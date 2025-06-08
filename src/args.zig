@@ -80,7 +80,17 @@ fn parseBuild(args: []const []const u8) CliArgs {
     for (args) |arg| {
         if (mem.eql(u8, arg, "-h") or mem.eql(u8, arg, "--help")) {
             return CliArgs{ .help = 
-            \\TODO build help message here
+            \\Build a binary from the given .roc file, but don't run it
+            \\
+            \\Usage: roc build [OPTIONS] [ROC_FILE]
+            \\
+            \\Arguments:
+            \\  [ROC_FILE]  The .roc file to build [default: main.roc]
+            \\
+            \\Options:
+            \\      --output=<output>      The full path to the output binary, including filename. To specify directory only, specify a path that ends in a directory separator (e.g. a slash)
+            \\      --opt=<size|speed|dev> Optimize the build process for binary size, binary speed, or compilation speed. Defaults to compilation speed `dev
+            \\      -h, --help             Print help
         };
         } else if (mem.startsWith(u8, arg, "--output")) {
             var iter = mem.splitScalar(u8, arg, '=');
@@ -115,7 +125,20 @@ fn parseFormat(args: []const []const u8) CliArgs {
     for (args) |arg| {
         if (mem.eql(u8, arg, "-h") or mem.eql(u8, arg, "--help")) {
             return CliArgs{ .help = 
-            \\TODO build help message here
+            \\Format a .roc file or the .roc files contained in a directory using standard Roc formatting
+            \\
+            \\Usage: roc format [OPTIONS] [DIRECTORY_OR_FILES]...
+            \\
+            \\Arguments:
+            \\  [DIRECTORY_OR_FILES]...
+            \\
+            \\Options:
+            \\      --check    Checks that specified files are formatted
+            \\                 (If formatting is needed, return a non-zero exit code.)
+            \\      --stdin    Format code from stdin; output to stdout
+            \\  -h, --help     Print help
+            \\
+            \\If DIRECTORY_OR_FILES is omitted, the .roc files in the current working directory are formatted.
         };
         } else if (mem.eql(u8, arg, "--stdin")) {
             stdin = true;
@@ -191,15 +214,15 @@ test "roc build" {
     }
     {
         const result = parse(&[_][]const u8{ "build", "-h" });
-        try testing.expectEqualStrings("TODO build help message here", result.help);
+        try testing.expectEqual(.help, std.meta.activeTag(result));
     }
     {
         const result = parse(&[_][]const u8{ "build", "--help" });
-        try testing.expectEqualStrings("TODO build help message here", result.help);
+        try testing.expectEqual(.help, std.meta.activeTag(result));
     }
     {
         const result = parse(&[_][]const u8{ "build", "foo.roc", "--opt=size", "--help" });
-        try testing.expectEqualStrings("TODO build help message here", result.help);
+        try testing.expectEqual(.help, std.meta.activeTag(result));
     }
     {
         const result = parse(&[_][]const u8{ "build", "--thisisactuallyafile" });
@@ -242,15 +265,15 @@ test "roc format" {
     }
     {
         const result = parse(&[_][]const u8{ "format", "-h" });
-        try testing.expectEqualStrings("TODO build help message here", result.help);
+        try testing.expectEqual(.help, std.meta.activeTag(result));
     }
     {
         const result = parse(&[_][]const u8{ "format", "--help" });
-        try testing.expectEqualStrings("TODO build help message here", result.help);
+        try testing.expectEqual(.help, std.meta.activeTag(result));
     }
     {
         const result = parse(&[_][]const u8{ "format", "foo.roc", "--help" });
-        try testing.expectEqualStrings("TODO build help message here", result.help);
+        try testing.expectEqual(.help, std.meta.activeTag(result));
     }
     {
         const result = parse(&[_][]const u8{ "format", "--thisisactuallyafile" });
