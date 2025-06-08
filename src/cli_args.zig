@@ -30,6 +30,7 @@ pub const CliArgs = union(enum) {
     }
 };
 
+/// Errors that can occur due to bad input while parsing the arguments
 pub const CliProblem = union(enum) {
     missing_flag_value: struct {
         flag: []const u8,
@@ -42,6 +43,7 @@ pub const CliProblem = union(enum) {
     },
 };
 
+/// The level of optimziation of a Roc program
 pub const OptLevel = enum {
     size,
     speed,
@@ -55,31 +57,37 @@ pub const OptLevel = enum {
     }
 };
 
+/// Arguments for the default `roc` command
 pub const RunArgs = struct {
     path: []const u8,
     opt: OptLevel = .dev,
     app_args: []const []const u8 = &[_][]const u8{},
 };
 
+/// Arguments for `roc check`
 pub const CheckArgs = struct {
     path: []const u8,
     main: ?[]const u8,
 };
 
+/// Arguments for `roc build`
 pub const BuildArgs = struct {
     path: []const u8,
     opt: OptLevel,
     output: ?[]const u8 = null,
 };
 
+/// Arguments for `roc test`
 pub const TestArgs = struct { path: []const u8, opt: OptLevel, main: ?[]const u8 };
 
+/// Arguments for `roc format`
 pub const FormatArgs = struct {
     paths: []const []const u8,
     stdin: bool = false,
     check: bool = false,
 };
 
+/// Arguments for `roc docs`
 pub const DocsArgs = struct {
     path: []const u8,
     output: []const u8,
