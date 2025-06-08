@@ -179,9 +179,9 @@ fn parse_build(args: []const []const u8) CliArgs {
             \\  [ROC_FILE] The .roc file to build [default: main.roc]
             \\
             \\Options:
-            \\      --output=<output>      The full path to the output binary, including filename. To specify directory only, specify a path that ends in a directory separator (e.g. a slash)
-            \\      --opt=<size|speed|dev> Optimize the build process for binary size, binary speed, or compilation speed. Defaults to compilation speed (dev)
-            \\      -h, --help             Print help
+            \\      --output=<output>       The full path to the output binary, including filename. To specify directory only, specify a path that ends in a directory separator (e.g. a slash)
+            \\      --opt=<size|speed|dev>  Optimize the build process for binary size, binary speed, or compilation speed. Defaults to compilation speed (dev)
+            \\      -h, --help              Print help
             \\
         };
         } else if (mem.startsWith(u8, arg, "--output")) {
@@ -226,10 +226,10 @@ fn parse_format(gpa: mem.Allocator, args: []const []const u8) CliArgs {
             \\  [DIRECTORY_OR_FILES]
             \\
             \\Options:
-            \\      --check    Checks that specified files are formatted
-            \\                 (If formatting is needed, return a non-zero exit code.)
-            \\      --stdin    Format code from stdin; output to stdout
-            \\  -h, --help     Print help
+            \\      --check  Checks that specified files are formatted
+            \\               (If formatting is needed, return a non-zero exit code.)
+            \\      --stdin  Format code from stdin; output to stdout
+            \\  -h, --help   Print help
             \\
             \\If DIRECTORY_OR_FILES is omitted, the .roc files in the current working directory are formatted.
             \\
@@ -263,9 +263,9 @@ fn parse_test(args: []const []const u8) CliArgs {
             \\  [ROC_FILE] The .roc file to test [default: main.roc]
             \\
             \\Options:
-            \\      --opt=<size|speed|dev> Optimize the build process for binary size, binary speed, or compilation speed. Defaults to compilation speed dev
-            \\      --main <main>          The .roc file of the main app/package module to resolve dependencies from
-            \\  -h, --help                 Print help
+            \\      --opt=<size|speed|dev>  Optimize the build process for binary size, binary speed, or compilation speed. Defaults to compilation speed dev
+            \\      --main <main>           The .roc file of the main app/package module to resolve dependencies from
+            \\  -h, --help                  Print help
             \\
         };
         } else if (mem.startsWith(u8, arg, "--main")) {
@@ -303,7 +303,7 @@ fn parse_repl(args: []const []const u8) CliArgs {
             \\Usage: roc repl [OPTIONS]
             \\
             \\Options:
-            \\  -h, --help       Print help
+            \\  -h, --help  Print help
             \\
         };
         } else {
