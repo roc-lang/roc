@@ -11,6 +11,7 @@ const Can = @import("../check/canonicalize.zig");
 const Scope = @import("../check/canonicalize/Scope.zig");
 const parse = @import("../check/parse.zig");
 const Filesystem = @import("../coordinate/Filesystem.zig");
+const types = @import("../types.zig");
 
 const Package = base.Package;
 const ModuleImport = base.ModuleImport;
@@ -107,9 +108,12 @@ fn loadOrCompileCanIr(
 
     return if (cache_lookup) |ir| ir else blk: {
         var module_env = base.ModuleEnv.init(gpa);
+        const type_store = types.Store.init(&module_env);
+
         var parse_ir = parse.parse(&module_env, contents);
         parse_ir.store.emptyScratch();
-        var can_ir = Can.IR.init(module_env);
+
+        var can_ir = Can.IR.init(module_env, type_store);
         var scope = Scope.init(&can_ir.env, &.{}, &.{});
         defer scope.deinit();
         var can = Can.init(&can_ir, &parse_ir, &scope);

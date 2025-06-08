@@ -23,5 +23,6 @@ CloseSquare(5:1-5:2),EndOfFile(5:2-5:2),
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(expr "TODO implement list expression")
+(expr
+	(list (elem_var "#0") (elems "TODO: access list elements")))
 ~~~END

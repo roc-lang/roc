@@ -34,12 +34,15 @@ test "checkTypes - basic type unification" {
 
     var module_env = ModuleEnv.init(gpa);
     defer module_env.deinit();
+
+    var type_store = types.Store.init(&module_env);
+
     var can_irs = ModuleWork(can.IR).Store.fromCanIrs(
         gpa,
         &.{ModuleWork(can.IR){
             .package_idx = @enumFromInt(1),
             .module_idx = @enumFromInt(0),
-            .work = can.IR.init(module_env),
+            .work = can.IR.init(module_env, type_store),
         }},
     );
     defer can_irs.deinit(gpa);
@@ -55,9 +58,10 @@ test "checkTypes - basic type unification" {
 
     var env = can_irs.getWork(@enumFromInt(0)).env;
     const resolve_ir = resolve_irs.getWork(@enumFromInt(0));
-    const type_store = type_stores.getWork(@enumFromInt(0));
+    // TODO how should the type_store be passed around?
+    // const type_store = type_stores.getWork(@enumFromInt(0));
 
-    checkTypes(type_store, resolve_ir, &resolve_irs, &type_stores);
+    checkTypes(&type_store, resolve_ir, &resolve_irs, &type_stores);
 
     // Test that we can perform basic type unification
     const flex = types.Content{ .flex_var = null };
@@ -69,7 +73,7 @@ test "checkTypes - basic type unification" {
     const b_type_var = type_store.freshFromContent(rigid);
 
     // After unification, both variables should have the rigid type
-    const result = unify.unify(type_store, &scratch, a_type_var, b_type_var);
+    const result = unify.unify(&type_store, &scratch, a_type_var, b_type_var);
 
     try testing.expectEqual(.ok, result);
     try testing.expectEqual(rigid, type_store.resolveVar(a_type_var).desc.content);

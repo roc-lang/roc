@@ -12,5 +12,11 @@ Float(1:1-1:5),EndOfFile(1:5-1:5),
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(expr (float "3.14"))
+(expr
+	(float
+		(num_var "#0")
+		(precision_var "#0")
+		(literal "3.14")
+		(value "0")
+		(bound "flex_var")))
 ~~~END

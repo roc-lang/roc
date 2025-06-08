@@ -307,33 +307,24 @@ pub fn canonicalize_expr(
             // parse the integer value
             const value = std.fmt.parseInt(i128, token_text, 10) catch {
                 // Add problem for invalid number literal
-                _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .InvalidNumLiteral = .{
+                const problem_id = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .InvalidNumLiteral = .{
                     .region = e.region.toBase(),
                     .literal = token_text,
                 } }));
 
-                // Return a valid expression with placeholder value so compilation can continue
                 return self.can_ir.store.addExpr(.{
-                    .expr = .{
-                        .int = .{
-                            .num_var = PLACEHOLDER_NUM_VAR,
-                            .precision_var = PLACEHOLDER_PRECISION_VAR,
-                            .literal = literal,
-                            .value = .{
-                                .bytes = [16]u8{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 },
-                                .kind = .i128,
-                            },
-                            .bound = .flex_var,
-                        },
-                    },
+                    .expr = IR.Expr{ .RuntimeError = problem_id },
                     .region = e.region.toBase(),
                 });
             };
 
+            const fresh_num_var = self.can_ir.type_store.fresh();
+            const fresh_prec_var = self.can_ir.type_store.fresh();
+
             const int_expr = IR.Expr{
                 .int = .{
-                    .num_var = PLACEHOLDER_NUM_VAR,
-                    .precision_var = PLACEHOLDER_PRECISION_VAR,
+                    .num_var = fresh_num_var,
+                    .precision_var = fresh_prec_var,
                     .literal = literal,
                     .value = IR.IntValue{
                         .bytes = @bitCast(value),
@@ -358,30 +349,24 @@ pub fn canonicalize_expr(
             // parse the float value
             const value = std.fmt.parseFloat(f64, token_text) catch {
                 // Add problem for invalid number literal
-                _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .InvalidNumLiteral = .{
+                const problem_id = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .InvalidNumLiteral = .{
                     .region = e.region.toBase(),
                     .literal = token_text,
                 } }));
 
-                // Return a valid expression with placeholder value so compilation can continue
                 return self.can_ir.store.addExpr(.{
-                    .expr = .{
-                        .float = .{
-                            .num_var = PLACEHOLDER_NUM_VAR,
-                            .precision_var = PLACEHOLDER_PRECISION_VAR,
-                            .literal = literal,
-                            .value = 0.0,
-                            .bound = .flex_var,
-                        },
-                    },
+                    .expr = IR.Expr{ .RuntimeError = problem_id },
                     .region = e.region.toBase(),
                 });
             };
 
+            const fresh_num_var = self.can_ir.type_store.fresh();
+            const fresh_prec_var = self.can_ir.type_store.fresh();
+
             const float_expr = IR.Expr{
                 .float = .{
-                    .num_var = PLACEHOLDER_NUM_VAR,
-                    .precision_var = PLACEHOLDER_PRECISION_VAR,
+                    .num_var = fresh_num_var,
+                    .precision_var = fresh_prec_var,
                     .literal = literal,
                     .value = value,
                     .bound = .flex_var,
@@ -422,10 +407,12 @@ pub fn canonicalize_expr(
                 }
             }
 
+            const fresh_type_var = self.can_ir.type_store.fresh();
+
             const list_expr = IR.Expr{
                 .list = .{
                     .elems = .{ .span = .{ .start = 0, .len = 0 } }, // TODO: properly store list elements
-                    .elem_var = PLACEHOLDER_NUM_VAR, // placeholder type variable
+                    .elem_var = fresh_type_var,
                 },
             };
 
@@ -436,10 +423,13 @@ pub fn canonicalize_expr(
         },
         .tag => |e| {
             if (self.parse_ir.tokens.resolveIdentifier(e.token)) |tag_name| {
+                const fresh_type_var_tag_union = self.can_ir.type_store.fresh();
+                const fresh_type_var_ext = self.can_ir.type_store.fresh();
+
                 const tag_expr = IR.Expr{
                     .tag = .{
-                        .tag_union_var = PLACEHOLDER_NUM_VAR,
-                        .ext_var = PLACEHOLDER_NUM_VAR,
+                        .tag_union_var = fresh_type_var_tag_union,
+                        .ext_var = fresh_type_var_ext,
                         .name = tag_name,
                         .args = .{ .span = .{ .start = 0, .len = 0 } }, // empty arguments
                     },

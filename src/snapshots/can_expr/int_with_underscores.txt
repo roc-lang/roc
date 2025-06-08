@@ -14,6 +14,8 @@ NO CHANGE
 ~~~CANONICALIZE
 (expr
 	(int
+		(num_var "#0")
+		(precision_var "#0")
 		(literal "1_000_000")
 		(value "TODO: format int value")
 		(bound "flex_var")))

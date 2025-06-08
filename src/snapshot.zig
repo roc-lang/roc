@@ -6,6 +6,7 @@ const Can = @import("check/canonicalize.zig");
 const Scope = @import("check/canonicalize/Scope.zig");
 const parse = @import("check/parse.zig");
 const fmt = @import("fmt.zig");
+const types = @import("types.zig");
 
 var verbose_log: bool = false;
 var prng = std.Random.DefaultPrng.init(1234567890);
@@ -449,8 +450,11 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
     // shouldn't be required in future
     parse_ast.store.emptyScratch();
 
+    const type_store = types.Store.init(&module_env);
+
     // Canonicalize the source code
-    var can_ir = Can.IR.init(module_env);
+    // Can.IR.init takes ownership of the module_env and type_store
+    var can_ir = Can.IR.init(module_env, type_store);
     defer can_ir.deinit();
 
     var scope = Scope.init(&can_ir.env, &.{}, &.{});

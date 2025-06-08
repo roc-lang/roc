@@ -19,5 +19,6 @@ OpenSquare(1:1-1:2),OpenSquare(1:2-1:3),Int(1:3-1:4),Comma(1:4-1:5),Int(1:6-1:7)
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(expr "TODO implement list expression")
+(expr
+	(list (elem_var "#0") (elems "TODO: access list elements")))
 ~~~END
