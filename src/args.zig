@@ -29,6 +29,7 @@ pub const OptLevel = enum {
 pub const RunArgs = struct {
     path: []const u8,
     opt: OptLevel = .dev,
+    app_args: []const []const u8 = &[_][]const u8{},
 };
 
 pub const CheckArgs = struct {
@@ -56,9 +57,8 @@ pub const DocsArgs = struct {
 };
 
 /// Parse a list of arguments.
-// TODO: should we ignore extra arguments or return errors when they are included?
 pub fn parse(args: []const []const u8) CliArgs {
-    if (args.len == 0) return CliArgs{ .run = RunArgs{ .path = "main.roc" } };
+    if (args.len == 0) return parse_run(args);
 
     if (mem.eql(u8, args[0], "check")) return parse_check(args[1..]);
     if (mem.eql(u8, args[0], "build")) return parse_build(args[1..]);
@@ -70,7 +70,7 @@ pub fn parse(args: []const []const u8) CliArgs {
     if (mem.eql(u8, args[0], "help")) return CliArgs{ .help = main_help };
     if (mem.eql(u8, args[0], "licenses")) return CliArgs.licenses;
 
-    return parse_run(args[1..]);
+    return parse_run(args);
 }
 
 const main_help =
@@ -299,8 +299,29 @@ fn parse_docs(args: []const []const u8) CliArgs {
 }
 
 fn parse_run(args: []const []const u8) CliArgs {
-    _ = args;
-    return CliArgs{ .run = RunArgs{ .path = "main.roc" } };
+    var path: ?[]const u8 = null;
+    var opt: OptLevel = .dev;
+    var app_args: []const []const u8 = &[_][]const u8{};
+    for (args) |arg| {
+        if (is_help_flag(arg)) {
+            return CliArgs{ .help = main_help };
+        } else if (mem.eql(u8, arg, "-v") or mem.eql(u8, arg, "--version")) {
+            return CliArgs.version;
+        } else if (mem.startsWith(u8, arg, "--opt")) {
+            if (parse_opt_level(arg)) |level| {
+                opt = level;
+            } else {
+                return CliArgs{ .invalid = "--opt can be either speed or size" };
+            }
+        } else {
+            if (path != null) {
+                app_args = &[_][]const u8{arg};
+            } else {
+                path = arg;
+            }
+        }
+    }
+    return CliArgs{ .run = RunArgs{ .path = path orelse "main.roc", .opt = opt, .app_args = app_args } };
 }
 
 fn is_help_flag(arg: []const u8) bool {
@@ -321,14 +342,29 @@ test "roc run" {
     {
         const result = parse(&[_][]const u8{});
         try testing.expectEqualStrings("main.roc", result.run.path);
+        try testing.expectEqual(.dev, result.run.opt);
+        try testing.expectEqualSlices([]const u8, &[_][]const u8{}, result.run.app_args);
     }
     {
-        const result = parse(&[_][]const u8{""});
-        try testing.expectEqualStrings("main.roc", result.run.path);
+        const result = parse(&[_][]const u8{"-v"});
+        try testing.expectEqual(.version, std.meta.activeTag(result));
     }
     {
-        const result = parse(&[_][]const u8{ "", "", "" });
-        try testing.expectEqualStrings("main.roc", result.run.path);
+        const result = parse(&[_][]const u8{"--version"});
+        try testing.expectEqual(.version, std.meta.activeTag(result));
+    }
+    {
+        const result = parse(&[_][]const u8{"-h"});
+        try testing.expectEqual(.help, std.meta.activeTag(result));
+    }
+    {
+        const result = parse(&[_][]const u8{"--help"});
+        try testing.expectEqual(.help, std.meta.activeTag(result));
+    }
+    {
+        const result = parse(&[_][]const u8{ "foo.roc", "--opt=speed" });
+        try testing.expectEqualStrings("foo.roc", result.run.path);
+        try testing.expectEqual(.speed, result.run.opt);
     }
 }
 
