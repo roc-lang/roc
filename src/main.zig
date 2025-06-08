@@ -11,7 +11,7 @@ const coordinate = @import("coordinate.zig");
 const problem_mod = @import("problem.zig");
 const tracy = @import("tracy.zig");
 const Filesystem = @import("coordinate/Filesystem.zig");
-const parse_args = @import("args.zig");
+const cli_args = @import("cli_args.zig");
 
 const RocCmd = cli.RocCmd;
 const RocOpt = cli.RocOpt;
@@ -50,7 +50,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
     defer trace.end();
 
     const stdout = std.io.getStdOut();
-    const parsed_args = parse_args.parse(gpa, args[1..]);
+    const parsed_args = cli_args.parse(gpa, args[1..]);
     defer parsed_args.deinit(gpa);
     try switch (parsed_args) {
         .run => |run_args| roc_run(gpa, run_args),
@@ -67,20 +67,20 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
     };
 }
 
-fn roc_run(gpa: Allocator, args: parse_args.RunArgs) void {
+fn roc_run(gpa: Allocator, args: cli_args.RunArgs) void {
     _ = gpa;
     _ = args;
     fatal("run not implemented", .{});
 }
 
-fn roc_build(gpa: Allocator, args: parse_args.BuildArgs) void {
+fn roc_build(gpa: Allocator, args: cli_args.BuildArgs) void {
     _ = gpa;
     _ = args;
 
     fatal("build not implemented", .{});
 }
 
-fn roc_test(gpa: Allocator, args: parse_args.TestArgs) !void {
+fn roc_test(gpa: Allocator, args: cli_args.TestArgs) !void {
     _ = gpa;
     _ = args;
     fatal("test not implemented", .{});
@@ -93,7 +93,7 @@ fn roc_repl(gpa: Allocator) !void {
 
 /// Reads, parses, formats, and overwrites all Roc files at the given paths.
 /// Recurses into directories to search for Roc files.
-fn roc_format(gpa: Allocator, arena: Allocator, args: parse_args.FormatArgs) !void {
+fn roc_format(gpa: Allocator, arena: Allocator, args: cli_args.FormatArgs) !void {
     var timer = try std.time.Timer.start();
     var count = fmt.SuccessFailCount{ .success = 0, .failure = 0 };
     for (args.paths) |path| {
@@ -114,7 +114,7 @@ fn roc_version(gpa: Allocator) !void {
     fatal("version not implemented", .{});
 }
 
-fn roc_check(gpa: Allocator, args: parse_args.CheckArgs) void {
+fn roc_check(gpa: Allocator, args: cli_args.CheckArgs) void {
     switch (coordinate.typecheckModule(gpa, Filesystem.default(), args.path)) {
         .success => |data| {
             var problems = std.ArrayList(Problem).init(gpa);
@@ -136,7 +136,7 @@ fn roc_check(gpa: Allocator, args: parse_args.CheckArgs) void {
     }
 }
 
-fn roc_docs(gpa: Allocator, args: parse_args.DocsArgs) !void {
+fn roc_docs(gpa: Allocator, args: cli_args.DocsArgs) !void {
     _ = gpa;
     _ = args;
     fatal("docs not implemented", .{});
