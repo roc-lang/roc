@@ -99,15 +99,8 @@ fn parseBuild(args: []const []const u8) CliArgs {
             const value = iter.next().?;
             output = value;
         } else if (mem.startsWith(u8, arg, "--opt")) {
-            var iter = mem.splitScalar(u8, arg, '=');
-            _ = iter.next();
-            const value = iter.next().?;
-            if (mem.eql(u8, value, "size")) {
-                opt = .size;
-            } else if (mem.eql(u8, value, "speed")) {
-                opt = .speed;
-            } else if (mem.eql(u8, value, "dev")) {
-                opt = .dev;
+            if (parse_opt_level(arg)) |level| {
+                opt = level;
             } else {
                 return CliArgs{ .invalid = "--opt can be either speed or size" };
             }
@@ -197,6 +190,16 @@ fn parseRun(args: []const []const u8) CliArgs {
 
 fn is_help_flag(arg: []const u8) bool {
     return mem.eql(u8, arg, "-h") or mem.eql(u8, arg, "--help");
+}
+
+fn parse_opt_level(arg: []const u8) ?OptLevel {
+    var iter = mem.splitScalar(u8, arg, '=');
+    _ = iter.next();
+    const value = iter.next().?;
+    if (mem.eql(u8, value, "speed")) return .speed;
+    if (mem.eql(u8, value, "size")) return .size;
+    if (mem.eql(u8, value, "dev")) return .dev;
+    return null;
 }
 
 test "roc run" {
