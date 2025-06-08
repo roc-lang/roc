@@ -20,5 +20,5 @@ OpenSquare(1:1-1:2),OpenSquare(1:2-1:3),Int(1:3-1:4),Comma(1:4-1:5),Int(1:6-1:7)
 NO CHANGE
 ~~~CANONICALIZE
 (expr
-	(list (elem_var "#0") (elems "TODO: access list elements")))
+	(list (elem_var "#0") (elems "TODO each element")))
 ~~~END

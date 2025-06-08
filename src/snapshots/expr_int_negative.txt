@@ -17,6 +17,6 @@ NO CHANGE
 		(num_var "#0")
 		(precision_var "#0")
 		(literal "-123")
-		(value "TODO: format int value")
+		(value "TODO")
 		(bound "flex_var")))
 ~~~END

@@ -32,5 +32,5 @@ CloseSquare(9:1-9:2),EndOfFile(9:2-9:2),
 NO CHANGE
 ~~~CANONICALIZE
 (expr
-	(list (elem_var "#0") (elems "TODO: access list elements")))
+	(list (elem_var "#0") (elems "TODO each element")))
 ~~~END

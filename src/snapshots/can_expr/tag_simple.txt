@@ -17,5 +17,5 @@ NO CHANGE
 		(tag_union_var "#0")
 		(ext_var "#0")
 		(name "Ok")
-		(args "TODO: access tag arguments")))
+		(args "TODO")))
 ~~~END

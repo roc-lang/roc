@@ -12,5 +12,5 @@ Int(1:1-1:42),EndOfFile(1:42-1:42),
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(expr "RUNTIME PROBLEM: problem.Problem{ .canonicalize = problem.Problem.Canonicalize{ .InvalidNumLiteral = problem.Problem.Canonicalize__struct_20370{ .region = @0-0, .literal = { ... } } } }")
+(expr (runtime_error "CAN: Invalid number literal 99999999999999999999999999999999999999999"))
 ~~~END
