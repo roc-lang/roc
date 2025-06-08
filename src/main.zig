@@ -22,29 +22,6 @@ const fatal = collections.utils.fatal;
 
 const legalDetailsFileContent = @embedFile("legal_details");
 
-const usage =
-    \\Usage:
-    \\
-    \\  roc [command] [options] [roc_file] [args]
-    \\
-    \\Commands:
-    \\
-    \\  run             Run a roc app
-    \\  build           Build a binary from the given .roc file, but don't run it
-    \\  test            Run all top-level `expect`s in a main module and any modules it imports
-    \\  repl            Launch the interactive Read Eval Print Loop (REPL)
-    \\  format          Format a .roc file or the .roc files contained in a directory using standard Roc formatting
-    \\  version         Print the Roc compiler’s version, which is currently built from commit 90db3b2db0, committed at 2025-01-28 18:26:51 UTC
-    \\  check           Check the code for problems, but don’t build or run it
-    \\  docs            Generate documentation for a Roc package
-    \\  glue            Generate glue code between a platform's Roc API and its host language
-    \\  licenses        Prints license info for Roc as well as attributions to other projects used by Roc.
-    \\
-    \\General Options:
-    \\
-    \\ -h, --help       Print usage
-;
-
 /// The CLI entrypoint for the Roc compiler.
 pub fn main() !void {
     var gpa_tracy: tracy.TracyAllocator(null) = undefined;
@@ -72,42 +49,45 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    try switch (parse_args.parse(args)) {
+    std.debug.print("Args: {s}\n", .{args});
+    const stdout = std.io.getStdOut();
+    try switch (parse_args.parse(args[1..])) {
         .run => |run_args| roc_run(gpa, run_args),
         .check => |check_args| roc_check(gpa, check_args),
         .build => |build_args| roc_build(gpa, build_args),
         .format => |format_args| roc_format(gpa, arena, format_args),
-        else => fatal("not implemented", .{}),
+        .test_cmd => |test_args| roc_test(gpa, test_args),
+        .repl => roc_repl(gpa),
+        .version => roc_version(gpa),
+        .docs => |docs_args| roc_docs(gpa, docs_args),
+        .help => |help_message| stdout.writeAll(help_message),
+        .licenses => stdout.writeAll(legalDetailsFileContent),
+        .invalid => |error_message| stdout.writeAll(error_message),
     };
 }
 
 fn roc_run(gpa: Allocator, args: parse_args.RunArgs) void {
     _ = gpa;
     _ = args;
-    fatal("not implemented", .{});
+    fatal("run not implemented", .{});
 }
 
 fn roc_build(gpa: Allocator, args: parse_args.BuildArgs) void {
     _ = gpa;
     _ = args;
 
-    fatal("not implemented", .{});
+    fatal("build not implemented", .{});
 }
 
-fn rocTest(gpa: Allocator, opt: RocOpt, args: []const []const u8) !void {
+fn roc_test(gpa: Allocator, args: parse_args.TestArgs) !void {
     _ = gpa;
-
-    std.debug.print("TODO roc test\n{}\n{s}\n\n", .{ opt, args });
-
-    fatal("not implemented", .{});
+    _ = args;
+    fatal("test not implemented", .{});
 }
 
-fn rocRepl(gpa: Allocator, opt: RocOpt, args: []const []const u8) !void {
+fn roc_repl(gpa: Allocator) !void {
     _ = gpa;
-
-    std.debug.print("TODO roc repl\n{}\n{s}\n\n", .{ opt, args });
-
-    fatal("not implemented", .{});
+    fatal("repl not implemented", .{});
 }
 
 /// Reads, parses, formats, and overwrites all Roc files at the given paths.
@@ -128,12 +108,9 @@ fn roc_format(gpa: Allocator, arena: Allocator, args: parse_args.FormatArgs) !vo
     try std.io.getStdOut().writer().print("Took {} ms.\n", .{elapsed});
 }
 
-fn rocVersion(gpa: Allocator, args: []const []const u8) !void {
+fn roc_version(gpa: Allocator) !void {
     _ = gpa;
-
-    std.debug.print("TODO roc version\n{s}\n\n", .{args});
-
-    fatal("not implemented", .{});
+    fatal("version not implemented", .{});
 }
 
 fn roc_check(gpa: Allocator, args: parse_args.CheckArgs) void {
@@ -158,28 +135,8 @@ fn roc_check(gpa: Allocator, args: parse_args.CheckArgs) void {
     }
 }
 
-fn rocDocs(allocator: Allocator, opt: RocOpt, args: []const []const u8) !void {
-    _ = allocator;
-
-    std.debug.print("TODO roc docs\n{}\n{s}\n\n", .{ opt, args });
-
-    fatal("not implemented", .{});
-}
-
-fn rocGlue(allocator: Allocator, opt: RocOpt, args: []const []const u8) !void {
-    _ = allocator;
-
-    std.debug.print("TODO roc glue\n{}\n{s}\n\n", .{ opt, args });
-
-    fatal("not implemented", .{});
-}
-
-fn rocLicenses() !void {
-    try std.io.getStdOut().writeAll(legalDetailsFileContent);
-    std.process.exit(0);
-}
-
-fn rocHelp() !void {
-    try std.io.getStdOut().writeAll(usage);
-    std.process.exit(0);
+fn roc_docs(gpa: Allocator, args: parse_args.DocsArgs) !void {
+    _ = gpa;
+    _ = args;
+    fatal("docs not implemented", .{});
 }

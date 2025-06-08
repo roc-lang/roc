@@ -89,6 +89,7 @@ const main_help =
     \\  check            Check the code for problems, but don’t build or run it
     \\  docs             Generate documentation for a Roc package
     \\  help             Print this message
+    \\  licenses         Prints license info for Roc as well as attributions to other projects used by Roc
     \\
     \\Arguments:
     \\  [ROC_FILE]         The .roc file of an app to run [default: main.roc]
