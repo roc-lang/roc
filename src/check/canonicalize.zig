@@ -294,23 +294,24 @@ fn canonicalize_pattern(
 
 test {
     try test_can_expr("foo", &.{"foo"}, &.{});
-    // try test_can_expr("bar", &.{"foo"}, &.{"Ident not in scope"});
+    try test_can_expr("bar", &.{"foo"}, &.{"Ident not in scope"});
 }
 
 fn test_can_expr(source: []const u8, idents: []const []const u8, error_messages: []const []const u8) !void {
     const gpa = std.testing.allocator;
 
+    // Setup environment
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
+    // Parse source
     var parse_ir = parse.parseExpr(&module_env, source);
     defer parse_ir.deinit();
 
+    // Expect NIL parser errors
     try std.testing.expectEqualSlices(parse.IR.Diagnostic, &.{}, parse_ir.errors);
 
-    // _ = idents;
-    // _ = error_messages;
-
+    // Initialize Can IR
     var can_ir = IR.initCapacity(module_env, parse_ir.store.nodes.items.len);
     defer can_ir.deinit();
 
@@ -326,6 +327,7 @@ fn test_can_expr(source: []const u8, idents: []const []const u8, error_messages:
     _ = can.canonicalize_expr(.{ .id = parse_ir.root_node_idx });
 
     try std.testing.expectEqual(error_messages.len, can.can_ir.env.problems.items.items.len);
+
     for (0..error_messages.len) |i| {
         var buf = std.ArrayListUnmanaged(u8){};
         var writer = buf.writer(std.testing.allocator);
