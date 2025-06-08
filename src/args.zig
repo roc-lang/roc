@@ -79,7 +79,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
     var opt: OptLevel = .none;
     var output: ?[]const u8 = null;
     for (args) |arg| {
-        if (mem.eql(u8, arg, "-h") or mem.eql(u8, arg, "--help")) {
+        if (is_help_flag(arg)) {
             return CliArgs{ .help = 
             \\Build a binary from the given .roc file, but don't run it
             \\
@@ -124,7 +124,7 @@ fn parseFormat(args: []const []const u8) CliArgs {
     var stdin = false;
     var check = false;
     for (args) |arg| {
-        if (mem.eql(u8, arg, "-h") or mem.eql(u8, arg, "--help")) {
+        if (is_help_flag(arg)) {
             return CliArgs{ .help = 
             \\Format a .roc file or the .roc files contained in a directory using standard Roc formatting
             \\
@@ -160,7 +160,7 @@ fn parseTest(args: []const []const u8) CliArgs {
     var stdin = false;
     var check = false;
     for (args) |arg| {
-        if (mem.eql(u8, arg, "-h") or mem.eql(u8, arg, "--help")) {
+        if (is_help_flag(arg)) {
             return CliArgs{ .help = 
             \\Run all top-level `expect`s in a main module and any modules it imports
             \\
@@ -191,6 +191,10 @@ fn parseTest(args: []const []const u8) CliArgs {
 fn parseRun(args: []const []const u8) CliArgs {
     _ = args;
     return CliArgs{ .run = RunArgs{ .path = "main.roc" } };
+}
+
+fn is_help_flag(arg: []const u8) bool {
+    return mem.eql(u8, arg, "-h") or mem.eql(u8, arg, "--help");
 }
 
 test "roc run" {
