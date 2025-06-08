@@ -67,9 +67,8 @@ pub fn parse(args: []const []const u8) CliArgs {
     if (mem.eql(u8, args[0], "repl")) return parse_repl(args[1..]);
     if (mem.eql(u8, args[0], "version")) return parse_version(args[1..]);
     if (mem.eql(u8, args[0], "docs")) return parse_docs(args[1..]);
-    if (mem.eql(u8, args[0], "help")) {
-        return CliArgs{ .help = main_help };
-    }
+    if (mem.eql(u8, args[0], "help")) return CliArgs{ .help = main_help };
+    if (mem.eql(u8, args[0], "licenses")) return CliArgs.licenses;
 
     return parse_run(args[1..]);
 }
@@ -552,5 +551,15 @@ test "roc help" {
     {
         const result = parse(&[_][]const u8{ "help", "extrastuff" });
         try testing.expectEqual(.help, std.meta.activeTag(result));
+    }
+}
+test "roc licenses" {
+    {
+        const result = parse(&[_][]const u8{"licenses"});
+        try testing.expectEqual(.licenses, std.meta.activeTag(result));
+    }
+    {
+        const result = parse(&[_][]const u8{ "licenses", "extrastuff" });
+        try testing.expectEqual(.licenses, std.meta.activeTag(result));
     }
 }
