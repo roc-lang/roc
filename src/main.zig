@@ -61,7 +61,6 @@ pub fn main() !void {
 
     const args = try std.process.argsAlloc(arena);
 
-    _ = parse_args.parse(args);
     const result = mainArgs(gpa, arena, args);
     if (tracy.enable) {
         try tracy.waitForShutdown();
@@ -73,47 +72,17 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const stderr = std.io.getStdErr().writer();
-    if (args.len <= 1) {
-        try stderr.print("{s}", .{usage});
-        fatal("expected command argument", .{});
-    }
+    _ = arena;
 
-    const cmd = args[1];
-
-    if (RocCmd.parse(cmd)) |roc_command| {
-        const parsed_opt = try RocOpt.parse(args[2..]);
-        const opt = parsed_opt.opt;
-        const cmd_args = args[(2 + parsed_opt.next_index)..];
-
-        switch (roc_command) {
-            .roc_run => try rocRun(gpa, opt, cmd_args),
-            .roc_build => try rocBuild(gpa, opt, cmd_args),
-            .roc_test => try rocTest(gpa, opt, cmd_args),
-            .roc_repl => try rocRepl(gpa, opt, cmd_args),
-            .roc_format => try rocFormat(gpa, arena, cmd_args),
-            .roc_version => try rocVersion(gpa, cmd_args),
-            .roc_check => rocCheck(gpa, opt, cmd_args),
-            .roc_docs => try rocDocs(gpa, opt, cmd_args),
-            .roc_glue => try rocGlue(gpa, opt, cmd_args),
-            .roc_help => try rocHelp(),
-            .roc_licenses => try rocLicenses(),
-        }
-    } else if (std.mem.eql(u8, cmd, "-h") or std.mem.eql(u8, cmd, "--help")) {
-        try rocHelp();
-    } else {
-        try stderr.print("{s}", .{usage});
-        fatal("unknown command: {s}", .{cmd});
+    switch (parse_args.parse(args)) {
+        .run => |run_args| try roc_run(gpa, run_args),
+        else => fatal("not implemented", .{}),
     }
 }
 
-fn rocRun(gpa: Allocator, opt: RocOpt, args: []const []const u8) !void {
+fn roc_run(gpa: Allocator, args: parse_args.RunArgs) !void {
     _ = gpa;
-
-    std.debug.print("TODO roc run\n{}\n{s}\n\n", .{ opt, args });
-
-    // TODO - check if file exists
-
+    _ = args;
     fatal("not implemented", .{});
 }
 
