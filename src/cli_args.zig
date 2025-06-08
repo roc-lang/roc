@@ -63,6 +63,7 @@ pub const RunArgs = struct {
 
 pub const CheckArgs = struct {
     path: []const u8,
+    main: ?[]const u8,
 };
 
 pub const BuildArgs = struct {
@@ -130,8 +131,37 @@ const main_help =
 ;
 
 fn parse_check(args: []const []const u8) CliArgs {
-    if (args.len == 0) return CliArgs{ .check = CheckArgs{ .path = "main.roc" } };
-    return CliArgs{ .check = CheckArgs{ .path = args[0] } };
+    var path: ?[]const u8 = null;
+    var main: ?[]const u8 = null;
+    for (args) |arg| {
+        if (is_help_flag(arg)) {
+            return CliArgs{ .help = 
+            \\Check the code for problems, but don’t build or run it
+            \\
+            \\Usage: roc check [OPTIONS] [ROC_FILE]
+            \\
+            \\Arguments:
+            \\  [ROC_FILE]  The .roc file to check [default: main.roc]
+            \\
+            \\Options:
+            \\      --main=<main>  The .roc file of the main app/package module to resolve dependencies from
+            \\  -h, --help         Print help
+            \\
+        };
+        } else if (mem.startsWith(u8, arg, "--main")) {
+            if (get_flag_value(arg)) |value| {
+                main = value;
+            } else {
+                return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--main" } } };
+            }
+        } else {
+            if (path != null) {
+                return CliArgs{ .problem = CliProblem{ .unexpected_argument = .{ .cmd = "check", .arg = arg } } };
+            }
+            path = arg;
+        }
+    }
+    return CliArgs{ .check = CheckArgs{ .path = path orelse "main.roc", .main = main } };
 }
 
 fn parse_build(args: []const []const u8) CliArgs {
@@ -470,20 +500,6 @@ test "roc run" {
     }
 }
 
-test "roc check" {
-    const gpa = testing.allocator;
-    {
-        const result = parse(gpa, &[_][]const u8{"check"});
-        defer result.deinit(gpa);
-        try testing.expectEqualStrings("main.roc", result.check.path);
-    }
-    {
-        const result = parse(gpa, &[_][]const u8{ "check", "some/file.roc" });
-        defer result.deinit(gpa);
-        try testing.expectEqualStrings("some/file.roc", result.check.path);
-    }
-}
-
 test "roc build" {
     const gpa = testing.allocator;
     {
@@ -663,6 +679,47 @@ test "roc test" {
     }
     {
         const result = parse(gpa, &[_][]const u8{ "test", "foo.roc", "--help" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(.help, std.meta.activeTag(result));
+    }
+}
+
+test "roc check" {
+    const gpa = testing.allocator;
+    {
+        const result = parse(gpa, &[_][]const u8{"check"});
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("main.roc", result.check.path);
+        try testing.expectEqual(null, result.check.main);
+    }
+    {
+        const result = parse(gpa, &[_][]const u8{ "check", "foo.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("foo.roc", result.check.path);
+    }
+    {
+        const result = parse(gpa, &[_][]const u8{ "check", "--main=mymain.roc", "foo.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("foo.roc", result.check.path);
+        try testing.expectEqualStrings("mymain.roc", result.check.main.?);
+    }
+    {
+        const result = parse(gpa, &[_][]const u8{ "check", "foo.roc", "bar.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("bar.roc", result.problem.unexpected_argument.arg);
+    }
+    {
+        const result = parse(gpa, &[_][]const u8{ "check", "-h" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(.help, std.meta.activeTag(result));
+    }
+    {
+        const result = parse(gpa, &[_][]const u8{ "check", "--help" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(.help, std.meta.activeTag(result));
+    }
+    {
+        const result = parse(gpa, &[_][]const u8{ "check", "foo.roc", "--help" });
         defer result.deinit(gpa);
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
