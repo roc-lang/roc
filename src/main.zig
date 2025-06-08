@@ -49,9 +49,10 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    std.debug.print("Args: {s}\n", .{args});
     const stdout = std.io.getStdOut();
-    try switch (parse_args.parse(args[1..])) {
+    const parsed_args = parse_args.parse(gpa, args[1..]);
+    defer parsed_args.deinit(gpa);
+    try switch (parsed_args) {
         .run => |run_args| roc_run(gpa, run_args),
         .check => |check_args| roc_check(gpa, check_args),
         .build => |build_args| roc_build(gpa, build_args),
