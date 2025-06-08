@@ -5,7 +5,6 @@
 const std = @import("std");
 const fmt = @import("fmt.zig");
 const base = @import("base.zig");
-const cli = @import("cli.zig");
 const collections = @import("collections.zig");
 const coordinate = @import("coordinate.zig");
 const problem_mod = @import("problem.zig");
@@ -13,8 +12,6 @@ const tracy = @import("tracy.zig");
 const Filesystem = @import("coordinate/Filesystem.zig");
 const cli_args = @import("cli_args.zig");
 
-const RocCmd = cli.RocCmd;
-const RocOpt = cli.RocOpt;
 const Problem = problem_mod.Problem;
 const Allocator = std.mem.Allocator;
 const exitOnOom = collections.utils.exitOnOom;
