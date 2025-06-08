@@ -1,0 +1,20 @@
+~~~META
+description=Integer literal with underscores
+type=expr
+~~~SOURCE
+1_000_000
+~~~PROBLEMS
+NIL
+~~~TOKENS
+Int(1:1-1:10),EndOfFile(1:10-1:10),
+~~~PARSE
+(int (1:1-1:10) "1_000_000")
+~~~FORMATTED
+NO CHANGE
+~~~CANONICALIZE
+(expr
+	(int
+		(literal "1_000_000")
+		(value "TODO: format int value")
+		(bound "flex_var")))
+~~~END

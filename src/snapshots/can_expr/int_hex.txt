@@ -1,0 +1,20 @@
+~~~META
+description=Hexadecimal integer literal
+type=expr
+~~~SOURCE
+0xFF
+~~~PROBLEMS
+NIL
+~~~TOKENS
+Int(1:1-1:5),EndOfFile(1:5-1:5),
+~~~PARSE
+(int (1:1-1:5) "0xFF")
+~~~FORMATTED
+NO CHANGE
+~~~CANONICALIZE
+(expr
+	(int
+		(literal "0xFF")
+		(value "TODO: format int value")
+		(bound "flex_var")))
+~~~END

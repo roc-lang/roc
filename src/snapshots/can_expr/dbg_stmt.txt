@@ -1,0 +1,16 @@
+~~~META
+description=Debug expression stmt
+type=expr
+~~~SOURCE
+dbg x
+~~~PROBLEMS
+NIL
+~~~TOKENS
+KwDbg(1:1-1:4),LowerIdent(1:5-1:6),EndOfFile(1:6-1:6),
+~~~PARSE
+(dbg (ident (1:5-1:6) "" "x"))
+~~~FORMATTED
+NO CHANGE
+~~~CANONICALIZE
+(can_ir "TODO")
+~~~END
