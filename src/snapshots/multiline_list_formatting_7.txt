@@ -23,5 +23,5 @@ CloseSquare(5:1-5:2),EndOfFile(5:2-5:2),
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(can_ir "TODO")
+(expr (list "TODO: implement"))
 ~~~END

@@ -23,7 +23,6 @@ env: base.ModuleEnv,
 store: NodeStore,
 ingested_files: IngestedFile.List,
 imports: ModuleImport.Store,
-
 /// Initialize the IR for a module's canonicalization info.
 ///
 /// When caching the can IR for a siloed module, we can avoid
@@ -147,6 +146,10 @@ pub const Node = struct {
         type_anno_record,
         type_anno_fn,
         type_anno_parens,
+        // Patterns
+        pattern_identifier,
+        pattern_as,
+        pattern_applied_tag,
     };
 };
 
@@ -237,7 +240,7 @@ pub const NodeStore = struct {
 
         switch (node.tag) {
             .expr_var => {
-                @panic("TODO implement expr_var");
+                @panic("TODO implement expr_var nodes");
             },
             .expr_int => {
                 // TODO: Store and retrieve all int data properly
@@ -252,6 +255,40 @@ pub const NodeStore = struct {
                             .kind = .i128,
                         },
                         .bound = .flex_var, // Default bound
+                    },
+                };
+            },
+            .expr_list => {
+                return .{
+                    .list = .{
+                        .elem_var = @enumFromInt(0), // Placeholder
+                        .elems = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
+                    },
+                };
+            },
+            .expr_float => {
+                return .{
+                    .float = .{
+                        .num_var = @enumFromInt(0), // Placeholder
+                        .precision_var = @enumFromInt(0), // Placeholder
+                        .literal = @enumFromInt(node.data_1),
+                        .value = 0.0, // Placeholder value
+                        .bound = .flex_var, // Default bound
+                    },
+                };
+            },
+            .expr_string => {
+                return .{
+                    .str = @enumFromInt(node.data_1),
+                };
+            },
+            .expr_tag => {
+                return .{
+                    .tag = .{
+                        .tag_union_var = @enumFromInt(0), // Placeholder
+                        .ext_var = @enumFromInt(0), // Placeholder
+                        .name = @bitCast(@as(base.Ident.Idx, @bitCast(node.data_1))),
+                        .args = .{ .span = .{ .start = 0, .len = 0 } }, // Empty args for now
                     },
                 };
             },
@@ -340,12 +377,33 @@ pub const NodeStore = struct {
         switch (expr.expr) {
             .lookup => |e| {
                 node.tag = .expr_var;
-                node.data_1 = @intCast(e.ident.idx);
+                node.data_1 = @bitCast(@as(u32, @bitCast(e.ident)));
             },
             .int => |e| {
                 node.tag = .expr_int;
                 // TODO: Store int data properly. For now, just store the literal idx
                 node.data_1 = @intCast(@intFromEnum(e.literal));
+            },
+            .list => |e| {
+                node.tag = .expr_list;
+                // TODO: Store list data properly. For now, just store placeholder values
+                node.data_1 = e.elems.span.start;
+                node.data_2 = e.elems.span.len;
+            },
+            .float => |e| {
+                node.tag = .expr_float;
+                // TODO: Store float data properly. For now, just store the literal idx
+                node.data_1 = @intCast(@intFromEnum(e.literal));
+            },
+            .str => |e| {
+                node.tag = .expr_string;
+                // TODO: Store string data properly. For now, just store the literal idx
+                node.data_1 = @intCast(@intFromEnum(e));
+            },
+            .tag => |e| {
+                node.tag = .expr_tag;
+                // Store the full Ident.Idx as a u32
+                node.data_1 = @bitCast(@as(u32, @bitCast(e.name)));
             },
             else => {
                 std.debug.panic("Expression of type {s} not yet implemented in Can\n", .{@tagName(expr.expr)});
@@ -377,15 +435,74 @@ pub const NodeStore = struct {
     }
 
     pub fn addPattern(store: *NodeStore, pattern: Pattern) Pattern.Idx {
-        const node = Node{};
+        var node = Node{
+            .data_1 = 0,
+            .data_2 = 0,
+            .data_3 = 0,
+            .region = Region.zero(),
+            .tag = @enumFromInt(0),
+        };
 
         switch (pattern) {
+            .identifier => |p| {
+                node.data_1 = @intCast(p.idx);
+                node.tag = .pattern_identifier;
+            },
+            // as: struct {
+            //     pattern: Pattern.Idx,
+            //     region: Region,
+            //     ident: Ident.Idx,
+            // },
+            // applied_tag: struct {
+            //     whole_var: TypeVar,
+            //     ext_var: TypeVar,
+            //     tag_name: Ident.Idx,
+            //     arguments: TypedPatternAtRegion.Range,
+            // },
+            // record_destructure: struct {
+            //     whole_var: TypeVar,
+            //     ext_var: TypeVar,
+            //     destructs: RecordDestruct.Range,
+            // },
+            // list: struct {
+            //     list_var: TypeVar,
+            //     elem_var: TypeVar,
+            //     patterns: Pattern.Range,
+            // },
+            // num_literal: struct {
+            //     num_var: TypeVar,
+            //     literal: StringLiteral.Idx,
+            //     value: IntValue,
+            //     bound: types.Num,
+            // },
+            // int_literal: struct {
+            //     num_var: TypeVar,
+            //     precision_var: TypeVar, // <- can probably be removed
+            //     literal: StringLiteral.Idx,
+            //     value: IntValue,
+            //     bound: types.Num.Int,
+            // },
+            // float_literal: struct {
+            //     num_var: TypeVar,
+            //     precision_var: TypeVar, // <- can probably be removed
+            //     literal: StringLiteral.Idx,
+            //     value: f64,
+            //     bound: types.Num.Frac,
+            // },
+            // str_literal: StringLiteral.Idx,
+            // char_literal: struct {
+            //     num_var: TypeVar,
+            //     precision_var: TypeVar, // <- can probably be removed
+            //     value: u32,
+            //     bound: types.Num.Int,
+            // },
+            // Underscore,
             else => {
                 std.debug.panic("Pattern of type {s} not yet implemented in Can\n", .{@tagName(pattern)});
             },
         }
 
-        return .{ .id = store.nodes.append(store.gpa, node) };
+        return @enumFromInt(@intFromEnum(store.nodes.append(store.gpa, node)));
     }
 
     pub fn addPatternRecordField(store: *NodeStore, patternRecordField: PatternRecordField) PatternRecordField.Idx {

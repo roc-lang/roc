@@ -90,7 +90,9 @@ pub fn canonicalize_file(
                 } }));
             },
             .expect => |expect| {
-                _ = expect;
+                _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpect = .{
+                    .region = expect.region.toBase(),
+                } }));
             },
             .@"for" => |f| {
                 // Not valid at top-level
@@ -107,10 +109,14 @@ pub fn canonicalize_file(
                 } }));
             },
             .type_decl => |type_decl| {
-                _ = type_decl;
+                _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedTypeDecl = .{
+                    .region = type_decl.region.toBase(),
+                } }));
             },
             .type_anno => |type_anno| {
-                _ = type_anno;
+                _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedTypeAnno = .{
+                    .region = type_anno.region.toBase(),
+                } }));
             },
             .malformed => |malformed| {
                 // We won't touch this since it's already a parse error.
@@ -128,6 +134,11 @@ fn bringImportIntoScope(
     self: *Self,
     import: *const parse.IR.NodeStore.Statement.Import,
 ) void {
+    // Add error for partially implemented imports
+    _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedImport = .{
+        .region = import.region.toBase(),
+    } }));
+
     // const import_name: []u8 = &.{}; // import.module_name_tok;
     // const shorthand: []u8 = &.{}; // import.qualifier_tok;
     // const region = Region{
@@ -253,7 +264,7 @@ fn canonicalize_decl(
     decl: parse.IR.NodeStore.Statement.Decl,
 ) void {
     _ = self.canonicalize_expr(decl.body);
-    self.canonicalize_pattern(decl.pattern);
+    _ = self.canonicalize_pattern(decl.pattern);
 }
 
 /// Canonicalize an expression.
@@ -275,10 +286,10 @@ pub fn canonicalize_expr(
                 switch (self.scope.levels.lookup(.ident, ident)) {
                     .InScope => {
                         return self.can_ir.store.addExpr(.{
-                            .region = e.region.toBase(),
                             .expr = .{ .lookup = .{
                                 .ident = ident,
                             } },
+                            .region = e.region.toBase(),
                         });
                     },
                     .NotInScope => {},
@@ -337,8 +348,210 @@ pub fn canonicalize_expr(
                 .region = e.region.toBase(),
             });
         },
-        else => {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(Problem.Canonicalize.NotYetImplemented));
+        .float => |e| {
+            // resolve to a string slice from the source
+            const token_text = self.parse_ir.resolve(e.token);
+
+            // intern the string slice
+            const literal = self.can_ir.env.strings.insert(self.can_ir.env.gpa, token_text);
+
+            // parse the float value
+            const value = std.fmt.parseFloat(f64, token_text) catch {
+                // Add problem for invalid number literal
+                _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .InvalidNumLiteral = .{
+                    .region = e.region.toBase(),
+                    .literal = token_text,
+                } }));
+
+                // Return a valid expression with placeholder value so compilation can continue
+                return self.can_ir.store.addExpr(.{
+                    .expr = .{
+                        .float = .{
+                            .num_var = PLACEHOLDER_NUM_VAR,
+                            .precision_var = PLACEHOLDER_PRECISION_VAR,
+                            .literal = literal,
+                            .value = 0.0,
+                            .bound = .flex_var,
+                        },
+                    },
+                    .region = e.region.toBase(),
+                });
+            };
+
+            const float_expr = IR.Expr{
+                .float = .{
+                    .num_var = PLACEHOLDER_NUM_VAR,
+                    .precision_var = PLACEHOLDER_PRECISION_VAR,
+                    .literal = literal,
+                    .value = value,
+                    .bound = .flex_var,
+                },
+            };
+
+            return self.can_ir.store.addExpr(.{
+                .expr = float_expr,
+                .region = e.region.toBase(),
+            });
+        },
+        .string => |e| {
+            // resolve to a string slice from the source
+            const token_text = self.parse_ir.resolve(e.token);
+
+            // TODO: Handle escape sequences and string interpolation
+            // For now, just intern the raw string
+            // TODO check if was this interned in tokenisation??
+            const literal = self.can_ir.env.strings.insert(self.can_ir.env.gpa, token_text);
+
+            const str_expr = IR.Expr{
+                .str = literal,
+            };
+
+            return self.can_ir.store.addExpr(.{
+                .expr = str_expr,
+                .region = e.region.toBase(),
+            });
+        },
+
+        .list => |e| {
+            var items = collections.SafeList(IR.Expr.Idx).initCapacity(self.can_ir.env.gpa, 0);
+            const items_slice = self.parse_ir.store.exprSlice(e.items);
+
+            for (items_slice) |item| {
+                if (self.canonicalize_expr(item)) |canonicalized| {
+                    _ = items.append(self.can_ir.env.gpa, canonicalized);
+                }
+            }
+
+            const list_expr = IR.Expr{
+                .list = .{
+                    .elems = .{ .span = .{ .start = 0, .len = 0 } }, // TODO: properly store list elements
+                    .elem_var = PLACEHOLDER_NUM_VAR, // placeholder type variable
+                },
+            };
+
+            return self.can_ir.store.addExpr(.{
+                .expr = list_expr,
+                .region = e.region.toBase(),
+            });
+        },
+        .tag => |e| {
+            if (self.parse_ir.tokens.resolveIdentifier(e.token)) |tag_name| {
+                const tag_expr = IR.Expr{
+                    .tag = .{
+                        .tag_union_var = PLACEHOLDER_NUM_VAR,
+                        .ext_var = PLACEHOLDER_NUM_VAR,
+                        .name = tag_name,
+                        .args = .{ .span = .{ .start = 0, .len = 0 } }, // empty arguments
+                    },
+                };
+
+                return self.can_ir.store.addExpr(.{
+                    .expr = tag_expr,
+                    .region = e.region.toBase(),
+                });
+            }
+        },
+        .string_part => |e| {
+            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
+                .expr_type = "string_part",
+                .region = e.region.toBase(),
+            } }));
+        },
+        .tuple => |e| {
+            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
+                .expr_type = "tuple",
+                .region = e.region.toBase(),
+            } }));
+        },
+        .record => |e| {
+            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
+                .expr_type = "record",
+                .region = e.region.toBase(),
+            } }));
+        },
+        .lambda => |e| {
+            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
+                .expr_type = "lambda",
+                .region = e.region.toBase(),
+            } }));
+        },
+        .record_updater => |e| {
+            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
+                .expr_type = "record_updater",
+                .region = e.region.toBase(),
+            } }));
+        },
+        .field_access => |e| {
+            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
+                .expr_type = "field_access",
+                .region = e.region.toBase(),
+            } }));
+        },
+        .local_dispatch => |e| {
+            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
+                .expr_type = "local_dispatch",
+                .region = e.region.toBase(),
+            } }));
+        },
+        .bin_op => |e| {
+            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
+                .expr_type = "bin_op",
+                .region = e.region.toBase(),
+            } }));
+        },
+        .suffix_single_question => |e| {
+            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
+                .expr_type = "suffix_single_question",
+                .region = e.region.toBase(),
+            } }));
+        },
+        .unary_op => |e| {
+            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
+                .expr_type = "unary_op",
+                .region = e.region.toBase(),
+            } }));
+        },
+        .if_then_else => |e| {
+            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
+                .expr_type = "if_then_else",
+                .region = e.region.toBase(),
+            } }));
+        },
+        .match => |e| {
+            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
+                .expr_type = "match",
+                .region = e.region.toBase(),
+            } }));
+        },
+        .dbg => |e| {
+            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
+                .expr_type = "dbg",
+                .region = e.region.toBase(),
+            } }));
+        },
+        .record_builder => |e| {
+            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
+                .expr_type = "record_builder",
+                .region = e.region.toBase(),
+            } }));
+        },
+        .ellipsis => |e| {
+            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
+                .expr_type = "ellipsis",
+                .region = e.region.toBase(),
+            } }));
+        },
+        .block => |e| {
+            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
+                .expr_type = "block",
+                .region = e.region.toBase(),
+            } }));
+        },
+        .malformed => |e| {
+            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
+                .expr_type = "malformed",
+                .region = e.region.toBase(),
+            } }));
         },
     }
     return null;
@@ -347,7 +560,127 @@ pub fn canonicalize_expr(
 fn canonicalize_pattern(
     self: *Self,
     pattern_idx: parse.IR.NodeStore.PatternIdx,
-) void {
-    _ = self;
-    _ = pattern_idx;
+) ?IR.Pattern.Idx {
+    const pattern = self.parse_ir.store.getPattern(pattern_idx);
+    const region = Region.zero(); // TODO: Implement proper pattern region retrieval
+
+    switch (pattern) {
+        .ident => |e| {
+            if (self.parse_ir.tokens.resolveIdentifier(e.ident_tok)) |ident| {
+                // Introduce the identifier into scope
+                _ = self.scope.levels.introduce(.ident, .{ .scope_name = ident, .ident = ident });
+
+                const ident_pattern = IR.Pattern{
+                    .identifier = ident,
+                };
+
+                return self.can_ir.store.addPattern(ident_pattern);
+            }
+        },
+        .underscore => {
+            const underscore_pattern = IR.Pattern{
+                .Underscore = {},
+            };
+
+            return self.can_ir.store.addPattern(underscore_pattern);
+        },
+        .number => |e| {
+            // resolve to a string slice from the source
+            const token_text = self.parse_ir.resolve(e.number_tok);
+
+            // intern the string slice
+            const literal = self.can_ir.env.strings.insert(self.can_ir.env.gpa, token_text);
+
+            // parse the integer value
+            const value = std.fmt.parseInt(i128, token_text, 10) catch {
+                // Add problem for invalid number literal
+                _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .InvalidNumLiteral = .{
+                    .region = region,
+                    .literal = token_text,
+                } }));
+                return null;
+            };
+
+            const int_pattern = IR.Pattern{
+                .int_literal = .{
+                    .num_var = PLACEHOLDER_NUM_VAR,
+                    .precision_var = PLACEHOLDER_PRECISION_VAR,
+                    .literal = literal,
+                    .value = IR.IntValue{
+                        .bytes = @bitCast(value),
+                        .kind = .i128,
+                    },
+                    .bound = .flex_var,
+                },
+            };
+
+            return self.can_ir.store.addPattern(int_pattern);
+        },
+        .string => |e| {
+            // resolve to a string slice from the source
+            const token_text = self.parse_ir.resolve(e.string_tok);
+
+            // TODO: Handle escape sequences
+            // For now, just intern the raw string
+            const literal = self.can_ir.env.strings.insert(self.can_ir.env.gpa, token_text);
+
+            const str_pattern = IR.Pattern{
+                .str_literal = literal,
+            };
+
+            return self.can_ir.store.addPattern(str_pattern);
+        },
+        .tag => |e| {
+            if (self.parse_ir.tokens.resolveIdentifier(e.tag_tok)) |tag_name| {
+                // Tag patterns are handled as applied_tag
+                const tag_pattern = IR.Pattern{
+                    .applied_tag = .{
+                        .whole_var = PLACEHOLDER_NUM_VAR,
+                        .ext_var = PLACEHOLDER_NUM_VAR,
+                        .tag_name = tag_name,
+                        .arguments = .{ .start = @enumFromInt(0), .end = @enumFromInt(0) }, // TODO: handle tag arguments from e.args
+                    },
+                };
+
+                return self.can_ir.store.addPattern(tag_pattern);
+            }
+        },
+        .record => |e| {
+            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedPattern = .{
+                .pattern_type = "record",
+                .region = e.region.toBase(),
+            } }));
+        },
+        .tuple => |e| {
+            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedPattern = .{
+                .pattern_type = "tuple",
+                .region = e.region.toBase(),
+            } }));
+        },
+        .list => |e| {
+            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedPattern = .{
+                .pattern_type = "list",
+                .region = e.region.toBase(),
+            } }));
+        },
+        .list_rest => |e| {
+            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedPattern = .{
+                .pattern_type = "list_rest",
+                .region = e.region.toBase(),
+            } }));
+        },
+        .alternatives => |e| {
+            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedPattern = .{
+                .pattern_type = "alternatives",
+                .region = e.region.toBase(),
+            } }));
+        },
+        .malformed => |e| {
+            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedPattern = .{
+                .pattern_type = "malformed",
+                .region = e.region.toBase(),
+            } }));
+        },
+    }
+    return null;
 }

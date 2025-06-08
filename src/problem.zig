@@ -24,6 +24,26 @@ pub const Problem = union(enum) {
     /// e.g. a variable that was used but not defined.
     pub const Canonicalize = union(enum) {
         NotYetImplemented,
+        NotYetImplementedExpr: struct {
+            expr_type: []const u8,
+            region: Region,
+        },
+        NotYetImplementedPattern: struct {
+            pattern_type: []const u8,
+            region: Region,
+        },
+        NotYetImplementedTypeDecl: struct {
+            region: Region,
+        },
+        NotYetImplementedTypeAnno: struct {
+            region: Region,
+        },
+        NotYetImplementedExpect: struct {
+            region: Region,
+        },
+        NotYetImplementedImport: struct {
+            region: Region,
+        },
         DuplicateImport: struct {
             duplicate_import_region: Region,
         },
@@ -71,6 +91,34 @@ pub const Problem = union(enum) {
             switch (self) {
                 .NotYetImplemented => {
                     const err_msg = try std.fmt.bufPrint(&buf, "CAN: Not yet implemented", .{});
+                    try writer.writeAll(err_msg);
+                },
+                .NotYetImplementedExpr => |e| {
+                    const err_msg = try std.fmt.bufPrint(&buf, "CAN: Expression type '{s}' not yet implemented", .{e.expr_type});
+                    try writer.writeAll(err_msg);
+                },
+                .NotYetImplementedPattern => |e| {
+                    const err_msg = try std.fmt.bufPrint(&buf, "CAN: Pattern type '{s}' not yet implemented", .{e.pattern_type});
+                    try writer.writeAll(err_msg);
+                },
+                .NotYetImplementedTypeDecl => |e| {
+                    _ = e;
+                    const err_msg = try std.fmt.bufPrint(&buf, "CAN: Type declarations not yet implemented", .{});
+                    try writer.writeAll(err_msg);
+                },
+                .NotYetImplementedTypeAnno => |e| {
+                    _ = e;
+                    const err_msg = try std.fmt.bufPrint(&buf, "CAN: Type annotations not yet implemented", .{});
+                    try writer.writeAll(err_msg);
+                },
+                .NotYetImplementedExpect => |e| {
+                    _ = e;
+                    const err_msg = try std.fmt.bufPrint(&buf, "CAN: Expect statements not yet implemented", .{});
+                    try writer.writeAll(err_msg);
+                },
+                .NotYetImplementedImport => |e| {
+                    _ = e;
+                    const err_msg = try std.fmt.bufPrint(&buf, "CAN: Import statements not yet fully implemented", .{});
                     try writer.writeAll(err_msg);
                 },
                 .DuplicateImport => |e| {

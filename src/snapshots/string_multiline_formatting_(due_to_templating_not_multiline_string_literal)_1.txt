@@ -25,5 +25,5 @@ LowerIdent(2:1-2:2),CloseRound(2:2-2:3),CloseStringInterpolation(2:3-2:4),String
 	)
 } lines of text due to the template parts"
 ~~~CANONICALIZE
-(can_ir "TODO")
+(expr (str "TODO: implement"))
 ~~~END
