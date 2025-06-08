@@ -50,8 +50,9 @@ pub const FormatArgs = struct {
 };
 
 pub const DocsArgs = struct {
-    package: ?[]const u8 = null,
-    output: ?[]const u8 = null,
+    path: []const u8,
+    output: []const u8,
+    root_dir: ?[]const u8 = null,
 };
 
 /// Parse a list of arguments.
@@ -65,6 +66,7 @@ pub fn parse(args: []const []const u8) CliArgs {
     if (mem.eql(u8, args[0], "test")) return parse_test(args[1..]);
     if (mem.eql(u8, args[0], "repl")) return parse_repl(args[1..]);
     if (mem.eql(u8, args[0], "version")) return parse_version(args[1..]);
+    if (mem.eql(u8, args[0], "docs")) return parse_docs(args[1..]);
 
     return parse_run(args[1..]);
 }
@@ -223,6 +225,44 @@ fn parse_version(args: []const []const u8) CliArgs {
         }
     }
     return CliArgs.version;
+}
+
+fn parse_docs(args: []const []const u8) CliArgs {
+    var output: ?[]const u8 = null;
+    var root_dir: ?[]const u8 = null;
+    var path: ?[]const u8 = null;
+    for (args) |arg| {
+        if (is_help_flag(arg)) {
+            return CliArgs{ .help = 
+            \\Generate documentation for a Roc package
+            \\
+            \\Usage: roc docs [OPTIONS] [ROC_FILE]
+            \\
+            \\Arguments:
+            \\  [ROC_FILE]  The package's main .roc file [default: main.roc]
+            \\
+            \\Options:
+            \\      --output=<output>      Output directory for the generated documentation files. [default: generated-docs]
+            \\      --root-dir=<root-dir>  Set a root directory path to be used as a prefix for URL links in the generated documentation files.
+            \\  -h, --help                 Print help
+        };
+        } else if (mem.startsWith(u8, arg, "--output")) {
+            var iter = mem.splitScalar(u8, arg, '=');
+            _ = iter.next();
+            output = iter.next().?;
+        } else if (mem.startsWith(u8, arg, "--root-dir")) {
+            var iter = mem.splitScalar(u8, arg, '=');
+            _ = iter.next();
+            root_dir = iter.next().?;
+        } else {
+            if (path != null) {
+                return CliArgs{ .invalid = "unexpected argument" };
+            }
+            path = arg;
+        }
+    }
+
+    return CliArgs{ .docs = DocsArgs{ .path = path orelse "main.roc", .output = output orelse "generated-docs", .root_dir = root_dir } };
 }
 
 fn parse_run(args: []const []const u8) CliArgs {
@@ -441,6 +481,37 @@ test "roc version" {
     }
     {
         const result = parse(&[_][]const u8{ "version", "--help" });
+        try testing.expectEqual(.help, std.meta.activeTag(result));
+    }
+}
+
+test "roc docs" {
+    {
+        const result = parse(&[_][]const u8{"docs"});
+        try testing.expectEqualStrings("main.roc", result.docs.path);
+        try testing.expectEqualStrings("generated-docs", result.docs.output);
+        try testing.expectEqual(null, result.docs.root_dir);
+    }
+    {
+        const result = parse(&[_][]const u8{ "docs", "foo/bar.roc", "--root-dir=/root/dir", "--output=my_output_dir" });
+        try testing.expectEqualStrings("foo/bar.roc", result.docs.path);
+        try testing.expectEqualStrings("my_output_dir", result.docs.output);
+        try testing.expectEqualStrings("/root/dir", result.docs.root_dir.?);
+    }
+    {
+        const result = parse(&[_][]const u8{ "docs", "foo.roc", "--madeup" });
+        try testing.expectEqualStrings("unexpected argument", result.invalid);
+    }
+    {
+        const result = parse(&[_][]const u8{ "docs", "-h" });
+        try testing.expectEqual(.help, std.meta.activeTag(result));
+    }
+    {
+        const result = parse(&[_][]const u8{ "docs", "--help" });
+        try testing.expectEqual(.help, std.meta.activeTag(result));
+    }
+    {
+        const result = parse(&[_][]const u8{ "docs", "foo.roc", "--help" });
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
 }
