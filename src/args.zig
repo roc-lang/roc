@@ -17,7 +17,7 @@ pub const CliArgs = union(enum) {
     docs: DocsArgs,
     help: []const u8,
     licenses,
-    invalid: []const u8, // error message
+    invalid: []const u8, // TODO: improve the error messages
 };
 
 pub const OptLevel = enum {
@@ -73,7 +73,9 @@ fn parseCheck(args: []const []const u8) CliArgs {
 }
 
 fn parseBuild(args: []const []const u8) CliArgs {
-    var build_args = BuildArgs{ .file = "main.roc" };
+    var file: ?[]const u8 = null;
+    var opt: OptLevel = .none;
+    var output: ?[]const u8 = null;
     for (args) |arg| {
         if (mem.eql(u8, arg, "-h") or mem.eql(u8, arg, "--help")) {
             return CliArgs{ .help = 
@@ -83,23 +85,26 @@ fn parseBuild(args: []const []const u8) CliArgs {
             var iter = mem.splitScalar(u8, arg, '=');
             _ = iter.next();
             const value = iter.next().?;
-            build_args.output = value;
+            output = value;
         } else if (mem.startsWith(u8, arg, "--opt")) {
             var iter = mem.splitScalar(u8, arg, '=');
             _ = iter.next();
             const value = iter.next().?;
             if (mem.eql(u8, value, "size")) {
-                build_args.opt = .size;
+                opt = .size;
             } else if (mem.eql(u8, value, "speed")) {
-                build_args.opt = .speed;
+                opt = .speed;
             } else {
                 return CliArgs{ .invalid = "--opt can be either speed or size" };
             }
         } else {
-            build_args.file = arg;
+            if (file != null) {
+                return CliArgs{ .invalid = "unexpected argument" };
+            }
+            file = arg;
         }
     }
-    return CliArgs{ .build = build_args };
+    return CliArgs{ .build = BuildArgs{ .file = file orelse "main.roc", .opt = opt, .output = output } };
 }
 
 fn parseRun(args: []const []const u8) CliArgs {
@@ -156,5 +161,21 @@ test "roc build" {
     {
         const result = parse(&[_][]const u8{ "build", "--opt=invalid" });
         try testing.expectEqualStrings("--opt can be either speed or size", result.invalid);
+    }
+    {
+        const result = parse(&[_][]const u8{ "build", "foo.roc", "bar.roc" });
+        try testing.expectEqualStrings("unexpected argument", result.invalid);
+    }
+    {
+        const result = parse(&[_][]const u8{ "build", "-h" });
+        try testing.expectEqualStrings("TODO build help message here", result.help);
+    }
+    {
+        const result = parse(&[_][]const u8{ "build", "--help" });
+        try testing.expectEqualStrings("TODO build help message here", result.help);
+    }
+    {
+        const result = parse(&[_][]const u8{ "build", "foo.roc", "--opt=size", "--help" });
+        try testing.expectEqualStrings("TODO build help message here", result.help);
     }
 }
