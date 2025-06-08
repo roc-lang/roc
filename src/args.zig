@@ -21,14 +21,14 @@ pub const CliArgs = union(enum) {
 };
 
 pub const OptLevel = enum {
-    none,
-    speed,
     size,
+    speed,
+    dev,
 };
 
 pub const RunArgs = struct {
     path: []const u8,
-    opt: OptLevel = .none,
+    opt: OptLevel = .dev,
 };
 
 pub const CheckArgs = struct {
@@ -37,13 +37,13 @@ pub const CheckArgs = struct {
 
 pub const BuildArgs = struct {
     path: []const u8,
-    opt: OptLevel = .none,
+    opt: OptLevel,
     output: ?[]const u8 = null,
 };
 
 pub const TestArgs = struct {
     path: []const u8,
-    opt: OptLevel = .none,
+    opt: OptLevel,
 };
 
 pub const FormatArgs = struct {
@@ -76,7 +76,7 @@ fn parseCheck(args: []const []const u8) CliArgs {
 
 fn parseBuild(args: []const []const u8) CliArgs {
     var path: ?[]const u8 = null;
-    var opt: OptLevel = .none;
+    var opt: OptLevel = .dev;
     var output: ?[]const u8 = null;
     for (args) |arg| {
         if (is_help_flag(arg)) {
@@ -106,6 +106,8 @@ fn parseBuild(args: []const []const u8) CliArgs {
                 opt = .size;
             } else if (mem.eql(u8, value, "speed")) {
                 opt = .speed;
+            } else if (mem.eql(u8, value, "dev")) {
+                opt = .dev;
             } else {
                 return CliArgs{ .invalid = "--opt can be either speed or size" };
             }
@@ -227,6 +229,7 @@ test "roc build" {
     {
         const result = parse(&[_][]const u8{"build"});
         try testing.expectEqualStrings("main.roc", result.build.path);
+        try testing.expectEqual(.dev, result.build.opt);
     }
     {
         const result = parse(&[_][]const u8{ "build", "foo.roc" });
@@ -236,6 +239,11 @@ test "roc build" {
         const result = parse(&[_][]const u8{ "build", "--opt=size" });
         try testing.expectEqualStrings("main.roc", result.build.path);
         try testing.expectEqual(OptLevel.size, result.build.opt);
+    }
+    {
+        const result = parse(&[_][]const u8{ "build", "--opt=dev" });
+        try testing.expectEqualStrings("main.roc", result.build.path);
+        try testing.expectEqual(OptLevel.dev, result.build.opt);
     }
     {
         const result = parse(&[_][]const u8{ "build", "--opt=speed", "foo/bar.roc", "--output=mypath" });
