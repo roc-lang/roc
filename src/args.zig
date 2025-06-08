@@ -41,10 +41,7 @@ pub const BuildArgs = struct {
     output: ?[]const u8 = null,
 };
 
-pub const TestArgs = struct {
-    path: []const u8,
-    opt: OptLevel,
-};
+pub const TestArgs = struct { path: []const u8, opt: OptLevel, main: ?[]const u8 };
 
 pub const FormatArgs = struct {
     path: []const u8,
@@ -152,8 +149,8 @@ fn parseFormat(args: []const []const u8) CliArgs {
 
 fn parseTest(args: []const []const u8) CliArgs {
     var path: ?[]const u8 = null;
-    var stdin = false;
-    var check = false;
+    var opt: OptLevel = .dev;
+    var main: ?[]const u8 = null;
     for (args) |arg| {
         if (is_help_flag(arg)) {
             return CliArgs{ .help = 
@@ -169,10 +166,16 @@ fn parseTest(args: []const []const u8) CliArgs {
             \\      --main <main>          The .roc file of the main app/package module to resolve dependencies from
             \\  -h, --help                 Print help
         };
-        } else if (mem.eql(u8, arg, "--stdin")) {
-            stdin = true;
-        } else if (mem.eql(u8, arg, "--check")) {
-            check = true;
+        } else if (mem.startsWith(u8, arg, "--main")) {
+            var iter = mem.splitScalar(u8, arg, '=');
+            _ = iter.next();
+            main = iter.next().?;
+        } else if (mem.startsWith(u8, arg, "--opt")) {
+            if (parse_opt_level(arg)) |level| {
+                opt = level;
+            } else {
+                return CliArgs{ .invalid = "--opt can be either speed or size" };
+            }
         } else {
             if (path != null) {
                 return CliArgs{ .invalid = "unexpected argument" };
@@ -180,7 +183,7 @@ fn parseTest(args: []const []const u8) CliArgs {
             path = arg;
         }
     }
-    return CliArgs{ .format = FormatArgs{ .path = path orelse "main.roc", .stdin = stdin, .check = check } };
+    return CliArgs{ .test_cmd = TestArgs{ .path = path orelse "main.roc", .opt = opt, .main = main } };
 }
 
 fn parseRun(args: []const []const u8) CliArgs {
@@ -328,5 +331,39 @@ test "roc format" {
     {
         const result = parse(&[_][]const u8{ "format", "--thisisactuallyafile" });
         try testing.expectEqualStrings("--thisisactuallyafile", result.format.path);
+    }
+}
+
+test "roc test" {
+    {
+        const result = parse(&[_][]const u8{"test"});
+        try testing.expectEqualStrings("main.roc", result.test_cmd.path);
+        try testing.expectEqual(null, result.test_cmd.main);
+        try testing.expectEqual(.dev, result.test_cmd.opt);
+    }
+    {
+        const result = parse(&[_][]const u8{ "test", "foo.roc" });
+        try testing.expectEqualStrings("foo.roc", result.test_cmd.path);
+    }
+    {
+        const result = parse(&[_][]const u8{ "test", "foo.roc", "--opt=speed" });
+        try testing.expectEqualStrings("foo.roc", result.test_cmd.path);
+        try testing.expectEqual(.speed, result.test_cmd.opt);
+    }
+    {
+        const result = parse(&[_][]const u8{ "test", "foo.roc", "bar.roc" });
+        try testing.expectEqualStrings("unexpected argument", result.invalid);
+    }
+    {
+        const result = parse(&[_][]const u8{ "test", "-h" });
+        try testing.expectEqual(.help, std.meta.activeTag(result));
+    }
+    {
+        const result = parse(&[_][]const u8{ "test", "--help" });
+        try testing.expectEqual(.help, std.meta.activeTag(result));
+    }
+    {
+        const result = parse(&[_][]const u8{ "test", "foo.roc", "--help" });
+        try testing.expectEqual(.help, std.meta.activeTag(result));
     }
 }
