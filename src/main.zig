@@ -72,24 +72,24 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    _ = arena;
-
-    switch (parse_args.parse(args)) {
-        .run => |run_args| try roc_run(gpa, run_args),
+    try switch (parse_args.parse(args)) {
+        .run => |run_args| roc_run(gpa, run_args),
+        .check => |check_args| roc_check(gpa, check_args),
+        .build => |build_args| roc_build(gpa, build_args),
+        .format => |format_args| roc_format(gpa, arena, format_args),
         else => fatal("not implemented", .{}),
-    }
+    };
 }
 
-fn roc_run(gpa: Allocator, args: parse_args.RunArgs) !void {
+fn roc_run(gpa: Allocator, args: parse_args.RunArgs) void {
     _ = gpa;
     _ = args;
     fatal("not implemented", .{});
 }
 
-fn rocBuild(gpa: Allocator, opt: RocOpt, args: []const []const u8) !void {
+fn roc_build(gpa: Allocator, args: parse_args.BuildArgs) void {
     _ = gpa;
-
-    std.debug.print("TODO roc build\n{}\n{s}\n\n", .{ opt, args });
+    _ = args;
 
     fatal("not implemented", .{});
 }
@@ -112,17 +112,13 @@ fn rocRepl(gpa: Allocator, opt: RocOpt, args: []const []const u8) !void {
 
 /// Reads, parses, formats, and overwrites all Roc files at the given paths.
 /// Recurses into directories to search for Roc files.
-fn rocFormat(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
+fn roc_format(gpa: Allocator, arena: Allocator, args: parse_args.FormatArgs) !void {
     var timer = try std.time.Timer.start();
     var count = fmt.SuccessFailCount{ .success = 0, .failure = 0 };
-    if (args.len > 0) {
-        for (args) |arg| {
-            const inner_count = try fmt.formatPath(gpa, arena, std.fs.cwd(), arg);
-            count.success += inner_count.success;
-            count.failure += inner_count.failure;
-        }
-    } else {
-        count = try fmt.formatPath(gpa, arena, std.fs.cwd(), "main.roc");
+    for (args.paths) |path| {
+        const inner_count = try fmt.formatPath(gpa, arena, std.fs.cwd(), path);
+        count.success += inner_count.success;
+        count.failure += inner_count.failure;
     }
     const elapsed = timer.read() / std.time.ns_per_ms;
     try std.io.getStdOut().writer().print("Successfully formatted {} files\n", .{count.success});
@@ -140,14 +136,8 @@ fn rocVersion(gpa: Allocator, args: []const []const u8) !void {
     fatal("not implemented", .{});
 }
 
-fn rocCheck(gpa: Allocator, opt: RocOpt, args: []const []const u8) void {
-    _ = opt;
-
-    const filename = if (args.len == 1) args[0] else {
-        fatal("The check command expects a single filename as an argument.\n", .{});
-    };
-
-    switch (coordinate.typecheckModule(gpa, Filesystem.default(), filename)) {
+fn roc_check(gpa: Allocator, args: parse_args.CheckArgs) void {
+    switch (coordinate.typecheckModule(gpa, Filesystem.default(), args.path)) {
         .success => |data| {
             var problems = std.ArrayList(Problem).init(gpa);
             var index_iter = data.can_irs.iterIndices();
@@ -163,7 +153,7 @@ fn rocCheck(gpa: Allocator, opt: RocOpt, args: []const []const u8) void {
             std.debug.print("{} problems found.\n", .{problems.items.len});
         },
         .err => |err| {
-            std.debug.print("Failed to check {s}:\n{}\n", .{ filename, err });
+            std.debug.print("Failed to check {s}:\n{}\n", .{ args.path, err });
         },
     }
 }

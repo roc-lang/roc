@@ -44,7 +44,7 @@ pub const BuildArgs = struct {
 pub const TestArgs = struct { path: []const u8, opt: OptLevel, main: ?[]const u8 };
 
 pub const FormatArgs = struct {
-    path: []const u8,
+    paths: []const []const u8,
     stdin: bool = false,
     check: bool = false,
 };
@@ -144,7 +144,7 @@ fn parse_build(args: []const []const u8) CliArgs {
 }
 
 fn parse_format(args: []const []const u8) CliArgs {
-    var path: ?[]const u8 = null;
+    var paths: []const []const u8 = &[_][]const u8{"main.roc"};
     var stdin = false;
     var check = false;
     for (args) |arg| {
@@ -170,13 +170,11 @@ fn parse_format(args: []const []const u8) CliArgs {
         } else if (mem.eql(u8, arg, "--check")) {
             check = true;
         } else {
-            if (path != null) {
-                return CliArgs{ .invalid = "unexpected argument" };
-            }
-            path = arg;
+            // TODO: actually create a list here
+            paths = &[_][]const u8{arg};
         }
     }
-    return CliArgs{ .format = FormatArgs{ .path = path orelse "main.roc", .stdin = stdin, .check = check } };
+    return CliArgs{ .format = FormatArgs{ .paths = paths, .stdin = stdin, .check = check } };
 }
 
 fn parse_test(args: []const []const u8) CliArgs {
@@ -392,35 +390,31 @@ test "roc build" {
 test "roc format" {
     {
         const result = parse(&[_][]const u8{"format"});
-        try testing.expectEqualStrings("main.roc", result.format.path);
+        try testing.expectEqualStrings("main.roc", result.format.paths[0]);
         try testing.expect(!result.format.stdin);
         try testing.expect(!result.format.check);
     }
     {
         const result = parse(&[_][]const u8{ "format", "--check" });
-        try testing.expectEqualStrings("main.roc", result.format.path);
+        try testing.expectEqualStrings("main.roc", result.format.paths[0]);
         try testing.expect(!result.format.stdin);
         try testing.expect(result.format.check);
     }
     {
         const result = parse(&[_][]const u8{ "format", "--stdin" });
-        try testing.expectEqualStrings("main.roc", result.format.path);
+        try testing.expectEqualStrings("main.roc", result.format.paths[0]);
         try testing.expect(result.format.stdin);
         try testing.expect(!result.format.check);
     }
     {
         const result = parse(&[_][]const u8{ "format", "--stdin", "--check", "foo.roc" });
-        try testing.expectEqualStrings("foo.roc", result.format.path);
+        try testing.expectEqualStrings("foo.roc", result.format.paths[0]);
         try testing.expect(result.format.stdin);
         try testing.expect(result.format.check);
     }
     {
         const result = parse(&[_][]const u8{ "format", "foo.roc" });
-        try testing.expectEqualStrings("foo.roc", result.format.path);
-    }
-    {
-        const result = parse(&[_][]const u8{ "format", "foo.roc", "bar.roc" });
-        try testing.expectEqualStrings("unexpected argument", result.invalid);
+        try testing.expectEqualStrings("foo.roc", result.format.paths[0]);
     }
     {
         const result = parse(&[_][]const u8{ "format", "-h" });
@@ -436,7 +430,7 @@ test "roc format" {
     }
     {
         const result = parse(&[_][]const u8{ "format", "--thisisactuallyafile" });
-        try testing.expectEqualStrings("--thisisactuallyafile", result.format.path);
+        try testing.expectEqualStrings("--thisisactuallyafile", result.format.paths[0]);
     }
 }
 
