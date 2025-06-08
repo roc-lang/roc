@@ -155,10 +155,11 @@ fn parse_build(args: []const []const u8) CliArgs {
             \\
         };
         } else if (mem.startsWith(u8, arg, "--output")) {
-            var iter = mem.splitScalar(u8, arg, '=');
-            _ = iter.next();
-            const value = iter.next().?;
-            output = value;
+            if (get_flag_value(arg)) |value| {
+                output = value;
+            } else {
+                return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--output" } } };
+            }
         } else if (mem.startsWith(u8, arg, "--opt")) {
             if (get_flag_value(arg)) |value| {
                 if (OptLevel.from_str(value)) |level| {
@@ -238,9 +239,11 @@ fn parse_test(args: []const []const u8) CliArgs {
             \\
         };
         } else if (mem.startsWith(u8, arg, "--main")) {
-            var iter = mem.splitScalar(u8, arg, '=');
-            _ = iter.next();
-            main = iter.next().?;
+            if (get_flag_value(arg)) |value| {
+                main = value;
+            } else {
+                return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--main" } } };
+            }
         } else if (mem.startsWith(u8, arg, "--opt")) {
             if (get_flag_value(arg)) |value| {
                 if (OptLevel.from_str(value)) |level| {
@@ -339,13 +342,17 @@ fn parse_docs(args: []const []const u8) CliArgs {
             \\
         };
         } else if (mem.startsWith(u8, arg, "--output")) {
-            var iter = mem.splitScalar(u8, arg, '=');
-            _ = iter.next();
-            output = iter.next().?;
+            if (get_flag_value(arg)) |value| {
+                output = value;
+            } else {
+                return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--output" } } };
+            }
         } else if (mem.startsWith(u8, arg, "--root-dir")) {
-            var iter = mem.splitScalar(u8, arg, '=');
-            _ = iter.next();
-            root_dir = iter.next().?;
+            if (get_flag_value(arg)) |value| {
+                root_dir = value;
+            } else {
+                return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--root-dir" } } };
+            }
         } else {
             if (path != null) {
                 return CliArgs{ .problem = CliProblem{ .unexpected_argument = .{ .cmd = "docs", .arg = arg } } };
