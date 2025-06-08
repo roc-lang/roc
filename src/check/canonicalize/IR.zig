@@ -1249,7 +1249,7 @@ pub const Expr = union(enum) {
 
                 p.toStr(gpa, "", buf.writer()) catch |err| {
                     // This definitely isn't clean... fix me
-                    // using our oom helper doesn't work here becuase
+                    // using our oom helper doesn't work here because
                     // the error set is different
                     std.debug.print("Error: {}\n", .{err});
                 };
