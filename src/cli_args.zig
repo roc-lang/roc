@@ -97,7 +97,7 @@ pub fn parse(gpa: mem.Allocator, args: []const []const u8) CliArgs {
     if (mem.eql(u8, args[0], "version")) return parse_version(args[1..]);
     if (mem.eql(u8, args[0], "docs")) return parse_docs(args[1..]);
     if (mem.eql(u8, args[0], "help")) return CliArgs{ .help = main_help };
-    if (mem.eql(u8, args[0], "licenses")) return CliArgs.licenses;
+    if (mem.eql(u8, args[0], "licenses")) return parse_licenses(args[1..]);
 
     return parse_run(gpa, args);
 }
@@ -253,7 +253,7 @@ fn parse_test(args: []const []const u8) CliArgs {
             }
         } else {
             if (path != null) {
-                return CliArgs{ .problem = CliProblem{ .unexpected_argument = .{ .cmd = "repl", .arg = arg } } };
+                return CliArgs{ .problem = CliProblem{ .unexpected_argument = .{ .cmd = "test", .arg = arg } } };
             }
             path = arg;
         }
@@ -297,6 +297,25 @@ fn parse_version(args: []const []const u8) CliArgs {
         }
     }
     return CliArgs.version;
+}
+
+fn parse_licenses(args: []const []const u8) CliArgs {
+    for (args) |arg| {
+        if (is_help_flag(arg)) {
+            return CliArgs{ .help = 
+            \\Prints license info for Roc as well as attributions to other projects used by Roc
+            \\
+            \\Usage: roc licenses
+            \\
+            \\Options:
+            \\  -h, --help  Print help
+            \\
+        };
+        } else {
+            return CliArgs{ .problem = CliProblem{ .unexpected_argument = .{ .cmd = "licenses", .arg = arg } } };
+        }
+    }
+    return CliArgs.licenses;
 }
 
 fn parse_docs(args: []const []const u8) CliArgs {
@@ -751,6 +770,6 @@ test "roc licenses" {
     {
         const result = parse(gpa, &[_][]const u8{ "licenses", "extrastuff" });
         defer result.deinit(gpa);
-        try testing.expectEqual(.licenses, std.meta.activeTag(result));
+        try testing.expectEqualStrings("extrastuff", result.problem.unexpected_argument.arg);
     }
 }
