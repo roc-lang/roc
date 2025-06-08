@@ -52,6 +52,10 @@ pub const Problem = union(enum) {
 
             const StatementType = enum(u8) { @"var", expr, @"for", crash, @"return" };
         },
+        InvalidNumLiteral: struct {
+            region: Region,
+            literal: []const u8,
+        },
 
         /// Make a `Problem` based on a canonicalization problem.
         pub fn make(can_problem: @This()) Problem {
@@ -97,6 +101,10 @@ pub const Problem = union(enum) {
                 .InvalidTopLevelStatement => |e| {
                     _ = e; // TODO: Use this capture in a meaningful way (make sure to update Canonicalize tests)
                     const err_msg = try std.fmt.bufPrint(&buf, "Invalid top level statement", .{});
+                    try writer.writeAll(err_msg);
+                },
+                .InvalidNumLiteral => |e| {
+                    const err_msg = try std.fmt.bufPrint(&buf, "Invalid number literal: '{s}'", .{e.literal});
                     try writer.writeAll(err_msg);
                 },
             }

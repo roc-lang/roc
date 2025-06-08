@@ -175,8 +175,6 @@ pub const Tuple = struct {
 /// often, we unify that representation into a special (much more compact)
 /// representation which saves a lot of memory.
 pub const Num = union(enum) {
-    const Self = @This();
-
     flex_var,
     int: Int,
     frac: Frac,

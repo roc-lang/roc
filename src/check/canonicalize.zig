@@ -3,9 +3,15 @@ const base = @import("../base.zig");
 const parse = @import("parse.zig");
 const problem = @import("../problem.zig");
 const collections = @import("../collections.zig");
+const types = @import("../types/types.zig");
 
 const Scope = @import("./canonicalize/Scope.zig");
 const Alias = @import("./canonicalize/Alias.zig");
+
+// Placeholder TypeVars used during canonicalization
+// These will be replaced with real type variables during type checking
+const PLACEHOLDER_NUM_VAR: types.Var = @enumFromInt(0);
+const PLACEHOLDER_PRECISION_VAR: types.Var = @enumFromInt(0);
 
 can_ir: *IR,
 parse_ir: *parse.IR,
@@ -279,7 +285,58 @@ fn canonicalize_expr(
                 }
             }
         },
-        else => {},
+        .int => |e| {
+            // resolve to a string slice from the source
+            const token_text = self.parse_ir.resolve(e.token);
+
+            // intern the string slice
+            const literal = self.can_ir.env.strings.insert(self.can_ir.env.gpa, token_text);
+
+            // parse the integer value
+            const value = std.fmt.parseInt(i128, token_text, 10) catch {
+                // Add problem for invalid number literal
+                _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .InvalidNumLiteral = .{
+                    .region = e.region.toBase(),
+                    .literal = token_text,
+                } }));
+
+                // Return a valid expression with placeholder value so compilation can continue
+                return self.can_ir.store.addExpr(.{
+                    .expr = .{
+                        .int = .{
+                            .num_var = PLACEHOLDER_NUM_VAR,
+                            .precision_var = PLACEHOLDER_PRECISION_VAR,
+                            .literal = literal,
+                            .value = .{
+                                .bytes = [16]u8{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 },
+                                .kind = .i128,
+                            },
+                            .bound = .flex_var,
+                        },
+                    },
+                    .region = e.region.toBase(),
+                });
+            };
+
+            const int_expr = IR.Expr{
+                .int = .{
+                    .num_var = PLACEHOLDER_NUM_VAR,
+                    .precision_var = PLACEHOLDER_PRECISION_VAR,
+                    .literal = literal,
+                    .value = IR.IntValue{
+                        .bytes = @bitCast(value),
+                        .kind = .i128,
+                    },
+                    .bound = .flex_var,
+                },
+            };
+
+            return self.can_ir.store.addExpr(.{
+                .expr = int_expr,
+                .region = e.region.toBase(),
+            });
+        },
+        else => @panic("TODO implement canonicalize expr for {expr}"),
     }
     return null;
 }
@@ -294,7 +351,12 @@ fn canonicalize_pattern(
 
 test {
     try test_can_expr("foo", &.{"foo"}, &.{});
-    try test_can_expr("bar", &.{"foo"}, &.{"Ident not in scope"});
+    try test_can_expr("42", &.{}, &.{});
+    try test_can_expr("0", &.{}, &.{});
+    try test_can_expr("-123", &.{}, &.{});
+
+    // Test very large number that exceeds i128 range
+    try test_can_expr("99999999999999999999999999999999999999999", &.{}, &.{"Invalid number literal: '99999999999999999999999999999999999999999'"});
 }
 
 fn test_can_expr(source: []const u8, idents: []const []const u8, error_messages: []const []const u8) !void {
@@ -312,7 +374,7 @@ fn test_can_expr(source: []const u8, idents: []const []const u8, error_messages:
     try std.testing.expectEqualSlices(parse.IR.Diagnostic, &.{}, parse_ir.errors);
 
     // Initialize Can IR
-    var can_ir = IR.initCapacity(module_env, parse_ir.store.nodes.items.len);
+    var can_ir = IR.init(module_env);
     defer can_ir.deinit();
 
     var scope = Scope.init(&can_ir.env, &.{}, &.{});
@@ -332,7 +394,7 @@ fn test_can_expr(source: []const u8, idents: []const []const u8, error_messages:
         var buf = std.ArrayListUnmanaged(u8){};
         var writer = buf.writer(std.testing.allocator);
         defer buf.deinit(std.testing.allocator);
-        try can_ir.env.problems.items.items[i].toStr(std.testing.allocator, source, &writer);
+        try can_ir.env.problems.items.items[i].toStr(std.testing.allocator, source, writer.any());
         try std.testing.expectEqualStrings(error_messages[i], buf.items);
     }
 }

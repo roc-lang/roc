@@ -43,6 +43,7 @@ pub fn init(env: ModuleEnv) IR {
 /// For more information refer to documentation on [init] as well
 pub fn initCapacity(env: ModuleEnv, capacity: usize) IR {
     var ident_store = env.idents;
+
     return IR{
         .env = env,
         .store = NodeStore.initCapacity(env.gpa, capacity),
@@ -326,6 +327,11 @@ pub const NodeStore = struct {
             .lookup => |e| {
                 node.tag = .expr_var;
                 node.data_1 = @intCast(e.ident.idx);
+            },
+            .int => |e| {
+                node.tag = .expr_int;
+                // TODO: Store int data properly. For now, just store the literal idx
+                node.data_1 = @intCast(@intFromEnum(e.literal));
             },
             else => {
                 std.debug.panic("Expression of type {s} not yet implemented in Can\n", .{@tagName(expr.expr)});
