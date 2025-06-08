@@ -63,6 +63,7 @@ pub fn parse(args: []const []const u8) CliArgs {
     if (mem.eql(u8, args[0], "build")) return parse_build(args[1..]);
     if (mem.eql(u8, args[0], "format")) return parse_format(args[1..]);
     if (mem.eql(u8, args[0], "test")) return parse_test(args[1..]);
+    if (mem.eql(u8, args[0], "repl")) return parse_repl(args[1..]);
 
     return parse_run(args[1..]);
 }
@@ -185,6 +186,24 @@ fn parse_test(args: []const []const u8) CliArgs {
         }
     }
     return CliArgs{ .test_cmd = TestArgs{ .path = path orelse "main.roc", .opt = opt, .main = main } };
+}
+
+fn parse_repl(args: []const []const u8) CliArgs {
+    for (args) |arg| {
+        if (is_help_flag(arg)) {
+            return CliArgs{ .help = 
+            \\Launch the interactive Read Eval Print Loop (REPL)
+            \\
+            \\Usage: roc repl [OPTIONS]
+            \\
+            \\Options:
+            \\  -h, --help       Print help
+        };
+        } else {
+            return CliArgs{ .invalid = "unexpected argument" };
+        }
+    }
+    return CliArgs.repl;
 }
 
 fn parse_run(args: []const []const u8) CliArgs {
@@ -365,6 +384,25 @@ test "roc test" {
     }
     {
         const result = parse(&[_][]const u8{ "test", "foo.roc", "--help" });
+        try testing.expectEqual(.help, std.meta.activeTag(result));
+    }
+}
+
+test "roc repl" {
+    {
+        const result = parse(&[_][]const u8{"repl"});
+        try testing.expectEqual(.repl, std.meta.activeTag(result));
+    }
+    {
+        const result = parse(&[_][]const u8{ "repl", "foo.roc" });
+        try testing.expectEqualStrings("unexpected argument", result.invalid);
+    }
+    {
+        const result = parse(&[_][]const u8{ "repl", "-h" });
+        try testing.expectEqual(.help, std.meta.activeTag(result));
+    }
+    {
+        const result = parse(&[_][]const u8{ "repl", "--help" });
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
 }
