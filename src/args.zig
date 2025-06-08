@@ -67,9 +67,37 @@ pub fn parse(args: []const []const u8) CliArgs {
     if (mem.eql(u8, args[0], "repl")) return parse_repl(args[1..]);
     if (mem.eql(u8, args[0], "version")) return parse_version(args[1..]);
     if (mem.eql(u8, args[0], "docs")) return parse_docs(args[1..]);
+    if (mem.eql(u8, args[0], "help")) {
+        return CliArgs{ .help = main_help };
+    }
 
     return parse_run(args[1..]);
 }
+
+const main_help =
+    \\Run the given .roc file
+    \\You can use one of the SUBCOMMANDS below to do something else!
+    \\
+    \\Usage: roc [OPTIONS] [ROC_FILE] [ARGS_FOR_APP]...
+    \\       roc <COMMAND>
+    \\
+    \\Commands:
+    \\  build            Build a binary from the given .roc file, but don't run it
+    \\  test             Run all top-level `expect`s in a main module and any modules it imports
+    \\  repl             Launch the interactive Read Eval Print Loop (REPL)
+    \\  format           Format a .roc file or the .roc files contained in a directory using standard Roc formatting
+    \\  version          Print the Roc compiler’s version
+    \\  check            Check the code for problems, but don’t build or run it
+    \\  docs             Generate documentation for a Roc package
+    \\  help             Print this message
+    \\
+    \\Arguments:
+    \\  [ROC_FILE]         The .roc file of an app to run [default: main.roc]
+    \\  [ARGS_FOR_APP]...  Arguments to pass into the app being run
+    \\                     e.g. `roc run -- arg1 arg2`
+    \\Options:
+    \\      --opt=<size|speed|dev> Optimize the build process for binary size, binary speed, or compilation speed. Defaults to compilation speed (dev)
+;
 
 fn parse_check(args: []const []const u8) CliArgs {
     if (args.len == 0) return CliArgs{ .check = CheckArgs{ .path = "main.roc" } };
@@ -512,6 +540,17 @@ test "roc docs" {
     }
     {
         const result = parse(&[_][]const u8{ "docs", "foo.roc", "--help" });
+        try testing.expectEqual(.help, std.meta.activeTag(result));
+    }
+}
+
+test "roc help" {
+    {
+        const result = parse(&[_][]const u8{"help"});
+        try testing.expectEqual(.help, std.meta.activeTag(result));
+    }
+    {
+        const result = parse(&[_][]const u8{ "help", "extrastuff" });
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
 }
