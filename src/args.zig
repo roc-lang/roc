@@ -64,6 +64,7 @@ pub fn parse(args: []const []const u8) CliArgs {
     if (mem.eql(u8, args[0], "check")) return parseCheck(args[1..]);
     if (mem.eql(u8, args[0], "build")) return parseBuild(args[1..]);
     if (mem.eql(u8, args[0], "format")) return parseFormat(args[1..]);
+    if (mem.eql(u8, args[0], "test")) return parseTest(args[1..]);
 
     return parseRun(args[1..]);
 }
@@ -85,11 +86,11 @@ fn parseBuild(args: []const []const u8) CliArgs {
             \\Usage: roc build [OPTIONS] [ROC_FILE]
             \\
             \\Arguments:
-            \\  [ROC_FILE]  The .roc file to build [default: main.roc]
+            \\  [ROC_FILE] The .roc file to build [default: main.roc]
             \\
             \\Options:
             \\      --output=<output>      The full path to the output binary, including filename. To specify directory only, specify a path that ends in a directory separator (e.g. a slash)
-            \\      --opt=<size|speed|dev> Optimize the build process for binary size, binary speed, or compilation speed. Defaults to compilation speed `dev
+            \\      --opt=<size|speed|dev> Optimize the build process for binary size, binary speed, or compilation speed. Defaults to compilation speed (dev)
             \\      -h, --help             Print help
         };
         } else if (mem.startsWith(u8, arg, "--output")) {
@@ -127,10 +128,10 @@ fn parseFormat(args: []const []const u8) CliArgs {
             return CliArgs{ .help = 
             \\Format a .roc file or the .roc files contained in a directory using standard Roc formatting
             \\
-            \\Usage: roc format [OPTIONS] [DIRECTORY_OR_FILES]...
+            \\Usage: roc format [OPTIONS] [DIRECTORY_OR_FILES]
             \\
             \\Arguments:
-            \\  [DIRECTORY_OR_FILES]...
+            \\  [DIRECTORY_OR_FILES]
             \\
             \\Options:
             \\      --check    Checks that specified files are formatted
@@ -153,6 +154,40 @@ fn parseFormat(args: []const []const u8) CliArgs {
     }
     return CliArgs{ .format = FormatArgs{ .path = path orelse "main.roc", .stdin = stdin, .check = check } };
 }
+
+fn parseTest(args: []const []const u8) CliArgs {
+    var path: ?[]const u8 = null;
+    var stdin = false;
+    var check = false;
+    for (args) |arg| {
+        if (mem.eql(u8, arg, "-h") or mem.eql(u8, arg, "--help")) {
+            return CliArgs{ .help = 
+            \\Run all top-level `expect`s in a main module and any modules it imports
+            \\
+            \\Usage: roc test [OPTIONS] [ROC_FILE]
+            \\
+            \\Arguments:
+            \\  [ROC_FILE] The .roc file to test [default: main.roc]
+            \\
+            \\Options:
+            \\      --opt=<size|speed|dev> Optimize the build process for binary size, binary speed, or compilation speed. Defaults to compilation speed dev
+            \\      --main <main>          The .roc file of the main app/package module to resolve dependencies from
+            \\  -h, --help                 Print help
+        };
+        } else if (mem.eql(u8, arg, "--stdin")) {
+            stdin = true;
+        } else if (mem.eql(u8, arg, "--check")) {
+            check = true;
+        } else {
+            if (path != null) {
+                return CliArgs{ .invalid = "unexpected argument" };
+            }
+            path = arg;
+        }
+    }
+    return CliArgs{ .format = FormatArgs{ .path = path orelse "main.roc", .stdin = stdin, .check = check } };
+}
+
 fn parseRun(args: []const []const u8) CliArgs {
     _ = args;
     return CliArgs{ .run = RunArgs{ .path = "main.roc" } };
