@@ -64,6 +64,7 @@ pub fn parse(args: []const []const u8) CliArgs {
     if (mem.eql(u8, args[0], "format")) return parse_format(args[1..]);
     if (mem.eql(u8, args[0], "test")) return parse_test(args[1..]);
     if (mem.eql(u8, args[0], "repl")) return parse_repl(args[1..]);
+    if (mem.eql(u8, args[0], "version")) return parse_version(args[1..]);
 
     return parse_run(args[1..]);
 }
@@ -204,6 +205,24 @@ fn parse_repl(args: []const []const u8) CliArgs {
         }
     }
     return CliArgs.repl;
+}
+
+fn parse_version(args: []const []const u8) CliArgs {
+    for (args) |arg| {
+        if (is_help_flag(arg)) {
+            return CliArgs{ .help = 
+            \\Print the Roc compiler’s version
+            \\
+            \\Usage: roc version
+            \\
+            \\Options:
+            \\  -h, --help  Print help
+        };
+        } else {
+            return CliArgs{ .invalid = "unexpected argument" };
+        }
+    }
+    return CliArgs.version;
 }
 
 fn parse_run(args: []const []const u8) CliArgs {
@@ -403,6 +422,25 @@ test "roc repl" {
     }
     {
         const result = parse(&[_][]const u8{ "repl", "--help" });
+        try testing.expectEqual(.help, std.meta.activeTag(result));
+    }
+}
+
+test "roc version" {
+    {
+        const result = parse(&[_][]const u8{"version"});
+        try testing.expectEqual(.version, std.meta.activeTag(result));
+    }
+    {
+        const result = parse(&[_][]const u8{ "version", "foo.roc" });
+        try testing.expectEqualStrings("unexpected argument", result.invalid);
+    }
+    {
+        const result = parse(&[_][]const u8{ "version", "-h" });
+        try testing.expectEqual(.help, std.meta.activeTag(result));
+    }
+    {
+        const result = parse(&[_][]const u8{ "version", "--help" });
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
 }
