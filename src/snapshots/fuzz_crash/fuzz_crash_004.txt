@@ -11,4 +11,8 @@ UpperIdent(1:1-1:2),EndOfFile(1:2-1:2),
 (file (1:1-1:2)
 	(malformed_header (1:1-1:2) "missing_header")
 	(statements))
+~~~FORMATTED
+
+~~~CANONICALIZE
+(can_ir "TODO")
 ~~~END

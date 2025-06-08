@@ -19,4 +19,6 @@ module [
 	something,
 	SomeType,
 ]
+~~~CANONICALIZE
+(can_ir "TODO")
 ~~~END

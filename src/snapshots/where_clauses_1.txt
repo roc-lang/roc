@@ -42,4 +42,6 @@ KwModule(10:3-10:9),NoSpaceOpenRound(10:9-10:10),LowerIdent(10:10-10:11),CloseRo
 			(ty_var (8:13-8:14) "a"))))
 ~~~FORMATTED
 NO CHANGE
+~~~CANONICALIZE
+(can_ir "TODO")
 ~~~END

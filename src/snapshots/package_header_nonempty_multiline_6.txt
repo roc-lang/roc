@@ -39,4 +39,6 @@ CloseCurly(9:2-9:3),EndOfFile(9:3-9:3),
 	(statements))
 ~~~FORMATTED
 NO CHANGE
+~~~CANONICALIZE
+(can_ir "TODO")
 ~~~END

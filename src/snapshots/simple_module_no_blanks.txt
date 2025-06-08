@@ -31,4 +31,6 @@ LowerIdent(4:1-4:6),OpAssign(4:7-4:8),StringStart(4:9-4:10),StringPart(4:10-4:15
 			(string (4:9-4:16) (string_part (4:10-4:15) "World")))))
 ~~~FORMATTED
 NO CHANGE
+~~~CANONICALIZE
+(can_ir "TODO")
 ~~~END

@@ -21,4 +21,10 @@ MalformedNumberBadSuffix(3:1-3:5),EndOfFile(3:5-3:5),
 		(malformed_expr (1:3-1:5) "expr_unexpected_token")
 		(malformed_expr (2:1-2:6) "expr_unexpected_token")
 		(malformed_expr (3:1-3:5) "expr_unexpected_token")))
+~~~FORMATTED
+
+
+
+~~~CANONICALIZE
+(can_ir "TODO")
 ~~~END

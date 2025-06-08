@@ -38,4 +38,6 @@ module [
 foo = 
 
 	"one"
+~~~CANONICALIZE
+(can_ir "TODO")
 ~~~END

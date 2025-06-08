@@ -1,0 +1,20 @@
+~~~META
+description=Negative integer literal canonicalization
+type=expr
+~~~SOURCE
+-123
+~~~PROBLEMS
+NIL
+~~~TOKENS
+Int(1:1-1:5),EndOfFile(1:5-1:5),
+~~~PARSE
+(int (1:1-1:5) "-123")
+~~~FORMATTED
+NO CHANGE
+~~~CANONICALIZE
+(expr
+	(int
+		(literal "-123")
+		(value "TODO: format int value")
+		(bound "flex_var")))
+~~~END

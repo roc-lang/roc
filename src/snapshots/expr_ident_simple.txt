@@ -1,0 +1,16 @@
+~~~META
+description=Simple identifier lookup canonicalization
+type=expr
+~~~SOURCE
+foo
+~~~PROBLEMS
+NIL
+~~~TOKENS
+LowerIdent(1:1-1:4),EndOfFile(1:4-1:4),
+~~~PARSE
+(ident (1:1-1:4) "" "foo")
+~~~FORMATTED
+NO CHANGE
+~~~CANONICALIZE
+(can_ir "TODO")
+~~~END

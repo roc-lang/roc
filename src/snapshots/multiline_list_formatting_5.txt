@@ -20,4 +20,6 @@ Int(2:3-2:4),CloseSquare(2:4-2:5),EndOfFile(2:5-2:5),
 	2, # Foo
 	3,
 ]
+~~~CANONICALIZE
+(can_ir "TODO")
 ~~~END

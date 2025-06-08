@@ -109,4 +109,6 @@ UpperIdent(15:1-15:8),OpColon(15:9-15:10),UpperIdent(15:11-15:17),NoSpaceDotUppe
 			(mod_ty "Module" ".Thingy"))))
 ~~~FORMATTED
 NO CHANGE
+~~~CANONICALIZE
+(can_ir "TODO")
 ~~~END

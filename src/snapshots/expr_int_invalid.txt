@@ -1,0 +1,20 @@
+~~~META
+description=Invalid integer literal that exceeds i128 range
+type=expr
+~~~SOURCE
+99999999999999999999999999999999999999999
+~~~PROBLEMS
+NIL
+~~~TOKENS
+Int(1:1-1:42),EndOfFile(1:42-1:42),
+~~~PARSE
+(int (1:1-1:42) "99999999999999999999999999999999999999999")
+~~~FORMATTED
+NO CHANGE
+~~~CANONICALIZE
+(expr
+	(int
+		(literal "99999999999999999999999999999999999999999")
+		(value "TODO: format int value")
+		(bound "flex_var")))
+~~~END

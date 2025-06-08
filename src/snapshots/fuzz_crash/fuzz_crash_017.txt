@@ -20,4 +20,9 @@ LowerIdent(2:1-2:4),OpAssign(2:5-2:6),StringStart(2:7-2:8),StringPart(2:8-2:14),
 		(decl (2:1-2:20)
 			(ident (2:1-2:4) "foo")
 			(malformed_expr (2:7-2:20) "string_expected_close_interpolation"))))
+~~~FORMATTED
+"luc"
+foo = 
+~~~CANONICALIZE
+(can_ir "TODO")
 ~~~END

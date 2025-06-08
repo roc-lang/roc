@@ -69,4 +69,6 @@ CloseSquare(21:3-21:4),EndOfFile(21:4-21:4),
 	(statements))
 ~~~FORMATTED
 NO CHANGE
+~~~CANONICALIZE
+(can_ir "TODO")
 ~~~END

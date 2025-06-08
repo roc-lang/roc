@@ -23,6 +23,7 @@ pub const Problem = union(enum) {
     /// User errors preventing a module from being canonicalized correctly,
     /// e.g. a variable that was used but not defined.
     pub const Canonicalize = union(enum) {
+        NotYetImplemented,
         DuplicateImport: struct {
             duplicate_import_region: Region,
         },
@@ -68,43 +69,47 @@ pub const Problem = union(enum) {
             var buf: [1000]u8 = undefined;
 
             switch (self) {
+                .NotYetImplemented => {
+                    const err_msg = try std.fmt.bufPrint(&buf, "CAN: Not yet implemented", .{});
+                    try writer.writeAll(err_msg);
+                },
                 .DuplicateImport => |e| {
                     _ = e; // TODO: Use this capture in a meaningful way (make sure to update Canonicalize tests)
-                    const err_msg = try std.fmt.bufPrint(&buf, "Duplicate Import", .{});
+                    const err_msg = try std.fmt.bufPrint(&buf, "CAN: Duplicate Import", .{});
                     try writer.writeAll(err_msg);
                 },
                 .DuplicateExposes => |e| {
                     _ = e; // TODO: Use this capture in a meaningful way (make sure to update Canonicalize tests)
-                    const err_msg = try std.fmt.bufPrint(&buf, "Duplicate Exposes", .{});
+                    const err_msg = try std.fmt.bufPrint(&buf, "CAN: Duplicate Exposes", .{});
                     try writer.writeAll(err_msg);
                 },
                 .AliasNotInScope => |e| {
                     _ = e; // TODO: Use this capture in a meaningful way (make sure to update Canonicalize tests)
-                    const err_msg = try std.fmt.bufPrint(&buf, "Alias not in scope", .{});
+                    const err_msg = try std.fmt.bufPrint(&buf, "CAN: Alias not in scope", .{});
                     try writer.writeAll(err_msg);
                 },
                 .IdentNotInScope => |e| {
                     _ = e; // TODO: Use this capture in a meaningful way (make sure to update Canonicalize tests)
-                    const err_msg = try std.fmt.bufPrint(&buf, "Ident not in scope", .{});
+                    const err_msg = try std.fmt.bufPrint(&buf, "CAN: Ident not in scope", .{});
                     try writer.writeAll(err_msg);
                 },
                 .AliasAlreadyInScope => |e| {
                     _ = e; // TODO: Use this capture in a meaningful way (make sure to update Canonicalize tests)
-                    const err_msg = try std.fmt.bufPrint(&buf, "Alias already in scope", .{});
+                    const err_msg = try std.fmt.bufPrint(&buf, "CAN: Alias already in scope", .{});
                     try writer.writeAll(err_msg);
                 },
                 .IdentAlreadyInScope => |e| {
                     _ = e; // TODO: Use this capture in a meaningful way (make sure to update Canonicalize tests)
-                    const err_msg = try std.fmt.bufPrint(&buf, "Ident already in scope", .{});
+                    const err_msg = try std.fmt.bufPrint(&buf, "CAN: Ident already in scope", .{});
                     try writer.writeAll(err_msg);
                 },
                 .InvalidTopLevelStatement => |e| {
                     _ = e; // TODO: Use this capture in a meaningful way (make sure to update Canonicalize tests)
-                    const err_msg = try std.fmt.bufPrint(&buf, "Invalid top level statement", .{});
+                    const err_msg = try std.fmt.bufPrint(&buf, "CAN: Invalid top level statement", .{});
                     try writer.writeAll(err_msg);
                 },
                 .InvalidNumLiteral => |e| {
-                    const err_msg = try std.fmt.bufPrint(&buf, "Invalid number literal: '{s}'", .{e.literal});
+                    const err_msg = try std.fmt.bufPrint(&buf, "CAN: Invalid number literal {s}", .{e.literal});
                     try writer.writeAll(err_msg);
                 },
             }

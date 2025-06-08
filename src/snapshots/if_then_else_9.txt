@@ -24,4 +24,6 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 		(statements (int (4:2-4:3) "2"))))
 ~~~FORMATTED
 NO CHANGE
+~~~CANONICALIZE
+(can_ir "TODO")
 ~~~END

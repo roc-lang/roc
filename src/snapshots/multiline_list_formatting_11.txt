@@ -33,4 +33,6 @@ CloseSquare(9:1-9:2),EndOfFile(9:2-9:2),
 	(list (8:2-8:5) (int (8:3-8:4) "5")))
 ~~~FORMATTED
 NO CHANGE
+~~~CANONICALIZE
+(can_ir "TODO")
 ~~~END

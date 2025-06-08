@@ -27,4 +27,6 @@ KwProvides(5:2-5:10),OpenSquare(5:11-5:12),CloseSquare(5:12-5:13),EndOfFile(5:13
 	(statements))
 ~~~FORMATTED
 NO CHANGE
+~~~CANONICALIZE
+(can_ir "TODO")
 ~~~END

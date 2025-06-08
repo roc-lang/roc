@@ -231,15 +231,29 @@ pub const NodeStore = struct {
         }
     }
 
-    pub fn getExpr(store: *NodeStore, expr: Expr.Idx) Expr {
+    pub fn getExpr(store: *const NodeStore, expr: Expr.Idx) Expr {
         const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr));
         const node = store.nodes.get(node_idx);
 
         switch (node.tag) {
             .expr_var => {
-                return .{ .@"var" = .{
-                    .ident = @bitCast(node.data_1),
-                } };
+                @panic("TODO implement expr_var");
+            },
+            .expr_int => {
+                // TODO: Store and retrieve all int data properly
+                // For now, we only have the literal index stored
+                return .{
+                    .int = .{
+                        .num_var = @enumFromInt(0), // Placeholder
+                        .precision_var = @enumFromInt(0), // Placeholder
+                        .literal = @enumFromInt(node.data_1),
+                        .value = IntValue{ // Placeholder value
+                            .bytes = [16]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+                            .kind = .i128,
+                        },
+                        .bound = .flex_var, // Default bound
+                    },
+                };
             },
             else => @panic("TODO: implement other expr variants"),
         }
@@ -1436,38 +1450,75 @@ pub const ExhaustiveMark = TypeVar;
 
 /// Helper function to convert the entire Canonical IR to a string in S-expression format
 /// and write it to the given writer.
-pub fn toSExprStr(ir: *const IR, module_env: *base.ModuleEnv, writer: std.io.AnyWriter) !void {
-    _ = ir;
-    var root_node = sexpr.Expr.init(module_env.gpa, "canonical_ir");
-    defer root_node.deinit(module_env.gpa);
+///
+/// If a single expression is provided we only print that expression
+pub fn toSExprStr(ir: *const IR, module_env: *base.ModuleEnv, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr.Idx) !void {
+    if (maybe_expr_idx) |expr_idx| {
+        // Get the expression from the store
+        const expr = ir.store.getExpr(expr_idx);
+        var expr_node = try exprToSExpr(expr, expr_idx, ir, module_env);
+        defer expr_node.deinit(module_env.gpa);
 
-    // Represent top-level definitions
-    // TODO Need a way to iterate all defs, assuming indices 0..ir.defs.len
-    var defs_node = sexpr.Expr.init(module_env.gpa, "defs");
-    // var iter = ir.defs.iterIndices();
-    // while (iter.next()) |i| {
-    //     const def = ir.defs.get(i);
-    //     var def_sexpr = def.toSExpr(ir.env, ir);
-    //     defs_node.appendNodeChild(module_env.gpa, &def_sexpr);
-    // }
-    root_node.appendNodeChild(module_env.gpa, &defs_node);
+        expr_node.toStringPretty(writer);
+    } else {
+        var root_node = sexpr.Expr.init(module_env.gpa, "can_ir");
+        defer root_node.deinit(module_env.gpa);
 
-    defs_node.appendStringChild(module_env.gpa, "TODO: Implement using NodeStore");
+        // TODO: Implement def iteration
 
-    // TODO: Optionally add other top-level elements like imports, aliases, ingested files
-    // var imports_node = sexpr.Expr.init(module_env.gpa, "imports");
-    // ... iterate ir.imports ...
-    // root_node.appendNodeChild(module_env.gpa, &imports_node);
+        root_node.appendStringChild(module_env.gpa, "TODO");
+        root_node.toStringPretty(writer);
+    }
+}
 
-    // var aliases_node = sexpr.Expr.init(module_env.gpa, "aliases");
-    // ... iterate ir.aliases ...
-    // root_node.appendNodeChild(module_env.gpa, &aliases_node);
+fn exprToSExpr(expr: Expr, expr_idx: Expr.Idx, ir: *const IR, module_env: *base.ModuleEnv) !sexpr.Expr {
+    _ = expr_idx;
+    var expr_node = sexpr.Expr.init(module_env.gpa, "expr");
 
-    // var ingested_node = sexpr.Expr.init(module_env.gpa, "ingested_files");
-    // ... iterate ir.ingested_files ...
-    // root_node.appendNodeChild(module_env.gpa, &ingested_node);
+    // TODO: Add region information when available
+    // For now, just add the expression content based on its type
+    switch (expr) {
+        .int => |int_expr| {
+            var int_node = sexpr.Expr.init(module_env.gpa, "int");
 
-    root_node.toStringPretty(writer);
+            // Add literal
+            var literal_node = sexpr.Expr.init(module_env.gpa, "literal");
+            const literal_str = ir.env.strings.get(int_expr.literal);
+            literal_node.appendStringChild(module_env.gpa, literal_str);
+            int_node.appendNodeChild(module_env.gpa, &literal_node);
+
+            // Add value info
+            var value_node = sexpr.Expr.init(module_env.gpa, "value");
+            // TODO: Format the actual integer value properly
+            value_node.appendStringChild(module_env.gpa, "TODO: format int value");
+            int_node.appendNodeChild(module_env.gpa, &value_node);
+
+            // Add bound info
+            var bound_node = sexpr.Expr.init(module_env.gpa, "bound");
+            bound_node.appendStringChild(module_env.gpa, @tagName(int_expr.bound));
+            int_node.appendNodeChild(module_env.gpa, &bound_node);
+
+            expr_node.appendNodeChild(module_env.gpa, &int_node);
+        },
+        .lookup => |lookup| {
+            var lookup_node = sexpr.Expr.init(module_env.gpa, "lookup");
+
+            var ident_node = sexpr.Expr.init(module_env.gpa, "ident");
+            const ident_str = ir.env.idents.getText(lookup.ident);
+            ident_node.appendStringChild(module_env.gpa, ident_str);
+            lookup_node.appendNodeChild(module_env.gpa, &ident_node);
+
+            expr_node.appendNodeChild(module_env.gpa, &lookup_node);
+        },
+        else => {
+            // For other expression types, add a placeholder
+            var placeholder = sexpr.Expr.init(module_env.gpa, @tagName(expr));
+            placeholder.appendStringChild(module_env.gpa, "TODO: implement");
+            expr_node.appendNodeChild(module_env.gpa, &placeholder);
+        },
+    }
+
+    return expr_node;
 }
 
 /// todo

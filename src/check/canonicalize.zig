@@ -256,7 +256,8 @@ fn canonicalize_decl(
     self.canonicalize_pattern(decl.pattern);
 }
 
-fn canonicalize_expr(
+/// Canonicalize an expression.
+pub fn canonicalize_expr(
     self: *Self,
     expr_idx: parse.IR.NodeStore.ExprIdx,
 ) ?IR.Expr.Idx {
@@ -336,7 +337,9 @@ fn canonicalize_expr(
                 .region = e.region.toBase(),
             });
         },
-        else => @panic("TODO implement canonicalize expr for {expr}"),
+        else => {
+            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(Problem.Canonicalize.NotYetImplemented));
+        },
     }
     return null;
 }
@@ -347,54 +350,4 @@ fn canonicalize_pattern(
 ) void {
     _ = self;
     _ = pattern_idx;
-}
-
-test {
-    try test_can_expr("foo", &.{"foo"}, &.{});
-    try test_can_expr("42", &.{}, &.{});
-    try test_can_expr("0", &.{}, &.{});
-    try test_can_expr("-123", &.{}, &.{});
-
-    // Test very large number that exceeds i128 range
-    try test_can_expr("99999999999999999999999999999999999999999", &.{}, &.{"Invalid number literal: '99999999999999999999999999999999999999999'"});
-}
-
-fn test_can_expr(source: []const u8, idents: []const []const u8, error_messages: []const []const u8) !void {
-    const gpa = std.testing.allocator;
-
-    // Setup environment
-    var module_env = base.ModuleEnv.init(gpa);
-    defer module_env.deinit();
-
-    // Parse source
-    var parse_ir = parse.parseExpr(&module_env, source);
-    defer parse_ir.deinit();
-
-    // Expect NIL parser errors
-    try std.testing.expectEqualSlices(parse.IR.Diagnostic, &.{}, parse_ir.errors);
-
-    // Initialize Can IR
-    var can_ir = IR.init(module_env);
-    defer can_ir.deinit();
-
-    var scope = Scope.init(&can_ir.env, &.{}, &.{});
-    defer scope.deinit();
-    var can = Self.init(&can_ir, &parse_ir, &scope);
-
-    for (idents) |ident| {
-        const id = can.can_ir.env.idents.insert(std.testing.allocator, Ident.for_text(ident), .{ .start = .{ .offset = 0 }, .end = .{ .offset = 0 } });
-        _ = can.scope.levels.introduce(.ident, .{ .ident = id, .scope_name = id });
-    }
-
-    _ = can.canonicalize_expr(.{ .id = parse_ir.root_node_idx });
-
-    try std.testing.expectEqual(error_messages.len, can.can_ir.env.problems.items.items.len);
-
-    for (0..error_messages.len) |i| {
-        var buf = std.ArrayListUnmanaged(u8){};
-        var writer = buf.writer(std.testing.allocator);
-        defer buf.deinit(std.testing.allocator);
-        try can_ir.env.problems.items.items[i].toStr(std.testing.allocator, source, writer.any());
-        try std.testing.expectEqualStrings(error_messages[i], buf.items);
-    }
 }

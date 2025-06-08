@@ -31,4 +31,6 @@ Int(8:3-8:4),EndOfFile(8:4-8:4),
 		(int (8:3-8:4) "3")))
 ~~~FORMATTED
 NO CHANGE
+~~~CANONICALIZE
+(can_ir "TODO")
 ~~~END

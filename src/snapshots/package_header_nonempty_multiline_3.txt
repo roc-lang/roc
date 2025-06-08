@@ -31,4 +31,6 @@ package
 	{
 		somePkg: "../main.roc",
 	}
+~~~CANONICALIZE
+(can_ir "TODO")
 ~~~END

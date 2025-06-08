@@ -47,4 +47,8 @@ LowerIdent(1:1-1:5),OpColon(1:5-1:6),MalformedUnknownToken(1:6-1:7),OpColon(1:7-
 		(malformed_expr (1:20-1:21) "expr_unexpected_token")
 		(ident (1:21-1:23) "" "le")
 		(malformed_expr (1:25-1:25) "expected_expr_close_square_or_comma")))
+~~~FORMATTED
+le
+~~~CANONICALIZE
+(can_ir "TODO")
 ~~~END
