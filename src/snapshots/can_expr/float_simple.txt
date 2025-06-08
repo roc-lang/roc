@@ -12,5 +12,5 @@ Float(1:1-1:5),EndOfFile(1:5-1:5),
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(expr (float "TODO: implement"))
+(expr (float "3.14"))
 ~~~END

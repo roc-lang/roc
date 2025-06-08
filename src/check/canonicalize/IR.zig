@@ -393,7 +393,7 @@ pub const NodeStore = struct {
             .float => |e| {
                 node.tag = .expr_float;
                 // TODO: Store float data properly. For now, just store the literal idx
-                node.data_1 = @intCast(@intFromEnum(e.literal));
+                node.data_1 = @intFromEnum(e.literal);
             },
             .str => |e| {
                 node.tag = .expr_string;
@@ -825,8 +825,10 @@ pub const Expr = union(enum) {
     };
     pub const Span = struct { span: DataSpan };
 
-    pub fn toSExpr(self: *const @This(), env: *const base.ModuleEnv, ir: *const IR) sexpr.Expr {
-        const gpa = env.gpa;
+    pub fn toSExpr(self: *const @This(), ir: *const IR) sexpr.Expr {
+        const env = ir.env;
+        const gpa = ir.env.gpa;
+
         switch (self.*) {
             .num => |e| {
                 var node = sexpr.Expr.init(gpa, "num");
@@ -872,7 +874,7 @@ pub const Expr = union(enum) {
                 var node = sexpr.Expr.init(gpa, "list");
                 var elems_node = sexpr.Expr.init(gpa, "elems");
                 for (ir.exprs_at_regions.rangeToSlice(l.elems).items(.expr)) |elem| {
-                    var elem_sexpr = ir.exprs.get(elem).toSExpr(env, ir);
+                    var elem_sexpr = ir.exprs.get(elem).toSExpr(ir);
                     elems_node.appendNodeChild(gpa, &elem_sexpr);
                 }
                 node.appendNodeChild(gpa, &elems_node);
@@ -880,13 +882,13 @@ pub const Expr = union(enum) {
             },
             .lookup => |v| {
                 var node = sexpr.Expr.init(gpa, "lookup");
-                appendIdentChild(&node, gpa, env, "ident", v.ident);
+                appendIdentChild(&node, gpa, ir.env, "ident", v.ident);
                 return node;
             },
             .when => |when_idx| {
                 var node = sexpr.Expr.init(gpa, "when");
                 const when_data = ir.when_branches.get(when_idx); // Assuming when stores When data
-                var when_sexpr = when_data.toSExpr(env, ir);
+                var when_sexpr = when_data.toSExpr(ir.env, ir);
                 node.appendNodeChild(gpa, &when_sexpr);
                 return node;
             },
@@ -1569,73 +1571,117 @@ pub const ExhaustiveMark = TypeVar;
 /// and write it to the given writer.
 ///
 /// If a single expression is provided we only print that expression
-pub fn toSExprStr(ir: *const IR, module_env: *base.ModuleEnv, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr.Idx) !void {
+pub fn toSExprStr(ir: *const IR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr.Idx) !void {
     if (maybe_expr_idx) |expr_idx| {
         // Get the expression from the store
-        const expr = ir.store.getExpr(expr_idx);
-        var expr_node = try exprToSExpr(expr, expr_idx, ir, module_env);
-        defer expr_node.deinit(module_env.gpa);
+        var expr_node = try exprToSExpr(expr_idx, ir);
+        defer expr_node.deinit(ir.env.gpa);
 
         expr_node.toStringPretty(writer);
     } else {
-        var root_node = sexpr.Expr.init(module_env.gpa, "can_ir");
-        defer root_node.deinit(module_env.gpa);
+        var root_node = sexpr.Expr.init(ir.env.gpa, "can_ir");
+        defer root_node.deinit(ir.env.gpa);
 
         // TODO: Implement def iteration
 
-        root_node.appendStringChild(module_env.gpa, "TODO");
+        root_node.appendStringChild(ir.env.gpa, "TODO");
         root_node.toStringPretty(writer);
     }
 }
 
-fn exprToSExpr(expr: Expr, expr_idx: Expr.Idx, ir: *const IR, module_env: *base.ModuleEnv) !sexpr.Expr {
-    _ = expr_idx;
-    var expr_node = sexpr.Expr.init(module_env.gpa, "expr");
+fn exprToSExpr(expr_idx: Expr.Idx, ir: *const IR) !sexpr.Expr {
+    const gpa = ir.env.gpa;
+    var root_node = sexpr.Expr.init(gpa, "expr");
 
     // TODO: Add region information when available
     // For now, just add the expression content based on its type
+
+    const expr = ir.store.getExpr(expr_idx);
     switch (expr) {
+        .num => {
+            root_node.appendStringChild(gpa, "TODO implement num expression");
+        },
         .int => |int_expr| {
-            var int_node = sexpr.Expr.init(module_env.gpa, "int");
+            var int_node = sexpr.Expr.init(gpa, "int");
 
             // Add literal
-            var literal_node = sexpr.Expr.init(module_env.gpa, "literal");
+            var literal_node = sexpr.Expr.init(gpa, "literal");
             const literal_str = ir.env.strings.get(int_expr.literal);
-            literal_node.appendStringChild(module_env.gpa, literal_str);
-            int_node.appendNodeChild(module_env.gpa, &literal_node);
+            literal_node.appendStringChild(gpa, literal_str);
+            int_node.appendNodeChild(gpa, &literal_node);
 
             // Add value info
-            var value_node = sexpr.Expr.init(module_env.gpa, "value");
+            var value_node = sexpr.Expr.init(gpa, "value");
             // TODO: Format the actual integer value properly
-            value_node.appendStringChild(module_env.gpa, "TODO: format int value");
-            int_node.appendNodeChild(module_env.gpa, &value_node);
+            value_node.appendStringChild(gpa, "TODO: format int value");
+            int_node.appendNodeChild(gpa, &value_node);
 
             // Add bound info
-            var bound_node = sexpr.Expr.init(module_env.gpa, "bound");
-            bound_node.appendStringChild(module_env.gpa, @tagName(int_expr.bound));
-            int_node.appendNodeChild(module_env.gpa, &bound_node);
+            var bound_node = sexpr.Expr.init(gpa, "bound");
+            bound_node.appendStringChild(gpa, @tagName(int_expr.bound));
+            int_node.appendNodeChild(gpa, &bound_node);
 
-            expr_node.appendNodeChild(module_env.gpa, &int_node);
+            root_node.appendNodeChild(gpa, &int_node);
+        },
+        .float => |e| {
+            var float_node = sexpr.Expr.init(gpa, "float");
+
+            const literal = ir.env.strings.get(e.literal);
+            float_node.appendStringChild(gpa, literal);
+
+            // TODO use more of the float expression fields
+
+            root_node.appendNodeChild(gpa, &float_node);
+        },
+        .str => {
+            root_node.appendStringChild(gpa, "TODO implement string expression");
+        },
+        .single_quote => {
+            root_node.appendStringChild(gpa, "TODO implement single quote expression");
         },
         .lookup => |lookup| {
-            var lookup_node = sexpr.Expr.init(module_env.gpa, "lookup");
+            var lookup_node = sexpr.Expr.init(gpa, "lookup");
 
-            var ident_node = sexpr.Expr.init(module_env.gpa, "ident");
+            var ident_node = sexpr.Expr.init(gpa, "ident");
             const ident_str = ir.env.idents.getText(lookup.ident);
-            ident_node.appendStringChild(module_env.gpa, ident_str);
-            lookup_node.appendNodeChild(module_env.gpa, &ident_node);
+            ident_node.appendStringChild(gpa, ident_str);
+            lookup_node.appendNodeChild(gpa, &ident_node);
 
-            expr_node.appendNodeChild(module_env.gpa, &lookup_node);
+            root_node.appendNodeChild(gpa, &lookup_node);
         },
-        else => {
-            // For other expression types, add a placeholder
-            var placeholder = sexpr.Expr.init(module_env.gpa, @tagName(expr));
-            placeholder.appendStringChild(module_env.gpa, "TODO: implement");
-            expr_node.appendNodeChild(module_env.gpa, &placeholder);
+        .list => {
+            root_node.appendStringChild(gpa, "TODO implement list expression");
+        },
+        .when => {
+            root_node.appendStringChild(gpa, "TODO implement when expression");
+        },
+        .@"if" => {
+            root_node.appendStringChild(gpa, "TODO implement if expression");
+        },
+        .call => {
+            root_node.appendStringChild(gpa, "TODO implement call expression");
+        },
+        .record => {
+            root_node.appendStringChild(gpa, "TODO implement record expression");
+        },
+        .empty_record => {
+            root_node.appendStringChild(gpa, "empty_record");
+        },
+        .record_access => {
+            root_node.appendStringChild(gpa, "TODO implement record access expression");
+        },
+        .tag => {
+            root_node.appendStringChild(gpa, "TODO implement tag expression");
+        },
+        .zero_argument_tag => {
+            root_node.appendStringChild(gpa, "TODO implement zero-argument tag expression");
+        },
+        .RuntimeError => {
+            root_node.appendStringChild(gpa, "TODO implement RuntimeError expression");
         },
     }
 
-    return expr_node;
+    return root_node;
 }
 
 /// todo
