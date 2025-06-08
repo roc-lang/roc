@@ -19,7 +19,7 @@ pub const CliArgs = union(enum) {
     docs: DocsArgs,
     help: []const u8,
     licenses,
-    invalid: []const u8, // TODO: improve the error messages
+    problem: CliProblem,
 
     pub fn deinit(self: CliArgs, gpa: mem.Allocator) void {
         switch (self) {
@@ -30,10 +30,29 @@ pub const CliArgs = union(enum) {
     }
 };
 
+pub const CliProblem = union(enum) {
+    missing_flag_value: struct {
+        flag: []const u8,
+    },
+    unexpected_argument: struct { cmd: []const u8, arg: []const u8 },
+    invalid_flag_value: struct {
+        value: []const u8,
+        flag: []const u8,
+        valid_options: []const u8,
+    },
+};
+
 pub const OptLevel = enum {
     size,
     speed,
     dev,
+
+    fn from_str(str: []const u8) ?OptLevel {
+        if (mem.eql(u8, str, "speed")) return .speed;
+        if (mem.eql(u8, str, "size")) return .size;
+        if (mem.eql(u8, str, "dev")) return .dev;
+        return null;
+    }
 };
 
 pub const RunArgs = struct {
@@ -141,14 +160,18 @@ fn parse_build(args: []const []const u8) CliArgs {
             const value = iter.next().?;
             output = value;
         } else if (mem.startsWith(u8, arg, "--opt")) {
-            if (parse_opt_level(arg)) |level| {
-                opt = level;
+            if (get_flag_value(arg)) |value| {
+                if (OptLevel.from_str(value)) |level| {
+                    opt = level;
+                } else {
+                    return CliArgs{ .problem = CliProblem{ .invalid_flag_value = .{ .flag = "--opt", .value = value, .valid_options = "speed,size,dev" } } };
+                }
             } else {
-                return CliArgs{ .invalid = "--opt can be either speed or size" };
+                return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--opt" } } };
             }
         } else {
             if (path != null) {
-                return CliArgs{ .invalid = "unexpected argument" };
+                return CliArgs{ .problem = CliProblem{ .unexpected_argument = .{ .cmd = "build", .arg = arg } } };
             }
             path = arg;
         }
@@ -219,14 +242,18 @@ fn parse_test(args: []const []const u8) CliArgs {
             _ = iter.next();
             main = iter.next().?;
         } else if (mem.startsWith(u8, arg, "--opt")) {
-            if (parse_opt_level(arg)) |level| {
-                opt = level;
+            if (get_flag_value(arg)) |value| {
+                if (OptLevel.from_str(value)) |level| {
+                    opt = level;
+                } else {
+                    return CliArgs{ .problem = CliProblem{ .invalid_flag_value = .{ .flag = "--opt", .value = value, .valid_options = "speed,size,dev" } } };
+                }
             } else {
-                return CliArgs{ .invalid = "--opt can be either speed or size" };
+                return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--opt" } } };
             }
         } else {
             if (path != null) {
-                return CliArgs{ .invalid = "unexpected argument" };
+                return CliArgs{ .problem = CliProblem{ .unexpected_argument = .{ .cmd = "repl", .arg = arg } } };
             }
             path = arg;
         }
@@ -247,7 +274,7 @@ fn parse_repl(args: []const []const u8) CliArgs {
             \\
         };
         } else {
-            return CliArgs{ .invalid = "unexpected argument" };
+            return CliArgs{ .problem = CliProblem{ .unexpected_argument = .{ .cmd = "repl", .arg = arg } } };
         }
     }
     return CliArgs.repl;
@@ -266,7 +293,7 @@ fn parse_version(args: []const []const u8) CliArgs {
             \\
         };
         } else {
-            return CliArgs{ .invalid = "unexpected argument" };
+            return CliArgs{ .problem = CliProblem{ .unexpected_argument = .{ .cmd = "version", .arg = arg } } };
         }
     }
     return CliArgs.version;
@@ -302,7 +329,7 @@ fn parse_docs(args: []const []const u8) CliArgs {
             root_dir = iter.next().?;
         } else {
             if (path != null) {
-                return CliArgs{ .invalid = "unexpected argument" };
+                return CliArgs{ .problem = CliProblem{ .unexpected_argument = .{ .cmd = "docs", .arg = arg } } };
             }
             path = arg;
         }
@@ -323,10 +350,14 @@ fn parse_run(gpa: mem.Allocator, args: []const []const u8) CliArgs {
             app_args.deinit();
             return CliArgs.version;
         } else if (mem.startsWith(u8, arg, "--opt")) {
-            if (parse_opt_level(arg)) |level| {
-                opt = level;
+            if (get_flag_value(arg)) |value| {
+                if (OptLevel.from_str(value)) |level| {
+                    opt = level;
+                } else {
+                    return CliArgs{ .problem = CliProblem{ .invalid_flag_value = .{ .flag = "--opt", .value = value, .valid_options = "speed,size,dev" } } };
+                }
             } else {
-                return CliArgs{ .invalid = "--opt can be either speed or size" };
+                return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--opt" } } };
             }
         } else {
             if (path != null) {
@@ -343,14 +374,10 @@ fn is_help_flag(arg: []const u8) bool {
     return mem.eql(u8, arg, "-h") or mem.eql(u8, arg, "--help");
 }
 
-fn parse_opt_level(arg: []const u8) ?OptLevel {
+fn get_flag_value(arg: []const u8) ?[]const u8 {
     var iter = mem.splitScalar(u8, arg, '=');
     _ = iter.next();
-    const value = iter.next().?;
-    if (mem.eql(u8, value, "speed")) return .speed;
-    if (mem.eql(u8, value, "size")) return .size;
-    if (mem.eql(u8, value, "dev")) return .dev;
-    return null;
+    return iter.next();
 }
 
 test "roc run" {
@@ -405,6 +432,16 @@ test "roc run" {
         try testing.expectEqualStrings("foo.roc", result.run.path);
         try testing.expectEqual(.speed, result.run.opt);
     }
+    {
+        const result = parse(gpa, &[_][]const u8{"--opt"});
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("--opt", result.problem.missing_flag_value.flag);
+    }
+    {
+        const result = parse(gpa, &[_][]const u8{"--opt=notreal"});
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("notreal", result.problem.invalid_flag_value.value);
+    }
 }
 
 test "roc check" {
@@ -447,6 +484,16 @@ test "roc build" {
         try testing.expectEqual(OptLevel.dev, result.build.opt);
     }
     {
+        const result = parse(gpa, &[_][]const u8{ "build", "--opt" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("--opt", result.problem.missing_flag_value.flag);
+    }
+    {
+        const result = parse(gpa, &[_][]const u8{ "build", "--opt=notreal" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("notreal", result.problem.invalid_flag_value.value);
+    }
+    {
         const result = parse(gpa, &[_][]const u8{ "build", "--opt=speed", "foo/bar.roc", "--output=mypath" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("foo/bar.roc", result.build.path);
@@ -456,12 +503,12 @@ test "roc build" {
     {
         const result = parse(gpa, &[_][]const u8{ "build", "--opt=invalid" });
         defer result.deinit(gpa);
-        try testing.expectEqualStrings("--opt can be either speed or size", result.invalid);
+        try testing.expectEqualStrings("--opt", result.problem.invalid_flag_value.flag);
     }
     {
         const result = parse(gpa, &[_][]const u8{ "build", "foo.roc", "bar.roc" });
         defer result.deinit(gpa);
-        try testing.expectEqualStrings("unexpected argument", result.invalid);
+        try testing.expectEqualStrings("bar.roc", result.problem.unexpected_argument.arg);
     }
     {
         const result = parse(gpa, &[_][]const u8{ "build", "-h" });
@@ -564,9 +611,19 @@ test "roc test" {
         try testing.expectEqual(.speed, result.test_cmd.opt);
     }
     {
+        const result = parse(gpa, &[_][]const u8{ "test", "--opt" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("--opt", result.problem.missing_flag_value.flag);
+    }
+    {
+        const result = parse(gpa, &[_][]const u8{ "test", "--opt=notreal" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("notreal", result.problem.invalid_flag_value.value);
+    }
+    {
         const result = parse(gpa, &[_][]const u8{ "test", "foo.roc", "bar.roc" });
         defer result.deinit(gpa);
-        try testing.expectEqualStrings("unexpected argument", result.invalid);
+        try testing.expectEqualStrings("bar.roc", result.problem.unexpected_argument.arg);
     }
     {
         const result = parse(gpa, &[_][]const u8{ "test", "-h" });
@@ -595,7 +652,7 @@ test "roc repl" {
     {
         const result = parse(gpa, &[_][]const u8{ "repl", "foo.roc" });
         defer result.deinit(gpa);
-        try testing.expectEqualStrings("unexpected argument", result.invalid);
+        try testing.expectEqualStrings("foo.roc", result.problem.unexpected_argument.arg);
     }
     {
         const result = parse(gpa, &[_][]const u8{ "repl", "-h" });
@@ -619,7 +676,7 @@ test "roc version" {
     {
         const result = parse(gpa, &[_][]const u8{ "version", "foo.roc" });
         defer result.deinit(gpa);
-        try testing.expectEqualStrings("unexpected argument", result.invalid);
+        try testing.expectEqualStrings("foo.roc", result.problem.unexpected_argument.arg);
     }
     {
         const result = parse(gpa, &[_][]const u8{ "version", "-h" });
@@ -652,7 +709,7 @@ test "roc docs" {
     {
         const result = parse(gpa, &[_][]const u8{ "docs", "foo.roc", "--madeup" });
         defer result.deinit(gpa);
-        try testing.expectEqualStrings("unexpected argument", result.invalid);
+        try testing.expectEqualStrings("--madeup", result.problem.unexpected_argument.arg);
     }
     {
         const result = parse(gpa, &[_][]const u8{ "docs", "-h" });

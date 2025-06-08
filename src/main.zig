@@ -46,7 +46,8 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const stdout = std.io.getStdOut();
+    const stdout = std.io.getStdOut().writer();
+    const stderr = std.io.getStdErr().writer();
     const parsed_args = cli_args.parse(gpa, args[1..]);
     defer parsed_args.deinit(gpa);
     try switch (parsed_args) {
@@ -60,7 +61,14 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
         .docs => |docs_args| roc_docs(gpa, docs_args),
         .help => |help_message| stdout.writeAll(help_message),
         .licenses => stdout.writeAll(legalDetailsFileContent),
-        .invalid => |error_message| stdout.writeAll(error_message),
+        .problem => |problem| {
+            try switch (problem) {
+                .missing_flag_value => |details| stderr.print("Error: no value was supplied for {s}\n", .{details.flag}),
+                .unexpected_argument => |details| stderr.print("Error: roc {s} received an unexpected argument: `{s}`\n", .{ details.cmd, details.arg }),
+                .invalid_flag_value => |details| stderr.print("Error: `{s}` is not a valid value for {s}. The valid options are {s}\n", .{ details.value, details.flag, details.valid_options }),
+            };
+            std.process.exit(1);
+        },
     };
 }
 
