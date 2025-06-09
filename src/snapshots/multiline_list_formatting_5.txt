@@ -21,6 +21,5 @@ Int(2:3-2:4),CloseSquare(2:4-2:5),EndOfFile(2:5-2:5),
 	3,
 ]
 ~~~CANONICALIZE
-(expr
-	(list (elem_var "#0") (elems "TODO each element")))
+(list (elem_var "#0") (elems "TODO each element"))
 ~~~END

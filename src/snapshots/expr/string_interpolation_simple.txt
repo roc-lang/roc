@@ -15,13 +15,11 @@ StringStart(1:1-1:2),StringPart(1:2-1:8),OpenStringInterpolation(1:8-1:10),Lower
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(expr
+(call
+	(lookup (ident "Str.concat"))
 	(call
-		(expr (lookup (ident "Str.concat")))
-		(expr
-			(call
-				(expr (lookup (ident "Str.concat")))
-				(expr (str "Hello "))
-				(expr (lookup (ident "name")))))
-		(expr (str "!"))))
+		(lookup (ident "Str.concat"))
+		(str "Hello ")
+		(lookup (ident "name")))
+	(str "!"))
 ~~~END

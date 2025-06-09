@@ -12,11 +12,10 @@ Int(1:1-1:10),EndOfFile(1:10-1:10),
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(expr
-	(int
-		(num_var "#0")
-		(precision_var "#0")
-		(literal "1_000_000")
-		(value "TODO")
-		(bound "flex_var")))
+(int
+	(num_var "#0")
+	(precision_var "#0")
+	(literal "1_000_000")
+	(value "TODO")
+	(bound "flex_var"))
 ~~~END

@@ -929,9 +929,6 @@ pub const Expr = union(enum) {
 
     pub fn toSExpr(self: *const @This(), ir: *const IR) sexpr.Expr {
         const gpa = ir.env.gpa;
-
-        var root_node = sexpr.Expr.init(gpa, "expr");
-
         switch (self.*) {
             .num => |num_expr| {
                 var num_node = sexpr.Expr.init(gpa, "num");
@@ -960,7 +957,7 @@ pub const Expr = union(enum) {
                 bound_node.appendStringChild(gpa, @tagName(num_expr.bound));
                 num_node.appendNodeChild(gpa, &bound_node);
 
-                root_node.appendNodeChild(gpa, &num_node);
+                return num_node;
             },
             .int => |int_expr| {
                 var int_node = sexpr.Expr.init(gpa, "int");
@@ -995,7 +992,7 @@ pub const Expr = union(enum) {
                 bound_node.appendStringChild(gpa, @tagName(int_expr.bound));
                 int_node.appendNodeChild(gpa, &bound_node);
 
-                root_node.appendNodeChild(gpa, &int_node);
+                return int_node;
             },
             .float => |float_expr| {
                 var float_node = sexpr.Expr.init(gpa, "float");
@@ -1032,13 +1029,13 @@ pub const Expr = union(enum) {
                 bound_node.appendStringChild(gpa, @tagName(float_expr.bound));
                 float_node.appendNodeChild(gpa, &bound_node);
 
-                root_node.appendNodeChild(gpa, &float_node);
+                return float_node;
             },
             .str => |str_idx| {
                 const value = ir.env.strings.get(str_idx);
                 var str_node = sexpr.Expr.init(gpa, "str");
                 str_node.appendStringChild(gpa, value);
-                root_node.appendNodeChild(gpa, &str_node);
+                return str_node;
             },
             .single_quote => |e| {
                 var single_quote_node = sexpr.Expr.init(gpa, "single_quote");
@@ -1069,7 +1066,7 @@ pub const Expr = union(enum) {
                 bound_node.appendStringChild(gpa, @tagName(e.bound));
                 single_quote_node.appendNodeChild(gpa, &bound_node);
 
-                root_node.appendNodeChild(gpa, &single_quote_node);
+                return single_quote_node;
             },
             .list => |l| {
                 var list_node = sexpr.Expr.init(gpa, "list");
@@ -1087,7 +1084,7 @@ pub const Expr = union(enum) {
                 elems_node.appendStringChild(gpa, "TODO each element");
                 list_node.appendNodeChild(gpa, &elems_node);
 
-                root_node.appendNodeChild(gpa, &list_node);
+                return list_node;
             },
             .lookup => |l| {
                 var lookup_node = sexpr.Expr.init(gpa, "lookup");
@@ -1097,13 +1094,13 @@ pub const Expr = union(enum) {
                 ident_node.appendStringChild(gpa, ident_str);
                 lookup_node.appendNodeChild(gpa, &ident_node);
 
-                root_node.appendNodeChild(gpa, &lookup_node);
+                return lookup_node;
             },
             .when => |_| {
                 var when_branch_node = sexpr.Expr.init(gpa, "when");
                 when_branch_node.appendStringChild(gpa, "TODO when branch");
 
-                root_node.appendNodeChild(gpa, &when_branch_node);
+                return when_branch_node;
             },
             .@"if" => |if_expr| {
                 var if_node = sexpr.Expr.init(gpa, "if");
@@ -1149,7 +1146,7 @@ pub const Expr = union(enum) {
                 else_node.appendStringChild(gpa, "TODO: access final else");
                 if_node.appendNodeChild(gpa, &else_node);
 
-                root_node.appendNodeChild(gpa, &if_node);
+                return if_node;
             },
             .call => |c| {
                 var call_node = sexpr.Expr.init(gpa, "call");
@@ -1173,7 +1170,7 @@ pub const Expr = union(enum) {
                     }
                 }
 
-                root_node.appendNodeChild(gpa, &call_node);
+                return call_node;
             },
             .record => |record_expr| {
                 var record_node = sexpr.Expr.init(gpa, "record");
@@ -1190,11 +1187,10 @@ pub const Expr = union(enum) {
                 fields_node.appendStringChild(gpa, "TODO");
                 record_node.appendNodeChild(gpa, &fields_node);
 
-                root_node.appendNodeChild(gpa, &record_node);
+                return record_node;
             },
             .empty_record => {
-                @panic("TODO empty_record");
-                // return sexpr.Expr.init(gpa, "empty_record");
+                return sexpr.Expr.init(gpa, "empty_record");
             },
             .record_access => |access_expr| {
                 var access_node = sexpr.Expr.init(gpa, "record_access");
@@ -1231,7 +1227,7 @@ pub const Expr = union(enum) {
                 field_node.appendStringChild(gpa, field_str);
                 access_node.appendNodeChild(gpa, &field_node);
 
-                root_node.appendNodeChild(gpa, &access_node);
+                return access_node;
             },
             .tag => |tag_expr| {
                 var tag_node = sexpr.Expr.init(gpa, "tag");
@@ -1262,7 +1258,7 @@ pub const Expr = union(enum) {
                 args_node.appendStringChild(gpa, "TODO");
                 tag_node.appendNodeChild(gpa, &args_node);
 
-                root_node.appendNodeChild(gpa, &tag_node);
+                return tag_node;
             },
             .zero_argument_tag => |tag_expr| {
                 var tag_node = sexpr.Expr.init(gpa, "zero_argument_tag");
@@ -1293,7 +1289,7 @@ pub const Expr = union(enum) {
                 name_node.appendStringChild(gpa, name_str);
                 tag_node.appendNodeChild(gpa, &name_node);
 
-                root_node.appendNodeChild(gpa, &tag_node);
+                return tag_node;
             },
             .RuntimeError => |problem_idx| {
                 var runtime_err_node = sexpr.Expr.init(gpa, "runtime_error");
@@ -1312,11 +1308,9 @@ pub const Expr = union(enum) {
 
                 runtime_err_node.appendStringChild(gpa, buf.items);
 
-                root_node.appendNodeChild(gpa, &runtime_err_node);
+                return runtime_err_node;
             },
         }
-
-        return root_node;
     }
 };
 

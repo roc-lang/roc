@@ -12,5 +12,5 @@ Int(1:1-1:42),EndOfFile(1:42-1:42),
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(expr (runtime_error "CAN: Invalid number literal 99999999999999999999999999999999999999999"))
+(runtime_error "CAN: Invalid number literal 99999999999999999999999999999999999999999")
 ~~~END

@@ -12,5 +12,5 @@ Int(1:1-1:5),EndOfFile(1:5-1:5),
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(expr (runtime_error "CAN: Invalid number literal 0xFF"))
+(runtime_error "CAN: Invalid number literal 0xFF")
 ~~~END

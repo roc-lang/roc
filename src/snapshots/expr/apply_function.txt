@@ -15,15 +15,13 @@ LowerIdent(1:1-1:4),NoSpaceOpenRound(1:4-1:5),Int(1:5-1:7),Comma(1:7-1:8),String
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(expr
-	(call
-		(expr (lookup (ident "foo")))
-		(expr
-			(int
-				(num_var "#0")
-				(precision_var "#0")
-				(literal "42")
-				(value "TODO")
-				(bound "flex_var")))
-		(expr (str "hello"))))
+(call
+	(lookup (ident "foo"))
+	(int
+		(num_var "#0")
+		(precision_var "#0")
+		(literal "42")
+		(value "TODO")
+		(bound "flex_var"))
+	(str "hello"))
 ~~~END
