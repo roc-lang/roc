@@ -25,5 +25,17 @@ LowerIdent(2:1-2:2),CloseRound(2:2-2:3),CloseStringInterpolation(2:3-2:4),String
 	)
 } lines of text due to the template parts"
 ~~~CANONICALIZE
-(expr (str "This is a string with "))
+(expr
+	(call
+		(expr (lookup (ident "Str.concat")))
+		(expr
+			(call
+				(expr (lookup (ident "Str.concat")))
+				(expr (str "This is a string with "))
+				(expr
+					(call
+						(expr (lookup (ident "some_func")))
+						(expr (lookup (ident "a")))
+						(expr (lookup (ident "b")))))))
+		(expr (str " lines of text due to the template parts"))))
 ~~~END

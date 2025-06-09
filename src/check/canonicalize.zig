@@ -677,39 +677,72 @@ fn desugarStringInterpolation(self: *Self, segments: []const StringSegment, regi
         return self.createStringLiteral("", region);
     }
 
-    // Mark the start of scratch expressions
-    const scratch_top = self.can_ir.store.scratchExprTop();
-    defer self.can_ir.store.clearScratchExprsFrom(scratch_top);
+    // Convert segments to expressions
+    var segment_exprs = std.ArrayList(IR.Expr.Idx).init(self.can_ir.env.gpa);
+    defer segment_exprs.deinit();
 
-    // Convert segments to expressions and add to scratch
-    var has_segments = false;
     for (segments) |segment| {
         const segment_expr = switch (segment) {
             .plaintext => |text| self.createStringLiteral(text, region),
             .interpolation => |expr_idx| self.canonicalize_expr(expr_idx) orelse continue,
         };
-        self.can_ir.store.addScratchExpr(segment_expr);
-        has_segments = true;
+        segment_exprs.append(segment_expr) catch |err| exitOnOom(err);
     }
 
-    if (!has_segments) {
+    if (segment_exprs.items.len == 0) {
         return self.createStringLiteral("", region);
     }
 
-    // For now, return the first segment as we don't have Str.concat yet
-    // When symbol resolution is implemented, this will create nested Str.concat calls
-    //
-    // The desugaring would work like:
-    // segments = ["Hello ", name, "!"]
-    // becomes: Str.concat (Str.concat "Hello " name) "!"
-
-    const span = self.can_ir.store.exprSpanFrom(scratch_top);
-    const exprs = self.can_ir.store.exprSlice(span);
-    if (exprs.len > 0) {
-        return exprs[0];
+    // If there's only one segment, return it directly
+    if (segment_exprs.items.len == 1) {
+        return segment_exprs.items[0];
     }
 
-    return self.createStringLiteral("", region);
+    // Create the Str.concat identifier
+    // TODO use a proper builtin when we have this... 
+    const str_concat_ident = Ident.for_text("Str.concat");
+    const str_concat_idx = self.can_ir.env.idents.insert(self.can_ir.env.gpa, str_concat_ident, region);
+    
+    // Build nested Str.concat calls from left to right
+    // For segments ["Hello ", name, "!"], create: Str.concat (Str.concat "Hello " name) "!"
+    var result = segment_exprs.items[0];
+    
+    for (segment_exprs.items[1..]) |segment_expr| {
+        // Mark the start of scratch expressions for this call
+        const call_scratch_top = self.can_ir.store.scratchExprTop();
+        
+        // Create the Str.concat lookup
+        const concat_fn = self.can_ir.store.addExpr(.{
+            .expr = .{ .lookup = .{
+                .ident = str_concat_idx,
+            } },
+            .region = region,
+        });
+        self.can_ir.store.addScratchExpr(concat_fn);
+        
+        // Add the accumulated result as first argument
+        self.can_ir.store.addScratchExpr(result);
+        
+        // Add the current segment as second argument
+        self.can_ir.store.addScratchExpr(segment_expr);
+        
+        // Create span from scratch expressions
+        const args_span = self.can_ir.store.exprSpanFrom(call_scratch_top);
+        
+        // Create the call expression
+        const call_expr = IR.Expr{
+            .call = .{
+                .args = args_span,
+            },
+        };
+        
+        result = self.can_ir.store.addExpr(.{
+            .expr = call_expr,
+            .region = region,
+        });
+    }
+
+    return result;
 }
 
 fn canonicalize_pattern(
