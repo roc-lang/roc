@@ -1,4 +1,4 @@
-//! The common state for a module: any data useful over the full lifetime of its compilation.
+//! The common state for a module: any data useful over the full lifetime of its compilation that lives beyond individual IR's.
 //!
 //! Stores all interned data like idents, strings, and problems.
 //!

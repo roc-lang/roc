@@ -281,30 +281,6 @@ fn bringIngestedFileIntoScope(
     }
 }
 
-const PendingValueDef = union(enum) {
-    /// A standalone annotation with no body
-    AnnotationOnly: struct {
-        pattern: CIR.PatternAtRegion.Idx,
-        type: CIR.Annotation.Idx,
-    },
-    /// A body with no type annotation
-    Body: struct {
-        pattern: CIR.PatternAtRegion.Idx,
-        expr: CIR.ExprAtRegion.Idx,
-    },
-    /// A body with a type annotation
-    TypedBody: struct {
-        // &'a Loc<ast::Pattern<'a>>,
-        // Loc<Pattern>,
-        // &'a Loc<ast::TypeAnnotation<'a>>,
-        // &'a Loc<ast::Expr<'a>>,
-    },
-    /// A standalone statement
-    Stmt: CIR.ExprAtRegion.Idx,
-
-    pub const List = collections.SafeList(@This());
-};
-
 fn canonicalize_decl(
     self: *Self,
     decl: parse.IR.NodeStore.Statement.Decl,
