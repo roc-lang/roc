@@ -12,7 +12,7 @@ const Region = base.Region;
 /// todo
 const TypeVar = types.Var;
 
-const CanIR = @import("../canonicalize/IR.zig");
+const CIR = @import("../canonicalize/CIR.zig");
 
 const Self = @This();
 

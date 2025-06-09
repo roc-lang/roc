@@ -110,7 +110,7 @@ pub fn getPackageRootAbsDir(url_data: Package.Url, gpa: Allocator, fs: Filesyste
 }
 
 /// TODO: implement
-pub fn getCanIrForHashAndRocVersion(file_hash: []const u8, roc_version: []const u8, fs: Filesystem, allocator: Allocator) ?canonicalize.IR {
+pub fn getCanIrForHashAndRocVersion(file_hash: []const u8, roc_version: []const u8, fs: Filesystem, allocator: Allocator) ?canonicalize.CIR {
     _ = file_hash;
     _ = roc_version;
     _ = fs;

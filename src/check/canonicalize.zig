@@ -8,7 +8,7 @@ const types = @import("../types/types.zig");
 const Scope = @import("./canonicalize/Scope.zig");
 const Alias = @import("./canonicalize/Alias.zig");
 
-can_ir: *IR,
+can_ir: *CIR,
 parse_ir: *parse.IR,
 scope: *Scope,
 
@@ -19,7 +19,7 @@ const ModuleEnv = base.ModuleEnv;
 const Problem = problem.Problem;
 const exitOnOom = collections.utils.exitOnOom;
 
-pub fn init(can_ir: *IR, parse_ir: *parse.IR, scope: *Scope) Self {
+pub fn init(can_ir: *CIR, parse_ir: *parse.IR, scope: *Scope) Self {
     return .{
         .can_ir = can_ir,
         .parse_ir = parse_ir,
@@ -30,7 +30,7 @@ pub fn init(can_ir: *IR, parse_ir: *parse.IR, scope: *Scope) Self {
 const Self = @This();
 
 /// The intermediate representation of a canonicalized Roc program.
-pub const IR = @import("canonicalize/IR.zig");
+pub const CIR = @import("canonicalize/CIR.zig");
 
 /// After parsing a Roc program, the [ParseIR](src/check/parse/ir.zig) is transformed into a [canonical
 /// form](src/check/canonicalize/ir.zig) called CanIR.
@@ -284,13 +284,13 @@ fn bringIngestedFileIntoScope(
 const PendingValueDef = union(enum) {
     /// A standalone annotation with no body
     AnnotationOnly: struct {
-        pattern: IR.PatternAtRegion.Idx,
-        type: IR.Annotation.Idx,
+        pattern: CIR.PatternAtRegion.Idx,
+        type: CIR.Annotation.Idx,
     },
     /// A body with no type annotation
     Body: struct {
-        pattern: IR.PatternAtRegion.Idx,
-        expr: IR.ExprAtRegion.Idx,
+        pattern: CIR.PatternAtRegion.Idx,
+        expr: CIR.ExprAtRegion.Idx,
     },
     /// A body with a type annotation
     TypedBody: struct {
@@ -300,7 +300,7 @@ const PendingValueDef = union(enum) {
         // &'a Loc<ast::Expr<'a>>,
     },
     /// A standalone statement
-    Stmt: IR.ExprAtRegion.Idx,
+    Stmt: CIR.ExprAtRegion.Idx,
 
     pub const List = collections.SafeList(@This());
 };
@@ -308,7 +308,7 @@ const PendingValueDef = union(enum) {
 fn canonicalize_decl(
     self: *Self,
     decl: parse.IR.NodeStore.Statement.Decl,
-) ?IR.Def.Idx {
+) ?CIR.Def.Idx {
     const pattern_idx = self.canonicalize_pattern(decl.pattern) orelse return null;
     const expr_idx = self.canonicalize_expr(decl.body) orelse return null;
 
@@ -331,7 +331,7 @@ fn canonicalize_decl(
 pub fn canonicalize_expr(
     self: *Self,
     expr_idx: parse.IR.NodeStore.ExprIdx,
-) ?IR.Expr.Idx {
+) ?CIR.Expr.Idx {
     const expr = self.parse_ir.store.getExpr(expr_idx);
     switch (expr) {
         .apply => |e| {
@@ -357,7 +357,7 @@ pub fn canonicalize_expr(
             const args_span = self.can_ir.store.exprSpanFrom(scratch_top);
 
             // Create the call expression
-            const call_expr = IR.Expr{
+            const call_expr = CIR.Expr{
                 .call = .{
                     .args = args_span,
                 },
@@ -412,7 +412,7 @@ pub fn canonicalize_expr(
                 } }));
 
                 return self.can_ir.store.addExpr(.{
-                    .expr = IR.Expr{ .RuntimeError = problem_id },
+                    .expr = CIR.Expr{ .RuntimeError = problem_id },
                     .region = e.region.toBase(),
                 });
             };
@@ -420,12 +420,12 @@ pub fn canonicalize_expr(
             const fresh_num_var = self.can_ir.type_store.fresh();
             const fresh_prec_var = self.can_ir.type_store.fresh();
 
-            const int_expr = IR.Expr{
+            const int_expr = CIR.Expr{
                 .int = .{
                     .num_var = fresh_num_var,
                     .precision_var = fresh_prec_var,
                     .literal = literal,
-                    .value = IR.IntValue{
+                    .value = CIR.IntValue{
                         .bytes = @bitCast(value),
                         .kind = .i128,
                     },
@@ -455,7 +455,7 @@ pub fn canonicalize_expr(
                 } }));
 
                 return self.can_ir.store.addExpr(.{
-                    .expr = IR.Expr{ .RuntimeError = problem_id },
+                    .expr = CIR.Expr{ .RuntimeError = problem_id },
                     .region = e.region.toBase(),
                 });
             };
@@ -463,7 +463,7 @@ pub fn canonicalize_expr(
             const fresh_num_var = self.can_ir.type_store.fresh();
             const fresh_prec_var = self.can_ir.type_store.fresh();
 
-            const float_expr = IR.Expr{
+            const float_expr = CIR.Expr{
                 .float = .{
                     .num_var = fresh_num_var,
                     .precision_var = fresh_prec_var,
@@ -508,7 +508,7 @@ pub fn canonicalize_expr(
             return self.desugarStringInterpolation(segments, e.region.toBase());
         },
         .list => |e| {
-            var items = collections.SafeList(IR.Expr.Idx).initCapacity(self.can_ir.env.gpa, 0);
+            var items = collections.SafeList(CIR.Expr.Idx).initCapacity(self.can_ir.env.gpa, 0);
             const items_slice = self.parse_ir.store.exprSlice(e.items);
 
             for (items_slice) |item| {
@@ -531,7 +531,7 @@ pub fn canonicalize_expr(
             // Create span from scratch expressions
             const elems_span = self.can_ir.store.exprSpanFrom(scratch_top);
 
-            const list_expr = IR.Expr{
+            const list_expr = CIR.Expr{
                 .list = .{
                     .elems = elems_span,
                     .elem_var = fresh_type_var,
@@ -548,7 +548,7 @@ pub fn canonicalize_expr(
                 const fresh_type_var_tag_union = self.can_ir.type_store.fresh();
                 const fresh_type_var_ext = self.can_ir.type_store.fresh();
 
-                const tag_expr = IR.Expr{
+                const tag_expr = CIR.Expr{
                     .tag = .{
                         .tag_union_var = fresh_type_var_tag_union,
                         .ext_var = fresh_type_var_ext,
@@ -682,7 +682,7 @@ pub fn canonicalize_expr(
             const args_span = self.can_ir.store.exprSpanFrom(scratch_top);
 
             // Create the call expression
-            const call_expr = IR.Expr{
+            const call_expr = CIR.Expr{
                 .call = .{
                     .args = args_span,
                 },
@@ -809,9 +809,9 @@ fn concatenatePlaintextSegments(self: *Self, segments: []const StringSegment) ![
 }
 
 /// Create a string literal expression
-fn createStringLiteral(self: *Self, text: []const u8, region: Region) IR.Expr.Idx {
+fn createStringLiteral(self: *Self, text: []const u8, region: Region) CIR.Expr.Idx {
     const literal = self.can_ir.env.strings.insert(self.can_ir.env.gpa, text);
-    const str_expr = IR.Expr{ .str = literal };
+    const str_expr = CIR.Expr{ .str = literal };
 
     return self.can_ir.store.addExpr(.{
         .expr = str_expr,
@@ -820,13 +820,13 @@ fn createStringLiteral(self: *Self, text: []const u8, region: Region) IR.Expr.Id
 }
 
 /// Desugar string interpolation into Str.concat calls
-fn desugarStringInterpolation(self: *Self, segments: []const StringSegment, region: Region) IR.Expr.Idx {
+fn desugarStringInterpolation(self: *Self, segments: []const StringSegment, region: Region) CIR.Expr.Idx {
     if (segments.len == 0) {
         return self.createStringLiteral("", region);
     }
 
     // Convert segments to expressions
-    var segment_exprs = std.ArrayList(IR.Expr.Idx).init(self.can_ir.env.gpa);
+    var segment_exprs = std.ArrayList(CIR.Expr.Idx).init(self.can_ir.env.gpa);
     defer segment_exprs.deinit();
 
     for (segments) |segment| {
@@ -878,7 +878,7 @@ fn desugarStringInterpolation(self: *Self, segments: []const StringSegment, regi
         const args_span = self.can_ir.store.exprSpanFrom(call_scratch_top);
 
         // Create the call expression
-        const call_expr = IR.Expr{
+        const call_expr = CIR.Expr{
             .call = .{
                 .args = args_span,
             },
@@ -896,7 +896,7 @@ fn desugarStringInterpolation(self: *Self, segments: []const StringSegment, regi
 fn canonicalize_pattern(
     self: *Self,
     pattern_idx: parse.IR.NodeStore.PatternIdx,
-) ?IR.Pattern.Idx {
+) ?CIR.Pattern.Idx {
     const pattern = self.parse_ir.store.getPattern(pattern_idx);
     const region = Region.zero(); // TODO: Implement proper pattern region retrieval
 
@@ -906,7 +906,7 @@ fn canonicalize_pattern(
                 // Introduce the identifier into scope
                 _ = self.scope.levels.introduce(.ident, .{ .scope_name = ident, .ident = ident });
 
-                const ident_pattern = IR.Pattern{
+                const ident_pattern = CIR.Pattern{
                     .identifier = ident,
                 };
 
@@ -915,7 +915,7 @@ fn canonicalize_pattern(
             return null;
         },
         .underscore => {
-            const underscore_pattern = IR.Pattern{
+            const underscore_pattern = CIR.Pattern{
                 .Underscore = {},
             };
 
@@ -941,12 +941,12 @@ fn canonicalize_pattern(
             const fresh_num_var = self.can_ir.type_store.fresh();
             const fresh_precision_var = self.can_ir.type_store.fresh();
 
-            const int_pattern = IR.Pattern{
+            const int_pattern = CIR.Pattern{
                 .int_literal = .{
                     .num_var = fresh_num_var,
                     .precision_var = fresh_precision_var,
                     .literal = literal,
-                    .value = IR.IntValue{
+                    .value = CIR.IntValue{
                         .bytes = @bitCast(value),
                         .kind = .i128,
                     },
@@ -965,7 +965,7 @@ fn canonicalize_pattern(
             // For now, just intern the raw string
             const literal = self.can_ir.env.strings.insert(self.can_ir.env.gpa, token_text);
 
-            const str_pattern = IR.Pattern{
+            const str_pattern = CIR.Pattern{
                 .str_literal = literal,
             };
 
@@ -975,7 +975,7 @@ fn canonicalize_pattern(
             if (self.parse_ir.tokens.resolveIdentifier(e.tag_tok)) |tag_name| {
 
                 // TODO: handle tag arguments from e.args
-                const arguments: IR.TypedPatternAtRegion.Span = .{ .span = base.DataSpan{
+                const arguments: CIR.TypedPatternAtRegion.Span = .{ .span = base.DataSpan{
                     .start = 867,
                     .len = 867,
                 } };
@@ -983,7 +983,7 @@ fn canonicalize_pattern(
                 const fresh_num_var = self.can_ir.type_store.fresh();
                 const fresh_ext_var = self.can_ir.type_store.fresh();
 
-                const tag_pattern = IR.Pattern{
+                const tag_pattern = CIR.Pattern{
                     .applied_tag = .{
                         .whole_var = fresh_num_var,
                         .ext_var = fresh_ext_var,

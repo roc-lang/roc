@@ -19,7 +19,7 @@ const Problem = problem.Problem;
 const Node = @import("Node.zig");
 const NodeStore = @import("NodeStore.zig");
 
-const IR = @This();
+const CanIR = @This();
 
 env: base.ModuleEnv,
 store: NodeStore,
@@ -40,17 +40,17 @@ top_level_defs: Def.Span,
 /// the `ModuleEnv` to also be owned by the can IR to cache it.
 ///
 /// Takes ownership of the module_env and type_store
-pub fn init(env: ModuleEnv, type_store: types.Store) IR {
+pub fn init(env: ModuleEnv, type_store: types.Store) CanIR {
     // TODO: Figure out what capacity should be
-    return IR.initCapacity(env, type_store, 1000);
+    return CanIR.initCapacity(env, type_store, 1000);
 }
 
 /// Initialize the IR for a module's canonicalization info with a specified capacity.
 /// For more information refer to documentation on [init] as well
-pub fn initCapacity(env: ModuleEnv, type_store: types.Store, capacity: usize) IR {
+pub fn initCapacity(env: ModuleEnv, type_store: types.Store, capacity: usize) CanIR {
     var ident_store = env.idents;
 
-    return IR{
+    return CanIR{
         .env = env,
         .store = NodeStore.initCapacity(env.gpa, capacity),
         .ingested_files = .{},
@@ -61,7 +61,7 @@ pub fn initCapacity(env: ModuleEnv, type_store: types.Store, capacity: usize) IR
 }
 
 /// Deinit the IR's memory.
-pub fn deinit(self: *IR) void {
+pub fn deinit(self: *CanIR) void {
     self.store.deinit();
     self.ingested_files.deinit(self.env.gpa);
     self.imports.deinit(self.env.gpa);
@@ -76,7 +76,7 @@ fn appendTypeVarChild(node: *sexpr.Expr, gpa: std.mem.Allocator, name: []const u
 }
 
 // Helper to add identifier info
-fn appendIdentChild(node: *sexpr.Expr, gpa: std.mem.Allocator, ir: *const IR, name: []const u8, ident_idx: Ident.Idx) void {
+fn appendIdentChild(node: *sexpr.Expr, gpa: std.mem.Allocator, ir: *const CanIR, name: []const u8, ident_idx: Ident.Idx) void {
     const ident_text = ir.env.idents.getText(ident_idx);
 
     // Create a node with no pre-allocated children to avoid aliasing issues
@@ -171,14 +171,14 @@ pub const Statement = union(enum) {
     /// Only valid at the top level of a module
     pub const TypeDecl = struct {
         header: TypeHeader.Idx,
-        anno: IR.TypeAnno.Idx,
+        anno: CanIR.TypeAnno.Idx,
         where: ?WhereClause.Span,
         region: Region,
     };
     /// A type annotation, declaring that the value referred to by an ident in the same scope should be a given type.
     pub const TypeAnno = struct {
         name: Ident.Idx,
-        anno: IR.TypeAnno.Idx,
+        anno: CanIR.TypeAnno.Idx,
         where: ?WhereClause.Span,
         region: Region,
     };
@@ -371,7 +371,7 @@ pub const Expr = union(enum) {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
 
-    pub fn toSExpr(self: *const @This(), ir: *const IR, line_starts: std.ArrayList(u32)) sexpr.Expr {
+    pub fn toSExpr(self: *const @This(), ir: *const CanIR, line_starts: std.ArrayList(u32)) sexpr.Expr {
         const gpa = ir.env.gpa;
         switch (self.*) {
             .num => |num_expr| {
@@ -775,7 +775,7 @@ pub const IngestedFile = struct {
     pub const Range = List.Range;
     pub const NonEmptyRange = List.NonEmptyRange;
 
-    pub fn toSExpr(self: *const @This(), ir: *const IR, line_starts: std.ArrayList(u32)) sexpr.Expr {
+    pub fn toSExpr(self: *const @This(), ir: *const CanIR, line_starts: std.ArrayList(u32)) sexpr.Expr {
         _ = line_starts;
         const gpa = ir.env.gpa;
         var node = sexpr.Expr.init(gpa, "ingested_file");
@@ -827,7 +827,7 @@ pub const Def = struct {
     pub const Span = struct { span: DataSpan };
     pub const Range = struct { start: u32, len: u32 };
 
-    pub fn toSExpr(self: *const @This(), ir: *IR, line_starts: std.ArrayList(u32), source: []const u8) sexpr.Expr {
+    pub fn toSExpr(self: *const @This(), ir: *CanIR, line_starts: std.ArrayList(u32), source: []const u8) sexpr.Expr {
         const gpa = ir.env.gpa;
         var node = sexpr.Expr.init(gpa, "def");
 
@@ -873,7 +873,7 @@ pub const Annotation = struct {
 
     pub const Idx = enum(u32) { _ };
 
-    pub fn toSExpr(self: *const @This(), ir: *const IR, line_starts: std.ArrayList(u32)) sexpr.Expr {
+    pub fn toSExpr(self: *const @This(), ir: *const CanIR, line_starts: std.ArrayList(u32)) sexpr.Expr {
         _ = self;
         _ = line_starts;
         const gpa = ir.env.gpa;
@@ -897,7 +897,7 @@ pub const ExprAtRegion = struct {
     expr: Expr,
     region: Region,
 
-    pub fn toSExpr(self: *const @This(), ir: *const IR, line_starts: std.ArrayList(u32)) sexpr.Expr {
+    pub fn toSExpr(self: *const @This(), ir: *const CanIR, line_starts: std.ArrayList(u32)) sexpr.Expr {
         const gpa = ir.env.gpa;
         var node = sexpr.Expr.init(gpa, "expr_at_region");
 
@@ -921,7 +921,7 @@ pub const TypedExprAtRegion = struct {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
 
-    pub fn toSExpr(self: *const @This(), ir: *const IR, line_starts: std.ArrayList(u32), source: []const u8) sexpr.Expr {
+    pub fn toSExpr(self: *const @This(), ir: *const CanIR, line_starts: std.ArrayList(u32), source: []const u8) sexpr.Expr {
         const gpa = ir.env.gpa;
 
         var typed_expr_node = sexpr.Expr.init(gpa, "typed_expr_at_region");
@@ -974,7 +974,7 @@ pub const When = struct {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
 
-    pub fn toSExpr(self: *const @This(), ir: *const IR, line_starts: std.ArrayList(u32)) sexpr.Expr {
+    pub fn toSExpr(self: *const @This(), ir: *const CanIR, line_starts: std.ArrayList(u32)) sexpr.Expr {
         const gpa = ir.env.gpa;
         var node = sexpr.Expr.init(gpa, "when");
 
@@ -1016,7 +1016,7 @@ pub const WhenBranchPattern = struct {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
 
-    pub fn toSExpr(self: *const @This(), ir: *const IR, line_starts: std.ArrayList(u32)) sexpr.Expr {
+    pub fn toSExpr(self: *const @This(), ir: *const CanIR, line_starts: std.ArrayList(u32)) sexpr.Expr {
         _ = line_starts;
         const gpa = ir.gpa;
         var node = sexpr.Expr.init(gpa, "when_branch_pattern");
@@ -1037,7 +1037,7 @@ pub const WhenBranch = struct {
     /// Whether this branch is redundant in the `when` it appears in
     redundant: RedundantMark,
 
-    pub fn toSExpr(self: *const @This(), ir: *const IR, line_starts: std.ArrayList(u32)) sexpr.Expr {
+    pub fn toSExpr(self: *const @This(), ir: *const CanIR, line_starts: std.ArrayList(u32)) sexpr.Expr {
         const gpa = ir.env.gpa;
         var node = sexpr.Expr.init(gpa, "when_branch");
 
@@ -1138,7 +1138,7 @@ pub const Pattern = union(enum) {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
 
-    pub fn toSExpr(self: *const @This(), ir: *IR, line_starts: std.ArrayList(u32), source: []const u8) sexpr.Expr {
+    pub fn toSExpr(self: *const @This(), ir: *CanIR, line_starts: std.ArrayList(u32), source: []const u8) sexpr.Expr {
         const gpa = ir.env.gpa;
         switch (self.*) {
             .identifier => |ident_idx| {
@@ -1250,7 +1250,7 @@ pub const PatternAtRegion = struct {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
 
-    pub fn toSExpr(self: *const @This(), ir: *const IR, line_starts: std.ArrayList(u32)) sexpr.Expr {
+    pub fn toSExpr(self: *const @This(), ir: *const CanIR, line_starts: std.ArrayList(u32)) sexpr.Expr {
         const gpa = ir.env.gpa;
 
         var pattern_node = sexpr.Expr.init(gpa, "pattern_at_region");
@@ -1273,7 +1273,7 @@ pub const TypedPatternAtRegion = struct {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
 
-    pub fn toSExpr(self: *const @This(), ir: *const IR, line_starts: std.ArrayList(u32), source: []const u8) sexpr.Expr {
+    pub fn toSExpr(self: *const @This(), ir: *const CanIR, line_starts: std.ArrayList(u32), source: []const u8) sexpr.Expr {
         const gpa = ir.env.gpa;
 
         var type_pattern_node = sexpr.Expr.init(gpa, "typed_pattern_at_region");
@@ -1303,7 +1303,7 @@ pub const RecordDestruct = struct {
         Required,
         Guard: TypedPatternAtRegion.Idx,
 
-        pub fn toSExpr(self: *const @This(), ir: *const IR, line_starts: std.ArrayList(u32)) sexpr.Expr {
+        pub fn toSExpr(self: *const @This(), ir: *const CanIR, line_starts: std.ArrayList(u32)) sexpr.Expr {
             const gpa = ir.env.gpa;
 
             switch (self.*) {
@@ -1321,7 +1321,7 @@ pub const RecordDestruct = struct {
         }
     };
 
-    pub fn toSExpr(self: *const @This(), ir: *const IR, line_starts: std.ArrayList(u32), source: []const u8) sexpr.Expr {
+    pub fn toSExpr(self: *const @This(), ir: *const CanIR, line_starts: std.ArrayList(u32), source: []const u8) sexpr.Expr {
         const gpa = ir.env.gpa;
 
         var record_destruct_node = sexpr.Expr.init(gpa, "record_destruct");
@@ -1349,7 +1349,7 @@ pub const ExhaustiveMark = TypeVar;
 /// and write it to the given writer.
 ///
 /// If a single expression is provided we only print that expression
-pub fn toSExprStr(ir: *IR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr.Idx, line_starts: std.ArrayList(u32), source: []const u8) !void {
+pub fn toSExprStr(ir: *CanIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr.Idx, line_starts: std.ArrayList(u32), source: []const u8) !void {
     const gpa = ir.env.gpa;
 
     if (maybe_expr_idx) |expr_idx| {
@@ -1490,7 +1490,7 @@ pub const TagExt = union(enum) {
 };
 
 test "NodeStore - init and deinit" {
-    var store = IR.NodeStore.init(testing.allocator);
+    var store = CanIR.NodeStore.init(testing.allocator);
     defer store.deinit();
 
     try testing.expect(store.nodes.len() == 0);

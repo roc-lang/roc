@@ -54,7 +54,7 @@ pub fn ModuleWork(comptime Work: type) type {
             ///  create a Store from a slice of ModuleWork(can.IR)
             pub fn fromCanIrs(
                 gpa: std.mem.Allocator,
-                can_irs: []const ModuleWork(can.IR),
+                can_irs: []const ModuleWork(can.CIR),
             ) Store {
                 var items = std.MultiArrayList(ModuleWork(Work)){};
                 items.ensureTotalCapacity(gpa, can_irs.len) catch |err| exitOnOom(err);
@@ -78,7 +78,7 @@ pub fn ModuleWork(comptime Work: type) type {
             /// to a `ModuleEnv` struct.
             pub fn initFromCanIrs(
                 gpa: std.mem.Allocator,
-                can_irs: *const ModuleWork(can.IR).Store,
+                can_irs: *const ModuleWork(can.CIR).Store,
             ) Store {
                 var items = std.MultiArrayList(ModuleWork(Work)){};
                 items.ensureTotalCapacity(gpa, can_irs.items.len) catch |err| exitOnOom(err);

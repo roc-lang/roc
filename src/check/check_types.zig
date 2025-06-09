@@ -37,12 +37,12 @@ test "checkTypes - basic type unification" {
 
     var type_store = types.Store.init(&module_env);
 
-    var can_irs = ModuleWork(can.IR).Store.fromCanIrs(
+    var can_irs = ModuleWork(can.CIR).Store.fromCanIrs(
         gpa,
-        &.{ModuleWork(can.IR){
+        &.{ModuleWork(can.CIR){
             .package_idx = @enumFromInt(1),
             .module_idx = @enumFromInt(0),
-            .work = can.IR.init(module_env, type_store),
+            .work = can.CIR.init(module_env, type_store),
         }},
     );
     defer can_irs.deinit(gpa);

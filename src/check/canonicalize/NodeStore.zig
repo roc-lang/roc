@@ -5,7 +5,7 @@ const base = @import("../../base.zig");
 const types = @import("../../types.zig");
 const collections = @import("../../collections.zig");
 const Node = @import("Node.zig");
-const CanIR = @import("IR.zig");
+const CanIR = @import("CIR.zig");
 
 const exitOnOom = collections.exitOnOom;
 
@@ -247,11 +247,6 @@ pub fn getWhenBranch(store: *const NodeStore, whenBranch: CanIR.WhenBranch.Idx) 
     _ = store;
     _ = whenBranch;
     @panic("TODO: implement getWhenBranch");
-}
-
-/// Returns a slice of 'when' branches.
-pub fn sliceWhenBranch(store: *NodeStore, range: CanIR.WhenBranch.Range) []CanIR.WhenBranch {
-    return store.nodes.rangeToSlice(range);
 }
 
 /// Retrieves a 'where' clause from the store.
@@ -604,11 +599,6 @@ pub fn getRecordField(store: *NodeStore, recordField: CanIR.RecordField.Idx) Can
 //     };
 // }
 
-/// Creates a slice corresponding to a span.
-pub fn sliceFromSpan(store: *NodeStore, comptime T: type, span: anytype) []T {
-    return store.extra_data.items[span.start..][0..span.len];
-}
-
 /// Returns the top index for scratch expressions.
 pub fn scratchExprTop(store: *NodeStore) u32 {
     return store.scratch_exprs.top();
@@ -674,19 +664,22 @@ pub fn clearScratchDefsFrom(store: *NodeStore, start: u32) void {
     store.scratch_defs.clearFrom(start);
 }
 
+/// Creates a slice corresponding to a span.
+pub fn sliceFromSpan(store: *NodeStore, comptime T: type, span: base.DataSpan) []T {
+    return @ptrCast(store.extra_data.items[span.start..][0..span.len]);
+}
+
 /// Returns a slice of definitions from the store.
-pub fn sliceDefs(store: *const NodeStore, span: CanIR.Def.Span) []CanIR.Def.Idx {
-    const slice = store.extra_data.items[span.span.start..(span.span.start + span.span.len)];
-    const result: []CanIR.Def.Idx = @ptrCast(@alignCast(slice));
-    return result;
+pub fn sliceDefs(store: *NodeStore, span: CanIR.Def.Span) []CanIR.Def.Idx {
+    return store.sliceFromSpan(CanIR.Def.Idx, span.span);
 }
 
-/// Returns a slice of `Pattern.Idx`
+/// Returns a slice of `CanIR.Pattern.Idx`
 pub fn slicePatterns(store: *NodeStore, span: CanIR.Pattern.Span) []CanIR.Pattern.Idx {
-    return @ptrCast(store.extra_data.items[span.span.start..(span.span.start + span.span.len)]);
+    return store.sliceFromSpan(CanIR.Pattern.Idx, span.span);
 }
 
-/// Returns a slice of `IfBranch.Idx`
+/// Returns a slice of `CanIR.IfBranch.Idx`
 pub fn sliceIfBranch(store: *const NodeStore, span: CanIR.IfBranch.Span) []CanIR.IfBranch.Idx {
-    return @ptrCast(store.extra_data.items[span.span.start..(span.span.start + span.span.len)]);
+    return store.sliceFromSpan(CanIR.IfBranch.Idx, span.span);
 }

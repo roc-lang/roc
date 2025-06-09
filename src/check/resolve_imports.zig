@@ -12,7 +12,7 @@ pub const IR = @import("resolve_imports/IR.zig");
 /// real modules based on the file tree for the owning package.
 pub fn resolveImports(
     ir: *IR,
-    can_ir: *const can.IR,
+    can_ir: *const can.CIR,
     other_modules: *const base.ModuleWork(IR).Store,
 ) void {
     _ = ir;

@@ -21,7 +21,7 @@ const exitOnOom = collections.utils.exitOnOom;
 
 const Self = @This();
 
-modules: std.ArrayList(ModuleWork(Can.IR)),
+modules: std.ArrayList(ModuleWork(Can.CIR)),
 adjacencies: std.ArrayList(std.ArrayList(usize)),
 gpa: std.mem.Allocator,
 
@@ -51,7 +51,7 @@ pub fn fromPackages(
     package_store: *const Package.Store,
 ) ConstructResult {
     var graph = Self{
-        .modules = std.ArrayList(ModuleWork(Can.IR)).init(gpa),
+        .modules = std.ArrayList(ModuleWork(Can.CIR)).init(gpa),
         .adjacencies = std.ArrayList(std.ArrayList(usize)).init(gpa),
         .gpa = gpa,
     };
@@ -76,7 +76,7 @@ pub fn fromPackages(
                 } };
             };
 
-            graph.modules.append(ModuleWork(Can.IR){
+            graph.modules.append(ModuleWork(Can.CIR){
                 .package_idx = @enumFromInt(package_idx),
                 .module_idx = @enumFromInt(module_idx),
                 .work = can_ir,
@@ -95,7 +95,7 @@ fn loadOrCompileCanIr(
     relpath: []const u8,
     fs: Filesystem,
     gpa: std.mem.Allocator,
-) Filesystem.ReadError!Can.IR {
+) Filesystem.ReadError!Can.CIR {
     // TODO: find a way to provide the current Roc compiler version
     const current_roc_version = "";
     const abs_file_path = std.fs.path.join(gpa, &.{ absdir, relpath }) catch |err| exitOnOom(err);
@@ -113,7 +113,7 @@ fn loadOrCompileCanIr(
         var parse_ir = parse.parse(&module_env, contents);
         parse_ir.store.emptyScratch();
 
-        var can_ir = Can.IR.init(module_env, type_store);
+        var can_ir = Can.CIR.init(module_env, type_store);
         var scope = Scope.init(&can_ir.env, &.{}, &.{});
         defer scope.deinit();
         var can = Can.init(&can_ir, &parse_ir, &scope);
@@ -184,7 +184,7 @@ pub const Sccs = struct {
 
 /// The result of an attempt to put modules in compilation order.
 pub const OrderingResult = union(enum) {
-    ordered: ModuleWork(Can.IR).Store,
+    ordered: ModuleWork(Can.CIR).Store,
     found_cycle: std.ArrayList(ModuleWork(void)),
 };
 
@@ -198,7 +198,7 @@ pub fn putModulesInCompilationOrder(
     sccs: *const Sccs,
     gpa: std.mem.Allocator,
 ) OrderingResult {
-    var modules = std.ArrayList(ModuleWork(Can.IR)).init(gpa);
+    var modules = std.ArrayList(ModuleWork(Can.CIR)).init(gpa);
     errdefer modules.deinit();
 
     var group_index = sccs.groups.items.len;
@@ -226,7 +226,7 @@ pub fn putModulesInCompilationOrder(
         }
     }
 
-    return .{ .ordered = ModuleWork(Can.IR).Store.fromCanIrs(gpa, modules.items) };
+    return .{ .ordered = ModuleWork(Can.CIR).Store.fromCanIrs(gpa, modules.items) };
 }
 
 /// Find the SCCs for a [ModuleGraph] to facilitate ordering modules in a dependency-first
