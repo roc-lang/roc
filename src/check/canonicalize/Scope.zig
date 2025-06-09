@@ -11,7 +11,7 @@ const Module = base.Module;
 const Problem = problem_mod.Problem;
 const exitOnOom = collections.utils.exitOnOom;
 
-const Self = @This();
+const Scope = @This();
 
 const TagMap = std.AutoHashMapUnmanaged(Ident.Idx, Alias.Idx);
 
@@ -28,8 +28,8 @@ pub fn init(
     env: *base.ModuleEnv,
     builtin_aliases: []const struct { alias: Ident.Idx, name: Ident.Idx },
     builtin_idents: []const Ident.Idx,
-) Self {
-    var scope = Self{ .env = env, .levels = Levels{ .env = env } };
+) Scope {
+    var scope = Scope{ .env = env, .levels = Levels{ .env = env } };
 
     scope.levels.enter();
 
@@ -51,7 +51,7 @@ pub fn init(
 }
 
 /// Deinitialize a scope's memory
-pub fn deinit(self: *Self) void {
+pub fn deinit(self: *Scope) void {
     // if (self.custom_tags.size > 0) {
     //     self.custom_tags.deinit(self.env.gpa);
     // }
@@ -62,7 +62,7 @@ pub fn deinit(self: *Self) void {
 ///
 /// This is used, for example, during canonicalization of an Expr::Closure
 /// to generate a unique ident to refer to that closure.
-pub fn genUnique(self: *Self) Ident.Idx {
+pub fn genUnique(self: *Scope) Ident.Idx {
     const unique_idx = self.env.idents.genUnique();
 
     _ = self.levels.introduce(.ident, .{
@@ -347,12 +347,12 @@ pub const Levels = struct {
     }
 };
 
-fn createTestScope(idents: [][]Level.IdentInScope, aliases: [][]Level.AliasInScope) Self {
+fn createTestScope(idents: [][]Level.IdentInScope, aliases: [][]Level.AliasInScope) Scope {
     const gpa = std.testing.allocator;
     var env = base.ModuleEnv.init(gpa);
     defer env.deinit();
 
-    var scope = Self{
+    var scope = Scope{
         .env = &env,
         .focused_custom_alias = null,
         .custom_tags = std.AutoHashMap(Ident.Idx, Alias.Idx).init(gpa),

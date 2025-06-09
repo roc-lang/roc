@@ -13,3 +13,5 @@ pub const SafeList = @import("collections/safe_list.zig").SafeList;
 pub const SafeMultiList = @import("collections/safe_list.zig").SafeMultiList;
 
 pub const SmallStringInterner = @import("collections/SmallStringInterner.zig");
+
+pub const exitOnOom = @import("collections/utils.zig").exitOnOom;
