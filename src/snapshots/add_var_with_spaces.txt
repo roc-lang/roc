@@ -41,6 +41,6 @@ add2 = x + 2
 						(precision_var "#1")
 						(literal "2")
 						(value "TODO")
-						(bound "flex_var"))))
+						(bound "i128"))))
 			"#2")))
 ~~~END

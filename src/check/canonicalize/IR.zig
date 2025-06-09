@@ -299,7 +299,8 @@ pub const NodeStore = struct {
                             .bytes = [16]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
                             .kind = .i128,
                         },
-                        .bound = .flex_var, // Default bound
+                        // TODO shouldn't this be a flex_var?
+                        .bound = types.Num.Compact.Int.Precision.i128,
                     },
                 };
             },
@@ -328,13 +329,16 @@ pub const NodeStore = struct {
 
                 // TODO get value and bound from extra_data
 
-                return Expr{ .float = .{
-                    .num_var = num_var,
-                    .precision_var = precision_var,
-                    .literal = literal,
-                    .value = 0,
-                    .bound = .flex_var,
-                } };
+                return Expr{
+                    .float = .{
+                        .num_var = num_var,
+                        .precision_var = precision_var,
+                        .literal = literal,
+                        .value = 0,
+                        // TODO shouldn't this be a flex_var?
+                        .bound = types.Num.Compact.Frac.Precision.dec,
+                    },
+                };
             },
             .expr_string => {
                 return .{
@@ -1017,31 +1021,31 @@ pub const Expr = union(enum) {
         num_var: TypeVar,
         literal: StringLiteral.Idx,
         value: IntValue,
-        bound: types.Num,
+        bound: types.Num.Compact,
     },
 
     // Int and Float store a variable to generate better error messages
     int: struct {
         num_var: TypeVar,
-        precision_var: TypeVar, // <- can probably be removed
+        precision_var: TypeVar,
         literal: StringLiteral.Idx,
         value: IntValue,
-        bound: types.Num.Int,
+        bound: types.Num.Compact.Int.Precision,
     },
     float: struct {
         num_var: TypeVar,
-        precision_var: TypeVar, // <- can probably be removed
+        precision_var: TypeVar,
         literal: StringLiteral.Idx,
         value: f64,
-        bound: types.Num.Frac,
+        bound: types.Num.Compact.Frac.Precision,
     },
     str: StringLiteral.Idx,
     // Number variable, precision variable, value, bound
     single_quote: struct {
         num_var: TypeVar,
-        precision_var: TypeVar, // <- can probably be removed
+        precision_var: TypeVar,
         value: u32,
-        bound: types.Num.Int,
+        bound: types.Num.Compact.Int.Precision,
     },
     lookup: Lookup,
     list: struct {
@@ -1840,28 +1844,28 @@ pub const Pattern = union(enum) {
         num_var: TypeVar,
         literal: StringLiteral.Idx,
         value: IntValue,
-        bound: types.Num,
+        bound: types.Num.Compact,
     },
     int_literal: struct {
         num_var: TypeVar,
-        precision_var: TypeVar, // <- can probably be removed
+        precision_var: TypeVar,
         literal: StringLiteral.Idx,
         value: IntValue,
-        bound: types.Num.Int,
+        bound: types.Num.Compact.Int.Precision,
     },
     float_literal: struct {
         num_var: TypeVar,
-        precision_var: TypeVar, // <- can probably be removed
+        precision_var: TypeVar,
         literal: StringLiteral.Idx,
         value: f64,
-        bound: types.Num.Frac,
+        bound: types.Num.Compact.Frac.Precision,
     },
     str_literal: StringLiteral.Idx,
     char_literal: struct {
         num_var: TypeVar,
-        precision_var: TypeVar, // <- can probably be removed
+        precision_var: TypeVar,
         value: u32,
-        bound: types.Num.Int,
+        bound: types.Num.Compact.Int.Precision,
     },
     Underscore,
 

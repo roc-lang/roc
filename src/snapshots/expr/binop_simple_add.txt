@@ -22,11 +22,11 @@ NO CHANGE
 		(precision_var "#1")
 		(literal "1")
 		(value "TODO")
-		(bound "flex_var"))
+		(bound "i128"))
 	(int
 		(num_var "#2")
 		(precision_var "#3")
 		(literal "2")
 		(value "TODO")
-		(bound "flex_var")))
+		(bound "i128")))
 ~~~END

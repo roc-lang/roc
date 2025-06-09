@@ -39,7 +39,7 @@ NO CHANGE
 		(precision_var "#1")
 		(literal "1")
 		(value "TODO")
-		(bound "flex_var"))
+		(bound "i128"))
 	(call
 		(lookup (ident "mul"))
 		(int
@@ -47,11 +47,11 @@ NO CHANGE
 			(precision_var "#3")
 			(literal "2")
 			(value "TODO")
-			(bound "flex_var"))
+			(bound "i128"))
 		(int
 			(num_var "#4")
 			(precision_var "#5")
 			(literal "3")
 			(value "TODO")
-			(bound "flex_var"))))
+			(bound "i128"))))
 ~~~END

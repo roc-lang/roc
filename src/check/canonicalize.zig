@@ -429,7 +429,8 @@ pub fn canonicalize_expr(
                         .bytes = @bitCast(value),
                         .kind = .i128,
                     },
-                    .bound = .flex_var,
+                    // TODO shouldn't this be a flex_var?
+                    .bound = types.Num.Compact.Int.Precision.i128,
                 },
             };
 
@@ -468,7 +469,8 @@ pub fn canonicalize_expr(
                     .precision_var = fresh_prec_var,
                     .literal = literal,
                     .value = value,
-                    .bound = .flex_var,
+                    // TODO shouldn't this be a flex_var?
+                    .bound = types.Num.Compact.Frac.Precision.dec,
                 },
             };
 
@@ -948,7 +950,8 @@ fn canonicalize_pattern(
                         .bytes = @bitCast(value),
                         .kind = .i128,
                     },
-                    .bound = .flex_var,
+                    // TODO shouldn't this be a flex_var?
+                    .bound = types.Num.Compact.Int.Precision.i128,
                 },
             };
 

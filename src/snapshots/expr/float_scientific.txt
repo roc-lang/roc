@@ -17,5 +17,5 @@ NO CHANGE
 	(precision_var "#1")
 	(literal "1.23e-4")
 	(value "0")
-	(bound "flex_var"))
+	(bound "dec"))
 ~~~END
