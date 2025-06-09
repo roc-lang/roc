@@ -43,11 +43,11 @@ pub const CliProblem = union(enum) {
     },
 };
 
-/// The level of optimziation of a Roc program
+/// The optimization strategy for the compilation of a Roc program
 pub const OptLevel = enum {
-    size,
-    speed,
-    dev,
+    size, // binary size
+    speed, // binary speed
+    dev, // speed of compilation
 
     fn from_str(str: []const u8) ?OptLevel {
         if (mem.eql(u8, str, "speed")) return .speed;
