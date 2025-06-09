@@ -305,17 +305,68 @@ Closure implementation:
 ## Type Inference
 
 The process of automatically determining the types of expressions without explicit [type annotations](#type-signature) from the programmer.
-The compiler analyzes how values are used in code to deduce their types.
+The compiler analyzes how values are used in code to deduce their types. For example:
+```roc
+foo = |bar|
+    Num.to_str(bar)
+```
+`foo` has no type annotation so we don't immediately know the type of bar. Later in the function, `Num.to_str` is called on `bar` and we know the type of `to_str` is `Num * -> Str`, so that means `bar` must be a `Num *`! We have now inferred the type of `bar` :tada:
 
 Type inference implementation:
 - new compiler: Not yet implemented
 - old compiler: Type inference is spread over multiple crates: [solve](crates/compiler/solve), [late-solve](crates/compiler/solve),[unify](crates/compiler/unify), [constrain](crates/compiler/constrain), ...
 
+## Type constraint
+
+A requirement or restriction that limits what types can be used in a particular context.
+Type constraints express relationships between types that must be satisfied for a program to be well-typed.
+Type constraints can take several forms:
+- Equality constraint: requires types to be the same:
+    + In the expression `a + b`, both `a` and `b` need to have the same type.
+- Try target constraint: requires the expression you use `?` on to be a `Result`:
+    + `Str.from_utf8(byte_list)?`
+- Effect suffix constraint: Your function should have a `!` suffix if it calls an effectful function.
+- See `pub enum Constraint` in [crates/compiler/can/src/constraint.rs](crates/compiler/can/src/constraint.rs) for an overview of all constraints.
+
+Type constraint implementation:
+- new compiler: Not yet implemented
+- old compiler:
+    + Definition:  [can/src/constraint.rs](crates/compiler/can/src/constraint.rs)
+    + [Type solving](#type-solving) using constraints: [crates/compiler/solve/src/solve.rs](crates/compiler/solve/src/solve.rs)
+
 ## Type Solving
 
 TODO
 
+## Structural Typing
+
+A type system where type equivalence is based on the shape (the set of members and their types) of the values, not the names by which the types were declared.
+Example:
+```roc
+Person : { first_name : Str, last_name : Str }
+
+User : { first_name : Str, last_name : Str }
+
+register_person! : Person => Result {} [InvalidName]
+register_person! = |person|
+    ...
+
+user : User
+user = { first_name: "Bob", last_name: "Foo"}
+
+# This works even though `register_person!` expects a `Person`, the types have the same structure so they are compatible!
+register_person!(user)
+```
+
+## Nominal Typing
+
+A type system where type equivalence is based on explicit names or declarations, not just structure. Two types are considered the same, only if they have the same name or originate from the same type declaration.
+
 ## Rank
+
+TODO
+
+## Rigid
 
 TODO
 
