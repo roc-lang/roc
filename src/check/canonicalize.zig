@@ -388,7 +388,7 @@ pub fn canonicalize_expr(
                 } }));
 
                 return self.can_ir.store.addExpr(.{
-                    .expr = CIR.Expr{ .RuntimeError = problem_id },
+                    .expr = CIR.Expr{ .runtime_error = problem_id },
                     .region = e.region.toBase(),
                 });
             };
@@ -431,7 +431,7 @@ pub fn canonicalize_expr(
                 } }));
 
                 return self.can_ir.store.addExpr(.{
-                    .expr = CIR.Expr{ .RuntimeError = problem_id },
+                    .expr = CIR.Expr{ .runtime_error = problem_id },
                     .region = e.region.toBase(),
                 });
             };

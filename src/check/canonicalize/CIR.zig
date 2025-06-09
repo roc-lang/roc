@@ -1,3 +1,6 @@
+//! The canonical intermediate representation (CIR) is a representation of the
+//! canonicalized abstract syntax tree (AST) that is used for interpreting code generation and type checking, and later compilation stages.
+
 const std = @import("std");
 const testing = std.testing;
 const base = @import("../../base.zig");
@@ -267,21 +270,14 @@ pub const RigidVariables = struct {
     // };
 };
 
-// TODO: don't use symbol in this module, no imports really exist yet?
 /// An expression that has been canonicalized.
 pub const Expr = union(enum) {
-    // Literals
-
-    // Num stores the `a` variable in `Num a`. Not the same as the variable
-    // stored in Int and Float below, which is strictly for better error messages
     num: struct {
         num_var: TypeVar,
         literal: StringLiteral.Idx,
         value: IntValue,
         bound: types.Num.Compact,
     },
-
-    // Int and Float store a variable to generate better error messages
     int: struct {
         num_var: TypeVar,
         precision_var: TypeVar,
@@ -297,7 +293,6 @@ pub const Expr = union(enum) {
         bound: types.Num.Compact.Frac.Precision,
     },
     str: StringLiteral.Idx,
-    // Number variable, precision variable, value, bound
     single_quote: struct {
         num_var: TypeVar,
         precision_var: TypeVar,
@@ -309,7 +304,6 @@ pub const Expr = union(enum) {
         elem_var: TypeVar,
         elems: Expr.Span,
     },
-
     when: When.Idx,
     @"if": struct {
         cond_var: TypeVar,
@@ -317,26 +311,19 @@ pub const Expr = union(enum) {
         branches: IfBranch.Span,
         final_else: Expr.Idx,
     },
-
     /// This is *only* for calling functions, not for tag application.
     /// The Tag variant contains any applied values inside it.
     call: struct {
         args: Expr.Span,
         // called_via: base.CalledVia,
     },
-
-    // Closure: ClosureData,
-
-    // Product Types
     record: struct {
         record_var: TypeVar,
         // TODO:
         // fields: SendMap<Lowercase, Field>,
     },
-
     /// Empty record constant
     empty_record,
-
     /// Look up exactly one field on a record, e.g. (expr).foo.
     record_access: struct {
         record_var: TypeVar,
@@ -345,24 +332,20 @@ pub const Expr = union(enum) {
         loc_expr: Expr.Idx,
         field: Ident.Idx,
     },
-
-    // Sum Types
     tag: struct {
         tag_union_var: TypeVar,
         ext_var: TypeVar,
         name: Ident.Idx,
         args: Expr.Span,
     },
-
     zero_argument_tag: struct {
         closure_name: Ident.Idx,
         variant_var: TypeVar,
         ext_var: TypeVar,
         name: Ident.Idx,
     },
-
     /// Compiles, but will crash if reached
-    RuntimeError: Problem.Idx,
+    runtime_error: Problem.Idx,
 
     const Lookup = struct {
         ident: Ident.Idx,
@@ -737,7 +720,7 @@ pub const Expr = union(enum) {
 
                 return tag_node;
             },
-            .RuntimeError => |problem_idx| {
+            .runtime_error => |problem_idx| {
                 var runtime_err_node = sexpr.Expr.init(gpa, "runtime_error");
 
                 const p = ir.env.problems.get(problem_idx);

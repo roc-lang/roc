@@ -5,7 +5,7 @@ const base = @import("../../base.zig");
 const types = @import("../../types.zig");
 const collections = @import("../../collections.zig");
 const Node = @import("Node.zig");
-const CanIR = @import("CIR.zig");
+const CIR = @import("CIR.zig");
 
 const exitOnOom = collections.exitOnOom;
 
@@ -14,17 +14,17 @@ const NodeStore = @This();
 gpa: std.mem.Allocator,
 nodes: Node.List,
 extra_data: std.ArrayListUnmanaged(u32),
-scratch_statements: base.Scratch(CanIR.Statement.Idx),
-scratch_exprs: base.Scratch(CanIR.Expr.Idx),
-scratch_record_fields: base.Scratch(CanIR.RecordField.Idx),
-scratch_when_branches: base.Scratch(CanIR.WhenBranch.Idx),
-scratch_where_clauses: base.Scratch(CanIR.WhereClause.Idx),
-scratch_patterns: base.Scratch(CanIR.Pattern.Idx),
-scratch_pattern_record_fields: base.Scratch(CanIR.PatternRecordField.Idx),
-scratch_type_annos: base.Scratch(CanIR.TypeAnno.Idx),
-scratch_anno_record_fields: base.Scratch(CanIR.AnnoRecordField.Idx),
-scratch_exposed_items: base.Scratch(CanIR.ExposedItem.Idx),
-scratch_defs: base.Scratch(CanIR.Def.Idx),
+scratch_statements: base.Scratch(CIR.Statement.Idx),
+scratch_exprs: base.Scratch(CIR.Expr.Idx),
+scratch_record_fields: base.Scratch(CIR.RecordField.Idx),
+scratch_when_branches: base.Scratch(CIR.WhenBranch.Idx),
+scratch_where_clauses: base.Scratch(CIR.WhereClause.Idx),
+scratch_patterns: base.Scratch(CIR.Pattern.Idx),
+scratch_pattern_record_fields: base.Scratch(CIR.PatternRecordField.Idx),
+scratch_type_annos: base.Scratch(CIR.TypeAnno.Idx),
+scratch_anno_record_fields: base.Scratch(CIR.AnnoRecordField.Idx),
+scratch_exposed_items: base.Scratch(CIR.ExposedItem.Idx),
+scratch_defs: base.Scratch(CIR.Def.Idx),
 
 /// Initializes the NodeStore
 pub fn init(gpa: std.mem.Allocator) NodeStore {
@@ -39,17 +39,17 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) NodeStore {
         .gpa = gpa,
         .nodes = Node.List.initCapacity(gpa, capacity),
         .extra_data = std.ArrayListUnmanaged(u32).initCapacity(gpa, capacity / 2) catch |err| exitOnOom(err),
-        .scratch_statements = base.Scratch(CanIR.Statement.Idx).init(gpa),
-        .scratch_exprs = base.Scratch(CanIR.Expr.Idx).init(gpa),
-        .scratch_patterns = base.Scratch(CanIR.Pattern.Idx).init(gpa),
-        .scratch_record_fields = base.Scratch(CanIR.RecordField.Idx).init(gpa),
-        .scratch_pattern_record_fields = base.Scratch(CanIR.PatternRecordField.Idx).init(gpa),
-        .scratch_when_branches = base.Scratch(CanIR.WhenBranch.Idx).init(gpa),
-        .scratch_type_annos = base.Scratch(CanIR.TypeAnno.Idx).init(gpa),
-        .scratch_anno_record_fields = base.Scratch(CanIR.AnnoRecordField.Idx).init(gpa),
-        .scratch_exposed_items = base.Scratch(CanIR.ExposedItem.Idx).init(gpa),
-        .scratch_defs = base.Scratch(CanIR.Def.Idx).init(gpa),
-        .scratch_where_clauses = base.Scratch(CanIR.WhereClause.Idx).init(gpa),
+        .scratch_statements = base.Scratch(CIR.Statement.Idx).init(gpa),
+        .scratch_exprs = base.Scratch(CIR.Expr.Idx).init(gpa),
+        .scratch_patterns = base.Scratch(CIR.Pattern.Idx).init(gpa),
+        .scratch_record_fields = base.Scratch(CIR.RecordField.Idx).init(gpa),
+        .scratch_pattern_record_fields = base.Scratch(CIR.PatternRecordField.Idx).init(gpa),
+        .scratch_when_branches = base.Scratch(CIR.WhenBranch.Idx).init(gpa),
+        .scratch_type_annos = base.Scratch(CIR.TypeAnno.Idx).init(gpa),
+        .scratch_anno_record_fields = base.Scratch(CIR.AnnoRecordField.Idx).init(gpa),
+        .scratch_exposed_items = base.Scratch(CIR.ExposedItem.Idx).init(gpa),
+        .scratch_defs = base.Scratch(CIR.Def.Idx).init(gpa),
+        .scratch_where_clauses = base.Scratch(CIR.WhereClause.Idx).init(gpa),
     };
 }
 
@@ -71,7 +71,7 @@ pub fn deinit(store: *NodeStore) void {
 }
 
 /// Retrieves a statement node from the store.
-pub fn getStatement(store: *NodeStore, statement: CanIR.Statement.Idx) CanIR.Statement {
+pub fn getStatement(store: *NodeStore, statement: CIR.Statement.Idx) CIR.Statement {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(statement));
     const node = store.nodes.get(node_idx);
 
@@ -98,14 +98,14 @@ pub fn getStatement(store: *NodeStore, statement: CanIR.Statement.Idx) CanIR.Sta
 }
 
 /// Retrieves an expression node from the store.
-pub fn getExpr(store: *const NodeStore, expr: CanIR.Expr.Idx) CanIR.Expr {
+pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr));
     const node = store.nodes.get(node_idx);
 
     switch (node.tag) {
         .expr_var => {
             const ident_idx: base.Ident.Idx = @bitCast(@as(u32, @bitCast(node.data_1)));
-            return CanIR.Expr{
+            return CIR.Expr{
                 .lookup = .{
                     .ident = ident_idx,
                 },
@@ -126,7 +126,7 @@ pub fn getExpr(store: *const NodeStore, expr: CanIR.Expr.Idx) CanIR.Expr {
                     .num_var = num_var,
                     .precision_var = precision_var,
                     .literal = literal,
-                    .value = CanIR.IntValue{ // Placeholder value
+                    .value = CIR.IntValue{ // Placeholder value
                         .bytes = [16]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
                         .kind = .i128,
                     },
@@ -160,7 +160,7 @@ pub fn getExpr(store: *const NodeStore, expr: CanIR.Expr.Idx) CanIR.Expr {
 
             // TODO get value and bound from extra_data
 
-            return CanIR.Expr{
+            return CIR.Expr{
                 .float = .{
                     .num_var = num_var,
                     .precision_var = precision_var,
@@ -187,8 +187,8 @@ pub fn getExpr(store: *const NodeStore, expr: CanIR.Expr.Idx) CanIR.Expr {
             };
         },
         .malformed => {
-            return .{
-                .RuntimeError = @enumFromInt(node.data_1),
+            return CIR.Expr{
+                .runtime_error = @enumFromInt(node.data_1),
             };
         },
         .statement_expr,
@@ -237,34 +237,34 @@ pub fn getExpr(store: *const NodeStore, expr: CanIR.Expr.Idx) CanIR.Expr {
         .if_branch,
         => {
             std.log.debug("TODO: implement getExpr for node type {?}", .{node.tag});
-            return .{ .RuntimeError = @enumFromInt(0) };
+            return CIR.Expr{ .runtime_error = @enumFromInt(0) };
         },
     }
 }
 
 /// Retrieves a 'when' branch from the store.
-pub fn getWhenBranch(store: *const NodeStore, whenBranch: CanIR.WhenBranch.Idx) CanIR.WhenBranch {
+pub fn getWhenBranch(store: *const NodeStore, whenBranch: CIR.WhenBranch.Idx) CIR.WhenBranch {
     _ = store;
     _ = whenBranch;
     @panic("TODO: implement getWhenBranch");
 }
 
 /// Retrieves a 'where' clause from the store.
-pub fn getWhereClause(store: *NodeStore, whereClause: CanIR.WhereClause.Idx) CanIR.WhereClause {
+pub fn getWhereClause(store: *NodeStore, whereClause: CIR.WhereClause.Idx) CIR.WhereClause {
     _ = store;
     _ = whereClause;
     @panic("TODO: implement getWhereClause");
 }
 
 /// Retrieves a pattern from the store.
-pub fn getPattern(store: *NodeStore, pattern_idx: CanIR.Pattern.Idx) CanIR.Pattern {
+pub fn getPattern(store: *NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pattern {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(pattern_idx));
     const node = store.nodes.get(node_idx);
 
     switch (node.tag) {
         .pattern_identifier => {
             const ident_idx: base.Ident.Idx = @bitCast(node.data_1);
-            return CanIR.Pattern{ .identifier = ident_idx };
+            return CIR.Pattern{ .identifier = ident_idx };
         },
         else => {
             std.log.debug("TODO: implement pattern {}", .{node.tag});
@@ -274,35 +274,35 @@ pub fn getPattern(store: *NodeStore, pattern_idx: CanIR.Pattern.Idx) CanIR.Patte
 }
 
 /// Retrieves a pattern record field from the store.
-pub fn getPatternRecordField(store: *NodeStore, patternRecordField: CanIR.PatternRecordField.Idx) CanIR.PatternRecordField {
+pub fn getPatternRecordField(store: *NodeStore, patternRecordField: CIR.PatternRecordField.Idx) CIR.PatternRecordField {
     _ = store;
     _ = patternRecordField;
     @panic("TODO: implement getPatternRecordField");
 }
 
 /// Retrieves a type annotation from the store.
-pub fn getTypeAnno(store: *NodeStore, typeAnno: CanIR.TypeAnno.Idx) CanIR.TypeAnno {
+pub fn getTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.TypeAnno {
     _ = store;
     _ = typeAnno;
     @panic("TODO: implement getTypeAnno");
 }
 
 /// Retrieves an annotation record field from the store.
-pub fn getAnnoRecordField(store: *NodeStore, annoRecordField: CanIR.AnnoRecordField.Idx) CanIR.AnnoRecordField {
+pub fn getAnnoRecordField(store: *NodeStore, annoRecordField: CIR.AnnoRecordField.Idx) CIR.AnnoRecordField {
     _ = store;
     _ = annoRecordField;
     @panic("TODO: implement getAnnoRecordField");
 }
 
 /// Retrieves an exposed item from the store.
-pub fn getExposedItem(store: *NodeStore, exposedItem: CanIR.ExposedItem.Idx) CanIR.ExposedItem {
+pub fn getExposedItem(store: *NodeStore, exposedItem: CIR.ExposedItem.Idx) CIR.ExposedItem {
     _ = store;
     _ = exposedItem;
     @panic("TODO: implement getExposedItem");
 }
 
 /// Adds a statement node to the store.
-pub fn addStatement(store: *NodeStore, statement: CanIR.Statement) CanIR.Statement.Idx {
+pub fn addStatement(store: *NodeStore, statement: CIR.Statement) CIR.Statement.Idx {
     const node = Node{};
 
     switch (statement) {
@@ -319,7 +319,7 @@ pub fn addStatement(store: *NodeStore, statement: CanIR.Statement) CanIR.Stateme
 }
 
 /// Adds an expression node to the store.
-pub fn addExpr(store: *NodeStore, expr: CanIR.ExprAtRegion) CanIR.Expr.Idx {
+pub fn addExpr(store: *NodeStore, expr: CIR.ExprAtRegion) CIR.Expr.Idx {
     var node = Node{
         .data_1 = 0,
         .data_2 = 0,
@@ -374,7 +374,7 @@ pub fn addExpr(store: *NodeStore, expr: CanIR.ExprAtRegion) CanIR.Expr.Idx {
             // Store the full Ident.Idx as a u32
             node.data_1 = @bitCast(@as(u32, @bitCast(e.name)));
         },
-        .RuntimeError => |err| {
+        .runtime_error => |err| {
             node.data_1 = @intFromEnum(err);
             node.tag = .malformed;
         },
@@ -414,7 +414,7 @@ pub fn addExpr(store: *NodeStore, expr: CanIR.ExprAtRegion) CanIR.Expr.Idx {
 }
 
 /// Adds a record field to the store.
-pub fn addRecordField(store: *NodeStore, recordField: CanIR.RecordField) CanIR.RecordField.Idx {
+pub fn addRecordField(store: *NodeStore, recordField: CIR.RecordField) CIR.RecordField.Idx {
     _ = store;
     _ = recordField;
 
@@ -422,7 +422,7 @@ pub fn addRecordField(store: *NodeStore, recordField: CanIR.RecordField) CanIR.R
 }
 
 /// Adds a 'when' branch to the store.
-pub fn addWhenBranch(store: *NodeStore, whenBranch: CanIR.WhenBranch) CanIR.WhenBranch.Idx {
+pub fn addWhenBranch(store: *NodeStore, whenBranch: CIR.WhenBranch) CIR.WhenBranch.Idx {
     _ = store;
     _ = whenBranch;
 
@@ -430,7 +430,7 @@ pub fn addWhenBranch(store: *NodeStore, whenBranch: CanIR.WhenBranch) CanIR.When
 }
 
 /// Adds a 'where' clause to the store.
-pub fn addWhereClause(store: *NodeStore, whereClause: CanIR.WhereClause) CanIR.WhereClause.Idx {
+pub fn addWhereClause(store: *NodeStore, whereClause: CIR.WhereClause) CIR.WhereClause.Idx {
     _ = store;
     _ = whereClause;
 
@@ -438,7 +438,7 @@ pub fn addWhereClause(store: *NodeStore, whereClause: CanIR.WhereClause) CanIR.W
 }
 
 /// Adds a pattern to the store.
-pub fn addPattern(store: *NodeStore, pattern: CanIR.Pattern) CanIR.Pattern.Idx {
+pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern) CIR.Pattern.Idx {
     var node = Node{
         .data_1 = 0,
         .data_2 = 0,
@@ -471,7 +471,7 @@ pub fn addPattern(store: *NodeStore, pattern: CanIR.Pattern) CanIR.Pattern.Idx {
 }
 
 /// Adds a pattern record field to the store.
-pub fn addPatternRecordField(store: *NodeStore, patternRecordField: CanIR.PatternRecordField) CanIR.PatternRecordField.Idx {
+pub fn addPatternRecordField(store: *NodeStore, patternRecordField: CIR.PatternRecordField) CIR.PatternRecordField.Idx {
     _ = store;
     _ = patternRecordField;
 
@@ -479,7 +479,7 @@ pub fn addPatternRecordField(store: *NodeStore, patternRecordField: CanIR.Patter
 }
 
 /// Adds a type annotation to the store.
-pub fn addTypeAnno(store: *NodeStore, typeAnno: CanIR.TypeAnno) CanIR.TypeAnno.Idx {
+pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno) CIR.TypeAnno.Idx {
     const node = Node{};
 
     switch (typeAnno) {
@@ -493,7 +493,7 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CanIR.TypeAnno) CanIR.TypeAnno.I
 }
 
 /// Adds an annotation record field to the store.
-pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: CanIR.AnnoRecordField) CanIR.AnnoRecordField.Idx {
+pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: CIR.AnnoRecordField) CIR.AnnoRecordField.Idx {
     _ = store;
     _ = annoRecordField;
 
@@ -501,7 +501,7 @@ pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: CanIR.AnnoRecordFi
 }
 
 /// Adds an exposed item to the store.
-pub fn addExposedItem(store: *NodeStore, exposedItem: CanIR.ExposedItem) CanIR.ExposedItem.Idx {
+pub fn addExposedItem(store: *NodeStore, exposedItem: CIR.ExposedItem) CIR.ExposedItem.Idx {
     const node = Node{};
 
     switch (exposedItem) {
@@ -515,7 +515,7 @@ pub fn addExposedItem(store: *NodeStore, exposedItem: CanIR.ExposedItem) CanIR.E
 }
 
 /// Adds a definition to the store.
-pub fn addDef(store: *NodeStore, def: CanIR.Def) CanIR.Def.Idx {
+pub fn addDef(store: *NodeStore, def: CIR.Def) CIR.Def.Idx {
     var node = Node{
         .data_1 = 0,
         .data_2 = 0,
@@ -547,7 +547,7 @@ pub fn addDef(store: *NodeStore, def: CanIR.Def) CanIR.Def.Idx {
 }
 
 /// Retrieves a definition from the store.
-pub fn getDef(store: *NodeStore, def_idx: CanIR.Def.Idx) CanIR.Def {
+pub fn getDef(store: *NodeStore, def_idx: CIR.Def.Idx) CIR.Def {
     const nid: Node.Idx = @enumFromInt(@intFromEnum(def_idx));
     const node = store.nodes.get(nid);
 
@@ -556,20 +556,20 @@ pub fn getDef(store: *NodeStore, def_idx: CanIR.Def.Idx) CanIR.Def {
     const extra_start = node.data_1;
     const extra_data = store.extra_data.items[extra_start..];
 
-    const pattern: CanIR.Pattern.Idx = @enumFromInt(extra_data[0]);
-    const expr: CanIR.Expr.Idx = @enumFromInt(extra_data[1]);
+    const pattern: CIR.Pattern.Idx = @enumFromInt(extra_data[0]);
+    const expr: CIR.Expr.Idx = @enumFromInt(extra_data[1]);
     const expr_var: types.Var = @enumFromInt(extra_data[2]);
     const kind_tag = extra_data[3];
     const anno_idx = extra_data[4];
 
-    const kind: CanIR.Def.Kind = switch (kind_tag) {
-        @intFromEnum(CanIR.Def.Kind.Let) => .Let,
+    const kind: CIR.Def.Kind = switch (kind_tag) {
+        @intFromEnum(CIR.Def.Kind.Let) => .Let,
         else => .{ .Stmt = @enumFromInt(0) }, // TODO: implement proper kind deserialization
     };
 
-    const annotation: ?CanIR.Annotation.Idx = if (anno_idx == 0) null else @enumFromInt(anno_idx);
+    const annotation: ?CIR.Annotation.Idx = if (anno_idx == 0) null else @enumFromInt(anno_idx);
 
-    return CanIR.Def{
+    return CIR.Def{
         .pattern = pattern,
         .pattern_region = node.region, // Stored as node region
         .expr = expr,
@@ -581,11 +581,11 @@ pub fn getDef(store: *NodeStore, def_idx: CanIR.Def.Idx) CanIR.Def {
 }
 
 /// Retrieves a record field from the store.
-pub fn getRecordField(store: *NodeStore, recordField: CanIR.RecordField.Idx) CanIR.RecordField {
+pub fn getRecordField(store: *NodeStore, recordField: CIR.RecordField.Idx) CIR.RecordField {
     _ = store;
     _ = recordField;
 
-    return CanIR.RecordField{};
+    return CIR.RecordField{};
 }
 
 // pub fn getIfBranch(store: *const NodeStore, if_branch_idx: IfBranch.Idx) IfBranch {
@@ -605,12 +605,12 @@ pub fn scratchExprTop(store: *NodeStore) u32 {
 }
 
 /// Adds a scratch expression to temporary storage.
-pub fn addScratchExpr(store: *NodeStore, idx: CanIR.Expr.Idx) void {
+pub fn addScratchExpr(store: *NodeStore, idx: CIR.Expr.Idx) void {
     store.scratch_exprs.append(store.gpa, idx);
 }
 
 /// Computes the span of an expression starting from a given index.
-pub fn exprSpanFrom(store: *NodeStore, start: u32) CanIR.Expr.Span {
+pub fn exprSpanFrom(store: *NodeStore, start: u32) CIR.Expr.Span {
     const end = store.scratch_exprs.top();
     defer store.scratch_exprs.clearFrom(start);
     var i = @as(usize, @intCast(start));
@@ -629,9 +629,9 @@ pub fn clearScratchExprsFrom(store: *NodeStore, start: u32) void {
 }
 
 /// Returns a slice of expressions from the scratch space.
-pub fn exprSlice(store: *const NodeStore, span: CanIR.Expr.Span) []CanIR.Expr.Idx {
+pub fn exprSlice(store: *const NodeStore, span: CIR.Expr.Span) []CIR.Expr.Idx {
     const slice = store.extra_data.items[span.span.start..(span.span.start + span.span.len)];
-    const result: []CanIR.Expr.Idx = @ptrCast(@alignCast(slice));
+    const result: []CIR.Expr.Idx = @ptrCast(@alignCast(slice));
     return result;
 }
 
@@ -641,12 +641,12 @@ pub fn scratchDefTop(store: *NodeStore) u32 {
 }
 
 /// Adds a scratch definition to temporary storage.
-pub fn addScratchDef(store: *NodeStore, idx: CanIR.Def.Idx) void {
+pub fn addScratchDef(store: *NodeStore, idx: CIR.Def.Idx) void {
     store.scratch_defs.append(store.gpa, idx);
 }
 
 /// Computes the span of a definition starting from a given index.
-pub fn defSpanFrom(store: *NodeStore, start: u32) CanIR.Def.Span {
+pub fn defSpanFrom(store: *NodeStore, start: u32) CIR.Def.Span {
     const end = store.scratch_defs.top();
     defer store.scratch_defs.clearFrom(start);
     var i = @as(usize, @intCast(start));
@@ -670,16 +670,16 @@ pub fn sliceFromSpan(store: *NodeStore, comptime T: type, span: base.DataSpan) [
 }
 
 /// Returns a slice of definitions from the store.
-pub fn sliceDefs(store: *NodeStore, span: CanIR.Def.Span) []CanIR.Def.Idx {
-    return store.sliceFromSpan(CanIR.Def.Idx, span.span);
+pub fn sliceDefs(store: *NodeStore, span: CIR.Def.Span) []CIR.Def.Idx {
+    return store.sliceFromSpan(CIR.Def.Idx, span.span);
 }
 
 /// Returns a slice of `CanIR.Pattern.Idx`
-pub fn slicePatterns(store: *NodeStore, span: CanIR.Pattern.Span) []CanIR.Pattern.Idx {
-    return store.sliceFromSpan(CanIR.Pattern.Idx, span.span);
+pub fn slicePatterns(store: *NodeStore, span: CIR.Pattern.Span) []CIR.Pattern.Idx {
+    return store.sliceFromSpan(CIR.Pattern.Idx, span.span);
 }
 
 /// Returns a slice of `CanIR.IfBranch.Idx`
-pub fn sliceIfBranch(store: *const NodeStore, span: CanIR.IfBranch.Span) []CanIR.IfBranch.Idx {
-    return store.sliceFromSpan(CanIR.IfBranch.Idx, span.span);
+pub fn sliceIfBranch(store: *const NodeStore, span: CIR.IfBranch.Span) []CIR.IfBranch.Idx {
+    return store.sliceFromSpan(CIR.IfBranch.Idx, span.span);
 }
