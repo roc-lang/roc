@@ -19,7 +19,7 @@ NO CHANGE
 	(lookup (ident "foo"))
 	(int
 		(num_var "#0")
-		(precision_var "#0")
+		(precision_var "#1")
 		(literal "42")
 		(value "TODO")
 		(bound "flex_var"))

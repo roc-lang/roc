@@ -32,5 +32,26 @@ Int(8:3-8:4),EndOfFile(8:4-8:4),
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(can_ir "TODO")
+(call
+	(lookup (ident "add"))
+	(int
+		(num_var "#0")
+		(precision_var "#1")
+		(literal "1")
+		(value "TODO")
+		(bound "flex_var"))
+	(call
+		(lookup (ident "mul"))
+		(int
+			(num_var "#2")
+			(precision_var "#3")
+			(literal "2")
+			(value "TODO")
+			(bound "flex_var"))
+		(int
+			(num_var "#4")
+			(precision_var "#5")
+			(literal "3")
+			(value "TODO")
+			(bound "flex_var"))))
 ~~~END

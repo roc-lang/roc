@@ -24,6 +24,7 @@ store: NodeStore,
 ingested_files: IngestedFile.List,
 imports: ModuleImport.Store,
 type_store: types.Store,
+top_level_defs: Def.Span,
 
 /// Initialize the IR for a module's canonicalization info.
 ///
@@ -53,6 +54,7 @@ pub fn initCapacity(env: ModuleEnv, type_store: types.Store, capacity: usize) IR
         .ingested_files = .{},
         .imports = ModuleImport.Store.init(&.{}, &ident_store, env.gpa),
         .type_store = type_store,
+        .top_level_defs = .{ .span = .{ .start = 0, .len = 0 } },
     };
 }
 
@@ -157,6 +159,8 @@ pub const Node = struct {
         pattern_identifier,
         pattern_as,
         pattern_applied_tag,
+        // Definitions
+        def,
         // Runtime Error
         malformed,
     };
@@ -167,16 +171,17 @@ pub const NodeStore = struct {
     gpa: std.mem.Allocator,
     nodes: Node.List,
     extra_data: std.ArrayListUnmanaged(u32),
-    scratch_statements: Scratch(Statement.Idx),
-    scratch_exprs: Scratch(Expr.Idx),
-    scratch_record_fields: Scratch(RecordField.Idx),
-    scratch_when_branches: Scratch(WhenBranch.Idx),
-    scratch_where_clauses: Scratch(WhereClause.Idx),
-    scratch_patterns: Scratch(Pattern.Idx),
-    scratch_pattern_record_fields: Scratch(PatternRecordField.Idx),
-    scratch_type_annos: Scratch(TypeAnno.Idx),
-    scratch_anno_record_fields: Scratch(AnnoRecordField.Idx),
-    scratch_exposed_items: Scratch(ExposedItem.Idx),
+    scratch_statements: base.Scratch(Statement.Idx),
+    scratch_exprs: base.Scratch(Expr.Idx),
+    scratch_record_fields: base.Scratch(RecordField.Idx),
+    scratch_when_branches: base.Scratch(WhenBranch.Idx),
+    scratch_where_clauses: base.Scratch(WhereClause.Idx),
+    scratch_patterns: base.Scratch(Pattern.Idx),
+    scratch_pattern_record_fields: base.Scratch(PatternRecordField.Idx),
+    scratch_type_annos: base.Scratch(TypeAnno.Idx),
+    scratch_anno_record_fields: base.Scratch(AnnoRecordField.Idx),
+    scratch_exposed_items: base.Scratch(ExposedItem.Idx),
+    scratch_defs: base.Scratch(Def.Idx),
 
     pub fn init(gpa: std.mem.Allocator) NodeStore {
         // TODO determine what capacity to use
@@ -189,16 +194,17 @@ pub const NodeStore = struct {
             .gpa = gpa,
             .nodes = Node.List.initCapacity(gpa, capacity),
             .extra_data = std.ArrayListUnmanaged(u32).initCapacity(gpa, capacity / 2) catch |err| exitOnOom(err),
-            .scratch_statements = Scratch(Statement.Idx).init(gpa),
-            .scratch_exprs = Scratch(Expr.Idx).init(gpa),
-            .scratch_patterns = Scratch(Pattern.Idx).init(gpa),
-            .scratch_record_fields = Scratch(RecordField.Idx).init(gpa),
-            .scratch_pattern_record_fields = Scratch(PatternRecordField.Idx).init(gpa),
-            .scratch_when_branches = Scratch(WhenBranch.Idx).init(gpa),
-            .scratch_type_annos = Scratch(TypeAnno.Idx).init(gpa),
-            .scratch_anno_record_fields = Scratch(AnnoRecordField.Idx).init(gpa),
-            .scratch_exposed_items = Scratch(ExposedItem.Idx).init(gpa),
-            .scratch_where_clauses = Scratch(WhereClause.Idx).init(gpa),
+            .scratch_statements = base.Scratch(Statement.Idx).init(gpa),
+            .scratch_exprs = base.Scratch(Expr.Idx).init(gpa),
+            .scratch_patterns = base.Scratch(Pattern.Idx).init(gpa),
+            .scratch_record_fields = base.Scratch(RecordField.Idx).init(gpa),
+            .scratch_pattern_record_fields = base.Scratch(PatternRecordField.Idx).init(gpa),
+            .scratch_when_branches = base.Scratch(WhenBranch.Idx).init(gpa),
+            .scratch_type_annos = base.Scratch(TypeAnno.Idx).init(gpa),
+            .scratch_anno_record_fields = base.Scratch(AnnoRecordField.Idx).init(gpa),
+            .scratch_exposed_items = base.Scratch(ExposedItem.Idx).init(gpa),
+            .scratch_defs = base.Scratch(Def.Idx).init(gpa),
+            .scratch_where_clauses = base.Scratch(WhereClause.Idx).init(gpa),
         };
     }
 
@@ -214,6 +220,7 @@ pub const NodeStore = struct {
         store.scratch_type_annos.items.deinit(store.gpa);
         store.scratch_anno_record_fields.items.deinit(store.gpa);
         store.scratch_exposed_items.items.deinit(store.gpa);
+        store.scratch_defs.items.deinit(store.gpa);
         store.scratch_where_clauses.items.deinit(store.gpa);
     }
 
@@ -257,13 +264,20 @@ pub const NodeStore = struct {
                 };
             },
             .expr_int => {
-                // TODO: Store and retrieve all int data properly
-                // For now, we only have the literal index stored
+                // Retrieve the literal index from data_1
+                const literal: StringLiteral.Idx = @enumFromInt(node.data_1);
+
+                // Retrieve type variables from data_2 and data_3
+                const num_var = @as(types.Var, @enumFromInt(node.data_2));
+                const precision_var = @as(types.Var, @enumFromInt(node.data_3));
+
+                // TODO get value and bound from extra_data
+
                 return .{
                     .int = .{
-                        .num_var = @enumFromInt(0), // Placeholder
-                        .precision_var = @enumFromInt(0), // Placeholder
-                        .literal = @enumFromInt(node.data_1),
+                        .num_var = num_var,
+                        .precision_var = precision_var,
+                        .literal = literal,
                         .value = IntValue{ // Placeholder value
                             .bytes = [16]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
                             .kind = .i128,
@@ -414,8 +428,15 @@ pub const NodeStore = struct {
             },
             .int => |e| {
                 node.tag = .expr_int;
-                // TODO: Store int data properly. For now, just store the literal idx
-                node.data_1 = @intCast(@intFromEnum(e.literal));
+
+                // Store the literal index in data_1
+                node.data_1 = @intFromEnum(e.literal);
+
+                // Store type variables in data_2 and data_3
+                node.data_2 = @intFromEnum(e.num_var);
+                node.data_3 = @intFromEnum(e.precision_var);
+
+                // TODO for storing the value and bound, use extra_data
             },
             .list => |e| {
                 node.tag = .expr_list;
@@ -616,6 +637,72 @@ pub const NodeStore = struct {
         return @enumFromInt(nid);
     }
 
+    pub fn addDef(store: *NodeStore, def: Def) Def.Idx {
+        var node = Node{
+            .data_1 = 0,
+            .data_2 = 0,
+            .data_3 = 0,
+            .region = def.pattern_region, // Use pattern region as the def's region
+            .tag = .def,
+        };
+
+        // Store def data in extra_data
+        const extra_start = @as(u32, @intCast(store.extra_data.items.len));
+
+        // Store pattern idx
+        store.extra_data.append(store.gpa, @intFromEnum(def.pattern)) catch |err| exitOnOom(err);
+        // Store expr idx
+        store.extra_data.append(store.gpa, @intFromEnum(def.expr)) catch |err| exitOnOom(err);
+        // Store expr_var
+        store.extra_data.append(store.gpa, @intFromEnum(def.expr_var)) catch |err| exitOnOom(err);
+        // Store kind tag
+        store.extra_data.append(store.gpa, @intFromEnum(def.kind)) catch |err| exitOnOom(err);
+        // Store annotation idx (0 if null)
+        const anno_idx = if (def.annotation) |anno| @intFromEnum(anno) else 0;
+        store.extra_data.append(store.gpa, anno_idx) catch |err| exitOnOom(err);
+
+        // Store the extra data range in the node
+        node.data_1 = extra_start;
+        node.data_2 = 5; // Number of extra data items
+
+        return @enumFromInt(@intFromEnum(store.nodes.append(store.gpa, node)));
+    }
+
+    pub fn getDef(store: *NodeStore, def_idx: Def.Idx) Def {
+        const nid: Node.Idx = @enumFromInt(@intFromEnum(def_idx));
+        const node = store.nodes.get(nid);
+
+        std.debug.assert(node.tag == .def);
+
+        const extra_start = node.data_1;
+        const extra_data = store.extra_data.items[extra_start..];
+
+        const pattern: Pattern.Idx = @enumFromInt(extra_data[0]);
+        const expr: Expr.Idx = @enumFromInt(extra_data[1]);
+        const expr_var: TypeVar = @enumFromInt(extra_data[2]);
+        const kind_tag = extra_data[3];
+        const anno_idx = extra_data[4];
+
+        const expr_node = store.nodes.get(expr);
+
+        const kind: Def.Kind = switch (kind_tag) {
+            @intFromEnum(Def.Kind.Let) => .Let,
+            else => .{ .Stmt = @enumFromInt(0) }, // TODO: implement proper kind deserialization
+        };
+
+        const annotation: ?Annotation.Idx = if (anno_idx == 0) null else @enumFromInt(anno_idx);
+
+        return Def{
+            .pattern = pattern,
+            .pattern_region = node.region, // Stored as node region
+            .expr = expr,
+            .expr_region = expr_node.region,
+            .expr_var = expr_var,
+            .annotation = annotation,
+            .kind = kind,
+        };
+    }
+
     pub fn getRecordField(store: *NodeStore, recordField: RecordField.Idx) RecordField {
         _ = store;
         _ = recordField;
@@ -655,6 +742,37 @@ pub const NodeStore = struct {
     pub fn exprSlice(store: *const NodeStore, span: Expr.Span) []Expr.Idx {
         const slice = store.extra_data.items[span.span.start..(span.span.start + span.span.len)];
         const result: []Expr.Idx = @ptrCast(@alignCast(slice));
+        return result;
+    }
+
+    pub fn scratchDefTop(store: *NodeStore) u32 {
+        return store.scratch_defs.top();
+    }
+
+    pub fn addScratchDef(store: *NodeStore, idx: Def.Idx) void {
+        store.scratch_defs.append(store.gpa, idx);
+    }
+
+    pub fn defSpanFrom(store: *NodeStore, start: u32) Def.Span {
+        const end = store.scratch_defs.top();
+        defer store.scratch_defs.clearFrom(start);
+        var i = @as(usize, @intCast(start));
+        const ed_start = @as(u32, @intCast(store.extra_data.items.len));
+        std.debug.assert(end >= i);
+        while (i < end) {
+            store.extra_data.append(store.gpa, @intFromEnum(store.scratch_defs.items.items[i])) catch |err| exitOnOom(err);
+            i += 1;
+        }
+        return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+    }
+
+    pub fn clearScratchDefsFrom(store: *NodeStore, start: u32) void {
+        store.scratch_defs.clearFrom(start);
+    }
+
+    pub fn defSlice(store: *const NodeStore, span: Def.Span) []Def.Idx {
+        const slice = store.extra_data.items[span.span.start..(span.span.start + span.span.len)];
+        const result: []Def.Idx = @ptrCast(@alignCast(slice));
         return result;
     }
 };
@@ -1350,7 +1468,7 @@ pub const Def = struct {
     expr_var: TypeVar,
     // TODO:
     // pattern_vars: SendMap<Symbol, Variable>,
-    annotation: ?Annotation,
+    annotation: ?Annotation.Idx,
     kind: Kind,
 
     const Kind = union(enum) {
@@ -1376,9 +1494,9 @@ pub const Def = struct {
         }
     };
 
-    pub const List = collections.SafeList(@This());
-    pub const Idx = List.Idx;
-    pub const Range = List.Range;
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: DataSpan };
+    pub const Range = struct { start: u32, len: u32 };
 
     pub fn toSExpr(self: *const @This(), env: *const base.ModuleEnv, ir: *const IR) sexpr.Expr {
         var node = sexpr.Expr.init(env.gpa, "def");
@@ -1404,9 +1522,10 @@ pub const Def = struct {
 
         node.appendTypeVarChild(&node, env.gpa, "expr_var", self.expr_var);
 
-        if (self.annotation) |anno| {
-            var anno_node = anno.toSExpr(env, ir);
-            node.appendNodeChild(env.gpa, &anno_node);
+        if (self.annotation) |anno_idx| {
+            _ = anno_idx; // TODO: implement annotation lookup
+            // var anno_node = anno.toSExpr(env, ir);
+            // node.appendNodeChild(env.gpa, &anno_node);
         }
 
         return node;
@@ -1420,13 +1539,14 @@ pub const Annotation = struct {
     // aliases: VecMap<Symbol, Alias>,
     region: Region,
 
+    pub const Idx = enum(u32) { _ };
+
     pub fn toSExpr(self: *const @This(), env: *const base.ModuleEnv, ir: *const IR) sexpr.Expr {
         _ = self;
         _ = ir; // ir not needed currently, but keep for signature consistency
         const gpa = env.gpa;
         const node = sexpr.Expr.init(gpa, "annotation");
-        // node.appendRegionChild(gpa, self.region);
-        // TODO: Add introduced_variables, aliases if needed
+        // TODO add signature info
         return node;
     }
 };

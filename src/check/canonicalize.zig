@@ -65,6 +65,9 @@ pub fn canonicalize_file(
 
     // canonicalize_header_packages();
 
+    // Track the start of scratch defs
+    const scratch_defs_start = self.can_ir.store.scratchDefTop();
+
     for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
         const stmt = self.parse_ir.store.getStatement(stmt_id);
         switch (stmt) {
@@ -72,7 +75,9 @@ pub fn canonicalize_file(
                 self.bringImportIntoScope(&import);
             },
             .decl => |decl| {
-                self.canonicalize_decl(decl);
+                if (self.canonicalize_decl(decl)) |def_idx| {
+                    self.can_ir.store.addScratchDef(def_idx);
+                }
             },
             .@"var" => |v| {
                 // Not valid at top-level
@@ -133,7 +138,53 @@ pub fn canonicalize_file(
 
     // TODO: implement
 
-    // canonicalize_header_exposes();
+    // Get the header and canonicalize exposes based on header type
+    const header = self.parse_ir.store.getHeader(file.header);
+    switch (header) {
+        .module => |h| self.canonicalize_header_exposes(h.exposes),
+        .package => |h| self.canonicalize_header_exposes(h.exposes),
+        .platform => |h| self.canonicalize_header_exposes(h.exposes),
+        .hosted => |h| self.canonicalize_header_exposes(h.exposes),
+        .app => {
+            // App headers have 'provides' instead of 'exposes'
+            // TODO: Handle app provides differently
+        },
+        .malformed => {
+            // Skip malformed headers
+        },
+    }
+
+    // Create the span of all top-level defs
+    self.can_ir.top_level_defs = self.can_ir.store.defSpanFrom(scratch_defs_start);
+}
+
+fn canonicalize_header_exposes(
+    self: *Self,
+    exposes: parse.IR.NodeStore.CollectionIdx,
+) void {
+    const collection = self.parse_ir.store.getCollection(exposes);
+    const exposed_items = self.parse_ir.store.exposedItemSlice(.{ .span = collection.span });
+
+    for (exposed_items) |exposed_idx| {
+        const exposed = self.parse_ir.store.getExposedItem(exposed_idx);
+        switch (exposed) {
+            .lower_ident => |ident| {
+                // For now, just mark that we've seen this exposed identifier
+                // In a full implementation, we'd check if it's actually defined
+                _ = ident;
+            },
+            .upper_ident => |type_name| {
+                // For now, just mark that we've seen this exposed type
+                // In a full implementation, we'd check if it's actually defined
+                _ = type_name;
+            },
+            .upper_ident_star => |type_with_constructors| {
+                // For now, just mark that we've seen this exposed type with constructors
+                // In a full implementation, we'd check if it's actually defined and has constructors
+                _ = type_with_constructors;
+            },
+        }
+    }
 }
 
 fn bringImportIntoScope(
@@ -268,9 +319,23 @@ const PendingValueDef = union(enum) {
 fn canonicalize_decl(
     self: *Self,
     decl: parse.IR.NodeStore.Statement.Decl,
-) void {
-    _ = self.canonicalize_expr(decl.body);
-    _ = self.canonicalize_pattern(decl.pattern);
+) ?IR.Def.Idx {
+    const pattern_idx = self.canonicalize_pattern(decl.pattern) orelse return null;
+    const expr_idx = self.canonicalize_expr(decl.body) orelse return null;
+
+    // Create a new type variable for this definition
+    const expr_var = self.can_ir.type_store.fresh();
+
+    // Create the def entry
+    return self.can_ir.store.addDef(.{
+        .pattern = pattern_idx,
+        .pattern_region = self.parse_ir.store.getPattern(decl.pattern).to_region().toBase(),
+        .expr = expr_idx,
+        .expr_region = self.parse_ir.store.getExpr(decl.body).to_region().toBase(),
+        .expr_var = expr_var,
+        .annotation = null,
+        .kind = .Let,
+    });
 }
 
 /// Canonicalize an expression.
@@ -338,6 +403,8 @@ pub fn canonicalize_expr(
                         });
                     },
                 }
+            } else {
+                return null;
             }
         },
         .int => |e| {
@@ -503,6 +570,8 @@ pub fn canonicalize_expr(
                     .expr = tag_expr,
                     .region = e.region.toBase(),
                 });
+            } else {
+                return null;
             }
         },
         .string_part => |e| {
@@ -510,105 +579,193 @@ pub fn canonicalize_expr(
                 .expr_type = "string_part",
                 .region = e.region.toBase(),
             } }));
+            return null;
         },
         .tuple => |e| {
             _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
                 .expr_type = "tuple",
                 .region = e.region.toBase(),
             } }));
+            return null;
         },
         .record => |e| {
             _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
                 .expr_type = "record",
                 .region = e.region.toBase(),
             } }));
+            return null;
         },
         .lambda => |e| {
             _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
                 .expr_type = "lambda",
                 .region = e.region.toBase(),
             } }));
+            return null;
         },
         .record_updater => |e| {
             _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
                 .expr_type = "record_updater",
                 .region = e.region.toBase(),
             } }));
+            return null;
         },
         .field_access => |e| {
             _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
                 .expr_type = "field_access",
                 .region = e.region.toBase(),
             } }));
+            return null;
         },
         .local_dispatch => |e| {
             _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
                 .expr_type = "local_dispatch",
                 .region = e.region.toBase(),
             } }));
+            return null;
         },
         .bin_op => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
-                .expr_type = "bin_op",
+            // Binary operators are desugared to function calls
+            // e.g., `x + y` becomes `Num.add x y`
+
+            // Canonicalize left and right operands
+            const left_expr = self.canonicalize_expr(e.left) orelse return null;
+            const right_expr = self.canonicalize_expr(e.right) orelse return null;
+
+            // Get the operator token
+            const op_token = self.parse_ir.tokens.tokens.get(e.operator);
+
+            // Map operator to function name
+            // TODO find the correct names to use here...
+            const op_name = switch (op_token.tag) {
+                .OpPlus => "add",
+                .OpStar => "mul",
+                .OpAssign => "assign",
+                .OpBinaryMinus => "sub",
+                .OpUnaryMinus => "neg",
+                .OpNotEquals => "isNotEq",
+                .OpBang => "not",
+                .OpAnd => "and",
+                .OpAmpersand => "bitAnd",
+                .OpOr => "or",
+                .OpBar => "bitOr",
+                .OpDoubleSlash => "doubleSlash",
+                .OpSlash => "div",
+                .OpPercent => "rem",
+                .OpCaret => "pow",
+                .OpGreaterThanOrEq => "isGte",
+                .OpGreaterThan => "isGt",
+                .OpLessThanOrEq => "isLte",
+                .OpLessThan => "isLt",
+                .OpEquals => "isEq",
+                else => return null, // Unknown operator
+            };
+
+            // Determine module prefix based on operator type
+            // TODO: Use module prefix when we properly resolve operator functions
+            // const module_prefix = switch (e.op) {
+            //     .plus, .minus, .star, .slash, .double_slash, .percent, .caret => "Num",
+            //     .greater_than, .less_than, .greater_than_or_eq, .less_than_or_eq, .double_eq, .not_eq => "Bool",
+            //     .double_ampersand, .double_pipe => "Bool",
+            //     .pizza, .pipe => "", // No module prefix for these
+            //     else => "",
+            // };
+
+            // For now, create a simple call expression
+            const scratch_top = self.can_ir.store.scratchExprTop();
+
+            // Create the operator function lookup
+            // For now, we'll create a simple identifier lookup
+            const ident = Ident.for_text(op_name);
+            const op_ident = self.can_ir.env.idents.insert(self.can_ir.env.gpa, ident, e.region.toBase());
+            const op_lookup = self.can_ir.store.addExpr(.{
+                .expr = .{ .lookup = .{ .ident = op_ident } },
                 .region = e.region.toBase(),
-            } }));
+            });
+
+            // Add function and arguments to scratch
+            self.can_ir.store.addScratchExpr(op_lookup);
+            self.can_ir.store.addScratchExpr(left_expr);
+            self.can_ir.store.addScratchExpr(right_expr);
+
+            // Create span from scratch expressions
+            const args_span = self.can_ir.store.exprSpanFrom(scratch_top);
+
+            // Create the call expression
+            const call_expr = IR.Expr{
+                .call = .{
+                    .args = args_span,
+                },
+            };
+
+            return self.can_ir.store.addExpr(.{
+                .expr = call_expr,
+                .region = e.region.toBase(),
+            });
         },
         .suffix_single_question => |e| {
             _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
                 .expr_type = "suffix_single_question",
                 .region = e.region.toBase(),
             } }));
+            return null;
         },
         .unary_op => |e| {
             _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
                 .expr_type = "unary_op",
                 .region = e.region.toBase(),
             } }));
+            return null;
         },
         .if_then_else => |e| {
             _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
                 .expr_type = "if_then_else",
                 .region = e.region.toBase(),
             } }));
+            return null;
         },
         .match => |e| {
             _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
                 .expr_type = "match",
                 .region = e.region.toBase(),
             } }));
+            return null;
         },
         .dbg => |e| {
             _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
                 .expr_type = "dbg",
                 .region = e.region.toBase(),
             } }));
+            return null;
         },
         .record_builder => |e| {
             _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
                 .expr_type = "record_builder",
                 .region = e.region.toBase(),
             } }));
+            return null;
         },
         .ellipsis => |e| {
             _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
                 .expr_type = "ellipsis",
                 .region = e.region.toBase(),
             } }));
+            return null;
         },
         .block => |e| {
             _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
                 .expr_type = "block",
                 .region = e.region.toBase(),
             } }));
+            return null;
         },
         .malformed => |e| {
             _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
                 .expr_type = "malformed",
                 .region = e.region.toBase(),
             } }));
+            return null;
         },
     }
-    return null;
 }
 
 /// Extract string segments from parsed string parts
@@ -699,18 +856,18 @@ fn desugarStringInterpolation(self: *Self, segments: []const StringSegment, regi
     }
 
     // Create the Str.concat identifier
-    // TODO use a proper builtin when we have this... 
+    // TODO use a proper builtin when we have this...
     const str_concat_ident = Ident.for_text("Str.concat");
     const str_concat_idx = self.can_ir.env.idents.insert(self.can_ir.env.gpa, str_concat_ident, region);
-    
+
     // Build nested Str.concat calls from left to right
     // For segments ["Hello ", name, "!"], create: Str.concat (Str.concat "Hello " name) "!"
     var result = segment_exprs.items[0];
-    
+
     for (segment_exprs.items[1..]) |segment_expr| {
         // Mark the start of scratch expressions for this call
         const call_scratch_top = self.can_ir.store.scratchExprTop();
-        
+
         // Create the Str.concat lookup
         const concat_fn = self.can_ir.store.addExpr(.{
             .expr = .{ .lookup = .{
@@ -719,23 +876,23 @@ fn desugarStringInterpolation(self: *Self, segments: []const StringSegment, regi
             .region = region,
         });
         self.can_ir.store.addScratchExpr(concat_fn);
-        
+
         // Add the accumulated result as first argument
         self.can_ir.store.addScratchExpr(result);
-        
+
         // Add the current segment as second argument
         self.can_ir.store.addScratchExpr(segment_expr);
-        
+
         // Create span from scratch expressions
         const args_span = self.can_ir.store.exprSpanFrom(call_scratch_top);
-        
+
         // Create the call expression
         const call_expr = IR.Expr{
             .call = .{
                 .args = args_span,
             },
         };
-        
+
         result = self.can_ir.store.addExpr(.{
             .expr = call_expr,
             .region = region,
@@ -764,6 +921,7 @@ fn canonicalize_pattern(
 
                 return self.can_ir.store.addPattern(ident_pattern);
             }
+            return null;
         },
         .underscore => {
             const underscore_pattern = IR.Pattern{
@@ -832,42 +990,49 @@ fn canonicalize_pattern(
 
                 return self.can_ir.store.addPattern(tag_pattern);
             }
+            return null;
         },
         .record => |e| {
             _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedPattern = .{
                 .pattern_type = "record",
                 .region = e.region.toBase(),
             } }));
+            return null;
         },
         .tuple => |e| {
             _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedPattern = .{
                 .pattern_type = "tuple",
                 .region = e.region.toBase(),
             } }));
+            return null;
         },
         .list => |e| {
             _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedPattern = .{
                 .pattern_type = "list",
                 .region = e.region.toBase(),
             } }));
+            return null;
         },
         .list_rest => |e| {
             _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedPattern = .{
                 .pattern_type = "list_rest",
                 .region = e.region.toBase(),
             } }));
+            return null;
         },
         .alternatives => |e| {
             _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedPattern = .{
                 .pattern_type = "alternatives",
                 .region = e.region.toBase(),
             } }));
+            return null;
         },
         .malformed => |e| {
             _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedPattern = .{
                 .pattern_type = "malformed",
                 .region = e.region.toBase(),
             } }));
+            return null;
         },
     }
     return null;

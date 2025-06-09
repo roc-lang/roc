@@ -2995,6 +2995,23 @@ pub const NodeStore = struct {
             reason: Diagnostic.Tag,
             region: Region,
         },
+
+        pub fn to_region(self: @This()) Region {
+            return switch (self) {
+                .ident => |p| p.region,
+                .tag => |p| p.region,
+                .number => |p| p.region,
+                .string => |p| p.region,
+                .record => |p| p.region,
+                .list => |p| p.region,
+                .list_rest => |p| p.region,
+                .tuple => |p| p.region,
+                .underscore => |p| p.region,
+                .alternatives => |p| p.region,
+                .malformed => |p| p.region,
+            };
+        }
+
         pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *IR, line_starts: std.ArrayList(u32)) sexpr.Expr {
             switch (self) {
                 .ident => |ident| {
@@ -3204,6 +3221,35 @@ pub const NodeStore = struct {
                 .string_part => |part| return part.region,
                 else => return error.ExpectedStringPartRegion,
             }
+        }
+
+        pub fn to_region(self: @This()) Region {
+            return switch (self) {
+                .ident => |e| e.region,
+                .int => |e| e.region,
+                .float => |e| e.region,
+                .string => |e| e.region,
+                .tag => |e| e.region,
+                .list => |e| e.region,
+                .record => |e| e.region,
+                .tuple => |e| e.region,
+                .field_access => |e| e.region,
+                .local_dispatch => |e| e.region,
+                .lambda => |e| e.region,
+                .record_updater => |e| e.region,
+                .bin_op => |e| e.region,
+                .unary_op => |e| e.region,
+                .suffix_single_question => |e| e.region,
+                .apply => |e| e.region,
+                .if_then_else => |e| e.region,
+                .match => |e| e.region,
+                .dbg => |e| e.region,
+                .block => |e| e.region,
+                .record_builder => |e| e.region,
+                .ellipsis => |e| e.region,
+                .malformed => |e| e.region,
+                .string_part => |e| e.region,
+            };
         }
 
         pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *IR, line_starts: std.ArrayList(u32)) sexpr.Expr {

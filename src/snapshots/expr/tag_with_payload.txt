@@ -21,8 +21,8 @@ NO CHANGE
 		(name "Some")
 		(args "TODO"))
 	(int
-		(num_var "#0")
-		(precision_var "#0")
+		(num_var "#2")
+		(precision_var "#3")
 		(literal "42")
 		(value "TODO")
 		(bound "flex_var")))
