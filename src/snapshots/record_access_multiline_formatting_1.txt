@@ -38,5 +38,5 @@ DotLowerIdent(4:2-4:15),NoSpaceOpQuestion(4:15-4:16),EndOfFile(4:16-4:16),
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(can_ir "TODO")
+(can_ir (top_level_defs "empty"))
 ~~~END

@@ -32,5 +32,5 @@ OpArrow(4:2-4:4),LowerIdent(4:4-4:16),NoSpaceOpQuestion(4:16-4:17),EndOfFile(4:1
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(can_ir "TODO")
+(can_ir (top_level_defs "empty"))
 ~~~END

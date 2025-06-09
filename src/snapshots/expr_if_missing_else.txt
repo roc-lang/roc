@@ -23,5 +23,5 @@ module []
 
 foo = 
 ~~~CANONICALIZE
-(can_ir "TODO")
+(can_ir (top_level_defs "empty"))
 ~~~END

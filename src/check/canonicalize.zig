@@ -8,17 +8,6 @@ const types = @import("../types/types.zig");
 const Scope = @import("./canonicalize/Scope.zig");
 const Alias = @import("./canonicalize/Alias.zig");
 
-// Placeholder TypeVars used during canonicalization
-// These will be replaced with real type variables during type checking
-const PLACEHOLDER_NUM_VAR: types.Var = @enumFromInt(0);
-const PLACEHOLDER_PRECISION_VAR: types.Var = @enumFromInt(0);
-
-/// Represents a segment of a string literal that may contain interpolations
-const StringSegment = union(enum) {
-    plaintext: []const u8,
-    interpolation: parse.IR.NodeStore.ExprIdx,
-};
-
 can_ir: *IR,
 parse_ir: *parse.IR,
 scope: *Scope,
@@ -947,10 +936,13 @@ fn canonicalize_pattern(
                 return null;
             };
 
+            const fresh_num_var = self.can_ir.type_store.fresh();
+            const fresh_precision_var = self.can_ir.type_store.fresh();
+
             const int_pattern = IR.Pattern{
                 .int_literal = .{
-                    .num_var = PLACEHOLDER_NUM_VAR,
-                    .precision_var = PLACEHOLDER_PRECISION_VAR,
+                    .num_var = fresh_num_var,
+                    .precision_var = fresh_precision_var,
                     .literal = literal,
                     .value = IR.IntValue{
                         .bytes = @bitCast(value),
@@ -978,13 +970,22 @@ fn canonicalize_pattern(
         },
         .tag => |e| {
             if (self.parse_ir.tokens.resolveIdentifier(e.tag_tok)) |tag_name| {
-                // Tag patterns are handled as applied_tag
+
+                // TODO: handle tag arguments from e.args
+                const arguments: IR.TypedPatternAtRegion.Span = .{ .span = base.DataSpan{
+                    .start = 867,
+                    .len = 867,
+                } };
+
+                const fresh_num_var = self.can_ir.type_store.fresh();
+                const fresh_ext_var = self.can_ir.type_store.fresh();
+
                 const tag_pattern = IR.Pattern{
                     .applied_tag = .{
-                        .whole_var = PLACEHOLDER_NUM_VAR,
-                        .ext_var = PLACEHOLDER_NUM_VAR,
+                        .whole_var = fresh_num_var,
+                        .ext_var = fresh_ext_var,
                         .tag_name = tag_name,
-                        .arguments = .{ .start = @enumFromInt(0), .end = @enumFromInt(0) }, // TODO: handle tag arguments from e.args
+                        .arguments = arguments,
                     },
                 };
 
@@ -1037,3 +1038,9 @@ fn canonicalize_pattern(
     }
     return null;
 }
+
+/// Represents a segment of a string literal that may contain interpolations
+const StringSegment = union(enum) {
+    plaintext: []const u8,
+    interpolation: parse.IR.NodeStore.ExprIdx,
+};

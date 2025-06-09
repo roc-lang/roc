@@ -40,5 +40,11 @@ foo =
 
 	"onmo %"
 ~~~CANONICALIZE
-(can_ir "TODO")
+(can_ir
+	(top_level_defs
+		(def
+			(Let)
+			(pattern (2:3-2:3) (pattern_ident (ident "foo")))
+			(expr (1:1-1:1) (str "onmo %"))
+			"#0")))
 ~~~END

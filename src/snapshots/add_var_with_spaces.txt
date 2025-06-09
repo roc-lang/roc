@@ -27,5 +27,20 @@ module [add2]
 
 add2 = x + 2
 ~~~CANONICALIZE
-(can_ir "TODO")
+(can_ir
+	(top_level_defs
+		(def
+			(Let)
+			(pattern (1:7-1:7) (pattern_ident (ident "add2")))
+			(expr (1:1-1:1)
+				(call
+					(lookup (ident "add"))
+					(lookup (ident "x"))
+					(int
+						(num_var "#0")
+						(precision_var "#1")
+						(literal "2")
+						(value "TODO")
+						(bound "flex_var"))))
+			"#2")))
 ~~~END

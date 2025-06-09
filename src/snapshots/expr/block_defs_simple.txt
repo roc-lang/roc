@@ -38,5 +38,5 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 	y * 2
 }
 ~~~CANONICALIZE
-(can_ir "TODO")
+(can_ir (top_level_defs "empty"))
 ~~~END

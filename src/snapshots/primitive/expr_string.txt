@@ -28,5 +28,23 @@ LowerIdent(3:1-3:4),OpAssign(3:5-3:6),StringStart(3:7-3:8),StringPart(3:8-3:14),
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(can_ir "TODO")
+(can_ir
+	(top_level_defs
+		(def
+			(Let)
+			(pattern (1:6-1:6) (pattern_ident (ident "name")))
+			(expr (1:1-1:1) (str "luc"))
+			"#0")
+		(def
+			(Let)
+			(pattern (1:12-1:12) (pattern_ident (ident "foo")))
+			(expr (1:1-1:1)
+				(call
+					(lookup (ident "Str.concat"))
+					(call
+						(lookup (ident "Str.concat"))
+						(str "hello ")
+						(lookup (ident "name")))
+					(str "")))
+			"#1")))
 ~~~END

@@ -608,7 +608,7 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
         var canonicalized = std.ArrayList(u8).init(gpa);
         defer canonicalized.deinit();
 
-        try can_ir.toSExprStr(canonicalized.writer().any(), maybe_expr_idx);
+        try can_ir.toSExprStr(canonicalized.writer().any(), maybe_expr_idx, line_starts, content.source);
 
         try writer.writeAll(Section.CANONICALIZE);
         try writer.writeAll("\n");

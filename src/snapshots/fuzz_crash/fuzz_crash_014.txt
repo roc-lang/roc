@@ -26,5 +26,5 @@ MalformedNumberBadSuffix(3:1-3:5),EndOfFile(3:5-3:5),
 
 
 ~~~CANONICALIZE
-(can_ir "TODO")
+(can_ir (top_level_defs "empty"))
 ~~~END

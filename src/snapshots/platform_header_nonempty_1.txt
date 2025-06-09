@@ -70,5 +70,5 @@ CloseSquare(21:3-21:4),EndOfFile(21:4-21:4),
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(can_ir "TODO")
+(can_ir (top_level_defs "empty"))
 ~~~END

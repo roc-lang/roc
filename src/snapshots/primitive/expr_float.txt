@@ -20,5 +20,17 @@ LowerIdent(2:1-2:4),OpAssign(2:5-2:6),Float(2:7-2:12),EndOfFile(2:12-2:12),
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(can_ir "TODO")
+(can_ir
+	(top_level_defs
+		(def
+			(Let)
+			(pattern (1:6-1:6) (pattern_ident (ident "foo")))
+			(expr (1:1-1:1)
+				(float
+					(num_var "#0")
+					(precision_var "#1")
+					(literal "12.34")
+					(value "0")
+					(bound "flex_var")))
+			"#2")))
 ~~~END

@@ -31,5 +31,16 @@ LowerIdent(5:1-5:4),OpAssign(5:5-5:6),StringStart(5:7-5:8),StringPart(5:8-5:11),
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(can_ir "TODO")
+(can_ir
+	(top_level_defs
+		(def
+			(Let)
+			(pattern (1:9-1:9) (pattern_ident (ident "foo")))
+			(expr (1:1-1:1) (str "one"))
+			"#0")
+		(def
+			(Let)
+			(pattern (1:16-1:16) (pattern_ident (ident "bar")))
+			(expr (1:1-1:1) (str "two"))
+			"#1")))
 ~~~END

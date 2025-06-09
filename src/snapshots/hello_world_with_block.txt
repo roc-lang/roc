@@ -57,5 +57,5 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(can_ir "TODO")
+(can_ir (top_level_defs "empty"))
 ~~~END
