@@ -28,5 +28,5 @@ CloseStringInterpolation(6:1-6:2),StringPart(6:2-6:42),StringEnd(6:42-6:43),EndO
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(expr (str """))
+(expr (str "This is a string with "))
 ~~~END

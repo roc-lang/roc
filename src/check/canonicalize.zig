@@ -13,6 +13,12 @@ const Alias = @import("./canonicalize/Alias.zig");
 const PLACEHOLDER_NUM_VAR: types.Var = @enumFromInt(0);
 const PLACEHOLDER_PRECISION_VAR: types.Var = @enumFromInt(0);
 
+/// Represents a segment of a string literal that may contain interpolations
+const StringSegment = union(enum) {
+    plaintext: []const u8,
+    interpolation: parse.IR.NodeStore.ExprIdx,
+};
+
 can_ir: *IR,
 parse_ir: *parse.IR,
 scope: *Scope,
@@ -275,16 +281,45 @@ pub fn canonicalize_expr(
     const expr = self.parse_ir.store.getExpr(expr_idx);
     switch (expr) {
         .apply => |e| {
-            _ = self.canonicalize_expr(e.@"fn");
+            // Mark the start of scratch expressions
+            const scratch_top = self.can_ir.store.scratchExprTop();
+
+            // Canonicalize the function being called and add as first element
+            const fn_expr = self.canonicalize_expr(e.@"fn") orelse {
+                self.can_ir.store.clearScratchExprsFrom(scratch_top);
+                return null;
+            };
+            self.can_ir.store.addScratchExpr(fn_expr);
+
+            // Canonicalize and add all arguments
             const args_slice = self.parse_ir.store.exprSlice(e.args);
             for (args_slice) |arg| {
-                _ = self.canonicalize_expr(arg);
+                if (self.canonicalize_expr(arg)) |canonicalized_arg| {
+                    self.can_ir.store.addScratchExpr(canonicalized_arg);
+                }
             }
+
+            // Create span from scratch expressions
+            const args_span = self.can_ir.store.exprSpanFrom(scratch_top);
+
+            // Create the call expression
+            const call_expr = IR.Expr{
+                .call = .{
+                    .args = args_span,
+                },
+            };
+
+            return self.can_ir.store.addExpr(.{
+                .expr = call_expr,
+                .region = e.region.toBase(),
+            });
         },
         .ident => |e| {
             if (self.parse_ir.tokens.resolveIdentifier(e.token)) |ident| {
                 switch (self.scope.levels.lookup(.ident, ident)) {
-                    .InScope => {
+                    .InScope, .NotInScope => {
+                        // Create lookup expression even if not in scope
+                        // The lookup function already recorded the problem
                         return self.can_ir.store.addExpr(.{
                             .expr = .{ .lookup = .{
                                 .ident = ident,
@@ -292,8 +327,16 @@ pub fn canonicalize_expr(
                             .region = e.region.toBase(),
                         });
                     },
-                    .NotInScope => {},
-                    .NotPresent => {},
+                    .NotPresent => {
+                        // Identifier doesn't exist at all - this shouldn't happen
+                        // but we'll still create a lookup for robustness
+                        return self.can_ir.store.addExpr(.{
+                            .expr = .{ .lookup = .{
+                                .ident = ident,
+                            } },
+                            .region = e.region.toBase(),
+                        });
+                    },
                 }
             }
         },
@@ -379,24 +422,33 @@ pub fn canonicalize_expr(
             });
         },
         .string => |e| {
-            // resolve to a string slice from the source
-            const token_text = self.parse_ir.resolve(e.token);
+            // Get all the string parts
+            const parts_span = e.parts;
+            const parts = self.parse_ir.store.exprSlice(parts_span);
 
-            // TODO: Handle escape sequences and string interpolation
-            // For now, just intern the raw string
-            // TODO check if was this interned in tokenisation??
-            const literal = self.can_ir.env.strings.insert(self.can_ir.env.gpa, token_text);
+            // Extract segments from the string
+            const segments = self.extractStringSegments(parts) catch |err| exitOnOom(err);
+            defer self.can_ir.env.gpa.free(segments);
 
-            const str_expr = IR.Expr{
-                .str = literal,
-            };
+            // Check if this is a simple string (no interpolation)
+            if (isSimpleString(segments)) {
+                // Simple string case - concatenate all plaintext segments
+                const final_string = self.concatenatePlaintextSegments(segments) catch |err| exitOnOom(err);
+                defer self.can_ir.env.gpa.free(final_string);
 
-            return self.can_ir.store.addExpr(.{
-                .expr = str_expr,
-                .region = e.region.toBase(),
-            });
+                return self.createStringLiteral(final_string, e.region.toBase());
+            }
+
+            // Handle string interpolation by desugaring to Str.concat calls
+            // TODO: This requires implementing function calls in the IR first
+            //
+            // The desugaring transforms interpolated strings into nested Str.concat calls:
+            // "Hello ${name}, welcome!" becomes:
+            //   Str.concat (Str.concat "Hello " name) ", welcome!"
+            //
+            // For now, we'll collect all the segments and prepare for future desugaring
+            return self.desugarStringInterpolation(segments, e.region.toBase());
         },
-
         .list => |e| {
             var items = collections.SafeList(IR.Expr.Idx).initCapacity(self.can_ir.env.gpa, 0);
             const items_slice = self.parse_ir.store.exprSlice(e.items);
@@ -409,9 +461,21 @@ pub fn canonicalize_expr(
 
             const fresh_type_var = self.can_ir.type_store.fresh();
 
+            // Mark the start of scratch expressions for the list
+            const scratch_top = self.can_ir.store.scratchExprTop();
+
+            // Add all canonicalized items to scratch
+            var iter = items.iterIndices();
+            while (iter.next()) |idx| {
+                self.can_ir.store.addScratchExpr(items.get(idx).*);
+            }
+
+            // Create span from scratch expressions
+            const elems_span = self.can_ir.store.exprSpanFrom(scratch_top);
+
             const list_expr = IR.Expr{
                 .list = .{
-                    .elems = .{ .span = .{ .start = 0, .len = 0 } }, // TODO: properly store list elements
+                    .elems = elems_span,
                     .elem_var = fresh_type_var,
                 },
             };
@@ -545,6 +609,107 @@ pub fn canonicalize_expr(
         },
     }
     return null;
+}
+
+/// Extract string segments from parsed string parts
+fn extractStringSegments(self: *Self, parts: []const parse.IR.NodeStore.ExprIdx) ![]StringSegment {
+    var segments = std.ArrayList(StringSegment).init(self.can_ir.env.gpa);
+    defer segments.deinit();
+
+    for (parts) |part| {
+        const part_node = self.parse_ir.store.getExpr(part);
+        switch (part_node) {
+            .string_part => |sp| {
+                const part_text = self.parse_ir.resolve(sp.token);
+                try segments.append(.{ .plaintext = part_text });
+            },
+            else => {
+                // Any non-string-part is an interpolation
+                try segments.append(.{ .interpolation = part });
+            },
+        }
+    }
+
+    return segments.toOwnedSlice();
+}
+
+/// Check if all segments are plaintext (no interpolation)
+fn isSimpleString(segments: []const StringSegment) bool {
+    for (segments) |segment| {
+        if (segment == .interpolation) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// Concatenate all plaintext segments into a single string
+///
+/// Must only be called for simple strings, caller is responsible
+fn concatenatePlaintextSegments(self: *Self, segments: []const StringSegment) ![]const u8 {
+    var string_builder = std.ArrayList(u8).init(self.can_ir.env.gpa);
+    defer string_builder.deinit();
+
+    for (segments) |segment| {
+        switch (segment) {
+            .plaintext => |text| try string_builder.appendSlice(text),
+            .interpolation => unreachable,
+        }
+    }
+
+    return string_builder.toOwnedSlice();
+}
+
+/// Create a string literal expression
+fn createStringLiteral(self: *Self, text: []const u8, region: Region) IR.Expr.Idx {
+    const literal = self.can_ir.env.strings.insert(self.can_ir.env.gpa, text);
+    const str_expr = IR.Expr{ .str = literal };
+
+    return self.can_ir.store.addExpr(.{
+        .expr = str_expr,
+        .region = region,
+    });
+}
+
+/// Desugar string interpolation into Str.concat calls
+fn desugarStringInterpolation(self: *Self, segments: []const StringSegment, region: Region) IR.Expr.Idx {
+    if (segments.len == 0) {
+        return self.createStringLiteral("", region);
+    }
+
+    // Mark the start of scratch expressions
+    const scratch_top = self.can_ir.store.scratchExprTop();
+    defer self.can_ir.store.clearScratchExprsFrom(scratch_top);
+
+    // Convert segments to expressions and add to scratch
+    var has_segments = false;
+    for (segments) |segment| {
+        const segment_expr = switch (segment) {
+            .plaintext => |text| self.createStringLiteral(text, region),
+            .interpolation => |expr_idx| self.canonicalize_expr(expr_idx) orelse continue,
+        };
+        self.can_ir.store.addScratchExpr(segment_expr);
+        has_segments = true;
+    }
+
+    if (!has_segments) {
+        return self.createStringLiteral("", region);
+    }
+
+    // For now, return the first segment as we don't have Str.concat yet
+    // When symbol resolution is implemented, this will create nested Str.concat calls
+    //
+    // The desugaring would work like:
+    // segments = ["Hello ", name, "!"]
+    // becomes: Str.concat (Str.concat "Hello " name) "!"
+
+    const span = self.can_ir.store.exprSpanFrom(scratch_top);
+    const exprs = self.can_ir.store.exprSlice(span);
+    if (exprs.len > 0) {
+        return exprs[0];
+    }
+
+    return self.createStringLiteral("", region);
 }
 
 fn canonicalize_pattern(

@@ -119,6 +119,7 @@ pub const Node = struct {
         expr_var,
         expr_tuple,
         expr_list,
+        expr_call,
         expr_record,
         expr_field_access,
         expr_static_dispatch,
@@ -248,7 +249,12 @@ pub const NodeStore = struct {
 
         switch (node.tag) {
             .expr_var => {
-                @panic("TODO implement expr_var nodes");
+                const ident_idx: base.Ident.Idx = @bitCast(@as(u32, @bitCast(node.data_1)));
+                return Expr{
+                    .lookup = .{
+                        .ident = ident_idx,
+                    },
+                };
             },
             .expr_int => {
                 // TODO: Store and retrieve all int data properly
@@ -269,8 +275,15 @@ pub const NodeStore = struct {
             .expr_list => {
                 return .{
                     .list = .{
-                        .elem_var = @enumFromInt(0), // Placeholder
                         .elems = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
+                        .elem_var = @enumFromInt(0), // TODO: get from extra_data
+                    },
+                };
+            },
+            .expr_call => {
+                return .{
+                    .call = .{
+                        .args = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
                     },
                 };
             },
@@ -449,7 +462,10 @@ pub const NodeStore = struct {
                 @panic("TODO addExpr if");
             },
             .call => {
-                @panic("TODO addExpr call");
+                node.tag = .expr_call;
+                // Store the args span
+                node.data_1 = expr.expr.call.args.span.start;
+                node.data_2 = expr.expr.call.args.span.len;
             },
             .record => {
                 @panic("TODO addExpr record");
@@ -609,6 +625,37 @@ pub const NodeStore = struct {
 
     pub fn sliceFromSpan(store: *NodeStore, comptime T: type, span: anytype) []T {
         return store.extra_data.items[span.start..][0..span.len];
+    }
+
+    pub fn scratchExprTop(store: *NodeStore) u32 {
+        return store.scratch_exprs.top();
+    }
+
+    pub fn addScratchExpr(store: *NodeStore, idx: Expr.Idx) void {
+        store.scratch_exprs.append(store.gpa, idx);
+    }
+
+    pub fn exprSpanFrom(store: *NodeStore, start: u32) Expr.Span {
+        const end = store.scratch_exprs.top();
+        defer store.scratch_exprs.clearFrom(start);
+        var i = @as(usize, @intCast(start));
+        const ed_start = @as(u32, @intCast(store.extra_data.items.len));
+        std.debug.assert(end >= i);
+        while (i < end) {
+            store.extra_data.append(store.gpa, @intFromEnum(store.scratch_exprs.items.items[i])) catch |err| exitOnOom(err);
+            i += 1;
+        }
+        return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+    }
+
+    pub fn clearScratchExprsFrom(store: *NodeStore, start: u32) void {
+        store.scratch_exprs.clearFrom(start);
+    }
+
+    pub fn exprSlice(store: *const NodeStore, span: Expr.Span) []Expr.Idx {
+        const slice = store.extra_data.items[span.span.start..(span.span.start + span.span.len)];
+        const result: []Expr.Idx = @ptrCast(@alignCast(slice));
+        return result;
     }
 };
 
@@ -1104,18 +1151,27 @@ pub const Expr = union(enum) {
 
                 root_node.appendNodeChild(gpa, &if_node);
             },
-            .call => |_| {
+            .call => |c| {
                 var call_node = sexpr.Expr.init(gpa, "call");
-                call_node.appendStringChild(gpa, "fn=<TODO: store and print fn expr>"); // The called expression needs to be stored
-                var args_node = sexpr.Expr.init(gpa, "args");
-                // for (ir.typed_exprs_at_regions.rangeToSlice(c.args).items(.expr), ir.typed_exprs_at_regions.rangeToSlice(c.args).items(.type_var)) |arg, ty_var| {
-                //     var arg_sexpr = ir.exprs.get(arg).toSExpr(env, ir);
-                //     var argty_sexpr = sexpr.Expr.init(gpa, "argty");
-                //     argty_sexpr.appendNodeChild(gpa, &arg_sexpr);
-                //     argty_sexpr.appendUnsignedIntChild(gpa, @intFromEnum(ty_var)); // TODO: use a type var name or something
-                //     args_node.appendNodeChild(gpa, &arg_sexpr);
-                // }
-                call_node.appendNodeChild(gpa, &args_node);
+
+                // Get all expressions from the args span
+                const all_exprs = ir.store.exprSlice(c.args);
+
+                // First element is the function being called
+                if (all_exprs.len > 0) {
+                    const fn_expr = ir.store.getExpr(all_exprs[0]);
+                    var fn_node = fn_expr.toSExpr(ir);
+                    call_node.appendNodeChild(gpa, &fn_node);
+                }
+
+                // Remaining elements are the arguments
+                if (all_exprs.len > 1) {
+                    for (all_exprs[1..]) |arg_idx| {
+                        const arg_expr = ir.store.getExpr(arg_idx);
+                        var arg_node = arg_expr.toSExpr(ir);
+                        call_node.appendNodeChild(gpa, &arg_node);
+                    }
+                }
 
                 root_node.appendNodeChild(gpa, &call_node);
             },

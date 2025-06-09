@@ -14,5 +14,19 @@ UpperIdent(1:1-1:5),NoSpaceOpenRound(1:5-1:6),Int(1:6-1:8),CloseRound(1:8-1:9),E
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(can_ir "TODO")
+(expr
+	(call
+		(expr
+			(tag
+				(tag_union_var "#0")
+				(ext_var "#0")
+				(name "Some")
+				(args "TODO")))
+		(expr
+			(int
+				(num_var "#0")
+				(precision_var "#0")
+				(literal "42")
+				(value "TODO")
+				(bound "flex_var")))))
 ~~~END
