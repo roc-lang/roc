@@ -88,7 +88,7 @@ pub fn occurs(types_store: *Store, scratch: *Scratch, var_: Var) Result {
         },
     };
 
-    // Reset the marks for all visited nodex
+    // Reset the marks for all visited nodes
     for (scratch.visited.items.items[0..]) |visited_desc_idx| {
         types_store.setDescMark(visited_desc_idx, Mark.none);
     }
@@ -99,7 +99,7 @@ pub fn occurs(types_store: *Store, scratch: *Scratch, var_: Var) Result {
 /// Performs an occurs check on a type variable.
 ///
 /// This struct encapsulates the recursive traversal logic used to detect
-/// whether a variable is recursively defined through its children.
+/// whether a variable is recursively defined through it's children.
 ///
 /// It uses a scratch space to track visited nodes and maintain state across
 /// recursive calls. It is intended for one-time use per `occurs()` call.
