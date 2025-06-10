@@ -342,10 +342,7 @@ const Scratch = struct {
 test "occurs: no recurcion (v = Str)" {
     const gpa = std.testing.allocator;
 
-    var module_env = base.ModuleEnv.init(gpa);
-    defer module_env.deinit();
-
-    var types_store = Store.init(&module_env);
+    var types_store = Store.init(gpa);
     defer types_store.deinit();
 
     var scratch = Scratch.init(gpa);
@@ -359,10 +356,7 @@ test "occurs: no recurcion (v = Str)" {
 
 test "occurs: direct recursion (v = List v)" {
     const gpa = std.testing.allocator;
-    var module_env = base.ModuleEnv.init(gpa);
-    defer module_env.deinit();
-
-    var types_store = Store.init(&module_env);
+    var types_store = Store.init(gpa);
     defer types_store.deinit();
 
     var scratch = Scratch.init(gpa);
@@ -384,10 +378,7 @@ test "occurs: direct recursion (v = List v)" {
 
 test "occurs: indirect recursion (v1 = Box v2, v2 = List v1)" {
     const gpa = std.testing.allocator;
-    var module_env = base.ModuleEnv.init(gpa);
-    defer module_env.deinit();
-
-    var types_store = Store.init(&module_env);
+    var types_store = Store.init(gpa);
     defer types_store.deinit();
 
     var scratch = Scratch.init(gpa);
@@ -410,10 +401,7 @@ test "occurs: indirect recursion (v1 = Box v2, v2 = List v1)" {
 
 test "occurs: no recursion through two levels (v1 = Box v2, v2 = Str)" {
     const gpa = std.testing.allocator;
-    var module_env = base.ModuleEnv.init(gpa);
-    defer module_env.deinit();
-
-    var types_store = Store.init(&module_env);
+    var types_store = Store.init(gpa);
     defer types_store.deinit();
 
     var scratch = Scratch.init(gpa);
@@ -431,10 +419,7 @@ test "occurs: no recursion through two levels (v1 = Box v2, v2 = Str)" {
 
 test "occurs: tuple recursion (v = Tuple(v, Str))" {
     const gpa = std.testing.allocator;
-    var module_env = base.ModuleEnv.init(gpa);
-    defer module_env.deinit();
-
-    var types_store = Store.init(&module_env);
+    var types_store = Store.init(gpa);
     defer types_store.deinit();
 
     var scratch = Scratch.init(gpa);
@@ -458,10 +443,7 @@ test "occurs: tuple recursion (v = Tuple(v, Str))" {
 
 test "occurs: tuple not recursive (v = Tuple(Str, Str))" {
     const gpa = std.testing.allocator;
-    var module_env = base.ModuleEnv.init(gpa);
-    defer module_env.deinit();
-
-    var types_store = Store.init(&module_env);
+    var types_store = Store.init(gpa);
     defer types_store.deinit();
 
     var scratch = Scratch.init(gpa);
@@ -482,10 +464,7 @@ test "occurs: tuple not recursive (v = Tuple(Str, Str))" {
 
 test "occurs: recursive alias (v = Alias(List v))" {
     const gpa = std.testing.allocator;
-    var module_env = base.ModuleEnv.init(gpa);
-    defer module_env.deinit();
-
-    var types_store = Store.init(&module_env);
+    var types_store = Store.init(gpa);
     defer types_store.deinit();
 
     var scratch = Scratch.init(gpa);
@@ -514,10 +493,7 @@ test "occurs: recursive alias (v = Alias(List v))" {
 
 test "occurs: alias with no recursion (v = Alias Str)" {
     const gpa = std.testing.allocator;
-    var module_env = base.ModuleEnv.init(gpa);
-    defer module_env.deinit();
-
-    var types_store = Store.init(&module_env);
+    var types_store = Store.init(gpa);
     defer types_store.deinit();
 
     var scratch = Scratch.init(gpa);
@@ -540,10 +516,7 @@ test "occurs: alias with no recursion (v = Alias Str)" {
 
 test "occurs: recursive tag union (v = [ Cons(elem, v), Nil ]" {
     const gpa = std.testing.allocator;
-    var module_env = base.ModuleEnv.init(gpa);
-    defer module_env.deinit();
-
-    var types_store = Store.init(&module_env);
+    var types_store = Store.init(gpa);
     defer types_store.deinit();
 
     var scratch = Scratch.init(gpa);
@@ -577,10 +550,7 @@ test "occurs: recursive tag union (v = [ Cons(elem, v), Nil ]" {
 }
 test "occurs: nested recursive tag union (v = [ Cons(elem, Box(v)) ] )" {
     const gpa = std.testing.allocator;
-    var module_env = base.ModuleEnv.init(gpa);
-    defer module_env.deinit();
-
-    var types_store = Store.init(&module_env);
+    var types_store = Store.init(gpa);
     defer types_store.deinit();
 
     var scratch = Scratch.init(gpa);
@@ -620,10 +590,7 @@ test "occurs: nested recursive tag union (v = [ Cons(elem, Box(v)) ] )" {
 
 test "occurs: recursive tag union (v = List: [ Cons(Elem, List), Nil ])" {
     const gpa = std.testing.allocator;
-    var module_env = base.ModuleEnv.init(gpa);
-    defer module_env.deinit();
-
-    var types_store = Store.init(&module_env);
+    var types_store = Store.init(gpa);
     defer types_store.deinit();
 
     var scratch = Scratch.init(gpa);
@@ -688,10 +655,7 @@ test "occurs: recursive tag union (v = List: [ Cons(Elem, List), Nil ])" {
 
 test "occurs: recursive tag union with multiple nominals (TypeA := TypeB, TypeB := [ Cons(Elem, TypeA), Nil ])" {
     const gpa = std.testing.allocator;
-    var module_env = base.ModuleEnv.init(gpa);
-    defer module_env.deinit();
-
-    var types_store = Store.init(&module_env);
+    var types_store = Store.init(gpa);
     defer types_store.deinit();
 
     var scratch = Scratch.init(gpa);
