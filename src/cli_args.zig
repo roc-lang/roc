@@ -59,61 +59,65 @@ pub const OptLevel = enum {
 
 /// Arguments for the default `roc` command
 pub const RunArgs = struct {
-    path: []const u8,
-    opt: OptLevel = .dev,
-    app_args: []const []const u8 = &[_][]const u8{},
+    path: []const u8, // the path of the roc file to be executed
+    opt: OptLevel = .dev, // the optimization level
+    app_args: []const []const u8 = &[_][]const u8{}, // any arguments to be passed to roc application being run
 };
 
 /// Arguments for `roc check`
 pub const CheckArgs = struct {
-    path: []const u8,
-    main: ?[]const u8,
+    path: []const u8, // the path of the roc file to be checked
+    main: ?[]const u8, // the path to a roc file with an app header to be used to resolved dependencies
 };
 
 /// Arguments for `roc build`
 pub const BuildArgs = struct {
-    path: []const u8,
-    opt: OptLevel,
-    output: ?[]const u8 = null,
+    path: []const u8, // the path to the roc file to be built
+    opt: OptLevel, // the optimization level
+    output: ?[]const u8 = null, // the path where the output binary should be created
 };
 
 /// Arguments for `roc test`
-pub const TestArgs = struct { path: []const u8, opt: OptLevel, main: ?[]const u8 };
+pub const TestArgs = struct {
+    path: []const u8, // the path to the file to be tested
+    opt: OptLevel, // the optimization level to be used for test execution
+    main: ?[]const u8, // the path to a roc file with an app header to be used to resolve dependencies
+};
 
 /// Arguments for `roc format`
 pub const FormatArgs = struct {
-    paths: []const []const u8,
-    stdin: bool = false,
-    check: bool = false,
+    paths: []const []const u8, // the paths of files to be formatted
+    stdin: bool = false, // if the input should be read in from stdin and output to stdout
+    check: bool = false, // if the command should only check formatting rather than applying it
 };
 
 /// Arguments for `roc docs`
 pub const DocsArgs = struct {
-    path: []const u8,
-    output: []const u8,
-    root_dir: ?[]const u8 = null,
+    path: []const u8, // the main.roc file to base the generation on
+    output: []const u8, // the path to the output directory for the generated docs
+    root_dir: ?[]const u8 = null, // the prefix to be used in generated links in the docs
 };
 
 /// Parse a list of arguments.
 pub fn parse(gpa: mem.Allocator, args: []const []const u8) CliArgs {
-    if (args.len == 0) return parse_run(gpa, args);
+    if (args.len == 0) return parseRun(gpa, args);
 
-    if (mem.eql(u8, args[0], "check")) return parse_check(args[1..]);
-    if (mem.eql(u8, args[0], "build")) return parse_build(args[1..]);
-    if (mem.eql(u8, args[0], "format")) return parse_format(gpa, args[1..]);
-    if (mem.eql(u8, args[0], "test")) return parse_test(args[1..]);
-    if (mem.eql(u8, args[0], "repl")) return parse_repl(args[1..]);
-    if (mem.eql(u8, args[0], "version")) return parse_version(args[1..]);
-    if (mem.eql(u8, args[0], "docs")) return parse_docs(args[1..]);
+    if (mem.eql(u8, args[0], "check")) return parseCheck(args[1..]);
+    if (mem.eql(u8, args[0], "build")) return parseBuild(args[1..]);
+    if (mem.eql(u8, args[0], "format")) return parseFormat(gpa, args[1..]);
+    if (mem.eql(u8, args[0], "test")) return parseTest(args[1..]);
+    if (mem.eql(u8, args[0], "repl")) return parseRepl(args[1..]);
+    if (mem.eql(u8, args[0], "version")) return parseVersion(args[1..]);
+    if (mem.eql(u8, args[0], "docs")) return parseDocs(args[1..]);
     if (mem.eql(u8, args[0], "help")) return CliArgs{ .help = main_help };
-    if (mem.eql(u8, args[0], "licenses")) return parse_licenses(args[1..]);
+    if (mem.eql(u8, args[0], "licenses")) return parseLicenses(args[1..]);
 
-    return parse_run(gpa, args);
+    return parseRun(gpa, args);
 }
 
 const main_help =
     \\Run the given .roc file
-    \\You can use one of the SUBCOMMANDS below to do something else!
+    \\You can use one of the COMMANDS below to do something else!
     \\
     \\Usage: roc [OPTIONS] [ROC_FILE] [ARGS_FOR_APP]...
     \\       roc <COMMAND>
@@ -125,7 +129,7 @@ const main_help =
     \\  format           Format a .roc file or the .roc files contained in a directory using standard Roc formatting
     \\  version          Print the Roc compiler’s version
     \\  check            Check the code for problems, but don’t build or run it
-    \\  docs             Generate documentation for a Roc package
+    \\  docs             Generate documentation for a Roc package or platform
     \\  help             Print this message
     \\  licenses         Prints license info for Roc as well as attributions to other projects used by Roc
     \\
@@ -138,11 +142,11 @@ const main_help =
     \\
 ;
 
-fn parse_check(args: []const []const u8) CliArgs {
+fn parseCheck(args: []const []const u8) CliArgs {
     var path: ?[]const u8 = null;
     var main: ?[]const u8 = null;
     for (args) |arg| {
-        if (is_help_flag(arg)) {
+        if (isHelpFlag(arg)) {
             return CliArgs{ .help = 
             \\Check the code for problems, but don’t build or run it
             \\
@@ -157,7 +161,7 @@ fn parse_check(args: []const []const u8) CliArgs {
             \\
         };
         } else if (mem.startsWith(u8, arg, "--main")) {
-            if (get_flag_value(arg)) |value| {
+            if (getFlagValue(arg)) |value| {
                 main = value;
             } else {
                 return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--main" } } };
@@ -172,12 +176,12 @@ fn parse_check(args: []const []const u8) CliArgs {
     return CliArgs{ .check = CheckArgs{ .path = path orelse "main.roc", .main = main } };
 }
 
-fn parse_build(args: []const []const u8) CliArgs {
+fn parseBuild(args: []const []const u8) CliArgs {
     var path: ?[]const u8 = null;
     var opt: OptLevel = .dev;
     var output: ?[]const u8 = null;
     for (args) |arg| {
-        if (is_help_flag(arg)) {
+        if (isHelpFlag(arg)) {
             return CliArgs{ .help = 
             \\Build a binary from the given .roc file, but don't run it
             \\
@@ -193,13 +197,13 @@ fn parse_build(args: []const []const u8) CliArgs {
             \\
         };
         } else if (mem.startsWith(u8, arg, "--output")) {
-            if (get_flag_value(arg)) |value| {
+            if (getFlagValue(arg)) |value| {
                 output = value;
             } else {
                 return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--output" } } };
             }
         } else if (mem.startsWith(u8, arg, "--opt")) {
-            if (get_flag_value(arg)) |value| {
+            if (getFlagValue(arg)) |value| {
                 if (OptLevel.from_str(value)) |level| {
                     opt = level;
                 } else {
@@ -218,12 +222,12 @@ fn parse_build(args: []const []const u8) CliArgs {
     return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .output = output } };
 }
 
-fn parse_format(gpa: mem.Allocator, args: []const []const u8) CliArgs {
+fn parseFormat(gpa: mem.Allocator, args: []const []const u8) CliArgs {
     var paths = std.ArrayList([]const u8).init(gpa);
     var stdin = false;
     var check = false;
     for (args) |arg| {
-        if (is_help_flag(arg)) {
+        if (isHelpFlag(arg)) {
             // We need to free the paths here because we aren't returning the .format variant
             paths.deinit();
             return CliArgs{ .help = 
@@ -257,12 +261,12 @@ fn parse_format(gpa: mem.Allocator, args: []const []const u8) CliArgs {
     return CliArgs{ .format = FormatArgs{ .paths = paths.toOwnedSlice() catch |err| exitOnOom(err), .stdin = stdin, .check = check } };
 }
 
-fn parse_test(args: []const []const u8) CliArgs {
+fn parseTest(args: []const []const u8) CliArgs {
     var path: ?[]const u8 = null;
     var opt: OptLevel = .dev;
     var main: ?[]const u8 = null;
     for (args) |arg| {
-        if (is_help_flag(arg)) {
+        if (isHelpFlag(arg)) {
             return CliArgs{ .help = 
             \\Run all top-level `expect`s in a main module and any modules it imports
             \\
@@ -278,13 +282,13 @@ fn parse_test(args: []const []const u8) CliArgs {
             \\
         };
         } else if (mem.startsWith(u8, arg, "--main")) {
-            if (get_flag_value(arg)) |value| {
+            if (getFlagValue(arg)) |value| {
                 main = value;
             } else {
                 return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--main" } } };
             }
         } else if (mem.startsWith(u8, arg, "--opt")) {
-            if (get_flag_value(arg)) |value| {
+            if (getFlagValue(arg)) |value| {
                 if (OptLevel.from_str(value)) |level| {
                     opt = level;
                 } else {
@@ -303,9 +307,9 @@ fn parse_test(args: []const []const u8) CliArgs {
     return CliArgs{ .test_cmd = TestArgs{ .path = path orelse "main.roc", .opt = opt, .main = main } };
 }
 
-fn parse_repl(args: []const []const u8) CliArgs {
+fn parseRepl(args: []const []const u8) CliArgs {
     for (args) |arg| {
-        if (is_help_flag(arg)) {
+        if (isHelpFlag(arg)) {
             return CliArgs{ .help = 
             \\Launch the interactive Read Eval Print Loop (REPL)
             \\
@@ -322,9 +326,9 @@ fn parse_repl(args: []const []const u8) CliArgs {
     return CliArgs.repl;
 }
 
-fn parse_version(args: []const []const u8) CliArgs {
+fn parseVersion(args: []const []const u8) CliArgs {
     for (args) |arg| {
-        if (is_help_flag(arg)) {
+        if (isHelpFlag(arg)) {
             return CliArgs{ .help = 
             \\Print the Roc compiler’s version
             \\
@@ -341,9 +345,9 @@ fn parse_version(args: []const []const u8) CliArgs {
     return CliArgs.version;
 }
 
-fn parse_licenses(args: []const []const u8) CliArgs {
+fn parseLicenses(args: []const []const u8) CliArgs {
     for (args) |arg| {
-        if (is_help_flag(arg)) {
+        if (isHelpFlag(arg)) {
             return CliArgs{ .help = 
             \\Prints license info for Roc as well as attributions to other projects used by Roc
             \\
@@ -360,12 +364,12 @@ fn parse_licenses(args: []const []const u8) CliArgs {
     return CliArgs.licenses;
 }
 
-fn parse_docs(args: []const []const u8) CliArgs {
+fn parseDocs(args: []const []const u8) CliArgs {
     var output: ?[]const u8 = null;
     var root_dir: ?[]const u8 = null;
     var path: ?[]const u8 = null;
     for (args) |arg| {
-        if (is_help_flag(arg)) {
+        if (isHelpFlag(arg)) {
             return CliArgs{ .help = 
             \\Generate documentation for a Roc package
             \\
@@ -381,13 +385,13 @@ fn parse_docs(args: []const []const u8) CliArgs {
             \\
         };
         } else if (mem.startsWith(u8, arg, "--output")) {
-            if (get_flag_value(arg)) |value| {
+            if (getFlagValue(arg)) |value| {
                 output = value;
             } else {
                 return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--output" } } };
             }
         } else if (mem.startsWith(u8, arg, "--root-dir")) {
-            if (get_flag_value(arg)) |value| {
+            if (getFlagValue(arg)) |value| {
                 root_dir = value;
             } else {
                 return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--root-dir" } } };
@@ -403,12 +407,12 @@ fn parse_docs(args: []const []const u8) CliArgs {
     return CliArgs{ .docs = DocsArgs{ .path = path orelse "main.roc", .output = output orelse "generated-docs", .root_dir = root_dir } };
 }
 
-fn parse_run(gpa: mem.Allocator, args: []const []const u8) CliArgs {
+fn parseRun(gpa: mem.Allocator, args: []const []const u8) CliArgs {
     var path: ?[]const u8 = null;
     var opt: OptLevel = .dev;
     var app_args = std.ArrayList([]const u8).init(gpa);
     for (args) |arg| {
-        if (is_help_flag(arg)) {
+        if (isHelpFlag(arg)) {
             // We need to free the paths here because we aren't returning the .run variant
             app_args.deinit();
             return CliArgs{ .help = main_help };
@@ -417,7 +421,7 @@ fn parse_run(gpa: mem.Allocator, args: []const []const u8) CliArgs {
             app_args.deinit();
             return CliArgs.version;
         } else if (mem.startsWith(u8, arg, "--opt")) {
-            if (get_flag_value(arg)) |value| {
+            if (getFlagValue(arg)) |value| {
                 if (OptLevel.from_str(value)) |level| {
                     opt = level;
                 } else {
@@ -437,11 +441,11 @@ fn parse_run(gpa: mem.Allocator, args: []const []const u8) CliArgs {
     return CliArgs{ .run = RunArgs{ .path = path orelse "main.roc", .opt = opt, .app_args = app_args.toOwnedSlice() catch |err| exitOnOom(err) } };
 }
 
-fn is_help_flag(arg: []const u8) bool {
+fn isHelpFlag(arg: []const u8) bool {
     return mem.eql(u8, arg, "-h") or mem.eql(u8, arg, "--help");
 }
 
-fn get_flag_value(arg: []const u8) ?[]const u8 {
+fn getFlagValue(arg: []const u8) ?[]const u8 {
     var iter = mem.splitScalar(u8, arg, '=');
     // ignore the flag key
     _ = iter.next();
