@@ -760,17 +760,28 @@ pub const Expr = union(enum) {
             .runtime_error => |problem_idx| {
                 var runtime_err_node = sexpr.Expr.init(gpa, "runtime_error");
 
-                const p = ir.env.problems.get(problem_idx);
-
                 var buf = std.ArrayList(u8).init(gpa);
                 defer buf.deinit();
 
-                p.toStr(gpa, "", buf.writer()) catch |err| {
-                    // This definitely isn't clean... fix me
-                    // using our oom helper doesn't work here because
-                    // the error set is different
-                    std.debug.print("Error: {}\n", .{err});
-                };
+                // Check if the problem index is valid
+                const problem_count = ir.env.problems.items.items.len;
+                const idx_value = @intFromEnum(problem_idx);
+                
+                if (idx_value < problem_count) {
+                    const p = ir.env.problems.get(problem_idx);
+                    p.toStr(gpa, "", buf.writer()) catch |err| {
+                        // This definitely isn't clean... fix me
+                        // using our oom helper doesn't work here because
+                        // the error set is different
+                        std.debug.print("Error: {}\n", .{err});
+                    };
+                } else {
+                    // Problem index is out of bounds - this happens when NodeStore creates
+                    // runtime errors for unimplemented node types but no problems have been added yet
+                    buf.writer().writeAll("COMPILER: unimplemented node type (no problem registered)") catch |err| {
+                        std.debug.print("Error: {}\n", .{err});
+                    };
+                }
 
                 runtime_err_node.appendStringChild(gpa, buf.items);
 
