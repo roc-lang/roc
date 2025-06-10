@@ -180,8 +180,10 @@ fn bringImportIntoScope(
     self: *Self,
     import: *const parse.IR.NodeStore.Statement.Import,
 ) void {
+    const gpa = self.can_ir.env.gpa;
+
     // Add error for partially implemented imports
-    _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedImport = .{
+    _ = self.can_ir.env.problems.append(gpa, Problem.Canonicalize.make(.{ .NotYetImplementedImport = .{
         .region = import.region.toBase(),
     } }));
 
@@ -192,10 +194,10 @@ fn bringImportIntoScope(
     //     .end = Region.Position.zero(),
     // };
 
-    // const res = self.can_ir.imports.getOrInsert(self.can_ir.env.gpa, import_name, shorthand);
+    // const res = self.can_ir.imports.getOrInsert(gpa, import_name, shorthand);
 
     // if (res.was_present) {
-    //     _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .DuplicateImport = .{
+    //     _ = self.can_ir.env.problems.append(gpa, Problem.Canonicalize.make(.{ .DuplicateImport = .{
     //         .duplicate_import_region = region,
     //     } }));
     // }
@@ -205,14 +207,15 @@ fn bringImportIntoScope(
         const exposed = self.parse_ir.store.getExposedItem(exposed_idx);
         switch (exposed) {
             .lower_ident => |ident| {
+
+                // TODO handle `as` here using an Alias
+
                 if (self.parse_ir.tokens.resolveIdentifier(ident.ident)) |ident_idx| {
-                    if (ident.as) |as_| {
-                        if (self.parse_ir.tokens.resolveIdentifier(as_)) |alias_idx| {
-                            _ = self.scope.levels.introduce(self.can_ir.env.gpa, &self.can_ir.env.idents, .alias, .{ .scope_name = ident_idx, .alias = alias_idx });
-                        }
-                    } else {
-                        _ = self.scope.levels.introduce(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, .{ .scope_name = ident_idx, .ident = ident_idx });
-                    }
+                    _ = ident_idx;
+
+                    // TODO Introduce our import
+
+                    // _ = self.scope.levels.introduce(gpa, &self.can_ir.env.idents, .ident, .{ .scope_name = ident_idx, .ident = ident_idx });
                 }
             },
             .upper_ident => |imported_type| {
@@ -346,28 +349,33 @@ pub fn canonicalize_expr(
         },
         .ident => |e| {
             if (self.parse_ir.tokens.resolveIdentifier(e.token)) |ident| {
-                switch (self.scope.levels.lookup(&self.can_ir.env.idents, .ident, ident)) {
-                    .InScope, .NotInScope => {
-                        // Create lookup expression even if not in scope
-                        // The lookup function already recorded the problem
-                        return self.can_ir.store.addExpr(.{
-                            .expr = .{ .lookup = .{
-                                .ident = ident,
-                            } },
-                            .region = e.region.toBase(),
-                        });
-                    },
-                    .NotPresent => {
-                        // Identifier doesn't exist at all - this shouldn't happen
-                        // but we'll still create a lookup for robustness
-                        return self.can_ir.store.addExpr(.{
-                            .expr = .{ .lookup = .{
-                                .ident = ident,
-                            } },
-                            .region = e.region.toBase(),
-                        });
-                    },
-                }
+                _ = ident;
+
+                @panic("TODO");
+
+                // TODO: Implement identifier resolution logic
+                // switch (self.scope.levels.lookup(&self.can_ir.env.idents, .ident, ident)) {
+                //     .InScope, .NotInScope => {
+                //         // Create lookup expression even if not in scope
+                //         // The lookup function already recorded the problem
+                //         return self.can_ir.store.addExpr(.{
+                //             .expr = .{ .lookup = .{
+                //                 .ident = ident,
+                //             } },
+                //             .region = e.region.toBase(),
+                //         });
+                //     },
+                //     .NotPresent => {
+                //         // Identifier doesn't exist at all - this shouldn't happen
+                //         // but we'll still create a lookup for robustness
+                //         return self.can_ir.store.addExpr(.{
+                //             .expr = .{ .lookup = .{
+                //                 .ident = ident,
+                //             } },
+                //             .region = e.region.toBase(),
+                //         });
+                //     },
+                // }
             } else {
                 return null;
             }
@@ -878,16 +886,18 @@ fn canonicalize_pattern(
 
     switch (pattern) {
         .ident => |e| {
-            if (self.parse_ir.tokens.resolveIdentifier(e.ident_tok)) |ident| {
-                // Introduce the identifier into scope
-                _ = self.scope.levels.introduce(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, .{ .scope_name = ident, .ident = ident });
+            _ = e;
+            // TODO
+            // if (self.parse_ir.tokens.resolveIdentifier(e.ident_tok)) |ident| {
+            //     // Introduce the identifier into scope
+            //     _ = self.scope.levels.introduce(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, .{ .scope_name = ident, .ident = ident });
 
-                const ident_pattern = CIR.Pattern{
-                    .assign = ident,
-                };
+            //     const ident_pattern = CIR.Pattern{
+            //         .assign = ident,
+            //     };
 
-                return self.can_ir.store.addPattern(ident_pattern);
-            }
+            //     return self.can_ir.store.addPattern(ident_pattern);
+            // }
             return null;
         },
         .underscore => {
