@@ -883,7 +883,7 @@ fn canonicalize_pattern(
                 _ = self.scope.levels.introduce(.ident, .{ .scope_name = ident, .ident = ident });
 
                 const ident_pattern = CIR.Pattern{
-                    .identifier = ident,
+                    .assign = ident,
                 };
 
                 return self.can_ir.store.addPattern(ident_pattern);

@@ -264,7 +264,7 @@ pub fn getPattern(store: *NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pattern {
     switch (node.tag) {
         .pattern_identifier => {
             const ident_idx: base.Ident.Idx = @bitCast(node.data_1);
-            return CIR.Pattern{ .identifier = ident_idx };
+            return CIR.Pattern{ .assign = ident_idx };
         },
         else => {
             std.log.debug("TODO: implement pattern {}", .{node.tag});
@@ -448,7 +448,7 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern) CIR.Pattern.Idx {
     };
 
     switch (pattern) {
-        .identifier => |ident_idx| {
+        .assign => |ident_idx| {
             node.data_1 = @bitCast(ident_idx);
             node.tag = .pattern_identifier;
         },

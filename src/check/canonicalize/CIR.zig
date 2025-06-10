@@ -348,6 +348,7 @@ pub const Expr = union(enum) {
     runtime_error: Problem.Idx,
 
     const Lookup = struct {
+        // replace with Pattern.Idx -- get this from Scope analysis
         ident: Ident.Idx,
     };
 
@@ -1058,7 +1059,7 @@ pub const WhenBranch = struct {
 /// A pattern, including possible problems (e.g. shadowing) so that
 /// codegen can generate a runtime error if this pattern is reached.
 pub const Pattern = union(enum) {
-    identifier: Ident.Idx,
+    assign: Ident.Idx,
     as: struct {
         pattern: Pattern.Idx,
         region: Region,
@@ -1124,7 +1125,7 @@ pub const Pattern = union(enum) {
     pub fn toSExpr(self: *const @This(), ir: *CIR, line_starts: std.ArrayList(u32), source: []const u8) sexpr.Expr {
         const gpa = ir.env.gpa;
         switch (self.*) {
-            .identifier => |ident_idx| {
+            .assign => |ident_idx| {
                 var node = sexpr.Expr.init(gpa, "pattern_ident");
                 appendIdentChild(&node, gpa, ir, "ident", ident_idx);
                 return node;
