@@ -59,39 +59,43 @@ pub const OptLevel = enum {
 
 /// Arguments for the default `roc` command
 pub const RunArgs = struct {
-    path: []const u8,
-    opt: OptLevel = .dev,
-    app_args: []const []const u8 = &[_][]const u8{},
+    path: []const u8, // the path of the roc file to be executed
+    opt: OptLevel = .dev, // the optimization level
+    app_args: []const []const u8 = &[_][]const u8{}, // any arguments to be passed to roc application being run
 };
 
 /// Arguments for `roc check`
 pub const CheckArgs = struct {
-    path: []const u8,
-    main: ?[]const u8,
+    path: []const u8, // the path of the roc file to be checked
+    main: ?[]const u8, // the path to a roc file with an app header to be used to resolved dependencies
 };
 
 /// Arguments for `roc build`
 pub const BuildArgs = struct {
-    path: []const u8,
-    opt: OptLevel,
-    output: ?[]const u8 = null,
+    path: []const u8, // the path to the roc file to be built
+    opt: OptLevel, // the optimization level
+    output: ?[]const u8 = null, // the path where the output binary should be created
 };
 
 /// Arguments for `roc test`
-pub const TestArgs = struct { path: []const u8, opt: OptLevel, main: ?[]const u8 };
+pub const TestArgs = struct {
+    path: []const u8, // the path to the file to be tested
+    opt: OptLevel, // the optimization level to be used for test execution
+    main: ?[]const u8, // the path to a roc file with an app header to be used to resolve dependencies
+};
 
 /// Arguments for `roc format`
 pub const FormatArgs = struct {
-    paths: []const []const u8,
-    stdin: bool = false,
-    check: bool = false,
+    paths: []const []const u8, // the paths of files to be formatted
+    stdin: bool = false, // if the input should be read in from stdin and output to stdout
+    check: bool = false, // if the command should only check formatting rather than applying it
 };
 
 /// Arguments for `roc docs`
 pub const DocsArgs = struct {
-    path: []const u8,
-    output: []const u8,
-    root_dir: ?[]const u8 = null,
+    path: []const u8, // the main.roc file to base the generation on
+    output: []const u8, // the path to the output directory for the generated docs
+    root_dir: ?[]const u8 = null, // the prefix to be used in generated links in the docs
 };
 
 /// Parse a list of arguments.
@@ -113,7 +117,7 @@ pub fn parse(gpa: mem.Allocator, args: []const []const u8) CliArgs {
 
 const main_help =
     \\Run the given .roc file
-    \\You can use one of the SUBCOMMANDS below to do something else!
+    \\You can use one of the COMMANDS below to do something else!
     \\
     \\Usage: roc [OPTIONS] [ROC_FILE] [ARGS_FOR_APP]...
     \\       roc <COMMAND>
@@ -125,7 +129,7 @@ const main_help =
     \\  format           Format a .roc file or the .roc files contained in a directory using standard Roc formatting
     \\  version          Print the Roc compiler’s version
     \\  check            Check the code for problems, but don’t build or run it
-    \\  docs             Generate documentation for a Roc package
+    \\  docs             Generate documentation for a Roc package or platform
     \\  help             Print this message
     \\  licenses         Prints license info for Roc as well as attributions to other projects used by Roc
     \\
