@@ -166,33 +166,47 @@ pub const Store = struct {
     // sub list getters //
 
     /// Given a range, get a slice of alias args from the backing array
-    pub fn getAliasArgsSlice(self: *Self, range: VarSafeList.Range) VarSafeList.Slice {
+    pub fn getAliasArgsSlice(self: *const Self, range: VarSafeList.Range) VarSafeList.Slice {
         return self.alias_args.rangeToSlice(range);
     }
 
     /// Given a range, get a slice of tuple from the backing list
-    pub fn getTupleElemsSlice(self: *Self, range: VarSafeList.Range) VarSafeList.Slice {
+    pub fn getTupleElemsSlice(self: *const Self, range: VarSafeList.Range) VarSafeList.Slice {
         return self.tuple_elems.rangeToSlice(range);
     }
 
     /// Given a range, get a slice of type from to the backing
-    pub fn getCustomTypeArgsSlice(self: *Self, range: VarSafeList.Range) VarSafeList.Slice {
+    pub fn getCustomTypeArgsSlice(self: *const Self, range: VarSafeList.Range) VarSafeList.Slice {
         return self.custom_type_args.rangeToSlice(range);
     }
 
     /// Given a range, get a slice of func from the backing list
-    pub fn getFuncArgsSlice(self: *Self, range: VarSafeList.Range) VarSafeList.Slice {
+    pub fn getFuncArgsSlice(self: *const Self, range: VarSafeList.Range) VarSafeList.Slice {
         return self.func_args.rangeToSlice(range);
     }
 
     /// Given a range, get a slice of record fields from the backing array
-    pub fn getRecordFieldsSlice(self: *Self, range: RecordFieldSafeMultiList.Range) RecordFieldSafeMultiList.Slice {
+    pub fn getRecordFieldsSlice(self: *const Self, range: RecordFieldSafeMultiList.Range) RecordFieldSafeMultiList.Slice {
         return self.record_fields.rangeToSlice(range);
     }
 
     /// Given a range, get a slice of tags from the backing array
-    pub fn getTagsSlice(self: *Self, range: TagSafeMultiList.Range) TagSafeMultiList.Slice {
+    pub fn getTagsSlice(self: *const Self, range: TagSafeMultiList.Range) TagSafeMultiList.Slice {
         return self.tags.rangeToSlice(range);
+    }
+
+    /// Given a range, get a slice of tag args from the backing array
+    pub fn getTagArgsSlice(self: *const Self, range: VarSafeList.Range) VarSafeList.Slice {
+        return self.tag_args.rangeToSlice(range);
+    }
+
+    // mark & rank //
+
+    /// Set the mark for a descriptor
+    pub fn setDescMark(self: *Self, desc_idx: DescStore.Idx, mark: Mark) void {
+        var desc = self.descs.get(desc_idx);
+        desc.mark = mark;
+        self.descs.set(desc_idx, desc);
     }
 
     // resolvers //
@@ -316,6 +330,24 @@ pub const Store = struct {
         return self.descs.get(desc_idx);
     }
 
+    const Error = error{VarNotRoot};
+
+    /// Set a root var to be the specified content
+    /// Used in tests
+    pub fn setRootVarContent(self: *Self, var_: Var, content: Content) error{VarNotRoot}!void {
+        const slot = self.slots.get(Self.varToSlotIdx(var_));
+        switch (slot) {
+            .root => |desc_idx| {
+                var desc = self.descs.get(desc_idx);
+                desc.content = content;
+                self.descs.set(desc_idx, desc);
+            },
+            .redirect => {
+                return error.VarNotRoot;
+            },
+        }
+    }
+
     // helpers //
 
     fn varToSlotIdx(var_: Var) SlotStore.Idx {
@@ -400,8 +432,12 @@ const DescStore = struct {
     }
 
     /// A type-safe index into the store
+    /// This type is made public below
     const Idx = enum(u32) { _ };
 };
+
+/// An index into the desc store
+pub const DescStoreIdx = DescStore.Idx;
 
 // path compression
 
