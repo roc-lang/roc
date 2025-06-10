@@ -401,12 +401,13 @@ const SlotStore = struct {
 const DescStore = struct {
     const Self = @This();
 
-    backing: std.ArrayListUnmanaged(Desc),
+    backing: std.MultiArrayList(Desc),
 
     /// Init & allocated memory
     fn init(gpa: std.mem.Allocator, capacity: usize) Self {
-        const arr_list = std.ArrayListUnmanaged(Desc).initCapacity(gpa, capacity) catch |err| exitOnOutOfMemory(err);
-        return .{ .backing = arr_list };
+        var arr = std.MultiArrayList(Desc){};
+        arr.ensureUnusedCapacity(gpa, capacity) catch |err| exitOnOutOfMemory(err);
+        return .{ .backing = arr };
     }
 
     /// Deinit & free allocated memory
@@ -416,19 +417,19 @@ const DescStore = struct {
 
     /// Insert a value into the store
     fn insert(self: *Self, gpa: std.mem.Allocator, typ: Desc) Idx {
-        const idx: Idx = @enumFromInt(self.backing.items.len);
+        const idx: Idx = @enumFromInt(self.backing.len);
         self.backing.append(gpa, typ) catch |err| exitOnOutOfMemory(err);
         return idx;
     }
 
     /// Set a value in the store
     fn set(self: *Self, idx: Idx, val: Desc) void {
-        self.backing.items[@intFromEnum(idx)] = val;
+        self.backing.set(@intFromEnum(idx), val);
     }
 
     /// Get a value from the store
     fn get(self: *const Self, idx: Idx) Desc {
-        return self.backing.items[@intFromEnum(idx)];
+        return self.backing.get(@intFromEnum(idx));
     }
 
     /// A type-safe index into the store
