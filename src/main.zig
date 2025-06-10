@@ -5,44 +5,19 @@
 const std = @import("std");
 const fmt = @import("fmt.zig");
 const base = @import("base.zig");
-const cli = @import("cli.zig");
 const collections = @import("collections.zig");
 const coordinate = @import("coordinate.zig");
 const problem_mod = @import("problem.zig");
 const tracy = @import("tracy.zig");
 const Filesystem = @import("coordinate/Filesystem.zig");
+const cli_args = @import("cli_args.zig");
 
-const RocCmd = cli.RocCmd;
-const RocOpt = cli.RocOpt;
 const Problem = problem_mod.Problem;
 const Allocator = std.mem.Allocator;
 const exitOnOom = collections.utils.exitOnOom;
 const fatal = collections.utils.fatal;
 
 const legalDetailsFileContent = @embedFile("legal_details");
-
-const usage =
-    \\Usage:
-    \\
-    \\  roc [command] [options] [roc_file] [args]
-    \\
-    \\Commands:
-    \\
-    \\  run             Run a roc app
-    \\  build           Build a binary from the given .roc file, but don't run it
-    \\  test            Run all top-level `expect`s in a main module and any modules it imports
-    \\  repl            Launch the interactive Read Eval Print Loop (REPL)
-    \\  format          Format a .roc file or the .roc files contained in a directory using standard Roc formatting
-    \\  version         Print the Roc compiler’s version, which is currently built from commit 90db3b2db0, committed at 2025-01-28 18:26:51 UTC
-    \\  check           Check the code for problems, but don’t build or run it
-    \\  docs            Generate documentation for a Roc package
-    \\  glue            Generate glue code between a platform's Roc API and its host language
-    \\  licenses        Prints license info for Roc as well as attributions to other projects used by Roc.
-    \\
-    \\General Options:
-    \\
-    \\ -h, --help       Print usage
-;
 
 /// The CLI entrypoint for the Roc compiler.
 pub fn main() !void {
@@ -71,87 +46,65 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    const stdout = std.io.getStdOut().writer();
     const stderr = std.io.getStdErr().writer();
-    if (args.len <= 1) {
-        try stderr.print("{s}", .{usage});
-        fatal("expected command argument", .{});
-    }
-
-    const cmd = args[1];
-
-    if (RocCmd.parse(cmd)) |roc_command| {
-        const parsed_opt = try RocOpt.parse(args[2..]);
-        const opt = parsed_opt.opt;
-        const cmd_args = args[(2 + parsed_opt.next_index)..];
-
-        switch (roc_command) {
-            .roc_run => try rocRun(gpa, opt, cmd_args),
-            .roc_build => try rocBuild(gpa, opt, cmd_args),
-            .roc_test => try rocTest(gpa, opt, cmd_args),
-            .roc_repl => try rocRepl(gpa, opt, cmd_args),
-            .roc_format => try rocFormat(gpa, arena, cmd_args),
-            .roc_version => try rocVersion(gpa, cmd_args),
-            .roc_check => rocCheck(gpa, opt, cmd_args),
-            .roc_docs => try rocDocs(gpa, opt, cmd_args),
-            .roc_glue => try rocGlue(gpa, opt, cmd_args),
-            .roc_help => try rocHelp(),
-            .roc_licenses => try rocLicenses(),
-        }
-    } else if (std.mem.eql(u8, cmd, "-h") or std.mem.eql(u8, cmd, "--help")) {
-        try rocHelp();
-    } else {
-        try stderr.print("{s}", .{usage});
-        fatal("unknown command: {s}", .{cmd});
-    }
+    const parsed_args = cli_args.parse(gpa, args[1..]);
+    defer parsed_args.deinit(gpa);
+    try switch (parsed_args) {
+        .run => |run_args| roc_run(gpa, run_args),
+        .check => |check_args| roc_check(gpa, check_args),
+        .build => |build_args| roc_build(gpa, build_args),
+        .format => |format_args| roc_format(gpa, arena, format_args),
+        .test_cmd => |test_args| roc_test(gpa, test_args),
+        .repl => roc_repl(gpa),
+        .version => roc_version(gpa),
+        .docs => |docs_args| roc_docs(gpa, docs_args),
+        .help => |help_message| stdout.writeAll(help_message),
+        .licenses => stdout.writeAll(legalDetailsFileContent),
+        .problem => |problem| {
+            try switch (problem) {
+                .missing_flag_value => |details| stderr.print("Error: no value was supplied for {s}\n", .{details.flag}),
+                .unexpected_argument => |details| stderr.print("Error: roc {s} received an unexpected argument: `{s}`\n", .{ details.cmd, details.arg }),
+                .invalid_flag_value => |details| stderr.print("Error: `{s}` is not a valid value for {s}. The valid options are {s}\n", .{ details.value, details.flag, details.valid_options }),
+            };
+            std.process.exit(1);
+        },
+    };
 }
 
-fn rocRun(gpa: Allocator, opt: RocOpt, args: []const []const u8) !void {
+fn roc_run(gpa: Allocator, args: cli_args.RunArgs) void {
     _ = gpa;
-
-    std.debug.print("TODO roc run\n{}\n{s}\n\n", .{ opt, args });
-
-    // TODO - check if file exists
-
-    fatal("not implemented", .{});
+    _ = args;
+    fatal("run not implemented", .{});
 }
 
-fn rocBuild(gpa: Allocator, opt: RocOpt, args: []const []const u8) !void {
+fn roc_build(gpa: Allocator, args: cli_args.BuildArgs) void {
     _ = gpa;
+    _ = args;
 
-    std.debug.print("TODO roc build\n{}\n{s}\n\n", .{ opt, args });
-
-    fatal("not implemented", .{});
+    fatal("build not implemented", .{});
 }
 
-fn rocTest(gpa: Allocator, opt: RocOpt, args: []const []const u8) !void {
+fn roc_test(gpa: Allocator, args: cli_args.TestArgs) !void {
     _ = gpa;
-
-    std.debug.print("TODO roc test\n{}\n{s}\n\n", .{ opt, args });
-
-    fatal("not implemented", .{});
+    _ = args;
+    fatal("test not implemented", .{});
 }
 
-fn rocRepl(gpa: Allocator, opt: RocOpt, args: []const []const u8) !void {
+fn roc_repl(gpa: Allocator) !void {
     _ = gpa;
-
-    std.debug.print("TODO roc repl\n{}\n{s}\n\n", .{ opt, args });
-
-    fatal("not implemented", .{});
+    fatal("repl not implemented", .{});
 }
 
 /// Reads, parses, formats, and overwrites all Roc files at the given paths.
 /// Recurses into directories to search for Roc files.
-fn rocFormat(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
+fn roc_format(gpa: Allocator, arena: Allocator, args: cli_args.FormatArgs) !void {
     var timer = try std.time.Timer.start();
     var count = fmt.SuccessFailCount{ .success = 0, .failure = 0 };
-    if (args.len > 0) {
-        for (args) |arg| {
-            const inner_count = try fmt.formatPath(gpa, arena, std.fs.cwd(), arg);
-            count.success += inner_count.success;
-            count.failure += inner_count.failure;
-        }
-    } else {
-        count = try fmt.formatPath(gpa, arena, std.fs.cwd(), "main.roc");
+    for (args.paths) |path| {
+        const inner_count = try fmt.formatPath(gpa, arena, std.fs.cwd(), path);
+        count.success += inner_count.success;
+        count.failure += inner_count.failure;
     }
     const elapsed = timer.read() / std.time.ns_per_ms;
     try std.io.getStdOut().writer().print("Successfully formatted {} files\n", .{count.success});
@@ -161,22 +114,13 @@ fn rocFormat(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
     try std.io.getStdOut().writer().print("Took {} ms.\n", .{elapsed});
 }
 
-fn rocVersion(gpa: Allocator, args: []const []const u8) !void {
+fn roc_version(gpa: Allocator) !void {
     _ = gpa;
-
-    std.debug.print("TODO roc version\n{s}\n\n", .{args});
-
-    fatal("not implemented", .{});
+    fatal("version not implemented", .{});
 }
 
-fn rocCheck(gpa: Allocator, opt: RocOpt, args: []const []const u8) void {
-    _ = opt;
-
-    const filename = if (args.len == 1) args[0] else {
-        fatal("The check command expects a single filename as an argument.\n", .{});
-    };
-
-    switch (coordinate.typecheckModule(gpa, Filesystem.default(), filename)) {
+fn roc_check(gpa: Allocator, args: cli_args.CheckArgs) void {
+    switch (coordinate.typecheckModule(gpa, Filesystem.default(), args.path)) {
         .success => |data| {
             var problems = std.ArrayList(Problem).init(gpa);
             var index_iter = data.can_irs.iterIndices();
@@ -192,33 +136,13 @@ fn rocCheck(gpa: Allocator, opt: RocOpt, args: []const []const u8) void {
             std.debug.print("{} problems found.\n", .{problems.items.len});
         },
         .err => |err| {
-            std.debug.print("Failed to check {s}:\n{}\n", .{ filename, err });
+            std.debug.print("Failed to check {s}:\n{}\n", .{ args.path, err });
         },
     }
 }
 
-fn rocDocs(allocator: Allocator, opt: RocOpt, args: []const []const u8) !void {
-    _ = allocator;
-
-    std.debug.print("TODO roc docs\n{}\n{s}\n\n", .{ opt, args });
-
-    fatal("not implemented", .{});
-}
-
-fn rocGlue(allocator: Allocator, opt: RocOpt, args: []const []const u8) !void {
-    _ = allocator;
-
-    std.debug.print("TODO roc glue\n{}\n{s}\n\n", .{ opt, args });
-
-    fatal("not implemented", .{});
-}
-
-fn rocLicenses() !void {
-    try std.io.getStdOut().writeAll(legalDetailsFileContent);
-    std.process.exit(0);
-}
-
-fn rocHelp() !void {
-    try std.io.getStdOut().writeAll(usage);
-    std.process.exit(0);
+fn roc_docs(gpa: Allocator, args: cli_args.DocsArgs) !void {
+    _ = gpa;
+    _ = args;
+    fatal("docs not implemented", .{});
 }
