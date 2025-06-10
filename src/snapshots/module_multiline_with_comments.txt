@@ -24,4 +24,6 @@ CloseSquare(5:2-5:3),EndOfFile(5:3-5:3),
 	(statements))
 ~~~FORMATTED
 NO CHANGE
+~~~CANONICALIZE
+(can_ir (top_level_defs "empty"))
 ~~~END

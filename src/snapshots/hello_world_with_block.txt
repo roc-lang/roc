@@ -56,4 +56,6 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 							(string (11:15-11:30) (string_part (11:16-11:29) "Hello, world!")))))))))
 ~~~FORMATTED
 NO CHANGE
+~~~CANONICALIZE
+(can_ir (top_level_defs "empty"))
 ~~~END

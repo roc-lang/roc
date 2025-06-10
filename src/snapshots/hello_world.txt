@@ -37,4 +37,6 @@ LowerIdent(5:1-5:6),OpAssign(5:7-5:8),OpBar(5:9-5:10),Underscore(5:10-5:11),OpBa
 					(string (5:26-5:41) (string_part (5:27-5:40) "Hello, world!")))))))
 ~~~FORMATTED
 NO CHANGE
+~~~CANONICALIZE
+(can_ir (top_level_defs "empty"))
 ~~~END

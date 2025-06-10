@@ -18,4 +18,10 @@ LowerIdent(3:1-3:4),OpAssign(3:5-3:6),LowerIdent(3:7-3:10),NoSpaceDotInt(3:10-3:
 		(decl (3:1-3:12)
 			(ident (3:1-3:4) "foo")
 			(malformed_expr (3:10-3:12) "expr_no_space_dot_int"))))
+~~~FORMATTED
+module []
+
+foo = 
+~~~CANONICALIZE
+(can_ir (top_level_defs "empty"))
 ~~~END

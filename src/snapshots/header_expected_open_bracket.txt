@@ -11,4 +11,8 @@ KwModule(1:1-1:7),EndOfFile(1:7-1:7),
 (file (1:1-1:7)
 	(malformed_header (1:7-1:7) "header_expected_open_square")
 	(statements))
+~~~FORMATTED
+
+~~~CANONICALIZE
+(can_ir (top_level_defs "empty"))
 ~~~END

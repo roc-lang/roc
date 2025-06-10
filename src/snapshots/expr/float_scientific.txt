@@ -1,0 +1,21 @@
+~~~META
+description=Scientific notation float literal
+type=expr
+~~~SOURCE
+1.23e-4
+~~~PROBLEMS
+NIL
+~~~TOKENS
+Float(1:1-1:8),EndOfFile(1:8-1:8),
+~~~PARSE
+(float (1:1-1:8) "1.23e-4")
+~~~FORMATTED
+NO CHANGE
+~~~CANONICALIZE
+(float
+	(num_var "#0")
+	(precision_var "#1")
+	(literal "1.23e-4")
+	(value "0")
+	(bound "dec"))
+~~~END

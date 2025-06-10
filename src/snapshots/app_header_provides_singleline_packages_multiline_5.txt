@@ -30,4 +30,6 @@ CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 	(statements))
 ~~~FORMATTED
 NO CHANGE
+~~~CANONICALIZE
+(can_ir (top_level_defs "empty"))
 ~~~END

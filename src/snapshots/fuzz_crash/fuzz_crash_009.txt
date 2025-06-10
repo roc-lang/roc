@@ -31,4 +31,20 @@ StringStart(6:5-6:6),StringPart(6:6-6:12),EndOfFile(6:12-6:12),
 		(decl (4:1-6:12)
 			(ident (4:1-4:4) "foo")
 			(string (6:5-6:12) (string_part (6:6-6:12) "onmo %")))))
+~~~FORMATTED
+{
+	o,
+}
+
+foo = 
+
+	"onmo %"
+~~~CANONICALIZE
+(can_ir
+	(top_level_defs
+		(def
+			(Let)
+			(pattern (2:3-2:3) (pattern_ident (ident "foo")))
+			(expr (1:1-1:1) (str "onmo %"))
+			"#0")))
 ~~~END

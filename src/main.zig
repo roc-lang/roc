@@ -125,7 +125,7 @@ fn roc_check(gpa: Allocator, args: cli_args.CheckArgs) void {
             var problems = std.ArrayList(Problem).init(gpa);
             var index_iter = data.can_irs.iterIndices();
             while (index_iter.next()) |idx| {
-                const env = &data.can_irs.getWork(idx).env;
+                const env = data.can_irs.getWork(idx).env;
                 problems.appendSlice(env.problems.items.items) catch |err| exitOnOom(err);
             }
 

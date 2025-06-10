@@ -2,9 +2,11 @@ const std = @import("std");
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const base = @import("base.zig");
-const can = @import("check/canonicalize.zig");
+const Can = @import("check/canonicalize.zig");
+const Scope = @import("check/canonicalize/Scope.zig");
 const parse = @import("check/parse.zig");
 const fmt = @import("fmt.zig");
+const types = @import("types.zig");
 
 var verbose_log: bool = false;
 var prng = std.Random.DefaultPrng.init(1234567890);
@@ -448,6 +450,35 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
     // shouldn't be required in future
     parse_ast.store.emptyScratch();
 
+    const type_store = types.Store.init(&module_env);
+
+    // Canonicalize the source code
+    // Can.IR.init takes ownership of the module_env and type_store
+    var can_ir = Can.CIR.init(module_env, type_store);
+    defer can_ir.deinit();
+
+    var scope = Scope.init(&can_ir.env, &.{}, &.{});
+    defer scope.deinit();
+
+    var can = Can.init(&can_ir, &parse_ast, &scope);
+
+    var maybe_expr_idx: ?Can.CIR.Expr.Idx = null;
+
+    switch (content.meta.node_type) {
+        .file => can.canonicalize_file(),
+        .header => {
+            // TODO: implement canonicalize_header when available
+        },
+        .expr => {
+            // For expr snapshots, just canonicalize the root expression directly
+            const expr_idx = parse.IR.NodeStore.ExprIdx{ .id = parse_ast.root_node_idx };
+            maybe_expr_idx = can.canonicalize_expr(expr_idx);
+        },
+        .statement => {
+            // TODO: implement canonicalize_statement when available
+        },
+    }
+
     // Buffer all output in memory before writing to the snapshot file
     var buffer = std.ArrayList(u8).init(gpa);
     defer buffer.deinit();
@@ -471,11 +502,10 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
     }
 
     // Write out any PROBLEMS
-    const has_problems = module_env.problems.len() > 0;
     {
         try writer.writeAll(Section.PROBLEMS);
         try writer.writeAll("\n");
-        if (has_problems) {
+        if (module_env.problems.len() > 0) {
             var iter = module_env.problems.iterIndices();
             while (iter.next()) |problem_idx| {
                 const problem = module_env.problems.get(problem_idx);
@@ -543,7 +573,7 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
     }
 
     // Write FORMAT SECTION
-    if (!has_problems) {
+    {
         var formatted = std.ArrayList(u8).init(gpa);
         defer formatted.deinit();
         switch (content.meta.node_type) {
@@ -574,16 +604,11 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
     }
 
     // Write CANONICALIZE SECTION
-    if (content.has_canonicalize) {
-        var can_ir = can.IR.init(gpa);
-        defer can_ir.deinit();
-        parse_ast.store.emptyScratch();
-        can.canonicalize(&can_ir, &parse_ast);
-
+    {
         var canonicalized = std.ArrayList(u8).init(gpa);
         defer canonicalized.deinit();
 
-        try can_ir.toSExprStr(&module_env, canonicalized.writer().any());
+        try can_ir.toSExprStr(canonicalized.writer().any(), maybe_expr_idx, line_starts, content.source);
 
         try writer.writeAll(Section.CANONICALIZE);
         try writer.writeAll("\n");

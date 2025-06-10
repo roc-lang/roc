@@ -23,4 +23,6 @@ platform "foo"
 	exposes []
 	packages {}
 	provides []
+~~~CANONICALIZE
+(can_ir (top_level_defs "empty"))
 ~~~END

@@ -11,4 +11,8 @@ LowerIdent(1:1-1:5),EndOfFile(1:5-1:5),
 (file (1:1-1:5)
 	(malformed_header (1:1-1:5) "missing_header")
 	(statements))
+~~~FORMATTED
+
+~~~CANONICALIZE
+(can_ir (top_level_defs "empty"))
 ~~~END

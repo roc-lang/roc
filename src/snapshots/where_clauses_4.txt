@@ -38,4 +38,6 @@ KwWhere(6:2-6:7),LowerIdent(6:8-6:9),NoSpaceDotUpperIdent(6:9-6:16),EndOfFile(6:
 					(ty_var (5:39-5:40) "a"))))))
 ~~~FORMATTED
 NO CHANGE
+~~~CANONICALIZE
+(can_ir (top_level_defs "empty"))
 ~~~END

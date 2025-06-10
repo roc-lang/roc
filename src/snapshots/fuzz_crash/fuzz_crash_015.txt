@@ -26,4 +26,11 @@ Int(4:1-4:3),EndOfFile(4:3-4:3),
 		(int (2:1-2:4) "0_0")
 		(malformed_expr (3:4-3:6) "expr_no_space_dot_int")
 		(int (4:1-4:3) "0_")))
+~~~FORMATTED
+
+0_0
+
+0_
+~~~CANONICALIZE
+(can_ir (top_level_defs "empty"))
 ~~~END

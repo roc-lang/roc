@@ -39,4 +39,6 @@ foo = if true A
 	else {
 		B
 	}
+~~~CANONICALIZE
+(can_ir (top_level_defs "empty"))
 ~~~END

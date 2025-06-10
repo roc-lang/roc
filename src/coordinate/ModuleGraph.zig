@@ -7,9 +7,11 @@ const base = @import("../base.zig");
 const utils = @import("utils.zig");
 const cache = @import("../cache.zig");
 const collections = @import("../collections.zig");
-const can = @import("../check/canonicalize.zig");
+const Can = @import("../check/canonicalize.zig");
+const Scope = @import("../check/canonicalize/Scope.zig");
 const parse = @import("../check/parse.zig");
 const Filesystem = @import("../coordinate/Filesystem.zig");
+const types = @import("../types.zig");
 
 const Package = base.Package;
 const ModuleImport = base.ModuleImport;
@@ -19,7 +21,7 @@ const exitOnOom = collections.utils.exitOnOom;
 
 const Self = @This();
 
-modules: std.ArrayList(ModuleWork(can.IR)),
+modules: std.ArrayList(ModuleWork(Can.CIR)),
 adjacencies: std.ArrayList(std.ArrayList(usize)),
 gpa: std.mem.Allocator,
 
@@ -49,7 +51,7 @@ pub fn fromPackages(
     package_store: *const Package.Store,
 ) ConstructResult {
     var graph = Self{
-        .modules = std.ArrayList(ModuleWork(can.IR)).init(gpa),
+        .modules = std.ArrayList(ModuleWork(Can.CIR)).init(gpa),
         .adjacencies = std.ArrayList(std.ArrayList(usize)).init(gpa),
         .gpa = gpa,
     };
@@ -74,7 +76,7 @@ pub fn fromPackages(
                 } };
             };
 
-            graph.modules.append(ModuleWork(can.IR){
+            graph.modules.append(ModuleWork(Can.CIR){
                 .package_idx = @enumFromInt(package_idx),
                 .module_idx = @enumFromInt(module_idx),
                 .work = can_ir,
@@ -93,7 +95,7 @@ fn loadOrCompileCanIr(
     relpath: []const u8,
     fs: Filesystem,
     gpa: std.mem.Allocator,
-) Filesystem.ReadError!can.IR {
+) Filesystem.ReadError!Can.CIR {
     // TODO: find a way to provide the current Roc compiler version
     const current_roc_version = "";
     const abs_file_path = std.fs.path.join(gpa, &.{ absdir, relpath }) catch |err| exitOnOom(err);
@@ -105,56 +107,66 @@ fn loadOrCompileCanIr(
     const cache_lookup = cache.getCanIrForHashAndRocVersion(&hash_of_contents, current_roc_version, fs, gpa);
 
     return if (cache_lookup) |ir| ir else blk: {
-        var can_ir = can.IR.init(gpa);
-        var parse_ir = parse.parse(&can_ir.env, contents);
+        var module_env = base.ModuleEnv.init(gpa);
+        const type_store = types.Store.init(&module_env);
+
+        var parse_ir = parse.parse(&module_env, contents);
         parse_ir.store.emptyScratch();
-        can.canonicalize(&can_ir, &parse_ir);
+
+        var can_ir = Can.CIR.init(module_env, type_store);
+        var scope = Scope.init(&can_ir.env, &.{}, &.{});
+        defer scope.deinit();
+        var can = Can.init(&can_ir, &parse_ir, &scope);
+        can.canonicalize_file();
 
         break :blk can_ir;
     };
 }
 
 fn collectAdjacencies(graph: *Self, package_store: *const Package.Store) void {
-    for (graph.modules.items, 0..) |metadata, metadata_index| {
-        const import_store = metadata.work.imports;
-        const package = package_store.packages.get(metadata.package_idx);
+    _ = graph;
+    _ = package_store;
+    @panic("TODO fix me");
+    // for (graph.modules.items, 0..) |metadata, metadata_index| {
+    //     const import_store = metadata.work.imports;
+    //     const package = package_store.packages.get(metadata.package_idx);
 
-        import_loop: for (import_store.imports.items.items) |*import| {
-            const from_package_idx = if (import.package_shorthand) |imp_shorthand| shorthand_blk: {
-                for (package.dependencies.items.items) |dependency| {
-                    if (std.mem.eql(u8, dependency.shorthand, imp_shorthand)) {
-                        switch (dependency.package) {
-                            .idx => |idx| break :shorthand_blk idx,
-                            .err => continue :import_loop,
-                        }
-                    }
-                }
+    //     import_loop: for (import_store.imports.items.items) |*import| {
+    //         const from_package_idx = if (import.package_shorthand) |imp_shorthand| shorthand_blk: {
+    //             for (package.dependencies.items.items) |dependency| {
+    //                 if (std.mem.eql(u8, dependency.shorthand, imp_shorthand)) {
+    //                     switch (dependency.package) {
+    //                         .idx => |idx| break :shorthand_blk idx,
+    //                         .err => continue :import_loop,
+    //                     }
+    //                 }
+    //             }
 
-                continue :import_loop;
-            } else metadata.package_idx;
+    //             continue :import_loop;
+    //         } else metadata.package_idx;
 
-            const from_package = package_store.packages.get(from_package_idx);
-            const from_package_modules = from_package.modules;
+    //         const from_package = package_store.packages.get(from_package_idx);
+    //         const from_package_modules = from_package.modules;
 
-            for (from_package_modules.items.items, @as(u32, 0)..) |from_module, from_module_index| {
-                const from_module_idx: Package.Module.Idx = @enumFromInt(from_module_index);
-                if (!std.mem.eql(u8, from_module.name, import.name)) continue :import_loop;
+    //         for (from_package_modules.items.items, @as(u32, 0)..) |from_module, from_module_index| {
+    //             const from_module_idx: Package.Module.Idx = @enumFromInt(from_module_index);
+    //             if (!std.mem.eql(u8, from_module.name, import.name)) continue :import_loop;
 
-                import.resolved = ModuleImport.Resolved{
-                    .package_idx = from_package_idx,
-                    .module_idx = from_module_idx,
-                };
+    //             import.resolved = ModuleImport.Resolved{
+    //                 .package_idx = from_package_idx,
+    //                 .module_idx = from_module_idx,
+    //             };
 
-                // TODO: find out what we need to store to avoid needing this expensive loop
-                for (graph.modules.items, 0..) |search_metadata, search_index| {
-                    if (search_metadata.package_idx != from_package_idx) continue;
-                    if (search_metadata.module_idx != from_module_idx) continue;
+    //             // TODO: find out what we need to store to avoid needing this expensive loop
+    //             for (graph.modules.items, 0..) |search_metadata, search_index| {
+    //                 if (search_metadata.package_idx != from_package_idx) continue;
+    //                 if (search_metadata.module_idx != from_module_idx) continue;
 
-                    graph.adjacencies.items[metadata_index].append(search_index) catch |err| exitOnOom(err);
-                }
-            }
-        }
-    }
+    //                 graph.adjacencies.items[metadata_index].append(search_index) catch |err| exitOnOom(err);
+    //             }
+    //         }
+    //     }
+    // }
 }
 
 const Attributes = struct {
@@ -172,7 +184,7 @@ pub const Sccs = struct {
 
 /// The result of an attempt to put modules in compilation order.
 pub const OrderingResult = union(enum) {
-    ordered: ModuleWork(can.IR).Store,
+    ordered: ModuleWork(Can.CIR).Store,
     found_cycle: std.ArrayList(ModuleWork(void)),
 };
 
@@ -186,7 +198,7 @@ pub fn putModulesInCompilationOrder(
     sccs: *const Sccs,
     gpa: std.mem.Allocator,
 ) OrderingResult {
-    var modules = std.ArrayList(ModuleWork(can.IR)).init(gpa);
+    var modules = std.ArrayList(ModuleWork(Can.CIR)).init(gpa);
     errdefer modules.deinit();
 
     var group_index = sccs.groups.items.len;
@@ -214,7 +226,7 @@ pub fn putModulesInCompilationOrder(
         }
     }
 
-    return .{ .ordered = ModuleWork(can.IR).Store.fromCanIrs(gpa, modules.items) };
+    return .{ .ordered = ModuleWork(Can.CIR).Store.fromCanIrs(gpa, modules.items) };
 }
 
 /// Find the SCCs for a [ModuleGraph] to facilitate ordering modules in a dependency-first

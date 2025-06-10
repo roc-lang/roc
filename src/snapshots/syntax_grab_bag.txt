@@ -983,4 +983,6 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 						(ident (206:10-206:13) "" "foo")))))))
 ~~~FORMATTED
 NO CHANGE
+~~~CANONICALIZE
+(can_ir (top_level_defs "empty"))
 ~~~END

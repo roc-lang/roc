@@ -1,0 +1,21 @@
+~~~META
+description=Large integer literal
+type=expr
+~~~SOURCE
+999999999999999999999999999999
+~~~PROBLEMS
+NIL
+~~~TOKENS
+Int(1:1-1:31),EndOfFile(1:31-1:31),
+~~~PARSE
+(int (1:1-1:31) "999999999999999999999999999999")
+~~~FORMATTED
+NO CHANGE
+~~~CANONICALIZE
+(int
+	(num_var "#0")
+	(precision_var "#1")
+	(literal "999999999999999999999999999999")
+	(value "TODO")
+	(bound "i128"))
+~~~END

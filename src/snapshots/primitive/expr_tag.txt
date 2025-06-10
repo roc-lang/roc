@@ -19,4 +19,17 @@ LowerIdent(2:1-2:4),OpAssign(2:5-2:6),UpperIdent(2:7-2:15),EndOfFile(2:15-2:15),
 			(tag (2:7-2:15) "FortyTwo"))))
 ~~~FORMATTED
 NO CHANGE
+~~~CANONICALIZE
+(can_ir
+	(top_level_defs
+		(def
+			(Let)
+			(pattern (1:6-1:6) (pattern_ident (ident "foo")))
+			(expr (1:1-1:1)
+				(tag
+					(tag_union_var "#0")
+					(ext_var "#0")
+					(name "FortyTwo")
+					(args "TODO")))
+			"#2")))
 ~~~END

@@ -1,0 +1,20 @@
+~~~META
+description=Field access expression simple expression
+type=expr
+~~~SOURCE
+person.name
+~~~PROBLEMS
+NIL
+~~~TOKENS
+LowerIdent(1:1-1:7),NoSpaceDotLowerIdent(1:7-1:12),EndOfFile(1:12-1:12),
+~~~PARSE
+(field_access (1:1-1:12)
+	(binop (1:1-1:12)
+		"person"
+		(ident (1:1-1:7) "" "person")
+		(ident (1:7-1:12) "" ".name")))
+~~~FORMATTED
+NO CHANGE
+~~~CANONICALIZE
+(can_ir (top_level_defs "empty"))
+~~~END

@@ -40,7 +40,7 @@ pub const TypecheckResult = union(enum) {
     pub const Success = struct {
         packages: Package.Store,
         main_module_idx: ModuleWorkIdx,
-        can_irs: ModuleWork(can.IR).Store,
+        can_irs: ModuleWork(can.CIR).Store,
         resolve_irs: ModuleWork(resolve.IR).Store,
         type_stores: ModuleWork(types.Store).Store,
     };
