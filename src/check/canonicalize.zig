@@ -208,10 +208,10 @@ fn bringImportIntoScope(
                 if (self.parse_ir.tokens.resolveIdentifier(ident.ident)) |ident_idx| {
                     if (ident.as) |as_| {
                         if (self.parse_ir.tokens.resolveIdentifier(as_)) |alias_idx| {
-                            _ = self.scope.levels.introduce(.alias, .{ .scope_name = ident_idx, .alias = alias_idx });
+                            _ = self.scope.levels.introduce(self.can_ir.env.gpa, &self.can_ir.env.idents, .alias, .{ .scope_name = ident_idx, .alias = alias_idx });
                         }
                     } else {
-                        _ = self.scope.levels.introduce(.ident, .{ .scope_name = ident_idx, .ident = ident_idx });
+                        _ = self.scope.levels.introduce(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, .{ .scope_name = ident_idx, .ident = ident_idx });
                     }
                 }
             },
@@ -346,7 +346,7 @@ pub fn canonicalize_expr(
         },
         .ident => |e| {
             if (self.parse_ir.tokens.resolveIdentifier(e.token)) |ident| {
-                switch (self.scope.levels.lookup(.ident, ident)) {
+                switch (self.scope.levels.lookup(&self.can_ir.env.idents, .ident, ident)) {
                     .InScope, .NotInScope => {
                         // Create lookup expression even if not in scope
                         // The lookup function already recorded the problem
@@ -880,7 +880,7 @@ fn canonicalize_pattern(
         .ident => |e| {
             if (self.parse_ir.tokens.resolveIdentifier(e.ident_tok)) |ident| {
                 // Introduce the identifier into scope
-                _ = self.scope.levels.introduce(.ident, .{ .scope_name = ident, .ident = ident });
+                _ = self.scope.levels.introduce(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, .{ .scope_name = ident, .ident = ident });
 
                 const ident_pattern = CIR.Pattern{
                     .assign = ident,

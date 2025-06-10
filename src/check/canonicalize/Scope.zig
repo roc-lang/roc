@@ -15,7 +15,6 @@ const Scope = @This();
 
 const TagMap = std.AutoHashMapUnmanaged(Ident.Idx, Alias.Idx);
 
-env: *base.ModuleEnv,
 /// The custom alias that this file is centered around, if one has been defined.
 focused_custom_alias: ?Alias.Idx = null,
 // TODO: handle renaming, e.g. `CustomType := [ExportedName as LocalName]`
@@ -25,23 +24,26 @@ levels: Levels,
 
 /// Initialize a new scope.
 pub fn init(
-    env: *base.ModuleEnv,
+    gpa: std.mem.Allocator,
+    ident_store: *const Ident.Store,
     builtin_aliases: []const struct { alias: Ident.Idx, name: Ident.Idx },
     builtin_idents: []const Ident.Idx,
 ) Scope {
-    var scope = Scope{ .env = env, .levels = Levels{ .env = env } };
+    var scope = Scope{
+        .levels = Levels{},
+    };
 
-    scope.levels.enter();
+    scope.levels.enter(gpa);
 
     for (builtin_idents) |builtin_ident| {
-        _ = scope.levels.introduce(.ident, .{
+        _ = scope.levels.introduce(gpa, ident_store, .ident, .{
             .scope_name = builtin_ident,
             .ident = builtin_ident,
         });
     }
 
     for (builtin_aliases) |builtin_alias| {
-        _ = scope.levels.introduce(.alias, .{
+        _ = scope.levels.introduce(gpa, ident_store, .alias, .{
             .scope_name = builtin_alias.name,
             .alias = builtin_alias.alias,
         });
@@ -51,11 +53,11 @@ pub fn init(
 }
 
 /// Deinitialize a scope's memory
-pub fn deinit(self: *Scope) void {
+pub fn deinit(self: *Scope, gpa: std.mem.Allocator) void {
     // if (self.custom_tags.size > 0) {
     //     self.custom_tags.deinit(self.env.gpa);
     // }
-    Levels.deinit(&self.levels);
+    Levels.deinit(gpa, &self.levels);
 }
 
 /// Generates a unique ident like "1" or "5" in the home module.
@@ -146,24 +148,23 @@ pub const Level = struct {
 
 /// todo
 pub const Levels = struct {
-    env: *base.ModuleEnv,
     levels: std.ArrayListUnmanaged(Level) = .{},
     /// todo
-    pub fn deinit(self: *Levels) void {
+    pub fn deinit(gpa: std.mem.Allocator, self: *Levels) void {
         for (0..self.levels.items.len) |i| {
             var level = &self.levels.items[i];
-            level.deinit(self.env.gpa);
+            level.deinit(gpa);
         }
-        self.levels.deinit(self.env.gpa);
+        self.levels.deinit(gpa);
     }
     /// todo
-    pub fn enter(self: *Levels) void {
-        self.levels.append(self.env.gpa, .{}) catch |err| exitOnOom(err);
+    pub fn enter(self: *Levels, gpa: std.mem.Allocator) void {
+        self.levels.append(gpa, .{}) catch |err| exitOnOom(err);
     }
     /// todo
-    pub fn exit(self: *Levels) void {
+    pub fn exit(self: *Levels, gpa: std.mem.Allocator) void {
         if (self.levels.items.len <= 1) {
-            self.env.problems.append(self.env.gpa, Problem.Compiler.make(.{
+            self.env.problems.append(gpa, Problem.Compiler.make(.{
                 .canonicalize = .exited_top_scope_level,
             })) catch |err| exitOnOom(err);
             return;
@@ -177,6 +178,7 @@ pub const Levels = struct {
 
     fn contains(
         self: *Levels,
+        ident_store: *const Ident.Store,
         comptime item_kind: Level.ItemKind,
         name: Level.ItemName(item_kind),
     ) ?Level.Item(item_kind) {
@@ -184,12 +186,12 @@ pub const Levels = struct {
         while (items_in_scope.nextData()) |item_in_scope| {
             switch (item_kind) {
                 .alias => {
-                    if (self.env.idents.identsHaveSameText(name, item_in_scope.alias)) {
+                    if (ident_store.identsHaveSameText(name, item_in_scope.alias)) {
                         return item_in_scope;
                     }
                 },
                 .ident => {
-                    if (self.env.idents.identsHaveSameText(name, item_in_scope.ident)) {
+                    if (ident_store.identsHaveSameText(name, item_in_scope.ident)) {
                         return item_in_scope;
                     }
                 },
@@ -202,61 +204,68 @@ pub const Levels = struct {
     /// todo
     pub fn lookup(
         self: *Levels,
+        ident_store: *const Ident.Store,
         comptime item_kind: Level.ItemKind,
         name: Level.ItemName(item_kind),
     ) Contains(item_kind) {
-        if (self.contains(item_kind, name)) |_| {
+        if (self.contains(ident_store, item_kind, name)) |_| {
             return Contains(item_kind){ .InScope = name };
         }
 
-        const problem = switch (item_kind) {
-            .ident => blk: {
-                var all_idents_in_scope = self.iter(.ident);
-                const options = self.env.ident_ids_for_slicing.extendFromIter(self.env.gpa, &all_idents_in_scope);
+        // TODO move problem reporting to callers
+        // const problem = switch (item_kind) {
+        //     .ident => blk: {
+        //         var all_idents_in_scope = self.iter(.ident);
+        //         const options = self.env.ident_ids_for_slicing.extendFromIter(gpa, &all_idents_in_scope);
 
-                break :blk Problem.Canonicalize.make(.{ .IdentNotInScope = .{
-                    .ident = name,
-                    .suggestions = options,
-                } });
-            },
-            .alias => blk: {
-                var all_aliases_in_scope = self.levels.iter(.alias);
-                const options = self.env.ident_ids_for_slicing.extendFromIter(self.env.gpa, &all_aliases_in_scope);
+        //         break :blk Problem.Canonicalize.make(.{ .IdentNotInScope = .{
+        //             .ident = name,
+        //             .suggestions = options,
+        //         } });
+        //     },
+        //     .alias => blk: {
+        //         var all_aliases_in_scope = self.levels.iter(.alias);
+        //         const options = self.env.ident_ids_for_slicing.extendFromIter(gpa, &all_aliases_in_scope);
 
-                break :blk Problem.Canonicalize.make(.{ .AliasNotInScope = .{
-                    .name = name,
-                    .suggestions = options,
-                } });
-            },
-        };
+        //         break :blk Problem.Canonicalize.make(.{ .AliasNotInScope = .{
+        //             .name = name,
+        //             .suggestions = options,
+        //         } });
+        //     },
+        // };
 
-        _ = self.env.problems.append(self.env.gpa, problem);
+        // _ = self.env.problems.append(gpa, problem);
+
         return Contains(item_kind).NotPresent;
     }
     /// todo
     pub fn introduce(
         self: *Levels,
+        gpa: std.mem.Allocator,
+        ident_store: *const Ident.Store,
         comptime item_kind: Level.ItemKind,
         scope_item: Level.Item(item_kind),
     ) Level.Item(item_kind) {
-        if (self.contains(item_kind, scope_item.scope_name)) |item_in_scope| {
-            const can_problem: Problem.Canonicalize = switch (item_kind) {
-                .ident => .{ .IdentAlreadyInScope = .{
-                    .original_ident = item_in_scope.scope_name,
-                    .shadow = scope_item.scope_name,
-                } },
-                .alias => .{ .AliasAlreadyInScope = .{
-                    .original_name = item_in_scope.scope_name,
-                    .shadow = scope_item.scope_name,
-                } },
-            };
+        if (self.contains(ident_store, item_kind, scope_item.scope_name)) |item_in_scope| {
+            _ = item_in_scope;
+            // TODO move problem reporting to callers
+            // const can_problem: Problem.Canonicalize = switch (item_kind) {
+            //     .ident => .{ .IdentAlreadyInScope = .{
+            //         .original_ident = item_in_scope.scope_name,
+            //         .shadow = scope_item.scope_name,
+            //     } },
+            //     .alias => .{ .AliasAlreadyInScope = .{
+            //         .original_name = item_in_scope.scope_name,
+            //         .shadow = scope_item.scope_name,
+            //     } },
+            // };
 
-            _ = self.env.problems.append(self.env.gpa, Problem.Canonicalize.make(can_problem));
+            // _ = self.env.problems.append(self.env.gpa, Problem.Canonicalize.make(can_problem));
             // TODO: is this correct for shadows?
             return scope_item;
         }
 
-        self.levels.items[self.levels.items.len -| 1].append(self.env.gpa, item_kind, scope_item);
+        self.levels.items[self.levels.items.len -| 1].append(gpa, item_kind, scope_item);
 
         return scope_item;
     }

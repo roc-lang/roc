@@ -457,8 +457,8 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
     var can_ir = Can.CIR.init(module_env, type_store);
     defer can_ir.deinit();
 
-    var scope = Scope.init(&can_ir.env, &.{}, &.{});
-    defer scope.deinit();
+    var scope = Scope.init(can_ir.env.gpa, &can_ir.env.idents, &.{}, &.{});
+    defer scope.deinit(can_ir.env.gpa);
 
     var can = Can.init(&can_ir, &parse_ast, &scope);
 
