@@ -9,7 +9,7 @@ const problem = @import("../../problem.zig");
 const collections = @import("../../collections.zig");
 const Alias = @import("./Alias.zig");
 const sexpr = @import("../../base/sexpr.zig");
-const exitOnOom = @import("../../collections/utils.zig").exitOnOom;
+const exitOnOom = collections.utils.exitOnOom;
 const Scratch = base.Scratch;
 const DataSpan = base.DataSpan;
 const Ident = base.Ident;
@@ -30,6 +30,7 @@ ingested_files: IngestedFile.List,
 imports: ModuleImport.Store,
 type_store: types.Store,
 top_level_defs: Def.Span,
+diagnostics: std.ArrayListUnmanaged(CIR.Diagnostic),
 
 /// Initialize the IR for a module's canonicalization info.
 ///
@@ -60,6 +61,7 @@ pub fn initCapacity(env: ModuleEnv, type_store: types.Store, capacity: usize) CI
         .imports = ModuleImport.Store.init(&.{}, &ident_store, env.gpa),
         .type_store = type_store,
         .top_level_defs = .{ .span = .{ .start = 0, .len = 0 } },
+        .diagnostics = .{},
     };
 }
 
@@ -69,6 +71,40 @@ pub fn deinit(self: *CIR) void {
     self.ingested_files.deinit(self.env.gpa);
     self.imports.deinit(self.env.gpa);
     self.type_store.deinit();
+    self.diagnostics.deinit(self.env.gpa);
+}
+
+/// Diagnostics related to canonicalization
+pub const Diagnostic = struct {
+    tag: Tag,
+    region: Region,
+
+    /// different types of diagnostic errors
+    pub const Tag = enum {
+        not_implemented,
+        invalid_num_literal,
+        ident_already_in_scope,
+        invalid_top_level_statement,
+    };
+};
+
+/// Push a diagnostic error during canonicalization
+///
+/// Do not use for compiler errors, but invalid input where you cannot insert a malformed node
+pub fn pushDiagnostic(self: *CIR, tag: CIR.Diagnostic.Tag, region: base.Region) void {
+    self.diagnostics.append(self.env.gpa, .{
+        .tag = tag,
+        .region = region,
+    }) catch |err| exitOnOom(err);
+}
+
+/// Returns a malformed token of the requested type, and pushes a diagnostic error
+pub fn pushMalformed(self: *CIR, comptime t: type, tag: CIR.Diagnostic.Tag, region: base.Region) t {
+    self.diagnostics.append(self.env.gpa, .{
+        .tag = tag,
+        .region = region,
+    }) catch |err| exitOnOom(err);
+    return self.store.addMalformed(t, tag, region);
 }
 
 // Helper to add type index info

@@ -17,158 +17,12 @@ const Region = base.Region;
 pub const Problem = union(enum) {
     tokenize: @import("check/parse/tokenize.zig").Diagnostic,
     parser: @import("check/parse/IR.zig").Diagnostic,
-    canonicalize: Canonicalize,
+    canonicalize: @import("check/canonicalize/CIR.zig").Diagnostic,
     compiler: Compiler,
-
-    /// User errors preventing a module from being canonicalized correctly,
-    /// e.g. a variable that was used but not defined.
-    pub const Canonicalize = union(enum) {
-        NotYetImplemented,
-        NotYetImplementedExpr: struct {
-            expr_type: []const u8,
-            region: Region,
-        },
-        NotYetImplementedPattern: struct {
-            pattern_type: []const u8,
-            region: Region,
-        },
-        NotYetImplementedTypeDecl: struct {
-            region: Region,
-        },
-        NotYetImplementedTypeAnno: struct {
-            region: Region,
-        },
-        NotYetImplementedExpect: struct {
-            region: Region,
-        },
-        NotYetImplementedImport: struct {
-            region: Region,
-        },
-        DuplicateImport: struct {
-            duplicate_import_region: Region,
-        },
-        DuplicateExposes: struct {
-            first_exposes: Ident.Idx,
-            duplicate_exposes: Ident.Idx,
-        },
-        AliasNotInScope: struct {
-            name: Ident.Idx,
-            suggestions: collections.SafeList(Ident.Idx).Range,
-        },
-        IdentNotInScope: struct {
-            ident: Ident.Idx,
-            suggestions: collections.SafeList(Ident.Idx).Range,
-        },
-        AliasAlreadyInScope: struct {
-            original_name: Ident.Idx,
-            shadow: Ident.Idx,
-        },
-        IdentAlreadyInScope: struct {
-            original_ident: Ident.Idx,
-            shadow: Ident.Idx,
-        },
-        InvalidTopLevelStatement: struct {
-            ty: StatementType,
-            region: Region,
-
-            const StatementType = enum(u8) { @"var", expr, @"for", crash, @"return" };
-        },
-        InvalidNumLiteral: struct {
-            region: Region,
-            literal: []const u8,
-        },
-
-        /// Make a `Problem` based on a canonicalization problem.
-        pub fn make(can_problem: @This()) Problem {
-            return Problem{ .canonicalize = can_problem };
-        }
-
-        pub fn toStr(self: @This(), gpa: Allocator, writer: anytype) !void {
-            _ = gpa;
-            // use a stack allocation for printing our tag errors
-            var buf: [1000]u8 = undefined;
-
-            switch (self) {
-                .NotYetImplemented => {
-                    const err_msg = try std.fmt.bufPrint(&buf, "CAN: Not yet implemented", .{});
-                    try writer.writeAll(err_msg);
-                },
-                .NotYetImplementedExpr => |e| {
-                    const err_msg = try std.fmt.bufPrint(&buf, "CAN: Expression type '{s}' not yet implemented", .{e.expr_type});
-                    try writer.writeAll(err_msg);
-                },
-                .NotYetImplementedPattern => |e| {
-                    const err_msg = try std.fmt.bufPrint(&buf, "CAN: Pattern type '{s}' not yet implemented", .{e.pattern_type});
-                    try writer.writeAll(err_msg);
-                },
-                .NotYetImplementedTypeDecl => |e| {
-                    _ = e;
-                    const err_msg = try std.fmt.bufPrint(&buf, "CAN: Type declarations not yet implemented", .{});
-                    try writer.writeAll(err_msg);
-                },
-                .NotYetImplementedTypeAnno => |e| {
-                    _ = e;
-                    const err_msg = try std.fmt.bufPrint(&buf, "CAN: Type annotations not yet implemented", .{});
-                    try writer.writeAll(err_msg);
-                },
-                .NotYetImplementedExpect => |e| {
-                    _ = e;
-                    const err_msg = try std.fmt.bufPrint(&buf, "CAN: Expect statements not yet implemented", .{});
-                    try writer.writeAll(err_msg);
-                },
-                .NotYetImplementedImport => |e| {
-                    _ = e;
-                    const err_msg = try std.fmt.bufPrint(&buf, "CAN: Import statements not yet fully implemented", .{});
-                    try writer.writeAll(err_msg);
-                },
-                .DuplicateImport => |e| {
-                    _ = e; // TODO: Use this capture in a meaningful way (make sure to update Canonicalize tests)
-                    const err_msg = try std.fmt.bufPrint(&buf, "CAN: Duplicate Import", .{});
-                    try writer.writeAll(err_msg);
-                },
-                .DuplicateExposes => |e| {
-                    _ = e; // TODO: Use this capture in a meaningful way (make sure to update Canonicalize tests)
-                    const err_msg = try std.fmt.bufPrint(&buf, "CAN: Duplicate Exposes", .{});
-                    try writer.writeAll(err_msg);
-                },
-                .AliasNotInScope => |e| {
-                    _ = e; // TODO: Use this capture in a meaningful way (make sure to update Canonicalize tests)
-                    const err_msg = try std.fmt.bufPrint(&buf, "CAN: Alias not in scope", .{});
-                    try writer.writeAll(err_msg);
-                },
-                .IdentNotInScope => |e| {
-                    _ = e; // TODO: Use this capture in a meaningful way (make sure to update Canonicalize tests)
-                    const err_msg = try std.fmt.bufPrint(&buf, "CAN: Ident not in scope", .{});
-                    try writer.writeAll(err_msg);
-                },
-                .AliasAlreadyInScope => |e| {
-                    _ = e; // TODO: Use this capture in a meaningful way (make sure to update Canonicalize tests)
-                    const err_msg = try std.fmt.bufPrint(&buf, "CAN: Alias already in scope", .{});
-                    try writer.writeAll(err_msg);
-                },
-                .IdentAlreadyInScope => |e| {
-                    _ = e; // TODO: Use this capture in a meaningful way (make sure to update Canonicalize tests)
-                    const err_msg = try std.fmt.bufPrint(&buf, "CAN: Ident already in scope", .{});
-                    try writer.writeAll(err_msg);
-                },
-                .InvalidTopLevelStatement => |e| {
-                    _ = e; // TODO: Use this capture in a meaningful way (make sure to update Canonicalize tests)
-                    const err_msg = try std.fmt.bufPrint(&buf, "CAN: Invalid top level statement", .{});
-                    try writer.writeAll(err_msg);
-                },
-                .InvalidNumLiteral => |e| {
-                    const err_msg = try std.fmt.bufPrint(&buf, "CAN: Invalid number literal {s}", .{e.literal});
-                    try writer.writeAll(err_msg);
-                },
-            }
-        }
-    };
 
     /// Internal compiler error due to a bug in the compiler implementation.
     pub const Compiler = union(enum) {
-        canonicalize: enum {
-            exited_top_scope_level,
-        },
+        canonicalize: Can,
         resolve_imports,
         type_check,
         specialize_types,
@@ -178,9 +32,20 @@ pub const Problem = union(enum) {
         lower_statements,
         reference_count,
 
+        pub const Can = enum {
+            not_implemented,
+            exited_top_scope_level,
+            unable_to_resolve_identifier,
+        };
+
         /// Make a `Problem` based on a compiler error.
         pub fn make(compiler_error: @This()) Problem {
             return Problem{ .compiler = compiler_error };
+        }
+
+        /// Make a  based on a compiler error.
+        pub fn makeCanonicalize(tag: Can) Problem {
+            return Problem{ .compiler = .{ .canonicalize = tag } };
         }
     };
 
@@ -196,13 +61,16 @@ pub const Problem = union(enum) {
         var buf: [1000]u8 = undefined;
 
         switch (self) {
-            .tokenize => |a| try a.toStr(gpa, source, writer),
+            .tokenize => |a| {
+                try a.toStr(gpa, source, writer);
+            },
             .parser => |a| {
                 const err_msg = try std.fmt.bufPrint(&buf, "PARSER: {s}", .{@tagName(a.tag)});
                 try writer.writeAll(err_msg);
             },
-            .canonicalize => |err| {
-                try err.toStr(gpa, writer);
+            .canonicalize => |a| {
+                const err_msg = try std.fmt.bufPrint(&buf, "CANONICALIZE: {s}", .{@tagName(a.tag)});
+                try writer.writeAll(err_msg);
             },
             .compiler => |err| {
                 const err_msg = try std.fmt.bufPrint(&buf, "COMPILER: {?}", .{err});

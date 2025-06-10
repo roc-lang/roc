@@ -33,10 +33,8 @@ levels: Levels,
 
 /// Errors that can occur during scope operations
 pub const Error = error{
-    IdentNotInScope,
-    IdentAlreadyInScope,
-    AliasNotInScope,
-    AliasAlreadyInScope,
+    NotInScope,
+    AlreadyInScope,
     ExitedTopScopeLevel,
 };
 
@@ -118,9 +116,9 @@ pub const Level = struct {
         };
     }
 
-    /// Put an item in the level
-    pub fn put(level: *Level, gpa: std.mem.Allocator, comptime item_kind: ItemKind, name: Ident.Idx, pattern: Pattern.Idx) !void {
-        try level.items(item_kind).put(gpa, name, pattern);
+    /// Put an item in the level, panics on OOM
+    pub fn put(level: *Level, gpa: std.mem.Allocator, comptime item_kind: ItemKind, name: Ident.Idx, pattern: Pattern.Idx) void {
+        level.items(item_kind).put(gpa, name, pattern) catch |err| exitOnOom(err);
     }
 };
 
@@ -144,7 +142,7 @@ pub const Levels = struct {
     }
 
     /// Exit the current scope level
-    pub fn exit(self: *Levels, gpa: std.mem.Allocator) Error!void {
+    pub fn exit(self: *Levels, gpa: std.mem.Allocator) error{ExitedTopScopeLevel}!void {
         if (self.levels.items.len <= 1) {
             return Error.ExitedTopScopeLevel;
         }
@@ -194,40 +192,36 @@ pub const Levels = struct {
         gpa: std.mem.Allocator,
         ident_store: *const Ident.Store,
         comptime item_kind: Level.ItemKind,
-        name: Ident.Idx,
-        pattern: Pattern.Idx,
-    ) !Pattern.Idx {
+        ident_idx: Ident.Idx,
+        pattern_idx: Pattern.Idx,
+    ) error{AlreadyInScope}!void {
         // Only check the current level for duplicates to allow shadowing in nested scopes
         const current_level = &self.levels.items[self.levels.items.len - 1];
         const map = current_level.itemsConst(item_kind);
 
         var iter = map.iterator();
         while (iter.next()) |entry| {
-            if (ident_store.identsHaveSameText(name, entry.key_ptr.*)) {
-                return switch (item_kind) {
-                    .ident => Error.IdentAlreadyInScope,
-                    .alias => Error.AliasAlreadyInScope,
-                };
+            if (ident_store.identsHaveSameText(ident_idx, entry.key_ptr.*)) {
+                return Error.AlreadyInScope;
             }
         }
 
-        self.levels.items[self.levels.items.len - 1].put(gpa, item_kind, name, pattern) catch |err| exitOnOom(err);
-        return pattern;
+        self.levels.items[self.levels.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
     }
 
     /// Get all identifiers in scope
-    pub fn getAllIdentsInScope(self: *const Levels, gpa: std.mem.Allocator, comptime item_kind: Level.ItemKind) ![]Ident.Idx {
+    pub fn getAllIdentsInScope(self: *const Levels, gpa: std.mem.Allocator, comptime item_kind: Level.ItemKind) []Ident.Idx {
         var result = std.ArrayList(Ident.Idx).init(gpa);
 
         for (self.levels.items) |level| {
             const map = level.itemsConst(item_kind);
             var iter = map.iterator();
             while (iter.next()) |entry| {
-                try result.append(entry.key_ptr.*);
+                result.append(entry.key_ptr.*) catch |err| exitOnOom(err);
             }
         }
 
-        return result.toOwnedSlice();
+        return result.toOwnedSlice() catch |err| exitOnOom(err);
     }
 };
 
@@ -324,7 +318,7 @@ test "cannot introduce duplicate identifier in same scope" {
 
     // Second introduction should fail
     const result = scope.levels.introduce(gpa, &ident_store, .ident, x_ident, pattern2);
-    try std.testing.expectError(Error.IdentAlreadyInScope, result);
+    try std.testing.expectError(Error.AlreadyInScope, result);
 }
 
 test "aliases work separately from idents" {
@@ -431,7 +425,7 @@ test "getAllIdentsInScope returns all identifiers" {
     _ = try scope.levels.introduce(gpa, &ident_store, .ident, b, @enumFromInt(2));
 
     // Get all idents in scope
-    const all_idents_1 = try scope.levels.getAllIdentsInScope(gpa, .ident);
+    const all_idents_1 = scope.levels.getAllIdentsInScope(gpa, .ident);
     defer gpa.free(all_idents_1);
 
     // Should only have 2 identifiers
@@ -442,14 +436,14 @@ test "getAllIdentsInScope returns all identifiers" {
     _ = try scope.levels.introduce(gpa, &ident_store, .ident, c, @enumFromInt(3));
 
     // Get all idents in scope
-    const all_idents_2 = try scope.levels.getAllIdentsInScope(gpa, .ident);
+    const all_idents_2 = scope.levels.getAllIdentsInScope(gpa, .ident);
     defer gpa.free(all_idents_2);
 
     // Should have all 3 identifiers
     try std.testing.expectEqual(@as(usize, 3), all_idents_2.len);
 
     // Also test for aliases (should be empty)
-    const all_aliases = try scope.levels.getAllIdentsInScope(gpa, .alias);
+    const all_aliases = scope.levels.getAllIdentsInScope(gpa, .alias);
     defer gpa.free(all_aliases);
 
     try std.testing.expectEqual(@as(usize, 0), all_aliases.len);
@@ -475,7 +469,7 @@ test "identifiers with same text are treated as duplicates" {
 
     // Adding the second should fail because it has the same text
     const result = scope.levels.introduce(gpa, &ident_store, .ident, foo2, @enumFromInt(2));
-    try std.testing.expectError(Error.IdentAlreadyInScope, result);
+    try std.testing.expectError(Error.AlreadyInScope, result);
 
     // But looking up either should find the first one
     const lookup1 = scope.levels.lookup(&ident_store, .ident, foo1);
@@ -502,7 +496,7 @@ test "cannot introduce duplicate alias in same scope" {
 
     // Second introduction should fail
     const result = scope.levels.introduce(gpa, &ident_store, .alias, list_alias, pattern2);
-    try std.testing.expectError(Error.AliasAlreadyInScope, result);
+    try std.testing.expectError(Error.AlreadyInScope, result);
 }
 
 test "shadowing works correctly for aliases" {

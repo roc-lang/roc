@@ -11,6 +11,7 @@ const problem = @import("../problem.zig");
 const collections = @import("../collections.zig");
 const Ident = @import("Ident.zig");
 const StringLiteral = @import("StringLiteral.zig");
+const exitOnOom = collections.utils.exitOnOom;
 
 const Type = type_mod.Type;
 const Problem = problem.Problem;
@@ -41,4 +42,9 @@ pub fn deinit(self: *Self) void {
     self.ident_ids_for_slicing.deinit(self.gpa);
     self.strings.deinit(self.gpa);
     self.problems.deinit(self.gpa);
+}
+
+/// Helper to push a problem to the ModuleEnv
+pub fn pushProblem(self: *Self, p: Problem) void {
+    _ = self.problems.append(self.gpa, p);
 }

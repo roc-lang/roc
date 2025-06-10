@@ -683,3 +683,15 @@ pub fn slicePatterns(store: *NodeStore, span: CIR.Pattern.Span) []CIR.Pattern.Id
 pub fn sliceIfBranch(store: *const NodeStore, span: CIR.IfBranch.Span) []CIR.IfBranch.Idx {
     return store.sliceFromSpan(CIR.IfBranch.Idx, span.span);
 }
+
+/// Any node type can be malformed, but must come with a diagnostic reason
+pub fn addMalformed(store: *NodeStore, comptime t: type, reason: CIR.Diagnostic.Tag, region: base.Region) t {
+    const nid = store.nodes.append(store.gpa, .{
+        .tag = .malformed,
+        .data_1 = @intFromEnum(reason),
+        .data_2 = 0, // spare
+        .data_3 = 0, // spare
+        .region = region,
+    });
+    return @enumFromInt(@intFromEnum(nid));
+}

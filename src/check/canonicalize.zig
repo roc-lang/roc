@@ -50,6 +50,8 @@ pub const CIR = @import("canonicalize/CIR.zig");
 pub fn canonicalize_file(
     self: *Self,
 ) void {
+    const gpa = self.can_ir.env.gpa;
+
     const file = self.parse_ir.store.getFile();
 
     // canonicalize_header_packages();
@@ -70,53 +72,32 @@ pub fn canonicalize_file(
             },
             .@"var" => |v| {
                 // Not valid at top-level
-                _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .InvalidTopLevelStatement = .{
-                    .region = v.region.toBase(),
-                    .ty = .@"var",
-                } }));
+                self.can_ir.pushDiagnostic(.invalid_top_level_statement, v.region.toBase());
             },
             .expr => |expr| {
                 // Not valid at top-level
-                _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .InvalidTopLevelStatement = .{
-                    .region = expr.region.toBase(),
-                    .ty = .expr,
-                } }));
+                self.can_ir.pushDiagnostic(.invalid_top_level_statement, expr.region.toBase());
             },
             .crash => |crash| {
                 // Not valid at top-level
-                _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .InvalidTopLevelStatement = .{
-                    .region = crash.region.toBase(),
-                    .ty = .crash,
-                } }));
+                self.can_ir.pushDiagnostic(.invalid_top_level_statement, crash.region.toBase());
             },
-            .expect => |expect| {
-                _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpect = .{
-                    .region = expect.region.toBase(),
-                } }));
+            .expect => |_| {
+                self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
             },
             .@"for" => |f| {
                 // Not valid at top-level
-                _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .InvalidTopLevelStatement = .{
-                    .region = f.region.toBase(),
-                    .ty = .@"for",
-                } }));
+                self.can_ir.pushDiagnostic(.invalid_top_level_statement, f.region.toBase());
             },
             .@"return" => |return_stmt| {
                 // Not valid at top-level
-                _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .InvalidTopLevelStatement = .{
-                    .region = return_stmt.region.toBase(),
-                    .ty = .@"return",
-                } }));
+                self.can_ir.pushDiagnostic(.invalid_top_level_statement, return_stmt.region.toBase());
             },
-            .type_decl => |type_decl| {
-                _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedTypeDecl = .{
-                    .region = type_decl.region.toBase(),
-                } }));
+            .type_decl => |_| {
+                self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
             },
-            .type_anno => |type_anno| {
-                _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedTypeAnno = .{
-                    .region = type_anno.region.toBase(),
-                } }));
+            .type_anno => |_| {
+                self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
             },
             .malformed => |malformed| {
                 // We won't touch this since it's already a parse error.
@@ -145,6 +126,11 @@ pub fn canonicalize_file(
 
     // Create the span of all top-level defs
     self.can_ir.top_level_defs = self.can_ir.store.defSpanFrom(scratch_defs_start);
+
+    // Copy errors across to ModuleEnv problems
+    for (self.can_ir.diagnostics.items) |msg| {
+        _ = self.can_ir.env.problems.append(gpa, .{ .canonicalize = msg });
+    }
 }
 
 fn canonicalize_header_exposes(
@@ -180,12 +166,7 @@ fn bringImportIntoScope(
     self: *Self,
     import: *const parse.IR.NodeStore.Statement.Import,
 ) void {
-    const gpa = self.can_ir.env.gpa;
-
-    // Add error for partially implemented imports
-    _ = self.can_ir.env.problems.append(gpa, Problem.Canonicalize.make(.{ .NotYetImplementedImport = .{
-        .region = import.region.toBase(),
-    } }));
+    // const gpa = self.can_ir.env.gpa;
 
     // const import_name: []u8 = &.{}; // import.module_name_tok;
     // const shorthand: []u8 = &.{}; // import.qualifier_tok;
@@ -351,7 +332,9 @@ pub fn canonicalize_expr(
             if (self.parse_ir.tokens.resolveIdentifier(e.token)) |ident| {
                 _ = ident;
 
-                @panic("TODO");
+                // TODO
+                self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
+                return null;
 
                 // TODO: Implement identifier resolution logic
                 // switch (self.scope.levels.lookup(&self.can_ir.env.idents, .ident, ident)) {
@@ -389,16 +372,9 @@ pub fn canonicalize_expr(
 
             // parse the integer value
             const value = std.fmt.parseInt(i128, token_text, 10) catch {
-                // Add problem for invalid number literal
-                const problem_id = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .InvalidNumLiteral = .{
-                    .region = e.region.toBase(),
-                    .literal = token_text,
-                } }));
 
-                return self.can_ir.store.addExpr(.{
-                    .expr = CIR.Expr{ .runtime_error = problem_id },
-                    .region = e.region.toBase(),
-                });
+                // Invalid number literal
+                return self.can_ir.pushMalformed(CIR.Expr.Idx, .invalid_num_literal, e.region.toBase());
             };
 
             const fresh_num_var = self.can_ir.type_store.fresh();
@@ -432,16 +408,7 @@ pub fn canonicalize_expr(
 
             // parse the float value
             const value = std.fmt.parseFloat(f64, token_text) catch {
-                // Add problem for invalid number literal
-                const problem_id = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .InvalidNumLiteral = .{
-                    .region = e.region.toBase(),
-                    .literal = token_text,
-                } }));
-
-                return self.can_ir.store.addExpr(.{
-                    .expr = CIR.Expr{ .runtime_error = problem_id },
-                    .region = e.region.toBase(),
-                });
+                return self.can_ir.pushMalformed(CIR.Expr.Idx, .invalid_num_literal, e.region.toBase());
             };
 
             const fresh_num_var = self.can_ir.type_store.fresh();
@@ -549,53 +516,32 @@ pub fn canonicalize_expr(
                 return null;
             }
         },
-        .string_part => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
-                .expr_type = "string_part",
-                .region = e.region.toBase(),
-            } }));
+        .string_part => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
             return null;
         },
-        .tuple => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
-                .expr_type = "tuple",
-                .region = e.region.toBase(),
-            } }));
+        .tuple => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
             return null;
         },
-        .record => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
-                .expr_type = "record",
-                .region = e.region.toBase(),
-            } }));
+        .record => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
             return null;
         },
-        .lambda => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
-                .expr_type = "lambda",
-                .region = e.region.toBase(),
-            } }));
+        .lambda => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
             return null;
         },
-        .record_updater => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
-                .expr_type = "record_updater",
-                .region = e.region.toBase(),
-            } }));
+        .record_updater => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
             return null;
         },
-        .field_access => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
-                .expr_type = "field_access",
-                .region = e.region.toBase(),
-            } }));
+        .field_access => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
             return null;
         },
-        .local_dispatch => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
-                .expr_type = "local_dispatch",
-                .region = e.region.toBase(),
-            } }));
+        .local_dispatch => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
             return null;
         },
         .bin_op => |e| {
@@ -677,67 +623,40 @@ pub fn canonicalize_expr(
                 .region = e.region.toBase(),
             });
         },
-        .suffix_single_question => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
-                .expr_type = "suffix_single_question",
-                .region = e.region.toBase(),
-            } }));
+        .suffix_single_question => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
             return null;
         },
-        .unary_op => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
-                .expr_type = "unary_op",
-                .region = e.region.toBase(),
-            } }));
+        .unary_op => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
             return null;
         },
-        .if_then_else => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
-                .expr_type = "if_then_else",
-                .region = e.region.toBase(),
-            } }));
+        .if_then_else => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
             return null;
         },
-        .match => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
-                .expr_type = "match",
-                .region = e.region.toBase(),
-            } }));
+        .match => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
             return null;
         },
-        .dbg => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
-                .expr_type = "dbg",
-                .region = e.region.toBase(),
-            } }));
+        .dbg => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
             return null;
         },
-        .record_builder => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
-                .expr_type = "record_builder",
-                .region = e.region.toBase(),
-            } }));
+        .record_builder => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
             return null;
         },
-        .ellipsis => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
-                .expr_type = "ellipsis",
-                .region = e.region.toBase(),
-            } }));
+        .ellipsis => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
             return null;
         },
-        .block => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
-                .expr_type = "block",
-                .region = e.region.toBase(),
-            } }));
+        .block => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
             return null;
         },
-        .malformed => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
-                .expr_type = "malformed",
-                .region = e.region.toBase(),
-            } }));
+        .malformed => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
             return null;
         },
     }
@@ -881,24 +800,32 @@ fn canonicalize_pattern(
     self: *Self,
     pattern_idx: parse.IR.NodeStore.PatternIdx,
 ) ?CIR.Pattern.Idx {
-    const pattern = self.parse_ir.store.getPattern(pattern_idx);
-    const region = Region.zero(); // TODO: Implement proper pattern region retrieval
-
-    switch (pattern) {
+    const gpa = self.can_ir.env.gpa;
+    switch (self.parse_ir.store.getPattern(pattern_idx)) {
         .ident => |e| {
-            _ = e;
-            // TODO
-            // if (self.parse_ir.tokens.resolveIdentifier(e.ident_tok)) |ident| {
-            //     // Introduce the identifier into scope
-            //     _ = self.scope.levels.introduce(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, .{ .scope_name = ident, .ident = ident });
+            if (self.parse_ir.tokens.resolveIdentifier(e.ident_tok)) |ident_idx| {
+                const ident_pattern = CIR.Pattern{
+                    .assign = ident_idx,
+                };
 
-            //     const ident_pattern = CIR.Pattern{
-            //         .assign = ident,
-            //     };
+                const assign_idx = self.can_ir.store.addPattern(ident_pattern);
 
-            //     return self.can_ir.store.addPattern(ident_pattern);
-            // }
-            return null;
+                // Introduce the identifier into scope
+                self.scope.levels.introduce(
+                    gpa,
+                    &self.can_ir.env.idents,
+                    .ident,
+                    ident_idx,
+                    assign_idx,
+                ) catch {
+                    return self.can_ir.pushMalformed(CIR.Pattern.Idx, .ident_already_in_scope, e.region.toBase());
+                };
+
+                return assign_idx;
+            } else {
+                self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.unable_to_resolve_identifier));
+                return null;
+            }
         },
         .underscore => {
             const underscore_pattern = CIR.Pattern{
@@ -912,16 +839,12 @@ fn canonicalize_pattern(
             const token_text = self.parse_ir.resolve(e.number_tok);
 
             // intern the string slice
-            const literal = self.can_ir.env.strings.insert(self.can_ir.env.gpa, token_text);
+            const literal = self.can_ir.env.strings.insert(gpa, token_text);
 
             // parse the integer value
             const value = std.fmt.parseInt(i128, token_text, 10) catch {
-                // Add problem for invalid number literal
-                _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .InvalidNumLiteral = .{
-                    .region = region,
-                    .literal = token_text,
-                } }));
-                return null;
+                // Invalid num literal
+                return self.can_ir.pushMalformed(CIR.Pattern.Idx, .invalid_num_literal, e.region.toBase());
             };
 
             const fresh_num_var = self.can_ir.type_store.fresh();
@@ -949,7 +872,7 @@ fn canonicalize_pattern(
 
             // TODO: Handle escape sequences
             // For now, just intern the raw string
-            const literal = self.can_ir.env.strings.insert(self.can_ir.env.gpa, token_text);
+            const literal = self.can_ir.env.strings.insert(gpa, token_text);
 
             const str_pattern = CIR.Pattern{
                 .str_literal = literal,
@@ -982,46 +905,28 @@ fn canonicalize_pattern(
             }
             return null;
         },
-        .record => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedPattern = .{
-                .pattern_type = "record",
-                .region = e.region.toBase(),
-            } }));
+        .record => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
             return null;
         },
-        .tuple => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedPattern = .{
-                .pattern_type = "tuple",
-                .region = e.region.toBase(),
-            } }));
+        .tuple => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
             return null;
         },
-        .list => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedPattern = .{
-                .pattern_type = "list",
-                .region = e.region.toBase(),
-            } }));
+        .list => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
             return null;
         },
-        .list_rest => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedPattern = .{
-                .pattern_type = "list_rest",
-                .region = e.region.toBase(),
-            } }));
+        .list_rest => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
             return null;
         },
-        .alternatives => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedPattern = .{
-                .pattern_type = "alternatives",
-                .region = e.region.toBase(),
-            } }));
+        .alternatives => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
             return null;
         },
-        .malformed => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedPattern = .{
-                .pattern_type = "malformed",
-                .region = e.region.toBase(),
-            } }));
+        .malformed => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
             return null;
         },
     }

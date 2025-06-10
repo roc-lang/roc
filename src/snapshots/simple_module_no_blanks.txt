@@ -36,15 +36,7 @@ NO CHANGE
 	(top_level_defs
 		(def
 			(Let)
-			(pattern (1:12-1:12) (pattern_ident (ident "hello!")))
-			(expr (1:1-1:1)
-				(call
-					(lookup (ident "line!"))
-					(str "Hello")))
-			"#0")
-		(def
-			(Let)
 			(pattern (1:22-1:22) (pattern_ident (ident "world")))
 			(expr (1:1-1:1) (str "World"))
-			"#1")))
+			"#0")))
 ~~~END

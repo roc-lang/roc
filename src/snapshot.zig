@@ -473,6 +473,12 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
             // For expr snapshots, just canonicalize the root expression directly
             const expr_idx = parse.IR.NodeStore.ExprIdx{ .id = parse_ast.root_node_idx };
             maybe_expr_idx = can.canonicalize_expr(expr_idx);
+
+            // Manually copy errors across to ModuleEnv problems
+            // as `canonicalize_expr` doesn't do this for us.
+            for (can_ir.diagnostics.items) |msg| {
+                _ = module_env.problems.append(gpa, .{ .canonicalize = msg });
+            }
         },
         .statement => {
             // TODO: implement canonicalize_statement when available
