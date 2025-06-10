@@ -2,9 +2,9 @@
 //!
 //! This module provides a hierarchical scope structure for tracking identifiers and aliases
 //! during the canonicalization phase of compilation. It supports:
-//! - Nested scopes with proper shadowing semantics
+//! - Nested scopes with shadowing semantics
 //! - Separate namespaces for identifiers and type aliases
-//! - Efficient O(1) lookups using hash maps
+//! - Lookups that search through nested scopes from innermost to outermost
 //! - Error reporting for duplicate and missing identifiers
 //!
 //! The scope hierarchy works like a stack of levels, where each level represents a lexical
@@ -28,10 +28,6 @@ const Scope = @This();
 
 const TagMap = std.AutoHashMapUnmanaged(Ident.Idx, Alias.Idx);
 
-/// The custom alias that this file is centered around, if one has been defined.
-focused_custom_alias: ?Alias.Idx = null,
-// TODO: handle renaming, e.g. `CustomType := [ExportedName as LocalName]`
-custom_tags: TagMap = TagMap.empty,
 /// Identifiers/aliases that are in scope, and defined in the current module.
 levels: Levels,
 
@@ -42,30 +38,6 @@ pub const Error = error{
     AliasNotInScope,
     AliasAlreadyInScope,
     ExitedTopScopeLevel,
-};
-
-/// Error details for when an identifier is not in scope
-pub const IdentNotInScopeError = struct {
-    ident: Ident.Idx,
-    suggestions: []const Ident.Idx,
-};
-
-/// Error details for when an identifier is already in scope
-pub const IdentAlreadyInScopeError = struct {
-    original_ident: Ident.Idx,
-    shadow: Ident.Idx,
-};
-
-/// Error details for when an alias is not in scope
-pub const AliasNotInScopeError = struct {
-    name: Ident.Idx,
-    suggestions: []const Ident.Idx,
-};
-
-/// Error details for when an alias is already in scope
-pub const AliasAlreadyInScopeError = struct {
-    original_name: Ident.Idx,
-    shadow: Ident.Idx,
 };
 
 /// Initialize a new scope.
@@ -94,22 +66,7 @@ pub fn init(
 
 /// Deinitialize a scope's memory
 pub fn deinit(self: *Scope, gpa: std.mem.Allocator) void {
-    if (self.custom_tags.count() > 0) {
-        self.custom_tags.deinit(gpa);
-    }
     Levels.deinit(gpa, &self.levels);
-}
-
-/// Generates a unique ident like "1" or "5" in the home module.
-///
-/// This is used, for example, during canonicalization of an Expr::Closure
-/// to generate a unique ident to refer to that closure.
-pub fn genUnique(self: *Scope, gpa: std.mem.Allocator, ident_store: *Ident.Store, pattern: Pattern.Idx) !Ident.Idx {
-    const unique_idx = ident_store.genUnique();
-
-    try self.levels.introduce(gpa, ident_store, .ident, unique_idx, pattern);
-
-    return unique_idx;
 }
 
 /// Result of a lookup operation
@@ -240,12 +197,18 @@ pub const Levels = struct {
         name: Ident.Idx,
         pattern: Pattern.Idx,
     ) !Pattern.Idx {
-        if (self.contains(ident_store, item_kind, name)) |existing_pattern| {
-            _ = existing_pattern;
-            return switch (item_kind) {
-                .ident => Error.IdentAlreadyInScope,
-                .alias => Error.AliasAlreadyInScope,
-            };
+        // Only check the current level for duplicates to allow shadowing in nested scopes
+        const current_level = &self.levels.items[self.levels.items.len - 1];
+        const map = current_level.itemsConst(item_kind);
+
+        var iter = map.iterator();
+        while (iter.next()) |entry| {
+            if (ident_store.identsHaveSameText(name, entry.key_ptr.*)) {
+                return switch (item_kind) {
+                    .ident => Error.IdentAlreadyInScope,
+                    .alias => Error.AliasAlreadyInScope,
+                };
+            }
         }
 
         self.levels.items[self.levels.items.len - 1].put(gpa, item_kind, name, pattern) catch |err| exitOnOom(err);
@@ -267,8 +230,6 @@ pub const Levels = struct {
         return result.toOwnedSlice();
     }
 };
-
-// Tests
 
 test "empty scope has no items" {
     const gpa = std.testing.allocator;
@@ -415,13 +376,13 @@ test "multiple nested scopes work correctly" {
     const b = ident_store.insert(gpa, Ident.for_text("b"), Region.zero());
     const c = ident_store.insert(gpa, Ident.for_text("c"), Region.zero());
 
-    const pattern_a1: Pattern.Idx = @enumFromInt(1);
+    const pattern_a: Pattern.Idx = @enumFromInt(1);
     const pattern_b1: Pattern.Idx = @enumFromInt(2);
     const pattern_b2: Pattern.Idx = @enumFromInt(3);
     const pattern_c: Pattern.Idx = @enumFromInt(4);
 
     // Level 1: add a
-    _ = try scope.levels.introduce(gpa, &ident_store, .ident, a, pattern_a1);
+    _ = try scope.levels.introduce(gpa, &ident_store, .ident, a, pattern_a);
 
     // Enter level 2: add b
     scope.levels.enter(gpa);
@@ -433,7 +394,7 @@ test "multiple nested scopes work correctly" {
     _ = try scope.levels.introduce(gpa, &ident_store, .ident, c, pattern_c);
 
     // Check all are visible with correct values
-    try std.testing.expectEqual(LookupResult{ .Found = pattern_a1 }, scope.levels.lookup(&ident_store, .ident, a));
+    try std.testing.expectEqual(LookupResult{ .Found = pattern_a }, scope.levels.lookup(&ident_store, .ident, a));
     try std.testing.expectEqual(LookupResult{ .Found = pattern_b2 }, scope.levels.lookup(&ident_store, .ident, b));
     try std.testing.expectEqual(LookupResult{ .Found = pattern_c }, scope.levels.lookup(&ident_store, .ident, c));
 
@@ -441,7 +402,7 @@ test "multiple nested scopes work correctly" {
     try scope.levels.exit(gpa);
 
     // c should be gone, b should be from level 2
-    try std.testing.expectEqual(LookupResult{ .Found = pattern_a1 }, scope.levels.lookup(&ident_store, .ident, a));
+    try std.testing.expectEqual(LookupResult{ .Found = pattern_a }, scope.levels.lookup(&ident_store, .ident, a));
     try std.testing.expectEqual(LookupResult{ .Found = pattern_b1 }, scope.levels.lookup(&ident_store, .ident, b));
     try std.testing.expectEqual(LookupResult.NotFound, scope.levels.lookup(&ident_store, .ident, c));
 
@@ -449,7 +410,170 @@ test "multiple nested scopes work correctly" {
     try scope.levels.exit(gpa);
 
     // Only a should remain
-    try std.testing.expectEqual(LookupResult{ .Found = pattern_a1 }, scope.levels.lookup(&ident_store, .ident, a));
+    try std.testing.expectEqual(LookupResult{ .Found = pattern_a }, scope.levels.lookup(&ident_store, .ident, a));
     try std.testing.expectEqual(LookupResult.NotFound, scope.levels.lookup(&ident_store, .ident, b));
     try std.testing.expectEqual(LookupResult.NotFound, scope.levels.lookup(&ident_store, .ident, c));
+}
+
+test "getAllIdentsInScope returns all identifiers" {
+    const gpa = std.testing.allocator;
+    var ident_store = Ident.Store.initCapacity(gpa, 100);
+    defer ident_store.deinit(gpa);
+
+    var scope = init(gpa, &ident_store, &.{}, &.{});
+    defer scope.deinit(gpa);
+
+    const a = ident_store.insert(gpa, Ident.for_text("a"), Region.zero());
+    const b = ident_store.insert(gpa, Ident.for_text("b"), Region.zero());
+    const c = ident_store.insert(gpa, Ident.for_text("c"), Region.zero());
+
+    _ = try scope.levels.introduce(gpa, &ident_store, .ident, a, @enumFromInt(1));
+    _ = try scope.levels.introduce(gpa, &ident_store, .ident, b, @enumFromInt(2));
+
+    // Get all idents in scope
+    const all_idents_1 = try scope.levels.getAllIdentsInScope(gpa, .ident);
+    defer gpa.free(all_idents_1);
+
+    // Should only have 2 identifiers
+    try std.testing.expectEqual(@as(usize, 2), all_idents_1.len);
+
+    scope.levels.enter(gpa);
+
+    _ = try scope.levels.introduce(gpa, &ident_store, .ident, c, @enumFromInt(3));
+
+    // Get all idents in scope
+    const all_idents_2 = try scope.levels.getAllIdentsInScope(gpa, .ident);
+    defer gpa.free(all_idents_2);
+
+    // Should have all 3 identifiers
+    try std.testing.expectEqual(@as(usize, 3), all_idents_2.len);
+
+    // Also test for aliases (should be empty)
+    const all_aliases = try scope.levels.getAllIdentsInScope(gpa, .alias);
+    defer gpa.free(all_aliases);
+
+    try std.testing.expectEqual(@as(usize, 0), all_aliases.len);
+}
+
+test "identifiers with same text are treated as duplicates" {
+    const gpa = std.testing.allocator;
+    var ident_store = Ident.Store.initCapacity(gpa, 100);
+    defer ident_store.deinit(gpa);
+
+    var scope = init(gpa, &ident_store, &.{}, &.{});
+    defer scope.deinit(gpa);
+
+    // Create two different Ident.Idx with the same text
+    const foo1 = ident_store.insert(gpa, Ident.for_text("foo"), Region.zero());
+    const foo2 = ident_store.insert(gpa, Ident.for_text("foo"), Region.zero());
+
+    // They should have different indices
+    try std.testing.expect(foo1 != foo2);
+
+    // Add the first one
+    _ = try scope.levels.introduce(gpa, &ident_store, .ident, foo1, @enumFromInt(1));
+
+    // Adding the second should fail because it has the same text
+    const result = scope.levels.introduce(gpa, &ident_store, .ident, foo2, @enumFromInt(2));
+    try std.testing.expectError(Error.IdentAlreadyInScope, result);
+
+    // But looking up either should find the first one
+    const lookup1 = scope.levels.lookup(&ident_store, .ident, foo1);
+    const lookup2 = scope.levels.lookup(&ident_store, .ident, foo2);
+
+    try std.testing.expectEqual(LookupResult{ .Found = @enumFromInt(1) }, lookup1);
+    try std.testing.expectEqual(LookupResult{ .Found = @enumFromInt(1) }, lookup2);
+}
+
+test "cannot introduce duplicate alias in same scope" {
+    const gpa = std.testing.allocator;
+    var ident_store = Ident.Store.initCapacity(gpa, 100);
+    defer ident_store.deinit(gpa);
+
+    var scope = init(gpa, &ident_store, &.{}, &.{});
+    defer scope.deinit(gpa);
+
+    const list_alias = ident_store.insert(gpa, Ident.for_text("List"), Region.zero());
+    const pattern1: Pattern.Idx = @enumFromInt(1);
+    const pattern2: Pattern.Idx = @enumFromInt(2);
+
+    // First introduction should succeed
+    _ = try scope.levels.introduce(gpa, &ident_store, .alias, list_alias, pattern1);
+
+    // Second introduction should fail
+    const result = scope.levels.introduce(gpa, &ident_store, .alias, list_alias, pattern2);
+    try std.testing.expectError(Error.AliasAlreadyInScope, result);
+}
+
+test "shadowing works correctly for aliases" {
+    const gpa = std.testing.allocator;
+    var ident_store = Ident.Store.initCapacity(gpa, 100);
+    defer ident_store.deinit(gpa);
+
+    var scope = init(gpa, &ident_store, &.{}, &.{});
+    defer scope.deinit(gpa);
+
+    const my_type = ident_store.insert(gpa, Ident.for_text("MyType"), Region.zero());
+    const outer_pattern: Pattern.Idx = @enumFromInt(1);
+    const inner_pattern: Pattern.Idx = @enumFromInt(2);
+
+    // Add alias to outer scope
+    _ = try scope.levels.introduce(gpa, &ident_store, .alias, my_type, outer_pattern);
+
+    // Enter new scope and shadow the alias
+    scope.levels.enter(gpa);
+    _ = try scope.levels.introduce(gpa, &ident_store, .alias, my_type, inner_pattern);
+
+    // Should resolve to inner scope
+    const inner_result = scope.levels.lookup(&ident_store, .alias, my_type);
+    try std.testing.expectEqual(LookupResult{ .Found = inner_pattern }, inner_result);
+
+    // Exit inner scope
+    try scope.levels.exit(gpa);
+
+    // Should resolve to outer scope again
+    const outer_result = scope.levels.lookup(&ident_store, .alias, my_type);
+    try std.testing.expectEqual(LookupResult{ .Found = outer_pattern }, outer_result);
+}
+
+test "deeply nested scopes maintain proper visibility" {
+    const gpa = std.testing.allocator;
+    var ident_store = Ident.Store.initCapacity(gpa, 100);
+    defer ident_store.deinit(gpa);
+
+    var scope = init(gpa, &ident_store, &.{}, &.{});
+    defer scope.deinit(gpa);
+
+    const x = ident_store.insert(gpa, Ident.for_text("x"), Region.zero());
+    const patterns = [_]Pattern.Idx{
+        @enumFromInt(1),
+        @enumFromInt(2),
+        @enumFromInt(3),
+        @enumFromInt(4),
+        @enumFromInt(5),
+    };
+
+    // Create 5 nested scopes, each shadowing x
+    for (patterns) |pattern| {
+        scope.levels.enter(gpa);
+        _ = try scope.levels.introduce(gpa, &ident_store, .ident, x, pattern);
+
+        // Verify it resolves to the current pattern
+        const result = scope.levels.lookup(&ident_store, .ident, x);
+        try std.testing.expectEqual(LookupResult{ .Found = pattern }, result);
+    }
+
+    // Exit all scopes and verify x resolves correctly at each level
+    var i: usize = patterns.len;
+    while (i > 1) : (i -= 1) {
+        try scope.levels.exit(gpa);
+        const expected = patterns[i - 2];
+        const result = scope.levels.lookup(&ident_store, .ident, x);
+        try std.testing.expectEqual(LookupResult{ .Found = expected }, result);
+    }
+
+    // Exit the last scope - x should not be found
+    try scope.levels.exit(gpa);
+    const final_result = scope.levels.lookup(&ident_store, .ident, x);
+    try std.testing.expectEqual(LookupResult.NotFound, final_result);
 }
