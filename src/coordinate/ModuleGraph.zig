@@ -108,12 +108,11 @@ fn loadOrCompileCanIr(
 
     return if (cache_lookup) |ir| ir else blk: {
         var module_env = base.ModuleEnv.init(gpa);
-        const type_store = types.Store.init(&module_env);
 
         var parse_ir = parse.parse(&module_env, contents);
         parse_ir.store.emptyScratch();
 
-        var can_ir = Can.CIR.init(module_env, type_store);
+        var can_ir = Can.CIR.init(module_env);
         var scope = Scope.init(&can_ir.env, &.{}, &.{});
         defer scope.deinit();
         var can = Can.init(&can_ir, &parse_ir, &scope);

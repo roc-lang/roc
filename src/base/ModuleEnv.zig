@@ -21,6 +21,7 @@ gpa: std.mem.Allocator,
 idents: Ident.Store = .{},
 ident_ids_for_slicing: collections.SafeList(Ident.Idx),
 strings: StringLiteral.Store,
+types_store: type_mod.Store,
 problems: Problem.List,
 
 /// Initialize the module environment.
@@ -31,6 +32,7 @@ pub fn init(gpa: std.mem.Allocator) Self {
         .idents = Ident.Store.initCapacity(gpa, 1024),
         .ident_ids_for_slicing = collections.SafeList(Ident.Idx).initCapacity(gpa, 256),
         .strings = StringLiteral.Store.initCapacityBytes(gpa, 4096),
+        .types_store = type_mod.Store.initCapacity(gpa, 2048, 512),
         .problems = Problem.List.initCapacity(gpa, 64),
     };
 }
@@ -40,5 +42,6 @@ pub fn deinit(self: *Self) void {
     self.idents.deinit(self.gpa);
     self.ident_ids_for_slicing.deinit(self.gpa);
     self.strings.deinit(self.gpa);
+    self.types_store.deinit();
     self.problems.deinit(self.gpa);
 }

@@ -450,11 +450,9 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
     // shouldn't be required in future
     parse_ast.store.emptyScratch();
 
-    const type_store = types.Store.init(&module_env);
-
     // Canonicalize the source code
     // Can.IR.init takes ownership of the module_env and type_store
-    var can_ir = Can.CIR.init(module_env, type_store);
+    var can_ir = Can.CIR.init(module_env);
     defer can_ir.deinit();
 
     var scope = Scope.init(&can_ir.env, &.{}, &.{});
