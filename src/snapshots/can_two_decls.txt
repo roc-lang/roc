@@ -56,7 +56,7 @@ NO CHANGE
 			(expr (1:1-1:1)
 				(binop
 					"add"
-					(lookup (pattern_idx "1"))
+					(lookup (pattern_idx "2"))
 					(int
 						(num_var "#3")
 						(precision_var "#4")

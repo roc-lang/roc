@@ -41,7 +41,7 @@ NO CHANGE
 			(expr (1:1-1:1)
 				(string
 					(literal "hello ")
-					(lookup (pattern_idx "1"))
+					(lookup (pattern_idx "2"))
 					(literal "")))
 			"#1")))
 ~~~END

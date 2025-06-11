@@ -20,20 +20,27 @@ const Problem = problem.Problem;
 const exitOnOom = collections.utils.exitOnOom;
 
 const BUILTIN_NUM_ADD: CIR.Pattern.Idx = @enumFromInt(0);
+const BUILTIN_NUM_SUB: CIR.Pattern.Idx = @enumFromInt(1);
 
 pub fn init(self: *CIR, parse_ir: *parse.IR, scope: *Scope) Self {
     const gpa = self.env.gpa;
-    const ident_store = self.env.idents;
+    const ident_store = &self.env.idents;
 
     // Simulate the builtins by adding to both the NodeStore and Scope
     // Not sure if this is how we want to do it long term, but want something to
-    // make a start on canonicalization
+    // make a start on canonicalization.
 
-    // BINOP_ADD "+"
+    // BUILTIN_NUM_ADD
     const ident_add = self.env.idents.insert(gpa, base.Ident.for_text("add"), base.Region.zero());
     const pattern_idx_add = self.store.addPattern(CIR.Pattern{ .assign = ident_add });
-    _ = scope.levels.introduce(gpa, &ident_store, .ident, ident_add, pattern_idx_add) catch {};
+    _ = scope.levels.introduce(gpa, ident_store, .ident, ident_add, pattern_idx_add) catch {};
     std.debug.assert(BUILTIN_NUM_ADD == pattern_idx_add);
+
+    // BUILTIN_NUM_SUB
+    const ident_sub = self.env.idents.insert(gpa, base.Ident.for_text("sub"), base.Region.zero());
+    const pattern_idx_sub = self.store.addPattern(CIR.Pattern{ .assign = ident_sub });
+    _ = scope.levels.introduce(gpa, ident_store, .ident, ident_sub, pattern_idx_sub) catch {};
+    std.debug.assert(BUILTIN_NUM_SUB == pattern_idx_sub);
 
     return .{
         .can_ir = self,
@@ -549,9 +556,6 @@ pub fn canonicalize_expr(
             // Get the operator token
             const op_token = self.parse_ir.tokens.tokens.get(e.operator);
 
-            // TODO use static dispatch or do something proper
-            // here we are simply mapping an operator to function name
-            // as an interim thing to have a simplified Canonicalize implementation
             const op: CIR.Expr.Binop.Op = switch (op_token.tag) {
                 .OpPlus => .add,
                 .OpBinaryMinus => .sub,
