@@ -338,6 +338,10 @@ Type constraint implementation:
 
 TODO
 
+## Unification
+
+TODO
+
 ## Structural Typing
 
 A type system where type equivalence is based on the shape (the set of members and their types) of the values, not the names by which the types were declared.
@@ -366,9 +370,37 @@ A type system where type equivalence is based on explicit names or declarations,
 
 TODO
 
-## Rigid
+## Rigid vs Flexible
 
-TODO
+An identifier is rigid if it has a fixed, concrete name that's written in Roc code. On the other hand, a flexible identifier is one created by the compiler during type inference.
+`a` is rigid below, I defined it. The compiler should use `a` in the error message if there is something wrong with the function's type.
+```roc
+take_first : List a, U64 -> List a
+take_first = |list, output_length|
+    List.sublist(list, { start: 0, len: output_length })
+```
+If I make a type error in the definition:
+```roc
+take_first : U64
+take_first = |list, output_length|
+    List.sublist(list, { start: 0, len: output_length })
+```
+The compiler's error message will say:
+```
+The body is an anonymous function of type:
+
+    List elem, Int Unsigned64 -> List elem
+
+But the type annotation on take_first says it should be:
+
+    U64
+```
+`elem` is a flexible [type variable](#type-variable), the compiler chose that name.
+
+Related definitions in the compiler:
+- old compiler: search "pub enum Content" in [types/src/subs.rs](crates/compiler/types/src/subs.rs)
+- new compiler: search "pub const Content" in [check/canonicalize/CIR.zig](src/check/canonicalize/CIR.zig)
+
 
 ## Canonicalization
 
