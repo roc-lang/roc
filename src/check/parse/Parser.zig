@@ -36,7 +36,7 @@ pub fn init(tokens: TokenizedBuffer) Parser {
     };
 }
 
-// Deinit the parser.  The buffer of tokens and the store are still owned by the caller.
+/// Deinit the parser.  The buffer of tokens and the store are still owned by the caller.
 pub fn deinit(parser: *Parser) void {
     parser.scratch_nodes.deinit(parser.gpa);
     parser.diagnostics.deinit(parser.gpa);
