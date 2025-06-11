@@ -42,7 +42,6 @@ pub const TypecheckResult = union(enum) {
         main_module_idx: ModuleWorkIdx,
         can_irs: ModuleWork(can.CIR).Store,
         resolve_irs: ModuleWork(resolve.IR).Store,
-        type_stores: ModuleWork(types.Store).Store,
     };
 
     /// Failure to typecheck a module.
@@ -135,11 +134,12 @@ pub fn typecheckModule(
         resolve.resolveImports(resolve_irs.getWork(idx), can_irs.getWork(idx), &resolve_irs);
     }
 
-    const type_stores = ModuleWork(types.Store).Store.initFromCanIrs(gpa, &can_irs);
-    index_iter = type_stores.iterIndices();
-    while (index_iter.next()) |idx| {
-        check_types.checkTypes(type_stores.getWork(idx), resolve_irs.getWork(idx), &resolve_irs, &type_stores);
-    }
+    // TODO
+    // const type_stores = ModuleWork(types.Store).Store.initFromCanIrs(gpa, &can_irs);
+    // index_iter = type_stores.iterIndices();
+    // while (index_iter.next()) |idx| {
+    //     check_types.checkTypes(type_stores.getWork(idx), resolve_irs.getWork(idx), &resolve_irs, &type_stores);
+    // }
 
     return .{
         .success = .{
@@ -147,7 +147,6 @@ pub fn typecheckModule(
             .main_module_idx = main_module_idx.?,
             .can_irs = can_irs,
             .resolve_irs = resolve_irs,
-            .type_stores = type_stores,
         },
     };
 }

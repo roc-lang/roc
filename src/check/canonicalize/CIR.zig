@@ -28,7 +28,6 @@ env: base.ModuleEnv,
 store: NodeStore,
 ingested_files: IngestedFile.List,
 imports: ModuleImport.Store,
-type_store: types.Store,
 top_level_defs: Def.Span,
 diagnostics: std.ArrayListUnmanaged(CIR.Diagnostic),
 
@@ -43,15 +42,15 @@ diagnostics: std.ArrayListUnmanaged(CIR.Diagnostic),
 /// Since the can IR holds indices into the `ModuleEnv`, we need
 /// the `ModuleEnv` to also be owned by the can IR to cache it.
 ///
-/// Takes ownership of the module_env and type_store
-pub fn init(env: ModuleEnv, type_store: types.Store) CIR {
+/// Takes ownership of the module_env
+pub fn init(env: ModuleEnv) CIR {
     // TODO: Figure out what capacity should be
-    return CIR.initCapacity(env, type_store, 1000);
+    return CIR.initCapacity(env, 1000);
 }
 
 /// Initialize the IR for a module's canonicalization info with a specified capacity.
 /// For more information refer to documentation on [init] as well
-pub fn initCapacity(env: ModuleEnv, type_store: types.Store, capacity: usize) CIR {
+pub fn initCapacity(env: ModuleEnv, capacity: usize) CIR {
     var ident_store = env.idents;
 
     return CIR{
@@ -59,7 +58,6 @@ pub fn initCapacity(env: ModuleEnv, type_store: types.Store, capacity: usize) CI
         .store = NodeStore.initCapacity(env.gpa, capacity),
         .ingested_files = .{},
         .imports = ModuleImport.Store.init(&.{}, &ident_store, env.gpa),
-        .type_store = type_store,
         .top_level_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .diagnostics = .{},
     };
@@ -70,7 +68,6 @@ pub fn deinit(self: *CIR) void {
     self.store.deinit();
     self.ingested_files.deinit(self.env.gpa);
     self.imports.deinit(self.env.gpa);
-    self.type_store.deinit();
     self.diagnostics.deinit(self.env.gpa);
 }
 
@@ -766,7 +763,7 @@ pub const Expr = union(enum) {
                 // Check if the problem index is valid
                 const problem_count = ir.env.problems.items.items.len;
                 const idx_value = @intFromEnum(problem_idx);
-                
+
                 if (idx_value < problem_count) {
                     const p = ir.env.problems.get(problem_idx);
                     p.toStr(gpa, "", buf.writer()) catch |err| {

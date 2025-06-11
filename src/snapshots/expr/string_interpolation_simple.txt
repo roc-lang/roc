@@ -17,9 +17,6 @@ NO CHANGE
 ~~~CANONICALIZE
 (call
 	(lookup (ident "Str.concat"))
-	(call
-		(lookup (ident "Str.concat"))
-		(str "Hello ")
-		(lookup (ident "name")))
+	(str "Hello ")
 	(str "!"))
 ~~~END

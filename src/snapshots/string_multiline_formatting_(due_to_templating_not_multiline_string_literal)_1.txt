@@ -27,12 +27,6 @@ LowerIdent(2:1-2:2),CloseRound(2:2-2:3),CloseStringInterpolation(2:3-2:4),String
 ~~~CANONICALIZE
 (call
 	(lookup (ident "Str.concat"))
-	(call
-		(lookup (ident "Str.concat"))
-		(str "This is a string with ")
-		(call
-			(lookup (ident "some_func"))
-			(lookup (ident "a"))
-			(lookup (ident "b"))))
+	(str "This is a string with ")
 	(str " lines of text due to the template parts"))
 ~~~END

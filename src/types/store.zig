@@ -44,7 +44,7 @@ pub const Slot = union(enum) {
 pub const Store = struct {
     const Self = @This();
 
-    env: *base.ModuleEnv,
+    gpa: std.mem.Allocator,
 
     // Slots & descriptors
     slots: SlotStore,
@@ -60,40 +60,45 @@ pub const Store = struct {
     tag_args: VarSafeList,
 
     /// Init the unification table
-    pub fn init(env: *base.ModuleEnv) Self {
+    pub fn init(gpa: std.mem.Allocator) Self {
         // TODO: eventually use herusitics here to determine sensible defaults
+        return Self.initCapacity(gpa, 1024, 512);
+    }
+
+    /// Init the unification table
+    pub fn initCapacity(gpa: std.mem.Allocator, root_capacity: usize, child_capacity: usize) Self {
         return .{
-            .env = env,
+            .gpa = gpa,
 
             // slots & descriptors
-            .descs = DescStore.init(env.gpa, 1024),
-            .slots = SlotStore.init(env.gpa, 1024),
+            .descs = DescStore.init(gpa, root_capacity),
+            .slots = SlotStore.init(gpa, root_capacity),
 
             // everything else
-            .alias_args = VarSafeList.initCapacity(env.gpa, 512),
-            .tuple_elems = VarSafeList.initCapacity(env.gpa, 512),
-            .custom_type_args = VarSafeList.initCapacity(env.gpa, 512),
-            .func_args = VarSafeList.initCapacity(env.gpa, 512),
-            .record_fields = RecordFieldSafeMultiList.initCapacity(env.gpa, 512),
-            .tags = TagSafeMultiList.initCapacity(env.gpa, 512),
-            .tag_args = VarSafeList.initCapacity(env.gpa, 512),
+            .alias_args = VarSafeList.initCapacity(gpa, child_capacity),
+            .tuple_elems = VarSafeList.initCapacity(gpa, child_capacity),
+            .custom_type_args = VarSafeList.initCapacity(gpa, child_capacity),
+            .func_args = VarSafeList.initCapacity(gpa, child_capacity),
+            .record_fields = RecordFieldSafeMultiList.initCapacity(gpa, child_capacity),
+            .tags = TagSafeMultiList.initCapacity(gpa, child_capacity),
+            .tag_args = VarSafeList.initCapacity(gpa, child_capacity),
         };
     }
 
     /// Deinit the unification table
     pub fn deinit(self: *Self) void {
         // slots & descriptors
-        self.descs.deinit(self.env.gpa);
-        self.slots.deinit(self.env.gpa);
+        self.descs.deinit(self.gpa);
+        self.slots.deinit(self.gpa);
 
         // everything else
-        self.alias_args.deinit(self.env.gpa);
-        self.tuple_elems.deinit(self.env.gpa);
-        self.custom_type_args.deinit(self.env.gpa);
-        self.func_args.deinit(self.env.gpa);
-        self.record_fields.deinit(self.env.gpa);
-        self.tags.deinit(self.env.gpa);
-        self.tag_args.deinit(self.env.gpa);
+        self.alias_args.deinit(self.gpa);
+        self.tuple_elems.deinit(self.gpa);
+        self.custom_type_args.deinit(self.gpa);
+        self.func_args.deinit(self.gpa);
+        self.record_fields.deinit(self.gpa);
+        self.tags.deinit(self.gpa);
+        self.tag_args.deinit(self.gpa);
     }
 
     // fresh variables //
@@ -106,23 +111,23 @@ pub const Store = struct {
 
     /// Create a new variable with the given descriptor
     pub fn register(self: *Self, desc: Desc) Var {
-        const desc_idx = self.descs.insert(self.env.gpa, desc);
-        const slot_idx = self.slots.insert(self.env.gpa, .{ .root = desc_idx });
+        const desc_idx = self.descs.insert(self.gpa, desc);
+        const slot_idx = self.slots.insert(self.gpa, .{ .root = desc_idx });
         return Self.slotIdxToVar(slot_idx);
     }
 
     /// Create a new variable with the provided desc at the top level
     /// Used in tests
     pub fn freshFromContent(self: *Self, content: Content) Var {
-        const desc_idx = self.descs.insert(self.env.gpa, .{ .content = content, .rank = Rank.top_level, .mark = Mark.none });
-        const slot_idx = self.slots.insert(self.env.gpa, .{ .root = desc_idx });
+        const desc_idx = self.descs.insert(self.gpa, .{ .content = content, .rank = Rank.top_level, .mark = Mark.none });
+        const slot_idx = self.slots.insert(self.gpa, .{ .root = desc_idx });
         return Self.slotIdxToVar(slot_idx);
     }
 
     /// Create a variable redirecting to the provided var
     /// Used in tests
     pub fn freshRedirect(self: *Self, var_: Var) Var {
-        const slot_idx = self.slots.insert(self.env.gpa, .{ .redirect = var_ });
+        const slot_idx = self.slots.insert(self.gpa, .{ .redirect = var_ });
         return Self.slotIdxToVar(slot_idx);
     }
 
@@ -130,37 +135,37 @@ pub const Store = struct {
 
     /// Append a slice of alias args to the backing list, returning the range
     pub fn appendAliasArgs(self: *Self, slice: []const Var) VarSafeList.Range {
-        return self.alias_args.appendSlice(self.env.gpa, slice);
+        return self.alias_args.appendSlice(self.gpa, slice);
     }
 
     /// Append a slice of tuple elems to the backing list, returning the range
     pub fn appendTupleElems(self: *Self, slice: []const Var) VarSafeList.Range {
-        return self.tuple_elems.appendSlice(self.env.gpa, slice);
+        return self.tuple_elems.appendSlice(self.gpa, slice);
     }
 
     /// Append a slice of type apply args to the backing list, returning the range
     pub fn appendCustomTypeArgs(self: *Self, slice: []const Var) VarSafeList.Range {
-        return self.custom_type_args.appendSlice(self.env.gpa, slice);
+        return self.custom_type_args.appendSlice(self.gpa, slice);
     }
 
     /// Append a slice of func args to the backing list, returning the range
     pub fn appendFuncArgs(self: *Self, slice: []const Var) VarSafeList.Range {
-        return self.func_args.appendSlice(self.env.gpa, slice);
+        return self.func_args.appendSlice(self.gpa, slice);
     }
 
     /// Append a slice of record fields to the backing list, returning the range
     pub fn appendRecordFields(self: *Self, slice: []const RecordField) RecordFieldSafeMultiList.Range {
-        return self.record_fields.appendSlice(self.env.gpa, slice);
+        return self.record_fields.appendSlice(self.gpa, slice);
     }
 
     /// Append a slice of tags to the backing list, returning the range
     pub fn appendTags(self: *Self, slice: []const Tag) TagSafeMultiList.Range {
-        return self.tags.appendSlice(self.env.gpa, slice);
+        return self.tags.appendSlice(self.gpa, slice);
     }
 
     /// Append a slice of tag args to the backing list, returning the range
     pub fn appendTagArgs(self: *Self, slice: []const Var) VarSafeList.Range {
-        return self.tag_args.appendSlice(self.env.gpa, slice);
+        return self.tag_args.appendSlice(self.gpa, slice);
     }
 
     // sub list getters //
@@ -445,10 +450,7 @@ pub const DescStoreIdx = DescStore.Idx;
 test "resolveVarAndCompressPath - flattens redirect chain to flex_var" {
     const gpa = std.testing.allocator;
 
-    var module_env = base.ModuleEnv.init(gpa);
-    defer module_env.deinit();
-
-    var store = Store.init(&module_env);
+    var store = Store.init(gpa);
     defer store.deinit();
 
     const c = store.fresh();
@@ -465,10 +467,7 @@ test "resolveVarAndCompressPath - flattens redirect chain to flex_var" {
 test "resolveVarAndCompressPath - no-op on already root" {
     const gpa = std.testing.allocator;
 
-    var module_env = base.ModuleEnv.init(gpa);
-    defer module_env.deinit();
-
-    var store = Store.init(&module_env);
+    var store = Store.init(gpa);
     defer store.deinit();
 
     const num_flex = store.fresh();
@@ -485,10 +484,7 @@ test "resolveVarAndCompressPath - no-op on already root" {
 test "resolveVarAndCompressPath - flattens redirect chain to structure" {
     const gpa = std.testing.allocator;
 
-    var module_env = base.ModuleEnv.init(gpa);
-    defer module_env.deinit();
-
-    var store = Store.init(&module_env);
+    var store = Store.init(gpa);
     defer store.deinit();
 
     const num_flex = store.fresh();

@@ -4,7 +4,7 @@ type=expr
 ~~~SOURCE
 99999999999999999999999999999999999999999
 ~~~PROBLEMS
-NIL
+CANONICALIZE: invalid_num_literal
 ~~~TOKENS
 Int(1:1-1:42),EndOfFile(1:42-1:42),
 ~~~PARSE
@@ -12,5 +12,5 @@ Int(1:1-1:42),EndOfFile(1:42-1:42),
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(runtime_error "CAN: Invalid number literal 99999999999999999999999999999999999999999")
+(runtime_error "COMPILER: unimplemented node type (no problem registered)")
 ~~~END

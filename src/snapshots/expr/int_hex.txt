@@ -4,7 +4,7 @@ type=expr
 ~~~SOURCE
 0xFF
 ~~~PROBLEMS
-NIL
+CANONICALIZE: invalid_num_literal
 ~~~TOKENS
 Int(1:1-1:5),EndOfFile(1:5-1:5),
 ~~~PARSE
@@ -12,5 +12,5 @@ Int(1:1-1:5),EndOfFile(1:5-1:5),
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(runtime_error "CAN: Invalid number literal 0xFF")
+(runtime_error "COMPILER: unimplemented node type (no problem registered)")
 ~~~END

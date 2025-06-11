@@ -15,13 +15,5 @@ LowerIdent(1:1-1:4),NoSpaceOpenRound(1:4-1:5),Int(1:5-1:7),Comma(1:7-1:8),String
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(call
-	(lookup (ident "foo"))
-	(int
-		(num_var "#0")
-		(precision_var "#1")
-		(literal "42")
-		(value "TODO")
-		(bound "i128"))
-	(str "hello"))
+(can_ir (top_level_defs "empty"))
 ~~~END

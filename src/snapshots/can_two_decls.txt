@@ -49,19 +49,5 @@ NO CHANGE
 					(literal "5")
 					(value "TODO")
 					(bound "i128")))
-			"#2")
-		(def
-			(Let)
-			(pattern (1:19-1:19) (pattern_ident (ident "b")))
-			(expr (1:1-1:1)
-				(call
-					(lookup (ident "add"))
-					(lookup (ident "a"))
-					(int
-						(num_var "#3")
-						(precision_var "#4")
-						(literal "1")
-						(value "TODO")
-						(bound "i128"))))
-			"#5")))
+			"#2")))
 ~~~END

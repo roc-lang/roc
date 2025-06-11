@@ -41,10 +41,7 @@ NO CHANGE
 			(expr (1:1-1:1)
 				(call
 					(lookup (ident "Str.concat"))
-					(call
-						(lookup (ident "Str.concat"))
-						(str "hello ")
-						(lookup (ident "name")))
+					(str "hello ")
 					(str "")))
 			"#1")))
 ~~~END

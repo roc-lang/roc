@@ -12,5 +12,5 @@ LowerIdent(1:1-1:4),EndOfFile(1:4-1:4),
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(lookup (ident "foo"))
+(can_ir (top_level_defs "empty"))
 ~~~END

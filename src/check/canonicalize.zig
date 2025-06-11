@@ -273,7 +273,7 @@ fn canonicalize_decl(
     const expr_idx = self.canonicalize_expr(decl.body) orelse return null;
 
     // Create a new type variable for this definition
-    const expr_var = self.can_ir.type_store.fresh();
+    const expr_var = self.can_ir.env.types_store.fresh();
 
     // Create the def entry
     return self.can_ir.store.addDef(.{
@@ -377,8 +377,8 @@ pub fn canonicalize_expr(
                 return self.can_ir.pushMalformed(CIR.Expr.Idx, .invalid_num_literal, e.region.toBase());
             };
 
-            const fresh_num_var = self.can_ir.type_store.fresh();
-            const fresh_prec_var = self.can_ir.type_store.fresh();
+            const fresh_num_var = self.can_ir.env.types_store.fresh();
+            const fresh_prec_var = self.can_ir.env.types_store.fresh();
 
             const int_expr = CIR.Expr{
                 .int = .{
@@ -411,8 +411,8 @@ pub fn canonicalize_expr(
                 return self.can_ir.pushMalformed(CIR.Expr.Idx, .invalid_num_literal, e.region.toBase());
             };
 
-            const fresh_num_var = self.can_ir.type_store.fresh();
-            const fresh_prec_var = self.can_ir.type_store.fresh();
+            const fresh_num_var = self.can_ir.env.types_store.fresh();
+            const fresh_prec_var = self.can_ir.env.types_store.fresh();
 
             const float_expr = CIR.Expr{
                 .float = .{
@@ -468,7 +468,7 @@ pub fn canonicalize_expr(
                 }
             }
 
-            const fresh_type_var = self.can_ir.type_store.fresh();
+            const fresh_type_var = self.can_ir.env.types_store.fresh();
 
             // Mark the start of scratch expressions for the list
             const scratch_top = self.can_ir.store.scratchExprTop();
@@ -496,8 +496,8 @@ pub fn canonicalize_expr(
         },
         .tag => |e| {
             if (self.parse_ir.tokens.resolveIdentifier(e.token)) |tag_name| {
-                const fresh_type_var_tag_union = self.can_ir.type_store.fresh();
-                const fresh_type_var_ext = self.can_ir.type_store.fresh();
+                const fresh_type_var_tag_union = self.can_ir.env.types_store.fresh();
+                const fresh_type_var_ext = self.can_ir.env.types_store.fresh();
 
                 const tag_expr = CIR.Expr{
                     .tag = .{
@@ -847,8 +847,8 @@ fn canonicalize_pattern(
                 return self.can_ir.pushMalformed(CIR.Pattern.Idx, .invalid_num_literal, e.region.toBase());
             };
 
-            const fresh_num_var = self.can_ir.type_store.fresh();
-            const fresh_precision_var = self.can_ir.type_store.fresh();
+            const fresh_num_var = self.can_ir.env.types_store.fresh();
+            const fresh_precision_var = self.can_ir.env.types_store.fresh();
 
             const int_pattern = CIR.Pattern{
                 .int_literal = .{
@@ -889,8 +889,8 @@ fn canonicalize_pattern(
                     .len = 867,
                 } };
 
-                const fresh_num_var = self.can_ir.type_store.fresh();
-                const fresh_ext_var = self.can_ir.type_store.fresh();
+                const fresh_num_var = self.can_ir.env.types_store.fresh();
+                const fresh_ext_var = self.can_ir.env.types_store.fresh();
 
                 const tag_pattern = CIR.Pattern{
                     .applied_tag = .{
