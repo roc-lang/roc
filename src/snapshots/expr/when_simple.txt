@@ -6,7 +6,7 @@ when x is
     Ok(value) -> value
     Err(msg) -> msg
 ~~~PROBLEMS
-NIL
+CANONICALIZE: ident_not_in_scope
 ~~~TOKENS
 LowerIdent(1:1-1:5),LowerIdent(1:6-1:7),LowerIdent(1:8-1:10),Newline(1:1-1:1),
 UpperIdent(2:5-2:7),NoSpaceOpenRound(2:7-2:8),LowerIdent(2:8-2:13),CloseRound(2:13-2:14),OpArrow(2:15-2:17),LowerIdent(2:18-2:23),Newline(1:1-1:1),
@@ -16,5 +16,5 @@ UpperIdent(3:5-3:8),NoSpaceOpenRound(3:8-3:9),LowerIdent(3:9-3:12),CloseRound(3:
 ~~~FORMATTED
 when
 ~~~CANONICALIZE
-(can_ir (top_level_defs "empty"))
+(runtime_error (1:1-1:1) "RUNTIME ERROR : ident_not_in_scope")
 ~~~END

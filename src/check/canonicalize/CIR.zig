@@ -81,6 +81,7 @@ pub const Diagnostic = struct {
         not_implemented,
         invalid_num_literal,
         ident_already_in_scope,
+        ident_not_in_scope,
         invalid_top_level_statement,
     };
 };
@@ -378,17 +379,19 @@ pub const Expr = union(enum) {
         name: Ident.Idx,
     },
     /// Compiles, but will crash if reached
-    runtime_error: Problem.Idx,
+    runtime_error: struct {
+        tag: Diagnostic.Tag,
+        region: base.Region,
+    },
 
     const Lookup = struct {
-        // replace with Pattern.Idx -- get this from Scope analysis
-        ident: Ident.Idx,
+        pattern_idx: Pattern.Idx,
     };
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
 
-    pub fn toSExpr(self: *const @This(), ir: *const CIR, line_starts: std.ArrayList(u32)) sexpr.Expr {
+    pub fn toSExpr(self: *const @This(), ir: *const CIR, line_starts: std.ArrayList(u32), source: []const u8) sexpr.Expr {
         const gpa = ir.env.gpa;
         switch (self.*) {
             .num => |num_expr| {
@@ -550,9 +553,12 @@ pub const Expr = union(enum) {
             .lookup => |l| {
                 var lookup_node = sexpr.Expr.init(gpa, "lookup");
 
-                var ident_node = sexpr.Expr.init(gpa, "ident");
-                const ident_str = ir.env.idents.getText(l.ident);
-                ident_node.appendStringChild(gpa, ident_str);
+                var ident_node = sexpr.Expr.init(gpa, "pattern_idx");
+
+                const pattern_idx_str = std.fmt.allocPrint(gpa, "{}", .{@intFromEnum(l.pattern_idx)}) catch |err| exitOnOom(err);
+                defer gpa.free(pattern_idx_str);
+
+                ident_node.appendStringChild(gpa, pattern_idx_str);
                 lookup_node.appendNodeChild(gpa, &ident_node);
 
                 return lookup_node;
@@ -620,7 +626,7 @@ pub const Expr = union(enum) {
                 // First element is the function being called
                 if (all_exprs.len > 0) {
                     const fn_expr = ir.store.getExpr(all_exprs[0]);
-                    var fn_node = fn_expr.toSExpr(ir, line_starts);
+                    var fn_node = fn_expr.toSExpr(ir, line_starts, source);
                     call_node.appendNodeChild(gpa, &fn_node);
                 }
 
@@ -628,7 +634,7 @@ pub const Expr = union(enum) {
                 if (all_exprs.len > 1) {
                     for (all_exprs[1..]) |arg_idx| {
                         const arg_expr = ir.store.getExpr(arg_idx);
-                        var arg_node = arg_expr.toSExpr(ir, line_starts);
+                        var arg_node = arg_expr.toSExpr(ir, line_starts, source);
                         call_node.appendNodeChild(gpa, &arg_node);
                     }
                 }
@@ -681,7 +687,7 @@ pub const Expr = union(enum) {
 
                 // Add loc_expr
                 var loc_expr = ir.store.getExpr(access_expr.loc_expr);
-                var loc_expr_node = loc_expr.toSExpr(ir, line_starts);
+                var loc_expr_node = loc_expr.toSExpr(ir, line_starts, source);
                 access_node.appendNodeChild(gpa, &loc_expr_node);
 
                 // Add field
@@ -754,31 +760,17 @@ pub const Expr = union(enum) {
 
                 return tag_node;
             },
-            .runtime_error => |problem_idx| {
+            .runtime_error => |e| {
                 var runtime_err_node = sexpr.Expr.init(gpa, "runtime_error");
+
+                runtime_err_node.appendRegionChild(gpa, regionInfo(source, e.region, line_starts));
 
                 var buf = std.ArrayList(u8).init(gpa);
                 defer buf.deinit();
 
-                // Check if the problem index is valid
-                const problem_count = ir.env.problems.items.items.len;
-                const idx_value = @intFromEnum(problem_idx);
-
-                if (idx_value < problem_count) {
-                    const p = ir.env.problems.get(problem_idx);
-                    p.toStr(gpa, "", buf.writer()) catch |err| {
-                        // This definitely isn't clean... fix me
-                        // using our oom helper doesn't work here because
-                        // the error set is different
-                        std.debug.print("Error: {}\n", .{err});
-                    };
-                } else {
-                    // Problem index is out of bounds - this happens when NodeStore creates
-                    // runtime errors for unimplemented node types but no problems have been added yet
-                    buf.writer().writeAll("COMPILER: unimplemented node type (no problem registered)") catch |err| {
-                        std.debug.print("Error: {}\n", .{err});
-                    };
-                }
+                buf.writer().writeAll("RUNTIME ERROR ") catch |err| exitOnOom(err);
+                buf.writer().writeAll(": ") catch |err| exitOnOom(err);
+                buf.writer().writeAll(@tagName(e.tag)) catch |err| exitOnOom(err);
 
                 runtime_err_node.appendStringChild(gpa, buf.items);
 
@@ -881,6 +873,7 @@ pub const Def = struct {
                 .stmt => |stmt| {
                     try std.testing.expect(stmt == @as(TypeVar, @enumFromInt(42)));
                 },
+                else => @panic("invalid def kind"),
             }
         }
     };
@@ -908,7 +901,7 @@ pub const Def = struct {
         expr_node.appendRegionChild(gpa, regionInfo(source, self.expr_region, line_starts));
 
         const expr = ir.store.getExpr(self.expr);
-        var expr_sexpr = expr.toSExpr(ir, line_starts);
+        var expr_sexpr = expr.toSExpr(ir, line_starts, source);
         expr_node.appendNodeChild(gpa, &expr_sexpr);
         node.appendNodeChild(gpa, &expr_node);
 
@@ -1137,6 +1130,7 @@ pub const WhenBranch = struct {
 /// A pattern, including possible problems (e.g. shadowing) so that
 /// codegen can generate a runtime error if this pattern is reached.
 pub const Pattern = union(enum) {
+    /// An identifier in the assignment position, e.g. the `x` in `x = foo(1)`
     assign: Ident.Idx,
     as: struct {
         pattern: Pattern.Idx,
@@ -1204,12 +1198,12 @@ pub const Pattern = union(enum) {
         const gpa = ir.env.gpa;
         switch (self.*) {
             .assign => |ident_idx| {
-                var node = sexpr.Expr.init(gpa, "pattern_ident");
+                var node = sexpr.Expr.init(gpa, "assign");
                 appendIdentChild(&node, gpa, ir, "ident", ident_idx);
                 return node;
             },
             .as => |a| {
-                var node = sexpr.Expr.init(gpa, "pattern_as");
+                var node = sexpr.Expr.init(gpa, "as");
                 node.appendRegionChild(gpa, regionInfo(source, a.region, line_starts));
                 appendIdentChild(&node, gpa, ir, "ident", a.ident);
                 var inner_patt_node = sexpr.Expr.init(gpa, "pattern");
@@ -1236,7 +1230,7 @@ pub const Pattern = union(enum) {
                 // return node;
             },
             .record_destructure => {
-                var node = sexpr.Expr.init(gpa, "pattern_record_destructure");
+                var node = sexpr.Expr.init(gpa, "record_destructure");
                 var destructs_node = sexpr.Expr.init(gpa, "destructs");
                 // Need RecordDestruct storage in IR
                 // Assuming ir.record_destructs exists:
@@ -1249,7 +1243,7 @@ pub const Pattern = union(enum) {
                 return node;
             },
             .list => |l| {
-                var pattern_list_node = sexpr.Expr.init(gpa, "pattern_list");
+                var pattern_list_node = sexpr.Expr.init(gpa, "list");
                 var patterns_node = sexpr.Expr.init(gpa, "patterns");
 
                 for (ir.store.slicePatterns(l.patterns)) |patt_idx| {
@@ -1263,21 +1257,21 @@ pub const Pattern = union(enum) {
                 return pattern_list_node;
             },
             .num_literal => |l| {
-                var node = sexpr.Expr.init(gpa, "pattern_num");
+                var node = sexpr.Expr.init(gpa, "num");
                 node.appendStringChild(gpa, "literal"); // TODO: use l.literal
                 node.appendStringChild(gpa, "value=<int_value>");
                 node.appendStringChild(gpa, @tagName(l.bound));
                 return node;
             },
             .int_literal => |l| {
-                var node = sexpr.Expr.init(gpa, "pattern_int");
+                var node = sexpr.Expr.init(gpa, "int");
                 node.appendStringChild(gpa, "literal"); // TODO: use l.literal
                 node.appendStringChild(gpa, "value=<int_value>");
                 node.appendStringChild(gpa, @tagName(l.bound));
                 return node;
             },
             .float_literal => |l| {
-                var node = sexpr.Expr.init(gpa, "pattern_float");
+                var node = sexpr.Expr.init(gpa, "float");
                 node.appendStringChild(gpa, "literal"); // TODO: use l.literal
                 const val_str = std.fmt.allocPrint(gpa, "{d}", .{l.value}) catch "<oom>";
                 defer gpa.free(val_str);
@@ -1287,19 +1281,19 @@ pub const Pattern = union(enum) {
             },
             .str_literal => |str_idx| {
                 _ = str_idx; // str_idx not used currently, but keep for signature consistency
-                var node = sexpr.Expr.init(gpa, "pattern_str");
+                var node = sexpr.Expr.init(gpa, "str");
                 node.appendStringChild(gpa, "value"); // TODO: use str_idx
                 return node;
             },
             .char_literal => |l| {
-                var node = sexpr.Expr.init(gpa, "pattern_char");
+                var node = sexpr.Expr.init(gpa, "char");
                 const char_str = std.fmt.allocPrint(gpa, "'\\u({d})'", .{l.value}) catch "<oom>";
                 defer gpa.free(char_str);
                 node.appendStringChild(gpa, char_str);
                 node.appendStringChild(gpa, @tagName(l.bound));
                 return node;
             },
-            .Underscore => return sexpr.Expr.init(gpa, "pattern_underscore"),
+            .Underscore => return sexpr.Expr.init(gpa, "underscore"),
         }
     }
 };
@@ -1418,7 +1412,7 @@ pub fn toSExprStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr.Idx,
         // Get the expression from the store
         const expr = ir.store.getExpr(expr_idx);
 
-        var expr_node = expr.toSExpr(ir, line_starts);
+        var expr_node = expr.toSExpr(ir, line_starts, source);
         defer expr_node.deinit(gpa);
 
         expr_node.toStringPretty(writer);

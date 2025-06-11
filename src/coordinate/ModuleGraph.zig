@@ -113,7 +113,7 @@ fn loadOrCompileCanIr(
         parse_ir.store.emptyScratch();
 
         var can_ir = Can.CIR.init(module_env);
-        var scope = Scope.init(can_ir.env.gpa, &can_ir.env.idents, &.{}, &.{});
+        var scope = Scope.init(can_ir.env.gpa);
         defer scope.deinit(gpa);
         var can = Can.init(&can_ir, &parse_ir, &scope);
         can.canonicalize_file();

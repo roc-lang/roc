@@ -23,8 +23,8 @@ NO CHANGE
 (can_ir
 	(top_level_defs
 		(def
-			(Let)
-			(pattern (1:6-1:6) (pattern_ident (ident "foo")))
+			(let)
+			(pattern (1:6-1:6) (assign (ident "foo")))
 			(expr (1:1-1:1)
 				(float
 					(num_var "#0")

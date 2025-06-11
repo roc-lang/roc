@@ -33,7 +33,7 @@ Int(8:3-8:4),EndOfFile(8:4-8:4),
 NO CHANGE
 ~~~CANONICALIZE
 (call
-	(lookup (ident "add"))
+	(lookup (pattern_idx "0"))
 	(int
 		(num_var "#0")
 		(precision_var "#1")
@@ -41,7 +41,7 @@ NO CHANGE
 		(value "TODO")
 		(bound "i128"))
 	(call
-		(lookup (ident "mul"))
+		(lookup (pattern_idx "0"))
 		(int
 			(num_var "#2")
 			(precision_var "#3")

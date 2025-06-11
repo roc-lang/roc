@@ -31,17 +31,20 @@ NO CHANGE
 (can_ir
 	(top_level_defs
 		(def
-			(Let)
-			(pattern (1:6-1:6) (pattern_ident (ident "name")))
+			(let)
+			(pattern (1:6-1:6) (assign (ident "name")))
 			(expr (1:1-1:1) (str "luc"))
 			"#0")
 		(def
-			(Let)
-			(pattern (1:12-1:12) (pattern_ident (ident "foo")))
+			(let)
+			(pattern (1:12-1:12) (assign (ident "foo")))
 			(expr (1:1-1:1)
 				(call
-					(lookup (ident "Str.concat"))
-					(str "hello ")
+					(lookup (pattern_idx "0"))
+					(call
+						(lookup (pattern_idx "0"))
+						(str "hello ")
+						(lookup (pattern_idx "1")))
 					(str "")))
 			"#1")))
 ~~~END

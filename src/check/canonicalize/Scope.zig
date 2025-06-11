@@ -39,25 +39,11 @@ pub const Error = error{
 };
 
 /// Initialize a new scope.
-pub fn init(
-    gpa: std.mem.Allocator,
-    ident_store: *const Ident.Store,
-    builtin_aliases: []const struct { alias: Ident.Idx, name: Ident.Idx },
-    builtin_idents: []const Ident.Idx,
-) Scope {
-    var scope = Scope{
-        .levels = Levels{},
-    };
+pub fn init(gpa: std.mem.Allocator) Scope {
+    var scope = Scope{ .levels = Levels{} };
 
+    // ensure we have a top-level scope
     scope.levels.enter(gpa);
-
-    for (builtin_idents) |builtin_ident| {
-        _ = scope.levels.introduce(gpa, ident_store, .ident, builtin_ident, @enumFromInt(0)) catch {};
-    }
-
-    for (builtin_aliases) |builtin_alias| {
-        _ = scope.levels.introduce(gpa, ident_store, .alias, builtin_alias.name, @enumFromInt(0)) catch {};
-    }
 
     return scope;
 }
@@ -66,12 +52,6 @@ pub fn init(
 pub fn deinit(self: *Scope, gpa: std.mem.Allocator) void {
     Levels.deinit(gpa, &self.levels);
 }
-
-/// Result of a lookup operation
-pub const LookupResult = union(enum) {
-    Found: Pattern.Idx,
-    NotFound: void,
-};
 
 /// Level in the scope hierarchy
 pub const Level = struct {
@@ -179,11 +159,11 @@ pub const Levels = struct {
         ident_store: *const Ident.Store,
         comptime item_kind: Level.ItemKind,
         name: Ident.Idx,
-    ) LookupResult {
+    ) ?Pattern.Idx {
         if (self.contains(ident_store, item_kind, name)) |pattern| {
-            return .{ .Found = pattern };
+            return pattern;
         }
-        return .NotFound;
+        return null;
     }
 
     /// Introduce a new identifier to the current scope level
@@ -230,13 +210,13 @@ test "empty scope has no items" {
     var ident_store = Ident.Store.initCapacity(gpa, 100);
     defer ident_store.deinit(gpa);
 
-    var scope = init(gpa, &ident_store, &.{}, &.{});
+    var scope = init(gpa);
     defer scope.deinit(gpa);
 
     const foo_ident = ident_store.insert(gpa, Ident.for_text("foo"), Region.zero());
     const result = scope.levels.lookup(&ident_store, .ident, foo_ident);
 
-    try std.testing.expectEqual(LookupResult.NotFound, result);
+    try std.testing.expectEqual(null, result);
 }
 
 test "can add and lookup idents at top level" {
@@ -244,7 +224,7 @@ test "can add and lookup idents at top level" {
     var ident_store = Ident.Store.initCapacity(gpa, 100);
     defer ident_store.deinit(gpa);
 
-    var scope = init(gpa, &ident_store, &.{}, &.{});
+    var scope = init(gpa);
     defer scope.deinit(gpa);
 
     const foo_ident = ident_store.insert(gpa, Ident.for_text("foo"), Region.zero());
@@ -260,8 +240,8 @@ test "can add and lookup idents at top level" {
     const foo_result = scope.levels.lookup(&ident_store, .ident, foo_ident);
     const bar_result = scope.levels.lookup(&ident_store, .ident, bar_ident);
 
-    try std.testing.expectEqual(LookupResult{ .Found = foo_pattern }, foo_result);
-    try std.testing.expectEqual(LookupResult{ .Found = bar_pattern }, bar_result);
+    try std.testing.expectEqual(foo_pattern, foo_result);
+    try std.testing.expectEqual(bar_pattern, bar_result);
 }
 
 test "nested scopes shadow outer scopes" {
@@ -269,7 +249,7 @@ test "nested scopes shadow outer scopes" {
     var ident_store = Ident.Store.initCapacity(gpa, 100);
     defer ident_store.deinit(gpa);
 
-    var scope = init(gpa, &ident_store, &.{}, &.{});
+    var scope = init(gpa);
     defer scope.deinit(gpa);
 
     const x_ident = ident_store.insert(gpa, Ident.for_text("x"), Region.zero());
@@ -284,21 +264,21 @@ test "nested scopes shadow outer scopes" {
 
     // x from outer scope should still be visible
     const outer_result = scope.levels.lookup(&ident_store, .ident, x_ident);
-    try std.testing.expectEqual(LookupResult{ .Found = outer_pattern }, outer_result);
+    try std.testing.expectEqual(outer_pattern, outer_result);
 
     // Add x to inner scope (shadows outer)
     _ = try scope.levels.introduce(gpa, &ident_store, .ident, x_ident, inner_pattern);
 
     // Now x should resolve to inner scope
     const inner_result = scope.levels.lookup(&ident_store, .ident, x_ident);
-    try std.testing.expectEqual(LookupResult{ .Found = inner_pattern }, inner_result);
+    try std.testing.expectEqual(inner_pattern, inner_result);
 
     // Exit inner scope
     try scope.levels.exit(gpa);
 
     // x should resolve to outer scope again
     const after_exit_result = scope.levels.lookup(&ident_store, .ident, x_ident);
-    try std.testing.expectEqual(LookupResult{ .Found = outer_pattern }, after_exit_result);
+    try std.testing.expectEqual(outer_pattern, after_exit_result);
 }
 
 test "cannot introduce duplicate identifier in same scope" {
@@ -306,7 +286,7 @@ test "cannot introduce duplicate identifier in same scope" {
     var ident_store = Ident.Store.initCapacity(gpa, 100);
     defer ident_store.deinit(gpa);
 
-    var scope = init(gpa, &ident_store, &.{}, &.{});
+    var scope = init(gpa);
     defer scope.deinit(gpa);
 
     const x_ident = ident_store.insert(gpa, Ident.for_text("x"), Region.zero());
@@ -326,7 +306,7 @@ test "aliases work separately from idents" {
     var ident_store = Ident.Store.initCapacity(gpa, 100);
     defer ident_store.deinit(gpa);
 
-    var scope = init(gpa, &ident_store, &.{}, &.{});
+    var scope = init(gpa);
     defer scope.deinit(gpa);
 
     const foo = ident_store.insert(gpa, Ident.for_text("Foo"), Region.zero());
@@ -341,8 +321,8 @@ test "aliases work separately from idents" {
     const ident_result = scope.levels.lookup(&ident_store, .ident, foo);
     const alias_result = scope.levels.lookup(&ident_store, .alias, foo);
 
-    try std.testing.expectEqual(LookupResult{ .Found = ident_pattern }, ident_result);
-    try std.testing.expectEqual(LookupResult{ .Found = alias_pattern }, alias_result);
+    try std.testing.expectEqual(ident_pattern, ident_result);
+    try std.testing.expectEqual(alias_pattern, alias_result);
 }
 
 test "cannot exit top scope level" {
@@ -350,7 +330,7 @@ test "cannot exit top scope level" {
     var ident_store = Ident.Store.initCapacity(gpa, 100);
     defer ident_store.deinit(gpa);
 
-    var scope = init(gpa, &ident_store, &.{}, &.{});
+    var scope = init(gpa);
     defer scope.deinit(gpa);
 
     // Should fail to exit the only level
@@ -363,7 +343,7 @@ test "multiple nested scopes work correctly" {
     var ident_store = Ident.Store.initCapacity(gpa, 100);
     defer ident_store.deinit(gpa);
 
-    var scope = init(gpa, &ident_store, &.{}, &.{});
+    var scope = init(gpa);
     defer scope.deinit(gpa);
 
     const a = ident_store.insert(gpa, Ident.for_text("a"), Region.zero());
@@ -388,25 +368,25 @@ test "multiple nested scopes work correctly" {
     _ = try scope.levels.introduce(gpa, &ident_store, .ident, c, pattern_c);
 
     // Check all are visible with correct values
-    try std.testing.expectEqual(LookupResult{ .Found = pattern_a }, scope.levels.lookup(&ident_store, .ident, a));
-    try std.testing.expectEqual(LookupResult{ .Found = pattern_b2 }, scope.levels.lookup(&ident_store, .ident, b));
-    try std.testing.expectEqual(LookupResult{ .Found = pattern_c }, scope.levels.lookup(&ident_store, .ident, c));
+    try std.testing.expectEqual(pattern_a, scope.levels.lookup(&ident_store, .ident, a));
+    try std.testing.expectEqual(pattern_b2, scope.levels.lookup(&ident_store, .ident, b));
+    try std.testing.expectEqual(pattern_c, scope.levels.lookup(&ident_store, .ident, c));
 
     // Exit level 3
     try scope.levels.exit(gpa);
 
     // c should be gone, b should be from level 2
-    try std.testing.expectEqual(LookupResult{ .Found = pattern_a }, scope.levels.lookup(&ident_store, .ident, a));
-    try std.testing.expectEqual(LookupResult{ .Found = pattern_b1 }, scope.levels.lookup(&ident_store, .ident, b));
-    try std.testing.expectEqual(LookupResult.NotFound, scope.levels.lookup(&ident_store, .ident, c));
+    try std.testing.expectEqual(pattern_a, scope.levels.lookup(&ident_store, .ident, a));
+    try std.testing.expectEqual(pattern_b1, scope.levels.lookup(&ident_store, .ident, b));
+    try std.testing.expectEqual(null, scope.levels.lookup(&ident_store, .ident, c));
 
     // Exit level 2
     try scope.levels.exit(gpa);
 
     // Only a should remain
-    try std.testing.expectEqual(LookupResult{ .Found = pattern_a }, scope.levels.lookup(&ident_store, .ident, a));
-    try std.testing.expectEqual(LookupResult.NotFound, scope.levels.lookup(&ident_store, .ident, b));
-    try std.testing.expectEqual(LookupResult.NotFound, scope.levels.lookup(&ident_store, .ident, c));
+    try std.testing.expectEqual(pattern_a, scope.levels.lookup(&ident_store, .ident, a));
+    try std.testing.expectEqual(null, scope.levels.lookup(&ident_store, .ident, b));
+    try std.testing.expectEqual(null, scope.levels.lookup(&ident_store, .ident, c));
 }
 
 test "getAllIdentsInScope returns all identifiers" {
@@ -414,7 +394,7 @@ test "getAllIdentsInScope returns all identifiers" {
     var ident_store = Ident.Store.initCapacity(gpa, 100);
     defer ident_store.deinit(gpa);
 
-    var scope = init(gpa, &ident_store, &.{}, &.{});
+    var scope = init(gpa);
     defer scope.deinit(gpa);
 
     const a = ident_store.insert(gpa, Ident.for_text("a"), Region.zero());
@@ -454,7 +434,7 @@ test "identifiers with same text are treated as duplicates" {
     var ident_store = Ident.Store.initCapacity(gpa, 100);
     defer ident_store.deinit(gpa);
 
-    var scope = init(gpa, &ident_store, &.{}, &.{});
+    var scope = init(gpa);
     defer scope.deinit(gpa);
 
     // Create two different Ident.Idx with the same text
@@ -464,19 +444,22 @@ test "identifiers with same text are treated as duplicates" {
     // They should have different indices
     try std.testing.expect(foo1 != foo2);
 
+    const pattern_1_idx: Pattern.Idx = @enumFromInt(1);
+    const pattern_2_idx: Pattern.Idx = @enumFromInt(1);
+
     // Add the first one
-    _ = try scope.levels.introduce(gpa, &ident_store, .ident, foo1, @enumFromInt(1));
+    _ = try scope.levels.introduce(gpa, &ident_store, .ident, foo1, pattern_1_idx);
 
     // Adding the second should fail because it has the same text
-    const result = scope.levels.introduce(gpa, &ident_store, .ident, foo2, @enumFromInt(2));
+    const result = scope.levels.introduce(gpa, &ident_store, .ident, foo2, pattern_2_idx);
     try std.testing.expectError(Error.AlreadyInScope, result);
 
     // But looking up either should find the first one
     const lookup1 = scope.levels.lookup(&ident_store, .ident, foo1);
     const lookup2 = scope.levels.lookup(&ident_store, .ident, foo2);
 
-    try std.testing.expectEqual(LookupResult{ .Found = @enumFromInt(1) }, lookup1);
-    try std.testing.expectEqual(LookupResult{ .Found = @enumFromInt(1) }, lookup2);
+    try std.testing.expectEqual(pattern_1_idx, lookup1);
+    try std.testing.expectEqual(pattern_1_idx, lookup2);
 }
 
 test "cannot introduce duplicate alias in same scope" {
@@ -484,7 +467,7 @@ test "cannot introduce duplicate alias in same scope" {
     var ident_store = Ident.Store.initCapacity(gpa, 100);
     defer ident_store.deinit(gpa);
 
-    var scope = init(gpa, &ident_store, &.{}, &.{});
+    var scope = init(gpa);
     defer scope.deinit(gpa);
 
     const list_alias = ident_store.insert(gpa, Ident.for_text("List"), Region.zero());
@@ -504,7 +487,7 @@ test "shadowing works correctly for aliases" {
     var ident_store = Ident.Store.initCapacity(gpa, 100);
     defer ident_store.deinit(gpa);
 
-    var scope = init(gpa, &ident_store, &.{}, &.{});
+    var scope = init(gpa);
     defer scope.deinit(gpa);
 
     const my_type = ident_store.insert(gpa, Ident.for_text("MyType"), Region.zero());
@@ -520,14 +503,14 @@ test "shadowing works correctly for aliases" {
 
     // Should resolve to inner scope
     const inner_result = scope.levels.lookup(&ident_store, .alias, my_type);
-    try std.testing.expectEqual(LookupResult{ .Found = inner_pattern }, inner_result);
+    try std.testing.expectEqual(inner_pattern, inner_result);
 
     // Exit inner scope
     try scope.levels.exit(gpa);
 
     // Should resolve to outer scope again
     const outer_result = scope.levels.lookup(&ident_store, .alias, my_type);
-    try std.testing.expectEqual(LookupResult{ .Found = outer_pattern }, outer_result);
+    try std.testing.expectEqual(outer_pattern, outer_result);
 }
 
 test "deeply nested scopes maintain proper visibility" {
@@ -535,7 +518,7 @@ test "deeply nested scopes maintain proper visibility" {
     var ident_store = Ident.Store.initCapacity(gpa, 100);
     defer ident_store.deinit(gpa);
 
-    var scope = init(gpa, &ident_store, &.{}, &.{});
+    var scope = init(gpa);
     defer scope.deinit(gpa);
 
     const x = ident_store.insert(gpa, Ident.for_text("x"), Region.zero());
@@ -554,7 +537,7 @@ test "deeply nested scopes maintain proper visibility" {
 
         // Verify it resolves to the current pattern
         const result = scope.levels.lookup(&ident_store, .ident, x);
-        try std.testing.expectEqual(LookupResult{ .Found = pattern }, result);
+        try std.testing.expectEqual(pattern, result);
     }
 
     // Exit all scopes and verify x resolves correctly at each level
@@ -563,11 +546,11 @@ test "deeply nested scopes maintain proper visibility" {
         try scope.levels.exit(gpa);
         const expected = patterns[i - 2];
         const result = scope.levels.lookup(&ident_store, .ident, x);
-        try std.testing.expectEqual(LookupResult{ .Found = expected }, result);
+        try std.testing.expectEqual(expected, result);
     }
 
     // Exit the last scope - x should not be found
     try scope.levels.exit(gpa);
     const final_result = scope.levels.lookup(&ident_store, .ident, x);
-    try std.testing.expectEqual(LookupResult.NotFound, final_result);
+    try std.testing.expectEqual(null, final_result);
 }

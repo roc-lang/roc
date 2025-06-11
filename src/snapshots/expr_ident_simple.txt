@@ -4,7 +4,7 @@ type=expr
 ~~~SOURCE
 foo
 ~~~PROBLEMS
-NIL
+CANONICALIZE: ident_not_in_scope
 ~~~TOKENS
 LowerIdent(1:1-1:4),EndOfFile(1:4-1:4),
 ~~~PARSE
@@ -12,5 +12,5 @@ LowerIdent(1:1-1:4),EndOfFile(1:4-1:4),
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(can_ir (top_level_defs "empty"))
+(runtime_error (1:1-1:1) "RUNTIME ERROR : ident_not_in_scope")
 ~~~END

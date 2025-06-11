@@ -36,15 +36,16 @@ pub const Problem = union(enum) {
             not_implemented,
             exited_top_scope_level,
             unable_to_resolve_identifier,
+            failed_to_canonicalize_decl,
         };
 
         /// Make a `Problem` based on a compiler error.
-        pub fn make(compiler_error: @This()) Problem {
+        pub fn make(compiler_error: Compiler) Problem {
             return Problem{ .compiler = compiler_error };
         }
 
         /// Make a  based on a compiler error.
-        pub fn makeCanonicalize(tag: Can) Problem {
+        pub fn can(tag: Can) Problem {
             return Problem{ .compiler = .{ .canonicalize = tag } };
         }
     };

@@ -5,7 +5,9 @@ type=expr
 "This is a string with ${some_func(a, #This is a comment
 b)} lines of text due to the template parts"
 ~~~PROBLEMS
-NIL
+CANONICALIZE: ident_not_in_scope
+CANONICALIZE: ident_not_in_scope
+CANONICALIZE: ident_not_in_scope
 ~~~TOKENS
 StringStart(1:1-1:2),StringPart(1:2-1:24),OpenStringInterpolation(1:24-1:26),LowerIdent(1:26-1:35),NoSpaceOpenRound(1:35-1:36),LowerIdent(1:36-1:37),Comma(1:37-1:38),Newline(1:40-1:57),
 LowerIdent(2:1-2:2),CloseRound(2:2-2:3),CloseStringInterpolation(2:3-2:4),StringPart(2:4-2:44),StringEnd(2:44-2:45),EndOfFile(2:45-2:45),
@@ -26,7 +28,13 @@ LowerIdent(2:1-2:2),CloseRound(2:2-2:3),CloseStringInterpolation(2:3-2:4),String
 } lines of text due to the template parts"
 ~~~CANONICALIZE
 (call
-	(lookup (ident "Str.concat"))
-	(str "This is a string with ")
+	(lookup (pattern_idx "0"))
+	(call
+		(lookup (pattern_idx "0"))
+		(str "This is a string with ")
+		(call
+			(runtime_error (1:4-1:4) "RUNTIME ERROR : ident_not_in_scope")
+			(runtime_error (1:6-1:6) "RUNTIME ERROR : ident_not_in_scope")
+			(runtime_error (1:9-1:9) "RUNTIME ERROR : ident_not_in_scope")))
 	(str " lines of text due to the template parts"))
 ~~~END

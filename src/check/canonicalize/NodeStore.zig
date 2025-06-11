@@ -104,12 +104,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
 
     switch (node.tag) {
         .expr_var => {
-            const ident_idx: base.Ident.Idx = @bitCast(@as(u32, @bitCast(node.data_1)));
-            return CIR.Expr{
-                .lookup = .{
-                    .ident = ident_idx,
-                },
-            };
+            return CIR.Expr{ .lookup = .{ .pattern_idx = @enumFromInt(node.data_1) } };
         },
         .expr_int => {
             // Retrieve the literal index from data_1
@@ -187,9 +182,10 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             };
         },
         .malformed => {
-            return CIR.Expr{
-                .runtime_error = @enumFromInt(node.data_1),
-            };
+            return CIR.Expr{ .runtime_error = .{
+                .tag = @enumFromInt(node.data_1),
+                .region = node.region,
+            } };
         },
         .statement_expr,
         .statement_decl,
@@ -237,7 +233,10 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         .if_branch,
         => {
             std.log.debug("TODO: implement getExpr for node type {?}", .{node.tag});
-            return CIR.Expr{ .runtime_error = @enumFromInt(0) };
+            return CIR.Expr{ .runtime_error = .{
+                .tag = CIR.Diagnostic.Tag.not_implemented,
+                .region = node.region,
+            } };
         },
     }
 }
@@ -332,7 +331,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.ExprAtRegion) CIR.Expr.Idx {
     switch (expr.expr) {
         .lookup => |e| {
             node.tag = .expr_var;
-            node.data_1 = @bitCast(@as(u32, @bitCast(e.ident)));
+            node.data_1 = @intFromEnum(e.pattern_idx);
         },
         .int => |e| {
             node.tag = .expr_int;
@@ -375,8 +374,9 @@ pub fn addExpr(store: *NodeStore, expr: CIR.ExprAtRegion) CIR.Expr.Idx {
             node.data_1 = @bitCast(@as(u32, @bitCast(e.name)));
         },
         .runtime_error => |err| {
-            node.data_1 = @intFromEnum(err);
+            node.data_1 = @intFromEnum(err.tag);
             node.tag = .malformed;
+            node.region = err.region;
         },
         .num => {
             @panic("TODO addExpr num");

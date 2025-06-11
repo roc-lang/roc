@@ -40,8 +40,8 @@ NO CHANGE
 (can_ir
 	(top_level_defs
 		(def
-			(Let)
-			(pattern (1:15-1:15) (pattern_ident (ident "a")))
+			(let)
+			(pattern (1:15-1:15) (assign (ident "a")))
 			(expr (1:1-1:1)
 				(int
 					(num_var "#0")
@@ -49,5 +49,19 @@ NO CHANGE
 					(literal "5")
 					(value "TODO")
 					(bound "i128")))
-			"#2")))
+			"#2")
+		(def
+			(let)
+			(pattern (1:19-1:19) (assign (ident "b")))
+			(expr (1:1-1:1)
+				(call
+					(lookup (pattern_idx "0"))
+					(lookup (pattern_idx "1"))
+					(int
+						(num_var "#3")
+						(precision_var "#4")
+						(literal "1")
+						(value "TODO")
+						(bound "i128"))))
+			"#5")))
 ~~~END

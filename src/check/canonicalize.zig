@@ -19,9 +19,24 @@ const ModuleEnv = base.ModuleEnv;
 const Problem = problem.Problem;
 const exitOnOom = collections.utils.exitOnOom;
 
-pub fn init(can_ir: *CIR, parse_ir: *parse.IR, scope: *Scope) Self {
+const BUILTIN_NUM_ADD: CIR.Pattern.Idx = @enumFromInt(0);
+
+pub fn init(self: *CIR, parse_ir: *parse.IR, scope: *Scope) Self {
+    const gpa = self.env.gpa;
+    const ident_store = self.env.idents;
+
+    // Simulate the builtins by adding to both the NodeStore and Scope
+    // Not sure if this is how we want to do it long term, but want something to
+    // make a start on canonicalization
+
+    // BINOP_ADD "+"
+    const ident_add = self.env.idents.insert(gpa, base.Ident.for_text("add"), base.Region.zero());
+    const pattern_idx_add = self.store.addPattern(CIR.Pattern{ .assign = ident_add });
+    _ = scope.levels.introduce(gpa, &ident_store, .ident, ident_add, pattern_idx_add) catch {};
+    std.debug.assert(BUILTIN_NUM_ADD == pattern_idx_add);
+
     return .{
-        .can_ir = can_ir,
+        .can_ir = self,
         .parse_ir = parse_ir,
         .scope = scope,
     };
@@ -68,6 +83,8 @@ pub fn canonicalize_file(
             .decl => |decl| {
                 if (self.canonicalize_decl(decl)) |def_idx| {
                     self.can_ir.store.addScratchDef(def_idx);
+                } else {
+                    self.can_ir.env.pushProblem(Problem.Compiler.can(.failed_to_canonicalize_decl));
                 }
             },
             .@"var" => |v| {
@@ -83,7 +100,7 @@ pub fn canonicalize_file(
                 self.can_ir.pushDiagnostic(.invalid_top_level_statement, crash.region.toBase());
             },
             .expect => |_| {
-                self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
+                self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             },
             .@"for" => |f| {
                 // Not valid at top-level
@@ -94,10 +111,10 @@ pub fn canonicalize_file(
                 self.can_ir.pushDiagnostic(.invalid_top_level_statement, return_stmt.region.toBase());
             },
             .type_decl => |_| {
-                self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
+                self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             },
             .type_anno => |_| {
-                self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
+                self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             },
             .malformed => |malformed| {
                 // We won't touch this since it's already a parse error.
@@ -283,7 +300,7 @@ fn canonicalize_decl(
         .expr_region = self.parse_ir.store.getExpr(decl.body).to_region().toBase(),
         .expr_var = expr_var,
         .annotation = null,
-        .kind = .Let,
+        .kind = .let,
     });
 }
 
@@ -330,36 +347,20 @@ pub fn canonicalize_expr(
         },
         .ident => |e| {
             if (self.parse_ir.tokens.resolveIdentifier(e.token)) |ident| {
-                _ = ident;
-
-                // TODO
-                self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
-                return null;
-
-                // TODO: Implement identifier resolution logic
-                // switch (self.scope.levels.lookup(&self.can_ir.env.idents, .ident, ident)) {
-                //     .InScope, .NotInScope => {
-                //         // Create lookup expression even if not in scope
-                //         // The lookup function already recorded the problem
-                //         return self.can_ir.store.addExpr(.{
-                //             .expr = .{ .lookup = .{
-                //                 .ident = ident,
-                //             } },
-                //             .region = e.region.toBase(),
-                //         });
-                //     },
-                //     .NotPresent => {
-                //         // Identifier doesn't exist at all - this shouldn't happen
-                //         // but we'll still create a lookup for robustness
-                //         return self.can_ir.store.addExpr(.{
-                //             .expr = .{ .lookup = .{
-                //                 .ident = ident,
-                //             } },
-                //             .region = e.region.toBase(),
-                //         });
-                //     },
-                // }
+                if (self.scope.levels.lookup(&self.can_ir.env.idents, .ident, ident)) |pattern_idx| {
+                    // We found the ident in scope, lookup to reference the pattern
+                    return self.can_ir.store.addExpr(
+                        CIR.ExprAtRegion{
+                            .expr = .{ .lookup = .{ .pattern_idx = pattern_idx } },
+                            .region = e.region.toBase(),
+                        },
+                    );
+                } else {
+                    // We did not find the ident in scope
+                    return self.can_ir.pushMalformed(CIR.Expr.Idx, .ident_not_in_scope, e.region.toBase());
+                }
             } else {
+                self.can_ir.env.pushProblem(Problem.Compiler.can(.unable_to_resolve_identifier));
                 return null;
             }
         },
@@ -517,31 +518,31 @@ pub fn canonicalize_expr(
             }
         },
         .string_part => |_| {
-            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
         .tuple => |_| {
-            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
         .record => |_| {
-            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
         .lambda => |_| {
-            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
         .record_updater => |_| {
-            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
         .field_access => |_| {
-            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
         .local_dispatch => |_| {
-            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
         .bin_op => |e| {
@@ -555,8 +556,9 @@ pub fn canonicalize_expr(
             // Get the operator token
             const op_token = self.parse_ir.tokens.tokens.get(e.operator);
 
-            // Map operator to function name
-            // TODO find the correct names to use here...
+            // TODO use static dispatch or do something proper
+            // here we are simply mapping an operator to function name
+            // as an interim thing to have a simplified Canonicalize implementation
             const op_name = switch (op_token.tag) {
                 .OpPlus => "add",
                 .OpStar => "mul",
@@ -581,25 +583,19 @@ pub fn canonicalize_expr(
                 else => return null, // Unknown operator
             };
 
-            // Determine module prefix based on operator type
-            // TODO: Use module prefix when we properly resolve operator functions
-            // const module_prefix = switch (e.op) {
-            //     .plus, .minus, .star, .slash, .double_slash, .percent, .caret => "Num",
-            //     .greater_than, .less_than, .greater_than_or_eq, .less_than_or_eq, .double_eq, .not_eq => "Bool",
-            //     .double_ampersand, .double_pipe => "Bool",
-            //     .pizza, .pipe => "", // No module prefix for these
-            //     else => "",
-            // };
+            // lookup the builtin function
+            // self.can_ir.env.idents.
+            // self.scope.levels.lookup(self.can_ir.env.types_store, comptime item_kind: Level.ItemKind, name: Ident.Idx)
 
-            // For now, create a simple call expression
             const scratch_top = self.can_ir.store.scratchExprTop();
 
             // Create the operator function lookup
             // For now, we'll create a simple identifier lookup
             const ident = Ident.for_text(op_name);
             const op_ident = self.can_ir.env.idents.insert(self.can_ir.env.gpa, ident, e.region.toBase());
+            _ = op_ident;
             const op_lookup = self.can_ir.store.addExpr(.{
-                .expr = .{ .lookup = .{ .ident = op_ident } },
+                .expr = .{ .lookup = .{ .pattern_idx = @enumFromInt(0) } },
                 .region = e.region.toBase(),
             });
 
@@ -612,11 +608,7 @@ pub fn canonicalize_expr(
             const args_span = self.can_ir.store.exprSpanFrom(scratch_top);
 
             // Create the call expression
-            const call_expr = CIR.Expr{
-                .call = .{
-                    .args = args_span,
-                },
-            };
+            const call_expr = CIR.Expr{ .call = .{ .args = args_span } };
 
             return self.can_ir.store.addExpr(.{
                 .expr = call_expr,
@@ -624,39 +616,39 @@ pub fn canonicalize_expr(
             });
         },
         .suffix_single_question => |_| {
-            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
         .unary_op => |_| {
-            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
         .if_then_else => |_| {
-            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
         .match => |_| {
-            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
         .dbg => |_| {
-            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
         .record_builder => |_| {
-            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
         .ellipsis => |_| {
-            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
         .block => |_| {
-            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
         .malformed => |_| {
-            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
     }
@@ -753,6 +745,7 @@ fn desugarStringInterpolation(self: *Self, segments: []const StringSegment, regi
     // TODO use a proper builtin when we have this...
     const str_concat_ident = Ident.for_text("Str.concat");
     const str_concat_idx = self.can_ir.env.idents.insert(self.can_ir.env.gpa, str_concat_ident, region);
+    _ = str_concat_idx;
 
     // Build nested Str.concat calls from left to right
     // For segments ["Hello ", name, "!"], create: Str.concat (Str.concat "Hello " name) "!"
@@ -765,7 +758,7 @@ fn desugarStringInterpolation(self: *Self, segments: []const StringSegment, regi
         // Create the Str.concat lookup
         const concat_fn = self.can_ir.store.addExpr(.{
             .expr = .{ .lookup = .{
-                .ident = str_concat_idx,
+                .pattern_idx = @enumFromInt(0),
             } },
             .region = region,
         });
@@ -804,13 +797,11 @@ fn canonicalize_pattern(
     switch (self.parse_ir.store.getPattern(pattern_idx)) {
         .ident => |e| {
             if (self.parse_ir.tokens.resolveIdentifier(e.ident_tok)) |ident_idx| {
-                const ident_pattern = CIR.Pattern{
-                    .assign = ident_idx,
-                };
 
-                const assign_idx = self.can_ir.store.addPattern(ident_pattern);
+                // Push a Pattern node for our identifier
+                const assign_idx = self.can_ir.store.addPattern(CIR.Pattern{ .assign = ident_idx });
 
-                // Introduce the identifier into scope
+                // Introduce the identifier into scope mapping to this pattern node
                 self.scope.levels.introduce(
                     gpa,
                     &self.can_ir.env.idents,
@@ -823,7 +814,7 @@ fn canonicalize_pattern(
 
                 return assign_idx;
             } else {
-                self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.unable_to_resolve_identifier));
+                self.can_ir.env.pushProblem(Problem.Compiler.can(.unable_to_resolve_identifier));
                 return null;
             }
         },
@@ -906,27 +897,27 @@ fn canonicalize_pattern(
             return null;
         },
         .record => |_| {
-            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
         .tuple => |_| {
-            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
         .list => |_| {
-            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
         .list_rest => |_| {
-            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
         .alternatives => |_| {
-            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
         .malformed => |_| {
-            self.can_ir.env.pushProblem(Problem.Compiler.makeCanonicalize(.not_implemented));
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
     }
