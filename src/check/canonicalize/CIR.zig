@@ -830,22 +830,56 @@ pub const Def = struct {
 
     pub const Kind = union(enum) {
         /// A def that introduces identifiers
-        Let,
+        let,
         /// A standalone statement with an fx variable
-        Stmt: TypeVar,
+        stmt: TypeVar,
         /// Ignored result, must be effectful
-        Ignored: TypeVar,
+        ignored: TypeVar,
 
         pub fn toSExpr(self: *const @This(), gpa: std.mem.Allocator) sexpr.Expr {
             switch (self.*) {
-                .Let => return sexpr.Expr.init(gpa, "Let"),
-                .Stmt => {
-                    const node = sexpr.Expr.init(gpa, "Stmt");
-                    return node;
-                },
-                .Ignored => {
-                    const node = sexpr.Expr.init(gpa, "Ignored");
-                    return node;
+                .let => return sexpr.Expr.init(gpa, "let"),
+                .stmt => return sexpr.Expr.init(gpa, "stmt"),
+                .ignored => return sexpr.Expr.init(gpa, "ignored"),
+            }
+        }
+
+        /// encode the kind of def into two u32 values
+        pub fn encode(self: *const Kind) [2]u32 {
+            switch (self.*) {
+                .let => return .{ 0, 0 },
+                .stmt => |ty_var| return .{ 1, @intFromEnum(ty_var) },
+                .ignored => |ty_var| return .{ 2, @intFromEnum(ty_var) },
+            }
+        }
+
+        /// decode the kind of def from two u32 values
+        pub fn decode(data: [2]u32) Kind {
+            if (data[0] == 0) {
+                return .let;
+            } else if (data[0] == 1) {
+                return .{ .stmt = @as(TypeVar, @enumFromInt(data[1])) };
+            } else if (data[0] == 2) {
+                return .{ .ignored = @as(TypeVar, @enumFromInt(data[1])) };
+            } else {
+                @panic("invalid def kind");
+            }
+        }
+
+        test "encode and decode def kind" {
+            const kind: Kind = Kind.let;
+            const encoded = kind.encode();
+            const decoded = Kind.decode(encoded);
+            try std.testing.expect(decoded == Kind.let);
+        }
+
+        test "encode and decode def kind with type var" {
+            const kind: Kind = .{ .stmt = @as(TypeVar, @enumFromInt(42)) };
+            const encoded = kind.encode();
+            const decoded = Kind.decode(encoded);
+            switch (decoded) {
+                .stmt => |stmt| {
+                    try std.testing.expect(stmt == @as(TypeVar, @enumFromInt(42)));
                 },
             }
         }

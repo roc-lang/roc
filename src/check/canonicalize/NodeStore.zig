@@ -533,15 +533,17 @@ pub fn addDef(store: *NodeStore, def: CIR.Def) CIR.Def.Idx {
     store.extra_data.append(store.gpa, @intFromEnum(def.expr)) catch |err| exitOnOom(err);
     // Store expr_var
     store.extra_data.append(store.gpa, @intFromEnum(def.expr_var)) catch |err| exitOnOom(err);
-    // Store kind tag
-    store.extra_data.append(store.gpa, @intFromEnum(def.kind)) catch |err| exitOnOom(err);
+    // Store kind tag as two u32's
+    const kind_encoded = def.kind.encode();
+    store.extra_data.append(store.gpa, kind_encoded[0]) catch |err| exitOnOom(err);
+    store.extra_data.append(store.gpa, kind_encoded[1]) catch |err| exitOnOom(err);
     // Store annotation idx (0 if null)
     const anno_idx = if (def.annotation) |anno| @intFromEnum(anno) else 0;
     store.extra_data.append(store.gpa, anno_idx) catch |err| exitOnOom(err);
 
     // Store the extra data range in the node
     node.data_1 = extra_start;
-    node.data_2 = 5; // Number of extra data items
+    node.data_2 = 6; // Number of extra data items
 
     return @enumFromInt(@intFromEnum(store.nodes.append(store.gpa, node)));
 }
@@ -559,13 +561,9 @@ pub fn getDef(store: *NodeStore, def_idx: CIR.Def.Idx) CIR.Def {
     const pattern: CIR.Pattern.Idx = @enumFromInt(extra_data[0]);
     const expr: CIR.Expr.Idx = @enumFromInt(extra_data[1]);
     const expr_var: types.Var = @enumFromInt(extra_data[2]);
-    const kind_tag = extra_data[3];
-    const anno_idx = extra_data[4];
-
-    const kind: CIR.Def.Kind = switch (kind_tag) {
-        @intFromEnum(CIR.Def.Kind.Let) => .Let,
-        else => .{ .Stmt = @enumFromInt(0) }, // TODO: implement proper kind deserialization
-    };
+    const kind_encoded = .{ extra_data[3], extra_data[4] };
+    const kind = CIR.Def.Kind.decode(kind_encoded);
+    const anno_idx = extra_data[5];
 
     const annotation: ?CIR.Annotation.Idx = if (anno_idx == 0) null else @enumFromInt(anno_idx);
 
