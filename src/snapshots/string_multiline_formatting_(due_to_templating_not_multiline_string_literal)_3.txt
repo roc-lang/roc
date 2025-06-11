@@ -30,14 +30,11 @@ CloseStringInterpolation(6:1-6:2),StringPart(6:2-6:42),StringEnd(6:42-6:43),EndO
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(call
-	(lookup (pattern_idx "0"))
+(string
+	(literal "This is a string with ")
 	(call
-		(lookup (pattern_idx "0"))
-		(str "This is a string with ")
-		(call
-			(runtime_error (1:5-1:5) "RUNTIME ERROR ident_not_in_scope")
-			(runtime_error (1:8-1:8) "RUNTIME ERROR ident_not_in_scope")
-			(runtime_error (1:11-1:11) "RUNTIME ERROR ident_not_in_scope")))
-	(str " lines of text due to the template parts"))
+		(runtime_error (1:5-1:5) "RUNTIME ERROR ident_not_in_scope")
+		(runtime_error (1:8-1:8) "RUNTIME ERROR ident_not_in_scope")
+		(runtime_error (1:11-1:11) "RUNTIME ERROR ident_not_in_scope"))
+	(literal " lines of text due to the template parts"))
 ~~~END

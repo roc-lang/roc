@@ -45,6 +45,6 @@ foo =
 		(def
 			(let)
 			(pattern (2:3-2:3) (assign (ident "foo")))
-			(expr (1:1-1:1) (str "onmo %"))
+			(expr (1:1-1:1) (string (literal "onmo %")))
 			"#0")))
 ~~~END

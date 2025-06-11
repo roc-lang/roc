@@ -84,6 +84,7 @@ pub const Diagnostic = struct {
         ident_not_in_scope,
         invalid_top_level_statement,
         expr_not_canonicalized,
+        invalid_string_interpolation,
     };
 };
 
@@ -327,7 +328,13 @@ pub const Expr = union(enum) {
         value: f64,
         bound: types.Num.Compact.Frac.Precision,
     },
-    str: StringLiteral.Idx,
+    // A single segment of a string literal
+    // a single string may be made up of a span sequential segments
+    // for example if it was split across multiple lines
+    str_segment: StringLiteral.Idx,
+    // A string is combined of one or more segments, some of which may be interpolated
+    // An interpolated string contains one or more non-string_segment's in the span
+    str: Expr.Span,
     single_quote: struct {
         num_var: TypeVar,
         precision_var: TypeVar,
@@ -386,7 +393,7 @@ pub const Expr = union(enum) {
         region: base.Region,
     },
 
-    const Lookup = struct {
+    pub const Lookup = struct {
         pattern_idx: Pattern.Idx,
     };
 
@@ -521,10 +528,20 @@ pub const Expr = union(enum) {
 
                 return float_node;
             },
-            .str => |str_idx| {
+            .str_segment => |str_idx| {
                 const value = ir.env.strings.get(str_idx);
-                var str_node = sexpr.Expr.init(gpa, "str");
+                var str_node = sexpr.Expr.init(gpa, "literal");
                 str_node.appendStringChild(gpa, value);
+                return str_node;
+            },
+            .str => |segment_span| {
+                var str_node = sexpr.Expr.init(gpa, "string");
+
+                for (ir.store.sliceExpr(segment_span)) |segment| {
+                    var segment_node = ir.store.getExpr(segment).toSExpr(ir, line_starts, source);
+                    str_node.appendNodeChild(gpa, &segment_node);
+                }
+
                 return str_node;
             },
             .single_quote => |e| {

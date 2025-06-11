@@ -36,11 +36,11 @@ NO CHANGE
 		(def
 			(let)
 			(pattern (1:9-1:9) (assign (ident "foo")))
-			(expr (1:1-1:1) (str "one"))
+			(expr (1:1-1:1) (string (literal "one")))
 			"#0")
 		(def
 			(let)
 			(pattern (1:16-1:16) (assign (ident "bar")))
-			(expr (1:1-1:1) (str "two"))
+			(expr (1:1-1:1) (string (literal "two")))
 			"#1")))
 ~~~END

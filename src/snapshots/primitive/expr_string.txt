@@ -33,18 +33,15 @@ NO CHANGE
 		(def
 			(let)
 			(pattern (1:6-1:6) (assign (ident "name")))
-			(expr (1:1-1:1) (str "luc"))
+			(expr (1:1-1:1) (string (literal "luc")))
 			"#0")
 		(def
 			(let)
 			(pattern (1:12-1:12) (assign (ident "foo")))
 			(expr (1:1-1:1)
-				(call
-					(lookup (pattern_idx "0"))
-					(call
-						(lookup (pattern_idx "0"))
-						(str "hello ")
-						(lookup (pattern_idx "1")))
-					(str "")))
+				(string
+					(literal "hello ")
+					(lookup (pattern_idx "1"))
+					(literal "")))
 			"#1")))
 ~~~END

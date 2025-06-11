@@ -45,7 +45,7 @@ pub const Tag = enum {
     expr_static_dispatch,
     expr_apply,
     expr_string,
-    expr_string_part,
+    expr_string_segment,
     expr_int,
     expr_float,
     expr_tag,

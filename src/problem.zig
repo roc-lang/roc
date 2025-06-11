@@ -38,6 +38,7 @@ pub const Problem = union(enum) {
             unable_to_resolve_identifier,
             failed_to_canonicalize_decl,
             unexpected_token_binop,
+            concatenate_an_interpolated_string,
         };
 
         /// Make a `Problem` based on a compiler error.

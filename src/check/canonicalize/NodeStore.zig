@@ -166,9 +166,17 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 },
             };
         },
+        .expr_string_segment => {
+            return .{
+                .str_segment = @enumFromInt(node.data_1),
+            };
+        },
         .expr_string => {
             return .{
-                .str = @enumFromInt(node.data_1),
+                .str = .{ .span = base.DataSpan{
+                    .start = node.data_1,
+                    .len = node.data_2,
+                } },
             };
         },
         .expr_tag => {
@@ -209,7 +217,6 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         .expr_field_access,
         .expr_static_dispatch,
         .expr_apply,
-        .expr_string_part,
         .expr_lambda,
         .expr_record_update,
         .expr_unary,
@@ -369,10 +376,14 @@ pub fn addExpr(store: *NodeStore, expr: CIR.ExprAtRegion) CIR.Expr.Idx {
 
             // TODO for storing the value and bound, use extra_data
         },
+        .str_segment => |str_literal_idx| {
+            node.tag = .expr_string_segment;
+            node.data_1 = @intFromEnum(str_literal_idx);
+        },
         .str => |e| {
             node.tag = .expr_string;
-            // TODO: Store string data properly. For now, just store the literal idx
-            node.data_1 = @intCast(@intFromEnum(e));
+            node.data_1 = e.span.start;
+            node.data_2 = e.span.len;
         },
         .tag => |e| {
             node.tag = .expr_tag;
@@ -675,17 +686,22 @@ pub fn clearScratchDefsFrom(store: *NodeStore, start: u32) void {
 }
 
 /// Creates a slice corresponding to a span.
-pub fn sliceFromSpan(store: *NodeStore, comptime T: type, span: base.DataSpan) []T {
+pub fn sliceFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan) []T {
     return @ptrCast(store.extra_data.items[span.start..][0..span.len]);
 }
 
 /// Returns a slice of definitions from the store.
-pub fn sliceDefs(store: *NodeStore, span: CIR.Def.Span) []CIR.Def.Idx {
+pub fn sliceDefs(store: *const NodeStore, span: CIR.Def.Span) []CIR.Def.Idx {
     return store.sliceFromSpan(CIR.Def.Idx, span.span);
 }
 
+/// Returns a slice of expressions from the store.
+pub fn sliceExpr(store: *const NodeStore, span: CIR.Expr.Span) []CIR.Expr.Idx {
+    return store.sliceFromSpan(CIR.Expr.Idx, span.span);
+}
+
 /// Returns a slice of `CanIR.Pattern.Idx`
-pub fn slicePatterns(store: *NodeStore, span: CIR.Pattern.Span) []CIR.Pattern.Idx {
+pub fn slicePatterns(store: *const NodeStore, span: CIR.Pattern.Span) []CIR.Pattern.Idx {
     return store.sliceFromSpan(CIR.Pattern.Idx, span.span);
 }
 

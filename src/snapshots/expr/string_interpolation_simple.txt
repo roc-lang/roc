@@ -15,11 +15,8 @@ StringStart(1:1-1:2),StringPart(1:2-1:8),OpenStringInterpolation(1:8-1:10),Lower
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(call
-	(lookup (pattern_idx "0"))
-	(call
-		(lookup (pattern_idx "0"))
-		(str "Hello ")
-		(runtime_error (1:4-1:4) "RUNTIME ERROR ident_not_in_scope"))
-	(str "!"))
+(string
+	(literal "Hello ")
+	(runtime_error (1:4-1:4) "RUNTIME ERROR ident_not_in_scope")
+	(literal "!"))
 ~~~END
