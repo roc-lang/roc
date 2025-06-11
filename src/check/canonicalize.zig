@@ -546,12 +546,17 @@ pub fn canonicalize_expr(
             return null;
         },
         .bin_op => |e| {
-            // Binary operators are desugared to function calls
-            // e.g., `x + y` becomes `Num.add x y`
 
             // Canonicalize left and right operands
-            const left_expr = self.canonicalize_expr(e.left) orelse return null;
-            const right_expr = self.canonicalize_expr(e.right) orelse return null;
+            const lhs = if (self.canonicalize_expr(e.left)) |left_expr_idx|
+                left_expr_idx
+            else
+                self.can_ir.pushMalformed(CIR.Expr.Idx, .expr_not_canonicalized, e.region.toBase());
+
+            const rhs = if (self.canonicalize_expr(e.right)) |right_expr_idx|
+                right_expr_idx
+            else
+                self.can_ir.pushMalformed(CIR.Expr.Idx, .expr_not_canonicalized, e.region.toBase());
 
             // Get the operator token
             const op_token = self.parse_ir.tokens.tokens.get(e.operator);
@@ -559,59 +564,19 @@ pub fn canonicalize_expr(
             // TODO use static dispatch or do something proper
             // here we are simply mapping an operator to function name
             // as an interim thing to have a simplified Canonicalize implementation
-            const op_name = switch (op_token.tag) {
-                .OpPlus => "add",
-                .OpStar => "mul",
-                .OpAssign => "assign",
-                .OpBinaryMinus => "sub",
-                .OpUnaryMinus => "neg",
-                .OpNotEquals => "isNotEq",
-                .OpBang => "not",
-                .OpAnd => "and",
-                .OpAmpersand => "bitAnd",
-                .OpOr => "or",
-                .OpBar => "bitOr",
-                .OpDoubleSlash => "doubleSlash",
-                .OpSlash => "div",
-                .OpPercent => "rem",
-                .OpCaret => "pow",
-                .OpGreaterThanOrEq => "isGte",
-                .OpGreaterThan => "isGt",
-                .OpLessThanOrEq => "isLte",
-                .OpLessThan => "isLt",
-                .OpEquals => "isEq",
-                else => return null, // Unknown operator
+            const op: CIR.Expr.Binop.Op = switch (op_token.tag) {
+                .OpPlus => .add,
+                .OpBinaryMinus => .sub,
+                .OpStar => .mul,
+                else => {
+                    // Unknown operator
+                    self.can_ir.env.pushProblem(Problem.Compiler.can(.unexpected_token_binop));
+                    return null;
+                },
             };
 
-            // lookup the builtin function
-            // self.can_ir.env.idents.
-            // self.scope.levels.lookup(self.can_ir.env.types_store, comptime item_kind: Level.ItemKind, name: Ident.Idx)
-
-            const scratch_top = self.can_ir.store.scratchExprTop();
-
-            // Create the operator function lookup
-            // For now, we'll create a simple identifier lookup
-            const ident = Ident.for_text(op_name);
-            const op_ident = self.can_ir.env.idents.insert(self.can_ir.env.gpa, ident, e.region.toBase());
-            _ = op_ident;
-            const op_lookup = self.can_ir.store.addExpr(.{
-                .expr = .{ .lookup = .{ .pattern_idx = @enumFromInt(0) } },
-                .region = e.region.toBase(),
-            });
-
-            // Add function and arguments to scratch
-            self.can_ir.store.addScratchExpr(op_lookup);
-            self.can_ir.store.addScratchExpr(left_expr);
-            self.can_ir.store.addScratchExpr(right_expr);
-
-            // Create span from scratch expressions
-            const args_span = self.can_ir.store.exprSpanFrom(scratch_top);
-
-            // Create the call expression
-            const call_expr = CIR.Expr{ .call = .{ .args = args_span } };
-
             return self.can_ir.store.addExpr(.{
-                .expr = call_expr,
+                .expr = .{ .binop = CIR.Expr.Binop.init(op, lhs, rhs) },
                 .region = e.region.toBase(),
             });
         },

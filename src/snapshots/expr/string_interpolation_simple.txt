@@ -20,6 +20,6 @@ NO CHANGE
 	(call
 		(lookup (pattern_idx "0"))
 		(str "Hello ")
-		(runtime_error (1:4-1:4) "RUNTIME ERROR : ident_not_in_scope"))
+		(runtime_error (1:4-1:4) "RUNTIME ERROR ident_not_in_scope"))
 	(str "!"))
 ~~~END

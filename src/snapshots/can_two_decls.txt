@@ -54,8 +54,8 @@ NO CHANGE
 			(let)
 			(pattern (1:19-1:19) (assign (ident "b")))
 			(expr (1:1-1:1)
-				(call
-					(lookup (pattern_idx "0"))
+				(binop
+					"add"
 					(lookup (pattern_idx "1"))
 					(int
 						(num_var "#3")

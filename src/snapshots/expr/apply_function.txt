@@ -16,7 +16,7 @@ LowerIdent(1:1-1:4),NoSpaceOpenRound(1:4-1:5),Int(1:5-1:7),Comma(1:7-1:8),String
 NO CHANGE
 ~~~CANONICALIZE
 (call
-	(runtime_error (1:1-1:1) "RUNTIME ERROR : ident_not_in_scope")
+	(runtime_error (1:1-1:1) "RUNTIME ERROR ident_not_in_scope")
 	(int
 		(num_var "#0")
 		(precision_var "#1")

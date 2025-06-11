@@ -37,6 +37,7 @@ pub const Problem = union(enum) {
             exited_top_scope_level,
             unable_to_resolve_identifier,
             failed_to_canonicalize_decl,
+            unexpected_token_binop,
         };
 
         /// Make a `Problem` based on a compiler error.

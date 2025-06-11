@@ -83,6 +83,7 @@ pub const Diagnostic = struct {
         ident_already_in_scope,
         ident_not_in_scope,
         invalid_top_level_statement,
+        expr_not_canonicalized,
     };
 };
 
@@ -378,6 +379,7 @@ pub const Expr = union(enum) {
         ext_var: TypeVar,
         name: Ident.Idx,
     },
+    binop: Binop,
     /// Compiles, but will crash if reached
     runtime_error: struct {
         tag: Diagnostic.Tag,
@@ -390,6 +392,30 @@ pub const Expr = union(enum) {
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
+
+    pub const Binop = struct {
+        op: Op,
+        lhs: Expr.Idx,
+        rhs: Expr.Idx,
+
+        pub const Op = enum {
+            add,
+            sub,
+            mul,
+            div,
+            rem,
+            lt,
+            gt,
+            le,
+            ge,
+            eq,
+            ne,
+        };
+
+        pub fn init(op: Op, lhs: Expr.Idx, rhs: Expr.Idx) Binop {
+            return .{ .lhs = lhs, .op = op, .rhs = rhs };
+        }
+    };
 
     pub fn toSExpr(self: *const @This(), ir: *const CIR, line_starts: std.ArrayList(u32), source: []const u8) sexpr.Expr {
         const gpa = ir.env.gpa;
@@ -760,6 +786,15 @@ pub const Expr = union(enum) {
 
                 return tag_node;
             },
+            .binop => |e| {
+                var binop_node = sexpr.Expr.init(gpa, "binop");
+                binop_node.appendStringChild(gpa, @tagName(e.op));
+                var lhs_node = ir.store.getExpr(e.lhs).toSExpr(ir, line_starts, source);
+                var rhs_node = ir.store.getExpr(e.rhs).toSExpr(ir, line_starts, source);
+                binop_node.appendNodeChild(gpa, &lhs_node);
+                binop_node.appendNodeChild(gpa, &rhs_node);
+                return binop_node;
+            },
             .runtime_error => |e| {
                 var runtime_err_node = sexpr.Expr.init(gpa, "runtime_error");
 
@@ -769,7 +804,6 @@ pub const Expr = union(enum) {
                 defer buf.deinit();
 
                 buf.writer().writeAll("RUNTIME ERROR ") catch |err| exitOnOom(err);
-                buf.writer().writeAll(": ") catch |err| exitOnOom(err);
                 buf.writer().writeAll(@tagName(e.tag)) catch |err| exitOnOom(err);
 
                 runtime_err_node.appendStringChild(gpa, buf.items);

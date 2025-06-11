@@ -39,7 +39,7 @@ NO CHANGE
 			(pattern (1:12-1:12) (assign (ident "hello!")))
 			(expr (1:1-1:1)
 				(call
-					(runtime_error (1:14-1:15) "RUNTIME ERROR : ident_not_in_scope")
+					(runtime_error (1:14-1:15) "RUNTIME ERROR ident_not_in_scope")
 					(str "Hello")))
 			"#0")
 		(def

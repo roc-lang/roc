@@ -181,6 +181,13 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 },
             };
         },
+        .expr_bin_op => {
+            return CIR.Expr{ .binop = CIR.Expr.Binop.init(
+                @enumFromInt(node.data_1),
+                @enumFromInt(node.data_2),
+                @enumFromInt(node.data_3),
+            ) };
+        },
         .malformed => {
             return CIR.Expr{ .runtime_error = .{
                 .tag = @enumFromInt(node.data_1),
@@ -205,7 +212,6 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         .expr_string_part,
         .expr_lambda,
         .expr_record_update,
-        .expr_bin_op,
         .expr_unary,
         .expr_suffix_single_question,
         .expr_if_then_else,
@@ -407,6 +413,12 @@ pub fn addExpr(store: *NodeStore, expr: CIR.ExprAtRegion) CIR.Expr.Idx {
         },
         .zero_argument_tag => {
             @panic("TODO addExpr zero_argument_tag");
+        },
+        .binop => {
+            node.tag = .expr_bin_op;
+            node.data_1 = @intFromEnum(expr.expr.binop.op);
+            node.data_2 = @intFromEnum(expr.expr.binop.lhs);
+            node.data_3 = @intFromEnum(expr.expr.binop.rhs);
         },
     }
 

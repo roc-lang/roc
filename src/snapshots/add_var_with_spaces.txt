@@ -33,9 +33,9 @@ add2 = x + 2
 			(let)
 			(pattern (1:7-1:7) (assign (ident "add2")))
 			(expr (1:1-1:1)
-				(call
-					(lookup (pattern_idx "0"))
-					(runtime_error (1:9-1:9) "RUNTIME ERROR : ident_not_in_scope")
+				(binop
+					"add"
+					(runtime_error (1:9-1:9) "RUNTIME ERROR ident_not_in_scope")
 					(int
 						(num_var "#0")
 						(precision_var "#1")
