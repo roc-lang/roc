@@ -11,6 +11,9 @@ const Diagnostic = AST.Diagnostic;
 const Parser = @import("parse/Parser.zig");
 const exitOnOom = @import("../collections/utils.zig").exitOnOom;
 
+pub const Node = @import("parse/Node.zig");
+pub const NodeStore = @import("parse/NodeStore.zig");
+
 /// Represents the intermediate representation or Abstract Syntax Tree (AST) of a parsed Roc file.
 pub const AST = @import("parse/AST.zig");
 

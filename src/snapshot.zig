@@ -469,7 +469,7 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
         },
         .expr => {
             // For expr snapshots, just canonicalize the root expression directly
-            const expr_idx = parse.AST.NodeStore.ExprIdx{ .id = parse_ast.root_node_idx };
+            const expr_idx = parse.NodeStore.ExprIdx{ .id = parse_ast.root_node_idx };
             maybe_expr_idx = can.canonicalize_expr(expr_idx);
         },
         .statement => {

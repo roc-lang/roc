@@ -491,18 +491,18 @@ fn parseDependenciesFromPackageRoot(
     const header = parse_ast.store.getHeader(file.header);
 
     const package_list = switch (header) {
-        .app => |app| AST.NodeStore.RecordFieldSpan{ .span = parse_ast.store.getCollection(app.packages).span },
-        .module => AST.NodeStore.RecordFieldSpan{ .span = .{
+        .app => |app| parse.NodeStore.RecordFieldSpan{ .span = parse_ast.store.getCollection(app.packages).span },
+        .module => parse.NodeStore.RecordFieldSpan{ .span = .{
             .start = 0,
             .len = 0,
         } },
-        .package => |pkg| AST.NodeStore.RecordFieldSpan{ .span = parse_ast.store.getCollection(pkg.packages).span },
+        .package => |pkg| parse.NodeStore.RecordFieldSpan{ .span = parse_ast.store.getCollection(pkg.packages).span },
         // TODO: get packages for hosted/platform modules once their headers are being parsed.
-        .platform => |_| AST.NodeStore.RecordFieldSpan{ .span = .{
+        .platform => |_| parse.NodeStore.RecordFieldSpan{ .span = .{
             .start = 0,
             .len = 0,
         } },
-        .hosted => |_| AST.NodeStore.RecordFieldSpan{ .span = .{
+        .hosted => |_| parse.NodeStore.RecordFieldSpan{ .span = .{
             .start = 0,
             .len = 0,
         } },

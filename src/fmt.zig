@@ -1,7 +1,7 @@
 //! Formatting logic for Roc modules.
 
 const std = @import("std");
-const parse = @import("check/parse.zig").parse;
+const parse = @import("check/parse.zig");
 const AST = @import("check/parse/AST.zig");
 const Filesystem = @import("coordinate/Filesystem.zig");
 const tokenizer = @import("check/parse/tokenize.zig");
@@ -12,8 +12,8 @@ const fatal = @import("./collections/utils.zig").fatal;
 const base = @import("base.zig");
 const tracy = @import("tracy.zig");
 
-const Node = AST.Node;
-const NodeStore = AST.NodeStore;
+const Node = parse.Node;
+const NodeStore = parse.NodeStore;
 const ExprIdx = NodeStore.ExprIdx;
 const PatternIdx = NodeStore.PatternIdx;
 const HeaderIdx = NodeStore.HeaderIdx;
@@ -147,7 +147,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    var parse_ast = parse(&module_env, contents);
+    var parse_ast = parse.parse(&module_env, contents);
     defer parse_ast.deinit();
     if (parse_ast.errors.len > 0) {
         parse_ast.toSExprStr(&module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
@@ -369,7 +369,7 @@ const Formatter = struct {
                         try fmt.pushAll(" exposing ");
                     }
                     const items = fmt.ast.store.exposedItemSlice(i.exposes);
-                    const items_region = fmt.regionInSlice(AST.NodeStore.ExposedItemIdx, items);
+                    const items_region = fmt.regionInSlice(parse.NodeStore.ExposedItemIdx, items);
                     // This is a near copy of formatCollection because to make that function
                     // work correctly, the exposed items have to be in a new Node type that
                     // will have its own region
@@ -531,7 +531,7 @@ const Formatter = struct {
         }
     }
 
-    fn formatWhereConstraint(fmt: *Formatter, w: AST.NodeStore.CollectionIdx) !void {
+    fn formatWhereConstraint(fmt: *Formatter, w: parse.NodeStore.CollectionIdx) !void {
         const start_indent = fmt.curr_indent;
         defer fmt.curr_indent = start_indent;
         try fmt.pushAll("where");
@@ -652,7 +652,7 @@ const Formatter = struct {
         try fmt.push(braces.end());
     }
 
-    fn formatRecordField(fmt: *Formatter, idx: AST.NodeStore.RecordFieldIdx) !AST.Region {
+    fn formatRecordField(fmt: *Formatter, idx: parse.NodeStore.RecordFieldIdx) !AST.Region {
         const field = fmt.ast.store.getRecordField(idx);
         try fmt.pushTokenText(field.name);
         if (field.value) |v| {
@@ -684,7 +684,7 @@ const Formatter = struct {
         switch (expr) {
             .apply => |a| {
                 _ = try fmt.formatExpr(a.@"fn");
-                try fmt.formatCollection(region, .round, AST.NodeStore.ExprIdx, fmt.ast.store.exprSlice(a.args), Formatter.formatExpr);
+                try fmt.formatCollection(region, .round, parse.NodeStore.ExprIdx, fmt.ast.store.exprSlice(a.args), Formatter.formatExpr);
             },
             .string_part => |s| {
                 try fmt.pushTokenText(s.token);
@@ -761,18 +761,18 @@ const Formatter = struct {
                 try fmt.pushTokenText(f.token);
             },
             .list => |l| {
-                try fmt.formatCollection(region, .square, AST.NodeStore.ExprIdx, fmt.ast.store.exprSlice(l.items), Formatter.formatExpr);
+                try fmt.formatCollection(region, .square, parse.NodeStore.ExprIdx, fmt.ast.store.exprSlice(l.items), Formatter.formatExpr);
             },
             .tuple => |t| {
-                try fmt.formatCollection(region, .round, AST.NodeStore.ExprIdx, fmt.ast.store.exprSlice(t.items), Formatter.formatExpr);
+                try fmt.formatCollection(region, .round, parse.NodeStore.ExprIdx, fmt.ast.store.exprSlice(t.items), Formatter.formatExpr);
             },
             .record => |r| {
-                try fmt.formatCollection(region, .curly, AST.NodeStore.RecordFieldIdx, fmt.ast.store.recordFieldSlice(r.fields), Formatter.formatRecordField);
+                try fmt.formatCollection(region, .curly, parse.NodeStore.RecordFieldIdx, fmt.ast.store.recordFieldSlice(r.fields), Formatter.formatRecordField);
             },
             .lambda => |l| {
                 const args = fmt.ast.store.patternSlice(l.args);
                 const body_region = fmt.nodeRegion(l.body.id);
-                const args_region = fmt.regionInSlice(AST.NodeStore.PatternIdx, args);
+                const args_region = fmt.regionInSlice(parse.NodeStore.PatternIdx, args);
                 const args_are_multiline = fmt.ast.regionIsMultiline(AST.Region{ .start = l.region.start, .end = args_region.end });
                 try fmt.push('|');
                 if (args_are_multiline) {
@@ -961,7 +961,7 @@ const Formatter = struct {
         return region;
     }
 
-    fn formatPatternRecordField(fmt: *Formatter, idx: AST.NodeStore.PatternRecordFieldIdx) !AST.Region {
+    fn formatPatternRecordField(fmt: *Formatter, idx: parse.NodeStore.PatternRecordFieldIdx) !AST.Region {
         const field = fmt.ast.store.getPatternRecordField(idx);
         const multiline = fmt.ast.regionIsMultiline(field.region);
         const curr_indent = fmt.curr_indent;
@@ -1010,7 +1010,7 @@ const Formatter = struct {
                 region = t.region;
                 try fmt.formatIdent(t.tag_tok, null);
                 if (t.args.span.len > 0) {
-                    try fmt.formatCollection(region, .round, AST.NodeStore.PatternIdx, fmt.ast.store.patternSlice(t.args), Formatter.formatPattern);
+                    try fmt.formatCollection(region, .round, parse.NodeStore.PatternIdx, fmt.ast.store.patternSlice(t.args), Formatter.formatPattern);
                 }
             },
             .string => |s| {
@@ -1023,15 +1023,15 @@ const Formatter = struct {
             },
             .record => |r| {
                 region = r.region;
-                try fmt.formatCollection(region, .curly, AST.NodeStore.PatternRecordFieldIdx, fmt.ast.store.patternRecordFieldSlice(r.fields), Formatter.formatPatternRecordField);
+                try fmt.formatCollection(region, .curly, parse.NodeStore.PatternRecordFieldIdx, fmt.ast.store.patternRecordFieldSlice(r.fields), Formatter.formatPatternRecordField);
             },
             .list => |l| {
                 region = l.region;
-                try fmt.formatCollection(region, .square, AST.NodeStore.PatternIdx, fmt.ast.store.patternSlice(l.patterns), Formatter.formatPattern);
+                try fmt.formatCollection(region, .square, parse.NodeStore.PatternIdx, fmt.ast.store.patternSlice(l.patterns), Formatter.formatPattern);
             },
             .tuple => |t| {
                 region = t.region;
-                try fmt.formatCollection(region, .round, AST.NodeStore.PatternIdx, fmt.ast.store.patternSlice(t.patterns), Formatter.formatPattern);
+                try fmt.formatCollection(region, .round, parse.NodeStore.PatternIdx, fmt.ast.store.patternSlice(t.patterns), Formatter.formatPattern);
             },
             .list_rest => |r| {
                 region = r.region;
@@ -1103,7 +1103,7 @@ const Formatter = struct {
         return region;
     }
 
-    fn formatExposedItem(fmt: *Formatter, idx: AST.NodeStore.ExposedItemIdx) !AST.Region {
+    fn formatExposedItem(fmt: *Formatter, idx: parse.NodeStore.ExposedItemIdx) !AST.Region {
         const item = fmt.ast.store.getExposedItem(idx);
         var region = AST.Region{ .start = 0, .end = 0 };
         switch (item) {
@@ -1155,7 +1155,7 @@ const Formatter = struct {
                 try fmt.formatCollection(
                     provides.region,
                     .square,
-                    AST.NodeStore.ExposedItemIdx,
+                    parse.NodeStore.ExposedItemIdx,
                     fmt.ast.store.exposedItemSlice(.{ .span = provides.span }),
                     Formatter.formatExposedItem,
                 );
@@ -1178,8 +1178,8 @@ const Formatter = struct {
                     try fmt.push(' ');
                 }
 
-                var platform_field: ?AST.NodeStore.RecordFieldIdx = null;
-                var package_fields_list = try std.ArrayListUnmanaged(AST.NodeStore.RecordFieldIdx).initCapacity(fmt.ast.store.gpa, 10);
+                var platform_field: ?parse.NodeStore.RecordFieldIdx = null;
+                var package_fields_list = try std.ArrayListUnmanaged(parse.NodeStore.RecordFieldIdx).initCapacity(fmt.ast.store.gpa, 10);
                 var i: usize = 0;
                 const packages_slice = fmt.ast.store.recordFieldSlice(.{ .span = packages.span });
                 for (packages_slice) |package| {
@@ -1257,7 +1257,7 @@ const Formatter = struct {
                 try fmt.formatCollection(
                     exposes.region,
                     .square,
-                    AST.NodeStore.ExposedItemIdx,
+                    parse.NodeStore.ExposedItemIdx,
                     fmt.ast.store.exposedItemSlice(.{ .span = exposes.span }),
                     Formatter.formatExposedItem,
                 );
@@ -1275,7 +1275,7 @@ const Formatter = struct {
                 try fmt.formatCollection(
                     exposes.region,
                     .square,
-                    AST.NodeStore.ExposedItemIdx,
+                    parse.NodeStore.ExposedItemIdx,
                     fmt.ast.store.exposedItemSlice(.{ .span = exposes.span }),
                     Formatter.formatExposedItem,
                 );
@@ -1299,7 +1299,7 @@ const Formatter = struct {
                 try fmt.formatCollection(
                     exposes.region,
                     .square,
-                    AST.NodeStore.ExposedItemIdx,
+                    parse.NodeStore.ExposedItemIdx,
                     fmt.ast.store.exposedItemSlice(.{ .span = exposes.span }),
                     Formatter.formatExposedItem,
                 );
@@ -1313,7 +1313,7 @@ const Formatter = struct {
                 try fmt.formatCollection(
                     packages.region,
                     .curly,
-                    AST.NodeStore.RecordFieldIdx,
+                    parse.NodeStore.RecordFieldIdx,
                     fmt.ast.store.recordFieldSlice(.{ .span = packages.span }),
                     Formatter.formatRecordField,
                 );
@@ -1346,7 +1346,7 @@ const Formatter = struct {
                 try fmt.formatCollection(
                     rigids.region,
                     .curly,
-                    AST.NodeStore.ExposedItemIdx,
+                    parse.NodeStore.ExposedItemIdx,
                     fmt.ast.store.exposedItemSlice(.{ .span = rigids.span }),
                     Formatter.formatExposedItem,
                 );
@@ -1377,7 +1377,7 @@ const Formatter = struct {
                 try fmt.formatCollection(
                     exposes.region,
                     .square,
-                    AST.NodeStore.ExposedItemIdx,
+                    parse.NodeStore.ExposedItemIdx,
                     fmt.ast.store.exposedItemSlice(.{ .span = exposes.span }),
                     Formatter.formatExposedItem,
                 );
@@ -1399,7 +1399,7 @@ const Formatter = struct {
                 try fmt.formatCollection(
                     packages.region,
                     .curly,
-                    AST.NodeStore.RecordFieldIdx,
+                    parse.NodeStore.RecordFieldIdx,
                     fmt.ast.store.recordFieldSlice(.{ .span = packages.span }),
                     Formatter.formatRecordField,
                 );
@@ -1421,7 +1421,7 @@ const Formatter = struct {
                 try fmt.formatCollection(
                     provides.region,
                     .square,
-                    AST.NodeStore.ExposedItemIdx,
+                    parse.NodeStore.ExposedItemIdx,
                     fmt.ast.store.exposedItemSlice(.{ .span = provides.span }),
                     Formatter.formatExposedItem,
                 );
@@ -1434,7 +1434,7 @@ const Formatter = struct {
         return fmt.ast.store.nodes.items.items(.region)[idx];
     }
 
-    fn formatBody(fmt: *Formatter, body: AST.NodeStore.Body) !void {
+    fn formatBody(fmt: *Formatter, body: parse.NodeStore.Body) !void {
         const multiline = fmt.ast.regionIsMultiline(body.region);
         if (multiline or body.statements.span.len > 1) {
             fmt.curr_indent += 1;
@@ -1460,15 +1460,15 @@ const Formatter = struct {
         }
     }
 
-    fn formatTypeHeader(fmt: *Formatter, header: AST.NodeStore.TypeHeaderIdx) !void {
+    fn formatTypeHeader(fmt: *Formatter, header: parse.NodeStore.TypeHeaderIdx) !void {
         const h = fmt.ast.store.getTypeHeader(header);
         try fmt.pushTokenText(h.name);
         if (h.args.span.len > 0) {
-            try fmt.formatCollection(h.region, .round, AST.NodeStore.TypeAnnoIdx, fmt.ast.store.typeAnnoSlice(h.args), Formatter.formatTypeAnno);
+            try fmt.formatCollection(h.region, .round, parse.NodeStore.TypeAnnoIdx, fmt.ast.store.typeAnnoSlice(h.args), Formatter.formatTypeAnno);
         }
     }
 
-    fn formatAnnoRecordField(fmt: *Formatter, idx: AST.NodeStore.AnnoRecordFieldIdx) !AST.Region {
+    fn formatAnnoRecordField(fmt: *Formatter, idx: parse.NodeStore.AnnoRecordFieldIdx) !AST.Region {
         const curr_indent = fmt.curr_indent;
         defer {
             fmt.curr_indent = curr_indent;
@@ -1494,7 +1494,7 @@ const Formatter = struct {
         return field.region;
     }
 
-    fn formatWhereClause(fmt: *Formatter, idx: AST.NodeStore.WhereClauseIdx) !void {
+    fn formatWhereClause(fmt: *Formatter, idx: parse.NodeStore.WhereClauseIdx) !void {
         const clause = fmt.ast.store.getWhereClause(idx);
         const start_indent = fmt.curr_indent;
         defer fmt.curr_indent = start_indent;
@@ -1531,7 +1531,7 @@ const Formatter = struct {
                 try fmt.formatCollection(
                     args_coll.region,
                     .round,
-                    AST.NodeStore.TypeAnnoIdx,
+                    parse.NodeStore.TypeAnnoIdx,
                     args,
                     Formatter.formatTypeAnno,
                 );
@@ -1579,7 +1579,7 @@ const Formatter = struct {
                 try fmt.formatCollection(
                     args_coll.region,
                     .round,
-                    AST.NodeStore.TypeAnnoIdx,
+                    parse.NodeStore.TypeAnnoIdx,
                     args,
                     Formatter.formatTypeAnno,
                 );
@@ -1605,7 +1605,7 @@ const Formatter = struct {
         }
     }
 
-    fn formatTypeAnno(fmt: *Formatter, anno: AST.NodeStore.TypeAnnoIdx) !AST.Region {
+    fn formatTypeAnno(fmt: *Formatter, anno: parse.NodeStore.TypeAnnoIdx) !AST.Region {
         const a = fmt.ast.store.getTypeAnno(anno);
         var region = AST.Region{ .start = 0, .end = 0 };
         switch (a) {
@@ -1614,7 +1614,7 @@ const Formatter = struct {
                 const first = slice[0];
                 _ = try fmt.formatTypeAnno(first);
                 const rest = slice[1..];
-                try fmt.formatCollection(app.region, .round, AST.NodeStore.TypeAnnoIdx, rest, Formatter.formatTypeAnno);
+                try fmt.formatCollection(app.region, .round, parse.NodeStore.TypeAnnoIdx, rest, Formatter.formatTypeAnno);
             },
             .ty_var => |v| {
                 region = v.region;
@@ -1630,15 +1630,15 @@ const Formatter = struct {
             },
             .tuple => |t| {
                 region = t.region;
-                try fmt.formatCollection(t.region, .round, AST.NodeStore.TypeAnnoIdx, fmt.ast.store.typeAnnoSlice(t.annos), Formatter.formatTypeAnno);
+                try fmt.formatCollection(t.region, .round, parse.NodeStore.TypeAnnoIdx, fmt.ast.store.typeAnnoSlice(t.annos), Formatter.formatTypeAnno);
             },
             .record => |r| {
                 region = r.region;
-                try fmt.formatCollection(region, .curly, AST.NodeStore.AnnoRecordFieldIdx, fmt.ast.store.annoRecordFieldSlice(r.fields), Formatter.formatAnnoRecordField);
+                try fmt.formatCollection(region, .curly, parse.NodeStore.AnnoRecordFieldIdx, fmt.ast.store.annoRecordFieldSlice(r.fields), Formatter.formatAnnoRecordField);
             },
             .tag_union => |t| {
                 region = t.region;
-                try fmt.formatCollection(t.region, .square, AST.NodeStore.TypeAnnoIdx, fmt.ast.store.typeAnnoSlice(t.tags), Formatter.formatTypeAnno);
+                try fmt.formatCollection(t.region, .square, parse.NodeStore.TypeAnnoIdx, fmt.ast.store.typeAnnoSlice(t.tags), Formatter.formatTypeAnno);
             },
             .@"fn" => |f| {
                 region = f.region;
@@ -1819,7 +1819,7 @@ const Formatter = struct {
 
     fn regionInSlice(fmt: *Formatter, comptime T: anytype, slice: []T) AST.Region {
         if (slice.len == 0) {
-            return AST.NodeStore.emptyRegion();
+            return parse.NodeStore.emptyRegion();
         }
         const first: usize = @intCast(slice[0].id);
         const last: usize = @intCast(slice[slice.len - 1].id);
