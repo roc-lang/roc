@@ -32,7 +32,7 @@ const Self = @This();
 /// The intermediate representation of a canonicalized Roc program.
 pub const CIR = @import("canonicalize/CIR.zig");
 
-/// After parsing a Roc program, the [ParseIR](src/check/parse/ir.zig) is transformed into a [canonical
+/// After parsing a Roc program, the [ParseIR](src/check/parse/AST.zig) is transformed into a [canonical
 /// form](src/check/canonicalize/ir.zig) called CanIR.
 ///
 /// Canonicalization performs analysis to catch user errors, and sets up the state necessary to solve the types in a

@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const IR = @import("IR.zig");
+const IR = @import("AST.zig");
 const NodeList = IR.NodeList;
 
 const tracy = @import("../../tracy.zig");

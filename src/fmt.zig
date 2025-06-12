@@ -2,7 +2,7 @@
 
 const std = @import("std");
 const parse = @import("check/parse.zig").parse;
-const IR = @import("check/parse/IR.zig");
+const IR = @import("check/parse/AST.zig");
 const Node = IR.Node;
 const Filesystem = @import("coordinate/Filesystem.zig");
 const tokenizer = @import("check/parse/tokenize.zig");

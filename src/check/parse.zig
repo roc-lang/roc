@@ -12,7 +12,7 @@ const Parser = @import("parse/Parser.zig");
 const exitOnOom = @import("../collections/utils.zig").exitOnOom;
 
 /// Represents the intermediate representation or Abstract Syntax Tree (AST) of a parsed Roc file.
-pub const IR = @import("parse/IR.zig");
+pub const IR = @import("parse/AST.zig");
 
 fn runParse(env: *base.ModuleEnv, source: []const u8, parserCall: *const fn (*Parser) u32) IR {
     const trace = tracy.trace(@src());
