@@ -9,7 +9,7 @@ const Scope = @import("./canonicalize/Scope.zig");
 const Alias = @import("./canonicalize/Alias.zig");
 
 can_ir: *CIR,
-parse_ir: *parse.IR,
+parse_ir: *parse.AST,
 scope: *Scope,
 
 const Ident = base.Ident;
@@ -19,7 +19,7 @@ const ModuleEnv = base.ModuleEnv;
 const Problem = problem.Problem;
 const exitOnOom = collections.utils.exitOnOom;
 
-pub fn init(can_ir: *CIR, parse_ir: *parse.IR, scope: *Scope) Self {
+pub fn init(can_ir: *CIR, parse_ir: *parse.AST, scope: *Scope) Self {
     return .{
         .can_ir = can_ir,
         .parse_ir = parse_ir,
@@ -149,7 +149,7 @@ pub fn canonicalize_file(
 
 fn canonicalize_header_exposes(
     self: *Self,
-    exposes: parse.IR.NodeStore.CollectionIdx,
+    exposes: parse.AST.NodeStore.CollectionIdx,
 ) void {
     const collection = self.parse_ir.store.getCollection(exposes);
     const exposed_items = self.parse_ir.store.exposedItemSlice(.{ .span = collection.span });
@@ -178,7 +178,7 @@ fn canonicalize_header_exposes(
 
 fn bringImportIntoScope(
     self: *Self,
-    import: *const parse.IR.NodeStore.Statement.Import,
+    import: *const parse.AST.NodeStore.Statement.Import,
 ) void {
     // Add error for partially implemented imports
     _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedImport = .{
@@ -255,7 +255,7 @@ fn bringImportIntoScope(
 
 fn bringIngestedFileIntoScope(
     self: *Self,
-    import: *const parse.IR.Stmt.Import,
+    import: *const parse.AST.Stmt.Import,
 ) void {
     const res = self.can_ir.env.modules.getOrInsert(
         import.name,
@@ -283,7 +283,7 @@ fn bringIngestedFileIntoScope(
 
 fn canonicalize_decl(
     self: *Self,
-    decl: parse.IR.NodeStore.Statement.Decl,
+    decl: parse.AST.NodeStore.Statement.Decl,
 ) ?CIR.Def.Idx {
     const pattern_idx = self.canonicalize_pattern(decl.pattern) orelse return null;
     const expr_idx = self.canonicalize_expr(decl.body) orelse return null;
@@ -306,7 +306,7 @@ fn canonicalize_decl(
 /// Canonicalize an expression.
 pub fn canonicalize_expr(
     self: *Self,
-    expr_idx: parse.IR.NodeStore.ExprIdx,
+    expr_idx: parse.AST.NodeStore.ExprIdx,
 ) ?CIR.Expr.Idx {
     const expr = self.parse_ir.store.getExpr(expr_idx);
     switch (expr) {
@@ -736,7 +736,7 @@ pub fn canonicalize_expr(
 }
 
 /// Extract string segments from parsed string parts
-fn extractStringSegments(self: *Self, parts: []const parse.IR.NodeStore.ExprIdx) ![]StringSegment {
+fn extractStringSegments(self: *Self, parts: []const parse.AST.NodeStore.ExprIdx) ![]StringSegment {
     var segments = std.ArrayList(StringSegment).init(self.can_ir.env.gpa);
     defer segments.deinit();
 
@@ -871,7 +871,7 @@ fn desugarStringInterpolation(self: *Self, segments: []const StringSegment, regi
 
 fn canonicalize_pattern(
     self: *Self,
-    pattern_idx: parse.IR.NodeStore.PatternIdx,
+    pattern_idx: parse.AST.NodeStore.PatternIdx,
 ) ?CIR.Pattern.Idx {
     const pattern = self.parse_ir.store.getPattern(pattern_idx);
     const region = Region.zero(); // TODO: Implement proper pattern region retrieval
@@ -1021,5 +1021,5 @@ fn canonicalize_pattern(
 /// Represents a segment of a string literal that may contain interpolations
 const StringSegment = union(enum) {
     plaintext: []const u8,
-    interpolation: parse.IR.NodeStore.ExprIdx,
+    interpolation: parse.AST.NodeStore.ExprIdx,
 };

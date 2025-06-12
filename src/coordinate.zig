@@ -20,6 +20,7 @@ const utils = @import("coordinate/utils.zig");
 const Filesystem = @import("coordinate/Filesystem.zig");
 const ModuleGraph = @import("coordinate/ModuleGraph.zig");
 
+const AST = parse.AST;
 const Region = base.Region;
 const Package = base.Package;
 const PackageUrl = base.PackageUrl;
@@ -490,18 +491,18 @@ fn parseDependenciesFromPackageRoot(
     const header = parse_ast.store.getHeader(file.header);
 
     const package_list = switch (header) {
-        .app => |app| parse.IR.NodeStore.RecordFieldSpan{ .span = parse_ast.store.getCollection(app.packages).span },
-        .module => parse.IR.NodeStore.RecordFieldSpan{ .span = .{
+        .app => |app| AST.NodeStore.RecordFieldSpan{ .span = parse_ast.store.getCollection(app.packages).span },
+        .module => AST.NodeStore.RecordFieldSpan{ .span = .{
             .start = 0,
             .len = 0,
         } },
-        .package => |pkg| parse.IR.NodeStore.RecordFieldSpan{ .span = parse_ast.store.getCollection(pkg.packages).span },
+        .package => |pkg| AST.NodeStore.RecordFieldSpan{ .span = parse_ast.store.getCollection(pkg.packages).span },
         // TODO: get packages for hosted/platform modules once their headers are being parsed.
-        .platform => |_| parse.IR.NodeStore.RecordFieldSpan{ .span = .{
+        .platform => |_| AST.NodeStore.RecordFieldSpan{ .span = .{
             .start = 0,
             .len = 0,
         } },
-        .hosted => |_| parse.IR.NodeStore.RecordFieldSpan{ .span = .{
+        .hosted => |_| AST.NodeStore.RecordFieldSpan{ .span = .{
             .start = 0,
             .len = 0,
         } },

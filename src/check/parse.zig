@@ -6,15 +6,15 @@ const tracy = @import("../tracy.zig");
 const tokenize = @import("parse/tokenize.zig");
 const TokenIndex = tokenize.TokenIndex;
 const TokenizedBuffer = tokenize.TokenizedBuffer;
-const NodeList = IR.NodeList;
-const Diagnostic = IR.Diagnostic;
+const NodeList = AST.NodeList;
+const Diagnostic = AST.Diagnostic;
 const Parser = @import("parse/Parser.zig");
 const exitOnOom = @import("../collections/utils.zig").exitOnOom;
 
 /// Represents the intermediate representation or Abstract Syntax Tree (AST) of a parsed Roc file.
-pub const IR = @import("parse/AST.zig");
+pub const AST = @import("parse/AST.zig");
 
-fn runParse(env: *base.ModuleEnv, source: []const u8, parserCall: *const fn (*Parser) u32) IR {
+fn runParse(env: *base.ModuleEnv, source: []const u8, parserCall: *const fn (*Parser) u32) AST {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -50,7 +50,7 @@ fn runParse(env: *base.ModuleEnv, source: []const u8, parserCall: *const fn (*Pa
 
 /// Parses a single Roc file.  The returned AST should be deallocated by calling deinit
 /// after its data is used to create the next IR, or at the end of any test.
-pub fn parse(env: *base.ModuleEnv, source: []const u8) IR {
+pub fn parse(env: *base.ModuleEnv, source: []const u8) AST {
     return runParse(env, source, parseFileAndReturnIdx);
 }
 
@@ -66,7 +66,7 @@ fn parseExprAndReturnIdx(parser: *Parser) u32 {
 
 /// Parses a Roc expression - only for use in snapshots. The returned AST should be deallocated by calling deinit
 /// after its data is used to create the next IR, or at the end of any test.
-pub fn parseExpr(env: *base.ModuleEnv, source: []const u8) IR {
+pub fn parseExpr(env: *base.ModuleEnv, source: []const u8) AST {
     return runParse(env, source, parseExprAndReturnIdx);
 }
 
@@ -77,7 +77,7 @@ fn parseHeaderAndReturnIdx(parser: *Parser) u32 {
 
 /// Parses a Roc Header - only for use in snapshots. The returned AST should be deallocated by calling deinit
 /// after its data is used to create the next IR, or at the end of any test.
-pub fn parseHeader(env: *base.ModuleEnv, source: []const u8) IR {
+pub fn parseHeader(env: *base.ModuleEnv, source: []const u8) AST {
     return runParse(env, source, parseHeaderAndReturnIdx);
 }
 
@@ -91,6 +91,6 @@ fn parseStatementAndReturnIdx(parser: *Parser) u32 {
 
 /// Parses a Roc statement - only for use in snapshots. The returned AST should be deallocated by calling deinit
 /// after its data is used to create the next IR, or at the end of any test.
-pub fn parseStatement(env: *base.ModuleEnv, source: []const u8) IR {
+pub fn parseStatement(env: *base.ModuleEnv, source: []const u8) AST {
     return runParse(env, source, parseStatementAndReturnIdx);
 }
