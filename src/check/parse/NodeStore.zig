@@ -63,7 +63,9 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) NodeStore {
     return store;
 }
 
-// TODO: tune this base on real roc code. In general, these arrays are all really small, so oversize it.
+/// Default capacity for scratch buffers, sized generously since they're typically small.
+///
+/// TODO: tune this base on real roc code.
 const scratch_90th_percentile_capacity = std.math.ceilPowerOfTwoAssert(usize, 64);
 
 /// Deinitializes all data owned by the store.
@@ -102,7 +104,7 @@ pub fn emptyScratch(store: *NodeStore) void {
     store.scratch_where_clauses.clearFrom(0);
 }
 
-/// TODO
+/// Prints debug information about all nodes and scratch buffers in the store.
 pub fn debug(store: *NodeStore) void {
     std.debug.print("\n==> IR.NodeStore DEBUG <==\n", .{});
     std.debug.print("Nodes:\n", .{});
@@ -140,7 +142,7 @@ pub fn addMalformed(store: *NodeStore, comptime t: type, reason: Diagnostic.Tag,
     return @enumFromInt(@intFromEnum(nid));
 }
 
-/// TODO
+/// Adds a file node to the store.
 pub fn addFile(store: *NodeStore, file: AST.File) void {
     store.extra_data.append(store.gpa, @intFromEnum(file.header)) catch |err| exitOnOom(err);
     store.nodes.set(@enumFromInt(0), .{
@@ -151,7 +153,7 @@ pub fn addFile(store: *NodeStore, file: AST.File) void {
     });
 }
 
-/// TODO
+/// Adds a AST.Collection node with the specified tag and returns its index.
 pub fn addCollection(store: *NodeStore, tag: Node.Tag, collection: AST.Collection) AST.Collection.Idx {
     const nid = store.nodes.append(store.gpa, Node{
         .tag = tag,
@@ -165,7 +167,7 @@ pub fn addCollection(store: *NodeStore, tag: Node.Tag, collection: AST.Collectio
     return @enumFromInt(@intFromEnum(nid));
 }
 
-/// TODO
+/// Adds a header node of any type (app, module, hosted, package, platform) and returns its index.
 pub fn addHeader(store: *NodeStore, header: AST.Header) AST.Header.Idx {
     var node = Node{
         .tag = .statement,
@@ -230,7 +232,7 @@ pub fn addHeader(store: *NodeStore, header: AST.Header) AST.Header.Idx {
     return @enumFromInt(@intFromEnum(node_idx));
 }
 
-/// TODO
+/// Adds an exposed item node (function, value, type, etc.) and returns its index.
 pub fn addExposedItem(store: *NodeStore, item: AST.ExposedItem) AST.ExposedItem.Idx {
     var node = Node{
         .tag = .malformed,
@@ -274,7 +276,7 @@ pub fn addExposedItem(store: *NodeStore, item: AST.ExposedItem) AST.ExposedItem.
     return @enumFromInt(@intFromEnum(nid));
 }
 
-/// TODO
+/// Adds a statement node (value def, type def, import, etc.) and returns its index.
 pub fn addStatement(store: *NodeStore, statement: AST.Statement) AST.Statement.Idx {
     var node = Node{
         .tag = .statement,
@@ -381,7 +383,7 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) AST.Statement.I
     return @enumFromInt(@intFromEnum(nid));
 }
 
-/// TODO
+/// Adds a pattern node (identifier, literal, record destructure, etc.) and returns its index.
 pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) AST.Pattern.Idx {
     var node = Node{
         .tag = .statement,
@@ -460,7 +462,7 @@ pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) AST.Pattern.Idx {
     return @enumFromInt(@intFromEnum(nid));
 }
 
-/// TODO
+/// Adds an expression node (literal, variable, call, record, etc.) and returns its index.
 pub fn addExpr(store: *NodeStore, expr: AST.Expr) AST.Expr.Idx {
     var node = Node{
         .tag = .statement,
@@ -875,7 +877,7 @@ pub fn getFile(store: *NodeStore) AST.File {
     };
 }
 
-/// TODO
+/// Retrieves collection data from a stored collection node.
 pub fn getCollection(store: *NodeStore, collection_idx: AST.Collection.Idx) AST.Collection {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(collection_idx)));
     return .{
@@ -887,7 +889,7 @@ pub fn getCollection(store: *NodeStore, collection_idx: AST.Collection.Idx) AST.
     };
 }
 
-/// TODO
+/// Retrieves header data from a stored header node, reconstructing the appropriate header type.
 pub fn getHeader(store: *NodeStore, header_idx: AST.Header.Idx) AST.Header {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(header_idx)));
     switch (node.tag) {
@@ -944,7 +946,7 @@ pub fn getHeader(store: *NodeStore, header_idx: AST.Header.Idx) AST.Header {
     }
 }
 
-/// TODO
+/// Retrieves exposed item data from a stored exposed item node.
 pub fn getExposedItem(store: *NodeStore, exposed_item_idx: AST.ExposedItem.Idx) AST.ExposedItem {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(exposed_item_idx)));
     switch (node.tag) {
@@ -988,7 +990,7 @@ pub fn getExposedItem(store: *NodeStore, exposed_item_idx: AST.ExposedItem.Idx) 
     }
 }
 
-/// TODO
+/// Retrieves statement data from a stored statement node, reconstructing the appropriate statement type.
 pub fn getStatement(store: *NodeStore, statement_idx: AST.Statement.Idx) AST.Statement {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(statement_idx)));
     switch (node.tag) {
@@ -1089,7 +1091,7 @@ pub fn getStatement(store: *NodeStore, statement_idx: AST.Statement.Idx) AST.Sta
     }
 }
 
-/// TODO
+/// Retrieves pattern data from a stored pattern node, reconstructing the appropriate pattern type.
 pub fn getPattern(store: *NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pattern {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(pattern_idx)));
     switch (node.tag) {
@@ -1181,7 +1183,7 @@ pub fn getPattern(store: *NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pattern {
     }
 }
 
-/// TODO
+/// Retrieves expression data from a stored expression node, reconstructing the appropriate expression type.
 pub fn getExpr(store: *NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(expr_idx)));
     switch (node.tag) {
@@ -1361,7 +1363,7 @@ pub fn getExpr(store: *NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
     }
 }
 
-/// TODO
+/// Retrieves record field data from a stored record field node.
 pub fn getRecordField(store: *NodeStore, field_idx: AST.RecordField.Idx) AST.RecordField {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(field_idx)));
     const name = node.main_token;
@@ -1376,7 +1378,7 @@ pub fn getRecordField(store: *NodeStore, field_idx: AST.RecordField.Idx) AST.Rec
     };
 }
 
-/// TODO
+/// Retrieves when branch data from a stored when branch node.
 pub fn getBranch(store: *NodeStore, branch_idx: AST.WhenBranch.Idx) AST.WhenBranch {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(branch_idx)));
     return .{
@@ -1386,7 +1388,7 @@ pub fn getBranch(store: *NodeStore, branch_idx: AST.WhenBranch.Idx) AST.WhenBran
     };
 }
 
-/// TODO
+/// Retrieves type header data from a stored type header node.
 pub fn getTypeHeader(store: *NodeStore, header_idx: AST.TypeHeader.Idx) AST.TypeHeader {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(header_idx)));
     std.debug.assert(node.tag == .ty_header);
@@ -1400,7 +1402,7 @@ pub fn getTypeHeader(store: *NodeStore, header_idx: AST.TypeHeader.Idx) AST.Type
     };
 }
 
-/// TODO
+/// Retrieves annotation record field data from a stored annotation record field node.
 pub fn getAnnoRecordField(store: *NodeStore, anno_record_field_idx: AST.AnnoRecordField.Idx) AST.AnnoRecordField {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(anno_record_field_idx)));
     return .{
@@ -1459,7 +1461,7 @@ pub fn getWhereClause(store: *NodeStore, where_clause_idx: AST.WhereClause.Idx) 
     }
 }
 
-/// TODO
+/// Retrieves type annotation data from a stored type annotation node, reconstructing the appropriate annotation type.
 pub fn getTypeAnno(store: *NodeStore, ty_anno_idx: AST.TypeAnno.Idx) AST.TypeAnno {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(ty_anno_idx)));
 
