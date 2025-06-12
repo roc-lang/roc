@@ -132,7 +132,7 @@ pub fn unify(
                 if (scratch.err) |unify_err| {
                     switch (unify_err) {
                         .recursion_anonymous => |side| {
-                            return Result{ .anonmyous_recursion = side };
+                            return Result{ .anonymous_recursion = side };
                         },
                         .recursion_infinite => |side| {
                             return Result{ .infinite_recursion = side };
@@ -163,7 +163,7 @@ pub const Result = union(enum) {
     ok,
     type_mismatch,
     infinite_recursion: Side,
-    anonmyous_recursion: Side,
+    anonymous_recursion: Side,
     invalid_number_type: Var,
     invalid_record_ext: Var,
     invalid_tag_union_ext: Var,
@@ -258,6 +258,9 @@ const Unifier = struct {
         UnifyErr,
     };
 
+    /// TODO: What should this be?
+    const max_depth_before_occurs: u8 = 8;
+
     /// Unify checking for equivalence
     fn unifyGuarded(self: *Self, a_var: Var, b_var: Var) Error!void {
         switch (self.types_store.checkVarsEquiv(a_var, b_var)) {
@@ -267,7 +270,7 @@ const Unifier = struct {
                 return;
             },
             .not_equiv => |vars| {
-                if (self.skip_depth_check or self.depth < 8) {
+                if (self.skip_depth_check or self.depth < max_depth_before_occurs) {
                     self.depth += 1;
                     const result = self.unifyVars(&vars);
                     self.depth -= 1;
@@ -896,9 +899,7 @@ const Unifier = struct {
             try self.unifyGuarded(a_arg, b_arg);
         }
 
-        // Now that we've confirm the nominal types are the same and have thes
-        // same args, we proceed to unify the backing vars
-        // try self.unifyGuarded(a_type.backing_var, b_type.backing_var);
+        // Note that we *do not* unify backing variable
 
         self.merge(vars, vars.b.desc.content);
     }
@@ -4529,10 +4530,10 @@ test "unify - fails on anonymous recursion" {
 
     const result = env.unify(list_var_a, list_var_b);
 
-    try std.testing.expectEqual(Result{ .anonmyous_recursion = .a }, result);
+    try std.testing.expectEqual(Result{ .anonymous_recursion = .a }, result);
 }
 
-test "unify - succeeds on nomminal, tag union recursion" {
+test "unify - succeeds on nominal, tag union recursion" {
     const gpa = std.testing.allocator;
     var env = TestEnv.init(gpa);
     defer env.deinit();
