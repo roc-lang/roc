@@ -16,7 +16,7 @@ const Region = base.Region;
 /// Represents a problem encountered during the compilation process.
 pub const Problem = union(enum) {
     tokenize: @import("check/parse/tokenize.zig").Diagnostic,
-    parser: @import("check/parse/IR.zig").Diagnostic,
+    parser: @import("check/parse/AST.zig").Diagnostic,
     canonicalize: Canonicalize,
     compiler: Compiler,
 

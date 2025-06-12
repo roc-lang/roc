@@ -1,9 +1,9 @@
 Here you can find definitions for words that are commonly used in the **compiler** along
-with links to the codebase. Check https://www.roc-lang.org/tutorial if you want to know 
+with links to the codebase. Check https://www.roc-lang.org/tutorial if you want to know
 about general Roc terms. Feel free to ask for a term to be added or add one yourself!
 
 Contributor note: definitions should be roughly ordered like in a tutorial, e.g.
-Parser should be explained before Canonicalization. 
+Parser should be explained before Canonicalization.
 
 ## CLI
 
@@ -63,7 +63,7 @@ LowerIdent(3:1-3:4),OpColon(3:5-3:6),UpperIdent(3:7-3:10),Newline(1:1-1:1)
 
 ## Interning
 
-A memory optimization technique where only one copy of each distinct value is stored in memory, regardless of how many times it appears in a program or [IR](#ir). For example, a function named `foo` may be called many times in a Roc file, but we store `foo` once and use an index to refer to `foo` at the call sites. 
+A memory optimization technique where only one copy of each distinct value is stored in memory, regardless of how many times it appears in a program or [IR](#ir). For example, a function named `foo` may be called many times in a Roc file, but we store `foo` once and use an index to refer to `foo` at the call sites.
 
 Uses of interning:
 - new compiler: [collections/SmallStringInterner.zig](src/collections/SmallStringInterner.zig), [ident.zig](src/base/Ident.zig), [ModuleEnv.zig](src/base/ModuleEnv.zig), [tokenize.zig](src/check/parse/tokenize.zig), ...
@@ -155,7 +155,7 @@ Person : { first_name : Str, last_name : Str }
 # Using Person:
 register : Person => Result {} [RegistrationFailed]
 register = |person|
-    ... 
+    ...
 ```
 
 Note: the term "alias" in the code base does not always refer to a type alias, it can also refer to an import alias using `as` or [alias analysis](#alias-analysis) etc. .
@@ -254,7 +254,7 @@ Compared to raw source code, this structured format is much easier to analyze an
 The AST is created by the [parser](#parsing).
 
 New compiler:
-- See the `Node` struct in [this file](src/check/parse/IR.zig).
+- See the `Node` struct in [this file](src/check/parse/AST.zig).
 - You can see examples of ASTs in the .txt files in [this folder](src/snapshots).
 
 Old compiler:
@@ -288,7 +288,7 @@ Example of a closure:
 makeCounter : I64 -> (I64 -> I64)
 makeCounter = |start|
     # This inner function is a closure - it "closes over" the start variable
-    |increment| 
+    |increment|
         start + increment
 
 # Test the closure with expect
@@ -443,7 +443,7 @@ Related Files:
   - [specialize_functions folder](src/build/specialize_functions)
   - [specialize_types.zig](src/build/specialize_types.zig)
   - [specialize types folder](src/build/specialize_types)
-  
+
 - old compiler:
   - [mono folder](crates/compiler/mono)
   - [mono tests](crates/compiler/test_mono)
