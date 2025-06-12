@@ -491,21 +491,12 @@ fn parseDependenciesFromPackageRoot(
     const header = parse_ast.store.getHeader(file.header);
 
     const package_list = switch (header) {
-        .app => |app| parse.NodeStore.RecordFieldSpan{ .span = parse_ast.store.getCollection(app.packages).span },
-        .module => parse.NodeStore.RecordFieldSpan{ .span = .{
-            .start = 0,
-            .len = 0,
-        } },
-        .package => |pkg| parse.NodeStore.RecordFieldSpan{ .span = parse_ast.store.getCollection(pkg.packages).span },
+        .app => |app| AST.RecordField.Span{ .span = parse_ast.store.getCollection(app.packages).span },
+        .module => AST.RecordField.Span{ .span = base.DataSpan.empty() },
+        .package => |pkg| AST.RecordField.Span{ .span = parse_ast.store.getCollection(pkg.packages).span },
         // TODO: get packages for hosted/platform modules once their headers are being parsed.
-        .platform => |_| parse.NodeStore.RecordFieldSpan{ .span = .{
-            .start = 0,
-            .len = 0,
-        } },
-        .hosted => |_| parse.NodeStore.RecordFieldSpan{ .span = .{
-            .start = 0,
-            .len = 0,
-        } },
+        .platform => |_| AST.RecordField.Span{ .span = base.DataSpan.empty() },
+        .hosted => |_| AST.RecordField.Span{ .span = base.DataSpan.empty() },
         .malformed => {
             return ParsePackageDepsErr.malformed_header;
         },

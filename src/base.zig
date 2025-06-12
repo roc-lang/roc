@@ -72,4 +72,8 @@ pub const NumLiteral = union(enum) {
 pub const DataSpan = struct {
     start: u32,
     len: u32,
+
+    pub fn empty() DataSpan {
+        return DataSpan{ .start = 0, .len = 0 };
+    }
 };

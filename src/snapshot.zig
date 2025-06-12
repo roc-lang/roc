@@ -8,6 +8,8 @@ const parse = @import("check/parse.zig");
 const fmt = @import("fmt.zig");
 const types = @import("types.zig");
 
+const AST = parse.AST;
+
 var verbose_log: bool = false;
 var prng = std.Random.DefaultPrng.init(1234567890);
 
@@ -469,7 +471,7 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
         },
         .expr => {
             // For expr snapshots, just canonicalize the root expression directly
-            const expr_idx = parse.NodeStore.ExprIdx{ .id = parse_ast.root_node_idx };
+            const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
             maybe_expr_idx = can.canonicalize_expr(expr_idx);
         },
         .statement => {
@@ -552,15 +554,15 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
                 try parse_ast.toSExprStr(&module_env, parse_buffer.writer().any());
             },
             .header => {
-                const node = parse_ast.store.getHeader(.{ .id = parse_ast.root_node_idx });
+                const node = parse_ast.store.getHeader(@enumFromInt(parse_ast.root_node_idx));
                 try parse_ast.nodeToSExprStr(node, &module_env, parse_buffer.writer().any());
             },
             .expr => {
-                const node = parse_ast.store.getExpr(.{ .id = parse_ast.root_node_idx });
+                const node = parse_ast.store.getExpr(@enumFromInt(parse_ast.root_node_idx));
                 try parse_ast.nodeToSExprStr(node, &module_env, parse_buffer.writer().any());
             },
             .statement => {
-                const node = parse_ast.store.getStatement(.{ .id = parse_ast.root_node_idx });
+                const node = parse_ast.store.getStatement(@enumFromInt(parse_ast.root_node_idx));
                 try parse_ast.nodeToSExprStr(node, &module_env, parse_buffer.writer().any());
             },
         }

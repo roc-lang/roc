@@ -16,6 +16,7 @@ data: Data,
 main_token: TokenIdx,
 region: AST.Region,
 
+/// A SafeMultiList of Nodes
 pub const List = collections.SafeMultiList(Node);
 
 /// Internal representation for where a node is stored

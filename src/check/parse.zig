@@ -64,7 +64,7 @@ fn parseFileAndReturnIdx(parser: *Parser) u32 {
 
 fn parseExprAndReturnIdx(parser: *Parser) u32 {
     const id = parser.parseExpr();
-    return id.id;
+    return @intFromEnum(id);
 }
 
 /// Parses a Roc expression - only for use in snapshots. The returned AST should be deallocated by calling deinit
@@ -75,7 +75,7 @@ pub fn parseExpr(env: *base.ModuleEnv, source: []const u8) AST {
 
 fn parseHeaderAndReturnIdx(parser: *Parser) u32 {
     const id = parser.parseHeader();
-    return id.id;
+    return @intFromEnum(id);
 }
 
 /// Parses a Roc Header - only for use in snapshots. The returned AST should be deallocated by calling deinit
@@ -85,9 +85,9 @@ pub fn parseHeader(env: *base.ModuleEnv, source: []const u8) AST {
 }
 
 fn parseStatementAndReturnIdx(parser: *Parser) u32 {
-    const statementId = parser.parseStmt();
-    if (statementId) |id| {
-        return id.id;
+    const maybe_statement_idx = parser.parseStmt();
+    if (maybe_statement_idx) |idx| {
+        return @intFromEnum(idx);
     }
     @panic("Statement to parse was not found in AST");
 }

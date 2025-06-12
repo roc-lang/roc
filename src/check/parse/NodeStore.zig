@@ -21,17 +21,17 @@ const NodeStore = @This();
 gpa: std.mem.Allocator,
 nodes: Node.List,
 extra_data: std.ArrayListUnmanaged(u32),
-scratch_statements: base.Scratch(StatementIdx),
+scratch_statements: base.Scratch(AST.Statement.Idx),
 scratch_tokens: base.Scratch(Token.Idx),
-scratch_exprs: base.Scratch(ExprIdx),
-scratch_patterns: base.Scratch(PatternIdx),
-scratch_record_fields: base.Scratch(RecordFieldIdx),
-scratch_pattern_record_fields: base.Scratch(PatternRecordFieldIdx),
-scratch_when_branches: base.Scratch(WhenBranchIdx),
-scratch_type_annos: base.Scratch(TypeAnnoIdx),
-scratch_anno_record_fields: base.Scratch(AnnoRecordFieldIdx),
-scratch_exposed_items: base.Scratch(ExposedItemIdx),
-scratch_where_clauses: base.Scratch(WhereClauseIdx),
+scratch_exprs: base.Scratch(AST.Expr.Idx),
+scratch_patterns: base.Scratch(AST.Pattern.Idx),
+scratch_record_fields: base.Scratch(AST.RecordField.Idx),
+scratch_pattern_record_fields: base.Scratch(AST.PatternRecordField.Idx),
+scratch_when_branches: base.Scratch(AST.WhenBranch.Idx),
+scratch_type_annos: base.Scratch(AST.TypeAnno.Idx),
+scratch_anno_record_fields: base.Scratch(AST.AnnoRecordField.Idx),
+scratch_exposed_items: base.Scratch(AST.ExposedItem.Idx),
+scratch_where_clauses: base.Scratch(AST.WhereClause.Idx),
 
 /// Initialize the store with an assumed capacity to
 /// ensure resizing of underlying data structures happens
@@ -41,17 +41,17 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) NodeStore {
         .gpa = gpa,
         .nodes = Node.List.initCapacity(gpa, capacity),
         .extra_data = std.ArrayListUnmanaged(u32).initCapacity(gpa, capacity / 2) catch |err| exitOnOom(err),
-        .scratch_statements = base.Scratch(StatementIdx).init(gpa),
+        .scratch_statements = base.Scratch(AST.Statement.Idx).init(gpa),
         .scratch_tokens = base.Scratch(Token.Idx).init(gpa),
-        .scratch_exprs = base.Scratch(ExprIdx).init(gpa),
-        .scratch_patterns = base.Scratch(PatternIdx).init(gpa),
-        .scratch_record_fields = base.Scratch(RecordFieldIdx).init(gpa),
-        .scratch_pattern_record_fields = base.Scratch(PatternRecordFieldIdx).init(gpa),
-        .scratch_when_branches = base.Scratch(WhenBranchIdx).init(gpa),
-        .scratch_type_annos = base.Scratch(TypeAnnoIdx).init(gpa),
-        .scratch_anno_record_fields = base.Scratch(AnnoRecordFieldIdx).init(gpa),
-        .scratch_exposed_items = base.Scratch(ExposedItemIdx).init(gpa),
-        .scratch_where_clauses = base.Scratch(WhereClauseIdx).init(gpa),
+        .scratch_exprs = base.Scratch(AST.Expr.Idx).init(gpa),
+        .scratch_patterns = base.Scratch(AST.Pattern.Idx).init(gpa),
+        .scratch_record_fields = base.Scratch(AST.RecordField.Idx).init(gpa),
+        .scratch_pattern_record_fields = base.Scratch(AST.PatternRecordField.Idx).init(gpa),
+        .scratch_when_branches = base.Scratch(AST.WhenBranch.Idx).init(gpa),
+        .scratch_type_annos = base.Scratch(AST.TypeAnno.Idx).init(gpa),
+        .scratch_anno_record_fields = base.Scratch(AST.AnnoRecordField.Idx).init(gpa),
+        .scratch_exposed_items = base.Scratch(AST.ExposedItem.Idx).init(gpa),
+        .scratch_where_clauses = base.Scratch(AST.WhereClause.Idx).init(gpa),
     };
 
     _ = store.nodes.append(gpa, .{
@@ -102,6 +102,7 @@ pub fn emptyScratch(store: *NodeStore) void {
     store.scratch_where_clauses.clearFrom(0);
 }
 
+/// TODO
 pub fn debug(store: *NodeStore) void {
     std.debug.print("\n==> IR.NodeStore DEBUG <==\n", .{});
     std.debug.print("Nodes:\n", .{});
@@ -124,39 +125,6 @@ pub fn debug(store: *NodeStore) void {
     std.debug.print("==> IR.NodeStore DEBUG <==\n\n", .{});
 }
 
-// Node Type Idx types
-
-/// An index for a Body node. Should not be constructed externally.
-pub const BodyIdx = struct { id: u32 };
-/// An index for a Header node. Should not be constructed externally.
-pub const HeaderIdx = struct { id: u32 };
-/// An index for a ExposedItem node. Should not be constructed externally.
-pub const ExposedItemIdx = struct { id: u32 };
-/// An index for a Statement node. Should not be constructed externally.
-pub const StatementIdx = struct { id: u32 };
-/// An index for a Pattern node. Should not be constructed externally.
-pub const PatternIdx = struct { id: u32 };
-/// An index for a Expr node. Should not be constructed externally.
-pub const ExprIdx = struct { id: u32 };
-/// An index for a IfElse node. Should not be constructed externally.
-pub const IfElseIdx = struct { id: u32 };
-/// An index for a WhenBranch node. Should not be constructed externally.
-pub const WhenBranchIdx = struct { id: u32 };
-/// An index for a RecordField node. Should not be constructed externally.
-pub const RecordFieldIdx = struct { id: u32 };
-/// An index for a PatternRecordField node. Should not be constructed externally.
-pub const PatternRecordFieldIdx = struct { id: u32 };
-/// An index for a TypeHeader node. Should not be constructed externally.
-pub const TypeHeaderIdx = struct { id: u32 };
-/// An index for a TypeAnno node. Should not be constructed externally.
-pub const TypeAnnoIdx = struct { id: u32 };
-/// An index for a AnnoRecordField node. Should not be constructed externally.
-pub const AnnoRecordFieldIdx = struct { id: u32 };
-/// An index for a WhereClause node.  Should not be constructed externally.
-pub const WhereClauseIdx = struct { id: u32 };
-/// An index for a Collection node.  Should not be constructed externally.
-pub const CollectionIdx = struct { id: u32 };
-
 // ------------------------------------------------------------------------
 // Creation API - All nodes should be added using these functions
 // ------------------------------------------------------------------------
@@ -169,23 +137,22 @@ pub fn addMalformed(store: *NodeStore, comptime t: type, reason: Diagnostic.Tag,
         .data = .{ .lhs = @intFromEnum(reason), .rhs = 0 },
         .region = region,
     });
-    return .{ .id = @intFromEnum(nid) };
+    return @enumFromInt(@intFromEnum(nid));
 }
 
-pub fn addFile(store: *NodeStore, file: File) void {
-    store.extra_data.append(store.gpa, file.header.id) catch |err| exitOnOom(err);
+/// TODO
+pub fn addFile(store: *NodeStore, file: AST.File) void {
+    store.extra_data.append(store.gpa, @intFromEnum(file.header)) catch |err| exitOnOom(err);
     store.nodes.set(@enumFromInt(0), .{
         .tag = .root,
         .main_token = 0,
-        .data = .{
-            .lhs = file.statements.span.start,
-            .rhs = file.statements.span.len,
-        },
+        .data = .{ .lhs = file.statements.span.start, .rhs = file.statements.span.len },
         .region = file.region,
     });
 }
 
-pub fn addCollection(store: *NodeStore, tag: Node.Tag, collection: Collection) CollectionIdx {
+/// TODO
+pub fn addCollection(store: *NodeStore, tag: Node.Tag, collection: AST.Collection) AST.Collection.Idx {
     const nid = store.nodes.append(store.gpa, Node{
         .tag = tag,
         .main_token = 0,
@@ -195,10 +162,11 @@ pub fn addCollection(store: *NodeStore, tag: Node.Tag, collection: Collection) C
         },
         .region = collection.region,
     });
-    return .{ .id = @intFromEnum(nid) };
+    return @enumFromInt(@intFromEnum(nid));
 }
 
-pub fn addHeader(store: *NodeStore, header: Header) HeaderIdx {
+/// TODO
+pub fn addHeader(store: *NodeStore, header: AST.Header) AST.Header.Idx {
     var node = Node{
         .tag = .statement,
         .main_token = 0,
@@ -206,33 +174,34 @@ pub fn addHeader(store: *NodeStore, header: Header) HeaderIdx {
             .lhs = 0,
             .rhs = 0,
         },
-        .region = emptyRegion(),
+        .region = AST.Region.empty(),
     };
     switch (header) {
         .app => |app| {
             node.tag = .app_header;
-            node.main_token = app.platform_idx.id;
+            // TODO this doesn't seem right, were giving it a record_field index instead of a token index
+            node.main_token = @intFromEnum(app.platform_idx);
             // Store provides collection
-            node.data.lhs = app.provides.id;
-            node.data.rhs = app.packages.id;
+            node.data.lhs = @intFromEnum(app.provides);
+            node.data.rhs = @intFromEnum(app.packages);
             node.region = app.region;
 
-            store.extra_data.append(store.gpa, app.platform_idx.id) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @intFromEnum(app.platform_idx)) catch |err| exitOnOom(err);
         },
         .module => |mod| {
             node.tag = .module_header;
-            node.data.lhs = mod.exposes.id;
+            node.data.lhs = @intFromEnum(mod.exposes);
             node.region = mod.region;
         },
         .hosted => |hosted| {
             node.tag = .hosted_header;
-            node.data.lhs = hosted.exposes.id;
+            node.data.lhs = @intFromEnum(hosted.exposes);
             node.region = hosted.region;
         },
         .package => |package| {
             node.tag = .package_header;
-            node.data.lhs = package.exposes.id;
-            node.data.rhs = package.packages.id;
+            node.data.lhs = @intFromEnum(package.exposes);
+            node.data.rhs = @intFromEnum(package.packages);
             node.region = package.region;
         },
         .platform => |platform| {
@@ -240,11 +209,11 @@ pub fn addHeader(store: *NodeStore, header: Header) HeaderIdx {
             node.main_token = platform.name;
 
             const ed_start = store.extra_data.items.len;
-            store.extra_data.append(store.gpa, platform.requires_rigids.id) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, platform.requires_signatures.id) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, platform.exposes.id) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, platform.packages.id) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, platform.provides.id) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @intFromEnum(platform.requires_rigids)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @intFromEnum(platform.requires_signatures)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @intFromEnum(platform.exposes)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @intFromEnum(platform.packages)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @intFromEnum(platform.provides)) catch |err| exitOnOom(err);
             const ed_len = store.extra_data.items.len - ed_start;
 
             node.data.lhs = @intCast(ed_start);
@@ -256,11 +225,13 @@ pub fn addHeader(store: *NodeStore, header: Header) HeaderIdx {
             @panic("Use addMalformed instead");
         },
     }
-    const nid = store.nodes.append(store.gpa, node);
-    return .{ .id = @intFromEnum(nid) };
+
+    const node_idx = store.nodes.append(store.gpa, node);
+    return @enumFromInt(@intFromEnum(node_idx));
 }
 
-pub fn addExposedItem(store: *NodeStore, item: ExposedItem) ExposedItemIdx {
+/// TODO
+pub fn addExposedItem(store: *NodeStore, item: AST.ExposedItem) AST.ExposedItem.Idx {
     var node = Node{
         .tag = .malformed,
         .main_token = 0,
@@ -268,7 +239,7 @@ pub fn addExposedItem(store: *NodeStore, item: ExposedItem) ExposedItemIdx {
             .lhs = 0,
             .rhs = 0,
         },
-        .region = emptyRegion(),
+        .region = AST.Region.empty(),
     };
 
     switch (item) {
@@ -300,10 +271,11 @@ pub fn addExposedItem(store: *NodeStore, item: ExposedItem) ExposedItemIdx {
     }
 
     const nid = store.nodes.append(store.gpa, node);
-    return .{ .id = @intFromEnum(nid) };
+    return @enumFromInt(@intFromEnum(nid));
 }
 
-pub fn addStatement(store: *NodeStore, statement: Statement) StatementIdx {
+/// TODO
+pub fn addStatement(store: *NodeStore, statement: AST.Statement) AST.Statement.Idx {
     var node = Node{
         .tag = .statement,
         .main_token = 0,
@@ -311,46 +283,46 @@ pub fn addStatement(store: *NodeStore, statement: Statement) StatementIdx {
             .lhs = 0,
             .rhs = 0,
         },
-        .region = emptyRegion(),
+        .region = AST.Region.empty(),
     };
     switch (statement) {
         .decl => |d| {
             node.tag = .decl;
-            node.data.lhs = d.pattern.id;
-            node.data.rhs = d.body.id;
+            node.data.lhs = @intFromEnum(d.pattern);
+            node.data.rhs = @intFromEnum(d.body);
             node.region = d.region;
         },
         .@"var" => |v| {
             node.tag = .@"var";
             node.main_token = v.name;
-            node.data.lhs = v.body.id;
+            node.data.lhs = @intFromEnum(v.body);
             node.region = v.region;
         },
         .expr => |expr| {
             node.tag = .expr;
-            node.data.lhs = expr.expr.id;
+            node.data.lhs = @intFromEnum(expr.expr);
             node.region = expr.region;
         },
         .crash => |c| {
             node.tag = .crash;
-            node.data.lhs = c.expr.id;
+            node.data.lhs = @intFromEnum(c.expr);
             node.region = c.region;
         },
         .expect => |e| {
             node.tag = .expect;
-            node.data.lhs = e.body.id;
+            node.data.lhs = @intFromEnum(e.body);
             node.region = e.region;
         },
         .@"for" => |f| {
             node.tag = .@"for";
-            node.main_token = f.patt.id;
-            node.data.lhs = f.expr.id;
-            node.data.rhs = f.body.id;
+            node.main_token = @intFromEnum(f.patt);
+            node.data.lhs = @intFromEnum(f.expr);
+            node.data.rhs = @intFromEnum(f.body);
             node.region = f.region;
         },
         .@"return" => |r| {
             node.tag = .@"return";
-            node.data.lhs = r.expr.id;
+            node.data.lhs = @intFromEnum(r.expr);
             node.region = r.region;
         },
         .import => |i| {
@@ -386,19 +358,19 @@ pub fn addStatement(store: *NodeStore, statement: Statement) StatementIdx {
         .type_decl => |d| {
             node.tag = .type_decl;
             node.region = d.region;
-            node.data.lhs = d.header.id;
-            node.data.rhs = d.anno.id;
+            node.data.lhs = @intFromEnum(d.header);
+            node.data.rhs = @intFromEnum(d.anno);
             if (d.where) |w| {
-                node.main_token = w.id;
+                node.main_token = @intFromEnum(w);
             }
         },
         .type_anno => |a| {
             node.tag = .type_anno;
             node.region = a.region;
             node.data.lhs = a.name;
-            node.data.rhs = a.anno.id;
+            node.data.rhs = @intFromEnum(a.anno);
             if (a.where) |w| {
-                node.main_token = w.id;
+                node.main_token = @intFromEnum(w);
             }
         },
         .malformed => {
@@ -406,10 +378,11 @@ pub fn addStatement(store: *NodeStore, statement: Statement) StatementIdx {
         },
     }
     const nid = store.nodes.append(store.gpa, node);
-    return .{ .id = @intFromEnum(nid) };
+    return @enumFromInt(@intFromEnum(nid));
 }
 
-pub fn addPattern(store: *NodeStore, pattern: Pattern) PatternIdx {
+/// TODO
+pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) AST.Pattern.Idx {
     var node = Node{
         .tag = .statement,
         .main_token = 0,
@@ -417,7 +390,7 @@ pub fn addPattern(store: *NodeStore, pattern: Pattern) PatternIdx {
             .lhs = 0,
             .rhs = 0,
         },
-        .region = emptyRegion(),
+        .region = AST.Region.empty(),
     };
     switch (pattern) {
         .ident => |i| {
@@ -441,7 +414,7 @@ pub fn addPattern(store: *NodeStore, pattern: Pattern) PatternIdx {
             node.tag = .string_patt;
             node.region = s.region;
             node.main_token = s.string_tok;
-            node.data.lhs = s.expr.id;
+            node.data.lhs = @intFromEnum(s.expr);
         },
         .record => |r| {
             node.tag = .record_patt;
@@ -484,18 +457,16 @@ pub fn addPattern(store: *NodeStore, pattern: Pattern) PatternIdx {
         },
     }
     const nid = store.nodes.append(store.gpa, node);
-    return .{ .id = @intFromEnum(nid) };
+    return @enumFromInt(@intFromEnum(nid));
 }
 
-pub fn addExpr(store: *NodeStore, expr: Expr) ExprIdx {
+/// TODO
+pub fn addExpr(store: *NodeStore, expr: AST.Expr) AST.Expr.Idx {
     var node = Node{
         .tag = .statement,
         .main_token = 0,
-        .data = .{
-            .lhs = 0,
-            .rhs = 0,
-        },
-        .region = emptyRegion(),
+        .data = .{ .lhs = 0, .rhs = 0 },
+        .region = AST.Region.empty(),
     };
     switch (expr) {
         .int => |e| {
@@ -550,7 +521,7 @@ pub fn addExpr(store: *NodeStore, expr: Expr) ExprIdx {
             node.data.lhs = l.args.span.start;
             node.data.rhs = l.args.span.len;
             const body_idx = store.extra_data.items.len;
-            store.extra_data.append(store.gpa, l.body.id) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @intFromEnum(l.body)) catch |err| exitOnOom(err);
             node.main_token = @as(u32, @intCast(body_idx));
         },
         .apply => |app| {
@@ -559,55 +530,55 @@ pub fn addExpr(store: *NodeStore, expr: Expr) ExprIdx {
             node.data.lhs = app.args.span.start;
             node.data.rhs = app.args.span.len;
             const fn_ed_idx = store.extra_data.items.len;
-            store.extra_data.append(store.gpa, app.@"fn".id) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @intFromEnum(app.@"fn")) catch |err| exitOnOom(err);
             node.main_token = @as(u32, @intCast(fn_ed_idx));
         },
         .record_updater => |_| {},
         .field_access => |fa| {
             node.tag = .field_access;
             node.region = fa.region;
-            node.data.lhs = fa.left.id;
-            node.data.rhs = fa.right.id;
+            node.data.lhs = @intFromEnum(fa.left);
+            node.data.rhs = @intFromEnum(fa.right);
         },
         .local_dispatch => |ld| {
             node.tag = .local_dispatch;
             node.region = ld.region;
             node.main_token = ld.operator;
-            node.data.lhs = ld.left.id;
-            node.data.rhs = ld.right.id;
+            node.data.lhs = @intFromEnum(ld.left);
+            node.data.rhs = @intFromEnum(ld.right);
         },
         .bin_op => |op| {
             node.tag = .bin_op;
             node.region = op.region;
             node.main_token = op.operator;
-            node.data.lhs = op.left.id;
-            node.data.rhs = op.right.id;
+            node.data.lhs = @intFromEnum(op.left);
+            node.data.rhs = @intFromEnum(op.right);
         },
         .suffix_single_question => |op| {
             node.tag = .suffix_single_question;
             node.region = op.region;
-            node.data.lhs = op.expr.id;
+            node.data.lhs = @intFromEnum(op.expr);
         },
         .unary_op => |u| {
             node.tag = .unary_op;
             node.region = u.region;
             node.main_token = u.operator;
-            node.data.lhs = u.expr.id;
+            node.data.lhs = @intFromEnum(u.expr);
         },
         .if_then_else => |i| {
             node.tag = .if_then_else;
             node.region = i.region;
-            node.data.lhs = i.condition.id;
+            node.data.lhs = @intFromEnum(i.condition);
             node.data.rhs = @as(u32, @intCast(store.extra_data.items.len));
-            store.extra_data.append(store.gpa, i.then.id) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, i.@"else".id) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @intFromEnum(i.then)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @intFromEnum(i.@"else")) catch |err| exitOnOom(err);
         },
         .match => |m| {
             node.tag = .match;
             node.region = m.region;
             node.data.lhs = m.branches.span.start;
             node.data.rhs = m.branches.span.len;
-            store.extra_data.append(store.gpa, m.expr.id) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @intFromEnum(m.expr)) catch |err| exitOnOom(err);
         },
         .ident => |id| {
             node.tag = .ident;
@@ -621,7 +592,7 @@ pub fn addExpr(store: *NodeStore, expr: Expr) ExprIdx {
         .dbg => |d| {
             node.tag = .dbg;
             node.region = d.region;
-            node.data.lhs = d.expr.id;
+            node.data.lhs = @intFromEnum(d.expr);
         },
         .record_builder => |_| {},
         .block => |body| {
@@ -640,10 +611,11 @@ pub fn addExpr(store: *NodeStore, expr: Expr) ExprIdx {
         },
     }
     const nid = store.nodes.append(store.gpa, node);
-    return .{ .id = @intFromEnum(nid) };
+    return @enumFromInt(@intFromEnum(nid));
 }
 
-pub fn addPatternRecordField(store: *NodeStore, field: PatternRecordField) PatternRecordFieldIdx {
+/// TODO
+pub fn addPatternRecordField(store: *NodeStore, field: AST.PatternRecordField) AST.PatternRecordField.Idx {
     var node = Node{
         .tag = .record_field_patt,
         .main_token = field.name,
@@ -654,23 +626,25 @@ pub fn addPatternRecordField(store: *NodeStore, field: PatternRecordField) Patte
         .region = field.region,
     };
     if (field.value) |value| {
-        node.data.rhs = value.id;
+        node.data.rhs = @intFromEnum(value);
     }
     const nid = store.nodes.append(store.gpa, node);
-    return .{ .id = @intFromEnum(nid) };
+    return @enumFromInt(@intFromEnum(nid));
 }
 
-pub fn getPatternRecordField(store: *NodeStore, field: PatternRecordFieldIdx) PatternRecordField {
-    const node = store.nodes.get(@enumFromInt(field.id));
+/// TODO
+pub fn getPatternRecordField(store: *NodeStore, field: AST.PatternRecordField.Idx) AST.PatternRecordField {
+    const node = store.nodes.get(@enumFromInt(@intFromEnum(field)));
     return .{
         .name = node.main_token,
-        .value = if (node.data.rhs == 0) null else .{ .id = node.data.rhs },
+        .value = if (node.data.rhs == 0) null else @enumFromInt(node.data.rhs),
         .rest = node.data.lhs == 1,
         .region = node.region,
     };
 }
 
-pub fn addRecordField(store: *NodeStore, field: RecordField) RecordFieldIdx {
+/// TODO
+pub fn addRecordField(store: *NodeStore, field: AST.RecordField) AST.RecordField.Idx {
     var node = Node{
         .tag = .statement,
         .main_token = 0,
@@ -683,32 +657,34 @@ pub fn addRecordField(store: *NodeStore, field: RecordField) RecordFieldIdx {
     node.tag = .record_field;
     node.main_token = field.name;
     if (field.value) |v| {
-        node.data.lhs = v.id;
+        node.data.lhs = @intFromEnum(v);
     }
     if (field.optional) {
         node.data.rhs = 1;
     }
 
     const nid = store.nodes.append(store.gpa, node);
-    return .{ .id = @intFromEnum(nid) };
+    return @enumFromInt(@intFromEnum(nid));
 }
 
-pub fn addWhenBranch(store: *NodeStore, branch: WhenBranch) WhenBranchIdx {
+/// TODO
+pub fn addWhenBranch(store: *NodeStore, branch: AST.WhenBranch) AST.WhenBranch.Idx {
     const node = Node{
         .tag = .branch,
         .main_token = 0,
         .data = .{
-            .lhs = branch.pattern.id,
-            .rhs = branch.body.id,
+            .lhs = @intFromEnum(branch.pattern),
+            .rhs = @intFromEnum(branch.body),
         },
         .region = branch.region,
     };
 
     const nid = store.nodes.append(store.gpa, node);
-    return .{ .id = @intFromEnum(nid) };
+    return @enumFromInt(@intFromEnum(nid));
 }
 
-pub fn addTypeHeader(store: *NodeStore, header: TypeHeader) TypeHeaderIdx {
+/// TODO
+pub fn addTypeHeader(store: *NodeStore, header: AST.TypeHeader) AST.TypeHeader.Idx {
     var node = Node{
         .tag = .ty_header,
         .main_token = header.name,
@@ -723,26 +699,27 @@ pub fn addTypeHeader(store: *NodeStore, header: TypeHeader) TypeHeaderIdx {
     node.data.rhs = header.args.span.len;
 
     const nid = store.nodes.append(store.gpa, node);
-    return .{ .id = @intFromEnum(nid) };
+    return @enumFromInt(@intFromEnum(nid));
 }
 
-pub fn addAnnoRecordField(store: *NodeStore, field: AnnoRecordField) AnnoRecordFieldIdx {
+/// TODO
+pub fn addAnnoRecordField(store: *NodeStore, field: AST.AnnoRecordField) AST.AnnoRecordField.Idx {
     const node = Node{
         .tag = .ty_record_field,
         .main_token = 0,
         .data = .{
-            .lhs = @as(u32, @intCast(field.name)),
-            .rhs = @as(u32, @intCast(field.ty.id)),
+            .lhs = field.name,
+            .rhs = @intFromEnum(field.ty),
         },
         .region = field.region,
     };
 
     const nid = store.nodes.append(store.gpa, node);
-    return .{ .id = @intFromEnum(nid) };
+    return @enumFromInt(@intFromEnum(nid));
 }
 
 /// Adds a WhereClause node to the store, returning a type-safe index to the node.
-pub fn addWhereClause(store: *NodeStore, clause: WhereClause) WhereClauseIdx {
+pub fn addWhereClause(store: *NodeStore, clause: AST.WhereClause) AST.WhereClause.Idx {
     var node = Node{
         .tag = .where_alias,
         .main_token = 0,
@@ -750,7 +727,7 @@ pub fn addWhereClause(store: *NodeStore, clause: WhereClause) WhereClauseIdx {
             .lhs = 0,
             .rhs = 0,
         },
-        .region = emptyRegion(),
+        .region = AST.Region.empty(),
     };
 
     switch (clause) {
@@ -766,8 +743,8 @@ pub fn addWhereClause(store: *NodeStore, clause: WhereClause) WhereClauseIdx {
             node.main_token = c.var_tok;
             const ed_start = store.extra_data.items.len;
             store.extra_data.append(store.gpa, c.name_tok) catch |e| exitOnOom(e);
-            store.extra_data.append(store.gpa, c.args.id) catch |e| exitOnOom(e);
-            store.extra_data.append(store.gpa, c.ret_anno.id) catch |e| exitOnOom(e);
+            store.extra_data.append(store.gpa, @intFromEnum(c.args)) catch |e| exitOnOom(e);
+            store.extra_data.append(store.gpa, @intFromEnum(c.ret_anno)) catch |e| exitOnOom(e);
             node.data.lhs = @intCast(ed_start);
         },
         .mod_method => |c| {
@@ -776,8 +753,8 @@ pub fn addWhereClause(store: *NodeStore, clause: WhereClause) WhereClauseIdx {
             node.main_token = c.var_tok;
             const ed_start = store.extra_data.items.len;
             store.extra_data.append(store.gpa, c.name_tok) catch |e| exitOnOom(e);
-            store.extra_data.append(store.gpa, c.args.id) catch |e| exitOnOom(e);
-            store.extra_data.append(store.gpa, c.ret_anno.id) catch |e| exitOnOom(e);
+            store.extra_data.append(store.gpa, @intFromEnum(c.args)) catch |e| exitOnOom(e);
+            store.extra_data.append(store.gpa, @intFromEnum(c.ret_anno)) catch |e| exitOnOom(e);
             node.data.lhs = @intCast(ed_start);
         },
         .malformed => {
@@ -786,10 +763,11 @@ pub fn addWhereClause(store: *NodeStore, clause: WhereClause) WhereClauseIdx {
     }
 
     const nid = store.nodes.append(store.gpa, node);
-    return .{ .id = @intFromEnum(nid) };
+    return @enumFromInt(@intFromEnum(nid));
 }
 
-pub fn addTypeAnno(store: *NodeStore, anno: TypeAnno) TypeAnnoIdx {
+/// TODO
+pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) AST.TypeAnno.Idx {
     var node = Node{
         .tag = .branch,
         .main_token = 0,
@@ -797,7 +775,7 @@ pub fn addTypeAnno(store: *NodeStore, anno: TypeAnno) TypeAnnoIdx {
             .lhs = 0,
             .rhs = 0,
         },
-        .region = emptyRegion(),
+        .region = AST.Region.empty(),
     };
 
     switch (anno) {
@@ -833,13 +811,13 @@ pub fn addTypeAnno(store: *NodeStore, anno: TypeAnno) TypeAnnoIdx {
             node.tag = .ty_union;
             node.region = tu.region;
             node.data.lhs = tu.tags.span.start;
-            var rhs = TypeAnno.TagUnionRhs{
+            var rhs = AST.TypeAnno.TagUnionRhs{
                 .open = 0,
                 .tags_len = @as(u31, @intCast(tu.tags.span.len)),
             };
             if (tu.open_anno) |a| {
                 rhs.open = 1;
-                store.extra_data.append(store.gpa, a.id) catch |err| exitOnOom(err);
+                store.extra_data.append(store.gpa, @intFromEnum(a)) catch |err| exitOnOom(err);
             }
             node.data.rhs = @as(u32, @bitCast(rhs));
         },
@@ -859,18 +837,18 @@ pub fn addTypeAnno(store: *NodeStore, anno: TypeAnno) TypeAnnoIdx {
             node.tag = .ty_fn;
             node.region = f.region;
             node.data.lhs = f.args.span.start;
-            node.data.rhs = @bitCast(TypeAnno.TypeAnnoFnRhs{
+            node.data.rhs = @bitCast(AST.TypeAnno.TypeAnnoFnRhs{
                 .effectful = if (f.effectful) 1 else 0,
                 .args_len = @intCast(f.args.span.len), // We hope a function has less than 2.147b args
             });
             const ret_idx = store.extra_data.items.len;
-            store.extra_data.append(store.gpa, f.ret.id) catch |err| exitOnOom(err);
-            node.main_token = @as(u32, @intCast(ret_idx));
+            store.extra_data.append(store.gpa, @intFromEnum(f.ret)) catch |err| exitOnOom(err);
+            node.main_token = @intCast(ret_idx);
         },
         .parens => |p| {
             node.tag = .ty_parens;
             node.region = p.region;
-            node.data.lhs = p.anno.id;
+            node.data.lhs = @intFromEnum(p.anno);
         },
         .malformed => {
             @panic("Use addMalformed instead");
@@ -878,26 +856,28 @@ pub fn addTypeAnno(store: *NodeStore, anno: TypeAnno) TypeAnnoIdx {
     }
 
     const nid = store.nodes.append(store.gpa, node);
-    return .{ .id = @intFromEnum(nid) };
+    return @enumFromInt(@intFromEnum(nid));
 }
 
 // ------------------------------------------------------------------------
 // Read API - All nodes should be accessed using these functions
 // ------------------------------------------------------------------------
 
-pub fn getFile(store: *NodeStore) File {
+/// TODO
+pub fn getFile(store: *NodeStore) AST.File {
     const node = store.nodes.get(@enumFromInt(0));
     const header_ed_idx = @as(usize, @intCast(node.data.lhs + node.data.rhs));
     const header = store.extra_data.items[header_ed_idx];
     return .{
-        .header = .{ .id = header },
+        .header = @enumFromInt(header),
         .statements = .{ .span = .{ .start = node.data.lhs, .len = node.data.rhs } },
         .region = node.region,
     };
 }
 
-pub fn getCollection(store: *NodeStore, idx: CollectionIdx) Collection {
-    const node = store.nodes.get(@enumFromInt(idx.id));
+/// TODO
+pub fn getCollection(store: *NodeStore, collection_idx: AST.Collection.Idx) AST.Collection {
+    const node = store.nodes.get(@enumFromInt(@intFromEnum(collection_idx)));
     return .{
         .span = .{
             .start = node.data.lhs,
@@ -907,33 +887,34 @@ pub fn getCollection(store: *NodeStore, idx: CollectionIdx) Collection {
     };
 }
 
-pub fn getHeader(store: *NodeStore, header: HeaderIdx) Header {
-    const node = store.nodes.get(@enumFromInt(header.id));
+/// TODO
+pub fn getHeader(store: *NodeStore, header_idx: AST.Header.Idx) AST.Header {
+    const node = store.nodes.get(@enumFromInt(@intFromEnum(header_idx)));
     switch (node.tag) {
         .app_header => {
             return .{ .app = .{
-                .platform_idx = RecordFieldIdx{ .id = node.main_token },
-                .provides = .{ .id = node.data.lhs },
-                .packages = .{ .id = node.data.rhs },
+                .platform_idx = @enumFromInt(node.main_token),
+                .provides = @enumFromInt(node.data.lhs),
+                .packages = @enumFromInt(node.data.rhs),
                 .region = node.region,
             } };
         },
         .module_header => {
             return .{ .module = .{
-                .exposes = .{ .id = node.data.lhs },
+                .exposes = @enumFromInt(node.data.lhs),
                 .region = node.region,
             } };
         },
         .hosted_header => {
             return .{ .hosted = .{
-                .exposes = .{ .id = node.data.lhs },
+                .exposes = @enumFromInt(node.data.lhs),
                 .region = node.region,
             } };
         },
         .package_header => {
             return .{ .package = .{
-                .exposes = .{ .id = node.data.lhs },
-                .packages = .{ .id = node.data.rhs },
+                .exposes = @enumFromInt(node.data.lhs),
+                .packages = @enumFromInt(node.data.rhs),
                 .region = node.region,
             } };
         },
@@ -943,11 +924,11 @@ pub fn getHeader(store: *NodeStore, header: HeaderIdx) Header {
 
             return .{ .platform = .{
                 .name = node.main_token,
-                .requires_rigids = .{ .id = store.extra_data.items[ed_start] },
-                .requires_signatures = .{ .id = store.extra_data.items[ed_start + 1] },
-                .exposes = .{ .id = store.extra_data.items[ed_start + 2] },
-                .packages = .{ .id = store.extra_data.items[ed_start + 3] },
-                .provides = .{ .id = store.extra_data.items[ed_start + 4] },
+                .requires_rigids = @enumFromInt(store.extra_data.items[ed_start]),
+                .requires_signatures = @enumFromInt(store.extra_data.items[ed_start + 1]),
+                .exposes = @enumFromInt(store.extra_data.items[ed_start + 2]),
+                .packages = @enumFromInt(store.extra_data.items[ed_start + 3]),
+                .provides = @enumFromInt(store.extra_data.items[ed_start + 4]),
                 .region = node.region,
             } };
         },
@@ -963,8 +944,9 @@ pub fn getHeader(store: *NodeStore, header: HeaderIdx) Header {
     }
 }
 
-pub fn getExposedItem(store: *NodeStore, item: ExposedItemIdx) ExposedItem {
-    const node = store.nodes.get(@enumFromInt(item.id));
+/// TODO
+pub fn getExposedItem(store: *NodeStore, exposed_item_idx: AST.ExposedItem.Idx) AST.ExposedItem {
+    const node = store.nodes.get(@enumFromInt(@intFromEnum(exposed_item_idx)));
     switch (node.tag) {
         .exposed_item_lower => {
             if (node.data.rhs == 1) {
@@ -1006,30 +988,27 @@ pub fn getExposedItem(store: *NodeStore, item: ExposedItemIdx) ExposedItem {
     }
 }
 
-pub fn emptyRegion() Region {
-    return .{ .start = 0, .end = 0 };
-}
-
-pub fn getStatement(store: *NodeStore, statement: StatementIdx) Statement {
-    const node = store.nodes.get(@enumFromInt(statement.id));
+/// TODO
+pub fn getStatement(store: *NodeStore, statement_idx: AST.Statement.Idx) AST.Statement {
+    const node = store.nodes.get(@enumFromInt(@intFromEnum(statement_idx)));
     switch (node.tag) {
         .decl => {
             return .{ .decl = .{
-                .pattern = .{ .id = node.data.lhs },
-                .body = .{ .id = node.data.rhs },
+                .pattern = @enumFromInt(node.data.lhs),
+                .body = @enumFromInt(node.data.rhs),
                 .region = node.region,
             } };
         },
         .@"var" => {
             return .{ .@"var" = .{
                 .name = node.main_token,
-                .body = .{ .id = node.data.lhs },
+                .body = @enumFromInt(node.data.lhs),
                 .region = node.region,
             } };
         },
         .expr => {
             return .{ .expr = .{
-                .expr = .{ .id = node.data.lhs },
+                .expr = @enumFromInt(node.data.lhs),
                 .region = node.region,
             } };
         },
@@ -1045,7 +1024,7 @@ pub fn getStatement(store: *NodeStore, statement: StatementIdx) Statement {
             if (rhs.aliased == 1) {
                 alias_tok = store.extra_data.items[extra_data_pos];
             }
-            const i = Statement.Import{
+            return AST.Statement{ .import = .{
                 .module_name_tok = node.main_token,
                 .qualifier_tok = qualifier_tok,
                 .alias_tok = alias_tok,
@@ -1054,50 +1033,48 @@ pub fn getStatement(store: *NodeStore, statement: StatementIdx) Statement {
                     .len = rhs.num_exposes,
                 } },
                 .region = node.region,
-            };
-            const imp = Statement{ .import = i };
-            return imp;
+            } };
         },
         .expect => {
             return .{ .expect = .{
-                .body = .{ .id = node.data.lhs },
+                .body = @enumFromInt(node.data.lhs),
                 .region = node.region,
             } };
         },
         .@"for" => {
             return .{ .@"for" = .{
-                .patt = .{ .id = node.main_token },
-                .expr = .{ .id = node.data.lhs },
-                .body = .{ .id = node.data.rhs },
+                .patt = @enumFromInt(node.main_token),
+                .expr = @enumFromInt(node.data.lhs),
+                .body = @enumFromInt(node.data.rhs),
                 .region = node.region,
             } };
         },
         .crash => {
             return .{ .crash = .{
-                .expr = .{ .id = node.data.lhs },
+                .expr = @enumFromInt(node.data.lhs),
                 .region = node.region,
             } };
         },
         .@"return" => {
             return .{ .@"return" = .{
-                .expr = .{ .id = node.data.lhs },
+                .expr = @enumFromInt(node.data.lhs),
                 .region = node.region,
             } };
         },
         .type_decl => {
             return .{ .type_decl = .{
                 .region = node.region,
-                .header = .{ .id = node.data.lhs },
-                .anno = .{ .id = node.data.rhs },
-                .where = if (node.main_token != 0) .{ .id = node.main_token } else null,
+                .header = @enumFromInt(node.data.lhs),
+                .anno = @enumFromInt(node.data.rhs),
+                .where = if (node.main_token != 0) @enumFromInt(node.main_token) else null,
             } };
         },
         .type_anno => {
             return .{ .type_anno = .{
                 .region = node.region,
                 .name = node.data.lhs,
-                .anno = .{ .id = node.data.rhs },
-                .where = if (node.main_token != 0) .{ .id = node.main_token } else null,
+                .anno = @enumFromInt(node.data.rhs),
+                .where = if (node.main_token != 0) @enumFromInt(node.main_token) else null,
             } };
         },
         .malformed => {
@@ -1112,8 +1089,9 @@ pub fn getStatement(store: *NodeStore, statement: StatementIdx) Statement {
     }
 }
 
-pub fn getPattern(store: *NodeStore, pattern: PatternIdx) Pattern {
-    const node = store.nodes.get(@enumFromInt(pattern.id));
+/// TODO
+pub fn getPattern(store: *NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pattern {
+    const node = store.nodes.get(@enumFromInt(@intFromEnum(pattern_idx)));
     switch (node.tag) {
         .ident_patt => {
             return .{ .ident = .{
@@ -1135,7 +1113,7 @@ pub fn getPattern(store: *NodeStore, pattern: PatternIdx) Pattern {
             return .{ .string = .{
                 .string_tok = node.main_token,
                 .region = node.region,
-                .expr = .{ .id = node.data.lhs },
+                .expr = @enumFromInt(node.data.lhs),
             } };
         },
         .number_patt => {
@@ -1203,8 +1181,9 @@ pub fn getPattern(store: *NodeStore, pattern: PatternIdx) Pattern {
     }
 }
 
-pub fn getExpr(store: *NodeStore, expr: ExprIdx) Expr {
-    const node = store.nodes.get(@enumFromInt(expr.id));
+/// TODO
+pub fn getExpr(store: *NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
+    const node = store.nodes.get(@enumFromInt(@intFromEnum(expr_idx)));
     switch (node.tag) {
         .int => {
             return .{ .int = .{
@@ -1280,33 +1259,30 @@ pub fn getExpr(store: *NodeStore, expr: ExprIdx) Expr {
         },
         .field_access => {
             return .{ .field_access = .{
-                .left = .{ .id = node.data.lhs },
-                .right = .{ .id = node.data.rhs },
+                .left = @enumFromInt(node.data.lhs),
+                .right = @enumFromInt(node.data.rhs),
                 .operator = node.main_token,
                 .region = node.region,
             } };
         },
         .local_dispatch => {
             return .{ .local_dispatch = .{
-                .left = .{ .id = node.data.lhs },
-                .right = .{ .id = node.data.rhs },
+                .left = @enumFromInt(node.data.lhs),
+                .right = @enumFromInt(node.data.rhs),
                 .operator = node.main_token,
                 .region = node.region,
             } };
         },
         .lambda => {
             return .{ .lambda = .{
-                .body = .{
-                    .id = @as(u32, @intCast(store.extra_data.items[@as(usize, @intCast(node.main_token))])),
-                },
+                .body = @enumFromInt(store.extra_data.items[node.main_token]),
                 .args = .{ .span = .{ .start = node.data.lhs, .len = node.data.rhs } },
                 .region = node.region,
             } };
         },
         .apply => {
-            const function = store.extra_data.items[@as(usize, @intCast(node.main_token))];
             return .{ .apply = .{
-                .@"fn" = .{ .id = function },
+                .@"fn" = @enumFromInt(store.extra_data.items[node.main_token]),
                 .args = .{ .span = base.DataSpan{
                     .start = node.data.lhs,
                     .len = node.data.rhs,
@@ -1318,7 +1294,7 @@ pub fn getExpr(store: *NodeStore, expr: ExprIdx) Expr {
             return .{ .suffix_single_question = .{
                 .region = node.region,
                 .operator = node.main_token,
-                .expr = .{ .id = node.data.lhs },
+                .expr = @enumFromInt(node.data.lhs),
             } };
         },
         .if_then_else => {
@@ -1328,16 +1304,16 @@ pub fn getExpr(store: *NodeStore, expr: ExprIdx) Expr {
             const else_ed = store.extra_data.items[else_idx];
             return .{ .if_then_else = .{
                 .region = node.region,
-                .condition = .{ .id = node.data.lhs },
-                .then = .{ .id = then_ed },
-                .@"else" = .{ .id = else_ed },
+                .condition = @enumFromInt(node.data.lhs),
+                .then = @enumFromInt(then_ed),
+                .@"else" = @enumFromInt(else_ed),
             } };
         },
         .match => {
-            const expr_idx = @as(usize, @intCast(node.data.lhs + node.data.rhs));
+            const idx = @as(usize, @intCast(node.data.lhs + node.data.rhs));
             return .{ .match = .{
                 .region = node.region,
-                .expr = .{ .id = store.extra_data.items[expr_idx] },
+                .expr = @enumFromInt(store.extra_data.items[idx]),
                 .branches = .{ .span = .{
                     .start = node.data.lhs,
                     .len = node.data.rhs,
@@ -1347,19 +1323,19 @@ pub fn getExpr(store: *NodeStore, expr: ExprIdx) Expr {
         .dbg => {
             return .{ .dbg = .{
                 .region = node.region,
-                .expr = .{ .id = node.data.lhs },
+                .expr = @enumFromInt(node.data.lhs),
             } };
         },
         .bin_op => {
             return .{ .bin_op = .{
-                .left = .{ .id = node.data.lhs },
-                .right = .{ .id = node.data.rhs },
+                .left = @enumFromInt(node.data.lhs),
+                .right = @enumFromInt(node.data.rhs),
                 .operator = node.main_token,
                 .region = node.region,
             } };
         },
         .block => {
-            const statements = StatementSpan{ .span = .{
+            const statements = AST.Statement.Span{ .span = .{
                 .start = node.data.lhs,
                 .len = node.data.rhs,
             } };
@@ -1385,10 +1361,11 @@ pub fn getExpr(store: *NodeStore, expr: ExprIdx) Expr {
     }
 }
 
-pub fn getRecordField(store: *NodeStore, fieldIdx: RecordFieldIdx) RecordField {
-    const node = store.nodes.get(@enumFromInt(fieldIdx.id));
+/// TODO
+pub fn getRecordField(store: *NodeStore, field_idx: AST.RecordField.Idx) AST.RecordField {
+    const node = store.nodes.get(@enumFromInt(@intFromEnum(field_idx)));
     const name = node.main_token;
-    const value = if (node.data.lhs > 0) ExprIdx{ .id = node.data.lhs } else null;
+    const value: ?AST.Expr.Idx = if (node.data.lhs > 0) @enumFromInt(node.data.lhs) else null;
     const optional = node.data.rhs == 1;
 
     return .{
@@ -1399,17 +1376,19 @@ pub fn getRecordField(store: *NodeStore, fieldIdx: RecordFieldIdx) RecordField {
     };
 }
 
-pub fn getBranch(store: *NodeStore, branch: WhenBranchIdx) WhenBranch {
-    const node = store.nodes.get(@enumFromInt(branch.id));
+/// TODO
+pub fn getBranch(store: *NodeStore, branch_idx: AST.WhenBranch.Idx) AST.WhenBranch {
+    const node = store.nodes.get(@enumFromInt(@intFromEnum(branch_idx)));
     return .{
         .region = node.region,
-        .pattern = .{ .id = node.data.lhs },
-        .body = .{ .id = node.data.rhs },
+        .pattern = @enumFromInt(node.data.lhs),
+        .body = @enumFromInt(node.data.rhs),
     };
 }
 
-pub fn getTypeHeader(store: *NodeStore, header: TypeHeaderIdx) TypeHeader {
-    const node = store.nodes.get(@enumFromInt(header.id));
+/// TODO
+pub fn getTypeHeader(store: *NodeStore, header_idx: AST.TypeHeader.Idx) AST.TypeHeader {
+    const node = store.nodes.get(@enumFromInt(@intFromEnum(header_idx)));
     std.debug.assert(node.tag == .ty_header);
     return .{
         .region = node.region,
@@ -1421,18 +1400,19 @@ pub fn getTypeHeader(store: *NodeStore, header: TypeHeaderIdx) TypeHeader {
     };
 }
 
-pub fn getAnnoRecordField(store: *NodeStore, idx: AnnoRecordFieldIdx) AnnoRecordField {
-    const node = store.nodes.get(@enumFromInt(idx.id));
+/// TODO
+pub fn getAnnoRecordField(store: *NodeStore, anno_record_field_idx: AST.AnnoRecordField.Idx) AST.AnnoRecordField {
+    const node = store.nodes.get(@enumFromInt(@intFromEnum(anno_record_field_idx)));
     return .{
         .region = node.region,
         .name = node.data.lhs,
-        .ty = .{ .id = node.data.rhs },
+        .ty = @enumFromInt(node.data.rhs),
     };
 }
 
 /// Get a WhereClause node from the store, using a type-safe index to the node.
-pub fn getWhereClause(store: *NodeStore, idx: WhereClauseIdx) WhereClause {
-    const node = store.nodes.get(@enumFromInt(idx.id));
+pub fn getWhereClause(store: *NodeStore, where_clause_idx: AST.WhereClause.Idx) AST.WhereClause {
+    const node = store.nodes.get(@enumFromInt(@intFromEnum(where_clause_idx)));
     switch (node.tag) {
         .where_alias => {
             return .{ .alias = .{
@@ -1450,8 +1430,8 @@ pub fn getWhereClause(store: *NodeStore, idx: WhereClauseIdx) WhereClause {
                 .region = node.region,
                 .var_tok = node.main_token,
                 .name_tok = name_tok,
-                .args = .{ .id = args },
-                .ret_anno = .{ .id = ret_anno },
+                .args = @enumFromInt(args),
+                .ret_anno = @enumFromInt(ret_anno),
             } };
         },
         .where_mod_method => {
@@ -1463,8 +1443,8 @@ pub fn getWhereClause(store: *NodeStore, idx: WhereClauseIdx) WhereClause {
                 .region = node.region,
                 .var_tok = node.main_token,
                 .name_tok = name_tok,
-                .args = .{ .id = args },
-                .ret_anno = .{ .id = ret_anno },
+                .args = @enumFromInt(args),
+                .ret_anno = @enumFromInt(ret_anno),
             } };
         },
         .malformed => {
@@ -1479,8 +1459,9 @@ pub fn getWhereClause(store: *NodeStore, idx: WhereClauseIdx) WhereClause {
     }
 }
 
-pub fn getTypeAnno(store: *NodeStore, anno: TypeAnnoIdx) TypeAnno {
-    const node = store.nodes.get(@enumFromInt(anno.id));
+/// TODO
+pub fn getTypeAnno(store: *NodeStore, ty_anno_idx: AST.TypeAnno.Idx) AST.TypeAnno {
+    const node = store.nodes.get(@enumFromInt(@intFromEnum(ty_anno_idx)));
 
     switch (node.tag) {
         .ty_apply => {
@@ -1517,12 +1498,12 @@ pub fn getTypeAnno(store: *NodeStore, anno: TypeAnnoIdx) TypeAnno {
             } };
         },
         .ty_union => {
-            const rhs = @as(TypeAnno.TagUnionRhs, @bitCast(node.data.rhs));
+            const rhs = @as(AST.TypeAnno.TagUnionRhs, @bitCast(node.data.rhs));
             const tags_ed_end = node.data.lhs + rhs.tags_len;
 
             return .{ .tag_union = .{
                 .region = node.region,
-                .open_anno = if (rhs.open == 1) .{ .id = store.extra_data.items[tags_ed_end] } else null,
+                .open_anno = if (rhs.open == 1) @enumFromInt(store.extra_data.items[tags_ed_end]) else null,
                 .tags = .{ .span = .{
                     .start = node.data.lhs,
                     .len = @as(u32, @intCast(rhs.tags_len)),
@@ -1548,10 +1529,10 @@ pub fn getTypeAnno(store: *NodeStore, anno: TypeAnnoIdx) TypeAnno {
             } };
         },
         .ty_fn => {
-            const rhs = @as(TypeAnno.TypeAnnoFnRhs, @bitCast(node.data.rhs));
+            const rhs = @as(AST.TypeAnno.TypeAnnoFnRhs, @bitCast(node.data.rhs));
             return .{ .@"fn" = .{
                 .region = node.region,
-                .ret = .{ .id = store.extra_data.items[@as(usize, @intCast(node.main_token))] },
+                .ret = @enumFromInt(store.extra_data.items[@as(usize, @intCast(node.main_token))]),
                 .args = .{ .span = .{
                     .start = node.data.lhs,
                     .len = @intCast(rhs.args_len),
@@ -1562,7 +1543,7 @@ pub fn getTypeAnno(store: *NodeStore, anno: TypeAnnoIdx) TypeAnno {
         .ty_parens => {
             return .{ .parens = .{
                 .region = node.region,
-                .anno = .{ .id = node.data.lhs },
+                .anno = @enumFromInt(node.data.lhs),
             } };
         },
         .malformed => {
@@ -1577,1431 +1558,33 @@ pub fn getTypeAnno(store: *NodeStore, anno: TypeAnnoIdx) TypeAnno {
     }
 
     const nid = store.nodes.append(store.gpa, node);
-    return .{ .id = @intFromEnum(nid) };
+    return @enumFromInt(@intFromEnum(nid));
 }
 
 // ------------------------------------------------------------------------
 // Node types - these are the constituent types used in the Node Store API
 // ------------------------------------------------------------------------
 
-/// Represents a delimited collection of other nodes
-pub const Collection = struct {
-    span: base.DataSpan,
-    region: Region,
-};
-
-/// Represents a Roc file.
-pub const File = struct {
-    header: HeaderIdx,
-    statements: StatementSpan,
-    region: Region,
-
-    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *AST, line_starts: std.ArrayList(u32)) sexpr.Expr {
-        var file_node = sexpr.Expr.init(env.gpa, "file");
-
-        file_node.appendRegionChild(env.gpa, ir.regionInfo(self.region, line_starts));
-
-        const header = ir.store.getHeader(self.header);
-        var header_node = header.toSExpr(env, ir, line_starts);
-
-        file_node.appendNodeChild(env.gpa, &header_node);
-
-        var statements_node = sexpr.Expr.init(env.gpa, "statements");
-
-        for (ir.store.statementSlice(self.statements)) |stmt_id| {
-            const stmt = ir.store.getStatement(stmt_id);
-            var stmt_node = stmt.toSExpr(env, ir, line_starts);
-            statements_node.appendNodeChild(env.gpa, &stmt_node);
-        }
-
-        file_node.appendNodeChild(env.gpa, &statements_node);
-
-        return file_node;
-    }
-};
-
-/// Represents a Body, or a block of statements.
-pub const Body = struct {
-    /// The statements that constitute the block
-    statements: StatementSpan,
-    region: Region,
-
-    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *AST, line_starts: std.ArrayList(u32)) sexpr.Expr {
-        var block_node = sexpr.Expr.init(env.gpa, "block");
-        block_node.appendRegionChild(env.gpa, ir.regionInfo(self.region, line_starts));
-        var statements_node = sexpr.Expr.init(env.gpa, "statements");
-
-        for (ir.store.statementSlice(self.statements)) |stmt_idx| {
-            const stmt = ir.store.getStatement(stmt_idx);
-
-            var stmt_node = stmt.toSExpr(env, ir, line_starts);
-
-            statements_node.appendNodeChild(env.gpa, &stmt_node);
-        }
-
-        block_node.appendNodeChild(env.gpa, &statements_node);
-
-        return block_node;
-    }
-};
-
-/// Represents a module header.
-pub const Header = union(enum) {
-    app: struct {
-        provides: CollectionIdx,
-        platform_idx: RecordFieldIdx,
-        packages: CollectionIdx,
-        region: Region,
-    },
-    module: struct {
-        exposes: CollectionIdx,
-        region: Region,
-    },
-    package: struct {
-        exposes: CollectionIdx,
-        packages: CollectionIdx,
-        region: Region,
-    },
-    platform: struct {
-        // TODO: complete this
-        name: Token.Idx,
-        requires_rigids: CollectionIdx,
-        requires_signatures: TypeAnnoIdx,
-        exposes: CollectionIdx,
-        packages: CollectionIdx,
-        provides: CollectionIdx,
-        region: Region,
-    },
-    hosted: struct {
-        exposes: CollectionIdx,
-        region: Region,
-    },
-    malformed: struct {
-        reason: Diagnostic.Tag,
-        region: Region,
-    },
-
-    pub const AppHeaderRhs = packed struct { num_packages: u10, num_provides: u22 };
-
-    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *AST, line_starts: std.ArrayList(u32)) sexpr.Expr {
-        switch (self) {
-            .app => |a| {
-                var node = sexpr.Expr.init(env.gpa, "app");
-                node.appendRegionChild(env.gpa, ir.regionInfo(a.region, line_starts));
-                // Provides
-                const provides_coll = ir.store.getCollection(a.provides);
-                const provides_items = ir.store.exposedItemSlice(.{ .span = provides_coll.span });
-                var provides_node = sexpr.Expr.init(env.gpa, "provides");
-                provides_node.appendRegionChild(env.gpa, ir.regionInfo(provides_coll.region, line_starts));
-                for (provides_items) |item_idx| {
-                    const item = ir.store.getExposedItem(item_idx);
-                    var item_node = item.toSExpr(env, ir, line_starts);
-                    provides_node.appendNodeChild(env.gpa, &item_node);
-                }
-                node.appendNodeChild(env.gpa, &provides_node);
-                // Platform
-                const platform = ir.store.getRecordField(a.platform_idx);
-                var platform_node = platform.toSExpr(env, ir, line_starts);
-                node.appendNodeChild(env.gpa, &platform_node);
-                // Packages
-                const packages_coll = ir.store.getCollection(a.packages);
-                const packages_items = ir.store.recordFieldSlice(.{ .span = packages_coll.span });
-                var packages_node = sexpr.Expr.init(env.gpa, "packages");
-                packages_node.appendRegionChild(env.gpa, ir.regionInfo(packages_coll.region, line_starts));
-                for (packages_items) |item_idx| {
-                    const item = ir.store.getRecordField(item_idx);
-                    var item_node = item.toSExpr(env, ir, line_starts);
-                    packages_node.appendNodeChild(env.gpa, &item_node);
-                }
-                node.appendNodeChild(env.gpa, &packages_node);
-                return node;
-            },
-            .module => |module| {
-                var node = sexpr.Expr.init(env.gpa, "module");
-                node.appendRegionChild(env.gpa, ir.regionInfo(module.region, line_starts));
-                const exposes = ir.store.getCollection(module.exposes);
-                var exposes_node = sexpr.Expr.init(env.gpa, "exposes");
-                exposes_node.appendRegionChild(env.gpa, ir.regionInfo(exposes.region, line_starts));
-                for (ir.store.exposedItemSlice(.{ .span = exposes.span })) |exposed| {
-                    const item = ir.store.getExposedItem(exposed);
-                    var item_node = item.toSExpr(env, ir, line_starts);
-                    exposes_node.appendNodeChild(env.gpa, &item_node);
-                }
-                node.appendNodeChild(env.gpa, &exposes_node);
-                return node;
-            },
-            .package => |a| {
-                var node = sexpr.Expr.init(env.gpa, "package");
-                node.appendRegionChild(env.gpa, ir.regionInfo(a.region, line_starts));
-                // Exposes
-                const exposes = ir.store.getCollection(a.exposes);
-                var exposes_node = sexpr.Expr.init(env.gpa, "exposes");
-                exposes_node.appendRegionChild(env.gpa, ir.regionInfo(exposes.region, line_starts));
-                for (ir.store.exposedItemSlice(.{ .span = exposes.span })) |exposed| {
-                    const item = ir.store.getExposedItem(exposed);
-                    var item_node = item.toSExpr(env, ir, line_starts);
-                    exposes_node.appendNodeChild(env.gpa, &item_node);
-                }
-                node.appendNodeChild(env.gpa, &exposes_node);
-                // Packages
-                const packages_coll = ir.store.getCollection(a.packages);
-                const packages_items = ir.store.recordFieldSlice(.{ .span = packages_coll.span });
-                var packages_node = sexpr.Expr.init(env.gpa, "packages");
-                packages_node.appendRegionChild(env.gpa, ir.regionInfo(packages_coll.region, line_starts));
-                for (packages_items) |item_idx| {
-                    const item = ir.store.getRecordField(item_idx);
-                    var item_node = item.toSExpr(env, ir, line_starts);
-                    packages_node.appendNodeChild(env.gpa, &item_node);
-                }
-                node.appendNodeChild(env.gpa, &packages_node);
-                return node;
-            },
-            .platform => |a| {
-                var node = sexpr.Expr.init(env.gpa, "platform");
-                node.appendRegionChild(env.gpa, ir.regionInfo(a.region, line_starts));
-                // Name
-                node.appendStringChild(env.gpa, ir.resolve(a.name));
-                // Requires Rigids
-                const rigids = ir.store.getCollection(a.requires_rigids);
-                var rigids_node = sexpr.Expr.init(env.gpa, "rigids");
-                rigids_node.appendRegionChild(env.gpa, ir.regionInfo(rigids.region, line_starts));
-                for (ir.store.exposedItemSlice(.{ .span = rigids.span })) |exposed| {
-                    const item = ir.store.getExposedItem(exposed);
-                    var item_node = item.toSExpr(env, ir, line_starts);
-                    rigids_node.appendNodeChild(env.gpa, &item_node);
-                }
-                node.appendNodeChild(env.gpa, &rigids_node);
-                // Requires Signatures
-                const signatures = ir.store.getTypeAnno(a.requires_signatures);
-                var signatures_node = signatures.toSExpr(env, ir, line_starts);
-                node.appendNodeChild(env.gpa, &signatures_node);
-                // Exposes
-                const exposes = ir.store.getCollection(a.exposes);
-                var exposes_node = sexpr.Expr.init(env.gpa, "exposes");
-                exposes_node.appendRegionChild(env.gpa, ir.regionInfo(exposes.region, line_starts));
-                for (ir.store.exposedItemSlice(.{ .span = exposes.span })) |exposed| {
-                    const item = ir.store.getExposedItem(exposed);
-                    var item_node = item.toSExpr(env, ir, line_starts);
-                    exposes_node.appendNodeChild(env.gpa, &item_node);
-                }
-                node.appendNodeChild(env.gpa, &exposes_node);
-                // Packages
-                const packages_coll = ir.store.getCollection(a.packages);
-                const packages_items = ir.store.recordFieldSlice(.{ .span = packages_coll.span });
-                var packages_node = sexpr.Expr.init(env.gpa, "packages");
-                packages_node.appendRegionChild(env.gpa, ir.regionInfo(packages_coll.region, line_starts));
-                for (packages_items) |item_idx| {
-                    const item = ir.store.getRecordField(item_idx);
-                    var item_node = item.toSExpr(env, ir, line_starts);
-                    packages_node.appendNodeChild(env.gpa, &item_node);
-                }
-                node.appendNodeChild(env.gpa, &packages_node);
-                // Provides
-                const provides = ir.store.getCollection(a.provides);
-                var provides_node = sexpr.Expr.init(env.gpa, "provides");
-                provides_node.appendRegionChild(env.gpa, ir.regionInfo(provides.region, line_starts));
-                for (ir.store.exposedItemSlice(.{ .span = provides.span })) |exposed| {
-                    const item = ir.store.getExposedItem(exposed);
-                    var item_node = item.toSExpr(env, ir, line_starts);
-                    provides_node.appendNodeChild(env.gpa, &item_node);
-                }
-                node.appendNodeChild(env.gpa, &provides_node);
-                return node;
-            },
-            .hosted => |a| {
-                var node = sexpr.Expr.init(env.gpa, "hosted");
-                node.appendRegionChild(env.gpa, ir.regionInfo(a.region, line_starts));
-                const exposes = ir.store.getCollection(a.exposes);
-                var exposes_node = sexpr.Expr.init(env.gpa, "exposes");
-                exposes_node.appendRegionChild(env.gpa, ir.regionInfo(exposes.region, line_starts));
-                for (ir.store.exposedItemSlice(.{ .span = exposes.span })) |exposed| {
-                    const item = ir.store.getExposedItem(exposed);
-                    var item_node = item.toSExpr(env, ir, line_starts);
-                    exposes_node.appendNodeChild(env.gpa, &item_node);
-                }
-                node.appendNodeChild(env.gpa, &exposes_node);
-                return node;
-            },
-            .malformed => |a| {
-                var node = sexpr.Expr.init(env.gpa, "malformed_header");
-                node.appendRegionChild(env.gpa, ir.regionInfo(a.region, line_starts));
-                node.appendStringChild(env.gpa, @tagName(a.reason));
-                return node;
-            },
-        }
-    }
-};
-
-pub const ExposedItem = union(enum) {
-    lower_ident: struct {
-        as: ?Token.Idx,
-        ident: Token.Idx,
-        region: Region,
-    },
-    upper_ident: struct {
-        as: ?Token.Idx,
-        ident: Token.Idx,
-        region: Region,
-    },
-    upper_ident_star: struct {
-        ident: Token.Idx,
-        region: Region,
-    },
-
-    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *AST, line_starts: std.ArrayList(u32)) sexpr.Expr {
-        _ = line_starts;
-        var node = sexpr.Expr.init(env.gpa, "exposed_item");
-        var inner_node = sexpr.Expr.init(env.gpa, @tagName(self));
-        switch (self) {
-            .lower_ident => |i| {
-                const token = ir.tokens.tokens.get(i.ident);
-                const text = env.idents.getText(token.extra.interned);
-                inner_node.appendStringChild(env.gpa, text);
-                if (i.as) |a| {
-                    const as_tok = ir.tokens.tokens.get(a);
-                    const as_text = env.idents.getText(as_tok.extra.interned);
-                    inner_node.appendStringChild(env.gpa, as_text);
-                }
-            },
-            .upper_ident => |i| {
-                const token = ir.tokens.tokens.get(i.ident);
-                const text = env.idents.getText(token.extra.interned);
-                inner_node.appendStringChild(env.gpa, text);
-                if (i.as) |a| {
-                    const as_tok = ir.tokens.tokens.get(a);
-                    const as_text = env.idents.getText(as_tok.extra.interned);
-                    inner_node.appendStringChild(env.gpa, as_text);
-                }
-            },
-            .upper_ident_star => |i| {
-                const token = ir.tokens.tokens.get(i.ident);
-                const text = env.idents.getText(token.extra.interned);
-                inner_node.appendStringChild(env.gpa, text);
-            },
-        }
-        node.appendNodeChild(env.gpa, &inner_node);
-        return node;
-    }
-};
-
-/// Represents a statement.  Not all statements are valid in all positions.
-pub const Statement = union(enum) {
-    decl: Decl,
-    @"var": Var,
-    expr: Statement.Expr,
-    crash: Crash,
-    expect: Expect,
-    @"for": For,
-    @"return": Return,
-    import: Import,
-    type_decl: TypeDecl,
-    type_anno: Statement.TypeAnno,
-    malformed: Malformed,
-
-    pub const Decl = struct {
-        pattern: PatternIdx,
-        body: ExprIdx,
-        region: Region,
-    };
-    pub const Var = struct {
-        name: Token.Idx,
-        body: ExprIdx,
-        region: Region,
-    };
-    pub const Expr = struct {
-        expr: ExprIdx,
-        region: Region,
-    };
-    pub const Crash = struct {
-        expr: ExprIdx,
-        region: Region,
-    };
-    pub const Expect = struct {
-        body: ExprIdx,
-        region: Region,
-    };
-    pub const For = struct {
-        patt: PatternIdx,
-        expr: ExprIdx,
-        body: ExprIdx,
-        region: Region,
-    };
-    pub const Return = struct {
-        expr: ExprIdx,
-        region: Region,
-    };
-    pub const Import = struct {
-        module_name_tok: Token.Idx,
-        qualifier_tok: ?Token.Idx,
-        alias_tok: ?Token.Idx,
-        exposes: ExposedItemSpan,
-        region: Region,
-    };
-    const TypeDecl = struct {
-        header: TypeHeaderIdx,
-        anno: TypeAnnoIdx,
-        where: ?CollectionIdx,
-        region: Region,
-    };
-    const TypeAnno = struct {
-        name: Token.Idx,
-        anno: TypeAnnoIdx,
-        where: ?CollectionIdx,
-        region: Region,
-    };
-    const Malformed = struct {
-        reason: Diagnostic.Tag,
-        region: Region,
-    };
-
-    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *AST, line_starts: std.ArrayList(u32)) sexpr.Expr {
-        switch (self) {
-            .decl => |decl| {
-                var node = sexpr.Expr.init(env.gpa, "decl");
-                node.appendRegionChild(env.gpa, ir.regionInfo(decl.region, line_starts));
-                // pattern
-                {
-                    const pattern = ir.store.getPattern(decl.pattern);
-                    var pattern_node = pattern.toSExpr(env, ir, line_starts);
-                    node.appendNodeChild(env.gpa, &pattern_node);
-                }
-                // body
-                {
-                    const body = ir.store.getExpr(decl.body);
-                    var body_node = body.toSExpr(env, ir, line_starts);
-                    node.appendNodeChild(env.gpa, &body_node);
-                }
-                return node;
-            },
-            .@"var" => |v| {
-                var node = sexpr.Expr.init(env.gpa, "var");
-                node.appendRegionChild(env.gpa, ir.regionInfo(v.region, line_starts));
-                // name
-                {
-                    const name_str = ir.resolve(v.name);
-                    var child = sexpr.Expr.init(env.gpa, "name");
-                    child.appendStringChild(env.gpa, name_str);
-                    node.appendNodeChild(env.gpa, &child);
-                }
-                // body
-                {
-                    const body = ir.store.getExpr(v.body);
-                    var body_node = body.toSExpr(env, ir, line_starts);
-                    node.appendNodeChild(env.gpa, &body_node);
-                }
-                return node;
-            },
-            .expr => |expr| {
-                return ir.store.getExpr(expr.expr).toSExpr(env, ir, line_starts);
-            },
-            .import => |import| {
-                var node = sexpr.Expr.init(env.gpa, "import");
-                node.appendRegionChild(env.gpa, ir.regionInfo(import.region, line_starts));
-                // name e.g. `Stdout` in `import pf.Stdout`
-                node.appendStringChild(env.gpa, ir.resolve(import.module_name_tok));
-                // qualifier e.g. `pf` in `import pf.Stdout`
-                if (import.qualifier_tok) |tok| {
-                    const qualifier_str = ir.resolve(tok);
-                    var child = sexpr.Expr.init(env.gpa, "qualifier");
-                    child.appendStringChild(env.gpa, qualifier_str);
-                    node.appendNodeChild(env.gpa, &child);
-                }
-                // alias e.g. `OUT` in `import pf.Stdout as OUT`
-                if (import.alias_tok) |tok| {
-                    const qualifier_str = ir.resolve(tok);
-                    var child = sexpr.Expr.init(env.gpa, "alias");
-                    child.appendStringChild(env.gpa, qualifier_str);
-                    node.appendNodeChild(env.gpa, &child);
-                }
-                // exposed identifiers e.g. [foo, bar] in `import pf.Stdout exposing [foo, bar]`
-                const exposed_slice = ir.store.exposedItemSlice(import.exposes);
-                if (exposed_slice.len > 0) {
-                    var exposed = sexpr.Expr.init(env.gpa, "exposing");
-                    for (ir.store.exposedItemSlice(import.exposes)) |e| {
-                        var exposed_item = &ir.store.getExposedItem(e);
-                        var exposed_item_sexpr = exposed_item.toSExpr(env, ir, line_starts);
-                        exposed.appendNodeChild(env.gpa, &exposed_item_sexpr);
-                    }
-                    node.appendNodeChild(env.gpa, &exposed);
-                }
-                return node;
-            },
-            // (type_decl (header <name> [<args>]) <annotation>)
-            .type_decl => |a| {
-                var node = sexpr.Expr.init(env.gpa, "type_decl");
-                node.appendRegionChild(env.gpa, ir.regionInfo(a.region, line_starts));
-                var header = sexpr.Expr.init(env.gpa, "header");
-                // pattern
-                {
-                    const ty_header = ir.store.getTypeHeader(a.header);
-                    header.appendRegionChild(env.gpa, ir.regionInfo(ty_header.region, line_starts));
-
-                    header.appendStringChild(env.gpa, ir.resolve(ty_header.name));
-
-                    var args_node = sexpr.Expr.init(env.gpa, "args");
-
-                    for (ir.store.typeAnnoSlice(ty_header.args)) |b| {
-                        const anno = ir.store.getTypeAnno(b);
-                        var anno_sexpr = anno.toSExpr(env, ir, line_starts);
-                        args_node.appendNodeChild(env.gpa, &anno_sexpr);
-                    }
-                    header.appendNodeChild(env.gpa, &args_node);
-
-                    node.appendNodeChild(env.gpa, &header);
-                }
-                // annotation
-                {
-                    var annotation = ir.store.getTypeAnno(a.anno).toSExpr(env, ir, line_starts);
-                    node.appendNodeChild(env.gpa, &annotation);
-                }
-                return node;
-            },
-            // (crash <expr>)
-            .crash => |a| {
-                var node = sexpr.Expr.init(env.gpa, "crash");
-
-                node.appendRegionChild(env.gpa, ir.regionInfo(a.region, line_starts));
-
-                var child = ir.store.getExpr(a.expr).toSExpr(env, ir, line_starts);
-                node.appendNodeChild(env.gpa, &child);
-                return node;
-            },
-            // (expect <body>)
-            .expect => |a| {
-                var node = sexpr.Expr.init(env.gpa, "expect");
-
-                node.appendRegionChild(env.gpa, ir.regionInfo(a.region, line_starts));
-
-                var child = ir.store.getExpr(a.body).toSExpr(env, ir, line_starts);
-                node.appendNodeChild(env.gpa, &child);
-                return node;
-            },
-            .@"for" => |a| {
-                var node = sexpr.Expr.init(env.gpa, "for");
-
-                // patt
-                {
-                    var child = ir.store.getPattern(a.patt).toSExpr(env, ir, line_starts);
-                    node.appendNodeChild(env.gpa, &child);
-                }
-                // expr
-                {
-                    var child = ir.store.getExpr(a.expr).toSExpr(env, ir, line_starts);
-                    node.appendNodeChild(env.gpa, &child);
-                }
-                // body
-                {
-                    var child = ir.store.getExpr(a.body).toSExpr(env, ir, line_starts);
-                    node.appendNodeChild(env.gpa, &child);
-                }
-
-                return node;
-            },
-            // (return <expr>)
-            .@"return" => |a| {
-                var node = sexpr.Expr.init(env.gpa, "return");
-
-                node.appendRegionChild(env.gpa, ir.regionInfo(a.region, line_starts));
-
-                var child = ir.store.getExpr(a.expr).toSExpr(env, ir, line_starts);
-                node.appendNodeChild(env.gpa, &child);
-                return node;
-            },
-            // (type_anno <annotation>)
-            .type_anno => |a| {
-                var node = sexpr.Expr.init(env.gpa, "type_anno");
-
-                node.appendRegionChild(env.gpa, ir.regionInfo(a.region, line_starts));
-
-                node.appendStringChild(env.gpa, ir.resolve(a.name));
-                var child = ir.store.getTypeAnno(a.anno).toSExpr(env, ir, line_starts);
-                node.appendNodeChild(env.gpa, &child);
-                return node;
-            },
-            .malformed => |a| {
-                var node = sexpr.Expr.init(env.gpa, "malformed_stmt");
-                node.appendRegionChild(env.gpa, ir.regionInfo(a.region, line_starts));
-                node.appendStringChild(env.gpa, @tagName(a.reason));
-                return node;
-            },
-        }
-    }
-};
-
-pub const TypeHeader = struct {
-    name: Token.Idx,
-    args: TypeAnnoSpan,
-    region: Region,
-};
-
-pub const TypeAnno = union(enum) {
-    apply: struct {
-        args: TypeAnnoSpan,
-        region: Region,
-    },
-    ty_var: struct {
-        tok: Token.Idx,
-        region: Region,
-    },
-    underscore: struct {
-        region: Region,
-    },
-    ty: struct {
-        ident: base.Ident.Idx,
-        // Region starts with the type token.
-        region: Region,
-    },
-    mod_ty: struct {
-        mod_ident: base.Ident.Idx,
-        ty_ident: base.Ident.Idx,
-        // Region starts with the mod token and ends with the type token.
-        region: Region,
-    },
-    tag_union: struct {
-        tags: TypeAnnoSpan,
-        open_anno: ?TypeAnnoIdx,
-        region: Region,
-    },
-    tuple: struct {
-        annos: TypeAnnoSpan,
-        region: Region,
-    },
-    record: struct {
-        fields: AnnoRecordFieldSpan,
-        region: Region,
-    },
-    @"fn": struct {
-        args: TypeAnnoSpan,
-        ret: TypeAnnoIdx,
-        effectful: bool,
-        region: Region,
-    },
-    parens: struct {
-        anno: TypeAnnoIdx,
-        region: Region,
-    },
-    malformed: struct {
-        reason: Diagnostic.Tag,
-        region: Region,
-    },
-
-    const TagUnionRhs = packed struct { open: u1, tags_len: u31 };
-    const TypeAnnoFnRhs = packed struct { effectful: u1, args_len: u31 };
-
-    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *AST, line_starts: std.ArrayList(u32)) sexpr.Expr {
-        switch (self) {
-            // (apply <ty> [<args>])
-            .apply => |a| {
-                var node = sexpr.Expr.init(env.gpa, "apply");
-
-                node.appendRegionChild(env.gpa, ir.regionInfo(a.region, line_starts));
-
-                for (ir.store.typeAnnoSlice(a.args)) |b| {
-                    var child = ir.store.getTypeAnno(b).toSExpr(env, ir, line_starts);
-                    node.appendNodeChild(env.gpa, &child);
-                }
-
-                return node;
-            },
-            // (ty_var <var>)
-            .ty_var => |a| {
-                var node = sexpr.Expr.init(env.gpa, "ty_var");
-
-                node.appendRegionChild(env.gpa, ir.regionInfo(a.region, line_starts));
-
-                node.appendStringChild(env.gpa, ir.resolve(a.tok));
-                return node;
-            },
-            // (_)
-            .underscore => {
-                return sexpr.Expr.init(env.gpa, "_");
-            },
-            // (ty name)
-            .ty => |a| {
-                var node = sexpr.Expr.init(env.gpa, "ty");
-                node.appendStringChild(env.gpa, ir.resolve(a.region.start));
-                return node;
-            },
-            // (mod_ty mod ty)
-            .mod_ty => |a| {
-                var node = sexpr.Expr.init(env.gpa, "mod_ty");
-                node.appendStringChild(env.gpa, ir.resolve(a.region.start));
-                node.appendStringChild(env.gpa, ir.resolve(a.region.end));
-                return node;
-            },
-            .tag_union => |a| {
-                var node = sexpr.Expr.init(env.gpa, "tag_union");
-
-                node.appendRegionChild(env.gpa, ir.regionInfo(a.region, line_starts));
-
-                const tags = ir.store.typeAnnoSlice(a.tags);
-                var tags_node = sexpr.Expr.init(env.gpa, "tags");
-                for (tags) |tag_idx| {
-                    const tag = ir.store.getTypeAnno(tag_idx);
-                    var tag_node = tag.toSExpr(env, ir, line_starts);
-                    tags_node.appendNodeChild(env.gpa, &tag_node);
-                }
-                node.appendNodeChild(env.gpa, &tags_node);
-                if (a.open_anno) |anno_idx| {
-                    const anno = ir.store.getTypeAnno(anno_idx);
-                    var anno_node = anno.toSExpr(env, ir, line_starts);
-                    node.appendNodeChild(env.gpa, &anno_node);
-                }
-                return node;
-            },
-            // (tuple [<elems>])
-            .tuple => |a| {
-                var node = sexpr.Expr.init(env.gpa, "tuple");
-
-                node.appendRegionChild(env.gpa, ir.regionInfo(a.region, line_starts));
-
-                for (ir.store.typeAnnoSlice(a.annos)) |b| {
-                    var child = ir.store.getTypeAnno(b).toSExpr(env, ir, line_starts);
-                    node.appendNodeChild(env.gpa, &child);
-                }
-                return node;
-            },
-            // (record [<fields>])
-            .record => |a| {
-                var node = sexpr.Expr.init(env.gpa, "record");
-
-                node.appendRegionChild(env.gpa, ir.regionInfo(a.region, line_starts));
-
-                for (ir.store.annoRecordFieldSlice(a.fields)) |f_idx| {
-                    const field = ir.store.getAnnoRecordField(f_idx);
-                    var field_node = field.toSExpr(env, ir, line_starts);
-                    node.appendNodeChild(env.gpa, &field_node);
-                }
-                return node;
-            },
-            // (fn <ret> [<args>])
-            .@"fn" => |a| {
-                var node = sexpr.Expr.init(env.gpa, "fn");
-
-                node.appendRegionChild(env.gpa, ir.regionInfo(a.region, line_starts));
-
-                // arguments
-                for (ir.store.typeAnnoSlice(a.args)) |b| {
-                    var child = ir.store.getTypeAnno(b).toSExpr(env, ir, line_starts);
-                    node.appendNodeChild(env.gpa, &child);
-                }
-
-                // return value
-                var ret = ir.store.getTypeAnno(a.ret).toSExpr(env, ir, line_starts);
-                node.appendNodeChild(env.gpa, &ret);
-
-                return node;
-            },
-            // ignore parens... use inner
-            .parens => |a| {
-                return ir.store.getTypeAnno(a.anno).toSExpr(env, ir, line_starts);
-            },
-            .malformed => |a| {
-                var node = sexpr.Expr.init(env.gpa, "malformed_expr");
-                node.appendRegionChild(env.gpa, ir.regionInfo(a.region, line_starts));
-                node.appendStringChild(env.gpa, @tagName(a.reason));
-                return node;
-            },
-        }
-    }
-};
-
-pub const AnnoRecordField = struct {
-    name: Token.Idx,
-    ty: TypeAnnoIdx,
-    region: Region,
-
-    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *AST, line_starts: std.ArrayList(u32)) sexpr.Expr {
-        var node = sexpr.Expr.init(env.gpa, "anno_record_field");
-        node.appendRegionChild(env.gpa, ir.regionInfo(self.region, line_starts));
-        node.appendStringChild(env.gpa, ir.resolve(self.name));
-        const anno = ir.store.getTypeAnno(self.ty);
-        var ty_node = anno.toSExpr(env, ir, line_starts);
-        node.appendNodeChild(env.gpa, &ty_node);
-        return node;
-    }
-};
-
-// The clause of a `where` constraint
-//
-// e.g. `a.hash(hasher) -> hasher`
-// or   `a.Hash`
-pub const WhereClause = union(enum) {
-    alias: struct {
-        var_tok: Token.Idx,
-        alias_tok: Token.Idx,
-        region: Region,
-    },
-    method: struct {
-        var_tok: Token.Idx,
-        name_tok: Token.Idx,
-        args: CollectionIdx,
-        ret_anno: TypeAnnoIdx,
-        region: Region,
-    },
-    mod_method: struct {
-        var_tok: Token.Idx,
-        name_tok: Token.Idx,
-        args: CollectionIdx,
-        ret_anno: TypeAnnoIdx,
-        region: Region,
-    },
-    malformed: struct {
-        reason: Diagnostic.Tag,
-        region: Region,
-    },
-};
-
-/// Represents a Pattern used in pattern matching.
-pub const Pattern = union(enum) {
-    ident: struct {
-        ident_tok: Token.Idx,
-        region: Region,
-    },
-    tag: struct {
-        tag_tok: Token.Idx,
-        args: PatternSpan,
-        region: Region,
-    },
-    number: struct {
-        number_tok: Token.Idx,
-        region: Region,
-    },
-    string: struct {
-        string_tok: Token.Idx,
-        region: Region,
-        expr: ExprIdx,
-    },
-    record: struct {
-        fields: PatternRecordFieldSpan,
-        region: Region,
-    },
-    list: struct {
-        patterns: PatternSpan,
-        region: Region,
-    },
-    list_rest: struct {
-        name: ?Token.Idx,
-        region: Region,
-    },
-    tuple: struct {
-        patterns: PatternSpan,
-        region: Region,
-    },
-    underscore: struct {
-        region: Region,
-    },
-    alternatives: struct {
-        patterns: PatternSpan,
-        region: Region,
-    },
-    malformed: struct {
-        reason: Diagnostic.Tag,
-        region: Region,
-    },
-
-    pub fn to_region(self: @This()) Region {
-        return switch (self) {
-            .ident => |p| p.region,
-            .tag => |p| p.region,
-            .number => |p| p.region,
-            .string => |p| p.region,
-            .record => |p| p.region,
-            .list => |p| p.region,
-            .list_rest => |p| p.region,
-            .tuple => |p| p.region,
-            .underscore => |p| p.region,
-            .alternatives => |p| p.region,
-            .malformed => |p| p.region,
-        };
-    }
-
-    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *AST, line_starts: std.ArrayList(u32)) sexpr.Expr {
-        switch (self) {
-            .ident => |ident| {
-                var node = sexpr.Expr.init(env.gpa, "ident");
-
-                node.appendRegionChild(env.gpa, ir.regionInfo(ident.region, line_starts));
-
-                node.appendStringChild(env.gpa, ir.resolve(ident.ident_tok));
-
-                return node;
-            },
-            .tag => |tag| {
-                var node = sexpr.Expr.init(env.gpa, "tag");
-
-                node.appendRegionChild(env.gpa, ir.regionInfo(tag.region, line_starts));
-
-                node.appendStringChild(env.gpa, ir.resolve(tag.tag_tok));
-
-                // Add arguments if there are any
-                for (ir.store.patternSlice(tag.args)) |arg| {
-                    var arg_node = ir.store.getPattern(arg).toSExpr(env, ir, line_starts);
-                    node.appendNodeChild(env.gpa, &arg_node);
-                }
-
-                return node;
-            },
-            .number => |num| {
-                var node = sexpr.Expr.init(env.gpa, "number");
-                node.appendRegionChild(env.gpa, ir.regionInfo(num.region, line_starts));
-                node.appendStringChild(env.gpa, ir.resolve(num.number_tok));
-                return node;
-            },
-            .string => |str| {
-                var node = sexpr.Expr.init(env.gpa, "string");
-                node.appendRegionChild(env.gpa, ir.regionInfo(str.region, line_starts));
-                node.appendStringChild(env.gpa, ir.resolve(str.string_tok));
-                return node;
-            },
-            .record => |rec| {
-                var node = sexpr.Expr.init(env.gpa, "record");
-                node.appendRegionChild(env.gpa, ir.regionInfo(rec.region, line_starts));
-
-                for (ir.store.patternRecordFieldSlice(rec.fields)) |field_idx| {
-                    const field = ir.store.getPatternRecordField(field_idx);
-                    var field_node = sexpr.Expr.init(env.gpa, "field");
-                    field_node.appendRegionChild(env.gpa, ir.regionInfo(field.region, line_starts));
-                    field_node.appendStringChild(env.gpa, ir.resolve(field.name));
-
-                    if (field.value) |value| {
-                        var value_node = ir.store.getPattern(value).toSExpr(env, ir, line_starts);
-                        field_node.appendNodeChild(env.gpa, &value_node);
-                    }
-
-                    if (field.rest) {
-                        field_node.appendStringChild(env.gpa, "rest");
-                    }
-
-                    node.appendNodeChild(env.gpa, &field_node);
-                }
-
-                return node;
-            },
-            .list => |list| {
-                var node = sexpr.Expr.init(env.gpa, "list");
-                node.appendRegionChild(env.gpa, ir.regionInfo(list.region, line_starts));
-
-                for (ir.store.patternSlice(list.patterns)) |pat| {
-                    var pattern_node = ir.store.getPattern(pat).toSExpr(env, ir, line_starts);
-                    node.appendNodeChild(env.gpa, &pattern_node);
-                }
-
-                return node;
-            },
-            .list_rest => |rest| {
-                var node = sexpr.Expr.init(env.gpa, "list_rest");
-                node.appendRegionChild(env.gpa, ir.regionInfo(rest.region, line_starts));
-
-                if (rest.name) |name_tok| {
-                    node.appendStringChild(env.gpa, ir.resolve(name_tok));
-                }
-
-                return node;
-            },
-            .tuple => |tuple| {
-                var node = sexpr.Expr.init(env.gpa, "tuple");
-                node.appendRegionChild(env.gpa, ir.regionInfo(tuple.region, line_starts));
-
-                for (ir.store.patternSlice(tuple.patterns)) |pat| {
-                    var pattern_node = ir.store.getPattern(pat).toSExpr(env, ir, line_starts);
-                    node.appendNodeChild(env.gpa, &pattern_node);
-                }
-
-                return node;
-            },
-            .underscore => {
-                return sexpr.Expr.init(env.gpa, "underscore");
-            },
-            .alternatives => |a| {
-                // '|' separated list of patterns
-                var node = sexpr.Expr.init(env.gpa, "alternatives");
-                for (ir.store.patternSlice(a.patterns)) |pat| {
-                    var patNode = ir.store.getPattern(pat).toSExpr(env, ir, line_starts);
-                    node.appendNodeChild(env.gpa, &patNode);
-                }
-                return node;
-            },
-            .malformed => |a| {
-                var node = sexpr.Expr.init(env.gpa, "malformed_pattern");
-                node.appendRegionChild(env.gpa, ir.regionInfo(a.region, line_starts));
-                node.appendStringChild(env.gpa, @tagName(a.reason));
-                return node;
-            },
-        }
-    }
-};
-
-/// Represents an expression.
-pub const Expr = union(enum) {
-    int: struct {
-        token: Token.Idx,
-        region: Region,
-    },
-    float: struct {
-        token: Token.Idx,
-        region: Region,
-    },
-    string_part: struct { // TODO: this should be more properly represented in its own union enum
-        token: Token.Idx,
-        region: Region,
-    },
-    string: struct {
-        token: Token.Idx,
-        region: Region,
-        parts: ExprSpan,
-    },
-    list: struct {
-        items: ExprSpan,
-        region: Region,
-    },
-    tuple: struct {
-        items: ExprSpan,
-        region: Region,
-    },
-    record: struct {
-        fields: RecordFieldSpan,
-        region: Region,
-    },
-    tag: struct {
-        token: Token.Idx,
-        region: Region,
-    },
-    lambda: struct {
-        args: PatternSpan,
-        body: ExprIdx,
-        region: Region,
-    },
-    apply: struct {
-        args: ExprSpan,
-        @"fn": ExprIdx,
-        region: Region,
-    },
-    record_updater: struct {
-        token: Token.Idx,
-        region: Region,
-    },
-    field_access: BinOp,
-    local_dispatch: BinOp,
-    bin_op: BinOp,
-    suffix_single_question: Unary,
-    unary_op: Unary,
-    if_then_else: struct {
-        condition: ExprIdx,
-        then: ExprIdx,
-        @"else": ExprIdx,
-        region: Region,
-    },
-    match: struct {
-        expr: ExprIdx,
-        branches: WhenBranchSpan,
-        region: Region,
-    },
-    ident: struct {
-        token: Token.Idx,
-        qualifier: ?Token.Idx,
-        region: Region,
-    },
-    dbg: struct {
-        expr: ExprIdx,
-        region: Region,
-    },
-    record_builder: struct {
-        mapper: ExprIdx,
-        fields: RecordFieldIdx,
-        region: Region,
-    },
-    ellipsis: struct {
-        region: Region,
-    },
-    block: Body,
-    malformed: struct {
-        reason: Diagnostic.Tag,
-        region: Region,
-    },
-
-    pub fn as_string_part_region(self: @This()) !Region {
-        switch (self) {
-            .string_part => |part| return part.region,
-            else => return error.ExpectedStringPartRegion,
-        }
-    }
-
-    pub fn to_region(self: @This()) Region {
-        return switch (self) {
-            .ident => |e| e.region,
-            .int => |e| e.region,
-            .float => |e| e.region,
-            .string => |e| e.region,
-            .tag => |e| e.region,
-            .list => |e| e.region,
-            .record => |e| e.region,
-            .tuple => |e| e.region,
-            .field_access => |e| e.region,
-            .local_dispatch => |e| e.region,
-            .lambda => |e| e.region,
-            .record_updater => |e| e.region,
-            .bin_op => |e| e.region,
-            .unary_op => |e| e.region,
-            .suffix_single_question => |e| e.region,
-            .apply => |e| e.region,
-            .if_then_else => |e| e.region,
-            .match => |e| e.region,
-            .dbg => |e| e.region,
-            .block => |e| e.region,
-            .record_builder => |e| e.region,
-            .ellipsis => |e| e.region,
-            .malformed => |e| e.region,
-            .string_part => |e| e.region,
-        };
-    }
-
-    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *AST, line_starts: std.ArrayList(u32)) sexpr.Expr {
-        switch (self) {
-            .int => |int| {
-                var node = sexpr.Expr.init(env.gpa, "int");
-                node.appendRegionChild(env.gpa, ir.regionInfo(int.region, line_starts));
-                node.appendStringChild(env.gpa, ir.resolve(int.token));
-                return node;
-            },
-            .string => |str| {
-                var node = sexpr.Expr.init(env.gpa, "string");
-                node.appendRegionChild(env.gpa, ir.regionInfo(str.region, line_starts));
-                for (ir.store.exprSlice(str.parts)) |part_id| {
-                    const part_expr = ir.store.getExpr(part_id);
-                    var part_sexpr = part_expr.toSExpr(env, ir, line_starts);
-                    node.appendNodeChild(env.gpa, &part_sexpr);
-                }
-                return node;
-            },
-            .string_part => |sp| {
-                var node = sexpr.Expr.init(env.gpa, "string_part");
-                node.appendRegionChild(env.gpa, ir.regionInfo(sp.region, line_starts));
-                node.appendStringChild(env.gpa, ir.resolve(sp.token));
-                return node;
-            },
-            // (tag <tag>)
-            .tag => |tag| {
-                var node = sexpr.Expr.init(env.gpa, "tag");
-
-                node.appendRegionChild(env.gpa, ir.regionInfo(tag.region, line_starts));
-
-                node.appendStringChild(env.gpa, ir.resolve(tag.token));
-                return node;
-            },
-            .block => |block| {
-                return block.toSExpr(env, ir, line_starts);
-            },
-            // (if_then_else <condition> <then> <else>)
-            .if_then_else => |stmt| {
-                var node = sexpr.Expr.init(env.gpa, "if_then_else");
-
-                node.appendRegionChild(env.gpa, ir.regionInfo(stmt.region, line_starts));
-
-                var condition = ir.store.getExpr(stmt.condition).toSExpr(env, ir, line_starts);
-                var then = ir.store.getExpr(stmt.then).toSExpr(env, ir, line_starts);
-                var else_ = ir.store.getExpr(stmt.@"else").toSExpr(env, ir, line_starts);
-
-                node.appendNodeChild(env.gpa, &condition);
-                node.appendNodeChild(env.gpa, &then);
-                node.appendNodeChild(env.gpa, &else_);
-
-                return node;
-            },
-            .ident => |ident| {
-                var node = sexpr.Expr.init(env.gpa, "ident");
-
-                node.appendRegionChild(env.gpa, ir.regionInfo(ident.region, line_starts));
-
-                node.appendStringChild(env.gpa, if (ident.qualifier != null) ir.resolve(ident.qualifier.?) else "");
-                node.appendStringChild(env.gpa, ir.resolve(ident.token));
-                return node;
-            },
-            // (list [<child>])
-            .list => |a| {
-                var node = sexpr.Expr.init(env.gpa, "list");
-
-                node.appendRegionChild(env.gpa, ir.regionInfo(a.region, line_starts));
-
-                for (ir.store.exprSlice(a.items)) |b| {
-                    var child = ir.store.getExpr(b).toSExpr(env, ir, line_starts);
-                    node.appendNodeChild(env.gpa, &child);
-                }
-                return node;
-            },
-            // (malformed_expr <reason>)
-            .malformed => |a| {
-                var node = sexpr.Expr.init(env.gpa, "malformed_expr");
-                node.appendRegionChild(env.gpa, ir.regionInfo(a.region, line_starts));
-                node.appendStringChild(env.gpa, @tagName(a.reason));
-                return node;
-            },
-            // (float <value>)
-            .float => |a| {
-                var node = sexpr.Expr.init(env.gpa, "float");
-
-                node.appendRegionChild(env.gpa, ir.regionInfo(a.region, line_starts));
-
-                node.appendStringChild(env.gpa, ir.resolve(a.token));
-                return node;
-            },
-            // (tuple [<item>])
-            .tuple => |a| {
-                var node = sexpr.Expr.init(env.gpa, "tuple");
-
-                node.appendRegionChild(env.gpa, ir.regionInfo(a.region, line_starts));
-
-                for (ir.store.exprSlice(a.items)) |item| {
-                    var child = ir.store.getExpr(item).toSExpr(env, ir, line_starts);
-                    node.appendNodeChild(env.gpa, &child);
-                }
-
-                return node;
-            },
-            // (record [(field <name> <?value> ?optional)])
-            .record => |a| {
-                var node = sexpr.Expr.init(env.gpa, "record");
-
-                node.appendRegionChild(env.gpa, ir.regionInfo(a.region, line_starts));
-
-                for (ir.store.recordFieldSlice(a.fields)) |field_idx| {
-                    const record_field = ir.store.getRecordField(field_idx);
-                    var record_field_node = sexpr.Expr.init(env.gpa, "field");
-                    record_field_node.appendStringChild(env.gpa, ir.resolve(record_field.name));
-                    if (record_field.value != null) {
-                        var value_node = ir.store.getExpr(record_field.value.?).toSExpr(env, ir, line_starts);
-                        record_field_node.appendNodeChild(env.gpa, &value_node);
-                    }
-                    if (record_field.optional) {
-                        record_field_node.appendStringChild(env.gpa, "optional");
-                    }
-                    node.appendNodeChild(env.gpa, &record_field_node);
-                }
-
-                return node;
-            },
-            // (apply <fn> [<args>])
-            .apply => |a| {
-                var node = sexpr.Expr.init(env.gpa, "apply");
-
-                node.appendRegionChild(env.gpa, ir.regionInfo(a.region, line_starts));
-
-                var apply_fn = ir.store.getExpr(a.@"fn").toSExpr(env, ir, line_starts);
-                node.appendNodeChild(env.gpa, &apply_fn);
-
-                for (ir.store.exprSlice(a.args)) |arg| {
-                    var arg_node = ir.store.getExpr(arg).toSExpr(env, ir, line_starts);
-                    node.appendNodeChild(env.gpa, &arg_node);
-                }
-
-                return node;
-            },
-            .field_access => |a| {
-                var node = sexpr.Expr.init(env.gpa, "field_access");
-
-                node.appendRegionChild(env.gpa, ir.regionInfo(a.region, line_starts));
-
-                var child = a.toSExpr(env, ir, line_starts);
-                node.appendNodeChild(env.gpa, &child);
-                return node;
-            },
-            .local_dispatch => |a| {
-                var node = sexpr.Expr.init(env.gpa, "local_dispatch");
-                node.appendRegionChild(env.gpa, ir.regionInfo(a.region, line_starts));
-
-                var left = ir.store.getExpr(a.left).toSExpr(env, ir, line_starts);
-                var right = ir.store.getExpr(a.right).toSExpr(env, ir, line_starts);
-                node.appendNodeChild(env.gpa, &left);
-                node.appendNodeChild(env.gpa, &right);
-                return node;
-            },
-            // (binop <op> <lhs> <rhs>)
-            .bin_op => |a| {
-                return a.toSExpr(env, ir, line_starts);
-            },
-            .lambda => |a| {
-                var node = sexpr.Expr.init(env.gpa, "lambda");
-
-                node.appendRegionChild(env.gpa, ir.regionInfo(a.region, line_starts));
-
-                // arguments
-                var args = sexpr.Expr.init(env.gpa, "args");
-                for (ir.store.patternSlice(a.args)) |arg| {
-                    var arg_node = ir.store.getPattern(arg).toSExpr(env, ir, line_starts);
-                    args.appendNodeChild(env.gpa, &arg_node);
-                }
-                node.appendNodeChild(env.gpa, &args);
-
-                // body
-                var body = ir.store.getExpr(a.body).toSExpr(env, ir, line_starts);
-                node.appendNodeChild(env.gpa, &body);
-
-                return node;
-            },
-            .dbg => |a| {
-                var node = sexpr.Expr.init(env.gpa, "dbg");
-
-                var arg = ir.store.getExpr(a.expr).toSExpr(env, ir, line_starts);
-                node.appendNodeChild(env.gpa, &arg);
-
-                return node;
-            },
-            .match => |a| {
-                var node = sexpr.Expr.init(env.gpa, "match");
-
-                var expr = ir.store.getExpr(a.expr).toSExpr(env, ir, line_starts);
-
-                // handle branches
-                var branches = sexpr.Expr.init(env.gpa, "branches");
-                for (ir.store.whenBranchSlice(a.branches)) |branch| {
-                    var branch_node = ir.store.getBranch(branch).toSExpr(env, ir, line_starts);
-                    branches.appendNodeChild(env.gpa, &branch_node);
-                }
-
-                node.appendNodeChild(env.gpa, &expr);
-
-                node.appendNodeChild(env.gpa, &branches);
-
-                return node;
-            },
-            .ellipsis => {
-                return sexpr.Expr.init(env.gpa, "ellipsis");
-            },
-            .suffix_single_question => |a| {
-                var node = sexpr.Expr.init(env.gpa, "suffix_single_question");
-
-                node.appendRegionChild(env.gpa, ir.regionInfo(a.region, line_starts));
-
-                var child = ir.store.getExpr(a.expr).toSExpr(env, ir, line_starts);
-                node.appendNodeChild(env.gpa, &child);
-                return node;
-            },
-            else => {
-                std.debug.print("\n\n toSExpr not implement for Expr {}\n\n", .{self});
-                @panic("not implemented yet");
-            },
-        }
-    }
-};
-
-pub const PatternRecordField = struct {
-    name: Token.Idx,
-    value: ?PatternIdx,
-    rest: bool,
-    region: Region,
-};
-
-pub const RecordField = struct {
-    name: Token.Idx,
-    value: ?ExprIdx,
-    optional: bool,
-    region: Region,
-
-    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *AST, line_starts: std.ArrayList(u32)) sexpr.Expr {
-        var node = sexpr.Expr.init(env.gpa, "record_field");
-        node.appendRegionChild(env.gpa, ir.regionInfo(self.region, line_starts));
-        node.appendStringChild(env.gpa, ir.resolve(self.name));
-        if (self.value) |idx| {
-            const value = ir.store.getExpr(idx);
-            var value_node = value.toSExpr(env, ir, line_starts);
-            node.appendNodeChild(env.gpa, &value_node);
-        }
-        return node;
-    }
-};
-
-pub const IfElse = struct {
-    condition: ExprIdx,
-    body: ExprIdx,
-    region: Region,
-};
-
-pub const WhenBranch = struct {
-    pattern: PatternIdx,
-    body: ExprIdx,
-    region: Region,
-
-    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *AST, line_starts: std.ArrayList(u32)) sexpr.Expr {
-        var node = sexpr.Expr.init(env.gpa, "branch");
-        node.appendRegionChild(env.gpa, ir.regionInfo(self.region, line_starts));
-        var pattern = ir.store.getPattern(self.pattern).toSExpr(env, ir, line_starts);
-        node.appendNodeChild(env.gpa, &pattern);
-        var body = ir.store.getExpr(self.body).toSExpr(env, ir, line_starts);
-        node.appendNodeChild(env.gpa, &body);
-        return node;
-    }
-};
-
-pub const BinOp = struct {
-    left: ExprIdx,
-    right: ExprIdx,
-    operator: Token.Idx,
-    region: Region,
-
-    /// (binop <op> <left> <right>) e.g. (binop '+' 1 2)
-    pub fn toSExpr(self: *const @This(), env: *base.ModuleEnv, ir: *AST, line_starts: std.ArrayList((u32))) sexpr.Expr {
-        var node = sexpr.Expr.init(env.gpa, "binop");
-        node.appendRegionChild(env.gpa, ir.regionInfo(self.region, line_starts));
-        node.appendStringChild(env.gpa, ir.resolve(self.operator));
-
-        var left = ir.store.getExpr(self.left).toSExpr(env, ir, line_starts);
-        node.appendNodeChild(env.gpa, &left);
-
-        var right = ir.store.getExpr(self.right).toSExpr(env, ir, line_starts);
-        node.appendNodeChild(env.gpa, &right);
-        return node;
-    }
-};
-
-pub const Unary = struct {
-    operator: Token.Idx,
-    expr: ExprIdx,
-    region: Region,
-
-    pub fn toSExpr(self: *const @This(), env: *base.ModuleEnv, ir: *AST, line_starts: std.ArrayList((u32))) sexpr.Expr {
-        var node = sexpr.Expr.init(env.gpa, "unary");
-        node.appendRegionChild(env.gpa, ir.regionInfo(self.region, line_starts));
-        node.appendStringChild(env.gpa, ir.resolve(self.operator));
-
-        var expr = ir.store.getExpr(self.expr).toSExpr(env, ir, line_starts);
-        node.appendNodeChild(env.gpa, &expr);
-
-        return node;
-    }
-};
-
-pub const ExprSpan = struct { span: base.DataSpan };
-pub const StatementSpan = struct { span: base.DataSpan };
-pub const TokenSpan = struct { span: base.DataSpan };
-pub const PatternSpan = struct { span: base.DataSpan };
-pub const PatternRecordFieldSpan = struct { span: base.DataSpan };
-pub const RecordFieldSpan = struct { span: base.DataSpan };
-pub const WhenBranchSpan = struct { span: base.DataSpan };
-pub const TypeAnnoSpan = struct { span: base.DataSpan };
-pub const AnnoRecordFieldSpan = struct { span: base.DataSpan };
-pub const ExposedItemSpan = struct { span: base.DataSpan };
-pub const WhereClauseSpan = struct { span: base.DataSpan };
-
-/// Returns the start position for a new Span of ExprIdxs in scratch
+/// Returns the start position for a new Span of AST.Expr.Idxs in scratch
 pub fn scratchExprTop(store: *NodeStore) u32 {
     return store.scratch_exprs.top();
 }
 
-/// Places a new ExprIdx in the scratch.  Will panic on OOM.
-pub fn addScratchExpr(store: *NodeStore, idx: ExprIdx) void {
+/// Places a new AST.Expr.Idx in the scratch.  Will panic on OOM.
+pub fn addScratchExpr(store: *NodeStore, idx: AST.Expr.Idx) void {
     store.scratch_exprs.append(store.gpa, idx);
 }
 
 /// Creates a new span starting at start.  Moves the items from scratch
 /// to extra_data as appropriate.
-pub fn exprSpanFrom(store: *NodeStore, start: u32) ExprSpan {
+pub fn exprSpanFrom(store: *NodeStore, start: u32) AST.Expr.Span {
     const end = store.scratch_exprs.top();
     defer store.scratch_exprs.clearFrom(start);
     var i = @as(usize, @intCast(start));
     const ed_start = @as(u32, @intCast(store.extra_data.items.len));
     std.debug.assert(end >= i);
     while (i < end) {
-        store.extra_data.append(store.gpa, store.scratch_exprs.items.items[i].id) catch |err| exitOnOom(err);
+        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_exprs.items.items[i])) catch |err| exitOnOom(err);
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
@@ -3016,30 +1599,30 @@ pub fn clearScratchExprsFrom(store: *NodeStore, start: u32) void {
 
 /// Returns a new ExprIter so that the caller can iterate through
 /// all items in the span.
-pub fn exprSlice(store: *NodeStore, span: ExprSpan) []ExprIdx {
+pub fn exprSlice(store: *NodeStore, span: AST.Expr.Span) []AST.Expr.Idx {
     return @ptrCast(store.extra_data.items[span.span.start..(span.span.start + span.span.len)]);
 }
 
-/// Returns the start position for a new Span of StatementIdxs in scratch
+/// Returns the start position for a new Span of AST.Statement.Idxs in scratch
 pub fn scratchStatementTop(store: *NodeStore) u32 {
     return store.scratch_statements.top();
 }
 
-/// Places a new StatementIdx in the scratch.  Will panic on OOM.
-pub fn addScratchStatement(store: *NodeStore, idx: StatementIdx) void {
+/// Places a new AST.Statement.Idx in the scratch.  Will panic on OOM.
+pub fn addScratchStatement(store: *NodeStore, idx: AST.Statement.Idx) void {
     store.scratch_statements.append(store.gpa, idx);
 }
 
 /// Creates a new span starting at start.  Moves the items from scratch
 /// to extra_data as appropriate.
-pub fn statementSpanFrom(store: *NodeStore, start: u32) StatementSpan {
+pub fn statementSpanFrom(store: *NodeStore, start: u32) AST.Statement.Span {
     const end = store.scratch_statements.top();
     defer store.scratch_statements.clearFrom(start);
     var i = @as(usize, @intCast(start));
     const ed_start = @as(u32, @intCast(store.extra_data.items.len));
     std.debug.assert(end >= i);
     while (i < end) {
-        store.extra_data.append(store.gpa, store.scratch_statements.items.items[i].id) catch |err| exitOnOom(err);
+        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_statements.items.items[i])) catch |err| exitOnOom(err);
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
@@ -3054,30 +1637,30 @@ pub fn clearScratchStatementsFrom(store: *NodeStore, start: u32) void {
 
 /// Returns a new Statement slice so that the caller can iterate through
 /// all items in the span.
-pub fn statementSlice(store: *NodeStore, span: StatementSpan) []StatementIdx {
-    return @ptrCast(store.extra_data.items[span.span.start..(span.span.start + span.span.len)]);
+pub fn statementSlice(store: *NodeStore, span: AST.Statement.Span) []AST.Statement.Idx {
+    return store.sliceFromSpan(AST.Statement.Idx, span.span);
 }
 
-/// Returns the start position for a new Span of patternIdxs in scratch
+/// Returns the start position for a new Span of AST.Pattern.Idx in scratch
 pub fn scratchPatternTop(store: *NodeStore) u32 {
     return store.scratch_patterns.top();
 }
 
-/// Places a new PatternIdx in the scratch.  Will panic on OOM.
-pub fn addScratchPattern(store: *NodeStore, idx: PatternIdx) void {
+/// Places a new AST.Pattern.Idx in the scratch.  Will panic on OOM.
+pub fn addScratchPattern(store: *NodeStore, idx: AST.Pattern.Idx) void {
     store.scratch_patterns.append(store.gpa, idx);
 }
 
 /// Creates a new span starting at start.  Moves the items from scratch
 /// to extra_data as appropriate.
-pub fn patternSpanFrom(store: *NodeStore, start: u32) PatternSpan {
+pub fn patternSpanFrom(store: *NodeStore, start: u32) AST.Pattern.Span {
     const end = store.scratch_patterns.top();
     defer store.scratch_patterns.clearFrom(start);
     var i = @as(usize, @intCast(start));
     const ed_start = @as(u32, @intCast(store.extra_data.items.len));
     std.debug.assert(end >= i);
     while (i < end) {
-        store.extra_data.append(store.gpa, store.scratch_patterns.items.items[i].id) catch |err| exitOnOom(err);
+        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_patterns.items.items[i])) catch |err| exitOnOom(err);
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
@@ -3090,42 +1673,47 @@ pub fn clearScratchPatternsFrom(store: *NodeStore, start: u32) void {
     store.scratch_patterns.clearFrom(start);
 }
 
-/// Returns a new Pattern slice so that the caller can iterate through
-/// all items in the span.
-pub fn patternSlice(store: *NodeStore, span: PatternSpan) []PatternIdx {
-    return @ptrCast(store.extra_data.items[span.span.start..(span.span.start + span.span.len)]);
+/// Creates a slice corresponding to a span.
+pub fn sliceFromSpan(store: *NodeStore, comptime T: type, span: base.DataSpan) []T {
+    return @ptrCast(store.extra_data.items[span.start..][0..span.len]);
 }
 
-/// Returns a new PatternRecordFieldIter so that the caller can iterate through
+/// Returns a new Pattern slice so that the caller can iterate through
 /// all items in the span.
-pub fn patternRecordFieldSlice(store: *NodeStore, span: PatternRecordFieldSpan) []PatternRecordFieldIdx {
-    return @ptrCast(store.extra_data.items[span.span.start..(span.span.start + span.span.len)]);
+pub fn patternSlice(store: *NodeStore, span: AST.Pattern.Span) []AST.Pattern.Idx {
+    return store.sliceFromSpan(AST.Pattern.Idx, span.span);
+}
+
+/// Returns a new AST.PatternRecordFieldIter so that the caller can iterate through
+/// all items in the span.
+pub fn patternRecordFieldSlice(store: *NodeStore, span: AST.PatternRecordField.Span) []AST.PatternRecordField.Idx {
+    return store.sliceFromSpan(AST.PatternRecordField.Idx, span.span);
 }
 /// Returns the start position for a new Span of patternRecordFieldIdxs in scratch
 pub fn scratchPatternRecordFieldTop(store: *NodeStore) u32 {
     return store.scratch_pattern_record_fields.top();
 }
 
-/// Places a new PatternRecordFieldIdx in the scratch.  Will panic on OOM.
-pub fn addScratchPatternRecordField(store: *NodeStore, idx: PatternRecordFieldIdx) void {
+/// Places a new AST.PatternRecordField.Idx in the scratch.  Will panic on OOM.
+pub fn addScratchPatternRecordField(store: *NodeStore, idx: AST.PatternRecordField.Idx) void {
     store.scratch_pattern_record_fields.append(store.gpa, idx);
 }
 
 /// Creates a new span starting at start.  Moves the items from scratch
 /// to extra_data as appropriate.
-pub fn patternRecordFieldSpanFrom(store: *NodeStore, start: u32) PatternRecordFieldSpan {
+pub fn patternRecordFieldSpanFrom(store: *NodeStore, start: u32) AST.PatternRecordField.Span {
     const end = store.scratch_pattern_record_fields.top();
     defer store.scratch_pattern_record_fields.clearFrom(start);
     var i = @as(usize, @intCast(start));
     const ed_start = @as(u32, @intCast(store.extra_data.items.len));
     while (i < end) {
-        store.extra_data.append(store.gpa, store.scratch_pattern_record_fields.items.items[i].id) catch |err| exitOnOom(err);
+        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_pattern_record_fields.items.items[i])) catch |err| exitOnOom(err);
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
 }
 
-/// Clears any PatternRecordFieldIds added to scratch from start until the end.
+/// Clears any AST.PatternRecordFieldIds added to scratch from start until the end.
 /// Should be used wherever the scratch items will not be used,
 /// as in when parsing fails.
 pub fn clearScratchPatternRecordFieldsFrom(store: *NodeStore, start: u32) void {
@@ -3134,7 +1722,7 @@ pub fn clearScratchPatternRecordFieldsFrom(store: *NodeStore, start: u32) void {
 
 /// Returns a new RecordField slice so that the caller can iterate through
 /// all items in the span.
-pub fn recordFieldSlice(store: *NodeStore, span: RecordFieldSpan) []RecordFieldIdx {
+pub fn recordFieldSlice(store: *NodeStore, span: AST.RecordField.Span) []AST.RecordField.Idx {
     return @ptrCast(store.extra_data.items[span.span.start..(span.span.start + span.span.len)]);
 }
 /// Returns the start position for a new Span of recordFieldIdxs in scratch
@@ -3142,20 +1730,20 @@ pub fn scratchRecordFieldTop(store: *NodeStore) u32 {
     return store.scratch_record_fields.top();
 }
 
-/// Places a new RecordFieldIdx in the scratch.  Will panic on OOM.
-pub fn addScratchRecordField(store: *NodeStore, idx: RecordFieldIdx) void {
+/// Places a new AST.RecordField.Idx in the scratch.  Will panic on OOM.
+pub fn addScratchRecordField(store: *NodeStore, idx: AST.RecordField.Idx) void {
     store.scratch_record_fields.append(store.gpa, idx);
 }
 
 /// Creates a new span starting at start.  Moves the items from scratch
 /// to extra_data as appropriate.
-pub fn recordFieldSpanFrom(store: *NodeStore, start: u32) RecordFieldSpan {
+pub fn recordFieldSpanFrom(store: *NodeStore, start: u32) AST.RecordField.Span {
     const end = store.scratch_record_fields.top();
     defer store.scratch_record_fields.clearFrom(start);
     var i = @as(usize, @intCast(start));
     const ed_start = @as(u32, @intCast(store.extra_data.items.len));
     while (i < end) {
-        store.extra_data.append(store.gpa, store.scratch_record_fields.items.items[i].id) catch |err| exitOnOom(err);
+        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_record_fields.items.items[i])) catch |err| exitOnOom(err);
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
@@ -3173,20 +1761,20 @@ pub fn scratchWhenBranchTop(store: *NodeStore) u32 {
     return store.scratch_when_branches.top();
 }
 
-/// Places a new WhenBranchIdx in the scratch.  Will panic on OOM.
-pub fn addScratchWhenBranch(store: *NodeStore, idx: WhenBranchIdx) void {
+/// Places a new AST.WhenBranch.Idx in the scratch.  Will panic on OOM.
+pub fn addScratchWhenBranch(store: *NodeStore, idx: AST.WhenBranch.Idx) void {
     store.scratch_when_branches.append(store.gpa, idx);
 }
 
 /// Creates a new span starting at start.  Moves the items from scratch
 /// to extra_data as appropriate.
-pub fn whenBranchSpanFrom(store: *NodeStore, start: u32) WhenBranchSpan {
+pub fn whenBranchSpanFrom(store: *NodeStore, start: u32) AST.WhenBranch.Span {
     const end = store.scratch_when_branches.top();
     defer store.scratch_when_branches.clearFrom(start);
     var i = @as(usize, @intCast(start));
     const ed_start = @as(u32, @intCast(store.extra_data.items.len));
     while (i < end) {
-        store.extra_data.append(store.gpa, store.scratch_when_branches.items.items[i].id) catch |err| exitOnOom(err);
+        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_when_branches.items.items[i])) catch |err| exitOnOom(err);
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
@@ -3201,8 +1789,8 @@ pub fn clearScratchWhenBranchesFrom(store: *NodeStore, start: u32) void {
 
 /// Returns a new WhenBranch slice so that the caller can iterate through
 /// all items in the span.
-pub fn whenBranchSlice(store: *NodeStore, span: WhenBranchSpan) []WhenBranchIdx {
-    return @ptrCast(store.extra_data.items[span.span.start..(span.span.start + span.span.len)]);
+pub fn whenBranchSlice(store: *NodeStore, span: AST.WhenBranch.Span) []AST.WhenBranch.Idx {
+    return store.sliceFromSpan(AST.WhenBranch.Idx, span.span);
 }
 
 /// Returns the start position for a new Span of typeAnnoIdxs in scratch
@@ -3210,20 +1798,20 @@ pub fn scratchTypeAnnoTop(store: *NodeStore) u32 {
     return store.scratch_type_annos.top();
 }
 
-/// Places a new TypeAnnoIdx in the scratch.  Will panic on OOM.
-pub fn addScratchTypeAnno(store: *NodeStore, idx: TypeAnnoIdx) void {
+/// Places a new AST.TypeAnno.Idx in the scratch.  Will panic on OOM.
+pub fn addScratchTypeAnno(store: *NodeStore, idx: AST.TypeAnno.Idx) void {
     store.scratch_type_annos.append(store.gpa, idx);
 }
 
 /// Creates a new span starting at start.  Moves the items from scratch
 /// to extra_data as appropriate.
-pub fn typeAnnoSpanFrom(store: *NodeStore, start: u32) TypeAnnoSpan {
+pub fn typeAnnoSpanFrom(store: *NodeStore, start: u32) AST.TypeAnno.Span {
     const end = store.scratch_type_annos.top();
     defer store.scratch_type_annos.clearFrom(start);
     var i = @as(usize, @intCast(start));
     const ed_start = @as(u32, @intCast(store.extra_data.items.len));
     while (i < end) {
-        store.extra_data.append(store.gpa, store.scratch_type_annos.items.items[i].id) catch |err| exitOnOom(err);
+        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_type_annos.items.items[i])) catch |err| exitOnOom(err);
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
@@ -3238,8 +1826,8 @@ pub fn clearScratchTypeAnnosFrom(store: *NodeStore, start: u32) void {
 
 /// Returns a new TypeAnno slice so that the caller can iterate through
 /// all items in the span.
-pub fn typeAnnoSlice(store: *NodeStore, span: TypeAnnoSpan) []TypeAnnoIdx {
-    return @ptrCast(store.extra_data.items[span.span.start..(span.span.start + span.span.len)]);
+pub fn typeAnnoSlice(store: *NodeStore, span: AST.TypeAnno.Span) []AST.TypeAnno.Idx {
+    return store.sliceFromSpan(AST.TypeAnno.Idx, span.span);
 }
 
 /// Returns the start position for a new Span of annoRecordFieldIdxs in scratch
@@ -3247,20 +1835,20 @@ pub fn scratchAnnoRecordFieldTop(store: *NodeStore) u32 {
     return store.scratch_anno_record_fields.top();
 }
 
-/// Places a new AnnoRecordFieldIdx in the scratch.  Will panic on OOM.
-pub fn addScratchAnnoRecordField(store: *NodeStore, idx: AnnoRecordFieldIdx) void {
+/// Places a new AST.AnnoRecordField.Idx in the scratch.  Will panic on OOM.
+pub fn addScratchAnnoRecordField(store: *NodeStore, idx: AST.AnnoRecordField.Idx) void {
     store.scratch_anno_record_fields.append(store.gpa, idx);
 }
 
 /// Creates a new span starting at start.  Moves the items from scratch
 /// to extra_data as appropriate.
-pub fn annoRecordFieldSpanFrom(store: *NodeStore, start: u32) AnnoRecordFieldSpan {
+pub fn annoRecordFieldSpanFrom(store: *NodeStore, start: u32) AST.AnnoRecordField.Span {
     const end = store.scratch_anno_record_fields.top();
     defer store.scratch_anno_record_fields.clearFrom(start);
     var i = @as(usize, @intCast(start));
     const ed_start = @as(u32, @intCast(store.extra_data.items.len));
     while (i < end) {
-        store.extra_data.append(store.gpa, store.scratch_anno_record_fields.items.items[i].id) catch |err| exitOnOom(err);
+        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_anno_record_fields.items.items[i])) catch |err| exitOnOom(err);
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
@@ -3275,8 +1863,8 @@ pub fn clearScratchAnnoRecordFieldsFrom(store: *NodeStore, start: u32) void {
 
 /// Returns a new AnnoRecordField slice so that the caller can iterate through
 /// all items in the span.
-pub fn annoRecordFieldSlice(store: *NodeStore, span: AnnoRecordFieldSpan) []AnnoRecordFieldIdx {
-    return @ptrCast(store.extra_data.items[span.span.start..(span.span.start + span.span.len)]);
+pub fn annoRecordFieldSlice(store: *NodeStore, span: AST.AnnoRecordField.Span) []AST.AnnoRecordField.Idx {
+    return store.sliceFromSpan(AST.AnnoRecordField.Idx, span.span);
 }
 
 /// Returns the start position for a new Span of token_Idxs in scratch
@@ -3291,13 +1879,13 @@ pub fn addScratchToken(store: *NodeStore, idx: Token.Idx) void {
 
 /// Creates a new span starting at start.  Moves the items from scratch
 /// to extra_data as appropriate.
-pub fn tokenSpanFrom(store: *NodeStore, start: u32) TokenSpan {
+pub fn tokenSpanFrom(store: *NodeStore, start: u32) Token.Span {
     const end = store.scratch_tokens.top();
     defer store.scratch_tokens.clearFrom(start);
     var i = @as(usize, @intCast(start));
     const ed_start = @as(u32, @intCast(store.extra_data.items.len));
     while (i < end) {
-        store.extra_data.append(store.gpa, store.scratch_tokens.items.items[i]) catch |err| exitOnOom(err);
+        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_tokens.items.items[i])) catch |err| exitOnOom(err);
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
@@ -3312,8 +1900,8 @@ pub fn clearScratchTokensFrom(store: *NodeStore, start: u32) void {
 
 /// Returns a new Token slice so that the caller can iterate through
 /// all items in the span.
-pub fn tokenSlice(store: *NodeStore, span: TokenSpan) []Token.Idx {
-    return @ptrCast(store.extra_data.items[span.span.start..(span.span.start + span.span.len)]);
+pub fn tokenSlice(store: *NodeStore, span: Token.Span) []Token.Idx {
+    return store.sliceFromSpan(Token.Idx, span.span);
 }
 
 /// Returns the start position for a new Span of exposedItemIdxs in scratch
@@ -3321,24 +1909,23 @@ pub fn scratchExposedItemTop(store: *NodeStore) u32 {
     return store.scratch_anno_record_fields.top();
 }
 
-/// Places a new ExposedItemIdx in the scratch.  Will panic on OOM.
-pub fn addScratchExposedItem(store: *NodeStore, idx: ExposedItemIdx) void {
+/// Places a new AST.ExposedItem.Idx in the scratch.  Will panic on OOM.
+pub fn addScratchExposedItem(store: *NodeStore, idx: AST.ExposedItem.Idx) void {
     store.scratch_exposed_items.append(store.gpa, idx);
 }
 
 /// Creates a new span starting at start.  Moves the items from scratch
 /// to extra_data as appropriate.
-pub fn exposedItemSpanFrom(store: *NodeStore, start: u32) ExposedItemSpan {
+pub fn exposedItemSpanFrom(store: *NodeStore, start: u32) AST.ExposedItem.Span {
     const end = store.scratch_exposed_items.top();
     defer store.scratch_exposed_items.clearFrom(start);
     var i = @as(usize, @intCast(start));
     const ed_start = @as(u32, @intCast(store.extra_data.items.len));
     while (i < end) {
-        store.extra_data.append(store.gpa, store.scratch_exposed_items.items.items[i].id) catch |err| exitOnOom(err);
+        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_exposed_items.items.items[i])) catch |err| exitOnOom(err);
         i += 1;
     }
-    const span = base.DataSpan{ .start = ed_start, .len = @as(u32, @intCast(end)) - start };
-    return .{ .span = span };
+    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
 }
 
 /// Clears any ExposedItemIds added to scratch from start until the end.
@@ -3350,8 +1937,8 @@ pub fn clearScratchExposedItemsFrom(store: *NodeStore, start: u32) void {
 
 /// Returns a new ExposedItem slice so that the caller can iterate through
 /// all items in the span.
-pub fn exposedItemSlice(store: *NodeStore, span: ExposedItemSpan) []ExposedItemIdx {
-    return @ptrCast(store.extra_data.items[span.span.start..(span.span.start + span.span.len)]);
+pub fn exposedItemSlice(store: *NodeStore, span: AST.ExposedItem.Span) []AST.ExposedItem.Idx {
+    return store.sliceFromSpan(AST.ExposedItem.Idx, span.span);
 }
 
 /// Returns the start position for a new Span of whereClauseIdxs in scratch
@@ -3359,20 +1946,20 @@ pub fn scratchWhereClauseTop(store: *NodeStore) u32 {
     return store.scratch_where_clauses.top();
 }
 
-/// Places a new WhereClauseIdx in the scratch.  Will panic on OOM.
-pub fn addScratchWhereClause(store: *NodeStore, idx: WhereClauseIdx) void {
+/// Places a new AST.WhereClause.Idx in the scratch.  Will panic on OOM.
+pub fn addScratchWhereClause(store: *NodeStore, idx: AST.WhereClause.Idx) void {
     store.scratch_where_clauses.append(store.gpa, idx);
 }
 
 /// Creates a new span starting at start.  Moves the items from scratch
 /// to extra_data as appropriate.
-pub fn whereClauseSpanFrom(store: *NodeStore, start: u32) WhereClauseSpan {
+pub fn whereClauseSpanFrom(store: *NodeStore, start: u32) AST.WhereClause.Span {
     const end = store.scratch_where_clauses.top();
     defer store.scratch_where_clauses.clearFrom(start);
     var i = @as(usize, @intCast(start));
     const ed_start = @as(u32, @intCast(store.extra_data.items.len));
     while (i < end) {
-        store.extra_data.append(store.gpa, store.scratch_where_clauses.items.items[i].id) catch |err| exitOnOom(err);
+        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_where_clauses.items.items[i])) catch |err| exitOnOom(err);
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
@@ -3387,6 +1974,6 @@ pub fn clearScratchWhereClausesFrom(store: *NodeStore, start: u32) void {
 
 /// Returns a new WhereClause slice so that the caller can iterate through
 /// all items in the span.
-pub fn whereClauseSlice(store: *NodeStore, span: WhereClauseSpan) []WhereClauseIdx {
-    return @ptrCast(store.extra_data.items[span.span.start..(span.span.start + span.span.len)]);
+pub fn whereClauseSlice(store: *NodeStore, span: AST.WhereClause.Span) []AST.WhereClause.Idx {
+    return store.sliceFromSpan(AST.WhereClause.Idx, span.span);
 }

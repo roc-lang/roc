@@ -8,6 +8,8 @@ const types = @import("../types/types.zig");
 const Scope = @import("./canonicalize/Scope.zig");
 const Alias = @import("./canonicalize/Alias.zig");
 
+const AST = parse.AST;
+
 can_ir: *CIR,
 parse_ir: *parse.AST,
 scope: *Scope,
@@ -61,7 +63,9 @@ pub fn canonicalize_file(
         const stmt = self.parse_ir.store.getStatement(stmt_id);
         switch (stmt) {
             .import => |import| {
-                self.bringImportIntoScope(&import);
+                _ = import;
+                // TODO
+                // self.bringImportIntoScope(&import);
             },
             .decl => |decl| {
                 if (self.canonicalize_decl(decl)) |def_idx| {
@@ -149,7 +153,7 @@ pub fn canonicalize_file(
 
 fn canonicalize_header_exposes(
     self: *Self,
-    exposes: parse.NodeStore.CollectionIdx,
+    exposes: AST.Collection.Idx,
 ) void {
     const collection = self.parse_ir.store.getCollection(exposes);
     const exposed_items = self.parse_ir.store.exposedItemSlice(.{ .span = collection.span });
@@ -178,11 +182,13 @@ fn canonicalize_header_exposes(
 
 fn bringImportIntoScope(
     self: *Self,
-    import: *const parse.NodeStore.Statement.Import,
+    import: *const AST.Statement,
 ) void {
+    _ = import;
+
     // Add error for partially implemented imports
     _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedImport = .{
-        .region = import.region.toBase(),
+        .region = Region.zero(),
     } }));
 
     // const import_name: []u8 = &.{}; // import.module_name_tok;
@@ -200,57 +206,57 @@ fn bringImportIntoScope(
     //     } }));
     // }
 
-    const exposesSlice = self.parse_ir.store.exposedItemSlice(import.exposes);
-    for (exposesSlice) |exposed_idx| {
-        const exposed = self.parse_ir.store.getExposedItem(exposed_idx);
-        switch (exposed) {
-            .lower_ident => |ident| {
-                if (self.parse_ir.tokens.resolveIdentifier(ident.ident)) |ident_idx| {
-                    if (ident.as) |as_| {
-                        if (self.parse_ir.tokens.resolveIdentifier(as_)) |alias_idx| {
-                            _ = self.scope.levels.introduce(.alias, .{ .scope_name = ident_idx, .alias = alias_idx });
-                        }
-                    } else {
-                        _ = self.scope.levels.introduce(.ident, .{ .scope_name = ident_idx, .ident = ident_idx });
-                    }
-                }
-            },
-            .upper_ident => |imported_type| {
-                _ = imported_type;
-                // const alias = Alias{
-                //     .name = imported_type.name,
-                //     .region = ir.env.tag_names.getRegion(imported_type.name),
-                //     .is_builtin = false,
-                //     .kind = .ImportedUnknown,
-                // };
-                // const alias_idx = ir.aliases.append(alias);
-                //
-                // _ = scope.levels.introduce(.alias, .{
-                //     .scope_name = imported_type.name,
-                //     .alias = alias_idx,
-                // });
-            },
-            .upper_ident_star => |ident| {
-                _ = ident;
-            },
-            // .CustomTagUnion => |custom| {
-            //     const alias = Alias{
-            //         .name = custom.name,
-            //         .region = ir.env.tag_names.getRegion(custom.name),
-            //         .is_builtin = false,
-            //         .kind = .ImportedCustomUnion,
-            //     };
-            //     const alias_idx = ir.aliases.append(alias);
-            //
-            //     _ = scope.levels.introduce(.alias, .{
-            //         .scope_name = custom.name,
-            //         .alias = alias_idx,
-            //     });
-            //     _ = scope.custom_tags.fetchPutAssumeCapacity(custom.name, alias_idx);
-            //     // TODO: add to scope.custom_tags
-            // },
-        }
-    }
+    // const exposesSlice = self.parse_ir.store.exposedItemSlice(import.exposes);
+    // for (exposesSlice) |exposed_idx| {
+    //     const exposed = self.parse_ir.store.getExposedItem(exposed_idx);
+    //     switch (exposed) {
+    //         .lower_ident => |ident| {
+    //             if (self.parse_ir.tokens.resolveIdentifier(ident.ident)) |ident_idx| {
+    //                 if (ident.as) |as_| {
+    //                     if (self.parse_ir.tokens.resolveIdentifier(as_)) |alias_idx| {
+    //                         _ = self.scope.levels.introduce(.alias, .{ .scope_name = ident_idx, .alias = alias_idx });
+    //                     }
+    //                 } else {
+    //                     _ = self.scope.levels.introduce(.ident, .{ .scope_name = ident_idx, .ident = ident_idx });
+    //                 }
+    //             }
+    //         },
+    //         .upper_ident => |imported_type| {
+    //             _ = imported_type;
+    //             // const alias = Alias{
+    //             //     .name = imported_type.name,
+    //             //     .region = ir.env.tag_names.getRegion(imported_type.name),
+    //             //     .is_builtin = false,
+    //             //     .kind = .ImportedUnknown,
+    //             // };
+    //             // const alias_idx = ir.aliases.append(alias);
+    //             //
+    //             // _ = scope.levels.introduce(.alias, .{
+    //             //     .scope_name = imported_type.name,
+    //             //     .alias = alias_idx,
+    //             // });
+    //         },
+    //         .upper_ident_star => |ident| {
+    //             _ = ident;
+    //         },
+    //         // .CustomTagUnion => |custom| {
+    //         //     const alias = Alias{
+    //         //         .name = custom.name,
+    //         //         .region = ir.env.tag_names.getRegion(custom.name),
+    //         //         .is_builtin = false,
+    //         //         .kind = .ImportedCustomUnion,
+    //         //     };
+    //         //     const alias_idx = ir.aliases.append(alias);
+    //         //
+    //         //     _ = scope.levels.introduce(.alias, .{
+    //         //         .scope_name = custom.name,
+    //         //         .alias = alias_idx,
+    //         //     });
+    //         //     _ = scope.custom_tags.fetchPutAssumeCapacity(custom.name, alias_idx);
+    //         //     // TODO: add to scope.custom_tags
+    //         // },
+    //     }
+    // }
 }
 
 fn bringIngestedFileIntoScope(
@@ -283,7 +289,7 @@ fn bringIngestedFileIntoScope(
 
 fn canonicalize_decl(
     self: *Self,
-    decl: parse.NodeStore.Statement.Decl,
+    decl: AST.Statement.Decl,
 ) ?CIR.Def.Idx {
     const pattern_idx = self.canonicalize_pattern(decl.pattern) orelse return null;
     const expr_idx = self.canonicalize_expr(decl.body) orelse return null;
@@ -306,7 +312,7 @@ fn canonicalize_decl(
 /// Canonicalize an expression.
 pub fn canonicalize_expr(
     self: *Self,
-    expr_idx: parse.NodeStore.ExprIdx,
+    expr_idx: AST.Expr.Idx,
 ) ?CIR.Expr.Idx {
     const expr = self.parse_ir.store.getExpr(expr_idx);
     switch (expr) {
@@ -736,7 +742,7 @@ pub fn canonicalize_expr(
 }
 
 /// Extract string segments from parsed string parts
-fn extractStringSegments(self: *Self, parts: []const parse.NodeStore.ExprIdx) ![]StringSegment {
+fn extractStringSegments(self: *Self, parts: []const AST.Expr.Idx) ![]StringSegment {
     var segments = std.ArrayList(StringSegment).init(self.can_ir.env.gpa);
     defer segments.deinit();
 
@@ -871,7 +877,7 @@ fn desugarStringInterpolation(self: *Self, segments: []const StringSegment, regi
 
 fn canonicalize_pattern(
     self: *Self,
-    pattern_idx: parse.NodeStore.PatternIdx,
+    pattern_idx: AST.Pattern.Idx,
 ) ?CIR.Pattern.Idx {
     const pattern = self.parse_ir.store.getPattern(pattern_idx);
     const region = Region.zero(); // TODO: Implement proper pattern region retrieval
@@ -1021,5 +1027,5 @@ fn canonicalize_pattern(
 /// Represents a segment of a string literal that may contain interpolations
 const StringSegment = union(enum) {
     plaintext: []const u8,
-    interpolation: parse.NodeStore.ExprIdx,
+    interpolation: AST.Expr.Idx,
 };
