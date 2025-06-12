@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const AST = @import("AST.zig");
+const Node = @import("Node.zig");
 const NodeList = AST.NodeList;
 
 const tracy = @import("../../tracy.zig");
@@ -18,7 +19,7 @@ gpa: std.mem.Allocator,
 pos: TokenIdx,
 tok_buf: TokenizedBuffer,
 store: AST.NodeStore,
-scratch_nodes: std.ArrayListUnmanaged(AST.Node.Idx),
+scratch_nodes: std.ArrayListUnmanaged(Node.Idx),
 diagnostics: std.ArrayListUnmanaged(AST.Diagnostic),
 
 /// init the parser from a buffer of tokens
