@@ -121,22 +121,30 @@ pub fn unify(
                 //
                 // 1. Encountering illegal recursion (infinite or anonymous)
                 // 2. Encountering an invalid polymorphic number type
+                // 2. Encountering an invalid record extensible type
+                // 2. Encountering an invalid tag union extensible type
                 //
                 // In these cases, before throwing, we set error state in
-                // `scratch.occurs_err`. This is necessary becuaes you cannot
+                // `scratch.occurs_err`. This is necessary because you cannot
                 // associated an error payload when throwing.
                 //
                 // If we threw but there is no error data, it is a bug
                 if (scratch.err) |unify_err| {
-                    switch (unify_err.type_) {
-                        .recursion_anonymous => {
-                            return Result{ .anonmyous_recursion = unify_err.side };
+                    switch (unify_err) {
+                        .recursion_anonymous => |side| {
+                            return Result{ .anonmyous_recursion = side };
                         },
-                        .recursion_infinite => {
-                            return Result{ .infinite_recursion = unify_err.side };
+                        .recursion_infinite => |side| {
+                            return Result{ .infinite_recursion = side };
                         },
-                        .invalid_number_type => {
-                            return Result{ .invalid_number_type = unify_err.side };
+                        .invalid_number_type => |var_| {
+                            return Result{ .invalid_number_type = var_ };
+                        },
+                        .invalid_record_ext => |var_| {
+                            return Result{ .invalid_record_ext = var_ };
+                        },
+                        .invalid_tag_union_ext => |var_| {
+                            return Result{ .invalid_tag_union_ext = var_ };
                         },
                     }
                 } else {
@@ -154,9 +162,11 @@ pub const Result = union(enum) {
 
     ok,
     type_mismatch,
-    invalid_number_type: Side,
     infinite_recursion: Side,
     anonmyous_recursion: Side,
+    invalid_number_type: Var,
+    invalid_record_ext: Var,
+    invalid_tag_union_ext: Var,
     bug,
 
     /// The error types that occurred during unification
@@ -311,10 +321,10 @@ const Unifier = struct {
             .not_recursive => {},
             .recursive_nominal => {},
             .recursive_anonymous => {
-                return self.setUnifyErrAndThrow(UnifyErrCtx{ .type_ = .recursion_anonymous, .side = .a });
+                return self.setUnifyErrAndThrow(UnifyErrCtx{ .recursion_anonymous = .a });
             },
             .infinite => {
-                return self.setUnifyErrAndThrow(UnifyErrCtx{ .type_ = .recursion_infinite, .side = .a });
+                return self.setUnifyErrAndThrow(UnifyErrCtx{ .recursion_infinite = .a });
             },
         }
 
@@ -323,10 +333,10 @@ const Unifier = struct {
             .not_recursive => {},
             .recursive_nominal => {},
             .recursive_anonymous => {
-                return self.setUnifyErrAndThrow(UnifyErrCtx{ .type_ = .recursion_anonymous, .side = .b });
+                return self.setUnifyErrAndThrow(UnifyErrCtx{ .recursion_anonymous = .b });
             },
             .infinite => {
-                return self.setUnifyErrAndThrow(UnifyErrCtx{ .type_ = .recursion_infinite, .side = .b });
+                return self.setUnifyErrAndThrow(UnifyErrCtx{ .recursion_infinite = .b });
             },
         }
     }
@@ -752,8 +762,8 @@ const Unifier = struct {
                         return error.TypeMismatch;
                     },
                     .frac_resolved => return error.TypeMismatch,
-                    .err => |_| {
-                        return self.setUnifyErrAndThrow(.{ .type_ = .invalid_number_type, .side = .b });
+                    .err => |var_| {
+                        return self.setUnifyErrAndThrow(.{ .invalid_number_type = var_ });
                     },
                 }
             },
@@ -766,8 +776,8 @@ const Unifier = struct {
                         return error.TypeMismatch;
                     },
                     .int_resolved => return error.TypeMismatch,
-                    .err => |_| {
-                        return self.setUnifyErrAndThrow(.{ .type_ = .invalid_number_type, .side = .b });
+                    .err => |var_| {
+                        return self.setUnifyErrAndThrow(.{ .invalid_number_type = var_ });
                     },
                 }
             },
@@ -801,8 +811,8 @@ const Unifier = struct {
                 },
                 .int => return error.TypeMismatch,
             },
-            .err => |_| {
-                return self.setUnifyErrAndThrow(.{ .type_ = .invalid_number_type, .side = .a });
+            .err => |var_| {
+                return self.setUnifyErrAndThrow(.{ .invalid_number_type = var_ });
             },
         }
     }
@@ -1005,8 +1015,8 @@ const Unifier = struct {
         b_record: Record,
     ) Error!void {
 
-        // First, unwrap all fields for record a, panicaing with various non-recoverable error
-        // These pancis will likely be changed/removed in the future
+        // First, unwrap all fields for record, erroring if we encounter an
+        // invalid record ext var
         const a_gathered_fields = try self.gatherRecordFields(a_record);
         const b_gathered_fields = try self.gatherRecordFields(b_record);
 
@@ -1150,7 +1160,7 @@ const Unifier = struct {
     /// * the final tail extension variable, which is either a flex var or an empty record
     ///
     /// Errors if it encounters a malformed or invalid extension (e.g. a non-record type).
-    fn gatherRecordFields(self: *Self, record: Record) error{TypeMismatch}!GatheredFields {
+    fn gatherRecordFields(self: *Self, record: Record) Error!GatheredFields {
         // first, copy from the store's MultiList record fields array into scratch's
         // regular list, capturing the insertion range
         var range = self.scratch.copyGatherFieldsFromMultiList(
@@ -1184,10 +1194,10 @@ const Unifier = struct {
                         .empty_record => {
                             return .{ .ext = ext_var, .range = range };
                         },
-                        else => return error.TypeMismatch,
+                        else => try self.setUnifyErrAndThrow(.{ .invalid_record_ext = ext_var }),
                     }
                 },
-                else => return error.TypeMismatch,
+                else => try self.setUnifyErrAndThrow(.{ .invalid_record_ext = ext_var }),
             }
         }
     }
@@ -1407,8 +1417,8 @@ const Unifier = struct {
         b_tag_union: TagUnion,
     ) Error!void {
 
-        // First, unwrap all tags for tag_union a, panicaing with various non-recoverable error
-        // These pancis will likely be changed/removed in the future
+        // First, unwrap all fields for tag unions, erroring if we encounter an
+        // invalid record ext var
         const a_gathered_tags = try self.gatherTagUnionTags(a_tag_union);
         const b_gathered_tags = try self.gatherTagUnionTags(b_tag_union);
 
@@ -1552,7 +1562,7 @@ const Unifier = struct {
     /// * the final tail extension variable, which is either a flex var or an empty tag_union
     ///
     /// Errors if it encounters a malformed or invalid extension (e.g. a non-tag_union type).
-    fn gatherTagUnionTags(self: *Self, tag_union: TagUnion) error{TypeMismatch}!GatheredTags {
+    fn gatherTagUnionTags(self: *Self, tag_union: TagUnion) Error!GatheredTags {
         // first, copy from the store's MultiList record fields array into scratch's
         // regular list, capturing the insertion range
         var range = self.scratch.copyGatherTagsFromMultiList(
@@ -1586,10 +1596,10 @@ const Unifier = struct {
                         .empty_tag_union => {
                             return .{ .ext = ext_var, .range = range };
                         },
-                        else => return error.TypeMismatch,
+                        else => try self.setUnifyErrAndThrow(.{ .invalid_tag_union_ext = ext_var }),
                     }
                 },
-                else => return error.TypeMismatch,
+                else => try self.setUnifyErrAndThrow(.{ .invalid_tag_union_ext = ext_var }),
             }
         }
     }
@@ -1736,15 +1746,12 @@ const Unifier = struct {
 };
 
 /// A fatal occurs error
-pub const UnifyErrCtx = struct {
-    type_: Type,
-    side: Side,
-
-    pub const Type = enum {
-        recursion_infinite,
-        recursion_anonymous,
-        invalid_number_type,
-    };
+pub const UnifyErrCtx = union(enum) {
+    recursion_infinite: Side,
+    recursion_anonymous: Side,
+    invalid_number_type: Var,
+    invalid_record_ext: Var,
+    invalid_tag_union_ext: Var,
 };
 
 /// A reusable memory arena used across unification calls to avoid per-call allocations.
