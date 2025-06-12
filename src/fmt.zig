@@ -2,7 +2,7 @@
 
 const std = @import("std");
 const parse = @import("check/parse.zig");
-const collections = @import("collections");
+const collections = @import("collections.zig");
 const Filesystem = @import("coordinate/Filesystem.zig");
 const tokenizer = @import("check/parse/tokenize.zig");
 const base = @import("base.zig");
@@ -1944,7 +1944,7 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const 
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    var parse_ast = parse(&module_env, input);
+    var parse_ast = parse.parse(&module_env, input);
     defer parse_ast.deinit();
 
     // Currently disabled cause SExpr are missing a lot of IR coverage resulting in panics.
