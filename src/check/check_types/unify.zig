@@ -1906,6 +1906,8 @@ pub const Scratch = struct {
 
 // tests //
 
+const RootModule = @This();
+
 /// A lightweight test harness used in unification and type inference tests.
 ///
 /// `TestEnv` bundles together the following components:
@@ -1946,6 +1948,18 @@ const TestEnv = struct {
         self.module_env.gpa.destroy(self.module_env);
         self.scratch.deinit();
         self.occurs_scratch.deinit();
+    }
+
+    /// Helper function to call unify with args from TestEnv
+    fn unify(self: *Self, a: Var, b: Var) Result {
+        return RootModule.unify(
+            self.module_env,
+            self.types_store,
+            &self.scratch,
+            &self.occurs_scratch,
+            a,
+            b,
+        );
     }
 
     const Error = error{ VarIsNotRoot, IsNotRecord, IsNotTagUnion };
@@ -2162,7 +2176,7 @@ test "unify - identical" {
     const a = env.types_store.fresh();
     const desc = try env.getDescForRootVar(a);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, a);
+    const result = env.unify(a, a);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(desc, try env.getDescForRootVar(a));
@@ -2177,7 +2191,7 @@ test "unify - both flex vars" {
     const a = env.types_store.fresh();
     const b = env.types_store.fresh();
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -2192,7 +2206,7 @@ test "unify - a is flex_var and b is not" {
     const a = env.types_store.fresh();
     const b = env.types_store.freshFromContent(Content{ .structure = .{ .num = Num.int_i8 } });
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -2209,7 +2223,7 @@ test "rigid_var - unifies with flex_var" {
     const a = env.types_store.freshFromContent(.{ .flex_var = null });
     const b = env.types_store.freshFromContent(rigid);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
     try std.testing.expectEqual(true, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
     try std.testing.expectEqual(rigid, (try env.getDescForRootVar(b)).content);
@@ -2224,7 +2238,7 @@ test "rigid_var - unifies with flex_var (other way)" {
     const a = env.types_store.freshFromContent(rigid);
     const b = env.types_store.freshFromContent(.{ .flex_var = null });
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
     try std.testing.expectEqual(true, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
     try std.testing.expectEqual(rigid, (try env.getDescForRootVar(b)).content);
@@ -2238,7 +2252,7 @@ test "rigid_var - cannot unify with alias (fail)" {
     const alias = env.types_store.freshFromContent(Content{ .structure = .str });
     const rigid = env.types_store.freshFromContent(env.mkRigidVar("a"));
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, alias, rigid);
+    const result = env.unify(alias, rigid);
     try std.testing.expectEqual(false, result.isOk());
 }
 
@@ -2250,7 +2264,7 @@ test "rigid_var - cannot unify with identical ident str (fail)" {
     const rigid1 = env.types_store.freshFromContent(env.mkRigidVar("a"));
     const rigid2 = env.types_store.freshFromContent(env.mkRigidVar("a"));
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, rigid1, rigid2);
+    const result = env.unify(rigid1, rigid2);
     try std.testing.expectEqual(false, result.isOk());
 }
 
@@ -2270,7 +2284,7 @@ test "unify - alias with same args" {
     const a = env.types_store.freshFromContent(alias);
     const b = env.types_store.freshFromContent(alias);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -2291,7 +2305,7 @@ test "unify - aliases with different names but same backing" {
     const a = env.types_store.freshFromContent(a_alias);
     const b = env.types_store.freshFromContent(b_alias);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(a_alias, (try env.getDescForRootVar(a)).content);
@@ -2314,7 +2328,7 @@ test "unify - alias with different args (fail)" {
     const a = env.types_store.freshFromContent(a_alias);
     const b = env.types_store.freshFromContent(b_alias);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -2335,7 +2349,7 @@ test "unify - alias with flex" {
     const a = env.types_store.freshFromContent(a_alias);
     const b = env.types_store.fresh();
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -2352,7 +2366,7 @@ test "unify - pure with pure" {
     const a = env.types_store.freshFromContent(.pure);
     const b = env.types_store.freshFromContent(.pure);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -2367,7 +2381,7 @@ test "unify - effectful with effectful" {
     const a = env.types_store.freshFromContent(.effectful);
     const b = env.types_store.freshFromContent(.effectful);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -2382,7 +2396,7 @@ test "unify - pure with flex_var" {
     const a = env.types_store.freshFromContent(.pure);
     const b = env.types_store.fresh();
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -2397,7 +2411,7 @@ test "unify - effectful with flex_var" {
     const a = env.types_store.freshFromContent(.effectful);
     const b = env.types_store.fresh();
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -2412,7 +2426,7 @@ test "unify - pure with effectful" {
     const a = env.types_store.freshFromContent(.pure);
     const b = env.types_store.freshFromContent(.effectful);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -2427,7 +2441,7 @@ test "unify - effectful with pure (fail)" {
     const a = env.types_store.freshFromContent(.effectful);
     const b = env.types_store.freshFromContent(.pure);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -2442,7 +2456,7 @@ test "unify - pure with err (fail)" {
     const a = env.types_store.freshFromContent(.pure);
     const b = env.types_store.freshFromContent(.err);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -2457,7 +2471,7 @@ test "unify - effectful with err (fail)" {
     const a = env.types_store.freshFromContent(.effectful);
     const b = env.types_store.freshFromContent(.err);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -2473,7 +2487,7 @@ test "unify - pure with structure type fails" {
     const a = env.types_store.freshFromContent(.pure);
     const b = env.types_store.freshFromContent(str);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(false, result.isOk());
 }
@@ -2487,7 +2501,7 @@ test "unify - effectful with structure type fails" {
     const a = env.types_store.freshFromContent(.effectful);
     const b = env.types_store.freshFromContent(str);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(false, result.isOk());
 }
@@ -2505,7 +2519,7 @@ test "unify - a is builtin and b is flex_var" {
     const a = env.types_store.freshFromContent(str);
     const b = env.types_store.fresh();
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -2523,7 +2537,7 @@ test "unify - a is flex_var and b is builtin" {
     const a = env.types_store.fresh();
     const b = env.types_store.freshFromContent(str);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -2543,7 +2557,7 @@ test "unify - a & b are both str" {
     const a = env.types_store.freshFromContent(str);
     const b = env.types_store.freshFromContent(str);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -2562,7 +2576,7 @@ test "unify - a & b are diff (fail)" {
     const a = env.types_store.freshFromContent(int);
     const b = env.types_store.freshFromContent(str);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -2583,7 +2597,7 @@ test "unify - a & b box with same arg unify" {
     const a = env.types_store.freshFromContent(box_str);
     const b = env.types_store.freshFromContent(box_str);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -2608,7 +2622,7 @@ test "unify - a & b box with diff args (fail)" {
     const a = env.types_store.freshFromContent(box_str);
     const b = env.types_store.freshFromContent(box_i64);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -2629,7 +2643,7 @@ test "unify - a & b list with same arg unify" {
     const a = env.types_store.freshFromContent(list_str);
     const b = env.types_store.freshFromContent(list_str);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -2654,7 +2668,7 @@ test "unify - a & b list with diff args (fail)" {
     const a = env.types_store.freshFromContent(list_str);
     const b = env.types_store.freshFromContent(list_u8);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -2680,7 +2694,7 @@ test "unify - a & b are same tuple" {
     const a = env.types_store.freshFromContent(tuple_str_bool);
     const b = env.types_store.freshFromContent(tuple_str_bool);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -2705,7 +2719,7 @@ test "unify - a & b are tuples with args flipped (fail)" {
     const a = env.types_store.freshFromContent(tuple_str_bool);
     const b = env.types_store.freshFromContent(tuple_bool_str);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -2724,7 +2738,7 @@ test "unify - two compact ints" {
     const a = env.types_store.freshFromContent(int_i32);
     const b = env.types_store.freshFromContent(int_i32);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -2740,7 +2754,7 @@ test "unify - two compact ints (fail)" {
     const a = env.types_store.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
     const b = env.types_store.freshFromContent(Content{ .structure = .{ .num = Num.int_u8 } });
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -2757,7 +2771,7 @@ test "unify - two compact fracs" {
     const a = env.types_store.freshFromContent(frac_f32);
     const b = env.types_store.freshFromContent(frac_f32);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -2773,7 +2787,7 @@ test "unify - two compact fracs (fail)" {
     const a = env.types_store.freshFromContent(Content{ .structure = .{ .num = Num.frac_f32 } });
     const b = env.types_store.freshFromContent(Content{ .structure = .{ .num = Num.frac_dec } });
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -2791,7 +2805,7 @@ test "unify - two poly ints" {
     const a = env.mkIntExact(Num.Int.Precision.u8);
     const b = env.mkIntExact(Num.Int.Precision.u8);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -2806,7 +2820,7 @@ test "unify - two poly ints (fail)" {
     const a = env.mkIntExact(Num.Int.Precision.u8);
     const b = env.mkIntExact(Num.Int.Precision.i128);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -2822,7 +2836,7 @@ test "unify - two poly fracs" {
     const a = env.mkFracExact(Num.Frac.Precision.f64);
     const b = env.mkFracExact(Num.Frac.Precision.f64);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -2837,7 +2851,7 @@ test "unify - two poly fracs (fail)" {
     const a = env.mkFracExact(Num.Frac.Precision.f32);
     const b = env.mkFracExact(Num.Frac.Precision.f64);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -2856,7 +2870,7 @@ test "unify - Num(flex) and compact int" {
     const a = env.mkNumFlex();
     const b = env.types_store.freshFromContent(int_i32);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -2873,7 +2887,7 @@ test "unify - Num(Int(flex)) and compact int" {
     const a = env.mkIntFlex();
     const b = env.types_store.freshFromContent(int_i32);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -2890,7 +2904,7 @@ test "unify - Num(Int(U8)) and compact int U8" {
     const a = env.mkIntExact(Num.Int.Precision.u8);
     const b = env.types_store.freshFromContent(int_u8);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -2907,7 +2921,7 @@ test "unify - Num(Int(U8)) and compact int I32 (fails)" {
     const a = env.mkIntExact(Num.Int.Precision.u8);
     const b = env.types_store.freshFromContent(int_i32);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -2926,7 +2940,7 @@ test "unify - Num(flex) and compact frac" {
     const a = env.mkNumFlex();
     const b = env.types_store.freshFromContent(frac_f32);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -2943,7 +2957,7 @@ test "unify - Num(Frac(flex)) and compact frac" {
     const a = env.mkFracFlex();
     const b = env.types_store.freshFromContent(frac_f32);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -2960,7 +2974,7 @@ test "unify - Num(Frac(Dec)) and compact frac Dec" {
     const a = env.mkFracExact(Num.Frac.Precision.dec);
     const b = env.types_store.freshFromContent(frac_dec);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -2977,7 +2991,7 @@ test "unify - Num(Frac(F32)) and compact frac Dec (fails)" {
     const a = env.mkFracExact(Num.Frac.Precision.dec);
     const b = env.types_store.freshFromContent(frac_f32);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -2996,7 +3010,7 @@ test "unify - compact int and Num(flex)" {
     const a = env.types_store.freshFromContent(int_i32);
     const b = env.mkNumFlex();
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -3013,7 +3027,7 @@ test "unify - compact int and Num(Int(flex))" {
     const a = env.types_store.freshFromContent(int_i32);
     const b = env.mkIntFlex();
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -3030,7 +3044,7 @@ test "unify - compact int and U8 Num(Int(U8))" {
     const a = env.types_store.freshFromContent(int_u8);
     const b = env.mkIntExact(Num.Int.Precision.u8);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -3047,7 +3061,7 @@ test "unify - compact int U8 and  Num(Int(I32)) (fails)" {
     const a = env.types_store.freshFromContent(int_i32);
     const b = env.mkIntExact(Num.Int.Precision.u8);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -3066,7 +3080,7 @@ test "unify - compact frac and Num(flex)" {
     const a = env.types_store.freshFromContent(frac_f32);
     const b = env.mkNumFlex();
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -3083,7 +3097,7 @@ test "unify - compact frac and Num(Frac(flex))" {
     const a = env.types_store.freshFromContent(frac_f32);
     const b = env.mkFracFlex();
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -3100,7 +3114,7 @@ test "unify - compact frac and Dec Num(Frac(Dec))" {
     const a = env.types_store.freshFromContent(frac_dec);
     const b = env.mkFracExact(Num.Frac.Precision.dec);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -3117,7 +3131,7 @@ test "unify - compact frac Dec and Num(Frac(F32)) (fails)" {
     const a = env.types_store.freshFromContent(frac_f32);
     const b = env.mkFracExact(Num.Frac.Precision.dec);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -3137,7 +3151,7 @@ test "unify - Num(rigid) and Num(rigid)" {
     const a = env.types_store.freshFromContent(num);
     const b = env.types_store.freshFromContent(num);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(true, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -3155,7 +3169,7 @@ test "unify - Num(rigid_a) and Num(rigid_b)" {
     const a = env.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = rigid_a } } });
     const b = env.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = rigid_b } } });
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -3174,7 +3188,7 @@ test "unify - Num(Int(rigid)) and Num(Int(rigid))" {
     const a = env.types_store.freshFromContent(num);
     const b = env.types_store.freshFromContent(num);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(true, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -3193,7 +3207,7 @@ test "unify - Num(Frac(rigid)) and Num(Frac(rigid))" {
     const a = env.types_store.freshFromContent(num);
     const b = env.types_store.freshFromContent(num);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(true, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -3212,7 +3226,7 @@ test "unify - compact int U8 and Num(Int(rigid)) (fails)" {
     const a = env.types_store.freshFromContent(int_u8);
     const b = env.mkFracRigid("a");
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -3229,7 +3243,7 @@ test "unify - compact frac Dec and Num(Frac(rigid)) (fails)" {
     const a = env.types_store.freshFromContent(frac_f32);
     const b = env.mkFracRigid("a");
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -3248,7 +3262,7 @@ test "unify - Num(Int(rigid)) and compact int U8 (fails)" {
     const a = env.mkFracRigid("a");
     const b = env.types_store.freshFromContent(int_u8);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -3265,7 +3279,7 @@ test "unify - Num(Frac(rigid)) and compact frac Dec (fails)" {
     const a = env.mkFracRigid("a");
     const b = env.types_store.freshFromContent(frac_f32);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -3289,7 +3303,7 @@ test "unify - func are same" {
     const a = env.types_store.freshFromContent(func);
     const b = env.types_store.freshFromContent(func);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -3308,7 +3322,7 @@ test "unify - funcs have diff return args (fail)" {
     const a = env.types_store.freshFromContent(env.mkFuncFlex(&[_]Var{int_i32}, str));
     const b = env.types_store.freshFromContent(env.mkFuncFlex(&[_]Var{str}, str));
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -3327,7 +3341,7 @@ test "unify - funcs have diff return types (fail)" {
     const a = env.types_store.freshFromContent(env.mkFuncFlex(&[_]Var{str}, int_i32));
     const b = env.types_store.freshFromContent(env.mkFuncFlex(&[_]Var{str}, str));
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -3349,7 +3363,7 @@ test "unify - same funcs pure" {
     const a = env.types_store.freshFromContent(func);
     const b = env.types_store.freshFromContent(func);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -3371,7 +3385,7 @@ test "unify - same funcs effectful" {
     const a = env.types_store.freshFromContent(func);
     const b = env.types_store.freshFromContent(func);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -3394,7 +3408,7 @@ test "unify - same funcs first eff, second pure (fail)" {
     const a = env.types_store.freshFromContent(eff_func);
     const b = env.types_store.freshFromContent(pure_func);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -3417,7 +3431,7 @@ test "unify - same funcs first pure, second eff" {
     const a = env.types_store.freshFromContent(pure_func);
     const b = env.types_store.freshFromContent(eff_func);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -3438,7 +3452,7 @@ test "unify - a & b are both the same custom type" {
 
     const a = env.types_store.freshFromContent(custom_type);
     const b = env.types_store.freshFromContent(custom_type);
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -3460,7 +3474,7 @@ test "unify - a & b are diff custom types (fail)" {
     const custom_type_b = env.mkCustomType("AnotherType", &[_]Var{arg_var}, backing_var);
     const b = env.types_store.freshFromContent(custom_type_b);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -3482,7 +3496,7 @@ test "unify - a & b are both the same custom type with diff args (fail)" {
     const custom_type_b = env.mkCustomType("MyType", &[_]Var{backing_var}, backing_var);
     const b = env.types_store.freshFromContent(custom_type_b);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -3612,7 +3626,7 @@ test "unify - identical closed records" {
     const a = env.types_store.freshFromContent(record_data.content);
     const b = env.types_store.freshFromContent(record_data.content);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -3639,7 +3653,7 @@ test "unify - closed record mismatch on diff fields (fail)" {
     const b_record_data = env.mkRecordClosed(&[_]RecordField{field1});
     const b = env.types_store.freshFromContent(b_record_data.content);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -3664,7 +3678,7 @@ test "unify - identical open records" {
     const b_rec_data = env.mkRecordOpen(&[_]RecordField{field_shared});
     const b = env.types_store.freshFromContent(b_rec_data.content);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -3701,7 +3715,7 @@ test "unify - open record a extends b" {
     const b_rec_data = env.mkRecordOpen(&[_]RecordField{field_shared});
     const b = env.types_store.freshFromContent(b_rec_data.content);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -3748,7 +3762,7 @@ test "unify - open record b extends a" {
     const b_rec_data = env.mkRecordOpen(&[_]RecordField{ field_shared, field_b_only });
     const b = env.types_store.freshFromContent(b_rec_data.content);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -3794,7 +3808,7 @@ test "unify - both extend open record" {
     const b_rec_data = env.mkRecordOpen(&[_]RecordField{ field_shared, field_b_only });
     const b = env.types_store.freshFromContent(b_rec_data.content);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -3849,7 +3863,7 @@ test "unify - record mismatch on shared field (fail)" {
     const b_rec_data = env.mkRecordOpen(&[_]RecordField{field_b});
     const b = env.types_store.freshFromContent(b_rec_data.content);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -3873,7 +3887,7 @@ test "unify - open record extends closed (fail)" {
     const open = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{ field_x, field_y }).content);
     const closed = env.types_store.freshFromContent(env.mkRecordClosed(&[_]RecordField{field_x}).content);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, open, closed);
+    const result = env.unify(open, closed);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = closed }, env.types_store.getSlot(open));
@@ -3893,7 +3907,7 @@ test "unify - closed record extends open" {
     const open = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{field_x}).content);
     const closed = env.types_store.freshFromContent(env.mkRecordClosed(&[_]RecordField{ field_x, field_y }).content);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, open, closed);
+    const result = env.unify(open, closed);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = closed }, env.types_store.getSlot(open));
@@ -3913,7 +3927,7 @@ test "unify - open vs closed records with type mismatch (fail)" {
     const open = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{field_x_str}).content);
     const closed = env.types_store.freshFromContent(env.mkRecordClosed(&[_]RecordField{field_x_int}).content);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, open, closed);
+    const result = env.unify(open, closed);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = closed }, env.types_store.getSlot(open));
@@ -3936,7 +3950,7 @@ test "unify - closed vs open records with type mismatch (fail)" {
     const closed = env.types_store.freshFromContent(env.mkRecordClosed(&[_]RecordField{field_x_int}).content);
     const open = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{field_x_str}).content);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, closed, open);
+    const result = env.unify(closed, open);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = open }, env.types_store.getSlot(closed));
@@ -4068,7 +4082,7 @@ test "unify - identical closed tag_unions" {
     const a = env.types_store.freshFromContent(tag_union_data.content);
     const b = env.types_store.freshFromContent(tag_union_data.content);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -4106,7 +4120,7 @@ test "unify - closed tag_unions with diff args (fail)" {
     const b_tag_union_data = env.mkTagUnionClosed(&b_tags);
     const b = env.types_store.freshFromContent(b_tag_union_data.content);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -4132,7 +4146,7 @@ test "unify - identical open tag unions" {
     const tag_union_b = env.mkTagUnionOpen(&[_]Tag{tag_shared});
     const b = env.types_store.freshFromContent(tag_union_b.content);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -4174,7 +4188,7 @@ test "unify - open tag union a extends b" {
     const tag_union_b = env.mkTagUnionOpen(&[_]Tag{tag_shared});
     const b = env.types_store.freshFromContent(tag_union_b.content);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -4227,7 +4241,7 @@ test "unify - open tag union b extends a" {
     const tag_union_b = env.mkTagUnionOpen(&[_]Tag{ tag_b_only, tag_shared });
     const b = env.types_store.freshFromContent(tag_union_b.content);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -4282,7 +4296,7 @@ test "unify - both extend open tag union" {
     const tag_union_b = env.mkTagUnionOpen(&[_]Tag{ tag_b_only, tag_shared });
     const b = env.types_store.freshFromContent(tag_union_b.content);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -4339,7 +4353,7 @@ test "unify - open tag unions a & b have same tag name with diff args (fail)" {
     const tag_union_b = env.mkTagUnionOpen(&[_]Tag{tag_shared});
     const b = env.types_store.freshFromContent(tag_union_b.content);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -4363,7 +4377,7 @@ test "unify - open tag extends closed (fail)" {
     const a = env.types_store.freshFromContent(env.mkTagUnionOpen(&[_]Tag{ tag_shared, tag_a_only }).content);
     const b = env.types_store.freshFromContent(env.mkTagUnionClosed(&[_]Tag{tag_shared}).content);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -4383,7 +4397,7 @@ test "unify - closed tag union extends open" {
     const a = env.types_store.freshFromContent(env.mkTagUnionOpen(&[_]Tag{tag_shared}).content);
     const b = env.types_store.freshFromContent(env.mkTagUnionClosed(&[_]Tag{ tag_shared, tag_b_only }).content);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -4433,7 +4447,7 @@ test "unify - open vs closed tag union with type mismatch (fail)" {
     const a = env.types_store.freshFromContent(env.mkTagUnionOpen(&[_]Tag{tag_a}).content);
     const b = env.types_store.freshFromContent(env.mkTagUnionClosed(&[_]Tag{tag_b}).content);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -4456,7 +4470,7 @@ test "unify - closed vs open tag union with type mismatch (fail)" {
     const a = env.types_store.freshFromContent(env.mkTagUnionClosed(&[_]Tag{tag_a}).content);
     const b = env.types_store.freshFromContent(env.mkTagUnionOpen(&[_]Tag{tag_b}).content);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -4484,7 +4498,7 @@ test "unify - fails on infinite type" {
     const b_tuple = types.Tuple{ .elems = b_elems_range };
     try env.types_store.setRootVarContent(b, Content{ .structure = .{ .tuple = b_tuple } });
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a, b);
+    const result = env.unify(a, b);
 
     try std.testing.expectEqual(Result{ .infinite_recursion = .a }, result);
 }
@@ -4506,7 +4520,7 @@ test "unify - fails on anonymous recursion" {
     };
     try env.types_store.setRootVarContent(list_var_b, list_content_b);
 
-    const result = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, list_var_a, list_var_b);
+    const result = env.unify(list_var_a, list_var_b);
 
     try std.testing.expectEqual(Result{ .anonmyous_recursion = .a }, result);
 }
@@ -4532,9 +4546,9 @@ test "unify - succeeds on nomminal, tag union recursion" {
     const b_custom_type = env.mkCustomType("List", &[_]Var{}, b_tag_union_var);
     try env.types_store.setRootVarContent(b_custom_type_var, b_custom_type);
 
-    const result_custom_type = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a_custom_type_var, b_custom_type_var);
+    const result_custom_type = env.unify(a_custom_type_var, b_custom_type_var);
     try std.testing.expectEqual(.ok, result_custom_type);
 
-    const result_tag_union = unify(env.module_env, env.types_store, &env.scratch, &env.occurs_scratch, a_tag_union_var, b_tag_union_var);
+    const result_tag_union = env.unify(a_tag_union_var, b_tag_union_var);
     try std.testing.expectEqual(.ok, result_tag_union);
 }
