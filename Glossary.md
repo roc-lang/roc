@@ -404,6 +404,8 @@ Related definitions in the compiler:
 
 ## Canonicalization
 
+(can)
+
 After parsing a Roc program, the obtained [IR](#ir) is transformed into a
 canonical form called CanIR.
 
@@ -500,5 +502,9 @@ See also [std::boxed::Box](https://doc.rust-lang.org/std/boxed/struct.Box.html) 
 ### Legacy Linker
 
 ## Glue
+
+## lhs & rhs
+
+Left & Right Hand Side: for example in `1 + 2`, `1` is on the left hand side and `2` is on the right hand side.
 
 ## WASM
