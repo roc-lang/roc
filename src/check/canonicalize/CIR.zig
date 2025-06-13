@@ -147,82 +147,80 @@ test "Node is 24 bytes" {
 
 /// A single statement - either at the top-level or within a block.
 pub const Statement = union(enum) {
-    decl: Decl,
-    @"var": Var,
-    crash: Crash,
-    expr: ExprStmt,
-    expect: Expect,
-    @"for": For,
-    @"return": Return,
-    import: Import,
-    type_decl: TypeDecl,
-    type_anno: Statement.TypeAnno,
-
     /// A simple immutable declaration
-    pub const Decl = struct {
+    decl: struct {
         pattern: Pattern.Idx,
         expr: Expr.Idx,
-    };
+        region: Region,
+    },
     /// A rebindable declaration using the "var" keyword
     /// Not valid at the top level of a module
-    pub const Var = struct {
+    @"var": struct {
         ident: Ident.Idx,
         expr: Expr.Idx,
-    };
+        region: Region,
+    },
     /// The "crash" keyword
+    ///
     /// Not valid at the top level of a module
-    pub const Crash = struct {
-        msg: Expr.Idx,
-    };
+    crash: struct {
+        msg: Ident.Idx,
+        region: Region,
+    },
     /// Just an expression - usually the return value for a block
+    ///
     /// Not valid at the top level of a module
-    pub const ExprStmt = struct {
+    expr: struct {
         expr: Expr.Idx,
         region: Region,
-    };
+    },
     /// An expression that will cause a panic (or some other error handling mechanism) if it evaluates to false
-    pub const Expect = struct {
+    expect: struct {
         body: Expr.Idx,
         region: Region,
-    };
+    },
     /// A block of code that will be ran multiple times for each item in a list.
+    ///
     /// Not valid at the top level of a module
-    pub const For = struct {
+    @"for": struct {
         patt: Pattern.Idx,
         expr: Expr.Idx,
         body: Expr.Idx,
         region: Region,
-    };
+    },
     /// A early return of the enclosing function.
+    ///
     /// Not valid at the top level of a module
-    pub const Return = struct {
+    @"return": struct {
         expr: Expr.Idx,
         region: Region,
-    };
+    },
     /// Brings in another module for use in the current module, optionally exposing only certain members of that module.
+    ///
     /// Only valid at the top level of a module
-    pub const Import = struct {
+    import: struct {
         module_name_tok: Ident.Idx,
         qualifier_tok: ?Ident.Idx,
         alias_tok: ?Ident.Idx,
         exposes: ExposedItem.Span,
         region: Region,
-    };
+    },
     /// A declaration of a new type - whether an alias or a new nominal custom type
+    ///
     /// Only valid at the top level of a module
-    pub const TypeDecl = struct {
+    type_decl: struct {
         header: TypeHeader.Idx,
         anno: CIR.TypeAnno.Idx,
         where: ?WhereClause.Span,
         region: Region,
-    };
+    },
     /// A type annotation, declaring that the value referred to by an ident in the same scope should be a given type.
-    pub const TypeAnno = struct {
+    type_anno: struct {
         name: Ident.Idx,
         anno: CIR.TypeAnno.Idx,
         where: ?WhereClause.Span,
         region: Region,
-    };
+    },
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
@@ -280,6 +278,9 @@ pub const TypeAnno = union(enum) {
 };
 
 /// TODO: implement TypeHeader
+///
+/// how do we represent type headers?
+/// i.e. the `Dict` in `Dict(k,v) := ...`
 pub const TypeHeader = struct {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };

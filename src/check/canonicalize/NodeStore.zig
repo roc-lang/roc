@@ -79,27 +79,61 @@ pub fn getStatement(store: *NodeStore, statement: CIR.Statement.Idx) CIR.Stateme
     const node = store.nodes.get(node_idx);
 
     switch (node.tag) {
-        .statement_expr => {
-            return .{ .expr = .{
-                .expr = node.data_1,
+        .statement_decl => return CIR.Statement{ .decl = .{
+            .region = node.region,
+            .expr = @enumFromInt(node.data_1),
+            .pattern = @enumFromInt(node.data_2),
+        } },
+        .statement_var => return CIR.Statement{ .@"var" = .{
+            .region = node.region,
+            .expr = @enumFromInt(node.data_1),
+            .ident = @bitCast(node.data_2),
+        } },
+        .statement_crash => return CIR.Statement{ .crash = .{
+            .msg = @bitCast(node.data_1),
+            .region = node.region,
+        } },
+        .statement_expr => return .{ .expr = .{
+            .expr = node.data_1,
+            .region = node.region,
+        } },
+        .statement_expect => return CIR.Statement{ .expect = .{
+            .region = node.region,
+            .body = @enumFromInt(node.data_1),
+        } },
+        .statement_for => return CIR.Statement{ .@"for" = .{
+            .region = node.region,
+            .body = @enumFromInt(node.data_1),
+            .expr = @enumFromInt(node.data_2),
+            .patt = @enumFromInt(node.data_3),
+        } },
+        .statement_return => return CIR.Statement{ .@"return" = .{
+            .region = node.region,
+            .expr = @enumFromInt(node.data_1),
+        } },
+        .statement_import => return CIR.Statement{
+            .import = .{
                 .region = node.region,
-            } };
+                .module_name_tok = @bitCast(node.data_1),
+                .exposes = DataSpan.init(node.data_2, node.data_3).as(CIR.ExposedItem.Span),
+                .alias_tok = null, // TODO save these in extra_data and then insert them here
+                .qualifier_tok = null, // TODO save these in extra_data and then insert them here
+            },
         },
-        .statement_decl,
-        .statement_var,
-        .statement_for,
-        .statement_expect,
-        .statement_return,
-        .statement_import,
-        .statement_type_decl,
-        .statement_type_anno,
-        .statement_crash,
-        => {
-            std.log.debug("TODO: implement getStatement for node type {?}", .{node.tag});
-            return .{ .expr = .{
-                .expr = @enumFromInt(0),
-                .region = Region.empty(),
-            } };
+        .statement_type_decl => return CIR.Statement{
+            .type_decl = .{
+                .region = node.region,
+                .anno = @enumFromInt(node.data_1),
+                .header = @enumFromInt(0), // TODO save these in extra_data and then insert them here
+                .where = null, // TODO save these in extra_data and then insert them here
+            },
+        },
+        .statement_type_anno => return CIR.Statement{
+            .type_anno = .{
+                .region = node.region,
+                .anno = @enumFromInt(node.data_1),
+                .where = null, // TODO save these in extra_data and then insert them here
+            },
         },
         else => {
             @panic("unreachable, node is not an expression tag");
@@ -385,12 +419,64 @@ pub fn addStatement(store: *NodeStore, statement: CIR.Statement) CIR.Statement.I
     const node = Node{};
 
     switch (statement) {
-        .expr => |stmt| {
-            node.data_1 = stmt.expr;
-            node.region = stmt.region;
+        .decl => |s| {
+            node.tag = .statement_decl;
+            node.region = s.region;
+            node.data_1 = @intFromEnum(s.expr);
+            node.data_2 = @enumFromInt(s.pattern);
         },
-        else => {
-            std.debug.panic("Statement of type {s} not yet implemented in Can\n", .{@tagName(statement)});
+        .@"var" => |s| {
+            node.tag = .statement_var;
+            node.region = s.region;
+            node.data_1 = @intFromEnum(s.expr);
+            node.data_2 = @bitCast(s.ident);
+        },
+        .crash => |s| {
+            node.tag = .statement_crash;
+            node.region = node.region;
+            node.data_1 = @bitCast(s.msg);
+        },
+        .expr => |s| {
+            node.tag = .statement_expr;
+            node.data_1 = s.expr;
+            node.region = s.region;
+        },
+        .expect => |s| {
+            node.tag = .statement_expect;
+            node.region = s.region;
+            node.data_1 = @intFromEnum(s.body);
+        },
+        .@"for" => |s| {
+            node.tag = .statement_for;
+            node.region = node.region;
+            node.data_1 = @intFromEnum(s.body);
+            node.data_2 = @intFromEnum(s.expr);
+            node.data_3 = @intFromEnum(s.patt);
+        },
+        .@"return" => |s| {
+            node.tag = .statement_return;
+            node.region = s.region;
+            node.data_1 = @intFromEnum(s.expr);
+        },
+        .import => |s| {
+            node.tag = .statement_import;
+            node.region = s.region;
+            node.data_1 = @bitCast(s.module_name_tok);
+            node.data_2 = s.exposes.span.start;
+            node.data_3 = s.exposes.span.len;
+            // TODO store alias_tok and qualifier_tok in extra_data
+        },
+        .type_decl => |s| {
+            node.tag = .statement_type_decl;
+            node.region = s.region;
+            node.data_1 = @intFromEnum(s.anno);
+            // TODO store header and where clause data in extra_data
+        },
+        .type_anno => |s| {
+            node.tag = .statement_type_anno;
+            node.region = s.region;
+            node.data_1 = @intFromEnum(s.anno);
+            // TODO store the optional where clause data in extra_data
         },
     }
 

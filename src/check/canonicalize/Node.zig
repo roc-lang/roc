@@ -25,16 +25,16 @@ pub const Idx = List.Idx;
 /// This is the tag associated with a raw Node in the list
 pub const Tag = enum {
     // Statements
-    statement_expr,
     statement_decl,
     statement_var,
-    statement_for,
+    statement_crash,
+    statement_expr,
     statement_expect,
+    statement_for,
     statement_return,
     statement_import,
     statement_type_decl,
     statement_type_anno,
-    statement_crash,
     // Expressions
     expr_var,
     expr_tuple,
