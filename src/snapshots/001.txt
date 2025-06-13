@@ -43,7 +43,7 @@ foo =
 	(top_level_defs
 		(def
 			(let)
-			(pattern (1:11-1:11) (assign (ident "foo")))
+			(pattern (6:1-6:4) (assign (ident "foo")))
 			(expr (1:1-1:1) (string (literal "one")))
 			"#0")))
 ~~~END

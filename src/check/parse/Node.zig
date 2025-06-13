@@ -14,7 +14,7 @@ const Node = @This();
 tag: Tag,
 data: Data,
 main_token: TokenIdx,
-region: AST.Region,
+region: AST.TokenizedRegion,
 
 /// A SafeMultiList of Nodes
 pub const List = collections.SafeMultiList(Node);

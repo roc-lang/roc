@@ -132,7 +132,7 @@ pub fn peekN(self: *Parser, n: u32) Token.Tag {
 }
 
 /// add a diagnostic error
-pub fn pushDiagnostic(self: *Parser, tag: AST.Diagnostic.Tag, region: AST.Region) void {
+pub fn pushDiagnostic(self: *Parser, tag: AST.Diagnostic.Tag, region: AST.TokenizedRegion) void {
     self.diagnostics.append(self.gpa, .{
         .tag = tag,
         .region = region,
@@ -144,7 +144,7 @@ pub fn pushMalformed(self: *Parser, comptime t: type, tag: AST.Diagnostic.Tag, s
     if (self.peek() != .EndOfFile) {
         self.advanceOne(); // TODO: find a better point to advance to
     }
-    const region = AST.Region{ .start = start, .end = pos };
+    const region = AST.TokenizedRegion{ .start = start, .end = pos };
     self.diagnostics.append(self.gpa, .{
         .tag = tag,
         .region = region,
@@ -162,7 +162,7 @@ pub fn parseFile(self: *Parser) void {
     _ = self.store.addFile(.{
         .header = @as(AST.Header.Idx, @enumFromInt(0)),
         .statements = AST.Statement.Span{ .span = base.DataSpan.empty() },
-        .region = AST.Region.empty(),
+        .region = AST.TokenizedRegion.empty(),
     });
 
     while (self.peek() == .Newline) {
@@ -667,7 +667,7 @@ pub fn parseAppHeader(self: *Parser) AST.Header.Idx {
         return self.pushMalformed(AST.Header.Idx, .import_exposing_no_close, start);
     };
     const provides_span = self.store.exposedItemSpanFrom(scratch_top);
-    const provides_region = AST.Region{ .start = provides_start, .end = provides_end };
+    const provides_region = AST.TokenizedRegion{ .start = provides_start, .end = provides_end };
     const provides = self.store.addCollection(.collection_exposed, AST.Collection{
         .span = provides_span.span,
         .region = provides_region,

@@ -41,7 +41,7 @@ NO CHANGE
 	(top_level_defs
 		(def
 			(let)
-			(pattern (1:15-1:15) (assign (ident "a")))
+			(pattern (3:1-3:2) (assign (ident "a")))
 			(expr (1:1-1:1)
 				(int
 					(num_var "#0")
@@ -52,7 +52,7 @@ NO CHANGE
 			"#2")
 		(def
 			(let)
-			(pattern (1:19-1:19) (assign (ident "b")))
+			(pattern (4:1-4:2) (assign (ident "b")))
 			(expr (1:1-1:1)
 				(binop
 					"add"

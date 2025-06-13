@@ -108,14 +108,14 @@ pub fn pushMalformed(self: *CIR, comptime t: type, tag: CIR.Diagnostic.Tag, regi
 }
 
 // Helper to add type index info
-fn appendTypeVarChild(node: *sexpr.Expr, gpa: std.mem.Allocator, name: []const u8, type_idx: TypeVar) void {
+fn appendTypeVar(node: *sexpr.Expr, gpa: std.mem.Allocator, name: []const u8, type_idx: TypeVar) void {
     var type_node = sexpr.Expr.init(gpa, name);
     type_node.appendUnsignedIntChild(gpa, @intCast(@intFromEnum(type_idx)));
-    node.appendNodeChild(gpa, &type_node);
+    node.appendNode(gpa, &type_node);
 }
 
 // Helper to add identifier info
-fn appendIdentChild(node: *sexpr.Expr, gpa: std.mem.Allocator, ir: *const CIR, name: []const u8, ident_idx: Ident.Idx) void {
+fn appendIdent(node: *sexpr.Expr, gpa: std.mem.Allocator, ir: *const CIR, name: []const u8, ident_idx: Ident.Idx) void {
     const ident_text = ir.env.idents.getText(ident_idx);
 
     // Create a node with no pre-allocated children to avoid aliasing issues
@@ -133,9 +133,9 @@ fn appendIdentChild(node: *sexpr.Expr, gpa: std.mem.Allocator, ir: *const CIR, n
 
             // Now add the string child directly to the node in its final location
             const last_idx = n.children.items.len - 1;
-            n.children.items[last_idx].appendStringChild(gpa, ident_text);
+            n.children.items[last_idx].appendString(gpa, ident_text);
         },
-        else => @panic("appendIdentChild called on non-node"),
+        else => @panic("appendIdent called on non-node"),
     }
 }
 
@@ -434,25 +434,25 @@ pub const Expr = union(enum) {
                 var num_var_node = sexpr.Expr.init(gpa, "num_var");
                 const num_var_str = num_expr.num_var.allocPrint(gpa);
                 defer gpa.free(num_var_str);
-                num_var_node.appendStringChild(gpa, num_var_str);
-                num_node.appendNodeChild(gpa, &num_var_node);
+                num_var_node.appendString(gpa, num_var_str);
+                num_node.appendNode(gpa, &num_var_node);
 
                 // Add literal
                 var literal_node = sexpr.Expr.init(gpa, "literal");
                 const literal_str = ir.env.strings.get(num_expr.literal);
-                literal_node.appendStringChild(gpa, literal_str);
-                num_node.appendNodeChild(gpa, &literal_node);
+                literal_node.appendString(gpa, literal_str);
+                num_node.appendNode(gpa, &literal_node);
 
                 // Add value info
                 var value_node = sexpr.Expr.init(gpa, "value");
                 // TODO: Format the actual integer value properly
-                value_node.appendStringChild(gpa, "TODO");
-                num_node.appendNodeChild(gpa, &value_node);
+                value_node.appendString(gpa, "TODO");
+                num_node.appendNode(gpa, &value_node);
 
                 // Add bound info
                 var bound_node = sexpr.Expr.init(gpa, "bound");
-                bound_node.appendStringChild(gpa, @tagName(num_expr.bound));
-                num_node.appendNodeChild(gpa, &bound_node);
+                bound_node.appendString(gpa, @tagName(num_expr.bound));
+                num_node.appendNode(gpa, &bound_node);
 
                 return num_node;
             },
@@ -463,31 +463,31 @@ pub const Expr = union(enum) {
                 var num_var_node = sexpr.Expr.init(gpa, "num_var");
                 const num_var_str = int_expr.num_var.allocPrint(gpa);
                 defer gpa.free(num_var_str);
-                num_var_node.appendStringChild(gpa, num_var_str);
-                int_node.appendNodeChild(gpa, &num_var_node);
+                num_var_node.appendString(gpa, num_var_str);
+                int_node.appendNode(gpa, &num_var_node);
 
                 // Add precision_var
                 var prec_var_node = sexpr.Expr.init(gpa, "precision_var");
                 const prec_var_str = int_expr.precision_var.allocPrint(gpa);
                 defer gpa.free(prec_var_str);
-                prec_var_node.appendStringChild(gpa, prec_var_str);
-                int_node.appendNodeChild(gpa, &prec_var_node);
+                prec_var_node.appendString(gpa, prec_var_str);
+                int_node.appendNode(gpa, &prec_var_node);
 
                 // Add literal
                 var literal_node = sexpr.Expr.init(gpa, "literal");
                 const literal_str = ir.env.strings.get(int_expr.literal);
-                literal_node.appendStringChild(gpa, literal_str);
-                int_node.appendNodeChild(gpa, &literal_node);
+                literal_node.appendString(gpa, literal_str);
+                int_node.appendNode(gpa, &literal_node);
 
                 // Add value info
                 var value_node = sexpr.Expr.init(gpa, "value");
-                value_node.appendStringChild(gpa, "TODO");
-                int_node.appendNodeChild(gpa, &value_node);
+                value_node.appendString(gpa, "TODO");
+                int_node.appendNode(gpa, &value_node);
 
                 // Add bound info
                 var bound_node = sexpr.Expr.init(gpa, "bound");
-                bound_node.appendStringChild(gpa, @tagName(int_expr.bound));
-                int_node.appendNodeChild(gpa, &bound_node);
+                bound_node.appendString(gpa, @tagName(int_expr.bound));
+                int_node.appendNode(gpa, &bound_node);
 
                 return int_node;
             },
@@ -498,40 +498,40 @@ pub const Expr = union(enum) {
                 var num_var_node = sexpr.Expr.init(gpa, "num_var");
                 const num_var_str = float_expr.num_var.allocPrint(gpa);
                 defer gpa.free(num_var_str);
-                num_var_node.appendStringChild(gpa, num_var_str);
-                float_node.appendNodeChild(gpa, &num_var_node);
+                num_var_node.appendString(gpa, num_var_str);
+                float_node.appendNode(gpa, &num_var_node);
 
                 // Add precision_var
                 var prec_var_node = sexpr.Expr.init(gpa, "precision_var");
                 const prec_var_str = float_expr.precision_var.allocPrint(gpa);
                 defer gpa.free(prec_var_str);
-                prec_var_node.appendStringChild(gpa, prec_var_str);
-                float_node.appendNodeChild(gpa, &prec_var_node);
+                prec_var_node.appendString(gpa, prec_var_str);
+                float_node.appendNode(gpa, &prec_var_node);
 
                 // Add literal
                 var literal_node = sexpr.Expr.init(gpa, "literal");
                 const literal = ir.env.strings.get(float_expr.literal);
-                literal_node.appendStringChild(gpa, literal);
-                float_node.appendNodeChild(gpa, &literal_node);
+                literal_node.appendString(gpa, literal);
+                float_node.appendNode(gpa, &literal_node);
 
                 // Add value
                 var value_node = sexpr.Expr.init(gpa, "value");
                 const value_str = std.fmt.allocPrint(gpa, "{d}", .{float_expr.value}) catch |err| exitOnOom(err);
                 defer gpa.free(value_str);
-                value_node.appendStringChild(gpa, value_str);
-                float_node.appendNodeChild(gpa, &value_node);
+                value_node.appendString(gpa, value_str);
+                float_node.appendNode(gpa, &value_node);
 
                 // Add bound info
                 var bound_node = sexpr.Expr.init(gpa, "bound");
-                bound_node.appendStringChild(gpa, @tagName(float_expr.bound));
-                float_node.appendNodeChild(gpa, &bound_node);
+                bound_node.appendString(gpa, @tagName(float_expr.bound));
+                float_node.appendNode(gpa, &bound_node);
 
                 return float_node;
             },
             .str_segment => |str_idx| {
                 const value = ir.env.strings.get(str_idx);
                 var str_node = sexpr.Expr.init(gpa, "literal");
-                str_node.appendStringChild(gpa, value);
+                str_node.appendString(gpa, value);
                 return str_node;
             },
             .str => |segment_span| {
@@ -539,7 +539,7 @@ pub const Expr = union(enum) {
 
                 for (ir.store.sliceExpr(segment_span)) |segment| {
                     var segment_node = ir.store.getExpr(segment).toSExpr(ir);
-                    str_node.appendNodeChild(gpa, &segment_node);
+                    str_node.appendNode(gpa, &segment_node);
                 }
 
                 return str_node;
@@ -551,27 +551,27 @@ pub const Expr = union(enum) {
                 var num_var_node = sexpr.Expr.init(gpa, "num_var");
                 const num_var_str = e.num_var.allocPrint(gpa);
                 defer gpa.free(num_var_str);
-                num_var_node.appendStringChild(gpa, num_var_str);
-                single_quote_node.appendNodeChild(gpa, &num_var_node);
+                num_var_node.appendString(gpa, num_var_str);
+                single_quote_node.appendNode(gpa, &num_var_node);
 
                 // Add precision_var
                 var prec_var_node = sexpr.Expr.init(gpa, "precision_var");
                 const prec_var_str = e.precision_var.allocPrint(gpa);
                 defer gpa.free(prec_var_str);
-                prec_var_node.appendStringChild(gpa, prec_var_str);
-                single_quote_node.appendNodeChild(gpa, &prec_var_node);
+                prec_var_node.appendString(gpa, prec_var_str);
+                single_quote_node.appendNode(gpa, &prec_var_node);
 
                 // Add value
                 var value_node = sexpr.Expr.init(gpa, "value");
                 const value_str = std.fmt.allocPrint(gpa, "'\\u{{{x}}}'", .{e.value}) catch |err| exitOnOom(err);
                 defer gpa.free(value_str);
-                value_node.appendStringChild(gpa, value_str);
-                single_quote_node.appendNodeChild(gpa, &value_node);
+                value_node.appendString(gpa, value_str);
+                single_quote_node.appendNode(gpa, &value_node);
 
                 // Add bound info
                 var bound_node = sexpr.Expr.init(gpa, "bound");
-                bound_node.appendStringChild(gpa, @tagName(e.bound));
-                single_quote_node.appendNodeChild(gpa, &bound_node);
+                bound_node.appendString(gpa, @tagName(e.bound));
+                single_quote_node.appendNode(gpa, &bound_node);
 
                 return single_quote_node;
             },
@@ -582,14 +582,14 @@ pub const Expr = union(enum) {
                 var elem_var_node = sexpr.Expr.init(gpa, "elem_var");
                 const elem_var_str = l.elem_var.allocPrint(gpa);
                 defer gpa.free(elem_var_str);
-                elem_var_node.appendStringChild(gpa, elem_var_str);
-                list_node.appendNodeChild(gpa, &elem_var_node);
+                elem_var_node.appendString(gpa, elem_var_str);
+                list_node.appendNode(gpa, &elem_var_node);
 
                 // TODO print list elems
                 // implement proper span access when collection is available
                 var elems_node = sexpr.Expr.init(gpa, "elems");
-                elems_node.appendStringChild(gpa, "TODO each element");
-                list_node.appendNodeChild(gpa, &elems_node);
+                elems_node.appendString(gpa, "TODO each element");
+                list_node.appendNode(gpa, &elems_node);
 
                 return list_node;
             },
@@ -601,14 +601,14 @@ pub const Expr = union(enum) {
                 const pattern_idx_str = std.fmt.allocPrint(gpa, "{}", .{@intFromEnum(l.pattern_idx)}) catch |err| exitOnOom(err);
                 defer gpa.free(pattern_idx_str);
 
-                ident_node.appendStringChild(gpa, pattern_idx_str);
-                lookup_node.appendNodeChild(gpa, &ident_node);
+                ident_node.appendString(gpa, pattern_idx_str);
+                lookup_node.appendNode(gpa, &ident_node);
 
                 return lookup_node;
             },
             .when => |_| {
                 var when_branch_node = sexpr.Expr.init(gpa, "when");
-                when_branch_node.appendStringChild(gpa, "TODO when branch");
+                when_branch_node.appendString(gpa, "TODO when branch");
 
                 return when_branch_node;
             },
@@ -619,15 +619,15 @@ pub const Expr = union(enum) {
                 var cond_var_node = sexpr.Expr.init(gpa, "cond_var");
                 const cond_var_str = if_expr.cond_var.allocPrint(gpa);
                 defer gpa.free(cond_var_str);
-                cond_var_node.appendStringChild(gpa, cond_var_str);
-                if_node.appendNodeChild(gpa, &cond_var_node);
+                cond_var_node.appendString(gpa, cond_var_str);
+                if_node.appendNode(gpa, &cond_var_node);
 
                 // Add branch_var
                 var branch_var_node = sexpr.Expr.init(gpa, "branch_var");
                 const branch_var_str = if_expr.branch_var.allocPrint(gpa);
                 defer gpa.free(branch_var_str);
-                branch_var_node.appendStringChild(gpa, branch_var_str);
-                if_node.appendNodeChild(gpa, &branch_var_node);
+                branch_var_node.appendString(gpa, branch_var_str);
+                if_node.appendNode(gpa, &branch_var_node);
 
                 // Add branches
                 // const if_branch_slice = ir.store.sliceIfBranch(if_expr.branches);
@@ -638,25 +638,25 @@ pub const Expr = union(enum) {
                 // var cond_node = cond.toSExpr(env, ir);
                 // var body_node = body.toSExpr(env, ir);
                 // var branch_node = sexpr.Expr.init(gpa, "branch");
-                // branch_node.appendNodeChild(gpa, &cond_node);
-                // branch_node.appendNodeChild(gpa, &body_node);
-                // branches_node.appendNodeChild(gpa, &branch_node);
+                // branch_node.appendNode(gpa, &cond_node);
+                // branch_node.appendNode(gpa, &body_node);
+                // branches_node.appendNode(gpa, &branch_node);
                 // }
-                // node.appendNodeChild(gpa, &branches_node);
+                // node.appendNode(gpa, &branches_node);
 
                 // var else_node = sexpr.Expr.init(gpa, "else");
                 // const final_else_expr = ir.exprs_at_regions.get(i.final_else);
                 // var else_sexpr = final_else_expr.toSExpr(env, ir);
-                // else_node.appendNodeChild(gpa, &else_sexpr);
-                // node.appendNodeChild(gpa, &else_node);
-                branches_node.appendStringChild(gpa, "TODO: access if branches");
-                if_node.appendNodeChild(gpa, &branches_node);
+                // else_node.appendNode(gpa, &else_sexpr);
+                // node.appendNode(gpa, &else_node);
+                branches_node.appendString(gpa, "TODO: access if branches");
+                if_node.appendNode(gpa, &branches_node);
 
                 // Add final_else
                 var else_node = sexpr.Expr.init(gpa, "else");
                 // TODO: Implement proper final_else access
-                else_node.appendStringChild(gpa, "TODO: access final else");
-                if_node.appendNodeChild(gpa, &else_node);
+                else_node.appendString(gpa, "TODO: access final else");
+                if_node.appendNode(gpa, &else_node);
 
                 return if_node;
             },
@@ -670,7 +670,7 @@ pub const Expr = union(enum) {
                 if (all_exprs.len > 0) {
                     const fn_expr = ir.store.getExpr(all_exprs[0]);
                     var fn_node = fn_expr.toSExpr(ir);
-                    call_node.appendNodeChild(gpa, &fn_node);
+                    call_node.appendNode(gpa, &fn_node);
                 }
 
                 // Remaining elements are the arguments
@@ -678,7 +678,7 @@ pub const Expr = union(enum) {
                     for (all_exprs[1..]) |arg_idx| {
                         const arg_expr = ir.store.getExpr(arg_idx);
                         var arg_node = arg_expr.toSExpr(ir);
-                        call_node.appendNodeChild(gpa, &arg_node);
+                        call_node.appendNode(gpa, &arg_node);
                     }
                 }
 
@@ -691,13 +691,13 @@ pub const Expr = union(enum) {
                 var record_var_node = sexpr.Expr.init(gpa, "record_var");
                 const record_var_str = record_expr.record_var.allocPrint(gpa);
                 defer gpa.free(record_var_str);
-                record_var_node.appendStringChild(gpa, record_var_str);
-                record_node.appendNodeChild(gpa, &record_var_node);
+                record_var_node.appendString(gpa, record_var_str);
+                record_node.appendNode(gpa, &record_var_node);
 
                 // TODO: Add fields when implemented
                 var fields_node = sexpr.Expr.init(gpa, "fields");
-                fields_node.appendStringChild(gpa, "TODO");
-                record_node.appendNodeChild(gpa, &fields_node);
+                fields_node.appendString(gpa, "TODO");
+                record_node.appendNode(gpa, &fields_node);
 
                 return record_node;
             },
@@ -711,33 +711,33 @@ pub const Expr = union(enum) {
                 var record_var_node = sexpr.Expr.init(gpa, "record_var");
                 const record_var_str = access_expr.record_var.allocPrint(gpa);
                 defer gpa.free(record_var_str);
-                record_var_node.appendStringChild(gpa, record_var_str);
-                access_node.appendNodeChild(gpa, &record_var_node);
+                record_var_node.appendString(gpa, record_var_str);
+                access_node.appendNode(gpa, &record_var_node);
 
                 // Add ext_var
                 var ext_var_node = sexpr.Expr.init(gpa, "ext_var");
                 const ext_var_str = access_expr.ext_var.allocPrint(gpa);
                 defer gpa.free(ext_var_str);
-                ext_var_node.appendStringChild(gpa, ext_var_str);
-                access_node.appendNodeChild(gpa, &ext_var_node);
+                ext_var_node.appendString(gpa, ext_var_str);
+                access_node.appendNode(gpa, &ext_var_node);
 
                 // Add field_var
                 var field_var_node = sexpr.Expr.init(gpa, "field_var");
                 const field_var_str = access_expr.field_var.allocPrint(gpa);
                 defer gpa.free(field_var_str);
-                field_var_node.appendStringChild(gpa, field_var_str);
-                access_node.appendNodeChild(gpa, &field_var_node);
+                field_var_node.appendString(gpa, field_var_str);
+                access_node.appendNode(gpa, &field_var_node);
 
                 // Add loc_expr
                 var loc_expr = ir.store.getExpr(access_expr.loc_expr);
                 var loc_expr_node = loc_expr.toSExpr(ir);
-                access_node.appendNodeChild(gpa, &loc_expr_node);
+                access_node.appendNode(gpa, &loc_expr_node);
 
                 // Add field
                 var field_node = sexpr.Expr.init(gpa, "field");
                 const field_str = ir.env.idents.getText(access_expr.field);
-                field_node.appendStringChild(gpa, field_str);
-                access_node.appendNodeChild(gpa, &field_node);
+                field_node.appendString(gpa, field_str);
+                access_node.appendNode(gpa, &field_node);
 
                 return access_node;
             },
@@ -748,27 +748,27 @@ pub const Expr = union(enum) {
                 var tag_union_var_node = sexpr.Expr.init(gpa, "tag_union_var");
                 const tag_union_var_str = tag_expr.tag_union_var.allocPrint(gpa);
                 defer gpa.free(tag_union_var_str);
-                tag_union_var_node.appendStringChild(gpa, tag_union_var_str);
-                tag_node.appendNodeChild(gpa, &tag_union_var_node);
+                tag_union_var_node.appendString(gpa, tag_union_var_str);
+                tag_node.appendNode(gpa, &tag_union_var_node);
 
                 // Add ext_var
                 var ext_var_node = sexpr.Expr.init(gpa, "ext_var");
                 const ext_var_str = tag_expr.ext_var.allocPrint(gpa);
                 defer gpa.free(ext_var_str);
-                ext_var_node.appendStringChild(gpa, ext_var_str);
-                tag_node.appendNodeChild(gpa, &ext_var_node);
+                ext_var_node.appendString(gpa, ext_var_str);
+                tag_node.appendNode(gpa, &ext_var_node);
 
                 // Add name
                 var name_node = sexpr.Expr.init(gpa, "name");
                 const name_str = ir.env.idents.getText(tag_expr.name);
-                name_node.appendStringChild(gpa, name_str);
-                tag_node.appendNodeChild(gpa, &name_node);
+                name_node.appendString(gpa, name_str);
+                tag_node.appendNode(gpa, &name_node);
 
                 // Add args
                 var args_node = sexpr.Expr.init(gpa, "args");
                 // const args_slice = ir.typed_exprs_at_regions.rangeToSlice(tag_expr.args);
-                args_node.appendStringChild(gpa, "TODO");
-                tag_node.appendNodeChild(gpa, &args_node);
+                args_node.appendString(gpa, "TODO");
+                tag_node.appendNode(gpa, &args_node);
 
                 return tag_node;
             },
@@ -778,44 +778,44 @@ pub const Expr = union(enum) {
                 // Add closure_name
                 var closure_name_node = sexpr.Expr.init(gpa, "closure_name");
                 const closure_name_str = ir.env.idents.getText(tag_expr.closure_name);
-                closure_name_node.appendStringChild(gpa, closure_name_str);
-                tag_node.appendNodeChild(gpa, &closure_name_node);
+                closure_name_node.appendString(gpa, closure_name_str);
+                tag_node.appendNode(gpa, &closure_name_node);
 
                 // Add variant_var
                 var variant_var_node = sexpr.Expr.init(gpa, "variant_var");
                 const variant_var_str = tag_expr.variant_var.allocPrint(gpa);
                 defer gpa.free(variant_var_str);
-                variant_var_node.appendStringChild(gpa, variant_var_str);
-                tag_node.appendNodeChild(gpa, &variant_var_node);
+                variant_var_node.appendString(gpa, variant_var_str);
+                tag_node.appendNode(gpa, &variant_var_node);
 
                 // Add ext_var
                 var ext_var_node = sexpr.Expr.init(gpa, "ext_var");
                 const ext_var_str = tag_expr.ext_var.allocPrint(gpa);
                 defer gpa.free(ext_var_str);
-                ext_var_node.appendStringChild(gpa, ext_var_str);
-                tag_node.appendNodeChild(gpa, &ext_var_node);
+                ext_var_node.appendString(gpa, ext_var_str);
+                tag_node.appendNode(gpa, &ext_var_node);
 
                 // Add name
                 var name_node = sexpr.Expr.init(gpa, "name");
                 const name_str = ir.env.idents.getText(tag_expr.name);
-                name_node.appendStringChild(gpa, name_str);
-                tag_node.appendNodeChild(gpa, &name_node);
+                name_node.appendString(gpa, name_str);
+                tag_node.appendNode(gpa, &name_node);
 
                 return tag_node;
             },
             .binop => |e| {
                 var binop_node = sexpr.Expr.init(gpa, "binop");
-                binop_node.appendStringChild(gpa, @tagName(e.op));
+                binop_node.appendString(gpa, @tagName(e.op));
                 var lhs_node = ir.store.getExpr(e.lhs).toSExpr(ir);
                 var rhs_node = ir.store.getExpr(e.rhs).toSExpr(ir);
-                binop_node.appendNodeChild(gpa, &lhs_node);
-                binop_node.appendNodeChild(gpa, &rhs_node);
+                binop_node.appendNode(gpa, &lhs_node);
+                binop_node.appendNode(gpa, &rhs_node);
                 return binop_node;
             },
             .runtime_error => |e| {
                 var runtime_err_node = sexpr.Expr.init(gpa, "runtime_error");
 
-                runtime_err_node.appendRegionChild(gpa, ir.regionInfoFromPositionOffsets(e.region));
+                runtime_err_node.appendRegionInfo(gpa, ir.regionInfoFromPositionOffsets(e.region));
 
                 var buf = std.ArrayList(u8).init(gpa);
                 defer buf.deinit();
@@ -823,7 +823,7 @@ pub const Expr = union(enum) {
                 buf.writer().writeAll("RUNTIME ERROR ") catch |err| exitOnOom(err);
                 buf.writer().writeAll(@tagName(e.tag)) catch |err| exitOnOom(err);
 
-                runtime_err_node.appendStringChild(gpa, buf.items);
+                runtime_err_node.appendString(gpa, buf.items);
 
                 return runtime_err_node;
             },
@@ -850,10 +850,10 @@ pub const IngestedFile = struct {
         _ = line_starts;
         const gpa = ir.env.gpa;
         var node = sexpr.Expr.init(gpa, "ingested_file");
-        node.appendStringChild(gpa, "path"); // TODO: use self.relative_path
-        appendIdentChild(&node, gpa, ir.env, "ident", self.ident);
+        node.appendString(gpa, "path"); // TODO: use self.relative_path
+        appendIdent(&node, gpa, ir.env, "ident", self.ident);
         var type_node = self.type.toSExpr(ir);
-        node.appendNodeChild(gpa, &type_node);
+        node.appendNode(gpa, &type_node);
         return node;
     }
 };
@@ -938,32 +938,32 @@ pub const Def = struct {
         var node = sexpr.Expr.init(gpa, "def");
 
         var kind_node = self.kind.toSExpr(gpa);
-        node.appendNodeChild(gpa, &kind_node);
+        node.appendNode(gpa, &kind_node);
 
         var pattern_node = sexpr.Expr.init(gpa, "pattern");
-        pattern_node.appendRegionChild(gpa, ir.regionInfoFromPositionOffsets(self.pattern_region));
+        pattern_node.appendRegionInfo(gpa, ir.regionInfoFromPositionOffsets(self.pattern_region));
 
         const pattern = ir.store.getPattern(self.pattern);
         var pattern_sexpr = pattern.toSExpr(ir);
-        pattern_node.appendNodeChild(gpa, &pattern_sexpr);
-        node.appendNodeChild(gpa, &pattern_node);
+        pattern_node.appendNode(gpa, &pattern_sexpr);
+        node.appendNode(gpa, &pattern_node);
 
         var expr_node = sexpr.Expr.init(gpa, "expr");
-        expr_node.appendRegionChild(gpa, ir.regionInfoFromPositionOffsets(self.expr_region));
+        expr_node.appendRegionInfo(gpa, ir.regionInfoFromPositionOffsets(self.expr_region));
 
         const expr = ir.store.getExpr(self.expr);
         var expr_sexpr = expr.toSExpr(ir);
-        expr_node.appendNodeChild(gpa, &expr_sexpr);
-        node.appendNodeChild(gpa, &expr_node);
+        expr_node.appendNode(gpa, &expr_sexpr);
+        node.appendNode(gpa, &expr_node);
 
         const expr_var = self.expr_var.allocPrint(gpa);
         defer gpa.free(expr_var);
-        node.appendStringChild(gpa, expr_var);
+        node.appendString(gpa, expr_var);
 
         if (self.annotation) |anno_idx| {
             _ = anno_idx; // TODO: implement annotation lookup
             // var anno_node = anno.toSExpr(env, ir);
-            // node.appendNodeChild(env.gpa, &anno_node);
+            // node.appendNode(env.gpa, &anno_node);
         }
 
         return node;
@@ -1007,12 +1007,12 @@ pub const ExprAtRegion = struct {
         const gpa = ir.env.gpa;
         var node = sexpr.Expr.init(gpa, "expr_at_region");
 
-        node.appendRegionChild(gpa, self.region);
+        node.appendRegionInfo(gpa, ir.regionInfoFromPositionOffsets(self.region));
 
         const expr = ir.store.getExpr(self.expr);
         var expr_sexpr = expr.toSExpr(ir, line_starts);
 
-        node.appendNodeChild(gpa, &expr_sexpr);
+        node.appendNode(gpa, &expr_sexpr);
 
         return expr.toSExpr(ir, line_starts);
     }
@@ -1031,10 +1031,10 @@ pub const TypedExprAtRegion = struct {
         const gpa = ir.env.gpa;
 
         var typed_expr_node = sexpr.Expr.init(gpa, "typed_expr_at_region");
-        typed_expr_node.appendRegionChild(gpa, ir.regionInfoFromPositionOffsets(self.region));
+        typed_expr_node.appendRegionInfo(gpa, ir.regionInfoFromPositionOffsets(self.region));
 
         const expr = ir.store.getExpr(self.expr);
-        typed_expr_node.appendNodeChild(gpa, &expr.toSExpr(ir));
+        typed_expr_node.appendNode(gpa, &expr.toSExpr(ir));
 
         return typed_expr_node;
     }
@@ -1084,28 +1084,28 @@ pub const When = struct {
         const gpa = ir.env.gpa;
         var node = sexpr.Expr.init(gpa, "when");
 
-        node.appendRegionChild(gpa, self.region);
+        node.appendRegionInfo(gpa, self.region);
 
         var cond_node = sexpr.Expr.init(gpa, "cond");
         const cond_expr = ir.store.getExpr(self.loc_cond);
         var cond_sexpr = cond_expr.toSExpr(ir, line_starts);
-        cond_node.appendNodeChild(gpa, &cond_sexpr);
+        cond_node.appendNode(gpa, &cond_sexpr);
 
-        node.appendNodeChild(gpa, &cond_node);
+        node.appendNode(gpa, &cond_node);
 
-        appendTypeVarChild(&node, gpa, "cond_var", self.cond_var);
-        appendTypeVarChild(&node, gpa, "expr_var", self.expr_var);
-        appendTypeVarChild(&node, gpa, "branches_cond_var", self.branches_cond_var);
-        appendTypeVarChild(&node, gpa, "exhaustive_mark", self.exhaustive);
+        appendTypeVar(&node, gpa, "cond_var", self.cond_var);
+        appendTypeVar(&node, gpa, "expr_var", self.expr_var);
+        appendTypeVar(&node, gpa, "branches_cond_var", self.branches_cond_var);
+        appendTypeVar(&node, gpa, "exhaustive_mark", self.exhaustive);
 
         var branches_node = sexpr.Expr.init(gpa, "branches");
         for (ir.store.whenBranchSlice(self.branches)) |branch_idx| {
             const branch = ir.store.getWhenBranch(branch_idx);
 
             var branch_sexpr = branch.toSExpr(ir);
-            branches_node.appendNodeChild(gpa, &branch_sexpr);
+            branches_node.appendNode(gpa, &branch_sexpr);
         }
-        node.appendNodeChild(gpa, &branches_node);
+        node.appendNode(gpa, &branches_node);
 
         return node;
     }
@@ -1127,9 +1127,9 @@ pub const WhenBranchPattern = struct {
         const gpa = ir.gpa;
         var node = sexpr.Expr.init(gpa, "when_branch_pattern");
         var pattern_sexpr = self.pattern.toSExpr(ir);
-        node.appendNodeChild(gpa, &pattern_sexpr);
+        node.appendNode(gpa, &pattern_sexpr);
         if (self.degenerate) {
-            node.appendStringChild(gpa, "degenerate=true");
+            node.appendString(gpa, "degenerate=true");
         }
         return node;
     }
@@ -1152,23 +1152,23 @@ pub const WhenBranch = struct {
         // Assuming `ir.when_branch_patterns` exists:
         // for (ir.when_branch_patterns.getSlice(self.patterns)) |patt| {
         //     var patt_sexpr = patt.toSExpr(env, ir);
-        //     patterns_node.appendNodeChild(gpa, &patt_sexpr);
+        //     patterns_node.appendNode(gpa, &patt_sexpr);
         // }
-        patterns_node.appendStringChild(gpa, "TODO: Store and represent WhenBranchPattern slice");
-        node.appendNodeChild(gpa, &patterns_node);
+        patterns_node.appendString(gpa, "TODO: Store and represent WhenBranchPattern slice");
+        node.appendNode(gpa, &patterns_node);
 
         var value_node = sexpr.Expr.init(gpa, "value");
         const value_expr = ir.exprs_at_regions.get(self.value);
         var value_sexpr = value_expr.toSExpr(ir, line_starts);
-        value_node.appendNodeChild(gpa, &value_sexpr);
-        node.appendNodeChild(gpa, &value_node);
+        value_node.appendNode(gpa, &value_sexpr);
+        node.appendNode(gpa, &value_node);
 
         if (self.guard) |guard_idx| {
             var guard_node = sexpr.Expr.init(gpa, "guard");
             const guard_expr = ir.exprs_at_regions.get(guard_idx);
             var guard_sexpr = guard_expr.toSExpr(ir, line_starts);
-            guard_node.appendNodeChild(gpa, &guard_sexpr);
-            node.appendNodeChild(gpa, &guard_node);
+            guard_node.appendNode(gpa, &guard_sexpr);
+            node.appendNode(gpa, &guard_node);
         }
 
         return node;
@@ -1250,34 +1250,34 @@ pub const Pattern = union(enum) {
         switch (self.*) {
             .assign => |ident_idx| {
                 var node = sexpr.Expr.init(gpa, "assign");
-                appendIdentChild(&node, gpa, ir, "ident", ident_idx);
+                appendIdent(&node, gpa, ir, "ident", ident_idx);
                 return node;
             },
             .as => |a| {
                 var node = sexpr.Expr.init(gpa, "as");
-                node.appendRegionChild(gpa, ir.regionInfoFromPositionOffsets(a.region));
-                appendIdentChild(&node, gpa, ir, "ident", a.ident);
+                node.appendRegionInfo(gpa, ir.regionInfoFromPositionOffsets(a.region));
+                appendIdent(&node, gpa, ir, "ident", a.ident);
                 var inner_patt_node = sexpr.Expr.init(gpa, "pattern");
                 const inner_patt = ir.store.getPattern(a.pattern);
                 var inner_patt_sexpr = inner_patt.toSExpr(ir);
-                inner_patt_node.appendNodeChild(gpa, &inner_patt_sexpr);
-                node.appendNodeChild(gpa, &inner_patt_node);
+                inner_patt_node.appendNode(gpa, &inner_patt_sexpr);
+                node.appendNode(gpa, &inner_patt_node);
                 return node;
             },
             .applied_tag => |_| {
                 @panic("TODO pattern applied_tag");
                 // var node = sexpr.Expr.init(gpa, "pattern_applied_tag");
-                // appendIdentChild(&node, gpa, ir, "tag_name", t.tag_name);
+                // appendIdent(&node, gpa, ir, "tag_name", t.tag_name);
                 // var args_node = sexpr.Expr.init(gpa, "arguments");
                 // ir.store.pa
                 // for (ir.patterns_at_regions.rangeToSlice(t.arguments).items(.pattern), ir.typed_patterns_at_regions.rangeToSlice(t.arguments).items(.type_var)) |arg, type_var| {
                 //     var arg_sexpr = ir.patterns.get(arg).toSExpr(ir);
                 //     var pat_ty_var = sexpr.Expr.init(gpa, "argty");
-                //     pat_ty_var.appendNodeChild(gpa, &arg_sexpr);
+                //     pat_ty_var.appendNode(gpa, &arg_sexpr);
                 //     pat_ty_var.appendUnsignedIntChild(gpa, @intFromEnum(type_var)); // TODO: use a type var name or something
-                //     args_node.appendNodeChild(gpa, &pat_ty_var);
+                //     args_node.appendNode(gpa, &pat_ty_var);
                 // }
-                // node.appendNodeChild(gpa, &args_node);
+                // node.appendNode(gpa, &args_node);
                 // return node;
             },
             .record_destructure => {
@@ -1287,10 +1287,10 @@ pub const Pattern = union(enum) {
                 // Assuming ir.record_destructs exists:
                 // for (ir.record_destructs.getSlice(r.destructs)) |destruct| {
                 //     var d_sexpr = destruct.toSExpr(env, ir);
-                //     destructs_node.appendNodeChild(gpa, &d_sexpr);
+                //     destructs_node.appendNode(gpa, &d_sexpr);
                 // }
-                destructs_node.appendStringChild(gpa, "TODO: Store and represent RecordDestruct slice");
-                node.appendNodeChild(gpa, &destructs_node);
+                destructs_node.appendString(gpa, "TODO: Store and represent RecordDestruct slice");
+                node.appendNode(gpa, &destructs_node);
                 return node;
             },
             .list => |l| {
@@ -1300,48 +1300,48 @@ pub const Pattern = union(enum) {
                 for (ir.store.slicePatterns(l.patterns)) |patt_idx| {
                     const patt = ir.store.getPattern(patt_idx);
                     var patt_sexpr = patt.toSExpr(ir);
-                    patterns_node.appendNodeChild(gpa, &patt_sexpr);
+                    patterns_node.appendNode(gpa, &patt_sexpr);
                 }
 
-                pattern_list_node.appendNodeChild(gpa, &patterns_node);
+                pattern_list_node.appendNode(gpa, &patterns_node);
 
                 return pattern_list_node;
             },
             .num_literal => |l| {
                 var node = sexpr.Expr.init(gpa, "num");
-                node.appendStringChild(gpa, "literal"); // TODO: use l.literal
-                node.appendStringChild(gpa, "value=<int_value>");
-                node.appendStringChild(gpa, @tagName(l.bound));
+                node.appendString(gpa, "literal"); // TODO: use l.literal
+                node.appendString(gpa, "value=<int_value>");
+                node.appendString(gpa, @tagName(l.bound));
                 return node;
             },
             .int_literal => |l| {
                 var node = sexpr.Expr.init(gpa, "int");
-                node.appendStringChild(gpa, "literal"); // TODO: use l.literal
-                node.appendStringChild(gpa, "value=<int_value>");
-                node.appendStringChild(gpa, @tagName(l.bound));
+                node.appendString(gpa, "literal"); // TODO: use l.literal
+                node.appendString(gpa, "value=<int_value>");
+                node.appendString(gpa, @tagName(l.bound));
                 return node;
             },
             .float_literal => |l| {
                 var node = sexpr.Expr.init(gpa, "float");
-                node.appendStringChild(gpa, "literal"); // TODO: use l.literal
+                node.appendString(gpa, "literal"); // TODO: use l.literal
                 const val_str = std.fmt.allocPrint(gpa, "{d}", .{l.value}) catch "<oom>";
                 defer gpa.free(val_str);
-                node.appendStringChild(gpa, val_str);
-                node.appendStringChild(gpa, @tagName(l.bound));
+                node.appendString(gpa, val_str);
+                node.appendString(gpa, @tagName(l.bound));
                 return node;
             },
             .str_literal => |str_idx| {
                 _ = str_idx; // str_idx not used currently, but keep for signature consistency
                 var node = sexpr.Expr.init(gpa, "str");
-                node.appendStringChild(gpa, "value"); // TODO: use str_idx
+                node.appendString(gpa, "value"); // TODO: use str_idx
                 return node;
             },
             .char_literal => |l| {
                 var node = sexpr.Expr.init(gpa, "char");
                 const char_str = std.fmt.allocPrint(gpa, "'\\u({d})'", .{l.value}) catch "<oom>";
                 defer gpa.free(char_str);
-                node.appendStringChild(gpa, char_str);
-                node.appendStringChild(gpa, @tagName(l.bound));
+                node.appendString(gpa, char_str);
+                node.appendString(gpa, @tagName(l.bound));
                 return node;
             },
             .Underscore => return sexpr.Expr.init(gpa, "underscore"),
@@ -1361,11 +1361,11 @@ pub const PatternAtRegion = struct {
         const gpa = ir.env.gpa;
 
         var pattern_node = sexpr.Expr.init(gpa, "pattern_at_region");
-        pattern_node.appendRegionChild(gpa, self.region);
+        pattern_node.appendRegionInfo(gpa, self.region);
 
         const pattern = ir.patterns.get(self.pattern);
         var pattern_sexpr = pattern.toSExpr(ir, line_starts);
-        pattern_node.appendNodeChild(gpa, &pattern_sexpr);
+        pattern_node.appendNode(gpa, &pattern_sexpr);
 
         return pattern_node;
     }
@@ -1384,11 +1384,11 @@ pub const TypedPatternAtRegion = struct {
         const gpa = ir.env.gpa;
 
         var type_pattern_node = sexpr.Expr.init(gpa, "typed_pattern_at_region");
-        type_pattern_node.appendRegionChild(gpa, self.region);
+        type_pattern_node.appendRegionInfo(gpa, self.region);
 
         const pattern = ir.patterns.get(self.pattern);
         var pattern_sexpr = pattern.toSExpr(ir);
-        type_pattern_node.appendNodeChild(gpa, &pattern_sexpr);
+        type_pattern_node.appendNode(gpa, &pattern_sexpr);
 
         return type_pattern_node;
     }
@@ -1420,7 +1420,7 @@ pub const RecordDestruct = struct {
 
                     const guard_patt = ir.typed_patterns_at_regions.get(guard_idx);
                     var guard_sexpr = guard_patt.toSExpr(ir.env, ir, line_starts);
-                    guard_kind_node.appendNodeChild(gpa, &guard_sexpr);
+                    guard_kind_node.appendNode(gpa, &guard_sexpr);
 
                     return guard_kind_node;
                 },
@@ -1433,14 +1433,14 @@ pub const RecordDestruct = struct {
 
         var record_destruct_node = sexpr.Expr.init(gpa, "record_destruct");
 
-        record_destruct_node.appendTypeVarChild(&record_destruct_node, gpa, "type_var", self.type_var);
-        record_destruct_node.appendRegionChild(gpa, ir.regionInfoFromPositionOffsets(self.region));
+        record_destruct_node.appendTypeVar(&record_destruct_node, gpa, "type_var", self.type_var);
+        record_destruct_node.appendRegionInfo(gpa, ir.regionInfoFromPositionOffsets(self.region));
 
-        appendIdentChild(&record_destruct_node, gpa, ir, "label", self.label);
-        appendIdentChild(&record_destruct_node, gpa, ir, "ident", self.ident);
+        appendIdent(&record_destruct_node, gpa, ir, "label", self.label);
+        appendIdent(&record_destruct_node, gpa, ir, "ident", self.ident);
 
         var kind_node = self.kind.toSExpr(ir);
-        record_destruct_node.appendNodeChild(gpa, &kind_node);
+        record_destruct_node.appendNode(gpa, &kind_node);
 
         return record_destruct_node;
     }
@@ -1477,16 +1477,16 @@ pub fn toSExprStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr.Idx)
         const defs_slice = ir.store.sliceDefs(ir.top_level_defs);
 
         if (defs_slice.len == 0) {
-            defs_node.appendStringChild(gpa, "empty");
+            defs_node.appendString(gpa, "empty");
         }
 
         for (defs_slice) |def_idx| {
             const d = ir.store.getDef(def_idx);
             var def_node = d.toSExpr(ir);
-            defs_node.appendNodeChild(gpa, &def_node);
+            defs_node.appendNode(gpa, &def_node);
         }
 
-        root_node.appendNodeChild(gpa, &defs_node);
+        root_node.appendNode(gpa, &defs_node);
 
         root_node.toStringPretty(writer);
     }

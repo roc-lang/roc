@@ -30,8 +30,8 @@ LowerIdent(2:1-2:2),CloseRound(2:2-2:3),CloseStringInterpolation(2:3-2:4),String
 (string
 	(literal "This is a string with ")
 	(call
-		(runtime_error (1:4-1:4) "RUNTIME ERROR ident_not_in_scope")
-		(runtime_error (1:6-1:6) "RUNTIME ERROR ident_not_in_scope")
-		(runtime_error (1:9-1:9) "RUNTIME ERROR ident_not_in_scope"))
+		(runtime_error (1:26-1:35) "RUNTIME ERROR ident_not_in_scope")
+		(runtime_error (1:36-1:37) "RUNTIME ERROR ident_not_in_scope")
+		(runtime_error (2:1-2:2) "RUNTIME ERROR ident_not_in_scope"))
 	(literal " lines of text due to the template parts"))
 ~~~END

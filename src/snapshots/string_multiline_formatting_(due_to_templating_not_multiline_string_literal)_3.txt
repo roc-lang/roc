@@ -33,8 +33,8 @@ NO CHANGE
 (string
 	(literal "This is a string with ")
 	(call
-		(runtime_error (1:5-1:5) "RUNTIME ERROR ident_not_in_scope")
-		(runtime_error (1:8-1:8) "RUNTIME ERROR ident_not_in_scope")
-		(runtime_error (1:11-1:11) "RUNTIME ERROR ident_not_in_scope"))
+		(runtime_error (2:2-2:11) "RUNTIME ERROR ident_not_in_scope")
+		(runtime_error (3:3-3:4) "RUNTIME ERROR ident_not_in_scope")
+		(runtime_error (4:3-4:4) "RUNTIME ERROR ident_not_in_scope"))
 	(literal " lines of text due to the template parts"))
 ~~~END

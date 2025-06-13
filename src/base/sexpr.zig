@@ -63,27 +63,27 @@ pub const Expr = union(enum) {
     }
 
     // Helper function to append a child node to a parent node
-    fn appendNodeChildUnsafe(self: *Expr, gpa: Allocator, child: Expr) void {
+    fn appendNodeUnsafe(self: *Expr, gpa: Allocator, child: Expr) void {
         switch (self.*) {
             .node => |*n| n.children.append(gpa, child) catch {
                 @panic("Failed to append child node");
             },
-            else => @panic("called appendNodeChildUnsafe on a Expr that is not a .node"),
+            else => @panic("called appendNodeUnsafe on a Expr that is not a .node"),
         }
     }
 
     /// Helper function to append a string child
     /// The value will be duplicated so that it is owned by the node
     /// and will be freed when the node is destroyed.
-    pub fn appendStringChild(self: *Expr, gpa: Allocator, value: []const u8) void {
+    pub fn appendString(self: *Expr, gpa: Allocator, value: []const u8) void {
         const owned_value = gpa.dupe(u8, value) catch {
             @panic("Failed to duplicate string value");
         };
-        self.appendNodeChildUnsafe(gpa, .{ .string = owned_value });
+        self.appendNodeUnsafe(gpa, .{ .string = owned_value });
     }
 
-    pub fn appendRegionChild(self: *Expr, gpa: Allocator, region: DiagnosticPosition) void {
-        self.appendNodeChildUnsafe(gpa, .{ .region = DiagnosticPosition{
+    pub fn appendRegionInfo(self: *Expr, gpa: Allocator, region: DiagnosticPosition) void {
+        self.appendNodeUnsafe(gpa, .{ .region = DiagnosticPosition{
             .start_line_idx = region.start_line_idx,
             .start_col_idx = region.start_col_idx,
             .end_line_idx = region.end_line_idx,
@@ -95,23 +95,23 @@ pub const Expr = union(enum) {
     }
 
     /// Helper function to append a signed integer child
-    pub fn appendSignedIntChild(self: *Expr, gpa: Allocator, value: i128) void {
-        self.appendNodeChildUnsafe(gpa, .{ .signed_int = value });
+    pub fn appendSignedInt(self: *Expr, gpa: Allocator, value: i128) void {
+        self.appendNodeUnsafe(gpa, .{ .signed_int = value });
     }
 
     /// Helper function to append an unsigned integer child
-    pub fn appendUnsignedIntChild(self: *Expr, gpa: Allocator, value: u128) void {
-        self.appendNodeChildUnsafe(gpa, .{ .unsigned_int = value });
+    pub fn appendUnsignedInt(self: *Expr, gpa: Allocator, value: u128) void {
+        self.appendNodeUnsafe(gpa, .{ .unsigned_int = value });
     }
 
     /// Helper function to append a float child
-    pub fn appendFloatChild(self: *Expr, gpa: Allocator, value: f64) void {
-        self.appendNodeChildUnsafe(gpa, .{ .float = value });
+    pub fn appendFloat(self: *Expr, gpa: Allocator, value: f64) void {
+        self.appendNodeUnsafe(gpa, .{ .float = value });
     }
 
     /// Helper function to append a node child
-    pub fn appendNodeChild(self: *Expr, gpa: Allocator, child_node: *Expr) void {
-        self.appendNodeChildUnsafe(gpa, child_node.*);
+    pub fn appendNode(self: *Expr, gpa: Allocator, child_node: *Expr) void {
+        self.appendNodeUnsafe(gpa, child_node.*);
     }
 
     /// Format the node as an S-expression formatted string
@@ -213,13 +213,13 @@ test "s-expression" {
     const gpa = testing.allocator;
 
     var baz = Expr.init(gpa, "baz");
-    baz.appendUnsignedIntChild(gpa, 456);
-    baz.appendFloatChild(gpa, 789.0);
+    baz.appendUnsignedInt(gpa, 456);
+    baz.appendFloat(gpa, 789.0);
 
     var foo = Expr.init(gpa, "foo");
-    foo.appendStringChild(gpa, "bar");
-    foo.appendSignedIntChild(gpa, -123);
-    foo.appendNodeChild(gpa, &baz);
+    foo.appendString(gpa, "bar");
+    foo.appendSignedInt(gpa, -123);
+    foo.appendNode(gpa, &baz);
 
     // Test pretty formatting
     {

@@ -10,7 +10,7 @@ const collections = @import("../../collections.zig");
 const AST = @import("AST.zig");
 const Node = @import("Node.zig");
 const Token = @import("tokenize.zig").Token;
-const Region = AST.Region;
+const Region = AST.TokenizedRegion;
 const Diagnostic = AST.Diagnostic;
 
 const sexpr = base.sexpr;
@@ -176,7 +176,7 @@ pub fn addHeader(store: *NodeStore, header: AST.Header) AST.Header.Idx {
             .lhs = 0,
             .rhs = 0,
         },
-        .region = AST.Region.empty(),
+        .region = AST.TokenizedRegion.empty(),
     };
     switch (header) {
         .app => |app| {
@@ -241,7 +241,7 @@ pub fn addExposedItem(store: *NodeStore, item: AST.ExposedItem) AST.ExposedItem.
             .lhs = 0,
             .rhs = 0,
         },
-        .region = AST.Region.empty(),
+        .region = AST.TokenizedRegion.empty(),
     };
 
     switch (item) {
@@ -285,7 +285,7 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) AST.Statement.I
             .lhs = 0,
             .rhs = 0,
         },
-        .region = AST.Region.empty(),
+        .region = AST.TokenizedRegion.empty(),
     };
     switch (statement) {
         .decl => |d| {
@@ -392,7 +392,7 @@ pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) AST.Pattern.Idx {
             .lhs = 0,
             .rhs = 0,
         },
-        .region = AST.Region.empty(),
+        .region = AST.TokenizedRegion.empty(),
     };
     switch (pattern) {
         .ident => |i| {
@@ -468,7 +468,7 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) AST.Expr.Idx {
         .tag = .statement,
         .main_token = 0,
         .data = .{ .lhs = 0, .rhs = 0 },
-        .region = AST.Region.empty(),
+        .region = AST.TokenizedRegion.empty(),
     };
     switch (expr) {
         .int => |e| {
@@ -729,7 +729,7 @@ pub fn addWhereClause(store: *NodeStore, clause: AST.WhereClause) AST.WhereClaus
             .lhs = 0,
             .rhs = 0,
         },
-        .region = AST.Region.empty(),
+        .region = AST.TokenizedRegion.empty(),
     };
 
     switch (clause) {
@@ -777,7 +777,7 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) AST.TypeAnno.Idx {
             .lhs = 0,
             .rhs = 0,
         },
-        .region = AST.Region.empty(),
+        .region = AST.TokenizedRegion.empty(),
     };
 
     switch (anno) {

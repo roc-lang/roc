@@ -17,6 +17,6 @@ NO CHANGE
 ~~~CANONICALIZE
 (string
 	(literal "Hello ")
-	(runtime_error (1:4-1:4) "RUNTIME ERROR ident_not_in_scope")
+	(runtime_error (1:10-1:14) "RUNTIME ERROR ident_not_in_scope")
 	(literal "!"))
 ~~~END
