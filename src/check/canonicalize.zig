@@ -8,8 +8,10 @@ const types = @import("../types/types.zig");
 const Scope = @import("./canonicalize/Scope.zig");
 const Alias = @import("./canonicalize/Alias.zig");
 
+const AST = parse.AST;
+
 can_ir: *CIR,
-parse_ir: *parse.IR,
+parse_ir: *AST,
 scope: *Scope,
 
 const Ident = base.Ident;
@@ -22,7 +24,7 @@ const exitOnOom = collections.utils.exitOnOom;
 const BUILTIN_NUM_ADD: CIR.Pattern.Idx = @enumFromInt(0);
 const BUILTIN_NUM_SUB: CIR.Pattern.Idx = @enumFromInt(1);
 
-pub fn init(self: *CIR, parse_ir: *parse.IR, scope: *Scope) Self {
+pub fn init(self: *CIR, parse_ir: *AST, scope: *Scope) Self {
     const gpa = self.env.gpa;
     const ident_store = &self.env.idents;
 
@@ -54,7 +56,7 @@ const Self = @This();
 /// The intermediate representation of a canonicalized Roc program.
 pub const CIR = @import("canonicalize/CIR.zig");
 
-/// After parsing a Roc program, the [ParseIR](src/check/parse/ir.zig) is transformed into a [canonical
+/// After parsing a Roc program, the [ParseIR](src/check/parse/AST.zig) is transformed into a [canonical
 /// form](src/check/canonicalize/ir.zig) called CanIR.
 ///
 /// Canonicalization performs analysis to catch user errors, and sets up the state necessary to solve the types in a
@@ -85,7 +87,9 @@ pub fn canonicalize_file(
         const stmt = self.parse_ir.store.getStatement(stmt_id);
         switch (stmt) {
             .import => |import| {
-                self.bringImportIntoScope(&import);
+                _ = import;
+                // TODO
+                // self.bringImportIntoScope(&import);
             },
             .decl => |decl| {
                 if (self.canonicalize_decl(decl)) |def_idx| {
@@ -159,7 +163,7 @@ pub fn canonicalize_file(
 
 fn canonicalize_header_exposes(
     self: *Self,
-    exposes: parse.IR.NodeStore.CollectionIdx,
+    exposes: AST.Collection.Idx,
 ) void {
     const collection = self.parse_ir.store.getCollection(exposes);
     const exposed_items = self.parse_ir.store.exposedItemSlice(.{ .span = collection.span });
@@ -188,10 +192,9 @@ fn canonicalize_header_exposes(
 
 fn bringImportIntoScope(
     self: *Self,
-    import: *const parse.IR.NodeStore.Statement.Import,
+    import: *const AST.Statement,
 ) void {
     // const gpa = self.can_ir.env.gpa;
-
     // const import_name: []u8 = &.{}; // import.module_name_tok;
     // const shorthand: []u8 = &.{}; // import.qualifier_tok;
     // const region = Region{
@@ -263,7 +266,7 @@ fn bringImportIntoScope(
 
 fn bringIngestedFileIntoScope(
     self: *Self,
-    import: *const parse.IR.Stmt.Import,
+    import: *const parse.AST.Stmt.Import,
 ) void {
     const res = self.can_ir.env.modules.getOrInsert(
         import.name,
@@ -291,7 +294,7 @@ fn bringIngestedFileIntoScope(
 
 fn canonicalize_decl(
     self: *Self,
-    decl: parse.IR.NodeStore.Statement.Decl,
+    decl: AST.Statement.Decl,
 ) ?CIR.Def.Idx {
     const pattern_idx = self.canonicalize_pattern(decl.pattern) orelse return null;
     const expr_idx = self.canonicalize_expr(decl.body) orelse return null;
@@ -314,7 +317,7 @@ fn canonicalize_decl(
 /// Canonicalize an expression.
 pub fn canonicalize_expr(
     self: *Self,
-    expr_idx: parse.IR.NodeStore.ExprIdx,
+    expr_idx: AST.Expr.Idx,
 ) ?CIR.Expr.Idx {
     const expr = self.parse_ir.store.getExpr(expr_idx);
     switch (expr) {
@@ -612,7 +615,7 @@ pub fn canonicalize_expr(
 }
 
 /// Extract string segments from parsed string parts
-fn extractStringSegments(self: *Self, parts: []const parse.IR.NodeStore.ExprIdx) CIR.Expr.Span {
+fn extractStringSegments(self: *Self, parts: []const AST.Expr.Idx) CIR.Expr.Span {
     const gpa = self.can_ir.env.gpa;
     const start = self.can_ir.store.scratchExprTop();
 
@@ -655,7 +658,7 @@ fn extractStringSegments(self: *Self, parts: []const parse.IR.NodeStore.ExprIdx)
 
 fn canonicalize_pattern(
     self: *Self,
-    pattern_idx: parse.IR.NodeStore.PatternIdx,
+    pattern_idx: AST.Pattern.Idx,
 ) ?CIR.Pattern.Idx {
     const gpa = self.can_ir.env.gpa;
     switch (self.parse_ir.store.getPattern(pattern_idx)) {

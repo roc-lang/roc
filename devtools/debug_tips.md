@@ -62,7 +62,7 @@ $ source <(cargo llvm-cov show-env --export-prefix)
 $ cargo llvm-cov clean --workspace
 $ cargo build --bin roc
 # Replace with the command you want to generate coverage for:
-$ ./target/debug/roc build yourFile.roc
+$ cargo llvm-cov run build yourFile.roc
 # To view in editor
 $ cargo llvm-cov report --lcov  --output-path lcov.info
 # To view in browser. This html report also allows you to see how many times each line of code was run. 

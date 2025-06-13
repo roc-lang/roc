@@ -1,9 +1,9 @@
 Here you can find definitions for words that are commonly used in the **compiler** along
-with links to the codebase. Check https://www.roc-lang.org/tutorial if you want to know 
+with links to the codebase. Check https://www.roc-lang.org/tutorial if you want to know
 about general Roc terms. Feel free to ask for a term to be added or add one yourself!
 
 Contributor note: definitions should be roughly ordered like in a tutorial, e.g.
-Parser should be explained before Canonicalization. 
+Parser should be explained before Canonicalization.
 
 ## CLI
 
@@ -63,7 +63,7 @@ LowerIdent(3:1-3:4),OpColon(3:5-3:6),UpperIdent(3:7-3:10),Newline(1:1-1:1)
 
 ## Interning
 
-A memory optimization technique where only one copy of each distinct value is stored in memory, regardless of how many times it appears in a program or [IR](#ir). For example, a function named `foo` may be called many times in a Roc file, but we store `foo` once and use an index to refer to `foo` at the call sites. 
+A memory optimization technique where only one copy of each distinct value is stored in memory, regardless of how many times it appears in a program or [IR](#ir). For example, a function named `foo` may be called many times in a Roc file, but we store `foo` once and use an index to refer to `foo` at the call sites.
 
 Uses of interning:
 - new compiler: [collections/SmallStringInterner.zig](src/collections/SmallStringInterner.zig), [ident.zig](src/base/Ident.zig), [ModuleEnv.zig](src/base/ModuleEnv.zig), [tokenize.zig](src/check/parse/tokenize.zig), ...
@@ -155,7 +155,7 @@ Person : { first_name : Str, last_name : Str }
 # Using Person:
 register : Person => Result {} [RegistrationFailed]
 register = |person|
-    ... 
+    ...
 ```
 
 Note: the term "alias" in the code base does not always refer to a type alias, it can also refer to an import alias using `as` or [alias analysis](#alias-analysis) etc. .
@@ -254,7 +254,7 @@ Compared to raw source code, this structured format is much easier to analyze an
 The AST is created by the [parser](#parsing).
 
 New compiler:
-- See the `Node` struct in [this file](src/check/parse/IR.zig).
+- See the `Node` struct in [this file](src/check/parse/AST.zig).
 - You can see examples of ASTs in the .txt files in [this folder](src/snapshots).
 
 Old compiler:
@@ -288,7 +288,7 @@ Example of a closure:
 makeCounter : I64 -> (I64 -> I64)
 makeCounter = |start|
     # This inner function is a closure - it "closes over" the start variable
-    |increment| 
+    |increment|
         start + increment
 
 # Test the closure with expect
@@ -338,6 +338,10 @@ Type constraint implementation:
 
 TODO
 
+## Unification
+
+TODO
+
 ## Structural Typing
 
 A type system where type equivalence is based on the shape (the set of members and their types) of the values, not the names by which the types were declared.
@@ -366,9 +370,37 @@ A type system where type equivalence is based on explicit names or declarations,
 
 TODO
 
-## Rigid
+## Rigid vs Flexible
 
-TODO
+An identifier is rigid if it has a fixed, concrete name that's written in Roc code. On the other hand, a flexible identifier is one created by the compiler during type inference.
+`a` is rigid below, I defined it. The compiler should use `a` in the error message if there is something wrong with the function's type.
+```roc
+take_first : List a, U64 -> List a
+take_first = |list, output_length|
+    List.sublist(list, { start: 0, len: output_length })
+```
+If I make a type error in the definition:
+```roc
+take_first : U64
+take_first = |list, output_length|
+    List.sublist(list, { start: 0, len: output_length })
+```
+The compiler's error message will say:
+```
+The body is an anonymous function of type:
+
+    List elem, Int Unsigned64 -> List elem
+
+But the type annotation on take_first says it should be:
+
+    U64
+```
+`elem` is a flexible [type variable](#type-variable), the compiler chose that name.
+
+Related definitions in the compiler:
+- old compiler: search "pub enum Content" in [types/src/subs.rs](crates/compiler/types/src/subs.rs)
+- new compiler: search "pub const Content" in [check/canonicalize/CIR.zig](src/check/canonicalize/CIR.zig)
+
 
 ## Canonicalization
 
@@ -411,7 +443,7 @@ Related Files:
   - [specialize_functions folder](src/build/specialize_functions)
   - [specialize_types.zig](src/build/specialize_types.zig)
   - [specialize types folder](src/build/specialize_types)
-  
+
 - old compiler:
   - [mono folder](crates/compiler/mono)
   - [mono tests](crates/compiler/test_mono)

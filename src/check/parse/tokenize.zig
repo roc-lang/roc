@@ -22,6 +22,7 @@ pub const Token = struct {
     pub const List = std.MultiArrayList(@This());
 
     pub const Idx = u32;
+    pub const Span = struct { span: base.DataSpan };
 
     pub const Tag = enum(u8) {
         EndOfFile,
