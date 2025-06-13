@@ -1610,7 +1610,7 @@ test "NodeStore - init and deinit" {
 pub fn regionInfo(source: []const u8, region: Region, line_starts: std.ArrayList(u32)) base.DiagnosticPosition {
     // In the Can IR, regions store byte offsets directly, not token indices.
     // We can use these offsets directly to calculate the diagnostic position.
-    const info = base.DiagnosticPosition.position(source, line_starts, region.start.offset, region.end.offset) catch {
+    const info = base.DiagnosticPosition.position(source, line_starts.items, region.start.offset, region.end.offset) catch {
         // Return a zero position if we can't calculate it
         return .{
             .start_line_idx = 0,

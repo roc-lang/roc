@@ -505,7 +505,7 @@ pub const Diagnostic = struct {
         defer newlines.deinit();
 
         // Get position information
-        const info = try base.DiagnosticPosition.position(source, newlines, self.begin, self.end);
+        const info = try base.DiagnosticPosition.position(source, newlines.items, self.begin, self.end);
 
         // Strip trailing newline for display
         const display_text = if (info.line_text.len > 0 and

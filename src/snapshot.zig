@@ -558,16 +558,25 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
                 try parse_ast.toSExprStr(&module_env, parse_buffer.writer().any());
             },
             .header => {
-                const node = parse_ast.store.getHeader(@enumFromInt(parse_ast.root_node_idx));
-                try parse_ast.nodeToSExprStr(node, &module_env, parse_buffer.writer().any());
+                const header = parse_ast.store.getHeader(@enumFromInt(parse_ast.root_node_idx));
+                var node = header.toSExpr(&module_env, &parse_ast);
+                defer node.deinit(gpa);
+
+                node.toStringPretty(parse_buffer.writer().any());
             },
             .expr => {
-                const node = parse_ast.store.getExpr(@enumFromInt(parse_ast.root_node_idx));
-                try parse_ast.nodeToSExprStr(node, &module_env, parse_buffer.writer().any());
+                const expr = parse_ast.store.getExpr(@enumFromInt(parse_ast.root_node_idx));
+                var node = expr.toSExpr(&module_env, &parse_ast);
+                defer node.deinit(gpa);
+
+                node.toStringPretty(parse_buffer.writer().any());
             },
             .statement => {
-                const node = parse_ast.store.getStatement(@enumFromInt(parse_ast.root_node_idx));
-                try parse_ast.nodeToSExprStr(node, &module_env, parse_buffer.writer().any());
+                const stmt = parse_ast.store.getStatement(@enumFromInt(parse_ast.root_node_idx));
+                var node = stmt.toSExpr(&module_env, &parse_ast);
+                defer node.deinit(gpa);
+
+                node.toStringPretty(parse_buffer.writer().any());
             },
         }
         try writer.writeAll(Section.PARSE);

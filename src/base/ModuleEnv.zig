@@ -67,5 +67,5 @@ pub fn calculateLineStarts(self: *Self, source: []const u8) !void {
 
 /// Get diagnostic position information for a given range
 pub fn getDiagnosticPosition(self: *Self, source: []const u8, begin: u32, end: u32) !DiagnosticPosition {
-    return DiagnosticPosition.position(source, self.line_starts, begin, end);
+    return DiagnosticPosition.position(source, self.line_starts.items, begin, end);
 }
