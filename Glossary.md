@@ -404,6 +404,8 @@ Related definitions in the compiler:
 
 ## Canonicalization
 
+(can)
+
 After parsing a Roc program, the obtained [IR](#ir) is transformed into a
 canonical form called CanIR.
 
