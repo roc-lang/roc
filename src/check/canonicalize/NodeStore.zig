@@ -563,10 +563,13 @@ pub fn addDef(store: *NodeStore, def: CIR.Def) CIR.Def.Idx {
     // Store annotation idx (0 if null)
     const anno_idx = if (def.annotation) |anno| @intFromEnum(anno) else 0;
     store.extra_data.append(store.gpa, anno_idx) catch |err| exitOnOom(err);
+    // Store expr_region start and end
+    store.extra_data.append(store.gpa, def.expr_region.start.offset) catch |err| exitOnOom(err);
+    store.extra_data.append(store.gpa, def.expr_region.end.offset) catch |err| exitOnOom(err);
 
     // Store the extra data range in the node
     node.data_1 = extra_start;
-    node.data_2 = 6; // Number of extra data items
+    node.data_2 = 8; // Number of extra data items
 
     return @enumFromInt(@intFromEnum(store.nodes.append(store.gpa, node)));
 }
@@ -587,6 +590,8 @@ pub fn getDef(store: *NodeStore, def_idx: CIR.Def.Idx) CIR.Def {
     const kind_encoded = .{ extra_data[3], extra_data[4] };
     const kind = CIR.Def.Kind.decode(kind_encoded);
     const anno_idx = extra_data[5];
+    const expr_region_start = extra_data[6];
+    const expr_region_end = extra_data[7];
 
     const annotation: ?CIR.Annotation.Idx = if (anno_idx == 0) null else @enumFromInt(anno_idx);
 
@@ -594,7 +599,10 @@ pub fn getDef(store: *NodeStore, def_idx: CIR.Def.Idx) CIR.Def {
         .pattern = pattern,
         .pattern_region = node.region, // Stored as node region
         .expr = expr,
-        .expr_region = base.Region.zero(), // TODO store and retrieve expr region
+        .expr_region = base.Region{
+            .start = .{ .offset = expr_region_start },
+            .end = .{ .offset = expr_region_end },
+        },
         .expr_var = expr_var,
         .annotation = annotation,
         .kind = kind,

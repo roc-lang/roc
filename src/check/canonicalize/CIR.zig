@@ -1014,7 +1014,7 @@ pub const ExprAtRegion = struct {
 
         node.appendNode(gpa, &expr_sexpr);
 
-        return expr.toSExpr(ir, line_starts);
+        return node;
     }
 };
 
