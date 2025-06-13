@@ -509,10 +509,10 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
     {
         try writer.writeAll(Section.PROBLEMS);
         try writer.writeAll("\n");
-        if (module_env.problems.len() > 0) {
-            var iter = module_env.problems.iterIndices();
+        if (can_ir.env.problems.len() > 0) {
+            var iter = can_ir.env.problems.iterIndices();
             while (iter.next()) |problem_idx| {
-                const problem = module_env.problems.get(problem_idx);
+                const problem = can_ir.env.problems.get(problem_idx);
                 try problem.toStr(gpa, content.source, writer);
                 try writer.writeAll("\n");
             }
