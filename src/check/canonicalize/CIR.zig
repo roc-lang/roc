@@ -466,6 +466,7 @@ pub const Expr = union(enum) {
         switch (self.*) {
             .num => |num_expr| {
                 var num_node = sexpr.Expr.init(gpa, "num");
+                num_node.appendRegionInfo(gpa, ir.calcRegionInfo(num_expr.region));
 
                 // Add num_var
                 var num_var_node = sexpr.Expr.init(gpa, "num_var");
@@ -495,6 +496,7 @@ pub const Expr = union(enum) {
             },
             .int => |int_expr| {
                 var int_node = sexpr.Expr.init(gpa, "int");
+                int_node.appendRegionInfo(gpa, ir.calcRegionInfo(int_expr.region));
 
                 // Add num_var
                 var num_var_node = sexpr.Expr.init(gpa, "num_var");
@@ -530,6 +532,7 @@ pub const Expr = union(enum) {
             },
             .float => |float_expr| {
                 var float_node = sexpr.Expr.init(gpa, "float");
+                float_node.appendRegionInfo(gpa, ir.calcRegionInfo(float_expr.region));
 
                 // Add num_var
                 var num_var_node = sexpr.Expr.init(gpa, "num_var");
@@ -566,10 +569,12 @@ pub const Expr = union(enum) {
                 return float_node;
             },
             .str_segment => |e| {
-                const value = ir.env.strings.get(e.literal);
                 var str_node = sexpr.Expr.init(gpa, "literal");
                 str_node.appendRegionInfo(gpa, ir.calcRegionInfo(e.region));
+
+                const value = ir.env.strings.get(e.literal);
                 str_node.appendString(gpa, value);
+
                 return str_node;
             },
             .str => |e| {
@@ -617,6 +622,7 @@ pub const Expr = union(enum) {
             },
             .list => |l| {
                 var list_node = sexpr.Expr.init(gpa, "list");
+                list_node.appendRegionInfo(gpa, ir.calcRegionInfo(l.region));
 
                 // Add elem_var
                 var elem_var_node = sexpr.Expr.init(gpa, "elem_var");
@@ -635,6 +641,7 @@ pub const Expr = union(enum) {
             },
             .lookup => |l| {
                 var lookup_node = sexpr.Expr.init(gpa, "lookup");
+                lookup_node.appendRegionInfo(gpa, ir.calcRegionInfo(l.region));
 
                 var ident_node = sexpr.Expr.init(gpa, "pattern_idx");
 
@@ -646,14 +653,16 @@ pub const Expr = union(enum) {
 
                 return lookup_node;
             },
-            .when => |_| {
+            .when => |e| {
                 var when_branch_node = sexpr.Expr.init(gpa, "when");
+                when_branch_node.appendRegionInfo(gpa, ir.calcRegionInfo(e.region));
                 when_branch_node.appendString(gpa, "TODO when branch");
 
                 return when_branch_node;
             },
             .@"if" => |if_expr| {
                 var if_node = sexpr.Expr.init(gpa, "if");
+                if_node.appendRegionInfo(gpa, ir.calcRegionInfo(if_expr.region));
 
                 // Add cond_var
                 var cond_var_node = sexpr.Expr.init(gpa, "cond_var");
@@ -702,6 +711,7 @@ pub const Expr = union(enum) {
             },
             .call => |c| {
                 var call_node = sexpr.Expr.init(gpa, "call");
+                call_node.appendRegionInfo(gpa, ir.calcRegionInfo(c.region));
 
                 // Get all expressions from the args span
                 const all_exprs = ir.store.exprSlice(c.args);
@@ -726,6 +736,7 @@ pub const Expr = union(enum) {
             },
             .record => |record_expr| {
                 var record_node = sexpr.Expr.init(gpa, "record");
+                record_node.appendRegionInfo(gpa, ir.calcRegionInfo(record_expr.region));
 
                 // Add record_var
                 var record_var_node = sexpr.Expr.init(gpa, "record_var");
@@ -741,11 +752,14 @@ pub const Expr = union(enum) {
 
                 return record_node;
             },
-            .empty_record => {
-                return sexpr.Expr.init(gpa, "empty_record");
+            .empty_record => |e| {
+                var empty_record_node = sexpr.Expr.init(gpa, "empty_record");
+                empty_record_node.appendRegionInfo(gpa, ir.calcRegionInfo(e.region));
+                return empty_record_node;
             },
             .record_access => |access_expr| {
                 var access_node = sexpr.Expr.init(gpa, "record_access");
+                access_node.appendRegionInfo(gpa, ir.calcRegionInfo(access_expr.region));
 
                 // Add record_var
                 var record_var_node = sexpr.Expr.init(gpa, "record_var");
@@ -783,6 +797,7 @@ pub const Expr = union(enum) {
             },
             .tag => |tag_expr| {
                 var tag_node = sexpr.Expr.init(gpa, "tag");
+                tag_node.appendRegionInfo(gpa, ir.calcRegionInfo(tag_expr.region));
 
                 // Add tag_union_var
                 var tag_union_var_node = sexpr.Expr.init(gpa, "tag_union_var");
@@ -814,6 +829,7 @@ pub const Expr = union(enum) {
             },
             .zero_argument_tag => |tag_expr| {
                 var tag_node = sexpr.Expr.init(gpa, "zero_argument_tag");
+                tag_node.appendRegionInfo(gpa, ir.calcRegionInfo(tag_expr.region));
 
                 // Add closure_name
                 var closure_name_node = sexpr.Expr.init(gpa, "closure_name");
@@ -845,16 +861,18 @@ pub const Expr = union(enum) {
             },
             .binop => |e| {
                 var binop_node = sexpr.Expr.init(gpa, "binop");
+                binop_node.appendRegionInfo(gpa, ir.calcRegionInfo(e.region));
                 binop_node.appendString(gpa, @tagName(e.op));
+
                 var lhs_node = ir.store.getExpr(e.lhs).toSExpr(ir);
                 var rhs_node = ir.store.getExpr(e.rhs).toSExpr(ir);
                 binop_node.appendNode(gpa, &lhs_node);
                 binop_node.appendNode(gpa, &rhs_node);
+
                 return binop_node;
             },
             .runtime_error => |e| {
                 var runtime_err_node = sexpr.Expr.init(gpa, "runtime_error");
-
                 runtime_err_node.appendRegionInfo(gpa, ir.calcRegionInfo(e.region));
 
                 var buf = std.ArrayList(u8).init(gpa);

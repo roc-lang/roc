@@ -14,13 +14,13 @@ UpperIdent(1:1-1:5),NoSpaceOpenRound(1:5-1:6),Int(1:6-1:8),CloseRound(1:8-1:9),E
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(call
-	(tag
+(call (1:1-1:9)
+	(tag (1:1-1:5)
 		(tag_union_var "#0")
 		(ext_var "#0")
 		(name "Some")
 		(args "TODO"))
-	(int
+	(int (1:6-1:8)
 		(num_var "#2")
 		(precision_var "#3")
 		(literal "42")

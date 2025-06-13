@@ -26,7 +26,7 @@ NO CHANGE
 			(let)
 			(pattern (2:1-2:4) (assign (ident "foo")))
 			(expr (2:7-2:15)
-				(tag
+				(tag (2:7-2:15)
 					(tag_union_var "#0")
 					(ext_var "#0")
 					(name "FortyTwo")

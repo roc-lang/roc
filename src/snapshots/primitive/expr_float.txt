@@ -26,7 +26,7 @@ NO CHANGE
 			(let)
 			(pattern (2:1-2:4) (assign (ident "foo")))
 			(expr (2:7-2:12)
-				(float
+				(float (2:7-2:12)
 					(num_var "#0")
 					(precision_var "#1")
 					(literal "12.34")

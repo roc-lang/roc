@@ -29,7 +29,7 @@ LowerIdent(2:1-2:2),CloseRound(2:2-2:3),CloseStringInterpolation(2:3-2:4),String
 ~~~CANONICALIZE
 (string (1:1-2:45)
 	(literal (1:2-1:24) "This is a string with ")
-	(call
+	(call (1:26-2:3)
 		(runtime_error (1:26-1:35) "RUNTIME ERROR ident_not_in_scope")
 		(runtime_error (1:36-1:37) "RUNTIME ERROR ident_not_in_scope")
 		(runtime_error (2:1-2:2) "RUNTIME ERROR ident_not_in_scope"))

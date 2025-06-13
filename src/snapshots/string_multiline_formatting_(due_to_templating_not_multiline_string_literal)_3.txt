@@ -32,7 +32,7 @@ NO CHANGE
 ~~~CANONICALIZE
 (string (1:1-6:43)
 	(literal (1:2-1:24) "This is a string with ")
-	(call
+	(call (2:2-5:3)
 		(runtime_error (2:2-2:11) "RUNTIME ERROR ident_not_in_scope")
 		(runtime_error (3:3-3:4) "RUNTIME ERROR ident_not_in_scope")
 		(runtime_error (4:3-4:4) "RUNTIME ERROR ident_not_in_scope"))

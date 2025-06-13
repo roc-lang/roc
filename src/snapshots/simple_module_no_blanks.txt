@@ -38,7 +38,7 @@ NO CHANGE
 			(let)
 			(pattern (3:1-3:7) (assign (ident "hello!")))
 			(expr (3:10-3:31)
-				(call
+				(call (3:10-3:31)
 					(runtime_error (3:10-3:22) "RUNTIME ERROR ident_not_in_scope")
 					(string (3:23-3:30) (literal (3:24-3:29) "Hello"))))
 			"#0")
