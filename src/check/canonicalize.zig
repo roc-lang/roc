@@ -519,9 +519,24 @@ pub fn canonicalize_expr(
             self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
-        .lambda => |_| {
-            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
-            return null;
+        .lambda => |e| {
+
+            // args
+
+            // body
+            const body_idx = blk: {
+                if (self.canonicalize_expr(e.body)) |idx| {
+                    break :blk idx;
+                } else {
+                    const ast_body = self.parse_ir.store.getExpr(e.body);
+                    const malformed_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, .lambda_body_not_canonicalized, self.tokenizedRegionToRegion(ast_body.to_tokenized_region()));
+                    break :blk malformed_idx;
+                }
+            };
+
+            // We don't have a Lambda in CIR.Expr ... TODO should we add one?
+            _ = body_idx;
+            return self.can_ir.pushMalformed(CIR.Expr.Idx, .can_lambda_not_implemented, self.tokenizedRegionToRegion(e.region));
         },
         .record_updater => |_| {
             self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));

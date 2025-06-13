@@ -88,6 +88,8 @@ pub const Diagnostic = struct {
         invalid_string_interpolation,
         pattern_arg_invalid,
         pattern_not_canonicalized,
+        can_lambda_not_implemented,
+        lambda_body_not_canonicalized,
     };
 };
 
@@ -871,7 +873,6 @@ pub const Expr = union(enum) {
                 var buf = std.ArrayList(u8).init(gpa);
                 defer buf.deinit();
 
-                buf.writer().writeAll("RUNTIME ERROR ") catch |err| exitOnOom(err);
                 buf.writer().writeAll(@tagName(e.tag)) catch |err| exitOnOom(err);
 
                 runtime_err_node.appendString(gpa, buf.items);
