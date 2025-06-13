@@ -17,6 +17,7 @@ const Region = base.Region;
 const ModuleImport = base.ModuleImport;
 const ModuleEnv = base.ModuleEnv;
 const StringLiteral = base.StringLiteral;
+const CalledVia = base.CalledVia;
 const TypeVar = types.Var;
 const Problem = problem.Problem;
 const Node = @import("Node.zig");
@@ -313,6 +314,7 @@ pub const Expr = union(enum) {
         literal: StringLiteral.Idx,
         value: IntValue,
         bound: types.Num.Compact,
+        region: Region,
     },
     int: struct {
         num_var: TypeVar,
@@ -320,6 +322,7 @@ pub const Expr = union(enum) {
         literal: StringLiteral.Idx,
         value: IntValue,
         bound: types.Num.Compact.Int.Precision,
+        region: Region,
     },
     float: struct {
         num_var: TypeVar,
@@ -327,45 +330,59 @@ pub const Expr = union(enum) {
         literal: StringLiteral.Idx,
         value: f64,
         bound: types.Num.Compact.Frac.Precision,
+        region: Region,
     },
     // A single segment of a string literal
     // a single string may be made up of a span sequential segments
     // for example if it was split across multiple lines
-    str_segment: StringLiteral.Idx,
+    str_segment: struct {
+        literal: StringLiteral.Idx,
+        region: Region,
+    },
     // A string is combined of one or more segments, some of which may be interpolated
     // An interpolated string contains one or more non-string_segment's in the span
-    str: Expr.Span,
+    str: struct {
+        span: Expr.Span,
+        region: Region,
+    },
     single_quote: struct {
         num_var: TypeVar,
         precision_var: TypeVar,
         value: u32,
         bound: types.Num.Compact.Int.Precision,
+        region: Region,
     },
     lookup: Lookup,
     list: struct {
         elem_var: TypeVar,
         elems: Expr.Span,
+        region: Region,
     },
-    when: When.Idx,
+    when: When,
     @"if": struct {
         cond_var: TypeVar,
         branch_var: TypeVar,
         branches: IfBranch.Span,
         final_else: Expr.Idx,
+        region: Region,
     },
     /// This is *only* for calling functions, not for tag application.
     /// The Tag variant contains any applied values inside it.
     call: struct {
         args: Expr.Span,
-        // called_via: base.CalledVia,
+        called_via: CalledVia,
+        region: Region,
     },
     record: struct {
         record_var: TypeVar,
+        region: Region,
         // TODO:
         // fields: SendMap<Lowercase, Field>,
     },
     /// Empty record constant
-    empty_record,
+    empty_record: struct {
+        region: Region,
+    },
     /// Look up exactly one field on a record, e.g. (expr).foo.
     record_access: struct {
         record_var: TypeVar,
@@ -373,37 +390,57 @@ pub const Expr = union(enum) {
         field_var: TypeVar,
         loc_expr: Expr.Idx,
         field: Ident.Idx,
+        region: Region,
     },
     tag: struct {
         tag_union_var: TypeVar,
         ext_var: TypeVar,
         name: Ident.Idx,
         args: Expr.Span,
+        region: Region,
     },
     zero_argument_tag: struct {
         closure_name: Ident.Idx,
         variant_var: TypeVar,
         ext_var: TypeVar,
         name: Ident.Idx,
+        region: Region,
     },
     binop: Binop,
     /// Compiles, but will crash if reached
     runtime_error: struct {
         tag: Diagnostic.Tag,
-        region: base.Region,
+        region: Region,
     },
 
     pub const Lookup = struct {
         pattern_idx: Pattern.Idx,
+        region: Region,
     };
 
     pub const Idx = enum(u32) { _ };
+
     pub const Span = struct { span: DataSpan };
+
+    pub fn init_str(expr_span: Expr.Span, region: Region) Expr {
+        return .{ .str = .{
+            .span = expr_span,
+            .region = region,
+        } };
+    }
+
+    pub fn init_str_segment(literal: StringLiteral.Idx, region: Region) Expr {
+        return .{ .str_segment = .{
+            .literal = literal,
+            .region = region,
+        } };
+    }
 
     pub const Binop = struct {
         op: Op,
         lhs: Expr.Idx,
         rhs: Expr.Idx,
+        region: Region,
 
         pub const Op = enum {
             add,
@@ -419,8 +456,8 @@ pub const Expr = union(enum) {
             ne,
         };
 
-        pub fn init(op: Op, lhs: Expr.Idx, rhs: Expr.Idx) Binop {
-            return .{ .lhs = lhs, .op = op, .rhs = rhs };
+        pub fn init(op: Op, lhs: Expr.Idx, rhs: Expr.Idx, region: Region) Binop {
+            return .{ .lhs = lhs, .op = op, .rhs = rhs, .region = region };
         }
     };
 
@@ -528,16 +565,18 @@ pub const Expr = union(enum) {
 
                 return float_node;
             },
-            .str_segment => |str_idx| {
-                const value = ir.env.strings.get(str_idx);
+            .str_segment => |e| {
+                const value = ir.env.strings.get(e.literal);
                 var str_node = sexpr.Expr.init(gpa, "literal");
+                str_node.appendRegionInfo(gpa, ir.calcRegionInfo(e.region));
                 str_node.appendString(gpa, value);
                 return str_node;
             },
-            .str => |segment_span| {
+            .str => |e| {
                 var str_node = sexpr.Expr.init(gpa, "string");
+                str_node.appendRegionInfo(gpa, ir.calcRegionInfo(e.region));
 
-                for (ir.store.sliceExpr(segment_span)) |segment| {
+                for (ir.store.sliceExpr(e.span)) |segment| {
                     var segment_node = ir.store.getExpr(segment).toSExpr(ir);
                     str_node.appendNode(gpa, &segment_node);
                 }
@@ -546,6 +585,7 @@ pub const Expr = union(enum) {
             },
             .single_quote => |e| {
                 var single_quote_node = sexpr.Expr.init(gpa, "single_quote");
+                single_quote_node.appendRegionInfo(gpa, ir.calcRegionInfo(e.region));
 
                 // Add num_var
                 var num_var_node = sexpr.Expr.init(gpa, "num_var");
@@ -999,48 +1039,6 @@ pub const IntValue = struct {
 };
 
 /// todo
-pub const ExprAtRegion = struct {
-    expr: Expr,
-    region: Region,
-
-    pub fn toSExpr(self: *const @This(), ir: *const CIR, line_starts: std.ArrayList(u32)) sexpr.Expr {
-        const gpa = ir.env.gpa;
-        var node = sexpr.Expr.init(gpa, "expr_at_region");
-
-        node.appendRegionInfo(gpa, ir.calcRegionInfo(self.region));
-
-        const expr = ir.store.getExpr(self.expr);
-        var expr_sexpr = expr.toSExpr(ir, line_starts);
-
-        node.appendNode(gpa, &expr_sexpr);
-
-        return node;
-    }
-};
-
-/// todo
-pub const TypedExprAtRegion = struct {
-    expr: Expr.Idx,
-    type_var: TypeVar,
-    region: Region,
-
-    pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: base.DataSpan };
-
-    pub fn toSExpr(self: *const @This(), ir: *const CIR) sexpr.Expr {
-        const gpa = ir.env.gpa;
-
-        var typed_expr_node = sexpr.Expr.init(gpa, "typed_expr_at_region");
-        typed_expr_node.appendRegionInfo(gpa, ir.calcRegionInfo(self.region));
-
-        const expr = ir.store.getExpr(self.expr);
-        typed_expr_node.appendNode(gpa, &expr.toSExpr(ir));
-
-        return typed_expr_node;
-    }
-};
-
-/// todo
 pub const Function = struct {
     return_var: TypeVar,
     fx_var: TypeVar,
@@ -1053,8 +1051,8 @@ pub const Function = struct {
 
 /// todo - evaluate if we need this?
 pub const IfBranch = struct {
-    cond: ExprAtRegion,
-    body: ExprAtRegion,
+    cond: Expr.Idx,
+    body: Expr.Idx,
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
@@ -1062,7 +1060,7 @@ pub const IfBranch = struct {
     // Note: toSExpr is handled within Expr.if because the slice reference is there
 };
 
-/// todo - evaluate if we need this?
+/// TODO
 pub const When = struct {
     /// The actual condition of the when expression.
     loc_cond: Expr.Idx,

@@ -23,5 +23,5 @@ NO CHANGE
 		(literal "42")
 		(value "TODO")
 		(bound "i128"))
-	(string (literal "hello")))
+	(string (1:9-1:16) (literal (1:10-1:15) "hello")))
 ~~~END

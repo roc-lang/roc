@@ -40,11 +40,12 @@ NO CHANGE
 			(expr (3:10-3:31)
 				(call
 					(runtime_error (3:10-3:22) "RUNTIME ERROR ident_not_in_scope")
-					(string (literal "Hello"))))
+					(string (3:23-3:30) (literal (3:24-3:29) "Hello"))))
 			"#0")
 		(def
 			(let)
 			(pattern (4:1-4:6) (assign (ident "world")))
-			(expr (4:9-4:16) (string (literal "World")))
+			(expr (4:9-4:16)
+				(string (4:9-4:16) (literal (4:10-4:15) "World")))
 			"#1")))
 ~~~END

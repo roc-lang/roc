@@ -27,7 +27,29 @@ pub const Recursive = enum {
 };
 
 /// The manner in which a function was called, useful for giving better feedback to users.
-pub const CalledVia = enum {};
+pub const CalledVia = enum {
+    /// Normal function application, e.g. `foo(bar)`
+    apply,
+    /// Calling with an operator, e.g. `(1 + 2)`
+    binop,
+    /// Calling with a unary operator, e.g. `!foo` or `-foo`
+    unary_op,
+    /// This call is the result of desugaring string interpolation,
+    /// e.g. "${first} ${last}" is transformed into `Str.concat(Str.concat(first, " "))` last.
+    string_interpolation,
+    /// This call is the result of desugaring a map2-based Record Builder field. e.g.
+    /// ```roc
+    /// { Result.parallel <-
+    ///     foo: get("a"),
+    ///     bar: get("b"),
+    /// }
+    /// ```
+    /// is transformed into
+    /// ```roc
+    /// Result.parallel(get("a"), get("b"), (|foo, bar | { foo, bar }))
+    /// ```
+    record_builder,
+};
 
 /// Represents a value written as-is in a Roc source file.
 pub const Literal = union(enum) {
@@ -75,5 +97,13 @@ pub const DataSpan = struct {
 
     pub fn empty() DataSpan {
         return DataSpan{ .start = 0, .len = 0 };
+    }
+
+    pub fn init(start: u32, len: u32) DataSpan {
+        return DataSpan{ .start = start, .len = len };
+    }
+
+    pub fn as(self: DataSpan, comptime T: type) T {
+        return @as(T, .{ .span = self });
     }
 };
