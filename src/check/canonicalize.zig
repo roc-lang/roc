@@ -758,7 +758,7 @@ fn canonicalize_pattern(
                     }
                 }
 
-                const args = self.can_ir.store.pattenSpanFrom(start);
+                const args = self.can_ir.store.patternSpanFrom(start);
 
                 const fresh_num_var = self.can_ir.env.types_store.fresh();
                 const fresh_ext_var = self.can_ir.env.types_store.fresh();

@@ -822,8 +822,8 @@ pub fn defSpanFrom(store: *NodeStore, start: u32) CIR.Def.Span {
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
 }
 
-/// Computes the span of an expression starting from a given index.
-pub fn pattenSpanFrom(store: *NodeStore, start: u32) CIR.Pattern.Span {
+/// Computes the span of a pattern starting from a given index.
+pub fn patternSpanFrom(store: *NodeStore, start: u32) CIR.Pattern.Span {
     const end = store.scratch_patterns.top();
     defer store.scratch_patterns.clearFrom(start);
     var i = @as(usize, @intCast(start));
