@@ -435,7 +435,7 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
         }
     };
 
-    var module_env = base.ModuleEnv.init(gpa);
+    var module_env = base.ModuleEnv.init(gpa, file_content);
     defer module_env.deinit();
 
     // Parse the source code
@@ -621,7 +621,7 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
         var canonicalized = std.ArrayList(u8).init(gpa);
         defer canonicalized.deinit();
 
-        try can_ir.toSExprStr(canonicalized.writer().any(), maybe_expr_idx, module_env.line_starts, content.source);
+        try can_ir.toSExprStr(canonicalized.writer().any(), maybe_expr_idx);
 
         try writer.writeAll(Section.CANONICALIZE);
         try writer.writeAll("\n");

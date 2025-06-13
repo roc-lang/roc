@@ -424,7 +424,7 @@ pub const Expr = union(enum) {
         }
     };
 
-    pub fn toSExpr(self: *const @This(), ir: *const CIR, line_starts: std.ArrayList(u32), source: []const u8) sexpr.Expr {
+    pub fn toSExpr(self: *const @This(), ir: *const CIR) sexpr.Expr {
         const gpa = ir.env.gpa;
         switch (self.*) {
             .num => |num_expr| {
@@ -538,7 +538,7 @@ pub const Expr = union(enum) {
                 var str_node = sexpr.Expr.init(gpa, "string");
 
                 for (ir.store.sliceExpr(segment_span)) |segment| {
-                    var segment_node = ir.store.getExpr(segment).toSExpr(ir, line_starts, source);
+                    var segment_node = ir.store.getExpr(segment).toSExpr(ir);
                     str_node.appendNodeChild(gpa, &segment_node);
                 }
 
@@ -669,7 +669,7 @@ pub const Expr = union(enum) {
                 // First element is the function being called
                 if (all_exprs.len > 0) {
                     const fn_expr = ir.store.getExpr(all_exprs[0]);
-                    var fn_node = fn_expr.toSExpr(ir, line_starts, source);
+                    var fn_node = fn_expr.toSExpr(ir);
                     call_node.appendNodeChild(gpa, &fn_node);
                 }
 
@@ -677,7 +677,7 @@ pub const Expr = union(enum) {
                 if (all_exprs.len > 1) {
                     for (all_exprs[1..]) |arg_idx| {
                         const arg_expr = ir.store.getExpr(arg_idx);
-                        var arg_node = arg_expr.toSExpr(ir, line_starts, source);
+                        var arg_node = arg_expr.toSExpr(ir);
                         call_node.appendNodeChild(gpa, &arg_node);
                     }
                 }
@@ -730,7 +730,7 @@ pub const Expr = union(enum) {
 
                 // Add loc_expr
                 var loc_expr = ir.store.getExpr(access_expr.loc_expr);
-                var loc_expr_node = loc_expr.toSExpr(ir, line_starts, source);
+                var loc_expr_node = loc_expr.toSExpr(ir);
                 access_node.appendNodeChild(gpa, &loc_expr_node);
 
                 // Add field
@@ -806,8 +806,8 @@ pub const Expr = union(enum) {
             .binop => |e| {
                 var binop_node = sexpr.Expr.init(gpa, "binop");
                 binop_node.appendStringChild(gpa, @tagName(e.op));
-                var lhs_node = ir.store.getExpr(e.lhs).toSExpr(ir, line_starts, source);
-                var rhs_node = ir.store.getExpr(e.rhs).toSExpr(ir, line_starts, source);
+                var lhs_node = ir.store.getExpr(e.lhs).toSExpr(ir);
+                var rhs_node = ir.store.getExpr(e.rhs).toSExpr(ir);
                 binop_node.appendNodeChild(gpa, &lhs_node);
                 binop_node.appendNodeChild(gpa, &rhs_node);
                 return binop_node;
@@ -815,7 +815,7 @@ pub const Expr = union(enum) {
             .runtime_error => |e| {
                 var runtime_err_node = sexpr.Expr.init(gpa, "runtime_error");
 
-                runtime_err_node.appendRegionChild(gpa, regionInfo(source, e.region, line_starts));
+                runtime_err_node.appendRegionChild(gpa, ir.regionInfoFromPositionOffsets(e.region));
 
                 var buf = std.ArrayList(u8).init(gpa);
                 defer buf.deinit();
@@ -933,7 +933,7 @@ pub const Def = struct {
     pub const Span = struct { span: DataSpan };
     pub const Range = struct { start: u32, len: u32 };
 
-    pub fn toSExpr(self: *const @This(), ir: *CIR, line_starts: std.ArrayList(u32), source: []const u8) sexpr.Expr {
+    pub fn toSExpr(self: *const @This(), ir: *CIR) sexpr.Expr {
         const gpa = ir.env.gpa;
         var node = sexpr.Expr.init(gpa, "def");
 
@@ -941,18 +941,18 @@ pub const Def = struct {
         node.appendNodeChild(gpa, &kind_node);
 
         var pattern_node = sexpr.Expr.init(gpa, "pattern");
-        pattern_node.appendRegionChild(gpa, regionInfo(source, self.pattern_region, line_starts));
+        pattern_node.appendRegionChild(gpa, ir.regionInfoFromPositionOffsets(self.pattern_region));
 
         const pattern = ir.store.getPattern(self.pattern);
-        var pattern_sexpr = pattern.toSExpr(ir, line_starts, source);
+        var pattern_sexpr = pattern.toSExpr(ir);
         pattern_node.appendNodeChild(gpa, &pattern_sexpr);
         node.appendNodeChild(gpa, &pattern_node);
 
         var expr_node = sexpr.Expr.init(gpa, "expr");
-        expr_node.appendRegionChild(gpa, regionInfo(source, self.expr_region, line_starts));
+        expr_node.appendRegionChild(gpa, ir.regionInfoFromPositionOffsets(self.expr_region));
 
         const expr = ir.store.getExpr(self.expr);
-        var expr_sexpr = expr.toSExpr(ir, line_starts, source);
+        var expr_sexpr = expr.toSExpr(ir);
         expr_node.appendNodeChild(gpa, &expr_sexpr);
         node.appendNodeChild(gpa, &expr_node);
 
@@ -1027,11 +1027,11 @@ pub const TypedExprAtRegion = struct {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
 
-    pub fn toSExpr(self: *const @This(), ir: *const CIR, line_starts: std.ArrayList(u32), source: []const u8) sexpr.Expr {
+    pub fn toSExpr(self: *const @This(), ir: *const CIR) sexpr.Expr {
         const gpa = ir.env.gpa;
 
         var typed_expr_node = sexpr.Expr.init(gpa, "typed_expr_at_region");
-        typed_expr_node.appendRegionChild(gpa, regionInfo(source, self.region, line_starts));
+        typed_expr_node.appendRegionChild(gpa, ir.regionInfoFromPositionOffsets(self.region));
 
         const expr = ir.store.getExpr(self.expr);
         typed_expr_node.appendNodeChild(gpa, &expr.toSExpr(ir));
@@ -1245,7 +1245,7 @@ pub const Pattern = union(enum) {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
 
-    pub fn toSExpr(self: *const @This(), ir: *CIR, line_starts: std.ArrayList(u32), source: []const u8) sexpr.Expr {
+    pub fn toSExpr(self: *const @This(), ir: *CIR) sexpr.Expr {
         const gpa = ir.env.gpa;
         switch (self.*) {
             .assign => |ident_idx| {
@@ -1255,11 +1255,11 @@ pub const Pattern = union(enum) {
             },
             .as => |a| {
                 var node = sexpr.Expr.init(gpa, "as");
-                node.appendRegionChild(gpa, regionInfo(source, a.region, line_starts));
+                node.appendRegionChild(gpa, ir.regionInfoFromPositionOffsets(a.region));
                 appendIdentChild(&node, gpa, ir, "ident", a.ident);
                 var inner_patt_node = sexpr.Expr.init(gpa, "pattern");
                 const inner_patt = ir.store.getPattern(a.pattern);
-                var inner_patt_sexpr = inner_patt.toSExpr(ir, line_starts, source);
+                var inner_patt_sexpr = inner_patt.toSExpr(ir);
                 inner_patt_node.appendNodeChild(gpa, &inner_patt_sexpr);
                 node.appendNodeChild(gpa, &inner_patt_node);
                 return node;
@@ -1299,7 +1299,7 @@ pub const Pattern = union(enum) {
 
                 for (ir.store.slicePatterns(l.patterns)) |patt_idx| {
                     const patt = ir.store.getPattern(patt_idx);
-                    var patt_sexpr = patt.toSExpr(ir, line_starts, source);
+                    var patt_sexpr = patt.toSExpr(ir);
                     patterns_node.appendNodeChild(gpa, &patt_sexpr);
                 }
 
@@ -1380,14 +1380,14 @@ pub const TypedPatternAtRegion = struct {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
 
-    pub fn toSExpr(self: *const @This(), ir: *const CIR, line_starts: std.ArrayList(u32), source: []const u8) sexpr.Expr {
+    pub fn toSExpr(self: *const @This(), ir: *const CIR) sexpr.Expr {
         const gpa = ir.env.gpa;
 
         var type_pattern_node = sexpr.Expr.init(gpa, "typed_pattern_at_region");
         type_pattern_node.appendRegionChild(gpa, self.region);
 
         const pattern = ir.patterns.get(self.pattern);
-        var pattern_sexpr = pattern.toSExpr(ir, line_starts, source);
+        var pattern_sexpr = pattern.toSExpr(ir);
         type_pattern_node.appendNodeChild(gpa, &pattern_sexpr);
 
         return type_pattern_node;
@@ -1428,13 +1428,13 @@ pub const RecordDestruct = struct {
         }
     };
 
-    pub fn toSExpr(self: *const @This(), ir: *const CIR, line_starts: std.ArrayList(u32), source: []const u8) sexpr.Expr {
+    pub fn toSExpr(self: *const @This(), ir: *const CIR) sexpr.Expr {
         const gpa = ir.env.gpa;
 
         var record_destruct_node = sexpr.Expr.init(gpa, "record_destruct");
 
         record_destruct_node.appendTypeVarChild(&record_destruct_node, gpa, "type_var", self.type_var);
-        record_destruct_node.appendRegionChild(gpa, regionInfo(source, self.region, line_starts));
+        record_destruct_node.appendRegionChild(gpa, ir.regionInfoFromPositionOffsets(self.region));
 
         appendIdentChild(&record_destruct_node, gpa, ir, "label", self.label);
         appendIdentChild(&record_destruct_node, gpa, ir, "ident", self.ident);
@@ -1456,14 +1456,14 @@ pub const ExhaustiveMark = TypeVar;
 /// and write it to the given writer.
 ///
 /// If a single expression is provided we only print that expression
-pub fn toSExprStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr.Idx, line_starts: std.ArrayList(u32), source: []const u8) !void {
+pub fn toSExprStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr.Idx) !void {
     const gpa = ir.env.gpa;
 
     if (maybe_expr_idx) |expr_idx| {
         // Get the expression from the store
         const expr = ir.store.getExpr(expr_idx);
 
-        var expr_node = expr.toSExpr(ir, line_starts, source);
+        var expr_node = expr.toSExpr(ir);
         defer expr_node.deinit(gpa);
 
         expr_node.toStringPretty(writer);
@@ -1482,7 +1482,7 @@ pub fn toSExprStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr.Idx,
 
         for (defs_slice) |def_idx| {
             const d = ir.store.getDef(def_idx);
-            var def_node = d.toSExpr(ir, line_starts, source);
+            var def_node = d.toSExpr(ir);
             defs_node.appendNodeChild(gpa, &def_node);
         }
 
@@ -1607,10 +1607,10 @@ test "NodeStore - init and deinit" {
 /// Returns diagnostic position information for the given region.
 /// This is a standalone utility function that takes the source text as a parameter
 /// to avoid storing it in the cacheable IR structure.
-pub fn regionInfo(source: []const u8, region: Region, line_starts: std.ArrayList(u32)) base.DiagnosticPosition {
+pub fn regionInfoFromPositionOffsets(self: *const CIR, region: Region) base.DiagnosticPosition {
     // In the Can IR, regions store byte offsets directly, not token indices.
     // We can use these offsets directly to calculate the diagnostic position.
-    const info = base.DiagnosticPosition.position(source, line_starts.items, region.start.offset, region.end.offset) catch {
+    const info = base.DiagnosticPosition.position(self.env.source.items, self.env.line_starts.items, region.start.offset, region.end.offset) catch {
         // Return a zero position if we can't calculate it
         return .{
             .start_line_idx = 0,

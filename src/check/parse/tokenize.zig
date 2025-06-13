@@ -1560,7 +1560,7 @@ pub const Tokenizer = struct {
 fn testTokenization(gpa: std.mem.Allocator, input: []const u8, expected: []const Token.Tag) !void {
     var messages: [10]Diagnostic = undefined;
 
-    var env = base.ModuleEnv.init(gpa);
+    var env = base.ModuleEnv.init(gpa, input);
     defer env.deinit();
 
     var tokenizer = Tokenizer.init(&env, input, &messages);
@@ -1578,7 +1578,7 @@ fn testTokenization(gpa: std.mem.Allocator, input: []const u8, expected: []const
 
 /// Assert the invariants of the tokenizer are held.
 pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug: bool) void {
-    var env = base.ModuleEnv.init(gpa);
+    var env = base.ModuleEnv.init(gpa, input);
     defer env.deinit();
 
     // Initial tokenization.
