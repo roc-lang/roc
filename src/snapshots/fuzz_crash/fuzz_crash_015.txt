@@ -13,6 +13,11 @@ TOKENIZE: (2:3-2:3) LeadingZero:
 PARSER: missing_header
 PARSER: expr_unexpected_token
 PARSER: expr_no_space_dot_int
+CANONICALIZE: invalid_top_level_statement ""
+CANONICALIZE: invalid_top_level_statement "0_0
+0u8"
+CANONICALIZE: invalid_top_level_statement ""
+CANONICALIZE: invalid_top_level_statement "0_"
 ~~~TOKENS
 Int(1:1-1:4),NoSpaceDotInt(1:4-1:6),Newline(1:1-1:1),
 Int(2:1-2:4),Newline(1:1-1:1),

@@ -59,6 +59,11 @@ const Self = @This();
 /// The intermediate representation of a canonicalized Roc program.
 pub const CIR = @import("canonicalize/CIR.zig");
 
+/// helper to get the allocator from ModuleEnv
+pub fn get_gpa(self: *Self) std.mem.Allocator {
+    comptime return self.can_ir.env.gpa;
+}
+
 /// After parsing a Roc program, the [ParseIR](src/check/parse/AST.zig) is transformed into a [canonical
 /// form](src/check/canonicalize/ir.zig) called CanIR.
 ///
@@ -822,4 +827,25 @@ fn canonicalize_pattern(
         },
     }
     return null;
+}
+
+/// Introduce a new identifier to the current scope, return an
+/// index if
+pub fn scope_introduce_ident(
+    self: Self,
+    ident_idx: Ident.Idx,
+    pattern_idx: CIR.Pattern.Idx,
+    region: Region,
+    comptime T: type,
+) T {
+    const gpa = self.get_gpa();
+    self.scope.levels.introduce(
+        gpa,
+        &self.can_ir.env.idents,
+        .ident,
+        ident_idx,
+        pattern_idx,
+    ) catch {
+        return self.can_ir.pushMalformed(CIR.Pattern.Idx, .ident_already_in_scope, region);
+    };
 }

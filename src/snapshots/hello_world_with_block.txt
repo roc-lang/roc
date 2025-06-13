@@ -15,7 +15,11 @@ main! = |_| {
 	Stdout.line!("Hello, world!")
 }
 ~~~PROBLEMS
-NIL
+COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
+CANONICALIZE: lambda_body_not_canonicalized "{
+	world = "World..."
+CANONICALIZE: can_lambda_not_implemented "|_| {
+	world = "W..."
 ~~~TOKENS
 Newline(1:2-1:15),
 Newline(1:1-1:1),
@@ -63,6 +67,6 @@ NO CHANGE
 			"let"
 			(pattern (8:1-8:6)
 				(assign (8:1-8:6) (ident "main!")))
-			(expr (8:9-12:2) (runtime_error (8:1-12:2) "RUNTIME ERROR expr_not_canonicalized"))
+			(expr (8:9-12:2) (runtime_error (8:9-12:2) "can_lambda_not_implemented"))
 			"#0")))
 ~~~END

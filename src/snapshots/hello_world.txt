@@ -8,7 +8,8 @@ import pf.Stdout
 
 main! = |_| Stdout.line!("Hello, world!")
 ~~~PROBLEMS
-NIL
+CANONICALIZE: ident_not_in_scope "Stdout.line!"
+CANONICALIZE: can_lambda_not_implemented "|_| Stdout.line!(..."
 ~~~TOKENS
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),Newline(1:1-1:1),
 Newline(1:1-1:1),
@@ -44,6 +45,6 @@ NO CHANGE
 			"let"
 			(pattern (5:1-5:6)
 				(assign (5:1-5:6) (ident "main!")))
-			(expr (5:9-5:42) (runtime_error (5:1-5:42) "RUNTIME ERROR expr_not_canonicalized"))
+			(expr (5:9-5:42) (runtime_error (5:9-5:42) "can_lambda_not_implemented"))
 			"#0")))
 ~~~END

@@ -4,7 +4,7 @@ type=expr
 ~~~SOURCE
 dbg x
 ~~~PROBLEMS
-NIL
+COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
 ~~~TOKENS
 KwDbg(1:1-1:4),LowerIdent(1:5-1:6),EndOfFile(1:6-1:6),
 ~~~PARSE

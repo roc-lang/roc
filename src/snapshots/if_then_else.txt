@@ -10,7 +10,10 @@ foo = if true A
     B
     }
 ~~~PROBLEMS
-NIL
+COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
+CANONICALIZE: expr_not_canonicalized "foo = if true A
+
+..."
 ~~~TOKENS
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),Newline(1:1-1:1),
 Newline(1:1-1:1),
@@ -46,6 +49,6 @@ foo = if true A
 			"let"
 			(pattern (3:1-3:4)
 				(assign (3:1-3:4) (ident "foo")))
-			(expr (3:7-7:6) (runtime_error (3:1-7:6) "RUNTIME ERROR expr_not_canonicalized"))
+			(expr (3:7-7:6) (runtime_error (3:1-7:6) "expr_not_canonicalized"))
 			"#0")))
 ~~~END

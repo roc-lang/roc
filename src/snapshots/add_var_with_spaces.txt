@@ -6,7 +6,7 @@ module [add2]
 
 add2 = x +      2
 ~~~PROBLEMS
-NIL
+CANONICALIZE: ident_not_in_scope "x"
 ~~~TOKENS
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:13),CloseSquare(1:13-1:14),Newline(1:1-1:1),
 Newline(1:1-1:1),
@@ -36,7 +36,7 @@ add2 = x + 2
 			(expr (3:8-3:18)
 				(binop (3:8-3:18)
 					"add"
-					(runtime_error (3:8-3:9) "RUNTIME ERROR ident_not_in_scope")
+					(runtime_error (3:8-3:9) "ident_not_in_scope")
 					(int (3:17-3:18)
 						(num_var "#0")
 						(precision_var "#1")

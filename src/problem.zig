@@ -72,7 +72,33 @@ pub const Problem = union(enum) {
                 try writer.writeAll(err_msg);
             },
             .canonicalize => |a| {
-                const err_msg = try std.fmt.bufPrint(&buf, "CANONICALIZE: {s}", .{@tagName(a.tag)});
+                const MAX_TO_PRINT = 20;
+                const ELLIPSIS = "...";
+
+                const start = a.region.start.offset;
+                const end = a.region.end.offset;
+                const src_len = source.len;
+
+                var text: []const u8 = "";
+
+                if (start < end and start < src_len) {
+                    const safe_end = if (end <= src_len) end else src_len;
+                    const region_len = safe_end - start;
+                    const truncated = region_len > MAX_TO_PRINT;
+                    const slice_len = if (truncated) MAX_TO_PRINT - ELLIPSIS.len else region_len;
+                    text = source[start .. start + slice_len];
+
+                    if (truncated) {
+                        var b: [MAX_TO_PRINT]u8 = undefined;
+                        std.mem.copyForwards(u8, b[0..slice_len], text);
+                        std.mem.copyForwards(u8, b[slice_len .. slice_len + ELLIPSIS.len], ELLIPSIS);
+                        text = b[0 .. slice_len + ELLIPSIS.len];
+                    }
+                }
+
+                // format the error message
+                const err_msg = try std.fmt.bufPrint(&buf, "CANONICALIZE: {s} \"{s}\"", .{ @tagName(a.tag), text });
+
                 try writer.writeAll(err_msg);
             },
             .compiler => |err| {

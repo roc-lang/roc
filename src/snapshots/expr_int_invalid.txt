@@ -4,7 +4,7 @@ type=expr
 ~~~SOURCE
 99999999999999999999999999999999999999999
 ~~~PROBLEMS
-CANONICALIZE: invalid_num_literal
+NIL
 ~~~TOKENS
 Int(1:1-1:42),EndOfFile(1:42-1:42),
 ~~~PARSE
@@ -12,5 +12,5 @@ Int(1:1-1:42),EndOfFile(1:42-1:42),
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(runtime_error (1:1-1:42) "RUNTIME ERROR invalid_num_literal")
+(runtime_error (1:1-1:42) "invalid_num_literal")
 ~~~END

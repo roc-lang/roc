@@ -7,6 +7,8 @@ module []
 foo = asd.0
 ~~~PROBLEMS
 PARSER: expr_no_space_dot_int
+COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
+CANONICALIZE: expr_not_canonicalized "foo = asd.0"
 ~~~TOKENS
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),
 Newline(1:1-1:1),
@@ -29,6 +31,6 @@ foo =
 			"let"
 			(pattern (3:1-3:4)
 				(assign (3:1-3:4) (ident "foo")))
-			(expr (3:10-3:12) (runtime_error (3:1-3:12) "RUNTIME ERROR expr_not_canonicalized"))
+			(expr (3:10-3:12) (runtime_error (3:1-3:12) "expr_not_canonicalized"))
 			"#0")))
 ~~~END
