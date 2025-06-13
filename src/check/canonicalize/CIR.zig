@@ -86,6 +86,7 @@ pub const Diagnostic = struct {
         invalid_top_level_statement,
         expr_not_canonicalized,
         invalid_string_interpolation,
+        pattern_arg_invalid,
     };
 };
 
@@ -296,17 +297,6 @@ pub const ExposedItem = struct {
     pub const Span = struct { span: DataSpan };
 };
 
-/// Type variables that have been explicitly named, e.g. `a` in `items : List a`.
-pub const RigidVariables = struct {
-    named: std.AutoHashMap(TypeVar, Ident.Idx),
-    // with_methods: std.AutoHashMap(TypeVar, WithMethods),
-
-    // pub const WithMethods = struct {
-    //     name: Ident.Idx,
-    //     methods: MethodSet,
-    // };
-};
-
 /// An expression that has been canonicalized.
 pub const Expr = union(enum) {
     num: struct {
@@ -321,7 +311,7 @@ pub const Expr = union(enum) {
         precision_var: TypeVar,
         literal: StringLiteral.Idx,
         value: IntValue,
-        bound: types.Num.Compact.Int.Precision,
+        bound: types.Num.Compact, // TODO use the correct type here
         region: Region,
     },
     float: struct {
@@ -329,7 +319,7 @@ pub const Expr = union(enum) {
         precision_var: TypeVar,
         literal: StringLiteral.Idx,
         value: f64,
-        bound: types.Num.Compact.Frac.Precision,
+        bound: types.Num.Compact, // TODO use the correct type here
         region: Region,
     },
     // A single segment of a string literal
@@ -349,7 +339,7 @@ pub const Expr = union(enum) {
         num_var: TypeVar,
         precision_var: TypeVar,
         value: u32,
-        bound: types.Num.Compact.Int.Precision,
+        bound: types.Num.Compact, // TODO use the correct type here
         region: Region,
     },
     lookup: Lookup,
@@ -1054,17 +1044,13 @@ pub const IntValue = struct {
 
     /// todo
     pub const Kind = enum { i128, u128 };
-};
 
-/// todo
-pub const Function = struct {
-    return_var: TypeVar,
-    fx_var: TypeVar,
-    function_var: TypeVar,
-    expr: Expr.Idx,
-    region: Region,
-
-    // TODO: Add toSExpr if needed, might be part of Expr.Closure?
+    pub fn placeholder() IntValue {
+        return IntValue{
+            .bytes = [16]u8{ 0, 1, 2, 3, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+            .kind = .i128,
+        };
+    }
 };
 
 /// todo - evaluate if we need this?
@@ -1129,7 +1115,7 @@ pub const When = struct {
 
 /// todo - evaluate if we need this?
 pub const WhenBranchPattern = struct {
-    pattern: PatternAtRegion,
+    pattern: Pattern.Idx,
     /// Degenerate branch patterns are those that don't fully bind symbols that the branch body
     /// needs. For example, in `A x | B y -> x`, the `B y` pattern is degenerate.
     /// Degenerate patterns emit a runtime error if reached in a program.
@@ -1198,65 +1184,71 @@ pub const WhenBranch = struct {
 /// codegen can generate a runtime error if this pattern is reached.
 pub const Pattern = union(enum) {
     /// An identifier in the assignment position, e.g. the `x` in `x = foo(1)`
-    assign: Ident.Idx,
+    assign: struct {
+        ident: Ident.Idx,
+        region: Region,
+    },
     as: struct {
         pattern: Pattern.Idx,
-        region: Region,
         ident: Ident.Idx,
+        region: Region,
     },
     applied_tag: struct {
         whole_var: TypeVar,
         ext_var: TypeVar,
         tag_name: Ident.Idx,
-        arguments: TypedPatternAtRegion.Span,
+        arguments: Pattern.Span,
+        region: Region,
     },
     record_destructure: struct {
         whole_var: TypeVar,
         ext_var: TypeVar,
         destructs: RecordDestruct.Span,
+        region: Region,
     },
     list: struct {
         list_var: TypeVar,
         elem_var: TypeVar,
         patterns: Pattern.Span,
+        region: Region,
     },
     num_literal: struct {
         num_var: TypeVar,
         literal: StringLiteral.Idx,
         value: IntValue,
         bound: types.Num.Compact,
+        region: Region,
     },
     int_literal: struct {
         num_var: TypeVar,
         precision_var: TypeVar,
         literal: StringLiteral.Idx,
         value: IntValue,
-        bound: types.Num.Compact.Int.Precision,
+        bound: types.Num.Compact, // TODO use the right type here
+        region: Region,
     },
     float_literal: struct {
         num_var: TypeVar,
         precision_var: TypeVar,
         literal: StringLiteral.Idx,
         value: f64,
-        bound: types.Num.Compact.Frac.Precision,
+        bound: types.Num.Compact, // TODO use the right type here
+        region: Region,
     },
-    str_literal: StringLiteral.Idx,
+    str_literal: struct {
+        literal: StringLiteral.Idx,
+        region: Region,
+    },
     char_literal: struct {
         num_var: TypeVar,
         precision_var: TypeVar,
         value: u32,
-        bound: types.Num.Compact.Int.Precision,
+        bound: types.Num.Compact, // TODO use the right type here
+        region: Region,
     },
-    Underscore,
-
-    // TODO: do we want these runtime exceptions here?
-    // // Runtime Exceptions
-    // Shadowed(Region, Loc<Ident>, Symbol),
-    // OpaqueNotInScope(Loc<Ident>),
-    // // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
-    // UnsupportedPattern(Region),
-    // parse error patterns
-    // MalformedPattern: .{ MalformedPatternProblem, Region },
+    underscore: struct {
+        region: Region,
+    },
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
@@ -1264,9 +1256,10 @@ pub const Pattern = union(enum) {
     pub fn toSExpr(self: *const @This(), ir: *CIR) sexpr.Expr {
         const gpa = ir.env.gpa;
         switch (self.*) {
-            .assign => |ident_idx| {
+            .assign => |p| {
                 var node = sexpr.Expr.init(gpa, "assign");
-                appendIdent(&node, gpa, ir, "ident", ident_idx);
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(p.region));
+                appendIdent(&node, gpa, ir, "ident", p.ident);
                 return node;
             },
             .as => |a| {
@@ -1280,40 +1273,29 @@ pub const Pattern = union(enum) {
                 node.appendNode(gpa, &inner_patt_node);
                 return node;
             },
-            .applied_tag => |_| {
-                @panic("TODO pattern applied_tag");
-                // var node = sexpr.Expr.init(gpa, "pattern_applied_tag");
-                // appendIdent(&node, gpa, ir, "tag_name", t.tag_name);
-                // var args_node = sexpr.Expr.init(gpa, "arguments");
-                // ir.store.pa
-                // for (ir.patterns_at_regions.rangeToSlice(t.arguments).items(.pattern), ir.typed_patterns_at_regions.rangeToSlice(t.arguments).items(.type_var)) |arg, type_var| {
-                //     var arg_sexpr = ir.patterns.get(arg).toSExpr(ir);
-                //     var pat_ty_var = sexpr.Expr.init(gpa, "argty");
-                //     pat_ty_var.appendNode(gpa, &arg_sexpr);
-                //     pat_ty_var.appendUnsignedIntChild(gpa, @intFromEnum(type_var)); // TODO: use a type var name or something
-                //     args_node.appendNode(gpa, &pat_ty_var);
-                // }
-                // node.appendNode(gpa, &args_node);
-                // return node;
-            },
-            .record_destructure => {
-                var node = sexpr.Expr.init(gpa, "record_destructure");
-                var destructs_node = sexpr.Expr.init(gpa, "destructs");
-                // Need RecordDestruct storage in IR
-                // Assuming ir.record_destructs exists:
-                // for (ir.record_destructs.getSlice(r.destructs)) |destruct| {
-                //     var d_sexpr = destruct.toSExpr(env, ir);
-                //     destructs_node.appendNode(gpa, &d_sexpr);
-                // }
-                destructs_node.appendString(gpa, "TODO: Store and represent RecordDestruct slice");
-                node.appendNode(gpa, &destructs_node);
+            .applied_tag => |p| {
+                var node = sexpr.Expr.init(gpa, "pattern_applied_tag");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(p.region));
+                node.appendString(gpa, "TODO");
                 return node;
             },
-            .list => |l| {
+            .record_destructure => |p| {
+                var node = sexpr.Expr.init(gpa, "record_destructure");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(p.region));
+
+                var destructs_node = sexpr.Expr.init(gpa, "destructs");
+                destructs_node.appendString(gpa, "TODO");
+                node.appendNode(gpa, &destructs_node);
+
+                return node;
+            },
+            .list => |p| {
                 var pattern_list_node = sexpr.Expr.init(gpa, "list");
+                pattern_list_node.appendRegionInfo(gpa, ir.calcRegionInfo(p.region));
+
                 var patterns_node = sexpr.Expr.init(gpa, "patterns");
 
-                for (ir.store.slicePatterns(l.patterns)) |patt_idx| {
+                for (ir.store.slicePatterns(p.patterns)) |patt_idx| {
                     const patt = ir.store.getPattern(patt_idx);
                     var patt_sexpr = patt.toSExpr(ir);
                     patterns_node.appendNode(gpa, &patt_sexpr);
@@ -1323,90 +1305,61 @@ pub const Pattern = union(enum) {
 
                 return pattern_list_node;
             },
-            .num_literal => |l| {
+            .num_literal => |p| {
                 var node = sexpr.Expr.init(gpa, "num");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(p.region));
                 node.appendString(gpa, "literal"); // TODO: use l.literal
                 node.appendString(gpa, "value=<int_value>");
-                node.appendString(gpa, @tagName(l.bound));
+                node.appendString(gpa, @tagName(p.bound));
                 return node;
             },
-            .int_literal => |l| {
+            .int_literal => |p| {
                 var node = sexpr.Expr.init(gpa, "int");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(p.region));
                 node.appendString(gpa, "literal"); // TODO: use l.literal
                 node.appendString(gpa, "value=<int_value>");
-                node.appendString(gpa, @tagName(l.bound));
+                node.appendString(gpa, @tagName(p.bound));
                 return node;
             },
-            .float_literal => |l| {
+            .float_literal => |p| {
                 var node = sexpr.Expr.init(gpa, "float");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(p.region));
+
                 node.appendString(gpa, "literal"); // TODO: use l.literal
-                const val_str = std.fmt.allocPrint(gpa, "{d}", .{l.value}) catch "<oom>";
+                const val_str = std.fmt.allocPrint(gpa, "{d}", .{p.value}) catch "<oom>";
                 defer gpa.free(val_str);
+
                 node.appendString(gpa, val_str);
-                node.appendString(gpa, @tagName(l.bound));
+                node.appendString(gpa, @tagName(p.bound));
+
                 return node;
             },
-            .str_literal => |str_idx| {
-                _ = str_idx; // str_idx not used currently, but keep for signature consistency
+            .str_literal => |p| {
                 var node = sexpr.Expr.init(gpa, "str");
-                node.appendString(gpa, "value"); // TODO: use str_idx
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(p.region));
+
+                const text = ir.env.strings.get(p.literal);
+                node.appendString(gpa, text);
+
                 return node;
             },
             .char_literal => |l| {
                 var node = sexpr.Expr.init(gpa, "char");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(l.region));
+
+                node.appendString(gpa, "value");
                 const char_str = std.fmt.allocPrint(gpa, "'\\u({d})'", .{l.value}) catch "<oom>";
                 defer gpa.free(char_str);
                 node.appendString(gpa, char_str);
                 node.appendString(gpa, @tagName(l.bound));
                 return node;
             },
-            .Underscore => return sexpr.Expr.init(gpa, "underscore"),
+            .underscore => |p| {
+                var node = sexpr.Expr.init(gpa, "underscore");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(p.region));
+                return node;
+            },
         }
-    }
-};
-
-/// todo - evaluate if we need this?
-pub const PatternAtRegion = struct {
-    pattern: Pattern.Idx,
-    region: Region,
-
-    pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: base.DataSpan };
-
-    pub fn toSExpr(self: *const @This(), ir: *const CIR, line_starts: std.ArrayList(u32)) sexpr.Expr {
-        const gpa = ir.env.gpa;
-
-        var pattern_node = sexpr.Expr.init(gpa, "pattern_at_region");
-        pattern_node.appendRegionInfo(gpa, self.region);
-
-        const pattern = ir.patterns.get(self.pattern);
-        var pattern_sexpr = pattern.toSExpr(ir, line_starts);
-        pattern_node.appendNode(gpa, &pattern_sexpr);
-
-        return pattern_node;
-    }
-};
-
-/// todo - evaluate if we need this?
-pub const TypedPatternAtRegion = struct {
-    pattern: Pattern.Idx,
-    region: Region,
-    type_var: TypeVar,
-
-    pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: base.DataSpan };
-
-    pub fn toSExpr(self: *const @This(), ir: *const CIR) sexpr.Expr {
-        const gpa = ir.env.gpa;
-
-        var type_pattern_node = sexpr.Expr.init(gpa, "typed_pattern_at_region");
-        type_pattern_node.appendRegionInfo(gpa, self.region);
-
-        const pattern = ir.patterns.get(self.pattern);
-        var pattern_sexpr = pattern.toSExpr(ir);
-        type_pattern_node.appendNode(gpa, &pattern_sexpr);
-
-        return type_pattern_node;
     }
 };
 
@@ -1424,7 +1377,7 @@ pub const RecordDestruct = struct {
     /// todo
     pub const Kind = union(enum) {
         Required,
-        Guard: TypedPatternAtRegion.Idx,
+        Guard: Pattern.Idx,
 
         pub fn toSExpr(self: *const @This(), ir: *const CIR, line_starts: std.ArrayList(u32)) sexpr.Expr {
             const gpa = ir.env.gpa;
@@ -1507,110 +1460,6 @@ pub fn toSExprStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr.Idx)
         root_node.toStringPretty(writer);
     }
 }
-
-/// todo - evaluate if we need this?
-/// I think Types are now implemented in `src/types.zig` etc...
-pub const Content = union(enum) {
-    /// A type variable which the user did not name in an annotation,
-    ///
-    /// When we auto-generate a type var name, e.g. the "a" in (a -> a), we
-    /// change the Option in here from None to Some.
-    FlexVar: ?Ident.Idx,
-    /// name given in a user-written annotation
-    RigidVar: Ident.Idx,
-    /// name given to a recursion variable
-    RecursionVar: struct {
-        structure: TypeVar,
-        opt_name: ?Ident.Idx,
-    },
-    Structure: FlatType,
-    Alias: struct {
-        ident: Ident.Idx,
-        // vars: AliasVariables,
-        type_var: TypeVar,
-        kind: Alias.Kind,
-    },
-    RangedNumber: types.num.NumericRange,
-    Error,
-    /// The fx type variable for a given function
-    Pure,
-    Effectful,
-};
-
-/// todo - evaluate if we need this?
-/// I think Types are now implemented in `src/types.zig` etc...
-pub const FlatType = union(enum) {
-    Apply: struct {
-        ident: Ident.Idx,
-        vars: collections.SafeList(TypeVar).Range,
-    },
-    Func: struct {
-        arg_vars: collections.SafeList(TypeVar).Range,
-        ret_var: TypeVar,
-        fx: TypeVar,
-    },
-    /// A function that we know nothing about yet except that it's effectful
-    EffectfulFunc,
-    Record: struct {
-        whole_var: TypeVar,
-        fields: FlatType.RecordField.Range,
-    },
-    // TagUnion: struct {
-    //     union_tags: UnionTags,
-    //     ext: TagExt,
-    // },
-
-    // /// `A` might either be a function
-    // ///   x -> A x : a -> [A a, B a, C a]
-    // /// or a tag `[A, B, C]`
-    // FunctionOrTagUnion: struct {
-    //     name: Ident.Idx,
-    //     ident: Ident.Idx,
-    //     ext: TagExt,
-    // },
-
-    // RecursiveTagUnion: struct {
-    //     type_var: TypeVar,
-    //     union_tags: UnionTags,
-    //     ext: TagExt,
-    // },
-
-    EmptyRecord,
-    EmptyTagUnion,
-
-    /// todo
-    pub const RecordField = struct {
-        name: Ident.Idx,
-        type_var: TypeVar,
-
-        // pub const List = collections.SafeMultiList(@This());
-        // pub const Range = List.Range;
-        pub const Idx = enum(u32) { _ };
-    };
-};
-
-/// todo
-pub const TagExt = union(enum) {
-    /// This tag extension variable measures polymorphism in the openness of the tag,
-    /// or the lack thereof. It can only be unified with
-    ///   - an empty tag union, or
-    ///   - a rigid extension variable
-    ///
-    /// Openness extensions are used when tag annotations are introduced, since tag union
-    /// annotations may contain hidden extension variables which we want to reflect openness,
-    /// but not growth in the monomorphic size of the tag. For example, openness extensions enable
-    /// catching
-    ///
-    /// ```ignore
-    /// f : [A]
-    /// f = if Bool.true then A else B
-    /// ```
-    ///
-    /// as an error rather than resolving as [A][B].
-    Openness: TypeVar,
-    /// This tag extension can grow unboundedly.
-    Any: TypeVar,
-};
 
 test "NodeStore - init and deinit" {
     var store = CIR.NodeStore.init(testing.allocator);

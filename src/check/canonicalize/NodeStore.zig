@@ -8,6 +8,7 @@ const Node = @import("Node.zig");
 const CIR = @import("CIR.zig");
 
 const DataSpan = base.DataSpan;
+const Region = base.Region;
 
 const exitOnOom = collections.exitOnOom;
 
@@ -84,18 +85,25 @@ pub fn getStatement(store: *NodeStore, statement: CIR.Statement.Idx) CIR.Stateme
                 .region = node.region,
             } };
         },
-        // .statement_decl => {},
-        // .statement_var => {},
-        // .statement_for => {},
-        // .statement_expect => {},
-        // .statement_return => {},
-        // .statement_import => {},
-        // .statement_type_decl => {},
-        // .statement_type_anno => {},
-        // .statement_crash => {},
-        else => @panic("TODO: implement other statement variants"),
-        // not a statement node
-        // else => unreachable,
+        .statement_decl,
+        .statement_var,
+        .statement_for,
+        .statement_expect,
+        .statement_return,
+        .statement_import,
+        .statement_type_decl,
+        .statement_type_anno,
+        .statement_crash,
+        => {
+            std.log.debug("TODO: implement getStatement for node type {?}", .{node.tag});
+            return .{ .expr = .{
+                .expr = @enumFromInt(0),
+                .region = Region.empty(),
+            } };
+        },
+        else => {
+            @panic("unreachable, node is not an expression tag");
+        },
     }
 }
 
@@ -126,12 +134,9 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                     .num_var = num_var,
                     .precision_var = precision_var,
                     .literal = literal,
-                    .value = CIR.IntValue{ // Placeholder value
-                        .bytes = [16]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
-                        .kind = .i128,
-                    },
+                    .value = CIR.IntValue.placeholder(),
                     // TODO shouldn't this be a flex_var?
-                    .bound = types.Num.Compact.Int.Precision.i128,
+                    .bound = types.Num.Compact.placeholder(), // TODO: get from extra_data
                     .region = node.region,
                 },
             };
@@ -171,7 +176,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                     .literal = literal,
                     .value = 0,
                     // TODO shouldn't this be a flex_var?
-                    .bound = types.Num.Compact.Frac.Precision.dec,
+                    .bound = types.Num.Compact.placeholder(), // TODO
                     .region = node.region,
                 },
             };
@@ -203,22 +208,6 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 node.region,
             ) };
         },
-        .malformed => {
-            return CIR.Expr{ .runtime_error = .{
-                .tag = @enumFromInt(node.data_1),
-                .region = node.region,
-            } };
-        },
-        .statement_expr,
-        .statement_decl,
-        .statement_var,
-        .statement_for,
-        .statement_expect,
-        .statement_return,
-        .statement_import,
-        .statement_type_decl,
-        .statement_type_anno,
-        .statement_crash,
         .expr_tuple,
         .expr_record,
         .expr_field_access,
@@ -233,30 +222,22 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         .expr_dbg,
         .expr_block,
         .expr_ellipsis,
-
         .expr_record_builder,
-        .type_decl_header,
-        .type_anno_apply,
-        .type_anno_var,
-        .type_anno_ty,
-        .type_anno_underscore,
-        .type_anno_mod_ty,
-        .type_anno_union,
-        .type_anno_tuple,
-        .type_anno_record,
-        .type_anno_fn,
-        .type_anno_parens,
-        .pattern_identifier,
-        .pattern_as,
-        .pattern_applied_tag,
-        .def,
-        .if_branch,
         => {
             std.log.debug("TODO: implement getExpr for node type {?}", .{node.tag});
             return CIR.Expr{ .runtime_error = .{
                 .tag = CIR.Diagnostic.Tag.not_implemented,
                 .region = node.region,
             } };
+        },
+        .malformed => {
+            return CIR.Expr{ .runtime_error = .{
+                .tag = @enumFromInt(node.data_1),
+                .region = node.region,
+            } };
+        },
+        else => {
+            @panic("unreachable, node is not an expression tag");
         },
     }
 }
@@ -281,13 +262,92 @@ pub fn getPattern(store: *NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pattern {
     const node = store.nodes.get(node_idx);
 
     switch (node.tag) {
-        .pattern_identifier => {
-            const ident_idx: base.Ident.Idx = @bitCast(node.data_1);
-            return CIR.Pattern{ .assign = ident_idx };
+        .pattern_identifier => return CIR.Pattern{
+            .assign = .{
+                .ident = @bitCast(node.data_1),
+                .region = node.region,
+            },
         },
+        .pattern_as => return CIR.Pattern{
+            .as = .{
+                .ident = @bitCast(node.data_1),
+                .pattern = @enumFromInt(node.data_2),
+                .region = node.region,
+            },
+        },
+        .pattern_applied_tag => return CIR.Pattern{
+            .applied_tag = .{
+                .region = node.region,
+                .arguments = DataSpan.init(node.data_1, node.data_2).as(CIR.Pattern.Span),
+                .tag_name = @bitCast(node.data_3),
+
+                .ext_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
+                .whole_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
+            },
+        },
+        .pattern_record_destructure => return CIR.Pattern{
+            .record_destructure = .{
+                .region = node.region,
+                .destructs = DataSpan.init(node.data_1, node.data_2).as(CIR.RecordDestruct.Span),
+                .ext_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
+                .whole_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
+            },
+        },
+        .pattern_list => return CIR.Pattern{
+            .list = .{
+                .region = node.region,
+                .patterns = DataSpan.init(node.data_1, node.data_2).as(CIR.Pattern.Span),
+                .elem_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
+                .list_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
+            },
+        },
+        .pattern_num_literal => return CIR.Pattern{
+            .num_literal = .{
+                .region = node.region,
+                .literal = @enumFromInt(node.data_1),
+                .num_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
+                .bound = types.Num.Compact.placeholder(), // TODO  extra_data
+                .value = CIR.IntValue.placeholder(),
+            },
+        },
+        .pattern_int_literal => return CIR.Pattern{
+            .int_literal = .{
+                .region = node.region,
+                .literal = @enumFromInt(node.data_1),
+                .precision_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
+                .num_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
+                .bound = types.Num.Compact.placeholder(), // TODO  extra_data
+                .value = CIR.IntValue.placeholder(), // TODO need to store and retrieve from extra_data
+            },
+        },
+        .pattern_float_literal => return CIR.Pattern{
+            .float_literal = .{
+                .region = node.region,
+                .literal = @enumFromInt(node.data_1),
+                .precision_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
+                .num_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
+                .bound = types.Num.Compact.placeholder(), // TODO  extra_data
+                .value = 42, // TODO need to store and retrieve from extra_data
+            },
+        },
+        .pattern_str_literal => return CIR.Pattern{ .str_literal = .{
+            .region = node.region,
+            .literal = @enumFromInt(node.data_1),
+        } },
+        .pattern_char_literal => return CIR.Pattern{
+            .char_literal = .{
+                .region = node.region,
+                .value = node.data_1,
+                .bound = types.Num.Compact.placeholder(), // TODO
+                .num_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
+                .precision_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
+            },
+        },
+        .pattern_underscore => return CIR.Pattern{ .underscore = .{
+            .region = node.region,
+        } },
         else => {
-            std.log.debug("TODO: implement pattern {}", .{node.tag});
-            @panic("unimplemented");
+            @panic("unreachable, node is not an pattern tag");
         },
     }
 }
@@ -495,22 +555,72 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern) CIR.Pattern.Idx {
     };
 
     switch (pattern) {
-        .assign => |ident_idx| {
-            node.data_1 = @bitCast(ident_idx);
+        .assign => |p| {
+            node.data_1 = @bitCast(p.ident);
             node.tag = .pattern_identifier;
+            node.region = p.region;
         },
-        .as,
-        .applied_tag,
-        .record_destructure,
-        .list,
-        .num_literal,
-        .int_literal,
-        .float_literal,
-        .str_literal,
-        .char_literal,
-        .Underscore,
-        => {
-            std.debug.panic("Pattern of type {s} not yet implemented in Can\n", .{@tagName(pattern)});
+        .as => |p| {
+            node.tag = .pattern_as;
+            node.region = p.region;
+            node.data_1 = @bitCast(p.ident);
+            node.data_2 = @intFromEnum(p.pattern);
+        },
+        .applied_tag => |p| {
+            node.tag = .pattern_applied_tag;
+            node.region = p.region;
+            node.data_1 = p.arguments.span.start;
+            node.data_2 = p.arguments.span.len;
+            node.data_3 = @bitCast(p.tag_name);
+            // TODO store type vars in extra data
+        },
+        .record_destructure => |p| {
+            node.tag = .pattern_record_destructure;
+            node.region = p.region;
+            node.data_1 = p.destructs.span.start;
+            node.data_2 = p.destructs.span.len;
+            // TODO store type vars in extra data
+        },
+        .list => |p| {
+            node.tag = .pattern_list;
+            node.region = p.region;
+            node.data_1 = p.patterns.span.start;
+            node.data_2 = p.patterns.span.len;
+            // TODO store type vars in extra data
+        },
+        .num_literal => |p| {
+            node.tag = .pattern_num_literal;
+            node.region = p.region;
+            node.data_1 = @intFromEnum(p.literal);
+            // TODO store other data in extra_data
+        },
+        .int_literal => |p| {
+            node.tag = .pattern_int_literal;
+            node.region = p.region;
+            node.data_1 = @intFromEnum(p.literal);
+            // TODO store other data
+        },
+        .float_literal => |p| {
+            node.tag = .pattern_float_literal;
+            node.region = p.region;
+            node.data_1 = @intFromEnum(p.literal);
+            // TODO store other data
+        },
+        .str_literal => |p| {
+            node.tag = .pattern_str_literal;
+            node.region = p.region;
+            node.data_1 = @intFromEnum(p.literal);
+            // TODO store other data
+        },
+        .char_literal => |p| {
+            node.tag = .pattern_char_literal;
+            node.region = p.region;
+            node.data_1 = p.value;
+            // TODO store other data
+        },
+        .underscore => |p| {
+            node.tag = .pattern_underscore;
+            node.region = p.region;
         },
     }
 
@@ -707,6 +817,20 @@ pub fn defSpanFrom(store: *NodeStore, start: u32) CIR.Def.Span {
     std.debug.assert(end >= i);
     while (i < end) {
         store.extra_data.append(store.gpa, @intFromEnum(store.scratch_defs.items.items[i])) catch |err| exitOnOom(err);
+        i += 1;
+    }
+    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+}
+
+/// Computes the span of an expression starting from a given index.
+pub fn pattenSpanFrom(store: *NodeStore, start: u32) CIR.Pattern.Span {
+    const end = store.scratch_patterns.top();
+    defer store.scratch_patterns.clearFrom(start);
+    var i = @as(usize, @intCast(start));
+    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
+    std.debug.assert(end >= i);
+    while (i < end) {
+        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_patterns.items.items[i])) catch |err| exitOnOom(err);
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };

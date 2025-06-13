@@ -41,18 +41,20 @@ NO CHANGE
 	(top_level_defs
 		(def
 			(let)
-			(pattern (3:1-3:2) (assign (ident "a")))
+			(pattern (3:1-3:2)
+				(assign (3:1-3:2) (ident "a")))
 			(expr (3:5-3:6)
 				(int (3:5-3:6)
 					(num_var "#0")
 					(precision_var "#1")
 					(literal "5")
 					(value "TODO")
-					(bound "i128")))
+					(bound "int")))
 			"#2")
 		(def
 			(let)
-			(pattern (4:1-4:2) (assign (ident "b")))
+			(pattern (4:1-4:2)
+				(assign (4:1-4:2) (ident "b")))
 			(expr (4:5-4:10)
 				(binop (4:5-4:10)
 					"add"
@@ -62,6 +64,6 @@ NO CHANGE
 						(precision_var "#4")
 						(literal "1")
 						(value "TODO")
-						(bound "i128"))))
+						(bound "int"))))
 			"#5")))
 ~~~END

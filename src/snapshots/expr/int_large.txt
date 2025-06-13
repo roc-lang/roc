@@ -17,5 +17,5 @@ NO CHANGE
 	(precision_var "#1")
 	(literal "999999999999999999999999999999")
 	(value "TODO")
-	(bound "i128"))
+	(bound "int"))
 ~~~END

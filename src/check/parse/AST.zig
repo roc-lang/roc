@@ -549,7 +549,7 @@ pub const Pattern = union(enum) {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
 
-    pub fn to_region(self: @This()) TokenizedRegion {
+    pub fn to_tokenized_region(self: @This()) TokenizedRegion {
         return switch (self) {
             .ident => |p| p.region,
             .tag => |p| p.region,
@@ -1340,7 +1340,7 @@ pub const Expr = union(enum) {
         }
     }
 
-    pub fn to_region(self: @This()) TokenizedRegion {
+    pub fn to_tokenized_region(self: @This()) TokenizedRegion {
         return switch (self) {
             .ident => |e| e.region,
             .int => |e| e.region,

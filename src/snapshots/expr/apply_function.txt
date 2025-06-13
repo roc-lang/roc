@@ -22,6 +22,6 @@ NO CHANGE
 		(precision_var "#1")
 		(literal "42")
 		(value "TODO")
-		(bound "i128"))
+		(bound "int"))
 	(string (1:9-1:16) (literal (1:10-1:15) "hello")))
 ~~~END

@@ -44,7 +44,8 @@ foo =
 	(top_level_defs
 		(def
 			(let)
-			(pattern (4:1-4:4) (assign (ident "foo")))
+			(pattern (4:1-4:4)
+				(assign (4:1-4:4) (ident "foo")))
 			(expr (6:5-6:12)
 				(string (6:5-6:12) (literal (6:6-6:12) "onmo %")))
 			"#0")))

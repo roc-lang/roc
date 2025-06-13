@@ -228,6 +228,10 @@ pub const Num = union(enum) {
         int: Int.Precision,
         frac: Frac.Precision,
 
+        pub fn placeholder() Compact {
+            return Compact{ .int = .u8 };
+        }
+
         /// the Frac data type
         pub const Frac = struct {
             /// the precision of a frac

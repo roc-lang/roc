@@ -17,5 +17,5 @@ NO CHANGE
 	(precision_var "#1")
 	(literal "-2.5")
 	(value "0")
-	(bound "dec"))
+	(bound "int"))
 ~~~END

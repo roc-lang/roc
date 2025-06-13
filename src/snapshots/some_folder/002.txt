@@ -35,13 +35,15 @@ NO CHANGE
 	(top_level_defs
 		(def
 			(let)
-			(pattern (3:1-3:4) (assign (ident "foo")))
+			(pattern (3:1-3:4)
+				(assign (3:1-3:4) (ident "foo")))
 			(expr (3:7-3:12)
 				(string (3:7-3:12) (literal (3:8-3:11) "one")))
 			"#0")
 		(def
 			(let)
-			(pattern (5:1-5:4) (assign (ident "bar")))
+			(pattern (5:1-5:4)
+				(assign (5:1-5:4) (ident "bar")))
 			(expr (5:7-5:12)
 				(string (5:7-5:12) (literal (5:8-5:11) "two")))
 			"#1")))

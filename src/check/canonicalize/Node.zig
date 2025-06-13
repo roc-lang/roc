@@ -77,6 +77,14 @@ pub const Tag = enum {
     pattern_identifier,
     pattern_as,
     pattern_applied_tag,
+    pattern_record_destructure,
+    pattern_list,
+    pattern_num_literal,
+    pattern_int_literal,
+    pattern_float_literal,
+    pattern_str_literal,
+    pattern_char_literal,
+    pattern_underscore,
     // Definitions
     def,
 
