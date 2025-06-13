@@ -501,4 +501,8 @@ See also [std::boxed::Box](https://doc.rust-lang.org/std/boxed/struct.Box.html) 
 
 ## Glue
 
+## lhs & rhs
+
+Left & Right Hand Side: for example in `1 + 2`, `1` is on the left hand side and `2` is on the right hand side.
+
 ## WASM
