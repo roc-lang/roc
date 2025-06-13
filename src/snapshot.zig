@@ -529,7 +529,7 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
         const tokens = tokenizedBuffer.tokens.items(.tag);
         for (tokens, 0..) |tok, i| {
             const region = tokenizedBuffer.resolve(@intCast(i));
-            const info = try module_env.getDiagnosticPosition(content.source, region.start.offset, region.end.offset);
+            const info = try module_env.calcRegionInfo(content.source, region.start.offset, region.end.offset);
             const region_str = try std.fmt.allocPrint(gpa, "{s}({d}:{d}-{d}:{d}),", .{
                 @tagName(tok),
                 // add one to display numbers instead of index

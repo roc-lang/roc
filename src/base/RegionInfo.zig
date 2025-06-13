@@ -1,5 +1,9 @@
-//! This module provides helpers for calculating position for diagnostics
+//! This module provides helpers for calculating region information for diagnostics
 //! including the start and end line and column information
+//!
+//! We only store simple position offsets in the AST and intermediate representation's (IR)
+//! as this is more compact, and then when we need to we can calculate the line and column information
+//! using line_starts and the offsets.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
@@ -10,7 +14,7 @@ end_line_idx: u32,
 end_col_idx: u32,
 line_text: []const u8,
 
-const DiagnosticPosition = @This();
+const RegionInfo = @This();
 
 /// Finds the line index for a given position in the source
 fn lineIdx(line_starts: []const u32, pos: u32) u32 {
@@ -68,7 +72,7 @@ pub fn findLineStarts(gpa: Allocator, source: []const u8) !std.ArrayList(u32) {
 }
 
 /// Returns position info for a given start and end index offset
-pub fn position(source: []const u8, line_starts: []const u32, begin: u32, end: u32) !DiagnosticPosition {
+pub fn position(source: []const u8, line_starts: []const u32, begin: u32, end: u32) !RegionInfo {
     if (begin > end) {
         return error.OutOfOrder;
     }

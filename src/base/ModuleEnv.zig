@@ -11,7 +11,7 @@ const problem = @import("../problem.zig");
 const collections = @import("../collections.zig");
 const Ident = @import("Ident.zig");
 const StringLiteral = @import("StringLiteral.zig");
-const DiagnosticPosition = @import("DiagnosticPosition.zig");
+const RegionInfo = @import("RegionInfo.zig");
 const exitOnOom = collections.utils.exitOnOom;
 
 const Type = type_mod.Type;
@@ -72,12 +72,12 @@ pub fn pushProblem(self: *Self, p: Problem) void {
 }
 
 /// Calculate and store line starts from the source text
-pub fn calculateLineStarts(self: *Self, source: []const u8) !void {
+pub fn calcLineStarts(self: *Self, source: []const u8) !void {
     self.line_starts.clearRetainingCapacity();
-    self.line_starts = try DiagnosticPosition.findLineStarts(self.gpa, source);
+    self.line_starts = try RegionInfo.findLineStarts(self.gpa, source);
 }
 
 /// Get diagnostic position information for a given range
-pub fn getDiagnosticPosition(self: *Self, source: []const u8, begin: u32, end: u32) !DiagnosticPosition {
-    return DiagnosticPosition.position(source, self.line_starts.items, begin, end);
+pub fn calcRegionInfo(self: *Self, source: []const u8, begin: u32, end: u32) !RegionInfo {
+    return RegionInfo.position(source, self.line_starts.items, begin, end);
 }

@@ -3,7 +3,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const testing = std.testing;
-const DiagnosticPosition = @import("DiagnosticPosition.zig");
+const RegionInfo = @import("RegionInfo.zig");
 
 /// How many child nodes before breaking to a newline
 const CHILD_COUNT_BREAKPOINT = 5;
@@ -14,7 +14,7 @@ pub const Expr = union(enum) {
         value: []const u8,
         children: std.ArrayListUnmanaged(Expr),
     },
-    region: DiagnosticPosition,
+    region: RegionInfo,
     string: []const u8,
     signed_int: i128,
     unsigned_int: u128,
@@ -82,8 +82,8 @@ pub const Expr = union(enum) {
         self.appendNodeUnsafe(gpa, .{ .string = owned_value });
     }
 
-    pub fn appendRegionInfo(self: *Expr, gpa: Allocator, region: DiagnosticPosition) void {
-        self.appendNodeUnsafe(gpa, .{ .region = DiagnosticPosition{
+    pub fn appendRegionInfo(self: *Expr, gpa: Allocator, region: RegionInfo) void {
+        self.appendNodeUnsafe(gpa, .{ .region = RegionInfo{
             .start_line_idx = region.start_line_idx,
             .start_col_idx = region.start_col_idx,
             .end_line_idx = region.end_line_idx,

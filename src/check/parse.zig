@@ -22,7 +22,7 @@ fn runParse(env: *base.ModuleEnv, source: []const u8, parserCall: *const fn (*Pa
     defer trace.end();
 
     // Calculate and store line starts for diagnostic position calculation
-    env.calculateLineStarts(source) catch |err| exitOnOom(err);
+    env.calcLineStarts(source) catch |err| exitOnOom(err);
 
     var messages: [128]tokenize.Diagnostic = undefined;
     const msg_slice = messages[0..];

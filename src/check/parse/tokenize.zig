@@ -501,11 +501,11 @@ pub const Diagnostic = struct {
     };
 
     pub fn toStr(self: Diagnostic, gpa: Allocator, source: []const u8, writer: anytype) !void {
-        var newlines = try base.DiagnosticPosition.findLineStarts(gpa, source);
+        var newlines = try base.RegionInfo.findLineStarts(gpa, source);
         defer newlines.deinit();
 
         // Get position information
-        const info = try base.DiagnosticPosition.position(source, newlines.items, self.begin, self.end);
+        const info = try base.RegionInfo.position(source, newlines.items, self.begin, self.end);
 
         // Strip trailing newline for display
         const display_text = if (info.line_text.len > 0 and

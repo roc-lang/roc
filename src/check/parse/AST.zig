@@ -54,10 +54,10 @@ pub fn regionIsMultiline(self: *AST, region: TokenizedRegion) bool {
 }
 
 /// Returns diagnostic position information for the given region.
-pub fn regionInfoFromTokenIds(self: *AST, region: TokenizedRegion, line_starts: []const u32) base.DiagnosticPosition {
+pub fn calcRegionInfo(self: *AST, region: TokenizedRegion, line_starts: []const u32) base.RegionInfo {
     const start = self.tokens.resolve(region.start);
     const end = self.tokens.resolve(region.end);
-    const info = base.DiagnosticPosition.position(self.source, line_starts, start.start.offset, end.end.offset) catch {
+    const info = base.RegionInfo.position(self.source, line_starts, start.start.offset, end.end.offset) catch {
         // std.debug.panic("failed to calculate position info for region {?}, start: {}, end: {}", .{ region, start, end });
         return .{
             .start_line_idx = 0,
@@ -226,12 +226,11 @@ test {
     _ = std.testing.refAllDeclsRecursive(@This());
 }
 
-/// Helper function to convert an IR to a string in S-expression format
-/// and write it to the given writer.
-pub fn toSExprStr(ir: *@This(), env: *base.ModuleEnv, writer: std.io.AnyWriter) !void {
-    const file = ir.store.getFile();
+/// Helper function to convert the AST to a human friendly representation in S-expression format
+pub fn toSExprStr(ast: *@This(), env: *base.ModuleEnv, writer: std.io.AnyWriter) !void {
+    const file = ast.store.getFile();
 
-    var node = file.toSExpr(env, ir);
+    var node = file.toSExpr(env, ast);
     defer node.deinit(env.gpa);
 
     node.toStringPretty(writer);
@@ -300,72 +299,72 @@ pub const Statement = union(enum) {
         region: TokenizedRegion,
     };
 
-    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *AST) sexpr.Expr {
+    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ast: *AST) sexpr.Expr {
         switch (self) {
             .decl => |decl| {
                 var node = sexpr.Expr.init(env.gpa, "decl");
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(decl.region, env.line_starts.items));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(decl.region, env.line_starts.items));
                 // pattern
                 {
-                    const pattern = ir.store.getPattern(decl.pattern);
-                    var pattern_node = pattern.toSExpr(env, ir);
+                    const pattern = ast.store.getPattern(decl.pattern);
+                    var pattern_node = pattern.toSExpr(env, ast);
                     node.appendNode(env.gpa, &pattern_node);
                 }
                 // body
                 {
-                    const body = ir.store.getExpr(decl.body);
-                    var body_node = body.toSExpr(env, ir);
+                    const body = ast.store.getExpr(decl.body);
+                    var body_node = body.toSExpr(env, ast);
                     node.appendNode(env.gpa, &body_node);
                 }
                 return node;
             },
             .@"var" => |v| {
                 var node = sexpr.Expr.init(env.gpa, "var");
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(v.region, env.line_starts.items));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(v.region, env.line_starts.items));
                 // name
                 {
-                    const name_str = ir.resolve(v.name);
+                    const name_str = ast.resolve(v.name);
                     var child = sexpr.Expr.init(env.gpa, "name");
                     child.appendString(env.gpa, name_str);
                     node.appendNode(env.gpa, &child);
                 }
                 // body
                 {
-                    const body = ir.store.getExpr(v.body);
-                    var body_node = body.toSExpr(env, ir);
+                    const body = ast.store.getExpr(v.body);
+                    var body_node = body.toSExpr(env, ast);
                     node.appendNode(env.gpa, &body_node);
                 }
                 return node;
             },
             .expr => |expr| {
-                return ir.store.getExpr(expr.expr).toSExpr(env, ir);
+                return ast.store.getExpr(expr.expr).toSExpr(env, ast);
             },
             .import => |import| {
                 var node = sexpr.Expr.init(env.gpa, "import");
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(import.region, env.line_starts.items));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(import.region, env.line_starts.items));
                 // name e.g. `Stdout` in `import pf.Stdout`
-                node.appendString(env.gpa, ir.resolve(import.module_name_tok));
+                node.appendString(env.gpa, ast.resolve(import.module_name_tok));
                 // qualifier e.g. `pf` in `import pf.Stdout`
                 if (import.qualifier_tok) |tok| {
-                    const qualifier_str = ir.resolve(tok);
+                    const qualifier_str = ast.resolve(tok);
                     var child = sexpr.Expr.init(env.gpa, "qualifier");
                     child.appendString(env.gpa, qualifier_str);
                     node.appendNode(env.gpa, &child);
                 }
                 // alias e.g. `OUT` in `import pf.Stdout as OUT`
                 if (import.alias_tok) |tok| {
-                    const qualifier_str = ir.resolve(tok);
+                    const qualifier_str = ast.resolve(tok);
                     var child = sexpr.Expr.init(env.gpa, "alias");
                     child.appendString(env.gpa, qualifier_str);
                     node.appendNode(env.gpa, &child);
                 }
                 // exposed identifiers e.g. [foo, bar] in `import pf.Stdout exposing [foo, bar]`
-                const exposed_slice = ir.store.exposedItemSlice(import.exposes);
+                const exposed_slice = ast.store.exposedItemSlice(import.exposes);
                 if (exposed_slice.len > 0) {
                     var exposed = sexpr.Expr.init(env.gpa, "exposing");
-                    for (ir.store.exposedItemSlice(import.exposes)) |e| {
-                        var exposed_item = &ir.store.getExposedItem(e);
-                        var exposed_item_sexpr = exposed_item.toSExpr(env, ir);
+                    for (ast.store.exposedItemSlice(import.exposes)) |e| {
+                        var exposed_item = &ast.store.getExposedItem(e);
+                        var exposed_item_sexpr = exposed_item.toSExpr(env, ast);
                         exposed.appendNode(env.gpa, &exposed_item_sexpr);
                     }
                     node.appendNode(env.gpa, &exposed);
@@ -375,20 +374,20 @@ pub const Statement = union(enum) {
             // (type_decl (header <name> [<args>]) <annotation>)
             .type_decl => |a| {
                 var node = sexpr.Expr.init(env.gpa, "type_decl");
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(a.region, env.line_starts.items));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
                 var header = sexpr.Expr.init(env.gpa, "header");
                 // pattern
                 {
-                    const ty_header = ir.store.getTypeHeader(a.header);
-                    header.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(ty_header.region, env.line_starts.items));
+                    const ty_header = ast.store.getTypeHeader(a.header);
+                    header.appendRegionInfo(env.gpa, ast.calcRegionInfo(ty_header.region, env.line_starts.items));
 
-                    header.appendString(env.gpa, ir.resolve(ty_header.name));
+                    header.appendString(env.gpa, ast.resolve(ty_header.name));
 
                     var args_node = sexpr.Expr.init(env.gpa, "args");
 
-                    for (ir.store.typeAnnoSlice(ty_header.args)) |b| {
-                        const anno = ir.store.getTypeAnno(b);
-                        var anno_sexpr = anno.toSExpr(env, ir);
+                    for (ast.store.typeAnnoSlice(ty_header.args)) |b| {
+                        const anno = ast.store.getTypeAnno(b);
+                        var anno_sexpr = anno.toSExpr(env, ast);
                         args_node.appendNode(env.gpa, &anno_sexpr);
                     }
                     header.appendNode(env.gpa, &args_node);
@@ -397,7 +396,7 @@ pub const Statement = union(enum) {
                 }
                 // annotation
                 {
-                    var annotation = ir.store.getTypeAnno(a.anno).toSExpr(env, ir);
+                    var annotation = ast.store.getTypeAnno(a.anno).toSExpr(env, ast);
                     node.appendNode(env.gpa, &annotation);
                 }
                 return node;
@@ -406,9 +405,9 @@ pub const Statement = union(enum) {
             .crash => |a| {
                 var node = sexpr.Expr.init(env.gpa, "crash");
 
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(a.region, env.line_starts.items));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
 
-                var child = ir.store.getExpr(a.expr).toSExpr(env, ir);
+                var child = ast.store.getExpr(a.expr).toSExpr(env, ast);
                 node.appendNode(env.gpa, &child);
                 return node;
             },
@@ -416,9 +415,9 @@ pub const Statement = union(enum) {
             .expect => |a| {
                 var node = sexpr.Expr.init(env.gpa, "expect");
 
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(a.region, env.line_starts.items));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
 
-                var child = ir.store.getExpr(a.body).toSExpr(env, ir);
+                var child = ast.store.getExpr(a.body).toSExpr(env, ast);
                 node.appendNode(env.gpa, &child);
                 return node;
             },
@@ -427,17 +426,17 @@ pub const Statement = union(enum) {
 
                 // patt
                 {
-                    var child = ir.store.getPattern(a.patt).toSExpr(env, ir);
+                    var child = ast.store.getPattern(a.patt).toSExpr(env, ast);
                     node.appendNode(env.gpa, &child);
                 }
                 // expr
                 {
-                    var child = ir.store.getExpr(a.expr).toSExpr(env, ir);
+                    var child = ast.store.getExpr(a.expr).toSExpr(env, ast);
                     node.appendNode(env.gpa, &child);
                 }
                 // body
                 {
-                    var child = ir.store.getExpr(a.body).toSExpr(env, ir);
+                    var child = ast.store.getExpr(a.body).toSExpr(env, ast);
                     node.appendNode(env.gpa, &child);
                 }
 
@@ -447,9 +446,9 @@ pub const Statement = union(enum) {
             .@"return" => |a| {
                 var node = sexpr.Expr.init(env.gpa, "return");
 
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(a.region, env.line_starts.items));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
 
-                var child = ir.store.getExpr(a.expr).toSExpr(env, ir);
+                var child = ast.store.getExpr(a.expr).toSExpr(env, ast);
                 node.appendNode(env.gpa, &child);
                 return node;
             },
@@ -457,16 +456,16 @@ pub const Statement = union(enum) {
             .type_anno => |a| {
                 var node = sexpr.Expr.init(env.gpa, "type_anno");
 
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(a.region, env.line_starts.items));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
 
-                node.appendString(env.gpa, ir.resolve(a.name));
-                var child = ir.store.getTypeAnno(a.anno).toSExpr(env, ir);
+                node.appendString(env.gpa, ast.resolve(a.name));
+                var child = ast.store.getTypeAnno(a.anno).toSExpr(env, ast);
                 node.appendNode(env.gpa, &child);
                 return node;
             },
             .malformed => |a| {
                 var node = sexpr.Expr.init(env.gpa, "malformed_stmt");
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(a.region, env.line_starts.items));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
                 node.appendString(env.gpa, @tagName(a.reason));
                 return node;
             },
@@ -480,15 +479,15 @@ pub const Body = struct {
     statements: Statement.Span,
     region: TokenizedRegion,
 
-    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *AST) sexpr.Expr {
+    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ast: *AST) sexpr.Expr {
         var block_node = sexpr.Expr.init(env.gpa, "block");
-        block_node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(self.region, env.line_starts.items));
+        block_node.appendRegionInfo(env.gpa, ast.calcRegionInfo(self.region, env.line_starts.items));
         var statements_node = sexpr.Expr.init(env.gpa, "statements");
 
-        for (ir.store.statementSlice(self.statements)) |stmt_idx| {
-            const stmt = ir.store.getStatement(stmt_idx);
+        for (ast.store.statementSlice(self.statements)) |stmt_idx| {
+            const stmt = ast.store.getStatement(stmt_idx);
 
-            var stmt_node = stmt.toSExpr(env, ir);
+            var stmt_node = stmt.toSExpr(env, ast);
 
             statements_node.appendNode(env.gpa, &stmt_node);
         }
@@ -566,27 +565,27 @@ pub const Pattern = union(enum) {
         };
     }
 
-    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *AST) sexpr.Expr {
+    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ast: *AST) sexpr.Expr {
         switch (self) {
             .ident => |ident| {
                 var node = sexpr.Expr.init(env.gpa, "ident");
 
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(ident.region, env.line_starts.items));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(ident.region, env.line_starts.items));
 
-                node.appendString(env.gpa, ir.resolve(ident.ident_tok));
+                node.appendString(env.gpa, ast.resolve(ident.ident_tok));
 
                 return node;
             },
             .tag => |tag| {
                 var node = sexpr.Expr.init(env.gpa, "tag");
 
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(tag.region, env.line_starts.items));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(tag.region, env.line_starts.items));
 
-                node.appendString(env.gpa, ir.resolve(tag.tag_tok));
+                node.appendString(env.gpa, ast.resolve(tag.tag_tok));
 
                 // Add arguments if there are any
-                for (ir.store.patternSlice(tag.args)) |arg| {
-                    var arg_node = ir.store.getPattern(arg).toSExpr(env, ir);
+                for (ast.store.patternSlice(tag.args)) |arg| {
+                    var arg_node = ast.store.getPattern(arg).toSExpr(env, ast);
                     node.appendNode(env.gpa, &arg_node);
                 }
 
@@ -594,28 +593,28 @@ pub const Pattern = union(enum) {
             },
             .number => |num| {
                 var node = sexpr.Expr.init(env.gpa, "number");
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(num.region, env.line_starts.items));
-                node.appendString(env.gpa, ir.resolve(num.number_tok));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(num.region, env.line_starts.items));
+                node.appendString(env.gpa, ast.resolve(num.number_tok));
                 return node;
             },
             .string => |str| {
                 var node = sexpr.Expr.init(env.gpa, "string");
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(str.region, env.line_starts.items));
-                node.appendString(env.gpa, ir.resolve(str.string_tok));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(str.region, env.line_starts.items));
+                node.appendString(env.gpa, ast.resolve(str.string_tok));
                 return node;
             },
             .record => |rec| {
                 var node = sexpr.Expr.init(env.gpa, "record");
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(rec.region, env.line_starts.items));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(rec.region, env.line_starts.items));
 
-                for (ir.store.patternRecordFieldSlice(rec.fields)) |field_idx| {
-                    const field = ir.store.getPatternRecordField(field_idx);
+                for (ast.store.patternRecordFieldSlice(rec.fields)) |field_idx| {
+                    const field = ast.store.getPatternRecordField(field_idx);
                     var field_node = sexpr.Expr.init(env.gpa, "field");
-                    field_node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(field.region, env.line_starts.items));
-                    field_node.appendString(env.gpa, ir.resolve(field.name));
+                    field_node.appendRegionInfo(env.gpa, ast.calcRegionInfo(field.region, env.line_starts.items));
+                    field_node.appendString(env.gpa, ast.resolve(field.name));
 
                     if (field.value) |value| {
-                        var value_node = ir.store.getPattern(value).toSExpr(env, ir);
+                        var value_node = ast.store.getPattern(value).toSExpr(env, ast);
                         field_node.appendNode(env.gpa, &value_node);
                     }
 
@@ -630,10 +629,10 @@ pub const Pattern = union(enum) {
             },
             .list => |list| {
                 var node = sexpr.Expr.init(env.gpa, "list");
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(list.region, env.line_starts.items));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(list.region, env.line_starts.items));
 
-                for (ir.store.patternSlice(list.patterns)) |pat| {
-                    var pattern_node = ir.store.getPattern(pat).toSExpr(env, ir);
+                for (ast.store.patternSlice(list.patterns)) |pat| {
+                    var pattern_node = ast.store.getPattern(pat).toSExpr(env, ast);
                     node.appendNode(env.gpa, &pattern_node);
                 }
 
@@ -641,20 +640,20 @@ pub const Pattern = union(enum) {
             },
             .list_rest => |rest| {
                 var node = sexpr.Expr.init(env.gpa, "list_rest");
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(rest.region, env.line_starts.items));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(rest.region, env.line_starts.items));
 
                 if (rest.name) |name_tok| {
-                    node.appendString(env.gpa, ir.resolve(name_tok));
+                    node.appendString(env.gpa, ast.resolve(name_tok));
                 }
 
                 return node;
             },
             .tuple => |tuple| {
                 var node = sexpr.Expr.init(env.gpa, "tuple");
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(tuple.region, env.line_starts.items));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(tuple.region, env.line_starts.items));
 
-                for (ir.store.patternSlice(tuple.patterns)) |pat| {
-                    var pattern_node = ir.store.getPattern(pat).toSExpr(env, ir);
+                for (ast.store.patternSlice(tuple.patterns)) |pat| {
+                    var pattern_node = ast.store.getPattern(pat).toSExpr(env, ast);
                     node.appendNode(env.gpa, &pattern_node);
                 }
 
@@ -666,15 +665,15 @@ pub const Pattern = union(enum) {
             .alternatives => |a| {
                 // '|' separated list of patterns
                 var node = sexpr.Expr.init(env.gpa, "alternatives");
-                for (ir.store.patternSlice(a.patterns)) |pat| {
-                    var patNode = ir.store.getPattern(pat).toSExpr(env, ir);
+                for (ast.store.patternSlice(a.patterns)) |pat| {
+                    var patNode = ast.store.getPattern(pat).toSExpr(env, ast);
                     node.appendNode(env.gpa, &patNode);
                 }
                 return node;
             },
             .malformed => |a| {
                 var node = sexpr.Expr.init(env.gpa, "malformed_pattern");
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(a.region, env.line_starts.items));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
                 node.appendString(env.gpa, @tagName(a.reason));
                 return node;
             },
@@ -690,15 +689,15 @@ pub const BinOp = struct {
     region: TokenizedRegion,
 
     /// (binop <op> <left> <right>) e.g. (binop '+' 1 2)
-    pub fn toSExpr(self: *const @This(), env: *base.ModuleEnv, ir: *AST) sexpr.Expr {
+    pub fn toSExpr(self: *const @This(), env: *base.ModuleEnv, ast: *AST) sexpr.Expr {
         var node = sexpr.Expr.init(env.gpa, "binop");
-        node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(self.region, env.line_starts.items));
-        node.appendString(env.gpa, ir.resolve(self.operator));
+        node.appendRegionInfo(env.gpa, ast.calcRegionInfo(self.region, env.line_starts.items));
+        node.appendString(env.gpa, ast.resolve(self.operator));
 
-        var left = ir.store.getExpr(self.left).toSExpr(env, ir);
+        var left = ast.store.getExpr(self.left).toSExpr(env, ast);
         node.appendNode(env.gpa, &left);
 
-        var right = ir.store.getExpr(self.right).toSExpr(env, ir);
+        var right = ast.store.getExpr(self.right).toSExpr(env, ast);
         node.appendNode(env.gpa, &right);
         return node;
     }
@@ -710,12 +709,12 @@ pub const Unary = struct {
     expr: Expr.Idx,
     region: TokenizedRegion,
 
-    pub fn toSExpr(self: *const @This(), env: *base.ModuleEnv, ir: *AST) sexpr.Expr {
+    pub fn toSExpr(self: *const @This(), env: *base.ModuleEnv, ast: *AST) sexpr.Expr {
         var node = sexpr.Expr.init(env.gpa, "unary");
-        node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(self.region, env.line_starts.items));
-        node.appendString(env.gpa, ir.resolve(self.operator));
+        node.appendRegionInfo(env.gpa, ast.calcRegionInfo(self.region, env.line_starts.items));
+        node.appendString(env.gpa, ast.resolve(self.operator));
 
-        var expr = ir.store.getExpr(self.expr).toSExpr(env, ir);
+        var expr = ast.store.getExpr(self.expr).toSExpr(env, ast);
         node.appendNode(env.gpa, &expr);
 
         return node;
@@ -736,21 +735,21 @@ pub const File = struct {
     statements: Statement.Span,
     region: TokenizedRegion,
 
-    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *AST) sexpr.Expr {
+    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ast: *AST) sexpr.Expr {
         var file_node = sexpr.Expr.init(env.gpa, "file");
 
-        file_node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(self.region, env.line_starts.items));
+        file_node.appendRegionInfo(env.gpa, ast.calcRegionInfo(self.region, env.line_starts.items));
 
-        const header = ir.store.getHeader(self.header);
-        var header_node = header.toSExpr(env, ir);
+        const header = ast.store.getHeader(self.header);
+        var header_node = header.toSExpr(env, ast);
 
         file_node.appendNode(env.gpa, &header_node);
 
         var statements_node = sexpr.Expr.init(env.gpa, "statements");
 
-        for (ir.store.statementSlice(self.statements)) |stmt_id| {
-            const stmt = ir.store.getStatement(stmt_id);
-            var stmt_node = stmt.toSExpr(env, ir);
+        for (ast.store.statementSlice(self.statements)) |stmt_id| {
+            const stmt = ast.store.getStatement(stmt_id);
+            var stmt_node = stmt.toSExpr(env, ast);
             statements_node.appendNode(env.gpa, &stmt_node);
         }
 
@@ -800,34 +799,34 @@ pub const Header = union(enum) {
 
     pub const AppHeaderRhs = packed struct { num_packages: u10, num_provides: u22 };
 
-    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *AST) sexpr.Expr {
+    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ast: *AST) sexpr.Expr {
         switch (self) {
             .app => |a| {
                 var node = sexpr.Expr.init(env.gpa, "app");
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(a.region, env.line_starts.items));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
                 // Provides
-                const provides_coll = ir.store.getCollection(a.provides);
-                const provides_items = ir.store.exposedItemSlice(.{ .span = provides_coll.span });
+                const provides_coll = ast.store.getCollection(a.provides);
+                const provides_items = ast.store.exposedItemSlice(.{ .span = provides_coll.span });
                 var provides_node = sexpr.Expr.init(env.gpa, "provides");
-                provides_node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(provides_coll.region, env.line_starts.items));
+                provides_node.appendRegionInfo(env.gpa, ast.calcRegionInfo(provides_coll.region, env.line_starts.items));
                 for (provides_items) |item_idx| {
-                    const item = ir.store.getExposedItem(item_idx);
-                    var item_node = item.toSExpr(env, ir);
+                    const item = ast.store.getExposedItem(item_idx);
+                    var item_node = item.toSExpr(env, ast);
                     provides_node.appendNode(env.gpa, &item_node);
                 }
                 node.appendNode(env.gpa, &provides_node);
                 // Platform
-                const platform = ir.store.getRecordField(a.platform_idx);
-                var platform_node = platform.toSExpr(env, ir);
+                const platform = ast.store.getRecordField(a.platform_idx);
+                var platform_node = platform.toSExpr(env, ast);
                 node.appendNode(env.gpa, &platform_node);
                 // Packages
-                const packages_coll = ir.store.getCollection(a.packages);
-                const packages_items = ir.store.recordFieldSlice(.{ .span = packages_coll.span });
+                const packages_coll = ast.store.getCollection(a.packages);
+                const packages_items = ast.store.recordFieldSlice(.{ .span = packages_coll.span });
                 var packages_node = sexpr.Expr.init(env.gpa, "packages");
-                packages_node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(packages_coll.region, env.line_starts.items));
+                packages_node.appendRegionInfo(env.gpa, ast.calcRegionInfo(packages_coll.region, env.line_starts.items));
                 for (packages_items) |item_idx| {
-                    const item = ir.store.getRecordField(item_idx);
-                    var item_node = item.toSExpr(env, ir);
+                    const item = ast.store.getRecordField(item_idx);
+                    var item_node = item.toSExpr(env, ast);
                     packages_node.appendNode(env.gpa, &item_node);
                 }
                 node.appendNode(env.gpa, &packages_node);
@@ -835,13 +834,13 @@ pub const Header = union(enum) {
             },
             .module => |module| {
                 var node = sexpr.Expr.init(env.gpa, "module");
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(module.region, env.line_starts.items));
-                const exposes = ir.store.getCollection(module.exposes);
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(module.region, env.line_starts.items));
+                const exposes = ast.store.getCollection(module.exposes);
                 var exposes_node = sexpr.Expr.init(env.gpa, "exposes");
-                exposes_node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(exposes.region, env.line_starts.items));
-                for (ir.store.exposedItemSlice(.{ .span = exposes.span })) |exposed| {
-                    const item = ir.store.getExposedItem(exposed);
-                    var item_node = item.toSExpr(env, ir);
+                exposes_node.appendRegionInfo(env.gpa, ast.calcRegionInfo(exposes.region, env.line_starts.items));
+                for (ast.store.exposedItemSlice(.{ .span = exposes.span })) |exposed| {
+                    const item = ast.store.getExposedItem(exposed);
+                    var item_node = item.toSExpr(env, ast);
                     exposes_node.appendNode(env.gpa, &item_node);
                 }
                 node.appendNode(env.gpa, &exposes_node);
@@ -849,25 +848,25 @@ pub const Header = union(enum) {
             },
             .package => |a| {
                 var node = sexpr.Expr.init(env.gpa, "package");
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(a.region, env.line_starts.items));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
                 // Exposes
-                const exposes = ir.store.getCollection(a.exposes);
+                const exposes = ast.store.getCollection(a.exposes);
                 var exposes_node = sexpr.Expr.init(env.gpa, "exposes");
-                exposes_node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(exposes.region, env.line_starts.items));
-                for (ir.store.exposedItemSlice(.{ .span = exposes.span })) |exposed| {
-                    const item = ir.store.getExposedItem(exposed);
-                    var item_node = item.toSExpr(env, ir);
+                exposes_node.appendRegionInfo(env.gpa, ast.calcRegionInfo(exposes.region, env.line_starts.items));
+                for (ast.store.exposedItemSlice(.{ .span = exposes.span })) |exposed| {
+                    const item = ast.store.getExposedItem(exposed);
+                    var item_node = item.toSExpr(env, ast);
                     exposes_node.appendNode(env.gpa, &item_node);
                 }
                 node.appendNode(env.gpa, &exposes_node);
                 // Packages
-                const packages_coll = ir.store.getCollection(a.packages);
-                const packages_items = ir.store.recordFieldSlice(.{ .span = packages_coll.span });
+                const packages_coll = ast.store.getCollection(a.packages);
+                const packages_items = ast.store.recordFieldSlice(.{ .span = packages_coll.span });
                 var packages_node = sexpr.Expr.init(env.gpa, "packages");
-                packages_node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(packages_coll.region, env.line_starts.items));
+                packages_node.appendRegionInfo(env.gpa, ast.calcRegionInfo(packages_coll.region, env.line_starts.items));
                 for (packages_items) |item_idx| {
-                    const item = ir.store.getRecordField(item_idx);
-                    var item_node = item.toSExpr(env, ir);
+                    const item = ast.store.getRecordField(item_idx);
+                    var item_node = item.toSExpr(env, ast);
                     packages_node.appendNode(env.gpa, &item_node);
                 }
                 node.appendNode(env.gpa, &packages_node);
@@ -875,51 +874,51 @@ pub const Header = union(enum) {
             },
             .platform => |a| {
                 var node = sexpr.Expr.init(env.gpa, "platform");
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(a.region, env.line_starts.items));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
                 // Name
-                node.appendString(env.gpa, ir.resolve(a.name));
+                node.appendString(env.gpa, ast.resolve(a.name));
                 // Requires Rigids
-                const rigids = ir.store.getCollection(a.requires_rigids);
+                const rigids = ast.store.getCollection(a.requires_rigids);
                 var rigids_node = sexpr.Expr.init(env.gpa, "rigids");
-                rigids_node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(rigids.region, env.line_starts.items));
-                for (ir.store.exposedItemSlice(.{ .span = rigids.span })) |exposed| {
-                    const item = ir.store.getExposedItem(exposed);
-                    var item_node = item.toSExpr(env, ir);
+                rigids_node.appendRegionInfo(env.gpa, ast.calcRegionInfo(rigids.region, env.line_starts.items));
+                for (ast.store.exposedItemSlice(.{ .span = rigids.span })) |exposed| {
+                    const item = ast.store.getExposedItem(exposed);
+                    var item_node = item.toSExpr(env, ast);
                     rigids_node.appendNode(env.gpa, &item_node);
                 }
                 node.appendNode(env.gpa, &rigids_node);
                 // Requires Signatures
-                const signatures = ir.store.getTypeAnno(a.requires_signatures);
-                var signatures_node = signatures.toSExpr(env, ir);
+                const signatures = ast.store.getTypeAnno(a.requires_signatures);
+                var signatures_node = signatures.toSExpr(env, ast);
                 node.appendNode(env.gpa, &signatures_node);
                 // Exposes
-                const exposes = ir.store.getCollection(a.exposes);
+                const exposes = ast.store.getCollection(a.exposes);
                 var exposes_node = sexpr.Expr.init(env.gpa, "exposes");
-                exposes_node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(exposes.region, env.line_starts.items));
-                for (ir.store.exposedItemSlice(.{ .span = exposes.span })) |exposed| {
-                    const item = ir.store.getExposedItem(exposed);
-                    var item_node = item.toSExpr(env, ir);
+                exposes_node.appendRegionInfo(env.gpa, ast.calcRegionInfo(exposes.region, env.line_starts.items));
+                for (ast.store.exposedItemSlice(.{ .span = exposes.span })) |exposed| {
+                    const item = ast.store.getExposedItem(exposed);
+                    var item_node = item.toSExpr(env, ast);
                     exposes_node.appendNode(env.gpa, &item_node);
                 }
                 node.appendNode(env.gpa, &exposes_node);
                 // Packages
-                const packages_coll = ir.store.getCollection(a.packages);
-                const packages_items = ir.store.recordFieldSlice(.{ .span = packages_coll.span });
+                const packages_coll = ast.store.getCollection(a.packages);
+                const packages_items = ast.store.recordFieldSlice(.{ .span = packages_coll.span });
                 var packages_node = sexpr.Expr.init(env.gpa, "packages");
-                packages_node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(packages_coll.region, env.line_starts.items));
+                packages_node.appendRegionInfo(env.gpa, ast.calcRegionInfo(packages_coll.region, env.line_starts.items));
                 for (packages_items) |item_idx| {
-                    const item = ir.store.getRecordField(item_idx);
-                    var item_node = item.toSExpr(env, ir);
+                    const item = ast.store.getRecordField(item_idx);
+                    var item_node = item.toSExpr(env, ast);
                     packages_node.appendNode(env.gpa, &item_node);
                 }
                 node.appendNode(env.gpa, &packages_node);
                 // Provides
-                const provides = ir.store.getCollection(a.provides);
+                const provides = ast.store.getCollection(a.provides);
                 var provides_node = sexpr.Expr.init(env.gpa, "provides");
-                provides_node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(provides.region, env.line_starts.items));
-                for (ir.store.exposedItemSlice(.{ .span = provides.span })) |exposed| {
-                    const item = ir.store.getExposedItem(exposed);
-                    var item_node = item.toSExpr(env, ir);
+                provides_node.appendRegionInfo(env.gpa, ast.calcRegionInfo(provides.region, env.line_starts.items));
+                for (ast.store.exposedItemSlice(.{ .span = provides.span })) |exposed| {
+                    const item = ast.store.getExposedItem(exposed);
+                    var item_node = item.toSExpr(env, ast);
                     provides_node.appendNode(env.gpa, &item_node);
                 }
                 node.appendNode(env.gpa, &provides_node);
@@ -927,13 +926,13 @@ pub const Header = union(enum) {
             },
             .hosted => |a| {
                 var node = sexpr.Expr.init(env.gpa, "hosted");
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(a.region, env.line_starts.items));
-                const exposes = ir.store.getCollection(a.exposes);
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
+                const exposes = ast.store.getCollection(a.exposes);
                 var exposes_node = sexpr.Expr.init(env.gpa, "exposes");
-                exposes_node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(exposes.region, env.line_starts.items));
-                for (ir.store.exposedItemSlice(.{ .span = exposes.span })) |exposed| {
-                    const item = ir.store.getExposedItem(exposed);
-                    var item_node = item.toSExpr(env, ir);
+                exposes_node.appendRegionInfo(env.gpa, ast.calcRegionInfo(exposes.region, env.line_starts.items));
+                for (ast.store.exposedItemSlice(.{ .span = exposes.span })) |exposed| {
+                    const item = ast.store.getExposedItem(exposed);
+                    var item_node = item.toSExpr(env, ast);
                     exposes_node.appendNode(env.gpa, &item_node);
                 }
                 node.appendNode(env.gpa, &exposes_node);
@@ -941,7 +940,7 @@ pub const Header = union(enum) {
             },
             .malformed => |a| {
                 var node = sexpr.Expr.init(env.gpa, "malformed_header");
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(a.region, env.line_starts.items));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
                 node.appendString(env.gpa, @tagName(a.reason));
                 return node;
             },
@@ -969,33 +968,33 @@ pub const ExposedItem = union(enum) {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
 
-    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *AST) sexpr.Expr {
+    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ast: *AST) sexpr.Expr {
         _ = env.line_starts.items;
         var node = sexpr.Expr.init(env.gpa, "exposed_item");
         var inner_node = sexpr.Expr.init(env.gpa, @tagName(self));
         switch (self) {
             .lower_ident => |i| {
-                const token = ir.tokens.tokens.get(i.ident);
+                const token = ast.tokens.tokens.get(i.ident);
                 const text = env.idents.getText(token.extra.interned);
                 inner_node.appendString(env.gpa, text);
                 if (i.as) |a| {
-                    const as_tok = ir.tokens.tokens.get(a);
+                    const as_tok = ast.tokens.tokens.get(a);
                     const as_text = env.idents.getText(as_tok.extra.interned);
                     inner_node.appendString(env.gpa, as_text);
                 }
             },
             .upper_ident => |i| {
-                const token = ir.tokens.tokens.get(i.ident);
+                const token = ast.tokens.tokens.get(i.ident);
                 const text = env.idents.getText(token.extra.interned);
                 inner_node.appendString(env.gpa, text);
                 if (i.as) |a| {
-                    const as_tok = ir.tokens.tokens.get(a);
+                    const as_tok = ast.tokens.tokens.get(a);
                     const as_text = env.idents.getText(as_tok.extra.interned);
                     inner_node.appendString(env.gpa, as_text);
                 }
             },
             .upper_ident_star => |i| {
-                const token = ir.tokens.tokens.get(i.ident);
+                const token = ast.tokens.tokens.get(i.ident);
                 const text = env.idents.getText(token.extra.interned);
                 inner_node.appendString(env.gpa, text);
             },
@@ -1072,16 +1071,16 @@ pub const TypeAnno = union(enum) {
     pub const TagUnionRhs = packed struct { open: u1, tags_len: u31 };
     pub const TypeAnnoFnRhs = packed struct { effectful: u1, args_len: u31 };
 
-    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *AST) sexpr.Expr {
+    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ast: *AST) sexpr.Expr {
         switch (self) {
             // (apply <ty> [<args>])
             .apply => |a| {
                 var node = sexpr.Expr.init(env.gpa, "apply");
 
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(a.region, env.line_starts.items));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
 
-                for (ir.store.typeAnnoSlice(a.args)) |b| {
-                    var child = ir.store.getTypeAnno(b).toSExpr(env, ir);
+                for (ast.store.typeAnnoSlice(a.args)) |b| {
+                    var child = ast.store.getTypeAnno(b).toSExpr(env, ast);
                     node.appendNode(env.gpa, &child);
                 }
 
@@ -1091,9 +1090,9 @@ pub const TypeAnno = union(enum) {
             .ty_var => |a| {
                 var node = sexpr.Expr.init(env.gpa, "ty_var");
 
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(a.region, env.line_starts.items));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
 
-                node.appendString(env.gpa, ir.resolve(a.tok));
+                node.appendString(env.gpa, ast.resolve(a.tok));
                 return node;
             },
             // (_)
@@ -1103,32 +1102,32 @@ pub const TypeAnno = union(enum) {
             // (ty name)
             .ty => |a| {
                 var node = sexpr.Expr.init(env.gpa, "ty");
-                node.appendString(env.gpa, ir.resolve(a.region.start));
+                node.appendString(env.gpa, ast.resolve(a.region.start));
                 return node;
             },
             // (mod_ty mod ty)
             .mod_ty => |a| {
                 var node = sexpr.Expr.init(env.gpa, "mod_ty");
-                node.appendString(env.gpa, ir.resolve(a.region.start));
-                node.appendString(env.gpa, ir.resolve(a.region.end));
+                node.appendString(env.gpa, ast.resolve(a.region.start));
+                node.appendString(env.gpa, ast.resolve(a.region.end));
                 return node;
             },
             .tag_union => |a| {
                 var node = sexpr.Expr.init(env.gpa, "tag_union");
 
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(a.region, env.line_starts.items));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
 
-                const tags = ir.store.typeAnnoSlice(a.tags);
+                const tags = ast.store.typeAnnoSlice(a.tags);
                 var tags_node = sexpr.Expr.init(env.gpa, "tags");
                 for (tags) |tag_idx| {
-                    const tag = ir.store.getTypeAnno(tag_idx);
-                    var tag_node = tag.toSExpr(env, ir);
+                    const tag = ast.store.getTypeAnno(tag_idx);
+                    var tag_node = tag.toSExpr(env, ast);
                     tags_node.appendNode(env.gpa, &tag_node);
                 }
                 node.appendNode(env.gpa, &tags_node);
                 if (a.open_anno) |anno_idx| {
-                    const anno = ir.store.getTypeAnno(anno_idx);
-                    var anno_node = anno.toSExpr(env, ir);
+                    const anno = ast.store.getTypeAnno(anno_idx);
+                    var anno_node = anno.toSExpr(env, ast);
                     node.appendNode(env.gpa, &anno_node);
                 }
                 return node;
@@ -1137,10 +1136,10 @@ pub const TypeAnno = union(enum) {
             .tuple => |a| {
                 var node = sexpr.Expr.init(env.gpa, "tuple");
 
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(a.region, env.line_starts.items));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
 
-                for (ir.store.typeAnnoSlice(a.annos)) |b| {
-                    var child = ir.store.getTypeAnno(b).toSExpr(env, ir);
+                for (ast.store.typeAnnoSlice(a.annos)) |b| {
+                    var child = ast.store.getTypeAnno(b).toSExpr(env, ast);
                     node.appendNode(env.gpa, &child);
                 }
                 return node;
@@ -1149,11 +1148,11 @@ pub const TypeAnno = union(enum) {
             .record => |a| {
                 var node = sexpr.Expr.init(env.gpa, "record");
 
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(a.region, env.line_starts.items));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
 
-                for (ir.store.annoRecordFieldSlice(a.fields)) |f_idx| {
-                    const field = ir.store.getAnnoRecordField(f_idx);
-                    var field_node = field.toSExpr(env, ir);
+                for (ast.store.annoRecordFieldSlice(a.fields)) |f_idx| {
+                    const field = ast.store.getAnnoRecordField(f_idx);
+                    var field_node = field.toSExpr(env, ast);
                     node.appendNode(env.gpa, &field_node);
                 }
                 return node;
@@ -1162,27 +1161,27 @@ pub const TypeAnno = union(enum) {
             .@"fn" => |a| {
                 var node = sexpr.Expr.init(env.gpa, "fn");
 
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(a.region, env.line_starts.items));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
 
                 // arguments
-                for (ir.store.typeAnnoSlice(a.args)) |b| {
-                    var child = ir.store.getTypeAnno(b).toSExpr(env, ir);
+                for (ast.store.typeAnnoSlice(a.args)) |b| {
+                    var child = ast.store.getTypeAnno(b).toSExpr(env, ast);
                     node.appendNode(env.gpa, &child);
                 }
 
                 // return value
-                var ret = ir.store.getTypeAnno(a.ret).toSExpr(env, ir);
+                var ret = ast.store.getTypeAnno(a.ret).toSExpr(env, ast);
                 node.appendNode(env.gpa, &ret);
 
                 return node;
             },
             // ignore parens... use inner
             .parens => |a| {
-                return ir.store.getTypeAnno(a.anno).toSExpr(env, ir);
+                return ast.store.getTypeAnno(a.anno).toSExpr(env, ast);
             },
             .malformed => |a| {
                 var node = sexpr.Expr.init(env.gpa, "malformed_expr");
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(a.region, env.line_starts.items));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
                 node.appendString(env.gpa, @tagName(a.reason));
                 return node;
             },
@@ -1199,12 +1198,12 @@ pub const AnnoRecordField = struct {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
 
-    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *AST) sexpr.Expr {
+    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ast: *AST) sexpr.Expr {
         var node = sexpr.Expr.init(env.gpa, "anno_record_field");
-        node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(self.region, env.line_starts.items));
-        node.appendString(env.gpa, ir.resolve(self.name));
-        const anno = ir.store.getTypeAnno(self.ty);
-        var ty_node = anno.toSExpr(env, ir);
+        node.appendRegionInfo(env.gpa, ast.calcRegionInfo(self.region, env.line_starts.items));
+        node.appendString(env.gpa, ast.resolve(self.name));
+        const anno = ast.store.getTypeAnno(self.ty);
+        var ty_node = anno.toSExpr(env, ast);
         node.appendNode(env.gpa, &ty_node);
         return node;
     }
@@ -1370,51 +1369,51 @@ pub const Expr = union(enum) {
         };
     }
 
-    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *AST) sexpr.Expr {
+    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ast: *AST) sexpr.Expr {
         switch (self) {
             .int => |int| {
                 var node = sexpr.Expr.init(env.gpa, "int");
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(int.region, env.line_starts.items));
-                node.appendString(env.gpa, ir.resolve(int.token));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(int.region, env.line_starts.items));
+                node.appendString(env.gpa, ast.resolve(int.token));
                 return node;
             },
             .string => |str| {
                 var node = sexpr.Expr.init(env.gpa, "string");
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(str.region, env.line_starts.items));
-                for (ir.store.exprSlice(str.parts)) |part_id| {
-                    const part_expr = ir.store.getExpr(part_id);
-                    var part_sexpr = part_expr.toSExpr(env, ir);
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(str.region, env.line_starts.items));
+                for (ast.store.exprSlice(str.parts)) |part_id| {
+                    const part_expr = ast.store.getExpr(part_id);
+                    var part_sexpr = part_expr.toSExpr(env, ast);
                     node.appendNode(env.gpa, &part_sexpr);
                 }
                 return node;
             },
             .string_part => |sp| {
                 var node = sexpr.Expr.init(env.gpa, "string_part");
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(sp.region, env.line_starts.items));
-                node.appendString(env.gpa, ir.resolve(sp.token));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(sp.region, env.line_starts.items));
+                node.appendString(env.gpa, ast.resolve(sp.token));
                 return node;
             },
             // (tag <tag>)
             .tag => |tag| {
                 var node = sexpr.Expr.init(env.gpa, "tag");
 
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(tag.region, env.line_starts.items));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(tag.region, env.line_starts.items));
 
-                node.appendString(env.gpa, ir.resolve(tag.token));
+                node.appendString(env.gpa, ast.resolve(tag.token));
                 return node;
             },
             .block => |block| {
-                return block.toSExpr(env, ir);
+                return block.toSExpr(env, ast);
             },
             // (if_then_else <condition> <then> <else>)
             .if_then_else => |stmt| {
                 var node = sexpr.Expr.init(env.gpa, "if_then_else");
 
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(stmt.region, env.line_starts.items));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(stmt.region, env.line_starts.items));
 
-                var condition = ir.store.getExpr(stmt.condition).toSExpr(env, ir);
-                var then = ir.store.getExpr(stmt.then).toSExpr(env, ir);
-                var else_ = ir.store.getExpr(stmt.@"else").toSExpr(env, ir);
+                var condition = ast.store.getExpr(stmt.condition).toSExpr(env, ast);
+                var then = ast.store.getExpr(stmt.then).toSExpr(env, ast);
+                var else_ = ast.store.getExpr(stmt.@"else").toSExpr(env, ast);
 
                 node.appendNode(env.gpa, &condition);
                 node.appendNode(env.gpa, &then);
@@ -1425,20 +1424,20 @@ pub const Expr = union(enum) {
             .ident => |ident| {
                 var node = sexpr.Expr.init(env.gpa, "ident");
 
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(ident.region, env.line_starts.items));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(ident.region, env.line_starts.items));
 
-                node.appendString(env.gpa, if (ident.qualifier != null) ir.resolve(ident.qualifier.?) else "");
-                node.appendString(env.gpa, ir.resolve(ident.token));
+                node.appendString(env.gpa, if (ident.qualifier != null) ast.resolve(ident.qualifier.?) else "");
+                node.appendString(env.gpa, ast.resolve(ident.token));
                 return node;
             },
             // (list [<child>])
             .list => |a| {
                 var node = sexpr.Expr.init(env.gpa, "list");
 
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(a.region, env.line_starts.items));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
 
-                for (ir.store.exprSlice(a.items)) |b| {
-                    var child = ir.store.getExpr(b).toSExpr(env, ir);
+                for (ast.store.exprSlice(a.items)) |b| {
+                    var child = ast.store.getExpr(b).toSExpr(env, ast);
                     node.appendNode(env.gpa, &child);
                 }
                 return node;
@@ -1446,7 +1445,7 @@ pub const Expr = union(enum) {
             // (malformed_expr <reason>)
             .malformed => |a| {
                 var node = sexpr.Expr.init(env.gpa, "malformed_expr");
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(a.region, env.line_starts.items));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
                 node.appendString(env.gpa, @tagName(a.reason));
                 return node;
             },
@@ -1454,19 +1453,19 @@ pub const Expr = union(enum) {
             .float => |a| {
                 var node = sexpr.Expr.init(env.gpa, "float");
 
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(a.region, env.line_starts.items));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
 
-                node.appendString(env.gpa, ir.resolve(a.token));
+                node.appendString(env.gpa, ast.resolve(a.token));
                 return node;
             },
             // (tuple [<item>])
             .tuple => |a| {
                 var node = sexpr.Expr.init(env.gpa, "tuple");
 
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(a.region, env.line_starts.items));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
 
-                for (ir.store.exprSlice(a.items)) |item| {
-                    var child = ir.store.getExpr(item).toSExpr(env, ir);
+                for (ast.store.exprSlice(a.items)) |item| {
+                    var child = ast.store.getExpr(item).toSExpr(env, ast);
                     node.appendNode(env.gpa, &child);
                 }
 
@@ -1476,14 +1475,14 @@ pub const Expr = union(enum) {
             .record => |a| {
                 var node = sexpr.Expr.init(env.gpa, "record");
 
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(a.region, env.line_starts.items));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
 
-                for (ir.store.recordFieldSlice(a.fields)) |field_idx| {
-                    const record_field = ir.store.getRecordField(field_idx);
+                for (ast.store.recordFieldSlice(a.fields)) |field_idx| {
+                    const record_field = ast.store.getRecordField(field_idx);
                     var record_field_node = sexpr.Expr.init(env.gpa, "field");
-                    record_field_node.appendString(env.gpa, ir.resolve(record_field.name));
+                    record_field_node.appendString(env.gpa, ast.resolve(record_field.name));
                     if (record_field.value != null) {
-                        var value_node = ir.store.getExpr(record_field.value.?).toSExpr(env, ir);
+                        var value_node = ast.store.getExpr(record_field.value.?).toSExpr(env, ast);
                         record_field_node.appendNode(env.gpa, &value_node);
                     }
                     if (record_field.optional) {
@@ -1498,13 +1497,13 @@ pub const Expr = union(enum) {
             .apply => |a| {
                 var node = sexpr.Expr.init(env.gpa, "apply");
 
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(a.region, env.line_starts.items));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
 
-                var apply_fn = ir.store.getExpr(a.@"fn").toSExpr(env, ir);
+                var apply_fn = ast.store.getExpr(a.@"fn").toSExpr(env, ast);
                 node.appendNode(env.gpa, &apply_fn);
 
-                for (ir.store.exprSlice(a.args)) |arg| {
-                    var arg_node = ir.store.getExpr(arg).toSExpr(env, ir);
+                for (ast.store.exprSlice(a.args)) |arg| {
+                    var arg_node = ast.store.getExpr(arg).toSExpr(env, ast);
                     node.appendNode(env.gpa, &arg_node);
                 }
 
@@ -1513,41 +1512,41 @@ pub const Expr = union(enum) {
             .field_access => |a| {
                 var node = sexpr.Expr.init(env.gpa, "field_access");
 
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(a.region, env.line_starts.items));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
 
-                var child = a.toSExpr(env, ir);
+                var child = a.toSExpr(env, ast);
                 node.appendNode(env.gpa, &child);
                 return node;
             },
             .local_dispatch => |a| {
                 var node = sexpr.Expr.init(env.gpa, "local_dispatch");
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(a.region, env.line_starts.items));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
 
-                var left = ir.store.getExpr(a.left).toSExpr(env, ir);
-                var right = ir.store.getExpr(a.right).toSExpr(env, ir);
+                var left = ast.store.getExpr(a.left).toSExpr(env, ast);
+                var right = ast.store.getExpr(a.right).toSExpr(env, ast);
                 node.appendNode(env.gpa, &left);
                 node.appendNode(env.gpa, &right);
                 return node;
             },
             // (binop <op> <lhs> <rhs>)
             .bin_op => |a| {
-                return a.toSExpr(env, ir);
+                return a.toSExpr(env, ast);
             },
             .lambda => |a| {
                 var node = sexpr.Expr.init(env.gpa, "lambda");
 
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(a.region, env.line_starts.items));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
 
                 // arguments
                 var args = sexpr.Expr.init(env.gpa, "args");
-                for (ir.store.patternSlice(a.args)) |arg| {
-                    var arg_node = ir.store.getPattern(arg).toSExpr(env, ir);
+                for (ast.store.patternSlice(a.args)) |arg| {
+                    var arg_node = ast.store.getPattern(arg).toSExpr(env, ast);
                     args.appendNode(env.gpa, &arg_node);
                 }
                 node.appendNode(env.gpa, &args);
 
                 // body
-                var body = ir.store.getExpr(a.body).toSExpr(env, ir);
+                var body = ast.store.getExpr(a.body).toSExpr(env, ast);
                 node.appendNode(env.gpa, &body);
 
                 return node;
@@ -1555,7 +1554,7 @@ pub const Expr = union(enum) {
             .dbg => |a| {
                 var node = sexpr.Expr.init(env.gpa, "dbg");
 
-                var arg = ir.store.getExpr(a.expr).toSExpr(env, ir);
+                var arg = ast.store.getExpr(a.expr).toSExpr(env, ast);
                 node.appendNode(env.gpa, &arg);
 
                 return node;
@@ -1563,12 +1562,12 @@ pub const Expr = union(enum) {
             .match => |a| {
                 var node = sexpr.Expr.init(env.gpa, "match");
 
-                var expr = ir.store.getExpr(a.expr).toSExpr(env, ir);
+                var expr = ast.store.getExpr(a.expr).toSExpr(env, ast);
 
                 // handle branches
                 var branches = sexpr.Expr.init(env.gpa, "branches");
-                for (ir.store.whenBranchSlice(a.branches)) |branch| {
-                    var branch_node = ir.store.getBranch(branch).toSExpr(env, ir);
+                for (ast.store.whenBranchSlice(a.branches)) |branch| {
+                    var branch_node = ast.store.getBranch(branch).toSExpr(env, ast);
                     branches.appendNode(env.gpa, &branch_node);
                 }
 
@@ -1584,9 +1583,9 @@ pub const Expr = union(enum) {
             .suffix_single_question => |a| {
                 var node = sexpr.Expr.init(env.gpa, "suffix_single_question");
 
-                node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(a.region, env.line_starts.items));
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
 
-                var child = ir.store.getExpr(a.expr).toSExpr(env, ir);
+                var child = ast.store.getExpr(a.expr).toSExpr(env, ast);
                 node.appendNode(env.gpa, &child);
                 return node;
             },
@@ -1619,13 +1618,13 @@ pub const RecordField = struct {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
 
-    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *AST) sexpr.Expr {
+    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ast: *AST) sexpr.Expr {
         var node = sexpr.Expr.init(env.gpa, "record_field");
-        node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(self.region, env.line_starts.items));
-        node.appendString(env.gpa, ir.resolve(self.name));
+        node.appendRegionInfo(env.gpa, ast.calcRegionInfo(self.region, env.line_starts.items));
+        node.appendString(env.gpa, ast.resolve(self.name));
         if (self.value) |idx| {
-            const value = ir.store.getExpr(idx);
-            var value_node = value.toSExpr(env, ir);
+            const value = ast.store.getExpr(idx);
+            var value_node = value.toSExpr(env, ast);
             node.appendNode(env.gpa, &value_node);
         }
         return node;
@@ -1651,12 +1650,12 @@ pub const WhenBranch = struct {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
 
-    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *AST) sexpr.Expr {
+    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ast: *AST) sexpr.Expr {
         var node = sexpr.Expr.init(env.gpa, "branch");
-        node.appendRegionInfo(env.gpa, ir.regionInfoFromTokenIds(self.region, env.line_starts.items));
-        var pattern = ir.store.getPattern(self.pattern).toSExpr(env, ir);
+        node.appendRegionInfo(env.gpa, ast.calcRegionInfo(self.region, env.line_starts.items));
+        var pattern = ast.store.getPattern(self.pattern).toSExpr(env, ast);
         node.appendNode(env.gpa, &pattern);
-        var body = ir.store.getExpr(self.body).toSExpr(env, ir);
+        var body = ast.store.getExpr(self.body).toSExpr(env, ast);
         node.appendNode(env.gpa, &body);
         return node;
     }

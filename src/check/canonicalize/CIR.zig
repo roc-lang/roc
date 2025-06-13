@@ -815,7 +815,7 @@ pub const Expr = union(enum) {
             .runtime_error => |e| {
                 var runtime_err_node = sexpr.Expr.init(gpa, "runtime_error");
 
-                runtime_err_node.appendRegionInfo(gpa, ir.regionInfoFromPositionOffsets(e.region));
+                runtime_err_node.appendRegionInfo(gpa, ir.calcRegionInfo(e.region));
 
                 var buf = std.ArrayList(u8).init(gpa);
                 defer buf.deinit();
@@ -941,7 +941,7 @@ pub const Def = struct {
         node.appendNode(gpa, &kind_node);
 
         var pattern_node = sexpr.Expr.init(gpa, "pattern");
-        pattern_node.appendRegionInfo(gpa, ir.regionInfoFromPositionOffsets(self.pattern_region));
+        pattern_node.appendRegionInfo(gpa, ir.calcRegionInfo(self.pattern_region));
 
         const pattern = ir.store.getPattern(self.pattern);
         var pattern_sexpr = pattern.toSExpr(ir);
@@ -949,7 +949,7 @@ pub const Def = struct {
         node.appendNode(gpa, &pattern_node);
 
         var expr_node = sexpr.Expr.init(gpa, "expr");
-        expr_node.appendRegionInfo(gpa, ir.regionInfoFromPositionOffsets(self.expr_region));
+        expr_node.appendRegionInfo(gpa, ir.calcRegionInfo(self.expr_region));
 
         const expr = ir.store.getExpr(self.expr);
         var expr_sexpr = expr.toSExpr(ir);
@@ -1007,7 +1007,7 @@ pub const ExprAtRegion = struct {
         const gpa = ir.env.gpa;
         var node = sexpr.Expr.init(gpa, "expr_at_region");
 
-        node.appendRegionInfo(gpa, ir.regionInfoFromPositionOffsets(self.region));
+        node.appendRegionInfo(gpa, ir.calcRegionInfo(self.region));
 
         const expr = ir.store.getExpr(self.expr);
         var expr_sexpr = expr.toSExpr(ir, line_starts);
@@ -1031,7 +1031,7 @@ pub const TypedExprAtRegion = struct {
         const gpa = ir.env.gpa;
 
         var typed_expr_node = sexpr.Expr.init(gpa, "typed_expr_at_region");
-        typed_expr_node.appendRegionInfo(gpa, ir.regionInfoFromPositionOffsets(self.region));
+        typed_expr_node.appendRegionInfo(gpa, ir.calcRegionInfo(self.region));
 
         const expr = ir.store.getExpr(self.expr);
         typed_expr_node.appendNode(gpa, &expr.toSExpr(ir));
@@ -1255,7 +1255,7 @@ pub const Pattern = union(enum) {
             },
             .as => |a| {
                 var node = sexpr.Expr.init(gpa, "as");
-                node.appendRegionInfo(gpa, ir.regionInfoFromPositionOffsets(a.region));
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(a.region));
                 appendIdent(&node, gpa, ir, "ident", a.ident);
                 var inner_patt_node = sexpr.Expr.init(gpa, "pattern");
                 const inner_patt = ir.store.getPattern(a.pattern);
@@ -1434,7 +1434,7 @@ pub const RecordDestruct = struct {
         var record_destruct_node = sexpr.Expr.init(gpa, "record_destruct");
 
         record_destruct_node.appendTypeVar(&record_destruct_node, gpa, "type_var", self.type_var);
-        record_destruct_node.appendRegionInfo(gpa, ir.regionInfoFromPositionOffsets(self.region));
+        record_destruct_node.appendRegionInfo(gpa, ir.calcRegionInfo(self.region));
 
         appendIdent(&record_destruct_node, gpa, ir, "label", self.label);
         appendIdent(&record_destruct_node, gpa, ir, "ident", self.ident);
@@ -1607,10 +1607,10 @@ test "NodeStore - init and deinit" {
 /// Returns diagnostic position information for the given region.
 /// This is a standalone utility function that takes the source text as a parameter
 /// to avoid storing it in the cacheable IR structure.
-pub fn regionInfoFromPositionOffsets(self: *const CIR, region: Region) base.DiagnosticPosition {
+pub fn calcRegionInfo(self: *const CIR, region: Region) base.RegionInfo {
     // In the Can IR, regions store byte offsets directly, not token indices.
     // We can use these offsets directly to calculate the diagnostic position.
-    const info = base.DiagnosticPosition.position(self.env.source.items, self.env.line_starts.items, region.start.offset, region.end.offset) catch {
+    const info = base.RegionInfo.position(self.env.source.items, self.env.line_starts.items, region.start.offset, region.end.offset) catch {
         // Return a zero position if we can't calculate it
         return .{
             .start_line_idx = 0,
