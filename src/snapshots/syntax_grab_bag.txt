@@ -984,5 +984,36 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(can_ir (top_level_defs "empty"))
+(can_ir
+	(top_level_defs
+		(def
+			"let"
+			(pattern (65:1-65:16)
+				(assign (65:1-65:16) (ident "add_one_oneline")))
+			(expr (65:19-67:8) (runtime_error (65:1-67:8) "RUNTIME ERROR expr_not_canonicalized"))
+			"#0")
+		(def
+			"let"
+			(pattern (68:1-68:8)
+				(assign (68:1-68:8) (ident "add_one")))
+			(expr (68:11-78:2) (runtime_error (68:1-78:2) "RUNTIME ERROR expr_not_canonicalized"))
+			"#1")
+		(def
+			"let"
+			(pattern (80:1-80:11)
+				(assign (80:1-80:11) (ident "match_time")))
+			(expr (80:14-140:7) (runtime_error (80:1-140:7) "RUNTIME ERROR expr_not_canonicalized"))
+			"#2")
+		(def
+			"let"
+			(pattern (144:1-144:6)
+				(assign (144:1-144:6) (ident "main!")))
+			(expr (144:9-196:2) (runtime_error (144:1-196:2) "RUNTIME ERROR expr_not_canonicalized"))
+			"#3")
+		(def
+			"let"
+			(pattern (199:1-199:6)
+				(assign (199:1-199:6) (ident "empty")))
+			(expr (199:9-199:11) (runtime_error (199:1-199:11) "RUNTIME ERROR expr_not_canonicalized"))
+			"#4")))
 ~~~END

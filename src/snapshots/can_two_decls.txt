@@ -40,7 +40,7 @@ NO CHANGE
 (can_ir
 	(top_level_defs
 		(def
-			(let)
+			"let"
 			(pattern (3:1-3:2)
 				(assign (3:1-3:2) (ident "a")))
 			(expr (3:5-3:6)
@@ -52,7 +52,7 @@ NO CHANGE
 					(bound "int")))
 			"#2")
 		(def
-			(let)
+			"let"
 			(pattern (4:1-4:2)
 				(assign (4:1-4:2) (ident "b")))
 			(expr (4:5-4:10)

@@ -23,7 +23,7 @@ NO CHANGE
 (can_ir
 	(top_level_defs
 		(def
-			(let)
+			"let"
 			(pattern (2:1-2:4)
 				(assign (2:1-2:4) (ident "foo")))
 			(expr (2:7-2:12)

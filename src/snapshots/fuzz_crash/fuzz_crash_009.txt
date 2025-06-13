@@ -43,7 +43,7 @@ foo =
 (can_ir
 	(top_level_defs
 		(def
-			(let)
+			"let"
 			(pattern (4:1-4:4)
 				(assign (4:1-4:4) (ident "foo")))
 			(expr (6:5-6:12)

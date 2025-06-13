@@ -38,5 +38,12 @@ LowerIdent(5:1-5:6),OpAssign(5:7-5:8),OpBar(5:9-5:10),Underscore(5:10-5:11),OpBa
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(can_ir (top_level_defs "empty"))
+(can_ir
+	(top_level_defs
+		(def
+			"let"
+			(pattern (5:1-5:6)
+				(assign (5:1-5:6) (ident "main!")))
+			(expr (5:9-5:42) (runtime_error (5:1-5:42) "RUNTIME ERROR expr_not_canonicalized"))
+			"#0")))
 ~~~END

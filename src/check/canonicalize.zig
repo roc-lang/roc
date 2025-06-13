@@ -95,11 +95,8 @@ pub fn canonicalize_file(
                 // self.bringImportIntoScope(&import);
             },
             .decl => |decl| {
-                if (self.canonicalize_decl(decl)) |def_idx| {
-                    self.can_ir.store.addScratchDef(def_idx);
-                } else {
-                    self.can_ir.env.pushProblem(Problem.Compiler.can(.failed_to_canonicalize_decl));
-                }
+                const def_idx = self.canonicalize_decl(decl);
+                self.can_ir.store.addScratchDef(def_idx);
             },
             .@"var" => |v| {
                 // Not valid at top-level
@@ -247,22 +244,6 @@ fn bringImportIntoScope(
             .upper_ident_star => |ident| {
                 _ = ident;
             },
-            // .CustomTagUnion => |custom| {
-            //     const alias = Alias{
-            //         .name = custom.name,
-            //         .region = ir.env.tag_names.getRegion(custom.name),
-            //         .is_builtin = false,
-            //         .kind = .ImportedCustomUnion,
-            //     };
-            //     const alias_idx = ir.aliases.append(alias);
-            //
-            //     _ = scope.levels.introduce(.alias, .{
-            //         .scope_name = custom.name,
-            //         .alias = alias_idx,
-            //     });
-            //     _ = scope.custom_tags.fetchPutAssumeCapacity(custom.name, alias_idx);
-            //     // TODO: add to scope.custom_tags
-            // },
         }
     }
 }
@@ -307,9 +288,32 @@ fn tokenizedRegionToRegion(self: *Self, ast_region: AST.TokenizedRegion) base.Re
 fn canonicalize_decl(
     self: *Self,
     decl: AST.Statement.Decl,
-) ?CIR.Def.Idx {
-    const pattern_idx = self.canonicalize_pattern(decl.pattern) orelse return null;
-    const expr_idx = self.canonicalize_expr(decl.body) orelse return null;
+) CIR.Def.Idx {
+    const pattern_idx = blk: {
+        if (self.canonicalize_pattern(decl.pattern)) |idx| {
+            break :blk idx;
+        } else {
+            const malformed_idx = self.can_ir.pushMalformed(
+                CIR.Pattern.Idx,
+                .pattern_not_canonicalized,
+                self.tokenizedRegionToRegion(decl.region),
+            );
+            break :blk malformed_idx;
+        }
+    };
+
+    const expr_idx = blk: {
+        if (self.canonicalize_expr(decl.body)) |idx| {
+            break :blk idx;
+        } else {
+            const malformed_idx = self.can_ir.pushMalformed(
+                CIR.Expr.Idx,
+                .expr_not_canonicalized,
+                self.tokenizedRegionToRegion(decl.region),
+            );
+            break :blk malformed_idx;
+        }
+    };
 
     // Create a new type variable for this definition
     const expr_var = self.can_ir.env.types_store.fresh();

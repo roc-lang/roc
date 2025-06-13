@@ -87,6 +87,7 @@ pub const Diagnostic = struct {
         expr_not_canonicalized,
         invalid_string_interpolation,
         pattern_arg_invalid,
+        pattern_not_canonicalized,
     };
 };
 
@@ -106,6 +107,7 @@ pub fn pushMalformed(self: *CIR, comptime t: type, tag: CIR.Diagnostic.Tag, regi
         .tag = tag,
         .region = region,
     }) catch |err| exitOnOom(err);
+
     return self.store.addMalformed(t, tag, region);
 }
 
@@ -928,14 +930,6 @@ pub const Def = struct {
         /// Ignored result, must be effectful
         ignored: TypeVar,
 
-        pub fn toSExpr(self: *const @This(), gpa: std.mem.Allocator) sexpr.Expr {
-            switch (self.*) {
-                .let => return sexpr.Expr.init(gpa, "let"),
-                .stmt => return sexpr.Expr.init(gpa, "stmt"),
-                .ignored => return sexpr.Expr.init(gpa, "ignored"),
-            }
-        }
-
         /// encode the kind of def into two u32 values
         pub fn encode(self: *const Kind) [2]u32 {
             switch (self.*) {
@@ -986,8 +980,11 @@ pub const Def = struct {
         const gpa = ir.env.gpa;
         var node = sexpr.Expr.init(gpa, "def");
 
-        var kind_node = self.kind.toSExpr(gpa);
-        node.appendNode(gpa, &kind_node);
+        switch (self.kind) {
+            .let => node.appendString(gpa, "let"),
+            .stmt => node.appendString(gpa, "stmt"),
+            .ignored => node.appendString(gpa, "ignored"),
+        }
 
         var pattern_node = sexpr.Expr.init(gpa, "pattern");
         pattern_node.appendRegionInfo(gpa, ir.calcRegionInfo(self.pattern_region));
