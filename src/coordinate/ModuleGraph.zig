@@ -107,14 +107,19 @@ fn loadOrCompileCanIr(
     const cache_lookup = cache.getCanIrForHashAndRocVersion(&hash_of_contents, current_roc_version, fs, gpa);
 
     return if (cache_lookup) |ir| ir else blk: {
-        var module_env = base.ModuleEnv.init(gpa);
+
+        // TODO we probably shouldn't be saving the contents of the file in the ModuleEnv
+        // this is temporary so we can generate error reporting and diagnostics/region info.
+        // We should probably be reading the file on demand or something else. Leaving this
+        // comment here so we discuss the plan and make the necessary changes.
+        var module_env = base.ModuleEnv.init(gpa, contents);
 
         var parse_ir = parse.parse(&module_env, contents);
         parse_ir.store.emptyScratch();
 
         var can_ir = Can.CIR.init(module_env);
-        var scope = Scope.init(&can_ir.env, &.{}, &.{});
-        defer scope.deinit();
+        var scope = Scope.init(can_ir.env.gpa);
+        defer scope.deinit(gpa);
         var can = Can.init(&can_ir, &parse_ir, &scope);
         can.canonicalize_file();
 

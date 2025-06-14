@@ -7,6 +7,8 @@ ff8.8.d
 PARSER: missing_header
 PARSER: expr_unexpected_token
 PARSER: expr_unexpected_token
+CANONICALIZE: invalid_top_level_statement ".8.d"
+CANONICALIZE: invalid_top_level_statement ".d"
 ~~~TOKENS
 LowerIdent(1:1-1:4),NoSpaceDotInt(1:4-1:6),NoSpaceDotLowerIdent(1:6-1:8),EndOfFile(1:8-1:8),
 ~~~PARSE

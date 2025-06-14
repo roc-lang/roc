@@ -12,10 +12,10 @@ Int(1:1-1:5),EndOfFile(1:5-1:5),
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(int
+(int (1:1-1:5)
 	(num_var "#0")
 	(precision_var "#1")
 	(literal "-123")
 	(value "TODO")
-	(bound "i128"))
+	(bound "int"))
 ~~~END

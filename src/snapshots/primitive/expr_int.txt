@@ -23,14 +23,15 @@ NO CHANGE
 (can_ir
 	(top_level_defs
 		(def
-			(Let)
-			(pattern (1:6-1:6) (pattern_ident (ident "foo")))
-			(expr (1:1-1:1)
-				(int
+			"let"
+			(pattern (2:1-2:4)
+				(assign (2:1-2:4) (ident "foo")))
+			(expr (2:7-2:9)
+				(int (2:7-2:9)
 					(num_var "#0")
 					(precision_var "#1")
 					(literal "42")
 					(value "TODO")
-					(bound "i128")))
+					(bound "int")))
 			"#2")))
 ~~~END

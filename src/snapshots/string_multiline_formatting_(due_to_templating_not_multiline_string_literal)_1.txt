@@ -25,14 +25,11 @@ LowerIdent(2:1-2:2),CloseRound(2:2-2:3),CloseStringInterpolation(2:3-2:4),String
 	)
 } lines of text due to the template parts"
 ~~~CANONICALIZE
-(call
-	(lookup (ident "Str.concat"))
-	(call
-		(lookup (ident "Str.concat"))
-		(str "This is a string with ")
-		(call
-			(lookup (ident "some_func"))
-			(lookup (ident "a"))
-			(lookup (ident "b"))))
-	(str " lines of text due to the template parts"))
+(string (1:1-2:45)
+	(literal (1:2-1:24) "This is a string with ")
+	(call (1:26-2:3)
+		(runtime_error (1:26-1:35) "ident_not_in_scope")
+		(runtime_error (1:36-1:37) "ident_not_in_scope")
+		(runtime_error (2:1-2:2) "ident_not_in_scope"))
+	(literal (2:4-2:44) " lines of text due to the template parts"))
 ~~~END

@@ -8,7 +8,7 @@ type=expr
     y * 2
 }
 ~~~PROBLEMS
-NIL
+COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
 ~~~TOKENS
 OpenCurly(1:1-1:2),Newline(1:1-1:1),
 LowerIdent(2:5-2:6),OpAssign(2:7-2:8),Int(2:9-2:11),Newline(1:1-1:1),

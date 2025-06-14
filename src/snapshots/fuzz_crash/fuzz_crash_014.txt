@@ -10,6 +10,9 @@ PARSER: missing_header
 PARSER: expr_unexpected_token
 PARSER: expr_unexpected_token
 PARSER: expr_unexpected_token
+CANONICALIZE: invalid_top_level_statement ""
+CANONICALIZE: invalid_top_level_statement ""
+CANONICALIZE: invalid_top_level_statement "0u22"
 ~~~TOKENS
 MalformedNumberNoDigits(1:1-1:3),NoSpaceDotInt(1:3-1:5),Newline(1:1-1:1),
 MalformedNumberNoDigits(2:1-2:6),Newline(1:1-1:1),

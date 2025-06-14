@@ -15,18 +15,18 @@ Int(1:1-1:2),OpPlus(1:3-1:4),Int(1:5-1:6),EndOfFile(1:6-1:6),
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(call
-	(lookup (ident "add"))
-	(int
+(binop (1:1-1:6)
+	"add"
+	(int (1:1-1:2)
 		(num_var "#0")
 		(precision_var "#1")
 		(literal "1")
 		(value "TODO")
-		(bound "i128"))
-	(int
+		(bound "int"))
+	(int (1:5-1:6)
 		(num_var "#2")
 		(precision_var "#3")
 		(literal "2")
 		(value "TODO")
-		(bound "i128")))
+		(bound "int")))
 ~~~END

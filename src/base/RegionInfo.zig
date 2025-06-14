@@ -1,5 +1,9 @@
-//! This module provides helpers for calculating position for diagnostics
+//! This module provides helpers for calculating region information for diagnostics
 //! including the start and end line and column information
+//!
+//! We only store simple position offsets in the AST and intermediate representation's (IR)
+//! as this is more compact, and then when we need to we can calculate the line and column information
+//! using line_starts and the offsets.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
@@ -10,21 +14,21 @@ end_line_idx: u32,
 end_col_idx: u32,
 line_text: []const u8,
 
-const DiagnosticPosition = @This();
+const RegionInfo = @This();
 
 /// Finds the line index for a given position in the source
-fn lineIdx(line_starts: std.ArrayList(u32), pos: u32) u32 {
-    for (line_starts.items[1..], 0..) |n, i| {
+fn lineIdx(line_starts: []const u32, pos: u32) u32 {
+    for (line_starts[1..], 0..) |n, i| {
         if (pos < n) {
             return @intCast(i);
         }
     }
-    return @intCast(line_starts.items.len - 1);
+    return @intCast(line_starts.len - 1);
 }
 
 /// Gets the column index for a position on a given line
-fn columnIdx(line_starts: std.ArrayList(u32), line: u32, pos: u32) !u32 {
-    const line_start: u32 = @intCast(line_starts.items[line]);
+fn columnIdx(line_starts: []const u32, line: u32, pos: u32) !u32 {
+    const line_start: u32 = @intCast(line_starts[line]);
     if (pos < line_start) {
         return error.InvalidPosition;
     }
@@ -32,10 +36,10 @@ fn columnIdx(line_starts: std.ArrayList(u32), line: u32, pos: u32) !u32 {
 }
 
 /// Returns the source text for a given line index
-fn getLineText(source: []const u8, line_starts: std.ArrayList(u32), line_idx: u32) []const u8 {
-    const line_start_offset = line_starts.items[line_idx];
-    const line_end_offset = if (line_idx + 1 < line_starts.items.len)
-        line_starts.items[line_idx + 1]
+fn getLineText(source: []const u8, line_starts: []const u32, line_idx: u32) []const u8 {
+    const line_start_offset = line_starts[line_idx];
+    const line_end_offset = if (line_idx + 1 < line_starts.len)
+        line_starts[line_idx + 1]
     else
         source.len;
 
@@ -68,7 +72,7 @@ pub fn findLineStarts(gpa: Allocator, source: []const u8) !std.ArrayList(u32) {
 }
 
 /// Returns position info for a given start and end index offset
-pub fn position(source: []const u8, line_starts: std.ArrayList(u32), begin: u32, end: u32) !DiagnosticPosition {
+pub fn position(source: []const u8, line_starts: []const u32, begin: u32, end: u32) !RegionInfo {
     if (begin > end) {
         return error.OutOfOrder;
     }
@@ -105,17 +109,17 @@ test "lineIdx" {
     try line_starts.append(20);
     try line_starts.append(30);
 
-    try std.testing.expectEqual(0, lineIdx(line_starts, 0));
-    try std.testing.expectEqual(0, lineIdx(line_starts, 5));
-    try std.testing.expectEqual(0, lineIdx(line_starts, 9));
-    try std.testing.expectEqual(1, lineIdx(line_starts, 10));
-    try std.testing.expectEqual(1, lineIdx(line_starts, 15));
-    try std.testing.expectEqual(1, lineIdx(line_starts, 19));
-    try std.testing.expectEqual(2, lineIdx(line_starts, 20));
-    try std.testing.expectEqual(2, lineIdx(line_starts, 25));
-    try std.testing.expectEqual(2, lineIdx(line_starts, 29));
-    try std.testing.expectEqual(3, lineIdx(line_starts, 30));
-    try std.testing.expectEqual(3, lineIdx(line_starts, 35));
+    try std.testing.expectEqual(0, lineIdx(line_starts.items, 0));
+    try std.testing.expectEqual(0, lineIdx(line_starts.items, 5));
+    try std.testing.expectEqual(0, lineIdx(line_starts.items, 9));
+    try std.testing.expectEqual(1, lineIdx(line_starts.items, 10));
+    try std.testing.expectEqual(1, lineIdx(line_starts.items, 15));
+    try std.testing.expectEqual(1, lineIdx(line_starts.items, 19));
+    try std.testing.expectEqual(2, lineIdx(line_starts.items, 20));
+    try std.testing.expectEqual(2, lineIdx(line_starts.items, 25));
+    try std.testing.expectEqual(2, lineIdx(line_starts.items, 29));
+    try std.testing.expectEqual(3, lineIdx(line_starts.items, 30));
+    try std.testing.expectEqual(3, lineIdx(line_starts.items, 35));
 }
 
 test "columnIdx" {
@@ -127,12 +131,12 @@ test "columnIdx" {
     try line_starts.append(10);
     try line_starts.append(20);
 
-    try std.testing.expectEqual(0, columnIdx(line_starts, 0, 0));
-    try std.testing.expectEqual(5, columnIdx(line_starts, 0, 5));
-    try std.testing.expectEqual(9, columnIdx(line_starts, 0, 9));
+    try std.testing.expectEqual(0, columnIdx(line_starts.items, 0, 0));
+    try std.testing.expectEqual(5, columnIdx(line_starts.items, 0, 5));
+    try std.testing.expectEqual(9, columnIdx(line_starts.items, 0, 9));
 
-    try std.testing.expectEqual(0, columnIdx(line_starts, 1, 10));
-    try std.testing.expectEqual(5, columnIdx(line_starts, 1, 15));
+    try std.testing.expectEqual(0, columnIdx(line_starts.items, 1, 10));
+    try std.testing.expectEqual(5, columnIdx(line_starts.items, 1, 15));
 }
 
 test "getLineText" {
@@ -146,9 +150,9 @@ test "getLineText" {
     try line_starts.append(6);
     try line_starts.append(12);
 
-    try std.testing.expectEqualStrings("line0\n", getLineText(source, line_starts, 0));
-    try std.testing.expectEqualStrings("line1\n", getLineText(source, line_starts, 1));
-    try std.testing.expectEqualStrings("line2", getLineText(source, line_starts, 2));
+    try std.testing.expectEqualStrings("line0\n", getLineText(source, line_starts.items, 0));
+    try std.testing.expectEqualStrings("line1\n", getLineText(source, line_starts.items, 1));
+    try std.testing.expectEqualStrings("line2", getLineText(source, line_starts.items, 2));
 }
 
 test "get" {
@@ -162,14 +166,14 @@ test "get" {
     try line_starts.append(6);
     try line_starts.append(12);
 
-    const info1 = try position(source, line_starts, 2, 4);
+    const info1 = try position(source, line_starts.items, 2, 4);
     try std.testing.expectEqual(0, info1.start_line_idx);
     try std.testing.expectEqual(2, info1.start_col_idx);
     try std.testing.expectEqual(0, info1.end_line_idx);
     try std.testing.expectEqual(4, info1.end_col_idx);
     try std.testing.expectEqualStrings("line0\n", info1.line_text);
 
-    const info2 = try position(source, line_starts, 8, 10);
+    const info2 = try position(source, line_starts.items, 8, 10);
     try std.testing.expectEqual(1, info2.start_line_idx);
     try std.testing.expectEqual(2, info2.start_col_idx);
     try std.testing.expectEqual(1, info2.end_line_idx);

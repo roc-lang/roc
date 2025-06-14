@@ -23,5 +23,7 @@ CloseSquare(5:1-5:2),EndOfFile(5:2-5:2),
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(list (elem_var "#0") (elems "TODO each element"))
+(list (1:1-5:2)
+	(elem_var "#0")
+	(elems "TODO each element"))
 ~~~END

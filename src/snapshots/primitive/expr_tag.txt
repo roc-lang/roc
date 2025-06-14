@@ -23,10 +23,11 @@ NO CHANGE
 (can_ir
 	(top_level_defs
 		(def
-			(Let)
-			(pattern (1:6-1:6) (pattern_ident (ident "foo")))
-			(expr (1:1-1:1)
-				(tag
+			"let"
+			(pattern (2:1-2:4)
+				(assign (2:1-2:4) (ident "foo")))
+			(expr (2:7-2:15)
+				(tag (2:7-2:15)
 					(tag_union_var "#0")
 					(ext_var "#0")
 					(name "FortyTwo")

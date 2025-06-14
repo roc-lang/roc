@@ -32,26 +32,26 @@ Int(8:3-8:4),EndOfFile(8:4-8:4),
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(call
-	(lookup (ident "add"))
-	(int
+(binop (1:1-8:4)
+	"add"
+	(int (1:1-1:2)
 		(num_var "#0")
 		(precision_var "#1")
 		(literal "1")
 		(value "TODO")
-		(bound "i128"))
-	(call
-		(lookup (ident "mul"))
-		(int
+		(bound "int"))
+	(binop (6:2-8:4)
+		"mul"
+		(int (6:2-6:3)
 			(num_var "#2")
 			(precision_var "#3")
 			(literal "2")
 			(value "TODO")
-			(bound "i128"))
-		(int
+			(bound "int"))
+		(int (8:3-8:4)
 			(num_var "#4")
 			(precision_var "#5")
 			(literal "3")
 			(value "TODO")
-			(bound "i128"))))
+			(bound "int"))))
 ~~~END

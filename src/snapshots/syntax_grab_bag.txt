@@ -210,7 +210,43 @@ expect {
 	blah == foo
 }
 ~~~PROBLEMS
-NIL
+COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
+COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
+COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
+COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
+COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
+COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
+COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
+COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
+COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
+COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
+COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
+COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
+COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
+COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
+COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
+COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
+COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
+COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
+COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
+COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
+COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
+CANONICALIZE: lambda_body_not_canonicalized "if num 2 else 5
+
+..."
+CANONICALIZE: can_lambda_not_implemented "|num| if num 2 el..."
+CANONICALIZE: lambda_body_not_canonicalized "{
+	other = 1
+	if ..."
+CANONICALIZE: can_lambda_not_implemented "|num| {
+	other = ..."
+CANONICALIZE: lambda_body_not_canonicalized "match a {
+		Blue ..."
+CANONICALIZE: can_lambda_not_implemented "|
+	a, # After arg..."
+CANONICALIZE: lambda_body_not_canonicalized "{ # Yeah I can le..."
+CANONICALIZE: can_lambda_not_implemented "|_| { # Yeah I ca..."
+CANONICALIZE: expr_not_canonicalized "empty = {}"
 ~~~TOKENS
 Newline(1:2-1:28),
 KwApp(2:1-2:4),OpenSquare(2:5-2:6),LowerIdent(2:6-2:11),CloseSquare(2:11-2:12),OpenCurly(2:13-2:14),LowerIdent(2:15-2:17),OpColon(2:17-2:18),KwPlatform(2:19-2:27),StringStart(2:28-2:29),StringPart(2:29-2:54),StringEnd(2:54-2:55),CloseCurly(2:56-2:57),Newline(1:1-1:1),
@@ -984,5 +1020,36 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(can_ir (top_level_defs "empty"))
+(can_ir
+	(top_level_defs
+		(def
+			"let"
+			(pattern (65:1-65:16)
+				(assign (65:1-65:16) (ident "add_one_oneline")))
+			(expr (65:19-67:8) (runtime_error (65:19-67:8) "can_lambda_not_implemented"))
+			"#0")
+		(def
+			"let"
+			(pattern (68:1-68:8)
+				(assign (68:1-68:8) (ident "add_one")))
+			(expr (68:11-78:2) (runtime_error (68:11-78:2) "can_lambda_not_implemented"))
+			"#1")
+		(def
+			"let"
+			(pattern (80:1-80:11)
+				(assign (80:1-80:11) (ident "match_time")))
+			(expr (80:14-140:7) (runtime_error (80:14-140:7) "can_lambda_not_implemented"))
+			"#2")
+		(def
+			"let"
+			(pattern (144:1-144:6)
+				(assign (144:1-144:6) (ident "main!")))
+			(expr (144:9-196:2) (runtime_error (144:9-196:2) "can_lambda_not_implemented"))
+			"#3")
+		(def
+			"let"
+			(pattern (199:1-199:6)
+				(assign (199:1-199:6) (ident "empty")))
+			(expr (199:9-199:11) (runtime_error (199:1-199:11) "expr_not_canonicalized"))
+			"#4")))
 ~~~END

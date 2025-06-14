@@ -145,7 +145,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
     };
     defer gpa.free(contents);
 
-    var module_env = base.ModuleEnv.init(gpa);
+    var module_env = base.ModuleEnv.init(gpa, contents);
     defer module_env.deinit();
 
     var parse_ast = parse.parse(&module_env, contents);
@@ -568,7 +568,7 @@ const Formatter = struct {
             fmt.curr_indent = curr_indent;
         }
         if (qualifier) |q| {
-            const multiline = fmt.ast.regionIsMultiline(AST.Region{ .start = q, .end = ident });
+            const multiline = fmt.ast.regionIsMultiline(AST.TokenizedRegion{ .start = q, .end = ident });
             try fmt.pushTokenText(q);
             if (multiline and try fmt.flushCommentsAfter(q)) {
                 fmt.curr_indent += 1;
@@ -607,7 +607,7 @@ const Formatter = struct {
         }
     };
 
-    fn formatCollection(fmt: *Formatter, region: AST.Region, braces: Braces, comptime T: type, items: []T, formatter: fn (*Formatter, T) anyerror!AST.Region) !void {
+    fn formatCollection(fmt: *Formatter, region: AST.TokenizedRegion, braces: Braces, comptime T: type, items: []T, formatter: fn (*Formatter, T) anyerror!AST.TokenizedRegion) !void {
         const multiline = fmt.ast.regionIsMultiline(region);
         const curr_indent = fmt.curr_indent;
         defer {
@@ -653,7 +653,7 @@ const Formatter = struct {
         try fmt.push(braces.end());
     }
 
-    fn formatRecordField(fmt: *Formatter, idx: AST.RecordField.Idx) !AST.Region {
+    fn formatRecordField(fmt: *Formatter, idx: AST.RecordField.Idx) !AST.TokenizedRegion {
         const field = fmt.ast.store.getRecordField(idx);
         try fmt.pushTokenText(field.name);
         if (field.value) |v| {
@@ -669,11 +669,11 @@ const Formatter = struct {
         no_indent_on_access,
     };
 
-    fn formatExpr(fmt: *Formatter, ei: AST.Expr.Idx) anyerror!AST.Region {
+    fn formatExpr(fmt: *Formatter, ei: AST.Expr.Idx) anyerror!AST.TokenizedRegion {
         return formatExprInner(fmt, ei, .normal);
     }
 
-    fn formatExprInner(fmt: *Formatter, ei: AST.Expr.Idx, format_behavior: ExprFormatBehavior) anyerror!AST.Region {
+    fn formatExprInner(fmt: *Formatter, ei: AST.Expr.Idx, format_behavior: ExprFormatBehavior) anyerror!AST.TokenizedRegion {
         const expr = fmt.ast.store.getExpr(ei);
         const region = fmt.nodeRegion(@intFromEnum(ei));
         const multiline = fmt.ast.regionIsMultiline(region);
@@ -707,7 +707,7 @@ const Formatter = struct {
                             // So we'll widen the region by one token for calculating multliline.
                             // Ideally, we'd also check if the expr itself is multiline, and if we will end up flushing, but
                             // we'll leave it as is for now
-                            const part_is_multiline = fmt.ast.regionIsMultiline(AST.Region{ .start = part_region.start - 1, .end = part_region.end + 1 });
+                            const part_is_multiline = fmt.ast.regionIsMultiline(AST.TokenizedRegion{ .start = part_region.start - 1, .end = part_region.end + 1 });
                             if (part_is_multiline) {
                                 _ = try fmt.flushCommentsBefore(part_region.start);
                                 try fmt.ensureNewline();
@@ -774,7 +774,7 @@ const Formatter = struct {
                 const args = fmt.ast.store.patternSlice(l.args);
                 const body_region = fmt.nodeRegion(@intFromEnum(l.body));
                 const args_region = fmt.regionInSlice(AST.Pattern.Idx, args);
-                const args_are_multiline = fmt.ast.regionIsMultiline(AST.Region{ .start = l.region.start, .end = args_region.end });
+                const args_are_multiline = fmt.ast.regionIsMultiline(AST.TokenizedRegion{ .start = l.region.start, .end = args_region.end });
                 try fmt.push('|');
                 if (args_are_multiline) {
                     fmt.curr_indent += 1;
@@ -962,7 +962,7 @@ const Formatter = struct {
         return region;
     }
 
-    fn formatPatternRecordField(fmt: *Formatter, idx: AST.PatternRecordField.Idx) !AST.Region {
+    fn formatPatternRecordField(fmt: *Formatter, idx: AST.PatternRecordField.Idx) !AST.TokenizedRegion {
         const field = fmt.ast.store.getPatternRecordField(idx);
         const multiline = fmt.ast.regionIsMultiline(field.region);
         const curr_indent = fmt.curr_indent;
@@ -999,9 +999,9 @@ const Formatter = struct {
         return field.region;
     }
 
-    fn formatPattern(fmt: *Formatter, pi: AST.Pattern.Idx) !AST.Region {
+    fn formatPattern(fmt: *Formatter, pi: AST.Pattern.Idx) !AST.TokenizedRegion {
         const pattern = fmt.ast.store.getPattern(pi);
-        var region = AST.Region{ .start = 0, .end = 0 };
+        var region = AST.TokenizedRegion{ .start = 0, .end = 0 };
         switch (pattern) {
             .ident => |i| {
                 region = i.region;
@@ -1104,9 +1104,9 @@ const Formatter = struct {
         return region;
     }
 
-    fn formatExposedItem(fmt: *Formatter, idx: AST.ExposedItem.Idx) !AST.Region {
+    fn formatExposedItem(fmt: *Formatter, idx: AST.ExposedItem.Idx) !AST.TokenizedRegion {
         const item = fmt.ast.store.getExposedItem(idx);
-        var region = AST.Region{ .start = 0, .end = 0 };
+        var region = AST.TokenizedRegion{ .start = 0, .end = 0 };
         switch (item) {
             .lower_ident => |i| {
                 region = i.region;
@@ -1431,7 +1431,7 @@ const Formatter = struct {
         }
     }
 
-    fn nodeRegion(fmt: *Formatter, idx: u32) AST.Region {
+    fn nodeRegion(fmt: *Formatter, idx: u32) AST.TokenizedRegion {
         return fmt.ast.store.nodes.items.items(.region)[idx];
     }
 
@@ -1469,7 +1469,7 @@ const Formatter = struct {
         }
     }
 
-    fn formatAnnoRecordField(fmt: *Formatter, idx: AST.AnnoRecordField.Idx) !AST.Region {
+    fn formatAnnoRecordField(fmt: *Formatter, idx: AST.AnnoRecordField.Idx) !AST.TokenizedRegion {
         const curr_indent = fmt.curr_indent;
         defer {
             fmt.curr_indent = curr_indent;
@@ -1606,9 +1606,9 @@ const Formatter = struct {
         }
     }
 
-    fn formatTypeAnno(fmt: *Formatter, anno: AST.TypeAnno.Idx) !AST.Region {
+    fn formatTypeAnno(fmt: *Formatter, anno: AST.TypeAnno.Idx) !AST.TokenizedRegion {
         const a = fmt.ast.store.getTypeAnno(anno);
-        var region = AST.Region{ .start = 0, .end = 0 };
+        var region = AST.TokenizedRegion{ .start = 0, .end = 0 };
         switch (a) {
             .apply => |app| {
                 const slice = fmt.ast.store.typeAnnoSlice(app.args);
@@ -1818,9 +1818,9 @@ const Formatter = struct {
         try fmt.pushAll(text);
     }
 
-    fn regionInSlice(fmt: *Formatter, comptime T: anytype, slice: []T) AST.Region {
+    fn regionInSlice(fmt: *Formatter, comptime T: anytype, slice: []T) AST.TokenizedRegion {
         if (slice.len == 0) {
-            return AST.Region.empty();
+            return AST.TokenizedRegion.empty();
         }
         const first: usize = @intFromEnum(slice[0]);
         const last: usize = @intFromEnum(slice[slice.len - 1]);
@@ -1829,7 +1829,7 @@ const Formatter = struct {
         return first_region.spanAcross(last_region);
     }
 
-    fn displayRegion(fmt: *Formatter, region: AST.Region) void {
+    fn displayRegion(fmt: *Formatter, region: AST.TokenizedRegion) void {
         const tags = fmt.ast.tokens.tokens.items(.tag);
         return std.debug.print("[{s}@{d}...{s}@{d}]\n", .{ @tagName(tags[region.start]), region.start, @tagName(tags[region.end]), region.end });
     }
@@ -1941,7 +1941,7 @@ pub fn moduleFmtsStable(gpa: std.mem.Allocator, input: []const u8, debug: bool) 
 }
 
 fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const u8 {
-    var module_env = base.ModuleEnv.init(gpa);
+    var module_env = base.ModuleEnv.init(gpa, input);
     defer module_env.deinit();
 
     var parse_ast = parse.parse(&module_env, input);

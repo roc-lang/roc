@@ -25,16 +25,16 @@ pub const Idx = List.Idx;
 /// This is the tag associated with a raw Node in the list
 pub const Tag = enum {
     // Statements
-    statement_expr,
     statement_decl,
     statement_var,
-    statement_for,
+    statement_crash,
+    statement_expr,
     statement_expect,
+    statement_for,
     statement_return,
     statement_import,
     statement_type_decl,
     statement_type_anno,
-    statement_crash,
     // Expressions
     expr_var,
     expr_tuple,
@@ -45,7 +45,7 @@ pub const Tag = enum {
     expr_static_dispatch,
     expr_apply,
     expr_string,
-    expr_string_part,
+    expr_string_segment,
     expr_int,
     expr_float,
     expr_tag,
@@ -77,6 +77,14 @@ pub const Tag = enum {
     pattern_identifier,
     pattern_as,
     pattern_applied_tag,
+    pattern_record_destructure,
+    pattern_list,
+    pattern_num_literal,
+    pattern_int_literal,
+    pattern_float_literal,
+    pattern_str_literal,
+    pattern_char_literal,
+    pattern_underscore,
     // Definitions
     def,
 

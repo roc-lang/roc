@@ -7,7 +7,7 @@ some_fn(arg1)?
 	->next_static_dispatch_method()?
 	->record_field?
 ~~~PROBLEMS
-NIL
+COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
 ~~~TOKENS
 LowerIdent(1:1-1:8),NoSpaceOpenRound(1:8-1:9),LowerIdent(1:9-1:13),CloseRound(1:13-1:14),NoSpaceOpQuestion(1:14-1:15),Newline(1:1-1:1),
 OpArrow(2:2-2:4),LowerIdent(2:4-2:26),NoSpaceOpenRound(2:26-2:27),CloseRound(2:27-2:28),NoSpaceOpQuestion(2:28-2:29),Newline(1:1-1:1),

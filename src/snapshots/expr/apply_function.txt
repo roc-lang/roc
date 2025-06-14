@@ -15,13 +15,13 @@ LowerIdent(1:1-1:4),NoSpaceOpenRound(1:4-1:5),Int(1:5-1:7),Comma(1:7-1:8),String
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(call
-	(lookup (ident "foo"))
-	(int
+(call (1:1-1:17)
+	(runtime_error (1:1-1:4) "ident_not_in_scope")
+	(int (1:5-1:7)
 		(num_var "#0")
 		(precision_var "#1")
 		(literal "42")
 		(value "TODO")
-		(bound "i128"))
-	(str "hello"))
+		(bound "int"))
+	(string (1:9-1:16) (literal (1:10-1:15) "hello")))
 ~~~END

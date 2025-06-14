@@ -11,19 +11,44 @@ const Alias = @import("./canonicalize/Alias.zig");
 const AST = parse.AST;
 
 can_ir: *CIR,
-parse_ir: *parse.AST,
+parse_ir: *AST,
 scope: *Scope,
 
 const Ident = base.Ident;
 const Region = base.Region;
 const TagName = base.TagName;
 const ModuleEnv = base.ModuleEnv;
+const CalledVia = base.CalledVia;
 const Problem = problem.Problem;
 const exitOnOom = collections.utils.exitOnOom;
 
-pub fn init(can_ir: *CIR, parse_ir: *parse.AST, scope: *Scope) Self {
+const BUILTIN_NUM_ADD: CIR.Pattern.Idx = @enumFromInt(0);
+const BUILTIN_NUM_SUB: CIR.Pattern.Idx = @enumFromInt(1);
+
+pub fn init(self: *CIR, parse_ir: *AST, scope: *Scope) Self {
+    const gpa = self.env.gpa;
+    const ident_store = &self.env.idents;
+
+    // Simulate the builtins by adding to both the NodeStore and Scope
+    // Not sure if this is how we want to do it long term, but want something to
+    // make a start on canonicalization.
+
+    const region_zero = Region.zero();
+
+    // BUILTIN_NUM_ADD
+    const ident_add = self.env.idents.insert(gpa, base.Ident.for_text("add"), region_zero);
+    const pattern_idx_add = self.store.addPattern(CIR.Pattern{ .assign = .{ .ident = ident_add, .region = region_zero } });
+    _ = scope.levels.introduce(gpa, ident_store, .ident, ident_add, pattern_idx_add) catch {};
+    std.debug.assert(BUILTIN_NUM_ADD == pattern_idx_add);
+
+    // BUILTIN_NUM_SUB
+    const ident_sub = self.env.idents.insert(gpa, base.Ident.for_text("sub"), region_zero);
+    const pattern_idx_sub = self.store.addPattern(CIR.Pattern{ .assign = .{ .ident = ident_sub, .region = region_zero } });
+    _ = scope.levels.introduce(gpa, ident_store, .ident, ident_sub, pattern_idx_sub) catch {};
+    std.debug.assert(BUILTIN_NUM_SUB == pattern_idx_sub);
+
     return .{
-        .can_ir = can_ir,
+        .can_ir = self,
         .parse_ir = parse_ir,
         .scope = scope,
     };
@@ -33,6 +58,11 @@ const Self = @This();
 
 /// The intermediate representation of a canonicalized Roc program.
 pub const CIR = @import("canonicalize/CIR.zig");
+
+/// helper to get the allocator from ModuleEnv
+pub fn get_gpa(self: *Self) std.mem.Allocator {
+    comptime return self.can_ir.env.gpa;
+}
 
 /// After parsing a Roc program, the [ParseIR](src/check/parse/AST.zig) is transformed into a [canonical
 /// form](src/check/canonicalize/ir.zig) called CanIR.
@@ -52,6 +82,8 @@ pub const CIR = @import("canonicalize/CIR.zig");
 pub fn canonicalize_file(
     self: *Self,
 ) void {
+    const gpa = self.can_ir.env.gpa;
+
     const file = self.parse_ir.store.getFile();
 
     // canonicalize_header_packages();
@@ -68,59 +100,37 @@ pub fn canonicalize_file(
                 // self.bringImportIntoScope(&import);
             },
             .decl => |decl| {
-                if (self.canonicalize_decl(decl)) |def_idx| {
-                    self.can_ir.store.addScratchDef(def_idx);
-                }
+                const def_idx = self.canonicalize_decl(decl);
+                self.can_ir.store.addScratchDef(def_idx);
             },
             .@"var" => |v| {
                 // Not valid at top-level
-                _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .InvalidTopLevelStatement = .{
-                    .region = v.region.toBase(),
-                    .ty = .@"var",
-                } }));
+                self.can_ir.pushDiagnostic(.invalid_top_level_statement, self.tokenizedRegionToRegion(v.region));
             },
             .expr => |expr| {
                 // Not valid at top-level
-                _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .InvalidTopLevelStatement = .{
-                    .region = expr.region.toBase(),
-                    .ty = .expr,
-                } }));
+                self.can_ir.pushDiagnostic(.invalid_top_level_statement, self.tokenizedRegionToRegion(expr.region));
             },
             .crash => |crash| {
                 // Not valid at top-level
-                _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .InvalidTopLevelStatement = .{
-                    .region = crash.region.toBase(),
-                    .ty = .crash,
-                } }));
+                self.can_ir.pushDiagnostic(.invalid_top_level_statement, self.tokenizedRegionToRegion(crash.region));
             },
-            .expect => |expect| {
-                _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpect = .{
-                    .region = expect.region.toBase(),
-                } }));
+            .expect => |_| {
+                self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             },
             .@"for" => |f| {
                 // Not valid at top-level
-                _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .InvalidTopLevelStatement = .{
-                    .region = f.region.toBase(),
-                    .ty = .@"for",
-                } }));
+                self.can_ir.pushDiagnostic(.invalid_top_level_statement, self.tokenizedRegionToRegion(f.region));
             },
             .@"return" => |return_stmt| {
                 // Not valid at top-level
-                _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .InvalidTopLevelStatement = .{
-                    .region = return_stmt.region.toBase(),
-                    .ty = .@"return",
-                } }));
+                self.can_ir.pushDiagnostic(.invalid_top_level_statement, self.tokenizedRegionToRegion(return_stmt.region));
             },
-            .type_decl => |type_decl| {
-                _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedTypeDecl = .{
-                    .region = type_decl.region.toBase(),
-                } }));
+            .type_decl => |_| {
+                self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             },
-            .type_anno => |type_anno| {
-                _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedTypeAnno = .{
-                    .region = type_anno.region.toBase(),
-                } }));
+            .type_anno => |_| {
+                self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             },
             .malformed => |malformed| {
                 // We won't touch this since it's already a parse error.
@@ -149,6 +159,11 @@ pub fn canonicalize_file(
 
     // Create the span of all top-level defs
     self.can_ir.top_level_defs = self.can_ir.store.defSpanFrom(scratch_defs_start);
+
+    // Copy errors across to ModuleEnv problems
+    for (self.can_ir.diagnostics.items) |msg| {
+        _ = self.can_ir.env.problems.append(gpa, .{ .canonicalize = msg });
+    }
 }
 
 fn canonicalize_header_exposes(
@@ -184,13 +199,7 @@ fn bringImportIntoScope(
     self: *Self,
     import: *const AST.Statement,
 ) void {
-    _ = import;
-
-    // Add error for partially implemented imports
-    _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedImport = .{
-        .region = Region.zero(),
-    } }));
-
+    // const gpa = self.can_ir.env.gpa;
     // const import_name: []u8 = &.{}; // import.module_name_tok;
     // const shorthand: []u8 = &.{}; // import.qualifier_tok;
     // const region = Region{
@@ -198,65 +207,50 @@ fn bringImportIntoScope(
     //     .end = Region.Position.zero(),
     // };
 
-    // const res = self.can_ir.imports.getOrInsert(self.can_ir.env.gpa, import_name, shorthand);
+    // const res = self.can_ir.imports.getOrInsert(gpa, import_name, shorthand);
 
     // if (res.was_present) {
-    //     _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .DuplicateImport = .{
+    //     _ = self.can_ir.env.problems.append(gpa, Problem.Canonicalize.make(.{ .DuplicateImport = .{
     //         .duplicate_import_region = region,
     //     } }));
     // }
 
-    // const exposesSlice = self.parse_ir.store.exposedItemSlice(import.exposes);
-    // for (exposesSlice) |exposed_idx| {
-    //     const exposed = self.parse_ir.store.getExposedItem(exposed_idx);
-    //     switch (exposed) {
-    //         .lower_ident => |ident| {
-    //             if (self.parse_ir.tokens.resolveIdentifier(ident.ident)) |ident_idx| {
-    //                 if (ident.as) |as_| {
-    //                     if (self.parse_ir.tokens.resolveIdentifier(as_)) |alias_idx| {
-    //                         _ = self.scope.levels.introduce(.alias, .{ .scope_name = ident_idx, .alias = alias_idx });
-    //                     }
-    //                 } else {
-    //                     _ = self.scope.levels.introduce(.ident, .{ .scope_name = ident_idx, .ident = ident_idx });
-    //                 }
-    //             }
-    //         },
-    //         .upper_ident => |imported_type| {
-    //             _ = imported_type;
-    //             // const alias = Alias{
-    //             //     .name = imported_type.name,
-    //             //     .region = ir.env.tag_names.getRegion(imported_type.name),
-    //             //     .is_builtin = false,
-    //             //     .kind = .ImportedUnknown,
-    //             // };
-    //             // const alias_idx = ir.aliases.append(alias);
-    //             //
-    //             // _ = scope.levels.introduce(.alias, .{
-    //             //     .scope_name = imported_type.name,
-    //             //     .alias = alias_idx,
-    //             // });
-    //         },
-    //         .upper_ident_star => |ident| {
-    //             _ = ident;
-    //         },
-    //         // .CustomTagUnion => |custom| {
-    //         //     const alias = Alias{
-    //         //         .name = custom.name,
-    //         //         .region = ir.env.tag_names.getRegion(custom.name),
-    //         //         .is_builtin = false,
-    //         //         .kind = .ImportedCustomUnion,
-    //         //     };
-    //         //     const alias_idx = ir.aliases.append(alias);
-    //         //
-    //         //     _ = scope.levels.introduce(.alias, .{
-    //         //         .scope_name = custom.name,
-    //         //         .alias = alias_idx,
-    //         //     });
-    //         //     _ = scope.custom_tags.fetchPutAssumeCapacity(custom.name, alias_idx);
-    //         //     // TODO: add to scope.custom_tags
-    //         // },
-    //     }
-    // }
+    const exposesSlice = self.parse_ir.store.exposedItemSlice(import.exposes);
+    for (exposesSlice) |exposed_idx| {
+        const exposed = self.parse_ir.store.getExposedItem(exposed_idx);
+        switch (exposed) {
+            .lower_ident => |ident| {
+
+                // TODO handle `as` here using an Alias
+
+                if (self.parse_ir.tokens.resolveIdentifier(ident.ident)) |ident_idx| {
+                    _ = ident_idx;
+
+                    // TODO Introduce our import
+
+                    // _ = self.scope.levels.introduce(gpa, &self.can_ir.env.idents, .ident, .{ .scope_name = ident_idx, .ident = ident_idx });
+                }
+            },
+            .upper_ident => |imported_type| {
+                _ = imported_type;
+                // const alias = Alias{
+                //     .name = imported_type.name,
+                //     .region = ir.env.tag_names.getRegion(imported_type.name),
+                //     .is_builtin = false,
+                //     .kind = .ImportedUnknown,
+                // };
+                // const alias_idx = ir.aliases.append(alias);
+                //
+                // _ = scope.levels.introduce(.alias, .{
+                //     .scope_name = imported_type.name,
+                //     .alias = alias_idx,
+                // });
+            },
+            .upper_ident_star => |ident| {
+                _ = ident;
+            },
+        }
+    }
 }
 
 fn bringIngestedFileIntoScope(
@@ -287,12 +281,44 @@ fn bringIngestedFileIntoScope(
     }
 }
 
+fn tokenizedRegionToRegion(self: *Self, ast_region: AST.TokenizedRegion) base.Region {
+    const start_region = self.parse_ir.tokens.resolve(ast_region.start);
+    const end_region = self.parse_ir.tokens.resolve(ast_region.end);
+    return .{
+        .start = start_region.start,
+        .end = end_region.end,
+    };
+}
+
 fn canonicalize_decl(
     self: *Self,
     decl: AST.Statement.Decl,
-) ?CIR.Def.Idx {
-    const pattern_idx = self.canonicalize_pattern(decl.pattern) orelse return null;
-    const expr_idx = self.canonicalize_expr(decl.body) orelse return null;
+) CIR.Def.Idx {
+    const pattern_idx = blk: {
+        if (self.canonicalize_pattern(decl.pattern)) |idx| {
+            break :blk idx;
+        } else {
+            const malformed_idx = self.can_ir.pushMalformed(
+                CIR.Pattern.Idx,
+                .pattern_not_canonicalized,
+                self.tokenizedRegionToRegion(decl.region),
+            );
+            break :blk malformed_idx;
+        }
+    };
+
+    const expr_idx = blk: {
+        if (self.canonicalize_expr(decl.body)) |idx| {
+            break :blk idx;
+        } else {
+            const malformed_idx = self.can_ir.pushMalformed(
+                CIR.Expr.Idx,
+                .expr_not_canonicalized,
+                self.tokenizedRegionToRegion(decl.region),
+            );
+            break :blk malformed_idx;
+        }
+    };
 
     // Create a new type variable for this definition
     const expr_var = self.can_ir.env.types_store.fresh();
@@ -300,12 +326,12 @@ fn canonicalize_decl(
     // Create the def entry
     return self.can_ir.store.addDef(.{
         .pattern = pattern_idx,
-        .pattern_region = self.parse_ir.store.getPattern(decl.pattern).to_region().toBase(),
+        .pattern_region = self.tokenizedRegionToRegion(self.parse_ir.store.getPattern(decl.pattern).to_tokenized_region()),
         .expr = expr_idx,
-        .expr_region = self.parse_ir.store.getExpr(decl.body).to_region().toBase(),
+        .expr_region = self.tokenizedRegionToRegion(self.parse_ir.store.getExpr(decl.body).to_tokenized_region()),
         .expr_var = expr_var,
         .annotation = null,
-        .kind = .Let,
+        .kind = .let,
     });
 }
 
@@ -338,43 +364,28 @@ pub fn canonicalize_expr(
             // Create span from scratch expressions
             const args_span = self.can_ir.store.exprSpanFrom(scratch_top);
 
-            // Create the call expression
-            const call_expr = CIR.Expr{
+            return self.can_ir.store.addExpr(CIR.Expr{
                 .call = .{
                     .args = args_span,
+                    .called_via = CalledVia.apply,
+                    .region = self.tokenizedRegionToRegion(e.region),
                 },
-            };
-
-            return self.can_ir.store.addExpr(.{
-                .expr = call_expr,
-                .region = e.region.toBase(),
             });
         },
         .ident => |e| {
             if (self.parse_ir.tokens.resolveIdentifier(e.token)) |ident| {
-                switch (self.scope.levels.lookup(.ident, ident)) {
-                    .InScope, .NotInScope => {
-                        // Create lookup expression even if not in scope
-                        // The lookup function already recorded the problem
-                        return self.can_ir.store.addExpr(.{
-                            .expr = .{ .lookup = .{
-                                .ident = ident,
-                            } },
-                            .region = e.region.toBase(),
-                        });
-                    },
-                    .NotPresent => {
-                        // Identifier doesn't exist at all - this shouldn't happen
-                        // but we'll still create a lookup for robustness
-                        return self.can_ir.store.addExpr(.{
-                            .expr = .{ .lookup = .{
-                                .ident = ident,
-                            } },
-                            .region = e.region.toBase(),
-                        });
-                    },
+                if (self.scope.levels.lookup(&self.can_ir.env.idents, .ident, ident)) |pattern_idx| {
+                    // We found the ident in scope, lookup to reference the pattern
+                    return self.can_ir.store.addExpr(CIR.Expr{ .lookup = .{
+                        .pattern_idx = pattern_idx,
+                        .region = self.tokenizedRegionToRegion(e.region),
+                    } });
+                } else {
+                    // We did not find the ident in scope
+                    return self.can_ir.pushMalformed(CIR.Expr.Idx, .ident_not_in_scope, self.tokenizedRegionToRegion(e.region));
                 }
             } else {
+                self.can_ir.env.pushProblem(Problem.Compiler.can(.unable_to_resolve_identifier));
                 return null;
             }
         },
@@ -387,22 +398,15 @@ pub fn canonicalize_expr(
 
             // parse the integer value
             const value = std.fmt.parseInt(i128, token_text, 10) catch {
-                // Add problem for invalid number literal
-                const problem_id = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .InvalidNumLiteral = .{
-                    .region = e.region.toBase(),
-                    .literal = token_text,
-                } }));
 
-                return self.can_ir.store.addExpr(.{
-                    .expr = CIR.Expr{ .runtime_error = problem_id },
-                    .region = e.region.toBase(),
-                });
+                // Invalid number literal
+                return self.can_ir.pushMalformed(CIR.Expr.Idx, .invalid_num_literal, self.tokenizedRegionToRegion(e.region));
             };
 
             const fresh_num_var = self.can_ir.env.types_store.fresh();
             const fresh_prec_var = self.can_ir.env.types_store.fresh();
 
-            const int_expr = CIR.Expr{
+            return self.can_ir.store.addExpr(CIR.Expr{
                 .int = .{
                     .num_var = fresh_num_var,
                     .precision_var = fresh_prec_var,
@@ -411,14 +415,9 @@ pub fn canonicalize_expr(
                         .bytes = @bitCast(value),
                         .kind = .i128,
                     },
-                    // TODO shouldn't this be a flex_var?
-                    .bound = types.Num.Compact.Int.Precision.i128,
+                    .bound = types.Num.Compact.placeholder(), // TODO
+                    .region = self.tokenizedRegionToRegion(e.region),
                 },
-            };
-
-            return self.can_ir.store.addExpr(.{
-                .expr = int_expr,
-                .region = e.region.toBase(),
             });
         },
         .float => |e| {
@@ -430,64 +429,38 @@ pub fn canonicalize_expr(
 
             // parse the float value
             const value = std.fmt.parseFloat(f64, token_text) catch {
-                // Add problem for invalid number literal
-                const problem_id = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .InvalidNumLiteral = .{
-                    .region = e.region.toBase(),
-                    .literal = token_text,
-                } }));
-
-                return self.can_ir.store.addExpr(.{
-                    .expr = CIR.Expr{ .runtime_error = problem_id },
-                    .region = e.region.toBase(),
-                });
+                return self.can_ir.pushMalformed(CIR.Expr.Idx, .invalid_num_literal, self.tokenizedRegionToRegion(e.region));
             };
 
             const fresh_num_var = self.can_ir.env.types_store.fresh();
             const fresh_prec_var = self.can_ir.env.types_store.fresh();
 
-            const float_expr = CIR.Expr{
+            return self.can_ir.store.addExpr(CIR.Expr{
                 .float = .{
                     .num_var = fresh_num_var,
                     .precision_var = fresh_prec_var,
                     .literal = literal,
                     .value = value,
-                    // TODO shouldn't this be a flex_var?
-                    .bound = types.Num.Compact.Frac.Precision.dec,
+                    .bound = types.Num.Compact.placeholder(), // TODO
+                    .region = self.tokenizedRegionToRegion(e.region),
                 },
-            };
-
-            return self.can_ir.store.addExpr(.{
-                .expr = float_expr,
-                .region = e.region.toBase(),
             });
         },
         .string => |e| {
             // Get all the string parts
-            const parts_span = e.parts;
-            const parts = self.parse_ir.store.exprSlice(parts_span);
+            const parts = self.parse_ir.store.exprSlice(e.parts);
 
-            // Extract segments from the string
-            const segments = self.extractStringSegments(parts) catch |err| exitOnOom(err);
-            defer self.can_ir.env.gpa.free(segments);
-
-            // Check if this is a simple string (no interpolation)
-            if (isSimpleString(segments)) {
-                // Simple string case - concatenate all plaintext segments
-                const final_string = self.concatenatePlaintextSegments(segments) catch |err| exitOnOom(err);
-                defer self.can_ir.env.gpa.free(final_string);
-
-                return self.createStringLiteral(final_string, e.region.toBase());
-            }
-
-            // Handle string interpolation by desugaring to Str.concat calls
-            // TODO: This requires implementing function calls in the IR first
+            // Extract segments from the string, inserting them into the string interner
+            // For non-string interpolation segments, canonicalize them
             //
-            // The desugaring transforms interpolated strings into nested Str.concat calls:
-            // "Hello ${name}, welcome!" becomes:
-            //   Str.concat (Str.concat "Hello " name) ", welcome!"
-            //
-            // For now, we'll collect all the segments and prepare for future desugaring
-            return self.desugarStringInterpolation(segments, e.region.toBase());
+            // Returns a Expr.Span containing the canonicalized string segments
+            // a string may consist of multiple string literal or expression segments
+            const str_segments_span = self.extractStringSegments(parts);
+
+            return self.can_ir.store.addExpr(CIR.Expr{ .str = .{
+                .span = str_segments_span,
+                .region = self.tokenizedRegionToRegion(e.region),
+            } });
         },
         .list => |e| {
             var items = collections.SafeList(CIR.Expr.Idx).initCapacity(self.can_ir.env.gpa, 0);
@@ -513,16 +486,12 @@ pub fn canonicalize_expr(
             // Create span from scratch expressions
             const elems_span = self.can_ir.store.exprSpanFrom(scratch_top);
 
-            const list_expr = CIR.Expr{
+            return self.can_ir.store.addExpr(CIR.Expr{
                 .list = .{
                     .elems = elems_span,
                     .elem_var = fresh_type_var,
+                    .region = self.tokenizedRegionToRegion(e.region),
                 },
-            };
-
-            return self.can_ir.store.addExpr(.{
-                .expr = list_expr,
-                .region = e.region.toBase(),
             });
         },
         .tag => |e| {
@@ -530,394 +499,236 @@ pub fn canonicalize_expr(
                 const fresh_type_var_tag_union = self.can_ir.env.types_store.fresh();
                 const fresh_type_var_ext = self.can_ir.env.types_store.fresh();
 
-                const tag_expr = CIR.Expr{
+                return self.can_ir.store.addExpr(CIR.Expr{
                     .tag = .{
                         .tag_union_var = fresh_type_var_tag_union,
                         .ext_var = fresh_type_var_ext,
                         .name = tag_name,
                         .args = .{ .span = .{ .start = 0, .len = 0 } }, // empty arguments
+                        .region = self.tokenizedRegionToRegion(e.region),
                     },
-                };
-
-                return self.can_ir.store.addExpr(.{
-                    .expr = tag_expr,
-                    .region = e.region.toBase(),
                 });
             } else {
                 return null;
             }
         },
-        .string_part => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
-                .expr_type = "string_part",
-                .region = e.region.toBase(),
-            } }));
+        .string_part => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
-        .tuple => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
-                .expr_type = "tuple",
-                .region = e.region.toBase(),
-            } }));
+        .tuple => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
-        .record => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
-                .expr_type = "record",
-                .region = e.region.toBase(),
-            } }));
+        .record => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
         .lambda => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
-                .expr_type = "lambda",
-                .region = e.region.toBase(),
-            } }));
+
+            // args
+            // TODO implement canonicalization of args here
+
+            // body
+            const body_idx = blk: {
+                if (self.canonicalize_expr(e.body)) |idx| {
+                    break :blk idx;
+                } else {
+                    const ast_body = self.parse_ir.store.getExpr(e.body);
+                    const malformed_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, .lambda_body_not_canonicalized, self.tokenizedRegionToRegion(ast_body.to_tokenized_region()));
+                    break :blk malformed_idx;
+                }
+            };
+
+            // We don't have a Lambda in CIR.Expr ... TODO should we add one?
+            _ = body_idx;
+            return self.can_ir.pushMalformed(CIR.Expr.Idx, .can_lambda_not_implemented, self.tokenizedRegionToRegion(e.region));
+        },
+        .record_updater => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
-        .record_updater => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
-                .expr_type = "record_updater",
-                .region = e.region.toBase(),
-            } }));
+        .field_access => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
-        .field_access => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
-                .expr_type = "field_access",
-                .region = e.region.toBase(),
-            } }));
-            return null;
-        },
-        .local_dispatch => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
-                .expr_type = "local_dispatch",
-                .region = e.region.toBase(),
-            } }));
+        .local_dispatch => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
         .bin_op => |e| {
-            // Binary operators are desugared to function calls
-            // e.g., `x + y` becomes `Num.add x y`
 
             // Canonicalize left and right operands
-            const left_expr = self.canonicalize_expr(e.left) orelse return null;
-            const right_expr = self.canonicalize_expr(e.right) orelse return null;
+            const lhs = if (self.canonicalize_expr(e.left)) |left_expr_idx|
+                left_expr_idx
+            else
+                self.can_ir.pushMalformed(CIR.Expr.Idx, .expr_not_canonicalized, self.tokenizedRegionToRegion(e.region));
+
+            const rhs = if (self.canonicalize_expr(e.right)) |right_expr_idx|
+                right_expr_idx
+            else
+                self.can_ir.pushMalformed(CIR.Expr.Idx, .expr_not_canonicalized, self.tokenizedRegionToRegion(e.region));
 
             // Get the operator token
             const op_token = self.parse_ir.tokens.tokens.get(e.operator);
 
-            // Map operator to function name
-            // TODO find the correct names to use here...
-            const op_name = switch (op_token.tag) {
-                .OpPlus => "add",
-                .OpStar => "mul",
-                .OpAssign => "assign",
-                .OpBinaryMinus => "sub",
-                .OpUnaryMinus => "neg",
-                .OpNotEquals => "isNotEq",
-                .OpBang => "not",
-                .OpAnd => "and",
-                .OpAmpersand => "bitAnd",
-                .OpOr => "or",
-                .OpBar => "bitOr",
-                .OpDoubleSlash => "doubleSlash",
-                .OpSlash => "div",
-                .OpPercent => "rem",
-                .OpCaret => "pow",
-                .OpGreaterThanOrEq => "isGte",
-                .OpGreaterThan => "isGt",
-                .OpLessThanOrEq => "isLte",
-                .OpLessThan => "isLt",
-                .OpEquals => "isEq",
-                else => return null, // Unknown operator
-            };
-
-            // Determine module prefix based on operator type
-            // TODO: Use module prefix when we properly resolve operator functions
-            // const module_prefix = switch (e.op) {
-            //     .plus, .minus, .star, .slash, .double_slash, .percent, .caret => "Num",
-            //     .greater_than, .less_than, .greater_than_or_eq, .less_than_or_eq, .double_eq, .not_eq => "Bool",
-            //     .double_ampersand, .double_pipe => "Bool",
-            //     .pizza, .pipe => "", // No module prefix for these
-            //     else => "",
-            // };
-
-            // For now, create a simple call expression
-            const scratch_top = self.can_ir.store.scratchExprTop();
-
-            // Create the operator function lookup
-            // For now, we'll create a simple identifier lookup
-            const ident = Ident.for_text(op_name);
-            const op_ident = self.can_ir.env.idents.insert(self.can_ir.env.gpa, ident, e.region.toBase());
-            const op_lookup = self.can_ir.store.addExpr(.{
-                .expr = .{ .lookup = .{ .ident = op_ident } },
-                .region = e.region.toBase(),
-            });
-
-            // Add function and arguments to scratch
-            self.can_ir.store.addScratchExpr(op_lookup);
-            self.can_ir.store.addScratchExpr(left_expr);
-            self.can_ir.store.addScratchExpr(right_expr);
-
-            // Create span from scratch expressions
-            const args_span = self.can_ir.store.exprSpanFrom(scratch_top);
-
-            // Create the call expression
-            const call_expr = CIR.Expr{
-                .call = .{
-                    .args = args_span,
+            const op: CIR.Expr.Binop.Op = switch (op_token.tag) {
+                .OpPlus => .add,
+                .OpBinaryMinus => .sub,
+                .OpStar => .mul,
+                else => {
+                    // Unknown operator
+                    self.can_ir.env.pushProblem(Problem.Compiler.can(.unexpected_token_binop));
+                    return null;
                 },
             };
 
-            return self.can_ir.store.addExpr(.{
-                .expr = call_expr,
-                .region = e.region.toBase(),
+            return self.can_ir.store.addExpr(CIR.Expr{
+                .binop = CIR.Expr.Binop.init(
+                    op,
+                    lhs,
+                    rhs,
+                    self.tokenizedRegionToRegion(e.region),
+                ),
             });
         },
-        .suffix_single_question => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
-                .expr_type = "suffix_single_question",
-                .region = e.region.toBase(),
-            } }));
+        .suffix_single_question => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
-        .unary_op => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
-                .expr_type = "unary_op",
-                .region = e.region.toBase(),
-            } }));
+        .unary_op => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
-        .if_then_else => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
-                .expr_type = "if_then_else",
-                .region = e.region.toBase(),
-            } }));
+        .if_then_else => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
-        .match => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
-                .expr_type = "match",
-                .region = e.region.toBase(),
-            } }));
+        .match => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
-        .dbg => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
-                .expr_type = "dbg",
-                .region = e.region.toBase(),
-            } }));
+        .dbg => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
-        .record_builder => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
-                .expr_type = "record_builder",
-                .region = e.region.toBase(),
-            } }));
+        .record_builder => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
-        .ellipsis => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
-                .expr_type = "ellipsis",
-                .region = e.region.toBase(),
-            } }));
+        .ellipsis => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
-        .block => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
-                .expr_type = "block",
-                .region = e.region.toBase(),
-            } }));
+        .block => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
-        .malformed => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedExpr = .{
-                .expr_type = "malformed",
-                .region = e.region.toBase(),
-            } }));
+        .malformed => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
     }
 }
 
 /// Extract string segments from parsed string parts
-fn extractStringSegments(self: *Self, parts: []const AST.Expr.Idx) ![]StringSegment {
-    var segments = std.ArrayList(StringSegment).init(self.can_ir.env.gpa);
-    defer segments.deinit();
+fn extractStringSegments(self: *Self, parts: []const AST.Expr.Idx) CIR.Expr.Span {
+    const gpa = self.can_ir.env.gpa;
+    const start = self.can_ir.store.scratchExprTop();
 
     for (parts) |part| {
         const part_node = self.parse_ir.store.getExpr(part);
         switch (part_node) {
             .string_part => |sp| {
+                // get the raw text of the string part
                 const part_text = self.parse_ir.resolve(sp.token);
-                try segments.append(.{ .plaintext = part_text });
+
+                // intern the string in the ModuleEnv
+                const string_idx = self.can_ir.env.strings.insert(gpa, part_text);
+
+                // create a node for the string literal
+                const str_expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .str_segment = .{
+                    .literal = string_idx,
+                    .region = self.tokenizedRegionToRegion(part_node.to_tokenized_region()),
+                } });
+
+                // add the node idx to our scratch expr stack
+                self.can_ir.store.addScratchExpr(str_expr_idx);
             },
             else => {
+
                 // Any non-string-part is an interpolation
-                try segments.append(.{ .interpolation = part });
+                if (self.canonicalize_expr(part)) |expr_idx| {
+                    // append our interpolated expression
+                    self.can_ir.store.addScratchExpr(expr_idx);
+                } else {
+                    // unable to canonicalize the interpolation, push a malformed node
+                    const malformed_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, .invalid_string_interpolation, self.tokenizedRegionToRegion(part_node.to_tokenized_region()));
+                    self.can_ir.store.addScratchExpr(malformed_idx);
+                }
             },
         }
     }
 
-    return segments.toOwnedSlice();
-}
-
-/// Check if all segments are plaintext (no interpolation)
-fn isSimpleString(segments: []const StringSegment) bool {
-    for (segments) |segment| {
-        if (segment == .interpolation) {
-            return false;
-        }
-    }
-    return true;
-}
-
-/// Concatenate all plaintext segments into a single string
-///
-/// Must only be called for simple strings, caller is responsible
-fn concatenatePlaintextSegments(self: *Self, segments: []const StringSegment) ![]const u8 {
-    var string_builder = std.ArrayList(u8).init(self.can_ir.env.gpa);
-    defer string_builder.deinit();
-
-    for (segments) |segment| {
-        switch (segment) {
-            .plaintext => |text| try string_builder.appendSlice(text),
-            .interpolation => unreachable,
-        }
-    }
-
-    return string_builder.toOwnedSlice();
-}
-
-/// Create a string literal expression
-fn createStringLiteral(self: *Self, text: []const u8, region: Region) CIR.Expr.Idx {
-    const literal = self.can_ir.env.strings.insert(self.can_ir.env.gpa, text);
-    const str_expr = CIR.Expr{ .str = literal };
-
-    return self.can_ir.store.addExpr(.{
-        .expr = str_expr,
-        .region = region,
-    });
-}
-
-/// Desugar string interpolation into Str.concat calls
-fn desugarStringInterpolation(self: *Self, segments: []const StringSegment, region: Region) CIR.Expr.Idx {
-    if (segments.len == 0) {
-        return self.createStringLiteral("", region);
-    }
-
-    // Convert segments to expressions
-    var segment_exprs = std.ArrayList(CIR.Expr.Idx).init(self.can_ir.env.gpa);
-    defer segment_exprs.deinit();
-
-    for (segments) |segment| {
-        const segment_expr = switch (segment) {
-            .plaintext => |text| self.createStringLiteral(text, region),
-            .interpolation => |expr_idx| self.canonicalize_expr(expr_idx) orelse continue,
-        };
-        segment_exprs.append(segment_expr) catch |err| exitOnOom(err);
-    }
-
-    if (segment_exprs.items.len == 0) {
-        return self.createStringLiteral("", region);
-    }
-
-    // If there's only one segment, return it directly
-    if (segment_exprs.items.len == 1) {
-        return segment_exprs.items[0];
-    }
-
-    // Create the Str.concat identifier
-    // TODO use a proper builtin when we have this...
-    const str_concat_ident = Ident.for_text("Str.concat");
-    const str_concat_idx = self.can_ir.env.idents.insert(self.can_ir.env.gpa, str_concat_ident, region);
-
-    // Build nested Str.concat calls from left to right
-    // For segments ["Hello ", name, "!"], create: Str.concat (Str.concat "Hello " name) "!"
-    var result = segment_exprs.items[0];
-
-    for (segment_exprs.items[1..]) |segment_expr| {
-        // Mark the start of scratch expressions for this call
-        const call_scratch_top = self.can_ir.store.scratchExprTop();
-
-        // Create the Str.concat lookup
-        const concat_fn = self.can_ir.store.addExpr(.{
-            .expr = .{ .lookup = .{
-                .ident = str_concat_idx,
-            } },
-            .region = region,
-        });
-        self.can_ir.store.addScratchExpr(concat_fn);
-
-        // Add the accumulated result as first argument
-        self.can_ir.store.addScratchExpr(result);
-
-        // Add the current segment as second argument
-        self.can_ir.store.addScratchExpr(segment_expr);
-
-        // Create span from scratch expressions
-        const args_span = self.can_ir.store.exprSpanFrom(call_scratch_top);
-
-        // Create the call expression
-        const call_expr = CIR.Expr{
-            .call = .{
-                .args = args_span,
-            },
-        };
-
-        result = self.can_ir.store.addExpr(.{
-            .expr = call_expr,
-            .region = region,
-        });
-    }
-
-    return result;
+    return self.can_ir.store.exprSpanFrom(start);
 }
 
 fn canonicalize_pattern(
     self: *Self,
     pattern_idx: AST.Pattern.Idx,
 ) ?CIR.Pattern.Idx {
-    const pattern = self.parse_ir.store.getPattern(pattern_idx);
-    const region = Region.zero(); // TODO: Implement proper pattern region retrieval
-
-    switch (pattern) {
+    const gpa = self.can_ir.env.gpa;
+    switch (self.parse_ir.store.getPattern(pattern_idx)) {
         .ident => |e| {
-            if (self.parse_ir.tokens.resolveIdentifier(e.ident_tok)) |ident| {
-                // Introduce the identifier into scope
-                _ = self.scope.levels.introduce(.ident, .{ .scope_name = ident, .ident = ident });
+            const region = self.tokenizedRegionToRegion(e.region);
 
-                const ident_pattern = CIR.Pattern{
-                    .identifier = ident,
+            if (self.parse_ir.tokens.resolveIdentifier(e.ident_tok)) |ident_idx| {
+
+                // Push a Pattern node for our identifier
+                const assign_idx = self.can_ir.store.addPattern(CIR.Pattern{ .assign = .{
+                    .ident = ident_idx,
+                    .region = region,
+                } });
+
+                // Introduce the identifier into scope mapping to this pattern node
+                self.scope.levels.introduce(
+                    gpa,
+                    &self.can_ir.env.idents,
+                    .ident,
+                    ident_idx,
+                    assign_idx,
+                ) catch {
+                    return self.can_ir.pushMalformed(CIR.Pattern.Idx, .ident_already_in_scope, region);
                 };
 
-                return self.can_ir.store.addPattern(ident_pattern);
+                return assign_idx;
+            } else {
+                self.can_ir.env.pushProblem(Problem.Compiler.can(.unable_to_resolve_identifier));
+                return null;
             }
-            return null;
         },
-        .underscore => {
+        .underscore => |p| {
             const underscore_pattern = CIR.Pattern{
-                .Underscore = {},
+                .underscore = .{
+                    .region = self.tokenizedRegionToRegion(p.region),
+                },
             };
 
             return self.can_ir.store.addPattern(underscore_pattern);
         },
         .number => |e| {
+            const region = self.tokenizedRegionToRegion(e.region);
+
             // resolve to a string slice from the source
             const token_text = self.parse_ir.resolve(e.number_tok);
 
             // intern the string slice
-            const literal = self.can_ir.env.strings.insert(self.can_ir.env.gpa, token_text);
+            const literal = self.can_ir.env.strings.insert(gpa, token_text);
 
             // parse the integer value
             const value = std.fmt.parseInt(i128, token_text, 10) catch {
-                // Add problem for invalid number literal
-                _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .InvalidNumLiteral = .{
-                    .region = region,
-                    .literal = token_text,
-                } }));
-                return null;
+                // Invalid num literal
+                return self.can_ir.pushMalformed(CIR.Pattern.Idx, .invalid_num_literal, region);
             };
 
             const fresh_num_var = self.can_ir.env.types_store.fresh();
@@ -932,8 +743,8 @@ fn canonicalize_pattern(
                         .bytes = @bitCast(value),
                         .kind = .i128,
                     },
-                    // TODO shouldn't this be a flex_var?
-                    .bound = types.Num.Compact.Int.Precision.i128,
+                    .bound = types.Num.Compact.placeholder(), // TODO
+                    .region = region,
                 },
             };
 
@@ -945,22 +756,34 @@ fn canonicalize_pattern(
 
             // TODO: Handle escape sequences
             // For now, just intern the raw string
-            const literal = self.can_ir.env.strings.insert(self.can_ir.env.gpa, token_text);
+            const literal = self.can_ir.env.strings.insert(gpa, token_text);
 
             const str_pattern = CIR.Pattern{
-                .str_literal = literal,
+                .str_literal = .{
+                    .literal = literal,
+                    .region = self.tokenizedRegionToRegion(e.region),
+                },
             };
 
             return self.can_ir.store.addPattern(str_pattern);
         },
         .tag => |e| {
             if (self.parse_ir.tokens.resolveIdentifier(e.tag_tok)) |tag_name| {
+                const start = self.can_ir.store.scratch_patterns.top();
 
-                // TODO: handle tag arguments from e.args
-                const arguments: CIR.TypedPatternAtRegion.Span = .{ .span = base.DataSpan{
-                    .start = 867,
-                    .len = 867,
-                } };
+                for (self.parse_ir.store.patternSlice(e.args)) |ast_pattern_idx| {
+                    if (self.canonicalize_pattern(ast_pattern_idx)) |idx| {
+                        self.can_ir.store.scratch_patterns.append(gpa, idx);
+                    } else {
+                        const arg = self.parse_ir.store.getPattern(ast_pattern_idx);
+                        const region = self.tokenizedRegionToRegion(arg.to_tokenized_region());
+                        const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, .pattern_arg_invalid, region);
+
+                        self.can_ir.store.scratch_patterns.append(gpa, malformed_idx);
+                    }
+                }
+
+                const args = self.can_ir.store.patternSpanFrom(start);
 
                 const fresh_num_var = self.can_ir.env.types_store.fresh();
                 const fresh_ext_var = self.can_ir.env.types_store.fresh();
@@ -970,7 +793,8 @@ fn canonicalize_pattern(
                         .whole_var = fresh_num_var,
                         .ext_var = fresh_ext_var,
                         .tag_name = tag_name,
-                        .arguments = arguments,
+                        .arguments = args,
+                        .region = self.tokenizedRegionToRegion(e.region),
                     },
                 };
 
@@ -978,54 +802,51 @@ fn canonicalize_pattern(
             }
             return null;
         },
-        .record => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedPattern = .{
-                .pattern_type = "record",
-                .region = e.region.toBase(),
-            } }));
+        .record => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
-        .tuple => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedPattern = .{
-                .pattern_type = "tuple",
-                .region = e.region.toBase(),
-            } }));
+        .tuple => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
-        .list => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedPattern = .{
-                .pattern_type = "list",
-                .region = e.region.toBase(),
-            } }));
+        .list => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
-        .list_rest => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedPattern = .{
-                .pattern_type = "list_rest",
-                .region = e.region.toBase(),
-            } }));
+        .list_rest => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
-        .alternatives => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedPattern = .{
-                .pattern_type = "alternatives",
-                .region = e.region.toBase(),
-            } }));
+        .alternatives => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
-        .malformed => |e| {
-            _ = self.can_ir.env.problems.append(self.can_ir.env.gpa, Problem.Canonicalize.make(.{ .NotYetImplementedPattern = .{
-                .pattern_type = "malformed",
-                .region = e.region.toBase(),
-            } }));
+        .malformed => |_| {
+            self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
             return null;
         },
     }
     return null;
 }
 
-/// Represents a segment of a string literal that may contain interpolations
-const StringSegment = union(enum) {
-    plaintext: []const u8,
-    interpolation: AST.Expr.Idx,
-};
+/// Introduce a new identifier to the current scope, return an
+/// index if
+pub fn scope_introduce_ident(
+    self: Self,
+    ident_idx: Ident.Idx,
+    pattern_idx: CIR.Pattern.Idx,
+    region: Region,
+    comptime T: type,
+) T {
+    const gpa = self.get_gpa();
+    self.scope.levels.introduce(
+        gpa,
+        &self.can_ir.env.idents,
+        .ident,
+        ident_idx,
+        pattern_idx,
+    ) catch {
+        return self.can_ir.pushMalformed(CIR.Pattern.Idx, .ident_already_in_scope, region);
+    };
+}

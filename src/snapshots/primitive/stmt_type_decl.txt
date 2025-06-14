@@ -6,7 +6,7 @@ module [Foo]
 
 Foo(a,b) : (a,b,Str,U64)
 ~~~PROBLEMS
-NIL
+COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
 ~~~TOKENS
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:12),CloseSquare(1:12-1:13),Newline(1:1-1:1),
 Newline(1:1-1:1),

@@ -2,7 +2,8 @@ const std = @import("std");
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const base = @import("base.zig");
-const Can = @import("check/canonicalize.zig");
+const canonicalize = @import("check/canonicalize.zig");
+const CIR = canonicalize.CIR;
 const Scope = @import("check/canonicalize/Scope.zig");
 const parse = @import("check/parse.zig");
 const fmt = @import("fmt.zig");
@@ -434,10 +435,7 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
         }
     };
 
-    var line_starts = try base.DiagnosticPosition.findLineStarts(gpa, content.source);
-    defer line_starts.deinit();
-
-    var module_env = base.ModuleEnv.init(gpa);
+    var module_env = base.ModuleEnv.init(gpa, file_content);
     defer module_env.deinit();
 
     // Parse the source code
@@ -454,15 +452,15 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
 
     // Canonicalize the source code
     // Can.IR.init takes ownership of the module_env and type_store
-    var can_ir = Can.CIR.init(module_env);
+    var can_ir = CIR.init(module_env);
     defer can_ir.deinit();
 
-    var scope = Scope.init(&can_ir.env, &.{}, &.{});
-    defer scope.deinit();
+    var scope = Scope.init(can_ir.env.gpa);
+    defer scope.deinit(can_ir.env.gpa);
 
-    var can = Can.init(&can_ir, &parse_ast, &scope);
+    var can = canonicalize.init(&can_ir, &parse_ast, &scope);
 
-    var maybe_expr_idx: ?Can.CIR.Expr.Idx = null;
+    var maybe_expr_idx: ?CIR.Expr.Idx = null;
 
     switch (content.meta.node_type) {
         .file => can.canonicalize_file(),
@@ -473,6 +471,12 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
             // For expr snapshots, just canonicalize the root expression directly
             const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
             maybe_expr_idx = can.canonicalize_expr(expr_idx);
+
+            // Manually copy errors across to ModuleEnv problems
+            // as `canonicalize_expr` doesn't do this for us.
+            for (can_ir.diagnostics.items) |msg| {
+                _ = module_env.problems.append(gpa, .{ .canonicalize = msg });
+            }
         },
         .statement => {
             // TODO: implement canonicalize_statement when available
@@ -505,10 +509,10 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
     {
         try writer.writeAll(Section.PROBLEMS);
         try writer.writeAll("\n");
-        if (module_env.problems.len() > 0) {
-            var iter = module_env.problems.iterIndices();
+        if (can_ir.env.problems.len() > 0) {
+            var iter = can_ir.env.problems.iterIndices();
             while (iter.next()) |problem_idx| {
-                const problem = module_env.problems.get(problem_idx);
+                const problem = can_ir.env.problems.get(problem_idx);
                 try problem.toStr(gpa, content.source, writer);
                 try writer.writeAll("\n");
             }
@@ -525,7 +529,7 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
         const tokens = tokenizedBuffer.tokens.items(.tag);
         for (tokens, 0..) |tok, i| {
             const region = tokenizedBuffer.resolve(@intCast(i));
-            const info = try base.DiagnosticPosition.position(content.source, line_starts, region.start.offset, region.end.offset);
+            const info = try module_env.calcRegionInfo(content.source, region.start.offset, region.end.offset);
             const region_str = try std.fmt.allocPrint(gpa, "{s}({d}:{d}-{d}:{d}),", .{
                 @tagName(tok),
                 // add one to display numbers instead of index
@@ -554,16 +558,25 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
                 try parse_ast.toSExprStr(&module_env, parse_buffer.writer().any());
             },
             .header => {
-                const node = parse_ast.store.getHeader(@enumFromInt(parse_ast.root_node_idx));
-                try parse_ast.nodeToSExprStr(node, &module_env, parse_buffer.writer().any());
+                const header = parse_ast.store.getHeader(@enumFromInt(parse_ast.root_node_idx));
+                var node = header.toSExpr(&module_env, &parse_ast);
+                defer node.deinit(gpa);
+
+                node.toStringPretty(parse_buffer.writer().any());
             },
             .expr => {
-                const node = parse_ast.store.getExpr(@enumFromInt(parse_ast.root_node_idx));
-                try parse_ast.nodeToSExprStr(node, &module_env, parse_buffer.writer().any());
+                const expr = parse_ast.store.getExpr(@enumFromInt(parse_ast.root_node_idx));
+                var node = expr.toSExpr(&module_env, &parse_ast);
+                defer node.deinit(gpa);
+
+                node.toStringPretty(parse_buffer.writer().any());
             },
             .statement => {
-                const node = parse_ast.store.getStatement(@enumFromInt(parse_ast.root_node_idx));
-                try parse_ast.nodeToSExprStr(node, &module_env, parse_buffer.writer().any());
+                const stmt = parse_ast.store.getStatement(@enumFromInt(parse_ast.root_node_idx));
+                var node = stmt.toSExpr(&module_env, &parse_ast);
+                defer node.deinit(gpa);
+
+                node.toStringPretty(parse_buffer.writer().any());
             },
         }
         try writer.writeAll(Section.PARSE);
@@ -608,7 +621,7 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
         var canonicalized = std.ArrayList(u8).init(gpa);
         defer canonicalized.deinit();
 
-        try can_ir.toSExprStr(canonicalized.writer().any(), maybe_expr_idx, line_starts, content.source);
+        try can_ir.toSExprStr(canonicalized.writer().any(), maybe_expr_idx);
 
         try writer.writeAll(Section.CANONICALIZE);
         try writer.writeAll("\n");
