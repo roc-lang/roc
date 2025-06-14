@@ -527,6 +527,7 @@ pub fn canonicalize_expr(
         .lambda => |e| {
 
             // args
+            // TODO implement canonicalization of args here
 
             // body
             const body_idx = blk: {

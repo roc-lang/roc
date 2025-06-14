@@ -72,7 +72,7 @@ pub const Expr = union(enum) {
         }
     }
 
-    /// Helper function to append a string child
+    /// Helper function to append a string
     /// The value will be duplicated so that it is owned by the node
     /// and will be freed when the node is destroyed.
     pub fn appendString(self: *Expr, gpa: Allocator, value: []const u8) void {
@@ -94,22 +94,22 @@ pub const Expr = union(enum) {
         } });
     }
 
-    /// Helper function to append a signed integer child
+    /// Helper function to append a signed integer
     pub fn appendSignedInt(self: *Expr, gpa: Allocator, value: i128) void {
         self.appendNodeUnsafe(gpa, .{ .signed_int = value });
     }
 
-    /// Helper function to append an unsigned integer child
+    /// Helper function to append an unsigned integer
     pub fn appendUnsignedInt(self: *Expr, gpa: Allocator, value: u128) void {
         self.appendNodeUnsafe(gpa, .{ .unsigned_int = value });
     }
 
-    /// Helper function to append a float child
+    /// Helper function to append a float
     pub fn appendFloat(self: *Expr, gpa: Allocator, value: f64) void {
         self.appendNodeUnsafe(gpa, .{ .float = value });
     }
 
-    /// Helper function to append a node child
+    /// Helper function to append a node
     pub fn appendNode(self: *Expr, gpa: Allocator, child_node: *Expr) void {
         self.appendNodeUnsafe(gpa, child_node.*);
     }

@@ -46,7 +46,7 @@ pub const Problem = union(enum) {
             return Problem{ .compiler = compiler_error };
         }
 
-        /// Make a  based on a compiler error.
+        /// Make a `Problem` based on a compiler error.
         pub fn can(tag: Can) Problem {
             return Problem{ .compiler = .{ .canonicalize = tag } };
         }
