@@ -454,6 +454,15 @@ fn listAppend(
     return listAppendUnsafe(with_capacity, element, element_width, copy);
 }
 
+test "listAppend" {
+    const list = RocList.fromSlice(u8, &[_]u8{ 1, 2, 3, 4 }, false);
+    defer list.decref(1, 1, false, &rcNone);
+    const appended = listAppend(list, 1, 5, 1, false, rcNone, .Immutable, rcNone);
+    const expected = RocList.fromSlice(u8, &[_]u8{ 1, 2, 3, 4, 5 }, false);
+    defer expected.decref(1, 1, false, &rcNone);
+    try expect(appended.eql(expected));
+}
+
 pub fn listPrepend(
     list: RocList,
     alignment: u32,
@@ -517,9 +526,9 @@ pub fn listSwap(
     const source_ptr = @as([*]u8, @ptrCast(newList.bytes));
 
     swapElements(source_ptr, element_width, @as(usize,
-    // We already verified that both indices are less than the stored list length,
-    // which is usize, so casting them to usize will definitely be lossless.
-    @intCast(index_1)), @as(usize, @intCast(index_2)), copy);
+        // We already verified that both indices are less than the stored list length,
+        // which is usize, so casting them to usize will definitely be lossless.
+        @intCast(index_1)), @as(usize, @intCast(index_2)), copy);
 
     return newList;
 }
