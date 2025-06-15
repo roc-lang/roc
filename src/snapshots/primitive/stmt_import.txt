@@ -6,7 +6,14 @@ module []
 
 import json.Json [foo, BAR]
 ~~~PROBLEMS
-CANONICALIZE: invalid_top_level_statement "[foo, BAR]"
+INVALID STATEMENT
+
+This statement is not allowed at the top level.
+
+module []
+
+import json.Json [foo, BAR]
+Only definitions, type annotations, and imports are allowed at the top level.
 ~~~TOKENS
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),
 Newline(1:1-1:1),

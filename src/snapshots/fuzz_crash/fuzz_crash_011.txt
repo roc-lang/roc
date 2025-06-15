@@ -4,11 +4,20 @@ type=file
 ~~~SOURCE
 module P]F
 ~~~PROBLEMS
-TOKENIZE: (1:9-1:9) OverClosedBrace:
+Misplaced carriage return character
+
+SYNTAX PROBLEM
+
+Expected '[' in the module header.
+
 module P]F
-        ^
-PARSER: header_expected_open_square
-PARSER: expected_colon_after_type_annotation
+Note: This is a parse error. Check your syntax.
+SYNTAX PROBLEM
+
+Expected ':' after the type annotation.
+
+module P]F
+Note: This is a parse error. Check your syntax.
 ~~~TOKENS
 KwModule(1:1-1:7),UpperIdent(1:8-1:9),UpperIdent(1:10-1:11),EndOfFile(1:11-1:11),
 ~~~PARSE

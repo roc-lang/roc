@@ -4,8 +4,12 @@ type=expr
 ~~~SOURCE
 3.14.15
 ~~~PROBLEMS
-PARSER: expr_no_space_dot_int
-COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
+SYNTAX PROBLEM
+
+There should be no space between the dot and the integer.
+
+3.14.15
+Note: This is a parse error. Check your syntax.
 ~~~TOKENS
 Float(1:1-1:5),NoSpaceDotInt(1:5-1:8),EndOfFile(1:8-1:8),
 ~~~PARSE

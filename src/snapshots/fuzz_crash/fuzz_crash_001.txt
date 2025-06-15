@@ -4,10 +4,30 @@ type=file
 ~~~SOURCE
 mo|%
 ~~~PROBLEMS
-PARSER: missing_header
-PARSER: pattern_unexpected_token
-PARSER: expected_expr_bar
-CANONICALIZE: invalid_top_level_statement "|%"
+MISSING HEADER
+
+The module header is missing.
+
+mo|%
+Note: This is a parse error. Check your syntax.
+SYNTAX PROBLEM
+
+I didn't expect to see this in the pattern.
+
+mo|%
+Note: This is a parse error. Check your syntax.
+SYNTAX PROBLEM
+
+Expected '|' in this expression.
+
+mo|%
+Note: This is a parse error. Check your syntax.
+INVALID STATEMENT
+
+This statement is not allowed at the top level.
+
+mo|%
+Only definitions, type annotations, and imports are allowed at the top level.
 ~~~TOKENS
 LowerIdent(1:1-1:3),OpBar(1:3-1:4),OpPercent(1:4-1:5),EndOfFile(1:5-1:5),
 ~~~PARSE

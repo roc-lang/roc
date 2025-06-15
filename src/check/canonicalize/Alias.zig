@@ -3,11 +3,9 @@
 const std = @import("std");
 const base = @import("../../base.zig");
 const types = @import("../../types.zig");
-const problem_mod = @import("../../problem.zig");
 const collections = @import("../../collections.zig");
 
 const Region = base.Region;
-const Problem = problem_mod.Problem;
 const TypeVar = types.Var;
 const Ident = base.Ident;
 
@@ -51,7 +49,7 @@ pub const Structural = struct {
 };
 /// A malformed alias that can still be referred to by other entities.
 pub const Malformed = struct {
-    problem: Problem,
+    // problem: Problem,
 };
 
 /// A type variable defined at header of an alias to refer to a type

@@ -9,17 +9,32 @@ foo =
 
     "onmo %
 ~~~PROBLEMS
-TOKENIZE: (2:6-2:6) MismatchedBrace:
-     ]
-     ^
-TOKENIZE: (6:6-6:12) UnclosedString:
-    "onmo %
-     ^^^^^^
-PARSER: missing_header
-CANONICALIZE: invalid_top_level_statement "{o,
+Misplaced carriage return character
+
+ASCII control character found
+
+MISSING HEADER
+
+The module header is missing.
+
+ f{o,
      ]
 
-foo"
+foo =
+
+    "onmo %
+Note: This is a parse error. Check your syntax.
+INVALID STATEMENT
+
+This statement is not allowed at the top level.
+
+ f{o,
+     ]
+
+foo =
+
+    "onmo %
+Only definitions, type annotations, and imports are allowed at the top level.
 ~~~TOKENS
 LowerIdent(1:2-1:3),OpenCurly(1:3-1:4),LowerIdent(1:4-1:5),Comma(1:5-1:6),Newline(1:1-1:1),
 CloseCurly(2:6-2:7),Newline(1:1-1:1),

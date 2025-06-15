@@ -9,7 +9,7 @@ const collections = @import("../../collections.zig");
 
 const AST = @import("AST.zig");
 const Node = @import("Node.zig");
-const Token = @import("tokenize.zig").Token;
+const Token = @import("../parse/tokenize.zig").Token;
 const Region = AST.TokenizedRegion;
 const Diagnostic = AST.Diagnostic;
 

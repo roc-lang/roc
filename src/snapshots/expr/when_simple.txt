@@ -6,7 +6,14 @@ when x is
     Ok(value) -> value
     Err(msg) -> msg
 ~~~PROBLEMS
-NIL
+UNDEFINED VARIABLE
+
+Nothing is named `when` in this scope.
+
+when x is
+    Ok(value) -> value
+    Err(msg) -> msg
+Is there an import or exposing missing up-top?
 ~~~TOKENS
 LowerIdent(1:1-1:5),LowerIdent(1:6-1:7),LowerIdent(1:8-1:10),Newline(1:1-1:1),
 UpperIdent(2:5-2:7),NoSpaceOpenRound(2:7-2:8),LowerIdent(2:8-2:13),CloseRound(2:13-2:14),OpArrow(2:15-2:17),LowerIdent(2:18-2:23),Newline(1:1-1:1),

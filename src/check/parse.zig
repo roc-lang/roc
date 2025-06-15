@@ -4,10 +4,11 @@ const testing = std.testing;
 const base = @import("../base.zig");
 const tracy = @import("../tracy.zig");
 const tokenize = @import("parse/tokenize.zig");
-const TokenIndex = tokenize.TokenIndex;
-const TokenizedBuffer = tokenize.TokenizedBuffer;
+
+/// Diagnostic information for parse errors and warnings.
+pub const Diagnostic = AST.Diagnostic;
+
 const NodeList = AST.NodeList;
-const Diagnostic = AST.Diagnostic;
 const Parser = @import("parse/Parser.zig");
 const exitOnOom = @import("../collections/utils.zig").exitOnOom;
 
@@ -21,36 +22,24 @@ fn runParse(env: *base.ModuleEnv, source: []const u8, parserCall: *const fn (*Pa
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    // Calculate and store line starts for diagnostic position calculation
-    env.calcLineStarts(source) catch |err| exitOnOom(err);
-
-    var messages: [128]tokenize.Diagnostic = undefined;
-    const msg_slice = messages[0..];
-    var tokenizer = tokenize.Tokenizer.init(env, source, msg_slice);
-    tokenizer.tokenize();
-    const result = tokenizer.finishAndDeinit();
-
-    for (result.messages) |msg| {
-        _ = env.problems.append(env.gpa, .{ .tokenize = msg });
-    }
+    const result = tokenize.runTokenize(env, source);
 
     var parser = Parser.init(result.tokens);
     defer parser.deinit();
 
     const idx = parserCall(&parser);
 
-    for (parser.diagnostics.items) |msg| {
-        _ = env.problems.append(env.gpa, .{ .parser = msg });
-    }
-
-    const errors = parser.diagnostics.toOwnedSlice(env.gpa) catch |err| exitOnOom(err);
+    const tokenize_diagnostics_slice = env.gpa.dupe(tokenize.Diagnostic, result.messages) catch |err| exitOnOom(err);
+    const tokenize_diagnostics = std.ArrayListUnmanaged(tokenize.Diagnostic).fromOwnedSlice(tokenize_diagnostics_slice);
+    const parse_diagnostics = parser.diagnostics;
 
     return .{
         .source = source,
         .tokens = result.tokens,
         .store = parser.store,
-        .errors = errors,
         .root_node_idx = idx,
+        .tokenize_diagnostics = tokenize_diagnostics,
+        .parse_diagnostics = parse_diagnostics,
     };
 }
 
