@@ -462,6 +462,15 @@ fn listAppend(
     return listAppendUnsafe(with_capacity, element, element_width, copy);
 }
 
+test "listAppend" {
+    const list = RocList.fromSlice(u8, &[_]u8{ 1, 2, 3, 4 }, false);
+    defer list.decref(1, 1, false, &rcNone);
+    const appended = listAppend(list, 1, 5, 1, false, rcNone, .Immutable, rcNone);
+    const expected = RocList.fromSlice(u8, &[_]u8{ 1, 2, 3, 4, 5 }, false);
+    defer expected.decref(1, 1, false, &rcNone);
+    try expect(appended.eql(expected));
+}
+
 /// TODO: Document listPrepend.
 pub fn listPrepend(
     list: RocList,
