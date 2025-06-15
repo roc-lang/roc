@@ -3,3 +3,6 @@
 * text=auto eol=lf
 
 crates/compiler/test_mono/generated/* linguist-generated=true
+
+# Mark snapshot files as generated to collapse them by default in GitHub
+src/snapshots/* linguist-generated=true

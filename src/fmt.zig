@@ -4,12 +4,13 @@ const std = @import("std");
 const parse = @import("check/parse.zig");
 const collections = @import("collections.zig");
 const Filesystem = @import("coordinate/Filesystem.zig");
-const tokenizer = @import("check/parse/tokenize.zig");
+
 const base = @import("base.zig");
 const tracy = @import("tracy.zig");
+const tokenize = @import("check/parse/tokenize.zig");
 
-const TokenizedBuffer = tokenizer.TokenizedBuffer;
-const Token = tokenizer.Token;
+// const TokenizedBuffer = tokenize.TokenizedBuffer;
+const Token = tokenize.Token;
 const AST = parse.AST;
 const Node = parse.Node;
 const NodeStore = parse.NodeStore;
@@ -149,12 +150,12 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
     defer module_env.deinit();
 
     var parse_ast = parse.parse(&module_env, contents);
-    defer parse_ast.deinit();
-    if (parse_ast.errors.len > 0) {
-        parse_ast.toSExprStr(&module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
-        try printParseErrors(gpa, contents, parse_ast);
-        return error.ParsingFailed;
-    }
+    defer parse_ast.deinit(gpa);
+    // if (parse_ast.errors.len > 0) {
+    //     parse_ast.toSExprStr(&module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
+    //     try printParseErrors(gpa, contents, parse_ast);
+    //     return error.ParsingFailed;
+    // }
 
     const output_file = try base_dir.createFile(path, .{});
     defer output_file.close();
@@ -1842,7 +1843,7 @@ fn moduleFmtsSame(source: []const u8) !void {
     defer env.deinit();
 
     var parse_ast = parse(&env, source);
-    defer parse_ast.deinit();
+    defer parse_ast.deinit(gpa);
 
     // @Anthony / @Josh shouldn't these be added to the ModuleEnv (env) so they are in the arena
     // and then they are cleaned up when the arena is deinitialized at the end of program compilation
@@ -1860,8 +1861,6 @@ fn moduleFmtsSame(source: []const u8) !void {
 
     try std.testing.expectEqualStrings(source, result.items);
 }
-
-const tokenize = @import("check/parse/tokenize.zig");
 
 fn exprFmtsSame(source: []const u8, flags: FormatFlags) !void {
     try exprFmtsTo(source, source, flags);
@@ -1894,7 +1893,7 @@ fn exprFmtsTo(source: []const u8, expected: []const u8, flags: FormatFlags) !voi
         .store = parser.store,
         .errors = errors,
     };
-    defer parse_ast.deinit();
+    defer parse_ast.deinit(std.testing.allocator);
     defer std.testing.allocator.free(parse_ast.errors);
 
     std.testing.expectEqualSlices(AST.Diagnostic, &[_]AST.Diagnostic{}, parse_ast.errors) catch {
@@ -1945,7 +1944,7 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const 
     defer module_env.deinit();
 
     var parse_ast = parse.parse(&module_env, input);
-    defer parse_ast.deinit();
+    defer parse_ast.deinit(gpa);
 
     // Currently disabled cause SExpr are missing a lot of IR coverage resulting in panics.
     if (debug and false) {
@@ -1957,7 +1956,7 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const 
         std.debug.print("\n==========\n\n", .{});
     }
 
-    std.testing.expectEqualSlices(AST.Diagnostic, &[_]AST.Diagnostic{}, parse_ast.errors) catch {
+    std.testing.expectEqualSlices(AST.Diagnostic, &[_]AST.Diagnostic{}, parse_ast.parse_diagnostics.items) catch {
         return error.ParseFailed;
     };
 

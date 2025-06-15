@@ -6,9 +6,22 @@ module []
 
 foo = asd.0
 ~~~PROBLEMS
-PARSER: expr_no_space_dot_int
-COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
-CANONICALIZE: expr_not_canonicalized "foo = asd.0"
+SYNTAX PROBLEM
+
+There should be no space between the dot and the integer.
+
+module []
+
+foo = asd.0
+Note: This is a parse error. Check your syntax.
+UNKNOWN OPERATOR
+
+This looks like an operator, but it's not one I recognize!
+
+module []
+
+foo = asd.0
+Check the spelling and make sure you're using a valid Roc operator.
 ~~~TOKENS
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),
 Newline(1:1-1:1),

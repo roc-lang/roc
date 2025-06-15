@@ -9,7 +9,39 @@ type=expr
 	)
 } lines of text due to the template parts"
 ~~~PROBLEMS
-NIL
+UNDEFINED VARIABLE
+
+Nothing is named `some_func` in this scope.
+
+"This is a string with ${
+	some_func(
+		a, # This is a comment
+		b,
+	)
+} lines of text due to the template parts"
+Is there an import or exposing missing up-top?
+UNDEFINED VARIABLE
+
+Nothing is named `a` in this scope.
+
+"This is a string with ${
+	some_func(
+		a, # This is a comment
+		b,
+	)
+} lines of text due to the template parts"
+Is there an import or exposing missing up-top?
+UNDEFINED VARIABLE
+
+Nothing is named `b` in this scope.
+
+"This is a string with ${
+	some_func(
+		a, # This is a comment
+		b,
+	)
+} lines of text due to the template parts"
+Is there an import or exposing missing up-top?
 ~~~TOKENS
 StringStart(1:1-1:2),StringPart(1:2-1:24),OpenStringInterpolation(1:24-1:26),Newline(1:1-1:1),
 LowerIdent(2:2-2:11),NoSpaceOpenRound(2:11-2:12),Newline(1:1-1:1),

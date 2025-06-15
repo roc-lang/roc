@@ -19,8 +19,7 @@ Decode(a) : a
 			List(U8), # After method arg
 		) -> a,
 ~~~PROBLEMS
-COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
-COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
+NIL
 ~~~TOKENS
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:13),CloseSquare(1:13-1:14),Newline(1:1-1:1),
 Newline(1:1-1:1),

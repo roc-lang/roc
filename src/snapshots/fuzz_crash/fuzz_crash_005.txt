@@ -4,7 +4,12 @@ type=file
 ~~~SOURCE
 modu
 ~~~PROBLEMS
-PARSER: missing_header
+MISSING HEADER
+
+The module header is missing.
+
+modu
+Note: This is a parse error. Check your syntax.
 ~~~TOKENS
 LowerIdent(1:1-1:5),EndOfFile(1:5-1:5),
 ~~~PARSE

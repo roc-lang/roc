@@ -6,9 +6,25 @@ module []
 
 foo = if tru then 0
 ~~~PROBLEMS
-PARSER: no_else
-COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
-CANONICALIZE: expr_not_canonicalized "foo = if tru then 0"
+MISSING ELSE
+
+This if expression is missing an else clause.
+
+module []
+
+foo = if tru then 0
+Note: This is a parse error. Check your syntax.
+
+
+Note: In Roc, every if expression must have an else clause to ensure all code paths return a value.
+UNKNOWN OPERATOR
+
+This looks like an operator, but it's not one I recognize!
+
+module []
+
+foo = if tru then 0
+Check the spelling and make sure you're using a valid Roc operator.
 ~~~TOKENS
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),
 Newline(1:1-1:1),

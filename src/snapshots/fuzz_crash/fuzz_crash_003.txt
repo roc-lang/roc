@@ -4,11 +4,20 @@ type=file
 ~~~SOURCE
  = "te
 ~~~PROBLEMS
-TOKENIZE: (1:5-1:7) UnclosedString:
+Misplaced carriage return character
+
+MISSING HEADER
+
+The module header is missing.
+
  = "te
-    ^^
-PARSER: missing_header
-CANONICALIZE: invalid_top_level_statement ""te"
+Note: This is a parse error. Check your syntax.
+INVALID STATEMENT
+
+This statement is not allowed at the top level.
+
+ = "te
+Only definitions, type annotations, and imports are allowed at the top level.
 ~~~TOKENS
 OpAssign(1:2-1:3),StringStart(1:4-1:5),StringPart(1:5-1:7),EndOfFile(1:7-1:7),
 ~~~PARSE

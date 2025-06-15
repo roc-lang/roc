@@ -7,7 +7,15 @@ import pf.Stdout
 hello! = Stdout.line!("Hello")
 world = "World"
 ~~~PROBLEMS
-CANONICALIZE: ident_not_in_scope "Stdout.line!"
+UNDEFINED VARIABLE
+
+Nothing is named `line!` in this scope.
+
+module [hello!, world]
+import pf.Stdout
+hello! = Stdout.line!("Hello")
+world = "World"
+Is there an import or exposing missing up-top?
 ~~~TOKENS
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:15),Comma(1:15-1:16),LowerIdent(1:17-1:22),CloseSquare(1:22-1:23),Newline(1:1-1:1),
 KwImport(2:1-2:7),LowerIdent(2:8-2:10),NoSpaceDotUpperIdent(2:10-2:17),Newline(1:1-1:1),

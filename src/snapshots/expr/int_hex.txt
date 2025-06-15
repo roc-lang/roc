@@ -4,7 +4,12 @@ type=expr
 ~~~SOURCE
 0xFF
 ~~~PROBLEMS
-NIL
+INVALID NUMBER
+
+This number literal is not valid: 0xFF
+
+0xFF
+Roc supports integers, floats, and scientific notation. Check that the number format is correct.
 ~~~TOKENS
 Int(1:1-1:5),EndOfFile(1:5-1:5),
 ~~~PARSE

@@ -4,7 +4,12 @@ type=expr
 ~~~SOURCE
 99999999999999999999999999999999999999999
 ~~~PROBLEMS
-NIL
+INVALID NUMBER
+
+This number literal is not valid: 99999999999999999999999999999999999999999
+
+99999999999999999999999999999999999999999
+Roc supports integers, floats, and scientific notation. Check that the number format is correct.
 ~~~TOKENS
 Int(1:1-1:42),EndOfFile(1:42-1:42),
 ~~~PARSE

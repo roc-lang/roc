@@ -8,8 +8,10 @@ const Scope = @import("check/canonicalize/Scope.zig");
 const parse = @import("check/parse.zig");
 const fmt = @import("fmt.zig");
 const types = @import("types.zig");
+const reporting = @import("reporting.zig");
 
 const AST = parse.AST;
+const Report = reporting.Report;
 
 var verbose_log: bool = false;
 var prng = std.Random.DefaultPrng.init(1234567890);
@@ -435,7 +437,7 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
         }
     };
 
-    var module_env = base.ModuleEnv.init(gpa, file_content);
+    var module_env = base.ModuleEnv.init(gpa, content.source);
     defer module_env.deinit();
 
     // Parse the source code
@@ -445,7 +447,7 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
         .expr => parse.parseExpr(&module_env, content.source),
         .statement => parse.parseStatement(&module_env, content.source),
     };
-    defer parse_ast.deinit();
+    defer parse_ast.deinit(gpa);
 
     // shouldn't be required in future
     parse_ast.store.emptyScratch();
@@ -471,12 +473,6 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
             // For expr snapshots, just canonicalize the root expression directly
             const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
             maybe_expr_idx = can.canonicalize_expr(expr_idx);
-
-            // Manually copy errors across to ModuleEnv problems
-            // as `canonicalize_expr` doesn't do this for us.
-            for (can_ir.diagnostics.items) |msg| {
-                _ = module_env.problems.append(gpa, .{ .canonicalize = msg });
-            }
         },
         .statement => {
             // TODO: implement canonicalize_statement when available
@@ -509,15 +505,60 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
     {
         try writer.writeAll(Section.PROBLEMS);
         try writer.writeAll("\n");
-        if (can_ir.env.problems.len() > 0) {
-            var iter = can_ir.env.problems.iterIndices();
-            while (iter.next()) |problem_idx| {
-                const problem = can_ir.env.problems.get(problem_idx);
-                try problem.toStr(gpa, content.source, writer);
-                try writer.writeAll("\n");
-            }
-        } else {
+
+        var tokenize_problems: usize = 0;
+        var parser_problems: usize = 0;
+        var canonicalize_problems: usize = 0;
+
+        // Use plain text rendering target
+
+        // Tokenize Diagnostics
+        for (parse_ast.tokenize_diagnostics.items) |diagnostic| {
+            tokenize_problems += 1;
+
+            var report: Report = try diagnostic.toReport(gpa, content.source);
+            defer report.deinit();
+            report.render(writer.any(), .plain_text) catch |err| {
+                try writer.print("Error rendering report: {}\n", .{err});
+                continue;
+            };
+        }
+
+        // Parser Diagnostics
+        for (parse_ast.parse_diagnostics.items) |diagnostic| {
+            parser_problems += 1;
+
+            var report: Report = try parse_ast.diagnosticToReport(diagnostic, gpa);
+            defer report.deinit();
+            report.render(writer.any(), .plain_text) catch |err| {
+                try writer.print("Error rendering report: {}\n", .{err});
+                continue;
+            };
+        }
+
+        // Canonicalization Diagnostics
+        const diagnostics = can_ir.getDiagnostics();
+        defer gpa.free(diagnostics);
+        for (diagnostics) |diagnostic| {
+            canonicalize_problems += 1;
+
+            var report: Report = try can_ir.diagnosticToReport(diagnostic, gpa);
+            defer report.deinit();
+            report.render(writer.any(), .plain_text) catch |err| {
+                try writer.print("Error rendering report: {}\n", .{err});
+                continue;
+            };
+        }
+
+        const nil_problems = tokenize_problems == 0 and parser_problems == 0 and canonicalize_problems == 0;
+
+        if (nil_problems) {
             try writer.writeAll("NIL\n");
+            log("reported NIL problems", .{});
+        } else {
+            log("reported {} token problems", .{tokenize_problems});
+            log("reported {} parser problems", .{parser_problems});
+            log("reported {} canonicalization problems", .{canonicalize_problems});
         }
     }
 

@@ -10,10 +10,18 @@ foo = if true A
     B
     }
 ~~~PROBLEMS
-COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
-CANONICALIZE: expr_not_canonicalized "foo = if true A
+UNKNOWN OPERATOR
 
-..."
+This looks like an operator, but it's not one I recognize!
+
+module [foo]
+
+foo = if true A
+
+    else {
+    B
+    }
+Check the spelling and make sure you're using a valid Roc operator.
 ~~~TOKENS
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),Newline(1:1-1:1),
 Newline(1:1-1:1),

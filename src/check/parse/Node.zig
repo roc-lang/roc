@@ -7,13 +7,16 @@
 
 const collections = @import("../../collections.zig");
 const AST = @import("AST.zig");
-const TokenIdx = @import("tokenize.zig").Token.Idx;
+
+const tokenize = @import("../parse/tokenize.zig");
+
+const Token = tokenize.Token;
 
 const Node = @This();
 
 tag: Tag,
 data: Data,
-main_token: TokenIdx,
+main_token: Token.Idx,
 region: AST.TokenizedRegion,
 
 /// A SafeMultiList of Nodes

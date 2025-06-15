@@ -1,12 +1,11 @@
 const std = @import("std");
 const base = @import("../../base.zig");
 const types_module = @import("../../types.zig");
-const problem = @import("../../problem.zig");
+
 const collections = @import("../../collections.zig");
 
 const Ident = base.Ident;
 const StringLiteral = base.StringLiteral;
-const Problem = problem.Problem;
 
 const Self = @This();
 
@@ -114,7 +113,7 @@ pub const Expr = union(enum) {
         branches: WhenBranch.NonEmptyRange,
     },
 
-    compiler_bug: Problem.Compiler,
+    // compiler_bug: Problem.Compiler,
 
     /// todo
     pub const List = collections.SafeList(@This());
@@ -210,7 +209,7 @@ pub const Pattern = union(enum) {
         },
     },
     underscore,
-    compiler_bug: Problem.Compiler,
+    // compiler_bug: Problem.Compiler,
     /// todo
     pub const List = collections.SafeList(@This());
     /// todo
