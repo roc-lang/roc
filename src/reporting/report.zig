@@ -1,7 +1,8 @@
-//! Report system for formatted error messages.
+//! Report system for formatted warning and error reports.
 //!
 //! This module provides the Report struct and related functionality for creating
 //! structured error reports that can be rendered to different output formats.
+//!
 //! Reports combine a title, severity level, and formatted document content.
 
 const std = @import("std");
@@ -320,121 +321,6 @@ pub const ReportBuilder = struct {
     }
 };
 
-/// Predefined report templates for common error types
-pub const Templates = struct {
-    /// Create a type mismatch report.
-    pub fn typeMismatch(
-        allocator: Allocator,
-        expected: []const u8,
-        actual: []const u8,
-        location: []const u8,
-        config: ReportingConfig,
-    ) !Report {
-        var report = Report.init(allocator, "TYPE MISMATCH", .runtime_error, config);
-
-        try report.document.addText("I expected this expression to have type:");
-        try report.document.addLineBreak();
-        try report.document.addIndent(1);
-        try report.document.addType(expected);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addText("But it actually has type:");
-        try report.document.addLineBreak();
-        try report.document.addIndent(1);
-        try report.document.addError(actual);
-        try report.document.addLineBreak();
-
-        if (location.len > 0) {
-            try report.document.addLineBreak();
-            try report.document.addText("At: ");
-            try report.document.addAnnotated(location, .path);
-        }
-
-        return report;
-    }
-
-    /// Create an unrecognized name report.
-    pub fn unrecognizedName(
-        allocator: Allocator,
-        name: []const u8,
-        suggestions: []const []const u8,
-        config: ReportingConfig,
-    ) !Report {
-        var report = Report.init(allocator, "NAMING ERROR", .runtime_error, config);
-
-        try report.document.addText("I cannot find a ");
-        try report.document.addError(name);
-        try report.document.addText(" variable.");
-        try report.document.addLineBreak();
-
-        if (suggestions.len > 0) {
-            try report.addSuggestions(suggestions);
-        }
-
-        return report;
-    }
-
-    /// Create a circular definition report.
-    pub fn circularDefinition(
-        allocator: Allocator,
-        names: []const []const u8,
-        config: ReportingConfig,
-    ) !Report {
-        var report = Report.init(allocator, "CIRCULAR DEFINITION", .runtime_error, config);
-
-        try report.document.addText("These definitions depend on each other in a cycle:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-
-        for (names, 0..) |name, i| {
-            try report.document.addIndent(1);
-            try report.document.addError(name);
-            if (i < names.len - 1) {
-                try report.document.addText(" → ");
-            } else {
-                try report.document.addText(" → ");
-                try report.document.addError(names[0]);
-            }
-            try report.document.addLineBreak();
-        }
-
-        try report.addNote("Roc cannot compile definitions that depend on themselves.");
-
-        return report;
-    }
-
-    /// Create a compiler internal error report.
-    pub fn internalError(
-        allocator: Allocator,
-        message: []const u8,
-        location: []const u8,
-        config: ReportingConfig,
-    ) !Report {
-        var report = Report.init(allocator, "INTERNAL COMPILER ERROR", .fatal, config);
-
-        try report.document.addText("The compiler encountered an unexpected error:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addError(message);
-        try report.document.addLineBreak();
-
-        if (location.len > 0) {
-            try report.document.addLineBreak();
-            try report.document.addText("Location: ");
-            try report.document.addAnnotated(location, .path);
-            try report.document.addLineBreak();
-        }
-
-        try report.document.addLineBreak();
-        try report.document.addText("This is a bug in the Roc compiler. Please report it at:");
-        try report.document.addLineBreak();
-        try report.document.addAnnotated("https://github.com/roc-lang/roc/issues", .path);
-        try report.document.addLineBreak();
-
-        return report;
-    }
-};
-
 // Tests
 const testing = std.testing;
 
@@ -461,51 +347,5 @@ test "ReportBuilder fluent interface" {
         .note("This is just a note")
         .build();
 
-    try testing.expect(!report.isEmpty());
-}
-
-test "Type mismatch template" {
-    const config = ReportingConfig.initForTesting();
-    var report = try Templates.typeMismatch(
-        testing.allocator,
-        "String",
-        "Number",
-        "main.roc:10:5",
-        config,
-    );
-    defer report.deinit();
-
-    try testing.expectEqualStrings("TYPE MISMATCH", report.title);
-    try testing.expectEqual(Severity.runtime_error, report.severity);
-}
-
-test "Unrecognized name template" {
-    const config = ReportingConfig.initForTesting();
-    const suggestions = [_][]const u8{ "length", "len", "size" };
-    var report = try Templates.unrecognizedName(
-        testing.allocator,
-        "length",
-        &suggestions,
-        config,
-    );
-    defer report.deinit();
-
-    try testing.expectEqualStrings("NAMING ERROR", report.title);
-}
-
-test "Source context rendering with RegionInfo" {
-    const config = ReportingConfig.initForTesting();
-    var report = Report.init(testing.allocator, "TEST", .runtime_error, config);
-    defer report.deinit();
-
-    const region = RegionInfo{
-        .start_line_idx = 1,
-        .start_col_idx = 12,
-        .end_line_idx = 1,
-        .end_col_idx = 27,
-        .line_text = "    let x = undefinedVariable",
-    };
-
-    try report.addSourceContext(region);
     try testing.expect(!report.isEmpty());
 }

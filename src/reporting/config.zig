@@ -1,7 +1,4 @@
-//! Configuration for the Roc compiler reporting system.
-//!
-//! This module provides configuration structures and utilities for the reporting
-//! system, centralizing environment variable access and providing sensible defaults.
+//! Configuration for formatting warning and error reports
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;

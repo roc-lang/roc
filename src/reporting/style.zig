@@ -1,4 +1,4 @@
-//! Styling system for the Roc compiler reporting.
+//! Styls for reporting.
 //!
 //! This module provides color palettes, style definitions, and utilities for
 //! rendering styled content across different output targets. It supports
