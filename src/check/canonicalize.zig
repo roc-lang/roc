@@ -406,8 +406,11 @@ pub fn canonicalize_expr(
                     } });
                 }
             } else {
-                // self.can_ir.env.pushProblem(Problem.Compiler.can(.unable_to_resolve_identifier));
-                return null;
+                const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "report an error when unable to resolve identifier");
+                self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                    .feature = feature,
+                    .region = Region.zero(),
+                } });
             }
         },
         .int => |e| {
@@ -542,16 +545,25 @@ pub fn canonicalize_expr(
             }
         },
         .string_part => |_| {
-            // self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
-            return null;
+            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize string_part expression");
+            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                .feature = feature,
+                .region = Region.zero(),
+            } });
         },
         .tuple => |_| {
-            // self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
-            return null;
+            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize tuple expression");
+            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                .feature = feature,
+                .region = Region.zero(),
+            } });
         },
         .record => |_| {
-            // self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
-            return null;
+            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize record expression");
+            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                .feature = feature,
+                .region = Region.zero(),
+            } });
         },
         .lambda => |e| {
 
@@ -579,16 +591,25 @@ pub fn canonicalize_expr(
             } });
         },
         .record_updater => |_| {
-            // self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
-            return null;
+            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize record_updater expression");
+            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                .feature = feature,
+                .region = Region.zero(),
+            } });
         },
         .field_access => |_| {
-            // self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
-            return null;
+            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize record field_access expression");
+            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                .feature = feature,
+                .region = Region.zero(),
+            } });
         },
         .local_dispatch => |_| {
-            // self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
-            return null;
+            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize local_dispatch expression");
+            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                .feature = feature,
+                .region = Region.zero(),
+            } });
         },
         .bin_op => |e| {
 
@@ -618,8 +639,11 @@ pub fn canonicalize_expr(
                 .OpStar => .mul,
                 else => {
                     // Unknown operator
-                    // self.can_ir.env.pushProblem(Problem.Compiler.can(.unexpected_token_binop));
-                    return null;
+                    const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "this particular binop operator");
+                    self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                        .feature = feature,
+                        .region = Region.zero(),
+                    } });
                 },
             };
 
@@ -633,40 +657,64 @@ pub fn canonicalize_expr(
             });
         },
         .suffix_single_question => |_| {
-            // self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
-            return null;
+            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize suffix_single_question expression");
+            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                .feature = feature,
+                .region = Region.zero(),
+            } });
         },
         .unary_op => |_| {
-            // self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
-            return null;
+            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize unary_op expression");
+            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                .feature = feature,
+                .region = Region.zero(),
+            } });
         },
         .if_then_else => |_| {
-            // self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
-            return null;
+            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize if_then_else expression");
+            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                .feature = feature,
+                .region = Region.zero(),
+            } });
         },
         .match => |_| {
-            // self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
-            return null;
+            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize match expression");
+            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                .feature = feature,
+                .region = Region.zero(),
+            } });
         },
         .dbg => |_| {
-            // self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
-            return null;
+            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize dbg expression");
+            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                .feature = feature,
+                .region = Region.zero(),
+            } });
         },
         .record_builder => |_| {
-            // self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
-            return null;
+            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize record_builder expression");
+            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                .feature = feature,
+                .region = Region.zero(),
+            } });
         },
         .ellipsis => |_| {
-            // self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
-            return null;
+            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize ellipsis expression");
+            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                .feature = feature,
+                .region = Region.zero(),
+            } });
         },
         .block => |_| {
-            // self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
-            return null;
+            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize block expression");
+            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                .feature = feature,
+                .region = Region.zero(),
+            } });
         },
-        .malformed => |_| {
-            // self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
-            return null;
+        .malformed => |malformed| {
+            // We won't touch this since it's already a parse error.
+            _ = malformed;
         },
     }
 }
@@ -749,8 +797,11 @@ fn canonicalize_pattern(
 
                 return assign_idx;
             } else {
-                // self.can_ir.env.pushProblem(Problem.Compiler.can(.unable_to_resolve_identifier));
-                return null;
+                const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "report an error when unable to resolve identifier");
+                self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                    .feature = feature,
+                    .region = Region.zero(),
+                } });
             }
         },
         .underscore => |p| {
@@ -854,28 +905,43 @@ fn canonicalize_pattern(
             return null;
         },
         .record => |_| {
-            // self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
-            return null;
+            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize record pattern");
+            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                .feature = feature,
+                .region = Region.zero(),
+            } });
         },
         .tuple => |_| {
-            // self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
-            return null;
+            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize tuple pattern");
+            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                .feature = feature,
+                .region = Region.zero(),
+            } });
         },
         .list => |_| {
-            // self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
-            return null;
+            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize list pattern");
+            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                .feature = feature,
+                .region = Region.zero(),
+            } });
         },
         .list_rest => |_| {
-            // self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
-            return null;
+            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize list rest pattern");
+            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                .feature = feature,
+                .region = Region.zero(),
+            } });
         },
         .alternatives => |_| {
-            // self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
-            return null;
+            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize alternatives pattern");
+            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                .feature = feature,
+                .region = Region.zero(),
+            } });
         },
-        .malformed => |_| {
-            // self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
-            return null;
+        .malformed => |malformed| {
+            // We won't touch this since it's already a parse error.
+            _ = malformed;
         },
     }
     return null;
