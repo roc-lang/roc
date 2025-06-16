@@ -1785,7 +1785,7 @@ const TestEnv = struct {
     /// slight more verbose setup for each test
     fn init(gpa: std.mem.Allocator) Self {
         const module_env = gpa.create(base.ModuleEnv) catch |e| exitOnOutOfMemory(e);
-        module_env.* = base.ModuleEnv.init(gpa);
+        module_env.* = base.ModuleEnv.init(gpa, &[_]u8{});
         return .{
             .module_env = module_env,
             .types_store = &module_env.types_store,

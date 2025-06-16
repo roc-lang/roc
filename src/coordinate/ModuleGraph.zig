@@ -117,6 +117,9 @@ fn loadOrCompileCanIr(
         var parse_ir = parse.parse(&module_env, contents);
         parse_ir.store.emptyScratch();
 
+        // TODO Can we init CIR & the types store capacities based on the number
+        // of parse nodes?
+
         var can_ir = Can.CIR.init(module_env);
         var scope = Scope.init(can_ir.env.gpa);
         defer scope.deinit(gpa);

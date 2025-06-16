@@ -150,14 +150,34 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
     };
 }
 
-// Helper to add type index info
+/// Inserts a placeholder CIR node and creates a fresh variable in the types
+/// store at that index
+pub fn pushFreshTypeVar(self: *CIR, region: base.Region) types.Var {
+    // insert a placeholder can node
+    const placeholder_node_idx = self.store.addTypePlaceholder(region);
+
+    // create a new type var based on the placeholder node
+    return self.env.types_store.freshAt(@intFromEnum(placeholder_node_idx)) catch |err| exitOnOom(err);
+}
+
+/// Inserts a placeholder CIR node and creates a type variable with the
+/// specified content in the types store at that index
+pub fn pushTypeVar(self: *CIR, content: types.Content, region: base.Region) types.Var {
+    // insert a placeholder can node
+    const placeholder_node_idx = self.store.addTypePlaceholder(region);
+
+    // create a new type var based on the placeholder node
+    return self.env.types_store.freshFromContentAt(@intFromEnum(placeholder_node_idx), content) catch |err| exitOnOom(err);
+}
+
+// Helper to add type index info to a s-expr node
 fn appendTypeVar(node: *sexpr.Expr, gpa: std.mem.Allocator, name: []const u8, type_idx: TypeVar) void {
     var type_node = sexpr.Expr.init(gpa, name);
     type_node.appendUnsignedIntChild(gpa, @intCast(@intFromEnum(type_idx)));
     node.appendNode(gpa, &type_node);
 }
 
-// Helper to add identifier info
+// Helper to add identifier info to a s-expr node
 fn appendIdent(node: *sexpr.Expr, gpa: std.mem.Allocator, ir: *const CIR, name: []const u8, ident_idx: Ident.Idx) void {
     const ident_text = ir.env.idents.getText(ident_idx);
 
@@ -353,7 +373,7 @@ pub const Expr = union(enum) {
         precision_var: TypeVar,
         literal: StringLiteral.Idx,
         value: IntValue,
-        bound: types.Num.Compact, // TODO use the correct type here
+        bound: types.Num.Compact.Int.Precision,
         region: Region,
     },
     float: struct {
@@ -361,7 +381,7 @@ pub const Expr = union(enum) {
         precision_var: TypeVar,
         literal: StringLiteral.Idx,
         value: f64,
-        bound: types.Num.Compact, // TODO use the correct type here
+        bound: types.Num.Compact.Frac.Precision,
         region: Region,
     },
     // A single segment of a string literal
@@ -1255,7 +1275,7 @@ pub const Pattern = union(enum) {
         num_var: TypeVar,
         literal: StringLiteral.Idx,
         value: IntValue,
-        bound: types.Num.Compact,
+        bound: types.Num.Precision,
         region: Region,
     },
     int_literal: struct {
@@ -1263,7 +1283,7 @@ pub const Pattern = union(enum) {
         precision_var: TypeVar,
         literal: StringLiteral.Idx,
         value: IntValue,
-        bound: types.Num.Compact, // TODO use the right type here
+        bound: types.Num.Compact.Int.Precision,
         region: Region,
     },
     float_literal: struct {
@@ -1271,7 +1291,7 @@ pub const Pattern = union(enum) {
         precision_var: TypeVar,
         literal: StringLiteral.Idx,
         value: f64,
-        bound: types.Num.Compact, // TODO use the right type here
+        bound: types.Num.Compact.Frac.Precision,
         region: Region,
     },
     str_literal: struct {
@@ -1282,7 +1302,7 @@ pub const Pattern = union(enum) {
         num_var: TypeVar,
         precision_var: TypeVar,
         value: u32,
-        bound: types.Num.Compact, // TODO use the right type here
+        bound: types.Num.Compact.Int.Precision,
         region: Region,
     },
     underscore: struct {
@@ -1349,7 +1369,8 @@ pub const Pattern = union(enum) {
                 node.appendRegionInfo(gpa, ir.calcRegionInfo(p.region));
                 node.appendString(gpa, "literal"); // TODO: use l.literal
                 node.appendString(gpa, "value=<int_value>");
-                node.appendString(gpa, @tagName(p.bound));
+                node.appendString(gpa, @tagName(p.bound.sign));
+                node.appendString(gpa, @tagName(p.bound.min_precision));
                 return node;
             },
             .int_literal => |p| {

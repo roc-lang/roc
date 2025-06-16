@@ -9,6 +9,7 @@ const types = @import("./types.zig");
 
 const exitOnOutOfMemory = collections.utils.exitOnOom;
 
+const Allocator = std.mem.Allocator;
 const Desc = types.Descriptor;
 const Var = types.Var;
 const Content = types.Content;
@@ -44,7 +45,7 @@ pub const Slot = union(enum) {
 pub const Store = struct {
     const Self = @This();
 
-    gpa: std.mem.Allocator,
+    gpa: Allocator,
 
     // Slots & descriptors
     slots: SlotStore,
@@ -60,13 +61,13 @@ pub const Store = struct {
     tag_args: VarSafeList,
 
     /// Init the unification table
-    pub fn init(gpa: std.mem.Allocator) Self {
+    pub fn init(gpa: Allocator) Self {
         // TODO: eventually use herusitics here to determine sensible defaults
         return Self.initCapacity(gpa, 1024, 512);
     }
 
     /// Init the unification table
-    pub fn initCapacity(gpa: std.mem.Allocator, root_capacity: usize, child_capacity: usize) Self {
+    pub fn initCapacity(gpa: Allocator, root_capacity: usize, child_capacity: usize) Self {
         return .{
             .gpa = gpa,
 
@@ -83,6 +84,12 @@ pub const Store = struct {
             .tags = TagSafeMultiList.initCapacity(gpa, child_capacity),
             .tag_args = VarSafeList.initCapacity(gpa, child_capacity),
         };
+    }
+
+    /// Ensure that slots & descriptor arrays have at least the provided capacity
+    pub fn ensureTotalCapacity(self: *const Self, capacity: usize) Allocator.Error!void {
+        try self.descs.backing.ensureTotalCapacity(self.gpa, capacity);
+        try self.slots.backing.ensureTotalCapacity(self.gpa, capacity);
     }
 
     /// Deinit the unification table
@@ -109,14 +116,17 @@ pub const Store = struct {
         return self.freshFromContent(Content{ .flex_var = null });
     }
 
-    /// Create a new variable with the given descriptor
-    pub fn register(self: *Self, desc: Desc) Var {
-        const desc_idx = self.descs.insert(self.gpa, desc);
-        const slot_idx = self.slots.insert(self.gpa, .{ .root = desc_idx });
-        return Self.slotIdxToVar(slot_idx);
+    /// Create a new unbound, flexible type variable without a name at the given idx
+    ///
+    /// This function may allocate if the provided index is greater than the
+    /// current capacities of descs or slots.
+    ///
+    /// Used in canonicalization when creating type slots
+    pub fn freshAt(self: *Self, target_idx: usize) Allocator.Error!Var {
+        return self.freshFromContentAt(target_idx, Content{ .flex_var = null });
     }
 
-    /// Create a new variable with the provided desc at the top level
+    /// Create a new variable with the provided desc
     /// Used in tests
     pub fn freshFromContent(self: *Self, content: Content) Var {
         const desc_idx = self.descs.insert(self.gpa, .{ .content = content, .rank = Rank.top_level, .mark = Mark.none });
@@ -124,10 +134,33 @@ pub const Store = struct {
         return Self.slotIdxToVar(slot_idx);
     }
 
+    /// Create a new variable with the provided desc at the given index
+    ///
+    /// This function may allocate if the provided index is greater than the
+    /// current capacities of descs or slots.
+    ///
+    /// Used in canonicalization when creating type slots
+    pub fn freshFromContentAt(self: *Self, target_idx: usize, content: Content) Allocator.Error!Var {
+        try self.descs.backing.ensureTotalCapacity(self.gpa, target_idx);
+        const desc_idx = self.descs.insert(self.gpa, .{ .content = content, .rank = Rank.top_level, .mark = Mark.none });
+
+        try self.slots.backing.ensureTotalCapacity(self.gpa, target_idx);
+        const slot_idx = self.slots.insert(self.gpa, .{ .root = desc_idx });
+
+        return Self.slotIdxToVar(slot_idx);
+    }
+
     /// Create a variable redirecting to the provided var
     /// Used in tests
     pub fn freshRedirect(self: *Self, var_: Var) Var {
         const slot_idx = self.slots.insert(self.gpa, .{ .redirect = var_ });
+        return Self.slotIdxToVar(slot_idx);
+    }
+
+    /// Create a new variable with the given descriptor
+    pub fn register(self: *Self, desc: Desc) Var {
+        const desc_idx = self.descs.insert(self.gpa, desc);
+        const slot_idx = self.slots.insert(self.gpa, .{ .root = desc_idx });
         return Self.slotIdxToVar(slot_idx);
     }
 
@@ -370,17 +403,17 @@ const SlotStore = struct {
 
     backing: Slot.ArrayList,
 
-    fn init(gpa: std.mem.Allocator, capacity: usize) Self {
+    fn init(gpa: Allocator, capacity: usize) Self {
         const arr_list = Slot.ArrayList.initCapacity(gpa, capacity) catch |err| exitOnOutOfMemory(err);
         return .{ .backing = arr_list };
     }
 
-    fn deinit(self: *Self, gpa: std.mem.Allocator) void {
+    fn deinit(self: *Self, gpa: Allocator) void {
         self.backing.deinit(gpa);
     }
 
     /// Insert a new slot into the store
-    fn insert(self: *Self, gpa: std.mem.Allocator, typ: Slot) Idx {
+    fn insert(self: *Self, gpa: Allocator, typ: Slot) Idx {
         const idx: Idx = @enumFromInt(self.backing.items.len);
         self.backing.append(gpa, typ) catch |err| exitOnOutOfMemory(err);
         return idx;
@@ -409,19 +442,19 @@ const DescStore = struct {
     backing: std.MultiArrayList(Desc),
 
     /// Init & allocated memory
-    fn init(gpa: std.mem.Allocator, capacity: usize) Self {
+    fn init(gpa: Allocator, capacity: usize) Self {
         var arr = std.MultiArrayList(Desc){};
         arr.ensureUnusedCapacity(gpa, capacity) catch |err| exitOnOutOfMemory(err);
         return .{ .backing = arr };
     }
 
     /// Deinit & free allocated memory
-    fn deinit(self: *Self, gpa: std.mem.Allocator) void {
+    fn deinit(self: *Self, gpa: Allocator) void {
         self.backing.deinit(gpa);
     }
 
     /// Insert a value into the store
-    fn insert(self: *Self, gpa: std.mem.Allocator, typ: Desc) Idx {
+    fn insert(self: *Self, gpa: Allocator, typ: Desc) Idx {
         const idx: Idx = @enumFromInt(self.backing.len);
         self.backing.append(gpa, typ) catch |err| exitOnOutOfMemory(err);
         return idx;
