@@ -45,12 +45,12 @@ NO CHANGE
 				(assign (3:1-3:2) (ident "a")))
 			(expr (3:5-3:6)
 				(int (3:5-3:6)
-					(num_var "#0")
+					(num_var "#2")
 					(precision_var "#1")
 					(literal "5")
 					(value "TODO")
-					(bound "int")))
-			"#2")
+					(bound "u8")))
+			"#5")
 		(def
 			"let"
 			(pattern (4:1-4:2)
@@ -60,10 +60,10 @@ NO CHANGE
 					"add"
 					(lookup (4:5-4:6) (pattern_idx "2"))
 					(int (4:9-4:10)
-						(num_var "#3")
-						(precision_var "#4")
+						(num_var "#7")
+						(precision_var "#6")
 						(literal "1")
 						(value "TODO")
-						(bound "int"))))
-			"#5")))
+						(bound "u8"))))
+			"#12")))
 ~~~END

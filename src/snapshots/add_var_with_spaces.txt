@@ -40,10 +40,10 @@ add2 = x + 2
 					"add"
 					(runtime_error (3:8-3:9) "ident_not_in_scope")
 					(int (3:17-3:18)
-						(num_var "#0")
-						(precision_var "#1")
+						(num_var "#4")
+						(precision_var "#3")
 						(literal "2")
 						(value "TODO")
-						(bound "int"))))
-			"#2")))
+						(bound "u8"))))
+			"#8")))
 ~~~END

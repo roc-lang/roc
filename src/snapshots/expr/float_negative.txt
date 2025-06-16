@@ -13,9 +13,9 @@ Float(1:1-1:5),EndOfFile(1:5-1:5),
 NO CHANGE
 ~~~CANONICALIZE
 (float (1:1-1:5)
-	(num_var "#0")
+	(num_var "#2")
 	(precision_var "#1")
 	(literal "-2.5")
 	(value "0")
-	(bound "int"))
+	(bound "f32"))
 ~~~END
