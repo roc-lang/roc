@@ -122,7 +122,7 @@ pub const Store = struct {
     /// current capacities of descs or slots.
     ///
     /// Used in canonicalization when creating type slots
-    pub fn freshAt(self: *Self, target_idx: usize) Allocator.Error!Var {
+    pub fn freshAt(self: *Self, target_idx: u32) Allocator.Error!Var {
         return self.freshFromContentAt(target_idx, Content{ .flex_var = null });
     }
 
@@ -140,7 +140,7 @@ pub const Store = struct {
     /// current capacities of descs or slots.
     ///
     /// Used in canonicalization when creating type slots
-    pub fn freshFromContentAt(self: *Self, target_idx: usize, content: Content) Allocator.Error!Var {
+    pub fn freshFromContentAt(self: *Self, target_idx: u32, content: Content) Allocator.Error!Var {
         try self.descs.backing.ensureTotalCapacity(self.gpa, target_idx);
         const desc_idx = self.descs.insert(self.gpa, .{ .content = content, .rank = Rank.top_level, .mark = Mark.none });
 

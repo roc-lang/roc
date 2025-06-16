@@ -250,10 +250,16 @@ pub const Num = union(enum) {
                 }
 
                 // Check if the value fits in f32 range and precision
-                if (@abs(value) == 0.0) {
+                const abs_value = @abs(value);
+                if (abs_value == 0.0) {
                     return .f32;
-                } else if (value <= std.math.floatMax(f32) and value >= std.math.floatMin(f32)) {
+                } else if (abs_value <= std.math.floatMax(f32) and abs_value >= std.math.floatMin(f32)) {
                     // Not every f64 can be downcast to f32 with the same precision
+                    //
+                    // For example if you had an f64 with the value
+                    // `1.0000000000000002` and you downcast to  f32, it becomes
+                    // 0.0. So this round trip equality tests ensure that if we
+                    // downcast the provided we don't loose precision
                     const as_f32 = @as(f32, @floatCast(value));
                     const back_to_f64 = @as(f64, @floatCast(as_f32));
                     if (value == back_to_f64) {
