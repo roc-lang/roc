@@ -703,8 +703,8 @@ const Unifier = struct {
     /// The result of attempting to resolve a polymorphic number
     const ResolvedNum = union(enum) {
         flex_resolved,
-        int_resolved: NumCompact.Int.Precision,
-        frac_resolved: NumCompact.Frac.Precision,
+        int_resolved: Num.Int.Precision,
+        frac_resolved: Num.Frac.Precision,
         err: Var,
     };
 
@@ -1875,7 +1875,7 @@ const TestEnv = struct {
         return self.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = frac_var } } });
     }
 
-    fn mkFracExact(self: *Self, prec: NumCompact.Frac.Precision) Var {
+    fn mkFracExact(self: *Self, prec: Num.Frac.Precision) Var {
         const prec_var = self.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .frac_precision = prec } } });
         const frac_var = self.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = prec_var } } });
         return self.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = frac_var } } });
@@ -1898,7 +1898,7 @@ const TestEnv = struct {
         return self.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = int_var } } });
     }
 
-    fn mkIntExact(self: *Self, prec: NumCompact.Int.Precision) Var {
+    fn mkIntExact(self: *Self, prec: Num.Int.Precision) Var {
         const prec_var = self.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .int_precision = prec } } });
         const int_var = self.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .int_poly = prec_var } } });
         return self.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = int_var } } });
@@ -2640,8 +2640,8 @@ test "unify - two poly ints" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const a = env.mkIntExact(NumCompact.Int.Precision.u8);
-    const b = env.mkIntExact(NumCompact.Int.Precision.u8);
+    const a = env.mkIntExact(Num.Int.Precision.u8);
+    const b = env.mkIntExact(Num.Int.Precision.u8);
 
     const result = unify(env.module_env, env.types_store, &env.scratch, a, b);
 
@@ -2655,8 +2655,8 @@ test "unify - two poly ints (fail)" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const a = env.mkIntExact(NumCompact.Int.Precision.u8);
-    const b = env.mkIntExact(NumCompact.Int.Precision.i128);
+    const a = env.mkIntExact(Num.Int.Precision.u8);
+    const b = env.mkIntExact(Num.Int.Precision.i128);
 
     const result = unify(env.module_env, env.types_store, &env.scratch, a, b);
 
@@ -2671,8 +2671,8 @@ test "unify - two poly fracs" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const a = env.mkFracExact(NumCompact.Frac.Precision.f64);
-    const b = env.mkFracExact(NumCompact.Frac.Precision.f64);
+    const a = env.mkFracExact(Num.Frac.Precision.f64);
+    const b = env.mkFracExact(Num.Frac.Precision.f64);
 
     const result = unify(env.module_env, env.types_store, &env.scratch, a, b);
 
@@ -2686,8 +2686,8 @@ test "unify - two poly fracs (fail)" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const a = env.mkFracExact(NumCompact.Frac.Precision.f32);
-    const b = env.mkFracExact(NumCompact.Frac.Precision.f64);
+    const a = env.mkFracExact(Num.Frac.Precision.f32);
+    const b = env.mkFracExact(Num.Frac.Precision.f64);
 
     const result = unify(env.module_env, env.types_store, &env.scratch, a, b);
 
@@ -2739,7 +2739,7 @@ test "unify - Num(Int(U8)) and compact int U8" {
     defer env.deinit();
 
     const int_u8 = Content{ .structure = .{ .num = Num.int_u8 } };
-    const a = env.mkIntExact(NumCompact.Int.Precision.u8);
+    const a = env.mkIntExact(Num.Int.Precision.u8);
     const b = env.types_store.freshFromContent(int_u8);
 
     const result = unify(env.module_env, env.types_store, &env.scratch, a, b);
@@ -2756,7 +2756,7 @@ test "unify - Num(Int(U8)) and compact int I32 (fails)" {
     defer env.deinit();
 
     const int_i32 = Content{ .structure = .{ .num = Num.int_i32 } };
-    const a = env.mkIntExact(NumCompact.Int.Precision.u8);
+    const a = env.mkIntExact(Num.Int.Precision.u8);
     const b = env.types_store.freshFromContent(int_i32);
 
     const result = unify(env.module_env, env.types_store, &env.scratch, a, b);
@@ -2809,7 +2809,7 @@ test "unify - Num(Frac(Dec)) and compact frac Dec" {
     defer env.deinit();
 
     const frac_dec = Content{ .structure = .{ .num = Num.frac_dec } };
-    const a = env.mkFracExact(NumCompact.Frac.Precision.dec);
+    const a = env.mkFracExact(Num.Frac.Precision.dec);
     const b = env.types_store.freshFromContent(frac_dec);
 
     const result = unify(env.module_env, env.types_store, &env.scratch, a, b);
@@ -2826,7 +2826,7 @@ test "unify - Num(Frac(F32)) and compact frac Dec (fails)" {
     defer env.deinit();
 
     const frac_f32 = Content{ .structure = .{ .num = Num.frac_f32 } };
-    const a = env.mkFracExact(NumCompact.Frac.Precision.dec);
+    const a = env.mkFracExact(Num.Frac.Precision.dec);
     const b = env.types_store.freshFromContent(frac_f32);
 
     const result = unify(env.module_env, env.types_store, &env.scratch, a, b);
@@ -2880,7 +2880,7 @@ test "unify - compact int and U8 Num(Int(U8))" {
 
     const int_u8 = Content{ .structure = .{ .num = Num.int_u8 } };
     const a = env.types_store.freshFromContent(int_u8);
-    const b = env.mkIntExact(NumCompact.Int.Precision.u8);
+    const b = env.mkIntExact(Num.Int.Precision.u8);
 
     const result = unify(env.module_env, env.types_store, &env.scratch, a, b);
 
@@ -2897,7 +2897,7 @@ test "unify - compact int U8 and  Num(Int(I32)) (fails)" {
 
     const int_i32 = Content{ .structure = .{ .num = Num.int_i32 } };
     const a = env.types_store.freshFromContent(int_i32);
-    const b = env.mkIntExact(NumCompact.Int.Precision.u8);
+    const b = env.mkIntExact(Num.Int.Precision.u8);
 
     const result = unify(env.module_env, env.types_store, &env.scratch, a, b);
 
@@ -2950,7 +2950,7 @@ test "unify - compact frac and Dec Num(Frac(Dec))" {
 
     const frac_dec = Content{ .structure = .{ .num = Num.frac_dec } };
     const a = env.types_store.freshFromContent(frac_dec);
-    const b = env.mkFracExact(NumCompact.Frac.Precision.dec);
+    const b = env.mkFracExact(Num.Frac.Precision.dec);
 
     const result = unify(env.module_env, env.types_store, &env.scratch, a, b);
 
@@ -2967,7 +2967,7 @@ test "unify - compact frac Dec and Num(Frac(F32)) (fails)" {
 
     const frac_f32 = Content{ .structure = .{ .num = Num.frac_f32 } };
     const a = env.types_store.freshFromContent(frac_f32);
-    const b = env.mkFracExact(NumCompact.Frac.Precision.dec);
+    const b = env.mkFracExact(Num.Frac.Precision.dec);
 
     const result = unify(env.module_env, env.types_store, &env.scratch, a, b);
 

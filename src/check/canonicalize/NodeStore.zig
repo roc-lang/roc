@@ -174,7 +174,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                     .literal = literal,
                     .value = CIR.IntValue.placeholder(),
                     // TODO shouldn't this be a flex_var?
-                    .bound = types.Num.Compact.Int.Precision.fromValue(0), // TODO: get from extra_data
+                    .bound = types.Num.Int.Precision.fromValue(0), // TODO: get from extra_data
                     .region = node.region,
                 },
             };
@@ -214,7 +214,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                     .literal = literal,
                     .value = 0,
                     // TODO shouldn't this be a flex_var?
-                    .bound = types.Num.Compact.Frac.Precision.fromValue(0), // TODO: get from extra_data
+                    .bound = types.Num.Frac.Precision.fromValue(0), // TODO: get from extra_data
                     .region = node.region,
                 },
             };
@@ -359,7 +359,7 @@ pub fn getPattern(store: *NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pattern {
                 .literal = @enumFromInt(node.data_1),
                 .precision_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
                 .num_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
-                .bound = types.Num.Compact.Int.Precision.fromValue(0), // TODO  extra_data
+                .bound = types.Num.Int.Precision.fromValue(0), // TODO  extra_data
                 .value = CIR.IntValue.placeholder(), // TODO need to store and retrieve from extra_data
             },
         },
@@ -369,7 +369,7 @@ pub fn getPattern(store: *NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pattern {
                 .literal = @enumFromInt(node.data_1),
                 .precision_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
                 .num_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
-                .bound = types.Num.Compact.Frac.Precision.fromValue(0), // TODO  extra_data
+                .bound = types.Num.Frac.Precision.fromValue(0), // TODO  extra_data
                 .value = 42, // TODO need to store and retrieve from extra_data
             },
         },
@@ -381,7 +381,7 @@ pub fn getPattern(store: *NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pattern {
             .char_literal = .{
                 .region = node.region,
                 .value = node.data_1,
-                .bound = types.Num.Compact.Int.Precision.fromValue(0), // TODO
+                .bound = types.Num.Int.Precision.fromValue(0), // TODO
                 .num_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
                 .precision_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
             },

@@ -373,7 +373,7 @@ pub const Expr = union(enum) {
         precision_var: TypeVar,
         literal: StringLiteral.Idx,
         value: IntValue,
-        bound: types.Num.Compact.Int.Precision,
+        bound: types.Num.Int.Precision,
         region: Region,
     },
     float: struct {
@@ -381,7 +381,7 @@ pub const Expr = union(enum) {
         precision_var: TypeVar,
         literal: StringLiteral.Idx,
         value: f64,
-        bound: types.Num.Compact.Frac.Precision,
+        bound: types.Num.Frac.Precision,
         region: Region,
     },
     // A single segment of a string literal
@@ -1283,7 +1283,7 @@ pub const Pattern = union(enum) {
         precision_var: TypeVar,
         literal: StringLiteral.Idx,
         value: IntValue,
-        bound: types.Num.Compact.Int.Precision,
+        bound: types.Num.Int.Precision,
         region: Region,
     },
     float_literal: struct {
@@ -1291,7 +1291,7 @@ pub const Pattern = union(enum) {
         precision_var: TypeVar,
         literal: StringLiteral.Idx,
         value: f64,
-        bound: types.Num.Compact.Frac.Precision,
+        bound: types.Num.Frac.Precision,
         region: Region,
     },
     str_literal: struct {
@@ -1302,7 +1302,7 @@ pub const Pattern = union(enum) {
         num_var: TypeVar,
         precision_var: TypeVar,
         value: u32,
-        bound: types.Num.Compact.Int.Precision,
+        bound: types.Num.Int.Precision,
         region: Region,
     },
     underscore: struct {

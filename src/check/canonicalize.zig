@@ -450,7 +450,7 @@ pub fn canonicalize_expr(
                         .bytes = @bitCast(value),
                         .kind = .i128,
                     },
-                    .bound = types.Num.Compact.Int.Precision.fromValue(value),
+                    .bound = types.Num.Int.Precision.fromValue(value),
                     .region = self.tokenizedRegionToRegion(e.region),
                 },
             });
@@ -483,7 +483,7 @@ pub fn canonicalize_expr(
                     .precision_var = precision_type_var,
                     .literal = literal,
                     .value = value,
-                    .bound = types.Num.Compact.Frac.Precision.fromValue(value),
+                    .bound = types.Num.Frac.Precision.fromValue(value),
                     .region = self.tokenizedRegionToRegion(e.region),
                 },
             });

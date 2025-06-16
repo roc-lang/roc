@@ -217,8 +217,8 @@ pub const Num = union(enum) {
     num_poly: Var,
     int_poly: Var,
     frac_poly: Var,
-    int_precision: Compact.Int.Precision,
-    frac_precision: Compact.Frac.Precision,
+    int_precision: Int.Precision,
+    frac_precision: Frac.Precision,
     num_compact: Compact,
 
     /// Represents a compact number
@@ -231,88 +231,85 @@ pub const Num = union(enum) {
         pub fn placeholder() Compact {
             return Compact{ .int = .u8 };
         }
+    };
 
-        /// the Num data type
-        pub const Num = struct {};
+    /// the Frac data type
+    pub const Frac = struct {
+        /// the precision of a frac
+        pub const Precision = enum {
+            f32,
+            f64,
+            dec,
 
-        /// the Frac data type
-        pub const Frac = struct {
-            /// the precision of a frac
-            pub const Precision = enum {
-                f32,
-                f64,
-                dec,
+            /// Get the lowest precision needed to hold the provided float
+            /// This only supports f32s and f64s. Decimals must be assigned based on different criteria.
+            /// When in doubt, this prefers f32s.
+            pub fn fromValue(value: f64) Frac.Precision {
+                if (std.math.isNan(value) or std.math.isInf(value)) {
+                    return .f32;
+                }
 
-                /// Get the lowest precision needed to hold the provided float
-                /// This only supports f32s and f64s. Decimals must be assigned based on different criteria.
-                /// When in doubt, this prefers f32s.
-                pub fn fromValue(value: f64) Frac.Precision {
-                    if (std.math.isNan(value) or std.math.isInf(value)) {
+                // Check if the value fits in f32 range and precision
+                if (@abs(value) == 0.0) {
+                    return .f32;
+                } else if (value <= std.math.floatMax(f32) and value >= std.math.floatMin(f32)) {
+                    // Not every f64 can be downcast to f32 with the same precision
+                    const as_f32 = @as(f32, @floatCast(value));
+                    const back_to_f64 = @as(f64, @floatCast(as_f32));
+                    if (value == back_to_f64) {
                         return .f32;
                     }
-
-                    // Check if the value fits in f32 range and precision
-                    if (@abs(value) == 0.0) {
-                        return .f32;
-                    } else if (value <= std.math.floatMax(f32) and value >= std.math.floatMin(f32)) {
-                        // Not every f64 can be downcast to f32 with the same precision
-                        const as_f32 = @as(f32, @floatCast(value));
-                        const back_to_f64 = @as(f64, @floatCast(as_f32));
-                        if (value == back_to_f64) {
-                            return .f32;
-                        }
-                    }
-
-                    return .f64;
                 }
-            };
-        };
 
-        /// the Int data type
-        pub const Int = struct {
-            /// the precision of an int
-            pub const Precision = enum {
-                u8,
-                i8,
-                u16,
-                i16,
-                u32,
-                i32,
-                u64,
-                i64,
-                u128,
-                i128,
-
-                /// Get the lowest precision needed to hold the provided
-                pub fn fromValue(value: i128) Int.Precision {
-                    if (value >= 0) {
-                        const unsigned_value = @as(u128, @intCast(value));
-                        if (unsigned_value <= std.math.maxInt(u8)) return .u8;
-                        if (unsigned_value <= std.math.maxInt(i8)) return .i8;
-                        if (unsigned_value <= std.math.maxInt(u16)) return .u16;
-                        if (unsigned_value <= std.math.maxInt(i16)) return .i16;
-                        if (unsigned_value <= std.math.maxInt(u32)) return .u32;
-                        if (unsigned_value <= std.math.maxInt(i32)) return .i32;
-                        if (unsigned_value <= std.math.maxInt(u64)) return .u64;
-                        if (unsigned_value <= std.math.maxInt(i64)) return .i64;
-                        return .i128;
-                    } else {
-                        // Negative values can only fit in signed types
-                        if (value >= std.math.minInt(i8)) return .i8;
-                        if (value >= std.math.minInt(i16)) return .i16;
-                        if (value >= std.math.minInt(i32)) return .i32;
-                        if (value >= std.math.minInt(i64)) return .i64;
-                        return .i128;
-                    }
-                }
-            };
+                return .f64;
+            }
         };
     };
-    ///
+
+    /// the Int data type
+    pub const Int = struct {
+        /// the precision of an int
+        pub const Precision = enum {
+            u8,
+            i8,
+            u16,
+            i16,
+            u32,
+            i32,
+            u64,
+            i64,
+            u128,
+            i128,
+
+            /// Get the lowest precision needed to hold the provided
+            pub fn fromValue(value: i128) Int.Precision {
+                if (value >= 0) {
+                    const unsigned_value = @as(u128, @intCast(value));
+                    if (unsigned_value <= std.math.maxInt(u8)) return .u8;
+                    if (unsigned_value <= std.math.maxInt(i8)) return .i8;
+                    if (unsigned_value <= std.math.maxInt(u16)) return .u16;
+                    if (unsigned_value <= std.math.maxInt(i16)) return .i16;
+                    if (unsigned_value <= std.math.maxInt(u32)) return .u32;
+                    if (unsigned_value <= std.math.maxInt(i32)) return .i32;
+                    if (unsigned_value <= std.math.maxInt(u64)) return .u64;
+                    if (unsigned_value <= std.math.maxInt(i64)) return .i64;
+                    return .i128;
+                } else {
+                    // Negative values can only fit in signed types
+                    if (value >= std.math.minInt(i8)) return .i8;
+                    if (value >= std.math.minInt(i16)) return .i16;
+                    if (value >= std.math.minInt(i32)) return .i32;
+                    if (value >= std.math.minInt(i64)) return .i64;
+                    return .i128;
+                }
+            }
+        };
+    };
+
     /// the precision of a num
     pub const Precision = struct {
         sign: Sign,
-        min_precision: Compact.Int.Precision,
+        min_precision: Int.Precision,
 
         pub const Sign = enum { positive, negative };
 
@@ -320,7 +317,7 @@ pub const Num = union(enum) {
         pub fn fromValue(value: i128) Precision {
             var sign: Sign = .negative;
             if (value >= 0) sign = .positive;
-            return .{ .sign = sign, .min_precision = Compact.Int.Precision.fromValue(value) };
+            return .{ .sign = sign, .min_precision = Int.Precision.fromValue(value) };
         }
     };
 
