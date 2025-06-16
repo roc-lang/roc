@@ -427,6 +427,8 @@ Implementation of Canonicalization:
 
 ## Lambda Set
 
+TODO
+
 ## Monomorphization
 
 (mono, specialization)
@@ -453,6 +455,8 @@ Related Files:
 
 ## Type Checking
 
+TODO
+
 ## Reference Count
 
 (refcount)
@@ -475,15 +479,44 @@ Reference counting implementation:
 
 ## Mutate in place
 
+TODO
+
 ## Alias Analysis
+
+TODO
+
+## Backend
+
+TODO
 
 ## Code Gen
 
+(code generation)
+
+The [phase](#compiler-phase) where the compiler translates intermediate representation (IR) of a program into target code, usually assembly code.
+This assembly code is not yet ready for execution, it needs to be [linked](#linking) first.
+
+For the old compiler we have three code gen backends, see [#backend](#backend) for more explanation.
+
+Code Gen implementation:
+- New compiler: Not done yet
+- Old compiler:
+  - [crates/compiler/gen_llvm](crates/compiler/gen_llvm) generates LLVM IR
+  - [crates/compiler/gen_dev](crates/compiler/gen_dev) generates assembly fast for quick build times
+  - [crates/compiler/gen_wasm](crates/compiler/gen_wasm) generates webassembly (binary) for typical [wasm](#wasm) usecases.
+  - [code gen tests](crates/compiler/test_gen)
+
 ## Host
+
+TODO
 
 ## Heap
 
+TODO
+
 ## Stack
+
+TODO
 
 ## Boxing
 
@@ -497,14 +530,24 @@ See also [std::boxed::Box](https://doc.rust-lang.org/std/boxed/struct.Box.html) 
 
 ## Linking
 
+TODO
+
 ### Surgical Linker
+
+TODO
 
 ### Legacy Linker
 
+TODO
+
 ## Glue
+
+TODO
 
 ## lhs & rhs
 
 Left & Right Hand Side: for example in `1 + 2`, `1` is on the left hand side and `2` is on the right hand side.
 
 ## WASM
+
+TODO
