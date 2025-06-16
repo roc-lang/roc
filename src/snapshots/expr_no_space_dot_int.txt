@@ -6,15 +6,7 @@ module []
 
 foo = asd.0
 ~~~PROBLEMS
-SYNTAX PROBLEM
-
-There should be no space between the dot and the integer.
-
-module []
-
-foo = asd.0
-Note: This is a parse error. Check your syntax.
-UNKNOWN OPERATOR
+PARSER: expr_no_space_dot_intUNKNOWN OPERATOR
 
 This looks like an operator, but it's not one I recognize!
 

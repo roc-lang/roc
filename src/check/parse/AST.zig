@@ -13,7 +13,7 @@
 const std = @import("std");
 const base = @import("../../base.zig");
 const sexpr = @import("../../base/sexpr.zig");
-const tokenize = @import("../parse/tokenize.zig");
+const tokenize = @import("tokenize.zig");
 const collections = @import("../../collections.zig");
 const reporting = @import("../../reporting.zig");
 
@@ -27,24 +27,156 @@ const testing = std.testing;
 const Ident = base.Ident;
 const Allocator = std.mem.Allocator;
 
-pub const Diagnostic = @import("Diagnostic.zig");
-
 const AST = @This();
 
 source: []const u8,
 tokens: TokenizedBuffer,
 store: NodeStore,
 root_node_idx: u32 = 0,
-
 tokenize_diagnostics: std.ArrayListUnmanaged(tokenize.Diagnostic),
-parse_diagnostics: std.ArrayListUnmanaged(Diagnostic),
+parse_diagnostics: std.ArrayListUnmanaged(AST.Diagnostic),
 
-pub fn deinit(self: *AST, allocator: Allocator) void {
+/// Calculate whether this region is - or will be - multiline
+pub fn regionIsMultiline(self: *AST, region: TokenizedRegion) bool {
+    var i = region.start;
+    const tags = self.tokens.tokens.items(.tag);
+    while (i <= region.end) {
+        if (tags[i] == .Newline) {
+            return true;
+        }
+        if (tags[i] == .Comma and (tags[i + 1] == .CloseSquare or
+            tags[i + 1] == .CloseRound or
+            tags[i + 1] == .CloseCurly))
+        {
+            return true;
+        }
+        i += 1;
+    }
+    return false;
+}
+
+/// Returns diagnostic position information for the given region.
+pub fn calcRegionInfo(self: *AST, region: TokenizedRegion, line_starts: []const u32) base.RegionInfo {
+    const start = self.tokens.resolve(region.start);
+    const end = self.tokens.resolve(region.end);
+    const info = base.RegionInfo.position(self.source, line_starts, start.start.offset, end.end.offset) catch {
+        // std.debug.panic("failed to calculate position info for region {?}, start: {}, end: {}", .{ region, start, end });
+        return .{
+            .start_line_idx = 0,
+            .start_col_idx = 0,
+            .end_line_idx = 0,
+            .end_col_idx = 0,
+            .line_text = "",
+        };
+    };
+
+    return info;
+}
+
+pub fn deinit(self: *AST, gpa: std.mem.Allocator) void {
     defer self.tokens.deinit();
     defer self.store.deinit();
-    defer self.tokenize_diagnostics.deinit(allocator);
-    defer self.parse_diagnostics.deinit(allocator);
+    defer self.tokenize_diagnostics.deinit(gpa);
+    defer self.parse_diagnostics.deinit(gpa);
 }
+
+/// Diagnostics related to parsing
+pub const Diagnostic = struct {
+    tag: Tag,
+    region: TokenizedRegion,
+
+    /// different types of diagnostic errors
+    pub const Tag = enum {
+        bad_indent,
+        multiple_platforms,
+        no_platform,
+        missing_header,
+        list_not_closed,
+        missing_arrow,
+        expected_exposes,
+        expected_exposes_close_square,
+        expected_exposes_open_square,
+        expected_imports,
+        expected_imports_close_curly,
+        expected_imports_open_curly,
+        expected_package_or_platform_name,
+        expected_package_or_platform_colon,
+        expected_package_or_platform_string,
+        expected_package_platform_close_curly,
+        expected_package_platform_open_curly,
+        expected_packages,
+        expected_packages_close_curly,
+        expected_packages_open_curly,
+        expected_platform_name_end,
+        expected_platform_name_start,
+        expected_platform_name_string,
+        expected_platform_string,
+        expected_provides,
+        expected_provides_close_square,
+        expected_provides_open_square,
+        expected_requires,
+        expected_requires_rigids_close_curly,
+        expected_requires_rigids_open_curly,
+        expected_requires_signatures_close_curly,
+        expected_requires_signatures_open_curly,
+        expect_closing_paren,
+        header_expected_open_square,
+        header_expected_close_square,
+        header_unexpected_token,
+        pattern_unexpected_token,
+        pattern_unexpected_eof,
+        ty_anno_unexpected_token,
+        statement_unexpected_eof,
+        statement_unexpected_token,
+        string_unexpected_token,
+        string_expected_close_interpolation,
+        expr_if_missing_else,
+        expr_no_space_dot_int,
+        import_exposing_no_open,
+        import_exposing_no_close,
+        no_else,
+        expected_type_field_name,
+        expected_colon_after_type_field_name,
+        expected_arrow,
+        expected_ty_close_curly_or_comma,
+        expected_ty_close_square_or_comma,
+        expected_lower_name_after_exposed_item_as,
+        expected_upper_name_after_exposed_item_as,
+        exposed_item_unexpected_token,
+        expected_upper_name_after_import_as,
+        expected_colon_after_type_annotation,
+        expected_lower_ident_pat_field_name,
+        expected_colon_after_pat_field_name,
+        expected_expr_bar,
+        expected_expr_close_curly_or_comma,
+        expected_expr_close_round_or_comma,
+        expected_expr_close_square_or_comma,
+        expected_close_curly_at_end_of_match,
+        expected_open_curly_after_match,
+        expr_unexpected_token,
+        expected_expr_record_field_name,
+        expected_ty_apply_close_round,
+        expected_ty_anno_end_of_function,
+        expected_ty_anno_end,
+        expected_expr_apply_close_round,
+        where_expected_where,
+        where_expected_mod_open,
+        where_expected_var,
+        where_expected_mod_close,
+        where_expected_arg_open,
+        where_expected_arg_close,
+        where_expected_method_arrow,
+        where_expected_method_or_alias_name,
+        where_expected_var_or_module,
+        import_must_be_top_level,
+        invalid_type_arg,
+        expr_arrow_expects_ident,
+        var_only_allowed_in_a_body,
+        var_must_have_ident,
+        var_expected_equals,
+        for_expected_in,
+    };
+};
 
 /// The first and last token consumed by a Node
 pub const TokenizedRegion = struct {
@@ -71,167 +203,9 @@ pub const TokenizedRegion = struct {
 };
 
 /// Resolve a token index to a string slice from the source code.
-pub fn resolve(self: *const AST, token: Token.Idx) []const u8 {
+pub fn resolve(self: *AST, token: Token.Idx) []const u8 {
     const range = self.tokens.resolve(token);
     return self.source[@intCast(range.start.offset)..@intCast(range.end.offset)];
-}
-
-/// Convert a parser diagnostic to a Report for rendering
-pub fn diagnosticToReport(self: *const AST, diagnostic: Diagnostic, allocator: std.mem.Allocator) !reporting.Report {
-    // Get title and main message based on diagnostic type
-    const title, const main_message = switch (diagnostic.tag) {
-        .bad_indent => .{ "INDENTATION PROBLEM", "The indentation here is not consistent with the rest of the code." },
-        .multiple_platforms => .{ "MULTIPLE PLATFORMS", "Multiple platform declarations were found, but only one is allowed." },
-        .no_platform => .{ "MISSING PLATFORM", "No platform declaration was found." },
-        .missing_header => .{ "MISSING HEADER", "The module header is missing." },
-        .list_not_closed => .{ "UNCLOSED LIST", "This list is not properly closed." },
-        .missing_arrow => .{ "MISSING ARROW", "Expected an arrow '->' here." },
-        .expected_exposes => .{ "SYNTAX PROBLEM", "Expected 'exposes' keyword here." },
-        .expected_exposes_close_square => .{ "SYNTAX PROBLEM", "Expected ']' to close the exposes list." },
-        .expected_exposes_open_square => .{ "SYNTAX PROBLEM", "Expected '[' to start the exposes list." },
-        .expected_imports => .{ "SYNTAX PROBLEM", "Expected 'imports' keyword here." },
-        .expected_imports_close_curly => .{ "SYNTAX PROBLEM", "Expected '}' to close the imports block." },
-        .expected_imports_open_curly => .{ "SYNTAX PROBLEM", "Expected '{' to start the imports block." },
-        .expected_package_or_platform_name => .{ "SYNTAX PROBLEM", "Expected a package or platform name here." },
-        .expected_package_or_platform_colon => .{ "SYNTAX PROBLEM", "Expected ':' after the package or platform name." },
-        .expected_package_or_platform_string => .{ "SYNTAX PROBLEM", "Expected a string after the package or platform declaration." },
-        .expected_package_platform_close_curly => .{ "SYNTAX PROBLEM", "Expected '}' to close the package platform declaration." },
-        .expected_package_platform_open_curly => .{ "SYNTAX PROBLEM", "Expected '{' to start the package platform declaration." },
-        .expected_packages => .{ "SYNTAX PROBLEM", "Expected 'packages' keyword here." },
-        .expected_packages_close_curly => .{ "SYNTAX PROBLEM", "Expected '}' to close the packages block." },
-        .expected_packages_open_curly => .{ "SYNTAX PROBLEM", "Expected '{' to start the packages block." },
-        .expected_platform_name_end => .{ "SYNTAX PROBLEM", "Expected the platform name to end here." },
-        .expected_platform_name_start => .{ "SYNTAX PROBLEM", "Expected the platform name to start here." },
-        .expected_platform_name_string => .{ "SYNTAX PROBLEM", "Expected the platform name as a string." },
-        .expected_platform_string => .{ "SYNTAX PROBLEM", "Expected the platform as a string." },
-        .expected_provides => .{ "SYNTAX PROBLEM", "Expected 'provides' keyword here." },
-        .expected_provides_close_square => .{ "SYNTAX PROBLEM", "Expected ']' to close the provides list." },
-        .expected_provides_open_square => .{ "SYNTAX PROBLEM", "Expected '[' to start the provides list." },
-        .expected_requires => .{ "SYNTAX PROBLEM", "Expected 'requires' keyword here." },
-        .expected_requires_rigids_close_curly => .{ "SYNTAX PROBLEM", "Expected '}' to close the requires rigids block." },
-        .expected_requires_rigids_open_curly => .{ "SYNTAX PROBLEM", "Expected '{' to start the requires rigids block." },
-        .expected_requires_signatures_close_curly => .{ "SYNTAX PROBLEM", "Expected '}' to close the requires signatures block." },
-        .expected_requires_signatures_open_curly => .{ "SYNTAX PROBLEM", "Expected '{' to start the requires signatures block." },
-        .expect_closing_paren => .{ "SYNTAX PROBLEM", "Expected a closing parenthesis ')' here." },
-        .header_expected_open_square => .{ "SYNTAX PROBLEM", "Expected '[' in the module header." },
-        .header_expected_close_square => .{ "SYNTAX PROBLEM", "Expected ']' in the module header." },
-        .header_unexpected_token => .{ "SYNTAX PROBLEM", "I didn't expect to see this in the module header." },
-        .pattern_unexpected_token => .{ "SYNTAX PROBLEM", "I didn't expect to see this in the pattern." },
-        .pattern_unexpected_eof => .{ "SYNTAX PROBLEM", "The pattern is incomplete - I reached the end of the file unexpectedly." },
-        .ty_anno_unexpected_token => .{ "SYNTAX PROBLEM", "I didn't expect to see this in the type annotation." },
-        .statement_unexpected_eof => .{ "SYNTAX PROBLEM", "The statement is incomplete - I reached the end of the file unexpectedly." },
-        .statement_unexpected_token => .{ "SYNTAX PROBLEM", "I didn't expect to see this in the statement." },
-        .string_unexpected_token => .{ "SYNTAX PROBLEM", "I didn't expect to see this in the string." },
-        .string_expected_close_interpolation => .{ "SYNTAX PROBLEM", "Expected the string interpolation to be closed." },
-        .expr_if_missing_else => .{ "INCOMPLETE IF", "This if expression is missing an else clause." },
-        .expr_no_space_dot_int => .{ "SYNTAX PROBLEM", "There should be no space between the dot and the integer." },
-        .import_exposing_no_open => .{ "SYNTAX PROBLEM", "Expected '(' after 'exposing'." },
-        .import_exposing_no_close => .{ "SYNTAX PROBLEM", "Expected ')' to close the exposing list." },
-        .no_else => .{ "MISSING ELSE", "This if expression is missing an else clause." },
-        .expected_type_field_name => .{ "SYNTAX PROBLEM", "Expected a field name in this type." },
-        .expected_colon_after_type_field_name => .{ "SYNTAX PROBLEM", "Expected ':' after the type field name." },
-        .expected_arrow => .{ "SYNTAX PROBLEM", "Expected an arrow '->' here." },
-        .expected_ty_close_curly_or_comma => .{ "SYNTAX PROBLEM", "Expected '}' or ',' in this type." },
-        .expected_ty_close_square_or_comma => .{ "SYNTAX PROBLEM", "Expected ']' or ',' in this type." },
-        .expected_lower_name_after_exposed_item_as => .{ "SYNTAX PROBLEM", "Expected a lowercase name after 'as'." },
-        .expected_upper_name_after_exposed_item_as => .{ "SYNTAX PROBLEM", "Expected an uppercase name after 'as'." },
-        .exposed_item_unexpected_token => .{ "SYNTAX PROBLEM", "I didn't expect to see this in the exposed item." },
-        .expected_upper_name_after_import_as => .{ "SYNTAX PROBLEM", "Expected an uppercase name after import 'as'." },
-        .expected_colon_after_type_annotation => .{ "SYNTAX PROBLEM", "Expected ':' after the type annotation." },
-        .expected_lower_ident_pat_field_name => .{ "SYNTAX PROBLEM", "Expected a lowercase identifier for the pattern field name." },
-        .expected_colon_after_pat_field_name => .{ "SYNTAX PROBLEM", "Expected ':' after the pattern field name." },
-        .expected_expr_bar => .{ "SYNTAX PROBLEM", "Expected '|' in this expression." },
-        .expected_expr_close_curly_or_comma => .{ "SYNTAX PROBLEM", "Expected '}' or ',' in this expression." },
-        .expected_expr_close_round_or_comma => .{ "SYNTAX PROBLEM", "Expected ')' or ',' in this expression." },
-        .expected_expr_close_square_or_comma => .{ "SYNTAX PROBLEM", "Expected ']' or ',' in this expression." },
-        .expected_close_curly_at_end_of_match => .{ "SYNTAX PROBLEM", "Expected '}' at the end of this match expression." },
-        .expected_open_curly_after_match => .{ "SYNTAX PROBLEM", "Expected '{' after 'match'." },
-        .expr_unexpected_token => .{ "UNKNOWN OPERATOR", "This looks like an operator, but it's not one I recognize!" },
-        .expected_expr_record_field_name => .{ "SYNTAX PROBLEM", "Expected a record field name in this expression." },
-        .expected_ty_apply_close_round => .{ "SYNTAX PROBLEM", "Expected ')' in this type application." },
-        .expected_ty_anno_end_of_function => .{ "SYNTAX PROBLEM", "Expected the function type annotation to end here." },
-        .expected_ty_anno_end => .{ "SYNTAX PROBLEM", "Expected the type annotation to end here." },
-        .expected_expr_apply_close_round => .{ "SYNTAX PROBLEM", "Expected ')' in this expression application." },
-        .where_expected_where => .{ "SYNTAX PROBLEM", "Expected 'where' keyword here." },
-        .where_expected_mod_open => .{ "SYNTAX PROBLEM", "Expected module opening in the where clause." },
-        .where_expected_var => .{ "SYNTAX PROBLEM", "Expected a variable in the where clause." },
-        .where_expected_mod_close => .{ "SYNTAX PROBLEM", "Expected module closing in the where clause." },
-        .where_expected_arg_open => .{ "SYNTAX PROBLEM", "Expected argument opening in the where clause." },
-        .where_expected_arg_close => .{ "SYNTAX PROBLEM", "Expected argument closing in the where clause." },
-        .where_expected_method_arrow => .{ "SYNTAX PROBLEM", "Expected '->' in the where clause method." },
-        .where_expected_method_or_alias_name => .{ "SYNTAX PROBLEM", "Expected a method or alias name in the where clause." },
-        .where_expected_var_or_module => .{ "SYNTAX PROBLEM", "Expected a variable or module in the where clause." },
-        .import_must_be_top_level => .{ "MISPLACED IMPORT", "Import statements must be at the top level of the module." },
-        .invalid_type_arg => .{ "INVALID TYPE", "This type argument is not valid." },
-        .expr_arrow_expects_ident => .{ "SYNTAX PROBLEM", "Expected an identifier after the arrow in this expression." },
-        .var_only_allowed_in_a_body => .{ "MISPLACED VARIABLE", "Variable declarations are only allowed inside function bodies." },
-        .var_must_have_ident => .{ "SYNTAX PROBLEM", "Variable declarations must have an identifier." },
-        .var_expected_equals => .{ "SYNTAX PROBLEM", "Expected '=' after the variable name." },
-        .for_expected_in => .{ "SYNTAX PROBLEM", "Expected 'in' in this for expression." },
-    };
-
-    var report = reporting.Report.init(allocator, title, .runtime_error, reporting.ReportingConfig.initPlainText());
-
-    // Add the main error message
-    try report.document.addText(main_message);
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
-
-    // Add source context using Document API
-    var line_starts = try base.RegionInfo.findLineStarts(allocator, self.source);
-    defer line_starts.deinit();
-
-    const start_region = self.tokens.resolve(diagnostic.region.start);
-    const end_region = self.tokens.resolve(diagnostic.region.end);
-    const region_info = base.RegionInfo.position(self.source, line_starts.items, start_region.start.offset, end_region.end.offset) catch base.RegionInfo{
-        .start_line_idx = 0,
-        .start_col_idx = 0,
-        .end_line_idx = 0,
-        .end_col_idx = 0,
-        .line_text = "",
-    };
-    if (region_info.line_text.len > 0) {
-        try report.document.addSourceRegion(
-            self.source,
-            region_info.start_line_idx + 1, // Convert from 0-based to 1-based
-            region_info.start_col_idx + 1, // Convert from 0-based to 1-based
-            region_info.end_line_idx + 1, // Convert from 0-based to 1-based
-            region_info.end_col_idx + 1, // Convert from 0-based to 1-based
-            .error_highlight,
-            null, // filename
-        );
-    }
-
-    try report.addNote("This is a parse error. Check your syntax.");
-
-    // Add specific suggestions based on diagnostic type
-    switch (diagnostic.tag) {
-        .expr_unexpected_token => {
-            // Check if this might be a ++ concatenation attempt
-            if (start_region.start.offset < self.source.len and end_region.end.offset <= self.source.len) {
-                const problem_text = self.source[start_region.start.offset..end_region.end.offset];
-                if (std.mem.indexOf(u8, problem_text, "++") != null) {
-                    try report.document.addLineBreak();
-                    try report.addSuggestion("To concatenate two lists or strings, try using List.concat or Str.concat instead.");
-                }
-            }
-        },
-        .expr_if_missing_else, .no_else => {
-            try report.document.addLineBreak();
-            try report.addNote("In Roc, every if expression must have an else clause to ensure all code paths return a value.");
-        },
-        .import_must_be_top_level => {
-            try report.document.addLineBreak();
-            try report.addNote("Move this import statement to the top of your module, after the module header.");
-        },
-        .var_only_allowed_in_a_body => {
-            try report.document.addLineBreak();
-            try report.addNote("Variables can only be declared inside function bodies, not at the module level.");
-        },
-        else => {},
-    }
-
-    return report;
 }
 
 /// Contains properties of the thing to the right of the `import` keyword.
@@ -1689,40 +1663,3 @@ pub const WhenBranch = struct {
         return node;
     }
 };
-
-/// Calculate whether this region is - or will be - multiline
-pub fn regionIsMultiline(self: *AST, region: TokenizedRegion) bool {
-    var i = region.start;
-    const tags = self.tokens.tokens.items(.tag);
-    while (i <= region.end) {
-        if (tags[i] == .Newline) {
-            return true;
-        }
-        if (tags[i] == .Comma and (tags[i + 1] == .CloseSquare or
-            tags[i + 1] == .CloseRound or
-            tags[i + 1] == .CloseCurly))
-        {
-            return true;
-        }
-        i += 1;
-    }
-    return false;
-}
-
-/// Returns diagnostic position information for the given region.
-pub fn calcRegionInfo(self: *AST, region: TokenizedRegion, line_starts: []const u32) base.RegionInfo {
-    const start = self.tokens.resolve(region.start);
-    const end = self.tokens.resolve(region.end);
-    const info = base.RegionInfo.position(self.source, line_starts, start.start.offset, end.end.offset) catch {
-        // std.debug.panic("failed to calculate position info for region {?}, start: {}, end: {}", .{ region, start, end });
-        return .{
-            .start_line_idx = 0,
-            .start_col_idx = 0,
-            .end_line_idx = 0,
-            .end_col_idx = 0,
-            .line_text = "",
-        };
-    };
-
-    return info;
-}

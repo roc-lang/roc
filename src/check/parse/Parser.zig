@@ -1,6 +1,6 @@
 const std = @import("std");
 const tracy = @import("../../tracy.zig");
-const tokenize = @import("../parse/tokenize.zig");
+const tokenize = @import("tokenize.zig");
 const collections = @import("../../collections.zig");
 const base = @import("../../base.zig");
 
@@ -10,8 +10,7 @@ const NodeStore = @import("NodeStore.zig");
 const NodeList = AST.NodeList;
 const TokenizedBuffer = tokenize.TokenizedBuffer;
 const Token = tokenize.Token;
-
-const Diagnostic = @import("Diagnostic.zig");
+const TokenIdx = Token.Idx;
 
 const exitOnOom = collections.utils.exitOnOom;
 
@@ -19,11 +18,11 @@ const exitOnOom = collections.utils.exitOnOom;
 pub const Parser = @This();
 
 gpa: std.mem.Allocator,
-pos: Token.Idx,
+pos: TokenIdx,
 tok_buf: TokenizedBuffer,
 store: NodeStore,
 scratch_nodes: std.ArrayListUnmanaged(Node.Idx),
-diagnostics: std.ArrayListUnmanaged(Diagnostic),
+diagnostics: std.ArrayListUnmanaged(AST.Diagnostic),
 
 /// init the parser from a buffer of tokens
 pub fn init(tokens: TokenizedBuffer) Parser {
@@ -142,7 +141,7 @@ pub fn pushDiagnostic(self: *Parser, tag: AST.Diagnostic.Tag, region: AST.Tokeni
     }) catch |err| exitOnOom(err);
 }
 /// add a malformed token
-pub fn pushMalformed(self: *Parser, comptime t: type, tag: AST.Diagnostic.Tag, start: Token.Idx) t {
+pub fn pushMalformed(self: *Parser, comptime t: type, tag: AST.Diagnostic.Tag, start: TokenIdx) t {
     const pos = self.pos;
     if (self.peek() != .EndOfFile) {
         self.advanceOne(); // TODO: find a better point to advance to
@@ -775,7 +774,7 @@ pub fn parseExposedItem(self: *Parser) AST.ExposedItem.Idx {
     var end = start;
     switch (self.peek()) {
         .LowerIdent => {
-            var as: ?Token.Idx = null;
+            var as: ?TokenIdx = null;
             if (self.peekNext() == .KwAs) {
                 self.advance(); // Advance past LowerIdent
                 self.advance(); // Advance past KwAs
@@ -796,7 +795,7 @@ pub fn parseExposedItem(self: *Parser) AST.ExposedItem.Idx {
             return ei;
         },
         .UpperIdent => {
-            var as: ?Token.Idx = null;
+            var as: ?TokenIdx = null;
             if (self.peekNext() == .KwAs) {
                 self.advance(); // Advance past UpperIdent
                 self.advance(); // Advance past KwAs
@@ -856,8 +855,8 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) ?AST.Statement.I
             }
             const start = self.pos;
             self.advance(); // Advance past KwImport
-            var qualifier: ?Token.Idx = null;
-            var alias_tok: ?Token.Idx = null;
+            var qualifier: ?TokenIdx = null;
+            var alias_tok: ?TokenIdx = null;
             if (self.peek() == .LowerIdent) {
                 qualifier = self.pos;
                 self.advance(); // Advance past LowerIdent
@@ -1208,7 +1207,7 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) AST.Pattern.Idx {
                 } });
             },
             .DoubleDot => {
-                var name: ?Token.Idx = null;
+                var name: ?TokenIdx = null;
                 var end: u32 = self.pos;
                 self.advance();
                 if (self.peek() == .KwAs) {

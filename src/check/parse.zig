@@ -4,11 +4,10 @@ const testing = std.testing;
 const base = @import("../base.zig");
 const tracy = @import("../tracy.zig");
 const tokenize = @import("parse/tokenize.zig");
-
-/// Diagnostic information for parse errors and warnings.
-pub const Diagnostic = AST.Diagnostic;
-
+const TokenIndex = tokenize.TokenIndex;
+const TokenizedBuffer = tokenize.TokenizedBuffer;
 const NodeList = AST.NodeList;
+const Diagnostic = AST.Diagnostic;
 const Parser = @import("parse/Parser.zig");
 const exitOnOom = @import("../collections/utils.zig").exitOnOom;
 
@@ -22,7 +21,14 @@ fn runParse(env: *base.ModuleEnv, source: []const u8, parserCall: *const fn (*Pa
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const result = tokenize.runTokenize(env, source);
+    // Calculate and store line starts for diagnostic position calculation
+    env.calcLineStarts(source) catch |err| exitOnOom(err);
+
+    var messages: [128]tokenize.Diagnostic = undefined;
+    const msg_slice = messages[0..];
+    var tokenizer = tokenize.Tokenizer.init(env, source, msg_slice);
+    tokenizer.tokenize();
+    const result = tokenizer.finishAndDeinit();
 
     var parser = Parser.init(result.tokens);
     defer parser.deinit();

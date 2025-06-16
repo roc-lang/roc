@@ -516,24 +516,33 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
         for (parse_ast.tokenize_diagnostics.items) |diagnostic| {
             tokenize_problems += 1;
 
-            var report: Report = try diagnostic.toReport(gpa, content.source);
-            defer report.deinit();
-            report.render(writer.any(), .plain_text) catch |err| {
-                try writer.print("Error rendering report: {}\n", .{err});
-                continue;
-            };
+            // TODO implement `toReport` for tokenize
+            // var report: Report = try diagnostic.toReport(gpa, content.source);
+            // defer report.deinit();
+            // report.render(writer.any(), .plain_text) catch |err| {
+            //     try writer.print("Error rendering report: {}\n", .{err});
+            //     continue;
+            // };
+
+            try diagnostic.toStr(gpa, content.source, writer);
         }
 
         // Parser Diagnostics
         for (parse_ast.parse_diagnostics.items) |diagnostic| {
             parser_problems += 1;
 
-            var report: Report = try parse_ast.diagnosticToReport(diagnostic, gpa);
-            defer report.deinit();
-            report.render(writer.any(), .plain_text) catch |err| {
-                try writer.print("Error rendering report: {}\n", .{err});
-                continue;
-            };
+            // TODO implement `diagnosticToReport` for parser
+            // var report: Report = try parse_ast.diagnosticToReport(diagnostic, gpa);
+            // defer report.deinit();
+            // report.render(writer.any(), .plain_text) catch |err| {
+            //     try writer.print("Error rendering report: {}\n", .{err});
+            //     continue;
+            // };
+
+            const err_msg = try std.fmt.allocPrint(gpa, "PARSER: {s}", .{@tagName(diagnostic.tag)});
+            defer gpa.free(err_msg);
+
+            try writer.writeAll(err_msg);
         }
 
         // Canonicalization Diagnostics

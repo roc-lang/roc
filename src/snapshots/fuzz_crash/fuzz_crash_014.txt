@@ -6,39 +6,7 @@ type=file
 0bu22
 0u22
 ~~~PROBLEMS
-MISSING HEADER
-
-The module header is missing.
-
-0b.0
-0bu22
-0u22
-Note: This is a parse error. Check your syntax.
-UNKNOWN OPERATOR
-
-This looks like an operator, but it's not one I recognize!
-
-0b.0
-0bu22
-0u22
-Note: This is a parse error. Check your syntax.
-UNKNOWN OPERATOR
-
-This looks like an operator, but it's not one I recognize!
-
-0b.0
-0bu22
-0u22
-Note: This is a parse error. Check your syntax.
-UNKNOWN OPERATOR
-
-This looks like an operator, but it's not one I recognize!
-
-0b.0
-0bu22
-0u22
-Note: This is a parse error. Check your syntax.
-INVALID STATEMENT
+PARSER: missing_headerPARSER: expr_unexpected_tokenPARSER: expr_unexpected_tokenPARSER: expr_unexpected_tokenINVALID STATEMENT
 
 This statement is not allowed at the top level.
 

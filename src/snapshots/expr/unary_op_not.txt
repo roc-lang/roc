@@ -4,13 +4,7 @@ type=expr
 ~~~SOURCE
 !isValid
 ~~~PROBLEMS
-UNKNOWN OPERATOR
-
-This looks like an operator, but it's not one I recognize!
-
-!isValid
-Note: This is a parse error. Check your syntax.
-~~~TOKENS
+PARSER: expr_unexpected_token~~~TOKENS
 OpBang(1:1-1:2),LowerIdent(1:2-1:9),EndOfFile(1:9-1:9),
 ~~~PARSE
 (malformed_expr (1:1-1:2) "expr_unexpected_token")

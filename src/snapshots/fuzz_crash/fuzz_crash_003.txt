@@ -4,15 +4,9 @@ type=file
 ~~~SOURCE
  = "te
 ~~~PROBLEMS
-Misplaced carriage return character
-
-MISSING HEADER
-
-The module header is missing.
-
+TOKENIZE: (1:5-1:7) UnclosedString:
  = "te
-Note: This is a parse error. Check your syntax.
-INVALID STATEMENT
+    ^^PARSER: missing_headerINVALID STATEMENT
 
 This statement is not allowed at the top level.
 

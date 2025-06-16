@@ -9,22 +9,11 @@ foo =
 
     "onmo %
 ~~~PROBLEMS
-Misplaced carriage return character
-
-ASCII control character found
-
-MISSING HEADER
-
-The module header is missing.
-
- f{o,
+TOKENIZE: (2:6-2:6) MismatchedBrace:
      ]
-
-foo =
-
+     ^TOKENIZE: (6:6-6:12) UnclosedString:
     "onmo %
-Note: This is a parse error. Check your syntax.
-INVALID STATEMENT
+     ^^^^^^PARSER: missing_headerINVALID STATEMENT
 
 This statement is not allowed at the top level.
 

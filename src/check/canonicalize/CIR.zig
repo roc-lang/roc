@@ -419,6 +419,7 @@ pub const Expr = union(enum) {
         region: Region,
     },
     lookup: Lookup,
+    // TODO introduce a new node for re-assign here, used by Var instead of lookup
     list: struct {
         elem_var: TypeVar,
         elems: Expr.Span,

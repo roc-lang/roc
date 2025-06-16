@@ -4,13 +4,7 @@ type=expr
 ~~~SOURCE
 1 ++ 2
 ~~~PROBLEMS
-UNKNOWN OPERATOR
-
-This looks like an operator, but it's not one I recognize!
-
-1 ++ 2
-Note: This is a parse error. Check your syntax.
-UNKNOWN OPERATOR
+PARSER: expr_unexpected_tokenUNKNOWN OPERATOR
 
 This looks like an operator, but it's not one I recognize!
 

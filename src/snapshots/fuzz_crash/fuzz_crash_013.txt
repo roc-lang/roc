@@ -4,13 +4,7 @@ type=file
 ~~~SOURCE
 0{
 ~~~PROBLEMS
-MISSING HEADER
-
-The module header is missing.
-
-0{
-Note: This is a parse error. Check your syntax.
-INVALID STATEMENT
+PARSER: missing_headerINVALID STATEMENT
 
 This statement is not allowed at the top level.
 

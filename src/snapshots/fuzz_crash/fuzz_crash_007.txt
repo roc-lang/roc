@@ -4,25 +4,7 @@ type=file
 ~~~SOURCE
 ff8.8.d
 ~~~PROBLEMS
-MISSING HEADER
-
-The module header is missing.
-
-ff8.8.d
-Note: This is a parse error. Check your syntax.
-UNKNOWN OPERATOR
-
-This looks like an operator, but it's not one I recognize!
-
-ff8.8.d
-Note: This is a parse error. Check your syntax.
-UNKNOWN OPERATOR
-
-This looks like an operator, but it's not one I recognize!
-
-ff8.8.d
-Note: This is a parse error. Check your syntax.
-INVALID STATEMENT
+PARSER: missing_headerPARSER: expr_unexpected_tokenPARSER: expr_unexpected_tokenINVALID STATEMENT
 
 This statement is not allowed at the top level.
 

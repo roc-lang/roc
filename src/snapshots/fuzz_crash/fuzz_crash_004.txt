@@ -4,13 +4,7 @@ type=file
 ~~~SOURCE
 F
 ~~~PROBLEMS
-MISSING HEADER
-
-The module header is missing.
-
-F
-Note: This is a parse error. Check your syntax.
-~~~TOKENS
+PARSER: missing_header~~~TOKENS
 UpperIdent(1:1-1:2),EndOfFile(1:2-1:2),
 ~~~PARSE
 (file (1:1-1:2)
