@@ -7,28 +7,13 @@ type=file
 0u22
 ~~~PROBLEMS
 PARSER: missing_headerPARSER: expr_unexpected_tokenPARSER: expr_unexpected_tokenPARSER: expr_unexpected_tokenINVALID STATEMENT
-
-This statement is not allowed at the top level.
-
-0b.0
-0bu22
-0u22
+The statement expr is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 INVALID STATEMENT
-
-This statement is not allowed at the top level.
-
-0b.0
-0bu22
-0u22
+The statement expr is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 INVALID STATEMENT
-
-This statement is not allowed at the top level.
-
-0b.0
-0bu22
-0u22
+The statement expr is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 ~~~TOKENS
 MalformedNumberNoDigits(1:1-1:3),NoSpaceDotInt(1:3-1:5),Newline(1:1-1:1),

@@ -9,7 +9,10 @@ import Decode exposing [Decode]
 decodeThings : List(List(U8)) -> List(a)
 	where a.Decode
 ~~~PROBLEMS
-NIL
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level import
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_anno
 ~~~TOKENS
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:15),CloseSquare(1:15-1:16),Newline(1:1-1:1),
 Newline(1:1-1:1),

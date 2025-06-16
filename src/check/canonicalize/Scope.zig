@@ -16,8 +16,6 @@ const std = @import("std");
 const base = @import("../../base.zig");
 const collections = @import("../../collections.zig");
 
-const Alias = @import("./Alias.zig");
-
 const Ident = base.Ident;
 const Region = base.Region;
 const Module = base.Module;
@@ -25,8 +23,6 @@ const Pattern = @import("CIR.zig").Pattern;
 const exitOnOom = collections.utils.exitOnOom;
 
 const Scope = @This();
-
-const TagMap = std.AutoHashMapUnmanaged(Ident.Idx, Alias.Idx);
 
 /// Identifiers/aliases that are in scope, and defined in the current module.
 levels: Levels,

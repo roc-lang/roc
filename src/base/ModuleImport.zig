@@ -159,10 +159,7 @@ pub const Store = struct {
 
         for (module.exposed_idents.items.items) |exposed_ident| {
             if (std.meta.eql(exposed_ident, ident_idx)) {
-                // _ = problems.append(gpa, Problem.Canonicalize.make(.{ .DuplicateExposes = .{
-                //     .first_exposes = exposed_ident,
-                //     .duplicate_exposes = ident_idx,
-                // } }));
+                // TODO push a problem for duplicate exposed ident
                 return;
             }
         }

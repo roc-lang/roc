@@ -7,7 +7,6 @@ const base = @import("../../base.zig");
 const types = @import("../../types.zig");
 const collections = @import("../../collections.zig");
 const reporting = @import("../../reporting.zig");
-const Alias = @import("./Alias.zig");
 const sexpr = @import("../../base/sexpr.zig");
 const exitOnOom = collections.utils.exitOnOom;
 const Scratch = base.Scratch;
@@ -112,20 +111,13 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
     return switch (diagnostic) {
         .not_implemented => |data| blk: {
             const feature_text = self.env.strings.get(data.feature);
-            break :blk Diagnostic.buildNotImplementedReport(
-                allocator,
-                feature_text,
-                self.env.source.items,
-                data.region,
-            );
+            break :blk Diagnostic.buildNotImplementedReport(allocator, feature_text);
         },
         .invalid_num_literal => |data| blk: {
             const literal_text = self.env.strings.get(data.literal);
             break :blk Diagnostic.buildInvalidNumLiteralReport(
                 allocator,
                 literal_text,
-                self.env.source.items,
-                data.region,
             );
         },
         .ident_already_in_scope => |data| blk: {
@@ -133,8 +125,6 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
             break :blk Diagnostic.buildIdentAlreadyInScopeReport(
                 allocator,
                 ident_name,
-                self.env.source.items,
-                data.region,
             );
         },
         .ident_not_in_scope => |data| blk: {
@@ -142,45 +132,21 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
             break :blk Diagnostic.buildIdentNotInScopeReport(
                 allocator,
                 ident_name,
-                self.env.source.items,
-                data.region,
             );
         },
-        .invalid_top_level_statement => |data| Diagnostic.buildInvalidTopLevelStatementReport(
-            allocator,
-            self.env.source.items,
-            data.region,
-        ),
-        .expr_not_canonicalized => |data| Diagnostic.buildExprNotCanonicalizedReport(
-            allocator,
-            self.env.source.items,
-            data.region,
-        ),
-        .invalid_string_interpolation => |data| Diagnostic.buildInvalidStringInterpolationReport(
-            allocator,
-            self.env.source.items,
-            data.region,
-        ),
-        .pattern_arg_invalid => |data| Diagnostic.buildPatternArgInvalidReport(
-            allocator,
-            self.env.source.items,
-            data.region,
-        ),
-        .pattern_not_canonicalized => |data| Diagnostic.buildPatternNotCanonicalizedReport(
-            allocator,
-            self.env.source.items,
-            data.region,
-        ),
-        .can_lambda_not_implemented => |data| Diagnostic.buildCanLambdaNotImplementedReport(
-            allocator,
-            self.env.source.items,
-            data.region,
-        ),
-        .lambda_body_not_canonicalized => |data| Diagnostic.buildLambdaBodyNotCanonicalizedReport(
-            allocator,
-            self.env.source.items,
-            data.region,
-        ),
+        .invalid_top_level_statement => |data| blk: {
+            const stmt_name = self.env.strings.get(data.stmt);
+            break :blk Diagnostic.buildInvalidTopLevelStatementReport(
+                allocator,
+                stmt_name,
+            );
+        },
+        .expr_not_canonicalized => Diagnostic.buildExprNotCanonicalizedReport(allocator),
+        .invalid_string_interpolation => Diagnostic.buildInvalidStringInterpolationReport(allocator),
+        .pattern_arg_invalid => Diagnostic.buildPatternArgInvalidReport(allocator),
+        .pattern_not_canonicalized => Diagnostic.buildPatternNotCanonicalizedReport(allocator),
+        .can_lambda_not_implemented => Diagnostic.buildCanLambdaNotImplementedReport(allocator),
+        .lambda_body_not_canonicalized => Diagnostic.buildLambdaBodyNotCanonicalizedReport(allocator),
     };
 }
 

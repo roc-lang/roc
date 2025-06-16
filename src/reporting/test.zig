@@ -58,9 +58,9 @@ test "SYNTAX_PROBLEM report along with all four render types" {
 
     const expected =
         \\SYNTAX PROBLEM
-        \\
         \\Using more than one + like this requires parentheses, to clarify how things should be grouped.
         \\example.roc:1-10:1: example.roc
+        \\
     ;
 
     try expectMultilineEqual(expected, buffer.items);

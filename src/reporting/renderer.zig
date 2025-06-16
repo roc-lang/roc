@@ -56,8 +56,9 @@ pub fn renderReportToTerminal(report: *const Report, writer: anytype, palette: C
 /// Render a report to plain text.
 pub fn renderReportToPlainText(report: *const Report, writer: anytype) !void {
     try writer.writeAll(report.title);
-    try writer.writeAll("\n\n");
+    try writer.writeAll("\n");
     try renderDocumentToPlainText(&report.document, writer);
+    try writer.writeAll("\n");
 }
 
 /// Render a report to HTML.

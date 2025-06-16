@@ -5,10 +5,7 @@ type=expr
 foo
 ~~~PROBLEMS
 UNDEFINED VARIABLE
-
 Nothing is named `foo` in this scope.
-
-foo
 Is there an import or exposing missing up-top?
 ~~~TOKENS
 LowerIdent(1:1-1:4),EndOfFile(1:4-1:4),

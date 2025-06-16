@@ -15,40 +15,12 @@ main! = |_| {
 	Stdout.line!("Hello, world!")
 }
 ~~~PROBLEMS
-INVALID LAMBDA
-
-The body of this lambda expression is not valid.
-
-# Hello world!
-
-# Multiline comments?
-app [main!] { pf: platform "../basic-cli/platform.roc" }
-
-import pf.Stdout
-
-main! = |_| {
-	world = "World"
-	# Hello
-	Stdout.line!("Hello, world!")
-}
-The lambda body must be a valid expression.
 NOT IMPLEMENTED
-
+This feature is not yet implemented: top-level import
+INVALID LAMBDA
+The body of this lambda expression is not valid.
+NOT IMPLEMENTED
 Lambda expressions are not yet fully implemented.
-
-# Hello world!
-
-# Multiline comments?
-app [main!] { pf: platform "../basic-cli/platform.roc" }
-
-import pf.Stdout
-
-main! = |_| {
-	world = "World"
-	# Hello
-	Stdout.line!("Hello, world!")
-}
-Lambda expressions will be supported in a future version of Roc.
 ~~~TOKENS
 Newline(1:2-1:15),
 Newline(1:1-1:1),

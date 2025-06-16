@@ -113,8 +113,6 @@ pub const Expr = union(enum) {
         branches: WhenBranch.NonEmptyRange,
     },
 
-    // compiler_bug: Problem.Compiler,
-
     /// todo
     pub const List = collections.SafeList(@This());
     /// todo
@@ -209,7 +207,6 @@ pub const Pattern = union(enum) {
         },
     },
     underscore,
-    // compiler_bug: Problem.Compiler,
     /// todo
     pub const List = collections.SafeList(@This());
     /// todo

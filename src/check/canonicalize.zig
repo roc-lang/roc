@@ -5,7 +5,6 @@ const collections = @import("../collections.zig");
 const types = @import("../types/types.zig");
 
 const Scope = @import("./canonicalize/Scope.zig");
-const Alias = @import("./canonicalize/Alias.zig");
 
 const AST = parse.AST;
 
@@ -90,53 +89,72 @@ pub fn canonicalize_file(
     for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
         const stmt = self.parse_ir.store.getStatement(stmt_id);
         switch (stmt) {
-            .import => |import| {
-                _ = import;
-                // TODO
-                // self.bringImportIntoScope(&import);
+            .import => |_| {
+                const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "top-level import");
+                self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                    .feature = feature,
+                    .region = Region.zero(),
+                } });
             },
             .decl => |decl| {
                 const def_idx = self.canonicalize_decl(decl);
                 self.can_ir.store.addScratchDef(def_idx);
             },
-            .@"var" => |v| {
+            .@"var" => {
                 // Not valid at top-level
+                const string_idx = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "var");
                 self.can_ir.pushDiagnostic(CIR.Diagnostic{ .invalid_top_level_statement = .{
-                    .region = self.tokenizedRegionToRegion(v.region),
+                    .stmt = string_idx,
                 } });
             },
-            .expr => |expr| {
+            .expr => {
                 // Not valid at top-level
+                const string_idx = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "expr");
                 self.can_ir.pushDiagnostic(CIR.Diagnostic{ .invalid_top_level_statement = .{
-                    .region = self.tokenizedRegionToRegion(expr.region),
+                    .stmt = string_idx,
                 } });
             },
-            .crash => |crash| {
+            .crash => {
                 // Not valid at top-level
+                const string_idx = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "crash");
                 self.can_ir.pushDiagnostic(CIR.Diagnostic{ .invalid_top_level_statement = .{
-                    .region = self.tokenizedRegionToRegion(crash.region),
+                    .stmt = string_idx,
                 } });
             },
-            .expect => |_| {
-                // self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
-            },
-            .@"for" => |f| {
-                // Not valid at top-level
-                self.can_ir.pushDiagnostic(CIR.Diagnostic{ .invalid_top_level_statement = .{
-                    .region = self.tokenizedRegionToRegion(f.region),
+            .expect => {
+                const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "top-level expect");
+                self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                    .feature = feature,
+                    .region = Region.zero(),
                 } });
             },
-            .@"return" => |return_stmt| {
+            .@"for" => {
                 // Not valid at top-level
+                const string_idx = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "for");
                 self.can_ir.pushDiagnostic(CIR.Diagnostic{ .invalid_top_level_statement = .{
-                    .region = self.tokenizedRegionToRegion(return_stmt.region),
+                    .stmt = string_idx,
+                } });
+            },
+            .@"return" => {
+                // Not valid at top-level
+                const string_idx = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "return");
+                self.can_ir.pushDiagnostic(CIR.Diagnostic{ .invalid_top_level_statement = .{
+                    .stmt = string_idx,
                 } });
             },
             .type_decl => |_| {
-                // self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
+                const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "top-level type_decl");
+                self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                    .feature = feature,
+                    .region = Region.zero(),
+                } });
             },
             .type_anno => |_| {
-                // self.can_ir.env.pushProblem(Problem.Compiler.can(.not_implemented));
+                const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "top-level type_anno");
+                self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                    .feature = feature,
+                    .region = Region.zero(),
+                } });
             },
             .malformed => |malformed| {
                 // We won't touch this since it's already a parse error.

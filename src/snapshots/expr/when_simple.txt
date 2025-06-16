@@ -7,12 +7,7 @@ when x is
     Err(msg) -> msg
 ~~~PROBLEMS
 UNDEFINED VARIABLE
-
 Nothing is named `when` in this scope.
-
-when x is
-    Ok(value) -> value
-    Err(msg) -> msg
 Is there an import or exposing missing up-top?
 ~~~TOKENS
 LowerIdent(1:1-1:5),LowerIdent(1:6-1:7),LowerIdent(1:8-1:10),Newline(1:1-1:1),

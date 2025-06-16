@@ -1007,7 +1007,7 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) CIR.Diagnostic.I
         },
         .invalid_top_level_statement => |r| {
             node.tag = .diag_invalid_top_level_statement;
-            node.region = r.region;
+            node.data_1 = @intFromEnum(r.stmt);
         },
         .expr_not_canonicalized => |r| {
             node.tag = .diag_expr_not_canonicalized;
@@ -1065,12 +1065,13 @@ pub fn addMalformed(store: *NodeStore, comptime t: type, reason: CIR.Diagnostic)
         .data_1 = @intFromEnum(diagnostic_idx),
         .data_2 = 0,
         .data_3 = 0,
+        // TODO add a toRegion() helper on the Diagnostic type
         .region = switch (reason) {
             .not_implemented => |r| r.region,
             .invalid_num_literal => |r| r.region,
             .ident_already_in_scope => |r| r.region,
             .ident_not_in_scope => |r| r.region,
-            .invalid_top_level_statement => |r| r.region,
+            .invalid_top_level_statement => Region.zero(),
             .expr_not_canonicalized => |r| r.region,
             .invalid_string_interpolation => |r| r.region,
             .pattern_arg_invalid => |r| r.region,
@@ -1111,7 +1112,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = node.region,
         } },
         .diag_invalid_top_level_statement => return CIR.Diagnostic{ .invalid_top_level_statement = .{
-            .region = node.region,
+            .stmt = @enumFromInt(node.data_1),
         } },
         .diag_expr_not_canonicalized => return CIR.Diagnostic{ .expr_not_canonicalized = .{
             .region = node.region,
