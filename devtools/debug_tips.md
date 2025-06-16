@@ -8,6 +8,10 @@
 - For Roc code; minimize the code that produces the issue.
 - If you plan to look at the data used and produced inside the compiler, try to reproduce your issue with a very simple platform like our [minimal Rust platform](https://github.com/roc-lang/roc/tree/main/examples/platform-switching/rust-platform) instead of for example basic-cli.
 
+## Debugging the compiler
+
+If you want to debug the rust compiler instead of a roc program, you need to comment out [this line](https://github.com/roc-lang/roc/blob/bba2103882a8124f3887da6adaaa44cf2b728c3e/Cargo.toml#L240) to be able to see variable contents with lldb or gdb.
+
 ## Segmentation Faults
 
 - In general we recommend using linux to investigate, it has better tools for this. 
