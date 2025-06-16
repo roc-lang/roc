@@ -151,11 +151,13 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
 
     var parse_ast = parse.parse(&module_env, contents);
     defer parse_ast.deinit(gpa);
-    // if (parse_ast.errors.len > 0) {
-    //     parse_ast.toSExprStr(&module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
-    //     try printParseErrors(gpa, contents, parse_ast);
-    //     return error.ParsingFailed;
-    // }
+
+    // If there are any parsing problems, print them to stderr
+    if (parse_ast.parse_diagnostics.items.len > 0) {
+        parse_ast.toSExprStr(&module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
+        try printParseErrors(gpa, contents, parse_ast);
+        return error.ParsingFailed;
+    }
 
     const output_file = try base_dir.createFile(path, .{});
     defer output_file.close();
@@ -176,7 +178,7 @@ fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST) 
 
     const stderr = std.io.getStdErr().writer();
     try stderr.print("Errors:\n", .{});
-    for (parse_ast.errors) |err| {
+    for (parse_ast.parse_diagnostics.items) |err| {
         const token_offset = parse_ast.tokens.tokens.items(.offset)[err.region.start];
         const line = binarySearch(line_offsets.items, token_offset) orelse unreachable;
         const column = token_offset - line_offsets.items[line];
