@@ -338,16 +338,13 @@ fn canonicalize_decl(
         }
     };
 
-    // Create a new type variable for this definition
-    const expr_var = self.can_ir.env.types_store.freshAt(@intFromEnum(expr_idx)) catch |err| exitOnOom(err);
-
     // Create the def entry
     return self.can_ir.store.addDef(.{
         .pattern = pattern_idx,
         .pattern_region = self.tokenizedRegionToRegion(self.parse_ir.store.getPattern(decl.pattern).to_tokenized_region()),
         .expr = expr_idx,
         .expr_region = self.tokenizedRegionToRegion(self.parse_ir.store.getExpr(decl.body).to_tokenized_region()),
-        .expr_var = expr_var,
+        .expr_var = @enumFromInt(@intFromEnum(expr_idx)),
         .annotation = null,
         .kind = .let,
     });
@@ -849,7 +846,7 @@ fn canonicalize_pattern(
                         .bytes = @bitCast(value),
                         .kind = .i128,
                     },
-                    .bound = types.Num.Precision.fromValue(value),
+                    .bound = types.Num.Int.Precision.fromValue(value),
                     .region = region,
                 },
             };

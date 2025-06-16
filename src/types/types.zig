@@ -306,21 +306,6 @@ pub const Num = union(enum) {
         };
     };
 
-    /// the precision of a num
-    pub const Precision = struct {
-        sign: Sign,
-        min_precision: Int.Precision,
-
-        pub const Sign = enum { positive, negative };
-
-        /// Get the lowest precision needed to hold the provided num
-        pub fn fromValue(value: i128) Precision {
-            var sign: Sign = .negative;
-            if (value >= 0) sign = .positive;
-            return .{ .sign = sign, .min_precision = Int.Precision.fromValue(value) };
-        }
-    };
-
     /// a frac f32
     pub const frac_f32: Num = Num{ .num_compact = Compact{ .frac = .f32 } };
 

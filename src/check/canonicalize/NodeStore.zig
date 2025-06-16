@@ -349,7 +349,7 @@ pub fn getPattern(store: *NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pattern {
                 .region = node.region,
                 .literal = @enumFromInt(node.data_1),
                 .num_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
-                .bound = types.Num.Precision.fromValue(0), // TODO  extra_data
+                .bound = types.Num.Int.Precision.fromValue(0), // TODO  extra_data
                 .value = CIR.IntValue.placeholder(),
             },
         },

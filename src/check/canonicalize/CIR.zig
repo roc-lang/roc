@@ -365,7 +365,7 @@ pub const Expr = union(enum) {
         num_var: TypeVar,
         literal: StringLiteral.Idx,
         value: IntValue,
-        bound: types.Num.Compact,
+        bound: types.Num.Int.Precision,
         region: Region,
     },
     int: struct {
@@ -401,7 +401,7 @@ pub const Expr = union(enum) {
         num_var: TypeVar,
         precision_var: TypeVar,
         value: u32,
-        bound: types.Num.Compact, // TODO use the correct type here
+        bound: types.Num.Int.Precision,
         region: Region,
     },
     lookup: Lookup,
@@ -1275,7 +1275,7 @@ pub const Pattern = union(enum) {
         num_var: TypeVar,
         literal: StringLiteral.Idx,
         value: IntValue,
-        bound: types.Num.Precision,
+        bound: types.Num.Int.Precision,
         region: Region,
     },
     int_literal: struct {
@@ -1369,8 +1369,7 @@ pub const Pattern = union(enum) {
                 node.appendRegionInfo(gpa, ir.calcRegionInfo(p.region));
                 node.appendString(gpa, "literal"); // TODO: use l.literal
                 node.appendString(gpa, "value=<int_value>");
-                node.appendString(gpa, @tagName(p.bound.sign));
-                node.appendString(gpa, @tagName(p.bound.min_precision));
+                node.appendString(gpa, @tagName(p.bound));
                 return node;
             },
             .int_literal => |p| {
