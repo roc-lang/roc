@@ -42,7 +42,9 @@ pub fn init(tokens: TokenizedBuffer) Parser {
 /// Deinit the parser.  The buffer of tokens and the store are still owned by the caller.
 pub fn deinit(parser: *Parser) void {
     parser.scratch_nodes.deinit(parser.gpa);
-    parser.diagnostics.deinit(parser.gpa);
+
+    // diagnostics will be kept and passed to the following compiler stage
+    // to be deinitialized by the caller when no longer required
 }
 
 const TestError = error{TestError};

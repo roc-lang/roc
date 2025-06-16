@@ -7,7 +7,6 @@
 
 const std = @import("std");
 const collections = @import("../collections.zig");
-const problem = @import("../problem.zig");
 const Region = @import("Region.zig");
 const ModuleImport = @import("ModuleImport.zig");
 

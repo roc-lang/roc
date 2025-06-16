@@ -5,9 +5,8 @@ const std = @import("std");
 const testing = std.testing;
 const base = @import("../../base.zig");
 const types = @import("../../types.zig");
-const problem = @import("../../problem.zig");
 const collections = @import("../../collections.zig");
-const Alias = @import("./Alias.zig");
+const reporting = @import("../../reporting.zig");
 const sexpr = @import("../../base/sexpr.zig");
 const exitOnOom = collections.utils.exitOnOom;
 const Scratch = base.Scratch;
@@ -19,9 +18,10 @@ const ModuleEnv = base.ModuleEnv;
 const StringLiteral = base.StringLiteral;
 const CalledVia = base.CalledVia;
 const TypeVar = types.Var;
-const Problem = problem.Problem;
 const Node = @import("Node.zig");
 const NodeStore = @import("NodeStore.zig");
+
+pub const Diagnostic = @import("Diagnostic.zig").Diagnostic;
 
 const CIR = @This();
 
@@ -30,7 +30,6 @@ store: NodeStore,
 ingested_files: IngestedFile.List,
 imports: ModuleImport.Store,
 top_level_defs: Def.Span,
-diagnostics: std.ArrayListUnmanaged(CIR.Diagnostic),
 
 /// Initialize the IR for a module's canonicalization info.
 ///
@@ -45,22 +44,16 @@ diagnostics: std.ArrayListUnmanaged(CIR.Diagnostic),
 ///
 /// Takes ownership of the module_env
 pub fn init(env: ModuleEnv) CIR {
-    // TODO: Figure out what capacity should be
-    return CIR.initCapacity(env, 1000);
-}
-
-/// Initialize the IR for a module's canonicalization info with a specified capacity.
-/// For more information refer to documentation on [init] as well
-pub fn initCapacity(env: ModuleEnv, capacity: usize) CIR {
     var ident_store = env.idents;
+
+    const NODE_STORE_CAPACITY = 10_000;
 
     return CIR{
         .env = env,
-        .store = NodeStore.initCapacity(env.gpa, capacity),
+        .store = NodeStore.initCapacity(env.gpa, NODE_STORE_CAPACITY),
         .ingested_files = .{},
         .imports = ModuleImport.Store.init(&.{}, &ident_store, env.gpa),
         .top_level_defs = .{ .span = .{ .start = 0, .len = 0 } },
-        .diagnostics = .{},
     };
 }
 
@@ -69,48 +62,92 @@ pub fn deinit(self: *CIR) void {
     self.store.deinit();
     self.ingested_files.deinit(self.env.gpa);
     self.imports.deinit(self.env.gpa);
-    self.diagnostics.deinit(self.env.gpa);
 }
 
-/// Diagnostics related to canonicalization
-pub const Diagnostic = struct {
-    tag: Tag,
-    region: Region,
-
-    /// different types of diagnostic errors
-    pub const Tag = enum {
-        not_implemented,
-        invalid_num_literal,
-        ident_already_in_scope,
-        ident_not_in_scope,
-        invalid_top_level_statement,
-        expr_not_canonicalized,
-        invalid_string_interpolation,
-        pattern_arg_invalid,
-        pattern_not_canonicalized,
-        can_lambda_not_implemented,
-        lambda_body_not_canonicalized,
-    };
-};
-
-/// Push a diagnostic error during canonicalization
+/// Records a diagnostic error during canonicalization without blocking compilation.
 ///
-/// Do not use for compiler errors, but invalid input where you cannot insert a malformed node
-pub fn pushDiagnostic(self: *CIR, tag: CIR.Diagnostic.Tag, region: base.Region) void {
-    self.diagnostics.append(self.env.gpa, .{
-        .tag = tag,
-        .region = region,
-    }) catch |err| exitOnOom(err);
+/// This creates a diagnostic node that stores error information for later reporting.
+/// The diagnostic is added to the diagnostic collection but does not create any
+/// malformed nodes in the IR.
+///
+/// Use this when you want to record an error but don't need to replace a node
+/// with a runtime error.
+pub fn pushDiagnostic(self: *CIR, reason: CIR.Diagnostic) void {
+    _ = self.store.addDiagnostic(reason);
 }
 
-/// Returns a malformed token of the requested type, and pushes a diagnostic error
-pub fn pushMalformed(self: *CIR, comptime t: type, tag: CIR.Diagnostic.Tag, region: base.Region) t {
-    self.diagnostics.append(self.env.gpa, .{
-        .tag = tag,
-        .region = region,
-    }) catch |err| exitOnOom(err);
+/// Creates a malformed node that represents a runtime error in the IR. Returns and index of the requested type pointing to a malformed node.
+///
+/// This follows the "Inform Don't Block" principle: it allows compilation to continue
+/// by creating a malformed node that will become a runtime_error in the CIR. If the
+/// program execution reaches this node, it will crash with the associated diagnostic.
+///
+/// This function:
+/// 1. Creates a diagnostic node to store the error details
+/// 2. Creates a malformed node that references the diagnostic
+/// 3. Returns an index of the requested type pointing to the malformed node
+///
+/// Use this when you need to replace a node (expression, pattern, etc.) with
+/// something that represents a compilation error but allows the compiler to continue.
+pub fn pushMalformed(self: *CIR, comptime t: type, reason: CIR.Diagnostic) t {
+    return self.store.addMalformed(t, reason);
+}
 
-    return self.store.addMalformed(t, tag, region);
+/// Retrieve all diagnostics collected during canonicalization.
+pub fn getDiagnostics(self: *CIR) []CIR.Diagnostic {
+    const all = self.store.diagnosticSpanFrom(0);
+
+    var list = std.ArrayList(CIR.Diagnostic).init(self.env.gpa);
+
+    for (self.store.sliceDiagnostics(all)) |idx| {
+        list.append(self.store.getDiagnostic(idx)) catch |err| exitOnOom(err);
+    }
+
+    return list.toOwnedSlice() catch |err| exitOnOom(err);
+}
+
+/// Convert a canonicalization diagnostic to a Report for rendering
+pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem.Allocator) !reporting.Report {
+    return switch (diagnostic) {
+        .not_implemented => |data| blk: {
+            const feature_text = self.env.strings.get(data.feature);
+            break :blk Diagnostic.buildNotImplementedReport(allocator, feature_text);
+        },
+        .invalid_num_literal => |data| blk: {
+            const literal_text = self.env.strings.get(data.literal);
+            break :blk Diagnostic.buildInvalidNumLiteralReport(
+                allocator,
+                literal_text,
+            );
+        },
+        .ident_already_in_scope => |data| blk: {
+            const ident_name = self.env.idents.getText(data.ident);
+            break :blk Diagnostic.buildIdentAlreadyInScopeReport(
+                allocator,
+                ident_name,
+            );
+        },
+        .ident_not_in_scope => |data| blk: {
+            const ident_name = self.env.idents.getText(data.ident);
+            break :blk Diagnostic.buildIdentNotInScopeReport(
+                allocator,
+                ident_name,
+            );
+        },
+        .invalid_top_level_statement => |data| blk: {
+            const stmt_name = self.env.strings.get(data.stmt);
+            break :blk Diagnostic.buildInvalidTopLevelStatementReport(
+                allocator,
+                stmt_name,
+            );
+        },
+        .expr_not_canonicalized => Diagnostic.buildExprNotCanonicalizedReport(allocator),
+        .invalid_string_interpolation => Diagnostic.buildInvalidStringInterpolationReport(allocator),
+        .pattern_arg_invalid => Diagnostic.buildPatternArgInvalidReport(allocator),
+        .pattern_not_canonicalized => Diagnostic.buildPatternNotCanonicalizedReport(allocator),
+        .can_lambda_not_implemented => Diagnostic.buildCanLambdaNotImplementedReport(allocator),
+        .lambda_body_not_canonicalized => Diagnostic.buildLambdaBodyNotCanonicalizedReport(allocator),
+    };
 }
 
 // Helper to add type index info
@@ -348,6 +385,7 @@ pub const Expr = union(enum) {
         region: Region,
     },
     lookup: Lookup,
+    // TODO introduce a new node for re-assign here, used by Var instead of lookup
     list: struct {
         elem_var: TypeVar,
         elems: Expr.Span,
@@ -404,7 +442,7 @@ pub const Expr = union(enum) {
     binop: Binop,
     /// Compiles, but will crash if reached
     runtime_error: struct {
-        tag: Diagnostic.Tag,
+        diagnostic: Diagnostic.Idx,
         region: Region,
     },
 
@@ -873,7 +911,9 @@ pub const Expr = union(enum) {
                 var buf = std.ArrayList(u8).init(gpa);
                 defer buf.deinit();
 
-                buf.writer().writeAll(@tagName(e.tag)) catch |err| exitOnOom(err);
+                const diagnostic = ir.store.getDiagnostic(e.diagnostic);
+
+                buf.writer().writeAll(@tagName(diagnostic)) catch |err| exitOnOom(err);
 
                 runtime_err_node.appendString(gpa, buf.items);
 

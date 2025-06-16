@@ -15,6 +15,7 @@ const base = @import("../../base.zig");
 const sexpr = @import("../../base/sexpr.zig");
 const tokenize = @import("tokenize.zig");
 const collections = @import("../../collections.zig");
+const reporting = @import("../../reporting.zig");
 
 const Node = @import("Node.zig");
 const NodeStore = @import("NodeStore.zig");
@@ -31,8 +32,9 @@ const AST = @This();
 source: []const u8,
 tokens: TokenizedBuffer,
 store: NodeStore,
-errors: []const Diagnostic,
 root_node_idx: u32 = 0,
+tokenize_diagnostics: std.ArrayListUnmanaged(tokenize.Diagnostic),
+parse_diagnostics: std.ArrayListUnmanaged(AST.Diagnostic),
 
 /// Calculate whether this region is - or will be - multiline
 pub fn regionIsMultiline(self: *AST, region: TokenizedRegion) bool {
@@ -71,10 +73,11 @@ pub fn calcRegionInfo(self: *AST, region: TokenizedRegion, line_starts: []const 
     return info;
 }
 
-pub fn deinit(self: *AST) void {
+pub fn deinit(self: *AST, gpa: std.mem.Allocator) void {
     defer self.tokens.deinit();
     defer self.store.deinit();
-    self.store.gpa.free(self.errors);
+    defer self.tokenize_diagnostics.deinit(gpa);
+    defer self.parse_diagnostics.deinit(gpa);
 }
 
 /// Diagnostics related to parsing

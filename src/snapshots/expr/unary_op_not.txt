@@ -5,7 +5,6 @@ type=expr
 !isValid
 ~~~PROBLEMS
 PARSER: expr_unexpected_token
-COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
 ~~~TOKENS
 OpBang(1:1-1:2),LowerIdent(1:2-1:9),EndOfFile(1:9-1:9),
 ~~~PARSE

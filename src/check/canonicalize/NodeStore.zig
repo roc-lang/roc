@@ -9,6 +9,7 @@ const CIR = @import("CIR.zig");
 
 const DataSpan = base.DataSpan;
 const Region = base.Region;
+const Diagnostic = @import("Diagnostic.zig");
 
 const exitOnOom = collections.exitOnOom;
 
@@ -28,6 +29,7 @@ scratch_type_annos: base.Scratch(CIR.TypeAnno.Idx),
 scratch_anno_record_fields: base.Scratch(CIR.AnnoRecordField.Idx),
 scratch_exposed_items: base.Scratch(CIR.ExposedItem.Idx),
 scratch_defs: base.Scratch(CIR.Def.Idx),
+scratch_diagnostics: base.Scratch(CIR.Diagnostic.Idx),
 
 /// Initializes the NodeStore
 pub fn init(gpa: std.mem.Allocator) NodeStore {
@@ -53,6 +55,7 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) NodeStore {
         .scratch_exposed_items = base.Scratch(CIR.ExposedItem.Idx).init(gpa),
         .scratch_defs = base.Scratch(CIR.Def.Idx).init(gpa),
         .scratch_where_clauses = base.Scratch(CIR.WhereClause.Idx).init(gpa),
+        .scratch_diagnostics = base.Scratch(CIR.Diagnostic.Idx).init(gpa),
     };
 }
 
@@ -71,6 +74,7 @@ pub fn deinit(store: *NodeStore) void {
     store.scratch_exposed_items.items.deinit(store.gpa);
     store.scratch_defs.items.deinit(store.gpa);
     store.scratch_where_clauses.items.deinit(store.gpa);
+    store.scratch_diagnostics.items.deinit(store.gpa);
 }
 
 /// Retrieves a statement node from the store.
@@ -260,16 +264,21 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         => {
             std.log.debug("TODO: implement getExpr for node type {?}", .{node.tag});
             return CIR.Expr{ .runtime_error = .{
-                .tag = CIR.Diagnostic.Tag.not_implemented,
+                .diagnostic = @enumFromInt(0),
                 .region = node.region,
             } };
         },
         .malformed => {
             return CIR.Expr{ .runtime_error = .{
-                .tag = @enumFromInt(node.data_1),
+                .diagnostic = @enumFromInt(node.data_1),
                 .region = node.region,
             } };
         },
+
+        // NOTE: Diagnostic tags should NEVER appear in getExpr().
+        // If compilation errors occur, use pushMalformed() to create .malformed nodes
+        // that reference diagnostic indices. The .malformed case above handles
+        // converting these to runtime_error nodes in the CIR.
         else => {
             @panic("unreachable, node is not an expression tag");
         },
@@ -551,7 +560,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
         },
         .runtime_error => |e| {
             node.region = e.region;
-            node.data_1 = @intFromEnum(e.tag);
+            node.data_1 = @intFromEnum(e.diagnostic);
             node.tag = .malformed;
         },
         .num => |e| {
@@ -952,14 +961,193 @@ pub fn sliceIfBranch(store: *const NodeStore, span: CIR.IfBranch.Span) []CIR.IfB
     return store.sliceFromSpan(CIR.IfBranch.Idx, span.span);
 }
 
-/// Any node type can be malformed, but must come with a diagnostic reason
-pub fn addMalformed(store: *NodeStore, comptime t: type, reason: CIR.Diagnostic.Tag, region: base.Region) t {
-    const nid = store.nodes.append(store.gpa, .{
+/// Returns a slice of diagnostics from the store.
+pub fn sliceDiagnostics(store: *const NodeStore, span: CIR.Diagnostic.Span) []CIR.Diagnostic.Idx {
+    return store.sliceFromSpan(CIR.Diagnostic.Idx, span.span);
+}
+
+/// Creates a diagnostic node that stores error information.
+///
+/// Diagnostics are informational nodes that contain details about compilation errors.
+/// They are stored separately from the main IR and are referenced by malformed nodes.
+///
+/// Note: This function creates diagnostic nodes for storage only.
+/// To create a malformed node that represents a runtime error, use `addMalformed()` instead.
+///
+/// Returns: Index to the created diagnostic node
+pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) CIR.Diagnostic.Idx {
+    var node = Node{
+        .data_1 = 0,
+        .data_2 = 0,
+        .data_3 = 0,
+        .region = base.Region.zero(),
+        .tag = @enumFromInt(0),
+    };
+
+    switch (reason) {
+        .not_implemented => |r| {
+            node.tag = .diag_not_implemented;
+            node.region = r.region;
+            node.data_1 = @intFromEnum(r.feature);
+        },
+        .invalid_num_literal => |r| {
+            node.tag = .diag_invalid_num_literal;
+            node.region = r.region;
+            node.data_1 = @intFromEnum(r.literal);
+        },
+        .ident_already_in_scope => |r| {
+            node.tag = .diag_ident_already_in_scope;
+            node.region = r.region;
+            node.data_1 = @bitCast(r.ident);
+        },
+        .ident_not_in_scope => |r| {
+            node.tag = .diag_ident_not_in_scope;
+            node.region = r.region;
+            node.data_1 = @bitCast(r.ident);
+        },
+        .invalid_top_level_statement => |r| {
+            node.tag = .diag_invalid_top_level_statement;
+            node.data_1 = @intFromEnum(r.stmt);
+        },
+        .expr_not_canonicalized => |r| {
+            node.tag = .diag_expr_not_canonicalized;
+            node.region = r.region;
+        },
+        .invalid_string_interpolation => |r| {
+            node.tag = .diag_invalid_string_interpolation;
+            node.region = r.region;
+        },
+        .pattern_arg_invalid => |r| {
+            node.tag = .diag_pattern_arg_invalid;
+            node.region = r.region;
+        },
+        .pattern_not_canonicalized => |r| {
+            node.tag = .diag_pattern_not_canonicalized;
+            node.region = r.region;
+        },
+        .can_lambda_not_implemented => |r| {
+            node.tag = .diag_can_lambda_not_implemented;
+            node.region = r.region;
+        },
+        .lambda_body_not_canonicalized => |r| {
+            node.tag = .diag_lambda_body_not_canonicalized;
+            node.region = r.region;
+        },
+    }
+
+    const nid = @intFromEnum(store.nodes.append(store.gpa, node));
+
+    // append to our scratch so we can get a span later of all our diagnostics
+    store.scratch_diagnostics.append(store.gpa, @enumFromInt(nid));
+
+    return @enumFromInt(nid);
+}
+
+/// Creates a malformed node that represents a runtime error in the IR.
+///
+/// Malformed nodes follow the "Inform Don't Block" principle: they allow compilation
+/// to continue while preserving error information. When encountered during execution,
+/// they will crash with the associated diagnostic.
+///
+/// This function:
+/// 1. Creates a diagnostic node to store the error details
+/// 2. Creates a malformed node (.malformed tag) that references the diagnostic
+/// 3. Returns an index of the requested type that points to the malformed node
+///
+/// The malformed node will generate a runtime_error in the CIR that properly
+/// references the diagnostic index.
+pub fn addMalformed(store: *NodeStore, comptime t: type, reason: CIR.Diagnostic) t {
+    // First create the diagnostic node
+    const diagnostic_idx = store.addDiagnostic(reason);
+
+    // Then create a malformed node that references the diagnostic
+    const malformed_node = Node{
+        .data_1 = @intFromEnum(diagnostic_idx),
+        .data_2 = 0,
+        .data_3 = 0,
+        // TODO add a toRegion() helper on the Diagnostic type
+        .region = switch (reason) {
+            .not_implemented => |r| r.region,
+            .invalid_num_literal => |r| r.region,
+            .ident_already_in_scope => |r| r.region,
+            .ident_not_in_scope => |r| r.region,
+            .invalid_top_level_statement => Region.zero(),
+            .expr_not_canonicalized => |r| r.region,
+            .invalid_string_interpolation => |r| r.region,
+            .pattern_arg_invalid => |r| r.region,
+            .pattern_not_canonicalized => |r| r.region,
+            .can_lambda_not_implemented => |r| r.region,
+            .lambda_body_not_canonicalized => |r| r.region,
+        },
         .tag = .malformed,
-        .data_1 = @intFromEnum(reason),
-        .data_2 = 0, // spare
-        .data_3 = 0, // spare
-        .region = region,
-    });
-    return @enumFromInt(@intFromEnum(nid));
+    };
+
+    const malformed_nid = @intFromEnum(store.nodes.append(store.gpa, malformed_node));
+    return @enumFromInt(malformed_nid);
+}
+
+/// Retrieves diagnostic information from a diagnostic node.
+///
+/// This function extracts the stored diagnostic data from nodes with .diag_* tags.
+/// It reconstructs the original CIR.Diagnostic from the node's stored data.
+pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CIR.Diagnostic {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(diagnostic));
+    const node = store.nodes.get(node_idx);
+
+    switch (node.tag) {
+        .diag_not_implemented => return CIR.Diagnostic{ .not_implemented = .{
+            .feature = @enumFromInt(node.data_1),
+            .region = node.region,
+        } },
+        .diag_invalid_num_literal => return CIR.Diagnostic{ .invalid_num_literal = .{
+            .literal = @enumFromInt(node.data_1),
+            .region = node.region,
+        } },
+        .diag_ident_already_in_scope => return CIR.Diagnostic{ .ident_already_in_scope = .{
+            .ident = @bitCast(node.data_1),
+            .region = node.region,
+        } },
+        .diag_ident_not_in_scope => return CIR.Diagnostic{ .ident_not_in_scope = .{
+            .ident = @bitCast(node.data_1),
+            .region = node.region,
+        } },
+        .diag_invalid_top_level_statement => return CIR.Diagnostic{ .invalid_top_level_statement = .{
+            .stmt = @enumFromInt(node.data_1),
+        } },
+        .diag_expr_not_canonicalized => return CIR.Diagnostic{ .expr_not_canonicalized = .{
+            .region = node.region,
+        } },
+        .diag_invalid_string_interpolation => return CIR.Diagnostic{ .invalid_string_interpolation = .{
+            .region = node.region,
+        } },
+        .diag_pattern_arg_invalid => return CIR.Diagnostic{ .pattern_arg_invalid = .{
+            .region = node.region,
+        } },
+        .diag_pattern_not_canonicalized => return CIR.Diagnostic{ .pattern_not_canonicalized = .{
+            .region = node.region,
+        } },
+        .diag_can_lambda_not_implemented => return CIR.Diagnostic{ .can_lambda_not_implemented = .{
+            .region = node.region,
+        } },
+        .diag_lambda_body_not_canonicalized => return CIR.Diagnostic{ .lambda_body_not_canonicalized = .{
+            .region = node.region,
+        } },
+        else => {
+            @panic("unreachable, node is not a diagnostic tag");
+        },
+    }
+}
+
+/// Computes the span of a diagnostic starting from a given index.
+pub fn diagnosticSpanFrom(store: *NodeStore, start: u32) CIR.Diagnostic.Span {
+    const end = store.scratch_diagnostics.top();
+    defer store.scratch_diagnostics.clearFrom(start);
+    var i = @as(usize, @intCast(start));
+    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
+    std.debug.assert(end >= i);
+    while (i < end) {
+        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_diagnostics.items.items[i])) catch |err| exitOnOom(err);
+        i += 1;
+    }
+    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
 }

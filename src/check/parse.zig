@@ -30,27 +30,22 @@ fn runParse(env: *base.ModuleEnv, source: []const u8, parserCall: *const fn (*Pa
     tokenizer.tokenize();
     const result = tokenizer.finishAndDeinit();
 
-    for (result.messages) |msg| {
-        _ = env.problems.append(env.gpa, .{ .tokenize = msg });
-    }
-
     var parser = Parser.init(result.tokens);
     defer parser.deinit();
 
     const idx = parserCall(&parser);
 
-    for (parser.diagnostics.items) |msg| {
-        _ = env.problems.append(env.gpa, .{ .parser = msg });
-    }
-
-    const errors = parser.diagnostics.toOwnedSlice(env.gpa) catch |err| exitOnOom(err);
+    const tokenize_diagnostics_slice = env.gpa.dupe(tokenize.Diagnostic, result.messages) catch |err| exitOnOom(err);
+    const tokenize_diagnostics = std.ArrayListUnmanaged(tokenize.Diagnostic).fromOwnedSlice(tokenize_diagnostics_slice);
+    const parse_diagnostics = parser.diagnostics;
 
     return .{
         .source = source,
         .tokens = result.tokens,
         .store = parser.store,
-        .errors = errors,
         .root_node_idx = idx,
+        .tokenize_diagnostics = tokenize_diagnostics,
+        .parse_diagnostics = parse_diagnostics,
     };
 }
 

@@ -210,43 +210,66 @@ expect {
 	blah == foo
 }
 ~~~PROBLEMS
-COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
-COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
-COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
-COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
-COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
-COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
-COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
-COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
-COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
-COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
-COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
-COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
-COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
-COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
-COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
-COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
-COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
-COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
-COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
-COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
-COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
-CANONICALIZE: lambda_body_not_canonicalized "if num 2 else 5
-
-..."
-CANONICALIZE: can_lambda_not_implemented "|num| if num 2 el..."
-CANONICALIZE: lambda_body_not_canonicalized "{
-	other = 1
-	if ..."
-CANONICALIZE: can_lambda_not_implemented "|num| {
-	other = ..."
-CANONICALIZE: lambda_body_not_canonicalized "match a {
-		Blue ..."
-CANONICALIZE: can_lambda_not_implemented "|
-	a, # After arg..."
-CANONICALIZE: lambda_body_not_canonicalized "{ # Yeah I can le..."
-CANONICALIZE: can_lambda_not_implemented "|_| { # Yeah I ca..."
-CANONICALIZE: expr_not_canonicalized "empty = {}"
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level import
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level import
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level import
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level import
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level import
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: canonicalize if_then_else expression
+NOT IMPLEMENTED
+Lambda expressions are not yet fully implemented.
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_anno
+NOT IMPLEMENTED
+This feature is not yet implemented: canonicalize block expression
+NOT IMPLEMENTED
+Lambda expressions are not yet fully implemented.
+NOT IMPLEMENTED
+This feature is not yet implemented: canonicalize match expression
+NOT IMPLEMENTED
+Lambda expressions are not yet fully implemented.
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level expect
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_anno
+NOT IMPLEMENTED
+This feature is not yet implemented: canonicalize block expression
+NOT IMPLEMENTED
+Lambda expressions are not yet fully implemented.
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_anno
+NOT IMPLEMENTED
+This feature is not yet implemented: canonicalize record expression
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_anno
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level expect
 ~~~TOKENS
 Newline(1:2-1:28),
 KwApp(2:1-2:4),OpenSquare(2:5-2:6),LowerIdent(2:6-2:11),CloseSquare(2:11-2:12),OpenCurly(2:13-2:14),LowerIdent(2:15-2:17),OpColon(2:17-2:18),KwPlatform(2:19-2:27),StringStart(2:28-2:29),StringPart(2:29-2:54),StringEnd(2:54-2:55),CloseCurly(2:56-2:57),Newline(1:1-1:1),
@@ -1050,6 +1073,6 @@ NO CHANGE
 			"let"
 			(pattern (199:1-199:6)
 				(assign (199:1-199:6) (ident "empty")))
-			(expr (199:9-199:11) (runtime_error (199:1-199:11) "expr_not_canonicalized"))
+			(expr (199:9-199:11) (runtime_error (1:1-1:1) "not_implemented"))
 			"#4")))
 ~~~END

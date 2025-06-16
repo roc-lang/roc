@@ -6,12 +6,10 @@
 
 const std = @import("std");
 const base = @import("../base.zig");
-const problem = @import("../problem.zig");
 const collections = @import("../collections.zig");
 
 const Ident = base.Ident;
 const Package = base.Package;
-const Problem = problem.Problem;
 const exitOnOom = collections.utils.exitOnOom;
 
 const Self = @This();
@@ -155,17 +153,13 @@ pub const Store = struct {
         module_idx: Idx,
         ident_idx: Ident.Idx,
         gpa: std.mem.Allocator,
-        problems: *collections.SafeList(problem.Problem),
     ) void {
         const module_index = @intFromEnum(module_idx);
         var module = self.imports.items.items[module_index];
 
         for (module.exposed_idents.items.items) |exposed_ident| {
             if (std.meta.eql(exposed_ident, ident_idx)) {
-                _ = problems.append(gpa, Problem.Canonicalize.make(.{ .DuplicateExposes = .{
-                    .first_exposes = exposed_ident,
-                    .duplicate_exposes = ident_idx,
-                } }));
+                // TODO push a problem for duplicate exposed ident
                 return;
             }
         }

@@ -6,9 +6,10 @@ type=file
 ~~~PROBLEMS
 TOKENIZE: (1:5-1:7) UnclosedString:
  = "te
-    ^^
-PARSER: missing_header
-CANONICALIZE: invalid_top_level_statement ""te"
+    ^^PARSER: missing_header
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 ~~~TOKENS
 OpAssign(1:2-1:3),StringStart(1:4-1:5),StringPart(1:5-1:7),EndOfFile(1:7-1:7),
 ~~~PARSE

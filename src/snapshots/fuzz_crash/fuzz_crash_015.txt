@@ -9,15 +9,21 @@ type=file
 ~~~PROBLEMS
 TOKENIZE: (2:3-2:3) LeadingZero:
 0_0
-  ^
-PARSER: missing_header
+  ^PARSER: missing_header
 PARSER: expr_unexpected_token
 PARSER: expr_no_space_dot_int
-CANONICALIZE: invalid_top_level_statement ""
-CANONICALIZE: invalid_top_level_statement "0_0
-0u8"
-CANONICALIZE: invalid_top_level_statement ""
-CANONICALIZE: invalid_top_level_statement "0_"
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 ~~~TOKENS
 Int(1:1-1:4),NoSpaceDotInt(1:4-1:6),Newline(1:1-1:1),
 Int(2:1-2:4),Newline(1:1-1:1),

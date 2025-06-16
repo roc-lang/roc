@@ -7,12 +7,11 @@ const fmt = @import("fmt.zig");
 const base = @import("base.zig");
 const collections = @import("collections.zig");
 const coordinate = @import("coordinate.zig");
-const problem_mod = @import("problem.zig");
+
 const tracy = @import("tracy.zig");
 const Filesystem = @import("coordinate/Filesystem.zig");
 const cli_args = @import("cli_args.zig");
 
-const Problem = problem_mod.Problem;
 const Allocator = std.mem.Allocator;
 const exitOnOom = collections.utils.exitOnOom;
 const fatal = collections.utils.fatal;
@@ -122,18 +121,8 @@ fn rocVersion(gpa: Allocator) !void {
 fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) void {
     switch (coordinate.typecheckModule(gpa, Filesystem.default(), args.path)) {
         .success => |data| {
-            var problems = std.ArrayList(Problem).init(gpa);
-            var index_iter = data.can_irs.iterIndices();
-            while (index_iter.next()) |idx| {
-                const env = data.can_irs.getWork(idx).env;
-                problems.appendSlice(env.problems.items.items) catch |err| exitOnOom(err);
-            }
-
-            for (problems.items) |problem| {
-                std.debug.print("{}\n", .{problem});
-            }
-
-            std.debug.print("{} problems found.\n", .{problems.items.len});
+            _ = data;
+            // TODO implement me
         },
         .err => |err| {
             std.debug.print("Failed to check {s}:\n{}\n", .{ args.path, err });

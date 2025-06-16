@@ -5,7 +5,7 @@ const base = @import("base.zig");
 const cache = @import("cache.zig");
 const types = @import("types.zig");
 const collections = @import("collections.zig");
-const tokenize = @import("check/parse/tokenize.zig");
+
 const parse = @import("check/parse.zig");
 const can = @import("check/canonicalize.zig");
 const resolve = @import("check/resolve_imports.zig");
@@ -484,7 +484,7 @@ fn parseDependenciesFromPackageRoot(
     defer env.deinit();
 
     var parse_ast = parse.parse(&env, contents);
-    defer parse_ast.deinit();
+    defer parse_ast.deinit(gpa);
 
     parse_ast.store.emptyScratch();
     const file = parse_ast.store.getFile();

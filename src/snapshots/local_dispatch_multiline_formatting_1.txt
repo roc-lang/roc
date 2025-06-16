@@ -7,7 +7,8 @@ some_fn(arg1)?
 	->next_static_dispatch_method()?
 	->record_field?
 ~~~PROBLEMS
-COMPILER: problem.Problem.Compiler{ .canonicalize = problem.Problem.Compiler.Can.not_implemented }
+NOT IMPLEMENTED
+This feature is not yet implemented: canonicalize local_dispatch expression
 ~~~TOKENS
 LowerIdent(1:1-1:8),NoSpaceOpenRound(1:8-1:9),LowerIdent(1:9-1:13),CloseRound(1:13-1:14),NoSpaceOpQuestion(1:14-1:15),Newline(1:1-1:1),
 OpArrow(2:2-2:4),LowerIdent(2:4-2:26),NoSpaceOpenRound(2:26-2:27),CloseRound(2:27-2:28),NoSpaceOpQuestion(2:28-2:29),Newline(1:1-1:1),
@@ -32,5 +33,5 @@ OpArrow(4:2-4:4),LowerIdent(4:4-4:16),NoSpaceOpQuestion(4:16-4:17),EndOfFile(4:1
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(can_ir (top_level_defs "empty"))
+(runtime_error (1:1-1:1) "not_implemented")
 ~~~END
