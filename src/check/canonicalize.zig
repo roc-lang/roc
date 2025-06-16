@@ -407,7 +407,7 @@ pub fn canonicalize_expr(
                 }
             } else {
                 const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "report an error when unable to resolve identifier");
-                self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
                     .feature = feature,
                     .region = Region.zero(),
                 } });
@@ -546,21 +546,21 @@ pub fn canonicalize_expr(
         },
         .string_part => |_| {
             const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize string_part expression");
-            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+            return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
                 .feature = feature,
                 .region = Region.zero(),
             } });
         },
         .tuple => |_| {
             const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize tuple expression");
-            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+            return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
                 .feature = feature,
                 .region = Region.zero(),
             } });
         },
         .record => |_| {
             const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize record expression");
-            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+            return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
                 .feature = feature,
                 .region = Region.zero(),
             } });
@@ -592,21 +592,21 @@ pub fn canonicalize_expr(
         },
         .record_updater => |_| {
             const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize record_updater expression");
-            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+            return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
                 .feature = feature,
                 .region = Region.zero(),
             } });
         },
         .field_access => |_| {
             const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize record field_access expression");
-            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+            return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
                 .feature = feature,
                 .region = Region.zero(),
             } });
         },
         .local_dispatch => |_| {
             const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize local_dispatch expression");
-            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+            return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
                 .feature = feature,
                 .region = Region.zero(),
             } });
@@ -639,8 +639,8 @@ pub fn canonicalize_expr(
                 .OpStar => .mul,
                 else => {
                     // Unknown operator
-                    const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "this particular binop operator");
-                    self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                    const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "binop");
+                    return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
                         .feature = feature,
                         .region = Region.zero(),
                     } });
@@ -658,56 +658,56 @@ pub fn canonicalize_expr(
         },
         .suffix_single_question => |_| {
             const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize suffix_single_question expression");
-            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+            return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
                 .feature = feature,
                 .region = Region.zero(),
             } });
         },
         .unary_op => |_| {
             const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize unary_op expression");
-            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+            return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
                 .feature = feature,
                 .region = Region.zero(),
             } });
         },
         .if_then_else => |_| {
             const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize if_then_else expression");
-            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+            return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
                 .feature = feature,
                 .region = Region.zero(),
             } });
         },
         .match => |_| {
             const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize match expression");
-            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+            return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
                 .feature = feature,
                 .region = Region.zero(),
             } });
         },
         .dbg => |_| {
             const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize dbg expression");
-            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+            return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
                 .feature = feature,
                 .region = Region.zero(),
             } });
         },
         .record_builder => |_| {
             const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize record_builder expression");
-            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+            return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
                 .feature = feature,
                 .region = Region.zero(),
             } });
         },
         .ellipsis => |_| {
             const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize ellipsis expression");
-            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+            return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
                 .feature = feature,
                 .region = Region.zero(),
             } });
         },
         .block => |_| {
             const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize block expression");
-            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+            return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
                 .feature = feature,
                 .region = Region.zero(),
             } });
@@ -715,6 +715,7 @@ pub fn canonicalize_expr(
         .malformed => |malformed| {
             // We won't touch this since it's already a parse error.
             _ = malformed;
+            return null;
         },
     }
 }

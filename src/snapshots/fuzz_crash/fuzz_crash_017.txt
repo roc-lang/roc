@@ -5,7 +5,10 @@ type=file
 me = "luc"
 foo = "hello ${namF
 ~~~PROBLEMS
-PARSER: missing_headerPARSER: expr_unexpected_tokenPARSER: string_expected_close_interpolationINVALID STATEMENT
+PARSER: missing_header
+PARSER: expr_unexpected_token
+PARSER: string_expected_close_interpolation
+INVALID STATEMENT
 The statement expr is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 INVALID STATEMENT

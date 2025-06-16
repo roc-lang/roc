@@ -17,8 +17,8 @@ main! = |_| {
 ~~~PROBLEMS
 NOT IMPLEMENTED
 This feature is not yet implemented: top-level import
-INVALID LAMBDA
-The body of this lambda expression is not valid.
+NOT IMPLEMENTED
+This feature is not yet implemented: canonicalize block expression
 NOT IMPLEMENTED
 Lambda expressions are not yet fully implemented.
 ~~~TOKENS

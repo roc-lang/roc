@@ -539,7 +539,7 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
             //     continue;
             // };
 
-            const err_msg = try std.fmt.allocPrint(gpa, "PARSER: {s}", .{@tagName(diagnostic.tag)});
+            const err_msg = try std.fmt.allocPrint(gpa, "PARSER: {s}\n", .{@tagName(diagnostic.tag)});
             defer gpa.free(err_msg);
 
             try writer.writeAll(err_msg);

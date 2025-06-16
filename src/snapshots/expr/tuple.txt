@@ -4,7 +4,8 @@ type=expr
 ~~~SOURCE
 (1, "hello", True)
 ~~~PROBLEMS
-NIL
+NOT IMPLEMENTED
+This feature is not yet implemented: canonicalize tuple expression
 ~~~TOKENS
 OpenRound(1:1-1:2),Int(1:2-1:3),Comma(1:3-1:4),StringStart(1:5-1:6),StringPart(1:6-1:11),StringEnd(1:11-1:12),Comma(1:12-1:13),UpperIdent(1:14-1:18),CloseRound(1:18-1:19),EndOfFile(1:19-1:19),
 ~~~PARSE
@@ -15,5 +16,5 @@ OpenRound(1:1-1:2),Int(1:2-1:3),Comma(1:3-1:4),StringStart(1:5-1:6),StringPart(1
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(can_ir (top_level_defs "empty"))
+(runtime_error (1:1-1:1) "not_implemented")
 ~~~END

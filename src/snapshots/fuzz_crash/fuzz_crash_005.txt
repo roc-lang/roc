@@ -4,7 +4,8 @@ type=file
 ~~~SOURCE
 modu
 ~~~PROBLEMS
-PARSER: missing_header~~~TOKENS
+PARSER: missing_header
+~~~TOKENS
 LowerIdent(1:1-1:5),EndOfFile(1:5-1:5),
 ~~~PARSE
 (file (1:1-1:5)

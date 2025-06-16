@@ -4,7 +4,10 @@ type=file
 ~~~SOURCE
 ff8.8.d
 ~~~PROBLEMS
-PARSER: missing_headerPARSER: expr_unexpected_tokenPARSER: expr_unexpected_tokenINVALID STATEMENT
+PARSER: missing_header
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+INVALID STATEMENT
 The statement expr is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 INVALID STATEMENT

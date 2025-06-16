@@ -240,33 +240,32 @@ NOT IMPLEMENTED
 This feature is not yet implemented: top-level type_decl
 NOT IMPLEMENTED
 This feature is not yet implemented: top-level type_decl
-INVALID LAMBDA
-The body of this lambda expression is not valid.
+NOT IMPLEMENTED
+This feature is not yet implemented: canonicalize if_then_else expression
 NOT IMPLEMENTED
 Lambda expressions are not yet fully implemented.
 NOT IMPLEMENTED
 This feature is not yet implemented: top-level type_anno
-INVALID LAMBDA
-The body of this lambda expression is not valid.
+NOT IMPLEMENTED
+This feature is not yet implemented: canonicalize block expression
 NOT IMPLEMENTED
 Lambda expressions are not yet fully implemented.
-INVALID LAMBDA
-The body of this lambda expression is not valid.
+NOT IMPLEMENTED
+This feature is not yet implemented: canonicalize match expression
 NOT IMPLEMENTED
 Lambda expressions are not yet fully implemented.
 NOT IMPLEMENTED
 This feature is not yet implemented: top-level expect
 NOT IMPLEMENTED
 This feature is not yet implemented: top-level type_anno
-INVALID LAMBDA
-The body of this lambda expression is not valid.
+NOT IMPLEMENTED
+This feature is not yet implemented: canonicalize block expression
 NOT IMPLEMENTED
 Lambda expressions are not yet fully implemented.
 NOT IMPLEMENTED
 This feature is not yet implemented: top-level type_anno
-UNKNOWN OPERATOR
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
+NOT IMPLEMENTED
+This feature is not yet implemented: canonicalize record expression
 NOT IMPLEMENTED
 This feature is not yet implemented: top-level type_anno
 NOT IMPLEMENTED
@@ -1074,6 +1073,6 @@ NO CHANGE
 			"let"
 			(pattern (199:1-199:6)
 				(assign (199:1-199:6) (ident "empty")))
-			(expr (199:9-199:11) (runtime_error (199:1-199:11) "expr_not_canonicalized"))
+			(expr (199:9-199:11) (runtime_error (1:1-1:1) "not_implemented"))
 			"#4")))
 ~~~END

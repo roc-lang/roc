@@ -4,7 +4,8 @@ type=file
 ~~~SOURCE
 F
 ~~~PROBLEMS
-PARSER: missing_header~~~TOKENS
+PARSER: missing_header
+~~~TOKENS
 UpperIdent(1:1-1:2),EndOfFile(1:2-1:2),
 ~~~PARSE
 (file (1:1-1:2)

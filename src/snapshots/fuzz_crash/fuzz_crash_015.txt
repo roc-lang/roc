@@ -9,7 +9,10 @@ type=file
 ~~~PROBLEMS
 TOKENIZE: (2:3-2:3) LeadingZero:
 0_0
-  ^PARSER: missing_headerPARSER: expr_unexpected_tokenPARSER: expr_no_space_dot_intINVALID STATEMENT
+  ^PARSER: missing_header
+PARSER: expr_unexpected_token
+PARSER: expr_no_space_dot_int
+INVALID STATEMENT
 The statement expr is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 INVALID STATEMENT

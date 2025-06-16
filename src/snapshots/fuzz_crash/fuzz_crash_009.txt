@@ -13,7 +13,8 @@ TOKENIZE: (2:6-2:6) MismatchedBrace:
      ]
      ^TOKENIZE: (6:6-6:12) UnclosedString:
     "onmo %
-     ^^^^^^PARSER: missing_headerINVALID STATEMENT
+     ^^^^^^PARSER: missing_header
+INVALID STATEMENT
 The statement expr is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 ~~~TOKENS
