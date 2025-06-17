@@ -148,21 +148,16 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
     };
 }
 
-/// Inserts a placeholder CIR node and creates a fresh variable in the types
-/// store at that index
-pub fn pushFreshTypeVar(self: *CIR, region: base.Region) types.Var {
-    // insert a placeholder can node
-    const placeholder_node_idx = self.store.addTypePlaceholder(region);
-
-    // create a new type var based on the placeholder node
-    return self.env.types_store.freshAt(@intFromEnum(placeholder_node_idx)) catch |err| exitOnOom(err);
+/// Inserts a placeholder CIR node and creates a fresh variable in the types store at that index
+pub fn pushFreshTypeVar(self: *CIR, parent_node_idx: Node.Idx, region: base.Region) types.Var {
+    return self.pushTypeVar(.{ .flex_var = null }, parent_node_idx, region);
 }
 
 /// Inserts a placeholder CIR node and creates a type variable with the
 /// specified content in the types store at that index
-pub fn pushTypeVar(self: *CIR, content: types.Content, region: base.Region) types.Var {
+pub fn pushTypeVar(self: *CIR, content: types.Content, parent_node_idx: Node.Idx, region: base.Region) types.Var {
     // insert a placeholder can node
-    const placeholder_node_idx = self.store.addTypePlaceholder(region);
+    const placeholder_node_idx = self.store.addTypePlaceholder(parent_node_idx, region);
 
     // create a new type var based on the placeholder node
     return self.env.types_store.freshFromContentAt(@intFromEnum(placeholder_node_idx), content) catch |err| exitOnOom(err);

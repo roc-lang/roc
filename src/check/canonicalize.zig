@@ -338,13 +338,15 @@ fn canonicalize_decl(
         }
     };
 
+    const expr_var = self.can_ir.env.types_store.freshAt(@intFromEnum(expr_idx)) catch |err| exitOnOom(err);
+
     // Create the def entry
     return self.can_ir.store.addDef(.{
         .pattern = pattern_idx,
         .pattern_region = self.tokenizedRegionToRegion(self.parse_ir.store.getPattern(decl.pattern).to_tokenized_region()),
         .expr = expr_idx,
         .expr_region = self.tokenizedRegionToRegion(self.parse_ir.store.getExpr(decl.body).to_tokenized_region()),
-        .expr_var = @enumFromInt(@intFromEnum(expr_idx)),
+        .expr_var = expr_var,
         .annotation = null,
         .kind = .let,
     });
@@ -358,9 +360,6 @@ pub fn canonicalize_expr(
     const expr = self.parse_ir.store.getExpr(expr_idx);
 
     // use the next can node idx to create the expr type var
-    const next_can_node_idx = self.can_ir.store.nextNodeIdx();
-    _ = self.can_ir.env.types_store.freshAt(@intFromEnum(next_can_node_idx)) catch |err| exitOnOom(err);
-
     switch (expr) {
         .apply => |e| {
             // Mark the start of scratch expressions
@@ -434,10 +433,14 @@ pub fn canonicalize_expr(
                 } });
             };
 
-            // create type vars
-            const precision_type_var = self.can_ir.pushFreshTypeVar(region);
-            const num_type_var = self.can_ir.pushFreshTypeVar(region);
+            // create type vars, first "reserve" node slots
+            const ret_expr_idx = self.can_ir.store.predictNodeIndex(3);
 
+            // then insert the type vars, setting the parent to be the final slot
+            const precision_type_var = self.can_ir.pushFreshTypeVar(ret_expr_idx, region);
+            const num_type_var = self.can_ir.pushFreshTypeVar(ret_expr_idx, region);
+
+            // then in the final slot the actual expr is inserted
             return self.can_ir.store.addExpr(CIR.Expr{
                 .int = .{
                     .num_var = num_type_var,
@@ -470,10 +473,14 @@ pub fn canonicalize_expr(
                 } });
             };
 
-            // create type vars
-            const precision_type_var = self.can_ir.pushFreshTypeVar(region);
-            const num_type_var = self.can_ir.pushFreshTypeVar(region);
+            // create type vars, first "reserve" 3 can node slots
+            const ret_expr_idx = self.can_ir.store.predictNodeIndex(3);
 
+            // then insert the type vars, setting the parent to be the final slot
+            const precision_type_var = self.can_ir.pushFreshTypeVar(ret_expr_idx, region);
+            const num_type_var = self.can_ir.pushFreshTypeVar(ret_expr_idx, region);
+
+            // then in the final slot the actual expr is inserted
             return self.can_ir.store.addExpr(CIR.Expr{
                 .float = .{
                     .num_var = num_type_var,
@@ -517,9 +524,16 @@ pub fn canonicalize_expr(
             // Create span of the new scratch expressions
             const elems_span = self.can_ir.store.exprSpanFrom(scratch_top);
 
-            // create type vars
-            const elem_type_var = self.can_ir.pushFreshTypeVar(self.tokenizedRegionToRegion(e.region));
+            // create type vars, first "reserve" node slots
+            const list_expr_idx = self.can_ir.store.predictNodeIndex(2);
 
+            // then insert the type vars, setting the parent to be the final slot
+            const elem_type_var = self.can_ir.pushFreshTypeVar(
+                list_expr_idx,
+                self.tokenizedRegionToRegion(e.region),
+            );
+
+            // then in the final slot the actual expr is inserted
             return self.can_ir.store.addExpr(CIR.Expr{
                 .list = .{
                     .elems = elems_span,
@@ -530,17 +544,23 @@ pub fn canonicalize_expr(
         },
         .tag => |e| {
             if (self.parse_ir.tokens.resolveIdentifier(e.token)) |tag_name| {
-                // create type vars
-                const tag_union_type_var = self.can_ir.pushFreshTypeVar(self.tokenizedRegionToRegion(e.region));
-                const ext_type_var = self.can_ir.pushFreshTypeVar(self.tokenizedRegionToRegion(e.region));
+                const region = self.tokenizedRegionToRegion(e.region);
 
+                // create type vars, first "reserve" node slots
+                const ret_expr_idx = self.can_ir.store.predictNodeIndex(3);
+
+                // then insert the type vars, setting the parent to be the final slot
+                const tag_union_type_var = self.can_ir.pushFreshTypeVar(ret_expr_idx, region);
+                const ext_type_var = self.can_ir.pushFreshTypeVar(ret_expr_idx, region);
+
+                // then in the final slot the actual expr is inserted
                 return self.can_ir.store.addExpr(CIR.Expr{
                     .tag = .{
                         .tag_union_var = tag_union_type_var,
                         .ext_var = ext_type_var,
                         .name = tag_name,
                         .args = .{ .span = .{ .start = 0, .len = 0 } }, // empty arguments
-                        .region = self.tokenizedRegionToRegion(e.region),
+                        .region = region,
                     },
                 });
             } else {
@@ -835,9 +855,13 @@ fn canonicalize_pattern(
                 } });
             };
 
-            // create type vars
-            const num_type_var = self.can_ir.pushFreshTypeVar(region);
+            // create type vars, first "reserve" node slots
+            const ret_expr_idx = self.can_ir.store.predictNodeIndex(2);
 
+            // then insert the type vars, setting the parent to be the final slot
+            const num_type_var = self.can_ir.pushFreshTypeVar(ret_expr_idx, region);
+
+            // then in the final slot the actual expr is inserted
             const num_pattern = CIR.Pattern{
                 .num_literal = .{
                     .num_var = num_type_var,
@@ -892,10 +916,14 @@ fn canonicalize_pattern(
 
                 const args = self.can_ir.store.patternSpanFrom(start);
 
-                // create type vars
-                const tag_union_type_var = self.can_ir.pushFreshTypeVar(region);
-                const ext_type_var = self.can_ir.pushFreshTypeVar(region);
+                // create type vars, first "reserve" node slots
+                const ret_expr_idx = self.can_ir.store.predictNodeIndex(2);
 
+                // then insert the type vars, setting the parent to be the final slot
+                const tag_union_type_var = self.can_ir.pushFreshTypeVar(ret_expr_idx, region);
+                const ext_type_var = self.can_ir.pushFreshTypeVar(ret_expr_idx, region);
+
+                // then in the final slot the actual expr is inserted
                 const tag_pattern = CIR.Pattern{
                     .applied_tag = .{
                         .whole_var = tag_union_type_var,

@@ -1153,19 +1153,23 @@ pub fn diagnosticSpanFrom(store: *NodeStore, start: u32) CIR.Diagnostic.Span {
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
 }
 
+/// Ensure the node store has capacity for at least the requested number of
+/// slots. Then return the *final* index.
+pub fn predictNodeIndex(store: *NodeStore, count: u32) Node.Idx {
+    const start_idx = store.nodes.len();
+    store.nodes.ensureTotalCapacity(store.gpa, start_idx + count);
+    // Return where the LAST node will actually be placed
+    return @enumFromInt(start_idx + count - 1);
+}
+
 /// Adds an type placeholder to the store.
-pub fn addTypePlaceholder(store: *NodeStore, region: base.Region) Node.Idx {
+pub fn addTypePlaceholder(store: *NodeStore, parent_node_idx: Node.Idx, region: base.Region) Node.Idx {
     const nid = store.nodes.append(store.gpa, .{
-        .tag = .type_placeholder,
-        .data_1 = 0,
+        .tag = .type_var_slot,
+        .data_1 = @intFromEnum(parent_node_idx),
         .data_2 = 0,
         .data_3 = 0,
         .region = region,
     });
     return @enumFromInt(@intFromEnum(nid));
-}
-
-/// Any node type can be malformed, but must come with a diagnostic reason
-pub fn nextNodeIdx(store: *const NodeStore) Node.Idx {
-    return @enumFromInt(store.nodes.len());
 }
