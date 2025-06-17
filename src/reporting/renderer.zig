@@ -1,6 +1,4 @@
-//! Simple report and document rendering to different output formats.
-//!
-//! This module provides functions to render Reports and Documents to various
+//! Provides functions to render Reports and Documents to various
 //! output formats without the complexity of vtables or interfaces.
 
 const std = @import("std");

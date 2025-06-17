@@ -1,6 +1,4 @@
-//! Test entry point for the reporting module.
-//!
-//! This file serves as the main test entry point for all reporting-related
+//! Main test entry point for all reporting-related
 //! functionality including rendering, document generation, styling, and reports.
 
 const std = @import("std");
