@@ -1194,7 +1194,7 @@ mod serialize {
     }
 
     pub fn deserialize_solved_implementations(bytes: &[u8]) -> (ResolvedImplementations, usize) {
-        let (len_slice, offset) = bytes::deserialize_slice::<u64>(bytes, 1, 0);
+        let (len_slice, offset) = bytes::deserialize_slice_safe::<u64>(bytes, 1, 0);
         let length = len_slice[0];
 
         bytes::deserialize_vec_map(
