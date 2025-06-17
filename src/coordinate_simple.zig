@@ -1,7 +1,4 @@
 //! Simplified coordination system for single-file processing.
-//!
-//! This provides a streamlined approach for `roc check` on single files,
-//! focusing only on parsing and canonicalization without complex dependency resolution.
 
 const std = @import("std");
 const base = @import("base.zig");
@@ -29,23 +26,6 @@ pub const ProcessResult = struct {
         gpa.destroy(self.cir);
     }
 };
-
-/// Process a single file and return diagnostics.
-pub fn checkFile(
-    gpa: std.mem.Allocator,
-    fs: Filesystem,
-    filepath: []const u8,
-) ![]const CIR.Diagnostic {
-    // Read the file content
-    const source = fs.readFile(filepath, gpa) catch |err| switch (err) {
-        error.FileNotFound => return error.FileNotFound,
-        error.AccessDenied => return error.AccessDenied,
-        else => return error.FileReadError,
-    };
-    defer gpa.free(source);
-
-    return checkSource(gpa, source);
-}
 
 /// Process a single file and return both CIR and diagnostics for proper reporting.
 pub fn processFile(
@@ -115,98 +95,42 @@ pub fn processSource(
     var parse_ast = parse.parse(&module_env, source);
     defer parse_ast.deinit(gpa);
 
+    // Create an arraylist for capturing diagnostic reports.
     var reports = std.ArrayList(reporting.Report).init(gpa);
     defer reports.deinit();
 
-    // Handle parse errors first - convert to Reports
-    if (parse_ast.hasErrors()) {
-        // Handle tokenize diagnostics
-        for (parse_ast.tokenize_diagnostics.items) |diagnostic| {
-            const report = parse_ast.tokenizeDiagnosticToReport(diagnostic, gpa) catch continue;
-            reports.append(report) catch continue;
-        }
-
-        // Handle parser diagnostics
-        for (parse_ast.parse_diagnostics.items) |diagnostic| {
-            const report = parse_ast.parseDiagnosticToReport(diagnostic, gpa) catch continue;
-            reports.append(report) catch continue;
-        }
+    // Get tokenize diagnostic Reports
+    for (parse_ast.tokenize_diagnostics.items) |diagnostic| {
+        const report = parse_ast.tokenizeDiagnosticToReport(diagnostic, gpa) catch continue;
+        reports.append(report) catch continue;
     }
 
-    // Create CIR on heap first to avoid memory issues with diagnostics
-    const cir_ptr = gpa.create(CIR) catch return error.OutOfMemory;
-    errdefer gpa.destroy(cir_ptr);
+    // Get parser diagnostic Reports
+    for (parse_ast.parse_diagnostics.items) |diagnostic| {
+        const report = parse_ast.parseDiagnosticToReport(diagnostic, gpa) catch continue;
+        reports.append(report) catch continue;
+    }
 
-    // Initialize CIR - this transfers ownership of module_env
-    cir_ptr.* = CIR.init(&module_env);
-    // Note: module_env is now owned by cir_ptr, don't defer deinit it
+    // Initialize the Can IR
+    var cir = CIR.init(&module_env);
 
     // Create scope for semantic analysis
-    var scope = Scope.init(cir_ptr.env.gpa);
-    defer scope.deinit(cir_ptr.env.gpa);
+    var scope = Scope.init(gpa);
+    defer scope.deinit(gpa);
 
     // Canonicalize the AST
-    var canonicalizer = canonicalize.init(cir_ptr, &parse_ast, &scope);
+    var canonicalizer = canonicalize.init(&cir, &parse_ast, &scope);
     canonicalizer.canonicalize_file();
 
-    // Get diagnostics from the heap-allocated CIR and convert to Reports
-    const diagnostics = cir_ptr.getDiagnostics();
+    // Get diagnostic Reports from CIR
+    const diagnostics = cir.getDiagnostics();
     for (diagnostics) |diagnostic| {
-        const report = cir_ptr.diagnosticToReport(diagnostic, gpa) catch continue;
+        const report = cir.diagnosticToReport(diagnostic, gpa) catch continue;
         reports.append(report) catch continue;
     }
 
     return ProcessResult{
-        .cir = cir_ptr,
+        .cir = &cir,
         .reports = reports.toOwnedSlice() catch return error.OutOfMemory,
     };
-}
-
-/// Process a file and render diagnostics directly to a writer.
-/// This avoids memory management issues by not returning CIR or diagnostics.
-pub fn renderDiagnostics(
-    gpa: std.mem.Allocator,
-    fs: Filesystem,
-    filepath: []const u8,
-    writer: anytype,
-) !bool {
-    // Read the file content
-    const source = fs.readFile(filepath, gpa) catch |err| switch (err) {
-        error.FileNotFound => return error.FileNotFound,
-        error.AccessDenied => return error.AccessDenied,
-        else => return error.FileReadError,
-    };
-    defer gpa.free(source);
-
-    return renderDiagnosticsFromSource(gpa, source, filepath, writer);
-}
-
-/// Process source code and render diagnostics directly to a writer.
-pub fn renderDiagnosticsFromSource(
-    gpa: std.mem.Allocator,
-    source: []const u8,
-    filename: []const u8,
-    writer: anytype,
-) !bool {
-    _ = filename; // TODO: Use filename in diagnostic reports
-
-    // Process source and get Reports
-    var result = processSource(gpa, source) catch |err| {
-        try writer.print("Error processing source: {}\n", .{err});
-        return true; // Assume there are errors if processing fails
-    };
-    defer result.deinit(gpa);
-
-    const has_errors = result.reports.len > 0;
-
-    // Render all reports
-    for (result.reports) |*report| {
-        // Render using plain text for now to avoid terminal escape issues
-        reporting.renderReportToPlainText(report, writer) catch |render_err| {
-            try writer.print("Error rendering diagnostic report: {}\n", .{render_err});
-            try writer.print("Report title: {s}\n", .{report.title});
-        };
-    }
-
-    return has_errors;
 }

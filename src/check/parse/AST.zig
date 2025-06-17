@@ -55,6 +55,7 @@ pub fn regionIsMultiline(self: *AST, region: TokenizedRegion) bool {
     return false;
 }
 
+/// Returns whether this AST has any diagnostic errors.
 pub fn hasErrors(self: *AST) bool {
     return self.tokenize_diagnostics.items.len > 0 or self.parse_diagnostics.items.len > 0;
 }
