@@ -28,10 +28,10 @@ NO CHANGE
 				(assign (2:1-2:4) (ident "foo")))
 			(expr (2:7-2:12)
 				(float (2:7-2:12)
-					(num_var "#0")
+					(num_var "#2")
 					(precision_var "#1")
 					(literal "12.34")
 					(value "0")
-					(bound "int")))
-			"#2")))
+					(bound "f32")))
+			"#5")))
 ~~~END

@@ -91,6 +91,9 @@ pub const Tag = enum {
     // todo -- put me somewhere and rename maybe
     if_branch,
 
+    // used to represent an extra node, solely for type-checking purposes
+    type_placeholder,
+
     // Runtime Error Node
     //
     // Malformed nodes represent runtime errors in the IR following the "Inform Don't Block" principle.

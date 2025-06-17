@@ -4,6 +4,7 @@ const parse = @import("parse.zig");
 const collections = @import("../collections.zig");
 const types = @import("../types/types.zig");
 
+const NodeStore = @import("./canonicalize/NodeStore.zig");
 const Scope = @import("./canonicalize/Scope.zig");
 
 const AST = parse.AST;
@@ -337,16 +338,13 @@ fn canonicalize_decl(
         }
     };
 
-    // Create a new type variable for this definition
-    const expr_var = self.can_ir.env.types_store.fresh();
-
     // Create the def entry
     return self.can_ir.store.addDef(.{
         .pattern = pattern_idx,
         .pattern_region = self.tokenizedRegionToRegion(self.parse_ir.store.getPattern(decl.pattern).to_tokenized_region()),
         .expr = expr_idx,
         .expr_region = self.tokenizedRegionToRegion(self.parse_ir.store.getExpr(decl.body).to_tokenized_region()),
-        .expr_var = expr_var,
+        .expr_var = @enumFromInt(@intFromEnum(expr_idx)),
         .annotation = null,
         .kind = .let,
     });
@@ -358,6 +356,11 @@ pub fn canonicalize_expr(
     expr_idx: AST.Expr.Idx,
 ) ?CIR.Expr.Idx {
     const expr = self.parse_ir.store.getExpr(expr_idx);
+
+    // use the next can node idx to create the expr type var
+    const next_can_node_idx = self.can_ir.store.nextNodeIdx();
+    _ = self.can_ir.env.types_store.freshAt(@intFromEnum(next_can_node_idx)) catch |err| exitOnOom(err);
+
     switch (expr) {
         .apply => |e| {
             // Mark the start of scratch expressions
@@ -414,6 +417,8 @@ pub fn canonicalize_expr(
             }
         },
         .int => |e| {
+            const region = self.tokenizedRegionToRegion(e.region);
+
             // resolve to a string slice from the source
             const token_text = self.parse_ir.resolve(e.token);
 
@@ -422,33 +427,34 @@ pub fn canonicalize_expr(
 
             // parse the integer value
             const value = std.fmt.parseInt(i128, token_text, 10) catch {
-
                 // Invalid number literal
-                const region = self.tokenizedRegionToRegion(e.region);
                 return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .invalid_num_literal = .{
                     .literal = literal,
                     .region = region,
                 } });
             };
 
-            const fresh_num_var = self.can_ir.env.types_store.fresh();
-            const fresh_prec_var = self.can_ir.env.types_store.fresh();
+            // create type vars
+            const precision_type_var = self.can_ir.pushFreshTypeVar(region);
+            const num_type_var = self.can_ir.pushFreshTypeVar(region);
 
             return self.can_ir.store.addExpr(CIR.Expr{
                 .int = .{
-                    .num_var = fresh_num_var,
-                    .precision_var = fresh_prec_var,
+                    .num_var = num_type_var,
+                    .precision_var = precision_type_var,
                     .literal = literal,
                     .value = CIR.IntValue{
                         .bytes = @bitCast(value),
                         .kind = .i128,
                     },
-                    .bound = types.Num.Compact.placeholder(), // TODO
+                    .bound = types.Num.Int.Precision.fromValue(value),
                     .region = self.tokenizedRegionToRegion(e.region),
                 },
             });
         },
         .float => |e| {
+            const region = self.tokenizedRegionToRegion(e.region);
+
             // resolve to a string slice from the source
             const token_text = self.parse_ir.resolve(e.token);
 
@@ -457,23 +463,24 @@ pub fn canonicalize_expr(
 
             // parse the float value
             const value = std.fmt.parseFloat(f64, token_text) catch {
-                const region = self.tokenizedRegionToRegion(e.region);
+                // Invalid number literal
                 return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .invalid_num_literal = .{
                     .literal = literal,
                     .region = region,
                 } });
             };
 
-            const fresh_num_var = self.can_ir.env.types_store.fresh();
-            const fresh_prec_var = self.can_ir.env.types_store.fresh();
+            // create type vars
+            const precision_type_var = self.can_ir.pushFreshTypeVar(region);
+            const num_type_var = self.can_ir.pushFreshTypeVar(region);
 
             return self.can_ir.store.addExpr(CIR.Expr{
                 .float = .{
-                    .num_var = fresh_num_var,
-                    .precision_var = fresh_prec_var,
+                    .num_var = num_type_var,
+                    .precision_var = precision_type_var,
                     .literal = literal,
                     .value = value,
-                    .bound = types.Num.Compact.placeholder(), // TODO
+                    .bound = types.Num.Frac.Precision.fromValue(value),
                     .region = self.tokenizedRegionToRegion(e.region),
                 },
             });
@@ -495,46 +502,42 @@ pub fn canonicalize_expr(
             } });
         },
         .list => |e| {
-            var items = collections.SafeList(CIR.Expr.Idx).initCapacity(self.can_ir.env.gpa, 0);
-            const items_slice = self.parse_ir.store.exprSlice(e.items);
-
-            for (items_slice) |item| {
-                if (self.canonicalize_expr(item)) |canonicalized| {
-                    _ = items.append(self.can_ir.env.gpa, canonicalized);
-                }
-            }
-
-            const fresh_type_var = self.can_ir.env.types_store.fresh();
-
             // Mark the start of scratch expressions for the list
             const scratch_top = self.can_ir.store.scratchExprTop();
 
-            // Add all canonicalized items to scratch
-            var iter = items.iterIndices();
-            while (iter.next()) |idx| {
-                self.can_ir.store.addScratchExpr(items.get(idx).*);
+            // Iterate over the list item, canonicalizing each one
+            // Then append the result to the scratch list
+            const items_slice = self.parse_ir.store.exprSlice(e.items);
+            for (items_slice) |item| {
+                if (self.canonicalize_expr(item)) |canonicalized| {
+                    self.can_ir.store.addScratchExpr(canonicalized);
+                }
             }
 
-            // Create span from scratch expressions
+            // Create span of the new scratch expressions
             const elems_span = self.can_ir.store.exprSpanFrom(scratch_top);
+
+            // create type vars
+            const elem_type_var = self.can_ir.pushFreshTypeVar(self.tokenizedRegionToRegion(e.region));
 
             return self.can_ir.store.addExpr(CIR.Expr{
                 .list = .{
                     .elems = elems_span,
-                    .elem_var = fresh_type_var,
+                    .elem_var = elem_type_var,
                     .region = self.tokenizedRegionToRegion(e.region),
                 },
             });
         },
         .tag => |e| {
             if (self.parse_ir.tokens.resolveIdentifier(e.token)) |tag_name| {
-                const fresh_type_var_tag_union = self.can_ir.env.types_store.fresh();
-                const fresh_type_var_ext = self.can_ir.env.types_store.fresh();
+                // create type vars
+                const tag_union_type_var = self.can_ir.pushFreshTypeVar(self.tokenizedRegionToRegion(e.region));
+                const ext_type_var = self.can_ir.pushFreshTypeVar(self.tokenizedRegionToRegion(e.region));
 
                 return self.can_ir.store.addExpr(CIR.Expr{
                     .tag = .{
-                        .tag_union_var = fresh_type_var_tag_union,
-                        .ext_var = fresh_type_var_ext,
+                        .tag_union_var = tag_union_type_var,
+                        .ext_var = ext_type_var,
                         .name = tag_name,
                         .args = .{ .span = .{ .start = 0, .len = 0 } }, // empty arguments
                         .region = self.tokenizedRegionToRegion(e.region),
@@ -832,24 +835,23 @@ fn canonicalize_pattern(
                 } });
             };
 
-            const fresh_num_var = self.can_ir.env.types_store.fresh();
-            const fresh_precision_var = self.can_ir.env.types_store.fresh();
+            // create type vars
+            const num_type_var = self.can_ir.pushFreshTypeVar(region);
 
-            const int_pattern = CIR.Pattern{
-                .int_literal = .{
-                    .num_var = fresh_num_var,
-                    .precision_var = fresh_precision_var,
+            const num_pattern = CIR.Pattern{
+                .num_literal = .{
+                    .num_var = num_type_var,
                     .literal = literal,
                     .value = CIR.IntValue{
                         .bytes = @bitCast(value),
                         .kind = .i128,
                     },
-                    .bound = types.Num.Compact.placeholder(), // TODO
+                    .bound = types.Num.Int.Precision.fromValue(value),
                     .region = region,
                 },
             };
 
-            return self.can_ir.store.addPattern(int_pattern);
+            return self.can_ir.store.addPattern(num_pattern);
         },
         .string => |e| {
             // resolve to a string slice from the source
@@ -886,18 +888,21 @@ fn canonicalize_pattern(
                     }
                 }
 
+                const region = self.tokenizedRegionToRegion(e.region);
+
                 const args = self.can_ir.store.patternSpanFrom(start);
 
-                const fresh_num_var = self.can_ir.env.types_store.fresh();
-                const fresh_ext_var = self.can_ir.env.types_store.fresh();
+                // create type vars
+                const tag_union_type_var = self.can_ir.pushFreshTypeVar(region);
+                const ext_type_var = self.can_ir.pushFreshTypeVar(region);
 
                 const tag_pattern = CIR.Pattern{
                     .applied_tag = .{
-                        .whole_var = fresh_num_var,
-                        .ext_var = fresh_ext_var,
+                        .whole_var = tag_union_type_var,
+                        .ext_var = ext_type_var,
                         .tag_name = tag_name,
                         .arguments = args,
-                        .region = self.tokenizedRegionToRegion(e.region),
+                        .region = region,
                     },
                 };
 

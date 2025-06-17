@@ -47,5 +47,5 @@ foo =
 				(assign (6:1-6:4) (ident "foo")))
 			(expr (8:5-8:10)
 				(string (8:5-8:10) (literal (8:6-8:9) "one")))
-			"#0")))
+			"#4")))
 ~~~END

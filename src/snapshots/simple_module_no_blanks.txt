@@ -46,12 +46,12 @@ NO CHANGE
 				(call (3:10-3:31)
 					(runtime_error (3:10-3:22) "ident_not_in_scope")
 					(string (3:23-3:30) (literal (3:24-3:29) "Hello"))))
-			"#0")
+			"#8")
 		(def
 			"let"
 			(pattern (4:1-4:6)
 				(assign (4:1-4:6) (ident "world")))
 			(expr (4:9-4:16)
 				(string (4:9-4:16) (literal (4:10-4:15) "World")))
-			"#1")))
+			"#12")))
 ~~~END

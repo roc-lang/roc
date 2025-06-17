@@ -28,10 +28,10 @@ NO CHANGE
 				(assign (2:1-2:4) (ident "foo")))
 			(expr (2:7-2:9)
 				(int (2:7-2:9)
-					(num_var "#0")
+					(num_var "#2")
 					(precision_var "#1")
 					(literal "42")
 					(value "TODO")
-					(bound "int")))
-			"#2")))
+					(bound "u8")))
+			"#5")))
 ~~~END
