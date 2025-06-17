@@ -108,12 +108,14 @@ fn rocFormat(gpa: Allocator, arena: Allocator, args: cli_args.FormatArgs) !void 
         count.success += inner_count.success;
         count.failure += inner_count.failure;
     }
-    const elapsed = timer.read() / std.time.ns_per_ms;
+    const elapsed = timer.read();
     try std.io.getStdOut().writer().print("Successfully formatted {} files\n", .{count.success});
     if (count.failure > 0) {
         try std.io.getStdOut().writer().print("Failed to format {} files.\n", .{count.failure});
     }
-    try std.io.getStdOut().writer().print("Took {} ms.\n", .{elapsed});
+    try std.io.getStdOut().writer().print("Took ", .{});
+    try formatElapsedTime(std.io.getStdOut().writer(), elapsed);
+    try std.io.getStdOut().writer().print(".\n", .{});
 }
 
 fn rocVersion(gpa: Allocator) !void {
@@ -121,10 +123,18 @@ fn rocVersion(gpa: Allocator) !void {
     fatal("version not implemented", .{});
 }
 
-fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) void {
+/// Helper function to format elapsed time, showing decimal milliseconds
+fn formatElapsedTime(writer: anytype, elapsed_ns: u64) !void {
+    const elapsed_ms_float = @as(f64, @floatFromInt(elapsed_ns)) / @as(f64, @floatFromInt(std.time.ns_per_ms));
+    try writer.print("{d:.1} ms", .{elapsed_ms_float});
+}
+
+fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
     const stdout = std.io.getStdOut().writer();
     const stderr = std.io.getStdErr().writer();
     const stderr_writer = stderr.any();
+
+    var timer = try std.time.Timer.start();
 
     // Process the file and get Reports
     var result = coordinate_simple.processFile(gpa, Filesystem.default(), args.path) catch |err| {
@@ -138,6 +148,8 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) void {
         std.process.exit(1);
     };
     defer result.deinit(gpa);
+
+    const elapsed = timer.read();
 
     // Process reports and render them using the reporting system
     if (result.reports.len > 0) {
@@ -169,14 +181,17 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) void {
         }
         stderr.writeAll("\n") catch {};
 
-        stderr.print("Found {} error(s) and {} warning(s) in {s}\n", .{
+        stderr.print("Found {} error(s) and {} warning(s) in ", .{
             (fatal_errors + runtime_errors),
             warnings,
-            args.path,
         }) catch {};
+        formatElapsedTime(stderr, elapsed) catch {};
+        stderr.print(" for {s}.\n", .{args.path}) catch {};
         std.process.exit(1);
     } else {
-        stdout.print("No errors found in {s}\n", .{args.path}) catch {};
+        stdout.print("No errors found in ", .{}) catch {};
+        formatElapsedTime(stdout, elapsed) catch {};
+        stdout.print(" for {s}\n", .{args.path}) catch {};
     }
 }
 
