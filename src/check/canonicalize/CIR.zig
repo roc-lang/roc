@@ -163,6 +163,21 @@ pub fn pushTypeVar(self: *CIR, content: types.Content, parent_node_idx: Node.Idx
     return self.env.types_store.freshFromContentAt(@intFromEnum(placeholder_node_idx), content) catch |err| exitOnOom(err);
 }
 
+/// Set a type variable To the specified content at the specified CIR node index.
+pub fn setTypeVarAtExpr(self: *CIR, at_idx: Expr.Idx, content: types.Content) types.Var {
+    return self.setTypeVarAt(@enumFromInt(@intFromEnum(at_idx)), content);
+}
+
+/// Set a type variable To the specified content at the specified CIR node index.
+pub fn setTypeVarAtPat(self: *CIR, at_idx: Pattern.Idx, content: types.Content) types.Var {
+    return self.setTypeVarAt(@enumFromInt(@intFromEnum(at_idx)), content);
+}
+
+/// Set a type variable To the specified content at the specified CIR node index.
+pub fn setTypeVarAt(self: *CIR, at_idx: Node.Idx, content: types.Content) types.Var {
+    return self.env.types_store.freshFromContentAt(@intFromEnum(at_idx), content) catch |err| exitOnOom(err);
+}
+
 // Helper to add type index info to a s-expr node
 fn appendTypeVar(node: *sexpr.Expr, gpa: std.mem.Allocator, name: []const u8, type_idx: TypeVar) void {
     var type_node = sexpr.Expr.init(gpa, name);
@@ -362,7 +377,7 @@ pub const Expr = union(enum) {
         region: Region,
     },
     int: struct {
-        num_var: TypeVar,
+        int_var: TypeVar,
         precision_var: TypeVar,
         literal: StringLiteral.Idx,
         value: IntValue,
@@ -370,7 +385,7 @@ pub const Expr = union(enum) {
         region: Region,
     },
     float: struct {
-        num_var: TypeVar,
+        frac_var: TypeVar,
         precision_var: TypeVar,
         literal: StringLiteral.Idx,
         value: f64,
@@ -439,7 +454,6 @@ pub const Expr = union(enum) {
         region: Region,
     },
     tag: struct {
-        tag_union_var: TypeVar,
         ext_var: TypeVar,
         name: Ident.Idx,
         args: Expr.Span,
@@ -544,12 +558,12 @@ pub const Expr = union(enum) {
                 var int_node = sexpr.Expr.init(gpa, "int");
                 int_node.appendRegionInfo(gpa, ir.calcRegionInfo(int_expr.region));
 
-                // Add num_var
-                var num_var_node = sexpr.Expr.init(gpa, "num_var");
-                const num_var_str = int_expr.num_var.allocPrint(gpa);
-                defer gpa.free(num_var_str);
-                num_var_node.appendString(gpa, num_var_str);
-                int_node.appendNode(gpa, &num_var_node);
+                // Add int_var
+                var int_var_node = sexpr.Expr.init(gpa, "int_var");
+                const int_var_str = int_expr.int_var.allocPrint(gpa);
+                defer gpa.free(int_var_str);
+                int_var_node.appendString(gpa, int_var_str);
+                int_node.appendNode(gpa, &int_var_node);
 
                 // Add precision_var
                 var prec_var_node = sexpr.Expr.init(gpa, "precision_var");
@@ -580,12 +594,12 @@ pub const Expr = union(enum) {
                 var float_node = sexpr.Expr.init(gpa, "float");
                 float_node.appendRegionInfo(gpa, ir.calcRegionInfo(float_expr.region));
 
-                // Add num_var
-                var num_var_node = sexpr.Expr.init(gpa, "num_var");
-                const num_var_str = float_expr.num_var.allocPrint(gpa);
-                defer gpa.free(num_var_str);
-                num_var_node.appendString(gpa, num_var_str);
-                float_node.appendNode(gpa, &num_var_node);
+                // Add frac_var
+                var frac_var_node = sexpr.Expr.init(gpa, "frac_var");
+                const frac_var_str = float_expr.frac_var.allocPrint(gpa);
+                defer gpa.free(frac_var_str);
+                frac_var_node.appendString(gpa, frac_var_str);
+                float_node.appendNode(gpa, &frac_var_node);
 
                 // Add precision_var
                 var prec_var_node = sexpr.Expr.init(gpa, "precision_var");
@@ -845,13 +859,6 @@ pub const Expr = union(enum) {
                 var tag_node = sexpr.Expr.init(gpa, "tag");
                 tag_node.appendRegionInfo(gpa, ir.calcRegionInfo(tag_expr.region));
 
-                // Add tag_union_var
-                var tag_union_var_node = sexpr.Expr.init(gpa, "tag_union_var");
-                const tag_union_var_str = tag_expr.tag_union_var.allocPrint(gpa);
-                defer gpa.free(tag_union_var_str);
-                tag_union_var_node.appendString(gpa, tag_union_var_str);
-                tag_node.appendNode(gpa, &tag_union_var_node);
-
                 // Add ext_var
                 var ext_var_node = sexpr.Expr.init(gpa, "ext_var");
                 const ext_var_str = tag_expr.ext_var.allocPrint(gpa);
@@ -970,7 +977,6 @@ pub const Def = struct {
     pattern_region: Region,
     expr: Expr.Idx,
     expr_region: Region,
-    expr_var: TypeVar,
     // TODO:
     // pattern_vars: SendMap<Symbol, Variable>,
     annotation: ?Annotation.Idx,
@@ -1055,10 +1061,6 @@ pub const Def = struct {
         var expr_sexpr = expr.toSExpr(ir);
         expr_node.appendNode(gpa, &expr_sexpr);
         node.appendNode(gpa, &expr_node);
-
-        const expr_var = self.expr_var.allocPrint(gpa);
-        defer gpa.free(expr_var);
-        node.appendString(gpa, expr_var);
 
         if (self.annotation) |anno_idx| {
             _ = anno_idx; // TODO: implement annotation lookup

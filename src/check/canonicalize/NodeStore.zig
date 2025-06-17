@@ -163,14 +163,14 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             const literal: base.StringLiteral.Idx = @enumFromInt(node.data_1);
 
             // Retrieve type variables from data_2 and data_3
-            const num_var = @as(types.Var, @enumFromInt(node.data_2));
+            const int_var = @as(types.Var, @enumFromInt(node.data_2));
             const precision_var = @as(types.Var, @enumFromInt(node.data_3));
 
             // TODO get value and bound from extra_data
 
             return .{
                 .int = .{
-                    .num_var = num_var,
+                    .int_var = int_var,
                     .precision_var = precision_var,
                     .literal = literal,
                     .value = CIR.IntValue.placeholder(),
@@ -203,14 +203,14 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             const literal: base.StringLiteral.Idx = @enumFromInt(node.data_1);
 
             // Retrieve type variables from data_2 and data_3
-            const num_var = @as(types.Var, @enumFromInt(node.data_2));
+            const frac_var = @as(types.Var, @enumFromInt(node.data_2));
             const precision_var = @as(types.Var, @enumFromInt(node.data_3));
 
             // TODO get value and bound from extra_data
 
             return CIR.Expr{
                 .float = .{
-                    .num_var = num_var,
+                    .frac_var = frac_var,
                     .precision_var = precision_var,
                     .literal = literal,
                     .value = 0,
@@ -231,7 +231,6 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         .expr_tag => {
             return .{
                 .tag = .{
-                    .tag_union_var = @enumFromInt(0), // Placeholder
                     .ext_var = @enumFromInt(0), // Placeholder
                     .name = @bitCast(@as(base.Ident.Idx, @bitCast(node.data_1))),
                     .args = .{ .span = .{ .start = 0, .len = 0 } }, // Empty args for now
@@ -517,7 +516,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             node.data_1 = @intFromEnum(e.literal);
 
             // Store type variables in data_2 and data_3
-            node.data_2 = @intFromEnum(e.num_var);
+            node.data_2 = @intFromEnum(e.int_var);
             node.data_3 = @intFromEnum(e.precision_var);
 
             // TODO for storing the value and bound, use extra_data
@@ -537,7 +536,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             node.data_1 = @intFromEnum(e.literal);
 
             // Store type variables in data_2 and data_3
-            node.data_2 = @intFromEnum(e.num_var);
+            node.data_2 = @intFromEnum(e.frac_var);
             node.data_3 = @intFromEnum(e.precision_var);
 
             // TODO for storing the value and bound, use extra_data
@@ -784,8 +783,6 @@ pub fn addDef(store: *NodeStore, def: CIR.Def) CIR.Def.Idx {
     store.extra_data.append(store.gpa, @intFromEnum(def.pattern)) catch |err| exitOnOom(err);
     // Store expr idx
     store.extra_data.append(store.gpa, @intFromEnum(def.expr)) catch |err| exitOnOom(err);
-    // Store expr_var
-    store.extra_data.append(store.gpa, @intFromEnum(def.expr_var)) catch |err| exitOnOom(err);
     // Store kind tag as two u32's
     const kind_encoded = def.kind.encode();
     store.extra_data.append(store.gpa, kind_encoded[0]) catch |err| exitOnOom(err);
@@ -816,7 +813,6 @@ pub fn getDef(store: *NodeStore, def_idx: CIR.Def.Idx) CIR.Def {
 
     const pattern: CIR.Pattern.Idx = @enumFromInt(extra_data[0]);
     const expr: CIR.Expr.Idx = @enumFromInt(extra_data[1]);
-    const expr_var: types.Var = @enumFromInt(extra_data[2]);
     const kind_encoded = .{ extra_data[3], extra_data[4] };
     const kind = CIR.Def.Kind.decode(kind_encoded);
     const anno_idx = extra_data[5];
@@ -833,7 +829,6 @@ pub fn getDef(store: *NodeStore, def_idx: CIR.Def.Idx) CIR.Def {
             .start = .{ .offset = expr_region_start },
             .end = .{ .offset = expr_region_end },
         },
-        .expr_var = expr_var,
         .annotation = annotation,
         .kind = kind,
     };
