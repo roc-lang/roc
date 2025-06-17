@@ -12,5 +12,4 @@ test {
     testing.refAllDeclsRecursive(@import("check/check_types/unify.zig"));
     testing.refAllDeclsRecursive(@import("check/check_types/occurs.zig"));
     testing.refAllDeclsRecursive(@import("snapshot.zig"));
-    testing.refAllDeclsRecursive(@import("base/module_work_new.zig"));
 }
