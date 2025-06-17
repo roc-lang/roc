@@ -120,7 +120,7 @@ fn loadOrCompileCanIr(
         // TODO Can we init CIR & the types store capacities based on the number
         // of parse nodes?
 
-        var can_ir = Can.CIR.init(module_env);
+        var can_ir = Can.CIR.init(&module_env);
         var scope = Scope.init(can_ir.env.gpa);
         defer scope.deinit(gpa);
         var can = Can.init(&can_ir, &parse_ir, &scope);
@@ -131,49 +131,56 @@ fn loadOrCompileCanIr(
 }
 
 fn collectAdjacencies(graph: *Self, package_store: *const Package.Store) void {
-    _ = graph;
-    _ = package_store;
-    @panic("TODO fix me");
-    // for (graph.modules.items, 0..) |metadata, metadata_index| {
-    //     const import_store = metadata.work.imports;
-    //     const package = package_store.packages.get(metadata.package_idx);
+    for (graph.modules.items, 0..) |*metadata, metadata_index| {
+        const import_store = &metadata.work.imports;
+        const package = &package_store.packages.items.items[@intFromEnum(metadata.package_idx)];
 
-    //     import_loop: for (import_store.imports.items.items) |*import| {
-    //         const from_package_idx = if (import.package_shorthand) |imp_shorthand| shorthand_blk: {
-    //             for (package.dependencies.items.items) |dependency| {
-    //                 if (std.mem.eql(u8, dependency.shorthand, imp_shorthand)) {
-    //                     switch (dependency.package) {
-    //                         .idx => |idx| break :shorthand_blk idx,
-    //                         .err => continue :import_loop,
-    //                     }
-    //                 }
-    //             }
+        // Skip the primary module (index 0) as it represents the module itself
+        var import_idx: u32 = 1;
+        while (import_idx < import_store.imports.items.items.len) : (import_idx += 1) {
+            const import = &import_store.imports.items.items[import_idx];
 
-    //             continue :import_loop;
-    //         } else metadata.package_idx;
+            // Skip if this import has no name (builtin or empty)
+            if (import.name.len == 0) continue;
 
-    //         const from_package = package_store.packages.get(from_package_idx);
-    //         const from_package_modules = from_package.modules;
+            const from_package_idx = if (import.package_shorthand) |imp_shorthand| shorthand_blk: {
+                for (package.dependencies.items.items) |dependency| {
+                    if (std.mem.eql(u8, dependency.shorthand, imp_shorthand)) {
+                        switch (dependency.package) {
+                            .idx => |idx| break :shorthand_blk idx,
+                            .err => continue,
+                        }
+                    }
+                }
+                continue; // Could not resolve package shorthand
+            } else metadata.package_idx;
 
-    //         for (from_package_modules.items.items, @as(u32, 0)..) |from_module, from_module_index| {
-    //             const from_module_idx: Package.Module.Idx = @enumFromInt(from_module_index);
-    //             if (!std.mem.eql(u8, from_module.name, import.name)) continue :import_loop;
+            const from_package = &package_store.packages.items.items[@intFromEnum(from_package_idx)];
 
-    //             import.resolved = ModuleImport.Resolved{
-    //                 .package_idx = from_package_idx,
-    //                 .module_idx = from_module_idx,
-    //             };
+            // Find the module in the target package
+            for (from_package.modules.items.items, 0..) |from_module, from_module_index| {
+                if (!std.mem.eql(u8, from_module.name, import.name)) continue;
 
-    //             // TODO: find out what we need to store to avoid needing this expensive loop
-    //             for (graph.modules.items, 0..) |search_metadata, search_index| {
-    //                 if (search_metadata.package_idx != from_package_idx) continue;
-    //                 if (search_metadata.module_idx != from_module_idx) continue;
+                const from_module_idx: Package.Module.Idx = @enumFromInt(from_module_index);
 
-    //                 graph.adjacencies.items[metadata_index].append(search_index) catch |err| exitOnOom(err);
-    //             }
-    //         }
-    //     }
-    // }
+                // Mark the import as resolved
+                import.resolved = ModuleImport.Resolved{
+                    .package_idx = from_package_idx,
+                    .module_idx = from_module_idx,
+                };
+
+                // Find the corresponding module in our graph and add the dependency
+                for (graph.modules.items, 0..) |search_metadata, search_index| {
+                    if (search_metadata.package_idx != from_package_idx) continue;
+                    if (search_metadata.module_idx != from_module_idx) continue;
+
+                    graph.adjacencies.items[metadata_index].append(search_index) catch |err| exitOnOom(err);
+                    break;
+                }
+                break;
+            }
+        }
+    }
 }
 
 const Attributes = struct {
@@ -243,6 +250,7 @@ pub fn putModulesInCompilationOrder(
 pub fn findStronglyConnectedComponents(self: *const Self, gpa: std.mem.Allocator) Sccs {
     var next_unused_index: usize = 0;
     var stack = std.ArrayList(usize).init(self.gpa);
+    defer stack.deinit();
 
     var all_attributes = gpa.alloc(Attributes, self.modules.items.len) catch |err| exitOnOom(err);
     defer gpa.free(all_attributes);

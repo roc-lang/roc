@@ -56,25 +56,28 @@ pub const Diagnostic = union(enum) {
 
     /// Build a report for "not implemented" diagnostic
     pub fn buildNotImplementedReport(allocator: Allocator, feature: []const u8) !Report {
-        var report = Report.init(allocator, "NOT IMPLEMENTED", .runtime_error, reporting.ReportingConfig.initPlainText());
+        var report = Report.init(allocator, "NOT IMPLEMENTED", .fatal, reporting.ReportingConfig.initPlainText());
+        const owned_feature = try report.addOwnedString(feature);
         try report.document.addText("This feature is not yet implemented: ");
-        try report.document.addText(feature);
+        try report.document.addText(owned_feature);
         return report;
     }
 
     /// Build a report for "invalid number literal" diagnostic
     pub fn buildInvalidNumLiteralReport(allocator: Allocator, literal: []const u8) !Report {
         var report = Report.init(allocator, "INVALID NUMBER", .runtime_error, reporting.ReportingConfig.initPlainText());
+        const owned_literal = try report.addOwnedString(literal);
         try report.document.addText("This number literal is not valid: ");
-        try report.document.addText(literal);
+        try report.document.addText(owned_literal);
         return report;
     }
 
     /// Build a report for "identifier already in scope" diagnostic
     pub fn buildIdentAlreadyInScopeReport(allocator: Allocator, ident_name: []const u8) !Report {
-        var report = Report.init(allocator, "DUPLICATE DEFINITION", .runtime_error, reporting.ReportingConfig.initPlainText());
+        var report = Report.init(allocator, "DUPLICATE DEFINITION", .warning, reporting.ReportingConfig.initPlainText());
+        const owned_ident = try report.addOwnedString(ident_name);
         try report.document.addText("The name `");
-        try report.document.addUnqualifiedSymbol(ident_name);
+        try report.document.addUnqualifiedSymbol(owned_ident);
         try report.document.addText("` is already defined in this scope.");
         try report.document.addLineBreak();
         try report.document.addReflowingText("Choose a different name for this identifier, or remove the duplicate definition.");
@@ -84,8 +87,9 @@ pub const Diagnostic = union(enum) {
     /// Build a report for "identifier not in scope" diagnostic
     pub fn buildIdentNotInScopeReport(allocator: Allocator, ident_name: []const u8) !Report {
         var report = Report.init(allocator, "UNDEFINED VARIABLE", .runtime_error, reporting.ReportingConfig.initPlainText());
+        const owned_ident = try report.addOwnedString(ident_name);
         try report.document.addText("Nothing is named `");
-        try report.document.addUnqualifiedSymbol(ident_name);
+        try report.document.addUnqualifiedSymbol(owned_ident);
         try report.document.addText("` in this scope.");
         try report.document.addLineBreak();
         try report.document.addText("Is there an ");
@@ -99,8 +103,9 @@ pub const Diagnostic = union(enum) {
     /// Build a report for "invalid top level statement" diagnostic
     pub fn buildInvalidTopLevelStatementReport(allocator: Allocator, stmt_name: []const u8) !Report {
         var report = Report.init(allocator, "INVALID STATEMENT", .runtime_error, reporting.ReportingConfig.initPlainText());
+        const owned_stmt = try report.addOwnedString(stmt_name);
         try report.document.addText("The statement ");
-        try report.document.addAnnotated(stmt_name, .emphasized);
+        try report.document.addAnnotated(owned_stmt, .emphasized);
         try report.document.addText(" is not allowed at the top level.");
         try report.document.addLineBreak();
         try report.document.addReflowingText("Only definitions, type annotations, and imports are allowed at the top level.");

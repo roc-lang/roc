@@ -46,6 +46,14 @@ pub const Report = struct {
         self.document.deinit();
     }
 
+    /// Add a string that the report will take ownership of.
+    /// Returns the owned copy of the string that can be safely used in the document.
+    pub fn addOwnedString(self: *Report, string: []const u8) ![]const u8 {
+        const owned_copy = try self.allocator.dupe(u8, string);
+        try self.owned_strings.append(owned_copy);
+        return owned_copy;
+    }
+
     /// Render the report to the specified writer and target format.
     pub fn render(self: *const Report, writer: anytype, target: RenderTarget) !void {
         try renderer.renderReport(self, writer, target);

@@ -43,14 +43,30 @@ pub fn renderReportToTerminal(report: *const Report, writer: anytype, palette: C
         .warning => palette.warning,
     };
 
+    try writer.writeAll("-- ");
     try writer.writeAll(palette.bold);
     try writer.writeAll(title_color);
     try writer.writeAll(report.title);
     try writer.writeAll(palette.reset);
+    try writer.writeAll(" ");
+
+    const PADDING_WIDTH = 50 - 4; // 4 is the width of the 3 char before and 1 space after the title
+    const title_length = report.title.len;
+    const padding = if (title_length < PADDING_WIDTH) PADDING_WIDTH - title_length else 0;
+
+    // stack allocate a buffer for our variable padding width
+    var buf: [PADDING_WIDTH]u8 = undefined;
+    for (buf[0..padding]) |*b| {
+        b.* = '-';
+    }
+    try writer.writeAll(buf[0..padding]);
+
     try writer.writeAll("\n\n");
 
     // Render document content
     try renderDocumentToTerminal(&report.document, writer, palette);
+
+    try writer.writeAll("\n");
 }
 
 /// Render a report to plain text.

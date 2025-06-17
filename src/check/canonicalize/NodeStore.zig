@@ -9,6 +9,7 @@ const CIR = @import("CIR.zig");
 
 const DataSpan = base.DataSpan;
 const Region = base.Region;
+const StringLiteral = base.StringLiteral;
 const Diagnostic = @import("Diagnostic.zig");
 
 const exitOnOom = collections.exitOnOom;
