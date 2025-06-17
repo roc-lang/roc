@@ -92,7 +92,7 @@ pub const Tag = enum {
     if_branch,
 
     // used to represent an extra node, solely for type-checking purposes
-    type_placeholder,
+    type_var_slot,
 
     // Runtime Error Node
     //

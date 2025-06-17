@@ -47,7 +47,6 @@ foo =
 			"let"
 			(pattern (4:1-4:4)
 				(assign (4:1-4:4) (ident "foo")))
-			(expr (6:5-6:12)
-				(string (6:5-6:12) (literal (6:6-6:12) "onmo %")))
-			"#5")))
+			(expr (1:1-1:1)
+				(string (6:5-6:12) (literal (6:6-6:12) "onmo %"))))))
 ~~~END

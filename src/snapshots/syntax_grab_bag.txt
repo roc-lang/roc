@@ -1049,30 +1049,25 @@ NO CHANGE
 			"let"
 			(pattern (65:1-65:16)
 				(assign (65:1-65:16) (ident "add_one_oneline")))
-			(expr (65:19-67:8) (runtime_error (65:19-67:8) "can_lambda_not_implemented"))
-			"#21")
+			(expr (1:1-1:1) (runtime_error (65:19-67:8) "can_lambda_not_implemented")))
 		(def
 			"let"
 			(pattern (68:1-68:8)
 				(assign (68:1-68:8) (ident "add_one")))
-			(expr (68:11-78:2) (runtime_error (68:11-78:2) "can_lambda_not_implemented"))
-			"#28")
+			(expr (1:1-1:1) (runtime_error (68:11-78:2) "can_lambda_not_implemented")))
 		(def
 			"let"
 			(pattern (80:1-80:11)
 				(assign (80:1-80:11) (ident "match_time")))
-			(expr (80:14-140:7) (runtime_error (80:14-140:7) "can_lambda_not_implemented"))
-			"#34")
+			(expr (1:1-1:1) (runtime_error (80:14-140:7) "can_lambda_not_implemented")))
 		(def
 			"let"
 			(pattern (144:1-144:6)
 				(assign (144:1-144:6) (ident "main!")))
-			(expr (144:9-196:2) (runtime_error (144:9-196:2) "can_lambda_not_implemented"))
-			"#42")
+			(expr (1:1-1:1) (runtime_error (144:9-196:2) "can_lambda_not_implemented")))
 		(def
 			"let"
 			(pattern (199:1-199:6)
 				(assign (199:1-199:6) (ident "empty")))
-			(expr (199:9-199:11) (runtime_error (1:1-1:1) "not_implemented"))
-			"#47")))
+			(expr (1:1-1:1) (runtime_error (1:1-1:1) "not_implemented")))))
 ~~~END

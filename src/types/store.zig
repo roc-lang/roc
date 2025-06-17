@@ -16,6 +16,7 @@ const Content = types.Content;
 const Rank = types.Rank;
 const Mark = types.Mark;
 const RecordField = types.RecordField;
+const TagUnion = types.TagUnion;
 const Tag = types.Tag;
 
 const VarSafeList = Var.SafeList;
@@ -162,6 +163,16 @@ pub const Store = struct {
         const desc_idx = self.descs.insert(self.gpa, desc);
         const slot_idx = self.slots.insert(self.gpa, .{ .root = desc_idx });
         return Self.slotIdxToVar(slot_idx);
+    }
+
+    // make content types //
+
+    /// Make a tag union data type
+    /// Does not insert content into the type store.
+    pub fn mkTagUnion(self: *Self, tags: []const Tag, ext_var: Var) Content {
+        const tags_range = self.appendTags(tags);
+        const tag_union = TagUnion{ .tags = tags_range, .ext = ext_var };
+        return Content{ .structure = .{ .tag_union = tag_union } };
     }
 
     // sub list setters //

@@ -26,12 +26,11 @@ NO CHANGE
 			"let"
 			(pattern (2:1-2:4)
 				(assign (2:1-2:4) (ident "foo")))
-			(expr (2:7-2:9)
+			(expr (1:1-1:1)
 				(int (2:7-2:9)
-					(num_var "#2")
-					(precision_var "#1")
+					(int_var "#1")
+					(precision_var "#0")
 					(literal "42")
 					(value "TODO")
-					(bound "u8")))
-			"#5")))
+					(bound "u8"))))))
 ~~~END
