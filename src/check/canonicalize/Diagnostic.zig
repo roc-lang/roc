@@ -56,7 +56,7 @@ pub const Diagnostic = union(enum) {
 
     /// Build a report for "not implemented" diagnostic
     pub fn buildNotImplementedReport(allocator: Allocator, feature: []const u8) !Report {
-        var report = Report.init(allocator, "NOT IMPLEMENTED", .runtime_error, reporting.ReportingConfig.initPlainText());
+        var report = Report.init(allocator, "NOT IMPLEMENTED", .fatal, reporting.ReportingConfig.initPlainText());
         const owned_feature = try report.addOwnedString(feature);
         try report.document.addText("This feature is not yet implemented: ");
         try report.document.addText(owned_feature);
@@ -74,7 +74,7 @@ pub const Diagnostic = union(enum) {
 
     /// Build a report for "identifier already in scope" diagnostic
     pub fn buildIdentAlreadyInScopeReport(allocator: Allocator, ident_name: []const u8) !Report {
-        var report = Report.init(allocator, "DUPLICATE DEFINITION", .runtime_error, reporting.ReportingConfig.initPlainText());
+        var report = Report.init(allocator, "DUPLICATE DEFINITION", .warning, reporting.ReportingConfig.initPlainText());
         const owned_ident = try report.addOwnedString(ident_name);
         try report.document.addText("The name `");
         try report.document.addUnqualifiedSymbol(owned_ident);

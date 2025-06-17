@@ -17,6 +17,7 @@ const cli_args = @import("cli_args.zig");
 const Allocator = std.mem.Allocator;
 const exitOnOom = collections.utils.exitOnOom;
 const fatal = collections.utils.fatal;
+const ColorPalette = reporting.ColorPalette;
 
 const legalDetailsFileContent = @embedFile("legal_details");
 
@@ -140,21 +141,39 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) void {
 
     // Process reports and render them using the reporting system
     if (result.reports.len > 0) {
-        stderr.print("Errors in {s}:\n", .{args.path}) catch {};
+        var fatal_errors: usize = 0;
+        var runtime_errors: usize = 0;
+        var warnings: usize = 0;
 
         // Render each report
         for (result.reports) |*report| {
-            // Render the full diagnostic report to stderr using terminal rendering
-            const palette = reporting.ColorPalette.ANSI;
-            reporting.renderReportToTerminal(report, stderr_writer, palette) catch |render_err| {
+
+            // Render the diagnostic report to stderr
+            reporting.renderReportToTerminal(report, stderr_writer, ColorPalette.ANSI) catch |render_err| {
                 stderr.print("Error rendering diagnostic report: {}\n", .{render_err}) catch {};
                 // Fallback to just printing the title
                 stderr.print("  {s}\n", .{report.title}) catch {};
             };
+
+            switch (report.severity) {
+                .runtime_error => {
+                    runtime_errors += 1;
+                },
+                .fatal => {
+                    fatal_errors += 1;
+                },
+                .warning => {
+                    warnings += 1;
+                },
+            }
         }
         stderr.writeAll("\n") catch {};
 
-        stderr.print("Found {} error(s) in {s}\n", .{ result.reports.len, args.path }) catch {};
+        stderr.print("Found {} error(s) and {} warning(s) in {s}\n", .{
+            (fatal_errors + runtime_errors),
+            warnings,
+            args.path,
+        }) catch {};
         std.process.exit(1);
     } else {
         stdout.print("No errors found in {s}\n", .{args.path}) catch {};
