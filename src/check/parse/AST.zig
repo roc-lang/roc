@@ -14,12 +14,12 @@ const std = @import("std");
 const base = @import("../../base.zig");
 const sexpr = @import("../../base/sexpr.zig");
 const tokenize = @import("tokenize.zig");
+const Token = tokenize.Token;
 const collections = @import("../../collections.zig");
 const reporting = @import("../../reporting.zig");
 
 const Node = @import("Node.zig");
 const NodeStore = @import("NodeStore.zig");
-const Token = tokenize.Token;
 const TokenizedBuffer = tokenize.TokenizedBuffer;
 const exitOnOom = @import("../../collections/utils.zig").exitOnOom;
 
@@ -55,6 +55,10 @@ pub fn regionIsMultiline(self: *AST, region: TokenizedRegion) bool {
     return false;
 }
 
+pub fn hasErrors(self: *AST) bool {
+    return self.tokenize_diagnostics.items.len > 0 or self.parse_diagnostics.items.len > 0;
+}
+
 /// Returns diagnostic position information for the given region.
 pub fn calcRegionInfo(self: *AST, region: TokenizedRegion, line_starts: []const u32) base.RegionInfo {
     const start = self.tokens.resolve(region.start);
@@ -78,6 +82,92 @@ pub fn deinit(self: *AST, gpa: std.mem.Allocator) void {
     defer self.store.deinit();
     defer self.tokenize_diagnostics.deinit(gpa);
     defer self.parse_diagnostics.deinit(gpa);
+}
+
+/// Convert a tokenize diagnostic to a Report for rendering
+pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, allocator: std.mem.Allocator) !reporting.Report {
+    _ = self; // TODO: Use self for source information
+    const title = switch (diagnostic.tag) {
+        .MisplacedCarriageReturn => "MISPLACED CARRIAGE RETURN",
+        .AsciiControl => "ASCII CONTROL CHARACTER",
+        .LeadingZero => "LEADING ZERO",
+        .UppercaseBase => "UPPERCASE BASE",
+        .InvalidUnicodeEscapeSequence => "INVALID UNICODE ESCAPE SEQUENCE",
+        .InvalidEscapeSequence => "INVALID ESCAPE SEQUENCE",
+        .UnclosedString => "UNCLOSED STRING",
+        .UnclosedSingleQuote => "UNCLOSED SINGLE QUOTE",
+        .OverClosedBrace => "OVER CLOSED BRACE",
+        .MismatchedBrace => "MISMATCHED BRACE",
+        .NonPrintableUnicodeInStrLiteral => "NON-PRINTABLE UNICODE IN STRING LITERAL",
+    };
+
+    const body = switch (diagnostic.tag) {
+        .MisplacedCarriageReturn => "Carriage return characters (\\r) are not allowed in Roc source code.",
+        .AsciiControl => "ASCII control characters are not allowed in Roc source code.",
+        .LeadingZero => "Numbers cannot have leading zeros.",
+        .UppercaseBase => "Number base prefixes must be lowercase (0x, 0o, 0b).",
+        .InvalidUnicodeEscapeSequence => "This Unicode escape sequence is not valid.",
+        .InvalidEscapeSequence => "This escape sequence is not recognized.",
+        .UnclosedString => "This string is missing a closing quote.",
+        .UnclosedSingleQuote => "This character literal is missing a closing single quote.",
+        .OverClosedBrace => "There are too many closing braces here.",
+        .MismatchedBrace => "This brace does not match the corresponding opening brace.",
+        .NonPrintableUnicodeInStrLiteral => "Non-printable Unicode characters are not allowed in string literals.",
+    };
+
+    const config = reporting.ReportingConfig.initForTesting();
+    var report = reporting.Report.init(allocator, title, .runtime_error, config);
+    try report.document.addText(body);
+    return report;
+}
+
+/// Convert a parse diagnostic to a Report for rendering
+pub fn parseDiagnosticToReport(self: *AST, diagnostic: Diagnostic, allocator: std.mem.Allocator) !reporting.Report {
+    _ = self; // TODO: Use self for source information
+    const title = switch (diagnostic.tag) {
+        .bad_indent => "BAD INDENTATION",
+        .multiple_platforms => "MULTIPLE PLATFORMS",
+        .no_platform => "NO PLATFORM",
+        .missing_header => "MISSING HEADER",
+        .list_not_closed => "LIST NOT CLOSED",
+        .missing_arrow => "MISSING ARROW",
+        .expected_exposes => "EXPECTED EXPOSES",
+        .expected_exposes_close_square => "EXPECTED CLOSING BRACKET",
+        .expected_exposes_open_square => "EXPECTED OPENING BRACKET",
+        .expected_imports => "EXPECTED IMPORTS",
+        .expected_imports_close_curly => "EXPECTED CLOSING BRACE",
+        .expected_imports_open_curly => "EXPECTED OPENING BRACE",
+        .header_unexpected_token => "UNEXPECTED TOKEN IN HEADER",
+        .pattern_unexpected_token => "UNEXPECTED TOKEN IN PATTERN",
+        .pattern_unexpected_eof => "UNEXPECTED END OF FILE IN PATTERN",
+        .ty_anno_unexpected_token => "UNEXPECTED TOKEN IN TYPE ANNOTATION",
+        .statement_unexpected_eof => "UNEXPECTED END OF FILE",
+        .statement_unexpected_token => "UNEXPECTED TOKEN",
+        .string_unexpected_token => "UNEXPECTED TOKEN IN STRING",
+        .expr_unexpected_token => "UNEXPECTED TOKEN IN EXPRESSION",
+        .import_must_be_top_level => "IMPORT MUST BE TOP LEVEL",
+        else => "PARSE ERROR",
+    };
+
+    const body = switch (diagnostic.tag) {
+        .missing_header => "Roc files must start with a module header like 'module [main]' or 'app [main] { pf: platform \"...\" }'.",
+        .multiple_platforms => "Only one platform declaration is allowed per file.",
+        .no_platform => "App files must specify a platform.",
+        .bad_indent => "The indentation here is inconsistent with the surrounding code.",
+        .list_not_closed => "This list is missing a closing bracket ']'.",
+        .missing_arrow => "Expected an arrow '->' here.",
+        .header_unexpected_token => "This token is not expected in a module header.",
+        .pattern_unexpected_token => "This token is not expected in a pattern.",
+        .statement_unexpected_token => "This token is not expected in a statement.",
+        .expr_unexpected_token => "This token is not expected in an expression.",
+        .import_must_be_top_level => "Import statements must appear at the top level of a module.",
+        else => "A parsing error occurred.",
+    };
+
+    const config = reporting.ReportingConfig.initForTesting();
+    var report = reporting.Report.init(allocator, title, .runtime_error, config);
+    try report.document.addText(body);
+    return report;
 }
 
 /// Diagnostics related to parsing

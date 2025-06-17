@@ -6,7 +6,9 @@ const std = @import("std");
 const fmt = @import("fmt.zig");
 const base = @import("base.zig");
 const collections = @import("collections.zig");
-const coordinate = @import("coordinate.zig");
+const reporting = @import("reporting.zig");
+// const coordinate = @import("coordinate.zig");
+const coordinate_simple = @import("coordinate_simple.zig");
 
 const tracy = @import("tracy.zig");
 const Filesystem = @import("coordinate/Filesystem.zig");
@@ -119,14 +121,43 @@ fn rocVersion(gpa: Allocator) !void {
 }
 
 fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) void {
-    switch (coordinate.typecheckModule(gpa, Filesystem.default(), args.path)) {
-        .success => |data| {
-            _ = data;
-            // TODO implement me
-        },
-        .err => |err| {
-            std.debug.print("Failed to check {s}:\n{}\n", .{ args.path, err });
-        },
+    const stdout = std.io.getStdOut().writer();
+    const stderr = std.io.getStdErr().writer();
+    const stderr_writer = stderr.any();
+
+    // Process the file and get Reports
+    var result = coordinate_simple.processFile(gpa, Filesystem.default(), args.path) catch |err| {
+        stderr.print("Failed to check {s}: ", .{args.path}) catch {};
+        switch (err) {
+            error.FileNotFound => stderr.print("File not found\n", .{}) catch {},
+            error.AccessDenied => stderr.print("Access denied\n", .{}) catch {},
+            error.FileReadError => stderr.print("Could not read file\n", .{}) catch {},
+            else => stderr.print("{}\n", .{err}) catch {},
+        }
+        std.process.exit(1);
+    };
+    defer result.deinit(gpa);
+
+    // Process reports and render them using the reporting system
+    if (result.reports.len > 0) {
+        stderr.print("Errors in {s}:\n", .{args.path}) catch {};
+
+        // Render each report
+        for (result.reports) |*report| {
+            // Render the full diagnostic report to stderr using terminal rendering
+            const palette = reporting.ColorPalette.ANSI;
+            reporting.renderReportToTerminal(report, stderr_writer, palette) catch |render_err| {
+                stderr.print("Error rendering diagnostic report: {}\n", .{render_err}) catch {};
+                // Fallback to just printing the title
+                stderr.print("  {s}\n", .{report.title}) catch {};
+            };
+        }
+        stderr.writeAll("\n") catch {};
+
+        stderr.print("Found {} error(s) in {s}\n", .{ result.reports.len, args.path }) catch {};
+        std.process.exit(1);
+    } else {
+        stdout.print("No errors found in {s}\n", .{args.path}) catch {};
     }
 }
 

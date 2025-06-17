@@ -75,6 +75,11 @@ pub const Module = struct {
         relative_path: []const u8,
         string_arena: *std.heap.ArenaAllocator,
     ) NameError!Module {
+        // Validate that the path ends with .roc extension
+        if (!std.mem.endsWith(u8, relative_path, ROC_EXTENSION)) {
+            return error.invalid_extension;
+        }
+
         var component_iter = try std.fs.path.componentIterator(relative_path);
         if (component_iter.peekNext() == null) {
             return error.empty_name;
@@ -82,9 +87,9 @@ pub const Module = struct {
 
         // The filepath should always be `Path/To/Module.roc`, meaning we can just
         // replace the separators (the / in this example) with dots and remove
-        // the last four characters for the extension.
-        std.debug.assert(relative_path.len > ROC_EXTENSION.len);
-        var name = string_arena.allocator().alloc(u8, relative_path.len - ROC_EXTENSION.len) catch |err| exitOnOom(err);
+        // the extension.
+        const buffer_size = relative_path.len - ROC_EXTENSION.len;
+        var name = string_arena.allocator().alloc(u8, buffer_size) catch |err| exitOnOom(err);
         var chars_added: usize = 0;
 
         while (component_iter.next()) |component| {
@@ -110,11 +115,11 @@ pub const Module = struct {
                 }
             };
 
+            // Validate segment characters
             for (segment) |char| {
                 if (char == '.') {
                     return error.dot_in_path;
                 } else if (!std.ascii.isASCII(char)) {
-                    // TODO: what is a legal module name?
                     return error.non_ascii_path;
                 }
             }
@@ -128,9 +133,109 @@ pub const Module = struct {
         }
 
         return Module{
-            .name = name,
+            .name = name[0..chars_added],
             .filepath_relative_to_package_root = relative_path,
         };
+    }
+
+    test "fromRelativePath valid module" {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+
+        const result = try fromRelativePath("Foo/Bar/Baz.roc", &arena);
+        try std.testing.expectEqualStrings("Foo.Bar.Baz", result.name);
+        try std.testing.expectEqualStrings("Foo/Bar/Baz.roc", result.filepath_relative_to_package_root);
+    }
+
+    test "fromRelativePath single component" {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+
+        const result = try fromRelativePath("Module.roc", &arena);
+        try std.testing.expectEqualStrings("Module", result.name);
+        try std.testing.expectEqualStrings("Module.roc", result.filepath_relative_to_package_root);
+    }
+
+    test "fromRelativePath lowercase first letter" {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+
+        const result = try fromRelativePath("main.roc", &arena);
+        try std.testing.expectEqualStrings("", result.name);
+        try std.testing.expectEqualStrings("main.roc", result.filepath_relative_to_package_root);
+    }
+
+    test "fromRelativePath lowercase nested" {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+
+        const result = try fromRelativePath("utils/helpers.roc", &arena);
+        try std.testing.expectEqualStrings("", result.name);
+        try std.testing.expectEqualStrings("utils/helpers.roc", result.filepath_relative_to_package_root);
+    }
+
+    test "fromRelativePath empty path" {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+
+        try std.testing.expectError(error.invalid_extension, fromRelativePath("", &arena));
+    }
+
+    test "fromRelativePath invalid extension" {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+
+        try std.testing.expectError(error.invalid_extension, fromRelativePath("Module.txt", &arena));
+        try std.testing.expectError(error.invalid_extension, fromRelativePath("Foo/Bar.py", &arena));
+        try std.testing.expectError(error.invalid_extension, fromRelativePath("Module", &arena));
+    }
+
+    test "fromRelativePath dot in path component" {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+
+        try std.testing.expectError(error.dot_in_path, fromRelativePath("Foo.Bar/Module.roc", &arena));
+        try std.testing.expectError(error.dot_in_path, fromRelativePath("Foo/Bar.Baz/Module.roc", &arena));
+    }
+
+    test "fromRelativePath normalized paths" {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+
+        // Note: std.fs.path.componentIterator automatically handles double slashes
+        // by skipping empty components, so "Foo//Bar.roc" becomes "Foo/Bar.roc"
+        const result1 = try fromRelativePath("Foo//Bar.roc", &arena);
+        try std.testing.expectEqualStrings("Foo.Bar", result1.name);
+
+        // Leading slash is also handled by componentIterator
+        const result2 = try fromRelativePath("/Module.roc", &arena);
+        try std.testing.expectEqualStrings("Module", result2.name);
+    }
+
+    test "fromRelativePath non-ascii characters" {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+
+        try std.testing.expectError(error.non_ascii_path, fromRelativePath("Fooé/Bar.roc", &arena));
+        try std.testing.expectError(error.non_ascii_path, fromRelativePath("Foo/Bär.roc", &arena));
+    }
+
+    test "fromRelativePath complex valid path" {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+
+        const result = try fromRelativePath("Data/Collections/List/Utils.roc", &arena);
+        try std.testing.expectEqualStrings("Data.Collections.List.Utils", result.name);
+        try std.testing.expectEqualStrings("Data/Collections/List/Utils.roc", result.filepath_relative_to_package_root);
+    }
+
+    test "fromRelativePath mixed case components" {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+
+        const result = try fromRelativePath("HTTP/JSON/Parser.roc", &arena);
+        try std.testing.expectEqualStrings("HTTP.JSON.Parser", result.name);
+        try std.testing.expectEqualStrings("HTTP/JSON/Parser.roc", result.filepath_relative_to_package_root);
     }
 };
 
@@ -177,6 +282,9 @@ pub const Url = struct {
     /// Parse a package download URL into useful metadata.
     pub fn parse(url: []const u8) ParseErr!Url {
         const HTTPS_PREFIX = "https://";
+        if (url.len < HTTPS_PREFIX.len) {
+            return error.missing_https;
+        }
         const starts_with_https = std.mem.eql(u8, url[0..HTTPS_PREFIX.len], HTTPS_PREFIX);
         const without_protocol = if (starts_with_https) url[0..HTTPS_PREFIX.len] else {
             return error.missing_https;
@@ -424,11 +532,11 @@ pub const Store = struct {
         for (self.packages.items.items) |*package| {
             package.modules.deinit(gpa);
             package.dependencies.deinit(gpa);
-            package.relative_filepaths.deinit();
+            package.relative_filepaths.deinit(gpa);
         }
 
-        self.packages.deinit();
-        self.indices_by_url.deinit();
+        self.packages.deinit(gpa);
+        self.indices_by_url.deinit(gpa);
         self.string_arena.deinit();
     }
 

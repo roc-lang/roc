@@ -5,7 +5,7 @@ const collections = @import("../collections.zig");
 const types = @import("../types/types.zig");
 
 const NodeStore = @import("./canonicalize/NodeStore.zig");
-const Scope = @import("./canonicalize/Scope.zig");
+pub const Scope = @import("./canonicalize/Scope.zig");
 
 const AST = parse.AST;
 

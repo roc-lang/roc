@@ -3,7 +3,6 @@ const testing = std.testing;
 
 test {
     testing.refAllDeclsRecursive(@import("main.zig"));
-    testing.refAllDeclsRecursive(@import("snapshot.zig"));
     testing.refAllDeclsRecursive(@import("builtins/main.zig"));
 
     // TODO: Remove after hooking up
@@ -11,4 +10,7 @@ test {
     testing.refAllDeclsRecursive(@import("reporting/test.zig"));
     testing.refAllDeclsRecursive(@import("eval/stack.zig"));
     testing.refAllDeclsRecursive(@import("check/check_types/unify.zig"));
+    testing.refAllDeclsRecursive(@import("check/check_types/occurs.zig"));
+    testing.refAllDeclsRecursive(@import("snapshot.zig"));
+    testing.refAllDeclsRecursive(@import("base/module_work_new.zig"));
 }

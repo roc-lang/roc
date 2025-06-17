@@ -25,7 +25,7 @@ pub const Diagnostic = @import("Diagnostic.zig").Diagnostic;
 
 const CIR = @This();
 
-env: base.ModuleEnv,
+env: *base.ModuleEnv,
 store: NodeStore,
 ingested_files: IngestedFile.List,
 imports: ModuleImport.Store,
@@ -43,16 +43,14 @@ top_level_defs: Def.Span,
 /// the `ModuleEnv` to also be owned by the can IR to cache it.
 ///
 /// Takes ownership of the module_env
-pub fn init(env: ModuleEnv) CIR {
-    var ident_store = env.idents;
-
+pub fn init(env: *ModuleEnv) CIR {
     const NODE_STORE_CAPACITY = 10_000;
 
     return CIR{
         .env = env,
         .store = NodeStore.initCapacity(env.gpa, NODE_STORE_CAPACITY),
         .ingested_files = .{},
-        .imports = ModuleImport.Store.init(&.{}, &ident_store, env.gpa),
+        .imports = ModuleImport.Store.init(&.{}, &env.idents, env.gpa),
         .top_level_defs = .{ .span = .{ .start = 0, .len = 0 } },
     };
 }

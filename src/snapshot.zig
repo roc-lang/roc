@@ -454,7 +454,7 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
 
     // Canonicalize the source code
     // Can.IR.init takes ownership of the module_env and type_store
-    var can_ir = CIR.init(module_env);
+    var can_ir = CIR.init(&module_env);
     defer can_ir.deinit();
 
     var scope = Scope.init(can_ir.env.gpa);
