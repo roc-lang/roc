@@ -51,7 +51,7 @@ pub fn checkSource(
     source: []const u8,
 ) ![]const CIR.Diagnostic {
     // Initialize the ModuleEnv
-    var module_env = ModuleEnv.init(gpa, source);
+    var module_env = ModuleEnv.init(gpa);
     defer module_env.deinit();
 
     // Parse the source code
@@ -88,7 +88,7 @@ pub fn processSource(
     source: []const u8,
 ) !ProcessResult {
     // Initialize the ModuleEnv
-    var module_env = ModuleEnv.init(gpa, source);
+    var module_env = ModuleEnv.init(gpa);
     defer module_env.deinit();
 
     // Parse the source code

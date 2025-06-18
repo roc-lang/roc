@@ -480,7 +480,7 @@ fn parseDependenciesFromPackageRoot(
         return .{ .failed_to_read_root_file = err };
     defer gpa.free(contents);
 
-    var env = base.ModuleEnv.init(gpa, contents);
+    var env = base.ModuleEnv.init(gpa);
     defer env.deinit();
 
     var parse_ast = parse.parse(&env, contents);

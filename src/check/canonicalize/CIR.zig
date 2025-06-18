@@ -28,6 +28,8 @@ const CIR = @This();
 env: *base.ModuleEnv,
 store: NodeStore,
 ingested_files: IngestedFile.List,
+/// Temporary source text used during SExpr generation for region info calculation
+temp_source_for_sexpr: ?[]const u8 = null,
 imports: ModuleImport.Store,
 top_level_defs: Def.Span,
 
@@ -1479,7 +1481,10 @@ pub const ExhaustiveMark = TypeVar;
 /// and write it to the given writer.
 ///
 /// If a single expression is provided we only print that expression
-pub fn toSExprStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr.Idx) !void {
+pub fn toSExprStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr.Idx, source: []const u8) !void {
+    // Set temporary source for region info calculation during SExpr generation
+    ir.temp_source_for_sexpr = source;
+    defer ir.temp_source_for_sexpr = null;
     const gpa = ir.env.gpa;
 
     if (maybe_expr_idx) |expr_idx| {
@@ -1527,17 +1532,24 @@ test "NodeStore - init and deinit" {
 /// This is a standalone utility function that takes the source text as a parameter
 /// to avoid storing it in the cacheable IR structure.
 pub fn calcRegionInfo(self: *const CIR, region: Region) base.RegionInfo {
+    const empty = base.RegionInfo{
+        .start_line_idx = 0,
+        .start_col_idx = 0,
+        .end_line_idx = 0,
+        .end_col_idx = 0,
+        .line_text = "",
+    };
+
     // In the Can IR, regions store byte offsets directly, not token indices.
     // We can use these offsets directly to calculate the diagnostic position.
-    const info = base.RegionInfo.position(self.env.source.items, self.env.line_starts.items, region.start.offset, region.end.offset) catch {
+    const source = self.temp_source_for_sexpr orelse {
+        // No source available, return empty region info
+        return empty;
+    };
+
+    const info = base.RegionInfo.position(source, self.env.line_starts.items, region.start.offset, region.end.offset) catch {
         // Return a zero position if we can't calculate it
-        return .{
-            .start_line_idx = 0,
-            .start_col_idx = 0,
-            .end_line_idx = 0,
-            .end_col_idx = 0,
-            .line_text = "",
-        };
+        return empty;
     };
 
     return info;

@@ -27,19 +27,10 @@ types_store: type_mod.Store,
 /// and then use these line starts to calculate the line number and column number as required.
 /// this is a more compact representation at the expense of extra computation only when generating error diagnostics.
 line_starts: std.ArrayList(u32),
-/// The original source bytes. We use these to generate error diagnostics.
-/// TODO think about how we will manage this using the cache. Should we only
-/// read these when we need them to report an error? instead of keeping all of this in memory.
-/// This implementation here is simple, but let's us progress with working snapshot tests
-/// and we can validate the error messages and region information there.
-source: std.ArrayList(u8),
 
 /// Initialize the module environment.
-pub fn init(gpa: std.mem.Allocator, source_bytes: []const u8) Self {
+pub fn init(gpa: std.mem.Allocator) Self {
     // TODO: maybe wire in smarter default based on the initial input text size.
-
-    var source = std.ArrayList(u8).init(gpa);
-    source.appendSlice(source_bytes) catch |err| exitOnOom(err);
 
     return Self{
         .gpa = gpa,
@@ -48,7 +39,6 @@ pub fn init(gpa: std.mem.Allocator, source_bytes: []const u8) Self {
         .strings = StringLiteral.Store.initCapacityBytes(gpa, 4096),
         .types_store = type_mod.Store.initCapacity(gpa, 2048, 512),
         .line_starts = std.ArrayList(u32).init(gpa),
-        .source = source,
     };
 }
 
@@ -59,7 +49,6 @@ pub fn deinit(self: *Self) void {
     self.strings.deinit(self.gpa);
     self.types_store.deinit();
     self.line_starts.deinit();
-    self.source.deinit();
 }
 
 /// Calculate and store line starts from the source text

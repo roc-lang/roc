@@ -146,7 +146,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
     };
     defer gpa.free(contents);
 
-    var module_env = base.ModuleEnv.init(gpa, contents);
+    var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
     var parse_ast = parse.parse(&module_env, contents);
@@ -1942,7 +1942,7 @@ pub fn moduleFmtsStable(gpa: std.mem.Allocator, input: []const u8, debug: bool) 
 }
 
 fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const u8 {
-    var module_env = base.ModuleEnv.init(gpa, input);
+    var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
     var parse_ast = parse.parse(&module_env, input);
