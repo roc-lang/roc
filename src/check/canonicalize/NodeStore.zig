@@ -325,7 +325,6 @@ pub fn getPattern(store: *NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pattern {
                 .tag_name = @bitCast(node.data_3),
 
                 .ext_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
-                .whole_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
             },
         },
         .pattern_record_destructure => return CIR.Pattern{

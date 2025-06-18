@@ -917,20 +917,19 @@ fn extractStringSegments(self: *Self, parts: []const AST.Expr.Idx) CIR.Expr.Span
 
 fn canonicalize_pattern(
     self: *Self,
-    pattern_idx: AST.Pattern.Idx,
+    ast_pattern_idx: AST.Pattern.Idx,
 ) ?CIR.Pattern.Idx {
     const gpa = self.can_ir.env.gpa;
-    switch (self.parse_ir.store.getPattern(pattern_idx)) {
+    switch (self.parse_ir.store.getPattern(ast_pattern_idx)) {
         .ident => |e| {
             const region = self.tokenizedRegionToRegion(e.region);
-
             if (self.parse_ir.tokens.resolveIdentifier(e.ident_tok)) |ident_idx| {
-
                 // Push a Pattern node for our identifier
                 const assign_idx = self.can_ir.store.addPattern(CIR.Pattern{ .assign = .{
                     .ident = ident_idx,
                     .region = region,
                 } });
+                _ = self.can_ir.setTypeVarAtPat(assign_idx, .{ .flex_var = null });
 
                 // Introduce the identifier into scope mapping to this pattern node
                 self.scope.levels.introduce(
@@ -940,19 +939,23 @@ fn canonicalize_pattern(
                     ident_idx,
                     assign_idx,
                 ) catch {
-                    return self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .ident_already_in_scope = .{
+                    const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .ident_already_in_scope = .{
                         .ident = ident_idx,
                         .region = region,
                     } });
+                    _ = self.can_ir.setTypeVarAtPat(malformed_idx, .err);
+                    return malformed_idx;
                 };
 
                 return assign_idx;
             } else {
                 const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "report an error when unable to resolve identifier");
-                self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .not_implemented = .{
                     .feature = feature,
                     .region = Region.zero(),
                 } });
+                _ = self.can_ir.setTypeVarAtPat(malformed_idx, .err);
+                return malformed_idx;
             }
         },
         .underscore => |p| {
@@ -962,7 +965,11 @@ fn canonicalize_pattern(
                 },
             };
 
-            return self.can_ir.store.addPattern(underscore_pattern);
+            const pattern_idx = self.can_ir.store.addPattern(underscore_pattern);
+
+            _ = self.can_ir.setTypeVarAtPat(pattern_idx, Content{ .flex_var = null });
+
+            return pattern_idx;
         },
         .number => |e| {
             const region = self.tokenizedRegionToRegion(e.region);
@@ -976,19 +983,21 @@ fn canonicalize_pattern(
             // parse the integer value
             const value = std.fmt.parseInt(i128, token_text, 10) catch {
                 // Invalid num literal
-                return self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .invalid_num_literal = .{
+                const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .invalid_num_literal = .{
                     .literal = literal,
                     .region = region,
                 } });
+                _ = self.can_ir.setTypeVarAtPat(malformed_idx, .err);
+                return malformed_idx;
             };
 
             // create type vars, first "reserve" node slots
-            const ret_expr_idx = self.can_ir.store.predictNodeIndex(2);
+            const ret_pattern_idx = self.can_ir.store.predictNodeIndex(2);
 
             // then insert the type vars, setting the parent to be the final slot
-            const num_type_var = self.can_ir.pushFreshTypeVar(ret_expr_idx, region);
+            const num_type_var = self.can_ir.pushFreshTypeVar(ret_pattern_idx, region);
 
-            // then in the final slot the actual expr is inserted
+            // then in the final slot the actual pattern is inserted
             const num_pattern = CIR.Pattern{
                 .num_literal = .{
                     .num_var = num_type_var,
@@ -1001,10 +1010,20 @@ fn canonicalize_pattern(
                     .region = region,
                 },
             };
+            const pattern_idx = self.can_ir.store.addPattern(num_pattern);
 
-            return self.can_ir.store.addPattern(num_pattern);
+            std.debug.assert(@intFromEnum(pattern_idx) == @intFromEnum(ret_pattern_idx));
+
+            // Set the concrete type variable
+            _ = self.can_ir.setTypeVarAtPat(pattern_idx, Content{
+                .structure = .{ .num = .{ .num_poly = num_type_var } },
+            });
+
+            return pattern_idx;
         },
         .string => |e| {
+            const region = self.tokenizedRegionToRegion(e.region);
+
             // resolve to a string slice from the source
             const token_text = self.parse_ir.resolve(e.string_tok);
 
@@ -1015,26 +1034,30 @@ fn canonicalize_pattern(
             const str_pattern = CIR.Pattern{
                 .str_literal = .{
                     .literal = literal,
-                    .region = self.tokenizedRegionToRegion(e.region),
+                    .region = region,
                 },
             };
+            const pattern_idx = self.can_ir.store.addPattern(str_pattern);
 
-            return self.can_ir.store.addPattern(str_pattern);
+            // Set the concrete type variable
+            _ = self.can_ir.setTypeVarAtPat(pattern_idx, Content{ .structure = .str });
+
+            return pattern_idx;
         },
         .tag => |e| {
             if (self.parse_ir.tokens.resolveIdentifier(e.tag_tok)) |tag_name| {
                 const start = self.can_ir.store.scratch_patterns.top();
 
-                for (self.parse_ir.store.patternSlice(e.args)) |ast_pattern_idx| {
-                    if (self.canonicalize_pattern(ast_pattern_idx)) |idx| {
+                for (self.parse_ir.store.patternSlice(e.args)) |sub_ast_pattern_idx| {
+                    if (self.canonicalize_pattern(sub_ast_pattern_idx)) |idx| {
                         self.can_ir.store.scratch_patterns.append(gpa, idx);
                     } else {
-                        const arg = self.parse_ir.store.getPattern(ast_pattern_idx);
-                        const region = self.tokenizedRegionToRegion(arg.to_tokenized_region());
+                        const arg = self.parse_ir.store.getPattern(sub_ast_pattern_idx);
+                        const arg_region = self.tokenizedRegionToRegion(arg.to_tokenized_region());
                         const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .pattern_arg_invalid = .{
-                            .region = region,
+                            .region = arg_region,
                         } });
-
+                        _ = self.can_ir.setTypeVarAtPat(malformed_idx, .err);
                         self.can_ir.store.scratch_patterns.append(gpa, malformed_idx);
                     }
                 }
@@ -1044,68 +1067,86 @@ fn canonicalize_pattern(
                 const args = self.can_ir.store.patternSpanFrom(start);
 
                 // create type vars, first "reserve" node slots
-                const ret_expr_idx = self.can_ir.store.predictNodeIndex(2);
+                const ret_pattern_idx = self.can_ir.store.predictNodeIndex(2);
 
                 // then insert the type vars, setting the parent to be the final slot
-                const tag_union_type_var = self.can_ir.pushFreshTypeVar(ret_expr_idx, region);
-                const ext_type_var = self.can_ir.pushFreshTypeVar(ret_expr_idx, region);
+                const ext_type_var = self.can_ir.pushFreshTypeVar(ret_pattern_idx, region);
 
-                // then in the final slot the actual expr is inserted
+                // then in the final slot the actual pattern is inserted
                 const tag_pattern = CIR.Pattern{
                     .applied_tag = .{
-                        .whole_var = tag_union_type_var,
                         .ext_var = ext_type_var,
                         .tag_name = tag_name,
                         .arguments = args,
                         .region = region,
                     },
                 };
+                const pattern_idx = self.can_ir.store.addPattern(tag_pattern);
 
-                return self.can_ir.store.addPattern(tag_pattern);
+                std.debug.assert(@intFromEnum(pattern_idx) == @intFromEnum(ret_pattern_idx));
+
+                // Set the concrete type variable
+                const tag_union_type = self.can_ir.env.types_store.mkTagUnion(
+                    &[_]Tag{Tag{ .name = tag_name, .args = types.Var.SafeList.Range.empty }},
+                    ext_type_var,
+                );
+                _ = self.can_ir.setTypeVarAtPat(pattern_idx, tag_union_type);
+
+                return pattern_idx;
             }
             return null;
         },
         .record => |_| {
             const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize record pattern");
-            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+            const pattern_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .not_implemented = .{
                 .feature = feature,
                 .region = Region.zero(),
             } });
+            _ = self.can_ir.setTypeVarAtPat(pattern_idx, .err);
+            return pattern_idx;
         },
         .tuple => |_| {
             const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize tuple pattern");
-            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+            const pattern_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .not_implemented = .{
                 .feature = feature,
                 .region = Region.zero(),
             } });
+            _ = self.can_ir.setTypeVarAtPat(pattern_idx, .err);
+            return pattern_idx;
         },
         .list => |_| {
             const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize list pattern");
-            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+            const pattern_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .not_implemented = .{
                 .feature = feature,
                 .region = Region.zero(),
             } });
+            _ = self.can_ir.setTypeVarAtPat(pattern_idx, .err);
+            return pattern_idx;
         },
         .list_rest => |_| {
             const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize list rest pattern");
-            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+            const pattern_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .not_implemented = .{
                 .feature = feature,
                 .region = Region.zero(),
             } });
+            _ = self.can_ir.setTypeVarAtPat(pattern_idx, .err);
+            return pattern_idx;
         },
         .alternatives => |_| {
             const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize alternatives pattern");
-            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+            const pattern_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .not_implemented = .{
                 .feature = feature,
                 .region = Region.zero(),
             } });
+            _ = self.can_ir.setTypeVarAtPat(pattern_idx, .err);
+            return pattern_idx;
         },
         .malformed => |malformed| {
             // We won't touch this since it's already a parse error.
             _ = malformed;
+            return null;
         },
     }
-    return null;
 }
 
 /// Introduce a new identifier to the current scope, return an

@@ -1250,7 +1250,6 @@ pub const Pattern = union(enum) {
         region: Region,
     },
     applied_tag: struct {
-        whole_var: TypeVar,
         ext_var: TypeVar,
         tag_name: Ident.Idx,
         arguments: Pattern.Span,
