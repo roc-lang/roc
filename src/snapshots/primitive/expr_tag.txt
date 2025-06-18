@@ -26,7 +26,7 @@ NO CHANGE
 			"let"
 			(pattern (2:1-2:4)
 				(assign (2:1-2:4) (ident "foo")))
-			(expr (1:1-1:1)
+			(expr (2:7-2:15)
 				(tag (2:7-2:15)
 					(ext_var "#0")
 					(name "FortyTwo")

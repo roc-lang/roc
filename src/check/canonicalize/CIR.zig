@@ -157,10 +157,10 @@ pub fn pushFreshTypeVar(self: *CIR, parent_node_idx: Node.Idx, region: base.Regi
 /// specified content in the types store at that index
 pub fn pushTypeVar(self: *CIR, content: types.Content, parent_node_idx: Node.Idx, region: base.Region) types.Var {
     // insert a placeholder can node
-    const placeholder_node_idx = self.store.addTypePlaceholder(parent_node_idx, region);
+    const var_slot = self.store.addTypeVarSlot(parent_node_idx, region);
 
     // create a new type var based on the placeholder node
-    return self.env.types_store.freshFromContentAt(@intFromEnum(placeholder_node_idx), content) catch |err| exitOnOom(err);
+    return self.env.types_store.freshFromContentAt(@intFromEnum(var_slot), content) catch |err| exitOnOom(err);
 }
 
 /// Set a type variable To the specified content at the specified CIR node index.

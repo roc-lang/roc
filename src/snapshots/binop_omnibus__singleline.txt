@@ -70,5 +70,5 @@ UpperIdent(1:1-1:4),NoSpaceOpenRound(1:4-1:5),LowerIdent(1:5-1:8),CloseRound(1:8
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(runtime_error (1:1-1:1) "not_implemented")
+(runtime_error (1:1-1:69) "not_implemented")
 ~~~END

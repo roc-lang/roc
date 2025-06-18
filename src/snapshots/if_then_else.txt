@@ -47,5 +47,5 @@ foo = if true A
 			"let"
 			(pattern (3:1-3:4)
 				(assign (3:1-3:4) (ident "foo")))
-			(expr (1:1-1:1) (runtime_error (1:1-1:1) "not_implemented")))))
+			(expr (3:7-7:6) (runtime_error (1:1-1:1) "not_implemented")))))
 ~~~END

@@ -50,5 +50,5 @@ NO CHANGE
 			"let"
 			(pattern (5:1-5:6)
 				(assign (5:1-5:6) (ident "main!")))
-			(expr (1:1-1:1) (runtime_error (5:9-5:42) "can_lambda_not_implemented")))))
+			(expr (5:9-5:42) (runtime_error (5:9-5:42) "can_lambda_not_implemented")))))
 ~~~END

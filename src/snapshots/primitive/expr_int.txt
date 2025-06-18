@@ -26,7 +26,7 @@ NO CHANGE
 			"let"
 			(pattern (2:1-2:4)
 				(assign (2:1-2:4) (ident "foo")))
-			(expr (1:1-1:1)
+			(expr (2:7-2:9)
 				(int (2:7-2:9)
 					(int_var "#1")
 					(precision_var "#0")
