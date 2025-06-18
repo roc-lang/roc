@@ -85,12 +85,15 @@ pub fn pushDiagnostic(self: *CIR, reason: CIR.Diagnostic) void {
 /// This function:
 /// 1. Creates a diagnostic node to store the error details
 /// 2. Creates a malformed node that references the diagnostic
-/// 3. Returns an index of the requested type pointing to the malformed node
+/// 3. Creates an error type var this CIR index
+/// 4. Returns an index of the requested type pointing to the malformed node
 ///
 /// Use this when you need to replace a node (expression, pattern, etc.) with
 /// something that represents a compilation error but allows the compiler to continue.
 pub fn pushMalformed(self: *CIR, comptime t: type, reason: CIR.Diagnostic) t {
-    return self.store.addMalformed(t, reason);
+    const malformed_idx = self.store.addMalformed(t, reason);
+    _ = self.setTypeVarAt(@enumFromInt(@intFromEnum(malformed_idx)), .err);
+    return malformed_idx;
 }
 
 /// Retrieve all diagnostics collected during canonicalization.
@@ -1250,7 +1253,6 @@ pub const Pattern = union(enum) {
         region: Region,
     },
     applied_tag: struct {
-        whole_var: TypeVar,
         ext_var: TypeVar,
         tag_name: Ident.Idx,
         arguments: Pattern.Span,
