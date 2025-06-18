@@ -320,13 +320,15 @@ fn canonicalize_decl(
     self: *Self,
     decl: AST.Statement.Decl,
 ) CIR.Def.Idx {
+    const pattern_region = self.tokenizedRegionToRegion(self.parse_ir.store.getPattern(decl.pattern).to_tokenized_region());
+    const expr_region = self.tokenizedRegionToRegion(self.parse_ir.store.getExpr(decl.body).to_tokenized_region());
+
     const pattern_idx = blk: {
         if (self.canonicalize_pattern(decl.pattern)) |idx| {
             break :blk idx;
         } else {
-            const region = self.tokenizedRegionToRegion(decl.region);
             const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .pattern_not_canonicalized = .{
-                .region = region,
+                .region = pattern_region,
             } });
             _ = self.can_ir.setTypeVarAtPat(malformed_idx, .err);
             break :blk malformed_idx;
@@ -337,9 +339,8 @@ fn canonicalize_decl(
         if (self.canonicalize_expr(decl.body)) |idx| {
             break :blk idx;
         } else {
-            const region = self.tokenizedRegionToRegion(decl.region);
             const malformed_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .expr_not_canonicalized = .{
-                .region = region,
+                .region = expr_region,
             } });
             _ = self.can_ir.setTypeVarAtExpr(malformed_idx, .err);
             break :blk malformed_idx;
@@ -349,9 +350,9 @@ fn canonicalize_decl(
     // Create the def entry
     return self.can_ir.store.addDef(.{
         .pattern = pattern_idx,
-        .pattern_region = self.tokenizedRegionToRegion(self.parse_ir.store.getPattern(decl.pattern).to_tokenized_region()),
+        .pattern_region = pattern_region,
         .expr = expr_idx,
-        .expr_region = self.tokenizedRegionToRegion(self.parse_ir.store.getExpr(decl.body).to_tokenized_region()),
+        .expr_region = expr_region,
         .annotation = null,
         .kind = .let,
     });
@@ -401,6 +402,7 @@ pub fn canonicalize_expr(
             return expr_idx;
         },
         .ident => |e| {
+            const region = self.tokenizedRegionToRegion(e.region);
             const expr_idx, const did_err = blk: {
                 if (self.parse_ir.tokens.resolveIdentifier(e.token)) |ident| {
                     if (self.scope.levels.lookup(&self.can_ir.env.idents, .ident, ident)) |pattern_idx| {
@@ -408,13 +410,12 @@ pub fn canonicalize_expr(
                         break :blk .{
                             self.can_ir.store.addExpr(CIR.Expr{ .lookup = .{
                                 .pattern_idx = pattern_idx,
-                                .region = self.tokenizedRegionToRegion(e.region),
+                                .region = region,
                             } }),
                             false,
                         };
                     } else {
                         // We did not find the ident in scope
-                        const region = self.tokenizedRegionToRegion(e.region);
                         break :blk .{
                             self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .ident_not_in_scope = .{
                                 .ident = ident,
@@ -428,7 +429,7 @@ pub fn canonicalize_expr(
                     break :blk .{
                         self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
                             .feature = feature,
-                            .region = Region.zero(),
+                            .region = region,
                         } }),
                         true,
                     };
@@ -484,7 +485,7 @@ pub fn canonicalize_expr(
                         .kind = .i128,
                     },
                     .bound = Num.Int.Precision.fromValue(value),
-                    .region = self.tokenizedRegionToRegion(e.region),
+                    .region = region,
                 },
             });
 
@@ -537,7 +538,7 @@ pub fn canonicalize_expr(
                     .literal = literal,
                     .value = value,
                     .bound = Num.Frac.Precision.fromValue(value),
-                    .region = self.tokenizedRegionToRegion(e.region),
+                    .region = region,
                 },
             });
 
@@ -573,6 +574,8 @@ pub fn canonicalize_expr(
             return expr_idx;
         },
         .list => |e| {
+            const region = self.tokenizedRegionToRegion(e.region);
+
             // Mark the start of scratch expressions for the list
             const scratch_top = self.can_ir.store.scratchExprTop();
 
@@ -594,7 +597,7 @@ pub fn canonicalize_expr(
             // then insert the type vars, setting the parent to be the final slot
             const elem_type_var = self.can_ir.pushFreshTypeVar(
                 list_expr_idx,
-                self.tokenizedRegionToRegion(e.region),
+                region,
             );
 
             // then in the final slot the actual expr is inserted
@@ -602,7 +605,7 @@ pub fn canonicalize_expr(
                 .list = .{
                     .elems = elems_span,
                     .elem_var = elem_type_var,
-                    .region = self.tokenizedRegionToRegion(e.region),
+                    .region = region,
                 },
             });
 
@@ -731,6 +734,7 @@ pub fn canonicalize_expr(
             return expr_idx;
         },
         .bin_op => |e| {
+            const region = self.tokenizedRegionToRegion(e.region);
 
             // Canonicalize left and right operands
             const lhs = blk: {
@@ -739,7 +743,7 @@ pub fn canonicalize_expr(
                 } else {
                     // TODO should probably use LHS region here
                     const left_expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .expr_not_canonicalized = .{
-                        .region = self.tokenizedRegionToRegion(e.region),
+                        .region = region,
                     } });
                     _ = self.can_ir.setTypeVarAtExpr(left_expr_idx, .err);
                     break :blk left_expr_idx;
@@ -752,7 +756,7 @@ pub fn canonicalize_expr(
                 } else {
                     // TODO should probably use RHS region here
                     const right_expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .expr_not_canonicalized = .{
-                        .region = self.tokenizedRegionToRegion(e.region),
+                        .region = region,
                     } });
                     _ = self.can_ir.setTypeVarAtExpr(right_expr_idx, .err);
                     break :blk right_expr_idx;
@@ -771,7 +775,7 @@ pub fn canonicalize_expr(
                     const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "binop");
                     const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
                         .feature = feature,
-                        .region = Region.zero(),
+                        .region = region,
                     } });
                     _ = self.can_ir.setTypeVarAtExpr(expr_idx, .err);
                     return expr_idx;
@@ -779,12 +783,7 @@ pub fn canonicalize_expr(
             };
 
             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
-                .binop = CIR.Expr.Binop.init(
-                    op,
-                    lhs,
-                    rhs,
-                    self.tokenizedRegionToRegion(e.region),
-                ),
+                .binop = CIR.Expr.Binop.init(op, lhs, rhs, region),
             });
 
             _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });

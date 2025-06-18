@@ -68,5 +68,5 @@ NO CHANGE
 			"let"
 			(pattern (8:1-8:6)
 				(assign (8:1-8:6) (ident "main!")))
-			(expr (1:1-1:1) (runtime_error (8:9-12:2) "can_lambda_not_implemented")))))
+			(expr (8:9-12:2) (runtime_error (8:9-12:2) "can_lambda_not_implemented")))))
 ~~~END

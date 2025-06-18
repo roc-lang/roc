@@ -796,7 +796,7 @@ pub fn addDef(store: *NodeStore, def: CIR.Def) CIR.Def.Idx {
 
     // Store the extra data range in the node
     node.data_1 = extra_start;
-    node.data_2 = 8; // Number of extra data items
+    node.data_2 = 7; // Number of extra data items
 
     return @enumFromInt(@intFromEnum(store.nodes.append(store.gpa, node)));
 }
@@ -813,11 +813,11 @@ pub fn getDef(store: *NodeStore, def_idx: CIR.Def.Idx) CIR.Def {
 
     const pattern: CIR.Pattern.Idx = @enumFromInt(extra_data[0]);
     const expr: CIR.Expr.Idx = @enumFromInt(extra_data[1]);
-    const kind_encoded = .{ extra_data[3], extra_data[4] };
+    const kind_encoded = .{ extra_data[2], extra_data[3] };
     const kind = CIR.Def.Kind.decode(kind_encoded);
-    const anno_idx = extra_data[5];
-    const expr_region_start = extra_data[6];
-    const expr_region_end = extra_data[7];
+    const anno_idx = extra_data[4];
+    const expr_region_start = extra_data[5];
+    const expr_region_end = extra_data[6];
 
     const annotation: ?CIR.Annotation.Idx = if (anno_idx == 0) null else @enumFromInt(anno_idx);
 
@@ -1157,8 +1157,8 @@ pub fn predictNodeIndex(store: *NodeStore, count: u32) Node.Idx {
     return @enumFromInt(start_idx + count - 1);
 }
 
-/// Adds an type placeholder to the store.
-pub fn addTypePlaceholder(store: *NodeStore, parent_node_idx: Node.Idx, region: base.Region) Node.Idx {
+/// Adds an type variable slot to the store.
+pub fn addTypeVarSlot(store: *NodeStore, parent_node_idx: Node.Idx, region: base.Region) Node.Idx {
     const nid = store.nodes.append(store.gpa, .{
         .tag = .type_var_slot,
         .data_1 = @intFromEnum(parent_node_idx),
