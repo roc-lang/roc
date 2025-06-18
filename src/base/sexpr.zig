@@ -110,7 +110,7 @@ pub const Expr = union(enum) {
     }
 
     /// Helper function to append a node
-    pub fn appendNode(self: *Expr, gpa: Allocator, child_node: *Expr) void {
+    pub fn appendNode(self: *Expr, gpa: Allocator, child_node: *const Expr) void {
         self.appendNodeUnsafe(gpa, child_node.*);
     }
 

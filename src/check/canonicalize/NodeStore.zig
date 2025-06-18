@@ -190,7 +190,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             return .{
                 .list = .{
                     .elems = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
-                    .elem_var = @enumFromInt(0), // TODO: get from extra_data
+                    .elem_var = @enumFromInt(node.data_3),
                     .region = node.region,
                 },
             };
@@ -563,6 +563,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             // TODO: Store list data properly. For now, just store placeholder values
             node.data_1 = e.elems.span.start;
             node.data_2 = e.elems.span.len;
+            node.data_3 = @intFromEnum(e.elem_var);
         },
         .float => |e| {
             node.region = e.region;
@@ -857,7 +858,7 @@ pub fn addDef(store: *NodeStore, def: CIR.Def) CIR.Def.Idx {
 }
 
 /// Retrieves a definition from the store.
-pub fn getDef(store: *NodeStore, def_idx: CIR.Def.Idx) CIR.Def {
+pub fn getDef(store: *const NodeStore, def_idx: CIR.Def.Idx) CIR.Def {
     const nid: Node.Idx = @enumFromInt(@intFromEnum(def_idx));
     const node = store.nodes.get(nid);
 

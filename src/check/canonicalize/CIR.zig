@@ -193,8 +193,19 @@ pub fn pushTypeVar(self: *CIR, content: types.Content, parent_node_idx: Node.Idx
     // insert a placeholder can node
     const var_slot = self.store.addTypeVarSlot(parent_node_idx, region);
 
-    // create a new type var based on the placeholder node
-    return self.env.types_store.freshFromContentAt(@intFromEnum(var_slot), content) catch |err| exitOnOom(err);
+    // if the new can node idx is greater than the types store length, backfill
+    const var_: types.Var = @enumFromInt(@intFromEnum(var_slot));
+    self.env.types_store.fillInSlotsThru(var_) catch |err| exitOnOom(err);
+
+    // set the type store slot based on the placeholder node idx
+    self.env.types_store.setVarContent(var_, content);
+
+    return var_;
+}
+
+/// Set a type variable To the specified content at the specified CIR node index.
+pub fn setTypeVarAtDef(self: *CIR, at_idx: Def.Idx, content: types.Content) types.Var {
+    return self.setTypeVarAt(@enumFromInt(@intFromEnum(at_idx)), content);
 }
 
 /// Set a type variable To the specified content at the specified CIR node index.
@@ -209,7 +220,14 @@ pub fn setTypeVarAtPat(self: *CIR, at_idx: Pattern.Idx, content: types.Content) 
 
 /// Set a type variable To the specified content at the specified CIR node index.
 pub fn setTypeVarAt(self: *CIR, at_idx: Node.Idx, content: types.Content) types.Var {
-    return self.env.types_store.freshFromContentAt(@intFromEnum(at_idx), content) catch |err| exitOnOom(err);
+    // if the new can node idx is greater than the types store length, backfill
+    const var_: types.Var = @enumFromInt(@intFromEnum(at_idx));
+    self.env.types_store.fillInSlotsThru(var_) catch |err| exitOnOom(err);
+
+    // set the type store slot based on the placeholder node idx
+    self.env.types_store.setVarContent(var_, content);
+
+    return var_;
 }
 
 // Helper to add type index info to a s-expr node
@@ -620,7 +638,7 @@ pub const Expr = union(enum) {
         region: Region,
     },
     record: struct {
-        record_var: TypeVar,
+        ext_var: TypeVar,
         region: Region,
         // TODO:
         // fields: SendMap<Lowercase, Field>,
@@ -726,9 +744,7 @@ pub const Expr = union(enum) {
 
                 // Add num_var
                 var num_var_node = sexpr.Expr.init(gpa, "num_var");
-                const num_var_str = num_expr.num_var.allocPrint(gpa);
-                defer gpa.free(num_var_str);
-                num_var_node.appendString(gpa, num_var_str);
+                num_var_node.appendUnsignedInt(gpa, @intFromEnum(num_expr.num_var));
                 num_node.appendNode(gpa, &num_var_node);
 
                 // Add literal
@@ -756,16 +772,12 @@ pub const Expr = union(enum) {
 
                 // Add int_var
                 var int_var_node = sexpr.Expr.init(gpa, "int_var");
-                const int_var_str = int_expr.int_var.allocPrint(gpa);
-                defer gpa.free(int_var_str);
-                int_var_node.appendString(gpa, int_var_str);
+                int_var_node.appendUnsignedInt(gpa, @intFromEnum(int_expr.int_var));
                 int_node.appendNode(gpa, &int_var_node);
 
                 // Add precision_var
                 var prec_var_node = sexpr.Expr.init(gpa, "precision_var");
-                const prec_var_str = int_expr.precision_var.allocPrint(gpa);
-                defer gpa.free(prec_var_str);
-                prec_var_node.appendString(gpa, prec_var_str);
+                prec_var_node.appendUnsignedInt(gpa, @intFromEnum(int_expr.precision_var));
                 int_node.appendNode(gpa, &prec_var_node);
 
                 // Add literal
@@ -792,16 +804,12 @@ pub const Expr = union(enum) {
 
                 // Add frac_var
                 var frac_var_node = sexpr.Expr.init(gpa, "frac_var");
-                const frac_var_str = float_expr.frac_var.allocPrint(gpa);
-                defer gpa.free(frac_var_str);
-                frac_var_node.appendString(gpa, frac_var_str);
+                frac_var_node.appendUnsignedInt(gpa, @intFromEnum(float_expr.frac_var));
                 float_node.appendNode(gpa, &frac_var_node);
 
                 // Add precision_var
                 var prec_var_node = sexpr.Expr.init(gpa, "precision_var");
-                const prec_var_str = float_expr.precision_var.allocPrint(gpa);
-                defer gpa.free(prec_var_str);
-                prec_var_node.appendString(gpa, prec_var_str);
+                prec_var_node.appendUnsignedInt(gpa, @intFromEnum(float_expr.precision_var));
                 float_node.appendNode(gpa, &prec_var_node);
 
                 // Add literal
@@ -857,9 +865,7 @@ pub const Expr = union(enum) {
 
                 // Add precision_var
                 var prec_var_node = sexpr.Expr.init(gpa, "precision_var");
-                const prec_var_str = e.precision_var.allocPrint(gpa);
-                defer gpa.free(prec_var_str);
-                prec_var_node.appendString(gpa, prec_var_str);
+                prec_var_node.appendUnsignedInt(gpa, @intFromEnum(e.precision_var));
                 single_quote_node.appendNode(gpa, &prec_var_node);
 
                 // Add value
@@ -882,16 +888,14 @@ pub const Expr = union(enum) {
 
                 // Add elem_var
                 var elem_var_node = sexpr.Expr.init(gpa, "elem_var");
-                const elem_var_str = l.elem_var.allocPrint(gpa);
-                defer gpa.free(elem_var_str);
-                elem_var_node.appendString(gpa, elem_var_str);
+                elem_var_node.appendUnsignedInt(gpa, @intFromEnum(l.elem_var));
                 list_node.appendNode(gpa, &elem_var_node);
 
-                // TODO print list elems
-                // implement proper span access when collection is available
-                var elems_node = sexpr.Expr.init(gpa, "elems");
-                elems_node.appendString(gpa, "TODO each element");
-                list_node.appendNode(gpa, &elems_node);
+                for (ir.store.exprSlice(l.elems)) |sub_expr_idx| {
+                    const sub_expr = ir.store.getExpr(sub_expr_idx);
+                    const sub_expr_node = sub_expr.toSExpr(ir, env);
+                    list_node.appendNode(gpa, &sub_expr_node);
+                }
 
                 return list_node;
             },
@@ -990,10 +994,8 @@ pub const Expr = union(enum) {
                 record_node.appendRegionInfo(gpa, ir.calcRegionInfo(record_expr.region));
 
                 // Add record_var
-                var record_var_node = sexpr.Expr.init(gpa, "record_var");
-                const record_var_str = record_expr.record_var.allocPrint(gpa);
-                defer gpa.free(record_var_str);
-                record_var_node.appendString(gpa, record_var_str);
+                var record_var_node = sexpr.Expr.init(gpa, "ext_var");
+                record_var_node.appendUnsignedInt(gpa, @intFromEnum(record_expr.ext_var));
                 record_node.appendNode(gpa, &record_var_node);
 
                 // TODO: Add fields when implemented
@@ -1067,9 +1069,7 @@ pub const Expr = union(enum) {
 
                 // Add ext_var
                 var ext_var_node = sexpr.Expr.init(gpa, "ext_var");
-                const ext_var_str = tag_expr.ext_var.allocPrint(gpa);
-                defer gpa.free(ext_var_str);
-                ext_var_node.appendString(gpa, ext_var_str);
+                ext_var_node.appendUnsignedInt(gpa, @intFromEnum(tag_expr.ext_var));
                 tag_node.appendNode(gpa, &ext_var_node);
 
                 // Add name
@@ -1098,16 +1098,12 @@ pub const Expr = union(enum) {
 
                 // Add variant_var
                 var variant_var_node = sexpr.Expr.init(gpa, "variant_var");
-                const variant_var_str = tag_expr.variant_var.allocPrint(gpa);
-                defer gpa.free(variant_var_str);
-                variant_var_node.appendString(gpa, variant_var_str);
+                variant_var_node.appendUnsignedInt(gpa, @intFromEnum(tag_expr.variant_var));
                 tag_node.appendNode(gpa, &variant_var_node);
 
                 // Add ext_var
                 var ext_var_node = sexpr.Expr.init(gpa, "ext_var");
-                const ext_var_str = tag_expr.ext_var.allocPrint(gpa);
-                defer gpa.free(ext_var_str);
-                ext_var_node.appendString(gpa, ext_var_str);
+                ext_var_node.appendUnsignedInt(gpa, @intFromEnum(tag_expr.ext_var));
                 tag_node.appendNode(gpa, &ext_var_node);
 
                 // Add name
@@ -1841,4 +1837,152 @@ pub fn calcRegionInfo(self: *const CIR, region: Region) base.RegionInfo {
     };
 
     return info;
+}
+
+/// Helper function to convert type information from the Canonical IR to a string
+/// in S-expression format for snapshot testing. Implements the definition-focused
+/// format showing final types for defs, expressions, and builtins.
+pub fn toSexprTypesStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr.Idx, source: []const u8) !void {
+    // Set temporary source for region info calculation during SExpr generation
+    ir.temp_source_for_sexpr = source;
+    defer ir.temp_source_for_sexpr = null;
+
+    const gpa = ir.env.gpa;
+
+    // Create TypeWriter for converting types to strings
+    var type_string_buf = std.ArrayList(u8).init(gpa);
+    defer type_string_buf.deinit();
+
+    var type_writer = types.TypeWriter.init(type_string_buf.writer(), ir.env);
+
+    if (maybe_expr_idx) |expr_idx| {
+        const expr_var = @as(types.Var, @enumFromInt(@intFromEnum(expr_idx)));
+
+        var expr_node = sexpr.Expr.init(gpa, "expr");
+        defer expr_node.deinit(gpa);
+
+        expr_node.appendUnsignedInt(gpa, @intFromEnum(expr_idx));
+
+        if (@intFromEnum(expr_var) > ir.env.types_store.slots.backing.items.len) {
+            const unknown_node = sexpr.Expr.init(gpa, "unknown");
+            expr_node.appendNode(gpa, &unknown_node);
+        } else {
+            if (type_writer.writeVar(expr_var)) {
+                var type_node = sexpr.Expr.init(gpa, "type");
+                type_node.appendString(gpa, type_string_buf.items);
+                expr_node.appendNode(gpa, &type_node);
+            } else |err| {
+                var err_node = sexpr.Expr.init(gpa, "err");
+
+                // If type writing fails, show the error
+                const error_str = std.fmt.allocPrint(gpa, "Error: {}", .{err}) catch "UnknownError";
+                defer if (!std.mem.eql(u8, error_str, "UnknownError")) gpa.free(error_str);
+                err_node.appendString(gpa, error_str);
+
+                expr_node.appendNode(gpa, &err_node);
+            }
+        }
+
+        expr_node.toStringPretty(writer);
+    } else {
+        var root_node = sexpr.Expr.init(gpa, "inferred_types");
+        defer root_node.deinit(gpa);
+
+        // Collect definitions
+        var defs_node = sexpr.Expr.init(gpa, "defs");
+        const defs_slice = ir.store.sliceDefs(ir.all_defs);
+
+        for (defs_slice) |def_idx| {
+            const def = ir.store.getDef(def_idx);
+
+            // Extract identifier name from the pattern (assuming it's an assign pattern)
+            const pattern = ir.store.getPattern(def.pattern);
+            switch (pattern) {
+                .assign => |assign_pat| {
+                    const ident_name = ir.env.idents.getText(assign_pat.ident);
+
+                    // Get the type of the expression
+                    const def_var = @as(types.Var, @enumFromInt(@intFromEnum(def_idx)));
+
+                    var def_node = sexpr.Expr.init(gpa, "def");
+                    def_node.appendString(gpa, ident_name);
+                    def_node.appendUnsignedInt(gpa, @intFromEnum(def_var));
+
+                    if (@intFromEnum(def_var) > ir.env.types_store.slots.backing.items.len) {
+                        const unknown_node = sexpr.Expr.init(gpa, "unknown");
+                        def_node.appendNode(gpa, &unknown_node);
+                    } else {
+
+                        // Clear the buffer and write the type
+                        type_string_buf.clearRetainingCapacity();
+                        if (type_writer.writeVar(def_var)) {
+                            var type_node = sexpr.Expr.init(gpa, "type");
+                            type_node.appendString(gpa, type_string_buf.items);
+                            def_node.appendNode(gpa, &type_node);
+                        } else |err| {
+                            var err_node = sexpr.Expr.init(gpa, "err");
+
+                            // If type writing fails, show the error
+                            const error_str = std.fmt.allocPrint(gpa, "Error: {}", .{err}) catch "UnknownError";
+                            defer if (!std.mem.eql(u8, error_str, "UnknownError")) gpa.free(error_str);
+                            err_node.appendString(gpa, error_str);
+
+                            def_node.appendNode(gpa, &err_node);
+                        }
+                    }
+                    defs_node.appendNode(gpa, &def_node);
+                },
+                else => {
+                    // For non-assign patterns, we could handle destructuring, but for now skip
+                    continue;
+                },
+            }
+        }
+
+        root_node.appendNode(gpa, &defs_node);
+
+        // Collect expression types (for significant expressions with regions)
+        var expressions_node = sexpr.Expr.init(gpa, "expressions");
+
+        // Walk through all expressions and collect those with meaningful types
+        // We'll collect expressions that have regions and aren't just intermediate nodes
+        for (defs_slice) |def_idx| {
+            const def = ir.store.getDef(def_idx);
+
+            // Get the expression type
+            const expr_var = @as(types.Var, @enumFromInt(@intFromEnum(def.expr)));
+
+            var expr_node = sexpr.Expr.init(gpa, "expr");
+            expr_node.appendRegionInfo(gpa, ir.calcRegionInfo(def.expr_region));
+            expr_node.appendUnsignedInt(gpa, @intFromEnum(expr_var));
+
+            if (@intFromEnum(expr_var) > ir.env.types_store.slots.backing.items.len) {
+                const unknown_node = sexpr.Expr.init(gpa, "unknown");
+                expr_node.appendNode(gpa, &unknown_node);
+            } else {
+                // Clear the buffer and write the type
+                type_string_buf.clearRetainingCapacity();
+                if (type_writer.writeVar(expr_var)) {
+                    var type_node = sexpr.Expr.init(gpa, "type");
+                    type_node.appendString(gpa, type_string_buf.items);
+                    expr_node.appendNode(gpa, &type_node);
+                } else |err| {
+                    var err_node = sexpr.Expr.init(gpa, "err");
+
+                    // If type writing fails, show the error
+                    const error_str = std.fmt.allocPrint(gpa, "Error: {}", .{err}) catch "UnknownError";
+                    defer if (!std.mem.eql(u8, error_str, "UnknownError")) gpa.free(error_str);
+                    err_node.appendString(gpa, error_str);
+
+                    expr_node.appendNode(gpa, &err_node);
+                }
+            }
+
+            expressions_node.appendNode(gpa, &expr_node);
+        }
+
+        root_node.appendNode(gpa, &expressions_node);
+
+        root_node.toStringPretty(writer);
+    }
 }

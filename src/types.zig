@@ -1,5 +1,6 @@
 const store = @import("./types/store.zig");
 const types = @import("./types/types.zig");
+const reporting = @import("./types/reporting.zig");
 
 /// Type Store
 pub const Store = store.Store;
@@ -51,3 +52,9 @@ pub const TagUnion = types.TagUnion;
 
 /// Type Tag
 pub const Tag = types.Tag;
+
+/// S-Expr Writer
+pub const SExprWriter = reporting.SExprWriter;
+
+/// Type Writer
+pub const TypeWriter = reporting.TypeWriter;

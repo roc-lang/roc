@@ -26,6 +26,7 @@ const ModuleEnv = base.ModuleEnv;
 const CalledVia = base.CalledVia;
 const exitOnOom = collections.utils.exitOnOom;
 
+const TypeVar = types.Var;
 const Content = types.Content;
 const FlatType = types.FlatType;
 const Num = types.Num;
@@ -107,6 +108,10 @@ fn addBuiltin(self: *Self, ir: *CIR, ident_text: []const u8, idx: CIR.Pattern.Id
     const pattern_idx_add = ir.store.addPattern(CIR.Pattern{ .assign = .{ .ident = ident_add, .region = Region.zero() } });
     _ = self.scopeIntroduceInternal(gpa, ident_store, .ident, ident_add, pattern_idx_add, false, true);
     std.debug.assert(idx == pattern_idx_add);
+
+    // TODO: Set correct type for builtins? But these types should ultimately
+    // come from the builtins roc files, so maybe the resolve stage will handle?
+    _ = ir.setTypeVarAtPat(pattern_idx_add, Content{ .flex_var = null });
 }
 
 const Self = @This();
@@ -387,7 +392,7 @@ fn canonicalize_decl(
     };
 
     // Create the def entry
-    return self.can_ir.store.addDef(.{
+    const def_idx = self.can_ir.store.addDef(.{
         .pattern = pattern_idx,
         .pattern_region = pattern_region,
         .expr = expr_idx,
@@ -395,6 +400,9 @@ fn canonicalize_decl(
         .annotation = null,
         .kind = .let,
     });
+    _ = self.can_ir.setTypeVarAtDef(def_idx, Content{ .flex_var = null });
+
+    return def_idx;
 }
 
 /// Canonicalize an expression.
@@ -750,6 +758,7 @@ pub fn canonicalize_expr(
                 },
             };
             const expr_idx = self.can_ir.store.addExpr(lambda_expr);
+            _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
             return expr_idx;
         },
         .record_updater => |_| {
@@ -919,9 +928,10 @@ pub fn canonicalize_expr(
             }
 
             // Determine the final expression
-            const final_expr = if (last_expr) |expr_idx|
-                expr_idx
-            else blk: {
+            const final_expr = if (last_expr) |expr_idx| blk: {
+                _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
+                break :blk expr_idx;
+            } else blk: {
                 // Empty block - create empty record
                 const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
                     .empty_record = .{ .region = region },
@@ -945,7 +955,7 @@ pub fn canonicalize_expr(
 
             // TODO: Propagate type from final expression during type checking
             // For now, create a fresh type var for the block
-            _ = self.can_ir.pushFreshTypeVar(@enumFromInt(@intFromEnum(block_idx)), region);
+            _ = self.can_ir.setTypeVarAtExpr(block_idx, Content{ .flex_var = null });
 
             return block_idx;
         },
