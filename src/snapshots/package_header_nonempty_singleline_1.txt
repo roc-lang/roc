@@ -24,5 +24,5 @@ KwPackage(1:1-1:8),OpenSquare(1:9-1:10),LowerIdent(1:10-1:19),Comma(1:19-1:20),U
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(can_ir (top_level_defs "empty"))
+(can_ir "empty")
 ~~~END

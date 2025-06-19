@@ -92,14 +92,19 @@ pub fn getStatement(store: *NodeStore, statement: CIR.Statement.Idx) CIR.Stateme
         .statement_var => return CIR.Statement{ .@"var" = .{
             .region = node.region,
             .expr = @enumFromInt(node.data_1),
-            .ident = @bitCast(node.data_2),
+            .pattern_idx = @enumFromInt(node.data_2),
+        } },
+        .statement_reassign => return CIR.Statement{ .reassign = .{
+            .region = node.region,
+            .expr = @enumFromInt(node.data_1),
+            .pattern_idx = @enumFromInt(node.data_2),
         } },
         .statement_crash => return CIR.Statement{ .crash = .{
             .msg = @bitCast(node.data_1),
             .region = node.region,
         } },
         .statement_expr => return .{ .expr = .{
-            .expr = node.data_1,
+            .expr = @enumFromInt(node.data_1),
             .region = node.region,
         } },
         .statement_expect => return CIR.Statement{ .expect = .{
@@ -136,6 +141,7 @@ pub fn getStatement(store: *NodeStore, statement: CIR.Statement.Idx) CIR.Stateme
         .statement_type_anno => return CIR.Statement{
             .type_anno = .{
                 .region = node.region,
+                .name = @bitCast(node.data_2),
                 .anno = @enumFromInt(node.data_1),
                 .where = null, // TODO save these in extra_data and then insert them here
             },
@@ -246,19 +252,31 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 node.region,
             ) };
         },
+        .expr_lambda => {
+            return CIR.Expr{ .lambda = .{
+                .args = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
+                .body = @enumFromInt(node.data_3),
+                .region = node.region,
+            } };
+        },
+        .expr_block => {
+            return CIR.Expr{ .block = .{
+                .stmts = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
+                .final_expr = @enumFromInt(node.data_3),
+                .region = node.region,
+            } };
+        },
         .expr_tuple,
         .expr_record,
         .expr_field_access,
         .expr_static_dispatch,
         .expr_apply,
-        .expr_lambda,
         .expr_record_update,
         .expr_unary,
         .expr_suffix_single_question,
         .expr_if_then_else,
         .expr_match,
         .expr_dbg,
-        .expr_block,
         .expr_ellipsis,
         .expr_record_builder,
         => {
@@ -300,7 +318,7 @@ pub fn getWhereClause(store: *NodeStore, whereClause: CIR.WhereClause.Idx) CIR.W
 }
 
 /// Retrieves a pattern from the store.
-pub fn getPattern(store: *NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pattern {
+pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pattern {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(pattern_idx));
     const node = store.nodes.get(node_idx);
 
@@ -388,6 +406,12 @@ pub fn getPattern(store: *NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pattern {
         .pattern_underscore => return CIR.Pattern{ .underscore = .{
             .region = node.region,
         } },
+        .malformed => {
+            return CIR.Pattern{ .runtime_error = .{
+                .diagnostic = @enumFromInt(node.data_1),
+                .region = node.region,
+            } };
+        },
         else => {
             @panic("unreachable, node is not an pattern tag");
         },
@@ -424,29 +448,41 @@ pub fn getExposedItem(store: *NodeStore, exposedItem: CIR.ExposedItem.Idx) CIR.E
 
 /// Adds a statement node to the store.
 pub fn addStatement(store: *NodeStore, statement: CIR.Statement) CIR.Statement.Idx {
-    const node = Node{};
+    var node = Node{
+        .data_1 = 0,
+        .data_2 = 0,
+        .data_3 = 0,
+        .region = base.Region.zero(),
+        .tag = @enumFromInt(0),
+    };
 
     switch (statement) {
         .decl => |s| {
             node.tag = .statement_decl;
             node.region = s.region;
             node.data_1 = @intFromEnum(s.expr);
-            node.data_2 = @enumFromInt(s.pattern);
+            node.data_2 = @intFromEnum(s.pattern);
         },
         .@"var" => |s| {
             node.tag = .statement_var;
             node.region = s.region;
             node.data_1 = @intFromEnum(s.expr);
-            node.data_2 = @bitCast(s.ident);
+            node.data_2 = @intFromEnum(s.pattern_idx);
+        },
+        .reassign => |s| {
+            node.tag = .statement_reassign;
+            node.region = s.region;
+            node.data_1 = @intFromEnum(s.expr);
+            node.data_2 = @intFromEnum(s.pattern_idx);
         },
         .crash => |s| {
             node.tag = .statement_crash;
-            node.region = node.region;
+            node.region = s.region;
             node.data_1 = @bitCast(s.msg);
         },
         .expr => |s| {
             node.tag = .statement_expr;
-            node.data_1 = s.expr;
+            node.data_1 = @intFromEnum(s.expr);
             node.region = s.region;
         },
         .expect => |s| {
@@ -456,7 +492,7 @@ pub fn addStatement(store: *NodeStore, statement: CIR.Statement) CIR.Statement.I
         },
         .@"for" => |s| {
             node.tag = .statement_for;
-            node.region = node.region;
+            node.region = s.region;
             node.data_1 = @intFromEnum(s.body);
             node.data_2 = @intFromEnum(s.expr);
             node.data_3 = @intFromEnum(s.patt);
@@ -484,11 +520,12 @@ pub fn addStatement(store: *NodeStore, statement: CIR.Statement) CIR.Statement.I
             node.tag = .statement_type_anno;
             node.region = s.region;
             node.data_1 = @intFromEnum(s.anno);
+            node.data_2 = @bitCast(s.name);
             // TODO store the optional where clause data in extra_data
         },
     }
 
-    return store.add(node);
+    return @enumFromInt(@intFromEnum(store.nodes.append(store.gpa, node)));
 }
 
 /// Adds an expression node to the store.
@@ -602,12 +639,26 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             node.region = e.region;
             @panic("TODO addExpr zero_argument_tag");
         },
+        .lambda => |e| {
+            node.region = e.region;
+            node.tag = .expr_lambda;
+            node.data_1 = e.args.span.start;
+            node.data_2 = e.args.span.len;
+            node.data_3 = @intFromEnum(e.body);
+        },
         .binop => |e| {
             node.region = e.region;
             node.tag = .expr_bin_op;
             node.data_1 = @intFromEnum(e.op);
             node.data_2 = @intFromEnum(e.lhs);
             node.data_3 = @intFromEnum(e.rhs);
+        },
+        .block => |e| {
+            node.region = e.region;
+            node.tag = .expr_block;
+            node.data_1 = e.stmts.span.start;
+            node.data_2 = e.stmts.span.len;
+            node.data_3 = @intFromEnum(e.final_expr);
         },
     }
 
@@ -715,6 +766,11 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern) CIR.Pattern.Idx {
         .underscore => |p| {
             node.tag = .pattern_underscore;
             node.region = p.region;
+        },
+        .runtime_error => |e| {
+            node.tag = .malformed;
+            node.region = e.region;
+            node.data_1 = @intFromEnum(e.diagnostic);
         },
     }
 
@@ -862,6 +918,11 @@ pub fn addScratchExpr(store: *NodeStore, idx: CIR.Expr.Idx) void {
     store.scratch_exprs.append(store.gpa, idx);
 }
 
+/// TODO
+pub fn addScratchStatement(store: *NodeStore, idx: CIR.Statement.Idx) void {
+    store.scratch_statements.append(store.gpa, idx);
+}
+
 /// Computes the span of an expression starting from a given index.
 pub fn exprSpanFrom(store: *NodeStore, start: u32) CIR.Expr.Span {
     const end = store.scratch_exprs.top();
@@ -871,6 +932,20 @@ pub fn exprSpanFrom(store: *NodeStore, start: u32) CIR.Expr.Span {
     std.debug.assert(end >= i);
     while (i < end) {
         store.extra_data.append(store.gpa, @intFromEnum(store.scratch_exprs.items.items[i])) catch |err| exitOnOom(err);
+        i += 1;
+    }
+    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+}
+
+/// TODO
+pub fn statementSpanFrom(store: *NodeStore, start: u32) CIR.Statement.Span {
+    const end = store.scratch_statements.top();
+    defer store.scratch_statements.clearFrom(start);
+    var i = @as(usize, @intCast(start));
+    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
+    std.debug.assert(end >= i);
+    while (i < end) {
+        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_statements.items.items[i])) catch |err| exitOnOom(err);
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
@@ -951,7 +1026,12 @@ pub fn slicePatterns(store: *const NodeStore, span: CIR.Pattern.Span) []CIR.Patt
     return store.sliceFromSpan(CIR.Pattern.Idx, span.span);
 }
 
-/// Returns a slice of `CanIR.IfBranch.Idx`
+/// TODO
+pub fn sliceStatements(store: *const NodeStore, span: CIR.Statement.Span) []CIR.Statement.Idx {
+    return store.sliceFromSpan(CIR.Statement.Idx, span.span);
+}
+
+/// TODO
 pub fn sliceIfBranch(store: *const NodeStore, span: CIR.IfBranch.Span) []CIR.IfBranch.Idx {
     return store.sliceFromSpan(CIR.IfBranch.Idx, span.span);
 }
@@ -1028,6 +1108,10 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) CIR.Diagnostic.I
             node.tag = .diag_lambda_body_not_canonicalized;
             node.region = r.region;
         },
+        .var_across_function_boundary => |r| {
+            node.tag = .diag_var_across_function_boundary;
+            node.region = r.region;
+        },
     }
 
     const nid = @intFromEnum(store.nodes.append(store.gpa, node));
@@ -1073,6 +1157,7 @@ pub fn addMalformed(store: *NodeStore, comptime t: type, reason: CIR.Diagnostic)
             .pattern_not_canonicalized => |r| r.region,
             .can_lambda_not_implemented => |r| r.region,
             .lambda_body_not_canonicalized => |r| r.region,
+            .var_across_function_boundary => |r| r.region,
         },
         .tag = .malformed,
     };
@@ -1125,6 +1210,9 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = node.region,
         } },
         .diag_lambda_body_not_canonicalized => return CIR.Diagnostic{ .lambda_body_not_canonicalized = .{
+            .region = node.region,
+        } },
+        .diag_var_across_function_boundary => return CIR.Diagnostic{ .var_across_function_boundary = .{
             .region = node.region,
         } },
         else => {

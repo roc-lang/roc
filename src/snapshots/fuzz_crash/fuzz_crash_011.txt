@@ -17,5 +17,5 @@ KwModule(1:1-1:7),UpperIdent(1:8-1:9),UpperIdent(1:10-1:11),EndOfFile(1:11-1:11)
 ~~~FORMATTED
 
 ~~~CANONICALIZE
-(can_ir (top_level_defs "empty"))
+(can_ir "empty")
 ~~~END

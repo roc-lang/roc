@@ -4,7 +4,6 @@ const Allocator = std.mem.Allocator;
 const base = @import("base.zig");
 const canonicalize = @import("check/canonicalize.zig");
 const CIR = canonicalize.CIR;
-const Scope = @import("check/canonicalize/Scope.zig");
 const parse = @import("check/parse.zig");
 const fmt = @import("fmt.zig");
 const types = @import("types.zig");
@@ -453,14 +452,12 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
     parse_ast.store.emptyScratch();
 
     // Canonicalize the source code
-    // Can.IR.init takes ownership of the module_env and type_store
+
     var can_ir = CIR.init(&module_env);
     defer can_ir.deinit();
 
-    var scope = Scope.init(can_ir.env.gpa);
-    defer scope.deinit(can_ir.env.gpa);
-
-    var can = canonicalize.init(&can_ir, &parse_ast, &scope);
+    var can = canonicalize.init(&can_ir, &parse_ast);
+    defer can.deinit();
 
     var maybe_expr_idx: ?CIR.Expr.Idx = null;
 

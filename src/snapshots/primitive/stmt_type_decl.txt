@@ -33,5 +33,5 @@ module [Foo]
 
 Foo(a, b) : (a, b, Str, U64)
 ~~~CANONICALIZE
-(can_ir (top_level_defs "empty"))
+(can_ir "empty")
 ~~~END

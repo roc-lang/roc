@@ -27,6 +27,7 @@ pub const Tag = enum {
     // Statements
     statement_decl,
     statement_var,
+    statement_reassign,
     statement_crash,
     statement_expr,
     statement_expect,
@@ -118,4 +119,5 @@ pub const Tag = enum {
     diag_pattern_not_canonicalized,
     diag_can_lambda_not_implemented,
     diag_lambda_body_not_canonicalized,
+    diag_var_across_function_boundary,
 };

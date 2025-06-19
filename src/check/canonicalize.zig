@@ -5,13 +5,18 @@ const collections = @import("../collections.zig");
 const types = @import("../types/types.zig");
 
 const NodeStore = @import("./canonicalize/NodeStore.zig");
-pub const Scope = @import("./canonicalize/Scope.zig");
 
 const AST = parse.AST;
 
 can_ir: *CIR,
 parse_ir: *AST,
-scope: *Scope,
+scopes: CIR.Scopes,
+/// Stack of function regions for tracking var reassignment across function boundaries
+function_regions: std.ArrayListUnmanaged(Region),
+/// Maps var patterns to the function region they were declared in
+var_function_regions: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, Region),
+/// Set of pattern indices that are vars
+var_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
 
 const Ident = base.Ident;
 const Region = base.Region;
@@ -29,11 +34,28 @@ const Tag = types.Tag;
 const BUILTIN_NUM_ADD: CIR.Pattern.Idx = @enumFromInt(0);
 const BUILTIN_NUM_SUB: CIR.Pattern.Idx = @enumFromInt(1);
 
-pub fn init(self: *CIR, parse_ir: *AST, scope: *Scope) Self {
-    const gpa = self.env.gpa;
-    const ident_store = &self.env.idents;
+/// Deinitialize canonicalizer resources
+pub fn deinit(self: *Self) void {
+    self.scopes.deinit(self.can_ir.env.gpa);
+    self.function_regions.deinit(self.can_ir.env.gpa);
+    self.var_function_regions.deinit(self.can_ir.env.gpa);
+    self.var_patterns.deinit(self.can_ir.env.gpa);
+}
 
-    // Simulate the builtins by adding to both the NodeStore and Scope
+pub fn init(self: *CIR, parse_ir: *AST) Self {
+    const gpa = self.env.gpa;
+
+    // Create the canonicalizer with scopes
+    var result = Self{
+        .can_ir = self,
+        .parse_ir = parse_ir,
+        .scopes = CIR.Scopes.init(gpa),
+        .function_regions = std.ArrayListUnmanaged(Region){},
+        .var_function_regions = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, Region){},
+        .var_patterns = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void){},
+    };
+
+    // Simulate the builtins by adding to both the NodeStore and Scopes
     // Not sure if this is how we want to do it long term, but want something to
     // make a start on canonicalization.
 
@@ -42,20 +64,16 @@ pub fn init(self: *CIR, parse_ir: *AST, scope: *Scope) Self {
     // BUILTIN_NUM_ADD
     const ident_add = self.env.idents.insert(gpa, base.Ident.for_text("add"), region_zero);
     const pattern_idx_add = self.store.addPattern(CIR.Pattern{ .assign = .{ .ident = ident_add, .region = region_zero } });
-    _ = scope.levels.introduce(gpa, ident_store, .ident, ident_add, pattern_idx_add) catch {};
+    _ = result.scopes.introduce(gpa, &self.env.idents, .ident, ident_add, pattern_idx_add, false, true);
     std.debug.assert(BUILTIN_NUM_ADD == pattern_idx_add);
 
     // BUILTIN_NUM_SUB
     const ident_sub = self.env.idents.insert(gpa, base.Ident.for_text("sub"), region_zero);
     const pattern_idx_sub = self.store.addPattern(CIR.Pattern{ .assign = .{ .ident = ident_sub, .region = region_zero } });
-    _ = scope.levels.introduce(gpa, ident_store, .ident, ident_sub, pattern_idx_sub) catch {};
+    _ = result.scopes.introduce(gpa, &self.env.idents, .ident, ident_sub, pattern_idx_sub, false, true);
     std.debug.assert(BUILTIN_NUM_SUB == pattern_idx_sub);
 
-    return .{
-        .can_ir = self,
-        .parse_ir = parse_ir,
-        .scope = scope,
-    };
+    return result;
 }
 
 const Self = @This();
@@ -66,6 +84,51 @@ pub const CIR = @import("canonicalize/CIR.zig");
 /// helper to get the allocator from ModuleEnv
 pub fn get_gpa(self: *Self) std.mem.Allocator {
     comptime return self.can_ir.env.gpa;
+}
+
+/// Enter a function boundary by pushing its region onto the stack
+pub fn enterFunction(self: *Self, region: Region) void {
+    self.function_regions.append(self.can_ir.env.gpa, region) catch |err| exitOnOom(err);
+}
+
+/// Exit a function boundary by popping from the stack
+pub fn exitFunction(self: *Self) void {
+    _ = self.function_regions.pop();
+}
+
+/// Get the current function region (the function we're currently in)
+pub fn getCurrentFunctionRegion(self: *const Self) ?Region {
+    if (self.function_regions.items.len > 0) {
+        return self.function_regions.items[self.function_regions.items.len - 1];
+    }
+    return null;
+}
+
+/// Record which function a var pattern was declared in
+pub fn recordVarFunction(self: *Self, pattern_idx: CIR.Pattern.Idx) void {
+    // Mark this pattern as a var
+    self.var_patterns.put(self.can_ir.env.gpa, pattern_idx, {}) catch |err| exitOnOom(err);
+
+    if (self.getCurrentFunctionRegion()) |function_region| {
+        self.var_function_regions.put(self.can_ir.env.gpa, pattern_idx, function_region) catch |err| exitOnOom(err);
+    }
+}
+
+/// Check if a pattern is a var
+pub fn isVarPattern(self: *const Self, pattern_idx: CIR.Pattern.Idx) bool {
+    return self.var_patterns.contains(pattern_idx);
+}
+
+/// Check if a var reassignment crosses function boundaries
+pub fn isVarReassignmentAcrossFunctionBoundary(self: *const Self, pattern_idx: CIR.Pattern.Idx) bool {
+    if (self.var_function_regions.get(pattern_idx)) |var_function_region| {
+        if (self.getCurrentFunctionRegion()) |current_function_region| {
+            // Manual comparison since Region doesn't have eql method
+            return !(var_function_region.start.offset == current_function_region.start.offset and
+                var_function_region.end.offset == current_function_region.end.offset);
+        }
+    }
+    return false;
 }
 
 /// After parsing a Roc program, the [ParseIR](src/check/parse/AST.zig) is transformed into a [canonical
@@ -303,7 +366,7 @@ fn bringIngestedFileIntoScope(
             .CustomTagUnion => |custom| custom.name,
         };
         self.can_ir.env.addExposedIdentForModule(exposed_ident, res.module_idx);
-        self.scope.introduce(exposed);
+        // TODO: Implement scope introduction for exposed identifiers
     }
 }
 
@@ -402,21 +465,24 @@ pub fn canonicalize_expr(
         .ident => |e| {
             const region = self.tokenizedRegionToRegion(e.region);
             if (self.parse_ir.tokens.resolveIdentifier(e.token)) |ident| {
-                if (self.scope.levels.lookup(&self.can_ir.env.idents, .ident, ident)) |pattern_idx| {
-                    // We found the ident in scope, lookup to reference the pattern
-                    const expr_idx =
-                        self.can_ir.store.addExpr(CIR.Expr{ .lookup = .{
-                            .pattern_idx = pattern_idx,
+                switch (self.scopes.lookup(&self.can_ir.env.idents, .ident, ident)) {
+                    .found => |pattern_idx| {
+                        // We found the ident in scope, lookup to reference the pattern
+                        const expr_idx =
+                            self.can_ir.store.addExpr(CIR.Expr{ .lookup = .{
+                                .pattern_idx = pattern_idx,
+                                .region = region,
+                            } });
+                        _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
+                        return expr_idx;
+                    },
+                    .not_found => {
+                        // We did not find the ident in scope
+                        return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .ident_not_in_scope = .{
+                            .ident = ident,
                             .region = region,
                         } });
-                    _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
-                    return expr_idx;
-                } else {
-                    // We did not find the ident in scope
-                    return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .ident_not_in_scope = .{
-                        .ident = ident,
-                        .region = region,
-                    } });
+                    },
                 }
             } else {
                 const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "report an error when unable to resolve identifier");
@@ -657,9 +723,32 @@ pub fn canonicalize_expr(
             return expr_idx;
         },
         .lambda => |e| {
+            const region = self.tokenizedRegionToRegion(e.region);
+
+            // Enter function boundary
+            self.enterFunction(region);
+            defer self.exitFunction();
+
+            // Enter new scope for function parameters and body
+            self.scopes.enter(self.can_ir.env.gpa, true); // true = is_function_boundary
+            defer self.scopes.exit(self.can_ir.env.gpa) catch {};
 
             // args
-            // TODO implement canonicalization of args here
+            const gpa = self.can_ir.env.gpa;
+            const args_start = self.can_ir.store.scratch_patterns.top();
+            for (self.parse_ir.store.patternSlice(e.args)) |arg_pattern_idx| {
+                if (self.canonicalize_pattern(arg_pattern_idx)) |pattern_idx| {
+                    self.can_ir.store.scratch_patterns.append(gpa, pattern_idx);
+                } else {
+                    const arg = self.parse_ir.store.getPattern(arg_pattern_idx);
+                    const arg_region = self.tokenizedRegionToRegion(arg.to_tokenized_region());
+                    const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .pattern_arg_invalid = .{
+                        .region = arg_region,
+                    } });
+                    self.can_ir.store.scratch_patterns.append(gpa, malformed_idx);
+                }
+            }
+            const args_span = self.can_ir.store.patternSpanFrom(args_start);
 
             // body
             const body_idx = blk: {
@@ -667,18 +756,22 @@ pub fn canonicalize_expr(
                     break :blk idx;
                 } else {
                     const ast_body = self.parse_ir.store.getExpr(e.body);
-                    const region = self.tokenizedRegionToRegion(ast_body.to_tokenized_region());
+                    const body_region = self.tokenizedRegionToRegion(ast_body.to_tokenized_region());
                     break :blk self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{
-                        .lambda_body_not_canonicalized = .{ .region = region },
+                        .lambda_body_not_canonicalized = .{ .region = body_region },
                     });
                 }
             };
 
-            // We don't have a Lambda in CIR.Expr ... TODO should we add one?
-            _ = body_idx;
-            const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .can_lambda_not_implemented = .{
-                .region = self.tokenizedRegionToRegion(e.region),
-            } });
+            // Create lambda expression
+            const lambda_expr = CIR.Expr{
+                .lambda = .{
+                    .args = args_span,
+                    .body = body_idx,
+                    .region = region,
+                },
+            };
+            const expr_idx = self.can_ir.store.addExpr(lambda_expr);
             return expr_idx;
         },
         .record_updater => |_| {
@@ -815,13 +908,57 @@ pub fn canonicalize_expr(
             } });
             return expr_idx;
         },
-        .block => |_| {
-            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize block expression");
-            const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
-                .feature = feature,
-                .region = Region.zero(),
-            } });
-            return expr_idx;
+        .block => |e| {
+            const region = self.tokenizedRegionToRegion(e.region);
+
+            // Blocks don't introduce function boundaries, but may contain var statements
+            self.scopes.enter(self.can_ir.env.gpa, false); // false = not a function boundary
+            defer self.scopes.exit(self.can_ir.env.gpa) catch {};
+
+            // Keep track of the start position for statements
+            const stmt_start = self.can_ir.store.scratch_statements.top();
+
+            // Canonicalize all statements in the block
+            const statements = self.parse_ir.store.statementSlice(e.statements);
+            var last_expr: ?CIR.Expr.Idx = null;
+
+            for (statements) |stmt_idx| {
+                const result = self.canonicalize_statement(stmt_idx);
+                if (result) |expr_idx| {
+                    last_expr = expr_idx;
+                }
+            }
+
+            // Determine the final expression
+            const final_expr = if (last_expr) |expr_idx|
+                expr_idx
+            else blk: {
+                // Empty block - create empty record
+                const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
+                    .empty_record = .{ .region = region },
+                });
+                _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .structure = .empty_record });
+                break :blk expr_idx;
+            };
+
+            // Create statement span
+            const stmt_span = self.can_ir.store.statementSpanFrom(stmt_start);
+
+            // Create and return block expression
+            const block_expr = CIR.Expr{
+                .block = .{
+                    .stmts = stmt_span,
+                    .final_expr = final_expr,
+                    .region = region,
+                },
+            };
+            const block_idx = self.can_ir.store.addExpr(block_expr);
+
+            // TODO: Propagate type from final expression during type checking
+            // For now, create a fresh type var for the block
+            _ = self.can_ir.pushFreshTypeVar(@enumFromInt(@intFromEnum(block_idx)), region);
+
+            return block_idx;
         },
         .malformed => |malformed| {
             // We won't touch this since it's already a parse error.
@@ -893,19 +1030,23 @@ fn canonicalize_pattern(
                 _ = self.can_ir.setTypeVarAtPat(assign_idx, .{ .flex_var = null });
 
                 // Introduce the identifier into scope mapping to this pattern node
-                self.scope.levels.introduce(
-                    gpa,
-                    &self.can_ir.env.idents,
-                    .ident,
-                    ident_idx,
-                    assign_idx,
-                ) catch {
-                    const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .ident_already_in_scope = .{
-                        .ident = ident_idx,
-                        .region = region,
-                    } });
-                    return malformed_idx;
-                };
+                switch (self.scopes.introduce(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, ident_idx, assign_idx, false, true)) {
+                    .success => {},
+                    .shadowing_warning => {
+                        // TODO: Issue shadowing warning diagnostic
+                    },
+                    .top_level_var_error => {
+                        return self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .invalid_top_level_statement = .{
+                            .stmt = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "var"),
+                        } });
+                    },
+                    .var_across_function_boundary => {
+                        return self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .ident_already_in_scope = .{
+                            .ident = ident_idx,
+                            .region = region,
+                        } });
+                    },
+                }
 
                 return assign_idx;
             } else {
@@ -1110,17 +1251,208 @@ pub fn scope_introduce_ident(
     region: Region,
     comptime T: type,
 ) T {
-    const gpa = self.get_gpa();
-    self.scope.levels.introduce(
-        gpa,
-        &self.can_ir.env.idents,
-        .ident,
-        ident_idx,
-        pattern_idx,
-    ) catch {
-        return self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .ident_already_in_scope = .{
-            .ident = ident_idx,
-            .region = region,
-        } });
-    };
+    const result = self.scopes.introduce(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, ident_idx, pattern_idx, false, true);
+
+    switch (result) {
+        .success => {
+            return pattern_idx;
+        },
+        .shadowing_warning => |_| {
+            // TODO: Issue shadowing warning diagnostic
+            return pattern_idx;
+        },
+        .top_level_var_error => {
+            return self.can_ir.pushMalformed(T, CIR.Diagnostic{ .invalid_top_level_statement = .{
+                .stmt = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "var"),
+            } });
+        },
+        .var_across_function_boundary => |_| {
+            // This shouldn't happen for regular identifiers
+            return self.can_ir.pushMalformed(T, CIR.Diagnostic{ .not_implemented = .{
+                .feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "var across function boundary for non-var identifier"),
+                .region = region,
+            } });
+        },
+    }
+}
+
+/// Introduce a var identifier to the current scope with function boundary tracking
+pub fn scope_introduce_var(
+    self: *Self,
+    ident_idx: Ident.Idx,
+    pattern_idx: CIR.Pattern.Idx,
+    region: Region,
+    is_declaration: bool,
+    comptime T: type,
+) T {
+    const result = self.scopes.introduce(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, ident_idx, pattern_idx, true, is_declaration);
+
+    switch (result) {
+        .success => {
+            // If this is a var declaration, record which function it belongs to
+            if (is_declaration) {
+                self.recordVarFunction(pattern_idx);
+            }
+            return pattern_idx;
+        },
+        .shadowing_warning => |_| {
+            // TODO: Issue shadowing warning diagnostic
+            if (is_declaration) {
+                self.recordVarFunction(pattern_idx);
+            }
+            return pattern_idx;
+        },
+        .top_level_var_error => {
+            return self.can_ir.pushMalformed(T, CIR.Diagnostic{ .invalid_top_level_statement = .{
+                .stmt = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "var"),
+            } });
+        },
+        .var_across_function_boundary => |_| {
+            // Generate crash expression for var reassignment across function boundary
+            return self.can_ir.pushMalformed(T, CIR.Diagnostic{ .var_across_function_boundary = .{
+                .region = region,
+            } });
+        },
+    }
+}
+
+/// Canonicalize a statement within a block
+fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) ?CIR.Expr.Idx {
+    const stmt = self.parse_ir.store.getStatement(stmt_idx);
+
+    switch (stmt) {
+        .decl => |d| {
+            // Check if this is a var reassignment
+            const pattern = self.parse_ir.store.getPattern(d.pattern);
+            if (pattern == .ident) {
+                const ident_tok = pattern.ident.ident_tok;
+                if (self.parse_ir.tokens.resolveIdentifier(ident_tok)) |ident_idx| {
+                    const region = self.tokenizedRegionToRegion(self.parse_ir.store.getPattern(d.pattern).to_tokenized_region());
+
+                    // Check if this identifier exists and is a var
+                    switch (self.scopes.lookup(&self.can_ir.env.idents, .ident, ident_idx)) {
+                        .found => |existing_pattern_idx| {
+                            // Check if this is a var reassignment across function boundaries
+                            if (self.isVarReassignmentAcrossFunctionBoundary(existing_pattern_idx)) {
+                                // Generate error for var reassignment across function boundary
+                                const error_expr = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .var_across_function_boundary = .{
+                                    .region = region,
+                                } });
+
+                                // Create an expression statement for the error
+                                const error_stmt_idx = self.can_ir.store.addStatement(CIR.Statement{ .expr = .{
+                                    .expr = error_expr,
+                                    .region = region,
+                                } });
+                                self.can_ir.store.addScratchStatement(error_stmt_idx);
+
+                                return error_expr;
+                            }
+
+                            // Check if this was declared as a var
+                            if (self.isVarPattern(existing_pattern_idx)) {
+                                // This is a var reassignment - canonicalize the expression and create reassign statement
+                                const expr_idx = self.canonicalize_expr(d.body) orelse return null;
+
+                                // Create reassign statement
+                                const reassign_stmt = CIR.Statement{ .reassign = .{
+                                    .pattern_idx = existing_pattern_idx,
+                                    .expr = expr_idx,
+                                    .region = region,
+                                } };
+                                const reassign_idx = self.can_ir.store.addStatement(reassign_stmt);
+                                self.can_ir.store.addScratchStatement(reassign_idx);
+
+                                return expr_idx;
+                            }
+                        },
+                        .not_found => {
+                            // Not found in scope, fall through to regular declaration
+                        },
+                    }
+                }
+            }
+
+            // Regular declaration - canonicalize as usual
+            const pattern_idx = self.canonicalize_pattern(d.pattern) orelse return null;
+            const expr_idx = self.canonicalize_expr(d.body) orelse return null;
+
+            // Create a declaration statement
+            const decl_stmt = CIR.Statement{ .decl = .{
+                .pattern = pattern_idx,
+                .expr = expr_idx,
+                .region = self.tokenizedRegionToRegion(d.region),
+            } };
+            const decl_idx = self.can_ir.store.addStatement(decl_stmt);
+            self.can_ir.store.addScratchStatement(decl_idx);
+
+            return expr_idx;
+        },
+        .@"var" => |v| {
+            // Var declaration - handle specially with function boundary tracking
+            const var_name = self.parse_ir.tokens.resolveIdentifier(v.name) orelse return null;
+            const region = self.tokenizedRegionToRegion(v.region);
+
+            // Canonicalize the initial value
+            const init_expr_idx = self.canonicalize_expr(v.body) orelse return null;
+
+            // Create pattern for the var
+            const pattern_idx = self.can_ir.store.addPattern(CIR.Pattern{ .assign = .{ .ident = var_name, .region = region } });
+
+            // Introduce the var with function boundary tracking
+            _ = self.scope_introduce_var(var_name, pattern_idx, region, true, CIR.Pattern.Idx);
+
+            // Create var statement
+            const var_stmt = CIR.Statement{ .@"var" = .{
+                .pattern_idx = pattern_idx,
+                .expr = init_expr_idx,
+                .region = region,
+            } };
+            const var_idx = self.can_ir.store.addStatement(var_stmt);
+            self.can_ir.store.addScratchStatement(var_idx);
+
+            return init_expr_idx;
+        },
+        .expr => |e| {
+            // Expression statement
+            const expr_idx = self.canonicalize_expr(e.expr) orelse return null;
+
+            // Create expression statement
+            const expr_stmt = CIR.Statement{ .expr = .{
+                .expr = expr_idx,
+                .region = self.tokenizedRegionToRegion(e.region),
+            } };
+            const expr_stmt_idx = self.can_ir.store.addStatement(expr_stmt);
+            self.can_ir.store.addScratchStatement(expr_stmt_idx);
+
+            return expr_idx;
+        },
+        .crash => |c| {
+            // Crash statement
+            const region = self.tokenizedRegionToRegion(c.region);
+            const msg_expr = self.canonicalize_expr(c.expr) orelse {
+                const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "crash message not canonicalized");
+                return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
+                    .feature = feature,
+                    .region = region,
+                } });
+            };
+
+            // Create a crash expression using pushMalformed
+            _ = msg_expr; // TODO: incorporate crash message
+            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "explicit crash");
+            return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
+                .feature = feature,
+                .region = region,
+            } });
+        },
+        else => {
+            // Other statement types not yet implemented
+            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "statement type in block");
+            return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
+                .feature = feature,
+                .region = Region.zero(),
+            } });
+        },
+    }
 }

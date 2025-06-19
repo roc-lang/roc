@@ -50,6 +50,9 @@ pub const Diagnostic = union(enum) {
     lambda_body_not_canonicalized: struct {
         region: Region,
     },
+    var_across_function_boundary: struct {
+        region: Region,
+    },
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
@@ -155,6 +158,19 @@ pub const Diagnostic = union(enum) {
     pub fn buildLambdaBodyNotCanonicalizedReport(allocator: Allocator) !Report {
         var report = Report.init(allocator, "INVALID LAMBDA", .runtime_error, reporting.ReportingConfig.initPlainText());
         try report.document.addReflowingText("The body of this lambda expression is not valid.");
+        return report;
+    }
+
+    /// Build a report for "var across function boundary" diagnostic
+    pub fn buildVarAcrossFunctionBoundaryReport(allocator: Allocator) !Report {
+        var report = Report.init(allocator, "VAR REASSIGNMENT ERROR", .runtime_error, reporting.ReportingConfig.initPlainText());
+        try report.document.addReflowingText("Cannot reassign a ");
+        try report.document.addKeyword("var");
+        try report.document.addReflowingText(" from outside the function where it was declared.");
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Variables declared with ");
+        try report.document.addKeyword("var");
+        try report.document.addReflowingText(" can only be reassigned within the same function scope.");
         return report;
     }
 };

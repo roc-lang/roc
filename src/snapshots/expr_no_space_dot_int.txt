@@ -27,10 +27,10 @@ module []
 foo = 
 ~~~CANONICALIZE
 (can_ir
-	(top_level_defs
-		(def
-			"let"
-			(pattern (3:1-3:4)
-				(assign (3:1-3:4) (ident "foo")))
-			(expr (3:10-3:12) (runtime_error (3:10-3:12) "expr_not_canonicalized")))))
+	(def
+		"let"
+		(pattern (3:1-3:4)
+			"pattern_idx_2"
+			(assign (3:1-3:4) (ident "foo")))
+		(expr (3:10-3:12) (runtime_error (3:10-3:12) "expr_not_canonicalized"))))
 ~~~END

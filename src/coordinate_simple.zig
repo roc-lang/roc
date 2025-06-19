@@ -9,7 +9,6 @@ const Filesystem = @import("coordinate/Filesystem.zig");
 
 const ModuleEnv = base.ModuleEnv;
 const CIR = canonicalize.CIR;
-const Scope = canonicalize.Scope;
 
 /// Result of processing source code, containing both CIR and Reports
 /// for proper diagnostic reporting.
@@ -70,11 +69,9 @@ pub fn checkSource(
     defer can_ir.deinit();
 
     // Create scope for semantic analysis
-    var scope = Scope.init(can_ir.env.gpa);
-    defer scope.deinit(can_ir.env.gpa);
-
     // Canonicalize the AST
-    var canonicalizer = canonicalize.init(&can_ir, &parse_ast, &scope);
+    var canonicalizer = canonicalize.init(&can_ir, &parse_ast);
+    defer canonicalizer.deinit();
     canonicalizer.canonicalize_file();
 
     // Return diagnostics - the caller owns the returned slice
@@ -115,11 +112,9 @@ pub fn processSource(
     var cir = CIR.init(&module_env);
 
     // Create scope for semantic analysis
-    var scope = Scope.init(gpa);
-    defer scope.deinit(gpa);
-
     // Canonicalize the AST
-    var canonicalizer = canonicalize.init(&cir, &parse_ast, &scope);
+    var canonicalizer = canonicalize.init(&cir, &parse_ast);
+    defer canonicalizer.deinit();
     canonicalizer.canonicalize_file();
 
     // Get diagnostic Reports from CIR

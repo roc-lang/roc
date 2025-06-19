@@ -33,6 +33,253 @@ temp_source_for_sexpr: ?[]const u8 = null,
 imports: ModuleImport.Store,
 top_level_defs: Def.Span,
 
+/// Scope management types and structures
+pub const ScopeError = error{
+    NotInScope,
+    AlreadyInScope,
+    ExitedTopScopeLevel,
+    TopLevelVarError,
+    VarAcrossFunctionBoundary,
+};
+
+/// Result of introducing an identifier
+pub const IntroduceResult = union(enum) {
+    success: void,
+    shadowing_warning: Pattern.Idx, // The pattern that was shadowed
+    top_level_var_error: void,
+    var_across_function_boundary: Pattern.Idx,
+};
+
+/// Result of looking up an identifier
+pub const LookupResult = union(enum) {
+    found: Pattern.Idx,
+    not_found: void,
+};
+
+/// Individual scope level
+pub const Scope = struct {
+    /// Maps an Ident to a Pattern in the Can IR
+    idents: std.AutoHashMapUnmanaged(Ident.Idx, Pattern.Idx),
+    aliases: std.AutoHashMapUnmanaged(Ident.Idx, Pattern.Idx),
+    is_function_boundary: bool,
+
+    /// Initialize the scope
+    pub fn init(is_function_boundary: bool) Scope {
+        return Scope{
+            .idents = std.AutoHashMapUnmanaged(Ident.Idx, Pattern.Idx){},
+            .aliases = std.AutoHashMapUnmanaged(Ident.Idx, Pattern.Idx){},
+            .is_function_boundary = is_function_boundary,
+        };
+    }
+
+    /// Deinitialize the scope
+    pub fn deinit(self: *Scope, gpa: std.mem.Allocator) void {
+        self.idents.deinit(gpa);
+        self.aliases.deinit(gpa);
+    }
+
+    /// Item kinds in a scope
+    pub const ItemKind = enum { ident, alias };
+
+    /// Get the appropriate map for the given item kind
+    pub fn items(scope: *Scope, comptime item_kind: ItemKind) *std.AutoHashMapUnmanaged(Ident.Idx, Pattern.Idx) {
+        return switch (item_kind) {
+            .ident => &scope.idents,
+            .alias => &scope.aliases,
+        };
+    }
+
+    /// Get the appropriate map for the given item kind (const version)
+    pub fn itemsConst(scope: *const Scope, comptime item_kind: ItemKind) *const std.AutoHashMapUnmanaged(Ident.Idx, Pattern.Idx) {
+        return switch (item_kind) {
+            .ident => &scope.idents,
+            .alias => &scope.aliases,
+        };
+    }
+
+    /// Put an item in the scope, panics on OOM
+    pub fn put(scope: *Scope, gpa: std.mem.Allocator, comptime item_kind: ItemKind, name: Ident.Idx, pattern: Pattern.Idx) void {
+        scope.items(item_kind).put(gpa, name, pattern) catch |err| collections.utils.exitOnOom(err);
+    }
+};
+
+/// Manages multiple levels of scope
+pub const Scopes = struct {
+    scopes: std.ArrayListUnmanaged(Scope) = .{},
+
+    /// Initialize with top-level scope
+    pub fn init(gpa: std.mem.Allocator) Scopes {
+        var self = Scopes{};
+        // Top-level scope is not a function boundary
+        self.enter(gpa, false);
+        return self;
+    }
+
+    /// Deinitialize all scopes
+    pub fn deinit(self: *Scopes, gpa: std.mem.Allocator) void {
+        for (0..self.scopes.items.len) |i| {
+            var scope = &self.scopes.items[i];
+            scope.deinit(gpa);
+        }
+        self.scopes.deinit(gpa);
+    }
+
+    /// Enter a new scope level
+    pub fn enter(self: *Scopes, gpa: std.mem.Allocator, is_function_boundary: bool) void {
+        const scope = Scope.init(is_function_boundary);
+        self.scopes.append(gpa, scope) catch |err| collections.utils.exitOnOom(err);
+    }
+
+    /// Exit the current scope level
+    pub fn exit(self: *Scopes, gpa: std.mem.Allocator) ScopeError!void {
+        if (self.scopes.items.len <= 1) {
+            return ScopeError.ExitedTopScopeLevel;
+        }
+        var scope: Scope = self.scopes.pop().?;
+        scope.deinit(gpa);
+    }
+
+    /// Check if an identifier is in scope
+    fn contains(
+        self: *const Scopes,
+        ident_store: *const base.Ident.Store,
+        comptime item_kind: Scope.ItemKind,
+        name: base.Ident.Idx,
+    ) ?Pattern.Idx {
+        var scope_idx = self.scopes.items.len;
+        while (scope_idx > 0) {
+            scope_idx -= 1;
+            const scope = &self.scopes.items[scope_idx];
+            const map = scope.itemsConst(item_kind);
+
+            var iter = map.iterator();
+            while (iter.next()) |entry| {
+                if (ident_store.identsHaveSameText(name, entry.key_ptr.*)) {
+                    return entry.value_ptr.*;
+                }
+            }
+        }
+        return null;
+    }
+
+    /// Look up an identifier in the scope
+    pub fn lookup(
+        self: *const Scopes,
+        ident_store: *const base.Ident.Store,
+        comptime item_kind: Scope.ItemKind,
+        name: base.Ident.Idx,
+    ) LookupResult {
+        if (self.contains(ident_store, item_kind, name)) |pattern| {
+            return LookupResult{ .found = pattern };
+        }
+        return LookupResult{ .not_found = {} };
+    }
+
+    /// Introduce a new identifier to the current scope level
+    pub fn introduce(
+        self: *Scopes,
+        gpa: std.mem.Allocator,
+        ident_store: *const base.Ident.Store,
+        comptime item_kind: Scope.ItemKind,
+        ident_idx: base.Ident.Idx,
+        pattern_idx: Pattern.Idx,
+        is_var: bool,
+        is_declaration: bool,
+    ) IntroduceResult {
+        // Check if var is being used at top-level
+        if (is_var and self.scopes.items.len == 1) {
+            return IntroduceResult{ .top_level_var_error = {} };
+        }
+
+        // Check for existing identifier in any scope level for shadowing detection
+        if (self.contains(ident_store, item_kind, ident_idx)) |existing_pattern| {
+            // If it's a var reassignment (not declaration), check function boundaries
+            if (is_var and !is_declaration) {
+                // Find the scope where the var was declared and check for function boundaries
+                var declaration_scope_idx: ?usize = null;
+                var scope_idx = self.scopes.items.len;
+
+                // First, find where the identifier was declared
+                while (scope_idx > 0) {
+                    scope_idx -= 1;
+                    const scope = &self.scopes.items[scope_idx];
+                    const map = scope.itemsConst(item_kind);
+
+                    var iter = map.iterator();
+                    while (iter.next()) |entry| {
+                        if (ident_store.identsHaveSameText(ident_idx, entry.key_ptr.*)) {
+                            declaration_scope_idx = scope_idx;
+                            break;
+                        }
+                    }
+
+                    if (declaration_scope_idx != null) break;
+                }
+
+                // Now check if there are function boundaries between declaration and current scope
+                if (declaration_scope_idx) |decl_idx| {
+                    var current_idx = decl_idx + 1;
+                    var found_function_boundary = false;
+
+                    while (current_idx < self.scopes.items.len) {
+                        const scope = &self.scopes.items[current_idx];
+                        if (scope.is_function_boundary) {
+                            found_function_boundary = true;
+                            break;
+                        }
+                        current_idx += 1;
+                    }
+
+                    if (found_function_boundary) {
+                        // Different function, return error
+                        return IntroduceResult{ .var_across_function_boundary = existing_pattern };
+                    } else {
+                        // Same function, allow reassignment without warning
+                        self.scopes.items[self.scopes.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
+                        return IntroduceResult{ .success = {} };
+                    }
+                }
+            }
+
+            // Regular shadowing case - produce warning but still introduce
+            self.scopes.items[self.scopes.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
+            return IntroduceResult{ .shadowing_warning = existing_pattern };
+        }
+
+        // Check the current level for duplicates
+        const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+        const map = current_scope.itemsConst(item_kind);
+
+        var iter = map.iterator();
+        while (iter.next()) |entry| {
+            if (ident_store.identsHaveSameText(ident_idx, entry.key_ptr.*)) {
+                // Duplicate in same scope - still introduce but return shadowing warning
+                self.scopes.items[self.scopes.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
+                return IntroduceResult{ .shadowing_warning = entry.value_ptr.* };
+            }
+        }
+
+        // No conflicts, introduce successfully
+        self.scopes.items[self.scopes.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
+        return IntroduceResult{ .success = {} };
+    }
+
+    /// Get all identifiers in scope
+    pub fn getAllIdentsInScope(self: *const Scopes, gpa: std.mem.Allocator, comptime item_kind: Scope.ItemKind) []base.Ident.Idx {
+        var result = std.ArrayList(base.Ident.Idx).init(gpa);
+
+        for (self.scopes.items) |scope| {
+            const map = scope.itemsConst(item_kind);
+            var iter = map.iterator();
+            while (iter.next()) |entry| {
+                result.append(entry.key_ptr.*) catch |err| collections.utils.exitOnOom(err);
+            }
+        }
+
+        return result.toOwnedSlice() catch |err| collections.utils.exitOnOom(err);
+    }
+};
+
 /// Initialize the IR for a module's canonicalization info.
 ///
 /// When caching the can IR for a siloed module, we can avoid
@@ -62,6 +309,8 @@ pub fn deinit(self: *CIR) void {
     self.store.deinit();
     self.ingested_files.deinit(self.env.gpa);
     self.imports.deinit(self.env.gpa);
+    // Note: scopes are managed by the canonicalizer, not the CIR
+    // The CIR only holds a temporary pointer during canonicalization
 }
 
 /// Records a diagnostic error during canonicalization without blocking compilation.
@@ -150,6 +399,7 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
         .pattern_not_canonicalized => Diagnostic.buildPatternNotCanonicalizedReport(allocator),
         .can_lambda_not_implemented => Diagnostic.buildCanLambdaNotImplementedReport(allocator),
         .lambda_body_not_canonicalized => Diagnostic.buildLambdaBodyNotCanonicalizedReport(allocator),
+        .var_across_function_boundary => Diagnostic.buildVarAcrossFunctionBoundaryReport(allocator),
     };
 }
 
@@ -215,6 +465,11 @@ fn appendIdent(node: *sexpr.Expr, gpa: std.mem.Allocator, ir: *const CIR, name: 
     }
 }
 
+// Helper to format pattern index for s-expr output
+fn formatPatternIdx(gpa: std.mem.Allocator, pattern_idx: Pattern.Idx) []const u8 {
+    return std.fmt.allocPrint(gpa, "pattern_idx_{}", .{@intFromEnum(pattern_idx)}) catch |err| exitOnOom(err);
+}
+
 test "Node is 24 bytes" {
     try testing.expectEqual(24, @sizeOf(Node));
 }
@@ -230,10 +485,18 @@ pub const Statement = union(enum) {
     /// A rebindable declaration using the "var" keyword
     /// Not valid at the top level of a module
     @"var": struct {
-        ident: Ident.Idx,
+        pattern_idx: Pattern.Idx,
         expr: Expr.Idx,
         region: Region,
     },
+    /// Reassignment of a previously declared var
+    /// Not valid at the top level of a module
+    reassign: struct {
+        pattern_idx: Pattern.Idx,
+        expr: Expr.Idx,
+        region: Region,
+    },
+    /// Instruct a runtime crash with optional message
     /// The "crash" keyword
     ///
     /// Not valid at the top level of a module
@@ -449,7 +712,13 @@ pub const Expr = union(enum) {
     empty_record: struct {
         region: Region,
     },
-    /// Look up exactly one field on a record, e.g. (expr).foo.
+    block: struct {
+        /// Statements executed in sequence
+        stmts: Statement.Span,
+        /// Final expression that produces the block's value
+        final_expr: Expr.Idx,
+        region: Region,
+    },
     record_access: struct {
         record_var: TypeVar,
         ext_var: TypeVar,
@@ -469,6 +738,11 @@ pub const Expr = union(enum) {
         variant_var: TypeVar,
         ext_var: TypeVar,
         name: Ident.Idx,
+        region: Region,
+    },
+    lambda: struct {
+        args: Pattern.Span,
+        body: Expr.Idx,
         region: Region,
     },
     binop: Binop,
@@ -526,7 +800,7 @@ pub const Expr = union(enum) {
         }
     };
 
-    pub fn toSExpr(self: *const @This(), ir: *const CIR) sexpr.Expr {
+    pub fn toSExpr(self: *const @This(), ir: *CIR) sexpr.Expr {
         const gpa = ir.env.gpa;
         switch (self.*) {
             .num => |num_expr| {
@@ -708,13 +982,10 @@ pub const Expr = union(enum) {
                 var lookup_node = sexpr.Expr.init(gpa, "lookup");
                 lookup_node.appendRegionInfo(gpa, ir.calcRegionInfo(l.region));
 
-                var ident_node = sexpr.Expr.init(gpa, "pattern_idx");
-
-                const pattern_idx_str = std.fmt.allocPrint(gpa, "{}", .{@intFromEnum(l.pattern_idx)}) catch |err| exitOnOom(err);
+                const pattern_idx_str = formatPatternIdx(gpa, l.pattern_idx);
                 defer gpa.free(pattern_idx_str);
 
-                ident_node.appendString(gpa, pattern_idx_str);
-                lookup_node.appendNode(gpa, &ident_node);
+                lookup_node.appendString(gpa, pattern_idx_str);
 
                 return lookup_node;
             },
@@ -822,6 +1093,66 @@ pub const Expr = union(enum) {
                 empty_record_node.appendRegionInfo(gpa, ir.calcRegionInfo(e.region));
                 return empty_record_node;
             },
+            .block => |block_expr| {
+                var block_node = sexpr.Expr.init(gpa, "block");
+                block_node.appendRegionInfo(gpa, ir.calcRegionInfo(block_expr.region));
+
+                // Add statements
+                var stmts_node = sexpr.Expr.init(gpa, "stmts");
+                for (ir.store.sliceStatements(block_expr.stmts)) |stmt_idx| {
+                    const stmt = ir.store.getStatement(stmt_idx);
+                    var stmt_node = switch (stmt) {
+                        .decl => |d| blk: {
+                            var let_node = sexpr.Expr.init(gpa, "let");
+
+                            // Add pattern_idx for easier tracing
+                            const pattern_idx_str = formatPatternIdx(gpa, d.pattern);
+                            defer gpa.free(pattern_idx_str);
+                            let_node.appendString(gpa, pattern_idx_str);
+
+                            var pattern_node = ir.store.getPattern(d.pattern).toSExpr(ir);
+                            var expr_node = ir.store.getExpr(d.expr).toSExpr(ir);
+                            let_node.appendNode(gpa, &pattern_node);
+                            let_node.appendNode(gpa, &expr_node);
+                            break :blk let_node;
+                        },
+                        .@"var" => |v| blk: {
+                            var var_node = sexpr.Expr.init(gpa, "var");
+
+                            // Add pattern_idx for easier tracing
+                            const pattern_idx_str = formatPatternIdx(gpa, v.pattern_idx);
+                            defer gpa.free(pattern_idx_str);
+                            var_node.appendString(gpa, pattern_idx_str);
+
+                            var pattern_node = ir.store.getPattern(v.pattern_idx).toSExpr(ir);
+                            var_node.appendNode(gpa, &pattern_node);
+                            var expr_node = ir.store.getExpr(v.expr).toSExpr(ir);
+                            var_node.appendNode(gpa, &expr_node);
+                            break :blk var_node;
+                        },
+                        .reassign => |r| blk: {
+                            var reassign_node = sexpr.Expr.init(gpa, "reassign");
+                            const pattern_idx_str = formatPatternIdx(gpa, r.pattern_idx);
+                            defer gpa.free(pattern_idx_str);
+                            reassign_node.appendString(gpa, pattern_idx_str);
+                            var expr_node = ir.store.getExpr(r.expr).toSExpr(ir);
+                            reassign_node.appendNode(gpa, &expr_node);
+                            break :blk reassign_node;
+                        },
+                        else => sexpr.Expr.init(gpa, "TODO_stmt"),
+                    };
+                    stmts_node.appendNode(gpa, &stmt_node);
+                }
+                block_node.appendNode(gpa, &stmts_node);
+
+                // Add final expression
+                var final_expr_node = sexpr.Expr.init(gpa, "final_expr");
+                var expr_node = ir.store.getExpr(block_expr.final_expr).toSExpr(ir);
+                final_expr_node.appendNode(gpa, &expr_node);
+                block_node.appendNode(gpa, &final_expr_node);
+
+                return block_node;
+            },
             .record_access => |access_expr| {
                 var access_node = sexpr.Expr.init(gpa, "record_access");
                 access_node.appendRegionInfo(gpa, ir.calcRegionInfo(access_expr.region));
@@ -916,6 +1247,34 @@ pub const Expr = union(enum) {
                 tag_node.appendNode(gpa, &name_node);
 
                 return tag_node;
+            },
+            .lambda => |lambda_expr| {
+                var lambda_node = sexpr.Expr.init(gpa, "lambda");
+                lambda_node.appendRegionInfo(gpa, ir.calcRegionInfo(lambda_expr.region));
+
+                // Handle args span
+                var args_node = sexpr.Expr.init(gpa, "args");
+                for (ir.store.slicePatterns(lambda_expr.args)) |arg_idx| {
+                    var arg_wrapper = sexpr.Expr.init(gpa, "arg");
+
+                    // Add pattern index for traceability
+                    const pattern_idx_str = formatPatternIdx(gpa, arg_idx);
+                    defer gpa.free(pattern_idx_str);
+                    arg_wrapper.appendString(gpa, pattern_idx_str);
+
+                    // Add the pattern itself
+                    var pattern_node = ir.store.getPattern(arg_idx).toSExpr(ir);
+                    arg_wrapper.appendNode(gpa, &pattern_node);
+
+                    args_node.appendNode(gpa, &arg_wrapper);
+                }
+                lambda_node.appendNode(gpa, &args_node);
+
+                // Handle body
+                var body_node = ir.store.getExpr(lambda_expr.body).toSExpr(ir);
+                lambda_node.appendNode(gpa, &body_node);
+
+                return lambda_node;
             },
             .binop => |e| {
                 var binop_node = sexpr.Expr.init(gpa, "binop");
@@ -1054,9 +1413,15 @@ pub const Def = struct {
         var pattern_node = sexpr.Expr.init(gpa, "pattern");
         pattern_node.appendRegionInfo(gpa, ir.calcRegionInfo(self.pattern_region));
 
+        // Add pattern index for debugging
+        const pattern_idx_str = formatPatternIdx(gpa, self.pattern);
+        defer gpa.free(pattern_idx_str);
+        pattern_node.appendString(gpa, pattern_idx_str);
+
         const pattern = ir.store.getPattern(self.pattern);
         var pattern_sexpr = pattern.toSExpr(ir);
         pattern_node.appendNode(gpa, &pattern_sexpr);
+
         node.appendNode(gpa, &pattern_node);
 
         var expr_node = sexpr.Expr.init(gpa, "expr");
@@ -1307,6 +1672,11 @@ pub const Pattern = union(enum) {
     underscore: struct {
         region: Region,
     },
+    /// Compiles, but will crash if reached
+    runtime_error: struct {
+        diagnostic: Diagnostic.Idx,
+        region: Region,
+    },
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
@@ -1417,6 +1787,20 @@ pub const Pattern = union(enum) {
                 node.appendRegionInfo(gpa, ir.calcRegionInfo(p.region));
                 return node;
             },
+            .runtime_error => |e| {
+                var runtime_err_node = sexpr.Expr.init(gpa, "runtime_error");
+                runtime_err_node.appendRegionInfo(gpa, ir.calcRegionInfo(e.region));
+
+                var buf = std.ArrayList(u8).init(gpa);
+                defer buf.deinit();
+
+                const diagnostic = ir.store.getDiagnostic(e.diagnostic);
+
+                buf.writer().writeAll(@tagName(diagnostic)) catch |err| exitOnOom(err);
+
+                runtime_err_node.appendString(gpa, buf.items);
+                return runtime_err_node;
+            },
         }
     }
 };
@@ -1501,22 +1885,18 @@ pub fn toSExprStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr.Idx,
         var root_node = sexpr.Expr.init(gpa, "can_ir");
         defer root_node.deinit(gpa);
 
-        var defs_node = sexpr.Expr.init(gpa, "top_level_defs");
-
         // Iterate over each top-level definition and convert it to an S-expression
         const defs_slice = ir.store.sliceDefs(ir.top_level_defs);
 
         if (defs_slice.len == 0) {
-            defs_node.appendString(gpa, "empty");
+            root_node.appendString(gpa, "empty");
         }
 
         for (defs_slice) |def_idx| {
             const d = ir.store.getDef(def_idx);
             var def_node = d.toSExpr(ir);
-            defs_node.appendNode(gpa, &def_node);
+            root_node.appendNode(gpa, &def_node);
         }
-
-        root_node.appendNode(gpa, &defs_node);
 
         root_node.toStringPretty(writer);
     }
@@ -1555,4 +1935,248 @@ pub fn calcRegionInfo(self: *const CIR, region: Region) base.RegionInfo {
     };
 
     return info;
+}
+
+test "basic scope initialization" {
+    const gpa = std.testing.allocator;
+    var scopes = CIR.Scopes.init(gpa);
+    defer scopes.deinit(gpa);
+
+    // Test that we start with one scope (top-level)
+    try std.testing.expect(scopes.scopes.items.len == 1);
+}
+
+test "empty scope has no items" {
+    const gpa = std.testing.allocator;
+    var env = base.ModuleEnv.init(gpa);
+    defer env.deinit();
+
+    var cir = CIR.init(&env);
+    defer cir.deinit();
+
+    var scopes = CIR.Scopes.init(gpa);
+    defer scopes.deinit(gpa);
+
+    const foo_ident = env.idents.insert(gpa, base.Ident.for_text("foo"), base.Region.zero());
+    const result = scopes.lookup(&env.idents, .ident, foo_ident);
+
+    try std.testing.expectEqual(LookupResult{ .not_found = {} }, result);
+}
+
+test "can add and lookup idents at top level" {
+    const gpa = std.testing.allocator;
+    var env = base.ModuleEnv.init(gpa);
+    defer env.deinit();
+
+    var cir = CIR.init(&env);
+    defer cir.deinit();
+
+    var scopes = CIR.Scopes.init(gpa);
+    defer scopes.deinit(gpa);
+
+    const foo_ident = env.idents.insert(gpa, base.Ident.for_text("foo"), base.Region.zero());
+    const bar_ident = env.idents.insert(gpa, base.Ident.for_text("bar"), base.Region.zero());
+    const foo_pattern: Pattern.Idx = @enumFromInt(1);
+    const bar_pattern: Pattern.Idx = @enumFromInt(2);
+
+    // Add identifiers
+    const foo_result = scopes.introduce(gpa, &env.idents, .ident, foo_ident, foo_pattern, false, true);
+    const bar_result = scopes.introduce(gpa, &env.idents, .ident, bar_ident, bar_pattern, false, true);
+
+    try std.testing.expectEqual(IntroduceResult{ .success = {} }, foo_result);
+    try std.testing.expectEqual(IntroduceResult{ .success = {} }, bar_result);
+
+    // Lookup should find them
+    const foo_lookup = scopes.lookup(&env.idents, .ident, foo_ident);
+    const bar_lookup = scopes.lookup(&env.idents, .ident, bar_ident);
+
+    try std.testing.expectEqual(LookupResult{ .found = foo_pattern }, foo_lookup);
+    try std.testing.expectEqual(LookupResult{ .found = bar_pattern }, bar_lookup);
+}
+
+test "nested scopes shadow outer scopes" {
+    const gpa = std.testing.allocator;
+    var env = base.ModuleEnv.init(gpa);
+    defer env.deinit();
+
+    var cir = CIR.init(&env);
+    defer cir.deinit();
+
+    var scopes = CIR.Scopes.init(gpa);
+    defer scopes.deinit(gpa);
+
+    const x_ident = env.idents.insert(gpa, base.Ident.for_text("x"), base.Region.zero());
+    const outer_pattern: Pattern.Idx = @enumFromInt(1);
+    const inner_pattern: Pattern.Idx = @enumFromInt(2);
+
+    // Add x to outer scope
+    const outer_result = scopes.introduce(gpa, &env.idents, .ident, x_ident, outer_pattern, false, true);
+    try std.testing.expectEqual(IntroduceResult{ .success = {} }, outer_result);
+
+    // Enter new scope
+    scopes.enter(gpa, false);
+
+    // x from outer scope should still be visible
+    const outer_lookup = scopes.lookup(&env.idents, .ident, x_ident);
+    try std.testing.expectEqual(LookupResult{ .found = outer_pattern }, outer_lookup);
+
+    // Add x to inner scope (shadows outer)
+    const inner_result = scopes.introduce(gpa, &env.idents, .ident, x_ident, inner_pattern, false, true);
+    try std.testing.expectEqual(IntroduceResult{ .shadowing_warning = outer_pattern }, inner_result);
+
+    // Now x should resolve to inner scope
+    const inner_lookup = scopes.lookup(&env.idents, .ident, x_ident);
+    try std.testing.expectEqual(LookupResult{ .found = inner_pattern }, inner_lookup);
+
+    // Exit inner scope
+    try scopes.exit(gpa);
+
+    // x should resolve to outer scope again
+    const after_exit_lookup = scopes.lookup(&env.idents, .ident, x_ident);
+    try std.testing.expectEqual(LookupResult{ .found = outer_pattern }, after_exit_lookup);
+}
+
+test "top level var error" {
+    const gpa = std.testing.allocator;
+    var env = base.ModuleEnv.init(gpa);
+    defer env.deinit();
+
+    var cir = CIR.init(&env);
+    defer cir.deinit();
+
+    var scopes = CIR.Scopes.init(gpa);
+    defer scopes.deinit(gpa);
+
+    const var_ident = env.idents.insert(gpa, base.Ident.for_text("count_"), base.Region.zero());
+    const pattern: Pattern.Idx = @enumFromInt(1);
+
+    // Should fail to introduce var at top level
+    const result = scopes.introduce(gpa, &env.idents, .ident, var_ident, pattern, true, true);
+    try std.testing.expectEqual(IntroduceResult{ .top_level_var_error = {} }, result);
+}
+
+test "var reassignment within same function" {
+    const gpa = std.testing.allocator;
+    var env = base.ModuleEnv.init(gpa);
+    defer env.deinit();
+
+    var cir = CIR.init(&env);
+    defer cir.deinit();
+
+    var scopes = CIR.Scopes.init(gpa);
+    defer scopes.deinit(gpa);
+
+    // Enter function scope
+    scopes.enter(gpa, true);
+
+    const count_ident = env.idents.insert(gpa, base.Ident.for_text("count_"), base.Region.zero());
+    const pattern1: Pattern.Idx = @enumFromInt(1);
+    const pattern2: Pattern.Idx = @enumFromInt(2);
+
+    // Declare var
+    const declare_result = scopes.introduce(gpa, &env.idents, .ident, count_ident, pattern1, true, true);
+    try std.testing.expectEqual(IntroduceResult{ .success = {} }, declare_result);
+
+    // Reassign var (not a declaration)
+    const reassign_result = scopes.introduce(gpa, &env.idents, .ident, count_ident, pattern2, true, false);
+    try std.testing.expectEqual(IntroduceResult{ .success = {} }, reassign_result);
+
+    // Should resolve to the reassigned value
+    const lookup_result = scopes.lookup(&env.idents, .ident, count_ident);
+    try std.testing.expectEqual(LookupResult{ .found = pattern2 }, lookup_result);
+}
+
+test "var reassignment across function boundary fails" {
+    const gpa = std.testing.allocator;
+    var env = base.ModuleEnv.init(gpa);
+    defer env.deinit();
+
+    var cir = CIR.init(&env);
+    defer cir.deinit();
+
+    var scopes = CIR.Scopes.init(gpa);
+    defer scopes.deinit(gpa);
+
+    // Enter first function scope
+    scopes.enter(gpa, true);
+
+    const count_ident = env.idents.insert(gpa, base.Ident.for_text("count_"), base.Region.zero());
+    const pattern1: Pattern.Idx = @enumFromInt(1);
+    const pattern2: Pattern.Idx = @enumFromInt(2);
+
+    // Declare var in first function
+    const declare_result = scopes.introduce(gpa, &env.idents, .ident, count_ident, pattern1, true, true);
+    try std.testing.expectEqual(IntroduceResult{ .success = {} }, declare_result);
+
+    // Enter second function scope (function boundary)
+    scopes.enter(gpa, true);
+
+    // Try to reassign var from different function - should fail
+    const reassign_result = scopes.introduce(gpa, &env.idents, .ident, count_ident, pattern2, true, false);
+    try std.testing.expectEqual(IntroduceResult{ .var_across_function_boundary = pattern1 }, reassign_result);
+}
+
+test "identifiers with and without underscores are different" {
+    const gpa = std.testing.allocator;
+    var env = base.ModuleEnv.init(gpa);
+    defer env.deinit();
+
+    var cir = CIR.init(&env);
+    defer cir.deinit();
+
+    var scopes = CIR.Scopes.init(gpa);
+    defer scopes.deinit(gpa);
+
+    const sum_ident = env.idents.insert(gpa, base.Ident.for_text("sum"), base.Region.zero());
+    const sum_underscore_ident = env.idents.insert(gpa, base.Ident.for_text("sum_"), base.Region.zero());
+    const pattern1: Pattern.Idx = @enumFromInt(1);
+    const pattern2: Pattern.Idx = @enumFromInt(2);
+
+    // Enter function scope so we can use var
+    scopes.enter(gpa, true);
+
+    // Introduce regular identifier
+    const regular_result = scopes.introduce(gpa, &env.idents, .ident, sum_ident, pattern1, false, true);
+    try std.testing.expectEqual(IntroduceResult{ .success = {} }, regular_result);
+
+    // Introduce var with underscore - should not conflict
+    const var_result = scopes.introduce(gpa, &env.idents, .ident, sum_underscore_ident, pattern2, true, true);
+    try std.testing.expectEqual(IntroduceResult{ .success = {} }, var_result);
+
+    // Both should be found independently
+    const regular_lookup = scopes.lookup(&env.idents, .ident, sum_ident);
+    const var_lookup = scopes.lookup(&env.idents, .ident, sum_underscore_ident);
+
+    try std.testing.expectEqual(LookupResult{ .found = pattern1 }, regular_lookup);
+    try std.testing.expectEqual(LookupResult{ .found = pattern2 }, var_lookup);
+}
+
+test "aliases work separately from idents" {
+    const gpa = std.testing.allocator;
+    var env = base.ModuleEnv.init(gpa);
+    defer env.deinit();
+
+    var cir = CIR.init(&env);
+    defer cir.deinit();
+
+    var scopes = CIR.Scopes.init(gpa);
+    defer scopes.deinit(gpa);
+
+    const foo_ident = env.idents.insert(gpa, base.Ident.for_text("Foo"), base.Region.zero());
+    const ident_pattern: Pattern.Idx = @enumFromInt(1);
+    const alias_pattern: Pattern.Idx = @enumFromInt(2);
+
+    // Add as both ident and alias (they're in separate namespaces)
+    const ident_result = scopes.introduce(gpa, &env.idents, .ident, foo_ident, ident_pattern, false, true);
+    const alias_result = scopes.introduce(gpa, &env.idents, .alias, foo_ident, alias_pattern, false, true);
+
+    try std.testing.expectEqual(IntroduceResult{ .success = {} }, ident_result);
+    try std.testing.expectEqual(IntroduceResult{ .success = {} }, alias_result);
+
+    // Both should be found in their respective namespaces
+    const ident_lookup = scopes.lookup(&env.idents, .ident, foo_ident);
+    const alias_lookup = scopes.lookup(&env.idents, .alias, foo_ident);
+
+    try std.testing.expectEqual(LookupResult{ .found = ident_pattern }, ident_lookup);
+    try std.testing.expectEqual(LookupResult{ .found = alias_pattern }, alias_lookup);
 }

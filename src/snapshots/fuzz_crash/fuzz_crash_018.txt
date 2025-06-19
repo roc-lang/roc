@@ -21,5 +21,5 @@ DotUpperIdent(2:1-2:3),EndOfFile(2:3-2:3),
 ~~~FORMATTED
 b : S..R
 ~~~CANONICALIZE
-(can_ir (top_level_defs "empty"))
+(can_ir "empty")
 ~~~END
