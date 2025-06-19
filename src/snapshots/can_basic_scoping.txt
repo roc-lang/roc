@@ -23,39 +23,11 @@ DUPLICATE DEFINITION
 The name `x` is being redeclared in this scope.
 
 The redeclaration is here:
-/Users/luke/Documents/GitHub/roc/src/snapshots/can_basic_scoping.txt:9-5:9: module []
+/Users/luke/Documents/GitHub/roc/src/snapshots/can_basic_scoping.txt:9-5:9:     x = 20  # Should shadow top-level x
 
-# Top-level variables
-x = 5
-y = 10
-
-# Function that shadows outer variable
-outerFunc = |_| {
-    x = 20  # Should shadow top-level x
-    innerResult = {
-        # Block scope
-        z = x + y  # x should resolve to 20, y to 10
-        z + 1
-    }
-    innerResult
-}
 But `x` was already defined here:
-/Users/luke/Documents/GitHub/roc/src/snapshots/can_basic_scoping.txt:4-1:4: module []
+/Users/luke/Documents/GitHub/roc/src/snapshots/can_basic_scoping.txt:4-1:4: x = 5
 
-# Top-level variables
-x = 5
-y = 10
-
-# Function that shadows outer variable
-outerFunc = |_| {
-    x = 20  # Should shadow top-level x
-    innerResult = {
-        # Block scope
-        z = x + y  # x should resolve to 20, y to 10
-        z + 1
-    }
-    innerResult
-}
 ~~~TOKENS
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),
 Newline(1:1-1:1),
