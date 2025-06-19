@@ -15,12 +15,16 @@ const CIR = canonicalize.CIR;
 pub const ProcessResult = struct {
     cir: *CIR,
     reports: []reporting.Report,
+    owned_source: ?[]const u8,
 
     pub fn deinit(self: *ProcessResult, gpa: std.mem.Allocator) void {
         for (self.reports) |*report| {
             report.deinit();
         }
         gpa.free(self.reports);
+        if (self.owned_source) |source| {
+            gpa.free(source);
+        }
         self.cir.deinit();
         gpa.destroy(self.cir);
     }
@@ -38,9 +42,10 @@ pub fn processFile(
         error.AccessDenied => return error.AccessDenied,
         else => return error.FileReadError,
     };
-    defer gpa.free(source);
 
-    return processSource(gpa, source, filepath);
+    var result = try processSourceInternal(gpa, source, filepath);
+    result.owned_source = source; // Transfer ownership
+    return result;
 }
 
 /// Process source code directly and return diagnostics.
@@ -80,7 +85,18 @@ pub fn checkSource(
 
 /// Process source code directly and return both CIR and Reports for proper reporting.
 /// Useful when you need access to the CIR for diagnostic-to-report conversion.
+/// NOTE: The caller retains ownership of the source parameter.
 pub fn processSource(
+    gpa: std.mem.Allocator,
+    source: []const u8,
+    filename: []const u8,
+) !ProcessResult {
+    var result = try processSourceInternal(gpa, source, filename);
+    result.owned_source = null; // Caller owns the source
+    return result;
+}
+
+fn processSourceInternal(
     gpa: std.mem.Allocator,
     source: []const u8,
     filename: []const u8,
@@ -109,12 +125,13 @@ pub fn processSource(
         reports.append(report) catch continue;
     }
 
-    // Initialize the Can IR
-    var cir = CIR.init(&module_env);
+    // Initialize the Can IR (heap-allocated)
+    var cir = try gpa.create(CIR);
+    cir.* = CIR.init(&module_env);
 
     // Create scope for semantic analysis
     // Canonicalize the AST
-    var canonicalizer = canonicalize.init(&cir, &parse_ast);
+    var canonicalizer = canonicalize.init(cir, &parse_ast);
     defer canonicalizer.deinit();
     canonicalizer.canonicalize_file();
 
@@ -126,7 +143,8 @@ pub fn processSource(
     }
 
     return ProcessResult{
-        .cir = &cir,
+        .cir = cir,
         .reports = reports.toOwnedSlice() catch return error.OutOfMemory,
+        .owned_source = undefined, // Will be set by caller
     };
 }
