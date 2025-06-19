@@ -22,7 +22,7 @@ test "addTypeVar - str" {
     defer module_env.deinit();
 
     // Create type store
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     // Create layout store
@@ -49,7 +49,7 @@ test "addTypeVar - bool" {
     defer module_env.deinit();
 
     // Create type store
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     // Create layout store
@@ -64,7 +64,7 @@ test "addTypeVar - bool" {
     const retrieved_layout = layout_store.getLayout(bool_layout_idx);
     try testing.expect(retrieved_layout.tag == .scalar);
     try testing.expectEqual(layout.ScalarTag.bool, retrieved_layout.data.scalar.tag);
-    try testing.expectEqual(@as(u32, 1), layout_store.layoutSize(retrieved_layout.*));
+    try testing.expectEqual(@as(u32, 1), layout_store.layoutSize(retrieved_layout));
 }
 
 test "addTypeVar - list of strings" {
@@ -75,7 +75,7 @@ test "addTypeVar - list of strings" {
     defer module_env.deinit();
 
     // Create type store
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     // Create layout store
@@ -107,7 +107,7 @@ test "addTypeVar - list of box of strings" {
     defer module_env.deinit();
 
     // Create type store
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     // Create layout store
@@ -146,7 +146,7 @@ test "addTypeVar - box of flex_var compiles to box of opaque_ptr" {
     defer module_env.deinit();
 
     // Create type store
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     // Create layout store
@@ -178,7 +178,7 @@ test "addTypeVar - num u32" {
     defer module_env.deinit();
 
     // Create type store
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     // Create layout store
@@ -186,7 +186,7 @@ test "addTypeVar - num u32" {
     defer layout_store.deinit();
 
     // Create a u32 type variable
-    const u32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u32 } } } });
+    const u32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u32 } } } });
 
     // Convert to layout
     const u32_layout_idx = try layout_store.addTypeVar(u32_var);
@@ -205,7 +205,7 @@ test "addTypeVar - num f64" {
     defer module_env.deinit();
 
     // Create type store
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     // Create layout store
@@ -213,7 +213,7 @@ test "addTypeVar - num f64" {
     defer layout_store.deinit();
 
     // Create a f64 type variable
-    const f64_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .frac = .{ .exact = .f64 } } } });
+    const f64_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f64 } } } });
 
     // Convert to layout
     const f64_layout_idx = try layout_store.addTypeVar(f64_var);
@@ -232,7 +232,7 @@ test "addTypeVar - list of num i128" {
     defer module_env.deinit();
 
     // Create type store
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     // Create layout store
@@ -240,7 +240,7 @@ test "addTypeVar - list of num i128" {
     defer layout_store.deinit();
 
     // Create an i128 type variable
-    const i128_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .i128 } } } });
+    const i128_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i128 } } } });
 
     // Create a list of i128 type variable
     const list_i128_var = type_store.freshFromContent(.{ .structure = .{ .list = i128_var } });
@@ -265,7 +265,7 @@ test "addTypeVar - num dec" {
     defer module_env.deinit();
 
     // Create type store
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     // Create layout store
@@ -273,7 +273,7 @@ test "addTypeVar - num dec" {
     defer layout_store.deinit();
 
     // Create a dec type variable
-    const dec_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .frac = .{ .exact = .dec } } } });
+    const dec_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = .dec } } } });
 
     // Convert to layout
     const dec_layout_idx = try layout_store.addTypeVar(dec_var);
@@ -292,7 +292,7 @@ test "addTypeVar - flex num var defaults to i128" {
     defer module_env.deinit();
 
     // Create type store
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     // Create layout store
@@ -300,7 +300,7 @@ test "addTypeVar - flex num var defaults to i128" {
     defer layout_store.deinit();
 
     // Create a flex number type variable (Num(a))
-    const flex_num_var = type_store.freshFromContent(.{ .structure = .{ .num = .flex_var } });
+    const flex_num_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_poly = @enumFromInt(0) } } });
 
     // Convert to layout - should default to i128
     const layout_idx = try layout_store.addTypeVar(flex_num_var);
@@ -319,7 +319,7 @@ test "addTypeVar - flex int var defaults to i128" {
     defer module_env.deinit();
 
     // Create type store
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     // Create layout store
@@ -327,7 +327,7 @@ test "addTypeVar - flex int var defaults to i128" {
     defer layout_store.deinit();
 
     // Create a flex int type variable (Int(a))
-    const flex_int_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .flex_var } } });
+    const flex_int_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int_poly = @enumFromInt(0) } } });
 
     // Convert to layout - should default to i128
     const layout_idx = try layout_store.addTypeVar(flex_int_var);
@@ -346,7 +346,7 @@ test "addTypeVar - flex frac var defaults to dec" {
     defer module_env.deinit();
 
     // Create type store
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     // Create layout store
@@ -354,7 +354,7 @@ test "addTypeVar - flex frac var defaults to dec" {
     defer layout_store.deinit();
 
     // Create a flex frac type variable (Frac(a))
-    const flex_frac_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .frac = .flex_var } } });
+    const flex_frac_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .frac_poly = @enumFromInt(0) } } });
 
     // Convert to layout - should default to dec
     const layout_idx = try layout_store.addTypeVar(flex_frac_var);
@@ -373,7 +373,7 @@ test "addTypeVar - list of flex num var defaults to list of i128" {
     defer module_env.deinit();
 
     // Create type store
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     // Create layout store
@@ -381,7 +381,7 @@ test "addTypeVar - list of flex num var defaults to list of i128" {
     defer layout_store.deinit();
 
     // Create a flex num type variable (Num(a))
-    const flex_num_var = type_store.freshFromContent(.{ .structure = .{ .num = .flex_var } });
+    const flex_num_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_poly = @enumFromInt(0) } } });
 
     // Create a list of flex num type variable
     const list_flex_num_var = type_store.freshFromContent(.{ .structure = .{ .list = flex_num_var } });
@@ -405,7 +405,7 @@ test "addTypeVar - box of flex frac var defaults to box of dec" {
     defer module_env.deinit();
 
     // Create type store
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     // Create layout store
@@ -413,7 +413,7 @@ test "addTypeVar - box of flex frac var defaults to box of dec" {
     defer layout_store.deinit();
 
     // Create a flex frac type variable (Frac(a))
-    const flex_frac_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .frac = .flex_var } } });
+    const flex_frac_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .frac_poly = @enumFromInt(0) } } });
 
     // Create a box of flex frac type variable
     const box_flex_frac_var = type_store.freshFromContent(.{ .structure = .{ .box = flex_frac_var } });
@@ -436,14 +436,14 @@ test "addTypeVar - box of rigid_var compiles to box of opaque_ptr" {
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
     defer layout_store.deinit();
 
     // Create an ident for the rigid var
-    const ident_idx = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("a"), base.Region.zero());
+    const ident_idx = module_env.idents.insert(module_env.gpa, base.Ident.for_text("a"), base.Region.zero());
 
     // Create a rigid_var type variable
     const rigid_var = type_store.freshFromContent(.{ .rigid_var = ident_idx });
@@ -470,7 +470,7 @@ test "addTypeVar - box of empty record compiles to box_of_zst" {
     defer module_env.deinit();
 
     // Create type store
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     // Create layout store
@@ -499,7 +499,7 @@ test "addTypeVar - list of empty tag union compiles to list_of_zst" {
     defer module_env.deinit();
 
     // Create type store
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     // Create layout store
@@ -528,7 +528,7 @@ test "alignment - record alignment is max of field alignments" {
     defer module_env.deinit();
 
     // Create type store
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     // Create layout store
@@ -536,17 +536,18 @@ test "alignment - record alignment is max of field alignments" {
     defer layout_store.deinit();
 
     // Create field identifiers
-    const field1_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("field1"), base.Region.zero());
-    const field2_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("field2"), base.Region.zero());
-    const field3_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("field3"), base.Region.zero());
+    const field1_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("field1"), base.Region.zero());
+    const field2_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("field2"), base.Region.zero());
+    const field3_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("field3"), base.Region.zero());
 
     // Create type variables for fields
-    const u8_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u8 } } } });
-    const u32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u32 } } } });
-    const u64_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u64 } } } });
+    const u8_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } });
+    _ = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u16 } } } });
+    const u32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u32 } } } });
+    const u64_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u64 } } } });
 
     // Create record type { field1: U8, field2: U32, field3: U64 }
-    const fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+    const fields = type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = field1_ident, .var_ = u8_var },
         .{ .name = field2_ident, .var_ = u32_var },
         .{ .name = field3_ident, .var_ = u64_var },
@@ -569,7 +570,7 @@ test "alignment - record alignment is max of field alignments" {
     }
 
     // Test with different field order - alignment should still be the same
-    const fields2 = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+    const fields2 = type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = field3_ident, .var_ = u64_var },
         .{ .name = field1_ident, .var_ = u8_var },
         .{ .name = field2_ident, .var_ = u32_var },
@@ -595,7 +596,7 @@ test "alignment - deeply nested record alignment (non-recursive)" {
     defer module_env.deinit();
 
     // Create type store
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     // Create layout store
@@ -603,37 +604,37 @@ test "alignment - deeply nested record alignment (non-recursive)" {
     defer layout_store.deinit();
 
     // Create field identifiers
-    const inner_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("inner"), base.Region.zero());
-    const middle_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("middle"), base.Region.zero());
-    const outer_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("outer"), base.Region.zero());
-    const data_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("data"), base.Region.zero());
+    const inner_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("inner"), base.Region.zero());
+    const middle_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("middle"), base.Region.zero());
+    const outer_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("outer"), base.Region.zero());
+    const data_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("data"), base.Region.zero());
 
     // Create a U64 field (alignment 8)
-    const u64_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u64 } } } });
+    const u64_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u64 } } } });
 
     // Create innermost record: { data: U64 }
-    const inner_fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+    const inner_fields = type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = data_ident, .var_ = u64_var },
     });
     const inner_ext = type_store.freshFromContent(.{ .structure = .empty_record });
     const inner_record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = inner_fields, .ext = inner_ext } } });
 
     // Create middle record: { inner: { data: U64 } }
-    const middle_fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+    const middle_fields = type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = inner_ident, .var_ = inner_record_var },
     });
     const middle_ext = type_store.freshFromContent(.{ .structure = .empty_record });
     const middle_record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = middle_fields, .ext = middle_ext } } });
 
     // Create outer record: { middle: { inner: { data: U64 } } }
-    const outer_fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+    const outer_fields = type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = middle_ident, .var_ = middle_record_var },
     });
     const outer_ext = type_store.freshFromContent(.{ .structure = .empty_record });
     const outer_record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = outer_fields, .ext = outer_ext } } });
 
     // Create outermost record: { outer: { middle: { inner: { data: U64 } } } }
-    const outermost_fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+    const outermost_fields = type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = outer_ident, .var_ = outer_record_var },
     });
     const outermost_ext = type_store.freshFromContent(.{ .structure = .empty_record });
@@ -659,7 +660,7 @@ test "addTypeVar - bare empty record returns error" {
     defer module_env.deinit();
 
     // Create type store
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     // Create layout store
@@ -682,7 +683,7 @@ test "addTypeVar - bare empty tag union returns error" {
     defer module_env.deinit();
 
     // Create type store
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     // Create layout store
@@ -705,7 +706,7 @@ test "addTypeVar - simple record" {
     defer module_env.deinit();
 
     // Create type store
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     // Create layout store
@@ -714,14 +715,14 @@ test "addTypeVar - simple record" {
 
     // Create field types
     const str_var = type_store.freshFromContent(.{ .structure = .str });
-    const u32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u32 } } } });
+    const u32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u32 } } } });
 
     // Create field identifiers
-    const name_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("name"), base.Region.zero());
-    const age_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("age"), base.Region.zero());
+    const name_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("name"), base.Region.zero());
+    const age_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("age"), base.Region.zero());
 
     // Create record type { name: str, age: u32 }
-    const fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+    const fields = type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = name_ident, .var_ = str_var },
         .{ .name = age_ident, .var_ = u32_var },
     });
@@ -768,7 +769,7 @@ test "record size calculation" {
     defer module_env.deinit();
 
     // Create type store
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     // Create layout store
@@ -777,16 +778,16 @@ test "record size calculation" {
 
     // Test record with multiple fields requiring padding
     // { a: u8, b: u32, c: u8, d: u64 }
-    const u8_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u8 } } } });
-    const u32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u32 } } } });
-    const u64_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u64 } } } });
+    const u8_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } });
+    const u32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u32 } } } });
+    const u64_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u64 } } } });
 
-    const a_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("a"), base.Region.zero());
-    const b_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("b"), base.Region.zero());
-    const c_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("c"), base.Region.zero());
-    const d_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("d"), base.Region.zero());
+    const a_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("a"), base.Region.zero());
+    const b_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("b"), base.Region.zero());
+    const c_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("c"), base.Region.zero());
+    const d_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("d"), base.Region.zero());
 
-    const fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+    const fields = type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = a_ident, .var_ = u8_var },
         .{ .name = b_ident, .var_ = u32_var },
         .{ .name = c_ident, .var_ = u8_var },
@@ -809,7 +810,7 @@ test "record size calculation" {
     // c: u8 (1 byte) at offset 13
     // Total: 14 bytes, but aligned to 8 bytes = 16 bytes
     for (target.TargetUsize.all()) |target_usize| {
-        try testing.expectEqual(@as(u32, 16), layout_store.layoutSize(record_layout.*));
+        try testing.expectEqual(@as(u32, 16), layout_store.layoutSize(record_layout));
         try testing.expectEqual(@as(u32, 8), record_layout.alignment(target_usize).toByteUnits());
     }
 }
@@ -822,7 +823,7 @@ test "addTypeVar - nested record" {
     defer module_env.deinit();
 
     // Create type store
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     // Create layout store
@@ -830,11 +831,11 @@ test "addTypeVar - nested record" {
     defer layout_store.deinit();
 
     // Create inner record type { x: i32, y: i32 }
-    const i32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .i32 } } } });
-    const x_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("x"), base.Region.zero());
-    const y_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("y"), base.Region.zero());
+    const i32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i32 } } } });
+    const x_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("x"), base.Region.zero());
+    const y_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("y"), base.Region.zero());
 
-    const point_fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+    const point_fields = type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = x_ident, .var_ = i32_var },
         .{ .name = y_ident, .var_ = i32_var },
     });
@@ -844,10 +845,10 @@ test "addTypeVar - nested record" {
 
     // Create outer record type { name: Str, position: { x: i32, y: i32 } }
     const str_var = type_store.freshFromContent(.{ .structure = .str });
-    const name_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("name"), base.Region.zero());
-    const position_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("position"), base.Region.zero());
+    const name_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("name"), base.Region.zero());
+    const position_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("position"), base.Region.zero());
 
-    const player_fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+    const player_fields = type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = name_ident, .var_ = str_var },
         .{ .name = position_ident, .var_ = point_var },
     });
@@ -910,7 +911,7 @@ test "addTypeVar - list of records" {
     defer module_env.deinit();
 
     // Create type store
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     // Create layout store
@@ -918,13 +919,13 @@ test "addTypeVar - list of records" {
     defer layout_store.deinit();
 
     // Create record type { id: u64, active: bool }
-    const u64_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u64 } } } });
+    const u64_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u64 } } } });
     // For bool, we'll use u8 as a placeholder
-    const bool_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u8 } } } });
-    const id_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("id"), base.Region.zero());
-    const active_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("active"), base.Region.zero());
+    const bool_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } });
+    const id_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("id"), base.Region.zero());
+    const active_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("active"), base.Region.zero());
 
-    const record_fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+    const record_fields = type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = id_ident, .var_ = u64_var },
         .{ .name = active_ident, .var_ = bool_var },
     });
@@ -975,22 +976,22 @@ test "addTypeVar - record with extension" {
     defer module_env.deinit();
 
     // Create type store
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     // Create layout store
     var layout_store = try Store.init(&module_env, &type_store);
     defer layout_store.deinit();
 
-    // Create extension record { y: i32, z: f64 }
-    const i32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .i32 } } } });
-    const f64_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .frac = .{ .exact = .f64 } } } });
-    const y_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("y"), base.Region.zero());
-    const z_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("z"), base.Region.zero());
+    // Create extension record { y: i32, z: u16 }
+    const i32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i32 } } } });
+    const u16_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u16 } } } });
+    const y_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("y"), base.Region.zero());
+    const z_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("z"), base.Region.zero());
 
-    const ext_fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+    const ext_fields = type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = y_ident, .var_ = i32_var },
-        .{ .name = z_ident, .var_ = f64_var },
+        .{ .name = z_ident, .var_ = u16_var },
     });
 
     const empty_ext = type_store.freshFromContent(.{ .structure = .empty_record });
@@ -998,9 +999,9 @@ test "addTypeVar - record with extension" {
 
     // Create main record { x: str } extending the above
     const str_var = type_store.freshFromContent(.{ .structure = .str });
-    const x_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("x"), base.Region.zero());
+    const x_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("x"), base.Region.zero());
 
-    const main_fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+    const main_fields = type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = x_ident, .var_ = str_var },
     });
 
@@ -1028,19 +1029,19 @@ test "addTypeVar - record with extension" {
     const x_layout = layout_store.getLayout(x_field.layout);
     try testing.expect(x_layout.tag == .scalar);
 
-    // Field z (f64) - comes before y due to alignment
-    const z_field = field_slice.get(1);
-    try testing.expect(z_field.name == z_ident);
-    const z_layout = layout_store.getLayout(z_field.layout);
-    try testing.expect(z_layout.tag == .scalar);
-    try testing.expect(z_layout.data.scalar.data.frac == .f64);
-
-    // Field y (i32) - comes last due to smaller alignment
-    const y_field = field_slice.get(2);
+    // Field y (i32) - comes before z due to alignment
+    const y_field = field_slice.get(1);
     try testing.expect(y_field.name == y_ident);
     const y_layout = layout_store.getLayout(y_field.layout);
     try testing.expect(y_layout.tag == .scalar);
     try testing.expect(y_layout.data.scalar.data.int == .i32);
+
+    // Field z (u16) - comes last due to smaller alignment
+    const z_field = field_slice.get(2);
+    try testing.expect(z_field.name == z_ident);
+    const z_layout = layout_store.getLayout(z_field.layout);
+    try testing.expect(z_layout.tag == .scalar);
+    try testing.expect(z_layout.data.scalar.data.int == .u16);
 
     // Exactly 3 fields
     try testing.expectEqual(@as(usize, 3), field_slice.len);
@@ -1053,14 +1054,14 @@ test "addTypeVar - record extension with str type fails" {
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
     defer layout_store.deinit();
 
     // Create a record with str as extension (invalid)
-    const field_name = type_store.env.idents.insert(gpa, base.Ident.for_text("field"), base.Region.zero());
+    const field_name = module_env.idents.insert(gpa, base.Ident.for_text("field"), base.Region.zero());
     var fields = std.ArrayList(types.RecordField).init(gpa);
     defer fields.deinit();
 
@@ -1084,14 +1085,14 @@ test "addTypeVar - record extension with num type fails" {
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
     defer layout_store.deinit();
 
     // Create a record with number as extension (invalid)
-    const field_name = type_store.env.idents.insert(gpa, base.Ident.for_text("field"), base.Region.zero());
+    const field_name = module_env.idents.insert(gpa, base.Ident.for_text("field"), base.Region.zero());
     var fields = std.ArrayList(types.RecordField).init(gpa);
     defer fields.deinit();
 
@@ -1101,7 +1102,7 @@ test "addTypeVar - record extension with num type fails" {
     });
 
     const fields_slice = type_store.record_fields.appendSlice(gpa, fields.items);
-    const num_ext = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u64 } } } });
+    const num_ext = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u64 } } } });
     const record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields_slice, .ext = num_ext } } });
 
     const result = layout_store.addTypeVar(record_var);
@@ -1115,7 +1116,7 @@ test "addTypeVar - deeply nested containers with zero-sized inner type" {
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
@@ -1155,14 +1156,14 @@ test "addTypeVar - record with single zero-sized field in container" {
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
     defer layout_store.deinit();
 
     // Create List({ only_field: {} })
-    const field_name = type_store.env.idents.insert(gpa, base.Ident.for_text("only_field"), base.Region.zero());
+    const field_name = module_env.idents.insert(gpa, base.Ident.for_text("only_field"), base.Region.zero());
     var fields = std.ArrayList(types.RecordField).init(gpa);
     defer fields.deinit();
 
@@ -1190,19 +1191,19 @@ test "addTypeVar - record field ordering stability" {
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
     defer layout_store.deinit();
 
     // Create multiple records with same fields but different order
-    const field_a = type_store.env.idents.insert(gpa, base.Ident.for_text("aaa"), base.Region.zero());
-    const field_b = type_store.env.idents.insert(gpa, base.Ident.for_text("bbb"), base.Region.zero());
-    const field_c = type_store.env.idents.insert(gpa, base.Ident.for_text("ccc"), base.Region.zero());
+    const field_a = module_env.idents.insert(gpa, base.Ident.for_text("aaa"), base.Region.zero());
+    const field_b = module_env.idents.insert(gpa, base.Ident.for_text("bbb"), base.Region.zero());
+    const field_c = module_env.idents.insert(gpa, base.Ident.for_text("ccc"), base.Region.zero());
 
     // All fields have same type (same alignment)
-    const field_type = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u32 } } } });
+    const field_type = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u32 } } } });
 
     // Record 1: a, b, c
     var fields1 = std.ArrayList(types.RecordField).init(gpa);
@@ -1265,18 +1266,18 @@ test "addTypeVar - record field ordering stability" {
                             // All should have same field order
                             var i: usize = 0;
                             while (i < 3) : (i += 1) {
-                                const name1 = type_store.env.idents.getText(fields_1.items(.name)[i]);
-                                const name2 = type_store.env.idents.getText(fields_2.items(.name)[i]);
-                                const name3 = type_store.env.idents.getText(fields_3.items(.name)[i]);
+                                const name1 = module_env.idents.getText(fields_1.items(.name)[i]);
+                                const name2 = module_env.idents.getText(fields_2.items(.name)[i]);
+                                const name3 = module_env.idents.getText(fields_3.items(.name)[i]);
 
                                 try testing.expectEqualStrings(name1, name2);
                                 try testing.expectEqualStrings(name2, name3);
                             }
 
                             // Verify correct alphabetical order
-                            try testing.expectEqualStrings("aaa", type_store.env.idents.getText(fields_1.items(.name)[0]));
-                            try testing.expectEqualStrings("bbb", type_store.env.idents.getText(fields_1.items(.name)[1]));
-                            try testing.expectEqualStrings("ccc", type_store.env.idents.getText(fields_1.items(.name)[2]));
+                            try testing.expectEqualStrings("aaa", module_env.idents.getText(fields_1.items(.name)[0]));
+                            try testing.expectEqualStrings("bbb", module_env.idents.getText(fields_1.items(.name)[1]));
+                            try testing.expectEqualStrings("ccc", module_env.idents.getText(fields_1.items(.name)[2]));
                         },
                         else => try testing.expect(false),
                     }
@@ -1295,7 +1296,7 @@ test "addTypeVar - empty record in different contexts" {
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
@@ -1319,7 +1320,7 @@ test "addTypeVar - empty record in different contexts" {
     try testing.expect(result3_layout.tag == .list_of_zst);
 
     // Test 4: Record containing only empty record field
-    const field_name = type_store.env.idents.insert(gpa, base.Ident.for_text("empty"), base.Region.zero());
+    const field_name = module_env.idents.insert(gpa, base.Ident.for_text("empty"), base.Region.zero());
     var fields = std.ArrayList(types.RecordField).init(gpa);
     defer fields.deinit();
     try fields.append(.{
@@ -1341,7 +1342,7 @@ test "addTypeVar - record alignment edge cases" {
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
@@ -1353,15 +1354,15 @@ test "addTypeVar - record alignment edge cases" {
 
     // Add fields with different alignments (1, 2, 4, 8, 16 bytes)
     const alignments = [_]struct { name: []const u8, type: types.FlatType }{
-        .{ .name = "align1", .type = .{ .num = .{ .int = .{ .exact = .u8 } } } }, // 1-byte alignment
-        .{ .name = "align2", .type = .{ .num = .{ .int = .{ .exact = .u16 } } } }, // 2-byte alignment
-        .{ .name = "align4", .type = .{ .num = .{ .int = .{ .exact = .u32 } } } }, // 4-byte alignment
-        .{ .name = "align8", .type = .{ .num = .{ .int = .{ .exact = .u64 } } } }, // 8-byte alignment
-        .{ .name = "align16", .type = .{ .num = .{ .int = .{ .exact = .u128 } } } }, // 16-byte alignment
+        .{ .name = "align1", .type = .{ .num = .{ .num_compact = .{ .int = .u8 } } } }, // 1-byte alignment
+        .{ .name = "align2", .type = .{ .num = .{ .num_compact = .{ .int = .u16 } } } }, // 2-byte alignment
+        .{ .name = "align4", .type = .{ .num = .{ .num_compact = .{ .int = .u32 } } } }, // 4-byte alignment
+        .{ .name = "align8", .type = .{ .num = .{ .num_compact = .{ .int = .u64 } } } }, // 8-byte alignment
+        .{ .name = "align16", .type = .{ .num = .{ .num_compact = .{ .int = .u128 } } } }, // 16-byte alignment
     };
 
     for (alignments) |field_info| {
-        const field_name = type_store.env.idents.insert(gpa, base.Ident.for_text(field_info.name), base.Region.zero());
+        const field_name = module_env.idents.insert(gpa, base.Ident.for_text(field_info.name), base.Region.zero());
         try fields.append(.{
             .name = field_name,
             .var_ = type_store.freshFromContent(.{ .structure = field_info.type }),
@@ -1386,7 +1387,7 @@ test "addTypeVar - record alignment edge cases" {
             // Verify order: align16, align8, align4, align2, align1
             const expected_order = [_][]const u8{ "align16", "align8", "align4", "align2", "align1" };
             for (expected_order, 0..) |expected_name, i| {
-                const actual_name = type_store.env.idents.getText(rec_fields.items(.name)[i]);
+                const actual_name = module_env.idents.getText(rec_fields.items(.name)[i]);
                 try testing.expectEqualStrings(expected_name, actual_name);
             }
         },
@@ -1402,7 +1403,7 @@ test "addTypeVar - record with duplicate field in extension (matching types)" {
     defer module_env.deinit();
 
     // Create type store
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     // Create layout store
@@ -1411,12 +1412,12 @@ test "addTypeVar - record with duplicate field in extension (matching types)" {
 
     // Create types
     const str_var = type_store.freshFromContent(.{ .structure = .str });
-    const i32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .i32 } } } });
-    const x_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("x"), base.Region.zero());
-    const y_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("y"), base.Region.zero());
+    const i32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i32 } } } });
+    const x_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("x"), base.Region.zero());
+    const y_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("y"), base.Region.zero());
 
     // Create extension record { x: str, y: i32 }
-    const ext_fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+    const ext_fields = type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = x_ident, .var_ = str_var },
         .{ .name = y_ident, .var_ = i32_var },
     });
@@ -1425,7 +1426,7 @@ test "addTypeVar - record with duplicate field in extension (matching types)" {
     const ext_record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = ext_fields, .ext = empty_ext } } });
 
     // Create main record { x: str } extending the above (x appears in both with same type)
-    const main_fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+    const main_fields = type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = x_ident, .var_ = str_var },
     });
 
@@ -1476,7 +1477,7 @@ test "addTypeVar - record with duplicate field in extension (mismatched types)" 
     defer module_env.deinit();
 
     // Create type store
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     // Create layout store
@@ -1485,11 +1486,11 @@ test "addTypeVar - record with duplicate field in extension (mismatched types)" 
 
     // Create types
     const str_var = type_store.freshFromContent(.{ .structure = .str });
-    const i32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .i32 } } } });
-    const x_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("x"), base.Region.zero());
+    const i32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i32 } } } });
+    const x_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("x"), base.Region.zero());
 
     // Create extension record { x: i32 }
-    const ext_fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+    const ext_fields = type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = x_ident, .var_ = i32_var },
     });
 
@@ -1497,7 +1498,7 @@ test "addTypeVar - record with duplicate field in extension (mismatched types)" 
     const ext_record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = ext_fields, .ext = empty_ext } } });
 
     // Create main record { x: str } extending the above (x appears in both with different types)
-    const main_fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+    const main_fields = type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = x_ident, .var_ = str_var },
     });
 
@@ -1543,7 +1544,7 @@ test "addTypeVar - record with invalid extension type" {
     defer module_env.deinit();
 
     // Create type store
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     // Create layout store
@@ -1552,10 +1553,10 @@ test "addTypeVar - record with invalid extension type" {
 
     // Create a str type to use as invalid extension
     const str_var = type_store.freshFromContent(.{ .structure = .str });
-    const x_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("x"), base.Region.zero());
+    const x_ident = module_env.idents.insert(gpa, base.Ident.for_text("x"), base.Region.zero());
 
     // Create main record { x: str } with str as extension (invalid)
-    const main_fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+    const main_fields = type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = x_ident, .var_ = str_var },
     });
 
@@ -1574,7 +1575,7 @@ test "addTypeVar - record with chained extensions" {
     defer module_env.deinit();
 
     // Create type store
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     // Create layout store
@@ -1583,17 +1584,17 @@ test "addTypeVar - record with chained extensions" {
 
     // Create types
     const str_var = type_store.freshFromContent(.{ .structure = .str });
-    const i32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .i32 } } } });
-    const f64_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .frac = .{ .exact = .f64 } } } });
-    const u8_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u8 } } } });
+    const i32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i32 } } } });
+    const f64_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f64 } } } });
+    const u8_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } });
 
-    const w_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("w"), base.Region.zero());
-    const x_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("x"), base.Region.zero());
-    const y_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("y"), base.Region.zero());
-    const z_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("z"), base.Region.zero());
+    const w_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("w"), base.Region.zero());
+    const x_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("x"), base.Region.zero());
+    const y_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("y"), base.Region.zero());
+    const z_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("z"), base.Region.zero());
 
     // Create innermost extension record { z: u8 }
-    const inner_fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+    const inner_fields = type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = z_ident, .var_ = u8_var },
     });
 
@@ -1601,14 +1602,14 @@ test "addTypeVar - record with chained extensions" {
     const inner_record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = inner_fields, .ext = empty_ext } } });
 
     // Create middle extension record { y: f64 } extending inner
-    const middle_fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+    const middle_fields = type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = y_ident, .var_ = f64_var },
     });
 
     const middle_record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = middle_fields, .ext = inner_record_var } } });
 
     // Create outermost record { w: str, x: i32 } extending middle
-    const outer_fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+    const outer_fields = type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = w_ident, .var_ = str_var },
         .{ .name = x_ident, .var_ = i32_var },
     });
@@ -1668,7 +1669,7 @@ test "addTypeVar - record with zero-sized fields dropped" {
     defer module_env.deinit();
 
     // Create type store
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     // Create layout store
@@ -1678,14 +1679,14 @@ test "addTypeVar - record with zero-sized fields dropped" {
     // Create types
     const str_var = type_store.freshFromContent(.{ .structure = .str });
     const empty_record_var = type_store.freshFromContent(.{ .structure = .empty_record });
-    const i32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .i32 } } } });
+    const i32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i32 } } } });
 
-    const name_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("name"), base.Region.zero());
-    const empty_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("empty"), base.Region.zero());
-    const age_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("age"), base.Region.zero());
+    const name_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("name"), base.Region.zero());
+    const empty_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("empty"), base.Region.zero());
+    const age_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("age"), base.Region.zero());
 
     // Create record { name: str, empty: {}, age: i32 }
-    const fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+    const fields = type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = name_ident, .var_ = str_var },
         .{ .name = empty_ident, .var_ = empty_record_var },
         .{ .name = age_ident, .var_ = i32_var },
@@ -1733,7 +1734,7 @@ test "addTypeVar - record with all zero-sized fields becomes empty" {
     defer module_env.deinit();
 
     // Create type store
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     // Create layout store
@@ -1744,11 +1745,11 @@ test "addTypeVar - record with all zero-sized fields becomes empty" {
     const empty_record_var = type_store.freshFromContent(.{ .structure = .empty_record });
     const empty_tag_union_var = type_store.freshFromContent(.{ .structure = .empty_tag_union });
 
-    const field1_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("field1"), base.Region.zero());
-    const field2_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("field2"), base.Region.zero());
+    const field1_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("field1"), base.Region.zero());
+    const field2_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("field2"), base.Region.zero());
 
     // Create record { field1: {}, field2: [] }
-    const fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+    const fields = type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = field1_ident, .var_ = empty_record_var },
         .{ .name = field2_ident, .var_ = empty_tag_union_var },
     });
@@ -1769,7 +1770,7 @@ test "addTypeVar - box of record with all zero-sized fields" {
     defer module_env.deinit();
 
     // Create type store
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     // Create layout store
@@ -1779,11 +1780,11 @@ test "addTypeVar - box of record with all zero-sized fields" {
     // Create types
     const empty_record_var = type_store.freshFromContent(.{ .structure = .empty_record });
 
-    const field1_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("field1"), base.Region.zero());
-    const field2_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("field2"), base.Region.zero());
+    const field1_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("field1"), base.Region.zero());
+    const field2_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("field2"), base.Region.zero());
 
     // Create record { field1: {}, field2: {} }
-    const fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+    const fields = type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = field1_ident, .var_ = empty_record_var },
         .{ .name = field2_ident, .var_ = empty_record_var },
     });
@@ -1815,7 +1816,7 @@ test "addTypeVar - comprehensive nested record combinations" {
     defer module_env.deinit();
 
     // Create type store
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     // Create layout store
@@ -1824,12 +1825,12 @@ test "addTypeVar - comprehensive nested record combinations" {
 
     // Create field names we'll reuse
     const field_names = [_]Ident.Idx{
-        type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("a"), base.Region.zero()),
-        type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("b"), base.Region.zero()),
-        type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("c"), base.Region.zero()),
-        type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("d"), base.Region.zero()),
-        type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("e"), base.Region.zero()),
-        type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("f"), base.Region.zero()),
+        module_env.idents.insert(module_env.gpa, base.Ident.for_text("a"), base.Region.zero()),
+        module_env.idents.insert(module_env.gpa, base.Ident.for_text("b"), base.Region.zero()),
+        module_env.idents.insert(module_env.gpa, base.Ident.for_text("c"), base.Region.zero()),
+        module_env.idents.insert(module_env.gpa, base.Ident.for_text("d"), base.Region.zero()),
+        module_env.idents.insert(module_env.gpa, base.Ident.for_text("e"), base.Region.zero()),
+        module_env.idents.insert(module_env.gpa, base.Ident.for_text("f"), base.Region.zero()),
     };
 
     // Test all combinations
@@ -1841,10 +1842,10 @@ test "addTypeVar - comprehensive nested record combinations" {
 
         while (field_type_combo < max_combo) : (field_type_combo += 1) {
             // Create a new type store and layout store for each test
-            var test_type_store = types_store.Store.init(&module_env);
+            var test_type_store = types_store.Store.init(module_env.gpa);
             defer test_type_store.deinit();
 
-            var test_layout_store = Store.init(&module_env, &test_type_store);
+            var test_layout_store = try Store.init(&module_env, &test_type_store);
             defer test_layout_store.deinit();
 
             // Build outer record fields
@@ -1891,7 +1892,7 @@ test "addTypeVar - comprehensive nested record combinations" {
                         expected_non_zero_fields += 1; // The nested record itself counts as 1
                         expected_total_fields += inner_field_count;
 
-                        const inner_fields_slice = test_type_store.record_fields.appendSlice(test_type_store.env.gpa, inner_fields.items);
+                        const inner_fields_slice = test_type_store.record_fields.appendSlice(module_env.gpa, inner_fields.items);
                         const empty_ext = test_type_store.freshFromContent(.{ .structure = .empty_record });
                         break :blk test_type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = inner_fields_slice, .ext = empty_ext } } });
                     },
@@ -1920,7 +1921,7 @@ test "addTypeVar - comprehensive nested record combinations" {
                         // This nested record will have 1 non-zero field (the str field) after dropping zero-sized ones
                         expected_non_zero_fields += 1;
 
-                        const inner_fields_slice = test_type_store.record_fields.appendSlice(test_type_store.env.gpa, inner_fields.items);
+                        const inner_fields_slice = test_type_store.record_fields.appendSlice(module_env.gpa, inner_fields.items);
                         const empty_ext = test_type_store.freshFromContent(.{ .structure = .empty_record });
                         break :blk test_type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = inner_fields_slice, .ext = empty_ext } } });
                     },
@@ -1934,7 +1935,7 @@ test "addTypeVar - comprehensive nested record combinations" {
             }
 
             // Create outer record
-            const outer_fields_slice = test_type_store.record_fields.appendSlice(test_type_store.env.gpa, outer_fields.items);
+            const outer_fields_slice = test_type_store.record_fields.appendSlice(module_env.gpa, outer_fields.items);
             const empty_ext = test_type_store.freshFromContent(.{ .structure = .empty_record });
             const outer_record_var = test_type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = outer_fields_slice, .ext = empty_ext } } });
 
@@ -1997,7 +1998,7 @@ test "addTypeVar - nested record with inner record having all zero-sized fields"
     defer module_env.deinit();
 
     // Create type store
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     // Create layout store
@@ -2006,11 +2007,11 @@ test "addTypeVar - nested record with inner record having all zero-sized fields"
 
     // Create inner record with only zero-sized fields
     const empty_record_var = type_store.freshFromContent(.{ .structure = .empty_record });
-    const a_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("a"), base.Region.zero());
-    const b_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("b"), base.Region.zero());
+    const a_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("a"), base.Region.zero());
+    const b_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("b"), base.Region.zero());
 
     // Create inner record
-    const inner_fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+    const inner_fields = type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = a_ident, .var_ = empty_record_var },
         .{ .name = b_ident, .var_ = empty_record_var },
     });
@@ -2020,10 +2021,10 @@ test "addTypeVar - nested record with inner record having all zero-sized fields"
 
     // Create outer record { name: str, data: inner_record }
     const str_var = type_store.freshFromContent(.{ .structure = .str });
-    const name_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("name"), base.Region.zero());
-    const data_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("data"), base.Region.zero());
+    const name_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("name"), base.Region.zero());
+    const data_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("data"), base.Region.zero());
 
-    const outer_fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+    const outer_fields = type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = name_ident, .var_ = str_var },
         .{ .name = data_ident, .var_ = inner_record_var },
     });
@@ -2047,7 +2048,7 @@ test "addTypeVar - list of record with all zero-sized fields" {
     defer module_env.deinit();
 
     // Create type store
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     // Create layout store
@@ -2056,10 +2057,10 @@ test "addTypeVar - list of record with all zero-sized fields" {
 
     // Create empty record type
     const empty_record_var = type_store.freshFromContent(.{ .structure = .empty_record });
-    const field_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("field"), base.Region.zero());
+    const field_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("field"), base.Region.zero());
 
     // Create record { field: {} }
-    const fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+    const fields = type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = field_ident, .var_ = empty_record_var },
     });
 
@@ -2084,7 +2085,7 @@ test "alignment - record with log2 alignment representation" {
     defer module_env.deinit();
 
     // Create type store
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     // Create layout store
@@ -2093,9 +2094,9 @@ test "alignment - record with log2 alignment representation" {
 
     // Test 1: Record with U8 field (alignment 1, log2 = 0)
     {
-        const u8_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u8 } } } });
-        const field_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("field"), base.Region.zero());
-        const fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+        const u8_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } });
+        const field_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("field"), base.Region.zero());
+        const fields = type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
             .{ .name = field_ident, .var_ = u8_var },
         });
         const ext = type_store.freshFromContent(.{ .structure = .empty_record });
@@ -2110,15 +2111,15 @@ test "alignment - record with log2 alignment representation" {
         // Verify alignment is still correct
         for (target.TargetUsize.all()) |target_usize| {
             try testing.expectEqual(@as(u32, 1), record_layout.alignment(target_usize).toByteUnits());
-            try testing.expectEqual(@as(u32, 1), layout_store.layoutSize(record_layout.*)); // size = 1 byte
+            try testing.expectEqual(@as(u32, 1), layout_store.layoutSize(record_layout)); // size = 1 byte
         }
     }
 
     // Test 2: Record with U32 field (alignment 4, log2 = 2)
     {
-        const u32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u32 } } } });
-        const field_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("field"), base.Region.zero());
-        const fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+        const u32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u32 } } } });
+        const field_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("field"), base.Region.zero());
+        const fields = type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
             .{ .name = field_ident, .var_ = u32_var },
         });
         const ext = type_store.freshFromContent(.{ .structure = .empty_record });
@@ -2133,15 +2134,15 @@ test "alignment - record with log2 alignment representation" {
         // Verify alignment is still correct
         for (target.TargetUsize.all()) |target_usize| {
             try testing.expectEqual(@as(u32, 4), record_layout.alignment(target_usize).toByteUnits());
-            try testing.expectEqual(@as(u32, 4), layout_store.layoutSize(record_layout.*)); // size = 4 bytes
+            try testing.expectEqual(@as(u32, 4), layout_store.layoutSize(record_layout)); // size = 4 bytes
         }
     }
 
     // Test 3: Record with U64 field (alignment 8, log2 = 3)
     {
-        const u64_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u64 } } } });
-        const field_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("field"), base.Region.zero());
-        const fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+        const u64_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u64 } } } });
+        const field_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("field"), base.Region.zero());
+        const fields = type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
             .{ .name = field_ident, .var_ = u64_var },
         });
         const ext = type_store.freshFromContent(.{ .structure = .empty_record });
@@ -2156,17 +2157,17 @@ test "alignment - record with log2 alignment representation" {
         // Verify alignment is still correct
         for (target.TargetUsize.all()) |target_usize| {
             try testing.expectEqual(@as(u32, 8), record_layout.alignment(target_usize).toByteUnits());
-            try testing.expectEqual(@as(u32, 8), layout_store.layoutSize(record_layout.*)); // size = 8 bytes
+            try testing.expectEqual(@as(u32, 8), layout_store.layoutSize(record_layout)); // size = 8 bytes
         }
     }
 
     // Test 4: Record with mixed fields - should use max alignment
     {
-        const u8_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u8 } } } });
-        const u64_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u64 } } } });
-        const field1_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("small"), base.Region.zero());
-        const field2_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("large"), base.Region.zero());
-        const fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+        const u8_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } });
+        const u64_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u64 } } } });
+        const field1_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("small"), base.Region.zero());
+        const field2_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("large"), base.Region.zero());
+        const fields = type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
             .{ .name = field1_ident, .var_ = u8_var },
             .{ .name = field2_ident, .var_ = u64_var },
         });
@@ -2182,7 +2183,7 @@ test "alignment - record with log2 alignment representation" {
         for (target.TargetUsize.all()) |target_usize| {
             try testing.expectEqual(@as(u32, 8), record_layout.alignment(target_usize).toByteUnits());
             // After sorting: u64 (8 bytes) at offset 0, u8 (1 byte) at offset 8, total size 16 (aligned to 8)
-            try testing.expectEqual(@as(u32, 16), layout_store.layoutSize(record_layout.*));
+            try testing.expectEqual(@as(u32, 16), layout_store.layoutSize(record_layout));
         }
     }
 }
@@ -2195,7 +2196,7 @@ test "record fields sorted by alignment then name" {
     defer module_env.deinit();
 
     // Create type store
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     // Create layout store
@@ -2203,19 +2204,19 @@ test "record fields sorted by alignment then name" {
     defer layout_store.deinit();
 
     // Create types with different alignments
-    const u8_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u8 } } } });
-    const u32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u32 } } } });
-    const u64_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u64 } } } });
+    const u8_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } });
+    const u32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u32 } } } });
+    const u64_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u64 } } } });
 
     // Create field names that would sort differently alphabetically
-    const a_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("a"), base.Region.zero());
-    const b_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("b"), base.Region.zero());
-    const c_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("c"), base.Region.zero());
-    const d_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("d"), base.Region.zero());
+    const a_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("a"), base.Region.zero());
+    const b_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("b"), base.Region.zero());
+    const c_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("c"), base.Region.zero());
+    const d_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("d"), base.Region.zero());
 
     // Create record with fields in a specific order to test sorting
     // { a: u32, b: u64, c: u8, d: u64 }
-    const fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+    const fields = type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = a_ident, .var_ = u32_var }, // alignment 4
         .{ .name = b_ident, .var_ = u64_var }, // alignment 8
         .{ .name = c_ident, .var_ = u8_var }, // alignment 1
@@ -2275,7 +2276,7 @@ test "record fields with same alignment sorted by name" {
     defer module_env.deinit();
 
     // Create type store
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     // Create layout store
@@ -2283,18 +2284,18 @@ test "record fields with same alignment sorted by name" {
     defer layout_store.deinit();
 
     // Create types with same alignment
-    const i32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .i32 } } } });
-    const u32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u32 } } } });
-    const f32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .frac = .{ .exact = .f32 } } } });
+    const i32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i32 } } } });
+    const u32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u32 } } } });
+    const f32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f32 } } } });
 
     // Create field names that are not in alphabetical order
-    const zebra_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("zebra"), base.Region.zero());
-    const apple_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("apple"), base.Region.zero());
-    const banana_ident = type_store.env.idents.insert(type_store.env.gpa, base.Ident.for_text("banana"), base.Region.zero());
+    const zebra_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("zebra"), base.Region.zero());
+    const apple_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("apple"), base.Region.zero());
+    const banana_ident = module_env.idents.insert(module_env.gpa, base.Ident.for_text("banana"), base.Region.zero());
 
     // Create record with fields that all have alignment 4
     // { zebra: i32, apple: u32, banana: f32 }
-    const fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+    const fields = type_store.record_fields.appendSlice(module_env.gpa, &[_]types.RecordField{
         .{ .name = zebra_ident, .var_ = i32_var },
         .{ .name = apple_ident, .var_ = u32_var },
         .{ .name = banana_ident, .var_ = f32_var },
@@ -2345,7 +2346,7 @@ test "addTypeVar - maximum nesting depth" {
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
@@ -2357,7 +2358,7 @@ test "addTypeVar - maximum nesting depth" {
 
     var depth: usize = 0;
     while (depth < max_depth) : (depth += 1) {
-        const field_name = type_store.env.idents.insert(gpa, base.Ident.for_text("field"), base.Region.zero());
+        const field_name = module_env.idents.insert(gpa, base.Ident.for_text("field"), base.Region.zero());
         var fields = std.ArrayList(types.RecordField).init(gpa);
         defer fields.deinit();
 
@@ -2384,7 +2385,7 @@ test "addTypeVar - record with maximum fields" {
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
@@ -2399,13 +2400,13 @@ test "addTypeVar - record with maximum fields" {
     while (i < num_fields) : (i += 1) {
         var name_buf: [20]u8 = undefined;
         const name_str = std.fmt.bufPrint(&name_buf, "field_{}", .{i}) catch unreachable;
-        const field_name = type_store.env.idents.insert(gpa, base.Ident.for_text(name_str), base.Region.zero());
+        const field_name = module_env.idents.insert(gpa, base.Ident.for_text(name_str), base.Region.zero());
 
         // Alternate between different types to test alignment sorting
         const field_var = if (i % 3 == 0)
-            type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u8 } } } })
+            type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } })
         else if (i % 3 == 1)
-            type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u64 } } } })
+            type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u64 } } } })
         else
             type_store.freshFromContent(.{ .structure = .str });
 
@@ -2429,14 +2430,14 @@ test "addTypeVar - record with maximum fields" {
             try testing.expectEqual(num_fields, record_fields.len);
 
             // Verify fields are sorted by alignment then name for the target used to create the layout
-            const target_usize = module_env.target.target_usize;
+            const target_usize = target.TargetUsize.u64; // Use u64 as default for field sorting verification
             var prev_alignment: ?std.mem.Alignment = null;
             var prev_name_in_group: ?[]const u8 = null;
 
             for (record_fields.items(.layout), record_fields.items(.name)) |field_layout_idx, field_name| {
                 const field_layout = layout_store.layouts.get(@enumFromInt(@intFromEnum(field_layout_idx)));
                 const field_alignment = field_layout.alignment(target_usize);
-                const field_name_str = type_store.env.idents.getText(field_name);
+                const field_name_str = module_env.idents.getText(field_name);
 
                 if (prev_alignment) |prev| {
                     // Alignment should be descending or equal
@@ -2467,7 +2468,7 @@ test "addTypeVar - record with very long field names" {
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
@@ -2480,8 +2481,8 @@ test "addTypeVar - record with very long field names" {
     const long_name_a = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const long_name_b = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
-    const field_name_a = type_store.env.idents.insert(gpa, base.Ident.for_text(long_name_a), base.Region.zero());
-    const field_name_b = type_store.env.idents.insert(gpa, base.Ident.for_text(long_name_b), base.Region.zero());
+    const field_name_a = module_env.idents.insert(gpa, base.Ident.for_text(long_name_a), base.Region.zero());
+    const field_name_b = module_env.idents.insert(gpa, base.Ident.for_text(long_name_b), base.Region.zero());
 
     try fields.append(.{
         .name = field_name_a,
@@ -2489,7 +2490,7 @@ test "addTypeVar - record with very long field names" {
     });
     try fields.append(.{
         .name = field_name_b,
-        .var_ = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u64 } } } }),
+        .var_ = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u64 } } } }),
     });
 
     const fields_slice = type_store.record_fields.appendSlice(gpa, fields.items);
@@ -2509,7 +2510,7 @@ test "addTypeVar - alternating zero-sized and non-zero-sized fields" {
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
@@ -2526,7 +2527,7 @@ test "addTypeVar - alternating zero-sized and non-zero-sized fields" {
     while (i < num_fields) : (i += 1) {
         var name_buf: [20]u8 = undefined;
         const name_str = std.fmt.bufPrint(&name_buf, "field_{}", .{i}) catch unreachable;
-        const field_name = type_store.env.idents.insert(gpa, base.Ident.for_text(name_str), base.Region.zero());
+        const field_name = module_env.idents.insert(gpa, base.Ident.for_text(name_str), base.Region.zero());
 
         const field_var = if (i % 2 == 0) blk: {
             expected_non_zero_count += 1;
@@ -2566,18 +2567,18 @@ test "addTypeVar - record field type changes through alias" {
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
     defer layout_store.deinit();
 
     // Create an alias that points to a concrete type
-    const backing_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u64 } } } });
+    const backing_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u64 } } } });
     const alias_var = backing_var;
 
     // Create record using the alias
-    const field_name = type_store.env.idents.insert(gpa, base.Ident.for_text("aliased"), base.Region.zero());
+    const field_name = module_env.idents.insert(gpa, base.Ident.for_text("aliased"), base.Region.zero());
     var fields = std.ArrayList(types.RecordField).init(gpa);
     defer fields.deinit();
 
@@ -2616,7 +2617,7 @@ test "addTypeVar - mixed container types" {
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
@@ -2625,12 +2626,12 @@ test "addTypeVar - mixed container types" {
     // Create complex nested structure: List(Box(Record { a: Str, b: List(U64) }))
 
     // Inner list of U64
-    const u64_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u64 } } } });
+    const u64_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u64 } } } });
     const inner_list_var = type_store.freshFromContent(.{ .structure = .{ .list = u64_var } });
 
     // Record with two fields
-    const field_a = type_store.env.idents.insert(gpa, base.Ident.for_text("a"), base.Region.zero());
-    const field_b = type_store.env.idents.insert(gpa, base.Ident.for_text("b"), base.Region.zero());
+    const field_a = module_env.idents.insert(gpa, base.Ident.for_text("a"), base.Region.zero());
+    const field_b = module_env.idents.insert(gpa, base.Ident.for_text("b"), base.Region.zero());
 
     var record_fields = std.ArrayList(types.RecordField).init(gpa);
     defer record_fields.deinit();
@@ -2677,8 +2678,8 @@ test "addTypeVar - mixed container types" {
 
     // Fields should be sorted by alignment then name
     // Both str and list have pointer alignment, so should be sorted by name (a, b)
-    const field_0_name = type_store.env.idents.getText(rec_fields.items(.name)[0]);
-    const field_1_name = type_store.env.idents.getText(rec_fields.items(.name)[1]);
+    const field_0_name = module_env.idents.getText(rec_fields.items(.name)[0]);
+    const field_1_name = module_env.idents.getText(rec_fields.items(.name)[1]);
     try testing.expectEqualStrings("a", field_0_name);
     try testing.expectEqualStrings("b", field_1_name);
 
@@ -2699,7 +2700,7 @@ test "addTypeVar - record size calculation with padding" {
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
@@ -2712,21 +2713,21 @@ test "addTypeVar - record size calculation with padding" {
     var fields = std.ArrayList(types.RecordField).init(gpa);
     defer fields.deinit();
 
-    const field_a = type_store.env.idents.insert(gpa, base.Ident.for_text("a"), base.Region.zero());
-    const field_b = type_store.env.idents.insert(gpa, base.Ident.for_text("b"), base.Region.zero());
-    const field_c = type_store.env.idents.insert(gpa, base.Ident.for_text("c"), base.Region.zero());
+    const field_a = module_env.idents.insert(gpa, base.Ident.for_text("a"), base.Region.zero());
+    const field_b = module_env.idents.insert(gpa, base.Ident.for_text("b"), base.Region.zero());
+    const field_c = module_env.idents.insert(gpa, base.Ident.for_text("c"), base.Region.zero());
 
     try fields.append(.{
         .name = field_a,
-        .var_ = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u8 } } } }),
+        .var_ = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } }),
     });
     try fields.append(.{
         .name = field_b,
-        .var_ = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u64 } } } }),
+        .var_ = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u64 } } } }),
     });
     try fields.append(.{
         .name = field_c,
-        .var_ = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u16 } } } }),
+        .var_ = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u16 } } } }),
     });
 
     const fields_slice = type_store.record_fields.appendSlice(gpa, fields.items);
@@ -2750,15 +2751,15 @@ test "addTypeVar - record size calculation with padding" {
             try testing.expectEqual(3, rec_fields.len);
 
             // First field should be 'b' (u64, 8-byte alignment)
-            const field_0_name = type_store.env.idents.getText(rec_fields.items(.name)[0]);
+            const field_0_name = module_env.idents.getText(rec_fields.items(.name)[0]);
             try testing.expectEqualStrings("b", field_0_name);
 
             // Second field should be 'c' (u16, 2-byte alignment)
-            const field_1_name = type_store.env.idents.getText(rec_fields.items(.name)[1]);
+            const field_1_name = module_env.idents.getText(rec_fields.items(.name)[1]);
             try testing.expectEqualStrings("c", field_1_name);
 
             // Third field should be 'a' (u8, 1-byte alignment)
-            const field_2_name = type_store.env.idents.getText(rec_fields.items(.name)[2]);
+            const field_2_name = module_env.idents.getText(rec_fields.items(.name)[2]);
             try testing.expectEqualStrings("a", field_2_name);
         },
         else => try testing.expect(false),
@@ -2772,7 +2773,7 @@ test "addTypeVar - all scalar types use scalar optimization" {
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
@@ -2780,7 +2781,7 @@ test "addTypeVar - all scalar types use scalar optimization" {
 
     // Test Box(I32) - should use box with i32 sentinel
     {
-        const i32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .i32 } } } });
+        const i32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i32 } } } });
         const box_i32_var = type_store.freshFromContent(.{ .structure = .{ .box = i32_var } });
 
         const result = try layout_store.addTypeVar(box_i32_var);
@@ -2792,7 +2793,7 @@ test "addTypeVar - all scalar types use scalar optimization" {
 
     // Test Box(F64) - should use box with f64 sentinel
     {
-        const f64_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .frac = .{ .exact = .f64 } } } });
+        const f64_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f64 } } } });
         const box_f64_var = type_store.freshFromContent(.{ .structure = .{ .box = f64_var } });
 
         const result = try layout_store.addTypeVar(box_f64_var);
@@ -2838,7 +2839,7 @@ test "addTypeVar - list of scalar types uses scalar optimization" {
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
@@ -2846,7 +2847,7 @@ test "addTypeVar - list of scalar types uses scalar optimization" {
 
     // Test List(U8) - should use list with u8 sentinel
     {
-        const u8_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u8 } } } });
+        const u8_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } });
         const list_u8_var = type_store.freshFromContent(.{ .structure = .{ .list = u8_var } });
 
         const result = try layout_store.addTypeVar(list_u8_var);
@@ -2858,7 +2859,7 @@ test "addTypeVar - list of scalar types uses scalar optimization" {
 
     // Test List(F32) - should use list with f32 sentinel
     {
-        const f32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .frac = .{ .exact = .f32 } } } });
+        const f32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f32 } } } });
         const list_f32_var = type_store.freshFromContent(.{ .structure = .{ .list = f32_var } });
 
         const result = try layout_store.addTypeVar(list_f32_var);
@@ -2904,14 +2905,14 @@ test "addTypeVar - box and list of non-scalar types use indexed approach" {
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
     defer layout_store.deinit();
 
     // Create a record type (non-scalar)
-    const field_name = type_store.env.idents.insert(gpa, base.Ident.for_text("field"), base.Region.zero());
+    const field_name = module_env.idents.insert(gpa, base.Ident.for_text("field"), base.Region.zero());
     const str_var = type_store.freshFromContent(.{ .structure = .str });
     const fields = type_store.record_fields.appendSlice(gpa, &[_]types.RecordField{
         .{ .name = field_name, .var_ = str_var },
@@ -2949,7 +2950,7 @@ test "addTypeVar - box and list of non-scalar types use indexed approach" {
 
     // Test Box(List(I32)) - should use .box with index since List(I32) is not a scalar
     {
-        const i32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .i32 } } } });
+        const i32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i32 } } } });
         const list_i32_var = type_store.freshFromContent(.{ .structure = .{ .list = i32_var } });
         const box_list_var = type_store.freshFromContent(.{ .structure = .{ .box = list_i32_var } });
 
@@ -2971,7 +2972,7 @@ test "addTypeVar - host opaque types use scalar optimization" {
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
@@ -3010,14 +3011,14 @@ test "addTypeVar - mixed scalar optimization in nested structures" {
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
     defer layout_store.deinit();
 
     // Create List(Box(I64)) - List should use index, Box should use scalar
-    const i64_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .i64 } } } });
+    const i64_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } });
     const box_i64_var = type_store.freshFromContent(.{ .structure = .{ .box = i64_var } });
     const list_box_var = type_store.freshFromContent(.{ .structure = .{ .list = box_i64_var } });
 
@@ -3040,7 +3041,7 @@ test "addTypeVar - all integer precisions use scalar optimization" {
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
@@ -3050,7 +3051,7 @@ test "addTypeVar - all integer precisions use scalar optimization" {
 
     for (int_precisions) |precision| {
         // Test Box(IntType)
-        const int_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = precision } } } });
+        const int_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = precision } } } });
         const box_int_var = type_store.freshFromContent(.{ .structure = .{ .box = int_var } });
 
         const box_result = try layout_store.addTypeVar(box_int_var);
@@ -3090,7 +3091,7 @@ test "addTypeVar - all boolean precisions use scalar optimization" {
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
@@ -3136,7 +3137,7 @@ test "addTypeVar - all frac precisions use scalar optimization" {
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     var layout_store = try Store.init(&module_env, &type_store);
@@ -3146,7 +3147,7 @@ test "addTypeVar - all frac precisions use scalar optimization" {
 
     for (frac_precisions) |precision| {
         // Test Box(FracType)
-        const frac_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .frac = .{ .exact = precision } } } });
+        const frac_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = precision } } } });
         const box_frac_var = type_store.freshFromContent(.{ .structure = .{ .box = frac_var } });
 
         const box_result = try layout_store.addTypeVar(box_frac_var);
@@ -3179,7 +3180,7 @@ test "layouts_by_var uses ArrayListMap with pre-allocation" {
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    var type_store = types_store.Store.init(&module_env);
+    var type_store = types_store.Store.init(gpa);
     defer type_store.deinit();
 
     // Create layout store with types store
@@ -3188,7 +3189,7 @@ test "layouts_by_var uses ArrayListMap with pre-allocation" {
 
     // Create some type variables
     const str_var = type_store.freshFromContent(.{ .structure = .str });
-    const num_var = type_store.freshFromContent(.{ .structure = types.int_u32 });
+    const num_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u32 } } } });
     const list_var = type_store.freshFromContent(.{ .structure = .{ .list = num_var } });
 
     // Convert to layouts
@@ -3196,14 +3197,14 @@ test "layouts_by_var uses ArrayListMap with pre-allocation" {
     _ = try layout_store.addTypeVar(num_var);
     _ = try layout_store.addTypeVar(list_var);
 
-    // Verify no Var 0 was used (all Vars start from 1)
-    try testing.expect(@intFromEnum(str_var) > 0);
-    try testing.expect(@intFromEnum(num_var) > 0);
-    try testing.expect(@intFromEnum(list_var) > 0);
+    // Verify variables were created
+    try testing.expect(str_var != num_var);
+    try testing.expect(num_var != list_var);
+    try testing.expect(str_var != list_var);
 
     // Verify the ArrayListMap was initialized with capacity
     // The length should be at least as large as the types store
-    try testing.expect(layout_store.layouts_by_var.entries.len >= type_store.getNumVars());
+    try testing.expect(layout_store.layouts_by_var.entries.len >= type_store.slots.backing.items.len);
 }
 
 test "idxFromScalar - arithmetic mapping with no branches" {

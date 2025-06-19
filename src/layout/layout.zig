@@ -9,22 +9,6 @@ const collections = @import("../collections.zig");
 const Ident = @import("../base/Ident.zig");
 const target = @import("../base/target.zig");
 
-pub const SizeAlign = packed struct(u28) {
-    size: u25, // u25 can represent sizes up to 32 MiB
-    alignment: std.mem.Alignment, // u3 on 64-bit targets, u2 on 32-bit targets
-
-    // Note: on 32-bit targets, there's an extra bit of uninitializde memory here,
-    // because the size of std.mem.Alignment is based on usize. If we want this data
-    // structure to be bit-for-bit identical on 32-bit and 64-bit builds of the Roc
-    // compiler, e.g. for serialization purposes, then we should make our own version
-    // of std.mem.Alignment which is hardcoded to be a u2 (which is enough, as Roc's
-    // compiler never generates values that are more than 16B aligned.)
-};
-
-test "Size of SizeAlign type" {
-    try std.testing.expectEqual(32, @bitSizeOf(SizeAlign));
-}
-
 /// Tag for Layout variants
 pub const LayoutTag = enum(u4) {
     scalar,
@@ -34,9 +18,87 @@ pub const LayoutTag = enum(u4) {
     list_of_zst, // List of zero-sized types, e.g. List({}) - needs a special-cased runtime implementation
     record,
     tuple,
-    tagged_union, // A union of alternatives plus a u8 tag (u16 if there are over 256 alternatives)
-    boxed_closure, // A Box(fn)
-    unboxed_closure, // A closure
+};
+
+/// The Layout untagged union should take up this many bits in memory.
+/// We verify this with a test, and make use of it to calculate Idx sizes.
+const layout_bit_size = 32;
+
+/// Tag for scalar variants
+///
+/// The exact numbers here are important, because we use them to convert between
+/// Scalar and Idx using branchless arithmetic instructions. Don't change them
+/// lightly, and make sure to re-run tests if you do!
+pub const ScalarTag = enum(u3) {
+    opaque_ptr = 0, // Maps to Idx 0
+    bool = 1, // Maps to Idx 1
+    str = 2, // Maps to Idx 2
+    int = 3, // Maps to Idx 3-12 (depending on precision)
+    frac = 4, // Maps to Idx 13-15 (depending on precision)
+};
+
+/// The union portion of the Scalar packed tagged union.
+///
+/// Some scalars have extra information associated with them,
+/// such as the precision of a particular int or frac. This union
+/// stores that extra information.
+pub const ScalarUnion = packed union {
+    opaque_ptr: void,
+    bool: void,
+    str: void,
+    int: types.Num.Int.Precision,
+    frac: types.Num.Frac.Precision,
+};
+
+/// A scalar value such as a bool, str, int, frac, or opaque pointer type.
+pub const Scalar = packed struct {
+    // This can't be a normal Zig tagged union because it uses a packed union to reduce memory use,
+    // and Zig tagged unions don't support being packed.
+    data: ScalarUnion,
+    tag: ScalarTag,
+};
+
+/// Index into a Layout Store
+pub const Idx = enum(@Type(.{
+    .int = .{
+        .signedness = .unsigned,
+        // Some Layout variants are just the Tag followed by Idx, so use as many
+        // bits as we can spare from the Layout for Idx.
+        .bits = layout_bit_size - @bitSizeOf(LayoutTag),
+    },
+})) {
+    // Sentinel values for scalar builtin layouts. When we init the layout store, it automatically
+    // adds entries for each of these at an index equal to the enum's value. That way, if you
+    // look up one of these in the store, it's always returns the correct layout, and we can have
+    // any type that resolves to one of these layouts use one of these hardcoded ones instead
+    // of adding redundant layouts to the store.
+    //
+    // The layout store's idxFromScalar method relies on these exact numbers being what they are now,
+    // so be careful when changing them! (Changing them will, at a minimum, cause tests to fail.)
+    bool = 0,
+    str = 1,
+    opaque_ptr = 2,
+
+    // ints
+    u8 = 3,
+    i8 = 4,
+    u16 = 5,
+    i16 = 6,
+    u32 = 7,
+    i32 = 8,
+    u64 = 9,
+    i64 = 10,
+    u128 = 11,
+    i128 = 12,
+
+    // fracs
+    f32 = 13,
+    f64 = 14,
+    dec = 15,
+
+    // Regular indices start from here.
+    // num_scalars in store.zig must refer to how many variants we had up to this point.
+    _,
 };
 
 /// The union portion of the Layout packed tagged union (the tag being LayoutTag).
@@ -50,90 +112,121 @@ pub const LayoutUnion = packed union {
     list_of_zst: void,
     record: RecordLayout,
     tuple: TupleLayout,
-    tagged_union: TaggedUnionLayout,
-    unboxed_closure: UnboxedClosureLayout,
-    boxed_closure: BoxedClosureLayout,
 };
 
-// Tuple of fn pointer and pointer to refcounted heap allocation of its capture
-pub const BoxedClosureLayout = struct {
-    //
+/// Record field layout
+pub const RecordField = struct {
+    /// The interned string name of the field
+    name: Ident.Idx,
+    /// The layout of the field's value
+    layout: Idx,
+
+    /// A SafeMultiList for storing record fields
+    pub const SafeMultiList = collections.SafeMultiList(RecordField);
 };
 
-pub const TupleLayout = struct {
-    first_field_idx: TupleFieldLayout.Idx,
-    num_fields: u14,
+/// Record layout - stores alignment and index to full data in Store
+pub const RecordLayout = packed struct {
+    /// Alignment of the record
+    alignment: std.mem.Alignment,
+    /// Index into the Store's record data
+    idx: RecordIdx,
 };
 
-pub const RecordLayout = struct {
-    first_field_idx: RecordFieldLayout.Idx,
-    num_fields: u14,
+/// Index into the Store's record data
+pub const RecordIdx = packed struct {
+    int_idx: @Type(.{
+        .int = .{
+            .signedness = .unsigned,
+            // We need to be able to fit this in a Layout along with the alignment field in the RecordLayout.
+            .bits = layout_bit_size - @bitSizeOf(LayoutTag) - @bitSizeOf(std.mem.Alignment),
+        },
+    }),
 };
 
-pub const RecordFieldLayout = struct {
-    field_name: Ident.Idx,
-    field_layout: Layout.Idx,
+/// Record data stored in the layout Store
+pub const RecordData = struct {
+    /// Size of the record, in bytes
+    size: u32,
+    /// Range of fields in the record_fields list
+    fields: collections.NonEmptyRange,
 
-    const Idx = struct { int_val: u18 };
-};
-
-/// A union of alternatives plus a u8 tag (u16 if there are over 256 alternatives)
-const TaggedUnionLayout = struct {
-    first_alternative_idx: u18,
-    num_alternatives: u14,
-
-    /// Returns 1 for 255 or fewer alternatives, 2 if more than 255 alternatives, etc.
-    fn tagBytes(self: @This()) usize {
-        const len = @as(usize, @intCast(self.num_alternatives));
-        return @as(usize, 1) << std.math.log2_int(usize, len - 1);
+    pub fn getFields(self: RecordData) RecordField.SafeMultiList.Range {
+        return self.fields.toRange(RecordField.SafeMultiList.Idx);
     }
 };
 
-/// A union of alternative captures plus a tag for which fn to call
-const UnboxedClosureLayout = struct {
-    first_alternative_idx: u18,
-    num_alternatives: u14,
+/// Tuple field layout
+pub const TupleField = struct {
+    /// The index of the field in the original tuple (e.g. 0 would be the first element in the tuple)
+    index: u16,
+    /// The layout of the field's value
+    layout: Idx,
 
-    fn tagBytes(self: @This()) usize {
-        const len = @as(usize, @intCast(self.num_alternatives));
-
-        return @as(usize, 1) << std.math.log2_int(usize, len - 1);
-    }
+    /// A SafeMultiList for storing tuple fields
+    pub const SafeMultiList = collections.SafeMultiList(TupleField);
 };
 
-test "UnboxedClosureLayout.tagBytes()" {
-    const testing = std.testing;
+/// Tuple field layout type alias for compatibility
+pub const TupleFieldLayout = TupleField;
 
-    // Test 1 byte tag (1-255 alternatives)
-    const test_cases_1_bytes = [_]u14{ 0, 1, 2, 255 };
-    for (test_cases_1_bytes) |num_alternatives| {
-        const layout = UnboxedClosureLayout{
-            .first_alternative_idx = 0,
-            .num_alternatives = @intCast(num_alternatives),
-        };
+/// Tuple layout - stores alignment and index to full data in Store
+pub const TupleLayout = packed struct {
+    /// Alignment of the tuple
+    alignment: std.mem.Alignment,
+    /// Index into the Store's tuple data
+    idx: TupleIdx,
+};
 
-        try testing.expectEqual(@as(usize, 1), layout.tagBytes());
+/// Index into the Store's tuple data
+pub const TupleIdx = packed struct {
+    int_idx: @Type(.{
+        .int = .{
+            .signedness = .unsigned,
+            // We need to be able to fit this in a Layout along with the alignment field in the TupleLayout.
+            .bits = layout_bit_size - @bitSizeOf(LayoutTag) - @bitSizeOf(std.mem.Alignment),
+        },
+    }),
+};
+
+/// Tuple data stored in the layout Store
+pub const TupleData = struct {
+    /// Size of the tuple, in bytes
+    size: u32,
+    /// Range of fields in the tuple_fields list
+    fields: collections.NonEmptyRange,
+
+    pub fn getFields(self: TupleData) TupleField.SafeMultiList.Range {
+        return self.fields.toRange(TupleField.SafeMultiList.Idx);
     }
+};
+/// Size and alignment information
+pub const SizeAlign = packed struct(u36) {
+    size: u30, // u30 can represent sizes up to 1 GiB
+    alignment: std.mem.Alignment, // u6 bits needed on this platform
 
-    // Test 2 byte tag (256-65535 alternatives)
-    const test_cases_2_bytes = [_]u14{ 256, 257, 1000, 32767, 65535 };
-    for (test_cases_2_bytes) |num_alternatives| {
-        const layout = UnboxedClosureLayout{
-            .first_alternative_idx = 0,
-            .num_alternatives = num_alternatives,
-        };
-        try testing.expectEqual(@as(usize, 2), layout.tagBytes());
-    }
+    // Note: on 32-bit targets, there's an extra bit of uninitialized memory here,
+    // because the size of std.mem.Alignment is based on usize. If we want this data
+    // structure to be bit-for-bit identical on 32-bit and 64-bit builds of the Roc
+    // compiler, e.g. for serialization purposes, then we should make our own version
+    // of std.mem.Alignment which is hardcoded to be a u2 (which is enough, as Roc's
+    // compiler never generates values that are more than 16B aligned.)
 
-    // Test 4 byte tag (65536 and above)
-    const test_cases_4_bytes = [_]u14{ 65536, 100000, 262143 };
-    for (test_cases_4_bytes) |num_alternatives| {
-        const layout = UnboxedClosureLayout{
-            .first_alternative_idx = 0,
-            .num_alternatives = num_alternatives,
-        };
-        try testing.expectEqual(@as(usize, 4), layout.tagBytes());
-    }
+    /// Box size and alignment (pointer-sized)
+    pub const box = SizeAlign{
+        .size = @sizeOf(usize),
+        .alignment = std.mem.Alignment.fromByteUnits(@alignOf(usize)),
+    };
+
+    /// List size and alignment (3 pointer-sized fields)
+    pub const list = SizeAlign{
+        .size = 3 * @sizeOf(usize),
+        .alignment = std.mem.Alignment.fromByteUnits(@alignOf(usize)),
+    };
+};
+
+test "Size of SizeAlign type" {
+    try std.testing.expectEqual(36, @bitSizeOf(SizeAlign));
 }
 
 /// The memory layout of a value in a running Roc program.
@@ -160,9 +253,8 @@ test "UnboxedClosureLayout.tagBytes()" {
 pub const Layout = packed struct {
     // This can't be a normal Zig tagged union because it uses a packed union to reduce memory use,
     // and Zig tagged unions don't support being packed.
-    tag: LayoutTag,
-    size_align: SizeAlign,
     data: LayoutUnion,
+    tag: LayoutTag,
 
     /// This layout's alignment, given a particular target usize.
     pub fn alignment(self: Layout, target_usize: target.TargetUsize) std.mem.Alignment {
@@ -179,148 +271,66 @@ pub const Layout = packed struct {
             .tuple => self.data.tuple.alignment,
         };
     }
-};
 
-/// The Layout untagged union should take up this many bits in memory.
-/// We verify this with a test, and make use of it to calculate Idx sizes.
-const layout_bit_size = 64;
-
-/// Tag for scalar variants
-///
-/// The exact numbers here are important, because we use them to convert between
-/// Scalar and Idx using branchless arithmetic instructions. Don't change them
-/// lightly, and make sure to re-run tests if you do!
-pub const ScalarTag = enum(u3) {
-    // 0 is reserved because these map to Var, and Var has 0 reserved for a sentinel value.
-    int = 1, // Maps to Idx 1-10 (depending on precision)
-    frac = 2, // Maps to Idx 11-13 (depending on precision)
-    bool = 3, // Maps to Idx 14
-    str = 4, // Maps to Idx 15
-    opaque_ptr = 5, // Maps to Idx 16
-    box_of_zst = 6, // Maps to Idx 17
-    list_of_zst = 7, // Maps to Idx 18
-};
-
-/// The union portion of the Scalar packed tagged union.
-///
-/// Some scalars have extra information associated with them,
-/// such as the precision of a particular int or frac. This union
-/// stores that extra information.
-pub const ScalarUnion = packed union {
-    int: types.Num.Int.Precision,
-    frac: types.Num.Frac.Precision,
-    bool: void,
-    str: void,
-    opaque_ptr: void,
-    box_of_zst: void,
-    list_of_zst: void,
-};
-
-/// A scalar value such as a bool, str, int, frac, or opaque pointer type.
-pub const Scalar = packed struct {
-    // This can't be a normal Zig tagged union because it uses a packed union to reduce memory use,
-    // and Zig tagged unions don't support being packed.
-    data: ScalarUnion,
-    tag: ScalarTag,
-};
-
-/// Index into a Layout Store
-pub const Idx = enum(@Type(.{
-    .int = .{
-        .signedness = .unsigned,
-        // We intentionally build the layout store to allow a Var to translate directly into the
-        // corresponding Layout in the layout store, so use the same number of bits as Var.
-        .bits = @bitSizeOf(types.Var),
-    },
-})) {
-    // Sentinel values for scalar builtin layouts. When we init the layout store, it automatically
-    // adds entries for each of these at an index equal to the enum's value. That way, if you
-    // look up one of these in the store, it's always returns the correct layout, and we can have
-    // any type that resolves to one of these layouts use one of these hardcoded ones instead
-    // of adding redundant layouts to the store.
-    //
-    // The layout store's idxFromScalar method relies on these exact numbers being what they are now,
-    // so be careful when changing them! (Changing them will, at a minimum, cause tests to fail.)
-    //
-    // TODO we need to have Var also have these same sentinel values, in the same order!
-
-    // ints
-    u8 = 1,
-    i8 = 2,
-    u16 = 3,
-    i16 = 4,
-    u32 = 5,
-    i32 = 6,
-    u64 = 7,
-    i64 = 8,
-    u128 = 9,
-    i128 = 10,
-
-    // fracs
-    f32 = 11,
-    f64 = 12,
-    dec = 13,
-
-    // others
-    bool = 14,
-    str = 15,
-    opaque_ptr = 16,
-    box_of_zst = 17,
-    list_of_zst = 18,
-
-    // Regular indices start from here.
-    // num_scalars in store.zig must refer to how many variants we had up to this point.
-    _,
-
-    /// Get the sentinel Idx for a given scalar type using pure arithmetic - no branches!
-    /// This relies on the careful ordering of ScalarTag and Idx enum values.
-    pub fn fromScalar(scalar: Scalar) Idx {
-        // TODO this arithmetic is wrong now! need to reorder this based on the new ordering.
-        // Map scalar to idx using pure arithmetic:
-        // opaque_ptr (tag 0) -> 0
-        // bool (tag 1) -> 1
-        // str (tag 2) -> 2
-        // int (tag 3) with precision p -> 3 + p
-        // frac (tag 4) with precision p -> 13 + (p - 2) = 11 + p
-
-        // In the packed struct, ScalarData comes first (4 bits), then ScalarTag (3 bits)
-        // For numeric types (int/frac), the precision enum is stored in ScalarData
-        // For void types (bool/str/opaque_ptr), ScalarData is 0
-
-        const tag = @intFromEnum(scalar.tag);
-
-        // Get the precision bits directly from the packed representation
-        // This works because in a packed union, all fields start at bit 0
-        const scalar_bits = @as(u7, @bitCast(scalar));
-        const precision = scalar_bits & 0xF; // Lower 4 bits contain precision for numeric types
-
-        // Create masks for different tag ranges
-        // is_numeric: 1 when tag >= 3, else 0
-        const is_numeric = @as(u7, @intFromBool(tag >= 3));
-        const is_frac = @as(u7, @intFromBool(scalar.tag == .frac));
-
-        // Calculate the base index
-        // For non-numeric (tag 0-2): base_idx = tag
-        // For int (tag 3): base_idx = 3
-        // For frac (tag 4): base_idx = 11 (to map to indices 13-15)
-        const base_idx = tag + ((is_frac * 8) - is_frac); // Could also do (is_frac * 7) but * 8 can become a bit shift
-
-        // Calculate the final index
-        // For non-numeric: idx = base_idx (precision is 0)
-        // For numeric: idx = base_idx + precision
-        return @enumFromInt(base_idx + (is_numeric * precision));
+    /// int layout with the given precision
+    pub fn int(precision: types.Num.Int.Precision) Layout {
+        return Layout{ .data = .{ .scalar = .{ .data = .{ .int = precision }, .tag = .int } }, .tag = .scalar };
     }
-};
 
-/// Record field layout
-pub const RecordField = struct {
-    /// The interned string name of the field
-    name: Ident.Idx,
-    /// The layout of the field's value
-    layout: Idx,
+    /// frac layout with the given precision
+    pub fn frac(precision: types.Num.Frac.Precision) Layout {
+        return Layout{ .data = .{ .scalar = .{ .data = .{ .frac = precision }, .tag = .frac } }, .tag = .scalar };
+    }
 
-    /// A SafeMultiList for storing record fields
-    pub const SafeMultiList = collections.SafeMultiList(RecordField);
+    /// bool layout
+    pub fn boolType() Layout {
+        return Layout{ .data = .{ .scalar = .{ .data = .{ .bool = {} }, .tag = .bool } }, .tag = .scalar };
+    }
+
+    /// bool layout (alias for consistency)
+    pub fn boolean() Layout {
+        return boolType();
+    }
+
+    /// str layout
+    pub fn str() Layout {
+        return Layout{ .data = .{ .scalar = .{ .data = .{ .str = {} }, .tag = .str } }, .tag = .scalar };
+    }
+
+    /// box layout with the given element layout
+    pub fn box(elem_idx: Idx) Layout {
+        return Layout{ .data = .{ .box = elem_idx }, .tag = .box };
+    }
+
+    /// box of zero-sized type layout (e.g. Box({}))
+    pub fn boxOfZst() Layout {
+        return Layout{ .data = .{ .box_of_zst = {} }, .tag = .box_of_zst };
+    }
+
+    /// list layout with the given element layout
+    pub fn list(elem_idx: Idx) Layout {
+        return Layout{ .data = .{ .list = elem_idx }, .tag = .list };
+    }
+
+    /// list of zero-sized type layout (e.g. List({}))
+    pub fn listOfZst() Layout {
+        return Layout{ .data = .{ .list_of_zst = {} }, .tag = .list_of_zst };
+    }
+
+    /// opaque pointer from the host's perspective (e.g. the void* that we pass to the host for flex vars etc.)
+    pub fn opaquePtr() Layout {
+        return Layout{ .data = .{ .scalar = .{ .data = .{ .opaque_ptr = {} }, .tag = .opaque_ptr } }, .tag = .scalar };
+    }
+
+    /// record layout with the given alignment and record metadata (e.g. size and field layouts)
+    pub fn record(record_alignment: std.mem.Alignment, record_idx: RecordIdx) Layout {
+        return Layout{ .data = .{ .record = .{ .alignment = record_alignment, .idx = record_idx } }, .tag = .record };
+    }
+
+    /// tuple layout with the given alignment and tuple metadata (e.g. size and field layouts)
+    pub fn tuple(tuple_alignment: std.mem.Alignment, tuple_idx: TupleIdx) Layout {
+        return Layout{ .data = .{ .tuple = .{ .alignment = tuple_alignment, .idx = tuple_idx } }, .tag = .tuple };
+    }
 };
 
 test "Size of Layout type" {
@@ -577,7 +587,7 @@ test "Layout scalar precision coverage" {
     }
 
     // Test all frac precisions
-    for ([_]types.Num.Frac.Precision{ .f32, .f64 }) |precision| {
+    for ([_]types.Num.Frac.Precision{ .f32, .f64, .dec }) |precision| {
         const frac_layout = Layout.frac(precision);
         try testing.expectEqual(LayoutTag.scalar, frac_layout.tag);
         try testing.expectEqual(ScalarTag.frac, frac_layout.data.scalar.tag);
@@ -605,104 +615,5 @@ test "Layout scalar precision coverage" {
 
     for (complex_layouts, expected_tags) |layout, expected_tag| {
         try testing.expectEqual(expected_tag, layout.tag);
-    }
-}
-
-test "Layout.alignment() - tuple types" {
-    const testing = std.testing;
-
-    for (target.TargetUsize.all()) |target_usize| {
-        // Test tuple alignment
-        const tuple_layout = Layout.tuple(std.mem.Alignment.@"8", TupleIdx{ .int_idx = 0 });
-        try testing.expectEqual(std.mem.Alignment.@"8", tuple_layout.alignment(target_usize));
-    }
-}
-
-test "TupleData.getFields()" {
-    const testing = std.testing;
-    const tuple_data = TupleData{
-        .size = 24,
-        .fields = .{ .start = 10, .count = 3 },
-    };
-
-    const fields_range = tuple_data.getFields();
-    try testing.expectEqual(@as(u32, 10), @intFromEnum(fields_range.start));
-    try testing.expectEqual(@as(u32, 13), @intFromEnum(fields_range.end));
-}
-
-test "Layout tuple variants" {
-    const testing = std.testing;
-    // Test tuple layout creation
-    const tuple_idx = TupleIdx{ .int_idx = 42 };
-    const tuple_layout = Layout.tuple(std.mem.Alignment.@"8", tuple_idx);
-
-    try testing.expectEqual(LayoutTag.tuple, tuple_layout.tag);
-    try testing.expectEqual(std.mem.Alignment.@"8", tuple_layout.data.tuple.alignment);
-    try testing.expectEqual(@as(@TypeOf(tuple_idx.int_idx), 42), tuple_layout.data.tuple.idx.int_idx);
-}
-
-test "TupleField structure" {
-    const testing = std.testing;
-    const tuple_field = TupleField{
-        .index = 1,
-        .layout = @as(Idx, @enumFromInt(5)),
-    };
-
-    try testing.expectEqual(@as(u24, 1), tuple_field.index);
-    try testing.expectEqual(@as(u28, 5), @intFromEnum(tuple_field.layout));
-}
-
-test "Tuple memory optimization - comprehensive coverage" {
-    const testing = std.testing;
-
-    // Test that tuple layouts properly handle different field types
-    const tuple_layouts = [_]Layout{
-        Layout.tuple(std.mem.Alignment.@"1", TupleIdx{ .int_idx = 0 }),
-        Layout.tuple(std.mem.Alignment.@"4", TupleIdx{ .int_idx = 1 }),
-        Layout.tuple(std.mem.Alignment.@"8", TupleIdx{ .int_idx = 2 }),
-        Layout.tuple(std.mem.Alignment.@"16", TupleIdx{ .int_idx = 3 }),
-    };
-
-    for (tuple_layouts) |layout| {
-        try testing.expectEqual(LayoutTag.tuple, layout.tag);
-    }
-}
-
-test "TupleIdx bit packing" {
-    const testing = std.testing;
-
-    // Test that TupleIdx can hold large values
-    const large_value: u32 = 65535; // Large but reasonable value
-    const tuple_idx = TupleIdx{ .int_idx = large_value };
-    try testing.expectEqual(large_value, tuple_idx.int_idx);
-
-    // Test tuple layout with large index
-    const tuple_layout = Layout.tuple(std.mem.Alignment.@"1", tuple_idx);
-    try testing.expectEqual(large_value, tuple_layout.data.tuple.idx.int_idx);
-}
-
-test "TupleData size calculation" {
-    const testing = std.testing;
-
-    // Test various tuple sizes
-    const test_cases = [_]struct { size: u32, field_count: u32 }{
-        .{ .size = 0, .field_count = 0 },
-        .{ .size = 8, .field_count = 1 },
-        .{ .size = 16, .field_count = 2 },
-        .{ .size = 32, .field_count = 4 },
-        .{ .size = 1024, .field_count = 64 },
-    };
-
-    for (test_cases) |case| {
-        const tuple_data = TupleData{
-            .size = case.size,
-            .fields = .{ .start = 0, .count = case.field_count },
-        };
-
-        try testing.expectEqual(case.size, tuple_data.size);
-
-        const fields_range = tuple_data.getFields();
-        try testing.expectEqual(@as(u32, 0), @intFromEnum(fields_range.start));
-        try testing.expectEqual(case.field_count, @intFromEnum(fields_range.end));
     }
 }

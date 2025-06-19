@@ -22,6 +22,7 @@ const RecordIdx = layout_.RecordIdx;
 const TupleField = layout_.TupleField;
 const TupleData = layout_.TupleData;
 const TupleIdx = layout_.TupleIdx;
+const SizeAlign = layout_.SizeAlign;
 const Work = work.Work;
 const exitOnOom = collections.utils.exitOnOom;
 
@@ -56,35 +57,73 @@ pub const Store = struct {
 
     // Number of primitive types that are pre-populated in the layout store
     // Must be kept in sync with the sentinel values in layout.zig Idx enum
-    const num_scalars = 18;
+    const num_scalars = 16;
+
+    /// Get the sentinel Idx for a given scalar type using pure arithmetic - no branches!
+    /// This relies on the careful ordering of ScalarTag and Idx enum values.
+    pub fn idxFromScalar(scalar: Scalar) Idx {
+        // Map scalar to idx using pure arithmetic:
+        // opaque_ptr (tag 0) -> 2
+        // bool (tag 1) -> 0
+        // str (tag 2) -> 1
+        // int (tag 3) with precision p -> 3 + p
+        // frac (tag 4) with precision p -> 13 + (p - 2) = 11 + p
+
+        const tag = @intFromEnum(scalar.tag);
+
+        // Get the precision bits directly from the packed representation
+        // This works because in a packed union, all fields start at bit 0
+        const scalar_bits = @as(u7, @bitCast(scalar));
+        const precision = scalar_bits & 0xF; // Lower 4 bits contain precision for numeric types
+
+        // Create masks for different tag ranges
+        // is_numeric: 1 when tag >= 3, else 0
+        const is_numeric = @as(u7, @intFromBool(tag >= 3));
+
+        // Calculate the base index based on tag mappings
+        const base_idx = switch (scalar.tag) {
+            .opaque_ptr => @as(u7, 2),
+            .bool => @as(u7, 0),
+            .str => @as(u7, 1),
+            .int => @as(u7, 3),
+            .frac => @as(u7, 11), // 13 - 2 = 11, so 11 + p gives correct result
+        };
+
+        // Calculate the final index
+        // For non-numeric: idx = base_idx (precision is 0)
+        // For int: idx = base_idx + precision
+        // For frac: idx = base_idx + precision (where base_idx is already adjusted)
+        return @enumFromInt(base_idx + (is_numeric * precision));
+    }
 
     pub fn init(
         env: *base.ModuleEnv,
         type_store: *const types_store.Store,
     ) std.mem.Allocator.Error!Self {
-        const capacity = type_store.getNumVars();
+        // Get the number of variables from the type store's slots
+        const capacity = type_store.slots.backing.items.len;
         const layouts_by_var = try collections.ArrayListMap(Var, Idx).init(env.gpa, capacity);
 
-        var layouts = collections.SafeList(Layout){};
+        var layouts = collections.SafeMultiList(Layout){};
 
         // Pre-populate primitive type layouts in order matching the Idx enum.
         // Changing the order of these can break things!
-        try layouts.append(env.gpa, Layout.opaquePtr());
-        try layouts.append(env.gpa, Layout.boolean());
-        try layouts.append(env.gpa, Layout.str());
-        try layouts.append(env.gpa, Layout.int(.u8));
-        try layouts.append(env.gpa, Layout.int(.i8));
-        try layouts.append(env.gpa, Layout.int(.u16));
-        try layouts.append(env.gpa, Layout.int(.i16));
-        try layouts.append(env.gpa, Layout.int(.u32));
-        try layouts.append(env.gpa, Layout.int(.i32));
-        try layouts.append(env.gpa, Layout.int(.u64));
-        try layouts.append(env.gpa, Layout.int(.i64));
-        try layouts.append(env.gpa, Layout.int(.u128));
-        try layouts.append(env.gpa, Layout.int(.i128));
-        try layouts.append(env.gpa, Layout.int(.f32));
-        try layouts.append(env.gpa, Layout.int(.f64));
-        try layouts.append(env.gpa, Layout.int(.dec));
+        _ = layouts.append(env.gpa, Layout.boolType());
+        _ = layouts.append(env.gpa, Layout.str());
+        _ = layouts.append(env.gpa, Layout.opaquePtr());
+        _ = layouts.append(env.gpa, Layout.int(.u8));
+        _ = layouts.append(env.gpa, Layout.int(.i8));
+        _ = layouts.append(env.gpa, Layout.int(.u16));
+        _ = layouts.append(env.gpa, Layout.int(.i16));
+        _ = layouts.append(env.gpa, Layout.int(.u32));
+        _ = layouts.append(env.gpa, Layout.int(.i32));
+        _ = layouts.append(env.gpa, Layout.int(.u64));
+        _ = layouts.append(env.gpa, Layout.int(.i64));
+        _ = layouts.append(env.gpa, Layout.int(.u128));
+        _ = layouts.append(env.gpa, Layout.int(.i128));
+        _ = layouts.append(env.gpa, Layout.frac(.f32));
+        _ = layouts.append(env.gpa, Layout.frac(.f64));
+        _ = layouts.append(env.gpa, Layout.frac(.dec));
 
         std.debug.assert(layouts.len() == num_scalars);
 
@@ -118,12 +157,9 @@ pub const Store = struct {
     /// Note: A Box of a zero-sized type doesn't need to (and can't) be inserted,
     /// because it's already considered a scalar. To get one of those, call Idx.fromScalar()
     /// passing the .box_of_zst scalar.
-    pub fn insertBox(elem_idx: Idx) std.mem.Allocator.Error!Idx {
-        return try insertLayout(Layout{
-            .data = .{ .box = elem_idx },
-            .tag = .box,
-            .size_align = SizeAlign.box,
-        });
+    pub fn insertBox(self: *Self, elem_idx: Idx) std.mem.Allocator.Error!Idx {
+        const layout = Layout.box(elem_idx);
+        return try self.insertLayout(layout);
     }
 
     /// Insert a List layout with the given element layout.
@@ -131,33 +167,24 @@ pub const Store = struct {
     /// Note: A List of a zero-sized type doesn't need to (and can't) be inserted,
     /// because it's already considered a scalar. To get one of those, call Idx.fromScalar()
     /// passing the .list_of_zst scalar.
-    pub fn insertList(elem_idx: Idx) std.mem.Allocator.Error!Idx {
-        return try insertLayout(Layout{
-            .data = .{ .list = elem_idx },
-            .tag = .list,
-            .size_align = SizeAlign.list,
-        });
+    pub fn insertList(self: *Self, elem_idx: Idx) std.mem.Allocator.Error!Idx {
+        const layout = Layout.list(elem_idx);
+        return try self.insertLayout(layout);
     }
 
-    /// Insert a record layout with the given size, alignment, and field layouts
-    pub fn insertRecord(size_align: SizeAlign, record_idx: RecordIdx) std.mem.Allocator.Error!Idx {
-        return try insertLayout(Layout{
-            .data = .{ .record = .{ .idx = record_idx } },
-            .tag = .record,
-            .size_align = size_align,
-        });
+    /// Insert a record layout with the given alignment and record metadata
+    pub fn insertRecord(self: *Self, alignment: std.mem.Alignment, record_idx: RecordIdx) std.mem.Allocator.Error!Idx {
+        const layout = Layout.record(alignment, record_idx);
+        return try self.insertLayout(layout);
     }
 
-    /// Insert a tuple layout with the given size, alignment, and field layouts
-    pub fn insertTuple(size_align: SizeAlign, tuple_idx: TupleIdx) std.mem.Allocator.Error!Idx {
-        return try insertLayout(Layout{
-            .data = .{ .tuple = .{ .idx = tuple_idx } },
-            .tag = .tuple,
-            .size_align = size_align,
-        });
+    /// Insert a tuple layout with the given alignment and tuple metadata
+    pub fn insertTuple(self: *Self, alignment: std.mem.Alignment, tuple_idx: TupleIdx) std.mem.Allocator.Error!Idx {
+        const layout = Layout.tuple(alignment, tuple_idx);
+        return try self.insertLayout(layout);
     }
 
-    pub fn getLayout(self: *Self, idx: Idx) *const Layout {
+    pub fn getLayout(self: *Self, idx: Idx) Layout {
         return self.layouts.get(@enumFromInt(@intFromEnum(idx)));
     }
 
@@ -169,8 +196,8 @@ pub const Store = struct {
         return self.tuple_data.get(@enumFromInt(idx.int_idx));
     }
 
-    fn targetUsize(self: *const Self) target.TargetUsize {
-        return self.env.target.target_usize;
+    fn targetUsize(_: *const Self) target.TargetUsize {
+        return target.TargetUsize.native;
     }
 
     /// Get the size in bytes of a layout, given the store's target usize.
@@ -328,7 +355,7 @@ pub const Store = struct {
             const field_layout = self.getLayout(temp_field.layout);
 
             const field_alignment = field_layout.alignment(target_usize);
-            const field_size = self.layoutSize(field_layout.*);
+            const field_size = self.layoutSize(field_layout);
 
             // Update max alignment
             max_alignment = max_alignment.max(field_alignment);
@@ -344,7 +371,7 @@ pub const Store = struct {
         const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment.toByteUnits())))));
 
         // Create the record layout with the fields range
-        const fields_range = collections.NonEmptyRange.init(@intCast(fields_start), @intCast(num_resolved_fields)) catch unreachable;
+        const fields_range = collections.NonEmptyRange{ .start = @intCast(fields_start), .count = @intCast(num_resolved_fields) };
 
         // Store the record data
         const record_idx = RecordIdx{ .int_idx = @intCast(self.record_data.len()) };
@@ -426,7 +453,7 @@ pub const Store = struct {
             const field_layout = self.getLayout(temp_field.layout);
 
             const field_alignment = field_layout.alignment(target_usize);
-            const field_size = self.layoutSize(field_layout.*);
+            const field_size = self.layoutSize(field_layout);
 
             // Update max alignment
             max_alignment = max_alignment.max(field_alignment);
@@ -442,7 +469,7 @@ pub const Store = struct {
         const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment.toByteUnits())))));
 
         // Create the tuple layout with the fields range
-        const fields_range = collections.NonEmptyRange.init(@intCast(fields_start), @intCast(num_resolved_fields)) catch unreachable;
+        const fields_range = collections.NonEmptyRange{ .start = @intCast(fields_start), .count = @intCast(num_resolved_fields) };
 
         // Store the tuple data
         const tuple_idx = TupleIdx{ .int_idx = @intCast(self.tuple_data.len()) };
@@ -529,18 +556,16 @@ pub const Store = struct {
                         continue;
                     },
                     .num => |num| switch (num) {
-                        .int => |int| switch (int) {
-                            .exact => |precision| Layout.int(precision),
-                            // For Int(a), use the default precision for an Int.
-                            .flex_var => Layout.int(types.Num.Int.Precision.default),
+                        .num_compact => |compact| switch (compact) {
+                            .int => |precision| Layout.int(precision),
+                            .frac => |precision| Layout.frac(precision),
                         },
-                        .frac => |frac| switch (frac) {
-                            .exact => |precision| Layout.frac(precision),
-                            // For Frac(a), use the default precision for a Frac.
-                            .flex_var => Layout.frac(types.Num.Frac.Precision.default),
-                        },
-                        // Num(a) defaults to Int(a), so use the default precision for an Int.
-                        .flex_var => Layout.int(types.Num.Int.Precision.default),
+                        .int_precision => |precision| Layout.int(precision),
+                        .frac_precision => |precision| Layout.frac(precision),
+                        // For polymorphic types, use default precision
+                        .num_poly => Layout.int(types.Num.Int.Precision.default),
+                        .int_poly => Layout.int(types.Num.Int.Precision.default),
+                        .frac_poly => Layout.frac(types.Num.Frac.Precision.default),
                     },
                     .tuple => |tuple_type| {
                         const num_fields = try self.gatherTupleFields(tuple_type);
@@ -799,9 +824,15 @@ pub const Store = struct {
             return layout_idx;
         }
     }
-};
 
-fn insertLayout(self: Store, layout: Layout) std.mem.Allocator.Error!Idx {
-    const safe_list_idx = self.layouts.append(self.env.gpa, layout);
-    return @enumFromInt(@intFromEnum(safe_list_idx));
-}
+    pub fn insertLayout(self: *Self, layout: Layout) std.mem.Allocator.Error!Idx {
+        // For scalar types, return the appropriate sentinel value instead of inserting
+        if (layout.tag == .scalar) {
+            return idxFromScalar(layout.data.scalar);
+        }
+
+        // For non-scalar types, insert as normal
+        const safe_list_idx = self.layouts.append(self.env.gpa, layout);
+        return @enumFromInt(@intFromEnum(safe_list_idx));
+    }
+};
