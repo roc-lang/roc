@@ -1112,6 +1112,13 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) CIR.Diagnostic.I
             node.tag = .diag_var_across_function_boundary;
             node.region = r.region;
         },
+        .shadowing_warning => |r| {
+            node.tag = .diag_shadowing_warning;
+            node.region = r.region;
+            node.data_1 = @bitCast(r.ident);
+            node.data_2 = r.original_region.start.offset;
+            node.data_3 = r.original_region.end.offset;
+        },
     }
 
     const nid = @intFromEnum(store.nodes.append(store.gpa, node));
@@ -1158,6 +1165,7 @@ pub fn addMalformed(store: *NodeStore, comptime t: type, reason: CIR.Diagnostic)
             .can_lambda_not_implemented => |r| r.region,
             .lambda_body_not_canonicalized => |r| r.region,
             .var_across_function_boundary => |r| r.region,
+            .shadowing_warning => |r| r.region,
         },
         .tag = .malformed,
     };
@@ -1214,6 +1222,14 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         } },
         .diag_var_across_function_boundary => return CIR.Diagnostic{ .var_across_function_boundary = .{
             .region = node.region,
+        } },
+        .diag_shadowing_warning => return CIR.Diagnostic{ .shadowing_warning = .{
+            .ident = @bitCast(node.data_1),
+            .region = node.region,
+            .original_region = .{
+                .start = .{ .offset = node.data_2 },
+                .end = .{ .offset = node.data_3 },
+            },
         } },
         else => {
             @panic("unreachable, node is not a diagnostic tag");

@@ -40,7 +40,7 @@ pub fn processFile(
     };
     defer gpa.free(source);
 
-    return processSource(gpa, source);
+    return processSource(gpa, source, filepath);
 }
 
 /// Process source code directly and return diagnostics.
@@ -83,6 +83,7 @@ pub fn checkSource(
 pub fn processSource(
     gpa: std.mem.Allocator,
     source: []const u8,
+    filename: []const u8,
 ) !ProcessResult {
     // Initialize the ModuleEnv
     var module_env = ModuleEnv.init(gpa);
@@ -120,7 +121,7 @@ pub fn processSource(
     // Get diagnostic Reports from CIR
     const diagnostics = cir.getDiagnostics();
     for (diagnostics) |diagnostic| {
-        const report = cir.diagnosticToReport(diagnostic, gpa) catch continue;
+        const report = cir.diagnosticToReport(diagnostic, gpa, source, filename) catch continue;
         reports.append(report) catch continue;
     }
 

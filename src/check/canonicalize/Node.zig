@@ -120,4 +120,5 @@ pub const Tag = enum {
     diag_can_lambda_not_implemented,
     diag_lambda_body_not_canonicalized,
     diag_var_across_function_boundary,
+    diag_shadowing_warning,
 };

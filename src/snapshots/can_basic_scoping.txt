@@ -19,7 +19,43 @@ outerFunc = |_| {
     innerResult
 }
 ~~~PROBLEMS
-NIL
+DUPLICATE DEFINITION
+The name `x` is being redeclared in this scope.
+
+The redeclaration is here:
+/Users/luke/Documents/GitHub/roc/src/snapshots/can_basic_scoping.txt:9-5:9: module []
+
+# Top-level variables
+x = 5
+y = 10
+
+# Function that shadows outer variable
+outerFunc = |_| {
+    x = 20  # Should shadow top-level x
+    innerResult = {
+        # Block scope
+        z = x + y  # x should resolve to 20, y to 10
+        z + 1
+    }
+    innerResult
+}
+But `x` was already defined here:
+/Users/luke/Documents/GitHub/roc/src/snapshots/can_basic_scoping.txt:4-1:4: module []
+
+# Top-level variables
+x = 5
+y = 10
+
+# Function that shadows outer variable
+outerFunc = |_| {
+    x = 20  # Should shadow top-level x
+    innerResult = {
+        # Block scope
+        z = x + y  # x should resolve to 20, y to 10
+        z + 1
+    }
+    innerResult
+}
 ~~~TOKENS
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),
 Newline(1:1-1:1),
@@ -135,12 +171,12 @@ outerFunc = |_| {
 							(bound "u8")))
 					(s_let (10:5-14:6)
 						(p_assign (10:5-10:16)
-							(pid 19)
+							(pid 20)
 							(ident "innerResult"))
 						(e_block (10:19-14:6)
 							(s_let (12:9-13:10)
 								(p_assign (12:9-12:10)
-									(pid 20)
+									(pid 21)
 									(ident "z"))
 								(e_binop (12:13-13:10)
 									"add"
@@ -148,12 +184,12 @@ outerFunc = |_| {
 									(e_lookup (12:17-12:18) (pid 7))))
 							(e_binop (13:9-14:6)
 								"add"
-								(e_lookup (13:9-13:10) (pid 20))
+								(e_lookup (13:9-13:10) (pid 21))
 								(e_int (13:13-13:14)
 									(int_var "#21")
 									(precision_var "#20")
 									(literal "1")
 									(value "TODO")
 									(bound "u8")))))
-					(e_lookup (15:5-15:16) (pid 19)))))))
+					(e_lookup (15:5-15:16) (pid 20)))))))
 ~~~END

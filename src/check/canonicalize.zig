@@ -1043,8 +1043,14 @@ fn canonicalize_pattern(
                 // Introduce the identifier into scope mapping to this pattern node
                 switch (self.scopes.introduce(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, ident_idx, assign_idx, false, true)) {
                     .success => {},
-                    .shadowing_warning => {
-                        // TODO: Issue shadowing warning diagnostic
+                    .shadowing_warning => |shadowed_pattern_idx| {
+                        const shadowed_pattern = self.can_ir.store.getPattern(shadowed_pattern_idx);
+                        const original_region = shadowed_pattern.toRegion();
+                        self.can_ir.pushDiagnostic(CIR.Diagnostic{ .shadowing_warning = .{
+                            .ident = ident_idx,
+                            .region = region,
+                            .original_region = original_region,
+                        } });
                     },
                     .top_level_var_error => {
                         return self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .invalid_top_level_statement = .{
@@ -1268,8 +1274,14 @@ pub fn scope_introduce_ident(
         .success => {
             return pattern_idx;
         },
-        .shadowing_warning => |_| {
-            // TODO: Issue shadowing warning diagnostic
+        .shadowing_warning => |shadowed_pattern_idx| {
+            const shadowed_pattern = self.can_ir.store.getPattern(shadowed_pattern_idx);
+            const original_region = shadowed_pattern.toRegion();
+            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .shadowing_warning = .{
+                .ident = ident_idx,
+                .region = region,
+                .original_region = original_region,
+            } });
             return pattern_idx;
         },
         .top_level_var_error => {
@@ -1306,8 +1318,14 @@ pub fn scope_introduce_var(
             }
             return pattern_idx;
         },
-        .shadowing_warning => |_| {
-            // TODO: Issue shadowing warning diagnostic
+        .shadowing_warning => |shadowed_pattern_idx| {
+            const shadowed_pattern = self.can_ir.store.getPattern(shadowed_pattern_idx);
+            const original_region = shadowed_pattern.toRegion();
+            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .shadowing_warning = .{
+                .ident = ident_idx,
+                .region = region,
+                .original_region = original_region,
+            } });
             if (is_declaration) {
                 self.recordVarFunction(pattern_idx);
             }

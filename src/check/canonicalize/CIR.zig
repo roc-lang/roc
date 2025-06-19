@@ -359,7 +359,11 @@ pub fn getDiagnostics(self: *CIR) []CIR.Diagnostic {
 }
 
 /// Convert a canonicalization diagnostic to a Report for rendering
-pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem.Allocator) !reporting.Report {
+pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem.Allocator, source: []const u8, filename: []const u8) !reporting.Report {
+    // Set temporary source for calcRegionInfo
+    self.temp_source_for_sexpr = source;
+    defer self.temp_source_for_sexpr = null;
+
     return switch (diagnostic) {
         .not_implemented => |data| blk: {
             const feature_text = self.env.strings.get(data.feature);
@@ -400,6 +404,19 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
         .can_lambda_not_implemented => Diagnostic.buildCanLambdaNotImplementedReport(allocator),
         .lambda_body_not_canonicalized => Diagnostic.buildLambdaBodyNotCanonicalizedReport(allocator),
         .var_across_function_boundary => Diagnostic.buildVarAcrossFunctionBoundaryReport(allocator),
+        .shadowing_warning => |data| blk: {
+            const ident_name = self.env.idents.getText(data.ident);
+            const new_region_info = self.calcRegionInfo(data.region);
+            const original_region_info = self.calcRegionInfo(data.original_region);
+            break :blk Diagnostic.buildShadowingWarningReport(
+                allocator,
+                ident_name,
+                new_region_info,
+                original_region_info,
+                source,
+                filename,
+            );
+        },
     };
 }
 
@@ -1750,6 +1767,23 @@ pub const Pattern = union(enum) {
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
+
+    pub fn toRegion(self: *const @This()) Region {
+        switch (self.*) {
+            .assign => |p| return p.region,
+            .as => |p| return p.region,
+            .applied_tag => |p| return p.region,
+            .record_destructure => |p| return p.region,
+            .list => |p| return p.region,
+            .num_literal => |p| return p.region,
+            .int_literal => |p| return p.region,
+            .float_literal => |p| return p.region,
+            .str_literal => |p| return p.region,
+            .char_literal => |p| return p.region,
+            .underscore => |p| return p.region,
+            .runtime_error => |p| return p.region,
+        }
+    }
 
     pub fn toSExpr(self: *const @This(), ir: *CIR, pattern_idx: Pattern.Idx) sexpr.Expr {
         const gpa = ir.env.gpa;

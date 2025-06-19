@@ -548,7 +548,7 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
         for (diagnostics) |diagnostic| {
             canonicalize_problems += 1;
 
-            var report: Report = try can_ir.diagnosticToReport(diagnostic, gpa);
+            var report: Report = try can_ir.diagnosticToReport(diagnostic, gpa, content.source, snapshot_path);
             defer report.deinit();
             report.render(writer.any(), .plain_text) catch |err| {
                 try writer.print("Error rendering report: {}\n", .{err});
