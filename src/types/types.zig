@@ -233,13 +233,28 @@ pub const Num = union(enum) {
         }
     };
 
-    /// the Frac data type
+    /// The Frac data type
     pub const Frac = struct {
-        /// the precision of a frac
-        pub const Precision = enum {
-            f32,
-            f64,
-            dec,
+        /// The precision of a Frac
+        pub const Precision = enum(u3) {
+            f32 = 2,
+            f64 = 3,
+            dec = 4,
+
+            /// Default precision for Frac(a), e.g. if you put `1.1` into `roc repl`.
+            pub const default = Num.Frac.Precision.dec;
+
+            /// Size in bytes
+            pub fn size(self: @This()) u32 {
+                // frac values always have the same size as their alignment
+                return @as(u32, @intCast(self.alignment().toByteUnits()));
+            }
+
+            /// Alignment
+            pub fn alignment(self: @This()) std.mem.Alignment {
+                // Both self and std.mem.Alignment are stored as log2(alignment) integers.
+                return @enumFromInt(@intFromEnum(self));
+            }
 
             /// Get the lowest precision needed to hold the provided float
             /// This only supports f32s and f64s. Decimals must be assigned based on different criteria.
@@ -272,20 +287,39 @@ pub const Num = union(enum) {
         };
     };
 
-    /// the Int data type
+    /// The Int data type
     pub const Int = struct {
-        /// the precision of an int
-        pub const Precision = enum {
-            u8,
-            i8,
-            u16,
-            i16,
-            u32,
-            i32,
-            u64,
-            i64,
-            u128,
-            i128,
+        /// The precision of an Int
+        pub const Precision = enum(u4) {
+            u8 = 0,
+            i8 = 1,
+            u16 = 2,
+            i16 = 3,
+            u32 = 4,
+            i32 = 5,
+            u64 = 6,
+            i64 = 7,
+            u128 = 8,
+            i128 = 9,
+
+            /// Default precision for Int(a), e.g. if you put `0x1` into `roc repl`.
+            ///
+            /// Note that numbers default to integers, so this is also what you'll
+            /// get if you put `1` into `roc repl`.
+            pub const default = Num.Int.Precision.i128;
+
+            /// Size in bytes
+            pub fn size(self: @This()) u32 {
+                // int values always have the same size as their alignment
+                return @as(u32, @intCast(self.alignment().toByteUnits()));
+            }
+
+            /// Alignment
+            pub fn alignment(self: @This()) std.mem.Alignment {
+                // Both self and std.mem.Alignment are stored as log2(alignment) integers,
+                // although we have to divide self by 2 to get to that exact representation.
+                return @enumFromInt(@intFromEnum(self) / 2);
+            }
 
             /// Get the lowest precision needed to hold the provided
             pub fn fromValue(value: i128) Int.Precision {
@@ -468,3 +502,49 @@ pub const TwoTags = struct {
     /// A safe multi list of tag union fields
     pub const SafeMultiList = MkSafeMultiList(@This());
 };
+
+test "Precision.size() and alignment()" {
+    const testing = @import("std").testing;
+
+    // u8 and i8 should have size and alignment of 1
+    try testing.expectEqual(1, Num.Int.Precision.u8.size());
+    try testing.expectEqual(1, Num.Int.Precision.i8.size());
+    try testing.expectEqual(1, Num.Int.Precision.u8.alignment().toByteUnits());
+    try testing.expectEqual(1, Num.Int.Precision.i8.alignment().toByteUnits());
+
+    // u16 and i16 should have size and alignment of 2
+    try testing.expectEqual(2, Num.Int.Precision.u16.size());
+    try testing.expectEqual(2, Num.Int.Precision.i16.size());
+    try testing.expectEqual(2, Num.Int.Precision.u16.alignment().toByteUnits());
+    try testing.expectEqual(2, Num.Int.Precision.i16.alignment().toByteUnits());
+
+    // u32 and i32 should have size and alignment of 4
+    try testing.expectEqual(4, Num.Int.Precision.u32.size());
+    try testing.expectEqual(4, Num.Int.Precision.i32.size());
+    try testing.expectEqual(4, Num.Int.Precision.u32.alignment().toByteUnits());
+    try testing.expectEqual(4, Num.Int.Precision.i32.alignment().toByteUnits());
+
+    // u64 and i64 should have size and alignment of 8
+    try testing.expectEqual(8, Num.Int.Precision.u64.size());
+    try testing.expectEqual(8, Num.Int.Precision.i64.size());
+    try testing.expectEqual(8, Num.Int.Precision.u64.alignment().toByteUnits());
+    try testing.expectEqual(8, Num.Int.Precision.i64.alignment().toByteUnits());
+
+    // u128 and i128 should have size and alignment of 16
+    try testing.expectEqual(16, Num.Int.Precision.u128.size());
+    try testing.expectEqual(16, Num.Int.Precision.i128.size());
+    try testing.expectEqual(16, Num.Int.Precision.u128.alignment().toByteUnits());
+    try testing.expectEqual(16, Num.Int.Precision.i128.alignment().toByteUnits());
+
+    // f32 should have size and alignment of 4
+    try testing.expectEqual(4, Num.Frac.Precision.f32.size());
+    try testing.expectEqual(4, Num.Frac.Precision.f32.alignment().toByteUnits());
+
+    // f64 should have size and alignment of 8
+    try testing.expectEqual(8, Num.Frac.Precision.f64.size());
+    try testing.expectEqual(8, Num.Frac.Precision.f64.alignment().toByteUnits());
+
+    // dec should have size and alignment of 16
+    try testing.expectEqual(16, Num.Frac.Precision.dec.size());
+    try testing.expectEqual(16, Num.Frac.Precision.dec.alignment().toByteUnits());
+}
