@@ -1,0 +1,194 @@
+~~~META
+description=Basic variable scoping behavior
+type=file
+~~~SOURCE
+module []
+
+# Top-level variables
+x = 5
+y = 10
+
+# Function that shadows outer variable
+outerFunc = |_|
+    x = 20  # Should shadow top-level x
+    innerResult =
+        # Block scope
+        z = x + y  # x should resolve to 20, y to 10
+        z + 1
+    innerResult
+
+# Another function to test independent scoping
+anotherFunc = |input|
+    y = input * 2  # Should shadow top-level y
+    x + y  # x should resolve to top-level 5, y should resolve to local y
+
+# Test that top-level variables are still accessible
+result1 = outerFunc({})
+result2 = anotherFunc(3)
+finalResult = x + y  # Should use top-level x=5, y=10
+~~~PROBLEMS
+PARSER: expr_unexpected_token
+NOT IMPLEMENTED
+This feature is not yet implemented: canonicalize block expression
+NOT IMPLEMENTED
+Lambda expressions are not yet fully implemented.
+NOT IMPLEMENTED
+This feature is not yet implemented: canonicalize block expression
+NOT IMPLEMENTED
+Lambda expressions are not yet fully implemented.
+~~~TOKENS
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),
+Newline(1:1-1:1),
+Newline(3:2-3:22),
+LowerIdent(4:1-4:2),OpAssign(4:3-4:4),Int(4:5-4:6),Newline(1:1-1:1),
+LowerIdent(5:1-5:2),OpAssign(5:3-5:4),Int(5:5-5:7),Newline(1:1-1:1),
+Newline(1:1-1:1),
+Newline(7:2-7:39),
+LowerIdent(8:1-8:10),OpAssign(8:11-8:12),OpBar(8:13-8:14),Underscore(8:14-8:15),OpBar(8:15-8:16),Newline(1:1-1:1),
+LowerIdent(9:5-9:6),OpAssign(9:7-9:8),Int(9:9-9:11),Newline(9:14-9:40),
+LowerIdent(10:5-10:16),OpAssign(10:17-10:18),Newline(1:1-1:1),
+Newline(11:10-11:22),
+LowerIdent(12:9-12:10),OpAssign(12:11-12:12),LowerIdent(12:13-12:14),OpPlus(12:15-12:16),LowerIdent(12:17-12:18),Newline(12:21-12:53),
+LowerIdent(13:9-13:10),OpPlus(13:11-13:12),Int(13:13-13:14),Newline(1:1-1:1),
+LowerIdent(14:5-14:16),Newline(1:1-1:1),
+Newline(1:1-1:1),
+Newline(16:2-16:47),
+LowerIdent(17:1-17:12),OpAssign(17:13-17:14),OpBar(17:15-17:16),LowerIdent(17:16-17:21),OpBar(17:21-17:22),Newline(1:1-1:1),
+LowerIdent(18:5-18:6),OpAssign(18:7-18:8),LowerIdent(18:9-18:14),OpStar(18:15-18:16),Int(18:17-18:18),Newline(18:21-18:47),
+LowerIdent(19:5-19:6),OpPlus(19:7-19:8),LowerIdent(19:9-19:10),Newline(19:13-19:74),
+Newline(1:1-1:1),
+Newline(21:2-21:53),
+LowerIdent(22:1-22:8),OpAssign(22:9-22:10),LowerIdent(22:11-22:20),NoSpaceOpenRound(22:20-22:21),OpenCurly(22:21-22:22),CloseCurly(22:22-22:23),CloseRound(22:23-22:24),Newline(1:1-1:1),
+LowerIdent(23:1-23:8),OpAssign(23:9-23:10),LowerIdent(23:11-23:22),NoSpaceOpenRound(23:22-23:23),Int(23:23-23:24),CloseRound(23:24-23:25),Newline(1:1-1:1),
+LowerIdent(24:1-24:12),OpAssign(24:13-24:14),LowerIdent(24:15-24:16),OpPlus(24:17-24:18),LowerIdent(24:19-24:20),EndOfFile(24:54-24:54),
+~~~PARSE
+(file (1:1-24:54)
+	(module (1:1-1:10) (exposes (1:8-1:10)))
+	(statements
+		(decl (4:1-4:6)
+			(ident (4:1-4:2) "x")
+			(int (4:5-4:6) "5"))
+		(decl (5:1-5:7)
+			(ident (5:1-5:2) "y")
+			(int (5:5-5:7) "10"))
+		(decl (8:1-17:12)
+			(ident (8:1-8:10) "outerFunc")
+			(lambda (8:13-17:12)
+				(args (underscore))
+				(block (8:13-17:12)
+					(statements
+						(decl (9:5-9:11)
+							(ident (9:5-9:6) "x")
+							(int (9:9-9:11) "20"))
+						(decl (10:5-12:10)
+							(ident (10:5-10:16) "innerResult")
+							(ident (12:9-12:10) "" "z"))
+						(malformed_expr (12:11-12:12) "expr_unexpected_token")
+						(binop (12:13-13:10)
+							"+"
+							(ident (12:13-12:14) "" "x")
+							(ident (12:17-12:18) "" "y"))
+						(binop (13:9-14:16)
+							"+"
+							(ident (13:9-13:10) "" "z")
+							(int (13:13-13:14) "1"))
+						(ident (14:5-14:16) "" "innerResult")))))
+		(decl (17:1-24:54)
+			(ident (17:1-17:12) "anotherFunc")
+			(lambda (17:15-24:54)
+				(args (ident (17:16-17:21) "input"))
+				(block (17:15-24:54)
+					(statements
+						(decl (18:5-19:6)
+							(ident (18:5-18:6) "y")
+							(binop (18:9-19:6)
+								"*"
+								(ident (18:9-18:14) "" "input")
+								(int (18:17-18:18) "2")))
+						(binop (19:5-22:8)
+							"+"
+							(ident (19:5-19:6) "" "x")
+							(ident (19:9-19:10) "" "y"))
+						(decl (22:1-22:24)
+							(ident (22:1-22:8) "result1")
+							(apply (22:11-22:24)
+								(ident (22:11-22:20) "" "outerFunc")
+								(record (22:21-22:23))))
+						(decl (23:1-23:25)
+							(ident (23:1-23:8) "result2")
+							(apply (23:11-23:25)
+								(ident (23:11-23:22) "" "anotherFunc")
+								(int (23:23-23:24) "3")))
+						(decl (24:1-24:54)
+							(ident (24:1-24:12) "finalResult")
+							(binop (24:15-24:54)
+								"+"
+								(ident (24:15-24:16) "" "x")
+								(ident (24:19-24:20) "" "y")))))))))
+~~~FORMATTED
+module []
+
+# Top-level variables
+x = 5
+y = 10
+
+# Function that shadows outer variable
+outerFunc = |_| {
+	x = 20 # Should shadow top-level x
+	innerResult = 
+	# Block scope
+		z
+	
+	x + y # x should resolve to 20, y to 10
+	z + 1
+	innerResult
+
+	# Another function to test independent scoping
+}
+
+# Another function to test independent scoping
+anotherFunc = |input| {
+	y = input * 2 # Should shadow top-level y
+	x + y # x should resolve to top-level 5, y should resolve to local y
+
+	# Test that top-level variables are still accessible
+	result1 = outerFunc({})
+	result2 = anotherFunc(3)
+	finalResult = x + y
+}
+~~~CANONICALIZE
+(can_ir
+	(top_level_defs
+		(def
+			"let"
+			(pattern (4:1-4:2)
+				(assign (4:1-4:2) (ident "x")))
+			(expr (4:5-4:6)
+				(int (4:5-4:6)
+					(int_var "#2")
+					(precision_var "#1")
+					(literal "5")
+					(value "TODO")
+					(bound "u8"))))
+		(def
+			"let"
+			(pattern (5:1-5:2)
+				(assign (5:1-5:2) (ident "y")))
+			(expr (5:5-5:7)
+				(int (5:5-5:7)
+					(int_var "#6")
+					(precision_var "#5")
+					(literal "10")
+					(value "TODO")
+					(bound "u8"))))
+		(def
+			"let"
+			(pattern (8:1-8:10)
+				(assign (8:1-8:10) (ident "outerFunc")))
+			(expr (8:13-17:12) (runtime_error (8:13-17:12) "can_lambda_not_implemented")))
+		(def
+			"let"
+			(pattern (17:1-17:12)
+				(assign (17:1-17:12) (ident "anotherFunc")))
+			(expr (17:15-24:54) (runtime_error (17:15-24:54) "can_lambda_not_implemented")))))
+~~~END

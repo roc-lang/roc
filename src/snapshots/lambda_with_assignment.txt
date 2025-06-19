@@ -1,0 +1,104 @@
+~~~META
+description=Lambda with assignment statements in body
+type=file
+~~~SOURCE
+module []
+
+my_func_1 = |_|
+    x = 20
+    y = x + 5
+    y
+
+my_func_2 = |input|
+    result = input * 2
+    final = result + 1
+    final
+~~~PROBLEMS
+NOT IMPLEMENTED
+This feature is not yet implemented: canonicalize block expression
+NOT IMPLEMENTED
+Lambda expressions are not yet fully implemented.
+NOT IMPLEMENTED
+This feature is not yet implemented: canonicalize block expression
+NOT IMPLEMENTED
+Lambda expressions are not yet fully implemented.
+~~~TOKENS
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),
+Newline(1:1-1:1),
+LowerIdent(3:1-3:10),OpAssign(3:11-3:12),OpBar(3:13-3:14),Underscore(3:14-3:15),OpBar(3:15-3:16),Newline(1:1-1:1),
+LowerIdent(4:5-4:6),OpAssign(4:7-4:8),Int(4:9-4:11),Newline(1:1-1:1),
+LowerIdent(5:5-5:6),OpAssign(5:7-5:8),LowerIdent(5:9-5:10),OpPlus(5:11-5:12),Int(5:13-5:14),Newline(1:1-1:1),
+LowerIdent(6:5-6:6),Newline(1:1-1:1),
+Newline(1:1-1:1),
+LowerIdent(8:1-8:10),OpAssign(8:11-8:12),OpBar(8:13-8:14),LowerIdent(8:14-8:19),OpBar(8:19-8:20),Newline(1:1-1:1),
+LowerIdent(9:5-9:11),OpAssign(9:12-9:13),LowerIdent(9:14-9:19),OpStar(9:20-9:21),Int(9:22-9:23),Newline(1:1-1:1),
+LowerIdent(10:5-10:10),OpAssign(10:11-10:12),LowerIdent(10:13-10:19),OpPlus(10:20-10:21),Int(10:22-10:23),Newline(1:1-1:1),
+LowerIdent(11:5-11:10),EndOfFile(11:10-11:10),
+~~~PARSE
+(file (1:1-11:10)
+	(module (1:1-1:10) (exposes (1:8-1:10)))
+	(statements
+		(decl (3:1-8:10)
+			(ident (3:1-3:10) "my_func_1")
+			(lambda (3:13-8:10)
+				(args (underscore))
+				(block (3:13-8:10)
+					(statements
+						(decl (4:5-4:11)
+							(ident (4:5-4:6) "x")
+							(int (4:9-4:11) "20"))
+						(decl (5:5-6:6)
+							(ident (5:5-5:6) "y")
+							(binop (5:9-6:6)
+								"+"
+								(ident (5:9-5:10) "" "x")
+								(int (5:13-5:14) "5")))
+						(ident (6:5-6:6) "" "y")))))
+		(decl (8:1-11:10)
+			(ident (8:1-8:10) "my_func_2")
+			(lambda (8:13-11:10)
+				(args (ident (8:14-8:19) "input"))
+				(block (8:13-11:10)
+					(statements
+						(decl (9:5-10:10)
+							(ident (9:5-9:11) "result")
+							(binop (9:14-10:10)
+								"*"
+								(ident (9:14-9:19) "" "input")
+								(int (9:22-9:23) "2")))
+						(decl (10:5-11:10)
+							(ident (10:5-10:10) "final")
+							(binop (10:13-11:10)
+								"+"
+								(ident (10:13-10:19) "" "result")
+								(int (10:22-10:23) "1")))
+						(ident (11:5-11:10) "" "final")))))))
+~~~FORMATTED
+module []
+
+my_func_1 = |_| {
+	x = 20
+	y = x + 5
+	y
+
+}
+
+my_func_2 = |input| {
+	result = input * 2
+	final = result + 1
+	final
+}
+~~~CANONICALIZE
+(can_ir
+	(top_level_defs
+		(def
+			"let"
+			(pattern (3:1-3:10)
+				(assign (3:1-3:10) (ident "my_func_1")))
+			(expr (3:13-8:10) (runtime_error (3:13-8:10) "can_lambda_not_implemented")))
+		(def
+			"let"
+			(pattern (8:1-8:10)
+				(assign (8:1-8:10) (ident "my_func_2")))
+			(expr (8:13-11:10) (runtime_error (8:13-11:10) "can_lambda_not_implemented")))))
+~~~END

@@ -1,0 +1,218 @@
+~~~META
+description=Lambda with type declarations in body
+type=file
+~~~SOURCE
+module []
+
+my_func_with_type_decl = |_|
+    Count : U64
+    x : Count
+    x = 12
+    x
+
+my_func_multiple_types = |input|
+    Result : U64
+    Factor : U64
+
+    factor : Factor
+    factor = 2
+
+    result : Result
+    result = input * factor
+    result
+
+my_func_nested_types = |value|
+    Point : { x : F64, y : F64 }
+    Distance : F64
+
+    origin : Point
+    origin = { x: 0.0, y: 0.0 }
+
+    distance : Distance
+    distance = value * 1.5
+
+    distance
+~~~PROBLEMS
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+NOT IMPLEMENTED
+This feature is not yet implemented: canonicalize block expression
+NOT IMPLEMENTED
+Lambda expressions are not yet fully implemented.
+NOT IMPLEMENTED
+This feature is not yet implemented: canonicalize block expression
+NOT IMPLEMENTED
+Lambda expressions are not yet fully implemented.
+NOT IMPLEMENTED
+This feature is not yet implemented: canonicalize block expression
+NOT IMPLEMENTED
+Lambda expressions are not yet fully implemented.
+~~~TOKENS
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),
+Newline(1:1-1:1),
+LowerIdent(3:1-3:23),OpAssign(3:24-3:25),OpBar(3:26-3:27),Underscore(3:27-3:28),OpBar(3:28-3:29),Newline(1:1-1:1),
+UpperIdent(4:5-4:10),OpColon(4:11-4:12),UpperIdent(4:13-4:16),Newline(1:1-1:1),
+LowerIdent(5:5-5:6),OpColon(5:7-5:8),UpperIdent(5:9-5:14),Newline(1:1-1:1),
+LowerIdent(6:5-6:6),OpAssign(6:7-6:8),Int(6:9-6:11),Newline(1:1-1:1),
+LowerIdent(7:5-7:6),Newline(1:1-1:1),
+Newline(1:1-1:1),
+LowerIdent(9:1-9:23),OpAssign(9:24-9:25),OpBar(9:26-9:27),LowerIdent(9:27-9:32),OpBar(9:32-9:33),Newline(1:1-1:1),
+UpperIdent(10:5-10:11),OpColon(10:12-10:13),UpperIdent(10:14-10:17),Newline(1:1-1:1),
+UpperIdent(11:5-11:11),OpColon(11:12-11:13),UpperIdent(11:14-11:17),Newline(1:1-1:1),
+Newline(1:1-1:1),
+LowerIdent(13:5-13:11),OpColon(13:12-13:13),UpperIdent(13:14-13:20),Newline(1:1-1:1),
+LowerIdent(14:5-14:11),OpAssign(14:12-14:13),Int(14:14-14:15),Newline(1:1-1:1),
+Newline(1:1-1:1),
+LowerIdent(16:5-16:11),OpColon(16:12-16:13),UpperIdent(16:14-16:20),Newline(1:1-1:1),
+LowerIdent(17:5-17:11),OpAssign(17:12-17:13),LowerIdent(17:14-17:19),OpStar(17:20-17:21),LowerIdent(17:22-17:28),Newline(1:1-1:1),
+LowerIdent(18:5-18:11),Newline(1:1-1:1),
+Newline(1:1-1:1),
+LowerIdent(20:1-20:21),OpAssign(20:22-20:23),OpBar(20:24-20:25),LowerIdent(20:25-20:30),OpBar(20:30-20:31),Newline(1:1-1:1),
+UpperIdent(21:5-21:10),OpColon(21:11-21:12),OpenCurly(21:13-21:14),LowerIdent(21:15-21:16),OpColon(21:17-21:18),UpperIdent(21:19-21:22),Comma(21:22-21:23),LowerIdent(21:24-21:25),OpColon(21:26-21:27),UpperIdent(21:28-21:31),CloseCurly(21:32-21:33),Newline(1:1-1:1),
+UpperIdent(22:5-22:13),OpColon(22:14-22:15),UpperIdent(22:16-22:19),Newline(1:1-1:1),
+Newline(1:1-1:1),
+LowerIdent(24:5-24:11),OpColon(24:12-24:13),UpperIdent(24:14-24:19),Newline(1:1-1:1),
+LowerIdent(25:5-25:11),OpAssign(25:12-25:13),OpenCurly(25:14-25:15),LowerIdent(25:16-25:17),OpColon(25:17-25:18),Float(25:19-25:22),Comma(25:22-25:23),LowerIdent(25:24-25:25),OpColon(25:25-25:26),Float(25:27-25:30),CloseCurly(25:31-25:32),Newline(1:1-1:1),
+Newline(1:1-1:1),
+LowerIdent(27:5-27:13),OpColon(27:14-27:15),UpperIdent(27:16-27:24),Newline(1:1-1:1),
+LowerIdent(28:5-28:13),OpAssign(28:14-28:15),LowerIdent(28:16-28:21),OpStar(28:22-28:23),Float(28:24-28:27),Newline(1:1-1:1),
+Newline(1:1-1:1),
+LowerIdent(30:5-30:13),EndOfFile(30:13-30:13),
+~~~PARSE
+(file (1:1-30:13)
+	(module (1:1-1:10) (exposes (1:8-1:10)))
+	(statements
+		(decl (3:1-9:23)
+			(ident (3:1-3:23) "my_func_with_type_decl")
+			(lambda (3:26-9:23)
+				(args (underscore))
+				(block (3:26-9:23)
+					(statements
+						(tag (4:5-4:10) "Count")
+						(malformed_expr (4:11-4:12) "expr_unexpected_token")
+						(tag (4:13-4:16) "U64")
+						(type_anno (5:5-6:6) "x" (ty "Count"))
+						(decl (6:5-6:11)
+							(ident (6:5-6:6) "x")
+							(int (6:9-6:11) "12"))
+						(ident (7:5-7:6) "" "x")))))
+		(decl (9:1-20:21)
+			(ident (9:1-9:23) "my_func_multiple_types")
+			(lambda (9:26-20:21)
+				(args (ident (9:27-9:32) "input"))
+				(block (9:26-20:21)
+					(statements
+						(tag (10:5-10:11) "Result")
+						(malformed_expr (10:12-10:13) "expr_unexpected_token")
+						(tag (10:14-10:17) "U64")
+						(tag (11:5-11:11) "Factor")
+						(malformed_expr (11:12-11:13) "expr_unexpected_token")
+						(tag (11:14-11:17) "U64")
+						(type_anno (13:5-14:11) "factor" (ty "Factor"))
+						(decl (14:5-14:15)
+							(ident (14:5-14:11) "factor")
+							(int (14:14-14:15) "2"))
+						(type_anno (16:5-17:11) "result" (ty "Result"))
+						(decl (17:5-18:11)
+							(ident (17:5-17:11) "result")
+							(binop (17:14-18:11)
+								"*"
+								(ident (17:14-17:19) "" "input")
+								(ident (17:22-17:28) "" "factor")))
+						(ident (18:5-18:11) "" "result")))))
+		(decl (20:1-30:13)
+			(ident (20:1-20:21) "my_func_nested_types")
+			(lambda (20:24-30:13)
+				(args (ident (20:25-20:30) "value"))
+				(block (20:24-30:13)
+					(statements
+						(tag (21:5-21:10) "Point")
+						(malformed_expr (21:11-21:12) "expr_unexpected_token")
+						(record (21:13-21:33)
+							(field "x" (tag (21:19-21:22) "F64"))
+							(field "y" (tag (21:28-21:31) "F64")))
+						(tag (22:5-22:13) "Distance")
+						(malformed_expr (22:14-22:15) "expr_unexpected_token")
+						(tag (22:16-22:19) "F64")
+						(type_anno (24:5-25:11) "origin" (ty "Point"))
+						(decl (25:5-25:32)
+							(ident (25:5-25:11) "origin")
+							(record (25:14-25:32)
+								(field "x" (float (25:19-25:22) "0.0"))
+								(field "y" (float (25:27-25:30) "0.0"))))
+						(type_anno (27:5-28:13) "distance" (ty "Distance"))
+						(decl (28:5-30:13)
+							(ident (28:5-28:13) "distance")
+							(binop (28:16-30:13)
+								"*"
+								(ident (28:16-28:21) "" "value")
+								(float (28:24-28:27) "1.5")))
+						(ident (30:5-30:13) "" "distance")))))))
+~~~FORMATTED
+module []
+
+my_func_with_type_decl = |_| {
+	Count
+	
+	U64
+	x : Count
+	x = 12
+	x
+
+}
+
+my_func_multiple_types = |input| {
+	Result
+	
+	U64
+	Factor
+	
+	U64
+
+	factor : Factor
+	factor = 2
+
+	result : Result
+	result = input * factor
+	result
+
+}
+
+my_func_nested_types = |value| {
+	Point
+	
+	{ x: F64, y: F64 }
+	Distance
+	
+	F64
+
+	origin : Point
+	origin = { x: 0.0, y: 0.0 }
+
+	distance : Distance
+	distance = value * 1.5
+
+	distance
+}
+~~~CANONICALIZE
+(can_ir
+	(top_level_defs
+		(def
+			"let"
+			(pattern (3:1-3:23)
+				(assign (3:1-3:23) (ident "my_func_with_type_decl")))
+			(expr (3:26-9:23) (runtime_error (3:26-9:23) "can_lambda_not_implemented")))
+		(def
+			"let"
+			(pattern (9:1-9:23)
+				(assign (9:1-9:23) (ident "my_func_multiple_types")))
+			(expr (9:26-20:21) (runtime_error (9:26-20:21) "can_lambda_not_implemented")))
+		(def
+			"let"
+			(pattern (20:1-20:21)
+				(assign (20:1-20:21) (ident "my_func_nested_types")))
+			(expr (20:24-30:13) (runtime_error (20:24-30:13) "can_lambda_not_implemented")))))
+~~~END

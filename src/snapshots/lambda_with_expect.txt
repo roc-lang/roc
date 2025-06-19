@@ -1,0 +1,185 @@
+~~~META
+description=Lambda with expect statements in body
+type=file
+~~~SOURCE
+module []
+
+my_func_with_expect = |_|
+    expect 1 == 1
+    expect 2 + 2 == 4
+    True
+
+my_func_expect_and_assignment = |input|
+    expect input > 0
+    result = input * 2
+    expect result > input
+    result
+
+my_func_multiple_expects = |x, y|
+    expect x >= 0
+    expect y >= 0
+    sum = x + y
+    expect sum >= x
+    expect sum >= y
+    sum
+~~~PROBLEMS
+NOT IMPLEMENTED
+This feature is not yet implemented: canonicalize block expression
+NOT IMPLEMENTED
+Lambda expressions are not yet fully implemented.
+NOT IMPLEMENTED
+This feature is not yet implemented: canonicalize block expression
+NOT IMPLEMENTED
+Lambda expressions are not yet fully implemented.
+NOT IMPLEMENTED
+This feature is not yet implemented: canonicalize block expression
+NOT IMPLEMENTED
+Lambda expressions are not yet fully implemented.
+~~~TOKENS
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),
+Newline(1:1-1:1),
+LowerIdent(3:1-3:20),OpAssign(3:21-3:22),OpBar(3:23-3:24),Underscore(3:24-3:25),OpBar(3:25-3:26),Newline(1:1-1:1),
+KwExpect(4:5-4:11),Int(4:12-4:13),OpEquals(4:14-4:16),Int(4:17-4:18),Newline(1:1-1:1),
+KwExpect(5:5-5:11),Int(5:12-5:13),OpPlus(5:14-5:15),Int(5:16-5:17),OpEquals(5:18-5:20),Int(5:21-5:22),Newline(1:1-1:1),
+UpperIdent(6:5-6:9),Newline(1:1-1:1),
+Newline(1:1-1:1),
+LowerIdent(8:1-8:30),OpAssign(8:31-8:32),OpBar(8:33-8:34),LowerIdent(8:34-8:39),OpBar(8:39-8:40),Newline(1:1-1:1),
+KwExpect(9:5-9:11),LowerIdent(9:12-9:17),OpGreaterThan(9:18-9:19),Int(9:20-9:21),Newline(1:1-1:1),
+LowerIdent(10:5-10:11),OpAssign(10:12-10:13),LowerIdent(10:14-10:19),OpStar(10:20-10:21),Int(10:22-10:23),Newline(1:1-1:1),
+KwExpect(11:5-11:11),LowerIdent(11:12-11:18),OpGreaterThan(11:19-11:20),LowerIdent(11:21-11:26),Newline(1:1-1:1),
+LowerIdent(12:5-12:11),Newline(1:1-1:1),
+Newline(1:1-1:1),
+LowerIdent(14:1-14:25),OpAssign(14:26-14:27),OpBar(14:28-14:29),LowerIdent(14:29-14:30),Comma(14:30-14:31),LowerIdent(14:32-14:33),OpBar(14:33-14:34),Newline(1:1-1:1),
+KwExpect(15:5-15:11),LowerIdent(15:12-15:13),OpGreaterThanOrEq(15:14-15:16),Int(15:17-15:18),Newline(1:1-1:1),
+KwExpect(16:5-16:11),LowerIdent(16:12-16:13),OpGreaterThanOrEq(16:14-16:16),Int(16:17-16:18),Newline(1:1-1:1),
+LowerIdent(17:5-17:8),OpAssign(17:9-17:10),LowerIdent(17:11-17:12),OpPlus(17:13-17:14),LowerIdent(17:15-17:16),Newline(1:1-1:1),
+KwExpect(18:5-18:11),LowerIdent(18:12-18:15),OpGreaterThanOrEq(18:16-18:18),LowerIdent(18:19-18:20),Newline(1:1-1:1),
+KwExpect(19:5-19:11),LowerIdent(19:12-19:15),OpGreaterThanOrEq(19:16-19:18),LowerIdent(19:19-19:20),Newline(1:1-1:1),
+LowerIdent(20:5-20:8),EndOfFile(20:8-20:8),
+~~~PARSE
+(file (1:1-20:8)
+	(module (1:1-1:10) (exposes (1:8-1:10)))
+	(statements
+		(decl (3:1-8:30)
+			(ident (3:1-3:20) "my_func_with_expect")
+			(lambda (3:23-8:30)
+				(args (underscore))
+				(block (3:23-8:30)
+					(statements
+						(expect (4:5-5:11)
+							(binop (4:12-5:11)
+								"=="
+								(int (4:12-4:13) "1")
+								(int (4:17-4:18) "1")))
+						(expect (5:5-6:9)
+							(binop (5:12-6:9)
+								"=="
+								(binop (5:12-5:20)
+									"+"
+									(int (5:12-5:13) "2")
+									(int (5:16-5:17) "2"))
+								(int (5:21-5:22) "4")))
+						(tag (6:5-6:9) "True")))))
+		(decl (8:1-14:25)
+			(ident (8:1-8:30) "my_func_expect_and_assignment")
+			(lambda (8:33-14:25)
+				(args (ident (8:34-8:39) "input"))
+				(block (8:33-14:25)
+					(statements
+						(expect (9:5-10:11)
+							(binop (9:12-10:11)
+								">"
+								(ident (9:12-9:17) "" "input")
+								(int (9:20-9:21) "0")))
+						(decl (10:5-11:11)
+							(ident (10:5-10:11) "result")
+							(binop (10:14-11:11)
+								"*"
+								(ident (10:14-10:19) "" "input")
+								(int (10:22-10:23) "2")))
+						(expect (11:5-12:11)
+							(binop (11:12-12:11)
+								">"
+								(ident (11:12-11:18) "" "result")
+								(ident (11:21-11:26) "" "input")))
+						(ident (12:5-12:11) "" "result")))))
+		(decl (14:1-20:8)
+			(ident (14:1-14:25) "my_func_multiple_expects")
+			(lambda (14:28-20:8)
+				(args
+					(ident (14:29-14:30) "x")
+					(ident (14:32-14:33) "y"))
+				(block (14:28-20:8)
+					(statements
+						(expect (15:5-16:11)
+							(binop (15:12-16:11)
+								">="
+								(ident (15:12-15:13) "" "x")
+								(int (15:17-15:18) "0")))
+						(expect (16:5-17:8)
+							(binop (16:12-17:8)
+								">="
+								(ident (16:12-16:13) "" "y")
+								(int (16:17-16:18) "0")))
+						(decl (17:5-18:11)
+							(ident (17:5-17:8) "sum")
+							(binop (17:11-18:11)
+								"+"
+								(ident (17:11-17:12) "" "x")
+								(ident (17:15-17:16) "" "y")))
+						(expect (18:5-19:11)
+							(binop (18:12-19:11)
+								">="
+								(ident (18:12-18:15) "" "sum")
+								(ident (18:19-18:20) "" "x")))
+						(expect (19:5-20:8)
+							(binop (19:12-20:8)
+								">="
+								(ident (19:12-19:15) "" "sum")
+								(ident (19:19-19:20) "" "y")))
+						(ident (20:5-20:8) "" "sum")))))))
+~~~FORMATTED
+module []
+
+my_func_with_expect = |_| {
+	expect 1 == 1
+	expect 2 + 2 == 4
+	True
+
+}
+
+my_func_expect_and_assignment = |input| {
+	expect input > 0
+	result = input * 2
+	expect result > input
+	result
+
+}
+
+my_func_multiple_expects = |x, y| {
+	expect x >= 0
+	expect y >= 0
+	sum = x + y
+	expect sum >= x
+	expect sum >= y
+	sum
+}
+~~~CANONICALIZE
+(can_ir
+	(top_level_defs
+		(def
+			"let"
+			(pattern (3:1-3:20)
+				(assign (3:1-3:20) (ident "my_func_with_expect")))
+			(expr (3:23-8:30) (runtime_error (3:23-8:30) "can_lambda_not_implemented")))
+		(def
+			"let"
+			(pattern (8:1-8:30)
+				(assign (8:1-8:30) (ident "my_func_expect_and_assignment")))
+			(expr (8:33-14:25) (runtime_error (8:33-14:25) "can_lambda_not_implemented")))
+		(def
+			"let"
+			(pattern (14:1-14:25)
+				(assign (14:1-14:25) (ident "my_func_multiple_expects")))
+			(expr (14:28-20:8) (runtime_error (14:28-20:8) "can_lambda_not_implemented")))))
+~~~END

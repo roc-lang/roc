@@ -388,6 +388,12 @@ pub fn getPattern(store: *NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pattern {
         .pattern_underscore => return CIR.Pattern{ .underscore = .{
             .region = node.region,
         } },
+        .malformed => {
+            return CIR.Pattern{ .runtime_error = .{
+                .diagnostic = @enumFromInt(node.data_1),
+                .region = node.region,
+            } };
+        },
         else => {
             @panic("unreachable, node is not an pattern tag");
         },
@@ -715,6 +721,11 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern) CIR.Pattern.Idx {
         .underscore => |p| {
             node.tag = .pattern_underscore;
             node.region = p.region;
+        },
+        .runtime_error => |e| {
+            node.tag = .malformed;
+            node.region = e.region;
+            node.data_1 = @intFromEnum(e.diagnostic);
         },
     }
 

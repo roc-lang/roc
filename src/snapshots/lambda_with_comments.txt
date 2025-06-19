@@ -1,0 +1,119 @@
+~~~META
+description=Lambda with comments in body
+type=file
+~~~SOURCE
+module []
+
+my_func_with_comment = |_|
+    # This is a comment
+    x = 20
+    # Another comment
+    y = x + 5
+    y
+
+my_func_multiline_comment = |input|
+    # Process the input
+    # by doubling it first
+    doubled = input * 2
+    # then add one
+    result = doubled + 1
+    result
+~~~PROBLEMS
+NOT IMPLEMENTED
+This feature is not yet implemented: canonicalize block expression
+NOT IMPLEMENTED
+Lambda expressions are not yet fully implemented.
+NOT IMPLEMENTED
+This feature is not yet implemented: canonicalize block expression
+NOT IMPLEMENTED
+Lambda expressions are not yet fully implemented.
+~~~TOKENS
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),
+Newline(1:1-1:1),
+LowerIdent(3:1-3:21),OpAssign(3:22-3:23),OpBar(3:24-3:25),Underscore(3:25-3:26),OpBar(3:26-3:27),Newline(1:1-1:1),
+Newline(4:6-4:24),
+LowerIdent(5:5-5:6),OpAssign(5:7-5:8),Int(5:9-5:11),Newline(1:1-1:1),
+Newline(6:6-6:22),
+LowerIdent(7:5-7:6),OpAssign(7:7-7:8),LowerIdent(7:9-7:10),OpPlus(7:11-7:12),Int(7:13-7:14),Newline(1:1-1:1),
+LowerIdent(8:5-8:6),Newline(1:1-1:1),
+Newline(1:1-1:1),
+LowerIdent(10:1-10:26),OpAssign(10:27-10:28),OpBar(10:29-10:30),LowerIdent(10:30-10:35),OpBar(10:35-10:36),Newline(1:1-1:1),
+Newline(11:6-11:24),
+Newline(12:6-12:27),
+LowerIdent(13:5-13:12),OpAssign(13:13-13:14),LowerIdent(13:15-13:20),OpStar(13:21-13:22),Int(13:23-13:24),Newline(1:1-1:1),
+Newline(14:6-14:19),
+LowerIdent(15:5-15:11),OpAssign(15:12-15:13),LowerIdent(15:14-15:21),OpPlus(15:22-15:23),Int(15:24-15:25),Newline(1:1-1:1),
+LowerIdent(16:5-16:11),EndOfFile(16:11-16:11),
+~~~PARSE
+(file (1:1-16:11)
+	(module (1:1-1:10) (exposes (1:8-1:10)))
+	(statements
+		(decl (3:1-10:26)
+			(ident (3:1-3:21) "my_func_with_comment")
+			(lambda (3:24-10:26)
+				(args (underscore))
+				(block (3:24-10:26)
+					(statements
+						(decl (5:5-5:11)
+							(ident (5:5-5:6) "x")
+							(int (5:9-5:11) "20"))
+						(decl (7:5-8:6)
+							(ident (7:5-7:6) "y")
+							(binop (7:9-8:6)
+								"+"
+								(ident (7:9-7:10) "" "x")
+								(int (7:13-7:14) "5")))
+						(ident (8:5-8:6) "" "y")))))
+		(decl (10:1-16:11)
+			(ident (10:1-10:26) "my_func_multiline_comment")
+			(lambda (10:29-16:11)
+				(args (ident (10:30-10:35) "input"))
+				(block (10:29-16:11)
+					(statements
+						(decl (13:5-15:11)
+							(ident (13:5-13:12) "doubled")
+							(binop (13:15-15:11)
+								"*"
+								(ident (13:15-13:20) "" "input")
+								(int (13:23-13:24) "2")))
+						(decl (15:5-16:11)
+							(ident (15:5-15:11) "result")
+							(binop (15:14-16:11)
+								"+"
+								(ident (15:14-15:21) "" "doubled")
+								(int (15:24-15:25) "1")))
+						(ident (16:5-16:11) "" "result")))))))
+~~~FORMATTED
+module []
+
+my_func_with_comment = |_| {
+	# This is a comment
+	x = 20
+	# Another comment
+	y = x + 5
+	y
+
+}
+
+my_func_multiline_comment = |input| {
+	# Process the input
+	# by doubling it first
+	doubled = input * 2
+	# then add one
+	result = doubled + 1
+	result
+}
+~~~CANONICALIZE
+(can_ir
+	(top_level_defs
+		(def
+			"let"
+			(pattern (3:1-3:21)
+				(assign (3:1-3:21) (ident "my_func_with_comment")))
+			(expr (3:24-10:26) (runtime_error (3:24-10:26) "can_lambda_not_implemented")))
+		(def
+			"let"
+			(pattern (10:1-10:26)
+				(assign (10:1-10:26) (ident "my_func_multiline_comment")))
+			(expr (10:29-16:11) (runtime_error (10:29-16:11) "can_lambda_not_implemented")))))
+~~~END

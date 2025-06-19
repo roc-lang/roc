@@ -1,0 +1,392 @@
+~~~META
+description=Variable scoping with var keyword
+type=file
+~~~SOURCE
+# This should cause an error - var not allowed at top level
+var topLevelVar_ = 0
+
+# Regular function with var usage
+processItems = |items|
+    var count_ = 0
+    var total_ = 0
+
+    # Reassign vars within same function - should work
+    count_ = count_ + 1
+    total_ = total_ + 10
+
+    # Nested function - var reassignment should fail across function boundary
+    nestedFunc = |_|
+        count_ = count_ + 5  # Should cause error - different function
+        total_ = total_ * 2  # Should cause error - different function
+        count_
+
+    result = nestedFunc({})
+    total_ + result
+
+# Function showing var vs regular identifier independence
+testFunc = |input|
+    sum = input          # Regular identifier
+    var sum_ = input * 2 # Var with underscore - should not conflict
+
+    sum_ = sum_ + sum    # Reassign var - should work
+    sum + sum_           # Both should be accessible
+
+# Test var redeclaration (should produce shadowing warning)
+redeclareTest = |_|
+    var x_ = 5
+    var x_ = 10  # Redeclare var - should warn but proceed
+    x_ = 15      # Reassign - should work without warning
+    x_
+
+result = processItems([1, 2, 3])
+~~~PROBLEMS
+PARSER: missing_header
+PARSER: expr_unexpected_token
+PARSER: var_only_allowed_in_a_body
+PARSER: expr_unexpected_token
+PARSER: var_only_allowed_in_a_body
+INVALID LAMBDA
+The body of this lambda expression is not valid.
+NOT IMPLEMENTED
+Lambda expressions are not yet fully implemented.
+DUPLICATE DEFINITION
+The name `count_` is already defined in this scope.
+Choose a different name for this identifier, or remove the duplicate definition.
+DUPLICATE DEFINITION
+The name `total_` is already defined in this scope.
+Choose a different name for this identifier, or remove the duplicate definition.
+NOT IMPLEMENTED
+This feature is not yet implemented: canonicalize block expression
+NOT IMPLEMENTED
+Lambda expressions are not yet fully implemented.
+NOT IMPLEMENTED
+This feature is not yet implemented: canonicalize block expression
+NOT IMPLEMENTED
+Lambda expressions are not yet fully implemented.
+INVALID LAMBDA
+The body of this lambda expression is not valid.
+NOT IMPLEMENTED
+Lambda expressions are not yet fully implemented.
+DUPLICATE DEFINITION
+The name `x_` is already defined in this scope.
+Choose a different name for this identifier, or remove the duplicate definition.
+DUPLICATE DEFINITION
+The name `x_` is already defined in this scope.
+Choose a different name for this identifier, or remove the duplicate definition.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+~~~TOKENS
+Newline(1:2-1:60),
+KwVar(2:1-2:4),LowerIdent(2:5-2:17),OpAssign(2:18-2:19),Int(2:20-2:21),Newline(1:1-1:1),
+Newline(1:1-1:1),
+Newline(4:2-4:34),
+LowerIdent(5:1-5:13),OpAssign(5:14-5:15),OpBar(5:16-5:17),LowerIdent(5:17-5:22),OpBar(5:22-5:23),Newline(1:1-1:1),
+KwVar(6:5-6:8),LowerIdent(6:9-6:15),OpAssign(6:16-6:17),Int(6:18-6:19),Newline(1:1-1:1),
+KwVar(7:5-7:8),LowerIdent(7:9-7:15),OpAssign(7:16-7:17),Int(7:18-7:19),Newline(1:1-1:1),
+Newline(1:1-1:1),
+Newline(9:6-9:55),
+LowerIdent(10:5-10:11),OpAssign(10:12-10:13),LowerIdent(10:14-10:20),OpPlus(10:21-10:22),Int(10:23-10:24),Newline(1:1-1:1),
+LowerIdent(11:5-11:11),OpAssign(11:12-11:13),LowerIdent(11:14-11:20),OpPlus(11:21-11:22),Int(11:23-11:25),Newline(1:1-1:1),
+Newline(1:1-1:1),
+Newline(13:6-13:78),
+LowerIdent(14:5-14:15),OpAssign(14:16-14:17),OpBar(14:18-14:19),Underscore(14:19-14:20),OpBar(14:20-14:21),Newline(1:1-1:1),
+LowerIdent(15:9-15:15),OpAssign(15:16-15:17),LowerIdent(15:18-15:24),OpPlus(15:25-15:26),Int(15:27-15:28),Newline(15:31-15:71),
+LowerIdent(16:9-16:15),OpAssign(16:16-16:17),LowerIdent(16:18-16:24),OpStar(16:25-16:26),Int(16:27-16:28),Newline(16:31-16:71),
+LowerIdent(17:9-17:15),Newline(1:1-1:1),
+Newline(1:1-1:1),
+LowerIdent(19:5-19:11),OpAssign(19:12-19:13),LowerIdent(19:14-19:24),NoSpaceOpenRound(19:24-19:25),OpenCurly(19:25-19:26),CloseCurly(19:26-19:27),CloseRound(19:27-19:28),Newline(1:1-1:1),
+LowerIdent(20:5-20:11),OpPlus(20:12-20:13),LowerIdent(20:14-20:20),Newline(1:1-1:1),
+Newline(1:1-1:1),
+Newline(22:2-22:58),
+LowerIdent(23:1-23:9),OpAssign(23:10-23:11),OpBar(23:12-23:13),LowerIdent(23:13-23:18),OpBar(23:18-23:19),Newline(1:1-1:1),
+LowerIdent(24:5-24:8),OpAssign(24:9-24:10),LowerIdent(24:11-24:16),Newline(24:27-24:46),
+KwVar(25:5-25:8),LowerIdent(25:9-25:13),OpAssign(25:14-25:15),LowerIdent(25:16-25:21),OpStar(25:22-25:23),Int(25:24-25:25),Newline(25:27-25:69),
+Newline(1:1-1:1),
+LowerIdent(27:5-27:9),OpAssign(27:10-27:11),LowerIdent(27:12-27:16),OpPlus(27:17-27:18),LowerIdent(27:19-27:22),Newline(27:27-27:54),
+LowerIdent(28:5-28:8),OpPlus(28:9-28:10),LowerIdent(28:11-28:15),Newline(28:27-28:53),
+Newline(1:1-1:1),
+Newline(30:2-30:60),
+LowerIdent(31:1-31:14),OpAssign(31:15-31:16),OpBar(31:17-31:18),Underscore(31:18-31:19),OpBar(31:19-31:20),Newline(1:1-1:1),
+KwVar(32:5-32:8),LowerIdent(32:9-32:11),OpAssign(32:12-32:13),Int(32:14-32:15),Newline(1:1-1:1),
+KwVar(33:5-33:8),LowerIdent(33:9-33:11),OpAssign(33:12-33:13),Int(33:14-33:16),Newline(33:19-33:59),
+LowerIdent(34:5-34:7),OpAssign(34:8-34:9),Int(34:10-34:12),Newline(34:19-34:58),
+LowerIdent(35:5-35:7),Newline(1:1-1:1),
+Newline(1:1-1:1),
+LowerIdent(37:1-37:7),OpAssign(37:8-37:9),LowerIdent(37:10-37:22),NoSpaceOpenRound(37:22-37:23),OpenSquare(37:23-37:24),Int(37:24-37:25),Comma(37:25-37:26),Int(37:27-37:28),Comma(37:28-37:29),Int(37:30-37:31),CloseSquare(37:31-37:32),CloseRound(37:32-37:33),EndOfFile(37:33-37:33),
+~~~PARSE
+(file (1:2-37:33)
+	(malformed_header (2:1-2:4) "missing_header")
+	(statements
+		(decl (2:5-2:21)
+			(ident (2:5-2:17) "topLevelVar_")
+			(int (2:20-2:21) "0"))
+		(decl (5:1-6:8)
+			(ident (5:1-5:13) "processItems")
+			(lambda (5:16-6:8)
+				(args (ident (5:17-5:22) "items"))
+				(malformed_expr (6:5-6:8) "expr_unexpected_token")))
+		(decl (6:9-6:19)
+			(ident (6:9-6:15) "count_")
+			(int (6:18-6:19) "0"))
+		(malformed_stmt (7:5-7:8) "var_only_allowed_in_a_body")
+		(decl (7:9-7:19)
+			(ident (7:9-7:15) "total_")
+			(int (7:18-7:19) "0"))
+		(decl (10:5-11:11)
+			(ident (10:5-10:11) "count_")
+			(binop (10:14-11:11)
+				"+"
+				(ident (10:14-10:20) "" "count_")
+				(int (10:23-10:24) "1")))
+		(decl (11:5-14:15)
+			(ident (11:5-11:11) "total_")
+			(binop (11:14-14:15)
+				"+"
+				(ident (11:14-11:20) "" "total_")
+				(int (11:23-11:25) "10")))
+		(decl (14:5-23:9)
+			(ident (14:5-14:15) "nestedFunc")
+			(lambda (14:18-23:9)
+				(args (underscore))
+				(block (14:18-23:9)
+					(statements
+						(decl (15:9-16:15)
+							(ident (15:9-15:15) "count_")
+							(binop (15:18-16:15)
+								"+"
+								(ident (15:18-15:24) "" "count_")
+								(int (15:27-15:28) "5")))
+						(decl (16:9-17:15)
+							(ident (16:9-16:15) "total_")
+							(binop (16:18-17:15)
+								"*"
+								(ident (16:18-16:24) "" "total_")
+								(int (16:27-16:28) "2")))
+						(ident (17:9-17:15) "" "count_")
+						(decl (19:5-19:28)
+							(ident (19:5-19:11) "result")
+							(apply (19:14-19:28)
+								(ident (19:14-19:24) "" "nestedFunc")
+								(record (19:25-19:27))))
+						(binop (20:5-23:9)
+							"+"
+							(ident (20:5-20:11) "" "total_")
+							(ident (20:14-20:20) "" "result"))))))
+		(decl (23:1-31:14)
+			(ident (23:1-23:9) "testFunc")
+			(lambda (23:12-31:14)
+				(args (ident (23:13-23:18) "input"))
+				(block (23:12-31:14)
+					(statements
+						(decl (24:5-24:16)
+							(ident (24:5-24:8) "sum")
+							(ident (24:11-24:16) "" "input"))
+						(var (25:5-27:9)
+							(name "sum_")
+							(binop (25:16-27:9)
+								"*"
+								(ident (25:16-25:21) "" "input")
+								(int (25:24-25:25) "2")))
+						(decl (27:5-28:8)
+							(ident (27:5-27:9) "sum_")
+							(binop (27:12-28:8)
+								"+"
+								(ident (27:12-27:16) "" "sum_")
+								(ident (27:19-27:22) "" "sum")))
+						(binop (28:5-31:14)
+							"+"
+							(ident (28:5-28:8) "" "sum")
+							(ident (28:11-28:15) "" "sum_"))))))
+		(decl (31:1-32:8)
+			(ident (31:1-31:14) "redeclareTest")
+			(lambda (31:17-32:8)
+				(args (underscore))
+				(malformed_expr (32:5-32:8) "expr_unexpected_token")))
+		(decl (32:9-32:15)
+			(ident (32:9-32:11) "x_")
+			(int (32:14-32:15) "5"))
+		(malformed_stmt (33:5-33:8) "var_only_allowed_in_a_body")
+		(decl (33:9-33:16)
+			(ident (33:9-33:11) "x_")
+			(int (33:14-33:16) "10"))
+		(decl (34:5-34:12)
+			(ident (34:5-34:7) "x_")
+			(int (34:10-34:12) "15"))
+		(ident (35:5-35:7) "" "x_")
+		(decl (37:1-37:33)
+			(ident (37:1-37:7) "result")
+			(apply (37:10-37:33)
+				(ident (37:10-37:22) "" "processItems")
+				(list (37:23-37:32)
+					(int (37:24-37:25) "1")
+					(int (37:27-37:28) "2")
+					(int (37:30-37:31) "3"))))))
+~~~FORMATTED
+# This should cause an error - var not allowed at top level
+topLevelVar_ = 0
+
+# Regular function with var usage
+processItems = |items|
+	count_ = 0
+total_ = 0
+
+# Reassign vars within same function - should work
+count_ = count_ + 1
+total_ = total_ + 10
+
+# Nested function - var reassignment should fail across function boundary
+nestedFunc = |_| {
+	count_ = count_ + 5 # Should cause error - different function
+	total_ = total_ * 2 # Should cause error - different function
+	count_
+
+	result = nestedFunc({})
+	total_ + result
+
+	# Function showing var vs regular identifier independence
+}
+
+# Function showing var vs regular identifier independence
+testFunc = |input| {
+	sum = input # Regular identifier
+	var sum_ = input * 2 # Var with underscore - should not conflict
+
+	sum_ = sum_ + sum # Reassign var - should work
+	sum + sum_ # Both should be accessible
+
+	# Test var redeclaration (should produce shadowing warning)
+} # Both should be accessible
+
+# Test var redeclaration (should produce shadowing warning)
+redeclareTest = |_|
+	x_ = 5
+x_ = 10 # Redeclare var - should warn but proceed
+x_ = 15 # Reassign - should work without warning
+x_
+
+result = processItems([1, 2, 3])
+~~~CANONICALIZE
+(can_ir
+	(top_level_defs
+		(def
+			"let"
+			(pattern (2:5-2:17)
+				(assign (2:5-2:17) (ident "topLevelVar_")))
+			(expr (2:20-2:21)
+				(int (2:20-2:21)
+					(int_var "#2")
+					(precision_var "#1")
+					(literal "0")
+					(value "TODO")
+					(bound "u8"))))
+		(def
+			"let"
+			(pattern (5:1-5:13)
+				(assign (5:1-5:13) (ident "processItems")))
+			(expr (5:16-6:8) (runtime_error (5:16-6:8) "can_lambda_not_implemented")))
+		(def
+			"let"
+			(pattern (6:9-6:15)
+				(assign (6:9-6:15) (ident "count_")))
+			(expr (6:18-6:19)
+				(int (6:18-6:19)
+					(int_var "#9")
+					(precision_var "#8")
+					(literal "0")
+					(value "TODO")
+					(bound "u8"))))
+		(def
+			"let"
+			(pattern (7:9-7:15)
+				(assign (7:9-7:15) (ident "total_")))
+			(expr (7:18-7:19)
+				(int (7:18-7:19)
+					(int_var "#13")
+					(precision_var "#12")
+					(literal "0")
+					(value "TODO")
+					(bound "u8"))))
+		(def
+			"let"
+			(pattern (10:5-10:11) (runtime_error (10:5-10:11) "ident_already_in_scope"))
+			(expr (10:14-11:11)
+				(binop (10:14-11:11)
+					"add"
+					(lookup (10:14-10:20) (pattern_idx "13"))
+					(int (10:23-10:24)
+						(int_var "#19")
+						(precision_var "#18")
+						(literal "1")
+						(value "TODO")
+						(bound "u8")))))
+		(def
+			"let"
+			(pattern (11:5-11:11) (runtime_error (11:5-11:11) "ident_already_in_scope"))
+			(expr (11:14-14:15)
+				(binop (11:14-14:15)
+					"add"
+					(lookup (11:14-11:20) (pattern_idx "18"))
+					(int (11:23-11:25)
+						(int_var "#26")
+						(precision_var "#25")
+						(literal "10")
+						(value "TODO")
+						(bound "u8")))))
+		(def
+			"let"
+			(pattern (14:5-14:15)
+				(assign (14:5-14:15) (ident "nestedFunc")))
+			(expr (14:18-23:9) (runtime_error (14:18-23:9) "can_lambda_not_implemented")))
+		(def
+			"let"
+			(pattern (23:1-23:9)
+				(assign (23:1-23:9) (ident "testFunc")))
+			(expr (23:12-31:14) (runtime_error (23:12-31:14) "can_lambda_not_implemented")))
+		(def
+			"let"
+			(pattern (31:1-31:14)
+				(assign (31:1-31:14) (ident "redeclareTest")))
+			(expr (31:17-32:8) (runtime_error (31:17-32:8) "can_lambda_not_implemented")))
+		(def
+			"let"
+			(pattern (32:9-32:11)
+				(assign (32:9-32:11) (ident "x_")))
+			(expr (32:14-32:15)
+				(int (32:14-32:15)
+					(int_var "#40")
+					(precision_var "#39")
+					(literal "5")
+					(value "TODO")
+					(bound "u8"))))
+		(def
+			"let"
+			(pattern (33:9-33:11) (runtime_error (33:9-33:11) "ident_already_in_scope"))
+			(expr (33:14-33:16)
+				(int (33:14-33:16)
+					(int_var "#45")
+					(precision_var "#44")
+					(literal "10")
+					(value "TODO")
+					(bound "u8"))))
+		(def
+			"let"
+			(pattern (34:5-34:7) (runtime_error (34:5-34:7) "ident_already_in_scope"))
+			(expr (34:10-34:12)
+				(int (34:10-34:12)
+					(int_var "#50")
+					(precision_var "#49")
+					(literal "15")
+					(value "TODO")
+					(bound "u8"))))
+		(def
+			"let"
+			(pattern (37:1-37:7)
+				(assign (37:1-37:7) (ident "result")))
+			(expr (37:10-37:33)
+				(call (37:10-37:33)
+					(lookup (37:10-37:22) (pattern_idx "7"))
+					(list (37:23-37:32)
+						(elem_var "#0")
+						(elems "TODO each element")))))))
+~~~END

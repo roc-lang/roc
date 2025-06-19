@@ -91,6 +91,32 @@ pub fn expect(self: *Parser, expected: Token.Tag) !void {
     self.advance();
 }
 
+/// Checks if the current position indicates the start of an indented lambda body
+/// Returns true if we should parse the following content as a block body for a lambda
+fn shouldParseLambdaBodyAsBlock(self: *Parser) bool {
+    // Check for assignment: identifier = expression
+    if (self.peek() == .LowerIdent and self.peekNext() == .OpAssign) {
+        return true;
+    }
+
+    // Check for expect statement: expect expression
+    if (self.peek() == .KwExpect) {
+        return true;
+    }
+
+    // Check for type declaration: TypeName : Type
+    if (self.peek() == .UpperIdent and self.peekNext() == .OpColon) {
+        return true;
+    }
+
+    // Check for variable type annotation: varName : Type
+    if (self.peek() == .LowerIdent and self.peekNext() == .OpColon) {
+        return true;
+    }
+
+    return false;
+}
+
 /// Peek at the token at the current position
 ///
 /// **note** caller is responsible to ensure this isn't the last token
@@ -1474,7 +1500,54 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
             };
             const args = self.store.patternSpanFrom(scratch_top);
 
-            const body = self.parseExpr();
+            // Check if this is an indented block body by looking for statement patterns
+            const body = blk: {
+                // Check if we should parse the following content as a lambda body block
+                if (self.shouldParseLambdaBodyAsBlock()) {
+                    // Try to parse statements as a block
+                    const stmt_scratch_top = self.store.scratchStatementTop();
+                    var end = self.pos;
+                    var found_statements = false;
+
+                    // Parse statements until parseStmt returns null (natural block termination)
+                    while (self.peek() != .EndOfFile) {
+                        const statement = self.parseStmt() orelse break;
+                        self.store.addScratchStatement(statement);
+                        found_statements = true;
+                        end = self.pos;
+
+                        // Stop at obvious top-level keywords that can't be in a lambda body
+                        if (self.peek() == .KwImport or self.peek() == .KwModule or
+                            self.peek() == .KwApp or self.peek() == .KwPlatform or
+                            self.peek() == .KwPackage)
+                        {
+                            break;
+                        }
+
+                        // Stop when we encounter another top-level lambda definition
+                        if (self.peek() == .LowerIdent and self.peekNext() == .OpAssign and
+                            self.peekN(2) == .OpBar)
+                        {
+                            // This looks like another top-level function definition
+                            break;
+                        }
+                    }
+
+                    if (found_statements) {
+                        const statements = self.store.statementSpanFrom(stmt_scratch_top);
+                        break :blk self.store.addExpr(.{ .block = .{
+                            .statements = statements,
+                            .region = .{ .start = start, .end = end },
+                        } });
+                    } else {
+                        self.store.clearScratchStatementsFrom(stmt_scratch_top);
+                    }
+                }
+
+                // Fall back to single expression parsing
+                break :blk self.parseExpr();
+            };
+
             const body_region = self.store.nodes.items.items(.region)[@intFromEnum(body)];
             expr = self.store.addExpr(.{ .lambda = .{
                 .body = body,

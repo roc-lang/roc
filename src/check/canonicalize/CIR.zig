@@ -1307,6 +1307,11 @@ pub const Pattern = union(enum) {
     underscore: struct {
         region: Region,
     },
+    /// Compiles, but will crash if reached
+    runtime_error: struct {
+        diagnostic: Diagnostic.Idx,
+        region: Region,
+    },
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
@@ -1416,6 +1421,20 @@ pub const Pattern = union(enum) {
                 var node = sexpr.Expr.init(gpa, "underscore");
                 node.appendRegionInfo(gpa, ir.calcRegionInfo(p.region));
                 return node;
+            },
+            .runtime_error => |e| {
+                var runtime_err_node = sexpr.Expr.init(gpa, "runtime_error");
+                runtime_err_node.appendRegionInfo(gpa, ir.calcRegionInfo(e.region));
+
+                var buf = std.ArrayList(u8).init(gpa);
+                defer buf.deinit();
+
+                const diagnostic = ir.store.getDiagnostic(e.diagnostic);
+
+                buf.writer().writeAll(@tagName(diagnostic)) catch |err| exitOnOom(err);
+
+                runtime_err_node.appendString(gpa, buf.items);
+                return runtime_err_node;
             },
         }
     }
