@@ -26,30 +26,47 @@ const Num = types.Num;
 const TagUnion = types.TagUnion;
 const Tag = types.Tag;
 
-const BUILTIN_NUM_ADD: CIR.Pattern.Idx = @enumFromInt(0);
-const BUILTIN_NUM_SUB: CIR.Pattern.Idx = @enumFromInt(1);
+const BUILTIN_BOOL: CIR.Pattern.Idx = @enumFromInt(0);
+const BUILTIN_BOX: CIR.Pattern.Idx = @enumFromInt(1);
+const BUILTIN_DECODE: CIR.Pattern.Idx = @enumFromInt(2);
+const BUILTIN_DICT: CIR.Pattern.Idx = @enumFromInt(3);
+const BUILTIN_ENCODE: CIR.Pattern.Idx = @enumFromInt(4);
+const BUILTIN_HASH: CIR.Pattern.Idx = @enumFromInt(5);
+const BUILTIN_INSPECT: CIR.Pattern.Idx = @enumFromInt(6);
+const BUILTIN_LIST: CIR.Pattern.Idx = @enumFromInt(7);
+const BUILTIN_NUM: CIR.Pattern.Idx = @enumFromInt(8);
+const BUILTIN_RESULT: CIR.Pattern.Idx = @enumFromInt(9);
+const BUILTIN_SET: CIR.Pattern.Idx = @enumFromInt(10);
+const BUILTIN_STR: CIR.Pattern.Idx = @enumFromInt(11);
 
-pub fn init(self: *CIR, parse_ir: *AST, scope: *Scope) Self {
+const region_zero = Region.zero();
+
+fn addBuiltin(self: *CIR, scope: *Scope, ident_text: []const u8, idx: CIR.Pattern.Idx) void {
     const gpa = self.env.gpa;
     const ident_store = &self.env.idents;
+    const ident_add = self.env.idents.insert(gpa, base.Ident.for_text(ident_text), region_zero);
+    const pattern_idx_add = self.store.addPattern(CIR.Pattern{ .assign = .{ .ident = ident_add, .region = region_zero } });
+    _ = scope.levels.introduce(gpa, ident_store, .ident, ident_add, pattern_idx_add) catch {};
+    std.debug.assert(idx == pattern_idx_add);
+}
 
+pub fn init(self: *CIR, parse_ir: *AST, scope: *Scope) Self {
     // Simulate the builtins by adding to both the NodeStore and Scope
     // Not sure if this is how we want to do it long term, but want something to
     // make a start on canonicalization.
 
-    const region_zero = Region.zero();
-
-    // BUILTIN_NUM_ADD
-    const ident_add = self.env.idents.insert(gpa, base.Ident.for_text("add"), region_zero);
-    const pattern_idx_add = self.store.addPattern(CIR.Pattern{ .assign = .{ .ident = ident_add, .region = region_zero } });
-    _ = scope.levels.introduce(gpa, ident_store, .ident, ident_add, pattern_idx_add) catch {};
-    std.debug.assert(BUILTIN_NUM_ADD == pattern_idx_add);
-
-    // BUILTIN_NUM_SUB
-    const ident_sub = self.env.idents.insert(gpa, base.Ident.for_text("sub"), region_zero);
-    const pattern_idx_sub = self.store.addPattern(CIR.Pattern{ .assign = .{ .ident = ident_sub, .region = region_zero } });
-    _ = scope.levels.introduce(gpa, ident_store, .ident, ident_sub, pattern_idx_sub) catch {};
-    std.debug.assert(BUILTIN_NUM_SUB == pattern_idx_sub);
+    addBuiltin(self, scope, "Bool", BUILTIN_BOOL);
+    addBuiltin(self, scope, "Box", BUILTIN_BOX);
+    addBuiltin(self, scope, "Decode", BUILTIN_DECODE);
+    addBuiltin(self, scope, "Dict", BUILTIN_DICT);
+    addBuiltin(self, scope, "Encode", BUILTIN_ENCODE);
+    addBuiltin(self, scope, "Hash", BUILTIN_HASH);
+    addBuiltin(self, scope, "Inspect", BUILTIN_INSPECT);
+    addBuiltin(self, scope, "List", BUILTIN_LIST);
+    addBuiltin(self, scope, "Num", BUILTIN_NUM);
+    addBuiltin(self, scope, "Result", BUILTIN_RESULT);
+    addBuiltin(self, scope, "Set", BUILTIN_SET);
+    addBuiltin(self, scope, "Str", BUILTIN_STR);
 
     return .{
         .can_ir = self,

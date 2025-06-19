@@ -43,6 +43,6 @@ NO CHANGE
 			(expr (3:7-3:22)
 				(string (3:7-3:22)
 					(literal (3:8-3:14) "hello ")
-					(lookup (3:16-3:20) (pattern_idx "2"))
+					(lookup (3:16-3:20) (pattern_idx "12"))
 					(literal (3:21-3:21) ""))))))
 ~~~END
