@@ -57,7 +57,7 @@ NO CHANGE
 			(expr (4:5-4:10)
 				(binop (4:5-4:10)
 					"add"
-					(lookup (4:5-4:6) (pattern_idx "2"))
+					(lookup (4:5-4:6) (pattern_idx "12"))
 					(int (4:9-4:10)
 						(int_var "#7")
 						(precision_var "#6")
