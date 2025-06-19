@@ -2428,15 +2428,162 @@ test "addTypeVar - record with maximum fields" {
         .record => {
             const record_fields = layout_store.record_fields.rangeToSlice(layout_store.getRecordData(result_layout.data.record.idx).getFields());
             try testing.expectEqual(num_fields, record_fields.len);
+        },
+        else => try testing.expect(false),
+    }
+}
 
-            // Verify fields are sorted by alignment then name for the target used to create the layout
-            const target_usize = target.TargetUsize.u64; // Use u64 as default for field sorting verification
+test "addTypeVar - record field alignments differ between targets" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    var type_store = types_store.Store.init(gpa);
+    defer type_store.deinit();
+
+    var layout_store = try Store.init(&module_env, &type_store);
+    defer layout_store.deinit();
+
+    // Create fields with different alignments on 32-bit vs 64-bit
+    // str/pointer types have 4-byte alignment on 32-bit, 8-byte on 64-bit
+    const str_field_name = module_env.idents.insert(gpa, base.Ident.for_text("str_field"), base.Region.zero());
+    const u64_field_name = module_env.idents.insert(gpa, base.Ident.for_text("u64_field"), base.Region.zero());
+    const u32_field_name = module_env.idents.insert(gpa, base.Ident.for_text("u32_field"), base.Region.zero());
+    const u8_field_name = module_env.idents.insert(gpa, base.Ident.for_text("u8_field"), base.Region.zero());
+
+    const str_var = type_store.freshFromContent(.{ .structure = .str });
+    const u64_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u64 } } } });
+    const u32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u32 } } } });
+    const u8_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } });
+
+    const fields_slice = type_store.record_fields.appendSlice(gpa, &[_]types.RecordField{
+        .{ .name = str_field_name, .var_ = str_var },
+        .{ .name = u64_field_name, .var_ = u64_var },
+        .{ .name = u32_field_name, .var_ = u32_var },
+        .{ .name = u8_field_name, .var_ = u8_var },
+    });
+
+    const empty_ext = type_store.freshFromContent(.{ .structure = .empty_record });
+    const record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields_slice, .ext = empty_ext } } });
+
+    const result = try layout_store.addTypeVar(record_var);
+    const result_layout = layout_store.getLayout(result);
+
+    switch (result_layout.tag) {
+        .record => {
+            const record_fields = layout_store.record_fields.rangeToSlice(layout_store.getRecordData(result_layout.data.record.idx).getFields());
+            try testing.expectEqual(@as(usize, 4), record_fields.len);
+
+            // Find each field by name and verify its alignment on different targets
+            var str_layout: ?layout.Layout = null;
+            var u64_layout: ?layout.Layout = null;
+            var u32_layout: ?layout.Layout = null;
+            var u8_layout: ?layout.Layout = null;
+
+            for (record_fields.items(.name), record_fields.items(.layout)) |name, layout_idx| {
+                const field_name = module_env.idents.getText(name);
+                const field_layout = layout_store.getLayout(layout_idx);
+
+                if (std.mem.eql(u8, field_name, "str_field")) {
+                    str_layout = field_layout;
+                } else if (std.mem.eql(u8, field_name, "u64_field")) {
+                    u64_layout = field_layout;
+                } else if (std.mem.eql(u8, field_name, "u32_field")) {
+                    u32_layout = field_layout;
+                } else if (std.mem.eql(u8, field_name, "u8_field")) {
+                    u8_layout = field_layout;
+                }
+            }
+
+            // Verify all fields were found
+            try testing.expect(str_layout != null);
+            try testing.expect(u64_layout != null);
+            try testing.expect(u32_layout != null);
+            try testing.expect(u8_layout != null);
+
+            // Verify alignments on 32-bit target
+            const target_32 = target.TargetUsize.u32;
+            try testing.expectEqual(@as(u32, 4), str_layout.?.alignment(target_32).toByteUnits());
+            try testing.expectEqual(@as(u32, 8), u64_layout.?.alignment(target_32).toByteUnits());
+            try testing.expectEqual(@as(u32, 4), u32_layout.?.alignment(target_32).toByteUnits());
+            try testing.expectEqual(@as(u32, 1), u8_layout.?.alignment(target_32).toByteUnits());
+
+            // Verify alignments on 64-bit target
+            const target_64 = target.TargetUsize.u64;
+            try testing.expectEqual(@as(u32, 8), str_layout.?.alignment(target_64).toByteUnits());
+            try testing.expectEqual(@as(u32, 8), u64_layout.?.alignment(target_64).toByteUnits());
+            try testing.expectEqual(@as(u32, 4), u32_layout.?.alignment(target_64).toByteUnits());
+            try testing.expectEqual(@as(u32, 1), u8_layout.?.alignment(target_64).toByteUnits());
+
+            // Verify that str field has different alignment on different targets
+            try testing.expect(str_layout.?.alignment(target_32).toByteUnits() !=
+                str_layout.?.alignment(target_64).toByteUnits());
+        },
+        else => try testing.expect(false),
+    }
+}
+
+test "addTypeVar - record field sorting follows alignment then name order" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    var type_store = types_store.Store.init(gpa);
+    defer type_store.deinit();
+
+    var layout_store = try Store.init(&module_env, &type_store);
+    defer layout_store.deinit();
+
+    // Create fields with different alignments to test sorting
+    // Names are chosen to test alphabetical sorting within same alignment group
+    const zebra_field_name = module_env.idents.insert(gpa, base.Ident.for_text("zebra"), base.Region.zero());
+    const apple_field_name = module_env.idents.insert(gpa, base.Ident.for_text("apple"), base.Region.zero());
+    const banana_field_name = module_env.idents.insert(gpa, base.Ident.for_text("banana"), base.Region.zero());
+    const carrot_field_name = module_env.idents.insert(gpa, base.Ident.for_text("carrot"), base.Region.zero());
+
+    // Create fields with specific alignments:
+    // zebra: u64 (8-byte alignment)
+    // apple: u32 (4-byte alignment)
+    // banana: u32 (4-byte alignment)
+    // carrot: u8 (1-byte alignment)
+    const zebra_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u64 } } } });
+    const apple_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u32 } } } });
+    const banana_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u32 } } } });
+    const carrot_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } });
+
+    const fields_slice = type_store.record_fields.appendSlice(gpa, &[_]types.RecordField{
+        .{ .name = zebra_field_name, .var_ = zebra_var },
+        .{ .name = apple_field_name, .var_ = apple_var },
+        .{ .name = banana_field_name, .var_ = banana_var },
+        .{ .name = carrot_field_name, .var_ = carrot_var },
+    });
+
+    const empty_ext = type_store.freshFromContent(.{ .structure = .empty_record });
+    const record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields_slice, .ext = empty_ext } } });
+
+    const result = try layout_store.addTypeVar(record_var);
+    const result_layout = layout_store.getLayout(result);
+
+    switch (result_layout.tag) {
+        .record => {
+            const record_fields = layout_store.record_fields.rangeToSlice(layout_store.getRecordData(result_layout.data.record.idx).getFields());
+            try testing.expectEqual(@as(usize, 4), record_fields.len);
+
+            // Note: The actual target used for sorting depends on the native platform,
+            // but we can verify the sorting principles are followed
+            const native_target = if (@sizeOf(usize) == 8) target.TargetUsize.u64 else target.TargetUsize.u32;
+
+            // Verify fields are sorted by alignment (descending) then by name (ascending)
             var prev_alignment: ?std.mem.Alignment = null;
             var prev_name_in_group: ?[]const u8 = null;
 
             for (record_fields.items(.layout), record_fields.items(.name)) |field_layout_idx, field_name| {
-                const field_layout = layout_store.layouts.get(@enumFromInt(@intFromEnum(field_layout_idx)));
-                const field_alignment = field_layout.alignment(target_usize);
+                const field_layout = layout_store.getLayout(field_layout_idx);
+                const field_alignment = field_layout.alignment(native_target);
                 const field_name_str = module_env.idents.getText(field_name);
 
                 if (prev_alignment) |prev| {
@@ -2450,8 +2597,11 @@ test "addTypeVar - record with maximum fields" {
                         }
                         prev_name_in_group = field_name_str;
                     } else {
+                        // Different alignment group, reset name tracking
                         prev_name_in_group = field_name_str;
                     }
+                } else {
+                    prev_name_in_group = field_name_str;
                 }
 
                 prev_alignment = field_alignment;
@@ -2459,6 +2609,48 @@ test "addTypeVar - record with maximum fields" {
         },
         else => try testing.expect(false),
     }
+}
+
+test "addTypeVar - pointer types have target-dependent alignment" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    var type_store = types_store.Store.init(gpa);
+    defer type_store.deinit();
+
+    var layout_store = try Store.init(&module_env, &type_store);
+    defer layout_store.deinit();
+
+    // Create types that contain pointers
+    const str_var = type_store.freshFromContent(.{ .structure = .str });
+    const box_var = type_store.freshFromContent(.{ .structure = .{ .box = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } }) } });
+    const list_var = type_store.freshFromContent(.{ .structure = .{ .list = type_store.freshFromContent(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u32 } } } }) } });
+
+    // Convert to layouts
+    const str_idx = try layout_store.addTypeVar(str_var);
+    const box_idx = try layout_store.addTypeVar(box_var);
+    const list_idx = try layout_store.addTypeVar(list_var);
+
+    const str_layout = layout_store.getLayout(str_idx);
+    const box_layout = layout_store.getLayout(box_idx);
+    const list_layout = layout_store.getLayout(list_idx);
+
+    // Verify pointer types have different alignment on different targets
+    const target_32 = target.TargetUsize.u32;
+    const target_64 = target.TargetUsize.u64;
+
+    // All pointer-containing types should have 4-byte alignment on 32-bit
+    try testing.expectEqual(@as(u32, 4), str_layout.alignment(target_32).toByteUnits());
+    try testing.expectEqual(@as(u32, 4), box_layout.alignment(target_32).toByteUnits());
+    try testing.expectEqual(@as(u32, 4), list_layout.alignment(target_32).toByteUnits());
+
+    // All pointer-containing types should have 8-byte alignment on 64-bit
+    try testing.expectEqual(@as(u32, 8), str_layout.alignment(target_64).toByteUnits());
+    try testing.expectEqual(@as(u32, 8), box_layout.alignment(target_64).toByteUnits());
+    try testing.expectEqual(@as(u32, 8), list_layout.alignment(target_64).toByteUnits());
 }
 
 test "addTypeVar - record with very long field names" {

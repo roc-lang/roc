@@ -200,6 +200,7 @@ pub const TupleData = struct {
         return self.fields.toRange(TupleField.SafeMultiList.Idx);
     }
 };
+
 /// Size and alignment information
 pub const SizeAlign = packed struct(u36) {
     size: u30, // u30 can represent sizes up to 1 GiB
