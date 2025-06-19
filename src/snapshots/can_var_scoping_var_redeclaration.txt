@@ -57,51 +57,53 @@ LowerIdent(11:1-11:7),OpAssign(11:8-11:9),LowerIdent(11:10-11:23),NoSpaceOpenRou
 NO CHANGE
 ~~~CANONICALIZE
 (can_ir
-	(def
-		"let"
-		(pattern (4:1-4:14)
-			"pattern_idx_2"
-			(assign (4:1-4:14) (ident "redeclareTest")))
-		(expr (4:17-9:2)
-			(lambda (4:17-9:2)
-				(args (arg "pattern_idx_3" (underscore (4:18-4:19))))
-				(block (4:21-9:2)
-					(stmts
-						(var
-							"pattern_idx_7"
-							(assign (5:2-6:5) (ident "x_"))
-							(int (5:11-5:12)
-								(int_var "#3")
-								(precision_var "#2")
-								(literal "5")
-								(value "TODO")
-								(bound "u8")))
-						(var
-							"pattern_idx_12"
-							(assign (6:2-7:4) (ident "x_"))
-							(int (6:11-6:13)
-								(int_var "#6")
-								(precision_var "#5")
-								(literal "10")
-								(value "TODO")
-								(bound "u8")))
-						(reassign
-							"pattern_idx_7"
-							(int (7:7-7:9)
-								(int_var "#9")
-								(precision_var "#8")
-								(literal "15")
-								(value "TODO")
-								(bound "u8")))
-						(TODO_stmt))
-					(final_expr (lookup (8:2-8:4) "pattern_idx_7"))))))
-	(def
-		"let"
-		(pattern (11:1-11:7)
-			"pattern_idx_24"
-			(assign (11:1-11:7) (ident "result")))
-		(expr (11:10-11:27)
-			(call (11:10-11:27)
-				(lookup (11:10-11:23) "pattern_idx_2")
-				(runtime_error (1:1-1:1) "not_implemented")))))
+	(d_let
+		(def_pattern
+			(p_assign (4:1-4:14)
+				(pid 2)
+				(ident "redeclareTest")))
+		(def_expr
+			(e_lambda (4:17-9:2)
+				(args (p_underscore (4:18-4:19) (pid 3)))
+				(e_block (4:21-9:2)
+					(s_var (5:2-6:5)
+						(pid 7)
+						(p_assign (5:2-6:5)
+							(pid 7)
+							(ident "x_"))
+						(e_int (5:11-5:12)
+							(int_var "#3")
+							(precision_var "#2")
+							(literal "5")
+							(value "TODO")
+							(bound "u8")))
+					(s_var (6:2-7:4)
+						(pid 12)
+						(p_assign (6:2-7:4)
+							(pid 12)
+							(ident "x_"))
+						(e_int (6:11-6:13)
+							(int_var "#6")
+							(precision_var "#5")
+							(literal "10")
+							(value "TODO")
+							(bound "u8")))
+					(s_reassign (7:2-7:4)
+						(pid 7)
+						(e_int (7:7-7:9)
+							(int_var "#9")
+							(precision_var "#8")
+							(literal "15")
+							(value "TODO")
+							(bound "u8")))
+					(e_lookup (8:2-8:4) (pid 7))))))
+	(d_let
+		(def_pattern
+			(p_assign (11:1-11:7)
+				(pid 23)
+				(ident "result")))
+		(def_expr
+			(e_call (11:10-11:27)
+				(e_lookup (11:10-11:23) (pid 2))
+				(e_runtime_error (1:1-1:1) "not_implemented")))))
 ~~~END

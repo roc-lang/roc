@@ -28,13 +28,13 @@ module []
 topLevelVar_ = 0
 ~~~CANONICALIZE
 (can_ir
-	(def
-		"let"
-		(pattern (4:5-4:17)
-			"pattern_idx_2"
-			(assign (4:5-4:17) (ident "topLevelVar_")))
-		(expr (4:20-4:21)
-			(int (4:20-4:21)
+	(d_let
+		(def_pattern
+			(p_assign (4:5-4:17)
+				(pid 2)
+				(ident "topLevelVar_")))
+		(def_expr
+			(e_int (4:20-4:21)
 				(int_var "#2")
 				(precision_var "#1")
 				(literal "0")

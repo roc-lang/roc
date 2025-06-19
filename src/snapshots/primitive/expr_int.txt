@@ -21,13 +21,13 @@ LowerIdent(2:1-2:4),OpAssign(2:5-2:6),Int(2:7-2:9),EndOfFile(2:9-2:9),
 NO CHANGE
 ~~~CANONICALIZE
 (can_ir
-	(def
-		"let"
-		(pattern (2:1-2:4)
-			"pattern_idx_2"
-			(assign (2:1-2:4) (ident "foo")))
-		(expr (2:7-2:9)
-			(int (2:7-2:9)
+	(d_let
+		(def_pattern
+			(p_assign (2:1-2:4)
+				(pid 2)
+				(ident "foo")))
+		(def_expr
+			(e_int (2:7-2:9)
 				(int_var "#2")
 				(precision_var "#1")
 				(literal "42")

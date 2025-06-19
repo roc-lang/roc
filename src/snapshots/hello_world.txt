@@ -43,15 +43,15 @@ LowerIdent(5:1-5:6),OpAssign(5:7-5:8),OpBar(5:9-5:10),Underscore(5:10-5:11),OpBa
 NO CHANGE
 ~~~CANONICALIZE
 (can_ir
-	(def
-		"let"
-		(pattern (5:1-5:6)
-			"pattern_idx_3"
-			(assign (5:1-5:6) (ident "main!")))
-		(expr (5:9-5:42)
-			(lambda (5:9-5:42)
-				(args (arg "pattern_idx_4" (underscore (5:10-5:11))))
-				(call (5:13-5:42)
-					(runtime_error (5:13-5:25) "ident_not_in_scope")
-					(string (5:26-5:41) (literal (5:27-5:40) "Hello, world!")))))))
+	(d_let
+		(def_pattern
+			(p_assign (5:1-5:6)
+				(pid 3)
+				(ident "main!")))
+		(def_expr
+			(e_lambda (5:9-5:42)
+				(args (p_underscore (5:10-5:11) (pid 4)))
+				(e_call (5:13-5:42)
+					(e_runtime_error (5:13-5:25) "ident_not_in_scope")
+					(e_string (5:26-5:41) (e_literal (5:27-5:40) "Hello, world!")))))))
 ~~~END

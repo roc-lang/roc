@@ -114,77 +114,85 @@ CloseCurly(21:1-21:2),EndOfFile(21:2-21:2),
 NO CHANGE
 ~~~CANONICALIZE
 (can_ir
-	(def
-		"let"
-		(pattern (4:1-4:13)
-			"pattern_idx_2"
-			(assign (4:1-4:13) (ident "processItems")))
-		(expr (4:16-21:2)
-			(lambda (4:16-21:2)
+	(d_let
+		(def_pattern
+			(p_assign (4:1-4:13)
+				(pid 2)
+				(ident "processItems")))
+		(def_expr
+			(e_lambda (4:16-21:2)
 				(args
-					(arg
-						"pattern_idx_3"
-						(assign (4:17-4:22) (ident "items"))))
-				(block (4:24-21:2)
-					(stmts
-						(var
-							"pattern_idx_7"
-							(assign (5:2-6:5) (ident "count_"))
-							(int (5:15-5:16)
-								(int_var "#3")
-								(precision_var "#2")
-								(literal "0")
-								(value "TODO")
-								(bound "u8")))
-						(var
-							"pattern_idx_12"
-							(assign (6:2-9:8) (ident "total_"))
-							(int (6:15-6:16)
-								(int_var "#6")
-								(precision_var "#5")
-								(literal "0")
-								(value "TODO")
-								(bound "u8")))
-						(reassign
-							"pattern_idx_7"
-							(binop (9:11-10:8)
-								"add"
-								(lookup (9:11-9:17) "pattern_idx_7")
-								(int (9:20-9:21)
-									(int_var "#10")
-									(precision_var "#9")
-									(literal "1")
-									(value "TODO")
-									(bound "u8"))))
-						(reassign
-							"pattern_idx_12"
-							(binop (10:11-13:12)
-								"add"
-								(lookup (10:11-10:17) "pattern_idx_12")
-								(int (10:20-10:22)
-									(int_var "#15")
-									(precision_var "#14")
-									(literal "10")
-									(value "TODO")
-									(bound "u8"))))
-						(let
-							"pattern_idx_26"
-							(assign (13:2-13:12) (ident "nestedFunc"))
-							(lambda (13:15-17:3)
-								(args (arg "pattern_idx_27" (underscore (13:16-13:17))))
-								(block (13:19-17:3)
-									(stmts (TODO_stmt) (TODO_stmt) (TODO_stmt))
-									(final_expr (lookup (16:3-16:9) "pattern_idx_7")))))
-						(let
-							"pattern_idx_40"
-							(assign (19:2-19:8) (ident "result"))
-							(call (19:11-19:25)
-								(lookup (19:11-19:21) "pattern_idx_26")
-								(runtime_error (1:1-1:1) "not_implemented")))
-						(TODO_stmt))
-					(final_expr
-						(binop (20:2-21:2)
+					(p_assign (4:17-4:22)
+						(pid 3)
+						(ident "items")))
+				(e_block (4:24-21:2)
+					(s_var (5:2-6:5)
+						(pid 7)
+						(p_assign (5:2-6:5)
+							(pid 7)
+							(ident "count_"))
+						(e_int (5:15-5:16)
+							(int_var "#3")
+							(precision_var "#2")
+							(literal "0")
+							(value "TODO")
+							(bound "u8")))
+					(s_var (6:2-9:8)
+						(pid 12)
+						(p_assign (6:2-9:8)
+							(pid 12)
+							(ident "total_"))
+						(e_int (6:15-6:16)
+							(int_var "#6")
+							(precision_var "#5")
+							(literal "0")
+							(value "TODO")
+							(bound "u8")))
+					(s_reassign (9:2-9:8)
+						(pid 7)
+						(e_binop (9:11-10:8)
 							"add"
-							(lookup (20:2-20:8) "pattern_idx_12")
-							(lookup (20:11-20:17) "pattern_idx_40"))))))))
+							(e_lookup (9:11-9:17) (pid 7))
+							(e_int (9:20-9:21)
+								(int_var "#10")
+								(precision_var "#9")
+								(literal "1")
+								(value "TODO")
+								(bound "u8"))))
+					(s_reassign (10:2-10:8)
+						(pid 12)
+						(e_binop (10:11-13:12)
+							"add"
+							(e_lookup (10:11-10:17) (pid 12))
+							(e_int (10:20-10:22)
+								(int_var "#15")
+								(precision_var "#14")
+								(literal "10")
+								(value "TODO")
+								(bound "u8"))))
+					(s_let (13:2-17:3)
+						(p_assign (13:2-13:12)
+							(pid 26)
+							(ident "nestedFunc"))
+						(e_lambda (13:15-17:3)
+							(args (p_underscore (13:16-13:17) (pid 27)))
+							(e_block (13:19-17:3)
+								(s_reassign (14:3-14:9)
+									(pid 7)
+									(e_runtime_error (14:3-14:9) "var_across_function_boundary"))
+								(s_reassign (15:3-15:9)
+									(pid 12)
+									(e_runtime_error (15:3-15:9) "var_across_function_boundary"))
+								(e_lookup (16:3-16:9) (pid 7)))))
+					(s_let (19:2-19:25)
+						(p_assign (19:2-19:8)
+							(pid 39)
+							(ident "result"))
+						(e_call (19:11-19:25)
+							(e_lookup (19:11-19:21) (pid 26))
+							(e_runtime_error (1:1-1:1) "not_implemented")))
+					(e_binop (20:2-21:2)
+						"add"
+						(e_lookup (20:2-20:8) (pid 12))
+						(e_lookup (20:11-20:17) (pid 39))))))))
 ~~~END

@@ -1090,147 +1090,155 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 NO CHANGE
 ~~~CANONICALIZE
 (can_ir
-	(def
-		"let"
-		(pattern (65:1-65:16)
-			"pattern_idx_17"
-			(assign (65:1-65:16) (ident "add_one_oneline")))
-		(expr (65:19-67:8)
-			(lambda (65:19-67:8)
+	(d_let
+		(def_pattern
+			(p_assign (65:1-65:16)
+				(pid 17)
+				(ident "add_one_oneline")))
+		(def_expr
+			(e_lambda (65:19-67:8)
 				(args
-					(arg
-						"pattern_idx_18"
-						(assign (65:20-65:23) (ident "num"))))
-				(runtime_error (1:1-1:1) "not_implemented"))))
-	(def
-		"let"
-		(pattern (68:1-68:8)
-			"pattern_idx_24"
-			(assign (68:1-68:8) (ident "add_one")))
-		(expr (68:11-78:2)
-			(lambda (68:11-78:2)
+					(p_assign (65:20-65:23)
+						(pid 18)
+						(ident "num")))
+				(e_runtime_error (1:1-1:1) "not_implemented"))))
+	(d_let
+		(def_pattern
+			(p_assign (68:1-68:8)
+				(pid 24)
+				(ident "add_one")))
+		(def_expr
+			(e_lambda (68:11-78:2)
 				(args
-					(arg
-						"pattern_idx_25"
-						(assign (68:12-68:15) (ident "num"))))
-				(block (68:17-78:2)
-					(stmts
-						(let
-							"pattern_idx_26"
-							(assign (69:2-69:7) (ident "other"))
-							(int (69:10-69:11)
-								(int_var "#7")
-								(precision_var "#6")
-								(literal "1")
-								(value "TODO")
-								(bound "u8")))
-						(TODO_stmt))
-					(final_expr (runtime_error (1:1-1:1) "not_implemented"))))))
-	(def
-		"let"
-		(pattern (80:1-80:11)
-			"pattern_idx_38"
-			(assign (80:1-80:11) (ident "match_time")))
-		(expr (80:14-140:7)
-			(lambda (80:14-140:7)
+					(p_assign (68:12-68:15)
+						(pid 25)
+						(ident "num")))
+				(e_block (68:17-78:2)
+					(s_let (69:2-69:11)
+						(p_assign (69:2-69:7)
+							(pid 26)
+							(ident "other"))
+						(e_int (69:10-69:11)
+							(int_var "#7")
+							(precision_var "#6")
+							(literal "1")
+							(value "TODO")
+							(bound "u8")))
+					(e_runtime_error (1:1-1:1) "not_implemented")))))
+	(d_let
+		(def_pattern
+			(p_assign (80:1-80:11)
+				(pid 37)
+				(ident "match_time")))
+		(def_expr
+			(e_lambda (80:14-140:7)
 				(args
-					(arg
-						"pattern_idx_39"
-						(assign (81:2-81:3) (ident "a")))
-					(arg
-						"pattern_idx_40"
-						(assign (82:2-82:3) (ident "b"))))
-				(runtime_error (1:1-1:1) "not_implemented"))))
-	(def
-		"let"
-		(pattern (144:1-144:6)
-			"pattern_idx_47"
-			(assign (144:1-144:6) (ident "main!")))
-		(expr (144:9-196:2)
-			(lambda (144:9-196:2)
-				(args (arg "pattern_idx_48" (underscore (144:10-144:11))))
-				(block (144:13-196:2)
-					(stmts
-						(let
-							"pattern_idx_49"
-							(assign (145:2-145:7) (ident "world"))
-							(string (145:10-145:17) (literal (145:11-145:16) "World")))
-						(var
-							"pattern_idx_56"
-							(assign (146:2-147:8) (ident "number"))
-							(int (146:15-146:18)
-								(int_var "#20")
-								(precision_var "#19")
-								(literal "123")
-								(value "TODO")
-								(bound "u8")))
-						(let
-							"pattern_idx_60"
-							(assign (148:2-148:5) (ident "tag"))
-							(tag (148:8-148:12)
+					(p_assign (81:2-81:3)
+						(pid 38)
+						(ident "a"))
+					(p_assign (82:2-82:3)
+						(pid 39)
+						(ident "b")))
+				(e_runtime_error (1:1-1:1) "not_implemented"))))
+	(d_let
+		(def_pattern
+			(p_assign (144:1-144:6)
+				(pid 46)
+				(ident "main!")))
+		(def_expr
+			(e_lambda (144:9-196:2)
+				(args (p_underscore (144:10-144:11) (pid 47)))
+				(e_block (144:13-196:2)
+					(s_let (145:2-145:17)
+						(p_assign (145:2-145:7)
+							(pid 48)
+							(ident "world"))
+						(e_string (145:10-145:17) (e_literal (145:11-145:16) "World")))
+					(s_var (146:2-147:8)
+						(pid 55)
+						(p_assign (146:2-147:8)
+							(pid 55)
+							(ident "number"))
+						(e_int (146:15-146:18)
+							(int_var "#20")
+							(precision_var "#19")
+							(literal "123")
+							(value "TODO")
+							(bound "u8")))
+					(s_let (148:2-148:12)
+						(p_assign (148:2-148:5)
+							(pid 59)
+							(ident "tag"))
+						(e_tag (148:8-148:12)
+							(ext_var "#0")
+							(name "Blue")
+							(args "TODO")))
+					(s_expr (154:2-155:12) "TODO")
+					(s_expr (155:2-158:11) "TODO")
+					(s_expr (158:2-162:7) "TODO")
+					(s_let (164:2-164:31)
+						(p_assign (164:2-164:18)
+							(pid 83)
+							(ident "tag_with_payload"))
+						(e_call (164:21-164:31)
+							(e_tag (164:21-164:23)
 								(ext_var "#0")
-								(name "Blue")
-								(args "TODO")))
-						(TODO_stmt)
-						(TODO_stmt)
-						(TODO_stmt)
-						(let
-							"pattern_idx_84"
-							(assign (164:2-164:18) (ident "tag_with_payload"))
-							(call (164:21-164:31)
-								(tag (164:21-164:23)
-									(ext_var "#0")
-									(name "Ok")
-									(args "TODO"))
-								(lookup (164:24-164:30) "pattern_idx_56")))
-						(let
-							"pattern_idx_90"
-							(assign (165:2-165:14) (ident "interpolated"))
-							(string (165:17-165:34)
-								(literal (165:18-165:25) "Hello, ")
-								(lookup (165:27-165:32) "pattern_idx_49")
-								(literal (165:33-165:33) "")))
-						(let
-							"pattern_idx_96"
-							(assign (166:2-166:6) (ident "list"))
-							(list (166:9-173:3)
-								(elem_var "#0")
-								(elems "TODO each element")))
-						(let
-							"pattern_idx_112"
-							(assign (178:2-178:8) (ident "record"))
-							(runtime_error (1:1-1:1) "not_implemented"))
-						(let
-							"pattern_idx_116"
-							(assign (179:2-179:7) (ident "tuple"))
-							(runtime_error (1:1-1:1) "not_implemented"))
-						(let
-							"pattern_idx_120"
-							(assign (180:2-180:17) (ident "multiline_tuple"))
-							(runtime_error (1:1-1:1) "not_implemented"))
-						(let
-							"pattern_idx_124"
-							(assign (188:2-188:15) (ident "bin_op_result"))
-							(runtime_error (188:18-189:23) "not_implemented"))
-						(let
-							"pattern_idx_188"
-							(assign (189:2-189:23) (ident "static_dispatch_style"))
-							(runtime_error (1:1-1:1) "not_implemented"))
-						(TODO_stmt)
-						(TODO_stmt))
-					(final_expr
-						(call (191:2-195:3)
-							(runtime_error (191:2-191:14) "ident_not_in_scope")
-							(string (192:3-194:18)
-								(literal (192:4-192:14) "How about ")
-								(call (193:4-193:21)
-									(runtime_error (193:4-193:13) "ident_not_in_scope")
-									(lookup (193:14-193:20) "pattern_idx_56"))
-								(literal (194:4-194:17) " as a string?"))))))))
-	(def
-		"let"
-		(pattern (199:1-199:6)
-			"pattern_idx_211"
-			(assign (199:1-199:6) (ident "empty")))
-		(expr (199:9-199:11) (runtime_error (1:1-1:1) "not_implemented"))))
+								(name "Ok")
+								(args "TODO"))
+							(e_lookup (164:24-164:30) (pid 55))))
+					(s_let (165:2-165:34)
+						(p_assign (165:2-165:14)
+							(pid 89)
+							(ident "interpolated"))
+						(e_string (165:17-165:34)
+							(e_literal (165:18-165:25) "Hello, ")
+							(e_lookup (165:27-165:32) (pid 48))
+							(e_literal (165:33-165:33) "")))
+					(s_let (166:2-173:3)
+						(p_assign (166:2-166:6)
+							(pid 95)
+							(ident "list"))
+						(e_list (166:9-173:3)
+							(elem_var "#0")
+							(elems "TODO each element")))
+					(s_let (178:2-178:71)
+						(p_assign (178:2-178:8)
+							(pid 111)
+							(ident "record"))
+						(e_runtime_error (1:1-1:1) "not_implemented"))
+					(s_let (179:2-179:68)
+						(p_assign (179:2-179:7)
+							(pid 115)
+							(ident "tuple"))
+						(e_runtime_error (1:1-1:1) "not_implemented"))
+					(s_let (180:2-187:3)
+						(p_assign (180:2-180:17)
+							(pid 119)
+							(ident "multiline_tuple"))
+						(e_runtime_error (1:1-1:1) "not_implemented"))
+					(s_let (188:2-189:23)
+						(p_assign (188:2-188:15)
+							(pid 123)
+							(ident "bin_op_result"))
+						(e_runtime_error (188:18-189:23) "not_implemented"))
+					(s_let (189:2-190:8)
+						(p_assign (189:2-189:23)
+							(pid 187)
+							(ident "static_dispatch_style"))
+						(e_runtime_error (1:1-1:1) "not_implemented"))
+					(s_expr (190:2-191:8) "TODO")
+					(e_call (191:2-195:3)
+						(e_runtime_error (191:2-191:14) "ident_not_in_scope")
+						(e_string (192:3-194:18)
+							(e_literal (192:4-192:14) "How about ")
+							(e_call (193:4-193:21)
+								(e_runtime_error (193:4-193:13) "ident_not_in_scope")
+								(e_lookup (193:14-193:20) (pid 55)))
+							(e_literal (194:4-194:17) " as a string?")))))))
+	(d_let
+		(def_pattern
+			(p_assign (199:1-199:6)
+				(pid 209)
+				(ident "empty")))
+		(def_expr (e_runtime_error (1:1-1:1) "not_implemented"))))
 ~~~END

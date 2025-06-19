@@ -13,5 +13,5 @@ KwDbg(1:1-1:4),LowerIdent(1:5-1:6),EndOfFile(1:6-1:6),
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(runtime_error (1:1-1:1) "not_implemented")
+(e_runtime_error (1:1-1:1) "not_implemented")
 ~~~END

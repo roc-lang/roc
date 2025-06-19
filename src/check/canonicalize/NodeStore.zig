@@ -100,7 +100,7 @@ pub fn getStatement(store: *NodeStore, statement: CIR.Statement.Idx) CIR.Stateme
             .pattern_idx = @enumFromInt(node.data_2),
         } },
         .statement_crash => return CIR.Statement{ .crash = .{
-            .msg = @bitCast(node.data_1),
+            .msg = @enumFromInt(node.data_1),
             .region = node.region,
         } },
         .statement_expr => return .{ .expr = .{
@@ -478,7 +478,7 @@ pub fn addStatement(store: *NodeStore, statement: CIR.Statement) CIR.Statement.I
         .crash => |s| {
             node.tag = .statement_crash;
             node.region = s.region;
-            node.data_1 = @bitCast(s.msg);
+            node.data_1 = @intFromEnum(s.msg);
         },
         .expr => |s| {
             node.tag = .statement_expr;

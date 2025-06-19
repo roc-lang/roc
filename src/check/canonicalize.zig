@@ -922,10 +922,21 @@ pub fn canonicalize_expr(
             const statements = self.parse_ir.store.statementSlice(e.statements);
             var last_expr: ?CIR.Expr.Idx = null;
 
-            for (statements) |stmt_idx| {
-                const result = self.canonicalize_statement(stmt_idx);
-                if (result) |expr_idx| {
-                    last_expr = expr_idx;
+            for (statements, 0..) |stmt_idx, i| {
+                // Check if this is the last statement and if it's an expression
+                const is_last = (i == statements.len - 1);
+                const stmt = self.parse_ir.store.getStatement(stmt_idx);
+
+                if (is_last and stmt == .expr) {
+                    // For the last expression statement, canonicalize it directly as the final expression
+                    // without adding it as a statement
+                    last_expr = self.canonicalize_expr(stmt.expr.expr);
+                } else {
+                    // Regular statement processing
+                    const result = self.canonicalize_statement(stmt_idx);
+                    if (result) |expr_idx| {
+                        last_expr = expr_idx;
+                    }
                 }
             }
 
@@ -1339,12 +1350,14 @@ fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) ?CIR.Expr.Id
                                     .region = region,
                                 } });
 
-                                // Create an expression statement for the error
-                                const error_stmt_idx = self.can_ir.store.addStatement(CIR.Statement{ .expr = .{
+                                // Create a reassign statement with the error expression
+                                const reassign_stmt = CIR.Statement{ .reassign = .{
+                                    .pattern_idx = existing_pattern_idx,
                                     .expr = error_expr,
                                     .region = region,
-                                } });
-                                self.can_ir.store.addScratchStatement(error_stmt_idx);
+                                } };
+                                const reassign_idx = self.can_ir.store.addStatement(reassign_stmt);
+                                self.can_ir.store.addScratchStatement(reassign_idx);
 
                                 return error_expr;
                             }

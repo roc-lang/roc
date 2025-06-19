@@ -33,5 +33,5 @@ OpArrow(4:2-4:4),LowerIdent(4:4-4:16),NoSpaceOpQuestion(4:16-4:17),EndOfFile(4:1
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(runtime_error (1:1-1:1) "not_implemented")
+(e_runtime_error (1:1-1:1) "not_implemented")
 ~~~END

@@ -28,7 +28,7 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:9),OpAmpersand(1:10-1:11),LowerIdent(1:12-1:
 	age : 
 }
 ~~~CANONICALIZE
-(block (1:1-1:21)
-	(stmts (TODO_stmt))
-	(final_expr (runtime_error (1:1-1:1) "not_implemented")))
+(e_block (1:1-1:21)
+	(s_expr (1:3-1:11) "TODO")
+	(e_runtime_error (1:1-1:1) "not_implemented"))
 ~~~END

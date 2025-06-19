@@ -38,38 +38,37 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 	y * 2
 }
 ~~~CANONICALIZE
-(block (1:1-5:2)
-	(stmts
-		(let
-			"pattern_idx_2"
-			(assign (2:5-2:6) (ident "x"))
-			(int (2:9-2:11)
-				(int_var "#2")
-				(precision_var "#1")
-				(literal "42")
+(e_block (1:1-5:2)
+	(s_let (2:5-2:11)
+		(p_assign (2:5-2:6)
+			(pid 2)
+			(ident "x"))
+		(e_int (2:9-2:11)
+			(int_var "#2")
+			(precision_var "#1")
+			(literal "42")
+			(value "TODO")
+			(bound "u8")))
+	(s_let (3:5-4:6)
+		(p_assign (3:5-3:6)
+			(pid 7)
+			(ident "y"))
+		(e_binop (3:9-4:6)
+			"add"
+			(e_lookup (3:9-3:10) (pid 2))
+			(e_int (3:13-3:14)
+				(int_var "#7")
+				(precision_var "#6")
+				(literal "1")
 				(value "TODO")
-				(bound "u8")))
-		(let
-			"pattern_idx_7"
-			(assign (3:5-3:6) (ident "y"))
-			(binop (3:9-4:6)
-				"add"
-				(lookup (3:9-3:10) "pattern_idx_2")
-				(int (3:13-3:14)
-					(int_var "#7")
-					(precision_var "#6")
-					(literal "1")
-					(value "TODO")
-					(bound "u8"))))
-		(TODO_stmt))
-	(final_expr
-		(binop (4:5-5:2)
-			"mul"
-			(lookup (4:5-4:6) "pattern_idx_7")
-			(int (4:9-4:10)
-				(int_var "#12")
-				(precision_var "#11")
-				(literal "2")
-				(value "TODO")
-				(bound "u8")))))
+				(bound "u8"))))
+	(e_binop (4:5-5:2)
+		"mul"
+		(e_lookup (4:5-4:6) (pid 7))
+		(e_int (4:9-4:10)
+			(int_var "#12")
+			(precision_var "#11")
+			(literal "2")
+			(value "TODO")
+			(bound "u8"))))
 ~~~END

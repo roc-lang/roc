@@ -42,11 +42,11 @@ foo =
 	"onmo %"
 ~~~CANONICALIZE
 (can_ir
-	(def
-		"let"
-		(pattern (4:1-4:4)
-			"pattern_idx_3"
-			(assign (4:1-4:4) (ident "foo")))
-		(expr (6:5-6:12)
-			(string (6:5-6:12) (literal (6:6-6:12) "onmo %")))))
+	(d_let
+		(def_pattern
+			(p_assign (4:1-4:4)
+				(pid 3)
+				(ident "foo")))
+		(def_expr
+			(e_string (6:5-6:12) (e_literal (6:6-6:12) "onmo %")))))
 ~~~END

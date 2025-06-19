@@ -13,5 +13,5 @@ Int(1:1-1:42),EndOfFile(1:42-1:42),
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(runtime_error (1:1-1:42) "invalid_num_literal")
+(e_runtime_error (1:1-1:42) "invalid_num_literal")
 ~~~END

@@ -62,23 +62,21 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 NO CHANGE
 ~~~CANONICALIZE
 (can_ir
-	(def
-		"let"
-		(pattern (8:1-8:6)
-			"pattern_idx_3"
-			(assign (8:1-8:6) (ident "main!")))
-		(expr (8:9-12:2)
-			(lambda (8:9-12:2)
-				(args (arg "pattern_idx_4" (underscore (8:10-8:11))))
-				(block (8:13-12:2)
-					(stmts
-						(let
-							"pattern_idx_5"
-							(assign (9:2-9:7) (ident "world"))
-							(string (9:10-9:17) (literal (9:11-9:16) "World")))
-						(TODO_stmt))
-					(final_expr
-						(call (11:2-11:31)
-							(runtime_error (11:2-11:14) "ident_not_in_scope")
-							(string (11:15-11:30) (literal (11:16-11:29) "Hello, world!")))))))))
+	(d_let
+		(def_pattern
+			(p_assign (8:1-8:6)
+				(pid 3)
+				(ident "main!")))
+		(def_expr
+			(e_lambda (8:9-12:2)
+				(args (p_underscore (8:10-8:11) (pid 4)))
+				(e_block (8:13-12:2)
+					(s_let (9:2-9:17)
+						(p_assign (9:2-9:7)
+							(pid 5)
+							(ident "world"))
+						(e_string (9:10-9:17) (e_literal (9:11-9:16) "World")))
+					(e_call (11:2-11:31)
+						(e_runtime_error (11:2-11:14) "ident_not_in_scope")
+						(e_string (11:15-11:30) (e_literal (11:16-11:29) "Hello, world!"))))))))
 ~~~END
