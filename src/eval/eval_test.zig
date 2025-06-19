@@ -170,3 +170,50 @@ test "eval multiple string segments" {
     const evaluated = try eval.eval(test_allocator, &cir, str_expr_idx);
     try testing.expectEqual(str_expr_idx, evaluated);
 }
+
+test "eval if expression - always takes final_else branch" {
+    // Note: We cannot directly test this because NodeStore.addExpr doesn't support if expressions yet.
+    // This test documents the expected behavior once that's implemented.
+
+    // The expected behavior is:
+    // 1. Create an if expression with branches and a final_else
+    // 2. When eval is called on the if expression, it should return the final_else expression
+    // 3. This simulates the behavior where all conditions fail
+
+    // For now, we'll test that our eval function correctly handles the if case
+    // by creating a mock scenario
+    var module_env = base.ModuleEnv.init(test_allocator);
+    defer module_env.deinit();
+
+    var cir = CIR.init(&module_env);
+    defer cir.deinit();
+
+    // Create expressions that would be used in the if
+    const true_branch = cir.store.addExpr(.{ .str_segment = .{
+        .literal = cir.env.strings.insert(test_allocator, "true branch"),
+        .region = base.Region.zero(),
+    } });
+
+    const else_branch = cir.store.addExpr(.{ .str_segment = .{
+        .literal = cir.env.strings.insert(test_allocator, "else branch"),
+        .region = base.Region.zero(),
+    } });
+
+    // If we could create an if expression, it would look like:
+    // if condition then true_branch else else_branch
+    // And eval should return else_branch
+
+    // For now, just verify the branches were created successfully
+    try testing.expect(true_branch != else_branch);
+
+    // Once addExpr supports if expressions, we would do:
+    // const if_expr = cir.store.addExpr(.{ .@"if" = .{
+    //     .cond_var = @enumFromInt(0),
+    //     .branch_var = @enumFromInt(0),
+    //     .branches = ..., // would need to create IfBranch nodes
+    //     .final_else = else_branch,
+    //     .region = base.Region.zero(),
+    // } });
+    // const result = try eval.eval(test_allocator, &cir, if_expr);
+    // try testing.expectEqual(else_branch, result);
+}

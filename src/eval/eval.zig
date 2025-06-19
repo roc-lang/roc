@@ -35,8 +35,14 @@ pub fn eval(allocator: std.mem.Allocator, cir: *CIR, expr_idx: CIR.Expr.Idx) Eva
         // Runtime errors should return an error
         .runtime_error => return error.Crash,
 
+        // If expressions - always take the final_else branch
+        .@"if" => |if_expr| {
+            // For now, we assume conditions always fail, so we take the final_else branch
+            return if_expr.final_else;
+        },
+
         // Non-primitive expressions need evaluation (TODO: implement these)
-        .lookup, .list, .when, .@"if", .call, .record, .record_access, .tag, .binop => {
+        .lookup, .list, .when, .call, .record, .record_access, .tag, .binop => {
             // For now, these are not implemented
             return expr_idx;
         },
