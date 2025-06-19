@@ -94,6 +94,11 @@ pub fn expect(self: *Parser, expected: Token.Tag) !void {
 /// Checks if the current position indicates the start of an indented lambda body
 /// Returns true if we should parse the following content as a block body for a lambda
 fn shouldParseLambdaBodyAsBlock(self: *Parser) bool {
+    // Check for variable declaration: var identifier = expression
+    if (self.peek() == .KwVar) {
+        return true;
+    }
+
     // Check for assignment: identifier = expression
     if (self.peek() == .LowerIdent and self.peekNext() == .OpAssign) {
         return true;
