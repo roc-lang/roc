@@ -40,7 +40,7 @@ NO CHANGE
 	(d_let
 		(def_pattern
 			(p_assign (3:1-3:7)
-				(pid 3)
+				(pid 13)
 				(ident "hello!")))
 		(def_expr
 			(e_call (3:10-3:31)
@@ -49,7 +49,7 @@ NO CHANGE
 	(d_let
 		(def_pattern
 			(p_assign (4:1-4:6)
-				(pid 10)
+				(pid 20)
 				(ident "world")))
 		(def_expr
 			(e_string (4:9-4:16) (e_literal (4:10-4:15) "World")))))

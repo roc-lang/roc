@@ -44,7 +44,7 @@ foo =
 	(d_let
 		(def_pattern
 			(p_assign (3:1-3:4)
-				(pid 3)
+				(pid 13)
 				(ident "foo")))
 		(def_expr
 			(e_string (5:5-5:35) (e_literal (5:6-5:35) "on        (string 'onmo %')))")))))

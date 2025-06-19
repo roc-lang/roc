@@ -65,15 +65,15 @@ NO CHANGE
 	(d_let
 		(def_pattern
 			(p_assign (8:1-8:6)
-				(pid 3)
+				(pid 13)
 				(ident "main!")))
 		(def_expr
 			(e_lambda (8:9-12:2)
-				(args (p_underscore (8:10-8:11) (pid 4)))
+				(args (p_underscore (8:10-8:11) (pid 14)))
 				(e_block (8:13-12:2)
 					(s_let (9:2-9:17)
 						(p_assign (9:2-9:7)
-							(pid 5)
+							(pid 15)
 							(ident "world"))
 						(e_string (9:10-9:17) (e_literal (9:11-9:16) "World")))
 					(e_call (11:2-11:31)

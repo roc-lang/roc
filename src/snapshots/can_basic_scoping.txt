@@ -101,7 +101,7 @@ outerFunc = |_| {
 	(d_let
 		(def_pattern
 			(p_assign (4:1-4:2)
-				(pid 2)
+				(pid 12)
 				(ident "x")))
 		(def_expr
 			(e_int (4:5-4:6)
@@ -113,7 +113,7 @@ outerFunc = |_| {
 	(d_let
 		(def_pattern
 			(p_assign (5:1-5:2)
-				(pid 7)
+				(pid 17)
 				(ident "y")))
 		(def_expr
 			(e_int (5:5-5:7)
@@ -125,15 +125,15 @@ outerFunc = |_| {
 	(d_let
 		(def_pattern
 			(p_assign (8:1-8:10)
-				(pid 12)
+				(pid 22)
 				(ident "outerFunc")))
 		(def_expr
 			(e_lambda (8:13-16:2)
-				(args (p_underscore (8:14-8:15) (pid 13)))
+				(args (p_underscore (8:14-8:15) (pid 23)))
 				(e_block (8:17-16:2)
 					(s_let (9:5-9:11)
 						(p_assign (9:5-9:6)
-							(pid 14)
+							(pid 24)
 							(ident "x"))
 						(e_int (9:9-9:11)
 							(int_var "#12")
@@ -143,25 +143,25 @@ outerFunc = |_| {
 							(bound "u8")))
 					(s_let (10:5-14:6)
 						(p_assign (10:5-10:16)
-							(pid 20)
+							(pid 30)
 							(ident "innerResult"))
 						(e_block (10:19-14:6)
 							(s_let (12:9-13:10)
 								(p_assign (12:9-12:10)
-									(pid 21)
+									(pid 31)
 									(ident "z"))
 								(e_binop (12:13-13:10)
 									"add"
-									(e_lookup (12:13-12:14) (pid 14))
-									(e_lookup (12:17-12:18) (pid 7))))
+									(e_lookup (12:13-12:14) (pid 24))
+									(e_lookup (12:17-12:18) (pid 17))))
 							(e_binop (13:9-14:6)
 								"add"
-								(e_lookup (13:9-13:10) (pid 21))
+								(e_lookup (13:9-13:10) (pid 31))
 								(e_int (13:13-13:14)
 									(int_var "#21")
 									(precision_var "#20")
 									(literal "1")
 									(value "TODO")
 									(bound "u8")))))
-					(e_lookup (15:5-15:16) (pid 20)))))))
+					(e_lookup (15:5-15:16) (pid 30)))))))
 ~~~END

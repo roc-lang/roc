@@ -31,8 +31,18 @@ const Num = types.Num;
 const TagUnion = types.TagUnion;
 const Tag = types.Tag;
 
-const BUILTIN_NUM_ADD: CIR.Pattern.Idx = @enumFromInt(0);
-const BUILTIN_NUM_SUB: CIR.Pattern.Idx = @enumFromInt(1);
+const BUILTIN_BOOL: CIR.Pattern.Idx = @enumFromInt(0);
+const BUILTIN_BOX: CIR.Pattern.Idx = @enumFromInt(1);
+const BUILTIN_DECODE: CIR.Pattern.Idx = @enumFromInt(2);
+const BUILTIN_DICT: CIR.Pattern.Idx = @enumFromInt(3);
+const BUILTIN_ENCODE: CIR.Pattern.Idx = @enumFromInt(4);
+const BUILTIN_HASH: CIR.Pattern.Idx = @enumFromInt(5);
+const BUILTIN_INSPECT: CIR.Pattern.Idx = @enumFromInt(6);
+const BUILTIN_LIST: CIR.Pattern.Idx = @enumFromInt(7);
+const BUILTIN_NUM: CIR.Pattern.Idx = @enumFromInt(8);
+const BUILTIN_RESULT: CIR.Pattern.Idx = @enumFromInt(9);
+const BUILTIN_SET: CIR.Pattern.Idx = @enumFromInt(10);
+const BUILTIN_STR: CIR.Pattern.Idx = @enumFromInt(11);
 
 /// Deinitialize canonicalizer resources
 pub fn deinit(self: *Self) void {
@@ -59,21 +69,29 @@ pub fn init(self: *CIR, parse_ir: *AST) Self {
     // Not sure if this is how we want to do it long term, but want something to
     // make a start on canonicalization.
 
-    const region_zero = Region.zero();
-
-    // BUILTIN_NUM_ADD
-    const ident_add = self.env.idents.insert(gpa, base.Ident.for_text("add"), region_zero);
-    const pattern_idx_add = self.store.addPattern(CIR.Pattern{ .assign = .{ .ident = ident_add, .region = region_zero } });
-    _ = result.scopes.introduce(gpa, &self.env.idents, .ident, ident_add, pattern_idx_add, false, true);
-    std.debug.assert(BUILTIN_NUM_ADD == pattern_idx_add);
-
-    // BUILTIN_NUM_SUB
-    const ident_sub = self.env.idents.insert(gpa, base.Ident.for_text("sub"), region_zero);
-    const pattern_idx_sub = self.store.addPattern(CIR.Pattern{ .assign = .{ .ident = ident_sub, .region = region_zero } });
-    _ = result.scopes.introduce(gpa, &self.env.idents, .ident, ident_sub, pattern_idx_sub, false, true);
-    std.debug.assert(BUILTIN_NUM_SUB == pattern_idx_sub);
+    result.addBuiltin(self, "Bool", BUILTIN_BOOL);
+    result.addBuiltin(self, "Box", BUILTIN_BOX);
+    result.addBuiltin(self, "Decode", BUILTIN_DECODE);
+    result.addBuiltin(self, "Dict", BUILTIN_DICT);
+    result.addBuiltin(self, "Encode", BUILTIN_ENCODE);
+    result.addBuiltin(self, "Hash", BUILTIN_HASH);
+    result.addBuiltin(self, "Inspect", BUILTIN_INSPECT);
+    result.addBuiltin(self, "List", BUILTIN_LIST);
+    result.addBuiltin(self, "Num", BUILTIN_NUM);
+    result.addBuiltin(self, "Result", BUILTIN_RESULT);
+    result.addBuiltin(self, "Set", BUILTIN_SET);
+    result.addBuiltin(self, "Str", BUILTIN_STR);
 
     return result;
+}
+
+fn addBuiltin(canonicalizer: *Self, ir: *CIR, ident_text: []const u8, idx: CIR.Pattern.Idx) void {
+    const gpa = ir.env.gpa;
+    const ident_store = &ir.env.idents;
+    const ident_add = ir.env.idents.insert(gpa, base.Ident.for_text(ident_text), Region.zero());
+    const pattern_idx_add = ir.store.addPattern(CIR.Pattern{ .assign = .{ .ident = ident_add, .region = Region.zero() } });
+    _ = canonicalizer.scopes.introduce(gpa, ident_store, .ident, ident_add, pattern_idx_add, false, true);
+    std.debug.assert(idx == pattern_idx_add);
 }
 
 const Self = @This();

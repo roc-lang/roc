@@ -33,7 +33,7 @@ add2 = x + 2
 	(d_let
 		(def_pattern
 			(p_assign (3:1-3:5)
-				(pid 2)
+				(pid 12)
 				(ident "add2")))
 		(def_expr
 			(e_binop (3:8-3:18)

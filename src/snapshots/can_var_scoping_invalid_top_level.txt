@@ -31,7 +31,7 @@ topLevelVar_ = 0
 	(d_let
 		(def_pattern
 			(p_assign (4:5-4:17)
-				(pid 2)
+				(pid 12)
 				(ident "topLevelVar_")))
 		(def_expr
 			(e_int (4:20-4:21)

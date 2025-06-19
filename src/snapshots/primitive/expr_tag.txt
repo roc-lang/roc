@@ -24,7 +24,7 @@ NO CHANGE
 	(d_let
 		(def_pattern
 			(p_assign (2:1-2:4)
-				(pid 2)
+				(pid 12)
 				(ident "foo")))
 		(def_expr
 			(e_tag (2:7-2:15)

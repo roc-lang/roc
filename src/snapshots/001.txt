@@ -43,7 +43,7 @@ foo =
 	(d_let
 		(def_pattern
 			(p_assign (6:1-6:4)
-				(pid 2)
+				(pid 12)
 				(ident "foo")))
 		(def_expr
 			(e_string (8:5-8:10) (e_literal (8:6-8:9) "one")))))

@@ -20,11 +20,11 @@ NO CHANGE
 (e_lambda (1:1-1:10)
 	(args
 		(p_assign (1:2-1:3)
-			(pid 2)
+			(pid 12)
 			(ident "x")))
 	(e_binop (1:5-1:10)
 		"add"
-		(e_lookup (1:5-1:6) (pid 2))
+		(e_lookup (1:5-1:6) (pid 12))
 		(e_int (1:9-1:10)
 			(int_var "#3")
 			(precision_var "#2")
