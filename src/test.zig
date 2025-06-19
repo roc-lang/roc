@@ -8,7 +8,7 @@ test {
     // TODO: Remove after hooking up
     testing.refAllDeclsRecursive(@import("reporting.zig"));
     testing.refAllDeclsRecursive(@import("reporting/test.zig"));
-    testing.refAllDeclsRecursive(@import("eval/stack.zig"));
+    testing.refAllDeclsRecursive(@import("eval/eval.zig"));
     testing.refAllDeclsRecursive(@import("check/check_types/unify.zig"));
     testing.refAllDeclsRecursive(@import("snapshot.zig"));
     testing.refAllDeclsRecursive(@import("layout/layout.zig"));
