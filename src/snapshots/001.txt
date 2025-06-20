@@ -47,4 +47,10 @@ foo =
 				(ident "foo")))
 		(def_expr
 			(e_string (8:5-8:10) (e_literal (8:6-8:9) "one")))))
+~~~TYPES
+(inferred_types
+	(defs
+		(def "foo" 15 (type "Str")))
+	(expressions
+		(expr (8:5-8:10) 14 (type "Str"))))
 ~~~END

@@ -18,4 +18,6 @@ LowerIdent(1:1-1:7),NoSpaceDotLowerIdent(1:7-1:12),EndOfFile(1:12-1:12),
 NO CHANGE
 ~~~CANONICALIZE
 (e_runtime_error (1:1-1:1) "not_implemented")
+~~~TYPES
+(expr 13 (type "Error"))
 ~~~END

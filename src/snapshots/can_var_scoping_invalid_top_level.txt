@@ -35,9 +35,15 @@ topLevelVar_ = 0
 				(ident "topLevelVar_")))
 		(def_expr
 			(e_int (4:20-4:21)
-				(int_var "#2")
-				(precision_var "#1")
+				(int_var 14)
+				(precision_var 13)
 				(literal "0")
 				(value "TODO")
 				(bound "u8")))))
+~~~TYPES
+(inferred_types
+	(defs
+		(def "topLevelVar_" 16 (type "Num(Int(*))")))
+	(expressions
+		(expr (4:20-4:21) 15 (type "Num(Int(*))"))))
 ~~~END

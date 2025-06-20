@@ -79,4 +79,10 @@ NO CHANGE
 					(e_call (11:2-11:31)
 						(e_runtime_error (11:2-11:14) "ident_not_in_scope")
 						(e_string (11:15-11:30) (e_literal (11:16-11:29) "Hello, world!"))))))))
+~~~TYPES
+(inferred_types
+	(defs
+		(def "main!" 26 (type "*")))
+	(expressions
+		(expr (8:9-12:2) 25 (type "*"))))
 ~~~END

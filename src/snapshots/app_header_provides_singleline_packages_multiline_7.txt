@@ -29,4 +29,6 @@ app [main!] {
 }
 ~~~CANONICALIZE
 (can_ir "empty")
+~~~TYPES
+(inferred_types (defs) (expressions))
 ~~~END

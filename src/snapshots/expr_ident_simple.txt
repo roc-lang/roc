@@ -15,4 +15,6 @@ LowerIdent(1:1-1:4),EndOfFile(1:4-1:4),
 NO CHANGE
 ~~~CANONICALIZE
 (e_runtime_error (1:1-1:4) "ident_not_in_scope")
+~~~TYPES
+(expr 13 (type "Error"))
 ~~~END

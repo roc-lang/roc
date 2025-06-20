@@ -13,4 +13,6 @@ StringStart(1:1-1:2),StringPart(1:2-1:13),StringEnd(1:13-1:14),EndOfFile(1:14-1:
 NO CHANGE
 ~~~CANONICALIZE
 (e_string (1:1-1:14) (e_literal (1:2-1:13) "hello world"))
+~~~TYPES
+(expr 13 (type "Str"))
 ~~~END

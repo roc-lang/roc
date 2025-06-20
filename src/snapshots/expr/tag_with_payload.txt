@@ -16,13 +16,15 @@ NO CHANGE
 ~~~CANONICALIZE
 (e_call (1:1-1:9)
 	(e_tag (1:1-1:5)
-		(ext_var "#0")
+		(ext_var 0)
 		(name "Some")
 		(args "TODO"))
 	(e_int (1:6-1:8)
-		(int_var "#3")
-		(precision_var "#2")
+		(int_var 15)
+		(precision_var 14)
 		(literal "42")
 		(value "TODO")
 		(bound "u8")))
+~~~TYPES
+(expr 17 (type "*"))
 ~~~END

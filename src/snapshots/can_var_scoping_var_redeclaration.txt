@@ -83,8 +83,8 @@ NO CHANGE
 							(pid 17)
 							(ident "x_"))
 						(e_int (5:11-5:12)
-							(int_var "#3")
-							(precision_var "#2")
+							(int_var 15)
+							(precision_var 14)
 							(literal "5")
 							(value "TODO")
 							(bound "u8")))
@@ -94,16 +94,16 @@ NO CHANGE
 							(pid 22)
 							(ident "x_"))
 						(e_int (6:11-6:13)
-							(int_var "#6")
-							(precision_var "#5")
+							(int_var 20)
+							(precision_var 19)
 							(literal "10")
 							(value "TODO")
 							(bound "u8")))
 					(s_reassign (7:2-7:4)
 						(pid 17)
 						(e_int (7:7-7:9)
-							(int_var "#9")
-							(precision_var "#8")
+							(int_var 26)
+							(precision_var 25)
 							(literal "15")
 							(value "TODO")
 							(bound "u8")))
@@ -111,10 +111,18 @@ NO CHANGE
 	(d_let
 		(def_pattern
 			(p_assign (11:1-11:7)
-				(pid 34)
+				(pid 33)
 				(ident "result")))
 		(def_expr
 			(e_call (11:10-11:27)
 				(e_lookup (11:10-11:23) (pid 12))
 				(e_runtime_error (1:1-1:1) "not_implemented")))))
+~~~TYPES
+(inferred_types
+	(defs
+		(def "redeclareTest" 32 (type "*"))
+		(def "result" 38 (type "*")))
+	(expressions
+		(expr (4:17-9:2) 31 (type "*"))
+		(expr (11:10-11:27) 37 (type "*"))))
 ~~~END

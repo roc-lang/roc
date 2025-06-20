@@ -53,4 +53,12 @@ NO CHANGE
 				(ident "world")))
 		(def_expr
 			(e_string (4:9-4:16) (e_literal (4:10-4:15) "World")))))
+~~~TYPES
+(inferred_types
+	(defs
+		(def "hello!" 19 (type "*"))
+		(def "world" 23 (type "Str")))
+	(expressions
+		(expr (3:10-3:31) 18 (type "*"))
+		(expr (4:9-4:16) 22 (type "Str"))))
 ~~~END

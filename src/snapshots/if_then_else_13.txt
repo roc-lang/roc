@@ -31,4 +31,6 @@ CloseCurly(7:3-7:4),EndOfFile(7:4-7:4),
 NO CHANGE
 ~~~CANONICALIZE
 (e_runtime_error (1:1-1:1) "not_implemented")
+~~~TYPES
+(expr 13 (type "Error"))
 ~~~END

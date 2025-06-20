@@ -48,4 +48,10 @@ foo = if true A
 				(pid 12)
 				(ident "foo")))
 		(def_expr (e_runtime_error (1:1-1:1) "not_implemented"))))
+~~~TYPES
+(inferred_types
+	(defs
+		(def "foo" 15 (type "Error")))
+	(expressions
+		(expr (3:7-7:6) 14 (type "Error"))))
 ~~~END

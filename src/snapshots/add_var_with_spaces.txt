@@ -40,9 +40,15 @@ add2 = x + 2
 				"add"
 				(e_runtime_error (3:8-3:9) "ident_not_in_scope")
 				(e_int (3:17-3:18)
-					(int_var "#3")
-					(precision_var "#2")
+					(int_var 16)
+					(precision_var 15)
 					(literal "2")
 					(value "TODO")
 					(bound "u8"))))))
+~~~TYPES
+(inferred_types
+	(defs
+		(def "add2" 19 (type "*")))
+	(expressions
+		(expr (3:8-3:18) 18 (type "*"))))
 ~~~END

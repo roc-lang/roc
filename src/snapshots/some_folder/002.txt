@@ -46,4 +46,12 @@ NO CHANGE
 				(ident "bar")))
 		(def_expr
 			(e_string (5:7-5:12) (e_literal (5:8-5:11) "two")))))
+~~~TYPES
+(inferred_types
+	(defs
+		(def "foo" 15 (type "Str"))
+		(def "bar" 19 (type "Str")))
+	(expressions
+		(expr (3:7-3:12) 14 (type "Str"))
+		(expr (5:7-5:12) 18 (type "Str"))))
 ~~~END

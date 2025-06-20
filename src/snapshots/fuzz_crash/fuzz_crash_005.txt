@@ -15,4 +15,6 @@ LowerIdent(1:1-1:5),EndOfFile(1:5-1:5),
 
 ~~~CANONICALIZE
 (can_ir "empty")
+~~~TYPES
+(inferred_types (defs) (expressions))
 ~~~END

@@ -34,4 +34,6 @@ LowerIdent(1:1-1:8),NoSpaceOpenRound(1:8-1:9),LowerIdent(1:9-1:13),CloseRound(1:
 NO CHANGE
 ~~~CANONICALIZE
 (e_runtime_error (1:1-1:1) "not_implemented")
+~~~TYPES
+(expr 13 (type "Error"))
 ~~~END

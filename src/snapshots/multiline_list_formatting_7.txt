@@ -24,6 +24,25 @@ CloseSquare(5:1-5:2),EndOfFile(5:2-5:2),
 NO CHANGE
 ~~~CANONICALIZE
 (e_list (1:1-5:2)
-	(elem_var "#0")
-	(elems "TODO each element"))
+	(elem_var 21)
+	(e_int (2:2-2:3)
+		(int_var 13)
+		(precision_var 12)
+		(literal "1")
+		(value "TODO")
+		(bound "u8"))
+	(e_int (3:2-3:3)
+		(int_var 16)
+		(precision_var 15)
+		(literal "2")
+		(value "TODO")
+		(bound "u8"))
+	(e_int (4:2-4:3)
+		(int_var 19)
+		(precision_var 18)
+		(literal "3")
+		(value "TODO")
+		(bound "u8")))
+~~~TYPES
+(expr 22 (type "List(Num(Int(*)))"))
 ~~~END
