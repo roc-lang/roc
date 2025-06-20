@@ -50,6 +50,14 @@ pub const Diagnostic = union(enum) {
     lambda_body_not_canonicalized: struct {
         region: Region,
     },
+    var_across_function_boundary: struct {
+        region: Region,
+    },
+    shadowing_warning: struct {
+        ident: Ident.Idx,
+        region: Region,
+        original_region: Region,
+    },
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
@@ -155,6 +163,67 @@ pub const Diagnostic = union(enum) {
     pub fn buildLambdaBodyNotCanonicalizedReport(allocator: Allocator) !Report {
         var report = Report.init(allocator, "INVALID LAMBDA", .runtime_error, reporting.ReportingConfig.initPlainText());
         try report.document.addReflowingText("The body of this lambda expression is not valid.");
+        return report;
+    }
+
+    /// Build a report for "var across function boundary" diagnostic
+    pub fn buildVarAcrossFunctionBoundaryReport(allocator: Allocator) !Report {
+        var report = Report.init(allocator, "VAR REASSIGNMENT ERROR", .runtime_error, reporting.ReportingConfig.initPlainText());
+        try report.document.addReflowingText("Cannot reassign a ");
+        try report.document.addKeyword("var");
+        try report.document.addReflowingText(" from outside the function where it was declared.");
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Variables declared with ");
+        try report.document.addKeyword("var");
+        try report.document.addReflowingText(" can only be reassigned within the same function scope.");
+        return report;
+    }
+
+    /// Build a report for "shadowing warning" diagnostic
+    pub fn buildShadowingWarningReport(
+        allocator: Allocator,
+        ident_name: []const u8,
+        new_region_info: base.RegionInfo,
+        original_region_info: base.RegionInfo,
+        source: []const u8,
+        filename: []const u8,
+    ) !Report {
+        var report = Report.init(allocator, "DUPLICATE DEFINITION", .warning, reporting.ReportingConfig.initPlainText());
+        const owned_ident = try report.addOwnedString(ident_name);
+        try report.document.addText("The name `");
+        try report.document.addUnqualifiedSymbol(owned_ident);
+        try report.document.addText("` is being redeclared in this scope.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        // Show where the new declaration is
+        try report.document.addText("The redeclaration is here:");
+        try report.document.addLineBreak();
+        try report.document.addSourceRegion(
+            source,
+            new_region_info.start_line_idx + 1, // RegionInfo uses 0-based line numbers
+            new_region_info.start_col_idx + 1, // RegionInfo uses 0-based column numbers
+            new_region_info.end_line_idx + 1,
+            new_region_info.end_col_idx + 1,
+            .error_highlight,
+            filename,
+        );
+
+        try report.document.addLineBreak();
+        try report.document.addText("But `");
+        try report.document.addUnqualifiedSymbol(owned_ident);
+        try report.document.addText("` was already defined here:");
+        try report.document.addLineBreak();
+        try report.document.addSourceRegion(
+            source,
+            original_region_info.start_line_idx + 1, // RegionInfo uses 0-based line numbers
+            original_region_info.start_col_idx + 1, // RegionInfo uses 0-based column numbers
+            original_region_info.end_line_idx + 1,
+            original_region_info.end_col_idx + 1,
+            .dimmed,
+            filename,
+        );
+
         return report;
     }
 };

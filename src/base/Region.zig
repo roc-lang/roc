@@ -26,6 +26,11 @@ pub fn zero() Self {
     };
 }
 
+/// Returns true if two regions are equal.
+pub fn eq(self: Self, other: Self) bool {
+    return self.start.offset == other.start.offset and self.end.offset == other.end.offset;
+}
+
 /// Returns true if the region is empty i.e. all values are zero.
 pub fn isEmpty(self: Self) bool {
     return self.start.offset == 0 and self.end.offset == 0;

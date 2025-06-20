@@ -48,5 +48,5 @@ LowerIdent(9:5-9:6),NoSpaceDotUpperIdent(9:6-9:13),Comma(9:13-9:14),EndOfFile(9:
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(can_ir (top_level_defs "empty"))
+(can_ir "empty")
 ~~~END

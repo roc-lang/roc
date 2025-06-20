@@ -14,5 +14,5 @@ UpperIdent(1:1-1:2),EndOfFile(1:2-1:2),
 ~~~FORMATTED
 
 ~~~CANONICALIZE
-(can_ir (top_level_defs "empty"))
+(can_ir "empty")
 ~~~END

@@ -26,5 +26,5 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(runtime_error (1:1-1:1) "not_implemented")
+(e_runtime_error (1:1-1:1) "not_implemented")
 ~~~END

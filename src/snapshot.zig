@@ -4,7 +4,6 @@ const Allocator = std.mem.Allocator;
 const base = @import("base.zig");
 const canonicalize = @import("check/canonicalize.zig");
 const CIR = canonicalize.CIR;
-const Scope = @import("check/canonicalize/Scope.zig");
 const parse = @import("check/parse.zig");
 const fmt = @import("fmt.zig");
 const types = @import("types.zig");
@@ -453,14 +452,12 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
     parse_ast.store.emptyScratch();
 
     // Canonicalize the source code
-    // Can.IR.init takes ownership of the module_env and type_store
+
     var can_ir = CIR.init(&module_env);
     defer can_ir.deinit();
 
-    var scope = Scope.init(can_ir.env.gpa);
-    defer scope.deinit(can_ir.env.gpa);
-
-    var can = canonicalize.init(&can_ir, &parse_ast, &scope);
+    var can = canonicalize.init(&can_ir, &parse_ast);
+    defer can.deinit();
 
     var maybe_expr_idx: ?CIR.Expr.Idx = null;
 
@@ -551,7 +548,7 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
         for (diagnostics) |diagnostic| {
             canonicalize_problems += 1;
 
-            var report: Report = try can_ir.diagnosticToReport(diagnostic, gpa);
+            var report: Report = try can_ir.diagnosticToReport(diagnostic, gpa, content.source, snapshot_path);
             defer report.deinit();
             report.render(writer.any(), .plain_text) catch |err| {
                 try writer.print("Error rendering report: {}\n", .{err});
@@ -671,7 +668,7 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
         var canonicalized = std.ArrayList(u8).init(gpa);
         defer canonicalized.deinit();
 
-        try can_ir.toSExprStr(canonicalized.writer().any(), maybe_expr_idx, content.source);
+        try can_ir.toSExprStr(&module_env, canonicalized.writer().any(), maybe_expr_idx, content.source);
 
         try writer.writeAll(Section.CANONICALIZE);
         try writer.writeAll("\n");

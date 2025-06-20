@@ -25,13 +25,24 @@ pub const Diagnostic = @import("Diagnostic.zig").Diagnostic;
 
 const CIR = @This();
 
-env: *base.ModuleEnv,
+/// Reference to data that persists between compiler stages
+env: *ModuleEnv,
+/// Stores the raw nodes which represent the intermediate representation
+///
+/// Uses an efficient data structure, and provides helpers for storing and retrieving nodes.
 store: NodeStore,
-ingested_files: IngestedFile.List,
-/// Temporary source text used during SExpr generation for region info calculation
+/// Temporary source text used for generating SExpr and Reports, required to calculate region info.
+///
+/// This field exists because:
+/// - CIR may be loaded from cache without access to the original source file
+/// - Region info calculation requires the source text to convert byte offsets to line/column
+/// - The source is only needed temporarily during diagnostic reporting or SExpr generation
+///
+/// Lifetime: The caller must ensure the source remains valid for the duration of the
+/// operation (e.g., `toSExprStr` or `diagnosticToReport` calls).
 temp_source_for_sexpr: ?[]const u8 = null,
-imports: ModuleImport.Store,
-top_level_defs: Def.Span,
+/// All the definitions and in the module, populated by calling `canonicalize_file`
+all_defs: Def.Span,
 
 /// Initialize the IR for a module's canonicalization info.
 ///
@@ -51,17 +62,13 @@ pub fn init(env: *ModuleEnv) CIR {
     return CIR{
         .env = env,
         .store = NodeStore.initCapacity(env.gpa, NODE_STORE_CAPACITY),
-        .ingested_files = .{},
-        .imports = ModuleImport.Store.init(&.{}, &env.idents, env.gpa),
-        .top_level_defs = .{ .span = .{ .start = 0, .len = 0 } },
+        .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
     };
 }
 
 /// Deinit the IR's memory.
 pub fn deinit(self: *CIR) void {
     self.store.deinit();
-    self.ingested_files.deinit(self.env.gpa);
-    self.imports.deinit(self.env.gpa);
 }
 
 /// Records a diagnostic error during canonicalization without blocking compilation.
@@ -109,8 +116,16 @@ pub fn getDiagnostics(self: *CIR) []CIR.Diagnostic {
     return list.toOwnedSlice() catch |err| exitOnOom(err);
 }
 
-/// Convert a canonicalization diagnostic to a Report for rendering
-pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem.Allocator) !reporting.Report {
+/// Convert a canonicalization diagnostic to a Report for rendering.
+///
+/// The source parameter is not owned by this function - the caller must ensure it
+/// remains valid for the duration of this call. The returned Report will contain
+/// references to the source text but does not own it.
+pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem.Allocator, source: []const u8, filename: []const u8) !reporting.Report {
+    // Set temporary source for calcRegionInfo
+    self.temp_source_for_sexpr = source;
+    defer self.temp_source_for_sexpr = null;
+
     return switch (diagnostic) {
         .not_implemented => |data| blk: {
             const feature_text = self.env.strings.get(data.feature);
@@ -150,6 +165,20 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
         .pattern_not_canonicalized => Diagnostic.buildPatternNotCanonicalizedReport(allocator),
         .can_lambda_not_implemented => Diagnostic.buildCanLambdaNotImplementedReport(allocator),
         .lambda_body_not_canonicalized => Diagnostic.buildLambdaBodyNotCanonicalizedReport(allocator),
+        .var_across_function_boundary => Diagnostic.buildVarAcrossFunctionBoundaryReport(allocator),
+        .shadowing_warning => |data| blk: {
+            const ident_name = self.env.idents.getText(data.ident);
+            const new_region_info = self.calcRegionInfo(data.region);
+            const original_region_info = self.calcRegionInfo(data.original_region);
+            break :blk Diagnostic.buildShadowingWarningReport(
+                allocator,
+                ident_name,
+                new_region_info,
+                original_region_info,
+                source,
+                filename,
+            );
+        },
     };
 }
 
@@ -215,6 +244,13 @@ fn appendIdent(node: *sexpr.Expr, gpa: std.mem.Allocator, ir: *const CIR, name: 
     }
 }
 
+// Helper to format pattern index for s-expr output
+fn formatPatternIdxNode(gpa: std.mem.Allocator, pattern_idx: Pattern.Idx) sexpr.Expr {
+    var node = sexpr.Expr.init(gpa, "pid");
+    node.appendUnsignedInt(gpa, @intFromEnum(pattern_idx));
+    return node;
+}
+
 test "Node is 24 bytes" {
     try testing.expectEqual(24, @sizeOf(Node));
 }
@@ -230,15 +266,22 @@ pub const Statement = union(enum) {
     /// A rebindable declaration using the "var" keyword
     /// Not valid at the top level of a module
     @"var": struct {
-        ident: Ident.Idx,
+        pattern_idx: Pattern.Idx,
         expr: Expr.Idx,
         region: Region,
     },
-    /// The "crash" keyword
+    /// Reassignment of a previously declared var
+    /// Not valid at the top level of a module
+    reassign: struct {
+        pattern_idx: Pattern.Idx,
+        expr: Expr.Idx,
+        region: Region,
+    },
+    /// The "crash" keyword instruct a runtime crash with message
     ///
     /// Not valid at the top level of a module
     crash: struct {
-        msg: Ident.Idx,
+        msg: StringLiteral.Idx,
         region: Region,
     },
     /// Just an expression - usually the return value for a block
@@ -298,6 +341,143 @@ pub const Statement = union(enum) {
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
+
+    pub fn toSExpr(self: *const @This(), ir: *CIR, env: *ModuleEnv) sexpr.Expr {
+        const gpa = ir.env.gpa;
+        switch (self.*) {
+            .decl => |d| {
+                var node = sexpr.Expr.init(gpa, "s_let");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(d.region));
+
+                var pattern_node = ir.store.getPattern(d.pattern).toSExpr(ir, d.pattern);
+                node.appendNode(gpa, &pattern_node);
+
+                var expr_node = ir.store.getExpr(d.expr).toSExpr(ir, env);
+                node.appendNode(gpa, &expr_node);
+
+                return node;
+            },
+            .@"var" => |v| {
+                var node = sexpr.Expr.init(gpa, "s_var");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(v.region));
+
+                var pattern_idx = formatPatternIdxNode(gpa, v.pattern_idx);
+                node.appendNode(gpa, &pattern_idx);
+
+                var pattern_node = ir.store.getPattern(v.pattern_idx).toSExpr(ir, v.pattern_idx);
+                node.appendNode(gpa, &pattern_node);
+
+                var expr_node = ir.store.getExpr(v.expr).toSExpr(ir, env);
+                node.appendNode(gpa, &expr_node);
+
+                return node;
+            },
+            .reassign => |r| {
+                var node = sexpr.Expr.init(gpa, "s_reassign");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(r.region));
+
+                var pattern_idx = formatPatternIdxNode(gpa, r.pattern_idx);
+                node.appendNode(gpa, &pattern_idx);
+
+                var expr_node = ir.store.getExpr(r.expr).toSExpr(ir, env);
+                node.appendNode(gpa, &expr_node);
+                return node;
+            },
+            .crash => |c| {
+                var node = sexpr.Expr.init(gpa, "s_crash");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(c.region));
+
+                const msg = env.strings.get(c.msg);
+                node.appendString(gpa, msg);
+
+                return node;
+            },
+            .expr => |s| {
+                const feature = env.strings.insert(gpa, "s-expression for statement expr");
+                ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                    .feature = feature,
+                    .region = s.region,
+                } });
+
+                var node = sexpr.Expr.init(gpa, "s_expr");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(s.region));
+                node.appendString(gpa, "TODO");
+                return node;
+            },
+            .expect => |s| {
+                const feature = env.strings.insert(gpa, "s-expression for statement expect");
+                ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                    .feature = feature,
+                    .region = s.region,
+                } });
+
+                var node = sexpr.Expr.init(gpa, "s_expect");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(s.region));
+                node.appendString(gpa, "TODO");
+                return node;
+            },
+            .@"for" => |s| {
+                const feature = env.strings.insert(gpa, "s-expression for statement for");
+                ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                    .feature = feature,
+                    .region = s.region,
+                } });
+
+                var node = sexpr.Expr.init(gpa, "s_for");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(s.region));
+                node.appendString(gpa, "TODO");
+                return node;
+            },
+            .@"return" => |s| {
+                const feature = env.strings.insert(gpa, "s-expression for statement return");
+                ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                    .feature = feature,
+                    .region = s.region,
+                } });
+
+                var node = sexpr.Expr.init(gpa, "s_return");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(s.region));
+                node.appendString(gpa, "TODO");
+                return node;
+            },
+            .import => |s| {
+                const feature = env.strings.insert(gpa, "s-expression for statement import");
+                ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                    .feature = feature,
+                    .region = s.region,
+                } });
+
+                var node = sexpr.Expr.init(gpa, "s_import");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(s.region));
+                node.appendString(gpa, "TODO");
+                return node;
+            },
+            .type_decl => |s| {
+                const feature = env.strings.insert(gpa, "s-expression for statement type_decl");
+                ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                    .feature = feature,
+                    .region = s.region,
+                } });
+
+                var node = sexpr.Expr.init(gpa, "s_type_decl");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(s.region));
+                node.appendString(gpa, "TODO");
+                return node;
+            },
+            .type_anno => |s| {
+                const feature = env.strings.insert(gpa, "s-expression for statement type_anno");
+                ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                    .feature = feature,
+                    .region = s.region,
+                } });
+
+                var node = sexpr.Expr.init(gpa, "s_type_anno");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(s.region));
+                node.appendString(gpa, "TODO");
+                return node;
+            },
+        }
+    }
 };
 
 /// A working representation of a record field
@@ -449,7 +629,13 @@ pub const Expr = union(enum) {
     empty_record: struct {
         region: Region,
     },
-    /// Look up exactly one field on a record, e.g. (expr).foo.
+    block: struct {
+        /// Statements executed in sequence
+        stmts: Statement.Span,
+        /// Final expression that produces the block's value
+        final_expr: Expr.Idx,
+        region: Region,
+    },
     record_access: struct {
         record_var: TypeVar,
         ext_var: TypeVar,
@@ -469,6 +655,11 @@ pub const Expr = union(enum) {
         variant_var: TypeVar,
         ext_var: TypeVar,
         name: Ident.Idx,
+        region: Region,
+    },
+    lambda: struct {
+        args: Pattern.Span,
+        body: Expr.Idx,
         region: Region,
     },
     binop: Binop,
@@ -526,11 +717,11 @@ pub const Expr = union(enum) {
         }
     };
 
-    pub fn toSExpr(self: *const @This(), ir: *const CIR) sexpr.Expr {
+    pub fn toSExpr(self: *const @This(), ir: *CIR, env: *ModuleEnv) sexpr.Expr {
         const gpa = ir.env.gpa;
         switch (self.*) {
             .num => |num_expr| {
-                var num_node = sexpr.Expr.init(gpa, "num");
+                var num_node = sexpr.Expr.init(gpa, "e_num");
                 num_node.appendRegionInfo(gpa, ir.calcRegionInfo(num_expr.region));
 
                 // Add num_var
@@ -560,7 +751,7 @@ pub const Expr = union(enum) {
                 return num_node;
             },
             .int => |int_expr| {
-                var int_node = sexpr.Expr.init(gpa, "int");
+                var int_node = sexpr.Expr.init(gpa, "e_int");
                 int_node.appendRegionInfo(gpa, ir.calcRegionInfo(int_expr.region));
 
                 // Add int_var
@@ -596,7 +787,7 @@ pub const Expr = union(enum) {
                 return int_node;
             },
             .float => |float_expr| {
-                var float_node = sexpr.Expr.init(gpa, "float");
+                var float_node = sexpr.Expr.init(gpa, "e_float");
                 float_node.appendRegionInfo(gpa, ir.calcRegionInfo(float_expr.region));
 
                 // Add frac_var
@@ -634,7 +825,7 @@ pub const Expr = union(enum) {
                 return float_node;
             },
             .str_segment => |e| {
-                var str_node = sexpr.Expr.init(gpa, "literal");
+                var str_node = sexpr.Expr.init(gpa, "e_literal");
                 str_node.appendRegionInfo(gpa, ir.calcRegionInfo(e.region));
 
                 const value = ir.env.strings.get(e.literal);
@@ -643,18 +834,18 @@ pub const Expr = union(enum) {
                 return str_node;
             },
             .str => |e| {
-                var str_node = sexpr.Expr.init(gpa, "string");
+                var str_node = sexpr.Expr.init(gpa, "e_string");
                 str_node.appendRegionInfo(gpa, ir.calcRegionInfo(e.region));
 
                 for (ir.store.sliceExpr(e.span)) |segment| {
-                    var segment_node = ir.store.getExpr(segment).toSExpr(ir);
+                    var segment_node = ir.store.getExpr(segment).toSExpr(ir, env);
                     str_node.appendNode(gpa, &segment_node);
                 }
 
                 return str_node;
             },
             .single_quote => |e| {
-                var single_quote_node = sexpr.Expr.init(gpa, "single_quote");
+                var single_quote_node = sexpr.Expr.init(gpa, "e_single_quote");
                 single_quote_node.appendRegionInfo(gpa, ir.calcRegionInfo(e.region));
 
                 // Add num_var
@@ -686,7 +877,7 @@ pub const Expr = union(enum) {
                 return single_quote_node;
             },
             .list => |l| {
-                var list_node = sexpr.Expr.init(gpa, "list");
+                var list_node = sexpr.Expr.init(gpa, "e_list");
                 list_node.appendRegionInfo(gpa, ir.calcRegionInfo(l.region));
 
                 // Add elem_var
@@ -705,28 +896,23 @@ pub const Expr = union(enum) {
                 return list_node;
             },
             .lookup => |l| {
-                var lookup_node = sexpr.Expr.init(gpa, "lookup");
+                var lookup_node = sexpr.Expr.init(gpa, "e_lookup");
                 lookup_node.appendRegionInfo(gpa, ir.calcRegionInfo(l.region));
 
-                var ident_node = sexpr.Expr.init(gpa, "pattern_idx");
-
-                const pattern_idx_str = std.fmt.allocPrint(gpa, "{}", .{@intFromEnum(l.pattern_idx)}) catch |err| exitOnOom(err);
-                defer gpa.free(pattern_idx_str);
-
-                ident_node.appendString(gpa, pattern_idx_str);
-                lookup_node.appendNode(gpa, &ident_node);
+                var pattern_idx = formatPatternIdxNode(gpa, l.pattern_idx);
+                lookup_node.appendNode(gpa, &pattern_idx);
 
                 return lookup_node;
             },
             .when => |e| {
-                var when_branch_node = sexpr.Expr.init(gpa, "when");
+                var when_branch_node = sexpr.Expr.init(gpa, "e_when");
                 when_branch_node.appendRegionInfo(gpa, ir.calcRegionInfo(e.region));
                 when_branch_node.appendString(gpa, "TODO when branch");
 
                 return when_branch_node;
             },
             .@"if" => |if_expr| {
-                var if_node = sexpr.Expr.init(gpa, "if");
+                var if_node = sexpr.Expr.init(gpa, "e_if");
                 if_node.appendRegionInfo(gpa, ir.calcRegionInfo(if_expr.region));
 
                 // Add cond_var
@@ -775,7 +961,7 @@ pub const Expr = union(enum) {
                 return if_node;
             },
             .call => |c| {
-                var call_node = sexpr.Expr.init(gpa, "call");
+                var call_node = sexpr.Expr.init(gpa, "e_call");
                 call_node.appendRegionInfo(gpa, ir.calcRegionInfo(c.region));
 
                 // Get all expressions from the args span
@@ -784,7 +970,7 @@ pub const Expr = union(enum) {
                 // First element is the function being called
                 if (all_exprs.len > 0) {
                     const fn_expr = ir.store.getExpr(all_exprs[0]);
-                    var fn_node = fn_expr.toSExpr(ir);
+                    var fn_node = fn_expr.toSExpr(ir, env);
                     call_node.appendNode(gpa, &fn_node);
                 }
 
@@ -792,7 +978,7 @@ pub const Expr = union(enum) {
                 if (all_exprs.len > 1) {
                     for (all_exprs[1..]) |arg_idx| {
                         const arg_expr = ir.store.getExpr(arg_idx);
-                        var arg_node = arg_expr.toSExpr(ir);
+                        var arg_node = arg_expr.toSExpr(ir, env);
                         call_node.appendNode(gpa, &arg_node);
                     }
                 }
@@ -800,7 +986,7 @@ pub const Expr = union(enum) {
                 return call_node;
             },
             .record => |record_expr| {
-                var record_node = sexpr.Expr.init(gpa, "record");
+                var record_node = sexpr.Expr.init(gpa, "e_record");
                 record_node.appendRegionInfo(gpa, ir.calcRegionInfo(record_expr.region));
 
                 // Add record_var
@@ -818,12 +1004,28 @@ pub const Expr = union(enum) {
                 return record_node;
             },
             .empty_record => |e| {
-                var empty_record_node = sexpr.Expr.init(gpa, "empty_record");
+                var empty_record_node = sexpr.Expr.init(gpa, "e_empty_record");
                 empty_record_node.appendRegionInfo(gpa, ir.calcRegionInfo(e.region));
                 return empty_record_node;
             },
+            .block => |block_expr| {
+                var block_node = sexpr.Expr.init(gpa, "e_block");
+                block_node.appendRegionInfo(gpa, ir.calcRegionInfo(block_expr.region));
+
+                // Add statements
+                for (ir.store.sliceStatements(block_expr.stmts)) |stmt_idx| {
+                    var stmt_node = ir.store.getStatement(stmt_idx).toSExpr(ir, env);
+                    block_node.appendNode(gpa, &stmt_node);
+                }
+
+                // Add final expression
+                var expr_node = ir.store.getExpr(block_expr.final_expr).toSExpr(ir, env);
+                block_node.appendNode(gpa, &expr_node);
+
+                return block_node;
+            },
             .record_access => |access_expr| {
-                var access_node = sexpr.Expr.init(gpa, "record_access");
+                var access_node = sexpr.Expr.init(gpa, "e_record_access");
                 access_node.appendRegionInfo(gpa, ir.calcRegionInfo(access_expr.region));
 
                 // Add record_var
@@ -848,8 +1050,7 @@ pub const Expr = union(enum) {
                 access_node.appendNode(gpa, &field_var_node);
 
                 // Add loc_expr
-                var loc_expr = ir.store.getExpr(access_expr.loc_expr);
-                var loc_expr_node = loc_expr.toSExpr(ir);
+                var loc_expr_node = ir.store.getExpr(access_expr.loc_expr).toSExpr(ir, env);
                 access_node.appendNode(gpa, &loc_expr_node);
 
                 // Add field
@@ -861,7 +1062,7 @@ pub const Expr = union(enum) {
                 return access_node;
             },
             .tag => |tag_expr| {
-                var tag_node = sexpr.Expr.init(gpa, "tag");
+                var tag_node = sexpr.Expr.init(gpa, "e_tag");
                 tag_node.appendRegionInfo(gpa, ir.calcRegionInfo(tag_expr.region));
 
                 // Add ext_var
@@ -886,7 +1087,7 @@ pub const Expr = union(enum) {
                 return tag_node;
             },
             .zero_argument_tag => |tag_expr| {
-                var tag_node = sexpr.Expr.init(gpa, "zero_argument_tag");
+                var tag_node = sexpr.Expr.init(gpa, "e_zero_argument_tag");
                 tag_node.appendRegionInfo(gpa, ir.calcRegionInfo(tag_expr.region));
 
                 // Add closure_name
@@ -917,20 +1118,38 @@ pub const Expr = union(enum) {
 
                 return tag_node;
             },
+            .lambda => |lambda_expr| {
+                var lambda_node = sexpr.Expr.init(gpa, "e_lambda");
+                lambda_node.appendRegionInfo(gpa, ir.calcRegionInfo(lambda_expr.region));
+
+                // Handle args span
+                var args_node = sexpr.Expr.init(gpa, "args");
+                for (ir.store.slicePatterns(lambda_expr.args)) |arg_idx| {
+                    var pattern_node = ir.store.getPattern(arg_idx).toSExpr(ir, arg_idx);
+                    args_node.appendNode(gpa, &pattern_node);
+                }
+                lambda_node.appendNode(gpa, &args_node);
+
+                // Handle body
+                var body_node = ir.store.getExpr(lambda_expr.body).toSExpr(ir, env);
+                lambda_node.appendNode(gpa, &body_node);
+
+                return lambda_node;
+            },
             .binop => |e| {
-                var binop_node = sexpr.Expr.init(gpa, "binop");
+                var binop_node = sexpr.Expr.init(gpa, "e_binop");
                 binop_node.appendRegionInfo(gpa, ir.calcRegionInfo(e.region));
                 binop_node.appendString(gpa, @tagName(e.op));
 
-                var lhs_node = ir.store.getExpr(e.lhs).toSExpr(ir);
-                var rhs_node = ir.store.getExpr(e.rhs).toSExpr(ir);
+                var lhs_node = ir.store.getExpr(e.lhs).toSExpr(ir, env);
+                var rhs_node = ir.store.getExpr(e.rhs).toSExpr(ir, env);
                 binop_node.appendNode(gpa, &lhs_node);
                 binop_node.appendNode(gpa, &rhs_node);
 
                 return binop_node;
             },
             .runtime_error => |e| {
-                var runtime_err_node = sexpr.Expr.init(gpa, "runtime_error");
+                var runtime_err_node = sexpr.Expr.init(gpa, "e_runtime_error");
                 runtime_err_node.appendRegionInfo(gpa, ir.calcRegionInfo(e.region));
 
                 var buf = std.ArrayList(u8).init(gpa);
@@ -1041,29 +1260,24 @@ pub const Def = struct {
     pub const Span = struct { span: DataSpan };
     pub const Range = struct { start: u32, len: u32 };
 
-    pub fn toSExpr(self: *const @This(), ir: *CIR) sexpr.Expr {
+    pub fn toSExpr(self: *const @This(), ir: *CIR, env: *ModuleEnv) sexpr.Expr {
         const gpa = ir.env.gpa;
-        var node = sexpr.Expr.init(gpa, "def");
 
-        switch (self.kind) {
-            .let => node.appendString(gpa, "let"),
-            .stmt => node.appendString(gpa, "stmt"),
-            .ignored => node.appendString(gpa, "ignored"),
-        }
+        const kind = switch (self.kind) {
+            .let => "d_let",
+            .stmt => "d_stmt",
+            .ignored => "d_ignored",
+        };
 
-        var pattern_node = sexpr.Expr.init(gpa, "pattern");
-        pattern_node.appendRegionInfo(gpa, ir.calcRegionInfo(self.pattern_region));
+        var node = sexpr.Expr.init(gpa, kind);
 
-        const pattern = ir.store.getPattern(self.pattern);
-        var pattern_sexpr = pattern.toSExpr(ir);
+        var pattern_node = sexpr.Expr.init(gpa, "def_pattern");
+        var pattern_sexpr = ir.store.getPattern(self.pattern).toSExpr(ir, self.pattern);
         pattern_node.appendNode(gpa, &pattern_sexpr);
         node.appendNode(gpa, &pattern_node);
 
-        var expr_node = sexpr.Expr.init(gpa, "expr");
-        expr_node.appendRegionInfo(gpa, ir.calcRegionInfo(self.expr_region));
-
-        const expr = ir.store.getExpr(self.expr);
-        var expr_sexpr = expr.toSExpr(ir);
+        var expr_node = sexpr.Expr.init(gpa, "def_expr");
+        var expr_sexpr = ir.store.getExpr(self.expr).toSExpr(ir, env);
         expr_node.appendNode(gpa, &expr_sexpr);
         node.appendNode(gpa, &expr_node);
 
@@ -1307,39 +1521,75 @@ pub const Pattern = union(enum) {
     underscore: struct {
         region: Region,
     },
+    /// Compiles, but will crash if reached
+    runtime_error: struct {
+        diagnostic: Diagnostic.Idx,
+        region: Region,
+    },
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
 
-    pub fn toSExpr(self: *const @This(), ir: *CIR) sexpr.Expr {
+    pub fn toRegion(self: *const @This()) Region {
+        switch (self.*) {
+            .assign => |p| return p.region,
+            .as => |p| return p.region,
+            .applied_tag => |p| return p.region,
+            .record_destructure => |p| return p.region,
+            .list => |p| return p.region,
+            .num_literal => |p| return p.region,
+            .int_literal => |p| return p.region,
+            .float_literal => |p| return p.region,
+            .str_literal => |p| return p.region,
+            .char_literal => |p| return p.region,
+            .underscore => |p| return p.region,
+            .runtime_error => |p| return p.region,
+        }
+    }
+
+    pub fn toSExpr(self: *const @This(), ir: *CIR, pattern_idx: Pattern.Idx) sexpr.Expr {
         const gpa = ir.env.gpa;
         switch (self.*) {
             .assign => |p| {
-                var node = sexpr.Expr.init(gpa, "assign");
+                var node = sexpr.Expr.init(gpa, "p_assign");
                 node.appendRegionInfo(gpa, ir.calcRegionInfo(p.region));
+
+                var pattern_idx_node = formatPatternIdxNode(gpa, pattern_idx);
+                node.appendNode(gpa, &pattern_idx_node);
+
                 appendIdent(&node, gpa, ir, "ident", p.ident);
                 return node;
             },
             .as => |a| {
-                var node = sexpr.Expr.init(gpa, "as");
+                var node = sexpr.Expr.init(gpa, "p_as");
                 node.appendRegionInfo(gpa, ir.calcRegionInfo(a.region));
+
+                var pattern_idx_node = formatPatternIdxNode(gpa, pattern_idx);
+                node.appendNode(gpa, &pattern_idx_node);
+
                 appendIdent(&node, gpa, ir, "ident", a.ident);
-                var inner_patt_node = sexpr.Expr.init(gpa, "pattern");
-                const inner_patt = ir.store.getPattern(a.pattern);
-                var inner_patt_sexpr = inner_patt.toSExpr(ir);
-                inner_patt_node.appendNode(gpa, &inner_patt_sexpr);
-                node.appendNode(gpa, &inner_patt_node);
+
+                var pattern_node = ir.store.getPattern(a.pattern).toSExpr(ir, a.pattern);
+                node.appendNode(gpa, &pattern_node);
+
                 return node;
             },
             .applied_tag => |p| {
-                var node = sexpr.Expr.init(gpa, "pattern_applied_tag");
+                var node = sexpr.Expr.init(gpa, "p_applied_tag");
                 node.appendRegionInfo(gpa, ir.calcRegionInfo(p.region));
+
+                var pattern_idx_node = formatPatternIdxNode(gpa, pattern_idx);
+                node.appendNode(gpa, &pattern_idx_node);
+
                 node.appendString(gpa, "TODO");
                 return node;
             },
             .record_destructure => |p| {
-                var node = sexpr.Expr.init(gpa, "record_destructure");
+                var node = sexpr.Expr.init(gpa, "p_record_destructure");
                 node.appendRegionInfo(gpa, ir.calcRegionInfo(p.region));
+
+                var pattern_idx_node = formatPatternIdxNode(gpa, pattern_idx);
+                node.appendNode(gpa, &pattern_idx_node);
 
                 var destructs_node = sexpr.Expr.init(gpa, "destructs");
                 destructs_node.appendString(gpa, "TODO");
@@ -1348,14 +1598,16 @@ pub const Pattern = union(enum) {
                 return node;
             },
             .list => |p| {
-                var pattern_list_node = sexpr.Expr.init(gpa, "list");
+                var pattern_list_node = sexpr.Expr.init(gpa, "p_list");
                 pattern_list_node.appendRegionInfo(gpa, ir.calcRegionInfo(p.region));
+
+                var pattern_idx_node = formatPatternIdxNode(gpa, pattern_idx);
+                pattern_list_node.appendNode(gpa, &pattern_idx_node);
 
                 var patterns_node = sexpr.Expr.init(gpa, "patterns");
 
                 for (ir.store.slicePatterns(p.patterns)) |patt_idx| {
-                    const patt = ir.store.getPattern(patt_idx);
-                    var patt_sexpr = patt.toSExpr(ir);
+                    var patt_sexpr = ir.store.getPattern(patt_idx).toSExpr(ir, patt_idx);
                     patterns_node.appendNode(gpa, &patt_sexpr);
                 }
 
@@ -1364,24 +1616,35 @@ pub const Pattern = union(enum) {
                 return pattern_list_node;
             },
             .num_literal => |p| {
-                var node = sexpr.Expr.init(gpa, "num");
+                var node = sexpr.Expr.init(gpa, "p_num");
                 node.appendRegionInfo(gpa, ir.calcRegionInfo(p.region));
+
+                var pattern_idx_node = formatPatternIdxNode(gpa, pattern_idx);
+                node.appendNode(gpa, &pattern_idx_node);
+
                 node.appendString(gpa, "literal"); // TODO: use l.literal
                 node.appendString(gpa, "value=<int_value>");
                 node.appendString(gpa, @tagName(p.bound));
                 return node;
             },
             .int_literal => |p| {
-                var node = sexpr.Expr.init(gpa, "int");
+                var node = sexpr.Expr.init(gpa, "p_int");
                 node.appendRegionInfo(gpa, ir.calcRegionInfo(p.region));
+
+                var pattern_idx_node = formatPatternIdxNode(gpa, pattern_idx);
+                node.appendNode(gpa, &pattern_idx_node);
+
                 node.appendString(gpa, "literal"); // TODO: use l.literal
                 node.appendString(gpa, "value=<int_value>");
                 node.appendString(gpa, @tagName(p.bound));
                 return node;
             },
             .float_literal => |p| {
-                var node = sexpr.Expr.init(gpa, "float");
+                var node = sexpr.Expr.init(gpa, "p_float");
                 node.appendRegionInfo(gpa, ir.calcRegionInfo(p.region));
+
+                var pattern_idx_node = formatPatternIdxNode(gpa, pattern_idx);
+                node.appendNode(gpa, &pattern_idx_node);
 
                 node.appendString(gpa, "literal"); // TODO: use l.literal
                 const val_str = std.fmt.allocPrint(gpa, "{d}", .{p.value}) catch "<oom>";
@@ -1393,8 +1656,11 @@ pub const Pattern = union(enum) {
                 return node;
             },
             .str_literal => |p| {
-                var node = sexpr.Expr.init(gpa, "str");
+                var node = sexpr.Expr.init(gpa, "p_str");
                 node.appendRegionInfo(gpa, ir.calcRegionInfo(p.region));
+
+                var pattern_idx_node = formatPatternIdxNode(gpa, pattern_idx);
+                node.appendNode(gpa, &pattern_idx_node);
 
                 const text = ir.env.strings.get(p.literal);
                 node.appendString(gpa, text);
@@ -1402,8 +1668,11 @@ pub const Pattern = union(enum) {
                 return node;
             },
             .char_literal => |l| {
-                var node = sexpr.Expr.init(gpa, "char");
+                var node = sexpr.Expr.init(gpa, "p_char");
                 node.appendRegionInfo(gpa, ir.calcRegionInfo(l.region));
+
+                var pattern_idx_node = formatPatternIdxNode(gpa, pattern_idx);
+                node.appendNode(gpa, &pattern_idx_node);
 
                 node.appendString(gpa, "value");
                 const char_str = std.fmt.allocPrint(gpa, "'\\u({d})'", .{l.value}) catch "<oom>";
@@ -1413,9 +1682,30 @@ pub const Pattern = union(enum) {
                 return node;
             },
             .underscore => |p| {
-                var node = sexpr.Expr.init(gpa, "underscore");
+                var node = sexpr.Expr.init(gpa, "p_underscore");
                 node.appendRegionInfo(gpa, ir.calcRegionInfo(p.region));
+
+                var pattern_idx_node = formatPatternIdxNode(gpa, pattern_idx);
+                node.appendNode(gpa, &pattern_idx_node);
+
                 return node;
+            },
+            .runtime_error => |e| {
+                var runtime_err_node = sexpr.Expr.init(gpa, "p_runtime_error");
+                runtime_err_node.appendRegionInfo(gpa, ir.calcRegionInfo(e.region));
+
+                var pattern_idx_node = formatPatternIdxNode(gpa, pattern_idx);
+                runtime_err_node.appendNode(gpa, &pattern_idx_node);
+
+                var buf = std.ArrayList(u8).init(gpa);
+                defer buf.deinit();
+
+                const diagnostic = ir.store.getDiagnostic(e.diagnostic);
+
+                buf.writer().writeAll(@tagName(diagnostic)) catch |err| exitOnOom(err);
+
+                runtime_err_node.appendString(gpa, buf.items);
+                return runtime_err_node;
             },
         }
     }
@@ -1483,7 +1773,7 @@ pub const ExhaustiveMark = TypeVar;
 /// and write it to the given writer.
 ///
 /// If a single expression is provided we only print that expression
-pub fn toSExprStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr.Idx, source: []const u8) !void {
+pub fn toSExprStr(ir: *CIR, env: *ModuleEnv, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr.Idx, source: []const u8) !void {
     // Set temporary source for region info calculation during SExpr generation
     ir.temp_source_for_sexpr = source;
     defer ir.temp_source_for_sexpr = null;
@@ -1493,7 +1783,7 @@ pub fn toSExprStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr.Idx,
         // Get the expression from the store
         const expr = ir.store.getExpr(expr_idx);
 
-        var expr_node = expr.toSExpr(ir);
+        var expr_node = expr.toSExpr(ir, env);
         defer expr_node.deinit(gpa);
 
         expr_node.toStringPretty(writer);
@@ -1501,22 +1791,18 @@ pub fn toSExprStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr.Idx,
         var root_node = sexpr.Expr.init(gpa, "can_ir");
         defer root_node.deinit(gpa);
 
-        var defs_node = sexpr.Expr.init(gpa, "top_level_defs");
-
-        // Iterate over each top-level definition and convert it to an S-expression
-        const defs_slice = ir.store.sliceDefs(ir.top_level_defs);
+        // Iterate over all the definitions in the file and convert each to an S-expression
+        const defs_slice = ir.store.sliceDefs(ir.all_defs);
 
         if (defs_slice.len == 0) {
-            defs_node.appendString(gpa, "empty");
+            root_node.appendString(gpa, "empty");
         }
 
         for (defs_slice) |def_idx| {
             const d = ir.store.getDef(def_idx);
-            var def_node = d.toSExpr(ir);
-            defs_node.appendNode(gpa, &def_node);
+            var def_node = d.toSExpr(ir, env);
+            root_node.appendNode(gpa, &def_node);
         }
-
-        root_node.appendNode(gpa, &defs_node);
 
         root_node.toStringPretty(writer);
     }

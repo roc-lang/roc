@@ -21,14 +21,14 @@ LowerIdent(2:1-2:4),OpAssign(2:5-2:6),UpperIdent(2:7-2:15),EndOfFile(2:15-2:15),
 NO CHANGE
 ~~~CANONICALIZE
 (can_ir
-	(top_level_defs
-		(def
-			"let"
-			(pattern (2:1-2:4)
-				(assign (2:1-2:4) (ident "foo")))
-			(expr (2:7-2:15)
-				(tag (2:7-2:15)
-					(ext_var "#0")
-					(name "FortyTwo")
-					(args "TODO"))))))
+	(d_let
+		(def_pattern
+			(p_assign (2:1-2:4)
+				(pid 12)
+				(ident "foo")))
+		(def_expr
+			(e_tag (2:7-2:15)
+				(ext_var "#0")
+				(name "FortyTwo")
+				(args "TODO")))))
 ~~~END

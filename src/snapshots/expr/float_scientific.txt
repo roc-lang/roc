@@ -12,7 +12,7 @@ Float(1:1-1:8),EndOfFile(1:8-1:8),
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(float (1:1-1:8)
+(e_float (1:1-1:8)
 	(frac_var "#1")
 	(precision_var "#0")
 	(literal "1.23e-4")

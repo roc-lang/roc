@@ -12,6 +12,26 @@ const ColorUtils = @import("style.zig").ColorUtils;
 const ReportingConfig = @import("config.zig").ReportingConfig;
 const collections = @import("../collections.zig");
 const exitOnOom = collections.utils.exitOnOom;
+const source_region = @import("source_region.zig");
+
+/// TODO find a better solution this is temporary to make CI happy
+///
+/// Makes a file path relative for error reporting.
+/// For snapshot files, returns just the filename.
+/// For other files, returns the original path.
+fn sanitisePathForSnapshots(path: []const u8) []const u8 {
+
+    // Check if this is a snapshot file (contains /snapshots/ or \snapshots\)
+    if (std.mem.indexOf(u8, path, "/snapshots/") != null or
+        std.mem.indexOf(u8, path, "\\snapshots\\") != null)
+    {
+        // For snapshot files, just return the basename
+        return std.fs.path.basename(path);
+    }
+
+    // For non-snapshot files, return the original path for now
+    return path;
+}
 
 /// Supported rendering targets.
 pub const RenderTarget = enum {
@@ -207,17 +227,71 @@ fn renderElementToTerminal(element: DocumentElement, writer: anytype, palette: C
             }
         },
         .source_code_region => |region| {
+            // Calculate the width needed for line numbers
+            const line_num_width = source_region.calculateLineNumberWidth(region.end_line);
+
+            // Print location header with proper alignment
+            try source_region.printSpaces(writer, line_num_width);
+            try writer.writeAll(palette.secondary);
             if (region.filename) |filename| {
-                try writer.print("{s}:{}-{}:{}: ", .{ filename, region.start_line, region.start_column, region.end_line });
+                try writer.print(" ┌─ {s}:{}:{}\n", .{ sanitisePathForSnapshots(filename), region.start_line, region.start_column });
+            } else {
+                try writer.print(" ┌─ <source>:{}:{}\n", .{ region.start_line, region.start_column });
             }
-            const color = getAnnotationColor(region.region_annotation, palette);
-            try writer.writeAll(color);
-            try writer.writeAll(region.source);
             try writer.writeAll(palette.reset);
+
+            // Print separator line
+            try source_region.printSpaces(writer, line_num_width);
+            try writer.writeAll(palette.secondary);
+            try writer.writeAll(" │\n");
+            try writer.writeAll(palette.reset);
+
+            // Extract and print the source lines with line numbers
+            const lines = source_region.extractLines(region.source, region.start_line, region.end_line);
+            var line_num = region.start_line;
+            var iter = std.mem.tokenizeScalar(u8, lines, '\n');
+            while (iter.next()) |line| {
+                // Print line number
+                try writer.writeAll(palette.secondary);
+                try source_region.formatLineNumber(writer, line_num, line_num_width);
+                try writer.writeAll(" │ ");
+                try writer.writeAll(palette.reset);
+
+                // Print the line content with highlighting
+                const color = getAnnotationColor(region.region_annotation, palette);
+                try writer.writeAll(color);
+                try writer.writeAll(line);
+                try writer.writeAll(palette.reset);
+                try writer.writeAll("\n");
+
+                // Print column indicator if this is a single-line region
+                if (region.start_line == region.end_line and line_num == region.start_line) {
+                    try writer.writeAll(palette.secondary);
+                    // Print spaces for line number width
+                    try source_region.printSpaces(writer, line_num_width);
+                    try writer.writeAll(" │ ");
+                    try writer.writeAll(palette.reset);
+
+                    // Print spaces up to the start column
+                    try source_region.printSpaces(writer, region.start_column - 1);
+
+                    // Print the underline
+                    try writer.writeAll(color);
+                    const underline_len = source_region.calculateUnderlineLength(region.start_column, region.end_column);
+                    var i: u32 = 0;
+                    while (i < underline_len) : (i += 1) {
+                        try writer.writeAll("^");
+                    }
+                    try writer.writeAll(palette.reset);
+                    try writer.writeAll("\n");
+                }
+
+                line_num += 1;
+            }
         },
         .source_code_multi_region => |multi| {
             if (multi.filename) |filename| {
-                try writer.print("{s}: ", .{filename});
+                try writer.print("{s}: ", .{sanitisePathForSnapshots(filename)});
             }
             try writer.writeAll(multi.source);
             try writer.writeAll("\n");
@@ -299,9 +373,11 @@ fn renderElementToPlainText(element: DocumentElement, writer: anytype) !void {
         },
         .source_code_region => |region| {
             if (region.filename) |filename| {
-                try writer.print("{s}:{}-{}:{}: ", .{ filename, region.start_line, region.start_column, region.end_line });
+                try writer.print("{s}:{}-{}:{}: ", .{ sanitisePathForSnapshots(filename), region.start_line, region.start_column, region.end_line });
             }
-            try writer.writeAll(region.source);
+            const lines = source_region.extractLines(region.source, region.start_line, region.end_line);
+            try writer.writeAll(lines);
+            try writer.writeAll("\n");
         },
         .source_code_multi_region => |multi| {
             if (multi.filename) |filename| {
@@ -379,17 +455,18 @@ fn renderElementToHtml(element: DocumentElement, writer: anytype, annotation_sta
         .source_code_region => |region| {
             try writer.writeAll("<div class=\"source-region\">");
             if (region.filename) |filename| {
-                try writer.print("<span class=\"filename\">{s}:{d}-{d}:{d}:</span> ", .{ filename, region.start_line, region.start_column, region.end_line });
+                try writer.print("<span class=\"filename\">{s}:{}-{}:{}:</span> ", .{ sanitisePathForSnapshots(filename), region.start_line, region.start_column, region.end_line });
             }
             const class = getAnnotationHtmlClass(region.region_annotation);
             try writer.print("<pre class=\"{s}\">", .{class});
-            try writeEscapedHtml(writer, region.source);
+            const lines = source_region.extractLines(region.source, region.start_line, region.end_line);
+            try writeEscapedHtml(writer, lines);
             try writer.writeAll("</pre></div>");
         },
         .source_code_multi_region => |multi| {
             try writer.writeAll("<div class=\"source-multi-region\">");
             if (multi.filename) |filename| {
-                try writer.print("<span class=\"filename\">{s}:</span> ", .{filename});
+                try writer.print("<span class=\"filename\">{s}:</span> ", .{sanitisePathForSnapshots(filename)});
             }
             try writer.writeAll("<pre>");
             try writeEscapedHtml(writer, multi.source);
@@ -471,9 +548,11 @@ fn renderElementToLsp(element: DocumentElement, writer: anytype) !void {
         },
         .source_code_region => |region| {
             if (region.filename) |filename| {
-                try writer.print("{s}:{}-{}:{}: ", .{ filename, region.start_line, region.start_column, region.end_line });
+                try writer.print("{s}:{}-{}:{}: ", .{ sanitisePathForSnapshots(filename), region.start_line, region.start_column, region.end_line });
             }
-            try writer.writeAll(region.source);
+            const lines = source_region.extractLines(region.source, region.start_line, region.end_line);
+            try writer.writeAll(lines);
+            try writer.writeAll("\n");
         },
         .source_code_multi_region => |multi| {
             if (multi.filename) |filename| {

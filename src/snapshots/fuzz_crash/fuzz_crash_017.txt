@@ -34,10 +34,10 @@ LowerIdent(2:1-2:4),OpAssign(2:5-2:6),StringStart(2:7-2:8),StringPart(2:8-2:14),
 foo = 
 ~~~CANONICALIZE
 (can_ir
-	(top_level_defs
-		(def
-			"let"
-			(pattern (2:1-2:4)
-				(assign (2:1-2:4) (ident "foo")))
-			(expr (2:7-2:20) (runtime_error (2:7-2:20) "expr_not_canonicalized")))))
+	(d_let
+		(def_pattern
+			(p_assign (2:1-2:4)
+				(pid 14)
+				(ident "foo")))
+		(def_expr (e_runtime_error (2:7-2:20) "expr_not_canonicalized"))))
 ~~~END

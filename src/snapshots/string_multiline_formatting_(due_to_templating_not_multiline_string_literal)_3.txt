@@ -36,11 +36,11 @@ CloseStringInterpolation(6:1-6:2),StringPart(6:2-6:42),StringEnd(6:42-6:43),EndO
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(string (1:1-6:43)
-	(literal (1:2-1:24) "This is a string with ")
-	(call (2:2-5:3)
-		(runtime_error (2:2-2:11) "ident_not_in_scope")
-		(runtime_error (3:3-3:4) "ident_not_in_scope")
-		(runtime_error (4:3-4:4) "ident_not_in_scope"))
-	(literal (6:2-6:42) " lines of text due to the template parts"))
+(e_string (1:1-6:43)
+	(e_literal (1:2-1:24) "This is a string with ")
+	(e_call (2:2-5:3)
+		(e_runtime_error (2:2-2:11) "ident_not_in_scope")
+		(e_runtime_error (3:3-3:4) "ident_not_in_scope")
+		(e_runtime_error (4:3-4:4) "ident_not_in_scope"))
+	(e_literal (6:2-6:42) " lines of text due to the template parts"))
 ~~~END

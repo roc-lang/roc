@@ -12,7 +12,7 @@ Int(1:1-1:31),EndOfFile(1:31-1:31),
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(int (1:1-1:31)
+(e_int (1:1-1:31)
 	(int_var "#1")
 	(precision_var "#0")
 	(literal "999999999999999999999999999999")

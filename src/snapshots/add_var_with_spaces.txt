@@ -30,19 +30,19 @@ module [add2]
 add2 = x + 2
 ~~~CANONICALIZE
 (can_ir
-	(top_level_defs
-		(def
-			"let"
-			(pattern (3:1-3:5)
-				(assign (3:1-3:5) (ident "add2")))
-			(expr (3:8-3:18)
-				(binop (3:8-3:18)
-					"add"
-					(runtime_error (3:8-3:9) "ident_not_in_scope")
-					(int (3:17-3:18)
-						(int_var "#3")
-						(precision_var "#2")
-						(literal "2")
-						(value "TODO")
-						(bound "u8")))))))
+	(d_let
+		(def_pattern
+			(p_assign (3:1-3:5)
+				(pid 12)
+				(ident "add2")))
+		(def_expr
+			(e_binop (3:8-3:18)
+				"add"
+				(e_runtime_error (3:8-3:9) "ident_not_in_scope")
+				(e_int (3:17-3:18)
+					(int_var "#3")
+					(precision_var "#2")
+					(literal "2")
+					(value "TODO")
+					(bound "u8"))))))
 ~~~END

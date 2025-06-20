@@ -43,5 +43,5 @@ Int(4:1-4:3),EndOfFile(4:3-4:3),
 
 0_
 ~~~CANONICALIZE
-(can_ir (top_level_defs "empty"))
+(can_ir "empty")
 ~~~END
