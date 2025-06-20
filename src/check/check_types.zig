@@ -119,6 +119,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
         .binop => |_| {},
         .block => |_| {},
         .lambda => |_| {},
+        .tuple => |_| {},
         .runtime_error => |_| {},
     }
 }
