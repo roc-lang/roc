@@ -1,10 +1,8 @@
-//! Prints types as human readable s-exprs
-
 const std = @import("std");
 const base = @import("../base.zig");
 const sexpr = @import("../base/sexpr.zig");
-const store = @import("./store.zig");
-const types = @import("./types.zig");
+const store = @import("../types/store.zig");
+const types = @import("../types/types.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -29,7 +27,7 @@ pub const SExprWriter = struct {
 
         var vars_node = sexpr.Expr.init(gpa, "vars");
 
-        if (env.types_store.slots.backing.items.len == 0) {
+        if (env.types.slots.backing.items.len == 0) {
             vars_node.appendString(gpa, "empty");
         }
 
@@ -38,7 +36,7 @@ pub const SExprWriter = struct {
 
         var type_writer = TypeWriter.init(buffer.writer(), env);
 
-        for (0..env.types_store.slots.backing.items.len) |slot_idx| {
+        for (0..env.types.slots.backing.items.len) |slot_idx| {
             const var_: Var = @enumFromInt(slot_idx);
             try type_writer.writeVar(var_);
 
@@ -79,7 +77,7 @@ pub const TypeWriter = struct {
 
     /// Convert a var to a type string
     pub fn writeVar(self: *Self, var_: Var) Allocator.Error!void {
-        const resolved = self.env.types_store.resolveVar(var_);
+        const resolved = self.env.types.resolveVar(var_);
         return self.writeContent(resolved.desc.content);
     }
 
@@ -117,7 +115,7 @@ pub const TypeWriter = struct {
     /// Write an alias type
     pub fn writeAlias(self: *Self, alias: types.Alias) Allocator.Error!void {
         _ = try self.writer.write(self.env.idents.getText(alias.ident.ident_idx));
-        const args = self.env.types_store.getAliasArgsSlice(alias.args);
+        const args = self.env.types.getAliasArgsSlice(alias.args);
         if (args.len > 0) {
             _ = try self.writer.write("(");
             for (args, 0..) |arg, i| {
@@ -173,7 +171,7 @@ pub const TypeWriter = struct {
 
     /// Write a tuple type
     pub fn writeTuple(self: *Self, tuple: types.Tuple) Allocator.Error!void {
-        const elems = self.env.types_store.getTupleElemsSlice(tuple.elems);
+        const elems = self.env.types.getTupleElemsSlice(tuple.elems);
         _ = try self.writer.write("(");
         for (elems, 0..) |elem, i| {
             if (i > 0) _ = try self.writer.write(", ");
@@ -185,7 +183,7 @@ pub const TypeWriter = struct {
     /// Write a custom type
     pub fn writeCustomType(self: *Self, custom_type: types.CustomType) Allocator.Error!void {
         _ = try self.writer.write(self.env.idents.getText(custom_type.ident.ident_idx));
-        const args = self.env.types_store.getCustomTypeArgsSlice(custom_type.args);
+        const args = self.env.types.getCustomTypeArgsSlice(custom_type.args);
         if (args.len > 0) {
             _ = try self.writer.write("(");
             for (args, 0..) |arg, i| {
@@ -198,7 +196,7 @@ pub const TypeWriter = struct {
 
     /// Write a function type
     pub fn writeFunc(self: *Self, func: types.Func) Allocator.Error!void {
-        const args = self.env.types_store.getFuncArgsSlice(func.args);
+        const args = self.env.types.getFuncArgsSlice(func.args);
 
         // Write arguments
         if (args.len == 0) {
@@ -213,7 +211,7 @@ pub const TypeWriter = struct {
         }
 
         // Only show effect if it's not pure
-        const effect_resolved = self.env.types_store.resolveVar(func.eff);
+        const effect_resolved = self.env.types.resolveVar(func.eff);
         switch (effect_resolved.desc.content) {
             .pure => _ = try self.writer.write(" -> "),
             .effectful => _ = try self.writer.write(" => "),
@@ -225,7 +223,7 @@ pub const TypeWriter = struct {
 
     /// Write a record type
     pub fn writeRecord(self: *Self, record: types.Record) Allocator.Error!void {
-        const fields = self.env.types_store.getRecordFieldsSlice(record.fields);
+        const fields = self.env.types.getRecordFieldsSlice(record.fields);
 
         _ = try self.writer.write("{ ");
         for (fields.items(.name), fields.items(.var_), 0..) |field_name, field_var, i| {
@@ -236,7 +234,7 @@ pub const TypeWriter = struct {
         }
 
         // Show extension variable if it's not empty
-        const ext_resolved = self.env.types_store.resolveVar(record.ext);
+        const ext_resolved = self.env.types.resolveVar(record.ext);
         switch (ext_resolved.desc.content) {
             .structure => |flat_type| switch (flat_type) {
                 .empty_record => {}, // Don't show empty extension
@@ -258,7 +256,7 @@ pub const TypeWriter = struct {
 
     /// Write a tag union type
     pub fn writeTagUnion(self: *Self, tag_union: types.TagUnion) Allocator.Error!void {
-        const tags = self.env.types_store.getTagsSlice(tag_union.tags);
+        const tags = self.env.types.getTagsSlice(tag_union.tags);
 
         _ = try self.writer.write("[");
         var iter = tag_union.tags.iterIndices();
@@ -267,12 +265,12 @@ pub const TypeWriter = struct {
                 _ = try self.writer.write(", ");
             }
 
-            const tag = self.env.types_store.tags.get(tag_idx);
+            const tag = self.env.types.tags.get(tag_idx);
             try self.writeTag(tag);
         }
 
         // Show extension variable if it's not empty
-        const ext_resolved = self.env.types_store.resolveVar(tag_union.ext);
+        const ext_resolved = self.env.types.resolveVar(tag_union.ext);
         switch (ext_resolved.desc.content) {
             .structure => |flat_type| switch (flat_type) {
                 .empty_tag_union => {}, // Don't show empty extension
@@ -295,7 +293,7 @@ pub const TypeWriter = struct {
     /// Write a single tag
     pub fn writeTag(self: *Self, tag: types.Tag) Allocator.Error!void {
         _ = try self.writer.write(self.env.idents.getText(tag.name));
-        const args = self.env.types_store.getTagArgsSlice(tag.args);
+        const args = self.env.types.getTagArgsSlice(tag.args);
         if (args.len > 0) {
             _ = try self.writer.write("(");
             for (args, 0..) |arg, i| {

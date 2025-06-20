@@ -1,10 +1,12 @@
 const std = @import("std");
 const base = @import("../base.zig");
 const collections = @import("../collections.zig");
-const types = @import("../types.zig");
+const types_mod = @import("../types.zig");
 const can = @import("canonicalize.zig");
 const unifier = @import("check_types/unify.zig");
 const occurs = @import("check_types/occurs.zig");
+const problem = @import("check_types/problem.zig");
+const snapshot = @import("check_types/snapshot.zig");
 const CIR = @import("./canonicalize/CIR.zig");
 const ModuleEnv = @import("../base/ModuleEnv.zig");
 
@@ -14,62 +16,58 @@ const Ident = base.Ident;
 const Region = base.Region;
 const ModuleWork = base.ModuleWork;
 
-const Var = types.Var;
+const Var = types_mod.Var;
 
 const Self = @This();
 
 gpa: std.mem.Allocator,
 // not owned
-types_store: *types.Store,
+types: *types_mod.Store,
 can_ir: *const CIR,
 // owned
-unify_scratch: *unifier.Scratch,
-occurs_scratch: *occurs.Scratch,
+snapshots: snapshot.Store,
+problems: problem.Store,
+unify_scratch: unifier.Scratch,
+occurs_scratch: occurs.Scratch,
 
 /// Init type solver
 /// Does *not* own types_store or can_ir, but *does* own other fields
-pub fn init(gpa: std.mem.Allocator, types_store: *types.Store, can_ir: *const CIR) std.mem.Allocator.Error!Self {
-    const unify_scratch = try gpa.create(unifier.Scratch);
-    unify_scratch.* = unifier.Scratch.init(gpa);
-
-    const occurs_scratch = try gpa.create(occurs.Scratch);
-    occurs_scratch.* = occurs.Scratch.init(gpa);
-
+pub fn init(
+    gpa: std.mem.Allocator,
+    types: *types_mod.Store,
+    can_ir: *const CIR,
+) std.mem.Allocator.Error!Self {
     return .{
         .gpa = gpa,
-        .types_store = types_store,
+        .types = types,
         .can_ir = can_ir,
-        .unify_scratch = unify_scratch,
-        .occurs_scratch = occurs_scratch,
+        .snapshots = snapshot.Store.initCapacity(gpa, 512),
+        .problems = problem.Store.initCapacity(gpa, 64),
+        .unify_scratch = unifier.Scratch.init(gpa),
+        .occurs_scratch = occurs.Scratch.init(gpa),
     };
 }
 
 /// Deinit owned fields
 pub fn deinit(self: *Self) void {
+    self.problems.deinit(self.gpa);
+    self.snapshots.deinit();
     self.unify_scratch.deinit();
-    self.gpa.destroy(self.unify_scratch);
-
     self.occurs_scratch.deinit();
-    self.gpa.destroy(self.occurs_scratch);
 }
 
 /// Deinit owned fields
 pub fn unify(self: *Self, a: Var, b: Var) void {
-    const ret = unifier.unify(
+    _ = unifier.unify(
         self.can_ir.env,
-        self.types_store,
-        self.unify_scratch,
-        self.occurs_scratch,
+        self.types,
+        &self.problems,
+        &self.snapshots,
+        &self.unify_scratch,
+        &self.occurs_scratch,
         a,
         b,
     );
-    switch (ret) {
-        .ok => {},
-        else => {
-            // TODO: Handle errors
-            std.debug.print("unify err {}\n", .{ret});
-        },
-    }
 }
 
 /// Check the types for all defs

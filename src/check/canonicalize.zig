@@ -673,7 +673,7 @@ pub fn canonicalize_expr(
                 std.debug.assert(@intFromEnum(expr_idx) == @intFromEnum(final_expr_idx));
 
                 // Insert concrete type variable
-                const tag_union = self.can_ir.env.types_store.mkTagUnion(
+                const tag_union = self.can_ir.env.types.mkTagUnion(
                     &[_]Tag{Tag{ .name = tag_name, .args = types.Var.SafeList.Range.empty }},
                     ext_type_var,
                 );
@@ -1226,7 +1226,7 @@ fn canonicalize_pattern(
                 std.debug.assert(@intFromEnum(pattern_idx) == @intFromEnum(final_pattern_idx));
 
                 // Set the concrete type variable
-                const tag_union_type = self.can_ir.env.types_store.mkTagUnion(
+                const tag_union_type = self.can_ir.env.types.mkTagUnion(
                     &[_]Tag{Tag{ .name = tag_name, .args = types.Var.SafeList.Range.empty }},
                     ext_type_var,
                 );

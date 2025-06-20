@@ -195,10 +195,10 @@ pub fn pushTypeVar(self: *CIR, content: types.Content, parent_node_idx: Node.Idx
 
     // if the new can node idx is greater than the types store length, backfill
     const var_: types.Var = @enumFromInt(@intFromEnum(var_slot));
-    self.env.types_store.fillInSlotsThru(var_) catch |err| exitOnOom(err);
+    self.env.types.fillInSlotsThru(var_) catch |err| exitOnOom(err);
 
     // set the type store slot based on the placeholder node idx
-    self.env.types_store.setVarContent(var_, content);
+    self.env.types.setVarContent(var_, content);
 
     return var_;
 }
@@ -222,10 +222,10 @@ pub fn setTypeVarAtPat(self: *CIR, at_idx: Pattern.Idx, content: types.Content) 
 pub fn setTypeVarAt(self: *CIR, at_idx: Node.Idx, content: types.Content) types.Var {
     // if the new can node idx is greater than the types store length, backfill
     const var_: types.Var = @enumFromInt(@intFromEnum(at_idx));
-    self.env.types_store.fillInSlotsThru(var_) catch |err| exitOnOom(err);
+    self.env.types.fillInSlotsThru(var_) catch |err| exitOnOom(err);
 
     // set the type store slot based on the placeholder node idx
-    self.env.types_store.setVarContent(var_, content);
+    self.env.types.setVarContent(var_, content);
 
     return var_;
 }
@@ -1912,7 +1912,7 @@ pub fn toSexprTypesStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr
     var type_string_buf = std.ArrayList(u8).init(gpa);
     defer type_string_buf.deinit();
 
-    var type_writer = types.TypeWriter.init(type_string_buf.writer(), ir.env);
+    var type_writer = types.writers.TypeWriter.init(type_string_buf.writer(), ir.env);
 
     if (maybe_expr_idx) |expr_idx| {
         const expr_var = @as(types.Var, @enumFromInt(@intFromEnum(expr_idx)));
@@ -1922,7 +1922,7 @@ pub fn toSexprTypesStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr
 
         expr_node.appendUnsignedInt(gpa, @intFromEnum(expr_idx));
 
-        if (@intFromEnum(expr_var) > ir.env.types_store.slots.backing.items.len) {
+        if (@intFromEnum(expr_var) > ir.env.types.slots.backing.items.len) {
             const unknown_node = sexpr.Expr.init(gpa, "unknown");
             expr_node.appendNode(gpa, &unknown_node);
         } else {
@@ -1967,7 +1967,7 @@ pub fn toSexprTypesStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr
                     def_node.appendString(gpa, ident_name);
                     def_node.appendUnsignedInt(gpa, @intFromEnum(def_var));
 
-                    if (@intFromEnum(def_var) > ir.env.types_store.slots.backing.items.len) {
+                    if (@intFromEnum(def_var) > ir.env.types.slots.backing.items.len) {
                         const unknown_node = sexpr.Expr.init(gpa, "unknown");
                         def_node.appendNode(gpa, &unknown_node);
                     } else {
@@ -2015,7 +2015,7 @@ pub fn toSexprTypesStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr
             expr_node.appendRegionInfo(gpa, ir.calcRegionInfo(def.expr_region));
             expr_node.appendUnsignedInt(gpa, @intFromEnum(expr_var));
 
-            if (@intFromEnum(expr_var) > ir.env.types_store.slots.backing.items.len) {
+            if (@intFromEnum(expr_var) > ir.env.types.slots.backing.items.len) {
                 const unknown_node = sexpr.Expr.init(gpa, "unknown");
                 expr_node.appendNode(gpa, &unknown_node);
             } else {
