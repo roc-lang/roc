@@ -141,9 +141,7 @@ pub fn isVarPattern(self: *const Self, pattern_idx: CIR.Pattern.Idx) bool {
 pub fn isVarReassignmentAcrossFunctionBoundary(self: *const Self, pattern_idx: CIR.Pattern.Idx) bool {
     if (self.var_function_regions.get(pattern_idx)) |var_function_region| {
         if (self.getCurrentFunctionRegion()) |current_function_region| {
-            // Manual comparison since Region doesn't have eql method
-            return !(var_function_region.start.offset == current_function_region.start.offset and
-                var_function_region.end.offset == current_function_region.end.offset);
+            return !var_function_region.eq(current_function_region);
         }
     }
     return false;
