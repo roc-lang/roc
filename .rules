@@ -95,3 +95,173 @@ The compiler follows this sequential flow:
 - All identifiers are interned for memory efficiency
 - Use `Ident.Store` methods to create/lookup identifiers
 - Identifiers carry attributes (effectful, ignored, reassignable) in a packed struct(u32)
+
+# Roc version 0.1 Syntax Guide
+
+Here is a comprehensive description of Roc version 0.1 syntax to assist with writing and understanding `.roc` code.
+
+## Module Structure
+
+```roc
+# A `app` module header using the basic-cli platform
+app [main!] { pf: platform "../basic-cli/platform.roc" }
+
+# A standard module header exposing the `add` function
+module [add]
+```
+
+## Import System
+
+```roc
+import pf.Stdout exposing [line!, write!]
+import pkg.Something exposing [func as function, Type as ValueCategory, Custom.*]
+import BadName as GoodName
+```
+
+**Import**
+- `import cli.Foo` - Basic import of the `Foo` module from the `cli` package
+
+## Type Annotations and Declarations
+
+```roc
+Map(a, b) : List(a), (a -> b) -> List(b)
+Maybe(a) : [Some(a), None]
+Some(a) : { foo : Ok(a), bar : Something }
+```
+
+**Type Syntax:**
+- **Generic Type Parameters**: `(a, b)` after type name
+- **Function Types**: `a -> b` (single arrow)
+- **Tag Unions**: `[Tag1(args), Tag2, Tag3(more)]`
+- **Records**: `{ field : Type, another : Type }`
+- **Tuples**: `(Type1, Type2, Type3)`
+
+## Function Definitions
+
+```roc
+add_one : U64 -> U64
+add_one = |num| {
+    other = 1
+    if num {
+        dbg some_func()
+        0
+    } else {
+        dbg 123
+        other
+    }
+}
+```
+
+**Function Patterns:**
+- **Lambda Syntax**: `|args| body`
+- **Multiline Args**: Vertical pipe, comma separated
+- **Block Bodies**: `{ statements }` uses braces, statements followed by final expression
+- **Pure Functions**: `add` snake_case ident
+- **Effectful Functions**: `print!` exclamation mark suffix
+
+**Pattern Types:**
+- **Tag Patterns**: `Ok(value)`, `Some(inner)`
+- **Literal Patterns**: `"foo"`, `123`, `3.14`
+- **List Patterns**: `[1, 2, 3, .. as rest]` (rest pattern)
+- **Tuple Patterns**: `(1, 2, 3)`
+- **Record Patterns**: `{ foo: 1, bar: 2, ..rest }`
+- **Anonymous Tag Unions**: `[Blue U8 | Green U32 | Red I64]`
+- **Nested Patterns**: `Ok(Some(dude))`
+
+## Control Flow
+
+```roc
+if condition {
+    then_branch
+} else {
+    else_branch
+}
+
+for n in list {
+    Stdout.line!("Adding ${n} to ${number}")
+    number = number + n
+}
+
+return tag
+```
+
+**Control Constructs:**
+- **If-Else**: Block-based with `{ }`
+- **For Loops**: `for item in collection { body }`
+- **Return**: Early return from functions
+- **Crash**: `crash "message"` for unrecoverable errors
+
+## Data Structures
+
+```roc
+list = [item1, item2, item3]
+record = { foo: 123, bar: "Hello", baz: tag, punned }
+tuple = (123, "World", tag, Ok(world))
+```
+
+**Collection Syntax:**
+- **Lists**: `[item1, item2, item3]`
+- **Records**: `{ field: value, punned }` (punning supported)
+- **Tuples**: `(value1, value2, value3)`
+- **Empty Record**: `{}`
+
+## Variables and Assignment
+
+```roc
+world = "World"
+var number_ = 123 # Variables are re-assignable, must have trailing underscore
+number = number + n  # Reassignment
+```
+
+**Variable Patterns:**
+- **Immutable**: `name = value`
+- **Semantically Mutability**: `var name = value`, re-assignment, cannot cross function/lambda boundaries
+
+## Operators and Expressions
+
+```roc
+bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16
+static_dispatch_style = some_fn(arg1)?.method()?.next_method()?.field?
+```
+
+**Operator Types:**
+- **Arithmetic**: `+`, `-`, `*`, `/`
+- **Comparison**: `>`, `<`, `>=`, `<=`, `==`
+- **Logical**: `and`, `or`
+- **Default Value**: `??`
+- **Optional Chaining**: `?.` returns early if Result is Err
+
+## String Interpolation
+
+```roc
+interpolated = "Hello, ${world}"
+"How about ${Num.toStr(number)} as a string?"
+```
+
+## Special Constructs
+
+```roc
+dbg some_func()  # Debug output
+expect blah == 1  # Inline assertion
+...              # Placeholder/ellipsis, valid syntax, compiles to runtime error
+```
+
+## Comments
+
+```roc
+# Line comment
+```
+
+## Type System Features
+
+```roc
+SomeFunc(a) : Maybe(a), a -> Maybe(a)  # Multiple parameters/returns
+_  # Wildcard/placeholder type
+```
+
+**Advanced Types:**
+- **Multiple Parameters**: Comma-separated before `:`
+- **Wildcards**: `_` for inferred types
+- **Parametric Types**: Generic type parameters in parentheses
+
+This syntax emphasizes readability, strong typing, and functional programming patterns while maintaining familiar imperative constructs where needed.
