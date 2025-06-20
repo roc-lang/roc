@@ -42,7 +42,7 @@ pub fn eval(allocator: std.mem.Allocator, cir: *CIR, expr_idx: CIR.Expr.Idx) Eva
         },
 
         // Non-primitive expressions need evaluation (TODO: implement these)
-        .lookup, .list, .when, .call, .record, .record_access, .tag, .binop => {
+        .lookup, .list, .when, .call, .record, .record_access, .tag, .binop, .block, .lambda => {
             // For now, these are not implemented
             return expr_idx;
         },
