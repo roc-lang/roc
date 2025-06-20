@@ -141,8 +141,9 @@ pub fn canonicalize_file(
 
     // canonicalize_header_packages();
 
-    // Track the start of scratch defs
+    // Track the start of scratch defs and statements
     const scratch_defs_start = self.can_ir.store.scratchDefTop();
+    const scratch_statements_start = self.can_ir.store.scratch_statements.top();
 
     for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
         const stmt = self.parse_ir.store.getStatement(stmt_id);
@@ -200,12 +201,23 @@ pub fn canonicalize_file(
                     .stmt = string_idx,
                 } });
             },
-            .type_decl => |_| {
-                const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "top-level type_decl");
-                self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
-                    .feature = feature,
-                    .region = Region.zero(),
-                } });
+            .type_decl => |type_decl| {
+                // Canonicalize the type declaration
+                const header_idx = self.canonicalize_type_header(type_decl.header);
+                const anno_idx = self.canonicalize_type_anno(type_decl.anno);
+
+                // Create the CIR type declaration statement
+                const cir_type_decl = CIR.Statement{
+                    .type_decl = .{
+                        .header = header_idx,
+                        .anno = anno_idx,
+                        .where = null, // TODO: implement where clauses
+                        .region = self.tokenizedRegionToRegion(type_decl.region),
+                    },
+                };
+
+                const type_decl_idx = self.can_ir.store.addStatement(cir_type_decl);
+                self.can_ir.store.addScratchStatement(type_decl_idx);
             },
             .type_anno => |_| {
                 const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "top-level type_anno");
@@ -237,8 +249,9 @@ pub fn canonicalize_file(
         },
     }
 
-    // Create the span of all top-level defs
+    // Create the span of all top-level defs and statements
     self.can_ir.all_defs = self.can_ir.store.defSpanFrom(scratch_defs_start);
+    self.can_ir.all_statements = self.can_ir.store.statementSpanFrom(scratch_statements_start);
 }
 
 fn canonicalize_header_exposes(
@@ -1451,6 +1464,157 @@ fn scopeIntroduceVar(
 }
 
 /// Canonicalize a statement within a block
+fn canonicalize_type_anno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.Idx {
+    const ast_anno = self.parse_ir.store.getTypeAnno(anno_idx);
+    switch (ast_anno) {
+        .apply => |apply| {
+            const region = self.tokenizedRegionToRegion(apply.region);
+            // Get the base type name from the first argument
+            const args_slice = self.parse_ir.store.typeAnnoSlice(apply.args);
+            if (args_slice.len == 0) {
+                // Malformed apply with no arguments
+                return self.can_ir.pushMalformed(CIR.TypeAnno.Idx, CIR.Diagnostic{ .malformed_type_annotation = .{
+                    .region = region,
+                } });
+            }
+
+            // TODO
+            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "type application");
+            return self.can_ir.pushMalformed(CIR.TypeAnno.Idx, CIR.Diagnostic{ .not_implemented = .{
+                .feature = feature,
+                .region = region,
+            } });
+        },
+        .ty_var => |ty_var| {
+            const region = self.tokenizedRegionToRegion(ty_var.region);
+            const name_ident = self.parse_ir.tokens.resolveIdentifier(ty_var.tok) orelse {
+                return self.can_ir.pushMalformed(CIR.TypeAnno.Idx, CIR.Diagnostic{ .malformed_type_annotation = .{
+                    .region = region,
+                } });
+            };
+
+            return self.can_ir.store.addTypeAnno(.{ .ty_var = .{
+                .name = name_ident,
+                .region = region,
+            } });
+        },
+        .ty => |ty| {
+            const region = self.tokenizedRegionToRegion(ty.region);
+            return self.can_ir.store.addTypeAnno(.{ .ty = .{
+                .symbol = ty.ident,
+                .region = region,
+            } });
+        },
+        .mod_ty => |mod_ty| {
+            const region = self.tokenizedRegionToRegion(mod_ty.region);
+            return self.can_ir.store.addTypeAnno(.{ .mod_ty = .{
+                .mod_symbol = mod_ty.mod_ident,
+                .ty_symbol = mod_ty.ty_ident,
+                .region = region,
+            } });
+        },
+        .underscore => |underscore| {
+            const region = self.tokenizedRegionToRegion(underscore.region);
+            return self.can_ir.store.addTypeAnno(.{ .underscore = .{
+                .region = region,
+            } });
+        },
+        .tuple => |tuple| {
+            const region = self.tokenizedRegionToRegion(tuple.region);
+            // Canonicalize all tuple elements
+            const scratch_top = self.can_ir.store.scratchTypeAnnoTop();
+            defer self.can_ir.store.clearScratchTypeAnnosFrom(scratch_top);
+
+            for (self.parse_ir.store.typeAnnoSlice(tuple.annos)) |elem_idx| {
+                const canonicalized = self.canonicalize_type_anno(elem_idx);
+                self.can_ir.store.addScratchTypeAnno(canonicalized);
+            }
+
+            const annos = self.can_ir.store.typeAnnoSpanFrom(scratch_top);
+            return self.can_ir.store.addTypeAnno(.{ .tuple = .{
+                .annos = annos,
+                .region = region,
+            } });
+        },
+        .record => |record| {
+            const region = self.tokenizedRegionToRegion(record.region);
+
+            // TODO
+            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "record type annotation");
+            return self.can_ir.pushMalformed(CIR.TypeAnno.Idx, CIR.Diagnostic{ .not_implemented = .{
+                .feature = feature,
+                .region = region,
+            } });
+        },
+        .tag_union => |tag_union| {
+            const region = self.tokenizedRegionToRegion(tag_union.region);
+
+            // TODO
+            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "tag union type annotation");
+            return self.can_ir.pushMalformed(CIR.TypeAnno.Idx, CIR.Diagnostic{ .not_implemented = .{
+                .feature = feature,
+                .region = region,
+            } });
+        },
+        .@"fn" => |fn_anno| {
+            const region = self.tokenizedRegionToRegion(fn_anno.region);
+
+            // TODO
+            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "function type annotation");
+            return self.can_ir.pushMalformed(CIR.TypeAnno.Idx, CIR.Diagnostic{ .not_implemented = .{
+                .feature = feature,
+                .region = region,
+            } });
+        },
+        .parens => |parens| {
+            const region = self.tokenizedRegionToRegion(parens.region);
+            const inner_anno = self.canonicalize_type_anno(parens.anno);
+            return self.can_ir.store.addTypeAnno(.{ .parens = .{
+                .anno = inner_anno,
+                .region = region,
+            } });
+        },
+        .malformed => |malformed| {
+            const region = self.tokenizedRegionToRegion(malformed.region);
+            return self.can_ir.pushMalformed(CIR.TypeAnno.Idx, CIR.Diagnostic{ .malformed_type_annotation = .{
+                .region = region,
+            } });
+        },
+    }
+}
+
+fn canonicalize_type_header(self: *Self, header_idx: AST.TypeHeader.Idx) CIR.TypeHeader.Idx {
+    const ast_header = self.parse_ir.store.getTypeHeader(header_idx);
+    const region = self.tokenizedRegionToRegion(ast_header.region);
+
+    // Get the type name identifier
+    const name_ident = self.parse_ir.tokens.resolveIdentifier(ast_header.name) orelse {
+        // If we can't resolve the identifier, create a malformed header with invalid identifier
+        return self.can_ir.store.addTypeHeader(.{
+            .name = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 }, // Invalid identifier
+            .args = .{ .span = .{ .start = 0, .len = 0 } },
+            .region = region,
+        });
+    };
+
+    // Canonicalize type arguments
+    const scratch_top = self.can_ir.store.scratchTypeAnnoTop();
+    defer self.can_ir.store.clearScratchTypeAnnosFrom(scratch_top);
+
+    for (self.parse_ir.store.typeAnnoSlice(ast_header.args)) |arg_idx| {
+        const canonicalized = self.canonicalize_type_anno(arg_idx);
+        self.can_ir.store.addScratchTypeAnno(canonicalized);
+    }
+
+    const args = self.can_ir.store.typeAnnoSpanFrom(scratch_top);
+
+    return self.can_ir.store.addTypeHeader(.{
+        .name = name_ident,
+        .args = args,
+        .region = region,
+    });
+}
+
 fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) ?CIR.Expr.Idx {
     const stmt = self.parse_ir.store.getStatement(stmt_idx);
 
@@ -1580,6 +1744,14 @@ fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) ?CIR.Expr.Id
             return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
                 .feature = feature,
                 .region = region,
+            } });
+        },
+        .type_decl => |s| {
+            // TODO type declarations in statement context
+            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "type_decl in statement context");
+            return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
+                .feature = feature,
+                .region = self.tokenizedRegionToRegion(s.region),
             } });
         },
         else => {

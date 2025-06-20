@@ -50,6 +50,9 @@ pub const Diagnostic = union(enum) {
     lambda_body_not_canonicalized: struct {
         region: Region,
     },
+    malformed_type_annotation: struct {
+        region: Region,
+    },
     var_across_function_boundary: struct {
         region: Region,
     },
@@ -176,6 +179,13 @@ pub const Diagnostic = union(enum) {
         try report.document.addReflowingText("Variables declared with ");
         try report.document.addKeyword("var");
         try report.document.addReflowingText(" can only be reassigned within the same function scope.");
+        return report;
+    }
+
+    /// Build a report for "malformed type annotation" diagnostic
+    pub fn buildMalformedTypeAnnotationReport(allocator: Allocator) !Report {
+        var report = Report.init(allocator, "MALFORMED TYPE", .runtime_error, reporting.ReportingConfig.initPlainText());
+        try report.document.addReflowingText("This type annotation is malformed or contains invalid syntax.");
         return report;
     }
 

@@ -43,6 +43,8 @@ store: NodeStore,
 temp_source_for_sexpr: ?[]const u8 = null,
 /// All the definitions and in the module, populated by calling `canonicalize_file`
 all_defs: Def.Span,
+/// All the top-level statements in the module, populated by calling `canonicalize_file`
+all_statements: Statement.Span,
 
 /// Initialize the IR for a module's canonicalization info.
 ///
@@ -63,6 +65,7 @@ pub fn init(env: *ModuleEnv) CIR {
         .env = env,
         .store = NodeStore.initCapacity(env.gpa, NODE_STORE_CAPACITY),
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
+        .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
     };
 }
 
@@ -166,6 +169,7 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
         .can_lambda_not_implemented => Diagnostic.buildCanLambdaNotImplementedReport(allocator),
         .lambda_body_not_canonicalized => Diagnostic.buildLambdaBodyNotCanonicalizedReport(allocator),
         .var_across_function_boundary => Diagnostic.buildVarAcrossFunctionBoundaryReport(allocator),
+        .malformed_type_annotation => Diagnostic.buildMalformedTypeAnnotationReport(allocator),
         .shadowing_warning => |data| blk: {
             const ident_name = self.env.idents.getText(data.ident);
             const new_region_info = self.calcRegionInfo(data.region);
@@ -471,15 +475,22 @@ pub const Statement = union(enum) {
                 return node;
             },
             .type_decl => |s| {
-                const feature = env.strings.insert(gpa, "s-expression for statement type_decl");
-                ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
-                    .feature = feature,
-                    .region = s.region,
-                } });
-
                 var node = sexpr.Expr.init(gpa, "s_type_decl");
                 node.appendRegionInfo(gpa, ir.calcRegionInfo(s.region));
-                node.appendString(gpa, "TODO");
+
+                // Add the type header
+                var header_node = ir.store.getTypeHeader(s.header).toSExpr(ir, env);
+                node.appendNode(gpa, &header_node);
+
+                // Add the type annotation
+                var anno_node = ir.store.getTypeAnno(s.anno).toSExpr(ir, env);
+                node.appendNode(gpa, &anno_node);
+
+                // TODO: Add where clause when implemented
+                if (s.where) |_| {
+                    node.appendString(gpa, "where_clause_todo");
+                }
+
                 return node;
             },
             .type_anno => |s| {
@@ -543,19 +554,259 @@ pub const PatternRecordField = struct {
     pub const Span = struct { span: DataSpan };
 };
 
-/// TODO: implement TypeAnno
+/// Canonical representation of type annotations in Roc.
+///
+/// Type annotations appear on the right-hand side of type declarations and in other
+/// contexts where types are specified. For example, in `Map(a, b) : List(a) -> List(b)`,
+/// the `List(a) -> List(b)` part is represented by these TypeAnno variants.
 pub const TypeAnno = union(enum) {
+    /// Type application: applying a type constructor to arguments.
+    /// Examples: `List(Str)`, `Dict(String, Int)`, `Result(a, b)`
+    apply: struct {
+        symbol: Ident.Idx, // The type constructor being applied (e.g., "List", "Dict")
+        args: TypeAnno.Span, // The type arguments (e.g., [Str], [String, Int])
+        region: Region,
+    },
+
+    /// Type variable: a placeholder type that can be unified with other types.
+    /// Examples: `a`, `b`, `elem` in generic type signatures
+    ty_var: struct {
+        name: Ident.Idx, // The variable name (e.g., "a", "b")
+        region: Region,
+    },
+
+    /// Inferred type `_`
+    underscore: struct {
+        region: Region,
+    },
+
+    /// Basic type identifier: a concrete type name without arguments.
+    /// Examples: `Str`, `U64`, `Bool`
+    ty: struct {
+        symbol: Ident.Idx, // The type name
+        region: Region,
+    },
+
+    /// Module-qualified type: a type name prefixed with its module.
+    /// Examples: `Shape.Rect`, `Json.Decoder`
+    mod_ty: struct {
+        mod_symbol: Ident.Idx, // The module name (e.g., "Json")
+        ty_symbol: Ident.Idx, // The type name (e.g., "Decoder")
+        region: Region,
+    },
+
+    /// Tag union type: a union of tags, possibly with payloads.
+    /// Examples: `[Some(a), None]`, `[Red, Green, Blue]`, `[Cons(a, (List a)), Nil]`
+    tag_union: struct {
+        tags: TypeAnno.Span, // The individual tags in the union
+        open_anno: ?TypeAnno.Idx, // Optional extension variable for open unions
+        region: Region,
+    },
+
+    /// Tuple type: a fixed-size collection of heterogeneous types.
+    /// Examples: `(Str, U64)`, `(a, b, c)`
+    tuple: struct {
+        annos: TypeAnno.Span, // The types of each tuple element
+        region: Region,
+    },
+
+    /// Record type: a collection of named fields with their types.
+    /// Examples: `{ name: Str, age: U64 }`, `{ x: F64, y: F64 }`
+    record: struct {
+        fields: AnnoRecordField.Span, // The field definitions
+        region: Region,
+    },
+
+    /// Function type: represents function signatures.
+    /// Examples: `a -> b`, `Str, U64 -> Str`, `{} => Str`
+    @"fn": struct {
+        args: TypeAnno.Span, // Argument types
+        ret: TypeAnno.Idx, // Return type
+        effectful: bool, // Whether the function can perform effects, i.e. uses fat arrow `=>`
+        region: Region,
+    },
+
+    /// Parenthesized type: used for grouping and precedence.
+    /// Examples: `(a -> b)` in `a, (a -> b) -> b`
+    parens: struct {
+        anno: TypeAnno.Idx, // The type inside the parentheses
+        region: Region,
+    },
+
+    /// Malformed type annotation: represents a type that couldn't be parsed correctly.
+    /// This follows the "Inform Don't Block" principle - compilation continues with
+    /// an error marker that will be reported to the user.
+    malformed: struct {
+        diagnostic: Diagnostic.Idx, // The error that occurred
+        region: Region,
+    },
+
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
+
+    pub fn toSExpr(self: *const @This(), ir: *CIR, env: *ModuleEnv) sexpr.Expr {
+        const gpa = ir.env.gpa;
+        switch (self.*) {
+            .apply => |a| {
+                var node = sexpr.Expr.init(gpa, "apply");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(a.region));
+
+                const symbol_name = env.idents.getText(a.symbol);
+                node.appendString(gpa, symbol_name);
+
+                const args_slice = ir.store.sliceTypeAnnos(a.args);
+                for (args_slice) |arg_idx| {
+                    const arg = ir.store.getTypeAnno(arg_idx);
+                    var arg_node = arg.toSExpr(ir, env);
+                    node.appendNode(gpa, &arg_node);
+                }
+
+                return node;
+            },
+            .ty_var => |tv| {
+                var node = sexpr.Expr.init(gpa, "ty_var");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(tv.region));
+
+                const var_name = env.idents.getText(tv.name);
+                node.appendString(gpa, var_name);
+
+                return node;
+            },
+            .underscore => |u| {
+                var node = sexpr.Expr.init(gpa, "underscore");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(u.region));
+                return node;
+            },
+            .ty => |t| {
+                var node = sexpr.Expr.init(gpa, "ty");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(t.region));
+
+                const type_name = env.idents.getText(t.symbol);
+                node.appendString(gpa, type_name);
+
+                return node;
+            },
+            .mod_ty => |mt| {
+                var node = sexpr.Expr.init(gpa, "mod_ty");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(mt.region));
+
+                const mod_name = env.idents.getText(mt.mod_symbol);
+                const type_name = env.idents.getText(mt.ty_symbol);
+                node.appendString(gpa, mod_name);
+                node.appendString(gpa, type_name);
+
+                return node;
+            },
+            .tag_union => |_| {
+                // Not implemented yet
+                const feature = env.strings.insert(gpa, "tag union type annotation toSExpr");
+                ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                    .feature = feature,
+                    .region = Region.zero(),
+                } });
+
+                var node = sexpr.Expr.init(gpa, "tag_union");
+                node.appendString(gpa, "NOT_IMPLEMENTED");
+                return node;
+            },
+            .tuple => |tup| {
+                var node = sexpr.Expr.init(gpa, "tuple");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(tup.region));
+
+                const annos_slice = ir.store.sliceTypeAnnos(tup.annos);
+                for (annos_slice) |anno_idx| {
+                    const anno = ir.store.getTypeAnno(anno_idx);
+                    var anno_node = anno.toSExpr(ir, env);
+                    node.appendNode(gpa, &anno_node);
+                }
+
+                return node;
+            },
+            .record => |_| {
+                // Not implemented yet
+                const feature = env.strings.insert(gpa, "record type annotation toSExpr");
+                ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                    .feature = feature,
+                    .region = Region.zero(),
+                } });
+
+                var node = sexpr.Expr.init(gpa, "record");
+                node.appendString(gpa, "NOT_IMPLEMENTED");
+                return node;
+            },
+            .@"fn" => |_| {
+                // Not implemented yet
+                const feature = env.strings.insert(gpa, "function type annotation toSExpr");
+                ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                    .feature = feature,
+                    .region = Region.zero(),
+                } });
+
+                var node = sexpr.Expr.init(gpa, "fn");
+                node.appendString(gpa, "NOT_IMPLEMENTED");
+                return node;
+            },
+            .parens => |p| {
+                var node = sexpr.Expr.init(gpa, "parens");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(p.region));
+
+                const inner_anno = ir.store.getTypeAnno(p.anno);
+                var inner_node = inner_anno.toSExpr(ir, env);
+                node.appendNode(gpa, &inner_node);
+
+                return node;
+            },
+            .malformed => |m| {
+                var node = sexpr.Expr.init(gpa, "malformed_type_anno");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(m.region));
+                return node;
+            },
+        }
+    }
 };
 
-/// TODO: implement TypeHeader
+/// Canonical representation of type declaration headers.
 ///
-/// how do we represent type headers?
-/// i.e. the `Dict` in `Dict(k,v) := ...`
+/// The type header is the left-hand side of a type declaration, specifying the type name
+/// and its parameters. For example, in `Map(a, b) : List(a) -> List(b)`, the header is
+/// `Map(a, b)` with name "Map" and type parameters `[a, b]`.
+///
+/// Examples:
+/// - `Foo` - simple type with no parameters
+/// - `List(a)` - generic type with one parameter
+/// - `Dict(k, v)` - generic type with two parameters
+/// - `Result(ok, err)` - generic type with named parameters
 pub const TypeHeader = struct {
+    name: Ident.Idx, // The type name (e.g., "Map", "List", "Dict")
+    args: TypeAnno.Span, // Type parameters (e.g., [a, b] for generic types)
+    region: Region, // Source location of the entire header
+
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
+
+    pub fn toSExpr(self: *const @This(), ir: *CIR, env: *ModuleEnv) sexpr.Expr {
+        const gpa = ir.env.gpa;
+        var node = sexpr.Expr.init(gpa, "type_header");
+        node.appendRegionInfo(gpa, ir.calcRegionInfo(self.region));
+
+        // Add the type name
+        const type_name = env.idents.getText(self.name);
+        node.appendString(gpa, type_name);
+
+        // Add the type arguments
+        const args_slice = ir.store.sliceTypeAnnos(self.args);
+        if (args_slice.len > 0) {
+            var args_node = sexpr.Expr.init(gpa, "args");
+            for (args_slice) |arg_idx| {
+                const arg = ir.store.getTypeAnno(arg_idx);
+                var arg_node = arg.toSExpr(ir, env);
+                args_node.appendNode(gpa, &arg_node);
+            }
+            node.appendNode(gpa, &args_node);
+        }
+
+        return node;
+    }
 };
 
 /// TODO: implement AnnoRecordField
@@ -1848,8 +2099,9 @@ pub fn toSExprStr(ir: *CIR, env: *ModuleEnv, writer: std.io.AnyWriter, maybe_exp
 
         // Iterate over all the definitions in the file and convert each to an S-expression
         const defs_slice = ir.store.sliceDefs(ir.all_defs);
+        const statements_slice = ir.store.sliceStatements(ir.all_statements);
 
-        if (defs_slice.len == 0) {
+        if (defs_slice.len == 0 and statements_slice.len == 0) {
             root_node.appendString(gpa, "empty");
         }
 
@@ -1857,6 +2109,12 @@ pub fn toSExprStr(ir: *CIR, env: *ModuleEnv, writer: std.io.AnyWriter, maybe_exp
             const d = ir.store.getDef(def_idx);
             var def_node = d.toSExpr(ir, env);
             root_node.appendNode(gpa, &def_node);
+        }
+
+        for (statements_slice) |stmt_idx| {
+            const s = ir.store.getStatement(stmt_idx);
+            var stmt_node = s.toSExpr(ir, env);
+            root_node.appendNode(gpa, &stmt_node);
         }
 
         root_node.toStringPretty(writer);
