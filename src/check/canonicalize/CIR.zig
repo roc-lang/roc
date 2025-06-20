@@ -622,6 +622,11 @@ pub const Expr = union(enum) {
         elems: Expr.Span,
         region: Region,
     },
+    tuple: struct {
+        tuple_var: TypeVar,
+        elems: Expr.Span,
+        region: Region,
+    },
     when: When,
     @"if": struct {
         cond_var: TypeVar,
@@ -891,13 +896,36 @@ pub const Expr = union(enum) {
                 elem_var_node.appendUnsignedInt(gpa, @intFromEnum(l.elem_var));
                 list_node.appendNode(gpa, &elem_var_node);
 
-                for (ir.store.exprSlice(l.elems)) |sub_expr_idx| {
-                    const sub_expr = ir.store.getExpr(sub_expr_idx);
-                    const sub_expr_node = sub_expr.toSExpr(ir, env);
-                    list_node.appendNode(gpa, &sub_expr_node);
+                // Add list elements
+                var elems_node = sexpr.Expr.init(gpa, "elems");
+                for (ir.store.sliceExpr(l.elems)) |elem_idx| {
+                    var elem_node = ir.store.getExpr(elem_idx).toSExpr(ir, env);
+                    elems_node.appendNode(gpa, &elem_node);
                 }
+                list_node.appendNode(gpa, &elems_node);
 
                 return list_node;
+            },
+            .tuple => |t| {
+                var tuple_node = sexpr.Expr.init(gpa, "e_tuple");
+                tuple_node.appendRegionInfo(gpa, ir.calcRegionInfo(t.region));
+
+                // Add tuple_var
+                var tuple_var_node = sexpr.Expr.init(gpa, "tuple_var");
+                const tuple_var_str = t.tuple_var.allocPrint(gpa);
+                defer gpa.free(tuple_var_str);
+                tuple_var_node.appendString(gpa, tuple_var_str);
+                tuple_node.appendNode(gpa, &tuple_var_node);
+
+                // Add tuple elements
+                var elems_node = sexpr.Expr.init(gpa, "elems");
+                for (ir.store.sliceExpr(t.elems)) |elem_idx| {
+                    var elem_node = ir.store.getExpr(elem_idx).toSExpr(ir, env);
+                    elems_node.appendNode(gpa, &elem_node);
+                }
+                tuple_node.appendNode(gpa, &elems_node);
+
+                return tuple_node;
             },
             .lookup => |l| {
                 var lookup_node = sexpr.Expr.init(gpa, "e_lookup");
@@ -1480,6 +1508,11 @@ pub const Pattern = union(enum) {
         patterns: Pattern.Span,
         region: Region,
     },
+    tuple: struct {
+        tuple_var: TypeVar,
+        patterns: Pattern.Span,
+        region: Region,
+    },
     num_literal: struct {
         num_var: TypeVar,
         literal: StringLiteral.Idx,
@@ -1533,6 +1566,7 @@ pub const Pattern = union(enum) {
             .applied_tag => |p| return p.region,
             .record_destructure => |p| return p.region,
             .list => |p| return p.region,
+            .tuple => |p| return p.region,
             .num_literal => |p| return p.region,
             .int_literal => |p| return p.region,
             .float_literal => |p| return p.region,
@@ -1610,6 +1644,31 @@ pub const Pattern = union(enum) {
                 pattern_list_node.appendNode(gpa, &patterns_node);
 
                 return pattern_list_node;
+            },
+            .tuple => |p| {
+                var node = sexpr.Expr.init(gpa, "p_tuple");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(p.region));
+
+                var pattern_idx_node = formatPatternIdxNode(gpa, pattern_idx);
+                node.appendNode(gpa, &pattern_idx_node);
+
+                // Add tuple_var
+                var tuple_var_node = sexpr.Expr.init(gpa, "tuple_var");
+                const tuple_var_str = p.tuple_var.allocPrint(gpa);
+                defer gpa.free(tuple_var_str);
+                tuple_var_node.appendString(gpa, tuple_var_str);
+                node.appendNode(gpa, &tuple_var_node);
+
+                var patterns_node = sexpr.Expr.init(gpa, "patterns");
+
+                for (ir.store.slicePatterns(p.patterns)) |patt_idx| {
+                    var patt_sexpr = ir.store.getPattern(patt_idx).toSExpr(ir, patt_idx);
+                    patterns_node.appendNode(gpa, &patt_sexpr);
+                }
+
+                node.appendNode(gpa, &patterns_node);
+
+                return node;
             },
             .num_literal => |p| {
                 var node = sexpr.Expr.init(gpa, "p_num");
