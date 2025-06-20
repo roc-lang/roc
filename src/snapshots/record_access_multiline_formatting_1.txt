@@ -40,4 +40,6 @@ DotLowerIdent(4:2-4:15),NoSpaceOpQuestion(4:15-4:16),EndOfFile(4:16-4:16),
 NO CHANGE
 ~~~CANONICALIZE
 (e_runtime_error (1:1-1:1) "not_implemented")
+~~~TYPES
+(expr 13 (type "Error"))
 ~~~END

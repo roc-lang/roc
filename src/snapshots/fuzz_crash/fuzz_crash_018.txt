@@ -22,4 +22,6 @@ DotUpperIdent(2:1-2:3),EndOfFile(2:3-2:3),
 b : S..R
 ~~~CANONICALIZE
 (can_ir "empty")
+~~~TYPES
+(inferred_types (defs) (expressions))
 ~~~END

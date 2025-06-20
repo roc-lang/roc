@@ -28,9 +28,15 @@ NO CHANGE
 				(ident "foo")))
 		(def_expr
 			(e_int (2:7-2:9)
-				(int_var "#2")
-				(precision_var "#1")
+				(int_var 14)
+				(precision_var 13)
 				(literal "42")
 				(value "TODO")
 				(bound "u8")))))
+~~~TYPES
+(inferred_types
+	(defs
+		(def "foo" 16 (type "Num(Int(*))")))
+	(expressions
+		(expr (2:7-2:9) 15 (type "Num(Int(*))"))))
 ~~~END

@@ -46,4 +46,12 @@ NO CHANGE
 				(e_literal (3:8-3:14) "hello ")
 				(e_lookup (3:16-3:20) (pid 12))
 				(e_literal (3:21-3:21) "")))))
+~~~TYPES
+(inferred_types
+	(defs
+		(def "name" 15 (type "Str"))
+		(def "foo" 21 (type "Str")))
+	(expressions
+		(expr (2:8-2:13) 14 (type "Str"))
+		(expr (3:7-3:22) 20 (type "Str"))))
 ~~~END

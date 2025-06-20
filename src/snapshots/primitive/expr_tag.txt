@@ -28,7 +28,13 @@ NO CHANGE
 				(ident "foo")))
 		(def_expr
 			(e_tag (2:7-2:15)
-				(ext_var "#0")
+				(ext_var 0)
 				(name "FortyTwo")
 				(args "TODO")))))
+~~~TYPES
+(inferred_types
+	(defs
+		(def "foo" 15 (type "[FortyTwo, * *]")))
+	(expressions
+		(expr (2:7-2:15) 14 (type "[FortyTwo, * *]"))))
 ~~~END

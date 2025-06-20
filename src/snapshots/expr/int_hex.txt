@@ -14,4 +14,6 @@ Int(1:1-1:5),EndOfFile(1:5-1:5),
 NO CHANGE
 ~~~CANONICALIZE
 (e_runtime_error (1:1-1:5) "invalid_num_literal")
+~~~TYPES
+(expr 13 (type "Error"))
 ~~~END

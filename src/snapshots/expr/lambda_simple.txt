@@ -26,9 +26,11 @@ NO CHANGE
 		"add"
 		(e_lookup (1:5-1:6) (pid 12))
 		(e_int (1:9-1:10)
-			(int_var "#3")
-			(precision_var "#2")
+			(int_var 15)
+			(precision_var 14)
 			(literal "1")
 			(value "TODO")
 			(bound "u8"))))
+~~~TYPES
+(expr 18 (type "*"))
 ~~~END

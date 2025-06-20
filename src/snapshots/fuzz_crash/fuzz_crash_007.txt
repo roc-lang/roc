@@ -25,4 +25,6 @@ LowerIdent(1:1-1:4),NoSpaceDotInt(1:4-1:6),NoSpaceDotLowerIdent(1:6-1:8),EndOfFi
 
 ~~~CANONICALIZE
 (can_ir "empty")
+~~~TYPES
+(inferred_types (defs) (expressions))
 ~~~END

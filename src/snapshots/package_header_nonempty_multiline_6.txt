@@ -41,4 +41,6 @@ CloseCurly(9:2-9:3),EndOfFile(9:3-9:3),
 NO CHANGE
 ~~~CANONICALIZE
 (can_ir "empty")
+~~~TYPES
+(inferred_types (defs) (expressions))
 ~~~END

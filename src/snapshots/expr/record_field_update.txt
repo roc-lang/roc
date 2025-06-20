@@ -31,4 +31,6 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:9),OpAmpersand(1:10-1:11),LowerIdent(1:12-1:
 (e_block (1:1-1:21)
 	(s_expr (1:3-1:11) "TODO")
 	(e_runtime_error (1:1-1:1) "not_implemented"))
+~~~TYPES
+(expr 17 (type "*"))
 ~~~END

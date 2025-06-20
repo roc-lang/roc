@@ -84,8 +84,8 @@ NO CHANGE
 							"mul"
 							(e_lookup (6:13-6:18) (pid 13))
 							(e_int (6:21-6:22)
-								(int_var "#6")
-								(precision_var "#5")
+								(int_var 19)
+								(precision_var 18)
 								(literal "2")
 								(value "TODO")
 								(bound "u8"))))
@@ -99,4 +99,10 @@ NO CHANGE
 						"add"
 						(e_lookup (9:2-9:5) (pid 14))
 						(e_lookup (9:8-9:12) (pid 22))))))))
+~~~TYPES
+(inferred_types
+	(defs
+		(def "testFunc" 33 (type "*")))
+	(expressions
+		(expr (4:12-10:2) 32 (type "*"))))
 ~~~END

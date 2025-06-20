@@ -3,6 +3,7 @@ const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const base = @import("base.zig");
 const canonicalize = @import("check/canonicalize.zig");
+const Solver = @import("check/check_types.zig");
 const CIR = canonicalize.CIR;
 const parse = @import("check/parse.zig");
 const fmt = @import("fmt.zig");
@@ -167,6 +168,7 @@ const Section = union(enum) {
     pub const CANONICALIZE = "~~~CANONICALIZE";
     pub const TOKENS = "~~~TOKENS";
     pub const PROBLEMS = "~~~PROBLEMS";
+    pub const TYPES = "~~~TYPES";
 
     fn next(self: Section) ?Section {
         return switch (self) {
@@ -476,6 +478,16 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
         },
     }
 
+    // Types
+    var solver = try Solver.init(gpa, &can_ir.env.types_store, &can_ir);
+    defer solver.deinit();
+
+    if (maybe_expr_idx) |expr_idx| {
+        solver.checkExpr(expr_idx);
+    } else {
+        solver.checkDefs();
+    }
+
     // Buffer all output in memory before writing to the snapshot file
     var buffer = std.ArrayList(u8).init(gpa);
     defer buffer.deinit();
@@ -673,6 +685,23 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
         try writer.writeAll(Section.CANONICALIZE);
         try writer.writeAll("\n");
         try writer.writeAll(canonicalized.items);
+        try writer.writeAll("\n");
+    }
+
+    // Write TYPES SECTION
+    {
+        var solved = std.ArrayList(u8).init(gpa);
+        defer solved.deinit();
+
+        try can_ir.toSexprTypesStr(solved.writer().any(), maybe_expr_idx, content.source);
+
+        // Uncomment to print entire types store, helpful for debugging
+        // try solved.writer().any().writeAll("\n");
+        // try types.SExprWriter.allVarsToSExprStr(solved.writer().any(), gpa, &module_env);
+
+        try writer.writeAll(Section.TYPES);
+        try writer.writeAll("\n");
+        try writer.writeAll(solved.items);
         try writer.writeAll("\n");
     }
 

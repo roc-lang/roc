@@ -44,8 +44,8 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 			(pid 12)
 			(ident "x"))
 		(e_int (2:9-2:11)
-			(int_var "#2")
-			(precision_var "#1")
+			(int_var 14)
+			(precision_var 13)
 			(literal "42")
 			(value "TODO")
 			(bound "u8")))
@@ -57,8 +57,8 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 			"add"
 			(e_lookup (3:9-3:10) (pid 12))
 			(e_int (3:13-3:14)
-				(int_var "#7")
-				(precision_var "#6")
+				(int_var 20)
+				(precision_var 19)
 				(literal "1")
 				(value "TODO")
 				(bound "u8"))))
@@ -66,9 +66,11 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 		"mul"
 		(e_lookup (4:5-4:6) (pid 17))
 		(e_int (4:9-4:10)
-			(int_var "#12")
-			(precision_var "#11")
+			(int_var 26)
+			(precision_var 25)
 			(literal "2")
 			(value "TODO")
 			(bound "u8"))))
+~~~TYPES
+(expr 29 (type "*"))
 ~~~END

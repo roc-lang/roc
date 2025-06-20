@@ -44,4 +44,6 @@ Int(4:1-4:3),EndOfFile(4:3-4:3),
 0_
 ~~~CANONICALIZE
 (can_ir "empty")
+~~~TYPES
+(inferred_types (defs) (expressions))
 ~~~END

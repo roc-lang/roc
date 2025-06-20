@@ -28,9 +28,15 @@ NO CHANGE
 				(ident "foo")))
 		(def_expr
 			(e_float (2:7-2:12)
-				(frac_var "#2")
-				(precision_var "#1")
+				(frac_var 14)
+				(precision_var 13)
 				(literal "12.34")
 				(value "0")
 				(bound "f32")))))
+~~~TYPES
+(inferred_types
+	(defs
+		(def "foo" 16 (type "Num(FloatingPoint(*))")))
+	(expressions
+		(expr (2:7-2:12) 15 (type "Num(FloatingPoint(*))"))))
 ~~~END

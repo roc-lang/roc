@@ -25,9 +25,36 @@ pub fn SafeRange(comptime Idx: type) type {
         pub const empty: Self = .{ .start = @enumFromInt(0), .end = @enumFromInt(0) };
 
         /// Get the length of a range slice
-        pub fn len(self: @This()) usize {
+        pub fn len(self: @This()) u32 {
             return @intFromEnum(self.end) - @intFromEnum(self.start);
         }
+
+        /// Get the length of a range slice
+        pub fn iterIndices(self: @This()) IndexIterator {
+            return IndexIterator{
+                .len = @intFromEnum(self.end),
+                .current = @intFromEnum(self.start),
+            };
+        }
+
+        /// An iterator over the indices of all elements in a list.
+        pub const IndexIterator = struct {
+            len: u32,
+            current: u32,
+
+            /// Get the next index from this iterator, or `null` if the iterator is finished.
+            pub fn next(iter: *IndexIterator) ?Idx {
+                if (iter.len == iter.current) {
+                    return null;
+                }
+
+                const curr = iter.current;
+                iter.current += 1;
+
+                const idx: u32 = @truncate(curr);
+                return @enumFromInt(idx);
+            }
+        };
     };
 }
 

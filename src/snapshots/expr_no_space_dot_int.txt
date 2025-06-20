@@ -33,4 +33,10 @@ foo =
 				(pid 12)
 				(ident "foo")))
 		(def_expr (e_runtime_error (3:10-3:12) "expr_not_canonicalized"))))
+~~~TYPES
+(inferred_types
+	(defs
+		(def "foo" 15 (type "Error")))
+	(expressions
+		(expr (3:10-3:12) 14 (type "Error"))))
 ~~~END

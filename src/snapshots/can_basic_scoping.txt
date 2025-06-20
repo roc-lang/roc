@@ -105,8 +105,8 @@ outerFunc = |_| {
 				(ident "x")))
 		(def_expr
 			(e_int (4:5-4:6)
-				(int_var "#2")
-				(precision_var "#1")
+				(int_var 14)
+				(precision_var 13)
 				(literal "5")
 				(value "TODO")
 				(bound "u8"))))
@@ -117,8 +117,8 @@ outerFunc = |_| {
 				(ident "y")))
 		(def_expr
 			(e_int (5:5-5:7)
-				(int_var "#6")
-				(precision_var "#5")
+				(int_var 19)
+				(precision_var 18)
 				(literal "10")
 				(value "TODO")
 				(bound "u8"))))
@@ -136,8 +136,8 @@ outerFunc = |_| {
 							(pid 24)
 							(ident "x"))
 						(e_int (9:9-9:11)
-							(int_var "#12")
-							(precision_var "#11")
+							(int_var 27)
+							(precision_var 26)
 							(literal "20")
 							(value "TODO")
 							(bound "u8")))
@@ -158,10 +158,20 @@ outerFunc = |_| {
 								"add"
 								(e_lookup (13:9-13:10) (pid 31))
 								(e_int (13:13-13:14)
-									(int_var "#21")
-									(precision_var "#20")
+									(int_var 38)
+									(precision_var 37)
 									(literal "1")
 									(value "TODO")
 									(bound "u8")))))
 					(e_lookup (15:5-15:16) (pid 30)))))))
+~~~TYPES
+(inferred_types
+	(defs
+		(def "x" 16 (type "Num(Int(*))"))
+		(def "y" 21 (type "Num(Int(*))"))
+		(def "outerFunc" 46 (type "*")))
+	(expressions
+		(expr (4:5-4:6) 15 (type "Num(Int(*))"))
+		(expr (5:5-5:7) 20 (type "Num(Int(*))"))
+		(expr (8:13-16:2) 45 (type "*"))))
 ~~~END
