@@ -25,10 +25,18 @@ pub const Diagnostic = @import("Diagnostic.zig").Diagnostic;
 
 const CIR = @This();
 
-env: *base.ModuleEnv,
+env: *ModuleEnv,
 store: NodeStore,
 ingested_files: IngestedFile.List,
-/// Temporary source text used during SExpr generation for region info calculation
+/// Temporary source text used for generating SExpr and Reports, required to calculate region info.
+///
+/// This field exists because:
+/// - CIR may be loaded from cache without access to the original source file
+/// - Region info calculation requires the source text to convert byte offsets to line/column
+/// - The source is only needed temporarily during diagnostic reporting or SExpr generation
+///
+/// Lifetime: The caller must ensure the source remains valid for the duration of the
+/// operation (e.g., `toSExprStr` or `diagnosticToReport` calls).
 temp_source_for_sexpr: ?[]const u8 = null,
 imports: ModuleImport.Store,
 top_level_defs: Def.Span,
@@ -358,7 +366,11 @@ pub fn getDiagnostics(self: *CIR) []CIR.Diagnostic {
     return list.toOwnedSlice() catch |err| exitOnOom(err);
 }
 
-/// Convert a canonicalization diagnostic to a Report for rendering
+/// Convert a canonicalization diagnostic to a Report for rendering.
+///
+/// The source parameter is not owned by this function - the caller must ensure it
+/// remains valid for the duration of this call. The returned Report will contain
+/// references to the source text but does not own it.
 pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem.Allocator, source: []const u8, filename: []const u8) !reporting.Report {
     // Set temporary source for calcRegionInfo
     self.temp_source_for_sexpr = source;
