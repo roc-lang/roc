@@ -266,8 +266,22 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .region = node.region,
             } };
         },
+        .expr_record => {
+            // Check if this is an empty record (span len = 0)
+            if (node.data_2 == 0) {
+                return CIR.Expr{ .empty_record = .{
+                    .region = node.region,
+                } };
+            } else {
+                // Regular record with fields - not implemented yet
+                std.log.debug("TODO: implement getExpr for record with fields", .{});
+                return CIR.Expr{ .runtime_error = .{
+                    .diagnostic = @enumFromInt(0),
+                    .region = node.region,
+                } };
+            }
+        },
         .expr_tuple,
-        .expr_record,
         .expr_field_access,
         .expr_static_dispatch,
         .expr_apply,
@@ -605,7 +619,9 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
         },
         .single_quote => |e| {
             node.region = e.region;
-            @panic("TODO addExpr single_quote");
+            // For now, create a runtime error since we can't store u32 values directly in node data
+            // TODO: implement proper storage for single_quote literals
+            @panic("TODO addExpr single_quote - need to store u32 value");
         },
         .when => |e| {
             node.region = e.region;
@@ -629,7 +645,11 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
         },
         .empty_record => |e| {
             node.region = e.region;
-            @panic("TODO addExpr empty_record");
+            // Empty records can be represented as records with no fields
+            node.tag = .expr_record;
+            // Set span to empty (start=0, len=0) to indicate no fields
+            node.data_1 = 0;
+            node.data_2 = 0;
         },
         .record_access => |e| {
             node.region = e.region;
