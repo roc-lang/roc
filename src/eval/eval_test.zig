@@ -257,9 +257,47 @@ test "eval simple number" {
         .i128 => @as(*i128, @ptrCast(@alignCast(result.ptr))).*,
     };
 
-    // TODO: Currently the parser returns placeholder values instead of actual parsed integers
-    // The placeholder bytes [0, 1, 2, 3, 4, 0, 0, ...] = 17230332160 in little-endian
-    try testing.expectEqual(@as(i128, 17230332160), value);
+    // The parser now correctly converts "42" to the integer 42
+    try testing.expectEqual(@as(i128, 42), value);
+}
+
+test "eval negative number" {
+    const source = "-42";
+
+    const resources = try parseAndCanonicalizeExpr(test_allocator, source);
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    // Create a stack for evaluation
+    var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
+    defer eval_stack.deinit();
+
+    // Create layout store
+    var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types_store);
+    defer layout_cache.deinit();
+
+    // Evaluate the number
+    const result = try eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache);
+
+    // Verify we got an integer layout
+    try testing.expect(result.layout.tag == .scalar);
+    try testing.expect(result.layout.data.scalar.tag == .int);
+
+    // Read the value back based on the precision
+    const value: i128 = switch (result.layout.data.scalar.data.int) {
+        .u8 => @as(*u8, @ptrCast(@alignCast(result.ptr))).*,
+        .i8 => @as(*i8, @ptrCast(@alignCast(result.ptr))).*,
+        .u16 => @as(*u16, @ptrCast(@alignCast(result.ptr))).*,
+        .i16 => @as(*i16, @ptrCast(@alignCast(result.ptr))).*,
+        .u32 => @as(*u32, @ptrCast(@alignCast(result.ptr))).*,
+        .i32 => @as(*i32, @ptrCast(@alignCast(result.ptr))).*,
+        .u64 => @as(*u64, @ptrCast(@alignCast(result.ptr))).*,
+        .i64 => @as(*i64, @ptrCast(@alignCast(result.ptr))).*,
+        .u128 => @intCast(@as(*u128, @ptrCast(@alignCast(result.ptr))).*),
+        .i128 => @as(*i128, @ptrCast(@alignCast(result.ptr))).*,
+    };
+
+    // The parser now correctly converts "-42" to the integer -42
+    try testing.expectEqual(@as(i128, -42), value);
 }
 
 test "eval list literal" {
@@ -405,6 +443,6 @@ test "eval integer literal directly from CIR node" {
 
     // Read the value back
     const value = @as(*i128, @ptrCast(@alignCast(result.ptr))).*;
-    // Expecting the placeholder value: 0x04030201_00 = 17230332160 in little-endian
+    // IntValue.placeholder() still returns the placeholder bytes
     try testing.expectEqual(@as(i128, 17230332160), value);
 }

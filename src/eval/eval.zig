@@ -75,11 +75,11 @@ pub fn eval(
         // Numeric literals are primitives
         .num => |num| {
             // Write the number bytes to memory based on the layout
-            writeIntToMemory(ptr, intValueToI128(num.value), .i128);
+            writeIntToMemory(ptr, num.value.toI128(), .i128);
         },
         .int => |int_lit| {
             // Write integer literal to memory
-            writeIntToMemory(ptr, intValueToI128(int_lit.value), .i128);
+            writeIntToMemory(ptr, int_lit.value.toI128(), .i128);
         },
         .float => |float_lit| {
             // Write float literal to memory
@@ -184,43 +184,6 @@ fn writeIntToMemory(ptr: *anyopaque, value: i128, precision: types.Num.Int.Preci
         .i128 => {
             const typed_ptr = @as(*i128, @ptrCast(@alignCast(ptr)));
             typed_ptr.* = value;
-        },
-    }
-}
-
-fn intValueToI128(int_value: CIR.IntValue) i128 {
-    // Debug: Print the bytes to understand the encoding
-    if (false) { // Set to true to enable debug logging
-        std.debug.print("IntValue bytes: ", .{});
-        for (int_value.bytes) |byte| {
-            std.debug.print("{x:0>2} ", .{byte});
-        }
-        std.debug.print("\nKind: {}\n", .{int_value.kind});
-    }
-
-    // TODO: Currently NodeStore returns placeholder values for integers
-    // The actual parsing of integer literals hasn't been implemented yet
-    // So we're just converting the placeholder bytes for now
-
-    // Convert the bytes array to i128 based on the kind
-    switch (int_value.kind) {
-        .i128 => {
-            // Little-endian bytes to i128
-            var result: i128 = 0;
-            var i: usize = 0;
-            while (i < 16) : (i += 1) {
-                result |= @as(i128, int_value.bytes[i]) << @intCast(i * 8);
-            }
-            return result;
-        },
-        .u128 => {
-            // Little-endian bytes to u128, then cast to i128
-            var result: u128 = 0;
-            var i: usize = 0;
-            while (i < 16) : (i += 1) {
-                result |= @as(u128, int_value.bytes[i]) << @intCast(i * 8);
-            }
-            return @intCast(result);
         },
     }
 }

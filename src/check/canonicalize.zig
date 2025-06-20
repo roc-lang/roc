@@ -506,10 +506,7 @@ pub fn canonicalize_expr(
                     .int_var = int_type_var,
                     .precision_var = precision_type_var,
                     .literal = literal,
-                    .value = CIR.IntValue{
-                        .bytes = @bitCast(value),
-                        .kind = .i128,
-                    },
+                    .value = CIR.IntValue.fromI128(value),
                     .bound = Num.Int.Precision.fromValue(value),
                     .region = region,
                 },
@@ -1278,6 +1275,10 @@ fn isVarReassignmentAcrossFunctionBoundary(self: *const Self, pattern_idx: CIR.P
         }
     }
     return false;
+}
+
+test {
+    _ = @import("canonicalize/test/int_test.zig");
 }
 
 /// Introduce a new identifier to the current scope, return an

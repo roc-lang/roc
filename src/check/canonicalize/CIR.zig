@@ -1324,6 +1324,59 @@ pub const IntValue = struct {
             .kind = .i128,
         };
     }
+
+    pub fn fromI128(value: i128) IntValue {
+        var bytes: [16]u8 = undefined;
+        // Store as little-endian bytes
+        var i: usize = 0;
+        var v = value;
+        while (i < 16) : (i += 1) {
+            bytes[i] = @truncate(@as(u128, @bitCast(v)));
+            v = v >> 8;
+        }
+        return IntValue{
+            .bytes = bytes,
+            .kind = .i128,
+        };
+    }
+
+    pub fn fromU128(value: u128) IntValue {
+        var bytes: [16]u8 = undefined;
+        // Store as little-endian bytes
+        var i: usize = 0;
+        var v = value;
+        while (i < 16) : (i += 1) {
+            bytes[i] = @truncate(v);
+            v = v >> 8;
+        }
+        return IntValue{
+            .bytes = bytes,
+            .kind = .u128,
+        };
+    }
+
+    pub fn toI128(self: IntValue) i128 {
+        switch (self.kind) {
+            .i128 => {
+                // Convert little-endian bytes to i128
+                var result: i128 = 0;
+                var i: usize = 0;
+                while (i < 16) : (i += 1) {
+                    result |= @as(i128, self.bytes[i]) << @intCast(i * 8);
+                }
+                return result;
+            },
+            .u128 => {
+                // Convert little-endian bytes to u128, then cast to i128
+                var result: u128 = 0;
+                var i: usize = 0;
+                while (i < 16) : (i += 1) {
+                    result |= @as(u128, self.bytes[i]) << @intCast(i * 8);
+                }
+                return @intCast(result);
+            },
+        }
+    }
 };
 
 /// todo - evaluate if we need this?
