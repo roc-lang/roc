@@ -1,6 +1,8 @@
 // This program was written by Jelle Teeuwissen within a final
 // thesis project of the Computing Science master program at Utrecht
 // University under supervision of Wouter Swierstra (w.s.swierstra@uu.nl).
+// Reading the thesis will help you understand the implementation:
+// https://studenttheses.uu.nl/bitstream/handle/20.500.12932/44634/Reference_Counting_with_Reuse_in_Roc.pdf?sequence=1&isAllowed=y
 
 // Implementation based of Perceus: Garbage Free Reference Counting with Reuse
 // https://www.microsoft.com/en-us/research/uploads/prod/2021/06/perceus-pldi21.pdf
