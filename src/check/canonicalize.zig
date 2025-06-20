@@ -105,7 +105,7 @@ fn addBuiltin(self: *Self, ir: *CIR, ident_text: []const u8, idx: CIR.Pattern.Id
     const ident_store = &ir.env.idents;
     const ident_add = ir.env.idents.insert(gpa, base.Ident.for_text(ident_text), Region.zero());
     const pattern_idx_add = ir.store.addPattern(CIR.Pattern{ .assign = .{ .ident = ident_add, .region = Region.zero() } });
-    _ = self.scopeIntroduce(gpa, ident_store, .ident, ident_add, pattern_idx_add, false, true);
+    _ = self.scopeIntroduceInternal(gpa, ident_store, .ident, ident_add, pattern_idx_add, false, true);
     std.debug.assert(idx == pattern_idx_add);
 }
 
@@ -113,54 +113,6 @@ const Self = @This();
 
 /// The intermediate representation of a canonicalized Roc program.
 pub const CIR = @import("canonicalize/CIR.zig");
-
-/// helper to get the allocator from ModuleEnv
-pub fn get_gpa(self: *Self) std.mem.Allocator {
-    comptime return self.can_ir.env.gpa;
-}
-
-/// Enter a function boundary by pushing its region onto the stack
-pub fn enterFunction(self: *Self, region: Region) void {
-    self.function_regions.append(self.can_ir.env.gpa, region) catch |err| exitOnOom(err);
-}
-
-/// Exit a function boundary by popping from the stack
-pub fn exitFunction(self: *Self) void {
-    _ = self.function_regions.pop();
-}
-
-/// Get the current function region (the function we're currently in)
-pub fn getCurrentFunctionRegion(self: *const Self) ?Region {
-    if (self.function_regions.items.len > 0) {
-        return self.function_regions.items[self.function_regions.items.len - 1];
-    }
-    return null;
-}
-
-/// Record which function a var pattern was declared in
-pub fn recordVarFunction(self: *Self, pattern_idx: CIR.Pattern.Idx) void {
-    // Mark this pattern as a var
-    self.var_patterns.put(self.can_ir.env.gpa, pattern_idx, {}) catch |err| exitOnOom(err);
-
-    if (self.getCurrentFunctionRegion()) |function_region| {
-        self.var_function_regions.put(self.can_ir.env.gpa, pattern_idx, function_region) catch |err| exitOnOom(err);
-    }
-}
-
-/// Check if a pattern is a var
-pub fn isVarPattern(self: *const Self, pattern_idx: CIR.Pattern.Idx) bool {
-    return self.var_patterns.contains(pattern_idx);
-}
-
-/// Check if a var reassignment crosses function boundaries
-pub fn isVarReassignmentAcrossFunctionBoundary(self: *const Self, pattern_idx: CIR.Pattern.Idx) bool {
-    if (self.var_function_regions.get(pattern_idx)) |var_function_region| {
-        if (self.getCurrentFunctionRegion()) |current_function_region| {
-            return !var_function_region.eq(current_function_region);
-        }
-    }
-    return false;
-}
 
 /// After parsing a Roc program, the [ParseIR](src/check/parse/AST.zig) is transformed into a [canonical
 /// form](src/check/canonicalize/ir.zig) called CanIR.
@@ -264,8 +216,6 @@ pub fn canonicalize_file(
         }
     }
 
-    // TODO: implement
-
     // Get the header and canonicalize exposes based on header type
     const header = self.parse_ir.store.getHeader(file.header);
     switch (header) {
@@ -283,7 +233,7 @@ pub fn canonicalize_file(
     }
 
     // Create the span of all top-level defs
-    self.can_ir.top_level_defs = self.can_ir.store.defSpanFrom(scratch_defs_start);
+    self.can_ir.all_defs = self.can_ir.store.defSpanFrom(scratch_defs_start);
 }
 
 fn canonicalize_header_exposes(
@@ -297,18 +247,15 @@ fn canonicalize_header_exposes(
         const exposed = self.parse_ir.store.getExposedItem(exposed_idx);
         switch (exposed) {
             .lower_ident => |ident| {
-                // For now, just mark that we've seen this exposed identifier
-                // In a full implementation, we'd check if it's actually defined
+                // TODO -- do we need a Pattern for "exposed_lower" identifiers?
                 _ = ident;
             },
             .upper_ident => |type_name| {
-                // For now, just mark that we've seen this exposed type
-                // In a full implementation, we'd check if it's actually defined
+                // TODO -- do we need a Pattern for "exposed_upper" identifiers?
                 _ = type_name;
             },
             .upper_ident_star => |type_with_constructors| {
-                // For now, just mark that we've seen this exposed type with constructors
-                // In a full implementation, we'd check if it's actually defined and has constructors
+                // TODO -- do we need a Pattern for "exposed_upper_star" identifiers?
                 _ = type_with_constructors;
             },
         }
@@ -1072,7 +1019,7 @@ fn canonicalize_pattern(
                 _ = self.can_ir.setTypeVarAtPat(assign_idx, .{ .flex_var = null });
 
                 // Introduce the identifier into scope mapping to this pattern node
-                switch (self.scopeIntroduce(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, ident_idx, assign_idx, false, true)) {
+                switch (self.scopeIntroduceInternal(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, ident_idx, assign_idx, false, true)) {
                     .success => {},
                     .shadowing_warning => |shadowed_pattern_idx| {
                         const shadowed_pattern = self.can_ir.store.getPattern(shadowed_pattern_idx);
@@ -1290,16 +1237,59 @@ fn canonicalize_pattern(
     }
 }
 
+/// Enter a function boundary by pushing its region onto the stack
+fn enterFunction(self: *Self, region: Region) void {
+    self.function_regions.append(self.can_ir.env.gpa, region) catch |err| exitOnOom(err);
+}
+
+/// Exit a function boundary by popping from the stack
+fn exitFunction(self: *Self) void {
+    _ = self.function_regions.pop();
+}
+
+/// Get the current function region (the function we're currently in)
+fn getCurrentFunctionRegion(self: *const Self) ?Region {
+    if (self.function_regions.items.len > 0) {
+        return self.function_regions.items[self.function_regions.items.len - 1];
+    }
+    return null;
+}
+
+/// Record which function a var pattern was declared in
+fn recordVarFunction(self: *Self, pattern_idx: CIR.Pattern.Idx) void {
+    // Mark this pattern as a var
+    self.var_patterns.put(self.can_ir.env.gpa, pattern_idx, {}) catch |err| exitOnOom(err);
+
+    if (self.getCurrentFunctionRegion()) |function_region| {
+        self.var_function_regions.put(self.can_ir.env.gpa, pattern_idx, function_region) catch |err| exitOnOom(err);
+    }
+}
+
+/// Check if a pattern is a var
+fn isVarPattern(self: *const Self, pattern_idx: CIR.Pattern.Idx) bool {
+    return self.var_patterns.contains(pattern_idx);
+}
+
+/// Check if a var reassignment crosses function boundaries
+fn isVarReassignmentAcrossFunctionBoundary(self: *const Self, pattern_idx: CIR.Pattern.Idx) bool {
+    if (self.var_function_regions.get(pattern_idx)) |var_function_region| {
+        if (self.getCurrentFunctionRegion()) |current_function_region| {
+            return !var_function_region.eq(current_function_region);
+        }
+    }
+    return false;
+}
+
 /// Introduce a new identifier to the current scope, return an
 /// index if
-pub fn scope_introduce_ident(
+fn scopeIntroduceIdent(
     self: Self,
     ident_idx: Ident.Idx,
     pattern_idx: CIR.Pattern.Idx,
     region: Region,
     comptime T: type,
 ) T {
-    const result = self.scopeIntroduce(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, ident_idx, pattern_idx, false, true);
+    const result = self.scopeIntroduceInternal(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, ident_idx, pattern_idx, false, true);
 
     switch (result) {
         .success => {
@@ -1331,7 +1321,7 @@ pub fn scope_introduce_ident(
 }
 
 /// Introduce a var identifier to the current scope with function boundary tracking
-pub fn scope_introduce_var(
+fn scopeIntroduceVar(
     self: *Self,
     ident_idx: Ident.Idx,
     pattern_idx: CIR.Pattern.Idx,
@@ -1339,7 +1329,7 @@ pub fn scope_introduce_var(
     is_declaration: bool,
     comptime T: type,
 ) T {
-    const result = self.scopeIntroduce(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, ident_idx, pattern_idx, true, is_declaration);
+    const result = self.scopeIntroduceInternal(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, ident_idx, pattern_idx, true, is_declaration);
 
     switch (result) {
         .success => {
@@ -1462,7 +1452,7 @@ fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) ?CIR.Expr.Id
             const pattern_idx = self.can_ir.store.addPattern(CIR.Pattern{ .assign = .{ .ident = var_name, .region = region } });
 
             // Introduce the var with function boundary tracking
-            _ = self.scope_introduce_var(var_name, pattern_idx, region, true, CIR.Pattern.Idx);
+            _ = self.scopeIntroduceVar(var_name, pattern_idx, region, true, CIR.Pattern.Idx);
 
             // Create var statement
             const var_stmt = CIR.Statement{ .@"var" = .{
@@ -1520,13 +1510,13 @@ fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) ?CIR.Expr.Id
 }
 
 /// Enter a new scope level
-pub fn scopeEnter(self: *Self, gpa: std.mem.Allocator, is_function_boundary: bool) void {
+fn scopeEnter(self: *Self, gpa: std.mem.Allocator, is_function_boundary: bool) void {
     const scope = Scope.init(is_function_boundary);
     self.scopes.append(gpa, scope) catch |err| collections.utils.exitOnOom(err);
 }
 
 /// Exit the current scope level
-pub fn scopeExit(self: *Self, gpa: std.mem.Allocator) Scope.Error!void {
+fn scopeExit(self: *Self, gpa: std.mem.Allocator) Scope.Error!void {
     if (self.scopes.items.len <= 1) {
         return Scope.Error.ExitedTopScopeLevel;
     }
@@ -1558,7 +1548,7 @@ fn scopeContains(
 }
 
 /// Look up an identifier in the scope
-pub fn scopeLookup(
+fn scopeLookup(
     self: *Self,
     ident_store: *const base.Ident.Store,
     comptime item_kind: Scope.ItemKind,
@@ -1571,7 +1561,7 @@ pub fn scopeLookup(
 }
 
 /// Introduce a new identifier to the current scope level
-pub fn scopeIntroduce(
+fn scopeIntroduceInternal(
     self: *Self,
     gpa: std.mem.Allocator,
     ident_store: *const base.Ident.Store,
@@ -1660,7 +1650,7 @@ pub fn scopeIntroduce(
 }
 
 /// Get all identifiers in scope
-pub fn scopeAllIdents(self: *const Self, gpa: std.mem.Allocator, comptime item_kind: Scope.ItemKind) []base.Ident.Idx {
+fn scopeAllIdents(self: *const Self, gpa: std.mem.Allocator, comptime item_kind: Scope.ItemKind) []base.Ident.Idx {
     var result = std.ArrayList(base.Ident.Idx).init(gpa);
 
     for (self.scopes.items) |scope| {
@@ -1741,8 +1731,8 @@ test "can add and lookup idents at top level" {
     const bar_pattern: CIR.Pattern.Idx = @enumFromInt(2);
 
     // Add identifiers
-    const foo_result = ctx.self.scopeIntroduce(gpa, &ctx.env.idents, .ident, foo_ident, foo_pattern, false, true);
-    const bar_result = ctx.self.scopeIntroduce(gpa, &ctx.env.idents, .ident, bar_ident, bar_pattern, false, true);
+    const foo_result = ctx.self.scopeIntroduceInternal(gpa, &ctx.env.idents, .ident, foo_ident, foo_pattern, false, true);
+    const bar_result = ctx.self.scopeIntroduceInternal(gpa, &ctx.env.idents, .ident, bar_ident, bar_pattern, false, true);
 
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, foo_result);
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, bar_result);
@@ -1766,7 +1756,7 @@ test "nested scopes shadow outer scopes" {
     const inner_pattern: CIR.Pattern.Idx = @enumFromInt(2);
 
     // Add x to outer scope
-    const outer_result = ctx.self.scopeIntroduce(gpa, &ctx.env.idents, .ident, x_ident, outer_pattern, false, true);
+    const outer_result = ctx.self.scopeIntroduceInternal(gpa, &ctx.env.idents, .ident, x_ident, outer_pattern, false, true);
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, outer_result);
 
     // Enter new scope
@@ -1777,7 +1767,7 @@ test "nested scopes shadow outer scopes" {
     try std.testing.expectEqual(Scope.LookupResult{ .found = outer_pattern }, outer_lookup);
 
     // Add x to inner scope (shadows outer)
-    const inner_result = ctx.self.scopeIntroduce(gpa, &ctx.env.idents, .ident, x_ident, inner_pattern, false, true);
+    const inner_result = ctx.self.scopeIntroduceInternal(gpa, &ctx.env.idents, .ident, x_ident, inner_pattern, false, true);
     try std.testing.expectEqual(Scope.IntroduceResult{ .shadowing_warning = outer_pattern }, inner_result);
 
     // Now x should resolve to inner scope
@@ -1802,7 +1792,7 @@ test "top level var error" {
     const pattern: CIR.Pattern.Idx = @enumFromInt(1);
 
     // Should fail to introduce var at top level
-    const result = ctx.self.scopeIntroduce(gpa, &ctx.env.idents, .ident, var_ident, pattern, true, true);
+    const result = ctx.self.scopeIntroduceInternal(gpa, &ctx.env.idents, .ident, var_ident, pattern, true, true);
     try std.testing.expectEqual(Scope.IntroduceResult{ .top_level_var_error = {} }, result);
 }
 
@@ -1820,11 +1810,11 @@ test "var reassignment within same function" {
     const pattern2: CIR.Pattern.Idx = @enumFromInt(2);
 
     // Declare var
-    const declare_result = ctx.self.scopeIntroduce(gpa, &ctx.env.idents, .ident, count_ident, pattern1, true, true);
+    const declare_result = ctx.self.scopeIntroduceInternal(gpa, &ctx.env.idents, .ident, count_ident, pattern1, true, true);
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, declare_result);
 
     // Reassign var (not a declaration)
-    const reassign_result = ctx.self.scopeIntroduce(gpa, &ctx.env.idents, .ident, count_ident, pattern2, true, false);
+    const reassign_result = ctx.self.scopeIntroduceInternal(gpa, &ctx.env.idents, .ident, count_ident, pattern2, true, false);
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, reassign_result);
 
     // Should resolve to the reassigned value
@@ -1846,14 +1836,14 @@ test "var reassignment across function boundary fails" {
     const pattern2: CIR.Pattern.Idx = @enumFromInt(2);
 
     // Declare var in first function
-    const declare_result = ctx.self.scopeIntroduce(gpa, &ctx.env.idents, .ident, count_ident, pattern1, true, true);
+    const declare_result = ctx.self.scopeIntroduceInternal(gpa, &ctx.env.idents, .ident, count_ident, pattern1, true, true);
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, declare_result);
 
     // Enter second function scope (function boundary)
     ctx.self.scopeEnter(gpa, true);
 
     // Try to reassign var from different function - should fail
-    const reassign_result = ctx.self.scopeIntroduce(gpa, &ctx.env.idents, .ident, count_ident, pattern2, true, false);
+    const reassign_result = ctx.self.scopeIntroduceInternal(gpa, &ctx.env.idents, .ident, count_ident, pattern2, true, false);
     try std.testing.expectEqual(Scope.IntroduceResult{ .var_across_function_boundary = pattern1 }, reassign_result);
 }
 
@@ -1872,11 +1862,11 @@ test "identifiers with and without underscores are different" {
     ctx.self.scopeEnter(gpa, true);
 
     // Introduce regular identifier
-    const regular_result = ctx.self.scopeIntroduce(gpa, &ctx.env.idents, .ident, sum_ident, pattern1, false, true);
+    const regular_result = ctx.self.scopeIntroduceInternal(gpa, &ctx.env.idents, .ident, sum_ident, pattern1, false, true);
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, regular_result);
 
     // Introduce var with underscore - should not conflict
-    const var_result = ctx.self.scopeIntroduce(gpa, &ctx.env.idents, .ident, sum_underscore_ident, pattern2, true, true);
+    const var_result = ctx.self.scopeIntroduceInternal(gpa, &ctx.env.idents, .ident, sum_underscore_ident, pattern2, true, true);
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, var_result);
 
     // Both should be found independently
@@ -1898,8 +1888,8 @@ test "aliases work separately from idents" {
     const alias_pattern: CIR.Pattern.Idx = @enumFromInt(2);
 
     // Add as both ident and alias (they're in separate namespaces)
-    const ident_result = ctx.self.scopeIntroduce(gpa, &ctx.env.idents, .ident, foo_ident, ident_pattern, false, true);
-    const alias_result = ctx.self.scopeIntroduce(gpa, &ctx.env.idents, .alias, foo_ident, alias_pattern, false, true);
+    const ident_result = ctx.self.scopeIntroduceInternal(gpa, &ctx.env.idents, .ident, foo_ident, ident_pattern, false, true);
+    const alias_result = ctx.self.scopeIntroduceInternal(gpa, &ctx.env.idents, .alias, foo_ident, alias_pattern, false, true);
 
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, ident_result);
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, alias_result);

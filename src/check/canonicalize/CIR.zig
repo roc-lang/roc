@@ -41,9 +41,8 @@ store: NodeStore,
 /// Lifetime: The caller must ensure the source remains valid for the duration of the
 /// operation (e.g., `toSExprStr` or `diagnosticToReport` calls).
 temp_source_for_sexpr: ?[]const u8 = null,
-/// TODO should this be renamed to just Defs -- it appears to be all the definitions and
-/// not just the top level ones.
-top_level_defs: Def.Span,
+/// All the definitions and in the module, populated by calling `canonicalize_file`
+all_defs: Def.Span,
 
 /// Initialize the IR for a module's canonicalization info.
 ///
@@ -63,7 +62,7 @@ pub fn init(env: *ModuleEnv) CIR {
     return CIR{
         .env = env,
         .store = NodeStore.initCapacity(env.gpa, NODE_STORE_CAPACITY),
-        .top_level_defs = .{ .span = .{ .start = 0, .len = 0 } },
+        .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
     };
 }
 
@@ -1792,8 +1791,8 @@ pub fn toSExprStr(ir: *CIR, env: *ModuleEnv, writer: std.io.AnyWriter, maybe_exp
         var root_node = sexpr.Expr.init(gpa, "can_ir");
         defer root_node.deinit(gpa);
 
-        // Iterate over each top-level definition and convert it to an S-expression
-        const defs_slice = ir.store.sliceDefs(ir.top_level_defs);
+        // Iterate over all the definitions in the file and convert each to an S-expression
+        const defs_slice = ir.store.sliceDefs(ir.all_defs);
 
         if (defs_slice.len == 0) {
             root_node.appendString(gpa, "empty");
