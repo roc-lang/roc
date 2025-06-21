@@ -512,7 +512,6 @@ pub fn canonicalize_expr(
                     .precision_var = precision_type_var,
                     .literal = literal,
                     .value = value,
-                    .bound = bound,
                     .region = region,
                 },
             });
@@ -550,7 +549,12 @@ pub fn canonicalize_expr(
             const final_expr_idx = self.can_ir.store.predictNodeIndex(3);
 
             // then insert the type vars, setting the parent to be the final slot
-            const precision_type_var = self.can_ir.pushFreshTypeVar(final_expr_idx, region);
+            const bound = Num.Frac.Precision.fromValue(value);
+            const precision_type_var = self.can_ir.pushTypeVar(
+                Content{ .structure = .{ .num = .{ .frac_precision = bound } } },
+                final_expr_idx,
+                region,
+            );
             const float_type_var = self.can_ir.pushTypeVar(
                 Content{ .structure = .{ .num = .{ .frac_poly = precision_type_var } } },
                 final_expr_idx,
@@ -564,7 +568,6 @@ pub fn canonicalize_expr(
                     .precision_var = precision_type_var,
                     .literal = literal,
                     .value = value,
-                    .bound = Num.Frac.Precision.fromValue(value),
                     .region = region,
                 },
             });
@@ -1099,7 +1102,6 @@ fn canonicalize_pattern(
                     .num_var = num_type_var,
                     .literal = literal,
                     .value = value,
-                    .bound = Num.Int.Precision.fromValue(value),
                     .region = region,
                 },
             };

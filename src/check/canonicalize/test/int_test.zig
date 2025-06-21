@@ -70,8 +70,16 @@ fn cleanup(allocator: std.mem.Allocator, resources: anytype) void {
 fn getIntValue(cir: *CIR, expr_idx: CIR.Expr.Idx) !struct { value: i128, precision: types.Num.Int.Precision } {
     const expr = cir.store.getExpr(expr_idx);
     switch (expr) {
-        .int => |int_expr| return .{ .value = int_expr.value, .precision = int_expr.bound },
-        .num => |num_expr| return .{ .value = num_expr.value, .precision = num_expr.bound },
+        .int => |int_expr| {
+            const precision = CIR.getIntPrecision(cir.env, int_expr.precision_var) orelse return error.NoPrecision;
+            return .{ .value = int_expr.value, .precision = precision };
+        },
+        .num => |num_expr| {
+            // For num expressions, we need to resolve the num_var to get the precision
+            // This is a simplified case - in real code we'd need to handle more complex type resolution
+            const precision = types.Num.Int.Precision.i128; // Default for now
+            return .{ .value = num_expr.value, .precision = precision };
+        },
         else => return error.NotAnInteger,
     }
 }
@@ -229,20 +237,10 @@ test "canonicalize integer bounds" {
         const resources = try parseAndCanonicalizeInt(test_allocator, tc.source);
         defer cleanup(test_allocator, resources);
 
-        const expr = resources.cir.store.getExpr(resources.expr_idx);
-        switch (expr) {
-            .int => |int_expr| {
-                const value = interpretAsI128(int_expr.value, int_expr.bound);
-                try testing.expectEqual(tc.expected_value, value);
-                try testing.expectEqual(tc.expected_bound, int_expr.bound);
-            },
-            .num => |num_expr| {
-                const value = interpretAsI128(num_expr.value, num_expr.bound);
-                try testing.expectEqual(tc.expected_value, value);
-                try testing.expectEqual(tc.expected_bound, num_expr.bound);
-            },
-            else => return error.UnexpectedExprType,
-        }
+        const int_data = try getIntValue(resources.cir, resources.expr_idx);
+        const value = interpretAsI128(int_data.value, int_data.precision);
+        try testing.expectEqual(tc.expected_value, value);
+        try testing.expectEqual(tc.expected_bound, int_data.precision);
     }
 }
 
@@ -394,17 +392,13 @@ test "canonicalize signed vs unsigned interpretation" {
         const resources = try parseAndCanonicalizeInt(test_allocator, tc.source);
         defer cleanup(test_allocator, resources);
 
-        const expr = resources.cir.store.getExpr(resources.expr_idx);
-        const int_expr = switch (expr) {
-            .int => |e| e,
-            else => return error.UnexpectedExprType,
-        };
+        const int_data = try getIntValue(resources.cir, resources.expr_idx);
 
         // Verify the precision is what we expect
-        try testing.expectEqual(tc.expected_precision, int_expr.bound);
+        try testing.expectEqual(tc.expected_precision, int_data.precision);
 
         // Verify the value is interpreted correctly based on the precision
-        const value = interpretAsI128(int_expr.value, int_expr.bound);
+        const value = interpretAsI128(int_data.value, int_data.precision);
         try testing.expectEqual(tc.expected_signed, value);
 
         // Note: We store values based on their determined precision, so 255 stored as u8

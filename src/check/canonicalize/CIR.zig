@@ -558,7 +558,6 @@ pub const Expr = union(enum) {
         num_var: TypeVar,
         literal: StringLiteral.Idx,
         value: i128,
-        bound: types.Num.Int.Precision,
         region: Region,
     },
     int: struct {
@@ -570,7 +569,6 @@ pub const Expr = union(enum) {
         // (i8, u8, i16, u16, i32, u32, i64, u64, i128), the value is interpreted as
         // a signed i128 and will be truncated/sign-extended as needed during codegen.
         value: i128,
-        bound: types.Num.Int.Precision,
         region: Region,
     },
     float: struct {
@@ -578,7 +576,6 @@ pub const Expr = union(enum) {
         precision_var: TypeVar,
         literal: StringLiteral.Idx,
         value: f64,
-        bound: types.Num.Frac.Precision,
         region: Region,
     },
     // A single segment of a string literal
@@ -598,7 +595,6 @@ pub const Expr = union(enum) {
         num_var: TypeVar,
         precision_var: TypeVar,
         value: u32,
-        bound: types.Num.Int.Precision,
         region: Region,
     },
     lookup: Lookup,
@@ -748,11 +744,6 @@ pub const Expr = union(enum) {
                 value_node.appendString(gpa, value_str);
                 num_node.appendNode(gpa, &value_node);
 
-                // Add bound info
-                var bound_node = sexpr.Expr.init(gpa, "bound");
-                bound_node.appendString(gpa, @tagName(num_expr.bound));
-                num_node.appendNode(gpa, &bound_node);
-
                 return num_node;
             },
             .int => |int_expr| {
@@ -786,11 +777,6 @@ pub const Expr = union(enum) {
                 value_node.appendString(gpa, value_str);
                 int_node.appendNode(gpa, &value_node);
 
-                // Add bound info
-                var bound_node = sexpr.Expr.init(gpa, "bound");
-                bound_node.appendString(gpa, @tagName(int_expr.bound));
-                int_node.appendNode(gpa, &bound_node);
-
                 return int_node;
             },
             .float => |float_expr| {
@@ -823,11 +809,6 @@ pub const Expr = union(enum) {
                 defer gpa.free(value_str);
                 value_node.appendString(gpa, value_str);
                 float_node.appendNode(gpa, &value_node);
-
-                // Add bound info
-                var bound_node = sexpr.Expr.init(gpa, "bound");
-                bound_node.appendString(gpa, @tagName(float_expr.bound));
-                float_node.appendNode(gpa, &bound_node);
 
                 return float_node;
             },
@@ -875,11 +856,6 @@ pub const Expr = union(enum) {
                 defer gpa.free(value_str);
                 value_node.appendString(gpa, value_str);
                 single_quote_node.appendNode(gpa, &value_node);
-
-                // Add bound info
-                var bound_node = sexpr.Expr.init(gpa, "bound");
-                bound_node.appendString(gpa, @tagName(e.bound));
-                single_quote_node.appendNode(gpa, &bound_node);
 
                 return single_quote_node;
             },
@@ -1479,12 +1455,11 @@ pub const Pattern = union(enum) {
         num_var: TypeVar,
         literal: StringLiteral.Idx,
         value: i128,
-        bound: types.Num.Int.Precision,
         region: Region,
     },
     /// Pattern for an integer literal with type annotation
     ///
-    /// NOTE: The value field is always stored as i128. When the bound type is u128,
+    /// NOTE: The value field is always stored as i128. When the precision type is u128,
     /// the i128 bits should be reinterpreted as u128. For all other integer types,
     /// the value is interpreted as a signed i128.
     int_literal: struct {
@@ -1492,7 +1467,6 @@ pub const Pattern = union(enum) {
         precision_var: TypeVar,
         literal: StringLiteral.Idx,
         value: i128,
-        bound: types.Num.Int.Precision,
         region: Region,
     },
     float_literal: struct {
@@ -1500,7 +1474,6 @@ pub const Pattern = union(enum) {
         precision_var: TypeVar,
         literal: StringLiteral.Idx,
         value: f64,
-        bound: types.Num.Frac.Precision,
         region: Region,
     },
     str_literal: struct {
@@ -1511,7 +1484,6 @@ pub const Pattern = union(enum) {
         num_var: TypeVar,
         precision_var: TypeVar,
         value: u32,
-        bound: types.Num.Int.Precision,
         region: Region,
     },
     underscore: struct {
@@ -1622,7 +1594,6 @@ pub const Pattern = union(enum) {
                 var value_buf: [64]u8 = undefined;
                 const value_str = std.fmt.bufPrint(&value_buf, "value={}", .{p.value}) catch "value=<fmt_error>";
                 node.appendString(gpa, value_str);
-                node.appendString(gpa, @tagName(p.bound));
                 return node;
             },
             .int_literal => |p| {
@@ -1636,7 +1607,6 @@ pub const Pattern = union(enum) {
                 var value_buf: [64]u8 = undefined;
                 const value_str = std.fmt.bufPrint(&value_buf, "value={}", .{p.value}) catch "value=<fmt_error>";
                 node.appendString(gpa, value_str);
-                node.appendString(gpa, @tagName(p.bound));
                 return node;
             },
             .float_literal => |p| {
@@ -1651,7 +1621,6 @@ pub const Pattern = union(enum) {
                 defer gpa.free(val_str);
 
                 node.appendString(gpa, val_str);
-                node.appendString(gpa, @tagName(p.bound));
 
                 return node;
             },
@@ -1678,7 +1647,6 @@ pub const Pattern = union(enum) {
                 const char_str = std.fmt.allocPrint(gpa, "'\\u({d})'", .{l.value}) catch "<oom>";
                 defer gpa.free(char_str);
                 node.appendString(gpa, char_str);
-                node.appendString(gpa, @tagName(l.bound));
                 return node;
             },
             .underscore => |p| {
@@ -1841,4 +1809,39 @@ pub fn calcRegionInfo(self: *const CIR, region: Region) base.RegionInfo {
     };
 
     return info;
+}
+
+/// Get the integer precision from a type variable by resolving it through the type store.
+/// Returns null if the type variable doesn't resolve to an integer precision.
+pub fn getIntPrecision(env: *ModuleEnv, type_var: TypeVar) ?types.Num.Int.Precision {
+    var current_var = type_var;
+    while (true) {
+        const resolved = env.types_store.resolveVar(current_var);
+        switch (resolved.desc.content) {
+            .structure => |flat_type| {
+                switch (flat_type) {
+                    .num => |num| {
+                        switch (num) {
+                            .int_precision => |precision| return precision,
+                            .int_poly => |var_| {
+                                current_var = var_;
+                                continue;
+                            },
+                            .num_poly => |var_| {
+                                current_var = var_;
+                                continue;
+                            },
+                            else => return null,
+                        }
+                    },
+                    else => return null,
+                }
+            },
+            .alias => |alias| {
+                current_var = alias.backing_var;
+                continue;
+            },
+            else => return null,
+        }
+    }
 }
