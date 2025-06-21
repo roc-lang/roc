@@ -20,17 +20,17 @@ NO CHANGE
 (e_lambda (1:1-1:10)
 	(args
 		(p_assign (1:2-1:3)
-			(pid 12)
+			(pid 72)
 			(ident "x")))
 	(e_binop (1:5-1:10)
 		"add"
-		(e_lookup (1:5-1:6) (pid 12))
+		(e_lookup (1:5-1:6) (pid 72))
 		(e_int (1:9-1:10)
-			(int_var 15)
-			(precision_var 14)
+			(int_var 75)
+			(precision_var 74)
 			(literal "1")
 			(value "TODO")
 			(bound "u8"))))
 ~~~TYPES
-(expr 18 (type "*"))
+(expr 78 (type "*"))
 ~~~END

@@ -26,10 +26,10 @@ type_scope_integration.txt:7-1:10: Foo : Str
 Bar : SomeUndeclaredType
 
 But `Foo` was already declared here:
-type_scope_integration.txt:7-1:10: Foo : Str
+type_scope_integration.txt:4-1:7: Foo : U64
 
-# Declare another type that uses an undeclared type
-Bar : SomeUndeclaredType
+# Try to redeclare the same type (should error)
+Foo : Str
 
 UNDECLARED TYPE
 The type `SomeUndeclaredType` is not declared in this scope.

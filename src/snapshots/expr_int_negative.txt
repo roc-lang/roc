@@ -13,11 +13,11 @@ Int(1:1-1:5),EndOfFile(1:5-1:5),
 NO CHANGE
 ~~~CANONICALIZE
 (e_int (1:1-1:5)
-	(int_var 13)
-	(precision_var 12)
+	(int_var 73)
+	(precision_var 72)
 	(literal "-123")
 	(value "TODO")
 	(bound "u8"))
 ~~~TYPES
-(expr 14 (type "Num(Int(*))"))
+(expr 74 (type "Num(Int(*))"))
 ~~~END

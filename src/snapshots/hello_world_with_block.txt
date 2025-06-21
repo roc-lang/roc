@@ -65,15 +65,15 @@ NO CHANGE
 	(d_let
 		(def_pattern
 			(p_assign (8:1-8:6)
-				(pid 13)
+				(pid 73)
 				(ident "main!")))
 		(def_expr
 			(e_lambda (8:9-12:2)
-				(args (p_underscore (8:10-8:11) (pid 14)))
+				(args (p_underscore (8:10-8:11) (pid 74)))
 				(e_block (8:13-12:2)
 					(s_let (9:2-9:17)
 						(p_assign (9:2-9:7)
-							(pid 15)
+							(pid 75)
 							(ident "world"))
 						(e_string (9:10-9:17) (e_literal (9:11-9:16) "World")))
 					(e_call (11:2-11:31)
@@ -82,7 +82,7 @@ NO CHANGE
 ~~~TYPES
 (inferred_types
 	(defs
-		(def "main!" 26 (type "*")))
+		(def "main!" 86 (type "*")))
 	(expressions
-		(expr (8:9-12:2) 25 (type "*"))))
+		(expr (8:9-12:2) 85 (type "*"))))
 ~~~END

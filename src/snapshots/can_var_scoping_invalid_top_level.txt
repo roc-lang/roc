@@ -31,19 +31,19 @@ topLevelVar_ = 0
 	(d_let
 		(def_pattern
 			(p_assign (4:5-4:17)
-				(pid 12)
+				(pid 72)
 				(ident "topLevelVar_")))
 		(def_expr
 			(e_int (4:20-4:21)
-				(int_var 14)
-				(precision_var 13)
+				(int_var 74)
+				(precision_var 73)
 				(literal "0")
 				(value "TODO")
 				(bound "u8")))))
 ~~~TYPES
 (inferred_types
 	(defs
-		(def "topLevelVar_" 16 (type "Num(Int(*))")))
+		(def "topLevelVar_" 76 (type "Num(Int(*))")))
 	(expressions
-		(expr (4:20-4:21) 15 (type "Num(Int(*))"))))
+		(expr (4:20-4:21) 75 (type "Num(Int(*))"))))
 ~~~END

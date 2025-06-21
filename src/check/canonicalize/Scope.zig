@@ -63,11 +63,17 @@ pub const IntroduceResult = union(enum) {
 };
 
 /// Result of introducing a type declaration
-/// TODO: Add more specific error types for different redeclaration scenarios
 pub const TypeIntroduceResult = union(enum) {
     success: void,
     shadowing_warning: CIR.Statement.Idx, // The type declaration that was shadowed
     redeclared_error: CIR.Statement.Idx, // The type declaration that was redeclared
+    type_alias_redeclared: CIR.Statement.Idx, // The type alias that was redeclared
+    custom_type_redeclared: CIR.Statement.Idx, // The custom type that was redeclared
+    cross_scope_shadowing: CIR.Statement.Idx, // Type shadowed across different scopes
+    parameter_conflict: struct {
+        original_stmt: CIR.Statement.Idx,
+        conflicting_parameter: base.Ident.Idx,
+    },
 };
 
 /// Item kinds in a scope
@@ -106,7 +112,14 @@ pub fn put(scope: *Scope, gpa: std.mem.Allocator, comptime item_kind: ItemKind, 
 }
 
 /// Introduce a type declaration into the scope
-pub fn introduceTypeDecl(scope: *Scope, gpa: std.mem.Allocator, ident_store: *const base.Ident.Store, name: Ident.Idx, type_decl: CIR.Statement.Idx) TypeIntroduceResult {
+pub fn introduceTypeDecl(
+    scope: *Scope,
+    gpa: std.mem.Allocator,
+    ident_store: *const base.Ident.Store,
+    name: Ident.Idx,
+    type_decl: CIR.Statement.Idx,
+    parent_lookup_fn: ?fn (Ident.Idx) ?CIR.Statement.Idx,
+) TypeIntroduceResult {
     // Check if already exists in current scope by comparing text content
     var iter = scope.type_decls.iterator();
     while (iter.next()) |entry| {
@@ -116,9 +129,18 @@ pub fn introduceTypeDecl(scope: *Scope, gpa: std.mem.Allocator, ident_store: *co
         }
     }
 
-    // TODO: Check for shadowing in parent scopes and issue warnings
-    // TODO: Implement proper type shadowing detection across scope levels
+    // Check for shadowing in parent scopes and issue warnings
+    var shadowed_stmt: ?CIR.Statement.Idx = null;
+    if (parent_lookup_fn) |lookup_fn| {
+        shadowed_stmt = lookup_fn(name);
+    }
+
     scope.put(gpa, .type_decl, name, type_decl);
+
+    if (shadowed_stmt) |stmt| {
+        return TypeIntroduceResult{ .shadowing_warning = stmt };
+    }
+
     return TypeIntroduceResult{ .success = {} };
 }
 

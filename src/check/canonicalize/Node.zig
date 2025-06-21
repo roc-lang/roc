@@ -126,4 +126,8 @@ pub const Tag = enum {
     diag_shadowing_warning,
     diag_type_redeclared,
     diag_undeclared_type,
+    diag_type_alias_redeclared,
+    diag_custom_type_redeclared,
+    diag_type_shadowed_warning,
+    diag_type_parameter_conflict,
 };

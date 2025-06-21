@@ -55,10 +55,7 @@ type_comprehensive_scope.txt:12-1:15: Result(ok, err) : [Ok(ok), Err(err)]
 Tree(a) : [Branch(Node(a)), Leaf(a)]
 
 But `Result` was already declared here:
-type_comprehensive_scope.txt:12-1:15: Result(ok, err) : [Ok(ok), Err(err)]
-
-# Forward reference - Tree references Node before Node is defined
-Tree(a) : [Branch(Node(a)), Leaf(a)]
+type_comprehensive_scope.txt:1-1:1: module [MyU64, Person, Result, Tree, Node]
 
 NOT IMPLEMENTED
 This feature is not yet implemented: tag union type annotation
@@ -76,10 +73,10 @@ type_comprehensive_scope.txt:24-1:27: Person : U64
 BadType : SomeUndeclaredType
 
 But `Person` was already declared here:
-type_comprehensive_scope.txt:24-1:27: Person : U64
+type_comprehensive_scope.txt:9-1:12: Person : { name: Str, age: U64 }
 
-# Using an undeclared type (should error)
-BadType : SomeUndeclaredType
+# Type with parameters
+Result(ok, err) : [Ok(ok), Err(err)]
 
 UNDECLARED TYPE
 The type `SomeUndeclaredType` is not declared in this scope.

@@ -44,5 +44,5 @@ NO CHANGE
 		(e_runtime_error (4:3-4:4) "ident_not_in_scope"))
 	(e_literal (6:2-6:42) " lines of text due to the template parts"))
 ~~~TYPES
-(expr 21 (type "Str"))
+(expr 81 (type "Str"))
 ~~~END

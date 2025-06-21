@@ -70,6 +70,28 @@ pub const Diagnostic = union(enum) {
         name: Ident.Idx,
         region: Region,
     },
+    type_alias_redeclared: struct {
+        name: Ident.Idx,
+        original_region: Region,
+        redeclared_region: Region,
+    },
+    custom_type_redeclared: struct {
+        name: Ident.Idx,
+        original_region: Region,
+        redeclared_region: Region,
+    },
+    type_shadowed_warning: struct {
+        name: Ident.Idx,
+        region: Region,
+        original_region: Region,
+        cross_scope: bool,
+    },
+    type_parameter_conflict: struct {
+        name: Ident.Idx,
+        parameter_name: Ident.Idx,
+        region: Region,
+        original_region: Region,
+    },
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
@@ -319,6 +341,226 @@ pub const Diagnostic = union(enum) {
             region_info.end_line_idx + 1,
             region_info.end_col_idx + 1,
             .error_highlight,
+            filename,
+        );
+
+        return report;
+    }
+
+    /// Build a report for "type alias redeclared" diagnostic
+    pub fn buildTypeAliasRedeclaredReport(
+        allocator: Allocator,
+        type_name: []const u8,
+        original_region_info: base.RegionInfo,
+        redeclared_region_info: base.RegionInfo,
+        source: []const u8,
+        filename: []const u8,
+    ) !Report {
+        var report = Report.init(allocator, "TYPE ALIAS REDECLARED", .runtime_error, reporting.ReportingConfig.initPlainText());
+        const owned_type_name = try report.addOwnedString(type_name);
+        try report.document.addText("The type alias `");
+        try report.document.addUnqualifiedSymbol(owned_type_name);
+        try report.document.addText("` is being redeclared.");
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Type aliases can only be declared once in the same scope.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        // Show where the redeclaration is
+        try report.document.addText("The redeclaration is here:");
+        try report.document.addLineBreak();
+        try report.document.addSourceRegion(
+            source,
+            redeclared_region_info.start_line_idx + 1,
+            redeclared_region_info.start_col_idx + 1,
+            redeclared_region_info.end_line_idx + 1,
+            redeclared_region_info.end_col_idx + 1,
+            .error_highlight,
+            filename,
+        );
+
+        try report.document.addLineBreak();
+        try report.document.addText("But `");
+        try report.document.addUnqualifiedSymbol(owned_type_name);
+        try report.document.addText("` was already declared here:");
+        try report.document.addLineBreak();
+        try report.document.addSourceRegion(
+            source,
+            original_region_info.start_line_idx + 1,
+            original_region_info.start_col_idx + 1,
+            original_region_info.end_line_idx + 1,
+            original_region_info.end_col_idx + 1,
+            .dimmed,
+            filename,
+        );
+
+        return report;
+    }
+
+    /// Build a report for "custom type redeclared" diagnostic
+    pub fn buildCustomTypeRedeclaredReport(
+        allocator: Allocator,
+        type_name: []const u8,
+        original_region_info: base.RegionInfo,
+        redeclared_region_info: base.RegionInfo,
+        source: []const u8,
+        filename: []const u8,
+    ) !Report {
+        var report = Report.init(allocator, "CUSTOM TYPE REDECLARED", .runtime_error, reporting.ReportingConfig.initPlainText());
+        const owned_type_name = try report.addOwnedString(type_name);
+        try report.document.addText("The custom type `");
+        try report.document.addUnqualifiedSymbol(owned_type_name);
+        try report.document.addText("` is being redeclared.");
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Custom types can only be declared once in the same scope.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        // Show where the redeclaration is
+        try report.document.addText("The redeclaration is here:");
+        try report.document.addLineBreak();
+        try report.document.addSourceRegion(
+            source,
+            redeclared_region_info.start_line_idx + 1,
+            redeclared_region_info.start_col_idx + 1,
+            redeclared_region_info.end_line_idx + 1,
+            redeclared_region_info.end_col_idx + 1,
+            .error_highlight,
+            filename,
+        );
+
+        try report.document.addLineBreak();
+        try report.document.addText("But `");
+        try report.document.addUnqualifiedSymbol(owned_type_name);
+        try report.document.addText("` was already declared here:");
+        try report.document.addLineBreak();
+        try report.document.addSourceRegion(
+            source,
+            original_region_info.start_line_idx + 1,
+            original_region_info.start_col_idx + 1,
+            original_region_info.end_line_idx + 1,
+            original_region_info.end_col_idx + 1,
+            .dimmed,
+            filename,
+        );
+
+        return report;
+    }
+
+    /// Build a report for "type shadowed warning" diagnostic
+    pub fn buildTypeShadowedWarningReport(
+        allocator: Allocator,
+        type_name: []const u8,
+        new_region_info: base.RegionInfo,
+        original_region_info: base.RegionInfo,
+        cross_scope: bool,
+        source: []const u8,
+        filename: []const u8,
+    ) !Report {
+        const severity = if (cross_scope) reporting.Severity.warning else reporting.Severity.runtime_error;
+        const title = if (cross_scope) "TYPE SHADOWED" else "TYPE DUPLICATE";
+
+        var report = Report.init(allocator, title, severity, reporting.ReportingConfig.initPlainText());
+        const owned_type_name = try report.addOwnedString(type_name);
+
+        if (cross_scope) {
+            try report.document.addText("The type `");
+            try report.document.addUnqualifiedSymbol(owned_type_name);
+            try report.document.addText("` shadows a type from an outer scope.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("This may make the outer type inaccessible in this scope.");
+        } else {
+            try report.document.addText("The type `");
+            try report.document.addUnqualifiedSymbol(owned_type_name);
+            try report.document.addText("` is being redeclared in the same scope.");
+        }
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        // Show where the new declaration is
+        try report.document.addText("The new declaration is here:");
+        try report.document.addLineBreak();
+        try report.document.addSourceRegion(
+            source,
+            new_region_info.start_line_idx + 1,
+            new_region_info.start_col_idx + 1,
+            new_region_info.end_line_idx + 1,
+            new_region_info.end_col_idx + 1,
+            .error_highlight,
+            filename,
+        );
+
+        try report.document.addLineBreak();
+        const scope_text = if (cross_scope) "outer scope" else "same scope";
+        try report.document.addText("But `");
+        try report.document.addUnqualifiedSymbol(owned_type_name);
+        try report.document.addText("` was already declared in the ");
+        try report.document.addText(scope_text);
+        try report.document.addText(" here:");
+        try report.document.addLineBreak();
+        try report.document.addSourceRegion(
+            source,
+            original_region_info.start_line_idx + 1,
+            original_region_info.start_col_idx + 1,
+            original_region_info.end_line_idx + 1,
+            original_region_info.end_col_idx + 1,
+            .dimmed,
+            filename,
+        );
+
+        return report;
+    }
+
+    /// Build a report for "type parameter conflict" diagnostic
+    pub fn buildTypeParameterConflictReport(
+        allocator: Allocator,
+        type_name: []const u8,
+        parameter_name: []const u8,
+        region_info: base.RegionInfo,
+        original_region_info: base.RegionInfo,
+        source: []const u8,
+        filename: []const u8,
+    ) !Report {
+        var report = Report.init(allocator, "TYPE PARAMETER CONFLICT", .runtime_error, reporting.ReportingConfig.initPlainText());
+        const owned_type_name = try report.addOwnedString(type_name);
+        const owned_parameter_name = try report.addOwnedString(parameter_name);
+
+        try report.document.addText("The type parameter `");
+        try report.document.addUnqualifiedSymbol(owned_parameter_name);
+        try report.document.addText("` in type `");
+        try report.document.addUnqualifiedSymbol(owned_type_name);
+        try report.document.addText("` conflicts with another declaration.");
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Type parameters must have unique names within their scope.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        // Show where the conflict is
+        try report.document.addText("The conflicting parameter is here:");
+        try report.document.addLineBreak();
+        try report.document.addSourceRegion(
+            source,
+            region_info.start_line_idx + 1,
+            region_info.start_col_idx + 1,
+            region_info.end_line_idx + 1,
+            region_info.end_col_idx + 1,
+            .error_highlight,
+            filename,
+        );
+
+        try report.document.addLineBreak();
+        try report.document.addText("But `");
+        try report.document.addUnqualifiedSymbol(owned_parameter_name);
+        try report.document.addText("` was already declared here:");
+        try report.document.addLineBreak();
+        try report.document.addSourceRegion(
+            source,
+            original_region_info.start_line_idx + 1,
+            original_region_info.start_col_idx + 1,
+            original_region_info.end_line_idx + 1,
+            original_region_info.end_col_idx + 1,
+            .dimmed,
             filename,
         );
 

@@ -20,6 +20,18 @@ MyType2 : Module.Thingy
 ~~~PROBLEMS
 NOT IMPLEMENTED
 This feature is not yet implemented: function type annotation
+UNDECLARED TYPE
+The type `Bar` is not declared in this scope.
+
+This type is referenced here:
+type_declarations.txt:5-8:5: Foo : (Bar, Baz)
+
+UNDECLARED TYPE
+The type `Baz` is not declared in this scope.
+
+This type is referenced here:
+type_declarations.txt:5-13:5: Foo : (Bar, Baz)
+
 NOT IMPLEMENTED
 This feature is not yet implemented: record type annotation
 NOT IMPLEMENTED

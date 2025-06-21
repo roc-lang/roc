@@ -15,5 +15,5 @@ NO CHANGE
 ~~~CANONICALIZE
 (e_runtime_error (1:1-1:5) "invalid_num_literal")
 ~~~TYPES
-(expr 13 (type "Error"))
+(expr 73 (type "Error"))
 ~~~END

@@ -72,5 +72,5 @@ NO CHANGE
 ~~~CANONICALIZE
 (e_runtime_error (1:1-1:69) "not_implemented")
 ~~~TYPES
-(expr 73 (type "Error"))
+(expr 133 (type "Error"))
 ~~~END

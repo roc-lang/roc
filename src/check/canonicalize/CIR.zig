@@ -207,6 +207,61 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 filename,
             );
         },
+        .type_alias_redeclared => |data| blk: {
+            const type_name = self.env.idents.getText(data.name);
+            const original_region_info = self.calcRegionInfo(data.original_region);
+            const redeclared_region_info = self.calcRegionInfo(data.redeclared_region);
+            break :blk Diagnostic.buildTypeAliasRedeclaredReport(
+                allocator,
+                type_name,
+                original_region_info,
+                redeclared_region_info,
+                source,
+                filename,
+            );
+        },
+        .custom_type_redeclared => |data| blk: {
+            const type_name = self.env.idents.getText(data.name);
+            const original_region_info = self.calcRegionInfo(data.original_region);
+            const redeclared_region_info = self.calcRegionInfo(data.redeclared_region);
+            break :blk Diagnostic.buildCustomTypeRedeclaredReport(
+                allocator,
+                type_name,
+                original_region_info,
+                redeclared_region_info,
+                source,
+                filename,
+            );
+        },
+        .type_shadowed_warning => |data| blk: {
+            const type_name = self.env.idents.getText(data.name);
+            const new_region_info = self.calcRegionInfo(data.region);
+            const original_region_info = self.calcRegionInfo(data.original_region);
+            break :blk Diagnostic.buildTypeShadowedWarningReport(
+                allocator,
+                type_name,
+                new_region_info,
+                original_region_info,
+                data.cross_scope,
+                source,
+                filename,
+            );
+        },
+        .type_parameter_conflict => |data| blk: {
+            const type_name = self.env.idents.getText(data.name);
+            const parameter_name = self.env.idents.getText(data.parameter_name);
+            const region_info = self.calcRegionInfo(data.region);
+            const original_region_info = self.calcRegionInfo(data.original_region);
+            break :blk Diagnostic.buildTypeParameterConflictReport(
+                allocator,
+                type_name,
+                parameter_name,
+                region_info,
+                original_region_info,
+                source,
+                filename,
+            );
+        },
     };
 }
 
@@ -529,6 +584,23 @@ pub const Statement = union(enum) {
                 node.appendString(gpa, "TODO");
                 return node;
             },
+        }
+    }
+
+    /// Extract the region from any Statement variant
+    pub fn toRegion(self: *const @This()) Region {
+        switch (self.*) {
+            .decl => |s| return s.region,
+            .@"var" => |s| return s.region,
+            .reassign => |s| return s.region,
+            .crash => |s| return s.region,
+            .expr => |s| return s.region,
+            .expect => |s| return s.region,
+            .@"for" => |s| return s.region,
+            .@"return" => |s| return s.region,
+            .import => |s| return s.region,
+            .type_decl => |s| return s.region,
+            .type_anno => |s| return s.region,
         }
     }
 };

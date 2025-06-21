@@ -2013,34 +2013,108 @@ fn scopeIntroduceTypeDecl(
     const gpa = self.can_ir.env.gpa;
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
 
-    const result = current_scope.introduceTypeDecl(gpa, &self.can_ir.env.idents, name_ident, type_decl_stmt);
+    // Check for shadowing in parent scopes
+    var shadowed_in_parent: ?CIR.Statement.Idx = null;
+    if (self.scopes.items.len > 1) {
+        var i = self.scopes.items.len - 1;
+        while (i > 0) {
+            i -= 1;
+            const scope = &self.scopes.items[i];
+            switch (scope.lookupTypeDecl(&self.can_ir.env.idents, name_ident)) {
+                .found => |type_decl_idx| {
+                    shadowed_in_parent = type_decl_idx;
+                    break;
+                },
+                .not_found => continue,
+            }
+        }
+    }
+
+    const result = current_scope.introduceTypeDecl(gpa, &self.can_ir.env.idents, name_ident, type_decl_stmt, null);
 
     switch (result) {
         .success => {
-            // Successfully introduced type declaration
+            // Check if we're shadowing a type in a parent scope
+            if (shadowed_in_parent) |shadowed_stmt| {
+                const shadowed_statement = self.can_ir.store.getStatement(shadowed_stmt);
+                const original_region = shadowed_statement.toRegion();
+                self.can_ir.pushDiagnostic(CIR.Diagnostic{
+                    .shadowing_warning = .{
+                        .ident = name_ident,
+                        .region = region,
+                        .original_region = original_region,
+                    },
+                });
+            }
         },
         .shadowing_warning => |shadowed_stmt| {
-            // TODO: Get region from shadowed statement and issue warning
-            // TODO: Implement proper type shadowing warnings across scope levels
-            // Currently we only check for redeclaration in the same scope
-            _ = shadowed_stmt;
+            // This shouldn't happen since we're not passing a parent lookup function
+            // but handle it just in case the Scope implementation changes
+            const shadowed_statement = self.can_ir.store.getStatement(shadowed_stmt);
+            const original_region = shadowed_statement.toRegion();
             self.can_ir.pushDiagnostic(CIR.Diagnostic{
                 .shadowing_warning = .{
                     .ident = name_ident,
                     .region = region,
-                    .original_region = region, // TODO: Get actual original region from shadowed_stmt
+                    .original_region = original_region,
                 },
             });
         },
         .redeclared_error => |original_stmt| {
-            // TODO: Get region from original statement and issue error
-            // TODO: Extract region information from CIR.Statement to show actual original location
-            _ = original_stmt;
+            // Extract region information from the original statement
+            const original_statement = self.can_ir.store.getStatement(original_stmt);
+            const original_region = original_statement.toRegion();
             self.can_ir.pushDiagnostic(CIR.Diagnostic{
                 .type_redeclared = .{
-                    .original_region = region, // TODO: Get actual original region from original_stmt
+                    .original_region = original_region,
                     .redeclared_region = region,
                     .name = name_ident,
+                },
+            });
+        },
+        .type_alias_redeclared => |original_stmt| {
+            const original_statement = self.can_ir.store.getStatement(original_stmt);
+            const original_region = original_statement.toRegion();
+            self.can_ir.pushDiagnostic(CIR.Diagnostic{
+                .type_alias_redeclared = .{
+                    .name = name_ident,
+                    .original_region = original_region,
+                    .redeclared_region = region,
+                },
+            });
+        },
+        .custom_type_redeclared => |original_stmt| {
+            const original_statement = self.can_ir.store.getStatement(original_stmt);
+            const original_region = original_statement.toRegion();
+            self.can_ir.pushDiagnostic(CIR.Diagnostic{
+                .custom_type_redeclared = .{
+                    .name = name_ident,
+                    .original_region = original_region,
+                    .redeclared_region = region,
+                },
+            });
+        },
+        .cross_scope_shadowing => |shadowed_stmt| {
+            const shadowed_statement = self.can_ir.store.getStatement(shadowed_stmt);
+            const original_region = shadowed_statement.toRegion();
+            self.can_ir.pushDiagnostic(CIR.Diagnostic{
+                .type_shadowed_warning = .{
+                    .name = name_ident,
+                    .region = region,
+                    .original_region = original_region,
+                    .cross_scope = true,
+                },
+            });
+        },
+        .parameter_conflict => |conflict| {
+            const original_statement = self.can_ir.store.getStatement(conflict.original_stmt);
+            const original_region = original_statement.toRegion();
+            self.can_ir.pushDiagnostic(CIR.Diagnostic{
+                .type_parameter_conflict = .{
+                    .name = name_ident,
+                    .parameter_name = conflict.conflicting_parameter,
+                    .region = region,
+                    .original_region = original_region,
                 },
             });
         },

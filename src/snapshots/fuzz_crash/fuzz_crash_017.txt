@@ -37,13 +37,13 @@ foo =
 	(d_let
 		(def_pattern
 			(p_assign (2:1-2:4)
-				(pid 14)
+				(pid 74)
 				(ident "foo")))
 		(def_expr (e_runtime_error (2:7-2:20) "expr_not_canonicalized"))))
 ~~~TYPES
 (inferred_types
 	(defs
-		(def "foo" 17 (type "Error")))
+		(def "foo" 77 (type "Error")))
 	(expressions
-		(expr (2:7-2:20) 16 (type "Error"))))
+		(expr (2:7-2:20) 76 (type "Error"))))
 ~~~END

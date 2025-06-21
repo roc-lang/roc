@@ -283,7 +283,19 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .region = node.region,
             } };
         },
-        .expr_record,
+        .expr_record => {
+            // data_1 = 0 indicates empty_record, otherwise it's a regular record with ext_var
+            if (node.data_1 == 0) {
+                return CIR.Expr{ .empty_record = .{
+                    .region = node.region,
+                } };
+            } else {
+                return CIR.Expr{ .record = .{
+                    .ext_var = @enumFromInt(node.data_1),
+                    .region = node.region,
+                } };
+            }
+        },
         .expr_field_access,
         .expr_static_dispatch,
         .expr_apply,
@@ -737,11 +749,14 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
         },
         .record => |e| {
             node.region = e.region;
-            @panic("TODO addExpr record");
+            node.tag = .expr_record;
+            node.data_1 = @intFromEnum(e.ext_var);
         },
         .empty_record => |e| {
             node.region = e.region;
-            @panic("TODO addExpr empty_record");
+            node.tag = .expr_record;
+            // Use data_1 = 0 to distinguish empty_record from regular record
+            node.data_1 = 0;
         },
         .record_access => |e| {
             node.region = e.region;
@@ -1378,6 +1393,34 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) CIR.Diagnostic.I
             node.region = r.region;
             node.data_1 = @bitCast(r.name);
         },
+        .type_alias_redeclared => |r| {
+            node.tag = .diag_type_alias_redeclared;
+            node.region = r.redeclared_region;
+            node.data_1 = @bitCast(r.name);
+            node.data_2 = r.original_region.start.offset;
+            node.data_3 = r.original_region.end.offset;
+        },
+        .custom_type_redeclared => |r| {
+            node.tag = .diag_custom_type_redeclared;
+            node.region = r.redeclared_region;
+            node.data_1 = @bitCast(r.name);
+            node.data_2 = r.original_region.start.offset;
+            node.data_3 = r.original_region.end.offset;
+        },
+        .type_shadowed_warning => |r| {
+            node.tag = .diag_type_shadowed_warning;
+            node.region = r.region;
+            node.data_1 = @bitCast(r.name);
+            node.data_2 = r.original_region.start.offset;
+            node.data_3 = r.original_region.end.offset | (@as(u32, if (r.cross_scope) 1 else 0) << 31);
+        },
+        .type_parameter_conflict => |r| {
+            node.tag = .diag_type_parameter_conflict;
+            node.region = r.region;
+            node.data_1 = @bitCast(r.name);
+            node.data_2 = @bitCast(r.parameter_name);
+            node.data_3 = r.original_region.start.offset;
+        },
     }
 
     const nid = @intFromEnum(store.nodes.append(store.gpa, node));
@@ -1416,7 +1459,7 @@ pub fn addMalformed(store: *NodeStore, comptime t: type, reason: CIR.Diagnostic)
             .invalid_num_literal => |r| r.region,
             .ident_already_in_scope => |r| r.region,
             .ident_not_in_scope => |r| r.region,
-            .invalid_top_level_statement => Region.zero(),
+            .invalid_top_level_statement => base.Region.zero(),
             .expr_not_canonicalized => |r| r.region,
             .invalid_string_interpolation => |r| r.region,
             .pattern_arg_invalid => |r| r.region,
@@ -1428,6 +1471,10 @@ pub fn addMalformed(store: *NodeStore, comptime t: type, reason: CIR.Diagnostic)
             .shadowing_warning => |r| r.region,
             .type_redeclared => |r| r.redeclared_region,
             .undeclared_type => |r| r.region,
+            .type_alias_redeclared => |r| r.redeclared_region,
+            .custom_type_redeclared => |r| r.redeclared_region,
+            .type_shadowed_warning => |r| r.region,
+            .type_parameter_conflict => |r| r.region,
         },
         .tag = .malformed,
     };
@@ -1507,6 +1554,40 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         } },
         .diag_malformed_type_annotation => return CIR.Diagnostic{ .malformed_type_annotation = .{
             .region = node.region,
+        } },
+        .diag_type_alias_redeclared => return CIR.Diagnostic{ .type_alias_redeclared = .{
+            .name = @bitCast(node.data_1),
+            .redeclared_region = node.region,
+            .original_region = .{
+                .start = .{ .offset = @intCast(node.data_2) },
+                .end = .{ .offset = @intCast(node.data_3) },
+            },
+        } },
+        .diag_custom_type_redeclared => return CIR.Diagnostic{ .custom_type_redeclared = .{
+            .name = @bitCast(node.data_1),
+            .redeclared_region = node.region,
+            .original_region = .{
+                .start = .{ .offset = @intCast(node.data_2) },
+                .end = .{ .offset = @intCast(node.data_3 & 0x7FFFFFFF) },
+            },
+        } },
+        .diag_type_shadowed_warning => return CIR.Diagnostic{ .type_shadowed_warning = .{
+            .name = @bitCast(node.data_1),
+            .region = node.region,
+            .original_region = .{
+                .start = .{ .offset = @intCast(node.data_2) },
+                .end = .{ .offset = @intCast(node.data_3 & 0x7FFFFFFF) },
+            },
+            .cross_scope = (node.data_3 & 0x80000000) != 0,
+        } },
+        .diag_type_parameter_conflict => return CIR.Diagnostic{ .type_parameter_conflict = .{
+            .name = @bitCast(node.data_1),
+            .parameter_name = @bitCast(node.data_2),
+            .region = node.region,
+            .original_region = .{
+                .start = .{ .offset = @intCast(node.data_3) },
+                .end = .{ .offset = @intCast(node.data_3) },
+            },
         } },
         else => {
             @panic("unreachable, node is not a diagnostic tag");
