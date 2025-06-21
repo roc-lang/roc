@@ -485,19 +485,28 @@ pub fn canonicalize_expr(
 
             // Determine the base from the prefix
             var radix: u8 = 10;
-            var digit_start = start;
-            if (token_text.len > start + 2) {
-                const prefix = token_text[start .. start + 2];
-                if (std.mem.eql(u8, prefix, "0x") or std.mem.eql(u8, prefix, "0X")) {
-                    radix = 16;
-                    digit_start = start + 2;
-                } else if (std.mem.eql(u8, prefix, "0o") or std.mem.eql(u8, prefix, "0O")) {
-                    radix = 8;
-                    digit_start = start + 2;
-                } else if (std.mem.eql(u8, prefix, "0b") or std.mem.eql(u8, prefix, "0B")) {
-                    radix = 2;
-                    digit_start = start + 2;
+            var digit_start: usize = undefined;
+
+            if (token_text[start] == '0' and token_text.len > start + 2) {
+                switch (token_text[start + 1]) {
+                    'x', 'X' => {
+                        radix = 16;
+                        digit_start = start + 2;
+                    },
+                    'o', 'O' => {
+                        radix = 8;
+                        digit_start = start + 2;
+                    },
+                    'b', 'B' => {
+                        radix = 2;
+                        digit_start = start + 2;
+                    },
+                    else => {
+                        digit_start = start;
+                    },
                 }
+            } else {
+                digit_start = start;
             }
 
             const u128_val: u128 = std.fmt.parseInt(u128, token_text[digit_start..], radix) catch {
