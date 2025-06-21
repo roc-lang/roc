@@ -1366,6 +1366,18 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) CIR.Diagnostic.I
             node.data_2 = r.original_region.start.offset;
             node.data_3 = r.original_region.end.offset;
         },
+        .type_redeclared => |r| {
+            node.tag = .diag_type_redeclared;
+            node.region = r.redeclared_region;
+            node.data_1 = @bitCast(r.name);
+            node.data_2 = r.original_region.start.offset;
+            node.data_3 = r.original_region.end.offset;
+        },
+        .undeclared_type => |r| {
+            node.tag = .diag_undeclared_type;
+            node.region = r.region;
+            node.data_1 = @bitCast(r.name);
+        },
     }
 
     const nid = @intFromEnum(store.nodes.append(store.gpa, node));
@@ -1414,6 +1426,8 @@ pub fn addMalformed(store: *NodeStore, comptime t: type, reason: CIR.Diagnostic)
             .malformed_type_annotation => |r| r.region,
             .var_across_function_boundary => |r| r.region,
             .shadowing_warning => |r| r.region,
+            .type_redeclared => |r| r.redeclared_region,
+            .undeclared_type => |r| r.region,
         },
         .tag = .malformed,
     };
@@ -1478,6 +1492,21 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
                 .start = .{ .offset = node.data_2 },
                 .end = .{ .offset = node.data_3 },
             },
+        } },
+        .diag_type_redeclared => return CIR.Diagnostic{ .type_redeclared = .{
+            .name = @bitCast(node.data_1),
+            .redeclared_region = node.region,
+            .original_region = .{
+                .start = .{ .offset = node.data_2 },
+                .end = .{ .offset = node.data_3 },
+            },
+        } },
+        .diag_undeclared_type => return CIR.Diagnostic{ .undeclared_type = .{
+            .name = @bitCast(node.data_1),
+            .region = node.region,
+        } },
+        .diag_malformed_type_annotation => return CIR.Diagnostic{ .malformed_type_annotation = .{
+            .region = node.region,
         } },
         else => {
             @panic("unreachable, node is not a diagnostic tag");

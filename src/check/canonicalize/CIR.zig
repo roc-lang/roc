@@ -183,6 +183,30 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 filename,
             );
         },
+        .type_redeclared => |data| blk: {
+            const type_name = self.env.idents.getText(data.name);
+            const original_region_info = self.calcRegionInfo(data.original_region);
+            const redeclared_region_info = self.calcRegionInfo(data.redeclared_region);
+            break :blk Diagnostic.buildTypeRedeclaredReport(
+                allocator,
+                type_name,
+                original_region_info,
+                redeclared_region_info,
+                source,
+                filename,
+            );
+        },
+        .undeclared_type => |data| blk: {
+            const type_name = self.env.idents.getText(data.name);
+            const region_info = self.calcRegionInfo(data.region);
+            break :blk Diagnostic.buildUndeclaredTypeReport(
+                allocator,
+                type_name,
+                region_info,
+                source,
+                filename,
+            );
+        },
     };
 }
 

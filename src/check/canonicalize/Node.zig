@@ -124,4 +124,6 @@ pub const Tag = enum {
     diag_malformed_type_annotation,
     diag_var_across_function_boundary,
     diag_shadowing_warning,
+    diag_type_redeclared,
+    diag_undeclared_type,
 };

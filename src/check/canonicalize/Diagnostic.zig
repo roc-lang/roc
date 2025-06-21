@@ -61,6 +61,15 @@ pub const Diagnostic = union(enum) {
         region: Region,
         original_region: Region,
     },
+    type_redeclared: struct {
+        name: Ident.Idx,
+        original_region: Region,
+        redeclared_region: Region,
+    },
+    undeclared_type: struct {
+        name: Ident.Idx,
+        region: Region,
+    },
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
@@ -231,6 +240,85 @@ pub const Diagnostic = union(enum) {
             original_region_info.end_line_idx + 1,
             original_region_info.end_col_idx + 1,
             .dimmed,
+            filename,
+        );
+
+        return report;
+    }
+
+    /// Build a report for "type redeclared" diagnostic
+    pub fn buildTypeRedeclaredReport(
+        allocator: Allocator,
+        type_name: []const u8,
+        original_region_info: base.RegionInfo,
+        redeclared_region_info: base.RegionInfo,
+        source: []const u8,
+        filename: []const u8,
+    ) !Report {
+        var report = Report.init(allocator, "TYPE REDECLARED", .runtime_error, reporting.ReportingConfig.initPlainText());
+        const owned_type_name = try report.addOwnedString(type_name);
+        try report.document.addText("The type `");
+        try report.document.addUnqualifiedSymbol(owned_type_name);
+        try report.document.addText("` is being redeclared.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        // Show where the redeclaration is
+        try report.document.addText("The redeclaration is here:");
+        try report.document.addLineBreak();
+        try report.document.addSourceRegion(
+            source,
+            redeclared_region_info.start_line_idx + 1,
+            redeclared_region_info.start_col_idx + 1,
+            redeclared_region_info.end_line_idx + 1,
+            redeclared_region_info.end_col_idx + 1,
+            .error_highlight,
+            filename,
+        );
+
+        try report.document.addLineBreak();
+        try report.document.addText("But `");
+        try report.document.addUnqualifiedSymbol(owned_type_name);
+        try report.document.addText("` was already declared here:");
+        try report.document.addLineBreak();
+        try report.document.addSourceRegion(
+            source,
+            original_region_info.start_line_idx + 1,
+            original_region_info.start_col_idx + 1,
+            original_region_info.end_line_idx + 1,
+            original_region_info.end_col_idx + 1,
+            .dimmed,
+            filename,
+        );
+
+        return report;
+    }
+
+    /// Build a report for "undeclared type" diagnostic
+    pub fn buildUndeclaredTypeReport(
+        allocator: Allocator,
+        type_name: []const u8,
+        region_info: base.RegionInfo,
+        source: []const u8,
+        filename: []const u8,
+    ) !Report {
+        var report = Report.init(allocator, "UNDECLARED TYPE", .runtime_error, reporting.ReportingConfig.initPlainText());
+        const owned_type_name = try report.addOwnedString(type_name);
+        try report.document.addText("The type `");
+        try report.document.addUnqualifiedSymbol(owned_type_name);
+        try report.document.addText("` is not declared in this scope.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addText("This type is referenced here:");
+        try report.document.addLineBreak();
+        try report.document.addSourceRegion(
+            source,
+            region_info.start_line_idx + 1,
+            region_info.start_col_idx + 1,
+            region_info.end_line_idx + 1,
+            region_info.end_col_idx + 1,
+            .error_highlight,
             filename,
         );
 
