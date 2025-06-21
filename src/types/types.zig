@@ -328,43 +328,6 @@ pub const Num = union(enum) {
                 // although we have to divide self by 2 to get to that exact representation.
                 return @enumFromInt(@intFromEnum(self) / 2);
             }
-
-            /// Get the lowest precision needed to hold the provided value.
-            ///
-            /// For positive values, this function prefers signed types when the value
-            /// fits in both signed and unsigned variants of the same bit width.
-            /// This provides better compatibility since signed types can represent
-            /// a wider range of operations (e.g., subtraction that might go negative).
-            ///
-            /// Examples:
-            /// - 0 to 127: returns i8 (not u8)
-            /// - 128 to 255: returns u8 (doesn't fit in i8)
-            /// - 256 to 32767: returns i16 (not u16)
-            /// - 32768 to 65535: returns u16 (doesn't fit in i16)
-            ///
-            /// For negative values, only signed types are considered.
-            pub fn fromValue(value: i128) Int.Precision {
-                if (value >= 0) {
-                    const unsigned_value = @as(u128, @intCast(value));
-                    // For positive values, prefer signed types when they fit
-                    if (unsigned_value <= std.math.maxInt(i8)) return .i8;
-                    if (unsigned_value <= std.math.maxInt(u8)) return .u8;
-                    if (unsigned_value <= std.math.maxInt(i16)) return .i16;
-                    if (unsigned_value <= std.math.maxInt(u16)) return .u16;
-                    if (unsigned_value <= std.math.maxInt(i32)) return .i32;
-                    if (unsigned_value <= std.math.maxInt(u32)) return .u32;
-                    if (unsigned_value <= std.math.maxInt(i64)) return .i64;
-                    if (unsigned_value <= std.math.maxInt(u64)) return .u64;
-                    return .i128;
-                } else {
-                    // Negative values can only fit in signed types
-                    if (value >= std.math.minInt(i8)) return .i8;
-                    if (value >= std.math.minInt(i16)) return .i16;
-                    if (value >= std.math.minInt(i32)) return .i32;
-                    if (value >= std.math.minInt(i64)) return .i64;
-                    return .i128;
-                }
-            }
         };
     };
 

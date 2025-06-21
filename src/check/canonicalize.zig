@@ -520,7 +520,31 @@ pub fn canonicalize_expr(
             const final_expr_idx = self.can_ir.store.predictNodeIndex(3);
 
             // then insert the type vars, setting the parent to be the final slot
-            const bound = Num.Int.Precision.fromValue(i128_val);
+            // Determine the precision based on the original u128 value and whether it was negated
+            const bound = blk: {
+                // TODO there is presumably a way to do all of this branchlessly.
+                if (is_negated) {
+                    // For negative values, only signed types are valid
+                    // We need to check the original u128 value (before negation)
+                    if (u128_val <= 128) break :blk Num.Int.Precision.i8;
+                    if (u128_val <= 32768) break :blk Num.Int.Precision.i16;
+                    if (u128_val <= 2147483648) break :blk Num.Int.Precision.i32;
+                    if (u128_val <= 9223372036854775808) break :blk Num.Int.Precision.i64;
+                    break :blk Num.Int.Precision.i128;
+                } else {
+                    // For positive values, prefer signed types when they fit
+                    if (u128_val <= std.math.maxInt(i8)) break :blk Num.Int.Precision.i8;
+                    if (u128_val <= std.math.maxInt(u8)) break :blk Num.Int.Precision.u8;
+                    if (u128_val <= std.math.maxInt(i16)) break :blk Num.Int.Precision.i16;
+                    if (u128_val <= std.math.maxInt(u16)) break :blk Num.Int.Precision.u16;
+                    if (u128_val <= std.math.maxInt(i32)) break :blk Num.Int.Precision.i32;
+                    if (u128_val <= std.math.maxInt(u32)) break :blk Num.Int.Precision.u32;
+                    if (u128_val <= std.math.maxInt(i64)) break :blk Num.Int.Precision.i64;
+                    if (u128_val <= std.math.maxInt(u64)) break :blk Num.Int.Precision.u64;
+                    if (u128_val <= std.math.maxInt(i128)) break :blk Num.Int.Precision.i128;
+                    break :blk Num.Int.Precision.u128;
+                }
+            };
             const precision_type_var = self.can_ir.pushTypeVar(
                 Content{ .structure = .{ .num = .{ .int_precision = bound } } },
                 final_expr_idx,
