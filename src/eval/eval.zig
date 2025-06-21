@@ -7,12 +7,15 @@ const layout_store = @import("../layout/store.zig");
 const types = @import("../types.zig");
 const base = @import("../base.zig");
 const target = @import("../base/target.zig");
+const Node = @import("../check/canonicalize/Node.zig");
 
 pub const EvalError = error{
     Crash,
     OutOfMemory,
     StackOverflow,
     LayoutError,
+    InvalidBranchNode,
+    TypeMismatch,
 };
 
 pub const EvalResult = struct {
@@ -124,10 +127,9 @@ pub fn eval(
         // Runtime errors are handled at the beginning of the function
         .runtime_error => unreachable,
 
-        // If expressions - evaluate the final_else branch
+        // If expressions - evaluate branches based on conditions
         .@"if" => |if_expr| {
-            // Recursively evaluate the final_else branch
-            return eval(allocator, cir, if_expr.final_else, eval_stack, layout_cache);
+            return evalIfExpression(allocator, cir, if_expr, eval_stack, layout_cache);
         },
 
         // Non-primitive expressions need evaluation (TODO: implement these)
@@ -188,6 +190,276 @@ fn writeIntToMemory(ptr: *anyopaque, value: i128, precision: types.Num.Int.Preci
     }
 }
 
+/// Evaluates an if expression by checking conditions and executing the appropriate branch.
+///
+/// The evaluation strategy:
+/// 1. If there are no branches (empty branches list), evaluate final_else directly
+/// 2. Otherwise, evaluate each branch condition in order:
+///    - The condition must evaluate to a boolean type
+///    - If the condition evaluates to true, evaluate and return that branch's body
+///    - If the condition is false, continue to the next branch
+/// 3. If no branch condition is true, evaluate and return final_else
+///
+/// Type Requirements:
+/// - Only boolean types are allowed as conditions
+/// - Type mismatch error if condition evaluates to any non-boolean type
+/// - Boolean evaluation: non-zero means true, zero means false
+///
+/// Branch Storage:
+/// - Branches are stored as nodes with data in extra_data
+/// - data_1: Index into extra_data where branch data starts
+/// - extra_data[data_1]: Condition expression index
+/// - extra_data[data_1 + 1]: Body expression index
+///
+/// Current Limitations:
+/// - Complex boolean expressions (like `1 == 1`) not fully canonicalized yet
+/// - Boolean literals (`Bool.true`, `Bool.false`) not yet fully supported
+/// - The `getIfBranch` helper function is not yet implemented in NodeStore
+///
+/// Future Work:
+/// - Complete canonicalization support for boolean expressions
+/// - Implement `getIfBranch` helper function in NodeStore
+/// - Add support for pattern matching in if expression conditions
+fn evalIfExpression(
+    allocator: std.mem.Allocator,
+    cir: *CIR,
+    if_expr: anytype,
+    eval_stack: *stack.Stack,
+    layout_cache: *layout_store.Store,
+) EvalError!EvalResult {
+    const branches = cir.store.sliceIfBranch(if_expr.branches);
+
+    // Fast path: no branches, directly evaluate final_else
+    if (branches.len == 0) {
+        return eval(allocator, cir, if_expr.final_else, eval_stack, layout_cache);
+    }
+
+    // Evaluate each branch condition in order
+    for (branches) |branch_idx| {
+        const branch = extractBranchData(cir, branch_idx) catch |err| switch (err) {
+            error.InvalidBranchNode => return error.LayoutError,
+            else => |e| return e,
+        };
+
+        // Evaluate the condition
+        const cond_result = try eval(allocator, cir, branch.condition, eval_stack, layout_cache);
+
+        // Check if condition is true
+        const is_true = evaluateBooleanCondition(cond_result) catch |err| switch (err) {
+            error.TypeMismatch => return error.LayoutError,
+            else => |e| return e,
+        };
+
+        if (is_true) {
+            // Condition is true, evaluate and return the branch body
+            return eval(allocator, cir, branch.body, eval_stack, layout_cache);
+        }
+    }
+
+    // No branch condition was true, evaluate the final_else
+    return eval(allocator, cir, if_expr.final_else, eval_stack, layout_cache);
+}
+
+/// Represents the extracted data from an if branch node
+const BranchData = struct {
+    condition: CIR.Expr.Idx,
+    body: CIR.Expr.Idx,
+};
+
+/// Extracts condition and body indices from a branch node.
+///
+/// Each branch is stored as a node with condition and body indices in extra_data.
+/// Layout: [condition_idx, body_idx] starting at data_1
+///
+/// Returns:
+/// - BranchData with condition and body indices on success
+/// - error.InvalidBranchNode if the node type is wrong or data is out of bounds
+fn extractBranchData(cir: *CIR, branch_idx: CIR.IfBranch.Idx) !BranchData {
+    // Convert branch index to node index
+    const branch_node_idx: Node.Idx = @enumFromInt(@intFromEnum(branch_idx));
+    const branch_node = cir.store.nodes.get(branch_node_idx);
+
+    // Validate node type
+    if (branch_node.tag != .if_branch) {
+        return error.InvalidBranchNode;
+    }
+
+    // Extract indices from extra_data
+    const extra_data_start = branch_node.data_1;
+    const extra_data = cir.store.extra_data.items;
+
+    // Bounds check to ensure we have both condition and body indices
+    if (extra_data_start + 1 >= extra_data.len) {
+        return error.InvalidBranchNode;
+    }
+
+    return BranchData{
+        .condition = @enumFromInt(extra_data[extra_data_start]),
+        .body = @enumFromInt(extra_data[extra_data_start + 1]),
+    };
+}
+
+/// Evaluates a boolean condition result and returns whether it's true.
+///
+/// This function enforces strict type checking - only boolean types are allowed.
+///
+/// Returns:
+/// - true if the boolean value is non-zero
+/// - false if the boolean value is zero
+/// - error.TypeMismatch if the condition is not a boolean type
+fn evaluateBooleanCondition(cond_result: EvalResult) !bool {
+    // Verify that the condition is a boolean type
+    if (cond_result.layout.tag != .scalar or cond_result.layout.data.scalar.tag != .bool) {
+        // Type mismatch: condition must be a boolean
+        return error.TypeMismatch;
+    }
+
+    // Read the boolean value (non-zero means true)
+    const bool_ptr = @as(*u8, @ptrCast(@alignCast(cond_result.ptr)));
+    return bool_ptr.* != 0;
+}
+
 test {
     _ = @import("eval_test.zig");
+}
+
+test "evaluateBooleanCondition - valid boolean true" {
+    const testing = std.testing;
+
+    // Create a boolean true value
+    var bool_value: u8 = 1;
+    const result = EvalResult{
+        .layout = layout.Layout.boolType(),
+        .ptr = &bool_value,
+    };
+
+    const is_true = try evaluateBooleanCondition(result);
+    try testing.expect(is_true);
+}
+
+test "evaluateBooleanCondition - valid boolean false" {
+    const testing = std.testing;
+
+    // Create a boolean false value
+    var bool_value: u8 = 0;
+    const result = EvalResult{
+        .layout = layout.Layout.boolType(),
+        .ptr = &bool_value,
+    };
+
+    const is_false = try evaluateBooleanCondition(result);
+    try testing.expect(!is_false);
+}
+
+test "evaluateBooleanCondition - integer type error" {
+    const testing = std.testing;
+
+    // Create an integer value
+    var int_value: i128 = 42;
+    const result = EvalResult{
+        .layout = layout.Layout.int(.i128),
+        .ptr = &int_value,
+    };
+
+    const err = evaluateBooleanCondition(result);
+    try testing.expectError(error.TypeMismatch, err);
+}
+
+test "evaluateBooleanCondition - string type error" {
+    const testing = std.testing;
+
+    // Create a string layout
+    const result = EvalResult{
+        .layout = layout.Layout.str(),
+        .ptr = undefined, // Doesn't matter for this test
+    };
+
+    const err = evaluateBooleanCondition(result);
+    try testing.expectError(error.TypeMismatch, err);
+}
+
+test "extractBranchData - valid branch node" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    var cir = CIR.init(&module_env);
+    defer cir.deinit();
+
+    // Add some dummy data to extra_data
+    cir.store.extra_data.append(gpa, 123) catch unreachable; // condition idx
+    cir.store.extra_data.append(gpa, 456) catch unreachable; // body idx
+
+    // Create a branch node
+    const node = Node{
+        .data_1 = 0, // Points to start of extra_data
+        .data_2 = 0,
+        .data_3 = 0,
+        .region = base.Region.zero(),
+        .tag = .if_branch,
+    };
+    const node_idx = cir.store.nodes.append(gpa, node);
+
+    // Extract branch data
+    const branch_idx: CIR.IfBranch.Idx = @enumFromInt(@intFromEnum(node_idx));
+    const branch_data = try extractBranchData(&cir, branch_idx);
+
+    try testing.expectEqual(@as(u32, 123), @intFromEnum(branch_data.condition));
+    try testing.expectEqual(@as(u32, 456), @intFromEnum(branch_data.body));
+}
+
+test "extractBranchData - wrong node type" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    var cir = CIR.init(&module_env);
+    defer cir.deinit();
+
+    // Create a non-branch node
+    const node = Node{
+        .data_1 = 0,
+        .data_2 = 0,
+        .data_3 = 0,
+        .region = base.Region.zero(),
+        .tag = .expr_int, // Wrong type
+    };
+    const node_idx = cir.store.nodes.append(gpa, node);
+
+    // Try to extract branch data from wrong node type
+    const branch_idx: CIR.IfBranch.Idx = @enumFromInt(@intFromEnum(node_idx));
+    const err = extractBranchData(&cir, branch_idx);
+
+    try testing.expectError(error.InvalidBranchNode, err);
+}
+
+test "extractBranchData - out of bounds extra_data" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    var cir = CIR.init(&module_env);
+    defer cir.deinit();
+
+    // Create a branch node with invalid extra_data index
+    const node = Node{
+        .data_1 = 999, // Out of bounds
+        .data_2 = 0,
+        .data_3 = 0,
+        .region = base.Region.zero(),
+        .tag = .if_branch,
+    };
+    const node_idx = cir.store.nodes.append(gpa, node);
+
+    // Try to extract branch data with out of bounds index
+    const branch_idx: CIR.IfBranch.Idx = @enumFromInt(@intFromEnum(node_idx));
+    const err = extractBranchData(&cir, branch_idx);
+
+    try testing.expectError(error.InvalidBranchNode, err);
 }
