@@ -179,12 +179,16 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             const value_as_u32s = store.extra_data.items[extra_idx..][0..4];
             const value: i128 = @bitCast(value_as_u32s.*);
 
+            // We store all values as i128 and reconstruct based on what was originally stored
+            // For now, default to i128 - the actual variant should be determined by the type system
+            const literal_value = CIR.IntLiteralValue{ .value = value };
+
             return .{
                 .int = .{
                     .int_var = int_var,
                     .precision_var = precision_var,
                     .literal = literal,
-                    .value = value,
+                    .value = literal_value,
                     .region = node.region,
                 },
             };
@@ -368,7 +372,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
                 .region = node.region,
                 .literal = @enumFromInt(node.data_1),
                 .num_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
-                .value = 0, // TODO need to store and retrieve from extra_data
+                .value = CIR.IntLiteralValue{ .value = 0 }, // TODO need to store and retrieve from extra_data
             },
         },
         .pattern_int_literal => return CIR.Pattern{
@@ -377,7 +381,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
                 .literal = @enumFromInt(node.data_1),
                 .precision_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
                 .num_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
-                .value = 0, // TODO need to store and retrieve from extra_data
+                .value = CIR.IntLiteralValue{ .value = 0 }, // TODO need to store and retrieve from extra_data
             },
         },
         .pattern_float_literal => return CIR.Pattern{
@@ -556,8 +560,10 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             // Store i128 value in extra_data
             const extra_data_start = store.extra_data.items.len;
 
-            // Store the i128 as u32s (16 bytes = 4 u32s)
-            const value_as_u32s: [4]u32 = @bitCast(e.value);
+            // Store the IntLiteralValue as i128 (16 bytes = 4 u32s)
+            // We always store as i128 internally
+            const value_as_i128: i128 = e.value.value;
+            const value_as_u32s: [4]u32 = @bitCast(value_as_i128);
             for (value_as_u32s) |word| {
                 store.extra_data.append(store.gpa, word) catch |err| exitOnOom(err);
             }

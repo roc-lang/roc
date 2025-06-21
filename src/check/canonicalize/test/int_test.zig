@@ -72,13 +72,15 @@ fn getIntValue(cir: *CIR, expr_idx: CIR.Expr.Idx) !struct { value: i128, precisi
     switch (expr) {
         .int => |int_expr| {
             const precision = CIR.getIntPrecision(cir.env, int_expr.precision_var) orelse return error.NoPrecision;
-            return .{ .value = int_expr.value, .precision = precision };
+            const value: i128 = int_expr.value.value;
+            return .{ .value = value, .precision = precision };
         },
         .num => |num_expr| {
             // For num expressions, we need to resolve the num_var to get the precision
             // This is a simplified case - in real code we'd need to handle more complex type resolution
             const precision = types.Num.Int.Precision.i128; // Default for now
-            return .{ .value = num_expr.value, .precision = precision };
+            const value: i128 = num_expr.value.value;
+            return .{ .value = value, .precision = precision };
         },
         else => return error.NotAnInteger,
     }

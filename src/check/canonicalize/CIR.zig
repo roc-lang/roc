@@ -555,9 +555,8 @@ pub const ExposedItem = struct {
 /// Every integer value in Roc fits into an i128 except for some u128s.
 /// As such, we generaly store things as i128, and only reinterpret
 /// these bytes as u128 in the specific case of a Layout of U128.
-pub const IntLiteralValue = union {
-    i128: i128,
-    u128: u128,
+pub const IntLiteralValue = struct {
+    value: i128,
 };
 
 /// An expression that has been canonicalized.
@@ -565,7 +564,7 @@ pub const Expr = union(enum) {
     num: struct {
         num_var: TypeVar,
         literal: StringLiteral.Idx,
-        value: i128,
+        value: IntLiteralValue,
         region: Region,
     },
     int: struct {
@@ -744,7 +743,7 @@ pub const Expr = union(enum) {
                 // Add value info
                 var value_node = sexpr.Expr.init(gpa, "value");
                 var value_buf: [64]u8 = undefined;
-                const value_str = std.fmt.bufPrint(&value_buf, "{}", .{num_expr.value}) catch "fmt_error";
+                const value_str = std.fmt.bufPrint(&value_buf, "{}", .{num_expr.value.value}) catch "fmt_error";
                 value_node.appendString(gpa, value_str);
                 num_node.appendNode(gpa, &value_node);
 
@@ -777,7 +776,7 @@ pub const Expr = union(enum) {
                 // Add value info
                 var value_node = sexpr.Expr.init(gpa, "value");
                 var value_buf: [64]u8 = undefined;
-                const value_str = std.fmt.bufPrint(&value_buf, "{}", .{int_expr.value}) catch "fmt_error";
+                const value_str = std.fmt.bufPrint(&value_buf, "{}", .{int_expr.value.value}) catch "fmt_error";
                 value_node.appendString(gpa, value_str);
                 int_node.appendNode(gpa, &value_node);
 
@@ -1591,7 +1590,7 @@ pub const Pattern = union(enum) {
 
                 node.appendString(gpa, "literal"); // TODO: use l.literal
                 var value_buf: [64]u8 = undefined;
-                const value_str = std.fmt.bufPrint(&value_buf, "value={}", .{p.value}) catch "value=<fmt_error>";
+                const value_str = std.fmt.bufPrint(&value_buf, "value={}", .{p.value.value}) catch "value=<fmt_error>";
                 node.appendString(gpa, value_str);
                 return node;
             },
@@ -1604,7 +1603,7 @@ pub const Pattern = union(enum) {
 
                 node.appendString(gpa, "literal"); // TODO: use l.literal
                 var value_buf: [64]u8 = undefined;
-                const value_str = std.fmt.bufPrint(&value_buf, "value={}", .{p.value}) catch "value=<fmt_error>";
+                const value_str = std.fmt.bufPrint(&value_buf, "value={}", .{p.value.value}) catch "value=<fmt_error>";
                 node.appendString(gpa, value_str);
                 return node;
             },
