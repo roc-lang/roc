@@ -552,6 +552,14 @@ pub const ExposedItem = struct {
     pub const Span = struct { span: DataSpan };
 };
 
+/// Every integer value in Roc fits into an i128 except for some u128s.
+/// As such, we generaly store things as i128, and only reinterpret
+/// these bytes as u128 in the specific case of a Layout of U128.
+pub const IntLiteralValue = union {
+    i128: i128,
+    u128: u128,
+};
+
 /// An expression that has been canonicalized.
 pub const Expr = union(enum) {
     num: struct {
@@ -564,11 +572,7 @@ pub const Expr = union(enum) {
         int_var: TypeVar,
         precision_var: TypeVar,
         literal: StringLiteral.Idx,
-        // NOTE: The value field is always stored as i128. When the bound type is u128,
-        // the i128 bits should be reinterpreted as u128. For all other integer types
-        // (i8, u8, i16, u16, i32, u32, i64, u64, i128), the value is interpreted as
-        // a signed i128 and will be truncated/sign-extended as needed during codegen.
-        value: i128,
+        value: IntLiteralValue,
         region: Region,
     },
     float: struct {
@@ -1454,19 +1458,14 @@ pub const Pattern = union(enum) {
     num_literal: struct {
         num_var: TypeVar,
         literal: StringLiteral.Idx,
-        value: i128,
+        value: IntLiteralValue,
         region: Region,
     },
-    /// Pattern for an integer literal with type annotation
-    ///
-    /// NOTE: The value field is always stored as i128. When the precision type is u128,
-    /// the i128 bits should be reinterpreted as u128. For all other integer types,
-    /// the value is interpreted as a signed i128.
     int_literal: struct {
         num_var: TypeVar,
         precision_var: TypeVar,
         literal: StringLiteral.Idx,
-        value: i128,
+        value: IntLiteralValue,
         region: Region,
     },
     float_literal: struct {
