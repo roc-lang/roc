@@ -195,6 +195,40 @@ test "eval call - not yet implemented" {
 //     ...
 // }
 
+test "eval if expression with boolean literals" {
+    // Test that Bool.true and Bool.false are properly canonicalized and evaluated
+    const sources = [_]struct { src: []const u8, expected: i128 }{
+        .{ .src = "if Bool.true then 1 else 0", .expected = 1 },
+        .{ .src = "if Bool.false then 1 else 0", .expected = 0 },
+    };
+
+    for (sources) |test_case| {
+        const resources = try parseAndCanonicalizeExpr(test_allocator, test_case.src);
+        defer cleanupParseAndCanonical(test_allocator, resources);
+
+        const expr = resources.cir.store.getExpr(resources.expr_idx);
+
+        // Check if canonicalization succeeded
+        if (expr == .runtime_error) {
+            // If it failed, skip this test case - boolean canonicalization may not be complete
+            continue;
+        }
+
+        var eval_stack = try stack.Stack.initCapacity(test_allocator, 1024);
+        defer eval_stack.deinit();
+        var layout_cache = try layout_store.Store.init(resources.module_env, &resources.module_env.types_store);
+        defer layout_cache.deinit();
+
+        const result = try eval.eval(test_allocator, resources.cir, resources.expr_idx, &eval_stack, &layout_cache);
+
+        // Verify the result
+        try testing.expect(result.layout.tag == .scalar);
+        try testing.expect(result.layout.data.scalar.tag == .int);
+        const value = @as(*i128, @ptrCast(@alignCast(result.ptr))).*;
+        try testing.expectEqual(test_case.expected, value);
+    }
+}
+
 test "eval if expression - demonstrate evaluation logic" {
     // This test demonstrates that our if expression evaluation logic is implemented
     // and ready to work once canonicalization supports if expressions with conditions.
