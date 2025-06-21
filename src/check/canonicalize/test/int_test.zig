@@ -67,32 +67,30 @@ fn cleanup(allocator: std.mem.Allocator, resources: anytype) void {
     allocator.destroy(resources.module_env);
 }
 
-fn getIntValue(cir: *CIR, expr_idx: CIR.Expr.Idx) !struct { value: i128, precision: types.Num.Int.Precision } {
+fn getIntValue(cir: *CIR, expr_idx: CIR.Expr.Idx) !struct { value: i128, requirements: types.Num.Int.Requirements } {
     const expr = cir.store.getExpr(expr_idx);
     switch (expr) {
         .int => |int_expr| {
-            const precision = CIR.getIntPrecision(cir.env, int_expr.precision_var) orelse return error.NoPrecision;
             const value: i128 = int_expr.value.value;
-            return .{ .value = value, .precision = precision };
+            return .{ .value = value, .requirements = int_expr.requirements };
         },
         .num => |num_expr| {
-            // For num expressions, we need to resolve the num_var to get the precision
-            // This is a simplified case - in real code we'd need to handle more complex type resolution
-            const precision = types.Num.Int.Precision.i128; // Default for now
+            // For num expressions, we calculate requirements based on the value
             const value: i128 = num_expr.value.value;
-            return .{ .value = value, .precision = precision };
+            const requirements = calculateRequirements(value);
+            return .{ .value = value, .requirements = requirements };
         },
         else => return error.NotAnInteger,
     }
 }
 
-fn interpretAsI128(value: i128, precision: types.Num.Int.Precision) i128 {
-    // When the precision is u128, we interpret the i128 bits as unsigned
-    if (precision == .u128) {
-        // The value is already stored correctly, just return it
-        return value;
-    }
-    return value;
+fn calculateRequirements(value: i128) types.Num.Int.Requirements {
+    const sign_needed = value < 0;
+    const abs_value = if (sign_needed) -value else value;
+
+    const bits_needed: types.Num.Int.BitsNeeded = if (abs_value <= 127) .@"7" else if (abs_value <= 255) .@"8" else if (abs_value <= 32767) .@"9_to_15" else if (abs_value <= 65535) .@"16" else if (abs_value <= 2147483647) .@"17_to_31" else if (abs_value <= 4294967295) .@"32" else if (abs_value <= 9223372036854775807) .@"33_to_63" else if (abs_value <= 18446744073709551615) .@"64" else if (abs_value <= 170141183460469231731687303715884105727) .@"65_to_127" else .@"128";
+
+    return .{ .sign_needed = sign_needed, .bits_needed = bits_needed };
 }
 
 test "canonicalize simple positive integer" {
@@ -101,9 +99,10 @@ test "canonicalize simple positive integer" {
     defer cleanup(test_allocator, resources);
 
     const int_data = try getIntValue(resources.cir, resources.expr_idx);
-    const value = interpretAsI128(int_data.value, int_data.precision);
+    const value = int_data.value;
     try testing.expectEqual(@as(i128, 42), value);
-    try testing.expectEqual(types.Num.Int.Precision.i8, int_data.precision);
+    try testing.expectEqual(false, int_data.requirements.sign_needed);
+    try testing.expectEqual(types.Num.Int.BitsNeeded.@"7", int_data.requirements.bits_needed);
 }
 
 test "canonicalize simple negative integer" {
@@ -112,9 +111,10 @@ test "canonicalize simple negative integer" {
     defer cleanup(test_allocator, resources);
 
     const int_data = try getIntValue(resources.cir, resources.expr_idx);
-    const value = interpretAsI128(int_data.value, int_data.precision);
+    const value = int_data.value;
     try testing.expectEqual(@as(i128, -42), value);
-    try testing.expectEqual(types.Num.Int.Precision.i8, int_data.precision);
+    try testing.expectEqual(true, int_data.requirements.sign_needed);
+    try testing.expectEqual(types.Num.Int.BitsNeeded.@"7", int_data.requirements.bits_needed);
 }
 
 test "canonicalize zero" {
@@ -123,7 +123,7 @@ test "canonicalize zero" {
     defer cleanup(test_allocator, resources);
 
     const int_data = try getIntValue(resources.cir, resources.expr_idx);
-    const value = interpretAsI128(int_data.value, int_data.precision);
+    const value = int_data.value;
     try testing.expectEqual(@as(i128, 0), value);
 }
 
@@ -133,7 +133,7 @@ test "canonicalize large positive integer" {
     defer cleanup(test_allocator, resources);
 
     const int_data = try getIntValue(resources.cir, resources.expr_idx);
-    const value = interpretAsI128(int_data.value, int_data.precision);
+    const value = int_data.value;
     try testing.expectEqual(@as(i128, 9223372036854775807), value);
 }
 
@@ -143,7 +143,7 @@ test "canonicalize large negative integer" {
     defer cleanup(test_allocator, resources);
 
     const int_data = try getIntValue(resources.cir, resources.expr_idx);
-    const value = interpretAsI128(int_data.value, int_data.precision);
+    const value = int_data.value;
     try testing.expectEqual(@as(i128, -9223372036854775808), value);
 }
 
@@ -153,7 +153,7 @@ test "canonicalize very large integer" {
     defer cleanup(test_allocator, resources);
 
     const int_data = try getIntValue(resources.cir, resources.expr_idx);
-    const value = interpretAsI128(int_data.value, int_data.precision);
+    const value = int_data.value;
     try testing.expectEqual(@as(i128, 170141183460469231731687303715884105727), value);
 }
 
@@ -163,7 +163,7 @@ test "canonicalize very large negative integer" {
     defer cleanup(test_allocator, resources);
 
     const int_data = try getIntValue(resources.cir, resources.expr_idx);
-    const value = interpretAsI128(int_data.value, int_data.precision);
+    const value = int_data.value;
     try testing.expectEqual(@as(i128, -170141183460469231731687303715884105728), value);
 }
 
@@ -188,7 +188,7 @@ test "canonicalize small integers" {
         defer cleanup(test_allocator, resources);
 
         const int_data = try getIntValue(resources.cir, resources.expr_idx);
-        const value = interpretAsI128(int_data.value, int_data.precision);
+        const value = int_data.value;
         try testing.expectEqual(tc.expected, value);
     }
 }
@@ -207,32 +207,28 @@ test "canonicalize integer literals with underscores" {
         defer cleanup(test_allocator, resources);
 
         const int_data = try getIntValue(resources.cir, resources.expr_idx);
-        const value = interpretAsI128(int_data.value, int_data.precision);
+        const value = int_data.value;
         try testing.expectEqual(tc.expected, value);
     }
 }
 
-test "canonicalize integer bounds" {
-    // Test that the correct bounds are inferred
+test "canonicalize integer with specific requirements" {
     const test_cases = [_]struct {
         source: []const u8,
         expected_value: i128,
-        expected_bound: types.Num.Int.Precision,
+        expected_sign_needed: bool,
+        expected_bits_needed: types.Num.Int.BitsNeeded,
     }{
-        .{ .source = "0", .expected_value = 0, .expected_bound = .i8 },
-        .{ .source = "127", .expected_value = 127, .expected_bound = .i8 },
-        .{ .source = "128", .expected_value = 128, .expected_bound = .u8 },
-        .{ .source = "255", .expected_value = 255, .expected_bound = .u8 },
-        .{ .source = "256", .expected_value = 256, .expected_bound = .i16 },
-        .{ .source = "-1", .expected_value = -1, .expected_bound = .i8 },
-        .{ .source = "-128", .expected_value = -128, .expected_bound = .i8 },
-        .{ .source = "-129", .expected_value = -129, .expected_bound = .i16 },
-        .{ .source = "32767", .expected_value = 32767, .expected_bound = .i16 },
-        .{ .source = "32768", .expected_value = 32768, .expected_bound = .u16 },
-        .{ .source = "65535", .expected_value = 65535, .expected_bound = .u16 },
-        .{ .source = "65536", .expected_value = 65536, .expected_bound = .i32 },
-        .{ .source = "-32768", .expected_value = -32768, .expected_bound = .i16 },
-        .{ .source = "-32769", .expected_value = -32769, .expected_bound = .i32 },
+        .{ .source = "127", .expected_value = 127, .expected_sign_needed = false, .expected_bits_needed = .@"7" },
+        .{ .source = "128", .expected_value = 128, .expected_sign_needed = false, .expected_bits_needed = .@"8" },
+        .{ .source = "255", .expected_value = 255, .expected_sign_needed = false, .expected_bits_needed = .@"8" },
+        .{ .source = "256", .expected_value = 256, .expected_sign_needed = false, .expected_bits_needed = .@"9_to_15" },
+        .{ .source = "-128", .expected_value = -128, .expected_sign_needed = true, .expected_bits_needed = .@"8" },
+        .{ .source = "-129", .expected_value = -129, .expected_sign_needed = true, .expected_bits_needed = .@"8" },
+        .{ .source = "32767", .expected_value = 32767, .expected_sign_needed = false, .expected_bits_needed = .@"9_to_15" },
+        .{ .source = "32768", .expected_value = 32768, .expected_sign_needed = false, .expected_bits_needed = .@"16" },
+        .{ .source = "65535", .expected_value = 65535, .expected_sign_needed = false, .expected_bits_needed = .@"16" },
+        .{ .source = "65536", .expected_value = 65536, .expected_sign_needed = false, .expected_bits_needed = .@"17_to_31" },
     };
 
     for (test_cases) |tc| {
@@ -240,9 +236,10 @@ test "canonicalize integer bounds" {
         defer cleanup(test_allocator, resources);
 
         const int_data = try getIntValue(resources.cir, resources.expr_idx);
-        const value = interpretAsI128(int_data.value, int_data.precision);
+        const value = int_data.value;
         try testing.expectEqual(tc.expected_value, value);
-        try testing.expectEqual(tc.expected_bound, int_data.precision);
+        try testing.expectEqual(tc.expected_sign_needed, int_data.requirements.sign_needed);
+        try testing.expectEqual(tc.expected_bits_needed, int_data.requirements.bits_needed);
     }
 }
 
@@ -257,7 +254,10 @@ test "canonicalize integer literal creates correct type variables" {
             // Verify type variables were created (they should be valid indices)
             // Note: @enumFromInt(0) could be a valid type variable, so just check they exist
             _ = int_expr.int_var;
-            _ = int_expr.precision_var;
+
+            // Verify requirements were set
+            try testing.expect(int_expr.requirements.sign_needed == false);
+            try testing.expect(int_expr.requirements.bits_needed == .@"7");
 
             // Verify the string literal was interned
             const literal_str = resources.cir.env.strings.get(int_expr.literal);
@@ -286,7 +286,7 @@ test "canonicalize invalid integer literal" {
         // This might actually parse as 123, so let's check if it's a valid integer
         if (expr != .runtime_error) {
             const int_data = try getIntValue(resources.cir, resources.expr_idx);
-            const value = interpretAsI128(int_data.value, int_data.precision);
+            const value = int_data.value;
             try testing.expectEqual(@as(i128, 123), value);
         }
     }
@@ -347,7 +347,7 @@ test "canonicalize integer round trip through NodeStore" {
 
         // Get the expression back from the store
         const int_data = try getIntValue(resources.cir, resources.expr_idx);
-        const value = interpretAsI128(int_data.value, int_data.precision);
+        const value = int_data.value;
 
         try testing.expectEqual(expected, value);
     }
@@ -366,28 +366,28 @@ test "canonicalize integer with maximum digits" {
         defer cleanup(test_allocator, resources);
 
         const int_data = try getIntValue(resources.cir, resources.expr_idx);
-        const value = interpretAsI128(int_data.value, int_data.precision);
+        const value = int_data.value;
         try testing.expectEqual(tc.expected, value);
     }
 }
 
-test "canonicalize signed vs unsigned interpretation" {
-    // Test that values are interpreted correctly based on their precision
+test "canonicalize integer requirements determination" {
     const test_cases = [_]struct {
         source: []const u8,
-        expected_signed: i128,
-        expected_precision: types.Num.Int.Precision,
+        expected_value: i128,
+        expected_sign_needed: bool,
+        expected_bits_needed: types.Num.Int.BitsNeeded,
     }{
-        // 255 should be stored as u8 and interpreted as 255
-        .{ .source = "255", .expected_signed = 255, .expected_precision = .u8 },
-        // 256 should be stored as i16 and interpreted as 256
-        .{ .source = "256", .expected_signed = 256, .expected_precision = .i16 },
-        // -1 should be stored as i8 and interpreted as -1
-        .{ .source = "-1", .expected_signed = -1, .expected_precision = .i8 },
-        // 65535 should be stored as u16
-        .{ .source = "65535", .expected_signed = 65535, .expected_precision = .u16 },
-        // 65536 should be stored as i32
-        .{ .source = "65536", .expected_signed = 65536, .expected_precision = .i32 },
+        // 255 needs 8 bits and no sign
+        .{ .source = "255", .expected_value = 255, .expected_sign_needed = false, .expected_bits_needed = .@"8" },
+        // 256 needs 9-15 bits and no sign
+        .{ .source = "256", .expected_value = 256, .expected_sign_needed = false, .expected_bits_needed = .@"9_to_15" },
+        // -1 needs sign and 7 bits
+        .{ .source = "-1", .expected_value = -1, .expected_sign_needed = true, .expected_bits_needed = .@"7" },
+        // 65535 needs 16 bits and no sign
+        .{ .source = "65535", .expected_value = 65535, .expected_sign_needed = false, .expected_bits_needed = .@"16" },
+        // 65536 needs 17-31 bits and no sign
+        .{ .source = "65536", .expected_value = 65536, .expected_sign_needed = false, .expected_bits_needed = .@"17_to_31" },
     };
 
     for (test_cases) |tc| {
@@ -396,16 +396,13 @@ test "canonicalize signed vs unsigned interpretation" {
 
         const int_data = try getIntValue(resources.cir, resources.expr_idx);
 
-        // Verify the precision is what we expect
-        try testing.expectEqual(tc.expected_precision, int_data.precision);
+        // Verify the requirements are what we expect
+        try testing.expectEqual(tc.expected_sign_needed, int_data.requirements.sign_needed);
+        try testing.expectEqual(tc.expected_bits_needed, int_data.requirements.bits_needed);
 
-        // Verify the value is interpreted correctly based on the precision
-        const value = interpretAsI128(int_data.value, int_data.precision);
-        try testing.expectEqual(tc.expected_signed, value);
-
-        // Note: We store values based on their determined precision, so 255 stored as u8
-        // will still be 255 when interpreted as i128 (not -1) because we use fromI128/fromU128
-        // appropriately based on the precision.
+        // Verify the value
+        const value = int_data.value;
+        try testing.expectEqual(tc.expected_value, value);
     }
 }
 

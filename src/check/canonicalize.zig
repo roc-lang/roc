@@ -483,8 +483,8 @@ pub fn canonicalize_expr(
             const is_negated = token_text[0] == '-'; // Drop the negation for now, so all valid literals fit in u128
             const after_minus_sign = @as(usize, @intFromBool(is_negated));
 
-            // Where does the first *actual* digit start? (after minus sign, "0x" prefix, etc.)
-            var digit_start: usize = undefined;
+            // The index the first *actual* digit (after minus sign, "0x" prefix, etc.) in the token
+            var first_digit: usize = undefined;
 
             // Default to base-10
             var int_base: u8 = 10;
@@ -497,25 +497,25 @@ pub fn canonicalize_expr(
                 switch (token_text[after_minus_sign + 1]) {
                     'x', 'X' => {
                         int_base = 16;
-                        digit_start = after_minus_sign + 2;
+                        first_digit = after_minus_sign + 2;
                     },
                     'o', 'O' => {
                         int_base = 8;
-                        digit_start = after_minus_sign + 2;
+                        first_digit = after_minus_sign + 2;
                     },
                     'b', 'B' => {
                         int_base = 2;
-                        digit_start = after_minus_sign + 2;
+                        first_digit = after_minus_sign + 2;
                     },
                     else => {
-                        digit_start = after_minus_sign;
+                        first_digit = after_minus_sign;
                     },
                 }
             } else {
-                digit_start = after_minus_sign;
+                first_digit = after_minus_sign;
             }
 
-            const u128_val: u128 = std.fmt.parseInt(u128, token_text[digit_start..], int_base) catch {
+            const u128_val: u128 = std.fmt.parseInt(u128, token_text[first_digit..], int_base) catch {
                 // Any number literal that is too large for u128 is invalid, regardless of whether it had a minus sign!
                 const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .invalid_num_literal = .{
                     .literal = literal,
@@ -550,43 +550,22 @@ pub fn canonicalize_expr(
             const i128_val: i128 = sign * @as(i128, @bitCast(u128_val));
 
             // create type vars, first "reserve" node slots
-            const final_expr_idx = self.can_ir.store.predictNodeIndex(3);
+            const final_expr_idx = self.can_ir.store.predictNodeIndex(2);
 
-            // then insert the type vars, setting the parent to be the final slot
-            // Determine the precision based on the original u128 value and whether it was negated
-            const bound = blk: {
-                // TODO this all needs to be redone in the future. Some notes:
-                // - need to store whether it's negative and therefore requires being signed
-                // - need to store how many bits it needs (e.g. 7 if it's <= 128)
-                if (is_negated) {
-                    // For negative values, only signed types are valid
-                    // We need to check the original u128 value (before negation)
-                    if (u128_val <= 128) break :blk Num.Int.Precision.i8;
-                    if (u128_val <= 32768) break :blk Num.Int.Precision.i16;
-                    if (u128_val <= 2147483648) break :blk Num.Int.Precision.i32;
-                    if (u128_val <= 9223372036854775808) break :blk Num.Int.Precision.i64;
-                    break :blk Num.Int.Precision.i128;
-                } else {
-                    // For positive values, prefer signed types when they fit
-                    if (u128_val <= std.math.maxInt(i8)) break :blk Num.Int.Precision.i8;
-                    if (u128_val <= std.math.maxInt(u8)) break :blk Num.Int.Precision.u8;
-                    if (u128_val <= std.math.maxInt(i16)) break :blk Num.Int.Precision.i16;
-                    if (u128_val <= std.math.maxInt(u16)) break :blk Num.Int.Precision.u16;
-                    if (u128_val <= std.math.maxInt(i32)) break :blk Num.Int.Precision.i32;
-                    if (u128_val <= std.math.maxInt(u32)) break :blk Num.Int.Precision.u32;
-                    if (u128_val <= std.math.maxInt(i64)) break :blk Num.Int.Precision.i64;
-                    if (u128_val <= std.math.maxInt(u64)) break :blk Num.Int.Precision.u64;
-                    if (u128_val <= std.math.maxInt(i128)) break :blk Num.Int.Precision.i128;
-                    break :blk Num.Int.Precision.u128;
-                }
+            // Calculate requirements based on the value
+            const requirements = blk: {
+                const sign_needed = is_negated;
+                const bits_needed: types.Num.Int.BitsNeeded = if (u128_val <= 127) .@"7" else if (u128_val <= 255) .@"8" else if (u128_val <= 32767) .@"9_to_15" else if (u128_val <= 65535) .@"16" else if (u128_val <= 2147483647) .@"17_to_31" else if (u128_val <= 4294967295) .@"32" else if (u128_val <= 9223372036854775807) .@"33_to_63" else if (u128_val <= 18446744073709551615) .@"64" else if (u128_val <= 170141183460469231731687303715884105727) .@"65_to_127" else .@"128";
+
+                break :blk types.Num.Int.Requirements{
+                    .sign_needed = sign_needed,
+                    .bits_needed = bits_needed,
+                };
             };
-            const precision_type_var = self.can_ir.pushTypeVar(
-                Content{ .structure = .{ .num = .{ .int_precision = bound } } },
-                final_expr_idx,
-                region,
-            );
+
+            // Create a polymorphic int type variable
             const int_type_var = self.can_ir.pushTypeVar(
-                Content{ .structure = .{ .num = .{ .int_poly = precision_type_var } } },
+                Content{ .structure = .{ .num = .{ .int_poly = @enumFromInt(0) } } },
                 final_expr_idx,
                 region,
             );
@@ -595,7 +574,7 @@ pub fn canonicalize_expr(
             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
                 .int = .{
                     .int_var = int_type_var,
-                    .precision_var = precision_type_var,
+                    .requirements = requirements,
                     .literal = literal,
                     .value = CIR.IntLiteralValue{ .value = i128_val },
                     .region = region,
@@ -631,18 +610,19 @@ pub fn canonicalize_expr(
                 return expr_idx;
             };
 
-            // create type vars, first "reserve" 3 can node slots
-            const final_expr_idx = self.can_ir.store.predictNodeIndex(3);
+            // create type vars, first "reserve" node slots
+            const final_expr_idx = self.can_ir.store.predictNodeIndex(2);
 
-            // then insert the type vars, setting the parent to be the final slot
-            const bound = Num.Frac.Precision.fromValue(value);
-            const precision_type_var = self.can_ir.pushTypeVar(
-                Content{ .structure = .{ .num = .{ .frac_precision = bound } } },
-                final_expr_idx,
-                region,
-            );
+            // For floats, we'll use requirements as a placeholder
+            // In the future, this might need different handling for float bounds
+            const requirements = types.Num.Int.Requirements{
+                .sign_needed = false,
+                .bits_needed = .@"64", // Default for f64
+            };
+
+            // Create a polymorphic float type variable
             const float_type_var = self.can_ir.pushTypeVar(
-                Content{ .structure = .{ .num = .{ .frac_poly = precision_type_var } } },
+                Content{ .structure = .{ .num = .{ .frac_poly = @enumFromInt(0) } } },
                 final_expr_idx,
                 region,
             );
@@ -651,7 +631,7 @@ pub fn canonicalize_expr(
             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
                 .float = .{
                     .frac_var = float_type_var,
-                    .precision_var = precision_type_var,
+                    .requirements = requirements,
                     .literal = literal,
                     .value = value,
                     .region = region,
@@ -2012,37 +1992,35 @@ test "hexadecimal integer literals" {
     const test_cases = [_]struct {
         literal: []const u8,
         expected_value: i128,
-        expected_precision: Num.Int.Precision,
+        expected_sign_needed: bool,
+        expected_bits_needed: types.Num.Int.BitsNeeded,
     }{
         // Basic hex literals
-        .{ .literal = "0x0", .expected_value = 0, .expected_precision = .i8 },
-        .{ .literal = "0x1", .expected_value = 1, .expected_precision = .i8 },
-        .{ .literal = "0xA", .expected_value = 10, .expected_precision = .i8 },
-        .{ .literal = "0xa", .expected_value = 10, .expected_precision = .i8 },
-        .{ .literal = "0xFF", .expected_value = 255, .expected_precision = .u8 },
-        .{ .literal = "0xff", .expected_value = 255, .expected_precision = .u8 },
-        .{ .literal = "0x100", .expected_value = 256, .expected_precision = .i16 },
-        .{ .literal = "0xFFFF", .expected_value = 65535, .expected_precision = .u16 },
-        .{ .literal = "0x10000", .expected_value = 65536, .expected_precision = .i32 },
-        .{ .literal = "0xFFFFFFFF", .expected_value = 4294967295, .expected_precision = .u32 },
-        .{ .literal = "0x100000000", .expected_value = 4294967296, .expected_precision = .i64 },
-        .{ .literal = "0xFFFFFFFFFFFFFFFF", .expected_value = @as(i128, @bitCast(@as(u128, 18446744073709551615))), .expected_precision = .u64 },
+        .{ .literal = "0x0", .expected_value = 0, .expected_sign_needed = false, .expected_bits_needed = .@"7" },
+        .{ .literal = "0x1", .expected_value = 1, .expected_sign_needed = false, .expected_bits_needed = .@"7" },
+        .{ .literal = "0xFF", .expected_value = 255, .expected_sign_needed = false, .expected_bits_needed = .@"8" },
+        .{ .literal = "0x100", .expected_value = 256, .expected_sign_needed = false, .expected_bits_needed = .@"9_to_15" },
+        .{ .literal = "0xFFFF", .expected_value = 65535, .expected_sign_needed = false, .expected_bits_needed = .@"16" },
+        .{ .literal = "0x10000", .expected_value = 65536, .expected_sign_needed = false, .expected_bits_needed = .@"17_to_31" },
+        .{ .literal = "0xFFFFFFFF", .expected_value = 4294967295, .expected_sign_needed = false, .expected_bits_needed = .@"32" },
+        .{ .literal = "0x100000000", .expected_value = 4294967296, .expected_sign_needed = false, .expected_bits_needed = .@"33_to_63" },
+        .{ .literal = "0xFFFFFFFFFFFFFFFF", .expected_value = @as(i128, @bitCast(@as(u128, 18446744073709551615))), .expected_sign_needed = false, .expected_bits_needed = .@"64" },
 
         // Hex with underscores
-        .{ .literal = "0x1_000", .expected_value = 4096, .expected_precision = .i16 },
-        .{ .literal = "0xFF_FF", .expected_value = 65535, .expected_precision = .u16 },
-        .{ .literal = "0x1234_5678_9ABC_DEF0", .expected_value = @as(i128, @bitCast(@as(u128, 0x123456789ABCDEF0))), .expected_precision = .i64 },
+        .{ .literal = "0x1_000", .expected_value = 4096, .expected_sign_needed = false, .expected_bits_needed = .@"9_to_15" },
+        .{ .literal = "0xFF_FF", .expected_value = 65535, .expected_sign_needed = false, .expected_bits_needed = .@"16" },
+        .{ .literal = "0x1234_5678_9ABC_DEF0", .expected_value = @as(i128, @bitCast(@as(u128, 0x123456789ABCDEF0))), .expected_sign_needed = false, .expected_bits_needed = .@"33_to_63" },
 
         // Negative hex literals
-        .{ .literal = "-0x1", .expected_value = -1, .expected_precision = .i8 },
-        .{ .literal = "-0x80", .expected_value = -128, .expected_precision = .i8 },
-        .{ .literal = "-0x81", .expected_value = -129, .expected_precision = .i16 },
-        .{ .literal = "-0x8000", .expected_value = -32768, .expected_precision = .i16 },
-        .{ .literal = "-0x8001", .expected_value = -32769, .expected_precision = .i32 },
-        .{ .literal = "-0x80000000", .expected_value = -2147483648, .expected_precision = .i32 },
-        .{ .literal = "-0x80000001", .expected_value = -2147483649, .expected_precision = .i64 },
-        .{ .literal = "-0x8000000000000000", .expected_value = -9223372036854775808, .expected_precision = .i64 },
-        .{ .literal = "-0x8000000000000001", .expected_value = @as(i128, -9223372036854775809), .expected_precision = .i128 },
+        .{ .literal = "-0x1", .expected_value = -1, .expected_sign_needed = true, .expected_bits_needed = .@"7" },
+        .{ .literal = "-0x80", .expected_value = -128, .expected_sign_needed = true, .expected_bits_needed = .@"8" },
+        .{ .literal = "-0x81", .expected_value = -129, .expected_sign_needed = true, .expected_bits_needed = .@"8" },
+        .{ .literal = "-0x8000", .expected_value = -32768, .expected_sign_needed = true, .expected_bits_needed = .@"16" },
+        .{ .literal = "-0x8001", .expected_value = -32769, .expected_sign_needed = true, .expected_bits_needed = .@"16" },
+        .{ .literal = "-0x80000000", .expected_value = -2147483648, .expected_sign_needed = true, .expected_bits_needed = .@"32" },
+        .{ .literal = "-0x80000001", .expected_value = -2147483649, .expected_sign_needed = true, .expected_bits_needed = .@"32" },
+        .{ .literal = "-0x8000000000000000", .expected_value = -9223372036854775808, .expected_sign_needed = true, .expected_bits_needed = .@"64" },
+        .{ .literal = "-0x8000000000000001", .expected_value = @as(i128, -9223372036854775809), .expected_sign_needed = true, .expected_bits_needed = .@"64" },
     };
 
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
@@ -2075,14 +2053,9 @@ test "hexadecimal integer literals" {
         // Check the value
         try std.testing.expectEqual(tc.expected_value, expr.int.value.value);
 
-        // Check the precision
-        const precision = CIR.getIntPrecision(&env, expr.int.precision_var) orelse {
-            std.debug.print("Failed to get precision for: {s}\n", .{tc.literal});
-            try std.testing.expect(false);
-            continue;
-        };
-
-        try std.testing.expectEqual(tc.expected_precision, precision);
+        // Check the requirements
+        try std.testing.expectEqual(tc.expected_sign_needed, expr.int.requirements.sign_needed);
+        try std.testing.expectEqual(tc.expected_bits_needed, expr.int.requirements.bits_needed);
     }
 }
 
@@ -2090,33 +2063,30 @@ test "binary integer literals" {
     const test_cases = [_]struct {
         literal: []const u8,
         expected_value: i128,
-        expected_precision: Num.Int.Precision,
+        expected_sign_needed: bool,
+        expected_bits_needed: types.Num.Int.BitsNeeded,
     }{
         // Basic binary literals
-        .{ .literal = "0b0", .expected_value = 0, .expected_precision = .i8 },
-        .{ .literal = "0b1", .expected_value = 1, .expected_precision = .i8 },
-        .{ .literal = "0b10", .expected_value = 2, .expected_precision = .i8 },
-        .{ .literal = "0b11", .expected_value = 3, .expected_precision = .i8 },
-        .{ .literal = "0b1111111", .expected_value = 127, .expected_precision = .i8 },
-        .{ .literal = "0b10000000", .expected_value = 128, .expected_precision = .u8 },
-        .{ .literal = "0b11111111", .expected_value = 255, .expected_precision = .u8 },
-        .{ .literal = "0b100000000", .expected_value = 256, .expected_precision = .i16 },
-        .{ .literal = "0b1111111111111111", .expected_value = 65535, .expected_precision = .u16 },
-        .{ .literal = "0b10000000000000000", .expected_value = 65536, .expected_precision = .i32 },
+        .{ .literal = "0b0", .expected_value = 0, .expected_sign_needed = false, .expected_bits_needed = .@"7" },
+        .{ .literal = "0b1", .expected_value = 1, .expected_sign_needed = false, .expected_bits_needed = .@"7" },
+        .{ .literal = "0b10", .expected_value = 2, .expected_sign_needed = false, .expected_bits_needed = .@"7" },
+        .{ .literal = "0b11111111", .expected_value = 255, .expected_sign_needed = false, .expected_bits_needed = .@"8" },
+        .{ .literal = "0b100000000", .expected_value = 256, .expected_sign_needed = false, .expected_bits_needed = .@"9_to_15" },
+        .{ .literal = "0b1111111111111111", .expected_value = 65535, .expected_sign_needed = false, .expected_bits_needed = .@"16" },
+        .{ .literal = "0b10000000000000000", .expected_value = 65536, .expected_sign_needed = false, .expected_bits_needed = .@"17_to_31" },
 
         // Binary with underscores
-        .{ .literal = "0b1111_1111", .expected_value = 255, .expected_precision = .u8 },
-        .{ .literal = "0b1_0000_0000", .expected_value = 256, .expected_precision = .i16 },
-        .{ .literal = "0b1010_1010_1010_1010", .expected_value = 43690, .expected_precision = .u16 },
+        .{ .literal = "0b11_11", .expected_value = 15, .expected_sign_needed = false, .expected_bits_needed = .@"7" },
+        .{ .literal = "0b1111_1111", .expected_value = 255, .expected_sign_needed = false, .expected_bits_needed = .@"8" },
+        .{ .literal = "0b1010_1010_1010_1010", .expected_value = 43690, .expected_sign_needed = false, .expected_bits_needed = .@"16" },
 
         // Negative binary literals
-        .{ .literal = "-0b1", .expected_value = -1, .expected_precision = .i8 },
-        .{ .literal = "-0b1111111", .expected_value = -127, .expected_precision = .i8 },
-        .{ .literal = "-0b10000000", .expected_value = -128, .expected_precision = .i8 },
-        .{ .literal = "-0b10000001", .expected_value = -129, .expected_precision = .i16 },
-        .{ .literal = "-0b111111111111111", .expected_value = -32767, .expected_precision = .i16 },
-        .{ .literal = "-0b1000000000000000", .expected_value = -32768, .expected_precision = .i16 },
-        .{ .literal = "-0b1000000000000001", .expected_value = -32769, .expected_precision = .i32 },
+        .{ .literal = "-0b1", .expected_value = -1, .expected_sign_needed = true, .expected_bits_needed = .@"7" },
+        .{ .literal = "-0b1000000", .expected_value = -64, .expected_sign_needed = true, .expected_bits_needed = .@"7" },
+        .{ .literal = "-0b10000000", .expected_value = -128, .expected_sign_needed = true, .expected_bits_needed = .@"8" },
+        .{ .literal = "-0b10000001", .expected_value = -129, .expected_sign_needed = true, .expected_bits_needed = .@"8" },
+        .{ .literal = "-0b1000000000000000", .expected_value = -32768, .expected_sign_needed = true, .expected_bits_needed = .@"16" },
+        .{ .literal = "-0b1000000000000001", .expected_value = -32769, .expected_sign_needed = true, .expected_bits_needed = .@"16" },
     };
 
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
@@ -2149,14 +2119,9 @@ test "binary integer literals" {
         // Check the value
         try std.testing.expectEqual(tc.expected_value, expr.int.value.value);
 
-        // Check the precision
-        const precision = CIR.getIntPrecision(&env, expr.int.precision_var) orelse {
-            std.debug.print("Failed to get precision for: {s}\n", .{tc.literal});
-            try std.testing.expect(false);
-            continue;
-        };
-
-        try std.testing.expectEqual(tc.expected_precision, precision);
+        // Check the requirements
+        try std.testing.expectEqual(tc.expected_sign_needed, expr.int.requirements.sign_needed);
+        try std.testing.expectEqual(tc.expected_bits_needed, expr.int.requirements.bits_needed);
     }
 }
 
@@ -2164,35 +2129,30 @@ test "octal integer literals" {
     const test_cases = [_]struct {
         literal: []const u8,
         expected_value: i128,
-        expected_precision: Num.Int.Precision,
+        expected_sign_needed: bool,
+        expected_bits_needed: types.Num.Int.BitsNeeded,
     }{
         // Basic octal literals
-        .{ .literal = "0o0", .expected_value = 0, .expected_precision = .i8 },
-        .{ .literal = "0o1", .expected_value = 1, .expected_precision = .i8 },
-        .{ .literal = "0o7", .expected_value = 7, .expected_precision = .i8 },
-        .{ .literal = "0o10", .expected_value = 8, .expected_precision = .i8 },
-        .{ .literal = "0o77", .expected_value = 63, .expected_precision = .i8 },
-        .{ .literal = "0o177", .expected_value = 127, .expected_precision = .i8 },
-        .{ .literal = "0o200", .expected_value = 128, .expected_precision = .u8 },
-        .{ .literal = "0o377", .expected_value = 255, .expected_precision = .u8 },
-        .{ .literal = "0o400", .expected_value = 256, .expected_precision = .i16 },
-        .{ .literal = "0o777", .expected_value = 511, .expected_precision = .i16 },
-        .{ .literal = "0o177777", .expected_value = 65535, .expected_precision = .u16 },
-        .{ .literal = "0o200000", .expected_value = 65536, .expected_precision = .i32 },
+        .{ .literal = "0o0", .expected_value = 0, .expected_sign_needed = false, .expected_bits_needed = .@"7" },
+        .{ .literal = "0o1", .expected_value = 1, .expected_sign_needed = false, .expected_bits_needed = .@"7" },
+        .{ .literal = "0o7", .expected_value = 7, .expected_sign_needed = false, .expected_bits_needed = .@"7" },
+        .{ .literal = "0o10", .expected_value = 8, .expected_sign_needed = false, .expected_bits_needed = .@"7" },
+        .{ .literal = "0o377", .expected_value = 255, .expected_sign_needed = false, .expected_bits_needed = .@"8" },
+        .{ .literal = "0o400", .expected_value = 256, .expected_sign_needed = false, .expected_bits_needed = .@"9_to_15" },
+        .{ .literal = "0o177777", .expected_value = 65535, .expected_sign_needed = false, .expected_bits_needed = .@"16" },
+        .{ .literal = "0o200000", .expected_value = 65536, .expected_sign_needed = false, .expected_bits_needed = .@"17_to_31" },
 
         // Octal with underscores
-        .{ .literal = "0o3_77", .expected_value = 255, .expected_precision = .u8 },
-        .{ .literal = "0o1_000", .expected_value = 512, .expected_precision = .i16 },
-        .{ .literal = "0o12_34_56", .expected_value = 42798, .expected_precision = .u16 },
+        .{ .literal = "0o377_377", .expected_value = 130815, .expected_sign_needed = false, .expected_bits_needed = .@"17_to_31" },
+        .{ .literal = "0o1_234_567", .expected_value = 342391, .expected_sign_needed = false, .expected_bits_needed = .@"17_to_31" },
 
         // Negative octal literals
-        .{ .literal = "-0o1", .expected_value = -1, .expected_precision = .i8 },
-        .{ .literal = "-0o177", .expected_value = -127, .expected_precision = .i8 },
-        .{ .literal = "-0o200", .expected_value = -128, .expected_precision = .i8 },
-        .{ .literal = "-0o201", .expected_value = -129, .expected_precision = .i16 },
-        .{ .literal = "-0o77777", .expected_value = -32767, .expected_precision = .i16 },
-        .{ .literal = "-0o100000", .expected_value = -32768, .expected_precision = .i16 },
-        .{ .literal = "-0o100001", .expected_value = -32769, .expected_precision = .i32 },
+        .{ .literal = "-0o1", .expected_value = -1, .expected_sign_needed = true, .expected_bits_needed = .@"7" },
+        .{ .literal = "-0o100", .expected_value = -64, .expected_sign_needed = true, .expected_bits_needed = .@"7" },
+        .{ .literal = "-0o200", .expected_value = -128, .expected_sign_needed = true, .expected_bits_needed = .@"8" },
+        .{ .literal = "-0o201", .expected_value = -129, .expected_sign_needed = true, .expected_bits_needed = .@"8" },
+        .{ .literal = "-0o100000", .expected_value = -32768, .expected_sign_needed = true, .expected_bits_needed = .@"16" },
+        .{ .literal = "-0o100001", .expected_value = -32769, .expected_sign_needed = true, .expected_bits_needed = .@"16" },
     };
 
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
@@ -2225,14 +2185,9 @@ test "octal integer literals" {
         // Check the value
         try std.testing.expectEqual(tc.expected_value, expr.int.value.value);
 
-        // Check the precision
-        const precision = CIR.getIntPrecision(&env, expr.int.precision_var) orelse {
-            std.debug.print("Failed to get precision for: {s}\n", .{tc.literal});
-            try std.testing.expect(false);
-            continue;
-        };
-
-        try std.testing.expectEqual(tc.expected_precision, precision);
+        // Check the requirements
+        try std.testing.expectEqual(tc.expected_sign_needed, expr.int.requirements.sign_needed);
+        try std.testing.expectEqual(tc.expected_bits_needed, expr.int.requirements.bits_needed);
     }
 }
 
@@ -2240,29 +2195,30 @@ test "integer literals with uppercase base prefixes" {
     const test_cases = [_]struct {
         literal: []const u8,
         expected_value: i128,
-        expected_precision: Num.Int.Precision,
+        expected_sign_needed: bool,
+        expected_bits_needed: types.Num.Int.BitsNeeded,
     }{
         // Uppercase hex prefix
-        .{ .literal = "0X0", .expected_value = 0, .expected_precision = .i8 },
-        .{ .literal = "0XFF", .expected_value = 255, .expected_precision = .u8 },
-        .{ .literal = "0XABCD", .expected_value = 43981, .expected_precision = .u16 },
-        .{ .literal = "-0X80", .expected_value = -128, .expected_precision = .i8 },
+        .{ .literal = "0X0", .expected_value = 0, .expected_sign_needed = false, .expected_bits_needed = .@"7" },
+        .{ .literal = "0X1", .expected_value = 1, .expected_sign_needed = false, .expected_bits_needed = .@"7" },
+        .{ .literal = "0XFF", .expected_value = 255, .expected_sign_needed = false, .expected_bits_needed = .@"8" },
+        .{ .literal = "0XABCD", .expected_value = 43981, .expected_sign_needed = false, .expected_bits_needed = .@"16" },
 
         // Uppercase binary prefix
-        .{ .literal = "0B0", .expected_value = 0, .expected_precision = .i8 },
-        .{ .literal = "0B11111111", .expected_value = 255, .expected_precision = .u8 },
-        .{ .literal = "0B101010", .expected_value = 42, .expected_precision = .i8 },
-        .{ .literal = "-0B1000000", .expected_value = -64, .expected_precision = .i8 },
+        .{ .literal = "0B0", .expected_value = 0, .expected_sign_needed = false, .expected_bits_needed = .@"7" },
+        .{ .literal = "0B1", .expected_value = 1, .expected_sign_needed = false, .expected_bits_needed = .@"7" },
+        .{ .literal = "0B1111", .expected_value = 15, .expected_sign_needed = false, .expected_bits_needed = .@"7" },
+        .{ .literal = "0B11111111", .expected_value = 255, .expected_sign_needed = false, .expected_bits_needed = .@"8" },
 
         // Uppercase octal prefix
-        .{ .literal = "0O0", .expected_value = 0, .expected_precision = .i8 },
-        .{ .literal = "0O377", .expected_value = 255, .expected_precision = .u8 },
-        .{ .literal = "0O777", .expected_value = 511, .expected_precision = .i16 },
-        .{ .literal = "-0O100", .expected_value = -64, .expected_precision = .i8 },
+        .{ .literal = "0O0", .expected_value = 0, .expected_sign_needed = false, .expected_bits_needed = .@"7" },
+        .{ .literal = "0O7", .expected_value = 7, .expected_sign_needed = false, .expected_bits_needed = .@"7" },
+        .{ .literal = "0O377", .expected_value = 255, .expected_sign_needed = false, .expected_bits_needed = .@"8" },
+        .{ .literal = "0O777", .expected_value = 511, .expected_sign_needed = false, .expected_bits_needed = .@"9_to_15" },
 
-        // Mixed case in values (hex only)
-        .{ .literal = "0xAbCd", .expected_value = 43981, .expected_precision = .u16 },
-        .{ .literal = "0XaBcD", .expected_value = 43981, .expected_precision = .u16 },
+        // Mixed case in value (should still work)
+        .{ .literal = "0xAbCd", .expected_value = 43981, .expected_sign_needed = false, .expected_bits_needed = .@"16" },
+        .{ .literal = "0XaBcD", .expected_value = 43981, .expected_sign_needed = false, .expected_bits_needed = .@"16" },
     };
 
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
@@ -2295,13 +2251,8 @@ test "integer literals with uppercase base prefixes" {
         // Check the value
         try std.testing.expectEqual(tc.expected_value, expr.int.value.value);
 
-        // Check the precision
-        const precision = CIR.getIntPrecision(&env, expr.int.precision_var) orelse {
-            std.debug.print("Failed to get precision for: {s}\n", .{tc.literal});
-            try std.testing.expect(false);
-            continue;
-        };
-
-        try std.testing.expectEqual(tc.expected_precision, precision);
+        // Check the requirements
+        try std.testing.expectEqual(tc.expected_sign_needed, expr.int.requirements.sign_needed);
+        try std.testing.expectEqual(tc.expected_bits_needed, expr.int.requirements.bits_needed);
     }
 }

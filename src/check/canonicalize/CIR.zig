@@ -569,14 +569,14 @@ pub const Expr = union(enum) {
     },
     int: struct {
         int_var: TypeVar,
-        precision_var: TypeVar,
+        requirements: types.Num.Int.Requirements,
         literal: StringLiteral.Idx,
         value: IntLiteralValue,
         region: Region,
     },
     float: struct {
         frac_var: TypeVar,
-        precision_var: TypeVar,
+        requirements: types.Num.Int.Requirements,
         literal: StringLiteral.Idx,
         value: f64,
         region: Region,
@@ -596,7 +596,7 @@ pub const Expr = union(enum) {
     },
     single_quote: struct {
         num_var: TypeVar,
-        precision_var: TypeVar,
+        requirements: types.Num.Int.Requirements,
         value: u32,
         region: Region,
     },
@@ -760,12 +760,17 @@ pub const Expr = union(enum) {
                 int_var_node.appendString(gpa, int_var_str);
                 int_node.appendNode(gpa, &int_var_node);
 
-                // Add precision_var
-                var prec_var_node = sexpr.Expr.init(gpa, "precision_var");
-                const prec_var_str = int_expr.precision_var.allocPrint(gpa);
-                defer gpa.free(prec_var_str);
-                prec_var_node.appendString(gpa, prec_var_str);
-                int_node.appendNode(gpa, &prec_var_node);
+                // Add requirements
+                var req_node = sexpr.Expr.init(gpa, "requirements");
+                var sign_node = sexpr.Expr.init(gpa, "sign_needed");
+                sign_node.appendString(gpa, if (int_expr.requirements.sign_needed) "true" else "false");
+                req_node.appendNode(gpa, &sign_node);
+                var bits_node = sexpr.Expr.init(gpa, "bits_needed");
+                const bits_str = std.fmt.allocPrint(gpa, "{}", .{int_expr.requirements.bits_needed}) catch unreachable;
+                defer gpa.free(bits_str);
+                bits_node.appendString(gpa, bits_str);
+                req_node.appendNode(gpa, &bits_node);
+                int_node.appendNode(gpa, &req_node);
 
                 // Add literal
                 var literal_node = sexpr.Expr.init(gpa, "literal");
@@ -793,12 +798,17 @@ pub const Expr = union(enum) {
                 frac_var_node.appendString(gpa, frac_var_str);
                 float_node.appendNode(gpa, &frac_var_node);
 
-                // Add precision_var
-                var prec_var_node = sexpr.Expr.init(gpa, "precision_var");
-                const prec_var_str = float_expr.precision_var.allocPrint(gpa);
-                defer gpa.free(prec_var_str);
-                prec_var_node.appendString(gpa, prec_var_str);
-                float_node.appendNode(gpa, &prec_var_node);
+                // Add requirements
+                var req_node = sexpr.Expr.init(gpa, "requirements");
+                var sign_node = sexpr.Expr.init(gpa, "sign_needed");
+                sign_node.appendString(gpa, if (float_expr.requirements.sign_needed) "true" else "false");
+                req_node.appendNode(gpa, &sign_node);
+                var bits_node = sexpr.Expr.init(gpa, "bits_needed");
+                const bits_str = std.fmt.allocPrint(gpa, "{}", .{float_expr.requirements.bits_needed}) catch unreachable;
+                defer gpa.free(bits_str);
+                bits_node.appendString(gpa, bits_str);
+                req_node.appendNode(gpa, &bits_node);
+                float_node.appendNode(gpa, &req_node);
 
                 // Add literal
                 var literal_node = sexpr.Expr.init(gpa, "literal");
@@ -846,12 +856,17 @@ pub const Expr = union(enum) {
                 num_var_node.appendString(gpa, num_var_str);
                 single_quote_node.appendNode(gpa, &num_var_node);
 
-                // Add precision_var
-                var prec_var_node = sexpr.Expr.init(gpa, "precision_var");
-                const prec_var_str = e.precision_var.allocPrint(gpa);
-                defer gpa.free(prec_var_str);
-                prec_var_node.appendString(gpa, prec_var_str);
-                single_quote_node.appendNode(gpa, &prec_var_node);
+                // Add requirements
+                var req_node = sexpr.Expr.init(gpa, "requirements");
+                var sign_node = sexpr.Expr.init(gpa, "sign_needed");
+                sign_node.appendString(gpa, if (e.requirements.sign_needed) "true" else "false");
+                req_node.appendNode(gpa, &sign_node);
+                var bits_node = sexpr.Expr.init(gpa, "bits_needed");
+                const bits_str = std.fmt.allocPrint(gpa, "{}", .{e.requirements.bits_needed}) catch unreachable;
+                defer gpa.free(bits_str);
+                bits_node.appendString(gpa, bits_str);
+                req_node.appendNode(gpa, &bits_node);
+                single_quote_node.appendNode(gpa, &req_node);
 
                 // Add value
                 var value_node = sexpr.Expr.init(gpa, "value");
@@ -1462,14 +1477,14 @@ pub const Pattern = union(enum) {
     },
     int_literal: struct {
         num_var: TypeVar,
-        precision_var: TypeVar,
+        requirements: types.Num.Int.Requirements,
         literal: StringLiteral.Idx,
         value: IntLiteralValue,
         region: Region,
     },
     float_literal: struct {
         num_var: TypeVar,
-        precision_var: TypeVar,
+        requirements: types.Num.Int.Requirements,
         literal: StringLiteral.Idx,
         value: f64,
         region: Region,
@@ -1480,7 +1495,7 @@ pub const Pattern = union(enum) {
     },
     char_literal: struct {
         num_var: TypeVar,
-        precision_var: TypeVar,
+        requirements: types.Num.Int.Requirements,
         value: u32,
         region: Region,
     },
@@ -1807,39 +1822,4 @@ pub fn calcRegionInfo(self: *const CIR, region: Region) base.RegionInfo {
     };
 
     return info;
-}
-
-/// Get the integer precision from a type variable by resolving it through the type store.
-/// Returns null if the type variable doesn't resolve to an integer precision.
-pub fn getIntPrecision(env: *ModuleEnv, type_var: TypeVar) ?types.Num.Int.Precision {
-    var current_var = type_var;
-    while (true) {
-        const resolved = env.types_store.resolveVar(current_var);
-        switch (resolved.desc.content) {
-            .structure => |flat_type| {
-                switch (flat_type) {
-                    .num => |num| {
-                        switch (num) {
-                            .int_precision => |precision| return precision,
-                            .int_poly => |var_| {
-                                current_var = var_;
-                                continue;
-                            },
-                            .num_poly => |var_| {
-                                current_var = var_;
-                                continue;
-                            },
-                            else => return null,
-                        }
-                    },
-                    else => return null,
-                }
-            },
-            .alias => |alias| {
-                current_var = alias.backing_var;
-                continue;
-            },
-            else => return null,
-        }
-    }
 }
