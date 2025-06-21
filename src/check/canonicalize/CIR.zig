@@ -557,7 +557,7 @@ pub const Expr = union(enum) {
     num: struct {
         num_var: TypeVar,
         literal: StringLiteral.Idx,
-        value: IntValue,
+        value: i128,
         bound: types.Num.Int.Precision,
         region: Region,
     },
@@ -565,7 +565,11 @@ pub const Expr = union(enum) {
         int_var: TypeVar,
         precision_var: TypeVar,
         literal: StringLiteral.Idx,
-        value: IntValue,
+        // NOTE: The value field is always stored as i128. When the bound type is u128,
+        // the i128 bits should be reinterpreted as u128. For all other integer types
+        // (i8, u8, i16, u16, i32, u32, i64, u64, i128), the value is interpreted as
+        // a signed i128 and will be truncated/sign-extended as needed during codegen.
+        value: i128,
         bound: types.Num.Int.Precision,
         region: Region,
     },
@@ -739,8 +743,9 @@ pub const Expr = union(enum) {
 
                 // Add value info
                 var value_node = sexpr.Expr.init(gpa, "value");
-                // TODO: Format the actual integer value properly
-                value_node.appendString(gpa, "TODO");
+                var value_buf: [64]u8 = undefined;
+                const value_str = std.fmt.bufPrint(&value_buf, "{}", .{num_expr.value}) catch "fmt_error";
+                value_node.appendString(gpa, value_str);
                 num_node.appendNode(gpa, &value_node);
 
                 // Add bound info
@@ -776,7 +781,9 @@ pub const Expr = union(enum) {
 
                 // Add value info
                 var value_node = sexpr.Expr.init(gpa, "value");
-                value_node.appendString(gpa, "TODO");
+                var value_buf: [64]u8 = undefined;
+                const value_str = std.fmt.bufPrint(&value_buf, "{}", .{int_expr.value}) catch "fmt_error";
+                value_node.appendString(gpa, value_str);
                 int_node.appendNode(gpa, &value_node);
 
                 // Add bound info
@@ -1310,22 +1317,6 @@ pub const Annotation = struct {
     }
 };
 
-/// todo
-pub const IntValue = struct {
-    bytes: [16]u8,
-    kind: Kind,
-
-    /// todo
-    pub const Kind = enum { i128, u128 };
-
-    pub fn placeholder() IntValue {
-        return IntValue{
-            .bytes = [16]u8{ 0, 1, 2, 3, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
-            .kind = .i128,
-        };
-    }
-};
-
 /// todo - evaluate if we need this?
 pub const IfBranch = struct {
     cond: Expr.Idx,
@@ -1487,15 +1478,20 @@ pub const Pattern = union(enum) {
     num_literal: struct {
         num_var: TypeVar,
         literal: StringLiteral.Idx,
-        value: IntValue,
+        value: i128,
         bound: types.Num.Int.Precision,
         region: Region,
     },
+    /// Pattern for an integer literal with type annotation
+    ///
+    /// NOTE: The value field is always stored as i128. When the bound type is u128,
+    /// the i128 bits should be reinterpreted as u128. For all other integer types,
+    /// the value is interpreted as a signed i128.
     int_literal: struct {
         num_var: TypeVar,
         precision_var: TypeVar,
         literal: StringLiteral.Idx,
-        value: IntValue,
+        value: i128,
         bound: types.Num.Int.Precision,
         region: Region,
     },
@@ -1623,7 +1619,9 @@ pub const Pattern = union(enum) {
                 node.appendNode(gpa, &pattern_idx_node);
 
                 node.appendString(gpa, "literal"); // TODO: use l.literal
-                node.appendString(gpa, "value=<int_value>");
+                var value_buf: [64]u8 = undefined;
+                const value_str = std.fmt.bufPrint(&value_buf, "value={}", .{p.value}) catch "value=<fmt_error>";
+                node.appendString(gpa, value_str);
                 node.appendString(gpa, @tagName(p.bound));
                 return node;
             },
@@ -1635,7 +1633,9 @@ pub const Pattern = union(enum) {
                 node.appendNode(gpa, &pattern_idx_node);
 
                 node.appendString(gpa, "literal"); // TODO: use l.literal
-                node.appendString(gpa, "value=<int_value>");
+                var value_buf: [64]u8 = undefined;
+                const value_str = std.fmt.bufPrint(&value_buf, "value={}", .{p.value}) catch "value=<fmt_error>";
+                node.appendString(gpa, value_str);
                 node.appendString(gpa, @tagName(p.bound));
                 return node;
             },

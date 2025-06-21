@@ -493,7 +493,12 @@ pub fn canonicalize_expr(
             const final_expr_idx = self.can_ir.store.predictNodeIndex(3);
 
             // then insert the type vars, setting the parent to be the final slot
-            const precision_type_var = self.can_ir.pushFreshTypeVar(final_expr_idx, region);
+            const bound = Num.Int.Precision.fromValue(value);
+            const precision_type_var = self.can_ir.pushTypeVar(
+                Content{ .structure = .{ .num = .{ .int_precision = bound } } },
+                final_expr_idx,
+                region,
+            );
             const int_type_var = self.can_ir.pushTypeVar(
                 Content{ .structure = .{ .num = .{ .int_poly = precision_type_var } } },
                 final_expr_idx,
@@ -506,11 +511,8 @@ pub fn canonicalize_expr(
                     .int_var = int_type_var,
                     .precision_var = precision_type_var,
                     .literal = literal,
-                    .value = CIR.IntValue{
-                        .bytes = @bitCast(value),
-                        .kind = .i128,
-                    },
-                    .bound = Num.Int.Precision.fromValue(value),
+                    .value = value,
+                    .bound = bound,
                     .region = region,
                 },
             });
@@ -1096,10 +1098,7 @@ fn canonicalize_pattern(
                 .num_literal = .{
                     .num_var = num_type_var,
                     .literal = literal,
-                    .value = CIR.IntValue{
-                        .bytes = @bitCast(value),
-                        .kind = .i128,
-                    },
+                    .value = value,
                     .bound = Num.Int.Precision.fromValue(value),
                     .region = region,
                 },
@@ -1278,6 +1277,10 @@ fn isVarReassignmentAcrossFunctionBoundary(self: *const Self, pattern_idx: CIR.P
         }
     }
     return false;
+}
+
+test {
+    _ = @import("canonicalize/test/int_test.zig");
 }
 
 /// Introduce a new identifier to the current scope, return an

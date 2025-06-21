@@ -165,23 +165,30 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             } };
         },
         .expr_int => {
-            // Retrieve the literal index from data_1
-            const literal: base.StringLiteral.Idx = @enumFromInt(node.data_1);
+            // Unpack the literal index from lower 16 bits of data_1
+            const literal: base.StringLiteral.Idx = @enumFromInt(node.data_1 & 0xFFFF);
 
             // Retrieve type variables from data_2 and data_3
             const int_var = @as(types.Var, @enumFromInt(node.data_2));
             const precision_var = @as(types.Var, @enumFromInt(node.data_3));
 
-            // TODO get value and bound from extra_data
+            // Extract extra_data index from packed data_1
+            const extra_idx = node.data_1 >> 16;
+
+            // Read i128 from extra_data (stored as 4 u32s)
+            const value_as_u32s = store.extra_data.items[extra_idx..][0..4];
+            const value: i128 = @bitCast(value_as_u32s.*);
+
+            // Read the bound
+            const bound: types.Num.Int.Precision = @enumFromInt(store.extra_data.items[extra_idx + 4]);
 
             return .{
                 .int = .{
                     .int_var = int_var,
                     .precision_var = precision_var,
                     .literal = literal,
-                    .value = CIR.IntValue.placeholder(),
-                    // TODO shouldn't this be a flex_var?
-                    .bound = types.Num.Int.Precision.fromValue(0), // TODO: get from extra_data
+                    .value = value,
+                    .bound = bound,
                     .region = node.region,
                 },
             };
@@ -367,7 +374,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
                 .literal = @enumFromInt(node.data_1),
                 .num_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
                 .bound = types.Num.Int.Precision.fromValue(0), // TODO  extra_data
-                .value = CIR.IntValue.placeholder(),
+                .value = 0, // TODO need to store and retrieve from extra_data
             },
         },
         .pattern_int_literal => return CIR.Pattern{
@@ -377,7 +384,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
                 .precision_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
                 .num_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
                 .bound = types.Num.Int.Precision.fromValue(0), // TODO  extra_data
-                .value = CIR.IntValue.placeholder(), // TODO need to store and retrieve from extra_data
+                .value = 0, // TODO need to store and retrieve from extra_data
             },
         },
         .pattern_float_literal => return CIR.Pattern{
@@ -555,7 +562,23 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             node.data_2 = @intFromEnum(e.int_var);
             node.data_3 = @intFromEnum(e.precision_var);
 
-            // TODO for storing the value and bound, use extra_data
+            // Store i128 value in extra_data
+            const extra_data_start = store.extra_data.items.len;
+
+            // Store the i128 as u32s (16 bytes = 4 u32s)
+            const value_as_u32s: [4]u32 = @bitCast(e.value);
+            for (value_as_u32s) |word| {
+                store.extra_data.append(store.gpa, word) catch |err| exitOnOom(err);
+            }
+
+            // Store the bound (1 byte padded to u32)
+            store.extra_data.append(store.gpa, @intFromEnum(e.bound)) catch |err| exitOnOom(err);
+
+            // Store the extra_data index in the node (reuse data_1 which has literal)
+            // We'll pack it: high 16 bits = extra_data index, low 16 bits = literal index
+            const literal_idx: u16 = @intCast(@intFromEnum(e.literal));
+            const extra_idx: u16 = @intCast(extra_data_start);
+            node.data_1 = (@as(u32, extra_idx) << 16) | literal_idx;
         },
         .list => |e| {
             node.region = e.region;

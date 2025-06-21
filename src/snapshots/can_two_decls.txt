@@ -48,8 +48,8 @@ NO CHANGE
 				(int_var "#2")
 				(precision_var "#1")
 				(literal "5")
-				(value "TODO")
-				(bound "u8"))))
+				(value "5")
+				(bound "i8"))))
 	(d_let
 		(def_pattern
 			(p_assign (4:1-4:2)
@@ -63,6 +63,6 @@ NO CHANGE
 					(int_var "#7")
 					(precision_var "#6")
 					(literal "1")
-					(value "TODO")
-					(bound "u8"))))))
+					(value "1")
+					(bound "i8"))))))
 ~~~END
