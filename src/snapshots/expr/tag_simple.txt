@@ -17,5 +17,5 @@ NO CHANGE
 	(name "Ok")
 	(args "TODO"))
 ~~~TYPES
-(expr 13 (type "[Ok, * *]"))
+(expr 73 (type "[Ok, * *]"))
 ~~~END

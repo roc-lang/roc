@@ -98,6 +98,29 @@ pub fn init(self: *CIR, parse_ir: *AST) Self {
     result.addBuiltin(self, "Set", BUILTIN_SET);
     result.addBuiltin(self, "Str", BUILTIN_STR);
 
+    // Add built-in types to the type scope
+    // TODO: These should ultimately come from the platform/builtin files rather than being hardcoded
+    result.addBuiltinType(self, "Bool");
+    result.addBuiltinType(self, "Str");
+    result.addBuiltinType(self, "U8");
+    result.addBuiltinType(self, "U16");
+    result.addBuiltinType(self, "U32");
+    result.addBuiltinType(self, "U64");
+    result.addBuiltinType(self, "U128");
+    result.addBuiltinType(self, "I8");
+    result.addBuiltinType(self, "I16");
+    result.addBuiltinType(self, "I32");
+    result.addBuiltinType(self, "I64");
+    result.addBuiltinType(self, "I128");
+    result.addBuiltinType(self, "F32");
+    result.addBuiltinType(self, "F64");
+    result.addBuiltinType(self, "Dec");
+    result.addBuiltinType(self, "List");
+    result.addBuiltinType(self, "Dict");
+    result.addBuiltinType(self, "Set");
+    result.addBuiltinType(self, "Result");
+    result.addBuiltinType(self, "Box");
+
     return result;
 }
 
@@ -112,6 +135,40 @@ fn addBuiltin(self: *Self, ir: *CIR, ident_text: []const u8, idx: CIR.Pattern.Id
     // TODO: Set correct type for builtins? But these types should ultimately
     // come from the builtins roc files, so maybe the resolve stage will handle?
     _ = ir.setTypeVarAtPat(pattern_idx_add, Content{ .flex_var = null });
+}
+
+fn addBuiltinType(self: *Self, ir: *CIR, type_name: []const u8) void {
+    const gpa = ir.env.gpa;
+    const type_ident = ir.env.idents.insert(gpa, base.Ident.for_text(type_name), Region.zero());
+
+    // Create a type header for the built-in type
+    const header_idx = ir.store.addTypeHeader(.{
+        .name = type_ident,
+        .args = .{ .span = .{ .start = 0, .len = 0 } }, // No type parameters for built-ins
+        .region = Region.zero(),
+    });
+
+    // Create a type annotation that refers to itself (built-in types are primitive)
+    const anno_idx = ir.store.addTypeAnno(.{ .ty = .{
+        .symbol = type_ident,
+        .region = Region.zero(),
+    } });
+
+    // Create the type declaration statement
+    const type_decl_stmt = CIR.Statement{
+        .type_decl = .{
+            .header = header_idx,
+            .anno = anno_idx,
+            .where = null,
+            .region = Region.zero(),
+        },
+    };
+
+    const type_decl_idx = ir.store.addStatement(type_decl_stmt);
+
+    // Add to scope without any error checking (built-ins are always valid)
+    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+    current_scope.put(gpa, .type_decl, type_ident, type_decl_idx);
 }
 
 const Self = @This();
@@ -141,8 +198,9 @@ pub fn canonicalize_file(
 
     // canonicalize_header_packages();
 
-    // Track the start of scratch defs
+    // Track the start of scratch defs and statements
     const scratch_defs_start = self.can_ir.store.scratchDefTop();
+    const scratch_statements_start = self.can_ir.store.scratch_statements.top();
 
     for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
         const stmt = self.parse_ir.store.getStatement(stmt_id);
@@ -200,12 +258,28 @@ pub fn canonicalize_file(
                     .stmt = string_idx,
                 } });
             },
-            .type_decl => |_| {
-                const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "top-level type_decl");
-                self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
-                    .feature = feature,
-                    .region = Region.zero(),
-                } });
+            .type_decl => |type_decl| {
+                // Canonicalize the type declaration
+                const header_idx = self.canonicalize_type_header(type_decl.header);
+                const anno_idx = self.canonicalize_type_anno(type_decl.anno);
+
+                // Create the CIR type declaration statement
+                const region = self.tokenizedRegionToRegion(type_decl.region);
+                const cir_type_decl = CIR.Statement{
+                    .type_decl = .{
+                        .header = header_idx,
+                        .anno = anno_idx,
+                        .where = null, // TODO: implement where clauses
+                        .region = region,
+                    },
+                };
+
+                const type_decl_idx = self.can_ir.store.addStatement(cir_type_decl);
+                self.can_ir.store.addScratchStatement(type_decl_idx);
+
+                // Introduce the type name into scope
+                const header = self.can_ir.store.getTypeHeader(header_idx);
+                self.scopeIntroduceTypeDecl(header.name, type_decl_idx, region);
             },
             .type_anno => |_| {
                 const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "top-level type_anno");
@@ -237,8 +311,9 @@ pub fn canonicalize_file(
         },
     }
 
-    // Create the span of all top-level defs
+    // Create the span of all top-level defs and statements
     self.can_ir.all_defs = self.can_ir.store.defSpanFrom(scratch_defs_start);
+    self.can_ir.all_statements = self.can_ir.store.statementSpanFrom(scratch_statements_start);
 }
 
 fn canonicalize_header_exposes(
@@ -1451,6 +1526,178 @@ fn scopeIntroduceVar(
 }
 
 /// Canonicalize a statement within a block
+fn canonicalize_type_anno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.Idx {
+    const ast_anno = self.parse_ir.store.getTypeAnno(anno_idx);
+    switch (ast_anno) {
+        .apply => |apply| {
+            const region = self.tokenizedRegionToRegion(apply.region);
+            // Get the base type name from the first argument
+            const args_slice = self.parse_ir.store.typeAnnoSlice(apply.args);
+            if (args_slice.len == 0) {
+                // Malformed apply with no arguments
+                return self.can_ir.pushMalformed(CIR.TypeAnno.Idx, CIR.Diagnostic{ .malformed_type_annotation = .{
+                    .region = region,
+                } });
+            }
+
+            // TODO: Implement type application canonicalization
+            // Need to handle: List(Str), Dict(String, Int), Result(ok, err)
+            // This should resolve the base type and canonicalize all argument types
+            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "type application");
+            return self.can_ir.pushMalformed(CIR.TypeAnno.Idx, CIR.Diagnostic{ .not_implemented = .{
+                .feature = feature,
+                .region = region,
+            } });
+        },
+        .ty_var => |ty_var| {
+            const region = self.tokenizedRegionToRegion(ty_var.region);
+            const name_ident = self.parse_ir.tokens.resolveIdentifier(ty_var.tok) orelse {
+                return self.can_ir.pushMalformed(CIR.TypeAnno.Idx, CIR.Diagnostic{ .malformed_type_annotation = .{
+                    .region = region,
+                } });
+            };
+
+            return self.can_ir.store.addTypeAnno(.{ .ty_var = .{
+                .name = name_ident,
+                .region = region,
+            } });
+        },
+        .ty => |ty| {
+            const region = self.tokenizedRegionToRegion(ty.region);
+
+            // Check if this type is declared in scope
+            if (self.scopeLookupTypeDecl(ty.ident)) |_| {
+                // Type found in scope - good!
+                // TODO: We could store a reference to the type declaration for better error messages
+            } else {
+                // Type not found in scope - issue diagnostic
+                self.can_ir.pushDiagnostic(CIR.Diagnostic{ .undeclared_type = .{
+                    .name = ty.ident,
+                    .region = region,
+                } });
+            }
+
+            return self.can_ir.store.addTypeAnno(.{ .ty = .{
+                .symbol = ty.ident,
+                .region = region,
+            } });
+        },
+        .mod_ty => |mod_ty| {
+            const region = self.tokenizedRegionToRegion(mod_ty.region);
+            return self.can_ir.store.addTypeAnno(.{ .mod_ty = .{
+                .mod_symbol = mod_ty.mod_ident,
+                .ty_symbol = mod_ty.ty_ident,
+                .region = region,
+            } });
+        },
+        .underscore => |underscore| {
+            const region = self.tokenizedRegionToRegion(underscore.region);
+            return self.can_ir.store.addTypeAnno(.{ .underscore = .{
+                .region = region,
+            } });
+        },
+        .tuple => |tuple| {
+            const region = self.tokenizedRegionToRegion(tuple.region);
+            // Canonicalize all tuple elements
+            const scratch_top = self.can_ir.store.scratchTypeAnnoTop();
+            defer self.can_ir.store.clearScratchTypeAnnosFrom(scratch_top);
+
+            for (self.parse_ir.store.typeAnnoSlice(tuple.annos)) |elem_idx| {
+                const canonicalized = self.canonicalize_type_anno(elem_idx);
+                self.can_ir.store.addScratchTypeAnno(canonicalized);
+            }
+
+            const annos = self.can_ir.store.typeAnnoSpanFrom(scratch_top);
+            return self.can_ir.store.addTypeAnno(.{ .tuple = .{
+                .annos = annos,
+                .region = region,
+            } });
+        },
+        .record => |record| {
+            const region = self.tokenizedRegionToRegion(record.region);
+
+            // TODO: Implement record type annotation canonicalization
+            // Need to handle: { field1: Type1, field2: Type2, ...rest }
+            // This should canonicalize each field type and create a proper record type annotation
+            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "record type annotation");
+            return self.can_ir.pushMalformed(CIR.TypeAnno.Idx, CIR.Diagnostic{ .not_implemented = .{
+                .feature = feature,
+                .region = region,
+            } });
+        },
+        .tag_union => |tag_union| {
+            const region = self.tokenizedRegionToRegion(tag_union.region);
+
+            // TODO: Implement tag union type annotation canonicalization
+            // Need to handle: [Tag1(payload), Tag2, Tag3(multiple, payloads)]
+            // This should canonicalize each tag and its payload types
+            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "tag union type annotation");
+            return self.can_ir.pushMalformed(CIR.TypeAnno.Idx, CIR.Diagnostic{ .not_implemented = .{
+                .feature = feature,
+                .region = region,
+            } });
+        },
+        .@"fn" => |fn_anno| {
+            const region = self.tokenizedRegionToRegion(fn_anno.region);
+
+            // TODO: Implement function type annotation canonicalization
+            // Need to handle: arg1, arg2 -> return_type and arg1, arg2 => return_type (effectful)
+            // This should canonicalize argument types and return type
+            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "function type annotation");
+            return self.can_ir.pushMalformed(CIR.TypeAnno.Idx, CIR.Diagnostic{ .not_implemented = .{
+                .feature = feature,
+                .region = region,
+            } });
+        },
+        .parens => |parens| {
+            const region = self.tokenizedRegionToRegion(parens.region);
+            const inner_anno = self.canonicalize_type_anno(parens.anno);
+            return self.can_ir.store.addTypeAnno(.{ .parens = .{
+                .anno = inner_anno,
+                .region = region,
+            } });
+        },
+        .malformed => |malformed| {
+            const region = self.tokenizedRegionToRegion(malformed.region);
+            return self.can_ir.pushMalformed(CIR.TypeAnno.Idx, CIR.Diagnostic{ .malformed_type_annotation = .{
+                .region = region,
+            } });
+        },
+    }
+}
+
+fn canonicalize_type_header(self: *Self, header_idx: AST.TypeHeader.Idx) CIR.TypeHeader.Idx {
+    const ast_header = self.parse_ir.store.getTypeHeader(header_idx);
+    const region = self.tokenizedRegionToRegion(ast_header.region);
+
+    // Get the type name identifier
+    const name_ident = self.parse_ir.tokens.resolveIdentifier(ast_header.name) orelse {
+        // If we can't resolve the identifier, create a malformed header with invalid identifier
+        return self.can_ir.store.addTypeHeader(.{
+            .name = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 }, // Invalid identifier
+            .args = .{ .span = .{ .start = 0, .len = 0 } },
+            .region = region,
+        });
+    };
+
+    // Canonicalize type arguments
+    const scratch_top = self.can_ir.store.scratchTypeAnnoTop();
+    defer self.can_ir.store.clearScratchTypeAnnosFrom(scratch_top);
+
+    for (self.parse_ir.store.typeAnnoSlice(ast_header.args)) |arg_idx| {
+        const canonicalized = self.canonicalize_type_anno(arg_idx);
+        self.can_ir.store.addScratchTypeAnno(canonicalized);
+    }
+
+    const args = self.can_ir.store.typeAnnoSpanFrom(scratch_top);
+
+    return self.can_ir.store.addTypeHeader(.{
+        .name = name_ident,
+        .args = args,
+        .region = region,
+    });
+}
+
 fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) ?CIR.Expr.Idx {
     const stmt = self.parse_ir.store.getStatement(stmt_idx);
 
@@ -1580,6 +1827,14 @@ fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) ?CIR.Expr.Id
             return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
                 .feature = feature,
                 .region = region,
+            } });
+        },
+        .type_decl => |s| {
+            // TODO type declarations in statement context
+            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "type_decl in statement context");
+            return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
+                .feature = feature,
+                .region = self.tokenizedRegionToRegion(s.region),
             } });
         },
         else => {
@@ -1746,6 +2001,141 @@ fn scopeAllIdents(self: *const Self, gpa: std.mem.Allocator, comptime item_kind:
     }
 
     return result.toOwnedSlice() catch |err| collections.utils.exitOnOom(err);
+}
+
+/// Introduce a type declaration into the current scope
+fn scopeIntroduceTypeDecl(
+    self: *Self,
+    name_ident: Ident.Idx,
+    type_decl_stmt: CIR.Statement.Idx,
+    region: Region,
+) void {
+    const gpa = self.can_ir.env.gpa;
+    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+
+    // Check for shadowing in parent scopes
+    var shadowed_in_parent: ?CIR.Statement.Idx = null;
+    if (self.scopes.items.len > 1) {
+        var i = self.scopes.items.len - 1;
+        while (i > 0) {
+            i -= 1;
+            const scope = &self.scopes.items[i];
+            switch (scope.lookupTypeDecl(&self.can_ir.env.idents, name_ident)) {
+                .found => |type_decl_idx| {
+                    shadowed_in_parent = type_decl_idx;
+                    break;
+                },
+                .not_found => continue,
+            }
+        }
+    }
+
+    const result = current_scope.introduceTypeDecl(gpa, &self.can_ir.env.idents, name_ident, type_decl_stmt, null);
+
+    switch (result) {
+        .success => {
+            // Check if we're shadowing a type in a parent scope
+            if (shadowed_in_parent) |shadowed_stmt| {
+                const shadowed_statement = self.can_ir.store.getStatement(shadowed_stmt);
+                const original_region = shadowed_statement.toRegion();
+                self.can_ir.pushDiagnostic(CIR.Diagnostic{
+                    .shadowing_warning = .{
+                        .ident = name_ident,
+                        .region = region,
+                        .original_region = original_region,
+                    },
+                });
+            }
+        },
+        .shadowing_warning => |shadowed_stmt| {
+            // This shouldn't happen since we're not passing a parent lookup function
+            // but handle it just in case the Scope implementation changes
+            const shadowed_statement = self.can_ir.store.getStatement(shadowed_stmt);
+            const original_region = shadowed_statement.toRegion();
+            self.can_ir.pushDiagnostic(CIR.Diagnostic{
+                .shadowing_warning = .{
+                    .ident = name_ident,
+                    .region = region,
+                    .original_region = original_region,
+                },
+            });
+        },
+        .redeclared_error => |original_stmt| {
+            // Extract region information from the original statement
+            const original_statement = self.can_ir.store.getStatement(original_stmt);
+            const original_region = original_statement.toRegion();
+            self.can_ir.pushDiagnostic(CIR.Diagnostic{
+                .type_redeclared = .{
+                    .original_region = original_region,
+                    .redeclared_region = region,
+                    .name = name_ident,
+                },
+            });
+        },
+        .type_alias_redeclared => |original_stmt| {
+            const original_statement = self.can_ir.store.getStatement(original_stmt);
+            const original_region = original_statement.toRegion();
+            self.can_ir.pushDiagnostic(CIR.Diagnostic{
+                .type_alias_redeclared = .{
+                    .name = name_ident,
+                    .original_region = original_region,
+                    .redeclared_region = region,
+                },
+            });
+        },
+        .custom_type_redeclared => |original_stmt| {
+            const original_statement = self.can_ir.store.getStatement(original_stmt);
+            const original_region = original_statement.toRegion();
+            self.can_ir.pushDiagnostic(CIR.Diagnostic{
+                .custom_type_redeclared = .{
+                    .name = name_ident,
+                    .original_region = original_region,
+                    .redeclared_region = region,
+                },
+            });
+        },
+        .cross_scope_shadowing => |shadowed_stmt| {
+            const shadowed_statement = self.can_ir.store.getStatement(shadowed_stmt);
+            const original_region = shadowed_statement.toRegion();
+            self.can_ir.pushDiagnostic(CIR.Diagnostic{
+                .type_shadowed_warning = .{
+                    .name = name_ident,
+                    .region = region,
+                    .original_region = original_region,
+                    .cross_scope = true,
+                },
+            });
+        },
+        .parameter_conflict => |conflict| {
+            const original_statement = self.can_ir.store.getStatement(conflict.original_stmt);
+            const original_region = original_statement.toRegion();
+            self.can_ir.pushDiagnostic(CIR.Diagnostic{
+                .type_parameter_conflict = .{
+                    .name = name_ident,
+                    .parameter_name = conflict.conflicting_parameter,
+                    .region = region,
+                    .original_region = original_region,
+                },
+            });
+        },
+    }
+}
+
+/// Lookup a type declaration in the scope hierarchy
+fn scopeLookupTypeDecl(self: *const Self, name_ident: Ident.Idx) ?CIR.Statement.Idx {
+    // Search from innermost to outermost scope
+    var i = self.scopes.items.len;
+    while (i > 0) {
+        i -= 1;
+        const scope = &self.scopes.items[i];
+
+        switch (scope.lookupTypeDecl(&self.can_ir.env.idents, name_ident)) {
+            .found => |type_decl_idx| return type_decl_idx,
+            .not_found => continue,
+        }
+    }
+
+    return null;
 }
 
 /// Context helper for Scope tests

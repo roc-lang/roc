@@ -1,0 +1,480 @@
+~~~META
+description=Advanced type declaration scenarios including aliases, custom types, and complex shadowing
+type=file
+~~~SOURCE
+module [MyList, Config, Status, User, processUser, Result]
+
+# Basic type alias
+MyList(a) : List(a)
+
+# Custom type with multiple parameters
+Config(key, value) : {
+    settings : Dict(key, value),
+    name : Str,
+}
+
+# Tag union type
+Status : [Active, Inactive, Pending(Str)]
+
+# Record type with nested types
+User : {
+    id : U64,
+    name : Str,
+    status : Status,
+    preferences : Config(Str, Str),
+}
+
+# Function that creates nested scope with type shadowing
+processUser = |user| {
+    # This should shadow the outer Status type
+    Status : [Working, Done, Failed(Str)]
+
+    # Nested function with its own type scope
+    checkStatus = |currentStatus|
+        # Another level of shadowing
+        Status : [Good, Bad]
+
+        # Using the innermost Status type
+        when currentStatus is
+            Status.Good -> "all good"
+            Status.Bad -> "needs attention"
+
+    # Using the middle-level Status type
+    currentStatus = Status.Working
+    checkStatus(Status.Good)
+}
+
+# Type that uses an undeclared type parameter
+Result(success, error) : [Ok(success), Err(error)]
+
+# Type alias that references another type alias
+UserList : MyList(User)
+
+# Type declaration with conflicting parameter names
+ConflictingType(a, a) : [First(a), Second(a)]
+
+# Type that references a module-qualified type
+ExternalType : SomeModule.ExternalThing
+
+# Type alias redeclaration (should error)
+MyList(b) : Dict(Str, b)
+~~~PROBLEMS
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expected_expr_apply_close_round
+PARSER: expr_unexpected_token
+NOT IMPLEMENTED
+This feature is not yet implemented: type application
+NOT IMPLEMENTED
+This feature is not yet implemented: record type annotation
+NOT IMPLEMENTED
+This feature is not yet implemented: tag union type annotation
+NOT IMPLEMENTED
+This feature is not yet implemented: record type annotation
+UNDEFINED VARIABLE
+Nothing is named `when` in this scope.
+Is there an import or exposing missing up-top?
+UNDEFINED VARIABLE
+Nothing is named `currentStatus` in this scope.
+Is there an import or exposing missing up-top?
+UNDEFINED VARIABLE
+Nothing is named `is` in this scope.
+Is there an import or exposing missing up-top?
+NOT IMPLEMENTED
+This feature is not yet implemented: tag union type annotation
+TYPE REDECLARED
+The type `Result` is being redeclared.
+
+The redeclaration is here:
+type_advanced_scenarios.txt:44-1:47: Result(success, error) : [Ok(success), Err(error)]
+
+# Type alias that references another type alias
+UserList : MyList(User)
+
+But `Result` was already declared here:
+type_advanced_scenarios.txt:1-1:1: module [MyList, Config, Status, User, processUser, Result]
+
+NOT IMPLEMENTED
+This feature is not yet implemented: type application
+NOT IMPLEMENTED
+This feature is not yet implemented: tag union type annotation
+NOT IMPLEMENTED
+This feature is not yet implemented: type application
+TYPE REDECLARED
+The type `MyList` is being redeclared.
+
+The redeclaration is here:
+type_advanced_scenarios.txt:56-1:56: MyList(b) : Dict(Str, b)
+
+But `MyList` was already declared here:
+type_advanced_scenarios.txt:4-1:7: MyList(a) : List(a)
+
+# Custom type with multiple parameters
+Config(key, value) : {
+
+~~~TOKENS
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:15),Comma(1:15-1:16),UpperIdent(1:17-1:23),Comma(1:23-1:24),UpperIdent(1:25-1:31),Comma(1:31-1:32),UpperIdent(1:33-1:37),Comma(1:37-1:38),LowerIdent(1:39-1:50),Comma(1:50-1:51),UpperIdent(1:52-1:58),CloseSquare(1:58-1:59),Newline(1:1-1:1),
+Newline(1:1-1:1),
+Newline(3:2-3:19),
+UpperIdent(4:1-4:7),NoSpaceOpenRound(4:7-4:8),LowerIdent(4:8-4:9),CloseRound(4:9-4:10),OpColon(4:11-4:12),UpperIdent(4:13-4:17),NoSpaceOpenRound(4:17-4:18),LowerIdent(4:18-4:19),CloseRound(4:19-4:20),Newline(1:1-1:1),
+Newline(1:1-1:1),
+Newline(6:2-6:39),
+UpperIdent(7:1-7:7),NoSpaceOpenRound(7:7-7:8),LowerIdent(7:8-7:11),Comma(7:11-7:12),LowerIdent(7:13-7:18),CloseRound(7:18-7:19),OpColon(7:20-7:21),OpenCurly(7:22-7:23),Newline(1:1-1:1),
+LowerIdent(8:5-8:13),OpColon(8:14-8:15),UpperIdent(8:16-8:20),NoSpaceOpenRound(8:20-8:21),LowerIdent(8:21-8:24),Comma(8:24-8:25),LowerIdent(8:26-8:31),CloseRound(8:31-8:32),Comma(8:32-8:33),Newline(1:1-1:1),
+LowerIdent(9:5-9:9),OpColon(9:10-9:11),UpperIdent(9:12-9:15),Comma(9:15-9:16),Newline(1:1-1:1),
+CloseCurly(10:1-10:2),Newline(1:1-1:1),
+Newline(1:1-1:1),
+Newline(12:2-12:17),
+UpperIdent(13:1-13:7),OpColon(13:8-13:9),OpenSquare(13:10-13:11),UpperIdent(13:11-13:17),Comma(13:17-13:18),UpperIdent(13:19-13:27),Comma(13:27-13:28),UpperIdent(13:29-13:36),NoSpaceOpenRound(13:36-13:37),UpperIdent(13:37-13:40),CloseRound(13:40-13:41),CloseSquare(13:41-13:42),Newline(1:1-1:1),
+Newline(1:1-1:1),
+Newline(15:2-15:32),
+UpperIdent(16:1-16:5),OpColon(16:6-16:7),OpenCurly(16:8-16:9),Newline(1:1-1:1),
+LowerIdent(17:5-17:7),OpColon(17:8-17:9),UpperIdent(17:10-17:13),Comma(17:13-17:14),Newline(1:1-1:1),
+LowerIdent(18:5-18:9),OpColon(18:10-18:11),UpperIdent(18:12-18:15),Comma(18:15-18:16),Newline(1:1-1:1),
+LowerIdent(19:5-19:11),OpColon(19:12-19:13),UpperIdent(19:14-19:20),Comma(19:20-19:21),Newline(1:1-1:1),
+LowerIdent(20:5-20:16),OpColon(20:17-20:18),UpperIdent(20:19-20:25),NoSpaceOpenRound(20:25-20:26),UpperIdent(20:26-20:29),Comma(20:29-20:30),UpperIdent(20:31-20:34),CloseRound(20:34-20:35),Comma(20:35-20:36),Newline(1:1-1:1),
+CloseCurly(21:1-21:2),Newline(1:1-1:1),
+Newline(1:1-1:1),
+Newline(23:2-23:57),
+LowerIdent(24:1-24:12),OpAssign(24:13-24:14),OpBar(24:15-24:16),LowerIdent(24:16-24:20),OpBar(24:20-24:21),OpenCurly(24:22-24:23),Newline(1:1-1:1),
+Newline(25:6-25:47),
+UpperIdent(26:5-26:11),OpColon(26:12-26:13),OpenSquare(26:14-26:15),UpperIdent(26:15-26:22),Comma(26:22-26:23),UpperIdent(26:24-26:28),Comma(26:28-26:29),UpperIdent(26:30-26:36),NoSpaceOpenRound(26:36-26:37),UpperIdent(26:37-26:40),CloseRound(26:40-26:41),CloseSquare(26:41-26:42),Newline(1:1-1:1),
+Newline(1:1-1:1),
+Newline(28:6-28:46),
+LowerIdent(29:5-29:16),OpAssign(29:17-29:18),OpBar(29:19-29:20),LowerIdent(29:20-29:33),OpBar(29:33-29:34),Newline(1:1-1:1),
+Newline(30:10-30:37),
+UpperIdent(31:9-31:15),OpColon(31:16-31:17),OpenSquare(31:18-31:19),UpperIdent(31:19-31:23),Comma(31:23-31:24),UpperIdent(31:25-31:28),CloseSquare(31:28-31:29),Newline(1:1-1:1),
+Newline(1:1-1:1),
+Newline(33:10-33:42),
+LowerIdent(34:9-34:13),LowerIdent(34:14-34:27),LowerIdent(34:28-34:30),Newline(1:1-1:1),
+UpperIdent(35:13-35:19),NoSpaceDotUpperIdent(35:19-35:24),OpArrow(35:25-35:27),StringStart(35:28-35:29),StringPart(35:29-35:37),StringEnd(35:37-35:38),Newline(1:1-1:1),
+UpperIdent(36:13-36:19),NoSpaceDotUpperIdent(36:19-36:23),OpArrow(36:24-36:26),StringStart(36:27-36:28),StringPart(36:28-36:43),StringEnd(36:43-36:44),Newline(1:1-1:1),
+Newline(1:1-1:1),
+Newline(38:6-38:41),
+LowerIdent(39:5-39:18),OpAssign(39:19-39:20),UpperIdent(39:21-39:27),NoSpaceDotUpperIdent(39:27-39:35),Newline(1:1-1:1),
+LowerIdent(40:5-40:16),NoSpaceOpenRound(40:16-40:17),UpperIdent(40:17-40:23),NoSpaceDotUpperIdent(40:23-40:28),CloseRound(40:28-40:29),Newline(1:1-1:1),
+CloseCurly(41:1-41:2),Newline(1:1-1:1),
+Newline(1:1-1:1),
+Newline(43:2-43:46),
+UpperIdent(44:1-44:7),NoSpaceOpenRound(44:7-44:8),LowerIdent(44:8-44:15),Comma(44:15-44:16),LowerIdent(44:17-44:22),CloseRound(44:22-44:23),OpColon(44:24-44:25),OpenSquare(44:26-44:27),UpperIdent(44:27-44:29),NoSpaceOpenRound(44:29-44:30),LowerIdent(44:30-44:37),CloseRound(44:37-44:38),Comma(44:38-44:39),UpperIdent(44:40-44:43),NoSpaceOpenRound(44:43-44:44),LowerIdent(44:44-44:49),CloseRound(44:49-44:50),CloseSquare(44:50-44:51),Newline(1:1-1:1),
+Newline(1:1-1:1),
+Newline(46:2-46:48),
+UpperIdent(47:1-47:9),OpColon(47:10-47:11),UpperIdent(47:12-47:18),NoSpaceOpenRound(47:18-47:19),UpperIdent(47:19-47:23),CloseRound(47:23-47:24),Newline(1:1-1:1),
+Newline(1:1-1:1),
+Newline(49:2-49:52),
+UpperIdent(50:1-50:16),NoSpaceOpenRound(50:16-50:17),LowerIdent(50:17-50:18),Comma(50:18-50:19),LowerIdent(50:20-50:21),CloseRound(50:21-50:22),OpColon(50:23-50:24),OpenSquare(50:25-50:26),UpperIdent(50:26-50:31),NoSpaceOpenRound(50:31-50:32),LowerIdent(50:32-50:33),CloseRound(50:33-50:34),Comma(50:34-50:35),UpperIdent(50:36-50:42),NoSpaceOpenRound(50:42-50:43),LowerIdent(50:43-50:44),CloseRound(50:44-50:45),CloseSquare(50:45-50:46),Newline(1:1-1:1),
+Newline(1:1-1:1),
+Newline(52:2-52:47),
+UpperIdent(53:1-53:13),OpColon(53:14-53:15),UpperIdent(53:16-53:26),NoSpaceDotUpperIdent(53:26-53:40),Newline(1:1-1:1),
+Newline(1:1-1:1),
+Newline(55:2-55:42),
+UpperIdent(56:1-56:7),NoSpaceOpenRound(56:7-56:8),LowerIdent(56:8-56:9),CloseRound(56:9-56:10),OpColon(56:11-56:12),UpperIdent(56:13-56:17),NoSpaceOpenRound(56:17-56:18),UpperIdent(56:18-56:21),Comma(56:21-56:22),LowerIdent(56:23-56:24),CloseRound(56:24-56:25),EndOfFile(56:25-56:25),
+~~~PARSE
+(file (1:1-56:25)
+	(module (1:1-1:59)
+		(exposes (1:8-1:59)
+			(exposed_item (upper_ident "MyList"))
+			(exposed_item (upper_ident "Config"))
+			(exposed_item (upper_ident "Status"))
+			(exposed_item (upper_ident "User"))
+			(exposed_item (lower_ident "processUser"))
+			(exposed_item (upper_ident "Result"))))
+	(statements
+		(type_decl (4:1-7:7)
+			(header (4:1-4:10)
+				"MyList"
+				(args (ty_var (4:8-4:9) "a")))
+			(apply (4:13-4:20)
+				(ty "List")
+				(ty_var (4:18-4:19) "a")))
+		(type_decl (7:1-13:7)
+			(header (7:1-7:19)
+				"Config"
+				(args
+					(ty_var (7:8-7:11) "key")
+					(ty_var (7:13-7:18) "value")))
+			(record (7:22-10:2)
+				(anno_record_field (8:5-8:33)
+					"settings"
+					(apply (8:16-8:32)
+						(ty "Dict")
+						(ty_var (8:21-8:24) "key")
+						(ty_var (8:26-8:31) "value")))
+				(anno_record_field (9:5-9:16) "name" (ty "Str"))))
+		(type_decl (13:1-16:5)
+			(header (13:1-13:7) "Status" (args))
+			(tag_union (13:10-13:42)
+				(tags
+					(ty "Active")
+					(ty "Inactive")
+					(apply (13:29-13:41)
+						(ty "Pending")
+						(ty "Str")))))
+		(type_decl (16:1-24:12)
+			(header (16:1-16:5) "User" (args))
+			(record (16:8-21:2)
+				(anno_record_field (17:5-17:14) "id" (ty "U64"))
+				(anno_record_field (18:5-18:16) "name" (ty "Str"))
+				(anno_record_field (19:5-19:21) "status" (ty "Status"))
+				(anno_record_field (20:5-20:36)
+					"preferences"
+					(apply (20:19-20:35)
+						(ty "Config")
+						(ty "Str")
+						(ty "Str")))))
+		(decl (24:1-41:2)
+			(ident (24:1-24:12) "processUser")
+			(lambda (24:15-41:2)
+				(args (ident (24:16-24:20) "user"))
+				(block (24:22-41:2)
+					(statements
+						(tag (26:5-26:11) "Status")
+						(malformed_expr (26:12-26:13) "expr_unexpected_token")
+						(list (26:14-26:42)
+							(tag (26:15-26:22) "Working")
+							(tag (26:24-26:28) "Done")
+							(apply (26:30-26:41)
+								(tag (26:30-26:36) "Failed")
+								(tag (26:37-26:40) "Str")))
+						(decl (29:5-31:15)
+							(ident (29:5-29:16) "checkStatus")
+							(lambda (29:19-31:15)
+								(args (ident (29:20-29:33) "currentStatus"))
+								(tag (31:9-31:15) "Status")))
+						(malformed_expr (31:16-31:17) "expr_unexpected_token")
+						(list (31:18-31:29)
+							(tag (31:19-31:23) "Good")
+							(tag (31:25-31:28) "Bad"))
+						(ident (34:9-34:13) "" "when")
+						(ident (34:14-34:27) "" "currentStatus")
+						(ident (34:28-34:30) "" "is")
+						(tag (35:13-35:19) "Status")
+						(malformed_expr (35:19-35:24) "expr_unexpected_token")
+						(malformed_expr (35:25-35:27) "expr_unexpected_token")
+						(string (35:28-35:38) (string_part (35:29-35:37) "all good"))
+						(tag (36:13-36:19) "Status")
+						(malformed_expr (36:19-36:23) "expr_unexpected_token")
+						(malformed_expr (36:24-36:26) "expr_unexpected_token")
+						(string (36:27-36:44) (string_part (36:28-36:43) "needs attention"))
+						(decl (39:5-39:27)
+							(ident (39:5-39:18) "currentStatus")
+							(tag (39:21-39:27) "Status"))
+						(malformed_expr (39:27-39:35) "expr_unexpected_token")
+						(malformed_expr (40:5-40:28) "expected_expr_apply_close_round")
+						(malformed_expr (40:28-40:29) "expr_unexpected_token")))))
+		(type_decl (44:1-47:9)
+			(header (44:1-44:23)
+				"Result"
+				(args
+					(ty_var (44:8-44:15) "success")
+					(ty_var (44:17-44:22) "error")))
+			(tag_union (44:26-44:51)
+				(tags
+					(apply (44:27-44:38)
+						(ty "Ok")
+						(ty_var (44:30-44:37) "success"))
+					(apply (44:40-44:50)
+						(ty "Err")
+						(ty_var (44:44-44:49) "error")))))
+		(type_decl (47:1-50:16)
+			(header (47:1-47:9) "UserList" (args))
+			(apply (47:12-47:24)
+				(ty "MyList")
+				(ty "User")))
+		(type_decl (50:1-53:13)
+			(header (50:1-50:22)
+				"ConflictingType"
+				(args
+					(ty_var (50:17-50:18) "a")
+					(ty_var (50:20-50:21) "a")))
+			(tag_union (50:25-50:46)
+				(tags
+					(apply (50:26-50:34)
+						(ty "First")
+						(ty_var (50:32-50:33) "a"))
+					(apply (50:36-50:45)
+						(ty "Second")
+						(ty_var (50:43-50:44) "a")))))
+		(type_decl (53:1-56:7)
+			(header (53:1-53:13) "ExternalType" (args))
+			(mod_ty "SomeModule" ".ExternalThing"))
+		(type_decl (56:1-56:25)
+			(header (56:1-56:10)
+				"MyList"
+				(args (ty_var (56:8-56:9) "b")))
+			(apply (56:13-56:25)
+				(ty "Dict")
+				(ty "Str")
+				(ty_var (56:23-56:24) "b")))))
+~~~FORMATTED
+module [MyList, Config, Status, User, processUser, Result]
+
+# Basic type alias
+MyList(a) : List(a)
+
+# Custom type with multiple parameters
+Config(key, value) : {
+	settings : Dict(key, value),
+	name : Str,
+}
+
+# Tag union type
+Status : [Active, Inactive, Pending(Str)]
+
+# Record type with nested types
+User : {
+	id : U64,
+	name : Str,
+	status : Status,
+	preferences : Config(Str, Str),
+}
+
+# Function that creates nested scope with type shadowing
+processUser = |user| {
+	# This should shadow the outer Status type
+	Status
+	
+	[Working, Done, Failed(Str)]
+
+	# Nested function with its own type scope
+	checkStatus = |currentStatus|
+	# Another level of shadowing
+		Status
+	
+	[Good, Bad]
+
+	# Using the innermost Status type
+	when
+	currentStatus
+	is
+	Status
+	
+	
+	"all good"
+	Status
+	
+	
+	"needs attention"
+
+	# Using the middle-level Status type
+	currentStatus = Status
+	
+	
+	
+}
+
+# Type that uses an undeclared type parameter
+Result(success, error) : [Ok(success), Err(error)]
+
+# Type alias that references another type alias
+UserList : MyList(User)
+
+# Type declaration with conflicting parameter names
+ConflictingType(a, a) : [First(a), Second(a)]
+
+# Type that references a module-qualified type
+ExternalType : SomeModule.ExternalThing
+
+# Type alias redeclaration (should error)
+MyList(b) : Dict(Str, b)
+~~~CANONICALIZE
+(can_ir
+	(d_let
+		(def_pattern
+			(p_assign (24:1-24:12)
+				(pid 91)
+				(ident "processUser")))
+		(def_expr
+			(e_lambda (24:15-41:2)
+				(args
+					(p_assign (24:16-24:20)
+						(pid 92)
+						(ident "user")))
+				(e_block (24:22-41:2)
+					(s_expr (26:5-26:13) "TODO")
+					(s_expr (26:14-29:16) "TODO")
+					(s_let (29:5-31:15)
+						(p_assign (29:5-29:16)
+							(pid 108)
+							(ident "checkStatus"))
+						(e_lambda (29:19-31:15)
+							(args
+								(p_assign (29:20-29:33)
+									(pid 109)
+									(ident "currentStatus")))
+							(e_tag (31:9-31:15)
+								(ext_var 0)
+								(name "Status")
+								(args "TODO"))))
+					(s_expr (31:18-34:13) "TODO")
+					(s_expr (34:9-34:27) "TODO")
+					(s_expr (34:14-34:30) "TODO")
+					(s_expr (34:28-35:19) "TODO")
+					(s_expr (35:13-35:24) "TODO")
+					(s_expr (1:1-1:1) "TODO")
+					(s_expr (36:13-36:23) "TODO")
+					(s_expr (1:1-1:1) "TODO")
+					(s_let (39:5-39:27)
+						(p_assign (39:5-39:18)
+							(pid 142)
+							(ident "currentStatus"))
+						(e_tag (39:21-39:27)
+							(ext_var 0)
+							(name "Status")
+							(args "TODO")))
+					(e_empty_record (24:22-41:2))))))
+	(s_type_decl (4:1-7:7)
+		(type_header (4:1-4:10)
+			"MyList"
+			(args (ty_var (4:8-4:9) "a")))
+		(malformed_type_anno (4:13-4:20)))
+	(s_type_decl (7:1-13:7)
+		(type_header (7:1-7:19)
+			"Config"
+			(args
+				(ty_var (7:8-7:11) "key")
+				(ty_var (7:13-7:18) "value")))
+		(malformed_type_anno (7:22-10:2)))
+	(s_type_decl (13:1-16:5)
+		(type_header (13:1-13:7) "Status")
+		(malformed_type_anno (13:10-13:42)))
+	(s_type_decl (16:1-24:12)
+		(type_header (16:1-16:5) "User")
+		(malformed_type_anno (16:8-21:2)))
+	(s_type_decl (44:1-47:9)
+		(type_header (44:1-44:23)
+			"Result"
+			(args
+				(ty_var (44:8-44:15) "success")
+				(ty_var (44:17-44:22) "error")))
+		(malformed_type_anno (44:26-44:51)))
+	(s_type_decl (47:1-50:16)
+		(type_header (47:1-47:9) "UserList")
+		(malformed_type_anno (47:12-47:24)))
+	(s_type_decl (50:1-53:13)
+		(type_header (50:1-50:22)
+			"ConflictingType"
+			(args
+				(ty_var (50:17-50:18) "a")
+				(ty_var (50:20-50:21) "a")))
+		(malformed_type_anno (50:25-50:46)))
+	(s_type_decl (53:1-56:7)
+		(type_header (53:1-53:13) "ExternalType")
+		(mod_ty (53:16-53:40) "ExternalThing" "SomeModule"))
+	(s_type_decl (56:1-56:25)
+		(type_header (56:1-56:10)
+			"MyList"
+			(args (ty_var (56:8-56:9) "b")))
+		(malformed_type_anno (56:13-56:25))))
+~~~TYPES
+(inferred_types
+	(defs
+		(def "processUser" 149 (type "*")))
+	(expressions
+		(expr (24:15-41:2) 148 (type "*"))))
+~~~END

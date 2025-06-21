@@ -61,48 +61,48 @@ NO CHANGE
 	(d_let
 		(def_pattern
 			(p_assign (4:1-4:9)
-				(pid 12)
+				(pid 72)
 				(ident "testFunc")))
 		(def_expr
 			(e_lambda (4:12-10:2)
 				(args
 					(p_assign (4:13-4:18)
-						(pid 13)
+						(pid 73)
 						(ident "input")))
 				(e_block (4:20-10:2)
 					(s_let (5:2-5:13)
 						(p_assign (5:2-5:5)
-							(pid 14)
+							(pid 74)
 							(ident "sum"))
-						(e_lookup (5:8-5:13) (pid 13)))
+						(e_lookup (5:8-5:13) (pid 73)))
 					(s_var (6:2-8:6)
-						(pid 22)
+						(pid 82)
 						(p_assign (6:2-8:6)
-							(pid 22)
+							(pid 82)
 							(ident "sum_"))
 						(e_binop (6:13-8:6)
 							"mul"
-							(e_lookup (6:13-6:18) (pid 13))
+							(e_lookup (6:13-6:18) (pid 73))
 							(e_int (6:21-6:22)
-								(int_var 19)
-								(precision_var 18)
+								(int_var 79)
+								(precision_var 78)
 								(literal "2")
 								(value "TODO")
 								(bound "u8"))))
 					(s_reassign (8:2-8:6)
-						(pid 22)
+						(pid 82)
 						(e_binop (8:9-9:5)
 							"add"
-							(e_lookup (8:9-8:13) (pid 22))
-							(e_lookup (8:16-8:19) (pid 14))))
+							(e_lookup (8:9-8:13) (pid 82))
+							(e_lookup (8:16-8:19) (pid 74))))
 					(e_binop (9:2-10:2)
 						"add"
-						(e_lookup (9:2-9:5) (pid 14))
-						(e_lookup (9:8-9:12) (pid 22))))))))
+						(e_lookup (9:2-9:5) (pid 74))
+						(e_lookup (9:8-9:12) (pid 82))))))))
 ~~~TYPES
 (inferred_types
 	(defs
-		(def "testFunc" 33 (type "*")))
+		(def "testFunc" 93 (type "*")))
 	(expressions
-		(expr (4:12-10:2) 32 (type "*"))))
+		(expr (4:12-10:2) 92 (type "*"))))
 ~~~END

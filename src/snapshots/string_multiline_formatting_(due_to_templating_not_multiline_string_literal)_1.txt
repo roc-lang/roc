@@ -41,5 +41,5 @@ LowerIdent(2:1-2:2),CloseRound(2:2-2:3),CloseStringInterpolation(2:3-2:4),String
 		(e_runtime_error (2:1-2:2) "ident_not_in_scope"))
 	(e_literal (2:4-2:44) " lines of text due to the template parts"))
 ~~~TYPES
-(expr 21 (type "Str"))
+(expr 81 (type "Str"))
 ~~~END

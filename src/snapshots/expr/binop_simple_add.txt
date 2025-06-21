@@ -18,17 +18,17 @@ NO CHANGE
 (e_binop (1:1-1:6)
 	"add"
 	(e_int (1:1-1:2)
-		(int_var 13)
-		(precision_var 12)
+		(int_var 73)
+		(precision_var 72)
 		(literal "1")
 		(value "TODO")
 		(bound "u8"))
 	(e_int (1:5-1:6)
-		(int_var 16)
-		(precision_var 15)
+		(int_var 76)
+		(precision_var 75)
 		(literal "2")
 		(value "TODO")
 		(bound "u8")))
 ~~~TYPES
-(expr 18 (type "*"))
+(expr 78 (type "*"))
 ~~~END

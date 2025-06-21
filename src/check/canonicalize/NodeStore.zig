@@ -130,13 +130,21 @@ pub fn getStatement(store: *NodeStore, statement: CIR.Statement.Idx) CIR.Stateme
                 .qualifier_tok = null, // TODO save these in extra_data and then insert them here
             },
         },
-        .statement_type_decl => return CIR.Statement{
-            .type_decl = .{
-                .region = node.region,
-                .anno = @enumFromInt(node.data_1),
-                .header = @enumFromInt(0), // TODO save these in extra_data and then insert them here
-                .where = null, // TODO save these in extra_data and then insert them here
-            },
+        .statement_type_decl => {
+            const extra_start = node.data_1;
+            const extra_data = store.extra_data.items[extra_start..];
+
+            const anno: CIR.TypeAnno.Idx = @enumFromInt(extra_data[0]);
+            const header: CIR.TypeHeader.Idx = @enumFromInt(extra_data[1]);
+
+            return CIR.Statement{
+                .type_decl = .{
+                    .region = node.region,
+                    .anno = anno,
+                    .header = header,
+                    .where = null, // Where clauses not implemented yet
+                },
+            };
         },
         .statement_type_anno => return CIR.Statement{
             .type_anno = .{
@@ -275,7 +283,19 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .region = node.region,
             } };
         },
-        .expr_record,
+        .expr_record => {
+            // data_1 = 0 indicates empty_record, otherwise it's a regular record with ext_var
+            if (node.data_1 == 0) {
+                return CIR.Expr{ .empty_record = .{
+                    .region = node.region,
+                } };
+            } else {
+                return CIR.Expr{ .record = .{
+                    .ext_var = @enumFromInt(node.data_1),
+                    .region = node.region,
+                } };
+            }
+        },
         .expr_field_access,
         .expr_static_dispatch,
         .expr_apply,
@@ -441,10 +461,82 @@ pub fn getPatternRecordField(store: *NodeStore, patternRecordField: CIR.PatternR
 }
 
 /// Retrieves a type annotation from the store.
-pub fn getTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.TypeAnno {
-    _ = store;
-    _ = typeAnno;
-    @panic("TODO: implement getTypeAnno");
+pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.TypeAnno {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(typeAnno));
+    const node = store.nodes.get(node_idx);
+
+    switch (node.tag) {
+        .ty_apply => return CIR.TypeAnno{ .apply = .{
+            .symbol = @bitCast(node.data_1),
+            .args = .{ .span = .{ .start = node.data_2, .len = node.data_3 } },
+            .region = node.region,
+        } },
+        .ty_var => return CIR.TypeAnno{ .ty_var = .{
+            .name = @bitCast(node.data_1),
+            .region = node.region,
+        } },
+        .ty_underscore => return CIR.TypeAnno{ .underscore = .{
+            .region = node.region,
+        } },
+        .ty_ident => return CIR.TypeAnno{ .ty = .{
+            .symbol = @bitCast(node.data_1),
+            .region = node.region,
+        } },
+        .ty_mod => return CIR.TypeAnno{ .mod_ty = .{
+            .mod_symbol = @bitCast(node.data_1),
+            .ty_symbol = @bitCast(node.data_2),
+            .region = node.region,
+        } },
+        .ty_tag_union => return CIR.TypeAnno{ .tag_union = .{
+            .tags = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
+            .open_anno = if (node.data_3 != 0) @enumFromInt(node.data_3) else null,
+            .region = node.region,
+        } },
+        .ty_tuple => return CIR.TypeAnno{ .tuple = .{
+            .annos = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
+            .region = node.region,
+        } },
+        .ty_record => return CIR.TypeAnno{ .record = .{
+            .fields = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
+            .region = node.region,
+        } },
+        .ty_fn => {
+            const ret_and_effectful = node.data_3;
+            const ret: CIR.TypeAnno.Idx = @enumFromInt(ret_and_effectful & 0x7FFFFFFF);
+            const effectful = (ret_and_effectful & (1 << 31)) != 0;
+            return CIR.TypeAnno{ .@"fn" = .{
+                .args = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
+                .ret = ret,
+                .effectful = effectful,
+                .region = node.region,
+            } };
+        },
+        .ty_parens => return CIR.TypeAnno{ .parens = .{
+            .anno = @enumFromInt(node.data_1),
+            .region = node.region,
+        } },
+        .malformed => return CIR.TypeAnno{ .malformed = .{
+            .diagnostic = @enumFromInt(node.data_1),
+            .region = node.region,
+        } },
+        else => {
+            std.debug.panic("Invalid node tag for TypeAnno: {}", .{node.tag});
+        },
+    }
+}
+
+/// Retrieves a type header from the store.
+pub fn getTypeHeader(store: *const NodeStore, typeHeader: CIR.TypeHeader.Idx) CIR.TypeHeader {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(typeHeader));
+    const node = store.nodes.get(node_idx);
+
+    std.debug.assert(node.tag == .type_header);
+
+    return CIR.TypeHeader{
+        .name = @bitCast(node.data_1),
+        .args = .{ .span = .{ .start = node.data_2, .len = node.data_3 } },
+        .region = node.region,
+    };
 }
 
 /// Retrieves an annotation record field from the store.
@@ -528,8 +620,18 @@ pub fn addStatement(store: *NodeStore, statement: CIR.Statement) CIR.Statement.I
         .type_decl => |s| {
             node.tag = .statement_type_decl;
             node.region = s.region;
-            node.data_1 = @intFromEnum(s.anno);
-            // TODO store header and where clause data in extra_data
+
+            // Store type_decl data in extra_data
+            const extra_start = @as(u32, @intCast(store.extra_data.items.len));
+
+            // Store anno idx
+            store.extra_data.append(store.gpa, @intFromEnum(s.anno)) catch |err| exitOnOom(err);
+            // Store header idx
+            store.extra_data.append(store.gpa, @intFromEnum(s.header)) catch |err| exitOnOom(err);
+            // Where clauses not implemented yet, so we don't store them
+
+            // Store the extra data start position in the node
+            node.data_1 = extra_start;
         },
         .type_anno => |s| {
             node.tag = .statement_type_anno;
@@ -647,11 +749,14 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
         },
         .record => |e| {
             node.region = e.region;
-            @panic("TODO addExpr record");
+            node.tag = .expr_record;
+            node.data_1 = @intFromEnum(e.ext_var);
         },
         .empty_record => |e| {
             node.region = e.region;
-            @panic("TODO addExpr empty_record");
+            node.tag = .expr_record;
+            // Use data_1 = 0 to distinguish empty_record from regular record
+            node.data_1 = 0;
         },
         .record_access => |e| {
             node.region = e.region;
@@ -816,16 +921,96 @@ pub fn addPatternRecordField(store: *NodeStore, patternRecordField: CIR.PatternR
 
 /// Adds a type annotation to the store.
 pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno) CIR.TypeAnno.Idx {
-    const node = Node{};
+    var node = Node{
+        .data_1 = 0,
+        .data_2 = 0,
+        .data_3 = 0,
+        .region = base.Region.zero(),
+        .tag = @enumFromInt(0),
+    };
 
     switch (typeAnno) {
-        else => {
-            std.debug.panic("Type Annotation of type {s} not yet implemented in Can\n", .{@tagName(typeAnno)});
+        .apply => |a| {
+            node.region = a.region;
+            node.data_1 = @bitCast(a.symbol);
+            node.data_2 = a.args.span.start;
+            node.data_3 = a.args.span.len;
+            node.tag = .ty_apply;
+        },
+        .ty_var => |tv| {
+            node.region = tv.region;
+            node.data_1 = @bitCast(tv.name);
+            node.tag = .ty_var;
+        },
+        .underscore => |u| {
+            node.region = u.region;
+            node.tag = .ty_underscore;
+        },
+        .ty => |t| {
+            node.region = t.region;
+            node.data_1 = @bitCast(t.symbol);
+            node.tag = .ty_ident;
+        },
+        .mod_ty => |mt| {
+            node.region = mt.region;
+            node.data_1 = @bitCast(mt.mod_symbol);
+            node.data_2 = @bitCast(mt.ty_symbol);
+            node.tag = .ty_mod;
+        },
+        .tag_union => |tu| {
+            node.region = tu.region;
+            node.data_1 = tu.tags.span.start;
+            node.data_2 = tu.tags.span.len;
+            node.data_3 = if (tu.open_anno) |open| @intFromEnum(open) else 0;
+            node.tag = .ty_tag_union;
+        },
+        .tuple => |t| {
+            node.region = t.region;
+            node.data_1 = t.annos.span.start;
+            node.data_2 = t.annos.span.len;
+            node.tag = .ty_tuple;
+        },
+        .record => |r| {
+            node.region = r.region;
+            node.data_1 = r.fields.span.start;
+            node.data_2 = r.fields.span.len;
+            node.tag = .ty_record;
+        },
+        .@"fn" => |f| {
+            node.region = f.region;
+            node.data_1 = f.args.span.start;
+            node.data_2 = f.args.span.len;
+            node.data_3 = @intFromEnum(f.ret) | (if (f.effectful) @as(u32, 1) << 31 else 0);
+            node.tag = .ty_fn;
+        },
+        .parens => |p| {
+            node.region = p.region;
+            node.data_1 = @intFromEnum(p.anno);
+            node.tag = .ty_parens;
+        },
+        .malformed => |m| {
+            node.region = m.region;
+            node.data_1 = @intFromEnum(m.diagnostic);
+            node.tag = .ty_malformed;
         },
     }
 
     const nid = store.nodes.append(store.gpa, node);
-    return @enumFromInt(nid);
+    return @enumFromInt(@intFromEnum(nid));
+}
+
+/// Adds a type header to the store.
+pub fn addTypeHeader(store: *NodeStore, typeHeader: CIR.TypeHeader) CIR.TypeHeader.Idx {
+    const node = Node{
+        .data_1 = @bitCast(typeHeader.name),
+        .data_2 = typeHeader.args.span.start,
+        .data_3 = typeHeader.args.span.len,
+        .region = typeHeader.region,
+        .tag = .type_header,
+    };
+
+    const nid = store.nodes.append(store.gpa, node);
+    return @enumFromInt(@intFromEnum(nid));
 }
 
 /// Adds an annotation record field to the store.
@@ -1002,6 +1187,35 @@ pub fn addScratchDef(store: *NodeStore, idx: CIR.Def.Idx) void {
     store.scratch_defs.append(store.gpa, idx);
 }
 
+/// Adds a type annotation to the scratch buffer.
+pub fn addScratchTypeAnno(store: *NodeStore, idx: CIR.TypeAnno.Idx) void {
+    store.scratch_type_annos.append(store.gpa, idx);
+}
+
+/// Returns the current top of the scratch type annotations buffer.
+pub fn scratchTypeAnnoTop(store: *NodeStore) u32 {
+    return store.scratch_type_annos.top();
+}
+
+/// Clears scratch type annotations from the given index.
+pub fn clearScratchTypeAnnosFrom(store: *NodeStore, from: u32) void {
+    store.scratch_type_annos.items.shrinkRetainingCapacity(from);
+}
+
+/// Creates a span from the scratch type annotations starting at the given index.
+pub fn typeAnnoSpanFrom(store: *NodeStore, start: u32) CIR.TypeAnno.Span {
+    const end = store.scratch_type_annos.top();
+    defer store.scratch_type_annos.clearFrom(start);
+    var i = @as(usize, @intCast(start));
+    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
+    std.debug.assert(end >= i);
+    while (i < end) {
+        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_type_annos.items.items[i])) catch |err| exitOnOom(err);
+        i += 1;
+    }
+    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+}
+
 /// Computes the span of a definition starting from a given index.
 pub fn defSpanFrom(store: *NodeStore, start: u32) CIR.Def.Span {
     const end = store.scratch_defs.top();
@@ -1065,19 +1279,24 @@ pub fn slicePatterns(store: *const NodeStore, span: CIR.Pattern.Span) []CIR.Patt
     return store.sliceFromSpan(CIR.Pattern.Idx, span.span);
 }
 
-/// TODO
+/// Returns a slice of statements from the store.
 pub fn sliceStatements(store: *const NodeStore, span: CIR.Statement.Span) []CIR.Statement.Idx {
     return store.sliceFromSpan(CIR.Statement.Idx, span.span);
 }
 
-/// TODO
-pub fn sliceIfBranch(store: *const NodeStore, span: CIR.IfBranch.Span) []CIR.IfBranch.Idx {
+/// Returns a slice of if branches from the store.
+pub fn sliceIfBranches(store: *const NodeStore, span: CIR.IfBranch.Span) []CIR.IfBranch.Idx {
     return store.sliceFromSpan(CIR.IfBranch.Idx, span.span);
 }
 
 /// Returns a slice of diagnostics from the store.
 pub fn sliceDiagnostics(store: *const NodeStore, span: CIR.Diagnostic.Span) []CIR.Diagnostic.Idx {
     return store.sliceFromSpan(CIR.Diagnostic.Idx, span.span);
+}
+
+/// Returns a slice of type annotations from the store.
+pub fn sliceTypeAnnos(store: *const NodeStore, span: CIR.TypeAnno.Span) []CIR.TypeAnno.Idx {
+    return store.sliceFromSpan(CIR.TypeAnno.Idx, span.span);
 }
 
 /// Creates a diagnostic node that stores error information.
@@ -1147,6 +1366,10 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) CIR.Diagnostic.I
             node.tag = .diag_lambda_body_not_canonicalized;
             node.region = r.region;
         },
+        .malformed_type_annotation => |r| {
+            node.tag = .diag_malformed_type_annotation;
+            node.region = r.region;
+        },
         .var_across_function_boundary => |r| {
             node.tag = .diag_var_across_function_boundary;
             node.region = r.region;
@@ -1157,6 +1380,46 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) CIR.Diagnostic.I
             node.data_1 = @bitCast(r.ident);
             node.data_2 = r.original_region.start.offset;
             node.data_3 = r.original_region.end.offset;
+        },
+        .type_redeclared => |r| {
+            node.tag = .diag_type_redeclared;
+            node.region = r.redeclared_region;
+            node.data_1 = @bitCast(r.name);
+            node.data_2 = r.original_region.start.offset;
+            node.data_3 = r.original_region.end.offset;
+        },
+        .undeclared_type => |r| {
+            node.tag = .diag_undeclared_type;
+            node.region = r.region;
+            node.data_1 = @bitCast(r.name);
+        },
+        .type_alias_redeclared => |r| {
+            node.tag = .diag_type_alias_redeclared;
+            node.region = r.redeclared_region;
+            node.data_1 = @bitCast(r.name);
+            node.data_2 = r.original_region.start.offset;
+            node.data_3 = r.original_region.end.offset;
+        },
+        .custom_type_redeclared => |r| {
+            node.tag = .diag_custom_type_redeclared;
+            node.region = r.redeclared_region;
+            node.data_1 = @bitCast(r.name);
+            node.data_2 = r.original_region.start.offset;
+            node.data_3 = r.original_region.end.offset;
+        },
+        .type_shadowed_warning => |r| {
+            node.tag = .diag_type_shadowed_warning;
+            node.region = r.region;
+            node.data_1 = @bitCast(r.name);
+            node.data_2 = r.original_region.start.offset;
+            node.data_3 = r.original_region.end.offset | (@as(u32, if (r.cross_scope) 1 else 0) << 31);
+        },
+        .type_parameter_conflict => |r| {
+            node.tag = .diag_type_parameter_conflict;
+            node.region = r.region;
+            node.data_1 = @bitCast(r.name);
+            node.data_2 = @bitCast(r.parameter_name);
+            node.data_3 = r.original_region.start.offset;
         },
     }
 
@@ -1196,15 +1459,22 @@ pub fn addMalformed(store: *NodeStore, comptime t: type, reason: CIR.Diagnostic)
             .invalid_num_literal => |r| r.region,
             .ident_already_in_scope => |r| r.region,
             .ident_not_in_scope => |r| r.region,
-            .invalid_top_level_statement => Region.zero(),
+            .invalid_top_level_statement => base.Region.zero(),
             .expr_not_canonicalized => |r| r.region,
             .invalid_string_interpolation => |r| r.region,
             .pattern_arg_invalid => |r| r.region,
             .pattern_not_canonicalized => |r| r.region,
             .can_lambda_not_implemented => |r| r.region,
             .lambda_body_not_canonicalized => |r| r.region,
+            .malformed_type_annotation => |r| r.region,
             .var_across_function_boundary => |r| r.region,
             .shadowing_warning => |r| r.region,
+            .type_redeclared => |r| r.redeclared_region,
+            .undeclared_type => |r| r.region,
+            .type_alias_redeclared => |r| r.redeclared_region,
+            .custom_type_redeclared => |r| r.redeclared_region,
+            .type_shadowed_warning => |r| r.region,
+            .type_parameter_conflict => |r| r.region,
         },
         .tag = .malformed,
     };
@@ -1268,6 +1538,55 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .original_region = .{
                 .start = .{ .offset = node.data_2 },
                 .end = .{ .offset = node.data_3 },
+            },
+        } },
+        .diag_type_redeclared => return CIR.Diagnostic{ .type_redeclared = .{
+            .name = @bitCast(node.data_1),
+            .redeclared_region = node.region,
+            .original_region = .{
+                .start = .{ .offset = node.data_2 },
+                .end = .{ .offset = node.data_3 },
+            },
+        } },
+        .diag_undeclared_type => return CIR.Diagnostic{ .undeclared_type = .{
+            .name = @bitCast(node.data_1),
+            .region = node.region,
+        } },
+        .diag_malformed_type_annotation => return CIR.Diagnostic{ .malformed_type_annotation = .{
+            .region = node.region,
+        } },
+        .diag_type_alias_redeclared => return CIR.Diagnostic{ .type_alias_redeclared = .{
+            .name = @bitCast(node.data_1),
+            .redeclared_region = node.region,
+            .original_region = .{
+                .start = .{ .offset = @intCast(node.data_2) },
+                .end = .{ .offset = @intCast(node.data_3) },
+            },
+        } },
+        .diag_custom_type_redeclared => return CIR.Diagnostic{ .custom_type_redeclared = .{
+            .name = @bitCast(node.data_1),
+            .redeclared_region = node.region,
+            .original_region = .{
+                .start = .{ .offset = @intCast(node.data_2) },
+                .end = .{ .offset = @intCast(node.data_3 & 0x7FFFFFFF) },
+            },
+        } },
+        .diag_type_shadowed_warning => return CIR.Diagnostic{ .type_shadowed_warning = .{
+            .name = @bitCast(node.data_1),
+            .region = node.region,
+            .original_region = .{
+                .start = .{ .offset = @intCast(node.data_2) },
+                .end = .{ .offset = @intCast(node.data_3 & 0x7FFFFFFF) },
+            },
+            .cross_scope = (node.data_3 & 0x80000000) != 0,
+        } },
+        .diag_type_parameter_conflict => return CIR.Diagnostic{ .type_parameter_conflict = .{
+            .name = @bitCast(node.data_1),
+            .parameter_name = @bitCast(node.data_2),
+            .region = node.region,
+            .original_region = .{
+                .start = .{ .offset = @intCast(node.data_3) },
+                .end = .{ .offset = @intCast(node.data_3) },
             },
         } },
         else => {
