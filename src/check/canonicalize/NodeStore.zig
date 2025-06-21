@@ -257,6 +257,20 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 },
             };
         },
+        .expr_zero_argument_tag => {
+            // Get the extra_data index from data_1
+            const extra_idx = node.data_1;
+
+            return .{
+                .zero_argument_tag = .{
+                    .closure_name = @bitCast(store.extra_data.items[extra_idx]),
+                    .variant_var = @enumFromInt(node.data_2),
+                    .ext_var = @enumFromInt(node.data_3),
+                    .name = @bitCast(store.extra_data.items[extra_idx + 1]),
+                    .region = node.region,
+                },
+            };
+        },
         .expr_bin_op => {
             return CIR.Expr{ .binop = CIR.Expr.Binop.init(
                 @enumFromInt(node.data_1),
@@ -688,8 +702,20 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             @panic("TODO addExpr record_access");
         },
         .zero_argument_tag => |e| {
+            node.tag = .expr_zero_argument_tag;
             node.region = e.region;
-            @panic("TODO addExpr zero_argument_tag");
+
+            // Store the extra_data index in data_1
+            const extra_idx = @as(u32, @intCast(store.extra_data.items.len));
+            node.data_1 = extra_idx;
+
+            // Store the tag name and type variables
+            node.data_2 = @intFromEnum(e.variant_var);
+            node.data_3 = @intFromEnum(e.ext_var);
+
+            // Store closure_name and name in extra_data
+            store.extra_data.append(store.gpa, @bitCast(e.closure_name)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @bitCast(e.name)) catch |err| exitOnOom(err);
         },
         .lambda => |e| {
             node.region = e.region;
