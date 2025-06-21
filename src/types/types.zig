@@ -289,7 +289,50 @@ pub const Num = union(enum) {
 
     /// The Int data type
     pub const Int = struct {
-        /// The precision of an Int
+        /// The requirements of a particular integer literal: the minimum number of bits required
+        /// to store it, and whether a sign is required because it's a negative integer.
+        /// Here's an example:
+        ///
+        ///     if foo() 500 else -500
+        ///
+        /// The `500` literal has a requirement of 9 bits and it's not negative. The `-500` literal also
+        /// requires 9 bits but it *is* negative, which means we need a signed integer. Since both require
+        /// 9 bits, they don't fit in I8, and therefore only type annotations of I16, I32, I64, or I128
+        /// will avoid an "integer literal too large" error.
+        ///
+        /// Here's an example which demonstrates why we need to track sign separately:
+        ///
+        ///     if foo() 100 else 200
+        ///
+        /// The `100` literal has a requirement of 7 bits, and the `200` literal requires 8. If we didn't
+        /// track sign, we might write down that the `100` literal "fits in `I8`" - which is a true claim,
+        /// but it doesn't record whether the `I8` being signed is necessary. So when we get `200` in the mix,
+        /// we have an ambiguity that causes a problem:
+        /// * If we assume the sign was required, then if this is annotated `U8`, that would incorrectly give an error. `U8` should be fine here!
+        /// * If we assume the sign is not required, then if it had been `-100` instead, then a `U8` annotation would incorrectly *not* give an error.
+        ///
+        /// Putting all of this together, we need to track the required number of bits and the sign separately.
+        pub const Requirements = packed struct {
+            sign_needed: bool,
+            bits_needed: BitsNeeded,
+        };
+
+        /// The lowest number of bits that can represent the decimal value of an Int literal, *excluding* its sign.
+        /// (By design, the sign is sored separately in Requirements.)
+        pub const BitsNeeded = enum(u4) {
+            @"7" = 0, // 7-bit integers (that is, `I8` - which uses 1 bit for the sign) are the smallest we support
+            @"8" = 1,
+            @"9_to_15" = 2,
+            @"16" = 3,
+            @"17_to_31" = 4,
+            @"32" = 5,
+            @"33_to_63" = 6,
+            @"64" = 7,
+            @"65_to_127" = 8,
+            @"128" = 9,
+        };
+
+        /// The exact precision of an Int
         pub const Precision = enum(u4) {
             u8 = 0,
             i8 = 1,
@@ -301,14 +344,6 @@ pub const Num = union(enum) {
             i64 = 7,
             u128 = 8,
             i128 = 9,
-
-            /// Check if this precision represents a signed integer type
-            pub fn isSigned(self: Precision) bool {
-                return switch (self) {
-                    .i8, .i16, .i32, .i64, .i128 => true,
-                    .u8, .u16, .u32, .u64, .u128 => false,
-                };
-            }
 
             /// Default precision for Int(a), e.g. if you put `0x1` into `roc repl`.
             ///
