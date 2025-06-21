@@ -404,7 +404,27 @@ test "canonicalize signed vs unsigned interpretation" {
         try testing.expectEqual(tc.expected_signed, value);
 
         // Note: We store values based on their determined precision, so 255 stored as u8
-        // will still be 255 when interpreted as i8 (not -1) because we use fromI128/fromU128
+        // will still be 255 when interpreted as i128 (not -1) because we use fromI128/fromU128
         // appropriately based on the precision.
+    }
+}
+
+test "canonicalize integer literals outside supported range" {
+    // Test integer literals that are too big to be represented
+    const test_cases = [_][]const u8{
+        // Negative number slightly lower than i128 min
+        "-170141183460469231731687303715884105729",
+        // Number too big for u128 max (340282366920938463463374607431768211455)
+        "340282366920938463463374607431768211456",
+        // Way too big
+        "999999999999999999999999999999999999999999999999999",
+    };
+
+    for (test_cases) |source| {
+        const resources = try parseAndCanonicalizeInt(test_allocator, source);
+        defer cleanup(test_allocator, resources);
+
+        const expr = resources.cir.store.getExpr(resources.expr_idx);
+        try testing.expect(expr == .runtime_error);
     }
 }

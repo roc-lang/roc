@@ -357,21 +357,6 @@ fn tokenizedRegionToRegion(self: *Self, ast_region: AST.TokenizedRegion) base.Re
     };
 }
 
-// We write out this giant literal because it's actually annoying to try to
-// take std.math.minInt(i128), drop the minus sign, and convert it to u128
-// all at comptime. Instead we just have a test that verifies its correctness.
-const min_i128_negated: u128 = 170141183460469231731687303715884105728;
-
-test "min_i128_negated is actually the minimum i128, negated" {
-    var min_i128_buf: [64]u8 = undefined;
-    const min_i128_str = std.fmt.bufPrint(&min_i128_buf, "{}", .{std.math.minInt(i128)}) catch unreachable;
-
-    var negated_buf: [64]u8 = undefined;
-    const negated_str = std.fmt.bufPrint(&negated_buf, "-{}", .{min_i128_negated}) catch unreachable;
-
-    try std.testing.expectEqualStrings(min_i128_str, negated_str);
-}
-
 fn canonicalize_decl(
     self: *Self,
     decl: AST.Statement.Decl,
@@ -495,10 +480,10 @@ pub fn canonicalize_expr(
             const literal = self.can_ir.env.strings.insert(self.can_ir.env.gpa, token_text);
 
             // parse the integer value
-            const is_negated = token_text[0] == '-';
-            const start = @as(usize, if (is_negated) 1 else 0);
+            const is_negated = token_text[0] == '-'; // Drop the negation for now, so all valid literals fit in u128
+            const start = @as(usize, @intFromBool(is_negated));
             const u128_val: u128 = std.fmt.parseInt(u128, token_text[start..], 10) catch {
-                // Invalid number literal
+                // Any number literal that is too large for u128 is invalid, regardless of whether it had a minus sign!
                 const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .invalid_num_literal = .{
                     .literal = literal,
                     .region = region,
@@ -507,16 +492,29 @@ pub fn canonicalize_expr(
             };
 
             // If this had a minus sign, but negating it would result in a negative number
-            // that would be too low to fit in i128, then this int literal is invalid.
+            // that would be too low to fit in i128, then this int literal is also invalid.
             if (is_negated and u128_val > min_i128_negated) {
-                // TODO report an error and return malformed
+                const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .invalid_num_literal = .{
+                    .literal = literal,
+                    .region = region,
+                } });
+                return expr_idx;
             }
 
-            // Branchlessly negate the value if there was a minus sign on its literal.
+            // Now we've confirmed that our int literal is one of these:
+            // * A signed integer that fits in i128
+            // * An unsigned integer that fits in u128
             //
-            // This should never overflow i128, becasue we already would have errored out
+            // We'll happily bitcast a u128 to i128 for storage (and bitcast it back later
+            // using its type information), but for negative numbers, we do need to actually
+            // negate them (branchlessly) if we skipped its minus sign earlier.
+            //
+            // This operation should never overflow i128, because we already would have errored out
             // if the u128 portion was bigger than the lowest i128 without a minus sign.
-            const i128_val: i128 = @as(i128, @intCast(u128_val)) * if (is_negated) -1 else 1;
+            // Special case: exactly i128 min already has the correct bit pattern when bitcast from u128,
+            // so if we try to negate it we'll get an overflow. We specifically *don't* negate that one.
+            const sign: i128 = (@as(i128, @intFromBool(!is_negated or u128_val == min_i128_negated)) << 1) - 1;
+            const i128_val: i128 = sign * @as(i128, @bitCast(u128_val));
 
             // create type vars, first "reserve" node slots
             const final_expr_idx = self.can_ir.store.predictNodeIndex(3);
@@ -1730,6 +1728,21 @@ const ScopeTestContext = struct {
         ctx.gpa.destroy(ctx.env);
     }
 };
+
+// We write out this giant literal because it's actually annoying to try to
+// take std.math.minInt(i128), drop the minus sign, and convert it to u128
+// all at comptime. Instead we just have a test that verifies its correctness.
+const min_i128_negated: u128 = 170141183460469231731687303715884105728;
+
+test "min_i128_negated is actually the minimum i128, negated" {
+    var min_i128_buf: [64]u8 = undefined;
+    const min_i128_str = std.fmt.bufPrint(&min_i128_buf, "{}", .{std.math.minInt(i128)}) catch unreachable;
+
+    var negated_buf: [64]u8 = undefined;
+    const negated_str = std.fmt.bufPrint(&negated_buf, "-{}", .{min_i128_negated}) catch unreachable;
+
+    try std.testing.expectEqualStrings(min_i128_str, negated_str);
+}
 
 test "basic scope initialization" {
     const gpa = std.testing.allocator;
