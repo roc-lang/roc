@@ -482,7 +482,25 @@ pub fn canonicalize_expr(
             // parse the integer value
             const is_negated = token_text[0] == '-'; // Drop the negation for now, so all valid literals fit in u128
             const start = @as(usize, @intFromBool(is_negated));
-            const u128_val: u128 = std.fmt.parseInt(u128, token_text[start..], 10) catch {
+
+            // Determine the base from the prefix
+            var radix: u8 = 10;
+            var digit_start = start;
+            if (token_text.len > start + 2) {
+                const prefix = token_text[start .. start + 2];
+                if (std.mem.eql(u8, prefix, "0x") or std.mem.eql(u8, prefix, "0X")) {
+                    radix = 16;
+                    digit_start = start + 2;
+                } else if (std.mem.eql(u8, prefix, "0o") or std.mem.eql(u8, prefix, "0O")) {
+                    radix = 8;
+                    digit_start = start + 2;
+                } else if (std.mem.eql(u8, prefix, "0b") or std.mem.eql(u8, prefix, "0B")) {
+                    radix = 2;
+                    digit_start = start + 2;
+                }
+            }
+
+            const u128_val: u128 = std.fmt.parseInt(u128, token_text[digit_start..], radix) catch {
                 // Any number literal that is too large for u128 is invalid, regardless of whether it had a minus sign!
                 const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .invalid_num_literal = .{
                     .literal = literal,
@@ -1971,4 +1989,302 @@ test "aliases work separately from idents" {
 
     try std.testing.expectEqual(Scope.LookupResult{ .found = ident_pattern }, ident_lookup);
     try std.testing.expectEqual(Scope.LookupResult{ .found = alias_pattern }, alias_lookup);
+}
+
+test "hexadecimal integer literals" {
+    const test_cases = [_]struct {
+        literal: []const u8,
+        expected_value: i128,
+        expected_precision: Num.Int.Precision,
+    }{
+        // Basic hex literals
+        .{ .literal = "0x0", .expected_value = 0, .expected_precision = .i8 },
+        .{ .literal = "0x1", .expected_value = 1, .expected_precision = .i8 },
+        .{ .literal = "0xA", .expected_value = 10, .expected_precision = .i8 },
+        .{ .literal = "0xa", .expected_value = 10, .expected_precision = .i8 },
+        .{ .literal = "0xFF", .expected_value = 255, .expected_precision = .u8 },
+        .{ .literal = "0xff", .expected_value = 255, .expected_precision = .u8 },
+        .{ .literal = "0x100", .expected_value = 256, .expected_precision = .i16 },
+        .{ .literal = "0xFFFF", .expected_value = 65535, .expected_precision = .u16 },
+        .{ .literal = "0x10000", .expected_value = 65536, .expected_precision = .i32 },
+        .{ .literal = "0xFFFFFFFF", .expected_value = 4294967295, .expected_precision = .u32 },
+        .{ .literal = "0x100000000", .expected_value = 4294967296, .expected_precision = .i64 },
+        .{ .literal = "0xFFFFFFFFFFFFFFFF", .expected_value = @as(i128, @bitCast(@as(u128, 18446744073709551615))), .expected_precision = .u64 },
+
+        // Hex with underscores
+        .{ .literal = "0x1_000", .expected_value = 4096, .expected_precision = .i16 },
+        .{ .literal = "0xFF_FF", .expected_value = 65535, .expected_precision = .u16 },
+        .{ .literal = "0x1234_5678_9ABC_DEF0", .expected_value = @as(i128, @bitCast(@as(u128, 0x123456789ABCDEF0))), .expected_precision = .i64 },
+
+        // Negative hex literals
+        .{ .literal = "-0x1", .expected_value = -1, .expected_precision = .i8 },
+        .{ .literal = "-0x80", .expected_value = -128, .expected_precision = .i8 },
+        .{ .literal = "-0x81", .expected_value = -129, .expected_precision = .i16 },
+        .{ .literal = "-0x8000", .expected_value = -32768, .expected_precision = .i16 },
+        .{ .literal = "-0x8001", .expected_value = -32769, .expected_precision = .i32 },
+        .{ .literal = "-0x80000000", .expected_value = -2147483648, .expected_precision = .i32 },
+        .{ .literal = "-0x80000001", .expected_value = -2147483649, .expected_precision = .i64 },
+        .{ .literal = "-0x8000000000000000", .expected_value = -9223372036854775808, .expected_precision = .i64 },
+        .{ .literal = "-0x8000000000000001", .expected_value = @as(i128, -9223372036854775809), .expected_precision = .i128 },
+    };
+
+    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    defer std.debug.assert(gpa_state.deinit() == .ok);
+    const gpa = gpa_state.allocator();
+
+    for (test_cases) |tc| {
+        var env = base.ModuleEnv.init(gpa);
+        defer env.deinit();
+
+        var ast = parse.parseExpr(&env, tc.literal);
+        defer ast.deinit(gpa);
+
+        var cir = CIR.init(&env);
+        defer cir.deinit();
+
+        var can = init(&cir, &ast);
+        defer can.deinit();
+
+        const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+        const canonical_expr_idx = can.canonicalize_expr(expr_idx) orelse {
+            std.debug.print("Failed to canonicalize: {s}\n", .{tc.literal});
+            try std.testing.expect(false);
+            continue;
+        };
+
+        const expr = cir.store.getExpr(canonical_expr_idx);
+        try std.testing.expect(expr == .int);
+
+        // Check the value
+        try std.testing.expectEqual(tc.expected_value, expr.int.value.value);
+
+        // Check the precision
+        const precision = CIR.getIntPrecision(&env, expr.int.precision_var) orelse {
+            std.debug.print("Failed to get precision for: {s}\n", .{tc.literal});
+            try std.testing.expect(false);
+            continue;
+        };
+
+        try std.testing.expectEqual(tc.expected_precision, precision);
+    }
+}
+
+test "binary integer literals" {
+    const test_cases = [_]struct {
+        literal: []const u8,
+        expected_value: i128,
+        expected_precision: Num.Int.Precision,
+    }{
+        // Basic binary literals
+        .{ .literal = "0b0", .expected_value = 0, .expected_precision = .i8 },
+        .{ .literal = "0b1", .expected_value = 1, .expected_precision = .i8 },
+        .{ .literal = "0b10", .expected_value = 2, .expected_precision = .i8 },
+        .{ .literal = "0b11", .expected_value = 3, .expected_precision = .i8 },
+        .{ .literal = "0b1111111", .expected_value = 127, .expected_precision = .i8 },
+        .{ .literal = "0b10000000", .expected_value = 128, .expected_precision = .u8 },
+        .{ .literal = "0b11111111", .expected_value = 255, .expected_precision = .u8 },
+        .{ .literal = "0b100000000", .expected_value = 256, .expected_precision = .i16 },
+        .{ .literal = "0b1111111111111111", .expected_value = 65535, .expected_precision = .u16 },
+        .{ .literal = "0b10000000000000000", .expected_value = 65536, .expected_precision = .i32 },
+
+        // Binary with underscores
+        .{ .literal = "0b1111_1111", .expected_value = 255, .expected_precision = .u8 },
+        .{ .literal = "0b1_0000_0000", .expected_value = 256, .expected_precision = .i16 },
+        .{ .literal = "0b1010_1010_1010_1010", .expected_value = 43690, .expected_precision = .u16 },
+
+        // Negative binary literals
+        .{ .literal = "-0b1", .expected_value = -1, .expected_precision = .i8 },
+        .{ .literal = "-0b1111111", .expected_value = -127, .expected_precision = .i8 },
+        .{ .literal = "-0b10000000", .expected_value = -128, .expected_precision = .i8 },
+        .{ .literal = "-0b10000001", .expected_value = -129, .expected_precision = .i16 },
+        .{ .literal = "-0b111111111111111", .expected_value = -32767, .expected_precision = .i16 },
+        .{ .literal = "-0b1000000000000000", .expected_value = -32768, .expected_precision = .i16 },
+        .{ .literal = "-0b1000000000000001", .expected_value = -32769, .expected_precision = .i32 },
+    };
+
+    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    defer std.debug.assert(gpa_state.deinit() == .ok);
+    const gpa = gpa_state.allocator();
+
+    for (test_cases) |tc| {
+        var env = base.ModuleEnv.init(gpa);
+        defer env.deinit();
+
+        var ast = parse.parseExpr(&env, tc.literal);
+        defer ast.deinit(gpa);
+
+        var cir = CIR.init(&env);
+        defer cir.deinit();
+
+        var can = init(&cir, &ast);
+        defer can.deinit();
+
+        const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+        const canonical_expr_idx = can.canonicalize_expr(expr_idx) orelse {
+            std.debug.print("Failed to canonicalize: {s}\n", .{tc.literal});
+            try std.testing.expect(false);
+            continue;
+        };
+
+        const expr = cir.store.getExpr(canonical_expr_idx);
+        try std.testing.expect(expr == .int);
+
+        // Check the value
+        try std.testing.expectEqual(tc.expected_value, expr.int.value.value);
+
+        // Check the precision
+        const precision = CIR.getIntPrecision(&env, expr.int.precision_var) orelse {
+            std.debug.print("Failed to get precision for: {s}\n", .{tc.literal});
+            try std.testing.expect(false);
+            continue;
+        };
+
+        try std.testing.expectEqual(tc.expected_precision, precision);
+    }
+}
+
+test "octal integer literals" {
+    const test_cases = [_]struct {
+        literal: []const u8,
+        expected_value: i128,
+        expected_precision: Num.Int.Precision,
+    }{
+        // Basic octal literals
+        .{ .literal = "0o0", .expected_value = 0, .expected_precision = .i8 },
+        .{ .literal = "0o1", .expected_value = 1, .expected_precision = .i8 },
+        .{ .literal = "0o7", .expected_value = 7, .expected_precision = .i8 },
+        .{ .literal = "0o10", .expected_value = 8, .expected_precision = .i8 },
+        .{ .literal = "0o77", .expected_value = 63, .expected_precision = .i8 },
+        .{ .literal = "0o177", .expected_value = 127, .expected_precision = .i8 },
+        .{ .literal = "0o200", .expected_value = 128, .expected_precision = .u8 },
+        .{ .literal = "0o377", .expected_value = 255, .expected_precision = .u8 },
+        .{ .literal = "0o400", .expected_value = 256, .expected_precision = .i16 },
+        .{ .literal = "0o777", .expected_value = 511, .expected_precision = .i16 },
+        .{ .literal = "0o177777", .expected_value = 65535, .expected_precision = .u16 },
+        .{ .literal = "0o200000", .expected_value = 65536, .expected_precision = .i32 },
+
+        // Octal with underscores
+        .{ .literal = "0o3_77", .expected_value = 255, .expected_precision = .u8 },
+        .{ .literal = "0o1_000", .expected_value = 512, .expected_precision = .i16 },
+        .{ .literal = "0o12_34_56", .expected_value = 42798, .expected_precision = .u16 },
+
+        // Negative octal literals
+        .{ .literal = "-0o1", .expected_value = -1, .expected_precision = .i8 },
+        .{ .literal = "-0o177", .expected_value = -127, .expected_precision = .i8 },
+        .{ .literal = "-0o200", .expected_value = -128, .expected_precision = .i8 },
+        .{ .literal = "-0o201", .expected_value = -129, .expected_precision = .i16 },
+        .{ .literal = "-0o77777", .expected_value = -32767, .expected_precision = .i16 },
+        .{ .literal = "-0o100000", .expected_value = -32768, .expected_precision = .i16 },
+        .{ .literal = "-0o100001", .expected_value = -32769, .expected_precision = .i32 },
+    };
+
+    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    defer std.debug.assert(gpa_state.deinit() == .ok);
+    const gpa = gpa_state.allocator();
+
+    for (test_cases) |tc| {
+        var env = base.ModuleEnv.init(gpa);
+        defer env.deinit();
+
+        var ast = parse.parseExpr(&env, tc.literal);
+        defer ast.deinit(gpa);
+
+        var cir = CIR.init(&env);
+        defer cir.deinit();
+
+        var can = init(&cir, &ast);
+        defer can.deinit();
+
+        const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+        const canonical_expr_idx = can.canonicalize_expr(expr_idx) orelse {
+            std.debug.print("Failed to canonicalize: {s}\n", .{tc.literal});
+            try std.testing.expect(false);
+            continue;
+        };
+
+        const expr = cir.store.getExpr(canonical_expr_idx);
+        try std.testing.expect(expr == .int);
+
+        // Check the value
+        try std.testing.expectEqual(tc.expected_value, expr.int.value.value);
+
+        // Check the precision
+        const precision = CIR.getIntPrecision(&env, expr.int.precision_var) orelse {
+            std.debug.print("Failed to get precision for: {s}\n", .{tc.literal});
+            try std.testing.expect(false);
+            continue;
+        };
+
+        try std.testing.expectEqual(tc.expected_precision, precision);
+    }
+}
+
+test "integer literals with uppercase base prefixes" {
+    const test_cases = [_]struct {
+        literal: []const u8,
+        expected_value: i128,
+        expected_precision: Num.Int.Precision,
+    }{
+        // Uppercase hex prefix
+        .{ .literal = "0X0", .expected_value = 0, .expected_precision = .i8 },
+        .{ .literal = "0XFF", .expected_value = 255, .expected_precision = .u8 },
+        .{ .literal = "0XABCD", .expected_value = 43981, .expected_precision = .u16 },
+        .{ .literal = "-0X80", .expected_value = -128, .expected_precision = .i8 },
+
+        // Uppercase binary prefix
+        .{ .literal = "0B0", .expected_value = 0, .expected_precision = .i8 },
+        .{ .literal = "0B11111111", .expected_value = 255, .expected_precision = .u8 },
+        .{ .literal = "0B101010", .expected_value = 42, .expected_precision = .i8 },
+        .{ .literal = "-0B1000000", .expected_value = -64, .expected_precision = .i8 },
+
+        // Uppercase octal prefix
+        .{ .literal = "0O0", .expected_value = 0, .expected_precision = .i8 },
+        .{ .literal = "0O377", .expected_value = 255, .expected_precision = .u8 },
+        .{ .literal = "0O777", .expected_value = 511, .expected_precision = .i16 },
+        .{ .literal = "-0O100", .expected_value = -64, .expected_precision = .i8 },
+
+        // Mixed case in values (hex only)
+        .{ .literal = "0xAbCd", .expected_value = 43981, .expected_precision = .u16 },
+        .{ .literal = "0XaBcD", .expected_value = 43981, .expected_precision = .u16 },
+    };
+
+    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    defer std.debug.assert(gpa_state.deinit() == .ok);
+    const gpa = gpa_state.allocator();
+
+    for (test_cases) |tc| {
+        var env = base.ModuleEnv.init(gpa);
+        defer env.deinit();
+
+        var ast = parse.parseExpr(&env, tc.literal);
+        defer ast.deinit(gpa);
+
+        var cir = CIR.init(&env);
+        defer cir.deinit();
+
+        var can = init(&cir, &ast);
+        defer can.deinit();
+
+        const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+        const canonical_expr_idx = can.canonicalize_expr(expr_idx) orelse {
+            std.debug.print("Failed to canonicalize: {s}\n", .{tc.literal});
+            try std.testing.expect(false);
+            continue;
+        };
+
+        const expr = cir.store.getExpr(canonical_expr_idx);
+        try std.testing.expect(expr == .int);
+
+        // Check the value
+        try std.testing.expectEqual(tc.expected_value, expr.int.value.value);
+
+        // Check the precision
+        const precision = CIR.getIntPrecision(&env, expr.int.precision_var) orelse {
+            std.debug.print("Failed to get precision for: {s}\n", .{tc.literal});
+            try std.testing.expect(false);
+            continue;
+        };
+
+        try std.testing.expectEqual(tc.expected_precision, precision);
+    }
 }
