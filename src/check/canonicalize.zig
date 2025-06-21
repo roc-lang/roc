@@ -473,43 +473,49 @@ pub fn canonicalize_expr(
         .int => |e| {
             const region = self.tokenizedRegionToRegion(e.region);
 
-            // resolve to a string slice from the source
+            // Resolve to a string slice from the source
             const token_text = self.parse_ir.resolve(e.token);
 
-            // intern the string slice
+            // Intern the string slice
             const literal = self.can_ir.env.strings.insert(self.can_ir.env.gpa, token_text);
 
-            // parse the integer value
+            // Parse the integer value
             const is_negated = token_text[0] == '-'; // Drop the negation for now, so all valid literals fit in u128
-            const start = @as(usize, @intFromBool(is_negated));
+            const after_minus_sign = @as(usize, @intFromBool(is_negated));
 
-            // Determine the base from the prefix
-            var radix: u8 = 10;
+            // Where does the first *actual* digit start? (after minus sign, "0x" prefix, etc.)
             var digit_start: usize = undefined;
 
-            if (token_text[start] == '0' and token_text.len > start + 2) {
-                switch (token_text[start + 1]) {
+            // Default to base-10
+            var int_base: u8 = 10;
+
+            // If this begins with "0x" or "0b" or "Oo" then it's not base-10.
+            // We don't bother storing this info anywhere else besides token text,
+            // because we already have to look at the whole token to parse the digits
+            // into a number, so it will be in cache. It's also trivial to parse.
+            if (token_text[after_minus_sign] == '0' and token_text.len > after_minus_sign + 2) {
+                switch (token_text[after_minus_sign + 1]) {
                     'x', 'X' => {
-                        radix = 16;
-                        digit_start = start + 2;
+                        int_base = 16;
+                        digit_start = after_minus_sign + 2;
                     },
                     'o', 'O' => {
-                        radix = 8;
-                        digit_start = start + 2;
+                        int_base = 8;
+                        digit_start = after_minus_sign + 2;
                     },
                     'b', 'B' => {
-                        radix = 2;
-                        digit_start = start + 2;
+                        int_base = 2;
+                        digit_start = after_minus_sign + 2;
                     },
                     else => {
-                        digit_start = start;
+                        digit_start = after_minus_sign;
                     },
                 }
             } else {
-                digit_start = start;
+                digit_start = after_minus_sign;
             }
 
-            const u128_val: u128 = std.fmt.parseInt(u128, token_text[digit_start..], radix) catch {
+            const u128_val: u128 = std.fmt.parseInt(u128, token_text[digit_start..], int_base) catch {
                 // Any number literal that is too large for u128 is invalid, regardless of whether it had a minus sign!
                 const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .invalid_num_literal = .{
                     .literal = literal,
@@ -549,7 +555,9 @@ pub fn canonicalize_expr(
             // then insert the type vars, setting the parent to be the final slot
             // Determine the precision based on the original u128 value and whether it was negated
             const bound = blk: {
-                // TODO there is presumably a way to do all of this branchlessly.
+                // TODO this all needs to be redone in the future. Some notes:
+                // - need to store whether it's negative and therefore requires being signed
+                // - need to store how many bits it needs (e.g. 7 if it's <= 128)
                 if (is_negated) {
                     // For negative values, only signed types are valid
                     // We need to check the original u128 value (before negation)
