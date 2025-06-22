@@ -9,23 +9,23 @@ type=file
 ~~~
 # PROBLEMS
 ~~~txt
-TOKENIZE: (1:5-1:7) UnclosedString:
- = "te
-    ^^PARSER: missing_header
+TOKENIZE: (1:4-1:6) UnclosedString:
+= "te
+   ^^PARSER: missing_header
 INVALID STATEMENT
 The statement expr is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 ~~~
 # TOKENS
 ~~~zig
-OpAssign(1:2-1:3),StringStart(1:4-1:5),StringPart(1:5-1:7),EndOfFile(1:7-1:7),
+OpAssign(1:1-1:2),StringStart(1:3-1:4),StringPart(1:4-1:6),EndOfFile(1:6-1:6),
 ~~~
 # PARSE
 ~~~clojure
-(file (1:2-1:7)
-	(malformed_header (1:2-1:3) "missing_header")
+(file (1:1-1:6)
+	(malformed_header (1:1-1:2) "missing_header")
 	(statements
-		(string (1:4-1:7) (string_part (1:5-1:7) "te"))))
+		(string (1:3-1:6) (string_part (1:4-1:6) "te"))))
 ~~~
 # FORMATTED
 ~~~roc

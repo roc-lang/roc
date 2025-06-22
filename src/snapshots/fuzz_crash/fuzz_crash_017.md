@@ -42,7 +42,7 @@ LowerIdent(2:1-2:4),OpAssign(2:5-2:6),StringStart(2:7-2:8),StringPart(2:8-2:14),
 # FORMATTED
 ~~~roc
 "luc"
-foo =
+foo = 
 ~~~
 # CANONICALIZE
 ~~~clojure
