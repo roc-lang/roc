@@ -134,14 +134,14 @@ fn processPath(gpa: Allocator, path: []const u8, maybe_fuzz_corpus_path: ?[]cons
 
             if (entry.kind == .directory) {
                 processed_count += try processPath(gpa, full_path, maybe_fuzz_corpus_path);
-            } else if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".txt")) {
+            } else if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".md")) {
                 if (try processSnapshotFile(gpa, full_path, maybe_fuzz_corpus_path)) {
                     processed_count += 1;
                 }
             }
         }
     } else if (stat.kind == .file) {
-        if (std.mem.endsWith(u8, canonical_path, ".txt")) {
+        if (std.mem.endsWith(u8, canonical_path, ".md")) {
             if (try processSnapshotFile(gpa, canonical_path, maybe_fuzz_corpus_path)) {
                 processed_count += 1;
             }
@@ -160,36 +160,28 @@ const Section = union(enum) {
     canonicalize,
     tokens,
     problems,
+    types,
 
-    pub const META = "~~~META";
-    pub const SOURCE = "~~~SOURCE";
-    pub const FORMATTED = "~~~FORMATTED";
-    pub const PARSE = "~~~PARSE";
-    pub const CANONICALIZE = "~~~CANONICALIZE";
-    pub const TOKENS = "~~~TOKENS";
-    pub const PROBLEMS = "~~~PROBLEMS";
-    pub const TYPES = "~~~TYPES";
+    pub const META = "# META\n~~~ini\n";
+    pub const SOURCE = "# SOURCE\n~~~roc\n";
+    pub const FORMATTED = "# FORMATTED\n~~~roc\n";
+    pub const PARSE = "# PARSE\n~~~clojure\n";
+    pub const CANONICALIZE = "# CANONICALIZE\n~~~clojure\n";
+    pub const TOKENS = "# TOKENS\n~~~zig\n";
+    pub const PROBLEMS = "# PROBLEMS\n~~~txt\n";
+    pub const TYPES = "# TYPES\n~~~clojure\n";
 
-    fn next(self: Section) ?Section {
-        return switch (self) {
-            .meta => .source,
-            .source => .problems,
-            .problems => .formatted,
-            .formatted => .tokens,
-            .tokens => .parse,
-            .parse => .canonicalize,
-            .canonicalize => .null,
-        };
-    }
+    pub const SECTION_END = "~~~\n";
 
     fn fromString(str: []const u8) ?Section {
-        if (std.mem.eql(u8, str, META)) return .meta;
-        if (std.mem.eql(u8, str, SOURCE)) return .source;
-        if (std.mem.eql(u8, str, FORMATTED)) return .formatted;
-        if (std.mem.eql(u8, str, PARSE)) return .parse;
-        if (std.mem.eql(u8, str, CANONICALIZE)) return .canonicalize;
-        if (std.mem.eql(u8, str, TOKENS)) return .tokens;
-        if (std.mem.eql(u8, str, PROBLEMS)) return .problems;
+        if (std.mem.startsWith(u8, str, META)) return .meta;
+        if (std.mem.startsWith(u8, str, SOURCE)) return .source;
+        if (std.mem.startsWith(u8, str, FORMATTED)) return .formatted;
+        if (std.mem.startsWith(u8, str, PARSE)) return .parse;
+        if (std.mem.startsWith(u8, str, CANONICALIZE)) return .canonicalize;
+        if (std.mem.startsWith(u8, str, TYPES)) return .types;
+        if (std.mem.startsWith(u8, str, TOKENS)) return .tokens;
+        if (std.mem.startsWith(u8, str, PROBLEMS)) return .problems;
         return null;
     }
 
@@ -202,7 +194,7 @@ const Section = union(enum) {
             .canonicalize => CANONICALIZE,
             .tokens => TOKENS,
             .problems => PROBLEMS,
-            .None => "",
+            .types => TYPES,
         };
     }
 
@@ -387,34 +379,17 @@ const Content = struct {
             return Error.MissingSnapshotHeader;
         }
     }
-
-    pub fn format(self: Content, comptime fmt_str: []const u8, _: std.fmt.FormatOptions, writer: std.io.AnyWriter) !void {
-        _ = fmt_str;
-        try writer.writeAll("SNAPSHOT CONTENTS\n");
-        try writer.writeAll("META:\n");
-        try self.meta.format(writer);
-        try writer.writeAll("\n---\n");
-        try writer.print("SOURCE:\n{s}\n---\n", .{self.source});
-        if (self.formatted) |formatted| {
-            try writer.print("FORMATTED:\n{s}\n---\n", .{formatted});
-        } else {
-            try writer.print("FORMATTED: null\n", .{});
-        }
-    }
 };
 
-const Error = error{
-    MissingSnapshotHeader,
-    MissingSnapshotSource,
-    InvalidNodeType,
-};
+const Error = error{ MissingSnapshotHeader, MissingSnapshotSource, InvalidNodeType, BadSectionHeader };
 
 fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_corpus_path: ?[]const u8) !bool {
 
     // Log the file path that was written to
     log("processing snapshot file: {s}", .{snapshot_path});
 
-    const file_content = std.fs.cwd().readFileAlloc(gpa, snapshot_path, 1024 * 1024) catch |err| {
+    const @"1Mb" = 1024 * 1024;
+    const file_content = std.fs.cwd().readFileAlloc(gpa, snapshot_path, @"1Mb") catch |err| {
         log("failed to read file '{s}': {s}", .{ snapshot_path, @errorName(err) });
         return false;
     };
@@ -430,7 +405,7 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
     // Parse the file to find section boundaries
     const content = extractSections(gpa, file_content) catch |err| {
         switch (err) {
-            Error.MissingSnapshotHeader, Error.MissingSnapshotSource => {
+            Error.MissingSnapshotHeader, Error.MissingSnapshotSource, Error.BadSectionHeader => {
                 warn("ignoring file {s}: {s}", .{ snapshot_path, @errorName(err) });
                 return false;
             },
@@ -441,7 +416,7 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    // Parse the source code
+    // Parse the source cod
     var parse_ast = switch (content.meta.node_type) {
         .file => parse.parse(&module_env, content.source),
         .header => parse.parseHeader(&module_env, content.source),
@@ -497,23 +472,22 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
     // Copy original META
     {
         try writer.writeAll(Section.META);
-        try writer.writeAll("\n");
         try content.meta.format(writer);
         try writer.writeAll("\n");
+        try writer.writeAll(Section.SECTION_END);
     }
 
     // Copy original SOURCE
     {
         try writer.writeAll(Section.SOURCE);
-        try writer.writeAll("\n");
         try writer.writeAll(content.source);
         try writer.writeAll("\n");
+        try writer.writeAll(Section.SECTION_END);
     }
 
     // Write out any PROBLEMS
     {
         try writer.writeAll(Section.PROBLEMS);
-        try writer.writeAll("\n");
 
         var tokenize_problems: usize = 0;
         var parser_problems: usize = 0;
@@ -578,12 +552,12 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
             log("reported {} parser problems", .{parser_problems});
             log("reported {} canonicalization problems", .{canonicalize_problems});
         }
+        try writer.writeAll(Section.SECTION_END);
     }
 
     // Write out any TOKENS
     {
         try writer.writeAll(Section.TOKENS);
-        try writer.writeAll("\n");
         var tokenizedBuffer = parse_ast.tokens;
         const tokens = tokenizedBuffer.tokens.items(.tag);
         for (tokens, 0..) |tok, i| {
@@ -606,6 +580,7 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
             }
         }
         try writer.writeAll("\n");
+        try writer.writeAll(Section.SECTION_END);
     }
 
     // Write PARSE SECTION
@@ -639,9 +614,9 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
             },
         }
         try writer.writeAll(Section.PARSE);
-        try writer.writeAll("\n");
         try writer.writeAll(parse_buffer.items);
         try writer.writeAll("\n");
+        try writer.writeAll(Section.SECTION_END);
     }
 
     // Write FORMAT SECTION
@@ -664,7 +639,6 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
         }
 
         try writer.writeAll(Section.FORMATTED);
-        try writer.writeAll("\n");
 
         if (!std.mem.eql(u8, formatted.items, content.source)) {
             try writer.writeAll(formatted.items);
@@ -673,6 +647,7 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
             try writer.writeAll("NO CHANGE");
             try writer.writeAll("\n");
         }
+        try writer.writeAll(Section.SECTION_END);
     }
 
     // Write CANONICALIZE SECTION
@@ -683,9 +658,9 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
         try can_ir.toSExprStr(&module_env, canonicalized.writer().any(), maybe_expr_idx, content.source);
 
         try writer.writeAll(Section.CANONICALIZE);
-        try writer.writeAll("\n");
         try writer.writeAll(canonicalized.items);
         try writer.writeAll("\n");
+        try writer.writeAll(Section.SECTION_END);
     }
 
     // Write TYPES SECTION
@@ -700,12 +675,11 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
         // try types.SExprWriter.allVarsToSExprStr(solved.writer().any(), gpa, &module_env);
 
         try writer.writeAll(Section.TYPES);
-        try writer.writeAll("\n");
         try writer.writeAll(solved.items);
         try writer.writeAll("\n");
     }
 
-    try writer.writeAll("~~~END");
+    try writer.writeAll(Section.SECTION_END[0 .. Section.SECTION_END.len - 1]);
 
     // Now write the buffer to the snapshot file in one go
     var file = std.fs.cwd().createFile(snapshot_path, .{}) catch |err| {
@@ -756,44 +730,21 @@ fn extractSections(gpa: Allocator, content: []const u8) !Content {
     var ranges = std.AutoHashMap(Section, Section.Range).init(gpa);
     defer ranges.deinit();
 
-    var current_section: ?Section = null;
-    var line_start: usize = 0;
+    var processed_chars: usize = 0;
 
-    var lines = std.mem.splitScalar(u8, content, '\n');
+    var sections_with_header = std.mem.splitSequence(u8, content, Section.SECTION_END);
 
-    while (true) {
-        const line_opt = lines.next();
-        if (line_opt == null) break;
+    while (sections_with_header.next()) |section_with_header| {
+        const trimmed_section = std.mem.trimLeft(u8, section_with_header, "\n\r \t");
+        if (Section.fromString(trimmed_section)) |section| {
+            const start = processed_chars + section.asString().len;
+            const end = processed_chars + section_with_header.len;
+            try ranges.put(section, .{ .start = start, .end = end });
 
-        const line = line_opt.?;
-        const line_end = line_start + line.len;
-        const next_line_start = line_end + 1; // +1 for the newline
-
-        if (Section.fromString(line)) |new_section| {
-            // If we were in a section, finalize its range
-            if (current_section) |section| {
-                var range = ranges.get(section) orelse Section.Range.empty();
-                range.end = line_start;
-                try ranges.put(section, range);
-            }
-
-            // Start the new section
-            current_section = new_section;
-
-            // Initialize new section range (starting after this line)
-            var range = Section.Range.empty();
-            range.start = next_line_start;
-            try ranges.put(new_section, range);
+            processed_chars += section_with_header.len + Section.SECTION_END.len;
+        } else if (std.mem.trim(u8, section_with_header, "\n\r \t").len != 0) {
+            return Error.BadSectionHeader;
         }
-
-        line_start = next_line_start;
-    }
-
-    // Handle the last section if there is one
-    if (current_section) |section| {
-        var range = ranges.get(section) orelse Section.Range.empty();
-        range.end = @min(line_start, content.len);
-        try ranges.put(section, range);
     }
 
     return try Content.from_ranges(ranges, content);
@@ -801,15 +752,23 @@ fn extractSections(gpa: Allocator, content: []const u8) !Content {
 
 test "extractSections" {
     const input =
-        \\~~~META
+        \\# META
+        \\~~~ini
         \\description=
         \\type=file
-        \\~~~SOURCE
+        \\~~~
+        \\# SOURCE
+        \\~~~roc
         \\source code line
-        \\~~~FORMATTED
+        \\~~~
+        \\# FORMATTED
+        \\~~~roc
         \\formatted output line
-        \\~~~PARSE
+        \\~~~
+        \\# PARSE
+        \\~~~clojure
         \\parse section line
+        \\~~~
     ;
 
     const content = try extractSections(testing.allocator, input);
@@ -827,15 +786,20 @@ test "extractSections" {
 
 test "extractSections complex" {
     const input =
-        \\~~~META
+        \\# META
+        \\~~~ini
         \\description=Basic example to develop the snapshot methodology
-        \\~~~SOURCE
+        \\~~~
+        \\# SOURCE
+        \\~~~roc
         \\module [foo, bar]
         \\
         \\foo = "one"
         \\
         \\bar = "two"
-        \\~~~PARSE
+        \\~~~
+        \\# PARSE
+        \\~~~clojure
         \\(file
         \\    (header
         \\        'foo'
@@ -848,6 +812,7 @@ test "extractSections complex" {
         \\        (ident
         \\            'bar')
         \\        (string_part)))
+        \\~~~
     ;
 
     const expected_meta =
