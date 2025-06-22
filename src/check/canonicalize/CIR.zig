@@ -20,7 +20,6 @@ const CalledVia = base.CalledVia;
 const TypeVar = types.Var;
 const Node = @import("Node.zig");
 const NodeStore = @import("NodeStore.zig");
-const RocDec = @import("../../builtins/dec.zig").RocDec;
 
 pub const Diagnostic = @import("Diagnostic.zig").Diagnostic;
 
@@ -560,13 +559,8 @@ pub const IntLiteralValue = struct {
     value: i128,
 };
 
-/// If we can store a given literal in memory as a RocDec without
-/// any precision loss, we do that because it's the most precise.
-/// Otherwise, we fall back on f64 - which can also fit f32s.
-pub const FracLiteralValue = union(enum) {
-    dec: i128, // RocDec.num
-    f64: f64,
-};
+// RocDec import for dec_literal
+pub const RocDec = @import("../../builtins/dec.zig").RocDec;
 
 /// An expression that has been canonicalized.
 pub const Expr = union(enum) {
@@ -1496,11 +1490,18 @@ pub const Pattern = union(enum) {
         value: IntLiteralValue,
         region: Region,
     },
-    frac_literal: struct {
+    dec_literal: struct {
         num_var: TypeVar,
         requirements: types.Num.Frac.Requirements,
         literal: StringLiteral.Idx,
-        value: FracLiteralValue,
+        value: RocDec,
+        region: Region,
+    },
+    f64_literal: struct {
+        num_var: TypeVar,
+        requirements: types.Num.Frac.Requirements,
+        literal: StringLiteral.Idx,
+        value: f64,
         region: Region,
     },
     str_literal: struct {
@@ -1534,7 +1535,8 @@ pub const Pattern = union(enum) {
             .list => |p| return p.region,
             .num_literal => |p| return p.region,
             .int_literal => |p| return p.region,
-            .frac_literal => |p| return p.region,
+            .dec_literal => |p| return p.region,
+            .f64_literal => |p| return p.region,
             .str_literal => |p| return p.region,
             .char_literal => |p| return p.region,
             .underscore => |p| return p.region,
@@ -1636,18 +1638,30 @@ pub const Pattern = union(enum) {
                 node.appendString(gpa, value_str);
                 return node;
             },
-            .frac_literal => |p| {
-                var node = sexpr.Expr.init(gpa, "p_frac");
+            .dec_literal => |p| {
+                var node = sexpr.Expr.init(gpa, "p_dec");
                 node.appendRegionInfo(gpa, ir.calcRegionInfo(p.region));
 
                 var pattern_idx_node = formatPatternIdxNode(gpa, pattern_idx);
                 node.appendNode(gpa, &pattern_idx_node);
 
                 node.appendString(gpa, "literal"); // TODO: use l.literal
-                const val_str = switch (p.value) {
-                    .dec => |d| std.fmt.allocPrint(gpa, "dec:{d}", .{d}) catch "<oom>",
-                    .f64 => |f| std.fmt.allocPrint(gpa, "{d}", .{f}) catch "<oom>",
-                };
+                const val_str = std.fmt.allocPrint(gpa, "dec:{d}", .{p.value.num}) catch "<oom>";
+                defer gpa.free(val_str);
+
+                node.appendString(gpa, val_str);
+
+                return node;
+            },
+            .f64_literal => |p| {
+                var node = sexpr.Expr.init(gpa, "p_f64");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(p.region));
+
+                var pattern_idx_node = formatPatternIdxNode(gpa, pattern_idx);
+                node.appendNode(gpa, &pattern_idx_node);
+
+                node.appendString(gpa, "literal"); // TODO: use l.literal
+                const val_str = std.fmt.allocPrint(gpa, "{d}", .{p.value}) catch "<oom>";
                 defer gpa.free(val_str);
 
                 node.appendString(gpa, val_str);

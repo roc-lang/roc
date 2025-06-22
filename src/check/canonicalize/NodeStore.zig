@@ -384,13 +384,22 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
                 .value = CIR.IntLiteralValue{ .value = 0 }, // TODO need to store and retrieve from extra_data
             },
         },
-        .pattern_frac_literal => return CIR.Pattern{
-            .frac_literal = .{
+        .pattern_dec_literal => return CIR.Pattern{
+            .dec_literal = .{
                 .region = node.region,
                 .literal = @enumFromInt(node.data_1),
                 .requirements = .{ .fits_in_f32 = true, .fits_in_f64 = true, .fits_in_dec = true }, // TODO need to store and retrieve from extra_data
                 .num_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
-                .value = .{ .f64 = 0.0 }, // TODO need to store and retrieve from extra_data
+                .value = CIR.RocDec{ .num = 0 }, // TODO need to store and retrieve from extra_data
+            },
+        },
+        .pattern_f64_literal => return CIR.Pattern{
+            .f64_literal = .{
+                .region = node.region,
+                .literal = @enumFromInt(node.data_1),
+                .requirements = .{ .fits_in_f32 = true, .fits_in_f64 = true, .fits_in_dec = true }, // TODO need to store and retrieve from extra_data
+                .num_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
+                .value = 0.0, // TODO need to store and retrieve from extra_data
             },
         },
         .pattern_str_literal => return CIR.Pattern{ .str_literal = .{
@@ -762,8 +771,14 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern) CIR.Pattern.Idx {
             node.data_1 = @intFromEnum(p.literal);
             // TODO store other data
         },
-        .frac_literal => |p| {
-            node.tag = .pattern_frac_literal;
+        .dec_literal => |p| {
+            node.tag = .pattern_dec_literal;
+            node.region = p.region;
+            node.data_1 = @intFromEnum(p.literal);
+            // TODO store other data
+        },
+        .f64_literal => |p| {
+            node.tag = .pattern_f64_literal;
             node.region = p.region;
             node.data_1 = @intFromEnum(p.literal);
             // TODO store other data
