@@ -1346,14 +1346,7 @@ pub const Expr = union(enum) {
         token: Token.Idx,
         region: TokenizedRegion,
     },
-    non_finite_float: struct {
-        value: enum {
-            nan,
-            infinity,
-            negative_infinity,
-        },
-        region: TokenizedRegion,
-    },
+
     string_part: struct { // TODO: this should be more properly represented in its own union enum
         token: Token.Idx,
         region: TokenizedRegion,

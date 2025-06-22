@@ -165,15 +165,12 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             } };
         },
         .expr_int => {
-            // Unpack the literal index from lower 16 bits of data_1
-            const literal: base.StringLiteral.Idx = @enumFromInt(node.data_1 & 0xFFFF);
-
             // Retrieve type variable from data_2 and requirements from data_3
             const int_var = @as(types.Var, @enumFromInt(node.data_2));
             const requirements = @as(types.Num.Int.Requirements, @bitCast(@as(u5, @intCast(node.data_3))));
 
-            // Extract extra_data index from packed data_1
-            const extra_idx = node.data_1 >> 16;
+            // Extract extra_data index from data_1
+            const extra_idx = node.data_1;
 
             // Read i128 from extra_data (stored as 4 u32s)
             const value_as_u32s = store.extra_data.items[extra_idx..][0..4];
@@ -187,7 +184,6 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .int = .{
                     .int_var = int_var,
                     .requirements = requirements,
-                    .literal = literal,
                     .value = literal_value,
                     .region = node.region,
                 },
@@ -212,12 +208,9 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             };
         },
         .expr_frac => {
-            // Retrieve the literal index from data_1
-            const literal: base.StringLiteral.Idx = @enumFromInt(node.data_1);
-
             // Retrieve type variable from data_2 and requirements from data_3
             const frac_var = @as(types.Var, @enumFromInt(node.data_2));
-            const requirements = @as(types.Num.Frac.Requirements, @bitCast(@as(u3, @truncate(node.data_3))));
+            const requirements = @as(types.Num.Frac.Requirements, @bitCast(@as(u2, @truncate(node.data_3))));
 
             // TODO get value and bound from extra_data
 
@@ -225,7 +218,6 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .frac = .{
                     .frac_var = frac_var,
                     .requirements = requirements,
-                    .literal = literal,
                     .value = 0,
                     // TODO shouldn't this be a flex_var?
                     .region = node.region,
@@ -378,7 +370,6 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
         .pattern_int_literal => return CIR.Pattern{
             .int_literal = .{
                 .region = node.region,
-                .literal = @enumFromInt(node.data_1),
                 .requirements = .{ .sign_needed = false, .bits_needed = .@"7" }, // TODO need to store and retrieve from extra_data
                 .num_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
                 .value = CIR.IntLiteralValue{ .value = 0 }, // TODO need to store and retrieve from extra_data
@@ -387,8 +378,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
         .pattern_dec_literal => return CIR.Pattern{
             .dec_literal = .{
                 .region = node.region,
-                .literal = @enumFromInt(node.data_1),
-                .requirements = .{ .fits_in_f32 = true, .fits_in_f64 = true, .fits_in_dec = true }, // TODO need to store and retrieve from extra_data
+                .requirements = .{ .fits_in_f32 = true, .fits_in_dec = true }, // TODO need to store and retrieve from extra_data
                 .num_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
                 .value = CIR.RocDec{ .num = 0 }, // TODO need to store and retrieve from extra_data
             },
@@ -396,8 +386,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
         .pattern_f64_literal => return CIR.Pattern{
             .f64_literal = .{
                 .region = node.region,
-                .literal = @enumFromInt(node.data_1),
-                .requirements = .{ .fits_in_f32 = true, .fits_in_f64 = true, .fits_in_dec = true }, // TODO need to store and retrieve from extra_data
+                .requirements = .{ .fits_in_f32 = true, .fits_in_dec = true }, // TODO need to store and retrieve from extra_data
                 .num_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
                 .value = 0.0, // TODO need to store and retrieve from extra_data
             },
@@ -560,7 +549,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             node.tag = .expr_int;
 
             // Store the literal index in data_1
-            node.data_1 = @intFromEnum(e.literal);
+            // literal field was removed, no need to store it
 
             // Store type variable in data_2 and requirements in data_3
             node.data_2 = @intFromEnum(e.int_var);
@@ -577,11 +566,8 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
                 store.extra_data.append(store.gpa, word) catch |err| exitOnOom(err);
             }
 
-            // Store the extra_data index in the node (reuse data_1 which has literal)
-            // We'll pack it: high 16 bits = extra_data index, low 16 bits = literal index
-            const literal_idx: u16 = @intCast(@intFromEnum(e.literal));
-            const extra_idx: u16 = @intCast(extra_data_start);
-            node.data_1 = (@as(u32, extra_idx) << 16) | literal_idx;
+            // Store the extra_data index in data_1
+            node.data_1 = @intCast(extra_data_start);
         },
         .list => |e| {
             node.region = e.region;
@@ -595,11 +581,11 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             node.tag = .expr_frac;
 
             // Store the literal index in data_1
-            node.data_1 = @intFromEnum(e.literal);
+            // literal field was removed, no need to store it
 
             // Store type variable in data_2 and requirements in data_3
             node.data_2 = @intFromEnum(e.frac_var);
-            node.data_3 = @as(u32, @intCast(@as(u3, @bitCast(e.requirements))));
+            node.data_3 = @as(u32, @intCast(@as(u2, @bitCast(e.requirements))));
 
             // TODO for storing the value and bound, use extra_data
         },
@@ -768,20 +754,17 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern) CIR.Pattern.Idx {
         .int_literal => |p| {
             node.tag = .pattern_int_literal;
             node.region = p.region;
-            node.data_1 = @intFromEnum(p.literal);
-            // TODO store other data
+            // TODO store num_var, requirements, and value
         },
         .dec_literal => |p| {
             node.tag = .pattern_dec_literal;
             node.region = p.region;
-            node.data_1 = @intFromEnum(p.literal);
-            // TODO store other data
+            // TODO store num_var, requirements, and value
         },
         .f64_literal => |p| {
             node.tag = .pattern_f64_literal;
             node.region = p.region;
-            node.data_1 = @intFromEnum(p.literal);
-            // TODO store other data
+            // TODO store num_var, requirements, and value
         },
         .str_literal => |p| {
             node.tag = .pattern_str_literal;
@@ -1100,7 +1083,7 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) CIR.Diagnostic.I
         .invalid_num_literal => |r| {
             node.tag = .diag_invalid_num_literal;
             node.region = r.region;
-            node.data_1 = @intFromEnum(r.literal);
+            // literal field was removed, no need to store it
         },
         .ident_already_in_scope => |r| {
             node.tag = .diag_ident_already_in_scope;
@@ -1220,7 +1203,6 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = node.region,
         } },
         .diag_invalid_num_literal => return CIR.Diagnostic{ .invalid_num_literal = .{
-            .literal = @enumFromInt(node.data_1),
             .region = node.region,
         } },
         .diag_ident_already_in_scope => return CIR.Diagnostic{ .ident_already_in_scope = .{

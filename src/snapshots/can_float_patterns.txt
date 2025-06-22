@@ -1,0 +1,1072 @@
+~~~META
+description=Simple float expressions to verify dec vs f64 literal handling
+type=file
+~~~SOURCE
+app [main] {
+    pf: platform "../basic-cli/platform.roc"
+}
+
+main =
+    # Values that should create dec literals (parseable by RocDec)
+    dec1 = 0.1
+    dec2 = 0.2
+    dec3 = 19.99
+    dec4 = 0.000000000000000001
+    dec5 = -42.5
+
+    # Values that should create f64 literals (not parseable by RocDec)
+    f64_1 = 1e400
+    f64_2 = -1e400
+    f64_3 = 3.141592653589793238462643383279502884197  # Too many digits for Dec
+
+    # Edge cases
+    zero = 0.0
+    one = 1.0
+
+    { dec1, dec2, dec3, dec4, dec5, f64_1, f64_2, f64_3, zero, one }
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_arrow_expects_ident
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_arrow_expects_ident
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_arrow_expects_ident
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_arrow_expects_ident
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_arrow_expects_ident
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_arrow_expects_ident
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_arrow_expects_ident
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_arrow_expects_ident
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_arrow_expects_ident
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_arrow_expects_ident
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_arrow_expects_ident
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_arrow_expects_ident
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_arrow_expects_ident
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+UNDEFINED VARIABLE
+Nothing is named `testFloat` in this scope.
+Is there an import or exposing missing up-top?
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+UNKNOWN OPERATOR
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+UNKNOWN OPERATOR
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+~~~PROBLEMS
+TOKENIZE: (163:36-163:59) UnclosedSingleQuote:
+This looks like an operator, but it's not one I recognize!
+                                   ^^^^^^^^^^^^^^^^^^^^^^^TOKENIZE: (164:37-164:68) UnclosedSingleQuote:
+Check the spelling and make sure you're using a valid Roc operator.
+                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^TOKENIZE: (220:36-220:59) UnclosedSingleQuote:
+This looks like an operator, but it's not one I recognize!
+                                   ^^^^^^^^^^^^^^^^^^^^^^^TOKENIZE: (221:37-221:68) UnclosedSingleQuote:
+Check the spelling and make sure you're using a valid Roc operator.
+                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^PARSER: expr_unexpected_token
+PARSER: expected_colon_after_type_annotation
+PARSER: expr_unexpected_token
+PARSER: expected_colon_after_type_annotation
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expected_colon_after_type_annotation
+UNDEFINED VARIABLE
+Nothing is named `dec1` in this scope.
+Is there an import or exposing missing up-top?
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+NOT IMPLEMENTED
+This feature is not yet implemented: top-level type_decl
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+~~~TOKENS
+KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:10),CloseSquare(1:10-1:11),OpenCurly(1:12-1:13),Newline(1:1-1:1),
+LowerIdent(2:5-2:7),OpColon(2:7-2:8),KwPlatform(2:9-2:17),StringStart(2:18-2:19),StringPart(2:19-2:44),StringEnd(2:44-2:45),Newline(1:1-1:1),
+CloseCurly(3:1-3:2),Newline(1:1-1:1),
+Newline(1:1-1:1),
+LowerIdent(5:1-5:5),OpAssign(5:6-5:7),Newline(1:1-1:1),
+Newline(6:6-6:67),
+LowerIdent(7:5-7:9),OpAssign(7:10-7:11),Float(7:12-7:15),Newline(1:1-1:1),
+LowerIdent(8:5-8:9),OpAssign(8:10-8:11),Float(8:12-8:15),Newline(1:1-1:1),
+LowerIdent(9:5-9:9),OpAssign(9:10-9:11),Float(9:12-9:17),Newline(1:1-1:1),
+LowerIdent(10:5-10:9),OpAssign(10:10-10:11),Float(10:12-10:32),Newline(1:1-1:1),
+LowerIdent(11:5-11:9),OpAssign(11:10-11:11),Float(11:12-11:17),Newline(1:1-1:1),
+Newline(1:1-1:1),
+Newline(13:6-13:71),
+LowerIdent(14:5-14:10),OpAssign(14:11-14:12),Float(14:13-14:18),Newline(1:1-1:1),
+LowerIdent(15:5-15:10),OpAssign(15:11-15:12),Float(15:13-15:19),Newline(1:1-1:1),
+LowerIdent(16:5-16:10),OpAssign(16:11-16:12),Float(16:13-16:54),Newline(16:57-16:81),
+Newline(1:1-1:1),
+Newline(18:6-18:17),
+LowerIdent(19:5-19:9),OpAssign(19:10-19:11),Float(19:12-19:15),Newline(1:1-1:1),
+LowerIdent(20:5-20:8),OpAssign(20:9-20:10),Float(20:11-20:14),Newline(1:1-1:1),
+Newline(1:1-1:1),
+OpenCurly(22:5-22:6),LowerIdent(22:7-22:11),Comma(22:11-22:12),LowerIdent(22:13-22:17),Comma(22:17-22:18),LowerIdent(22:19-22:23),Comma(22:23-22:24),LowerIdent(22:25-22:29),Comma(22:29-22:30),LowerIdent(22:31-22:35),Comma(22:35-22:36),LowerIdent(22:37-22:42),Comma(22:42-22:43),LowerIdent(22:44-22:49),Comma(22:49-22:50),LowerIdent(22:51-22:56),Comma(22:56-22:57),LowerIdent(22:58-22:62),Comma(22:62-22:63),LowerIdent(22:64-22:67),CloseCurly(22:68-22:69),Newline(1:1-1:1),
+UpperIdent(23:1-23:7),OpColon(23:7-23:8),LowerIdent(23:9-23:30),Newline(1:1-1:1),
+UpperIdent(24:1-24:7),OpColon(24:7-24:8),LowerIdent(24:9-24:30),Newline(1:1-1:1),
+UpperIdent(25:1-25:7),OpColon(25:7-25:8),LowerIdent(25:9-25:33),Newline(1:1-1:1),
+UpperIdent(26:1-26:7),OpColon(26:7-26:8),LowerIdent(26:9-26:30),Newline(1:1-1:1),
+UpperIdent(27:1-27:7),OpColon(27:7-27:8),LowerIdent(27:9-27:30),Newline(1:1-1:1),
+UpperIdent(28:1-28:7),OpColon(28:7-28:8),LowerIdent(28:9-28:33),Newline(1:1-1:1),
+UpperIdent(29:1-29:7),OpColon(29:7-29:8),LowerIdent(29:9-29:30),Newline(1:1-1:1),
+UpperIdent(30:1-30:7),OpColon(30:7-30:8),LowerIdent(30:9-30:30),Newline(1:1-1:1),
+UpperIdent(31:1-31:7),OpColon(31:7-31:8),LowerIdent(31:9-31:33),Newline(1:1-1:1),
+UpperIdent(32:1-32:7),OpColon(32:7-32:8),LowerIdent(32:9-32:30),Newline(1:1-1:1),
+UpperIdent(33:1-33:7),OpColon(33:7-33:8),LowerIdent(33:9-33:30),Newline(1:1-1:1),
+UpperIdent(34:1-34:7),OpColon(34:7-34:8),LowerIdent(34:9-34:33),Newline(1:1-1:1),
+UpperIdent(35:1-35:7),OpColon(35:7-35:8),LowerIdent(35:9-35:30),Newline(1:1-1:1),
+UpperIdent(36:1-36:7),OpColon(36:7-36:8),LowerIdent(36:9-36:30),Newline(1:1-1:1),
+UpperIdent(37:1-37:7),OpColon(37:7-37:8),LowerIdent(37:9-37:33),Newline(1:1-1:1),
+UpperIdent(38:1-38:7),OpColon(38:7-38:8),LowerIdent(38:9-38:30),Newline(1:1-1:1),
+UpperIdent(39:1-39:7),OpColon(39:7-39:8),LowerIdent(39:9-39:30),Newline(1:1-1:1),
+UpperIdent(40:1-40:7),OpColon(40:7-40:8),LowerIdent(40:9-40:33),Newline(1:1-1:1),
+UpperIdent(41:1-41:7),OpColon(41:7-41:8),LowerIdent(41:9-41:30),Newline(1:1-1:1),
+UpperIdent(42:1-42:7),OpColon(42:7-42:8),LowerIdent(42:9-42:30),Newline(1:1-1:1),
+UpperIdent(43:1-43:7),OpColon(43:7-43:8),LowerIdent(43:9-43:33),Newline(1:1-1:1),
+UpperIdent(44:1-44:7),OpColon(44:7-44:8),LowerIdent(44:9-44:30),Newline(1:1-1:1),
+UpperIdent(45:1-45:7),OpColon(45:7-45:8),LowerIdent(45:9-45:30),Newline(1:1-1:1),
+UpperIdent(46:1-46:7),OpColon(46:7-46:8),LowerIdent(46:9-46:30),Newline(1:1-1:1),
+UpperIdent(47:1-47:7),OpColon(47:7-47:8),LowerIdent(47:9-47:30),Newline(1:1-1:1),
+UpperIdent(48:1-48:7),OpColon(48:7-48:8),LowerIdent(48:9-48:30),Newline(1:1-1:1),
+UpperIdent(49:1-49:7),OpColon(49:7-49:8),LowerIdent(49:9-49:33),Newline(1:1-1:1),
+UpperIdent(50:1-50:7),OpColon(50:7-50:8),LowerIdent(50:9-50:30),Newline(1:1-1:1),
+UpperIdent(51:1-51:7),OpColon(51:7-51:8),LowerIdent(51:9-51:30),Newline(1:1-1:1),
+UpperIdent(52:1-52:7),OpColon(52:7-52:8),LowerIdent(52:9-52:33),Newline(1:1-1:1),
+UpperIdent(53:1-53:7),OpColon(53:7-53:8),LowerIdent(53:9-53:30),Newline(1:1-1:1),
+UpperIdent(54:1-54:7),OpColon(54:7-54:8),LowerIdent(54:9-54:30),Newline(1:1-1:1),
+UpperIdent(55:1-55:7),OpColon(55:7-55:8),LowerIdent(55:9-55:33),Newline(1:1-1:1),
+UpperIdent(56:1-56:7),OpColon(56:7-56:8),LowerIdent(56:9-56:30),Newline(1:1-1:1),
+UpperIdent(57:1-57:7),OpColon(57:7-57:8),LowerIdent(57:9-57:30),Newline(1:1-1:1),
+UpperIdent(58:1-58:7),OpColon(58:7-58:8),LowerIdent(58:9-58:33),Newline(1:1-1:1),
+UpperIdent(59:1-59:7),OpColon(59:7-59:8),LowerIdent(59:9-59:30),Newline(1:1-1:1),
+UpperIdent(60:1-60:7),OpColon(60:7-60:8),LowerIdent(60:9-60:30),Newline(1:1-1:1),
+UpperIdent(61:1-61:7),OpColon(61:7-61:8),LowerIdent(61:9-61:30),Newline(1:1-1:1),
+UpperIdent(62:1-62:7),OpColon(62:7-62:8),LowerIdent(62:9-62:30),Newline(1:1-1:1),
+UpperIdent(63:1-63:7),OpColon(63:7-63:8),LowerIdent(63:9-63:30),Newline(1:1-1:1),
+UpperIdent(64:1-64:7),OpColon(64:7-64:8),LowerIdent(64:9-64:33),Newline(1:1-1:1),
+UpperIdent(65:1-65:7),OpColon(65:7-65:8),LowerIdent(65:9-65:30),Newline(1:1-1:1),
+UpperIdent(66:1-66:7),OpColon(66:7-66:8),LowerIdent(66:9-66:30),Newline(1:1-1:1),
+UpperIdent(67:1-67:7),OpColon(67:7-67:8),LowerIdent(67:9-67:33),Newline(1:1-1:1),
+UpperIdent(68:1-68:7),OpColon(68:7-68:8),LowerIdent(68:9-68:30),Newline(1:1-1:1),
+UpperIdent(69:1-69:7),OpColon(69:7-69:8),LowerIdent(69:9-69:30),Newline(1:1-1:1),
+UpperIdent(70:1-70:7),OpColon(70:7-70:8),LowerIdent(70:9-70:30),Newline(1:1-1:1),
+UpperIdent(71:1-71:7),OpColon(71:7-71:8),LowerIdent(71:9-71:30),Newline(1:1-1:1),
+UpperIdent(72:1-72:10),UpperIdent(72:11-72:19),Newline(1:1-1:1),
+UpperIdent(73:1-73:8),LowerIdent(73:9-73:11),LowerIdent(73:12-73:17),MalformedUnknownToken(73:18-73:19),LowerIdent(73:19-73:28),MalformedUnknownToken(73:28-73:29),KwIn(73:30-73:32),LowerIdent(73:33-73:37),LowerIdent(73:38-73:43),Dot(73:43-73:44),Newline(1:1-1:1),
+UpperIdent(74:1-74:3),LowerIdent(74:4-74:9),LowerIdent(74:10-74:12),KwImport(74:13-74:19),OpOr(74:20-74:22),KwExposing(74:23-74:31),LowerIdent(74:32-74:39),LowerIdent(74:40-74:42),OpBinaryMinus(74:42-74:43),LowerIdent(74:43-74:46),NoSpaceOpQuestion(74:46-74:47),Newline(1:1-1:1),
+UpperIdent(75:1-75:8),UpperIdent(75:9-75:18),Newline(1:1-1:1),
+UpperIdent(76:1-76:4),LowerIdent(76:5-76:14),LowerIdent(76:15-76:19),LowerIdent(76:20-76:22),LowerIdent(76:23-76:26),LowerIdent(76:27-76:34),LowerIdent(76:35-76:37),LowerIdent(76:38-76:41),LowerIdent(76:42-76:45),LowerIdent(76:46-76:51),Dot(76:51-76:52),Newline(1:1-1:1),
+UpperIdent(77:1-77:5),LowerIdent(77:6-77:17),Comma(77:17-77:18),LowerIdent(77:19-77:23),LowerIdent(77:24-77:35),Comma(77:35-77:36),OpAnd(77:37-77:40),KwImports(77:41-77:48),LowerIdent(77:49-77:52),LowerIdent(77:53-77:60),LowerIdent(77:61-77:63),LowerIdent(77:64-77:67),LowerIdent(77:68-77:71),LowerIdent(77:72-77:77),Dot(77:77-77:78),Newline(1:1-1:1),
+UpperIdent(78:1-78:8),UpperIdent(78:9-78:18),Newline(1:1-1:1),
+UpperIdent(79:1-79:4),LowerIdent(79:5-79:14),LowerIdent(79:15-79:19),LowerIdent(79:20-79:22),LowerIdent(79:23-79:26),LowerIdent(79:27-79:34),LowerIdent(79:35-79:37),LowerIdent(79:38-79:41),LowerIdent(79:42-79:45),LowerIdent(79:46-79:51),Dot(79:51-79:52),Newline(1:1-1:1),
+UpperIdent(80:1-80:5),LowerIdent(80:6-80:17),Comma(80:17-80:18),LowerIdent(80:19-80:23),LowerIdent(80:24-80:35),Comma(80:35-80:36),OpAnd(80:37-80:40),KwImports(80:41-80:48),LowerIdent(80:49-80:52),LowerIdent(80:53-80:60),LowerIdent(80:61-80:63),LowerIdent(80:64-80:67),LowerIdent(80:68-80:71),LowerIdent(80:72-80:77),Dot(80:77-80:78),Newline(1:1-1:1),
+UpperIdent(81:1-81:8),UpperIdent(81:9-81:18),Newline(1:1-1:1),
+UpperIdent(82:1-82:4),LowerIdent(82:5-82:14),LowerIdent(82:15-82:19),LowerIdent(82:20-82:22),LowerIdent(82:23-82:26),LowerIdent(82:27-82:34),LowerIdent(82:35-82:37),LowerIdent(82:38-82:41),LowerIdent(82:42-82:45),LowerIdent(82:46-82:51),Dot(82:51-82:52),Newline(1:1-1:1),
+UpperIdent(83:1-83:5),LowerIdent(83:6-83:17),Comma(83:17-83:18),LowerIdent(83:19-83:23),LowerIdent(83:24-83:35),Comma(83:35-83:36),OpAnd(83:37-83:40),KwImports(83:41-83:48),LowerIdent(83:49-83:52),LowerIdent(83:53-83:60),LowerIdent(83:61-83:63),LowerIdent(83:64-83:67),LowerIdent(83:68-83:71),LowerIdent(83:72-83:77),Dot(83:77-83:78),Newline(1:1-1:1),
+UpperIdent(84:1-84:8),UpperIdent(84:9-84:18),Newline(1:1-1:1),
+UpperIdent(85:1-85:4),LowerIdent(85:5-85:14),LowerIdent(85:15-85:19),LowerIdent(85:20-85:22),LowerIdent(85:23-85:26),LowerIdent(85:27-85:34),LowerIdent(85:35-85:37),LowerIdent(85:38-85:41),LowerIdent(85:42-85:45),LowerIdent(85:46-85:51),Dot(85:51-85:52),Newline(1:1-1:1),
+UpperIdent(86:1-86:5),LowerIdent(86:6-86:17),Comma(86:17-86:18),LowerIdent(86:19-86:23),LowerIdent(86:24-86:35),Comma(86:35-86:36),OpAnd(86:37-86:40),KwImports(86:41-86:48),LowerIdent(86:49-86:52),LowerIdent(86:53-86:60),LowerIdent(86:61-86:63),LowerIdent(86:64-86:67),LowerIdent(86:68-86:71),LowerIdent(86:72-86:77),Dot(86:77-86:78),Newline(1:1-1:1),
+UpperIdent(87:1-87:8),UpperIdent(87:9-87:18),Newline(1:1-1:1),
+UpperIdent(88:1-88:4),LowerIdent(88:5-88:14),LowerIdent(88:15-88:19),LowerIdent(88:20-88:22),LowerIdent(88:23-88:26),LowerIdent(88:27-88:34),LowerIdent(88:35-88:37),LowerIdent(88:38-88:41),LowerIdent(88:42-88:45),LowerIdent(88:46-88:51),Dot(88:51-88:52),Newline(1:1-1:1),
+UpperIdent(89:1-89:5),LowerIdent(89:6-89:17),Comma(89:17-89:18),LowerIdent(89:19-89:23),LowerIdent(89:24-89:35),Comma(89:35-89:36),OpAnd(89:37-89:40),KwImports(89:41-89:48),LowerIdent(89:49-89:52),LowerIdent(89:53-89:60),LowerIdent(89:61-89:63),LowerIdent(89:64-89:67),LowerIdent(89:68-89:71),LowerIdent(89:72-89:77),Dot(89:77-89:78),Newline(1:1-1:1),
+UpperIdent(90:1-90:8),UpperIdent(90:9-90:18),Newline(1:1-1:1),
+UpperIdent(91:1-91:4),LowerIdent(91:5-91:14),LowerIdent(91:15-91:19),LowerIdent(91:20-91:22),LowerIdent(91:23-91:26),LowerIdent(91:27-91:34),LowerIdent(91:35-91:37),LowerIdent(91:38-91:41),LowerIdent(91:42-91:45),LowerIdent(91:46-91:51),Dot(91:51-91:52),Newline(1:1-1:1),
+UpperIdent(92:1-92:5),LowerIdent(92:6-92:17),Comma(92:17-92:18),LowerIdent(92:19-92:23),LowerIdent(92:24-92:35),Comma(92:35-92:36),OpAnd(92:37-92:40),KwImports(92:41-92:48),LowerIdent(92:49-92:52),LowerIdent(92:53-92:60),LowerIdent(92:61-92:63),LowerIdent(92:64-92:67),LowerIdent(92:68-92:71),LowerIdent(92:72-92:77),Dot(92:77-92:78),Newline(1:1-1:1),
+UpperIdent(93:1-93:8),UpperIdent(93:9-93:18),Newline(1:1-1:1),
+UpperIdent(94:1-94:4),LowerIdent(94:5-94:14),LowerIdent(94:15-94:19),LowerIdent(94:20-94:22),LowerIdent(94:23-94:26),LowerIdent(94:27-94:34),LowerIdent(94:35-94:37),LowerIdent(94:38-94:41),LowerIdent(94:42-94:45),LowerIdent(94:46-94:51),Dot(94:51-94:52),Newline(1:1-1:1),
+UpperIdent(95:1-95:5),LowerIdent(95:6-95:17),Comma(95:17-95:18),LowerIdent(95:19-95:23),LowerIdent(95:24-95:35),Comma(95:35-95:36),OpAnd(95:37-95:40),KwImports(95:41-95:48),LowerIdent(95:49-95:52),LowerIdent(95:53-95:60),LowerIdent(95:61-95:63),LowerIdent(95:64-95:67),LowerIdent(95:68-95:71),LowerIdent(95:72-95:77),Dot(95:77-95:78),Newline(1:1-1:1),
+UpperIdent(96:1-96:8),UpperIdent(96:9-96:18),Newline(1:1-1:1),
+UpperIdent(97:1-97:4),LowerIdent(97:5-97:14),LowerIdent(97:15-97:19),LowerIdent(97:20-97:22),LowerIdent(97:23-97:26),LowerIdent(97:27-97:34),LowerIdent(97:35-97:37),LowerIdent(97:38-97:41),LowerIdent(97:42-97:45),LowerIdent(97:46-97:51),Dot(97:51-97:52),Newline(1:1-1:1),
+UpperIdent(98:1-98:5),LowerIdent(98:6-98:17),Comma(98:17-98:18),LowerIdent(98:19-98:23),LowerIdent(98:24-98:35),Comma(98:35-98:36),OpAnd(98:37-98:40),KwImports(98:41-98:48),LowerIdent(98:49-98:52),LowerIdent(98:53-98:60),LowerIdent(98:61-98:63),LowerIdent(98:64-98:67),LowerIdent(98:68-98:71),LowerIdent(98:72-98:77),Dot(98:77-98:78),Newline(1:1-1:1),
+UpperIdent(99:1-99:8),UpperIdent(99:9-99:18),Newline(1:1-1:1),
+UpperIdent(100:1-100:4),LowerIdent(100:5-100:14),LowerIdent(100:15-100:19),LowerIdent(100:20-100:22),LowerIdent(100:23-100:26),LowerIdent(100:27-100:34),LowerIdent(100:35-100:37),LowerIdent(100:38-100:41),LowerIdent(100:42-100:45),LowerIdent(100:46-100:51),Dot(100:51-100:52),Newline(1:1-1:1),
+UpperIdent(101:1-101:5),LowerIdent(101:6-101:17),Comma(101:17-101:18),LowerIdent(101:19-101:23),LowerIdent(101:24-101:35),Comma(101:35-101:36),OpAnd(101:37-101:40),KwImports(101:41-101:48),LowerIdent(101:49-101:52),LowerIdent(101:53-101:60),LowerIdent(101:61-101:63),LowerIdent(101:64-101:67),LowerIdent(101:68-101:71),LowerIdent(101:72-101:77),Dot(101:77-101:78),Newline(1:1-1:1),
+UpperIdent(102:1-102:8),UpperIdent(102:9-102:18),Newline(1:1-1:1),
+UpperIdent(103:1-103:4),LowerIdent(103:5-103:14),LowerIdent(103:15-103:19),LowerIdent(103:20-103:22),LowerIdent(103:23-103:26),LowerIdent(103:27-103:34),LowerIdent(103:35-103:37),LowerIdent(103:38-103:41),LowerIdent(103:42-103:45),LowerIdent(103:46-103:51),Dot(103:51-103:52),Newline(1:1-1:1),
+UpperIdent(104:1-104:5),LowerIdent(104:6-104:17),Comma(104:17-104:18),LowerIdent(104:19-104:23),LowerIdent(104:24-104:35),Comma(104:35-104:36),OpAnd(104:37-104:40),KwImports(104:41-104:48),LowerIdent(104:49-104:52),LowerIdent(104:53-104:60),LowerIdent(104:61-104:63),LowerIdent(104:64-104:67),LowerIdent(104:68-104:71),LowerIdent(104:72-104:77),Dot(104:77-104:78),Newline(1:1-1:1),
+UpperIdent(105:1-105:8),UpperIdent(105:9-105:18),Newline(1:1-1:1),
+UpperIdent(106:1-106:4),LowerIdent(106:5-106:14),LowerIdent(106:15-106:19),LowerIdent(106:20-106:22),LowerIdent(106:23-106:26),LowerIdent(106:27-106:34),LowerIdent(106:35-106:37),LowerIdent(106:38-106:41),LowerIdent(106:42-106:45),LowerIdent(106:46-106:51),Dot(106:51-106:52),Newline(1:1-1:1),
+UpperIdent(107:1-107:5),LowerIdent(107:6-107:17),Comma(107:17-107:18),LowerIdent(107:19-107:23),LowerIdent(107:24-107:35),Comma(107:35-107:36),OpAnd(107:37-107:40),KwImports(107:41-107:48),LowerIdent(107:49-107:52),LowerIdent(107:53-107:60),LowerIdent(107:61-107:63),LowerIdent(107:64-107:67),LowerIdent(107:68-107:71),LowerIdent(107:72-107:77),Dot(107:77-107:78),Newline(1:1-1:1),
+UpperIdent(108:1-108:8),UpperIdent(108:9-108:18),Newline(1:1-1:1),
+UpperIdent(109:1-109:4),LowerIdent(109:5-109:14),LowerIdent(109:15-109:19),LowerIdent(109:20-109:22),LowerIdent(109:23-109:26),LowerIdent(109:27-109:34),LowerIdent(109:35-109:37),LowerIdent(109:38-109:41),LowerIdent(109:42-109:45),LowerIdent(109:46-109:51),Dot(109:51-109:52),Newline(1:1-1:1),
+UpperIdent(110:1-110:5),LowerIdent(110:6-110:17),Comma(110:17-110:18),LowerIdent(110:19-110:23),LowerIdent(110:24-110:35),Comma(110:35-110:36),OpAnd(110:37-110:40),KwImports(110:41-110:48),LowerIdent(110:49-110:52),LowerIdent(110:53-110:60),LowerIdent(110:61-110:63),LowerIdent(110:64-110:67),LowerIdent(110:68-110:71),LowerIdent(110:72-110:77),Dot(110:77-110:78),Newline(1:1-1:1),
+UpperIdent(111:1-111:8),UpperIdent(111:9-111:18),Newline(1:1-1:1),
+UpperIdent(112:1-112:4),LowerIdent(112:5-112:14),LowerIdent(112:15-112:19),LowerIdent(112:20-112:22),LowerIdent(112:23-112:26),LowerIdent(112:27-112:34),LowerIdent(112:35-112:37),LowerIdent(112:38-112:41),LowerIdent(112:42-112:45),LowerIdent(112:46-112:51),Dot(112:51-112:52),Newline(1:1-1:1),
+UpperIdent(113:1-113:5),LowerIdent(113:6-113:17),Comma(113:17-113:18),LowerIdent(113:19-113:23),LowerIdent(113:24-113:35),Comma(113:35-113:36),OpAnd(113:37-113:40),KwImports(113:41-113:48),LowerIdent(113:49-113:52),LowerIdent(113:53-113:60),LowerIdent(113:61-113:63),LowerIdent(113:64-113:67),LowerIdent(113:68-113:71),LowerIdent(113:72-113:77),Dot(113:77-113:78),Newline(1:1-1:1),
+UpperIdent(114:1-114:8),UpperIdent(114:9-114:18),Newline(1:1-1:1),
+UpperIdent(115:1-115:4),LowerIdent(115:5-115:14),LowerIdent(115:15-115:19),LowerIdent(115:20-115:22),LowerIdent(115:23-115:26),LowerIdent(115:27-115:34),LowerIdent(115:35-115:37),LowerIdent(115:38-115:41),LowerIdent(115:42-115:45),LowerIdent(115:46-115:51),Dot(115:51-115:52),Newline(1:1-1:1),
+UpperIdent(116:1-116:5),LowerIdent(116:6-116:17),Comma(116:17-116:18),LowerIdent(116:19-116:23),LowerIdent(116:24-116:35),Comma(116:35-116:36),OpAnd(116:37-116:40),KwImports(116:41-116:48),LowerIdent(116:49-116:52),LowerIdent(116:53-116:60),LowerIdent(116:61-116:63),LowerIdent(116:64-116:67),LowerIdent(116:68-116:71),LowerIdent(116:72-116:77),Dot(116:77-116:78),Newline(1:1-1:1),
+UpperIdent(117:1-117:8),UpperIdent(117:9-117:18),Newline(1:1-1:1),
+UpperIdent(118:1-118:4),LowerIdent(118:5-118:14),LowerIdent(118:15-118:19),LowerIdent(118:20-118:22),LowerIdent(118:23-118:26),LowerIdent(118:27-118:34),LowerIdent(118:35-118:37),LowerIdent(118:38-118:41),LowerIdent(118:42-118:45),LowerIdent(118:46-118:51),Dot(118:51-118:52),Newline(1:1-1:1),
+UpperIdent(119:1-119:5),LowerIdent(119:6-119:17),Comma(119:17-119:18),LowerIdent(119:19-119:23),LowerIdent(119:24-119:35),Comma(119:35-119:36),OpAnd(119:37-119:40),KwImports(119:41-119:48),LowerIdent(119:49-119:52),LowerIdent(119:53-119:60),LowerIdent(119:61-119:63),LowerIdent(119:64-119:67),LowerIdent(119:68-119:71),LowerIdent(119:72-119:77),Dot(119:77-119:78),Newline(1:1-1:1),
+UpperIdent(120:1-120:8),UpperIdent(120:9-120:18),Newline(1:1-1:1),
+UpperIdent(121:1-121:4),LowerIdent(121:5-121:14),LowerIdent(121:15-121:19),LowerIdent(121:20-121:22),LowerIdent(121:23-121:26),LowerIdent(121:27-121:34),LowerIdent(121:35-121:37),LowerIdent(121:38-121:41),LowerIdent(121:42-121:45),LowerIdent(121:46-121:51),Dot(121:51-121:52),Newline(1:1-1:1),
+UpperIdent(122:1-122:5),LowerIdent(122:6-122:17),Comma(122:17-122:18),LowerIdent(122:19-122:23),LowerIdent(122:24-122:35),Comma(122:35-122:36),OpAnd(122:37-122:40),KwImports(122:41-122:48),LowerIdent(122:49-122:52),LowerIdent(122:53-122:60),LowerIdent(122:61-122:63),LowerIdent(122:64-122:67),LowerIdent(122:68-122:71),LowerIdent(122:72-122:77),Dot(122:77-122:78),Newline(1:1-1:1),
+UpperIdent(123:1-123:8),UpperIdent(123:9-123:18),Newline(1:1-1:1),
+UpperIdent(124:1-124:4),LowerIdent(124:5-124:14),LowerIdent(124:15-124:19),LowerIdent(124:20-124:22),LowerIdent(124:23-124:26),LowerIdent(124:27-124:34),LowerIdent(124:35-124:37),LowerIdent(124:38-124:41),LowerIdent(124:42-124:45),LowerIdent(124:46-124:51),Dot(124:51-124:52),Newline(1:1-1:1),
+UpperIdent(125:1-125:5),LowerIdent(125:6-125:17),Comma(125:17-125:18),LowerIdent(125:19-125:23),LowerIdent(125:24-125:35),Comma(125:35-125:36),OpAnd(125:37-125:40),KwImports(125:41-125:48),LowerIdent(125:49-125:52),LowerIdent(125:53-125:60),LowerIdent(125:61-125:63),LowerIdent(125:64-125:67),LowerIdent(125:68-125:71),LowerIdent(125:72-125:77),Dot(125:77-125:78),Newline(1:1-1:1),
+UpperIdent(126:1-126:8),UpperIdent(126:9-126:18),Newline(1:1-1:1),
+UpperIdent(127:1-127:4),LowerIdent(127:5-127:14),LowerIdent(127:15-127:19),LowerIdent(127:20-127:22),LowerIdent(127:23-127:26),LowerIdent(127:27-127:34),LowerIdent(127:35-127:37),LowerIdent(127:38-127:41),LowerIdent(127:42-127:45),LowerIdent(127:46-127:51),Dot(127:51-127:52),Newline(1:1-1:1),
+UpperIdent(128:1-128:5),LowerIdent(128:6-128:17),Comma(128:17-128:18),LowerIdent(128:19-128:23),LowerIdent(128:24-128:35),Comma(128:35-128:36),OpAnd(128:37-128:40),KwImports(128:41-128:48),LowerIdent(128:49-128:52),LowerIdent(128:53-128:60),LowerIdent(128:61-128:63),LowerIdent(128:64-128:67),LowerIdent(128:68-128:71),LowerIdent(128:72-128:77),Dot(128:77-128:78),Newline(1:1-1:1),
+UpperIdent(129:1-129:8),UpperIdent(129:9-129:18),Newline(1:1-1:1),
+UpperIdent(130:1-130:4),LowerIdent(130:5-130:14),LowerIdent(130:15-130:19),LowerIdent(130:20-130:22),LowerIdent(130:23-130:26),LowerIdent(130:27-130:34),LowerIdent(130:35-130:37),LowerIdent(130:38-130:41),LowerIdent(130:42-130:45),LowerIdent(130:46-130:51),Dot(130:51-130:52),Newline(1:1-1:1),
+UpperIdent(131:1-131:5),LowerIdent(131:6-131:17),Comma(131:17-131:18),LowerIdent(131:19-131:23),LowerIdent(131:24-131:35),Comma(131:35-131:36),OpAnd(131:37-131:40),KwImports(131:41-131:48),LowerIdent(131:49-131:52),LowerIdent(131:53-131:60),LowerIdent(131:61-131:63),LowerIdent(131:64-131:67),LowerIdent(131:68-131:71),LowerIdent(131:72-131:77),Dot(131:77-131:78),Newline(1:1-1:1),
+UpperIdent(132:1-132:8),UpperIdent(132:9-132:18),Newline(1:1-1:1),
+UpperIdent(133:1-133:4),LowerIdent(133:5-133:14),LowerIdent(133:15-133:19),LowerIdent(133:20-133:22),LowerIdent(133:23-133:26),LowerIdent(133:27-133:34),LowerIdent(133:35-133:37),LowerIdent(133:38-133:41),LowerIdent(133:42-133:45),LowerIdent(133:46-133:51),Dot(133:51-133:52),Newline(1:1-1:1),
+UpperIdent(134:1-134:5),LowerIdent(134:6-134:17),Comma(134:17-134:18),LowerIdent(134:19-134:23),LowerIdent(134:24-134:35),Comma(134:35-134:36),OpAnd(134:37-134:40),KwImports(134:41-134:48),LowerIdent(134:49-134:52),LowerIdent(134:53-134:60),LowerIdent(134:61-134:63),LowerIdent(134:64-134:67),LowerIdent(134:68-134:71),LowerIdent(134:72-134:77),Dot(134:77-134:78),Newline(1:1-1:1),
+UpperIdent(135:1-135:8),UpperIdent(135:9-135:18),Newline(1:1-1:1),
+UpperIdent(136:1-136:4),LowerIdent(136:5-136:14),LowerIdent(136:15-136:19),LowerIdent(136:20-136:22),LowerIdent(136:23-136:26),LowerIdent(136:27-136:34),LowerIdent(136:35-136:37),LowerIdent(136:38-136:41),LowerIdent(136:42-136:45),LowerIdent(136:46-136:51),Dot(136:51-136:52),Newline(1:1-1:1),
+UpperIdent(137:1-137:5),LowerIdent(137:6-137:17),Comma(137:17-137:18),LowerIdent(137:19-137:23),LowerIdent(137:24-137:35),Comma(137:35-137:36),OpAnd(137:37-137:40),KwImports(137:41-137:48),LowerIdent(137:49-137:52),LowerIdent(137:53-137:60),LowerIdent(137:61-137:63),LowerIdent(137:64-137:67),LowerIdent(137:68-137:71),LowerIdent(137:72-137:77),Dot(137:77-137:78),Newline(1:1-1:1),
+UpperIdent(138:1-138:8),UpperIdent(138:9-138:18),Newline(1:1-1:1),
+UpperIdent(139:1-139:4),LowerIdent(139:5-139:14),LowerIdent(139:15-139:19),LowerIdent(139:20-139:22),LowerIdent(139:23-139:26),LowerIdent(139:27-139:34),LowerIdent(139:35-139:37),LowerIdent(139:38-139:41),LowerIdent(139:42-139:45),LowerIdent(139:46-139:51),Dot(139:51-139:52),Newline(1:1-1:1),
+UpperIdent(140:1-140:5),LowerIdent(140:6-140:17),Comma(140:17-140:18),LowerIdent(140:19-140:23),LowerIdent(140:24-140:35),Comma(140:35-140:36),OpAnd(140:37-140:40),KwImports(140:41-140:48),LowerIdent(140:49-140:52),LowerIdent(140:53-140:60),LowerIdent(140:61-140:63),LowerIdent(140:64-140:67),LowerIdent(140:68-140:71),LowerIdent(140:72-140:77),Dot(140:77-140:78),Newline(1:1-1:1),
+UpperIdent(141:1-141:8),UpperIdent(141:9-141:18),Newline(1:1-1:1),
+UpperIdent(142:1-142:4),LowerIdent(142:5-142:14),LowerIdent(142:15-142:19),LowerIdent(142:20-142:22),LowerIdent(142:23-142:26),LowerIdent(142:27-142:34),LowerIdent(142:35-142:37),LowerIdent(142:38-142:41),LowerIdent(142:42-142:45),LowerIdent(142:46-142:51),Dot(142:51-142:52),Newline(1:1-1:1),
+UpperIdent(143:1-143:5),LowerIdent(143:6-143:17),Comma(143:17-143:18),LowerIdent(143:19-143:23),LowerIdent(143:24-143:35),Comma(143:35-143:36),OpAnd(143:37-143:40),KwImports(143:41-143:48),LowerIdent(143:49-143:52),LowerIdent(143:53-143:60),LowerIdent(143:61-143:63),LowerIdent(143:64-143:67),LowerIdent(143:68-143:71),LowerIdent(143:72-143:77),Dot(143:77-143:78),Newline(1:1-1:1),
+UpperIdent(144:1-144:8),UpperIdent(144:9-144:18),Newline(1:1-1:1),
+UpperIdent(145:1-145:4),LowerIdent(145:5-145:14),LowerIdent(145:15-145:19),LowerIdent(145:20-145:22),LowerIdent(145:23-145:26),LowerIdent(145:27-145:34),LowerIdent(145:35-145:37),LowerIdent(145:38-145:41),LowerIdent(145:42-145:45),LowerIdent(145:46-145:51),Dot(145:51-145:52),Newline(1:1-1:1),
+UpperIdent(146:1-146:5),LowerIdent(146:6-146:17),Comma(146:17-146:18),LowerIdent(146:19-146:23),LowerIdent(146:24-146:35),Comma(146:35-146:36),OpAnd(146:37-146:40),KwImports(146:41-146:48),LowerIdent(146:49-146:52),LowerIdent(146:53-146:60),LowerIdent(146:61-146:63),LowerIdent(146:64-146:67),LowerIdent(146:68-146:71),LowerIdent(146:72-146:77),Dot(146:77-146:78),Newline(1:1-1:1),
+UpperIdent(147:1-147:8),UpperIdent(147:9-147:18),Newline(1:1-1:1),
+UpperIdent(148:1-148:4),LowerIdent(148:5-148:14),LowerIdent(148:15-148:19),LowerIdent(148:20-148:22),LowerIdent(148:23-148:26),LowerIdent(148:27-148:34),LowerIdent(148:35-148:37),LowerIdent(148:38-148:41),LowerIdent(148:42-148:45),LowerIdent(148:46-148:51),Dot(148:51-148:52),Newline(1:1-1:1),
+UpperIdent(149:1-149:5),LowerIdent(149:6-149:17),Comma(149:17-149:18),LowerIdent(149:19-149:23),LowerIdent(149:24-149:35),Comma(149:35-149:36),OpAnd(149:37-149:40),KwImports(149:41-149:48),LowerIdent(149:49-149:52),LowerIdent(149:53-149:60),LowerIdent(149:61-149:63),LowerIdent(149:64-149:67),LowerIdent(149:68-149:71),LowerIdent(149:72-149:77),Dot(149:77-149:78),Newline(1:1-1:1),
+UpperIdent(150:1-150:8),UpperIdent(150:9-150:18),Newline(1:1-1:1),
+UpperIdent(151:1-151:4),LowerIdent(151:5-151:14),LowerIdent(151:15-151:19),LowerIdent(151:20-151:22),LowerIdent(151:23-151:26),LowerIdent(151:27-151:34),LowerIdent(151:35-151:37),LowerIdent(151:38-151:41),LowerIdent(151:42-151:45),LowerIdent(151:46-151:51),Dot(151:51-151:52),Newline(1:1-1:1),
+UpperIdent(152:1-152:5),LowerIdent(152:6-152:17),Comma(152:17-152:18),LowerIdent(152:19-152:23),LowerIdent(152:24-152:35),Comma(152:35-152:36),OpAnd(152:37-152:40),KwImports(152:41-152:48),LowerIdent(152:49-152:52),LowerIdent(152:53-152:60),LowerIdent(152:61-152:63),LowerIdent(152:64-152:67),LowerIdent(152:68-152:71),LowerIdent(152:72-152:77),Dot(152:77-152:78),Newline(1:1-1:1),
+UpperIdent(153:1-153:8),UpperIdent(153:9-153:18),Newline(1:1-1:1),
+UpperIdent(154:1-154:4),LowerIdent(154:5-154:14),LowerIdent(154:15-154:19),LowerIdent(154:20-154:22),LowerIdent(154:23-154:26),LowerIdent(154:27-154:34),LowerIdent(154:35-154:37),LowerIdent(154:38-154:41),LowerIdent(154:42-154:45),LowerIdent(154:46-154:51),Dot(154:51-154:52),Newline(1:1-1:1),
+UpperIdent(155:1-155:5),LowerIdent(155:6-155:17),Comma(155:17-155:18),LowerIdent(155:19-155:23),LowerIdent(155:24-155:35),Comma(155:35-155:36),OpAnd(155:37-155:40),KwImports(155:41-155:48),LowerIdent(155:49-155:52),LowerIdent(155:53-155:60),LowerIdent(155:61-155:63),LowerIdent(155:64-155:67),LowerIdent(155:68-155:71),LowerIdent(155:72-155:77),Dot(155:77-155:78),Newline(1:1-1:1),
+UpperIdent(156:1-156:8),UpperIdent(156:9-156:18),Newline(1:1-1:1),
+UpperIdent(157:1-157:4),LowerIdent(157:5-157:14),LowerIdent(157:15-157:19),LowerIdent(157:20-157:22),LowerIdent(157:23-157:26),LowerIdent(157:27-157:34),LowerIdent(157:35-157:37),LowerIdent(157:38-157:41),LowerIdent(157:42-157:45),LowerIdent(157:46-157:51),Dot(157:51-157:52),Newline(1:1-1:1),
+UpperIdent(158:1-158:5),LowerIdent(158:6-158:17),Comma(158:17-158:18),LowerIdent(158:19-158:23),LowerIdent(158:24-158:35),Comma(158:35-158:36),OpAnd(158:37-158:40),KwImports(158:41-158:48),LowerIdent(158:49-158:52),LowerIdent(158:53-158:60),LowerIdent(158:61-158:63),LowerIdent(158:64-158:67),LowerIdent(158:68-158:71),LowerIdent(158:72-158:77),Dot(158:77-158:78),Newline(1:1-1:1),
+UpperIdent(159:1-159:8),UpperIdent(159:9-159:18),Newline(1:1-1:1),
+UpperIdent(160:1-160:4),LowerIdent(160:5-160:14),LowerIdent(160:15-160:19),LowerIdent(160:20-160:22),LowerIdent(160:23-160:26),LowerIdent(160:27-160:34),LowerIdent(160:35-160:37),LowerIdent(160:38-160:41),LowerIdent(160:42-160:45),LowerIdent(160:46-160:51),Dot(160:51-160:52),Newline(1:1-1:1),
+UpperIdent(161:1-161:5),LowerIdent(161:6-161:17),Comma(161:17-161:18),LowerIdent(161:19-161:23),LowerIdent(161:24-161:35),Comma(161:35-161:36),OpAnd(161:37-161:40),KwImports(161:41-161:48),LowerIdent(161:49-161:52),LowerIdent(161:53-161:60),LowerIdent(161:61-161:63),LowerIdent(161:64-161:67),LowerIdent(161:68-161:71),LowerIdent(161:72-161:77),Dot(161:77-161:78),Newline(1:1-1:1),
+UpperIdent(162:1-162:8),UpperIdent(162:9-162:17),Newline(1:1-1:1),
+UpperIdent(163:1-163:5),LowerIdent(163:6-163:11),LowerIdent(163:12-163:16),LowerIdent(163:17-163:19),LowerIdent(163:20-163:28),Comma(163:28-163:29),LowerIdent(163:30-163:33),LowerIdent(163:34-163:36),SingleQuote(163:36-163:59),Newline(1:1-1:1),
+UpperIdent(164:1-164:6),LowerIdent(164:7-164:10),LowerIdent(164:11-164:19),OpAnd(164:20-164:23),LowerIdent(164:24-164:28),LowerIdent(164:29-164:33),LowerIdent(164:34-164:37),SingleQuote(164:37-164:68),Newline(1:1-1:1),
+UpperIdent(165:1-165:8),UpperIdent(165:9-165:18),Newline(1:1-1:1),
+UpperIdent(166:1-166:4),LowerIdent(166:5-166:14),LowerIdent(166:15-166:19),LowerIdent(166:20-166:22),LowerIdent(166:23-166:26),LowerIdent(166:27-166:34),LowerIdent(166:35-166:37),LowerIdent(166:38-166:41),LowerIdent(166:42-166:45),LowerIdent(166:46-166:51),Dot(166:51-166:52),Newline(1:1-1:1),
+UpperIdent(167:1-167:5),LowerIdent(167:6-167:17),Comma(167:17-167:18),LowerIdent(167:19-167:23),LowerIdent(167:24-167:35),Comma(167:35-167:36),OpAnd(167:37-167:40),KwImports(167:41-167:48),LowerIdent(167:49-167:52),LowerIdent(167:53-167:60),LowerIdent(167:61-167:63),LowerIdent(167:64-167:67),LowerIdent(167:68-167:71),LowerIdent(167:72-167:77),Dot(167:77-167:78),Newline(1:1-1:1),
+UpperIdent(168:1-168:8),UpperIdent(168:9-168:18),Newline(1:1-1:1),
+UpperIdent(169:1-169:4),LowerIdent(169:5-169:14),LowerIdent(169:15-169:19),LowerIdent(169:20-169:22),LowerIdent(169:23-169:26),LowerIdent(169:27-169:34),LowerIdent(169:35-169:37),LowerIdent(169:38-169:41),LowerIdent(169:42-169:45),LowerIdent(169:46-169:51),Dot(169:51-169:52),Newline(1:1-1:1),
+UpperIdent(170:1-170:5),LowerIdent(170:6-170:17),Comma(170:17-170:18),LowerIdent(170:19-170:23),LowerIdent(170:24-170:35),Comma(170:35-170:36),OpAnd(170:37-170:40),KwImports(170:41-170:48),LowerIdent(170:49-170:52),LowerIdent(170:53-170:60),LowerIdent(170:61-170:63),LowerIdent(170:64-170:67),LowerIdent(170:68-170:71),LowerIdent(170:72-170:77),Dot(170:77-170:78),Newline(1:1-1:1),
+UpperIdent(171:1-171:8),UpperIdent(171:9-171:18),Newline(1:1-1:1),
+UpperIdent(172:1-172:4),LowerIdent(172:5-172:14),LowerIdent(172:15-172:19),LowerIdent(172:20-172:22),LowerIdent(172:23-172:26),LowerIdent(172:27-172:34),LowerIdent(172:35-172:37),LowerIdent(172:38-172:41),LowerIdent(172:42-172:45),LowerIdent(172:46-172:51),Dot(172:51-172:52),Newline(1:1-1:1),
+UpperIdent(173:1-173:5),LowerIdent(173:6-173:17),Comma(173:17-173:18),LowerIdent(173:19-173:23),LowerIdent(173:24-173:35),Comma(173:35-173:36),OpAnd(173:37-173:40),KwImports(173:41-173:48),LowerIdent(173:49-173:52),LowerIdent(173:53-173:60),LowerIdent(173:61-173:63),LowerIdent(173:64-173:67),LowerIdent(173:68-173:71),LowerIdent(173:72-173:77),Dot(173:77-173:78),Newline(1:1-1:1),
+UpperIdent(174:1-174:8),UpperIdent(174:9-174:18),Newline(1:1-1:1),
+UpperIdent(175:1-175:4),LowerIdent(175:5-175:14),LowerIdent(175:15-175:19),LowerIdent(175:20-175:22),LowerIdent(175:23-175:26),LowerIdent(175:27-175:34),LowerIdent(175:35-175:37),LowerIdent(175:38-175:41),LowerIdent(175:42-175:45),LowerIdent(175:46-175:51),Dot(175:51-175:52),Newline(1:1-1:1),
+UpperIdent(176:1-176:5),LowerIdent(176:6-176:17),Comma(176:17-176:18),LowerIdent(176:19-176:23),LowerIdent(176:24-176:35),Comma(176:35-176:36),OpAnd(176:37-176:40),KwImports(176:41-176:48),LowerIdent(176:49-176:52),LowerIdent(176:53-176:60),LowerIdent(176:61-176:63),LowerIdent(176:64-176:67),LowerIdent(176:68-176:71),LowerIdent(176:72-176:77),Dot(176:77-176:78),Newline(1:1-1:1),
+UpperIdent(177:1-177:8),UpperIdent(177:9-177:18),Newline(1:1-1:1),
+UpperIdent(178:1-178:4),LowerIdent(178:5-178:14),LowerIdent(178:15-178:19),LowerIdent(178:20-178:22),LowerIdent(178:23-178:26),LowerIdent(178:27-178:34),LowerIdent(178:35-178:37),LowerIdent(178:38-178:41),LowerIdent(178:42-178:45),LowerIdent(178:46-178:51),Dot(178:51-178:52),Newline(1:1-1:1),
+UpperIdent(179:1-179:5),LowerIdent(179:6-179:17),Comma(179:17-179:18),LowerIdent(179:19-179:23),LowerIdent(179:24-179:35),Comma(179:35-179:36),OpAnd(179:37-179:40),KwImports(179:41-179:48),LowerIdent(179:49-179:52),LowerIdent(179:53-179:60),LowerIdent(179:61-179:63),LowerIdent(179:64-179:67),LowerIdent(179:68-179:71),LowerIdent(179:72-179:77),Dot(179:77-179:78),Newline(1:1-1:1),
+UpperIdent(180:1-180:8),UpperIdent(180:9-180:18),Newline(1:1-1:1),
+UpperIdent(181:1-181:4),LowerIdent(181:5-181:14),LowerIdent(181:15-181:19),LowerIdent(181:20-181:22),LowerIdent(181:23-181:26),LowerIdent(181:27-181:34),LowerIdent(181:35-181:37),LowerIdent(181:38-181:41),LowerIdent(181:42-181:45),LowerIdent(181:46-181:51),Dot(181:51-181:52),Newline(1:1-1:1),
+UpperIdent(182:1-182:5),LowerIdent(182:6-182:17),Comma(182:17-182:18),LowerIdent(182:19-182:23),LowerIdent(182:24-182:35),Comma(182:35-182:36),OpAnd(182:37-182:40),KwImports(182:41-182:48),LowerIdent(182:49-182:52),LowerIdent(182:53-182:60),LowerIdent(182:61-182:63),LowerIdent(182:64-182:67),LowerIdent(182:68-182:71),LowerIdent(182:72-182:77),Dot(182:77-182:78),Newline(1:1-1:1),
+UpperIdent(183:1-183:8),UpperIdent(183:9-183:18),Newline(1:1-1:1),
+UpperIdent(184:1-184:4),LowerIdent(184:5-184:14),LowerIdent(184:15-184:19),LowerIdent(184:20-184:22),LowerIdent(184:23-184:26),LowerIdent(184:27-184:34),LowerIdent(184:35-184:37),LowerIdent(184:38-184:41),LowerIdent(184:42-184:45),LowerIdent(184:46-184:51),Dot(184:51-184:52),Newline(1:1-1:1),
+UpperIdent(185:1-185:5),LowerIdent(185:6-185:17),Comma(185:17-185:18),LowerIdent(185:19-185:23),LowerIdent(185:24-185:35),Comma(185:35-185:36),OpAnd(185:37-185:40),KwImports(185:41-185:48),LowerIdent(185:49-185:52),LowerIdent(185:53-185:60),LowerIdent(185:61-185:63),LowerIdent(185:64-185:67),LowerIdent(185:68-185:71),LowerIdent(185:72-185:77),Dot(185:77-185:78),Newline(1:1-1:1),
+UpperIdent(186:1-186:8),UpperIdent(186:9-186:18),Newline(1:1-1:1),
+UpperIdent(187:1-187:4),LowerIdent(187:5-187:14),LowerIdent(187:15-187:19),LowerIdent(187:20-187:22),LowerIdent(187:23-187:26),LowerIdent(187:27-187:34),LowerIdent(187:35-187:37),LowerIdent(187:38-187:41),LowerIdent(187:42-187:45),LowerIdent(187:46-187:51),Dot(187:51-187:52),Newline(1:1-1:1),
+UpperIdent(188:1-188:5),LowerIdent(188:6-188:17),Comma(188:17-188:18),LowerIdent(188:19-188:23),LowerIdent(188:24-188:35),Comma(188:35-188:36),OpAnd(188:37-188:40),KwImports(188:41-188:48),LowerIdent(188:49-188:52),LowerIdent(188:53-188:60),LowerIdent(188:61-188:63),LowerIdent(188:64-188:67),LowerIdent(188:68-188:71),LowerIdent(188:72-188:77),Dot(188:77-188:78),Newline(1:1-1:1),
+UpperIdent(189:1-189:8),UpperIdent(189:9-189:18),Newline(1:1-1:1),
+UpperIdent(190:1-190:4),LowerIdent(190:5-190:14),LowerIdent(190:15-190:19),LowerIdent(190:20-190:22),LowerIdent(190:23-190:26),LowerIdent(190:27-190:34),LowerIdent(190:35-190:37),LowerIdent(190:38-190:41),LowerIdent(190:42-190:45),LowerIdent(190:46-190:51),Dot(190:51-190:52),Newline(1:1-1:1),
+UpperIdent(191:1-191:5),LowerIdent(191:6-191:17),Comma(191:17-191:18),LowerIdent(191:19-191:23),LowerIdent(191:24-191:35),Comma(191:35-191:36),OpAnd(191:37-191:40),KwImports(191:41-191:48),LowerIdent(191:49-191:52),LowerIdent(191:53-191:60),LowerIdent(191:61-191:63),LowerIdent(191:64-191:67),LowerIdent(191:68-191:71),LowerIdent(191:72-191:77),Dot(191:77-191:78),Newline(1:1-1:1),
+UpperIdent(192:1-192:8),UpperIdent(192:9-192:18),Newline(1:1-1:1),
+UpperIdent(193:1-193:4),LowerIdent(193:5-193:14),LowerIdent(193:15-193:19),LowerIdent(193:20-193:22),LowerIdent(193:23-193:26),LowerIdent(193:27-193:34),LowerIdent(193:35-193:37),LowerIdent(193:38-193:41),LowerIdent(193:42-193:45),LowerIdent(193:46-193:51),Dot(193:51-193:52),Newline(1:1-1:1),
+UpperIdent(194:1-194:5),LowerIdent(194:6-194:17),Comma(194:17-194:18),LowerIdent(194:19-194:23),LowerIdent(194:24-194:35),Comma(194:35-194:36),OpAnd(194:37-194:40),KwImports(194:41-194:48),LowerIdent(194:49-194:52),LowerIdent(194:53-194:60),LowerIdent(194:61-194:63),LowerIdent(194:64-194:67),LowerIdent(194:68-194:71),LowerIdent(194:72-194:77),Dot(194:77-194:78),Newline(1:1-1:1),
+UpperIdent(195:1-195:8),UpperIdent(195:9-195:18),Newline(1:1-1:1),
+UpperIdent(196:1-196:4),LowerIdent(196:5-196:14),LowerIdent(196:15-196:19),LowerIdent(196:20-196:22),LowerIdent(196:23-196:26),LowerIdent(196:27-196:34),LowerIdent(196:35-196:37),LowerIdent(196:38-196:41),LowerIdent(196:42-196:45),LowerIdent(196:46-196:51),Dot(196:51-196:52),Newline(1:1-1:1),
+UpperIdent(197:1-197:5),LowerIdent(197:6-197:17),Comma(197:17-197:18),LowerIdent(197:19-197:23),LowerIdent(197:24-197:35),Comma(197:35-197:36),OpAnd(197:37-197:40),KwImports(197:41-197:48),LowerIdent(197:49-197:52),LowerIdent(197:53-197:60),LowerIdent(197:61-197:63),LowerIdent(197:64-197:67),LowerIdent(197:68-197:71),LowerIdent(197:72-197:77),Dot(197:77-197:78),Newline(1:1-1:1),
+UpperIdent(198:1-198:8),UpperIdent(198:9-198:18),Newline(1:1-1:1),
+UpperIdent(199:1-199:4),LowerIdent(199:5-199:14),LowerIdent(199:15-199:19),LowerIdent(199:20-199:22),LowerIdent(199:23-199:26),LowerIdent(199:27-199:34),LowerIdent(199:35-199:37),LowerIdent(199:38-199:41),LowerIdent(199:42-199:45),LowerIdent(199:46-199:51),Dot(199:51-199:52),Newline(1:1-1:1),
+UpperIdent(200:1-200:5),LowerIdent(200:6-200:17),Comma(200:17-200:18),LowerIdent(200:19-200:23),LowerIdent(200:24-200:35),Comma(200:35-200:36),OpAnd(200:37-200:40),KwImports(200:41-200:48),LowerIdent(200:49-200:52),LowerIdent(200:53-200:60),LowerIdent(200:61-200:63),LowerIdent(200:64-200:67),LowerIdent(200:68-200:71),LowerIdent(200:72-200:77),Dot(200:77-200:78),Newline(1:1-1:1),
+UpperIdent(201:1-201:8),UpperIdent(201:9-201:18),Newline(1:1-1:1),
+UpperIdent(202:1-202:4),LowerIdent(202:5-202:14),LowerIdent(202:15-202:19),LowerIdent(202:20-202:22),LowerIdent(202:23-202:26),LowerIdent(202:27-202:34),LowerIdent(202:35-202:37),LowerIdent(202:38-202:41),LowerIdent(202:42-202:45),LowerIdent(202:46-202:51),Dot(202:51-202:52),Newline(1:1-1:1),
+UpperIdent(203:1-203:5),LowerIdent(203:6-203:17),Comma(203:17-203:18),LowerIdent(203:19-203:23),LowerIdent(203:24-203:35),Comma(203:35-203:36),OpAnd(203:37-203:40),KwImports(203:41-203:48),LowerIdent(203:49-203:52),LowerIdent(203:53-203:60),LowerIdent(203:61-203:63),LowerIdent(203:64-203:67),LowerIdent(203:68-203:71),LowerIdent(203:72-203:77),Dot(203:77-203:78),Newline(1:1-1:1),
+UpperIdent(204:1-204:8),UpperIdent(204:9-204:18),Newline(1:1-1:1),
+UpperIdent(205:1-205:4),LowerIdent(205:5-205:14),LowerIdent(205:15-205:19),LowerIdent(205:20-205:22),LowerIdent(205:23-205:26),LowerIdent(205:27-205:34),LowerIdent(205:35-205:37),LowerIdent(205:38-205:41),LowerIdent(205:42-205:45),LowerIdent(205:46-205:51),Dot(205:51-205:52),Newline(1:1-1:1),
+UpperIdent(206:1-206:5),LowerIdent(206:6-206:17),Comma(206:17-206:18),LowerIdent(206:19-206:23),LowerIdent(206:24-206:35),Comma(206:35-206:36),OpAnd(206:37-206:40),KwImports(206:41-206:48),LowerIdent(206:49-206:52),LowerIdent(206:53-206:60),LowerIdent(206:61-206:63),LowerIdent(206:64-206:67),LowerIdent(206:68-206:71),LowerIdent(206:72-206:77),Dot(206:77-206:78),Newline(1:1-1:1),
+UpperIdent(207:1-207:8),UpperIdent(207:9-207:18),Newline(1:1-1:1),
+UpperIdent(208:1-208:4),LowerIdent(208:5-208:14),LowerIdent(208:15-208:19),LowerIdent(208:20-208:22),LowerIdent(208:23-208:26),LowerIdent(208:27-208:34),LowerIdent(208:35-208:37),LowerIdent(208:38-208:41),LowerIdent(208:42-208:45),LowerIdent(208:46-208:51),Dot(208:51-208:52),Newline(1:1-1:1),
+UpperIdent(209:1-209:5),LowerIdent(209:6-209:17),Comma(209:17-209:18),LowerIdent(209:19-209:23),LowerIdent(209:24-209:35),Comma(209:35-209:36),OpAnd(209:37-209:40),KwImports(209:41-209:48),LowerIdent(209:49-209:52),LowerIdent(209:53-209:60),LowerIdent(209:61-209:63),LowerIdent(209:64-209:67),LowerIdent(209:68-209:71),LowerIdent(209:72-209:77),Dot(209:77-209:78),Newline(1:1-1:1),
+UpperIdent(210:1-210:8),UpperIdent(210:9-210:18),Newline(1:1-1:1),
+UpperIdent(211:1-211:4),LowerIdent(211:5-211:14),LowerIdent(211:15-211:19),LowerIdent(211:20-211:22),LowerIdent(211:23-211:26),LowerIdent(211:27-211:34),LowerIdent(211:35-211:37),LowerIdent(211:38-211:41),LowerIdent(211:42-211:45),LowerIdent(211:46-211:51),Dot(211:51-211:52),Newline(1:1-1:1),
+UpperIdent(212:1-212:5),LowerIdent(212:6-212:17),Comma(212:17-212:18),LowerIdent(212:19-212:23),LowerIdent(212:24-212:35),Comma(212:35-212:36),OpAnd(212:37-212:40),KwImports(212:41-212:48),LowerIdent(212:49-212:52),LowerIdent(212:53-212:60),LowerIdent(212:61-212:63),LowerIdent(212:64-212:67),LowerIdent(212:68-212:71),LowerIdent(212:72-212:77),Dot(212:77-212:78),Newline(1:1-1:1),
+UpperIdent(213:1-213:8),UpperIdent(213:9-213:18),Newline(1:1-1:1),
+UpperIdent(214:1-214:4),LowerIdent(214:5-214:14),LowerIdent(214:15-214:19),LowerIdent(214:20-214:22),LowerIdent(214:23-214:26),LowerIdent(214:27-214:34),LowerIdent(214:35-214:37),LowerIdent(214:38-214:41),LowerIdent(214:42-214:45),LowerIdent(214:46-214:51),Dot(214:51-214:52),Newline(1:1-1:1),
+UpperIdent(215:1-215:5),LowerIdent(215:6-215:17),Comma(215:17-215:18),LowerIdent(215:19-215:23),LowerIdent(215:24-215:35),Comma(215:35-215:36),OpAnd(215:37-215:40),KwImports(215:41-215:48),LowerIdent(215:49-215:52),LowerIdent(215:53-215:60),LowerIdent(215:61-215:63),LowerIdent(215:64-215:67),LowerIdent(215:68-215:71),LowerIdent(215:72-215:77),Dot(215:77-215:78),Newline(1:1-1:1),
+UpperIdent(216:1-216:8),UpperIdent(216:9-216:18),Newline(1:1-1:1),
+UpperIdent(217:1-217:4),LowerIdent(217:5-217:14),LowerIdent(217:15-217:19),LowerIdent(217:20-217:22),LowerIdent(217:23-217:26),LowerIdent(217:27-217:34),LowerIdent(217:35-217:37),LowerIdent(217:38-217:41),LowerIdent(217:42-217:45),LowerIdent(217:46-217:51),Dot(217:51-217:52),Newline(1:1-1:1),
+UpperIdent(218:1-218:5),LowerIdent(218:6-218:17),Comma(218:17-218:18),LowerIdent(218:19-218:23),LowerIdent(218:24-218:35),Comma(218:35-218:36),OpAnd(218:37-218:40),KwImports(218:41-218:48),LowerIdent(218:49-218:52),LowerIdent(218:53-218:60),LowerIdent(218:61-218:63),LowerIdent(218:64-218:67),LowerIdent(218:68-218:71),LowerIdent(218:72-218:77),Dot(218:77-218:78),Newline(1:1-1:1),
+UpperIdent(219:1-219:8),UpperIdent(219:9-219:17),Newline(1:1-1:1),
+UpperIdent(220:1-220:5),LowerIdent(220:6-220:11),LowerIdent(220:12-220:16),LowerIdent(220:17-220:19),LowerIdent(220:20-220:28),Comma(220:28-220:29),LowerIdent(220:30-220:33),LowerIdent(220:34-220:36),SingleQuote(220:36-220:59),Newline(1:1-1:1),
+UpperIdent(221:1-221:6),LowerIdent(221:7-221:10),LowerIdent(221:11-221:19),OpAnd(221:20-221:23),LowerIdent(221:24-221:28),LowerIdent(221:29-221:33),LowerIdent(221:34-221:37),SingleQuote(221:37-221:68),Newline(1:1-1:1),
+UpperIdent(222:1-222:8),UpperIdent(222:9-222:18),Newline(1:1-1:1),
+UpperIdent(223:1-223:4),LowerIdent(223:5-223:14),LowerIdent(223:15-223:19),LowerIdent(223:20-223:22),LowerIdent(223:23-223:26),LowerIdent(223:27-223:34),LowerIdent(223:35-223:37),LowerIdent(223:38-223:41),LowerIdent(223:42-223:45),LowerIdent(223:46-223:51),Dot(223:51-223:52),Newline(1:1-1:1),
+UpperIdent(224:1-224:5),LowerIdent(224:6-224:17),Comma(224:17-224:18),LowerIdent(224:19-224:23),LowerIdent(224:24-224:35),Comma(224:35-224:36),OpAnd(224:37-224:40),KwImports(224:41-224:48),LowerIdent(224:49-224:52),LowerIdent(224:53-224:60),LowerIdent(224:61-224:63),LowerIdent(224:64-224:67),LowerIdent(224:68-224:71),LowerIdent(224:72-224:77),Dot(224:77-224:78),Newline(1:1-1:1),
+UpperIdent(225:1-225:8),UpperIdent(225:9-225:18),Newline(1:1-1:1),
+UpperIdent(226:1-226:4),LowerIdent(226:5-226:14),LowerIdent(226:15-226:19),LowerIdent(226:20-226:22),LowerIdent(226:23-226:26),LowerIdent(226:27-226:34),LowerIdent(226:35-226:37),LowerIdent(226:38-226:41),LowerIdent(226:42-226:45),LowerIdent(226:46-226:51),Dot(226:51-226:52),Newline(1:1-1:1),
+UpperIdent(227:1-227:5),LowerIdent(227:6-227:17),Comma(227:17-227:18),LowerIdent(227:19-227:23),LowerIdent(227:24-227:35),Comma(227:35-227:36),OpAnd(227:37-227:40),KwImports(227:41-227:48),LowerIdent(227:49-227:52),LowerIdent(227:53-227:60),LowerIdent(227:61-227:63),LowerIdent(227:64-227:67),LowerIdent(227:68-227:71),LowerIdent(227:72-227:77),Dot(227:77-227:78),Newline(1:1-1:1),
+UpperIdent(228:1-228:8),UpperIdent(228:9-228:18),Newline(1:1-1:1),
+UpperIdent(229:1-229:4),LowerIdent(229:5-229:14),LowerIdent(229:15-229:19),LowerIdent(229:20-229:22),LowerIdent(229:23-229:26),LowerIdent(229:27-229:34),LowerIdent(229:35-229:37),LowerIdent(229:38-229:41),LowerIdent(229:42-229:45),LowerIdent(229:46-229:51),Dot(229:51-229:52),Newline(1:1-1:1),
+UpperIdent(230:1-230:5),LowerIdent(230:6-230:17),Comma(230:17-230:18),LowerIdent(230:19-230:23),LowerIdent(230:24-230:35),Comma(230:35-230:36),OpAnd(230:37-230:40),KwImports(230:41-230:48),LowerIdent(230:49-230:52),LowerIdent(230:53-230:60),LowerIdent(230:61-230:63),LowerIdent(230:64-230:67),LowerIdent(230:68-230:71),LowerIdent(230:72-230:77),Dot(230:77-230:78),Newline(1:1-1:1),
+UpperIdent(231:1-231:8),UpperIdent(231:9-231:18),Newline(1:1-1:1),
+UpperIdent(232:1-232:4),LowerIdent(232:5-232:14),LowerIdent(232:15-232:19),LowerIdent(232:20-232:22),LowerIdent(232:23-232:26),LowerIdent(232:27-232:34),LowerIdent(232:35-232:37),LowerIdent(232:38-232:41),LowerIdent(232:42-232:45),LowerIdent(232:46-232:51),Dot(232:51-232:52),Newline(1:1-1:1),
+UpperIdent(233:1-233:5),LowerIdent(233:6-233:17),Comma(233:17-233:18),LowerIdent(233:19-233:23),LowerIdent(233:24-233:35),Comma(233:35-233:36),OpAnd(233:37-233:40),KwImports(233:41-233:48),LowerIdent(233:49-233:52),LowerIdent(233:53-233:60),LowerIdent(233:61-233:63),LowerIdent(233:64-233:67),LowerIdent(233:68-233:71),LowerIdent(233:72-233:77),Dot(233:77-233:78),Newline(1:1-1:1),
+UpperIdent(234:1-234:8),UpperIdent(234:9-234:18),Newline(1:1-1:1),
+UpperIdent(235:1-235:4),LowerIdent(235:5-235:14),LowerIdent(235:15-235:19),LowerIdent(235:20-235:22),LowerIdent(235:23-235:26),LowerIdent(235:27-235:34),LowerIdent(235:35-235:37),LowerIdent(235:38-235:41),LowerIdent(235:42-235:45),LowerIdent(235:46-235:51),Dot(235:51-235:52),Newline(1:1-1:1),
+UpperIdent(236:1-236:5),LowerIdent(236:6-236:17),Comma(236:17-236:18),LowerIdent(236:19-236:23),LowerIdent(236:24-236:35),Comma(236:35-236:36),OpAnd(236:37-236:40),KwImports(236:41-236:48),LowerIdent(236:49-236:52),LowerIdent(236:53-236:60),LowerIdent(236:61-236:63),LowerIdent(236:64-236:67),LowerIdent(236:68-236:71),LowerIdent(236:72-236:77),Dot(236:77-236:78),Newline(1:1-1:1),
+UpperIdent(237:1-237:8),UpperIdent(237:9-237:18),Newline(1:1-1:1),
+UpperIdent(238:1-238:4),LowerIdent(238:5-238:14),LowerIdent(238:15-238:19),LowerIdent(238:20-238:22),LowerIdent(238:23-238:26),LowerIdent(238:27-238:34),LowerIdent(238:35-238:37),LowerIdent(238:38-238:41),LowerIdent(238:42-238:45),LowerIdent(238:46-238:51),Dot(238:51-238:52),Newline(1:1-1:1),
+UpperIdent(239:1-239:5),LowerIdent(239:6-239:17),Comma(239:17-239:18),LowerIdent(239:19-239:23),LowerIdent(239:24-239:35),Comma(239:35-239:36),OpAnd(239:37-239:40),KwImports(239:41-239:48),LowerIdent(239:49-239:52),LowerIdent(239:53-239:60),LowerIdent(239:61-239:63),LowerIdent(239:64-239:67),LowerIdent(239:68-239:71),LowerIdent(239:72-239:77),Dot(239:77-239:78),Newline(1:1-1:1),
+UpperIdent(240:1-240:8),UpperIdent(240:9-240:18),Newline(1:1-1:1),
+UpperIdent(241:1-241:4),LowerIdent(241:5-241:14),LowerIdent(241:15-241:19),LowerIdent(241:20-241:22),LowerIdent(241:23-241:26),LowerIdent(241:27-241:34),LowerIdent(241:35-241:37),LowerIdent(241:38-241:41),LowerIdent(241:42-241:45),LowerIdent(241:46-241:51),Dot(241:51-241:52),Newline(1:1-1:1),
+UpperIdent(242:1-242:5),LowerIdent(242:6-242:17),Comma(242:17-242:18),LowerIdent(242:19-242:23),LowerIdent(242:24-242:35),Comma(242:35-242:36),OpAnd(242:37-242:40),KwImports(242:41-242:48),LowerIdent(242:49-242:52),LowerIdent(242:53-242:60),LowerIdent(242:61-242:63),LowerIdent(242:64-242:67),LowerIdent(242:68-242:71),LowerIdent(242:72-242:77),Dot(242:77-242:78),Newline(1:1-1:1),
+UpperIdent(243:1-243:8),UpperIdent(243:9-243:18),Newline(1:1-1:1),
+UpperIdent(244:1-244:4),LowerIdent(244:5-244:14),LowerIdent(244:15-244:19),LowerIdent(244:20-244:22),LowerIdent(244:23-244:26),LowerIdent(244:27-244:34),LowerIdent(244:35-244:37),LowerIdent(244:38-244:41),LowerIdent(244:42-244:45),LowerIdent(244:46-244:51),Dot(244:51-244:52),Newline(1:1-1:1),
+UpperIdent(245:1-245:5),LowerIdent(245:6-245:17),Comma(245:17-245:18),LowerIdent(245:19-245:23),LowerIdent(245:24-245:35),Comma(245:35-245:36),OpAnd(245:37-245:40),KwImports(245:41-245:48),LowerIdent(245:49-245:52),LowerIdent(245:53-245:60),LowerIdent(245:61-245:63),LowerIdent(245:64-245:67),LowerIdent(245:68-245:71),LowerIdent(245:72-245:77),Dot(245:77-245:78),Newline(1:1-1:1),
+UpperIdent(246:1-246:8),UpperIdent(246:9-246:18),Newline(1:1-1:1),
+UpperIdent(247:1-247:4),LowerIdent(247:5-247:14),LowerIdent(247:15-247:19),LowerIdent(247:20-247:22),LowerIdent(247:23-247:26),LowerIdent(247:27-247:34),LowerIdent(247:35-247:37),LowerIdent(247:38-247:41),LowerIdent(247:42-247:45),LowerIdent(247:46-247:51),Dot(247:51-247:52),Newline(1:1-1:1),
+UpperIdent(248:1-248:5),LowerIdent(248:6-248:17),Comma(248:17-248:18),LowerIdent(248:19-248:23),LowerIdent(248:24-248:35),Comma(248:35-248:36),OpAnd(248:37-248:40),KwImports(248:41-248:48),LowerIdent(248:49-248:52),LowerIdent(248:53-248:60),LowerIdent(248:61-248:63),LowerIdent(248:64-248:67),LowerIdent(248:68-248:71),LowerIdent(248:72-248:77),Dot(248:77-248:78),Newline(1:1-1:1),
+UpperIdent(249:1-249:8),UpperIdent(249:9-249:18),Newline(1:1-1:1),
+UpperIdent(250:1-250:4),LowerIdent(250:5-250:14),LowerIdent(250:15-250:19),LowerIdent(250:20-250:22),LowerIdent(250:23-250:26),LowerIdent(250:27-250:34),LowerIdent(250:35-250:37),LowerIdent(250:38-250:41),LowerIdent(250:42-250:45),LowerIdent(250:46-250:51),Dot(250:51-250:52),Newline(1:1-1:1),
+UpperIdent(251:1-251:5),LowerIdent(251:6-251:17),Comma(251:17-251:18),LowerIdent(251:19-251:23),LowerIdent(251:24-251:35),Comma(251:35-251:36),OpAnd(251:37-251:40),KwImports(251:41-251:48),LowerIdent(251:49-251:52),LowerIdent(251:53-251:60),LowerIdent(251:61-251:63),LowerIdent(251:64-251:67),LowerIdent(251:68-251:71),LowerIdent(251:72-251:77),Dot(251:77-251:78),Newline(1:1-1:1),
+UpperIdent(252:1-252:8),UpperIdent(252:9-252:18),Newline(1:1-1:1),
+UpperIdent(253:1-253:4),LowerIdent(253:5-253:14),LowerIdent(253:15-253:19),LowerIdent(253:20-253:22),LowerIdent(253:23-253:26),LowerIdent(253:27-253:34),LowerIdent(253:35-253:37),LowerIdent(253:38-253:41),LowerIdent(253:42-253:45),LowerIdent(253:46-253:51),Dot(253:51-253:52),Newline(1:1-1:1),
+UpperIdent(254:1-254:5),LowerIdent(254:6-254:17),Comma(254:17-254:18),LowerIdent(254:19-254:23),LowerIdent(254:24-254:35),Comma(254:35-254:36),OpAnd(254:37-254:40),KwImports(254:41-254:48),LowerIdent(254:49-254:52),LowerIdent(254:53-254:60),LowerIdent(254:61-254:63),LowerIdent(254:64-254:67),LowerIdent(254:68-254:71),LowerIdent(254:72-254:77),Dot(254:77-254:78),Newline(1:1-1:1),
+UpperIdent(255:1-255:8),UpperIdent(255:9-255:18),Newline(1:1-1:1),
+UpperIdent(256:1-256:4),LowerIdent(256:5-256:14),LowerIdent(256:15-256:19),LowerIdent(256:20-256:22),LowerIdent(256:23-256:26),LowerIdent(256:27-256:34),LowerIdent(256:35-256:37),LowerIdent(256:38-256:41),LowerIdent(256:42-256:45),LowerIdent(256:46-256:51),Dot(256:51-256:52),Newline(1:1-1:1),
+UpperIdent(257:1-257:5),LowerIdent(257:6-257:17),Comma(257:17-257:18),LowerIdent(257:19-257:23),LowerIdent(257:24-257:35),Comma(257:35-257:36),OpAnd(257:37-257:40),KwImports(257:41-257:48),LowerIdent(257:49-257:52),LowerIdent(257:53-257:60),LowerIdent(257:61-257:63),LowerIdent(257:64-257:67),LowerIdent(257:68-257:71),LowerIdent(257:72-257:77),Dot(257:77-257:78),Newline(1:1-1:1),
+UpperIdent(258:1-258:8),UpperIdent(258:9-258:18),Newline(1:1-1:1),
+UpperIdent(259:1-259:4),LowerIdent(259:5-259:14),LowerIdent(259:15-259:19),LowerIdent(259:20-259:22),LowerIdent(259:23-259:26),LowerIdent(259:27-259:34),LowerIdent(259:35-259:37),LowerIdent(259:38-259:41),LowerIdent(259:42-259:45),LowerIdent(259:46-259:51),Dot(259:51-259:52),Newline(1:1-1:1),
+UpperIdent(260:1-260:5),LowerIdent(260:6-260:17),Comma(260:17-260:18),LowerIdent(260:19-260:23),LowerIdent(260:24-260:35),Comma(260:35-260:36),OpAnd(260:37-260:40),KwImports(260:41-260:48),LowerIdent(260:49-260:52),LowerIdent(260:53-260:60),LowerIdent(260:61-260:63),LowerIdent(260:64-260:67),LowerIdent(260:68-260:71),LowerIdent(260:72-260:77),Dot(260:77-260:78),EndOfFile(260:78-260:78),
+~~~PARSE
+(file (1:1-260:78)
+	(app (1:1-3:2)
+		(provides (1:6-1:11) (exposed_item (lower_ident "main")))
+		(record_field (1:1-1:1)
+			"pf"
+			(string (2:18-2:45) (string_part (2:19-2:44) "../basic-cli/platform.roc")))
+		(packages (1:12-3:2)
+			(record_field (1:1-1:1)
+				"pf"
+				(string (2:18-2:45) (string_part (2:19-2:44) "../basic-cli/platform.roc")))))
+	(statements
+		(decl (5:1-7:9)
+			(ident (5:1-5:5) "main")
+			(ident (7:5-7:9) "" "dec1"))
+		(malformed_expr (7:10-7:11) "expr_unexpected_token")
+		(frac (7:12-7:15) "0.1")
+		(decl (8:5-8:15)
+			(ident (8:5-8:9) "dec2")
+			(frac (8:12-8:15) "0.2"))
+		(decl (9:5-9:17)
+			(ident (9:5-9:9) "dec3")
+			(frac (9:12-9:17) "19.99"))
+		(decl (10:5-10:32)
+			(ident (10:5-10:9) "dec4")
+			(frac (10:12-10:32) "0.000000000000000001"))
+		(decl (11:5-11:17)
+			(ident (11:5-11:9) "dec5")
+			(frac (11:12-11:17) "-42.5"))
+		(decl (14:5-14:18)
+			(ident (14:5-14:10) "f64_1")
+			(frac (14:13-14:18) "1e400"))
+		(decl (15:5-15:19)
+			(ident (15:5-15:10) "f64_2")
+			(frac (15:13-15:19) "-1e400"))
+		(decl (16:5-16:54)
+			(ident (16:5-16:10) "f64_3")
+			(frac (16:13-16:54) "3.141592653589793238462643383279502884197"))
+		(decl (19:5-19:15)
+			(ident (19:5-19:9) "zero")
+			(frac (19:12-19:15) "0.0"))
+		(decl (20:5-20:14)
+			(ident (20:5-20:8) "one")
+			(frac (20:11-20:14) "1.0"))
+		(record (22:5-22:69)
+			(field "dec1")
+			(field "dec2")
+			(field "dec3")
+			(field "dec4")
+			(field "dec5")
+			(field "f64_1")
+			(field "f64_2")
+			(field "f64_3")
+			(field "zero")
+			(field "one"))
+		(type_decl (23:1-24:7)
+			(header (23:1-23:7) "PARSER" (args))
+			(ty_var (23:9-23:30) "expr_unexpected_token"))
+		(type_decl (24:1-25:7)
+			(header (24:1-24:7) "PARSER" (args))
+			(ty_var (24:9-24:30) "expr_unexpected_token"))
+		(type_decl (25:1-26:7)
+			(header (25:1-25:7) "PARSER" (args))
+			(ty_var (25:9-25:33) "expr_arrow_expects_ident"))
+		(type_decl (26:1-27:7)
+			(header (26:1-26:7) "PARSER" (args))
+			(ty_var (26:9-26:30) "expr_unexpected_token"))
+		(type_decl (27:1-28:7)
+			(header (27:1-27:7) "PARSER" (args))
+			(ty_var (27:9-27:30) "expr_unexpected_token"))
+		(type_decl (28:1-29:7)
+			(header (28:1-28:7) "PARSER" (args))
+			(ty_var (28:9-28:33) "expr_arrow_expects_ident"))
+		(type_decl (29:1-30:7)
+			(header (29:1-29:7) "PARSER" (args))
+			(ty_var (29:9-29:30) "expr_unexpected_token"))
+		(type_decl (30:1-31:7)
+			(header (30:1-30:7) "PARSER" (args))
+			(ty_var (30:9-30:30) "expr_unexpected_token"))
+		(type_decl (31:1-32:7)
+			(header (31:1-31:7) "PARSER" (args))
+			(ty_var (31:9-31:33) "expr_arrow_expects_ident"))
+		(type_decl (32:1-33:7)
+			(header (32:1-32:7) "PARSER" (args))
+			(ty_var (32:9-32:30) "expr_unexpected_token"))
+		(type_decl (33:1-34:7)
+			(header (33:1-33:7) "PARSER" (args))
+			(ty_var (33:9-33:30) "expr_unexpected_token"))
+		(type_decl (34:1-35:7)
+			(header (34:1-34:7) "PARSER" (args))
+			(ty_var (34:9-34:33) "expr_arrow_expects_ident"))
+		(type_decl (35:1-36:7)
+			(header (35:1-35:7) "PARSER" (args))
+			(ty_var (35:9-35:30) "expr_unexpected_token"))
+		(type_decl (36:1-37:7)
+			(header (36:1-36:7) "PARSER" (args))
+			(ty_var (36:9-36:30) "expr_unexpected_token"))
+		(type_decl (37:1-38:7)
+			(header (37:1-37:7) "PARSER" (args))
+			(ty_var (37:9-37:33) "expr_arrow_expects_ident"))
+		(type_decl (38:1-39:7)
+			(header (38:1-38:7) "PARSER" (args))
+			(ty_var (38:9-38:30) "expr_unexpected_token"))
+		(type_decl (39:1-40:7)
+			(header (39:1-39:7) "PARSER" (args))
+			(ty_var (39:9-39:30) "expr_unexpected_token"))
+		(type_decl (40:1-41:7)
+			(header (40:1-40:7) "PARSER" (args))
+			(ty_var (40:9-40:33) "expr_arrow_expects_ident"))
+		(type_decl (41:1-42:7)
+			(header (41:1-41:7) "PARSER" (args))
+			(ty_var (41:9-41:30) "expr_unexpected_token"))
+		(type_decl (42:1-43:7)
+			(header (42:1-42:7) "PARSER" (args))
+			(ty_var (42:9-42:30) "expr_unexpected_token"))
+		(type_decl (43:1-44:7)
+			(header (43:1-43:7) "PARSER" (args))
+			(ty_var (43:9-43:33) "expr_arrow_expects_ident"))
+		(type_decl (44:1-45:7)
+			(header (44:1-44:7) "PARSER" (args))
+			(ty_var (44:9-44:30) "expr_unexpected_token"))
+		(type_decl (45:1-46:7)
+			(header (45:1-45:7) "PARSER" (args))
+			(ty_var (45:9-45:30) "expr_unexpected_token"))
+		(type_decl (46:1-47:7)
+			(header (46:1-46:7) "PARSER" (args))
+			(ty_var (46:9-46:30) "expr_unexpected_token"))
+		(type_decl (47:1-48:7)
+			(header (47:1-47:7) "PARSER" (args))
+			(ty_var (47:9-47:30) "expr_unexpected_token"))
+		(type_decl (48:1-49:7)
+			(header (48:1-48:7) "PARSER" (args))
+			(ty_var (48:9-48:30) "expr_unexpected_token"))
+		(type_decl (49:1-50:7)
+			(header (49:1-49:7) "PARSER" (args))
+			(ty_var (49:9-49:33) "expr_arrow_expects_ident"))
+		(type_decl (50:1-51:7)
+			(header (50:1-50:7) "PARSER" (args))
+			(ty_var (50:9-50:30) "expr_unexpected_token"))
+		(type_decl (51:1-52:7)
+			(header (51:1-51:7) "PARSER" (args))
+			(ty_var (51:9-51:30) "expr_unexpected_token"))
+		(type_decl (52:1-53:7)
+			(header (52:1-52:7) "PARSER" (args))
+			(ty_var (52:9-52:33) "expr_arrow_expects_ident"))
+		(type_decl (53:1-54:7)
+			(header (53:1-53:7) "PARSER" (args))
+			(ty_var (53:9-53:30) "expr_unexpected_token"))
+		(type_decl (54:1-55:7)
+			(header (54:1-54:7) "PARSER" (args))
+			(ty_var (54:9-54:30) "expr_unexpected_token"))
+		(type_decl (55:1-56:7)
+			(header (55:1-55:7) "PARSER" (args))
+			(ty_var (55:9-55:33) "expr_arrow_expects_ident"))
+		(type_decl (56:1-57:7)
+			(header (56:1-56:7) "PARSER" (args))
+			(ty_var (56:9-56:30) "expr_unexpected_token"))
+		(type_decl (57:1-58:7)
+			(header (57:1-57:7) "PARSER" (args))
+			(ty_var (57:9-57:30) "expr_unexpected_token"))
+		(type_decl (58:1-59:7)
+			(header (58:1-58:7) "PARSER" (args))
+			(ty_var (58:9-58:33) "expr_arrow_expects_ident"))
+		(type_decl (59:1-60:7)
+			(header (59:1-59:7) "PARSER" (args))
+			(ty_var (59:9-59:30) "expr_unexpected_token"))
+		(type_decl (60:1-61:7)
+			(header (60:1-60:7) "PARSER" (args))
+			(ty_var (60:9-60:30) "expr_unexpected_token"))
+		(type_decl (61:1-62:7)
+			(header (61:1-61:7) "PARSER" (args))
+			(ty_var (61:9-61:30) "expr_unexpected_token"))
+		(type_decl (62:1-63:7)
+			(header (62:1-62:7) "PARSER" (args))
+			(ty_var (62:9-62:30) "expr_unexpected_token"))
+		(type_decl (63:1-64:7)
+			(header (63:1-63:7) "PARSER" (args))
+			(ty_var (63:9-63:30) "expr_unexpected_token"))
+		(type_decl (64:1-65:7)
+			(header (64:1-64:7) "PARSER" (args))
+			(ty_var (64:9-64:33) "expr_arrow_expects_ident"))
+		(type_decl (65:1-66:7)
+			(header (65:1-65:7) "PARSER" (args))
+			(ty_var (65:9-65:30) "expr_unexpected_token"))
+		(type_decl (66:1-67:7)
+			(header (66:1-66:7) "PARSER" (args))
+			(ty_var (66:9-66:30) "expr_unexpected_token"))
+		(type_decl (67:1-68:7)
+			(header (67:1-67:7) "PARSER" (args))
+			(ty_var (67:9-67:33) "expr_arrow_expects_ident"))
+		(type_decl (68:1-69:7)
+			(header (68:1-68:7) "PARSER" (args))
+			(ty_var (68:9-68:30) "expr_unexpected_token"))
+		(type_decl (69:1-70:7)
+			(header (69:1-69:7) "PARSER" (args))
+			(ty_var (69:9-69:30) "expr_unexpected_token"))
+		(type_decl (70:1-71:7)
+			(header (70:1-70:7) "PARSER" (args))
+			(ty_var (70:9-70:30) "expr_unexpected_token"))
+		(type_decl (71:1-72:10)
+			(header (71:1-71:7) "PARSER" (args))
+			(ty_var (71:9-71:30) "expr_unexpected_token"))
+		(malformed_stmt (72:1-72:19) "expected_colon_after_type_annotation")
+		(malformed_expr (1:1-1:1) "expr_unexpected_token")
+		(malformed_stmt (73:1-73:11) "expected_colon_after_type_annotation")
+		(ident (73:12-73:17) "" "named")
+		(malformed_expr (73:18-73:19) "expr_unexpected_token")
+		(ident (73:19-73:28) "" "testFloat")
+		(malformed_expr (73:28-73:29) "expr_unexpected_token")
+		(malformed_expr (73:30-73:32) "expr_unexpected_token")
+		(ident (73:33-73:37) "" "this")
+		(ident (73:38-73:43) "" "scope")
+		(malformed_expr (73:43-73:44) "expr_unexpected_token")
+		(malformed_stmt (74:1-74:9) "expected_colon_after_type_annotation")
+		(ident (74:10-74:12) "" "an")))
+~~~FORMATTED
+app [main] {
+	pf: platform "../basic-cli/platform.roc",
+}
+
+main =
+# Values that should create dec literals (parseable by RocDec)
+	dec10.1
+dec2 = 0.2
+dec3 = 19.99
+dec4 = 0.000000000000000001
+dec5 = -42.5
+
+# Values that should create f64 literals (not parseable by RocDec)
+f64_1 = 1e400
+f64_2 = -1e400
+f64_3 = 3.141592653589793238462643383279502884197 # Too many digits for Dec
+
+# Edge cases
+zero = 0.0
+one = 1.0
+
+{ dec1, dec2, dec3, dec4, dec5, f64_1, f64_2, f64_3, zero, one }
+PARSER : expr_unexpected_token
+PARSER : expr_unexpected_token
+PARSER : expr_arrow_expects_ident
+PARSER : expr_unexpected_token
+PARSER : expr_unexpected_token
+PARSER : expr_arrow_expects_ident
+PARSER : expr_unexpected_token
+PARSER : expr_unexpected_token
+PARSER : expr_arrow_expects_ident
+PARSER : expr_unexpected_token
+PARSER : expr_unexpected_token
+PARSER : expr_arrow_expects_ident
+PARSER : expr_unexpected_token
+PARSER : expr_unexpected_token
+PARSER : expr_arrow_expects_ident
+PARSER : expr_unexpected_token
+PARSER : expr_unexpected_token
+PARSER : expr_arrow_expects_ident
+PARSER : expr_unexpected_token
+PARSER : expr_unexpected_token
+PARSER : expr_arrow_expects_ident
+PARSER : expr_unexpected_token
+PARSER : expr_unexpected_token
+PARSER : expr_unexpected_token
+PARSER : expr_unexpected_token
+PARSER : expr_unexpected_token
+PARSER : expr_arrow_expects_ident
+PARSER : expr_unexpected_token
+PARSER : expr_unexpected_token
+PARSER : expr_arrow_expects_ident
+PARSER : expr_unexpected_token
+PARSER : expr_unexpected_token
+PARSER : expr_arrow_expects_ident
+PARSER : expr_unexpected_token
+PARSER : expr_unexpected_token
+PARSER : expr_arrow_expects_ident
+PARSER : expr_unexpected_token
+PARSER : expr_unexpected_token
+PARSER : expr_unexpected_token
+PARSER : expr_unexpected_token
+PARSER : expr_unexpected_token
+PARSER : expr_arrow_expects_ident
+PARSER : expr_unexpected_token
+PARSER : expr_unexpected_token
+PARSER : expr_arrow_expects_ident
+PARSER : expr_unexpected_token
+PARSER : expr_unexpected_token
+PARSER : expr_unexpected_token
+PARSER : expr_unexpected_token
+
+namedtestFloatthisscope
+an
+~~~CANONICALIZE
+(can_ir
+	(d_let
+		(def_pattern
+			(p_assign (5:1-5:5)
+				(pid 12)
+				(ident "main")))
+		(def_expr (e_runtime_error (7:5-7:9) "ident_not_in_scope")))
+	(d_let
+		(def_pattern
+			(p_assign (8:5-8:9)
+				(pid 18)
+				(ident "dec2")))
+		(def_expr
+			(e_frac (8:12-8:15)
+				(frac_var "#3")
+				(requirements (fits_in_f32 "false") (fits_in_dec "true"))
+				(value "0"))))
+	(d_let
+		(def_pattern
+			(p_assign (9:5-9:9)
+				(pid 22)
+				(ident "dec3")))
+		(def_expr
+			(e_frac (9:12-9:17)
+				(frac_var "#6")
+				(requirements (fits_in_f32 "false") (fits_in_dec "true"))
+				(value "0"))))
+	(d_let
+		(def_pattern
+			(p_assign (10:5-10:9)
+				(pid 26)
+				(ident "dec4")))
+		(def_expr
+			(e_frac (10:12-10:32)
+				(frac_var "#9")
+				(requirements (fits_in_f32 "false") (fits_in_dec "true"))
+				(value "0"))))
+	(d_let
+		(def_pattern
+			(p_assign (11:5-11:9)
+				(pid 30)
+				(ident "dec5")))
+		(def_expr
+			(e_frac (11:12-11:17)
+				(frac_var "#12")
+				(requirements (fits_in_f32 "true") (fits_in_dec "true"))
+				(value "0"))))
+	(d_let
+		(def_pattern
+			(p_assign (14:5-14:10)
+				(pid 34)
+				(ident "f64_1")))
+		(def_expr
+			(e_frac (14:13-14:18)
+				(frac_var "#15")
+				(requirements (fits_in_f32 "false") (fits_in_dec "false"))
+				(value "0"))))
+	(d_let
+		(def_pattern
+			(p_assign (15:5-15:10)
+				(pid 38)
+				(ident "f64_2")))
+		(def_expr
+			(e_frac (15:13-15:19)
+				(frac_var "#18")
+				(requirements (fits_in_f32 "false") (fits_in_dec "false"))
+				(value "0"))))
+	(d_let
+		(def_pattern
+			(p_assign (16:5-16:10)
+				(pid 42)
+				(ident "f64_3")))
+		(def_expr
+			(e_frac (16:13-16:54)
+				(frac_var "#21")
+				(requirements (fits_in_f32 "false") (fits_in_dec "false"))
+				(value "0"))))
+	(d_let
+		(def_pattern
+			(p_assign (19:5-19:9)
+				(pid 46)
+				(ident "zero")))
+		(def_expr
+			(e_frac (19:12-19:15)
+				(frac_var "#24")
+				(requirements (fits_in_f32 "true") (fits_in_dec "true"))
+				(value "0"))))
+	(d_let
+		(def_pattern
+			(p_assign (20:5-20:8)
+				(pid 50)
+				(ident "one")))
+		(def_expr
+			(e_frac (20:11-20:14)
+				(frac_var "#27")
+				(requirements (fits_in_f32 "true") (fits_in_dec "true"))
+				(value "0")))))
+~~~END

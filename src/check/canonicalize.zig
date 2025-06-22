@@ -476,9 +476,6 @@ pub fn canonicalize_expr(
             // Resolve to a string slice from the source
             const token_text = self.parse_ir.resolve(e.token);
 
-            // Intern the string slice
-            const literal = self.can_ir.env.strings.insert(self.can_ir.env.gpa, token_text);
-
             // Parse the integer value
             const is_negated = token_text[0] == '-'; // Drop the negation for now, so all valid literals fit in u128
             const after_minus_sign = @as(usize, @intFromBool(is_negated));
@@ -518,7 +515,6 @@ pub fn canonicalize_expr(
             const u128_val: u128 = std.fmt.parseInt(u128, token_text[first_digit..], int_base) catch {
                 // Any number literal that is too large for u128 is invalid, regardless of whether it had a minus sign!
                 const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .invalid_num_literal = .{
-                    .literal = literal,
                     .region = region,
                 } });
                 return expr_idx;
@@ -528,7 +524,6 @@ pub fn canonicalize_expr(
             // that would be too low to fit in i128, then this int literal is also invalid.
             if (is_negated and u128_val > min_i128_negated) {
                 const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .invalid_num_literal = .{
-                    .literal = literal,
                     .region = region,
                 } });
                 return expr_idx;
@@ -554,6 +549,11 @@ pub fn canonicalize_expr(
 
             // Calculate requirements based on the value
             const requirements = blk: {
+                ///////////////////////////////////////////////////////////////////////////////////////
+                // TODO revise all this, or at least move it into a method on types.Num.Int.BitsNeeded,
+                // such that it just takes the input and returns a thing. also use constants, not magic numbers.
+                // oh and use counting zeros if possible? leading zeros I think?
+                ///////////////////////////////////////////////////////////////////////////////////////
                 const sign_needed = is_negated;
                 const bits_needed: types.Num.Int.BitsNeeded = if (u128_val <= 127) .@"7" else if (u128_val <= 255) .@"8" else if (u128_val <= 32767) .@"9_to_15" else if (u128_val <= 65535) .@"16" else if (u128_val <= 2147483647) .@"17_to_31" else if (u128_val <= 4294967295) .@"32" else if (u128_val <= 9223372036854775807) .@"33_to_63" else if (u128_val <= 18446744073709551615) .@"64" else if (u128_val <= 170141183460469231731687303715884105727) .@"65_to_127" else .@"128";
 
@@ -565,6 +565,9 @@ pub fn canonicalize_expr(
 
             // Create a polymorphic int type variable
             const int_type_var = self.can_ir.pushTypeVar(
+                //////////////////////////////////////////////////////////////
+                // TODO why is this enumFromInt(0)?
+                //////////////////////////////////////////////////////////////
                 Content{ .structure = .{ .num = .{ .int_poly = @enumFromInt(0) } } },
                 final_expr_idx,
                 region,
@@ -575,7 +578,6 @@ pub fn canonicalize_expr(
                 .int = .{
                     .int_var = int_type_var,
                     .requirements = requirements,
-                    .literal = literal,
                     .value = CIR.IntLiteralValue{ .value = i128_val },
                     .region = region,
                 },
@@ -587,47 +589,6 @@ pub fn canonicalize_expr(
             _ = self.can_ir.setTypeVarAtExpr(
                 expr_idx,
                 Content{ .structure = .{ .num = .{ .num_poly = int_type_var } } },
-            );
-
-            return expr_idx;
-        },
-        .non_finite_float => |e| {
-            // Dec doesn't have infinity, -infinity, or NaN
-            const requirements = types.Num.Frac.Requirements{
-                .fits_in_f32 = true,
-                .fits_in_f64 = true,
-                .fits_in_dec = false,
-            };
-
-            // Create type vars, first "reserve" node slots
-            const final_expr_idx = self.can_ir.store.predictNodeIndex(2);
-
-            // Create a polymorphic frac type variable
-            const frac_type_var = self.can_ir.pushTypeVar(
-                Content{ .structure = .{ .num = .{ .frac_poly = @enumFromInt(0) } } },
-                final_expr_idx,
-                e.region,
-            );
-
-            // Store the f64 value for now (TODO: update to store the full frac_value)
-            const value: f64 = std.math.nan(f64);
-
-            // then in the final slot the actual expr is inserted
-            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
-                .frac = .{
-                    .frac_var = frac_type_var,
-                    .requirements = requirements,
-                    .value = value,
-                    .region = e.region,
-                },
-            });
-
-            std.debug.assert(@intFromEnum(expr_idx) == @intFromEnum(final_expr_idx));
-
-            // Insert concrete type variable
-            _ = self.can_ir.setTypeVarAtExpr(
-                expr_idx,
-                Content{ .structure = .{ .num = .{ .num_poly = frac_type_var } } },
             );
 
             return expr_idx;
@@ -664,7 +625,6 @@ pub fn canonicalize_expr(
                 const f64_value = std.fmt.parseFloat(f64, token_text) catch {
                     // It doesn't parse as Dec or as F64, so it's too big to fit in any of Roc's numeric types. Error out!
                     const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .invalid_num_literal = .{
-                        .literal = literal,
                         .region = region,
                     } });
                     return expr_idx;
@@ -685,7 +645,6 @@ pub fn canonicalize_expr(
 
             const requirements = types.Num.Frac.Requirements{
                 .fits_in_f32 = fits_in_f32,
-                .fits_in_f64 = fits_in_f64,
                 .fits_in_dec = fits_in_dec,
             };
 
@@ -1218,11 +1177,8 @@ fn canonicalize_pattern(
         .number => |e| {
             const region = self.tokenizedRegionToRegion(e.region);
 
-            // resolve to a string slice from the source
+            // Resolve to a string slice from the source
             const token_text = self.parse_ir.resolve(e.number_tok);
-
-            // intern the string slice
-            const literal = self.can_ir.env.strings.insert(gpa, token_text);
 
             // Check if this is a float literal (contains '.' or 'e'/'E')
             const is_float = std.mem.indexOfAny(u8, token_text, ".eE") != null;
@@ -1232,7 +1188,6 @@ fn canonicalize_pattern(
                 const RocDec = @import("../builtins/dec.zig").RocDec;
 
                 var fits_in_f32 = false;
-                var fits_in_f64 = false;
                 var fits_in_dec = false;
 
                 // create type vars, first "reserve" node slots
@@ -1246,12 +1201,8 @@ fn canonicalize_pattern(
                     // Successfully parsed as Dec
                     fits_in_dec = true;
 
-                    // Also check if it fits in f32/f64
+                    // Also check if it fits in f32
                     const f64_val = dec.toF64();
-                    // Check if the decimal value fits in f64 range
-                    if (f64_val >= -std.math.floatMax(f64) and f64_val <= std.math.floatMax(f64) and !std.math.isInf(f64_val)) {
-                        fits_in_f64 = true;
-                    }
 
                     // Check if it fits in f32 without precision loss
                     if (f64_val >= -std.math.floatMax(f32) and f64_val <= std.math.floatMax(f32)) {
@@ -1264,7 +1215,6 @@ fn canonicalize_pattern(
 
                     const requirements = types.Num.Frac.Requirements{
                         .fits_in_f32 = fits_in_f32,
-                        .fits_in_f64 = fits_in_f64,
                         .fits_in_dec = fits_in_dec,
                     };
 
@@ -1273,7 +1223,6 @@ fn canonicalize_pattern(
                         .dec_literal = .{
                             .num_var = num_type_var,
                             .requirements = requirements,
-                            .literal = literal,
                             .value = dec,
                             .region = region,
                         },
@@ -1293,7 +1242,6 @@ fn canonicalize_pattern(
                     const f64_value = std.fmt.parseFloat(f64, token_text) catch {
                         // Invalid float literal
                         const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .invalid_num_literal = .{
-                            .literal = literal,
                             .region = region,
                         } });
                         return malformed_idx;
@@ -1303,12 +1251,8 @@ fn canonicalize_pattern(
                     if (std.math.isNan(f64_value) or std.math.isInf(f64_value)) {
                         // Non-finite values can be represented in f32 and f64, but not dec
                         fits_in_f32 = true;
-                        fits_in_f64 = true;
                         fits_in_dec = false;
                     } else {
-                        // Check if it fits in f64
-                        fits_in_f64 = true;
-
                         // Check if it fits in f32 without precision loss
                         if (f64_value >= -std.math.floatMax(f32) and f64_value <= std.math.floatMax(f32)) {
                             const as_f32 = @as(f32, @floatCast(f64_value));
@@ -1321,7 +1265,6 @@ fn canonicalize_pattern(
 
                     const requirements = types.Num.Frac.Requirements{
                         .fits_in_f32 = fits_in_f32,
-                        .fits_in_f64 = fits_in_f64,
                         .fits_in_dec = fits_in_dec,
                     };
 
@@ -1330,7 +1273,6 @@ fn canonicalize_pattern(
                         .f64_literal = .{
                             .num_var = num_type_var,
                             .requirements = requirements,
-                            .literal = literal,
                             .value = f64_value,
                             .region = region,
                         },
@@ -1347,32 +1289,38 @@ fn canonicalize_pattern(
                     return pattern_idx;
                 }
             } else {
-                // Handle integer literal pattern (existing code)
+                // Parse as integer
                 const value = std.fmt.parseInt(i128, token_text, 10) catch {
                     // Invalid num literal
                     const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .invalid_num_literal = .{
-                        .literal = literal,
                         .region = region,
                     } });
                     return malformed_idx;
                 };
 
-                // create type vars, first "reserve" node slots
-                const final_pattern_idx = self.can_ir.store.predictNodeIndex(2);
+                // Calculate requirements based on the value
+                const sign_needed = value < 0;
+                const u128_val: u128 = if (value < 0) @as(u128, @intCast(-(value + 1))) + 1 else @as(u128, @intCast(value));
+                const bits_needed: types.Num.Int.BitsNeeded = if (u128_val <= 127) .@"7" else if (u128_val <= 255) .@"8" else if (u128_val <= 32767) .@"9_to_15" else if (u128_val <= 65535) .@"16" else if (u128_val <= 2147483647) .@"17_to_31" else if (u128_val <= 4294967295) .@"32" else if (u128_val <= 9223372036854775807) .@"33_to_63" else if (u128_val <= 18446744073709551615) .@"64" else if (u128_val <= 170141183460469231731687303715884105727) .@"65_to_127" else .@"128";
+                const requirements = types.Num.Int.Requirements{
+                    .sign_needed = sign_needed,
+                    .bits_needed = bits_needed,
+                };
 
-                // then insert the type vars, setting the parent to be the final slot
+                // Create type vars, first "reserve" node slots
+                const final_pattern_idx = self.can_ir.store.predictNodeIndex(2);
                 const num_type_var = self.can_ir.pushFreshTypeVar(final_pattern_idx, region);
 
                 // then in the final slot the actual pattern is inserted
-                const num_pattern = CIR.Pattern{
-                    .num_literal = .{
+                const int_pattern = CIR.Pattern{
+                    .int_literal = .{
                         .num_var = num_type_var,
-                        .literal = literal,
+                        .requirements = requirements,
                         .value = CIR.IntLiteralValue{ .value = value },
                         .region = region,
                     },
                 };
-                const pattern_idx = self.can_ir.store.addPattern(num_pattern);
+                const pattern_idx = self.can_ir.store.addPattern(int_pattern);
 
                 std.debug.assert(@intFromEnum(pattern_idx) == @intFromEnum(final_pattern_idx));
 
@@ -1795,6 +1743,45 @@ fn scopeExit(self: *Self, gpa: std.mem.Allocator) Scope.Error!void {
     }
     var scope: Scope = self.scopes.pop().?;
     scope.deinit(gpa);
+}
+
+/// This will be used later for builtins like Num.nan, Num.infinity, etc.
+pub fn addNonFiniteFloat(self: *Self, value: f64, region: base.Region) CIR.Expr.Idx {
+    // Dec doesn't have infinity, -infinity, or NaN
+    const requirements = types.Num.Frac.Requirements{
+        .fits_in_f32 = true,
+        .fits_in_dec = false,
+    };
+
+    // Create type vars, first "reserve" node slots
+    const final_expr_idx = self.can_ir.store.predictNodeIndex(2);
+
+    // Create a polymorphic frac type variable
+    const frac_type_var = self.can_ir.pushTypeVar(
+        Content{ .structure = .{ .num = .{ .frac_poly = @enumFromInt(0) } } },
+        final_expr_idx,
+        region,
+    );
+
+    // then in the final slot the actual expr is inserted
+    const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
+        .frac = .{
+            .frac_var = frac_type_var,
+            .requirements = requirements,
+            .value = value,
+            .region = region,
+        },
+    });
+
+    std.debug.assert(@intFromEnum(expr_idx) == @intFromEnum(final_expr_idx));
+
+    // Insert concrete type variable
+    _ = self.can_ir.setTypeVarAtExpr(
+        expr_idx,
+        Content{ .structure = .{ .num = .{ .num_poly = frac_type_var } } },
+    );
+
+    return expr_idx;
 }
 
 /// Check if an identifier is in scope

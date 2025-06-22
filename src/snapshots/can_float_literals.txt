@@ -151,7 +151,7 @@ app [main] {
 	pf: platform "../basic-cli/platform.roc",
 }
 
-main = 
+main =
 # Values that fit in all three types (f32, f64, dec)
 	zero0.0
 one = 1.0
@@ -194,11 +194,7 @@ decBoundary = 0.000000000000000001
 		(def_expr
 			(e_frac (8:11-8:14)
 				(frac_var "#3")
-				(requirements
-					(fits_in_f32 "true")
-					(fits_in_f64 "true")
-					(fits_in_dec "true"))
-				(literal "1.0")
+				(requirements (fits_in_f32 "true") (fits_in_dec "true"))
 				(value "0"))))
 	(d_let
 		(def_pattern
@@ -208,11 +204,7 @@ decBoundary = 0.000000000000000001
 		(def_expr
 			(e_frac (9:14-9:18)
 				(frac_var "#6")
-				(requirements
-					(fits_in_f32 "true")
-					(fits_in_f64 "true")
-					(fits_in_dec "true"))
-				(literal "42.5")
+				(requirements (fits_in_f32 "true") (fits_in_dec "true"))
 				(value "0"))))
 	(d_let
 		(def_pattern
@@ -222,11 +214,7 @@ decBoundary = 0.000000000000000001
 		(def_expr
 			(e_frac (12:10-12:32)
 				(frac_var "#9")
-				(requirements
-					(fits_in_f32 "false")
-					(fits_in_f64 "true")
-					(fits_in_dec "false"))
-				(literal "3.14159265358979323846")
+				(requirements (fits_in_f32 "false") (fits_in_dec "false"))
 				(value "0"))))
 	(d_let
 		(def_pattern
@@ -236,11 +224,7 @@ decBoundary = 0.000000000000000001
 		(def_expr
 			(e_frac (13:15-13:31)
 				(frac_var "#12")
-				(requirements
-					(fits_in_f32 "false")
-					(fits_in_f64 "true")
-					(fits_in_dec "true"))
-				(literal "1.23456789012345")
+				(requirements (fits_in_f32 "false") (fits_in_dec "true"))
 				(value "0"))))
 	(d_let
 		(def_pattern
@@ -250,11 +234,7 @@ decBoundary = 0.000000000000000001
 		(def_expr
 			(e_frac (16:12-16:16)
 				(frac_var "#15")
-				(requirements
-					(fits_in_f32 "false")
-					(fits_in_f64 "true")
-					(fits_in_dec "false"))
-				(literal "1e21")
+				(requirements (fits_in_f32 "false") (fits_in_dec "false"))
 				(value "0"))))
 	(d_let
 		(def_pattern
@@ -264,11 +244,7 @@ decBoundary = 0.000000000000000001
 		(def_expr
 			(e_frac (17:15-17:20)
 				(frac_var "#18")
-				(requirements
-					(fits_in_f32 "false")
-					(fits_in_f64 "true")
-					(fits_in_dec "false"))
-				(literal "-1e21")
+				(requirements (fits_in_f32 "false") (fits_in_dec "false"))
 				(value "0"))))
 	(d_let
 		(def_pattern
@@ -278,11 +254,7 @@ decBoundary = 0.000000000000000001
 		(def_expr
 			(e_frac (20:16-20:20)
 				(frac_var "#21")
-				(requirements
-					(fits_in_f32 "false")
-					(fits_in_f64 "true")
-					(fits_in_dec "false"))
-				(literal "1e39")
+				(requirements (fits_in_f32 "false") (fits_in_dec "false"))
 				(value "0"))))
 	(d_let
 		(def_pattern
@@ -292,11 +264,7 @@ decBoundary = 0.000000000000000001
 		(def_expr
 			(e_frac (21:17-21:22)
 				(frac_var "#24")
-				(requirements
-					(fits_in_f32 "false")
-					(fits_in_f64 "true")
-					(fits_in_dec "false"))
-				(literal "1e-40")
+				(requirements (fits_in_f32 "false") (fits_in_dec "false"))
 				(value "0"))))
 	(d_let
 		(def_pattern
@@ -306,11 +274,7 @@ decBoundary = 0.000000000000000001
 		(def_expr
 			(e_frac (24:13-24:16)
 				(frac_var "#27")
-				(requirements
-					(fits_in_f32 "false")
-					(fits_in_f64 "true")
-					(fits_in_dec "true"))
-				(literal "0.1")
+				(requirements (fits_in_f32 "false") (fits_in_dec "true"))
 				(value "0"))))
 	(d_let
 		(def_pattern
@@ -320,11 +284,7 @@ decBoundary = 0.000000000000000001
 		(def_expr
 			(e_frac (25:13-25:18)
 				(frac_var "#30")
-				(requirements
-					(fits_in_f32 "false")
-					(fits_in_f64 "true")
-					(fits_in_dec "true"))
-				(literal "0.333")
+				(requirements (fits_in_f32 "false") (fits_in_dec "true"))
 				(value "0"))))
 	(d_let
 		(def_pattern
@@ -334,11 +294,7 @@ decBoundary = 0.000000000000000001
 		(def_expr
 			(e_frac (26:13-26:18)
 				(frac_var "#33")
-				(requirements
-					(fits_in_f32 "false")
-					(fits_in_f64 "true")
-					(fits_in_dec "true"))
-				(literal "19.99")
+				(requirements (fits_in_f32 "false") (fits_in_dec "true"))
 				(value "0"))))
 	(d_let
 		(def_pattern
@@ -348,10 +304,6 @@ decBoundary = 0.000000000000000001
 		(def_expr
 			(e_frac (29:19-29:39)
 				(frac_var "#36")
-				(requirements
-					(fits_in_f32 "false")
-					(fits_in_f64 "true")
-					(fits_in_dec "true"))
-				(literal "0.000000000000000001")
+				(requirements (fits_in_f32 "false") (fits_in_dec "true"))
 				(value "0")))))
 ~~~END

@@ -258,10 +258,6 @@ test "canonicalize integer literal creates correct type variables" {
             // Verify requirements were set
             try testing.expect(int_expr.requirements.sign_needed == false);
             try testing.expect(int_expr.requirements.bits_needed == .@"7");
-
-            // Verify the string literal was interned
-            const literal_str = resources.cir.env.strings.get(int_expr.literal);
-            try testing.expectEqualStrings("42", literal_str);
         },
         else => return error.UnexpectedExprType,
     }

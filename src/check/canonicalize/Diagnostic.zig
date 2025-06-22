@@ -18,7 +18,6 @@ pub const Diagnostic = union(enum) {
         region: Region,
     },
     invalid_num_literal: struct {
-        literal: StringLiteral.Idx,
         region: Region,
     },
     ident_already_in_scope: struct {

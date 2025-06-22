@@ -481,6 +481,7 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) AST.Expr.Idx {
             node.region = e.region;
             node.main_token = e.token;
         },
+
         .string_part => |e| {
             node.tag = .string_part;
             node.region = e.region;

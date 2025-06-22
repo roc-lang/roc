@@ -257,24 +257,21 @@ pub const Num = union(enum) {
             }
         };
 
-        /// The requirements of a particular float literal: which types can represent it
-        /// accurately without precision loss. We track three booleans to indicate whether
-        /// the literal can be exactly represented in each float type.
+        /// The requirements of a particular Frac literal: which types can represent it in memory.
+        /// We don't bather tracking whether it can fit in F64, because:
+        /// - If it can fit in F32 without precision loss compared to F64, then it can definitely fit in F64 as well.
+        /// - If it can't fit in F32 or Dec, then clearly must have fit in F64, or else we would have errored out.
+        /// - If it can't fit in F32 but it can fit in Dec, then it can fit (with precision loss) in F64, which is fine.
         ///
         /// Examples:
         ///
         ///     3.14 - fits in f32, f64, and dec
-        ///     1e40 - fits only in f64 (exceeds f32 max ~3.4e38 and dec's range)
-        ///     0.1 - fits in f32, f64, and dec (though f32/f64 use binary approximation)
+        ///     1e40 - fits only in f64 (exceeds f32's max of ~3.4e38, and is out of dec's range)
+        ///     0.1 - fits in f32, f64, and dec (though f32 and f64 use binary approximation)
         ///     NaN - fits in f32 and f64, but not dec
         ///     1.23456789012345 - may fit in f64 and dec, but not f32 (precision loss)
-        ///
-        /// During type checking, a literal can only be used with types where the
-        /// corresponding boolean is true. If a literal doesn't fit in any type
-        /// (all booleans false), it's a compile error.
         pub const Requirements = packed struct {
             fits_in_f32: bool,
-            fits_in_f64: bool,
             fits_in_dec: bool,
         };
     };

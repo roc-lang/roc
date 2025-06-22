@@ -132,10 +132,10 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
             break :blk Diagnostic.buildNotImplementedReport(allocator, feature_text);
         },
         .invalid_num_literal => |data| blk: {
-            const literal_text = self.env.strings.get(data.literal);
+            _ = data;
             break :blk Diagnostic.buildInvalidNumLiteralReport(
                 allocator,
-                literal_text,
+                "number literal", // Generic message since we no longer store the literal
             );
         },
         .ident_already_in_scope => |data| blk: {
@@ -734,12 +734,6 @@ pub const Expr = union(enum) {
                 num_var_node.appendString(gpa, num_var_str);
                 num_node.appendNode(gpa, &num_var_node);
 
-                // Add literal
-                var literal_node = sexpr.Expr.init(gpa, "literal");
-                const literal_str = ir.env.strings.get(num_expr.literal);
-                literal_node.appendString(gpa, literal_str);
-                num_node.appendNode(gpa, &literal_node);
-
                 // Add value info
                 var value_node = sexpr.Expr.init(gpa, "value");
                 var value_buf: [64]u8 = undefined;
@@ -772,12 +766,6 @@ pub const Expr = union(enum) {
                 req_node.appendNode(gpa, &bits_node);
                 int_node.appendNode(gpa, &req_node);
 
-                // Add literal
-                var literal_node = sexpr.Expr.init(gpa, "literal");
-                const literal_str = ir.env.strings.get(int_expr.literal);
-                literal_node.appendString(gpa, literal_str);
-                int_node.appendNode(gpa, &literal_node);
-
                 // Add value info
                 var value_node = sexpr.Expr.init(gpa, "value");
                 var value_buf: [64]u8 = undefined;
@@ -805,21 +793,11 @@ pub const Expr = union(enum) {
                 f32_node.appendString(gpa, if (frac_expr.requirements.fits_in_f32) "true" else "false");
                 req_node.appendNode(gpa, &f32_node);
 
-                var f64_node = sexpr.Expr.init(gpa, "fits_in_f64");
-                f64_node.appendString(gpa, if (frac_expr.requirements.fits_in_f64) "true" else "false");
-                req_node.appendNode(gpa, &f64_node);
-
                 var dec_node = sexpr.Expr.init(gpa, "fits_in_dec");
                 dec_node.appendString(gpa, if (frac_expr.requirements.fits_in_dec) "true" else "false");
                 req_node.appendNode(gpa, &dec_node);
 
                 frac_node.appendNode(gpa, &req_node);
-
-                // Add literal
-                var literal_node = sexpr.Expr.init(gpa, "literal");
-                const literal_str = ir.env.strings.get(frac_expr.literal);
-                literal_node.appendString(gpa, literal_str);
-                frac_node.appendNode(gpa, &literal_node);
 
                 // Add value
                 var value_node = sexpr.Expr.init(gpa, "value");
@@ -1483,21 +1461,18 @@ pub const Pattern = union(enum) {
     int_literal: struct {
         num_var: TypeVar,
         requirements: types.Num.Int.Requirements,
-        literal: StringLiteral.Idx,
         value: IntLiteralValue,
         region: Region,
     },
     dec_literal: struct {
         num_var: TypeVar,
         requirements: types.Num.Frac.Requirements,
-        literal: StringLiteral.Idx,
         value: RocDec,
         region: Region,
     },
     f64_literal: struct {
         num_var: TypeVar,
         requirements: types.Num.Frac.Requirements,
-        literal: StringLiteral.Idx,
         value: f64,
         region: Region,
     },
