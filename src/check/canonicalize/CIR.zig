@@ -505,38 +505,76 @@ pub const Statement = union(enum) {
                 return node;
             },
             .expr => |s| {
-                // Not implemented yet - just return placeholder
                 var node = sexpr.Expr.init(gpa, "s_expr");
                 node.appendRegionInfo(gpa, ir.calcRegionInfo(s.region));
-                node.appendString(gpa, "TODO");
+
+                var expr_node = ir.store.getExpr(s.expr).toSExpr(ir, env);
+                node.appendNode(gpa, &expr_node);
+
                 return node;
             },
             .expect => |s| {
-                // Not implemented yet - just return placeholder
                 var node = sexpr.Expr.init(gpa, "s_expect");
                 node.appendRegionInfo(gpa, ir.calcRegionInfo(s.region));
-                node.appendString(gpa, "TODO");
+
+                var body_node = ir.store.getExpr(s.body).toSExpr(ir, env);
+                node.appendNode(gpa, &body_node);
+
                 return node;
             },
             .@"for" => |s| {
-                // Not implemented yet - just return placeholder
                 var node = sexpr.Expr.init(gpa, "s_for");
                 node.appendRegionInfo(gpa, ir.calcRegionInfo(s.region));
-                node.appendString(gpa, "TODO");
+
+                var pattern_node = ir.store.getPattern(s.patt).toSExpr(ir, s.patt);
+                node.appendNode(gpa, &pattern_node);
+
+                var expr_node = ir.store.getExpr(s.expr).toSExpr(ir, env);
+                node.appendNode(gpa, &expr_node);
+
+                var body_node = ir.store.getExpr(s.body).toSExpr(ir, env);
+                node.appendNode(gpa, &body_node);
+
                 return node;
             },
             .@"return" => |s| {
-                // Not implemented yet - just return placeholder
                 var node = sexpr.Expr.init(gpa, "s_return");
                 node.appendRegionInfo(gpa, ir.calcRegionInfo(s.region));
-                node.appendString(gpa, "TODO");
+
+                var expr_node = ir.store.getExpr(s.expr).toSExpr(ir, env);
+                node.appendNode(gpa, &expr_node);
+
                 return node;
             },
             .import => |s| {
-                // Not implemented yet - just return placeholder
                 var node = sexpr.Expr.init(gpa, "s_import");
                 node.appendRegionInfo(gpa, ir.calcRegionInfo(s.region));
-                node.appendString(gpa, "TODO");
+
+                const module_name = env.idents.getText(s.module_name_tok);
+                node.appendString(gpa, module_name);
+
+                if (s.qualifier_tok) |qualifier| {
+                    const qualifier_name = env.idents.getText(qualifier);
+                    node.appendString(gpa, qualifier_name);
+                } else {
+                    node.appendString(gpa, "");
+                }
+
+                if (s.alias_tok) |alias| {
+                    const alias_name = env.idents.getText(alias);
+                    node.appendString(gpa, alias_name);
+                } else {
+                    node.appendString(gpa, "");
+                }
+
+                var exposes_node = sexpr.Expr.init(gpa, "exposes");
+                const exposes_slice = ir.store.sliceExposedItems(s.exposes);
+                for (exposes_slice) |_| {
+                    // TODO: Implement ExposedItem.toSExpr when ExposedItem structure is complete
+                    exposes_node.appendString(gpa, "exposed_item");
+                }
+                node.appendNode(gpa, &exposes_node);
+
                 return node;
             },
             .type_decl => |s| {
@@ -559,10 +597,27 @@ pub const Statement = union(enum) {
                 return node;
             },
             .type_anno => |s| {
-                // Not implemented yet - just return placeholder
                 var node = sexpr.Expr.init(gpa, "s_type_anno");
                 node.appendRegionInfo(gpa, ir.calcRegionInfo(s.region));
-                node.appendString(gpa, "TODO");
+
+                const name = env.idents.getText(s.name);
+                node.appendString(gpa, name);
+
+                var anno_node = ir.store.getTypeAnno(s.anno).toSExpr(ir, env);
+                node.appendNode(gpa, &anno_node);
+
+                if (s.where) |where_span| {
+                    var where_node = sexpr.Expr.init(gpa, "where");
+                    const where_slice = ir.store.sliceWhereClauses(where_span);
+                    for (where_slice) |_| {
+                        // TODO: Implement WhereClause.toSExpr when WhereClause structure is complete
+                        where_node.appendString(gpa, "where_clause");
+                    }
+                    node.appendNode(gpa, &where_node);
+                } else {
+                    node.appendString(gpa, "");
+                }
+
                 return node;
             },
         }
@@ -774,10 +829,23 @@ pub const TypeAnno = union(enum) {
 
                 return node;
             },
-            .tag_union => |_| {
-                // Not implemented yet - just return placeholder
+            .tag_union => |tu| {
                 var node = sexpr.Expr.init(gpa, "tag_union");
-                node.appendString(gpa, "NOT_IMPLEMENTED");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(tu.region));
+
+                const tags_slice = ir.store.sliceTypeAnnos(tu.tags);
+                for (tags_slice) |tag_idx| {
+                    const tag = ir.store.getTypeAnno(tag_idx);
+                    var tag_node = tag.toSExpr(ir, env);
+                    node.appendNode(gpa, &tag_node);
+                }
+
+                if (tu.open_anno) |open_idx| {
+                    const open_anno = ir.store.getTypeAnno(open_idx);
+                    var open_node = open_anno.toSExpr(ir, env);
+                    node.appendNode(gpa, &open_node);
+                }
+
                 return node;
             },
             .tuple => |tup| {
@@ -793,16 +861,43 @@ pub const TypeAnno = union(enum) {
 
                 return node;
             },
-            .record => |_| {
-                // Not implemented yet - just return placeholder
+            .record => |r| {
                 var node = sexpr.Expr.init(gpa, "record");
-                node.appendString(gpa, "NOT_IMPLEMENTED");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(r.region));
+
+                const fields_slice = ir.store.sliceAnnoRecordFields(r.fields);
+                for (fields_slice) |field_idx| {
+                    const field = ir.store.getAnnoRecordField(field_idx);
+                    var field_node = sexpr.Expr.init(gpa, "record_field");
+
+                    const field_name = env.idents.getText(field.name);
+                    field_node.appendString(gpa, field_name);
+
+                    var type_node = ir.store.getTypeAnno(field.ty).toSExpr(ir, env);
+                    field_node.appendNode(gpa, &type_node);
+
+                    node.appendNode(gpa, &field_node);
+                }
+
                 return node;
             },
-            .@"fn" => |_| {
-                // Not implemented yet - just return placeholder
+            .@"fn" => |f| {
                 var node = sexpr.Expr.init(gpa, "fn");
-                node.appendString(gpa, "NOT_IMPLEMENTED");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(f.region));
+
+                const args_slice = ir.store.sliceTypeAnnos(f.args);
+                for (args_slice) |arg_idx| {
+                    const arg = ir.store.getTypeAnno(arg_idx);
+                    var arg_node = arg.toSExpr(ir, env);
+                    node.appendNode(gpa, &arg_node);
+                }
+
+                var ret_node = ir.store.getTypeAnno(f.ret).toSExpr(ir, env);
+                node.appendNode(gpa, &ret_node);
+
+                const effectful_str = if (f.effectful) "true" else "false";
+                node.appendString(gpa, effectful_str);
+
                 return node;
             },
             .parens => |p| {
@@ -895,8 +990,16 @@ pub const AnnoRecordField = struct {
     pub const Span = struct { span: DataSpan };
 };
 
-/// TODO: implement ExposedItem
+/// An item exposed from an imported module
+/// Examples: `line!`, `Type as ValueCategory`, `Custom.*`
 pub const ExposedItem = struct {
+    /// The identifier being exposed
+    name: Ident.Idx,
+    /// Optional alias for the exposed item (e.g., `function` in `func as function`)
+    alias: ?Ident.Idx,
+    /// Whether this is a wildcard import (e.g., `Custom.*`)
+    is_wildcard: bool,
+
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
 };

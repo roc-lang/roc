@@ -540,7 +540,7 @@ pub fn getTypeHeader(store: *const NodeStore, typeHeader: CIR.TypeHeader.Idx) CI
 }
 
 /// Retrieves an annotation record field from the store.
-pub fn getAnnoRecordField(store: *NodeStore, annoRecordField: CIR.AnnoRecordField.Idx) CIR.AnnoRecordField {
+pub fn getAnnoRecordField(store: *const NodeStore, annoRecordField: CIR.AnnoRecordField.Idx) CIR.AnnoRecordField {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(annoRecordField)));
     return .{
         .name = @bitCast(node.data_1),
@@ -1365,6 +1365,21 @@ pub fn sliceDiagnostics(store: *const NodeStore, span: CIR.Diagnostic.Span) []CI
 /// Returns a slice of type annotations from the store.
 pub fn sliceTypeAnnos(store: *const NodeStore, span: CIR.TypeAnno.Span) []CIR.TypeAnno.Idx {
     return store.sliceFromSpan(CIR.TypeAnno.Idx, span.span);
+}
+
+/// Returns a slice of exposed items from the store.
+pub fn sliceExposedItems(store: *const NodeStore, span: CIR.ExposedItem.Span) []CIR.ExposedItem.Idx {
+    return store.sliceFromSpan(CIR.ExposedItem.Idx, span.span);
+}
+
+/// Returns a slice of where clauses from the store.
+pub fn sliceWhereClauses(store: *const NodeStore, span: CIR.WhereClause.Span) []CIR.WhereClause.Idx {
+    return store.sliceFromSpan(CIR.WhereClause.Idx, span.span);
+}
+
+/// Returns a slice of annotation record fields from the store.
+pub fn sliceAnnoRecordFields(store: *const NodeStore, span: CIR.AnnoRecordField.Span) []CIR.AnnoRecordField.Idx {
+    return store.sliceFromSpan(CIR.AnnoRecordField.Idx, span.span);
 }
 
 /// Creates a diagnostic node that stores error information.
