@@ -207,6 +207,17 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 filename,
             );
         },
+        .undeclared_type_var => |data| blk: {
+            const type_var_name = self.env.idents.getText(data.name);
+            const region_info = self.calcRegionInfo(data.region);
+            break :blk Diagnostic.buildUndeclaredTypeVarReport(
+                allocator,
+                type_var_name,
+                region_info,
+                source,
+                filename,
+            );
+        },
         .type_alias_redeclared => |data| blk: {
             const type_name = self.env.idents.getText(data.name);
             const original_region_info = self.calcRegionInfo(data.original_region);
@@ -857,6 +868,23 @@ pub const TypeAnno = union(enum) {
                 node.appendRegionInfo(gpa, ir.calcRegionInfo(m.region));
                 return node;
             },
+        }
+    }
+
+    /// Extract the region from any TypeAnno variant
+    pub fn toRegion(self: *const @This()) Region {
+        switch (self.*) {
+            .apply => |a| return a.region,
+            .ty_var => |tv| return tv.region,
+            .underscore => |u| return u.region,
+            .ty => |t| return t.region,
+            .mod_ty => |mt| return mt.region,
+            .tuple => |t| return t.region,
+            .tag_union => |tu| return tu.region,
+            .record => |r| return r.region,
+            .@"fn" => |f| return f.region,
+            .parens => |p| return p.region,
+            .malformed => |m| return m.region,
         }
     }
 };

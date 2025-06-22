@@ -1557,6 +1557,16 @@ fn canonicalize_type_anno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.
                 } });
             };
 
+            // Check if this type variable is in scope
+            const type_var_in_scope = self.scopeLookupTypeVar(name_ident);
+            if (type_var_in_scope == null) {
+                // Type variable not found in scope - issue diagnostic
+                self.can_ir.pushDiagnostic(CIR.Diagnostic{ .undeclared_type_var = .{
+                    .name = name_ident,
+                    .region = region,
+                } });
+            }
+
             return self.can_ir.store.addTypeAnno(.{ .ty_var = .{
                 .name = name_ident,
                 .region = region,
@@ -1837,6 +1847,41 @@ fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) ?CIR.Expr.Id
                 .region = self.tokenizedRegionToRegion(s.region),
             } });
         },
+        .type_anno => |ta| {
+            // Type annotation statement
+            const region = self.tokenizedRegionToRegion(ta.region);
+
+            // Resolve the identifier name
+            const name_ident = self.parse_ir.tokens.resolveIdentifier(ta.name) orelse {
+                const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "type annotation identifier resolution");
+                return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
+                    .feature = feature,
+                    .region = region,
+                } });
+            };
+
+            // Canonicalize the type annotation
+            const type_anno_idx = self.canonicalize_type_anno(ta.anno);
+
+            // Extract type variables from the annotation and introduce them into scope
+            // This makes them available for the subsequent value declaration
+            self.extractTypeVarsFromAnno(type_anno_idx);
+
+            // Store the type annotation for connection with the next declaration
+            // TODO: Connect this type annotation to the following declaration with the same name
+            _ = name_ident; // Will be used when connecting annotations to declarations
+
+            // Type annotations don't produce runtime values, so return a unit expression
+            // Create an empty tuple as a unit value
+            const empty_span = CIR.Expr.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } };
+            const unit_expr = self.can_ir.store.addExpr(CIR.Expr{ .tuple = .{
+                .tuple_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region),
+                .elems = empty_span,
+                .region = region,
+            } });
+            _ = self.can_ir.setTypeVarAtExpr(unit_expr, Content{ .flex_var = null });
+            return unit_expr;
+        },
         else => {
             // Other statement types not yet implemented
             const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "statement type in block");
@@ -1897,6 +1942,84 @@ fn scopeLookup(
         return Scope.LookupResult{ .found = pattern };
     }
     return Scope.LookupResult{ .not_found = {} };
+}
+
+/// Lookup a type variable in the scope hierarchy
+fn scopeLookupTypeVar(self: *const Self, name_ident: Ident.Idx) ?CIR.TypeAnno.Idx {
+    // Search from innermost to outermost scope
+    var i = self.scopes.items.len;
+    while (i > 0) {
+        i -= 1;
+        const scope = &self.scopes.items[i];
+
+        switch (scope.lookupTypeVar(&self.can_ir.env.idents, name_ident)) {
+            .found => |type_var_idx| return type_var_idx,
+            .not_found => continue,
+        }
+    }
+    return null;
+}
+
+/// Introduce a type variable into the current scope
+fn scopeIntroduceTypeVar(self: *Self, name: Ident.Idx, type_var_anno: CIR.TypeAnno.Idx) void {
+    const gpa = self.can_ir.env.gpa;
+    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+
+    // Don't use parent lookup function for now - just introduce directly
+    // Type variable shadowing is allowed in Roc
+    const result = current_scope.introduceTypeVar(gpa, &self.can_ir.env.idents, name, type_var_anno, null);
+
+    switch (result) {
+        .success => {},
+        .shadowing_warning => |shadowed_type_var_idx| {
+            // Type variable shadowing is allowed but should produce warning
+            const shadowed_type_var = self.can_ir.store.getTypeAnno(shadowed_type_var_idx);
+            const original_region = shadowed_type_var.toRegion();
+            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .shadowing_warning = .{
+                .ident = name,
+                .region = self.can_ir.store.getTypeAnno(type_var_anno).toRegion(),
+                .original_region = original_region,
+            } });
+        },
+        .already_in_scope => |_| {
+            // Type variable already exists in this scope - this is fine for repeated references
+        },
+    }
+}
+
+/// Extract type variables from a type annotation and introduce them into scope
+fn extractTypeVarsFromAnno(self: *Self, type_anno_idx: CIR.TypeAnno.Idx) void {
+    const type_anno = self.can_ir.store.getTypeAnno(type_anno_idx);
+
+    switch (type_anno) {
+        .ty_var => |ty_var| {
+            // This is a type variable - introduce it into scope
+            self.scopeIntroduceTypeVar(ty_var.name, type_anno_idx);
+        },
+        .apply => |apply| {
+            // Recursively extract from arguments
+            for (self.can_ir.store.sliceTypeAnnos(apply.args)) |arg_idx| {
+                self.extractTypeVarsFromAnno(arg_idx);
+            }
+        },
+        .@"fn" => {
+            // Function type annotations are not yet implemented in CIR
+            // When implemented, extract from parameter and return types
+        },
+        .tuple => |tuple| {
+            // Extract from tuple elements
+            for (self.can_ir.store.sliceTypeAnnos(tuple.annos)) |elem_idx| {
+                self.extractTypeVarsFromAnno(elem_idx);
+            }
+        },
+        .parens => |parens| {
+            // Extract from inner annotation
+            self.extractTypeVarsFromAnno(parens.anno);
+        },
+        .ty, .underscore, .mod_ty, .record, .tag_union, .malformed => {
+            // These don't contain type variables to extract
+        },
+    }
 }
 
 /// Introduce a new identifier to the current scope level
@@ -2267,7 +2390,37 @@ test "top level var error" {
 
     // Should fail to introduce var at top level
     const result = ctx.self.scopeIntroduceInternal(gpa, &ctx.env.idents, .ident, var_ident, pattern, true, true);
+
     try std.testing.expectEqual(Scope.IntroduceResult{ .top_level_var_error = {} }, result);
+}
+
+test "type variables are tracked separately from value identifiers" {
+    const gpa = std.testing.allocator;
+
+    var ctx = try ScopeTestContext.init(gpa);
+    defer ctx.deinit();
+
+    // Create identifiers for 'a' - one for value, one for type
+    const a_ident = ctx.env.idents.insert(gpa, base.Ident.for_text("a"), base.Region.zero());
+    const pattern: CIR.Pattern.Idx = @enumFromInt(1);
+    const type_anno: CIR.TypeAnno.Idx = @enumFromInt(1);
+
+    // Introduce 'a' as a value identifier
+    const value_result = ctx.self.scopeIntroduceInternal(gpa, &ctx.env.idents, .ident, a_ident, pattern, false, true);
+    try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, value_result);
+
+    // Introduce 'a' as a type variable - should succeed because they're in separate namespaces
+    const current_scope = &ctx.self.scopes.items[ctx.self.scopes.items.len - 1];
+    const type_result = current_scope.introduceTypeVar(gpa, &ctx.env.idents, a_ident, type_anno, null);
+    try std.testing.expectEqual(Scope.TypeVarIntroduceResult{ .success = {} }, type_result);
+
+    // Lookup 'a' as value should find the pattern
+    const value_lookup = ctx.self.scopeLookup(&ctx.env.idents, .ident, a_ident);
+    try std.testing.expectEqual(Scope.LookupResult{ .found = pattern }, value_lookup);
+
+    // Lookup 'a' as type variable should find the type annotation
+    const type_lookup = current_scope.lookupTypeVar(&ctx.env.idents, a_ident);
+    try std.testing.expectEqual(Scope.TypeVarLookupResult{ .found = type_anno }, type_lookup);
 }
 
 test "var reassignment within same function" {

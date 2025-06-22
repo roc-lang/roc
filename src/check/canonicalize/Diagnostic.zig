@@ -70,6 +70,10 @@ pub const Diagnostic = union(enum) {
         name: Ident.Idx,
         region: Region,
     },
+    undeclared_type_var: struct {
+        name: Ident.Idx,
+        region: Region,
+    },
     type_alias_redeclared: struct {
         name: Ident.Idx,
         original_region: Region,
@@ -333,6 +337,41 @@ pub const Diagnostic = union(enum) {
         try report.document.addLineBreak();
 
         try report.document.addText("This type is referenced here:");
+        try report.document.addLineBreak();
+        try report.document.addSourceRegion(
+            source,
+            region_info.start_line_idx + 1,
+            region_info.start_col_idx + 1,
+            region_info.end_line_idx + 1,
+            region_info.end_col_idx + 1,
+            .error_highlight,
+            filename,
+        );
+
+        return report;
+    }
+
+    /// Build a report for "undeclared type variable" diagnostic
+    pub fn buildUndeclaredTypeVarReport(
+        allocator: Allocator,
+        type_var_name: []const u8,
+        region_info: base.RegionInfo,
+        source: []const u8,
+        filename: []const u8,
+    ) !Report {
+        var report = Report.init(allocator, "UNDECLARED TYPE VARIABLE", .runtime_error, reporting.ReportingConfig.initPlainText());
+        const owned_type_var_name = try report.addOwnedString(type_var_name);
+        try report.document.addText("The type variable `");
+        try report.document.addUnqualifiedSymbol(owned_type_var_name);
+        try report.document.addText("` is not declared in this scope.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addText("Type variables must be introduced in a type annotation before they can be used.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addText("This type variable is referenced here:");
         try report.document.addLineBreak();
         try report.document.addSourceRegion(
             source,

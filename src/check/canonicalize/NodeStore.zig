@@ -1393,6 +1393,11 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) CIR.Diagnostic.I
             node.region = r.region;
             node.data_1 = @bitCast(r.name);
         },
+        .undeclared_type_var => |r| {
+            node.tag = .diag_undeclared_type_var;
+            node.region = r.region;
+            node.data_1 = @bitCast(r.name);
+        },
         .type_alias_redeclared => |r| {
             node.tag = .diag_type_alias_redeclared;
             node.region = r.redeclared_region;
@@ -1471,6 +1476,7 @@ pub fn addMalformed(store: *NodeStore, comptime t: type, reason: CIR.Diagnostic)
             .shadowing_warning => |r| r.region,
             .type_redeclared => |r| r.redeclared_region,
             .undeclared_type => |r| r.region,
+            .undeclared_type_var => |r| r.region,
             .type_alias_redeclared => |r| r.redeclared_region,
             .custom_type_redeclared => |r| r.redeclared_region,
             .type_shadowed_warning => |r| r.region,
@@ -1549,6 +1555,10 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             },
         } },
         .diag_undeclared_type => return CIR.Diagnostic{ .undeclared_type = .{
+            .name = @bitCast(node.data_1),
+            .region = node.region,
+        } },
+        .diag_undeclared_type_var => return CIR.Diagnostic{ .undeclared_type_var = .{
             .name = @bitCast(node.data_1),
             .region = node.region,
         } },
