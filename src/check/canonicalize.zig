@@ -19,6 +19,8 @@ function_regions: std.ArrayListUnmanaged(Region),
 var_function_regions: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, Region),
 /// Set of pattern indices that are vars
 var_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
+/// Tracks which pattern indices have been used/referenced
+used_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
 /// Maps identifier names to pending type annotations awaiting connection to declarations
 pending_type_annos: std.StringHashMapUnmanaged(CIR.TypeAnno.Idx),
 
@@ -66,6 +68,7 @@ pub fn deinit(
     self.function_regions.deinit(gpa);
     self.var_function_regions.deinit(gpa);
     self.var_patterns.deinit(gpa);
+    self.used_patterns.deinit(gpa);
     self.pending_type_annos.deinit(gpa);
 }
 
@@ -80,6 +83,7 @@ pub fn init(self: *CIR, parse_ir: *AST) Self {
         .function_regions = std.ArrayListUnmanaged(Region){},
         .var_function_regions = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, Region){},
         .var_patterns = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void){},
+        .used_patterns = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void){},
         .pending_type_annos = std.StringHashMapUnmanaged(CIR.TypeAnno.Idx){},
     };
 
@@ -608,6 +612,12 @@ pub fn canonicalize_expr(
             if (self.parse_ir.tokens.resolveIdentifier(e.token)) |ident| {
                 switch (self.scopeLookup(&self.can_ir.env.idents, .ident, ident)) {
                     .found => |pattern_idx| {
+                        // Mark this pattern as used for unused variable checking
+                        self.used_patterns.put(self.can_ir.env.gpa, pattern_idx, {}) catch |err| exitOnOom(err);
+
+                        // Check if this is a used underscore variable
+                        self.checkUsedUnderscoreVariable(ident, region);
+
                         // We found the ident in scope, lookup to reference the pattern
                         const expr_idx =
                             self.can_ir.store.addExpr(CIR.Expr{ .lookup = .{
@@ -2081,8 +2091,13 @@ fn scopeExit(self: *Self, gpa: std.mem.Allocator) Scope.Error!void {
     if (self.scopes.items.len <= 1) {
         return Scope.Error.ExitedTopScopeLevel;
     }
-    var scope: Scope = self.scopes.pop().?;
-    scope.deinit(gpa);
+
+    // Check for unused variables in the scope we're about to exit
+    const scope = &self.scopes.items[self.scopes.items.len - 1];
+    self.checkScopeForUnusedVariables(scope);
+
+    var popped_scope: Scope = self.scopes.pop().?;
+    popped_scope.deinit(gpa);
 }
 
 /// Get the current scope
@@ -2365,22 +2380,44 @@ fn identIsIgnored(ident_idx: base.Ident.Idx) bool {
 }
 
 /// Handle unused variable checking and diagnostics
-fn checkUnusedVariable(
+fn checkUsedUnderscoreVariable(
     self: *Self,
     ident_idx: base.Ident.Idx,
     region: Region,
-    is_used: bool,
 ) void {
     const is_ignored = identIsIgnored(ident_idx);
 
-    if (is_ignored and is_used) {
+    if (is_ignored) {
         // Variable prefixed with _ but is actually used - warning
         self.can_ir.pushDiagnostic(CIR.Diagnostic{ .used_underscore_variable = .{
             .ident = ident_idx,
             .region = region,
         } });
-    } else if (!is_ignored and !is_used) {
-        // Variable not prefixed with _ but is unused - warning
+    }
+}
+
+fn checkScopeForUnusedVariables(self: *Self, scope: *const Scope) void {
+    // Iterate through all identifiers in this scope
+    var iterator = scope.idents.iterator();
+    while (iterator.next()) |entry| {
+        const ident_idx = entry.key_ptr.*;
+        const pattern_idx = entry.value_ptr.*;
+
+        // Skip if this variable was used
+        if (self.used_patterns.contains(pattern_idx)) {
+            continue;
+        }
+
+        // Skip if this is an ignored variable (starts with _)
+        if (identIsIgnored(ident_idx)) {
+            continue;
+        }
+
+        // Get the region for this pattern to provide good error location
+        const pattern = self.can_ir.store.getPattern(pattern_idx);
+        const region = pattern.toRegion();
+
+        // Report unused variable
         self.can_ir.pushDiagnostic(CIR.Diagnostic{ .unused_variable = .{
             .ident = ident_idx,
             .region = region,
