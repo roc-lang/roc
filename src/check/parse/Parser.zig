@@ -1117,6 +1117,13 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) AST.Pattern.Idx {
                 } });
                 self.advance();
             },
+            .NamedUnderscore => {
+                pattern = self.store.addPattern(.{ .ident = .{
+                    .ident_tok = start,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+                self.advance();
+            },
             .UpperIdent => {
                 if (self.peekNext() != .NoSpaceOpenRound) {
                     pattern = self.store.addPattern(.{ .tag = .{
