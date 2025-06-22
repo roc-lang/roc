@@ -1,0 +1,125 @@
+# META
+~~~ini
+description=fuzz crash
+type=file
+~~~
+# SOURCE
+~~~roc
+modu:;::::::::::::::le[%
+~~~
+# PROBLEMS
+~~~txt
+PARSER: missing_header
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+PARSER: expected_expr_close_square_or_comma
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+~~~
+# TOKENS
+~~~zig
+LowerIdent(1:1-1:5),OpColon(1:5-1:6),MalformedUnknownToken(1:6-1:7),OpColon(1:7-1:8),OpColon(1:8-1:9),OpColon(1:9-1:10),OpColon(1:10-1:11),OpColon(1:11-1:12),OpColon(1:12-1:13),OpColon(1:13-1:14),OpColon(1:14-1:15),OpColon(1:15-1:16),OpColon(1:16-1:17),OpColon(1:17-1:18),OpColon(1:18-1:19),OpColon(1:19-1:20),OpColon(1:20-1:21),LowerIdent(1:21-1:23),OpenSquare(1:23-1:24),OpPercent(1:24-1:25),EndOfFile(1:25-1:25),
+~~~
+# PARSE
+~~~clojure
+(file (1:1-1:25)
+	(malformed_header (1:1-1:5) "missing_header")
+	(statements
+		(malformed_expr (1:5-1:6) "expr_unexpected_token")
+		(malformed_expr (1:6-1:7) "expr_unexpected_token")
+		(malformed_expr (1:7-1:8) "expr_unexpected_token")
+		(malformed_expr (1:8-1:9) "expr_unexpected_token")
+		(malformed_expr (1:9-1:10) "expr_unexpected_token")
+		(malformed_expr (1:10-1:11) "expr_unexpected_token")
+		(malformed_expr (1:11-1:12) "expr_unexpected_token")
+		(malformed_expr (1:12-1:13) "expr_unexpected_token")
+		(malformed_expr (1:13-1:14) "expr_unexpected_token")
+		(malformed_expr (1:14-1:15) "expr_unexpected_token")
+		(malformed_expr (1:15-1:16) "expr_unexpected_token")
+		(malformed_expr (1:16-1:17) "expr_unexpected_token")
+		(malformed_expr (1:17-1:18) "expr_unexpected_token")
+		(malformed_expr (1:18-1:19) "expr_unexpected_token")
+		(malformed_expr (1:19-1:20) "expr_unexpected_token")
+		(malformed_expr (1:20-1:21) "expr_unexpected_token")
+		(ident (1:21-1:23) "" "le")
+		(malformed_expr (1:25-1:25) "expected_expr_close_square_or_comma")))
+~~~
+# FORMATTED
+~~~roc
+le
+~~~
+# CANONICALIZE
+~~~clojure
+(can_ir "empty")
+~~~
+# TYPES
+~~~clojure
+(inferred_types (defs) (expressions))
+~~~
