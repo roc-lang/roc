@@ -800,15 +800,19 @@ pub const Expr = union(enum) {
 
                 // Add requirements
                 var req_node = sexpr.Expr.init(gpa, "requirements");
-                var precision_node = sexpr.Expr.init(gpa, "precision_needed");
-                const precision_str = switch (float_expr.requirements.precision_needed) {
-                    .f32 => "f32",
-                    .f64 => "f64",
-                    .dec => "dec",
-                    .non_finite => "non_finite",
-                };
-                precision_node.appendString(gpa, precision_str);
-                req_node.appendNode(gpa, &precision_node);
+
+                var f32_node = sexpr.Expr.init(gpa, "fits_in_f32");
+                f32_node.appendString(gpa, if (float_expr.requirements.fits_in_f32) "true" else "false");
+                req_node.appendNode(gpa, &f32_node);
+
+                var f64_node = sexpr.Expr.init(gpa, "fits_in_f64");
+                f64_node.appendString(gpa, if (float_expr.requirements.fits_in_f64) "true" else "false");
+                req_node.appendNode(gpa, &f64_node);
+
+                var dec_node = sexpr.Expr.init(gpa, "fits_in_dec");
+                dec_node.appendString(gpa, if (float_expr.requirements.fits_in_dec) "true" else "false");
+                req_node.appendNode(gpa, &dec_node);
+
                 float_node.appendNode(gpa, &req_node);
 
                 // Add literal

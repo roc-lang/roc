@@ -257,33 +257,25 @@ pub const Num = union(enum) {
             }
         };
 
-        /// The requirements of a particular Frac literal: the minimum precision required
-        /// to represent it accurately. Since Frac vaues are always signed, we only need to
-        /// track the required precision (F32, F64, or Dec) and whether they are fininte.
+        /// The requirements of a particular float literal: which types can represent it
+        /// accurately without precision loss. We track three booleans to indicate whether
+        /// the literal can be exactly represented in each float type.
         ///
-        /// Here's an example:
+        /// Examples:
         ///
-        ///     if foo() 3.14 else 1e40
+        ///     3.14 - fits in f32, f64, and dec
+        ///     1e40 - fits only in f64 (exceeds f32 max ~3.4e38 and dec's range)
+        ///     0.1 - fits in f32, f64, and dec (though f32/f64 use binary approximation)
+        ///     NaN - fits in f32 and f64, but not dec
+        ///     1.23456789012345 - may fit in f64 and dec, but not f32 (precision loss)
         ///
-        /// The `3.14` literal can be accurately represented as F32, F64, or Dec. The `1e40`
-        /// literal exceeds the range of F32 (which maxes out around 3.4e38) and
-        /// Dec (which has 18 decimal places of precision), and so requires F64.
-        /// Therefore, the overall expression requires F64.
-        ///
-        /// NaN, Infinity, and -Infinity have `non_finite` precision requirements,
-        /// which means they can be represented in F32 or F64, but not in Dec.
-        /// When a `non_finite` value is unified with a type annotation, it
-        /// will succeed for F32 or F64 but fail for Dec.
+        /// During type checking, a literal can only be used with types where the
+        /// corresponding boolean is true. If a literal doesn't fit in any type
+        /// (all booleans false), it's a compile error.
         pub const Requirements = packed struct {
-            precision_needed: PrecisionNeeded,
-        };
-
-        /// The minimum precision needed to represent a float literal
-        pub const PrecisionNeeded = enum(u2) {
-            f32 = 0,
-            f64 = 1,
-            dec = 2,
-            non_finite = 3, // NaN, Infinity, or -Infinity (f32/f64 work, but dec doesn't)
+            fits_in_f32: bool,
+            fits_in_f64: bool,
+            fits_in_dec: bool,
         };
     };
 

@@ -613,30 +613,69 @@ pub fn canonicalize_expr(
             // create type vars, first "reserve" node slots
             const final_expr_idx = self.can_ir.store.predictNodeIndex(2);
 
-            // Determine the precision requirements for this float literal
+            // Determine which types can represent this float literal exactly
             const requirements = blk: {
-                if (std.math.isNan(value) or std.math.isInf(value)) {
-                    break :blk types.Num.Frac.Requirements{ .precision_needed = .non_finite };
-                }
+                var fits_in_f32 = false;
+                var fits_in_f64 = false;
+                var fits_in_dec = false;
 
-                // Check if the value fits in f32 range and precision
-                const abs_value = @abs(value);
-                if (abs_value == 0.0) {
-                    break :blk types.Num.Frac.Requirements{ .precision_needed = .f32 };
-                } else if (abs_value <= std.math.floatMax(f32) and abs_value >= std.math.floatMin(f32)) {
-                    // Not every f64 can be downcast to f32 with the same precision
-                    // For example if you had an f64 with the value
-                    // `1.0000000000000002` and you downcast to f32, it becomes
-                    // 0.0. So this round trip equality test ensures that if we
-                    // downcast the provided value we don't lose precision
-                    const as_f32 = @as(f32, @floatCast(value));
-                    const back_to_f64 = @as(f64, @floatCast(as_f32));
-                    if (value == back_to_f64) {
-                        break :blk types.Num.Frac.Requirements{ .precision_needed = .f32 };
+                // Check for non-finite values (NaN, Infinity, -Infinity)
+                if (std.math.isNan(value) or std.math.isInf(value)) {
+                    // Non-finite values can be represented in f32 and f64, but not dec
+                    fits_in_f32 = true;
+                    fits_in_f64 = true;
+                    fits_in_dec = false;
+                } else {
+                    // Check if it fits in f32 without precision loss
+                    const abs_value = @abs(value);
+                    if (abs_value == 0.0 or (abs_value <= std.math.floatMax(f32) and abs_value >= std.math.floatMin(f32))) {
+                        // Test round-trip conversion to ensure no precision loss
+                        const as_f32 = @as(f32, @floatCast(value));
+                        const back_to_f64 = @as(f64, @floatCast(as_f32));
+                        if (value == back_to_f64) {
+                            fits_in_f32 = true;
+                        }
+                    }
+
+                    // Check if it fits in f64 (it should always fit unless it's a special case)
+                    if (abs_value <= std.math.floatMax(f64)) {
+                        fits_in_f64 = true;
+                    }
+
+                    // Check if it fits in dec
+                    // Dec represents a decimal with 18 decimal places as a 128-bit integer
+                    // Maximum value: (2^127 - 1) / 10^18 ≈ 1.7e20
+                    // Minimum positive value: 1e-18
+                    if (!std.math.isNan(value) and !std.math.isInf(value)) {
+                        // First check if the value is in the representable range
+                        const max_dec = 170141183460469231731.687303715884105727; // (2^127 - 1) / 10^18
+                        if (abs_value <= max_dec) {
+                            // Check if we can represent this exactly with 18 decimal places
+                            // by seeing if scaling by 10^18 gives us an integer
+                            const scaled = abs_value * 1e18;
+
+                            // Check if the scaled value fits in 128 bits and is an integer
+                            if (scaled <= @as(f64, @floatFromInt(std.math.maxInt(i128)))) {
+                                // Check if scaling resulted in an exact integer
+                                // This is done by checking if the fractional part is negligible
+                                const rounded = @round(scaled);
+                                const diff = @abs(scaled - rounded);
+
+                                // If the difference is very small relative to the value,
+                                // we can represent it exactly in dec
+                                if (diff < 1e-9) {
+                                    fits_in_dec = true;
+                                }
+                            }
+                        }
                     }
                 }
 
-                break :blk types.Num.Frac.Requirements{ .precision_needed = .f64 };
+                break :blk types.Num.Frac.Requirements{
+                    .fits_in_f32 = fits_in_f32,
+                    .fits_in_f64 = fits_in_f64,
+                    .fits_in_dec = fits_in_dec,
+                };
             };
 
             // Create a polymorphic float type variable
