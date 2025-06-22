@@ -1342,7 +1342,7 @@ pub const Expr = union(enum) {
         token: Token.Idx,
         region: TokenizedRegion,
     },
-    float: struct {
+    frac: struct {
         token: Token.Idx,
         region: TokenizedRegion,
     },
@@ -1543,9 +1543,9 @@ pub const Expr = union(enum) {
                 node.appendString(env.gpa, @tagName(a.reason));
                 return node;
             },
-            // (float <value>)
-            .float => |a| {
-                var node = sexpr.Expr.init(env.gpa, "float");
+            // (frac <value>)
+            .frac => |a| {
+                var node = sexpr.Expr.init(env.gpa, "frac");
 
                 node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
 

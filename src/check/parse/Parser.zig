@@ -1386,7 +1386,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
         },
         .Float => {
             self.advance();
-            expr = self.store.addExpr(.{ .float = .{
+            expr = self.store.addExpr(.{ .frac = .{
                 .token = start,
                 .region = .{ .start = start, .end = start },
             } });

@@ -20,6 +20,7 @@ const CalledVia = base.CalledVia;
 const TypeVar = types.Var;
 const Node = @import("Node.zig");
 const NodeStore = @import("NodeStore.zig");
+const RocDec = @import("../../builtins/dec.zig").RocDec;
 
 pub const Diagnostic = @import("Diagnostic.zig").Diagnostic;
 
@@ -559,6 +560,14 @@ pub const IntLiteralValue = struct {
     value: i128,
 };
 
+/// If we can store a given literal in memory as a RocDec without
+/// any precision loss, we do that because it's the most precise.
+/// Otherwise, we fall back on f64 - which can also fit f32s.
+pub const FracLiteralValue = union {
+    dec: RocDec,
+    f64: f64,
+};
+
 /// An expression that has been canonicalized.
 pub const Expr = union(enum) {
     num: struct {
@@ -574,7 +583,7 @@ pub const Expr = union(enum) {
         value: IntLiteralValue,
         region: Region,
     },
-    float: struct {
+    frac: struct {
         frac_var: TypeVar,
         requirements: types.Num.Frac.Requirements,
         literal: StringLiteral.Idx,
@@ -787,13 +796,13 @@ pub const Expr = union(enum) {
 
                 return int_node;
             },
-            .float => |float_expr| {
-                var float_node = sexpr.Expr.init(gpa, "e_float");
-                float_node.appendRegionInfo(gpa, ir.calcRegionInfo(float_expr.region));
+            .frac => |frac_expr| {
+                var frac_node = sexpr.Expr.init(gpa, "e_frac");
+                frac_node.appendRegionInfo(gpa, ir.calcRegionInfo(frac_expr.region));
 
                 // Add frac_var
                 var frac_var_node = sexpr.Expr.init(gpa, "frac_var");
-                const frac_var_str = float_expr.frac_var.allocPrint(gpa);
+                const frac_var_str = frac_expr.frac_var.allocPrint(gpa);
                 defer gpa.free(frac_var_str);
                 frac_var_node.appendString(gpa, frac_var_str);
                 float_node.appendNode(gpa, &frac_var_node);
@@ -802,33 +811,33 @@ pub const Expr = union(enum) {
                 var req_node = sexpr.Expr.init(gpa, "requirements");
 
                 var f32_node = sexpr.Expr.init(gpa, "fits_in_f32");
-                f32_node.appendString(gpa, if (float_expr.requirements.fits_in_f32) "true" else "false");
+                f32_node.appendString(gpa, if (frac_expr.requirements.fits_in_f32) "true" else "false");
                 req_node.appendNode(gpa, &f32_node);
 
                 var f64_node = sexpr.Expr.init(gpa, "fits_in_f64");
-                f64_node.appendString(gpa, if (float_expr.requirements.fits_in_f64) "true" else "false");
+                f64_node.appendString(gpa, if (frac_expr.requirements.fits_in_f64) "true" else "false");
                 req_node.appendNode(gpa, &f64_node);
 
                 var dec_node = sexpr.Expr.init(gpa, "fits_in_dec");
-                dec_node.appendString(gpa, if (float_expr.requirements.fits_in_dec) "true" else "false");
+                dec_node.appendString(gpa, if (frac_expr.requirements.fits_in_dec) "true" else "false");
                 req_node.appendNode(gpa, &dec_node);
 
-                float_node.appendNode(gpa, &req_node);
+                frac_node.appendNode(gpa, &req_node);
 
                 // Add literal
                 var literal_node = sexpr.Expr.init(gpa, "literal");
-                const literal = ir.env.strings.get(float_expr.literal);
-                literal_node.appendString(gpa, literal);
-                float_node.appendNode(gpa, &literal_node);
+                const literal_str = ir.stringLiteral(frac_expr.literal);
+                literal_node.appendString(gpa, literal_str);
+                frac_node.appendNode(gpa, &literal_node);
 
                 // Add value
                 var value_node = sexpr.Expr.init(gpa, "value");
-                const value_str = std.fmt.allocPrint(gpa, "{d}", .{float_expr.value}) catch |err| exitOnOom(err);
+                const value_str = std.fmt.allocPrint(gpa, "{any}", .{frac_expr.value}) catch unreachable;
                 defer gpa.free(value_str);
                 value_node.appendString(gpa, value_str);
-                float_node.appendNode(gpa, &value_node);
+                frac_node.appendNode(gpa, &value_node);
 
-                return float_node;
+                return frac_node;
             },
             .str_segment => |e| {
                 var str_node = sexpr.Expr.init(gpa, "e_literal");
@@ -1487,11 +1496,11 @@ pub const Pattern = union(enum) {
         value: IntLiteralValue,
         region: Region,
     },
-    float_literal: struct {
+    frac_literal: struct {
         num_var: TypeVar,
         requirements: types.Num.Frac.Requirements,
         literal: StringLiteral.Idx,
-        value: f64,
+        value: FracLiteralValue,
         region: Region,
     },
     str_literal: struct {
@@ -1525,7 +1534,7 @@ pub const Pattern = union(enum) {
             .list => |p| return p.region,
             .num_literal => |p| return p.region,
             .int_literal => |p| return p.region,
-            .float_literal => |p| return p.region,
+            .frac_literal => |p| return p.region,
             .str_literal => |p| return p.region,
             .char_literal => |p| return p.region,
             .underscore => |p| return p.region,
@@ -1627,8 +1636,8 @@ pub const Pattern = union(enum) {
                 node.appendString(gpa, value_str);
                 return node;
             },
-            .float_literal => |p| {
-                var node = sexpr.Expr.init(gpa, "p_float");
+            .frac_literal => |p| {
+                var node = sexpr.Expr.init(gpa, "p_frac");
                 node.appendRegionInfo(gpa, ir.calcRegionInfo(p.region));
 
                 var pattern_idx_node = formatPatternIdxNode(gpa, pattern_idx);

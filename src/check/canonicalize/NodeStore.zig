@@ -211,7 +211,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 },
             };
         },
-        .expr_float => {
+        .expr_frac => {
             // Retrieve the literal index from data_1
             const literal: base.StringLiteral.Idx = @enumFromInt(node.data_1);
 
@@ -222,7 +222,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             // TODO get value and bound from extra_data
 
             return CIR.Expr{
-                .float = .{
+                .frac = .{
                     .frac_var = frac_var,
                     .requirements = requirements,
                     .literal = literal,
@@ -384,8 +384,8 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
                 .value = CIR.IntLiteralValue{ .value = 0 }, // TODO need to store and retrieve from extra_data
             },
         },
-        .pattern_float_literal => return CIR.Pattern{
-            .float_literal = .{
+        .pattern_frac_literal => return CIR.Pattern{
+            .frac_literal = .{
                 .region = node.region,
                 .literal = @enumFromInt(node.data_1),
                 .requirements = .{ .fits_in_f32 = true, .fits_in_f64 = true, .fits_in_dec = true }, // TODO need to store and retrieve from extra_data
@@ -581,9 +581,9 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             node.data_1 = e.elems.span.start;
             node.data_2 = e.elems.span.len;
         },
-        .float => |e| {
+        .frac => |e| {
             node.region = e.region;
-            node.tag = .expr_float;
+            node.tag = .expr_frac;
 
             // Store the literal index in data_1
             node.data_1 = @intFromEnum(e.literal);
@@ -762,8 +762,8 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern) CIR.Pattern.Idx {
             node.data_1 = @intFromEnum(p.literal);
             // TODO store other data
         },
-        .float_literal => |p| {
-            node.tag = .pattern_float_literal;
+        .frac_literal => |p| {
+            node.tag = .pattern_frac_literal;
             node.region = p.region;
             node.data_1 = @intFromEnum(p.literal);
             // TODO store other data
