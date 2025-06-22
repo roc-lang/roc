@@ -160,6 +160,7 @@ const Section = union(enum) {
     canonicalize,
     tokens,
     problems,
+    types,
 
     pub const META = "# META\n~~~ini\n";
     pub const SOURCE = "# SOURCE\n~~~roc\n";
@@ -168,7 +169,7 @@ const Section = union(enum) {
     pub const CANONICALIZE = "# CANONICALIZE\n~~~clojure\n";
     pub const TOKENS = "# TOKENS\n~~~zig\n";
     pub const PROBLEMS = "# PROBLEMS\n~~~txt\n";
-    pub const TYPES = "# TYPES\n~~~txt\n";
+    pub const TYPES = "# TYPES\n~~~clojure\n";
 
     pub const SECTION_END = "~~~\n";
 
@@ -178,6 +179,7 @@ const Section = union(enum) {
         if (std.mem.startsWith(u8, str, FORMATTED)) return .formatted;
         if (std.mem.startsWith(u8, str, PARSE)) return .parse;
         if (std.mem.startsWith(u8, str, CANONICALIZE)) return .canonicalize;
+        if (std.mem.startsWith(u8, str, TYPES)) return .types;
         if (std.mem.startsWith(u8, str, TOKENS)) return .tokens;
         if (std.mem.startsWith(u8, str, PROBLEMS)) return .problems;
         return null;
@@ -192,6 +194,7 @@ const Section = union(enum) {
             .canonicalize => CANONICALIZE,
             .tokens => TOKENS,
             .problems => PROBLEMS,
+            .types => TYPES,
         };
     }
 
@@ -485,7 +488,6 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
     // Write out any PROBLEMS
     {
         try writer.writeAll(Section.PROBLEMS);
-        try writer.writeAll("\n");
 
         var tokenize_problems: usize = 0;
         var parser_problems: usize = 0;
@@ -698,7 +700,6 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
         // try types.SExprWriter.allVarsToSExprStr(solved.writer().any(), gpa, &module_env);
 
         try writer.writeAll(Section.TYPES);
-        try writer.writeAll("\n");
         try writer.writeAll(solved.items);
         try writer.writeAll("\n");
     }
