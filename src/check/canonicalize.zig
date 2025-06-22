@@ -594,27 +594,20 @@ pub fn canonicalize_expr(
             // First, try to parse as RocDec
             const RocDec = @import("../builtins/dec.zig").RocDec;
 
-            var fits_in_f32 = false;
-            var fits_in_dec = false;
+            var fits_in_f32: bool = undefined;
+            var fits_in_dec: bool = undefined;
+            var f64_val: f64 = undefined;
             var frac_value: base.FracLiteral = undefined;
 
             if (RocDec.fromNonemptySlice(token_text)) |dec| {
                 // Successfully parsed as Dec
                 fits_in_dec = true;
                 frac_value = .{ .Dec = @as(u128, @bitCast(dec.num)) };
-
-                // Also check if it fits in f32
-                const f64_val = dec.toF64();
-
-                // Check if it fits in f32 without precision loss
-                if (f64_val >= -std.math.floatMax(f32) and f64_val <= std.math.floatMax(f32)) {
-                    const as_f32 = @as(f32, @floatCast(f64_val));
-                    const back_to_f64 = @as(f64, @floatCast(as_f32));
-                    fits_in_f32 = f64_val == back_to_f64;
-                }
+                f64_val = dec.toF64();
             } else {
                 // Parsing it as a Dec failed, so try F64 next.
-                const f64_value = std.fmt.parseFloat(f64, token_text) catch {
+                fits_in_dec = false;
+                f64_val = std.fmt.parseFloat(f64, token_text) catch {
                     // It doesn't parse as Dec or as F64, so it's too big to fit in any of Roc's numeric types. Error out!
                     const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .invalid_num_literal = .{
                         .region = region,
@@ -622,14 +615,16 @@ pub fn canonicalize_expr(
                     return expr_idx;
                 };
 
-                frac_value = .{ .F64 = f64_value };
+                frac_value = .{ .F64 = f64_val };
+            }
 
-                // Check if it fits in F32 without precision loss
-                if (f64_value >= -std.math.floatMax(f32) and f64_value <= std.math.floatMax(f32)) {
-                    const as_f32 = @as(f32, @floatCast(f64_value));
-                    const back_to_f64 = @as(f64, @floatCast(as_f32));
-                    fits_in_f32 = f64_value == back_to_f64;
-                }
+            // Check if it fits in f32 without precision loss
+            if (f64_val >= -std.math.floatMax(f32) and f64_val <= std.math.floatMax(f32)) {
+                const as_f32 = @as(f32, @floatCast(f64_val));
+                const back_to_f64 = @as(f64, @floatCast(as_f32));
+                fits_in_f32 = f64_val == back_to_f64;
+            } else {
+                fits_in_f32 = false;
             }
 
             // create type vars, first "reserve" node slots
