@@ -273,6 +273,28 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 filename,
             );
         },
+        .unused_variable => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            break :blk try Diagnostic.buildUnusedVariableReport(
+                allocator,
+                &self.env.idents,
+                region_info,
+                data,
+                source,
+                filename,
+            );
+        },
+        .used_underscore_variable => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            break :blk try Diagnostic.buildUsedUnderscoreVariableReport(
+                allocator,
+                &self.env.idents,
+                region_info,
+                data,
+                source,
+                filename,
+            );
+        },
     };
 }
 

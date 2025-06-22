@@ -1509,6 +1509,16 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) CIR.Diagnostic.I
             node.data_2 = @bitCast(r.parameter_name);
             node.data_3 = r.original_region.start.offset;
         },
+        .unused_variable => |r| {
+            node.tag = .diag_unused_variable;
+            node.region = r.region;
+            node.data_1 = @bitCast(r.ident);
+        },
+        .used_underscore_variable => |r| {
+            node.tag = .diag_used_underscore_variable;
+            node.region = r.region;
+            node.data_1 = @bitCast(r.ident);
+        },
     }
 
     const nid = @intFromEnum(store.nodes.append(store.gpa, node));
@@ -1542,29 +1552,7 @@ pub fn addMalformed(store: *NodeStore, comptime t: type, reason: CIR.Diagnostic)
         .data_2 = 0,
         .data_3 = 0,
         // TODO add a toRegion() helper on the Diagnostic type
-        .region = switch (reason) {
-            .not_implemented => |r| r.region,
-            .invalid_num_literal => |r| r.region,
-            .ident_already_in_scope => |r| r.region,
-            .ident_not_in_scope => |r| r.region,
-            .invalid_top_level_statement => base.Region.zero(),
-            .expr_not_canonicalized => |r| r.region,
-            .invalid_string_interpolation => |r| r.region,
-            .pattern_arg_invalid => |r| r.region,
-            .pattern_not_canonicalized => |r| r.region,
-            .can_lambda_not_implemented => |r| r.region,
-            .lambda_body_not_canonicalized => |r| r.region,
-            .malformed_type_annotation => |r| r.region,
-            .var_across_function_boundary => |r| r.region,
-            .shadowing_warning => |r| r.region,
-            .type_redeclared => |r| r.redeclared_region,
-            .undeclared_type => |r| r.region,
-            .undeclared_type_var => |r| r.region,
-            .type_alias_redeclared => |r| r.redeclared_region,
-            .custom_type_redeclared => |r| r.redeclared_region,
-            .type_shadowed_warning => |r| r.region,
-            .type_parameter_conflict => |r| r.region,
-        },
+        .region = reason.toRegion(),
         .tag = .malformed,
     };
 
@@ -1681,6 +1669,14 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
                 .start = .{ .offset = @intCast(node.data_3) },
                 .end = .{ .offset = @intCast(node.data_3) },
             },
+        } },
+        .diag_unused_variable => return CIR.Diagnostic{ .unused_variable = .{
+            .ident = @bitCast(node.data_1),
+            .region = node.region,
+        } },
+        .diag_used_underscore_variable => return CIR.Diagnostic{ .used_underscore_variable = .{
+            .ident = @bitCast(node.data_1),
+            .region = node.region,
         } },
         else => {
             @panic("unreachable, node is not a diagnostic tag");

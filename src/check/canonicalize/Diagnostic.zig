@@ -96,9 +96,46 @@ pub const Diagnostic = union(enum) {
         region: Region,
         original_region: Region,
     },
+    unused_variable: struct {
+        ident: Ident.Idx,
+        region: Region,
+    },
+    used_underscore_variable: struct {
+        ident: Ident.Idx,
+        region: Region,
+    },
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
+
+    /// Helper to extract the region from any diagnostic variant
+    pub fn toRegion(self: Diagnostic) Region {
+        return switch (self) {
+            .not_implemented => |d| d.region,
+            .invalid_num_literal => |d| d.region,
+            .ident_already_in_scope => |d| d.region,
+            .ident_not_in_scope => |d| d.region,
+            .invalid_top_level_statement => base.Region.zero(),
+            .expr_not_canonicalized => |d| d.region,
+            .invalid_string_interpolation => |d| d.region,
+            .pattern_arg_invalid => |d| d.region,
+            .pattern_not_canonicalized => |d| d.region,
+            .can_lambda_not_implemented => |d| d.region,
+            .lambda_body_not_canonicalized => |d| d.region,
+            .malformed_type_annotation => |d| d.region,
+            .var_across_function_boundary => |d| d.region,
+            .shadowing_warning => |d| d.region,
+            .type_redeclared => |d| d.redeclared_region,
+            .undeclared_type => |d| d.region,
+            .undeclared_type_var => |d| d.region,
+            .type_alias_redeclared => |d| d.redeclared_region,
+            .custom_type_redeclared => |d| d.redeclared_region,
+            .type_shadowed_warning => |d| d.region,
+            .type_parameter_conflict => |d| d.region,
+            .unused_variable => |d| d.region,
+            .used_underscore_variable => |d| d.region,
+        };
+    }
 
     /// Build a report for "not implemented" diagnostic
     pub fn buildNotImplementedReport(allocator: Allocator, feature: []const u8) !Report {
@@ -600,6 +637,88 @@ pub const Diagnostic = union(enum) {
             original_region_info.end_line_idx + 1,
             original_region_info.end_col_idx + 1,
             .dimmed,
+            filename,
+        );
+
+        return report;
+    }
+
+    pub fn buildUnusedVariableReport(
+        gpa: Allocator,
+        ident_store: *const base.Ident.Store,
+        region_info: base.RegionInfo,
+        diagnostic: @TypeOf(@as(Diagnostic, undefined).unused_variable),
+        source: []const u8,
+        filename: []const u8,
+    ) !Report {
+        const ident_name = ident_store.getText(diagnostic.ident);
+
+        var report = Report.init(gpa, "UNUSED VARIABLE", .warning, reporting.ReportingConfig.initPlainText());
+        const owned_ident = try report.addOwnedString(ident_name);
+
+        try report.document.addText("Variable `");
+        try report.document.addUnqualifiedSymbol(owned_ident);
+        try report.document.addText("` is not used anywhere in your code.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addText("If you don't need this variable, prefix it with an underscore like `_");
+        try report.document.addText(owned_ident);
+        try report.document.addText("` to suppress this warning.");
+
+        try report.document.addLineBreak();
+        try report.document.addText("The unused variable is declared here:");
+        try report.document.addLineBreak();
+
+        try report.document.addSourceRegion(
+            source,
+            region_info.start_line_idx + 1,
+            region_info.start_col_idx + 1,
+            region_info.end_line_idx + 1,
+            region_info.end_col_idx + 1,
+            .error_highlight,
+            filename,
+        );
+
+        return report;
+    }
+
+    pub fn buildUsedUnderscoreVariableReport(
+        gpa: Allocator,
+        ident_store: *const base.Ident.Store,
+        region_info: base.RegionInfo,
+        diagnostic: @TypeOf(@as(Diagnostic, undefined).used_underscore_variable),
+        source: []const u8,
+        filename: []const u8,
+    ) !Report {
+        const ident_name = ident_store.getText(diagnostic.ident);
+
+        var report = Report.init(gpa, "UNDERSCORE VARIABLE USED", .warning, reporting.ReportingConfig.initPlainText());
+        const owned_ident = try report.addOwnedString(ident_name);
+
+        try report.document.addText("Variable `");
+        try report.document.addUnqualifiedSymbol(owned_ident);
+        try report.document.addText("` is prefixed with an underscore but is actually used.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addText("Variables prefixed with `_` are intended to be unused. Remove the underscore prefix: `");
+        const name_without_underscore = if (std.mem.startsWith(u8, ident_name, "_")) ident_name[1..] else ident_name;
+        const owned_name_without_underscore = try report.addOwnedString(name_without_underscore);
+        try report.document.addText(owned_name_without_underscore);
+        try report.document.addText("`.");
+
+        try report.document.addLineBreak();
+        try report.document.addText("The underscore variable is declared here:");
+        try report.document.addLineBreak();
+
+        try report.document.addSourceRegion(
+            source,
+            region_info.start_line_idx + 1,
+            region_info.start_col_idx + 1,
+            region_info.end_line_idx + 1,
+            region_info.end_col_idx + 1,
+            .error_highlight,
             filename,
         );
 

@@ -2359,6 +2359,35 @@ fn scopeAllIdents(self: *const Self, gpa: std.mem.Allocator, comptime item_kind:
     return result.toOwnedSlice() catch |err| collections.utils.exitOnOom(err);
 }
 
+/// Check if an identifier is marked as ignored (underscore prefix)
+fn identIsIgnored(ident_idx: base.Ident.Idx) bool {
+    return ident_idx.attributes.ignored;
+}
+
+/// Handle unused variable checking and diagnostics
+fn checkUnusedVariable(
+    self: *Self,
+    ident_idx: base.Ident.Idx,
+    region: Region,
+    is_used: bool,
+) void {
+    const is_ignored = identIsIgnored(ident_idx);
+
+    if (is_ignored and is_used) {
+        // Variable prefixed with _ but is actually used - warning
+        self.can_ir.pushDiagnostic(CIR.Diagnostic{ .used_underscore_variable = .{
+            .ident = ident_idx,
+            .region = region,
+        } });
+    } else if (!is_ignored and !is_used) {
+        // Variable not prefixed with _ but is unused - warning
+        self.can_ir.pushDiagnostic(CIR.Diagnostic{ .unused_variable = .{
+            .ident = ident_idx,
+            .region = region,
+        } });
+    }
+}
+
 /// Introduce a type declaration into the current scope
 fn scopeIntroduceTypeDecl(
     self: *Self,
