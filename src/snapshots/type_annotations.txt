@@ -2,100 +2,104 @@
 description=Various type annotations
 type=file
 ~~~SOURCE
-module []
+app [main!] { pf: platform "../basic-cli/platform.roc" }
 
-foo : U64
-bar : Thing(a, b, _)
-baz : (a, b, c)
-add_one : (U8, U16 -> U32)
-main! : List(String) -> Result({}, _)
-tag_tuple : Value((a, b, c))
+add_one : U64 -> U64
+add_one = |x| x + 1
+
+my_number : U64
+my_number = 42
 ~~~PROBLEMS
-UNDECLARED TYPE VARIABLE
-The type variable `a` is not declared in this scope.
-
-Type variables must be introduced in a type annotation before they can be used.
-
-This type variable is referenced here:
-type_annotations.txt:4-13:4: bar : Thing(a, b, _)
-
-UNDECLARED TYPE VARIABLE
-The type variable `b` is not declared in this scope.
-
-Type variables must be introduced in a type annotation before they can be used.
-
-This type variable is referenced here:
-type_annotations.txt:4-16:4: bar : Thing(a, b, _)
-
-UNDECLARED TYPE VARIABLE
-The type variable `c` is not declared in this scope.
-
-Type variables must be introduced in a type annotation before they can be used.
-
-This type variable is referenced here:
-type_annotations.txt:5-14:5: baz : (a, b, c)
-
-UNDECLARED TYPE
-The type `String` is not declared in this scope.
-
-This type is referenced here:
-type_annotations.txt:7-14:7: main! : List(String) -> Result({}, _)
-
+NIL
 ~~~TOKENS
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),
+KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(3:1-3:4),OpColon(3:5-3:6),UpperIdent(3:7-3:10),Newline(1:1-1:1),
-LowerIdent(4:1-4:4),OpColon(4:5-4:6),UpperIdent(4:7-4:12),NoSpaceOpenRound(4:12-4:13),LowerIdent(4:13-4:14),Comma(4:14-4:15),LowerIdent(4:16-4:17),Comma(4:17-4:18),Underscore(4:19-4:20),CloseRound(4:20-4:21),Newline(1:1-1:1),
-LowerIdent(5:1-5:4),OpColon(5:5-5:6),OpenRound(5:7-5:8),LowerIdent(5:8-5:9),Comma(5:9-5:10),LowerIdent(5:11-5:12),Comma(5:12-5:13),LowerIdent(5:14-5:15),CloseRound(5:15-5:16),Newline(1:1-1:1),
-LowerIdent(6:1-6:8),OpColon(6:9-6:10),OpenRound(6:11-6:12),UpperIdent(6:12-6:14),Comma(6:14-6:15),UpperIdent(6:16-6:19),OpArrow(6:20-6:22),UpperIdent(6:23-6:26),CloseRound(6:26-6:27),Newline(1:1-1:1),
-LowerIdent(7:1-7:6),OpColon(7:7-7:8),UpperIdent(7:9-7:13),NoSpaceOpenRound(7:13-7:14),UpperIdent(7:14-7:20),CloseRound(7:20-7:21),OpArrow(7:22-7:24),UpperIdent(7:25-7:31),NoSpaceOpenRound(7:31-7:32),OpenCurly(7:32-7:33),CloseCurly(7:33-7:34),Comma(7:34-7:35),Underscore(7:36-7:37),CloseRound(7:37-7:38),Newline(1:1-1:1),
-LowerIdent(8:1-8:10),OpColon(8:11-8:12),UpperIdent(8:13-8:18),NoSpaceOpenRound(8:18-8:19),NoSpaceOpenRound(8:19-8:20),LowerIdent(8:20-8:21),Comma(8:21-8:22),LowerIdent(8:23-8:24),Comma(8:24-8:25),LowerIdent(8:26-8:27),CloseRound(8:27-8:28),CloseRound(8:28-8:29),EndOfFile(8:29-8:29),
+LowerIdent(3:1-3:8),OpColon(3:9-3:10),UpperIdent(3:11-3:14),OpArrow(3:15-3:17),UpperIdent(3:18-3:21),Newline(1:1-1:1),
+LowerIdent(4:1-4:8),OpAssign(4:9-4:10),OpBar(4:11-4:12),LowerIdent(4:12-4:13),OpBar(4:13-4:14),LowerIdent(4:15-4:16),OpPlus(4:17-4:18),Int(4:19-4:20),Newline(1:1-1:1),
+Newline(1:1-1:1),
+LowerIdent(6:1-6:10),OpColon(6:11-6:12),UpperIdent(6:13-6:16),Newline(1:1-1:1),
+LowerIdent(7:1-7:10),OpAssign(7:11-7:12),Int(7:13-7:15),EndOfFile(7:15-7:15),
 ~~~PARSE
-(file (1:1-8:29)
-	(module (1:1-1:10) (exposes (1:8-1:10)))
+(file (1:1-7:15)
+	(app (1:1-1:57)
+		(provides (1:6-1:12) (exposed_item (lower_ident "main!")))
+		(record_field (1:15-1:57)
+			"pf"
+			(string (1:28-1:55) (string_part (1:29-1:54) "../basic-cli/platform.roc")))
+		(packages (1:13-1:57)
+			(record_field (1:15-1:57)
+				"pf"
+				(string (1:28-1:55) (string_part (1:29-1:54) "../basic-cli/platform.roc")))))
 	(statements
-		(type_anno (3:1-4:4) "foo" (ty "U64"))
-		(type_anno (4:1-5:4)
-			"bar"
-			(apply (4:7-4:21)
-				(ty "Thing")
-				(ty_var (4:13-4:14) "a")
-				(ty_var (4:16-4:17) "b")
-				(_)))
-		(type_anno (5:1-6:8)
-			"baz"
-			(tuple (5:7-5:16)
-				(ty_var (5:8-5:9) "a")
-				(ty_var (5:11-5:12) "b")
-				(ty_var (5:14-5:15) "c")))
-		(type_anno (6:1-7:6)
+		(type_anno (3:1-4:8)
 			"add_one"
-			(fn (6:12-6:26)
-				(ty "U8")
-				(ty "U16")
-				(ty "U32")))
-		(type_anno (7:1-8:10)
-			"main!"
-			(fn (7:9-7:38)
-				(apply (7:9-7:21)
-					(ty "List")
-					(ty "String"))
-				(apply (7:25-7:38)
-					(ty "Result")
-					(record (7:32-7:34))
-					(_))))
-		(type_anno (8:1-8:29)
-			"tag_tuple"
-			(apply (8:13-8:29)
-				(ty "Value")
-				(tuple (8:19-8:28)
-					(ty_var (8:20-8:21) "a")
-					(ty_var (8:23-8:24) "b")
-					(ty_var (8:26-8:27) "c"))))))
+			(fn (3:11-3:21)
+				(ty "U64")
+				(ty "U64")))
+		(decl (4:1-6:10)
+			(ident (4:1-4:8) "add_one")
+			(lambda (4:11-6:10)
+				(args (ident (4:12-4:13) "x"))
+				(binop (4:15-6:10)
+					"+"
+					(ident (4:15-4:16) "" "x")
+					(int (4:19-4:20) "1"))))
+		(type_anno (6:1-7:10) "my_number" (ty "U64"))
+		(decl (7:1-7:15)
+			(ident (7:1-7:10) "my_number")
+			(int (7:13-7:15) "42"))))
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
-(can_ir "empty")
+(can_ir
+	(d_let
+		(def_pattern
+			(p_assign (4:1-4:8)
+				(pid 75)
+				(ident "add_one")))
+		(def_expr
+			(e_lambda (4:11-6:10)
+				(args
+					(p_assign (4:12-4:13)
+						(pid 76)
+						(ident "x")))
+				(e_binop (4:15-6:10)
+					"add"
+					(e_lookup (4:15-4:16) (pid 76))
+					(e_int (4:19-4:20)
+						(int_var 79)
+						(precision_var 78)
+						(literal "1")
+						(value "TODO")
+						(bound "u8")))))
+		(annotation (4:1-4:8)
+			(signature 86)
+			(declared_type
+				(fn (3:11-3:21)
+					(ty (3:11-3:14) "U64")
+					(ty (3:18-3:21) "U64")
+					"false"))))
+	(d_let
+		(def_pattern
+			(p_assign (7:1-7:10)
+				(pid 90)
+				(ident "my_number")))
+		(def_expr
+			(e_int (7:13-7:15)
+				(int_var 92)
+				(precision_var 91)
+				(literal "42")
+				(value "TODO")
+				(bound "u8")))
+		(annotation (7:1-7:10)
+			(signature 95)
+			(declared_type (ty (6:13-6:16) "U64")))))
 ~~~TYPES
-(inferred_types (defs) (expressions))
+(inferred_types
+	(defs
+		(def "add_one" 88 (type "*"))
+		(def "my_number" 97 (type "Num(Int(*))")))
+	(expressions
+		(expr (4:11-6:10) 82 (type "*"))
+		(expr (7:13-7:15) 93 (type "Num(Int(*))"))))
 ~~~END

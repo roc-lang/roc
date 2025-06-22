@@ -19,8 +19,6 @@ PARSER: expected_type_field_name
 PARSER: expected_ty_close_curly_or_comma
 PARSER: expr_unexpected_token
 PARSER: expr_unexpected_token
-NOT IMPLEMENTED
-This feature is not yet implemented: tag union type annotation
 TYPE REDECLARED
 The type `Result` is being redeclared.
 
@@ -32,10 +30,15 @@ processData : Str -> Str
 But `Result` was already declared here:
 type_shadowing_across_scopes.txt:1-1:1: module [Result, processData]
 
-NOT IMPLEMENTED
-This feature is not yet implemented: top-level type_anno
 MALFORMED TYPE
 This type annotation is malformed or contains invalid syntax.
+UNUSED VARIABLE
+Variable `data` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_data` to suppress this warning.
+The unused variable is declared here:
+type_shadowing_across_scopes.txt:6-16:6: processData = |data|
+
 INVALID STATEMENT
 The statement expr is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
@@ -108,29 +111,42 @@ InnerModule :
 	(d_let
 		(def_pattern
 			(p_assign (6:1-6:12)
-				(pid 80)
+				(pid 89)
 				(ident "processData")))
 		(def_expr
 			(e_lambda (6:15-7:16)
 				(args
 					(p_assign (6:16-6:20)
-						(pid 81)
+						(pid 90)
 						(ident "data")))
-				(e_string (7:5-7:16) (e_literal (7:6-7:15) "processed")))))
+				(e_string (7:5-7:16) (e_literal (7:6-7:15) "processed"))))
+		(annotation (6:1-6:12)
+			(signature 98)
+			(declared_type
+				(fn (5:15-5:25)
+					(ty (5:15-5:18) "Str")
+					(ty (5:22-5:25) "Str")
+					"false"))))
 	(s_type_decl (3:1-5:12)
 		(type_header (3:1-3:13)
 			"Result"
 			(args
 				(ty_var (3:8-3:9) "a")
 				(ty_var (3:11-3:12) "b")))
-		(malformed_type_anno (3:16-3:31)))
+		(tag_union (3:16-3:31)
+			(apply (3:17-3:22)
+				"Ok"
+				(ty_var (3:20-3:21) "a"))
+			(apply (3:24-3:30)
+				"Err"
+				(ty_var (3:28-3:29) "b"))))
 	(s_type_decl (10:1-11:32)
 		(type_header (10:1-10:12) "InnerModule")
 		(malformed_type_anno (11:24-11:31))))
 ~~~TYPES
 (inferred_types
 	(defs
-		(def "processData" 85 (type "*")))
+		(def "processData" 100 (type "*")))
 	(expressions
-		(expr (6:15-7:16) 84 (type "*"))))
+		(expr (6:15-7:16) 93 (type "*"))))
 ~~~END

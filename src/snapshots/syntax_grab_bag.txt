@@ -210,20 +210,6 @@ expect {
 	blah == foo
 }
 ~~~PROBLEMS
-NOT IMPLEMENTED
-This feature is not yet implemented: top-level import
-NOT IMPLEMENTED
-This feature is not yet implemented: top-level import
-NOT IMPLEMENTED
-This feature is not yet implemented: top-level import
-NOT IMPLEMENTED
-This feature is not yet implemented: top-level import
-NOT IMPLEMENTED
-This feature is not yet implemented: top-level import
-NOT IMPLEMENTED
-This feature is not yet implemented: function type annotation
-NOT IMPLEMENTED
-This feature is not yet implemented: function type annotation
 UNDECLARED TYPE
 The type `Bar` is not declared in this scope.
 
@@ -248,38 +234,103 @@ The type `Baz` is not declared in this scope.
 This type is referenced here:
 syntax_grab_bag.txt:40-2:40: 	Baz, # Another after pattern tuple item
 
+UNDECLARED TYPE
+The type `Something` is not declared in this scope.
+
+This type is referenced here:
+syntax_grab_bag.txt:43-32:43: Some(a) : { foo : Ok(a), bar : Something }
+
+UNDECLARED TYPE
+The type `Something` is not declared in this scope.
+
+This type is referenced here:
+syntax_grab_bag.txt:46-8:46: 	bar : Something, # After last field
+
+UNDECLARED TYPE
+The type `Something` is not declared in this scope.
+
+This type is referenced here:
+syntax_grab_bag.txt:53-8:53: 	bar : Something, # Another after pattern record field
+
+UNDECLARED TYPE
+The type `None` is not declared in this scope.
+
+This type is referenced here:
+syntax_grab_bag.txt:56-22:56: Maybe(a) : [Some(a), None]
+
+UNDECLARED TYPE
+The type `None` is not declared in this scope.
+
+This type is referenced here:
+syntax_grab_bag.txt:60-2:60: 	None, # Another after tag union member
+
 NOT IMPLEMENTED
-This feature is not yet implemented: record type annotation
+This feature is not yet implemented: top-level import
 NOT IMPLEMENTED
-This feature is not yet implemented: record type annotation
+This feature is not yet implemented: top-level import
 NOT IMPLEMENTED
-This feature is not yet implemented: record type annotation
+This feature is not yet implemented: top-level import
 NOT IMPLEMENTED
-This feature is not yet implemented: tag union type annotation
+This feature is not yet implemented: top-level import
 NOT IMPLEMENTED
-This feature is not yet implemented: tag union type annotation
-NOT IMPLEMENTED
-This feature is not yet implemented: function type annotation
+This feature is not yet implemented: top-level import
 NOT IMPLEMENTED
 This feature is not yet implemented: canonicalize if_then_else expression
-NOT IMPLEMENTED
-This feature is not yet implemented: top-level type_anno
+UNUSED VARIABLE
+Variable `num` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_num` to suppress this warning.
+The unused variable is declared here:
+syntax_grab_bag.txt:65-20:65: add_one_oneline = |num| if num 2 else 5
+
 NOT IMPLEMENTED
 This feature is not yet implemented: canonicalize if_then_else expression
+UNUSED VARIABLE
+Variable `other` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_other` to suppress this warning.
+The unused variable is declared here:
+syntax_grab_bag.txt:69-2:69: 	other = 1
+
+UNUSED VARIABLE
+Variable `num` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_num` to suppress this warning.
+The unused variable is declared here:
+syntax_grab_bag.txt:68-12:68: add_one = |num| {
+
 NOT IMPLEMENTED
 This feature is not yet implemented: canonicalize match expression
+UNUSED VARIABLE
+Variable `b` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
+The unused variable is declared here:
+syntax_grab_bag.txt:82-2:82: 	b,
+
+UNUSED VARIABLE
+Variable `a` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_a` to suppress this warning.
+The unused variable is declared here:
+syntax_grab_bag.txt:81-2:81: 	a, # After arg
+
 NOT IMPLEMENTED
 This feature is not yet implemented: top-level expect
-NOT IMPLEMENTED
-This feature is not yet implemented: top-level type_anno
+UNDECLARED TYPE
+The type `String` is not declared in this scope.
+
+This type is referenced here:
+syntax_grab_bag.txt:143-14:143: main! : List(String) -> Result({}, _)
+
 NOT IMPLEMENTED
 This feature is not yet implemented: statement type in block
 NOT IMPLEMENTED
 This feature is not yet implemented: statement type in block
 NOT IMPLEMENTED
-This feature is not yet implemented: canonicalize ellipsis expression
+This feature is not yet implemented: ...
 NOT IMPLEMENTED
-This feature is not yet implemented: canonicalize ellipsis expression
+This feature is not yet implemented: ...
 UNDEFINED VARIABLE
 Nothing is named `some_func` in this scope.
 Is there an import or exposing missing up-top?
@@ -324,7 +375,7 @@ This feature is not yet implemented: binop
 NOT IMPLEMENTED
 This feature is not yet implemented: binop
 NOT IMPLEMENTED
-This feature is not yet implemented: canonicalize record field_access expression
+This feature is not yet implemented: canonicalize suffix_single_question expression
 NOT IMPLEMENTED
 This feature is not yet implemented: canonicalize suffix_single_question expression
 UNDEFINED VARIABLE
@@ -333,12 +384,57 @@ Is there an import or exposing missing up-top?
 UNDEFINED VARIABLE
 Nothing is named `toStr` in this scope.
 Is there an import or exposing missing up-top?
-NOT IMPLEMENTED
-This feature is not yet implemented: top-level type_anno
+UNUSED VARIABLE
+Variable `multiline_tuple` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_multiline_tuple` to suppress this warning.
+The unused variable is declared here:
+syntax_grab_bag.txt:180-2:180: 	multiline_tuple = (
+
+UNUSED VARIABLE
+Variable `record` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_record` to suppress this warning.
+The unused variable is declared here:
+syntax_grab_bag.txt:178-2:178: 	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
+
+UNUSED VARIABLE
+Variable `tag_with_payload` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_tag_with_payload` to suppress this warning.
+The unused variable is declared here:
+syntax_grab_bag.txt:164-2:164: 	tag_with_payload = Ok(number)
+
+UNUSED VARIABLE
+Variable `list` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
+The unused variable is declared here:
+syntax_grab_bag.txt:166-2:166: 	list = [
+
+UNUSED VARIABLE
+Variable `bin_op_result` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_bin_op_result` to suppress this warning.
+The unused variable is declared here:
+syntax_grab_bag.txt:188-2:188: 	bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
+
+UNUSED VARIABLE
+Variable `static_dispatch_style` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_static_dispatch_style` to suppress this warning.
+The unused variable is declared here:
+syntax_grab_bag.txt:189-2:189: 	static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+
+UNUSED VARIABLE
+Variable `interpolated` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_interpolated` to suppress this warning.
+The unused variable is declared here:
+syntax_grab_bag.txt:165-2:165: 	interpolated = "Hello, ${world}"
+
 NOT IMPLEMENTED
 This feature is not yet implemented: canonicalize record expression
-NOT IMPLEMENTED
-This feature is not yet implemented: top-level type_anno
 NOT IMPLEMENTED
 This feature is not yet implemented: top-level expect
 ~~~TOKENS
@@ -1118,191 +1214,204 @@ NO CHANGE
 	(d_let
 		(def_pattern
 			(p_assign (65:1-65:16)
-				(pid 133)
+				(pid 172)
 				(ident "add_one_oneline")))
 		(def_expr
 			(e_lambda (65:19-67:8)
 				(args
 					(p_assign (65:20-65:23)
-						(pid 134)
+						(pid 173)
 						(ident "num")))
 				(e_runtime_error (1:1-1:1) "not_implemented"))))
 	(d_let
 		(def_pattern
 			(p_assign (68:1-68:8)
-				(pid 140)
+				(pid 182)
 				(ident "add_one")))
 		(def_expr
 			(e_lambda (68:11-78:2)
 				(args
 					(p_assign (68:12-68:15)
-						(pid 141)
+						(pid 183)
 						(ident "num")))
 				(e_block (68:17-78:2)
 					(s_let (69:2-69:11)
 						(p_assign (69:2-69:7)
-							(pid 142)
+							(pid 184)
 							(ident "other"))
 						(e_int (69:10-69:11)
-							(int_var 144)
-							(precision_var 143)
+							(int_var 186)
+							(precision_var 185)
 							(literal "1")
 							(value "TODO")
 							(bound "u8")))
-					(e_runtime_error (1:1-1:1) "not_implemented")))))
+					(e_runtime_error (1:1-1:1) "not_implemented"))))
+		(annotation (68:1-68:8)
+			(signature 198)
+			(declared_type
+				(fn (67:11-67:21)
+					(ty (67:11-67:14) "U64")
+					(ty (67:18-67:21) "U64")
+					"false"))))
 	(d_let
 		(def_pattern
 			(p_assign (80:1-80:11)
-				(pid 152)
+				(pid 201)
 				(ident "match_time")))
 		(def_expr
 			(e_lambda (80:14-140:7)
 				(args
 					(p_assign (81:2-81:3)
-						(pid 153)
+						(pid 202)
 						(ident "a"))
 					(p_assign (82:2-82:3)
-						(pid 154)
+						(pid 203)
 						(ident "b")))
 				(e_runtime_error (1:1-1:1) "not_implemented"))))
 	(d_let
 		(def_pattern
 			(p_assign (144:1-144:6)
-				(pid 161)
+				(pid 218)
 				(ident "main!")))
 		(def_expr
 			(e_lambda (144:9-196:2)
-				(args (p_underscore (144:10-144:11) (pid 162)))
+				(args (p_underscore (144:10-144:11) (pid 219)))
 				(e_block (144:13-196:2)
 					(s_let (145:2-145:17)
 						(p_assign (145:2-145:7)
-							(pid 163)
+							(pid 220)
 							(ident "world"))
 						(e_string (145:10-145:17) (e_literal (145:11-145:16) "World")))
 					(s_var (146:2-147:8)
-						(pid 170)
+						(pid 227)
 						(p_assign (146:2-147:8)
-							(pid 170)
+							(pid 227)
 							(ident "number"))
 						(e_int (146:15-146:18)
-							(int_var 168)
-							(precision_var 167)
+							(int_var 225)
+							(precision_var 224)
 							(literal "123")
 							(value "TODO")
 							(bound "u8")))
 					(s_let (148:2-148:12)
 						(p_assign (148:2-148:5)
-							(pid 174)
+							(pid 231)
 							(ident "tag"))
 						(e_tag (148:8-148:12)
 							(ext_var 0)
 							(name "Blue")
 							(args "TODO")))
-					(s_expr (154:2-155:12) "TODO")
-					(s_expr (155:2-158:11) "TODO")
-					(s_expr (158:2-162:7) "TODO")
+					(s_expr (154:2-155:12) (e_runtime_error (154:2-154:5) "not_implemented"))
+					(s_expr (155:2-158:11)
+						(e_call (155:2-157:3)
+							(e_lookup (155:2-155:12) (pid 201))
+							(e_runtime_error (156:3-156:6) "not_implemented")))
+					(s_expr (158:2-162:7)
+						(e_call (158:2-161:3)
+							(e_runtime_error (158:2-158:11) "ident_not_in_scope")
+							(e_runtime_error (1:1-1:1) "not_implemented")))
 					(s_let (164:2-164:31)
 						(p_assign (164:2-164:18)
-							(pid 198)
+							(pid 253)
 							(ident "tag_with_payload"))
 						(e_call (164:21-164:31)
 							(e_tag (164:21-164:23)
 								(ext_var 0)
 								(name "Ok")
 								(args "TODO"))
-							(e_lookup (164:24-164:30) (pid 170))))
+							(e_lookup (164:24-164:30) (pid 227))))
 					(s_let (165:2-165:34)
 						(p_assign (165:2-165:14)
-							(pid 204)
+							(pid 259)
 							(ident "interpolated"))
 						(e_string (165:17-165:34)
 							(e_literal (165:18-165:25) "Hello, ")
-							(e_lookup (165:27-165:32) (pid 163))
+							(e_lookup (165:27-165:32) (pid 220))
 							(e_literal (165:33-165:33) "")))
 					(s_let (166:2-173:3)
 						(p_assign (166:2-166:6)
-							(pid 210)
+							(pid 265)
 							(ident "list"))
 						(e_list (166:9-173:3)
-							(elem_var 221)
+							(elem_var 276)
 							(elems
 								(e_call (167:3-170:4)
-									(e_lookup (167:3-167:10) (pid 140))
+									(e_lookup (167:3-167:10) (pid 182))
 									(e_runtime_error (1:1-1:1) "not_implemented"))
 								(e_int (171:3-171:6)
-									(int_var 216)
-									(precision_var 215)
+									(int_var 271)
+									(precision_var 270)
 									(literal "456")
 									(value "TODO")
 									(bound "u8"))
 								(e_int (172:3-172:6)
-									(int_var 219)
-									(precision_var 218)
+									(int_var 274)
+									(precision_var 273)
 									(literal "789")
 									(value "TODO")
 									(bound "u8")))))
 					(s_let (178:2-178:71)
 						(p_assign (178:2-178:8)
-							(pid 226)
+							(pid 281)
 							(ident "record"))
 						(e_runtime_error (1:1-1:1) "not_implemented"))
 					(s_let (179:2-179:68)
 						(p_assign (179:2-179:7)
-							(pid 230)
+							(pid 285)
 							(ident "tuple"))
 						(e_tuple (179:10-179:68)
-							(tuple_var "#257")
+							(tuple_var "#312")
 							(elems
 								(e_int (179:11-179:14)
-									(int_var 232)
-									(precision_var 231)
+									(int_var 287)
+									(precision_var 286)
 									(literal "123")
 									(value "TODO")
 									(bound "u8"))
 								(e_string (179:16-179:23) (e_literal (179:17-179:22) "World"))
-								(e_lookup (179:25-179:28) (pid 174))
+								(e_lookup (179:25-179:28) (pid 231))
 								(e_call (179:30-179:39)
 									(e_tag (179:30-179:32)
 										(ext_var 0)
 										(name "Ok")
 										(args "TODO"))
-									(e_lookup (179:33-179:38) (pid 163)))
+									(e_lookup (179:33-179:38) (pid 220)))
 								(e_tuple (179:41-179:56)
-									(tuple_var "#244")
+									(tuple_var "#299")
 									(elems
 										(e_runtime_error (179:42-179:48) "ident_not_in_scope")
-										(e_lookup (179:50-179:55) (pid 230))))
+										(e_lookup (179:50-179:55) (pid 285))))
 								(e_list (179:58-179:67)
-									(elem_var 255)
+									(elem_var 310)
 									(elems
 										(e_int (179:59-179:60)
-											(int_var 247)
-											(precision_var 246)
+											(int_var 302)
+											(precision_var 301)
 											(literal "1")
 											(value "TODO")
 											(bound "u8"))
 										(e_int (179:62-179:63)
-											(int_var 250)
-											(precision_var 249)
+											(int_var 305)
+											(precision_var 304)
 											(literal "2")
 											(value "TODO")
 											(bound "u8"))
 										(e_int (179:65-179:66)
-											(int_var 253)
-											(precision_var 252)
+											(int_var 308)
+											(precision_var 307)
 											(literal "3")
 											(value "TODO")
 											(bound "u8")))))))
 					(s_let (180:2-187:3)
 						(p_assign (180:2-180:17)
-							(pid 260)
+							(pid 315)
 							(ident "multiline_tuple"))
 						(e_tuple (180:20-187:3)
-							(tuple_var "#288")
+							(tuple_var "#343")
 							(elems
 								(e_int (181:3-181:6)
-									(int_var 262)
-									(precision_var 261)
+									(int_var 317)
+									(precision_var 316)
 									(literal "123")
 									(value "TODO")
 									(bound "u8"))
@@ -1313,72 +1422,117 @@ NO CHANGE
 										(ext_var 0)
 										(name "Ok")
 										(args "TODO"))
-									(e_lookup (184:6-184:11) (pid 163)))
+									(e_lookup (184:6-184:11) (pid 220)))
 								(e_tuple (185:3-185:18)
-									(tuple_var "#275")
+									(tuple_var "#330")
 									(elems
 										(e_runtime_error (185:4-185:10) "ident_not_in_scope")
-										(e_lookup (185:12-185:17) (pid 230))))
+										(e_lookup (185:12-185:17) (pid 285))))
 								(e_list (186:3-186:12)
-									(elem_var 286)
+									(elem_var 341)
 									(elems
 										(e_int (186:4-186:5)
-											(int_var 278)
-											(precision_var 277)
+											(int_var 333)
+											(precision_var 332)
 											(literal "1")
 											(value "TODO")
 											(bound "u8"))
 										(e_int (186:7-186:8)
-											(int_var 281)
-											(precision_var 280)
+											(int_var 336)
+											(precision_var 335)
 											(literal "2")
 											(value "TODO")
 											(bound "u8"))
 										(e_int (186:10-186:11)
-											(int_var 284)
-											(precision_var 283)
+											(int_var 339)
+											(precision_var 338)
 											(literal "3")
 											(value "TODO")
 											(bound "u8")))))))
 					(s_let (188:2-189:23)
 						(p_assign (188:2-188:15)
-							(pid 291)
+							(pid 346)
 							(ident "bin_op_result"))
 						(e_runtime_error (188:18-189:23) "not_implemented"))
 					(s_let (189:2-190:8)
 						(p_assign (189:2-189:23)
-							(pid 355)
+							(pid 410)
 							(ident "static_dispatch_style"))
-						(e_runtime_error (1:1-1:1) "not_implemented"))
-					(s_expr (190:2-191:8) "TODO")
+						(e_dot_access (189:26-190:8)
+							(e_dot_access (189:26-189:110)
+								(e_dot_access (189:26-189:94)
+									(e_runtime_error (1:1-1:1) "not_implemented")
+									"unknown")
+								"unknown")
+							"unknown"))
+					(s_expr (190:2-191:8) (e_runtime_error (1:1-1:1) "not_implemented"))
 					(e_call (191:2-195:3)
 						(e_runtime_error (191:2-191:14) "ident_not_in_scope")
 						(e_string (192:3-194:18)
 							(e_literal (192:4-192:14) "How about ")
 							(e_call (193:4-193:21)
 								(e_runtime_error (193:4-193:13) "ident_not_in_scope")
-								(e_lookup (193:14-193:20) (pid 170)))
-							(e_literal (194:4-194:17) " as a string?")))))))
+								(e_lookup (193:14-193:20) (pid 227)))
+							(e_literal (194:4-194:17) " as a string?"))))))
+		(annotation (144:1-144:6)
+			(signature 442)
+			(declared_type
+				(fn (143:9-143:38)
+					(apply (143:9-143:21)
+						"List"
+						(ty (143:14-143:20) "String"))
+					(apply (143:25-143:38)
+						"Result"
+						(record (143:32-143:34))
+						(underscore (143:36-143:37)))
+					"false"))))
 	(d_let
 		(def_pattern
 			(p_assign (199:1-199:6)
-				(pid 376)
+				(pid 446)
 				(ident "empty")))
-		(def_expr (e_runtime_error (1:1-1:1) "not_implemented")))
+		(def_expr (e_runtime_error (1:1-1:1) "not_implemented"))
+		(annotation (199:1-199:6)
+			(signature 450)
+			(declared_type (record (198:9-198:11)))))
 	(s_type_decl (22:1-23:6)
 		(type_header (22:1-22:10)
 			"Map"
 			(args
 				(ty_var (22:5-22:6) "a")
 				(ty_var (22:8-22:9) "b")))
-		(malformed_type_anno (22:13-22:41)))
+		(fn (22:13-22:41)
+			(apply (22:13-22:20)
+				"List"
+				(ty_var (22:18-22:19) "a"))
+			(parens (22:22-22:30)
+				(fn (22:23-22:29)
+					(ty_var (22:23-22:24) "a")
+					(ty_var (22:28-22:29) "b")
+					"false"))
+			(apply (22:34-22:41)
+				"List"
+				(ty_var (22:39-22:40) "b"))
+			"false"))
 	(s_type_decl (23:1-36:4)
 		(type_header (23:1-26:2)
 			"MapML"
 			(args
 				(ty_var (24:2-24:3) "a")
 				(ty_var (25:2-25:3) "b")))
-		(malformed_type_anno (28:3-34:5)))
+		(fn (28:3-34:5)
+			(apply (28:3-30:4)
+				"List"
+				(ty_var (29:4-29:5) "a"))
+			(parens (31:3-31:11)
+				(fn (31:4-31:10)
+					(ty_var (31:4-31:5) "a")
+					(ty_var (31:9-31:10) "b")
+					"false"))
+			(apply (32:4-34:5)
+				"List"
+				(ty_var (33:5-33:6) "b"))
+			"false"))
 	(s_type_decl (36:1-38:13)
 		(type_header (36:1-36:4) "Foo")
 		(tuple (36:7-36:17)
@@ -1393,44 +1547,78 @@ NO CHANGE
 		(type_header (43:1-43:8)
 			"Some"
 			(args (ty_var (43:6-43:7) "a")))
-		(malformed_type_anno (43:11-43:43)))
+		(record (43:11-43:43)
+			(record_field
+				"foo"
+				(apply (43:19-43:24)
+					"Ok"
+					(ty_var (43:22-43:23) "a")))
+			(record_field "bar" (ty (43:32-43:41) "Something"))))
 	(s_type_decl (44:1-49:14)
 		(type_header (44:1-44:10)
 			"SomeMl"
 			(args (ty_var (44:8-44:9) "a")))
-		(malformed_type_anno (44:13-47:2)))
+		(record (44:13-47:2)
+			(record_field
+				"foo"
+				(apply (45:8-45:13)
+					"Ok"
+					(ty_var (45:11-45:12) "a")))
+			(record_field "bar" (ty (46:8-46:17) "Something"))))
 	(s_type_decl (49:1-56:6)
 		(type_header (49:1-49:17)
 			"SomeMultiline"
 			(args (ty_var (49:15-49:16) "a")))
-		(malformed_type_anno (49:20-54:2)))
+		(record (49:20-54:2)
+			(record_field
+				"foo"
+				(apply (52:4-52:9)
+					"Ok"
+					(ty_var (52:7-52:8) "a")))
+			(record_field "bar" (ty (53:8-53:17) "Something"))))
 	(s_type_decl (56:1-58:15)
 		(type_header (56:1-56:9)
 			"Maybe"
 			(args (ty_var (56:7-56:8) "a")))
-		(malformed_type_anno (56:12-56:27)))
+		(tag_union (56:12-56:27)
+			(apply (56:13-56:20)
+				"Some"
+				(ty_var (56:18-56:19) "a"))
+			(ty (56:22-56:26) "None")))
 	(s_type_decl (58:1-63:9)
 		(type_header (58:1-58:18)
 			"MaybeMultiline"
 			(args (ty_var (58:16-58:17) "a")))
-		(malformed_type_anno (58:21-61:2)))
+		(tag_union (58:21-61:2)
+			(apply (59:2-59:9)
+				"Some"
+				(ty_var (59:7-59:8) "a"))
+			(ty (60:2-60:6) "None")))
 	(s_type_decl (63:1-65:16)
 		(type_header (63:1-63:12)
 			"SomeFunc"
 			(args (ty_var (63:10-63:11) "a")))
-		(malformed_type_anno (63:15-63:38))))
+		(fn (63:15-63:38)
+			(apply (63:15-63:23)
+				"Maybe"
+				(ty_var (63:21-63:22) "a"))
+			(ty_var (63:25-63:26) "a")
+			(apply (63:30-63:38)
+				"Maybe"
+				(ty_var (63:36-63:37) "a"))
+			"false")))
 ~~~TYPES
 (inferred_types
 	(defs
-		(def "add_one_oneline" 138 (type "*"))
-		(def "add_one" 151 (type "*"))
-		(def "match_time" 158 (type "*"))
-		(def "main!" 374 (type "*"))
-		(def "empty" 379 (type "Error")))
+		(def "add_one_oneline" 178 (type "*"))
+		(def "add_one" 200 (type "*"))
+		(def "match_time" 209 (type "*"))
+		(def "main!" 444 (type "*"))
+		(def "empty" 452 (type "Error")))
 	(expressions
-		(expr (65:19-67:8) 137 (type "*"))
-		(expr (68:11-78:2) 150 (type "*"))
-		(expr (80:14-140:7) 157 (type "*"))
-		(expr (144:9-196:2) 373 (type "*"))
-		(expr (199:9-199:11) 378 (type "Error"))))
+		(expr (65:19-67:8) 176 (type "*"))
+		(expr (68:11-78:2) 193 (type "*"))
+		(expr (80:14-140:7) 206 (type "*"))
+		(expr (144:9-196:2) 438 (type "*"))
+		(expr (199:9-199:11) 448 (type "Error"))))
 ~~~END

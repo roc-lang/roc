@@ -7,10 +7,18 @@ module [Maybe]
 Maybe(a) : [Some(a), None]
 Maybe(a) : [Ok(a), Err]
 ~~~PROBLEMS
-NOT IMPLEMENTED
-This feature is not yet implemented: tag union type annotation
-NOT IMPLEMENTED
-This feature is not yet implemented: tag union type annotation
+UNDECLARED TYPE
+The type `None` is not declared in this scope.
+
+This type is referenced here:
+type_redeclaration_same_scope.txt:3-22:3: Maybe(a) : [Some(a), None]
+
+UNDECLARED TYPE
+The type `Err` is not declared in this scope.
+
+This type is referenced here:
+type_redeclaration_same_scope.txt:4-20:4: Maybe(a) : [Ok(a), Err]
+
 TYPE REDECLARED
 The type `Maybe` is being redeclared.
 
@@ -59,12 +67,20 @@ NO CHANGE
 		(type_header (3:1-3:9)
 			"Maybe"
 			(args (ty_var (3:7-3:8) "a")))
-		(malformed_type_anno (3:12-3:27)))
+		(tag_union (3:12-3:27)
+			(apply (3:13-3:20)
+				"Some"
+				(ty_var (3:18-3:19) "a"))
+			(ty (3:22-3:26) "None")))
 	(s_type_decl (4:1-4:24)
 		(type_header (4:1-4:9)
 			"Maybe"
 			(args (ty_var (4:7-4:8) "a")))
-		(malformed_type_anno (4:12-4:24))))
+		(tag_union (4:12-4:24)
+			(apply (4:13-4:18)
+				"Ok"
+				(ty_var (4:16-4:17) "a"))
+			(ty (4:20-4:23) "Err"))))
 ~~~TYPES
 (inferred_types (defs) (expressions))
 ~~~END

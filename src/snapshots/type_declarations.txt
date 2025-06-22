@@ -18,8 +18,6 @@ MyType : U64
 
 MyType2 : Module.Thingy
 ~~~PROBLEMS
-NOT IMPLEMENTED
-This feature is not yet implemented: function type annotation
 UNDECLARED TYPE
 The type `Bar` is not declared in this scope.
 
@@ -32,12 +30,18 @@ The type `Baz` is not declared in this scope.
 This type is referenced here:
 type_declarations.txt:5-13:5: Foo : (Bar, Baz)
 
-NOT IMPLEMENTED
-This feature is not yet implemented: record type annotation
-NOT IMPLEMENTED
-This feature is not yet implemented: tag union type annotation
-NOT IMPLEMENTED
-This feature is not yet implemented: function type annotation
+UNDECLARED TYPE
+The type `Something` is not declared in this scope.
+
+This type is referenced here:
+type_declarations.txt:7-32:7: Some(a) : { foo : Ok(a), bar : Something }
+
+UNDECLARED TYPE
+The type `None` is not declared in this scope.
+
+This type is referenced here:
+type_declarations.txt:9-22:9: Maybe(a) : [Some(a), None]
+
 ~~~TOKENS
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:12),Comma(1:12-1:13),UpperIdent(1:14-1:17),Comma(1:17-1:18),UpperIdent(1:19-1:23),Comma(1:23-1:24),UpperIdent(1:25-1:30),Comma(1:30-1:31),UpperIdent(1:32-1:40),Comma(1:40-1:41),LowerIdent(1:42-1:49),Comma(1:49-1:50),LowerIdent(1:51-1:56),CloseSquare(1:56-1:57),Newline(1:1-1:1),
 Newline(1:1-1:1),
@@ -136,7 +140,19 @@ NO CHANGE
 			(args
 				(ty_var (3:5-3:6) "a")
 				(ty_var (3:8-3:9) "b")))
-		(malformed_type_anno (3:13-3:41)))
+		(fn (3:13-3:41)
+			(apply (3:13-3:20)
+				"List"
+				(ty_var (3:18-3:19) "a"))
+			(parens (3:22-3:30)
+				(fn (3:23-3:29)
+					(ty_var (3:23-3:24) "a")
+					(ty_var (3:28-3:29) "b")
+					"false"))
+			(apply (3:34-3:41)
+				"List"
+				(ty_var (3:39-3:40) "b"))
+			"false"))
 	(s_type_decl (5:1-7:5)
 		(type_header (5:1-5:4) "Foo")
 		(tuple (5:7-5:17)
@@ -146,17 +162,35 @@ NO CHANGE
 		(type_header (7:1-7:8)
 			"Some"
 			(args (ty_var (7:6-7:7) "a")))
-		(malformed_type_anno (7:11-7:43)))
+		(record (7:11-7:43)
+			(record_field
+				"foo"
+				(apply (7:19-7:24)
+					"Ok"
+					(ty_var (7:22-7:23) "a")))
+			(record_field "bar" (ty (7:32-7:41) "Something"))))
 	(s_type_decl (9:1-11:9)
 		(type_header (9:1-9:9)
 			"Maybe"
 			(args (ty_var (9:7-9:8) "a")))
-		(malformed_type_anno (9:12-9:27)))
+		(tag_union (9:12-9:27)
+			(apply (9:13-9:20)
+				"Some"
+				(ty_var (9:18-9:19) "a"))
+			(ty (9:22-9:26) "None")))
 	(s_type_decl (11:1-13:7)
 		(type_header (11:1-11:12)
 			"SomeFunc"
 			(args (ty_var (11:10-11:11) "a")))
-		(malformed_type_anno (11:15-11:38)))
+		(fn (11:15-11:38)
+			(apply (11:15-11:23)
+				"Maybe"
+				(ty_var (11:21-11:22) "a"))
+			(ty_var (11:25-11:26) "a")
+			(apply (11:30-11:38)
+				"Maybe"
+				(ty_var (11:36-11:37) "a"))
+			"false"))
 	(s_type_decl (13:1-15:8)
 		(type_header (13:1-13:7) "MyType")
 		(ty (13:10-13:13) "U64"))

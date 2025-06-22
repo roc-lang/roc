@@ -1073,6 +1073,7 @@ pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: CIR.AnnoRecordFiel
     return @enumFromInt(@intFromEnum(nid));
 }
 
+/// Adds an annotation to the store.
 pub fn addAnnotation(store: *NodeStore, annotation: CIR.Annotation) CIR.Annotation.Idx {
     const node = Node{
         .data_1 = @intFromEnum(annotation.signature),
@@ -1280,6 +1281,7 @@ pub fn typeAnnoSpanFrom(store: *NodeStore, start: u32) CIR.TypeAnno.Span {
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
 }
 
+/// Returns a span from the scratch anno record fields starting at the given index.
 pub fn annoRecordFieldSpanFrom(store: *NodeStore, start: u32) CIR.AnnoRecordField.Span {
     const end = store.scratch_anno_record_fields.top();
     defer store.scratch_anno_record_fields.clearFrom(start);

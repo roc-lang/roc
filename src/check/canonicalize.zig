@@ -1161,13 +1161,18 @@ pub fn canonicalize_expr(
             } });
             return expr_idx;
         },
-        .ellipsis => |_| {
-            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize ellipsis expression");
-            const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
+        .ellipsis => |e| {
+            const region = self.tokenizedRegionToRegion(e.region);
+            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "...");
+            const diagnostic = self.can_ir.store.addDiagnostic(CIR.Diagnostic{ .not_implemented = .{
                 .feature = feature,
-                .region = Region.zero(),
+                .region = region,
             } });
-            return expr_idx;
+            const ellipsis_expr = self.can_ir.store.addExpr(CIR.Expr{ .runtime_error = .{
+                .diagnostic = diagnostic,
+                .region = region,
+            } });
+            return ellipsis_expr;
         },
         .block => |e| {
             const region = self.tokenizedRegionToRegion(e.region);
@@ -2080,23 +2085,18 @@ fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) ?CIR.Expr.Id
             return expr_idx;
         },
         .crash => |c| {
-            // Crash statement
+            // Crash statement - create a runtime error expression that represents the crash
             const region = self.tokenizedRegionToRegion(c.region);
-            const msg_expr = self.canonicalize_expr(c.expr) orelse {
-                const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "crash message not canonicalized");
-                return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
-                    .feature = feature,
-                    .region = region,
-                } });
-            };
-
-            // Create a crash expression using pushMalformed
-            _ = msg_expr; // TODO: incorporate crash message
             const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "explicit crash");
-            return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
+            const diagnostic = self.can_ir.store.addDiagnostic(CIR.Diagnostic{ .not_implemented = .{
                 .feature = feature,
                 .region = region,
             } });
+            const crash_expr = self.can_ir.store.addExpr(CIR.Expr{ .runtime_error = .{
+                .diagnostic = diagnostic,
+                .region = region,
+            } });
+            return crash_expr;
         },
         .type_decl => |s| {
             // TODO type declarations in statement context

@@ -13,6 +13,13 @@ main! = |_| getUser(100)
 ~~~PROBLEMS
 NOT IMPLEMENTED
 This feature is not yet implemented: canonicalize if_then_else expression
+UNUSED VARIABLE
+Variable `id` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_id` to suppress this warning.
+The unused variable is declared here:
+type_alias_simple.txt:6-12:6: getUser = |id| if (id > 10) "big" else "small"
+
 ~~~TOKENS
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),Newline(1:1-1:1),
 Newline(1:1-1:1),
@@ -77,20 +84,26 @@ NO CHANGE
 						(pid 79)
 						(ident "id")))
 				(e_runtime_error (1:1-1:1) "not_implemented")))
-		(annotation (6:1-6:8) (signature 84)))
+		(annotation (6:1-6:8)
+			(signature 87)
+			(declared_type
+				(fn (5:11-5:24)
+					(ty (5:11-5:17) "UserId")
+					(ty (5:21-5:24) "Str")
+					"false"))))
 	(d_let
 		(def_pattern
 			(p_assign (8:1-8:6)
-				(pid 87)
+				(pid 90)
 				(ident "main!")))
 		(def_expr
 			(e_lambda (8:9-8:25)
-				(args (p_underscore (8:10-8:11) (pid 88)))
+				(args (p_underscore (8:10-8:11) (pid 91)))
 				(e_call (8:13-8:25)
 					(e_lookup (8:13-8:20) (pid 78))
 					(e_int (8:21-8:24)
-						(int_var 91)
-						(precision_var 90)
+						(int_var 94)
+						(precision_var 93)
 						(literal "100")
 						(value "TODO")
 						(bound "u8"))))))
@@ -100,9 +113,9 @@ NO CHANGE
 ~~~TYPES
 (inferred_types
 	(defs
-		(def "getUser" 86 (type "*"))
-		(def "main!" 95 (type "*")))
+		(def "getUser" 89 (type "*"))
+		(def "main!" 98 (type "*")))
 	(expressions
 		(expr (1:1-1:1) 82 (type "*"))
-		(expr (8:9-8:25) 94 (type "*"))))
+		(expr (8:9-8:25) 97 (type "*"))))
 ~~~END

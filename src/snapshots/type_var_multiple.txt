@@ -14,8 +14,6 @@ swap = |pair| {
 main! = |_| {}
 ~~~PROBLEMS
 PARSER: expr_unexpected_token
-NOT IMPLEMENTED
-This feature is not yet implemented: top-level type_anno
 UNDEFINED VARIABLE
 Nothing is named `first` in this scope.
 Is there an import or exposing missing up-top?
@@ -99,37 +97,54 @@ main! = |_| {}
 	(d_let
 		(def_pattern
 			(p_assign (5:1-5:5)
-				(pid 73)
+				(pid 83)
 				(ident "swap")))
 		(def_expr
 			(e_lambda (5:8-8:2)
 				(args
 					(p_assign (5:9-5:13)
-						(pid 74)
+						(pid 84)
 						(ident "pair")))
 				(e_block (5:15-8:2)
-					(s_expr (6:5-6:22) "TODO")
-					(s_expr (6:23-7:6) "TODO")
+					(s_expr (6:5-6:22)
+						(e_tuple (6:5-6:20)
+							(tuple_var "#89")
+							(elems
+								(e_runtime_error (6:6-6:11) "ident_not_in_scope")
+								(e_runtime_error (6:13-6:19) "ident_not_in_scope"))))
+					(s_expr (6:23-7:6)
+						(e_lookup (6:23-6:27) (pid 84)))
 					(e_tuple (7:5-7:20)
-						(tuple_var "#88")
+						(tuple_var "#98")
 						(elems
 							(e_runtime_error (7:6-7:12) "ident_not_in_scope")
-							(e_runtime_error (7:14-7:19) "ident_not_in_scope")))))))
+							(e_runtime_error (7:14-7:19) "ident_not_in_scope"))))))
+		(annotation (5:1-5:5)
+			(signature 105)
+			(declared_type
+				(fn (4:8-4:24)
+					(tuple (4:8-4:14)
+						(ty_var (4:9-4:10) "a")
+						(ty_var (4:12-4:13) "b"))
+					(tuple (4:18-4:24)
+						(ty_var (4:19-4:20) "b")
+						(ty_var (4:22-4:23) "a"))
+					"false"))))
 	(d_let
 		(def_pattern
 			(p_assign (10:1-10:6)
-				(pid 93)
+				(pid 108)
 				(ident "main!")))
 		(def_expr
 			(e_lambda (10:9-10:15)
-				(args (p_underscore (10:10-10:11) (pid 94)))
+				(args (p_underscore (10:10-10:11) (pid 109)))
 				(e_runtime_error (1:1-1:1) "not_implemented")))))
 ~~~TYPES
 (inferred_types
 	(defs
-		(def "swap" 92 (type "*"))
-		(def "main!" 98 (type "*")))
+		(def "swap" 107 (type "*"))
+		(def "main!" 113 (type "*")))
 	(expressions
-		(expr (5:8-8:2) 91 (type "*"))
-		(expr (10:9-10:15) 97 (type "*"))))
+		(expr (5:8-8:2) 101 (type "*"))
+		(expr (10:9-10:15) 112 (type "*"))))
 ~~~END

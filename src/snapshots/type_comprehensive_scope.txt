@@ -41,10 +41,6 @@ Complex : {
     tree: Tree(U64)
 }
 ~~~PROBLEMS
-NOT IMPLEMENTED
-This feature is not yet implemented: record type annotation
-NOT IMPLEMENTED
-This feature is not yet implemented: tag union type annotation
 TYPE REDECLARED
 The type `Result` is being redeclared.
 
@@ -57,12 +53,6 @@ Tree(a) : [Branch(Node(a)), Leaf(a)]
 But `Result` was already declared here:
 type_comprehensive_scope.txt:1-1:1: module [MyU64, Person, Result, Tree, Node]
 
-NOT IMPLEMENTED
-This feature is not yet implemented: tag union type annotation
-NOT IMPLEMENTED
-This feature is not yet implemented: record type annotation
-NOT IMPLEMENTED
-This feature is not yet implemented: type application
 TYPE REDECLARED
 The type `Person` is being redeclared.
 
@@ -84,12 +74,6 @@ The type `SomeUndeclaredType` is not declared in this scope.
 This type is referenced here:
 type_comprehensive_scope.txt:27-11:27: BadType : SomeUndeclaredType
 
-NOT IMPLEMENTED
-This feature is not yet implemented: type application
-NOT IMPLEMENTED
-This feature is not yet implemented: type application
-NOT IMPLEMENTED
-This feature is not yet implemented: record type annotation
 ~~~TOKENS
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:14),Comma(1:14-1:15),UpperIdent(1:16-1:22),Comma(1:22-1:23),UpperIdent(1:24-1:30),Comma(1:30-1:31),UpperIdent(1:32-1:36),Comma(1:36-1:37),UpperIdent(1:38-1:42),CloseSquare(1:42-1:43),Newline(1:1-1:1),
 Newline(1:1-1:1),
@@ -286,27 +270,54 @@ Complex : {
 		(ty (6:10-6:14) "Bool"))
 	(s_type_decl (9:1-12:7)
 		(type_header (9:1-9:7) "Person")
-		(malformed_type_anno (9:10-9:33)))
+		(record (9:10-9:33)
+			(record_field "name" (ty (9:18-9:21) "Str"))
+			(record_field "age" (ty (9:28-9:31) "U64"))))
 	(s_type_decl (12:1-15:5)
 		(type_header (12:1-12:16)
 			"Result"
 			(args
 				(ty_var (12:8-12:10) "ok")
 				(ty_var (12:12-12:15) "err")))
-		(malformed_type_anno (12:19-12:37)))
+		(tag_union (12:19-12:37)
+			(apply (12:20-12:26)
+				"Ok"
+				(ty_var (12:23-12:25) "ok"))
+			(apply (12:28-12:36)
+				"Err"
+				(ty_var (12:32-12:35) "err"))))
 	(s_type_decl (15:1-18:5)
 		(type_header (15:1-15:8)
 			"Tree"
 			(args (ty_var (15:6-15:7) "a")))
-		(malformed_type_anno (15:11-15:37)))
+		(tag_union (15:11-15:37)
+			(apply (15:12-15:27)
+				"Branch"
+				(apply (15:19-15:26)
+					"Node"
+					(ty_var (15:24-15:25) "a")))
+			(apply (15:29-15:36)
+				"Leaf"
+				(ty_var (15:34-15:35) "a"))))
 	(s_type_decl (18:1-21:9)
 		(type_header (18:1-18:8)
 			"Node"
 			(args (ty_var (18:6-18:7) "a")))
-		(malformed_type_anno (18:11-18:48)))
+		(record (18:11-18:48)
+			(record_field "value" (ty_var (18:20-18:21) "a"))
+			(record_field
+				"children"
+				(apply (18:33-18:46)
+					"List"
+					(apply (18:38-18:45)
+						"Tree"
+						(ty_var (18:43-18:44) "a"))))))
 	(s_type_decl (21:1-24:7)
 		(type_header (21:1-21:9) "MyResult")
-		(malformed_type_anno (21:12-21:28)))
+		(apply (21:12-21:28)
+			"Result"
+			(ty (21:19-21:22) "Str")
+			(ty (21:24-21:27) "U64")))
 	(s_type_decl (24:1-27:8)
 		(type_header (24:1-24:7) "Person")
 		(ty (24:10-24:13) "U64"))
@@ -315,13 +326,30 @@ Complex : {
 		(ty (27:11-27:29) "SomeUndeclaredType"))
 	(s_type_decl (30:1-31:7)
 		(type_header (30:1-30:7) "MyList")
-		(malformed_type_anno (30:10-30:19)))
+		(apply (30:10-30:19)
+			"List"
+			(ty (30:15-30:18) "Str")))
 	(s_type_decl (31:1-34:8)
 		(type_header (31:1-31:7) "MyDict")
-		(malformed_type_anno (31:10-31:24)))
+		(apply (31:10-31:24)
+			"Dict"
+			(ty (31:15-31:18) "Str")
+			(ty (31:20-31:23) "U64")))
 	(s_type_decl (34:1-38:2)
 		(type_header (34:1-34:8) "Complex")
-		(malformed_type_anno (34:11-38:2))))
+		(record (34:11-38:2)
+			(record_field "person" (ty (35:13-35:19) "Person"))
+			(record_field
+				"result"
+				(apply (36:13-36:30)
+					"Result"
+					(ty (36:20-36:24) "Bool")
+					(ty (36:26-36:29) "Str")))
+			(record_field
+				"tree"
+				(apply (37:11-37:20)
+					"Tree"
+					(ty (37:16-37:19) "U64"))))))
 ~~~TYPES
 (inferred_types (defs) (expressions))
 ~~~END

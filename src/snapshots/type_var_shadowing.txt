@@ -19,10 +19,15 @@ main! = |_| {}
 PARSER: expected_expr_close_curly_or_comma
 PARSER: expr_unexpected_token
 PARSER: expr_unexpected_token
-NOT IMPLEMENTED
-This feature is not yet implemented: top-level type_anno
 INVALID LAMBDA
 The body of this lambda expression is not valid.
+UNUSED VARIABLE
+Variable `x` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+The unused variable is declared here:
+type_var_shadowing.txt:5-10:5: outer = |x| {
+
 INVALID STATEMENT
 The statement expr is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
@@ -103,30 +108,37 @@ main! = |_| {}
 	(d_let
 		(def_pattern
 			(p_assign (5:1-5:6)
-				(pid 73)
+				(pid 77)
 				(ident "outer")))
 		(def_expr
 			(e_lambda (5:9-8:10)
 				(args
 					(p_assign (5:10-5:11)
-						(pid 74)
+						(pid 78)
 						(ident "x")))
-				(e_runtime_error (8:5-8:10) "lambda_body_not_canonicalized"))))
+				(e_runtime_error (8:5-8:10) "lambda_body_not_canonicalized")))
+		(annotation (5:1-5:6)
+			(signature 87)
+			(declared_type
+				(fn (4:9-4:15)
+					(ty_var (4:9-4:10) "a")
+					(ty_var (4:14-4:15) "a")
+					"false"))))
 	(d_let
 		(def_pattern
 			(p_assign (13:1-13:6)
-				(pid 83)
+				(pid 94)
 				(ident "main!")))
 		(def_expr
 			(e_lambda (13:9-13:15)
-				(args (p_underscore (13:10-13:11) (pid 84)))
+				(args (p_underscore (13:10-13:11) (pid 95)))
 				(e_runtime_error (1:1-1:1) "not_implemented")))))
 ~~~TYPES
 (inferred_types
 	(defs
-		(def "outer" 78 (type "*"))
-		(def "main!" 88 (type "*")))
+		(def "outer" 89 (type "*"))
+		(def "main!" 99 (type "*")))
 	(expressions
-		(expr (5:9-8:10) 77 (type "*"))
-		(expr (13:9-13:15) 87 (type "*"))))
+		(expr (5:9-8:10) 81 (type "*"))
+		(expr (13:9-13:15) 98 (type "*"))))
 ~~~END

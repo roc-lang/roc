@@ -24,7 +24,6 @@ main! = |_| {
     a + b + c + d
 }
 ~~~PROBLEMS
-PARSER: expr_unexpected_token
 UNUSED VARIABLE
 Variable `x` is not used anywhere in your code.
 
@@ -32,8 +31,13 @@ If you don't need this variable, prefix it with an underscore like `_x` to suppr
 The unused variable is declared here:
 unused_vars_simple.txt:4-19:4: unused_regular = |x| 42
 
-INVALID LAMBDA
-The body of this lambda expression is not valid.
+UNDERSCORE VARIABLE USED
+Variable `_value` is prefixed with an underscore but is actually used.
+
+Variables prefixed with `_` are intended to be unused. Remove the underscore prefix: `value`.
+The underscore variable is declared here:
+unused_vars_simple.txt:7-28:7: used_underscore = |_value| _value
+
 ~~~TOKENS
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),Newline(1:1-1:1),
 Newline(1:1-1:1),
@@ -77,7 +81,7 @@ CloseCurly(21:1-21:2),EndOfFile(21:2-21:2),
 			(ident (7:1-7:16) "used_underscore")
 			(lambda (7:19-7:34)
 				(args (ident (7:20-7:26) "_value"))
-				(malformed_expr (7:28-7:34) "expr_unexpected_token")))
+				(ident (7:28-7:34) "" "_value")))
 		(decl (10:1-10:35)
 			(ident (10:1-10:18) "unused_underscore")
 			(lambda (10:21-10:35)
@@ -134,7 +138,7 @@ app [main!] { pf: platform "../basic-cli/main.roc" }
 unused_regular = |x| 42
 
 # Underscore variable that is used - should warn
-used_underscore = |_value| 
+used_underscore = |_value| _value
 
 # Underscore variable that is unused - should be fine
 unused_underscore = |_ignored| 100
@@ -179,7 +183,7 @@ main! = |_| {
 					(p_assign (7:20-7:26)
 						(pid 81)
 						(ident "_value")))
-				(e_runtime_error (7:28-7:34) "lambda_body_not_canonicalized"))))
+				(e_lookup (7:28-7:34) (pid 81)))))
 	(d_let
 		(def_pattern
 			(p_assign (10:1-10:18)
