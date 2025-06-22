@@ -166,7 +166,7 @@ const Section = union(enum) {
     pub const FORMATTED = "# FORMATTED\n~~~roc\n";
     pub const PARSE = "# PARSE\n~~~clojure\n";
     pub const CANONICALIZE = "# CANONICALIZE\n~~~clojure\n";
-    pub const TOKENS = "# TOKENS\n~~~txt\n";
+    pub const TOKENS = "# TOKENS\n~~~zig\n";
     pub const PROBLEMS = "# PROBLEMS\n~~~txt\n";
     pub const TYPES = "# TYPES\n~~~txt\n";
 
@@ -703,7 +703,7 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
         try writer.writeAll("\n");
     }
 
-    try writer.writeAll(Section.SECTION_END);
+    try writer.writeAll(Section.SECTION_END[0 .. Section.SECTION_END.len - 1]);
 
     // Now write the buffer to the snapshot file in one go
     var file = std.fs.cwd().createFile(snapshot_path, .{}) catch |err| {
@@ -759,7 +759,8 @@ fn extractSections(gpa: Allocator, content: []const u8) !Content {
     var sections_with_header = std.mem.splitSequence(u8, content, Section.SECTION_END);
 
     while (sections_with_header.next()) |section_with_header| {
-        if (Section.fromString(section_with_header)) |section| {
+        const trimmed_section = std.mem.trimLeft(u8, section_with_header, "\n\r \t");
+        if (Section.fromString(trimmed_section)) |section| {
             const start = processed_chars + section.asString().len;
             const end = processed_chars + section_with_header.len;
             try ranges.put(section, .{ .start = start, .end = end });
