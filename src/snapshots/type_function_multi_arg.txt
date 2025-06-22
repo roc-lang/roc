@@ -1,0 +1,10 @@
+~~~META
+description=Multi-argument function type in function annotation
+type=file
+~~~SOURCE
+app [main!] { pf: platform "../basic-cli/main.roc" }
+
+curry : (a, b -> c) -> (a -> b -> c)
+curry = |fn| |x| |y| fn(x, y)
+
+main! = |_| {}

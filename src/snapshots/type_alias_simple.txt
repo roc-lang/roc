@@ -1,0 +1,12 @@
+~~~META
+description=Simple type alias usage in function annotation
+type=file
+~~~SOURCE
+app [main!] { pf: platform "../basic-cli/main.roc" }
+
+UserId : U64
+
+getUser : UserId -> Str
+getUser = |id| if (id > 10) "big" else "small"
+
+main! = |_| getUser(100)

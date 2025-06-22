@@ -1,0 +1,10 @@
+~~~META
+description=Multiple uses of same type variable in function annotation
+type=file
+~~~SOURCE
+app [main!] { pf: platform "../basic-cli/main.roc" }
+
+pair : a -> (a, a)
+pair = |x| (x, x)
+
+main! = |_| {}

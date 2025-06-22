@@ -63,6 +63,8 @@ pub const Tag = enum {
     expr_record_builder,
     // Type Header
     type_header,
+    // Annotation
+    annotation,
     // Type Annotation
     ty_apply,
     ty_var,
@@ -72,6 +74,7 @@ pub const Tag = enum {
     ty_tag_union,
     ty_tuple,
     ty_record,
+    ty_record_field,
     ty_fn,
     ty_parens,
     ty_malformed,

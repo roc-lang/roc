@@ -1,0 +1,10 @@
+~~~META
+description=Simple function type in function annotation
+type=file
+~~~SOURCE
+app [main!] { pf: platform "../basic-cli/main.roc" }
+
+apply : (a -> b), a -> b
+apply = |fn, x| fn(x)
+
+main! = |_| {}

@@ -1,0 +1,10 @@
+~~~META
+description=Effectful function type with fat arrow syntax
+type=file
+~~~SOURCE
+app [main!] { pf: platform "../basic-cli/main.roc" }
+
+runEffect! : (a => b), a => b
+runEffect! = |fn!, x| fn!(x)
+
+main! = |_| {}

@@ -1,0 +1,10 @@
+~~~META
+description=Nested type applications in function annotation
+type=file
+~~~SOURCE
+app [main!] { pf: platform "../basic-cli/main.roc" }
+
+processNested : List(Result(Str, Err)) -> List(Str)
+processNested = |_list| ["one","two"]
+
+main! = |_| processNested([])

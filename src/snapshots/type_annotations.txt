@@ -11,18 +11,36 @@ add_one : (U8, U16 -> U32)
 main! : List(String) -> Result({}, _)
 tag_tuple : Value((a, b, c))
 ~~~PROBLEMS
-NOT IMPLEMENTED
-This feature is not yet implemented: top-level type_anno
-NOT IMPLEMENTED
-This feature is not yet implemented: top-level type_anno
-NOT IMPLEMENTED
-This feature is not yet implemented: top-level type_anno
-NOT IMPLEMENTED
-This feature is not yet implemented: top-level type_anno
-NOT IMPLEMENTED
-This feature is not yet implemented: top-level type_anno
-NOT IMPLEMENTED
-This feature is not yet implemented: top-level type_anno
+UNDECLARED TYPE VARIABLE
+The type variable `a` is not declared in this scope.
+
+Type variables must be introduced in a type annotation before they can be used.
+
+This type variable is referenced here:
+type_annotations.txt:4-13:4: bar : Thing(a, b, _)
+
+UNDECLARED TYPE VARIABLE
+The type variable `b` is not declared in this scope.
+
+Type variables must be introduced in a type annotation before they can be used.
+
+This type variable is referenced here:
+type_annotations.txt:4-16:4: bar : Thing(a, b, _)
+
+UNDECLARED TYPE VARIABLE
+The type variable `c` is not declared in this scope.
+
+Type variables must be introduced in a type annotation before they can be used.
+
+This type variable is referenced here:
+type_annotations.txt:5-14:5: baz : (a, b, c)
+
+UNDECLARED TYPE
+The type `String` is not declared in this scope.
+
+This type is referenced here:
+type_annotations.txt:7-14:7: main! : List(String) -> Result({}, _)
+
 ~~~TOKENS
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),
 Newline(1:1-1:1),

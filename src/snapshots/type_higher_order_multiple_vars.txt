@@ -1,0 +1,10 @@
+~~~META
+description=Higher-order function with multiple type variables
+type=file
+~~~SOURCE
+app [main!] { pf: platform "../basic-cli/main.roc" }
+
+compose : (b -> c), (a -> b) -> (a -> c)
+compose = |f, g| |x| f(g(x))
+
+main! = |_| {}

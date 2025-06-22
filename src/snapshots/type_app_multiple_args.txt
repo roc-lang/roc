@@ -1,0 +1,10 @@
+~~~META
+description=Multiple type arguments application in function annotation
+type=file
+~~~SOURCE
+app [main!] { pf: platform "../basic-cli/main.roc" }
+
+processDict : Dict(Str, U64) -> List(Str)
+processDict = |_dict| []
+
+main! = |_| processDict(Dict.empty().insert("one", 1))

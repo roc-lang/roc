@@ -1,0 +1,10 @@
+~~~META
+description=Simple record type in function annotation
+type=file
+~~~SOURCE
+app [main!] { pf: platform "../basic-cli/main.roc" }
+
+getName : { name: Str, age: U64 } -> Str
+getName = |person| person.name
+
+main! = |_| {}

@@ -1,0 +1,15 @@
+~~~META
+description=Function-local type variables in separate scopes
+type=file
+~~~SOURCE
+app [main!] { pf: platform "../basic-cli/main.roc" }
+
+outer : a -> a
+outer = |x| {
+    inner : b -> b
+    inner = |y| y
+
+    inner(x)
+}
+
+main! = |_| {}

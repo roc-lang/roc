@@ -1,0 +1,10 @@
+~~~META
+description=Record with type variables in function annotation
+type=file
+~~~SOURCE
+app [main!] { pf: platform "../basic-cli/main.roc" }
+
+getField : { field: a, other: b } -> a
+getField = |record| record.field
+
+main! = |_| {}

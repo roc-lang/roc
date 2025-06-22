@@ -541,9 +541,25 @@ pub fn getTypeHeader(store: *const NodeStore, typeHeader: CIR.TypeHeader.Idx) CI
 
 /// Retrieves an annotation record field from the store.
 pub fn getAnnoRecordField(store: *NodeStore, annoRecordField: CIR.AnnoRecordField.Idx) CIR.AnnoRecordField {
-    _ = store;
-    _ = annoRecordField;
-    @panic("TODO: implement getAnnoRecordField");
+    const node = store.nodes.get(@enumFromInt(@intFromEnum(annoRecordField)));
+    return .{
+        .name = @bitCast(node.data_1),
+        .ty = @enumFromInt(node.data_2),
+        .region = node.region,
+    };
+}
+
+/// Retrieves an annotation from the store.
+pub fn getAnnotation(store: *NodeStore, annotation: CIR.Annotation.Idx) CIR.Annotation {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(annotation));
+    const node = store.nodes.get(node_idx);
+
+    std.debug.assert(node.tag == .annotation);
+
+    return CIR.Annotation{
+        .signature = @enumFromInt(node.data_1),
+        .region = node.region,
+    };
 }
 
 /// Retrieves an exposed item from the store.
@@ -1015,10 +1031,29 @@ pub fn addTypeHeader(store: *NodeStore, typeHeader: CIR.TypeHeader) CIR.TypeHead
 
 /// Adds an annotation record field to the store.
 pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: CIR.AnnoRecordField) CIR.AnnoRecordField.Idx {
-    _ = store;
-    _ = annoRecordField;
+    const node = Node{
+        .data_1 = @bitCast(annoRecordField.name),
+        .data_2 = @intFromEnum(annoRecordField.ty),
+        .data_3 = 0,
+        .region = annoRecordField.region,
+        .tag = .ty_record_field,
+    };
 
-    return @enumFromInt(0);
+    const nid = store.nodes.append(store.gpa, node);
+    return @enumFromInt(@intFromEnum(nid));
+}
+
+pub fn addAnnotation(store: *NodeStore, annotation: CIR.Annotation) CIR.Annotation.Idx {
+    const node = Node{
+        .data_1 = @intFromEnum(annotation.signature),
+        .data_2 = 0,
+        .data_3 = 0,
+        .region = annotation.region,
+        .tag = .annotation,
+    };
+
+    const nid = store.nodes.append(store.gpa, node);
+    return @enumFromInt(@intFromEnum(nid));
 }
 
 /// Adds an exposed item to the store.
@@ -1208,12 +1243,44 @@ pub fn typeAnnoSpanFrom(store: *NodeStore, start: u32) CIR.TypeAnno.Span {
     defer store.scratch_type_annos.clearFrom(start);
     var i = @as(usize, @intCast(start));
     const ed_start = @as(u32, @intCast(store.extra_data.items.len));
-    std.debug.assert(end >= i);
     while (i < end) {
         store.extra_data.append(store.gpa, @intFromEnum(store.scratch_type_annos.items.items[i])) catch |err| exitOnOom(err);
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+}
+
+pub fn annoRecordFieldSpanFrom(store: *NodeStore, start: u32) CIR.AnnoRecordField.Span {
+    const end = store.scratch_anno_record_fields.top();
+    defer store.scratch_anno_record_fields.clearFrom(start);
+    var i = @as(usize, @intCast(start));
+    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
+    while (i < end) {
+        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_anno_record_fields.items.items[i])) catch |err| exitOnOom(err);
+        i += 1;
+    }
+    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+}
+
+/// Returns the start position for a new Span of annoRecordFieldIdxs in scratch
+pub fn scratchAnnoRecordFieldTop(store: *NodeStore) u32 {
+    return store.scratch_anno_record_fields.top();
+}
+
+/// Places a new CIR.AnnoRecordField.Idx in the scratch. Will panic on OOM.
+pub fn addScratchAnnoRecordField(store: *NodeStore, idx: CIR.AnnoRecordField.Idx) void {
+    store.scratch_anno_record_fields.append(store.gpa, idx);
+}
+
+/// Clears any AnnoRecordFieldIds added to scratch from start until the end.
+pub fn clearScratchAnnoRecordFieldsFrom(store: *NodeStore, start: u32) void {
+    store.scratch_anno_record_fields.clearFrom(start);
+}
+
+/// Returns a new AnnoRecordField slice so that the caller can iterate through
+/// all items in the span.
+pub fn annoRecordFieldSlice(store: *NodeStore, span: CIR.AnnoRecordField.Span) []CIR.AnnoRecordField.Idx {
+    return store.sliceFromSpan(CIR.AnnoRecordField.Idx, span.span);
 }
 
 /// Computes the span of a definition starting from a given index.

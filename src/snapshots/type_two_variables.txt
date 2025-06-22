@@ -1,0 +1,10 @@
+~~~META
+description=Two distinct type variables in function annotation
+type=file
+~~~SOURCE
+app [main!] { pf: platform "../basic-cli/main.roc" }
+
+swap : (a, b) -> (b, a)
+swap = |(x, y)| (y, x)
+
+main! = |_| {}

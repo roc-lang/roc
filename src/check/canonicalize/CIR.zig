@@ -327,7 +327,7 @@ pub fn setTypeVarAt(self: *CIR, at_idx: Node.Idx, content: types.Content) types.
 // Helper to add type index info to a s-expr node
 fn appendTypeVar(node: *sexpr.Expr, gpa: std.mem.Allocator, name: []const u8, type_idx: TypeVar) void {
     var type_node = sexpr.Expr.init(gpa, name);
-    type_node.appendUnsignedIntChild(gpa, @intCast(@intFromEnum(type_idx)));
+    type_node.appendUnsignedInt(gpa, @intCast(@intFromEnum(type_idx)));
     node.appendNode(gpa, &type_node);
 }
 
@@ -933,8 +933,12 @@ pub const TypeHeader = struct {
     }
 };
 
-/// TODO: implement AnnoRecordField
+/// Record field in a type annotation: `{ field_name: Type }`
 pub const AnnoRecordField = struct {
+    name: Ident.Idx,
+    ty: TypeAnno.Idx,
+    region: Region,
+
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
 };
@@ -1681,9 +1685,9 @@ pub const Def = struct {
         node.appendNode(gpa, &expr_node);
 
         if (self.annotation) |anno_idx| {
-            _ = anno_idx; // TODO: implement annotation lookup
-            // var anno_node = anno.toSExpr(env, ir);
-            // node.appendNode(env.gpa, &anno_node);
+            const anno = ir.store.getAnnotation(anno_idx);
+            var anno_node = anno.toSExpr(ir, env.line_starts);
+            node.appendNode(gpa, &anno_node);
         }
 
         return node;
@@ -1691,21 +1695,129 @@ pub const Def = struct {
 };
 
 /// todo
+/// An annotation represents a canonicalized type signature that connects
+/// a type declaration to a value definition
 pub const Annotation = struct {
+    /// The canonical type signature as a type variable
     signature: TypeVar,
-    // introduced_variables: IntroducedVariables,
-    // aliases: VecMap<Symbol, Alias>,
+    /// Source region of the annotation
     region: Region,
 
     pub const Idx = enum(u32) { _ };
 
     pub fn toSExpr(self: *const @This(), ir: *const CIR, line_starts: std.ArrayList(u32)) sexpr.Expr {
-        _ = self;
         _ = line_starts;
         const gpa = ir.env.gpa;
-        const node = sexpr.Expr.init(gpa, "annotation");
-        // TODO add signature info
+        var node = sexpr.Expr.init(gpa, "annotation");
+        node.appendRegionInfo(gpa, ir.calcRegionInfo(self.region));
+
+        // Add the signature type variable info
+        appendTypeVar(&node, gpa, "signature", self.signature);
+
         return node;
+    }
+};
+
+/// Tracks type variables introduced during annotation canonicalization
+pub const IntroducedVariables = struct {
+    /// Named type variables (e.g., 'a' in 'a -> a')
+    named: std.ArrayListUnmanaged(NamedVariable),
+    /// Wildcard type variables (e.g., '*' in some contexts)
+    wildcards: std.ArrayListUnmanaged(TypeVar),
+    /// Inferred type variables (e.g., '_')
+    inferred: std.ArrayListUnmanaged(TypeVar),
+
+    pub fn init() IntroducedVariables {
+        return IntroducedVariables{
+            .named = .{},
+            .wildcards = .{},
+            .inferred = .{},
+        };
+    }
+
+    pub fn deinit(self: *IntroducedVariables, gpa: std.mem.Allocator) void {
+        self.named.deinit(gpa);
+        self.wildcards.deinit(gpa);
+        self.inferred.deinit(gpa);
+    }
+
+    /// Insert a named type variable
+    pub fn insertNamed(self: *IntroducedVariables, gpa: std.mem.Allocator, name: Ident.Idx, var_type: TypeVar, region: Region) void {
+        const named_var = NamedVariable{
+            .name = name,
+            .variable = var_type,
+            .first_seen = region,
+        };
+        self.named.append(gpa, named_var) catch |err| collections.exitOnOom(err);
+    }
+
+    /// Insert a wildcard type variable
+    pub fn insertWildcard(self: *IntroducedVariables, gpa: std.mem.Allocator, var_type: TypeVar) void {
+        self.wildcards.append(gpa, var_type) catch |err| collections.exitOnOom(err);
+    }
+
+    /// Insert an inferred type variable
+    pub fn insertInferred(self: *IntroducedVariables, gpa: std.mem.Allocator, var_type: TypeVar) void {
+        self.inferred.append(gpa, var_type) catch |err| collections.exitOnOom(err);
+    }
+
+    /// Find a type variable by name
+    pub fn varByName(self: *const IntroducedVariables, name: Ident.Idx) ?TypeVar {
+        // Check named variables
+        for (self.named.items) |named_var| {
+            if (named_var.name == name) {
+                return named_var.variable;
+            }
+        }
+
+        return null;
+    }
+
+    /// Union with another IntroducedVariables
+    pub fn unionWith(self: *IntroducedVariables, other: *const IntroducedVariables) void {
+        // This is a simplified union - in practice we'd want to avoid duplicates
+        // For now, just append all items
+        const gpa = std.heap.page_allocator; // TODO: pass proper allocator
+
+        self.named.appendSlice(gpa, other.named.items) catch |err| collections.exitOnOom(err);
+        self.wildcards.appendSlice(gpa, other.wildcards.items) catch |err| collections.exitOnOom(err);
+        self.inferred.appendSlice(gpa, other.inferred.items) catch |err| collections.exitOnOom(err);
+    }
+};
+
+/// A named type variable in an annotation
+pub const NamedVariable = struct {
+    variable: TypeVar,
+    name: Ident.Idx,
+    first_seen: Region,
+};
+
+/// Tracks references to symbols and modules made by an annotation
+pub const References = struct {
+    /// References to value symbols
+    value_lookups: std.ArrayListUnmanaged(Ident.Idx),
+    /// References to type symbols
+    type_lookups: std.ArrayListUnmanaged(Ident.Idx),
+    /// References to modules
+    module_lookups: std.ArrayListUnmanaged(Ident.Idx),
+
+    pub fn init() References {
+        return .{
+            .value_lookups = .{},
+            .type_lookups = .{},
+            .module_lookups = .{},
+        };
+    }
+
+    pub fn deinit(self: *References, gpa: std.mem.Allocator) void {
+        self.value_lookups.deinit(gpa);
+        self.type_lookups.deinit(gpa);
+        self.module_lookups.deinit(gpa);
+    }
+
+    /// Insert a value symbol reference
+    pub fn insertValueLookup(self: *References, gpa: std.mem.Allocator, symbol: Ident.Idx) void {
+        self.value_lookups.append(gpa, symbol) catch |err| exitOnOom(err);
     }
 };
 

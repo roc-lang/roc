@@ -1,0 +1,10 @@
+~~~META
+description=Complex nested type applications in function annotation
+type=file
+~~~SOURCE
+app [main!] { pf: platform "../basic-cli/main.roc" }
+
+processComplex : Result(List(Maybe(a)), Dict(Str, Error(b))) -> List(a)
+processComplex = |_result| []
+
+main! = |_| processComplex(Ok([]))
