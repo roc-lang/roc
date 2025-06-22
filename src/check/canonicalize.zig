@@ -207,6 +207,52 @@ pub fn canonicalize_file(
     const scratch_defs_start = self.can_ir.store.scratchDefTop();
     const scratch_statements_start = self.can_ir.store.scratch_statements.top();
 
+    // First pass: Process all type declarations to introduce them into scope
+    for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
+        const stmt = self.parse_ir.store.getStatement(stmt_id);
+        switch (stmt) {
+            .type_decl => |type_decl| {
+                // Canonicalize the type declaration header first
+                const header_idx = self.canonicalize_type_header(type_decl.header);
+
+                // Process type parameters and annotation in a separate scope
+                const anno_idx = blk: {
+                    // Enter a new scope for type parameters
+                    self.scopeEnter(self.can_ir.env.gpa, false);
+                    defer self.scopeExit(self.can_ir.env.gpa) catch {};
+
+                    // Introduce type parameters from the header into the scope
+                    self.introduceTypeParametersFromHeader(header_idx);
+
+                    // Now canonicalize the type annotation with type parameters in scope
+                    break :blk self.canonicalize_type_anno(type_decl.anno);
+                };
+
+                // Create the CIR type declaration statement
+                const region = self.tokenizedRegionToRegion(type_decl.region);
+                const cir_type_decl = CIR.Statement{
+                    .type_decl = .{
+                        .header = header_idx,
+                        .anno = anno_idx,
+                        .where = null, // TODO: implement where clauses
+                        .region = region,
+                    },
+                };
+
+                const type_decl_idx = self.can_ir.store.addStatement(cir_type_decl);
+                self.can_ir.store.addScratchStatement(type_decl_idx);
+
+                // Introduce the type name into scope (now truly outside the parameter scope)
+                const header = self.can_ir.store.getTypeHeader(header_idx);
+                self.scopeIntroduceTypeDecl(header.name, type_decl_idx, region);
+            },
+            else => {
+                // Skip non-type-declaration statements in first pass
+            },
+        }
+    }
+
+    // Second pass: Process all other statements
     for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
         const stmt = self.parse_ir.store.getStatement(stmt_id);
         switch (stmt) {
@@ -263,37 +309,8 @@ pub fn canonicalize_file(
                     .stmt = string_idx,
                 } });
             },
-            .type_decl => |type_decl| {
-                // Canonicalize the type declaration header first
-                const header_idx = self.canonicalize_type_header(type_decl.header);
-
-                // Enter a new scope for type parameters
-                self.scopeEnter(self.can_ir.env.gpa, false);
-                defer self.scopeExit(self.can_ir.env.gpa) catch {};
-
-                // Introduce type parameters from the header into the scope
-                self.introduceTypeParametersFromHeader(header_idx);
-
-                // Now canonicalize the type annotation with type parameters in scope
-                const anno_idx = self.canonicalize_type_anno(type_decl.anno);
-
-                // Create the CIR type declaration statement
-                const region = self.tokenizedRegionToRegion(type_decl.region);
-                const cir_type_decl = CIR.Statement{
-                    .type_decl = .{
-                        .header = header_idx,
-                        .anno = anno_idx,
-                        .where = null, // TODO: implement where clauses
-                        .region = region,
-                    },
-                };
-
-                const type_decl_idx = self.can_ir.store.addStatement(cir_type_decl);
-                self.can_ir.store.addScratchStatement(type_decl_idx);
-
-                // Introduce the type name into scope (outside the parameter scope)
-                const header = self.can_ir.store.getTypeHeader(header_idx);
-                self.scopeIntroduceTypeDecl(header.name, type_decl_idx, region);
+            .type_decl => {
+                // Already processed in first pass, skip
             },
             .type_anno => |ta| {
                 // Top-level type annotation - store for connection to next declaration
