@@ -576,7 +576,7 @@ pub const Expr = union(enum) {
     },
     float: struct {
         frac_var: TypeVar,
-        requirements: types.Num.Int.Requirements,
+        requirements: types.Num.Frac.Requirements,
         literal: StringLiteral.Idx,
         value: f64,
         region: Region,
@@ -800,14 +800,15 @@ pub const Expr = union(enum) {
 
                 // Add requirements
                 var req_node = sexpr.Expr.init(gpa, "requirements");
-                var sign_node = sexpr.Expr.init(gpa, "sign_needed");
-                sign_node.appendString(gpa, if (float_expr.requirements.sign_needed) "true" else "false");
-                req_node.appendNode(gpa, &sign_node);
-                var bits_node = sexpr.Expr.init(gpa, "bits_needed");
-                const bits_str = std.fmt.allocPrint(gpa, "{}", .{float_expr.requirements.bits_needed}) catch unreachable;
-                defer gpa.free(bits_str);
-                bits_node.appendString(gpa, bits_str);
-                req_node.appendNode(gpa, &bits_node);
+                var precision_node = sexpr.Expr.init(gpa, "precision_needed");
+                const precision_str = switch (float_expr.requirements.precision_needed) {
+                    .f32 => "f32",
+                    .f64 => "f64",
+                    .dec => "dec",
+                    .non_finite => "non_finite",
+                };
+                precision_node.appendString(gpa, precision_str);
+                req_node.appendNode(gpa, &precision_node);
                 float_node.appendNode(gpa, &req_node);
 
                 // Add literal
@@ -1484,7 +1485,7 @@ pub const Pattern = union(enum) {
     },
     float_literal: struct {
         num_var: TypeVar,
-        requirements: types.Num.Int.Requirements,
+        requirements: types.Num.Frac.Requirements,
         literal: StringLiteral.Idx,
         value: f64,
         region: Region,

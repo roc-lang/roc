@@ -217,7 +217,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
 
             // Retrieve type variable from data_2 and requirements from data_3
             const frac_var = @as(types.Var, @enumFromInt(node.data_2));
-            const requirements = @as(types.Num.Int.Requirements, @bitCast(@as(u5, @intCast(node.data_3))));
+            const requirements = @as(types.Num.Frac.Requirements, @bitCast(@as(u2, @truncate(node.data_3))));
 
             // TODO get value and bound from extra_data
 
@@ -388,7 +388,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
             .float_literal = .{
                 .region = node.region,
                 .literal = @enumFromInt(node.data_1),
-                .requirements = .{ .sign_needed = false, .bits_needed = .@"7" }, // TODO need to store and retrieve from extra_data
+                .requirements = .{ .precision_needed = .f32 }, // TODO need to store and retrieve from extra_data
                 .num_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
                 .value = 42, // TODO need to store and retrieve from extra_data
             },
@@ -590,7 +590,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
 
             // Store type variable in data_2 and requirements in data_3
             node.data_2 = @intFromEnum(e.frac_var);
-            node.data_3 = @as(u32, @intCast(@as(u5, @bitCast(e.requirements))));
+            node.data_3 = @as(u32, @intCast(@as(u2, @bitCast(e.requirements))));
 
             // TODO for storing the value and bound, use extra_data
         },

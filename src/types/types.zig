@@ -255,35 +255,35 @@ pub const Num = union(enum) {
                 // Both self and std.mem.Alignment are stored as log2(alignment) integers.
                 return @enumFromInt(@intFromEnum(self));
             }
+        };
 
-            /// Get the lowest precision needed to hold the provided float
-            /// This only supports f32s and f64s. Decimals must be assigned based on different criteria.
-            /// When in doubt, this prefers f32s.
-            pub fn fromValue(value: f64) Frac.Precision {
-                if (std.math.isNan(value) or std.math.isInf(value)) {
-                    return .f32;
-                }
+        /// The requirements of a particular Frac literal: the minimum precision required
+        /// to represent it accurately. Since Frac vaues are always signed, we only need to
+        /// track the required precision (F32, F64, or Dec) and whether they are fininte.
+        ///
+        /// Here's an example:
+        ///
+        ///     if foo() 3.14 else 1e40
+        ///
+        /// The `3.14` literal can be accurately represented as F32, F64, or Dec. The `1e40`
+        /// literal exceeds the range of F32 (which maxes out around 3.4e38) and
+        /// Dec (which has 18 decimal places of precision), and so requires F64.
+        /// Therefore, the overall expression requires F64.
+        ///
+        /// NaN, Infinity, and -Infinity have `non_finite` precision requirements,
+        /// which means they can be represented in F32 or F64, but not in Dec.
+        /// When a `non_finite` value is unified with a type annotation, it
+        /// will succeed for F32 or F64 but fail for Dec.
+        pub const Requirements = packed struct {
+            precision_needed: PrecisionNeeded,
+        };
 
-                // Check if the value fits in f32 range and precision
-                const abs_value = @abs(value);
-                if (abs_value == 0.0) {
-                    return .f32;
-                } else if (abs_value <= std.math.floatMax(f32) and abs_value >= std.math.floatMin(f32)) {
-                    // Not every f64 can be downcast to f32 with the same precision
-                    //
-                    // For example if you had an f64 with the value
-                    // `1.0000000000000002` and you downcast to  f32, it becomes
-                    // 0.0. So this round trip equality tests ensure that if we
-                    // downcast the provided we don't loose precision
-                    const as_f32 = @as(f32, @floatCast(value));
-                    const back_to_f64 = @as(f64, @floatCast(as_f32));
-                    if (value == back_to_f64) {
-                        return .f32;
-                    }
-                }
-
-                return .f64;
-            }
+        /// The minimum precision needed to represent a float literal
+        pub const PrecisionNeeded = enum(u2) {
+            f32 = 0,
+            f64 = 1,
+            dec = 2,
+            non_finite = 3, // NaN, Infinity, or -Infinity (f32/f64 work, but dec doesn't)
         };
     };
 

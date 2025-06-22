@@ -1,0 +1,331 @@
+~~~META
+description=Float literals with different precision requirements
+type=file
+~~~SOURCE
+app [main] {
+    pf: platform "../basic-cli/platform.roc"
+}
+
+main =
+    # Small float that fits in f32
+    small = 3.14
+
+    # Medium float that still fits in f32
+    medium = 1.23e10
+
+    # Large float that needs f64
+    large = 1.5e39
+
+    # Very large float near f64 max
+    veryLarge = 1.7e308
+
+    # Negative floats
+    negSmall = -2.718
+    negLarge = -9.9e100
+
+    # Special precision cases
+    precise = 3.141592653589793
+
+    # Zero
+    zero = 0.0
+
+    # Very small positive number
+    tiny = 1.0e-30
+
+    # Numbers that might need decimal precision for exact representation
+    tenth = 0.1
+    fifth = 0.2
+    sum = 0.1 + 0.2
+
+    { small, medium, large, veryLarge, negSmall, negLarge, precise, zero, tiny, tenth, fifth, sum }
+~~~PROBLEMS
+PARSER: expr_unexpected_token
+UNDEFINED VARIABLE
+Nothing is named `small` in this scope.
+Is there an import or exposing missing up-top?
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+INVALID STATEMENT
+The statement expr is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+~~~TOKENS
+KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:10),CloseSquare(1:10-1:11),OpenCurly(1:12-1:13),Newline(1:1-1:1),
+LowerIdent(2:5-2:7),OpColon(2:7-2:8),KwPlatform(2:9-2:17),StringStart(2:18-2:19),StringPart(2:19-2:44),StringEnd(2:44-2:45),Newline(1:1-1:1),
+CloseCurly(3:1-3:2),Newline(1:1-1:1),
+Newline(1:1-1:1),
+LowerIdent(5:1-5:5),OpAssign(5:6-5:7),Newline(1:1-1:1),
+Newline(6:6-6:35),
+LowerIdent(7:5-7:10),OpAssign(7:11-7:12),Float(7:13-7:17),Newline(1:1-1:1),
+Newline(1:1-1:1),
+Newline(9:6-9:42),
+LowerIdent(10:5-10:11),OpAssign(10:12-10:13),Float(10:14-10:21),Newline(1:1-1:1),
+Newline(1:1-1:1),
+Newline(12:6-12:33),
+LowerIdent(13:5-13:10),OpAssign(13:11-13:12),Float(13:13-13:19),Newline(1:1-1:1),
+Newline(1:1-1:1),
+Newline(15:6-15:36),
+LowerIdent(16:5-16:14),OpAssign(16:15-16:16),Float(16:17-16:24),Newline(1:1-1:1),
+Newline(1:1-1:1),
+Newline(18:6-18:22),
+LowerIdent(19:5-19:13),OpAssign(19:14-19:15),Float(19:16-19:22),Newline(1:1-1:1),
+LowerIdent(20:5-20:13),OpAssign(20:14-20:15),Float(20:16-20:24),Newline(1:1-1:1),
+Newline(1:1-1:1),
+Newline(22:6-22:30),
+LowerIdent(23:5-23:12),OpAssign(23:13-23:14),Float(23:15-23:32),Newline(1:1-1:1),
+Newline(1:1-1:1),
+Newline(25:6-25:11),
+LowerIdent(26:5-26:9),OpAssign(26:10-26:11),Float(26:12-26:15),Newline(1:1-1:1),
+Newline(1:1-1:1),
+Newline(28:6-28:33),
+LowerIdent(29:5-29:9),OpAssign(29:10-29:11),Float(29:12-29:19),Newline(1:1-1:1),
+Newline(1:1-1:1),
+Newline(31:6-31:73),
+LowerIdent(32:5-32:10),OpAssign(32:11-32:12),Float(32:13-32:16),Newline(1:1-1:1),
+LowerIdent(33:5-33:10),OpAssign(33:11-33:12),Float(33:13-33:16),Newline(1:1-1:1),
+LowerIdent(34:5-34:8),OpAssign(34:9-34:10),Float(34:11-34:14),OpPlus(34:15-34:16),Float(34:17-34:20),Newline(1:1-1:1),
+Newline(1:1-1:1),
+OpenCurly(36:5-36:6),LowerIdent(36:7-36:12),Comma(36:12-36:13),LowerIdent(36:14-36:20),Comma(36:20-36:21),LowerIdent(36:22-36:27),Comma(36:27-36:28),LowerIdent(36:29-36:38),Comma(36:38-36:39),LowerIdent(36:40-36:48),Comma(36:48-36:49),LowerIdent(36:50-36:58),Comma(36:58-36:59),LowerIdent(36:60-36:67),Comma(36:67-36:68),LowerIdent(36:69-36:73),Comma(36:73-36:74),LowerIdent(36:75-36:79),Comma(36:79-36:80),LowerIdent(36:81-36:86),Comma(36:86-36:87),LowerIdent(36:88-36:93),Comma(36:93-36:94),LowerIdent(36:95-36:98),CloseCurly(36:99-36:100),EndOfFile(36:100-36:100),
+~~~PARSE
+(file (1:1-36:100)
+	(app (1:1-3:2)
+		(provides (1:6-1:11) (exposed_item (lower_ident "main")))
+		(record_field (1:1-1:1)
+			"pf"
+			(string (2:18-2:45) (string_part (2:19-2:44) "../basic-cli/platform.roc")))
+		(packages (1:12-3:2)
+			(record_field (1:1-1:1)
+				"pf"
+				(string (2:18-2:45) (string_part (2:19-2:44) "../basic-cli/platform.roc")))))
+	(statements
+		(decl (5:1-7:10)
+			(ident (5:1-5:5) "main")
+			(ident (7:5-7:10) "" "small"))
+		(malformed_expr (7:11-7:12) "expr_unexpected_token")
+		(float (7:13-7:17) "3.14")
+		(decl (10:5-10:21)
+			(ident (10:5-10:11) "medium")
+			(float (10:14-10:21) "1.23e10"))
+		(decl (13:5-13:19)
+			(ident (13:5-13:10) "large")
+			(float (13:13-13:19) "1.5e39"))
+		(decl (16:5-16:24)
+			(ident (16:5-16:14) "veryLarge")
+			(float (16:17-16:24) "1.7e308"))
+		(decl (19:5-19:22)
+			(ident (19:5-19:13) "negSmall")
+			(float (19:16-19:22) "-2.718"))
+		(decl (20:5-20:24)
+			(ident (20:5-20:13) "negLarge")
+			(float (20:16-20:24) "-9.9e100"))
+		(decl (23:5-23:32)
+			(ident (23:5-23:12) "precise")
+			(float (23:15-23:32) "3.141592653589793"))
+		(decl (26:5-26:15)
+			(ident (26:5-26:9) "zero")
+			(float (26:12-26:15) "0.0"))
+		(decl (29:5-29:19)
+			(ident (29:5-29:9) "tiny")
+			(float (29:12-29:19) "1.0e-30"))
+		(decl (32:5-32:16)
+			(ident (32:5-32:10) "tenth")
+			(float (32:13-32:16) "0.1"))
+		(decl (33:5-33:16)
+			(ident (33:5-33:10) "fifth")
+			(float (33:13-33:16) "0.2"))
+		(decl (34:5-36:6)
+			(ident (34:5-34:8) "sum")
+			(binop (34:11-36:6)
+				"+"
+				(float (34:11-34:14) "0.1")
+				(float (34:17-34:20) "0.2")))
+		(record (36:5-36:100)
+			(field "small")
+			(field "medium")
+			(field "large")
+			(field "veryLarge")
+			(field "negSmall")
+			(field "negLarge")
+			(field "precise")
+			(field "zero")
+			(field "tiny")
+			(field "tenth")
+			(field "fifth")
+			(field "sum"))))
+~~~FORMATTED
+app [main] {
+	pf: platform "../basic-cli/platform.roc",
+}
+
+main = 
+# Small float that fits in f32
+	small3.14
+
+# Medium float that still fits in f32
+medium = 1.23e10
+
+# Large float that needs f64
+large = 1.5e39
+
+# Very large float near f64 max
+veryLarge = 1.7e308
+
+# Negative floats
+negSmall = -2.718
+negLarge = -9.9e100
+
+# Special precision cases
+precise = 3.141592653589793
+
+# Zero
+zero = 0.0
+
+# Very small positive number
+tiny = 1.0e-30
+
+# Numbers that might need decimal precision for exact representation
+tenth = 0.1
+fifth = 0.2
+sum = 0.1 + 0.2
+
+{ small, medium, large, veryLarge, negSmall, negLarge, precise, zero, tiny, tenth, fifth, sum }
+~~~CANONICALIZE
+(can_ir
+	(d_let
+		(def_pattern
+			(p_assign (5:1-5:5)
+				(pid 12)
+				(ident "main")))
+		(def_expr (e_runtime_error (7:5-7:10) "ident_not_in_scope")))
+	(d_let
+		(def_pattern
+			(p_assign (10:5-10:11)
+				(pid 18)
+				(ident "medium")))
+		(def_expr
+			(e_float (10:14-10:21)
+				(frac_var "#3")
+				(requirements (precision_needed "f64"))
+				(literal "1.23e10")
+				(value "0"))))
+	(d_let
+		(def_pattern
+			(p_assign (13:5-13:10)
+				(pid 22)
+				(ident "large")))
+		(def_expr
+			(e_float (13:13-13:19)
+				(frac_var "#6")
+				(requirements (precision_needed "f64"))
+				(literal "1.5e39")
+				(value "0"))))
+	(d_let
+		(def_pattern
+			(p_assign (16:5-16:14)
+				(pid 26)
+				(ident "veryLarge")))
+		(def_expr
+			(e_float (16:17-16:24)
+				(frac_var "#9")
+				(requirements (precision_needed "f64"))
+				(literal "1.7e308")
+				(value "0"))))
+	(d_let
+		(def_pattern
+			(p_assign (19:5-19:13)
+				(pid 30)
+				(ident "negSmall")))
+		(def_expr
+			(e_float (19:16-19:22)
+				(frac_var "#12")
+				(requirements (precision_needed "f64"))
+				(literal "-2.718")
+				(value "0"))))
+	(d_let
+		(def_pattern
+			(p_assign (20:5-20:13)
+				(pid 34)
+				(ident "negLarge")))
+		(def_expr
+			(e_float (20:16-20:24)
+				(frac_var "#15")
+				(requirements (precision_needed "f64"))
+				(literal "-9.9e100")
+				(value "0"))))
+	(d_let
+		(def_pattern
+			(p_assign (23:5-23:12)
+				(pid 38)
+				(ident "precise")))
+		(def_expr
+			(e_float (23:15-23:32)
+				(frac_var "#18")
+				(requirements (precision_needed "f64"))
+				(literal "3.141592653589793")
+				(value "0"))))
+	(d_let
+		(def_pattern
+			(p_assign (26:5-26:9)
+				(pid 42)
+				(ident "zero")))
+		(def_expr
+			(e_float (26:12-26:15)
+				(frac_var "#21")
+				(requirements (precision_needed "f32"))
+				(literal "0.0")
+				(value "0"))))
+	(d_let
+		(def_pattern
+			(p_assign (29:5-29:9)
+				(pid 46)
+				(ident "tiny")))
+		(def_expr
+			(e_float (29:12-29:19)
+				(frac_var "#24")
+				(requirements (precision_needed "f64"))
+				(literal "1.0e-30")
+				(value "0"))))
+	(d_let
+		(def_pattern
+			(p_assign (32:5-32:10)
+				(pid 50)
+				(ident "tenth")))
+		(def_expr
+			(e_float (32:13-32:16)
+				(frac_var "#27")
+				(requirements (precision_needed "f64"))
+				(literal "0.1")
+				(value "0"))))
+	(d_let
+		(def_pattern
+			(p_assign (33:5-33:10)
+				(pid 54)
+				(ident "fifth")))
+		(def_expr
+			(e_float (33:13-33:16)
+				(frac_var "#30")
+				(requirements (precision_needed "f64"))
+				(literal "0.2")
+				(value "0"))))
+	(d_let
+		(def_pattern
+			(p_assign (34:5-34:8)
+				(pid 58)
+				(ident "sum")))
+		(def_expr
+			(e_binop (34:11-36:6)
+				"add"
+				(e_float (34:11-34:14)
+					(frac_var "#33")
+					(requirements (precision_needed "f64"))
+					(literal "0.1")
+					(value "0"))
+				(e_float (34:17-34:20)
+					(frac_var "#35")
+					(requirements (precision_needed "f64"))
+					(literal "0.2")
+					(value "0"))))))
+~~~END

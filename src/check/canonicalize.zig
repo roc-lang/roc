@@ -613,11 +613,30 @@ pub fn canonicalize_expr(
             // create type vars, first "reserve" node slots
             const final_expr_idx = self.can_ir.store.predictNodeIndex(2);
 
-            // For floats, we'll use requirements as a placeholder
-            // In the future, this might need different handling for float bounds
-            const requirements = types.Num.Int.Requirements{
-                .sign_needed = false,
-                .bits_needed = .@"64", // Default for f64
+            // Determine the precision requirements for this float literal
+            const requirements = blk: {
+                if (std.math.isNan(value) or std.math.isInf(value)) {
+                    break :blk types.Num.Frac.Requirements{ .precision_needed = .non_finite };
+                }
+
+                // Check if the value fits in f32 range and precision
+                const abs_value = @abs(value);
+                if (abs_value == 0.0) {
+                    break :blk types.Num.Frac.Requirements{ .precision_needed = .f32 };
+                } else if (abs_value <= std.math.floatMax(f32) and abs_value >= std.math.floatMin(f32)) {
+                    // Not every f64 can be downcast to f32 with the same precision
+                    // For example if you had an f64 with the value
+                    // `1.0000000000000002` and you downcast to f32, it becomes
+                    // 0.0. So this round trip equality test ensures that if we
+                    // downcast the provided value we don't lose precision
+                    const as_f32 = @as(f32, @floatCast(value));
+                    const back_to_f64 = @as(f64, @floatCast(as_f32));
+                    if (value == back_to_f64) {
+                        break :blk types.Num.Frac.Requirements{ .precision_needed = .f32 };
+                    }
+                }
+
+                break :blk types.Num.Frac.Requirements{ .precision_needed = .f64 };
             };
 
             // Create a polymorphic float type variable
