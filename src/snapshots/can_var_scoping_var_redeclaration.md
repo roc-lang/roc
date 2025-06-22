@@ -23,11 +23,11 @@ DUPLICATE DEFINITION
 The name `x_` is being redeclared in this scope.
 
 The redeclaration is here:
-can_var_scoping_var_redeclaration.txt:6-2:7: 	var x_ = 10 # Redeclare var - should warn but proceed
+can_var_scoping_var_redeclaration.md:6-2:7: 	var x_ = 10 # Redeclare var - should warn but proceed
 	x_ = 15 # Reassign - should work without warning
 
 But `x_` was already defined here:
-can_var_scoping_var_redeclaration.txt:5-2:6: 	var x_ = 5
+can_var_scoping_var_redeclaration.md:5-2:6: 	var x_ = 5
 	var x_ = 10 # Redeclare var - should warn but proceed
 
 NOT IMPLEMENTED

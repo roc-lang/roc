@@ -19,13 +19,13 @@ Only definitions, type annotations, and imports are allowed at the top level.
 ~~~
 # TOKENS
 ~~~zig
-OpBar(1:2-1:3),OpBar(1:3-1:4),NoSpaceOpenRound(1:4-1:5),OpBar(1:5-1:6),NoSpaceOpenRound(1:6-1:7),LowerIdent(1:7-1:17),OpBar(1:17-1:18),EndOfFile(1:18-1:18),
+OpBar(1:1-1:2),OpBar(1:2-1:3),NoSpaceOpenRound(1:3-1:4),OpBar(1:4-1:5),NoSpaceOpenRound(1:5-1:6),LowerIdent(1:6-1:16),OpBar(1:16-1:17),EndOfFile(1:17-1:17),
 ~~~
 # PARSE
 ~~~clojure
-(file (1:2-1:18)
-	(malformed_header (1:2-1:3) "missing_header")
-	(statements (malformed_expr (1:18-1:18) "expected_expr_bar")))
+(file (1:1-1:17)
+	(malformed_header (1:1-1:2) "missing_header")
+	(statements (malformed_expr (1:17-1:17) "expected_expr_bar")))
 ~~~
 # FORMATTED
 ~~~roc

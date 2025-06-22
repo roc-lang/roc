@@ -35,7 +35,7 @@ LowerIdent(3:1-3:4),OpAssign(3:5-3:6),KwIf(3:7-3:9),LowerIdent(3:10-3:13),LowerI
 ~~~roc
 module []
 
-foo =
+foo = 
 ~~~
 # CANONICALIZE
 ~~~clojure
