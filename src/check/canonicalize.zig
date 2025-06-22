@@ -548,18 +548,13 @@ pub fn canonicalize_expr(
             const final_expr_idx = self.can_ir.store.predictNodeIndex(2);
 
             // Calculate requirements based on the value
-            const requirements = blk: {
-                const sign_needed = is_negated;
-                const bits_needed: types.Num.Int.BitsNeeded = if (u128_val <= 127) .@"7" else if (u128_val <= 255) .@"8" else if (u128_val <= 32767) .@"9_to_15" else if (u128_val <= 65535) .@"16" else if (u128_val <= 2147483647) .@"17_to_31" else if (u128_val <= 4294967295) .@"32" else if (u128_val <= 9223372036854775807) .@"33_to_63" else if (u128_val <= 18446744073709551615) .@"64" else if (u128_val <= 170141183460469231731687303715884105727) .@"65_to_127" else .@"128";
-
-                break :blk types.Num.Int.Requirements{
-                    .sign_needed = sign_needed,
-                    .bits_needed = bits_needed,
-                };
-            };
+            const requirements = types.Num.Int.Requirements.fromIntLiteral(u128_val, is_negated);
 
             // Create a polymorphic int type variable
             const int_type_var = self.can_ir.pushTypeVar(
+                //////////////////////////////////////////////////////////////
+                // TODO why is this enumFromInt(0)?
+                //////////////////////////////////////////////////////////////
                 Content{ .structure = .{ .num = .{ .int_poly = @enumFromInt(0) } } },
                 final_expr_idx,
                 region,

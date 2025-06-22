@@ -304,6 +304,14 @@ pub const Num = union(enum) {
         pub const Requirements = packed struct {
             sign_needed: bool,
             bits_needed: BitsNeeded,
+
+            /// Create Requirements from a u128 value and whether it's negated
+            pub fn fromIntLiteral(val: u128, is_negated: bool) Requirements {
+                return Requirements{
+                    .sign_needed = is_negated,
+                    .bits_needed = BitsNeeded.fromValue(val),
+                };
+            }
         };
 
         /// The lowest number of bits that can represent the decimal value of an Int literal, *excluding* its sign.
@@ -319,6 +327,30 @@ pub const Num = union(enum) {
             @"64" = 7,
             @"65_to_127" = 8,
             @"128" = 9,
+
+            /// Calculate the BitsNeeded for a given u128 value
+            pub fn fromValue(val: u128) BitsNeeded {
+                if (val == 0) return .@"7";
+
+                // Count leading zeros to determine how many bits are needed
+                const leading_zeros = @clz(val);
+                const bits_used = 128 - leading_zeros;
+
+                // Map bits used to our enum values
+                return switch (bits_used) {
+                    0...7 => .@"7",
+                    8 => .@"8",
+                    9...15 => .@"9_to_15",
+                    16 => .@"16",
+                    17...31 => .@"17_to_31",
+                    32 => .@"32",
+                    33...63 => .@"33_to_63",
+                    64 => .@"64",
+                    65...127 => .@"65_to_127",
+                    128 => .@"128",
+                    else => unreachable,
+                };
+            }
         };
 
         /// The exact precision of an Int

@@ -13,9 +13,7 @@ Int(1:1-1:31),EndOfFile(1:31-1:31),
 NO CHANGE
 ~~~CANONICALIZE
 (e_int (1:1-1:31)
-	(int_var "#1")
-	(precision_var "#0")
-	(literal "999999999999999999999999999999")
-	(value "TODO")
-	(bound "u8"))
+	(int_var "#0")
+	(requirements (sign_needed "false") (bits_needed "types.types.Num.Int.BitsNeeded.65_to_127"))
+	(value "999999999999999999999999999999"))
 ~~~END
