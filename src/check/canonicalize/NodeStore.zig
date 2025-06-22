@@ -165,26 +165,18 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             } };
         },
         .expr_int => {
+            // Read i128 from extra_data (stored as 4 u32s in data_1)
+            const value_as_u32s = store.extra_data.items[node.data_1..][0..4];
+
             // Retrieve type variable from data_2 and requirements from data_3
             const int_var = @as(types.Var, @enumFromInt(node.data_2));
             const requirements = @as(types.Num.Int.Requirements, @bitCast(@as(u5, @intCast(node.data_3))));
-
-            // Extract extra_data index from data_1
-            const extra_idx = node.data_1;
-
-            // Read i128 from extra_data (stored as 4 u32s)
-            const value_as_u32s = store.extra_data.items[extra_idx..][0..4];
-            const value: i128 = @bitCast(value_as_u32s.*);
-
-            // We store all values as i128 and reconstruct based on what was originally stored
-            // For now, default to i128 - the actual variant should be determined by the type system
-            const literal_value = CIR.IntLiteralValue{ .value = value };
 
             return .{
                 .int = .{
                     .int_var = int_var,
                     .requirements = requirements,
-                    .value = literal_value,
+                    .value = CIR.IntLiteralValue{ .value = @bitCast(value_as_u32s.*) },
                     .region = node.region,
                 },
             };
