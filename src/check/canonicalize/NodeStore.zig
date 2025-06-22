@@ -548,9 +548,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             node.region = e.region;
             node.tag = .expr_int;
 
-            // Store the literal index in data_1
-            // literal field was removed, no need to store it
-
             // Store type variable in data_2 and requirements in data_3
             node.data_2 = @intFromEnum(e.int_var);
             node.data_3 = @as(u32, @intCast(@as(u5, @bitCast(e.requirements))));
@@ -579,9 +576,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
         .frac => |e| {
             node.region = e.region;
             node.tag = .expr_frac;
-
-            // Store the literal index in data_1
-            // literal field was removed, no need to store it
 
             // Store type variable in data_2 and requirements in data_3
             node.data_2 = @intFromEnum(e.frac_var);
@@ -1083,7 +1077,6 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) CIR.Diagnostic.I
         .invalid_num_literal => |r| {
             node.tag = .diag_invalid_num_literal;
             node.region = r.region;
-            // literal field was removed, no need to store it
         },
         .ident_already_in_scope => |r| {
             node.tag = .diag_ident_already_in_scope;

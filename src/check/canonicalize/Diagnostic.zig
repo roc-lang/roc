@@ -74,7 +74,7 @@ pub const Diagnostic = union(enum) {
     pub fn buildInvalidNumLiteralReport(allocator: Allocator, region: Region, source: []const u8) !Report {
         var report = Report.init(allocator, "INVALID NUMBER", .runtime_error, reporting.ReportingConfig.initPlainText());
 
-        // Extract the literal text from the source using the region
+        // Extract the literal's text from the source using its region
         const literal_text = source[region.start.offset..region.end.offset];
         const owned_literal = try report.addOwnedString(literal_text);
 
