@@ -54,7 +54,7 @@ pub const CalledVia = enum {
 /// Represents a value written as-is in a Roc source file.
 pub const Literal = union(enum) {
     Int: IntLiteral,
-    Float: FloatLiteral,
+    Float: FracLiteral,
     Bool: bool,
     Str: StringLiteral.Idx,
     /// A crash with a textual message describing why a crash occurred.
@@ -76,7 +76,7 @@ pub const IntLiteral = union(enum) {
 };
 
 /// A fractional number literal.
-pub const FloatLiteral = union(enum) {
+pub const FracLiteral = union(enum) {
     F32: f32,
     F64: f64,
     // We represent Dec as a large integer divided by 10^18, which is the maximum
@@ -87,7 +87,7 @@ pub const FloatLiteral = union(enum) {
 /// An integer or fractional number literal.
 pub const NumLiteral = union(enum) {
     Int: IntLiteral,
-    Float: FloatLiteral,
+    Frac: FracLiteral,
 };
 
 /// Just a small struct to take a span of data in an array

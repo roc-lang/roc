@@ -566,21 +566,18 @@ pub const RocDec = @import("../../builtins/dec.zig").RocDec;
 pub const Expr = union(enum) {
     num: struct {
         num_var: TypeVar,
-        literal: StringLiteral.Idx,
         value: IntLiteralValue,
         region: Region,
     },
     int: struct {
         int_var: TypeVar,
         requirements: types.Num.Int.Requirements,
-        literal: StringLiteral.Idx,
         value: IntLiteralValue,
         region: Region,
     },
     frac: struct {
         frac_var: TypeVar,
         requirements: types.Num.Frac.Requirements,
-        literal: StringLiteral.Idx,
         value: f64,
         region: Region,
     },

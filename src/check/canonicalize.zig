@@ -591,31 +591,67 @@ pub fn canonicalize_expr(
 
             return expr_idx;
         },
+        .non_finite_float => |e| {
+            // Dec doesn't have infinity, -infinity, or NaN
+            const requirements = types.Num.Frac.Requirements{
+                .fits_in_f32 = true,
+                .fits_in_f64 = true,
+                .fits_in_dec = false,
+            };
+
+            // Create type vars, first "reserve" node slots
+            const final_expr_idx = self.can_ir.store.predictNodeIndex(2);
+
+            // Create a polymorphic frac type variable
+            const frac_type_var = self.can_ir.pushTypeVar(
+                Content{ .structure = .{ .num = .{ .frac_poly = @enumFromInt(0) } } },
+                final_expr_idx,
+                e.region,
+            );
+
+            // Store the f64 value for now (TODO: update to store the full frac_value)
+            const value: f64 = std.math.nan(f64);
+
+            // then in the final slot the actual expr is inserted
+            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
+                .frac = .{
+                    .frac_var = frac_type_var,
+                    .requirements = requirements,
+                    .value = value,
+                    .region = e.region,
+                },
+            });
+
+            std.debug.assert(@intFromEnum(expr_idx) == @intFromEnum(final_expr_idx));
+
+            // Insert concrete type variable
+            _ = self.can_ir.setTypeVarAtExpr(
+                expr_idx,
+                Content{ .structure = .{ .num = .{ .num_poly = frac_type_var } } },
+            );
+
+            return expr_idx;
+        },
         .frac => |e| {
             const region = self.tokenizedRegionToRegion(e.region);
 
             // resolve to a string slice from the source
             const token_text = self.parse_ir.resolve(e.token);
 
-            // intern the string slice
-            const literal = self.can_ir.env.strings.insert(self.can_ir.env.gpa, token_text);
-
             // First, try to parse as RocDec
             const RocDec = @import("../builtins/dec.zig").RocDec;
 
             var fits_in_f32 = false;
-            var fits_in_f64 = false;
             var fits_in_dec = false;
-            var frac_value: base.FloatLiteral = undefined;
+            var frac_value: base.FracLiteral = undefined;
 
             if (RocDec.fromNonemptySlice(token_text)) |dec| {
                 // Successfully parsed as Dec
                 fits_in_dec = true;
                 frac_value = .{ .Dec = @as(u128, @bitCast(dec.num)) };
 
-                // Also check if it fits in f32/f64
+                // Also check if it fits in f32
                 const f64_val = dec.toF64();
-                fits_in_f64 = true;
 
                 // Check if it fits in f32 without precision loss
                 if (f64_val >= -std.math.floatMax(f32) and f64_val <= std.math.floatMax(f32)) {
@@ -624,10 +660,9 @@ pub fn canonicalize_expr(
                     fits_in_f32 = f64_val == back_to_f64;
                 }
             } else {
-                // Failed to parse as Dec - parse digits separately for f32/f64 analysis
-                // For now, fall back to parsing as f64
+                // Parsing it as a Dec failed, so try F64 next.
                 const f64_value = std.fmt.parseFloat(f64, token_text) catch {
-                    // Invalid number literal
+                    // It doesn't parse as Dec or as F64, so it's too big to fit in any of Roc's numeric types. Error out!
                     const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .invalid_num_literal = .{
                         .literal = literal,
                         .region = region,
@@ -637,22 +672,11 @@ pub fn canonicalize_expr(
 
                 frac_value = .{ .F64 = f64_value };
 
-                // Check for non-finite values (NaN, Infinity, -Infinity)
-                if (std.math.isNan(f64_value) or std.math.isInf(f64_value)) {
-                    // Non-finite values can be represented in f32 and f64, but not dec
-                    fits_in_f32 = true;
-                    fits_in_f64 = true;
-                    fits_in_dec = false;
-                } else {
-                    // Check if it fits in f64
-                    fits_in_f64 = true;
-
-                    // Check if it fits in f32 without precision loss
-                    if (f64_value >= -std.math.floatMax(f32) and f64_value <= std.math.floatMax(f32)) {
-                        const as_f32 = @as(f32, @floatCast(f64_value));
-                        const back_to_f64 = @as(f64, @floatCast(as_f32));
-                        fits_in_f32 = f64_value == back_to_f64;
-                    }
+                // Check if it fits in F32 without precision loss
+                if (f64_value >= -std.math.floatMax(f32) and f64_value <= std.math.floatMax(f32)) {
+                    const as_f32 = @as(f32, @floatCast(f64_value));
+                    const back_to_f64 = @as(f64, @floatCast(as_f32));
+                    fits_in_f32 = f64_value == back_to_f64;
                 }
             }
 
@@ -687,7 +711,6 @@ pub fn canonicalize_expr(
                 .frac = .{
                     .frac_var = frac_type_var,
                     .requirements = requirements,
-                    .literal = literal,
                     .value = value,
                     .region = region,
                 },
@@ -1225,7 +1248,10 @@ fn canonicalize_pattern(
 
                     // Also check if it fits in f32/f64
                     const f64_val = dec.toF64();
-                    fits_in_f64 = true;
+                    // Check if the decimal value fits in f64 range
+                    if (f64_val >= -std.math.floatMax(f64) and f64_val <= std.math.floatMax(f64) and !std.math.isInf(f64_val)) {
+                        fits_in_f64 = true;
+                    }
 
                     // Check if it fits in f32 without precision loss
                     if (f64_val >= -std.math.floatMax(f32) and f64_val <= std.math.floatMax(f32)) {
