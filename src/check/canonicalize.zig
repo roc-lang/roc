@@ -971,12 +971,84 @@ pub fn canonicalize_expr(
             } });
             return expr_idx;
         },
-        .field_access => |_| {
-            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize record field_access expression");
-            const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
-                .feature = feature,
-                .region = Region.zero(),
-            } });
+        .field_access => |field_access| {
+            // Canonicalize the receiver (left side of the dot)
+            const receiver_idx = blk: {
+                if (self.canonicalize_expr(field_access.left)) |idx| {
+                    break :blk idx;
+                } else {
+                    // Failed to canonicalize receiver, return malformed
+                    const region = self.tokenizedRegionToRegion(field_access.region);
+                    return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .expr_not_canonicalized = .{
+                        .region = region,
+                    } });
+                }
+            };
+
+            // Parse the right side - this could be just a field name or a method call
+            const right_expr = self.parse_ir.store.getExpr(field_access.right);
+
+            var field_name: Ident.Idx = undefined;
+            var args: ?CIR.Expr.Span = null;
+
+            switch (right_expr) {
+                .apply => |apply| {
+                    // This is a method call like .map(fn)
+                    const method_expr = self.parse_ir.store.getExpr(apply.@"fn");
+                    switch (method_expr) {
+                        .ident => |ident| {
+                            // The method name should start with a dot, so we need to extract it
+                            const method_name = self.parse_ir.resolve(ident.token);
+                            if (method_name.len > 0 and method_name[0] == '.') {
+                                field_name = self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(method_name[1..]), Region.zero());
+                            } else {
+                                field_name = self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(method_name), Region.zero());
+                            }
+                        },
+                        else => {
+                            // Fallback to a generic name
+                            field_name = self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text("unknown"), Region.zero());
+                        },
+                    }
+
+                    // Canonicalize the arguments using scratch system
+                    const scratch_top = self.can_ir.store.scratchExprTop();
+                    for (self.parse_ir.store.exprSlice(apply.args)) |arg_idx| {
+                        if (self.canonicalize_expr(arg_idx)) |canonicalized| {
+                            self.can_ir.store.addScratchExpr(canonicalized);
+                        } else {
+                            self.can_ir.store.clearScratchExprsFrom(scratch_top);
+                            return null;
+                        }
+                    }
+                    args = self.can_ir.store.exprSpanFrom(scratch_top);
+                },
+                .ident => |ident| {
+                    // This is just a field access like .field
+                    const field_name_str = self.parse_ir.resolve(ident.token);
+                    if (field_name_str.len > 0 and field_name_str[0] == '.') {
+                        field_name = self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(field_name_str[1..]), Region.zero());
+                    } else {
+                        field_name = self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(field_name_str), Region.zero());
+                    }
+                },
+                else => {
+                    // Fallback
+                    field_name = self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text("unknown"), Region.zero());
+                },
+            }
+
+            const dot_access_expr = CIR.Expr{
+                .dot_access = .{
+                    .receiver = receiver_idx,
+                    .field_name = field_name,
+                    .args = args,
+                    .region = self.tokenizedRegionToRegion(field_access.region),
+                },
+            };
+
+            const expr_idx = self.can_ir.store.addExpr(dot_access_expr);
+            _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
             return expr_idx;
         },
         .local_dispatch => |_| {

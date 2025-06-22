@@ -6,6 +6,7 @@ const types = @import("../../types.zig");
 const collections = @import("../../collections.zig");
 const Node = @import("Node.zig");
 const CIR = @import("CIR.zig");
+const PackedDataSpan = @import("../../base/PackedDataSpan.zig");
 
 const DataSpan = base.DataSpan;
 const Region = base.Region;
@@ -311,6 +312,20 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             std.log.debug("TODO: implement getExpr for node type {?}", .{node.tag});
             return CIR.Expr{ .runtime_error = .{
                 .diagnostic = @enumFromInt(0),
+                .region = node.region,
+            } };
+        },
+        .expr_dot_access => {
+            const args_span = if (node.data_3 != 0) blk: {
+                const packed_span = PackedDataSpan.FunctionArgs.fromU32(node.data_3);
+                const data_span = packed_span.toDataSpan();
+                break :blk CIR.Expr.Span{ .span = data_span };
+            } else null;
+
+            return CIR.Expr{ .dot_access = .{
+                .receiver = @enumFromInt(node.data_1),
+                .field_name = @bitCast(node.data_2),
+                .args = args_span,
                 .region = node.region,
             } };
         },
@@ -734,6 +749,20 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             node.tag = .expr_tag;
             // Store the full Ident.Idx as a u32
             node.data_1 = @bitCast(@as(u32, @bitCast(e.name)));
+        },
+        .dot_access => |e| {
+            node.region = e.region;
+            node.tag = .expr_dot_access;
+            node.data_1 = @intFromEnum(e.receiver);
+            node.data_2 = @bitCast(e.field_name);
+            if (e.args) |args| {
+                // Use PackedDataSpan for efficient storage - FunctionArgs config is good for method call args
+                std.debug.assert(PackedDataSpan.FunctionArgs.canFit(args.span));
+                const packed_span = PackedDataSpan.FunctionArgs.fromDataSpanUnchecked(args.span);
+                node.data_3 = packed_span.toU32();
+            } else {
+                node.data_3 = 0; // No args
+            }
         },
         .runtime_error => |e| {
             node.region = e.region;

@@ -1142,6 +1142,14 @@ pub const Expr = union(enum) {
         region: Region,
     },
     binop: Binop,
+    /// Dot access that could be either record field access or static dispatch
+    /// The decision is deferred until after type inference based on the receiver's type
+    dot_access: struct {
+        receiver: Expr.Idx, // Expression before the dot (e.g., `list` in `list.map`)
+        field_name: Ident.Idx, // Identifier after the dot (e.g., `map` in `list.map`)
+        args: ?Expr.Span, // Optional arguments for method calls (e.g., `fn` in `list.map(fn)`)
+        region: Region,
+    },
     /// Compiles, but will crash if reached
     runtime_error: struct {
         diagnostic: Diagnostic.Idx,
@@ -1627,6 +1635,25 @@ pub const Expr = union(enum) {
                 binop_node.appendNode(gpa, &rhs_node);
 
                 return binop_node;
+            },
+            .dot_access => |e| {
+                var dot_access_node = sexpr.Expr.init(gpa, "e_dot_access");
+                dot_access_node.appendRegionInfo(gpa, ir.calcRegionInfo(e.region));
+
+                var receiver_node = ir.store.getExpr(e.receiver).toSExpr(ir, env);
+                dot_access_node.appendNode(gpa, &receiver_node);
+
+                const field_name = env.idents.getText(e.field_name);
+                dot_access_node.appendString(gpa, field_name);
+
+                if (e.args) |args| {
+                    for (ir.store.exprSlice(args)) |arg_idx| {
+                        var arg_node = ir.store.getExpr(arg_idx).toSExpr(ir, env);
+                        dot_access_node.appendNode(gpa, &arg_node);
+                    }
+                }
+
+                return dot_access_node;
             },
             .runtime_error => |e| {
                 var runtime_err_node = sexpr.Expr.init(gpa, "e_runtime_error");
