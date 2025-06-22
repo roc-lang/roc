@@ -95,43 +95,43 @@ OpenCurly(31:5-31:6),LowerIdent(31:7-31:11),Comma(31:11-31:12),LowerIdent(31:13-
 			(ident (5:1-5:5) "main")
 			(ident (7:5-7:9) "" "zero"))
 		(malformed_expr (7:10-7:11) "expr_unexpected_token")
-		(float (7:12-7:15) "0.0")
+		(frac (7:12-7:15) "0.0")
 		(decl (8:5-8:14)
 			(ident (8:5-8:8) "one")
-			(float (8:11-8:14) "1.0"))
+			(frac (8:11-8:14) "1.0"))
 		(decl (9:5-9:18)
 			(ident (9:5-9:11) "simple")
-			(float (9:14-9:18) "42.5"))
+			(frac (9:14-9:18) "42.5"))
 		(decl (12:5-12:32)
 			(ident (12:5-12:7) "pi")
-			(float (12:10-12:32) "3.14159265358979323846"))
+			(frac (12:10-12:32) "3.14159265358979323846"))
 		(decl (13:5-13:31)
 			(ident (13:5-13:12) "precise")
-			(float (13:15-13:31) "1.23456789012345"))
+			(frac (13:15-13:31) "1.23456789012345"))
 		(decl (16:5-16:16)
 			(ident (16:5-16:9) "huge")
-			(float (16:12-16:16) "1e21"))
+			(frac (16:12-16:16) "1e21"))
 		(decl (17:5-17:20)
 			(ident (17:5-17:12) "hugeNeg")
-			(float (17:15-17:20) "-1e21"))
+			(frac (17:15-17:20) "-1e21"))
 		(decl (20:5-20:20)
 			(ident (20:5-20:13) "bigFloat")
-			(float (20:16-20:20) "1e39"))
+			(frac (20:16-20:20) "1e39"))
 		(decl (21:5-21:22)
 			(ident (21:5-21:14) "tinyFloat")
-			(float (21:17-21:22) "1e-40"))
+			(frac (21:17-21:22) "1e-40"))
 		(decl (24:5-24:16)
 			(ident (24:5-24:10) "tenth")
-			(float (24:13-24:16) "0.1"))
+			(frac (24:13-24:16) "0.1"))
 		(decl (25:5-25:18)
 			(ident (25:5-25:10) "third")
-			(float (25:13-25:18) "0.333"))
+			(frac (25:13-25:18) "0.333"))
 		(decl (26:5-26:18)
 			(ident (26:5-26:10) "money")
-			(float (26:13-26:18) "19.99"))
+			(frac (26:13-26:18) "19.99"))
 		(decl (29:5-29:39)
 			(ident (29:5-29:16) "decBoundary")
-			(float (29:19-29:39) "0.000000000000000001"))
+			(frac (29:19-29:39) "0.000000000000000001"))
 		(record (31:5-31:109)
 			(field "zero")
 			(field "one")
@@ -192,7 +192,7 @@ decBoundary = 0.000000000000000001
 				(pid 18)
 				(ident "one")))
 		(def_expr
-			(e_float (8:11-8:14)
+			(e_frac (8:11-8:14)
 				(frac_var "#3")
 				(requirements
 					(fits_in_f32 "true")
@@ -206,7 +206,7 @@ decBoundary = 0.000000000000000001
 				(pid 22)
 				(ident "simple")))
 		(def_expr
-			(e_float (9:14-9:18)
+			(e_frac (9:14-9:18)
 				(frac_var "#6")
 				(requirements
 					(fits_in_f32 "true")
@@ -220,12 +220,12 @@ decBoundary = 0.000000000000000001
 				(pid 26)
 				(ident "pi")))
 		(def_expr
-			(e_float (12:10-12:32)
+			(e_frac (12:10-12:32)
 				(frac_var "#9")
 				(requirements
 					(fits_in_f32 "false")
 					(fits_in_f64 "true")
-					(fits_in_dec "true"))
+					(fits_in_dec "false"))
 				(literal "3.14159265358979323846")
 				(value "0"))))
 	(d_let
@@ -234,7 +234,7 @@ decBoundary = 0.000000000000000001
 				(pid 30)
 				(ident "precise")))
 		(def_expr
-			(e_float (13:15-13:31)
+			(e_frac (13:15-13:31)
 				(frac_var "#12")
 				(requirements
 					(fits_in_f32 "false")
@@ -248,7 +248,7 @@ decBoundary = 0.000000000000000001
 				(pid 34)
 				(ident "huge")))
 		(def_expr
-			(e_float (16:12-16:16)
+			(e_frac (16:12-16:16)
 				(frac_var "#15")
 				(requirements
 					(fits_in_f32 "false")
@@ -262,7 +262,7 @@ decBoundary = 0.000000000000000001
 				(pid 38)
 				(ident "hugeNeg")))
 		(def_expr
-			(e_float (17:15-17:20)
+			(e_frac (17:15-17:20)
 				(frac_var "#18")
 				(requirements
 					(fits_in_f32 "false")
@@ -276,7 +276,7 @@ decBoundary = 0.000000000000000001
 				(pid 42)
 				(ident "bigFloat")))
 		(def_expr
-			(e_float (20:16-20:20)
+			(e_frac (20:16-20:20)
 				(frac_var "#21")
 				(requirements
 					(fits_in_f32 "false")
@@ -290,12 +290,12 @@ decBoundary = 0.000000000000000001
 				(pid 46)
 				(ident "tinyFloat")))
 		(def_expr
-			(e_float (21:17-21:22)
+			(e_frac (21:17-21:22)
 				(frac_var "#24")
 				(requirements
 					(fits_in_f32 "false")
 					(fits_in_f64 "true")
-					(fits_in_dec "true"))
+					(fits_in_dec "false"))
 				(literal "1e-40")
 				(value "0"))))
 	(d_let
@@ -304,7 +304,7 @@ decBoundary = 0.000000000000000001
 				(pid 50)
 				(ident "tenth")))
 		(def_expr
-			(e_float (24:13-24:16)
+			(e_frac (24:13-24:16)
 				(frac_var "#27")
 				(requirements
 					(fits_in_f32 "false")
@@ -318,7 +318,7 @@ decBoundary = 0.000000000000000001
 				(pid 54)
 				(ident "third")))
 		(def_expr
-			(e_float (25:13-25:18)
+			(e_frac (25:13-25:18)
 				(frac_var "#30")
 				(requirements
 					(fits_in_f32 "false")
@@ -332,7 +332,7 @@ decBoundary = 0.000000000000000001
 				(pid 58)
 				(ident "money")))
 		(def_expr
-			(e_float (26:13-26:18)
+			(e_frac (26:13-26:18)
 				(frac_var "#33")
 				(requirements
 					(fits_in_f32 "false")
@@ -346,7 +346,7 @@ decBoundary = 0.000000000000000001
 				(pid 62)
 				(ident "decBoundary")))
 		(def_expr
-			(e_float (29:19-29:39)
+			(e_frac (29:19-29:39)
 				(frac_var "#36")
 				(requirements
 					(fits_in_f32 "false")

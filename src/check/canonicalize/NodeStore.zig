@@ -390,7 +390,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
                 .literal = @enumFromInt(node.data_1),
                 .requirements = .{ .fits_in_f32 = true, .fits_in_f64 = true, .fits_in_dec = true }, // TODO need to store and retrieve from extra_data
                 .num_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
-                .value = 42, // TODO need to store and retrieve from extra_data
+                .value = .{ .f64 = 0.0 }, // TODO need to store and retrieve from extra_data
             },
         },
         .pattern_str_literal => return CIR.Pattern{ .str_literal = .{

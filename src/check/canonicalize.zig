@@ -608,23 +608,22 @@ pub fn canonicalize_expr(
             var fits_in_dec = false;
             var frac_value: base.FloatLiteral = undefined;
 
-            if (RocDec.fromNonemptySlice(@constCast(token_text))) |dec| {
+            if (RocDec.fromNonemptySlice(token_text)) |dec| {
                 // Successfully parsed as Dec
                 fits_in_dec = true;
                 frac_value = .{ .Dec = @as(u128, @bitCast(dec.num)) };
 
                 // Also check if it fits in f32/f64
-                if (dec.toF64()) |f64_val| {
-                    fits_in_f64 = true;
+                const f64_val = dec.toF64();
+                fits_in_f64 = true;
 
-                    // Check if it fits in f32 without precision loss
-                    const abs_value = @abs(f64_val);
-                    if (abs_value == 0.0 or (abs_value <= std.math.floatMax(f32) and abs_value >= std.math.floatMin(f32))) {
-                        const as_f32 = @as(f32, @floatCast(f64_val));
-                        const back_to_f64 = @as(f64, @floatCast(as_f32));
-                        if (f64_val == back_to_f64) {
-                            fits_in_f32 = true;
-                        }
+                // Check if it fits in f32 without precision loss
+                const abs_value = @abs(f64_val);
+                if (abs_value == 0.0 or (abs_value <= std.math.floatMax(f32) and abs_value >= std.math.floatMin(f32))) {
+                    const as_f32 = @as(f32, @floatCast(f64_val));
+                    const back_to_f64 = @as(f64, @floatCast(as_f32));
+                    if (f64_val == back_to_f64) {
+                        fits_in_f32 = true;
                     }
                 }
             } else {
@@ -685,7 +684,7 @@ pub fn canonicalize_expr(
                 .F32 => |f| @floatCast(f),
                 .Dec => |d| blk: {
                     const dec = RocDec{ .num = @as(i128, @bitCast(d)) };
-                    break :blk if (dec.toF64()) |f| f else 0.0;
+                    break :blk dec.toF64();
                 },
             };
 

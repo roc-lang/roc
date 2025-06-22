@@ -63,8 +63,8 @@ pub const RocDec = extern struct {
     }
 
     // This a separate function because the compiler uses it.
-    pub fn fromNonemptySlice(roc_str_slice: []u8) ?RocDec {
-        const length = roc_str_slice.len();
+    pub fn fromNonemptySlice(roc_str_slice: []const u8) ?RocDec {
+        const length = roc_str_slice.len;
         const is_negative: bool = roc_str_slice[0] == '-';
         const initial_index: usize = if (is_negative) 1 else 0;
 

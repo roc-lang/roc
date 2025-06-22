@@ -563,8 +563,8 @@ pub const IntLiteralValue = struct {
 /// If we can store a given literal in memory as a RocDec without
 /// any precision loss, we do that because it's the most precise.
 /// Otherwise, we fall back on f64 - which can also fit f32s.
-pub const FracLiteralValue = union {
-    dec: RocDec,
+pub const FracLiteralValue = union(enum) {
+    dec: i128, // RocDec.num
     f64: f64,
 };
 
@@ -805,7 +805,7 @@ pub const Expr = union(enum) {
                 const frac_var_str = frac_expr.frac_var.allocPrint(gpa);
                 defer gpa.free(frac_var_str);
                 frac_var_node.appendString(gpa, frac_var_str);
-                float_node.appendNode(gpa, &frac_var_node);
+                frac_node.appendNode(gpa, &frac_var_node);
 
                 // Add requirements
                 var req_node = sexpr.Expr.init(gpa, "requirements");
@@ -826,13 +826,13 @@ pub const Expr = union(enum) {
 
                 // Add literal
                 var literal_node = sexpr.Expr.init(gpa, "literal");
-                const literal_str = ir.stringLiteral(frac_expr.literal);
+                const literal_str = ir.env.strings.get(frac_expr.literal);
                 literal_node.appendString(gpa, literal_str);
                 frac_node.appendNode(gpa, &literal_node);
 
                 // Add value
                 var value_node = sexpr.Expr.init(gpa, "value");
-                const value_str = std.fmt.allocPrint(gpa, "{any}", .{frac_expr.value}) catch unreachable;
+                const value_str = std.fmt.allocPrint(gpa, "{d}", .{frac_expr.value}) catch unreachable;
                 defer gpa.free(value_str);
                 value_node.appendString(gpa, value_str);
                 frac_node.appendNode(gpa, &value_node);
@@ -1644,7 +1644,10 @@ pub const Pattern = union(enum) {
                 node.appendNode(gpa, &pattern_idx_node);
 
                 node.appendString(gpa, "literal"); // TODO: use l.literal
-                const val_str = std.fmt.allocPrint(gpa, "{d}", .{p.value}) catch "<oom>";
+                const val_str = switch (p.value) {
+                    .dec => |d| std.fmt.allocPrint(gpa, "dec:{d}", .{d}) catch "<oom>",
+                    .f64 => |f| std.fmt.allocPrint(gpa, "{d}", .{f}) catch "<oom>",
+                };
                 defer gpa.free(val_str);
 
                 node.appendString(gpa, val_str);

@@ -761,7 +761,7 @@ const Formatter = struct {
             .int => |i| {
                 try fmt.pushTokenText(i.token);
             },
-            .float => |f| {
+            .frac => |f| {
                 try fmt.pushTokenText(f.token);
             },
             .list => |l| {

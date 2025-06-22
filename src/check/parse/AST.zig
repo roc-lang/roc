@@ -1438,7 +1438,7 @@ pub const Expr = union(enum) {
         return switch (self) {
             .ident => |e| e.region,
             .int => |e| e.region,
-            .float => |e| e.region,
+            .frac => |e| e.region,
             .string => |e| e.region,
             .tag => |e| e.region,
             .list => |e| e.region,
