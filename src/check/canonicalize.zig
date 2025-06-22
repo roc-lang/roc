@@ -618,13 +618,10 @@ pub fn canonicalize_expr(
                 fits_in_f64 = true;
 
                 // Check if it fits in f32 without precision loss
-                const abs_value = @abs(f64_val);
-                if (abs_value == 0.0 or (abs_value <= std.math.floatMax(f32) and abs_value >= std.math.floatMin(f32))) {
+                if (f64_val >= -std.math.floatMax(f32) and f64_val <= std.math.floatMax(f32)) {
                     const as_f32 = @as(f32, @floatCast(f64_val));
                     const back_to_f64 = @as(f64, @floatCast(as_f32));
-                    if (f64_val == back_to_f64) {
-                        fits_in_f32 = true;
-                    }
+                    fits_in_f32 = f64_val == back_to_f64;
                 }
             } else {
                 // Failed to parse as Dec - parse digits separately for f32/f64 analysis
@@ -651,13 +648,10 @@ pub fn canonicalize_expr(
                     fits_in_f64 = true;
 
                     // Check if it fits in f32 without precision loss
-                    const abs_value = @abs(f64_value);
-                    if (abs_value == 0.0 or (abs_value <= std.math.floatMax(f32) and abs_value >= std.math.floatMin(f32))) {
+                    if (f64_value >= -std.math.floatMax(f32) and f64_value <= std.math.floatMax(f32)) {
                         const as_f32 = @as(f32, @floatCast(f64_value));
                         const back_to_f64 = @as(f64, @floatCast(as_f32));
-                        if (f64_value == back_to_f64) {
-                            fits_in_f32 = true;
-                        }
+                        fits_in_f32 = f64_value == back_to_f64;
                     }
                 }
             }
@@ -1234,8 +1228,7 @@ fn canonicalize_pattern(
                     fits_in_f64 = true;
 
                     // Check if it fits in f32 without precision loss
-                    const abs_value = @abs(f64_val);
-                    if (abs_value == 0.0 or (abs_value <= std.math.floatMax(f32) and abs_value >= std.math.floatMin(f32))) {
+                    if (f64_val >= -std.math.floatMax(f32) and f64_val <= std.math.floatMax(f32)) {
                         const as_f32 = @as(f32, @floatCast(f64_val));
                         const back_to_f64 = @as(f64, @floatCast(as_f32));
                         if (f64_val == back_to_f64) {
@@ -1291,8 +1284,7 @@ fn canonicalize_pattern(
                         fits_in_f64 = true;
 
                         // Check if it fits in f32 without precision loss
-                        const abs_value = @abs(f64_value);
-                        if (abs_value == 0.0 or (abs_value <= std.math.floatMax(f32) and abs_value >= std.math.floatMin(f32))) {
+                        if (f64_value >= -std.math.floatMax(f32) and f64_value <= std.math.floatMax(f32)) {
                             const as_f32 = @as(f32, @floatCast(f64_value));
                             const back_to_f64 = @as(f64, @floatCast(as_f32));
                             if (f64_value == back_to_f64) {
