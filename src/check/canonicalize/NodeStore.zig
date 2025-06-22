@@ -557,6 +557,7 @@ pub fn getAnnotation(store: *NodeStore, annotation: CIR.Annotation.Idx) CIR.Anno
     std.debug.assert(node.tag == .annotation);
 
     return CIR.Annotation{
+        .type_anno = @enumFromInt(node.data_2),
         .signature = @enumFromInt(node.data_1),
         .region = node.region,
     };
@@ -1046,7 +1047,7 @@ pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: CIR.AnnoRecordFiel
 pub fn addAnnotation(store: *NodeStore, annotation: CIR.Annotation) CIR.Annotation.Idx {
     const node = Node{
         .data_1 = @intFromEnum(annotation.signature),
-        .data_2 = 0,
+        .data_2 = @intFromEnum(annotation.type_anno),
         .data_3 = 0,
         .region = annotation.region,
         .tag = .annotation,

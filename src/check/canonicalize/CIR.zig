@@ -505,60 +505,35 @@ pub const Statement = union(enum) {
                 return node;
             },
             .expr => |s| {
-                const feature = env.strings.insert(gpa, "s-expression for statement expr");
-                ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
-                    .feature = feature,
-                    .region = s.region,
-                } });
-
+                // Not implemented yet - just return placeholder
                 var node = sexpr.Expr.init(gpa, "s_expr");
                 node.appendRegionInfo(gpa, ir.calcRegionInfo(s.region));
                 node.appendString(gpa, "TODO");
                 return node;
             },
             .expect => |s| {
-                const feature = env.strings.insert(gpa, "s-expression for statement expect");
-                ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
-                    .feature = feature,
-                    .region = s.region,
-                } });
-
+                // Not implemented yet - just return placeholder
                 var node = sexpr.Expr.init(gpa, "s_expect");
                 node.appendRegionInfo(gpa, ir.calcRegionInfo(s.region));
                 node.appendString(gpa, "TODO");
                 return node;
             },
             .@"for" => |s| {
-                const feature = env.strings.insert(gpa, "s-expression for statement for");
-                ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
-                    .feature = feature,
-                    .region = s.region,
-                } });
-
+                // Not implemented yet - just return placeholder
                 var node = sexpr.Expr.init(gpa, "s_for");
                 node.appendRegionInfo(gpa, ir.calcRegionInfo(s.region));
                 node.appendString(gpa, "TODO");
                 return node;
             },
             .@"return" => |s| {
-                const feature = env.strings.insert(gpa, "s-expression for statement return");
-                ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
-                    .feature = feature,
-                    .region = s.region,
-                } });
-
+                // Not implemented yet - just return placeholder
                 var node = sexpr.Expr.init(gpa, "s_return");
                 node.appendRegionInfo(gpa, ir.calcRegionInfo(s.region));
                 node.appendString(gpa, "TODO");
                 return node;
             },
             .import => |s| {
-                const feature = env.strings.insert(gpa, "s-expression for statement import");
-                ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
-                    .feature = feature,
-                    .region = s.region,
-                } });
-
+                // Not implemented yet - just return placeholder
                 var node = sexpr.Expr.init(gpa, "s_import");
                 node.appendRegionInfo(gpa, ir.calcRegionInfo(s.region));
                 node.appendString(gpa, "TODO");
@@ -584,12 +559,7 @@ pub const Statement = union(enum) {
                 return node;
             },
             .type_anno => |s| {
-                const feature = env.strings.insert(gpa, "s-expression for statement type_anno");
-                ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
-                    .feature = feature,
-                    .region = s.region,
-                } });
-
+                // Not implemented yet - just return placeholder
                 var node = sexpr.Expr.init(gpa, "s_type_anno");
                 node.appendRegionInfo(gpa, ir.calcRegionInfo(s.region));
                 node.appendString(gpa, "TODO");
@@ -751,7 +721,7 @@ pub const TypeAnno = union(enum) {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
 
-    pub fn toSExpr(self: *const @This(), ir: *CIR, env: *ModuleEnv) sexpr.Expr {
+    pub fn toSExpr(self: *const @This(), ir: *const CIR, env: *ModuleEnv) sexpr.Expr {
         const gpa = ir.env.gpa;
         switch (self.*) {
             .apply => |a| {
@@ -805,13 +775,7 @@ pub const TypeAnno = union(enum) {
                 return node;
             },
             .tag_union => |_| {
-                // Not implemented yet
-                const feature = env.strings.insert(gpa, "tag union type annotation toSExpr");
-                ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
-                    .feature = feature,
-                    .region = Region.zero(),
-                } });
-
+                // Not implemented yet - just return placeholder
                 var node = sexpr.Expr.init(gpa, "tag_union");
                 node.appendString(gpa, "NOT_IMPLEMENTED");
                 return node;
@@ -830,25 +794,13 @@ pub const TypeAnno = union(enum) {
                 return node;
             },
             .record => |_| {
-                // Not implemented yet
-                const feature = env.strings.insert(gpa, "record type annotation toSExpr");
-                ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
-                    .feature = feature,
-                    .region = Region.zero(),
-                } });
-
+                // Not implemented yet - just return placeholder
                 var node = sexpr.Expr.init(gpa, "record");
                 node.appendString(gpa, "NOT_IMPLEMENTED");
                 return node;
             },
             .@"fn" => |_| {
-                // Not implemented yet
-                const feature = env.strings.insert(gpa, "function type annotation toSExpr");
-                ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
-                    .feature = feature,
-                    .region = Region.zero(),
-                } });
-
+                // Not implemented yet - just return placeholder
                 var node = sexpr.Expr.init(gpa, "fn");
                 node.appendString(gpa, "NOT_IMPLEMENTED");
                 return node;
@@ -1698,7 +1650,9 @@ pub const Def = struct {
 /// An annotation represents a canonicalized type signature that connects
 /// a type declaration to a value definition
 pub const Annotation = struct {
-    /// The canonical type signature as a type variable
+    /// The canonicalized declared type structure (what the programmer wrote)
+    type_anno: TypeAnno.Idx,
+    /// The canonical type signature as a type variable (for type inference)
     signature: TypeVar,
     /// Source region of the annotation
     region: Region,
@@ -1713,6 +1667,13 @@ pub const Annotation = struct {
 
         // Add the signature type variable info
         appendTypeVar(&node, gpa, "signature", self.signature);
+
+        // Add the declared type annotation structure
+        var type_anno_node = sexpr.Expr.init(gpa, "declared_type");
+        const type_anno = ir.store.getTypeAnno(self.type_anno);
+        var anno_sexpr = type_anno.toSExpr(ir, ir.env);
+        type_anno_node.appendNode(gpa, &anno_sexpr);
+        node.appendNode(gpa, &type_anno_node);
 
         return node;
     }

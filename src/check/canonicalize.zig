@@ -2628,8 +2628,20 @@ fn canonicalizeTypeApplication(self: *Self, apply: anytype, parent_node_idx: Nod
 
 /// Handle function types like a -> b
 fn canonicalizeFunctionType(self: *Self, func: anytype, parent_node_idx: Node.Idx, region: Region) TypeVar {
-    _ = func;
-    // Simplified implementation - create a flex var for function types
+    // Canonicalize argument types and return type
+    const args_slice = self.can_ir.store.sliceTypeAnnos(func.args);
+
+    // For each argument, canonicalize its type
+    for (args_slice) |arg_anno_idx| {
+        _ = self.canonicalizeTypeAnnoToTypeVar(arg_anno_idx, parent_node_idx, region);
+    }
+
+    // Canonicalize return type
+    _ = self.canonicalizeTypeAnnoToTypeVar(func.ret, parent_node_idx, region);
+
+    // For now, create a flex var representing the function type
+    // TODO: Implement proper function type structure when the type system infrastructure is ready
+    // This ensures that function types are at least recognized and processed, even if not fully structured
     return self.can_ir.pushFreshTypeVar(parent_node_idx, region);
 }
 
@@ -2667,6 +2679,7 @@ fn createAnnotationFromTypeAnno(self: *Self, type_anno_idx: CIR.TypeAnno.Idx, _:
 
     // Create the annotation structure
     const annotation = CIR.Annotation{
+        .type_anno = type_anno_idx,
         .signature = signature,
         .region = region,
     };
