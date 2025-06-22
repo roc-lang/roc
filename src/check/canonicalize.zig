@@ -997,12 +997,12 @@ pub fn canonicalize_expr(
                     const method_expr = self.parse_ir.store.getExpr(apply.@"fn");
                     switch (method_expr) {
                         .ident => |ident| {
-                            // The method name should start with a dot, so we need to extract it
-                            const method_name = self.parse_ir.resolve(ident.token);
-                            if (method_name.len > 0 and method_name[0] == '.') {
-                                field_name = self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(method_name[1..]), Region.zero());
+                            // Get the method name
+                            if (self.parse_ir.tokens.resolveIdentifier(ident.token)) |ident_idx| {
+                                field_name = ident_idx;
                             } else {
-                                field_name = self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(method_name), Region.zero());
+                                // Fallback for malformed identifiers
+                                field_name = self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text("unknown"), Region.zero());
                             }
                         },
                         else => {
@@ -1024,12 +1024,12 @@ pub fn canonicalize_expr(
                     args = self.can_ir.store.exprSpanFrom(scratch_top);
                 },
                 .ident => |ident| {
-                    // This is just a field access like .field
-                    const field_name_str = self.parse_ir.resolve(ident.token);
-                    if (field_name_str.len > 0 and field_name_str[0] == '.') {
-                        field_name = self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(field_name_str[1..]), Region.zero());
+                    // Get the field name
+                    if (self.parse_ir.tokens.resolveIdentifier(ident.token)) |ident_idx| {
+                        field_name = ident_idx;
                     } else {
-                        field_name = self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(field_name_str), Region.zero());
+                        // Fallback for malformed identifiers
+                        field_name = self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text("unknown"), Region.zero());
                     }
                 },
                 else => {
