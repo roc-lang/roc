@@ -264,8 +264,17 @@ pub fn canonicalize_file(
                 } });
             },
             .type_decl => |type_decl| {
-                // Canonicalize the type declaration
+                // Canonicalize the type declaration header first
                 const header_idx = self.canonicalize_type_header(type_decl.header);
+
+                // Enter a new scope for type parameters
+                self.scopeEnter(self.can_ir.env.gpa, false);
+                defer self.scopeExit(self.can_ir.env.gpa) catch {};
+
+                // Introduce type parameters from the header into the scope
+                self.introduceTypeParametersFromHeader(header_idx);
+
+                // Now canonicalize the type annotation with type parameters in scope
                 const anno_idx = self.canonicalize_type_anno(type_decl.anno);
 
                 // Create the CIR type declaration statement
@@ -282,7 +291,7 @@ pub fn canonicalize_file(
                 const type_decl_idx = self.can_ir.store.addStatement(cir_type_decl);
                 self.can_ir.store.addScratchStatement(type_decl_idx);
 
-                // Introduce the type name into scope
+                // Introduce the type name into scope (outside the parameter scope)
                 const header = self.can_ir.store.getTypeHeader(header_idx);
                 self.scopeIntroduceTypeDecl(header.name, type_decl_idx, region);
             },
@@ -293,15 +302,32 @@ pub fn canonicalize_file(
                     continue;
                 };
 
-                // Canonicalize the annotation
+                // First, extract all type variables from the AST annotation
+                var type_vars = std.ArrayList(Ident.Idx).init(self.can_ir.env.gpa);
+                defer type_vars.deinit();
+                self.extractTypeVarsFromASTAnno(ta.anno, &type_vars);
+
+                // Enter a new scope for type variables
+                self.scopeEnter(self.can_ir.env.gpa, false);
+                defer self.scopeExit(self.can_ir.env.gpa) catch {};
+
+                // Introduce type variables into scope
+                for (type_vars.items) |type_var| {
+                    // Create a dummy type annotation for the type variable
+                    const region = Region.zero(); // TODO: get proper region from type variable
+                    const dummy_anno = self.can_ir.store.addTypeAnno(.{ .ty_var = .{
+                        .name = type_var,
+                        .region = region,
+                    } });
+                    self.scopeIntroduceTypeVar(type_var, dummy_anno);
+                }
+
+                // Now canonicalize the annotation with type variables in scope
                 const anno_idx = self.canonicalize_type_anno(ta.anno);
 
                 // Store annotation for connection to next declaration
                 const name_text = self.can_ir.env.idents.getText(name);
                 self.pending_type_annos.put(self.can_ir.env.gpa, name_text, anno_idx) catch |err| exitOnOom(err);
-
-                // Extract and introduce type variables from the annotation
-                self.extractTypeVarsFromAnno(anno_idx);
             },
             .malformed => |malformed| {
                 // We won't touch this since it's already a parse error.
@@ -1800,13 +1826,37 @@ fn canonicalize_type_header(self: *Self, header_idx: AST.TypeHeader.Idx) CIR.Typ
         });
     };
 
-    // Canonicalize type arguments
+    // Canonicalize type arguments - these are parameter declarations, not references
     const scratch_top = self.can_ir.store.scratchTypeAnnoTop();
     defer self.can_ir.store.clearScratchTypeAnnosFrom(scratch_top);
 
     for (self.parse_ir.store.typeAnnoSlice(ast_header.args)) |arg_idx| {
-        const canonicalized = self.canonicalize_type_anno(arg_idx);
-        self.can_ir.store.addScratchTypeAnno(canonicalized);
+        const ast_arg = self.parse_ir.store.getTypeAnno(arg_idx);
+        // Type parameters should be treated as declarations, not lookups
+        switch (ast_arg) {
+            .ty_var => |ty_var| {
+                const param_region = self.tokenizedRegionToRegion(ty_var.region);
+                const param_ident = self.parse_ir.tokens.resolveIdentifier(ty_var.tok) orelse {
+                    const malformed = self.can_ir.pushMalformed(CIR.TypeAnno.Idx, CIR.Diagnostic{ .malformed_type_annotation = .{
+                        .region = param_region,
+                    } });
+                    self.can_ir.store.addScratchTypeAnno(malformed);
+                    continue;
+                };
+
+                // Create type variable annotation for this parameter
+                const param_anno = self.can_ir.store.addTypeAnno(.{ .ty_var = .{
+                    .name = param_ident,
+                    .region = param_region,
+                } });
+                self.can_ir.store.addScratchTypeAnno(param_anno);
+            },
+            else => {
+                // Other types in parameter position - canonicalize normally but warn
+                const canonicalized = self.canonicalize_type_anno(arg_idx);
+                self.can_ir.store.addScratchTypeAnno(canonicalized);
+            },
+        }
     }
 
     const args = self.can_ir.store.typeAnnoSpanFrom(scratch_top);
@@ -2131,6 +2181,56 @@ fn extractTypeVarsFromAnno(self: *Self, type_anno_idx: CIR.TypeAnno.Idx) void {
         .parens => |parens| {
             // Extract from inner annotation
             self.extractTypeVarsFromAnno(parens.anno);
+        },
+        .ty, .underscore, .mod_ty, .record, .tag_union, .malformed => {
+            // These don't contain type variables to extract
+        },
+    }
+}
+
+fn introduceTypeParametersFromHeader(self: *Self, header_idx: CIR.TypeHeader.Idx) void {
+    const header = self.can_ir.store.getTypeHeader(header_idx);
+
+    // Introduce each type parameter into the current scope
+    for (self.can_ir.store.sliceTypeAnnos(header.args)) |param_idx| {
+        const param = self.can_ir.store.getTypeAnno(param_idx);
+        if (param == .ty_var) {
+            self.scopeIntroduceTypeVar(param.ty_var.name, param_idx);
+        }
+    }
+}
+
+fn extractTypeVarsFromASTAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, vars: *std.ArrayList(Ident.Idx)) void {
+    const ast_anno = self.parse_ir.store.getTypeAnno(anno_idx);
+
+    switch (ast_anno) {
+        .ty_var => |ty_var| {
+            if (self.parse_ir.tokens.resolveIdentifier(ty_var.tok)) |ident| {
+                // Check if we already have this type variable
+                for (vars.items) |existing| {
+                    if (existing.idx == ident.idx) return; // Already added
+                }
+                vars.append(ident) catch |err| exitOnOom(err);
+            }
+        },
+        .apply => |apply| {
+            for (self.parse_ir.store.typeAnnoSlice(apply.args)) |arg_idx| {
+                self.extractTypeVarsFromASTAnno(arg_idx, vars);
+            }
+        },
+        .@"fn" => |fn_anno| {
+            for (self.parse_ir.store.typeAnnoSlice(fn_anno.args)) |arg_idx| {
+                self.extractTypeVarsFromASTAnno(arg_idx, vars);
+            }
+            self.extractTypeVarsFromASTAnno(fn_anno.ret, vars);
+        },
+        .tuple => |tuple| {
+            for (self.parse_ir.store.typeAnnoSlice(tuple.annos)) |elem_idx| {
+                self.extractTypeVarsFromASTAnno(elem_idx, vars);
+            }
+        },
+        .parens => |parens| {
+            self.extractTypeVarsFromASTAnno(parens.anno, vars);
         },
         .ty, .underscore, .mod_ty, .record, .tag_union, .malformed => {
             // These don't contain type variables to extract
