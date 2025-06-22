@@ -549,11 +549,6 @@ pub fn canonicalize_expr(
 
             // Calculate requirements based on the value
             const requirements = blk: {
-                ///////////////////////////////////////////////////////////////////////////////////////
-                // TODO revise all this, or at least move it into a method on types.Num.Int.BitsNeeded,
-                // such that it just takes the input and returns a thing. also use constants, not magic numbers.
-                // oh and use counting zeros if possible? leading zeros I think?
-                ///////////////////////////////////////////////////////////////////////////////////////
                 const sign_needed = is_negated;
                 const bits_needed: types.Num.Int.BitsNeeded = if (u128_val <= 127) .@"7" else if (u128_val <= 255) .@"8" else if (u128_val <= 32767) .@"9_to_15" else if (u128_val <= 65535) .@"16" else if (u128_val <= 2147483647) .@"17_to_31" else if (u128_val <= 4294967295) .@"32" else if (u128_val <= 9223372036854775807) .@"33_to_63" else if (u128_val <= 18446744073709551615) .@"64" else if (u128_val <= 170141183460469231731687303715884105727) .@"65_to_127" else .@"128";
 
@@ -565,9 +560,6 @@ pub fn canonicalize_expr(
 
             // Create a polymorphic int type variable
             const int_type_var = self.can_ir.pushTypeVar(
-                //////////////////////////////////////////////////////////////
-                // TODO why is this enumFromInt(0)?
-                //////////////////////////////////////////////////////////////
                 Content{ .structure = .{ .num = .{ .int_poly = @enumFromInt(0) } } },
                 final_expr_idx,
                 region,

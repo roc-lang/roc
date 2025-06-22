@@ -132,10 +132,10 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
             break :blk Diagnostic.buildNotImplementedReport(allocator, feature_text);
         },
         .invalid_num_literal => |data| blk: {
-            _ = data;
             break :blk Diagnostic.buildInvalidNumLiteralReport(
                 allocator,
-                "number literal", // Generic message since we no longer store the literal
+                data.region,
+                source,
             );
         },
         .ident_already_in_scope => |data| blk: {

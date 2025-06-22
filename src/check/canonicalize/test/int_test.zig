@@ -421,3 +421,119 @@ test "canonicalize integer literals outside supported range" {
         try testing.expect(expr == .runtime_error);
     }
 }
+
+test "invalid number literal - too large for u128" {
+    const allocator = test_allocator;
+    const source = "999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999";
+
+    var resources = try parseAndCanonicalizeInt(allocator, source);
+    defer {
+        resources.can.deinit();
+        resources.cir.deinit();
+        resources.parse_ast.deinit(allocator);
+        resources.module_env.deinit();
+        allocator.destroy(resources.can);
+        allocator.destroy(resources.cir);
+        allocator.destroy(resources.parse_ast);
+        allocator.destroy(resources.module_env);
+    }
+
+    // Should have produced a runtime error
+    const expr = resources.cir.store.getExpr(resources.expr_idx);
+    try testing.expect(expr == .runtime_error);
+
+    // Check that we have an invalid_num_literal diagnostic
+    const diagnostics = resources.cir.getDiagnostics();
+    defer allocator.free(diagnostics);
+    try testing.expect(diagnostics.len > 0);
+
+    var found_invalid_num = false;
+    for (diagnostics) |diag| {
+        switch (diag) {
+            .invalid_num_literal => |data| {
+                found_invalid_num = true;
+
+                // Verify the region captures the entire number
+                const literal_text = source[data.region.start.offset..data.region.end.offset];
+                try testing.expectEqualStrings(source, literal_text);
+
+                // Test that buildInvalidNumLiteralReport extracts the literal correctly
+                var report = try CIR.Diagnostic.buildInvalidNumLiteralReport(
+                    allocator,
+                    data.region,
+                    source,
+                );
+                defer report.deinit();
+
+                // The report should contain the literal
+                var buf: [1024]u8 = undefined;
+                var stream = std.io.fixedBufferStream(&buf);
+                try report.render(stream.writer(), .plain_text);
+                const rendered = stream.getWritten();
+
+                try testing.expect(std.mem.indexOf(u8, rendered, "999999999") != null);
+            },
+            else => {},
+        }
+    }
+
+    try testing.expect(found_invalid_num);
+}
+
+test "invalid number literal - negative too large for i128" {
+    const allocator = test_allocator;
+    const source = "-999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999";
+
+    var resources = try parseAndCanonicalizeInt(allocator, source);
+    defer {
+        resources.can.deinit();
+        resources.cir.deinit();
+        resources.parse_ast.deinit(allocator);
+        resources.module_env.deinit();
+        allocator.destroy(resources.can);
+        allocator.destroy(resources.cir);
+        allocator.destroy(resources.parse_ast);
+        allocator.destroy(resources.module_env);
+    }
+
+    // Should have produced a runtime error
+    const expr = resources.cir.store.getExpr(resources.expr_idx);
+    try testing.expect(expr == .runtime_error);
+
+    // Check that we have an invalid_num_literal diagnostic
+    const diagnostics = resources.cir.getDiagnostics();
+    defer allocator.free(diagnostics);
+    try testing.expect(diagnostics.len > 0);
+
+    var found_invalid_num = false;
+    for (diagnostics) |diag| {
+        switch (diag) {
+            .invalid_num_literal => |data| {
+                found_invalid_num = true;
+
+                // Verify the region captures the entire number including the minus
+                const literal_text = source[data.region.start.offset..data.region.end.offset];
+                try testing.expectEqualStrings(source, literal_text);
+
+                // Test that buildInvalidNumLiteralReport extracts the literal correctly
+                var report = try CIR.Diagnostic.buildInvalidNumLiteralReport(
+                    allocator,
+                    data.region,
+                    source,
+                );
+                defer report.deinit();
+
+                // The report should contain the literal with minus sign
+                var buf: [1024]u8 = undefined;
+                var stream = std.io.fixedBufferStream(&buf);
+                try report.render(stream.writer(), .plain_text);
+                const rendered = stream.getWritten();
+
+                try testing.expect(std.mem.indexOf(u8, rendered, "-999999999") != null);
+            },
+            else => {},
+        }
+    }
+
+    try testing.expect(found_invalid_num);
+}
