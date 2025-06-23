@@ -589,6 +589,9 @@ pub fn toSExprStr(ast: *@This(), env: *base.ModuleEnv, writer: std.io.AnyWriter)
     node.toStringPretty(writer);
 }
 
+/// The kind of the type declaration represented, either:
+/// 1. An alias of the form `Foo = (Bar, Baz)`
+/// 2. A nominal type of the form `Foo := [Bar, Baz]`
 pub const TypeDeclKind = enum {
     alias,
     nominal,
