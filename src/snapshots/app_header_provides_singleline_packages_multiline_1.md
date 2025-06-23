@@ -11,9 +11,7 @@ app [main!] {
 }
 ~~~
 # PROBLEMS
-~~~txt
 NIL
-~~~
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),Newline(1:1-1:1),

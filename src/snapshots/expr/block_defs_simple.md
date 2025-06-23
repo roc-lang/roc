@@ -12,9 +12,7 @@ type=expr
 }
 ~~~
 # PROBLEMS
-~~~txt
 NIL
-~~~
 # TOKENS
 ~~~zig
 OpenCurly(1:1-1:2),Newline(1:1-1:1),

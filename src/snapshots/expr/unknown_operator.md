@@ -8,12 +8,11 @@ type=expr
 1 ++ 2
 ~~~
 # PROBLEMS
-~~~txt
 PARSER: expr_unexpected_token
-UNKNOWN OPERATOR
+**UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
 Check the spelling and make sure you're using a valid Roc operator.
-~~~
+
 # TOKENS
 ~~~zig
 Int(1:1-1:2),OpPlus(1:3-1:4),OpPlus(1:4-1:5),Int(1:6-1:7),EndOfFile(1:7-1:7),

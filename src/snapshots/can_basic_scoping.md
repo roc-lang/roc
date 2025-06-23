@@ -23,17 +23,22 @@ outerFunc = |_| {
 }
 ~~~
 # PROBLEMS
-~~~txt
-DUPLICATE DEFINITION
+**DUPLICATE DEFINITION**
 The name `x` is being redeclared in this scope.
 
 The redeclaration is here:
-can_basic_scoping.md:9-5:9:     x = 20  # Should shadow top-level x
+**can_basic_scoping.md:9-5:9:**
+```roc
+    x = 20  # Should shadow top-level x
+```
 
 But `x` was already defined here:
-can_basic_scoping.md:4-1:4: x = 5
+**can_basic_scoping.md:4-1:4:**
+```roc
+x = 5
+```
 
-~~~
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),

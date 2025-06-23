@@ -8,10 +8,9 @@ type=expr
 some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
 ~~~
 # PROBLEMS
-~~~txt
-NOT IMPLEMENTED
+**NOT IMPLEMENTED**
 This feature is not yet implemented: canonicalize record field_access expression
-~~~
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:8),NoSpaceOpenRound(1:8-1:9),LowerIdent(1:9-1:13),CloseRound(1:13-1:14),NoSpaceOpQuestion(1:14-1:15),NoSpaceDotLowerIdent(1:15-1:38),NoSpaceOpenRound(1:38-1:39),CloseRound(1:39-1:40),NoSpaceOpQuestion(1:40-1:41),NoSpaceDotLowerIdent(1:41-1:69),NoSpaceOpenRound(1:69-1:70),CloseRound(1:70-1:71),NoSpaceOpQuestion(1:71-1:72),NoSpaceDotLowerIdent(1:72-1:85),NoSpaceOpQuestion(1:85-1:86),EndOfFile(1:86-1:86),

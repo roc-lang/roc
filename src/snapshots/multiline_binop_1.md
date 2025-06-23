@@ -15,9 +15,7 @@ type=expr
 		3
 ~~~
 # PROBLEMS
-~~~txt
 NIL
-~~~
 # TOKENS
 ~~~zig
 Int(1:1-1:2),Newline(1:4-1:8),

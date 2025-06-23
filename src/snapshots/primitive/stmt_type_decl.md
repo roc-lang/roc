@@ -10,10 +10,9 @@ module [Foo]
 Foo(a,b) : (a,b,Str,U64)
 ~~~
 # PROBLEMS
-~~~txt
-NOT IMPLEMENTED
+**NOT IMPLEMENTED**
 This feature is not yet implemented: top-level type_decl
-~~~
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:12),CloseSquare(1:12-1:13),Newline(1:1-1:1),

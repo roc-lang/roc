@@ -28,9 +28,7 @@ platform # Comment after platform keyword
 		]
 ~~~
 # PROBLEMS
-~~~txt
 NIL
-~~~
 # TOKENS
 ~~~zig
 KwPlatform(1:1-1:9),Newline(1:11-1:42),

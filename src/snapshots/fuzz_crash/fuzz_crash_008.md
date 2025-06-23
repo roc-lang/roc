@@ -8,15 +8,14 @@ type=file
 ||1
 ~~~
 # PROBLEMS
-~~~txt
 TOKENIZE: (1:2-1:2) AsciiControl:
 ||1
  ^PARSER: missing_header
 PARSER: expected_expr_bar
-INVALID STATEMENT
-The statement expr is not allowed at the top level.
+**INVALID STATEMENT**
+The statement **expr** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
-~~~
+
 # TOKENS
 ~~~zig
 OpBar(1:1-1:2),OpBar(1:3-1:4),Int(1:4-1:5),EndOfFile(1:5-1:5),
