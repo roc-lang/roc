@@ -12,10 +12,20 @@ type=file
 ASCII control characters are not allowed in Roc source code.
 
 **MISSING HEADER**
-Roc files must start with a module header like 'module [main]' or 'app [main] { pf: platform "..." }'.
+Roc files must start with a module header.
+
+For example:
+        module [main]
+or for an app:
+        app [main!] { pf: platform "../basic-cli/platform.roc" }
+Here is the problematic code:
+1 | ||1
+    ^
+
 
 **PARSE ERROR**
-A parsing error occurred.
+A parsing error occurred: ~~expected_expr_bar~~
+This is an unexpected parsing error. Please check your syntax.
 
 **INVALID STATEMENT**
 The statement **expr** is not allowed at the top level.

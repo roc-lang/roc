@@ -11,7 +11,12 @@ foo = asd.0
 ~~~
 # PROBLEMS
 **PARSE ERROR**
-A parsing error occurred.
+A parsing error occurred: ~~expr_no_space_dot_int~~
+This is an unexpected parsing error. Please check your syntax.
+Here is the problematic code:
+3 | foo = asd.0
+             ^^
+
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!

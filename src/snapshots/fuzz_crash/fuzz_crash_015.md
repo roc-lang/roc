@@ -15,13 +15,32 @@ type=file
 Numbers cannot have leading zeros.
 
 **MISSING HEADER**
-Roc files must start with a module header like 'module [main]' or 'app [main] { pf: platform "..." }'.
+Roc files must start with a module header.
+
+For example:
+        module [main]
+or for an app:
+        app [main!] { pf: platform "../basic-cli/platform.roc" }
+Here is the problematic code:
+1 | 0o0.0
+    ^^^
+
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-This token is not expected in an expression.
+The token **<unknown>** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+Here is the problematic code:
+1 | 0o0.0
+       ^^
+
 
 **PARSE ERROR**
-A parsing error occurred.
+A parsing error occurred: ~~expr_no_space_dot_int~~
+This is an unexpected parsing error. Please check your syntax.
+Here is the problematic code:
+3 | 0u8.0
+       ^^
+
 
 **INVALID STATEMENT**
 The statement **expr** is not allowed at the top level.

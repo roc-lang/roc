@@ -10,7 +10,16 @@ type=file
 ~~~
 # PROBLEMS
 **MISSING HEADER**
-Roc files must start with a module header like 'module [main]' or 'app [main] { pf: platform "..." }'.
+Roc files must start with a module header.
+
+For example:
+        module [main]
+or for an app:
+        app [main!] { pf: platform "../basic-cli/platform.roc" }
+Here is the problematic code:
+1 | 0 b:S
+    ^
+
 
 **NOT IMPLEMENTED**
 This feature is not yet implemented: top-level type_anno

@@ -378,9 +378,9 @@ fn renderElementToMarkdown(element: DocumentElement, writer: anytype, config: Re
                     try writer.writeAll("**");
                 },
                 .warning_highlight => {
-                    try writer.writeAll("_");
+                    try writer.writeAll("**⚠ ");
                     try writer.writeAll(annotated.content);
-                    try writer.writeAll("_");
+                    try writer.writeAll("**");
                 },
                 .suggestion => {
                     try writer.writeAll("**");
@@ -388,7 +388,7 @@ fn renderElementToMarkdown(element: DocumentElement, writer: anytype, config: Re
                     try writer.writeAll("**");
                 },
                 .code_block => {
-                    try writer.writeAll("```\n");
+                    try writer.writeAll("```roc\n");
                     try writer.writeAll(annotated.content);
                     try writer.writeAll("\n```");
                 },
@@ -423,9 +423,9 @@ fn renderElementToMarkdown(element: DocumentElement, writer: anytype, config: Re
                     try writer.writeAll("__");
                 },
                 .dimmed => {
-                    try writer.writeAll("~~");
+                    try writer.writeAll("`");
                     try writer.writeAll(annotated.content);
-                    try writer.writeAll("~~");
+                    try writer.writeAll("`");
                 },
                 .symbol_qualified, .symbol_unqualified => {
                     try writer.writeAll("`");

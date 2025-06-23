@@ -10,13 +10,32 @@ foo = "hello ${namF
 ~~~
 # PROBLEMS
 **MISSING HEADER**
-Roc files must start with a module header like 'module [main]' or 'app [main] { pf: platform "..." }'.
+Roc files must start with a module header.
+
+For example:
+        module [main]
+or for an app:
+        app [main!] { pf: platform "../basic-cli/platform.roc" }
+Here is the problematic code:
+1 | me = "luc"
+    ^^
+
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-This token is not expected in an expression.
+The token **<unknown>** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+Here is the problematic code:
+1 | me = "luc"
+       ^
+
 
 **PARSE ERROR**
-A parsing error occurred.
+A parsing error occurred: ~~string_expected_close_interpolation~~
+This is an unexpected parsing error. Please check your syntax.
+Here is the problematic code:
+2 | foo = "hello ${namF
+          ^^^^^^^^^^^^^
+
 
 **INVALID STATEMENT**
 The statement **expr** is not allowed at the top level.

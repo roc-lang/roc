@@ -12,7 +12,14 @@ var topLevelVar_ = 0
 ~~~
 # PROBLEMS
 **PARSE ERROR**
-A parsing error occurred.
+A parsing error occurred: `var_only_allowed_in_a_body`
+This is an unexpected parsing error. Please check your syntax.
+Here is the problematic code:
+```
+4 | var topLevelVar_ = 0
+    ^^^
+```
+
 
 # TOKENS
 ~~~zig

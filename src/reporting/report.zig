@@ -78,7 +78,11 @@ pub const Report = struct {
         };
 
         if (line_number) |line_num| {
-            try self.document.addFormattedText("{d} | ", .{line_num});
+            // Manually format line number to avoid buffer corruption
+            var line_num_buf: [32]u8 = undefined;
+            const line_num_str = std.fmt.bufPrint(&line_num_buf, "{d}", .{line_num}) catch unreachable;
+            try self.document.addText(line_num_str);
+            try self.document.addText(" | ");
         } else {
             try self.document.addText("   | ");
         }
@@ -96,9 +100,17 @@ pub const Report = struct {
             },
         };
 
-        // Show line number
+        // Show line number with code block formatting
+        try self.document.addText("```");
+        try self.document.addLineBreak();
+
         const line_num = region.start_line_idx + 1; // Convert to 1-based
-        try self.document.addFormattedText("{d} | ", .{line_num});
+        // Format line number and make owned copy to avoid buffer corruption
+        var line_num_buf: [32]u8 = undefined;
+        const line_num_str = std.fmt.bufPrint(&line_num_buf, "{d}", .{line_num}) catch unreachable;
+        const owned_line_num = try self.addOwnedString(line_num_str);
+        try self.document.addText(owned_line_num);
+        try self.document.addText(" | ");
 
         // Add the line content with highlighting
         const line_without_newline = std.mem.trimRight(u8, region.line_text, "\n\r");
@@ -150,6 +162,10 @@ pub const Report = struct {
             try self.document.endAnnotation();
             try self.document.addLineBreak();
         }
+
+        // Close code block
+        try self.document.addText("```");
+        try self.document.addLineBreak();
     }
 
     /// Add a suggestion with proper formatting and UTF-8 validation.

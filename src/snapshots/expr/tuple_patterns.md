@@ -27,19 +27,44 @@ type=expr
 ~~~
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-This token is not expected in an expression.
+The token **<unknown>** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+Here is the problematic code:
+4 |     (x, y) = (1, 2)
+               ^
+
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-This token is not expected in an expression.
+The token **<unknown>** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+Here is the problematic code:
+7 |     ((a, b), (c, d)) = ((10, 20), (30, 40))
+                         ^
+
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-This token is not expected in an expression.
+The token **<unknown>** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+Here is the problematic code:
+10 |     (first, second, third) = (100, 42, 200)
+                                ^
+
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-This token is not expected in an expression.
+The token **<unknown>** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+Here is the problematic code:
+13 |     (name, string, boolean) = ("Alice", "fixed", True)
+                                 ^
+
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-This token is not expected in an expression.
+The token **<unknown>** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+Here is the problematic code:
+16 |     (list, hello) = ([1, 2, 3], "hello")
+                       ^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `x` in this scope.

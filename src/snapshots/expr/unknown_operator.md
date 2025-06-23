@@ -9,7 +9,12 @@ type=expr
 ~~~
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-This token is not expected in an expression.
+The token **<unknown>** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+Here is the problematic code:
+1 | 1 ++ 2
+       ^
+
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!

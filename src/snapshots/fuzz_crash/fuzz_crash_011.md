@@ -12,10 +12,20 @@ module P]F
 There are too many closing braces here.
 
 **PARSE ERROR**
-A parsing error occurred.
+A parsing error occurred: ~~header_expected_open_square~~
+This is an unexpected parsing error. Please check your syntax.
+Here is the problematic code:
+1 | module P]F
+           ^
+
 
 **PARSE ERROR**
-A parsing error occurred.
+A parsing error occurred: ~~expected_colon_after_type_annotation~~
+This is an unexpected parsing error. Please check your syntax.
+Here is the problematic code:
+1 | module P]F
+             ^
+
 
 # TOKENS
 ~~~zig

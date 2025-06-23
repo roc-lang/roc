@@ -121,9 +121,26 @@ pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, a
     return report;
 }
 
+/// Convert TokenizedRegion to base.Region for error reporting
+fn tokenizedRegionToRegion(self: *AST, tokenized_region: TokenizedRegion) base.Region {
+    const start_region = self.tokens.resolve(@intCast(tokenized_region.start));
+    const end_region = self.tokens.resolve(@intCast(tokenized_region.end));
+    return .{
+        .start = start_region.start,
+        .end = end_region.end,
+    };
+}
+
+/// Get the text content of a token for error reporting
+fn getTokenText(self: *AST, token_idx: Token.Idx) []const u8 {
+    const token_region = self.tokens.resolve(@intCast(token_idx));
+    return self.source[token_region.start.offset..token_region.end.offset];
+}
+
 /// Convert a parse diagnostic to a Report for rendering
 pub fn parseDiagnosticToReport(self: *AST, diagnostic: Diagnostic, allocator: std.mem.Allocator) !reporting.Report {
-    _ = self; // TODO: Use self for source information
+    const region = self.tokenizedRegionToRegion(diagnostic.region);
+
     const title = switch (diagnostic.tag) {
         .bad_indent => "BAD INDENTATION",
         .multiple_platforms => "MULTIPLE PLATFORMS",
@@ -146,26 +163,212 @@ pub fn parseDiagnosticToReport(self: *AST, diagnostic: Diagnostic, allocator: st
         .string_unexpected_token => "UNEXPECTED TOKEN IN STRING",
         .expr_unexpected_token => "UNEXPECTED TOKEN IN EXPRESSION",
         .import_must_be_top_level => "IMPORT MUST BE TOP LEVEL",
+        .expected_expr_close_square_or_comma => "LIST NOT CLOSED",
         else => "PARSE ERROR",
     };
 
-    const body = switch (diagnostic.tag) {
-        .missing_header => "Roc files must start with a module header like 'module [main]' or 'app [main] { pf: platform \"...\" }'.",
-        .multiple_platforms => "Only one platform declaration is allowed per file.",
-        .no_platform => "App files must specify a platform.",
-        .bad_indent => "The indentation here is inconsistent with the surrounding code.",
-        .list_not_closed => "This list is missing a closing bracket ']'.",
-        .missing_arrow => "Expected an arrow '->' here.",
-        .header_unexpected_token => "This token is not expected in a module header.",
-        .pattern_unexpected_token => "This token is not expected in a pattern.",
-        .statement_unexpected_token => "This token is not expected in a statement.",
-        .expr_unexpected_token => "This token is not expected in an expression.",
-        .import_must_be_top_level => "Import statements must appear at the top level of a module.",
-        else => "A parsing error occurred.",
-    };
-
     var report = reporting.Report.init(allocator, title, .runtime_error);
-    try report.document.addText(body);
+
+    // Add detailed error message based on the diagnostic type
+    switch (diagnostic.tag) {
+        .missing_header => {
+            try report.document.addReflowingText("Roc files must start with a module header.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addText("For example:");
+            try report.document.addLineBreak();
+            try report.document.addIndent(1);
+            try report.document.addCodeBlock("module [main]");
+            try report.document.addLineBreak();
+            try report.document.addText("or for an app:");
+            try report.document.addLineBreak();
+            try report.document.addIndent(1);
+            try report.document.addCodeBlock("app [main!] { pf: platform \"../basic-cli/platform.roc\" }");
+        },
+        .multiple_platforms => {
+            try report.document.addReflowingText("Only one platform declaration is allowed per file.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Remove the duplicate platform declaration.");
+        },
+        .no_platform => {
+            try report.document.addReflowingText("App files must specify a platform.");
+            try report.document.addLineBreak();
+            try report.document.addText("Add a platform specification like:");
+            try report.document.addLineBreak();
+            try report.document.addIndent(1);
+            try report.document.addCodeBlock("{ pf: platform \"../basic-cli/platform.roc\" }");
+        },
+        .bad_indent => {
+            try report.document.addReflowingText("The indentation here is inconsistent with the surrounding code.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Make sure to use consistent spacing for indentation.");
+        },
+        .list_not_closed => {
+            try report.document.addReflowingText("This list is missing a closing bracket.");
+            try report.document.addLineBreak();
+            try report.document.addText("Add a ");
+            try report.document.addAnnotated("]", .emphasized);
+            try report.document.addText(" to close the list.");
+        },
+        .missing_arrow => {
+            try report.document.addText("Expected an arrow ");
+            try report.document.addAnnotated("->", .emphasized);
+            try report.document.addText(" here.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Function type annotations require arrows between parameter and return types.");
+        },
+        .expected_exposes, .expected_exposes_close_square, .expected_exposes_open_square => {
+            try report.document.addReflowingText("Module headers must have an ");
+            try report.document.addKeyword("exposing");
+            try report.document.addReflowingText(" section that lists what the module exposes.");
+            try report.document.addLineBreak();
+            try report.document.addText("For example: ");
+            try report.document.addCodeBlock("module [main, add, subtract]");
+        },
+        .expected_imports, .expected_imports_close_curly, .expected_imports_open_curly => {
+            try report.document.addReflowingText("Import statements must specify what is being imported.");
+            try report.document.addLineBreak();
+            try report.document.addText("For example: ");
+            try report.document.addCodeBlock("import pf.Stdout exposing [line!]");
+        },
+        .header_unexpected_token => {
+            // Try to get the actual token text
+            const token_text = if (diagnostic.region.start != diagnostic.region.end)
+                self.source[region.start.offset..region.end.offset]
+            else
+                "<unknown>";
+            const owned_token = try report.addOwnedString(token_text);
+            try report.document.addText("The token ");
+            try report.document.addAnnotated(owned_token, .error_highlight);
+            try report.document.addText(" is not expected in a module header.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Module headers should only contain the module name and exposing list.");
+        },
+        .pattern_unexpected_token => {
+            const token_text = if (diagnostic.region.start != diagnostic.region.end)
+                self.source[region.start.offset..region.end.offset]
+            else
+                "<unknown>";
+            const owned_token = try report.addOwnedString(token_text);
+            try report.document.addText("The token ");
+            try report.document.addAnnotated(owned_token, .error_highlight);
+            try report.document.addText(" is not expected in a pattern.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Patterns can contain identifiers, literals, lists, records, or tags.");
+        },
+        .pattern_unexpected_eof => {
+            try report.document.addReflowingText("This pattern is incomplete - the file ended unexpectedly.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Complete the pattern or remove the incomplete pattern.");
+        },
+        .ty_anno_unexpected_token => {
+            const token_text = if (diagnostic.region.start != diagnostic.region.end)
+                self.source[region.start.offset..region.end.offset]
+            else
+                "<unknown>";
+            const owned_token = try report.addOwnedString(token_text);
+            try report.document.addText("The token ");
+            try report.document.addAnnotated(owned_token, .error_highlight);
+            try report.document.addText(" is not expected in a type annotation.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Type annotations should contain types like ");
+            try report.document.addType("Str");
+            try report.document.addText(", ");
+            try report.document.addType("Num a");
+            try report.document.addText(", or ");
+            try report.document.addType("List U64");
+            try report.document.addText(".");
+        },
+        .statement_unexpected_eof => {
+            try report.document.addReflowingText("This statement is incomplete - the file ended unexpectedly.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Complete the statement or remove the incomplete statement.");
+        },
+        .statement_unexpected_token => {
+            const token_text = if (diagnostic.region.start != diagnostic.region.end)
+                self.source[region.start.offset..region.end.offset]
+            else
+                "<unknown>";
+            const owned_token = try report.addOwnedString(token_text);
+            try report.document.addText("The token ");
+            try report.document.addAnnotated(owned_token, .error_highlight);
+            try report.document.addText(" is not expected in a statement.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Statements can be definitions, assignments, or expressions.");
+        },
+        .string_unexpected_token => {
+            const token_text = if (diagnostic.region.start != diagnostic.region.end)
+                self.source[region.start.offset..region.end.offset]
+            else
+                "<unknown>";
+            const owned_token = try report.addOwnedString(token_text);
+            try report.document.addText("The token ");
+            try report.document.addAnnotated(owned_token, .error_highlight);
+            try report.document.addText(" is not expected in a string literal.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("String literals should be enclosed in double quotes.");
+        },
+        .expr_unexpected_token => {
+            const token_text = if (diagnostic.region.start != diagnostic.region.end)
+                self.source[region.start.offset..region.end.offset]
+            else
+                "<unknown>";
+            const owned_token = try report.addOwnedString(token_text);
+            try report.document.addText("The token ");
+            try report.document.addAnnotated(owned_token, .error_highlight);
+            try report.document.addText(" is not expected in an expression.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Expressions can be identifiers, literals, function calls, or operators.");
+        },
+        .import_must_be_top_level => {
+            try report.document.addReflowingText("Import statements must appear at the top level of a module.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Move this import to the top of the file, after the module header but before any definitions.");
+        },
+        .expected_expr_close_square_or_comma => {
+            try report.document.addReflowingText("This list is missing a closing bracket or has a syntax error.");
+            try report.document.addLineBreak();
+            try report.document.addText("Lists must be closed with ");
+            try report.document.addAnnotated("]", .emphasized);
+            try report.document.addText(" and list items must be separated by commas.");
+            try report.document.addLineBreak();
+            try report.document.addText("For example: ");
+            try report.document.addCodeBlock("[1, 2, 3]");
+        },
+        else => {
+            const tag_name = @tagName(diagnostic.tag);
+            const owned_tag = try report.addOwnedString(tag_name);
+            try report.document.addText("A parsing error occurred: ");
+            try report.document.addAnnotated(owned_tag, .dimmed);
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("This is an unexpected parsing error. Please check your syntax.");
+        },
+    }
+
+    // Add source context if we have a valid region
+    if (region.start.offset < region.end.offset and region.end.offset <= self.source.len) {
+        // Compute line_starts from source for proper region info calculation
+        var line_starts = std.ArrayList(u32).init(allocator);
+        defer line_starts.deinit();
+
+        try line_starts.append(0); // First line starts at 0
+        for (self.source, 0..) |char, i| {
+            if (char == '\n') {
+                try line_starts.append(@intCast(i + 1));
+            }
+        }
+
+        // Use proper region info calculation
+        const region_info = self.calcRegionInfo(diagnostic.region, line_starts.items);
+
+        try report.document.addLineBreak();
+        try report.document.addText("Here is the problematic code:");
+        try report.document.addLineBreak();
+
+        // Use the proper addSourceContext method
+        try report.addSourceContext(region_info);
+    }
+
     return report;
 }
 

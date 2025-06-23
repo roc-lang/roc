@@ -9,7 +9,14 @@ type=expr
 ~~~
 # PROBLEMS
 **PARSE ERROR**
-A parsing error occurred.
+A parsing error occurred: `expr_no_space_dot_int`
+This is an unexpected parsing error. Please check your syntax.
+Here is the problematic code:
+```
+1 | 3.14.15
+        ^^^
+```
+
 
 # TOKENS
 ~~~zig

@@ -9,10 +9,20 @@ type=expr
 ~~~
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-This token is not expected in an expression.
+The token **<unknown>** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+Here is the problematic code:
+1 | { person & age: 31 }
+             ^
+
 
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
-A parsing error occurred.
+The token **<unknown>** is not expected in a type annotation.
+Type annotations should contain types like _Str_, _Num a_, or _List U64_.
+Here is the problematic code:
+1 | { person & age: 31 }
+                    ^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `person` in this scope.

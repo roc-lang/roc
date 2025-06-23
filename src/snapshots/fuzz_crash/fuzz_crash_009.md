@@ -20,7 +20,16 @@ This brace does not match the corresponding opening brace.
 This string is missing a closing quote.
 
 **MISSING HEADER**
-Roc files must start with a module header like 'module [main]' or 'app [main] { pf: platform "..." }'.
+Roc files must start with a module header.
+
+For example:
+        module [main]
+or for an app:
+        app [main!] { pf: platform "../basic-cli/platform.roc" }
+Here is the problematic code:
+1 | f{o,
+    ^
+
 
 **INVALID STATEMENT**
 The statement **expr** is not allowed at the top level.
