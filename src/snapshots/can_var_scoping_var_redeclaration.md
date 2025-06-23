@@ -41,10 +41,10 @@ Variable ``x_`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_x_` to suppress this warning.
 The unused variable is declared here:
-**can_var_scoping_var_redeclaration.md:7:3:8:5:**
+**can_var_scoping_var_redeclaration.md:6:2:7:4:**
 ```roc
+	var x_ = 10 # Redeclare var - should warn but proceed
 	x_ = 15 # Reassign - should work without warning
-	x_
 ```
 
 

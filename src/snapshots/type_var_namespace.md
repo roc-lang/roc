@@ -40,9 +40,9 @@ The type variable ``elem`` is not declared in this scope.
 Type variables must be introduced in a type annotation before they can be used.
 
 This type variable is referenced here:
-**type_var_namespace.md:11:15:11:19:**
+**type_var_namespace.md:10:14:10:18:**
 ```roc
-    result = List.first(list) |> Result.withDefault(elem)
+    result : elem
 ```
 
 

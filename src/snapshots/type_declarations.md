@@ -26,9 +26,9 @@ MyType2 : Module.Thingy
 The type ``Bar`` is not declared in this scope.
 
 This type is referenced here:
-**type_declarations.md:6:9:6:12:**
+**type_declarations.md:5:8:5:11:**
 ```roc
-
+Foo : (Bar, Baz)
 ```
 
 
@@ -36,9 +36,9 @@ This type is referenced here:
 The type ``Baz`` is not declared in this scope.
 
 This type is referenced here:
-**type_declarations.md:6:14:6:17:**
+**type_declarations.md:5:13:5:16:**
 ```roc
-
+Foo : (Bar, Baz)
 ```
 
 
@@ -46,9 +46,9 @@ This type is referenced here:
 The type ``Something`` is not declared in this scope.
 
 This type is referenced here:
-**type_declarations.md:8:33:8:42:**
+**type_declarations.md:7:32:7:41:**
 ```roc
-
+Some(a) : { foo : Ok(a), bar : Something }
 ```
 
 
@@ -56,9 +56,9 @@ This type is referenced here:
 The type ``None`` is not declared in this scope.
 
 This type is referenced here:
-**type_declarations.md:10:23:10:27:**
+**type_declarations.md:9:22:9:26:**
 ```roc
-
+Maybe(a) : [Some(a), None]
 ```
 
 

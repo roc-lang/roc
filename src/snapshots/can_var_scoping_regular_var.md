@@ -44,9 +44,9 @@ Variable ``items`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_items` to suppress this warning.
 The unused variable is declared here:
-**can_var_scoping_regular_var.md:5:18:5:23:**
+**can_var_scoping_regular_var.md:4:17:4:22:**
 ```roc
-	var count_ = 0
+processItems = |items| {
 ```
 
 

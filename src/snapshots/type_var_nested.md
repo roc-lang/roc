@@ -43,9 +43,9 @@ Variable ``transform`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_transform` to suppress this warning.
 The unused variable is declared here:
-**type_var_nested.md:6:23:6:32:**
+**type_var_nested.md:5:22:5:31:**
 ```roc
-    when result is
+mapResult = |result, transform| {
 ```
 
 

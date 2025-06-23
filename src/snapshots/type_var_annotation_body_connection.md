@@ -58,9 +58,9 @@ Variable ``x`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
 The unused variable is declared here:
-**type_var_annotation_body_connection.md:5:14:5:15:**
+**type_var_annotation_body_connection.md:4:13:4:14:**
 ```roc
-    thing : a  # refers to the type var introduced in function type annotation
+identity = |x| {
 ```
 
 

@@ -59,9 +59,9 @@ Variable ``x`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
 The unused variable is declared here:
-**type_var_shadowing_inner.md:5:11:5:12:**
+**type_var_shadowing_inner.md:4:10:4:11:**
 ```roc
-    inner : a -> a  # Shadows outer 'a'
+outer = |x| {
 ```
 
 

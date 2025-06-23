@@ -67,17 +67,17 @@ Here is the problematic code:
 The type ``Result`` is being redeclared.
 
 The redeclaration is here:
-**type_shadowing_across_scopes.md:4:2:6:13:**
+**type_shadowing_across_scopes.md:3:1:5:12:**
 ```roc
+Result(a, b) : [Ok(a), Err(b)]
 
 processData : Str -> Str
-processData = |data|
 ```
 
 But ``Result`` was already declared here:
-**type_shadowing_across_scopes.md:2:2:2:2:**
+**type_shadowing_across_scopes.md:1:1:1:1:**
 ```roc
-
+module [Result, processData]
 ```
 
 
@@ -89,9 +89,9 @@ Variable ``data`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_data` to suppress this warning.
 The unused variable is declared here:
-**type_shadowing_across_scopes.md:7:17:7:21:**
+**type_shadowing_across_scopes.md:6:16:6:20:**
 ```roc
-    "processed"
+processData = |data|
 ```
 
 

@@ -32,9 +32,9 @@ Variable ``name`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_name` to suppress this warning.
 The unused variable is declared here:
-**type_multiple_aliases.md:10:20:10:24:**
+**type_multiple_aliases.md:9:19:9:23:**
 ```roc
-
+createUser = |id, name, age| { id, name, age }
 ```
 
 
@@ -43,9 +43,9 @@ Variable ``age`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_age` to suppress this warning.
 The unused variable is declared here:
-**type_multiple_aliases.md:10:26:10:29:**
+**type_multiple_aliases.md:9:25:9:28:**
 ```roc
-
+createUser = |id, name, age| { id, name, age }
 ```
 
 
@@ -54,9 +54,9 @@ Variable ``id`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_id` to suppress this warning.
 The unused variable is declared here:
-**type_multiple_aliases.md:10:16:10:18:**
+**type_multiple_aliases.md:9:15:9:17:**
 ```roc
-
+createUser = |id, name, age| { id, name, age }
 ```
 
 

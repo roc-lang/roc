@@ -19,9 +19,9 @@ tag_tuple : Value((a, b, c))
 The type ``String`` is not declared in this scope.
 
 This type is referenced here:
-**type_annotations.md:8:15:8:21:**
+**type_annotations.md:7:14:7:20:**
 ```roc
-tag_tuple : Value((a, b, c))
+main! : List(String) -> Result({}, _)
 ```
 
 
