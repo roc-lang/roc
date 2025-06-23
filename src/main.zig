@@ -161,7 +161,7 @@ fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
         for (result.reports) |*report| {
 
             // Render the diagnostic report to stderr
-            reporting.renderReportToTerminal(report, stderr_writer, ColorPalette.ANSI) catch |render_err| {
+            reporting.renderReportToTerminal(report, stderr_writer, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch |render_err| {
                 stderr.print("Error rendering diagnostic report: {}\n", .{render_err}) catch {};
                 // Fallback to just printing the title
                 stderr.print("  {s}\n", .{report.title}) catch {};
