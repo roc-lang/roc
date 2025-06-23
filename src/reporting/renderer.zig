@@ -101,7 +101,7 @@ pub fn renderReportToMarkdown(report: *const Report, writer: anytype, config: Re
     try writer.writeAll(report.title);
     try writer.writeAll("**\n");
     try renderDocumentToMarkdown(&report.document, writer, config);
-    try writer.writeAll("\n");
+    try writer.writeAll("\n\n");
 }
 
 /// Render a report to HTML.

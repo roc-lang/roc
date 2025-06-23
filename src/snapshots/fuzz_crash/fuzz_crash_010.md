@@ -22,6 +22,7 @@ TOKENIZE: (2:3-2:3) AsciiControl:
 **INVALID STATEMENT**
 The statement **expr** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
 # TOKENS
 ~~~zig
 UpperIdent(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:3-1:4),Comma(1:4-1:5),Newline(1:1-1:1),

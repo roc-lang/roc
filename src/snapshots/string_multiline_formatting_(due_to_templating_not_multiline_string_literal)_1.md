@@ -12,12 +12,15 @@ b)} lines of text due to the template parts"
 **UNDEFINED VARIABLE**
 Nothing is named `some_func` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
 **UNDEFINED VARIABLE**
 Nothing is named `a` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
 **UNDEFINED VARIABLE**
 Nothing is named `b` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 StringStart(1:1-1:2),StringPart(1:2-1:24),OpenStringInterpolation(1:24-1:26),LowerIdent(1:26-1:35),NoSpaceOpenRound(1:35-1:36),LowerIdent(1:36-1:37),Comma(1:37-1:38),Newline(1:40-1:57),

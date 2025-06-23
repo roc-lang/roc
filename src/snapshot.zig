@@ -560,7 +560,7 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
                 &module_env.idents,
             );
             defer report.deinit();
-            report.render(writer.any(), .plain_text) catch |err| {
+            report.render(writer.any(), .markdown) catch |err| {
                 try writer.print("Error rendering report: {}\n", .{err});
                 continue;
             };

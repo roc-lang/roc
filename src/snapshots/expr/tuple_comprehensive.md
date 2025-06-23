@@ -28,6 +28,7 @@ type=expr
 # PROBLEMS
 **NOT IMPLEMENTED**
 This feature is not yet implemented: canonicalize record expression
+
 # TOKENS
 ~~~zig
 OpenCurly(1:1-1:2),Newline(1:1-1:1),

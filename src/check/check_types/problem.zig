@@ -66,7 +66,7 @@ pub const Problem = union(enum) {
         writer: *snapshot.SnapshotWriter,
         vars: VarProblem2,
     ) !Report {
-        var report = Report.init(allocator, "TYPE MISMATCH", .runtime_error, reporting.ReportingConfig.initPlainText());
+        var report = Report.init(allocator, "TYPE MISMATCH", .runtime_error);
 
         try writer.write(vars.expected);
         try report.document.addText("Expected: ");
@@ -82,7 +82,7 @@ pub const Problem = union(enum) {
 
     /// Build a report for "invalid number literal" diagnostic
     pub fn buildUnimplementedReport(allocator: Allocator) !Report {
-        const report = Report.init(allocator, "UNIMPLEMENTED", .runtime_error, reporting.ReportingConfig.initPlainText());
+        const report = Report.init(allocator, "UNIMPLEMENTED", .runtime_error);
         return report;
     }
 };

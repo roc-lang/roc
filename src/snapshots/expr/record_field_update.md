@@ -13,8 +13,10 @@ PARSER: ty_anno_unexpected_token
 **UNDEFINED VARIABLE**
 Nothing is named `person` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
 **NOT IMPLEMENTED**
 This feature is not yet implemented: statement type in block
+
 # TOKENS
 ~~~zig
 OpenCurly(1:1-1:2),LowerIdent(1:3-1:9),OpAmpersand(1:10-1:11),LowerIdent(1:12-1:15),OpColon(1:15-1:16),Int(1:17-1:19),CloseCurly(1:20-1:21),EndOfFile(1:21-1:21),
