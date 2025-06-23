@@ -14,9 +14,9 @@ foo = if tru then 0
 A parsing error occurred: `no_else`
 This is an unexpected parsing error. Please check your syntax.
 Here is the problematic code:
-**expr_if_missing_else.md:3-18:3:**
+**expr_if_missing_else.md:3:19:3:20:**
 ```roc
-
+foo = if tru then 0
 ```
 
 

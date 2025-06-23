@@ -44,7 +44,7 @@ This is an unexpected parsing error. Please check your syntax.
 Here is the problematic code:
 **fuzz_crash_015.md:3-3:3:**
 ```roc
-
+0u8.0
 ```
 
 

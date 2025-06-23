@@ -27,50 +27,50 @@ type=expr
 ~~~
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **<unknown>** is not expected in an expression.
+The token **= (** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 Here is the problematic code:
-**tuple_patterns.md:4-11:4:**
+**tuple_patterns.md:4:12:4:15:**
 ```roc
     (x, y) = (1, 2)
 ```
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **<unknown>** is not expected in an expression.
+The token **= (** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 Here is the problematic code:
-**tuple_patterns.md:7-21:7:**
+**tuple_patterns.md:7:22:7:25:**
 ```roc
     ((a, b), (c, d)) = ((10, 20), (30, 40))
 ```
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **<unknown>** is not expected in an expression.
+The token **= (** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 Here is the problematic code:
-**tuple_patterns.md:10-27:10:**
+**tuple_patterns.md:10:28:10:31:**
 ```roc
     (first, second, third) = (100, 42, 200)
 ```
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **<unknown>** is not expected in an expression.
+The token **= (** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 Here is the problematic code:
-**tuple_patterns.md:13-28:13:**
+**tuple_patterns.md:13:29:13:32:**
 ```roc
     (name, string, boolean) = ("Alice", "fixed", True)
 ```
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **<unknown>** is not expected in an expression.
+The token **= (** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 Here is the problematic code:
-**tuple_patterns.md:16-18:16:**
+**tuple_patterns.md:16:19:16:22:**
 ```roc
     (list, hello) = ([1, 2, 3], "hello")
 ```
@@ -164,7 +164,7 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 		(tuple (4:5-4:11)
 			(ident (4:6-4:7) "" "x")
 			(ident (4:9-4:10) "" "y"))
-		(malformed_expr (4:12-4:13) "expr_unexpected_token")
+		(malformed_expr (4:12-4:15) "expr_unexpected_token")
 		(tuple (4:14-4:20)
 			(int (4:15-4:16) "1")
 			(int (4:18-4:19) "2"))
@@ -175,7 +175,7 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 			(tuple (7:14-7:20)
 				(ident (7:15-7:16) "" "c")
 				(ident (7:18-7:19) "" "d")))
-		(malformed_expr (7:22-7:23) "expr_unexpected_token")
+		(malformed_expr (7:22-7:25) "expr_unexpected_token")
 		(tuple (7:24-7:44)
 			(tuple (7:25-7:33)
 				(int (7:26-7:28) "10")
@@ -187,7 +187,7 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 			(ident (10:6-10:11) "" "first")
 			(ident (10:13-10:19) "" "second")
 			(ident (10:21-10:26) "" "third"))
-		(malformed_expr (10:28-10:29) "expr_unexpected_token")
+		(malformed_expr (10:28-10:31) "expr_unexpected_token")
 		(tuple (10:30-10:44)
 			(int (10:31-10:34) "100")
 			(int (10:36-10:38) "42")
@@ -196,7 +196,7 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 			(ident (13:6-13:10) "" "name")
 			(ident (13:12-13:18) "" "string")
 			(ident (13:20-13:27) "" "boolean"))
-		(malformed_expr (13:29-13:30) "expr_unexpected_token")
+		(malformed_expr (13:29-13:32) "expr_unexpected_token")
 		(tuple (13:31-13:55)
 			(string (13:32-13:39) (string_part (13:33-13:38) "Alice"))
 			(string (13:41-13:48) (string_part (13:42-13:47) "fixed"))
@@ -204,7 +204,7 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 		(tuple (16:5-16:18)
 			(ident (16:6-16:10) "" "list")
 			(ident (16:12-16:17) "" "hello"))
-		(malformed_expr (16:19-16:20) "expr_unexpected_token")
+		(malformed_expr (16:19-16:22) "expr_unexpected_token")
 		(tuple (16:21-16:41)
 			(list (16:22-16:31)
 				(int (16:23-16:24) "1")

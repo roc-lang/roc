@@ -358,8 +358,10 @@ pub fn parseDiagnosticToReport(self: *AST, diagnostic: Diagnostic, allocator: st
             }
         }
 
-        // Use proper region info calculation
-        const region_info = self.calcRegionInfo(diagnostic.region, line_starts.items);
+        // Use proper region info calculation with converted region
+        const region_info = base.RegionInfo.position(self.source, line_starts.items, region.start.offset, region.end.offset) catch {
+            return report; // Return report without source context if region calculation fails
+        };
 
         try report.document.addLineBreak();
         try report.document.addText("Here is the problematic code:");

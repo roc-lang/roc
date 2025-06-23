@@ -53,7 +53,7 @@ test "SYNTAX_PROBLEM report along with all four render types" {
     const expected =
         \\**SYNTAX PROBLEM**
         \\Using more than one `+` like this requires parentheses, to clarify how things should be grouped.
-        \\**example.roc:1-10:1:**
+        \\**example.roc:1:10:1:20:**
         \\```roc
         \\example.roc
         \\```
@@ -74,7 +74,7 @@ test "SYNTAX_PROBLEM report along with all four render types" {
         \\<h1 class="report-title">SYNTAX PROBLEM</h1>
         \\<div class="report-content">
         \\Using more than one <span class="operator">+</span> like this requires parentheses, to clarify how things should be grouped.<br>
-        \\<div class="source-region"><span class="filename">example.roc:1-10:1:</span> <pre class="error">example.roc</pre></div></div>
+        \\<div class="source-region"><span class="filename">example.roc:1:10:1:20:</span> <pre class="error">example.roc</pre></div></div>
         \\</div>
         \\
     ;
@@ -90,7 +90,7 @@ test "SYNTAX_PROBLEM report along with all four render types" {
         \\SYNTAX PROBLEM
         \\
         \\Using more than one + like this requires parentheses, to clarify how things should be grouped.
-        \\example.roc:1-10:1: example.roc
+        \\example.roc:1:10:1:20: example.roc
         \\
     ;
 

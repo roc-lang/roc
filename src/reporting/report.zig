@@ -107,9 +107,9 @@ pub const Report = struct {
         try self.document.addSourceRegion(
             source,
             start_line,
-            region.start_col_idx,
+            region.start_col_idx + 1, // Convert to 1-based
             end_line,
-            region.end_col_idx,
+            region.end_col_idx + 1, // Convert to 1-based
             .error_highlight,
             filename,
         );
@@ -249,9 +249,6 @@ pub const ReportBuilder = struct {
     pub fn code(self: *ReportBuilder, code_text: []const u8) *ReportBuilder {
         self.report.addCodeSnippet(code_text, null) catch |err| switch (err) {
             error.OutOfMemory => exitOnOom(error.OutOfMemory),
-            else => {
-                @panic("unexpected error building code snippet");
-            },
         };
         return self;
     }

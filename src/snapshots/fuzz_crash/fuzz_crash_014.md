@@ -40,7 +40,7 @@ Expressions can be identifiers, literals, function calls, or operators.
 Here is the problematic code:
 **fuzz_crash_014.md:2-0:2:**
 ```roc
-
+0bu22
 ```
 
 
@@ -50,7 +50,7 @@ Expressions can be identifiers, literals, function calls, or operators.
 Here is the problematic code:
 **fuzz_crash_014.md:3-0:3:**
 ```roc
-
+0u22
 ```
 
 

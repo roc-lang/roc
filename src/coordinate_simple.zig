@@ -110,7 +110,7 @@ fn processSourceInternal(
 
     // Get parser diagnostic Reports
     for (parse_ast.parse_diagnostics.items) |diagnostic| {
-        const report = parse_ast.parseDiagnosticToReport(diagnostic, gpa) catch continue;
+        const report = parse_ast.parseDiagnosticToReport(diagnostic, gpa, "<source>") catch continue;
         reports.append(report) catch continue;
     }
 

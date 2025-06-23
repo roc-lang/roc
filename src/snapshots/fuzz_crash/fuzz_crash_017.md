@@ -39,7 +39,7 @@ This is an unexpected parsing error. Please check your syntax.
 Here is the problematic code:
 **fuzz_crash_017.md:2-6:2:**
 ```roc
-
+foo = "hello ${namF
 ```
 
 

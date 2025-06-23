@@ -9,20 +9,20 @@ type=expr
 ~~~
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **<unknown>** is not expected in an expression.
+The token **& age** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 Here is the problematic code:
-**record_field_update.md:1-9:1:**
+**record_field_update.md:1:10:1:15:**
 ```roc
 { person & age: 31 }
 ```
 
 
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
-The token **<unknown>** is not expected in a type annotation.
+The token **31 }** is not expected in a type annotation.
 Type annotations should contain types like _Str_, _Num a_, or _List U64_.
 Here is the problematic code:
-**record_field_update.md:1-16:1:**
+**record_field_update.md:1:17:1:21:**
 ```roc
 { person & age: 31 }
 ```
@@ -44,10 +44,10 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:9),OpAmpersand(1:10-1:11),LowerIdent(1:12-1:
 (block (1:1-1:21)
 	(statements
 		(ident (1:3-1:9) "" "person")
-		(malformed_expr (1:10-1:11) "expr_unexpected_token")
+		(malformed_expr (1:10-1:15) "expr_unexpected_token")
 		(type_anno (1:12-1:21)
 			"age"
-			(malformed_expr (1:17-1:19) "ty_anno_unexpected_token"))))
+			(malformed_expr (1:17-1:21) "ty_anno_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc

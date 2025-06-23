@@ -490,7 +490,7 @@ fn renderElementToMarkdown(element: DocumentElement, writer: anytype, config: Re
         },
         .source_code_region => |region| {
             if (region.filename) |filename| {
-                try writer.print("**{s}:{d}-{d}:{d}:**\n", .{ sanitisePathForSnapshots(filename), region.start_line, region.start_column, region.end_line });
+                try writer.print("**{s}:{d}:{d}:{d}:{d}:**\n", .{ sanitisePathForSnapshots(filename), region.start_line, region.start_column, region.end_line, region.end_column });
             }
             try writer.writeAll("```roc\n");
             const lines = source_region.extractLines(region.source, region.start_line, region.end_line);
@@ -574,7 +574,7 @@ fn renderElementToHtml(element: DocumentElement, writer: anytype, annotation_sta
         .source_code_region => |region| {
             try writer.writeAll("<div class=\"source-region\">");
             if (region.filename) |filename| {
-                try writer.print("<span class=\"filename\">{s}:{}-{}:{}:</span> ", .{ sanitisePathForSnapshots(filename), region.start_line, region.start_column, region.end_line });
+                try writer.print("<span class=\"filename\">{s}:{}:{}:{}:{}:</span> ", .{ sanitisePathForSnapshots(filename), region.start_line, region.start_column, region.end_line, region.end_column });
             }
             const class = getAnnotationHtmlClass(region.region_annotation);
             try writer.print("<pre class=\"{s}\">", .{class});
@@ -667,7 +667,7 @@ fn renderElementToLsp(element: DocumentElement, writer: anytype, config: Reporti
         },
         .source_code_region => |region| {
             if (region.filename) |filename| {
-                try writer.print("{s}:{}-{}:{}: ", .{ sanitisePathForSnapshots(filename), region.start_line, region.start_column, region.end_line });
+                try writer.print("{s}:{}:{}:{}:{}: ", .{ sanitisePathForSnapshots(filename), region.start_line, region.start_column, region.end_line, region.end_column });
             }
             const lines = source_region.extractLines(region.source, region.start_line, region.end_line);
             try writer.writeAll(lines);

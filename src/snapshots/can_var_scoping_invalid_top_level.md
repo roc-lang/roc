@@ -15,9 +15,9 @@ var topLevelVar_ = 0
 A parsing error occurred: `var_only_allowed_in_a_body`
 This is an unexpected parsing error. Please check your syntax.
 Here is the problematic code:
-**can_var_scoping_invalid_top_level.md:4-0:4:**
+**can_var_scoping_invalid_top_level.md:4:1:4:17:**
 ```roc
-
+var topLevelVar_ = 0
 ```
 
 
@@ -33,7 +33,7 @@ KwVar(4:1-4:4),LowerIdent(4:5-4:17),OpAssign(4:18-4:19),Int(4:20-4:21),EndOfFile
 (file (1:1-4:21)
 	(module (1:1-1:10) (exposes (1:8-1:10)))
 	(statements
-		(malformed_stmt (4:1-4:4) "var_only_allowed_in_a_body")
+		(malformed_stmt (4:1-4:17) "var_only_allowed_in_a_body")
 		(decl (4:5-4:21)
 			(ident (4:5-4:17) "topLevelVar_")
 			(int (4:20-4:21) "0"))))
