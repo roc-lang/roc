@@ -93,8 +93,8 @@ main! = |_| {
 						(e_call (8:14-8:54)
 							(e_lookup_external
 								(external_decl (8:14-8:23)
-									(qualified_name "Json.utf8")
-									(module_name "Json")
+									(qualified_name "json.Json.utf8")
+									(module_name "json.Json")
 									(local_name "utf8")
 									(kind "value")
 									(type_var 77)))
@@ -102,19 +102,19 @@ main! = |_| {
 					(e_call (9:5-9:25)
 						(e_lookup_external
 							(external_decl (9:5-9:17)
-								(qualified_name "Stdout.line!")
-								(module_name "Stdout")
+								(qualified_name "pf.Stdout.line!")
+								(module_name "pf.Stdout")
 								(local_name "line!")
 								(kind "value")
 								(type_var 83)))
 						(e_lookup_local (9:18-9:24) (pid 76)))))))
 	(s_import (3:1-3:17)
-		"Stdout"
+		"pf.Stdout"
 		""
 		""
 		(exposes))
 	(s_import (4:1-4:17)
-		"Json"
+		"json.Json"
 		""
 		""
 		(exposes)))

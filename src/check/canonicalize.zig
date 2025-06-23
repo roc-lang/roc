@@ -533,13 +533,17 @@ fn canonicalizeImportStatement(
     // 3. Add to scope: alias -> module_name mapping
     self.scopeIntroduceModuleAlias(alias, module_name);
 
-    // 4. Create CIR import statement
+    // 4. Convert exposed items and introduce them into scope
+    const cir_exposes = self.convertASTExposesToCIR(import_stmt.exposes);
+    self.introduceExposedItemsIntoScope(cir_exposes, module_name);
+
+    // 5. Create CIR import statement
     const cir_import = CIR.Statement{
         .import = .{
             .module_name_tok = module_name,
             .qualifier_tok = if (import_stmt.qualifier_tok) |q_tok| self.parse_ir.tokens.resolveIdentifier(q_tok) else null,
             .alias_tok = if (import_stmt.alias_tok) |a_tok| self.parse_ir.tokens.resolveIdentifier(a_tok) else null,
-            .exposes = self.convertASTExposesToCIR(import_stmt.exposes),
+            .exposes = cir_exposes,
             .region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region),
         },
     };
@@ -642,6 +646,32 @@ fn convertASTExposesToCIR(
     }
 
     return self.can_ir.store.exposedItemSpanFrom(scratch_start);
+}
+
+/// Introduce converted exposed items into scope for identifier resolution
+fn introduceExposedItemsIntoScope(
+    self: *Self,
+    exposed_items_span: CIR.ExposedItem.Span,
+    module_name: Ident.Idx,
+) void {
+    const exposed_items_slice = self.can_ir.store.sliceExposedItems(exposed_items_span);
+
+    for (exposed_items_slice) |exposed_item_idx| {
+        const exposed_item = self.can_ir.store.getExposedItem(exposed_item_idx);
+
+        // Use the alias if provided, otherwise use the original name for the local lookup
+        const item_name = exposed_item.alias orelse exposed_item.name;
+
+        // Create the exposed item info with module name and original name
+        const item_info = Scope.ExposedItemInfo{
+            .module_name = module_name,
+            .original_name = exposed_item.name, // Always use the original name for module lookup
+        };
+
+        // Introduce the exposed item into scope
+        // This allows `decode` to resolve to `json.Json.decode`
+        self.scopeIntroduceExposedItem(item_name, item_info);
+    }
 }
 
 fn canonicalize_decl(
@@ -810,7 +840,30 @@ pub fn canonicalize_expr(
                         return expr_idx;
                     },
                     .not_found => {
-                        // We did not find the ident in scope
+                        // Check if this identifier is an exposed item from an import
+                        if (self.scopeLookupExposedItem(ident)) |exposed_info| {
+                            // Create qualified name using the original name, not the alias
+                            const qualified_name = self.createQualifiedName(exposed_info.module_name, exposed_info.original_name);
+
+                            // Create external declaration for the exposed item
+                            const external_decl = CIR.ExternalDecl{
+                                .qualified_name = qualified_name,
+                                .module_name = exposed_info.module_name,
+                                .local_name = ident,
+                                .type_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region),
+                                .kind = .value,
+                                .region = region,
+                            };
+
+                            const external_idx = self.can_ir.pushExternalDecl(external_decl);
+
+                            // Create lookup expression for external declaration
+                            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .lookup = .{ .external = external_idx } });
+                            _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
+                            return expr_idx;
+                        }
+
+                        // We did not find the ident in scope or as an exposed item
                         return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .ident_not_in_scope = .{
                             .ident = ident,
                             .region = region,
@@ -2941,6 +2994,90 @@ fn scopeLookupModuleInParentScopes(self: *const Self, alias_name: Ident.Idx) ?Id
 
         switch (scope.lookupModuleAlias(&self.can_ir.env.idents, alias_name)) {
             .found => |module_name| return module_name,
+            .not_found => continue,
+        }
+    }
+
+    return null;
+}
+
+/// Look up an exposed item across all scopes
+fn scopeLookupExposedItem(self: *const Self, item_name: Ident.Idx) ?Scope.ExposedItemInfo {
+    // Search from innermost to outermost scope
+    var i = self.scopes.items.len;
+    while (i > 0) {
+        i -= 1;
+        const scope = &self.scopes.items[i];
+
+        switch (scope.lookupExposedItem(&self.can_ir.env.idents, item_name)) {
+            .found => |item_info| return item_info,
+            .not_found => continue,
+        }
+    }
+
+    return null;
+}
+
+/// Introduce an exposed item into the current scope
+fn scopeIntroduceExposedItem(self: *Self, item_name: Ident.Idx, item_info: Scope.ExposedItemInfo) void {
+    const gpa = self.can_ir.env.gpa;
+    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+
+    // Simplified introduction without parent lookup for now
+    const result = current_scope.introduceExposedItem(gpa, &self.can_ir.env.idents, item_name, item_info, null);
+
+    switch (result) {
+        .success => {},
+        .shadowing_warning => |shadowed_info| {
+            // Create diagnostic for exposed item shadowing
+            const item_text = self.can_ir.env.idents.getText(item_name);
+            const shadowed_module_text = self.can_ir.env.idents.getText(shadowed_info.module_name);
+            const current_module_text = self.can_ir.env.idents.getText(item_info.module_name);
+
+            // For now, just add a simple diagnostic message
+            const message = std.fmt.allocPrint(gpa, "Exposed item '{s}' from module '{s}' shadows item from module '{s}'", .{ item_text, current_module_text, shadowed_module_text }) catch |err| collections.utils.exitOnOom(err);
+            const message_str = self.can_ir.env.strings.insert(gpa, message);
+            gpa.free(message);
+
+            self.can_ir.pushDiagnostic(CIR.Diagnostic{
+                .not_implemented = .{
+                    .feature = message_str,
+                    .region = Region.zero(), // TODO: Get proper region from import statement
+                },
+            });
+        },
+        .already_in_scope => |existing_info| {
+            // Create diagnostic for duplicate exposed item
+            const item_text = self.can_ir.env.idents.getText(item_name);
+            const existing_module_text = self.can_ir.env.idents.getText(existing_info.module_name);
+            const new_module_text = self.can_ir.env.idents.getText(item_info.module_name);
+
+            const message = std.fmt.allocPrint(gpa, "Exposed item '{s}' already imported from module '{s}', cannot import again from module '{s}'", .{ item_text, existing_module_text, new_module_text }) catch |err| collections.utils.exitOnOom(err);
+            const message_str = self.can_ir.env.strings.insert(gpa, message);
+            gpa.free(message);
+
+            self.can_ir.pushDiagnostic(CIR.Diagnostic{
+                .not_implemented = .{
+                    .feature = message_str,
+                    .region = Region.zero(), // TODO: Get proper region from import statement
+                },
+            });
+        },
+    }
+}
+
+/// Look up an exposed item in parent scopes (for shadowing detection)
+fn scopeLookupExposedItemInParentScopes(self: *const Self, item_name: Ident.Idx) ?Scope.ExposedItemInfo {
+    // Search from second-innermost to outermost scope (excluding current scope)
+    if (self.scopes.items.len <= 1) return null;
+
+    var i = self.scopes.items.len - 1;
+    while (i > 0) {
+        i -= 1;
+        const scope = &self.scopes.items[i];
+
+        switch (scope.lookupExposedItem(&self.can_ir.env.idents, item_name)) {
+            .found => |item_info| return item_info,
             .not_found => continue,
         }
     }

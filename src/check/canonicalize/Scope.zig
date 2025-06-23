@@ -18,6 +18,8 @@ type_decls: std.AutoHashMapUnmanaged(Ident.Idx, CIR.Statement.Idx),
 type_vars: std.AutoHashMapUnmanaged(Ident.Idx, CIR.TypeAnno.Idx),
 /// Maps module alias names to their full module names
 module_aliases: std.AutoHashMapUnmanaged(Ident.Idx, Ident.Idx),
+/// Maps exposed item names to their source modules and original names (for import resolution)
+exposed_items: std.AutoHashMapUnmanaged(Ident.Idx, ExposedItemInfo),
 is_function_boundary: bool,
 
 /// Initialize the scope
@@ -28,6 +30,7 @@ pub fn init(is_function_boundary: bool) Scope {
         .type_decls = std.AutoHashMapUnmanaged(Ident.Idx, CIR.Statement.Idx){},
         .type_vars = std.AutoHashMapUnmanaged(Ident.Idx, CIR.TypeAnno.Idx){},
         .module_aliases = std.AutoHashMapUnmanaged(Ident.Idx, Ident.Idx){},
+        .exposed_items = std.AutoHashMapUnmanaged(Ident.Idx, ExposedItemInfo){},
         .is_function_boundary = is_function_boundary,
     };
 }
@@ -39,6 +42,7 @@ pub fn deinit(self: *Scope, gpa: std.mem.Allocator) void {
     self.type_decls.deinit(gpa);
     self.type_vars.deinit(gpa);
     self.module_aliases.deinit(gpa);
+    self.exposed_items.deinit(gpa);
 }
 
 /// Scope management types and structures
@@ -71,6 +75,18 @@ pub const TypeVarLookupResult = union(enum) {
 /// Result of looking up a module alias
 pub const ModuleAliasLookupResult = union(enum) {
     found: Ident.Idx,
+    not_found: void,
+};
+
+/// Information about an exposed item
+pub const ExposedItemInfo = struct {
+    module_name: Ident.Idx,
+    original_name: Ident.Idx,
+};
+
+/// Result of looking up an exposed item
+pub const ExposedItemLookupResult = union(enum) {
+    found: ExposedItemInfo,
     not_found: void,
 };
 
@@ -110,8 +126,15 @@ pub const ModuleAliasIntroduceResult = union(enum) {
     already_in_scope: Ident.Idx, // The module alias already exists in this scope
 };
 
+/// Result of introducing an exposed item
+pub const ExposedItemIntroduceResult = union(enum) {
+    success: void,
+    shadowing_warning: ExposedItemInfo, // The exposed item that was shadowed
+    already_in_scope: ExposedItemInfo, // The exposed item already exists in this scope
+};
+
 /// Item kinds in a scope
-pub const ItemKind = enum { ident, alias, type_decl, type_var, module_alias };
+pub const ItemKind = enum { ident, alias, type_decl, type_var, module_alias, exposed_item };
 
 /// Get the appropriate map for the given item kind
 pub fn items(scope: *Scope, comptime item_kind: ItemKind) switch (item_kind) {
@@ -119,6 +142,7 @@ pub fn items(scope: *Scope, comptime item_kind: ItemKind) switch (item_kind) {
     .type_decl => *std.AutoHashMapUnmanaged(Ident.Idx, CIR.Statement.Idx),
     .type_var => *std.AutoHashMapUnmanaged(Ident.Idx, CIR.TypeAnno.Idx),
     .module_alias => *std.AutoHashMapUnmanaged(Ident.Idx, Ident.Idx),
+    .exposed_item => *std.AutoHashMapUnmanaged(Ident.Idx, ExposedItemInfo),
 } {
     return switch (item_kind) {
         .ident => &scope.idents,
@@ -126,6 +150,7 @@ pub fn items(scope: *Scope, comptime item_kind: ItemKind) switch (item_kind) {
         .type_decl => &scope.type_decls,
         .type_var => &scope.type_vars,
         .module_alias => &scope.module_aliases,
+        .exposed_item => &scope.exposed_items,
     };
 }
 
@@ -135,6 +160,7 @@ pub fn itemsConst(scope: *const Scope, comptime item_kind: ItemKind) switch (ite
     .type_decl => *const std.AutoHashMapUnmanaged(Ident.Idx, CIR.Statement.Idx),
     .type_var => *const std.AutoHashMapUnmanaged(Ident.Idx, CIR.TypeAnno.Idx),
     .module_alias => *const std.AutoHashMapUnmanaged(Ident.Idx, Ident.Idx),
+    .exposed_item => *const std.AutoHashMapUnmanaged(Ident.Idx, ExposedItemInfo),
 } {
     return switch (item_kind) {
         .ident => &scope.idents,
@@ -142,6 +168,7 @@ pub fn itemsConst(scope: *const Scope, comptime item_kind: ItemKind) switch (ite
         .type_decl => &scope.type_decls,
         .type_var => &scope.type_vars,
         .module_alias => &scope.module_aliases,
+        .exposed_item => &scope.exposed_items,
     };
 }
 
@@ -151,6 +178,7 @@ pub fn put(scope: *Scope, gpa: std.mem.Allocator, comptime item_kind: ItemKind, 
     .type_decl => CIR.Statement.Idx,
     .type_var => CIR.TypeAnno.Idx,
     .module_alias => Ident.Idx,
+    .exposed_item => ExposedItemInfo,
 }) void {
     scope.items(item_kind).put(gpa, name, value) catch |err| collections.utils.exitOnOom(err);
 }
@@ -291,4 +319,49 @@ pub fn introduceModuleAlias(
     }
 
     return ModuleAliasIntroduceResult{ .success = {} };
+}
+
+/// Look up an exposed item in this scope
+pub fn lookupExposedItem(scope: *const Scope, ident_store: *const base.Ident.Store, name: Ident.Idx) ExposedItemLookupResult {
+    // Search by comparing text content, not identifier index
+    var iter = scope.exposed_items.iterator();
+    while (iter.next()) |entry| {
+        if (ident_store.identsHaveSameText(name, entry.key_ptr.*)) {
+            return ExposedItemLookupResult{ .found = entry.value_ptr.* };
+        }
+    }
+    return ExposedItemLookupResult{ .not_found = {} };
+}
+
+/// Introduce an exposed item into this scope
+pub fn introduceExposedItem(
+    scope: *Scope,
+    gpa: std.mem.Allocator,
+    ident_store: *const base.Ident.Store,
+    item_name: Ident.Idx,
+    item_info: ExposedItemInfo,
+    parent_lookup_fn: ?fn (Ident.Idx) ?ExposedItemInfo,
+) ExposedItemIntroduceResult {
+    // Check if already exists in current scope by comparing text content
+    var iter = scope.exposed_items.iterator();
+    while (iter.next()) |entry| {
+        if (ident_store.identsHaveSameText(item_name, entry.key_ptr.*)) {
+            // Exposed item already exists in this scope
+            return ExposedItemIntroduceResult{ .already_in_scope = entry.value_ptr.* };
+        }
+    }
+
+    // Check for shadowing in parent scopes
+    var shadowed_info: ?ExposedItemInfo = null;
+    if (parent_lookup_fn) |lookup_fn| {
+        shadowed_info = lookup_fn(item_name);
+    }
+
+    scope.put(gpa, .exposed_item, item_name, item_info);
+
+    if (shadowed_info) |info| {
+        return ExposedItemIntroduceResult{ .shadowing_warning = info };
+    }
+
+    return ExposedItemIntroduceResult{ .success = {} };
 }

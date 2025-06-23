@@ -96,14 +96,14 @@ NO CHANGE
 					(e_call (11:2-11:31)
 						(e_lookup_external
 							(external_decl (11:2-11:14)
-								(qualified_name "Stdout.line!")
-								(module_name "Stdout")
+								(qualified_name "pf.Stdout.line!")
+								(module_name "pf.Stdout")
 								(local_name "line!")
 								(kind "value")
 								(type_var 79)))
 						(e_string (11:15-11:30) (e_literal (11:16-11:29) "Hello, world!")))))))
 	(s_import (6:1-6:17)
-		"Stdout"
+		"pf.Stdout"
 		""
 		""
 		(exposes)))

@@ -53,8 +53,8 @@ NO CHANGE
 			(e_call (3:10-3:31)
 				(e_lookup_external
 					(external_decl (3:10-3:22)
-						(qualified_name "Stdout.line!")
-						(module_name "Stdout")
+						(qualified_name "pf.Stdout.line!")
+						(module_name "pf.Stdout")
 						(local_name "line!")
 						(kind "value")
 						(type_var 74)))
@@ -67,7 +67,7 @@ NO CHANGE
 		(def_expr
 			(e_string (4:9-4:16) (e_literal (4:10-4:15) "World"))))
 	(s_import (2:1-2:17)
-		"Stdout"
+		"pf.Stdout"
 		""
 		""
 		(exposes)))

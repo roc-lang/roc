@@ -60,7 +60,7 @@ NO CHANGE
 		"pf.Stdout"
 		""
 		""
-		(exposes "exposed_item" "exposed_item")))
+		(exposes (exposed_item "line!") (exposed_item "write!"))))
 ~~~
 # TYPES
 ~~~clojure

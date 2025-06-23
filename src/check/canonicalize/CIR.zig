@@ -621,9 +621,10 @@ pub const Statement = union(enum) {
 
                 var exposes_node = sexpr.Expr.init(gpa, "exposes");
                 const exposes_slice = ir.store.sliceExposedItems(s.exposes);
-                for (exposes_slice) |_| {
-                    // TODO: Implement ExposedItem.toSExpr when ExposedItem structure is complete
-                    exposes_node.appendString(gpa, "exposed_item");
+                for (exposes_slice) |exposed_idx| {
+                    const exposed_item = ir.store.getExposedItem(exposed_idx);
+                    const exposed_sexpr = exposed_item.toSExpr(gpa, ir.env);
+                    exposes_node.appendNode(gpa, &exposed_sexpr);
                 }
                 node.appendNode(gpa, &exposes_node);
 
@@ -1054,6 +1055,27 @@ pub const ExposedItem = struct {
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
+
+    pub fn toSExpr(self: ExposedItem, gpa: std.mem.Allocator, env: *const ModuleEnv) sexpr.Expr {
+        var node = sexpr.Expr.init(gpa, "exposed_item");
+
+        // Add the original name
+        const name_text = env.idents.getText(self.name);
+        node.appendString(gpa, name_text);
+
+        // Add the alias if present
+        if (self.alias) |alias_idx| {
+            const alias_text = env.idents.getText(alias_idx);
+            node.appendString(gpa, alias_text);
+        }
+
+        // Add wildcard indicator if needed
+        if (self.is_wildcard) {
+            node.appendString(gpa, "wildcard");
+        }
+
+        return node;
+    }
 };
 
 /// An expression that has been canonicalized.

@@ -55,7 +55,7 @@ NO CHANGE
 		"Decode"
 		""
 		""
-		(exposes)))
+		(exposes (exposed_item "Decode"))))
 ~~~
 # TYPES
 ~~~clojure

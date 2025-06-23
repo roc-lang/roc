@@ -40,7 +40,7 @@ import json.Json[foo, BAR]
 ~~~clojure
 (can_ir
 	(s_import (3:1-3:17)
-		"Json"
+		"json.Json"
 		""
 		""
 		(exposes)))
