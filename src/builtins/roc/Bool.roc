@@ -10,7 +10,8 @@ module [Bool, Eq, true, false, not, is_eq, is_not_eq]
 ## be a `NaN` ([Not a Number](https://en.wikipedia.org/wiki/NaN)), and the
 ## [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754) floating point standard
 ## specifies that two `NaN`s are not equal.
-Eq a : a where
+Eq(a) : a
+    where
         ## Returns `Bool.true` if the input values are equal. This is
         ## equivalent to the logic
         ## [XNOR](https://en.wikipedia.org/wiki/Logical_equality) gate. The infix
@@ -28,7 +29,7 @@ Eq a : a where
         ## for more detail.
         ## 5. Functions cannot be compared for structural equality, therefore Roc
         ## cannot derive `is_eq` for types that contain functions.
-        a.is_eq(a) -> Bool
+        a.is_eq(a) -> Bool,
 
 ## Represents the boolean true and false using an opaque type.
 ## `Bool` implements the `Eq` ability.
@@ -73,4 +74,4 @@ not = |b| match b {
 ## expect "Apples" != "Oranges"
 ## ```
 is_not_eq : a, a -> Bool where a.Eq
-is_not_eq = |a, b| !a.is_eq(b)
+is_not_eq = |a, b| not(a.is_eq(b))

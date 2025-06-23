@@ -589,6 +589,11 @@ pub fn toSExprStr(ast: *@This(), env: *base.ModuleEnv, writer: std.io.AnyWriter)
     node.toStringPretty(writer);
 }
 
+pub const TypeDeclKind = enum {
+    alias,
+    nominal,
+};
+
 /// Represents a statement.  Not all statements are valid in all positions.
 pub const Statement = union(enum) {
     decl: Decl,
@@ -630,6 +635,7 @@ pub const Statement = union(enum) {
         header: TypeHeader.Idx,
         anno: TypeAnno.Idx,
         where: ?Collection.Idx,
+        kind: TypeDeclKind,
         region: TokenizedRegion,
     },
     type_anno: struct {

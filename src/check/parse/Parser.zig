@@ -1082,15 +1082,17 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) ?AST.Statement.I
             const start = self.pos;
             if (statementType == .top_level) {
                 const header = self.parseTypeHeader();
-                if (self.peek() != .OpColon) {
+                if (self.peek() != .OpColon and self.peek() != .OpColonEqual) {
                     return self.pushMalformed(AST.Statement.Idx, .expected_colon_after_type_annotation, start);
                 }
+                const kind: AST.TypeDeclKind = if (self.peek() == .OpColonEqual) .nominal else .alias;
                 self.advance();
                 const anno = self.parseTypeAnno(.not_looking_for_args);
                 const statement_idx = self.store.addStatement(.{ .type_decl = .{
                     .header = header,
                     .anno = anno,
                     .where = self.parseWhereConstraint(),
+                    .kind = kind,
                     .region = .{ .start = start, .end = self.pos },
                 } });
                 return statement_idx;

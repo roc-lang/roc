@@ -1,4 +1,6 @@
-package [
-    Bool,
-    Result,
-] {}
+package
+	[
+		Bool,
+		Result,
+	]
+	{}

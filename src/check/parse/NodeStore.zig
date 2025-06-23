@@ -359,6 +359,9 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) AST.Statement.I
         },
         .type_decl => |d| {
             node.tag = .type_decl;
+            if (d.kind == .nominal) {
+                node.tag = .type_decl_nominal;
+            }
             node.region = d.region;
             node.data.lhs = @intFromEnum(d.header);
             node.data.rhs = @intFromEnum(d.anno);
@@ -1068,6 +1071,16 @@ pub fn getStatement(store: *NodeStore, statement_idx: AST.Statement.Idx) AST.Sta
                 .region = node.region,
                 .header = @enumFromInt(node.data.lhs),
                 .anno = @enumFromInt(node.data.rhs),
+                .kind = .alias,
+                .where = if (node.main_token != 0) @enumFromInt(node.main_token) else null,
+            } };
+        },
+        .type_decl_nominal => {
+            return .{ .type_decl = .{
+                .region = node.region,
+                .header = @enumFromInt(node.data.lhs),
+                .anno = @enumFromInt(node.data.rhs),
+                .kind = .nominal,
                 .where = if (node.main_token != 0) @enumFromInt(node.main_token) else null,
             } };
         },
