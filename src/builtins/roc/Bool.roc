@@ -35,9 +35,11 @@ Eq(a) : a
 ## `Bool` implements the `Eq` ability.
 Bool := [True, False]
 
+is_eq : Bool, Bool -> Bool
 is_eq = |b1, b2| match (b1, b2) {
     (True, True) => True
-    (False, False) => False
+    (False, False) => True
+    _ => False
 }
 
 ## The boolean true value.
