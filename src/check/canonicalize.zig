@@ -1153,7 +1153,7 @@ fn canonicalize_pattern(
             // Calculate requirements based on the value
             const u128_val: u128 = if (value < 0) @as(u128, @intCast(-(value + 1))) + 1 else @as(u128, @intCast(value));
             const requirements = types.Num.Int.Requirements{
-                .sign_needed = sign_needed = value < 0,
+                .sign_needed = value < 0,
                 .bits_needed = types.Num.Int.BitsNeeded.fromValue(u128_val),
             };
 
@@ -1187,11 +1187,8 @@ fn canonicalize_pattern(
             // Resolve to a string slice from the source
             const token_text = self.parse_ir.resolve(e.number_tok);
 
-            // Handle float literal pattern
+            // Handle frac literal pattern
             const RocDec = @import("../builtins/dec.zig").RocDec;
-
-            var fits_in_f32 = false;
-            var fits_in_dec = false;
 
             // create type vars, first "reserve" node slots
             const final_pattern_idx = self.can_ir.store.predictNodeIndex(2);
@@ -1199,98 +1196,51 @@ fn canonicalize_pattern(
             // then insert the type vars, setting the parent to be the final slot
             const num_type_var = self.can_ir.pushFreshTypeVar(final_pattern_idx, region);
 
-            // Try to parse as RocDec first
-            if (RocDec.fromNonemptySlice(token_text)) |dec| {
-                // Successfully parsed as Dec
-                fits_in_dec = true;
-
-                // Also check if it fits in f32
-                const f64_val = dec.toF64();
-
-                // Check if it fits in f32 without precision loss
-                if (f64_val >= -std.math.floatMax(f32) and f64_val <= std.math.floatMax(f32)) {
-                    const as_f32 = @as(f32, @floatCast(f64_val));
-                    const back_to_f64 = @as(f64, @floatCast(as_f32));
-                    if (f64_val == back_to_f64) {
-                        fits_in_f32 = true;
-                    }
-                }
-
-                const requirements = types.Num.Frac.Requirements{
-                    .fits_in_f32 = fits_in_f32,
-                    .fits_in_dec = fits_in_dec,
-                };
-
-                // Create dec_literal pattern
-                const dec_pattern = CIR.Pattern{
+            const cir_pattern = if (RocDec.fromNonemptySlice(token_text)) |dec|
+                CIR.Pattern{
                     .dec_literal = .{
                         .num_var = num_type_var,
-                        .requirements = requirements,
+                        .requirements = types.Num.Frac.Requirements{
+                            .fits_in_f32 = fitsInF32(dec.toF64()),
+                            .fits_in_dec = true,
+                        },
                         .value = dec,
                         .region = region,
                     },
-                };
-                const pattern_idx = self.can_ir.store.addPattern(dec_pattern);
-
-                std.debug.assert(@intFromEnum(pattern_idx) == @intFromEnum(final_pattern_idx));
-
-                // Set the concrete type variable
-                _ = self.can_ir.setTypeVarAtPat(pattern_idx, Content{
-                    .structure = .{ .num = .{ .num_poly = num_type_var } },
-                });
-
-                return pattern_idx;
-            } else {
-                // Failed to parse as Dec - parse as f64
-                const f64_value = std.fmt.parseFloat(f64, token_text) catch {
-                    // Invalid float literal
+                }
+            else blk: {
+                // Parsing it as a Dec failed, so try F64 next.
+                const f64_val = std.fmt.parseFloat(f64, token_text) catch {
+                    // It doesn't parse as Dec or as F64, so it's too big to fit in any of Roc's numeric types. Error out!
                     const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .invalid_num_literal = .{
                         .region = region,
                     } });
                     return malformed_idx;
                 };
 
-                // Check for non-finite values (NaN, Infinity, -Infinity)
-                if (std.math.isNan(f64_value) or std.math.isInf(f64_value)) {
-                    // Non-finite values can be represented in f32 and f64, but not dec
-                    fits_in_f32 = true;
-                    fits_in_dec = false;
-                } else {
-                    // Check if it fits in f32 without precision loss
-                    if (f64_value >= -std.math.floatMax(f32) and f64_value <= std.math.floatMax(f32)) {
-                        const as_f32 = @as(f32, @floatCast(f64_value));
-                        const back_to_f64 = @as(f64, @floatCast(as_f32));
-                        if (f64_value == back_to_f64) {
-                            fits_in_f32 = true;
-                        }
-                    }
-                }
-
-                const requirements = types.Num.Frac.Requirements{
-                    .fits_in_f32 = fits_in_f32,
-                    .fits_in_dec = fits_in_dec,
-                };
-
-                // Create f64_literal pattern
-                const f64_pattern = CIR.Pattern{
+                break :blk CIR.Pattern{
                     .f64_literal = .{
                         .num_var = num_type_var,
-                        .requirements = requirements,
-                        .value = f64_value,
+                        .requirements = types.Num.Frac.Requirements{
+                            .fits_in_f32 = fitsInF32(f64_val),
+                            .fits_in_dec = false,
+                        },
+                        .value = f64_val,
                         .region = region,
                     },
                 };
-                const pattern_idx = self.can_ir.store.addPattern(f64_pattern);
+            };
 
-                std.debug.assert(@intFromEnum(pattern_idx) == @intFromEnum(final_pattern_idx));
+            const pattern_idx = self.can_ir.store.addPattern(cir_pattern);
 
-                // Set the concrete type variable
-                _ = self.can_ir.setTypeVarAtPat(pattern_idx, Content{
-                    .structure = .{ .num = .{ .num_poly = num_type_var } },
-                });
+            std.debug.assert(@intFromEnum(pattern_idx) == @intFromEnum(final_pattern_idx));
 
-                return pattern_idx;
-            }
+            // Set the concrete type variable
+            _ = self.can_ir.setTypeVarAtPat(pattern_idx, Content{
+                .structure = .{ .num = .{ .num_poly = num_type_var } },
+            });
+
+            return pattern_idx;
         },
         .string => |e| {
             const region = self.tokenizedRegionToRegion(e.region);
