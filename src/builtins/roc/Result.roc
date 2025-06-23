@@ -25,8 +25,8 @@ Result(ok, err) := [Ok(ok), Err(err)]
 ## ```
 is_ok : Result(ok, err) -> Bool
 is_ok = |result| match result {
-    Ok(_) => Bool.true
-    Err(_) => Bool.false
+    Result.Ok(_) => Bool.true
+    Result.Err(_) => Bool.false
 }
 
 ## Returns `Bool.true` if the result indicates a failure, else returns `Bool.false`
@@ -35,8 +35,8 @@ is_ok = |result| match result {
 ## ```
 is_err : Result(ok, err) -> Bool
 is_err = |result| match result {
-    Ok(_) => Bool.false
-    Err(_) => Bool.true
+    Result.Ok(_) => Bool.false
+    Result.Err(_) => Bool.true
 }
 
 ## If the result is `Ok`, returns the value it holds. Otherwise, returns
@@ -47,8 +47,8 @@ is_err = |result| match result {
 ## ```
 with_default : Result(ok, err), ok -> ok
 with_default = |result, default| match result {
-        Ok(value) => value
-        Err(_) => default
+        Result.Ok(value) => value
+        Result.Err(_) => default
 }
 
 ## If the result is `Ok`, transforms the value it holds by running a conversion
@@ -63,8 +63,8 @@ with_default = |result, default| match result {
 ## `Set.map`, and `Dict.map`.
 map_ok : Result(a, err), (a -> b) -> Result(b, err)
 map_ok = |result, transform| match result {
-    Ok(v) => Ok(transform(v))
-    Err(e) => Err(e)
+    Result.Ok(v) => Result.Ok(transform(v))
+    Result.Err(e) => Result.Err(e)
 }
 
 ## If the result is `Err`, transforms the value it holds by running a conversion
@@ -76,51 +76,61 @@ map_ok = |result, transform| match result {
 ## ```
 map_err : Result(ok, a), (a -> b) -> Result(ok, b)
 map_err = |result, transform| match result {
-    Ok(v) => Ok(v)
-    Err(e) => Err(transform(e))
+    Result.Ok(v) => Result.Ok(v)
+    Result.Err(e) => Result.Err(transform(e))
 }
 
 ## Maps both the `Ok` and `Err` values of a `Result` to new values.
 map_both : Result(ok1, err1), (ok1 -> ok2), (err1 -> err2) -> Result(ok2, err2)
 map_both = |result, ok_transform, err_transform| match result {
-    Ok(val) => Ok(ok_transform(val))
-    Err(err) => Err(err_transform(err))
+    Result. Ok(val) => Result.Ok(ok_transform(val))
+    Result. Err(err) => Result.Err(err_transform(err))
 }
 
 ## Maps the `Ok` values of two `Result`s to a new value using a given transformation,
 ## or returns the first `Err` value encountered.
 map2 : Result(a, err), Result(b, err), (a, b -> c) -> Result(c, err)
 map2 = |first_result, second_result, transform| match (first_result, second_result) {
-    (Ok(first), Ok(second)) => Ok(transform(first, second))
-    (Err(err), _) => Err(err)
-    (_, Err(err)) => Err(err)
+    (Result.Ok(first), Result.Ok(second)) => Ok(transform(first, second))
+    (Result.Err(err), _) => Result.Err(err)
+    (_, Result.Err(err)) => Result.Err(err)
 }
 
 ## If the result is `Ok`, transforms the entire result by running a conversion
 ## function on the value the `Ok` holds. Then returns that new result. If the
 ## result is `Err`, this has no effect. Use `on_err` to transform an `Err`.
 ## ```roc
-## Ok(-1).try(|num| if num < 0 then Err("negative!") else Ok(-num))
-## Err("yipes!").try(|num| if num < 0 then Err("negative!") else Ok(-num))
+## Ok(-1).try(|num| if num < 0 then Err("negative!") else Ok(-num)) # Result.Err("negative!") : Result(U64, Str)
+## Ok(1).try(|num| if num < 0 then Err("negative!") else Ok(-num)) # Result.Ok(-1) : Result(U64, Str)
+## Err("yipes!").try(|num| if num < 0 then Err("negative!") else Ok(-num)) # Result.Err("yipes!") : Result(U64, Str)
 ## ```
 try : Result(a, err), (a -> Result(b, err)) -> Result(b, err)
 try = |result, transform| match result {
-    Ok(v) => transform(v)
-    Err(e) => Err(e)
+    Result.Ok(v) => transform(v)
+    Result.Err(e) => Result.Err(e)
 }
+
+expect Ok(-1).try(|num| if num < 0 then Err("negative!") else Ok(-num)) == Result.Err("negative!")
+expect Ok(1).try(|num| if num < 0 then Err("negative!") else Ok(-num)) == Result.Ok(-1)
+expect Err("yipes!").try(|num| if num < 0 then Err("negative!") else Ok(-num)) == Result.Err("yipes!")
 
 ## If the result is `Err`, transforms the entire result by running a conversion
 ## function on the value the `Err` holds. Then returns that new result. If the
 ## result is `Ok`, this has no effect. Use `try` to transform an `Ok`.
 ## ```roc
-## Result.on_err(Ok(10), (\error_num -> Str.to_u64(error_num)))
-## Result.on_err(Err("42"), (\error_num -> Str.to_u64(error_num)))
+## Result.on_err(Ok(10), (|error_num| Str.to_u64(error_num))) # Result.Ok(10) : Result(U64, [InvalidNumStr])
+## Result.on_err(Err("42"), (|error_num| Str.to_u64(error_num))) # Result.Ok(42) : Result(U64, [InvalidNumStr])
+## Result.on_err(Err("a2"), Str.to_u64) # Result.Err(InvalidNumStr) : Result(U64, [InvalidNumStr])
 ## ```
 on_err : Result(a, err), (err -> Result(a, other_err)) -> Result(a, other_err)
 on_err = |result, transform| match result {
-    Ok(v) => Ok(v)
-    Err(e) => transform(e)
+    Result.Ok(v) => Result.Ok(v)
+    Result.Err(e) => transform(e)
 }
+
+expect Result.on_err(Ok(10), Str.to_u64) == Result.Ok(10)
+expect Result.on_err(Err("42"), Str.to_u64) == Result.Ok(42)
+expect Result.on_err(Err("a2"), Str.to_u64) == Result.Err(InvalidNumStr)
 
 ## Like [on_err], but it allows the transformation function to produce effects.
 ##
@@ -132,8 +142,8 @@ on_err = |result, transform| match result {
 ## ```
 on_err! : Result(a, err), (err => Result(a, other_err)) => Result(a, other_err)
 on_err! = |result, transform!| match result {
-    Ok(v) => Ok(v)
-    Err(e) => transform!(e)
+    Result.Ok(v) => Result.Ok(v)
+    Result.Err(e) => transform!(e)
 }
 
 ## Implementation of [Bool.Eq].  Checks if two results that have both `ok` and `err` types that are `Eq` are themselves equal.
@@ -143,6 +153,12 @@ on_err! = |result, transform!| match result {
 ## ```
 is_eq : Result(ok, err), Result(ok, err) -> Bool where ok.Eq, err.Eq
 is_eq = |r1, r2| match (r1, r2) {
-    (Ok(ok1), Ok(ok2)) => ok1 == ok2
-    (Err(err1), Err(err2)) => err1 == err2
+    (Result.Ok(ok1), Result.Ok(ok2)) => ok1 == ok2
+    (Result.Err(err1), Result.Err(err2)) => err1 == err2
 }
+
+expect Result.Ok(1) == Result.Ok(1)
+expect Result.Ok(2) != Result.Ok(1)
+expect Result.Err("Foo") == Result.Err("Foo")
+expect Result.Err("Bar") != Result.Err("Foo")
+expext Result.Ok("Foo") != Result.Err("Foo")
