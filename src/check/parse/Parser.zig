@@ -146,12 +146,22 @@ pub fn pushMalformed(self: *Parser, comptime t: type, tag: AST.Diagnostic.Tag, s
     if (self.peek() != .EndOfFile) {
         self.advanceOne(); // TODO: find a better point to advance to
     }
-    const region = AST.TokenizedRegion{ .start = start, .end = pos };
+
+    // Create a diagnostic region that points to the current problematic token
+    // Ensure the region is always valid by using min/max
+    const diagnostic_start = @min(pos, self.pos);
+    const diagnostic_end = @max(pos, self.pos);
+    // If start equals end, make it a single-token region
+    const diagnostic_region = AST.TokenizedRegion{ .start = diagnostic_start, .end = if (diagnostic_start == diagnostic_end) diagnostic_start + 1 else diagnostic_end };
+
+    // AST node should span the entire malformed expression
+    const ast_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
+
     self.diagnostics.append(self.gpa, .{
         .tag = tag,
-        .region = region,
+        .region = diagnostic_region,
     }) catch |err| exitOnOom(err);
-    return self.store.addMalformed(t, tag, region);
+    return self.store.addMalformed(t, tag, ast_region);
 }
 /// parse a `.roc` module
 ///

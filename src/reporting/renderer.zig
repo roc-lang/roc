@@ -9,7 +9,7 @@ const DocumentElement = @import("document.zig").DocumentElement;
 const Annotation = @import("document.zig").Annotation;
 const ColorPalette = @import("style.zig").ColorPalette;
 const ColorUtils = @import("style.zig").ColorUtils;
-const ReportingConfig = @import("config.zig").ReportingConfig;
+pub const ReportingConfig = @import("config.zig").ReportingConfig;
 const collections = @import("../collections.zig");
 const exitOnOom = collections.utils.exitOnOom;
 const source_region = @import("source_region.zig");
@@ -36,24 +36,32 @@ fn sanitisePathForSnapshots(path: []const u8) []const u8 {
 /// Supported rendering targets.
 pub const RenderTarget = enum {
     color_terminal,
-    plain_text,
+    markdown,
     html,
     language_server,
 };
 
 /// Render a report to the specified target format.
 pub fn renderReport(report: *const Report, writer: anytype, target: RenderTarget) !void {
-    const palette = ColorUtils.getPaletteForConfig(report.config);
+    // Create appropriate config based on render target
+    const config = switch (target) {
+        .color_terminal => ReportingConfig.initColorTerminal(),
+        .markdown => ReportingConfig.initMarkdown(),
+        .html => ReportingConfig.initHtml(),
+        .language_server => ReportingConfig.initLsp(),
+    };
+
+    const palette = ColorUtils.getPaletteForConfig(config);
     switch (target) {
-        .color_terminal => try renderReportToTerminal(report, writer, palette),
-        .plain_text => try renderReportToPlainText(report, writer),
-        .html => try renderReportToHtml(report, writer),
-        .language_server => try renderReportToLsp(report, writer),
+        .color_terminal => try renderReportToTerminal(report, writer, palette, config),
+        .markdown => try renderReportToMarkdown(report, writer, config),
+        .html => try renderReportToHtml(report, writer, config),
+        .language_server => try renderReportToLsp(report, writer, config),
     }
 }
 
 /// Render a report to terminal with color support.
-pub fn renderReportToTerminal(report: *const Report, writer: anytype, palette: ColorPalette) !void {
+pub fn renderReportToTerminal(report: *const Report, writer: anytype, palette: ColorPalette, config: ReportingConfig) !void {
     // Render title with appropriate severity styling
     const title_color = switch (report.severity) {
         .fatal => palette.error_color,
@@ -82,21 +90,22 @@ pub fn renderReportToTerminal(report: *const Report, writer: anytype, palette: C
     try writer.writeAll("\n\n");
 
     // Render document content
-    try renderDocumentToTerminal(&report.document, writer, palette);
+    try renderDocumentToTerminal(&report.document, writer, palette, config);
 
     try writer.writeAll("\n");
 }
 
 /// Render a report to plain text.
-pub fn renderReportToPlainText(report: *const Report, writer: anytype) !void {
+pub fn renderReportToMarkdown(report: *const Report, writer: anytype, config: ReportingConfig) !void {
+    try writer.writeAll("**");
     try writer.writeAll(report.title);
-    try writer.writeAll("\n");
-    try renderDocumentToPlainText(&report.document, writer);
-    try writer.writeAll("\n");
+    try writer.writeAll("**\n");
+    try renderDocumentToMarkdown(&report.document, writer, config);
+    try writer.writeAll("\n\n");
 }
 
 /// Render a report to HTML.
-pub fn renderReportToHtml(report: *const Report, writer: anytype) !void {
+pub fn renderReportToHtml(report: *const Report, writer: anytype, config: ReportingConfig) !void {
     const title_class = switch (report.severity) {
         .fatal => "error",
         .runtime_error => "error",
@@ -108,66 +117,76 @@ pub fn renderReportToHtml(report: *const Report, writer: anytype) !void {
     try writeEscapedHtml(writer, report.title);
     try writer.writeAll("</h1>\n");
     try writer.writeAll("<div class=\"report-content\">\n");
-    try renderDocumentToHtml(&report.document, writer);
+    try renderDocumentToHtml(&report.document, writer, config);
     try writer.writeAll("</div>\n</div>\n");
 }
 
 /// Render a report for language server protocol.
-pub fn renderReportToLsp(report: *const Report, writer: anytype) !void {
+pub fn renderReportToLsp(report: *const Report, writer: anytype, config: ReportingConfig) !void {
     // LSP typically wants plain text without formatting
     try writer.writeAll(report.title);
     try writer.writeAll("\n\n");
-    try renderDocumentToLsp(&report.document, writer);
+    try renderDocumentToLsp(&report.document, writer, config);
 }
 
 /// Render a document to the specified target format.
-pub fn renderDocument(document: *const Document, writer: anytype, target: RenderTarget, config: ReportingConfig) !void {
-    const palette = ColorUtils.getPaletteForConfig(config);
+pub fn renderDocument(document: *const Document, writer: anytype, target: RenderTarget) !void {
+    // Create appropriate config based on render target
+    const config = switch (target) {
+        .color_terminal => ReportingConfig.initColorTerminal(),
+        .markdown => ReportingConfig.initMarkdown(),
+        .html => ReportingConfig.initHtml(),
+        .language_server => ReportingConfig.initLsp(),
+    };
+
     switch (target) {
-        .color_terminal => try renderDocumentToTerminal(document, writer, palette),
-        .plain_text => try renderDocumentToPlainText(document, writer),
-        .html => try renderDocumentToHtml(document, writer),
-        .language_server => try renderDocumentToLsp(document, writer),
+        .color_terminal => {
+            const palette = ColorUtils.getPaletteForConfig(config);
+            try renderDocumentToTerminal(document, writer, palette, config);
+        },
+        .markdown => try renderDocumentToMarkdown(document, writer, config),
+        .html => try renderDocumentToHtml(document, writer, config),
+        .language_server => try renderDocumentToLsp(document, writer, config),
     }
 }
 
 /// Render a document to terminal with color support.
-pub fn renderDocumentToTerminal(document: *const Document, writer: anytype, palette: ColorPalette) !void {
+pub fn renderDocumentToTerminal(document: *const Document, writer: anytype, palette: ColorPalette, config: ReportingConfig) !void {
     var annotation_stack = std.ArrayList(Annotation).init(document.allocator);
     defer annotation_stack.deinit();
 
     for (document.elements.items) |element| {
-        try renderElementToTerminal(element, writer, palette, &annotation_stack);
+        try renderElementToTerminal(element, writer, palette, &annotation_stack, config);
     }
 }
 
 /// Render a document to plain text.
-pub fn renderDocumentToPlainText(document: *const Document, writer: anytype) !void {
+pub fn renderDocumentToMarkdown(document: *const Document, writer: anytype, config: ReportingConfig) !void {
     for (document.elements.items) |element| {
-        try renderElementToPlainText(element, writer);
+        try renderElementToMarkdown(element, writer, config);
     }
 }
 
 /// Render a document to HTML.
-pub fn renderDocumentToHtml(document: *const Document, writer: anytype) !void {
+pub fn renderDocumentToHtml(document: *const Document, writer: anytype, config: ReportingConfig) !void {
     var annotation_stack = std.ArrayList(Annotation).init(document.allocator);
     defer annotation_stack.deinit();
 
     for (document.elements.items) |element| {
-        try renderElementToHtml(element, writer, &annotation_stack);
+        try renderElementToHtml(element, writer, &annotation_stack, config);
     }
 }
 
 /// Render a document for language server protocol.
-pub fn renderDocumentToLsp(document: *const Document, writer: anytype) !void {
+pub fn renderDocumentToLsp(document: *const Document, writer: anytype, config: ReportingConfig) !void {
     for (document.elements.items) |element| {
-        try renderElementToLsp(element, writer);
+        try renderElementToLsp(element, writer, config);
     }
 }
 
 // Terminal rendering functions
 
-fn renderElementToTerminal(element: DocumentElement, writer: anytype, palette: ColorPalette, annotation_stack: *std.ArrayList(Annotation)) !void {
+fn renderElementToTerminal(element: DocumentElement, writer: anytype, palette: ColorPalette, annotation_stack: *std.ArrayList(Annotation), config: ReportingConfig) !void {
     switch (element) {
         .text => |text| try writer.writeAll(text),
         .annotated => |annotated| {
@@ -190,7 +209,7 @@ fn renderElementToTerminal(element: DocumentElement, writer: anytype, palette: C
             }
         },
         .horizontal_rule => |width| {
-            const rule_width = width orelse 80;
+            const rule_width = width orelse config.getMaxLineWidth();
             var i: u32 = 0;
             while (i < rule_width) : (i += 1) {
                 try writer.writeAll("─");
@@ -218,12 +237,12 @@ fn renderElementToTerminal(element: DocumentElement, writer: anytype, palette: C
         .vertical_stack => |elements| {
             for (elements, 0..) |elem, i| {
                 if (i > 0) try writer.writeAll("\n");
-                try renderElementToTerminal(elem, writer, palette, annotation_stack);
+                try renderElementToTerminal(elem, writer, palette, annotation_stack, config);
             }
         },
         .horizontal_concat => |elements| {
             for (elements) |elem| {
-                try renderElementToTerminal(elem, writer, palette, annotation_stack);
+                try renderElementToTerminal(elem, writer, palette, annotation_stack, config);
             }
         },
         .source_code_region => |region| {
@@ -333,10 +352,110 @@ fn getAnnotationColor(annotation: Annotation, palette: ColorPalette) []const u8 
 
 // Plain text rendering functions
 
-fn renderElementToPlainText(element: DocumentElement, writer: anytype) !void {
+fn renderElementToMarkdown(element: DocumentElement, writer: anytype, config: ReportingConfig) !void {
     switch (element) {
         .text => |text| try writer.writeAll(text),
-        .annotated => |annotated| try writer.writeAll(annotated.content),
+        .annotated => |annotated| {
+            switch (annotated.annotation) {
+                .emphasized => {
+                    try writer.writeAll("**");
+                    try writer.writeAll(annotated.content);
+                    try writer.writeAll("**");
+                },
+                .keyword => {
+                    try writer.writeAll("`");
+                    try writer.writeAll(annotated.content);
+                    try writer.writeAll("`");
+                },
+                .type_variable => {
+                    try writer.writeAll("_");
+                    try writer.writeAll(annotated.content);
+                    try writer.writeAll("_");
+                },
+                .error_highlight => {
+                    try writer.writeAll("**");
+                    try writer.writeAll(annotated.content);
+                    try writer.writeAll("**");
+                },
+                .warning_highlight => {
+                    try writer.writeAll("**⚠ ");
+                    try writer.writeAll(annotated.content);
+                    try writer.writeAll("**");
+                },
+                .suggestion => {
+                    try writer.writeAll("**");
+                    try writer.writeAll(annotated.content);
+                    try writer.writeAll("**");
+                },
+                .code_block => {
+                    try writer.writeAll("```roc\n");
+                    try writer.writeAll(annotated.content);
+                    try writer.writeAll("\n```");
+                },
+                .inline_code => {
+                    try writer.writeAll("`");
+                    try writer.writeAll(annotated.content);
+                    try writer.writeAll("`");
+                },
+                .symbol => {
+                    try writer.writeAll("`");
+                    try writer.writeAll(annotated.content);
+                    try writer.writeAll("`");
+                },
+                .path => {
+                    try writer.writeAll("`");
+                    try writer.writeAll(annotated.content);
+                    try writer.writeAll("`");
+                },
+                .literal => {
+                    try writer.writeAll("`");
+                    try writer.writeAll(annotated.content);
+                    try writer.writeAll("`");
+                },
+                .comment => {
+                    try writer.writeAll("_");
+                    try writer.writeAll(annotated.content);
+                    try writer.writeAll("_");
+                },
+                .underline => {
+                    try writer.writeAll("__");
+                    try writer.writeAll(annotated.content);
+                    try writer.writeAll("__");
+                },
+                .dimmed => {
+                    try writer.writeAll("`");
+                    try writer.writeAll(annotated.content);
+                    try writer.writeAll("`");
+                },
+                .symbol_qualified, .symbol_unqualified => {
+                    try writer.writeAll("`");
+                    try writer.writeAll(annotated.content);
+                    try writer.writeAll("`");
+                },
+                .module_name => {
+                    try writer.writeAll("**");
+                    try writer.writeAll(annotated.content);
+                    try writer.writeAll("**");
+                },
+                .record_field => {
+                    try writer.writeAll("`");
+                    try writer.writeAll(annotated.content);
+                    try writer.writeAll("`");
+                },
+                .tag_name => {
+                    try writer.writeAll("`");
+                    try writer.writeAll(annotated.content);
+                    try writer.writeAll("`");
+                },
+                .binary_operator => {
+                    try writer.writeAll("`");
+                    try writer.writeAll(annotated.content);
+                    try writer.writeAll("`");
+                },
+                .source_region => try writer.writeAll(annotated.content),
+                .reflowing_text => try writer.writeAll(annotated.content),
+            }
+        },
         .line_break => try writer.writeAll("\n"),
         .indent => |levels| {
             var i: u32 = 0;
@@ -351,42 +470,42 @@ fn renderElementToPlainText(element: DocumentElement, writer: anytype) !void {
             }
         },
         .horizontal_rule => |width| {
-            const rule_width = width orelse 80;
-            var i: u32 = 0;
-            while (i < rule_width) : (i += 1) {
-                try writer.writeAll("-");
-            }
+            const rule_width = width orelse config.getMaxLineWidth();
+            try writer.writeAll("\n---\n");
+            _ = rule_width; // Markdown uses standard horizontal rule
         },
-        .annotation_start, .annotation_end => {}, // Ignore annotations in plain text
+        .annotation_start, .annotation_end => {}, // Handled in annotated case
         .raw => |content| try writer.writeAll(content),
         .reflowing_text => |text| try writer.writeAll(text),
         .vertical_stack => |elements| {
             for (elements, 0..) |elem, i| {
                 if (i > 0) try writer.writeAll("\n");
-                try renderElementToPlainText(elem, writer);
+                try renderElementToMarkdown(elem, writer, config);
             }
         },
         .horizontal_concat => |elements| {
             for (elements) |elem| {
-                try renderElementToPlainText(elem, writer);
+                try renderElementToMarkdown(elem, writer, config);
             }
         },
         .source_code_region => |region| {
             if (region.filename) |filename| {
-                try writer.print("{s}:{}-{}:{}: ", .{ sanitisePathForSnapshots(filename), region.start_line, region.start_column, region.end_line });
+                try writer.print("**{s}:{d}:{d}:{d}:{d}:**\n", .{ sanitisePathForSnapshots(filename), region.start_line, region.start_column, region.end_line, region.end_column });
             }
+            try writer.writeAll("```roc\n");
             const lines = source_region.extractLines(region.source, region.start_line, region.end_line);
             try writer.writeAll(lines);
-            try writer.writeAll("\n");
+            try writer.writeAll("\n```\n");
         },
         .source_code_multi_region => |multi| {
             if (multi.filename) |filename| {
-                try writer.print("{s}: ", .{filename});
+                try writer.print("**{s}:**\n", .{filename});
             }
+            try writer.writeAll("```roc\n");
             try writer.writeAll(multi.source);
-            try writer.writeAll("\n");
+            try writer.writeAll("\n```\n");
             for (multi.regions) |region| {
-                try writer.print("  {}:{}-{}:{}\n", .{ region.start_line, region.start_column, region.end_line, region.end_column });
+                try writer.print("- Line {d}:{d}-{d}:{d}\n", .{ region.start_line, region.start_column, region.end_line, region.end_column });
             }
         },
     }
@@ -394,7 +513,7 @@ fn renderElementToPlainText(element: DocumentElement, writer: anytype) !void {
 
 // HTML rendering functions
 
-fn renderElementToHtml(element: DocumentElement, writer: anytype, annotation_stack: *std.ArrayList(Annotation)) !void {
+fn renderElementToHtml(element: DocumentElement, writer: anytype, annotation_stack: *std.ArrayList(Annotation), config: ReportingConfig) !void {
     switch (element) {
         .text => |text| try writeEscapedHtml(writer, text),
         .annotated => |annotated| {
@@ -418,7 +537,7 @@ fn renderElementToHtml(element: DocumentElement, writer: anytype, annotation_sta
             }
         },
         .horizontal_rule => |width| {
-            const rule_width = width orelse 80;
+            const rule_width = width orelse config.getMaxLineWidth();
             try writer.print("<hr style=\"width: {d}ch;\">\n", .{rule_width});
         },
         .annotation_start => |annotation| {
@@ -441,21 +560,21 @@ fn renderElementToHtml(element: DocumentElement, writer: anytype, annotation_sta
             try writer.writeAll("<div class=\"vertical-stack\">\n");
             for (elements, 0..) |elem, i| {
                 if (i > 0) try writer.writeAll("\n");
-                try renderElementToHtml(elem, writer, annotation_stack);
+                try renderElementToHtml(elem, writer, annotation_stack, config);
             }
             try writer.writeAll("</div>\n");
         },
         .horizontal_concat => |elements| {
             try writer.writeAll("<span class=\"horizontal-concat\">");
             for (elements) |elem| {
-                try renderElementToHtml(elem, writer, annotation_stack);
+                try renderElementToHtml(elem, writer, annotation_stack, config);
             }
             try writer.writeAll("</span>");
         },
         .source_code_region => |region| {
             try writer.writeAll("<div class=\"source-region\">");
             if (region.filename) |filename| {
-                try writer.print("<span class=\"filename\">{s}:{}-{}:{}:</span> ", .{ sanitisePathForSnapshots(filename), region.start_line, region.start_column, region.end_line });
+                try writer.print("<span class=\"filename\">{s}:{}:{}:{}:{}:</span> ", .{ sanitisePathForSnapshots(filename), region.start_line, region.start_column, region.end_line, region.end_column });
             }
             const class = getAnnotationHtmlClass(region.region_annotation);
             try writer.print("<pre class=\"{s}\">", .{class});
@@ -508,7 +627,7 @@ fn writeEscapedHtml(writer: anytype, text: []const u8) !void {
 
 // LSP rendering functions
 
-fn renderElementToLsp(element: DocumentElement, writer: anytype) !void {
+fn renderElementToLsp(element: DocumentElement, writer: anytype, config: ReportingConfig) !void {
     switch (element) {
         .text => |text| try writer.writeAll(text),
         .annotated => |annotated| try writer.writeAll(annotated.content),
@@ -526,7 +645,7 @@ fn renderElementToLsp(element: DocumentElement, writer: anytype) !void {
             }
         },
         .horizontal_rule => |width| {
-            const rule_width = width orelse 40; // Shorter for LSP
+            const rule_width = width orelse config.getMaxLineWidth();
             var i: u32 = 0;
             while (i < rule_width) : (i += 1) {
                 try writer.writeAll("-");
@@ -538,17 +657,17 @@ fn renderElementToLsp(element: DocumentElement, writer: anytype) !void {
         .vertical_stack => |elements| {
             for (elements, 0..) |elem, i| {
                 if (i > 0) try writer.writeAll("\n");
-                try renderElementToLsp(elem, writer);
+                try renderElementToLsp(elem, writer, config);
             }
         },
         .horizontal_concat => |elements| {
             for (elements) |elem| {
-                try renderElementToLsp(elem, writer);
+                try renderElementToLsp(elem, writer, config);
             }
         },
         .source_code_region => |region| {
             if (region.filename) |filename| {
-                try writer.print("{s}:{}-{}:{}: ", .{ sanitisePathForSnapshots(filename), region.start_line, region.start_column, region.end_line });
+                try writer.print("{s}:{}:{}:{}:{}: ", .{ sanitisePathForSnapshots(filename), region.start_line, region.start_column, region.end_line, region.end_column });
             }
             const lines = source_region.extractLines(region.source, region.start_line, region.end_line);
             try writer.writeAll(lines);
@@ -570,9 +689,8 @@ fn renderElementToLsp(element: DocumentElement, writer: anytype) !void {
 // Tests
 const testing = std.testing;
 
-test "render report to plain text" {
-    const config = ReportingConfig.initForTesting();
-    var report = Report.init(testing.allocator, "TEST ERROR", .runtime_error, config);
+test "render report to markdown" {
+    var report = Report.init(testing.allocator, "TEST ERROR", .runtime_error);
     defer report.deinit();
 
     try report.document.addText("This is a test error message.");
@@ -580,13 +698,13 @@ test "render report to plain text" {
     var buffer = std.ArrayList(u8).init(testing.allocator);
     defer buffer.deinit();
 
-    try renderReportToPlainText(&report, buffer.writer());
+    try renderReportToMarkdown(&report, buffer.writer(), ReportingConfig.initMarkdown());
 
-    try testing.expect(std.mem.indexOf(u8, buffer.items, "TEST ERROR") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "**TEST ERROR**") != null);
     try testing.expect(std.mem.indexOf(u8, buffer.items, "This is a test error message.") != null);
 }
 
-test "render document with annotations to plain text" {
+test "render document with annotations to markdown" {
     var doc = Document.init(testing.allocator);
     defer doc.deinit();
 
@@ -597,9 +715,9 @@ test "render document with annotations to plain text" {
     var buffer = std.ArrayList(u8).init(testing.allocator);
     defer buffer.deinit();
 
-    try renderDocumentToPlainText(&doc, buffer.writer());
+    try renderDocumentToMarkdown(&doc, buffer.writer(), ReportingConfig.initMarkdown());
 
-    try testing.expectEqualStrings("Hello world!", buffer.items);
+    try testing.expectEqualStrings("Hello **world**!", buffer.items);
 }
 
 test "render HTML escaping" {
@@ -611,7 +729,7 @@ test "render HTML escaping" {
     var buffer = std.ArrayList(u8).init(testing.allocator);
     defer buffer.deinit();
 
-    try renderDocumentToHtml(&doc, buffer.writer());
+    try renderDocumentToHtml(&doc, buffer.writer(), ReportingConfig.initHtml());
 
     try testing.expect(std.mem.indexOf(u8, buffer.items, "&lt;script&gt;") != null);
     try testing.expect(std.mem.indexOf(u8, buffer.items, "<script>") == null);
@@ -629,7 +747,7 @@ test "render indentation and spacing" {
     var buffer = std.ArrayList(u8).init(testing.allocator);
     defer buffer.deinit();
 
-    try renderDocumentToPlainText(&doc, buffer.writer());
+    try renderDocumentToMarkdown(&doc, buffer.writer(), ReportingConfig.initMarkdown());
 
     try testing.expectEqualStrings("        indented   spaced", buffer.items);
 }
@@ -643,7 +761,7 @@ test "render horizontal rule" {
     var buffer = std.ArrayList(u8).init(testing.allocator);
     defer buffer.deinit();
 
-    try renderDocumentToPlainText(&doc, buffer.writer());
+    try renderDocumentToMarkdown(&doc, buffer.writer(), ReportingConfig.initMarkdown());
 
-    try testing.expectEqualStrings("-----", buffer.items);
+    try testing.expectEqualStrings("\n---\n", buffer.items);
 }
