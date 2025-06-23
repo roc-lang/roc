@@ -31,7 +31,7 @@ Eq(a) : a
         ## cannot derive `is_eq` for types that contain functions.
         a.is_eq(a) -> Bool,
 
-## Represents the boolean true and false using an opaque type.
+## Represents the boolean true and false using an nominal type.
 ## `Bool` implements the `Eq` ability.
 Bool := [True, False]
 
