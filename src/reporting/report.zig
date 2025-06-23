@@ -18,22 +18,23 @@ const RegionInfo = base.RegionInfo;
 const collections = @import("../collections.zig");
 const exitOnOom = collections.utils.exitOnOom;
 
+/// Default maximum message size in bytes for truncation
+const DEFAULT_MAX_MESSAGE_BYTES: usize = 4096;
+
 /// A structured report containing error information and formatted content.
 pub const Report = struct {
     title: []const u8,
     severity: Severity,
     document: Document,
     allocator: Allocator,
-    config: ReportingConfig,
     owned_strings: std.ArrayList([]const u8),
 
-    pub fn init(allocator: Allocator, title: []const u8, severity: Severity, config: ReportingConfig) Report {
+    pub fn init(allocator: Allocator, title: []const u8, severity: Severity) Report {
         return Report{
             .title = title,
             .severity = severity,
             .document = Document.init(allocator),
             .allocator = allocator,
-            .config = config,
             .owned_strings = std.ArrayList([]const u8).init(allocator),
         };
     }
@@ -68,22 +69,18 @@ pub const Report = struct {
 
     /// Add a code snippet with proper formatting and UTF-8 validation.
     pub fn addCodeSnippet(self: *Report, code: []const u8, line_number: ?u32) !void {
-        if (self.config.shouldValidateUtf8()) {
-            @import("config.zig").validateUtf8(code) catch |err| switch (err) {
-                error.InvalidUtf8 => {
-                    try self.document.addError("[Invalid UTF-8 in code snippet]");
-                    try self.document.addLineBreak();
-                    return;
-                },
-            };
-        }
+        @import("config.zig").validateUtf8(code) catch |err| switch (err) {
+            error.InvalidUtf8 => {
+                try self.document.addError("[Invalid UTF-8 in code snippet]");
+                try self.document.addLineBreak();
+                return;
+            },
+        };
 
-        if (self.config.shouldShowLineNumbers()) {
-            if (line_number) |line_num| {
-                try self.document.addFormattedText("{d} | ", .{line_num});
-            } else {
-                try self.document.addText("   | ");
-            }
+        if (line_number) |line_num| {
+            try self.document.addFormattedText("{d} | ", .{line_num});
+        } else {
+            try self.document.addText("   | ");
         }
         try self.document.addCodeBlock(code);
         try self.document.addLineBreak();
@@ -91,23 +88,17 @@ pub const Report = struct {
 
     /// Add source context using RegionInfo for better accuracy and simplicity.
     pub fn addSourceContext(self: *Report, region: RegionInfo) !void {
-        if (self.config.shouldValidateUtf8()) {
-            @import("config.zig").validateUtf8(region.line_text) catch |err| switch (err) {
-                error.InvalidUtf8 => {
-                    try self.document.addError("[Invalid UTF-8 in source context]");
-                    try self.document.addLineBreak();
-                    return;
-                },
-            };
-        }
+        @import("config.zig").validateUtf8(region.line_text) catch |err| switch (err) {
+            error.InvalidUtf8 => {
+                try self.document.addError("[Invalid UTF-8 in source context]");
+                try self.document.addLineBreak();
+                return;
+            },
+        };
 
-        // Show line number if enabled
-        if (self.config.shouldShowLineNumbers()) {
-            const line_num = region.start_line_idx + 1; // Convert to 1-based
-            try self.document.addFormattedText("{d} | ", .{line_num});
-        } else {
-            try self.document.addText("   | ");
-        }
+        // Show line number
+        const line_num = region.start_line_idx + 1; // Convert to 1-based
+        try self.document.addFormattedText("{d} | ", .{line_num});
 
         // Add the line content with highlighting
         const line_without_newline = std.mem.trimRight(u8, region.line_text, "\n\r");
@@ -143,13 +134,8 @@ pub const Report = struct {
         // Add underline for highlighted section
         if (region.start_col_idx < region.end_col_idx) {
             // Add padding for line number prefix
-            if (self.config.shouldShowLineNumbers()) {
-                const line_num = region.start_line_idx + 1;
-                const line_num_width: u32 = if (line_num < 10) 1 else if (line_num < 100) 2 else if (line_num < 1000) 3 else 4;
-                try self.document.addSpace(line_num_width + 3); // number + " | "
-            } else {
-                try self.document.addSpace(5); // "   | "
-            }
+            const line_num_width: u32 = if (line_num < 10) 1 else if (line_num < 100) 2 else if (line_num < 1000) 3 else 4;
+            try self.document.addSpace(line_num_width + 3); // number + " | "
 
             // Add spaces up to the start of the error
             try self.document.addSpace(region.start_col_idx);
@@ -168,18 +154,16 @@ pub const Report = struct {
 
     /// Add a suggestion with proper formatting and UTF-8 validation.
     pub fn addSuggestion(self: *Report, suggestion: []const u8) !void {
-        if (self.config.shouldValidateUtf8()) {
-            @import("config.zig").validateUtf8(suggestion) catch |err| switch (err) {
-                error.InvalidUtf8 => {
-                    try self.document.addError("[Invalid UTF-8 in suggestion]");
-                    try self.document.addLineBreak();
-                    return;
-                },
-            };
-        }
+        @import("config.zig").validateUtf8(suggestion) catch |err| switch (err) {
+            error.InvalidUtf8 => {
+                try self.document.addError("[Invalid UTF-8 in suggestion]");
+                try self.document.addLineBreak();
+                return;
+            },
+        };
 
-        const truncated_suggestion = if (suggestion.len > self.config.getMaxMessageBytes()) blk: {
-            const truncated = @import("config.zig").truncateUtf8(self.allocator, suggestion, self.config.getMaxMessageBytes()) catch suggestion;
+        const truncated_suggestion = if (suggestion.len > DEFAULT_MAX_MESSAGE_BYTES) blk: {
+            const truncated = @import("config.zig").truncateUtf8(self.allocator, suggestion, DEFAULT_MAX_MESSAGE_BYTES) catch suggestion;
             if (truncated.ptr != suggestion.ptr) {
                 self.owned_strings.append(truncated) catch |err| exitOnOom(err);
             }
@@ -278,9 +262,9 @@ pub const Report = struct {
 pub const ReportBuilder = struct {
     report: Report,
 
-    pub fn init(allocator: Allocator, title: []const u8, severity: Severity, config: ReportingConfig) ReportBuilder {
+    pub fn init(allocator: Allocator, title: []const u8, severity: Severity) ReportBuilder {
         return ReportBuilder{
-            .report = Report.init(allocator, title, severity, config),
+            .report = Report.init(allocator, title, severity),
         };
     }
 
@@ -333,8 +317,7 @@ pub const ReportBuilder = struct {
 const testing = std.testing;
 
 test "Report basic functionality" {
-    const config = ReportingConfig.initForTesting();
-    var report = Report.init(testing.allocator, "TEST ERROR", .runtime_error, config);
+    var report = Report.init(testing.allocator, "TEST ERROR", .runtime_error);
     defer report.deinit();
 
     try report.document.addText("This is a test error message.");
@@ -345,8 +328,7 @@ test "Report basic functionality" {
 }
 
 test "ReportBuilder fluent interface" {
-    const config = ReportingConfig.initForTesting();
-    var builder = ReportBuilder.init(testing.allocator, "BUILD ERROR", .runtime_error, config);
+    var builder = ReportBuilder.init(testing.allocator, "BUILD ERROR", .runtime_error);
     defer builder.deinit();
 
     var report = builder
