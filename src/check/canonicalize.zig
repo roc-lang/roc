@@ -563,8 +563,12 @@ pub fn canonicalize_expr(
 
             // Create a polymorphic int type variable
             const poly_var = self.can_ir.env.types.fresh();
-            const int_type_var = self.can_ir.pushTypeVar(
-                Content{ .structure = .{ .num = .{ .int_poly = poly_var } } },
+            const int_var = self.can_ir.env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_poly = poly_var } } });
+            const num_var = self.can_ir.env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = int_var } } });
+
+            // Store the type variable at the expression location
+            _ = self.can_ir.pushTypeVar(
+                Content{ .structure = .{ .num = .{ .num_poly = int_var } } },
                 final_expr_idx,
                 region,
             );
@@ -572,9 +576,9 @@ pub fn canonicalize_expr(
             // then in the final slot the actual expr is inserted
             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
                 .int = .{
-                    .int_var = int_type_var,
+                    .int_var = num_var,
                     .requirements = requirements,
-                    .value = CIR.IntLiteralValue{ .value = i128_val },
+                    .value = .{ .value = i128_val },
                     .region = region,
                 },
             });
@@ -584,7 +588,7 @@ pub fn canonicalize_expr(
             // Insert concrete type variable
             _ = self.can_ir.setTypeVarAtExpr(
                 expr_idx,
-                Content{ .structure = .{ .num = .{ .num_poly = int_type_var } } },
+                Content{ .structure = .{ .num = .{ .num_poly = int_var } } },
             );
 
             return expr_idx;
@@ -599,8 +603,13 @@ pub fn canonicalize_expr(
             const final_expr_idx = self.can_ir.store.predictNodeIndex(2);
 
             // Create a polymorphic frac type variable
-            const frac_type_var = self.can_ir.pushTypeVar(
-                Content{ .structure = .{ .num = .{ .frac_poly = @enumFromInt(0) } } },
+            const poly_var = self.can_ir.env.types.fresh();
+            const frac_var = self.can_ir.env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = poly_var } } });
+            const num_var = self.can_ir.env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = frac_var } } });
+
+            // Store the type variable at the expression location
+            _ = self.can_ir.pushTypeVar(
+                Content{ .structure = .{ .num = .{ .num_poly = frac_var } } },
                 final_expr_idx,
                 region,
             );
@@ -617,7 +626,7 @@ pub fn canonicalize_expr(
             const cir_expr = switch (parsed) {
                 .dec => |dec_info| CIR.Expr{
                     .frac_dec = .{
-                        .frac_var = frac_type_var,
+                        .frac_var = num_var,
                         .requirements = dec_info.requirements,
                         .value = dec_info.value,
                         .region = region,
@@ -625,7 +634,7 @@ pub fn canonicalize_expr(
                 },
                 .f64 => |f64_info| CIR.Expr{
                     .frac_f64 = .{
-                        .frac_var = frac_type_var,
+                        .frac_var = num_var,
                         .requirements = f64_info.requirements,
                         .value = f64_info.value,
                         .region = region,
@@ -638,9 +647,7 @@ pub fn canonicalize_expr(
             std.debug.assert(@intFromEnum(expr_idx) == @intFromEnum(final_expr_idx));
 
             // Insert concrete type variable
-            _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{
-                .structure = .{ .num = .{ .num_poly = frac_type_var } },
-            });
+            _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .structure = .{ .num = .{ .num_poly = frac_var } } });
 
             return expr_idx;
         },
@@ -1786,16 +1793,21 @@ pub fn addNonFiniteFloat(self: *Self, value: f64, region: base.Region) CIR.Expr.
     const final_expr_idx = self.can_ir.store.predictNodeIndex(2);
 
     // Create a polymorphic frac type variable
-    const frac_type_var = self.can_ir.pushTypeVar(
-        Content{ .structure = .{ .num = .{ .frac_poly = @enumFromInt(0) } } },
+    const poly_var = self.can_ir.env.types.fresh();
+    const frac_var = self.can_ir.env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = poly_var } } });
+    const num_var = self.can_ir.env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = frac_var } } });
+
+    // Store the type variable at the expression location
+    _ = self.can_ir.pushTypeVar(
+        Content{ .structure = .{ .num = .{ .num_poly = frac_var } } },
         final_expr_idx,
         region,
     );
 
     // then in the final slot the actual expr is inserted
     const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
-        .frac = .{
-            .frac_var = frac_type_var,
+        .frac_f64 = .{
+            .frac_var = num_var,
             .requirements = requirements,
             .value = value,
             .region = region,
@@ -1807,7 +1819,7 @@ pub fn addNonFiniteFloat(self: *Self, value: f64, region: base.Region) CIR.Expr.
     // Insert concrete type variable
     _ = self.can_ir.setTypeVarAtExpr(
         expr_idx,
-        Content{ .structure = .{ .num = .{ .num_poly = frac_type_var } } },
+        Content{ .structure = .{ .num = .{ .num_poly = frac_var } } },
     );
 
     return expr_idx;
