@@ -24,10 +24,8 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (e_int (1:1-1:31)
-	(int_var 13)
-	(requirements
-		(sign_needed "false")
-		(bits_needed "100"))
+	(int_var 14)
+	(requirements (sign_needed "false") (bits_needed "types.types.Num.Int.BitsNeeded.65_to_127"))
 	(value "999999999999999999999999999999"))
 ~~~
 # TYPES

@@ -52,11 +52,9 @@ add2 = x + 2
 				"add"
 				(e_runtime_error (3:8-3:9) "ident_not_in_scope")
 				(e_int (3:17-3:18)
-					(int_var 16)
-					(precision_var 15)
-					(literal "2")
-					(value "TODO")
-					(bound "u8"))))))
+					(int_var 17)
+					(requirements (sign_needed "false") (bits_needed "types.types.Num.Int.BitsNeeded.7"))
+					(value "2"))))))
 ~~~
 # TYPES
 ~~~clojure

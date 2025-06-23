@@ -46,11 +46,9 @@ topLevelVar_ = 0
 				(ident "topLevelVar_")))
 		(def_expr
 			(e_int (4:20-4:21)
-				(int_var 14)
-				(precision_var 13)
-				(literal "0")
-				(value "TODO")
-				(bound "u8")))))
+				(int_var 15)
+				(requirements (sign_needed "false") (bits_needed "types.types.Num.Int.BitsNeeded.7"))
+				(value "0")))))
 ~~~
 # TYPES
 ~~~clojure

@@ -123,11 +123,9 @@ outerFunc = |_| {
 				(ident "x")))
 		(def_expr
 			(e_int (4:5-4:6)
-				(int_var 14)
-				(precision_var 13)
-				(literal "5")
-				(value "TODO")
-				(bound "u8"))))
+				(int_var 15)
+				(requirements (sign_needed "false") (bits_needed "types.types.Num.Int.BitsNeeded.7"))
+				(value "5"))))
 	(d_let
 		(def_pattern
 			(p_assign (5:1-5:2)
@@ -135,11 +133,9 @@ outerFunc = |_| {
 				(ident "y")))
 		(def_expr
 			(e_int (5:5-5:7)
-				(int_var 19)
-				(precision_var 18)
-				(literal "10")
-				(value "TODO")
-				(bound "u8"))))
+				(int_var 20)
+				(requirements (sign_needed "false") (bits_needed "types.types.Num.Int.BitsNeeded.7"))
+				(value "10"))))
 	(d_let
 		(def_pattern
 			(p_assign (8:1-8:10)
@@ -154,11 +150,9 @@ outerFunc = |_| {
 							(pid 24)
 							(ident "x"))
 						(e_int (9:9-9:11)
-							(int_var 27)
-							(precision_var 26)
-							(literal "20")
-							(value "TODO")
-							(bound "u8")))
+							(int_var 28)
+							(requirements (sign_needed "false") (bits_needed "types.types.Num.Int.BitsNeeded.7"))
+							(value "20")))
 					(s_let (10:5-14:6)
 						(p_assign (10:5-10:16)
 							(pid 30)
@@ -176,11 +170,9 @@ outerFunc = |_| {
 								"add"
 								(e_lookup (13:9-13:10) (pid 31))
 								(e_int (13:13-13:14)
-									(int_var 38)
-									(precision_var 37)
-									(literal "1")
-									(value "TODO")
-									(bound "u8")))))
+									(int_var 39)
+									(requirements (sign_needed "false") (bits_needed "types.types.Num.Int.BitsNeeded.7"))
+									(value "1")))))
 					(e_lookup (15:5-15:16) (pid 30)))))))
 ~~~
 # TYPES

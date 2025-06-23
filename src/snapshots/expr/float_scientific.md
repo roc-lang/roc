@@ -15,7 +15,7 @@ Float(1:1-1:8),EndOfFile(1:8-1:8),
 ~~~
 # PARSE
 ~~~clojure
-(float (1:1-1:8) "1.23e-4")
+(frac (1:1-1:8) "1.23e-4")
 ~~~
 # FORMATTED
 ~~~roc
@@ -23,12 +23,10 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e_float (1:1-1:8)
-	(frac_var 13)
-	(precision_var 12)
-	(literal "1.23e-4")
-	(value "0")
-	(bound "f32"))
+(e_frac_f64 (1:1-1:8)
+	(frac_var 14)
+	(requirements (fits_in_f32 "false") (fits_in_dec "false"))
+	(value "0.000123"))
 ~~~
 # TYPES
 ~~~clojure

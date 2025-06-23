@@ -32,11 +32,9 @@ NO CHANGE
 (e_call (1:1-1:17)
 	(e_runtime_error (1:1-1:4) "ident_not_in_scope")
 	(e_int (1:5-1:7)
-		(int_var 15)
-		(precision_var 14)
-		(literal "42")
-		(value "TODO")
-		(bound "u8"))
+		(int_var 16)
+		(requirements (sign_needed "false") (bits_needed "types.types.Num.Int.BitsNeeded.7"))
+		(value "42"))
 	(e_string (1:9-1:16) (e_literal (1:10-1:15) "hello")))
 ~~~
 # TYPES

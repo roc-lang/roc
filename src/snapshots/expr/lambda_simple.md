@@ -37,11 +37,9 @@ NO CHANGE
 		"add"
 		(e_lookup (1:5-1:6) (pid 12))
 		(e_int (1:9-1:10)
-			(int_var 15)
-			(precision_var 14)
-			(literal "1")
-			(value "TODO")
-			(bound "u8"))))
+			(int_var 16)
+			(requirements (sign_needed "false") (bits_needed "types.types.Num.Int.BitsNeeded.7"))
+			(value "1"))))
 ~~~
 # TYPES
 ~~~clojure

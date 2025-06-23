@@ -31,11 +31,9 @@ NO CHANGE
 		(name "Some")
 		(args "TODO"))
 	(e_int (1:6-1:8)
-		(int_var 15)
-		(precision_var 14)
-		(literal "42")
-		(value "TODO")
-		(bound "u8")))
+		(int_var 16)
+		(requirements (sign_needed "false") (bits_needed "types.types.Num.Int.BitsNeeded.7"))
+		(value "42")))
 ~~~
 # TYPES
 ~~~clojure

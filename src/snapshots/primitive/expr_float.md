@@ -23,7 +23,7 @@ LowerIdent(2:1-2:4),OpAssign(2:5-2:6),Float(2:7-2:12),EndOfFile(2:12-2:12),
 	(statements
 		(decl (2:1-2:12)
 			(ident (2:1-2:4) "foo")
-			(float (2:7-2:12) "12.34"))))
+			(frac (2:7-2:12) "12.34"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -38,11 +38,9 @@ NO CHANGE
 				(pid 12)
 				(ident "foo")))
 		(def_expr
-			(e_frac_f64 (2:7-2:12)
-				(frac_var 14)
-				(requirements
-					(fits_in_f32 "true")
-					(fits_in_dec "true"))
+			(e_frac_dec (2:7-2:12)
+				(frac_var 15)
+				(requirements (fits_in_f32 "false") (fits_in_dec "true"))
 				(value "12.34")))))
 ~~~
 # TYPES

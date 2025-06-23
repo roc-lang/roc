@@ -24,11 +24,9 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (e_int (1:1-1:3)
-	(int_var 13)
-	(precision_var 12)
-	(literal "42")
-	(value "TODO")
-	(bound "u8"))
+	(int_var 14)
+	(requirements (sign_needed "false") (bits_needed "types.types.Num.Int.BitsNeeded.7"))
+	(value "42"))
 ~~~
 # TYPES
 ~~~clojure

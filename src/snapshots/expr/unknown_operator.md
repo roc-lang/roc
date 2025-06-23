@@ -33,11 +33,9 @@ Int(1:1-1:2),OpPlus(1:3-1:4),OpPlus(1:4-1:5),Int(1:6-1:7),EndOfFile(1:7-1:7),
 (e_binop (1:1-1:7)
 	"add"
 	(e_int (1:1-1:2)
-		(int_var 13)
-		(precision_var 12)
-		(literal "1")
-		(value "TODO")
-		(bound "u8"))
+		(int_var 14)
+		(requirements (sign_needed "false") (bits_needed "types.types.Num.Int.BitsNeeded.7"))
+		(value "1"))
 	(e_runtime_error (1:1-1:7) "expr_not_canonicalized"))
 ~~~
 # TYPES

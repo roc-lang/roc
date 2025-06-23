@@ -56,10 +56,8 @@ NO CHANGE
 				(ident "a")))
 		(def_expr
 			(e_int (3:5-3:6)
-				(int_var 14)
-				(requirements
-					(sign_needed "false")
-					(bits_needed "8"))
+				(int_var 15)
+				(requirements (sign_needed "false") (bits_needed "types.types.Num.Int.BitsNeeded.7"))
 				(value "5"))))
 	(d_let
 		(def_pattern
@@ -71,10 +69,8 @@ NO CHANGE
 				"add"
 				(e_lookup (4:5-4:6) (pid 12))
 				(e_int (4:9-4:10)
-					(int_var 20)
-					(requirements
-						(sign_needed "false")
-						(bits_needed "8"))
+					(int_var 21)
+					(requirements (sign_needed "false") (bits_needed "types.types.Num.Int.BitsNeeded.7"))
 					(value "1"))))))
 ~~~
 # TYPES

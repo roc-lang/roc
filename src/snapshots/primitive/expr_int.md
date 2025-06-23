@@ -39,11 +39,9 @@ NO CHANGE
 				(ident "foo")))
 		(def_expr
 			(e_int (2:7-2:9)
-				(int_var 14)
-				(precision_var 13)
-				(literal "42")
-				(value "TODO")
-				(bound "u8")))))
+				(int_var 15)
+				(requirements (sign_needed "false") (bits_needed "types.types.Num.Int.BitsNeeded.7"))
+				(value "42")))))
 ~~~
 # TYPES
 ~~~clojure

@@ -556,22 +556,19 @@ pub fn canonicalize_expr(
             const i128_val: i128 = sign * @as(i128, @bitCast(u128_val));
 
             // create type vars, first "reserve" node slots
-            const final_expr_idx = self.can_ir.store.predictNodeIndex(2);
+            const final_expr_idx = self.can_ir.store.predictNodeIndex(3);
 
             // Calculate requirements based on the value
             const requirements = types.Num.Int.Requirements.fromIntLiteral(u128_val, is_negated);
 
-            // Create a polymorphic int type variable
-            const poly_var = self.can_ir.env.types.fresh();
-            const int_var = self.can_ir.env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_poly = poly_var } } });
-            const num_var = self.can_ir.env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = int_var } } });
-
-            // Store the type variable at the expression location
-            _ = self.can_ir.pushTypeVar(
-                Content{ .structure = .{ .num = .{ .num_poly = int_var } } },
+            // Create type variables with proper structure
+            const poly_var = self.can_ir.pushFreshTypeVar(final_expr_idx, region);
+            const int_var = self.can_ir.pushTypeVar(
+                Content{ .structure = .{ .num = .{ .int_poly = poly_var } } },
                 final_expr_idx,
                 region,
             );
+            const num_var = self.can_ir.env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = int_var } } });
 
             // then in the final slot the actual expr is inserted
             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
@@ -600,19 +597,16 @@ pub fn canonicalize_expr(
             const token_text = self.parse_ir.resolve(e.token);
 
             // create type vars, first "reserve" node slots
-            const final_expr_idx = self.can_ir.store.predictNodeIndex(2);
+            const final_expr_idx = self.can_ir.store.predictNodeIndex(3);
 
-            // Create a polymorphic frac type variable
-            const poly_var = self.can_ir.env.types.fresh();
-            const frac_var = self.can_ir.env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = poly_var } } });
-            const num_var = self.can_ir.env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = frac_var } } });
-
-            // Store the type variable at the expression location
-            _ = self.can_ir.pushTypeVar(
-                Content{ .structure = .{ .num = .{ .num_poly = frac_var } } },
+            // Create type variables with proper structure
+            const poly_var = self.can_ir.pushFreshTypeVar(final_expr_idx, region);
+            const frac_var = self.can_ir.pushTypeVar(
+                Content{ .structure = .{ .num = .{ .frac_poly = poly_var } } },
                 final_expr_idx,
                 region,
             );
+            const num_var = self.can_ir.env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = frac_var } } });
 
             const parsed = parseFracLiteral(token_text) catch |err| switch (err) {
                 error.InvalidNumLiteral => {

@@ -29,17 +29,13 @@ NO CHANGE
 (e_binop (1:1-1:6)
 	"add"
 	(e_int (1:1-1:2)
-		(int_var 13)
-		(precision_var 12)
-		(literal "1")
-		(value "TODO")
-		(bound "u8"))
+		(int_var 14)
+		(requirements (sign_needed "false") (bits_needed "types.types.Num.Int.BitsNeeded.7"))
+		(value "1"))
 	(e_int (1:5-1:6)
-		(int_var 16)
-		(precision_var 15)
-		(literal "2")
-		(value "TODO")
-		(bound "u8")))
+		(int_var 17)
+		(requirements (sign_needed "false") (bits_needed "types.types.Num.Int.BitsNeeded.7"))
+		(value "2")))
 ~~~
 # TYPES
 ~~~clojure
