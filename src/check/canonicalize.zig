@@ -260,12 +260,41 @@ pub fn canonicalize_file(
     for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
         const stmt = self.parse_ir.store.getStatement(stmt_id);
         switch (stmt) {
-            .import => |_| {
-                const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "top-level import");
-                self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
-                    .feature = feature,
-                    .region = Region.zero(),
-                } });
+            .import => |import_stmt| {
+                // 1. Intern the module name (e.g., "json.Json")
+                const module_name = if (self.parse_ir.tokens.resolveIdentifier(import_stmt.module_name_tok)) |ident_idx| ident_idx else {
+                    const region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
+                    const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "resolve import module name");
+                    self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                        .feature = feature,
+                        .region = region,
+                    } });
+                    continue;
+                };
+
+                // 2. Determine the alias (either explicit or default to last part)
+                const alias = if (import_stmt.alias_tok) |alias_tok|
+                    self.parse_ir.tokens.resolveIdentifier(alias_tok) orelse continue
+                else
+                    // Extract last part from module name - e.g., "Json" from "json.Json"
+                    self.extractModuleName(module_name);
+
+                // 3. Add to scope: alias -> module_name mapping
+                self.scopeIntroduceModuleAlias(alias, module_name);
+
+                // 4. Create CIR import statement
+                const cir_import = CIR.Statement{
+                    .import = .{
+                        .module_name_tok = module_name,
+                        .qualifier_tok = if (import_stmt.qualifier_tok) |q_tok| self.parse_ir.tokens.resolveIdentifier(q_tok) else null,
+                        .alias_tok = if (import_stmt.alias_tok) |a_tok| self.parse_ir.tokens.resolveIdentifier(a_tok) else null,
+                        .exposes = CIR.ExposedItem.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } }, // TODO: Convert from AST exposes
+                        .region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region),
+                    },
+                };
+
+                const import_idx = self.can_ir.store.addStatement(cir_import);
+                self.can_ir.store.addScratchStatement(import_idx);
             },
             .decl => |decl| {
                 const def_idx = self.canonicalize_decl(decl);
@@ -601,6 +630,43 @@ pub fn canonicalize_expr(
         .ident => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
             if (self.parse_ir.tokens.resolveIdentifier(e.token)) |ident| {
+                // Check if this is a module-qualified identifier
+                if (e.qualifier) |qualifier_tok| {
+                    if (self.parse_ir.tokens.resolveIdentifier(qualifier_tok)) |module_alias| {
+                        // Check if this is a module alias
+                        if (self.scopeLookupModule(module_alias)) |module_name| {
+                            // This is a module-qualified lookup
+                            // Create qualified name for external declaration
+                            const module_text = self.can_ir.env.idents.getText(module_name);
+                            const field_text = self.can_ir.env.idents.getText(ident);
+
+                            // Allocate space for qualified name
+                            const qualified_text = std.fmt.allocPrint(self.can_ir.env.gpa, "{s}.{s}", .{ module_text, field_text }) catch |err| collections.utils.exitOnOom(err);
+                            defer self.can_ir.env.gpa.free(qualified_text);
+
+                            const qualified_name = self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(qualified_text), Region.zero());
+
+                            // Create external declaration
+                            const external_decl = CIR.ExternalDecl{
+                                .qualified_name = qualified_name,
+                                .module_name = module_name,
+                                .local_name = ident,
+                                .type_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region),
+                                .kind = .value,
+                                .region = region,
+                            };
+
+                            const external_idx = self.can_ir.pushExternalDecl(external_decl);
+
+                            // Create lookup expression for external declaration
+                            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .lookup = .{ .external = external_idx } });
+                            _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
+                            return expr_idx;
+                        }
+                    }
+                }
+
+                // Not a module-qualified lookup or qualifier not found, proceed with normal lookup
                 switch (self.scopeLookup(&self.can_ir.env.idents, .ident, ident)) {
                     .found => |pattern_idx| {
                         // Mark this pattern as used for unused variable checking
@@ -963,6 +1029,52 @@ pub fn canonicalize_expr(
             return expr_idx;
         },
         .field_access => |field_access| {
+            // Check if this is a module-qualified lookup (like Json.utf8)
+            const left_expr = self.parse_ir.store.getExpr(field_access.left);
+            if (left_expr == .ident) {
+                const left_ident = left_expr.ident;
+                if (self.parse_ir.tokens.resolveIdentifier(left_ident.token)) |module_alias| {
+                    // Check if this is a module alias
+                    if (self.scopeLookupModule(module_alias)) |module_name| {
+                        // This is a module-qualified lookup
+                        const right_expr = self.parse_ir.store.getExpr(field_access.right);
+                        if (right_expr == .ident) {
+                            const right_ident = right_expr.ident;
+                            if (self.parse_ir.tokens.resolveIdentifier(right_ident.token)) |field_name| {
+                                // Create qualified name for external declaration
+                                const module_text = self.can_ir.env.idents.getText(module_name);
+                                const field_text = self.can_ir.env.idents.getText(field_name);
+
+                                // Allocate space for qualified name
+                                const qualified_text = std.fmt.allocPrint(self.can_ir.env.gpa, "{s}.{s}", .{ module_text, field_text }) catch |err| collections.utils.exitOnOom(err);
+                                defer self.can_ir.env.gpa.free(qualified_text);
+
+                                const qualified_name = self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(qualified_text), Region.zero());
+
+                                // Create external declaration
+                                const region = self.parse_ir.tokenizedRegionToRegion(field_access.region);
+                                const external_decl = CIR.ExternalDecl{
+                                    .qualified_name = qualified_name,
+                                    .module_name = module_name,
+                                    .local_name = field_name,
+                                    .type_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region),
+                                    .kind = .value,
+                                    .region = region,
+                                };
+
+                                const external_idx = self.can_ir.pushExternalDecl(external_decl);
+
+                                // Create lookup expression for external declaration
+                                const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .lookup = .{ .external = external_idx } });
+                                _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
+                                return expr_idx;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Not a module-qualified lookup, proceed with regular field access
             // Canonicalize the receiver (left side of the dot)
             const receiver_idx = blk: {
                 if (self.canonicalize_expr(field_access.left)) |idx| {
@@ -2134,6 +2246,52 @@ fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) ?CIR.Expr.Id
             _ = self.can_ir.setTypeVarAtExpr(unit_expr, Content{ .flex_var = null });
             return unit_expr;
         },
+        .import => |import_stmt| {
+            // 1. Intern the module name (e.g., "json.Json")
+            const module_name = if (self.parse_ir.tokens.resolveIdentifier(import_stmt.module_name_tok)) |ident_idx| ident_idx else {
+                const region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
+                const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "resolve import module name");
+                return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
+                    .feature = feature,
+                    .region = region,
+                } });
+            };
+
+            // 2. Determine the alias (either explicit or default to last part)
+            const alias = if (import_stmt.alias_tok) |alias_tok|
+                self.parse_ir.tokens.resolveIdentifier(alias_tok) orelse return null
+            else
+                // Extract last part from module name - e.g., "Json" from "json.Json"
+                self.extractModuleName(module_name);
+
+            // 3. Add to scope: alias -> module_name mapping
+            self.scopeIntroduceModuleAlias(alias, module_name);
+
+            // 4. Create CIR import statement
+            const cir_import = CIR.Statement{
+                .import = .{
+                    .module_name_tok = module_name,
+                    .qualifier_tok = if (import_stmt.qualifier_tok) |q_tok| self.parse_ir.tokens.resolveIdentifier(q_tok) else null,
+                    .alias_tok = if (import_stmt.alias_tok) |a_tok| self.parse_ir.tokens.resolveIdentifier(a_tok) else null,
+                    .exposes = CIR.ExposedItem.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } }, // TODO: Convert from AST exposes
+                    .region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region),
+                },
+            };
+
+            const import_idx = self.can_ir.store.addStatement(cir_import);
+            self.can_ir.store.addScratchStatement(import_idx);
+
+            // Import statements don't produce runtime values, so return a unit expression
+            const region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
+            const empty_span = CIR.Expr.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } };
+            const unit_expr = self.can_ir.store.addExpr(CIR.Expr{ .tuple = .{
+                .tuple_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region),
+                .elems = empty_span,
+                .region = region,
+            } });
+            _ = self.can_ir.setTypeVarAtExpr(unit_expr, Content{ .flex_var = null });
+            return unit_expr;
+        },
         else => {
             // Other statement types not yet implemented
             const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "statement type in block");
@@ -2623,6 +2781,92 @@ fn scopeLookupTypeDecl(self: *const Self, name_ident: Ident.Idx) ?CIR.Statement.
     }
 
     return null;
+}
+
+/// Look up a module alias in the scope hierarchy
+fn scopeLookupModule(self: *const Self, alias_name: Ident.Idx) ?Ident.Idx {
+    // Search from innermost to outermost scope
+    var i = self.scopes.items.len;
+    while (i > 0) {
+        i -= 1;
+        const scope = &self.scopes.items[i];
+
+        switch (scope.lookupModuleAlias(&self.can_ir.env.idents, alias_name)) {
+            .found => |module_name| return module_name,
+            .not_found => continue,
+        }
+    }
+
+    return null;
+}
+
+/// Introduce a module alias into scope
+fn scopeIntroduceModuleAlias(self: *Self, alias_name: Ident.Idx, module_name: Ident.Idx) void {
+    const gpa = self.can_ir.env.gpa;
+    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+
+    // Simplified introduction without parent lookup for now
+    const result = current_scope.introduceModuleAlias(gpa, &self.can_ir.env.idents, alias_name, module_name, null);
+
+    switch (result) {
+        .success => {},
+        .shadowing_warning => |shadowed_module| {
+            // Create diagnostic for module alias shadowing
+            self.can_ir.pushDiagnostic(CIR.Diagnostic{
+                .shadowing_warning = .{
+                    .ident = alias_name,
+                    .region = Region.zero(), // TODO: get proper region
+                    .original_region = Region.zero(), // TODO: get proper region
+                },
+            });
+            _ = shadowed_module; // Suppress unused variable warning
+        },
+        .already_in_scope => |existing_module| {
+            // Module alias already exists in current scope
+            // For now, just issue a diagnostic
+            self.can_ir.pushDiagnostic(CIR.Diagnostic{
+                .shadowing_warning = .{
+                    .ident = alias_name,
+                    .region = Region.zero(), // TODO: get proper region
+                    .original_region = Region.zero(), // TODO: get proper region
+                },
+            });
+            _ = existing_module; // Suppress unused variable warning
+        },
+    }
+}
+
+/// Helper function to look up module aliases in parent scopes only
+fn scopeLookupModuleInParentScopes(self: *const Self, alias_name: Ident.Idx) ?Ident.Idx {
+    // Search from second-innermost to outermost scope (excluding current scope)
+    if (self.scopes.items.len <= 1) return null;
+
+    var i = self.scopes.items.len - 1;
+    while (i > 0) {
+        i -= 1;
+        const scope = &self.scopes.items[i];
+
+        switch (scope.lookupModuleAlias(&self.can_ir.env.idents, alias_name)) {
+            .found => |module_name| return module_name,
+            .not_found => continue,
+        }
+    }
+
+    return null;
+}
+
+/// Extract the module name from a full qualified name (e.g., "Json" from "json.Json")
+fn extractModuleName(self: *Self, module_name_ident: Ident.Idx) Ident.Idx {
+    const module_text = self.can_ir.env.idents.getText(module_name_ident);
+
+    // Find the last dot and extract the part after it
+    if (std.mem.lastIndexOf(u8, module_text, ".")) |last_dot_idx| {
+        const extracted_name = module_text[last_dot_idx + 1 ..];
+        return self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(extracted_name), Region.zero());
+    } else {
+        // No dot found, return the original name
+        return module_name_ident;
+    }
 }
 
 /// Convert a parsed TypeAnno into a canonical TypeVar with appropriate Content
