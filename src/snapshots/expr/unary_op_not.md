@@ -8,9 +8,7 @@ type=expr
 !isValid
 ~~~
 # PROBLEMS
-~~~txt
 PARSER: expr_unexpected_token
-~~~
 # TOKENS
 ~~~zig
 OpBang(1:1-1:2),LowerIdent(1:2-1:9),EndOfFile(1:9-1:9),

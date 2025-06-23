@@ -15,9 +15,7 @@ app # Comment after keyword
 	}
 ~~~
 # PROBLEMS
-~~~txt
 NIL
-~~~
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),Newline(1:6-1:28),

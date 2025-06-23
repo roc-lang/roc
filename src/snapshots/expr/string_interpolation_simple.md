@@ -8,11 +8,9 @@ type=expr
 "Hello ${name}!"
 ~~~
 # PROBLEMS
-~~~txt
-UNDEFINED VARIABLE
-Nothing is named `name` in this scope.
-Is there an import or exposing missing up-top?
-~~~
+**UNDEFINED VARIABLE**
+Nothing is named ``name`` in this scope.
+Is there an `import` or `exposing` missing up-top?
 # TOKENS
 ~~~zig
 StringStart(1:1-1:2),StringPart(1:2-1:8),OpenStringInterpolation(1:8-1:10),LowerIdent(1:10-1:14),CloseStringInterpolation(1:14-1:15),StringPart(1:15-1:16),StringEnd(1:16-1:17),EndOfFile(1:17-1:17),

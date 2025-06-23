@@ -8,9 +8,7 @@ type=expr
 42
 ~~~
 # PROBLEMS
-~~~txt
 NIL
-~~~
 # TOKENS
 ~~~zig
 Int(1:1-1:3),EndOfFile(1:3-1:3),

@@ -28,16 +28,14 @@ processItems = |items| {
 }
 ~~~
 # PROBLEMS
-~~~txt
-VAR REASSIGNMENT ERROR
-Cannot reassign a var from outside the function where it was declared.
-Variables declared with var can only be reassigned within the same function scope.
-VAR REASSIGNMENT ERROR
-Cannot reassign a var from outside the function where it was declared.
-Variables declared with var can only be reassigned within the same function scope.
-NOT IMPLEMENTED
+**VAR REASSIGNMENT ERROR**
+Cannot reassign a `var` from outside the function where it was declared.
+Variables declared with `var` can only be reassigned within the same function scope.
+**VAR REASSIGNMENT ERROR**
+Cannot reassign a `var` from outside the function where it was declared.
+Variables declared with `var` can only be reassigned within the same function scope.
+**NOT IMPLEMENTED**
 This feature is not yet implemented: canonicalize record expression
-~~~
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),

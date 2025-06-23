@@ -13,17 +13,15 @@ type=expr
 } lines of text due to the template parts"
 ~~~
 # PROBLEMS
-~~~txt
-UNDEFINED VARIABLE
-Nothing is named `some_func` in this scope.
-Is there an import or exposing missing up-top?
-UNDEFINED VARIABLE
-Nothing is named `a` in this scope.
-Is there an import or exposing missing up-top?
-UNDEFINED VARIABLE
-Nothing is named `b` in this scope.
-Is there an import or exposing missing up-top?
-~~~
+**UNDEFINED VARIABLE**
+Nothing is named ``some_func`` in this scope.
+Is there an `import` or `exposing` missing up-top?
+**UNDEFINED VARIABLE**
+Nothing is named ``a`` in this scope.
+Is there an `import` or `exposing` missing up-top?
+**UNDEFINED VARIABLE**
+Nothing is named ``b`` in this scope.
+Is there an `import` or `exposing` missing up-top?
 # TOKENS
 ~~~zig
 StringStart(1:1-1:2),StringPart(1:2-1:24),OpenStringInterpolation(1:24-1:26),Newline(1:1-1:1),

@@ -10,9 +10,7 @@ app
 	{ somePkg: "../main.roc", pf: platform "../main.roc", }
 ~~~
 # PROBLEMS
-~~~txt
 NIL
-~~~
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),Newline(1:1-1:1),
