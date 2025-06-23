@@ -47,8 +47,8 @@ pub fn renderReport(report: *const Report, writer: anytype, target: RenderTarget
     const config = switch (target) {
         .color_terminal => ReportingConfig.initColorTerminal(),
         .markdown => ReportingConfig.initMarkdown(),
-        .html => ReportingConfig.initMarkdown(), // HTML uses similar settings to markdown
-        .language_server => ReportingConfig.initMarkdown(), // LSP uses plain text settings
+        .html => ReportingConfig.initHtml(),
+        .language_server => ReportingConfig.initLsp(),
     };
 
     const palette = ColorUtils.getPaletteForConfig(config);

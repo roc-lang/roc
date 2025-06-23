@@ -135,6 +135,32 @@ pub const ReportingConfig = struct {
         };
     }
 
+    pub fn initHtml() ReportingConfig {
+        return ReportingConfig{
+            .color_preference = .never,
+            .is_tty = false,
+            .render_target = .html,
+            .max_line_width = 80,
+            .show_line_numbers = true,
+            .context_lines = 3,
+            .validate_utf8 = true,
+            .max_message_bytes = 4096,
+        };
+    }
+
+    pub fn initLsp() ReportingConfig {
+        return ReportingConfig{
+            .color_preference = .never,
+            .is_tty = false,
+            .render_target = .language_server,
+            .max_line_width = 120, // LSP clients often have wider displays
+            .show_line_numbers = true,
+            .context_lines = 2, // Fewer context lines for cleaner LSP output
+            .validate_utf8 = true,
+            .max_message_bytes = 8192, // LSP may need longer messages
+        };
+    }
+
     pub fn initColorTerminal() ReportingConfig {
         return ReportingConfig{
             .color_preference = .always,
@@ -317,6 +343,23 @@ test "ReportingConfig high contrast" {
     try testing.expect(config.shouldUseColors());
     try testing.expect(config.isHighContrast());
     try testing.expectEqual(RenderTargetPreference.color_terminal, config.getRenderTarget());
+}
+
+test "ReportingConfig HTML" {
+    const config = ReportingConfig.initHtml();
+    try testing.expect(!config.shouldUseColors());
+    try testing.expect(!config.is_tty);
+    try testing.expectEqual(RenderTargetPreference.html, config.getRenderTarget());
+}
+
+test "ReportingConfig LSP" {
+    const config = ReportingConfig.initLsp();
+    try testing.expect(!config.shouldUseColors());
+    try testing.expect(!config.is_tty);
+    try testing.expectEqual(RenderTargetPreference.language_server, config.getRenderTarget());
+    try testing.expectEqual(@as(u32, 120), config.getMaxLineWidth());
+    try testing.expectEqual(@as(u32, 2), config.getContextLines());
+    try testing.expectEqual(@as(usize, 8192), config.getMaxMessageBytes());
 }
 
 test "UTF-8 validation" {
