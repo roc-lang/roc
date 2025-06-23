@@ -1497,20 +1497,33 @@ const FracLiteralResult = union(enum) {
 
 // Parse a fractional literal from text and return either a Dec or F64 value
 fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
-    // First, try to parse as RocDec
-    if (RocDec.fromNonemptySlice(token_text)) |dec| {
-        return FracLiteralResult{
-            .dec = .{
-                .value = dec,
-                .requirements = types.Num.Frac.Requirements{
-                    .fits_in_f32 = fitsInF32(dec.toF64()),
-                    .fits_in_dec = true,
+    // Check if the literal contains scientific notation (e or E)
+    // If it does, skip Dec parsing since Dec doesn't support scientific notation
+    const has_scientific_notation = blk: {
+        for (token_text) |char| {
+            if (char == 'e' or char == 'E') {
+                break :blk true;
+            }
+        }
+        break :blk false;
+    };
+
+    // Only try to parse as RocDec if there's no scientific notation
+    if (!has_scientific_notation) {
+        if (RocDec.fromNonemptySlice(token_text)) |dec| {
+            return FracLiteralResult{
+                .dec = .{
+                    .value = dec,
+                    .requirements = types.Num.Frac.Requirements{
+                        .fits_in_f32 = fitsInF32(dec.toF64()),
+                        .fits_in_dec = true,
+                    },
                 },
-            },
-        };
+            };
+        }
     }
 
-    // Parsing it as a Dec failed, so try F64 next.
+    // Either has scientific notation or parsing as Dec failed, so try F64
     const f64_val = std.fmt.parseFloat(f64, token_text) catch {
         // It doesn't parse as Dec or as F64, so it's too big to fit in any of Roc's numeric types.
         return error.InvalidNumLiteral;
@@ -1529,6 +1542,7 @@ fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
 
 test {
     _ = @import("canonicalize/test/int_test.zig");
+    _ = @import("canonicalize/test/frac_test.zig");
 }
 
 /// Introduce a new identifier to the current scope, return an

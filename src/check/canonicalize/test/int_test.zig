@@ -534,3 +534,40 @@ test "invalid number literal - negative too large for i128" {
 
     try testing.expect(found_invalid_num);
 }
+
+test "integer literal - negative zero" {
+    const result = try parseAndCanonicalizeInt(test_allocator, "-0");
+    defer cleanup(test_allocator, result);
+
+    const expr = result.cir.store.getExpr(result.expr_idx);
+    switch (expr) {
+        .int => |int| {
+            // -0 should be treated as 0
+            try testing.expectEqual(int.value.value, 0);
+            // But it should still be marked as needing a sign
+            try testing.expect(int.requirements.sign_needed);
+            try testing.expectEqual(int.requirements.bits_needed, types.Num.Int.BitsNeeded.@"7");
+        },
+        else => {
+            try testing.expect(false); // Should be int
+        },
+    }
+}
+
+test "integer literal - positive zero" {
+    const result = try parseAndCanonicalizeInt(test_allocator, "0");
+    defer cleanup(test_allocator, result);
+
+    const expr = result.cir.store.getExpr(result.expr_idx);
+    switch (expr) {
+        .int => |int| {
+            try testing.expectEqual(int.value.value, 0);
+            // Positive zero should not need a sign
+            try testing.expect(!int.requirements.sign_needed);
+            try testing.expectEqual(int.requirements.bits_needed, types.Num.Int.BitsNeeded.@"7");
+        },
+        else => {
+            try testing.expect(false); // Should be int
+        },
+    }
+}
