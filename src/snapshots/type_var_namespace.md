@@ -26,6 +26,7 @@ main! = |_| {}
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **|> Result** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
+
 Here is the problematic code:
 **type_var_namespace.md:11:31:11:40:**
 ```roc

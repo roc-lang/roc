@@ -20,6 +20,7 @@ main! = |_| {}
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_close_curly_or_comma`
 This is an unexpected parsing error. Please check your syntax.
+
 Here is the problematic code:
 **type_var_annotation_body_connection.md:6:5:6:12:**
 ```roc
@@ -30,6 +31,7 @@ Here is the problematic code:
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **= x** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
+
 Here is the problematic code:
 **type_var_annotation_body_connection.md:6:11:6:14:**
 ```roc
@@ -40,6 +42,13 @@ Here is the problematic code:
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token  is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**type_var_annotation_body_connection.md:8:1:8:1:**
+```roc
+}
+```
+
 
 **INVALID LAMBDA**
 The body of this lambda expression is not valid.

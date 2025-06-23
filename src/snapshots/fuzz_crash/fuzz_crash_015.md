@@ -21,6 +21,7 @@ For example:
         module [main]
 or for an app:
         app [main!] { pf: platform "../basic-cli/platform.roc" }
+
 Here is the problematic code:
 **fuzz_crash_015.md:1:1:1:6:**
 ```roc
@@ -32,9 +33,23 @@ Here is the problematic code:
 The token  is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
+Here is the problematic code:
+**fuzz_crash_015.md:1:4:1:4:**
+```roc
+0o0.0
+```
+
+
 **PARSE ERROR**
 A parsing error occurred: `expr_no_space_dot_int`
 This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_015.md:3:4:3:4:**
+```roc
+0u8.0
+```
+
 
 **INVALID STATEMENT**
 The statement **expr** is not allowed at the top level.

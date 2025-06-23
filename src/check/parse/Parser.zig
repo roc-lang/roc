@@ -147,10 +147,10 @@ pub fn pushMalformed(self: *Parser, comptime t: type, tag: AST.Diagnostic.Tag, s
         self.advanceOne(); // TODO: find a better point to advance to
     }
 
-    // Create a diagnostic region that points to the current problematic token
-    // Ensure the region is always valid by using min/max
-    const diagnostic_start = @min(pos, self.pos);
-    const diagnostic_end = @max(pos, self.pos);
+    // Create a diagnostic region that points to the problematic token
+    // If the parser has moved too far from the start, use the start token for better error location
+    const diagnostic_start = if (self.pos > start and (self.pos - start) > 2) start else @min(pos, self.pos);
+    const diagnostic_end = if (self.pos > start and (self.pos - start) > 2) start + 1 else @max(pos, self.pos);
     // If start equals end, make it a single-token region
     const diagnostic_region = AST.TokenizedRegion{ .start = diagnostic_start, .end = if (diagnostic_start == diagnostic_end) diagnostic_start + 1 else diagnostic_end };
 

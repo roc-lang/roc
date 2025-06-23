@@ -22,8 +22,9 @@ InnerModule : {
 **PARSE ERROR**
 A parsing error occurred: `expected_type_field_name`
 This is an unexpected parsing error. Please check your syntax.
+
 Here is the problematic code:
-**type_shadowing_across_scopes.md:11:22:11:31:**
+**type_shadowing_across_scopes.md:11:5:11:13:**
 ```roc
     Result : [Success, Failure]
 ```
@@ -32,6 +33,7 @@ Here is the problematic code:
 **PARSE ERROR**
 A parsing error occurred: `expected_ty_close_curly_or_comma`
 This is an unexpected parsing error. Please check your syntax.
+
 Here is the problematic code:
 **type_shadowing_across_scopes.md:11:24:11:32:**
 ```roc
@@ -43,9 +45,17 @@ Here is the problematic code:
 The token  is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
+Here is the problematic code:
+**type_shadowing_across_scopes.md:11:31:11:31:**
+```roc
+    Result : [Success, Failure]
+```
+
+
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **}** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
+
 Here is the problematic code:
 **type_shadowing_across_scopes.md:12:1:12:2:**
 ```roc

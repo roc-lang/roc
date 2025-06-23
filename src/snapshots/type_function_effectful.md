@@ -16,6 +16,7 @@ main! = |_| {}
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **, a** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
+
 Here is the problematic code:
 **type_function_effectful.md:3:22:3:25:**
 ```roc
@@ -26,6 +27,7 @@ runEffect! : (a => b), a => b
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **=> b** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
+
 Here is the problematic code:
 **type_function_effectful.md:3:26:3:30:**
 ```roc

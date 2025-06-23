@@ -16,6 +16,7 @@ main! = |_| {}
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **-> (** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
+
 Here is the problematic code:
 **type_function_multi_arg.md:3:21:3:25:**
 ```roc

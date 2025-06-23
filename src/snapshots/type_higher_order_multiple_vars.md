@@ -16,6 +16,7 @@ main! = |_| {}
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **, (** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
+
 Here is the problematic code:
 **type_higher_order_multiple_vars.md:3:19:3:22:**
 ```roc
@@ -26,6 +27,7 @@ compose : (b -> c), (a -> b) -> (a -> c)
 **PARSE ERROR**
 A parsing error occurred: `expr_arrow_expects_ident`
 This is an unexpected parsing error. Please check your syntax.
+
 Here is the problematic code:
 **type_higher_order_multiple_vars.md:3:33:3:35:**
 ```roc
@@ -36,6 +38,13 @@ compose : (b -> c), (a -> b) -> (a -> c)
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token  is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**type_higher_order_multiple_vars.md:3:40:3:40:**
+```roc
+compose : (b -> c), (a -> b) -> (a -> c)
+```
+
 
 **INVALID STATEMENT**
 The statement **expr** is not allowed at the top level.
