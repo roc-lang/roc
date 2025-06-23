@@ -106,7 +106,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
             for (self.can_ir.store.exprSlice(list.elems)) |single_elem_expr_idx| {
                 self.checkExpr(single_elem_expr_idx);
                 const single_elem_expr = self.can_ir.store.getExpr(single_elem_expr_idx);
-                const elem_region = self.getExprRegion(single_elem_expr);
+                const elem_region = single_elem_expr.toRegion();
                 self.unifyWithRegion(
                     @enumFromInt(@intFromEnum(elem_var)),
                     @enumFromInt(@intFromEnum(single_elem_expr_idx)),
@@ -127,25 +127,5 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
         .lambda => |_| {},
         .tuple => |_| {},
         .runtime_error => |_| {},
-    }
-}
-
-fn getExprRegion(self: *Self, expr: CIR.Expr) ?Region {
-    _ = self;
-    switch (expr) {
-        .int => |int_expr| return int_expr.region,
-        .float => |float_expr| return float_expr.region,
-        .str => |str_expr| return str_expr.region,
-        .str_segment => |seg_expr| return seg_expr.region,
-        .single_quote => |sq_expr| return sq_expr.region,
-        .list => |list_expr| return list_expr.region,
-        .record => |record_expr| return record_expr.region,
-        .record_access => |access_expr| return access_expr.region,
-        .@"if" => |if_expr| return if_expr.region,
-        .block => |block_expr| return block_expr.region,
-        .tag => |tag_expr| return tag_expr.region,
-        .zero_argument_tag => |tag_expr| return tag_expr.region,
-        .lambda => |lambda_expr| return lambda_expr.region,
-        else => return null,
     }
 }

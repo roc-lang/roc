@@ -558,6 +558,9 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
                 &problem_buf,
                 &solver.snapshots,
                 &module_env.idents,
+                content.source,
+                snapshot_path,
+                &module_env,
             );
             defer report.deinit();
             report.render(writer.any(), .markdown) catch |err| {

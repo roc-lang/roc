@@ -740,6 +740,32 @@ pub const Expr = union(enum) {
         }
     };
 
+    pub fn toRegion(self: *const @This()) ?Region {
+        switch (self.*) {
+            .num => |e| return e.region,
+            .int => |e| return e.region,
+            .float => |e| return e.region,
+            .str_segment => |e| return e.region,
+            .str => |e| return e.region,
+            .single_quote => |e| return e.region,
+            .lookup => |e| return e.region,
+            .list => |e| return e.region,
+            .tuple => |e| return e.region,
+            .when => |e| return e.region,
+            .@"if" => |e| return e.region,
+            .call => |e| return e.region,
+            .record => |e| return e.region,
+            .empty_record => |e| return e.region,
+            .record_access => |e| return e.region,
+            .tag => |e| return e.region,
+            .zero_argument_tag => |e| return e.region,
+            .binop => |e| return e.region,
+            .block => |e| return e.region,
+            .lambda => |e| return e.region,
+            .runtime_error => |e| return e.region,
+        }
+    }
+
     pub fn toSExpr(self: *const @This(), ir: *CIR, env: *ModuleEnv) sexpr.Expr {
         const gpa = ir.env.gpa;
         switch (self.*) {
