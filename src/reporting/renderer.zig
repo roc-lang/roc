@@ -43,7 +43,15 @@ pub const RenderTarget = enum {
 
 /// Render a report to the specified target format.
 pub fn renderReport(report: *const Report, writer: anytype, target: RenderTarget) !void {
-    const palette = ColorUtils.getPaletteForConfig(report.config);
+    // Create appropriate config based on render target
+    const config = switch (target) {
+        .color_terminal => ReportingConfig.initColorTerminal(),
+        .markdown => ReportingConfig.initMarkdown(),
+        .html => ReportingConfig.initMarkdown(), // HTML uses similar settings to markdown
+        .language_server => ReportingConfig.initMarkdown(), // LSP uses plain text settings
+    };
+
+    const palette = ColorUtils.getPaletteForConfig(config);
     switch (target) {
         .color_terminal => try renderReportToTerminal(report, writer, palette),
         .markdown => try renderReportToMarkdown(report, writer),
@@ -674,8 +682,7 @@ fn renderElementToLsp(element: DocumentElement, writer: anytype) !void {
 const testing = std.testing;
 
 test "render report to markdown" {
-    const config = ReportingConfig.initForTesting();
-    var report = Report.init(testing.allocator, "TEST ERROR", .runtime_error, config);
+    var report = Report.init(testing.allocator, "TEST ERROR", .runtime_error);
     defer report.deinit();
 
     try report.document.addText("This is a test error message.");

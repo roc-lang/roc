@@ -64,7 +64,7 @@ pub const Diagnostic = union(enum) {
 
     /// Build a report for "not implemented" diagnostic
     pub fn buildNotImplementedReport(allocator: Allocator, feature: []const u8) !Report {
-        var report = Report.init(allocator, "NOT IMPLEMENTED", .fatal, reporting.ReportingConfig.initMarkdown());
+        var report = Report.init(allocator, "NOT IMPLEMENTED", .fatal);
         const owned_feature = try report.addOwnedString(feature);
         try report.document.addText("This feature is not yet implemented: ");
         try report.document.addText(owned_feature);
@@ -73,7 +73,7 @@ pub const Diagnostic = union(enum) {
 
     /// Build a report for "invalid number literal" diagnostic
     pub fn buildInvalidNumLiteralReport(allocator: Allocator, literal: []const u8) !Report {
-        var report = Report.init(allocator, "INVALID NUMBER", .runtime_error, reporting.ReportingConfig.initMarkdown());
+        var report = Report.init(allocator, "INVALID NUMBER", .runtime_error);
         const owned_literal = try report.addOwnedString(literal);
         try report.document.addText("This number literal is not valid: ");
         try report.document.addText(owned_literal);
@@ -82,7 +82,7 @@ pub const Diagnostic = union(enum) {
 
     /// Build a report for "identifier already in scope" diagnostic
     pub fn buildIdentAlreadyInScopeReport(allocator: Allocator, ident_name: []const u8) !Report {
-        var report = Report.init(allocator, "DUPLICATE DEFINITION", .warning, reporting.ReportingConfig.initMarkdown());
+        var report = Report.init(allocator, "DUPLICATE DEFINITION", .warning);
         const owned_ident = try report.addOwnedString(ident_name);
         try report.document.addText("The name ");
         try report.document.addUnqualifiedSymbol(owned_ident);
@@ -94,7 +94,7 @@ pub const Diagnostic = union(enum) {
 
     /// Build a report for "identifier not in scope" diagnostic
     pub fn buildIdentNotInScopeReport(allocator: Allocator, ident_name: []const u8) !Report {
-        var report = Report.init(allocator, "UNDEFINED VARIABLE", .runtime_error, reporting.ReportingConfig.initMarkdown());
+        var report = Report.init(allocator, "UNDEFINED VARIABLE", .runtime_error);
         const owned_ident = try report.addOwnedString(ident_name);
         try report.document.addText("Nothing is named ");
         try report.document.addUnqualifiedSymbol(owned_ident);
@@ -110,7 +110,7 @@ pub const Diagnostic = union(enum) {
 
     /// Build a report for "invalid top level statement" diagnostic
     pub fn buildInvalidTopLevelStatementReport(allocator: Allocator, stmt_name: []const u8) !Report {
-        var report = Report.init(allocator, "INVALID STATEMENT", .runtime_error, reporting.ReportingConfig.initMarkdown());
+        var report = Report.init(allocator, "INVALID STATEMENT", .runtime_error);
         const owned_stmt = try report.addOwnedString(stmt_name);
         try report.document.addText("The statement ");
         try report.document.addAnnotated(owned_stmt, .emphasized);
@@ -122,7 +122,7 @@ pub const Diagnostic = union(enum) {
 
     /// Build a report for "expression not canonicalized" diagnostic
     pub fn buildExprNotCanonicalizedReport(allocator: Allocator) !Report {
-        var report = Report.init(allocator, "UNKNOWN OPERATOR", .runtime_error, reporting.ReportingConfig.initMarkdown());
+        var report = Report.init(allocator, "UNKNOWN OPERATOR", .runtime_error);
         try report.document.addReflowingText("This looks like an operator, but it's not one I recognize!");
         try report.document.addLineBreak();
         try report.document.addReflowingText("Check the spelling and make sure you're using a valid Roc operator.");
@@ -131,7 +131,7 @@ pub const Diagnostic = union(enum) {
 
     /// Build a report for "invalid string interpolation" diagnostic
     pub fn buildInvalidStringInterpolationReport(allocator: Allocator) !Report {
-        var report = Report.init(allocator, "INVALID INTERPOLATION", .runtime_error, reporting.ReportingConfig.initMarkdown());
+        var report = Report.init(allocator, "INVALID INTERPOLATION", .runtime_error);
         try report.document.addReflowingText("This string interpolation is not valid.");
         try report.document.addLineBreak();
         try report.document.addReflowingText("String interpolation should use the format: \"text $(expression) more text\"");
@@ -140,35 +140,35 @@ pub const Diagnostic = union(enum) {
 
     /// Build a report for "pattern argument invalid" diagnostic
     pub fn buildPatternArgInvalidReport(allocator: Allocator) !Report {
-        var report = Report.init(allocator, "INVALID PATTERN", .runtime_error, reporting.ReportingConfig.initMarkdown());
+        var report = Report.init(allocator, "INVALID PATTERN", .runtime_error);
         try report.document.addReflowingText("Pattern arguments must be valid patterns like identifiers, literals, or destructuring patterns.");
         return report;
     }
 
     /// Build a report for "pattern not canonicalized" diagnostic
     pub fn buildPatternNotCanonicalizedReport(allocator: Allocator) !Report {
-        var report = Report.init(allocator, "INVALID PATTERN", .runtime_error, reporting.ReportingConfig.initMarkdown());
+        var report = Report.init(allocator, "INVALID PATTERN", .runtime_error);
         try report.document.addReflowingText("This pattern contains invalid syntax or uses unsupported features.");
         return report;
     }
 
     /// Build a report for "lambda not implemented" diagnostic
     pub fn buildCanLambdaNotImplementedReport(allocator: Allocator) !Report {
-        var report = Report.init(allocator, "NOT IMPLEMENTED", .runtime_error, reporting.ReportingConfig.initMarkdown());
+        var report = Report.init(allocator, "NOT IMPLEMENTED", .runtime_error);
         try report.document.addReflowingText("Lambda expressions are not yet fully implemented.");
         return report;
     }
 
     /// Build a report for "lambda body not canonicalized" diagnostic
     pub fn buildLambdaBodyNotCanonicalizedReport(allocator: Allocator) !Report {
-        var report = Report.init(allocator, "INVALID LAMBDA", .runtime_error, reporting.ReportingConfig.initMarkdown());
+        var report = Report.init(allocator, "INVALID LAMBDA", .runtime_error);
         try report.document.addReflowingText("The body of this lambda expression is not valid.");
         return report;
     }
 
     /// Build a report for "var across function boundary" diagnostic
     pub fn buildVarAcrossFunctionBoundaryReport(allocator: Allocator) !Report {
-        var report = Report.init(allocator, "VAR REASSIGNMENT ERROR", .runtime_error, reporting.ReportingConfig.initMarkdown());
+        var report = Report.init(allocator, "VAR REASSIGNMENT ERROR", .runtime_error);
         try report.document.addReflowingText("Cannot reassign a ");
         try report.document.addKeyword("var");
         try report.document.addReflowingText(" from outside the function where it was declared.");
@@ -188,7 +188,7 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         filename: []const u8,
     ) !Report {
-        var report = Report.init(allocator, "DUPLICATE DEFINITION", .warning, reporting.ReportingConfig.initMarkdown());
+        var report = Report.init(allocator, "DUPLICATE DEFINITION", .warning);
         const owned_ident = try report.addOwnedString(ident_name);
         try report.document.addText("The name ");
         try report.document.addUnqualifiedSymbol(owned_ident);

@@ -38,11 +38,8 @@ test "SYNTAX_PROBLEM report along with all four render types" {
     var buffer = std.ArrayList(u8).init(gpa);
     defer buffer.deinit();
 
-    // Setup configuration
-    const reporting_config = ReportingConfig.initForTesting();
-
     // Create a Report
-    var r = Report.init(gpa, "SYNTAX PROBLEM", .runtime_error, reporting_config);
+    var r = Report.init(gpa, "SYNTAX PROBLEM", .runtime_error);
     defer r.deinit();
 
     // Add the document which describes the problem
