@@ -49,13 +49,13 @@ NO CHANGE
 		(def_expr
 			(e_lookup_external
 				(external_decl (5:8-5:21)
-					(qualified_name "Json.decode")
-					(module_name "Json")
+					(qualified_name "json.Json.decode")
+					(module_name "json.Json")
 					(local_name "decode")
 					(kind "value")
 					(type_var 74)))))
 	(s_import (3:1-3:27)
-		"Json"
+		"json.Json"
 		""
 		""
 		(exposes)))

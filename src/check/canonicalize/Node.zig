@@ -95,6 +95,8 @@ pub const Tag = enum {
     pattern_underscore,
     // Definitions
     def,
+    // Exposed Items
+    exposed_item,
 
     // todo -- put me somewhere and rename maybe
     if_branch,

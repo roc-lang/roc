@@ -602,20 +602,46 @@ fn createExternalDeclaration(
 }
 
 /// Convert AST exposed items to CIR exposed items
-/// TODO: Implement full exposed items conversion once CIR exposed items infrastructure is complete
-/// Currently the CIR NodeStore methods for exposed items are not fully implemented
 fn convertASTExposesToCIR(
     self: *Self,
     ast_exposes: AST.ExposedItem.Span,
 ) CIR.ExposedItem.Span {
-    _ = self;
-    _ = ast_exposes;
-    // Return empty span until exposed items infrastructure is implemented
-    // The exposed items are parsed correctly in the AST but CIR conversion needs:
-    // - Complete implementation of NodeStore.addExposedItem()
-    // - Complete implementation of NodeStore.getExposedItem()
-    // - Scratch methods for exposed items (scratchExposedItemTop, addScratchExposedItem, etc.)
-    return CIR.ExposedItem.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } };
+    const scratch_start = self.can_ir.store.scratchExposedItemTop();
+
+    const ast_exposed_slice = self.parse_ir.store.exposedItemSlice(ast_exposes);
+    for (ast_exposed_slice) |ast_exposed_idx| {
+        const ast_exposed = self.parse_ir.store.getExposedItem(ast_exposed_idx);
+
+        // Convert AST exposed item to CIR exposed item
+        const cir_exposed = switch (ast_exposed) {
+            .lower_ident => |ident| CIR.ExposedItem{
+                .name = if (self.parse_ir.tokens.resolveIdentifier(ident.ident)) |resolved| resolved else self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text("unknown"), base.Region.zero()),
+                .alias = if (ident.as) |as_token|
+                    if (self.parse_ir.tokens.resolveIdentifier(as_token)) |resolved| resolved else self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text("unknown"), base.Region.zero())
+                else
+                    null,
+                .is_wildcard = false,
+            },
+            .upper_ident => |ident| CIR.ExposedItem{
+                .name = if (self.parse_ir.tokens.resolveIdentifier(ident.ident)) |resolved| resolved else self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text("unknown"), base.Region.zero()),
+                .alias = if (ident.as) |as_token|
+                    if (self.parse_ir.tokens.resolveIdentifier(as_token)) |resolved| resolved else self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text("unknown"), base.Region.zero())
+                else
+                    null,
+                .is_wildcard = false,
+            },
+            .upper_ident_star => |star_ident| CIR.ExposedItem{
+                .name = if (self.parse_ir.tokens.resolveIdentifier(star_ident.ident)) |resolved| resolved else self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text("unknown"), base.Region.zero()),
+                .alias = null,
+                .is_wildcard = true,
+            },
+        };
+
+        const cir_exposed_idx = self.can_ir.store.addExposedItem(cir_exposed);
+        self.can_ir.store.addScratchExposedItem(cir_exposed_idx);
+    }
+
+    return self.can_ir.store.exposedItemSpanFrom(scratch_start);
 }
 
 fn canonicalize_decl(
