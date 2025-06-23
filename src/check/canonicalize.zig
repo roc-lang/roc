@@ -834,7 +834,7 @@ pub fn canonicalize_expr(
                     }
                 }
 
-                // Not a module-qualified lookup or qualifier not found, proceed with normal lookup
+                // Not a module-qualified lookup, or qualifier not found, proceed with normal lookup
                 switch (self.scopeLookup(&self.can_ir.env.idents, .ident, ident)) {
                     .found => |pattern_idx| {
                         // Mark this pattern as used for unused variable checking
