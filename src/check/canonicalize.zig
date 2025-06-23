@@ -1,6 +1,7 @@
 const std = @import("std");
 const base = @import("../base.zig");
 const parse = @import("parse.zig");
+const tokenize = @import("parse/tokenize.zig");
 const collections = @import("../collections.zig");
 const types = @import("../types/types.zig");
 
@@ -9,6 +10,7 @@ const Scope = @import("./canonicalize/Scope.zig");
 const Node = @import("./canonicalize/Node.zig");
 
 const AST = parse.AST;
+const Token = tokenize.Token;
 
 can_ir: *CIR,
 parse_ir: *AST,
@@ -261,40 +263,7 @@ pub fn canonicalize_file(
         const stmt = self.parse_ir.store.getStatement(stmt_id);
         switch (stmt) {
             .import => |import_stmt| {
-                // 1. Intern the module name (e.g., "json.Json")
-                const module_name = if (self.parse_ir.tokens.resolveIdentifier(import_stmt.module_name_tok)) |ident_idx| ident_idx else {
-                    const region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
-                    const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "resolve import module name");
-                    self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
-                        .feature = feature,
-                        .region = region,
-                    } });
-                    continue;
-                };
-
-                // 2. Determine the alias (either explicit or default to last part)
-                const alias = if (import_stmt.alias_tok) |alias_tok|
-                    self.parse_ir.tokens.resolveIdentifier(alias_tok) orelse continue
-                else
-                    // Extract last part from module name - e.g., "Json" from "json.Json"
-                    self.extractModuleName(module_name);
-
-                // 3. Add to scope: alias -> module_name mapping
-                self.scopeIntroduceModuleAlias(alias, module_name);
-
-                // 4. Create CIR import statement
-                const cir_import = CIR.Statement{
-                    .import = .{
-                        .module_name_tok = module_name,
-                        .qualifier_tok = if (import_stmt.qualifier_tok) |q_tok| self.parse_ir.tokens.resolveIdentifier(q_tok) else null,
-                        .alias_tok = if (import_stmt.alias_tok) |a_tok| self.parse_ir.tokens.resolveIdentifier(a_tok) else null,
-                        .exposes = CIR.ExposedItem.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } }, // TODO: Convert from AST exposes
-                        .region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region),
-                    },
-                };
-
-                const import_idx = self.can_ir.store.addStatement(cir_import);
-                self.can_ir.store.addScratchStatement(import_idx);
+                _ = self.canonicalizeImportStatement(import_stmt);
             },
             .decl => |decl| {
                 const def_idx = self.canonicalize_decl(decl);
@@ -517,6 +486,94 @@ fn bringIngestedFileIntoScope(
         self.can_ir.env.addExposedIdentForModule(exposed_ident, res.module_idx);
         // TODO: Implement scope introduction for exposed identifiers
     }
+}
+
+/// Canonicalize an import statement, handling both top-level file imports and statement imports
+fn canonicalizeImportStatement(
+    self: *Self,
+    import_stmt: @TypeOf(@as(AST.Statement, undefined).import),
+) ?CIR.Statement.Idx {
+    // 1. Intern the module name (e.g., "json.Json")
+    const module_name = if (self.parse_ir.tokens.resolveIdentifier(import_stmt.module_name_tok)) |ident_idx| ident_idx else {
+        const region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
+        const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "resolve import module name");
+        self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+            .feature = feature,
+            .region = region,
+        } });
+        return null;
+    };
+
+    // 2. Determine the alias (either explicit or default to last part)
+    const alias = self.resolveModuleAlias(import_stmt.alias_tok, module_name) orelse return null;
+
+    // 3. Add to scope: alias -> module_name mapping
+    self.scopeIntroduceModuleAlias(alias, module_name);
+
+    // 4. Create CIR import statement
+    const cir_import = CIR.Statement{
+        .import = .{
+            .module_name_tok = module_name,
+            .qualifier_tok = if (import_stmt.qualifier_tok) |q_tok| self.parse_ir.tokens.resolveIdentifier(q_tok) else null,
+            .alias_tok = if (import_stmt.alias_tok) |a_tok| self.parse_ir.tokens.resolveIdentifier(a_tok) else null,
+            .exposes = CIR.ExposedItem.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } }, // TODO: Convert from AST exposes
+            .region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region),
+        },
+    };
+
+    const import_idx = self.can_ir.store.addStatement(cir_import);
+    self.can_ir.store.addScratchStatement(import_idx);
+    return import_idx;
+}
+
+/// Resolve the module alias name from either explicit alias or module name
+fn resolveModuleAlias(
+    self: *Self,
+    alias_tok: ?Token.Idx,
+    module_name: Ident.Idx,
+) ?Ident.Idx {
+    if (alias_tok) |alias_token| {
+        return self.parse_ir.tokens.resolveIdentifier(alias_token);
+    } else {
+        // Extract last part from module name - e.g., "Json" from "json.Json"
+        return self.extractModuleName(module_name);
+    }
+}
+
+/// Create a qualified name by combining module and field names (e.g., "json.Json.utf8")
+fn createQualifiedName(
+    self: *Self,
+    module_name: Ident.Idx,
+    field_name: Ident.Idx,
+) Ident.Idx {
+    const module_text = self.can_ir.env.idents.getText(module_name);
+    const field_text = self.can_ir.env.idents.getText(field_name);
+
+    // Allocate space for "module.field"
+    const qualified_text = std.fmt.allocPrint(self.can_ir.env.gpa, "{s}.{s}", .{ module_text, field_text }) catch |err| exitOnOom(err);
+
+    return self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(qualified_text), Region.zero());
+}
+
+/// Create an external declaration for a qualified name
+fn createExternalDeclaration(
+    self: *Self,
+    qualified_name: Ident.Idx,
+    module_name: Ident.Idx,
+    local_name: Ident.Idx,
+    kind: CIR.ExternalDecl.kind,
+    region: Region,
+) CIR.ExternalDecl.Idx {
+    const external_decl = CIR.ExternalDecl{
+        .qualified_name = qualified_name,
+        .module_name = module_name,
+        .local_name = local_name,
+        .type_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region),
+        .kind = kind,
+        .region = region,
+    };
+
+    return self.can_ir.pushExternalDecl(external_decl);
 }
 
 fn canonicalize_decl(
@@ -2247,39 +2304,7 @@ fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) ?CIR.Expr.Id
             return unit_expr;
         },
         .import => |import_stmt| {
-            // 1. Intern the module name (e.g., "json.Json")
-            const module_name = if (self.parse_ir.tokens.resolveIdentifier(import_stmt.module_name_tok)) |ident_idx| ident_idx else {
-                const region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
-                const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "resolve import module name");
-                return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
-                    .feature = feature,
-                    .region = region,
-                } });
-            };
-
-            // 2. Determine the alias (either explicit or default to last part)
-            const alias = if (import_stmt.alias_tok) |alias_tok|
-                self.parse_ir.tokens.resolveIdentifier(alias_tok) orelse return null
-            else
-                // Extract last part from module name - e.g., "Json" from "json.Json"
-                self.extractModuleName(module_name);
-
-            // 3. Add to scope: alias -> module_name mapping
-            self.scopeIntroduceModuleAlias(alias, module_name);
-
-            // 4. Create CIR import statement
-            const cir_import = CIR.Statement{
-                .import = .{
-                    .module_name_tok = module_name,
-                    .qualifier_tok = if (import_stmt.qualifier_tok) |q_tok| self.parse_ir.tokens.resolveIdentifier(q_tok) else null,
-                    .alias_tok = if (import_stmt.alias_tok) |a_tok| self.parse_ir.tokens.resolveIdentifier(a_tok) else null,
-                    .exposes = CIR.ExposedItem.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } }, // TODO: Convert from AST exposes
-                    .region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region),
-                },
-            };
-
-            const import_idx = self.can_ir.store.addStatement(cir_import);
-            self.can_ir.store.addScratchStatement(import_idx);
+            _ = self.canonicalizeImportStatement(import_stmt);
 
             // Import statements don't produce runtime values, so return a unit expression
             const region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);

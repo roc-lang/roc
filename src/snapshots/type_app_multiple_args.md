@@ -110,7 +110,7 @@ NO CHANGE
 			(e_lambda (6:9-6:55)
 				(args (p_underscore (6:10-6:11) (pid 90)))
 				(e_call (6:13-6:55)
-					(e_lookup (6:13-6:24) (pid 78))
+					(e_lookup_local (6:13-6:24) (pid 78))
 					(e_dot_access (6:25-6:55)
 						(e_call (6:25-6:37) (e_runtime_error (6:25-6:35) "ident_not_in_scope"))
 						"insert"

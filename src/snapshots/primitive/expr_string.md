@@ -55,7 +55,7 @@ NO CHANGE
 		(def_expr
 			(e_string (3:7-3:22)
 				(e_literal (3:8-3:14) "hello ")
-				(e_lookup (3:16-3:20) (pid 72))
+				(e_lookup_local (3:16-3:20) (pid 72))
 				(e_literal (3:21-3:21) "")))))
 ~~~
 # TYPES

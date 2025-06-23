@@ -125,8 +125,8 @@ main! = |_| {}
 						(pid 84)
 						(ident "x")))
 				(e_call (4:23-4:29)
-					(e_lookup (4:23-4:26) (pid 83))
-					(e_lookup (4:27-4:28) (pid 84)))))
+					(e_lookup_local (4:23-4:26) (pid 83))
+					(e_lookup_local (4:27-4:28) (pid 84)))))
 		(annotation (4:1-4:11)
 			(signature 94)
 			(declared_type

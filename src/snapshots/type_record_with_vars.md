@@ -100,7 +100,7 @@ main! = |_| {}
 						(pid 82)
 						(ident "record")))
 				(e_dot_access (4:21-6:6)
-					(e_lookup (4:21-4:27) (pid 82))
+					(e_lookup_local (4:21-4:27) (pid 82))
 					"field")))
 		(annotation (4:1-4:9)
 			(signature 90)

@@ -69,7 +69,7 @@ NO CHANGE
 		(def_expr
 			(e_binop (4:5-4:10)
 				"add"
-				(e_lookup (4:5-4:6) (pid 72))
+				(e_lookup_local (4:5-4:6) (pid 72))
 				(e_int (4:9-4:10)
 					(int_var 80)
 					(precision_var 79)

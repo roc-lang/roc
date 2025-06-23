@@ -138,7 +138,7 @@ NO CHANGE
 							(literal "15")
 							(value "TODO")
 							(bound "u8")))
-					(e_lookup (8:2-8:4) (pid 77))))))
+					(e_lookup_local (8:2-8:4) (pid 77))))))
 	(d_let
 		(def_pattern
 			(p_assign (11:1-11:7)
@@ -146,7 +146,7 @@ NO CHANGE
 				(ident "result")))
 		(def_expr
 			(e_call (11:10-11:27)
-				(e_lookup (11:10-11:23) (pid 72))
+				(e_lookup_local (11:10-11:23) (pid 72))
 				(e_runtime_error (1:1-1:1) "not_implemented")))))
 ~~~
 # TYPES

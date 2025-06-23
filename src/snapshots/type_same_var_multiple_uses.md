@@ -79,8 +79,8 @@ NO CHANGE
 				(e_tuple (4:12-4:18)
 					(tuple_var "#84")
 					(elems
-						(e_lookup (4:13-4:14) (pid 81))
-						(e_lookup (4:16-4:17) (pid 81))))))
+						(e_lookup_local (4:13-4:14) (pid 81))
+						(e_lookup_local (4:16-4:17) (pid 81))))))
 		(annotation (4:1-4:5)
 			(signature 91)
 			(declared_type

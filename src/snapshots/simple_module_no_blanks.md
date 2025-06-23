@@ -11,13 +11,7 @@ hello! = Stdout.line!("Hello")
 world = "World"
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level import
-
-**UNDEFINED VARIABLE**
-Nothing is named `line!` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:15),Comma(1:15-1:16),LowerIdent(1:17-1:22),CloseSquare(1:22-1:23),Newline(1:1-1:1),
@@ -57,7 +51,13 @@ NO CHANGE
 				(ident "hello!")))
 		(def_expr
 			(e_call (3:10-3:31)
-				(e_runtime_error (3:10-3:22) "ident_not_in_scope")
+				(e_lookup_external
+					(external_decl (3:10-3:22)
+						(qualified_name "Stdout.line!")
+						(module_name "Stdout")
+						(local_name "line!")
+						(kind "value")
+						(type_var 74)))
 				(e_string (3:23-3:30) (e_literal (3:24-3:29) "Hello")))))
 	(d_let
 		(def_pattern
@@ -65,7 +65,12 @@ NO CHANGE
 				(pid 80)
 				(ident "world")))
 		(def_expr
-			(e_string (4:9-4:16) (e_literal (4:10-4:15) "World")))))
+			(e_string (4:9-4:16) (e_literal (4:10-4:15) "World"))))
+	(s_import (2:1-2:17)
+		"Stdout"
+		""
+		""
+		(exposes)))
 ~~~
 # TYPES
 ~~~clojure

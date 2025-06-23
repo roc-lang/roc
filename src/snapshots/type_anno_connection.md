@@ -73,7 +73,7 @@ NO CHANGE
 						(ident "x")))
 				(e_binop (4:15-6:10)
 					"add"
-					(e_lookup (4:15-4:16) (pid 76))
+					(e_lookup_local (4:15-4:16) (pid 76))
 					(e_int (4:19-4:20)
 						(int_var 79)
 						(precision_var 78)
@@ -94,7 +94,7 @@ NO CHANGE
 				(ident "my_number")))
 		(def_expr
 			(e_call (7:13-7:24)
-				(e_lookup (7:13-7:20) (pid 75))
+				(e_lookup_local (7:13-7:20) (pid 75))
 				(e_int (7:21-7:23)
 					(int_var 93)
 					(precision_var 92)

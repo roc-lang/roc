@@ -363,7 +363,7 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 			(tuple_var "#164")
 			(elems
 				(e_call (14:11-14:21)
-					(e_lookup (14:11-14:18) (pid 72))
+					(e_lookup_local (14:11-14:18) (pid 72))
 					(e_int (14:19-14:20)
 						(int_var 148)
 						(precision_var 147)
@@ -399,9 +399,9 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 		(e_tuple (15:14-15:23)
 			(tuple_var "#171")
 			(elems
-				(e_lookup (15:15-15:16) (pid 78))
-				(e_lookup (15:18-15:19) (pid 83))
-				(e_lookup (15:21-15:22) (pid 88)))))
+				(e_lookup_local (15:15-15:16) (pid 78))
+				(e_lookup_local (15:18-15:19) (pid 83))
+				(e_lookup_local (15:21-15:22) (pid 88)))))
 	(s_let (16:2-16:31)
 		(p_assign (16:2-16:13)
 			(pid 174)
@@ -416,7 +416,7 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 							(ident "n")))
 					(e_binop (16:21-16:27)
 						"add"
-						(e_lookup (16:21-16:22) (pid 175))
+						(e_lookup_local (16:21-16:22) (pid 175))
 						(e_int (16:25-16:26)
 							(int_var 178)
 							(precision_var 177)
@@ -429,7 +429,7 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 					(literal "42")
 					(value "TODO")
 					(bound "u8")))))
-	(e_lookup (18:2-18:7) (pid 93)))
+	(e_lookup_local (18:2-18:7) (pid 93)))
 ~~~
 # TYPES
 ~~~clojure

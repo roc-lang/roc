@@ -19,13 +19,6 @@ main! = |_| {
 }
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level import
-
-**UNDEFINED VARIABLE**
-Nothing is named `line!` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
 **UNUSED VARIABLE**
 Variable ``world`` is not used anywhere in your code.
 
@@ -101,8 +94,19 @@ NO CHANGE
 							(ident "world"))
 						(e_string (9:10-9:17) (e_literal (9:11-9:16) "World")))
 					(e_call (11:2-11:31)
-						(e_runtime_error (11:2-11:14) "ident_not_in_scope")
-						(e_string (11:15-11:30) (e_literal (11:16-11:29) "Hello, world!"))))))))
+						(e_lookup_external
+							(external_decl (11:2-11:14)
+								(qualified_name "Stdout.line!")
+								(module_name "Stdout")
+								(local_name "line!")
+								(kind "value")
+								(type_var 79)))
+						(e_string (11:15-11:30) (e_literal (11:16-11:29) "Hello, world!")))))))
+	(s_import (6:1-6:17)
+		"Stdout"
+		""
+		""
+		(exposes)))
 ~~~
 # TYPES
 ~~~clojure

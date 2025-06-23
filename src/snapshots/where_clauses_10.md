@@ -16,9 +16,7 @@ decodeThings # After member name
 				a.Decode,
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level import
-
+NIL
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:15),CloseSquare(1:15-1:16),Newline(1:1-1:1),
@@ -58,7 +56,12 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir "empty")
+(can_ir
+	(s_import (3:1-3:32)
+		"Decode"
+		""
+		""
+		(exposes)))
 ~~~
 # TYPES
 ~~~clojure

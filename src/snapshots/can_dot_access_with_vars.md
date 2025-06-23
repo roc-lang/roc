@@ -94,7 +94,7 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 					(ident "x")))
 			(e_binop (3:14-4:9)
 				"add"
-				(e_lookup (3:14-3:15) (pid 86))
+				(e_lookup_local (3:14-3:15) (pid 86))
 				(e_int (3:18-3:19)
 					(int_var 89)
 					(precision_var 88)
@@ -102,9 +102,9 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 					(value "TODO")
 					(bound "u8")))))
 	(e_dot_access (4:5-5:2)
-		(e_lookup (4:5-4:9) (pid 72))
+		(e_lookup_local (4:5-4:9) (pid 72))
 		"map"
-		(e_lookup (4:14-4:16) (pid 85))))
+		(e_lookup_local (4:14-4:16) (pid 85))))
 ~~~
 # TYPES
 ~~~clojure

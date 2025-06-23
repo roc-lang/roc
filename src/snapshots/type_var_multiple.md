@@ -138,7 +138,7 @@ main! = |_| {}
 								(e_runtime_error (6:6-6:11) "ident_not_in_scope")
 								(e_runtime_error (6:13-6:19) "ident_not_in_scope"))))
 					(s_expr (6:23-7:6)
-						(e_lookup (6:23-6:27) (pid 84)))
+						(e_lookup_local (6:23-6:27) (pid 84)))
 					(e_tuple (7:5-7:20)
 						(tuple_var "#98")
 						(elems

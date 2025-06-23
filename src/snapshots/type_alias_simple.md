@@ -116,7 +116,7 @@ NO CHANGE
 			(e_lambda (8:9-8:25)
 				(args (p_underscore (8:10-8:11) (pid 91)))
 				(e_call (8:13-8:25)
-					(e_lookup (8:13-8:20) (pid 78))
+					(e_lookup_local (8:13-8:20) (pid 78))
 					(e_int (8:21-8:24)
 						(int_var 94)
 						(precision_var 93)

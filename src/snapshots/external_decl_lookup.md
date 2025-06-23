@@ -17,20 +17,7 @@ main! = |_| {
 }
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level import
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level import
-
-**UNDEFINED VARIABLE**
-Nothing is named `utf8` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `line!` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),Newline(1:1-1:1),
@@ -104,11 +91,33 @@ main! = |_| {
 							(pid 76)
 							(ident "result"))
 						(e_call (8:14-8:54)
-							(e_runtime_error (8:14-8:23) "ident_not_in_scope")
+							(e_lookup_external
+								(external_decl (8:14-8:23)
+									(qualified_name "Json.utf8")
+									(module_name "Json")
+									(local_name "utf8")
+									(kind "value")
+									(type_var 77)))
 							(e_string (8:24-8:53) (e_literal (8:25-8:52) "Hello from external module!"))))
 					(e_call (9:5-9:25)
-						(e_runtime_error (9:5-9:17) "ident_not_in_scope")
-						(e_lookup_local (9:18-9:24) (pid 76))))))))
+						(e_lookup_external
+							(external_decl (9:5-9:17)
+								(qualified_name "Stdout.line!")
+								(module_name "Stdout")
+								(local_name "line!")
+								(kind "value")
+								(type_var 83)))
+						(e_lookup_local (9:18-9:24) (pid 76)))))))
+	(s_import (3:1-3:17)
+		"Stdout"
+		""
+		""
+		(exposes))
+	(s_import (4:1-4:17)
+		"Json"
+		""
+		""
+		(exposes)))
 ~~~
 # TYPES
 ~~~clojure

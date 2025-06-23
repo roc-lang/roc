@@ -305,21 +305,6 @@ This type is referenced here:
 
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: top-level import
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level import
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level import
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level import
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level import
-
-**NOT IMPLEMENTED**
 This feature is not yet implemented: canonicalize if_then_else expression
 
 **UNUSED VARIABLE**
@@ -475,10 +460,6 @@ This feature is not yet implemented: canonicalize suffix_single_question express
 
 **NOT IMPLEMENTED**
 This feature is not yet implemented: canonicalize suffix_single_question expression
-
-**UNDEFINED VARIABLE**
-Nothing is named `line!` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
 **UNDEFINED VARIABLE**
 Nothing is named `toStr` in this scope.
@@ -1441,7 +1422,7 @@ NO CHANGE
 					(s_expr (154:2-155:12) (e_runtime_error (154:2-154:5) "not_implemented"))
 					(s_expr (155:2-158:11)
 						(e_call (155:2-157:3)
-							(e_lookup (155:2-155:12) (pid 201))
+							(e_lookup_local (155:2-155:12) (pid 201))
 							(e_runtime_error (156:3-156:6) "not_implemented")))
 					(s_expr (158:2-162:7)
 						(e_call (158:2-161:3)
@@ -1456,14 +1437,14 @@ NO CHANGE
 								(ext_var 0)
 								(name "Ok")
 								(args "TODO"))
-							(e_lookup (164:24-164:30) (pid 227))))
+							(e_lookup_local (164:24-164:30) (pid 227))))
 					(s_let (165:2-165:34)
 						(p_assign (165:2-165:14)
 							(pid 259)
 							(ident "interpolated"))
 						(e_string (165:17-165:34)
 							(e_literal (165:18-165:25) "Hello, ")
-							(e_lookup (165:27-165:32) (pid 220))
+							(e_lookup_local (165:27-165:32) (pid 220))
 							(e_literal (165:33-165:33) "")))
 					(s_let (166:2-173:3)
 						(p_assign (166:2-166:6)
@@ -1473,7 +1454,7 @@ NO CHANGE
 							(elem_var 276)
 							(elems
 								(e_call (167:3-170:4)
-									(e_lookup (167:3-167:10) (pid 182))
+									(e_lookup_local (167:3-167:10) (pid 182))
 									(e_runtime_error (1:1-1:1) "not_implemented"))
 								(e_int (171:3-171:6)
 									(int_var 271)
@@ -1506,18 +1487,18 @@ NO CHANGE
 									(value "TODO")
 									(bound "u8"))
 								(e_string (179:16-179:23) (e_literal (179:17-179:22) "World"))
-								(e_lookup (179:25-179:28) (pid 231))
+								(e_lookup_local (179:25-179:28) (pid 231))
 								(e_call (179:30-179:39)
 									(e_tag (179:30-179:32)
 										(ext_var 0)
 										(name "Ok")
 										(args "TODO"))
-									(e_lookup (179:33-179:38) (pid 220)))
+									(e_lookup_local (179:33-179:38) (pid 220)))
 								(e_tuple (179:41-179:56)
 									(tuple_var "#299")
 									(elems
 										(e_runtime_error (179:42-179:48) "ident_not_in_scope")
-										(e_lookup (179:50-179:55) (pid 285))))
+										(e_lookup_local (179:50-179:55) (pid 285))))
 								(e_list (179:58-179:67)
 									(elem_var 310)
 									(elems
@@ -1559,12 +1540,12 @@ NO CHANGE
 										(ext_var 0)
 										(name "Ok")
 										(args "TODO"))
-									(e_lookup (184:6-184:11) (pid 220)))
+									(e_lookup_local (184:6-184:11) (pid 220)))
 								(e_tuple (185:3-185:18)
 									(tuple_var "#330")
 									(elems
 										(e_runtime_error (185:4-185:10) "ident_not_in_scope")
-										(e_lookup (185:12-185:17) (pid 285))))
+										(e_lookup_local (185:12-185:17) (pid 285))))
 								(e_list (186:3-186:12)
 									(elem_var 341)
 									(elems
@@ -1604,12 +1585,18 @@ NO CHANGE
 							"unknown"))
 					(s_expr (190:2-191:8) (e_runtime_error (1:1-1:1) "not_implemented"))
 					(e_call (191:2-195:3)
-						(e_runtime_error (191:2-191:14) "ident_not_in_scope")
+						(e_lookup_external
+							(external_decl (191:2-191:14)
+								(qualified_name "Stdout.line!")
+								(module_name "Stdout")
+								(local_name "line!")
+								(kind "value")
+								(type_var 420)))
 						(e_string (192:3-194:18)
 							(e_literal (192:4-192:14) "How about ")
 							(e_call (193:4-193:21)
 								(e_runtime_error (193:4-193:13) "ident_not_in_scope")
-								(e_lookup (193:14-193:20) (pid 227)))
+								(e_lookup_local (193:14-193:20) (pid 227)))
 							(e_literal (194:4-194:17) " as a string?"))))))
 		(annotation (144:1-144:6)
 			(signature 442)
@@ -1743,7 +1730,32 @@ NO CHANGE
 			(apply (63:30-63:38)
 				"Maybe"
 				(ty_var (63:36-63:37) "a"))
-			"false")))
+			"false"))
+	(s_import (4:1-4:42)
+		"Stdout"
+		""
+		""
+		(exposes))
+	(s_import (6:1-12:4)
+		"StdoutMultiline"
+		""
+		""
+		(exposes))
+	(s_import (14:1-14:82)
+		"Something"
+		""
+		""
+		(exposes))
+	(s_import (16:1-16:27)
+		"BadName"
+		""
+		""
+		(exposes))
+	(s_import (17:1-20:20)
+		"BadNameMultiline"
+		""
+		""
+		(exposes)))
 ~~~
 # TYPES
 ~~~clojure
