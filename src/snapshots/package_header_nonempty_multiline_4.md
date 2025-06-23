@@ -15,9 +15,7 @@ package
 	}
 ~~~
 # PROBLEMS
-~~~txt
 NIL
-~~~
 # TOKENS
 ~~~zig
 KwPackage(1:1-1:8),Newline(1:1-1:1),

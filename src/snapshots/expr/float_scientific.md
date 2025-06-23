@@ -8,9 +8,7 @@ type=expr
 1.23e-4
 ~~~
 # PROBLEMS
-~~~txt
 NIL
-~~~
 # TOKENS
 ~~~zig
 Float(1:1-1:8),EndOfFile(1:8-1:8),

@@ -168,7 +168,7 @@ const Section = union(enum) {
     pub const PARSE = "# PARSE\n~~~clojure\n";
     pub const CANONICALIZE = "# CANONICALIZE\n~~~clojure\n";
     pub const TOKENS = "# TOKENS\n~~~zig\n";
-    pub const PROBLEMS = "# PROBLEMS\n~~~txt\n";
+    pub const PROBLEMS = "# PROBLEMS\n";
     pub const TYPES = "# TYPES\n~~~clojure\n";
 
     pub const SECTION_END = "~~~\n";
@@ -536,7 +536,7 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
 
             var report: Report = try can_ir.diagnosticToReport(diagnostic, gpa, content.source, snapshot_path);
             defer report.deinit();
-            report.render(writer.any(), .plain_text) catch |err| {
+            report.render(writer.any(), .markdown) catch |err| {
                 try writer.print("Error rendering report: {}\n", .{err});
                 continue;
             };
@@ -552,7 +552,8 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
             log("reported {} parser problems", .{parser_problems});
             log("reported {} canonicalization problems", .{canonicalize_problems});
         }
-        try writer.writeAll(Section.SECTION_END);
+
+        // Don't write out section end, as the problem reports are already in markdown format.
     }
 
     // Write out any TOKENS

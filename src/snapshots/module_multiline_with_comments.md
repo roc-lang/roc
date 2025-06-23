@@ -12,9 +12,7 @@ module # Comment after module keyword
 	]
 ~~~
 # PROBLEMS
-~~~txt
 NIL
-~~~
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),Newline(1:9-1:38),

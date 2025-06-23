@@ -17,12 +17,10 @@ Decode(a) : a
 		module(a).decode(List(U8)) -> a,
 ~~~
 # PROBLEMS
-~~~txt
-NOT IMPLEMENTED
+**NOT IMPLEMENTED**
 This feature is not yet implemented: top-level type_decl
-NOT IMPLEMENTED
+**NOT IMPLEMENTED**
 This feature is not yet implemented: top-level type_decl
-~~~
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:13),CloseSquare(1:13-1:14),Newline(1:1-1:1),

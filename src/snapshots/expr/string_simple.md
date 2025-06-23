@@ -8,9 +8,7 @@ type=expr
 "hello world"
 ~~~
 # PROBLEMS
-~~~txt
 NIL
-~~~
 # TOKENS
 ~~~zig
 StringStart(1:1-1:2),StringPart(1:2-1:13),StringEnd(1:13-1:14),EndOfFile(1:14-1:14),

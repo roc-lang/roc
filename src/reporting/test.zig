@@ -50,13 +50,16 @@ test "SYNTAX_PROBLEM report along with all four render types" {
     try testing.expect(r.document.elementCount() > 0);
     try testing.expect(!r.document.isEmpty());
 
-    // Plain Text
-    try renderer.renderReportToPlainText(&r, buffer.writer());
+    // Markdown
+    try renderer.renderReportToMarkdown(&r, buffer.writer());
 
     const expected =
-        \\SYNTAX PROBLEM
-        \\Using more than one + like this requires parentheses, to clarify how things should be grouped.
-        \\example.roc:1-10:1: example.roc
+        \\**SYNTAX PROBLEM**
+        \\Using more than one `+` like this requires parentheses, to clarify how things should be grouped.
+        \\**example.roc:1-10:1:**
+        \\```roc
+        \\example.roc
+        \\```
         \\
         \\
     ;

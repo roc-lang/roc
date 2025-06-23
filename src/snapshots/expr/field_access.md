@@ -8,10 +8,8 @@ type=expr
 person.name
 ~~~
 # PROBLEMS
-~~~txt
-NOT IMPLEMENTED
+**NOT IMPLEMENTED**
 This feature is not yet implemented: canonicalize record field_access expression
-~~~
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:7),NoSpaceDotLowerIdent(1:7-1:12),EndOfFile(1:12-1:12),

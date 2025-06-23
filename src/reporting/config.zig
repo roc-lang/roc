@@ -17,8 +17,8 @@ pub const ColorPreference = enum {
 
 /// Render target preference
 pub const RenderTargetPreference = enum {
-    /// Plain text output
-    plain_text,
+    /// Markdown output
+    markdown,
     /// Colored terminal output
     color_terminal,
     /// HTML output
@@ -63,7 +63,7 @@ pub const ReportingConfig = struct {
         var config = ReportingConfig{
             .color_preference = .auto,
             .is_tty = false,
-            .render_target = .plain_text,
+            .render_target = .markdown,
             .max_line_width = 80,
             .show_line_numbers = true,
             .context_lines = 3,
@@ -114,19 +114,19 @@ pub const ReportingConfig = struct {
 
         // Set render target based on color preference and TTY status
         config.render_target = switch (config.color_preference) {
-            .never => .plain_text,
-            .auto => if (config.is_tty) .color_terminal else .plain_text,
+            .never => .markdown,
+            .auto => if (config.is_tty) .color_terminal else .markdown,
             .always, .high_contrast => .color_terminal,
         };
 
         return config;
     }
 
-    pub fn initPlainText() ReportingConfig {
+    pub fn initMarkdown() ReportingConfig {
         return ReportingConfig{
             .color_preference = .never,
             .is_tty = false,
-            .render_target = .plain_text,
+            .render_target = .markdown,
             .max_line_width = 80,
             .show_line_numbers = true,
             .context_lines = 3,
@@ -165,7 +165,7 @@ pub const ReportingConfig = struct {
         return ReportingConfig{
             .color_preference = .never,
             .is_tty = false,
-            .render_target = .plain_text,
+            .render_target = .markdown,
             .max_line_width = 80,
             .show_line_numbers = false, // Simpler output for tests
             .context_lines = 1,
@@ -299,10 +299,10 @@ pub fn findUtf8CharEnd(input: []const u8, pos: usize) usize {
 const testing = std.testing;
 
 test "ReportingConfig initialization" {
-    const config = ReportingConfig.initPlainText();
+    const config = ReportingConfig.initMarkdown();
     try testing.expect(!config.shouldUseColors());
     try testing.expect(!config.is_tty);
-    try testing.expectEqual(RenderTargetPreference.plain_text, config.getRenderTarget());
+    try testing.expectEqual(RenderTargetPreference.markdown, config.getRenderTarget());
 }
 
 test "ReportingConfig color terminal" {
