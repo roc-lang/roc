@@ -1220,130 +1220,13 @@ pub fn canonicalize_expr(
             return expr_idx;
         },
         .field_access => |field_access| {
-            // Check if this is a module-qualified lookup (like Json.utf8)
-            const left_expr = self.parse_ir.store.getExpr(field_access.left);
-            if (left_expr == .ident) {
-                const left_ident = left_expr.ident;
-                if (self.parse_ir.tokens.resolveIdentifier(left_ident.token)) |module_alias| {
-                    // Check if this is a module alias
-                    if (self.scopeLookupModule(module_alias)) |module_name| {
-                        // This is a module-qualified lookup
-                        const right_expr = self.parse_ir.store.getExpr(field_access.right);
-                        if (right_expr == .ident) {
-                            const right_ident = right_expr.ident;
-                            if (self.parse_ir.tokens.resolveIdentifier(right_ident.token)) |field_name| {
-                                // Create qualified name for external declaration
-                                const module_text = self.can_ir.env.idents.getText(module_name);
-                                const field_text = self.can_ir.env.idents.getText(field_name);
-
-                                // Allocate space for qualified name
-                                const qualified_text = std.fmt.allocPrint(self.can_ir.env.gpa, "{s}.{s}", .{ module_text, field_text }) catch |err| collections.utils.exitOnOom(err);
-                                defer self.can_ir.env.gpa.free(qualified_text);
-
-                                const qualified_name = self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(qualified_text), Region.zero());
-
-                                // Create external declaration
-                                const region = self.parse_ir.tokenizedRegionToRegion(field_access.region);
-                                const external_decl = CIR.ExternalDecl{
-                                    .qualified_name = qualified_name,
-                                    .module_name = module_name,
-                                    .local_name = field_name,
-                                    .type_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region),
-                                    .kind = .value,
-                                    .region = region,
-                                };
-
-                                const external_idx = self.can_ir.pushExternalDecl(external_decl);
-
-                                // Create lookup expression for external declaration
-                                const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .lookup = .{ .external = external_idx } });
-                                _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
-                                return expr_idx;
-                            }
-                        }
-                    }
-                }
+            // Try module-qualified lookup first (e.g., Json.utf8)
+            if (self.tryModuleQualifiedLookup(field_access)) |expr_idx| {
+                return expr_idx;
             }
 
-            // Not a module-qualified lookup, proceed with regular field access
-            // Canonicalize the receiver (left side of the dot)
-            const receiver_idx = blk: {
-                if (self.canonicalize_expr(field_access.left)) |idx| {
-                    break :blk idx;
-                } else {
-                    // Failed to canonicalize receiver, return malformed
-                    const region = self.parse_ir.tokenizedRegionToRegion(field_access.region);
-                    return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .expr_not_canonicalized = .{
-                        .region = region,
-                    } });
-                }
-            };
-
-            // Parse the right side - this could be just a field name or a method call
-            const right_expr = self.parse_ir.store.getExpr(field_access.right);
-
-            var field_name: Ident.Idx = undefined;
-            var args: ?CIR.Expr.Span = null;
-
-            switch (right_expr) {
-                .apply => |apply| {
-                    // This is a method call like .map(fn)
-                    const method_expr = self.parse_ir.store.getExpr(apply.@"fn");
-                    switch (method_expr) {
-                        .ident => |ident| {
-                            // Get the method name
-                            if (self.parse_ir.tokens.resolveIdentifier(ident.token)) |ident_idx| {
-                                field_name = ident_idx;
-                            } else {
-                                // Fallback for malformed identifiers
-                                field_name = self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text("unknown"), Region.zero());
-                            }
-                        },
-                        else => {
-                            // Fallback to a generic name
-                            field_name = self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text("unknown"), Region.zero());
-                        },
-                    }
-
-                    // Canonicalize the arguments using scratch system
-                    const scratch_top = self.can_ir.store.scratchExprTop();
-                    for (self.parse_ir.store.exprSlice(apply.args)) |arg_idx| {
-                        if (self.canonicalize_expr(arg_idx)) |canonicalized| {
-                            self.can_ir.store.addScratchExpr(canonicalized);
-                        } else {
-                            self.can_ir.store.clearScratchExprsFrom(scratch_top);
-                            return null;
-                        }
-                    }
-                    args = self.can_ir.store.exprSpanFrom(scratch_top);
-                },
-                .ident => |ident| {
-                    // Get the field name
-                    if (self.parse_ir.tokens.resolveIdentifier(ident.token)) |ident_idx| {
-                        field_name = ident_idx;
-                    } else {
-                        // Fallback for malformed identifiers
-                        field_name = self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text("unknown"), Region.zero());
-                    }
-                },
-                else => {
-                    // Fallback
-                    field_name = self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text("unknown"), Region.zero());
-                },
-            }
-
-            const dot_access_expr = CIR.Expr{
-                .dot_access = .{
-                    .receiver = receiver_idx,
-                    .field_name = field_name,
-                    .args = args,
-                    .region = self.parse_ir.tokenizedRegionToRegion(field_access.region),
-                },
-            };
-
-            const expr_idx = self.can_ir.store.addExpr(dot_access_expr);
-            _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
-            return expr_idx;
+            // Regular field access canonicalization
+            return self.canonicalizeRegularFieldAccess(field_access);
         },
         .local_dispatch => |_| {
             const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize local_dispatch expression");
@@ -3306,6 +3189,168 @@ fn createAnnotationFromTypeAnno(self: *Self, type_anno_idx: CIR.TypeAnno.Idx, _:
     const annotation_idx = self.can_ir.store.addAnnotation(annotation);
 
     return annotation_idx;
+}
+
+/// Try to handle field access as a module-qualified lookup.
+///
+/// Examples:
+/// - `Json.utf8` where `Json` is a module alias and `utf8` is an exposed function
+/// - `Http.get` where `Http` is imported and `get` is available in that module
+///
+/// Returns `null` if this is not a module-qualified lookup (e.g., regular field access like `user.name`)
+fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) ?CIR.Expr.Idx {
+    const left_expr = self.parse_ir.store.getExpr(field_access.left);
+    if (left_expr != .ident) return null;
+
+    const left_ident = left_expr.ident;
+    const module_alias = self.parse_ir.tokens.resolveIdentifier(left_ident.token) orelse return null;
+
+    // Check if this is a module alias
+    const module_name = self.scopeLookupModule(module_alias) orelse return null;
+
+    // This is a module-qualified lookup
+    const right_expr = self.parse_ir.store.getExpr(field_access.right);
+    if (right_expr != .ident) return null;
+
+    const right_ident = right_expr.ident;
+    const field_name = self.parse_ir.tokens.resolveIdentifier(right_ident.token) orelse return null;
+
+    // Create qualified name by slicing from original source text
+    // The field_access region covers the entire "Module.field" span
+    const region = self.parse_ir.tokenizedRegionToRegion(field_access.region);
+    const source_text = self.parse_ir.source[region.start.offset..region.end.offset];
+
+    const qualified_name = self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(source_text), region);
+
+    // Create external declaration
+    const external_decl = CIR.ExternalDecl{
+        .qualified_name = qualified_name,
+        .module_name = module_name,
+        .local_name = field_name,
+        .type_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region),
+        .kind = .value,
+        .region = region,
+    };
+
+    const external_idx = self.can_ir.pushExternalDecl(external_decl);
+
+    // Create lookup expression for external declaration
+    const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .lookup = .{ .external = external_idx } });
+    _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
+    return expr_idx;
+}
+
+/// Canonicalize regular field access (not module-qualified).
+///
+/// Examples:
+/// - `user.name` - accessing a field on a record
+/// - `list.map(transform)` - calling a method with arguments
+/// - `result.isOk` - accessing a field that might be a function
+fn canonicalizeRegularFieldAccess(self: *Self, field_access: AST.BinOp) ?CIR.Expr.Idx {
+    // Canonicalize the receiver (left side of the dot)
+    const receiver_idx = self.canonicalizeFieldAccessReceiver(field_access) orelse return null;
+
+    // Parse the right side - this could be just a field name or a method call
+    const field_name, const args = self.parseFieldAccessRight(field_access);
+
+    const dot_access_expr = CIR.Expr{
+        .dot_access = .{
+            .receiver = receiver_idx,
+            .field_name = field_name,
+            .args = args,
+            .region = self.parse_ir.tokenizedRegionToRegion(field_access.region),
+        },
+    };
+
+    const expr_idx = self.can_ir.store.addExpr(dot_access_expr);
+    _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
+    return expr_idx;
+}
+
+/// Canonicalize the receiver (left side) of field access.
+///
+/// Examples:
+/// - In `user.name`, canonicalizes `user`
+/// - In `getUser().email`, canonicalizes `getUser()`
+/// - In `[1,2,3].map(fn)`, canonicalizes `[1,2,3]`
+fn canonicalizeFieldAccessReceiver(self: *Self, field_access: AST.BinOp) ?CIR.Expr.Idx {
+    if (self.canonicalize_expr(field_access.left)) |idx| {
+        return idx;
+    } else {
+        // Failed to canonicalize receiver, return malformed
+        const region = self.parse_ir.tokenizedRegionToRegion(field_access.region);
+        return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .expr_not_canonicalized = .{
+            .region = region,
+        } });
+    }
+}
+
+/// Parse the right side of field access, handling both plain fields and method calls.
+///
+/// Examples:
+/// - `user.name` - returns `("name", null)` for plain field access
+/// - `list.map(fn)` - returns `("map", args)` where args contains the canonicalized function
+/// - `obj.method(a, b)` - returns `("method", args)` where args contains canonicalized a and b
+fn parseFieldAccessRight(self: *Self, field_access: AST.BinOp) struct { Ident.Idx, ?CIR.Expr.Span } {
+    const right_expr = self.parse_ir.store.getExpr(field_access.right);
+
+    return switch (right_expr) {
+        .apply => |apply| self.parseMethodCall(apply),
+        .ident => |ident| .{ self.resolveIdentOrFallback(ident.token), null },
+        else => .{ self.createUnknownIdent(), null },
+    };
+}
+
+/// Parse a method call on the right side of field access.
+///
+/// Examples:
+/// - `.map(transform)` - extracts "map" as method name and canonicalizes `transform` argument
+/// - `.filter(predicate)` - extracts "filter" and canonicalizes `predicate`
+/// - `.fold(0, combine)` - extracts "fold" and canonicalizes both `0` and `combine` arguments
+fn parseMethodCall(self: *Self, apply: @TypeOf(@as(AST.Expr, undefined).apply)) struct { Ident.Idx, ?CIR.Expr.Span } {
+    const method_expr = self.parse_ir.store.getExpr(apply.@"fn");
+    const field_name = switch (method_expr) {
+        .ident => |ident| self.resolveIdentOrFallback(ident.token),
+        else => self.createUnknownIdent(),
+    };
+
+    // Canonicalize the arguments using scratch system
+    const scratch_top = self.can_ir.store.scratchExprTop();
+    for (self.parse_ir.store.exprSlice(apply.args)) |arg_idx| {
+        if (self.canonicalize_expr(arg_idx)) |canonicalized| {
+            self.can_ir.store.addScratchExpr(canonicalized);
+        } else {
+            self.can_ir.store.clearScratchExprsFrom(scratch_top);
+            return .{ field_name, null };
+        }
+    }
+    const args = self.can_ir.store.exprSpanFrom(scratch_top);
+
+    return .{ field_name, args };
+}
+
+/// Resolve an identifier token or return a fallback "unknown" identifier.
+///
+/// This helps maintain the "inform don't block" philosophy - even if we can't
+/// resolve an identifier (due to malformed input), we continue compilation.
+///
+/// Examples:
+/// - Valid token for "name" -> returns the interned identifier for "name"
+/// - Malformed/missing token -> returns identifier for "unknown"
+fn resolveIdentOrFallback(self: *Self, token: Token.Idx) Ident.Idx {
+    if (self.parse_ir.tokens.resolveIdentifier(token)) |ident_idx| {
+        return ident_idx;
+    } else {
+        return self.createUnknownIdent();
+    }
+}
+
+/// Create an "unknown" identifier for fallback cases.
+///
+/// Used when we encounter malformed or unexpected syntax but want to continue
+/// compilation instead of stopping. This supports the compiler's "inform don't block" approach.
+fn createUnknownIdent(self: *Self) Ident.Idx {
+    return self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text("unknown"), Region.zero());
 }
 
 /// Context helper for Scope tests
