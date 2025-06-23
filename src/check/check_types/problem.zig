@@ -70,12 +70,14 @@ pub const Problem = union(enum) {
 
         try writer.write(vars.expected);
         try report.document.addText("Expected: ");
-        try report.document.addText(buf.items[0..]);
+        const owned_expected = try report.addOwnedString(buf.items[0..]);
+        try report.document.addText(owned_expected);
 
         const buf_len = buf.items.len;
         try writer.write(vars.actual);
         try report.document.addText("\nBut got: ");
-        try report.document.addText(buf.items[buf_len..]);
+        const owned_actual = try report.addOwnedString(buf.items[buf_len..]);
+        try report.document.addText(owned_actual);
 
         return report;
     }
