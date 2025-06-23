@@ -14,7 +14,7 @@ world = "World"
 **NOT IMPLEMENTED**
 This feature is not yet implemented: top-level import
 **UNDEFINED VARIABLE**
-Nothing is named ``line!`` in this scope.
+Nothing is named `line!` in this scope.
 Is there an `import` or `exposing` missing up-top?
 # TOKENS
 ~~~zig

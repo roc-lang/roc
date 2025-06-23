@@ -9,7 +9,7 @@ Err(foo)??12>5*5 or 13+2<5 and 10-1>=16 or 12<=3/5
 ~~~
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named ``foo`` in this scope.
+Nothing is named `foo` in this scope.
 Is there an `import` or `exposing` missing up-top?
 **NOT IMPLEMENTED**
 This feature is not yet implemented: binop

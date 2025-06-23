@@ -11,7 +11,7 @@ type=expr
 PARSER: expr_unexpected_token
 PARSER: ty_anno_unexpected_token
 **UNDEFINED VARIABLE**
-Nothing is named ``person`` in this scope.
+Nothing is named `person` in this scope.
 Is there an `import` or `exposing` missing up-top?
 **NOT IMPLEMENTED**
 This feature is not yet implemented: statement type in block

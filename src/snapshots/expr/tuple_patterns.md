@@ -32,46 +32,46 @@ PARSER: expr_unexpected_token
 PARSER: expr_unexpected_token
 PARSER: expr_unexpected_token
 **UNDEFINED VARIABLE**
-Nothing is named ``x`` in this scope.
+Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?
 **UNDEFINED VARIABLE**
-Nothing is named ``y`` in this scope.
+Nothing is named `y` in this scope.
 Is there an `import` or `exposing` missing up-top?
 **UNDEFINED VARIABLE**
-Nothing is named ``a`` in this scope.
+Nothing is named `a` in this scope.
 Is there an `import` or `exposing` missing up-top?
 **UNDEFINED VARIABLE**
-Nothing is named ``b`` in this scope.
+Nothing is named `b` in this scope.
 Is there an `import` or `exposing` missing up-top?
 **UNDEFINED VARIABLE**
-Nothing is named ``c`` in this scope.
+Nothing is named `c` in this scope.
 Is there an `import` or `exposing` missing up-top?
 **UNDEFINED VARIABLE**
-Nothing is named ``d`` in this scope.
+Nothing is named `d` in this scope.
 Is there an `import` or `exposing` missing up-top?
 **UNDEFINED VARIABLE**
-Nothing is named ``first`` in this scope.
+Nothing is named `first` in this scope.
 Is there an `import` or `exposing` missing up-top?
 **UNDEFINED VARIABLE**
-Nothing is named ``second`` in this scope.
+Nothing is named `second` in this scope.
 Is there an `import` or `exposing` missing up-top?
 **UNDEFINED VARIABLE**
-Nothing is named ``third`` in this scope.
+Nothing is named `third` in this scope.
 Is there an `import` or `exposing` missing up-top?
 **UNDEFINED VARIABLE**
-Nothing is named ``name`` in this scope.
+Nothing is named `name` in this scope.
 Is there an `import` or `exposing` missing up-top?
 **UNDEFINED VARIABLE**
-Nothing is named ``string`` in this scope.
+Nothing is named `string` in this scope.
 Is there an `import` or `exposing` missing up-top?
 **UNDEFINED VARIABLE**
-Nothing is named ``boolean`` in this scope.
+Nothing is named `boolean` in this scope.
 Is there an `import` or `exposing` missing up-top?
 **UNDEFINED VARIABLE**
-Nothing is named ``list`` in this scope.
+Nothing is named `list` in this scope.
 Is there an `import` or `exposing` missing up-top?
 **UNDEFINED VARIABLE**
-Nothing is named ``hello`` in this scope.
+Nothing is named `hello` in this scope.
 Is there an `import` or `exposing` missing up-top?
 **NOT IMPLEMENTED**
 This feature is not yet implemented: canonicalize record expression
