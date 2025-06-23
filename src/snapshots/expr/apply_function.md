@@ -9,7 +9,7 @@ foo(42, "hello")
 ~~~
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named ``foo`` in this scope.
+Nothing is named `foo` in this scope.
 Is there an `import` or `exposing` missing up-top?
 # TOKENS
 ~~~zig

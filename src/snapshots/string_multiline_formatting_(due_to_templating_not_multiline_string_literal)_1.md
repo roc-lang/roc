@@ -10,13 +10,13 @@ b)} lines of text due to the template parts"
 ~~~
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named ``some_func`` in this scope.
+Nothing is named `some_func` in this scope.
 Is there an `import` or `exposing` missing up-top?
 **UNDEFINED VARIABLE**
-Nothing is named ``a`` in this scope.
+Nothing is named `a` in this scope.
 Is there an `import` or `exposing` missing up-top?
 **UNDEFINED VARIABLE**
-Nothing is named ``b`` in this scope.
+Nothing is named `b` in this scope.
 Is there an `import` or `exposing` missing up-top?
 # TOKENS
 ~~~zig

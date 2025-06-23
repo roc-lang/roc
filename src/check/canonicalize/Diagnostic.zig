@@ -84,9 +84,9 @@ pub const Diagnostic = union(enum) {
     pub fn buildIdentAlreadyInScopeReport(allocator: Allocator, ident_name: []const u8) !Report {
         var report = Report.init(allocator, "DUPLICATE DEFINITION", .warning, reporting.ReportingConfig.initMarkdown());
         const owned_ident = try report.addOwnedString(ident_name);
-        try report.document.addText("The name `");
+        try report.document.addText("The name ");
         try report.document.addUnqualifiedSymbol(owned_ident);
-        try report.document.addText("` is already defined in this scope.");
+        try report.document.addText(" is already defined in this scope.");
         try report.document.addLineBreak();
         try report.document.addReflowingText("Choose a different name for this identifier, or remove the duplicate definition.");
         return report;
@@ -96,9 +96,9 @@ pub const Diagnostic = union(enum) {
     pub fn buildIdentNotInScopeReport(allocator: Allocator, ident_name: []const u8) !Report {
         var report = Report.init(allocator, "UNDEFINED VARIABLE", .runtime_error, reporting.ReportingConfig.initMarkdown());
         const owned_ident = try report.addOwnedString(ident_name);
-        try report.document.addText("Nothing is named `");
+        try report.document.addText("Nothing is named ");
         try report.document.addUnqualifiedSymbol(owned_ident);
-        try report.document.addText("` in this scope.");
+        try report.document.addText(" in this scope.");
         try report.document.addLineBreak();
         try report.document.addText("Is there an ");
         try report.document.addKeyword("import");
@@ -190,9 +190,9 @@ pub const Diagnostic = union(enum) {
     ) !Report {
         var report = Report.init(allocator, "DUPLICATE DEFINITION", .warning, reporting.ReportingConfig.initMarkdown());
         const owned_ident = try report.addOwnedString(ident_name);
-        try report.document.addText("The name `");
+        try report.document.addText("The name ");
         try report.document.addUnqualifiedSymbol(owned_ident);
-        try report.document.addText("` is being redeclared in this scope.");
+        try report.document.addText(" is being redeclared in this scope.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
@@ -210,9 +210,9 @@ pub const Diagnostic = union(enum) {
         );
 
         try report.document.addLineBreak();
-        try report.document.addText("But `");
+        try report.document.addText("But ");
         try report.document.addUnqualifiedSymbol(owned_ident);
-        try report.document.addText("` was already defined here:");
+        try report.document.addText(" was already defined here:");
         try report.document.addLineBreak();
         try report.document.addSourceRegion(
             source,

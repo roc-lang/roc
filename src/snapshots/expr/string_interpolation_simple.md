@@ -9,7 +9,7 @@ type=expr
 ~~~
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named ``name`` in this scope.
+Nothing is named `name` in this scope.
 Is there an `import` or `exposing` missing up-top?
 # TOKENS
 ~~~zig

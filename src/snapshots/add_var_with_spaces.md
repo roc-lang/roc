@@ -11,7 +11,7 @@ add2 = x +      2
 ~~~
 # PROBLEMS
 **UNDEFINED VARIABLE**
-Nothing is named ``x`` in this scope.
+Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?
 # TOKENS
 ~~~zig
