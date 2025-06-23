@@ -35,21 +35,21 @@ Eq(a) : a
 ## `Bool` implements the `Eq` ability.
 Bool := [True, False]
 
-## Satisfies the interface of `Eq`
-is_eq : Bool, Bool -> Bool
-is_eq = |b1, b2| match (b1, b2) {
-    (True, True) => True
-    (False, False) => True
-    _ => False
-}
-
 ## The boolean true value.
 true : Bool
-true = True
+true = Bool.True
 
 ## The boolean false value.
 false : Bool
-false = False
+false = Bool.False
+
+## Satisfies the interface of `Eq`
+is_eq : Bool, Bool -> Bool
+is_eq = |b1, b2| match (b1, b2) {
+    (Bool.True, Bool.True) => true
+    (Bool.False, Bool.False) => true
+    _ => false
+}
 
 ## Returns `Bool.false` when given `Bool.true`, and vice versa. This is
 ## equivalent to the logic [NOT](https://en.wikipedia.org/wiki/Negation)
@@ -60,8 +60,8 @@ false = False
 ## ```
 not : Bool -> Bool
 not = |b| match b {
-    True => False
-    False => True
+    Bool.True => false
+    Bool.False => true
 }
 
 ## This will call the function `Bool.is_eq` on the inputs, and then `Bool.not`
