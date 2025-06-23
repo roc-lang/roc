@@ -168,10 +168,14 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
 
     switch (node.tag) {
         .expr_var => {
-            return CIR.Expr{ .lookup = .{
+            return CIR.Expr{ .lookup = .{ .local = .{
                 .pattern_idx = @enumFromInt(node.data_1),
                 .region = node.region,
-            } };
+            } } };
+        },
+        .expr_external_lookup => {
+            // Handle external lookups
+            return CIR.Expr{ .lookup = .{ .external = @enumFromInt(node.data_1) } };
         },
         .expr_int => {
             // Retrieve the literal index from data_1
@@ -689,9 +693,20 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
 
     switch (expr) {
         .lookup => |e| {
-            node.region = e.region;
-            node.tag = .expr_var;
-            node.data_1 = @intFromEnum(e.pattern_idx);
+            switch (e) {
+                .local => |local| {
+                    node.region = local.region;
+                    node.tag = .expr_var;
+                    node.data_1 = @intFromEnum(local.pattern_idx);
+                },
+                .external => |external_idx| {
+                    // For external lookups, store the external decl index
+                    // Use external lookup tag to distinguish from local lookups
+                    node.region = base.Region.zero();
+                    node.tag = .expr_external_lookup;
+                    node.data_1 = @intFromEnum(external_idx);
+                },
+            }
         },
         .int => |e| {
             node.region = e.region;

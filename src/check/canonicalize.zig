@@ -611,10 +611,10 @@ pub fn canonicalize_expr(
 
                         // We found the ident in scope, lookup to reference the pattern
                         const expr_idx =
-                            self.can_ir.store.addExpr(CIR.Expr{ .lookup = .{
+                            self.can_ir.store.addExpr(CIR.Expr{ .lookup = .{ .local = .{
                                 .pattern_idx = pattern_idx,
                                 .region = region,
-                            } });
+                            } } });
                         _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
                         return expr_idx;
                     },
