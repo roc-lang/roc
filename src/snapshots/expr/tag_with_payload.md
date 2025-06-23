@@ -31,13 +31,13 @@ NO CHANGE
 		(name "Some")
 		(args "TODO"))
 	(e_int (1:6-1:8)
-		(int_var 15)
-		(precision_var 14)
+		(int_var 75)
+		(precision_var 74)
 		(literal "42")
 		(value "TODO")
 		(bound "u8")))
 ~~~
 # TYPES
 ~~~clojure
-(expr 17 (type "*"))
+(expr 77 (type "*"))
 ~~~

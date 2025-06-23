@@ -35,7 +35,7 @@ NO CHANGE
 	(d_let
 		(def_pattern
 			(p_assign (2:1-2:4)
-				(pid 12)
+				(pid 72)
 				(ident "foo")))
 		(def_expr
 			(e_tag (2:7-2:15)
@@ -47,7 +47,7 @@ NO CHANGE
 ~~~clojure
 (inferred_types
 	(defs
-		(def "foo" 15 (type "[FortyTwo, * *]")))
+		(def "foo" 75 (type "[FortyTwo, * *]")))
 	(expressions
-		(expr (2:7-2:15) 14 (type "[FortyTwo, * *]"))))
+		(expr (2:7-2:15) 74 (type "[FortyTwo, * *]"))))
 ~~~

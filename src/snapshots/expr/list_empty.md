@@ -23,9 +23,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e_list (1:1-1:3) (elem_var 12) (elems))
+(e_list (1:1-1:3) (elem_var 72) (elems))
 ~~~
 # TYPES
 ~~~clojure
-(expr 13 (type "List(*)"))
+(expr 73 (type "List(*)"))
 ~~~

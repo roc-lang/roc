@@ -27,11 +27,11 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (e_tuple (1:1-1:19)
-	(tuple_var "#19")
+	(tuple_var "#79")
 	(elems
 		(e_int (1:2-1:3)
-			(int_var 13)
-			(precision_var 12)
+			(int_var 73)
+			(precision_var 72)
 			(literal "1")
 			(value "TODO")
 			(bound "u8"))
@@ -43,5 +43,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr 20 (type "*"))
+(expr 80 (type "*"))
 ~~~

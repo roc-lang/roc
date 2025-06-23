@@ -23,12 +23,16 @@ attributes: Attributes,
 
 /// Create a new identifier from a string.
 pub fn for_text(text: []const u8) Ident {
-    // TODO: parse idents and their attributes/problems
+    // Parse identifier attributes from the text
+    const is_ignored = std.mem.startsWith(u8, text, "_");
+    const is_effectful = std.mem.endsWith(u8, text, "!");
+    // TODO: parse reassignable attribute (var keyword handling)
+
     return Ident{
         .raw_text = text,
         .attributes = Attributes{
-            .effectful = false,
-            .ignored = false,
+            .effectful = is_effectful,
+            .ignored = is_ignored,
             .reassignable = false,
         },
     };

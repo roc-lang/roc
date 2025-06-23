@@ -24,13 +24,13 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (e_int (1:1-1:10)
-	(int_var 13)
-	(precision_var 12)
+	(int_var 73)
+	(precision_var 72)
 	(literal "1_000_000")
 	(value "TODO")
 	(bound "u8"))
 ~~~
 # TYPES
 ~~~clojure
-(expr 14 (type "Num(Int(*))"))
+(expr 74 (type "Num(Int(*))"))
 ~~~

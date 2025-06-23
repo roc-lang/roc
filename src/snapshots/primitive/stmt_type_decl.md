@@ -10,9 +10,7 @@ module [Foo]
 Foo(a,b) : (a,b,Str,U64)
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level type_decl
-
+NIL
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:12),CloseSquare(1:12-1:13),Newline(1:1-1:1),
@@ -45,7 +43,18 @@ Foo(a, b) : (a, b, Str, U64)
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir "empty")
+(can_ir
+	(s_type_decl (3:1-3:25)
+		(type_header (3:1-3:9)
+			"Foo"
+			(args
+				(ty_var (3:5-3:6) "a")
+				(ty_var (3:7-3:8) "b")))
+		(tuple (3:12-3:25)
+			(ty_var (3:13-3:14) "a")
+			(ty_var (3:15-3:16) "b")
+			(ty (3:17-3:20) "Str")
+			(ty (3:21-3:24) "U64"))))
 ~~~
 # TYPES
 ~~~clojure

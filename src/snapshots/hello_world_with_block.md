@@ -26,6 +26,17 @@ This feature is not yet implemented: top-level import
 Nothing is named `line!` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**UNUSED VARIABLE**
+Variable ``world`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_world` to suppress this warning.
+The unused variable is declared here:
+**hello_world_with_block.md:10:3:10:8:**
+```roc
+	# Hello
+```
+
+
 # TOKENS
 ~~~zig
 Newline(1:2-1:15),
@@ -78,15 +89,15 @@ NO CHANGE
 	(d_let
 		(def_pattern
 			(p_assign (8:1-8:6)
-				(pid 13)
+				(pid 73)
 				(ident "main!")))
 		(def_expr
 			(e_lambda (8:9-12:2)
-				(args (p_underscore (8:10-8:11) (pid 14)))
+				(args (p_underscore (8:10-8:11) (pid 74)))
 				(e_block (8:13-12:2)
 					(s_let (9:2-9:17)
 						(p_assign (9:2-9:7)
-							(pid 15)
+							(pid 75)
 							(ident "world"))
 						(e_string (9:10-9:17) (e_literal (9:11-9:16) "World")))
 					(e_call (11:2-11:31)
@@ -97,7 +108,7 @@ NO CHANGE
 ~~~clojure
 (inferred_types
 	(defs
-		(def "main!" 26 (type "*")))
+		(def "main!" 87 (type "*")))
 	(expressions
-		(expr (8:9-12:2) 25 (type "*"))))
+		(expr (8:9-12:2) 86 (type "*"))))
 ~~~

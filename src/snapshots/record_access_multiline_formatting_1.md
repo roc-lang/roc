@@ -12,7 +12,7 @@ some_fn(arg1)?
 ~~~
 # PROBLEMS
 **NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize record field_access expression
+This feature is not yet implemented: canonicalize suffix_single_question expression
 
 # TOKENS
 ~~~zig
@@ -51,9 +51,15 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e_runtime_error (1:1-1:1) "not_implemented")
+(e_dot_access (1:1-4:16)
+	(e_dot_access (1:1-4:15)
+		(e_dot_access (1:1-3:30)
+			(e_runtime_error (1:1-1:1) "not_implemented")
+			"unknown")
+		"unknown")
+	"unknown")
 ~~~
 # TYPES
 ~~~clojure
-(expr 13 (type "Error"))
+(expr 76 (type "*"))
 ~~~

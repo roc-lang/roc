@@ -52,27 +52,27 @@ NO CHANGE
 	(d_let
 		(def_pattern
 			(p_assign (3:1-3:2)
-				(pid 12)
+				(pid 72)
 				(ident "a")))
 		(def_expr
 			(e_int (3:5-3:6)
-				(int_var 14)
-				(precision_var 13)
+				(int_var 74)
+				(precision_var 73)
 				(literal "5")
 				(value "TODO")
 				(bound "u8"))))
 	(d_let
 		(def_pattern
 			(p_assign (4:1-4:2)
-				(pid 17)
+				(pid 77)
 				(ident "b")))
 		(def_expr
 			(e_binop (4:5-4:10)
 				"add"
-				(e_lookup (4:5-4:6) (pid 12))
+				(e_lookup (4:5-4:6) (pid 72))
 				(e_int (4:9-4:10)
-					(int_var 20)
-					(precision_var 19)
+					(int_var 80)
+					(precision_var 79)
 					(literal "1")
 					(value "TODO")
 					(bound "u8"))))))
@@ -81,9 +81,9 @@ NO CHANGE
 ~~~clojure
 (inferred_types
 	(defs
-		(def "a" 16 (type "Num(Int(*))"))
-		(def "b" 23 (type "*")))
+		(def "a" 76 (type "Num(Int(*))"))
+		(def "b" 83 (type "*")))
 	(expressions
-		(expr (3:5-3:6) 15 (type "Num(Int(*))"))
-		(expr (4:5-4:10) 22 (type "*"))))
+		(expr (3:5-3:6) 75 (type "Num(Int(*))"))
+		(expr (4:5-4:10) 82 (type "*"))))
 ~~~

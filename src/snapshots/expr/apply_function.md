@@ -32,8 +32,8 @@ NO CHANGE
 (e_call (1:1-1:17)
 	(e_runtime_error (1:1-1:4) "ident_not_in_scope")
 	(e_int (1:5-1:7)
-		(int_var 15)
-		(precision_var 14)
+		(int_var 75)
+		(precision_var 74)
 		(literal "42")
 		(value "TODO")
 		(bound "u8"))
@@ -41,5 +41,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr 19 (type "*"))
+(expr 79 (type "*"))
 ~~~

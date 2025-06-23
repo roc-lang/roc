@@ -43,6 +43,8 @@ store: NodeStore,
 temp_source_for_sexpr: ?[]const u8 = null,
 /// All the definitions and in the module, populated by calling `canonicalize_file`
 all_defs: Def.Span,
+/// All the top-level statements in the module, populated by calling `canonicalize_file`
+all_statements: Statement.Span,
 
 /// Initialize the IR for a module's canonicalization info.
 ///
@@ -63,6 +65,7 @@ pub fn init(env: *ModuleEnv) CIR {
         .env = env,
         .store = NodeStore.initCapacity(env.gpa, NODE_STORE_CAPACITY),
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
+        .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
     };
 }
 
@@ -166,6 +169,7 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
         .can_lambda_not_implemented => Diagnostic.buildCanLambdaNotImplementedReport(allocator),
         .lambda_body_not_canonicalized => Diagnostic.buildLambdaBodyNotCanonicalizedReport(allocator),
         .var_across_function_boundary => Diagnostic.buildVarAcrossFunctionBoundaryReport(allocator),
+        .malformed_type_annotation => Diagnostic.buildMalformedTypeAnnotationReport(allocator),
         .shadowing_warning => |data| blk: {
             const ident_name = self.env.idents.getText(data.ident);
             const new_region_info = self.calcRegionInfo(data.region);
@@ -175,6 +179,118 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 ident_name,
                 new_region_info,
                 original_region_info,
+                source,
+                filename,
+            );
+        },
+        .type_redeclared => |data| blk: {
+            const type_name = self.env.idents.getText(data.name);
+            const original_region_info = self.calcRegionInfo(data.original_region);
+            const redeclared_region_info = self.calcRegionInfo(data.redeclared_region);
+            break :blk Diagnostic.buildTypeRedeclaredReport(
+                allocator,
+                type_name,
+                original_region_info,
+                redeclared_region_info,
+                source,
+                filename,
+            );
+        },
+        .undeclared_type => |data| blk: {
+            const type_name = self.env.idents.getText(data.name);
+            const region_info = self.calcRegionInfo(data.region);
+            break :blk Diagnostic.buildUndeclaredTypeReport(
+                allocator,
+                type_name,
+                region_info,
+                source,
+                filename,
+            );
+        },
+        .undeclared_type_var => |data| blk: {
+            const type_var_name = self.env.idents.getText(data.name);
+            const region_info = self.calcRegionInfo(data.region);
+            break :blk Diagnostic.buildUndeclaredTypeVarReport(
+                allocator,
+                type_var_name,
+                region_info,
+                source,
+                filename,
+            );
+        },
+        .type_alias_redeclared => |data| blk: {
+            const type_name = self.env.idents.getText(data.name);
+            const original_region_info = self.calcRegionInfo(data.original_region);
+            const redeclared_region_info = self.calcRegionInfo(data.redeclared_region);
+            break :blk Diagnostic.buildTypeAliasRedeclaredReport(
+                allocator,
+                type_name,
+                original_region_info,
+                redeclared_region_info,
+                source,
+                filename,
+            );
+        },
+        .custom_type_redeclared => |data| blk: {
+            const type_name = self.env.idents.getText(data.name);
+            const original_region_info = self.calcRegionInfo(data.original_region);
+            const redeclared_region_info = self.calcRegionInfo(data.redeclared_region);
+            break :blk Diagnostic.buildCustomTypeRedeclaredReport(
+                allocator,
+                type_name,
+                original_region_info,
+                redeclared_region_info,
+                source,
+                filename,
+            );
+        },
+        .type_shadowed_warning => |data| blk: {
+            const type_name = self.env.idents.getText(data.name);
+            const new_region_info = self.calcRegionInfo(data.region);
+            const original_region_info = self.calcRegionInfo(data.original_region);
+            break :blk Diagnostic.buildTypeShadowedWarningReport(
+                allocator,
+                type_name,
+                new_region_info,
+                original_region_info,
+                data.cross_scope,
+                source,
+                filename,
+            );
+        },
+        .type_parameter_conflict => |data| blk: {
+            const type_name = self.env.idents.getText(data.name);
+            const parameter_name = self.env.idents.getText(data.parameter_name);
+            const region_info = self.calcRegionInfo(data.region);
+            const original_region_info = self.calcRegionInfo(data.original_region);
+            break :blk Diagnostic.buildTypeParameterConflictReport(
+                allocator,
+                type_name,
+                parameter_name,
+                region_info,
+                original_region_info,
+                source,
+                filename,
+            );
+        },
+        .unused_variable => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            break :blk try Diagnostic.buildUnusedVariableReport(
+                allocator,
+                &self.env.idents,
+                region_info,
+                data,
+                source,
+                filename,
+            );
+        },
+        .used_underscore_variable => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            break :blk try Diagnostic.buildUsedUnderscoreVariableReport(
+                allocator,
+                &self.env.idents,
+                region_info,
+                data,
                 source,
                 filename,
             );
@@ -233,7 +349,7 @@ pub fn setTypeVarAt(self: *CIR, at_idx: Node.Idx, content: types.Content) types.
 // Helper to add type index info to a s-expr node
 fn appendTypeVar(node: *sexpr.Expr, gpa: std.mem.Allocator, name: []const u8, type_idx: TypeVar) void {
     var type_node = sexpr.Expr.init(gpa, name);
-    type_node.appendUnsignedIntChild(gpa, @intCast(@intFromEnum(type_idx)));
+    type_node.appendUnsignedInt(gpa, @intCast(@intFromEnum(type_idx)));
     node.appendNode(gpa, &type_node);
 }
 
@@ -411,89 +527,138 @@ pub const Statement = union(enum) {
                 return node;
             },
             .expr => |s| {
-                const feature = env.strings.insert(gpa, "s-expression for statement expr");
-                ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
-                    .feature = feature,
-                    .region = s.region,
-                } });
-
                 var node = sexpr.Expr.init(gpa, "s_expr");
                 node.appendRegionInfo(gpa, ir.calcRegionInfo(s.region));
-                node.appendString(gpa, "TODO");
+
+                var expr_node = ir.store.getExpr(s.expr).toSExpr(ir, env);
+                node.appendNode(gpa, &expr_node);
+
                 return node;
             },
             .expect => |s| {
-                const feature = env.strings.insert(gpa, "s-expression for statement expect");
-                ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
-                    .feature = feature,
-                    .region = s.region,
-                } });
-
                 var node = sexpr.Expr.init(gpa, "s_expect");
                 node.appendRegionInfo(gpa, ir.calcRegionInfo(s.region));
-                node.appendString(gpa, "TODO");
+
+                var body_node = ir.store.getExpr(s.body).toSExpr(ir, env);
+                node.appendNode(gpa, &body_node);
+
                 return node;
             },
             .@"for" => |s| {
-                const feature = env.strings.insert(gpa, "s-expression for statement for");
-                ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
-                    .feature = feature,
-                    .region = s.region,
-                } });
-
                 var node = sexpr.Expr.init(gpa, "s_for");
                 node.appendRegionInfo(gpa, ir.calcRegionInfo(s.region));
-                node.appendString(gpa, "TODO");
+
+                var pattern_node = ir.store.getPattern(s.patt).toSExpr(ir, s.patt);
+                node.appendNode(gpa, &pattern_node);
+
+                var expr_node = ir.store.getExpr(s.expr).toSExpr(ir, env);
+                node.appendNode(gpa, &expr_node);
+
+                var body_node = ir.store.getExpr(s.body).toSExpr(ir, env);
+                node.appendNode(gpa, &body_node);
+
                 return node;
             },
             .@"return" => |s| {
-                const feature = env.strings.insert(gpa, "s-expression for statement return");
-                ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
-                    .feature = feature,
-                    .region = s.region,
-                } });
-
                 var node = sexpr.Expr.init(gpa, "s_return");
                 node.appendRegionInfo(gpa, ir.calcRegionInfo(s.region));
-                node.appendString(gpa, "TODO");
+
+                var expr_node = ir.store.getExpr(s.expr).toSExpr(ir, env);
+                node.appendNode(gpa, &expr_node);
+
                 return node;
             },
             .import => |s| {
-                const feature = env.strings.insert(gpa, "s-expression for statement import");
-                ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
-                    .feature = feature,
-                    .region = s.region,
-                } });
-
                 var node = sexpr.Expr.init(gpa, "s_import");
                 node.appendRegionInfo(gpa, ir.calcRegionInfo(s.region));
-                node.appendString(gpa, "TODO");
+
+                const module_name = env.idents.getText(s.module_name_tok);
+                node.appendString(gpa, module_name);
+
+                if (s.qualifier_tok) |qualifier| {
+                    const qualifier_name = env.idents.getText(qualifier);
+                    node.appendString(gpa, qualifier_name);
+                } else {
+                    node.appendString(gpa, "");
+                }
+
+                if (s.alias_tok) |alias| {
+                    const alias_name = env.idents.getText(alias);
+                    node.appendString(gpa, alias_name);
+                } else {
+                    node.appendString(gpa, "");
+                }
+
+                var exposes_node = sexpr.Expr.init(gpa, "exposes");
+                const exposes_slice = ir.store.sliceExposedItems(s.exposes);
+                for (exposes_slice) |_| {
+                    // TODO: Implement ExposedItem.toSExpr when ExposedItem structure is complete
+                    exposes_node.appendString(gpa, "exposed_item");
+                }
+                node.appendNode(gpa, &exposes_node);
+
                 return node;
             },
             .type_decl => |s| {
-                const feature = env.strings.insert(gpa, "s-expression for statement type_decl");
-                ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
-                    .feature = feature,
-                    .region = s.region,
-                } });
-
                 var node = sexpr.Expr.init(gpa, "s_type_decl");
                 node.appendRegionInfo(gpa, ir.calcRegionInfo(s.region));
-                node.appendString(gpa, "TODO");
+
+                // Add the type header
+                var header_node = ir.store.getTypeHeader(s.header).toSExpr(ir, env);
+                node.appendNode(gpa, &header_node);
+
+                // Add the type annotation
+                var anno_node = ir.store.getTypeAnno(s.anno).toSExpr(ir, env);
+                node.appendNode(gpa, &anno_node);
+
+                // TODO: Add where clause when implemented
+                if (s.where) |_| {
+                    node.appendString(gpa, "where_clause_todo");
+                }
+
                 return node;
             },
             .type_anno => |s| {
-                const feature = env.strings.insert(gpa, "s-expression for statement type_anno");
-                ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
-                    .feature = feature,
-                    .region = s.region,
-                } });
-
                 var node = sexpr.Expr.init(gpa, "s_type_anno");
                 node.appendRegionInfo(gpa, ir.calcRegionInfo(s.region));
-                node.appendString(gpa, "TODO");
+
+                const name = env.idents.getText(s.name);
+                node.appendString(gpa, name);
+
+                var anno_node = ir.store.getTypeAnno(s.anno).toSExpr(ir, env);
+                node.appendNode(gpa, &anno_node);
+
+                if (s.where) |where_span| {
+                    var where_node = sexpr.Expr.init(gpa, "where");
+                    const where_slice = ir.store.sliceWhereClauses(where_span);
+                    for (where_slice) |_| {
+                        // TODO: Implement WhereClause.toSExpr when WhereClause structure is complete
+                        where_node.appendString(gpa, "where_clause");
+                    }
+                    node.appendNode(gpa, &where_node);
+                } else {
+                    node.appendString(gpa, "");
+                }
+
                 return node;
             },
+        }
+    }
+
+    /// Extract the region from any Statement variant
+    pub fn toRegion(self: *const @This()) Region {
+        switch (self.*) {
+            .decl => |s| return s.region,
+            .@"var" => |s| return s.region,
+            .reassign => |s| return s.region,
+            .crash => |s| return s.region,
+            .expr => |s| return s.region,
+            .expect => |s| return s.region,
+            .@"for" => |s| return s.region,
+            .@"return" => |s| return s.region,
+            .import => |s| return s.region,
+            .type_decl => |s| return s.region,
+            .type_anno => |s| return s.region,
         }
     }
 };
@@ -543,29 +708,320 @@ pub const PatternRecordField = struct {
     pub const Span = struct { span: DataSpan };
 };
 
-/// TODO: implement TypeAnno
-pub const TypeAnno = union(enum) {
-    pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: DataSpan };
-};
-
-/// TODO: implement TypeHeader
+/// Canonical representation of type annotations in Roc.
 ///
-/// how do we represent type headers?
-/// i.e. the `Dict` in `Dict(k,v) := ...`
+/// Type annotations appear on the right-hand side of type declarations and in other
+/// contexts where types are specified. For example, in `Map(a, b) : List(a) -> List(b)`,
+/// the `List(a) -> List(b)` part is represented by these TypeAnno variants.
+pub const TypeAnno = union(enum) {
+    /// Type application: applying a type constructor to arguments.
+    /// Examples: `List(Str)`, `Dict(String, Int)`, `Result(a, b)`
+    apply: struct {
+        symbol: Ident.Idx, // The type constructor being applied (e.g., "List", "Dict")
+        args: TypeAnno.Span, // The type arguments (e.g., [Str], [String, Int])
+        region: Region,
+    },
+
+    /// Type variable: a placeholder type that can be unified with other types.
+    /// Examples: `a`, `b`, `elem` in generic type signatures
+    ty_var: struct {
+        name: Ident.Idx, // The variable name (e.g., "a", "b")
+        region: Region,
+    },
+
+    /// Inferred type `_`
+    underscore: struct {
+        region: Region,
+    },
+
+    /// Basic type identifier: a concrete type name without arguments.
+    /// Examples: `Str`, `U64`, `Bool`
+    ty: struct {
+        symbol: Ident.Idx, // The type name
+        region: Region,
+    },
+
+    /// Module-qualified type: a type name prefixed with its module.
+    /// Examples: `Shape.Rect`, `Json.Decoder`
+    mod_ty: struct {
+        mod_symbol: Ident.Idx, // The module name (e.g., "Json")
+        ty_symbol: Ident.Idx, // The type name (e.g., "Decoder")
+        region: Region,
+    },
+
+    /// Tag union type: a union of tags, possibly with payloads.
+    /// Examples: `[Some(a), None]`, `[Red, Green, Blue]`, `[Cons(a, (List a)), Nil]`
+    tag_union: struct {
+        tags: TypeAnno.Span, // The individual tags in the union
+        open_anno: ?TypeAnno.Idx, // Optional extension variable for open unions
+        region: Region,
+    },
+
+    /// Tuple type: a fixed-size collection of heterogeneous types.
+    /// Examples: `(Str, U64)`, `(a, b, c)`
+    tuple: struct {
+        annos: TypeAnno.Span, // The types of each tuple element
+        region: Region,
+    },
+
+    /// Record type: a collection of named fields with their types.
+    /// Examples: `{ name: Str, age: U64 }`, `{ x: F64, y: F64 }`
+    record: struct {
+        fields: AnnoRecordField.Span, // The field definitions
+        region: Region,
+    },
+
+    /// Function type: represents function signatures.
+    /// Examples: `a -> b`, `Str, U64 -> Str`, `{} => Str`
+    @"fn": struct {
+        args: TypeAnno.Span, // Argument types
+        ret: TypeAnno.Idx, // Return type
+        effectful: bool, // Whether the function can perform effects, i.e. uses fat arrow `=>`
+        region: Region,
+    },
+
+    /// Parenthesized type: used for grouping and precedence.
+    /// Examples: `(a -> b)` in `a, (a -> b) -> b`
+    parens: struct {
+        anno: TypeAnno.Idx, // The type inside the parentheses
+        region: Region,
+    },
+
+    /// Malformed type annotation: represents a type that couldn't be parsed correctly.
+    /// This follows the "Inform Don't Block" principle - compilation continues with
+    /// an error marker that will be reported to the user.
+    malformed: struct {
+        diagnostic: Diagnostic.Idx, // The error that occurred
+        region: Region,
+    },
+
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: DataSpan };
+
+    pub fn toSExpr(self: *const @This(), ir: *const CIR, env: *ModuleEnv) sexpr.Expr {
+        const gpa = ir.env.gpa;
+        switch (self.*) {
+            .apply => |a| {
+                var node = sexpr.Expr.init(gpa, "apply");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(a.region));
+
+                const symbol_name = env.idents.getText(a.symbol);
+                node.appendString(gpa, symbol_name);
+
+                const args_slice = ir.store.sliceTypeAnnos(a.args);
+                for (args_slice) |arg_idx| {
+                    const arg = ir.store.getTypeAnno(arg_idx);
+                    var arg_node = arg.toSExpr(ir, env);
+                    node.appendNode(gpa, &arg_node);
+                }
+
+                return node;
+            },
+            .ty_var => |tv| {
+                var node = sexpr.Expr.init(gpa, "ty_var");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(tv.region));
+
+                const var_name = env.idents.getText(tv.name);
+                node.appendString(gpa, var_name);
+
+                return node;
+            },
+            .underscore => |u| {
+                var node = sexpr.Expr.init(gpa, "underscore");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(u.region));
+                return node;
+            },
+            .ty => |t| {
+                var node = sexpr.Expr.init(gpa, "ty");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(t.region));
+
+                const type_name = env.idents.getText(t.symbol);
+                node.appendString(gpa, type_name);
+
+                return node;
+            },
+            .mod_ty => |mt| {
+                var node = sexpr.Expr.init(gpa, "mod_ty");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(mt.region));
+
+                const mod_name = env.idents.getText(mt.mod_symbol);
+                const type_name = env.idents.getText(mt.ty_symbol);
+                node.appendString(gpa, mod_name);
+                node.appendString(gpa, type_name);
+
+                return node;
+            },
+            .tag_union => |tu| {
+                var node = sexpr.Expr.init(gpa, "tag_union");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(tu.region));
+
+                const tags_slice = ir.store.sliceTypeAnnos(tu.tags);
+                for (tags_slice) |tag_idx| {
+                    const tag = ir.store.getTypeAnno(tag_idx);
+                    var tag_node = tag.toSExpr(ir, env);
+                    node.appendNode(gpa, &tag_node);
+                }
+
+                if (tu.open_anno) |open_idx| {
+                    const open_anno = ir.store.getTypeAnno(open_idx);
+                    var open_node = open_anno.toSExpr(ir, env);
+                    node.appendNode(gpa, &open_node);
+                }
+
+                return node;
+            },
+            .tuple => |tup| {
+                var node = sexpr.Expr.init(gpa, "tuple");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(tup.region));
+
+                const annos_slice = ir.store.sliceTypeAnnos(tup.annos);
+                for (annos_slice) |anno_idx| {
+                    const anno = ir.store.getTypeAnno(anno_idx);
+                    var anno_node = anno.toSExpr(ir, env);
+                    node.appendNode(gpa, &anno_node);
+                }
+
+                return node;
+            },
+            .record => |r| {
+                var node = sexpr.Expr.init(gpa, "record");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(r.region));
+
+                const fields_slice = ir.store.sliceAnnoRecordFields(r.fields);
+                for (fields_slice) |field_idx| {
+                    const field = ir.store.getAnnoRecordField(field_idx);
+                    var field_node = sexpr.Expr.init(gpa, "record_field");
+
+                    const field_name = env.idents.getText(field.name);
+                    field_node.appendString(gpa, field_name);
+
+                    var type_node = ir.store.getTypeAnno(field.ty).toSExpr(ir, env);
+                    field_node.appendNode(gpa, &type_node);
+
+                    node.appendNode(gpa, &field_node);
+                }
+
+                return node;
+            },
+            .@"fn" => |f| {
+                var node = sexpr.Expr.init(gpa, "fn");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(f.region));
+
+                const args_slice = ir.store.sliceTypeAnnos(f.args);
+                for (args_slice) |arg_idx| {
+                    const arg = ir.store.getTypeAnno(arg_idx);
+                    var arg_node = arg.toSExpr(ir, env);
+                    node.appendNode(gpa, &arg_node);
+                }
+
+                var ret_node = ir.store.getTypeAnno(f.ret).toSExpr(ir, env);
+                node.appendNode(gpa, &ret_node);
+
+                const effectful_str = if (f.effectful) "true" else "false";
+                node.appendString(gpa, effectful_str);
+
+                return node;
+            },
+            .parens => |p| {
+                var node = sexpr.Expr.init(gpa, "parens");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(p.region));
+
+                const inner_anno = ir.store.getTypeAnno(p.anno);
+                var inner_node = inner_anno.toSExpr(ir, env);
+                node.appendNode(gpa, &inner_node);
+
+                return node;
+            },
+            .malformed => |m| {
+                var node = sexpr.Expr.init(gpa, "malformed_type_anno");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(m.region));
+                return node;
+            },
+        }
+    }
+
+    /// Extract the region from any TypeAnno variant
+    pub fn toRegion(self: *const @This()) Region {
+        switch (self.*) {
+            .apply => |a| return a.region,
+            .ty_var => |tv| return tv.region,
+            .underscore => |u| return u.region,
+            .ty => |t| return t.region,
+            .mod_ty => |mt| return mt.region,
+            .tuple => |t| return t.region,
+            .tag_union => |tu| return tu.region,
+            .record => |r| return r.region,
+            .@"fn" => |f| return f.region,
+            .parens => |p| return p.region,
+            .malformed => |m| return m.region,
+        }
+    }
+};
+
+/// Canonical representation of type declaration headers.
+///
+/// The type header is the left-hand side of a type declaration, specifying the type name
+/// and its parameters. For example, in `Map(a, b) : List(a) -> List(b)`, the header is
+/// `Map(a, b)` with name "Map" and type parameters `[a, b]`.
+///
+/// Examples:
+/// - `Foo` - simple type with no parameters
+/// - `List(a)` - generic type with one parameter
+/// - `Dict(k, v)` - generic type with two parameters
+/// - `Result(ok, err)` - generic type with named parameters
 pub const TypeHeader = struct {
+    name: Ident.Idx, // The type name (e.g., "Map", "List", "Dict")
+    args: TypeAnno.Span, // Type parameters (e.g., [a, b] for generic types)
+    region: Region, // Source location of the entire header
+
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
+
+    pub fn toSExpr(self: *const @This(), ir: *CIR, env: *ModuleEnv) sexpr.Expr {
+        const gpa = ir.env.gpa;
+        var node = sexpr.Expr.init(gpa, "type_header");
+        node.appendRegionInfo(gpa, ir.calcRegionInfo(self.region));
+
+        // Add the type name
+        const type_name = env.idents.getText(self.name);
+        node.appendString(gpa, type_name);
+
+        // Add the type arguments
+        const args_slice = ir.store.sliceTypeAnnos(self.args);
+        if (args_slice.len > 0) {
+            var args_node = sexpr.Expr.init(gpa, "args");
+            for (args_slice) |arg_idx| {
+                const arg = ir.store.getTypeAnno(arg_idx);
+                var arg_node = arg.toSExpr(ir, env);
+                args_node.appendNode(gpa, &arg_node);
+            }
+            node.appendNode(gpa, &args_node);
+        }
+
+        return node;
+    }
 };
 
-/// TODO: implement AnnoRecordField
+/// Record field in a type annotation: `{ field_name: Type }`
 pub const AnnoRecordField = struct {
+    name: Ident.Idx,
+    ty: TypeAnno.Idx,
+    region: Region,
+
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
 };
 
-/// TODO: implement ExposedItem
+/// An item exposed from an imported module
+/// Examples: `line!`, `Type as ValueCategory`, `Custom.*`
 pub const ExposedItem = struct {
+    /// The identifier being exposed
+    name: Ident.Idx,
+    /// Optional alias for the exposed item (e.g., `function` in `func as function`)
+    alias: ?Ident.Idx,
+    /// Whether this is a wildcard import (e.g., `Custom.*`)
+    is_wildcard: bool,
+
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
 };
@@ -686,6 +1142,14 @@ pub const Expr = union(enum) {
         region: Region,
     },
     binop: Binop,
+    /// Dot access that could be either record field access or static dispatch
+    /// The decision is deferred until after type inference based on the receiver's type
+    dot_access: struct {
+        receiver: Expr.Idx, // Expression before the dot (e.g., `list` in `list.map`)
+        field_name: Ident.Idx, // Identifier after the dot (e.g., `map` in `list.map`)
+        args: ?Expr.Span, // Optional arguments for method calls (e.g., `fn` in `list.map(fn)`)
+        region: Region,
+    },
     /// Compiles, but will crash if reached
     runtime_error: struct {
         diagnostic: Diagnostic.Idx,
@@ -757,6 +1221,7 @@ pub const Expr = union(enum) {
             .record => |e| return e.region,
             .empty_record => |e| return e.region,
             .record_access => |e| return e.region,
+            .dot_access => |e| return e.region,
             .tag => |e| return e.region,
             .zero_argument_tag => |e| return e.region,
             .binop => |e| return e.region,
@@ -1198,6 +1663,25 @@ pub const Expr = union(enum) {
 
                 return binop_node;
             },
+            .dot_access => |e| {
+                var dot_access_node = sexpr.Expr.init(gpa, "e_dot_access");
+                dot_access_node.appendRegionInfo(gpa, ir.calcRegionInfo(e.region));
+
+                var receiver_node = ir.store.getExpr(e.receiver).toSExpr(ir, env);
+                dot_access_node.appendNode(gpa, &receiver_node);
+
+                const field_name = env.idents.getText(e.field_name);
+                dot_access_node.appendString(gpa, field_name);
+
+                if (e.args) |args| {
+                    for (ir.store.exprSlice(args)) |arg_idx| {
+                        var arg_node = ir.store.getExpr(arg_idx).toSExpr(ir, env);
+                        dot_access_node.appendNode(gpa, &arg_node);
+                    }
+                }
+
+                return dot_access_node;
+            },
             .runtime_error => |e| {
                 var runtime_err_node = sexpr.Expr.init(gpa, "e_runtime_error");
                 runtime_err_node.appendRegionInfo(gpa, ir.calcRegionInfo(e.region));
@@ -1332,9 +1816,9 @@ pub const Def = struct {
         node.appendNode(gpa, &expr_node);
 
         if (self.annotation) |anno_idx| {
-            _ = anno_idx; // TODO: implement annotation lookup
-            // var anno_node = anno.toSExpr(env, ir);
-            // node.appendNode(env.gpa, &anno_node);
+            const anno = ir.store.getAnnotation(anno_idx);
+            var anno_node = anno.toSExpr(ir, env.line_starts);
+            node.appendNode(gpa, &anno_node);
         }
 
         return node;
@@ -1342,21 +1826,138 @@ pub const Def = struct {
 };
 
 /// todo
+/// An annotation represents a canonicalized type signature that connects
+/// a type declaration to a value definition
 pub const Annotation = struct {
+    /// The canonicalized declared type structure (what the programmer wrote)
+    type_anno: TypeAnno.Idx,
+    /// The canonical type signature as a type variable (for type inference)
     signature: TypeVar,
-    // introduced_variables: IntroducedVariables,
-    // aliases: VecMap<Symbol, Alias>,
+    /// Source region of the annotation
     region: Region,
 
     pub const Idx = enum(u32) { _ };
 
     pub fn toSExpr(self: *const @This(), ir: *const CIR, line_starts: std.ArrayList(u32)) sexpr.Expr {
-        _ = self;
         _ = line_starts;
         const gpa = ir.env.gpa;
-        const node = sexpr.Expr.init(gpa, "annotation");
-        // TODO add signature info
+        var node = sexpr.Expr.init(gpa, "annotation");
+        node.appendRegionInfo(gpa, ir.calcRegionInfo(self.region));
+
+        // Add the signature type variable info
+        appendTypeVar(&node, gpa, "signature", self.signature);
+
+        // Add the declared type annotation structure
+        var type_anno_node = sexpr.Expr.init(gpa, "declared_type");
+        const type_anno = ir.store.getTypeAnno(self.type_anno);
+        var anno_sexpr = type_anno.toSExpr(ir, ir.env);
+        type_anno_node.appendNode(gpa, &anno_sexpr);
+        node.appendNode(gpa, &type_anno_node);
+
         return node;
+    }
+};
+
+/// Tracks type variables introduced during annotation canonicalization
+pub const IntroducedVariables = struct {
+    /// Named type variables (e.g., 'a' in 'a -> a')
+    named: std.ArrayListUnmanaged(NamedVariable),
+    /// Wildcard type variables (e.g., '*' in some contexts)
+    wildcards: std.ArrayListUnmanaged(TypeVar),
+    /// Inferred type variables (e.g., '_')
+    inferred: std.ArrayListUnmanaged(TypeVar),
+
+    pub fn init() IntroducedVariables {
+        return IntroducedVariables{
+            .named = .{},
+            .wildcards = .{},
+            .inferred = .{},
+        };
+    }
+
+    pub fn deinit(self: *IntroducedVariables, gpa: std.mem.Allocator) void {
+        self.named.deinit(gpa);
+        self.wildcards.deinit(gpa);
+        self.inferred.deinit(gpa);
+    }
+
+    /// Insert a named type variable
+    pub fn insertNamed(self: *IntroducedVariables, gpa: std.mem.Allocator, name: Ident.Idx, var_type: TypeVar, region: Region) void {
+        const named_var = NamedVariable{
+            .name = name,
+            .variable = var_type,
+            .first_seen = region,
+        };
+        self.named.append(gpa, named_var) catch |err| collections.exitOnOom(err);
+    }
+
+    /// Insert a wildcard type variable
+    pub fn insertWildcard(self: *IntroducedVariables, gpa: std.mem.Allocator, var_type: TypeVar) void {
+        self.wildcards.append(gpa, var_type) catch |err| collections.exitOnOom(err);
+    }
+
+    /// Insert an inferred type variable
+    pub fn insertInferred(self: *IntroducedVariables, gpa: std.mem.Allocator, var_type: TypeVar) void {
+        self.inferred.append(gpa, var_type) catch |err| collections.exitOnOom(err);
+    }
+
+    /// Find a type variable by name
+    pub fn varByName(self: *const IntroducedVariables, name: Ident.Idx) ?TypeVar {
+        // Check named variables
+        for (self.named.items) |named_var| {
+            if (named_var.name == name) {
+                return named_var.variable;
+            }
+        }
+
+        return null;
+    }
+
+    /// Union with another IntroducedVariables
+    pub fn unionWith(self: *IntroducedVariables, other: *const IntroducedVariables) void {
+        // This is a simplified union - in practice we'd want to avoid duplicates
+        // For now, just append all items
+        const gpa = std.heap.page_allocator; // TODO: pass proper allocator
+
+        self.named.appendSlice(gpa, other.named.items) catch |err| collections.exitOnOom(err);
+        self.wildcards.appendSlice(gpa, other.wildcards.items) catch |err| collections.exitOnOom(err);
+        self.inferred.appendSlice(gpa, other.inferred.items) catch |err| collections.exitOnOom(err);
+    }
+};
+
+/// A named type variable in an annotation
+pub const NamedVariable = struct {
+    variable: TypeVar,
+    name: Ident.Idx,
+    first_seen: Region,
+};
+
+/// Tracks references to symbols and modules made by an annotation
+pub const References = struct {
+    /// References to value symbols
+    value_lookups: std.ArrayListUnmanaged(Ident.Idx),
+    /// References to type symbols
+    type_lookups: std.ArrayListUnmanaged(Ident.Idx),
+    /// References to modules
+    module_lookups: std.ArrayListUnmanaged(Ident.Idx),
+
+    pub fn init() References {
+        return .{
+            .value_lookups = .{},
+            .type_lookups = .{},
+            .module_lookups = .{},
+        };
+    }
+
+    pub fn deinit(self: *References, gpa: std.mem.Allocator) void {
+        self.value_lookups.deinit(gpa);
+        self.type_lookups.deinit(gpa);
+        self.module_lookups.deinit(gpa);
+    }
+
+    /// Insert a value symbol reference
+    pub fn insertValueLookup(self: *References, gpa: std.mem.Allocator, symbol: Ident.Idx) void {
+        self.value_lookups.append(gpa, symbol) catch |err| exitOnOom(err);
     }
 };
 
@@ -1874,8 +2475,9 @@ pub fn toSExprStr(ir: *CIR, env: *ModuleEnv, writer: std.io.AnyWriter, maybe_exp
 
         // Iterate over all the definitions in the file and convert each to an S-expression
         const defs_slice = ir.store.sliceDefs(ir.all_defs);
+        const statements_slice = ir.store.sliceStatements(ir.all_statements);
 
-        if (defs_slice.len == 0) {
+        if (defs_slice.len == 0 and statements_slice.len == 0) {
             root_node.appendString(gpa, "empty");
         }
 
@@ -1883,6 +2485,12 @@ pub fn toSExprStr(ir: *CIR, env: *ModuleEnv, writer: std.io.AnyWriter, maybe_exp
             const d = ir.store.getDef(def_idx);
             var def_node = d.toSExpr(ir, env);
             root_node.appendNode(gpa, &def_node);
+        }
+
+        for (statements_slice) |stmt_idx| {
+            const s = ir.store.getStatement(stmt_idx);
+            var stmt_node = s.toSExpr(ir, env);
+            root_node.appendNode(gpa, &stmt_node);
         }
 
         root_node.toStringPretty(writer);

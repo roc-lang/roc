@@ -35,12 +35,12 @@ NO CHANGE
 	(d_let
 		(def_pattern
 			(p_assign (2:1-2:4)
-				(pid 12)
+				(pid 72)
 				(ident "foo")))
 		(def_expr
 			(e_int (2:7-2:9)
-				(int_var 14)
-				(precision_var 13)
+				(int_var 74)
+				(precision_var 73)
 				(literal "42")
 				(value "TODO")
 				(bound "u8")))))
@@ -49,7 +49,7 @@ NO CHANGE
 ~~~clojure
 (inferred_types
 	(defs
-		(def "foo" 16 (type "Num(Int(*))")))
+		(def "foo" 76 (type "Num(Int(*))")))
 	(expressions
-		(expr (2:7-2:9) 15 (type "Num(Int(*))"))))
+		(expr (2:7-2:9) 75 (type "Num(Int(*))"))))
 ~~~

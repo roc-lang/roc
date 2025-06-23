@@ -43,28 +43,28 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (e_list (1:1-9:2)
-	(elem_var 21)
+	(elem_var 81)
 	(elems
 		(e_int (2:2-2:3)
-			(int_var 13)
-			(precision_var 12)
+			(int_var 73)
+			(precision_var 72)
 			(literal "1")
 			(value "TODO")
 			(bound "u8"))
 		(e_int (6:2-6:3)
-			(int_var 16)
-			(precision_var 15)
+			(int_var 76)
+			(precision_var 75)
 			(literal "2")
 			(value "TODO")
 			(bound "u8"))
 		(e_int (8:2-8:3)
-			(int_var 19)
-			(precision_var 18)
+			(int_var 79)
+			(precision_var 78)
 			(literal "3")
 			(value "TODO")
 			(bound "u8"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr 22 (type "List(Num(Int(*)))"))
+(expr 82 (type "List(Num(Int(*)))"))
 ~~~

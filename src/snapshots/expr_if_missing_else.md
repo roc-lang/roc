@@ -51,7 +51,7 @@ foo =
 	(d_let
 		(def_pattern
 			(p_assign (3:1-3:4)
-				(pid 12)
+				(pid 72)
 				(ident "foo")))
 		(def_expr (e_runtime_error (3:19-3:20) "expr_not_canonicalized"))))
 ~~~
@@ -59,7 +59,7 @@ foo =
 ~~~clojure
 (inferred_types
 	(defs
-		(def "foo" 15 (type "Error")))
+		(def "foo" 75 (type "Error")))
 	(expressions
-		(expr (3:19-3:20) 14 (type "Error"))))
+		(expr (3:19-3:20) 74 (type "Error"))))
 ~~~

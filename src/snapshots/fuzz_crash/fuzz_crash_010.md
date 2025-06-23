@@ -72,7 +72,7 @@ foo =
 	(d_let
 		(def_pattern
 			(p_assign (3:1-3:4)
-				(pid 13)
+				(pid 73)
 				(ident "foo")))
 		(def_expr
 			(e_string (5:5-5:35) (e_literal (5:6-5:35) "on        (string 'onmo %')))")))))
@@ -81,7 +81,7 @@ foo =
 ~~~clojure
 (inferred_types
 	(defs
-		(def "foo" 16 (type "Str")))
+		(def "foo" 76 (type "Str")))
 	(expressions
-		(expr (5:5-5:35) 15 (type "Str"))))
+		(expr (5:5-5:35) 75 (type "Str"))))
 ~~~

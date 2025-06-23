@@ -59,11 +59,11 @@ NO CHANGE
 	(d_let
 		(def_pattern
 			(p_assign (5:1-5:6)
-				(pid 13)
+				(pid 73)
 				(ident "main!")))
 		(def_expr
 			(e_lambda (5:9-5:42)
-				(args (p_underscore (5:10-5:11) (pid 14)))
+				(args (p_underscore (5:10-5:11) (pid 74)))
 				(e_call (5:13-5:42)
 					(e_runtime_error (5:13-5:25) "ident_not_in_scope")
 					(e_string (5:26-5:41) (e_literal (5:27-5:40) "Hello, world!")))))))
@@ -72,7 +72,7 @@ NO CHANGE
 ~~~clojure
 (inferred_types
 	(defs
-		(def "main!" 21 (type "*")))
+		(def "main!" 81 (type "*")))
 	(expressions
-		(expr (5:9-5:42) 20 (type "*"))))
+		(expr (5:9-5:42) 80 (type "*"))))
 ~~~

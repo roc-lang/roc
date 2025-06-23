@@ -95,5 +95,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr 73 (type "Error"))
+(expr 133 (type "Error"))
 ~~~

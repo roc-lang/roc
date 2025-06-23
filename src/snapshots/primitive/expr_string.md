@@ -43,28 +43,28 @@ NO CHANGE
 	(d_let
 		(def_pattern
 			(p_assign (2:1-2:5)
-				(pid 12)
+				(pid 72)
 				(ident "name")))
 		(def_expr
 			(e_string (2:8-2:13) (e_literal (2:9-2:12) "luc"))))
 	(d_let
 		(def_pattern
 			(p_assign (3:1-3:4)
-				(pid 16)
+				(pid 76)
 				(ident "foo")))
 		(def_expr
 			(e_string (3:7-3:22)
 				(e_literal (3:8-3:14) "hello ")
-				(e_lookup (3:16-3:20) (pid 12))
+				(e_lookup (3:16-3:20) (pid 72))
 				(e_literal (3:21-3:21) "")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred_types
 	(defs
-		(def "name" 15 (type "Str"))
-		(def "foo" 21 (type "Str")))
+		(def "name" 75 (type "Str"))
+		(def "foo" 81 (type "Str")))
 	(expressions
-		(expr (2:8-2:13) 14 (type "Str"))
-		(expr (3:7-3:22) 20 (type "Str"))))
+		(expr (2:8-2:13) 74 (type "Str"))
+		(expr (3:7-3:22) 80 (type "Str"))))
 ~~~

@@ -17,12 +17,7 @@ Decode(a) : a
 		module(a).decode(List(U8)) -> a,
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level type_decl
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level type_decl
-
+NIL
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:13),CloseSquare(1:13-1:14),Newline(1:1-1:1),
@@ -59,7 +54,17 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir "empty")
+(can_ir
+	(s_type_decl (3:1-8:7)
+		(type_header (3:1-3:8)
+			"Hash"
+			(args (ty_var (3:6-3:7) "a")))
+		(ty_var (3:11-3:12) "a"))
+	(s_type_decl (8:1-10:35)
+		(type_header (8:1-8:10)
+			"Decode"
+			(args (ty_var (8:8-8:9) "a")))
+		(ty_var (8:13-8:14) "a")))
 ~~~
 # TYPES
 ~~~clojure

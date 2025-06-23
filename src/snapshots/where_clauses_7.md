@@ -23,12 +23,7 @@ Decode(a) : a
 		) -> a,
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level type_decl
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level type_decl
-
+NIL
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:13),CloseSquare(1:13-1:14),Newline(1:1-1:1),
@@ -71,7 +66,17 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir "empty")
+(can_ir
+	(s_type_decl (3:1-12:7)
+		(type_header (3:1-3:8)
+			"Hash"
+			(args (ty_var (3:6-3:7) "a")))
+		(ty_var (5:3-5:4) "a"))
+	(s_type_decl (12:1-16:10)
+		(type_header (12:1-12:10)
+			"Decode"
+			(args (ty_var (12:8-12:9) "a")))
+		(ty_var (12:13-12:14) "a")))
 ~~~
 # TYPES
 ~~~clojure

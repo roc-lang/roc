@@ -46,27 +46,27 @@ NO CHANGE
 (e_binop (1:1-8:4)
 	"add"
 	(e_int (1:1-1:2)
-		(int_var 13)
-		(precision_var 12)
+		(int_var 73)
+		(precision_var 72)
 		(literal "1")
 		(value "TODO")
 		(bound "u8"))
 	(e_binop (6:2-8:4)
 		"mul"
 		(e_int (6:2-6:3)
-			(int_var 16)
-			(precision_var 15)
+			(int_var 76)
+			(precision_var 75)
 			(literal "2")
 			(value "TODO")
 			(bound "u8"))
 		(e_int (8:3-8:4)
-			(int_var 19)
-			(precision_var 18)
+			(int_var 79)
+			(precision_var 78)
 			(literal "3")
 			(value "TODO")
 			(bound "u8"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr 22 (type "*"))
+(expr 82 (type "*"))
 ~~~

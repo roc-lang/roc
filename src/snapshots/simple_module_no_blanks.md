@@ -53,7 +53,7 @@ NO CHANGE
 	(d_let
 		(def_pattern
 			(p_assign (3:1-3:7)
-				(pid 13)
+				(pid 73)
 				(ident "hello!")))
 		(def_expr
 			(e_call (3:10-3:31)
@@ -62,7 +62,7 @@ NO CHANGE
 	(d_let
 		(def_pattern
 			(p_assign (4:1-4:6)
-				(pid 20)
+				(pid 80)
 				(ident "world")))
 		(def_expr
 			(e_string (4:9-4:16) (e_literal (4:10-4:15) "World")))))
@@ -71,9 +71,9 @@ NO CHANGE
 ~~~clojure
 (inferred_types
 	(defs
-		(def "hello!" 19 (type "*"))
-		(def "world" 23 (type "Str")))
+		(def "hello!" 79 (type "*"))
+		(def "world" 83 (type "Str")))
 	(expressions
-		(expr (3:10-3:31) 18 (type "*"))
-		(expr (4:9-4:16) 22 (type "Str"))))
+		(expr (3:10-3:31) 78 (type "*"))
+		(expr (4:9-4:16) 82 (type "Str"))))
 ~~~

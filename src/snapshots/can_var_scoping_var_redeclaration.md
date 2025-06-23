@@ -36,6 +36,18 @@ But `x_` was already defined here:
 ```
 
 
+**UNUSED VARIABLE**
+Variable ``x_`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_x_` to suppress this warning.
+The unused variable is declared here:
+**can_var_scoping_var_redeclaration.md:7:3:8:5:**
+```roc
+	x_ = 15 # Reassign - should work without warning
+	x_
+```
+
+
 **NOT IMPLEMENTED**
 This feature is not yet implemented: canonicalize record expression
 
@@ -90,60 +102,60 @@ NO CHANGE
 	(d_let
 		(def_pattern
 			(p_assign (4:1-4:14)
-				(pid 12)
+				(pid 72)
 				(ident "redeclareTest")))
 		(def_expr
 			(e_lambda (4:17-9:2)
-				(args (p_underscore (4:18-4:19) (pid 13)))
+				(args (p_underscore (4:18-4:19) (pid 73)))
 				(e_block (4:21-9:2)
 					(s_var (5:2-6:5)
-						(pid 17)
+						(pid 77)
 						(p_assign (5:2-6:5)
-							(pid 17)
+							(pid 77)
 							(ident "x_"))
 						(e_int (5:11-5:12)
-							(int_var 15)
-							(precision_var 14)
+							(int_var 75)
+							(precision_var 74)
 							(literal "5")
 							(value "TODO")
 							(bound "u8")))
 					(s_var (6:2-7:4)
-						(pid 22)
+						(pid 82)
 						(p_assign (6:2-7:4)
-							(pid 22)
+							(pid 82)
 							(ident "x_"))
 						(e_int (6:11-6:13)
-							(int_var 20)
-							(precision_var 19)
+							(int_var 80)
+							(precision_var 79)
 							(literal "10")
 							(value "TODO")
 							(bound "u8")))
 					(s_reassign (7:2-7:4)
-						(pid 17)
+						(pid 77)
 						(e_int (7:7-7:9)
-							(int_var 26)
-							(precision_var 25)
+							(int_var 86)
+							(precision_var 85)
 							(literal "15")
 							(value "TODO")
 							(bound "u8")))
-					(e_lookup (8:2-8:4) (pid 17))))))
+					(e_lookup (8:2-8:4) (pid 77))))))
 	(d_let
 		(def_pattern
 			(p_assign (11:1-11:7)
-				(pid 33)
+				(pid 94)
 				(ident "result")))
 		(def_expr
 			(e_call (11:10-11:27)
-				(e_lookup (11:10-11:23) (pid 12))
+				(e_lookup (11:10-11:23) (pid 72))
 				(e_runtime_error (1:1-1:1) "not_implemented")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred_types
 	(defs
-		(def "redeclareTest" 32 (type "*"))
-		(def "result" 38 (type "*")))
+		(def "redeclareTest" 93 (type "*"))
+		(def "result" 99 (type "*")))
 	(expressions
-		(expr (4:17-9:2) 31 (type "*"))
-		(expr (11:10-11:27) 37 (type "*"))))
+		(expr (4:17-9:2) 92 (type "*"))
+		(expr (11:10-11:27) 98 (type "*"))))
 ~~~

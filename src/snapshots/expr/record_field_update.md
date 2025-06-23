@@ -32,8 +32,8 @@ Here is the problematic code:
 Nothing is named `person` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: statement type in block
+**MALFORMED TYPE**
+This type annotation is malformed or contains invalid syntax.
 
 # TOKENS
 ~~~zig
@@ -60,10 +60,10 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:9),OpAmpersand(1:10-1:11),LowerIdent(1:12-1:
 # CANONICALIZE
 ~~~clojure
 (e_block (1:1-1:21)
-	(s_expr (1:3-1:11) "TODO")
-	(e_runtime_error (1:1-1:1) "not_implemented"))
+	(s_expr (1:3-1:11) (e_runtime_error (1:3-1:9) "ident_not_in_scope"))
+	(e_tuple (1:12-1:21) (tuple_var "#77") (elems)))
 ~~~
 # TYPES
 ~~~clojure
-(expr 17 (type "*"))
+(expr 79 (type "*"))
 ~~~

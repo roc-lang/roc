@@ -5,7 +5,7 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-f{o,
+ f{o,
      ]
 
 foo =
@@ -27,9 +27,9 @@ For example:
 or for an app:
         app [main!] { pf: platform "../basic-cli/platform.roc" }
 Here is the problematic code:
-**fuzz_crash_009.md:1:1:1:3:**
+**fuzz_crash_009.md:1:2:1:4:**
 ```roc
-f{o,
+ f{o,
 ```
 
 
@@ -39,7 +39,7 @@ Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:3-1:4),Comma(1:4-1:5),Newline(1:1-1:1),
+LowerIdent(1:2-1:3),OpenCurly(1:3-1:4),LowerIdent(1:4-1:5),Comma(1:5-1:6),Newline(1:1-1:1),
 CloseCurly(2:6-2:7),Newline(1:1-1:1),
 Newline(1:1-1:1),
 LowerIdent(4:1-4:4),OpAssign(4:5-4:6),Newline(1:1-1:1),
@@ -48,10 +48,10 @@ StringStart(6:5-6:6),StringPart(6:6-6:12),EndOfFile(6:12-6:12),
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-6:12)
-	(malformed_header (1:1-1:3) "missing_header")
+(file (1:2-6:12)
+	(malformed_header (1:2-1:4) "missing_header")
 	(statements
-		(record (1:2-2:7) (field "o"))
+		(record (1:3-2:7) (field "o"))
 		(decl (4:1-6:12)
 			(ident (4:1-4:4) "foo")
 			(string (6:5-6:12) (string_part (6:6-6:12) "onmo %")))))
@@ -72,7 +72,7 @@ foo =
 	(d_let
 		(def_pattern
 			(p_assign (4:1-4:4)
-				(pid 13)
+				(pid 73)
 				(ident "foo")))
 		(def_expr
 			(e_string (6:5-6:12) (e_literal (6:6-6:12) "onmo %")))))
@@ -81,7 +81,7 @@ foo =
 ~~~clojure
 (inferred_types
 	(defs
-		(def "foo" 16 (type "Str")))
+		(def "foo" 76 (type "Str")))
 	(expressions
-		(expr (6:5-6:12) 15 (type "Str"))))
+		(expr (6:5-6:12) 75 (type "Str"))))
 ~~~

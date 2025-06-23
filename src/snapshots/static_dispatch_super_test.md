@@ -9,7 +9,7 @@ some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_f
 ~~~
 # PROBLEMS
 **NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize record field_access expression
+This feature is not yet implemented: canonicalize suffix_single_question expression
 
 # TOKENS
 ~~~zig
@@ -45,9 +45,15 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e_runtime_error (1:1-1:1) "not_implemented")
+(e_dot_access (1:1-1:86)
+	(e_dot_access (1:1-1:85)
+		(e_dot_access (1:1-1:69)
+			(e_runtime_error (1:1-1:1) "not_implemented")
+			"unknown")
+		"unknown")
+	"unknown")
 ~~~
 # TYPES
 ~~~clojure
-(expr 13 (type "Error"))
+(expr 76 (type "*"))
 ~~~

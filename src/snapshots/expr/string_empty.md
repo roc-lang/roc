@@ -27,5 +27,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr 13 (type "Str"))
+(expr 73 (type "Str"))
 ~~~

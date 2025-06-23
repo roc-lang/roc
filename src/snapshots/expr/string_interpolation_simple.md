@@ -36,5 +36,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr 16 (type "Str"))
+(expr 76 (type "Str"))
 ~~~

@@ -24,13 +24,13 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (e_float (1:1-1:5)
-	(frac_var 13)
-	(precision_var 12)
+	(frac_var 73)
+	(precision_var 72)
 	(literal "3.14")
 	(value "0")
 	(bound "f32"))
 ~~~
 # TYPES
 ~~~clojure
-(expr 14 (type "Num(FloatingPoint(*))"))
+(expr 74 (type "Num(FloatingPoint(*))"))
 ~~~

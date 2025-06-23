@@ -1042,6 +1042,41 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) ?AST.Statement.I
                 // continue to parse final expression
             }
         },
+        .NamedUnderscore => {
+            const start = self.pos;
+            if (self.peekNext() == .OpAssign) {
+                self.advance(); // Advance past NamedUnderscore
+                self.advance(); // Advance past OpAssign
+                const idx = self.parseExpr();
+                const expr_region = self.store.nodes.items.items(.region)[@intFromEnum(idx)];
+                const patt_idx = self.store.addPattern(.{ .ident = .{
+                    .ident_tok = start,
+                    .region = .{ .start = start, .end = start },
+                } });
+                const statement_idx = self.store.addStatement(.{ .decl = .{
+                    .pattern = patt_idx,
+                    .body = idx,
+                    .region = .{ .start = start, .end = expr_region.end },
+                } });
+                if (self.peek() == .Newline) {
+                    self.advance();
+                }
+                return statement_idx;
+            } else if (self.peekNext() == .OpColon) {
+                self.advance(); // Advance past NamedUnderscore
+                self.advance(); // Advance past OpColon
+                const anno = self.parseTypeAnno(.not_looking_for_args);
+                const statement_idx = self.store.addStatement(.{ .type_anno = .{
+                    .anno = anno,
+                    .name = start,
+                    .where = self.parseWhereConstraint(),
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+                return statement_idx;
+            } else {
+                // continue to parse final expression
+            }
+        },
         // Expect to parse a Type Annotation, e.g. `Foo a : (a,a)`
         .UpperIdent => {
             const start = self.pos;
@@ -1121,6 +1156,13 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) AST.Pattern.Idx {
         var pattern: ?AST.Pattern.Idx = null;
         switch (self.peek()) {
             .LowerIdent => {
+                pattern = self.store.addPattern(.{ .ident = .{
+                    .ident_tok = start,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+                self.advance();
+            },
+            .NamedUnderscore => {
                 pattern = self.store.addPattern(.{ .ident = .{
                     .ident_tok = start,
                     .region = .{ .start = start, .end = self.pos },
@@ -1378,6 +1420,16 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
             }
         },
         .LowerIdent => {
+            self.advance();
+            const ident = self.store.addExpr(.{ .ident = .{
+                .token = start,
+                .qualifier = null,
+                .region = .{ .start = start, .end = start },
+            } });
+
+            expr = ident;
+        },
+        .NamedUnderscore => {
             self.advance();
             const ident = self.store.addExpr(.{ .ident = .{
                 .token = start,

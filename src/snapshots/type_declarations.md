@@ -22,26 +22,45 @@ MyType : U64
 MyType2 : Module.Thingy
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level type_decl
+**UNDECLARED TYPE**
+The type ``Bar`` is not declared in this scope.
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level type_decl
+This type is referenced here:
+**type_declarations.md:6:9:6:12:**
+```roc
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level type_decl
+```
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level type_decl
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level type_decl
+**UNDECLARED TYPE**
+The type ``Baz`` is not declared in this scope.
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level type_decl
+This type is referenced here:
+**type_declarations.md:6:14:6:17:**
+```roc
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level type_decl
+```
+
+
+**UNDECLARED TYPE**
+The type ``Something`` is not declared in this scope.
+
+This type is referenced here:
+**type_declarations.md:8:33:8:42:**
+```roc
+
+```
+
+
+**UNDECLARED TYPE**
+The type ``None`` is not declared in this scope.
+
+This type is referenced here:
+**type_declarations.md:10:23:10:27:**
+```roc
+
+```
+
 
 # TOKENS
 ~~~zig
@@ -141,7 +160,70 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir "empty")
+(can_ir
+	(s_type_decl (3:1-5:4)
+		(type_header (3:1-3:10)
+			"Map"
+			(args
+				(ty_var (3:5-3:6) "a")
+				(ty_var (3:8-3:9) "b")))
+		(fn (3:13-3:41)
+			(apply (3:13-3:20)
+				"List"
+				(ty_var (3:18-3:19) "a"))
+			(parens (3:22-3:30)
+				(fn (3:23-3:29)
+					(ty_var (3:23-3:24) "a")
+					(ty_var (3:28-3:29) "b")
+					"false"))
+			(apply (3:34-3:41)
+				"List"
+				(ty_var (3:39-3:40) "b"))
+			"false"))
+	(s_type_decl (5:1-7:5)
+		(type_header (5:1-5:4) "Foo")
+		(tuple (5:7-5:17)
+			(ty (5:8-5:11) "Bar")
+			(ty (5:13-5:16) "Baz")))
+	(s_type_decl (7:1-9:6)
+		(type_header (7:1-7:8)
+			"Some"
+			(args (ty_var (7:6-7:7) "a")))
+		(record (7:11-7:43)
+			(record_field
+				"foo"
+				(apply (7:19-7:24)
+					"Ok"
+					(ty_var (7:22-7:23) "a")))
+			(record_field "bar" (ty (7:32-7:41) "Something"))))
+	(s_type_decl (9:1-11:9)
+		(type_header (9:1-9:9)
+			"Maybe"
+			(args (ty_var (9:7-9:8) "a")))
+		(tag_union (9:12-9:27)
+			(apply (9:13-9:20)
+				"Some"
+				(ty_var (9:18-9:19) "a"))
+			(ty (9:22-9:26) "None")))
+	(s_type_decl (11:1-13:7)
+		(type_header (11:1-11:12)
+			"SomeFunc"
+			(args (ty_var (11:10-11:11) "a")))
+		(fn (11:15-11:38)
+			(apply (11:15-11:23)
+				"Maybe"
+				(ty_var (11:21-11:22) "a"))
+			(ty_var (11:25-11:26) "a")
+			(apply (11:30-11:38)
+				"Maybe"
+				(ty_var (11:36-11:37) "a"))
+			"false"))
+	(s_type_decl (13:1-15:8)
+		(type_header (13:1-13:7) "MyType")
+		(ty (13:10-13:13) "U64"))
+	(s_type_decl (15:1-15:24)
+		(type_header (15:1-15:8) "MyType2")
+		(mod_ty (15:11-15:24) "Thingy" "Module")))
 ~~~
 # TYPES
 ~~~clojure

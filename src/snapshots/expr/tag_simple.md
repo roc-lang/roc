@@ -30,5 +30,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr 13 (type "[Ok, * *]"))
+(expr 73 (type "[Ok, * *]"))
 ~~~

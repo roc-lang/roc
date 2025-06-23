@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=
+description=Expected an open bracket for the header
 type=file
 ~~~
 # SOURCE

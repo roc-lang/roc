@@ -57,5 +57,5 @@ LowerIdent(2:1-2:2),CloseRound(2:2-2:3),CloseStringInterpolation(2:3-2:4),String
 ~~~
 # TYPES
 ~~~clojure
-(expr 21 (type "Str"))
+(expr 81 (type "Str"))
 ~~~

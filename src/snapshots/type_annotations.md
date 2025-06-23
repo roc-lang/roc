@@ -15,23 +15,15 @@ main! : List(String) -> Result({}, _)
 tag_tuple : Value((a, b, c))
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level type_anno
+**UNDECLARED TYPE**
+The type ``String`` is not declared in this scope.
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level type_anno
+This type is referenced here:
+**type_annotations.md:8:15:8:21:**
+```roc
+tag_tuple : Value((a, b, c))
+```
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level type_anno
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level type_anno
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level type_anno
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level type_anno
 
 # TOKENS
 ~~~zig

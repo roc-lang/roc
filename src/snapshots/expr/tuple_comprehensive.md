@@ -29,6 +29,83 @@ type=expr
 **NOT IMPLEMENTED**
 This feature is not yet implemented: canonicalize record expression
 
+**UNUSED VARIABLE**
+Variable ``with_lambda`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_with_lambda` to suppress this warning.
+The unused variable is declared here:
+**tuple_comprehensive.md:17:3:17:14:**
+```roc
+
+```
+
+
+**UNUSED VARIABLE**
+Variable ``single`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_single` to suppress this warning.
+The unused variable is declared here:
+**tuple_comprehensive.md:11:3:11:9:**
+```roc
+	pair = (1, 2)
+```
+
+
+**UNUSED VARIABLE**
+Variable ``pair`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_pair` to suppress this warning.
+The unused variable is declared here:
+**tuple_comprehensive.md:12:3:12:7:**
+```roc
+	triple = (1, "hello", True)
+```
+
+
+**UNUSED VARIABLE**
+Variable ``nested`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_nested` to suppress this warning.
+The unused variable is declared here:
+**tuple_comprehensive.md:14:3:14:9:**
+```roc
+	mixed = (add_one(5), "world", [1, 2, 3])
+```
+
+
+**UNUSED VARIABLE**
+Variable ``triple`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_triple` to suppress this warning.
+The unused variable is declared here:
+**tuple_comprehensive.md:13:3:13:9:**
+```roc
+	nested = ((1, 2), (3, 4))
+```
+
+
+**UNUSED VARIABLE**
+Variable ``mixed`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_mixed` to suppress this warning.
+The unused variable is declared here:
+**tuple_comprehensive.md:15:3:15:8:**
+```roc
+	with_vars = (x, y, z)
+```
+
+
+**UNUSED VARIABLE**
+Variable ``with_vars`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_with_vars` to suppress this warning.
+The unused variable is declared here:
+**tuple_comprehensive.md:16:3:16:12:**
+```roc
+	with_lambda = (|n| n + 1, 42)
+```
+
+
 # TOKENS
 ~~~zig
 OpenCurly(1:1-1:2),Newline(1:1-1:1),
@@ -151,88 +228,88 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 (e_block (1:1-19:2)
 	(s_let (3:5-3:21)
 		(p_assign (3:5-3:12)
-			(pid 12)
+			(pid 72)
 			(ident "add_one"))
 		(e_lambda (3:15-3:21)
-			(args (p_underscore (3:16-3:17) (pid 13)))
+			(args (p_underscore (3:16-3:17) (pid 73)))
 			(e_runtime_error (1:1-1:1) "not_implemented")))
 	(s_let (4:5-4:11)
 		(p_assign (4:5-4:6)
-			(pid 18)
+			(pid 78)
 			(ident "x"))
 		(e_int (4:9-4:11)
-			(int_var 20)
-			(precision_var 19)
+			(int_var 80)
+			(precision_var 79)
 			(literal "10")
 			(value "TODO")
 			(bound "u8")))
 	(s_let (5:5-5:11)
 		(p_assign (5:5-5:6)
-			(pid 23)
+			(pid 83)
 			(ident "y"))
 		(e_int (5:9-5:11)
-			(int_var 25)
-			(precision_var 24)
+			(int_var 85)
+			(precision_var 84)
 			(literal "20")
 			(value "TODO")
 			(bound "u8")))
 	(s_let (6:5-6:11)
 		(p_assign (6:5-6:6)
-			(pid 28)
+			(pid 88)
 			(ident "z"))
 		(e_int (6:9-6:11)
-			(int_var 30)
-			(precision_var 29)
+			(int_var 90)
+			(precision_var 89)
 			(literal "30")
 			(value "TODO")
 			(bound "u8")))
 	(s_let (9:2-9:12)
 		(p_assign (9:2-9:7)
-			(pid 33)
+			(pid 93)
 			(ident "empty"))
-		(e_tuple (9:10-9:12) (tuple_var "#34") (elems)))
+		(e_tuple (9:10-9:12) (tuple_var "#94") (elems)))
 	(s_let (10:2-10:15)
 		(p_assign (10:2-10:8)
-			(pid 37)
+			(pid 97)
 			(ident "single"))
 		(e_tuple (10:11-10:15)
-			(tuple_var "#41")
+			(tuple_var "#101")
 			(elems
 				(e_int (10:12-10:14)
-					(int_var 39)
-					(precision_var 38)
+					(int_var 99)
+					(precision_var 98)
 					(literal "42")
 					(value "TODO")
 					(bound "u8")))))
 	(s_let (11:2-11:15)
 		(p_assign (11:2-11:6)
-			(pid 44)
+			(pid 104)
 			(ident "pair"))
 		(e_tuple (11:9-11:15)
-			(tuple_var "#51")
+			(tuple_var "#111")
 			(elems
 				(e_int (11:10-11:11)
-					(int_var 46)
-					(precision_var 45)
+					(int_var 106)
+					(precision_var 105)
 					(literal "1")
 					(value "TODO")
 					(bound "u8"))
 				(e_int (11:13-11:14)
-					(int_var 49)
-					(precision_var 48)
+					(int_var 109)
+					(precision_var 108)
 					(literal "2")
 					(value "TODO")
 					(bound "u8")))))
 	(s_let (12:2-12:29)
 		(p_assign (12:2-12:8)
-			(pid 54)
+			(pid 114)
 			(ident "triple"))
 		(e_tuple (12:11-12:29)
-			(tuple_var "#62")
+			(tuple_var "#122")
 			(elems
 				(e_int (12:12-12:13)
-					(int_var 56)
-					(precision_var 55)
+					(int_var 116)
+					(precision_var 115)
 					(literal "1")
 					(value "TODO")
 					(bound "u8"))
@@ -243,118 +320,118 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 					(args "TODO")))))
 	(s_let (13:2-13:27)
 		(p_assign (13:2-13:8)
-			(pid 65)
+			(pid 125)
 			(ident "nested"))
 		(e_tuple (13:11-13:27)
-			(tuple_var "#82")
+			(tuple_var "#142")
 			(elems
 				(e_tuple (13:12-13:18)
-					(tuple_var "#72")
+					(tuple_var "#132")
 					(elems
 						(e_int (13:13-13:14)
-							(int_var 67)
-							(precision_var 66)
+							(int_var 127)
+							(precision_var 126)
 							(literal "1")
 							(value "TODO")
 							(bound "u8"))
 						(e_int (13:16-13:17)
-							(int_var 70)
-							(precision_var 69)
+							(int_var 130)
+							(precision_var 129)
 							(literal "2")
 							(value "TODO")
 							(bound "u8"))))
 				(e_tuple (13:20-13:26)
-					(tuple_var "#80")
+					(tuple_var "#140")
 					(elems
 						(e_int (13:21-13:22)
-							(int_var 75)
-							(precision_var 74)
+							(int_var 135)
+							(precision_var 134)
 							(literal "3")
 							(value "TODO")
 							(bound "u8"))
 						(e_int (13:24-13:25)
-							(int_var 78)
-							(precision_var 77)
+							(int_var 138)
+							(precision_var 137)
 							(literal "4")
 							(value "TODO")
 							(bound "u8")))))))
 	(s_let (14:2-14:42)
 		(p_assign (14:2-14:7)
-			(pid 85)
+			(pid 145)
 			(ident "mixed"))
 		(e_tuple (14:10-14:42)
-			(tuple_var "#104")
+			(tuple_var "#164")
 			(elems
 				(e_call (14:11-14:21)
-					(e_lookup (14:11-14:18) (pid 12))
+					(e_lookup (14:11-14:18) (pid 72))
 					(e_int (14:19-14:20)
-						(int_var 88)
-						(precision_var 87)
+						(int_var 148)
+						(precision_var 147)
 						(literal "5")
 						(value "TODO")
 						(bound "u8")))
 				(e_string (14:23-14:30) (e_literal (14:24-14:29) "world"))
 				(e_list (14:32-14:41)
-					(elem_var 102)
+					(elem_var 162)
 					(elems
 						(e_int (14:33-14:34)
-							(int_var 94)
-							(precision_var 93)
+							(int_var 154)
+							(precision_var 153)
 							(literal "1")
 							(value "TODO")
 							(bound "u8"))
 						(e_int (14:36-14:37)
-							(int_var 97)
-							(precision_var 96)
+							(int_var 157)
+							(precision_var 156)
 							(literal "2")
 							(value "TODO")
 							(bound "u8"))
 						(e_int (14:39-14:40)
-							(int_var 100)
-							(precision_var 99)
+							(int_var 160)
+							(precision_var 159)
 							(literal "3")
 							(value "TODO")
 							(bound "u8")))))))
 	(s_let (15:2-15:23)
 		(p_assign (15:2-15:11)
-			(pid 107)
+			(pid 167)
 			(ident "with_vars"))
 		(e_tuple (15:14-15:23)
-			(tuple_var "#111")
+			(tuple_var "#171")
 			(elems
-				(e_lookup (15:15-15:16) (pid 18))
-				(e_lookup (15:18-15:19) (pid 23))
-				(e_lookup (15:21-15:22) (pid 28)))))
+				(e_lookup (15:15-15:16) (pid 78))
+				(e_lookup (15:18-15:19) (pid 83))
+				(e_lookup (15:21-15:22) (pid 88)))))
 	(s_let (16:2-16:31)
 		(p_assign (16:2-16:13)
-			(pid 114)
+			(pid 174)
 			(ident "with_lambda"))
 		(e_tuple (16:16-16:31)
-			(tuple_var "#125")
+			(tuple_var "#185")
 			(elems
 				(e_lambda (16:17-16:27)
 					(args
 						(p_assign (16:18-16:19)
-							(pid 115)
+							(pid 175)
 							(ident "n")))
 					(e_binop (16:21-16:27)
 						"add"
-						(e_lookup (16:21-16:22) (pid 115))
+						(e_lookup (16:21-16:22) (pid 175))
 						(e_int (16:25-16:26)
-							(int_var 118)
-							(precision_var 117)
+							(int_var 178)
+							(precision_var 177)
 							(literal "1")
 							(value "TODO")
 							(bound "u8"))))
 				(e_int (16:28-16:30)
-					(int_var 123)
-					(precision_var 122)
+					(int_var 183)
+					(precision_var 182)
 					(literal "42")
 					(value "TODO")
 					(bound "u8")))))
-	(e_lookup (18:2-18:7) (pid 33)))
+	(e_lookup (18:2-18:7) (pid 93)))
 ~~~
 # TYPES
 ~~~clojure
-(expr 129 (type "*"))
+(expr 189 (type "*"))
 ~~~

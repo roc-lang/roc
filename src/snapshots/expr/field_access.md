@@ -8,8 +8,9 @@ type=expr
 person.name
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize record field_access expression
+**UNDEFINED VARIABLE**
+Nothing is named `person` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
@@ -29,9 +30,11 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e_runtime_error (1:1-1:1) "not_implemented")
+(e_dot_access (1:1-1:12)
+	(e_runtime_error (1:1-1:7) "ident_not_in_scope")
+	"name")
 ~~~
 # TYPES
 ~~~clojure
-(expr 13 (type "Error"))
+(expr 74 (type "*"))
 ~~~
