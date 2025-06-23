@@ -587,46 +587,8 @@ pub fn canonicalize_expr(
             // First, try to parse as RocDec
             const RocDec = @import("../builtins/dec.zig").RocDec;
 
-            var fits_in_f32: bool = undefined;
-            var fits_in_dec: bool = undefined;
-            var f64_val: f64 = undefined;
-            var frac_value: base.FracLiteral = undefined;
-
-            if (RocDec.fromNonemptySlice(token_text)) |dec| {
-                // Successfully parsed as Dec
-                fits_in_dec = true;
-                frac_value = .{ .Dec = @as(u128, @bitCast(dec.num)) };
-                f64_val = dec.toF64();
-            } else {
-                // Parsing it as a Dec failed, so try F64 next.
-                fits_in_dec = false;
-                f64_val = std.fmt.parseFloat(f64, token_text) catch {
-                    // It doesn't parse as Dec or as F64, so it's too big to fit in any of Roc's numeric types. Error out!
-                    const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .invalid_num_literal = .{
-                        .region = region,
-                    } });
-                    return expr_idx;
-                };
-
-                frac_value = .{ .F64 = f64_val };
-            }
-
-            // Check if it fits in f32 without precision loss
-            if (f64_val >= -std.math.floatMax(f32) and f64_val <= std.math.floatMax(f32)) {
-                const as_f32 = @as(f32, @floatCast(f64_val));
-                const back_to_f64 = @as(f64, @floatCast(as_f32));
-                fits_in_f32 = f64_val == back_to_f64;
-            } else {
-                fits_in_f32 = false;
-            }
-
             // create type vars, first "reserve" node slots
             const final_expr_idx = self.can_ir.store.predictNodeIndex(2);
-
-            const requirements = types.Num.Frac.Requirements{
-                .fits_in_f32 = fits_in_f32,
-                .fits_in_dec = fits_in_dec,
-            };
 
             // Create a polymorphic frac type variable
             const frac_type_var = self.can_ir.pushTypeVar(
@@ -635,33 +597,42 @@ pub fn canonicalize_expr(
                 region,
             );
 
-            // then in the final slot the actual expr is inserted
-            const expr_idx = switch (frac_value) {
-                .F64 => |f| self.can_ir.store.addExpr(CIR.Expr{
-                    .frac_f64 = .{
-                        .frac_var = frac_type_var,
-                        .requirements = requirements,
-                        .value = f,
-                        .region = region,
-                    },
-                }),
-                .F32 => |f| self.can_ir.store.addExpr(CIR.Expr{
-                    .frac_f64 = .{
-                        .frac_var = frac_type_var,
-                        .requirements = requirements,
-                        .value = @floatCast(f),
-                        .region = region,
-                    },
-                }),
-                .Dec => |d| self.can_ir.store.addExpr(CIR.Expr{
+            const cir_expr = if (RocDec.fromNonemptySlice(token_text)) |dec|
+                CIR.Expr{
                     .frac_dec = .{
                         .frac_var = frac_type_var,
-                        .requirements = requirements,
-                        .value = RocDec{ .num = @as(i128, @bitCast(d)) },
+                        .requirements = types.Num.Frac.Requirements{
+                            .fits_in_f32 = fitsInF32(dec.toF64()),
+                            .fits_in_dec = true,
+                        },
+                        .value = dec,
                         .region = region,
                     },
-                }),
+                }
+            else blk: {
+                // Parsing it as a Dec failed, so try F64 next.
+                const f64_val = std.fmt.parseFloat(f64, token_text) catch {
+                    // It doesn't parse as Dec or as F64, so it's too big to fit in any of Roc's numeric types. Error out!
+                    const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .invalid_num_literal = .{
+                        .region = region,
+                    } });
+                    return expr_idx;
+                };
+
+                break :blk CIR.Expr{
+                    .frac_f64 = .{
+                        .frac_var = frac_type_var,
+                        .requirements = types.Num.Frac.Requirements{
+                            .fits_in_f32 = fitsInF32(f64_val),
+                            .fits_in_dec = false,
+                        },
+                        .value = f64_val,
+                        .region = region,
+                    },
+                };
             };
+
+            const expr_idx = self.can_ir.store.addExpr(cir_expr);
 
             std.debug.assert(@intFromEnum(expr_idx) == @intFromEnum(final_expr_idx));
 
@@ -1484,6 +1455,17 @@ fn isVarReassignmentAcrossFunctionBoundary(self: *const Self, pattern_idx: CIR.P
         }
     }
     return false;
+}
+
+// Check if the given f64 fits in f32 without precision loss
+fn fitsInF32(f64_val: f64) bool {
+    if (f64_val >= -std.math.floatMax(f32) and f64_val <= std.math.floatMax(f32)) {
+        const as_f32 = @as(f32, @floatCast(f64_val));
+        const back_to_f64 = @as(f64, @floatCast(as_f32));
+        return f64_val == back_to_f64;
+    } else {
+        return false;
+    }
 }
 
 test {
