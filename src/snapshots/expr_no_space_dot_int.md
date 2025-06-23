@@ -10,7 +10,9 @@ module []
 foo = asd.0
 ~~~
 # PROBLEMS
-PARSER: expr_no_space_dot_int
+**PARSE ERROR**
+A parsing error occurred.
+
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
 Check the spelling and make sure you're using a valid Roc operator.

@@ -8,8 +8,12 @@ type=file
 0 (
 ~~~
 # PROBLEMS
-PARSER: missing_header
-PARSER: expected_expr_close_round_or_comma
+**MISSING HEADER**
+Roc files must start with a module header like 'module [main]' or 'app [main] { pf: platform "..." }'.
+
+**PARSE ERROR**
+A parsing error occurred.
+
 **INVALID STATEMENT**
 The statement **expr** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.

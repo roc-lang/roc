@@ -13,11 +13,15 @@ foo =
     "onmo %
 ~~~
 # PROBLEMS
-TOKENIZE: (2:6-2:6) MismatchedBrace:
-     ]
-     ^TOKENIZE: (6:6-6:12) UnclosedString:
-    "onmo %
-     ^^^^^^PARSER: missing_header
+**MISMATCHED BRACE**
+This brace does not match the corresponding opening brace.
+
+**UNCLOSED STRING**
+This string is missing a closing quote.
+
+**MISSING HEADER**
+Roc files must start with a module header like 'module [main]' or 'app [main] { pf: platform "..." }'.
+
 **INVALID STATEMENT**
 The statement **expr** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.

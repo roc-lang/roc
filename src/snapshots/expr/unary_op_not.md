@@ -8,7 +8,9 @@ type=expr
 !isValid
 ~~~
 # PROBLEMS
-PARSER: expr_unexpected_token
+**UNEXPECTED TOKEN IN EXPRESSION**
+This token is not expected in an expression.
+
 # TOKENS
 ~~~zig
 OpBang(1:1-1:2),LowerIdent(1:2-1:9),EndOfFile(1:9-1:9),

@@ -500,33 +500,30 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
         for (parse_ast.tokenize_diagnostics.items) |diagnostic| {
             tokenize_problems += 1;
 
-            // TODO implement `toReport` for tokenize
-            // var report: Report = try diagnostic.toReport(gpa, content.source);
-            // defer report.deinit();
-            // report.render(writer.any(), .plain_text) catch |err| {
-            //     try writer.print("Error rendering report: {}\n", .{err});
-            //     continue;
-            // };
-
-            try diagnostic.toStr(gpa, content.source, writer);
+            var report: Report = parse_ast.tokenizeDiagnosticToReport(diagnostic, gpa) catch |err| {
+                try writer.print("Error creating tokenize report: {}\n", .{err});
+                continue;
+            };
+            defer report.deinit();
+            report.render(writer.any(), .markdown) catch |err| {
+                try writer.print("Error rendering report: {}\n", .{err});
+                continue;
+            };
         }
 
         // Parser Diagnostics
         for (parse_ast.parse_diagnostics.items) |diagnostic| {
             parser_problems += 1;
 
-            // TODO implement `diagnosticToReport` for parser
-            // var report: Report = try parse_ast.diagnosticToReport(diagnostic, gpa);
-            // defer report.deinit();
-            // report.render(writer.any(), .plain_text) catch |err| {
-            //     try writer.print("Error rendering report: {}\n", .{err});
-            //     continue;
-            // };
-
-            const err_msg = try std.fmt.allocPrint(gpa, "PARSER: {s}\n", .{@tagName(diagnostic.tag)});
-            defer gpa.free(err_msg);
-
-            try writer.writeAll(err_msg);
+            var report: Report = parse_ast.parseDiagnosticToReport(diagnostic, gpa) catch |err| {
+                try writer.print("Error creating parse report: {}\n", .{err});
+                continue;
+            };
+            defer report.deinit();
+            report.render(writer.any(), .markdown) catch |err| {
+                try writer.print("Error rendering report: {}\n", .{err});
+                continue;
+            };
         }
 
         // Canonicalization Diagnostics
@@ -535,7 +532,10 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
         for (diagnostics) |diagnostic| {
             canonicalize_problems += 1;
 
-            var report: Report = try can_ir.diagnosticToReport(diagnostic, gpa, content.source, snapshot_path);
+            var report: Report = can_ir.diagnosticToReport(diagnostic, gpa, content.source, snapshot_path) catch |err| {
+                try writer.print("Error creating canonicalization report: {}\n", .{err});
+                continue;
+            };
             defer report.deinit();
             report.render(writer.any(), .markdown) catch |err| {
                 try writer.print("Error rendering report: {}\n", .{err});
@@ -553,7 +553,7 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
         while (problems_itr.next()) |problem_idx| {
             check_types_problem += 1;
             const problem = solver.problems.problems.get(problem_idx);
-            var report: Report = try problem.buildReport(
+            var report: Report = problem.buildReport(
                 gpa,
                 &problem_buf,
                 &solver.snapshots,
@@ -561,7 +561,10 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
                 content.source,
                 snapshot_path,
                 &module_env,
-            );
+            ) catch |err| {
+                try writer.print("Error creating type checking report: {}\n", .{err});
+                continue;
+            };
             defer report.deinit();
             report.render(writer.any(), .markdown) catch |err| {
                 try writer.print("Error rendering report: {}\n", .{err});

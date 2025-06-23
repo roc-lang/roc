@@ -9,7 +9,9 @@ type=file
 .R
 ~~~
 # PROBLEMS
-PARSER: missing_header
+**MISSING HEADER**
+Roc files must start with a module header like 'module [main]' or 'app [main] { pf: platform "..." }'.
+
 **NOT IMPLEMENTED**
 This feature is not yet implemented: top-level type_anno
 

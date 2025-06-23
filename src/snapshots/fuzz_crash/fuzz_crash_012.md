@@ -8,10 +8,18 @@ type=file
 ||(|(l888888888|
 ~~~
 # PROBLEMS
-PARSER: missing_header
-PARSER: pattern_unexpected_token
-PARSER: pattern_unexpected_token
-PARSER: expected_expr_bar
+**MISSING HEADER**
+Roc files must start with a module header like 'module [main]' or 'app [main] { pf: platform "..." }'.
+
+**UNEXPECTED TOKEN IN PATTERN**
+This token is not expected in a pattern.
+
+**UNEXPECTED TOKEN IN PATTERN**
+This token is not expected in a pattern.
+
+**PARSE ERROR**
+A parsing error occurred.
+
 **INVALID STATEMENT**
 The statement **expr** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.

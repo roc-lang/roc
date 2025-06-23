@@ -8,8 +8,12 @@ type=expr
 { person & age: 31 }
 ~~~
 # PROBLEMS
-PARSER: expr_unexpected_token
-PARSER: ty_anno_unexpected_token
+**UNEXPECTED TOKEN IN EXPRESSION**
+This token is not expected in an expression.
+
+**UNEXPECTED TOKEN IN TYPE ANNOTATION**
+A parsing error occurred.
+
 **UNDEFINED VARIABLE**
 Nothing is named `person` in this scope.
 Is there an `import` or `exposing` missing up-top?

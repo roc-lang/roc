@@ -8,10 +8,15 @@ type=file
 module P]F
 ~~~
 # PROBLEMS
-TOKENIZE: (1:9-1:9) OverClosedBrace:
-module P]F
-        ^PARSER: header_expected_open_square
-PARSER: expected_colon_after_type_annotation
+**OVER CLOSED BRACE**
+There are too many closing braces here.
+
+**PARSE ERROR**
+A parsing error occurred.
+
+**PARSE ERROR**
+A parsing error occurred.
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),UpperIdent(1:8-1:9),UpperIdent(1:10-1:11),EndOfFile(1:11-1:11),

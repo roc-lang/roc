@@ -8,10 +8,15 @@ type=file
 ||1
 ~~~
 # PROBLEMS
-TOKENIZE: (1:2-1:2) AsciiControl:
-||1
- ^PARSER: missing_header
-PARSER: expected_expr_bar
+**ASCII CONTROL CHARACTER**
+ASCII control characters are not allowed in Roc source code.
+
+**MISSING HEADER**
+Roc files must start with a module header like 'module [main]' or 'app [main] { pf: platform "..." }'.
+
+**PARSE ERROR**
+A parsing error occurred.
+
 **INVALID STATEMENT**
 The statement **expr** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.

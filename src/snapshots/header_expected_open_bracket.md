@@ -8,7 +8,9 @@ type=file
 module
 ~~~
 # PROBLEMS
-PARSER: header_expected_open_square
+**PARSE ERROR**
+A parsing error occurred.
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),EndOfFile(1:7-1:7),

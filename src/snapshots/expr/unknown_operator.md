@@ -8,7 +8,9 @@ type=expr
 1 ++ 2
 ~~~
 # PROBLEMS
-PARSER: expr_unexpected_token
+**UNEXPECTED TOKEN IN EXPRESSION**
+This token is not expected in an expression.
+
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
 Check the spelling and make sure you're using a valid Roc operator.

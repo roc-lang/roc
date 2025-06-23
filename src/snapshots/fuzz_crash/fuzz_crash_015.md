@@ -11,11 +11,18 @@ type=file
 0_
 ~~~
 # PROBLEMS
-TOKENIZE: (2:3-2:3) LeadingZero:
-0_0
-  ^PARSER: missing_header
-PARSER: expr_unexpected_token
-PARSER: expr_no_space_dot_int
+**LEADING ZERO**
+Numbers cannot have leading zeros.
+
+**MISSING HEADER**
+Roc files must start with a module header like 'module [main]' or 'app [main] { pf: platform "..." }'.
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+This token is not expected in an expression.
+
+**PARSE ERROR**
+A parsing error occurred.
+
 **INVALID STATEMENT**
 The statement **expr** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.

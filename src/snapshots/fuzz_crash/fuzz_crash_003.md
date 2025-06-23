@@ -8,9 +8,12 @@ type=file
 = "te
 ~~~
 # PROBLEMS
-TOKENIZE: (1:4-1:6) UnclosedString:
-= "te
-   ^^PARSER: missing_header
+**UNCLOSED STRING**
+This string is missing a closing quote.
+
+**MISSING HEADER**
+Roc files must start with a module header like 'module [main]' or 'app [main] { pf: platform "..." }'.
+
 **INVALID STATEMENT**
 The statement **expr** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.

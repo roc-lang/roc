@@ -8,7 +8,9 @@ type=file
 F
 ~~~
 # PROBLEMS
-PARSER: missing_header
+**MISSING HEADER**
+Roc files must start with a module header like 'module [main]' or 'app [main] { pf: platform "..." }'.
+
 # TOKENS
 ~~~zig
 UpperIdent(1:1-1:2),EndOfFile(1:2-1:2),

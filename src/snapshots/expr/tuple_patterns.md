@@ -26,11 +26,21 @@ type=expr
 }
 ~~~
 # PROBLEMS
-PARSER: expr_unexpected_token
-PARSER: expr_unexpected_token
-PARSER: expr_unexpected_token
-PARSER: expr_unexpected_token
-PARSER: expr_unexpected_token
+**UNEXPECTED TOKEN IN EXPRESSION**
+This token is not expected in an expression.
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+This token is not expected in an expression.
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+This token is not expected in an expression.
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+This token is not expected in an expression.
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+This token is not expected in an expression.
+
 **UNDEFINED VARIABLE**
 Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?
