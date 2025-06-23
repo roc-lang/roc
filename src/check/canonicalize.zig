@@ -3,6 +3,7 @@ const base = @import("../base.zig");
 const parse = @import("parse.zig");
 const collections = @import("../collections.zig");
 const types = @import("../types/types.zig");
+const RocDec = @import("../builtins/dec.zig").RocDec;
 
 const NodeStore = @import("./canonicalize/NodeStore.zig");
 const Scope = @import("./canonicalize/Scope.zig");
@@ -586,9 +587,6 @@ pub fn canonicalize_expr(
             // resolve to a string slice from the source
             const token_text = self.parse_ir.resolve(e.token);
 
-            // First, try to parse as RocDec
-            const RocDec = @import("../builtins/dec.zig").RocDec;
-
             // create type vars, first "reserve" node slots
             const final_expr_idx = self.can_ir.store.predictNodeIndex(2);
 
@@ -599,39 +597,32 @@ pub fn canonicalize_expr(
                 region,
             );
 
-            const cir_expr = if (RocDec.fromNonemptySlice(token_text)) |dec|
-                CIR.Expr{
-                    .frac_dec = .{
-                        .frac_var = frac_type_var,
-                        .requirements = types.Num.Frac.Requirements{
-                            .fits_in_f32 = fitsInF32(dec.toF64()),
-                            .fits_in_dec = true,
-                        },
-                        .value = dec,
-                        .region = region,
-                    },
-                }
-            else blk: {
-                // Parsing it as a Dec failed, so try F64 next.
-                const f64_val = std.fmt.parseFloat(f64, token_text) catch {
-                    // It doesn't parse as Dec or as F64, so it's too big to fit in any of Roc's numeric types. Error out!
+            const parsed = parseFracLiteral(token_text) catch |err| switch (err) {
+                error.InvalidNumLiteral => {
                     const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .invalid_num_literal = .{
                         .region = region,
                     } });
                     return expr_idx;
-                };
+                },
+            };
 
-                break :blk CIR.Expr{
-                    .frac_f64 = .{
+            const cir_expr = switch (parsed) {
+                .dec => |dec_info| CIR.Expr{
+                    .frac_dec = .{
                         .frac_var = frac_type_var,
-                        .requirements = types.Num.Frac.Requirements{
-                            .fits_in_f32 = fitsInF32(f64_val),
-                            .fits_in_dec = false,
-                        },
-                        .value = f64_val,
+                        .requirements = dec_info.requirements,
+                        .value = dec_info.value,
                         .region = region,
                     },
-                };
+                },
+                .f64 => |f64_info| CIR.Expr{
+                    .frac_f64 = .{
+                        .frac_var = frac_type_var,
+                        .requirements = f64_info.requirements,
+                        .value = f64_info.value,
+                        .region = region,
+                    },
+                },
             };
 
             const expr_idx = self.can_ir.store.addExpr(cir_expr);
@@ -639,10 +630,9 @@ pub fn canonicalize_expr(
             std.debug.assert(@intFromEnum(expr_idx) == @intFromEnum(final_expr_idx));
 
             // Insert concrete type variable
-            _ = self.can_ir.setTypeVarAtExpr(
-                expr_idx,
-                Content{ .structure = .{ .num = .{ .num_poly = frac_type_var } } },
-            );
+            _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{
+                .structure = .{ .num = .{ .num_poly = frac_type_var } },
+            });
 
             return expr_idx;
         },
@@ -1187,48 +1177,38 @@ fn canonicalize_pattern(
             // Resolve to a string slice from the source
             const token_text = self.parse_ir.resolve(e.number_tok);
 
-            // Handle frac literal pattern
-            const RocDec = @import("../builtins/dec.zig").RocDec;
-
             // create type vars, first "reserve" node slots
             const final_pattern_idx = self.can_ir.store.predictNodeIndex(2);
 
             // then insert the type vars, setting the parent to be the final slot
             const num_type_var = self.can_ir.pushFreshTypeVar(final_pattern_idx, region);
 
-            const cir_pattern = if (RocDec.fromNonemptySlice(token_text)) |dec|
-                CIR.Pattern{
-                    .dec_literal = .{
-                        .num_var = num_type_var,
-                        .requirements = types.Num.Frac.Requirements{
-                            .fits_in_f32 = fitsInF32(dec.toF64()),
-                            .fits_in_dec = true,
-                        },
-                        .value = dec,
-                        .region = region,
-                    },
-                }
-            else blk: {
-                // Parsing it as a Dec failed, so try F64 next.
-                const f64_val = std.fmt.parseFloat(f64, token_text) catch {
-                    // It doesn't parse as Dec or as F64, so it's too big to fit in any of Roc's numeric types. Error out!
+            const parsed = parseFracLiteral(token_text) catch |err| switch (err) {
+                error.InvalidNumLiteral => {
                     const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .invalid_num_literal = .{
                         .region = region,
                     } });
                     return malformed_idx;
-                };
+                },
+            };
 
-                break :blk CIR.Pattern{
-                    .f64_literal = .{
+            const cir_pattern = switch (parsed) {
+                .dec => |dec_info| CIR.Pattern{
+                    .dec_literal = .{
                         .num_var = num_type_var,
-                        .requirements = types.Num.Frac.Requirements{
-                            .fits_in_f32 = fitsInF32(f64_val),
-                            .fits_in_dec = false,
-                        },
-                        .value = f64_val,
+                        .requirements = dec_info.requirements,
+                        .value = dec_info.value,
                         .region = region,
                     },
-                };
+                },
+                .f64 => |f64_info| CIR.Pattern{
+                    .f64_literal = .{
+                        .num_var = num_type_var,
+                        .requirements = f64_info.requirements,
+                        .value = f64_info.value,
+                        .region = region,
+                    },
+                },
             };
 
             const pattern_idx = self.can_ir.store.addPattern(cir_pattern);
@@ -1416,6 +1396,50 @@ fn fitsInF32(f64_val: f64) bool {
     } else {
         return false;
     }
+}
+
+// Result type for parsing fractional literals into either Dec or f64
+const FracLiteralResult = union(enum) {
+    dec: struct {
+        value: RocDec,
+        requirements: types.Num.Frac.Requirements,
+    },
+    f64: struct {
+        value: f64,
+        requirements: types.Num.Frac.Requirements,
+    },
+};
+
+// Parse a fractional literal from text and return either a Dec or F64 value
+fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
+    // First, try to parse as RocDec
+    if (RocDec.fromNonemptySlice(token_text)) |dec| {
+        return FracLiteralResult{
+            .dec = .{
+                .value = dec,
+                .requirements = types.Num.Frac.Requirements{
+                    .fits_in_f32 = fitsInF32(dec.toF64()),
+                    .fits_in_dec = true,
+                },
+            },
+        };
+    }
+
+    // Parsing it as a Dec failed, so try F64 next.
+    const f64_val = std.fmt.parseFloat(f64, token_text) catch {
+        // It doesn't parse as Dec or as F64, so it's too big to fit in any of Roc's numeric types.
+        return error.InvalidNumLiteral;
+    };
+
+    return FracLiteralResult{
+        .f64 = .{
+            .value = f64_val,
+            .requirements = types.Num.Frac.Requirements{
+                .fits_in_f32 = fitsInF32(f64_val),
+                .fits_in_dec = false,
+            },
+        },
+    };
 }
 
 test {
