@@ -15,6 +15,7 @@ For example:
         module [main]
 or for an app:
         app [main!] { pf: platform "../basic-cli/platform.roc" }
+
 Here is the problematic code:
 **fuzz_crash_001.md:1:1:1:4:**
 ```roc
@@ -25,6 +26,7 @@ mo|%
 **UNEXPECTED TOKEN IN PATTERN**
 The token **%** is not expected in a pattern.
 Patterns can contain identifiers, literals, lists, records, or tags.
+
 Here is the problematic code:
 **fuzz_crash_001.md:1:4:1:5:**
 ```roc
@@ -35,6 +37,13 @@ mo|%
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_bar`
 This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_001.md:1:5:1:5:**
+```roc
+mo|%
+```
+
 
 **INVALID STATEMENT**
 The statement **expr** is not allowed at the top level.

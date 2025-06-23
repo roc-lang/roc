@@ -360,6 +360,36 @@ pub fn parseDiagnosticToReport(self: *AST, diagnostic: Diagnostic, allocator: st
             try report.document.addText("For example: ");
             try report.document.addCodeBlock("[1, 2, 3]");
         },
+        .expected_colon_after_type_annotation => {
+            try report.document.addReflowingText("Type applications require parentheses around their type arguments.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("I found a type followed by what looks like a type argument, but they need to be connected with parentheses.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addText("Instead of:");
+            try report.document.addLineBreak();
+            try report.document.addIndent(1);
+            try report.document.addAnnotated("List U8", .error_highlight);
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addText("Use:");
+            try report.document.addLineBreak();
+            try report.document.addIndent(1);
+            try report.document.addAnnotated("List(U8)", .emphasized);
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addText("Other valid examples:");
+            try report.document.addLineBreak();
+            try report.document.addIndent(1);
+            try report.document.addAnnotated("Dict(Str, Num)", .dimmed);
+            try report.document.addLineBreak();
+            try report.document.addIndent(1);
+            try report.document.addAnnotated("Result(a, Str)", .dimmed);
+            try report.document.addLineBreak();
+            try report.document.addIndent(1);
+            try report.document.addAnnotated("Maybe(List(U64))", .dimmed);
+        },
         else => {
             const tag_name = @tagName(diagnostic.tag);
             const owned_tag = try report.addOwnedString(tag_name);
@@ -388,6 +418,7 @@ pub fn parseDiagnosticToReport(self: *AST, diagnostic: Diagnostic, allocator: st
             return report; // Return report without source context if region calculation fails
         };
 
+        try report.document.addLineBreak();
         try report.document.addLineBreak();
         try report.document.addText("Here is the problematic code:");
         try report.document.addLineBreak();

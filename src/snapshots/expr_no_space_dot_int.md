@@ -13,6 +13,7 @@ foo = asd.0
 **PARSE ERROR**
 A parsing error occurred: `expr_no_space_dot_int`
 This is an unexpected parsing error. Please check your syntax.
+
 Here is the problematic code:
 **expr_no_space_dot_int.md:3:10:3:12:**
 ```roc

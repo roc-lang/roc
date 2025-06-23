@@ -16,6 +16,7 @@ For example:
         module [main]
 or for an app:
         app [main!] { pf: platform "../basic-cli/platform.roc" }
+
 Here is the problematic code:
 **fuzz_crash_017.md:1:1:1:5:**
 ```roc
@@ -26,6 +27,7 @@ me = "luc"
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **= "** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
+
 Here is the problematic code:
 **fuzz_crash_017.md:1:4:1:7:**
 ```roc
@@ -36,6 +38,13 @@ me = "luc"
 **PARSE ERROR**
 A parsing error occurred: `string_expected_close_interpolation`
 This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_crash_017.md:2:7:2:14:**
+```roc
+foo = "hello ${namF
+```
+
 
 **INVALID STATEMENT**
 The statement **expr** is not allowed at the top level.

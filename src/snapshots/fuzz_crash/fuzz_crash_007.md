@@ -15,6 +15,7 @@ For example:
         module [main]
 or for an app:
         app [main!] { pf: platform "../basic-cli/platform.roc" }
+
 Here is the problematic code:
 **fuzz_crash_007.md:1:1:1:6:**
 ```roc
@@ -25,6 +26,7 @@ ff8.8.d
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **.8.d** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
+
 Here is the problematic code:
 **fuzz_crash_007.md:1:4:1:8:**
 ```roc
@@ -35,6 +37,7 @@ ff8.8.d
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **.d** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
+
 Here is the problematic code:
 **fuzz_crash_007.md:1:6:1:8:**
 ```roc

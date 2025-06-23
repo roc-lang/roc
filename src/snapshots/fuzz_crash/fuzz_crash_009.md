@@ -26,6 +26,7 @@ For example:
         module [main]
 or for an app:
         app [main!] { pf: platform "../basic-cli/platform.roc" }
+
 Here is the problematic code:
 **fuzz_crash_009.md:1:2:1:4:**
 ```roc

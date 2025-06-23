@@ -20,6 +20,7 @@ main! = |_| {}
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **= pair** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
+
 Here is the problematic code:
 **type_var_multiple.md:6:21:6:27:**
 ```roc

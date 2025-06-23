@@ -14,6 +14,7 @@ var topLevelVar_ = 0
 **PARSE ERROR**
 A parsing error occurred: `var_only_allowed_in_a_body`
 This is an unexpected parsing error. Please check your syntax.
+
 Here is the problematic code:
 **can_var_scoping_invalid_top_level.md:4:1:4:17:**
 ```roc

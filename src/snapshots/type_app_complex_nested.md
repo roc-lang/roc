@@ -25,10 +25,23 @@ main! = |_| processComplex(Ok([Some(42), None]))
 ~~~
 # PROBLEMS
 **PARSE ERROR**
-A parsing error occurred: `expected_colon_after_type_annotation`
-This is an unexpected parsing error. Please check your syntax.
+Type applications require parentheses around their type arguments.
+
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+Instead of:
+    **List U8**
+
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Result(a, Str)`
+    `Maybe(List(U64))`
+
 Here is the problematic code:
-**type_app_complex_nested.md:7:23:7:27:**
+**type_app_complex_nested.md:7:9:7:12:**
 ```roc
         Ok(maybeList) -> []
 ```
@@ -37,6 +50,7 @@ Here is the problematic code:
 **PARSE ERROR**
 A parsing error occurred: `invalid_type_arg`
 This is an unexpected parsing error. Please check your syntax.
+
 Here is the problematic code:
 **type_app_complex_nested.md:8:13:8:15:**
 ```roc
@@ -45,10 +59,23 @@ Here is the problematic code:
 
 
 **PARSE ERROR**
-A parsing error occurred: `expected_colon_after_type_annotation`
-This is an unexpected parsing error. Please check your syntax.
+Type applications require parentheses around their type arguments.
+
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+Instead of:
+    **List U8**
+
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Result(a, Str)`
+    `Maybe(List(U64))`
+
 Here is the problematic code:
-**type_app_complex_nested.md:8:16:8:20:**
+**type_app_complex_nested.md:8:9:8:13:**
 ```roc
         Err(_) -> []
 ```
@@ -57,6 +84,7 @@ Here is the problematic code:
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **crash "** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
+
 Here is the problematic code:
 **type_app_complex_nested.md:12:18:12:25:**
 ```roc

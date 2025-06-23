@@ -49,6 +49,7 @@ main! = |_| {
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_close_curly_or_comma`
 This is an unexpected parsing error. Please check your syntax.
+
 Here is the problematic code:
 **type_alias_decl.md:30:5:30:13:**
 ```roc
@@ -59,6 +60,7 @@ Here is the problematic code:
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **= 123** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
+
 Here is the problematic code:
 **type_alias_decl.md:30:12:30:17:**
 ```roc
@@ -69,6 +71,7 @@ Here is the problematic code:
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **}** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
+
 Here is the problematic code:
 **type_alias_decl.md:39:1:39:2:**
 ```roc

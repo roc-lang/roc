@@ -29,6 +29,7 @@ type=expr
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **= (** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
+
 Here is the problematic code:
 **tuple_patterns.md:4:12:4:15:**
 ```roc
@@ -39,6 +40,7 @@ Here is the problematic code:
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **= (** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
+
 Here is the problematic code:
 **tuple_patterns.md:7:22:7:25:**
 ```roc
@@ -49,6 +51,7 @@ Here is the problematic code:
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **= (** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
+
 Here is the problematic code:
 **tuple_patterns.md:10:28:10:31:**
 ```roc
@@ -59,6 +62,7 @@ Here is the problematic code:
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **= (** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
+
 Here is the problematic code:
 **tuple_patterns.md:13:29:13:32:**
 ```roc
@@ -69,6 +73,7 @@ Here is the problematic code:
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **= (** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
+
 Here is the problematic code:
 **tuple_patterns.md:16:19:16:22:**
 ```roc

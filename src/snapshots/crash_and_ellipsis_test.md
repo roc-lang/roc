@@ -29,6 +29,7 @@ main! = |_|
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **crash "** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
+
 Here is the problematic code:
 **crash_and_ellipsis_test.md:9:17:9:24:**
 ```roc
@@ -39,6 +40,7 @@ testCrash = |_| crash "This is a crash message"
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **crash "** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
+
 Here is the problematic code:
 **crash_and_ellipsis_test.md:13:23:13:30:**
 ```roc
@@ -49,6 +51,7 @@ testCrashSimple = |_| crash "oops"
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **= testEllipsis** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
+
 Here is the problematic code:
 **crash_and_ellipsis_test.md:16:13:16:27:**
 ```roc

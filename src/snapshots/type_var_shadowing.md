@@ -23,6 +23,7 @@ main! = |_| {}
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_close_curly_or_comma`
 This is an unexpected parsing error. Please check your syntax.
+
 Here is the problematic code:
 **type_var_shadowing.md:8:5:8:12:**
 ```roc
@@ -33,6 +34,7 @@ Here is the problematic code:
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **= |** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
+
 Here is the problematic code:
 **type_var_shadowing.md:8:11:8:14:**
 ```roc
@@ -43,6 +45,13 @@ Here is the problematic code:
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token  is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**type_var_shadowing.md:11:1:11:1:**
+```roc
+}
+```
+
 
 **INVALID LAMBDA**
 The body of this lambda expression is not valid.

@@ -11,6 +11,7 @@ type=expr
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **+ 2** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
+
 Here is the problematic code:
 **unknown_operator.md:1:4:1:7:**
 ```roc

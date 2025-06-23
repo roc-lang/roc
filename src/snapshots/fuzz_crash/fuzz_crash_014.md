@@ -17,6 +17,7 @@ For example:
         module [main]
 or for an app:
         app [main!] { pf: platform "../basic-cli/platform.roc" }
+
 Here is the problematic code:
 **fuzz_crash_014.md:1:1:1:5:**
 ```roc
@@ -28,13 +29,28 @@ Here is the problematic code:
 The token  is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
+Here is the problematic code:
+**fuzz_crash_014.md:1:3:1:3:**
+```roc
+0b.0
+```
+
+
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token  is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
+Here is the problematic code:
+**fuzz_crash_014.md:2:1:2:1:**
+```roc
+0bu22
+```
+
+
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **0u22** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
+
 Here is the problematic code:
 **fuzz_crash_014.md:3:1:3:5:**
 ```roc

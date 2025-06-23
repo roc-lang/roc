@@ -15,6 +15,7 @@ For example:
         module [main]
 or for an app:
         app [main!] { pf: platform "../basic-cli/platform.roc" }
+
 Here is the problematic code:
 **fuzz_hang_001.md:1:1:1:4:**
 ```roc
@@ -25,6 +26,13 @@ Here is the problematic code:
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_close_round_or_comma`
 This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**fuzz_hang_001.md:1:4:1:4:**
+```roc
+0 (
+```
+
 
 **INVALID STATEMENT**
 The statement **expr** is not allowed at the top level.
