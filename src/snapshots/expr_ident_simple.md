@@ -11,6 +11,7 @@ foo
 **UNDEFINED VARIABLE**
 Nothing is named `foo` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:4),EndOfFile(1:4-1:4),

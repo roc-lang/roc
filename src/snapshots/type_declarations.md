@@ -24,18 +24,25 @@ MyType2 : Module.Thingy
 # PROBLEMS
 **NOT IMPLEMENTED**
 This feature is not yet implemented: top-level type_decl
+
 **NOT IMPLEMENTED**
 This feature is not yet implemented: top-level type_decl
+
 **NOT IMPLEMENTED**
 This feature is not yet implemented: top-level type_decl
+
 **NOT IMPLEMENTED**
 This feature is not yet implemented: top-level type_decl
+
 **NOT IMPLEMENTED**
 This feature is not yet implemented: top-level type_decl
+
 **NOT IMPLEMENTED**
 This feature is not yet implemented: top-level type_decl
+
 **NOT IMPLEMENTED**
 This feature is not yet implemented: top-level type_decl
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:12),Comma(1:12-1:13),UpperIdent(1:14-1:17),Comma(1:17-1:18),UpperIdent(1:19-1:23),Comma(1:23-1:24),UpperIdent(1:25-1:30),Comma(1:30-1:31),UpperIdent(1:32-1:40),Comma(1:40-1:41),LowerIdent(1:42-1:49),Comma(1:49-1:50),LowerIdent(1:51-1:56),CloseSquare(1:56-1:57),Newline(1:1-1:1),
