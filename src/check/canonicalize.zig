@@ -551,7 +551,7 @@ pub fn canonicalize_expr(
             const requirements = types.Num.Int.Requirements.fromIntLiteral(u128_val, is_negated);
 
             // Create a polymorphic int type variable
-            const poly_var = self.env.types_store.fresh();
+            const poly_var = self.can_ir.env.types_store.fresh();
             const int_type_var = self.can_ir.pushTypeVar(
                 Content{ .structure = .{ .num = .{ .int_poly = poly_var } } },
                 final_expr_idx,
@@ -635,31 +635,33 @@ pub fn canonicalize_expr(
                 region,
             );
 
-            /////////////////////////////////////////////////////////////////////////////
-            // TODO don't just turn frac_value into f64, actually store the proper f32/f64/Dec/etc.
-            // also might want like a SmallFrac value which is just like "u14 before decimal, u14 after decimal"
-            // for super common scenarios like 123.456 - might need to store the number after the decimal reversed,
-            // e.g. if it's 0.001, store the part after the decimal as "100" rather than "001" b/c "001" is just "1"
-            // which would make 0.1 and 0.001 indistinguishable. Then later we can easily convert those to Dec, F64, etc.
-            /////////////////////////////////////////////////////////////////////////////
-            const value: f64 = switch (frac_value) {
-                .F64 => |f| f,
-                .F32 => |f| @floatCast(f),
-                .Dec => |d| blk: {
-                    const dec = RocDec{ .num = @as(i128, @bitCast(d)) };
-                    break :blk dec.toF64();
-                },
-            };
-
             // then in the final slot the actual expr is inserted
-            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
-                .frac = .{
-                    .frac_var = frac_type_var,
-                    .requirements = requirements,
-                    .value = value,
-                    .region = region,
-                },
-            });
+            const expr_idx = switch (frac_value) {
+                .F64 => |f| self.can_ir.store.addExpr(CIR.Expr{
+                    .frac_f64 = .{
+                        .frac_var = frac_type_var,
+                        .requirements = requirements,
+                        .value = f,
+                        .region = region,
+                    },
+                }),
+                .F32 => |f| self.can_ir.store.addExpr(CIR.Expr{
+                    .frac_f64 = .{
+                        .frac_var = frac_type_var,
+                        .requirements = requirements,
+                        .value = @floatCast(f),
+                        .region = region,
+                    },
+                }),
+                .Dec => |d| self.can_ir.store.addExpr(CIR.Expr{
+                    .frac_dec = .{
+                        .frac_var = frac_type_var,
+                        .requirements = requirements,
+                        .value = RocDec{ .num = @as(i128, @bitCast(d)) },
+                        .region = region,
+                    },
+                }),
+            };
 
             std.debug.assert(@intFromEnum(expr_idx) == @intFromEnum(final_expr_idx));
 

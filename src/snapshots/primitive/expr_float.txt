@@ -16,7 +16,7 @@ LowerIdent(2:1-2:4),OpAssign(2:5-2:6),Float(2:7-2:12),EndOfFile(2:12-2:12),
 	(statements
 		(decl (2:1-2:12)
 			(ident (2:1-2:4) "foo")
-			(float (2:7-2:12) "12.34"))))
+			(frac (2:7-2:12) "12.34"))))
 ~~~FORMATTED
 NO CHANGE
 ~~~CANONICALIZE
@@ -27,10 +27,8 @@ NO CHANGE
 				(pid 12)
 				(ident "foo")))
 		(def_expr
-			(e_float (2:7-2:12)
-				(frac_var "#2")
-				(precision_var "#1")
-				(literal "12.34")
-				(value "0")
-				(bound "f32")))))
+			(e_frac_dec (2:7-2:12)
+				(frac_var "#1")
+				(requirements (fits_in_f32 "false") (fits_in_dec "true"))
+				(value "12.34")))))
 ~~~END

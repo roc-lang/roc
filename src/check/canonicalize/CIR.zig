@@ -575,10 +575,16 @@ pub const Expr = union(enum) {
         value: IntLiteralValue,
         region: Region,
     },
-    frac: struct {
+    frac_f64: struct {
         frac_var: TypeVar,
         requirements: types.Num.Frac.Requirements,
         value: f64,
+        region: Region,
+    },
+    frac_dec: struct {
+        frac_var: TypeVar,
+        requirements: types.Num.Frac.Requirements,
+        value: RocDec,
         region: Region,
     },
     // A single segment of a string literal
@@ -775,8 +781,8 @@ pub const Expr = union(enum) {
 
                 return int_node;
             },
-            .frac => |frac_expr| {
-                var frac_node = sexpr.Expr.init(gpa, "e_frac");
+            .frac_f64 => |frac_expr| {
+                var frac_node = sexpr.Expr.init(gpa, "e_frac_f64");
                 frac_node.appendRegionInfo(gpa, ir.calcRegionInfo(frac_expr.region));
 
                 // Add frac_var
@@ -802,6 +808,39 @@ pub const Expr = union(enum) {
                 // Add value
                 var value_node = sexpr.Expr.init(gpa, "value");
                 const value_str = std.fmt.allocPrint(gpa, "{d}", .{frac_expr.value}) catch unreachable;
+                defer gpa.free(value_str);
+                value_node.appendString(gpa, value_str);
+                frac_node.appendNode(gpa, &value_node);
+
+                return frac_node;
+            },
+            .frac_dec => |frac_expr| {
+                var frac_node = sexpr.Expr.init(gpa, "e_frac_dec");
+                frac_node.appendRegionInfo(gpa, ir.calcRegionInfo(frac_expr.region));
+
+                // Add frac_var
+                var frac_var_node = sexpr.Expr.init(gpa, "frac_var");
+                const frac_var_str = frac_expr.frac_var.allocPrint(gpa);
+                defer gpa.free(frac_var_str);
+                frac_var_node.appendString(gpa, frac_var_str);
+                frac_node.appendNode(gpa, &frac_var_node);
+
+                // Add requirements
+                var req_node = sexpr.Expr.init(gpa, "requirements");
+
+                var f32_node = sexpr.Expr.init(gpa, "fits_in_f32");
+                f32_node.appendString(gpa, if (frac_expr.requirements.fits_in_f32) "true" else "false");
+                req_node.appendNode(gpa, &f32_node);
+
+                var dec_node = sexpr.Expr.init(gpa, "fits_in_dec");
+                dec_node.appendString(gpa, if (frac_expr.requirements.fits_in_dec) "true" else "false");
+                req_node.appendNode(gpa, &dec_node);
+
+                frac_node.appendNode(gpa, &req_node);
+
+                // Add value
+                var value_node = sexpr.Expr.init(gpa, "value");
+                const value_str = std.fmt.allocPrint(gpa, "{d}", .{frac_expr.value.toF64()}) catch unreachable;
                 defer gpa.free(value_str);
                 value_node.appendString(gpa, value_str);
                 frac_node.appendNode(gpa, &value_node);

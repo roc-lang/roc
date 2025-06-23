@@ -199,19 +199,41 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 },
             };
         },
-        .expr_frac => {
+        .expr_frac_f64 => {
             // Retrieve type variable from data_2 and requirements from data_3
             const frac_var = @as(types.Var, @enumFromInt(node.data_2));
             const requirements = @as(types.Num.Frac.Requirements, @bitCast(@as(u2, @truncate(node.data_3))));
 
-            // TODO get value and bound from extra_data
+            // Get value from extra_data
+            const extra_data_idx = node.data_1;
+            const value_as_u32s = store.extra_data.items[extra_data_idx..][0..2];
+            const value_as_u64: u64 = @bitCast(value_as_u32s.*);
+            const value: f64 = @bitCast(value_as_u64);
 
             return CIR.Expr{
-                .frac = .{
+                .frac_f64 = .{
                     .frac_var = frac_var,
                     .requirements = requirements,
-                    .value = 0,
-                    // TODO shouldn't this be a flex_var?
+                    .value = value,
+                    .region = node.region,
+                },
+            };
+        },
+        .expr_frac_dec => {
+            // Retrieve type variable from data_2 and requirements from data_3
+            const frac_var = @as(types.Var, @enumFromInt(node.data_2));
+            const requirements = @as(types.Num.Frac.Requirements, @bitCast(@as(u2, @truncate(node.data_3))));
+
+            // Get value from extra_data
+            const extra_data_idx = node.data_1;
+            const value_as_u32s = store.extra_data.items[extra_data_idx..][0..4];
+            const value_as_i128: i128 = @bitCast(value_as_u32s.*);
+
+            return CIR.Expr{
+                .frac_dec = .{
+                    .frac_var = frac_var,
+                    .requirements = requirements,
+                    .value = CIR.RocDec{ .num = value_as_i128 },
                     .region = node.region,
                 },
             };
@@ -565,15 +587,43 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             node.data_1 = e.elems.span.start;
             node.data_2 = e.elems.span.len;
         },
-        .frac => |e| {
+        .frac_f64 => |e| {
             node.region = e.region;
-            node.tag = .expr_frac;
+            node.tag = .expr_frac_f64;
 
             // Store type variable in data_2 and requirements in data_3
             node.data_2 = @intFromEnum(e.frac_var);
             node.data_3 = @as(u32, @intCast(@as(u2, @bitCast(e.requirements))));
 
-            // TODO for storing the value and bound, use extra_data
+            // Store the f64 value in extra_data
+            const extra_data_start = store.extra_data.items.len;
+            const value_as_u64: u64 = @bitCast(e.value);
+            const value_as_u32s: [2]u32 = @bitCast(value_as_u64);
+            for (value_as_u32s) |word| {
+                store.extra_data.append(store.gpa, word) catch |err| exitOnOom(err);
+            }
+
+            // Store the extra_data index in data_1
+            node.data_1 = @intCast(extra_data_start);
+        },
+        .frac_dec => |e| {
+            node.region = e.region;
+            node.tag = .expr_frac_dec;
+
+            // Store type variable in data_2 and requirements in data_3
+            node.data_2 = @intFromEnum(e.frac_var);
+            node.data_3 = @as(u32, @intCast(@as(u2, @bitCast(e.requirements))));
+
+            // Store the RocDec value in extra_data
+            const extra_data_start = store.extra_data.items.len;
+            const value_as_i128: i128 = e.value.num;
+            const value_as_u32s: [4]u32 = @bitCast(value_as_i128);
+            for (value_as_u32s) |word| {
+                store.extra_data.append(store.gpa, word) catch |err| exitOnOom(err);
+            }
+
+            // Store the extra_data index in data_1
+            node.data_1 = @intCast(extra_data_start);
         },
         .str_segment => |e| {
             node.region = e.region;
