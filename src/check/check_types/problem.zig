@@ -39,6 +39,9 @@ pub const Problem = union(enum) {
         buf: *std.ArrayList(u8),
         snapshots: *const snapshot.Store,
         idents: *const Ident.Store,
+        source: []const u8,
+        filename: []const u8,
+        module_env: *base.ModuleEnv,
     ) !Report {
         var snapshot_writer = snapshot.SnapshotWriter.init(
             buf.writer(),
@@ -48,7 +51,7 @@ pub const Problem = union(enum) {
 
         switch (problem) {
             .type_mismatch => |vars| {
-                return buildTypeMismatchReport(gpa, buf, &snapshot_writer, vars);
+                return buildTypeMismatchReport(gpa, buf, &snapshot_writer, vars, source, filename, module_env);
             },
             .infinite_recursion => |_| return buildUnimplementedReport(gpa),
             .anonymous_recursion => |_| return buildUnimplementedReport(gpa),
@@ -59,25 +62,61 @@ pub const Problem = union(enum) {
         }
     }
 
-    /// Build a report for "invalid number literal" diagnostic
+    /// Build a report for type mismatch diagnostic
     pub fn buildTypeMismatchReport(
         allocator: Allocator,
         buf: *std.ArrayList(u8),
         writer: *snapshot.SnapshotWriter,
         vars: VarProblem2,
+        source: []const u8,
+        filename: []const u8,
+        module_env: *base.ModuleEnv,
     ) !Report {
         var report = Report.init(allocator, "TYPE MISMATCH", .runtime_error);
 
         try writer.write(vars.expected);
-        try report.document.addText("Expected: ");
         const owned_expected = try report.addOwnedString(buf.items[0..]);
-        try report.document.addText(owned_expected);
 
         const buf_len = buf.items.len;
         try writer.write(vars.actual);
-        try report.document.addText("\nBut got: ");
         const owned_actual = try report.addOwnedString(buf.items[buf_len..]);
-        try report.document.addText(owned_actual);
+
+        try report.document.addReflowingText("This expression is used in an unexpected way:");
+        try report.document.addLineBreak();
+
+        // Add source region highlighting
+        const region_info = module_env.calcRegionInfo(source, vars.region.start.offset, vars.region.end.offset) catch |err| switch (err) {
+            else => base.RegionInfo{
+                .start_line_idx = 0,
+                .start_col_idx = 0,
+                .end_line_idx = 0,
+                .end_col_idx = 0,
+                .line_text = "",
+            },
+        };
+
+        try report.document.addSourceRegion(
+            source,
+            region_info.start_line_idx + 1, // RegionInfo uses 0-based line numbers
+            region_info.start_col_idx + 1, // RegionInfo uses 0-based column numbers
+            region_info.end_line_idx + 1,
+            region_info.end_col_idx + 1,
+            .error_highlight,
+            filename,
+        );
+        try report.document.addLineBreak();
+
+        try report.document.addText("It is of type:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(owned_actual, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addText("But you are trying to use it as:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(owned_expected, .type_variable);
 
         return report;
     }
@@ -101,6 +140,7 @@ pub const VarProblem2 = struct {
     expected: SnapshotContentIdx,
     actual_var: Var,
     actual: SnapshotContentIdx,
+    region: base.Region,
 };
 
 /// Self-contained problems store with resolved snapshots of type content

@@ -91,6 +91,9 @@ fn processSourceInternal(
     var module_env = ModuleEnv.init(gpa);
     defer module_env.deinit();
 
+    // Calculate line starts for region info
+    try module_env.calcLineStarts(source);
+
     // Parse the source code
     var parse_ast = parse.parse(&module_env, source);
     defer parse_ast.deinit(gpa);
@@ -135,6 +138,16 @@ fn processSourceInternal(
     // Check for type errors
     solver.checkDefs();
 
+    // Ensure ProcessResult owns the source
+    // We have two cases:
+    // 1. processFile already allocated the source memory - we take ownership to avoid a copy
+    // 2. processSource borrows the caller's source - we must clone it
+    // This optimization matters because source files can be large and we process many of them.
+    const owned_source = if (take_ownership)
+        source // Transfer existing ownership (no allocation)
+    else
+        try gpa.dupe(u8, source); // Clone to get our own copy
+
     // Get type checking diagnostic Reports
     var problem_buf = std.ArrayList(u8).init(gpa);
     defer problem_buf.deinit();
@@ -148,19 +161,12 @@ fn processSourceInternal(
             &problem_buf,
             &solver.snapshots,
             &module_env.idents,
+            owned_source,
+            filename,
+            &module_env,
         ) catch continue;
         reports.append(report) catch continue;
     }
-
-    // Ensure ProcessResult owns the source
-    // We have two cases:
-    // 1. processFile already allocated the source memory - we take ownership to avoid a copy
-    // 2. processSource borrows the caller's source - we must clone it
-    // This optimization matters because source files can be large and we process many of them.
-    const owned_source = if (take_ownership)
-        source // Transfer existing ownership (no allocation)
-    else
-        try gpa.dupe(u8, source); // Clone to get our own copy
 
     return ProcessResult{
         .cir = cir,
