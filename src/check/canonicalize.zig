@@ -493,15 +493,38 @@ fn canonicalizeImportStatement(
     self: *Self,
     import_stmt: @TypeOf(@as(AST.Statement, undefined).import),
 ) ?CIR.Statement.Idx {
-    // 1. Intern the module name (e.g., "json.Json")
-    const module_name = if (self.parse_ir.tokens.resolveIdentifier(import_stmt.module_name_tok)) |ident_idx| ident_idx else {
-        const region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
-        const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "resolve import module name");
-        self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
-            .feature = feature,
-            .region = region,
-        } });
-        return null;
+    // 1. Reconstruct the full module name (e.g., "json.Json")
+    const module_name = blk: {
+        if (self.parse_ir.tokens.resolveIdentifier(import_stmt.module_name_tok) == null) {
+            const region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
+            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "resolve import module name token");
+            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                .feature = feature,
+                .region = region,
+            } });
+            return null;
+        }
+
+        if (import_stmt.qualifier_tok) |qualifier_tok| {
+            if (self.parse_ir.tokens.resolveIdentifier(qualifier_tok) == null) {
+                const region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
+                const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "resolve import qualifier token");
+                self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                    .feature = feature,
+                    .region = region,
+                } });
+                return null;
+            }
+
+            // Slice from original source to get "qualifier.ModuleName"
+            const qualifier_region = self.parse_ir.tokens.resolve(qualifier_tok);
+            const module_region = self.parse_ir.tokens.resolve(import_stmt.module_name_tok);
+            const full_name = self.parse_ir.source[qualifier_region.start.offset..module_region.end.offset];
+            break :blk self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(full_name), Region.zero());
+        } else {
+            // No qualifier, just use the module name directly
+            break :blk self.parse_ir.tokens.resolveIdentifier(import_stmt.module_name_tok).?;
+        }
     };
 
     // 2. Determine the alias (either explicit or default to last part)
@@ -516,7 +539,7 @@ fn canonicalizeImportStatement(
             .module_name_tok = module_name,
             .qualifier_tok = if (import_stmt.qualifier_tok) |q_tok| self.parse_ir.tokens.resolveIdentifier(q_tok) else null,
             .alias_tok = if (import_stmt.alias_tok) |a_tok| self.parse_ir.tokens.resolveIdentifier(a_tok) else null,
-            .exposes = CIR.ExposedItem.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } }, // TODO: Convert from AST exposes
+            .exposes = self.convertASTExposesToCIR(import_stmt.exposes),
             .region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region),
         },
     };
@@ -549,8 +572,10 @@ fn createQualifiedName(
     const module_text = self.can_ir.env.idents.getText(module_name);
     const field_text = self.can_ir.env.idents.getText(field_name);
 
-    // Allocate space for "module.field"
+    // Allocate space for "module.field" - this case still needs allocation since we're combining
+    // module name from import with field name from usage site
     const qualified_text = std.fmt.allocPrint(self.can_ir.env.gpa, "{s}.{s}", .{ module_text, field_text }) catch |err| exitOnOom(err);
+    defer self.can_ir.env.gpa.free(qualified_text);
 
     return self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(qualified_text), Region.zero());
 }
@@ -574,6 +599,23 @@ fn createExternalDeclaration(
     };
 
     return self.can_ir.pushExternalDecl(external_decl);
+}
+
+/// Convert AST exposed items to CIR exposed items
+/// TODO: Implement full exposed items conversion once CIR exposed items infrastructure is complete
+/// Currently the CIR NodeStore methods for exposed items are not fully implemented
+fn convertASTExposesToCIR(
+    self: *Self,
+    ast_exposes: AST.ExposedItem.Span,
+) CIR.ExposedItem.Span {
+    _ = self;
+    _ = ast_exposes;
+    // Return empty span until exposed items infrastructure is implemented
+    // The exposed items are parsed correctly in the AST but CIR conversion needs:
+    // - Complete implementation of NodeStore.addExposedItem()
+    // - Complete implementation of NodeStore.getExposedItem()
+    // - Scratch methods for exposed items (scratchExposedItemTop, addScratchExposedItem, etc.)
+    return CIR.ExposedItem.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } };
 }
 
 fn canonicalize_decl(
