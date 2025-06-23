@@ -16,8 +16,10 @@ For example:
 or for an app:
         app [main!] { pf: platform "../basic-cli/platform.roc" }
 Here is the problematic code:
-1 | modu
-    ^^^^
+**fuzz_crash_005.md:1-0:1:**
+```roc
+modu
+```
 
 
 # TOKENS

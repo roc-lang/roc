@@ -29,8 +29,10 @@ For example:
 or for an app:
         app [main!] { pf: platform "../basic-cli/platform.roc" }
 Here is the problematic code:
-1 | H{o,
-    ^
+**fuzz_crash_010.md:1-0:1:**
+```roc
+H{o,
+```
 
 
 **INVALID STATEMENT**

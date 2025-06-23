@@ -11,11 +11,13 @@ foo = asd.0
 ~~~
 # PROBLEMS
 **PARSE ERROR**
-A parsing error occurred: ~~expr_no_space_dot_int~~
+A parsing error occurred: `expr_no_space_dot_int`
 This is an unexpected parsing error. Please check your syntax.
 Here is the problematic code:
-3 | foo = asd.0
-             ^^
+**expr_no_space_dot_int.md:3-9:3:**
+```roc
+
+```
 
 
 **UNKNOWN OPERATOR**

@@ -16,28 +16,34 @@ For example:
 or for an app:
         app [main!] { pf: platform "../basic-cli/platform.roc" }
 Here is the problematic code:
-1 | ||(|(l888888888|
-    ^
+**fuzz_crash_012.md:1-0:1:**
+```roc
+||(|(l888888888|
+```
 
 
 **UNEXPECTED TOKEN IN PATTERN**
 The token **<unknown>** is not expected in a pattern.
 Patterns can contain identifiers, literals, lists, records, or tags.
 Here is the problematic code:
-1 | ||(|(l888888888|
-       ^
+**fuzz_crash_012.md:1-3:1:**
+```roc
+||(|(l888888888|
+```
 
 
 **UNEXPECTED TOKEN IN PATTERN**
 The token **(|(l888888888|** is not expected in a pattern.
 Patterns can contain identifiers, literals, lists, records, or tags.
 Here is the problematic code:
-1 | ||(|(l888888888|
-      ^^^^^^^^^^^^^^
+**fuzz_crash_012.md:1-2:1:**
+```roc
+||(|(l888888888|
+```
 
 
 **PARSE ERROR**
-A parsing error occurred: ~~expected_expr_bar~~
+A parsing error occurred: `expected_expr_bar`
 This is an unexpected parsing error. Please check your syntax.
 
 **INVALID STATEMENT**

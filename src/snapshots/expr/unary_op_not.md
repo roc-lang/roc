@@ -12,8 +12,10 @@ type=expr
 The token **<unknown>** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 Here is the problematic code:
-1 | !isValid
-    ^
+**unary_op_not.md:1-0:1:**
+```roc
+!isValid
+```
 
 
 # TOKENS

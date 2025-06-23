@@ -22,24 +22,30 @@ For example:
 or for an app:
         app [main!] { pf: platform "../basic-cli/platform.roc" }
 Here is the problematic code:
-1 | 0o0.0
-    ^^^
+**fuzz_crash_015.md:1-0:1:**
+```roc
+0o0.0
+```
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **<unknown>** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 Here is the problematic code:
-1 | 0o0.0
-       ^^
+**fuzz_crash_015.md:1-3:1:**
+```roc
+0o0.0
+```
 
 
 **PARSE ERROR**
-A parsing error occurred: ~~expr_no_space_dot_int~~
+A parsing error occurred: `expr_no_space_dot_int`
 This is an unexpected parsing error. Please check your syntax.
 Here is the problematic code:
-3 | 0u8.0
-       ^^
+**fuzz_crash_015.md:3-3:3:**
+```roc
+
+```
 
 
 **INVALID STATEMENT**

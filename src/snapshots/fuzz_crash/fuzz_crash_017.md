@@ -17,24 +17,30 @@ For example:
 or for an app:
         app [main!] { pf: platform "../basic-cli/platform.roc" }
 Here is the problematic code:
-1 | me = "luc"
-    ^^
+**fuzz_crash_017.md:1-0:1:**
+```roc
+me = "luc"
+```
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **<unknown>** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 Here is the problematic code:
-1 | me = "luc"
-       ^
+**fuzz_crash_017.md:1-3:1:**
+```roc
+me = "luc"
+```
 
 
 **PARSE ERROR**
-A parsing error occurred: ~~string_expected_close_interpolation~~
+A parsing error occurred: `string_expected_close_interpolation`
 This is an unexpected parsing error. Please check your syntax.
 Here is the problematic code:
-2 | foo = "hello ${namF
-          ^^^^^^^^^^^^^
+**fuzz_crash_017.md:2-6:2:**
+```roc
+
+```
 
 
 **INVALID STATEMENT**

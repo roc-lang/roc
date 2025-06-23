@@ -18,32 +18,40 @@ For example:
 or for an app:
         app [main!] { pf: platform "../basic-cli/platform.roc" }
 Here is the problematic code:
-1 | 0b.0
-    ^^
+**fuzz_crash_014.md:1-0:1:**
+```roc
+0b.0
+```
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **<unknown>** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 Here is the problematic code:
-1 | 0b.0
-      ^^
+**fuzz_crash_014.md:1-2:1:**
+```roc
+0b.0
+```
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **<unknown>** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 Here is the problematic code:
-2 | 0bu22
-    ^^^^^
+**fuzz_crash_014.md:2-0:2:**
+```roc
+
+```
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **<unknown>** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 Here is the problematic code:
-3 | 0u22
-    ^^^^
+**fuzz_crash_014.md:3-0:3:**
+```roc
+
+```
 
 
 **INVALID STATEMENT**

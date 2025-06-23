@@ -15,9 +15,9 @@ var topLevelVar_ = 0
 A parsing error occurred: `var_only_allowed_in_a_body`
 This is an unexpected parsing error. Please check your syntax.
 Here is the problematic code:
-```
-4 | var topLevelVar_ = 0
-    ^^^
+**can_var_scoping_invalid_top_level.md:4-0:4:**
+```roc
+
 ```
 
 

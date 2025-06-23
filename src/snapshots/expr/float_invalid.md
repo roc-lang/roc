@@ -12,9 +12,9 @@ type=expr
 A parsing error occurred: `expr_no_space_dot_int`
 This is an unexpected parsing error. Please check your syntax.
 Here is the problematic code:
-```
-1 | 3.14.15
-        ^^^
+**float_invalid.md:1-4:1:**
+```roc
+3.14.15
 ```
 
 

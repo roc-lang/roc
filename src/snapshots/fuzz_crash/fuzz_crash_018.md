@@ -17,8 +17,10 @@ For example:
 or for an app:
         app [main!] { pf: platform "../basic-cli/platform.roc" }
 Here is the problematic code:
-1 | 0 b:S
-    ^
+**fuzz_crash_018.md:1-0:1:**
+```roc
+0 b:S
+```
 
 
 **NOT IMPLEMENTED**

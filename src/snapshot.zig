@@ -544,7 +544,7 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
         for (parse_ast.parse_diagnostics.items) |diagnostic| {
             parser_problems += 1;
 
-            var report: Report = parse_ast.parseDiagnosticToReport(diagnostic, gpa) catch |err| {
+            var report: Report = parse_ast.parseDiagnosticToReport(diagnostic, gpa, snapshot_path) catch |err| {
                 try writer.print("Error creating parse report: {}\n", .{err});
                 continue;
             };

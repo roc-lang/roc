@@ -30,40 +30,50 @@ type=expr
 The token **<unknown>** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 Here is the problematic code:
-4 |     (x, y) = (1, 2)
-               ^
+**tuple_patterns.md:4-11:4:**
+```roc
+    (x, y) = (1, 2)
+```
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **<unknown>** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 Here is the problematic code:
-7 |     ((a, b), (c, d)) = ((10, 20), (30, 40))
-                         ^
+**tuple_patterns.md:7-21:7:**
+```roc
+    ((a, b), (c, d)) = ((10, 20), (30, 40))
+```
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **<unknown>** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 Here is the problematic code:
-10 |     (first, second, third) = (100, 42, 200)
-                                ^
+**tuple_patterns.md:10-27:10:**
+```roc
+    (first, second, third) = (100, 42, 200)
+```
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **<unknown>** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 Here is the problematic code:
-13 |     (name, string, boolean) = ("Alice", "fixed", True)
-                                 ^
+**tuple_patterns.md:13-28:13:**
+```roc
+    (name, string, boolean) = ("Alice", "fixed", True)
+```
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **<unknown>** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 Here is the problematic code:
-16 |     (list, hello) = ([1, 2, 3], "hello")
-                       ^
+**tuple_patterns.md:16-18:16:**
+```roc
+    (list, hello) = ([1, 2, 3], "hello")
+```
 
 
 **UNDEFINED VARIABLE**

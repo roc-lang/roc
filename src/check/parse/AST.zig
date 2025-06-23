@@ -138,7 +138,7 @@ fn getTokenText(self: *AST, token_idx: Token.Idx) []const u8 {
 }
 
 /// Convert a parse diagnostic to a Report for rendering
-pub fn parseDiagnosticToReport(self: *AST, diagnostic: Diagnostic, allocator: std.mem.Allocator) !reporting.Report {
+pub fn parseDiagnosticToReport(self: *AST, diagnostic: Diagnostic, allocator: std.mem.Allocator, filename: []const u8) !reporting.Report {
     const region = self.tokenizedRegionToRegion(diagnostic.region);
 
     const title = switch (diagnostic.tag) {
@@ -366,7 +366,7 @@ pub fn parseDiagnosticToReport(self: *AST, diagnostic: Diagnostic, allocator: st
         try report.document.addLineBreak();
 
         // Use the proper addSourceContext method
-        try report.addSourceContext(region_info);
+        try report.addSourceContext(region_info, self.source, filename);
     }
 
     return report;

@@ -12,8 +12,10 @@ type=expr
 The token **<unknown>** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 Here is the problematic code:
-1 | 1 ++ 2
-       ^
+**unknown_operator.md:1-3:1:**
+```roc
+1 ++ 2
+```
 
 
 **UNKNOWN OPERATOR**

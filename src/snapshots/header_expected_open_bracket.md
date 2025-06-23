@@ -9,7 +9,7 @@ module
 ~~~
 # PROBLEMS
 **PARSE ERROR**
-A parsing error occurred: ~~header_expected_open_square~~
+A parsing error occurred: `header_expected_open_square`
 This is an unexpected parsing error. Please check your syntax.
 
 # TOKENS

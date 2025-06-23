@@ -16,12 +16,14 @@ For example:
 or for an app:
         app [main!] { pf: platform "../basic-cli/platform.roc" }
 Here is the problematic code:
-1 | 0|
-    ^
+**fuzz_crash_016.md:1-0:1:**
+```roc
+0|
+```
 
 
 **PARSE ERROR**
-A parsing error occurred: ~~expected_expr_bar~~
+A parsing error occurred: `expected_expr_bar`
 This is an unexpected parsing error. Please check your syntax.
 
 **INVALID STATEMENT**

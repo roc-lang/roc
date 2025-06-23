@@ -12,19 +12,23 @@ module P]F
 There are too many closing braces here.
 
 **PARSE ERROR**
-A parsing error occurred: ~~header_expected_open_square~~
+A parsing error occurred: `header_expected_open_square`
 This is an unexpected parsing error. Please check your syntax.
 Here is the problematic code:
-1 | module P]F
-           ^
+**fuzz_crash_011.md:1-7:1:**
+```roc
+module P]F
+```
 
 
 **PARSE ERROR**
-A parsing error occurred: ~~expected_colon_after_type_annotation~~
+A parsing error occurred: `expected_colon_after_type_annotation`
 This is an unexpected parsing error. Please check your syntax.
 Here is the problematic code:
-1 | module P]F
-             ^
+**fuzz_crash_011.md:1-9:1:**
+```roc
+module P]F
+```
 
 
 # TOKENS
