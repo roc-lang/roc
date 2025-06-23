@@ -371,7 +371,7 @@ pub fn parseDiagnosticToReport(self: *AST, diagnostic: Diagnostic, allocator: st
     }
 
     // Add source context if we have a valid region
-    if (region.start.offset < region.end.offset and region.end.offset <= self.source.len) {
+    if (region.start.offset <= region.end.offset and region.end.offset <= self.source.len) {
         // Compute line_starts from source for proper region info calculation
         var line_starts = std.ArrayList(u32).init(allocator);
         defer line_starts.deinit();
