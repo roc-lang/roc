@@ -15,9 +15,9 @@ Maybe(a) : [Ok(a), Err]
 The type ``None`` is not declared in this scope.
 
 This type is referenced here:
-**type_redeclaration_same_scope.md:4:23:4:27:**
+**type_redeclaration_same_scope.md:3:22:3:26:**
 ```roc
-Maybe(a) : [Ok(a), Err]
+Maybe(a) : [Some(a), None]
 ```
 
 
@@ -25,9 +25,9 @@ Maybe(a) : [Ok(a), Err]
 The type ``Err`` is not declared in this scope.
 
 This type is referenced here:
-**type_redeclaration_same_scope.md:5:21:5:24:**
+**type_redeclaration_same_scope.md:4:20:4:23:**
 ```roc
-
+Maybe(a) : [Ok(a), Err]
 ```
 
 
@@ -35,14 +35,15 @@ This type is referenced here:
 The type ``Maybe`` is being redeclared.
 
 The redeclaration is here:
-**type_redeclaration_same_scope.md:5:2:5:25:**
+**type_redeclaration_same_scope.md:4:1:4:24:**
 ```roc
-
+Maybe(a) : [Ok(a), Err]
 ```
 
 But ``Maybe`` was already declared here:
-**type_redeclaration_same_scope.md:4:2:5:7:**
+**type_redeclaration_same_scope.md:3:1:4:6:**
 ```roc
+Maybe(a) : [Some(a), None]
 Maybe(a) : [Ok(a), Err]
 ```
 

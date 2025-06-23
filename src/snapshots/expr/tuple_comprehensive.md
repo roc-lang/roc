@@ -34,9 +34,9 @@ Variable ``with_lambda`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_with_lambda` to suppress this warning.
 The unused variable is declared here:
-**tuple_comprehensive.md:17:3:17:14:**
+**tuple_comprehensive.md:16:2:16:13:**
 ```roc
-
+	with_lambda = (|n| n + 1, 42)
 ```
 
 
@@ -45,9 +45,9 @@ Variable ``single`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_single` to suppress this warning.
 The unused variable is declared here:
-**tuple_comprehensive.md:11:3:11:9:**
+**tuple_comprehensive.md:10:2:10:8:**
 ```roc
-	pair = (1, 2)
+	single = (42)
 ```
 
 
@@ -56,9 +56,9 @@ Variable ``pair`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_pair` to suppress this warning.
 The unused variable is declared here:
-**tuple_comprehensive.md:12:3:12:7:**
+**tuple_comprehensive.md:11:2:11:6:**
 ```roc
-	triple = (1, "hello", True)
+	pair = (1, 2)
 ```
 
 
@@ -67,9 +67,9 @@ Variable ``nested`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_nested` to suppress this warning.
 The unused variable is declared here:
-**tuple_comprehensive.md:14:3:14:9:**
+**tuple_comprehensive.md:13:2:13:8:**
 ```roc
-	mixed = (add_one(5), "world", [1, 2, 3])
+	nested = ((1, 2), (3, 4))
 ```
 
 
@@ -78,9 +78,9 @@ Variable ``triple`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_triple` to suppress this warning.
 The unused variable is declared here:
-**tuple_comprehensive.md:13:3:13:9:**
+**tuple_comprehensive.md:12:2:12:8:**
 ```roc
-	nested = ((1, 2), (3, 4))
+	triple = (1, "hello", True)
 ```
 
 
@@ -89,9 +89,9 @@ Variable ``mixed`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_mixed` to suppress this warning.
 The unused variable is declared here:
-**tuple_comprehensive.md:15:3:15:8:**
+**tuple_comprehensive.md:14:2:14:7:**
 ```roc
-	with_vars = (x, y, z)
+	mixed = (add_one(5), "world", [1, 2, 3])
 ```
 
 
@@ -100,9 +100,9 @@ Variable ``with_vars`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_with_vars` to suppress this warning.
 The unused variable is declared here:
-**tuple_comprehensive.md:16:3:16:12:**
+**tuple_comprehensive.md:15:2:15:11:**
 ```roc
-	with_lambda = (|n| n + 1, 42)
+	with_vars = (x, y, z)
 ```
 
 

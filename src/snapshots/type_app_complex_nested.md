@@ -101,9 +101,9 @@ Variable ``result`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_result` to suppress this warning.
 The unused variable is declared here:
-**type_app_complex_nested.md:6:20:6:26:**
+**type_app_complex_nested.md:5:19:5:25:**
 ```roc
-    when result is
+processComplex = |result|
 ```
 
 

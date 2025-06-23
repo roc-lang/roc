@@ -37,9 +37,9 @@ Variable ``unused`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_unused` to suppress this warning.
 The unused variable is declared here:
-**lambda_parameter_unused.md:6:9:6:15:**
+**lambda_parameter_unused.md:5:8:5:14:**
 ```roc
-
+add = |unused| 42
 ```
 
 
@@ -48,9 +48,9 @@ Variable ``_factor`` is prefixed with an underscore but is actually used.
 
 Variables prefixed with `_` are intended to be unused. Remove the underscore prefix: `factor`.
 The underscore variable is declared here:
-**lambda_parameter_unused.md:10:23:10:30:**
+**lambda_parameter_unused.md:9:22:9:29:**
 ```roc
-
+multiply = |_factor| _factor * 2
 ```
 
 

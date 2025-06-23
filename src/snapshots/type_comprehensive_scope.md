@@ -49,18 +49,18 @@ Complex : {
 The type ``Result`` is being redeclared.
 
 The redeclaration is here:
-**type_comprehensive_scope.md:13:2:16:6:**
+**type_comprehensive_scope.md:12:1:15:5:**
 ```roc
+Result(ok, err) : [Ok(ok), Err(err)]
 
 # Forward reference - Tree references Node before Node is defined
 Tree(a) : [Branch(Node(a)), Leaf(a)]
-
 ```
 
 But ``Result`` was already declared here:
-**type_comprehensive_scope.md:2:2:2:2:**
+**type_comprehensive_scope.md:1:1:1:1:**
 ```roc
-
+module [MyU64, Person, Result, Tree, Node]
 ```
 
 
@@ -68,21 +68,21 @@ But ``Result`` was already declared here:
 The type ``Person`` is being redeclared.
 
 The redeclaration is here:
-**type_comprehensive_scope.md:25:2:28:9:**
+**type_comprehensive_scope.md:24:1:27:8:**
 ```roc
+Person : U64
 
 # Using an undeclared type (should error)
 BadType : SomeUndeclaredType
-
 ```
 
 But ``Person`` was already declared here:
-**type_comprehensive_scope.md:10:2:13:8:**
+**type_comprehensive_scope.md:9:1:12:7:**
 ```roc
+Person : { name: Str, age: U64 }
 
 # Type with parameters
 Result(ok, err) : [Ok(ok), Err(err)]
-
 ```
 
 
@@ -90,9 +90,9 @@ Result(ok, err) : [Ok(ok), Err(err)]
 The type ``SomeUndeclaredType`` is not declared in this scope.
 
 This type is referenced here:
-**type_comprehensive_scope.md:28:12:28:30:**
+**type_comprehensive_scope.md:27:11:27:29:**
 ```roc
-
+BadType : SomeUndeclaredType
 ```
 
 

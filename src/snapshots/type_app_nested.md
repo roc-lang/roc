@@ -17,9 +17,9 @@ main! = |_| processNested([])
 The type ``Err`` is not declared in this scope.
 
 This type is referenced here:
-**type_app_nested.md:4:35:4:38:**
+**type_app_nested.md:3:34:3:37:**
 ```roc
-processNested = |_list| ["one","two"]
+processNested : List(Result(Str, Err)) -> List(Str)
 ```
 
 

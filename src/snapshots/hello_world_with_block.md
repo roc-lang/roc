@@ -31,9 +31,9 @@ Variable ``world`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_world` to suppress this warning.
 The unused variable is declared here:
-**hello_world_with_block.md:10:3:10:8:**
+**hello_world_with_block.md:9:2:9:7:**
 ```roc
-	# Hello
+	world = "World"
 ```
 
 

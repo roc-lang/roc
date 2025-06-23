@@ -24,21 +24,21 @@ Baz : Foo
 The type ``Foo`` is being redeclared.
 
 The redeclaration is here:
-**type_scope_integration.md:8:2:11:5:**
+**type_scope_integration.md:7:1:10:4:**
 ```roc
+Foo : Str
 
 # Declare another type that uses an undeclared type
 Bar : SomeUndeclaredType
-
 ```
 
 But ``Foo`` was already declared here:
-**type_scope_integration.md:5:2:8:5:**
+**type_scope_integration.md:4:1:7:4:**
 ```roc
+Foo : U64
 
 # Try to redeclare the same type (should error)
 Foo : Str
-
 ```
 
 
@@ -46,9 +46,9 @@ Foo : Str
 The type ``SomeUndeclaredType`` is not declared in this scope.
 
 This type is referenced here:
-**type_scope_integration.md:11:8:11:26:**
+**type_scope_integration.md:10:7:10:25:**
 ```roc
-
+Bar : SomeUndeclaredType
 ```
 
 

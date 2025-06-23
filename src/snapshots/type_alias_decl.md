@@ -83,18 +83,18 @@ Here is the problematic code:
 The type ``Result`` is being redeclared.
 
 The redeclaration is here:
-**type_alias_decl.md:8:2:11:8:**
+**type_alias_decl.md:7:1:10:7:**
 ```roc
+Result(ok, err) : [Ok(ok), Err(err)]
 
 # Record type alias
 Person : { name : Str, age : U64 }
-
 ```
 
 But ``Result`` was already declared here:
-**type_alias_decl.md:2:2:2:2:**
+**type_alias_decl.md:1:1:1:1:**
 ```roc
-
+app [main!] { pf: platform "../basic-cli/main.roc" }
 ```
 
 
@@ -102,9 +102,9 @@ But ``Result`` was already declared here:
 The type ``Red`` is not declared in this scope.
 
 This type is referenced here:
-**type_alias_decl.md:20:11:20:14:**
+**type_alias_decl.md:19:10:19:13:**
 ```roc
-
+Color : [Red, Green, Blue, Custom(U8, U8, U8)]
 ```
 
 
@@ -112,9 +112,9 @@ This type is referenced here:
 The type ``Green`` is not declared in this scope.
 
 This type is referenced here:
-**type_alias_decl.md:20:16:20:21:**
+**type_alias_decl.md:19:15:19:20:**
 ```roc
-
+Color : [Red, Green, Blue, Custom(U8, U8, U8)]
 ```
 
 
@@ -122,9 +122,9 @@ This type is referenced here:
 The type ``Blue`` is not declared in this scope.
 
 This type is referenced here:
-**type_alias_decl.md:20:23:20:27:**
+**type_alias_decl.md:19:22:19:26:**
 ```roc
-
+Color : [Red, Green, Blue, Custom(U8, U8, U8)]
 ```
 
 

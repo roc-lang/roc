@@ -23,9 +23,9 @@ Variable ``id`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_id` to suppress this warning.
 The unused variable is declared here:
-**type_alias_simple.md:7:13:7:15:**
+**type_alias_simple.md:6:12:6:14:**
 ```roc
-
+getUser = |id| if (id > 10) "big" else "small"
 ```
 
 

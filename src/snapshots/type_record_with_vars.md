@@ -19,9 +19,9 @@ The type variable ``b`` is not declared in this scope.
 Type variables must be introduced in a type annotation before they can be used.
 
 This type variable is referenced here:
-**type_record_with_vars.md:4:32:4:33:**
+**type_record_with_vars.md:3:31:3:32:**
 ```roc
-getField = |record| record.field
+getField : { field: a, other: b } -> a
 ```
 
 

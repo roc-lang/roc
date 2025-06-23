@@ -218,9 +218,9 @@ expect {
 The type ``Bar`` is not declared in this scope.
 
 This type is referenced here:
-**syntax_grab_bag.md:37:9:37:12:**
+**syntax_grab_bag.md:36:8:36:11:**
 ```roc
-
+Foo : (Bar, Baz)
 ```
 
 
@@ -228,9 +228,9 @@ This type is referenced here:
 The type ``Baz`` is not declared in this scope.
 
 This type is referenced here:
-**syntax_grab_bag.md:37:14:37:17:**
+**syntax_grab_bag.md:36:13:36:16:**
 ```roc
-
+Foo : (Bar, Baz)
 ```
 
 
@@ -238,9 +238,9 @@ This type is referenced here:
 The type ``Bar`` is not declared in this scope.
 
 This type is referenced here:
-**syntax_grab_bag.md:40:3:40:6:**
+**syntax_grab_bag.md:39:2:39:5:**
 ```roc
-	Baz, # Another after pattern tuple item
+	Bar, # Comment after pattern tuple item
 ```
 
 
@@ -248,9 +248,9 @@ This type is referenced here:
 The type ``Baz`` is not declared in this scope.
 
 This type is referenced here:
-**syntax_grab_bag.md:41:3:41:6:**
+**syntax_grab_bag.md:40:2:40:5:**
 ```roc
-) # Comment after pattern tuple close
+	Baz, # Another after pattern tuple item
 ```
 
 
@@ -258,9 +258,9 @@ This type is referenced here:
 The type ``Something`` is not declared in this scope.
 
 This type is referenced here:
-**syntax_grab_bag.md:44:33:44:42:**
+**syntax_grab_bag.md:43:32:43:41:**
 ```roc
-SomeMl(a) : { # After record open
+Some(a) : { foo : Ok(a), bar : Something }
 ```
 
 
@@ -268,9 +268,9 @@ SomeMl(a) : { # After record open
 The type ``Something`` is not declared in this scope.
 
 This type is referenced here:
-**syntax_grab_bag.md:47:9:47:18:**
+**syntax_grab_bag.md:46:8:46:17:**
 ```roc
-}
+	bar : Something, # After last field
 ```
 
 
@@ -278,9 +278,9 @@ This type is referenced here:
 The type ``Something`` is not declared in this scope.
 
 This type is referenced here:
-**syntax_grab_bag.md:54:9:54:18:**
+**syntax_grab_bag.md:53:8:53:17:**
 ```roc
-} # Comment after pattern record close
+	bar : Something, # Another after pattern record field
 ```
 
 
@@ -288,9 +288,9 @@ This type is referenced here:
 The type ``None`` is not declared in this scope.
 
 This type is referenced here:
-**syntax_grab_bag.md:57:23:57:27:**
+**syntax_grab_bag.md:56:22:56:26:**
 ```roc
-
+Maybe(a) : [Some(a), None]
 ```
 
 
@@ -298,9 +298,9 @@ This type is referenced here:
 The type ``None`` is not declared in this scope.
 
 This type is referenced here:
-**syntax_grab_bag.md:61:3:61:7:**
+**syntax_grab_bag.md:60:2:60:6:**
 ```roc
-] # Comment after tag union close
+	None, # Another after tag union member
 ```
 
 
@@ -327,9 +327,9 @@ Variable ``num`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_num` to suppress this warning.
 The unused variable is declared here:
-**syntax_grab_bag.md:66:21:66:24:**
+**syntax_grab_bag.md:65:20:65:23:**
 ```roc
-
+add_one_oneline = |num| if num 2 else 5
 ```
 
 
@@ -341,9 +341,9 @@ Variable ``other`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_other` to suppress this warning.
 The unused variable is declared here:
-**syntax_grab_bag.md:70:3:70:8:**
+**syntax_grab_bag.md:69:2:69:7:**
 ```roc
-	if num {
+	other = 1
 ```
 
 
@@ -352,9 +352,9 @@ Variable ``num`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_num` to suppress this warning.
 The unused variable is declared here:
-**syntax_grab_bag.md:69:13:69:16:**
+**syntax_grab_bag.md:68:12:68:15:**
 ```roc
-	other = 1
+add_one = |num| {
 ```
 
 
@@ -366,9 +366,9 @@ Variable ``b`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
 The unused variable is declared here:
-**syntax_grab_bag.md:83:3:83:4:**
+**syntax_grab_bag.md:82:2:82:3:**
 ```roc
-| # After args
+	b,
 ```
 
 
@@ -377,9 +377,9 @@ Variable ``a`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_a` to suppress this warning.
 The unused variable is declared here:
-**syntax_grab_bag.md:82:3:82:4:**
+**syntax_grab_bag.md:81:2:81:3:**
 ```roc
-	b,
+	a, # After arg
 ```
 
 
@@ -390,9 +390,9 @@ This feature is not yet implemented: top-level expect
 The type ``String`` is not declared in this scope.
 
 This type is referenced here:
-**syntax_grab_bag.md:144:15:144:21:**
+**syntax_grab_bag.md:143:14:143:20:**
 ```roc
-main! = |_| { # Yeah I can leave a comment here
+main! : List(String) -> Result({}, _)
 ```
 
 
@@ -489,9 +489,9 @@ Variable ``multiline_tuple`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_multiline_tuple` to suppress this warning.
 The unused variable is declared here:
-**syntax_grab_bag.md:181:3:181:18:**
+**syntax_grab_bag.md:180:2:180:17:**
 ```roc
-		123,
+	multiline_tuple = (
 ```
 
 
@@ -500,9 +500,9 @@ Variable ``record`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_record` to suppress this warning.
 The unused variable is declared here:
-**syntax_grab_bag.md:179:3:179:9:**
+**syntax_grab_bag.md:178:2:178:8:**
 ```roc
-	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
+	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
 ```
 
 
@@ -511,9 +511,9 @@ Variable ``tag_with_payload`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_tag_with_payload` to suppress this warning.
 The unused variable is declared here:
-**syntax_grab_bag.md:165:3:165:19:**
+**syntax_grab_bag.md:164:2:164:18:**
 ```roc
-	interpolated = "Hello, ${world}"
+	tag_with_payload = Ok(number)
 ```
 
 
@@ -522,9 +522,9 @@ Variable ``list`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
 The unused variable is declared here:
-**syntax_grab_bag.md:167:3:167:7:**
+**syntax_grab_bag.md:166:2:166:6:**
 ```roc
-		add_one(
+	list = [
 ```
 
 
@@ -533,9 +533,9 @@ Variable ``bin_op_result`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_bin_op_result` to suppress this warning.
 The unused variable is declared here:
-**syntax_grab_bag.md:189:3:189:16:**
+**syntax_grab_bag.md:188:2:188:15:**
 ```roc
-	static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+	bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
 ```
 
 
@@ -544,9 +544,9 @@ Variable ``static_dispatch_style`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_static_dispatch_style` to suppress this warning.
 The unused variable is declared here:
-**syntax_grab_bag.md:190:3:190:24:**
+**syntax_grab_bag.md:189:2:189:23:**
 ```roc
-	Stdout.line!(interpolated)?
+	static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
 ```
 
 
@@ -555,9 +555,9 @@ Variable ``interpolated`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_interpolated` to suppress this warning.
 The unused variable is declared here:
-**syntax_grab_bag.md:166:3:166:15:**
+**syntax_grab_bag.md:165:2:165:14:**
 ```roc
-	list = [
+	interpolated = "Hello, ${world}"
 ```
 
 

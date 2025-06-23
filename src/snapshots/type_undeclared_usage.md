@@ -21,9 +21,9 @@ AnotherType : SomeModule.MissingType
 The type ``UnknownType`` is not declared in this scope.
 
 This type is referenced here:
-**type_undeclared_usage.md:4:11:4:22:**
+**type_undeclared_usage.md:3:10:3:21:**
 ```roc
-
+MyType : UnknownType
 ```
 
 
@@ -31,9 +31,9 @@ This type is referenced here:
 The type ``UndeclaredResult`` is not declared in this scope.
 
 This type is referenced here:
-**type_undeclared_usage.md:6:17:6:33:**
+**type_undeclared_usage.md:5:16:5:32:**
 ```roc
-processValue = |value| {
+processValue : UndeclaredResult -> Str
 ```
 
 
@@ -42,9 +42,9 @@ Variable ``value`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_value` to suppress this warning.
 The unused variable is declared here:
-**type_undeclared_usage.md:7:18:7:23:**
+**type_undeclared_usage.md:6:17:6:22:**
 ```roc
-    "processed"
+processValue = |value| {
 ```
 
 
