@@ -55,7 +55,7 @@ false = False
 ## gate. The operator `!` can also be used as shorthand for `Bool.not`.
 ## ```roc
 ## expect Bool.not(Bool.false) == Bool.true
-## expect !Bool.false == Bool.true
+## expect Bool.false != Bool.true
 ## ```
 not : Bool -> Bool
 not = |b| match b {
