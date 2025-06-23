@@ -1,3 +1,5 @@
+//! Capture the state of an type at a point in time for the purpose of error reporting.
+
 const std = @import("std");
 const base = @import("../../base.zig");
 const collections = @import("../../collections.zig");
@@ -8,7 +10,9 @@ const TypesStore = store_mod.Store;
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
 
+/// Index enum for SnapshotContentList
 pub const SnapshotContentIdx = SnapshotContentList.Idx;
+
 const SnapshotContentList = collections.SafeList(SnapshotContent);
 const SnapshotContentIdxSafeList = collections.SafeList(SnapshotContentIdx);
 const SnapshotRecordFieldSafeList = collections.SafeMultiList(SnapshotRecordField);
@@ -383,11 +387,13 @@ pub const SnapshotContent = union(enum) {
     err,
 };
 
+/// TODO
 pub const SnapshotAlias = struct {
     ident: types.TypeIdent,
     args: SnapshotContentIdxSafeList.Range, // Range into SnapshotStore.alias_args
 };
 
+/// TODO
 pub const SnapshotFlatType = union(enum) {
     str,
     box: SnapshotContentIdx, // Index into SnapshotStore.contents
@@ -402,10 +408,12 @@ pub const SnapshotFlatType = union(enum) {
     empty_tag_union,
 };
 
+/// TODO
 pub const SnapshotTuple = struct {
     elems: SnapshotContentIdxSafeList.Range, // Range into SnapshotStore.tuple_elems
 };
 
+/// TODO
 pub const SnapshotNum = union(enum) {
     num_poly: SnapshotContentIdx,
     int_poly: SnapshotContentIdx,
@@ -415,32 +423,38 @@ pub const SnapshotNum = union(enum) {
     num_compact: types.Num.Compact,
 };
 
+/// TODO
 pub const SnapshotCustomType = struct {
     ident: types.TypeIdent,
     args: SnapshotContentIdxSafeList.Range, // Range into SnapshotStore.custom_type_args
 };
 
+/// TODO
 pub const SnapshotFunc = struct {
     args: SnapshotContentIdxSafeList.Range, // Range into SnapshotStore.func_args
     ret: SnapshotContentIdx, // Index into SnapshotStore.contents
     eff: SnapshotContentIdx, // Index into SnapshotStore.contents
 };
 
+/// TODO
 pub const SnapshotRecord = struct {
     fields: SnapshotRecordFieldSafeList.Range, // Range into SnapshotStore.record_fields
     ext: SnapshotContentIdx, // Index into SnapshotStore.contents
 };
 
+/// TODO
 pub const SnapshotRecordField = struct {
     name: Ident.Idx,
     content: SnapshotContentIdx, // Instead of var_
 };
 
+/// TODO
 pub const SnapshotTagUnion = struct {
     tags: SnapshotTagSafeList.Range, // Range into SnapshotStore.tags
     ext: SnapshotContentIdx, // Index into SnapshotStore.contents
 };
 
+/// TODO
 pub const SnapshotTag = struct {
     name: Ident.Idx,
     args: SnapshotContentIdxSafeList.Range, // Range into SnapshotStore.tag_args

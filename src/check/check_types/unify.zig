@@ -112,6 +112,7 @@ pub fn unify(
     return unifyWithRegion(module_env, types, problems, snapshots, unify_scratch, occurs_scratch, a, b, null);
 }
 
+/// Unify two type variables with a region
 pub fn unifyWithRegion(
     module_env: *const base.ModuleEnv,
     types: *types_root_mod.Store,

@@ -61,6 +61,7 @@ pub fn unify(self: *Self, a: Var, b: Var) void {
     self.unifyWithRegion(a, b, null);
 }
 
+/// TODO
 pub fn unifyWithRegion(self: *Self, a: Var, b: Var, region: ?Region) void {
     _ = unifier.unifyWithRegion(
         self.can_ir.env,

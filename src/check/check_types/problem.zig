@@ -1,3 +1,5 @@
+//! Generate Reports for type checking errors
+
 const std = @import("std");
 const base = @import("../../base.zig");
 const collections = @import("../../collections.zig");
@@ -128,13 +130,13 @@ pub const Problem = union(enum) {
     }
 };
 
-// A single var problem
+/// A single var problem
 pub const VarProblem1 = struct {
     var_: Var,
     snapshot: SnapshotContentIdx,
 };
 
-// A two var problem
+/// A two var problem
 pub const VarProblem2 = struct {
     expected_var: Var,
     expected: SnapshotContentIdx,
