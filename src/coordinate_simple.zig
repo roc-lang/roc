@@ -4,6 +4,7 @@ const std = @import("std");
 const base = @import("base.zig");
 const parse = @import("check/parse.zig");
 const canonicalize = @import("check/canonicalize.zig");
+const Solver = @import("check/check_types.zig");
 const reporting = @import("reporting.zig");
 const Filesystem = @import("coordinate/Filesystem.zig");
 
@@ -124,6 +125,30 @@ fn processSourceInternal(
     const diagnostics = cir.getDiagnostics();
     for (diagnostics) |diagnostic| {
         const report = cir.diagnosticToReport(diagnostic, gpa, source, filename) catch continue;
+        reports.append(report) catch continue;
+    }
+
+    // Type checking
+    var solver = try Solver.init(gpa, &module_env.types, cir);
+    defer solver.deinit();
+
+    // Check for type errors
+    solver.checkDefs();
+
+    // Get type checking diagnostic Reports
+    var problem_buf = std.ArrayList(u8).init(gpa);
+    defer problem_buf.deinit();
+
+    var problems_itr = solver.problems.problems.iterIndices();
+    while (problems_itr.next()) |problem_idx| {
+        problem_buf.clearRetainingCapacity();
+        const problem = solver.problems.problems.get(problem_idx);
+        const report = problem.buildReport(
+            gpa,
+            &problem_buf,
+            &solver.snapshots,
+            &module_env.idents,
+        ) catch continue;
         reports.append(report) catch continue;
     }
 
