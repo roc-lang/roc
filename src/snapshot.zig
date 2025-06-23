@@ -105,17 +105,22 @@ pub fn main() !void {
     std.log.info("processed {d} snapshots in {d} ms.", .{ file_count, duration_ms });
 }
 
+/// Check if a file has a valid snapshot extension
+fn isSnapshotFile(filename: []const u8) bool {
+    return std.mem.endsWith(u8, filename, ".md");
+}
+
 fn processPath(gpa: Allocator, path: []const u8, maybe_fuzz_corpus_path: ?[]const u8) !usize {
     var processed_count: usize = 0;
 
     const canonical_path = std.fs.cwd().realpathAlloc(gpa, path) catch |err| {
-        log("failed to resolve path '{s}': {s}", .{ path, @errorName(err) });
+        std.log.err("failed to resolve path '{s}': {s}", .{ path, @errorName(err) });
         return 0;
     };
     defer gpa.free(canonical_path);
 
     const stat = std.fs.cwd().statFile(canonical_path) catch |err| {
-        log("failed to stat path '{s}': {s}", .{ canonical_path, @errorName(err) });
+        std.log.err("failed to stat path '{s}': {s}", .{ canonical_path, @errorName(err) });
         return 0;
     };
 
@@ -134,17 +139,24 @@ fn processPath(gpa: Allocator, path: []const u8, maybe_fuzz_corpus_path: ?[]cons
 
             if (entry.kind == .directory) {
                 processed_count += try processPath(gpa, full_path, maybe_fuzz_corpus_path);
-            } else if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".md")) {
+            } else if (entry.kind == .file and isSnapshotFile(entry.name)) {
                 if (try processSnapshotFile(gpa, full_path, maybe_fuzz_corpus_path)) {
                     processed_count += 1;
+                } else {
+                    log("skipped file (not a valid snapshot): {s}", .{full_path});
                 }
             }
         }
     } else if (stat.kind == .file) {
-        if (std.mem.endsWith(u8, canonical_path, ".md")) {
+        if (isSnapshotFile(canonical_path)) {
             if (try processSnapshotFile(gpa, canonical_path, maybe_fuzz_corpus_path)) {
                 processed_count += 1;
+            } else {
+                std.log.err("failed to process snapshot file: {s}", .{canonical_path});
+                std.log.err("make sure the file starts with '~~~META' and has valid snapshot format", .{});
             }
+        } else {
+            std.log.err("file '{s}' is not a snapshot file (must end with .md)", .{canonical_path});
         }
     }
 
@@ -390,7 +402,7 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
 
     const @"1Mb" = 1024 * 1024;
     const file_content = std.fs.cwd().readFileAlloc(gpa, snapshot_path, @"1Mb") catch |err| {
-        log("failed to read file '{s}': {s}", .{ snapshot_path, @errorName(err) });
+        std.log.err("failed to read file '{s}': {s}", .{ snapshot_path, @errorName(err) });
         return false;
     };
     defer gpa.free(file_content);
@@ -398,15 +410,32 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
     // Check our file starts with the metadata section
     // so we can skip parsing and later steps if this isn't a snapshot file
     if (!std.mem.startsWith(u8, file_content, Section.META)) {
-        log("ignoring non-snapshot file {s}", .{snapshot_path});
+        std.log.err("file '{s}' is not a valid snapshot file", .{snapshot_path});
+        std.log.err("snapshot files must start with '~~~META'", .{});
+        if (file_content.len > 0) {
+            const first_line_end = std.mem.indexOfScalar(u8, file_content, '\n') orelse @min(file_content.len, 50);
+            const first_line = file_content[0..first_line_end];
+            std.log.err("file starts with: '{s}'", .{first_line});
+        }
         return false;
     }
 
     // Parse the file to find section boundaries
     const content = extractSections(gpa, file_content) catch |err| {
         switch (err) {
-            Error.MissingSnapshotHeader, Error.MissingSnapshotSource, Error.BadSectionHeader => {
-                warn("ignoring file {s}: {s}", .{ snapshot_path, @errorName(err) });
+            Error.MissingSnapshotHeader => {
+                std.log.err("file '{s}' is missing the META section header", .{snapshot_path});
+                std.log.err("add a META section like: ~~~META\\ndescription=My test\\ntype=expr\\n", .{});
+                return false;
+            },
+            Error.MissingSnapshotSource => {
+                std.log.err("file '{s}' is missing the SOURCE section", .{snapshot_path});
+                std.log.err("add a SOURCE section like: ~~~SOURCE\\nyour_roc_code_here\\n", .{});
+                return false;
+            },
+            Error.BadSectionHeader => {
+                std.log.err("file '{s}' has an invalid section header", .{snapshot_path});
+                std.log.err("section headers must be like: ~~~META, ~~~SOURCE, etc.", .{});
                 return false;
             },
             else => return err,
