@@ -465,7 +465,7 @@ test "invalid number literal - too large for u128" {
                 // The report should contain the literal
                 var buf: [1024]u8 = undefined;
                 var stream = std.io.fixedBufferStream(&buf);
-                try report.render(stream.writer(), .plain_text);
+                try report.render(stream.writer(), .markdown);
                 const rendered = stream.getWritten();
 
                 try testing.expect(std.mem.indexOf(u8, rendered, "999999999") != null);
@@ -523,7 +523,7 @@ test "invalid number literal - negative too large for i128" {
                 // The report should contain the literal with minus sign
                 var buf: [1024]u8 = undefined;
                 var stream = std.io.fixedBufferStream(&buf);
-                try report.render(stream.writer(), .plain_text);
+                try report.render(stream.writer(), .markdown);
                 const rendered = stream.getWritten();
 
                 try testing.expect(std.mem.indexOf(u8, rendered, "-999999999") != null);

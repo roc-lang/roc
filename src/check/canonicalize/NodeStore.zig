@@ -185,7 +185,16 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             return .{
                 .list = .{
                     .elems = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
-                    .elem_var = @enumFromInt(0), // TODO: get from extra_data
+                    .elem_var = @enumFromInt(node.data_3),
+                    .region = node.region,
+                },
+            };
+        },
+        .expr_tuple => {
+            return .{
+                .tuple = .{
+                    .elems = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
+                    .tuple_var = @enumFromInt(node.data_3),
                     .region = node.region,
                 },
             };
@@ -278,7 +287,6 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .region = node.region,
             } };
         },
-        .expr_tuple,
         .expr_record,
         .expr_field_access,
         .expr_static_dispatch,
@@ -369,8 +377,15 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
             .list = .{
                 .region = node.region,
                 .patterns = DataSpan.init(node.data_1, node.data_2).as(CIR.Pattern.Span),
-                .elem_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
-                .list_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
+                .elem_var = @enumFromInt(0), // TODO need to store elem_var separately
+                .list_var = @enumFromInt(node.data_3),
+            },
+        },
+        .pattern_tuple => return CIR.Pattern{
+            .tuple = .{
+                .region = node.region,
+                .patterns = DataSpan.init(node.data_1, node.data_2).as(CIR.Pattern.Span),
+                .tuple_var = @enumFromInt(node.data_3),
             },
         },
         .pattern_num_literal => return CIR.Pattern{
@@ -583,9 +598,16 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
         .list => |e| {
             node.region = e.region;
             node.tag = .expr_list;
-            // TODO: Store list data properly. For now, just store placeholder values
             node.data_1 = e.elems.span.start;
             node.data_2 = e.elems.span.len;
+            node.data_3 = @intFromEnum(e.elem_var);
+        },
+        .tuple => |e| {
+            node.region = e.region;
+            node.tag = .expr_tuple;
+            node.data_1 = e.elems.span.start;
+            node.data_2 = e.elems.span.len;
+            node.data_3 = @intFromEnum(e.tuple_var);
         },
         .frac_f64 => |e| {
             node.region = e.region;
@@ -779,7 +801,14 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern) CIR.Pattern.Idx {
             node.region = p.region;
             node.data_1 = p.patterns.span.start;
             node.data_2 = p.patterns.span.len;
-            // TODO store type vars in extra data
+            node.data_3 = @intFromEnum(p.list_var);
+        },
+        .tuple => |p| {
+            node.tag = .pattern_tuple;
+            node.region = p.region;
+            node.data_1 = p.patterns.span.start;
+            node.data_2 = p.patterns.span.len;
+            node.data_3 = @intFromEnum(p.tuple_var);
         },
         .num_literal => |p| {
             node.tag = .pattern_num_literal;
@@ -908,7 +937,7 @@ pub fn addDef(store: *NodeStore, def: CIR.Def) CIR.Def.Idx {
 }
 
 /// Retrieves a definition from the store.
-pub fn getDef(store: *NodeStore, def_idx: CIR.Def.Idx) CIR.Def {
+pub fn getDef(store: *const NodeStore, def_idx: CIR.Def.Idx) CIR.Def {
     const nid: Node.Idx = @enumFromInt(@intFromEnum(def_idx));
     const node = store.nodes.get(nid);
 
@@ -1036,6 +1065,16 @@ pub fn defSpanFrom(store: *NodeStore, start: u32) CIR.Def.Span {
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+}
+
+/// Gets the current top index of the scratch patterns array.
+pub fn scratchPatternTop(store: *NodeStore) u32 {
+    return store.scratch_patterns.top();
+}
+
+/// Adds a pattern index to the scratch patterns array.
+pub fn addScratchPattern(store: *NodeStore, idx: CIR.Pattern.Idx) void {
+    store.scratch_patterns.append(store.gpa, idx);
 }
 
 /// Computes the span of a pattern starting from a given index.

@@ -6,14 +6,12 @@
 //! interned (and deduplicated) data instead of storing the values themselves.
 
 const std = @import("std");
-const type_mod = @import("../types.zig");
+const types_mod = @import("../types.zig");
 const collections = @import("../collections.zig");
 const Ident = @import("Ident.zig");
 const StringLiteral = @import("StringLiteral.zig");
 const RegionInfo = @import("RegionInfo.zig");
 const exitOnOom = collections.utils.exitOnOom;
-
-const Type = type_mod.Type;
 
 const Self = @This();
 
@@ -21,7 +19,7 @@ gpa: std.mem.Allocator,
 idents: Ident.Store = .{},
 ident_ids_for_slicing: collections.SafeList(Ident.Idx),
 strings: StringLiteral.Store,
-types_store: type_mod.Store,
+types: types_mod.Store,
 
 /// Line starts for error reporting. We retain only start and offset positions in the IR
 /// and then use these line starts to calculate the line number and column number as required.
@@ -37,7 +35,7 @@ pub fn init(gpa: std.mem.Allocator) Self {
         .idents = Ident.Store.initCapacity(gpa, 1024),
         .ident_ids_for_slicing = collections.SafeList(Ident.Idx).initCapacity(gpa, 256),
         .strings = StringLiteral.Store.initCapacityBytes(gpa, 4096),
-        .types_store = type_mod.Store.initCapacity(gpa, 2048, 512),
+        .types = types_mod.Store.initCapacity(gpa, 2048, 512),
         .line_starts = std.ArrayList(u32).init(gpa),
     };
 }
@@ -47,7 +45,7 @@ pub fn deinit(self: *Self) void {
     self.idents.deinit(self.gpa);
     self.ident_ids_for_slicing.deinit(self.gpa);
     self.strings.deinit(self.gpa);
-    self.types_store.deinit();
+    self.types.deinit();
     self.line_starts.deinit();
 }
 

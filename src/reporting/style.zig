@@ -365,7 +365,7 @@ test "Style composition" {
 }
 
 test "ColorUtils palette selection" {
-    const plain_config = ReportingConfig.initPlainText();
+    const plain_config = ReportingConfig.initMarkdown();
     const color_config = ReportingConfig.initColorTerminal();
     const contrast_config = ReportingConfig.initHighContrast();
 

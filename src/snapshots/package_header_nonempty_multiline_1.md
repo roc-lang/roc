@@ -1,0 +1,44 @@
+# META
+~~~ini
+description=package_header_nonempty_multiline (1)
+type=file
+~~~
+# SOURCE
+~~~roc
+package # This comment is here
+	[something, SomeType]
+	{ somePkg: "../main.roc" }
+~~~
+# PROBLEMS
+NIL
+# TOKENS
+~~~zig
+KwPackage(1:1-1:8),Newline(1:10-1:31),
+OpenSquare(2:2-2:3),LowerIdent(2:3-2:12),Comma(2:12-2:13),UpperIdent(2:14-2:22),CloseSquare(2:22-2:23),Newline(1:1-1:1),
+OpenCurly(3:2-3:3),LowerIdent(3:4-3:11),OpColon(3:11-3:12),StringStart(3:13-3:14),StringPart(3:14-3:25),StringEnd(3:25-3:26),CloseCurly(3:27-3:28),EndOfFile(3:28-3:28),
+~~~
+# PARSE
+~~~clojure
+(file (1:1-3:28)
+	(package (1:1-3:28)
+		(exposes (2:2-2:23)
+			(exposed_item (lower_ident "something"))
+			(exposed_item (upper_ident "SomeType")))
+		(packages (3:2-3:28)
+			(record_field (3:4-3:28)
+				"somePkg"
+				(string (3:13-3:26) (string_part (3:14-3:25) "../main.roc")))))
+	(statements))
+~~~
+# FORMATTED
+~~~roc
+NO CHANGE
+~~~
+# CANONICALIZE
+~~~clojure
+(can_ir "empty")
+~~~
+# TYPES
+~~~clojure
+(inferred_types (defs) (expressions))
+~~~

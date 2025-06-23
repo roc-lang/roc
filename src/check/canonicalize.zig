@@ -27,6 +27,7 @@ const ModuleEnv = base.ModuleEnv;
 const CalledVia = base.CalledVia;
 const exitOnOom = collections.utils.exitOnOom;
 
+const TypeVar = types.Var;
 const Content = types.Content;
 const FlatType = types.FlatType;
 const Num = types.Num;
@@ -108,6 +109,10 @@ fn addBuiltin(self: *Self, ir: *CIR, ident_text: []const u8, idx: CIR.Pattern.Id
     const pattern_idx_add = ir.store.addPattern(CIR.Pattern{ .assign = .{ .ident = ident_add, .region = Region.zero() } });
     _ = self.scopeIntroduceInternal(gpa, ident_store, .ident, ident_add, pattern_idx_add, false, true);
     std.debug.assert(idx == pattern_idx_add);
+
+    // TODO: Set correct type for builtins? But these types should ultimately
+    // come from the builtins roc files, so maybe the resolve stage will handle?
+    _ = ir.setTypeVarAtPat(pattern_idx_add, Content{ .flex_var = null });
 }
 
 const Self = @This();
@@ -388,7 +393,7 @@ fn canonicalize_decl(
     };
 
     // Create the def entry
-    return self.can_ir.store.addDef(.{
+    const def_idx = self.can_ir.store.addDef(.{
         .pattern = pattern_idx,
         .pattern_region = pattern_region,
         .expr = expr_idx,
@@ -396,6 +401,9 @@ fn canonicalize_decl(
         .annotation = null,
         .kind = .let,
     });
+    _ = self.can_ir.setTypeVarAtDef(def_idx, Content{ .flex_var = null });
+
+    return def_idx;
 }
 
 /// Canonicalize an expression.
@@ -554,7 +562,7 @@ pub fn canonicalize_expr(
             const requirements = types.Num.Int.Requirements.fromIntLiteral(u128_val, is_negated);
 
             // Create a polymorphic int type variable
-            const poly_var = self.can_ir.env.types_store.fresh();
+            const poly_var = self.can_ir.env.types.fresh();
             const int_type_var = self.can_ir.pushTypeVar(
                 Content{ .structure = .{ .num = .{ .int_poly = poly_var } } },
                 final_expr_idx,
@@ -724,7 +732,7 @@ pub fn canonicalize_expr(
                 std.debug.assert(@intFromEnum(expr_idx) == @intFromEnum(final_expr_idx));
 
                 // Insert concrete type variable
-                const tag_union = self.can_ir.env.types_store.mkTagUnion(
+                const tag_union = self.can_ir.env.types.mkTagUnion(
                     &[_]Tag{Tag{ .name = tag_name, .args = types.Var.SafeList.Range.empty }},
                     ext_type_var,
                 );
@@ -743,12 +751,49 @@ pub fn canonicalize_expr(
             } });
             return expr_idx;
         },
-        .tuple => |_| {
-            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize tuple expression");
-            const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
-                .feature = feature,
-                .region = Region.zero(),
-            } });
+        .tuple => |e| {
+            const region = self.tokenizedRegionToRegion(e.region);
+
+            // Mark the start of scratch expressions for the tuple
+            const scratch_top = self.can_ir.store.scratchExprTop();
+
+            // Iterate over the tuple items, canonicalizing each one
+            // Then append the result to the scratch list
+            const items_slice = self.parse_ir.store.exprSlice(e.items);
+            for (items_slice) |item| {
+                if (self.canonicalize_expr(item)) |canonicalized| {
+                    self.can_ir.store.addScratchExpr(canonicalized);
+                }
+            }
+
+            // Create span of the new scratch expressions
+            const elems_span = self.can_ir.store.exprSpanFrom(scratch_top);
+
+            // create type vars, first "reserve" node slots
+            const tuple_expr_idx = self.can_ir.store.predictNodeIndex(2);
+
+            // then insert the type vars, setting the parent to be the final slot
+            const tuple_type_var = self.can_ir.pushFreshTypeVar(
+                tuple_expr_idx,
+                region,
+            );
+
+            // then in the final slot the actual expr is inserted
+            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
+                .tuple = .{
+                    .elems = elems_span,
+                    .tuple_var = tuple_type_var,
+                    .region = region,
+                },
+            });
+
+            // Insert concrete type variable for tuple
+            // TODO: Implement proper tuple type structure when tuple types are available
+            _ = self.can_ir.setTypeVarAtExpr(
+                expr_idx,
+                Content{ .flex_var = null },
+            );
+
             return expr_idx;
         },
         .record => |_| {
@@ -809,6 +854,7 @@ pub fn canonicalize_expr(
                 },
             };
             const expr_idx = self.can_ir.store.addExpr(lambda_expr);
+            _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
             return expr_idx;
         },
         .record_updater => |_| {
@@ -978,9 +1024,10 @@ pub fn canonicalize_expr(
             }
 
             // Determine the final expression
-            const final_expr = if (last_expr) |expr_idx|
-                expr_idx
-            else blk: {
+            const final_expr = if (last_expr) |expr_idx| blk: {
+                _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
+                break :blk expr_idx;
+            } else blk: {
                 // Empty block - create empty record
                 const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
                     .empty_record = .{ .region = region },
@@ -1004,7 +1051,7 @@ pub fn canonicalize_expr(
 
             // TODO: Propagate type from final expression during type checking
             // For now, create a fresh type var for the block
-            _ = self.can_ir.pushFreshTypeVar(@enumFromInt(@intFromEnum(block_idx)), region);
+            _ = self.can_ir.setTypeVarAtExpr(block_idx, Content{ .flex_var = null });
 
             return block_idx;
         },
@@ -1286,7 +1333,7 @@ fn canonicalize_pattern(
                 std.debug.assert(@intFromEnum(pattern_idx) == @intFromEnum(final_pattern_idx));
 
                 // Set the concrete type variable
-                const tag_union_type = self.can_ir.env.types_store.mkTagUnion(
+                const tag_union_type = self.can_ir.env.types.mkTagUnion(
                     &[_]Tag{Tag{ .name = tag_name, .args = types.Var.SafeList.Range.empty }},
                     ext_type_var,
                 );
@@ -1304,12 +1351,49 @@ fn canonicalize_pattern(
             } });
             return pattern_idx;
         },
-        .tuple => |_| {
-            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize tuple pattern");
-            const pattern_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .not_implemented = .{
-                .feature = feature,
-                .region = Region.zero(),
-            } });
+        .tuple => |e| {
+            const region = self.tokenizedRegionToRegion(e.region);
+
+            // Mark the start of scratch patterns for the tuple
+            const scratch_top = self.can_ir.store.scratchPatternTop();
+
+            // Iterate over the tuple patterns, canonicalizing each one
+            // Then append the result to the scratch list
+            const patterns_slice = self.parse_ir.store.patternSlice(e.patterns);
+            for (patterns_slice) |pattern| {
+                if (self.canonicalize_pattern(pattern)) |canonicalized| {
+                    self.can_ir.store.addScratchPattern(canonicalized);
+                }
+            }
+
+            // Create span of the new scratch patterns
+            const patterns_span = self.can_ir.store.patternSpanFrom(scratch_top);
+
+            // create type vars, first "reserve" node slots
+            const tuple_pattern_idx = self.can_ir.store.predictNodeIndex(2);
+
+            // then insert the type vars, setting the parent to be the final slot
+            const tuple_type_var = self.can_ir.pushFreshTypeVar(
+                tuple_pattern_idx,
+                region,
+            );
+
+            // then in the final slot the actual pattern is inserted
+            const pattern_idx = self.can_ir.store.addPattern(CIR.Pattern{
+                .tuple = .{
+                    .patterns = patterns_span,
+                    .tuple_var = tuple_type_var,
+                    .region = region,
+                },
+            });
+
+            // Insert concrete type variable for tuple pattern
+            // TODO: Implement proper tuple type structure when tuple types are available
+            _ = self.can_ir.setTypeVarAtPat(
+                pattern_idx,
+                Content{ .flex_var = null },
+            );
+
             return pattern_idx;
         },
         .list => |_| {

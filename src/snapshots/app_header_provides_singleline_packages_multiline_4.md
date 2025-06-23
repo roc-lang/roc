@@ -1,0 +1,53 @@
+# META
+~~~ini
+description=app_header_provides_singleline_packages_multiline (4)
+type=file
+~~~
+# SOURCE
+~~~roc
+app [main!] {
+	somePkg: "../main.roc",
+	pf: platform "../main.roc"
+}
+~~~
+# PROBLEMS
+NIL
+# TOKENS
+~~~zig
+KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),Newline(1:1-1:1),
+LowerIdent(2:2-2:9),OpColon(2:9-2:10),StringStart(2:11-2:12),StringPart(2:12-2:23),StringEnd(2:23-2:24),Comma(2:24-2:25),Newline(1:1-1:1),
+LowerIdent(3:2-3:4),OpColon(3:4-3:5),KwPlatform(3:6-3:14),StringStart(3:15-3:16),StringPart(3:16-3:27),StringEnd(3:27-3:28),Newline(1:1-1:1),
+CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
+~~~
+# PARSE
+~~~clojure
+(file (1:1-4:2)
+	(app (1:1-4:2)
+		(provides (1:6-1:12) (exposed_item (lower_ident "main!")))
+		(record_field (1:1-1:1)
+			"pf"
+			(string (3:15-3:28) (string_part (3:16-3:27) "../main.roc")))
+		(packages (1:13-4:2)
+			(record_field (2:2-2:25)
+				"somePkg"
+				(string (2:11-2:24) (string_part (2:12-2:23) "../main.roc")))
+			(record_field (1:1-1:1)
+				"pf"
+				(string (3:15-3:28) (string_part (3:16-3:27) "../main.roc")))))
+	(statements))
+~~~
+# FORMATTED
+~~~roc
+app [main!] {
+	pf: platform "../main.roc",
+	somePkg: "../main.roc",
+}
+~~~
+# CANONICALIZE
+~~~clojure
+(can_ir "empty")
+~~~
+# TYPES
+~~~clojure
+(inferred_types (defs) (expressions))
+~~~

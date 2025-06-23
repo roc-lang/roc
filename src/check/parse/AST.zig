@@ -116,8 +116,7 @@ pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, a
         .NonPrintableUnicodeInStrLiteral => "Non-printable Unicode characters are not allowed in string literals.",
     };
 
-    const config = reporting.ReportingConfig.initForTesting();
-    var report = reporting.Report.init(allocator, title, .runtime_error, config);
+    var report = reporting.Report.init(allocator, title, .runtime_error);
     try report.document.addText(body);
     return report;
 }
@@ -165,8 +164,7 @@ pub fn parseDiagnosticToReport(self: *AST, diagnostic: Diagnostic, allocator: st
         else => "A parsing error occurred.",
     };
 
-    const config = reporting.ReportingConfig.initForTesting();
-    var report = reporting.Report.init(allocator, title, .runtime_error, config);
+    var report = reporting.Report.init(allocator, title, .runtime_error);
     try report.document.addText(body);
     return report;
 }

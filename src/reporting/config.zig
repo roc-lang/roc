@@ -17,8 +17,8 @@ pub const ColorPreference = enum {
 
 /// Render target preference
 pub const RenderTargetPreference = enum {
-    /// Plain text output
-    plain_text,
+    /// Markdown output
+    markdown,
     /// Colored terminal output
     color_terminal,
     /// HTML output
@@ -63,7 +63,7 @@ pub const ReportingConfig = struct {
         var config = ReportingConfig{
             .color_preference = .auto,
             .is_tty = false,
-            .render_target = .plain_text,
+            .render_target = .markdown,
             .max_line_width = 80,
             .show_line_numbers = true,
             .context_lines = 3,
@@ -114,24 +114,50 @@ pub const ReportingConfig = struct {
 
         // Set render target based on color preference and TTY status
         config.render_target = switch (config.color_preference) {
-            .never => .plain_text,
-            .auto => if (config.is_tty) .color_terminal else .plain_text,
+            .never => .markdown,
+            .auto => if (config.is_tty) .color_terminal else .markdown,
             .always, .high_contrast => .color_terminal,
         };
 
         return config;
     }
 
-    pub fn initPlainText() ReportingConfig {
+    pub fn initMarkdown() ReportingConfig {
         return ReportingConfig{
             .color_preference = .never,
             .is_tty = false,
-            .render_target = .plain_text,
+            .render_target = .markdown,
             .max_line_width = 80,
             .show_line_numbers = true,
             .context_lines = 3,
             .validate_utf8 = true,
             .max_message_bytes = 4096,
+        };
+    }
+
+    pub fn initHtml() ReportingConfig {
+        return ReportingConfig{
+            .color_preference = .never,
+            .is_tty = false,
+            .render_target = .html,
+            .max_line_width = 80,
+            .show_line_numbers = true,
+            .context_lines = 3,
+            .validate_utf8 = true,
+            .max_message_bytes = 4096,
+        };
+    }
+
+    pub fn initLsp() ReportingConfig {
+        return ReportingConfig{
+            .color_preference = .never,
+            .is_tty = false,
+            .render_target = .language_server,
+            .max_line_width = 120, // LSP clients often have wider displays
+            .show_line_numbers = true,
+            .context_lines = 2, // Fewer context lines for cleaner LSP output
+            .validate_utf8 = true,
+            .max_message_bytes = 8192, // LSP may need longer messages
         };
     }
 
@@ -165,7 +191,7 @@ pub const ReportingConfig = struct {
         return ReportingConfig{
             .color_preference = .never,
             .is_tty = false,
-            .render_target = .plain_text,
+            .render_target = .markdown,
             .max_line_width = 80,
             .show_line_numbers = false, // Simpler output for tests
             .context_lines = 1,
@@ -299,10 +325,10 @@ pub fn findUtf8CharEnd(input: []const u8, pos: usize) usize {
 const testing = std.testing;
 
 test "ReportingConfig initialization" {
-    const config = ReportingConfig.initPlainText();
+    const config = ReportingConfig.initMarkdown();
     try testing.expect(!config.shouldUseColors());
     try testing.expect(!config.is_tty);
-    try testing.expectEqual(RenderTargetPreference.plain_text, config.getRenderTarget());
+    try testing.expectEqual(RenderTargetPreference.markdown, config.getRenderTarget());
 }
 
 test "ReportingConfig color terminal" {
@@ -317,6 +343,23 @@ test "ReportingConfig high contrast" {
     try testing.expect(config.shouldUseColors());
     try testing.expect(config.isHighContrast());
     try testing.expectEqual(RenderTargetPreference.color_terminal, config.getRenderTarget());
+}
+
+test "ReportingConfig HTML" {
+    const config = ReportingConfig.initHtml();
+    try testing.expect(!config.shouldUseColors());
+    try testing.expect(!config.is_tty);
+    try testing.expectEqual(RenderTargetPreference.html, config.getRenderTarget());
+}
+
+test "ReportingConfig LSP" {
+    const config = ReportingConfig.initLsp();
+    try testing.expect(!config.shouldUseColors());
+    try testing.expect(!config.is_tty);
+    try testing.expectEqual(RenderTargetPreference.language_server, config.getRenderTarget());
+    try testing.expectEqual(@as(u32, 120), config.getMaxLineWidth());
+    try testing.expectEqual(@as(u32, 2), config.getContextLines());
+    try testing.expectEqual(@as(usize, 8192), config.getMaxMessageBytes());
 }
 
 test "UTF-8 validation" {

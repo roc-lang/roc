@@ -5,6 +5,7 @@ const std = @import("std");
 
 const base = @import("../base.zig");
 const collections = @import("../collections.zig");
+const sexpr = @import("../base/sexpr.zig");
 const types = @import("./types.zig");
 
 const exitOnOutOfMemory = collections.utils.exitOnOom;
@@ -117,37 +118,11 @@ pub const Store = struct {
         return self.freshFromContent(Content{ .flex_var = null });
     }
 
-    /// Create a new unbound, flexible type variable without a name at the given idx
-    ///
-    /// This function may allocate if the provided index is greater than the
-    /// current capacities of descs or slots.
-    ///
-    /// Used in canonicalization when creating type slots
-    pub fn freshAt(self: *Self, target_idx: u32) Allocator.Error!Var {
-        return self.freshFromContentAt(target_idx, Content{ .flex_var = null });
-    }
-
     /// Create a new variable with the provided desc
     /// Used in tests
     pub fn freshFromContent(self: *Self, content: Content) Var {
         const desc_idx = self.descs.insert(self.gpa, .{ .content = content, .rank = Rank.top_level, .mark = Mark.none });
         const slot_idx = self.slots.insert(self.gpa, .{ .root = desc_idx });
-        return Self.slotIdxToVar(slot_idx);
-    }
-
-    /// Create a new variable with the provided desc at the given index
-    ///
-    /// This function may allocate if the provided index is greater than the
-    /// current capacities of descs or slots.
-    ///
-    /// Used in canonicalization when creating type slots
-    pub fn freshFromContentAt(self: *Self, target_idx: u32, content: Content) Allocator.Error!Var {
-        try self.descs.backing.ensureTotalCapacity(self.gpa, target_idx);
-        const desc_idx = self.descs.insert(self.gpa, .{ .content = content, .rank = Rank.top_level, .mark = Mark.none });
-
-        try self.slots.backing.ensureTotalCapacity(self.gpa, target_idx);
-        const slot_idx = self.slots.insert(self.gpa, .{ .root = desc_idx });
-
         return Self.slotIdxToVar(slot_idx);
     }
 
@@ -165,14 +140,99 @@ pub const Store = struct {
         return Self.slotIdxToVar(slot_idx);
     }
 
+    // setting variables //
+
+    pub const SetVarError = error{VarNotInitialized};
+
+    /// Create a new unbound, flexible type variable without a name at the given idx
+    ///
+    /// This function may allocate if the provided index is greater than the
+    /// current capacities of descs or slots.
+    ///
+    /// Used in canonicalization when creating type slots
+    pub fn setVarFlex(self: *Self, target_var: Var) SetVarError!Var {
+        return self.setVarContent(target_var, Content{ .flex_var = null });
+    }
+
+    /// Create a new variable with the provided desc at the given index
+    ///
+    /// This function may allocate if the provided index is greater than the
+    /// current capacities of descs or slots.
+    ///
+    /// Used in canonicalization when creating type slots
+    pub fn setVarContent(self: *Self, target_var: Var, content: Content) void {
+        const resolved = self.resolveVar(target_var);
+
+        var desc = resolved.desc;
+        desc.content = content;
+        self.descs.set(resolved.desc_idx, desc);
+    }
+
+    /// Given a target variable, check that the var is in bounds
+    /// If it is, do nothing
+    /// If it's not, then fill in the types store with flex vars for all missing
+    /// intervening vars, *up to and including* the provided var
+    pub fn fillInSlotsThru(self: *Self, target_var: Var) Allocator.Error!void {
+        const idx = @intFromEnum(target_var);
+
+        if (idx > self.descs.backing.len) {
+            try self.descs.backing.ensureTotalCapacity(
+                self.gpa,
+                idx - self.descs.backing.len + 1,
+            );
+        }
+        if (idx > self.slots.backing.items.len) {
+            try self.slots.backing.ensureTotalCapacity(
+                self.gpa,
+                idx - self.slots.backing.items.len + 1,
+            );
+        }
+
+        while (self.slots.backing.items.len <= idx) {
+            const desc_idx = self.descs.insert(
+                self.gpa,
+                .{ .content = .{ .flex_var = null }, .rank = Rank.top_level, .mark = Mark.none },
+            );
+            _ = self.slots.insert(self.gpa, .{ .root = desc_idx });
+        }
+    }
+
     // make content types //
 
     /// Make a tag union data type
-    /// Does not insert content into the type store.
+    /// Does not insert content into the types store
     pub fn mkTagUnion(self: *Self, tags: []const Tag, ext_var: Var) Content {
         const tags_range = self.appendTags(tags);
         const tag_union = TagUnion{ .tags = tags_range, .ext = ext_var };
         return Content{ .structure = .{ .tag_union = tag_union } };
+    }
+
+    // Make a function data type
+    // Does not insert content into the types store.
+    pub fn mkFunc(self: *Self, args: []const Var, ret: Var, eff: Var) Content {
+        const args_range = self.appendFuncArgs(args);
+        return Content{ .structure = .{ .func = .{ .args = args_range, .ret = ret, .eff = eff } } };
+    }
+
+    // Make a function data type with flex effectfulness
+    // Does not insert content into the types store.
+    pub fn mkFuncFlex(self: *Self, args: []const Var, ret: Var) Content {
+        const eff_var = self.freshFromContent(.{ .flex_var = null });
+        return self.mkFunc(args, ret, eff_var);
+    }
+
+    // Make a pure function data type
+    // Does not insert content into the types store.
+    pub fn mkFuncPure(self: *Self, args: []const Var, ret: Var) Content {
+        const eff_var = self.freshFromContent(.pure);
+        return self.mkFunc(args, ret, eff_var);
+    }
+
+    // Make an effectful function data type
+    // Does not insert content into the types store.
+    pub fn mkFuncEff(self: *Self, args: []const Var, ret: Var) Content {
+        const eff_var = self.freshFromContent(.effectful);
+        return self.mkFunc(args, ret, eff_var);
     }
 
     // sub list setters //
@@ -427,6 +487,13 @@ const SlotStore = struct {
     fn insert(self: *Self, gpa: Allocator, typ: Slot) Idx {
         const idx: Idx = @enumFromInt(self.backing.items.len);
         self.backing.append(gpa, typ) catch |err| exitOnOutOfMemory(err);
+        return idx;
+    }
+
+    /// Insert a value into the store
+    fn appendAssumeCapacity(self: *Self, gpa: Allocator, typ: Desc) Idx {
+        const idx: Idx = @enumFromInt(self.backing.len);
+        self.backing.appendAssumeCapacity(gpa, typ) catch |err| exitOnOutOfMemory(err);
         return idx;
     }
 

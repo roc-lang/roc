@@ -38,11 +38,8 @@ test "SYNTAX_PROBLEM report along with all four render types" {
     var buffer = std.ArrayList(u8).init(gpa);
     defer buffer.deinit();
 
-    // Setup configuration
-    const reporting_config = ReportingConfig.initForTesting();
-
     // Create a Report
-    var r = Report.init(gpa, "SYNTAX PROBLEM", .runtime_error, reporting_config);
+    var r = Report.init(gpa, "SYNTAX PROBLEM", .runtime_error);
     defer r.deinit();
 
     // Add the document which describes the problem
@@ -50,13 +47,17 @@ test "SYNTAX_PROBLEM report along with all four render types" {
     try testing.expect(r.document.elementCount() > 0);
     try testing.expect(!r.document.isEmpty());
 
-    // Plain Text
-    try renderer.renderReportToPlainText(&r, buffer.writer());
+    // Markdown
+    try renderer.renderReportToMarkdown(&r, buffer.writer(), renderer.ReportingConfig.initMarkdown());
 
     const expected =
-        \\SYNTAX PROBLEM
-        \\Using more than one + like this requires parentheses, to clarify how things should be grouped.
-        \\example.roc:1-10:1: example.roc
+        \\**SYNTAX PROBLEM**
+        \\Using more than one `+` like this requires parentheses, to clarify how things should be grouped.
+        \\**example.roc:1-10:1:**
+        \\```roc
+        \\example.roc
+        \\```
+        \\
         \\
         \\
     ;
@@ -66,7 +67,7 @@ test "SYNTAX_PROBLEM report along with all four render types" {
     // HTML
     buffer.clearRetainingCapacity();
 
-    try renderer.renderReportToHtml(&r, buffer.writer());
+    try renderer.renderReportToHtml(&r, buffer.writer(), renderer.ReportingConfig.initHtml());
 
     const expected_html =
         \\<div class="report error">
@@ -83,7 +84,7 @@ test "SYNTAX_PROBLEM report along with all four render types" {
     // Language Server Protocol
     buffer.clearRetainingCapacity();
 
-    try renderer.renderReportToLsp(&r, buffer.writer());
+    try renderer.renderReportToLsp(&r, buffer.writer(), renderer.ReportingConfig.initLsp());
 
     const expected_lsp =
         \\SYNTAX PROBLEM
@@ -98,7 +99,7 @@ test "SYNTAX_PROBLEM report along with all four render types" {
     // Terminal (TTY)
     buffer.clearRetainingCapacity();
 
-    try renderer.renderReportToTerminal(&r, buffer.writer(), ColorPalette.ANSI);
+    try renderer.renderReportToTerminal(&r, buffer.writer(), ColorPalette.ANSI, renderer.ReportingConfig.initColorTerminal());
 
     // let's forget about comparing with ansi escape codes present... doesn't seem worth the effort.
     // we'll have to QA the old fashioned way.
