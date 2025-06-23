@@ -85,12 +85,9 @@ fn getIntValue(cir: *CIR, expr_idx: CIR.Expr.Idx) !struct { value: i128, require
 }
 
 fn calculateRequirements(value: i128) types.Num.Int.Requirements {
-    const sign_needed = value < 0;
-    const abs_value = if (sign_needed) -value else value;
+    const bits_needed = types.Num.Int.BitsNeeded.fromValue(@bitCast(value));
 
-    const bits_needed: types.Num.Int.BitsNeeded = if (abs_value <= 127) .@"7" else if (abs_value <= 255) .@"8" else if (abs_value <= 32767) .@"9_to_15" else if (abs_value <= 65535) .@"16" else if (abs_value <= 2147483647) .@"17_to_31" else if (abs_value <= 4294967295) .@"32" else if (abs_value <= 9223372036854775807) .@"33_to_63" else if (abs_value <= 18446744073709551615) .@"64" else if (abs_value <= 170141183460469231731687303715884105727) .@"65_to_127" else .@"128";
-
-    return .{ .sign_needed = sign_needed, .bits_needed = bits_needed };
+    return .{ .sign_needed = value < 0, .bits_needed = bits_needed };
 }
 
 test "canonicalize simple positive integer" {

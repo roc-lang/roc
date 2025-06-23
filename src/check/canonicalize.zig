@@ -1151,19 +1151,17 @@ fn canonicalize_pattern(
             };
 
             // Calculate requirements based on the value
-            const sign_needed = value < 0;
             const u128_val: u128 = if (value < 0) @as(u128, @intCast(-(value + 1))) + 1 else @as(u128, @intCast(value));
-            const bits_needed: types.Num.Int.BitsNeeded = if (u128_val <= 127) .@"7" else if (u128_val <= 255) .@"8" else if (u128_val <= 32767) .@"9_to_15" else if (u128_val <= 65535) .@"16" else if (u128_val <= 2147483647) .@"17_to_31" else if (u128_val <= 4294967295) .@"32" else if (u128_val <= 9223372036854775807) .@"33_to_63" else if (u128_val <= 18446744073709551615) .@"64" else if (u128_val <= 170141183460469231731687303715884105727) .@"65_to_127" else .@"128";
             const requirements = types.Num.Int.Requirements{
-                .sign_needed = sign_needed,
-                .bits_needed = bits_needed,
+                .sign_needed = sign_needed = value < 0,
+                .bits_needed = types.Num.Int.BitsNeeded.fromValue(u128_val),
             };
 
             // Create type vars, first "reserve" node slots
             const final_pattern_idx = self.can_ir.store.predictNodeIndex(2);
             const num_type_var = self.can_ir.pushFreshTypeVar(final_pattern_idx, region);
 
-            // then in the final slot the actual pattern is inserted
+            // Then in the final slot the actual pattern is inserted
             const int_pattern = CIR.Pattern{
                 .int_literal = .{
                     .num_var = num_type_var,
