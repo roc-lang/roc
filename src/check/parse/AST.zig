@@ -603,7 +603,11 @@ pub const Pattern = union(enum) {
         args: Pattern.Span,
         region: TokenizedRegion,
     },
-    number: struct {
+    int: struct {
+        number_tok: Token.Idx,
+        region: TokenizedRegion,
+    },
+    frac: struct {
         number_tok: Token.Idx,
         region: TokenizedRegion,
     },
@@ -647,7 +651,8 @@ pub const Pattern = union(enum) {
         return switch (self) {
             .ident => |p| p.region,
             .tag => |p| p.region,
-            .number => |p| p.region,
+            .int => |p| p.region,
+            .frac => |p| p.region,
             .string => |p| p.region,
             .record => |p| p.region,
             .list => |p| p.region,
@@ -685,8 +690,14 @@ pub const Pattern = union(enum) {
 
                 return node;
             },
-            .number => |num| {
-                var node = sexpr.Expr.init(env.gpa, "number");
+            .int => |num| {
+                var node = sexpr.Expr.init(env.gpa, "int");
+                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(num.region, env.line_starts.items));
+                node.appendString(env.gpa, ast.resolve(num.number_tok));
+                return node;
+            },
+            .frac => |num| {
+                var node = sexpr.Expr.init(env.gpa, "frac");
                 node.appendRegionInfo(env.gpa, ast.calcRegionInfo(num.region, env.line_starts.items));
                 node.appendString(env.gpa, ast.resolve(num.number_tok));
                 return node;

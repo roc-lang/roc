@@ -407,8 +407,13 @@ pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) AST.Pattern.Idx {
             node.data.lhs = t.args.span.start;
             node.data.rhs = t.args.span.len;
         },
-        .number => |n| {
-            node.tag = .number_patt;
+        .int => |n| {
+            node.tag = .int_patt;
+            node.region = n.region;
+            node.main_token = n.number_tok;
+        },
+        .frac => |n| {
+            node.tag = .frac_patt;
             node.region = n.region;
             node.main_token = n.number_tok;
         },
@@ -1119,8 +1124,14 @@ pub fn getPattern(store: *NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pattern {
                 .expr = @enumFromInt(node.data.lhs),
             } };
         },
-        .number_patt => {
-            return .{ .number = .{
+        .int_patt => {
+            return .{ .int = .{
+                .number_tok = node.main_token,
+                .region = node.region,
+            } };
+        },
+        .frac_patt => {
+            return .{ .frac = .{
                 .number_tok = node.main_token,
                 .region = node.region,
             } };
