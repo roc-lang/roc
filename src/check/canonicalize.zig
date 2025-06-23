@@ -483,8 +483,8 @@ pub fn canonicalize_expr(
             // The index the first *actual* digit (after minus sign, "0x" prefix, etc.) in the token
             var first_digit: usize = undefined;
 
-            // Default to base-10
-            var int_base: u8 = 10;
+            const DEFAULT_BASE: u8 = 10; // default to base-10, naturally
+            var int_base: u8 = undefined;
 
             // If this begins with "0x" or "0b" or "Oo" then it's not base-10.
             // We don't bother storing this info anywhere else besides token text,
@@ -505,10 +505,12 @@ pub fn canonicalize_expr(
                         first_digit = after_minus_sign + 2;
                     },
                     else => {
+                        int_base = DEFAULT_BASE;
                         first_digit = after_minus_sign;
                     },
                 }
             } else {
+                int_base = DEFAULT_BASE;
                 first_digit = after_minus_sign;
             }
 
