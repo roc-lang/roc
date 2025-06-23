@@ -353,21 +353,12 @@ fn bringIngestedFileIntoScope(
     }
 }
 
-fn tokenizedRegionToRegion(self: *Self, ast_region: AST.TokenizedRegion) base.Region {
-    const start_region = self.parse_ir.tokens.resolve(ast_region.start);
-    const end_region = self.parse_ir.tokens.resolve(ast_region.end);
-    return .{
-        .start = start_region.start,
-        .end = end_region.end,
-    };
-}
-
 fn canonicalize_decl(
     self: *Self,
     decl: AST.Statement.Decl,
 ) CIR.Def.Idx {
-    const pattern_region = self.tokenizedRegionToRegion(self.parse_ir.store.getPattern(decl.pattern).to_tokenized_region());
-    const expr_region = self.tokenizedRegionToRegion(self.parse_ir.store.getExpr(decl.body).to_tokenized_region());
+    const pattern_region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getPattern(decl.pattern).to_tokenized_region());
+    const expr_region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getExpr(decl.body).to_tokenized_region());
 
     const pattern_idx = blk: {
         if (self.canonicalize_pattern(decl.pattern)) |idx| {
@@ -439,7 +430,7 @@ pub fn canonicalize_expr(
                 .call = .{
                     .args = args_span,
                     .called_via = CalledVia.apply,
-                    .region = self.tokenizedRegionToRegion(e.region),
+                    .region = self.parse_ir.tokenizedRegionToRegion(e.region),
                 },
             });
 
@@ -449,7 +440,7 @@ pub fn canonicalize_expr(
             return expr_idx;
         },
         .ident => |e| {
-            const region = self.tokenizedRegionToRegion(e.region);
+            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
             if (self.parse_ir.tokens.resolveIdentifier(e.token)) |ident| {
                 switch (self.scopeLookup(&self.can_ir.env.idents, .ident, ident)) {
                     .found => |pattern_idx| {
@@ -479,7 +470,7 @@ pub fn canonicalize_expr(
             }
         },
         .int => |e| {
-            const region = self.tokenizedRegionToRegion(e.region);
+            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
             // resolve to a string slice from the source
             const token_text = self.parse_ir.resolve(e.token);
@@ -534,7 +525,7 @@ pub fn canonicalize_expr(
             return expr_idx;
         },
         .float => |e| {
-            const region = self.tokenizedRegionToRegion(e.region);
+            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
             // resolve to a string slice from the source
             const token_text = self.parse_ir.resolve(e.token);
@@ -598,7 +589,7 @@ pub fn canonicalize_expr(
 
             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .str = .{
                 .span = str_segments_span,
-                .region = self.tokenizedRegionToRegion(e.region),
+                .region = self.parse_ir.tokenizedRegionToRegion(e.region),
             } });
 
             // Insert concrete type variable
@@ -607,7 +598,7 @@ pub fn canonicalize_expr(
             return expr_idx;
         },
         .list => |e| {
-            const region = self.tokenizedRegionToRegion(e.region);
+            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
             // Mark the start of scratch expressions for the list
             const scratch_top = self.can_ir.store.scratchExprTop();
@@ -652,7 +643,7 @@ pub fn canonicalize_expr(
         },
         .tag => |e| {
             if (self.parse_ir.tokens.resolveIdentifier(e.token)) |tag_name| {
-                const region = self.tokenizedRegionToRegion(e.region);
+                const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
                 // create type vars, first "reserve" node slots
                 const final_expr_idx = self.can_ir.store.predictNodeIndex(2);
@@ -693,7 +684,7 @@ pub fn canonicalize_expr(
             return expr_idx;
         },
         .tuple => |e| {
-            const region = self.tokenizedRegionToRegion(e.region);
+            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
             // Mark the start of scratch expressions for the tuple
             const scratch_top = self.can_ir.store.scratchExprTop();
@@ -746,7 +737,7 @@ pub fn canonicalize_expr(
             return expr_idx;
         },
         .lambda => |e| {
-            const region = self.tokenizedRegionToRegion(e.region);
+            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
             // Enter function boundary
             self.enterFunction(region);
@@ -764,7 +755,7 @@ pub fn canonicalize_expr(
                     self.can_ir.store.scratch_patterns.append(gpa, pattern_idx);
                 } else {
                     const arg = self.parse_ir.store.getPattern(arg_pattern_idx);
-                    const arg_region = self.tokenizedRegionToRegion(arg.to_tokenized_region());
+                    const arg_region = self.parse_ir.tokenizedRegionToRegion(arg.to_tokenized_region());
                     const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .pattern_arg_invalid = .{
                         .region = arg_region,
                     } });
@@ -779,7 +770,7 @@ pub fn canonicalize_expr(
                     break :blk idx;
                 } else {
                     const ast_body = self.parse_ir.store.getExpr(e.body);
-                    const body_region = self.tokenizedRegionToRegion(ast_body.to_tokenized_region());
+                    const body_region = self.parse_ir.tokenizedRegionToRegion(ast_body.to_tokenized_region());
                     break :blk self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{
                         .lambda_body_not_canonicalized = .{ .region = body_region },
                     });
@@ -823,7 +814,7 @@ pub fn canonicalize_expr(
             return expr_idx;
         },
         .bin_op => |e| {
-            const region = self.tokenizedRegionToRegion(e.region);
+            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
             // Canonicalize left and right operands
             const lhs = blk: {
@@ -933,7 +924,7 @@ pub fn canonicalize_expr(
             return expr_idx;
         },
         .block => |e| {
-            const region = self.tokenizedRegionToRegion(e.region);
+            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
             // Blocks don't introduce function boundaries, but may contain var statements
             self.scopeEnter(self.can_ir.env.gpa, false); // false = not a function boundary
@@ -1022,7 +1013,7 @@ fn extractStringSegments(self: *Self, parts: []const AST.Expr.Idx) CIR.Expr.Span
                 // create a node for the string literal
                 const str_expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .str_segment = .{
                     .literal = string_idx,
-                    .region = self.tokenizedRegionToRegion(part_node.to_tokenized_region()),
+                    .region = self.parse_ir.tokenizedRegionToRegion(part_node.to_tokenized_region()),
                 } });
 
                 // add the node idx to our scratch expr stack
@@ -1036,7 +1027,7 @@ fn extractStringSegments(self: *Self, parts: []const AST.Expr.Idx) CIR.Expr.Span
                     self.can_ir.store.addScratchExpr(expr_idx);
                 } else {
                     // unable to canonicalize the interpolation, push a malformed node
-                    const region = self.tokenizedRegionToRegion(part_node.to_tokenized_region());
+                    const region = self.parse_ir.tokenizedRegionToRegion(part_node.to_tokenized_region());
                     const malformed_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .invalid_string_interpolation = .{
                         .region = region,
                     } });
@@ -1056,7 +1047,7 @@ fn canonicalize_pattern(
     const gpa = self.can_ir.env.gpa;
     switch (self.parse_ir.store.getPattern(ast_pattern_idx)) {
         .ident => |e| {
-            const region = self.tokenizedRegionToRegion(e.region);
+            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
             if (self.parse_ir.tokens.resolveIdentifier(e.ident_tok)) |ident_idx| {
                 // Push a Pattern node for our identifier
                 const assign_idx = self.can_ir.store.addPattern(CIR.Pattern{ .assign = .{
@@ -1103,7 +1094,7 @@ fn canonicalize_pattern(
         .underscore => |p| {
             const underscore_pattern = CIR.Pattern{
                 .underscore = .{
-                    .region = self.tokenizedRegionToRegion(p.region),
+                    .region = self.parse_ir.tokenizedRegionToRegion(p.region),
                 },
             };
 
@@ -1114,7 +1105,7 @@ fn canonicalize_pattern(
             return pattern_idx;
         },
         .number => |e| {
-            const region = self.tokenizedRegionToRegion(e.region);
+            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
             // resolve to a string slice from the source
             const token_text = self.parse_ir.resolve(e.number_tok);
@@ -1163,7 +1154,7 @@ fn canonicalize_pattern(
             return pattern_idx;
         },
         .string => |e| {
-            const region = self.tokenizedRegionToRegion(e.region);
+            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
             // resolve to a string slice from the source
             const token_text = self.parse_ir.resolve(e.string_tok);
@@ -1194,7 +1185,7 @@ fn canonicalize_pattern(
                         self.can_ir.store.scratch_patterns.append(gpa, idx);
                     } else {
                         const arg = self.parse_ir.store.getPattern(sub_ast_pattern_idx);
-                        const arg_region = self.tokenizedRegionToRegion(arg.to_tokenized_region());
+                        const arg_region = self.parse_ir.tokenizedRegionToRegion(arg.to_tokenized_region());
                         const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .pattern_arg_invalid = .{
                             .region = arg_region,
                         } });
@@ -1202,7 +1193,7 @@ fn canonicalize_pattern(
                     }
                 }
 
-                const region = self.tokenizedRegionToRegion(e.region);
+                const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
                 const args = self.can_ir.store.patternSpanFrom(start);
 
@@ -1245,7 +1236,7 @@ fn canonicalize_pattern(
             return pattern_idx;
         },
         .tuple => |e| {
-            const region = self.tokenizedRegionToRegion(e.region);
+            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
             // Mark the start of scratch patterns for the tuple
             const scratch_top = self.can_ir.store.scratchPatternTop();
@@ -1461,7 +1452,7 @@ fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) ?CIR.Expr.Id
             if (pattern == .ident) {
                 const ident_tok = pattern.ident.ident_tok;
                 if (self.parse_ir.tokens.resolveIdentifier(ident_tok)) |ident_idx| {
-                    const region = self.tokenizedRegionToRegion(self.parse_ir.store.getPattern(d.pattern).to_tokenized_region());
+                    const region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getPattern(d.pattern).to_tokenized_region());
 
                     // Check if this identifier exists and is a var
                     switch (self.scopeLookup(&self.can_ir.env.idents, .ident, ident_idx)) {
@@ -1517,7 +1508,7 @@ fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) ?CIR.Expr.Id
             const decl_stmt = CIR.Statement{ .decl = .{
                 .pattern = pattern_idx,
                 .expr = expr_idx,
-                .region = self.tokenizedRegionToRegion(d.region),
+                .region = self.parse_ir.tokenizedRegionToRegion(d.region),
             } };
             const decl_idx = self.can_ir.store.addStatement(decl_stmt);
             self.can_ir.store.addScratchStatement(decl_idx);
@@ -1527,7 +1518,7 @@ fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) ?CIR.Expr.Id
         .@"var" => |v| {
             // Var declaration - handle specially with function boundary tracking
             const var_name = self.parse_ir.tokens.resolveIdentifier(v.name) orelse return null;
-            const region = self.tokenizedRegionToRegion(v.region);
+            const region = self.parse_ir.tokenizedRegionToRegion(v.region);
 
             // Canonicalize the initial value
             const init_expr_idx = self.canonicalize_expr(v.body) orelse return null;
@@ -1556,7 +1547,7 @@ fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) ?CIR.Expr.Id
             // Create expression statement
             const expr_stmt = CIR.Statement{ .expr = .{
                 .expr = expr_idx,
-                .region = self.tokenizedRegionToRegion(e.region),
+                .region = self.parse_ir.tokenizedRegionToRegion(e.region),
             } };
             const expr_stmt_idx = self.can_ir.store.addStatement(expr_stmt);
             self.can_ir.store.addScratchStatement(expr_stmt_idx);
@@ -1565,7 +1556,7 @@ fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) ?CIR.Expr.Id
         },
         .crash => |c| {
             // Crash statement
-            const region = self.tokenizedRegionToRegion(c.region);
+            const region = self.parse_ir.tokenizedRegionToRegion(c.region);
             const msg_expr = self.canonicalize_expr(c.expr) orelse {
                 const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "crash message not canonicalized");
                 return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{

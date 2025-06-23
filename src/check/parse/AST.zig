@@ -122,9 +122,28 @@ pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, a
 }
 
 /// Convert TokenizedRegion to base.Region for error reporting
-fn tokenizedRegionToRegion(self: *AST, tokenized_region: TokenizedRegion) base.Region {
-    const start_region = self.tokens.resolve(@intCast(tokenized_region.start));
-    const end_region = self.tokens.resolve(@intCast(tokenized_region.end));
+pub fn tokenizedRegionToRegion(self: *AST, tokenized_region: TokenizedRegion) base.Region {
+    const token_count: u32 = @intCast(self.tokens.tokens.len);
+
+    // Ensure both start and end are within bounds
+    const safe_start_idx = if (tokenized_region.start >= token_count)
+        token_count - 1
+    else
+        tokenized_region.start;
+
+    const safe_end_idx = if (tokenized_region.end >= token_count)
+        token_count - 1
+    else
+        tokenized_region.end;
+
+    // Ensure end is at least start to prevent invalid regions
+    const final_end_idx = if (safe_end_idx < safe_start_idx)
+        safe_start_idx
+    else
+        safe_end_idx;
+
+    const start_region = self.tokens.resolve(safe_start_idx);
+    const end_region = self.tokens.resolve(final_end_idx);
     return .{
         .start = start_region.start,
         .end = end_region.end,
@@ -139,7 +158,13 @@ fn getTokenText(self: *AST, token_idx: Token.Idx) []const u8 {
 
 /// Convert a parse diagnostic to a Report for rendering
 pub fn parseDiagnosticToReport(self: *AST, diagnostic: Diagnostic, allocator: std.mem.Allocator, filename: []const u8) !reporting.Report {
-    const region = self.tokenizedRegionToRegion(diagnostic.region);
+    const raw_region = self.tokenizedRegionToRegion(diagnostic.region);
+
+    // Ensure region bounds are valid for source slicing
+    const region = base.Region{
+        .start = .{ .offset = @min(raw_region.start.offset, self.source.len) },
+        .end = .{ .offset = @min(@max(raw_region.end.offset, raw_region.start.offset), self.source.len) },
+    };
 
     const title = switch (diagnostic.tag) {
         .bad_indent => "BAD INDENTATION",

@@ -101,15 +101,13 @@ pub const Report = struct {
         };
 
         // Use proper source region API for consistent formatting
-        const start_line = region.start_line_idx + 1; // Convert to 1-based
-        const end_line = start_line; // Single line region
-
+        // addSourceRegion now expects 0-based coordinates and handles conversion internally
         try self.document.addSourceRegion(
             source,
-            start_line,
-            region.start_col_idx + 1, // Convert to 1-based
-            end_line,
-            region.end_col_idx + 1, // Convert to 1-based
+            region.start_line_idx,
+            region.start_col_idx,
+            region.end_line_idx,
+            region.end_col_idx,
             .error_highlight,
             filename,
         );

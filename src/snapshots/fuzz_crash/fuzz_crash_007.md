@@ -16,27 +16,27 @@ For example:
 or for an app:
         app [main!] { pf: platform "../basic-cli/platform.roc" }
 Here is the problematic code:
-**fuzz_crash_007.md:1-0:1:**
+**fuzz_crash_007.md:1:1:1:6:**
 ```roc
 ff8.8.d
 ```
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **<unknown>** is not expected in an expression.
+The token **.8.d** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 Here is the problematic code:
-**fuzz_crash_007.md:1-3:1:**
+**fuzz_crash_007.md:1:4:1:8:**
 ```roc
 ff8.8.d
 ```
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **<unknown>** is not expected in an expression.
+The token **.d** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 Here is the problematic code:
-**fuzz_crash_007.md:1-5:1:**
+**fuzz_crash_007.md:1:6:1:8:**
 ```roc
 ff8.8.d
 ```
@@ -57,9 +57,9 @@ LowerIdent(1:1-1:4),NoSpaceDotInt(1:4-1:6),NoSpaceDotLowerIdent(1:6-1:8),EndOfFi
 # PARSE
 ~~~clojure
 (file (1:1-1:8)
-	(malformed_header (1:1-1:4) "missing_header")
+	(malformed_header (1:1-1:6) "missing_header")
 	(statements
-		(malformed_expr (1:4-1:6) "expr_unexpected_token")
+		(malformed_expr (1:4-1:8) "expr_unexpected_token")
 		(malformed_expr (1:6-1:8) "expr_unexpected_token")))
 ~~~
 # FORMATTED

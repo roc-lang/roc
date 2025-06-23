@@ -19,7 +19,7 @@ For example:
 or for an app:
         app [main!] { pf: platform "../basic-cli/platform.roc" }
 Here is the problematic code:
-**fuzz_crash_008.md:1-0:1:**
+**fuzz_crash_008.md:1:1:1:4:**
 ```roc
 ||1
 ```
@@ -40,7 +40,7 @@ OpBar(1:1-1:2),OpBar(1:3-1:4),Int(1:4-1:5),EndOfFile(1:5-1:5),
 # PARSE
 ~~~clojure
 (file (1:1-1:5)
-	(malformed_header (1:1-1:2) "missing_header")
+	(malformed_header (1:1-1:4) "missing_header")
 	(statements (malformed_expr (1:5-1:5) "expected_expr_bar")))
 ~~~
 # FORMATTED

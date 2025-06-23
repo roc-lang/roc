@@ -18,37 +18,25 @@ For example:
 or for an app:
         app [main!] { pf: platform "../basic-cli/platform.roc" }
 Here is the problematic code:
-**fuzz_crash_014.md:1-0:1:**
+**fuzz_crash_014.md:1:1:1:5:**
 ```roc
 0b.0
 ```
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **<unknown>** is not expected in an expression.
+The token  is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
-Here is the problematic code:
-**fuzz_crash_014.md:1-2:1:**
-```roc
-0b.0
-```
-
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **<unknown>** is not expected in an expression.
+The token  is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
-Here is the problematic code:
-**fuzz_crash_014.md:2-0:2:**
-```roc
-0bu22
-```
-
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **<unknown>** is not expected in an expression.
+The token **0u22** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 Here is the problematic code:
-**fuzz_crash_014.md:3-0:3:**
+**fuzz_crash_014.md:3:1:3:5:**
 ```roc
 0u22
 ```
@@ -75,10 +63,10 @@ MalformedNumberBadSuffix(3:1-3:5),EndOfFile(3:5-3:5),
 # PARSE
 ~~~clojure
 (file (1:1-3:5)
-	(malformed_header (1:1-1:3) "missing_header")
+	(malformed_header (1:1-1:5) "missing_header")
 	(statements
-		(malformed_expr (1:3-1:5) "expr_unexpected_token")
-		(malformed_expr (2:1-2:6) "expr_unexpected_token")
+		(malformed_expr (1:1-1:1) "expr_unexpected_token")
+		(malformed_expr (1:1-1:1) "expr_unexpected_token")
 		(malformed_expr (3:1-3:5) "expr_unexpected_token")))
 ~~~
 # FORMATTED

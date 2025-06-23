@@ -17,7 +17,7 @@ For example:
 or for an app:
         app [main!] { pf: platform "../basic-cli/platform.roc" }
 Here is the problematic code:
-**fuzz_crash_018.md:1-0:1:**
+**fuzz_crash_018.md:1:1:1:4:**
 ```roc
 0 b:S
 ```
@@ -34,7 +34,7 @@ DotUpperIdent(2:1-2:3),EndOfFile(2:3-2:3),
 # PARSE
 ~~~clojure
 (file (1:1-2:3)
-	(malformed_header (1:1-1:2) "missing_header")
+	(malformed_header (1:1-1:4) "missing_header")
 	(statements
 		(type_anno (1:3-2:3)
 			"b"

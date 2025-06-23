@@ -16,31 +16,25 @@ For example:
 or for an app:
         app [main!] { pf: platform "../basic-cli/platform.roc" }
 Here is the problematic code:
-**fuzz_crash_012.md:1-0:1:**
+**fuzz_crash_012.md:1:1:1:3:**
 ```roc
 ||(|(l888888888|
 ```
 
 
 **UNEXPECTED TOKEN IN PATTERN**
-The token **<unknown>** is not expected in a pattern.
+The token **|(** is not expected in a pattern.
 Patterns can contain identifiers, literals, lists, records, or tags.
 Here is the problematic code:
-**fuzz_crash_012.md:1-3:1:**
+**fuzz_crash_012.md:1:4:1:6:**
 ```roc
 ||(|(l888888888|
 ```
 
 
 **UNEXPECTED TOKEN IN PATTERN**
-The token **(|(l888888888|** is not expected in a pattern.
+The token  is not expected in a pattern.
 Patterns can contain identifiers, literals, lists, records, or tags.
-Here is the problematic code:
-**fuzz_crash_012.md:1-2:1:**
-```roc
-||(|(l888888888|
-```
-
 
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_bar`
@@ -57,7 +51,7 @@ OpBar(1:1-1:2),OpBar(1:2-1:3),NoSpaceOpenRound(1:3-1:4),OpBar(1:4-1:5),NoSpaceOp
 # PARSE
 ~~~clojure
 (file (1:1-1:17)
-	(malformed_header (1:1-1:2) "missing_header")
+	(malformed_header (1:1-1:3) "missing_header")
 	(statements (malformed_expr (1:17-1:17) "expected_expr_bar")))
 ~~~
 # FORMATTED

@@ -16,7 +16,7 @@ For example:
 or for an app:
         app [main!] { pf: platform "../basic-cli/platform.roc" }
 Here is the problematic code:
-**fuzz_crash_005.md:1-0:1:**
+**fuzz_crash_005.md:1:1:1:5:**
 ```roc
 modu
 ```

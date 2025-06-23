@@ -201,10 +201,10 @@ pub const Diagnostic = union(enum) {
         try report.document.addLineBreak();
         try report.document.addSourceRegion(
             source,
-            new_region_info.start_line_idx + 1, // RegionInfo uses 0-based line numbers
-            new_region_info.start_col_idx + 1, // RegionInfo uses 0-based column numbers
-            new_region_info.end_line_idx + 1,
-            new_region_info.end_col_idx + 1,
+            new_region_info.start_line_idx,
+            new_region_info.start_col_idx,
+            new_region_info.end_line_idx,
+            new_region_info.end_col_idx,
             .error_highlight,
             filename,
         );
@@ -216,10 +216,10 @@ pub const Diagnostic = union(enum) {
         try report.document.addLineBreak();
         try report.document.addSourceRegion(
             source,
-            original_region_info.start_line_idx + 1, // RegionInfo uses 0-based line numbers
-            original_region_info.start_col_idx + 1, // RegionInfo uses 0-based column numbers
-            original_region_info.end_line_idx + 1,
-            original_region_info.end_col_idx + 1,
+            original_region_info.start_line_idx,
+            original_region_info.start_col_idx,
+            original_region_info.end_line_idx,
+            original_region_info.end_col_idx,
             .dimmed,
             filename,
         );

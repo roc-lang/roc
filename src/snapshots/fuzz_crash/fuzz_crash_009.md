@@ -27,7 +27,7 @@ For example:
 or for an app:
         app [main!] { pf: platform "../basic-cli/platform.roc" }
 Here is the problematic code:
-**fuzz_crash_009.md:1-0:1:**
+**fuzz_crash_009.md:1:1:1:3:**
 ```roc
 f{o,
 ```
@@ -49,7 +49,7 @@ StringStart(6:5-6:6),StringPart(6:6-6:12),EndOfFile(6:12-6:12),
 # PARSE
 ~~~clojure
 (file (1:1-6:12)
-	(malformed_header (1:1-1:2) "missing_header")
+	(malformed_header (1:1-1:3) "missing_header")
 	(statements
 		(record (1:2-2:7) (field "o"))
 		(decl (4:1-6:12)
