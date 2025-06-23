@@ -4,6 +4,7 @@ const std = @import("std");
 const base = @import("base.zig");
 const parse = @import("check/parse.zig");
 const canonicalize = @import("check/canonicalize.zig");
+const Solver = @import("check/check_types.zig");
 const reporting = @import("reporting.zig");
 const Filesystem = @import("coordinate/Filesystem.zig");
 
@@ -90,6 +91,9 @@ fn processSourceInternal(
     var module_env = ModuleEnv.init(gpa);
     defer module_env.deinit();
 
+    // Calculate line starts for region info
+    try module_env.calcLineStarts(source);
+
     // Parse the source code
     var parse_ast = parse.parse(&module_env, source);
     defer parse_ast.deinit(gpa);
@@ -127,6 +131,13 @@ fn processSourceInternal(
         reports.append(report) catch continue;
     }
 
+    // Type checking
+    var solver = try Solver.init(gpa, &module_env.types, cir);
+    defer solver.deinit();
+
+    // Check for type errors
+    solver.checkDefs();
+
     // Ensure ProcessResult owns the source
     // We have two cases:
     // 1. processFile already allocated the source memory - we take ownership to avoid a copy
@@ -136,6 +147,26 @@ fn processSourceInternal(
         source // Transfer existing ownership (no allocation)
     else
         try gpa.dupe(u8, source); // Clone to get our own copy
+
+    // Get type checking diagnostic Reports
+    var problem_buf = std.ArrayList(u8).init(gpa);
+    defer problem_buf.deinit();
+
+    var problems_itr = solver.problems.problems.iterIndices();
+    while (problems_itr.next()) |problem_idx| {
+        problem_buf.clearRetainingCapacity();
+        const problem = solver.problems.problems.get(problem_idx);
+        const report = problem.buildReport(
+            gpa,
+            &problem_buf,
+            &solver.snapshots,
+            &module_env.idents,
+            owned_source,
+            filename,
+            &module_env,
+        ) catch continue;
+        reports.append(report) catch continue;
+    }
 
     return ProcessResult{
         .cir = cir,

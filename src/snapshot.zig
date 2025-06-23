@@ -454,7 +454,7 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
     }
 
     // Types
-    var solver = try Solver.init(gpa, &can_ir.env.types_store, &can_ir);
+    var solver = try Solver.init(gpa, &can_ir.env.types, &can_ir);
     defer solver.deinit();
 
     if (maybe_expr_idx) |expr_idx| {
@@ -492,6 +492,7 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
         var tokenize_problems: usize = 0;
         var parser_problems: usize = 0;
         var canonicalize_problems: usize = 0;
+        var check_types_problem: usize = 0;
 
         // Use plain text rendering target
 
@@ -542,7 +543,33 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
             };
         }
 
-        const nil_problems = tokenize_problems == 0 and parser_problems == 0 and canonicalize_problems == 0;
+        // Check Types Problems
+
+        // Create TypeWriter for converting types to strings
+        var problem_buf = std.ArrayList(u8).init(gpa);
+        defer problem_buf.deinit();
+
+        var problems_itr = solver.problems.problems.iterIndices();
+        while (problems_itr.next()) |problem_idx| {
+            check_types_problem += 1;
+            const problem = solver.problems.problems.get(problem_idx);
+            var report: Report = try problem.buildReport(
+                gpa,
+                &problem_buf,
+                &solver.snapshots,
+                &module_env.idents,
+                content.source,
+                snapshot_path,
+                &module_env,
+            );
+            defer report.deinit();
+            report.render(writer.any(), .markdown) catch |err| {
+                try writer.print("Error rendering report: {}\n", .{err});
+                continue;
+            };
+        }
+
+        const nil_problems = tokenize_problems == 0 and parser_problems == 0 and canonicalize_problems == 0 and check_types_problem == 0;
 
         if (nil_problems) {
             try writer.writeAll("NIL\n");
@@ -551,6 +578,7 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
             log("reported {} token problems", .{tokenize_problems});
             log("reported {} parser problems", .{parser_problems});
             log("reported {} canonicalization problems", .{canonicalize_problems});
+            log("reported {} type problems", .{check_types_problem});
         }
 
         // Don't write out section end, as the problem reports are already in markdown format.
