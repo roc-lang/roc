@@ -110,7 +110,7 @@ fn processSourceInternal(
 
     // Get parser diagnostic Reports
     for (parse_ast.parse_diagnostics.items) |diagnostic| {
-        const report = parse_ast.parseDiagnosticToReport(diagnostic, gpa) catch continue;
+        const report = parse_ast.parseDiagnosticToReport(diagnostic, gpa, "<source>") catch continue;
         reports.append(report) catch continue;
     }
 
@@ -126,6 +126,7 @@ fn processSourceInternal(
 
     // Get diagnostic Reports from CIR
     const diagnostics = cir.getDiagnostics();
+    defer gpa.free(diagnostics);
     for (diagnostics) |diagnostic| {
         const report = cir.diagnosticToReport(diagnostic, gpa, source, filename) catch continue;
         reports.append(report) catch continue;

@@ -10,7 +10,16 @@ module []
 foo = if tru then 0
 ~~~
 # PROBLEMS
-PARSER: no_else
+**PARSE ERROR**
+A parsing error occurred: `no_else`
+This is an unexpected parsing error. Please check your syntax.
+Here is the problematic code:
+**expr_if_missing_else.md:3:19:3:20:**
+```roc
+foo = if tru then 0
+```
+
+
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
 Check the spelling and make sure you're using a valid Roc operator.

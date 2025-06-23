@@ -13,11 +13,26 @@ foo =
     "onmo %
 ~~~
 # PROBLEMS
-TOKENIZE: (2:6-2:6) MismatchedBrace:
-     ]
-     ^TOKENIZE: (6:6-6:12) UnclosedString:
-    "onmo %
-     ^^^^^^PARSER: missing_header
+**MISMATCHED BRACE**
+This brace does not match the corresponding opening brace.
+
+**UNCLOSED STRING**
+This string is missing a closing quote.
+
+**MISSING HEADER**
+Roc files must start with a module header.
+
+For example:
+        module [main]
+or for an app:
+        app [main!] { pf: platform "../basic-cli/platform.roc" }
+Here is the problematic code:
+**fuzz_crash_009.md:1:1:1:3:**
+```roc
+f{o,
+```
+
+
 **INVALID STATEMENT**
 The statement **expr** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
@@ -34,7 +49,7 @@ StringStart(6:5-6:6),StringPart(6:6-6:12),EndOfFile(6:12-6:12),
 # PARSE
 ~~~clojure
 (file (1:1-6:12)
-	(malformed_header (1:1-1:2) "missing_header")
+	(malformed_header (1:1-1:3) "missing_header")
 	(statements
 		(record (1:2-2:7) (field "o"))
 		(decl (4:1-6:12)

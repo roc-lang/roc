@@ -9,7 +9,20 @@ type=file
 .R
 ~~~
 # PROBLEMS
-PARSER: missing_header
+**MISSING HEADER**
+Roc files must start with a module header.
+
+For example:
+        module [main]
+or for an app:
+        app [main!] { pf: platform "../basic-cli/platform.roc" }
+Here is the problematic code:
+**fuzz_crash_018.md:1:1:1:4:**
+```roc
+0 b:S
+```
+
+
 **NOT IMPLEMENTED**
 This feature is not yet implemented: top-level type_anno
 
@@ -21,7 +34,7 @@ DotUpperIdent(2:1-2:3),EndOfFile(2:3-2:3),
 # PARSE
 ~~~clojure
 (file (1:1-2:3)
-	(malformed_header (1:1-1:2) "missing_header")
+	(malformed_header (1:1-1:4) "missing_header")
 	(statements
 		(type_anno (1:3-2:3)
 			"b"

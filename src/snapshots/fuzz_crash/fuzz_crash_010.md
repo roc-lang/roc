@@ -12,13 +12,29 @@ foo =
     "on        (string 'onmo %')))
 ~~~
 # PROBLEMS
-TOKENIZE: (2:3-2:3) AsciiControl:
-    ]
-  ^TOKENIZE: (2:6-2:6) MismatchedBrace:
-    ]
-     ^TOKENIZE: (5:6-5:35) UnclosedString:
-    "on        (string 'onmo %')))
-     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^PARSER: missing_header
+**ASCII CONTROL CHARACTER**
+ASCII control characters are not allowed in Roc source code.
+
+**MISMATCHED BRACE**
+This brace does not match the corresponding opening brace.
+
+**UNCLOSED STRING**
+This string is missing a closing quote.
+
+**MISSING HEADER**
+Roc files must start with a module header.
+
+For example:
+        module [main]
+or for an app:
+        app [main!] { pf: platform "../basic-cli/platform.roc" }
+Here is the problematic code:
+**fuzz_crash_010.md:1:1:1:3:**
+```roc
+H{o,
+```
+
+
 **INVALID STATEMENT**
 The statement **expr** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
@@ -34,7 +50,7 @@ StringStart(5:5-5:6),StringPart(5:6-5:35),EndOfFile(5:35-5:35),
 # PARSE
 ~~~clojure
 (file (1:1-5:35)
-	(malformed_header (1:1-1:2) "missing_header")
+	(malformed_header (1:1-1:3) "missing_header")
 	(statements
 		(record (1:2-2:7) (field "o"))
 		(decl (3:1-5:35)

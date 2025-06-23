@@ -11,11 +11,31 @@ type=file
 0_
 ~~~
 # PROBLEMS
-TOKENIZE: (2:3-2:3) LeadingZero:
-0_0
-  ^PARSER: missing_header
-PARSER: expr_unexpected_token
-PARSER: expr_no_space_dot_int
+**LEADING ZERO**
+Numbers cannot have leading zeros.
+
+**MISSING HEADER**
+Roc files must start with a module header.
+
+For example:
+        module [main]
+or for an app:
+        app [main!] { pf: platform "../basic-cli/platform.roc" }
+Here is the problematic code:
+**fuzz_crash_015.md:1:1:1:6:**
+```roc
+0o0.0
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token  is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**PARSE ERROR**
+A parsing error occurred: `expr_no_space_dot_int`
+This is an unexpected parsing error. Please check your syntax.
+
 **INVALID STATEMENT**
 The statement **expr** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
@@ -42,11 +62,11 @@ Int(4:1-4:3),EndOfFile(4:3-4:3),
 # PARSE
 ~~~clojure
 (file (1:1-4:3)
-	(malformed_header (1:1-1:4) "missing_header")
+	(malformed_header (1:1-1:6) "missing_header")
 	(statements
-		(malformed_expr (1:4-1:6) "expr_unexpected_token")
+		(malformed_expr (1:1-1:1) "expr_unexpected_token")
 		(int (2:1-2:4) "0_0")
-		(malformed_expr (3:4-3:6) "expr_no_space_dot_int")
+		(malformed_expr (1:1-1:1) "expr_no_space_dot_int")
 		(int (4:1-4:3) "0_")))
 ~~~
 # FORMATTED

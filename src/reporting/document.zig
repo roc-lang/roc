@@ -416,6 +416,7 @@ pub const Document = struct {
     }
 
     /// Add a source code region with highlighting.
+    /// Accepts 0-based line and column coordinates, converts to 1-based for display.
     pub fn addSourceRegion(
         self: *Document,
         source: []const u8,
@@ -426,13 +427,19 @@ pub const Document = struct {
         annotation: Annotation,
         filename: ?[]const u8,
     ) !void {
+        // Validate coordinates to catch programming errors early
+        std.debug.assert(end_line >= start_line);
+        if (start_line == end_line) {
+            std.debug.assert(end_column >= start_column);
+        }
+
         try self.elements.append(.{
             .source_code_region = .{
                 .source = source,
-                .start_line = start_line,
-                .start_column = start_column,
-                .end_line = end_line,
-                .end_column = end_column,
+                .start_line = start_line + 1,
+                .start_column = start_column + 1,
+                .end_line = end_line + 1,
+                .end_column = end_column + 1,
                 .region_annotation = annotation,
                 .filename = filename,
             },
