@@ -51,7 +51,8 @@ def print_line_and_continue(frame, bp_loc, internal_dict):
             # Check if we've entered a new function
             if CURRENT_FUNCTION_NAME != function_name:
                 # Split on '::' and take the second part if it exists
-                fun_display_name = function_name.split('::')[1] if '::' in function_name and len(function_name.split('::')) > 1 else function_name
+                fun_display_name_list = function_name.split('::')[1:-1] if '::' in function_name and len(function_name.split('::')) > 3 else function_name
+                fun_display_name = "::".join(fun_display_name_list)
                 print(f"=> function: {fun_display_name}")
                 CURRENT_FUNCTION_NAME = function_name
             
