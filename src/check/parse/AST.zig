@@ -589,6 +589,14 @@ pub fn toSExprStr(ast: *@This(), env: *base.ModuleEnv, writer: std.io.AnyWriter)
     node.toStringPretty(writer);
 }
 
+/// The kind of the type declaration represented, either:
+/// 1. An alias of the form `Foo = (Bar, Baz)`
+/// 2. A nominal type of the form `Foo := [Bar, Baz]`
+pub const TypeDeclKind = enum {
+    alias,
+    nominal,
+};
+
 /// Represents a statement.  Not all statements are valid in all positions.
 pub const Statement = union(enum) {
     decl: Decl,
@@ -630,6 +638,7 @@ pub const Statement = union(enum) {
         header: TypeHeader.Idx,
         anno: TypeAnno.Idx,
         where: ?Collection.Idx,
+        kind: TypeDeclKind,
         region: TokenizedRegion,
     },
     type_anno: struct {
