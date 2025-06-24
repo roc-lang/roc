@@ -99,6 +99,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
         .int => |_| {},
         .frac_f64 => |_| {},
         .frac_dec => |_| {},
+        .dec_small => |_| {},
         .str_segment => |_| {},
         .str => |_| {},
         .single_quote => |_| {},

@@ -23,10 +23,12 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e_frac_dec (1:1-1:5)
-	(frac_var 14)
+(e_dec_small (1:1-1:5)
+	(num_var 14)
 	(requirements (fits_in_f32 "true") (fits_in_dec "true"))
-	(value "-2.5"))
+	(before_decimal "-2")
+	(after_decimal "5")
+	(after_decimal_digits "1"))
 ~~~
 # TYPES
 ~~~clojure

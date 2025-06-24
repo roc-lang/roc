@@ -38,10 +38,12 @@ NO CHANGE
 				(pid 12)
 				(ident "foo")))
 		(def_expr
-			(e_frac_dec (2:7-2:12)
-				(frac_var 15)
+			(e_dec_small (2:7-2:12)
+				(num_var 15)
 				(requirements (fits_in_f32 "false") (fits_in_dec "true"))
-				(value "12.34")))))
+				(before_decimal "12")
+				(after_decimal "34")
+				(after_decimal_digits "2")))))
 ~~~
 # TYPES
 ~~~clojure

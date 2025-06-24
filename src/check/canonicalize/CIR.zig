@@ -605,6 +605,14 @@ pub const Expr = union(enum) {
         value: RocDec,
         region: Region,
     },
+    dec_small: struct {
+        num_var: TypeVar,
+        requirements: types.Num.Frac.Requirements,
+        before_decimal: i8,
+        after_decimal: u8,
+        after_decimal_digits: u8, // Number of digits after decimal point (to handle 0.1 vs 0.10)
+        region: Region,
+    },
     // A single segment of a string literal
     // a single string may be made up of a span sequential segments
     // for example if it was split across multiple lines
@@ -755,6 +763,7 @@ pub const Expr = union(enum) {
             .int => |e| return e.region,
             .frac_f64 => |e| return e.region,
             .frac_dec => |e| return e.region,
+            .dec_small => |e| return e.region,
             .str_segment => |e| return e.region,
             .str => |e| return e.region,
             .single_quote => |e| return e.region,
@@ -887,7 +896,49 @@ pub const Expr = union(enum) {
                 value_node.appendString(gpa, value_str);
                 frac_node.appendNode(gpa, &value_node);
 
-                return frac_node;
+                return dec_node;
+            },
+            .dec_small => |small_expr| {
+                var small_node = sexpr.Expr.init(gpa, "e_dec_small");
+                small_node.appendRegionInfo(gpa, ir.calcRegionInfo(small_expr.region));
+
+                // Add num_var
+                var num_var_node = sexpr.Expr.init(gpa, "num_var");
+                num_var_node.appendUnsignedInt(gpa, @intFromEnum(small_expr.num_var));
+                small_node.appendNode(gpa, &num_var_node);
+
+                // Add requirements
+                var req_node = sexpr.Expr.init(gpa, "requirements");
+                var f32_node = sexpr.Expr.init(gpa, "fits_in_f32");
+                f32_node.appendString(gpa, if (small_expr.requirements.fits_in_f32) "true" else "false");
+                req_node.appendNode(gpa, &f32_node);
+                var dec_node = sexpr.Expr.init(gpa, "fits_in_dec");
+                dec_node.appendString(gpa, if (small_expr.requirements.fits_in_dec) "true" else "false");
+                req_node.appendNode(gpa, &dec_node);
+                small_node.appendNode(gpa, &req_node);
+
+                // Add before_decimal
+                var before_node = sexpr.Expr.init(gpa, "before_decimal");
+                var before_buf: [8]u8 = undefined;
+                const before_str = std.fmt.bufPrint(&before_buf, "{}", .{small_expr.before_decimal}) catch "fmt_error";
+                before_node.appendString(gpa, before_str);
+                small_node.appendNode(gpa, &before_node);
+
+                // Add after_decimal
+                var after_node = sexpr.Expr.init(gpa, "after_decimal");
+                var after_buf: [8]u8 = undefined;
+                const after_str = std.fmt.bufPrint(&after_buf, "{}", .{small_expr.after_decimal}) catch "fmt_error";
+                after_node.appendString(gpa, after_str);
+                small_node.appendNode(gpa, &after_node);
+
+                // Add after_decimal_digits
+                var digits_node = sexpr.Expr.init(gpa, "after_decimal_digits");
+                var digits_buf: [8]u8 = undefined;
+                const digits_str = std.fmt.bufPrint(&digits_buf, "{}", .{small_expr.after_decimal_digits}) catch "fmt_error";
+                digits_node.appendString(gpa, digits_str);
+                small_node.appendNode(gpa, &digits_node);
+
+                return small_node;
             },
             .str_segment => |e| {
                 var str_node = sexpr.Expr.init(gpa, "e_literal");
@@ -1573,6 +1624,14 @@ pub const Pattern = union(enum) {
         value: f64,
         region: Region,
     },
+    small_dec_literal: struct {
+        num_var: TypeVar,
+        requirements: types.Num.Frac.Requirements,
+        before_decimal: i8,
+        after_decimal: u8,
+        after_decimal_digits: u8,
+        region: Region,
+    },
     str_literal: struct {
         literal: StringLiteral.Idx,
         region: Region,
@@ -1607,6 +1666,7 @@ pub const Pattern = union(enum) {
             .int_literal => |p| return p.region,
             .dec_literal => |p| return p.region,
             .f64_literal => |p| return p.region,
+            .small_dec_literal => |p| return p.region,
             .str_literal => |p| return p.region,
             .char_literal => |p| return p.region,
             .underscore => |p| return p.region,
@@ -1760,6 +1820,36 @@ pub const Pattern = union(enum) {
                 defer gpa.free(val_str);
 
                 node.appendString(gpa, val_str);
+
+                return node;
+            },
+            .small_dec_literal => |p| {
+                var node = sexpr.Expr.init(gpa, "p_small_dec");
+                node.appendRegionInfo(gpa, ir.calcRegionInfo(p.region));
+
+                var pattern_idx_node = formatPatternIdxNode(gpa, pattern_idx);
+                node.appendNode(gpa, &pattern_idx_node);
+
+                // Add before_decimal
+                var before_node = sexpr.Expr.init(gpa, "before_decimal");
+                var before_buf: [8]u8 = undefined;
+                const before_str = std.fmt.bufPrint(&before_buf, "{}", .{p.before_decimal}) catch "fmt_error";
+                before_node.appendString(gpa, before_str);
+                node.appendNode(gpa, &before_node);
+
+                // Add after_decimal
+                var after_node = sexpr.Expr.init(gpa, "after_decimal");
+                var after_buf: [8]u8 = undefined;
+                const after_str = std.fmt.bufPrint(&after_buf, "{}", .{p.after_decimal}) catch "fmt_error";
+                after_node.appendString(gpa, after_str);
+                node.appendNode(gpa, &after_node);
+
+                // Add after_decimal_digits
+                var digits_node = sexpr.Expr.init(gpa, "after_decimal_digits");
+                var digits_buf: [8]u8 = undefined;
+                const digits_str = std.fmt.bufPrint(&digits_buf, "{}", .{p.after_decimal_digits}) catch "fmt_error";
+                digits_node.appendString(gpa, digits_str);
+                node.appendNode(gpa, &digits_node);
 
                 return node;
             },
