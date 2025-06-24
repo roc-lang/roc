@@ -387,6 +387,61 @@ pub fn SafeMultiList(comptime T: type) type {
                 .current = 0,
             };
         }
+
+        pub fn serializedSize(self: *const SafeMultiList(T)) usize {
+            // Header: 4 bytes for count
+            // Data: items.len * @sizeOf(T)
+            return @sizeOf(u32) + (self.items.len * @sizeOf(T));
+        }
+
+        /// Serialize this list into the provided buffer
+        /// Returns the slice of buffer that was written to
+        pub fn serializeInto(self: *const SafeMultiList(T), buffer: []align(@alignOf(T)) u8) ![]align(@alignOf(T)) const u8 {
+            const size = self.serializedSize();
+            if (buffer.len < size) return error.BufferTooSmall;
+
+            // Write count
+            const count_ptr = @as(*u32, @ptrCast(@alignCast(buffer.ptr)));
+            count_ptr.* = @intCast(self.items.len);
+
+            // If T is a POD type, serialize each item
+            if (@typeInfo(T) == .@"struct" or @typeInfo(T) == .int or @typeInfo(T) == .float) {
+                const data_ptr = @as([*]T, @ptrCast(@alignCast(buffer.ptr + @sizeOf(u32))));
+                // Copy each item from the MultiArrayList to contiguous memory
+                for (0..self.items.len) |i| {
+                    data_ptr[i] = self.items.get(i);
+                }
+            } else {
+                @compileError("Cannot serialize non-POD type " ++ @typeName(T));
+            }
+
+            return buffer[0..size];
+        }
+
+        /// Deserialize from buffer, using provided allocator
+        pub fn deserializeFrom(buffer: []align(@alignOf(T)) const u8, allocator: Allocator) !SafeMultiList(T) {
+            if (buffer.len < @sizeOf(u32)) return error.BufferTooSmall;
+
+            // Read count
+            const count = @as(*const u32, @ptrCast(@alignCast(buffer.ptr))).*;
+
+            const expected_size = @sizeOf(u32) + (count * @sizeOf(T));
+            if (buffer.len < expected_size) return error.BufferTooSmall;
+
+            // Create list with exact capacity
+            var list = SafeMultiList(T).initCapacity(allocator, count);
+
+            // Copy data
+            if (count > 0) {
+                const data_ptr = @as([*]const T, @ptrCast(@alignCast(buffer.ptr + @sizeOf(u32))));
+                // Add each item to the MultiArrayList
+                for (0..count) |i| {
+                    _ = list.append(allocator, data_ptr[i]);
+                }
+            }
+
+            return list;
+        }
     };
 }
 
@@ -696,4 +751,330 @@ test "SafeList(struct) serialization" {
     const p1 = deserialized.get(@enumFromInt(1));
     try testing.expectEqual(@as(i32, 30), p1.x);
     try testing.expectEqual(@as(i32, 40), p1.y);
+}
+
+test "SafeMultiList(struct) serialization empty list" {
+    const gpa = testing.allocator;
+
+    const Point = struct { x: i32, y: i32 };
+    var list = SafeMultiList(Point){};
+    defer list.deinit(gpa);
+
+    // Empty list should serialize to just a count of 0
+    const expected_size = @sizeOf(u32);
+    try testing.expectEqual(expected_size, list.serializedSize());
+
+    var buffer: [@sizeOf(u32)]u8 align(@alignOf(Point)) = undefined;
+    const serialized = try list.serializeInto(&buffer);
+    try testing.expectEqual(expected_size, serialized.len);
+
+    // Check that count is 0
+    const count = @as(*const u32, @ptrCast(@alignCast(buffer[0..@sizeOf(u32)]))).*;
+    try testing.expectEqual(@as(u32, 0), count);
+}
+
+test "SafeMultiList(struct) serialization with data" {
+    const gpa = testing.allocator;
+
+    const Point = struct { x: i32, y: i32 };
+    var list = SafeMultiList(Point){};
+    defer list.deinit(gpa);
+
+    _ = list.append(gpa, Point{ .x = 10, .y = 20 });
+    _ = list.append(gpa, Point{ .x = 30, .y = 40 });
+    _ = list.append(gpa, Point{ .x = 50, .y = 60 });
+
+    const expected_size = @sizeOf(u32) + (3 * @sizeOf(Point));
+    try testing.expectEqual(expected_size, list.serializedSize());
+
+    var buffer: [256]u8 align(@alignOf(Point)) = undefined;
+    const serialized = try list.serializeInto(&buffer);
+    try testing.expectEqual(expected_size, serialized.len);
+
+    // Check that count is 3
+    const count = @as(*const u32, @ptrCast(@alignCast(buffer[0..@sizeOf(u32)]))).*;
+    try testing.expectEqual(@as(u32, 3), count);
+
+    // Check the data
+    const data_start = @sizeOf(u32);
+    const data_ptr = @as([*]const Point, @ptrCast(@alignCast(buffer[data_start..])));
+    try testing.expectEqual(@as(i32, 10), data_ptr[0].x);
+    try testing.expectEqual(@as(i32, 20), data_ptr[0].y);
+    try testing.expectEqual(@as(i32, 30), data_ptr[1].x);
+    try testing.expectEqual(@as(i32, 40), data_ptr[1].y);
+    try testing.expectEqual(@as(i32, 50), data_ptr[2].x);
+    try testing.expectEqual(@as(i32, 60), data_ptr[2].y);
+}
+
+test "SafeMultiList(struct) serialization with primitive data" {
+    const gpa = testing.allocator;
+
+    const Value = struct { val: u32 };
+    var list = SafeMultiList(Value){};
+    defer list.deinit(gpa);
+
+    _ = list.append(gpa, Value{ .val = 42 });
+    _ = list.append(gpa, Value{ .val = 100 });
+
+    const expected_size = @sizeOf(u32) + (2 * @sizeOf(Value));
+    try testing.expectEqual(expected_size, list.serializedSize());
+
+    var buffer: [256]u8 align(@alignOf(Value)) = undefined;
+    const serialized = try list.serializeInto(&buffer);
+    try testing.expectEqual(expected_size, serialized.len);
+
+    // Check that count is 2
+    const count = @as(*const u32, @ptrCast(@alignCast(buffer[0..@sizeOf(u32)]))).*;
+    try testing.expectEqual(@as(u32, 2), count);
+
+    // Check the data
+    const data_start = @sizeOf(u32);
+    const data_ptr = @as([*]const Value, @ptrCast(@alignCast(buffer[data_start..])));
+    try testing.expectEqual(@as(u32, 42), data_ptr[0].val);
+    try testing.expectEqual(@as(u32, 100), data_ptr[1].val);
+}
+
+test "SafeMultiList(struct) deserialization empty list" {
+    const gpa = testing.allocator;
+
+    const Point = struct { x: i32, y: i32 };
+
+    // Create buffer with count = 0
+    var buffer: [@sizeOf(u32)]u8 align(@alignOf(Point)) = undefined;
+    @as(*u32, @ptrCast(@alignCast(&buffer))).* = 0;
+
+    var list = try SafeMultiList(Point).deserializeFrom(&buffer, gpa);
+    defer list.deinit(gpa);
+
+    try testing.expectEqual(@as(usize, 0), list.len());
+}
+
+test "SafeMultiList(struct) deserialization with data" {
+    const gpa = testing.allocator;
+
+    const Point = struct { x: i32, y: i32 };
+    const expected_data = [_]Point{
+        Point{ .x = 10, .y = 20 },
+        Point{ .x = 30, .y = 40 },
+    };
+
+    // Prepare buffer with count = 2 and data
+    const buffer_size = @sizeOf(u32) + expected_data.len * @sizeOf(Point);
+    var buffer: [256]u8 align(@alignOf(Point)) = undefined;
+
+    @as(*u32, @ptrCast(@alignCast(&buffer))).* = expected_data.len;
+    const data_ptr = @as([*]Point, @ptrCast(@alignCast(buffer[@sizeOf(u32)..])));
+    @memcpy(data_ptr[0..expected_data.len], &expected_data);
+
+    var list = try SafeMultiList(Point).deserializeFrom(buffer[0..buffer_size], gpa);
+    defer list.deinit(gpa);
+
+    try testing.expectEqual(expected_data.len, list.len());
+    for (expected_data, 0..) |expected, i| {
+        const idx: SafeMultiList(Point).Idx = @enumFromInt(i); // SafeMultiList uses 0-based indexing
+        const actual = list.get(idx);
+        try testing.expectEqual(expected.x, actual.x);
+        try testing.expectEqual(expected.y, actual.y);
+    }
+}
+
+test "SafeMultiList(struct) deserialization with primitive data" {
+    const gpa = testing.allocator;
+
+    const Value = struct { val: u32 };
+    const expected_data = [_]Value{ Value{ .val = 42 }, Value{ .val = 100 }, Value{ .val = 255 } };
+    const buffer_size = @sizeOf(u32) + expected_data.len * @sizeOf(Value);
+    var buffer: [256]u8 align(@alignOf(Value)) = undefined;
+
+    @as(*u32, @ptrCast(@alignCast(&buffer))).* = expected_data.len;
+    const data_ptr = @as([*]Value, @ptrCast(@alignCast(buffer[@sizeOf(u32)..])));
+    @memcpy(data_ptr[0..expected_data.len], &expected_data);
+
+    var list = try SafeMultiList(Value).deserializeFrom(buffer[0..buffer_size], gpa);
+    defer list.deinit(gpa);
+
+    try testing.expectEqual(expected_data.len, list.len());
+    for (expected_data, 0..) |expected, i| {
+        const idx: SafeMultiList(Value).Idx = @enumFromInt(i); // SafeMultiList uses 0-based indexing
+        try testing.expectEqual(expected.val, list.get(idx).val);
+    }
+}
+
+test "SafeMultiList(struct) round-trip serialization" {
+    const gpa = testing.allocator;
+
+    const Point = struct { x: i32, y: i32 };
+    var original = SafeMultiList(Point){};
+    defer original.deinit(gpa);
+
+    const test_data = [_]Point{
+        Point{ .x = 1, .y = 2 },
+        Point{ .x = 42, .y = 100 },
+        Point{ .x = 255, .y = 128 },
+    };
+    _ = original.appendSlice(gpa, &test_data);
+
+    // Serialize
+    var buffer: [1024]u8 align(@alignOf(Point)) = undefined;
+    const serialized = try original.serializeInto(&buffer);
+
+    // Deserialize
+    var deserialized = try SafeMultiList(Point).deserializeFrom(serialized, gpa);
+    defer deserialized.deinit(gpa);
+
+    // Compare
+    try testing.expectEqual(original.len(), deserialized.len());
+    for (test_data, 0..) |expected, i| {
+        const idx: SafeMultiList(Point).Idx = @enumFromInt(i); // SafeMultiList uses 0-based indexing
+        const actual = deserialized.get(idx);
+        try testing.expectEqual(expected.x, actual.x);
+        try testing.expectEqual(expected.y, actual.y);
+    }
+}
+
+test "SafeMultiList serialization buffer too small error" {
+    const gpa = testing.allocator;
+
+    const Point = struct { x: i32, y: i32 };
+    var list = SafeMultiList(Point){};
+    defer list.deinit(gpa);
+
+    _ = list.append(gpa, Point{ .x = 10, .y = 20 });
+    _ = list.append(gpa, Point{ .x = 30, .y = 40 });
+
+    // Buffer too small for the data
+    var small_buffer: [4]u8 align(@alignOf(Point)) = undefined; // Only room for count, not data
+    try testing.expectError(error.BufferTooSmall, list.serializeInto(&small_buffer));
+}
+
+test "SafeMultiList deserialization buffer too small error" {
+    const gpa = testing.allocator;
+
+    const Point = struct { x: i32, y: i32 };
+
+    // Buffer too small to even contain count
+    var tiny_buffer: [2]u8 align(@alignOf(Point)) = undefined;
+    try testing.expectError(error.BufferTooSmall, SafeMultiList(Point).deserializeFrom(&tiny_buffer, gpa));
+
+    // Buffer with count but insufficient data
+    var partial_buffer: [6]u8 align(@alignOf(Point)) = undefined;
+    @as(*u32, @ptrCast(@alignCast(&partial_buffer))).* = 1; // Claims 1 item but insufficient space for Point
+    try testing.expectError(error.BufferTooSmall, SafeMultiList(Point).deserializeFrom(&partial_buffer, gpa));
+}
+
+test "SafeMultiList complex Node-like structure serialization" {
+    const gpa = testing.allocator;
+
+    // Complex structure similar to Node.zig with enums, multiple fields, and nested data
+    const NodeTag = enum(u8) {
+        statement_decl,
+        statement_var,
+        statement_expr,
+        expr_var,
+        expr_tuple,
+        expr_list,
+        expr_call,
+        expr_int,
+        expr_float,
+        expr_string,
+        pattern_identifier,
+        pattern_list,
+        ty_apply,
+        ty_var,
+        malformed,
+        diag_not_implemented,
+    };
+
+    const Region = struct {
+        start: u32,
+        end: u32,
+    };
+
+    const ComplexNode = struct {
+        data_1: u32,
+        data_2: u32,
+        data_3: u32,
+        region: Region,
+        tag: NodeTag,
+        flags: u16,
+        extra: u8,
+    };
+
+    var list = SafeMultiList(ComplexNode){};
+    defer list.deinit(gpa);
+
+    // Add various node types with different data
+    const test_nodes = [_]ComplexNode{
+        ComplexNode{
+            .data_1 = 42,
+            .data_2 = 100,
+            .data_3 = 255,
+            .region = Region{ .start = 0, .end = 10 },
+            .tag = NodeTag.statement_decl,
+            .flags = 0x1234,
+            .extra = 0xAB,
+        },
+        ComplexNode{
+            .data_1 = 0,
+            .data_2 = 0xFFFFFFFF,
+            .data_3 = 128,
+            .region = Region{ .start = 15, .end = 45 },
+            .tag = NodeTag.expr_call,
+            .flags = 0x5678,
+            .extra = 0xCD,
+        },
+        ComplexNode{
+            .data_1 = 999,
+            .data_2 = 1000,
+            .data_3 = 1001,
+            .region = Region{ .start = 50, .end = 75 },
+            .tag = NodeTag.pattern_list,
+            .flags = 0x9ABC,
+            .extra = 0xEF,
+        },
+        ComplexNode{
+            .data_1 = 0x12345678,
+            .data_2 = 0x87654321,
+            .data_3 = 0xDEADBEEF,
+            .region = Region{ .start = 100, .end = 200 },
+            .tag = NodeTag.malformed,
+            .flags = 0xDEF0,
+            .extra = 0x00,
+        },
+    };
+
+    _ = list.appendSlice(gpa, &test_nodes);
+
+    // Test serialization
+    const expected_size = @sizeOf(u32) + (test_nodes.len * @sizeOf(ComplexNode));
+    try testing.expectEqual(expected_size, list.serializedSize());
+
+    var buffer: [1024]u8 align(@alignOf(ComplexNode)) = undefined;
+    const serialized = try list.serializeInto(&buffer);
+    try testing.expectEqual(expected_size, serialized.len);
+
+    // Verify count in serialized data
+    const count = @as(*const u32, @ptrCast(@alignCast(buffer[0..@sizeOf(u32)]))).*;
+    try testing.expectEqual(@as(u32, test_nodes.len), count);
+
+    // Test deserialization
+    var deserialized = try SafeMultiList(ComplexNode).deserializeFrom(serialized, gpa);
+    defer deserialized.deinit(gpa);
+
+    try testing.expectEqual(test_nodes.len, deserialized.len());
+
+    // Verify all fields are correctly deserialized
+    for (test_nodes, 0..) |expected, i| {
+        const idx: SafeMultiList(ComplexNode).Idx = @enumFromInt(i);
+        const actual = deserialized.get(idx);
+
+        try testing.expectEqual(expected.data_1, actual.data_1);
+        try testing.expectEqual(expected.data_2, actual.data_2);
+        try testing.expectEqual(expected.data_3, actual.data_3);
+        try testing.expectEqual(expected.region.start, actual.region.start);
+        try testing.expectEqual(expected.region.end, actual.region.end);
+        try testing.expectEqual(expected.tag, actual.tag);
+        try testing.expectEqual(expected.flags, actual.flags);
+        try testing.expectEqual(expected.extra, actual.extra);
+    }
 }
