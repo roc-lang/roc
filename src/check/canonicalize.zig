@@ -1869,6 +1869,60 @@ fn scopeIntroduceVar(
     }
 }
 
+/// Canonicalize a tag variant within a tag union type annotation
+/// Unlike general type canonicalization, this doesn't validate tag names against scope
+/// since tags in tag unions are anonymous and defined by the union itself
+fn canonicalize_tag_variant(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.Idx {
+    const ast_anno = self.parse_ir.store.getTypeAnno(anno_idx);
+    switch (ast_anno) {
+        .ty => |ty| {
+            // For simple tags like `None`, just create the type annotation without scope validation
+            const region = self.parse_ir.tokenizedRegionToRegion(ty.region);
+            return self.can_ir.store.addTypeAnno(.{ .ty = .{
+                .symbol = ty.ident,
+                .region = region,
+            } });
+        },
+        .apply => |apply| {
+            // For tags with arguments like `Some(Str)`, validate the arguments but not the tag name
+            const region = self.parse_ir.tokenizedRegionToRegion(apply.region);
+            const args_slice = self.parse_ir.store.typeAnnoSlice(apply.args);
+
+            if (args_slice.len == 0) {
+                return self.can_ir.pushMalformed(CIR.TypeAnno.Idx, CIR.Diagnostic{ .malformed_type_annotation = .{ .region = region } });
+            }
+
+            // First argument is the tag name - don't validate it against scope
+            const base_type = self.parse_ir.store.getTypeAnno(args_slice[0]);
+            const type_name = switch (base_type) {
+                .ty => |ty| ty.ident,
+                else => return self.can_ir.pushMalformed(CIR.TypeAnno.Idx, CIR.Diagnostic{ .malformed_type_annotation = .{ .region = region } }),
+            };
+
+            // Canonicalize type arguments (skip first which is the tag name)
+            // These should be validated against scope since they're real types like `Str`, `Int`, etc.
+            const scratch_top = self.can_ir.store.scratchTypeAnnoTop();
+            defer self.can_ir.store.clearScratchTypeAnnosFrom(scratch_top);
+
+            for (args_slice[1..]) |arg_idx| {
+                const canonicalized = self.canonicalize_type_anno(arg_idx);
+                self.can_ir.store.addScratchTypeAnno(canonicalized);
+            }
+
+            const args = self.can_ir.store.typeAnnoSpanFrom(scratch_top);
+            return self.can_ir.store.addTypeAnno(.{ .apply = .{
+                .symbol = type_name,
+                .args = args,
+                .region = region,
+            } });
+        },
+        else => {
+            // For other cases, fall back to regular canonicalization
+            return self.canonicalize_type_anno(anno_idx);
+        },
+    }
+}
+
 /// Canonicalize a statement within a block
 fn canonicalize_type_anno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.Idx {
     const ast_anno = self.parse_ir.store.getTypeAnno(anno_idx);
@@ -2029,12 +2083,12 @@ fn canonicalize_type_anno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.
         .tag_union => |tag_union| {
             const region = self.parse_ir.tokenizedRegionToRegion(tag_union.region);
 
-            // Canonicalize all tags in the union
+            // Canonicalize all tags in the union using tag-specific canonicalization
             const scratch_top = self.can_ir.store.scratchTypeAnnoTop();
             defer self.can_ir.store.clearScratchTypeAnnosFrom(scratch_top);
 
             for (self.parse_ir.store.typeAnnoSlice(tag_union.tags)) |tag_idx| {
-                const canonicalized = self.canonicalize_type_anno(tag_idx);
+                const canonicalized = self.canonicalize_tag_variant(tag_idx);
                 self.can_ir.store.addScratchTypeAnno(canonicalized);
             }
 

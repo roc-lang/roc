@@ -121,10 +121,10 @@ AnotherType : SomeModule.MissingType
 					(ty @5-16-5-32 (name "UndeclaredResult"))
 					(ty @5-36-5-39 (name "Str"))))))
 	(s-type-decl @3-1-5-13 (id 75)
-		(type-header @3-1-3-7 (name "MyType"))
+		(ty-header @3-1-3-7 (name "MyType"))
 		(ty @3-10-3-21 (name "UnknownType")))
 	(s-type-decl @10-1-10-37 (id 78)
-		(type-header @10-1-10-12 (name "AnotherType"))
+		(ty-header @10-1-10-12 (name "AnotherType"))
 		(ty-mod @10-15-10-37 (module "MissingType") (type "SomeModule"))))
 ~~~
 # TYPES

@@ -187,8 +187,8 @@ InnerModule :
 					(ty @5-15-5-18 (name "Str"))
 					(ty @5-22-5-25 (name "Str"))))))
 	(s-type-decl @3-1-5-12 (id 80)
-		(type-header @3-1-3-13 (name "Result")
-			(args
+		(ty-header @3-1-3-13 (name "Result")
+			(ty-args
 				(ty-var @3-8-3-9 (name "a"))
 				(ty-var @3-11-3-12 (name "b"))))
 		(ty-tag-union @3-16-3-31
@@ -197,7 +197,7 @@ InnerModule :
 			(ty-apply @3-24-3-30 (symbol "Err")
 				(ty-var @3-28-3-29 (name "b")))))
 	(s-type-decl @10-1-11-32 (id 85)
-		(type-header @10-1-10-12 (name "InnerModule"))
+		(ty-header @10-1-10-12 (name "InnerModule"))
 		(ty-malformed @11-24-11-32)))
 ~~~
 # TYPES

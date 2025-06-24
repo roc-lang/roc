@@ -69,13 +69,13 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(s-type-decl @3-1-12-7 (id 75)
-		(type-header @3-1-3-8 (name "Hash")
-			(args
+		(ty-header @3-1-3-8 (name "Hash")
+			(ty-args
 				(ty-var @3-6-3-7 (name "a"))))
 		(ty-var @5-3-5-4 (name "a")))
 	(s-type-decl @12-1-16-10 (id 79)
-		(type-header @12-1-12-10 (name "Decode")
-			(args
+		(ty-header @12-1-12-10 (name "Decode")
+			(ty-args
 				(ty-var @12-8-12-9 (name "a"))))
 		(ty-var @12-13-12-14 (name "a"))))
 ~~~

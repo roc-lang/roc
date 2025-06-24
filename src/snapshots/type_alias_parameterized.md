@@ -120,8 +120,8 @@ NO CHANGE
 				(e-int @8-22-8-23 (int-var 110) (precision-var 109) (literal "1") (value "TODO") (bound "u8"))
 				(e-int @8-25-8-26 (int-var 113) (precision-var 112) (literal "2") (value "TODO") (bound "u8")))))
 	(s-type-decl @3-1-5-9 (id 78)
-		(type-header @3-1-3-11 (name "Pair")
-			(args
+		(ty-header @3-1-3-11 (name "Pair")
+			(ty-args
 				(ty-var @3-6-3-7 (name "a"))
 				(ty-var @3-9-3-10 (name "b"))))
 		(ty-tuple @3-14-3-20

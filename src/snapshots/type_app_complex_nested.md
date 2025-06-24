@@ -325,8 +325,8 @@ main! = |_| processComplex(Ok([Some(42), None]))
 								(e-int @17-37-17-39 (int-var 147) (precision-var 146) (literal "42") (value "TODO") (bound "u8")))
 							(e-tag @17-42-17-46 (ext-var 0) (name "None") (args "TODO"))))))))
 	(s-type-decl @15-1-17-6 (id 83)
-		(type-header @15-1-15-18 (name "ComplexType")
-			(args
+		(ty-header @15-1-15-18 (name "ComplexType")
+			(ty-args
 				(ty-var @15-13-15-14 (name "a"))
 				(ty-var @15-16-15-17 (name "b"))))
 		(ty-apply @15-21-15-64 (symbol "Result")

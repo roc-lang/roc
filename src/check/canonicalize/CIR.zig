@@ -984,7 +984,7 @@ pub const TypeHeader = struct {
 
     pub fn toSExpr(self: *const @This(), ir: *CIR, env: *ModuleEnv) SExpr {
         const gpa = ir.env.gpa;
-        var node = SExpr.init(gpa, "type-header");
+        var node = SExpr.init(gpa, "ty-header");
         node.appendRegion(gpa, ir.calcRegionInfo(self.region));
 
         // Add the type name
@@ -993,7 +993,7 @@ pub const TypeHeader = struct {
         // Add the type arguments
         const args_slice = ir.store.sliceTypeAnnos(self.args);
         if (args_slice.len > 0) {
-            var args_node = SExpr.init(gpa, "args");
+            var args_node = SExpr.init(gpa, "ty-args");
             for (args_slice) |arg_idx| {
                 const arg = ir.store.getTypeAnno(arg_idx);
                 var arg_node = arg.toSExpr(ir, env);
