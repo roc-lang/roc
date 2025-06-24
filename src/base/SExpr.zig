@@ -6,6 +6,7 @@ const testing = std.testing;
 const RegionInfo = @import("RegionInfo.zig");
 const exitOnOom = @import("../collections.zig").exitOnOom;
 
+/// A simple format for representing tree-like data.
 pub const SExpr = @This();
 
 /// name of the s-expression node
