@@ -26,6 +26,10 @@ jobs:
 
       - run: zig version
 
+      - run: locale
+
+      - run: date -u
+
       - name: zig fmt check, zig tests
         run: cd crates/compiler/builtins/bitcode && ./run-tests.sh
 
