@@ -42,44 +42,48 @@ LowerIdent(8:1-8:6),OpAssign(8:7-8:8),OpBar(8:9-8:10),Underscore(8:10-8:11),OpBa
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-8:25)
-	(app (1:1-1:53)
-		(provides (1:6-1:12) (exposed_item (lower_ident "main!")))
-		(record_field (1:15-1:53)
-			"pf"
-			(string (1:28-1:51) (string_part (1:29-1:50) "../basic-cli/main.roc")))
-		(packages (1:13-1:53)
-			(record_field (1:15-1:53)
-				"pf"
-				(string (1:28-1:51) (string_part (1:29-1:50) "../basic-cli/main.roc")))))
+(file @1-1-8-25
+	(app @1-1-1-53
+		(provides @1-6-1-12
+			(exposed-lower-ident (text "main!")))
+		(record-field @1-15-1-53 (name "pf")
+			(e-string @1-28-1-51
+				(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))
+		(packages @1-13-1-53
+			(record-field @1-15-1-53 (name "pf")
+				(e-string @1-28-1-51
+					(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(type_decl (3:1-5:8)
-			(header (3:1-3:7) "UserId" (args))
-			(ty "U64"))
-		(type_anno (5:1-6:8)
-			"getUser"
-			(fn (5:11-5:24)
-				(ty "UserId")
-				(ty "Str")))
-		(decl (1:1-1:1)
-			(ident (6:1-6:8) "getUser")
-			(lambda (1:1-1:1)
-				(args (ident (6:12-6:14) "id"))
-				(if_then_else (1:1-1:1)
-					(tuple (6:19-6:28)
-						(binop (6:20-6:28)
-							">"
-							(ident (6:20-6:22) "" "id")
-							(int (6:25-6:27) "10")))
-					(string (6:29-6:34) (string_part (6:30-6:33) "big"))
-					(string (6:40-6:47) (string_part (6:41-6:46) "small")))))
-		(decl (8:1-8:25)
-			(ident (8:1-8:6) "main!")
-			(lambda (8:9-8:25)
-				(args (underscore))
-				(apply (8:13-8:25)
-					(ident (8:13-8:20) "" "getUser")
-					(int (8:21-8:24) "100"))))))
+		(s-type-decl @3-1-5-8
+			(header @3-1-3-7 (name "UserId")
+				(args))
+			(ty (name "U64")))
+		(s-type-anno @5-1-6-8 (name "getUser")
+			(ty-fn @5-11-5-24
+				(ty (name "UserId"))
+				(ty (name "Str"))))
+		(s-decl @1-1-1-1
+			(p-ident @6-1-6-8 (raw "getUser"))
+			(e-lambda @1-1-1-1
+				(args
+					(p-ident @6-12-6-14 (raw "id")))
+				(e-if-then-else @1-1-1-1
+					(e-tuple @6-19-6-28
+						(e-binop @6-20-6-28 (op ">")
+							(e-ident @6-20-6-22 (qaul "") (raw "id"))
+							(e-int @6-25-6-27 (raw "10"))))
+					(e-string @6-29-6-34
+						(e-string-part @6-30-6-33 (raw "big")))
+					(e-string @6-40-6-47
+						(e-string-part @6-41-6-46 (raw "small"))))))
+		(s-decl @8-1-8-25
+			(p-ident @8-1-8-6 (raw "main!"))
+			(e-lambda @8-9-8-25
+				(args
+					(p-underscore))
+				(e-apply @8-13-8-25
+					(e-ident @8-13-8-20 (qaul "") (raw "getUser"))
+					(e-int @8-21-8-24 (raw "100")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -87,53 +91,38 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir
-	(d_let
-		(def_pattern
-			(p_assign (6:1-6:8)
-				(pid 78)
-				(ident "getUser")))
-		(def_expr
-			(e_lambda (1:1-1:1)
-				(args
-					(p_assign (6:12-6:14)
-						(pid 79)
-						(ident "id")))
-				(e_runtime_error (1:1-1:1) "not_implemented")))
-		(annotation (6:1-6:8)
-			(signature 87)
-			(declared_type
-				(fn (5:11-5:24)
-					(ty (5:11-5:17) "UserId")
-					(ty (5:21-5:24) "Str")
-					"false"))))
-	(d_let
-		(def_pattern
-			(p_assign (8:1-8:6)
-				(pid 90)
-				(ident "main!")))
-		(def_expr
-			(e_lambda (8:9-8:25)
-				(args (p_underscore (8:10-8:11) (pid 91)))
-				(e_call (8:13-8:25)
-					(e_lookup_local (8:13-8:20) (pid 78))
-					(e_int (8:21-8:24)
-						(int_var 94)
-						(precision_var 93)
-						(literal "100")
-						(value "TODO")
-						(bound "u8"))))))
-	(s_type_decl (3:1-5:8)
-		(type_header (3:1-3:7) "UserId")
-		(ty (3:10-3:13) "U64")))
+(can-ir
+	(d-let (id 89)
+		(p-assign @6-1-6-8 (ident "getUser") (id 78))
+		(e-lambda @1-1-1-1 (id 82)
+			(args
+				(p-assign @6-12-6-14 (ident "id") (id 79)))
+			(e-runtime-error (tag "not_implemented")))
+		(annotation @6-1-6-8 (signature 87) (id 88)
+			(declared-type
+				(ty-fn @5-11-5-24 (effectful false)
+					(ty @5-11-5-17 (name "UserId"))
+					(ty @5-21-5-24 (name "Str"))))))
+	(d-let (id 98)
+		(p-assign @8-1-8-6 (ident "main!") (id 90))
+		(e-lambda @8-9-8-25 (id 97)
+			(args
+				(p-underscore @8-10-8-11 (id 91)))
+			(e-call @8-13-8-25
+				(e-lookup-local @8-13-8-20
+					(pattern (id 78)))
+				(e-int @8-21-8-24 (int-var 94) (precision-var 93) (literal "100") (value "TODO") (bound "u8")))))
+	(s-type-decl @3-1-5-8 (id 74)
+		(type-header @3-1-3-7 (name "UserId"))
+		(ty @3-10-3-13 (name "U64"))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types
+(inferred-types
 	(defs
-		(def "getUser" 89 (type "*"))
-		(def "main!" 98 (type "*")))
+		(def (name "getUser") (type "*"))
+		(def (name "main!") (type "*")))
 	(expressions
-		(expr (1:1-1:1) 82 (type "*"))
-		(expr (8:9-8:25) 97 (type "*"))))
+		(expr @1-1-1-1 (type "*"))
+		(expr @8-9-8-25 (type "*"))))
 ~~~

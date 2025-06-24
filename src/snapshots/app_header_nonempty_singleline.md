@@ -15,18 +15,19 @@ KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),O
 ~~~
 # PARSE
 ~~~clojure
-(app (1:1-1:74)
-	(provides (1:6-1:12) (exposed_item (lower_ident "main!")))
-	(record_field (1:15-1:42)
-		"pf"
-		(string (1:28-1:41) (string_part (1:29-1:40) "../main.roc")))
-	(packages (1:13-1:74)
-		(record_field (1:15-1:42)
-			"pf"
-			(string (1:28-1:41) (string_part (1:29-1:40) "../main.roc")))
-		(record_field (1:43-1:74)
-			"other"
-			(string (1:50-1:72) (string_part (1:51-1:71) "../../other/main.roc")))))
+(app @1-1-1-74
+	(provides @1-6-1-12
+		(exposed-lower-ident (text "main!")))
+	(record-field @1-15-1-42 (name "pf")
+		(e-string @1-28-1-41
+			(e-string-part @1-29-1-40 (raw "../main.roc"))))
+	(packages @1-13-1-74
+		(record-field @1-15-1-42 (name "pf")
+			(e-string @1-28-1-41
+				(e-string-part @1-29-1-40 (raw "../main.roc"))))
+		(record-field @1-43-1-74 (name "other")
+			(e-string @1-50-1-72
+				(e-string-part @1-51-1-71 (raw "../../other/main.roc"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -34,9 +35,11 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir "empty")
+(can-ir (empty true))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types (defs) (expressions))
+(inferred-types
+	(defs)
+	(expressions))
 ~~~

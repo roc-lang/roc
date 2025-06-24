@@ -17,13 +17,14 @@ LowerIdent(2:1-2:4),OpAssign(2:5-2:6),UpperIdent(2:7-2:15),EndOfFile(2:15-2:15),
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-2:15)
-	(module (1:1-1:13)
-		(exposes (1:8-1:13) (exposed_item (lower_ident "foo"))))
+(file @1-1-2-15
+	(module @1-1-1-13
+		(exposes @1-8-1-13
+			(exposed-lower-ident (text "foo"))))
 	(statements
-		(decl (2:1-2:15)
-			(ident (2:1-2:4) "foo")
-			(tag (2:7-2:15) "FortyTwo"))))
+		(s-decl @2-1-2-15
+			(p-ident @2-1-2-4 (raw "foo"))
+			(e-tag @2-7-2-15 (raw "FortyTwo")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -31,23 +32,16 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir
-	(d_let
-		(def_pattern
-			(p_assign (2:1-2:4)
-				(pid 72)
-				(ident "foo")))
-		(def_expr
-			(e_tag (2:7-2:15)
-				(ext_var 0)
-				(name "FortyTwo")
-				(args "TODO")))))
+(can-ir
+	(d-let (id 75)
+		(p-assign @2-1-2-4 (ident "foo") (id 72))
+		(e-tag @2-7-2-15 (ext-var 0) (name "FortyTwo") (args "TODO") (id 74))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types
+(inferred-types
 	(defs
-		(def "foo" 75 (type "[FortyTwo, * *]")))
+		(def (name "foo") (type "[FortyTwo, * *]")))
 	(expressions
-		(expr (2:7-2:15) 74 (type "[FortyTwo, * *]"))))
+		(expr @2-7-2-15 (type "[FortyTwo, * *]"))))
 ~~~

@@ -17,7 +17,8 @@ KwDbg(1:1-1:4),LowerIdent(1:5-1:6),EndOfFile(1:6-1:6),
 ~~~
 # PARSE
 ~~~clojure
-(dbg (ident (1:5-1:6) "" "x"))
+(e-dbg
+	(e-ident @1-5-1-6 (qaul "") (raw "x")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -25,9 +26,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e_runtime_error (1:1-1:1) "not_implemented")
+(e-runtime-error (tag "not_implemented") (id 73))
 ~~~
 # TYPES
 ~~~clojure
-(expr 73 (type "Error"))
+(expr (id 73) (type "Error"))
 ~~~

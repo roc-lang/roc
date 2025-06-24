@@ -31,18 +31,18 @@ CloseCurly(9:2-9:3),EndOfFile(9:3-9:3),
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-9:3)
-	(package (1:1-9:3)
-		(exposes (2:2-5:3)
-			(exposed_item (lower_ident "something"))
-			(exposed_item (upper_ident "SomeType")))
-		(packages (6:2-9:3)
-			(record_field (7:3-7:26)
-				"somePkg"
-				(string (7:12-7:25) (string_part (7:13-7:24) "../main.roc")))
-			(record_field (8:3-8:33)
-				"other"
-				(string (8:10-8:32) (string_part (8:11-8:31) "../../other/main.roc")))))
+(file @1-1-9-3
+	(package @1-1-9-3
+		(exposes @2-2-5-3
+			(exposed-lower-ident (text "something"))
+			(exposed-upper-ident (text "SomeType")))
+		(packages @6-2-9-3
+			(record-field @7-3-7-26 (name "somePkg")
+				(e-string @7-12-7-25
+					(e-string-part @7-13-7-24 (raw "../main.roc"))))
+			(record-field @8-3-8-33 (name "other")
+				(e-string @8-10-8-32
+					(e-string-part @8-11-8-31 (raw "../../other/main.roc"))))))
 	(statements))
 ~~~
 # FORMATTED
@@ -51,9 +51,11 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir "empty")
+(can-ir (empty true))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types (defs) (expressions))
+(inferred-types
+	(defs)
+	(expressions))
 ~~~

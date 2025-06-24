@@ -22,13 +22,12 @@ LowerIdent(1:1-1:5),NoSpaceDotLowerIdent(1:5-1:9),NoSpaceOpenRound(1:9-1:10),Low
 ~~~
 # PARSE
 ~~~clojure
-(field_access (1:1-1:13)
-	(binop (1:1-1:13)
-		"list"
-		(ident (1:1-1:5) "" "list")
-		(apply (1:5-1:13)
-			(ident (1:5-1:9) "" ".map")
-			(ident (1:10-1:12) "" "fn"))))
+(e-field-access @1-1-1-13
+	(e-binop @1-1-1-13 (op "list")
+		(e-ident @1-1-1-5 (qaul "") (raw "list"))
+		(e-apply @1-5-1-13
+			(e-ident @1-5-1-9 (qaul "") (raw ".map"))
+			(e-ident @1-10-1-12 (qaul "") (raw "fn")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -36,12 +35,13 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e_dot_access (1:1-1:13)
-	(e_runtime_error (1:1-1:5) "ident_not_in_scope")
-	"map"
-	(e_runtime_error (1:10-1:12) "ident_not_in_scope"))
+(e-dot-access @1-1-1-13 (field "map") (id 76)
+	(receiver
+		(e-runtime-error (tag "ident_not_in_scope")))
+	(args
+		(e-runtime-error (tag "ident_not_in_scope"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr 76 (type "*"))
+(expr (id 76) (type "*"))
 ~~~

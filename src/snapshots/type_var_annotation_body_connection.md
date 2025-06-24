@@ -98,36 +98,38 @@ LowerIdent(10:1-10:6),OpAssign(10:7-10:8),OpBar(10:9-10:10),Underscore(10:10-10:
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-10:15)
-	(app (1:1-1:53)
-		(provides (1:6-1:12) (exposed_item (lower_ident "main!")))
-		(record_field (1:15-1:53)
-			"pf"
-			(string (1:28-1:51) (string_part (1:29-1:50) "../basic-cli/main.roc")))
-		(packages (1:13-1:53)
-			(record_field (1:15-1:53)
-				"pf"
-				(string (1:28-1:51) (string_part (1:29-1:50) "../basic-cli/main.roc")))))
+(file @1-1-10-15
+	(app @1-1-1-53
+		(provides @1-6-1-12
+			(exposed-lower-ident (text "main!")))
+		(record-field @1-15-1-53 (name "pf")
+			(e-string @1-28-1-51
+				(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))
+		(packages @1-13-1-53
+			(record-field @1-15-1-53 (name "pf")
+				(e-string @1-28-1-51
+					(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(type_anno (3:1-4:9)
-			"identity"
-			(fn (3:12-3:18)
-				(ty_var (3:12-3:13) "a")
-				(ty_var (3:17-3:18) "a")))
-		(decl (4:1-6:12)
-			(ident (4:1-4:9) "identity")
-			(lambda (4:12-6:12)
-				(args (ident (4:13-4:14) "x"))
-				(malformed_expr (6:5-6:12) "expected_expr_close_curly_or_comma")))
-		(malformed_expr (6:11-6:14) "expr_unexpected_token")
-		(ident (6:13-6:14) "" "x")
-		(ident (7:5-7:10) "" "thing")
-		(malformed_expr (1:1-1:1) "expr_unexpected_token")
-		(decl (10:1-10:15)
-			(ident (10:1-10:6) "main!")
-			(lambda (10:9-10:15)
-				(args (underscore))
-				(record (10:13-10:15))))))
+		(s-type-anno @3-1-4-9 (name "identity")
+			(ty-fn @3-12-3-18
+				(ty-var @3-12-3-13 (raw "a"))
+				(ty-var @3-17-3-18 (raw "a"))))
+		(s-decl @4-1-6-12
+			(p-ident @4-1-4-9 (raw "identity"))
+			(e-lambda @4-12-6-12
+				(args
+					(p-ident @4-13-4-14 (raw "x")))
+				(e-malformed @6-5-6-12 (reason "expected_expr_close_curly_or_comma"))))
+		(e-malformed @6-11-6-14 (reason "expr_unexpected_token"))
+		(e-ident @6-13-6-14 (qaul "") (raw "x"))
+		(e-ident @7-5-7-10 (qaul "") (raw "thing"))
+		(e-malformed @1-1-1-1 (reason "expr_unexpected_token"))
+		(s-decl @10-1-10-15
+			(p-ident @10-1-10-6 (raw "main!"))
+			(e-lambda @10-9-10-15
+				(args
+					(p-underscore))
+				(e-record @10-13-10-15)))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -143,43 +145,32 @@ main! = |_| {}
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir
-	(d_let
-		(def_pattern
-			(p_assign (4:1-4:9)
-				(pid 77)
-				(ident "identity")))
-		(def_expr
-			(e_lambda (4:12-6:12)
-				(args
-					(p_assign (4:13-4:14)
-						(pid 78)
-						(ident "x")))
-				(e_runtime_error (6:5-6:12) "lambda_body_not_canonicalized")))
-		(annotation (4:1-4:9)
-			(signature 87)
-			(declared_type
-				(fn (3:12-3:18)
-					(ty_var (3:12-3:13) "a")
-					(ty_var (3:17-3:18) "a")
-					"false"))))
-	(d_let
-		(def_pattern
-			(p_assign (10:1-10:6)
-				(pid 94)
-				(ident "main!")))
-		(def_expr
-			(e_lambda (10:9-10:15)
-				(args (p_underscore (10:10-10:11) (pid 95)))
-				(e_runtime_error (1:1-1:1) "not_implemented")))))
+(can-ir
+	(d-let (id 89)
+		(p-assign @4-1-4-9 (ident "identity") (id 77))
+		(e-lambda @4-12-6-12 (id 81)
+			(args
+				(p-assign @4-13-4-14 (ident "x") (id 78)))
+			(e-runtime-error (tag "lambda_body_not_canonicalized")))
+		(annotation @4-1-4-9 (signature 87) (id 88)
+			(declared-type
+				(ty-fn @3-12-3-18 (effectful false)
+					(ty-var @3-12-3-13 (name "a"))
+					(ty-var @3-17-3-18 (name "a"))))))
+	(d-let (id 99)
+		(p-assign @10-1-10-6 (ident "main!") (id 94))
+		(e-lambda @10-9-10-15 (id 98)
+			(args
+				(p-underscore @10-10-10-11 (id 95)))
+			(e-runtime-error (tag "not_implemented")))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types
+(inferred-types
 	(defs
-		(def "identity" 89 (type "*"))
-		(def "main!" 99 (type "*")))
+		(def (name "identity") (type "*"))
+		(def (name "main!") (type "*")))
 	(expressions
-		(expr (4:12-6:12) 81 (type "*"))
-		(expr (10:9-10:15) 98 (type "*"))))
+		(expr @4-12-6-12 (type "*"))
+		(expr @10-9-10-15 (type "*"))))
 ~~~

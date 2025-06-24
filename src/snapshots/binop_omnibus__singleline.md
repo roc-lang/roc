@@ -45,45 +45,33 @@ UpperIdent(1:1-1:4),NoSpaceOpenRound(1:4-1:5),LowerIdent(1:5-1:8),CloseRound(1:8
 ~~~
 # PARSE
 ~~~clojure
-(binop (1:1-1:69)
-	"or"
-	(binop (1:1-1:57)
-		"or"
-		(binop (1:1-1:26)
-			">"
-			(binop (1:1-1:17)
-				"??"
-				(apply (1:1-1:9)
-					(tag (1:1-1:4) "Err")
-					(ident (1:5-1:8) "" "foo"))
-				(int (1:13-1:15) "12"))
-			(binop (1:18-1:26)
-				"*"
-				(int (1:18-1:19) "5")
-				(int (1:22-1:23) "5")))
-		(binop (1:27-1:57)
-			"and"
-			(binop (1:27-1:41)
-				"<"
-				(binop (1:27-1:35)
-					"+"
-					(int (1:27-1:29) "13")
-					(int (1:32-1:33) "2"))
-				(int (1:36-1:37) "5"))
-			(binop (1:42-1:57)
-				">="
-				(binop (1:42-1:51)
-					"-"
-					(int (1:42-1:44) "10")
-					(int (1:47-1:48) "1"))
-				(int (1:52-1:54) "16"))))
-	(binop (1:58-1:69)
-		"<="
-		(int (1:58-1:60) "12")
-		(binop (1:64-1:69)
-			"/"
-			(int (1:64-1:65) "3")
-			(int (1:68-1:69) "5"))))
+(e-binop @1-1-1-69 (op "or")
+	(e-binop @1-1-1-57 (op "or")
+		(e-binop @1-1-1-26 (op ">")
+			(e-binop @1-1-1-17 (op "??")
+				(e-apply @1-1-1-9
+					(e-tag @1-1-1-4 (raw "Err"))
+					(e-ident @1-5-1-8 (qaul "") (raw "foo")))
+				(e-int @1-13-1-15 (raw "12")))
+			(e-binop @1-18-1-26 (op "*")
+				(e-int @1-18-1-19 (raw "5"))
+				(e-int @1-22-1-23 (raw "5"))))
+		(e-binop @1-27-1-57 (op "and")
+			(e-binop @1-27-1-41 (op "<")
+				(e-binop @1-27-1-35 (op "+")
+					(e-int @1-27-1-29 (raw "13"))
+					(e-int @1-32-1-33 (raw "2")))
+				(e-int @1-36-1-37 (raw "5")))
+			(e-binop @1-42-1-57 (op ">=")
+				(e-binop @1-42-1-51 (op "-")
+					(e-int @1-42-1-44 (raw "10"))
+					(e-int @1-47-1-48 (raw "1")))
+				(e-int @1-52-1-54 (raw "16")))))
+	(e-binop @1-58-1-69 (op "<=")
+		(e-int @1-58-1-60 (raw "12"))
+		(e-binop @1-64-1-69 (op "/")
+			(e-int @1-64-1-65 (raw "3"))
+			(e-int @1-68-1-69 (raw "5")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -91,9 +79,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e_runtime_error (1:1-1:69) "not_implemented")
+(e-runtime-error (tag "not_implemented") (id 133))
 ~~~
 # TYPES
 ~~~clojure
-(expr 133 (type "Error"))
+(expr (id 133) (type "Error"))
 ~~~

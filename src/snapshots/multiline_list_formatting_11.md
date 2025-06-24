@@ -31,13 +31,16 @@ CloseSquare(9:1-9:2),EndOfFile(9:2-9:2),
 ~~~
 # PARSE
 ~~~clojure
-(list (1:1-9:2)
-	(list (2:2-2:5) (int (2:3-2:4) "1"))
-	(list (3:2-3:5) (int (3:3-3:4) "2"))
-	(list (4:2-7:3)
-		(int (5:3-5:4) "3")
-		(int (6:3-6:4) "4"))
-	(list (8:2-8:5) (int (8:3-8:4) "5")))
+(e-list @1-1-9-2
+	(e-list @2-2-2-5
+		(e-int @2-3-2-4 (raw "1")))
+	(e-list @3-2-3-5
+		(e-int @3-3-3-4 (raw "2")))
+	(e-list @4-2-7-3
+		(e-int @5-3-5-4 (raw "3"))
+		(e-int @6-3-6-4 (raw "4")))
+	(e-list @8-2-8-5
+		(e-int @8-3-8-4 (raw "5"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -45,53 +48,23 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e_list (1:1-9:2)
-	(elem_var 95)
+(e-list @1-1-9-2 (elem-var 95) (id 96)
 	(elems
-		(e_list (2:2-2:5)
-			(elem_var 75)
+		(e-list @2-2-2-5 (elem-var 75)
 			(elems
-				(e_int (2:3-2:4)
-					(int_var 73)
-					(precision_var 72)
-					(literal "1")
-					(value "TODO")
-					(bound "u8"))))
-		(e_list (3:2-3:5)
-			(elem_var 80)
+				(e-int @2-3-2-4 (int-var 73) (precision-var 72) (literal "1") (value "TODO") (bound "u8"))))
+		(e-list @3-2-3-5 (elem-var 80)
 			(elems
-				(e_int (3:3-3:4)
-					(int_var 78)
-					(precision_var 77)
-					(literal "2")
-					(value "TODO")
-					(bound "u8"))))
-		(e_list (4:2-7:3)
-			(elem_var 88)
+				(e-int @3-3-3-4 (int-var 78) (precision-var 77) (literal "2") (value "TODO") (bound "u8"))))
+		(e-list @4-2-7-3 (elem-var 88)
 			(elems
-				(e_int (5:3-5:4)
-					(int_var 83)
-					(precision_var 82)
-					(literal "3")
-					(value "TODO")
-					(bound "u8"))
-				(e_int (6:3-6:4)
-					(int_var 86)
-					(precision_var 85)
-					(literal "4")
-					(value "TODO")
-					(bound "u8"))))
-		(e_list (8:2-8:5)
-			(elem_var 93)
+				(e-int @5-3-5-4 (int-var 83) (precision-var 82) (literal "3") (value "TODO") (bound "u8"))
+				(e-int @6-3-6-4 (int-var 86) (precision-var 85) (literal "4") (value "TODO") (bound "u8"))))
+		(e-list @8-2-8-5 (elem-var 93)
 			(elems
-				(e_int (8:3-8:4)
-					(int_var 91)
-					(precision_var 90)
-					(literal "5")
-					(value "TODO")
-					(bound "u8"))))))
+				(e-int @8-3-8-4 (int-var 91) (precision-var 90) (literal "5") (value "TODO") (bound "u8"))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr 96 (type "List(List(Num(Int(*))))"))
+(expr (id 96) (type "List(List(Num(Int(*))))"))
 ~~~

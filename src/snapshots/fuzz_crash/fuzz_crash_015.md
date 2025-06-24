@@ -76,13 +76,13 @@ Int(4:1-4:3),EndOfFile(4:3-4:3),
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-4:3)
-	(malformed_header (1:1-1:6) "missing_header")
+(file @1-1-4-3
+	(malformed-header @1-1-1-6 (tag "missing_header"))
 	(statements
-		(malformed_expr (1:1-1:1) "expr_unexpected_token")
-		(int (2:1-2:4) "0_0")
-		(malformed_expr (1:1-1:1) "expr_no_space_dot_int")
-		(int (4:1-4:3) "0_")))
+		(e-malformed @1-1-1-1 (reason "expr_unexpected_token"))
+		(e-int @2-1-2-4 (raw "0_0"))
+		(e-malformed @1-1-1-1 (reason "expr_no_space_dot_int"))
+		(e-int @4-1-4-3 (raw "0_"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -93,9 +93,11 @@ Int(4:1-4:3),EndOfFile(4:3-4:3),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir "empty")
+(can-ir (empty true))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types (defs) (expressions))
+(inferred-types
+	(defs)
+	(expressions))
 ~~~

@@ -36,10 +36,11 @@ OpAssign(1:1-1:2),StringStart(1:3-1:4),StringPart(1:4-1:6),EndOfFile(1:6-1:6),
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-1:6)
-	(malformed_header (1:1-1:4) "missing_header")
+(file @1-1-1-6
+	(malformed-header @1-1-1-4 (tag "missing_header"))
 	(statements
-		(string (1:3-1:6) (string_part (1:4-1:6) "te"))))
+		(e-string @1-3-1-6
+			(e-string-part @1-4-1-6 (raw "te")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -47,9 +48,11 @@ OpAssign(1:1-1:2),StringStart(1:3-1:4),StringPart(1:4-1:6),EndOfFile(1:6-1:6),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir "empty")
+(can-ir (empty true))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types (defs) (expressions))
+(inferred-types
+	(defs)
+	(expressions))
 ~~~

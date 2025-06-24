@@ -23,16 +23,14 @@ LowerIdent(5:1-5:5),OpAssign(5:6-5:7),UpperIdent(5:8-5:14),NoSpaceDotLowerIdent(
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-5:21)
-	(module (1:1-1:10) (exposes (1:8-1:10)))
+(file @1-1-5-21
+	(module @1-1-1-10
+		(exposes @1-8-1-10))
 	(statements
-		(import (3:1-3:27)
-			".Json"
-			(qualifier "json")
-			(alias "MyJson"))
-		(decl (5:1-5:21)
-			(ident (5:1-5:5) "main")
-			(ident (5:8-5:21) "MyJson" ".decode"))))
+		(s-import @3-1-3-27 (module ".Json") (qualifier "json") (alias "MyJson"))
+		(s-decl @5-1-5-21
+			(p-ident @5-1-5-5 (raw "main"))
+			(e-ident @5-8-5-21 (qaul "MyJson") (raw ".decode")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -40,31 +38,19 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir
-	(d_let
-		(def_pattern
-			(p_assign (5:1-5:5)
-				(pid 73)
-				(ident "main")))
-		(def_expr
-			(e_lookup_external
-				(external_decl (5:8-5:21)
-					(qualified_name "json.Json.decode")
-					(module_name "json.Json")
-					(local_name "decode")
-					(kind "value")
-					(type_var 74)))))
-	(s_import (3:1-3:27)
-		"json.Json"
-		""
-		""
+(can-ir
+	(d-let (id 76)
+		(p-assign @5-1-5-5 (ident "main") (id 73))
+		(e-lookup-external (id 75)
+			(ext-decl @5-8-5-21 (qualified "json.Json.decode") (module "json.Json") (local "decode") (kind "value") (type-var 74))))
+	(s-import @3-1-3-27 (module "json.Json") (id 72)
 		(exposes)))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types
+(inferred-types
 	(defs
-		(def "main" 76 (type "*")))
+		(def (name "main") (type "*")))
 	(expressions
-		(expr (5:8-5:21) 75 (type "*"))))
+		(expr @5-8-5-21 (type "*"))))
 ~~~

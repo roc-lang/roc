@@ -23,21 +23,19 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 ~~~
 # PARSE
 ~~~clojure
-(block (1:1-5:2)
+(e-block @1-1-5-2
 	(statements
-		(decl (2:5-2:11)
-			(ident (2:5-2:6) "x")
-			(int (2:9-2:11) "42"))
-		(decl (3:5-4:6)
-			(ident (3:5-3:6) "y")
-			(binop (3:9-4:6)
-				"+"
-				(ident (3:9-3:10) "" "x")
-				(int (3:13-3:14) "1")))
-		(binop (4:5-5:2)
-			"*"
-			(ident (4:5-4:6) "" "y")
-			(int (4:9-4:10) "2"))))
+		(s-decl @2-5-2-11
+			(p-ident @2-5-2-6 (raw "x"))
+			(e-int @2-9-2-11 (raw "42")))
+		(s-decl @3-5-4-6
+			(p-ident @3-5-3-6 (raw "y"))
+			(e-binop @3-9-4-6 (op "+")
+				(e-ident @3-9-3-10 (qaul "") (raw "x"))
+				(e-int @3-13-3-14 (raw "1"))))
+		(e-binop @4-5-5-2 (op "*")
+			(e-ident @4-5-4-6 (qaul "") (raw "y"))
+			(e-int @4-9-4-10 (raw "2")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -49,41 +47,22 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e_block (1:1-5:2)
-	(s_let (2:5-2:11)
-		(p_assign (2:5-2:6)
-			(pid 72)
-			(ident "x"))
-		(e_int (2:9-2:11)
-			(int_var 74)
-			(precision_var 73)
-			(literal "42")
-			(value "TODO")
-			(bound "u8")))
-	(s_let (3:5-4:6)
-		(p_assign (3:5-3:6)
-			(pid 77)
-			(ident "y"))
-		(e_binop (3:9-4:6)
-			"add"
-			(e_lookup_local (3:9-3:10) (pid 72))
-			(e_int (3:13-3:14)
-				(int_var 80)
-				(precision_var 79)
-				(literal "1")
-				(value "TODO")
-				(bound "u8"))))
-	(e_binop (4:5-5:2)
-		"mul"
-		(e_lookup_local (4:5-4:6) (pid 77))
-		(e_int (4:9-4:10)
-			(int_var 86)
-			(precision_var 85)
-			(literal "2")
-			(value "TODO")
-			(bound "u8"))))
+(e-block @1-1-5-2 (id 89)
+	(s-let @2-5-2-11
+		(p-assign @2-5-2-6 (ident "x") (id 72))
+		(e-int @2-9-2-11 (int-var 74) (precision-var 73) (literal "42") (value "TODO") (bound "u8") (id 75)))
+	(s-let @3-5-4-6
+		(p-assign @3-5-3-6 (ident "y") (id 77))
+		(e-binop @3-9-4-6 (op "add") (id 82)
+			(e-lookup-local @3-9-3-10
+				(pattern (id 72)))
+			(e-int @3-13-3-14 (int-var 80) (precision-var 79) (literal "1") (value "TODO") (bound "u8"))))
+	(e-binop @4-5-5-2 (op "mul")
+		(e-lookup-local @4-5-4-6
+			(pattern (id 77)))
+		(e-int @4-9-4-10 (int-var 86) (precision-var 85) (literal "2") (value "TODO") (bound "u8"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr 89 (type "*"))
+(expr (id 89) (type "*"))
 ~~~

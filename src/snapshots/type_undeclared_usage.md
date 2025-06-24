@@ -63,30 +63,33 @@ UpperIdent(10:1-10:12),OpColon(10:13-10:14),UpperIdent(10:15-10:25),NoSpaceDotUp
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-10:37)
-	(module (1:1-1:30)
-		(exposes (1:8-1:30)
-			(exposed_item (upper_ident "MyType"))
-			(exposed_item (lower_ident "processValue"))))
+(file @1-1-10-37
+	(module @1-1-1-30
+		(exposes @1-8-1-30
+			(exposed-upper-ident (text "MyType"))
+			(exposed-lower-ident (text "processValue"))))
 	(statements
-		(type_decl (3:1-5:13)
-			(header (3:1-3:7) "MyType" (args))
-			(ty "UnknownType"))
-		(type_anno (5:1-6:13)
-			"processValue"
-			(fn (5:16-5:39)
-				(ty "UndeclaredResult")
-				(ty "Str")))
-		(decl (6:1-8:2)
-			(ident (6:1-6:13) "processValue")
-			(lambda (6:16-8:2)
-				(args (ident (6:17-6:22) "value"))
-				(block (6:24-8:2)
+		(s-type-decl @3-1-5-13
+			(header @3-1-3-7 (name "MyType")
+				(args))
+			(ty (name "UnknownType")))
+		(s-type-anno @5-1-6-13 (name "processValue")
+			(ty-fn @5-16-5-39
+				(ty (name "UndeclaredResult"))
+				(ty (name "Str"))))
+		(s-decl @6-1-8-2
+			(p-ident @6-1-6-13 (raw "processValue"))
+			(e-lambda @6-16-8-2
+				(args
+					(p-ident @6-17-6-22 (raw "value")))
+				(e-block @6-24-8-2
 					(statements
-						(string (7:5-7:16) (string_part (7:6-7:15) "processed"))))))
-		(type_decl (10:1-10:37)
-			(header (10:1-10:12) "AnotherType" (args))
-			(mod_ty "SomeModule" ".MissingType"))))
+						(e-string @7-5-7-16
+							(e-string-part @7-6-7-15 (raw "processed")))))))
+		(s-type-decl @10-1-10-37
+			(header @10-1-10-12 (name "AnotherType")
+				(args))
+			(ty-mod (module "MissingType") (name "SomeModule")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -103,39 +106,32 @@ AnotherType : SomeModule.MissingType
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir
-	(d_let
-		(def_pattern
-			(p_assign (6:1-6:13)
-				(pid 83)
-				(ident "processValue")))
-		(def_expr
-			(e_lambda (6:16-8:2)
-				(args
-					(p_assign (6:17-6:22)
-						(pid 84)
-						(ident "value")))
-				(e_block (6:24-8:2)
-					(e_string (7:5-7:16) (e_literal (7:6-7:15) "processed")))))
-		(annotation (6:1-6:13)
-			(signature 93)
-			(declared_type
-				(fn (5:16-5:39)
-					(ty (5:16-5:32) "UndeclaredResult")
-					(ty (5:36-5:39) "Str")
-					"false"))))
-	(s_type_decl (3:1-5:13)
-		(type_header (3:1-3:7) "MyType")
-		(ty (3:10-3:21) "UnknownType"))
-	(s_type_decl (10:1-10:37)
-		(type_header (10:1-10:12) "AnotherType")
-		(mod_ty (10:15-10:37) "MissingType" "SomeModule")))
+(can-ir
+	(d-let (id 95)
+		(p-assign @6-1-6-13 (ident "processValue") (id 83))
+		(e-lambda @6-16-8-2 (id 88)
+			(args
+				(p-assign @6-17-6-22 (ident "value") (id 84)))
+			(e-block @6-24-8-2
+				(e-string @7-5-7-16
+					(e-literal @7-6-7-15 (string "processed")))))
+		(annotation @6-1-6-13 (signature 93) (id 94)
+			(declared-type
+				(ty-fn @5-16-5-39 (effectful false)
+					(ty @5-16-5-32 (name "UndeclaredResult"))
+					(ty @5-36-5-39 (name "Str"))))))
+	(s-type-decl @3-1-5-13 (id 75)
+		(type-header @3-1-3-7 (name "MyType"))
+		(ty @3-10-3-21 (name "UnknownType")))
+	(s-type-decl @10-1-10-37 (id 78)
+		(type-header @10-1-10-12 (name "AnotherType"))
+		(ty-mod @10-15-10-37 (module "MissingType") (type "SomeModule"))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types
+(inferred-types
 	(defs
-		(def "processValue" 95 (type "*")))
+		(def (name "processValue") (type "*")))
 	(expressions
-		(expr (6:16-8:2) 88 (type "*"))))
+		(expr @6-16-8-2 (type "*"))))
 ~~~

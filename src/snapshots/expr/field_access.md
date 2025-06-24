@@ -18,11 +18,10 @@ LowerIdent(1:1-1:7),NoSpaceDotLowerIdent(1:7-1:12),EndOfFile(1:12-1:12),
 ~~~
 # PARSE
 ~~~clojure
-(field_access (1:1-1:12)
-	(binop (1:1-1:12)
-		"person"
-		(ident (1:1-1:7) "" "person")
-		(ident (1:7-1:12) "" ".name")))
+(e-field-access @1-1-1-12
+	(e-binop @1-1-1-12 (op "person")
+		(e-ident @1-1-1-7 (qaul "") (raw "person"))
+		(e-ident @1-7-1-12 (qaul "") (raw ".name"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -30,11 +29,11 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e_dot_access (1:1-1:12)
-	(e_runtime_error (1:1-1:7) "ident_not_in_scope")
-	"name")
+(e-dot-access @1-1-1-12 (field "name") (id 74)
+	(receiver
+		(e-runtime-error (tag "ident_not_in_scope"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr 74 (type "*"))
+(expr (id 74) (type "*"))
 ~~~

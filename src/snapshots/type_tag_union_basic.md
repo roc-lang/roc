@@ -48,37 +48,40 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-6:15)
-	(app (1:1-1:53)
-		(provides (1:6-1:12) (exposed_item (lower_ident "main!")))
-		(record_field (1:15-1:53)
-			"pf"
-			(string (1:28-1:51) (string_part (1:29-1:50) "../basic-cli/main.roc")))
-		(packages (1:13-1:53)
-			(record_field (1:15-1:53)
-				"pf"
-				(string (1:28-1:51) (string_part (1:29-1:50) "../basic-cli/main.roc")))))
+(file @1-1-6-15
+	(app @1-1-1-53
+		(provides @1-6-1-12
+			(exposed-lower-ident (text "main!")))
+		(record-field @1-15-1-53 (name "pf")
+			(e-string @1-28-1-51
+				(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))
+		(packages @1-13-1-53
+			(record-field @1-15-1-53 (name "pf")
+				(e-string @1-28-1-51
+					(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(type_anno (3:1-4:8)
-			"process"
-			(fn (3:11-3:35)
-				(tag_union (3:11-3:28)
+		(s-type-anno @3-1-4-8 (name "process")
+			(ty-fn @3-11-3-35
+				(ty-tag-union @3-11-3-28
 					(tags
-						(apply (3:12-3:21)
-							(ty "Some")
-							(ty "Str"))
-						(ty "None")))
-				(ty "Str")))
-		(decl (4:1-4:27)
-			(ident (4:1-4:8) "process")
-			(lambda (4:11-4:27)
-				(args (ident (4:12-4:17) "maybe"))
-				(string (4:19-4:27) (string_part (4:20-4:26) "result"))))
-		(decl (6:1-6:15)
-			(ident (6:1-6:6) "main!")
-			(lambda (6:9-6:15)
-				(args (underscore))
-				(record (6:13-6:15))))))
+						(ty-apply @3-12-3-21
+							(ty (name "Some"))
+							(ty (name "Str")))
+						(ty (name "None"))))
+				(ty (name "Str"))))
+		(s-decl @4-1-4-27
+			(p-ident @4-1-4-8 (raw "process"))
+			(e-lambda @4-11-4-27
+				(args
+					(p-ident @4-12-4-17 (raw "maybe")))
+				(e-string @4-19-4-27
+					(e-string-part @4-20-4-26 (raw "result")))))
+		(s-decl @6-1-6-15
+			(p-ident @6-1-6-6 (raw "main!"))
+			(e-lambda @6-9-6-15
+				(args
+					(p-underscore))
+				(e-record @6-13-6-15)))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -86,47 +89,36 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir
-	(d_let
-		(def_pattern
-			(p_assign (4:1-4:8)
-				(pid 79)
-				(ident "process")))
-		(def_expr
-			(e_lambda (4:11-4:27)
-				(args
-					(p_assign (4:12-4:17)
-						(pid 80)
-						(ident "maybe")))
-				(e_string (4:19-4:27) (e_literal (4:20-4:26) "result"))))
-		(annotation (4:1-4:8)
-			(signature 88)
-			(declared_type
-				(fn (3:11-3:35)
-					(tag_union (3:11-3:28)
-						(apply (3:12-3:21)
-							"Some"
-							(ty (3:17-3:20) "Str"))
-						(ty (3:23-3:27) "None"))
-					(ty (3:32-3:35) "Str")
-					"false"))))
-	(d_let
-		(def_pattern
-			(p_assign (6:1-6:6)
-				(pid 91)
-				(ident "main!")))
-		(def_expr
-			(e_lambda (6:9-6:15)
-				(args (p_underscore (6:10-6:11) (pid 92)))
-				(e_runtime_error (1:1-1:1) "not_implemented")))))
+(can-ir
+	(d-let (id 90)
+		(p-assign @4-1-4-8 (ident "process") (id 79))
+		(e-lambda @4-11-4-27 (id 83)
+			(args
+				(p-assign @4-12-4-17 (ident "maybe") (id 80)))
+			(e-string @4-19-4-27
+				(e-literal @4-20-4-26 (string "result"))))
+		(annotation @4-1-4-8 (signature 88) (id 89)
+			(declared-type
+				(ty-fn @3-11-3-35 (effectful false)
+					(ty-tag-union @3-11-3-28
+						(ty-apply @3-12-3-21 (symbol "Some")
+							(ty @3-17-3-20 (name "Str")))
+						(ty @3-23-3-27 (name "None")))
+					(ty @3-32-3-35 (name "Str"))))))
+	(d-let (id 96)
+		(p-assign @6-1-6-6 (ident "main!") (id 91))
+		(e-lambda @6-9-6-15 (id 95)
+			(args
+				(p-underscore @6-10-6-11 (id 92)))
+			(e-runtime-error (tag "not_implemented")))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types
+(inferred-types
 	(defs
-		(def "process" 90 (type "*"))
-		(def "main!" 96 (type "*")))
+		(def (name "process") (type "*"))
+		(def (name "main!") (type "*")))
 	(expressions
-		(expr (4:11-4:27) 83 (type "*"))
-		(expr (6:9-6:15) 95 (type "*"))))
+		(expr @4-11-4-27 (type "*"))
+		(expr @6-9-6-15 (type "*"))))
 ~~~

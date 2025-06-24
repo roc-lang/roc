@@ -82,80 +82,88 @@ CloseCurly(17:1-17:2),EndOfFile(17:2-17:2),
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-17:2)
-	(app (1:1-1:57)
-		(provides (1:6-1:12) (exposed_item (lower_ident "main!")))
-		(record_field (1:15-1:57)
-			"pf"
-			(string (1:28-1:55) (string_part (1:29-1:54) "../basic-cli/platform.roc")))
-		(packages (1:13-1:57)
-			(record_field (1:15-1:57)
-				"pf"
-				(string (1:28-1:55) (string_part (1:29-1:54) "../basic-cli/platform.roc")))))
+(file @1-1-17-2
+	(app @1-1-1-57
+		(provides @1-6-1-12
+			(exposed-lower-ident (text "main!")))
+		(record-field @1-15-1-57 (name "pf")
+			(e-string @1-28-1-55
+				(e-string-part @1-29-1-54 (raw "../basic-cli/platform.roc"))))
+		(packages @1-13-1-57
+			(record-field @1-15-1-57 (name "pf")
+				(e-string @1-28-1-55
+					(e-string-part @1-29-1-54 (raw "../basic-cli/platform.roc"))))))
 	(statements
-		(type_decl (3:1-4:9)
-			(header (3:1-3:7) "UserId" (args))
-			(ty "U64"))
-		(type_decl (4:1-5:8)
-			(header (4:1-4:9) "UserName" (args))
-			(ty "Str"))
-		(type_decl (5:1-6:5)
-			(header (5:1-5:8) "UserAge" (args))
-			(ty "U8"))
-		(type_decl (6:1-8:11)
-			(header (6:1-6:5) "User" (args))
-			(record (6:8-6:52)
-				(anno_record_field (6:10-6:21) "id" (ty "UserId"))
-				(anno_record_field (6:22-6:37) "name" (ty "UserName"))
-				(anno_record_field (6:38-6:52) "age" (ty "UserAge"))))
-		(type_anno (8:1-9:11)
-			"createUser"
-			(fn (8:14-8:47)
-				(ty "UserId")
-				(ty "UserName")
-				(ty "UserAge")
-				(ty "User")))
-		(decl (9:1-9:47)
-			(ident (9:1-9:11) "createUser")
-			(lambda (9:14-9:47)
+		(s-type-decl @3-1-4-9
+			(header @3-1-3-7 (name "UserId")
+				(args))
+			(ty (name "U64")))
+		(s-type-decl @4-1-5-8
+			(header @4-1-4-9 (name "UserName")
+				(args))
+			(ty (name "Str")))
+		(s-type-decl @5-1-6-5
+			(header @5-1-5-8 (name "UserAge")
+				(args))
+			(ty (name "U8")))
+		(s-type-decl @6-1-8-11
+			(header @6-1-6-5 (name "User")
+				(args))
+			(ty-record @6-8-6-52
+				(anno-record-field @6-10-6-21 (name "id")
+					(ty (name "UserId")))
+				(anno-record-field @6-22-6-37 (name "name")
+					(ty (name "UserName")))
+				(anno-record-field @6-38-6-52 (name "age")
+					(ty (name "UserAge")))))
+		(s-type-anno @8-1-9-11 (name "createUser")
+			(ty-fn @8-14-8-47
+				(ty (name "UserId"))
+				(ty (name "UserName"))
+				(ty (name "UserAge"))
+				(ty (name "User"))))
+		(s-decl @9-1-9-47
+			(p-ident @9-1-9-11 (raw "createUser"))
+			(e-lambda @9-14-9-47
 				(args
-					(ident (9:15-9:17) "id")
-					(ident (9:19-9:23) "name")
-					(ident (9:25-9:28) "age"))
-				(record (9:30-9:47)
-					(field "id")
-					(field "name")
-					(field "age"))))
-		(type_anno (11:1-12:12)
-			"getUserName"
-			(fn (11:15-11:31)
-				(ty "User")
-				(ty "UserName")))
-		(decl (12:1-14:6)
-			(ident (12:1-12:12) "getUserName")
-			(lambda (12:15-14:6)
-				(args (ident (12:16-12:20) "user"))
-				(field_access (12:22-14:6)
-					(binop (12:22-14:6)
-						"app"
-						(ident (12:22-12:26) "" "user")
-						(ident (12:26-12:31) "" ".name")))))
-		(decl (14:1-17:2)
-			(ident (14:1-14:6) "main!")
-			(lambda (14:9-17:2)
-				(args (underscore))
-				(block (14:13-17:2)
+					(p-ident @9-15-9-17 (raw "id"))
+					(p-ident @9-19-9-23 (raw "name"))
+					(p-ident @9-25-9-28 (raw "age")))
+				(e-record @9-30-9-47
+					(field (field "id") (optional false))
+					(field (field "name") (optional false))
+					(field (field "age") (optional false)))))
+		(s-type-anno @11-1-12-12 (name "getUserName")
+			(ty-fn @11-15-11-31
+				(ty (name "User"))
+				(ty (name "UserName"))))
+		(s-decl @12-1-14-6
+			(p-ident @12-1-12-12 (raw "getUserName"))
+			(e-lambda @12-15-14-6
+				(args
+					(p-ident @12-16-12-20 (raw "user")))
+				(e-field-access @12-22-14-6
+					(e-binop @12-22-14-6 (op "app")
+						(e-ident @12-22-12-26 (qaul "") (raw "user"))
+						(e-ident @12-26-12-31 (qaul "") (raw ".name"))))))
+		(s-decl @14-1-17-2
+			(p-ident @14-1-14-6 (raw "main!"))
+			(e-lambda @14-9-17-2
+				(args
+					(p-underscore))
+				(e-block @14-13-17-2
 					(statements
-						(decl (15:5-15:40)
-							(ident (15:5-15:9) "user")
-							(apply (15:12-15:40)
-								(ident (15:12-15:22) "" "createUser")
-								(int (15:23-15:26) "123")
-								(string (15:28-15:35) (string_part (15:29-15:34) "Alice"))
-								(int (15:37-15:39) "25")))
-						(apply (16:5-16:22)
-							(ident (16:5-16:16) "" "getUserName")
-							(ident (16:17-16:21) "" "user"))))))))
+						(s-decl @15-5-15-40
+							(p-ident @15-5-15-9 (raw "user"))
+							(e-apply @15-12-15-40
+								(e-ident @15-12-15-22 (qaul "") (raw "createUser"))
+								(e-int @15-23-15-26 (raw "123"))
+								(e-string @15-28-15-35
+									(e-string-part @15-29-15-34 (raw "Alice")))
+								(e-int @15-37-15-39 (raw "25"))))
+						(e-apply @16-5-16-22
+							(e-ident @16-5-16-16 (qaul "") (raw "getUserName"))
+							(e-ident @16-17-16-21 (qaul "") (raw "user")))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -179,111 +187,84 @@ main! = |_| {
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir
-	(d_let
-		(def_pattern
-			(p_assign (9:1-9:11)
-				(pid 95)
-				(ident "createUser")))
-		(def_expr
-			(e_lambda (9:14-9:47)
-				(args
-					(p_assign (9:15-9:17)
-						(pid 96)
-						(ident "id"))
-					(p_assign (9:19-9:23)
-						(pid 97)
-						(ident "name"))
-					(p_assign (9:25-9:28)
-						(pid 98)
-						(ident "age")))
-				(e_runtime_error (1:1-1:1) "not_implemented")))
-		(annotation (9:1-9:11)
-			(signature 110)
-			(declared_type
-				(fn (8:14-8:47)
-					(ty (8:14-8:20) "UserId")
-					(ty (8:22-8:30) "UserName")
-					(ty (8:32-8:39) "UserAge")
-					(ty (8:43-8:47) "User")
-					"false"))))
-	(d_let
-		(def_pattern
-			(p_assign (12:1-12:12)
-				(pid 116)
-				(ident "getUserName")))
-		(def_expr
-			(e_lambda (12:15-14:6)
-				(args
-					(p_assign (12:16-12:20)
-						(pid 117)
-						(ident "user")))
-				(e_dot_access (12:22-14:6)
-					(e_lookup_local (12:22-12:26) (pid 117))
-					"name")))
-		(annotation (12:1-12:12)
-			(signature 124)
-			(declared_type
-				(fn (11:15-11:31)
-					(ty (11:15-11:19) "User")
-					(ty (11:23-11:31) "UserName")
-					"false"))))
-	(d_let
-		(def_pattern
-			(p_assign (14:1-14:6)
-				(pid 127)
-				(ident "main!")))
-		(def_expr
-			(e_lambda (14:9-17:2)
-				(args (p_underscore (14:10-14:11) (pid 128)))
-				(e_block (14:13-17:2)
-					(s_let (15:5-15:40)
-						(p_assign (15:5-15:9)
-							(pid 129)
-							(ident "user"))
-						(e_call (15:12-15:40)
-							(e_lookup_local (15:12-15:22) (pid 95))
-							(e_int (15:23-15:26)
-								(int_var 132)
-								(precision_var 131)
-								(literal "123")
-								(value "TODO")
-								(bound "u8"))
-							(e_string (15:28-15:35) (e_literal (15:29-15:34) "Alice"))
-							(e_int (15:37-15:39)
-								(int_var 137)
-								(precision_var 136)
-								(literal "25")
-								(value "TODO")
-								(bound "u8"))))
-					(e_call (16:5-16:22)
-						(e_lookup_local (16:5-16:16) (pid 116))
-						(e_lookup_local (16:17-16:21) (pid 129)))))))
-	(s_type_decl (3:1-4:9)
-		(type_header (3:1-3:7) "UserId")
-		(ty (3:10-3:13) "U64"))
-	(s_type_decl (4:1-5:8)
-		(type_header (4:1-4:9) "UserName")
-		(ty (4:12-4:15) "Str"))
-	(s_type_decl (5:1-6:5)
-		(type_header (5:1-5:8) "UserAge")
-		(ty (5:11-5:13) "U8"))
-	(s_type_decl (6:1-8:11)
-		(type_header (6:1-6:5) "User")
-		(record (6:8-6:52)
-			(record_field "id" (ty (6:14-6:20) "UserId"))
-			(record_field "name" (ty (6:28-6:36) "UserName"))
-			(record_field "age" (ty (6:43-6:50) "UserAge")))))
+(can-ir
+	(d-let (id 112)
+		(p-assign @9-1-9-11 (ident "createUser") (id 95))
+		(e-lambda @9-14-9-47 (id 101)
+			(args
+				(p-assign @9-15-9-17 (ident "id") (id 96))
+				(p-assign @9-19-9-23 (ident "name") (id 97))
+				(p-assign @9-25-9-28 (ident "age") (id 98)))
+			(e-runtime-error (tag "not_implemented")))
+		(annotation @9-1-9-11 (signature 110) (id 111)
+			(declared-type
+				(ty-fn @8-14-8-47 (effectful false)
+					(ty @8-14-8-20 (name "UserId"))
+					(ty @8-22-8-30 (name "UserName"))
+					(ty @8-32-8-39 (name "UserAge"))
+					(ty @8-43-8-47 (name "User"))))))
+	(d-let (id 126)
+		(p-assign @12-1-12-12 (ident "getUserName") (id 116))
+		(e-lambda @12-15-14-6 (id 120)
+			(args
+				(p-assign @12-16-12-20 (ident "user") (id 117)))
+			(e-dot-access @12-22-14-6 (field "name")
+				(receiver
+					(e-lookup-local @12-22-12-26
+						(pattern (id 117))))))
+		(annotation @12-1-12-12 (signature 124) (id 125)
+			(declared-type
+				(ty-fn @11-15-11-31 (effectful false)
+					(ty @11-15-11-19 (name "User"))
+					(ty @11-23-11-31 (name "UserName"))))))
+	(d-let (id 146)
+		(p-assign @14-1-14-6 (ident "main!") (id 127))
+		(e-lambda @14-9-17-2 (id 145)
+			(args
+				(p-underscore @14-10-14-11 (id 128)))
+			(e-block @14-13-17-2
+				(s-let @15-5-15-40
+					(p-assign @15-5-15-9 (ident "user") (id 129))
+					(e-call @15-12-15-40 (id 139)
+						(e-lookup-local @15-12-15-22
+							(pattern (id 95)))
+						(e-int @15-23-15-26 (int-var 132) (precision-var 131) (literal "123") (value "TODO") (bound "u8"))
+						(e-string @15-28-15-35
+							(e-literal @15-29-15-34 (string "Alice")))
+						(e-int @15-37-15-39 (int-var 137) (precision-var 136) (literal "25") (value "TODO") (bound "u8"))))
+				(e-call @16-5-16-22
+					(e-lookup-local @16-5-16-16
+						(pattern (id 116)))
+					(e-lookup-local @16-17-16-21
+						(pattern (id 129)))))))
+	(s-type-decl @3-1-4-9 (id 74)
+		(type-header @3-1-3-7 (name "UserId"))
+		(ty @3-10-3-13 (name "U64")))
+	(s-type-decl @4-1-5-8 (id 77)
+		(type-header @4-1-4-9 (name "UserName"))
+		(ty @4-12-4-15 (name "Str")))
+	(s-type-decl @5-1-6-5 (id 80)
+		(type-header @5-1-5-8 (name "UserAge"))
+		(ty @5-11-5-13 (name "U8")))
+	(s-type-decl @6-1-8-11 (id 89)
+		(type-header @6-1-6-5 (name "User"))
+		(ty-record @6-8-6-52
+			(field (field "id")
+				(ty @6-14-6-20 (name "UserId")))
+			(field (field "name")
+				(ty @6-28-6-36 (name "UserName")))
+			(field (field "age")
+				(ty @6-43-6-50 (name "UserAge"))))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types
+(inferred-types
 	(defs
-		(def "createUser" 112 (type "*"))
-		(def "getUserName" 126 (type "*"))
-		(def "main!" 146 (type "*")))
+		(def (name "createUser") (type "*"))
+		(def (name "getUserName") (type "*"))
+		(def (name "main!") (type "*")))
 	(expressions
-		(expr (9:14-9:47) 101 (type "*"))
-		(expr (12:15-14:6) 120 (type "*"))
-		(expr (14:9-17:2) 145 (type "*"))))
+		(expr @9-14-9-47 (type "*"))
+		(expr @12-15-14-6 (type "*"))
+		(expr @14-9-17-2 (type "*"))))
 ~~~

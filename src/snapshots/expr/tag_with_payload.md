@@ -15,9 +15,9 @@ UpperIdent(1:1-1:5),NoSpaceOpenRound(1:5-1:6),Int(1:6-1:8),CloseRound(1:8-1:9),E
 ~~~
 # PARSE
 ~~~clojure
-(apply (1:1-1:9)
-	(tag (1:1-1:5) "Some")
-	(int (1:6-1:8) "42"))
+(e-apply @1-1-1-9
+	(e-tag @1-1-1-5 (raw "Some"))
+	(e-int @1-6-1-8 (raw "42")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -25,19 +25,11 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e_call (1:1-1:9)
-	(e_tag (1:1-1:5)
-		(ext_var 0)
-		(name "Some")
-		(args "TODO"))
-	(e_int (1:6-1:8)
-		(int_var 75)
-		(precision_var 74)
-		(literal "42")
-		(value "TODO")
-		(bound "u8")))
+(e-call @1-1-1-9 (id 77)
+	(e-tag @1-1-1-5 (ext-var 0) (name "Some") (args "TODO"))
+	(e-int @1-6-1-8 (int-var 75) (precision-var 74) (literal "42") (value "TODO") (bound "u8")))
 ~~~
 # TYPES
 ~~~clojure
-(expr 77 (type "*"))
+(expr (id 77) (type "*"))
 ~~~

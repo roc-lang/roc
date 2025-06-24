@@ -65,14 +65,15 @@ LowerIdent(2:1-2:4),OpAssign(2:5-2:6),StringStart(2:7-2:8),StringPart(2:8-2:14),
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-2:20)
-	(malformed_header (1:1-1:5) "missing_header")
+(file @1-1-2-20
+	(malformed-header @1-1-1-5 (tag "missing_header"))
 	(statements
-		(malformed_expr (1:4-1:7) "expr_unexpected_token")
-		(string (1:6-1:11) (string_part (1:7-1:10) "luc"))
-		(decl (2:1-2:20)
-			(ident (2:1-2:4) "foo")
-			(malformed_expr (2:7-2:20) "string_expected_close_interpolation"))))
+		(e-malformed @1-4-1-7 (reason "expr_unexpected_token"))
+		(e-string @1-6-1-11
+			(e-string-part @1-7-1-10 (raw "luc")))
+		(s-decl @2-1-2-20
+			(p-ident @2-1-2-4 (raw "foo"))
+			(e-malformed @2-7-2-20 (reason "string_expected_close_interpolation")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -81,19 +82,16 @@ foo =
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir
-	(d_let
-		(def_pattern
-			(p_assign (2:1-2:4)
-				(pid 74)
-				(ident "foo")))
-		(def_expr (e_runtime_error (2:7-2:20) "expr_not_canonicalized"))))
+(can-ir
+	(d-let (id 77)
+		(p-assign @2-1-2-4 (ident "foo") (id 74))
+		(e-runtime-error (tag "expr_not_canonicalized") (id 76))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types
+(inferred-types
 	(defs
-		(def "foo" 77 (type "Error")))
+		(def (name "foo") (type "Error")))
 	(expressions
-		(expr (2:7-2:20) 76 (type "Error"))))
+		(expr @2-7-2-20 (type "Error"))))
 ~~~

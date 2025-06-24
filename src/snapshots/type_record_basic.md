@@ -27,40 +27,46 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-6:44)
-	(app (1:1-1:53)
-		(provides (1:6-1:12) (exposed_item (lower_ident "main!")))
-		(record_field (1:15-1:53)
-			"pf"
-			(string (1:28-1:51) (string_part (1:29-1:50) "../basic-cli/main.roc")))
-		(packages (1:13-1:53)
-			(record_field (1:15-1:53)
-				"pf"
-				(string (1:28-1:51) (string_part (1:29-1:50) "../basic-cli/main.roc")))))
+(file @1-1-6-44
+	(app @1-1-1-53
+		(provides @1-6-1-12
+			(exposed-lower-ident (text "main!")))
+		(record-field @1-15-1-53 (name "pf")
+			(e-string @1-28-1-51
+				(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))
+		(packages @1-13-1-53
+			(record-field @1-15-1-53 (name "pf")
+				(e-string @1-28-1-51
+					(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(type_anno (3:1-4:8)
-			"getName"
-			(fn (3:11-3:41)
-				(record (3:11-3:34)
-					(anno_record_field (3:13-3:23) "name" (ty "Str"))
-					(anno_record_field (3:24-3:34) "age" (ty "U64")))
-				(ty "Str")))
-		(decl (4:1-4:28)
-			(ident (4:1-4:8) "getName")
-			(lambda (4:11-4:28)
-				(args (ident (4:12-4:19) "_person"))
-				(string (4:21-4:28) (string_part (4:22-4:27) "hello"))))
-		(decl (6:1-6:44)
-			(ident (6:1-6:6) "main!")
-			(lambda (6:9-6:44)
-				(args (underscore))
-				(apply (6:13-6:44)
-					(ident (6:13-6:20) "" "getName")
-					(record (6:21-6:43)
-						(field
-							"name"
-							(string (6:28-6:34) (string_part (6:29-6:33) "luke")))
-						(field "age" (int (6:40-6:42) "21"))))))))
+		(s-type-anno @3-1-4-8 (name "getName")
+			(ty-fn @3-11-3-41
+				(ty-record @3-11-3-34
+					(anno-record-field @3-13-3-23 (name "name")
+						(ty (name "Str")))
+					(anno-record-field @3-24-3-34 (name "age")
+						(ty (name "U64"))))
+				(ty (name "Str"))))
+		(s-decl @4-1-4-28
+			(p-ident @4-1-4-8 (raw "getName"))
+			(e-lambda @4-11-4-28
+				(args
+					(p-ident @4-12-4-19 (raw "_person")))
+				(e-string @4-21-4-28
+					(e-string-part @4-22-4-27 (raw "hello")))))
+		(s-decl @6-1-6-44
+			(p-ident @6-1-6-6 (raw "main!"))
+			(e-lambda @6-9-6-44
+				(args
+					(p-underscore))
+				(e-apply @6-13-6-44
+					(e-ident @6-13-6-20 (qaul "") (raw "getName"))
+					(e-record @6-21-6-43
+						(field (field "name") (optional false)
+							(e-string @6-28-6-34
+								(e-string-part @6-29-6-33 (raw "luke"))))
+						(field (field "age") (optional false)
+							(e-int @6-40-6-42 (raw "21")))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -73,47 +79,40 @@ main! = |_| getName({ name: "luke", age: 21 })
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir
-	(d_let
-		(def_pattern
-			(p_assign (4:1-4:8)
-				(pid 79)
-				(ident "getName")))
-		(def_expr
-			(e_lambda (4:11-4:28)
-				(args
-					(p_assign (4:12-4:19)
-						(pid 80)
-						(ident "_person")))
-				(e_string (4:21-4:28) (e_literal (4:22-4:27) "hello"))))
-		(annotation (4:1-4:8)
-			(signature 87)
-			(declared_type
-				(fn (3:11-3:41)
-					(record (3:11-3:34)
-						(record_field "name" (ty (3:19-3:22) "Str"))
-						(record_field "age" (ty (3:29-3:32) "U64")))
-					(ty (3:38-3:41) "Str")
-					"false"))))
-	(d_let
-		(def_pattern
-			(p_assign (6:1-6:6)
-				(pid 90)
-				(ident "main!")))
-		(def_expr
-			(e_lambda (6:9-6:44)
-				(args (p_underscore (6:10-6:11) (pid 91)))
-				(e_call (6:13-6:44)
-					(e_lookup_local (6:13-6:20) (pid 79))
-					(e_runtime_error (1:1-1:1) "not_implemented"))))))
+(can-ir
+	(d-let (id 89)
+		(p-assign @4-1-4-8 (ident "getName") (id 79))
+		(e-lambda @4-11-4-28 (id 83)
+			(args
+				(p-assign @4-12-4-19 (ident "_person") (id 80)))
+			(e-string @4-21-4-28
+				(e-literal @4-22-4-27 (string "hello"))))
+		(annotation @4-1-4-8 (signature 87) (id 88)
+			(declared-type
+				(ty-fn @3-11-3-41 (effectful false)
+					(ty-record @3-11-3-34
+						(field (field "name")
+							(ty @3-19-3-22 (name "Str")))
+						(field (field "age")
+							(ty @3-29-3-32 (name "U64"))))
+					(ty @3-38-3-41 (name "Str"))))))
+	(d-let (id 97)
+		(p-assign @6-1-6-6 (ident "main!") (id 90))
+		(e-lambda @6-9-6-44 (id 96)
+			(args
+				(p-underscore @6-10-6-11 (id 91)))
+			(e-call @6-13-6-44
+				(e-lookup-local @6-13-6-20
+					(pattern (id 79)))
+				(e-runtime-error (tag "not_implemented"))))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types
+(inferred-types
 	(defs
-		(def "getName" 89 (type "*"))
-		(def "main!" 97 (type "*")))
+		(def (name "getName") (type "*"))
+		(def (name "main!") (type "*")))
 	(expressions
-		(expr (4:11-4:28) 83 (type "*"))
-		(expr (6:9-6:44) 96 (type "*"))))
+		(expr @4-11-4-28 (type "*"))
+		(expr @6-9-6-44 (type "*"))))
 ~~~

@@ -15,18 +15,18 @@ KwPackage(1:1-1:8),OpenSquare(1:9-1:10),LowerIdent(1:10-1:19),Comma(1:19-1:20),U
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-1:88)
-	(package (1:1-1:88)
-		(exposes (1:9-1:30)
-			(exposed_item (lower_ident "something"))
-			(exposed_item (upper_ident "SomeType")))
-		(packages (1:31-1:88)
-			(record_field (1:33-1:56)
-				"somePkg"
-				(string (1:42-1:55) (string_part (1:43-1:54) "../main.roc")))
-			(record_field (1:57-1:88)
-				"other"
-				(string (1:64-1:86) (string_part (1:65-1:85) "../../other/main.roc")))))
+(file @1-1-1-88
+	(package @1-1-1-88
+		(exposes @1-9-1-30
+			(exposed-lower-ident (text "something"))
+			(exposed-upper-ident (text "SomeType")))
+		(packages @1-31-1-88
+			(record-field @1-33-1-56 (name "somePkg")
+				(e-string @1-42-1-55
+					(e-string-part @1-43-1-54 (raw "../main.roc"))))
+			(record-field @1-57-1-88 (name "other")
+				(e-string @1-64-1-86
+					(e-string-part @1-65-1-85 (raw "../../other/main.roc"))))))
 	(statements))
 ~~~
 # FORMATTED
@@ -35,9 +35,11 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir "empty")
+(can-ir (empty true))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types (defs) (expressions))
+(inferred-types
+	(defs)
+	(expressions))
 ~~~

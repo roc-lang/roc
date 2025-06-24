@@ -43,13 +43,12 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:9),OpAmpersand(1:10-1:11),LowerIdent(1:12-1:
 ~~~
 # PARSE
 ~~~clojure
-(block (1:1-1:21)
+(e-block @1-1-1-21
 	(statements
-		(ident (1:3-1:9) "" "person")
-		(malformed_expr (1:10-1:15) "expr_unexpected_token")
-		(type_anno (1:12-1:21)
-			"age"
-			(malformed_expr (1:17-1:21) "ty_anno_unexpected_token"))))
+		(e-ident @1-3-1-9 (qaul "") (raw "person"))
+		(e-malformed @1-10-1-15 (reason "expr_unexpected_token"))
+		(s-type-anno @1-12-1-21 (name "age")
+			(ty-malformed @1-17-1-21 (tag "ty_anno_unexpected_token")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -61,11 +60,13 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:9),OpAmpersand(1:10-1:11),LowerIdent(1:12-1:
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e_block (1:1-1:21)
-	(s_expr (1:3-1:11) (e_runtime_error (1:3-1:9) "ident_not_in_scope"))
-	(e_tuple (1:12-1:21) (tuple_var "#77") (elems)))
+(e-block @1-1-1-21 (id 79)
+	(s-expr @1-3-1-11
+		(e-runtime-error (tag "ident_not_in_scope")))
+	(e-tuple @1-12-1-21 (tuple-var 77)
+		(elems)))
 ~~~
 # TYPES
 ~~~clojure
-(expr 79 (type "*"))
+(expr (id 79) (type "*"))
 ~~~

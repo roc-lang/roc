@@ -2,12 +2,12 @@
 
 const std = @import("std");
 const base = @import("../base.zig");
-const sexpr = @import("../base/sexpr.zig");
 const store = @import("../types/store.zig");
 const types = @import("../types/types.zig");
 
 const Allocator = std.mem.Allocator;
 
+const SExpr = base.SExpr;
 const ModuleEnv = base.ModuleEnv;
 const Ident = base.Ident;
 
@@ -24,10 +24,10 @@ const Tag = types.Tag;
 pub const SExprWriter = struct {
     /// Write all variables in the type store into the writer as an s-exprs
     pub fn allVarsToSExprStr(writer: std.io.AnyWriter, gpa: std.mem.Allocator, env: *const ModuleEnv) Allocator.Error!void {
-        var root_node = sexpr.Expr.init(gpa, "types_store");
+        var root_node = SExpr.init(gpa, "types_store");
         defer root_node.deinit(gpa);
 
-        var vars_node = sexpr.Expr.init(gpa, "vars");
+        var vars_node = SExpr.init(gpa, "vars");
 
         if (env.types.slots.backing.items.len == 0) {
             vars_node.appendString(gpa, "empty");
@@ -42,7 +42,7 @@ pub const SExprWriter = struct {
             const var_: Var = @enumFromInt(slot_idx);
             try type_writer.writeVar(var_);
 
-            var var_node = sexpr.Expr.init(gpa, "var");
+            var var_node = SExpr.init(gpa, "var");
             var_node.appendUnsignedInt(gpa, slot_idx);
             var_node.appendString(gpa, buffer.items);
 
@@ -56,10 +56,10 @@ pub const SExprWriter = struct {
     }
 
     /// Convert some content to an s-expr node
-    pub fn varToSExpr(gpa: std.mem.Allocator, type_writer: TypeWriter, var_: Var) sexpr.Expr {
+    pub fn varToSExpr(gpa: std.mem.Allocator, type_writer: TypeWriter, var_: Var) SExpr {
         try type_writer.writerVar(var_);
 
-        var node = sexpr.Expr.init(gpa, "type");
+        var node = SExpr.init(gpa, "type");
         node.appendString(gpa, type_writer.writer.context);
         return node;
     }

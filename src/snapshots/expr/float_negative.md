@@ -15,7 +15,7 @@ Float(1:1-1:5),EndOfFile(1:5-1:5),
 ~~~
 # PARSE
 ~~~clojure
-(float (1:1-1:5) "-2.5")
+(e-float @1-1-1-5 (raw "-2.5"))
 ~~~
 # FORMATTED
 ~~~roc
@@ -23,14 +23,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e_float (1:1-1:5)
-	(frac_var 73)
-	(precision_var 72)
-	(literal "-2.5")
-	(value "0")
-	(bound "f32"))
+(e-float @1-1-1-5 (frac_var 73) (precision-var 72) (literal "-2.5") (value "0") (bound "f32") (id 74))
 ~~~
 # TYPES
 ~~~clojure
-(expr 74 (type "Num(FloatingPoint(*))"))
+(expr (id 74) (type "Num(FloatingPoint(*))"))
 ~~~

@@ -15,10 +15,11 @@ OpenRound(1:1-1:2),Int(1:2-1:3),Comma(1:3-1:4),StringStart(1:5-1:6),StringPart(1
 ~~~
 # PARSE
 ~~~clojure
-(tuple (1:1-1:19)
-	(int (1:2-1:3) "1")
-	(string (1:5-1:12) (string_part (1:6-1:11) "hello"))
-	(tag (1:14-1:18) "True"))
+(e-tuple @1-1-1-19
+	(e-int @1-2-1-3 (raw "1"))
+	(e-string @1-5-1-12
+		(e-string-part @1-6-1-11 (raw "hello")))
+	(e-tag @1-14-1-18 (raw "True")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -26,22 +27,14 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e_tuple (1:1-1:19)
-	(tuple_var "#79")
+(e-tuple @1-1-1-19 (tuple-var 79) (id 80)
 	(elems
-		(e_int (1:2-1:3)
-			(int_var 73)
-			(precision_var 72)
-			(literal "1")
-			(value "TODO")
-			(bound "u8"))
-		(e_string (1:5-1:12) (e_literal (1:6-1:11) "hello"))
-		(e_tag (1:14-1:18)
-			(ext_var 0)
-			(name "True")
-			(args "TODO"))))
+		(e-int @1-2-1-3 (int-var 73) (precision-var 72) (literal "1") (value "TODO") (bound "u8"))
+		(e-string @1-5-1-12
+			(e-literal @1-6-1-11 (string "hello")))
+		(e-tag @1-14-1-18 (ext-var 0) (name "True") (args "TODO"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr 80 (type "*"))
+(expr (id 80) (type "*"))
 ~~~

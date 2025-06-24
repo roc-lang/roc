@@ -78,12 +78,12 @@ MalformedNumberBadSuffix(3:1-3:5),EndOfFile(3:5-3:5),
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-3:5)
-	(malformed_header (1:1-1:5) "missing_header")
+(file @1-1-3-5
+	(malformed-header @1-1-1-5 (tag "missing_header"))
 	(statements
-		(malformed_expr (1:1-1:1) "expr_unexpected_token")
-		(malformed_expr (1:1-1:1) "expr_unexpected_token")
-		(malformed_expr (3:1-3:5) "expr_unexpected_token")))
+		(e-malformed @1-1-1-1 (reason "expr_unexpected_token"))
+		(e-malformed @1-1-1-1 (reason "expr_unexpected_token"))
+		(e-malformed @3-1-3-5 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -93,9 +93,11 @@ MalformedNumberBadSuffix(3:1-3:5),EndOfFile(3:5-3:5),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir "empty")
+(can-ir (empty true))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types (defs) (expressions))
+(inferred-types
+	(defs)
+	(expressions))
 ~~~

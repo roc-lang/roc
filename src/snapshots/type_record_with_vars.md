@@ -39,42 +39,41 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-6:15)
-	(app (1:1-1:53)
-		(provides (1:6-1:12) (exposed_item (lower_ident "main!")))
-		(record_field (1:15-1:53)
-			"pf"
-			(string (1:28-1:51) (string_part (1:29-1:50) "../basic-cli/main.roc")))
-		(packages (1:13-1:53)
-			(record_field (1:15-1:53)
-				"pf"
-				(string (1:28-1:51) (string_part (1:29-1:50) "../basic-cli/main.roc")))))
+(file @1-1-6-15
+	(app @1-1-1-53
+		(provides @1-6-1-12
+			(exposed-lower-ident (text "main!")))
+		(record-field @1-15-1-53 (name "pf")
+			(e-string @1-28-1-51
+				(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))
+		(packages @1-13-1-53
+			(record-field @1-15-1-53 (name "pf")
+				(e-string @1-28-1-51
+					(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(type_anno (3:1-4:9)
-			"getField"
-			(fn (3:12-3:39)
-				(record (3:12-3:34)
-					(anno_record_field (3:14-3:23)
-						"field"
-						(ty_var (3:21-3:22) "a"))
-					(anno_record_field (3:24-3:34)
-						"other"
-						(ty_var (3:31-3:32) "b")))
-				(ty_var (3:38-3:39) "a")))
-		(decl (4:1-6:6)
-			(ident (4:1-4:9) "getField")
-			(lambda (4:12-6:6)
-				(args (ident (4:13-4:19) "record"))
-				(field_access (4:21-6:6)
-					(binop (4:21-6:6)
-						"app"
-						(ident (4:21-4:27) "" "record")
-						(ident (4:27-4:33) "" ".field")))))
-		(decl (6:1-6:15)
-			(ident (6:1-6:6) "main!")
-			(lambda (6:9-6:15)
-				(args (underscore))
-				(record (6:13-6:15))))))
+		(s-type-anno @3-1-4-9 (name "getField")
+			(ty-fn @3-12-3-39
+				(ty-record @3-12-3-34
+					(anno-record-field @3-14-3-23 (name "field")
+						(ty-var @3-21-3-22 (raw "a")))
+					(anno-record-field @3-24-3-34 (name "other")
+						(ty-var @3-31-3-32 (raw "b"))))
+				(ty-var @3-38-3-39 (raw "a"))))
+		(s-decl @4-1-6-6
+			(p-ident @4-1-4-9 (raw "getField"))
+			(e-lambda @4-12-6-6
+				(args
+					(p-ident @4-13-4-19 (raw "record")))
+				(e-field-access @4-21-6-6
+					(e-binop @4-21-6-6 (op "app")
+						(e-ident @4-21-4-27 (qaul "") (raw "record"))
+						(e-ident @4-27-4-33 (qaul "") (raw ".field"))))))
+		(s-decl @6-1-6-15
+			(p-ident @6-1-6-6 (raw "main!"))
+			(e-lambda @6-9-6-15
+				(args
+					(p-underscore))
+				(e-record @6-13-6-15)))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -87,47 +86,39 @@ main! = |_| {}
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir
-	(d_let
-		(def_pattern
-			(p_assign (4:1-4:9)
-				(pid 81)
-				(ident "getField")))
-		(def_expr
-			(e_lambda (4:12-6:6)
-				(args
-					(p_assign (4:13-4:19)
-						(pid 82)
-						(ident "record")))
-				(e_dot_access (4:21-6:6)
-					(e_lookup_local (4:21-4:27) (pid 82))
-					"field")))
-		(annotation (4:1-4:9)
-			(signature 90)
-			(declared_type
-				(fn (3:12-3:39)
-					(record (3:12-3:34)
-						(record_field "field" (ty_var (3:21-3:22) "a"))
-						(record_field "other" (ty_var (3:31-3:32) "b")))
-					(ty_var (3:38-3:39) "a")
-					"false"))))
-	(d_let
-		(def_pattern
-			(p_assign (6:1-6:6)
-				(pid 93)
-				(ident "main!")))
-		(def_expr
-			(e_lambda (6:9-6:15)
-				(args (p_underscore (6:10-6:11) (pid 94)))
-				(e_runtime_error (1:1-1:1) "not_implemented")))))
+(can-ir
+	(d-let (id 92)
+		(p-assign @4-1-4-9 (ident "getField") (id 81))
+		(e-lambda @4-12-6-6 (id 85)
+			(args
+				(p-assign @4-13-4-19 (ident "record") (id 82)))
+			(e-dot-access @4-21-6-6 (field "field")
+				(receiver
+					(e-lookup-local @4-21-4-27
+						(pattern (id 82))))))
+		(annotation @4-1-4-9 (signature 90) (id 91)
+			(declared-type
+				(ty-fn @3-12-3-39 (effectful false)
+					(ty-record @3-12-3-34
+						(field (field "field")
+							(ty-var @3-21-3-22 (name "a")))
+						(field (field "other")
+							(ty-var @3-31-3-32 (name "b"))))
+					(ty-var @3-38-3-39 (name "a"))))))
+	(d-let (id 98)
+		(p-assign @6-1-6-6 (ident "main!") (id 93))
+		(e-lambda @6-9-6-15 (id 97)
+			(args
+				(p-underscore @6-10-6-11 (id 94)))
+			(e-runtime-error (tag "not_implemented")))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types
+(inferred-types
 	(defs
-		(def "getField" 92 (type "*"))
-		(def "main!" 98 (type "*")))
+		(def (name "getField") (type "*"))
+		(def (name "main!") (type "*")))
 	(expressions
-		(expr (4:12-6:6) 85 (type "*"))
-		(expr (6:9-6:15) 97 (type "*"))))
+		(expr @4-12-6-6 (type "*"))
+		(expr @6-9-6-15 (type "*"))))
 ~~~
