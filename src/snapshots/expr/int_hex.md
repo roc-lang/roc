@@ -17,7 +17,7 @@ Int(1:1-1:5),EndOfFile(1:5-1:5),
 ~~~
 # PARSE
 ~~~clojure
-(int (1:1-1:5) "0xFF")
+(e-int @1-1-1-5 (raw "0xFF"))
 ~~~
 # FORMATTED
 ~~~roc
@@ -25,9 +25,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e_runtime_error (1:1-1:5) "invalid_num_literal")
+(e-runtime-error (tag "invalid_num_literal") (id 73))
 ~~~
 # TYPES
 ~~~clojure
-(expr 73 (type "Error"))
+(expr (id 73) (type "Error"))
 ~~~

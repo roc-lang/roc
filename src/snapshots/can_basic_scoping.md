@@ -60,39 +60,39 @@ CloseCurly(16:1-16:2),EndOfFile(16:2-16:2),
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-16:2)
-	(module (1:1-1:10) (exposes (1:8-1:10)))
+(file @1-1-16-2
+	(module @1-1-1-10
+		(exposes @1-8-1-10))
 	(statements
-		(decl (4:1-4:6)
-			(ident (4:1-4:2) "x")
-			(int (4:5-4:6) "5"))
-		(decl (5:1-5:7)
-			(ident (5:1-5:2) "y")
-			(int (5:5-5:7) "10"))
-		(decl (8:1-16:2)
-			(ident (8:1-8:10) "outerFunc")
-			(lambda (8:13-16:2)
-				(args (underscore))
-				(block (8:17-16:2)
+		(s-decl @4-1-4-6
+			(p-ident @4-1-4-2 (raw "x"))
+			(e-int @4-5-4-6 (raw "5")))
+		(s-decl @5-1-5-7
+			(p-ident @5-1-5-2 (raw "y"))
+			(e-int @5-5-5-7 (raw "10")))
+		(s-decl @8-1-16-2
+			(p-ident @8-1-8-10 (raw "outerFunc"))
+			(e-lambda @8-13-16-2
+				(args
+					(p-underscore))
+				(e-block @8-17-16-2
 					(statements
-						(decl (9:5-9:11)
-							(ident (9:5-9:6) "x")
-							(int (9:9-9:11) "20"))
-						(decl (10:5-14:6)
-							(ident (10:5-10:16) "innerResult")
-							(block (10:19-14:6)
+						(s-decl @9-5-9-11
+							(p-ident @9-5-9-6 (raw "x"))
+							(e-int @9-9-9-11 (raw "20")))
+						(s-decl @10-5-14-6
+							(p-ident @10-5-10-16 (raw "innerResult"))
+							(e-block @10-19-14-6
 								(statements
-									(decl (12:9-13:10)
-										(ident (12:9-12:10) "z")
-										(binop (12:13-13:10)
-											"+"
-											(ident (12:13-12:14) "" "x")
-											(ident (12:17-12:18) "" "y")))
-									(binop (13:9-14:6)
-										"+"
-										(ident (13:9-13:10) "" "z")
-										(int (13:13-13:14) "1")))))
-						(ident (15:5-15:16) "" "innerResult")))))))
+									(s-decl @12-9-13-10
+										(p-ident @12-9-12-10 (raw "z"))
+										(e-binop @12-13-13-10 (op "+")
+											(e-ident @12-13-12-14 (qaul "") (raw "x"))
+											(e-ident @12-17-12-18 (qaul "") (raw "y"))))
+									(e-binop @13-9-14-6 (op "+")
+										(e-ident @13-9-13-10 (qaul "") (raw "z"))
+										(e-int @13-13-13-14 (raw "1"))))))
+						(e-ident @15-5-15-16 (qaul "") (raw "innerResult"))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -115,83 +115,48 @@ outerFunc = |_| {
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir
-	(d_let
-		(def_pattern
-			(p_assign (4:1-4:2)
-				(pid 72)
-				(ident "x")))
-		(def_expr
-			(e_int (4:5-4:6)
-				(int_var 74)
-				(precision_var 73)
-				(literal "5")
-				(value "TODO")
-				(bound "u8"))))
-	(d_let
-		(def_pattern
-			(p_assign (5:1-5:2)
-				(pid 77)
-				(ident "y")))
-		(def_expr
-			(e_int (5:5-5:7)
-				(int_var 79)
-				(precision_var 78)
-				(literal "10")
-				(value "TODO")
-				(bound "u8"))))
-	(d_let
-		(def_pattern
-			(p_assign (8:1-8:10)
-				(pid 82)
-				(ident "outerFunc")))
-		(def_expr
-			(e_lambda (8:13-16:2)
-				(args (p_underscore (8:14-8:15) (pid 83)))
-				(e_block (8:17-16:2)
-					(s_let (9:5-9:11)
-						(p_assign (9:5-9:6)
-							(pid 84)
-							(ident "x"))
-						(e_int (9:9-9:11)
-							(int_var 87)
-							(precision_var 86)
-							(literal "20")
-							(value "TODO")
-							(bound "u8")))
-					(s_let (10:5-14:6)
-						(p_assign (10:5-10:16)
-							(pid 90)
-							(ident "innerResult"))
-						(e_block (10:19-14:6)
-							(s_let (12:9-13:10)
-								(p_assign (12:9-12:10)
-									(pid 91)
-									(ident "z"))
-								(e_binop (12:13-13:10)
-									"add"
-									(e_lookup_local (12:13-12:14) (pid 84))
-									(e_lookup_local (12:17-12:18) (pid 77))))
-							(e_binop (13:9-14:6)
-								"add"
-								(e_lookup_local (13:9-13:10) (pid 91))
-								(e_int (13:13-13:14)
-									(int_var 98)
-									(precision_var 97)
-									(literal "1")
-									(value "TODO")
-									(bound "u8")))))
-					(e_lookup_local (15:5-15:16) (pid 90)))))))
+(can-ir
+	(d-let (id 76)
+		(p-assign @4-1-4-2 (ident "x") (id 72))
+		(e-int @4-5-4-6 (int-var 74) (precision-var 73) (literal "5") (value "TODO") (bound "u8") (id 75)))
+	(d-let (id 81)
+		(p-assign @5-1-5-2 (ident "y") (id 77))
+		(e-int @5-5-5-7 (int-var 79) (precision-var 78) (literal "10") (value "TODO") (bound "u8") (id 80)))
+	(d-let (id 106)
+		(p-assign @8-1-8-10 (ident "outerFunc") (id 82))
+		(e-lambda @8-13-16-2 (id 105)
+			(args
+				(p-underscore @8-14-8-15 (id 83)))
+			(e-block @8-17-16-2
+				(s-let @9-5-9-11
+					(p-assign @9-5-9-6 (ident "x") (id 84))
+					(e-int @9-9-9-11 (int-var 87) (precision-var 86) (literal "20") (value "TODO") (bound "u8") (id 88)))
+				(s-let @10-5-14-6
+					(p-assign @10-5-10-16 (ident "innerResult") (id 90))
+					(e-block @10-19-14-6 (id 101)
+						(s-let @12-9-13-10
+							(p-assign @12-9-12-10 (ident "z") (id 91))
+							(e-binop @12-13-13-10 (op "add") (id 94)
+								(e-lookup-local @12-13-12-14
+									(pattern (id 84)))
+								(e-lookup-local @12-17-12-18
+									(pattern (id 77)))))
+						(e-binop @13-9-14-6 (op "add")
+							(e-lookup-local @13-9-13-10
+								(pattern (id 91)))
+							(e-int @13-13-13-14 (int-var 98) (precision-var 97) (literal "1") (value "TODO") (bound "u8")))))
+				(e-lookup-local @15-5-15-16
+					(pattern (id 90)))))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types
+(inferred-types
 	(defs
-		(def "x" 76 (type "Num(Int(*))"))
-		(def "y" 81 (type "Num(Int(*))"))
-		(def "outerFunc" 106 (type "*")))
+		(def (name "x") (type "Num(Int(*))"))
+		(def (name "y") (type "Num(Int(*))"))
+		(def (name "outerFunc") (type "*")))
 	(expressions
-		(expr (4:5-4:6) 75 (type "Num(Int(*))"))
-		(expr (5:5-5:7) 80 (type "Num(Int(*))"))
-		(expr (8:13-16:2) 105 (type "*"))))
+		(expr @4-5-4-6 (type "Num(Int(*))"))
+		(expr @5-5-5-7 (type "Num(Int(*))"))
+		(expr @8-13-16-2 (type "*"))))
 ~~~

@@ -27,41 +27,42 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-6:15)
-	(app (1:1-1:53)
-		(provides (1:6-1:12) (exposed_item (lower_ident "main!")))
-		(record_field (1:15-1:53)
-			"pf"
-			(string (1:28-1:51) (string_part (1:29-1:50) "../basic-cli/main.roc")))
-		(packages (1:13-1:53)
-			(record_field (1:15-1:53)
-				"pf"
-				(string (1:28-1:51) (string_part (1:29-1:50) "../basic-cli/main.roc")))))
+(file @1-1-6-15
+	(app @1-1-1-53
+		(provides @1-6-1-12
+			(exposed-lower-ident (text "main!")))
+		(record-field @1-15-1-53 (name "pf")
+			(e-string @1-28-1-51
+				(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))
+		(packages @1-13-1-53
+			(record-field @1-15-1-53 (name "pf")
+				(e-string @1-28-1-51
+					(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(type_anno (3:1-4:5)
-			"swap"
-			(fn (3:8-3:24)
-				(tuple (3:8-3:14)
-					(ty_var (3:9-3:10) "a")
-					(ty_var (3:12-3:13) "b"))
-				(tuple (3:18-3:24)
-					(ty_var (3:19-3:20) "b")
-					(ty_var (3:22-3:23) "a"))))
-		(decl (4:1-4:23)
-			(ident (4:1-4:5) "swap")
-			(lambda (4:8-4:23)
+		(s-type-anno @3-1-4-5 (name "swap")
+			(ty-fn @3-8-3-24
+				(ty-tuple @3-8-3-14
+					(ty-var @3-9-3-10 (raw "a"))
+					(ty-var @3-12-3-13 (raw "b")))
+				(ty-tuple @3-18-3-24
+					(ty-var @3-19-3-20 (raw "b"))
+					(ty-var @3-22-3-23 (raw "a")))))
+		(s-decl @4-1-4-23
+			(p-ident @4-1-4-5 (raw "swap"))
+			(e-lambda @4-8-4-23
 				(args
-					(tuple (4:9-4:15)
-						(ident (4:10-4:11) "x")
-						(ident (4:13-4:14) "y")))
-				(tuple (4:17-4:23)
-					(ident (4:18-4:19) "" "y")
-					(ident (4:21-4:22) "" "x"))))
-		(decl (6:1-6:15)
-			(ident (6:1-6:6) "main!")
-			(lambda (6:9-6:15)
-				(args (underscore))
-				(record (6:13-6:15))))))
+					(p-tuple @4-9-4-15
+						(p-ident @4-10-4-11 (raw "x"))
+						(p-ident @4-13-4-14 (raw "y"))))
+				(e-tuple @4-17-4-23
+					(e-ident @4-18-4-19 (qaul "") (raw "y"))
+					(e-ident @4-21-4-22 (qaul "") (raw "x")))))
+		(s-decl @6-1-6-15
+			(p-ident @6-1-6-6 (raw "main!"))
+			(e-lambda @6-9-6-15
+				(args
+					(p-underscore))
+				(e-record @6-13-6-15)))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -69,58 +70,44 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir
-	(d_let
-		(def_pattern
-			(p_assign (4:1-4:5)
-				(pid 83)
-				(ident "swap")))
-		(def_expr
-			(e_lambda (4:8-4:23)
-				(args
-					(p_tuple (4:9-4:15)
-						(pid 87)
-						(tuple_var "#86")
-						(patterns
-							(p_assign (4:10-4:11)
-								(pid 84)
-								(ident "x"))
-							(p_assign (4:13-4:14)
-								(pid 85)
-								(ident "y")))))
-				(e_tuple (4:17-4:23)
-					(tuple_var "#90")
-					(elems
-						(e_lookup_local (4:18-4:19) (pid 85))
-						(e_lookup_local (4:21-4:22) (pid 84))))))
-		(annotation (4:1-4:5)
-			(signature 96)
-			(declared_type
-				(fn (3:8-3:24)
-					(tuple (3:8-3:14)
-						(ty_var (3:9-3:10) "a")
-						(ty_var (3:12-3:13) "b"))
-					(tuple (3:18-3:24)
-						(ty_var (3:19-3:20) "b")
-						(ty_var (3:22-3:23) "a"))
-					"false"))))
-	(d_let
-		(def_pattern
-			(p_assign (6:1-6:6)
-				(pid 99)
-				(ident "main!")))
-		(def_expr
-			(e_lambda (6:9-6:15)
-				(args (p_underscore (6:10-6:11) (pid 100)))
-				(e_runtime_error (1:1-1:1) "not_implemented")))))
+(can-ir
+	(d-let (id 98)
+		(p-assign @4-1-4-5 (ident "swap") (id 83))
+		(e-lambda @4-8-4-23 (id 92)
+			(args
+				(p-tuple @4-9-4-15 (tuple-var 86) (id 87)
+					(patterns
+						(p-assign @4-10-4-11 (ident "x") (id 84))
+						(p-assign @4-13-4-14 (ident "y") (id 85)))))
+			(e-tuple @4-17-4-23 (tuple-var 90)
+				(elems
+					(e-lookup-local @4-18-4-19
+						(pattern (id 85)))
+					(e-lookup-local @4-21-4-22
+						(pattern (id 84))))))
+		(annotation @4-1-4-5 (signature 96) (id 97)
+			(declared-type
+				(ty-fn @3-8-3-24 (effectful false)
+					(ty-tuple @3-8-3-14
+						(ty-var @3-9-3-10 (name "a"))
+						(ty-var @3-12-3-13 (name "b")))
+					(ty-tuple @3-18-3-24
+						(ty-var @3-19-3-20 (name "b"))
+						(ty-var @3-22-3-23 (name "a")))))))
+	(d-let (id 104)
+		(p-assign @6-1-6-6 (ident "main!") (id 99))
+		(e-lambda @6-9-6-15 (id 103)
+			(args
+				(p-underscore @6-10-6-11 (id 100)))
+			(e-runtime-error (tag "not_implemented")))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types
+(inferred-types
 	(defs
-		(def "swap" 98 (type "*"))
-		(def "main!" 104 (type "*")))
+		(def (name "swap") (type "*"))
+		(def (name "main!") (type "*")))
 	(expressions
-		(expr (4:8-4:23) 92 (type "*"))
-		(expr (6:9-6:15) 103 (type "*"))))
+		(expr @4-8-4-23 (type "*"))
+		(expr @6-9-6-15 (type "*"))))
 ~~~

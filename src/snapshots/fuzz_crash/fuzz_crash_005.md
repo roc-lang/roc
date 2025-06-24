@@ -29,8 +29,8 @@ LowerIdent(1:1-1:5),EndOfFile(1:5-1:5),
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-1:5)
-	(malformed_header (1:1-1:5) "missing_header")
+(file @1-1-1-5
+	(malformed-header @1-1-1-5 (tag "missing_header"))
 	(statements))
 ~~~
 # FORMATTED
@@ -39,9 +39,11 @@ LowerIdent(1:1-1:5),EndOfFile(1:5-1:5),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir "empty")
+(can-ir (empty true))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types (defs) (expressions))
+(inferred-types
+	(defs)
+	(expressions))
 ~~~

@@ -57,30 +57,31 @@ UpperIdent(4:1-4:6),NoSpaceOpenRound(4:6-4:7),LowerIdent(4:7-4:8),CloseRound(4:8
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-4:24)
-	(module (1:1-1:15)
-		(exposes (1:8-1:15) (exposed_item (upper_ident "Maybe"))))
+(file @1-1-4-24
+	(module @1-1-1-15
+		(exposes @1-8-1-15
+			(exposed-upper-ident (text "Maybe"))))
 	(statements
-		(type_decl (3:1-4:6)
-			(header (3:1-3:9)
-				"Maybe"
-				(args (ty_var (3:7-3:8) "a")))
-			(tag_union (3:12-3:27)
+		(s-type-decl @3-1-4-6
+			(header @3-1-3-9 (name "Maybe")
+				(args
+					(ty-var @3-7-3-8 (raw "a"))))
+			(ty-tag-union @3-12-3-27
 				(tags
-					(apply (3:13-3:20)
-						(ty "Some")
-						(ty_var (3:18-3:19) "a"))
-					(ty "None"))))
-		(type_decl (4:1-4:24)
-			(header (4:1-4:9)
-				"Maybe"
-				(args (ty_var (4:7-4:8) "a")))
-			(tag_union (4:12-4:24)
+					(ty-apply @3-13-3-20
+						(ty (name "Some"))
+						(ty-var @3-18-3-19 (raw "a")))
+					(ty (name "None")))))
+		(s-type-decl @4-1-4-24
+			(header @4-1-4-9 (name "Maybe")
+				(args
+					(ty-var @4-7-4-8 (raw "a"))))
+			(ty-tag-union @4-12-4-24
 				(tags
-					(apply (4:13-4:18)
-						(ty "Ok")
-						(ty_var (4:16-4:17) "a"))
-					(ty "Err"))))))
+					(ty-apply @4-13-4-18
+						(ty (name "Ok"))
+						(ty-var @4-16-4-17 (raw "a")))
+					(ty (name "Err")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -88,27 +89,27 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir
-	(s_type_decl (3:1-4:6)
-		(type_header (3:1-3:9)
-			"Maybe"
-			(args (ty_var (3:7-3:8) "a")))
-		(tag_union (3:12-3:27)
-			(apply (3:13-3:20)
-				"Some"
-				(ty_var (3:18-3:19) "a"))
-			(ty (3:22-3:26) "None")))
-	(s_type_decl (4:1-4:24)
-		(type_header (4:1-4:9)
-			"Maybe"
-			(args (ty_var (4:7-4:8) "a")))
-		(tag_union (4:12-4:24)
-			(apply (4:13-4:18)
-				"Ok"
-				(ty_var (4:16-4:17) "a"))
-			(ty (4:20-4:23) "Err"))))
+(can-ir
+	(s-type-decl @3-1-4-6 (id 79)
+		(type-header @3-1-3-9 (name "Maybe")
+			(args
+				(ty-var @3-7-3-8 (name "a"))))
+		(ty-tag-union @3-12-3-27
+			(ty-apply @3-13-3-20 (symbol "Some")
+				(ty-var @3-18-3-19 (name "a")))
+			(ty @3-22-3-26 (name "None"))))
+	(s-type-decl @4-1-4-24 (id 87)
+		(type-header @4-1-4-9 (name "Maybe")
+			(args
+				(ty-var @4-7-4-8 (name "a"))))
+		(ty-tag-union @4-12-4-24
+			(ty-apply @4-13-4-18 (symbol "Ok")
+				(ty-var @4-16-4-17 (name "a")))
+			(ty @4-20-4-23 (name "Err")))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types (defs) (expressions))
+(inferred-types
+	(defs)
+	(expressions))
 ~~~

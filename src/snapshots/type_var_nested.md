@@ -78,83 +78,84 @@ LowerIdent(17:1-17:6),OpAssign(17:7-17:8),OpBar(17:9-17:10),Underscore(17:10-17:
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-17:15)
-	(app (1:1-1:57)
-		(provides (1:6-1:12) (exposed_item (lower_ident "main!")))
-		(record_field (1:15-1:57)
-			"pf"
-			(string (1:28-1:55) (string_part (1:29-1:54) "../basic-cli/platform.roc")))
-		(packages (1:13-1:57)
-			(record_field (1:15-1:57)
-				"pf"
-				(string (1:28-1:55) (string_part (1:29-1:54) "../basic-cli/platform.roc")))))
+(file @1-1-17-15
+	(app @1-1-1-57
+		(provides @1-6-1-12
+			(exposed-lower-ident (text "main!")))
+		(record-field @1-15-1-57 (name "pf")
+			(e-string @1-28-1-55
+				(e-string-part @1-29-1-54 (raw "../basic-cli/platform.roc"))))
+		(packages @1-13-1-57
+			(record-field @1-15-1-57 (name "pf")
+				(e-string @1-28-1-55
+					(e-string-part @1-29-1-54 (raw "../basic-cli/platform.roc"))))))
 	(statements
-		(type_anno (4:1-5:10)
-			"mapResult"
-			(fn (4:13-4:51)
-				(apply (4:13-4:25)
-					(ty "Result")
-					(ty_var (4:20-4:21) "a")
-					(ty_var (4:23-4:24) "e"))
-				(fn (4:28-4:34)
-					(ty_var (4:28-4:29) "a")
-					(ty_var (4:33-4:34) "b"))
-				(apply (4:39-4:51)
-					(ty "Result")
-					(ty_var (4:46-4:47) "b")
-					(ty_var (4:49-4:50) "e"))))
-		(decl (5:1-9:2)
-			(ident (5:1-5:10) "mapResult")
-			(lambda (5:13-9:2)
+		(s-type-anno @4-1-5-10 (name "mapResult")
+			(ty-fn @4-13-4-51
+				(ty-apply @4-13-4-25
+					(ty (name "Result"))
+					(ty-var @4-20-4-21 (raw "a"))
+					(ty-var @4-23-4-24 (raw "e")))
+				(ty-fn @4-28-4-34
+					(ty-var @4-28-4-29 (raw "a"))
+					(ty-var @4-33-4-34 (raw "b")))
+				(ty-apply @4-39-4-51
+					(ty (name "Result"))
+					(ty-var @4-46-4-47 (raw "b"))
+					(ty-var @4-49-4-50 (raw "e")))))
+		(s-decl @5-1-9-2
+			(p-ident @5-1-5-10 (raw "mapResult"))
+			(e-lambda @5-13-9-2
 				(args
-					(ident (5:14-5:20) "result")
-					(ident (5:22-5:31) "transform"))
-				(block (5:33-9:2)
+					(p-ident @5-14-5-20 (raw "result"))
+					(p-ident @5-22-5-31 (raw "transform")))
+				(e-block @5-33-9-2
 					(statements
-						(ident (6:5-6:9) "" "when")
-						(ident (6:10-6:16) "" "result")
-						(ident (6:17-6:19) "" "is")
-						(local_dispatch (7:9-8:12)
-							(apply (7:9-7:18)
-								(tag (7:9-7:11) "Ok")
-								(ident (7:12-7:17) "" "value"))
-							(apply (7:19-7:42)
-								(tag (7:22-7:24) "Ok")
-								(apply (7:25-7:41)
-									(ident (7:25-7:34) "" "transform")
-									(ident (7:35-7:40) "" "value"))))
-						(local_dispatch (8:9-9:2)
-							(apply (8:9-8:19)
-								(tag (8:9-8:12) "Err")
-								(ident (8:13-8:18) "" "error"))
-							(apply (8:20-8:33)
-								(tag (8:23-8:26) "Err")
-								(ident (8:27-8:32) "" "error")))))))
-		(type_anno (12:1-13:13)
-			"filterMaybes"
-			(fn (12:16-12:41)
-				(apply (12:16-12:30)
-					(ty "List")
-					(apply (12:21-12:29)
-						(ty "Maybe")
-						(ty_var (12:27-12:28) "t")))
-				(apply (12:34-12:41)
-					(ty "List")
-					(ty_var (12:39-12:40) "t"))))
-		(decl (13:1-15:2)
-			(ident (13:1-13:13) "filterMaybes")
-			(lambda (13:16-15:2)
-				(args (ident (13:17-13:21) "list"))
-				(block (13:23-15:2)
+						(e-ident @6-5-6-9 (qaul "") (raw "when"))
+						(e-ident @6-10-6-16 (qaul "") (raw "result"))
+						(e-ident @6-17-6-19 (qaul "") (raw "is"))
+						(e-local-dispatch @7-9-8-12
+							(e-apply @7-9-7-18
+								(e-tag @7-9-7-11 (raw "Ok"))
+								(e-ident @7-12-7-17 (qaul "") (raw "value")))
+							(e-apply @7-19-7-42
+								(e-tag @7-22-7-24 (raw "Ok"))
+								(e-apply @7-25-7-41
+									(e-ident @7-25-7-34 (qaul "") (raw "transform"))
+									(e-ident @7-35-7-40 (qaul "") (raw "value")))))
+						(e-local-dispatch @8-9-9-2
+							(e-apply @8-9-8-19
+								(e-tag @8-9-8-12 (raw "Err"))
+								(e-ident @8-13-8-18 (qaul "") (raw "error")))
+							(e-apply @8-20-8-33
+								(e-tag @8-23-8-26 (raw "Err"))
+								(e-ident @8-27-8-32 (qaul "") (raw "error"))))))))
+		(s-type-anno @12-1-13-13 (name "filterMaybes")
+			(ty-fn @12-16-12-41
+				(ty-apply @12-16-12-30
+					(ty (name "List"))
+					(ty-apply @12-21-12-29
+						(ty (name "Maybe"))
+						(ty-var @12-27-12-28 (raw "t"))))
+				(ty-apply @12-34-12-41
+					(ty (name "List"))
+					(ty-var @12-39-12-40 (raw "t")))))
+		(s-decl @13-1-15-2
+			(p-ident @13-1-13-13 (raw "filterMaybes"))
+			(e-lambda @13-16-15-2
+				(args
+					(p-ident @13-17-13-21 (raw "list")))
+				(e-block @13-23-15-2
 					(statements
-						(apply (14:5-14:23)
-							(ident (14:5-14:17) "List" ".keepOks")
-							(ident (14:18-14:22) "" "list"))))))
-		(decl (17:1-17:15)
-			(ident (17:1-17:6) "main!")
-			(lambda (17:9-17:15)
-				(args (underscore))
-				(record (17:13-17:15))))))
+						(e-apply @14-5-14-23
+							(e-ident @14-5-14-17 (qaul "List") (raw ".keepOks"))
+							(e-ident @14-18-14-22 (qaul "") (raw "list")))))))
+		(s-decl @17-1-17-15
+			(p-ident @17-1-17-6 (raw "main!"))
+			(e-lambda @17-9-17-15
+				(args
+					(p-underscore))
+				(e-record @17-13-17-15)))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -180,93 +181,71 @@ main! = |_| {}
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir
-	(d_let
-		(def_pattern
-			(p_assign (5:1-5:10)
-				(pid 89)
-				(ident "mapResult")))
-		(def_expr
-			(e_lambda (5:13-9:2)
-				(args
-					(p_assign (5:14-5:20)
-						(pid 90)
-						(ident "result"))
-					(p_assign (5:22-5:31)
-						(pid 91)
-						(ident "transform")))
-				(e_block (5:33-9:2)
-					(s_expr (6:5-6:16) (e_runtime_error (6:5-6:9) "ident_not_in_scope"))
-					(s_expr (6:10-6:19)
-						(e_lookup_local (6:10-6:16) (pid 90)))
-					(s_expr (6:17-7:11) (e_runtime_error (6:17-6:19) "ident_not_in_scope"))
-					(s_expr (7:9-8:12) (e_runtime_error (1:1-1:1) "not_implemented"))
-					(e_runtime_error (1:1-1:1) "not_implemented"))))
-		(annotation (5:1-5:10)
-			(signature 116)
-			(declared_type
-				(fn (4:13-4:51)
-					(apply (4:13-4:25)
-						"Result"
-						(ty_var (4:20-4:21) "a")
-						(ty_var (4:23-4:24) "e"))
-					(parens (4:27-4:35)
-						(fn (4:28-4:34)
-							(ty_var (4:28-4:29) "a")
-							(ty_var (4:33-4:34) "b")
-							"false"))
-					(apply (4:39-4:51)
-						"Result"
-						(ty_var (4:46-4:47) "b")
-						(ty_var (4:49-4:50) "e"))
-					"false"))))
-	(d_let
-		(def_pattern
-			(p_assign (13:1-13:13)
-				(pid 127)
-				(ident "filterMaybes")))
-		(def_expr
-			(e_lambda (13:16-15:2)
-				(args
-					(p_assign (13:17-13:21)
-						(pid 128)
-						(ident "list")))
-				(e_block (13:23-15:2)
-					(e_call (14:5-14:23)
-						(e_runtime_error (14:5-14:17) "ident_not_in_scope")
-						(e_lookup_local (14:18-14:22) (pid 128))))))
-		(annotation (13:1-13:13)
-			(signature 138)
-			(declared_type
-				(fn (12:16-12:41)
-					(apply (12:16-12:30)
-						"List"
-						(apply (12:21-12:29)
-							"Maybe"
-							(ty_var (12:27-12:28) "t")))
-					(apply (12:34-12:41)
-						"List"
-						(ty_var (12:39-12:40) "t"))
-					"false"))))
-	(d_let
-		(def_pattern
-			(p_assign (17:1-17:6)
-				(pid 141)
-				(ident "main!")))
-		(def_expr
-			(e_lambda (17:9-17:15)
-				(args (p_underscore (17:10-17:11) (pid 142)))
-				(e_runtime_error (1:1-1:1) "not_implemented")))))
+(can-ir
+	(d-let (id 118)
+		(p-assign @5-1-5-10 (ident "mapResult") (id 89))
+		(e-lambda @5-13-9-2 (id 106)
+			(args
+				(p-assign @5-14-5-20 (ident "result") (id 90))
+				(p-assign @5-22-5-31 (ident "transform") (id 91)))
+			(e-block @5-33-9-2
+				(s-expr @6-5-6-16
+					(e-runtime-error (tag "ident_not_in_scope")))
+				(s-expr @6-10-6-19
+					(e-lookup-local @6-10-6-16
+						(pattern (id 90))))
+				(s-expr @6-17-7-11
+					(e-runtime-error (tag "ident_not_in_scope")))
+				(s-expr @7-9-8-12
+					(e-runtime-error (tag "not_implemented")))
+				(e-runtime-error (tag "not_implemented"))))
+		(annotation @5-1-5-10 (signature 116) (id 117)
+			(declared-type
+				(ty-fn @4-13-4-51 (effectful false)
+					(ty-apply @4-13-4-25 (symbol "Result")
+						(ty-var @4-20-4-21 (name "a"))
+						(ty-var @4-23-4-24 (name "e")))
+					(ty-parens @4-27-4-35
+						(ty-fn @4-28-4-34 (effectful false)
+							(ty-var @4-28-4-29 (name "a"))
+							(ty-var @4-33-4-34 (name "b"))))
+					(ty-apply @4-39-4-51 (symbol "Result")
+						(ty-var @4-46-4-47 (name "b"))
+						(ty-var @4-49-4-50 (name "e")))))))
+	(d-let (id 140)
+		(p-assign @13-1-13-13 (ident "filterMaybes") (id 127))
+		(e-lambda @13-16-15-2 (id 134)
+			(args
+				(p-assign @13-17-13-21 (ident "list") (id 128)))
+			(e-block @13-23-15-2
+				(e-call @14-5-14-23
+					(e-runtime-error (tag "ident_not_in_scope"))
+					(e-lookup-local @14-18-14-22
+						(pattern (id 128))))))
+		(annotation @13-1-13-13 (signature 138) (id 139)
+			(declared-type
+				(ty-fn @12-16-12-41 (effectful false)
+					(ty-apply @12-16-12-30 (symbol "List")
+						(ty-apply @12-21-12-29 (symbol "Maybe")
+							(ty-var @12-27-12-28 (name "t"))))
+					(ty-apply @12-34-12-41 (symbol "List")
+						(ty-var @12-39-12-40 (name "t")))))))
+	(d-let (id 146)
+		(p-assign @17-1-17-6 (ident "main!") (id 141))
+		(e-lambda @17-9-17-15 (id 145)
+			(args
+				(p-underscore @17-10-17-11 (id 142)))
+			(e-runtime-error (tag "not_implemented")))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types
+(inferred-types
 	(defs
-		(def "mapResult" 118 (type "*"))
-		(def "filterMaybes" 140 (type "*"))
-		(def "main!" 146 (type "*")))
+		(def (name "mapResult") (type "*"))
+		(def (name "filterMaybes") (type "*"))
+		(def (name "main!") (type "*")))
 	(expressions
-		(expr (5:13-9:2) 106 (type "*"))
-		(expr (13:16-15:2) 134 (type "*"))
-		(expr (17:9-17:15) 145 (type "*"))))
+		(expr @5-13-9-2 (type "*"))
+		(expr @13-16-15-2 (type "*"))
+		(expr @17-9-17-15 (type "*"))))
 ~~~

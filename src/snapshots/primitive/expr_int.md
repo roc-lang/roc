@@ -17,13 +17,14 @@ LowerIdent(2:1-2:4),OpAssign(2:5-2:6),Int(2:7-2:9),EndOfFile(2:9-2:9),
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-2:9)
-	(module (1:1-1:13)
-		(exposes (1:8-1:13) (exposed_item (lower_ident "foo"))))
+(file @1-1-2-9
+	(module @1-1-1-13
+		(exposes @1-8-1-13
+			(exposed-lower-ident (text "foo"))))
 	(statements
-		(decl (2:1-2:9)
-			(ident (2:1-2:4) "foo")
-			(int (2:7-2:9) "42"))))
+		(s-decl @2-1-2-9
+			(p-ident @2-1-2-4 (raw "foo"))
+			(e-int @2-7-2-9 (raw "42")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -31,25 +32,16 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir
-	(d_let
-		(def_pattern
-			(p_assign (2:1-2:4)
-				(pid 72)
-				(ident "foo")))
-		(def_expr
-			(e_int (2:7-2:9)
-				(int_var 74)
-				(precision_var 73)
-				(literal "42")
-				(value "TODO")
-				(bound "u8")))))
+(can-ir
+	(d-let (id 76)
+		(p-assign @2-1-2-4 (ident "foo") (id 72))
+		(e-int @2-7-2-9 (int-var 74) (precision-var 73) (literal "42") (value "TODO") (bound "u8") (id 75))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types
+(inferred-types
 	(defs
-		(def "foo" 76 (type "Num(Int(*))")))
+		(def (name "foo") (type "Num(Int(*))")))
 	(expressions
-		(expr (2:7-2:9) 75 (type "Num(Int(*))"))))
+		(expr @2-7-2-9 (type "Num(Int(*))"))))
 ~~~

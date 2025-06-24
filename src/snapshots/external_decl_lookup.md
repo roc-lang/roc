@@ -33,33 +33,36 @@ CloseCurly(10:1-10:2),EndOfFile(10:2-10:2),
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-10:2)
-	(app (1:1-1:57)
-		(provides (1:6-1:12) (exposed_item (lower_ident "main!")))
-		(record_field (1:15-1:57)
-			"pf"
-			(string (1:28-1:55) (string_part (1:29-1:54) "../basic-cli/platform.roc")))
-		(packages (1:13-1:57)
-			(record_field (1:15-1:57)
-				"pf"
-				(string (1:28-1:55) (string_part (1:29-1:54) "../basic-cli/platform.roc")))))
+(file @1-1-10-2
+	(app @1-1-1-57
+		(provides @1-6-1-12
+			(exposed-lower-ident (text "main!")))
+		(record-field @1-15-1-57 (name "pf")
+			(e-string @1-28-1-55
+				(e-string-part @1-29-1-54 (raw "../basic-cli/platform.roc"))))
+		(packages @1-13-1-57
+			(record-field @1-15-1-57 (name "pf")
+				(e-string @1-28-1-55
+					(e-string-part @1-29-1-54 (raw "../basic-cli/platform.roc"))))))
 	(statements
-		(import (3:1-3:17) ".Stdout" (qualifier "pf"))
-		(import (4:1-4:17) ".Json" (qualifier "json"))
-		(decl (6:1-10:2)
-			(ident (6:1-6:6) "main!")
-			(lambda (6:9-10:2)
-				(args (underscore))
-				(block (6:13-10:2)
+		(s-import @3-1-3-17 (module ".Stdout") (qualifier "pf"))
+		(s-import @4-1-4-17 (module ".Json") (qualifier "json"))
+		(s-decl @6-1-10-2
+			(p-ident @6-1-6-6 (raw "main!"))
+			(e-lambda @6-9-10-2
+				(args
+					(p-underscore))
+				(e-block @6-13-10-2
 					(statements
-						(decl (8:5-8:54)
-							(ident (8:5-8:11) "result")
-							(apply (8:14-8:54)
-								(ident (8:14-8:23) "Json" ".utf8")
-								(string (8:24-8:53) (string_part (8:25-8:52) "Hello from external module!"))))
-						(apply (9:5-9:25)
-							(ident (9:5-9:17) "Stdout" ".line!")
-							(ident (9:18-9:24) "" "result"))))))))
+						(s-decl @8-5-8-54
+							(p-ident @8-5-8-11 (raw "result"))
+							(e-apply @8-14-8-54
+								(e-ident @8-14-8-23 (qaul "Json") (raw ".utf8"))
+								(e-string @8-24-8-53
+									(e-string-part @8-25-8-52 (raw "Hello from external module!")))))
+						(e-apply @9-5-9-25
+							(e-ident @9-5-9-17 (qaul "Stdout") (raw ".line!"))
+							(e-ident @9-18-9-24 (qaul "") (raw "result")))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -76,54 +79,35 @@ main! = |_| {
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir
-	(d_let
-		(def_pattern
-			(p_assign (6:1-6:6)
-				(pid 74)
-				(ident "main!")))
-		(def_expr
-			(e_lambda (6:9-10:2)
-				(args (p_underscore (6:10-6:11) (pid 75)))
-				(e_block (6:13-10:2)
-					(s_let (8:5-8:54)
-						(p_assign (8:5-8:11)
-							(pid 76)
-							(ident "result"))
-						(e_call (8:14-8:54)
-							(e_lookup_external
-								(external_decl (8:14-8:23)
-									(qualified_name "json.Json.utf8")
-									(module_name "json.Json")
-									(local_name "utf8")
-									(kind "value")
-									(type_var 77)))
-							(e_string (8:24-8:53) (e_literal (8:25-8:52) "Hello from external module!"))))
-					(e_call (9:5-9:25)
-						(e_lookup_external
-							(external_decl (9:5-9:17)
-								(qualified_name "pf.Stdout.line!")
-								(module_name "pf.Stdout")
-								(local_name "line!")
-								(kind "value")
-								(type_var 83)))
-						(e_lookup_local (9:18-9:24) (pid 76)))))))
-	(s_import (3:1-3:17)
-		"pf.Stdout"
-		""
-		""
+(can-ir
+	(d-let (id 89)
+		(p-assign @6-1-6-6 (ident "main!") (id 74))
+		(e-lambda @6-9-10-2 (id 88)
+			(args
+				(p-underscore @6-10-6-11 (id 75)))
+			(e-block @6-13-10-2
+				(s-let @8-5-8-54
+					(p-assign @8-5-8-11 (ident "result") (id 76))
+					(e-call @8-14-8-54 (id 81)
+						(e-lookup-external
+							(ext-decl @8-14-8-23 (qualified "json.Json.utf8") (module "json.Json") (local "utf8") (kind "value") (type-var 77)))
+						(e-string @8-24-8-53
+							(e-literal @8-25-8-52 (string "Hello from external module!")))))
+				(e-call @9-5-9-25
+					(e-lookup-external
+						(ext-decl @9-5-9-17 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value") (type-var 83)))
+					(e-lookup-local @9-18-9-24
+						(pattern (id 76)))))))
+	(s-import @3-1-3-17 (module "pf.Stdout") (id 72)
 		(exposes))
-	(s_import (4:1-4:17)
-		"json.Json"
-		""
-		""
+	(s-import @4-1-4-17 (module "json.Json") (id 73)
 		(exposes)))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types
+(inferred-types
 	(defs
-		(def "main!" 89 (type "*")))
+		(def (name "main!") (type "*")))
 	(expressions
-		(expr (6:9-10:2) 88 (type "*"))))
+		(expr @6-9-10-2 (type "*"))))
 ~~~

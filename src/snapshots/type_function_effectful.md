@@ -65,40 +65,41 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-6:15)
-	(app (1:1-1:53)
-		(provides (1:6-1:12) (exposed_item (lower_ident "main!")))
-		(record_field (1:15-1:53)
-			"pf"
-			(string (1:28-1:51) (string_part (1:29-1:50) "../basic-cli/main.roc")))
-		(packages (1:13-1:53)
-			(record_field (1:15-1:53)
-				"pf"
-				(string (1:28-1:51) (string_part (1:29-1:50) "../basic-cli/main.roc")))))
+(file @1-1-6-15
+	(app @1-1-1-53
+		(provides @1-6-1-12
+			(exposed-lower-ident (text "main!")))
+		(record-field @1-15-1-53 (name "pf")
+			(e-string @1-28-1-51
+				(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))
+		(packages @1-13-1-53
+			(record-field @1-15-1-53 (name "pf")
+				(e-string @1-28-1-51
+					(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(type_anno (3:1-3:23)
-			"runEffect!"
-			(fn (3:15-3:21)
-				(ty_var (3:15-3:16) "a")
-				(ty_var (3:20-3:21) "b")))
-		(malformed_expr (3:22-3:25) "expr_unexpected_token")
-		(ident (3:24-3:25) "" "a")
-		(malformed_expr (3:26-3:30) "expr_unexpected_token")
-		(ident (3:29-3:30) "" "b")
-		(decl (4:1-4:29)
-			(ident (4:1-4:11) "runEffect!")
-			(lambda (4:14-4:29)
+		(s-type-anno @3-1-3-23 (name "runEffect!")
+			(ty-fn @3-15-3-21
+				(ty-var @3-15-3-16 (raw "a"))
+				(ty-var @3-20-3-21 (raw "b"))))
+		(e-malformed @3-22-3-25 (reason "expr_unexpected_token"))
+		(e-ident @3-24-3-25 (qaul "") (raw "a"))
+		(e-malformed @3-26-3-30 (reason "expr_unexpected_token"))
+		(e-ident @3-29-3-30 (qaul "") (raw "b"))
+		(s-decl @4-1-4-29
+			(p-ident @4-1-4-11 (raw "runEffect!"))
+			(e-lambda @4-14-4-29
 				(args
-					(ident (4:15-4:18) "fn!")
-					(ident (4:20-4:21) "x"))
-				(apply (4:23-4:29)
-					(ident (4:23-4:26) "" "fn!")
-					(ident (4:27-4:28) "" "x"))))
-		(decl (6:1-6:15)
-			(ident (6:1-6:6) "main!")
-			(lambda (6:9-6:15)
-				(args (underscore))
-				(record (6:13-6:15))))))
+					(p-ident @4-15-4-18 (raw "fn!"))
+					(p-ident @4-20-4-21 (raw "x")))
+				(e-apply @4-23-4-29
+					(e-ident @4-23-4-26 (qaul "") (raw "fn!"))
+					(e-ident @4-27-4-28 (qaul "") (raw "x")))))
+		(s-decl @6-1-6-15
+			(p-ident @6-1-6-6 (raw "main!"))
+			(e-lambda @6-9-6-15
+				(args
+					(p-underscore))
+				(e-record @6-13-6-15)))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -111,49 +112,38 @@ main! = |_| {}
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir
-	(d_let
-		(def_pattern
-			(p_assign (4:1-4:11)
-				(pid 82)
-				(ident "runEffect!")))
-		(def_expr
-			(e_lambda (4:14-4:29)
-				(args
-					(p_assign (4:15-4:18)
-						(pid 83)
-						(ident "fn!"))
-					(p_assign (4:20-4:21)
-						(pid 84)
-						(ident "x")))
-				(e_call (4:23-4:29)
-					(e_lookup_local (4:23-4:26) (pid 83))
-					(e_lookup_local (4:27-4:28) (pid 84)))))
-		(annotation (4:1-4:11)
-			(signature 94)
-			(declared_type
-				(parens (3:14-3:22)
-					(fn (3:15-3:21)
-						(ty_var (3:15-3:16) "a")
-						(ty_var (3:20-3:21) "b")
-						"true")))))
-	(d_let
-		(def_pattern
-			(p_assign (6:1-6:6)
-				(pid 97)
-				(ident "main!")))
-		(def_expr
-			(e_lambda (6:9-6:15)
-				(args (p_underscore (6:10-6:11) (pid 98)))
-				(e_runtime_error (1:1-1:1) "not_implemented")))))
+(can-ir
+	(d-let (id 96)
+		(p-assign @4-1-4-11 (ident "runEffect!") (id 82))
+		(e-lambda @4-14-4-29 (id 88)
+			(args
+				(p-assign @4-15-4-18 (ident "fn!") (id 83))
+				(p-assign @4-20-4-21 (ident "x") (id 84)))
+			(e-call @4-23-4-29
+				(e-lookup-local @4-23-4-26
+					(pattern (id 83)))
+				(e-lookup-local @4-27-4-28
+					(pattern (id 84)))))
+		(annotation @4-1-4-11 (signature 94) (id 95)
+			(declared-type
+				(ty-parens @3-14-3-22
+					(ty-fn @3-15-3-21 (effectful true)
+						(ty-var @3-15-3-16 (name "a"))
+						(ty-var @3-20-3-21 (name "b")))))))
+	(d-let (id 102)
+		(p-assign @6-1-6-6 (ident "main!") (id 97))
+		(e-lambda @6-9-6-15 (id 101)
+			(args
+				(p-underscore @6-10-6-11 (id 98)))
+			(e-runtime-error (tag "not_implemented")))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types
+(inferred-types
 	(defs
-		(def "runEffect!" 96 (type "*"))
-		(def "main!" 102 (type "*")))
+		(def (name "runEffect!") (type "*"))
+		(def (name "main!") (type "*")))
 	(expressions
-		(expr (4:14-4:29) 88 (type "*"))
-		(expr (6:9-6:15) 101 (type "*"))))
+		(expr @4-14-4-29 (type "*"))
+		(expr @6-9-6-15 (type "*"))))
 ~~~

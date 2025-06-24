@@ -23,11 +23,11 @@ CloseSquare(5:2-5:3),EndOfFile(5:3-5:3),
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-5:3)
-	(module (1:1-5:3)
-		(exposes (2:2-5:3)
-			(exposed_item (lower_ident "something"))
-			(exposed_item (upper_ident "SomeType"))))
+(file @1-1-5-3
+	(module @1-1-5-3
+		(exposes @2-2-5-3
+			(exposed-lower-ident (text "something"))
+			(exposed-upper-ident (text "SomeType"))))
 	(statements))
 ~~~
 # FORMATTED
@@ -36,9 +36,11 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir "empty")
+(can-ir (empty true))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types (defs) (expressions))
+(inferred-types
+	(defs)
+	(expressions))
 ~~~

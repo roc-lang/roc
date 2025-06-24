@@ -83,58 +83,53 @@ CloseCurly(35:1-35:2),EndOfFile(35:2-35:2),
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-35:2)
-	(module (1:1-1:10) (exposes (1:8-1:10)))
+(file @1-1-35-2
+	(module @1-1-1-10
+		(exposes @1-8-1-10))
 	(statements
-		(import (3:1-3:17) ".Json" (qualifier "json"))
-		(import (4:1-4:48)
-			".Client"
-			(qualifier "http")
-			(alias "Http")
+		(s-import @3-1-3-17 (module ".Json") (qualifier "json"))
+		(s-import @4-1-4-48 (module ".Client") (qualifier "http") (alias "Http")
 			(exposing
-				(exposed_item (lower_ident "get"))
-				(exposed_item (lower_ident "post"))))
-		(import (5:1-5:27)
-			".String"
-			(qualifier "utils")
-			(alias "Str"))
-		(decl (7:1-35:2)
-			(ident (7:1-7:5) "main")
-			(block (7:8-35:2)
+				(exposed-lower-ident (text "get"))
+				(exposed-lower-ident (text "post"))))
+		(s-import @5-1-5-27 (module ".String") (qualifier "utils") (alias "Str"))
+		(s-decl @7-1-35-2
+			(p-ident @7-1-7-5 (raw "main"))
+			(e-block @7-8-35-2
 				(statements
-					(decl (8:5-8:22)
-						(ident (8:5-8:11) "client")
-						(ident (8:14-8:22) "Http" ".get"))
-					(decl (9:5-9:23)
-						(ident (9:5-9:11) "parser")
-						(ident (9:14-9:23) "Json" ".utf8"))
-					(decl (10:5-10:22)
-						(ident (10:5-10:11) "helper")
-						(ident (10:14-10:22) "Str" ".trim"))
-					(decl (13:5-13:25)
-						(ident (13:5-13:12) "result1")
-						(ident (13:15-13:25) "Json" ".parse"))
-					(decl (16:5-16:24)
-						(ident (16:5-16:12) "result2")
-						(ident (16:15-16:24) "Http" ".post"))
-					(decl (19:5-19:18)
-						(ident (19:5-19:12) "result3")
-						(ident (19:15-19:18) "" "get"))
-					(decl (20:5-20:19)
-						(ident (20:5-20:12) "result4")
-						(ident (20:15-20:19) "" "post"))
-					(decl (23:5-23:26)
-						(ident (23:5-23:13) "combined")
-						(ident (23:16-23:26) "Str" ".concat"))
-					(tuple (25:5-34:6)
-						(ident (26:9-26:15) "" "client")
-						(ident (27:9-27:15) "" "parser")
-						(ident (28:9-28:15) "" "helper")
-						(ident (29:9-29:16) "" "result1")
-						(ident (30:9-30:16) "" "result2")
-						(ident (31:9-31:16) "" "result3")
-						(ident (32:9-32:16) "" "result4")
-						(ident (33:9-33:17) "" "combined")))))))
+					(s-decl @8-5-8-22
+						(p-ident @8-5-8-11 (raw "client"))
+						(e-ident @8-14-8-22 (qaul "Http") (raw ".get")))
+					(s-decl @9-5-9-23
+						(p-ident @9-5-9-11 (raw "parser"))
+						(e-ident @9-14-9-23 (qaul "Json") (raw ".utf8")))
+					(s-decl @10-5-10-22
+						(p-ident @10-5-10-11 (raw "helper"))
+						(e-ident @10-14-10-22 (qaul "Str") (raw ".trim")))
+					(s-decl @13-5-13-25
+						(p-ident @13-5-13-12 (raw "result1"))
+						(e-ident @13-15-13-25 (qaul "Json") (raw ".parse")))
+					(s-decl @16-5-16-24
+						(p-ident @16-5-16-12 (raw "result2"))
+						(e-ident @16-15-16-24 (qaul "Http") (raw ".post")))
+					(s-decl @19-5-19-18
+						(p-ident @19-5-19-12 (raw "result3"))
+						(e-ident @19-15-19-18 (qaul "") (raw "get")))
+					(s-decl @20-5-20-19
+						(p-ident @20-5-20-12 (raw "result4"))
+						(e-ident @20-15-20-19 (qaul "") (raw "post")))
+					(s-decl @23-5-23-26
+						(p-ident @23-5-23-13 (raw "combined"))
+						(e-ident @23-16-23-26 (qaul "Str") (raw ".concat")))
+					(e-tuple @25-5-34-6
+						(e-ident @26-9-26-15 (qaul "") (raw "client"))
+						(e-ident @27-9-27-15 (qaul "") (raw "parser"))
+						(e-ident @28-9-28-15 (qaul "") (raw "helper"))
+						(e-ident @29-9-29-16 (qaul "") (raw "result1"))
+						(e-ident @30-9-30-16 (qaul "") (raw "result2"))
+						(e-ident @31-9-31-16 (qaul "") (raw "result3"))
+						(e-ident @32-9-32-16 (qaul "") (raw "result4"))
+						(e-ident @33-9-33-17 (qaul "") (raw "combined"))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -176,134 +171,74 @@ main = {
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir
-	(d_let
-		(def_pattern
-			(p_assign (7:1-7:5)
-				(pid 77)
-				(ident "main")))
-		(def_expr
-			(e_block (7:8-35:2)
-				(s_let (8:5-8:22)
-					(p_assign (8:5-8:11)
-						(pid 78)
-						(ident "client"))
-					(e_lookup_external
-						(external_decl (8:14-8:22)
-							(qualified_name "http.Client.get")
-							(module_name "http.Client")
-							(local_name "get")
-							(kind "value")
-							(type_var 79))))
-				(s_let (9:5-9:23)
-					(p_assign (9:5-9:11)
-						(pid 82)
-						(ident "parser"))
-					(e_lookup_external
-						(external_decl (9:14-9:23)
-							(qualified_name "json.Json.utf8")
-							(module_name "json.Json")
-							(local_name "utf8")
-							(kind "value")
-							(type_var 83))))
-				(s_let (10:5-10:22)
-					(p_assign (10:5-10:11)
-						(pid 86)
-						(ident "helper"))
-					(e_lookup_external
-						(external_decl (10:14-10:22)
-							(qualified_name "utils.String.trim")
-							(module_name "utils.String")
-							(local_name "trim")
-							(kind "value")
-							(type_var 87))))
-				(s_let (13:5-13:25)
-					(p_assign (13:5-13:12)
-						(pid 90)
-						(ident "result1"))
-					(e_lookup_external
-						(external_decl (13:15-13:25)
-							(qualified_name "json.Json.parse")
-							(module_name "json.Json")
-							(local_name "parse")
-							(kind "value")
-							(type_var 91))))
-				(s_let (16:5-16:24)
-					(p_assign (16:5-16:12)
-						(pid 94)
-						(ident "result2"))
-					(e_lookup_external
-						(external_decl (16:15-16:24)
-							(qualified_name "http.Client.post")
-							(module_name "http.Client")
-							(local_name "post")
-							(kind "value")
-							(type_var 95))))
-				(s_let (19:5-19:18)
-					(p_assign (19:5-19:12)
-						(pid 98)
-						(ident "result3"))
-					(e_lookup_external
-						(external_decl (19:15-19:18)
-							(qualified_name "http.Client.get")
-							(module_name "http.Client")
-							(local_name "get")
-							(kind "value")
-							(type_var 99))))
-				(s_let (20:5-20:19)
-					(p_assign (20:5-20:12)
-						(pid 102)
-						(ident "result4"))
-					(e_lookup_external
-						(external_decl (20:15-20:19)
-							(qualified_name "http.Client.post")
-							(module_name "http.Client")
-							(local_name "post")
-							(kind "value")
-							(type_var 103))))
-				(s_let (23:5-23:26)
-					(p_assign (23:5-23:13)
-						(pid 106)
-						(ident "combined"))
-					(e_lookup_external
-						(external_decl (23:16-23:26)
-							(qualified_name "utils.String.concat")
-							(module_name "utils.String")
-							(local_name "concat")
-							(kind "value")
-							(type_var 107))))
-				(e_tuple (25:5-34:6)
-					(tuple_var "#118")
-					(elems
-						(e_lookup_local (26:9-26:15) (pid 78))
-						(e_lookup_local (27:9-27:15) (pid 82))
-						(e_lookup_local (28:9-28:15) (pid 86))
-						(e_lookup_local (29:9-29:16) (pid 90))
-						(e_lookup_local (30:9-30:16) (pid 94))
-						(e_lookup_local (31:9-31:16) (pid 98))
-						(e_lookup_local (32:9-32:16) (pid 102))
-						(e_lookup_local (33:9-33:17) (pid 106)))))))
-	(s_import (3:1-3:17)
-		"json.Json"
-		""
-		""
+(can-ir
+	(d-let (id 121)
+		(p-assign @7-1-7-5 (ident "main") (id 77))
+		(e-block @7-8-35-2 (id 120)
+			(s-let @8-5-8-22
+				(p-assign @8-5-8-11 (ident "client") (id 78))
+				(e-lookup-external (id 80)
+					(ext-decl @8-14-8-22 (qualified "http.Client.get") (module "http.Client") (local "get") (kind "value") (type-var 79))))
+			(s-let @9-5-9-23
+				(p-assign @9-5-9-11 (ident "parser") (id 82))
+				(e-lookup-external (id 84)
+					(ext-decl @9-14-9-23 (qualified "json.Json.utf8") (module "json.Json") (local "utf8") (kind "value") (type-var 83))))
+			(s-let @10-5-10-22
+				(p-assign @10-5-10-11 (ident "helper") (id 86))
+				(e-lookup-external (id 88)
+					(ext-decl @10-14-10-22 (qualified "utils.String.trim") (module "utils.String") (local "trim") (kind "value") (type-var 87))))
+			(s-let @13-5-13-25
+				(p-assign @13-5-13-12 (ident "result1") (id 90))
+				(e-lookup-external (id 92)
+					(ext-decl @13-15-13-25 (qualified "json.Json.parse") (module "json.Json") (local "parse") (kind "value") (type-var 91))))
+			(s-let @16-5-16-24
+				(p-assign @16-5-16-12 (ident "result2") (id 94))
+				(e-lookup-external (id 96)
+					(ext-decl @16-15-16-24 (qualified "http.Client.post") (module "http.Client") (local "post") (kind "value") (type-var 95))))
+			(s-let @19-5-19-18
+				(p-assign @19-5-19-12 (ident "result3") (id 98))
+				(e-lookup-external (id 100)
+					(ext-decl @19-15-19-18 (qualified "http.Client.get") (module "http.Client") (local "get") (kind "value") (type-var 99))))
+			(s-let @20-5-20-19
+				(p-assign @20-5-20-12 (ident "result4") (id 102))
+				(e-lookup-external (id 104)
+					(ext-decl @20-15-20-19 (qualified "http.Client.post") (module "http.Client") (local "post") (kind "value") (type-var 103))))
+			(s-let @23-5-23-26
+				(p-assign @23-5-23-13 (ident "combined") (id 106))
+				(e-lookup-external (id 108)
+					(ext-decl @23-16-23-26 (qualified "utils.String.concat") (module "utils.String") (local "concat") (kind "value") (type-var 107))))
+			(e-tuple @25-5-34-6 (tuple-var 118)
+				(elems
+					(e-lookup-local @26-9-26-15
+						(pattern (id 78)))
+					(e-lookup-local @27-9-27-15
+						(pattern (id 82)))
+					(e-lookup-local @28-9-28-15
+						(pattern (id 86)))
+					(e-lookup-local @29-9-29-16
+						(pattern (id 90)))
+					(e-lookup-local @30-9-30-16
+						(pattern (id 94)))
+					(e-lookup-local @31-9-31-16
+						(pattern (id 98)))
+					(e-lookup-local @32-9-32-16
+						(pattern (id 102)))
+					(e-lookup-local @33-9-33-17
+						(pattern (id 106)))))))
+	(s-import @3-1-3-17 (module "json.Json") (id 72)
 		(exposes))
-	(s_import (4:1-4:48)
-		"http.Client"
-		""
-		""
-		(exposes (exposed_item "get") (exposed_item "post")))
-	(s_import (5:1-5:27)
-		"utils.String"
-		""
-		""
+	(s-import @4-1-4-48 (module "http.Client") (id 75)
+		(exposes
+			(exposed (name "get") (wildcard false))
+			(exposed (name "post") (wildcard false))))
+	(s-import @5-1-5-27 (module "utils.String") (id 76)
 		(exposes)))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types
+(inferred-types
 	(defs
-		(def "main" 121 (type "*")))
+		(def (name "main") (type "*")))
 	(expressions
-		(expr (7:8-35:2) 120 (type "*"))))
+		(expr @7-8-35-2 (type "*"))))
 ~~~

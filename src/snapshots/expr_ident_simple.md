@@ -18,7 +18,7 @@ LowerIdent(1:1-1:4),EndOfFile(1:4-1:4),
 ~~~
 # PARSE
 ~~~clojure
-(ident (1:1-1:4) "" "foo")
+(e-ident @1-1-1-4 (qaul "") (raw "foo"))
 ~~~
 # FORMATTED
 ~~~roc
@@ -26,9 +26,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e_runtime_error (1:1-1:4) "ident_not_in_scope")
+(e-runtime-error (tag "ident_not_in_scope") (id 73))
 ~~~
 # TYPES
 ~~~clojure
-(expr 73 (type "Error"))
+(expr (id 73) (type "Error"))
 ~~~

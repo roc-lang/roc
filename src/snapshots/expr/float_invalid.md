@@ -25,7 +25,7 @@ Float(1:1-1:5),NoSpaceDotInt(1:5-1:8),EndOfFile(1:8-1:8),
 ~~~
 # PARSE
 ~~~clojure
-(malformed_expr (1:5-1:8) "expr_no_space_dot_int")
+(e-malformed @1-5-1-8 (reason "expr_no_space_dot_int"))
 ~~~
 # FORMATTED
 ~~~roc
@@ -33,9 +33,11 @@ Float(1:1-1:5),NoSpaceDotInt(1:5-1:8),EndOfFile(1:8-1:8),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir "empty")
+(can-ir (empty true))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types (defs) (expressions))
+(inferred-types
+	(defs)
+	(expressions))
 ~~~

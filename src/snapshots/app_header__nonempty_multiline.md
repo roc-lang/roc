@@ -19,18 +19,19 @@ OpenCurly(3:2-3:3),LowerIdent(3:4-3:6),OpColon(3:6-3:7),KwPlatform(3:8-3:16),Str
 ~~~
 # PARSE
 ~~~clojure
-(app (1:1-3:56)
-	(provides (2:3-2:9) (exposed_item (lower_ident "main!")))
-	(record_field (3:4-3:31)
-		"pf"
-		(string (3:17-3:30) (string_part (3:18-3:29) "../main.roc")))
-	(packages (3:2-3:56)
-		(record_field (3:4-3:31)
-			"pf"
-			(string (3:17-3:30) (string_part (3:18-3:29) "../main.roc")))
-		(record_field (3:32-3:56)
-			"somePkg"
-			(string (3:41-3:54) (string_part (3:42-3:53) "../main.roc")))))
+(app @1-1-3-56
+	(provides @2-3-2-9
+		(exposed-lower-ident (text "main!")))
+	(record-field @3-4-3-31 (name "pf")
+		(e-string @3-17-3-30
+			(e-string-part @3-18-3-29 (raw "../main.roc"))))
+	(packages @3-2-3-56
+		(record-field @3-4-3-31 (name "pf")
+			(e-string @3-17-3-30
+				(e-string-part @3-18-3-29 (raw "../main.roc"))))
+		(record-field @3-32-3-56 (name "somePkg")
+			(e-string @3-41-3-54
+				(e-string-part @3-42-3-53 (raw "../main.roc"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -38,9 +39,11 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir "empty")
+(can-ir (empty true))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types (defs) (expressions))
+(inferred-types
+	(defs)
+	(expressions))
 ~~~

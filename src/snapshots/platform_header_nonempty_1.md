@@ -55,24 +55,25 @@ CloseSquare(21:3-21:4),EndOfFile(21:4-21:4),
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-21:4)
-	(platform (1:1-21:4)
-		"foo"
-		(rigids (4:3-6:4) (exposed_item (upper_ident "Main")))
-		(record (7:4-9:5)
-			(anno_record_field (8:5-8:29)
-				"main!"
-				(fn (8:13-8:28)
-					(apply (8:13-8:22)
-						(ty "List")
-						(ty "Str"))
-					(record (8:26-8:28)))))
-		(exposes (11:3-13:4) (exposed_item (lower_ident "foo")))
-		(packages (15:3-17:4)
-			(record_field (16:4-16:32)
-				"some_pkg"
-				(string (16:14-16:31) (string_part (16:15-16:30) "../some_pkg.roc"))))
-		(provides (19:3-21:4) (exposed_item (lower_ident "bar"))))
+(file @1-1-21-4
+	(platform @1-1-21-4 (name "foo")
+		(rigids @4-3-6-4
+			(exposed-upper-ident (text "Main")))
+		(ty-record @7-4-9-5
+			(anno-record-field @8-5-8-29 (name "main!")
+				(ty-fn @8-13-8-28
+					(ty-apply @8-13-8-22
+						(ty (name "List"))
+						(ty (name "Str")))
+					(ty-record @8-26-8-28))))
+		(exposes @11-3-13-4
+			(exposed-lower-ident (text "foo")))
+		(packages @15-3-17-4
+			(record-field @16-4-16-32 (name "some_pkg")
+				(e-string @16-14-16-31
+					(e-string-part @16-15-16-30 (raw "../some_pkg.roc")))))
+		(provides @19-3-21-4
+			(exposed-lower-ident (text "bar"))))
 	(statements))
 ~~~
 # FORMATTED
@@ -81,9 +82,11 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir "empty")
+(can-ir (empty true))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types (defs) (expressions))
+(inferred-types
+	(defs)
+	(expressions))
 ~~~

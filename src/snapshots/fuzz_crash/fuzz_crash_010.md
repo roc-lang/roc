@@ -50,13 +50,15 @@ StringStart(5:5-5:6),StringPart(5:6-5:35),EndOfFile(5:35-5:35),
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-5:35)
-	(malformed_header (1:1-1:3) "missing_header")
+(file @1-1-5-35
+	(malformed-header @1-1-1-3 (tag "missing_header"))
 	(statements
-		(record (1:2-2:7) (field "o"))
-		(decl (3:1-5:35)
-			(ident (3:1-3:4) "foo")
-			(string (5:5-5:35) (string_part (5:6-5:35) "on        (string 'onmo %')))")))))
+		(e-record @1-2-2-7
+			(field (field "o") (optional false)))
+		(s-decl @3-1-5-35
+			(p-ident @3-1-3-4 (raw "foo"))
+			(e-string @5-5-5-35
+				(e-string-part @5-6-5-35 (raw "on        (string 'onmo %')))"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -69,20 +71,17 @@ foo =
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir
-	(d_let
-		(def_pattern
-			(p_assign (3:1-3:4)
-				(pid 73)
-				(ident "foo")))
-		(def_expr
-			(e_string (5:5-5:35) (e_literal (5:6-5:35) "on        (string 'onmo %')))")))))
+(can-ir
+	(d-let (id 76)
+		(p-assign @3-1-3-4 (ident "foo") (id 73))
+		(e-string @5-5-5-35 (id 75)
+			(e-literal @5-6-5-35 (string "on        (string 'onmo %')))")))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types
+(inferred-types
 	(defs
-		(def "foo" 76 (type "Str")))
+		(def (name "foo") (type "Str")))
 	(expressions
-		(expr (5:5-5:35) 75 (type "Str"))))
+		(expr @5-5-5-35 (type "Str"))))
 ~~~

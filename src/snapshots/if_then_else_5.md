@@ -21,11 +21,12 @@ CloseCurly(3:1-3:2),KwElse(3:3-3:7),Int(3:8-3:9),EndOfFile(3:9-3:9),
 ~~~
 # PARSE
 ~~~clojure
-(if_then_else (1:1-3:9)
-	(ident (1:4-1:8) "" "bool")
-	(block (1:9-3:2)
-		(statements (int (2:2-2:3) "1")))
-	(int (3:8-3:9) "2"))
+(e-if-then-else @1-1-3-9
+	(e-ident @1-4-1-8 (qaul "") (raw "bool"))
+	(e-block @1-9-3-2
+		(statements
+			(e-int @2-2-2-3 (raw "1"))))
+	(e-int @3-8-3-9 (raw "2")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -33,9 +34,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e_runtime_error (1:1-1:1) "not_implemented")
+(e-runtime-error (tag "not_implemented") (id 73))
 ~~~
 # TYPES
 ~~~clojure
-(expr 73 (type "Error"))
+(expr (id 73) (type "Error"))
 ~~~

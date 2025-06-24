@@ -41,12 +41,14 @@ LowerIdent(3:1-3:5),OpColon(3:6-3:7),UpperIdent(3:8-3:12),UpperIdent(3:13-3:15),
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-3:15)
-	(module (1:1-1:14)
-		(exposes (1:8-1:14) (exposed_item (lower_ident "nums"))))
+(file @1-1-3-15
+	(module @1-1-1-14
+		(exposes @1-8-1-14
+			(exposed-lower-ident (text "nums"))))
 	(statements
-		(type_anno (3:1-3:15) "nums" (ty "List"))
-		(malformed_stmt (3:13-3:15) "expected_colon_after_type_annotation")))
+		(s-type-anno @3-1-3-15 (name "nums")
+			(ty (name "List")))
+		(s-malformed @3-13-3-15 (tag "expected_colon_after_type_annotation"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -56,9 +58,11 @@ nums : List
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir "empty")
+(can-ir (empty true))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types (defs) (expressions))
+(inferred-types
+	(defs)
+	(expressions))
 ~~~

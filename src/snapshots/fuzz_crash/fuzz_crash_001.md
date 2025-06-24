@@ -55,9 +55,10 @@ LowerIdent(1:1-1:3),OpBar(1:3-1:4),OpPercent(1:4-1:5),EndOfFile(1:5-1:5),
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-1:5)
-	(malformed_header (1:1-1:4) "missing_header")
-	(statements (malformed_expr (1:5-1:5) "expected_expr_bar")))
+(file @1-1-1-5
+	(malformed-header @1-1-1-4 (tag "missing_header"))
+	(statements
+		(e-malformed @1-5-1-5 (reason "expected_expr_bar"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -65,9 +66,11 @@ LowerIdent(1:1-1:3),OpBar(1:3-1:4),OpPercent(1:4-1:5),EndOfFile(1:5-1:5),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir "empty")
+(can-ir (empty true))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types (defs) (expressions))
+(inferred-types
+	(defs)
+	(expressions))
 ~~~

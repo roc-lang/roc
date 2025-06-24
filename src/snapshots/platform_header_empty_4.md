@@ -15,14 +15,13 @@ KwPlatform(1:1-1:9),StringStart(1:10-1:11),StringPart(1:11-1:14),StringEnd(1:14-
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-1:65)
-	(platform (1:1-1:65)
-		"foo"
-		(rigids (1:25-1:27))
-		(record (1:28-1:30))
-		(exposes (1:39-1:41))
-		(packages (1:51-1:53))
-		(provides (1:63-1:65)))
+(file @1-1-1-65
+	(platform @1-1-1-65 (name "foo")
+		(rigids @1-25-1-27)
+		(ty-record @1-28-1-30)
+		(exposes @1-39-1-41)
+		(packages @1-51-1-53)
+		(provides @1-63-1-65))
 	(statements))
 ~~~
 # FORMATTED
@@ -35,9 +34,11 @@ platform "foo"
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir "empty")
+(can-ir (empty true))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types (defs) (expressions))
+(inferred-types
+	(defs)
+	(expressions))
 ~~~
