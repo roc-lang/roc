@@ -156,6 +156,56 @@ pub fn SafeList(comptime T: type) type {
             self.items.items[@as(usize, @intFromEnum(id))] = value;
         }
 
+        /// Returns the size needed to serialize this list
+        pub fn serializedSize(self: *const SafeList(T)) usize {
+            // Header: 4 bytes for count
+            // Data: items.len * @sizeOf(T)
+            return @sizeOf(u32) + (self.items.items.len * @sizeOf(T));
+        }
+
+        /// Serialize this list into the provided buffer
+        /// Returns the slice of buffer that was written to
+        pub fn serializeInto(self: *const SafeList(T), buffer: []align(@alignOf(T)) u8) ![]align(@alignOf(T)) const u8 {
+            const size = self.serializedSize();
+            if (buffer.len < size) return error.BufferTooSmall;
+
+            // Write count
+            const count_ptr = @as(*u32, @ptrCast(@alignCast(buffer.ptr)));
+            count_ptr.* = @intCast(self.items.items.len);
+
+            // If T is a POD type, just memcpy the data
+            if (@typeInfo(T) == .@"struct" or @typeInfo(T) == .int or @typeInfo(T) == .float) {
+                const data_ptr = @as([*]T, @ptrCast(@alignCast(buffer.ptr + @sizeOf(u32))));
+                @memcpy(data_ptr[0..self.items.items.len], self.items.items);
+            } else {
+                @compileError("Cannot serialize non-POD type " ++ @typeName(T));
+            }
+
+            return buffer[0..size];
+        }
+
+        /// Deserialize from buffer, using provided allocator
+        pub fn deserializeFrom(buffer: []align(@alignOf(T)) const u8, allocator: Allocator) !SafeList(T) {
+            if (buffer.len < @sizeOf(u32)) return error.BufferTooSmall;
+
+            // Read count
+            const count = @as(*const u32, @ptrCast(@alignCast(buffer.ptr))).*;
+
+            const expected_size = @sizeOf(u32) + (count * @sizeOf(T));
+            if (buffer.len < expected_size) return error.BufferTooSmall;
+
+            // Create list with exact capacity
+            var list = SafeList(T).initCapacity(allocator, count);
+
+            // Copy data
+            if (count > 0) {
+                const data_ptr = @as([*]const T, @ptrCast(@alignCast(buffer.ptr + @sizeOf(u32))));
+                list.items.appendSliceAssumeCapacity(data_ptr[0..count]);
+            }
+
+            return list;
+        }
+
         /// An iterator over all the indices in this list.
         pub const IndexIterator = struct {
             len: usize,
@@ -441,4 +491,209 @@ test "SafeMultiList(u8) rangeToSlice" {
     const char_slice_b = slice_b.items(.char);
     try testing.expectEqual(1, char_slice_b.len);
     try testing.expectEqual('b', char_slice_b[0]);
+}
+
+test "SafeList(u32) serialization empty list" {
+    const gpa = testing.allocator;
+
+    var list = SafeList(u32){};
+    defer list.deinit(gpa);
+
+    // Empty list should serialize to just a count of 0
+    const expected_size = @sizeOf(u32);
+    try testing.expectEqual(expected_size, list.serializedSize());
+
+    var buffer: [@sizeOf(u32)]u8 align(@alignOf(u32)) = undefined;
+    const serialized = try list.serializeInto(&buffer);
+    try testing.expectEqual(expected_size, serialized.len);
+
+    // Check that count is 0
+    const count = @as(*const u32, @ptrCast(@alignCast(buffer[0..@sizeOf(u32)]))).*;
+    try testing.expectEqual(@as(u32, 0), count);
+}
+
+test "SafeList(u32) serialization with data" {
+    const gpa = testing.allocator;
+
+    var list = SafeList(u32){};
+    defer list.deinit(gpa);
+
+    _ = list.append(gpa, 42);
+    _ = list.append(gpa, 100);
+    _ = list.append(gpa, 255);
+
+    const expected_size = @sizeOf(u32) + (3 * @sizeOf(u32));
+    try testing.expectEqual(expected_size, list.serializedSize());
+
+    var buffer: [256]u8 align(@alignOf(u32)) = undefined;
+    const serialized = try list.serializeInto(&buffer);
+    try testing.expectEqual(expected_size, serialized.len);
+
+    // Check that count is 3
+    const count = @as(*const u32, @ptrCast(@alignCast(buffer[0..@sizeOf(u32)]))).*;
+    try testing.expectEqual(@as(u32, 3), count);
+
+    // Check the data
+    const data_start = @sizeOf(u32);
+    const data_ptr = @as([*]const u32, @ptrCast(@alignCast(buffer[data_start..])));
+    try testing.expectEqual(@as(u32, 42), data_ptr[0]);
+    try testing.expectEqual(@as(u32, 100), data_ptr[1]);
+    try testing.expectEqual(@as(u32, 255), data_ptr[2]);
+}
+
+test "SafeList(u8) serialization with data" {
+    const gpa = testing.allocator;
+
+    var list = SafeList(u8){};
+    defer list.deinit(gpa);
+
+    _ = list.appendSlice(gpa, "hello");
+
+    const expected_size = @sizeOf(u32) + 5;
+    try testing.expectEqual(expected_size, list.serializedSize());
+
+    var buffer: [256]u8 align(@alignOf(u8)) = undefined;
+    const serialized = try list.serializeInto(&buffer);
+    try testing.expectEqual(expected_size, serialized.len);
+
+    // Check that count is 5
+    const count = @as(*const u32, @ptrCast(@alignCast(buffer[0..@sizeOf(u32)]))).*;
+    try testing.expectEqual(@as(u32, 5), count);
+
+    // Check the data
+    try testing.expectEqualSlices(u8, "hello", buffer[@sizeOf(u32)..expected_size]);
+}
+
+test "SafeList(u32) deserialization empty list" {
+    const gpa = testing.allocator;
+
+    // Create buffer with count = 0
+    var buffer: [@sizeOf(u32)]u8 align(@alignOf(u32)) = undefined;
+    @as(*u32, @ptrCast(@alignCast(&buffer))).* = 0;
+
+    var list = try SafeList(u32).deserializeFrom(&buffer, gpa);
+    defer list.deinit(gpa);
+
+    try testing.expectEqual(@as(usize, 0), list.len());
+}
+
+test "SafeList(u32) deserialization with data" {
+    const gpa = testing.allocator;
+
+    // Prepare buffer with count = 3 and data [42, 100, 255]
+    const expected_data = [_]u32{ 42, 100, 255 };
+    const buffer_size = @sizeOf(u32) + expected_data.len * @sizeOf(u32);
+    var buffer: [256]u8 align(@alignOf(u32)) = undefined;
+
+    @as(*u32, @ptrCast(@alignCast(&buffer))).* = expected_data.len;
+    const data_ptr = @as([*]u32, @ptrCast(@alignCast(buffer[@sizeOf(u32)..])));
+    @memcpy(data_ptr[0..expected_data.len], &expected_data);
+
+    var list = try SafeList(u32).deserializeFrom(buffer[0..buffer_size], gpa);
+    defer list.deinit(gpa);
+
+    try testing.expectEqual(expected_data.len, list.len());
+    for (expected_data, 0..) |expected, i| {
+        const idx: SafeList(u32).Idx = @enumFromInt(i);
+        try testing.expectEqual(expected, list.get(idx).*);
+    }
+}
+
+test "SafeList(u8) deserialization with data" {
+    const gpa = testing.allocator;
+
+    // Prepare buffer with "world"
+    const expected_data = "world";
+    const buffer_size = @sizeOf(u32) + expected_data.len;
+    var buffer: [256]u8 align(@alignOf(u8)) = undefined;
+
+    @as(*u32, @ptrCast(@alignCast(&buffer))).* = @intCast(expected_data.len);
+    @memcpy(buffer[@sizeOf(u32)..buffer_size], expected_data);
+
+    var list = try SafeList(u8).deserializeFrom(buffer[0..buffer_size], gpa);
+    defer list.deinit(gpa);
+
+    try testing.expectEqual(expected_data.len, list.len());
+    const slice = list.rangeToSlice(SafeList(u8).Range{ .start = @enumFromInt(0), .end = @enumFromInt(expected_data.len) });
+    try testing.expectEqualSlices(u8, expected_data, slice);
+}
+
+test "SafeList(u32) round-trip serialization" {
+    const gpa = testing.allocator;
+
+    // Create original list
+    var original = SafeList(u32){};
+    defer original.deinit(gpa);
+
+    const test_data = [_]u32{ 1, 2, 3, 42, 100, 255 };
+    _ = original.appendSlice(gpa, &test_data);
+
+    // Serialize
+    var buffer: [1024]u8 align(@alignOf(u32)) = undefined;
+    const serialized = try original.serializeInto(&buffer);
+
+    // Deserialize
+    var deserialized = try SafeList(u32).deserializeFrom(serialized, gpa);
+    defer deserialized.deinit(gpa);
+
+    // Compare
+    try testing.expectEqual(original.len(), deserialized.len());
+    for (test_data, 0..) |expected, i| {
+        const idx: SafeList(u32).Idx = @enumFromInt(i);
+        try testing.expectEqual(expected, deserialized.get(idx).*);
+    }
+}
+
+test "SafeList serialization buffer too small error" {
+    const gpa = testing.allocator;
+
+    var list = SafeList(u32){};
+    defer list.deinit(gpa);
+
+    _ = list.append(gpa, 42);
+    _ = list.append(gpa, 100);
+
+    // Buffer too small for the data
+    var small_buffer: [4]u8 align(@alignOf(u32)) = undefined; // Only room for count, not data
+    try testing.expectError(error.BufferTooSmall, list.serializeInto(&small_buffer));
+}
+
+test "SafeList deserialization buffer too small error" {
+    const gpa = testing.allocator;
+
+    // Buffer too small to even contain count
+    var tiny_buffer: [2]u8 align(@alignOf(u32)) = undefined;
+    try testing.expectError(error.BufferTooSmall, SafeList(u32).deserializeFrom(&tiny_buffer, gpa));
+
+    // Buffer with count but insufficient data
+    var partial_buffer: [6]u8 align(@alignOf(u32)) = undefined;
+    @as(*u32, @ptrCast(@alignCast(&partial_buffer))).* = 2; // Claims 2 items but only has 2 extra bytes
+    try testing.expectError(error.BufferTooSmall, SafeList(u32).deserializeFrom(&partial_buffer, gpa));
+}
+
+test "SafeList(struct) serialization" {
+    const gpa = testing.allocator;
+
+    const Point = struct { x: i32, y: i32 };
+    var list = SafeList(Point){};
+    defer list.deinit(gpa);
+
+    _ = list.append(gpa, Point{ .x = 10, .y = 20 });
+    _ = list.append(gpa, Point{ .x = 30, .y = 40 });
+
+    var buffer: [1024]u8 align(@alignOf(Point)) = undefined;
+    const serialized = try list.serializeInto(&buffer);
+
+    var deserialized = try SafeList(Point).deserializeFrom(serialized, gpa);
+    defer deserialized.deinit(gpa);
+
+    try testing.expectEqual(@as(usize, 2), deserialized.len());
+
+    const p0 = deserialized.get(@enumFromInt(0));
+    try testing.expectEqual(@as(i32, 10), p0.x);
+    try testing.expectEqual(@as(i32, 20), p0.y);
+
+    const p1 = deserialized.get(@enumFromInt(1));
+    try testing.expectEqual(@as(i32, 30), p1.x);
+    try testing.expectEqual(@as(i32, 40), p1.y);
 }
