@@ -305,19 +305,12 @@ This type is referenced here:
 
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: top-level import
+This feature is not yet implemented: Exposed item 'line!' already imported from module 'pf.Stdout', cannot import again from module 'pf # Comment after qualifier
+		.StdoutMultiline'
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: top-level import
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level import
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level import
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level import
+This feature is not yet implemented: Exposed item 'write!' already imported from module 'pf.Stdout', cannot import again from module 'pf # Comment after qualifier
+		.StdoutMultiline'
 
 **NOT IMPLEMENTED**
 This feature is not yet implemented: canonicalize if_then_else expression
@@ -475,10 +468,6 @@ This feature is not yet implemented: canonicalize suffix_single_question express
 
 **NOT IMPLEMENTED**
 This feature is not yet implemented: canonicalize suffix_single_question expression
-
-**UNDEFINED VARIABLE**
-Nothing is named `line!` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
 **UNDEFINED VARIABLE**
 Nothing is named `toStr` in this scope.
@@ -1351,40 +1340,40 @@ NO CHANGE
 	(d_let
 		(def_pattern
 			(p_assign (65:1-65:16)
-				(pid 172)
+				(pid 181)
 				(ident "add_one_oneline")))
 		(def_expr
 			(e_lambda (65:19-67:8)
 				(args
 					(p_assign (65:20-65:23)
-						(pid 173)
+						(pid 182)
 						(ident "num")))
 				(e_runtime_error (1:1-1:1) "not_implemented"))))
 	(d_let
 		(def_pattern
 			(p_assign (68:1-68:8)
-				(pid 182)
+				(pid 191)
 				(ident "add_one")))
 		(def_expr
 			(e_lambda (68:11-78:2)
 				(args
 					(p_assign (68:12-68:15)
-						(pid 183)
+						(pid 192)
 						(ident "num")))
 				(e_block (68:17-78:2)
 					(s_let (69:2-69:11)
 						(p_assign (69:2-69:7)
-							(pid 184)
+							(pid 193)
 							(ident "other"))
 						(e_int (69:10-69:11)
-							(int_var 186)
-							(precision_var 185)
+							(int_var 195)
+							(precision_var 194)
 							(literal "1")
 							(value "TODO")
 							(bound "u8")))
 					(e_runtime_error (1:1-1:1) "not_implemented"))))
 		(annotation (68:1-68:8)
-			(signature 198)
+			(signature 207)
 			(declared_type
 				(fn (67:11-67:21)
 					(ty (67:11-67:14) "U64")
@@ -1393,46 +1382,46 @@ NO CHANGE
 	(d_let
 		(def_pattern
 			(p_assign (80:1-80:11)
-				(pid 201)
+				(pid 210)
 				(ident "match_time")))
 		(def_expr
 			(e_lambda (80:14-140:7)
 				(args
 					(p_assign (81:2-81:3)
-						(pid 202)
+						(pid 211)
 						(ident "a"))
 					(p_assign (82:2-82:3)
-						(pid 203)
+						(pid 212)
 						(ident "b")))
 				(e_runtime_error (1:1-1:1) "not_implemented"))))
 	(d_let
 		(def_pattern
 			(p_assign (144:1-144:6)
-				(pid 218)
+				(pid 227)
 				(ident "main!")))
 		(def_expr
 			(e_lambda (144:9-196:2)
-				(args (p_underscore (144:10-144:11) (pid 219)))
+				(args (p_underscore (144:10-144:11) (pid 228)))
 				(e_block (144:13-196:2)
 					(s_let (145:2-145:17)
 						(p_assign (145:2-145:7)
-							(pid 220)
+							(pid 229)
 							(ident "world"))
 						(e_string (145:10-145:17) (e_literal (145:11-145:16) "World")))
 					(s_var (146:2-147:8)
-						(pid 227)
+						(pid 236)
 						(p_assign (146:2-147:8)
-							(pid 227)
+							(pid 236)
 							(ident "number"))
 						(e_int (146:15-146:18)
-							(int_var 225)
-							(precision_var 224)
+							(int_var 234)
+							(precision_var 233)
 							(literal "123")
 							(value "TODO")
 							(bound "u8")))
 					(s_let (148:2-148:12)
 						(p_assign (148:2-148:5)
-							(pid 231)
+							(pid 240)
 							(ident "tag"))
 						(e_tag (148:8-148:12)
 							(ext_var 0)
@@ -1441,7 +1430,7 @@ NO CHANGE
 					(s_expr (154:2-155:12) (e_runtime_error (154:2-154:5) "not_implemented"))
 					(s_expr (155:2-158:11)
 						(e_call (155:2-157:3)
-							(e_lookup (155:2-155:12) (pid 201))
+							(e_lookup_local (155:2-155:12) (pid 210))
 							(e_runtime_error (156:3-156:6) "not_implemented")))
 					(s_expr (158:2-162:7)
 						(e_call (158:2-161:3)
@@ -1449,106 +1438,106 @@ NO CHANGE
 							(e_runtime_error (1:1-1:1) "not_implemented")))
 					(s_let (164:2-164:31)
 						(p_assign (164:2-164:18)
-							(pid 253)
+							(pid 262)
 							(ident "tag_with_payload"))
 						(e_call (164:21-164:31)
 							(e_tag (164:21-164:23)
 								(ext_var 0)
 								(name "Ok")
 								(args "TODO"))
-							(e_lookup (164:24-164:30) (pid 227))))
+							(e_lookup_local (164:24-164:30) (pid 236))))
 					(s_let (165:2-165:34)
 						(p_assign (165:2-165:14)
-							(pid 259)
+							(pid 268)
 							(ident "interpolated"))
 						(e_string (165:17-165:34)
 							(e_literal (165:18-165:25) "Hello, ")
-							(e_lookup (165:27-165:32) (pid 220))
+							(e_lookup_local (165:27-165:32) (pid 229))
 							(e_literal (165:33-165:33) "")))
 					(s_let (166:2-173:3)
 						(p_assign (166:2-166:6)
-							(pid 265)
+							(pid 274)
 							(ident "list"))
 						(e_list (166:9-173:3)
-							(elem_var 276)
+							(elem_var 285)
 							(elems
 								(e_call (167:3-170:4)
-									(e_lookup (167:3-167:10) (pid 182))
+									(e_lookup_local (167:3-167:10) (pid 191))
 									(e_runtime_error (1:1-1:1) "not_implemented"))
 								(e_int (171:3-171:6)
-									(int_var 271)
-									(precision_var 270)
+									(int_var 280)
+									(precision_var 279)
 									(literal "456")
 									(value "TODO")
 									(bound "u8"))
 								(e_int (172:3-172:6)
-									(int_var 274)
-									(precision_var 273)
+									(int_var 283)
+									(precision_var 282)
 									(literal "789")
 									(value "TODO")
 									(bound "u8")))))
 					(s_let (178:2-178:71)
 						(p_assign (178:2-178:8)
-							(pid 281)
+							(pid 290)
 							(ident "record"))
 						(e_runtime_error (1:1-1:1) "not_implemented"))
 					(s_let (179:2-179:68)
 						(p_assign (179:2-179:7)
-							(pid 285)
+							(pid 294)
 							(ident "tuple"))
 						(e_tuple (179:10-179:68)
-							(tuple_var "#312")
+							(tuple_var "#321")
 							(elems
 								(e_int (179:11-179:14)
-									(int_var 287)
-									(precision_var 286)
+									(int_var 296)
+									(precision_var 295)
 									(literal "123")
 									(value "TODO")
 									(bound "u8"))
 								(e_string (179:16-179:23) (e_literal (179:17-179:22) "World"))
-								(e_lookup (179:25-179:28) (pid 231))
+								(e_lookup_local (179:25-179:28) (pid 240))
 								(e_call (179:30-179:39)
 									(e_tag (179:30-179:32)
 										(ext_var 0)
 										(name "Ok")
 										(args "TODO"))
-									(e_lookup (179:33-179:38) (pid 220)))
+									(e_lookup_local (179:33-179:38) (pid 229)))
 								(e_tuple (179:41-179:56)
-									(tuple_var "#299")
+									(tuple_var "#308")
 									(elems
 										(e_runtime_error (179:42-179:48) "ident_not_in_scope")
-										(e_lookup (179:50-179:55) (pid 285))))
+										(e_lookup_local (179:50-179:55) (pid 294))))
 								(e_list (179:58-179:67)
-									(elem_var 310)
+									(elem_var 319)
 									(elems
 										(e_int (179:59-179:60)
-											(int_var 302)
-											(precision_var 301)
+											(int_var 311)
+											(precision_var 310)
 											(literal "1")
 											(value "TODO")
 											(bound "u8"))
 										(e_int (179:62-179:63)
-											(int_var 305)
-											(precision_var 304)
+											(int_var 314)
+											(precision_var 313)
 											(literal "2")
 											(value "TODO")
 											(bound "u8"))
 										(e_int (179:65-179:66)
-											(int_var 308)
-											(precision_var 307)
+											(int_var 317)
+											(precision_var 316)
 											(literal "3")
 											(value "TODO")
 											(bound "u8")))))))
 					(s_let (180:2-187:3)
 						(p_assign (180:2-180:17)
-							(pid 315)
+							(pid 324)
 							(ident "multiline_tuple"))
 						(e_tuple (180:20-187:3)
-							(tuple_var "#343")
+							(tuple_var "#352")
 							(elems
 								(e_int (181:3-181:6)
-									(int_var 317)
-									(precision_var 316)
+									(int_var 326)
+									(precision_var 325)
 									(literal "123")
 									(value "TODO")
 									(bound "u8"))
@@ -1559,41 +1548,41 @@ NO CHANGE
 										(ext_var 0)
 										(name "Ok")
 										(args "TODO"))
-									(e_lookup (184:6-184:11) (pid 220)))
+									(e_lookup_local (184:6-184:11) (pid 229)))
 								(e_tuple (185:3-185:18)
-									(tuple_var "#330")
+									(tuple_var "#339")
 									(elems
 										(e_runtime_error (185:4-185:10) "ident_not_in_scope")
-										(e_lookup (185:12-185:17) (pid 285))))
+										(e_lookup_local (185:12-185:17) (pid 294))))
 								(e_list (186:3-186:12)
-									(elem_var 341)
+									(elem_var 350)
 									(elems
 										(e_int (186:4-186:5)
-											(int_var 333)
-											(precision_var 332)
+											(int_var 342)
+											(precision_var 341)
 											(literal "1")
 											(value "TODO")
 											(bound "u8"))
 										(e_int (186:7-186:8)
-											(int_var 336)
-											(precision_var 335)
+											(int_var 345)
+											(precision_var 344)
 											(literal "2")
 											(value "TODO")
 											(bound "u8"))
 										(e_int (186:10-186:11)
-											(int_var 339)
-											(precision_var 338)
+											(int_var 348)
+											(precision_var 347)
 											(literal "3")
 											(value "TODO")
 											(bound "u8")))))))
 					(s_let (188:2-189:23)
 						(p_assign (188:2-188:15)
-							(pid 346)
+							(pid 355)
 							(ident "bin_op_result"))
 						(e_runtime_error (188:18-189:23) "not_implemented"))
 					(s_let (189:2-190:8)
 						(p_assign (189:2-189:23)
-							(pid 410)
+							(pid 419)
 							(ident "static_dispatch_style"))
 						(e_dot_access (189:26-190:8)
 							(e_dot_access (189:26-189:110)
@@ -1604,15 +1593,21 @@ NO CHANGE
 							"unknown"))
 					(s_expr (190:2-191:8) (e_runtime_error (1:1-1:1) "not_implemented"))
 					(e_call (191:2-195:3)
-						(e_runtime_error (191:2-191:14) "ident_not_in_scope")
+						(e_lookup_external
+							(external_decl (191:2-191:14)
+								(qualified_name "pf.Stdout.line!")
+								(module_name "pf.Stdout")
+								(local_name "line!")
+								(kind "value")
+								(type_var 429)))
 						(e_string (192:3-194:18)
 							(e_literal (192:4-192:14) "How about ")
 							(e_call (193:4-193:21)
 								(e_runtime_error (193:4-193:13) "ident_not_in_scope")
-								(e_lookup (193:14-193:20) (pid 227)))
+								(e_lookup_local (193:14-193:20) (pid 236)))
 							(e_literal (194:4-194:17) " as a string?"))))))
 		(annotation (144:1-144:6)
-			(signature 442)
+			(signature 451)
 			(declared_type
 				(fn (143:9-143:38)
 					(apply (143:9-143:21)
@@ -1626,11 +1621,11 @@ NO CHANGE
 	(d_let
 		(def_pattern
 			(p_assign (199:1-199:6)
-				(pid 446)
+				(pid 455)
 				(ident "empty")))
 		(def_expr (e_runtime_error (1:1-1:1) "not_implemented"))
 		(annotation (199:1-199:6)
-			(signature 450)
+			(signature 459)
 			(declared_type (record (198:9-198:11)))))
 	(s_type_decl (22:1-23:6)
 		(type_header (22:1-22:10)
@@ -1743,21 +1738,50 @@ NO CHANGE
 			(apply (63:30-63:38)
 				"Maybe"
 				(ty_var (63:36-63:37) "a"))
-			"false")))
+			"false"))
+	(s_import (4:1-4:42)
+		"pf.Stdout"
+		""
+		""
+		(exposes (exposed_item "line!") (exposed_item "write!")))
+	(s_import (6:1-12:4)
+		"pf # Comment after qualifier
+		.StdoutMultiline"
+		""
+		""
+		(exposes (exposed_item "line!") (exposed_item "write!")))
+	(s_import (14:1-14:82)
+		"pkg.Something"
+		""
+		""
+		(exposes
+			(exposed_item "func" "function")
+			(exposed_item "Type" "ValueCategory")
+			(exposed_item "Custom" "wildcard")))
+	(s_import (16:1-16:27)
+		"BadName"
+		""
+		""
+		(exposes))
+	(s_import (17:1-20:20)
+		"BadNameMultiline"
+		""
+		""
+		(exposes)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred_types
 	(defs
-		(def "add_one_oneline" 178 (type "*"))
-		(def "add_one" 200 (type "*"))
-		(def "match_time" 209 (type "*"))
-		(def "main!" 444 (type "*"))
-		(def "empty" 452 (type "Error")))
+		(def "add_one_oneline" 187 (type "*"))
+		(def "add_one" 209 (type "*"))
+		(def "match_time" 218 (type "*"))
+		(def "main!" 453 (type "*"))
+		(def "empty" 461 (type "Error")))
 	(expressions
-		(expr (65:19-67:8) 176 (type "*"))
-		(expr (68:11-78:2) 193 (type "*"))
-		(expr (80:14-140:7) 206 (type "*"))
-		(expr (144:9-196:2) 438 (type "*"))
-		(expr (199:9-199:11) 448 (type "Error"))))
+		(expr (65:19-67:8) 185 (type "*"))
+		(expr (68:11-78:2) 202 (type "*"))
+		(expr (80:14-140:7) 215 (type "*"))
+		(expr (144:9-196:2) 447 (type "*"))
+		(expr (199:9-199:11) 457 (type "Error"))))
 ~~~

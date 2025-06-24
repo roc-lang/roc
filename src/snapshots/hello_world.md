@@ -12,13 +12,7 @@ import pf.Stdout
 main! = |_| Stdout.line!("Hello, world!")
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level import
-
-**UNDEFINED VARIABLE**
-Nothing is named `line!` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),Newline(1:1-1:1),
@@ -65,8 +59,19 @@ NO CHANGE
 			(e_lambda (5:9-5:42)
 				(args (p_underscore (5:10-5:11) (pid 74)))
 				(e_call (5:13-5:42)
-					(e_runtime_error (5:13-5:25) "ident_not_in_scope")
-					(e_string (5:26-5:41) (e_literal (5:27-5:40) "Hello, world!")))))))
+					(e_lookup_external
+						(external_decl (5:13-5:25)
+							(qualified_name "pf.Stdout.line!")
+							(module_name "pf.Stdout")
+							(local_name "line!")
+							(kind "value")
+							(type_var 75)))
+					(e_string (5:26-5:41) (e_literal (5:27-5:40) "Hello, world!"))))))
+	(s_import (3:1-3:17)
+		"pf.Stdout"
+		""
+		""
+		(exposes)))
 ~~~
 # TYPES
 ~~~clojure

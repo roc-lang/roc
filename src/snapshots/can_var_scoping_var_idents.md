@@ -85,7 +85,7 @@ NO CHANGE
 						(p_assign (5:2-5:5)
 							(pid 74)
 							(ident "sum"))
-						(e_lookup (5:8-5:13) (pid 73)))
+						(e_lookup_local (5:8-5:13) (pid 73)))
 					(s_var (6:2-8:6)
 						(pid 82)
 						(p_assign (6:2-8:6)
@@ -93,7 +93,7 @@ NO CHANGE
 							(ident "sum_"))
 						(e_binop (6:13-8:6)
 							"mul"
-							(e_lookup (6:13-6:18) (pid 73))
+							(e_lookup_local (6:13-6:18) (pid 73))
 							(e_int (6:21-6:22)
 								(int_var 79)
 								(precision_var 78)
@@ -104,12 +104,12 @@ NO CHANGE
 						(pid 82)
 						(e_binop (8:9-9:5)
 							"add"
-							(e_lookup (8:9-8:13) (pid 82))
-							(e_lookup (8:16-8:19) (pid 74))))
+							(e_lookup_local (8:9-8:13) (pid 82))
+							(e_lookup_local (8:16-8:19) (pid 74))))
 					(e_binop (9:2-10:2)
 						"add"
-						(e_lookup (9:2-9:5) (pid 74))
-						(e_lookup (9:8-9:12) (pid 82))))))))
+						(e_lookup_local (9:2-9:5) (pid 74))
+						(e_lookup_local (9:8-9:12) (pid 82))))))))
 ~~~
 # TYPES
 ~~~clojure

@@ -168,10 +168,14 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
 
     switch (node.tag) {
         .expr_var => {
-            return CIR.Expr{ .lookup = .{
+            return CIR.Expr{ .lookup = .{ .local = .{
                 .pattern_idx = @enumFromInt(node.data_1),
                 .region = node.region,
-            } };
+            } } };
+        },
+        .expr_external_lookup => {
+            // Handle external lookups
+            return CIR.Expr{ .lookup = .{ .external = @enumFromInt(node.data_1) } };
         },
         .expr_int => {
             // Retrieve the literal index from data_1
@@ -580,9 +584,19 @@ pub fn getAnnotation(store: *NodeStore, annotation: CIR.Annotation.Idx) CIR.Anno
 
 /// Retrieves an exposed item from the store.
 pub fn getExposedItem(store: *NodeStore, exposedItem: CIR.ExposedItem.Idx) CIR.ExposedItem {
-    _ = store;
-    _ = exposedItem;
-    @panic("TODO: implement getExposedItem");
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(exposedItem));
+    const node = store.nodes.get(node_idx);
+
+    switch (node.tag) {
+        .exposed_item => {
+            return CIR.ExposedItem{
+                .name = @bitCast(node.data_1),
+                .alias = if (node.data_2 == 0) null else @bitCast(node.data_2),
+                .is_wildcard = node.data_3 != 0,
+            };
+        },
+        else => std.debug.panic("Expected exposed_item node, got {s}\n", .{@tagName(node.tag)}),
+    }
 }
 
 /// Adds a statement node to the store.
@@ -689,9 +703,20 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
 
     switch (expr) {
         .lookup => |e| {
-            node.region = e.region;
-            node.tag = .expr_var;
-            node.data_1 = @intFromEnum(e.pattern_idx);
+            switch (e) {
+                .local => |local| {
+                    node.region = local.region;
+                    node.tag = .expr_var;
+                    node.data_1 = @intFromEnum(local.pattern_idx);
+                },
+                .external => |external_idx| {
+                    // For external lookups, store the external decl index
+                    // Use external lookup tag to distinguish from local lookups
+                    node.region = base.Region.zero();
+                    node.tag = .expr_external_lookup;
+                    node.data_1 = @intFromEnum(external_idx);
+                },
+            }
         },
         .int => |e| {
             node.region = e.region;
@@ -1089,16 +1114,16 @@ pub fn addAnnotation(store: *NodeStore, annotation: CIR.Annotation) CIR.Annotati
 
 /// Adds an exposed item to the store.
 pub fn addExposedItem(store: *NodeStore, exposedItem: CIR.ExposedItem) CIR.ExposedItem.Idx {
-    const node = Node{};
-
-    switch (exposedItem) {
-        else => {
-            std.debug.panic("Exposed Item of type {s} not yet implemented in Can\n", .{@tagName(exposedItem)});
-        },
-    }
+    const node = Node{
+        .data_1 = @bitCast(exposedItem.name),
+        .data_2 = if (exposedItem.alias) |alias| @bitCast(alias) else 0,
+        .data_3 = if (exposedItem.is_wildcard) 1 else 0,
+        .region = base.Region.zero(),
+        .tag = .exposed_item,
+    };
 
     const nid = store.nodes.append(store.gpa, node);
-    return @enumFromInt(nid);
+    return @enumFromInt(@intFromEnum(nid));
 }
 
 /// Adds a definition to the store.
@@ -1292,6 +1317,34 @@ pub fn annoRecordFieldSpanFrom(store: *NodeStore, start: u32) CIR.AnnoRecordFiel
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+}
+
+/// Returns the current top of the scratch exposed items buffer.
+pub fn scratchExposedItemTop(store: *NodeStore) u32 {
+    return store.scratch_exposed_items.top();
+}
+
+/// Adds an exposed item to the scratch buffer.
+pub fn addScratchExposedItem(store: *NodeStore, idx: CIR.ExposedItem.Idx) void {
+    store.scratch_exposed_items.append(store.gpa, idx);
+}
+
+/// Creates a span from the scratch exposed items starting at the given index.
+pub fn exposedItemSpanFrom(store: *NodeStore, start: u32) CIR.ExposedItem.Span {
+    const end = store.scratch_exposed_items.top();
+    defer store.scratch_exposed_items.clearFrom(start);
+    var i = @as(usize, @intCast(start));
+    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
+    while (i < end) {
+        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_exposed_items.items.items[i])) catch |err| exitOnOom(err);
+        i += 1;
+    }
+    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+}
+
+/// Clears scratch exposed items from the given index.
+pub fn clearScratchExposedItemsFrom(store: *NodeStore, start: u32) void {
+    store.scratch_exposed_items.clearFrom(start);
 }
 
 /// Returns the start position for a new Span of annoRecordFieldIdxs in scratch

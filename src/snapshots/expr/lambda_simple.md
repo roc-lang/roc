@@ -35,7 +35,7 @@ NO CHANGE
 			(ident "x")))
 	(e_binop (1:5-1:10)
 		"add"
-		(e_lookup (1:5-1:6) (pid 72))
+		(e_lookup_local (1:5-1:6) (pid 72))
 		(e_int (1:9-1:10)
 			(int_var 75)
 			(precision_var 74)

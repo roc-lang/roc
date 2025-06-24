@@ -10,9 +10,6 @@ module []
 import json.Json [foo, BAR]
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level import
-
 **INVALID STATEMENT**
 The statement **expr** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
@@ -41,7 +38,12 @@ import json.Json[foo, BAR]
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir "empty")
+(can_ir
+	(s_import (3:1-3:17)
+		"json.Json"
+		""
+		""
+		(exposes)))
 ~~~
 # TYPES
 ~~~clojure

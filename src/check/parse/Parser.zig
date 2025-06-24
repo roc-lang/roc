@@ -875,6 +875,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) ?AST.Statement.I
                 var exposes = AST.ExposedItem.Span{ .span = base.DataSpan.empty() };
                 const module_name_tok = self.pos;
                 var end = self.pos;
+                // Handle 'as' clause if present
                 if (self.peekNext() == .KwAs) {
                     self.advance(); // Advance past UpperIdent
                     self.advance(); // Advance past KwAs
@@ -885,8 +886,12 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) ?AST.Statement.I
                         self.advance();
                         return malformed;
                     };
-                } else if (self.peekNext() == .KwExposing) {
-                    self.advance(); // Advance past ident
+                } else {
+                    self.advance(); // Advance past identifier
+                }
+
+                // Handle 'exposing' clause if present (can occur with or without 'as')
+                if (self.peek() == .KwExposing) {
                     self.advance(); // Advance past KwExposing
                     self.expect(.OpenSquare) catch {
                         return self.pushMalformed(AST.Statement.Idx, .import_exposing_no_open, start);
@@ -901,8 +906,6 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) ?AST.Statement.I
                         return self.pushMalformed(AST.Statement.Idx, .import_exposing_no_close, start);
                     };
                     exposes = self.store.exposedItemSpanFrom(scratch_top);
-                } else {
-                    self.advance(); // Advance past identifier
                 }
                 const statement_idx = self.store.addStatement(.{ .import = .{
                     .module_name_tok = module_name_tok,

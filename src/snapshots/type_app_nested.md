@@ -123,7 +123,7 @@ main! = |_| processNested([])
 			(e_lambda (6:9-6:30)
 				(args (p_underscore (6:10-6:11) (pid 96)))
 				(e_call (6:13-6:30)
-					(e_lookup (6:13-6:26) (pid 80))
+					(e_lookup_local (6:13-6:26) (pid 80))
 					(e_list (6:27-6:29) (elem_var 98) (elems)))))))
 ~~~
 # TYPES

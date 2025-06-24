@@ -84,7 +84,7 @@ main! = |_| {}
 						(pid 80)
 						(ident "person")))
 				(e_dot_access (4:20-6:6)
-					(e_lookup (4:20-4:26) (pid 80))
+					(e_lookup_local (4:20-4:26) (pid 80))
 					"name")))
 		(annotation (4:1-4:8)
 			(signature 87)

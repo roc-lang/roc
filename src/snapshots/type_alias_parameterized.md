@@ -107,8 +107,8 @@ NO CHANGE
 				(e_tuple (6:21-6:27)
 					(tuple_var "#97")
 					(elems
-						(e_lookup (6:22-6:23) (pid 92))
-						(e_lookup (6:25-6:26) (pid 91))))))
+						(e_lookup_local (6:22-6:23) (pid 92))
+						(e_lookup_local (6:25-6:26) (pid 91))))))
 		(annotation (6:1-6:9)
 			(signature 103)
 			(declared_type
@@ -131,7 +131,7 @@ NO CHANGE
 			(e_lambda (8:9-8:27)
 				(args (p_underscore (8:10-8:11) (pid 107)))
 				(e_call (8:13-8:27)
-					(e_lookup (8:13-8:21) (pid 90))
+					(e_lookup_local (8:13-8:21) (pid 90))
 					(e_int (8:22-8:23)
 						(int_var 110)
 						(precision_var 109)

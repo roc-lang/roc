@@ -184,14 +184,14 @@ main! = |_| {
 							(ident "result"))
 						(e_binop (17:14-18:11)
 							"add"
-							(e_lookup (17:14-17:22) (pid 79))
+							(e_lookup_local (17:14-17:22) (pid 79))
 							(e_int (17:25-17:27)
 								(int_var 96)
 								(precision_var 95)
 								(literal "10")
 								(value "TODO")
 								(bound "u8"))))
-					(e_lookup (18:5-18:11) (pid 93)))))))
+					(e_lookup_local (18:5-18:11) (pid 93)))))))
 ~~~
 # TYPES
 ~~~clojure

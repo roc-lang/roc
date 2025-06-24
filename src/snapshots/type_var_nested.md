@@ -198,7 +198,7 @@ main! = |_| {}
 				(e_block (5:33-9:2)
 					(s_expr (6:5-6:16) (e_runtime_error (6:5-6:9) "ident_not_in_scope"))
 					(s_expr (6:10-6:19)
-						(e_lookup (6:10-6:16) (pid 90)))
+						(e_lookup_local (6:10-6:16) (pid 90)))
 					(s_expr (6:17-7:11) (e_runtime_error (6:17-6:19) "ident_not_in_scope"))
 					(s_expr (7:9-8:12) (e_runtime_error (1:1-1:1) "not_implemented"))
 					(e_runtime_error (1:1-1:1) "not_implemented"))))
@@ -234,7 +234,7 @@ main! = |_| {}
 				(e_block (13:23-15:2)
 					(e_call (14:5-14:23)
 						(e_runtime_error (14:5-14:17) "ident_not_in_scope")
-						(e_lookup (14:18-14:22) (pid 128))))))
+						(e_lookup_local (14:18-14:22) (pid 128))))))
 		(annotation (13:1-13:13)
 			(signature 138)
 			(declared_type

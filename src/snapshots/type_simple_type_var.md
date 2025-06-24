@@ -72,7 +72,7 @@ NO CHANGE
 					(p_assign (4:13-4:14)
 						(pid 78)
 						(ident "x")))
-				(e_lookup (4:16-4:17) (pid 78))))
+				(e_lookup_local (4:16-4:17) (pid 78))))
 		(annotation (4:1-4:9)
 			(signature 85)
 			(declared_type

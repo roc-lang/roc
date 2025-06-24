@@ -45,6 +45,8 @@ temp_source_for_sexpr: ?[]const u8 = null,
 all_defs: Def.Span,
 /// All the top-level statements in the module, populated by calling `canonicalize_file`
 all_statements: Statement.Span,
+/// All external declarations referenced in this module
+external_decls: std.ArrayList(ExternalDecl),
 
 /// Initialize the IR for a module's canonicalization info.
 ///
@@ -66,12 +68,14 @@ pub fn init(env: *ModuleEnv) CIR {
         .store = NodeStore.initCapacity(env.gpa, NODE_STORE_CAPACITY),
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
+        .external_decls = std.ArrayList(ExternalDecl).init(env.gpa),
     };
 }
 
 /// Deinit the IR's memory.
 pub fn deinit(self: *CIR) void {
     self.store.deinit();
+    self.external_decls.deinit();
 }
 
 /// Records a diagnostic error during canonicalization without blocking compilation.
@@ -346,6 +350,32 @@ pub fn setTypeVarAt(self: *CIR, at_idx: Node.Idx, content: types.Content) types.
     return var_;
 }
 
+/// Adds an external declaration to the CIR and returns its index
+pub fn pushExternalDecl(self: *CIR, decl: ExternalDecl) ExternalDecl.Idx {
+    const idx = @as(u32, @intCast(self.external_decls.items.len));
+    self.external_decls.append(decl) catch |err| exitOnOom(err);
+    return @enumFromInt(idx);
+}
+
+/// Retrieves an external declaration by its index
+pub fn getExternalDecl(self: *const CIR, idx: ExternalDecl.Idx) *const ExternalDecl {
+    return &self.external_decls.items[@intFromEnum(idx)];
+}
+
+/// Adds multiple external declarations and returns a span
+pub fn pushExternalDecls(self: *CIR, decls: []const ExternalDecl) ExternalDecl.Span {
+    const start = @as(u32, @intCast(self.external_decls.items.len));
+    for (decls) |decl| {
+        self.external_decls.append(decl) catch |err| exitOnOom(err);
+    }
+    return .{ .span = .{ .start = start, .len = @as(u32, @intCast(decls.len)) } };
+}
+
+/// Gets a slice of external declarations from a span
+pub fn sliceExternalDecls(self: *const CIR, span: ExternalDecl.Span) []const ExternalDecl {
+    return self.external_decls.items[span.span.start .. span.span.start + span.span.len];
+}
+
 // Helper to add type index info to a s-expr node
 fn appendTypeVar(node: *sexpr.Expr, gpa: std.mem.Allocator, name: []const u8, type_idx: TypeVar) void {
     var type_node = sexpr.Expr.init(gpa, name);
@@ -591,9 +621,10 @@ pub const Statement = union(enum) {
 
                 var exposes_node = sexpr.Expr.init(gpa, "exposes");
                 const exposes_slice = ir.store.sliceExposedItems(s.exposes);
-                for (exposes_slice) |_| {
-                    // TODO: Implement ExposedItem.toSExpr when ExposedItem structure is complete
-                    exposes_node.appendString(gpa, "exposed_item");
+                for (exposes_slice) |exposed_idx| {
+                    const exposed_item = ir.store.getExposedItem(exposed_idx);
+                    const exposed_sexpr = exposed_item.toSExpr(gpa, ir.env);
+                    exposes_node.appendNode(gpa, &exposed_sexpr);
                 }
                 node.appendNode(gpa, &exposes_node);
 
@@ -1024,6 +1055,27 @@ pub const ExposedItem = struct {
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
+
+    pub fn toSExpr(self: ExposedItem, gpa: std.mem.Allocator, env: *const ModuleEnv) sexpr.Expr {
+        var node = sexpr.Expr.init(gpa, "exposed_item");
+
+        // Add the original name
+        const name_text = env.idents.getText(self.name);
+        node.appendString(gpa, name_text);
+
+        // Add the alias if present
+        if (self.alias) |alias_idx| {
+            const alias_text = env.idents.getText(alias_idx);
+            node.appendString(gpa, alias_text);
+        }
+
+        // Add wildcard indicator if needed
+        if (self.is_wildcard) {
+            node.appendString(gpa, "wildcard");
+        }
+
+        return node;
+    }
 };
 
 /// An expression that has been canonicalized.
@@ -1071,7 +1123,10 @@ pub const Expr = union(enum) {
         bound: types.Num.Int.Precision,
         region: Region,
     },
-    lookup: Lookup,
+    lookup: union(enum) {
+        local: Lookup,
+        external: ExternalDecl.Idx,
+    },
     // TODO introduce a new node for re-assign here, used by Var instead of lookup
     list: struct {
         elem_var: TypeVar,
@@ -1212,7 +1267,14 @@ pub const Expr = union(enum) {
             .str_segment => |e| return e.region,
             .str => |e| return e.region,
             .single_quote => |e| return e.region,
-            .lookup => |e| return e.region,
+            .lookup => |e| switch (e) {
+                .local => |local| return local.region,
+                .external => |_| {
+                    // External lookups don't have a direct region access from Expr context
+                    // The region should be handled where the CIR context is available
+                    return null;
+                },
+            },
             .list => |e| return e.region,
             .tuple => |e| return e.region,
             .when => |e| return e.region,
@@ -1419,13 +1481,26 @@ pub const Expr = union(enum) {
                 return tuple_node;
             },
             .lookup => |l| {
-                var lookup_node = sexpr.Expr.init(gpa, "e_lookup");
-                lookup_node.appendRegionInfo(gpa, ir.calcRegionInfo(l.region));
+                switch (l) {
+                    .local => |local| {
+                        var lookup_node = sexpr.Expr.init(gpa, "e_lookup_local");
+                        lookup_node.appendRegionInfo(gpa, ir.calcRegionInfo(local.region));
 
-                var pattern_idx = formatPatternIdxNode(gpa, l.pattern_idx);
-                lookup_node.appendNode(gpa, &pattern_idx);
+                        var pattern_idx = formatPatternIdxNode(gpa, local.pattern_idx);
+                        lookup_node.appendNode(gpa, &pattern_idx);
 
-                return lookup_node;
+                        return lookup_node;
+                    },
+                    .external => |external_idx| {
+                        var lookup_node = sexpr.Expr.init(gpa, "e_lookup_external");
+
+                        const external_decl = ir.getExternalDecl(external_idx);
+                        var external_sexpr = external_decl.toSExpr(ir, env);
+                        lookup_node.appendNode(gpa, &external_sexpr);
+
+                        return lookup_node;
+                    },
+                }
             },
             .when => |e| {
                 var when_branch_node = sexpr.Expr.init(gpa, "e_when");
@@ -1853,6 +1928,73 @@ pub const Annotation = struct {
         var anno_sexpr = type_anno.toSExpr(ir, ir.env);
         type_anno_node.appendNode(gpa, &anno_sexpr);
         node.appendNode(gpa, &type_anno_node);
+
+        return node;
+    }
+};
+
+/// External declaration node for cross-module references
+///
+/// This node represents a reference to a declaration from another module
+/// that hasn't been resolved yet. It serves as a placeholder during
+/// canonicalization that will be populated with type information
+/// later during dependency resolution.
+pub const ExternalDecl = struct {
+    /// Fully qualified name (e.g., "json.Json.utf8")
+    qualified_name: Ident.Idx,
+
+    /// Module this decl comes from (e.g., "json.Json")
+    module_name: Ident.Idx,
+
+    /// Local name within that module (e.g., "utf8")
+    local_name: Ident.Idx,
+
+    /// Type information (populated later after dependency resolution)
+    type_var: TypeVar,
+
+    /// Whether this is a value or type declaration
+    kind: enum { value, type },
+
+    /// Region where this was referenced
+    region: Region,
+
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: DataSpan };
+
+    pub fn toSExpr(self: *const @This(), ir: *const CIR, env: *ModuleEnv) sexpr.Expr {
+        const gpa = ir.env.gpa;
+        var node = sexpr.Expr.init(gpa, "external_decl");
+        node.appendRegionInfo(gpa, ir.calcRegionInfo(self.region));
+
+        // Add qualified name
+        var qualified_name_node = sexpr.Expr.init(gpa, "qualified_name");
+        const qualified_name_str = env.idents.getText(self.qualified_name);
+        qualified_name_node.appendString(gpa, qualified_name_str);
+        node.appendNode(gpa, &qualified_name_node);
+
+        // Add module name
+        var module_name_node = sexpr.Expr.init(gpa, "module_name");
+        const module_name_str = env.idents.getText(self.module_name);
+        module_name_node.appendString(gpa, module_name_str);
+        node.appendNode(gpa, &module_name_node);
+
+        // Add local name
+        var local_name_node = sexpr.Expr.init(gpa, "local_name");
+        const local_name_str = env.idents.getText(self.local_name);
+        local_name_node.appendString(gpa, local_name_str);
+        node.appendNode(gpa, &local_name_node);
+
+        // Add kind
+        var kind_node = sexpr.Expr.init(gpa, "kind");
+        const kind_str = switch (self.kind) {
+            .value => "value",
+            .type => "type",
+        };
+        kind_node.appendString(gpa, kind_str);
+        node.appendNode(gpa, &kind_node);
+
+        // Add type variable info
+        appendTypeVar(&node, gpa, "type_var", self.type_var);
 
         return node;
     }

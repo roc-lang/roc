@@ -246,7 +246,7 @@ main! = |_| {
 						(ident "_factor")))
 				(e_binop (9:22-12:8)
 					"mul"
-					(e_lookup (9:22-9:29) (pid 92))
+					(e_lookup_local (9:22-9:29) (pid 92))
 					(e_int (9:32-9:33)
 						(int_var 96)
 						(precision_var 95)
@@ -297,7 +297,7 @@ main! = |_| {
 						(ident "value")))
 				(e_binop (17:18-19:6)
 					"mul"
-					(e_lookup (17:18-17:23) (pid 125))
+					(e_lookup_local (17:18-17:23) (pid 125))
 					(e_int (17:26-17:27)
 						(int_var 128)
 						(precision_var 127)
@@ -325,7 +325,7 @@ main! = |_| {
 							(pid 140)
 							(ident "result1"))
 						(e_call (20:15-20:21)
-							(e_lookup (20:15-20:18) (pid 75))
+							(e_lookup_local (20:15-20:18) (pid 75))
 							(e_int (20:19-20:20)
 								(int_var 143)
 								(precision_var 142)
@@ -337,7 +337,7 @@ main! = |_| {
 							(pid 147)
 							(ident "result2"))
 						(e_call (21:15-21:26)
-							(e_lookup (21:15-21:23) (pid 91))
+							(e_lookup_local (21:15-21:23) (pid 91))
 							(e_int (21:24-21:25)
 								(int_var 150)
 								(precision_var 149)
@@ -349,7 +349,7 @@ main! = |_| {
 							(pid 154)
 							(ident "result3"))
 						(e_call (22:15-22:25)
-							(e_lookup (22:15-22:22) (pid 109))
+							(e_lookup_local (22:15-22:22) (pid 109))
 							(e_int (22:23-22:24)
 								(int_var 157)
 								(precision_var 156)
@@ -361,7 +361,7 @@ main! = |_| {
 							(pid 161)
 							(ident "result4"))
 						(e_call (23:15-23:24)
-							(e_lookup (23:15-23:21) (pid 124))
+							(e_lookup_local (23:15-23:21) (pid 124))
 							(e_int (23:22-23:23)
 								(int_var 164)
 								(precision_var 163)
@@ -370,14 +370,14 @@ main! = |_| {
 								(bound "u8"))))
 					(e_binop (24:5-25:2)
 						"add"
-						(e_lookup (24:5-24:12) (pid 140))
+						(e_lookup_local (24:5-24:12) (pid 140))
 						(e_binop (24:15-25:2)
 							"add"
-							(e_lookup (24:15-24:22) (pid 147))
+							(e_lookup_local (24:15-24:22) (pid 147))
 							(e_binop (24:25-25:2)
 								"add"
-								(e_lookup (24:25-24:32) (pid 154))
-								(e_lookup (24:35-24:42) (pid 161))))))))))
+								(e_lookup_local (24:25-24:32) (pid 154))
+								(e_lookup_local (24:35-24:42) (pid 161))))))))))
 ~~~
 # TYPES
 ~~~clojure

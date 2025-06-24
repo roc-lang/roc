@@ -66,7 +66,7 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 			(ident "y"))
 		(e_binop (3:9-4:6)
 			"add"
-			(e_lookup (3:9-3:10) (pid 72))
+			(e_lookup_local (3:9-3:10) (pid 72))
 			(e_int (3:13-3:14)
 				(int_var 80)
 				(precision_var 79)
@@ -75,7 +75,7 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 				(bound "u8"))))
 	(e_binop (4:5-5:2)
 		"mul"
-		(e_lookup (4:5-4:6) (pid 77))
+		(e_lookup_local (4:5-4:6) (pid 77))
 		(e_int (4:9-4:10)
 			(int_var 86)
 			(precision_var 85)

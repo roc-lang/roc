@@ -170,18 +170,18 @@ outerFunc = |_| {
 									(ident "z"))
 								(e_binop (12:13-13:10)
 									"add"
-									(e_lookup (12:13-12:14) (pid 84))
-									(e_lookup (12:17-12:18) (pid 77))))
+									(e_lookup_local (12:13-12:14) (pid 84))
+									(e_lookup_local (12:17-12:18) (pid 77))))
 							(e_binop (13:9-14:6)
 								"add"
-								(e_lookup (13:9-13:10) (pid 91))
+								(e_lookup_local (13:9-13:10) (pid 91))
 								(e_int (13:13-13:14)
 									(int_var 98)
 									(precision_var 97)
 									(literal "1")
 									(value "TODO")
 									(bound "u8")))))
-					(e_lookup (15:5-15:16) (pid 90)))))))
+					(e_lookup_local (15:5-15:16) (pid 90)))))))
 ~~~
 # TYPES
 ~~~clojure

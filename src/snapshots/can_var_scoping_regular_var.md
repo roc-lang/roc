@@ -177,7 +177,7 @@ NO CHANGE
 						(pid 77)
 						(e_binop (9:11-10:8)
 							"add"
-							(e_lookup (9:11-9:17) (pid 77))
+							(e_lookup_local (9:11-9:17) (pid 77))
 							(e_int (9:20-9:21)
 								(int_var 86)
 								(precision_var 85)
@@ -188,7 +188,7 @@ NO CHANGE
 						(pid 82)
 						(e_binop (10:11-13:12)
 							"add"
-							(e_lookup (10:11-10:17) (pid 82))
+							(e_lookup_local (10:11-10:17) (pid 82))
 							(e_int (10:20-10:22)
 								(int_var 92)
 								(precision_var 91)
@@ -208,18 +208,18 @@ NO CHANGE
 								(s_reassign (15:3-15:9)
 									(pid 82)
 									(e_runtime_error (15:3-15:9) "var_across_function_boundary"))
-								(e_lookup (16:3-16:9) (pid 77)))))
+								(e_lookup_local (16:3-16:9) (pid 77)))))
 					(s_let (19:2-19:25)
 						(p_assign (19:2-19:8)
 							(pid 108)
 							(ident "result"))
 						(e_call (19:11-19:25)
-							(e_lookup (19:11-19:21) (pid 96))
+							(e_lookup_local (19:11-19:21) (pid 96))
 							(e_runtime_error (1:1-1:1) "not_implemented")))
 					(e_binop (20:2-21:2)
 						"add"
-						(e_lookup (20:2-20:8) (pid 82))
-						(e_lookup (20:11-20:17) (pid 108))))))))
+						(e_lookup_local (20:2-20:8) (pid 82))
+						(e_lookup_local (20:11-20:17) (pid 108))))))))
 ~~~
 # TYPES
 ~~~clojure

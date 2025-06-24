@@ -104,7 +104,7 @@ main! = |_| getName({ name: "luke", age: 21 })
 			(e_lambda (6:9-6:44)
 				(args (p_underscore (6:10-6:11) (pid 91)))
 				(e_call (6:13-6:44)
-					(e_lookup (6:13-6:20) (pid 79))
+					(e_lookup_local (6:13-6:20) (pid 79))
 					(e_runtime_error (1:1-1:1) "not_implemented"))))))
 ~~~
 # TYPES
