@@ -1306,12 +1306,71 @@ pub fn canonicalize_expr(
             } });
             return expr_idx;
         },
-        .if_then_else => |_| {
-            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize if_then_else expression");
-            const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
-                .feature = feature,
-                .region = Region.zero(),
-            } });
+        .if_then_else => |e| {
+            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
+
+            // Canonicalize condition
+            const cond_idx = blk: {
+                if (self.canonicalize_expr(e.condition)) |idx| {
+                    break :blk idx;
+                } else {
+                    const ast_cond = self.parse_ir.store.getExpr(e.condition);
+                    const cond_region = self.parse_ir.tokenizedRegionToRegion(ast_cond.to_tokenized_region());
+                    break :blk self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{
+                        .if_condition_not_canonicalized = .{ .region = cond_region },
+                    });
+                }
+            };
+
+            // Canonicalize then branch
+            const then_idx = blk: {
+                if (self.canonicalize_expr(e.then)) |idx| {
+                    break :blk idx;
+                } else {
+                    const ast_then = self.parse_ir.store.getExpr(e.then);
+                    const then_region = self.parse_ir.tokenizedRegionToRegion(ast_then.to_tokenized_region());
+                    break :blk self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{
+                        .if_then_not_canonicalized = .{ .region = then_region },
+                    });
+                }
+            };
+
+            // Canonicalize else branch
+            const else_idx = blk: {
+                if (self.canonicalize_expr(e.@"else")) |idx| {
+                    break :blk idx;
+                } else {
+                    const ast_else = self.parse_ir.store.getExpr(e.@"else");
+                    const else_region = self.parse_ir.tokenizedRegionToRegion(ast_else.to_tokenized_region());
+                    break :blk self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{
+                        .if_else_not_canonicalized = .{ .region = else_region },
+                    });
+                }
+            };
+
+            // Create the if branch
+            const scratch_top = self.can_ir.store.scratchIfBranchTop();
+            const if_branch = CIR.IfBranch{
+                .cond = cond_idx,
+                .body = then_idx,
+            };
+            self.can_ir.store.addScratchIfBranch(if_branch);
+            const branches_span = self.can_ir.store.ifBranchSpanFrom(scratch_top);
+
+            // Create the if expression
+            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
+                .@"if" = .{
+                    .branches = branches_span,
+                    .final_else = else_idx,
+                    .region = region,
+                    .cond_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region),
+                    .branch_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region),
+                },
+            });
+
+            // Set type variable for the entire if expression
+            _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
+
             return expr_idx;
         },
         .match => |_| {
