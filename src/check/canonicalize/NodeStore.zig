@@ -331,18 +331,18 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .region = node.region,
             } };
         },
+        .expr_empty_record => {
+            return CIR.Expr{ .empty_record = .{
+                .region = node.region,
+            } };
+        },
         .expr_record => {
-            // data_1 = 0 indicates empty_record, otherwise it's a regular record with ext_var
-            if (node.data_1 == 0) {
-                return CIR.Expr{ .empty_record = .{
-                    .region = node.region,
-                } };
-            } else {
-                return CIR.Expr{ .record = .{
-                    .ext_var = @enumFromInt(node.data_1),
-                    .region = node.region,
-                } };
-            }
+            return CIR.Expr{ .record = .{
+                .record_var = @enumFromInt(node.data_1),
+                .ext_var = @enumFromInt(0), // TODO: get from extra_data
+                .fields = .{ .span = .{ .start = node.data_2, .len = node.data_3 } },
+                .region = node.region,
+            } };
         },
         .expr_field_access,
         .expr_static_dispatch,
@@ -946,13 +946,19 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
         .record => |e| {
             node.region = e.region;
             node.tag = .expr_record;
-            node.data_1 = @intFromEnum(e.ext_var);
+            if (e.fields.span.len == 0) {
+                node.data_1 = 0;
+                node.data_2 = 0;
+                node.data_3 = 0;
+            } else {
+                node.data_1 = @intFromEnum(e.record_var);
+                node.data_2 = e.fields.span.start;
+                node.data_3 = e.fields.span.len;
+            }
         },
         .empty_record => |e| {
             node.region = e.region;
-            node.tag = .expr_record;
-            // Use data_1 = 0 to distinguish empty_record from regular record
-            node.data_1 = 0;
+            node.tag = .expr_empty_record;
         },
         .record_access => |e| {
             node.region = e.region;
@@ -990,10 +996,16 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
 
 /// Adds a record field to the store.
 pub fn addRecordField(store: *NodeStore, recordField: CIR.RecordField) CIR.RecordField.Idx {
-    _ = store;
-    _ = recordField;
+    const node = Node{
+        .data_1 = @bitCast(recordField.name),
+        .data_2 = @intFromEnum(recordField.value),
+        .data_3 = 0,
+        .region = base.Region.zero(),
+        .tag = .record_field,
+    };
 
-    return .{ .id = @enumFromInt(0) };
+    const nid = store.nodes.append(store.gpa, node);
+    return @enumFromInt(@intFromEnum(nid));
 }
 
 /// Adds a 'when' branch to the store.
@@ -1331,10 +1343,12 @@ pub fn getDef(store: *const NodeStore, def_idx: CIR.Def.Idx) CIR.Def {
 
 /// Retrieves a record field from the store.
 pub fn getRecordField(store: *NodeStore, recordField: CIR.RecordField.Idx) CIR.RecordField {
-    _ = store;
-    _ = recordField;
+    const node = store.nodes.get(@enumFromInt(@intFromEnum(recordField)));
 
-    return CIR.RecordField{};
+    return CIR.RecordField{
+        .name = @bitCast(node.data_1),
+        .value = @enumFromInt(node.data_2),
+    };
 }
 
 /// Retrieves an if branch from the store.
@@ -1456,6 +1470,19 @@ pub fn annoRecordFieldSpanFrom(store: *NodeStore, start: u32) CIR.AnnoRecordFiel
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
 }
 
+/// Returns a span from the scratch record fields starting at the given index.
+pub fn recordFieldSpanFrom(store: *NodeStore, start: u32) CIR.RecordField.Span {
+    const end = store.scratch_record_fields.top();
+    defer store.scratch_record_fields.clearFrom(start);
+    var i = @as(usize, @intCast(start));
+    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
+    while (i < end) {
+        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_record_fields.items.items[i])) catch |err| exitOnOom(err);
+        i += 1;
+    }
+    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+}
+
 /// Returns the current top of the scratch exposed items buffer.
 pub fn scratchExposedItemTop(store: *NodeStore) u32 {
     return store.scratch_exposed_items.top();
@@ -1571,6 +1598,11 @@ pub fn slicePatterns(store: *const NodeStore, span: CIR.Pattern.Span) []CIR.Patt
 /// Returns a slice of statements from the store.
 pub fn sliceStatements(store: *const NodeStore, span: CIR.Statement.Span) []CIR.Statement.Idx {
     return store.sliceFromSpan(CIR.Statement.Idx, span.span);
+}
+
+/// Returns a slice of record fields from the store.
+pub fn sliceRecordFields(store: *const NodeStore, span: CIR.RecordField.Span) []CIR.RecordField.Idx {
+    return store.sliceFromSpan(CIR.RecordField.Idx, span.span);
 }
 
 /// Returns a slice of if branches from the store.

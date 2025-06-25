@@ -8,9 +8,7 @@ type=expr
 { name: "Alice", age: 30 }
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize record expression
-
+NIL
 # TOKENS
 ~~~zig
 OpenCurly(1:1-1:2),LowerIdent(1:3-1:7),OpColon(1:7-1:8),StringStart(1:9-1:10),StringPart(1:10-1:15),StringEnd(1:15-1:16),Comma(1:16-1:17),LowerIdent(1:18-1:21),OpColon(1:21-1:22),Int(1:23-1:25),CloseCurly(1:26-1:27),EndOfFile(1:27-1:27),
@@ -30,9 +28,15 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "not_implemented") (id 73))
+(e-record @1-1-1-27 (record-var 79) (ext-var 0) (id 81)
+	(fields
+		(field (name "name")
+			(e-string @1-9-1-16
+				(e-literal @1-10-1-15 (string "Alice"))))
+		(field (name "age")
+			(e-int @1-23-1-25 (int-var 76) (precision-var 75) (literal "30") (value "TODO") (bound "u8")))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 73) (type "Error"))
+(expr (id 81) (type "*"))
 ~~~

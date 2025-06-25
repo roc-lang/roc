@@ -753,6 +753,33 @@ fn canonicalize_decl(
     return def_idx;
 }
 
+fn canonicalize_record_field(
+    self: *Self,
+    ast_field_idx: AST.RecordField.Idx,
+) ?CIR.RecordField.Idx {
+    const field = self.parse_ir.store.getRecordField(ast_field_idx);
+
+    // Canonicalize the field name
+    const name = self.parse_ir.tokens.resolveIdentifier(field.name) orelse {
+        return null;
+    };
+
+    // Canonicalize the field value
+    const value = if (field.value) |v| self.canonicalize_expr(v) orelse {
+        return null;
+    } else {
+        return null;
+    };
+
+    // Create the CIR record field
+    const cir_field = CIR.RecordField{
+        .name = name,
+        .value = value,
+    };
+
+    return self.can_ir.store.addRecordField(cir_field);
+}
+
 /// Canonicalize an expression.
 pub fn canonicalize_expr(
     self: *Self,
@@ -1219,12 +1246,62 @@ pub fn canonicalize_expr(
 
             return expr_idx;
         },
-        .record => |_| {
-            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize record expression");
-            const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
-                .feature = feature,
-                .region = Region.zero(),
-            } });
+        .record => |e| {
+            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
+
+            const fields_slice = self.parse_ir.store.recordFieldSlice(e.fields);
+            if (fields_slice.len == 0) {
+                const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
+                    .empty_record = .{
+                        .region = region,
+                    },
+                });
+
+                _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .structure = .empty_record });
+
+                return expr_idx;
+            }
+
+            // Mark the start of scratch record fields for the record
+            const scratch_top = self.can_ir.store.scratch_record_fields.top();
+
+            // Iterate over the record fields, canonicalizing each one
+            // Then append the result to the scratch list
+            for (fields_slice) |field| {
+                if (self.canonicalize_record_field(field)) |canonicalized| {
+                    self.can_ir.store.scratch_record_fields.append(self.can_ir.env.gpa, canonicalized);
+                }
+            }
+
+            // Create span of the new scratch record fields
+            const fields_span = self.can_ir.store.recordFieldSpanFrom(scratch_top);
+
+            // create type vars, first "reserve" node slots
+            const record_expr_idx = self.can_ir.store.predictNodeIndex(2);
+
+            // then insert the type vars, setting the parent to be the final slot
+            const record_type_var = self.can_ir.pushFreshTypeVar(
+                record_expr_idx,
+                region,
+            );
+
+            // then in the final slot the actual expr is inserted
+            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
+                .record = .{
+                    .fields = fields_span,
+                    .record_var = record_type_var,
+                    .ext_var = self.can_ir.pushFreshTypeVar(record_expr_idx, region),
+                    .region = region,
+                },
+            });
+
+            // Insert concrete type variable for record
+            // TODO: Implement proper record type structure when record types are available
+            _ = self.can_ir.setTypeVarAtExpr(
+                expr_idx,
+                Content{ .flex_var = null },
+            );
+
             return expr_idx;
         },
         .lambda => |e| {

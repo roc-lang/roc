@@ -693,6 +693,18 @@ pub const RecordField = struct {
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
+
+    pub fn toSExpr(self: *const @This(), ir: *CIR, env: *ModuleEnv) SExpr {
+        const gpa = ir.env.gpa;
+        var node = SExpr.init(gpa, "field");
+
+        node.appendStringAttr(gpa, "name", ir.getIdentText(self.name));
+
+        var value_node = ir.store.getExpr(self.value).toSExpr(ir, env);
+        node.appendNode(gpa, &value_node);
+
+        return node;
+    }
 };
 
 /// TODO: implement WhereClause
@@ -1136,10 +1148,10 @@ pub const Expr = union(enum) {
         region: Region,
     },
     record: struct {
+        record_var: TypeVar,
         ext_var: TypeVar,
+        fields: RecordField.Span,
         region: Region,
-        // TODO:
-        // fields: SendMap<Lowercase, Field>,
     },
     /// Empty record constant
     empty_record: struct {
@@ -1580,10 +1592,18 @@ pub const Expr = union(enum) {
                 record_node.appendRegion(gpa, ir.calcRegionInfo(record_expr.region));
 
                 // Add record_var
+                record_node.appendTypeVar(gpa, "record-var", record_expr.record_var);
+
+                // Add ext_var
                 record_node.appendTypeVar(gpa, "ext-var", record_expr.ext_var);
 
-                // TODO: Add fields when implemented
-                record_node.appendStringAttr(gpa, "fields", "TODO");
+                // Add fields
+                var fields_node = SExpr.init(gpa, "fields");
+                for (ir.store.sliceRecordFields(record_expr.fields)) |field_idx| {
+                    var field_node = ir.store.getRecordField(field_idx).toSExpr(ir, env);
+                    fields_node.appendNode(gpa, &field_node);
+                }
+                record_node.appendNode(gpa, &fields_node);
 
                 return record_node;
             },
