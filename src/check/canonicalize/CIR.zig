@@ -1594,7 +1594,6 @@ pub const Pattern = union(enum) {
     },
     num_literal: struct {
         num_var: TypeVar,
-        literal: StringLiteral.Idx,
         value: IntLiteralValue, // TODO move this to a side table because it's 16B
         region: Region,
     },

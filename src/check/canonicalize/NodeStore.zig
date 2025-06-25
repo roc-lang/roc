@@ -409,13 +409,19 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
                 .tuple_var = @enumFromInt(node.data_3),
             },
         },
-        .pattern_num_literal => return CIR.Pattern{
-            .num_literal = .{
-                .region = node.region,
-                .literal = @enumFromInt(node.data_1),
-                .num_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
-                .value = CIR.IntLiteralValue{ .value = 0 }, // TODO need to store and retrieve from extra_data
-            },
+        .pattern_num_literal => {
+            // Retrieve value from extra_data
+            const extra_data_idx = node.data_1;
+            const value_as_u32s = store.extra_data.items[extra_data_idx..][0..4];
+            const value_as_i128: i128 = @bitCast(value_as_u32s.*);
+
+            return CIR.Pattern{
+                .num_literal = .{
+                    .region = node.region,
+                    .num_var = @as(types.Var, @enumFromInt(node.data_2)),
+                    .value = CIR.IntLiteralValue{ .value = value_as_i128 },
+                },
+            };
         },
         .pattern_int_literal => return CIR.Pattern{
             .int_literal = .{
@@ -847,8 +853,14 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern) CIR.Pattern.Idx {
         .num_literal => |p| {
             node.tag = .pattern_num_literal;
             node.region = p.region;
-            node.data_1 = @intFromEnum(p.literal);
-            // TODO store other data in extra_data
+            // Store the value in extra_data
+            const extra_data_start = store.extra_data.items.len;
+            const value_as_u32s: [4]u32 = @bitCast(p.value.value);
+            for (value_as_u32s) |word| {
+                store.extra_data.append(store.gpa, word) catch |err| exitOnOom(err);
+            }
+            node.data_1 = @intCast(extra_data_start);
+            node.data_2 = @intFromEnum(p.num_var);
         },
         .int_literal => |p| {
             node.tag = .pattern_int_literal;
