@@ -18,6 +18,7 @@ const ModuleEnv = base.ModuleEnv;
 const StringLiteral = base.StringLiteral;
 const CalledVia = base.CalledVia;
 const TypeVar = types.Var;
+const RocDec = @import("../../builtins/dec.zig").RocDec;
 const Node = @import("Node.zig");
 const NodeStore = @import("NodeStore.zig");
 
@@ -139,10 +140,10 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
             break :blk Diagnostic.buildNotImplementedReport(allocator, feature_text);
         },
         .invalid_num_literal => |data| blk: {
-            const literal_text = self.env.strings.get(data.literal);
             break :blk Diagnostic.buildInvalidNumLiteralReport(
                 allocator,
-                literal_text,
+                data.region,
+                source,
             );
         },
         .ident_already_in_scope => |data| blk: {
@@ -172,6 +173,9 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
         .pattern_not_canonicalized => Diagnostic.buildPatternNotCanonicalizedReport(allocator),
         .can_lambda_not_implemented => Diagnostic.buildCanLambdaNotImplementedReport(allocator),
         .lambda_body_not_canonicalized => Diagnostic.buildLambdaBodyNotCanonicalizedReport(allocator),
+        .if_condition_not_canonicalized => Diagnostic.buildIfConditionNotCanonicalizedReport(allocator),
+        .if_then_not_canonicalized => Diagnostic.buildIfThenNotCanonicalizedReport(allocator),
+        .if_else_not_canonicalized => Diagnostic.buildIfElseNotCanonicalizedReport(allocator),
         .var_across_function_boundary => Diagnostic.buildVarAcrossFunctionBoundaryReport(allocator),
         .malformed_type_annotation => Diagnostic.buildMalformedTypeAnnotationReport(allocator),
         .shadowing_warning => |data| blk: {
@@ -1057,19 +1061,28 @@ pub const Expr = union(enum) {
         region: Region,
     },
     int: struct {
-        int_var: TypeVar,
-        precision_var: TypeVar,
-        literal: StringLiteral.Idx,
+        num_var: TypeVar,
+        requirements: types.Num.Int.Requirements,
         value: IntValue,
-        bound: types.Num.Int.Precision,
         region: Region,
     },
-    float: struct {
+    frac_f64: struct {
         frac_var: TypeVar,
-        precision_var: TypeVar,
-        literal: StringLiteral.Idx,
+        requirements: types.Num.Frac.Requirements,
         value: f64,
-        bound: types.Num.Frac.Precision,
+        region: Region,
+    },
+    frac_dec: struct {
+        frac_var: TypeVar,
+        requirements: types.Num.Frac.Requirements,
+        value: RocDec,
+        region: Region,
+    },
+    dec_small: struct {
+        num_var: TypeVar,
+        requirements: types.Num.Frac.Requirements,
+        numerator: i16,
+        denominator_power_of_ten: u8,
         region: Region,
     },
     // A single segment of a string literal
@@ -1238,7 +1251,9 @@ pub const Expr = union(enum) {
         switch (self.*) {
             .num => |e| return e.region,
             .int => |e| return e.region,
-            .float => |e| return e.region,
+            .frac_f64 => |e| return e.region,
+            .frac_dec => |e| return e.region,
+            .dec_small => |e| return e.region,
             .str_segment => |e| return e.region,
             .str => |e| return e.region,
             .single_quote => |e| return e.region,
@@ -1294,43 +1309,100 @@ pub const Expr = union(enum) {
                 var node = SExpr.init(gpa, "e-int");
                 node.appendRegion(gpa, ir.calcRegionInfo(int_expr.region));
 
-                // Add int_var
-                node.appendTypeVar(gpa, "int-var", int_expr.int_var);
+                // Add num_var
+                node.appendTypeVar(gpa, "num-var", int_expr.num_var);
 
-                // Add precision_var
-                node.appendTypeVar(gpa, "precision-var", int_expr.precision_var);
+                // Add requirements
+                node.appendStringAttr(gpa, "sign-needed", if (int_expr.requirements.sign_needed) "true" else "false");
+                node.appendStringAttr(gpa, "bits-needed", @tagName(int_expr.requirements.bits_needed));
 
-                // Add literal
-                node.appendStringAttr(gpa, "literal", ir.env.strings.get(int_expr.literal));
-
-                // Add value info
-                node.appendStringAttr(gpa, "value", "TODO");
-
-                // Add bound info
-                node.appendStringAttr(gpa, "bound", @tagName(int_expr.bound));
+                // Add value
+                const value_i128: i128 = @bitCast(int_expr.value.bytes);
+                var value_buf: [40]u8 = undefined;
+                const value_str = std.fmt.bufPrint(&value_buf, "{}", .{value_i128}) catch "fmt_error";
+                node.appendStringAttr(gpa, "value", value_str);
 
                 return node;
             },
-            .float => |float_expr| {
-                var node = SExpr.init(gpa, "e-float");
-                node.appendRegion(gpa, ir.calcRegionInfo(float_expr.region));
+            .frac_f64 => |e| {
+                var node = SExpr.init(gpa, "e-frac-f64");
+                node.appendRegion(gpa, ir.calcRegionInfo(e.region));
+                node.appendTypeVar(gpa, "frac-var", e.frac_var);
 
-                // Add frac_var
-                node.appendTypeVar(gpa, "frac_var", float_expr.frac_var);
-
-                // Add precision_var
-                node.appendTypeVar(gpa, "precision-var", float_expr.precision_var);
-
-                // Add literal
-                node.appendStringAttr(gpa, "literal", ir.env.strings.get(float_expr.literal));
+                // Add requirements
+                node.appendStringAttr(gpa, "fits-in-f32", if (e.requirements.fits_in_f32) "true" else "false");
+                node.appendStringAttr(gpa, "fits-in-dec", if (e.requirements.fits_in_dec) "true" else "false");
 
                 // Add value
-                const value_str = std.fmt.allocPrint(gpa, "{d}", .{float_expr.value}) catch |err| exitOnOom(err);
-                defer gpa.free(value_str);
+                var value_buf: [512]u8 = undefined;
+                // Use scientific notation for very large or very small numbers (but not zero)
+                const value_str = if (e.value == 0)
+                    "0.0"
+                else if (@abs(e.value) < 1e-10 or @abs(e.value) > 1e10)
+                    std.fmt.bufPrint(&value_buf, "{e}", .{e.value}) catch "fmt_error"
+                else
+                    std.fmt.bufPrint(&value_buf, "{d}", .{e.value}) catch "fmt_error";
                 node.appendStringAttr(gpa, "value", value_str);
 
-                // Add bound info
-                node.appendStringAttr(gpa, "bound", @tagName(float_expr.bound));
+                return node;
+            },
+            .frac_dec => |e| {
+                var node = SExpr.init(gpa, "e-frac-dec");
+                node.appendRegion(gpa, ir.calcRegionInfo(e.region));
+                node.appendTypeVar(gpa, "frac-var", e.frac_var);
+
+                // Add requirements
+                node.appendStringAttr(gpa, "fits-in-f32", if (e.requirements.fits_in_f32) "true" else "false");
+                node.appendStringAttr(gpa, "fits-in-dec", if (e.requirements.fits_in_dec) "true" else "false");
+
+                // Add value (convert RocDec to string)
+                // RocDec has 18 decimal places, so divide by 10^18
+                const dec_value_f64: f64 = @as(f64, @floatFromInt(e.value.num)) / std.math.pow(f64, 10, 18);
+                var value_buf: [512]u8 = undefined;
+                // Use scientific notation for very large or very small numbers (but not zero)
+                const value_str = if (dec_value_f64 == 0)
+                    "0.0"
+                else if (@abs(dec_value_f64) < 1e-10 or @abs(dec_value_f64) > 1e10)
+                    std.fmt.bufPrint(&value_buf, "{e}", .{dec_value_f64}) catch "fmt_error"
+                else
+                    std.fmt.bufPrint(&value_buf, "{d}", .{dec_value_f64}) catch "fmt_error";
+                node.appendStringAttr(gpa, "value", value_str);
+
+                return node;
+            },
+            .dec_small => |e| {
+                var node = SExpr.init(gpa, "e-dec-small");
+                node.appendRegion(gpa, ir.calcRegionInfo(e.region));
+                node.appendTypeVar(gpa, "num-var", e.num_var);
+
+                // Add requirements
+                node.appendStringAttr(gpa, "fits-in-f32", if (e.requirements.fits_in_f32) "true" else "false");
+                node.appendStringAttr(gpa, "fits-in-dec", if (e.requirements.fits_in_dec) "true" else "false");
+
+                // Add numerator and denominator_power_of_ten
+                var num_buf: [32]u8 = undefined;
+                const num_str = std.fmt.bufPrint(&num_buf, "{}", .{e.numerator}) catch "fmt_error";
+                node.appendStringAttr(gpa, "numerator", num_str);
+
+                var denom_buf: [32]u8 = undefined;
+                const denom_str = std.fmt.bufPrint(&denom_buf, "{}", .{e.denominator_power_of_ten}) catch "fmt_error";
+                node.appendStringAttr(gpa, "denominator-power-of-ten", denom_str);
+
+                // Calculate and add the decimal value
+                // Convert numerator to f64 and divide by 10^denominator_power_of_ten
+                const numerator_f64: f64 = @floatFromInt(e.numerator);
+                const denominator_f64: f64 = std.math.pow(f64, 10, @floatFromInt(e.denominator_power_of_ten));
+                const value_f64 = numerator_f64 / denominator_f64;
+
+                var value_buf: [512]u8 = undefined;
+                // Use scientific notation for very large or very small numbers (but not zero)
+                const value_str = if (value_f64 == 0)
+                    "0.0"
+                else if (@abs(value_f64) < 1e-10 or @abs(value_f64) > 1e10)
+                    std.fmt.bufPrint(&value_buf, "{e}", .{value_f64}) catch "fmt_error"
+                else
+                    std.fmt.bufPrint(&value_buf, "{d}", .{value_f64}) catch "fmt_error";
+                node.appendStringAttr(gpa, "value", value_str);
 
                 return node;
             },
@@ -1448,13 +1520,32 @@ pub const Expr = union(enum) {
                 node.appendTypeVar(gpa, "branch-var", if_expr.branch_var);
 
                 // Add branches
-                var branches_node = SExpr.init(gpa, "branches");
-                branches_node.appendStringAttr(gpa, "branches", "TODO");
+                var branches_node = SExpr.init(gpa, "if-branches");
+                const branch_indices = ir.store.sliceIfBranches(if_expr.branches);
+                for (branch_indices) |branch_idx| {
+                    const branch = ir.store.getIfBranch(branch_idx);
+
+                    var branch_node = SExpr.init(gpa, "if-branch");
+
+                    // Add condition
+                    const cond_expr = ir.store.getExpr(branch.cond);
+                    var cond_node = cond_expr.toSExpr(ir, env);
+                    branch_node.appendNode(gpa, &cond_node);
+
+                    // Add body
+                    const body_expr = ir.store.getExpr(branch.body);
+                    var body_node = body_expr.toSExpr(ir, env);
+                    branch_node.appendNode(gpa, &body_node);
+
+                    branches_node.appendNode(gpa, &branch_node);
+                }
                 node.appendNode(gpa, &branches_node);
 
                 // Add final_else
-                var else_node = SExpr.init(gpa, "else");
-                else_node.appendStringAttr(gpa, "else", "TODO");
+                var else_node = SExpr.init(gpa, "if-else");
+                const else_expr = ir.store.getExpr(if_expr.final_else);
+                var else_expr_node = else_expr.toSExpr(ir, env);
+                else_node.appendNode(gpa, &else_expr_node);
                 node.appendNode(gpa, &else_node);
 
                 return node;
@@ -2132,27 +2223,29 @@ pub const Pattern = union(enum) {
         patterns: Pattern.Span,
         region: Region,
     },
-    num_literal: struct {
-        num_var: TypeVar,
-        literal: StringLiteral.Idx,
-        value: IntValue,
-        bound: types.Num.Int.Precision,
-        region: Region,
-    },
     int_literal: struct {
         num_var: TypeVar,
-        precision_var: TypeVar,
-        literal: StringLiteral.Idx,
+        requirements: types.Num.Int.Requirements,
         value: IntValue,
-        bound: types.Num.Int.Precision,
         region: Region,
     },
-    float_literal: struct {
+    small_dec_literal: struct {
         num_var: TypeVar,
-        precision_var: TypeVar,
-        literal: StringLiteral.Idx,
+        requirements: types.Num.Frac.Requirements,
+        numerator: i16,
+        denominator_power_of_ten: u8,
+        region: Region,
+    },
+    dec_literal: struct {
+        num_var: TypeVar,
+        requirements: types.Num.Frac.Requirements,
+        value: RocDec,
+        region: Region,
+    },
+    f64_literal: struct {
+        num_var: TypeVar,
+        requirements: types.Num.Frac.Requirements,
         value: f64,
-        bound: types.Num.Frac.Precision,
         region: Region,
     },
     str_literal: struct {
@@ -2161,9 +2254,8 @@ pub const Pattern = union(enum) {
     },
     char_literal: struct {
         num_var: TypeVar,
-        precision_var: TypeVar,
+        requirements: types.Num.Int.Requirements,
         value: u32,
-        bound: types.Num.Int.Precision,
         region: Region,
     },
     underscore: struct {
@@ -2186,9 +2278,10 @@ pub const Pattern = union(enum) {
             .record_destructure => |p| return p.region,
             .list => |p| return p.region,
             .tuple => |p| return p.region,
-            .num_literal => |p| return p.region,
             .int_literal => |p| return p.region,
-            .float_literal => |p| return p.region,
+            .small_dec_literal => |p| return p.region,
+            .dec_literal => |p| return p.region,
+            .f64_literal => |p| return p.region,
             .str_literal => |p| return p.region,
             .char_literal => |p| return p.region,
             .underscore => |p| return p.region,
@@ -2276,26 +2369,27 @@ pub const Pattern = union(enum) {
 
                 return node;
             },
-            .num_literal => |p| {
-                var node = SExpr.init(gpa, "p-num");
-                node.appendRegion(gpa, ir.calcRegionInfo(p.region));
-                return node;
-            },
             .int_literal => |p| {
                 var node = SExpr.init(gpa, "p-int");
                 node.appendRegion(gpa, ir.calcRegionInfo(p.region));
                 return node;
             },
-            .float_literal => |p| {
-                var node = SExpr.init(gpa, "p-float");
+            .small_dec_literal => |p| {
+                var node = SExpr.init(gpa, "p-small-dec");
                 node.appendRegion(gpa, ir.calcRegionInfo(p.region));
-
-                const val_str = std.fmt.allocPrint(gpa, "{d}", .{p.value}) catch "<oom>";
-                defer gpa.free(val_str);
-
-                node.appendStringAttr(gpa, "value", val_str);
-                node.appendStringAttr(gpa, "bound", @tagName(p.bound));
-
+                // TODO: add fields
+                return node;
+            },
+            .dec_literal => |p| {
+                var node = SExpr.init(gpa, "p-dec");
+                node.appendRegion(gpa, ir.calcRegionInfo(p.region));
+                // TODO: add fields
+                return node;
+            },
+            .f64_literal => |p| {
+                var node = SExpr.init(gpa, "p-f64");
+                node.appendRegion(gpa, ir.calcRegionInfo(p.region));
+                // TODO: add fields
                 return node;
             },
             .str_literal => |p| {
@@ -2314,7 +2408,7 @@ pub const Pattern = union(enum) {
                 const char_str = std.fmt.allocPrint(gpa, "'\\u({d})'", .{l.value}) catch "<oom>";
                 defer gpa.free(char_str);
                 node.appendStringAttr(gpa, "byte", char_str);
-                node.appendStringAttr(gpa, "bound", @tagName(l.bound));
+                // TODO: add num_var and requirements
                 return node;
             },
             .underscore => |p| {

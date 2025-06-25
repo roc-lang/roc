@@ -118,10 +118,10 @@ outerFunc = |_| {
 (can-ir
 	(d-let (id 76)
 		(p-assign @4-1-4-2 (ident "x") (id 72))
-		(e-int @4-5-4-6 (int-var 74) (precision-var 73) (literal "5") (value "TODO") (bound "u8") (id 75)))
+		(e-int @4-5-4-6 (num-var 75) (sign-needed "false") (bits-needed "7") (value "5") (id 75)))
 	(d-let (id 81)
 		(p-assign @5-1-5-2 (ident "y") (id 77))
-		(e-int @5-5-5-7 (int-var 79) (precision-var 78) (literal "10") (value "TODO") (bound "u8") (id 80)))
+		(e-int @5-5-5-7 (num-var 80) (sign-needed "false") (bits-needed "7") (value "10") (id 80)))
 	(d-let (id 106)
 		(p-assign @8-1-8-10 (ident "outerFunc") (id 82))
 		(e-lambda @8-13-16-2 (id 105)
@@ -130,7 +130,7 @@ outerFunc = |_| {
 			(e-block @8-17-16-2
 				(s-let @9-5-9-11
 					(p-assign @9-5-9-6 (ident "x") (id 84))
-					(e-int @9-9-9-11 (int-var 87) (precision-var 86) (literal "20") (value "TODO") (bound "u8") (id 88)))
+					(e-int @9-9-9-11 (num-var 88) (sign-needed "false") (bits-needed "7") (value "20") (id 88)))
 				(s-let @10-5-14-6
 					(p-assign @10-5-10-16 (ident "innerResult") (id 90))
 					(e-block @10-19-14-6 (id 101)
@@ -144,7 +144,7 @@ outerFunc = |_| {
 						(e-binop @13-9-14-6 (op "add")
 							(e-lookup-local @13-9-13-10
 								(pattern (id 91)))
-							(e-int @13-13-13-14 (int-var 98) (precision-var 97) (literal "1") (value "TODO") (bound "u8")))))
+							(e-int @13-13-13-14 (num-var 99) (sign-needed "false") (bits-needed "7") (value "1")))))
 				(e-lookup-local @15-5-15-16
 					(pattern (id 90)))))))
 ~~~

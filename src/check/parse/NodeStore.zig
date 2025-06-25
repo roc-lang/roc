@@ -410,8 +410,13 @@ pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) AST.Pattern.Idx {
             node.data.lhs = t.args.span.start;
             node.data.rhs = t.args.span.len;
         },
-        .number => |n| {
-            node.tag = .number_patt;
+        .int => |n| {
+            node.tag = .int_patt;
+            node.region = n.region;
+            node.main_token = n.number_tok;
+        },
+        .frac => |n| {
+            node.tag = .frac_patt;
             node.region = n.region;
             node.main_token = n.number_tok;
         },
@@ -479,11 +484,12 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) AST.Expr.Idx {
             node.region = e.region;
             node.main_token = e.token;
         },
-        .float => |e| {
-            node.tag = .float;
+        .frac => |e| {
+            node.tag = .frac;
             node.region = e.region;
             node.main_token = e.token;
         },
+
         .string_part => |e| {
             node.tag = .string_part;
             node.region = e.region;
@@ -1131,8 +1137,14 @@ pub fn getPattern(store: *NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pattern {
                 .expr = @enumFromInt(node.data.lhs),
             } };
         },
-        .number_patt => {
-            return .{ .number = .{
+        .int_patt => {
+            return .{ .int = .{
+                .number_tok = node.main_token,
+                .region = node.region,
+            } };
+        },
+        .frac_patt => {
+            return .{ .frac = .{
                 .number_tok = node.main_token,
                 .region = node.region,
             } };
@@ -1206,8 +1218,8 @@ pub fn getExpr(store: *NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
                 .region = node.region,
             } };
         },
-        .float => {
-            return .{ .float = .{
+        .frac => {
+            return .{ .frac = .{
                 .token = node.main_token,
                 .region = node.region,
             } };

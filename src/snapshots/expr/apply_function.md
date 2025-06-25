@@ -32,7 +32,7 @@ NO CHANGE
 ~~~clojure
 (e-call @1-1-1-17 (id 79)
 	(e-runtime-error (tag "ident_not_in_scope"))
-	(e-int @1-5-1-7 (int-var 75) (precision-var 74) (literal "42") (value "TODO") (bound "u8"))
+	(e-int @1-5-1-7 (num-var 76) (sign-needed "false") (bits-needed "7") (value "42"))
 	(e-string @1-9-1-16
 		(e-literal @1-10-1-15 (string "hello"))))
 ~~~

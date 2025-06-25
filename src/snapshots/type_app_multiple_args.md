@@ -109,7 +109,7 @@ NO CHANGE
 					(args
 						(e-string @6-45-6-50
 							(e-literal @6-46-6-49 (string "one")))
-						(e-int @6-52-6-53 (int-var 98) (precision-var 97) (literal "1") (value "TODO") (bound "u8"))))))))
+						(e-int @6-52-6-53 (num-var 99) (sign-needed "false") (bits-needed "7") (value "1"))))))))
 ~~~
 # TYPES
 ~~~clojure

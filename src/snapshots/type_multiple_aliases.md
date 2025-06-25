@@ -228,10 +228,10 @@ main! = |_| {
 					(e-call @15-12-15-40 (id 139)
 						(e-lookup-local @15-12-15-22
 							(pattern (id 95)))
-						(e-int @15-23-15-26 (int-var 132) (precision-var 131) (literal "123") (value "TODO") (bound "u8"))
+						(e-int @15-23-15-26 (num-var 133) (sign-needed "false") (bits-needed "7") (value "123"))
 						(e-string @15-28-15-35
 							(e-literal @15-29-15-34 (string "Alice")))
-						(e-int @15-37-15-39 (int-var 137) (precision-var 136) (literal "25") (value "TODO") (bound "u8"))))
+						(e-int @15-37-15-39 (num-var 138) (sign-needed "false") (bits-needed "7") (value "25"))))
 				(e-call @16-5-16-22
 					(e-lookup-local @16-5-16-16
 						(pattern (id 116)))

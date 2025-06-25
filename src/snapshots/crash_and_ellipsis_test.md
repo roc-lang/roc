@@ -253,13 +253,13 @@ result3 = testCrashSimple(42)
 		(e-call @17-15-17-28 (id 129)
 			(e-lookup-local @17-15-17-24
 				(pattern (id 89)))
-			(e-int @17-25-17-27 (int-var 127) (precision-var 126) (literal "42") (value "TODO") (bound "u8"))))
+			(e-int @17-25-17-27 (num-var 128) (sign-needed "false") (bits-needed "7") (value "42"))))
 	(d-let (id 137)
 		(p-assign @18-5-18-12 (ident "result3") (id 131))
 		(e-call @18-15-18-34 (id 136)
 			(e-lookup-local @18-15-18-30
 				(pattern (id 104)))
-			(e-int @18-31-18-33 (int-var 134) (precision-var 133) (literal "42") (value "TODO") (bound "u8")))))
+			(e-int @18-31-18-33 (num-var 135) (sign-needed "false") (bits-needed "7") (value "42")))))
 ~~~
 # TYPES
 ~~~clojure

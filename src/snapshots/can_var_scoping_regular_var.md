@@ -143,22 +143,22 @@ NO CHANGE
 			(e-block @4-24-21-2
 				(s-var @5-2-6-5
 					(p-assign @5-2-6-5 (ident "count_") (id 77))
-					(e-int @5-15-5-16 (int-var 75) (precision-var 74) (literal "0") (value "TODO") (bound "u8") (id 76)))
+					(e-int @5-15-5-16 (num-var 76) (sign-needed "false") (bits-needed "7") (value "0") (id 76)))
 				(s-var @6-2-9-8
 					(p-assign @6-2-9-8 (ident "total_") (id 82))
-					(e-int @6-15-6-16 (int-var 80) (precision-var 79) (literal "0") (value "TODO") (bound "u8") (id 81)))
+					(e-int @6-15-6-16 (num-var 81) (sign-needed "false") (bits-needed "7") (value "0") (id 81)))
 				(s-reassign @9-2-9-8
 					(p-assign @5-2-6-5 (ident "count_") (id 77))
 					(e-binop @9-11-10-8 (op "add") (id 88)
 						(e-lookup-local @9-11-9-17
 							(pattern (id 77)))
-						(e-int @9-20-9-21 (int-var 86) (precision-var 85) (literal "1") (value "TODO") (bound "u8"))))
+						(e-int @9-20-9-21 (num-var 87) (sign-needed "false") (bits-needed "7") (value "1"))))
 				(s-reassign @10-2-10-8
 					(p-assign @6-2-9-8 (ident "total_") (id 82))
 					(e-binop @10-11-13-12 (op "add") (id 94)
 						(e-lookup-local @10-11-10-17
 							(pattern (id 82)))
-						(e-int @10-20-10-22 (int-var 92) (precision-var 91) (literal "10") (value "TODO") (bound "u8"))))
+						(e-int @10-20-10-22 (num-var 93) (sign-needed "false") (bits-needed "7") (value "10"))))
 				(s-let @13-2-17-3
 					(p-assign @13-2-13-12 (ident "nestedFunc") (id 96))
 					(e-lambda @13-15-17-3 (id 106)

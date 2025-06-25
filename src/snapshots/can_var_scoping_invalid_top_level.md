@@ -52,7 +52,7 @@ topLevelVar_ = 0
 (can-ir
 	(d-let (id 76)
 		(p-assign @4-5-4-17 (ident "topLevelVar_") (id 72))
-		(e-int @4-20-4-21 (int-var 74) (precision-var 73) (literal "0") (value "TODO") (bound "u8") (id 75))))
+		(e-int @4-20-4-21 (num-var 75) (sign-needed "false") (bits-needed "7") (value "0") (id 75))))
 ~~~
 # TYPES
 ~~~clojure

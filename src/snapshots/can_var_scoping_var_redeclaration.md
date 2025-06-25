@@ -107,13 +107,13 @@ NO CHANGE
 			(e-block @4-21-9-2
 				(s-var @5-2-6-5
 					(p-assign @5-2-6-5 (ident "x_") (id 77))
-					(e-int @5-11-5-12 (int-var 75) (precision-var 74) (literal "5") (value "TODO") (bound "u8") (id 76)))
+					(e-int @5-11-5-12 (num-var 76) (sign-needed "false") (bits-needed "7") (value "5") (id 76)))
 				(s-var @6-2-7-4
 					(p-assign @6-2-7-4 (ident "x_") (id 82))
-					(e-int @6-11-6-13 (int-var 80) (precision-var 79) (literal "10") (value "TODO") (bound "u8") (id 81)))
+					(e-int @6-11-6-13 (num-var 81) (sign-needed "false") (bits-needed "7") (value "10") (id 81)))
 				(s-reassign @7-2-7-4
 					(p-assign @5-2-6-5 (ident "x_") (id 77))
-					(e-int @7-7-7-9 (int-var 86) (precision-var 85) (literal "15") (value "TODO") (bound "u8") (id 87)))
+					(e-int @7-7-7-9 (num-var 87) (sign-needed "false") (bits-needed "7") (value "15") (id 87)))
 				(e-lookup-local @8-2-8-4
 					(pattern (id 77))))))
 	(d-let (id 99)

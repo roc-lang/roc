@@ -35,7 +35,7 @@ NO CHANGE
 (can-ir
 	(d-let (id 76)
 		(p-assign @2-1-2-4 (ident "foo") (id 72))
-		(e-int @2-7-2-9 (int-var 74) (precision-var 73) (literal "42") (value "TODO") (bound "u8") (id 75))))
+		(e-int @2-7-2-9 (num-var 75) (sign-needed "false") (bits-needed "7") (value "42") (id 75))))
 ~~~
 # TYPES
 ~~~clojure

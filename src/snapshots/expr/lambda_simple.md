@@ -34,7 +34,7 @@ NO CHANGE
 	(e-binop @1-5-1-10 (op "add")
 		(e-lookup-local @1-5-1-6
 			(pattern (id 72)))
-		(e-int @1-9-1-10 (int-var 75) (precision-var 74) (literal "1") (value "TODO") (bound "u8"))))
+		(e-int @1-9-1-10 (num-var 76) (sign-needed "false") (bits-needed "7") (value "1"))))
 ~~~
 # TYPES
 ~~~clojure

@@ -1209,16 +1209,14 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) AST.Pattern.Idx {
                 pattern = self.parseStringPattern();
             },
             .Int => {
-                // Should be number
-                pattern = self.store.addPattern(.{ .number = .{
+                pattern = self.store.addPattern(.{ .int = .{
                     .region = .{ .start = start, .end = self.pos },
                     .number_tok = start,
                 } });
                 self.advance();
             },
             .Float => {
-                // Should be number
-                pattern = self.store.addPattern(.{ .number = .{
+                pattern = self.store.addPattern(.{ .frac = .{
                     .region = .{ .start = start, .end = self.pos },
                     .number_tok = start,
                 } });
@@ -1453,7 +1451,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
         },
         .Float => {
             self.advance();
-            expr = self.store.addExpr(.{ .float = .{
+            expr = self.store.addExpr(.{ .frac = .{
                 .token = start,
                 .region = .{ .start = start, .end = start },
             } });

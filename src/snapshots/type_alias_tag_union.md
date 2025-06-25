@@ -175,7 +175,7 @@ NO CHANGE
 		(e-lambda @18-13-18-21 (id 128)
 			(args
 				(p-assign @18-14-18-18 (ident "_opt") (id 124)))
-			(e-int @18-20-18-21 (int-var 126) (precision-var 125) (literal "0") (value "TODO") (bound "u8")))
+			(e-int @18-20-18-21 (num-var 127) (sign-needed "false") (bits-needed "7") (value "0")))
 		(annotation @18-1-18-10 (signature 132) (id 133)
 			(declared-type
 				(ty-fn @17-13-17-31 (effectful false)

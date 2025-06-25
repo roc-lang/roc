@@ -51,13 +51,13 @@ NO CHANGE
 (can-ir
 	(d-let (id 76)
 		(p-assign @3-1-3-2 (ident "a") (id 72))
-		(e-int @3-5-3-6 (int-var 74) (precision-var 73) (literal "5") (value "TODO") (bound "u8") (id 75)))
+		(e-int @3-5-3-6 (num-var 75) (sign-needed "false") (bits-needed "7") (value "5") (id 75)))
 	(d-let (id 83)
 		(p-assign @4-1-4-2 (ident "b") (id 77))
 		(e-binop @4-5-4-10 (op "add") (id 82)
 			(e-lookup-local @4-5-4-6
 				(pattern (id 72)))
-			(e-int @4-9-4-10 (int-var 80) (precision-var 79) (literal "1") (value "TODO") (bound "u8")))))
+			(e-int @4-9-4-10 (num-var 81) (sign-needed "false") (bits-needed "7") (value "1")))))
 ~~~
 # TYPES
 ~~~clojure

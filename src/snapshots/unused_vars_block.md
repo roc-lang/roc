@@ -144,23 +144,23 @@ main! = |_| {
 			(e-block @3-13-19-2
 				(s-let @5-5-5-20
 					(p-assign @5-5-5-15 (ident "unused_var") (id 74))
-					(e-int @5-18-5-20 (int-var 76) (precision-var 75) (literal "42") (value "TODO") (bound "u8") (id 77)))
+					(e-int @5-18-5-20 (num-var 77) (sign-needed "false") (bits-needed "7") (value "42") (id 77)))
 				(s-let @8-5-8-19
 					(p-assign @8-5-8-13 (ident "used_var") (id 79))
-					(e-int @8-16-8-19 (int-var 81) (precision-var 80) (literal "100") (value "TODO") (bound "u8") (id 82)))
+					(e-int @8-16-8-19 (num-var 82) (sign-needed "false") (bits-needed "7") (value "100") (id 82)))
 				(s-let @11-5-11-29
 					(p-assign @11-5-11-19 (ident "another_unused") (id 84))
 					(e-string @11-22-11-29 (id 86)
 						(e-literal @11-23-11-28 (string "hello"))))
 				(s-let @14-5-14-19
 					(p-assign @14-5-14-13 (ident "_ignored") (id 88))
-					(e-int @14-16-14-19 (int-var 90) (precision-var 89) (literal "999") (value "TODO") (bound "u8") (id 91)))
+					(e-int @14-16-14-19 (num-var 91) (sign-needed "false") (bits-needed "9_to_15") (value "999") (id 91)))
 				(s-let @17-5-18-11
 					(p-assign @17-5-17-11 (ident "result") (id 93))
 					(e-binop @17-14-18-11 (op "add") (id 98)
 						(e-lookup-local @17-14-17-22
 							(pattern (id 79)))
-						(e-int @17-25-17-27 (int-var 96) (precision-var 95) (literal "10") (value "TODO") (bound "u8"))))
+						(e-int @17-25-17-27 (num-var 97) (sign-needed "false") (bits-needed "7") (value "10"))))
 				(e-lookup-local @18-5-18-11
 					(pattern (id 93)))))))
 ~~~
