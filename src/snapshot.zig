@@ -523,12 +523,12 @@ fn generateSourceSection(output: *DualOutput, content: *const Content, parse_ast
         \\                <div class="source-code">
         \\                    <div id="source-content">
     );
-
     // Apply syntax highlighting by processing tokens in order
     var tokenizedBuffer = parse_ast.tokens;
     const tokens = tokenizedBuffer.tokens.items(.tag);
     var source_offset: u32 = 0;
     var line_num: u32 = 1;
+    var col_num: u32 = 1;
 
     try output.html_writer.print("                        <span class=\"source-line\" data-line=\"{d}\">", .{line_num});
 
@@ -541,9 +541,19 @@ fn generateSourceSection(output: *DualOutput, content: *const Content, parse_ast
             if (char == '\n') {
                 try output.html_writer.writeAll("</span>\n");
                 line_num += 1;
+                col_num = 1;
                 try output.html_writer.print("                        <span class=\"source-line\" data-line=\"{d}\">", .{line_num});
+            } else if (char == ' ') {
+                // Render space as &nbsp; to preserve indentation
+                try output.html_writer.writeAll("&nbsp;");
+                col_num += 1;
+            } else if (char == '\t') {
+                // Render tab as 4 non-breaking spaces (or adjust as needed)
+                try output.html_writer.writeAll("&nbsp;&nbsp;&nbsp;&nbsp;");
+                col_num += 4;
             } else {
                 try escapeHtmlChar(output.html_writer, char);
+                col_num += 1;
             }
             source_offset += 1;
         }
@@ -560,7 +570,16 @@ fn generateSourceSection(output: *DualOutput, content: *const Content, parse_ast
         try output.html_writer.print("<span class=\"{s}\" data-token-id=\"{d}\">", .{ category.toCssClass(), i });
 
         for (token_text) |char| {
-            try escapeHtmlChar(output.html_writer, char);
+            if (char == ' ') {
+                try output.html_writer.writeAll("&nbsp;");
+                col_num += 1;
+            } else if (char == '\t') {
+                try output.html_writer.writeAll("&nbsp;&nbsp;&nbsp;&nbsp;");
+                col_num += 4;
+            } else {
+                try escapeHtmlChar(output.html_writer, char);
+                col_num += 1;
+            }
         }
 
         try output.html_writer.writeAll("</span>");
@@ -573,11 +592,19 @@ fn generateSourceSection(output: *DualOutput, content: *const Content, parse_ast
         if (char == '\n') {
             try output.html_writer.writeAll("</span>\n");
             line_num += 1;
+            col_num = 1;
             if (source_offset + 1 < content.source.len) {
                 try output.html_writer.print("                        <span class=\"source-line\" data-line=\"{d}\">", .{line_num});
             }
+        } else if (char == ' ') {
+            try output.html_writer.writeAll("&nbsp;");
+            col_num += 1;
+        } else if (char == '\t') {
+            try output.html_writer.writeAll("&nbsp;&nbsp;&nbsp;&nbsp;");
+            col_num += 4;
         } else {
             try escapeHtmlChar(output.html_writer, char);
+            col_num += 1;
         }
         source_offset += 1;
     }
@@ -1070,8 +1097,6 @@ fn generateHtmlClosing(output: *DualOutput) !void {
         \\                        const tokenItem = document.querySelector(`.token-item[data-token-id="${tokenId}"]`);
         \\                        if (tokenItem) {
         \\                            tokenItem.classList.add('highlighted');
-        \\                            // Scroll token into view if needed
-        \\                            tokenItem.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         \\                        }
         \\                    });
         \\
