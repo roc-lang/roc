@@ -20,15 +20,7 @@ checkNumber = |num| {
 }
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: binop
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: binop
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: binop
-
+NIL
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:20),CloseSquare(1:20-1:21),Newline(1:1-1:1),
@@ -91,6 +83,46 @@ CloseCurly(13:1-13:2),EndOfFile(13:2-13:2),
 # FORMATTED
 ~~~roc
 NO CHANGE
+~~~
+# CANONICALIZE
+~~~clojure
+(can-ir
+	(d-let (id 109)
+		(p-assign @3-1-3-12 (ident "checkNumber") (id 72))
+		(e-lambda @3-15-13-2 (id 108)
+			(args
+				(p-assign @3-16-3-19 (ident "num") (id 73)))
+			(e-block @3-21-13-2
+				(e-if @4-2-13-2 (cond-var 0) (branch-var 0)
+					(if-branches
+						(if-branch
+							(e-binop @4-5-4-14 (op "lt")
+								(e-lookup-local @4-5-4-8
+									(pattern (id 73)))
+								(e-int @4-11-4-12 (int-var 76) (precision-var 75) (literal "0") (value "TODO") (bound "u8")))
+							(e-block @4-13-6-3
+								(e-string @5-3-5-13
+									(e-literal @5-4-5-12 (string "negative")))))
+						(if-branch
+							(e-binop @6-12-6-22 (op "eq")
+								(e-lookup-local @6-12-6-15
+									(pattern (id 73)))
+								(e-int @6-19-6-20 (int-var 85) (precision-var 84) (literal "0") (value "TODO") (bound "u8")))
+							(e-block @6-21-8-3
+								(e-string @7-3-7-9
+									(e-literal @7-4-7-8 (string "zero")))))
+						(if-branch
+							(e-binop @8-12-8-23 (op "gt")
+								(e-lookup-local @8-12-8-15
+									(pattern (id 73)))
+								(e-int @8-18-8-21 (int-var 94) (precision-var 93) (literal "100") (value "TODO") (bound "u8")))
+							(e-block @8-22-10-3
+								(e-string @9-3-9-10
+									(e-literal @9-4-9-9 (string "large"))))))
+					(if-else
+						(e-block @10-9-12-3
+							(e-string @11-3-11-13
+								(e-literal @11-4-11-12 (string "positive"))))))))))
 ~~~
 # TYPES
 ~~~clojure

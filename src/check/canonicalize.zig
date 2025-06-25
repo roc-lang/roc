@@ -1271,6 +1271,9 @@ pub fn canonicalize_expr(
                 .OpPlus => .add,
                 .OpBinaryMinus => .sub,
                 .OpStar => .mul,
+                .OpLessThan => .lt,
+                .OpGreaterThan => .gt,
+                .OpEquals => .eq,
                 else => {
                     // Unknown operator
                     const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "binop");
