@@ -1987,3 +1987,86 @@ pub fn addTypeVarSlot(store: *NodeStore, parent_node_idx: Node.Idx, region: base
     });
     return @enumFromInt(@intFromEnum(nid));
 }
+
+/// Calculate the size needed to serialize this NodeStore
+pub fn serializedSize(self: *const NodeStore) usize {
+    // We only serialize nodes and extra_data (the scratch arrays are transient)
+    return self.nodes.serializedSize() +
+        @sizeOf(u32) + // extra_data length
+        (self.extra_data.items.len * @sizeOf(u32));
+}
+
+/// Serialize this NodeStore into the provided buffer
+/// Buffer must be at least serializedSize() bytes and properly aligned
+pub fn serializeInto(self: *const NodeStore, buffer: []align(@alignOf(Node)) u8) ![]u8 {
+    const size = self.serializedSize();
+    if (buffer.len < size) return error.BufferTooSmall;
+
+    var offset: usize = 0;
+
+    // Serialize nodes - cast to proper alignment for Node type
+    const nodes_buffer = @as([]align(@alignOf(Node)) u8, @alignCast(buffer[offset..]));
+    const nodes_slice = try self.nodes.serializeInto(nodes_buffer);
+    offset += nodes_slice.len;
+
+    // Serialize extra_data length
+    const extra_len_ptr = @as(*u32, @ptrCast(@alignCast(buffer.ptr + offset)));
+    extra_len_ptr.* = @intCast(self.extra_data.items.len);
+    offset += @sizeOf(u32);
+
+    // Serialize extra_data items
+    if (self.extra_data.items.len > 0) {
+        const extra_ptr = @as([*]u32, @ptrCast(@alignCast(buffer.ptr + offset)));
+        @memcpy(extra_ptr, self.extra_data.items);
+        offset += self.extra_data.items.len * @sizeOf(u32);
+    }
+
+    return buffer[0..offset];
+}
+
+/// Deserialize a NodeStore from the provided buffer
+pub fn deserializeFrom(buffer: []align(@alignOf(Node)) const u8, allocator: std.mem.Allocator) !NodeStore {
+    var offset: usize = 0;
+
+    // Deserialize nodes - cast to proper alignment for Node type
+    const nodes_buffer = @as([]align(@alignOf(Node)) const u8, @alignCast(buffer[offset..]));
+    const nodes = try Node.List.deserializeFrom(nodes_buffer, allocator);
+    offset += nodes.serializedSize();
+
+    // Deserialize extra_data length
+    if (buffer.len < offset + @sizeOf(u32)) return error.BufferTooSmall;
+    const extra_len = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
+    offset += @sizeOf(u32);
+
+    // Deserialize extra_data items
+    var extra_data = try std.ArrayListUnmanaged(u32).initCapacity(allocator, extra_len);
+    if (extra_len > 0) {
+        const remaining = buffer.len - offset;
+        const expected = extra_len * @sizeOf(u32);
+        if (remaining < expected) return error.BufferTooSmall;
+
+        const extra_ptr = @as([*]const u32, @ptrCast(@alignCast(buffer.ptr + offset)));
+        extra_data.appendSliceAssumeCapacity(extra_ptr[0..extra_len]);
+    }
+
+    // Create NodeStore with empty scratch arrays
+    return NodeStore{
+        .gpa = allocator,
+        .nodes = nodes,
+        .extra_data = extra_data,
+        // All scratch arrays start empty
+        .scratch_statements = base.Scratch(CIR.Statement.Idx){ .items = .{} },
+        .scratch_exprs = base.Scratch(CIR.Expr.Idx){ .items = .{} },
+        .scratch_record_fields = base.Scratch(CIR.RecordField.Idx){ .items = .{} },
+        .scratch_when_branches = base.Scratch(CIR.WhenBranch.Idx){ .items = .{} },
+        .scratch_if_branches = base.Scratch(CIR.IfBranch.Idx){ .items = .{} },
+        .scratch_where_clauses = base.Scratch(CIR.WhereClause.Idx){ .items = .{} },
+        .scratch_patterns = base.Scratch(CIR.Pattern.Idx){ .items = .{} },
+        .scratch_pattern_record_fields = base.Scratch(CIR.PatternRecordField.Idx){ .items = .{} },
+        .scratch_type_annos = base.Scratch(CIR.TypeAnno.Idx){ .items = .{} },
+        .scratch_anno_record_fields = base.Scratch(CIR.AnnoRecordField.Idx){ .items = .{} },
+        .scratch_exposed_items = base.Scratch(CIR.ExposedItem.Idx){ .items = .{} },
+        .scratch_defs = base.Scratch(CIR.Def.Idx){ .items = .{} },
+        .scratch_diagnostics = base.Scratch(CIR.Diagnostic.Idx){ .items = .{} },
+    };
+}
