@@ -25,7 +25,7 @@ NO CHANGE
 ~~~clojure
 (e_frac_f64 (1:1-1:8)
 	(frac_var 14)
-	(requirements (fits_in_f32 "false") (fits_in_dec "false"))
+	(requirements (fits_in_f32 "true") (fits_in_dec "false"))
 	(value "0.000123"))
 ~~~
 # TYPES

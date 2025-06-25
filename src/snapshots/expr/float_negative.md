@@ -27,7 +27,7 @@ NO CHANGE
 	(num_var 14)
 	(requirements (fits_in_f32 "true") (fits_in_dec "true"))
 	(numerator "-25")
-	(denominator_power_of_ten "1"))
+	(power_of_ten "1"))
 ~~~
 # TYPES
 ~~~clojure

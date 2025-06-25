@@ -40,9 +40,9 @@ NO CHANGE
 		(def_expr
 			(e_dec_small (2:7-2:12)
 				(num_var 15)
-				(requirements (fits_in_f32 "false") (fits_in_dec "true"))
+				(requirements (fits_in_f32 "true") (fits_in_dec "true"))
 				(numerator "1234")
-				(denominator_power_of_ten "2")))))
+				(power_of_ten "2")))))
 ~~~
 # TYPES
 ~~~clojure
