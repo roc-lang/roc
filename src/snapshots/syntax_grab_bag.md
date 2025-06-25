@@ -887,8 +887,8 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 					(p-ident @82-2-82-3 (raw "b")))
 				(e-match
 					(e-ident @84-8-84-9 (qaul "") (raw "a"))
-					(if-branches
-						(if-branch @85-3-89-7
+					(branches
+						(branch @85-3-89-7
 							(p-alternatives
 								(p-tag @85-3-85-7 (raw "Blue"))
 								(p-tag @85-10-85-15 (raw "Green"))
@@ -899,7 +899,7 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 										(p-ident @86-4-86-5 (raw "x"))
 										(e-int @86-8-86-10 (raw "12")))
 									(e-ident @87-4-87-5 (qaul "") (raw "x")))))
-						(if-branch @89-3-97-8
+						(branch @89-3-97-8
 							(p-alternatives
 								(p-tag @89-3-89-7 (raw "Blue"))
 								(p-tag @91-4-91-9 (raw "Green"))
@@ -910,25 +910,25 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 										(p-ident @94-5-94-6 (raw "x"))
 										(e-int @94-9-94-11 (raw "12")))
 									(e-ident @95-5-95-6 (qaul "") (raw "x")))))
-						(if-branch @97-3-99-4
+						(branch @97-3-99-4
 							(p-ident @97-3-97-8 (raw "lower"))
 							(e-int @98-7-98-8 (raw "1")))
-						(if-branch @99-3-101-4
+						(branch @99-3-101-4
 							(p-string @99-3-99-4 (raw """))
 							(e-int @100-4-100-7 (raw "100")))
-						(if-branch @101-3-102-4
+						(branch @101-3-102-4
 							(p-alternatives
 								(p-string @101-3-101-4 (raw """))
 								(p-string @101-11-101-12 (raw """)))
 							(e-int @101-20-101-23 (raw "200")))
-						(if-branch @102-3-108-4
+						(branch @102-3-108-4
 							(p-list @102-3-102-24
 								(p-number @102-4-102-5 (raw "1"))
 								(p-number @102-7-102-8 (raw "2"))
 								(p-number @102-10-102-11 (raw "3"))
 								(p-list-rest @102-13-102-23 (name "rest")))
 							(e-int @104-5-104-8 (raw "123")))
-						(if-branch @108-3-109-4
+						(branch @108-3-109-4
 							(p-list @108-3-108-28
 								(p-number @108-4-108-5 (raw "1"))
 								(p-alternatives
@@ -937,7 +937,7 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 								(p-number @108-14-108-15 (raw "3"))
 								(p-list-rest @108-17-108-27 (name "rest")))
 							(e-int @108-32-108-35 (raw "123")))
-						(if-branch @109-3-117-7
+						(branch @109-3-117-7
 							(p-list @109-3-116-4
 								(p-number @110-4-110-5 (raw "1"))
 								(p-alternatives
@@ -946,21 +946,21 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 								(p-number @112-4-112-5 (raw "3"))
 								(p-list-rest @113-4-115-10 (name "rest")))
 							(e-int @116-8-116-11 (raw "123")))
-						(if-branch @117-3-118-7
+						(branch @117-3-118-7
 							(p-number @117-3-117-7 (raw "3.14"))
 							(e-int @117-11-117-14 (raw "314")))
-						(if-branch @118-3-119-4
+						(branch @118-3-119-4
 							(p-alternatives
 								(p-number @118-3-118-7 (raw "3.14"))
 								(p-number @118-10-118-14 (raw "6.28")))
 							(e-int @118-18-118-21 (raw "314")))
-						(if-branch @119-3-120-4
+						(branch @119-3-120-4
 							(p-tuple @119-3-119-12
 								(p-number @119-4-119-5 (raw "1"))
 								(p-number @119-7-119-8 (raw "2"))
 								(p-number @119-10-119-11 (raw "3")))
 							(e-int @119-16-119-19 (raw "123")))
-						(if-branch @120-3-121-4
+						(branch @120-3-121-4
 							(p-tuple @120-3-120-16
 								(p-number @120-4-120-5 (raw "1"))
 								(p-alternatives
@@ -968,7 +968,7 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 									(p-number @120-11-120-12 (raw "5")))
 								(p-number @120-14-120-15 (raw "3")))
 							(e-int @120-20-120-23 (raw "123")))
-						(if-branch @121-3-122-4
+						(branch @121-3-122-4
 							(p-record @121-3-121-29
 								(field @121-5-121-12 (name "foo") (rest false)
 									(p-number @121-10-121-11 (raw "1")))
@@ -980,7 +980,7 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 								(e-apply @121-35-121-44
 									(e-ident @121-37-121-40 (qaul "") (raw "add"))
 									(e-int @121-41-121-43 (raw "34")))))
-						(if-branch @122-3-130-4
+						(branch @122-3-130-4
 							(p-record @122-3-129-4
 								(field @123-4-125-8 (name "foo") (rest false)
 									(p-number @125-6-125-7 (raw "1")))
@@ -988,7 +988,7 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 									(p-number @126-9-126-10 (raw "2")))
 								(field @127-4-128-10 (name "rest") (rest true)))
 							(e-int @129-8-129-10 (raw "12")))
-						(if-branch @130-3-131-4
+						(branch @130-3-131-4
 							(p-record @130-3-130-25
 								(field @130-5-130-12 (name "foo") (rest false)
 									(p-number @130-10-130-11 (raw "1")))
@@ -997,7 +997,7 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 										(p-number @130-18-130-19 (raw "2"))
 										(p-number @130-22-130-23 (raw "7")))))
 							(e-int @130-29-130-31 (raw "12")))
-						(if-branch @131-3-135-5
+						(branch @131-3-135-5
 							(p-record @131-3-134-4
 								(field @132-4-132-11 (name "foo") (rest false)
 									(p-number @132-9-132-10 (raw "1")))
@@ -1006,16 +1006,16 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 										(p-number @133-9-133-10 (raw "2"))
 										(p-number @133-13-133-14 (raw "7")))))
 							(e-int @134-8-134-10 (raw "12")))
-						(if-branch @135-3-136-5
+						(branch @135-3-136-5
 							(p-tag @135-3-135-10 (raw "Ok")
 								(p-number @135-6-135-9 (raw "123")))
 							(e-int @135-14-135-17 (raw "123")))
-						(if-branch @136-3-137-10
+						(branch @136-3-137-10
 							(p-tag @136-3-136-17 (raw "Ok")
 								(p-tag @136-6-136-16 (raw "Some")
 									(p-ident @136-11-136-15 (raw "dude"))))
 							(e-ident @136-21-136-25 (qaul "") (raw "dude")))
-						(if-branch @137-3-138-3
+						(branch @137-3-138-3
 							(p-tag @137-3-137-34 (raw "TwoArgs")
 								(p-string @137-11-137-12 (raw """))
 								(p-tag @137-20-137-33 (raw "Some")
