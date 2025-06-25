@@ -58,12 +58,7 @@ pub fn deinit(self: *Self) void {
 
 /// Deinit owned fields
 pub fn unify(self: *Self, a: Var, b: Var) void {
-    self.unifyWithRegion(a, b, null);
-}
-
-/// TODO
-pub fn unifyWithRegion(self: *Self, a: Var, b: Var, region: ?Region) void {
-    _ = unifier.unifyWithRegion(
+    _ = unifier.unify(
         self.can_ir.env,
         self.types,
         &self.problems,
@@ -72,7 +67,6 @@ pub fn unifyWithRegion(self: *Self, a: Var, b: Var, region: ?Region) void {
         &self.occurs_scratch,
         a,
         b,
-        region,
     );
 }
 
@@ -108,12 +102,9 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
             const elem_var = list.elem_var;
             for (self.can_ir.store.exprSlice(list.elems)) |single_elem_expr_idx| {
                 self.checkExpr(single_elem_expr_idx);
-                const single_elem_expr = self.can_ir.store.getExpr(single_elem_expr_idx);
-                const elem_region = single_elem_expr.toRegion();
-                self.unifyWithRegion(
+                self.unify(
                     @enumFromInt(@intFromEnum(elem_var)),
                     @enumFromInt(@intFromEnum(single_elem_expr_idx)),
-                    elem_region,
                 );
             }
         },

@@ -715,11 +715,11 @@ fn generateProblemsSection(output: *DualOutput, parse_ast: *AST, can_ir: *CIR, s
         var report: reporting.Report = problem.buildReport(
             output.gpa,
             &problem_buf,
+            module_env,
+            can_ir,
             &solver.snapshots,
-            &module_env.idents,
             content.source,
             snapshot_path,
-            module_env,
         ) catch |err| {
             try output.md_writer.print("Error creating type checking report: {}\n", .{err});
             try output.html_writer.print("                    <p>Error creating type checking report: {}</p>\n", .{err});

@@ -1340,6 +1340,9 @@ pub fn canonicalize_expr(
                 .OpPlus => .add,
                 .OpBinaryMinus => .sub,
                 .OpStar => .mul,
+                .OpLessThan => .lt,
+                .OpGreaterThan => .gt,
+                .OpEquals => .eq,
                 else => {
                     // Unknown operator
                     const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "binop");
@@ -1375,12 +1378,30 @@ pub fn canonicalize_expr(
             } });
             return expr_idx;
         },
-        .if_then_else => |_| {
-            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize if_then_else expression");
-            const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
-                .feature = feature,
-                .region = Region.zero(),
-            } });
+        .if_then_else => |e| {
+            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
+
+            // Start collecting if-branches
+            const scratch_top = self.can_ir.store.scratchIfBranchTop();
+
+            // Flatten the if-then-else chain
+            const final_else = self.flattenIfThenElseChainRecursive(e);
+            const branches_span = self.can_ir.store.ifBranchSpanFrom(scratch_top);
+
+            // Create the if expression
+            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
+                .@"if" = .{
+                    .branches = branches_span,
+                    .final_else = final_else,
+                    .region = region,
+                    .cond_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region),
+                    .branch_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region),
+                },
+            });
+
+            // Set type variable for the entire if expression
+            _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
+
             return expr_idx;
         },
         .match => |_| {
@@ -1902,7 +1923,7 @@ fn fitsInF32(f64_val: f64) bool {
     // (This is a magnitude check, so take the abs value to check
     // positive and negative at the same time.)
     const abs_val = @abs(f64_val);
-    return abs_val >= std.math.floatTrueMin(f32) and abs_val <= std.math.floatMax(f32);
+    return abs_val == 0.0 or (abs_val >= std.math.floatTrueMin(f32) and abs_val <= std.math.floatMax(f32));
 }
 
 // Check if a float value can be represented accurately in RocDec
@@ -2118,6 +2139,61 @@ test {
     _ = @import("canonicalize/test/frac_test.zig");
 }
 
+/// Flatten a chain of if-then-else expressions into multiple if-branches
+/// Returns the final else expression that is not an if-then-else
+fn flattenIfThenElseChainRecursive(self: *Self, if_expr: anytype) CIR.Expr.Idx {
+    // Canonicalize and add the current condition/then pair
+    const cond_idx = blk: {
+        if (self.canonicalize_expr(if_expr.condition)) |idx| {
+            break :blk idx;
+        } else {
+            const ast_cond = self.parse_ir.store.getExpr(if_expr.condition);
+            const cond_region = self.parse_ir.tokenizedRegionToRegion(ast_cond.to_tokenized_region());
+            break :blk self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{
+                .if_condition_not_canonicalized = .{ .region = cond_region },
+            });
+        }
+    };
+
+    const then_idx = blk: {
+        if (self.canonicalize_expr(if_expr.then)) |idx| {
+            break :blk idx;
+        } else {
+            const ast_then = self.parse_ir.store.getExpr(if_expr.then);
+            const then_region = self.parse_ir.tokenizedRegionToRegion(ast_then.to_tokenized_region());
+            break :blk self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{
+                .if_then_not_canonicalized = .{ .region = then_region },
+            });
+        }
+    };
+
+    // Add this condition/then pair as an if-branch
+    const if_branch = CIR.IfBranch{
+        .cond = cond_idx,
+        .body = then_idx,
+    };
+    self.can_ir.store.addScratchIfBranch(if_branch);
+
+    // Check if the else clause is another if-then-else that we should flatten
+    const else_expr = self.parse_ir.store.getExpr(if_expr.@"else");
+    switch (else_expr) {
+        .if_then_else => |nested_if| {
+            // Recursively flatten the nested if-then-else
+            return self.flattenIfThenElseChainRecursive(nested_if);
+        },
+        else => {
+            // This is the final else - canonicalize and return it
+            if (self.canonicalize_expr(if_expr.@"else")) |else_idx| {
+                return else_idx;
+            } else {
+                const else_region = self.parse_ir.tokenizedRegionToRegion(else_expr.to_tokenized_region());
+                return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{
+                    .if_else_not_canonicalized = .{ .region = else_region },
+                });
+            }
+        },
+    }
+}
 /// Introduce a new identifier to the current scope, return an
 /// index if
 fn scopeIntroduceIdent(

@@ -12,8 +12,9 @@ if bool {
 }
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize if_then_else expression
+**UNDEFINED VARIABLE**
+Nothing is named `bool` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
@@ -40,9 +41,17 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "not_implemented") (id 73))
+(e-if @1-1-5-2 (cond-var 0) (branch-var 0) (id 85)
+	(if-branches
+		(if-branch
+			(e-runtime-error (tag "ident_not_in_scope"))
+			(e-block @1-9-3-2
+				(e-int @2-2-2-3 (num-var 76) (sign-needed "false") (bits-needed "7") (value "1")))))
+	(if-else
+		(e-block @3-8-5-2
+			(e-int @4-2-4-3 (num-var 81) (sign-needed "false") (bits-needed "7") (value "2")))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 73) (type "Error"))
+(expr (id 85) (type "*"))
 ~~~
