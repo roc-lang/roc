@@ -18,9 +18,7 @@ const ModuleEnv = base.ModuleEnv;
 const StringLiteral = base.StringLiteral;
 const CalledVia = base.CalledVia;
 const TypeVar = types.Var;
-
-// RocDec import for dec_literal
-pub const RocDec = @import("../../builtins/dec.zig").RocDec;
+const RocDec = @import("../../builtins/dec.zig").RocDec;
 const Node = @import("Node.zig");
 const NodeStore = @import("NodeStore.zig");
 

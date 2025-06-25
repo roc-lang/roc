@@ -6,6 +6,7 @@ const types = @import("../../types.zig");
 const collections = @import("../../collections.zig");
 const Node = @import("Node.zig");
 const CIR = @import("CIR.zig");
+const RocDec = @import("../../builtins/dec.zig").RocDec;
 const PackedDataSpan = @import("../../base/PackedDataSpan.zig");
 
 const DataSpan = base.DataSpan;
@@ -264,7 +265,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .frac_dec = .{
                     .frac_var = frac_var,
                     .requirements = requirements,
-                    .value = CIR.RocDec{ .num = value_as_i128 },
+                    .value = RocDec{ .num = value_as_i128 },
                     .region = node.region,
                 },
             };
@@ -505,7 +506,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
                 .region = node.region,
                 .num_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
                 .requirements = .{ .fits_in_f32 = true, .fits_in_dec = true }, // TODO need to store and retrieve from extra_data
-                .value = CIR.RocDec{ .num = 0 }, // TODO need to store and retrieve from extra_data
+                .value = RocDec{ .num = 0 }, // TODO need to store and retrieve from extra_data
             },
         },
         .pattern_f64_literal => return CIR.Pattern{
