@@ -1490,15 +1490,19 @@ fn isVarReassignmentAcrossFunctionBoundary(self: *const Self, pattern_idx: CIR.P
     return false;
 }
 
-// Check if the given f64 fits in f32 without precision loss
+// Check if the given f64 fits in f32 range (ignoring precision loss)
 fn fitsInF32(f64_val: f64) bool {
-    if (f64_val >= -std.math.floatMax(f32) and f64_val <= std.math.floatMax(f32)) {
-        const as_f32 = @as(f32, @floatCast(f64_val));
-        const back_to_f64 = @as(f64, @floatCast(as_f32));
-        return f64_val == back_to_f64;
-    } else {
-        return false;
-    }
+    // Check if it's within the range that f32 can represent
+    // This includes normal, subnormal, and zero values
+    const abs_val = @abs(f64_val);
+
+    // Zero always fits
+    if (abs_val == 0.0) return true;
+
+    // Check if it's within f32's range
+    // Note: std.math.floatMax(f32) is the largest finite f32
+    // and std.math.floatTrueMin(f32) is the smallest positive f32 (including subnormals)
+    return abs_val >= std.math.floatTrueMin(f32) and abs_val <= std.math.floatMax(f32);
 }
 
 // Result type for parsing fractional literals into small, Dec, or f64

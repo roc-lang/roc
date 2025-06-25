@@ -93,8 +93,8 @@ test "fractional literal - scientific notation small" {
     switch (expr) {
         .frac_f64 => |frac| {
             try testing.expect(!frac.requirements.fits_in_dec); // Scientific notation not supported by Dec
-            // 1.23e-10 loses precision when converted to f32 and back
-            try testing.expect(!frac.requirements.fits_in_f32);
+            // 1.23e-10 is within f32 range, so it should fit (ignoring precision)
+            try testing.expect(frac.requirements.fits_in_f32);
             try testing.expectApproxEqAbs(frac.value, 1.23e-10, 1e-20);
         },
         else => {
@@ -121,16 +121,17 @@ test "fractional literal - scientific notation large (near f64 max)" {
 }
 
 test "fractional literal - scientific notation at f32 boundary" {
-    // f32 max is approximately 3.4e38
-    const result = try parseAndCanonicalizeFrac(test_allocator, "3.4e38");
+    // f32 max is approximately 3.4028235e38
+    // 3.4e38 is actually within the range, but let's test with 3.5e38 which is above
+    const result = try parseAndCanonicalizeFrac(test_allocator, "3.5e38");
     defer cleanup(result);
 
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
         .frac_f64 => |frac| {
             try testing.expect(!frac.requirements.fits_in_dec);
-            try testing.expect(!frac.requirements.fits_in_f32); // Just above f32 max
-            try testing.expectEqual(frac.value, 3.4e38);
+            try testing.expect(!frac.requirements.fits_in_f32); // Above f32 max
+            try testing.expectEqual(frac.value, 3.5e38);
         },
         else => {
             try testing.expect(false); // Should be frac_f64
@@ -188,9 +189,8 @@ test "fractional literal - very small scientific notation" {
     switch (expr) {
         .frac_f64 => |frac| {
             try testing.expect(!frac.requirements.fits_in_dec);
-            // 1e-40 is subnormal for f32 and may lose precision
-            // The fitsInF32 function checks for exact round-trip, so this should be false
-            try testing.expect(!frac.requirements.fits_in_f32);
+            // 1e-40 is within f32's subnormal range, so it should fit (ignoring precision)
+            try testing.expect(frac.requirements.fits_in_f32);
             try testing.expectEqual(frac.value, 1e-40);
         },
         else => {
@@ -251,7 +251,7 @@ test "fractional literal - scientific notation with capital E" {
     switch (expr) {
         .frac_f64 => |frac| {
             try testing.expect(!frac.requirements.fits_in_dec); // Scientific notation
-            try testing.expect(!frac.requirements.fits_in_f32); // Too large for f32
+            try testing.expect(frac.requirements.fits_in_f32); // 2.5e10 is within f32 range
             try testing.expectEqual(frac.value, 2.5e10);
         },
         else => {
