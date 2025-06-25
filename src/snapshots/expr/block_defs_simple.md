@@ -50,17 +50,17 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 (e-block @1-1-5-2 (id 89)
 	(s-let @2-5-2-11
 		(p-assign @2-5-2-6 (ident "x") (id 72))
-		(e-int @2-9-2-11 (int-var 74) (precision-var 73) (literal "42") (value "TODO") (bound "u8") (id 75)))
+		(e-int @2-9-2-11 (num-var 75) (sign-needed "false") (bits-needed "7") (value "42") (id 75)))
 	(s-let @3-5-4-6
 		(p-assign @3-5-3-6 (ident "y") (id 77))
 		(e-binop @3-9-4-6 (op "add") (id 82)
 			(e-lookup-local @3-9-3-10
 				(pattern (id 72)))
-			(e-int @3-13-3-14 (int-var 80) (precision-var 79) (literal "1") (value "TODO") (bound "u8"))))
+			(e-int @3-13-3-14 (num-var 81) (sign-needed "false") (bits-needed "7") (value "1"))))
 	(e-binop @4-5-5-2 (op "mul")
 		(e-lookup-local @4-5-4-6
 			(pattern (id 77)))
-		(e-int @4-9-4-10 (int-var 86) (precision-var 85) (literal "2") (value "TODO") (bound "u8"))))
+		(e-int @4-9-4-10 (num-var 87) (sign-needed "false") (bits-needed "7") (value "2"))))
 ~~~
 # TYPES
 ~~~clojure

@@ -27,7 +27,7 @@ NO CHANGE
 ~~~clojure
 (e-call @1-1-1-9 (id 77)
 	(e-tag @1-1-1-5 (ext-var 0) (name "Some") (args "TODO"))
-	(e-int @1-6-1-8 (int-var 75) (precision-var 74) (literal "42") (value "TODO") (bound "u8")))
+	(e-int @1-6-1-8 (num-var 76) (sign-needed "false") (bits-needed "7") (value "42")))
 ~~~
 # TYPES
 ~~~clojure

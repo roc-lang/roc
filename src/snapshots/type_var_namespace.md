@@ -157,7 +157,7 @@ main! = |_| {}
 			(e-block @5-18-14-2
 				(s-let @7-5-7-14
 					(p-assign @7-5-7-9 (ident "elem") (id 80))
-					(e-int @7-12-7-14 (int-var 82) (precision-var 81) (literal "42") (value "TODO") (bound "u8") (id 83)))
+					(e-int @7-12-7-14 (num-var 83) (sign-needed "false") (bits-needed "7") (value "42") (id 83)))
 				(s-let @11-5-11-30
 					(p-assign @11-5-11-11 (ident "result") (id 89))
 					(e-call @11-14-11-30 (id 93)

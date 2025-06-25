@@ -46,7 +46,7 @@ add2 = x + 2
 		(p-assign @3-1-3-5 (ident "add2") (id 72))
 		(e-binop @3-8-3-18 (op "add") (id 78)
 			(e-runtime-error (tag "ident_not_in_scope"))
-			(e-int @3-17-3-18 (int-var 76) (precision-var 75) (literal "2") (value "TODO") (bound "u8")))))
+			(e-int @3-17-3-18 (num-var 77) (sign-needed "false") (bits-needed "7") (value "2")))))
 ~~~
 # TYPES
 ~~~clojure

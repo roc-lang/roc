@@ -761,7 +761,7 @@ const Formatter = struct {
             .int => |i| {
                 try fmt.pushTokenText(i.token);
             },
-            .float => |f| {
+            .frac => |f| {
                 try fmt.pushTokenText(f.token);
             },
             .list => |l| {
@@ -1021,7 +1021,11 @@ const Formatter = struct {
                 region = s.region;
                 _ = try fmt.formatExpr(s.expr);
             },
-            .number => |n| {
+            .int => |n| {
+                region = n.region;
+                try fmt.formatIdent(n.number_tok, null);
+            },
+            .frac => |n| {
                 region = n.region;
                 try fmt.formatIdent(n.number_tok, null);
             },

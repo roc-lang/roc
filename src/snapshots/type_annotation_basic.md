@@ -231,7 +231,7 @@ main! = |_| {
 			(e-binop @13-14-15-6 (op "add")
 				(e-lookup-local @13-14-13-15
 					(pattern (id 118)))
-				(e-int @13-18-13-19 (int-var 121) (precision-var 120) (literal "1") (value "TODO") (bound "u8"))))
+				(e-int @13-18-13-19 (num-var 122) (sign-needed "false") (bits-needed "7") (value "1"))))
 		(annotation @13-1-13-7 (signature 128) (id 129)
 			(declared-type
 				(ty-fn @12-10-12-20 (effectful false)
@@ -248,7 +248,7 @@ main! = |_| {
 					(e-call @17-11-17-23 (id 138)
 						(e-lookup-local @17-11-17-19
 							(pattern (id 77)))
-						(e-int @17-20-17-22 (int-var 136) (precision-var 135) (literal "42") (value "TODO") (bound "u8"))))
+						(e-int @17-20-17-22 (num-var 137) (sign-needed "false") (bits-needed "7") (value "42"))))
 				(s-let @18-5-18-29
 					(p-assign @18-5-18-9 (ident "text") (id 140))
 					(e-call @18-12-18-29 (id 144)
@@ -270,7 +270,7 @@ main! = |_| {
 					(e-call @24-14-24-23 (id 157)
 						(e-lookup-local @24-14-24-20
 							(pattern (id 117)))
-						(e-int @24-21-24-22 (int-var 155) (precision-var 154) (literal "5") (value "TODO") (bound "u8"))))
+						(e-int @24-21-24-22 (num-var 156) (sign-needed "false") (bits-needed "7") (value "5"))))
 				(e-lookup-local @26-5-26-11
 					(pattern (id 152)))))))
 ~~~

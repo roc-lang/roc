@@ -61,9 +61,9 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 		(p-assign @2-5-2-9 (ident "list") (id 72))
 		(e-list @2-12-2-21 (elem-var 82) (id 83)
 			(elems
-				(e-int @2-13-2-14 (int-var 74) (precision-var 73) (literal "1") (value "TODO") (bound "u8"))
-				(e-int @2-16-2-17 (int-var 77) (precision-var 76) (literal "2") (value "TODO") (bound "u8"))
-				(e-int @2-19-2-20 (int-var 80) (precision-var 79) (literal "3") (value "TODO") (bound "u8")))))
+				(e-int @2-13-2-14 (num-var 75) (sign-needed "false") (bits-needed "7") (value "1"))
+				(e-int @2-16-2-17 (num-var 78) (sign-needed "false") (bits-needed "7") (value "2"))
+				(e-int @2-19-2-20 (num-var 81) (sign-needed "false") (bits-needed "7") (value "3")))))
 	(s-let @3-5-4-9
 		(p-assign @3-5-3-7 (ident "fn") (id 85))
 		(e-lambda @3-10-4-9 (id 92)
@@ -72,7 +72,7 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 			(e-binop @3-14-4-9 (op "add")
 				(e-lookup-local @3-14-3-15
 					(pattern (id 86)))
-				(e-int @3-18-3-19 (int-var 89) (precision-var 88) (literal "1") (value "TODO") (bound "u8")))))
+				(e-int @3-18-3-19 (num-var 90) (sign-needed "false") (bits-needed "7") (value "1")))))
 	(e-dot-access @4-5-5-2 (field "map")
 		(receiver
 			(e-lookup-local @4-5-4-9

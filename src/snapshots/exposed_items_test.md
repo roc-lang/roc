@@ -45,7 +45,7 @@ NO CHANGE
 (can-ir
 	(d-let (id 79)
 		(p-assign @5-1-5-5 (ident "main") (id 75))
-		(e-int @5-8-5-10 (int-var 77) (precision-var 76) (literal "42") (value "TODO") (bound "u8") (id 78)))
+		(e-int @5-8-5-10 (num-var 78) (sign-needed "false") (bits-needed "7") (value "42") (id 78)))
 	(s-import @3-1-3-42 (module "pf.Stdout") (id 74)
 		(exposes
 			(exposed (name "line!") (wildcard false))

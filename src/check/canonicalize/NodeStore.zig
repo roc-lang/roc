@@ -6,6 +6,7 @@ const types = @import("../../types.zig");
 const collections = @import("../../collections.zig");
 const Node = @import("Node.zig");
 const CIR = @import("CIR.zig");
+const RocDec = @import("../../builtins/dec.zig").RocDec;
 const PackedDataSpan = @import("../../base/PackedDataSpan.zig");
 
 const DataSpan = base.DataSpan;
@@ -187,23 +188,18 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             return CIR.Expr{ .lookup = .{ .external = @enumFromInt(node.data_1) } };
         },
         .expr_int => {
-            // Retrieve the literal index from data_1
-            const literal: base.StringLiteral.Idx = @enumFromInt(node.data_1);
+            // Read i128 from extra_data (stored as 4 u32s in data_1)
+            const value_as_u32s = store.extra_data.items[node.data_1..][0..4];
 
-            // Retrieve type variables from data_2 and data_3
+            // Retrieve type variable from data_2 and requirements from data_3
             const int_var = @as(types.Var, @enumFromInt(node.data_2));
-            const precision_var = @as(types.Var, @enumFromInt(node.data_3));
-
-            // TODO get value and bound from extra_data
+            const requirements = @as(types.Num.Int.Requirements, @bitCast(@as(u5, @intCast(node.data_3))));
 
             return .{
                 .int = .{
-                    .int_var = int_var,
-                    .precision_var = precision_var,
-                    .literal = literal,
-                    .value = CIR.IntValue.placeholder(),
-                    // TODO shouldn't this be a flex_var?
-                    .bound = types.Num.Int.Precision.fromValue(0), // TODO: get from extra_data
+                    .num_var = int_var,
+                    .requirements = requirements,
+                    .value = .{ .bytes = @bitCast(value_as_u32s.*), .kind = .i128 },
                     .region = node.region,
                 },
             };
@@ -235,24 +231,62 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 },
             };
         },
-        .expr_float => {
-            // Retrieve the literal index from data_1
-            const literal: base.StringLiteral.Idx = @enumFromInt(node.data_1);
-
-            // Retrieve type variables from data_2 and data_3
+        .expr_frac_f64 => {
+            // Retrieve type variable from data_2 and requirements from data_3
             const frac_var = @as(types.Var, @enumFromInt(node.data_2));
-            const precision_var = @as(types.Var, @enumFromInt(node.data_3));
+            const requirements = @as(types.Num.Frac.Requirements, @bitCast(@as(u2, @truncate(node.data_3))));
 
-            // TODO get value and bound from extra_data
+            // Get value from extra_data
+            const extra_data_idx = node.data_1;
+            const value_as_u32s = store.extra_data.items[extra_data_idx..][0..2];
+            const value_as_u64: u64 = @bitCast(value_as_u32s.*);
+            const value: f64 = @bitCast(value_as_u64);
 
             return CIR.Expr{
-                .float = .{
+                .frac_f64 = .{
                     .frac_var = frac_var,
-                    .precision_var = precision_var,
-                    .literal = literal,
-                    .value = 0,
-                    // TODO shouldn't this be a flex_var?
-                    .bound = types.Num.Frac.Precision.fromValue(0), // TODO: get from extra_data
+                    .requirements = requirements,
+                    .value = value,
+                    .region = node.region,
+                },
+            };
+        },
+        .expr_frac_dec => {
+            // Retrieve type variable from data_2 and requirements from data_3
+            const frac_var = @as(types.Var, @enumFromInt(node.data_2));
+            const requirements = @as(types.Num.Frac.Requirements, @bitCast(@as(u2, @truncate(node.data_3))));
+
+            // Get value from extra_data
+            const extra_data_idx = node.data_1;
+            const value_as_u32s = store.extra_data.items[extra_data_idx..][0..4];
+            const value_as_i128: i128 = @bitCast(value_as_u32s.*);
+
+            return CIR.Expr{
+                .frac_dec = .{
+                    .frac_var = frac_var,
+                    .requirements = requirements,
+                    .value = RocDec{ .num = value_as_i128 },
+                    .region = node.region,
+                },
+            };
+        },
+        .expr_dec_small => {
+            // Retrieve type variable from data_2
+            const num_var = @as(types.Var, @enumFromInt(node.data_2));
+
+            // Unpack small dec data from data_1 and data_3
+            // data_1: numerator (i16) stored as u32
+            // data_3: denominator_power_of_ten (u8) in lower 8 bits, requirements (2 bits) in upper bits
+            const numerator = @as(i16, @intCast(@as(i32, @bitCast(node.data_1))));
+            const denominator_power_of_ten = @as(u8, @truncate(node.data_3));
+            const requirements = @as(types.Num.Frac.Requirements, @bitCast(@as(u2, @truncate(node.data_3 >> 8))));
+
+            return CIR.Expr{
+                .dec_small = .{
+                    .num_var = num_var,
+                    .requirements = requirements,
+                    .numerator = numerator,
+                    .denominator_power_of_ten = denominator_power_of_ten,
                     .region = node.region,
                 },
             };
@@ -444,33 +478,43 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
                 .tuple_var = @enumFromInt(node.data_3),
             },
         },
-        .pattern_num_literal => return CIR.Pattern{
-            .num_literal = .{
-                .region = node.region,
-                .literal = @enumFromInt(node.data_1),
-                .num_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
-                .bound = types.Num.Int.Precision.fromValue(0), // TODO  extra_data
-                .value = CIR.IntValue.placeholder(),
-            },
+        .pattern_num_literal => {
+            // Retrieve value from extra_data
+            const extra_data_idx = node.data_1;
+            const value_as_u32s = store.extra_data.items[extra_data_idx..][0..4];
+            const value_as_i128: i128 = @bitCast(value_as_u32s.*);
+
+            return CIR.Pattern{
+                .int_literal = .{
+                    .region = node.region,
+                    .num_var = @as(types.Var, @enumFromInt(node.data_2)),
+                    .value = .{ .bytes = @bitCast(value_as_i128), .kind = .i128 },
+                    .requirements = .{ .sign_needed = false, .bits_needed = .@"128" }, // TODO: store and retrieve from extra_data
+                },
+            };
         },
         .pattern_int_literal => return CIR.Pattern{
             .int_literal = .{
                 .region = node.region,
-                .literal = @enumFromInt(node.data_1),
-                .precision_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
                 .num_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
-                .bound = types.Num.Int.Precision.fromValue(0), // TODO  extra_data
-                .value = CIR.IntValue.placeholder(), // TODO need to store and retrieve from extra_data
+                .requirements = .{ .sign_needed = false, .bits_needed = .@"7" }, // TODO need to store and retrieve from extra_data
+                .value = .{ .bytes = @bitCast(@as(i128, 0)), .kind = .i128 }, // TODO need to store and retrieve from extra_data
             },
         },
-        .pattern_float_literal => return CIR.Pattern{
-            .float_literal = .{
+        .pattern_dec_literal => return CIR.Pattern{
+            .dec_literal = .{
                 .region = node.region,
-                .literal = @enumFromInt(node.data_1),
-                .precision_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
                 .num_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
-                .bound = types.Num.Frac.Precision.fromValue(0), // TODO  extra_data
-                .value = 42, // TODO need to store and retrieve from extra_data
+                .requirements = .{ .fits_in_f32 = true, .fits_in_dec = true }, // TODO need to store and retrieve from extra_data
+                .value = RocDec{ .num = 0 }, // TODO need to store and retrieve from extra_data
+            },
+        },
+        .pattern_f64_literal => return CIR.Pattern{
+            .f64_literal = .{
+                .region = node.region,
+                .num_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
+                .requirements = .{ .fits_in_f32 = true, .fits_in_dec = true }, // TODO need to store and retrieve from extra_data
+                .value = 0.0, // TODO need to store and retrieve from extra_data
             },
         },
         .pattern_str_literal => return CIR.Pattern{ .str_literal = .{
@@ -480,10 +524,9 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
         .pattern_char_literal => return CIR.Pattern{
             .char_literal = .{
                 .region = node.region,
-                .value = node.data_1,
-                .bound = types.Num.Int.Precision.fromValue(0), // TODO
                 .num_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
-                .precision_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
+                .requirements = .{ .sign_needed = false, .bits_needed = .@"32" }, // TODO need to store and retrieve from extra_data
+                .value = node.data_1,
             },
         },
         .pattern_underscore => return CIR.Pattern{ .underscore = .{
@@ -751,14 +794,23 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             node.region = e.region;
             node.tag = .expr_int;
 
-            // Store the literal index in data_1
-            node.data_1 = @intFromEnum(e.literal);
+            // Store type variable in data_2 and requirements in data_3
+            node.data_2 = @intFromEnum(e.num_var);
+            node.data_3 = @as(u32, @intCast(@as(u5, @bitCast(e.requirements))));
 
-            // Store type variables in data_2 and data_3
-            node.data_2 = @intFromEnum(e.int_var);
-            node.data_3 = @intFromEnum(e.precision_var);
+            // Store i128 value in extra_data
+            const extra_data_start = store.extra_data.items.len;
 
-            // TODO for storing the value and bound, use extra_data
+            // Store the IntLiteralValue as i128 (16 bytes = 4 u32s)
+            // We always store as i128 internally
+            const value_as_i128: i128 = @bitCast(e.value.bytes);
+            const value_as_u32s: [4]u32 = @bitCast(value_as_i128);
+            for (value_as_u32s) |word| {
+                store.extra_data.append(store.gpa, word) catch |err| exitOnOom(err);
+            }
+
+            // Store the extra_data index in data_1
+            node.data_1 = @intCast(extra_data_start);
         },
         .list => |e| {
             node.region = e.region;
@@ -774,18 +826,56 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             node.data_2 = e.elems.span.len;
             node.data_3 = @intFromEnum(e.tuple_var);
         },
-        .float => |e| {
+        .frac_f64 => |e| {
             node.region = e.region;
-            node.tag = .expr_float;
+            node.tag = .expr_frac_f64;
 
-            // Store the literal index in data_1
-            node.data_1 = @intFromEnum(e.literal);
-
-            // Store type variables in data_2 and data_3
+            // Store type variable in data_2 and requirements in data_3
             node.data_2 = @intFromEnum(e.frac_var);
-            node.data_3 = @intFromEnum(e.precision_var);
+            node.data_3 = @as(u32, @intCast(@as(u2, @bitCast(e.requirements))));
 
-            // TODO for storing the value and bound, use extra_data
+            // Store the f64 value in extra_data
+            const extra_data_start = store.extra_data.items.len;
+            const value_as_u64: u64 = @bitCast(e.value);
+            const value_as_u32s: [2]u32 = @bitCast(value_as_u64);
+            for (value_as_u32s) |word| {
+                store.extra_data.append(store.gpa, word) catch |err| exitOnOom(err);
+            }
+
+            // Store the extra_data index in data_1
+            node.data_1 = @intCast(extra_data_start);
+        },
+        .frac_dec => |e| {
+            node.region = e.region;
+            node.tag = .expr_frac_dec;
+
+            // Store type variable in data_2 and requirements in data_3
+            node.data_2 = @intFromEnum(e.frac_var);
+            node.data_3 = @as(u32, @intCast(@as(u2, @bitCast(e.requirements))));
+
+            // Store the RocDec value in extra_data
+            const extra_data_start = store.extra_data.items.len;
+            const value_as_i128: i128 = e.value.num;
+            const value_as_u32s: [4]u32 = @bitCast(value_as_i128);
+            for (value_as_u32s) |word| {
+                store.extra_data.append(store.gpa, word) catch |err| exitOnOom(err);
+            }
+
+            // Store the extra_data index in data_1
+            node.data_1 = @intCast(extra_data_start);
+        },
+        .dec_small => |e| {
+            node.region = e.region;
+            node.tag = .expr_dec_small;
+
+            // Store type variable in data_2
+            node.data_2 = @intFromEnum(e.num_var);
+
+            // Pack small dec data into data_1 and data_3
+            // data_1: numerator (i16) - fits in lower 16 bits
+            // data_3: denominator_power_of_ten (u8) in lower 8 bits, requirements (2 bits) in upper bits
+            node.data_1 = @as(u32, @bitCast(@as(i32, e.numerator)));
+            node.data_3 = (@as(u32, @intCast(@as(u2, @bitCast(e.requirements)))) << 8) | @as(u32, e.denominator_power_of_ten);
         },
         .str_segment => |e| {
             node.region = e.region;
@@ -827,6 +917,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             node.region = e.region;
             @panic("TODO addExpr num");
         },
+
         .single_quote => |e| {
             node.region = e.region;
             @panic("TODO addExpr single_quote");
@@ -972,24 +1063,34 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern) CIR.Pattern.Idx {
             node.data_2 = p.patterns.span.len;
             node.data_3 = @intFromEnum(p.tuple_var);
         },
-        .num_literal => |p| {
-            node.tag = .pattern_num_literal;
-            node.region = p.region;
-            node.data_1 = @intFromEnum(p.literal);
-            // TODO store other data in extra_data
-        },
         .int_literal => |p| {
             node.tag = .pattern_int_literal;
             node.region = p.region;
-            node.data_1 = @intFromEnum(p.literal);
-            // TODO store other data
+            // Store the value in extra_data
+            const extra_data_start = store.extra_data.items.len;
+            const value_as_u32s: [4]u32 = @bitCast(p.value.bytes);
+            for (value_as_u32s) |word| {
+                store.extra_data.append(store.gpa, word) catch |err| exitOnOom(err);
+            }
+            node.data_1 = @intCast(extra_data_start);
+            // TODO store num_var and requirements
         },
-        .float_literal => |p| {
-            node.tag = .pattern_float_literal;
+        .small_dec_literal => |p| {
+            node.tag = .pattern_small_dec_literal;
             node.region = p.region;
-            node.data_1 = @intFromEnum(p.literal);
-            // TODO store other data
+            // TODO store num_var, numerator, denominator_power_of_ten, requirements
         },
+        .dec_literal => |p| {
+            node.tag = .pattern_dec_literal;
+            node.region = p.region;
+            // TODO store num_var, requirements, and value
+        },
+        .f64_literal => |p| {
+            node.tag = .pattern_f64_literal;
+            node.region = p.region;
+            // TODO store num_var, requirements, and value
+        },
+
         .str_literal => |p| {
             node.tag = .pattern_str_literal;
             node.region = p.region;
@@ -1567,7 +1668,6 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) CIR.Diagnostic.I
         .invalid_num_literal => |r| {
             node.tag = .diag_invalid_num_literal;
             node.region = r.region;
-            node.data_1 = @intFromEnum(r.literal);
         },
         .ident_already_in_scope => |r| {
             node.tag = .diag_ident_already_in_scope;
@@ -1744,7 +1844,6 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = node.region,
         } },
         .diag_invalid_num_literal => return CIR.Diagnostic{ .invalid_num_literal = .{
-            .literal = @enumFromInt(node.data_1),
             .region = node.region,
         } },
         .diag_ident_already_in_scope => return CIR.Diagnostic{ .ident_already_in_scope = .{

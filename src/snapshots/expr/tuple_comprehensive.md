@@ -238,13 +238,13 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 			(e-runtime-error (tag "not_implemented"))))
 	(s-let @4-5-4-11
 		(p-assign @4-5-4-6 (ident "x") (id 78))
-		(e-int @4-9-4-11 (int-var 80) (precision-var 79) (literal "10") (value "TODO") (bound "u8") (id 81)))
+		(e-int @4-9-4-11 (num-var 81) (sign-needed "false") (bits-needed "7") (value "10") (id 81)))
 	(s-let @5-5-5-11
 		(p-assign @5-5-5-6 (ident "y") (id 83))
-		(e-int @5-9-5-11 (int-var 85) (precision-var 84) (literal "20") (value "TODO") (bound "u8") (id 86)))
+		(e-int @5-9-5-11 (num-var 86) (sign-needed "false") (bits-needed "7") (value "20") (id 86)))
 	(s-let @6-5-6-11
 		(p-assign @6-5-6-6 (ident "z") (id 88))
-		(e-int @6-9-6-11 (int-var 90) (precision-var 89) (literal "30") (value "TODO") (bound "u8") (id 91)))
+		(e-int @6-9-6-11 (num-var 91) (sign-needed "false") (bits-needed "7") (value "30") (id 91)))
 	(s-let @9-2-9-12
 		(p-assign @9-2-9-7 (ident "empty") (id 93))
 		(e-tuple @9-10-9-12 (tuple-var 94) (id 95)
@@ -253,18 +253,18 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 		(p-assign @10-2-10-8 (ident "single") (id 97))
 		(e-tuple @10-11-10-15 (tuple-var 101) (id 102)
 			(elems
-				(e-int @10-12-10-14 (int-var 99) (precision-var 98) (literal "42") (value "TODO") (bound "u8")))))
+				(e-int @10-12-10-14 (num-var 100) (sign-needed "false") (bits-needed "7") (value "42")))))
 	(s-let @11-2-11-15
 		(p-assign @11-2-11-6 (ident "pair") (id 104))
 		(e-tuple @11-9-11-15 (tuple-var 111) (id 112)
 			(elems
-				(e-int @11-10-11-11 (int-var 106) (precision-var 105) (literal "1") (value "TODO") (bound "u8"))
-				(e-int @11-13-11-14 (int-var 109) (precision-var 108) (literal "2") (value "TODO") (bound "u8")))))
+				(e-int @11-10-11-11 (num-var 107) (sign-needed "false") (bits-needed "7") (value "1"))
+				(e-int @11-13-11-14 (num-var 110) (sign-needed "false") (bits-needed "7") (value "2")))))
 	(s-let @12-2-12-29
 		(p-assign @12-2-12-8 (ident "triple") (id 114))
 		(e-tuple @12-11-12-29 (tuple-var 122) (id 123)
 			(elems
-				(e-int @12-12-12-13 (int-var 116) (precision-var 115) (literal "1") (value "TODO") (bound "u8"))
+				(e-int @12-12-12-13 (num-var 117) (sign-needed "false") (bits-needed "7") (value "1"))
 				(e-string @12-15-12-22
 					(e-literal @12-16-12-21 (string "hello")))
 				(e-tag @12-24-12-28 (ext-var 0) (name "True") (args "TODO")))))
@@ -274,12 +274,12 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 			(elems
 				(e-tuple @13-12-13-18 (tuple-var 132)
 					(elems
-						(e-int @13-13-13-14 (int-var 127) (precision-var 126) (literal "1") (value "TODO") (bound "u8"))
-						(e-int @13-16-13-17 (int-var 130) (precision-var 129) (literal "2") (value "TODO") (bound "u8"))))
+						(e-int @13-13-13-14 (num-var 128) (sign-needed "false") (bits-needed "7") (value "1"))
+						(e-int @13-16-13-17 (num-var 131) (sign-needed "false") (bits-needed "7") (value "2"))))
 				(e-tuple @13-20-13-26 (tuple-var 140)
 					(elems
-						(e-int @13-21-13-22 (int-var 135) (precision-var 134) (literal "3") (value "TODO") (bound "u8"))
-						(e-int @13-24-13-25 (int-var 138) (precision-var 137) (literal "4") (value "TODO") (bound "u8")))))))
+						(e-int @13-21-13-22 (num-var 136) (sign-needed "false") (bits-needed "7") (value "3"))
+						(e-int @13-24-13-25 (num-var 139) (sign-needed "false") (bits-needed "7") (value "4")))))))
 	(s-let @14-2-14-42
 		(p-assign @14-2-14-7 (ident "mixed") (id 145))
 		(e-tuple @14-10-14-42 (tuple-var 164) (id 165)
@@ -287,14 +287,14 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 				(e-call @14-11-14-21
 					(e-lookup-local @14-11-14-18
 						(pattern (id 72)))
-					(e-int @14-19-14-20 (int-var 148) (precision-var 147) (literal "5") (value "TODO") (bound "u8")))
+					(e-int @14-19-14-20 (num-var 149) (sign-needed "false") (bits-needed "7") (value "5")))
 				(e-string @14-23-14-30
 					(e-literal @14-24-14-29 (string "world")))
 				(e-list @14-32-14-41 (elem-var 162)
 					(elems
-						(e-int @14-33-14-34 (int-var 154) (precision-var 153) (literal "1") (value "TODO") (bound "u8"))
-						(e-int @14-36-14-37 (int-var 157) (precision-var 156) (literal "2") (value "TODO") (bound "u8"))
-						(e-int @14-39-14-40 (int-var 160) (precision-var 159) (literal "3") (value "TODO") (bound "u8")))))))
+						(e-int @14-33-14-34 (num-var 155) (sign-needed "false") (bits-needed "7") (value "1"))
+						(e-int @14-36-14-37 (num-var 158) (sign-needed "false") (bits-needed "7") (value "2"))
+						(e-int @14-39-14-40 (num-var 161) (sign-needed "false") (bits-needed "7") (value "3")))))))
 	(s-let @15-2-15-23
 		(p-assign @15-2-15-11 (ident "with_vars") (id 167))
 		(e-tuple @15-14-15-23 (tuple-var 171) (id 172)
@@ -315,8 +315,8 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 					(e-binop @16-21-16-27 (op "add")
 						(e-lookup-local @16-21-16-22
 							(pattern (id 175)))
-						(e-int @16-25-16-26 (int-var 178) (precision-var 177) (literal "1") (value "TODO") (bound "u8"))))
-				(e-int @16-28-16-30 (int-var 183) (precision-var 182) (literal "42") (value "TODO") (bound "u8")))))
+						(e-int @16-25-16-26 (num-var 179) (sign-needed "false") (bits-needed "7") (value "1"))))
+				(e-int @16-28-16-30 (num-var 184) (sign-needed "false") (bits-needed "7") (value "42")))))
 	(e-lookup-local @18-2-18-7
 		(pattern (id 93))))
 ~~~

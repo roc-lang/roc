@@ -120,11 +120,11 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 					(pattern (id 85)))
 				(e-list @6-21-6-32 (elem-var 121)
 					(elems
-						(e-int @6-22-6-23 (int-var 107) (precision-var 106) (literal "1") (value "TODO") (bound "u8"))
-						(e-int @6-24-6-25 (int-var 110) (precision-var 109) (literal "2") (value "TODO") (bound "u8"))
-						(e-int @6-26-6-27 (int-var 113) (precision-var 112) (literal "3") (value "TODO") (bound "u8"))
-						(e-int @6-28-6-29 (int-var 116) (precision-var 115) (literal "4") (value "TODO") (bound "u8"))
-						(e-int @6-30-6-31 (int-var 119) (precision-var 118) (literal "5") (value "TODO") (bound "u8"))))))))
+						(e-int @6-22-6-23 (num-var 108) (sign-needed "false") (bits-needed "7") (value "1"))
+						(e-int @6-24-6-25 (num-var 111) (sign-needed "false") (bits-needed "7") (value "2"))
+						(e-int @6-26-6-27 (num-var 114) (sign-needed "false") (bits-needed "7") (value "3"))
+						(e-int @6-28-6-29 (num-var 117) (sign-needed "false") (bits-needed "7") (value "4"))
+						(e-int @6-30-6-31 (num-var 120) (sign-needed "false") (bits-needed "7") (value "5"))))))))
 ~~~
 # TYPES
 ~~~clojure

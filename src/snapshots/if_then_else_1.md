@@ -33,9 +33,9 @@ NO CHANGE
 	(if-branches
 		(if-branch
 			(e-runtime-error (tag "ident_not_in_scope"))
-			(e-int @1-9-1-10 (int-var 75) (precision-var 74) (literal "1") (value "TODO") (bound "u8"))))
+			(e-int @1-9-1-10 (num-var 76) (sign-needed "false") (bits-needed "7") (value "1"))))
 	(if-else
-		(e-int @1-16-1-17 (int-var 79) (precision-var 78) (literal "2") (value "TODO") (bound "u8"))))
+		(e-int @1-16-1-17 (num-var 80) (sign-needed "false") (bits-needed "7") (value "2"))))
 ~~~
 # TYPES
 ~~~clojure

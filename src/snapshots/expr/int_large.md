@@ -23,7 +23,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-int @1-1-1-31 (int-var 73) (precision-var 72) (literal "999999999999999999999999999999") (value "TODO") (bound "u8") (id 74))
+(e-int @1-1-1-31 (num-var 74) (sign-needed "false") (bits-needed "65_to_127") (value "999999999999999999999999999999") (id 74))
 ~~~
 # TYPES
 ~~~clojure

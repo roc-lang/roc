@@ -35,15 +35,15 @@ NO CHANGE
 	(elems
 		(e-list @1-2-1-8 (elem-var 78)
 			(elems
-				(e-int @1-3-1-4 (int-var 73) (precision-var 72) (literal "1") (value "TODO") (bound "u8"))
-				(e-int @1-6-1-7 (int-var 76) (precision-var 75) (literal "2") (value "TODO") (bound "u8"))))
+				(e-int @1-3-1-4 (num-var 74) (sign-needed "false") (bits-needed "7") (value "1"))
+				(e-int @1-6-1-7 (num-var 77) (sign-needed "false") (bits-needed "7") (value "2"))))
 		(e-list @1-10-1-16 (elem-var 86)
 			(elems
-				(e-int @1-11-1-12 (int-var 81) (precision-var 80) (literal "3") (value "TODO") (bound "u8"))
-				(e-int @1-14-1-15 (int-var 84) (precision-var 83) (literal "4") (value "TODO") (bound "u8"))))
+				(e-int @1-11-1-12 (num-var 82) (sign-needed "false") (bits-needed "7") (value "3"))
+				(e-int @1-14-1-15 (num-var 85) (sign-needed "false") (bits-needed "7") (value "4"))))
 		(e-list @1-18-1-21 (elem-var 91)
 			(elems
-				(e-int @1-19-1-20 (int-var 89) (precision-var 88) (literal "5") (value "TODO") (bound "u8"))))))
+				(e-int @1-19-1-20 (num-var 90) (sign-needed "false") (bits-needed "7") (value "5"))))))
 ~~~
 # TYPES
 ~~~clojure

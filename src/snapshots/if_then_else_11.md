@@ -50,10 +50,10 @@ NO CHANGE
 		(if-branch
 			(e-runtime-error (tag "ident_not_in_scope"))
 			(e-block @3-3-5-4
-				(e-int @4-4-4-5 (int-var 75) (precision-var 74) (literal "1") (value "TODO") (bound "u8")))))
+				(e-int @4-4-4-5 (num-var 76) (sign-needed "false") (bits-needed "7") (value "1")))))
 	(if-else
 		(e-block @5-10-7-4
-			(e-int @6-4-6-5 (int-var 80) (precision-var 79) (literal "2") (value "TODO") (bound "u8")))))
+			(e-int @6-4-6-5 (num-var 81) (sign-needed "false") (bits-needed "7") (value "2")))))
 ~~~
 # TYPES
 ~~~clojure

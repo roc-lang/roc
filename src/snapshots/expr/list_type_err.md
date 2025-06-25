@@ -41,8 +41,8 @@ NO CHANGE
 ~~~clojure
 (e-list @1-1-1-16 (elem-var 80) (id 81)
 	(elems
-		(e-int @1-2-1-3 (int-var 73) (precision-var 72) (literal "1") (value "TODO") (bound "u8"))
-		(e-int @1-5-1-6 (int-var 76) (precision-var 75) (literal "2") (value "TODO") (bound "u8"))
+		(e-int @1-2-1-3 (num-var 74) (sign-needed "false") (bits-needed "7") (value "1"))
+		(e-int @1-5-1-6 (num-var 77) (sign-needed "false") (bits-needed "7") (value "2"))
 		(e-string @1-8-1-15
 			(e-literal @1-9-1-14 (string "hello")))))
 ~~~

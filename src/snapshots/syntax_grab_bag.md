@@ -923,57 +923,57 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 							(e-int @101-20-101-23 (raw "200")))
 						(branch @102-3-108-4
 							(p-list @102-3-102-24
-								(p-number @102-4-102-5 (raw "1"))
-								(p-number @102-7-102-8 (raw "2"))
-								(p-number @102-10-102-11 (raw "3"))
+								(p-int @102-4-102-5 (raw "1"))
+								(p-int @102-7-102-8 (raw "2"))
+								(p-int @102-10-102-11 (raw "3"))
 								(p-list-rest @102-13-102-23 (name "rest")))
 							(e-int @104-5-104-8 (raw "123")))
 						(branch @108-3-109-4
 							(p-list @108-3-108-28
-								(p-number @108-4-108-5 (raw "1"))
+								(p-int @108-4-108-5 (raw "1"))
 								(p-alternatives
-									(p-number @108-7-108-8 (raw "2"))
-									(p-number @108-11-108-12 (raw "5")))
-								(p-number @108-14-108-15 (raw "3"))
+									(p-int @108-7-108-8 (raw "2"))
+									(p-int @108-11-108-12 (raw "5")))
+								(p-int @108-14-108-15 (raw "3"))
 								(p-list-rest @108-17-108-27 (name "rest")))
 							(e-int @108-32-108-35 (raw "123")))
 						(branch @109-3-117-7
 							(p-list @109-3-116-4
-								(p-number @110-4-110-5 (raw "1"))
+								(p-int @110-4-110-5 (raw "1"))
 								(p-alternatives
-									(p-number @111-4-111-5 (raw "2"))
-									(p-number @111-8-111-9 (raw "5")))
-								(p-number @112-4-112-5 (raw "3"))
+									(p-int @111-4-111-5 (raw "2"))
+									(p-int @111-8-111-9 (raw "5")))
+								(p-int @112-4-112-5 (raw "3"))
 								(p-list-rest @113-4-115-10 (name "rest")))
 							(e-int @116-8-116-11 (raw "123")))
 						(branch @117-3-118-7
-							(p-number @117-3-117-7 (raw "3.14"))
+							(p-frac @117-3-117-7 (raw "3.14"))
 							(e-int @117-11-117-14 (raw "314")))
 						(branch @118-3-119-4
 							(p-alternatives
-								(p-number @118-3-118-7 (raw "3.14"))
-								(p-number @118-10-118-14 (raw "6.28")))
+								(p-frac @118-3-118-7 (raw "3.14"))
+								(p-frac @118-10-118-14 (raw "6.28")))
 							(e-int @118-18-118-21 (raw "314")))
 						(branch @119-3-120-4
 							(p-tuple @119-3-119-12
-								(p-number @119-4-119-5 (raw "1"))
-								(p-number @119-7-119-8 (raw "2"))
-								(p-number @119-10-119-11 (raw "3")))
+								(p-int @119-4-119-5 (raw "1"))
+								(p-int @119-7-119-8 (raw "2"))
+								(p-int @119-10-119-11 (raw "3")))
 							(e-int @119-16-119-19 (raw "123")))
 						(branch @120-3-121-4
 							(p-tuple @120-3-120-16
-								(p-number @120-4-120-5 (raw "1"))
+								(p-int @120-4-120-5 (raw "1"))
 								(p-alternatives
-									(p-number @120-7-120-8 (raw "2"))
-									(p-number @120-11-120-12 (raw "5")))
-								(p-number @120-14-120-15 (raw "3")))
+									(p-int @120-7-120-8 (raw "2"))
+									(p-int @120-11-120-12 (raw "5")))
+								(p-int @120-14-120-15 (raw "3")))
 							(e-int @120-20-120-23 (raw "123")))
 						(branch @121-3-122-4
 							(p-record @121-3-121-29
 								(field @121-5-121-12 (name "foo") (rest false)
-									(p-number @121-10-121-11 (raw "1")))
+									(p-int @121-10-121-11 (raw "1")))
 								(field @121-13-121-20 (name "bar") (rest false)
-									(p-number @121-18-121-19 (raw "2")))
+									(p-int @121-18-121-19 (raw "2")))
 								(field @121-21-121-29 (name "rest") (rest true)))
 							(e-local-dispatch @121-33-122-4
 								(e-int @121-33-121-35 (raw "12"))
@@ -983,32 +983,32 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 						(branch @122-3-130-4
 							(p-record @122-3-129-4
 								(field @123-4-125-8 (name "foo") (rest false)
-									(p-number @125-6-125-7 (raw "1")))
+									(p-int @125-6-125-7 (raw "1")))
 								(field @126-4-126-11 (name "bar") (rest false)
-									(p-number @126-9-126-10 (raw "2")))
+									(p-int @126-9-126-10 (raw "2")))
 								(field @127-4-128-10 (name "rest") (rest true)))
 							(e-int @129-8-129-10 (raw "12")))
 						(branch @130-3-131-4
 							(p-record @130-3-130-25
 								(field @130-5-130-12 (name "foo") (rest false)
-									(p-number @130-10-130-11 (raw "1")))
+									(p-int @130-10-130-11 (raw "1")))
 								(field @130-13-130-25 (name "bar") (rest false)
 									(p-alternatives
-										(p-number @130-18-130-19 (raw "2"))
-										(p-number @130-22-130-23 (raw "7")))))
+										(p-int @130-18-130-19 (raw "2"))
+										(p-int @130-22-130-23 (raw "7")))))
 							(e-int @130-29-130-31 (raw "12")))
 						(branch @131-3-135-5
 							(p-record @131-3-134-4
 								(field @132-4-132-11 (name "foo") (rest false)
-									(p-number @132-9-132-10 (raw "1")))
+									(p-int @132-9-132-10 (raw "1")))
 								(field @133-4-133-15 (name "bar") (rest false)
 									(p-alternatives
-										(p-number @133-9-133-10 (raw "2"))
-										(p-number @133-13-133-14 (raw "7")))))
+										(p-int @133-9-133-10 (raw "2"))
+										(p-int @133-13-133-14 (raw "7")))))
 							(e-int @134-8-134-10 (raw "12")))
 						(branch @135-3-136-5
 							(p-tag @135-3-135-10 (raw "Ok")
-								(p-number @135-6-135-9 (raw "123")))
+								(p-int @135-6-135-9 (raw "123")))
 							(e-int @135-14-135-17 (raw "123")))
 						(branch @136-3-137-10
 							(p-tag @136-3-136-17 (raw "Ok")
@@ -1257,9 +1257,9 @@ NO CHANGE
 					(if-branch
 						(e-lookup-local @65-28-65-31
 							(pattern (id 180)))
-						(e-int @65-32-65-33 (int-var 183) (precision-var 182) (literal "2") (value "TODO") (bound "u8"))))
+						(e-int @65-32-65-33 (num-var 184) (sign-needed "false") (bits-needed "7") (value "2"))))
 				(if-else
-					(e-int @65-39-65-40 (int-var 187) (precision-var 186) (literal "5") (value "TODO") (bound "u8"))))))
+					(e-int @65-39-65-40 (num-var 188) (sign-needed "false") (bits-needed "7") (value "5"))))))
 	(d-let (id 228)
 		(p-assign @68-1-68-8 (ident "add_one") (id 197))
 		(e-lambda @68-11-78-2 (id 222)
@@ -1268,7 +1268,7 @@ NO CHANGE
 			(e-block @68-17-78-2
 				(s-let @69-2-69-11
 					(p-assign @69-2-69-7 (ident "other") (id 199))
-					(e-int @69-10-69-11 (int-var 201) (precision-var 200) (literal "1") (value "TODO") (bound "u8") (id 202)))
+					(e-int @69-10-69-11 (num-var 202) (sign-needed "false") (bits-needed "7") (value "1") (id 202)))
 				(e-if @70-2-78-2 (cond-var 0) (branch-var 0)
 					(if-branches
 						(if-branch
@@ -1277,7 +1277,7 @@ NO CHANGE
 							(e-block @70-9-74-3
 								(s-expr @71-3-73-4
 									(e-runtime-error (tag "not_implemented")))
-								(e-int @73-3-73-4 (int-var 209) (precision-var 208) (literal "0") (value "TODO") (bound "u8")))))
+								(e-int @73-3-73-4 (num-var 210) (sign-needed "false") (bits-needed "7") (value "0")))))
 					(if-else
 						(e-block @74-9-77-3
 							(s-expr @75-3-76-8
@@ -1308,7 +1308,7 @@ NO CHANGE
 						(e-literal @145-11-145-16 (string "World"))))
 				(s-var @146-2-147-8
 					(p-assign @146-2-147-8 (ident "number") (id 255))
-					(e-int @146-15-146-18 (int-var 253) (precision-var 252) (literal "123") (value "TODO") (bound "u8") (id 254)))
+					(e-int @146-15-146-18 (num-var 254) (sign-needed "false") (bits-needed "7") (value "123") (id 254)))
 				(s-let @148-2-148-12
 					(p-assign @148-2-148-5 (ident "tag") (id 259))
 					(e-tag @148-8-148-12 (ext-var 0) (name "Blue") (args "TODO") (id 261)))
@@ -1344,8 +1344,8 @@ NO CHANGE
 								(e-lookup-local @167-3-167-10
 									(pattern (id 197)))
 								(e-runtime-error (tag "not_implemented")))
-							(e-int @171-3-171-6 (int-var 299) (precision-var 298) (literal "456") (value "TODO") (bound "u8"))
-							(e-int @172-3-172-6 (int-var 302) (precision-var 301) (literal "789") (value "TODO") (bound "u8")))))
+							(e-int @171-3-171-6 (num-var 300) (sign-needed "false") (bits-needed "9_to_15") (value "456"))
+							(e-int @172-3-172-6 (num-var 303) (sign-needed "false") (bits-needed "9_to_15") (value "789")))))
 				(s-let @178-2-178-71
 					(p-assign @178-2-178-8 (ident "record") (id 309))
 					(e-runtime-error (tag "not_implemented") (id 311)))
@@ -1353,7 +1353,7 @@ NO CHANGE
 					(p-assign @179-2-179-7 (ident "tuple") (id 313))
 					(e-tuple @179-10-179-68 (tuple-var 340) (id 341)
 						(elems
-							(e-int @179-11-179-14 (int-var 315) (precision-var 314) (literal "123") (value "TODO") (bound "u8"))
+							(e-int @179-11-179-14 (num-var 316) (sign-needed "false") (bits-needed "7") (value "123"))
 							(e-string @179-16-179-23
 								(e-literal @179-17-179-22 (string "World")))
 							(e-lookup-local @179-25-179-28
@@ -1369,14 +1369,14 @@ NO CHANGE
 										(pattern (id 313)))))
 							(e-list @179-58-179-67 (elem-var 338)
 								(elems
-									(e-int @179-59-179-60 (int-var 330) (precision-var 329) (literal "1") (value "TODO") (bound "u8"))
-									(e-int @179-62-179-63 (int-var 333) (precision-var 332) (literal "2") (value "TODO") (bound "u8"))
-									(e-int @179-65-179-66 (int-var 336) (precision-var 335) (literal "3") (value "TODO") (bound "u8")))))))
+									(e-int @179-59-179-60 (num-var 331) (sign-needed "false") (bits-needed "7") (value "1"))
+									(e-int @179-62-179-63 (num-var 334) (sign-needed "false") (bits-needed "7") (value "2"))
+									(e-int @179-65-179-66 (num-var 337) (sign-needed "false") (bits-needed "7") (value "3")))))))
 				(s-let @180-2-187-3
 					(p-assign @180-2-180-17 (ident "multiline_tuple") (id 343))
 					(e-tuple @180-20-187-3 (tuple-var 371) (id 372)
 						(elems
-							(e-int @181-3-181-6 (int-var 345) (precision-var 344) (literal "123") (value "TODO") (bound "u8"))
+							(e-int @181-3-181-6 (num-var 346) (sign-needed "false") (bits-needed "7") (value "123"))
 							(e-string @182-3-182-10
 								(e-literal @182-4-182-9 (string "World")))
 							(e-runtime-error (tag "ident_not_in_scope"))
@@ -1391,9 +1391,9 @@ NO CHANGE
 										(pattern (id 313)))))
 							(e-list @186-3-186-12 (elem-var 369)
 								(elems
-									(e-int @186-4-186-5 (int-var 361) (precision-var 360) (literal "1") (value "TODO") (bound "u8"))
-									(e-int @186-7-186-8 (int-var 364) (precision-var 363) (literal "2") (value "TODO") (bound "u8"))
-									(e-int @186-10-186-11 (int-var 367) (precision-var 366) (literal "3") (value "TODO") (bound "u8")))))))
+									(e-int @186-4-186-5 (num-var 362) (sign-needed "false") (bits-needed "7") (value "1"))
+									(e-int @186-7-186-8 (num-var 365) (sign-needed "false") (bits-needed "7") (value "2"))
+									(e-int @186-10-186-11 (num-var 368) (sign-needed "false") (bits-needed "7") (value "3")))))))
 				(s-let @188-2-189-23
 					(p-assign @188-2-188-15 (ident "bin_op_result") (id 374))
 					(e-runtime-error (tag "not_implemented") (id 434)))

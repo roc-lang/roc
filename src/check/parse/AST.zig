@@ -868,7 +868,11 @@ pub const Pattern = union(enum) {
         args: Pattern.Span,
         region: TokenizedRegion,
     },
-    number: struct {
+    int: struct {
+        number_tok: Token.Idx,
+        region: TokenizedRegion,
+    },
+    frac: struct {
         number_tok: Token.Idx,
         region: TokenizedRegion,
     },
@@ -912,7 +916,8 @@ pub const Pattern = union(enum) {
         return switch (self) {
             .ident => |p| p.region,
             .tag => |p| p.region,
-            .number => |p| p.region,
+            .int => |p| p.region,
+            .frac => |p| p.region,
             .string => |p| p.region,
             .record => |p| p.region,
             .list => |p| p.region,
@@ -950,8 +955,14 @@ pub const Pattern = union(enum) {
 
                 return node;
             },
-            .number => |num| {
-                var node = SExpr.init(env.gpa, "p-number");
+            .int => |num| {
+                var node = SExpr.init(env.gpa, "p-int");
+                node.appendRegion(env.gpa, ast.calcRegionInfo(num.region, env.line_starts.items));
+                node.appendStringAttr(env.gpa, "raw", ast.resolve(num.number_tok));
+                return node;
+            },
+            .frac => |num| {
+                var node = SExpr.init(env.gpa, "p-frac");
                 node.appendRegion(env.gpa, ast.calcRegionInfo(num.region, env.line_starts.items));
                 node.appendStringAttr(env.gpa, "raw", ast.resolve(num.number_tok));
                 return node;
@@ -1610,10 +1621,11 @@ pub const Expr = union(enum) {
         token: Token.Idx,
         region: TokenizedRegion,
     },
-    float: struct {
+    frac: struct {
         token: Token.Idx,
         region: TokenizedRegion,
     },
+
     string_part: struct { // TODO: this should be more properly represented in its own union enum
         token: Token.Idx,
         region: TokenizedRegion,
@@ -1706,7 +1718,7 @@ pub const Expr = union(enum) {
         return switch (self) {
             .ident => |e| e.region,
             .int => |e| e.region,
-            .float => |e| e.region,
+            .frac => |e| e.region,
             .string => |e| e.region,
             .tag => |e| e.region,
             .list => |e| e.region,
@@ -1811,8 +1823,8 @@ pub const Expr = union(enum) {
                 node.appendStringAttr(env.gpa, "reason", @tagName(a.reason));
                 return node;
             },
-            .float => |a| {
-                var node = SExpr.init(env.gpa, "e-float");
+            .frac => |a| {
+                var node = SExpr.init(env.gpa, "e-frac");
 
                 node.appendRegion(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
 

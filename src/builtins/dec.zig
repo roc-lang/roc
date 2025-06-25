@@ -59,10 +59,12 @@ pub const RocDec = extern struct {
             return null;
         }
 
-        const length = roc_str.len();
+        return @call(.always_inline, RocDec.fromNonemptySlice, .{roc_str.asSlice()});
+    }
 
-        const roc_str_slice = roc_str.asSlice();
-
+    // This a separate function because the compiler uses it.
+    pub fn fromNonemptySlice(roc_str_slice: []const u8) ?RocDec {
+        const length = roc_str_slice.len;
         const is_negative: bool = roc_str_slice[0] == '-';
         const initial_index: usize = if (is_negative) 1 else 0;
 

@@ -18,7 +18,6 @@ pub const Diagnostic = union(enum) {
         region: Region,
     },
     invalid_num_literal: struct {
-        literal: StringLiteral.Idx,
         region: Region,
     },
     ident_already_in_scope: struct {
@@ -159,9 +158,13 @@ pub const Diagnostic = union(enum) {
     }
 
     /// Build a report for "invalid number literal" diagnostic
-    pub fn buildInvalidNumLiteralReport(allocator: Allocator, literal: []const u8) !Report {
+    pub fn buildInvalidNumLiteralReport(allocator: Allocator, region: Region, source: []const u8) !Report {
         var report = Report.init(allocator, "INVALID NUMBER", .runtime_error);
-        const owned_literal = try report.addOwnedString(literal);
+
+        // Extract the literal's text from the source using its region
+        const literal_text = source[region.start.offset..region.end.offset];
+        const owned_literal = try report.addOwnedString(literal_text);
+
         try report.document.addText("This number literal is not valid: ");
         try report.document.addText(owned_literal);
         return report;
