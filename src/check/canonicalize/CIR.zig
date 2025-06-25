@@ -1328,8 +1328,10 @@ pub const Expr = union(enum) {
 
                 // Add value
                 var value_buf: [512]u8 = undefined;
-                // Use scientific notation for very large or very small numbers
-                const value_str = if (@abs(e.value) < 1e-10 or @abs(e.value) > 1e10)
+                // Use scientific notation for very large or very small numbers (but not zero)
+                const value_str = if (e.value == 0)
+                    "0.0"
+                else if (@abs(e.value) < 1e-10 or @abs(e.value) > 1e10)
                     std.fmt.bufPrint(&value_buf, "{e}", .{e.value}) catch "fmt_error"
                 else
                     std.fmt.bufPrint(&value_buf, "{d}", .{e.value}) catch "fmt_error";
@@ -1350,8 +1352,10 @@ pub const Expr = union(enum) {
                 // RocDec has 18 decimal places, so divide by 10^18
                 const dec_value_f64: f64 = @as(f64, @floatFromInt(e.value.num)) / std.math.pow(f64, 10, 18);
                 var value_buf: [512]u8 = undefined;
-                // Use scientific notation for very large or very small numbers
-                const value_str = if (@abs(dec_value_f64) < 1e-10 or @abs(dec_value_f64) > 1e10)
+                // Use scientific notation for very large or very small numbers (but not zero)
+                const value_str = if (dec_value_f64 == 0)
+                    "0.0"
+                else if (@abs(dec_value_f64) < 1e-10 or @abs(dec_value_f64) > 1e10)
                     std.fmt.bufPrint(&value_buf, "{e}", .{dec_value_f64}) catch "fmt_error"
                 else
                     std.fmt.bufPrint(&value_buf, "{d}", .{dec_value_f64}) catch "fmt_error";
@@ -1384,8 +1388,10 @@ pub const Expr = union(enum) {
                 const value_f64 = numerator_f64 / denominator_f64;
 
                 var value_buf: [512]u8 = undefined;
-                // Use scientific notation for very large or very small numbers
-                const value_str = if (@abs(value_f64) < 1e-10 or @abs(value_f64) > 1e10)
+                // Use scientific notation for very large or very small numbers (but not zero)
+                const value_str = if (value_f64 == 0)
+                    "0.0"
+                else if (@abs(value_f64) < 1e-10 or @abs(value_f64) > 1e10)
                     std.fmt.bufPrint(&value_buf, "{e}", .{value_f64}) catch "fmt_error"
                 else
                     std.fmt.bufPrint(&value_buf, "{d}", .{value_f64}) catch "fmt_error";

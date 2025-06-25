@@ -23,7 +23,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dec-small @1-1-1-4 (num-var 74) (fits-in-f32 "true") (fits-in-dec "true") (numerator "0") (denominator-power-of-ten "1") (value "0e0") (id 74))
+(e-dec-small @1-1-1-4 (num-var 74) (fits-in-f32 "true") (fits-in-dec "true") (numerator "0") (denominator-power-of-ten "1") (value "0.0") (id 74))
 ~~~
 # TYPES
 ~~~clojure
