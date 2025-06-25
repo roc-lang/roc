@@ -79,6 +79,12 @@ pub fn deinit(store: *NodeStore) void {
     store.scratch_diagnostics.items.deinit(store.gpa);
 }
 
+/// Retrieves a region from node from the store.
+pub fn getNodeRegion(store: *const NodeStore, node_idx: Node.Idx) Region {
+    const node = store.nodes.get(node_idx);
+    return node.region;
+}
+
 /// Retrieves a statement node from the store.
 pub fn getStatement(store: *NodeStore, statement: CIR.Statement.Idx) CIR.Statement {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(statement));
