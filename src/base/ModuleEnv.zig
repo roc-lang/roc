@@ -56,6 +56,6 @@ pub fn calcLineStarts(self: *Self, source: []const u8) !void {
 }
 
 /// Get diagnostic position information for a given range
-pub fn calcRegionInfo(self: *Self, source: []const u8, begin: u32, end: u32) !RegionInfo {
+pub fn calcRegionInfo(self: *const Self, source: []const u8, begin: u32, end: u32) !RegionInfo {
     return RegionInfo.position(source, self.line_starts.items, begin, end);
 }

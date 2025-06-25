@@ -3,6 +3,7 @@
 const std = @import("std");
 const base = @import("../../base.zig");
 const collections = @import("../../collections.zig");
+const can = @import("../canonicalize.zig");
 const types = @import("../../types/types.zig");
 const reporting = @import("../../reporting.zig");
 const store_mod = @import("../../types/store.zig");
@@ -39,21 +40,30 @@ pub const Problem = union(enum) {
         problem: Problem,
         gpa: Allocator,
         buf: *std.ArrayList(u8),
+        module_env: *const base.ModuleEnv,
+        can_ir: *const can.CIR,
         snapshots: *const snapshot.Store,
-        idents: *const Ident.Store,
         source: []const u8,
         filename: []const u8,
-        module_env: *base.ModuleEnv,
     ) !Report {
         var snapshot_writer = snapshot.SnapshotWriter.init(
             buf.writer(),
             snapshots,
-            idents,
+            &module_env.idents,
         );
 
         switch (problem) {
             .type_mismatch => |vars| {
-                return buildTypeMismatchReport(gpa, buf, &snapshot_writer, vars, source, filename, module_env);
+                return buildTypeMismatchReport(
+                    gpa,
+                    buf,
+                    module_env,
+                    can_ir,
+                    &snapshot_writer,
+                    vars,
+                    source,
+                    filename,
+                );
             },
             .infinite_recursion => |_| return buildUnimplementedReport(gpa),
             .anonymous_recursion => |_| return buildUnimplementedReport(gpa),
@@ -66,15 +76,16 @@ pub const Problem = union(enum) {
 
     /// Build a report for type mismatch diagnostic
     pub fn buildTypeMismatchReport(
-        allocator: Allocator,
+        gpa: Allocator,
         buf: *std.ArrayList(u8),
+        module_env: *const base.ModuleEnv,
+        can_ir: *const can.CIR,
         writer: *snapshot.SnapshotWriter,
         vars: VarProblem2,
         source: []const u8,
         filename: []const u8,
-        module_env: *base.ModuleEnv,
     ) !Report {
-        var report = Report.init(allocator, "TYPE MISMATCH", .runtime_error);
+        var report = Report.init(gpa, "TYPE MISMATCH", .runtime_error);
 
         try writer.write(vars.expected);
         const owned_expected = try report.addOwnedString(buf.items[0..]);
@@ -86,8 +97,10 @@ pub const Problem = union(enum) {
         try report.document.addReflowingText("This expression is used in an unexpected way:");
         try report.document.addLineBreak();
 
+        const region = can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(vars.actual_var)));
+
         // Add source region highlighting
-        const region_info = module_env.calcRegionInfo(source, vars.region.start.offset, vars.region.end.offset) catch |err| switch (err) {
+        const region_info = module_env.calcRegionInfo(source, region.start.offset, region.end.offset) catch |err| switch (err) {
             else => base.RegionInfo{
                 .start_line_idx = 0,
                 .start_col_idx = 0,
@@ -142,7 +155,6 @@ pub const VarProblem2 = struct {
     expected: SnapshotContentIdx,
     actual_var: Var,
     actual: SnapshotContentIdx,
-    region: base.Region,
 };
 
 /// Self-contained problems store with resolved snapshots of type content
