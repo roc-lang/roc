@@ -2059,6 +2059,7 @@ pub fn deserializeFrom(buffer: []align(@alignOf(Node)) const u8, allocator: std.
         .scratch_exprs = base.Scratch(CIR.Expr.Idx){ .items = .{} },
         .scratch_record_fields = base.Scratch(CIR.RecordField.Idx){ .items = .{} },
         .scratch_when_branches = base.Scratch(CIR.WhenBranch.Idx){ .items = .{} },
+        .scratch_if_branches = base.Scratch(CIR.IfBranch.Idx){ .items = .{} },
         .scratch_where_clauses = base.Scratch(CIR.WhereClause.Idx){ .items = .{} },
         .scratch_patterns = base.Scratch(CIR.Pattern.Idx){ .items = .{} },
         .scratch_pattern_record_fields = base.Scratch(CIR.PatternRecordField.Idx){ .items = .{} },
