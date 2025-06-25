@@ -24,6 +24,7 @@ scratch_statements: base.Scratch(CIR.Statement.Idx),
 scratch_exprs: base.Scratch(CIR.Expr.Idx),
 scratch_record_fields: base.Scratch(CIR.RecordField.Idx),
 scratch_when_branches: base.Scratch(CIR.WhenBranch.Idx),
+scratch_if_branches: base.Scratch(CIR.IfBranch.Idx),
 scratch_where_clauses: base.Scratch(CIR.WhereClause.Idx),
 scratch_patterns: base.Scratch(CIR.Pattern.Idx),
 scratch_pattern_record_fields: base.Scratch(CIR.PatternRecordField.Idx),
@@ -52,6 +53,7 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) NodeStore {
         .scratch_record_fields = base.Scratch(CIR.RecordField.Idx).init(gpa),
         .scratch_pattern_record_fields = base.Scratch(CIR.PatternRecordField.Idx).init(gpa),
         .scratch_when_branches = base.Scratch(CIR.WhenBranch.Idx).init(gpa),
+        .scratch_if_branches = base.Scratch(CIR.IfBranch.Idx).init(gpa),
         .scratch_type_annos = base.Scratch(CIR.TypeAnno.Idx).init(gpa),
         .scratch_anno_record_fields = base.Scratch(CIR.AnnoRecordField.Idx).init(gpa),
         .scratch_exposed_items = base.Scratch(CIR.ExposedItem.Idx).init(gpa),
@@ -71,6 +73,7 @@ pub fn deinit(store: *NodeStore) void {
     store.scratch_record_fields.items.deinit(store.gpa);
     store.scratch_pattern_record_fields.items.deinit(store.gpa);
     store.scratch_when_branches.items.deinit(store.gpa);
+    store.scratch_if_branches.items.deinit(store.gpa);
     store.scratch_type_annos.items.deinit(store.gpa);
     store.scratch_anno_record_fields.items.deinit(store.gpa);
     store.scratch_exposed_items.items.deinit(store.gpa);
@@ -313,7 +316,6 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         .expr_record_update,
         .expr_unary,
         .expr_suffix_single_question,
-        .expr_if_then_else,
         .expr_match,
         .expr_dbg,
         .expr_ellipsis,
@@ -322,6 +324,27 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             std.log.debug("TODO: implement getExpr for node type {?}", .{node.tag});
             return CIR.Expr{ .runtime_error = .{
                 .diagnostic = @enumFromInt(0),
+                .region = node.region,
+            } };
+        },
+        .expr_if_then_else => {
+            // Reconstruct the if expression from node data
+            const branches_span = CIR.IfBranch.Span{ .span = .{
+                .start = node.data_1,
+                .len = node.data_2,
+            } };
+            const final_else = @as(CIR.Expr.Idx, @enumFromInt(node.data_3));
+
+            // Type variables are stored in extra_data, but for now we'll create fresh ones
+            // TODO: Properly restore type variables from extra_data
+            const cond_var = @as(types.Var, @enumFromInt(0));
+            const branch_var = @as(types.Var, @enumFromInt(0));
+
+            return CIR.Expr{ .@"if" = .{
+                .cond_var = cond_var,
+                .branch_var = branch_var,
+                .branches = branches_span,
+                .final_else = final_else,
                 .region = node.region,
             } };
         },
@@ -814,7 +837,12 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
         },
         .@"if" => |e| {
             node.region = e.region;
-            @panic("TODO addExpr if");
+            node.tag = .expr_if_then_else;
+            // Store branches span start and len
+            node.data_1 = e.branches.span.start;
+            node.data_2 = e.branches.span.len;
+            // Store final_else expression index
+            node.data_3 = @intFromEnum(e.final_else);
         },
         .call => |e| {
             node.region = e.region;
@@ -1208,16 +1236,18 @@ pub fn getRecordField(store: *NodeStore, recordField: CIR.RecordField.Idx) CIR.R
     return CIR.RecordField{};
 }
 
-// pub fn getIfBranch(store: *const NodeStore, if_branch_idx: IfBranch.Idx) IfBranch {
-//     const nid: Node.Idx = @enumFromInt(@intFromEnum(if_branch_idx));
-//     const node = store.nodes.get(nid);
+/// Retrieves an if branch from the store.
+pub fn getIfBranch(store: *const NodeStore, if_branch_idx: CIR.IfBranch.Idx) CIR.IfBranch {
+    const nid: Node.Idx = @enumFromInt(@intFromEnum(if_branch_idx));
+    const node = store.nodes.get(nid);
 
-//     std.debug.assert(node.tag == .if_branch);
+    std.debug.assert(node.tag == .if_branch);
 
-//     return IfBranch{
-
-//     };
-// }
+    return CIR.IfBranch{
+        .cond = @enumFromInt(node.data_1),
+        .body = @enumFromInt(node.data_2),
+    };
+}
 
 /// Returns the top index for scratch expressions.
 pub fn scratchExprTop(store: *NodeStore) u32 {
@@ -1443,8 +1473,46 @@ pub fn sliceStatements(store: *const NodeStore, span: CIR.Statement.Span) []CIR.
 }
 
 /// Returns a slice of if branches from the store.
+pub fn scratchIfBranchTop(store: *NodeStore) u32 {
+    return store.scratch_if_branches.top();
+}
+
+/// TODO
+pub fn addScratchIfBranch(store: *NodeStore, if_branch: CIR.IfBranch) void {
+    const if_branch_idx = store.addIfBranch(if_branch);
+    store.scratch_if_branches.append(store.gpa, if_branch_idx);
+}
+
+/// TODO
+pub fn ifBranchSpanFrom(store: *NodeStore, start: u32) CIR.IfBranch.Span {
+    const end = store.scratch_if_branches.top();
+    defer store.scratch_if_branches.clearFrom(start);
+    var i = @as(usize, @intCast(start));
+    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
+    std.debug.assert(end >= i);
+    while (i < end) {
+        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_if_branches.items.items[i])) catch |err| exitOnOom(err);
+        i += 1;
+    }
+    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+}
+
+/// TODO
 pub fn sliceIfBranches(store: *const NodeStore, span: CIR.IfBranch.Span) []CIR.IfBranch.Idx {
     return store.sliceFromSpan(CIR.IfBranch.Idx, span.span);
+}
+
+/// TODO
+pub fn addIfBranch(store: *NodeStore, if_branch: CIR.IfBranch) CIR.IfBranch.Idx {
+    const node = Node{
+        .data_1 = @intFromEnum(if_branch.cond),
+        .data_2 = @intFromEnum(if_branch.body),
+        .data_3 = 0,
+        .region = Region.zero(),
+        .tag = .if_branch,
+    };
+    const node_idx = store.nodes.append(store.gpa, node);
+    return @enumFromInt(@intFromEnum(node_idx));
 }
 
 /// Returns a slice of diagnostics from the store.
@@ -1537,6 +1605,18 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) CIR.Diagnostic.I
         },
         .lambda_body_not_canonicalized => |r| {
             node.tag = .diag_lambda_body_not_canonicalized;
+            node.region = r.region;
+        },
+        .if_condition_not_canonicalized => |r| {
+            node.tag = .diag_if_condition_not_canonicalized;
+            node.region = r.region;
+        },
+        .if_then_not_canonicalized => |r| {
+            node.tag = .diag_if_then_not_canonicalized;
+            node.region = r.region;
+        },
+        .if_else_not_canonicalized => |r| {
+            node.tag = .diag_if_else_not_canonicalized;
             node.region = r.region;
         },
         .malformed_type_annotation => |r| {
