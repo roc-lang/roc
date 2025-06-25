@@ -27,9 +27,7 @@ getNumber = |_opt| 0
 main! = |_| {}
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize record expression
-
+NIL
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),Newline(1:1-1:1),
@@ -182,12 +180,12 @@ NO CHANGE
 					(ty-apply @17-13-17-24 (symbol "Option")
 						(ty @17-20-17-23 (name "I32")))
 					(ty @17-28-17-31 (name "I32"))))))
-	(d-let (id 140)
+	(d-let (id 139)
 		(p-assign @20-1-20-6 (ident "main!") (id 135))
-		(e-lambda @20-9-20-15 (id 139)
+		(e-lambda @20-9-20-15 (id 138)
 			(args
 				(p-underscore @20-10-20-11 (id 136)))
-			(e-runtime-error (tag "not_implemented"))))
+			(e-empty_record @20-13-20-15)))
 	(s-type-decl @4-1-7-8 (id 80)
 		(ty-header @4-1-4-18 (name "MyResult")
 			(ty-args

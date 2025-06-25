@@ -44,9 +44,6 @@ Is there an `import` or `exposing` missing up-top?
 Nothing is named `first` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize record expression
-
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),Newline(1:1-1:1),
@@ -149,12 +146,12 @@ main! = |_| {}
 					(ty-tuple @4-18-4-24
 						(ty-var @4-19-4-20 (name "b"))
 						(ty-var @4-22-4-23 (name "a")))))))
-	(d-let (id 113)
+	(d-let (id 112)
 		(p-assign @10-1-10-6 (ident "main!") (id 108))
-		(e-lambda @10-9-10-15 (id 112)
+		(e-lambda @10-9-10-15 (id 111)
 			(args
 				(p-underscore @10-10-10-11 (id 109)))
-			(e-runtime-error (tag "not_implemented")))))
+			(e-empty_record @10-13-10-15))))
 ~~~
 # TYPES
 ~~~clojure

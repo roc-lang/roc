@@ -24,9 +24,6 @@ main! = |_| {
 }
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize record expression
-
 **UNUSED VARIABLE**
 Variable ``name`` is not used anywhere in your code.
 
@@ -188,55 +185,56 @@ main! = |_| {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 112)
+	(d-let (id 113)
 		(p-assign @9-1-9-11 (ident "createUser") (id 95))
-		(e-lambda @9-14-9-47 (id 101)
+		(e-lambda @9-14-9-47 (id 102)
 			(args
 				(p-assign @9-15-9-17 (ident "id") (id 96))
 				(p-assign @9-19-9-23 (ident "name") (id 97))
 				(p-assign @9-25-9-28 (ident "age") (id 98)))
-			(e-runtime-error (tag "not_implemented")))
-		(annotation @9-1-9-11 (signature 110) (id 111)
+			(e-record @9-30-9-47 (record-var 0) (ext-var 0)
+				(fields)))
+		(annotation @9-1-9-11 (signature 111) (id 112)
 			(declared-type
 				(ty-fn @8-14-8-47 (effectful false)
 					(ty @8-14-8-20 (name "UserId"))
 					(ty @8-22-8-30 (name "UserName"))
 					(ty @8-32-8-39 (name "UserAge"))
 					(ty @8-43-8-47 (name "User"))))))
-	(d-let (id 126)
-		(p-assign @12-1-12-12 (ident "getUserName") (id 116))
-		(e-lambda @12-15-14-6 (id 120)
+	(d-let (id 127)
+		(p-assign @12-1-12-12 (ident "getUserName") (id 117))
+		(e-lambda @12-15-14-6 (id 121)
 			(args
-				(p-assign @12-16-12-20 (ident "user") (id 117)))
+				(p-assign @12-16-12-20 (ident "user") (id 118)))
 			(e-dot-access @12-22-14-6 (field "name")
 				(receiver
 					(e-lookup-local @12-22-12-26
-						(pattern (id 117))))))
-		(annotation @12-1-12-12 (signature 124) (id 125)
+						(pattern (id 118))))))
+		(annotation @12-1-12-12 (signature 125) (id 126)
 			(declared-type
 				(ty-fn @11-15-11-31 (effectful false)
 					(ty @11-15-11-19 (name "User"))
 					(ty @11-23-11-31 (name "UserName"))))))
-	(d-let (id 146)
-		(p-assign @14-1-14-6 (ident "main!") (id 127))
-		(e-lambda @14-9-17-2 (id 145)
+	(d-let (id 147)
+		(p-assign @14-1-14-6 (ident "main!") (id 128))
+		(e-lambda @14-9-17-2 (id 146)
 			(args
-				(p-underscore @14-10-14-11 (id 128)))
+				(p-underscore @14-10-14-11 (id 129)))
 			(e-block @14-13-17-2
 				(s-let @15-5-15-40
-					(p-assign @15-5-15-9 (ident "user") (id 129))
-					(e-call @15-12-15-40 (id 139)
+					(p-assign @15-5-15-9 (ident "user") (id 130))
+					(e-call @15-12-15-40 (id 140)
 						(e-lookup-local @15-12-15-22
 							(pattern (id 95)))
-						(e-int @15-23-15-26 (num-var 133) (sign-needed "false") (bits-needed "7") (value "123"))
+						(e-int @15-23-15-26 (num-var 134) (sign-needed "false") (bits-needed "7") (value "123"))
 						(e-string @15-28-15-35
 							(e-literal @15-29-15-34 (string "Alice")))
-						(e-int @15-37-15-39 (num-var 138) (sign-needed "false") (bits-needed "7") (value "25"))))
+						(e-int @15-37-15-39 (num-var 139) (sign-needed "false") (bits-needed "7") (value "25"))))
 				(e-call @16-5-16-22
 					(e-lookup-local @16-5-16-16
-						(pattern (id 116)))
+						(pattern (id 117)))
 					(e-lookup-local @16-17-16-21
-						(pattern (id 129)))))))
+						(pattern (id 130)))))))
 	(s-type-decl @3-1-4-9 (id 74)
 		(ty-header @3-1-3-7 (name "UserId"))
 		(ty @3-10-3-13 (name "U64")))
