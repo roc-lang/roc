@@ -113,7 +113,7 @@ NO CHANGE
 					(pattern (id 78)))
 				(e-int @8-21-8-24 (int-var 94) (precision-var 93) (literal "100") (value "TODO") (bound "u8")))))
 	(s-type-decl @3-1-5-8 (id 74)
-		(type-header @3-1-3-7 (name "UserId"))
+		(ty-header @3-1-3-7 (name "UserId"))
 		(ty @3-10-3-13 (name "U64"))))
 ~~~
 # TYPES

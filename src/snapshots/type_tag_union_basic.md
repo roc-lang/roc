@@ -13,16 +13,6 @@ process = |maybe| "result"
 main! = |_| {}
 ~~~
 # PROBLEMS
-**UNDECLARED TYPE**
-The type ``None`` is not declared in this scope.
-
-This type is referenced here:
-**type_tag_union_basic.md:3:23:3:27:**
-```roc
-process : [Some(Str), None] -> Str
-```
-
-
 **UNUSED VARIABLE**
 Variable ``maybe`` is not used anywhere in your code.
 
@@ -90,14 +80,14 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 90)
-		(p-assign @4-1-4-8 (ident "process") (id 79))
-		(e-lambda @4-11-4-27 (id 83)
+	(d-let (id 89)
+		(p-assign @4-1-4-8 (ident "process") (id 78))
+		(e-lambda @4-11-4-27 (id 82)
 			(args
-				(p-assign @4-12-4-17 (ident "maybe") (id 80)))
+				(p-assign @4-12-4-17 (ident "maybe") (id 79)))
 			(e-string @4-19-4-27
 				(e-literal @4-20-4-26 (string "result"))))
-		(annotation @4-1-4-8 (signature 88) (id 89)
+		(annotation @4-1-4-8 (signature 87) (id 88)
 			(declared-type
 				(ty-fn @3-11-3-35 (effectful false)
 					(ty-tag-union @3-11-3-28
@@ -105,11 +95,11 @@ NO CHANGE
 							(ty @3-17-3-20 (name "Str")))
 						(ty @3-23-3-27 (name "None")))
 					(ty @3-32-3-35 (name "Str"))))))
-	(d-let (id 96)
-		(p-assign @6-1-6-6 (ident "main!") (id 91))
-		(e-lambda @6-9-6-15 (id 95)
+	(d-let (id 95)
+		(p-assign @6-1-6-6 (ident "main!") (id 90))
+		(e-lambda @6-9-6-15 (id 94)
 			(args
-				(p-underscore @6-10-6-11 (id 92)))
+				(p-underscore @6-10-6-11 (id 91)))
 			(e-runtime-error (tag "not_implemented")))))
 ~~~
 # TYPES

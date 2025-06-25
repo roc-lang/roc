@@ -11,26 +11,6 @@ Maybe(a) : [Some(a), None]
 Maybe(a) : [Ok(a), Err]
 ~~~
 # PROBLEMS
-**UNDECLARED TYPE**
-The type ``None`` is not declared in this scope.
-
-This type is referenced here:
-**type_redeclaration_same_scope.md:3:22:3:26:**
-```roc
-Maybe(a) : [Some(a), None]
-```
-
-
-**UNDECLARED TYPE**
-The type ``Err`` is not declared in this scope.
-
-This type is referenced here:
-**type_redeclaration_same_scope.md:4:20:4:23:**
-```roc
-Maybe(a) : [Ok(a), Err]
-```
-
-
 **TYPE REDECLARED**
 The type ``Maybe`` is being redeclared.
 
@@ -90,17 +70,17 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-type-decl @3-1-4-6 (id 79)
-		(type-header @3-1-3-9 (name "Maybe")
-			(args
+	(s-type-decl @3-1-4-6 (id 78)
+		(ty-header @3-1-3-9 (name "Maybe")
+			(ty-args
 				(ty-var @3-7-3-8 (name "a"))))
 		(ty-tag-union @3-12-3-27
 			(ty-apply @3-13-3-20 (symbol "Some")
 				(ty-var @3-18-3-19 (name "a")))
 			(ty @3-22-3-26 (name "None"))))
-	(s-type-decl @4-1-4-24 (id 87)
-		(type-header @4-1-4-9 (name "Maybe")
-			(args
+	(s-type-decl @4-1-4-24 (id 85)
+		(ty-header @4-1-4-9 (name "Maybe")
+			(ty-args
 				(ty-var @4-7-4-8 (name "a"))))
 		(ty-tag-union @4-12-4-24
 			(ty-apply @4-13-4-18 (symbol "Ok")

@@ -52,16 +52,6 @@ Some(a) : { foo : Ok(a), bar : Something }
 ```
 
 
-**UNDECLARED TYPE**
-The type ``None`` is not declared in this scope.
-
-This type is referenced here:
-**type_declarations.md:9:22:9:26:**
-```roc
-Maybe(a) : [Some(a), None]
-```
-
-
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:12),Comma(1:12-1:13),UpperIdent(1:14-1:17),Comma(1:17-1:18),UpperIdent(1:19-1:23),Comma(1:23-1:24),UpperIdent(1:25-1:30),Comma(1:30-1:31),UpperIdent(1:32-1:40),Comma(1:40-1:41),LowerIdent(1:42-1:49),Comma(1:49-1:50),LowerIdent(1:51-1:56),CloseSquare(1:56-1:57),Newline(1:1-1:1),
@@ -164,8 +154,8 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(s-type-decl @3-1-5-4 (id 84)
-		(type-header @3-1-3-10 (name "Map")
-			(args
+		(ty-header @3-1-3-10 (name "Map")
+			(ty-args
 				(ty-var @3-5-3-6 (name "a"))
 				(ty-var @3-8-3-9 (name "b"))))
 		(ty-fn @3-13-3-41 (effectful false)
@@ -178,13 +168,13 @@ NO CHANGE
 			(ty-apply @3-34-3-41 (symbol "List")
 				(ty-var @3-39-3-40 (name "b")))))
 	(s-type-decl @5-1-7-5 (id 91)
-		(type-header @5-1-5-4 (name "Foo"))
+		(ty-header @5-1-5-4 (name "Foo"))
 		(ty-tuple @5-7-5-17
 			(ty @5-8-5-11 (name "Bar"))
 			(ty @5-13-5-16 (name "Baz"))))
 	(s-type-decl @7-1-9-6 (id 101)
-		(type-header @7-1-7-8 (name "Some")
-			(args
+		(ty-header @7-1-7-8 (name "Some")
+			(ty-args
 				(ty-var @7-6-7-7 (name "a"))))
 		(ty-record @7-11-7-43
 			(field (field "foo")
@@ -192,17 +182,17 @@ NO CHANGE
 					(ty-var @7-22-7-23 (name "a"))))
 			(field (field "bar")
 				(ty @7-32-7-41 (name "Something")))))
-	(s-type-decl @9-1-11-9 (id 109)
-		(type-header @9-1-9-9 (name "Maybe")
-			(args
+	(s-type-decl @9-1-11-9 (id 108)
+		(ty-header @9-1-9-9 (name "Maybe")
+			(ty-args
 				(ty-var @9-7-9-8 (name "a"))))
 		(ty-tag-union @9-12-9-27
 			(ty-apply @9-13-9-20 (symbol "Some")
 				(ty-var @9-18-9-19 (name "a")))
 			(ty @9-22-9-26 (name "None"))))
-	(s-type-decl @11-1-13-7 (id 118)
-		(type-header @11-1-11-12 (name "SomeFunc")
-			(args
+	(s-type-decl @11-1-13-7 (id 117)
+		(ty-header @11-1-11-12 (name "SomeFunc")
+			(ty-args
 				(ty-var @11-10-11-11 (name "a"))))
 		(ty-fn @11-15-11-38 (effectful false)
 			(ty-apply @11-15-11-23 (symbol "Maybe")
@@ -210,11 +200,11 @@ NO CHANGE
 			(ty-var @11-25-11-26 (name "a"))
 			(ty-apply @11-30-11-38 (symbol "Maybe")
 				(ty-var @11-36-11-37 (name "a")))))
-	(s-type-decl @13-1-15-8 (id 121)
-		(type-header @13-1-13-7 (name "MyType"))
+	(s-type-decl @13-1-15-8 (id 120)
+		(ty-header @13-1-13-7 (name "MyType"))
 		(ty @13-10-13-13 (name "U64")))
-	(s-type-decl @15-1-15-24 (id 124)
-		(type-header @15-1-15-8 (name "MyType2"))
+	(s-type-decl @15-1-15-24 (id 123)
+		(ty-header @15-1-15-8 (name "MyType2"))
 		(ty-mod @15-11-15-24 (module "Thingy") (type "Module"))))
 ~~~
 # TYPES

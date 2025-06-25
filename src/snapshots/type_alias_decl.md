@@ -98,36 +98,6 @@ app [main!] { pf: platform "../basic-cli/main.roc" }
 ```
 
 
-**UNDECLARED TYPE**
-The type ``Red`` is not declared in this scope.
-
-This type is referenced here:
-**type_alias_decl.md:19:10:19:13:**
-```roc
-Color : [Red, Green, Blue, Custom(U8, U8, U8)]
-```
-
-
-**UNDECLARED TYPE**
-The type ``Green`` is not declared in this scope.
-
-This type is referenced here:
-**type_alias_decl.md:19:15:19:20:**
-```roc
-Color : [Red, Green, Blue, Custom(U8, U8, U8)]
-```
-
-
-**UNDECLARED TYPE**
-The type ``Blue`` is not declared in this scope.
-
-This type is referenced here:
-**type_alias_decl.md:19:22:19:26:**
-```roc
-Color : [Red, Green, Blue, Custom(U8, U8, U8)]
-```
-
-
 **INVALID LAMBDA**
 The body of this lambda expression is not valid.
 
@@ -344,30 +314,30 @@ userId
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 136)
-		(p-assign @27-1-27-6 (ident "main!") (id 131))
-		(e-lambda @27-9-30-13 (id 135)
+	(d-let (id 133)
+		(p-assign @27-1-27-6 (ident "main!") (id 128))
+		(e-lambda @27-9-30-13 (id 132)
 			(args
-				(p-underscore @27-10-27-11 (id 132)))
+				(p-underscore @27-10-27-11 (id 129)))
 			(e-runtime-error (tag "lambda_body_not_canonicalized"))))
-	(d-let (id 146)
-		(p-assign @33-5-33-11 (ident "person") (id 140))
-		(e-runtime-error (tag "not_implemented") (id 142))
-		(annotation @33-5-33-11 (signature 144) (id 145)
+	(d-let (id 143)
+		(p-assign @33-5-33-11 (ident "person") (id 137))
+		(e-runtime-error (tag "not_implemented") (id 139))
+		(annotation @33-5-33-11 (signature 141) (id 142)
 			(declared-type
 				(ty @32-14-32-20 (name "Person")))))
-	(d-let (id 154)
-		(p-assign @36-5-36-10 (ident "color") (id 148))
-		(e-tag @36-13-36-16 (ext-var 0) (name "Red") (args "TODO") (id 150))
-		(annotation @36-5-36-10 (signature 152) (id 153)
+	(d-let (id 151)
+		(p-assign @36-5-36-10 (ident "color") (id 145))
+		(e-tag @36-13-36-16 (ext-var 0) (name "Red") (args "TODO") (id 147))
+		(annotation @36-5-36-10 (signature 149) (id 150)
 			(declared-type
 				(ty @35-13-35-18 (name "Color")))))
 	(s-type-decl @4-1-7-7 (id 74)
-		(type-header @4-1-4-7 (name "UserId"))
+		(ty-header @4-1-4-7 (name "UserId"))
 		(ty @4-10-4-13 (name "U64")))
 	(s-type-decl @7-1-10-7 (id 83)
-		(type-header @7-1-7-16 (name "Result")
-			(args
+		(ty-header @7-1-7-16 (name "Result")
+			(ty-args
 				(ty-var @7-8-7-10 (name "ok"))
 				(ty-var @7-12-7-15 (name "err"))))
 		(ty-tag-union @7-19-7-37
@@ -376,29 +346,29 @@ userId
 			(ty-apply @7-28-7-36 (symbol "Err")
 				(ty-var @7-32-7-35 (name "err")))))
 	(s-type-decl @10-1-13-6 (id 91)
-		(type-header @10-1-10-7 (name "Person"))
+		(ty-header @10-1-10-7 (name "Person"))
 		(ty-record @10-10-10-35
 			(field (field "name")
 				(ty @10-19-10-22 (name "Str")))
 			(field (field "age")
 				(ty @10-30-10-33 (name "U64")))))
 	(s-type-decl @13-1-16-12 (id 98)
-		(type-header @13-1-13-12 (name "MapFn")
-			(args
+		(ty-header @13-1-13-12 (name "MapFn")
+			(ty-args
 				(ty-var @13-7-13-8 (name "a"))
 				(ty-var @13-10-13-11 (name "b"))))
 		(ty-fn @13-15-13-21 (effectful false)
 			(ty-var @13-15-13-16 (name "a"))
 			(ty-var @13-20-13-21 (name "b"))))
 	(s-type-decl @16-1-19-6 (id 104)
-		(type-header @16-1-16-18 (name "ApiResponse")
-			(args
+		(ty-header @16-1-16-18 (name "ApiResponse")
+			(ty-args
 				(ty-var @16-13-16-17 (name "data"))))
 		(ty-apply @16-21-16-38 (symbol "Result")
 			(ty-var @16-28-16-32 (name "data"))
 			(ty @16-34-16-37 (name "Str"))))
-	(s-type-decl @19-1-22-10 (id 117)
-		(type-header @19-1-19-6 (name "Color"))
+	(s-type-decl @19-1-22-10 (id 114)
+		(ty-header @19-1-19-6 (name "Color"))
 		(ty-tag-union @19-9-19-47
 			(ty @19-10-19-13 (name "Red"))
 			(ty @19-15-19-20 (name "Green"))
@@ -407,9 +377,9 @@ userId
 				(ty @19-35-19-37 (name "U8"))
 				(ty @19-39-19-41 (name "U8"))
 				(ty @19-43-19-45 (name "U8")))))
-	(s-type-decl @22-1-27-6 (id 130)
-		(type-header @22-1-22-16 (name "Container")
-			(args
+	(s-type-decl @22-1-27-6 (id 127)
+		(ty-header @22-1-22-16 (name "Container")
+			(ty-args
 				(ty-var @22-11-22-15 (name "item"))))
 		(ty-record @22-19-25-2
 			(field (field "contents")

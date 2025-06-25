@@ -45,8 +45,8 @@ Foo(a, b) : (a, b, Str, U64)
 ~~~clojure
 (can-ir
 	(s-type-decl @3-1-3-25 (id 80)
-		(type-header @3-1-3-9 (name "Foo")
-			(args
+		(ty-header @3-1-3-9 (name "Foo")
+			(ty-args
 				(ty-var @3-5-3-6 (name "a"))
 				(ty-var @3-7-3-8 (name "b"))))
 		(ty-tuple @3-12-3-25
