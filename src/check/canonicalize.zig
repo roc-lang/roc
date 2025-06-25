@@ -1623,11 +1623,9 @@ fn canonicalize_pattern(
                 .bits_needed = types.Num.Int.BitsNeeded.fromValue(u128_val),
             };
 
-            // Create type vars, first "reserve" node slots
+            // Reserve node slots for type vars, then insert into them.
             const final_pattern_idx = self.can_ir.store.predictNodeIndex(2);
             const num_type_var = self.can_ir.pushFreshTypeVar(final_pattern_idx, region);
-
-            // Then in the final slot the actual pattern is inserted
             const int_pattern = CIR.Pattern{
                 .int_literal = .{
                     .num_var = num_type_var,
@@ -1640,7 +1638,6 @@ fn canonicalize_pattern(
 
             std.debug.assert(@intFromEnum(pattern_idx) == @intFromEnum(final_pattern_idx));
 
-            // Set the concrete type variable
             _ = self.can_ir.setTypeVarAtPat(pattern_idx, Content{
                 .structure = .{ .num = .{ .num_poly = num_type_var } },
             });
@@ -1667,9 +1664,6 @@ fn canonicalize_pattern(
                     return malformed_idx;
                 },
             };
-
-            // For patterns, convert all float representations to f64
-            // Remove unused variable - pattern matching handles the different cases
 
             const cir_pattern = switch (parsed) {
                 .small => |small_info| CIR.Pattern{
@@ -1703,7 +1697,6 @@ fn canonicalize_pattern(
 
             std.debug.assert(@intFromEnum(pattern_idx) == @intFromEnum(final_pattern_idx));
 
-            // Set the concrete type variable
             _ = self.can_ir.setTypeVarAtPat(pattern_idx, Content{
                 .structure = .{ .num = .{ .num_poly = num_type_var } },
             });
@@ -1728,7 +1721,6 @@ fn canonicalize_pattern(
             };
             const pattern_idx = self.can_ir.store.addPattern(str_pattern);
 
-            // Set the concrete type variable
             _ = self.can_ir.setTypeVarAtPat(pattern_idx, Content{ .structure = .str });
 
             return pattern_idx;
@@ -1754,13 +1746,9 @@ fn canonicalize_pattern(
 
                 const args = self.can_ir.store.patternSpanFrom(start);
 
-                // create type vars, first "reserve" node slots
+                // Reserve node slots for type vars, then insert into them.
                 const final_pattern_idx = self.can_ir.store.predictNodeIndex(2);
-
-                // then insert the type vars, setting the parent to be the final slot
                 const ext_type_var = self.can_ir.pushFreshTypeVar(final_pattern_idx, region);
-
-                // then in the final slot the actual pattern is inserted
                 const tag_pattern = CIR.Pattern{
                     .applied_tag = .{
                         .ext_var = ext_type_var,
@@ -1773,7 +1761,6 @@ fn canonicalize_pattern(
 
                 std.debug.assert(@intFromEnum(pattern_idx) == @intFromEnum(final_pattern_idx));
 
-                // Set the concrete type variable
                 const tag_union_type = self.can_ir.env.types.mkTagUnion(
                     &[_]Tag{Tag{ .name = tag_name, .args = types.Var.SafeList.Range.empty }},
                     ext_type_var,
@@ -1810,16 +1797,12 @@ fn canonicalize_pattern(
             // Create span of the new scratch patterns
             const patterns_span = self.can_ir.store.patternSpanFrom(scratch_top);
 
-            // create type vars, first "reserve" node slots
+            // Reserve node slots for type vars, then insert into them.
             const tuple_pattern_idx = self.can_ir.store.predictNodeIndex(2);
-
-            // then insert the type vars, setting the parent to be the final slot
             const tuple_type_var = self.can_ir.pushFreshTypeVar(
                 tuple_pattern_idx,
                 region,
             );
-
-            // then in the final slot the actual pattern is inserted
             const pattern_idx = self.can_ir.store.addPattern(CIR.Pattern{
                 .tuple = .{
                     .patterns = patterns_span,
@@ -1914,24 +1897,18 @@ fn isVarReassignmentAcrossFunctionBoundary(self: *const Self, pattern_idx: CIR.P
 
 // Check if the given f64 fits in f32 range (ignoring precision loss)
 fn fitsInF32(f64_val: f64) bool {
-    // Check if it's within the range that f32 can represent
-    // This includes normal, subnormal, and zero values
+    // Check if it's within the range that f32 can represent.
+    // This includes normal, subnormal, and zero values.
+    // (This is a magnitude check, so take the abs value to check
+    // positive and negative at the same time.)
     const abs_val = @abs(f64_val);
-
-    // Zero always fits
-    if (abs_val == 0.0) return true;
-
-    // Check if it's within f32's range
-    // Note: std.math.floatMax(f32) is the largest finite f32
-    // and std.math.floatTrueMin(f32) is the smallest positive f32 (including subnormals)
     return abs_val >= std.math.floatTrueMin(f32) and abs_val <= std.math.floatMax(f32);
 }
 
 // Check if a float value can be represented accurately in RocDec
 fn fitsInDec(value: f64) bool {
     // RocDec uses i128 with 18 decimal places
-    // So the range is approximately -1.7e20 to 1.7e20
-    const max_dec_value = 170141183460469231731.0; // Max before decimal point
+    const max_dec_value = 170141183460469231731.0;
     const min_dec_value = -170141183460469231731.0;
 
     return value >= min_dec_value and value <= max_dec_value;
@@ -2007,7 +1984,7 @@ fn parseSmallDec(token_text: []const u8) ?struct { numerator: i16, denominator_p
 fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
     // First, always parse as f64 to get the numeric value
     const f64_val = std.fmt.parseFloat(f64, token_text) catch {
-        // It doesn't parse as F64, so it's too big to fit in any of Roc's numeric types.
+        // If it can't be parsed as F64, it's too big to fit in any of Roc's Frac types.
         return error.InvalidNumLiteral;
     };
 
