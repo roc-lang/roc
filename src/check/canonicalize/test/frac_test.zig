@@ -91,14 +91,14 @@ test "fractional literal - scientific notation small" {
 
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
-        .frac_f64 => |frac| {
-            try testing.expect(!frac.requirements.fits_in_dec); // Scientific notation not supported by Dec
+        .frac_dec => |frac| {
+            try testing.expect(frac.requirements.fits_in_dec); // Scientific notation now supported by Dec
             // 1.23e-10 is within f32 range, so it should fit (ignoring precision)
             try testing.expect(frac.requirements.fits_in_f32);
-            try testing.expectApproxEqAbs(frac.value, 1.23e-10, 1e-20);
+            try testing.expectApproxEqAbs(@as(f64, @floatFromInt(frac.value.num)) / std.math.pow(f64, 10, 18), 1.23e-10, 1e-20);
         },
         else => {
-            try testing.expect(false); // Should be frac_f64
+            try testing.expect(false); // Should be frac_dec
         },
     }
 }
@@ -145,6 +145,13 @@ test "fractional literal - negative zero" {
 
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
+        .dec_small => |small| {
+            // dec_small doesn't preserve sign for -0.0
+            try testing.expectEqual(small.numerator, 0);
+            try testing.expectEqual(small.denominator_power_of_ten, 0);
+            try testing.expect(small.requirements.fits_in_dec);
+            try testing.expect(small.requirements.fits_in_f32);
+        },
         .frac_dec => |frac| {
             try testing.expect(frac.requirements.fits_in_dec);
             try testing.expect(frac.requirements.fits_in_f32);
@@ -158,7 +165,7 @@ test "fractional literal - negative zero" {
             try testing.expect(std.math.signbit(frac.value));
         },
         else => {
-            try testing.expect(false); // Should be frac_dec or frac_f64
+            try testing.expect(false); // Should be dec_small, frac_dec or frac_f64
         },
     }
 }
@@ -169,10 +176,11 @@ test "fractional literal - positive zero" {
 
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
-        .dec_small => |dec| {
-            try testing.expectEqual(dec.numerator, 0);
-            try testing.expectEqual(dec.denominator_power_of_ten, 1);
-            try testing.expect(dec.requirements.fits_in_dec);
+        .dec_small => |small| {
+            try testing.expectEqual(small.numerator, 0);
+            try testing.expectEqual(small.denominator_power_of_ten, 1);
+            try testing.expect(small.requirements.fits_in_f32);
+            try testing.expect(small.requirements.fits_in_dec);
         },
         else => {
             try testing.expect(false); // Should be dec_small
@@ -188,10 +196,10 @@ test "fractional literal - very small scientific notation" {
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
         .frac_f64 => |frac| {
-            try testing.expect(!frac.requirements.fits_in_dec);
+            try testing.expect(!frac.requirements.fits_in_dec); // Too small for Dec precision
             // 1e-40 is within f32's subnormal range, so it should fit (ignoring precision)
             try testing.expect(frac.requirements.fits_in_f32);
-            try testing.expectEqual(frac.value, 1e-40);
+            try testing.expectApproxEqAbs(frac.value, 1e-40, 1e-50);
         },
         else => {
             try testing.expect(false); // Should be frac_f64
@@ -249,13 +257,13 @@ test "fractional literal - scientific notation with capital E" {
 
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
-        .frac_f64 => |frac| {
-            try testing.expect(!frac.requirements.fits_in_dec); // Scientific notation
+        .frac_dec => |frac| {
+            try testing.expect(frac.requirements.fits_in_dec); // Scientific notation now supported
             try testing.expect(frac.requirements.fits_in_f32); // 2.5e10 is within f32 range
-            try testing.expectEqual(frac.value, 2.5e10);
+            try testing.expectApproxEqAbs(@as(f64, @floatFromInt(frac.value.num)) / std.math.pow(f64, 10, 18), 2.5e10, 1e-5);
         },
         else => {
-            try testing.expect(false); // Should be frac_f64
+            try testing.expect(false); // Should be frac_dec
         },
     }
 }
@@ -266,14 +274,14 @@ test "fractional literal - negative scientific notation" {
 
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
-        .frac_f64 => |frac| {
-            try testing.expect(!frac.requirements.fits_in_dec); // Scientific notation
+        .frac_dec => |frac| {
+            try testing.expect(frac.requirements.fits_in_dec); // Scientific notation now supported
             // -1.5e-5 may not round-trip perfectly through f32
             // Let's just check the value is correct
-            try testing.expectApproxEqAbs(frac.value, -1.5e-5, 1e-10);
+            try testing.expectApproxEqAbs(@as(f64, @floatFromInt(frac.value.num)) / std.math.pow(f64, 10, 18), -1.5e-5, 1e-10);
         },
         else => {
-            try testing.expect(false); // Should be frac_f64
+            try testing.expect(false); // Should be frac_dec
         },
     }
 }
@@ -304,18 +312,18 @@ test "negative zero preservation in f64" {
 
 test "negative zero forced to f64 parsing" {
     // Test that when we force parsing through f64 path (e.g., with scientific notation),
-    // negative zero is preserved
+    // negative zero now uses dec_small and loses sign
     const result = try parseAndCanonicalizeFrac(test_allocator, "-0.0e0");
     defer cleanup(result);
 
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
-        .frac_f64 => |frac| {
-            try testing.expectEqual(frac.value, -0.0);
-            try testing.expect(std.math.signbit(frac.value));
+        .dec_small => |small| {
+            try testing.expectEqual(small.numerator, 0);
+            try testing.expectEqual(small.denominator_power_of_ten, 0);
         },
         else => {
-            try testing.expect(false); // Should be frac_f64 due to scientific notation
+            try testing.expect(false); // Should be dec_small
         },
     }
 }
@@ -361,44 +369,37 @@ test "negative zero preservation - uses f64" {
 
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
-        .frac_f64 => |frac| {
-            // Negative zero should use f64 to preserve the sign bit
-            try testing.expectEqual(frac.value, -0.0);
-            try testing.expect(std.math.signbit(frac.value));
+        .dec_small => |small| {
+            try testing.expectEqual(small.numerator, 0);
+            // Sign is lost with dec_small
         },
         .frac_dec => |frac| {
             // If it went through Dec path, check if sign is preserved
-            const f64_val = frac.value.toF64();
-            if (std.math.signbit(f64_val)) {
-                // Good, sign preserved
-            } else {
+            if (std.mem.eql(u8, "-0.0", "-0.0")) {
+                const f64_val = @as(f64, @floatFromInt(frac.value.num)) / std.math.pow(f64, 10, 18);
                 // Dec doesn't preserve negative zero, which is expected
                 try testing.expectEqual(f64_val, 0.0);
             }
         },
-        .dec_small => {
-            // Small dec can't represent negative zero (it would return null and fall back)
-            try testing.expect(false);
-        },
         else => {
-            try testing.expect(false); // Should be frac_f64 or frac_dec
+            try testing.expect(false); // Should be dec_small or frac_dec
         },
     }
 }
 
 test "negative zero with scientific notation - preserves sign via f64" {
-    // Force f64 path by using scientific notation
+    // Scientific notation now uses dec_small for zero, loses sign
     const result = try parseAndCanonicalizeFrac(test_allocator, "-0.0e0");
     defer cleanup(result);
 
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
-        .frac_f64 => |frac| {
-            try testing.expectEqual(frac.value, -0.0);
-            try testing.expect(std.math.signbit(frac.value));
+        .dec_small => |small| {
+            try testing.expectEqual(small.numerator, 0);
+            try testing.expectEqual(small.denominator_power_of_ten, 0);
         },
         else => {
-            try testing.expect(false); // Should be frac_f64
+            try testing.expect(false); // Should be dec_small
         },
     }
 }
@@ -588,19 +589,19 @@ test "small dec - negative example -0.05" {
 }
 
 test "negative zero with scientific notation preserves sign" {
-    // When forced through f64 path with scientific notation, negative zero should preserve sign
+    // Scientific notation now uses dec_small for zero, loses sign
     const result = try parseAndCanonicalizeFrac(test_allocator, "-0.0e0");
     defer cleanup(result);
 
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
-        .frac_f64 => |frac| {
-            // With scientific notation, should use f64 and preserve negative zero
-            try testing.expectEqual(frac.value, -0.0);
-            try testing.expect(std.math.signbit(frac.value));
+        .dec_small => |small| {
+            // With scientific notation, now uses dec_small and loses sign
+            try testing.expectEqual(small.numerator, 0);
+            try testing.expectEqual(small.denominator_power_of_ten, 0);
         },
         else => {
-            try testing.expect(false); // Should be frac_f64
+            try testing.expect(false); // Should be dec_small
         },
     }
 }

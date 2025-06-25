@@ -71,12 +71,12 @@ fn getIntValue(cir: *CIR, expr_idx: CIR.Expr.Idx) !struct { value: i128, require
     const expr = cir.store.getExpr(expr_idx);
     switch (expr) {
         .int => |int_expr| {
-            const value: i128 = int_expr.value.value;
+            const value: i128 = @bitCast(int_expr.value.bytes);
             return .{ .value = value, .requirements = int_expr.requirements };
         },
         .num => |num_expr| {
             // For num expressions, we calculate requirements based on the value
-            const value: i128 = num_expr.value.value;
+            const value: i128 = @bitCast(num_expr.value.bytes);
             const requirements = calculateRequirements(value);
             return .{ .value = value, .requirements = requirements };
         },
@@ -250,7 +250,7 @@ test "canonicalize integer literal creates correct type variables" {
         .int => |int_expr| {
             // Verify type variables were created (they should be valid indices)
             // Note: @enumFromInt(0) could be a valid type variable, so just check they exist
-            _ = int_expr.int_var;
+            _ = int_expr.num_var;
 
             // Verify requirements were set
             try testing.expect(int_expr.requirements.sign_needed == false);
@@ -543,7 +543,7 @@ test "integer literal - negative zero" {
     switch (expr) {
         .int => |int| {
             // -0 should be treated as 0
-            try testing.expectEqual(int.value.value, 0);
+            try testing.expectEqual(@as(i128, @bitCast(int.value.bytes)), 0);
             // But it should still be marked as needing a sign
             try testing.expect(int.requirements.sign_needed);
             try testing.expectEqual(int.requirements.bits_needed, types.Num.Int.BitsNeeded.@"7");
@@ -561,7 +561,7 @@ test "integer literal - positive zero" {
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
         .int => |int| {
-            try testing.expectEqual(int.value.value, 0);
+            try testing.expectEqual(@as(i128, @bitCast(int.value.bytes)), 0);
             // Positive zero should not need a sign
             try testing.expect(!int.requirements.sign_needed);
             try testing.expectEqual(int.requirements.bits_needed, types.Num.Int.BitsNeeded.@"7");

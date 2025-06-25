@@ -1927,6 +1927,16 @@ fn fitsInF32(f64_val: f64) bool {
     return abs_val >= std.math.floatTrueMin(f32) and abs_val <= std.math.floatMax(f32);
 }
 
+// Check if a float value can be represented accurately in RocDec
+fn fitsInDec(value: f64) bool {
+    // RocDec uses i128 with 18 decimal places
+    // So the range is approximately -1.7e20 to 1.7e20
+    const max_dec_value = 170141183460469231731.0; // Max before decimal point
+    const min_dec_value = -170141183460469231731.0;
+
+    return value >= min_dec_value and value <= max_dec_value;
+}
+
 // Result type for parsing fractional literals into small, Dec, or f64
 const FracLiteralResult = union(enum) {
     small: struct {
@@ -1995,8 +2005,13 @@ fn parseSmallDec(token_text: []const u8) ?struct { numerator: i16, denominator_p
 
 // Parse a fractional literal from text and return small, Dec, or F64 value
 fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
-    // Check if the literal contains scientific notation (e or E)
-    // If it does, skip small and Dec parsing
+    // First, always parse as f64 to get the numeric value
+    const f64_val = std.fmt.parseFloat(f64, token_text) catch {
+        // It doesn't parse as F64, so it's too big to fit in any of Roc's numeric types.
+        return error.InvalidNumLiteral;
+    };
+
+    // Check if it has scientific notation
     const has_scientific_notation = blk: {
         for (token_text) |char| {
             if (char == 'e' or char == 'E') {
@@ -2006,7 +2021,7 @@ fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
         break :blk false;
     };
 
-    // First try to parse as small dec if no scientific notation
+    // For non-scientific notation, try the original parseSmallDec first to preserve behavior
     if (!has_scientific_notation) {
         if (parseSmallDec(token_text)) |small| {
             // Convert to f64 to check requirements
@@ -2016,27 +2031,14 @@ fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
             while (i < small.denominator_power_of_ten) : (i += 1) {
                 divisor *= 10.0;
             }
-            const f64_val = numerator_f64 / divisor;
+            const small_f64_val = numerator_f64 / divisor;
 
             return FracLiteralResult{
                 .small = .{
                     .numerator = small.numerator,
                     .denominator_power_of_ten = small.denominator_power_of_ten,
                     .requirements = types.Num.Frac.Requirements{
-                        .fits_in_f32 = fitsInF32(f64_val),
-                        .fits_in_dec = true, // Small decs always fit in Dec
-                    },
-                },
-            };
-        }
-
-        // Try to parse as RocDec if small dec failed
-        if (RocDec.fromNonemptySlice(token_text)) |dec| {
-            return FracLiteralResult{
-                .dec = .{
-                    .value = dec,
-                    .requirements = types.Num.Frac.Requirements{
-                        .fits_in_f32 = fitsInF32(dec.toF64()),
+                        .fits_in_f32 = fitsInF32(small_f64_val),
                         .fits_in_dec = true,
                     },
                 },
@@ -2044,12 +2046,85 @@ fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
         }
     }
 
-    // Either has scientific notation or parsing as Dec failed, so try F64
-    const f64_val = std.fmt.parseFloat(f64, token_text) catch {
-        // It doesn't parse as Dec or as F64, so it's too big to fit in any of Roc's numeric types.
-        return error.InvalidNumLiteral;
-    };
+    // For scientific notation or when parseSmallDec fails, check if it's a whole number
+    const rounded = @round(f64_val);
+    if (f64_val == rounded and rounded >= -32768 and rounded <= 32767) {
+        // It's a whole number in i16 range, can use small dec with denominator_power_of_ten = 0
+        return FracLiteralResult{
+            .small = .{
+                .numerator = @as(i16, @intFromFloat(rounded)),
+                .denominator_power_of_ten = 0,
+                .requirements = types.Num.Frac.Requirements{
+                    .fits_in_f32 = fitsInF32(f64_val),
+                    .fits_in_dec = true,
+                },
+            },
+        };
+    }
 
+    // Check if the value can fit in RocDec (whether or not it uses scientific notation)
+    // RocDec uses i128 with 18 decimal places
+    // We need to check if the value is within RocDec's range
+    if (fitsInDec(f64_val)) {
+        // Convert f64 to RocDec by multiplying by 10^18
+        const dec_scale = std.math.pow(f64, 10, 18);
+        const scaled_val = f64_val * dec_scale;
+
+        // i128 max is 170141183460469231731687303715884105727
+        // i128 min is -170141183460469231731687303715884105728
+        // We need to be more conservative to avoid overflow during conversion
+        const i128_max_f64 = 170141183460469231731687303715884105727.0;
+        const i128_min_f64 = -170141183460469231731687303715884105728.0;
+
+        if (scaled_val >= i128_min_f64 and scaled_val <= i128_max_f64) {
+            // Safe to convert - but check for special cases
+            const rounded_val = @round(scaled_val);
+
+            // Extra safety check for boundary values
+            if (rounded_val < i128_min_f64 or rounded_val > i128_max_f64) {
+                // Would overflow, use f64 instead
+                return FracLiteralResult{
+                    .f64 = .{
+                        .value = f64_val,
+                        .requirements = types.Num.Frac.Requirements{
+                            .fits_in_f32 = fitsInF32(f64_val),
+                            .fits_in_dec = false,
+                        },
+                    },
+                };
+            }
+
+            const dec_num = @as(i128, @intFromFloat(rounded_val));
+
+            // Check if the value is too small (would round to 0 or near 0)
+            // This prevents loss of precision for very small numbers like 1e-40
+            const min_representable = 1e-18; // Smallest non-zero value Dec can represent
+            if (@abs(f64_val) > 0 and @abs(f64_val) < min_representable) {
+                // Too small for Dec precision, use f64
+                return FracLiteralResult{
+                    .f64 = .{
+                        .value = f64_val,
+                        .requirements = types.Num.Frac.Requirements{
+                            .fits_in_f32 = fitsInF32(f64_val),
+                            .fits_in_dec = false,
+                        },
+                    },
+                };
+            }
+
+            return FracLiteralResult{
+                .dec = .{
+                    .value = RocDec{ .num = dec_num },
+                    .requirements = types.Num.Frac.Requirements{
+                        .fits_in_f32 = fitsInF32(f64_val),
+                        .fits_in_dec = true,
+                    },
+                },
+            };
+        }
+    }
+
+    // If it doesn't fit in small dec or RocDec, use f64
     return FracLiteralResult{
         .f64 = .{
             .value = f64_val,
@@ -4080,7 +4155,7 @@ test "hexadecimal integer literals" {
         try std.testing.expect(expr == .int);
 
         // Check the value
-        try std.testing.expectEqual(tc.expected_value, expr.int.value.value);
+        try std.testing.expectEqual(tc.expected_value, @as(i128, @bitCast(expr.int.value.bytes)));
 
         // Check the requirements
         try std.testing.expectEqual(tc.expected_sign_needed, expr.int.requirements.sign_needed);
@@ -4146,7 +4221,7 @@ test "binary integer literals" {
         try std.testing.expect(expr == .int);
 
         // Check the value
-        try std.testing.expectEqual(tc.expected_value, expr.int.value.value);
+        try std.testing.expectEqual(tc.expected_value, @as(i128, @bitCast(expr.int.value.bytes)));
 
         // Check the requirements
         try std.testing.expectEqual(tc.expected_sign_needed, expr.int.requirements.sign_needed);
@@ -4212,7 +4287,7 @@ test "octal integer literals" {
         try std.testing.expect(expr == .int);
 
         // Check the value
-        try std.testing.expectEqual(tc.expected_value, expr.int.value.value);
+        try std.testing.expectEqual(tc.expected_value, @as(i128, @bitCast(expr.int.value.bytes)));
 
         // Check the requirements
         try std.testing.expectEqual(tc.expected_sign_needed, expr.int.requirements.sign_needed);
@@ -4278,7 +4353,7 @@ test "integer literals with uppercase base prefixes" {
         try std.testing.expect(expr == .int);
 
         // Check the value
-        try std.testing.expectEqual(tc.expected_value, expr.int.value.value);
+        try std.testing.expectEqual(tc.expected_value, @as(i128, @bitCast(expr.int.value.bytes)));
 
         // Check the requirements
         try std.testing.expectEqual(tc.expected_sign_needed, expr.int.requirements.sign_needed);
