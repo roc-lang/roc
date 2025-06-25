@@ -1321,21 +1321,64 @@ pub const Expr = union(enum) {
                 var node = SExpr.init(gpa, "e-frac-f64");
                 node.appendRegion(gpa, ir.calcRegionInfo(e.region));
                 node.appendTypeVar(gpa, "frac-var", e.frac_var);
-                // TODO: add requirements and value
+
+                // Add requirements
+                node.appendStringAttr(gpa, "fits-in-f32", if (e.requirements.fits_in_f32) "true" else "false");
+                node.appendStringAttr(gpa, "fits-in-dec", if (e.requirements.fits_in_dec) "true" else "false");
+
+                // Add value
+                var value_buf: [64]u8 = undefined;
+                const value_str = std.fmt.bufPrint(&value_buf, "{d}", .{e.value}) catch "fmt_error";
+                node.appendStringAttr(gpa, "value", value_str);
+
                 return node;
             },
             .frac_dec => |e| {
                 var node = SExpr.init(gpa, "e-frac-dec");
                 node.appendRegion(gpa, ir.calcRegionInfo(e.region));
                 node.appendTypeVar(gpa, "frac-var", e.frac_var);
-                // TODO: add requirements and value
+
+                // Add requirements
+                node.appendStringAttr(gpa, "fits-in-f32", if (e.requirements.fits_in_f32) "true" else "false");
+                node.appendStringAttr(gpa, "fits-in-dec", if (e.requirements.fits_in_dec) "true" else "false");
+
+                // Add value (convert RocDec to string)
+                // RocDec has 18 decimal places, so divide by 10^18
+                const dec_value_f64: f64 = @as(f64, @floatFromInt(e.value.num)) / std.math.pow(f64, 10, 18);
+                var value_buf: [64]u8 = undefined;
+                const value_str = std.fmt.bufPrint(&value_buf, "{d}", .{dec_value_f64}) catch "fmt_error";
+                node.appendStringAttr(gpa, "value", value_str);
+
                 return node;
             },
             .dec_small => |e| {
                 var node = SExpr.init(gpa, "e-dec-small");
                 node.appendRegion(gpa, ir.calcRegionInfo(e.region));
                 node.appendTypeVar(gpa, "num-var", e.num_var);
-                // TODO: add requirements, numerator, and denominator_power_of_ten
+
+                // Add requirements
+                node.appendStringAttr(gpa, "fits-in-f32", if (e.requirements.fits_in_f32) "true" else "false");
+                node.appendStringAttr(gpa, "fits-in-dec", if (e.requirements.fits_in_dec) "true" else "false");
+
+                // Add numerator and denominator_power_of_ten
+                var num_buf: [32]u8 = undefined;
+                const num_str = std.fmt.bufPrint(&num_buf, "{}", .{e.numerator}) catch "fmt_error";
+                node.appendStringAttr(gpa, "numerator", num_str);
+
+                var denom_buf: [32]u8 = undefined;
+                const denom_str = std.fmt.bufPrint(&denom_buf, "{}", .{e.denominator_power_of_ten}) catch "fmt_error";
+                node.appendStringAttr(gpa, "denominator-power-of-ten", denom_str);
+
+                // Calculate and add the decimal value
+                // Convert numerator to f64 and divide by 10^denominator_power_of_ten
+                const numerator_f64: f64 = @floatFromInt(e.numerator);
+                const denominator_f64: f64 = std.math.pow(f64, 10, @floatFromInt(e.denominator_power_of_ten));
+                const value_f64 = numerator_f64 / denominator_f64;
+
+                var value_buf: [64]u8 = undefined;
+                const value_str = std.fmt.bufPrint(&value_buf, "{d}", .{value_f64}) catch "fmt_error";
+                node.appendStringAttr(gpa, "value", value_str);
+
                 return node;
             },
             .str_segment => |e| {

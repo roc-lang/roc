@@ -23,7 +23,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-frac-f64 @1-1-1-8 (frac-var 74) (id 74))
+(e-frac-f64 @1-1-1-8 (frac-var 74) (fits-in-f32 "true") (fits-in-dec "false") (value "0.000123") (id 74))
 ~~~
 # TYPES
 ~~~clojure
