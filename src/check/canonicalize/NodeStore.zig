@@ -252,21 +252,18 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             const num_var = @as(types.Var, @enumFromInt(node.data_2));
 
             // Unpack small dec data from data_1 and data_3
-            // data_1: before_decimal (i8) in lower 8 bits, after_decimal (u8) in upper 8 bits
-            // data_3: after_decimal_digits (u8) in lower 8 bits, requirements (2 bits) in upper bits
-            const before_u8 = @as(u8, @truncate(node.data_1));
-            const before_decimal: i8 = @bitCast(before_u8);
-            const after_decimal = @as(u8, @truncate(node.data_1 >> 8));
-            const after_decimal_digits = @as(u8, @truncate(node.data_3));
+            // data_1: numerator (i16) stored as u32
+            // data_3: denominator_power_of_ten (u8) in lower 8 bits, requirements (2 bits) in upper bits
+            const numerator = @as(i16, @intCast(@as(i32, @bitCast(node.data_1))));
+            const denominator_power_of_ten = @as(u8, @truncate(node.data_3));
             const requirements = @as(types.Num.Frac.Requirements, @bitCast(@as(u2, @truncate(node.data_3 >> 8))));
 
             return CIR.Expr{
                 .dec_small = .{
                     .num_var = num_var,
                     .requirements = requirements,
-                    .before_decimal = before_decimal,
-                    .after_decimal = after_decimal,
-                    .after_decimal_digits = after_decimal_digits,
+                    .numerator = numerator,
+                    .denominator_power_of_ten = denominator_power_of_ten,
                     .region = node.region,
                 },
             };
@@ -660,11 +657,10 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             node.data_2 = @intFromEnum(e.num_var);
 
             // Pack small dec data into data_1 and data_3
-            // data_1: before_decimal (i8) in lower 8 bits, after_decimal (u8) in upper 8 bits
-            // data_3: after_decimal_digits (u8) in lower 8 bits, requirements (2 bits) in upper bits
-            const before_u8: u8 = @bitCast(e.before_decimal);
-            node.data_1 = (@as(u32, e.after_decimal) << 8) | @as(u32, before_u8);
-            node.data_3 = (@as(u32, @intCast(@as(u2, @bitCast(e.requirements)))) << 8) | @as(u32, e.after_decimal_digits);
+            // data_1: numerator (i16) - fits in lower 16 bits
+            // data_3: denominator_power_of_ten (u8) in lower 8 bits, requirements (2 bits) in upper bits
+            node.data_1 = @as(u32, @bitCast(@as(i32, e.numerator)));
+            node.data_3 = (@as(u32, @intCast(@as(u2, @bitCast(e.requirements)))) << 8) | @as(u32, e.denominator_power_of_ten);
         },
         .frac_dec => |e| {
             node.region = e.region;
@@ -872,7 +868,7 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern) CIR.Pattern.Idx {
         .small_dec_literal => |p| {
             node.tag = .pattern_small_dec_literal;
             node.region = p.region;
-            // TODO store num_var, before_decimal, after_decimal, after_decimal_digits, requirements
+            // TODO store num_var, numerator, denominator_power_of_ten, requirements
         },
         .str_literal => |p| {
             node.tag = .pattern_str_literal;

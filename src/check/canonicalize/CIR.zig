@@ -608,9 +608,8 @@ pub const Expr = union(enum) {
     dec_small: struct {
         num_var: TypeVar,
         requirements: types.Num.Frac.Requirements,
-        before_decimal: i8,
-        after_decimal: u8,
-        after_decimal_digits: u8, // Number of digits after decimal point (to handle 0.1 vs 0.10)
+        numerator: i16,
+        denominator_power_of_ten: u8,
         region: Region,
     },
     // A single segment of a string literal
@@ -917,26 +916,19 @@ pub const Expr = union(enum) {
                 req_node.appendNode(gpa, &dec_node);
                 small_node.appendNode(gpa, &req_node);
 
-                // Add before_decimal
-                var before_node = sexpr.Expr.init(gpa, "before_decimal");
-                var before_buf: [8]u8 = undefined;
-                const before_str = std.fmt.bufPrint(&before_buf, "{}", .{small_expr.before_decimal}) catch "fmt_error";
-                before_node.appendString(gpa, before_str);
-                small_node.appendNode(gpa, &before_node);
+                // Add numerator
+                var num_node = sexpr.Expr.init(gpa, "numerator");
+                var num_buf: [8]u8 = undefined;
+                const num_str = std.fmt.bufPrint(&num_buf, "{}", .{small_expr.numerator}) catch "fmt_error";
+                num_node.appendString(gpa, num_str);
+                small_node.appendNode(gpa, &num_node);
 
-                // Add after_decimal
-                var after_node = sexpr.Expr.init(gpa, "after_decimal");
-                var after_buf: [8]u8 = undefined;
-                const after_str = std.fmt.bufPrint(&after_buf, "{}", .{small_expr.after_decimal}) catch "fmt_error";
-                after_node.appendString(gpa, after_str);
-                small_node.appendNode(gpa, &after_node);
-
-                // Add after_decimal_digits
-                var digits_node = sexpr.Expr.init(gpa, "after_decimal_digits");
-                var digits_buf: [8]u8 = undefined;
-                const digits_str = std.fmt.bufPrint(&digits_buf, "{}", .{small_expr.after_decimal_digits}) catch "fmt_error";
-                digits_node.appendString(gpa, digits_str);
-                small_node.appendNode(gpa, &digits_node);
+                // Add denominator_power_of_ten
+                var power_node = sexpr.Expr.init(gpa, "denominator_power_of_ten");
+                var power_buf: [8]u8 = undefined;
+                const power_str = std.fmt.bufPrint(&power_buf, "{}", .{small_expr.denominator_power_of_ten}) catch "fmt_error";
+                power_node.appendString(gpa, power_str);
+                small_node.appendNode(gpa, &power_node);
 
                 return small_node;
             },
@@ -1603,7 +1595,7 @@ pub const Pattern = union(enum) {
     num_literal: struct {
         num_var: TypeVar,
         literal: StringLiteral.Idx,
-        value: IntLiteralValue,
+        value: IntLiteralValue, // TODO move this to a side table because it's 16B
         region: Region,
     },
     int_literal: struct {
@@ -1615,21 +1607,22 @@ pub const Pattern = union(enum) {
     dec_literal: struct {
         num_var: TypeVar,
         requirements: types.Num.Frac.Requirements,
-        value: RocDec,
-        region: Region,
-    },
-    f64_literal: struct {
-        num_var: TypeVar,
-        requirements: types.Num.Frac.Requirements,
-        value: f64,
+        value: RocDec, // TODO move this to a side table because it's 16B
         region: Region,
     },
     small_dec_literal: struct {
         num_var: TypeVar,
         requirements: types.Num.Frac.Requirements,
-        before_decimal: i8,
-        after_decimal: u8,
-        after_decimal_digits: u8,
+        // Represent a small decimal literal like -0.05 as (-5 * 10^2)
+        // using numerator: -5, denominator_power_of_10: 2
+        numerator: i16,
+        denominator_power_of_ten: u8,
+        region: Region,
+    },
+    f64_literal: struct {
+        num_var: TypeVar,
+        requirements: types.Num.Frac.Requirements,
+        value: f64, // TODO move this to a side table because it's 8B
         region: Region,
     },
     str_literal: struct {
@@ -1830,26 +1823,19 @@ pub const Pattern = union(enum) {
                 var pattern_idx_node = formatPatternIdxNode(gpa, pattern_idx);
                 node.appendNode(gpa, &pattern_idx_node);
 
-                // Add before_decimal
-                var before_node = sexpr.Expr.init(gpa, "before_decimal");
-                var before_buf: [8]u8 = undefined;
-                const before_str = std.fmt.bufPrint(&before_buf, "{}", .{p.before_decimal}) catch "fmt_error";
-                before_node.appendString(gpa, before_str);
-                node.appendNode(gpa, &before_node);
+                // Add numerator
+                var num_node = sexpr.Expr.init(gpa, "numerator");
+                var num_buf: [8]u8 = undefined;
+                const num_str = std.fmt.bufPrint(&num_buf, "{}", .{p.numerator}) catch "fmt_error";
+                num_node.appendString(gpa, num_str);
+                node.appendNode(gpa, &num_node);
 
-                // Add after_decimal
-                var after_node = sexpr.Expr.init(gpa, "after_decimal");
-                var after_buf: [8]u8 = undefined;
-                const after_str = std.fmt.bufPrint(&after_buf, "{}", .{p.after_decimal}) catch "fmt_error";
-                after_node.appendString(gpa, after_str);
-                node.appendNode(gpa, &after_node);
-
-                // Add after_decimal_digits
-                var digits_node = sexpr.Expr.init(gpa, "after_decimal_digits");
-                var digits_buf: [8]u8 = undefined;
-                const digits_str = std.fmt.bufPrint(&digits_buf, "{}", .{p.after_decimal_digits}) catch "fmt_error";
-                digits_node.appendString(gpa, digits_str);
-                node.appendNode(gpa, &digits_node);
+                // Add denominator_power_of_ten
+                var power_node = sexpr.Expr.init(gpa, "denominator_power_of_ten");
+                var power_buf: [8]u8 = undefined;
+                const power_str = std.fmt.bufPrint(&power_buf, "{}", .{p.denominator_power_of_ten}) catch "fmt_error";
+                power_node.appendString(gpa, power_str);
+                node.appendNode(gpa, &power_node);
 
                 return node;
             },

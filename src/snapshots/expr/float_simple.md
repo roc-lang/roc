@@ -26,9 +26,8 @@ NO CHANGE
 (e_dec_small (1:1-1:5)
 	(num_var 14)
 	(requirements (fits_in_f32 "false") (fits_in_dec "true"))
-	(before_decimal "3")
-	(after_decimal "14")
-	(after_decimal_digits "2"))
+	(numerator "314")
+	(denominator_power_of_ten "2"))
 ~~~
 # TYPES
 ~~~clojure

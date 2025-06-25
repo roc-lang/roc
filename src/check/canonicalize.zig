@@ -622,9 +622,8 @@ pub fn canonicalize_expr(
                     .dec_small = .{
                         .num_var = num_var,
                         .requirements = small_info.requirements,
-                        .before_decimal = small_info.before_decimal,
-                        .after_decimal = small_info.after_decimal,
-                        .after_decimal_digits = small_info.after_decimal_digits,
+                        .numerator = small_info.numerator,
+                        .denominator_power_of_ten = small_info.denominator_power_of_ten,
                         .region = region,
                     },
                 },
@@ -1255,9 +1254,8 @@ fn canonicalize_pattern(
                     .small_dec_literal = .{
                         .num_var = num_type_var,
                         .requirements = small_info.requirements,
-                        .before_decimal = small_info.before_decimal,
-                        .after_decimal = small_info.after_decimal,
-                        .after_decimal_digits = small_info.after_decimal_digits,
+                        .numerator = small_info.numerator,
+                        .denominator_power_of_ten = small_info.denominator_power_of_ten,
                         .region = region,
                     },
                 },
@@ -1506,9 +1504,8 @@ fn fitsInF32(f64_val: f64) bool {
 // Result type for parsing fractional literals into small, Dec, or f64
 const FracLiteralResult = union(enum) {
     small: struct {
-        before_decimal: i8,
-        after_decimal: u8,
-        after_decimal_digits: u8,
+        numerator: i16,
+        denominator_power_of_ten: u8,
         requirements: types.Num.Frac.Requirements,
     },
     dec: struct {
@@ -1521,44 +1518,53 @@ const FracLiteralResult = union(enum) {
     },
 };
 
-// Try to parse a fractional literal as a small dec (i8.u8)
-fn parseSmallDec(token_text: []const u8) ?struct { before: i8, after: u8, digits: u8 } {
-    // Find the decimal point
-    const dot_pos = std.mem.indexOf(u8, token_text, ".") orelse return null;
-
-    // Parse the part before decimal
-    const before_str = token_text[0..dot_pos];
-    const before_i32 = std.fmt.parseInt(i32, before_str, 10) catch return null;
-
-    // Check if it fits in i8
-    if (before_i32 < -128 or before_i32 > 127) return null;
-    const before_i8 = @as(i8, @intCast(before_i32));
-
+// Try to parse a fractional literal as a small dec (numerator/10^power)
+fn parseSmallDec(token_text: []const u8) ?struct { numerator: i16, denominator_power_of_ten: u8 } {
     // For negative zero, we'll return null to force f64 path
-    if (before_i32 == 0 and token_text.len > 0 and token_text[0] == '-') {
-        return null;
+    if (token_text.len > 0 and token_text[0] == '-') {
+        const rest = token_text[1..];
+        // Check if it's -0, -0.0, -0.00, etc.
+        var all_zeros = true;
+        for (rest) |c| {
+            if (c != '0' and c != '.') {
+                all_zeros = false;
+                break;
+            }
+        }
+        if (all_zeros) return null;
     }
 
-    // Parse the part after decimal
-    const after_str = token_text[dot_pos + 1 ..];
-    if (after_str.len == 0) {
-        // Handle cases like "5." -> "5.0"
-        return .{ .before = before_i8, .after = 0, .digits = 0 };
+    // Parse as a whole number by removing the decimal point
+    const dot_pos = std.mem.indexOf(u8, token_text, ".") orelse {
+        // No decimal point, parse as integer
+        const val = std.fmt.parseInt(i32, token_text, 10) catch return null;
+        if (val < -32768 or val > 32767) return null;
+        return .{ .numerator = @as(i16, @intCast(val)), .denominator_power_of_ten = 0 };
+    };
+
+    // Count digits after decimal point
+    const after_decimal_len = token_text.len - dot_pos - 1;
+    if (after_decimal_len > 255) return null; // Too many decimal places
+
+    // Build the string without the decimal point
+    var buf: [32]u8 = undefined;
+    var len: usize = 0;
+
+    // Copy part before decimal
+    @memcpy(buf[0..dot_pos], token_text[0..dot_pos]);
+    len = dot_pos;
+
+    // Copy part after decimal
+    if (after_decimal_len > 0) {
+        @memcpy(buf[len..][0..after_decimal_len], token_text[dot_pos + 1 ..]);
+        len += after_decimal_len;
     }
 
-    // Count actual digits (to distinguish 0.1 from 0.10)
-    const after_digits = @as(u8, @intCast(after_str.len));
+    // Parse the combined number
+    const val = std.fmt.parseInt(i32, buf[0..len], 10) catch return null;
+    if (val < -32768 or val > 32767) return null;
 
-    // Reverse the digits to store them (e.g., "14" becomes 41, "001" becomes 100)
-    var reversed: u32 = 0;
-    for (after_str) |digit| {
-        if (digit < '0' or digit > '9') return null;
-        const digit_val = digit - '0';
-        reversed = reversed * 10 + digit_val;
-        if (reversed > 255) return null; // Won't fit in u8
-    }
-
-    return .{ .before = before_i8, .after = @as(u8, @intCast(reversed)), .digits = after_digits };
+    return .{ .numerator = @as(i16, @intCast(val)), .denominator_power_of_ten = @as(u8, @intCast(after_decimal_len)) };
 }
 
 // Parse a fractional literal from text and return small, Dec, or F64 value
@@ -1578,38 +1584,21 @@ fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
     if (!has_scientific_notation) {
         if (parseSmallDec(token_text)) |small| {
             // Convert to f64 to check requirements
-            // Need to "unreverse" the after_decimal part
-            var unreversed: f64 = 0;
-            var temp = small.after;
+            const numerator_f64 = @as(f64, @floatFromInt(small.numerator));
             var divisor: f64 = 1.0;
-            var j: u8 = 0;
-            while (j < small.digits) : (j += 1) {
+            var i: u8 = 0;
+            while (i < small.denominator_power_of_ten) : (i += 1) {
                 divisor *= 10.0;
             }
-            // Now extract digits from reversed number
-            j = 0;
-            while (j < small.digits) : (j += 1) {
-                const digit = @rem(temp, 10);
-                unreversed = unreversed * 10.0 + @as(f64, @floatFromInt(digit));
-                temp = @divTrunc(temp, 10);
-            }
-            unreversed = unreversed / divisor;
-
-            // For negative numbers, we need to subtract the fractional part
-            const before_f64 = @as(f64, @floatFromInt(small.before));
-            const f64_val = if (small.before < 0)
-                before_f64 - unreversed
-            else
-                before_f64 + unreversed;
+            const f64_val = numerator_f64 / divisor;
 
             return FracLiteralResult{
                 .small = .{
-                    .before_decimal = small.before,
-                    .after_decimal = small.after,
-                    .after_decimal_digits = small.digits,
+                    .numerator = small.numerator,
+                    .denominator_power_of_ten = small.denominator_power_of_ten,
                     .requirements = types.Num.Frac.Requirements{
                         .fits_in_f32 = fitsInF32(f64_val),
-                        .fits_in_dec = true, // Small fracs always fit in Dec
+                        .fits_in_dec = true, // Small decs always fit in Dec
                     },
                 },
             };

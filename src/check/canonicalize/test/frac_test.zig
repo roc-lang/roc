@@ -75,9 +75,8 @@ test "fractional literal - basic decimal" {
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
         .dec_small => |dec| {
-            try testing.expectEqual(dec.before_decimal, 3);
-            try testing.expectEqual(dec.after_decimal, 14);
-            try testing.expectEqual(dec.after_decimal_digits, 2);
+            try testing.expectEqual(dec.numerator, 314);
+            try testing.expectEqual(dec.denominator_power_of_ten, 2);
             try testing.expect(dec.requirements.fits_in_dec);
         },
         else => {
@@ -170,9 +169,8 @@ test "fractional literal - positive zero" {
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
         .dec_small => |dec| {
-            try testing.expectEqual(dec.before_decimal, 0);
-            try testing.expectEqual(dec.after_decimal, 0);
-            try testing.expectEqual(dec.after_decimal_digits, 1);
+            try testing.expectEqual(dec.numerator, 0);
+            try testing.expectEqual(dec.denominator_power_of_ten, 1);
             try testing.expect(dec.requirements.fits_in_dec);
         },
         else => {
@@ -347,9 +345,8 @@ test "small dec - basic positive decimal" {
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
         .dec_small => |dec| {
-            try testing.expectEqual(dec.before_decimal, 3);
-            try testing.expectEqual(dec.after_decimal, 14);
-            try testing.expectEqual(dec.after_decimal_digits, 2);
+            try testing.expectEqual(dec.numerator, 314);
+            try testing.expectEqual(dec.denominator_power_of_ten, 2);
             try testing.expect(dec.requirements.fits_in_dec);
         },
         else => {
@@ -413,13 +410,11 @@ test "small dec - positive zero" {
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
         .dec_small => |dec| {
-            try testing.expectEqual(dec.before_decimal, 0);
-            try testing.expectEqual(dec.after_decimal, 0);
-            try testing.expectEqual(dec.after_decimal_digits, 1);
+            try testing.expectEqual(dec.numerator, 0);
+            try testing.expectEqual(dec.denominator_power_of_ten, 1);
 
             // Verify positive zero
-            const before_f64 = @as(f64, @floatFromInt(dec.before_decimal));
-            try testing.expect(!std.math.signbit(before_f64));
+            try testing.expectEqual(dec.numerator, 0);
         },
         else => {
             try testing.expect(false); // Should be dec_small
@@ -434,9 +429,8 @@ test "small dec - precision preservation for 0.1" {
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
         .dec_small => |dec| {
-            try testing.expectEqual(dec.before_decimal, 0);
-            try testing.expectEqual(dec.after_decimal, 1); // "1" reversed is still 1
-            try testing.expectEqual(dec.after_decimal_digits, 1);
+            try testing.expectEqual(dec.numerator, 1);
+            try testing.expectEqual(dec.denominator_power_of_ten, 1);
         },
         else => {
             try testing.expect(false); // Should be dec_small
@@ -451,9 +445,8 @@ test "small dec - trailing zeros" {
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
         .dec_small => |dec| {
-            try testing.expectEqual(dec.before_decimal, 1);
-            try testing.expectEqual(dec.after_decimal, 100);
-            try testing.expectEqual(dec.after_decimal_digits, 3);
+            try testing.expectEqual(dec.numerator, 1100);
+            try testing.expectEqual(dec.denominator_power_of_ten, 3);
         },
         else => {
             try testing.expect(false); // Should be dec_small
@@ -468,9 +461,8 @@ test "small dec - negative number" {
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
         .dec_small => |dec| {
-            try testing.expectEqual(dec.before_decimal, -5);
-            try testing.expectEqual(dec.after_decimal, 25);
-            try testing.expectEqual(dec.after_decimal_digits, 2);
+            try testing.expectEqual(dec.numerator, -525);
+            try testing.expectEqual(dec.denominator_power_of_ten, 2);
         },
         else => {
             try testing.expect(false); // Should be dec_small
@@ -485,9 +477,8 @@ test "small dec - max i8 value" {
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
         .dec_small => |dec| {
-            try testing.expectEqual(dec.before_decimal, 127);
-            try testing.expectEqual(dec.after_decimal, 99); // "99" reversed is 99
-            try testing.expectEqual(dec.after_decimal_digits, 2);
+            try testing.expectEqual(dec.numerator, 12799);
+            try testing.expectEqual(dec.denominator_power_of_ten, 2);
         },
         else => {
             try testing.expect(false); // Should be dec_small
@@ -502,9 +493,8 @@ test "small dec - min i8 value" {
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
         .dec_small => |dec| {
-            try testing.expectEqual(dec.before_decimal, -128);
-            try testing.expectEqual(dec.after_decimal, 0);
-            try testing.expectEqual(dec.after_decimal_digits, 1);
+            try testing.expectEqual(dec.numerator, -1280);
+            try testing.expectEqual(dec.denominator_power_of_ten, 1);
         },
         else => {
             try testing.expect(false); // Should be dec_small
@@ -512,14 +502,31 @@ test "small dec - min i8 value" {
     }
 }
 
-test "small dec - exceeds i8 range falls back to Dec" {
+test "small dec - 128.0 now fits with new representation" {
     const result = try parseAndCanonicalizeFrac(test_allocator, "128.0");
     defer cleanup(result);
 
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
+        .dec_small => |dec| {
+            // With numerator/power representation, 128.0 = 1280/10^1 fits in i16
+            try testing.expectEqual(dec.numerator, 1280);
+            try testing.expectEqual(dec.denominator_power_of_ten, 1);
+        },
+        else => {
+            try testing.expect(false); // Should be dec_small
+        },
+    }
+}
+
+test "small dec - exceeds i16 range falls back to Dec" {
+    const result = try parseAndCanonicalizeFrac(test_allocator, "32768.0");
+    defer cleanup(result);
+
+    const expr = result.cir.store.getExpr(result.expr_idx);
+    switch (expr) {
         .frac_dec => |frac| {
-            // Should fall back to Dec because 128 > 127 (max i8)
+            // Should fall back to Dec because 327680 > 32767 (max i16)
             try testing.expect(frac.requirements.fits_in_dec);
         },
         .dec_small => {
@@ -538,10 +545,8 @@ test "small dec - too many fractional digits falls back to Dec" {
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
         .dec_small => |dec| {
-            // Actually "234" fits in u8 (234 < 255)
-            try testing.expectEqual(dec.before_decimal, 1);
-            try testing.expectEqual(dec.after_decimal, 234);
-            try testing.expectEqual(dec.after_decimal_digits, 3);
+            try testing.expectEqual(dec.numerator, 1234);
+            try testing.expectEqual(dec.denominator_power_of_ten, 3);
         },
         else => {
             try testing.expect(false); // Should be dec_small
@@ -556,9 +561,25 @@ test "small dec - complex example 0.001" {
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
         .dec_small => |dec| {
-            try testing.expectEqual(dec.before_decimal, 0);
-            try testing.expectEqual(dec.after_decimal, 1);
-            try testing.expectEqual(dec.after_decimal_digits, 3);
+            try testing.expectEqual(dec.numerator, 1);
+            try testing.expectEqual(dec.denominator_power_of_ten, 3);
+        },
+        else => {
+            try testing.expect(false); // Should be dec_small
+        },
+    }
+}
+
+test "small dec - negative example -0.05" {
+    const result = try parseAndCanonicalizeFrac(test_allocator, "-0.05");
+    defer cleanup(result);
+
+    const expr = result.cir.store.getExpr(result.expr_idx);
+    switch (expr) {
+        .dec_small => |dec| {
+            // -0.05 = -5 / 10^2
+            try testing.expectEqual(dec.numerator, -5);
+            try testing.expectEqual(dec.denominator_power_of_ten, 2);
         },
         else => {
             try testing.expect(false); // Should be dec_small
@@ -591,9 +612,8 @@ test "fractional literal - simple 1.0 uses small dec" {
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
         .dec_small => |dec| {
-            try testing.expectEqual(dec.before_decimal, 1);
-            try testing.expectEqual(dec.after_decimal, 0);
-            try testing.expectEqual(dec.after_decimal_digits, 1);
+            try testing.expectEqual(dec.numerator, 10);
+            try testing.expectEqual(dec.denominator_power_of_ten, 1);
         },
         else => {
             try testing.expect(false); // Should be dec_small
