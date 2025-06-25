@@ -34,43 +34,47 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-6:30)
-	(app (1:1-1:53)
-		(provides (1:6-1:12) (exposed_item (lower_ident "main!")))
-		(record_field (1:15-1:53)
-			"pf"
-			(string (1:28-1:51) (string_part (1:29-1:50) "../basic-cli/main.roc")))
-		(packages (1:13-1:53)
-			(record_field (1:15-1:53)
-				"pf"
-				(string (1:28-1:51) (string_part (1:29-1:50) "../basic-cli/main.roc")))))
+(file @1-1-6-30
+	(app @1-1-1-53
+		(provides @1-6-1-12
+			(exposed-lower-ident (text "main!")))
+		(record-field @1-15-1-53 (name "pf")
+			(e-string @1-28-1-51
+				(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))
+		(packages @1-13-1-53
+			(record-field @1-15-1-53 (name "pf")
+				(e-string @1-28-1-51
+					(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(type_anno (3:1-4:14)
-			"processNested"
-			(fn (3:17-3:52)
-				(apply (3:17-3:39)
-					(ty "List")
-					(apply (3:22-3:38)
-						(ty "Result")
-						(ty "Str")
-						(ty "Err")))
-				(apply (3:43-3:52)
-					(ty "List")
-					(ty "Str"))))
-		(decl (4:1-4:38)
-			(ident (4:1-4:14) "processNested")
-			(lambda (4:17-4:38)
-				(args (ident (4:18-4:23) "_list"))
-				(list (4:25-4:38)
-					(string (4:26-4:31) (string_part (4:27-4:30) "one"))
-					(string (4:32-4:37) (string_part (4:33-4:36) "two")))))
-		(decl (6:1-6:30)
-			(ident (6:1-6:6) "main!")
-			(lambda (6:9-6:30)
-				(args (underscore))
-				(apply (6:13-6:30)
-					(ident (6:13-6:26) "" "processNested")
-					(list (6:27-6:29)))))))
+		(s-type-anno @3-1-4-14 (name "processNested")
+			(ty-fn @3-17-3-52
+				(ty-apply @3-17-3-39
+					(ty (name "List"))
+					(ty-apply @3-22-3-38
+						(ty (name "Result"))
+						(ty (name "Str"))
+						(ty (name "Err"))))
+				(ty-apply @3-43-3-52
+					(ty (name "List"))
+					(ty (name "Str")))))
+		(s-decl @4-1-4-38
+			(p-ident @4-1-4-14 (raw "processNested"))
+			(e-lambda @4-17-4-38
+				(args
+					(p-ident @4-18-4-23 (raw "_list")))
+				(e-list @4-25-4-38
+					(e-string @4-26-4-31
+						(e-string-part @4-27-4-30 (raw "one")))
+					(e-string @4-32-4-37
+						(e-string-part @4-33-4-36 (raw "two"))))))
+		(s-decl @6-1-6-30
+			(p-ident @6-1-6-6 (raw "main!"))
+			(e-lambda @6-9-6-30
+				(args
+					(p-underscore))
+				(e-apply @6-13-6-30
+					(e-ident @6-13-6-26 (qaul "") (raw "processNested"))
+					(e-list @6-27-6-29))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -83,56 +87,45 @@ main! = |_| processNested([])
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir
-	(d_let
-		(def_pattern
-			(p_assign (4:1-4:14)
-				(pid 80)
-				(ident "processNested")))
-		(def_expr
-			(e_lambda (4:17-4:38)
-				(args
-					(p_assign (4:18-4:23)
-						(pid 81)
-						(ident "_list")))
-				(e_list (4:25-4:38)
-					(elem_var 86)
-					(elems
-						(e_string (4:26-4:31) (e_literal (4:27-4:30) "one"))
-						(e_string (4:32-4:37) (e_literal (4:33-4:36) "two"))))))
-		(annotation (4:1-4:14)
-			(signature 92)
-			(declared_type
-				(fn (3:17-3:52)
-					(apply (3:17-3:39)
-						"List"
-						(apply (3:22-3:38)
-							"Result"
-							(ty (3:29-3:32) "Str")
-							(ty (3:34-3:37) "Err")))
-					(apply (3:43-3:52)
-						"List"
-						(ty (3:48-3:51) "Str"))
-					"false"))))
-	(d_let
-		(def_pattern
-			(p_assign (6:1-6:6)
-				(pid 95)
-				(ident "main!")))
-		(def_expr
-			(e_lambda (6:9-6:30)
-				(args (p_underscore (6:10-6:11) (pid 96)))
-				(e_call (6:13-6:30)
-					(e_lookup_local (6:13-6:26) (pid 80))
-					(e_list (6:27-6:29) (elem_var 98) (elems)))))))
+(can-ir
+	(d-let (id 94)
+		(p-assign @4-1-4-14 (ident "processNested") (id 80))
+		(e-lambda @4-17-4-38 (id 88)
+			(args
+				(p-assign @4-18-4-23 (ident "_list") (id 81)))
+			(e-list @4-25-4-38 (elem-var 86)
+				(elems
+					(e-string @4-26-4-31
+						(e-literal @4-27-4-30 (string "one")))
+					(e-string @4-32-4-37
+						(e-literal @4-33-4-36 (string "two"))))))
+		(annotation @4-1-4-14 (signature 92) (id 93)
+			(declared-type
+				(ty-fn @3-17-3-52 (effectful false)
+					(ty-apply @3-17-3-39 (symbol "List")
+						(ty-apply @3-22-3-38 (symbol "Result")
+							(ty @3-29-3-32 (name "Str"))
+							(ty @3-34-3-37 (name "Err"))))
+					(ty-apply @3-43-3-52 (symbol "List")
+						(ty @3-48-3-51 (name "Str")))))))
+	(d-let (id 102)
+		(p-assign @6-1-6-6 (ident "main!") (id 95))
+		(e-lambda @6-9-6-30 (id 101)
+			(args
+				(p-underscore @6-10-6-11 (id 96)))
+			(e-call @6-13-6-30
+				(e-lookup-local @6-13-6-26
+					(pattern (id 80)))
+				(e-list @6-27-6-29 (elem-var 98)
+					(elems))))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types
+(inferred-types
 	(defs
-		(def "processNested" 94 (type "*"))
-		(def "main!" 102 (type "*")))
+		(def (name "processNested") (type "*"))
+		(def (name "main!") (type "*")))
 	(expressions
-		(expr (4:17-4:38) 88 (type "*"))
-		(expr (6:9-6:30) 101 (type "*"))))
+		(expr @4-17-4-38 (type "*"))
+		(expr @6-9-6-30 (type "*"))))
 ~~~

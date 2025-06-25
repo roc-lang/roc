@@ -72,42 +72,44 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-19:2)
-	(app (1:1-1:53)
-		(provides (1:6-1:12) (exposed_item (lower_ident "main!")))
-		(record_field (1:15-1:53)
-			"pf"
-			(string (1:28-1:51) (string_part (1:29-1:50) "../basic-cli/main.roc")))
-		(packages (1:13-1:53)
-			(record_field (1:15-1:53)
-				"pf"
-				(string (1:28-1:51) (string_part (1:29-1:50) "../basic-cli/main.roc")))))
+(file @1-1-19-2
+	(app @1-1-1-53
+		(provides @1-6-1-12
+			(exposed-lower-ident (text "main!")))
+		(record-field @1-15-1-53 (name "pf")
+			(e-string @1-28-1-51
+				(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))
+		(packages @1-13-1-53
+			(record-field @1-15-1-53 (name "pf")
+				(e-string @1-28-1-51
+					(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(decl (3:1-19:2)
-			(ident (3:1-3:6) "main!")
-			(lambda (3:9-19:2)
-				(args (underscore))
-				(block (3:13-19:2)
+		(s-decl @3-1-19-2
+			(p-ident @3-1-3-6 (raw "main!"))
+			(e-lambda @3-9-19-2
+				(args
+					(p-underscore))
+				(e-block @3-13-19-2
 					(statements
-						(decl (5:5-5:20)
-							(ident (5:5-5:15) "unused_var")
-							(int (5:18-5:20) "42"))
-						(decl (8:5-8:19)
-							(ident (8:5-8:13) "used_var")
-							(int (8:16-8:19) "100"))
-						(decl (11:5-11:29)
-							(ident (11:5-11:19) "another_unused")
-							(string (11:22-11:29) (string_part (11:23-11:28) "hello")))
-						(decl (14:5-14:19)
-							(ident (14:5-14:13) "_ignored")
-							(int (14:16-14:19) "999"))
-						(decl (17:5-18:11)
-							(ident (17:5-17:11) "result")
-							(binop (17:14-18:11)
-								"+"
-								(ident (17:14-17:22) "" "used_var")
-								(int (17:25-17:27) "10")))
-						(ident (18:5-18:11) "" "result")))))))
+						(s-decl @5-5-5-20
+							(p-ident @5-5-5-15 (raw "unused_var"))
+							(e-int @5-18-5-20 (raw "42")))
+						(s-decl @8-5-8-19
+							(p-ident @8-5-8-13 (raw "used_var"))
+							(e-int @8-16-8-19 (raw "100")))
+						(s-decl @11-5-11-29
+							(p-ident @11-5-11-19 (raw "another_unused"))
+							(e-string @11-22-11-29
+								(e-string-part @11-23-11-28 (raw "hello"))))
+						(s-decl @14-5-14-19
+							(p-ident @14-5-14-13 (raw "_ignored"))
+							(e-int @14-16-14-19 (raw "999")))
+						(s-decl @17-5-18-11
+							(p-ident @17-5-17-11 (raw "result"))
+							(e-binop @17-14-18-11 (op "+")
+								(e-ident @17-14-17-22 (qaul "") (raw "used_var"))
+								(e-int @17-25-17-27 (raw "10"))))
+						(e-ident @18-5-18-11 (qaul "") (raw "result"))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -133,71 +135,40 @@ main! = |_| {
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir
-	(d_let
-		(def_pattern
-			(p_assign (3:1-3:6)
-				(pid 72)
-				(ident "main!")))
-		(def_expr
-			(e_lambda (3:9-19:2)
-				(args (p_underscore (3:10-3:11) (pid 73)))
-				(e_block (3:13-19:2)
-					(s_let (5:5-5:20)
-						(p_assign (5:5-5:15)
-							(pid 74)
-							(ident "unused_var"))
-						(e_int (5:18-5:20)
-							(int_var 76)
-							(precision_var 75)
-							(literal "42")
-							(value "TODO")
-							(bound "u8")))
-					(s_let (8:5-8:19)
-						(p_assign (8:5-8:13)
-							(pid 79)
-							(ident "used_var"))
-						(e_int (8:16-8:19)
-							(int_var 81)
-							(precision_var 80)
-							(literal "100")
-							(value "TODO")
-							(bound "u8")))
-					(s_let (11:5-11:29)
-						(p_assign (11:5-11:19)
-							(pid 84)
-							(ident "another_unused"))
-						(e_string (11:22-11:29) (e_literal (11:23-11:28) "hello")))
-					(s_let (14:5-14:19)
-						(p_assign (14:5-14:13)
-							(pid 88)
-							(ident "_ignored"))
-						(e_int (14:16-14:19)
-							(int_var 90)
-							(precision_var 89)
-							(literal "999")
-							(value "TODO")
-							(bound "u8")))
-					(s_let (17:5-18:11)
-						(p_assign (17:5-17:11)
-							(pid 93)
-							(ident "result"))
-						(e_binop (17:14-18:11)
-							"add"
-							(e_lookup_local (17:14-17:22) (pid 79))
-							(e_int (17:25-17:27)
-								(int_var 96)
-								(precision_var 95)
-								(literal "10")
-								(value "TODO")
-								(bound "u8"))))
-					(e_lookup_local (18:5-18:11) (pid 93)))))))
+(can-ir
+	(d-let (id 105)
+		(p-assign @3-1-3-6 (ident "main!") (id 72))
+		(e-lambda @3-9-19-2 (id 104)
+			(args
+				(p-underscore @3-10-3-11 (id 73)))
+			(e-block @3-13-19-2
+				(s-let @5-5-5-20
+					(p-assign @5-5-5-15 (ident "unused_var") (id 74))
+					(e-int @5-18-5-20 (num-var 77) (sign-needed "false") (bits-needed "7") (value "42") (id 77)))
+				(s-let @8-5-8-19
+					(p-assign @8-5-8-13 (ident "used_var") (id 79))
+					(e-int @8-16-8-19 (num-var 82) (sign-needed "false") (bits-needed "7") (value "100") (id 82)))
+				(s-let @11-5-11-29
+					(p-assign @11-5-11-19 (ident "another_unused") (id 84))
+					(e-string @11-22-11-29 (id 86)
+						(e-literal @11-23-11-28 (string "hello"))))
+				(s-let @14-5-14-19
+					(p-assign @14-5-14-13 (ident "_ignored") (id 88))
+					(e-int @14-16-14-19 (num-var 91) (sign-needed "false") (bits-needed "9_to_15") (value "999") (id 91)))
+				(s-let @17-5-18-11
+					(p-assign @17-5-17-11 (ident "result") (id 93))
+					(e-binop @17-14-18-11 (op "add") (id 98)
+						(e-lookup-local @17-14-17-22
+							(pattern (id 79)))
+						(e-int @17-25-17-27 (num-var 97) (sign-needed "false") (bits-needed "7") (value "10"))))
+				(e-lookup-local @18-5-18-11
+					(pattern (id 93)))))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types
+(inferred-types
 	(defs
-		(def "main!" 105 (type "*")))
+		(def (name "main!") (type "*")))
 	(expressions
-		(expr (3:9-19:2) 104 (type "*"))))
+		(expr @3-9-19-2 (type "*"))))
 ~~~

@@ -230,7 +230,12 @@ pub const Tag = enum {
     /// Example: EXAMPLE
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
-    number_patt,
+    int_patt,
+    /// DESCRIPTION
+    /// Example: EXAMPLE
+    /// * lhs - LHS DESCRIPTION
+    /// * rhs - RHS DESCRIPTION
+    frac_patt,
     /// DESCRIPTION
     /// Example: EXAMPLE
     /// * lhs - LHS DESCRIPTION
@@ -289,7 +294,7 @@ pub const Tag = enum {
     /// Example: EXAMPLE
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
-    float,
+    frac,
     /// DESCRIPTION
     /// Example: EXAMPLE
     /// * lhs - LHS DESCRIPTION

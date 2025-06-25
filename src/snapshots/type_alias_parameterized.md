@@ -29,55 +29,55 @@ LowerIdent(8:1-8:6),OpAssign(8:7-8:8),OpBar(8:9-8:10),Underscore(8:10-8:11),OpBa
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-8:27)
-	(app (1:1-1:53)
-		(provides (1:6-1:12) (exposed_item (lower_ident "main!")))
-		(record_field (1:15-1:53)
-			"pf"
-			(string (1:28-1:51) (string_part (1:29-1:50) "../basic-cli/main.roc")))
-		(packages (1:13-1:53)
-			(record_field (1:15-1:53)
-				"pf"
-				(string (1:28-1:51) (string_part (1:29-1:50) "../basic-cli/main.roc")))))
+(file @1-1-8-27
+	(app @1-1-1-53
+		(provides @1-6-1-12
+			(exposed-lower-ident (text "main!")))
+		(record-field @1-15-1-53 (name "pf")
+			(e-string @1-28-1-51
+				(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))
+		(packages @1-13-1-53
+			(record-field @1-15-1-53 (name "pf")
+				(e-string @1-28-1-51
+					(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(type_decl (3:1-5:9)
-			(header (3:1-3:11)
-				"Pair"
+		(s-type-decl @3-1-5-9
+			(header @3-1-3-11 (name "Pair")
 				(args
-					(ty_var (3:6-3:7) "a")
-					(ty_var (3:9-3:10) "b")))
-			(tuple (3:14-3:20)
-				(ty_var (3:15-3:16) "a")
-				(ty_var (3:18-3:19) "b")))
-		(type_anno (5:1-6:9)
-			"swapPair"
-			(fn (5:12-5:36)
-				(apply (5:12-5:22)
-					(ty "Pair")
-					(ty_var (5:17-5:18) "a")
-					(ty_var (5:20-5:21) "b"))
-				(apply (5:26-5:36)
-					(ty "Pair")
-					(ty_var (5:31-5:32) "b")
-					(ty_var (5:34-5:35) "a"))))
-		(decl (6:1-6:27)
-			(ident (6:1-6:9) "swapPair")
-			(lambda (6:12-6:27)
+					(ty-var @3-6-3-7 (raw "a"))
+					(ty-var @3-9-3-10 (raw "b"))))
+			(ty-tuple @3-14-3-20
+				(ty-var @3-15-3-16 (raw "a"))
+				(ty-var @3-18-3-19 (raw "b"))))
+		(s-type-anno @5-1-6-9 (name "swapPair")
+			(ty-fn @5-12-5-36
+				(ty-apply @5-12-5-22
+					(ty (name "Pair"))
+					(ty-var @5-17-5-18 (raw "a"))
+					(ty-var @5-20-5-21 (raw "b")))
+				(ty-apply @5-26-5-36
+					(ty (name "Pair"))
+					(ty-var @5-31-5-32 (raw "b"))
+					(ty-var @5-34-5-35 (raw "a")))))
+		(s-decl @6-1-6-27
+			(p-ident @6-1-6-9 (raw "swapPair"))
+			(e-lambda @6-12-6-27
 				(args
-					(tuple (6:13-6:19)
-						(ident (6:14-6:15) "x")
-						(ident (6:17-6:18) "y")))
-				(tuple (6:21-6:27)
-					(ident (6:22-6:23) "" "y")
-					(ident (6:25-6:26) "" "x"))))
-		(decl (8:1-8:27)
-			(ident (8:1-8:6) "main!")
-			(lambda (8:9-8:27)
-				(args (underscore))
-				(apply (8:13-8:27)
-					(ident (8:13-8:21) "" "swapPair")
-					(int (8:22-8:23) "1")
-					(int (8:25-8:26) "2"))))))
+					(p-tuple @6-13-6-19
+						(p-ident @6-14-6-15 (raw "x"))
+						(p-ident @6-17-6-18 (raw "y"))))
+				(e-tuple @6-21-6-27
+					(e-ident @6-22-6-23 (qaul "") (raw "y"))
+					(e-ident @6-25-6-26 (qaul "") (raw "x")))))
+		(s-decl @8-1-8-27
+			(p-ident @8-1-8-6 (raw "main!"))
+			(e-lambda @8-9-8-27
+				(args
+					(p-underscore))
+				(e-apply @8-13-8-27
+					(e-ident @8-13-8-21 (qaul "") (raw "swapPair"))
+					(e-int @8-22-8-23 (raw "1"))
+					(e-int @8-25-8-26 (raw "2")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -85,82 +85,56 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir
-	(d_let
-		(def_pattern
-			(p_assign (6:1-6:9)
-				(pid 90)
-				(ident "swapPair")))
-		(def_expr
-			(e_lambda (6:12-6:27)
-				(args
-					(p_tuple (6:13-6:19)
-						(pid 94)
-						(tuple_var "#93")
-						(patterns
-							(p_assign (6:14-6:15)
-								(pid 91)
-								(ident "x"))
-							(p_assign (6:17-6:18)
-								(pid 92)
-								(ident "y")))))
-				(e_tuple (6:21-6:27)
-					(tuple_var "#97")
-					(elems
-						(e_lookup_local (6:22-6:23) (pid 92))
-						(e_lookup_local (6:25-6:26) (pid 91))))))
-		(annotation (6:1-6:9)
-			(signature 103)
-			(declared_type
-				(fn (5:12-5:36)
-					(apply (5:12-5:22)
-						"Pair"
-						(ty_var (5:17-5:18) "a")
-						(ty_var (5:20-5:21) "b"))
-					(apply (5:26-5:36)
-						"Pair"
-						(ty_var (5:31-5:32) "b")
-						(ty_var (5:34-5:35) "a"))
-					"false"))))
-	(d_let
-		(def_pattern
-			(p_assign (8:1-8:6)
-				(pid 106)
-				(ident "main!")))
-		(def_expr
-			(e_lambda (8:9-8:27)
-				(args (p_underscore (8:10-8:11) (pid 107)))
-				(e_call (8:13-8:27)
-					(e_lookup_local (8:13-8:21) (pid 90))
-					(e_int (8:22-8:23)
-						(int_var 110)
-						(precision_var 109)
-						(literal "1")
-						(value "TODO")
-						(bound "u8"))
-					(e_int (8:25-8:26)
-						(int_var 113)
-						(precision_var 112)
-						(literal "2")
-						(value "TODO")
-						(bound "u8"))))))
-	(s_type_decl (3:1-5:9)
-		(type_header (3:1-3:11)
-			"Pair"
+(can-ir
+	(d-let (id 105)
+		(p-assign @6-1-6-9 (ident "swapPair") (id 90))
+		(e-lambda @6-12-6-27 (id 99)
 			(args
-				(ty_var (3:6-3:7) "a")
-				(ty_var (3:9-3:10) "b")))
-		(tuple (3:14-3:20)
-			(ty_var (3:15-3:16) "a")
-			(ty_var (3:18-3:19) "b"))))
+				(p-tuple @6-13-6-19 (tuple-var 93) (id 94)
+					(patterns
+						(p-assign @6-14-6-15 (ident "x") (id 91))
+						(p-assign @6-17-6-18 (ident "y") (id 92)))))
+			(e-tuple @6-21-6-27 (tuple-var 97)
+				(elems
+					(e-lookup-local @6-22-6-23
+						(pattern (id 92)))
+					(e-lookup-local @6-25-6-26
+						(pattern (id 91))))))
+		(annotation @6-1-6-9 (signature 103) (id 104)
+			(declared-type
+				(ty-fn @5-12-5-36 (effectful false)
+					(ty-apply @5-12-5-22 (symbol "Pair")
+						(ty-var @5-17-5-18 (name "a"))
+						(ty-var @5-20-5-21 (name "b")))
+					(ty-apply @5-26-5-36 (symbol "Pair")
+						(ty-var @5-31-5-32 (name "b"))
+						(ty-var @5-34-5-35 (name "a")))))))
+	(d-let (id 117)
+		(p-assign @8-1-8-6 (ident "main!") (id 106))
+		(e-lambda @8-9-8-27 (id 116)
+			(args
+				(p-underscore @8-10-8-11 (id 107)))
+			(e-call @8-13-8-27
+				(e-lookup-local @8-13-8-21
+					(pattern (id 90)))
+				(e-int @8-22-8-23 (num-var 111) (sign-needed "false") (bits-needed "7") (value "1"))
+				(e-int @8-25-8-26 (num-var 114) (sign-needed "false") (bits-needed "7") (value "2")))))
+	(s-type-decl @3-1-5-9 (id 78)
+		(ty-header @3-1-3-11 (name "Pair")
+			(ty-args
+				(ty-var @3-6-3-7 (name "a"))
+				(ty-var @3-9-3-10 (name "b"))))
+		(ty-tuple @3-14-3-20
+			(ty-var @3-15-3-16 (name "a"))
+			(ty-var @3-18-3-19 (name "b")))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types
+(inferred-types
 	(defs
-		(def "swapPair" 105 (type "*"))
-		(def "main!" 117 (type "*")))
+		(def (name "swapPair") (type "*"))
+		(def (name "main!") (type "*")))
 	(expressions
-		(expr (6:12-6:27) 99 (type "*"))
-		(expr (8:9-8:27) 116 (type "*"))))
+		(expr @6-12-6-27 (type "*"))
+		(expr @8-9-8-27 (type "*"))))
 ~~~

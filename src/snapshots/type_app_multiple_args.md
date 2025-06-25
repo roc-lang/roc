@@ -28,47 +28,49 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-6:55)
-	(app (1:1-1:53)
-		(provides (1:6-1:12) (exposed_item (lower_ident "main!")))
-		(record_field (1:15-1:53)
-			"pf"
-			(string (1:28-1:51) (string_part (1:29-1:50) "../basic-cli/main.roc")))
-		(packages (1:13-1:53)
-			(record_field (1:15-1:53)
-				"pf"
-				(string (1:28-1:51) (string_part (1:29-1:50) "../basic-cli/main.roc")))))
+(file @1-1-6-55
+	(app @1-1-1-53
+		(provides @1-6-1-12
+			(exposed-lower-ident (text "main!")))
+		(record-field @1-15-1-53 (name "pf")
+			(e-string @1-28-1-51
+				(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))
+		(packages @1-13-1-53
+			(record-field @1-15-1-53 (name "pf")
+				(e-string @1-28-1-51
+					(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(type_anno (3:1-4:12)
-			"processDict"
-			(fn (3:15-3:42)
-				(apply (3:15-3:29)
-					(ty "Dict")
-					(ty "Str")
-					(ty "U64"))
-				(apply (3:33-3:42)
-					(ty "List")
-					(ty "Str"))))
-		(decl (4:1-4:25)
-			(ident (4:1-4:12) "processDict")
-			(lambda (4:15-4:25)
-				(args (ident (4:16-4:21) "_dict"))
-				(list (4:23-4:25))))
-		(decl (6:1-6:55)
-			(ident (6:1-6:6) "main!")
-			(lambda (6:9-6:55)
-				(args (underscore))
-				(apply (6:13-6:55)
-					(ident (6:13-6:24) "" "processDict")
-					(field_access (6:25-6:55)
-						(binop (6:25-6:55)
-							"app"
-							(apply (6:25-6:37)
-								(ident (6:25-6:35) "Dict" ".empty"))
-							(apply (6:37-6:54)
-								(ident (6:37-6:44) "" ".insert")
-								(string (6:45-6:50) (string_part (6:46-6:49) "one"))
-								(int (6:52-6:53) "1")))))))))
+		(s-type-anno @3-1-4-12 (name "processDict")
+			(ty-fn @3-15-3-42
+				(ty-apply @3-15-3-29
+					(ty (name "Dict"))
+					(ty (name "Str"))
+					(ty (name "U64")))
+				(ty-apply @3-33-3-42
+					(ty (name "List"))
+					(ty (name "Str")))))
+		(s-decl @4-1-4-25
+			(p-ident @4-1-4-12 (raw "processDict"))
+			(e-lambda @4-15-4-25
+				(args
+					(p-ident @4-16-4-21 (raw "_dict")))
+				(e-list @4-23-4-25)))
+		(s-decl @6-1-6-55
+			(p-ident @6-1-6-6 (raw "main!"))
+			(e-lambda @6-9-6-55
+				(args
+					(p-underscore))
+				(e-apply @6-13-6-55
+					(e-ident @6-13-6-24 (qaul "") (raw "processDict"))
+					(e-field-access @6-25-6-55
+						(e-binop @6-25-6-55 (op "app")
+							(e-apply @6-25-6-37
+								(e-ident @6-25-6-35 (qaul "Dict") (raw ".empty")))
+							(e-apply @6-37-6-54
+								(e-ident @6-37-6-44 (qaul "") (raw ".insert"))
+								(e-string @6-45-6-50
+									(e-string-part @6-46-6-49 (raw "one")))
+								(e-int @6-52-6-53 (raw "1"))))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -76,59 +78,46 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir
-	(d_let
-		(def_pattern
-			(p_assign (4:1-4:12)
-				(pid 78)
-				(ident "processDict")))
-		(def_expr
-			(e_lambda (4:15-4:25)
-				(args
-					(p_assign (4:16-4:21)
-						(pid 79)
-						(ident "_dict")))
-				(e_list (4:23-4:25) (elem_var 80) (elems))))
-		(annotation (4:1-4:12)
-			(signature 86)
-			(declared_type
-				(fn (3:15-3:42)
-					(apply (3:15-3:29)
-						"Dict"
-						(ty (3:20-3:23) "Str")
-						(ty (3:25-3:28) "U64"))
-					(apply (3:33-3:42)
-						"List"
-						(ty (3:38-3:41) "Str"))
-					"false"))))
-	(d_let
-		(def_pattern
-			(p_assign (6:1-6:6)
-				(pid 89)
-				(ident "main!")))
-		(def_expr
-			(e_lambda (6:9-6:55)
-				(args (p_underscore (6:10-6:11) (pid 90)))
-				(e_call (6:13-6:55)
-					(e_lookup_local (6:13-6:24) (pid 78))
-					(e_dot_access (6:25-6:55)
-						(e_call (6:25-6:37) (e_runtime_error (6:25-6:35) "ident_not_in_scope"))
-						"insert"
-						(e_string (6:45-6:50) (e_literal (6:46-6:49) "one"))
-						(e_int (6:52-6:53)
-							(int_var 98)
-							(precision_var 97)
-							(literal "1")
-							(value "TODO")
-							(bound "u8"))))))))
+(can-ir
+	(d-let (id 88)
+		(p-assign @4-1-4-12 (ident "processDict") (id 78))
+		(e-lambda @4-15-4-25 (id 82)
+			(args
+				(p-assign @4-16-4-21 (ident "_dict") (id 79)))
+			(e-list @4-23-4-25 (elem-var 80)
+				(elems)))
+		(annotation @4-1-4-12 (signature 86) (id 87)
+			(declared-type
+				(ty-fn @3-15-3-42 (effectful false)
+					(ty-apply @3-15-3-29 (symbol "Dict")
+						(ty @3-20-3-23 (name "Str"))
+						(ty @3-25-3-28 (name "U64")))
+					(ty-apply @3-33-3-42 (symbol "List")
+						(ty @3-38-3-41 (name "Str")))))))
+	(d-let (id 103)
+		(p-assign @6-1-6-6 (ident "main!") (id 89))
+		(e-lambda @6-9-6-55 (id 102)
+			(args
+				(p-underscore @6-10-6-11 (id 90)))
+			(e-call @6-13-6-55
+				(e-lookup-local @6-13-6-24
+					(pattern (id 78)))
+				(e-dot-access @6-25-6-55 (field "insert")
+					(receiver
+						(e-call @6-25-6-37
+							(e-runtime-error (tag "ident_not_in_scope"))))
+					(args
+						(e-string @6-45-6-50
+							(e-literal @6-46-6-49 (string "one")))
+						(e-int @6-52-6-53 (num-var 99) (sign-needed "false") (bits-needed "7") (value "1"))))))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types
+(inferred-types
 	(defs
-		(def "processDict" 88 (type "*"))
-		(def "main!" 103 (type "*")))
+		(def (name "processDict") (type "*"))
+		(def (name "main!") (type "*")))
 	(expressions
-		(expr (4:15-4:25) 82 (type "*"))
-		(expr (6:9-6:55) 102 (type "*"))))
+		(expr @4-15-4-25 (type "*"))
+		(expr @6-9-6-55 (type "*"))))
 ~~~

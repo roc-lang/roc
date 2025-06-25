@@ -12,8 +12,9 @@ if bool {
 }
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize if_then_else expression
+**UNDEFINED VARIABLE**
+Nothing is named `bool` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
@@ -25,12 +26,14 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 ~~~
 # PARSE
 ~~~clojure
-(if_then_else (1:1-5:2)
-	(ident (1:4-1:8) "" "bool")
-	(block (1:9-3:2)
-		(statements (int (2:2-2:3) "1")))
-	(block (3:8-5:2)
-		(statements (int (4:2-4:3) "2"))))
+(e-if-then-else @1-1-5-2
+	(e-ident @1-4-1-8 (qaul "") (raw "bool"))
+	(e-block @1-9-3-2
+		(statements
+			(e-int @2-2-2-3 (raw "1"))))
+	(e-block @3-8-5-2
+		(statements
+			(e-int @4-2-4-3 (raw "2")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -38,9 +41,17 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e_runtime_error (1:1-1:1) "not_implemented")
+(e-if @1-1-5-2 (cond-var 0) (branch-var 0) (id 85)
+	(if-branches
+		(if-branch
+			(e-runtime-error (tag "ident_not_in_scope"))
+			(e-block @1-9-3-2
+				(e-int @2-2-2-3 (num-var 76) (sign-needed "false") (bits-needed "7") (value "1")))))
+	(if-else
+		(e-block @3-8-5-2
+			(e-int @4-2-4-3 (num-var 81) (sign-needed "false") (bits-needed "7") (value "2")))))
 ~~~
 # TYPES
 ~~~clojure
-(expr 73 (type "Error"))
+(expr (id 85) (type "*"))
 ~~~

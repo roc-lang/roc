@@ -109,21 +109,6 @@ pub fn unify(
     a: Var,
     b: Var,
 ) Result {
-    return unifyWithRegion(module_env, types, problems, snapshots, unify_scratch, occurs_scratch, a, b, null);
-}
-
-/// Unify two type variables with a region
-pub fn unifyWithRegion(
-    module_env: *const base.ModuleEnv,
-    types: *types_root_mod.Store,
-    problems: *problem_mod.Store,
-    snapshots: *snapshot_mod.Store,
-    unify_scratch: *Scratch,
-    occurs_scratch: *occurs.Scratch,
-    a: Var,
-    b: Var,
-    region: ?base.Region,
-) Result {
     // First reset the scratch store
     unify_scratch.reset();
 
@@ -140,7 +125,6 @@ pub fn unifyWithRegion(
                         .expected = expected_snapshot,
                         .actual_var = b,
                         .actual = actual_snapshot,
-                        .region = region orelse base.Region.zero(),
                     } };
                 },
                 error.UnifyErr => {
@@ -200,7 +184,6 @@ pub fn unifyWithRegion(
                             .expected = snapshots.createSnapshot(types, a),
                             .actual_var = b,
                             .actual = snapshots.createSnapshot(types, b),
-                            .region = region orelse base.Region.zero(),
                         } };
                     }
                 },

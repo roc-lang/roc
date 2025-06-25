@@ -31,10 +31,10 @@ CloseSquare(9:1-9:2),EndOfFile(9:2-9:2),
 ~~~
 # PARSE
 ~~~clojure
-(list (1:1-9:2)
-	(int (2:2-2:3) "1")
-	(int (6:2-6:3) "2")
-	(int (8:2-8:3) "3"))
+(e-list @1-1-9-2
+	(e-int @2-2-2-3 (raw "1"))
+	(e-int @6-2-6-3 (raw "2"))
+	(e-int @8-2-8-3 (raw "3")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -42,29 +42,13 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e_list (1:1-9:2)
-	(elem_var 81)
+(e-list @1-1-9-2 (elem-var 81) (id 82)
 	(elems
-		(e_int (2:2-2:3)
-			(int_var 73)
-			(precision_var 72)
-			(literal "1")
-			(value "TODO")
-			(bound "u8"))
-		(e_int (6:2-6:3)
-			(int_var 76)
-			(precision_var 75)
-			(literal "2")
-			(value "TODO")
-			(bound "u8"))
-		(e_int (8:2-8:3)
-			(int_var 79)
-			(precision_var 78)
-			(literal "3")
-			(value "TODO")
-			(bound "u8"))))
+		(e-int @2-2-2-3 (num-var 74) (sign-needed "false") (bits-needed "7") (value "1"))
+		(e-int @6-2-6-3 (num-var 77) (sign-needed "false") (bits-needed "7") (value "2"))
+		(e-int @8-2-8-3 (num-var 80) (sign-needed "false") (bits-needed "7") (value "3"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr 82 (type "List(Num(Int(*)))"))
+(expr (id 82) (type "List(Num(Int(*)))"))
 ~~~

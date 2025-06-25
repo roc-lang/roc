@@ -22,16 +22,16 @@ LowerIdent(3:1-3:5),OpAssign(3:6-3:7),LowerIdent(3:8-3:9),OpPlus(3:10-3:11),Int(
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-3:18)
-	(module (1:1-1:14)
-		(exposes (1:8-1:14) (exposed_item (lower_ident "add2"))))
+(file @1-1-3-18
+	(module @1-1-1-14
+		(exposes @1-8-1-14
+			(exposed-lower-ident (text "add2"))))
 	(statements
-		(decl (3:1-3:18)
-			(ident (3:1-3:5) "add2")
-			(binop (3:8-3:18)
-				"+"
-				(ident (3:8-3:9) "" "x")
-				(int (3:17-3:18) "2")))))
+		(s-decl @3-1-3-18
+			(p-ident @3-1-3-5 (raw "add2"))
+			(e-binop @3-8-3-18 (op "+")
+				(e-ident @3-8-3-9 (qaul "") (raw "x"))
+				(e-int @3-17-3-18 (raw "2"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -41,28 +41,18 @@ add2 = x + 2
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir
-	(d_let
-		(def_pattern
-			(p_assign (3:1-3:5)
-				(pid 72)
-				(ident "add2")))
-		(def_expr
-			(e_binop (3:8-3:18)
-				"add"
-				(e_runtime_error (3:8-3:9) "ident_not_in_scope")
-				(e_int (3:17-3:18)
-					(int_var 76)
-					(precision_var 75)
-					(literal "2")
-					(value "TODO")
-					(bound "u8"))))))
+(can-ir
+	(d-let (id 79)
+		(p-assign @3-1-3-5 (ident "add2") (id 72))
+		(e-binop @3-8-3-18 (op "add") (id 78)
+			(e-runtime-error (tag "ident_not_in_scope"))
+			(e-int @3-17-3-18 (num-var 77) (sign-needed "false") (bits-needed "7") (value "2")))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types
+(inferred-types
 	(defs
-		(def "add2" 79 (type "*")))
+		(def (name "add2") (type "*")))
 	(expressions
-		(expr (3:8-3:18) 78 (type "*"))))
+		(expr @3-8-3-18 (type "*"))))
 ~~~

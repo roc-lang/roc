@@ -21,26 +21,26 @@ LowerIdent(4:1-4:2),OpAssign(4:3-4:4),LowerIdent(4:5-4:6),OpPlus(4:7-4:8),Int(4:
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-4:10)
-	(app (1:1-1:57)
-		(provides (1:6-1:12) (exposed_item (lower_ident "main!")))
-		(record_field (1:15-1:57)
-			"pf"
-			(string (1:28-1:55) (string_part (1:29-1:54) "../basic-cli/platform.roc")))
-		(packages (1:13-1:57)
-			(record_field (1:15-1:57)
-				"pf"
-				(string (1:28-1:55) (string_part (1:29-1:54) "../basic-cli/platform.roc")))))
+(file @1-1-4-10
+	(app @1-1-1-57
+		(provides @1-6-1-12
+			(exposed-lower-ident (text "main!")))
+		(record-field @1-15-1-57 (name "pf")
+			(e-string @1-28-1-55
+				(e-string-part @1-29-1-54 (raw "../basic-cli/platform.roc"))))
+		(packages @1-13-1-57
+			(record-field @1-15-1-57 (name "pf")
+				(e-string @1-28-1-55
+					(e-string-part @1-29-1-54 (raw "../basic-cli/platform.roc"))))))
 	(statements
-		(decl (3:1-3:6)
-			(ident (3:1-3:2) "a")
-			(int (3:5-3:6) "5"))
-		(decl (4:1-4:10)
-			(ident (4:1-4:2) "b")
-			(binop (4:5-4:10)
-				"+"
-				(ident (4:5-4:6) "" "a")
-				(int (4:9-4:10) "1")))))
+		(s-decl @3-1-3-6
+			(p-ident @3-1-3-2 (raw "a"))
+			(e-int @3-5-3-6 (raw "5")))
+		(s-decl @4-1-4-10
+			(p-ident @4-1-4-2 (raw "b"))
+			(e-binop @4-5-4-10 (op "+")
+				(e-ident @4-5-4-6 (qaul "") (raw "a"))
+				(e-int @4-9-4-10 (raw "1"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -48,42 +48,24 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir
-	(d_let
-		(def_pattern
-			(p_assign (3:1-3:2)
-				(pid 72)
-				(ident "a")))
-		(def_expr
-			(e_int (3:5-3:6)
-				(int_var 74)
-				(precision_var 73)
-				(literal "5")
-				(value "TODO")
-				(bound "u8"))))
-	(d_let
-		(def_pattern
-			(p_assign (4:1-4:2)
-				(pid 77)
-				(ident "b")))
-		(def_expr
-			(e_binop (4:5-4:10)
-				"add"
-				(e_lookup_local (4:5-4:6) (pid 72))
-				(e_int (4:9-4:10)
-					(int_var 80)
-					(precision_var 79)
-					(literal "1")
-					(value "TODO")
-					(bound "u8"))))))
+(can-ir
+	(d-let (id 76)
+		(p-assign @3-1-3-2 (ident "a") (id 72))
+		(e-int @3-5-3-6 (num-var 75) (sign-needed "false") (bits-needed "7") (value "5") (id 75)))
+	(d-let (id 83)
+		(p-assign @4-1-4-2 (ident "b") (id 77))
+		(e-binop @4-5-4-10 (op "add") (id 82)
+			(e-lookup-local @4-5-4-6
+				(pattern (id 72)))
+			(e-int @4-9-4-10 (num-var 81) (sign-needed "false") (bits-needed "7") (value "1")))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types
+(inferred-types
 	(defs
-		(def "a" 76 (type "Num(Int(*))"))
-		(def "b" 83 (type "*")))
+		(def (name "a") (type "Num(Int(*))"))
+		(def (name "b") (type "*")))
 	(expressions
-		(expr (3:5-3:6) 75 (type "Num(Int(*))"))
-		(expr (4:5-4:10) 82 (type "*"))))
+		(expr @3-5-3-6 (type "Num(Int(*))"))
+		(expr @4-5-4-10 (type "*"))))
 ~~~

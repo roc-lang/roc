@@ -27,10 +27,11 @@ OpenSquare(1:1-1:2),Int(1:2-1:3),Comma(1:3-1:4),Int(1:5-1:6),Comma(1:6-1:7),Stri
 ~~~
 # PARSE
 ~~~clojure
-(list (1:1-1:16)
-	(int (1:2-1:3) "1")
-	(int (1:5-1:6) "2")
-	(string (1:8-1:15) (string_part (1:9-1:14) "hello")))
+(e-list @1-1-1-16
+	(e-int @1-2-1-3 (raw "1"))
+	(e-int @1-5-1-6 (raw "2"))
+	(e-string @1-8-1-15
+		(e-string-part @1-9-1-14 (raw "hello"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -38,24 +39,14 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e_list (1:1-1:16)
-	(elem_var 80)
+(e-list @1-1-1-16 (elem-var 80) (id 81)
 	(elems
-		(e_int (1:2-1:3)
-			(int_var 73)
-			(precision_var 72)
-			(literal "1")
-			(value "TODO")
-			(bound "u8"))
-		(e_int (1:5-1:6)
-			(int_var 76)
-			(precision_var 75)
-			(literal "2")
-			(value "TODO")
-			(bound "u8"))
-		(e_string (1:8-1:15) (e_literal (1:9-1:14) "hello"))))
+		(e-int @1-2-1-3 (num-var 74) (sign-needed "false") (bits-needed "7") (value "1"))
+		(e-int @1-5-1-6 (num-var 77) (sign-needed "false") (bits-needed "7") (value "2"))
+		(e-string @1-8-1-15
+			(e-literal @1-9-1-14 (string "hello")))))
 ~~~
 # TYPES
 ~~~clojure
-(expr 81 (type "List(Error)"))
+(expr (id 81) (type "List(Error)"))
 ~~~

@@ -76,76 +76,78 @@ CloseCurly(21:1-21:2),EndOfFile(21:2-21:2),
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-21:2)
-	(app (1:1-1:53)
-		(provides (1:6-1:12) (exposed_item (lower_ident "main!")))
-		(record_field (1:15-1:53)
-			"pf"
-			(string (1:28-1:51) (string_part (1:29-1:50) "../basic-cli/main.roc")))
-		(packages (1:13-1:53)
-			(record_field (1:15-1:53)
-				"pf"
-				(string (1:28-1:51) (string_part (1:29-1:50) "../basic-cli/main.roc")))))
+(file @1-1-21-2
+	(app @1-1-1-53
+		(provides @1-6-1-12
+			(exposed-lower-ident (text "main!")))
+		(record-field @1-15-1-53 (name "pf")
+			(e-string @1-28-1-51
+				(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))
+		(packages @1-13-1-53
+			(record-field @1-15-1-53 (name "pf")
+				(e-string @1-28-1-51
+					(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(decl (4:1-4:24)
-			(ident (4:1-4:15) "unused_regular")
-			(lambda (4:18-4:24)
-				(args (ident (4:19-4:20) "x"))
-				(int (4:22-4:24) "42")))
-		(decl (7:1-7:34)
-			(ident (7:1-7:16) "used_underscore")
-			(lambda (7:19-7:34)
-				(args (ident (7:20-7:26) "_value"))
-				(ident (7:28-7:34) "" "_value")))
-		(decl (10:1-10:35)
-			(ident (10:1-10:18) "unused_underscore")
-			(lambda (10:21-10:35)
-				(args (ident (10:22-10:30) "_ignored"))
-				(int (10:32-10:35) "100")))
-		(decl (13:1-15:6)
-			(ident (13:1-13:13) "used_regular")
-			(lambda (13:16-15:6)
-				(args (ident (13:17-13:23) "number"))
-				(binop (13:25-15:6)
-					"+"
-					(ident (13:25-13:31) "" "number")
-					(int (13:34-13:35) "1"))))
-		(decl (15:1-21:2)
-			(ident (15:1-15:6) "main!")
-			(lambda (15:9-21:2)
-				(args (underscore))
-				(block (15:13-21:2)
+		(s-decl @4-1-4-24
+			(p-ident @4-1-4-15 (raw "unused_regular"))
+			(e-lambda @4-18-4-24
+				(args
+					(p-ident @4-19-4-20 (raw "x")))
+				(e-int @4-22-4-24 (raw "42"))))
+		(s-decl @7-1-7-34
+			(p-ident @7-1-7-16 (raw "used_underscore"))
+			(e-lambda @7-19-7-34
+				(args
+					(p-ident @7-20-7-26 (raw "_value")))
+				(e-ident @7-28-7-34 (qaul "") (raw "_value"))))
+		(s-decl @10-1-10-35
+			(p-ident @10-1-10-18 (raw "unused_underscore"))
+			(e-lambda @10-21-10-35
+				(args
+					(p-ident @10-22-10-30 (raw "_ignored")))
+				(e-int @10-32-10-35 (raw "100"))))
+		(s-decl @13-1-15-6
+			(p-ident @13-1-13-13 (raw "used_regular"))
+			(e-lambda @13-16-15-6
+				(args
+					(p-ident @13-17-13-23 (raw "number")))
+				(e-binop @13-25-15-6 (op "+")
+					(e-ident @13-25-13-31 (qaul "") (raw "number"))
+					(e-int @13-34-13-35 (raw "1")))))
+		(s-decl @15-1-21-2
+			(p-ident @15-1-15-6 (raw "main!"))
+			(e-lambda @15-9-21-2
+				(args
+					(p-underscore))
+				(e-block @15-13-21-2
 					(statements
-						(decl (16:5-16:26)
-							(ident (16:5-16:6) "a")
-							(apply (16:9-16:26)
-								(ident (16:9-16:23) "" "unused_regular")
-								(int (16:24-16:25) "5")))
-						(decl (17:5-17:28)
-							(ident (17:5-17:6) "b")
-							(apply (17:9-17:28)
-								(ident (17:9-17:24) "" "used_underscore")
-								(int (17:25-17:27) "10")))
-						(decl (18:5-18:30)
-							(ident (18:5-18:6) "c")
-							(apply (18:9-18:30)
-								(ident (18:9-18:26) "" "unused_underscore")
-								(int (18:27-18:29) "15")))
-						(decl (19:5-19:25)
-							(ident (19:5-19:6) "d")
-							(apply (19:9-19:25)
-								(ident (19:9-19:21) "" "used_regular")
-								(int (19:22-19:24) "20")))
-						(binop (20:5-21:2)
-							"+"
-							(ident (20:5-20:6) "" "a")
-							(binop (20:9-21:2)
-								"+"
-								(ident (20:9-20:10) "" "b")
-								(binop (20:13-21:2)
-									"+"
-									(ident (20:13-20:14) "" "c")
-									(ident (20:17-20:18) "" "d"))))))))))
+						(s-decl @16-5-16-26
+							(p-ident @16-5-16-6 (raw "a"))
+							(e-apply @16-9-16-26
+								(e-ident @16-9-16-23 (qaul "") (raw "unused_regular"))
+								(e-int @16-24-16-25 (raw "5"))))
+						(s-decl @17-5-17-28
+							(p-ident @17-5-17-6 (raw "b"))
+							(e-apply @17-9-17-28
+								(e-ident @17-9-17-24 (qaul "") (raw "used_underscore"))
+								(e-int @17-25-17-27 (raw "10"))))
+						(s-decl @18-5-18-30
+							(p-ident @18-5-18-6 (raw "c"))
+							(e-apply @18-9-18-30
+								(e-ident @18-9-18-26 (qaul "") (raw "unused_underscore"))
+								(e-int @18-27-18-29 (raw "15"))))
+						(s-decl @19-5-19-25
+							(p-ident @19-5-19-6 (raw "d"))
+							(e-apply @19-9-19-25
+								(e-ident @19-9-19-21 (qaul "") (raw "used_regular"))
+								(e-int @19-22-19-24 (raw "20"))))
+						(e-binop @20-5-21-2 (op "+")
+							(e-ident @20-5-20-6 (qaul "") (raw "a"))
+							(e-binop @20-9-21-2 (op "+")
+								(e-ident @20-9-20-10 (qaul "") (raw "b"))
+								(e-binop @20-13-21-2 (op "+")
+									(e-ident @20-13-20-14 (qaul "") (raw "c"))
+									(e-ident @20-17-20-18 (qaul "") (raw "d")))))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -173,154 +175,90 @@ main! = |_| {
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir
-	(d_let
-		(def_pattern
-			(p_assign (4:1-4:15)
-				(pid 72)
-				(ident "unused_regular")))
-		(def_expr
-			(e_lambda (4:18-4:24)
-				(args
-					(p_assign (4:19-4:20)
-						(pid 73)
-						(ident "x")))
-				(e_int (4:22-4:24)
-					(int_var 75)
-					(precision_var 74)
-					(literal "42")
-					(value "TODO")
-					(bound "u8")))))
-	(d_let
-		(def_pattern
-			(p_assign (7:1-7:16)
-				(pid 80)
-				(ident "used_underscore")))
-		(def_expr
-			(e_lambda (7:19-7:34)
-				(args
-					(p_assign (7:20-7:26)
-						(pid 81)
-						(ident "_value")))
-				(e_lookup_local (7:28-7:34) (pid 81)))))
-	(d_let
-		(def_pattern
-			(p_assign (10:1-10:18)
-				(pid 86)
-				(ident "unused_underscore")))
-		(def_expr
-			(e_lambda (10:21-10:35)
-				(args
-					(p_assign (10:22-10:30)
-						(pid 87)
-						(ident "_ignored")))
-				(e_int (10:32-10:35)
-					(int_var 89)
-					(precision_var 88)
-					(literal "100")
-					(value "TODO")
-					(bound "u8")))))
-	(d_let
-		(def_pattern
-			(p_assign (13:1-13:13)
-				(pid 93)
-				(ident "used_regular")))
-		(def_expr
-			(e_lambda (13:16-15:6)
-				(args
-					(p_assign (13:17-13:23)
-						(pid 94)
-						(ident "number")))
-				(e_binop (13:25-15:6)
-					"add"
-					(e_lookup_local (13:25-13:31) (pid 94))
-					(e_int (13:34-13:35)
-						(int_var 97)
-						(precision_var 96)
-						(literal "1")
-						(value "TODO")
-						(bound "u8"))))))
-	(d_let
-		(def_pattern
-			(p_assign (15:1-15:6)
-				(pid 102)
-				(ident "main!")))
-		(def_expr
-			(e_lambda (15:9-21:2)
-				(args (p_underscore (15:10-15:11) (pid 103)))
-				(e_block (15:13-21:2)
-					(s_let (16:5-16:26)
-						(p_assign (16:5-16:6)
-							(pid 104)
-							(ident "a"))
-						(e_call (16:9-16:26)
-							(e_lookup_local (16:9-16:23) (pid 72))
-							(e_int (16:24-16:25)
-								(int_var 107)
-								(precision_var 106)
-								(literal "5")
-								(value "TODO")
-								(bound "u8"))))
-					(s_let (17:5-17:28)
-						(p_assign (17:5-17:6)
-							(pid 111)
-							(ident "b"))
-						(e_call (17:9-17:28)
-							(e_lookup_local (17:9-17:24) (pid 80))
-							(e_int (17:25-17:27)
-								(int_var 114)
-								(precision_var 113)
-								(literal "10")
-								(value "TODO")
-								(bound "u8"))))
-					(s_let (18:5-18:30)
-						(p_assign (18:5-18:6)
-							(pid 118)
-							(ident "c"))
-						(e_call (18:9-18:30)
-							(e_lookup_local (18:9-18:26) (pid 86))
-							(e_int (18:27-18:29)
-								(int_var 121)
-								(precision_var 120)
-								(literal "15")
-								(value "TODO")
-								(bound "u8"))))
-					(s_let (19:5-19:25)
-						(p_assign (19:5-19:6)
-							(pid 125)
-							(ident "d"))
-						(e_call (19:9-19:25)
-							(e_lookup_local (19:9-19:21) (pid 93))
-							(e_int (19:22-19:24)
-								(int_var 128)
-								(precision_var 127)
-								(literal "20")
-								(value "TODO")
-								(bound "u8"))))
-					(e_binop (20:5-21:2)
-						"add"
-						(e_lookup_local (20:5-20:6) (pid 104))
-						(e_binop (20:9-21:2)
-							"add"
-							(e_lookup_local (20:9-20:10) (pid 111))
-							(e_binop (20:13-21:2)
-								"add"
-								(e_lookup_local (20:13-20:14) (pid 118))
-								(e_lookup_local (20:17-20:18) (pid 125))))))))))
+(can-ir
+	(d-let (id 79)
+		(p-assign @4-1-4-15 (ident "unused_regular") (id 72))
+		(e-lambda @4-18-4-24 (id 77)
+			(args
+				(p-assign @4-19-4-20 (ident "x") (id 73)))
+			(e-int @4-22-4-24 (num-var 76) (sign-needed "false") (bits-needed "7") (value "42"))))
+	(d-let (id 85)
+		(p-assign @7-1-7-16 (ident "used_underscore") (id 80))
+		(e-lambda @7-19-7-34 (id 84)
+			(args
+				(p-assign @7-20-7-26 (ident "_value") (id 81)))
+			(e-lookup-local @7-28-7-34
+				(pattern (id 81)))))
+	(d-let (id 92)
+		(p-assign @10-1-10-18 (ident "unused_underscore") (id 86))
+		(e-lambda @10-21-10-35 (id 91)
+			(args
+				(p-assign @10-22-10-30 (ident "_ignored") (id 87)))
+			(e-int @10-32-10-35 (num-var 90) (sign-needed "false") (bits-needed "7") (value "100"))))
+	(d-let (id 101)
+		(p-assign @13-1-13-13 (ident "used_regular") (id 93))
+		(e-lambda @13-16-15-6 (id 100)
+			(args
+				(p-assign @13-17-13-23 (ident "number") (id 94)))
+			(e-binop @13-25-15-6 (op "add")
+				(e-lookup-local @13-25-13-31
+					(pattern (id 94)))
+				(e-int @13-34-13-35 (num-var 98) (sign-needed "false") (bits-needed "7") (value "1")))))
+	(d-let (id 141)
+		(p-assign @15-1-15-6 (ident "main!") (id 102))
+		(e-lambda @15-9-21-2 (id 140)
+			(args
+				(p-underscore @15-10-15-11 (id 103)))
+			(e-block @15-13-21-2
+				(s-let @16-5-16-26
+					(p-assign @16-5-16-6 (ident "a") (id 104))
+					(e-call @16-9-16-26 (id 109)
+						(e-lookup-local @16-9-16-23
+							(pattern (id 72)))
+						(e-int @16-24-16-25 (num-var 108) (sign-needed "false") (bits-needed "7") (value "5"))))
+				(s-let @17-5-17-28
+					(p-assign @17-5-17-6 (ident "b") (id 111))
+					(e-call @17-9-17-28 (id 116)
+						(e-lookup-local @17-9-17-24
+							(pattern (id 80)))
+						(e-int @17-25-17-27 (num-var 115) (sign-needed "false") (bits-needed "7") (value "10"))))
+				(s-let @18-5-18-30
+					(p-assign @18-5-18-6 (ident "c") (id 118))
+					(e-call @18-9-18-30 (id 123)
+						(e-lookup-local @18-9-18-26
+							(pattern (id 86)))
+						(e-int @18-27-18-29 (num-var 122) (sign-needed "false") (bits-needed "7") (value "15"))))
+				(s-let @19-5-19-25
+					(p-assign @19-5-19-6 (ident "d") (id 125))
+					(e-call @19-9-19-25 (id 130)
+						(e-lookup-local @19-9-19-21
+							(pattern (id 93)))
+						(e-int @19-22-19-24 (num-var 129) (sign-needed "false") (bits-needed "7") (value "20"))))
+				(e-binop @20-5-21-2 (op "add")
+					(e-lookup-local @20-5-20-6
+						(pattern (id 104)))
+					(e-binop @20-9-21-2 (op "add")
+						(e-lookup-local @20-9-20-10
+							(pattern (id 111)))
+						(e-binop @20-13-21-2 (op "add")
+							(e-lookup-local @20-13-20-14
+								(pattern (id 118)))
+							(e-lookup-local @20-17-20-18
+								(pattern (id 125))))))))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types
+(inferred-types
 	(defs
-		(def "unused_regular" 79 (type "*"))
-		(def "used_underscore" 85 (type "*"))
-		(def "unused_underscore" 92 (type "*"))
-		(def "used_regular" 101 (type "*"))
-		(def "main!" 141 (type "*")))
+		(def (name "unused_regular") (type "*"))
+		(def (name "used_underscore") (type "*"))
+		(def (name "unused_underscore") (type "*"))
+		(def (name "used_regular") (type "*"))
+		(def (name "main!") (type "*")))
 	(expressions
-		(expr (4:18-4:24) 77 (type "*"))
-		(expr (7:19-7:34) 84 (type "*"))
-		(expr (10:21-10:35) 91 (type "*"))
-		(expr (13:16-15:6) 100 (type "*"))
-		(expr (15:9-21:2) 140 (type "*"))))
+		(expr @4-18-4-24 (type "*"))
+		(expr @7-19-7-34 (type "*"))
+		(expr @10-21-10-35 (type "*"))
+		(expr @13-16-15-6 (type "*"))
+		(expr @15-9-21-2 (type "*"))))
 ~~~

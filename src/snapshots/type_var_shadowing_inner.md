@@ -100,40 +100,43 @@ LowerIdent(11:1-11:6),OpAssign(11:7-11:8),OpBar(11:9-11:10),Underscore(11:10-11:
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-11:15)
-	(app (1:1-1:53)
-		(provides (1:6-1:12) (exposed_item (lower_ident "main!")))
-		(record_field (1:15-1:53)
-			"pf"
-			(string (1:28-1:51) (string_part (1:29-1:50) "../basic-cli/main.roc")))
-		(packages (1:13-1:53)
-			(record_field (1:15-1:53)
-				"pf"
-				(string (1:28-1:51) (string_part (1:29-1:50) "../basic-cli/main.roc")))))
+(file @1-1-11-15
+	(app @1-1-1-53
+		(provides @1-6-1-12
+			(exposed-lower-ident (text "main!")))
+		(record-field @1-15-1-53 (name "pf")
+			(e-string @1-28-1-51
+				(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))
+		(packages @1-13-1-53
+			(record-field @1-15-1-53 (name "pf")
+				(e-string @1-28-1-51
+					(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(type_anno (3:1-4:6)
-			"outer"
-			(fn (3:9-3:15)
-				(ty_var (3:9-3:10) "a")
-				(ty_var (3:14-3:15) "a")))
-		(decl (4:1-6:12)
-			(ident (4:1-4:6) "outer")
-			(lambda (4:9-6:12)
-				(args (ident (4:10-4:11) "x"))
-				(malformed_expr (6:5-6:12) "expected_expr_close_curly_or_comma")))
-		(malformed_expr (6:11-6:14) "expr_unexpected_token")
-		(lambda (6:13-6:18)
-			(args (ident (6:14-6:15) "y"))
-			(ident (6:17-6:18) "" "y"))
-		(apply (8:5-8:13)
-			(ident (8:5-8:10) "" "inner")
-			(ident (8:11-8:12) "" "x"))
-		(malformed_expr (1:1-1:1) "expr_unexpected_token")
-		(decl (11:1-11:15)
-			(ident (11:1-11:6) "main!")
-			(lambda (11:9-11:15)
-				(args (underscore))
-				(record (11:13-11:15))))))
+		(s-type-anno @3-1-4-6 (name "outer")
+			(ty-fn @3-9-3-15
+				(ty-var @3-9-3-10 (raw "a"))
+				(ty-var @3-14-3-15 (raw "a"))))
+		(s-decl @4-1-6-12
+			(p-ident @4-1-4-6 (raw "outer"))
+			(e-lambda @4-9-6-12
+				(args
+					(p-ident @4-10-4-11 (raw "x")))
+				(e-malformed @6-5-6-12 (reason "expected_expr_close_curly_or_comma"))))
+		(e-malformed @6-11-6-14 (reason "expr_unexpected_token"))
+		(e-lambda @6-13-6-18
+			(args
+				(p-ident @6-14-6-15 (raw "y")))
+			(e-ident @6-17-6-18 (qaul "") (raw "y")))
+		(e-apply @8-5-8-13
+			(e-ident @8-5-8-10 (qaul "") (raw "inner"))
+			(e-ident @8-11-8-12 (qaul "") (raw "x")))
+		(e-malformed @1-1-1-1 (reason "expr_unexpected_token"))
+		(s-decl @11-1-11-15
+			(p-ident @11-1-11-6 (raw "main!"))
+			(e-lambda @11-9-11-15
+				(args
+					(p-underscore))
+				(e-record @11-13-11-15)))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -150,43 +153,32 @@ main! = |_| {}
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir
-	(d_let
-		(def_pattern
-			(p_assign (4:1-4:6)
-				(pid 77)
-				(ident "outer")))
-		(def_expr
-			(e_lambda (4:9-6:12)
-				(args
-					(p_assign (4:10-4:11)
-						(pid 78)
-						(ident "x")))
-				(e_runtime_error (6:5-6:12) "lambda_body_not_canonicalized")))
-		(annotation (4:1-4:6)
-			(signature 87)
-			(declared_type
-				(fn (3:9-3:15)
-					(ty_var (3:9-3:10) "a")
-					(ty_var (3:14-3:15) "a")
-					"false"))))
-	(d_let
-		(def_pattern
-			(p_assign (11:1-11:6)
-				(pid 94)
-				(ident "main!")))
-		(def_expr
-			(e_lambda (11:9-11:15)
-				(args (p_underscore (11:10-11:11) (pid 95)))
-				(e_runtime_error (1:1-1:1) "not_implemented")))))
+(can-ir
+	(d-let (id 89)
+		(p-assign @4-1-4-6 (ident "outer") (id 77))
+		(e-lambda @4-9-6-12 (id 81)
+			(args
+				(p-assign @4-10-4-11 (ident "x") (id 78)))
+			(e-runtime-error (tag "lambda_body_not_canonicalized")))
+		(annotation @4-1-4-6 (signature 87) (id 88)
+			(declared-type
+				(ty-fn @3-9-3-15 (effectful false)
+					(ty-var @3-9-3-10 (name "a"))
+					(ty-var @3-14-3-15 (name "a"))))))
+	(d-let (id 99)
+		(p-assign @11-1-11-6 (ident "main!") (id 94))
+		(e-lambda @11-9-11-15 (id 98)
+			(args
+				(p-underscore @11-10-11-11 (id 95)))
+			(e-runtime-error (tag "not_implemented")))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types
+(inferred-types
 	(defs
-		(def "outer" 89 (type "*"))
-		(def "main!" 99 (type "*")))
+		(def (name "outer") (type "*"))
+		(def (name "main!") (type "*")))
 	(expressions
-		(expr (4:9-6:12) 81 (type "*"))
-		(expr (11:9-11:15) 98 (type "*"))))
+		(expr @4-9-6-12 (type "*"))
+		(expr @11-9-11-15 (type "*"))))
 ~~~

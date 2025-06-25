@@ -31,13 +31,14 @@ KwVar(4:1-4:4),LowerIdent(4:5-4:17),OpAssign(4:18-4:19),Int(4:20-4:21),EndOfFile
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-4:21)
-	(module (1:1-1:10) (exposes (1:8-1:10)))
+(file @1-1-4-21
+	(module @1-1-1-10
+		(exposes @1-8-1-10))
 	(statements
-		(malformed_stmt (4:1-4:17) "var_only_allowed_in_a_body")
-		(decl (4:5-4:21)
-			(ident (4:5-4:17) "topLevelVar_")
-			(int (4:20-4:21) "0"))))
+		(s-malformed @4-1-4-17 (tag "var_only_allowed_in_a_body"))
+		(s-decl @4-5-4-21
+			(p-ident @4-5-4-17 (raw "topLevelVar_"))
+			(e-int @4-20-4-21 (raw "0")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -48,25 +49,16 @@ topLevelVar_ = 0
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir
-	(d_let
-		(def_pattern
-			(p_assign (4:5-4:17)
-				(pid 72)
-				(ident "topLevelVar_")))
-		(def_expr
-			(e_int (4:20-4:21)
-				(int_var 74)
-				(precision_var 73)
-				(literal "0")
-				(value "TODO")
-				(bound "u8")))))
+(can-ir
+	(d-let (id 76)
+		(p-assign @4-5-4-17 (ident "topLevelVar_") (id 72))
+		(e-int @4-20-4-21 (num-var 75) (sign-needed "false") (bits-needed "7") (value "0") (id 75))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types
+(inferred-types
 	(defs
-		(def "topLevelVar_" 76 (type "Num(Int(*))")))
+		(def (name "topLevelVar_") (type "Num(Int(*))")))
 	(expressions
-		(expr (4:20-4:21) 75 (type "Num(Int(*))"))))
+		(expr @4-20-4-21 (type "Num(Int(*))"))))
 ~~~

@@ -5,7 +5,6 @@ const std = @import("std");
 
 const base = @import("../base.zig");
 const collections = @import("../collections.zig");
-const sexpr = @import("../base/sexpr.zig");
 const types = @import("./types.zig");
 
 const exitOnOutOfMemory = collections.utils.exitOnOom;

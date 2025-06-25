@@ -19,15 +19,15 @@ OpenCurly(3:2-3:3),LowerIdent(3:4-3:11),OpColon(3:11-3:12),StringStart(3:13-3:14
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-3:29)
-	(package (1:1-3:29)
-		(exposes (2:2-2:24)
-			(exposed_item (lower_ident "something"))
-			(exposed_item (upper_ident "SomeType")))
-		(packages (3:2-3:29)
-			(record_field (3:4-3:27)
-				"somePkg"
-				(string (3:13-3:26) (string_part (3:14-3:25) "../main.roc")))))
+(file @1-1-3-29
+	(package @1-1-3-29
+		(exposes @2-2-2-24
+			(exposed-lower-ident (text "something"))
+			(exposed-upper-ident (text "SomeType")))
+		(packages @3-2-3-29
+			(record-field @3-4-3-27 (name "somePkg")
+				(e-string @3-13-3-26
+					(e-string-part @3-14-3-25 (raw "../main.roc"))))))
 	(statements))
 ~~~
 # FORMATTED
@@ -43,9 +43,11 @@ package
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir "empty")
+(can-ir (empty true))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types (defs) (expressions))
+(inferred-types
+	(defs)
+	(expressions))
 ~~~

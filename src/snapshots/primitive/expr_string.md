@@ -19,19 +19,21 @@ LowerIdent(3:1-3:4),OpAssign(3:5-3:6),StringStart(3:7-3:8),StringPart(3:8-3:14),
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-3:22)
-	(module (1:1-1:13)
-		(exposes (1:8-1:13) (exposed_item (lower_ident "foo"))))
+(file @1-1-3-22
+	(module @1-1-1-13
+		(exposes @1-8-1-13
+			(exposed-lower-ident (text "foo"))))
 	(statements
-		(decl (2:1-2:13)
-			(ident (2:1-2:5) "name")
-			(string (2:8-2:13) (string_part (2:9-2:12) "luc")))
-		(decl (3:1-3:22)
-			(ident (3:1-3:4) "foo")
-			(string (3:7-3:22)
-				(string_part (3:8-3:14) "hello ")
-				(ident (3:16-3:20) "" "name")
-				(string_part (3:21-3:21) "")))))
+		(s-decl @2-1-2-13
+			(p-ident @2-1-2-5 (raw "name"))
+			(e-string @2-8-2-13
+				(e-string-part @2-9-2-12 (raw "luc"))))
+		(s-decl @3-1-3-22
+			(p-ident @3-1-3-4 (raw "foo"))
+			(e-string @3-7-3-22
+				(e-string-part @3-8-3-14 (raw "hello "))
+				(e-ident @3-16-3-20 (qaul "") (raw "name"))
+				(e-string-part @3-21-3-21 (raw ""))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -39,32 +41,26 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir
-	(d_let
-		(def_pattern
-			(p_assign (2:1-2:5)
-				(pid 72)
-				(ident "name")))
-		(def_expr
-			(e_string (2:8-2:13) (e_literal (2:9-2:12) "luc"))))
-	(d_let
-		(def_pattern
-			(p_assign (3:1-3:4)
-				(pid 76)
-				(ident "foo")))
-		(def_expr
-			(e_string (3:7-3:22)
-				(e_literal (3:8-3:14) "hello ")
-				(e_lookup_local (3:16-3:20) (pid 72))
-				(e_literal (3:21-3:21) "")))))
+(can-ir
+	(d-let (id 75)
+		(p-assign @2-1-2-5 (ident "name") (id 72))
+		(e-string @2-8-2-13 (id 74)
+			(e-literal @2-9-2-12 (string "luc"))))
+	(d-let (id 81)
+		(p-assign @3-1-3-4 (ident "foo") (id 76))
+		(e-string @3-7-3-22 (id 80)
+			(e-literal @3-8-3-14 (string "hello "))
+			(e-lookup-local @3-16-3-20
+				(pattern (id 72)))
+			(e-literal @3-21-3-21 (string "")))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types
+(inferred-types
 	(defs
-		(def "name" 75 (type "Str"))
-		(def "foo" 81 (type "Str")))
+		(def (name "name") (type "Str"))
+		(def (name "foo") (type "Str")))
 	(expressions
-		(expr (2:8-2:13) 74 (type "Str"))
-		(expr (3:7-3:22) 80 (type "Str"))))
+		(expr @2-8-2-13 (type "Str"))
+		(expr @3-7-3-22 (type "Str"))))
 ~~~

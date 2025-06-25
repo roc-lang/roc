@@ -27,31 +27,31 @@ LowerIdent(7:1-7:10),OpAssign(7:11-7:12),LowerIdent(7:13-7:20),NoSpaceOpenRound(
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-7:24)
-	(module (1:1-1:28)
-		(exposes (1:8-1:28)
-			(exposed_item (lower_ident "add_one"))
-			(exposed_item (lower_ident "my_number"))))
+(file @1-1-7-24
+	(module @1-1-1-28
+		(exposes @1-8-1-28
+			(exposed-lower-ident (text "add_one"))
+			(exposed-lower-ident (text "my_number"))))
 	(statements
-		(type_anno (3:1-4:8)
-			"add_one"
-			(fn (3:11-3:21)
-				(ty "U64")
-				(ty "U64")))
-		(decl (4:1-6:10)
-			(ident (4:1-4:8) "add_one")
-			(lambda (4:11-6:10)
-				(args (ident (4:12-4:13) "x"))
-				(binop (4:15-6:10)
-					"+"
-					(ident (4:15-4:16) "" "x")
-					(int (4:19-4:20) "1"))))
-		(type_anno (6:1-7:10) "my_number" (ty "U64"))
-		(decl (7:1-7:24)
-			(ident (7:1-7:10) "my_number")
-			(apply (7:13-7:24)
-				(ident (7:13-7:20) "" "add_one")
-				(int (7:21-7:23) "42")))))
+		(s-type-anno @3-1-4-8 (name "add_one")
+			(ty-fn @3-11-3-21
+				(ty (name "U64"))
+				(ty (name "U64"))))
+		(s-decl @4-1-6-10
+			(p-ident @4-1-4-8 (raw "add_one"))
+			(e-lambda @4-11-6-10
+				(args
+					(p-ident @4-12-4-13 (raw "x")))
+				(e-binop @4-15-6-10 (op "+")
+					(e-ident @4-15-4-16 (qaul "") (raw "x"))
+					(e-int @4-19-4-20 (raw "1")))))
+		(s-type-anno @6-1-7-10 (name "my_number")
+			(ty (name "U64")))
+		(s-decl @7-1-7-24
+			(p-ident @7-1-7-10 (raw "my_number"))
+			(e-apply @7-13-7-24
+				(e-ident @7-13-7-20 (qaul "") (raw "add_one"))
+				(e-int @7-21-7-23 (raw "42"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -59,59 +59,38 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir
-	(d_let
-		(def_pattern
-			(p_assign (4:1-4:8)
-				(pid 75)
-				(ident "add_one")))
-		(def_expr
-			(e_lambda (4:11-6:10)
-				(args
-					(p_assign (4:12-4:13)
-						(pid 76)
-						(ident "x")))
-				(e_binop (4:15-6:10)
-					"add"
-					(e_lookup_local (4:15-4:16) (pid 76))
-					(e_int (4:19-4:20)
-						(int_var 79)
-						(precision_var 78)
-						(literal "1")
-						(value "TODO")
-						(bound "u8")))))
-		(annotation (4:1-4:8)
-			(signature 86)
-			(declared_type
-				(fn (3:11-3:21)
-					(ty (3:11-3:14) "U64")
-					(ty (3:18-3:21) "U64")
-					"false"))))
-	(d_let
-		(def_pattern
-			(p_assign (7:1-7:10)
-				(pid 90)
-				(ident "my_number")))
-		(def_expr
-			(e_call (7:13-7:24)
-				(e_lookup_local (7:13-7:20) (pid 75))
-				(e_int (7:21-7:23)
-					(int_var 93)
-					(precision_var 92)
-					(literal "42")
-					(value "TODO")
-					(bound "u8"))))
-		(annotation (7:1-7:10)
-			(signature 97)
-			(declared_type (ty (6:13-6:16) "U64")))))
+(can-ir
+	(d-let (id 88)
+		(p-assign @4-1-4-8 (ident "add_one") (id 75))
+		(e-lambda @4-11-6-10 (id 82)
+			(args
+				(p-assign @4-12-4-13 (ident "x") (id 76)))
+			(e-binop @4-15-6-10 (op "add")
+				(e-lookup-local @4-15-4-16
+					(pattern (id 76)))
+				(e-int @4-19-4-20 (num-var 80) (sign-needed "false") (bits-needed "7") (value "1"))))
+		(annotation @4-1-4-8 (signature 86) (id 87)
+			(declared-type
+				(ty-fn @3-11-3-21 (effectful false)
+					(ty @3-11-3-14 (name "U64"))
+					(ty @3-18-3-21 (name "U64"))))))
+	(d-let (id 99)
+		(p-assign @7-1-7-10 (ident "my_number") (id 90))
+		(e-call @7-13-7-24 (id 95)
+			(e-lookup-local @7-13-7-20
+				(pattern (id 75)))
+			(e-int @7-21-7-23 (num-var 94) (sign-needed "false") (bits-needed "7") (value "42")))
+		(annotation @7-1-7-10 (signature 97) (id 98)
+			(declared-type
+				(ty @6-13-6-16 (name "U64"))))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types
+(inferred-types
 	(defs
-		(def "add_one" 88 (type "*"))
-		(def "my_number" 99 (type "*")))
+		(def (name "add_one") (type "*"))
+		(def (name "my_number") (type "*")))
 	(expressions
-		(expr (4:11-6:10) 82 (type "*"))
-		(expr (7:13-7:24) 95 (type "*"))))
+		(expr @4-11-6-10 (type "*"))
+		(expr @7-13-7-24 (type "*"))))
 ~~~

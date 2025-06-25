@@ -25,8 +25,8 @@ KwModule(1:1-1:7),EndOfFile(1:7-1:7),
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-1:7)
-	(malformed_header (1:7-1:7) "header_expected_open_square")
+(file @1-1-1-7
+	(malformed-header @1-7-1-7 (tag "header_expected_open_square"))
 	(statements))
 ~~~
 # FORMATTED
@@ -35,9 +35,11 @@ KwModule(1:1-1:7),EndOfFile(1:7-1:7),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir "empty")
+(can-ir (empty true))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types (defs) (expressions))
+(inferred-types
+	(defs)
+	(expressions))
 ~~~

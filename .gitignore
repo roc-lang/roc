@@ -134,3 +134,6 @@ perf.data
 perf.data.old
 profile.json
 flamegraph.svg
+
+# Ignore html files in the snapshot directory
+src/snapshots/**/*.html

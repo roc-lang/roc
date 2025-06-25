@@ -14,8 +14,9 @@ foo = if true A
     }
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize if_then_else expression
+**UNDEFINED VARIABLE**
+Nothing is named `true` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
@@ -29,17 +30,19 @@ CloseCurly(7:5-7:6),EndOfFile(7:6-7:6),
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-7:6)
-	(module (1:1-1:13)
-		(exposes (1:8-1:13) (exposed_item (lower_ident "foo"))))
+(file @1-1-7-6
+	(module @1-1-1-13
+		(exposes @1-8-1-13
+			(exposed-lower-ident (text "foo"))))
 	(statements
-		(decl (3:1-7:6)
-			(ident (3:1-3:4) "foo")
-			(if_then_else (3:7-7:6)
-				(ident (3:10-3:14) "" "true")
-				(tag (3:15-3:16) "A")
-				(block (5:10-7:6)
-					(statements (tag (6:5-6:6) "B")))))))
+		(s-decl @3-1-7-6
+			(p-ident @3-1-3-4 (raw "foo"))
+			(e-if-then-else @3-7-7-6
+				(e-ident @3-10-3-14 (qaul "") (raw "true"))
+				(e-tag @3-15-3-16 (raw "A"))
+				(e-block @5-10-7-6
+					(statements
+						(e-tag @6-5-6-6 (raw "B"))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -53,19 +56,23 @@ foo = if true A
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir
-	(d_let
-		(def_pattern
-			(p_assign (3:1-3:4)
-				(pid 72)
-				(ident "foo")))
-		(def_expr (e_runtime_error (1:1-1:1) "not_implemented"))))
+(can-ir
+	(d-let (id 84)
+		(p-assign @3-1-3-4 (ident "foo") (id 72))
+		(e-if @3-7-7-6 (cond-var 0) (branch-var 0) (id 83)
+			(if-branches
+				(if-branch
+					(e-runtime-error (tag "ident_not_in_scope"))
+					(e-tag @3-15-3-16 (ext-var 0) (name "A") (args "TODO"))))
+			(if-else
+				(e-block @5-10-7-6
+					(e-tag @6-5-6-6 (ext-var 0) (name "B") (args "TODO")))))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types
+(inferred-types
 	(defs
-		(def "foo" 75 (type "Error")))
+		(def (name "foo") (type "*")))
 	(expressions
-		(expr (3:7-7:6) 74 (type "Error"))))
+		(expr @3-7-7-6 (type "*"))))
 ~~~

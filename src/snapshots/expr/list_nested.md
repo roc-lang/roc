@@ -15,14 +15,15 @@ OpenSquare(1:1-1:2),OpenSquare(1:2-1:3),Int(1:3-1:4),Comma(1:4-1:5),Int(1:6-1:7)
 ~~~
 # PARSE
 ~~~clojure
-(list (1:1-1:22)
-	(list (1:2-1:8)
-		(int (1:3-1:4) "1")
-		(int (1:6-1:7) "2"))
-	(list (1:10-1:16)
-		(int (1:11-1:12) "3")
-		(int (1:14-1:15) "4"))
-	(list (1:18-1:21) (int (1:19-1:20) "5")))
+(e-list @1-1-1-22
+	(e-list @1-2-1-8
+		(e-int @1-3-1-4 (raw "1"))
+		(e-int @1-6-1-7 (raw "2")))
+	(e-list @1-10-1-16
+		(e-int @1-11-1-12 (raw "3"))
+		(e-int @1-14-1-15 (raw "4")))
+	(e-list @1-18-1-21
+		(e-int @1-19-1-20 (raw "5"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -30,50 +31,21 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e_list (1:1-1:22)
-	(elem_var 93)
+(e-list @1-1-1-22 (elem-var 93) (id 94)
 	(elems
-		(e_list (1:2-1:8)
-			(elem_var 78)
+		(e-list @1-2-1-8 (elem-var 78)
 			(elems
-				(e_int (1:3-1:4)
-					(int_var 73)
-					(precision_var 72)
-					(literal "1")
-					(value "TODO")
-					(bound "u8"))
-				(e_int (1:6-1:7)
-					(int_var 76)
-					(precision_var 75)
-					(literal "2")
-					(value "TODO")
-					(bound "u8"))))
-		(e_list (1:10-1:16)
-			(elem_var 86)
+				(e-int @1-3-1-4 (num-var 74) (sign-needed "false") (bits-needed "7") (value "1"))
+				(e-int @1-6-1-7 (num-var 77) (sign-needed "false") (bits-needed "7") (value "2"))))
+		(e-list @1-10-1-16 (elem-var 86)
 			(elems
-				(e_int (1:11-1:12)
-					(int_var 81)
-					(precision_var 80)
-					(literal "3")
-					(value "TODO")
-					(bound "u8"))
-				(e_int (1:14-1:15)
-					(int_var 84)
-					(precision_var 83)
-					(literal "4")
-					(value "TODO")
-					(bound "u8"))))
-		(e_list (1:18-1:21)
-			(elem_var 91)
+				(e-int @1-11-1-12 (num-var 82) (sign-needed "false") (bits-needed "7") (value "3"))
+				(e-int @1-14-1-15 (num-var 85) (sign-needed "false") (bits-needed "7") (value "4"))))
+		(e-list @1-18-1-21 (elem-var 91)
 			(elems
-				(e_int (1:19-1:20)
-					(int_var 89)
-					(precision_var 88)
-					(literal "5")
-					(value "TODO")
-					(bound "u8"))))))
+				(e-int @1-19-1-20 (num-var 90) (sign-needed "false") (bits-needed "7") (value "5"))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr 94 (type "List(List(Num(Int(*))))"))
+(expr (id 94) (type "List(List(Num(Int(*))))"))
 ~~~

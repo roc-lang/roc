@@ -120,41 +120,42 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-12:2)
-	(module (1:1-1:29)
-		(exposes (1:8-1:29)
-			(exposed_item (upper_ident "Result"))
-			(exposed_item (lower_ident "processData"))))
+(file @1-1-12-2
+	(module @1-1-1-29
+		(exposes @1-8-1-29
+			(exposed-upper-ident (text "Result"))
+			(exposed-lower-ident (text "processData"))))
 	(statements
-		(type_decl (3:1-5:12)
-			(header (3:1-3:13)
-				"Result"
+		(s-type-decl @3-1-5-12
+			(header @3-1-3-13 (name "Result")
 				(args
-					(ty_var (3:8-3:9) "a")
-					(ty_var (3:11-3:12) "b")))
-			(tag_union (3:16-3:31)
+					(ty-var @3-8-3-9 (raw "a"))
+					(ty-var @3-11-3-12 (raw "b"))))
+			(ty-tag-union @3-16-3-31
 				(tags
-					(apply (3:17-3:22)
-						(ty "Ok")
-						(ty_var (3:20-3:21) "a"))
-					(apply (3:24-3:30)
-						(ty "Err")
-						(ty_var (3:28-3:29) "b")))))
-		(type_anno (5:1-6:12)
-			"processData"
-			(fn (5:15-5:25)
-				(ty "Str")
-				(ty "Str")))
-		(decl (6:1-7:16)
-			(ident (6:1-6:12) "processData")
-			(lambda (6:15-7:16)
-				(args (ident (6:16-6:20) "data"))
-				(string (7:5-7:16) (string_part (7:6-7:15) "processed"))))
-		(type_decl (10:1-11:32)
-			(header (10:1-10:12) "InnerModule" (args))
-			(malformed_expr (11:24-11:32) "expected_ty_close_curly_or_comma"))
-		(malformed_expr (1:1-1:1) "expr_unexpected_token")
-		(malformed_expr (12:1-12:2) "expr_unexpected_token")))
+					(ty-apply @3-17-3-22
+						(ty (name "Ok"))
+						(ty-var @3-20-3-21 (raw "a")))
+					(ty-apply @3-24-3-30
+						(ty (name "Err"))
+						(ty-var @3-28-3-29 (raw "b"))))))
+		(s-type-anno @5-1-6-12 (name "processData")
+			(ty-fn @5-15-5-25
+				(ty (name "Str"))
+				(ty (name "Str"))))
+		(s-decl @6-1-7-16
+			(p-ident @6-1-6-12 (raw "processData"))
+			(e-lambda @6-15-7-16
+				(args
+					(p-ident @6-16-6-20 (raw "data")))
+				(e-string @7-5-7-16
+					(e-string-part @7-6-7-15 (raw "processed")))))
+		(s-type-decl @10-1-11-32
+			(header @10-1-10-12 (name "InnerModule")
+				(args))
+			(ty-malformed @11-24-11-32 (tag "expected_ty_close_curly_or_comma")))
+		(e-malformed @1-1-1-1 (reason "expr_unexpected_token"))
+		(e-malformed @12-1-12-2 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -172,48 +173,38 @@ InnerModule :
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir
-	(d_let
-		(def_pattern
-			(p_assign (6:1-6:12)
-				(pid 89)
-				(ident "processData")))
-		(def_expr
-			(e_lambda (6:15-7:16)
-				(args
-					(p_assign (6:16-6:20)
-						(pid 90)
-						(ident "data")))
-				(e_string (7:5-7:16) (e_literal (7:6-7:15) "processed"))))
-		(annotation (6:1-6:12)
-			(signature 98)
-			(declared_type
-				(fn (5:15-5:25)
-					(ty (5:15-5:18) "Str")
-					(ty (5:22-5:25) "Str")
-					"false"))))
-	(s_type_decl (3:1-5:12)
-		(type_header (3:1-3:13)
-			"Result"
+(can-ir
+	(d-let (id 100)
+		(p-assign @6-1-6-12 (ident "processData") (id 89))
+		(e-lambda @6-15-7-16 (id 93)
 			(args
-				(ty_var (3:8-3:9) "a")
-				(ty_var (3:11-3:12) "b")))
-		(tag_union (3:16-3:31)
-			(apply (3:17-3:22)
-				"Ok"
-				(ty_var (3:20-3:21) "a"))
-			(apply (3:24-3:30)
-				"Err"
-				(ty_var (3:28-3:29) "b"))))
-	(s_type_decl (10:1-11:32)
-		(type_header (10:1-10:12) "InnerModule")
-		(malformed_type_anno (11:24-11:32))))
+				(p-assign @6-16-6-20 (ident "data") (id 90)))
+			(e-string @7-5-7-16
+				(e-literal @7-6-7-15 (string "processed"))))
+		(annotation @6-1-6-12 (signature 98) (id 99)
+			(declared-type
+				(ty-fn @5-15-5-25 (effectful false)
+					(ty @5-15-5-18 (name "Str"))
+					(ty @5-22-5-25 (name "Str"))))))
+	(s-type-decl @3-1-5-12 (id 80)
+		(ty-header @3-1-3-13 (name "Result")
+			(ty-args
+				(ty-var @3-8-3-9 (name "a"))
+				(ty-var @3-11-3-12 (name "b"))))
+		(ty-tag-union @3-16-3-31
+			(ty-apply @3-17-3-22 (symbol "Ok")
+				(ty-var @3-20-3-21 (name "a")))
+			(ty-apply @3-24-3-30 (symbol "Err")
+				(ty-var @3-28-3-29 (name "b")))))
+	(s-type-decl @10-1-11-32 (id 85)
+		(ty-header @10-1-10-12 (name "InnerModule"))
+		(ty-malformed @11-24-11-32)))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types
+(inferred-types
 	(defs
-		(def "processData" 100 (type "*")))
+		(def (name "processData") (type "*")))
 	(expressions
-		(expr (6:15-7:16) 93 (type "*"))))
+		(expr @6-15-7-16 (type "*"))))
 ~~~

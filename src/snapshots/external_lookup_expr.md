@@ -18,7 +18,7 @@ UpperIdent(1:1-1:5),NoSpaceDotLowerIdent(1:5-1:10),EndOfFile(1:10-1:10),
 ~~~
 # PARSE
 ~~~clojure
-(ident (1:1-1:10) "Json" ".utf8")
+(e-ident @1-1-1-10 (qaul "Json") (raw ".utf8"))
 ~~~
 # FORMATTED
 ~~~roc
@@ -26,9 +26,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e_runtime_error (1:1-1:10) "ident_not_in_scope")
+(e-runtime-error (tag "ident_not_in_scope") (id 73))
 ~~~
 # TYPES
 ~~~clojure
-(expr 73 (type "Error"))
+(expr (id 73) (type "Error"))
 ~~~
