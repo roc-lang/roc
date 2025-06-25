@@ -417,33 +417,6 @@ Nothing is named `foo` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: binop
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: binop
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: binop
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: binop
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: binop
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: binop
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: binop
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: binop
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: binop
-
-**NOT IMPLEMENTED**
 This feature is not yet implemented: canonicalize suffix_single_question expression
 
 **NOT IMPLEMENTED**
@@ -1314,9 +1287,9 @@ NO CHANGE
 				(p-assign @81-2-81-3 (ident "a") (id 209))
 				(p-assign @82-2-82-3 (ident "b") (id 210)))
 			(e-runtime-error (tag "not_implemented"))))
-	(d-let (id 451)
+	(d-let (id 442)
 		(p-assign @144-1-144-6 (ident "main!") (id 225))
-		(e-lambda @144-9-196-2 (id 445)
+		(e-lambda @144-9-196-2 (id 436)
 			(args
 				(p-underscore @144-10-144-11 (id 226)))
 			(e-block @144-13-196-2
@@ -1414,10 +1387,36 @@ NO CHANGE
 									(e-int @186-10-186-11 (int-var 346) (precision-var 345) (literal "3") (value "TODO") (bound "u8")))))))
 				(s-let @188-2-189-23
 					(p-assign @188-2-188-15 (ident "bin_op_result") (id 353))
-					(e-runtime-error (tag "not_implemented") (id 415)))
+					(e-binop @188-18-189-23 (op "or") (id 406)
+						(e-binop @188-18-188-74 (op "or")
+							(e-binop @188-18-188-43 (op "gt")
+								(e-binop @188-18-188-34 (op "null_coalesce")
+									(e-call @188-18-188-26
+										(e-tag @188-18-188-21 (ext-var 0) (name "Err") (args "TODO"))
+										(e-runtime-error (tag "ident_not_in_scope")))
+									(e-int @188-30-188-32 (int-var 360) (precision-var 359) (literal "12") (value "TODO") (bound "u8")))
+								(e-binop @188-35-188-43 (op "mul")
+									(e-int @188-35-188-36 (int-var 364) (precision-var 363) (literal "5") (value "TODO") (bound "u8"))
+									(e-int @188-39-188-40 (int-var 367) (precision-var 366) (literal "5") (value "TODO") (bound "u8"))))
+							(e-binop @188-44-188-74 (op "and")
+								(e-binop @188-44-188-58 (op "lt")
+									(e-binop @188-44-188-52 (op "add")
+										(e-int @188-44-188-46 (int-var 372) (precision-var 371) (literal "13") (value "TODO") (bound "u8"))
+										(e-int @188-49-188-50 (int-var 375) (precision-var 374) (literal "2") (value "TODO") (bound "u8")))
+									(e-int @188-53-188-54 (int-var 379) (precision-var 378) (literal "5") (value "TODO") (bound "u8")))
+								(e-binop @188-59-188-74 (op "ge")
+									(e-binop @188-59-188-68 (op "sub")
+										(e-int @188-59-188-61 (int-var 383) (precision-var 382) (literal "10") (value "TODO") (bound "u8"))
+										(e-int @188-64-188-65 (int-var 386) (precision-var 385) (literal "1") (value "TODO") (bound "u8")))
+									(e-int @188-69-188-71 (int-var 390) (precision-var 389) (literal "16") (value "TODO") (bound "u8")))))
+						(e-binop @188-75-189-23 (op "le")
+							(e-int @188-75-188-77 (int-var 396) (precision-var 395) (literal "12") (value "TODO") (bound "u8"))
+							(e-binop @188-81-189-23 (op "div")
+								(e-int @188-81-188-82 (int-var 399) (precision-var 398) (literal "3") (value "TODO") (bound "u8"))
+								(e-int @188-85-188-86 (int-var 402) (precision-var 401) (literal "5") (value "TODO") (bound "u8"))))))
 				(s-let @189-2-190-8
-					(p-assign @189-2-189-23 (ident "static_dispatch_style") (id 417))
-					(e-dot-access @189-26-190-8 (field "unknown") (id 422)
+					(p-assign @189-2-189-23 (ident "static_dispatch_style") (id 408))
+					(e-dot-access @189-26-190-8 (field "unknown") (id 413)
 						(receiver
 							(e-dot-access @189-26-189-110 (field "unknown")
 								(receiver
@@ -1428,7 +1427,7 @@ NO CHANGE
 					(e-runtime-error (tag "not_implemented")))
 				(e-call @191-2-195-3
 					(e-lookup-external
-						(ext-decl @191-2-191-14 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value") (type-var 427)))
+						(ext-decl @191-2-191-14 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value") (type-var 418)))
 					(e-string @192-3-194-18
 						(e-literal @192-4-192-14 (string "How about "))
 						(e-call @193-4-193-21
@@ -1436,7 +1435,7 @@ NO CHANGE
 							(e-lookup-local @193-14-193-20
 								(pattern (id 234))))
 						(e-literal @194-4-194-17 (string " as a string?"))))))
-		(annotation @144-1-144-6 (signature 449) (id 450)
+		(annotation @144-1-144-6 (signature 440) (id 441)
 			(declared-type
 				(ty-fn @143-9-143-38 (effectful false)
 					(ty-apply @143-9-143-21 (symbol "List")
@@ -1444,10 +1443,10 @@ NO CHANGE
 					(ty-apply @143-25-143-38 (symbol "Result")
 						(ty-record @143-32-143-34)
 						(ty-underscore @143-36-143-37))))))
-	(d-let (id 459)
-		(p-assign @199-1-199-6 (ident "empty") (id 453))
-		(e-runtime-error (tag "not_implemented") (id 455))
-		(annotation @199-1-199-6 (signature 457) (id 458)
+	(d-let (id 450)
+		(p-assign @199-1-199-6 (ident "empty") (id 444))
+		(e-runtime-error (tag "not_implemented") (id 446))
+		(annotation @199-1-199-6 (signature 448) (id 449)
 			(declared-type
 				(ty-record @198-9-198-11))))
 	(s-type-decl @22-1-23-6 (id 84)

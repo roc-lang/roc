@@ -12,33 +12,6 @@ Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
 Nothing is named `foo` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: binop
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: binop
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: binop
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: binop
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: binop
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: binop
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: binop
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: binop
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: binop
-
 # TOKENS
 ~~~zig
 UpperIdent(1:1-1:4),NoSpaceOpenRound(1:4-1:5),LowerIdent(1:5-1:8),CloseRound(1:8-1:9),OpDoubleQuestion(1:10-1:12),Int(1:13-1:15),OpGreaterThan(1:16-1:17),Int(1:18-1:19),OpStar(1:20-1:21),Int(1:22-1:23),OpOr(1:24-1:26),Int(1:27-1:29),OpPlus(1:30-1:31),Int(1:32-1:33),OpLessThan(1:34-1:35),Int(1:36-1:37),OpAnd(1:38-1:41),Int(1:42-1:44),OpBinaryMinus(1:45-1:46),Int(1:47-1:48),OpGreaterThanOrEq(1:49-1:51),Int(1:52-1:54),OpOr(1:55-1:57),Int(1:58-1:60),OpLessThanOrEq(1:61-1:63),Int(1:64-1:65),OpSlash(1:66-1:67),Int(1:68-1:69),EndOfFile(1:69-1:69),
@@ -79,9 +52,35 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "not_implemented") (id 133))
+(e-binop @1-1-1-69 (op "or") (id 124)
+	(e-binop @1-1-1-57 (op "or")
+		(e-binop @1-1-1-26 (op "gt")
+			(e-binop @1-1-1-17 (op "null_coalesce")
+				(e-call @1-1-1-9
+					(e-tag @1-1-1-4 (ext-var 0) (name "Err") (args "TODO"))
+					(e-runtime-error (tag "ident_not_in_scope")))
+				(e-int @1-13-1-15 (int-var 78) (precision-var 77) (literal "12") (value "TODO") (bound "u8")))
+			(e-binop @1-18-1-26 (op "mul")
+				(e-int @1-18-1-19 (int-var 82) (precision-var 81) (literal "5") (value "TODO") (bound "u8"))
+				(e-int @1-22-1-23 (int-var 85) (precision-var 84) (literal "5") (value "TODO") (bound "u8"))))
+		(e-binop @1-27-1-57 (op "and")
+			(e-binop @1-27-1-41 (op "lt")
+				(e-binop @1-27-1-35 (op "add")
+					(e-int @1-27-1-29 (int-var 90) (precision-var 89) (literal "13") (value "TODO") (bound "u8"))
+					(e-int @1-32-1-33 (int-var 93) (precision-var 92) (literal "2") (value "TODO") (bound "u8")))
+				(e-int @1-36-1-37 (int-var 97) (precision-var 96) (literal "5") (value "TODO") (bound "u8")))
+			(e-binop @1-42-1-57 (op "ge")
+				(e-binop @1-42-1-51 (op "sub")
+					(e-int @1-42-1-44 (int-var 101) (precision-var 100) (literal "10") (value "TODO") (bound "u8"))
+					(e-int @1-47-1-48 (int-var 104) (precision-var 103) (literal "1") (value "TODO") (bound "u8")))
+				(e-int @1-52-1-54 (int-var 108) (precision-var 107) (literal "16") (value "TODO") (bound "u8")))))
+	(e-binop @1-58-1-69 (op "le")
+		(e-int @1-58-1-60 (int-var 114) (precision-var 113) (literal "12") (value "TODO") (bound "u8"))
+		(e-binop @1-64-1-69 (op "div")
+			(e-int @1-64-1-65 (int-var 117) (precision-var 116) (literal "3") (value "TODO") (bound "u8"))
+			(e-int @1-68-1-69 (int-var 120) (precision-var 119) (literal "5") (value "TODO") (bound "u8")))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 133) (type "Error"))
+(expr (id 124) (type "*"))
 ~~~

@@ -1221,6 +1221,12 @@ pub const Expr = union(enum) {
             ge,
             eq,
             ne,
+            pow,
+            div_trunc,
+            @"and",
+            @"or",
+            pipe_forward,
+            null_coalesce,
         };
 
         pub fn init(op: Op, lhs: Expr.Idx, rhs: Expr.Idx, region: Region) Binop {
