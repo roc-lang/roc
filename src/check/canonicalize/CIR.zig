@@ -1445,13 +1445,32 @@ pub const Expr = union(enum) {
                 node.appendTypeVar(gpa, "branch-var", if_expr.branch_var);
 
                 // Add branches
-                var branches_node = SExpr.init(gpa, "branches");
-                branches_node.appendStringAttr(gpa, "branches", "TODO");
+                var branches_node = SExpr.init(gpa, "if-branches");
+                const branch_indices = ir.store.sliceIfBranches(if_expr.branches);
+                for (branch_indices) |branch_idx| {
+                    const branch = ir.store.getIfBranch(branch_idx);
+
+                    var branch_node = SExpr.init(gpa, "if-branch");
+
+                    // Add condition
+                    const cond_expr = ir.store.getExpr(branch.cond);
+                    var cond_node = cond_expr.toSExpr(ir, env);
+                    branch_node.appendNode(gpa, &cond_node);
+
+                    // Add body
+                    const body_expr = ir.store.getExpr(branch.body);
+                    var body_node = body_expr.toSExpr(ir, env);
+                    branch_node.appendNode(gpa, &body_node);
+
+                    branches_node.appendNode(gpa, &branch_node);
+                }
                 node.appendNode(gpa, &branches_node);
 
                 // Add final_else
-                var else_node = SExpr.init(gpa, "else");
-                else_node.appendStringAttr(gpa, "else", "TODO");
+                var else_node = SExpr.init(gpa, "if-else");
+                const else_expr = ir.store.getExpr(if_expr.final_else);
+                var else_expr_node = else_expr.toSExpr(ir, env);
+                else_node.appendNode(gpa, &else_expr_node);
                 node.appendNode(gpa, &else_node);
 
                 return node;

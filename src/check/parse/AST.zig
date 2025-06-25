@@ -1920,7 +1920,7 @@ pub const Expr = union(enum) {
                 var expr = ast.store.getExpr(a.expr).toSExpr(env, ast);
 
                 // handle branches
-                var branches = SExpr.init(env.gpa, "branches");
+                var branches = SExpr.init(env.gpa, "if-branches");
                 for (ast.store.whenBranchSlice(a.branches)) |branch| {
                     var branch_node = ast.store.getBranch(branch).toSExpr(env, ast);
                     branches.appendNode(env.gpa, &branch_node);
@@ -2006,7 +2006,7 @@ pub const WhenBranch = struct {
     pub const Span = struct { span: base.DataSpan };
 
     pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ast: *AST) SExpr {
-        var node = SExpr.init(env.gpa, "branch");
+        var node = SExpr.init(env.gpa, "if-branch");
         node.appendRegion(env.gpa, ast.calcRegionInfo(self.region, env.line_starts.items));
         var pattern = ast.store.getPattern(self.pattern).toSExpr(env, ast);
         node.appendNode(env.gpa, &pattern);

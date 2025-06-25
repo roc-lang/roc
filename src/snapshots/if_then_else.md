@@ -14,8 +14,9 @@ foo = if true A
     }
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize if_then_else expression
+**UNDEFINED VARIABLE**
+Nothing is named `true` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
@@ -56,15 +57,22 @@ foo = if true A
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 75)
+	(d-let (id 84)
 		(p-assign @3-1-3-4 (ident "foo") (id 72))
-		(e-runtime-error (tag "not_implemented") (id 74))))
+		(e-if @3-7-7-6 (cond-var 0) (branch-var 0) (id 83)
+			(if-branches
+				(if-branch
+					(e-runtime-error (tag "ident_not_in_scope"))
+					(e-tag @3-15-3-16 (ext-var 0) (name "A") (args "TODO"))))
+			(if-else
+				(e-block @5-10-7-6
+					(e-tag @6-5-6-6 (ext-var 0) (name "B") (args "TODO")))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "foo") (type "Error")))
+		(def (name "foo") (type "*")))
 	(expressions
-		(expr @3-7-7-6 (type "Error"))))
+		(expr @3-7-7-6 (type "*"))))
 ~~~

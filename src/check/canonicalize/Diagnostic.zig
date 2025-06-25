@@ -256,21 +256,57 @@ pub const Diagnostic = union(enum) {
     /// Build a report for "if condition not canonicalized" diagnostic
     pub fn buildIfConditionNotCanonicalizedReport(allocator: Allocator) !Report {
         var report = Report.init(allocator, "INVALID IF CONDITION", .runtime_error);
-        try report.document.addReflowingText("The condition in this if expression is not valid.");
+        try report.document.addReflowingText("The condition in this ");
+        try report.document.addKeyword("if");
+        try report.document.addReflowingText(" expression could not be processed.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("The condition must be a valid expression that evaluates to a ");
+        try report.document.addKeyword("Bool");
+        try report.document.addReflowingText(" value (");
+        try report.document.addKeyword("Bool.true");
+        try report.document.addReflowingText(" or ");
+        try report.document.addKeyword("Bool.false");
+        try report.document.addReflowingText(").");
         return report;
     }
 
     /// Build a report for "if then not canonicalized" diagnostic
     pub fn buildIfThenNotCanonicalizedReport(allocator: Allocator) !Report {
         var report = Report.init(allocator, "INVALID IF BRANCH", .runtime_error);
-        try report.document.addReflowingText("The then branch of this if expression is not valid.");
+        try report.document.addReflowingText("The ");
+        try report.document.addKeyword("then");
+        try report.document.addReflowingText(" branch of this ");
+        try report.document.addKeyword("if");
+        try report.document.addReflowingText(" expression could not be processed.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("The ");
+        try report.document.addKeyword("then");
+        try report.document.addReflowingText(" branch must contain a valid expression. Check for syntax errors or missing values.");
         return report;
     }
 
     /// Build a report for "if else not canonicalized" diagnostic
     pub fn buildIfElseNotCanonicalizedReport(allocator: Allocator) !Report {
         var report = Report.init(allocator, "INVALID IF BRANCH", .runtime_error);
-        try report.document.addReflowingText("The else branch of this if expression is not valid.");
+        try report.document.addReflowingText("The ");
+        try report.document.addKeyword("else");
+        try report.document.addReflowingText(" branch of this ");
+        try report.document.addKeyword("if");
+        try report.document.addReflowingText(" expression could not be processed.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("The ");
+        try report.document.addKeyword("else");
+        try report.document.addReflowingText(" branch must contain a valid expression. Check for syntax errors or missing values.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Note: Every ");
+        try report.document.addKeyword("if");
+        try report.document.addReflowingText(" expression in Roc must have an ");
+        try report.document.addKeyword("else");
+        try report.document.addReflowingText(" branch, and both branches must have the same type.");
         return report;
     }
 

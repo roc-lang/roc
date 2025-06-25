@@ -293,43 +293,10 @@ This feature is not yet implemented: Exposed item 'write!' already imported from
 		.StdoutMultiline'
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize if_then_else expression
-
-**UNUSED VARIABLE**
-Variable ``num`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_num` to suppress this warning.
-The unused variable is declared here:
-**syntax_grab_bag.md:65:20:65:23:**
-```roc
-add_one_oneline = |num| if num 2 else 5
-```
-
+This feature is not yet implemented: canonicalize dbg expression
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize if_then_else expression
-
-**UNUSED VARIABLE**
-Variable ``other`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_other` to suppress this warning.
-The unused variable is declared here:
-**syntax_grab_bag.md:69:2:69:7:**
-```roc
-	other = 1
-```
-
-
-**UNUSED VARIABLE**
-Variable ``num`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_num` to suppress this warning.
-The unused variable is declared here:
-**syntax_grab_bag.md:68:12:68:15:**
-```roc
-add_one = |num| {
-```
-
+This feature is not yet implemented: canonicalize dbg expression
 
 **NOT IMPLEMENTED**
 This feature is not yet implemented: canonicalize match expression
@@ -926,8 +893,8 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 					(p-ident @82-2-82-3 (raw "b")))
 				(e-match
 					(e-ident @84-8-84-9 (qaul "") (raw "a"))
-					(branches
-						(branch @85-3-89-7
+					(if-branches
+						(if-branch @85-3-89-7
 							(p-alternatives
 								(p-tag @85-3-85-7 (raw "Blue"))
 								(p-tag @85-10-85-15 (raw "Green"))
@@ -938,7 +905,7 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 										(p-ident @86-4-86-5 (raw "x"))
 										(e-int @86-8-86-10 (raw "12")))
 									(e-ident @87-4-87-5 (qaul "") (raw "x")))))
-						(branch @89-3-97-8
+						(if-branch @89-3-97-8
 							(p-alternatives
 								(p-tag @89-3-89-7 (raw "Blue"))
 								(p-tag @91-4-91-9 (raw "Green"))
@@ -949,25 +916,25 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 										(p-ident @94-5-94-6 (raw "x"))
 										(e-int @94-9-94-11 (raw "12")))
 									(e-ident @95-5-95-6 (qaul "") (raw "x")))))
-						(branch @97-3-99-4
+						(if-branch @97-3-99-4
 							(p-ident @97-3-97-8 (raw "lower"))
 							(e-int @98-7-98-8 (raw "1")))
-						(branch @99-3-101-4
+						(if-branch @99-3-101-4
 							(p-string @99-3-99-4 (raw """))
 							(e-int @100-4-100-7 (raw "100")))
-						(branch @101-3-102-4
+						(if-branch @101-3-102-4
 							(p-alternatives
 								(p-string @101-3-101-4 (raw """))
 								(p-string @101-11-101-12 (raw """)))
 							(e-int @101-20-101-23 (raw "200")))
-						(branch @102-3-108-4
+						(if-branch @102-3-108-4
 							(p-list @102-3-102-24
 								(p-number @102-4-102-5 (raw "1"))
 								(p-number @102-7-102-8 (raw "2"))
 								(p-number @102-10-102-11 (raw "3"))
 								(p-list-rest @102-13-102-23 (name "rest")))
 							(e-int @104-5-104-8 (raw "123")))
-						(branch @108-3-109-4
+						(if-branch @108-3-109-4
 							(p-list @108-3-108-28
 								(p-number @108-4-108-5 (raw "1"))
 								(p-alternatives
@@ -976,7 +943,7 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 								(p-number @108-14-108-15 (raw "3"))
 								(p-list-rest @108-17-108-27 (name "rest")))
 							(e-int @108-32-108-35 (raw "123")))
-						(branch @109-3-117-7
+						(if-branch @109-3-117-7
 							(p-list @109-3-116-4
 								(p-number @110-4-110-5 (raw "1"))
 								(p-alternatives
@@ -985,21 +952,21 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 								(p-number @112-4-112-5 (raw "3"))
 								(p-list-rest @113-4-115-10 (name "rest")))
 							(e-int @116-8-116-11 (raw "123")))
-						(branch @117-3-118-7
+						(if-branch @117-3-118-7
 							(p-number @117-3-117-7 (raw "3.14"))
 							(e-int @117-11-117-14 (raw "314")))
-						(branch @118-3-119-4
+						(if-branch @118-3-119-4
 							(p-alternatives
 								(p-number @118-3-118-7 (raw "3.14"))
 								(p-number @118-10-118-14 (raw "6.28")))
 							(e-int @118-18-118-21 (raw "314")))
-						(branch @119-3-120-4
+						(if-branch @119-3-120-4
 							(p-tuple @119-3-119-12
 								(p-number @119-4-119-5 (raw "1"))
 								(p-number @119-7-119-8 (raw "2"))
 								(p-number @119-10-119-11 (raw "3")))
 							(e-int @119-16-119-19 (raw "123")))
-						(branch @120-3-121-4
+						(if-branch @120-3-121-4
 							(p-tuple @120-3-120-16
 								(p-number @120-4-120-5 (raw "1"))
 								(p-alternatives
@@ -1007,7 +974,7 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 									(p-number @120-11-120-12 (raw "5")))
 								(p-number @120-14-120-15 (raw "3")))
 							(e-int @120-20-120-23 (raw "123")))
-						(branch @121-3-122-4
+						(if-branch @121-3-122-4
 							(p-record @121-3-121-29
 								(field @121-5-121-12 (name "foo") (rest false)
 									(p-number @121-10-121-11 (raw "1")))
@@ -1019,7 +986,7 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 								(e-apply @121-35-121-44
 									(e-ident @121-37-121-40 (qaul "") (raw "add"))
 									(e-int @121-41-121-43 (raw "34")))))
-						(branch @122-3-130-4
+						(if-branch @122-3-130-4
 							(p-record @122-3-129-4
 								(field @123-4-125-8 (name "foo") (rest false)
 									(p-number @125-6-125-7 (raw "1")))
@@ -1027,7 +994,7 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 									(p-number @126-9-126-10 (raw "2")))
 								(field @127-4-128-10 (name "rest") (rest true)))
 							(e-int @129-8-129-10 (raw "12")))
-						(branch @130-3-131-4
+						(if-branch @130-3-131-4
 							(p-record @130-3-130-25
 								(field @130-5-130-12 (name "foo") (rest false)
 									(p-number @130-10-130-11 (raw "1")))
@@ -1036,7 +1003,7 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 										(p-number @130-18-130-19 (raw "2"))
 										(p-number @130-22-130-23 (raw "7")))))
 							(e-int @130-29-130-31 (raw "12")))
-						(branch @131-3-135-5
+						(if-branch @131-3-135-5
 							(p-record @131-3-134-4
 								(field @132-4-132-11 (name "foo") (rest false)
 									(p-number @132-9-132-10 (raw "1")))
@@ -1045,16 +1012,16 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 										(p-number @133-9-133-10 (raw "2"))
 										(p-number @133-13-133-14 (raw "7")))))
 							(e-int @134-8-134-10 (raw "12")))
-						(branch @135-3-136-5
+						(if-branch @135-3-136-5
 							(p-tag @135-3-135-10 (raw "Ok")
 								(p-number @135-6-135-9 (raw "123")))
 							(e-int @135-14-135-17 (raw "123")))
-						(branch @136-3-137-10
+						(if-branch @136-3-137-10
 							(p-tag @136-3-136-17 (raw "Ok")
 								(p-tag @136-6-136-16 (raw "Some")
 									(p-ident @136-11-136-15 (raw "dude"))))
 							(e-ident @136-21-136-25 (qaul "") (raw "dude")))
-						(branch @137-3-138-3
+						(if-branch @137-3-138-3
 							(p-tag @137-3-137-34 (raw "TwoArgs")
 								(p-string @137-11-137-12 (raw """))
 								(p-tag @137-20-137-33 (raw "Some")
@@ -1286,138 +1253,159 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 185)
+	(d-let (id 193)
 		(p-assign @65-1-65-16 (ident "add_one_oneline") (id 179))
-		(e-lambda @65-19-67-8 (id 183)
+		(e-lambda @65-19-67-8 (id 192)
 			(args
 				(p-assign @65-20-65-23 (ident "num") (id 180)))
-			(e-runtime-error (tag "not_implemented"))))
-	(d-let (id 207)
-		(p-assign @68-1-68-8 (ident "add_one") (id 189))
-		(e-lambda @68-11-78-2 (id 200)
+			(e-if @65-25-67-8 (cond-var 0) (branch-var 0)
+				(if-branches
+					(if-branch
+						(e-lookup-local @65-28-65-31
+							(pattern (id 180)))
+						(e-int @65-32-65-33 (int-var 183) (precision-var 182) (literal "2") (value "TODO") (bound "u8"))))
+				(if-else
+					(e-int @65-39-65-40 (int-var 186) (precision-var 185) (literal "5") (value "TODO") (bound "u8"))))))
+	(d-let (id 228)
+		(p-assign @68-1-68-8 (ident "add_one") (id 197))
+		(e-lambda @68-11-78-2 (id 222)
 			(args
-				(p-assign @68-12-68-15 (ident "num") (id 190)))
+				(p-assign @68-12-68-15 (ident "num") (id 198)))
 			(e-block @68-17-78-2
 				(s-let @69-2-69-11
-					(p-assign @69-2-69-7 (ident "other") (id 191))
-					(e-int @69-10-69-11 (int-var 193) (precision-var 192) (literal "1") (value "TODO") (bound "u8") (id 194)))
-				(e-runtime-error (tag "not_implemented"))))
-		(annotation @68-1-68-8 (signature 205) (id 206)
+					(p-assign @69-2-69-7 (ident "other") (id 199))
+					(e-int @69-10-69-11 (int-var 201) (precision-var 200) (literal "1") (value "TODO") (bound "u8") (id 202)))
+				(e-if @70-2-78-2 (cond-var 0) (branch-var 0)
+					(if-branches
+						(if-branch
+							(e-lookup-local @70-5-70-8
+								(pattern (id 198)))
+							(e-block @70-9-74-3
+								(s-expr @71-3-73-4
+									(e-runtime-error (tag "not_implemented")))
+								(e-int @73-3-73-4 (int-var 209) (precision-var 208) (literal "0") (value "TODO") (bound "u8")))))
+					(if-else
+						(e-block @74-9-77-3
+							(s-expr @75-3-76-8
+								(e-runtime-error (tag "not_implemented")))
+							(e-lookup-local @76-3-76-8
+								(pattern (id 199))))))))
+		(annotation @68-1-68-8 (signature 226) (id 227)
 			(declared-type
 				(ty-fn @67-11-67-21 (effectful false)
 					(ty @67-11-67-14 (name "U64"))
 					(ty @67-18-67-21 (name "U64"))))))
-	(d-let (id 216)
-		(p-assign @80-1-80-11 (ident "match_time") (id 208))
-		(e-lambda @80-14-140-7 (id 213)
+	(d-let (id 237)
+		(p-assign @80-1-80-11 (ident "match_time") (id 229))
+		(e-lambda @80-14-140-7 (id 234)
 			(args
-				(p-assign @81-2-81-3 (ident "a") (id 209))
-				(p-assign @82-2-82-3 (ident "b") (id 210)))
+				(p-assign @81-2-81-3 (ident "a") (id 230))
+				(p-assign @82-2-82-3 (ident "b") (id 231)))
 			(e-runtime-error (tag "not_implemented"))))
-	(d-let (id 451)
-		(p-assign @144-1-144-6 (ident "main!") (id 225))
-		(e-lambda @144-9-196-2 (id 445)
+	(d-let (id 472)
+		(p-assign @144-1-144-6 (ident "main!") (id 246))
+		(e-lambda @144-9-196-2 (id 466)
 			(args
-				(p-underscore @144-10-144-11 (id 226)))
+				(p-underscore @144-10-144-11 (id 247)))
 			(e-block @144-13-196-2
 				(s-let @145-2-145-17
-					(p-assign @145-2-145-7 (ident "world") (id 227))
-					(e-string @145-10-145-17 (id 229)
+					(p-assign @145-2-145-7 (ident "world") (id 248))
+					(e-string @145-10-145-17 (id 250)
 						(e-literal @145-11-145-16 (string "World"))))
 				(s-var @146-2-147-8
-					(p-assign @146-2-147-8 (ident "number") (id 234))
-					(e-int @146-15-146-18 (int-var 232) (precision-var 231) (literal "123") (value "TODO") (bound "u8") (id 233)))
+					(p-assign @146-2-147-8 (ident "number") (id 255))
+					(e-int @146-15-146-18 (int-var 253) (precision-var 252) (literal "123") (value "TODO") (bound "u8") (id 254)))
 				(s-let @148-2-148-12
-					(p-assign @148-2-148-5 (ident "tag") (id 238))
-					(e-tag @148-8-148-12 (ext-var 0) (name "Blue") (args "TODO") (id 240)))
+					(p-assign @148-2-148-5 (ident "tag") (id 259))
+					(e-tag @148-8-148-12 (ext-var 0) (name "Blue") (args "TODO") (id 261)))
 				(s-expr @154-2-155-12
 					(e-runtime-error (tag "not_implemented")))
 				(s-expr @155-2-158-11
 					(e-call @155-2-157-3
 						(e-lookup-local @155-2-155-12
-							(pattern (id 208)))
+							(pattern (id 229)))
 						(e-runtime-error (tag "not_implemented"))))
 				(s-expr @158-2-162-7
 					(e-call @158-2-161-3
 						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-runtime-error (tag "not_implemented"))))
 				(s-let @164-2-164-31
-					(p-assign @164-2-164-18 (ident "tag_with_payload") (id 260))
-					(e-call @164-21-164-31 (id 264)
+					(p-assign @164-2-164-18 (ident "tag_with_payload") (id 281))
+					(e-call @164-21-164-31 (id 285)
 						(e-tag @164-21-164-23 (ext-var 0) (name "Ok") (args "TODO"))
 						(e-lookup-local @164-24-164-30
-							(pattern (id 234)))))
+							(pattern (id 255)))))
 				(s-let @165-2-165-34
-					(p-assign @165-2-165-14 (ident "interpolated") (id 266))
-					(e-string @165-17-165-34 (id 270)
+					(p-assign @165-2-165-14 (ident "interpolated") (id 287))
+					(e-string @165-17-165-34 (id 291)
 						(e-literal @165-18-165-25 (string "Hello, "))
 						(e-lookup-local @165-27-165-32
-							(pattern (id 227)))
+							(pattern (id 248)))
 						(e-literal @165-33-165-33 (string ""))))
 				(s-let @166-2-173-3
-					(p-assign @166-2-166-6 (ident "list") (id 272))
-					(e-list @166-9-173-3 (elem-var 283) (id 284)
+					(p-assign @166-2-166-6 (ident "list") (id 293))
+					(e-list @166-9-173-3 (elem-var 304) (id 305)
 						(elems
 							(e-call @167-3-170-4
 								(e-lookup-local @167-3-167-10
-									(pattern (id 189)))
+									(pattern (id 197)))
 								(e-runtime-error (tag "not_implemented")))
-							(e-int @171-3-171-6 (int-var 278) (precision-var 277) (literal "456") (value "TODO") (bound "u8"))
-							(e-int @172-3-172-6 (int-var 281) (precision-var 280) (literal "789") (value "TODO") (bound "u8")))))
+							(e-int @171-3-171-6 (int-var 299) (precision-var 298) (literal "456") (value "TODO") (bound "u8"))
+							(e-int @172-3-172-6 (int-var 302) (precision-var 301) (literal "789") (value "TODO") (bound "u8")))))
 				(s-let @178-2-178-71
-					(p-assign @178-2-178-8 (ident "record") (id 288))
-					(e-runtime-error (tag "not_implemented") (id 290)))
+					(p-assign @178-2-178-8 (ident "record") (id 309))
+					(e-runtime-error (tag "not_implemented") (id 311)))
 				(s-let @179-2-179-68
-					(p-assign @179-2-179-7 (ident "tuple") (id 292))
-					(e-tuple @179-10-179-68 (tuple-var 319) (id 320)
+					(p-assign @179-2-179-7 (ident "tuple") (id 313))
+					(e-tuple @179-10-179-68 (tuple-var 340) (id 341)
 						(elems
-							(e-int @179-11-179-14 (int-var 294) (precision-var 293) (literal "123") (value "TODO") (bound "u8"))
+							(e-int @179-11-179-14 (int-var 315) (precision-var 314) (literal "123") (value "TODO") (bound "u8"))
 							(e-string @179-16-179-23
 								(e-literal @179-17-179-22 (string "World")))
 							(e-lookup-local @179-25-179-28
-								(pattern (id 238)))
+								(pattern (id 259)))
 							(e-call @179-30-179-39
 								(e-tag @179-30-179-32 (ext-var 0) (name "Ok") (args "TODO"))
 								(e-lookup-local @179-33-179-38
-									(pattern (id 227))))
-							(e-tuple @179-41-179-56 (tuple-var 306)
+									(pattern (id 248))))
+							(e-tuple @179-41-179-56 (tuple-var 327)
 								(elems
 									(e-runtime-error (tag "ident_not_in_scope"))
 									(e-lookup-local @179-50-179-55
-										(pattern (id 292)))))
-							(e-list @179-58-179-67 (elem-var 317)
+										(pattern (id 313)))))
+							(e-list @179-58-179-67 (elem-var 338)
 								(elems
-									(e-int @179-59-179-60 (int-var 309) (precision-var 308) (literal "1") (value "TODO") (bound "u8"))
-									(e-int @179-62-179-63 (int-var 312) (precision-var 311) (literal "2") (value "TODO") (bound "u8"))
-									(e-int @179-65-179-66 (int-var 315) (precision-var 314) (literal "3") (value "TODO") (bound "u8")))))))
+									(e-int @179-59-179-60 (int-var 330) (precision-var 329) (literal "1") (value "TODO") (bound "u8"))
+									(e-int @179-62-179-63 (int-var 333) (precision-var 332) (literal "2") (value "TODO") (bound "u8"))
+									(e-int @179-65-179-66 (int-var 336) (precision-var 335) (literal "3") (value "TODO") (bound "u8")))))))
 				(s-let @180-2-187-3
-					(p-assign @180-2-180-17 (ident "multiline_tuple") (id 322))
-					(e-tuple @180-20-187-3 (tuple-var 350) (id 351)
+					(p-assign @180-2-180-17 (ident "multiline_tuple") (id 343))
+					(e-tuple @180-20-187-3 (tuple-var 371) (id 372)
 						(elems
-							(e-int @181-3-181-6 (int-var 324) (precision-var 323) (literal "123") (value "TODO") (bound "u8"))
+							(e-int @181-3-181-6 (int-var 345) (precision-var 344) (literal "123") (value "TODO") (bound "u8"))
 							(e-string @182-3-182-10
 								(e-literal @182-4-182-9 (string "World")))
 							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-call @184-3-184-12
 								(e-tag @184-3-184-5 (ext-var 0) (name "Ok") (args "TODO"))
 								(e-lookup-local @184-6-184-11
-									(pattern (id 227))))
-							(e-tuple @185-3-185-18 (tuple-var 337)
+									(pattern (id 248))))
+							(e-tuple @185-3-185-18 (tuple-var 358)
 								(elems
 									(e-runtime-error (tag "ident_not_in_scope"))
 									(e-lookup-local @185-12-185-17
-										(pattern (id 292)))))
-							(e-list @186-3-186-12 (elem-var 348)
+										(pattern (id 313)))))
+							(e-list @186-3-186-12 (elem-var 369)
 								(elems
-									(e-int @186-4-186-5 (int-var 340) (precision-var 339) (literal "1") (value "TODO") (bound "u8"))
-									(e-int @186-7-186-8 (int-var 343) (precision-var 342) (literal "2") (value "TODO") (bound "u8"))
-									(e-int @186-10-186-11 (int-var 346) (precision-var 345) (literal "3") (value "TODO") (bound "u8")))))))
+									(e-int @186-4-186-5 (int-var 361) (precision-var 360) (literal "1") (value "TODO") (bound "u8"))
+									(e-int @186-7-186-8 (int-var 364) (precision-var 363) (literal "2") (value "TODO") (bound "u8"))
+									(e-int @186-10-186-11 (int-var 367) (precision-var 366) (literal "3") (value "TODO") (bound "u8")))))))
 				(s-let @188-2-189-23
-					(p-assign @188-2-188-15 (ident "bin_op_result") (id 353))
-					(e-runtime-error (tag "not_implemented") (id 415)))
+					(p-assign @188-2-188-15 (ident "bin_op_result") (id 374))
+					(e-runtime-error (tag "not_implemented") (id 436)))
 				(s-let @189-2-190-8
-					(p-assign @189-2-189-23 (ident "static_dispatch_style") (id 417))
-					(e-dot-access @189-26-190-8 (field "unknown") (id 422)
+					(p-assign @189-2-189-23 (ident "static_dispatch_style") (id 438))
+					(e-dot-access @189-26-190-8 (field "unknown") (id 443)
 						(receiver
 							(e-dot-access @189-26-189-110 (field "unknown")
 								(receiver
@@ -1428,15 +1416,15 @@ NO CHANGE
 					(e-runtime-error (tag "not_implemented")))
 				(e-call @191-2-195-3
 					(e-lookup-external
-						(ext-decl @191-2-191-14 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value") (type-var 427)))
+						(ext-decl @191-2-191-14 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value") (type-var 448)))
 					(e-string @192-3-194-18
 						(e-literal @192-4-192-14 (string "How about "))
 						(e-call @193-4-193-21
 							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-lookup-local @193-14-193-20
-								(pattern (id 234))))
+								(pattern (id 255))))
 						(e-literal @194-4-194-17 (string " as a string?"))))))
-		(annotation @144-1-144-6 (signature 449) (id 450)
+		(annotation @144-1-144-6 (signature 470) (id 471)
 			(declared-type
 				(ty-fn @143-9-143-38 (effectful false)
 					(ty-apply @143-9-143-21 (symbol "List")
@@ -1444,10 +1432,10 @@ NO CHANGE
 					(ty-apply @143-25-143-38 (symbol "Result")
 						(ty-record @143-32-143-34)
 						(ty-underscore @143-36-143-37))))))
-	(d-let (id 459)
-		(p-assign @199-1-199-6 (ident "empty") (id 453))
-		(e-runtime-error (tag "not_implemented") (id 455))
-		(annotation @199-1-199-6 (signature 457) (id 458)
+	(d-let (id 480)
+		(p-assign @199-1-199-6 (ident "empty") (id 474))
+		(e-runtime-error (tag "not_implemented") (id 476))
+		(annotation @199-1-199-6 (signature 478) (id 479)
 			(declared-type
 				(ty-record @198-9-198-11))))
 	(s-type-decl @22-1-23-6 (id 84)
