@@ -1230,6 +1230,7 @@ pub fn getRecordField(store: *NodeStore, recordField: CIR.RecordField.Idx) CIR.R
     return CIR.RecordField{};
 }
 
+/// Retrieves an if branch from the store.
 pub fn getIfBranch(store: *const NodeStore, if_branch_idx: CIR.IfBranch.Idx) CIR.IfBranch {
     const nid: Node.Idx = @enumFromInt(@intFromEnum(if_branch_idx));
     const node = store.nodes.get(nid);
@@ -1470,11 +1471,13 @@ pub fn scratchIfBranchTop(store: *NodeStore) u32 {
     return store.scratch_if_branches.top();
 }
 
+/// TODO
 pub fn addScratchIfBranch(store: *NodeStore, if_branch: CIR.IfBranch) void {
     const if_branch_idx = store.addIfBranch(if_branch);
     store.scratch_if_branches.append(store.gpa, if_branch_idx);
 }
 
+/// TODO
 pub fn ifBranchSpanFrom(store: *NodeStore, start: u32) CIR.IfBranch.Span {
     const end = store.scratch_if_branches.top();
     defer store.scratch_if_branches.clearFrom(start);
@@ -1488,10 +1491,12 @@ pub fn ifBranchSpanFrom(store: *NodeStore, start: u32) CIR.IfBranch.Span {
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
 }
 
+/// TODO
 pub fn sliceIfBranches(store: *const NodeStore, span: CIR.IfBranch.Span) []CIR.IfBranch.Idx {
     return store.sliceFromSpan(CIR.IfBranch.Idx, span.span);
 }
 
+/// TODO
 pub fn addIfBranch(store: *NodeStore, if_branch: CIR.IfBranch) CIR.IfBranch.Idx {
     const node = Node{
         .data_1 = @intFromEnum(if_branch.cond),

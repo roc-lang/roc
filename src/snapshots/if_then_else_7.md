@@ -49,7 +49,7 @@ NO CHANGE
 				(e-int @2-2-2-3 (int-var 75) (precision-var 74) (literal "1") (value "TODO") (bound "u8")))))
 	(if-else
 		(e-block @3-8-5-2
-			(e-int @4-2-4-3 (int-var 79) (precision-var 78) (literal "2") (value "TODO") (bound "u8")))))
+			(e-int @4-2-4-3 (int-var 80) (precision-var 79) (literal "2") (value "TODO") (bound "u8")))))
 ~~~
 # TYPES
 ~~~clojure

@@ -35,7 +35,7 @@ NO CHANGE
 			(e-runtime-error (tag "ident_not_in_scope"))
 			(e-int @1-9-1-10 (int-var 75) (precision-var 74) (literal "1") (value "TODO") (bound "u8"))))
 	(if-else
-		(e-int @1-16-1-17 (int-var 78) (precision-var 77) (literal "2") (value "TODO") (bound "u8"))))
+		(e-int @1-16-1-17 (int-var 79) (precision-var 78) (literal "2") (value "TODO") (bound "u8"))))
 ~~~
 # TYPES
 ~~~clojure
