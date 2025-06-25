@@ -12,7 +12,7 @@ some_fn(arg1)? # Comment 1
 ~~~
 # PROBLEMS
 **NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize record field_access expression
+This feature is not yet implemented: canonicalize suffix_single_question expression
 
 # TOKENS
 ~~~zig
@@ -23,27 +23,24 @@ DotLowerIdent(4:2-4:15),NoSpaceOpQuestion(4:15-4:16),EndOfFile(4:16-4:16),
 ~~~
 # PARSE
 ~~~clojure
-(field_access (1:1-4:16)
-	(binop (1:1-4:16)
-		"some_fn"
-		(field_access (1:1-4:15)
-			(binop (1:1-4:15)
-				"some_fn"
-				(field_access (1:1-3:30)
-					(binop (1:1-3:30)
-						"some_fn"
-						(suffix_single_question (1:1-1:15)
-							(apply (1:1-1:14)
-								(ident (1:1-1:8) "" "some_fn")
-								(ident (1:9-1:13) "" "arg1")))
-						(suffix_single_question (2:2-2:28)
-							(apply (2:2-2:27)
-								(ident (2:2-2:25) "" ".static_dispatch_method")))))
-				(suffix_single_question (3:2-3:33)
-					(apply (3:2-3:32)
-						(ident (3:2-3:30) "" ".next_static_dispatch_method")))))
-		(suffix_single_question (4:2-4:16)
-			(ident (4:2-4:15) "" ".record_field"))))
+(e-field-access @1-1-4-16
+	(e-binop @1-1-4-16 (op "some_fn")
+		(e-field-access @1-1-4-15
+			(e-binop @1-1-4-15 (op "some_fn")
+				(e-field-access @1-1-3-30
+					(e-binop @1-1-3-30 (op "some_fn")
+						(e-question-suffix @1-1-1-15
+							(e-apply @1-1-1-14
+								(e-ident @1-1-1-8 (qaul "") (raw "some_fn"))
+								(e-ident @1-9-1-13 (qaul "") (raw "arg1"))))
+						(e-question-suffix @2-2-2-28
+							(e-apply @2-2-2-27
+								(e-ident @2-2-2-25 (qaul "") (raw ".static_dispatch_method"))))))
+				(e-question-suffix @3-2-3-33
+					(e-apply @3-2-3-32
+						(e-ident @3-2-3-30 (qaul "") (raw ".next_static_dispatch_method"))))))
+		(e-question-suffix @4-2-4-16
+			(e-ident @4-2-4-15 (qaul "") (raw ".record_field")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -51,9 +48,15 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e_runtime_error (1:1-1:1) "not_implemented")
+(e-dot-access @1-1-4-16 (field "unknown") (id 76)
+	(receiver
+		(e-dot-access @1-1-4-15 (field "unknown")
+			(receiver
+				(e-dot-access @1-1-3-30 (field "unknown")
+					(receiver
+						(e-runtime-error (tag "not_implemented"))))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr 13 (type "Error"))
+(expr (id 76) (type "*"))
 ~~~

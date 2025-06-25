@@ -18,10 +18,10 @@ StringStart(1:1-1:2),StringPart(1:2-1:8),OpenStringInterpolation(1:8-1:10),Lower
 ~~~
 # PARSE
 ~~~clojure
-(string (1:1-1:17)
-	(string_part (1:2-1:8) "Hello ")
-	(ident (1:10-1:14) "" "name")
-	(string_part (1:15-1:16) "!"))
+(e-string @1-1-1-17
+	(e-string-part @1-2-1-8 (raw "Hello "))
+	(e-ident @1-10-1-14 (qaul "") (raw "name"))
+	(e-string-part @1-15-1-16 (raw "!")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -29,12 +29,12 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e_string (1:1-1:17)
-	(e_literal (1:2-1:8) "Hello ")
-	(e_runtime_error (1:10-1:14) "ident_not_in_scope")
-	(e_literal (1:15-1:16) "!"))
+(e-string @1-1-1-17 (id 76)
+	(e-literal @1-2-1-8 (string "Hello "))
+	(e-runtime-error (tag "ident_not_in_scope"))
+	(e-literal @1-15-1-16 (string "!")))
 ~~~
 # TYPES
 ~~~clojure
-(expr 16 (type "Str"))
+(expr (id 76) (type "Str"))
 ~~~

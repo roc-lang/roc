@@ -15,14 +15,15 @@ OpenSquare(1:1-1:2),OpenSquare(1:2-1:3),Int(1:3-1:4),Comma(1:4-1:5),Int(1:6-1:7)
 ~~~
 # PARSE
 ~~~clojure
-(list (1:1-1:22)
-	(list (1:2-1:8)
-		(int (1:3-1:4) "1")
-		(int (1:6-1:7) "2"))
-	(list (1:10-1:16)
-		(int (1:11-1:12) "3")
-		(int (1:14-1:15) "4"))
-	(list (1:18-1:21) (int (1:19-1:20) "5")))
+(e-list @1-1-1-22
+	(e-list @1-2-1-8
+		(e-int @1-3-1-4 (raw "1"))
+		(e-int @1-6-1-7 (raw "2")))
+	(e-list @1-10-1-16
+		(e-int @1-11-1-12 (raw "3"))
+		(e-int @1-14-1-15 (raw "4")))
+	(e-list @1-18-1-21
+		(e-int @1-19-1-20 (raw "5"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -30,40 +31,21 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e_list (1:1-1:22)
-	(elem_var 33)
+(e-list @1-1-1-22 (elem-var 93) (id 94)
 	(elems
-		(e_list (1:2-1:8)
-			(elem_var 18)
+		(e-list @1-2-1-8 (elem-var 78)
 			(elems
-				(e_int (1:3-1:4)
-					(int_var 14)
-					(requirements (sign_needed "false") (bits_needed "types.types.Num.Int.BitsNeeded.7"))
-					(value "1"))
-				(e_int (1:6-1:7)
-					(int_var 17)
-					(requirements (sign_needed "false") (bits_needed "types.types.Num.Int.BitsNeeded.7"))
-					(value "2"))))
-		(e_list (1:10-1:16)
-			(elem_var 26)
+				(e-int @1-3-1-4 (num-var 74) (sign-needed "false") (bits-needed "7") (value "1"))
+				(e-int @1-6-1-7 (num-var 77) (sign-needed "false") (bits-needed "7") (value "2"))))
+		(e-list @1-10-1-16 (elem-var 86)
 			(elems
-				(e_int (1:11-1:12)
-					(int_var 22)
-					(requirements (sign_needed "false") (bits_needed "types.types.Num.Int.BitsNeeded.7"))
-					(value "3"))
-				(e_int (1:14-1:15)
-					(int_var 25)
-					(requirements (sign_needed "false") (bits_needed "types.types.Num.Int.BitsNeeded.7"))
-					(value "4"))))
-		(e_list (1:18-1:21)
-			(elem_var 31)
+				(e-int @1-11-1-12 (num-var 82) (sign-needed "false") (bits-needed "7") (value "3"))
+				(e-int @1-14-1-15 (num-var 85) (sign-needed "false") (bits-needed "7") (value "4"))))
+		(e-list @1-18-1-21 (elem-var 91)
 			(elems
-				(e_int (1:19-1:20)
-					(int_var 30)
-					(requirements (sign_needed "false") (bits_needed "types.types.Num.Int.BitsNeeded.7"))
-					(value "5"))))))
+				(e-int @1-19-1-20 (num-var 90) (sign-needed "false") (bits-needed "7") (value "5"))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr 34 (type "List(List(Num(Int(*))))"))
+(expr (id 94) (type "List(List(Num(Int(*))))"))
 ~~~

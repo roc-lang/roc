@@ -18,10 +18,11 @@ LowerIdent(1:1-1:4),NoSpaceOpenRound(1:4-1:5),Int(1:5-1:7),Comma(1:7-1:8),String
 ~~~
 # PARSE
 ~~~clojure
-(apply (1:1-1:17)
-	(ident (1:1-1:4) "" "foo")
-	(int (1:5-1:7) "42")
-	(string (1:9-1:16) (string_part (1:10-1:15) "hello")))
+(e-apply @1-1-1-17
+	(e-ident @1-1-1-4 (qaul "") (raw "foo"))
+	(e-int @1-5-1-7 (raw "42"))
+	(e-string @1-9-1-16
+		(e-string-part @1-10-1-15 (raw "hello"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -29,15 +30,13 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e_call (1:1-1:17)
-	(e_runtime_error (1:1-1:4) "ident_not_in_scope")
-	(e_int (1:5-1:7)
-		(int_var 16)
-		(requirements (sign_needed "false") (bits_needed "types.types.Num.Int.BitsNeeded.7"))
-		(value "42"))
-	(e_string (1:9-1:16) (e_literal (1:10-1:15) "hello")))
+(e-call @1-1-1-17 (id 79)
+	(e-runtime-error (tag "ident_not_in_scope"))
+	(e-int @1-5-1-7 (num-var 76) (sign-needed "false") (bits-needed "7") (value "42"))
+	(e-string @1-9-1-16
+		(e-literal @1-10-1-15 (string "hello"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr 19 (type "*"))
+(expr (id 79) (type "*"))
 ~~~

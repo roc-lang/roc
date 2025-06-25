@@ -8,9 +8,43 @@ type=file
 ff8.8.d
 ~~~
 # PROBLEMS
-PARSER: missing_header
-PARSER: expr_unexpected_token
-PARSER: expr_unexpected_token
+**MISSING HEADER**
+Roc files must start with a module header.
+
+For example:
+        module [main]
+or for an app:
+        app [main!] { pf: platform "../basic-cli/platform.roc" }
+
+Here is the problematic code:
+**fuzz_crash_007.md:1:1:1:6:**
+```roc
+ff8.8.d
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **.8.d** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**fuzz_crash_007.md:1:4:1:8:**
+```roc
+ff8.8.d
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **.d** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**fuzz_crash_007.md:1:6:1:8:**
+```roc
+ff8.8.d
+```
+
+
 **INVALID STATEMENT**
 The statement **expr** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
@@ -25,11 +59,11 @@ LowerIdent(1:1-1:4),NoSpaceDotInt(1:4-1:6),NoSpaceDotLowerIdent(1:6-1:8),EndOfFi
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-1:8)
-	(malformed_header (1:1-1:4) "missing_header")
+(file @1-1-1-8
+	(malformed-header @1-1-1-6 (tag "missing_header"))
 	(statements
-		(malformed_expr (1:4-1:6) "expr_unexpected_token")
-		(malformed_expr (1:6-1:8) "expr_unexpected_token")))
+		(e-malformed @1-4-1-8 (reason "expr_unexpected_token"))
+		(e-malformed @1-6-1-8 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -37,9 +71,11 @@ LowerIdent(1:1-1:4),NoSpaceDotInt(1:4-1:6),NoSpaceDotLowerIdent(1:6-1:8),EndOfFi
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir "empty")
+(can-ir (empty true))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types (defs) (expressions))
+(inferred-types
+	(defs)
+	(expressions))
 ~~~

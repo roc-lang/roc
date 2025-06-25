@@ -15,10 +15,10 @@ OpenSquare(1:1-1:2),Int(1:2-1:3),Comma(1:3-1:4),Int(1:5-1:6),Comma(1:6-1:7),Int(
 ~~~
 # PARSE
 ~~~clojure
-(list (1:1-1:10)
-	(int (1:2-1:3) "1")
-	(int (1:5-1:6) "2")
-	(int (1:8-1:9) "3"))
+(e-list @1-1-1-10
+	(e-int @1-2-1-3 (raw "1"))
+	(e-int @1-5-1-6 (raw "2"))
+	(e-int @1-8-1-9 (raw "3")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -26,23 +26,13 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e_list (1:1-1:10)
-	(elem_var 21)
+(e-list @1-1-1-10 (elem-var 81) (id 82)
 	(elems
-		(e_int (1:2-1:3)
-			(int_var 14)
-			(requirements (sign_needed "false") (bits_needed "types.types.Num.Int.BitsNeeded.7"))
-			(value "1"))
-		(e_int (1:5-1:6)
-			(int_var 17)
-			(requirements (sign_needed "false") (bits_needed "types.types.Num.Int.BitsNeeded.7"))
-			(value "2"))
-		(e_int (1:8-1:9)
-			(int_var 20)
-			(requirements (sign_needed "false") (bits_needed "types.types.Num.Int.BitsNeeded.7"))
-			(value "3"))))
+		(e-int @1-2-1-3 (num-var 74) (sign-needed "false") (bits-needed "7") (value "1"))
+		(e-int @1-5-1-6 (num-var 77) (sign-needed "false") (bits-needed "7") (value "2"))
+		(e-int @1-8-1-9 (num-var 80) (sign-needed "false") (bits-needed "7") (value "3"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr 22 (type "List(Num(Int(*)))"))
+(expr (id 82) (type "List(Num(Int(*)))"))
 ~~~

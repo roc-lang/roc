@@ -146,12 +146,22 @@ pub fn pushMalformed(self: *Parser, comptime t: type, tag: AST.Diagnostic.Tag, s
     if (self.peek() != .EndOfFile) {
         self.advanceOne(); // TODO: find a better point to advance to
     }
-    const region = AST.TokenizedRegion{ .start = start, .end = pos };
+
+    // Create a diagnostic region that points to the problematic token
+    // If the parser has moved too far from the start, use the start token for better error location
+    const diagnostic_start = if (self.pos > start and (self.pos - start) > 2) start else @min(pos, self.pos);
+    const diagnostic_end = if (self.pos > start and (self.pos - start) > 2) start + 1 else @max(pos, self.pos);
+    // If start equals end, make it a single-token region
+    const diagnostic_region = AST.TokenizedRegion{ .start = diagnostic_start, .end = if (diagnostic_start == diagnostic_end) diagnostic_start + 1 else diagnostic_end };
+
+    // AST node should span the entire malformed expression
+    const ast_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
+
     self.diagnostics.append(self.gpa, .{
         .tag = tag,
-        .region = region,
+        .region = diagnostic_region,
     }) catch |err| exitOnOom(err);
-    return self.store.addMalformed(t, tag, region);
+    return self.store.addMalformed(t, tag, ast_region);
 }
 /// parse a `.roc` module
 ///
@@ -865,6 +875,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) ?AST.Statement.I
                 var exposes = AST.ExposedItem.Span{ .span = base.DataSpan.empty() };
                 const module_name_tok = self.pos;
                 var end = self.pos;
+                // Handle 'as' clause if present
                 if (self.peekNext() == .KwAs) {
                     self.advance(); // Advance past UpperIdent
                     self.advance(); // Advance past KwAs
@@ -875,8 +886,12 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) ?AST.Statement.I
                         self.advance();
                         return malformed;
                     };
-                } else if (self.peekNext() == .KwExposing) {
-                    self.advance(); // Advance past ident
+                } else {
+                    self.advance(); // Advance past identifier
+                }
+
+                // Handle 'exposing' clause if present (can occur with or without 'as')
+                if (self.peek() == .KwExposing) {
                     self.advance(); // Advance past KwExposing
                     self.expect(.OpenSquare) catch {
                         return self.pushMalformed(AST.Statement.Idx, .import_exposing_no_open, start);
@@ -891,8 +906,6 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) ?AST.Statement.I
                         return self.pushMalformed(AST.Statement.Idx, .import_exposing_no_close, start);
                     };
                     exposes = self.store.exposedItemSpanFrom(scratch_top);
-                } else {
-                    self.advance(); // Advance past identifier
                 }
                 const statement_idx = self.store.addStatement(.{ .import = .{
                     .module_name_tok = module_name_tok,
@@ -1032,20 +1045,57 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) ?AST.Statement.I
                 // continue to parse final expression
             }
         },
+        .NamedUnderscore => {
+            const start = self.pos;
+            if (self.peekNext() == .OpAssign) {
+                self.advance(); // Advance past NamedUnderscore
+                self.advance(); // Advance past OpAssign
+                const idx = self.parseExpr();
+                const expr_region = self.store.nodes.items.items(.region)[@intFromEnum(idx)];
+                const patt_idx = self.store.addPattern(.{ .ident = .{
+                    .ident_tok = start,
+                    .region = .{ .start = start, .end = start },
+                } });
+                const statement_idx = self.store.addStatement(.{ .decl = .{
+                    .pattern = patt_idx,
+                    .body = idx,
+                    .region = .{ .start = start, .end = expr_region.end },
+                } });
+                if (self.peek() == .Newline) {
+                    self.advance();
+                }
+                return statement_idx;
+            } else if (self.peekNext() == .OpColon) {
+                self.advance(); // Advance past NamedUnderscore
+                self.advance(); // Advance past OpColon
+                const anno = self.parseTypeAnno(.not_looking_for_args);
+                const statement_idx = self.store.addStatement(.{ .type_anno = .{
+                    .anno = anno,
+                    .name = start,
+                    .where = self.parseWhereConstraint(),
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+                return statement_idx;
+            } else {
+                // continue to parse final expression
+            }
+        },
         // Expect to parse a Type Annotation, e.g. `Foo a : (a,a)`
         .UpperIdent => {
             const start = self.pos;
             if (statementType == .top_level) {
                 const header = self.parseTypeHeader();
-                if (self.peek() != .OpColon) {
+                if (self.peek() != .OpColon and self.peek() != .OpColonEqual) {
                     return self.pushMalformed(AST.Statement.Idx, .expected_colon_after_type_annotation, start);
                 }
+                const kind: AST.TypeDeclKind = if (self.peek() == .OpColonEqual) .nominal else .alias;
                 self.advance();
                 const anno = self.parseTypeAnno(.not_looking_for_args);
                 const statement_idx = self.store.addStatement(.{ .type_decl = .{
                     .header = header,
                     .anno = anno,
                     .where = self.parseWhereConstraint(),
+                    .kind = kind,
                     .region = .{ .start = start, .end = self.pos },
                 } });
                 return statement_idx;
@@ -1111,6 +1161,13 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) AST.Pattern.Idx {
         var pattern: ?AST.Pattern.Idx = null;
         switch (self.peek()) {
             .LowerIdent => {
+                pattern = self.store.addPattern(.{ .ident = .{
+                    .ident_tok = start,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+                self.advance();
+            },
+            .NamedUnderscore => {
                 pattern = self.store.addPattern(.{ .ident = .{
                     .ident_tok = start,
                     .region = .{ .start = start, .end = self.pos },
@@ -1366,6 +1423,16 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
             }
         },
         .LowerIdent => {
+            self.advance();
+            const ident = self.store.addExpr(.{ .ident = .{
+                .token = start,
+                .qualifier = null,
+                .region = .{ .start = start, .end = start },
+            } });
+
+            expr = ident;
+        },
+        .NamedUnderscore => {
             self.advance();
             const ident = self.store.addExpr(.{ .ident = .{
                 .token = start,

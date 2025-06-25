@@ -19,12 +19,16 @@ main! = |_| {
 }
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level import
+**UNUSED VARIABLE**
+Variable ``world`` is not used anywhere in your code.
 
-**UNDEFINED VARIABLE**
-Nothing is named `line!` in this scope.
-Is there an `import` or `exposing` missing up-top?
+If you don't need this variable, prefix it with an underscore like `_world` to suppress this warning.
+The unused variable is declared here:
+**hello_world_with_block.md:9:2:9:7:**
+```roc
+	world = "World"
+```
+
 
 # TOKENS
 ~~~zig
@@ -43,30 +47,34 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 ~~~
 # PARSE
 ~~~clojure
-(file (1:2-12:2)
-	(app (4:1-4:57)
-		(provides (4:6-4:12) (exposed_item (lower_ident "main!")))
-		(record_field (4:15-4:57)
-			"pf"
-			(string (4:28-4:55) (string_part (4:29-4:54) "../basic-cli/platform.roc")))
-		(packages (4:13-4:57)
-			(record_field (4:15-4:57)
-				"pf"
-				(string (4:28-4:55) (string_part (4:29-4:54) "../basic-cli/platform.roc")))))
+(file @1-2-12-2
+	(app @4-1-4-57
+		(provides @4-6-4-12
+			(exposed-lower-ident (text "main!")))
+		(record-field @4-15-4-57 (name "pf")
+			(e-string @4-28-4-55
+				(e-string-part @4-29-4-54 (raw "../basic-cli/platform.roc"))))
+		(packages @4-13-4-57
+			(record-field @4-15-4-57 (name "pf")
+				(e-string @4-28-4-55
+					(e-string-part @4-29-4-54 (raw "../basic-cli/platform.roc"))))))
 	(statements
-		(import (6:1-6:17) ".Stdout" (qualifier "pf"))
-		(decl (8:1-12:2)
-			(ident (8:1-8:6) "main!")
-			(lambda (8:9-12:2)
-				(args (underscore))
-				(block (8:13-12:2)
+		(s-import @6-1-6-17 (module ".Stdout") (qualifier "pf"))
+		(s-decl @8-1-12-2
+			(p-ident @8-1-8-6 (raw "main!"))
+			(e-lambda @8-9-12-2
+				(args
+					(p-underscore))
+				(e-block @8-13-12-2
 					(statements
-						(decl (9:2-9:17)
-							(ident (9:2-9:7) "world")
-							(string (9:10-9:17) (string_part (9:11-9:16) "World")))
-						(apply (11:2-11:31)
-							(ident (11:2-11:14) "Stdout" ".line!")
-							(string (11:15-11:30) (string_part (11:16-11:29) "Hello, world!")))))))))
+						(s-decl @9-2-9-17
+							(p-ident @9-2-9-7 (raw "world"))
+							(e-string @9-10-9-17
+								(e-string-part @9-11-9-16 (raw "World"))))
+						(e-apply @11-2-11-31
+							(e-ident @11-2-11-14 (qaul "Stdout") (raw ".line!"))
+							(e-string @11-15-11-30
+								(e-string-part @11-16-11-29 (raw "Hello, world!"))))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -74,30 +82,30 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir
-	(d_let
-		(def_pattern
-			(p_assign (8:1-8:6)
-				(pid 13)
-				(ident "main!")))
-		(def_expr
-			(e_lambda (8:9-12:2)
-				(args (p_underscore (8:10-8:11) (pid 14)))
-				(e_block (8:13-12:2)
-					(s_let (9:2-9:17)
-						(p_assign (9:2-9:7)
-							(pid 15)
-							(ident "world"))
-						(e_string (9:10-9:17) (e_literal (9:11-9:16) "World")))
-					(e_call (11:2-11:31)
-						(e_runtime_error (11:2-11:14) "ident_not_in_scope")
-						(e_string (11:15-11:30) (e_literal (11:16-11:29) "Hello, world!"))))))))
+(can-ir
+	(d-let (id 87)
+		(p-assign @8-1-8-6 (ident "main!") (id 73))
+		(e-lambda @8-9-12-2 (id 86)
+			(args
+				(p-underscore @8-10-8-11 (id 74)))
+			(e-block @8-13-12-2
+				(s-let @9-2-9-17
+					(p-assign @9-2-9-7 (ident "world") (id 75))
+					(e-string @9-10-9-17 (id 77)
+						(e-literal @9-11-9-16 (string "World"))))
+				(e-call @11-2-11-31
+					(e-lookup-external
+						(ext-decl @11-2-11-14 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value") (type-var 79)))
+					(e-string @11-15-11-30
+						(e-literal @11-16-11-29 (string "Hello, world!")))))))
+	(s-import @6-1-6-17 (module "pf.Stdout") (id 72)
+		(exposes)))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types
+(inferred-types
 	(defs
-		(def "main!" 26 (type "*")))
+		(def (name "main!") (type "*")))
 	(expressions
-		(expr (8:9-12:2) 25 (type "*"))))
+		(expr @8-9-12-2 (type "*"))))
 ~~~

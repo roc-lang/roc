@@ -8,15 +8,29 @@ type=file
 F
 ~~~
 # PROBLEMS
-PARSER: missing_header
+**MISSING HEADER**
+Roc files must start with a module header.
+
+For example:
+        module [main]
+or for an app:
+        app [main!] { pf: platform "../basic-cli/platform.roc" }
+
+Here is the problematic code:
+**fuzz_crash_004.md:1:1:1:2:**
+```roc
+F
+```
+
+
 # TOKENS
 ~~~zig
 UpperIdent(1:1-1:2),EndOfFile(1:2-1:2),
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-1:2)
-	(malformed_header (1:1-1:2) "missing_header")
+(file @1-1-1-2
+	(malformed-header @1-1-1-2 (tag "missing_header"))
 	(statements))
 ~~~
 # FORMATTED
@@ -25,9 +39,11 @@ UpperIdent(1:1-1:2),EndOfFile(1:2-1:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir "empty")
+(can-ir (empty true))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types (defs) (expressions))
+(inferred-types
+	(defs)
+	(expressions))
 ~~~

@@ -15,7 +15,8 @@ StringStart(1:1-1:2),StringPart(1:2-1:2),StringEnd(1:2-1:3),EndOfFile(1:3-1:3),
 ~~~
 # PARSE
 ~~~clojure
-(string (1:1-1:3) (string_part (1:2-1:2) ""))
+(e-string @1-1-1-3
+	(e-string-part @1-2-1-2 (raw "")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -23,9 +24,10 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e_string (1:1-1:3) (e_literal (1:2-1:2) ""))
+(e-string @1-1-1-3 (id 73)
+	(e-literal @1-2-1-2 (string "")))
 ~~~
 # TYPES
 ~~~clojure
-(expr 13 (type "Str"))
+(expr (id 73) (type "Str"))
 ~~~

@@ -396,6 +396,7 @@ pub const TokenizedBuffer = struct {
             .DotUpperIdent,
             .NoSpaceDotUpperIdent,
             .UpperIdent,
+            .NamedUnderscore,
             => {
                 return self.env.idents.getRegion(extra.interned);
             },
@@ -420,6 +421,7 @@ pub const TokenizedBuffer = struct {
             .DotUpperIdent,
             .NoSpaceDotUpperIdent,
             .UpperIdent,
+            .NamedUnderscore,
             => {
                 return extra.interned;
             },
@@ -1395,8 +1397,7 @@ pub const Tokenizer = struct {
                             if (!self.cursor.chompIdentGeneral()) {
                                 tok = .MalformedNamedUnderscoreUnicode;
                             }
-                            const len = self.cursor.pos - start;
-                            self.output.pushTokenNormal(tok, start, len);
+                            self.pushTokenInternedHere(tok, start, start);
                         } else {
                             self.cursor.pos += 1;
                             self.output.pushTokenNormal(.Underscore, start, 1);

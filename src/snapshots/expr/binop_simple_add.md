@@ -15,10 +15,9 @@ Int(1:1-1:2),OpPlus(1:3-1:4),Int(1:5-1:6),EndOfFile(1:6-1:6),
 ~~~
 # PARSE
 ~~~clojure
-(binop (1:1-1:6)
-	"+"
-	(int (1:1-1:2) "1")
-	(int (1:5-1:6) "2"))
+(e-binop @1-1-1-6 (op "+")
+	(e-int @1-1-1-2 (raw "1"))
+	(e-int @1-5-1-6 (raw "2")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -26,18 +25,11 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e_binop (1:1-1:6)
-	"add"
-	(e_int (1:1-1:2)
-		(int_var 14)
-		(requirements (sign_needed "false") (bits_needed "types.types.Num.Int.BitsNeeded.7"))
-		(value "1"))
-	(e_int (1:5-1:6)
-		(int_var 17)
-		(requirements (sign_needed "false") (bits_needed "types.types.Num.Int.BitsNeeded.7"))
-		(value "2")))
+(e-binop @1-1-1-6 (op "add") (id 78)
+	(e-int @1-1-1-2 (num-var 74) (sign-needed "false") (bits-needed "7") (value "1"))
+	(e-int @1-5-1-6 (num-var 77) (sign-needed "false") (bits-needed "7") (value "2")))
 ~~~
 # TYPES
 ~~~clojure
-(expr 18 (type "*"))
+(expr (id 78) (type "*"))
 ~~~

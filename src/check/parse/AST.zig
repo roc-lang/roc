@@ -11,19 +11,19 @@
 //! the IR, as well as converting it to S-expressions for debugging and visualization.
 
 const std = @import("std");
+const testing = std.testing;
 const base = @import("../../base.zig");
-const sexpr = @import("../../base/sexpr.zig");
 const tokenize = @import("tokenize.zig");
-const Token = tokenize.Token;
 const collections = @import("../../collections.zig");
 const reporting = @import("../../reporting.zig");
 
 const Node = @import("Node.zig");
 const NodeStore = @import("NodeStore.zig");
+const Token = tokenize.Token;
 const TokenizedBuffer = tokenize.TokenizedBuffer;
-const exitOnOom = @import("../../collections/utils.zig").exitOnOom;
+const exitOnOom = collections.utils.exitOnOom;
 
-const testing = std.testing;
+const SExpr = base.SExpr;
 const Ident = base.Ident;
 const Allocator = std.mem.Allocator;
 
@@ -121,9 +121,51 @@ pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, a
     return report;
 }
 
+/// Convert TokenizedRegion to base.Region for error reporting
+pub fn tokenizedRegionToRegion(self: *AST, tokenized_region: TokenizedRegion) base.Region {
+    const token_count: u32 = @intCast(self.tokens.tokens.len);
+
+    // Ensure both start and end are within bounds
+    const safe_start_idx = if (tokenized_region.start >= token_count)
+        token_count - 1
+    else
+        tokenized_region.start;
+
+    const safe_end_idx = if (tokenized_region.end >= token_count)
+        token_count - 1
+    else
+        tokenized_region.end;
+
+    // Ensure end is at least start to prevent invalid regions
+    const final_end_idx = if (safe_end_idx < safe_start_idx)
+        safe_start_idx
+    else
+        safe_end_idx;
+
+    const start_region = self.tokens.resolve(safe_start_idx);
+    const end_region = self.tokens.resolve(final_end_idx);
+    return .{
+        .start = start_region.start,
+        .end = end_region.end,
+    };
+}
+
+/// Get the text content of a token for error reporting
+fn getTokenText(self: *AST, token_idx: Token.Idx) []const u8 {
+    const token_region = self.tokens.resolve(@intCast(token_idx));
+    return self.source[token_region.start.offset..token_region.end.offset];
+}
+
 /// Convert a parse diagnostic to a Report for rendering
-pub fn parseDiagnosticToReport(self: *AST, diagnostic: Diagnostic, allocator: std.mem.Allocator) !reporting.Report {
-    _ = self; // TODO: Use self for source information
+pub fn parseDiagnosticToReport(self: *AST, diagnostic: Diagnostic, allocator: std.mem.Allocator, filename: []const u8) !reporting.Report {
+    const raw_region = self.tokenizedRegionToRegion(diagnostic.region);
+
+    // Ensure region bounds are valid for source slicing
+    const region = base.Region{
+        .start = .{ .offset = @min(raw_region.start.offset, self.source.len) },
+        .end = .{ .offset = @min(@max(raw_region.end.offset, raw_region.start.offset), self.source.len) },
+    };
+
     const title = switch (diagnostic.tag) {
         .bad_indent => "BAD INDENTATION",
         .multiple_platforms => "MULTIPLE PLATFORMS",
@@ -146,26 +188,245 @@ pub fn parseDiagnosticToReport(self: *AST, diagnostic: Diagnostic, allocator: st
         .string_unexpected_token => "UNEXPECTED TOKEN IN STRING",
         .expr_unexpected_token => "UNEXPECTED TOKEN IN EXPRESSION",
         .import_must_be_top_level => "IMPORT MUST BE TOP LEVEL",
+        .expected_expr_close_square_or_comma => "LIST NOT CLOSED",
         else => "PARSE ERROR",
     };
 
-    const body = switch (diagnostic.tag) {
-        .missing_header => "Roc files must start with a module header like 'module [main]' or 'app [main] { pf: platform \"...\" }'.",
-        .multiple_platforms => "Only one platform declaration is allowed per file.",
-        .no_platform => "App files must specify a platform.",
-        .bad_indent => "The indentation here is inconsistent with the surrounding code.",
-        .list_not_closed => "This list is missing a closing bracket ']'.",
-        .missing_arrow => "Expected an arrow '->' here.",
-        .header_unexpected_token => "This token is not expected in a module header.",
-        .pattern_unexpected_token => "This token is not expected in a pattern.",
-        .statement_unexpected_token => "This token is not expected in a statement.",
-        .expr_unexpected_token => "This token is not expected in an expression.",
-        .import_must_be_top_level => "Import statements must appear at the top level of a module.",
-        else => "A parsing error occurred.",
-    };
-
     var report = reporting.Report.init(allocator, title, .runtime_error);
-    try report.document.addText(body);
+
+    // Add detailed error message based on the diagnostic type
+    switch (diagnostic.tag) {
+        .missing_header => {
+            try report.document.addReflowingText("Roc files must start with a module header.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addText("For example:");
+            try report.document.addLineBreak();
+            try report.document.addIndent(1);
+            try report.document.addCodeBlock("module [main]");
+            try report.document.addLineBreak();
+            try report.document.addText("or for an app:");
+            try report.document.addLineBreak();
+            try report.document.addIndent(1);
+            try report.document.addCodeBlock("app [main!] { pf: platform \"../basic-cli/platform.roc\" }");
+        },
+        .multiple_platforms => {
+            try report.document.addReflowingText("Only one platform declaration is allowed per file.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Remove the duplicate platform declaration.");
+        },
+        .no_platform => {
+            try report.document.addReflowingText("App files must specify a platform.");
+            try report.document.addLineBreak();
+            try report.document.addText("Add a platform specification like:");
+            try report.document.addLineBreak();
+            try report.document.addIndent(1);
+            try report.document.addCodeBlock("{ pf: platform \"../basic-cli/platform.roc\" }");
+        },
+        .bad_indent => {
+            try report.document.addReflowingText("The indentation here is inconsistent with the surrounding code.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Make sure to use consistent spacing for indentation.");
+        },
+        .list_not_closed => {
+            try report.document.addReflowingText("This list is missing a closing bracket.");
+            try report.document.addLineBreak();
+            try report.document.addText("Add a ");
+            try report.document.addAnnotated("]", .emphasized);
+            try report.document.addText(" to close the list.");
+        },
+        .missing_arrow => {
+            try report.document.addText("Expected an arrow ");
+            try report.document.addAnnotated("->", .emphasized);
+            try report.document.addText(" here.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Function type annotations require arrows between parameter and return types.");
+        },
+        .expected_exposes, .expected_exposes_close_square, .expected_exposes_open_square => {
+            try report.document.addReflowingText("Module headers must have an ");
+            try report.document.addKeyword("exposing");
+            try report.document.addReflowingText(" section that lists what the module exposes.");
+            try report.document.addLineBreak();
+            try report.document.addText("For example: ");
+            try report.document.addCodeBlock("module [main, add, subtract]");
+        },
+        .expected_imports, .expected_imports_close_curly, .expected_imports_open_curly => {
+            try report.document.addReflowingText("Import statements must specify what is being imported.");
+            try report.document.addLineBreak();
+            try report.document.addText("For example: ");
+            try report.document.addCodeBlock("import pf.Stdout exposing [line!]");
+        },
+        .header_unexpected_token => {
+            // Try to get the actual token text
+            const token_text = if (diagnostic.region.start != diagnostic.region.end)
+                self.source[region.start.offset..region.end.offset]
+            else
+                "<unknown>";
+            const owned_token = try report.addOwnedString(token_text);
+            try report.document.addText("The token ");
+            try report.document.addAnnotated(owned_token, .error_highlight);
+            try report.document.addText(" is not expected in a module header.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Module headers should only contain the module name and exposing list.");
+        },
+        .pattern_unexpected_token => {
+            const token_text = if (diagnostic.region.start != diagnostic.region.end)
+                self.source[region.start.offset..region.end.offset]
+            else
+                "<unknown>";
+            const owned_token = try report.addOwnedString(token_text);
+            try report.document.addText("The token ");
+            try report.document.addAnnotated(owned_token, .error_highlight);
+            try report.document.addText(" is not expected in a pattern.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Patterns can contain identifiers, literals, lists, records, or tags.");
+        },
+        .pattern_unexpected_eof => {
+            try report.document.addReflowingText("This pattern is incomplete - the file ended unexpectedly.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Complete the pattern or remove the incomplete pattern.");
+        },
+        .ty_anno_unexpected_token => {
+            const token_text = if (diagnostic.region.start != diagnostic.region.end)
+                self.source[region.start.offset..region.end.offset]
+            else
+                "<unknown>";
+            const owned_token = try report.addOwnedString(token_text);
+            try report.document.addText("The token ");
+            try report.document.addAnnotated(owned_token, .error_highlight);
+            try report.document.addText(" is not expected in a type annotation.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Type annotations should contain types like ");
+            try report.document.addType("Str");
+            try report.document.addText(", ");
+            try report.document.addType("Num a");
+            try report.document.addText(", or ");
+            try report.document.addType("List U64");
+            try report.document.addText(".");
+        },
+        .statement_unexpected_eof => {
+            try report.document.addReflowingText("This statement is incomplete - the file ended unexpectedly.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Complete the statement or remove the incomplete statement.");
+        },
+        .statement_unexpected_token => {
+            const token_text = if (diagnostic.region.start != diagnostic.region.end)
+                self.source[region.start.offset..region.end.offset]
+            else
+                "<unknown>";
+            const owned_token = try report.addOwnedString(token_text);
+            try report.document.addText("The token ");
+            try report.document.addAnnotated(owned_token, .error_highlight);
+            try report.document.addText(" is not expected in a statement.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Statements can be definitions, assignments, or expressions.");
+        },
+        .string_unexpected_token => {
+            const token_text = if (diagnostic.region.start != diagnostic.region.end)
+                self.source[region.start.offset..region.end.offset]
+            else
+                "<unknown>";
+            const owned_token = try report.addOwnedString(token_text);
+            try report.document.addText("The token ");
+            try report.document.addAnnotated(owned_token, .error_highlight);
+            try report.document.addText(" is not expected in a string literal.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("String literals should be enclosed in double quotes.");
+        },
+        .expr_unexpected_token => {
+            const token_text = if (diagnostic.region.start != diagnostic.region.end)
+                self.source[region.start.offset..region.end.offset]
+            else
+                "<unknown>";
+            const owned_token = try report.addOwnedString(token_text);
+            try report.document.addText("The token ");
+            try report.document.addAnnotated(owned_token, .error_highlight);
+            try report.document.addText(" is not expected in an expression.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Expressions can be identifiers, literals, function calls, or operators.");
+        },
+        .import_must_be_top_level => {
+            try report.document.addReflowingText("Import statements must appear at the top level of a module.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Move this import to the top of the file, after the module header but before any definitions.");
+        },
+        .expected_expr_close_square_or_comma => {
+            try report.document.addReflowingText("This list is missing a closing bracket or has a syntax error.");
+            try report.document.addLineBreak();
+            try report.document.addText("Lists must be closed with ");
+            try report.document.addAnnotated("]", .emphasized);
+            try report.document.addText(" and list items must be separated by commas.");
+            try report.document.addLineBreak();
+            try report.document.addText("For example: ");
+            try report.document.addCodeBlock("[1, 2, 3]");
+        },
+        .expected_colon_after_type_annotation => {
+            try report.document.addReflowingText("Type applications require parentheses around their type arguments.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("I found a type followed by what looks like a type argument, but they need to be connected with parentheses.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addText("Instead of:");
+            try report.document.addLineBreak();
+            try report.document.addIndent(1);
+            try report.document.addAnnotated("List U8", .error_highlight);
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addText("Use:");
+            try report.document.addLineBreak();
+            try report.document.addIndent(1);
+            try report.document.addAnnotated("List(U8)", .emphasized);
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addText("Other valid examples:");
+            try report.document.addLineBreak();
+            try report.document.addIndent(1);
+            try report.document.addAnnotated("Dict(Str, Num)", .dimmed);
+            try report.document.addLineBreak();
+            try report.document.addIndent(1);
+            try report.document.addAnnotated("Result(a, Str)", .dimmed);
+            try report.document.addLineBreak();
+            try report.document.addIndent(1);
+            try report.document.addAnnotated("Maybe(List(U64))", .dimmed);
+        },
+        else => {
+            const tag_name = @tagName(diagnostic.tag);
+            const owned_tag = try report.addOwnedString(tag_name);
+            try report.document.addText("A parsing error occurred: ");
+            try report.document.addAnnotated(owned_tag, .dimmed);
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("This is an unexpected parsing error. Please check your syntax.");
+        },
+    }
+
+    // Add source context if we have a valid region
+    if (region.start.offset <= region.end.offset and region.end.offset <= self.source.len) {
+        // Compute line_starts from source for proper region info calculation
+        var line_starts = std.ArrayList(u32).init(allocator);
+        defer line_starts.deinit();
+
+        try line_starts.append(0); // First line starts at 0
+        for (self.source, 0..) |char, i| {
+            if (char == '\n') {
+                try line_starts.append(@intCast(i + 1));
+            }
+        }
+
+        // Use proper region info calculation with converted region
+        const region_info = base.RegionInfo.position(self.source, line_starts.items, region.start.offset, region.end.offset) catch {
+            return report; // Return report without source context if region calculation fails
+        };
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addText("Here is the problematic code:");
+        try report.document.addLineBreak();
+
+        // Use the proper addSourceContext method
+        try report.addSourceContext(region_info, self.source, filename);
+    }
+
     return report;
 }
 
@@ -328,6 +589,14 @@ pub fn toSExprStr(ast: *@This(), env: *base.ModuleEnv, writer: std.io.AnyWriter)
     node.toStringPretty(writer);
 }
 
+/// The kind of the type declaration represented, either:
+/// 1. An alias of the form `Foo = (Bar, Baz)`
+/// 2. A nominal type of the form `Foo := [Bar, Baz]`
+pub const TypeDeclKind = enum {
+    alias,
+    nominal,
+};
+
 /// Represents a statement.  Not all statements are valid in all positions.
 pub const Statement = union(enum) {
     decl: Decl,
@@ -369,6 +638,7 @@ pub const Statement = union(enum) {
         header: TypeHeader.Idx,
         anno: TypeAnno.Idx,
         where: ?Collection.Idx,
+        kind: TypeDeclKind,
         region: TokenizedRegion,
     },
     type_anno: struct {
@@ -391,11 +661,11 @@ pub const Statement = union(enum) {
         region: TokenizedRegion,
     };
 
-    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ast: *AST) sexpr.Expr {
+    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ast: *AST) SExpr {
         switch (self) {
             .decl => |decl| {
-                var node = sexpr.Expr.init(env.gpa, "decl");
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(decl.region, env.line_starts.items));
+                var node = SExpr.init(env.gpa, "s-decl");
+                node.appendRegion(env.gpa, ast.calcRegionInfo(decl.region, env.line_starts.items));
                 // pattern
                 {
                     const pattern = ast.store.getPattern(decl.pattern);
@@ -411,53 +681,47 @@ pub const Statement = union(enum) {
                 return node;
             },
             .@"var" => |v| {
-                var node = sexpr.Expr.init(env.gpa, "var");
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(v.region, env.line_starts.items));
-                // name
-                {
-                    const name_str = ast.resolve(v.name);
-                    var child = sexpr.Expr.init(env.gpa, "name");
-                    child.appendString(env.gpa, name_str);
-                    node.appendNode(env.gpa, &child);
-                }
-                // body
-                {
-                    const body = ast.store.getExpr(v.body);
-                    var body_node = body.toSExpr(env, ast);
-                    node.appendNode(env.gpa, &body_node);
-                }
+                var node = SExpr.init(env.gpa, "s-var");
+                node.appendRegion(env.gpa, ast.calcRegionInfo(v.region, env.line_starts.items));
+
+                const name_str = ast.resolve(v.name);
+                node.appendStringAttr(env.gpa, "name", name_str);
+
+                const body = ast.store.getExpr(v.body);
+                var body_node = body.toSExpr(env, ast);
+                node.appendNode(env.gpa, &body_node);
+
                 return node;
             },
             .expr => |expr| {
                 return ast.store.getExpr(expr.expr).toSExpr(env, ast);
             },
             .import => |import| {
-                var node = sexpr.Expr.init(env.gpa, "import");
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(import.region, env.line_starts.items));
+                var node = SExpr.init(env.gpa, "s-import");
+                node.appendRegion(env.gpa, ast.calcRegionInfo(import.region, env.line_starts.items));
+
                 // name e.g. `Stdout` in `import pf.Stdout`
-                node.appendString(env.gpa, ast.resolve(import.module_name_tok));
+                node.appendStringAttr(env.gpa, "module", ast.resolve(import.module_name_tok));
+
                 // qualifier e.g. `pf` in `import pf.Stdout`
                 if (import.qualifier_tok) |tok| {
                     const qualifier_str = ast.resolve(tok);
-                    var child = sexpr.Expr.init(env.gpa, "qualifier");
-                    child.appendString(env.gpa, qualifier_str);
-                    node.appendNode(env.gpa, &child);
+                    node.appendStringAttr(env.gpa, "qualifier", qualifier_str);
                 }
+
                 // alias e.g. `OUT` in `import pf.Stdout as OUT`
                 if (import.alias_tok) |tok| {
                     const qualifier_str = ast.resolve(tok);
-                    var child = sexpr.Expr.init(env.gpa, "alias");
-                    child.appendString(env.gpa, qualifier_str);
-                    node.appendNode(env.gpa, &child);
+                    node.appendStringAttr(env.gpa, "alias", qualifier_str);
                 }
+
                 // exposed identifiers e.g. [foo, bar] in `import pf.Stdout exposing [foo, bar]`
                 const exposed_slice = ast.store.exposedItemSlice(import.exposes);
                 if (exposed_slice.len > 0) {
-                    var exposed = sexpr.Expr.init(env.gpa, "exposing");
+                    var exposed = SExpr.init(env.gpa, "exposing");
                     for (ast.store.exposedItemSlice(import.exposes)) |e| {
-                        var exposed_item = &ast.store.getExposedItem(e);
-                        var exposed_item_sexpr = exposed_item.toSExpr(env, ast);
-                        exposed.appendNode(env.gpa, &exposed_item_sexpr);
+                        var exposed_item = ast.store.getExposedItem(e).toSExpr(env, ast);
+                        exposed.appendNode(env.gpa, &exposed_item);
                     }
                     node.appendNode(env.gpa, &exposed);
                 }
@@ -465,17 +729,17 @@ pub const Statement = union(enum) {
             },
             // (type_decl (header <name> [<args>]) <annotation>)
             .type_decl => |a| {
-                var node = sexpr.Expr.init(env.gpa, "type_decl");
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
-                var header = sexpr.Expr.init(env.gpa, "header");
+                var node = SExpr.init(env.gpa, "s-type-decl");
+                node.appendRegion(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
+                var header = SExpr.init(env.gpa, "header");
+
                 // pattern
                 {
                     const ty_header = ast.store.getTypeHeader(a.header);
-                    header.appendRegionInfo(env.gpa, ast.calcRegionInfo(ty_header.region, env.line_starts.items));
+                    header.appendRegion(env.gpa, ast.calcRegionInfo(ty_header.region, env.line_starts.items));
+                    header.appendStringAttr(env.gpa, "name", ast.resolve(ty_header.name));
 
-                    header.appendString(env.gpa, ast.resolve(ty_header.name));
-
-                    var args_node = sexpr.Expr.init(env.gpa, "args");
+                    var args_node = SExpr.init(env.gpa, "args");
 
                     for (ast.store.typeAnnoSlice(ty_header.args)) |b| {
                         const anno = ast.store.getTypeAnno(b);
@@ -486,6 +750,7 @@ pub const Statement = union(enum) {
 
                     node.appendNode(env.gpa, &header);
                 }
+
                 // annotation
                 {
                     var annotation = ast.store.getTypeAnno(a.anno).toSExpr(env, ast);
@@ -495,9 +760,9 @@ pub const Statement = union(enum) {
             },
             // (crash <expr>)
             .crash => |a| {
-                var node = sexpr.Expr.init(env.gpa, "crash");
+                var node = SExpr.init(env.gpa, "s-crash");
 
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
+                node.appendRegion(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
 
                 var child = ast.store.getExpr(a.expr).toSExpr(env, ast);
                 node.appendNode(env.gpa, &child);
@@ -505,16 +770,16 @@ pub const Statement = union(enum) {
             },
             // (expect <body>)
             .expect => |a| {
-                var node = sexpr.Expr.init(env.gpa, "expect");
+                var node = SExpr.init(env.gpa, "s-expect");
 
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
+                node.appendRegion(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
 
                 var child = ast.store.getExpr(a.body).toSExpr(env, ast);
                 node.appendNode(env.gpa, &child);
                 return node;
             },
             .@"for" => |a| {
-                var node = sexpr.Expr.init(env.gpa, "for");
+                var node = SExpr.init(env.gpa, "s-for");
 
                 // patt
                 {
@@ -536,9 +801,9 @@ pub const Statement = union(enum) {
             },
             // (return <expr>)
             .@"return" => |a| {
-                var node = sexpr.Expr.init(env.gpa, "return");
+                var node = SExpr.init(env.gpa, "s-return");
 
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
+                node.appendRegion(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
 
                 var child = ast.store.getExpr(a.expr).toSExpr(env, ast);
                 node.appendNode(env.gpa, &child);
@@ -546,19 +811,21 @@ pub const Statement = union(enum) {
             },
             // (type_anno <annotation>)
             .type_anno => |a| {
-                var node = sexpr.Expr.init(env.gpa, "type_anno");
+                var node = SExpr.init(env.gpa, "s-type-anno");
 
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
+                node.appendRegion(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
 
-                node.appendString(env.gpa, ast.resolve(a.name));
+                node.appendStringAttr(env.gpa, "name", ast.resolve(a.name));
+
                 var child = ast.store.getTypeAnno(a.anno).toSExpr(env, ast);
                 node.appendNode(env.gpa, &child);
+
                 return node;
             },
             .malformed => |a| {
-                var node = sexpr.Expr.init(env.gpa, "malformed_stmt");
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
-                node.appendString(env.gpa, @tagName(a.reason));
+                var node = SExpr.init(env.gpa, "s-malformed");
+                node.appendRegion(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
+                node.appendStringAttr(env.gpa, "tag", @tagName(a.reason));
                 return node;
             },
         }
@@ -571,10 +838,10 @@ pub const Body = struct {
     statements: Statement.Span,
     region: TokenizedRegion,
 
-    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ast: *AST) sexpr.Expr {
-        var block_node = sexpr.Expr.init(env.gpa, "block");
-        block_node.appendRegionInfo(env.gpa, ast.calcRegionInfo(self.region, env.line_starts.items));
-        var statements_node = sexpr.Expr.init(env.gpa, "statements");
+    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ast: *AST) SExpr {
+        var block_node = SExpr.init(env.gpa, "e-block");
+        block_node.appendRegion(env.gpa, ast.calcRegionInfo(self.region, env.line_starts.items));
+        var statements_node = SExpr.init(env.gpa, "statements");
 
         for (ast.store.statementSlice(self.statements)) |stmt_idx| {
             const stmt = ast.store.getStatement(stmt_idx);
@@ -662,23 +929,23 @@ pub const Pattern = union(enum) {
         };
     }
 
-    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ast: *AST) sexpr.Expr {
+    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ast: *AST) SExpr {
         switch (self) {
             .ident => |ident| {
-                var node = sexpr.Expr.init(env.gpa, "ident");
+                var node = SExpr.init(env.gpa, "p-ident");
 
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(ident.region, env.line_starts.items));
+                node.appendRegion(env.gpa, ast.calcRegionInfo(ident.region, env.line_starts.items));
 
-                node.appendString(env.gpa, ast.resolve(ident.ident_tok));
+                node.appendStringAttr(env.gpa, "raw", ast.resolve(ident.ident_tok));
 
                 return node;
             },
             .tag => |tag| {
-                var node = sexpr.Expr.init(env.gpa, "tag");
+                var node = SExpr.init(env.gpa, "p-tag");
 
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(tag.region, env.line_starts.items));
+                node.appendRegion(env.gpa, ast.calcRegionInfo(tag.region, env.line_starts.items));
 
-                node.appendString(env.gpa, ast.resolve(tag.tag_tok));
+                node.appendStringAttr(env.gpa, "raw", ast.resolve(tag.tag_tok));
 
                 // Add arguments if there are any
                 for (ast.store.patternSlice(tag.args)) |arg| {
@@ -689,41 +956,39 @@ pub const Pattern = union(enum) {
                 return node;
             },
             .int => |num| {
-                var node = sexpr.Expr.init(env.gpa, "int");
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(num.region, env.line_starts.items));
-                node.appendString(env.gpa, ast.resolve(num.number_tok));
+                var node = SExpr.init(env.gpa, "p-int");
+                node.appendRegion(env.gpa, ast.calcRegionInfo(num.region, env.line_starts.items));
+                node.appendStringAttr(env.gpa, "raw", ast.resolve(num.number_tok));
                 return node;
             },
             .frac => |num| {
-                var node = sexpr.Expr.init(env.gpa, "frac");
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(num.region, env.line_starts.items));
-                node.appendString(env.gpa, ast.resolve(num.number_tok));
+                var node = SExpr.init(env.gpa, "p-frac");
+                node.appendRegion(env.gpa, ast.calcRegionInfo(num.region, env.line_starts.items));
+                node.appendStringAttr(env.gpa, "raw", ast.resolve(num.number_tok));
                 return node;
             },
             .string => |str| {
-                var node = sexpr.Expr.init(env.gpa, "string");
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(str.region, env.line_starts.items));
-                node.appendString(env.gpa, ast.resolve(str.string_tok));
+                var node = SExpr.init(env.gpa, "p-string");
+                node.appendRegion(env.gpa, ast.calcRegionInfo(str.region, env.line_starts.items));
+                node.appendStringAttr(env.gpa, "raw", ast.resolve(str.string_tok));
                 return node;
             },
             .record => |rec| {
-                var node = sexpr.Expr.init(env.gpa, "record");
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(rec.region, env.line_starts.items));
+                var node = SExpr.init(env.gpa, "p-record");
+                node.appendRegion(env.gpa, ast.calcRegionInfo(rec.region, env.line_starts.items));
 
                 for (ast.store.patternRecordFieldSlice(rec.fields)) |field_idx| {
                     const field = ast.store.getPatternRecordField(field_idx);
-                    var field_node = sexpr.Expr.init(env.gpa, "field");
-                    field_node.appendRegionInfo(env.gpa, ast.calcRegionInfo(field.region, env.line_starts.items));
-                    field_node.appendString(env.gpa, ast.resolve(field.name));
+                    var field_node = SExpr.init(env.gpa, "field");
+                    field_node.appendRegion(env.gpa, ast.calcRegionInfo(field.region, env.line_starts.items));
+                    field_node.appendStringAttr(env.gpa, "name", ast.resolve(field.name));
 
                     if (field.value) |value| {
                         var value_node = ast.store.getPattern(value).toSExpr(env, ast);
                         field_node.appendNode(env.gpa, &value_node);
                     }
 
-                    if (field.rest) {
-                        field_node.appendString(env.gpa, "rest");
-                    }
+                    field_node.appendBoolAttr(env.gpa, "rest", field.rest);
 
                     node.appendNode(env.gpa, &field_node);
                 }
@@ -731,8 +996,8 @@ pub const Pattern = union(enum) {
                 return node;
             },
             .list => |list| {
-                var node = sexpr.Expr.init(env.gpa, "list");
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(list.region, env.line_starts.items));
+                var node = SExpr.init(env.gpa, "p-list");
+                node.appendRegion(env.gpa, ast.calcRegionInfo(list.region, env.line_starts.items));
 
                 for (ast.store.patternSlice(list.patterns)) |pat| {
                     var pattern_node = ast.store.getPattern(pat).toSExpr(env, ast);
@@ -742,18 +1007,18 @@ pub const Pattern = union(enum) {
                 return node;
             },
             .list_rest => |rest| {
-                var node = sexpr.Expr.init(env.gpa, "list_rest");
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(rest.region, env.line_starts.items));
+                var node = SExpr.init(env.gpa, "p-list-rest");
+                node.appendRegion(env.gpa, ast.calcRegionInfo(rest.region, env.line_starts.items));
 
                 if (rest.name) |name_tok| {
-                    node.appendString(env.gpa, ast.resolve(name_tok));
+                    node.appendStringAttr(env.gpa, "name", ast.resolve(name_tok));
                 }
 
                 return node;
             },
             .tuple => |tuple| {
-                var node = sexpr.Expr.init(env.gpa, "tuple");
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(tuple.region, env.line_starts.items));
+                var node = SExpr.init(env.gpa, "p-tuple");
+                node.appendRegion(env.gpa, ast.calcRegionInfo(tuple.region, env.line_starts.items));
 
                 for (ast.store.patternSlice(tuple.patterns)) |pat| {
                     var pattern_node = ast.store.getPattern(pat).toSExpr(env, ast);
@@ -763,11 +1028,11 @@ pub const Pattern = union(enum) {
                 return node;
             },
             .underscore => {
-                return sexpr.Expr.init(env.gpa, "underscore");
+                return SExpr.init(env.gpa, "p-underscore");
             },
             .alternatives => |a| {
                 // '|' separated list of patterns
-                var node = sexpr.Expr.init(env.gpa, "alternatives");
+                var node = SExpr.init(env.gpa, "p-alternatives");
                 for (ast.store.patternSlice(a.patterns)) |pat| {
                     var patNode = ast.store.getPattern(pat).toSExpr(env, ast);
                     node.appendNode(env.gpa, &patNode);
@@ -775,9 +1040,9 @@ pub const Pattern = union(enum) {
                 return node;
             },
             .malformed => |a| {
-                var node = sexpr.Expr.init(env.gpa, "malformed_pattern");
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
-                node.appendString(env.gpa, @tagName(a.reason));
+                var node = SExpr.init(env.gpa, "p-malformed");
+                node.appendRegion(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
+                node.appendStringAttr(env.gpa, "tag", @tagName(a.reason));
                 return node;
             },
         }
@@ -792,10 +1057,10 @@ pub const BinOp = struct {
     region: TokenizedRegion,
 
     /// (binop <op> <left> <right>) e.g. (binop '+' 1 2)
-    pub fn toSExpr(self: *const @This(), env: *base.ModuleEnv, ast: *AST) sexpr.Expr {
-        var node = sexpr.Expr.init(env.gpa, "binop");
-        node.appendRegionInfo(env.gpa, ast.calcRegionInfo(self.region, env.line_starts.items));
-        node.appendString(env.gpa, ast.resolve(self.operator));
+    pub fn toSExpr(self: *const @This(), env: *base.ModuleEnv, ast: *AST) SExpr {
+        var node = SExpr.init(env.gpa, "e-binop");
+        node.appendRegion(env.gpa, ast.calcRegionInfo(self.region, env.line_starts.items));
+        node.appendStringAttr(env.gpa, "op", ast.resolve(self.operator));
 
         var left = ast.store.getExpr(self.left).toSExpr(env, ast);
         node.appendNode(env.gpa, &left);
@@ -812,10 +1077,10 @@ pub const Unary = struct {
     expr: Expr.Idx,
     region: TokenizedRegion,
 
-    pub fn toSExpr(self: *const @This(), env: *base.ModuleEnv, ast: *AST) sexpr.Expr {
-        var node = sexpr.Expr.init(env.gpa, "unary");
-        node.appendRegionInfo(env.gpa, ast.calcRegionInfo(self.region, env.line_starts.items));
-        node.appendString(env.gpa, ast.resolve(self.operator));
+    pub fn toSExpr(self: *const @This(), env: *base.ModuleEnv, ast: *AST) SExpr {
+        var node = SExpr.init(env.gpa, "unary");
+        node.appendRegion(env.gpa, ast.calcRegionInfo(self.region, env.line_starts.items));
+        node.appendStringAttr(env.gpa, "op", ast.resolve(self.operator));
 
         var expr = ast.store.getExpr(self.expr).toSExpr(env, ast);
         node.appendNode(env.gpa, &expr);
@@ -838,17 +1103,17 @@ pub const File = struct {
     statements: Statement.Span,
     region: TokenizedRegion,
 
-    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ast: *AST) sexpr.Expr {
-        var file_node = sexpr.Expr.init(env.gpa, "file");
+    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ast: *AST) SExpr {
+        var file_node = SExpr.init(env.gpa, "file");
 
-        file_node.appendRegionInfo(env.gpa, ast.calcRegionInfo(self.region, env.line_starts.items));
+        file_node.appendRegion(env.gpa, ast.calcRegionInfo(self.region, env.line_starts.items));
 
         const header = ast.store.getHeader(self.header);
         var header_node = header.toSExpr(env, ast);
 
         file_node.appendNode(env.gpa, &header_node);
 
-        var statements_node = sexpr.Expr.init(env.gpa, "statements");
+        var statements_node = SExpr.init(env.gpa, "statements");
 
         for (ast.store.statementSlice(self.statements)) |stmt_id| {
             const stmt = ast.store.getStatement(stmt_id);
@@ -902,16 +1167,16 @@ pub const Header = union(enum) {
 
     pub const AppHeaderRhs = packed struct { num_packages: u10, num_provides: u22 };
 
-    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ast: *AST) sexpr.Expr {
+    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ast: *AST) SExpr {
         switch (self) {
             .app => |a| {
-                var node = sexpr.Expr.init(env.gpa, "app");
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
+                var node = SExpr.init(env.gpa, "app");
+                node.appendRegion(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
                 // Provides
                 const provides_coll = ast.store.getCollection(a.provides);
                 const provides_items = ast.store.exposedItemSlice(.{ .span = provides_coll.span });
-                var provides_node = sexpr.Expr.init(env.gpa, "provides");
-                provides_node.appendRegionInfo(env.gpa, ast.calcRegionInfo(provides_coll.region, env.line_starts.items));
+                var provides_node = SExpr.init(env.gpa, "provides");
+                provides_node.appendRegion(env.gpa, ast.calcRegionInfo(provides_coll.region, env.line_starts.items));
                 for (provides_items) |item_idx| {
                     const item = ast.store.getExposedItem(item_idx);
                     var item_node = item.toSExpr(env, ast);
@@ -925,8 +1190,8 @@ pub const Header = union(enum) {
                 // Packages
                 const packages_coll = ast.store.getCollection(a.packages);
                 const packages_items = ast.store.recordFieldSlice(.{ .span = packages_coll.span });
-                var packages_node = sexpr.Expr.init(env.gpa, "packages");
-                packages_node.appendRegionInfo(env.gpa, ast.calcRegionInfo(packages_coll.region, env.line_starts.items));
+                var packages_node = SExpr.init(env.gpa, "packages");
+                packages_node.appendRegion(env.gpa, ast.calcRegionInfo(packages_coll.region, env.line_starts.items));
                 for (packages_items) |item_idx| {
                     const item = ast.store.getRecordField(item_idx);
                     var item_node = item.toSExpr(env, ast);
@@ -936,11 +1201,11 @@ pub const Header = union(enum) {
                 return node;
             },
             .module => |module| {
-                var node = sexpr.Expr.init(env.gpa, "module");
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(module.region, env.line_starts.items));
+                var node = SExpr.init(env.gpa, "module");
+                node.appendRegion(env.gpa, ast.calcRegionInfo(module.region, env.line_starts.items));
                 const exposes = ast.store.getCollection(module.exposes);
-                var exposes_node = sexpr.Expr.init(env.gpa, "exposes");
-                exposes_node.appendRegionInfo(env.gpa, ast.calcRegionInfo(exposes.region, env.line_starts.items));
+                var exposes_node = SExpr.init(env.gpa, "exposes");
+                exposes_node.appendRegion(env.gpa, ast.calcRegionInfo(exposes.region, env.line_starts.items));
                 for (ast.store.exposedItemSlice(.{ .span = exposes.span })) |exposed| {
                     const item = ast.store.getExposedItem(exposed);
                     var item_node = item.toSExpr(env, ast);
@@ -950,12 +1215,12 @@ pub const Header = union(enum) {
                 return node;
             },
             .package => |a| {
-                var node = sexpr.Expr.init(env.gpa, "package");
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
+                var node = SExpr.init(env.gpa, "package");
+                node.appendRegion(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
                 // Exposes
                 const exposes = ast.store.getCollection(a.exposes);
-                var exposes_node = sexpr.Expr.init(env.gpa, "exposes");
-                exposes_node.appendRegionInfo(env.gpa, ast.calcRegionInfo(exposes.region, env.line_starts.items));
+                var exposes_node = SExpr.init(env.gpa, "exposes");
+                exposes_node.appendRegion(env.gpa, ast.calcRegionInfo(exposes.region, env.line_starts.items));
                 for (ast.store.exposedItemSlice(.{ .span = exposes.span })) |exposed| {
                     const item = ast.store.getExposedItem(exposed);
                     var item_node = item.toSExpr(env, ast);
@@ -965,8 +1230,8 @@ pub const Header = union(enum) {
                 // Packages
                 const packages_coll = ast.store.getCollection(a.packages);
                 const packages_items = ast.store.recordFieldSlice(.{ .span = packages_coll.span });
-                var packages_node = sexpr.Expr.init(env.gpa, "packages");
-                packages_node.appendRegionInfo(env.gpa, ast.calcRegionInfo(packages_coll.region, env.line_starts.items));
+                var packages_node = SExpr.init(env.gpa, "packages");
+                packages_node.appendRegion(env.gpa, ast.calcRegionInfo(packages_coll.region, env.line_starts.items));
                 for (packages_items) |item_idx| {
                     const item = ast.store.getRecordField(item_idx);
                     var item_node = item.toSExpr(env, ast);
@@ -976,14 +1241,14 @@ pub const Header = union(enum) {
                 return node;
             },
             .platform => |a| {
-                var node = sexpr.Expr.init(env.gpa, "platform");
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
+                var node = SExpr.init(env.gpa, "platform");
+                node.appendRegion(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
                 // Name
-                node.appendString(env.gpa, ast.resolve(a.name));
+                node.appendStringAttr(env.gpa, "name", ast.resolve(a.name));
                 // Requires Rigids
                 const rigids = ast.store.getCollection(a.requires_rigids);
-                var rigids_node = sexpr.Expr.init(env.gpa, "rigids");
-                rigids_node.appendRegionInfo(env.gpa, ast.calcRegionInfo(rigids.region, env.line_starts.items));
+                var rigids_node = SExpr.init(env.gpa, "rigids");
+                rigids_node.appendRegion(env.gpa, ast.calcRegionInfo(rigids.region, env.line_starts.items));
                 for (ast.store.exposedItemSlice(.{ .span = rigids.span })) |exposed| {
                     const item = ast.store.getExposedItem(exposed);
                     var item_node = item.toSExpr(env, ast);
@@ -996,8 +1261,8 @@ pub const Header = union(enum) {
                 node.appendNode(env.gpa, &signatures_node);
                 // Exposes
                 const exposes = ast.store.getCollection(a.exposes);
-                var exposes_node = sexpr.Expr.init(env.gpa, "exposes");
-                exposes_node.appendRegionInfo(env.gpa, ast.calcRegionInfo(exposes.region, env.line_starts.items));
+                var exposes_node = SExpr.init(env.gpa, "exposes");
+                exposes_node.appendRegion(env.gpa, ast.calcRegionInfo(exposes.region, env.line_starts.items));
                 for (ast.store.exposedItemSlice(.{ .span = exposes.span })) |exposed| {
                     const item = ast.store.getExposedItem(exposed);
                     var item_node = item.toSExpr(env, ast);
@@ -1007,8 +1272,8 @@ pub const Header = union(enum) {
                 // Packages
                 const packages_coll = ast.store.getCollection(a.packages);
                 const packages_items = ast.store.recordFieldSlice(.{ .span = packages_coll.span });
-                var packages_node = sexpr.Expr.init(env.gpa, "packages");
-                packages_node.appendRegionInfo(env.gpa, ast.calcRegionInfo(packages_coll.region, env.line_starts.items));
+                var packages_node = SExpr.init(env.gpa, "packages");
+                packages_node.appendRegion(env.gpa, ast.calcRegionInfo(packages_coll.region, env.line_starts.items));
                 for (packages_items) |item_idx| {
                     const item = ast.store.getRecordField(item_idx);
                     var item_node = item.toSExpr(env, ast);
@@ -1017,8 +1282,8 @@ pub const Header = union(enum) {
                 node.appendNode(env.gpa, &packages_node);
                 // Provides
                 const provides = ast.store.getCollection(a.provides);
-                var provides_node = sexpr.Expr.init(env.gpa, "provides");
-                provides_node.appendRegionInfo(env.gpa, ast.calcRegionInfo(provides.region, env.line_starts.items));
+                var provides_node = SExpr.init(env.gpa, "provides");
+                provides_node.appendRegion(env.gpa, ast.calcRegionInfo(provides.region, env.line_starts.items));
                 for (ast.store.exposedItemSlice(.{ .span = provides.span })) |exposed| {
                     const item = ast.store.getExposedItem(exposed);
                     var item_node = item.toSExpr(env, ast);
@@ -1028,11 +1293,11 @@ pub const Header = union(enum) {
                 return node;
             },
             .hosted => |a| {
-                var node = sexpr.Expr.init(env.gpa, "hosted");
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
+                var node = SExpr.init(env.gpa, "hosted");
+                node.appendRegion(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
                 const exposes = ast.store.getCollection(a.exposes);
-                var exposes_node = sexpr.Expr.init(env.gpa, "exposes");
-                exposes_node.appendRegionInfo(env.gpa, ast.calcRegionInfo(exposes.region, env.line_starts.items));
+                var exposes_node = SExpr.init(env.gpa, "exposes");
+                exposes_node.appendRegion(env.gpa, ast.calcRegionInfo(exposes.region, env.line_starts.items));
                 for (ast.store.exposedItemSlice(.{ .span = exposes.span })) |exposed| {
                     const item = ast.store.getExposedItem(exposed);
                     var item_node = item.toSExpr(env, ast);
@@ -1042,9 +1307,9 @@ pub const Header = union(enum) {
                 return node;
             },
             .malformed => |a| {
-                var node = sexpr.Expr.init(env.gpa, "malformed_header");
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
-                node.appendString(env.gpa, @tagName(a.reason));
+                var node = SExpr.init(env.gpa, "malformed-header");
+                node.appendRegion(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
+                node.appendStringAttr(env.gpa, "tag", @tagName(a.reason));
                 return node;
             },
         }
@@ -1071,39 +1336,41 @@ pub const ExposedItem = union(enum) {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
 
-    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ast: *AST) sexpr.Expr {
+    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ast: *AST) SExpr {
         _ = env.line_starts.items;
-        var node = sexpr.Expr.init(env.gpa, "exposed_item");
-        var inner_node = sexpr.Expr.init(env.gpa, @tagName(self));
         switch (self) {
             .lower_ident => |i| {
+                var node = SExpr.init(env.gpa, "exposed-lower-ident");
                 const token = ast.tokens.tokens.get(i.ident);
                 const text = env.idents.getText(token.extra.interned);
-                inner_node.appendString(env.gpa, text);
+                node.appendStringAttr(env.gpa, "text", text);
                 if (i.as) |a| {
                     const as_tok = ast.tokens.tokens.get(a);
                     const as_text = env.idents.getText(as_tok.extra.interned);
-                    inner_node.appendString(env.gpa, as_text);
+                    node.appendStringAttr(env.gpa, "as", as_text);
                 }
+                return node;
             },
             .upper_ident => |i| {
+                var node = SExpr.init(env.gpa, "exposed-upper-ident");
                 const token = ast.tokens.tokens.get(i.ident);
                 const text = env.idents.getText(token.extra.interned);
-                inner_node.appendString(env.gpa, text);
+                node.appendStringAttr(env.gpa, "text", text);
                 if (i.as) |a| {
                     const as_tok = ast.tokens.tokens.get(a);
                     const as_text = env.idents.getText(as_tok.extra.interned);
-                    inner_node.appendString(env.gpa, as_text);
+                    node.appendStringAttr(env.gpa, "as", as_text);
                 }
+                return node;
             },
             .upper_ident_star => |i| {
+                var node = SExpr.init(env.gpa, "exposed-upper-ident-star");
                 const token = ast.tokens.tokens.get(i.ident);
                 const text = env.idents.getText(token.extra.interned);
-                inner_node.appendString(env.gpa, text);
+                node.appendStringAttr(env.gpa, "text", text);
+                return node;
             },
         }
-        node.appendNode(env.gpa, &inner_node);
-        return node;
     }
 };
 
@@ -1174,13 +1441,13 @@ pub const TypeAnno = union(enum) {
     pub const TagUnionRhs = packed struct { open: u1, tags_len: u31 };
     pub const TypeAnnoFnRhs = packed struct { effectful: u1, args_len: u31 };
 
-    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ast: *AST) sexpr.Expr {
+    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ast: *AST) SExpr {
         switch (self) {
             // (apply <ty> [<args>])
             .apply => |a| {
-                var node = sexpr.Expr.init(env.gpa, "apply");
+                var node = SExpr.init(env.gpa, "ty-apply");
 
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
+                node.appendRegion(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
 
                 for (ast.store.typeAnnoSlice(a.args)) |b| {
                     var child = ast.store.getTypeAnno(b).toSExpr(env, ast);
@@ -1191,37 +1458,40 @@ pub const TypeAnno = union(enum) {
             },
             // (ty_var <var>)
             .ty_var => |a| {
-                var node = sexpr.Expr.init(env.gpa, "ty_var");
+                var node = SExpr.init(env.gpa, "ty-var");
 
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
+                node.appendRegion(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
 
-                node.appendString(env.gpa, ast.resolve(a.tok));
+                node.appendStringAttr(env.gpa, "raw", ast.resolve(a.tok));
                 return node;
             },
             // (_)
             .underscore => {
-                return sexpr.Expr.init(env.gpa, "_");
+                return SExpr.init(env.gpa, "_");
             },
-            // (ty name)
             .ty => |a| {
-                var node = sexpr.Expr.init(env.gpa, "ty");
-                node.appendString(env.gpa, ast.resolve(a.region.start));
+                var node = SExpr.init(env.gpa, "ty");
+                node.appendStringAttr(env.gpa, "name", ast.resolve(a.region.start));
                 return node;
             },
-            // (mod_ty mod ty)
             .mod_ty => |a| {
-                var node = sexpr.Expr.init(env.gpa, "mod_ty");
-                node.appendString(env.gpa, ast.resolve(a.region.start));
-                node.appendString(env.gpa, ast.resolve(a.region.end));
+                var node = SExpr.init(env.gpa, "ty-mod");
+
+                const mod_text = env.idents.getText(a.mod_ident);
+                node.appendStringAttr(env.gpa, "module", mod_text);
+
+                const type_text = env.idents.getText(a.ty_ident);
+                node.appendStringAttr(env.gpa, "name", type_text);
+
                 return node;
             },
             .tag_union => |a| {
-                var node = sexpr.Expr.init(env.gpa, "tag_union");
+                var node = SExpr.init(env.gpa, "ty-tag-union");
 
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
+                node.appendRegion(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
 
                 const tags = ast.store.typeAnnoSlice(a.tags);
-                var tags_node = sexpr.Expr.init(env.gpa, "tags");
+                var tags_node = SExpr.init(env.gpa, "tags");
                 for (tags) |tag_idx| {
                     const tag = ast.store.getTypeAnno(tag_idx);
                     var tag_node = tag.toSExpr(env, ast);
@@ -1237,9 +1507,9 @@ pub const TypeAnno = union(enum) {
             },
             // (tuple [<elems>])
             .tuple => |a| {
-                var node = sexpr.Expr.init(env.gpa, "tuple");
+                var node = SExpr.init(env.gpa, "ty-tuple");
 
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
+                node.appendRegion(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
 
                 for (ast.store.typeAnnoSlice(a.annos)) |b| {
                     var child = ast.store.getTypeAnno(b).toSExpr(env, ast);
@@ -1249,9 +1519,9 @@ pub const TypeAnno = union(enum) {
             },
             // (record [<fields>])
             .record => |a| {
-                var node = sexpr.Expr.init(env.gpa, "record");
+                var node = SExpr.init(env.gpa, "ty-record");
 
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
+                node.appendRegion(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
 
                 for (ast.store.annoRecordFieldSlice(a.fields)) |f_idx| {
                     const field = ast.store.getAnnoRecordField(f_idx);
@@ -1262,9 +1532,9 @@ pub const TypeAnno = union(enum) {
             },
             // (fn <ret> [<args>])
             .@"fn" => |a| {
-                var node = sexpr.Expr.init(env.gpa, "fn");
+                var node = SExpr.init(env.gpa, "ty-fn");
 
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
+                node.appendRegion(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
 
                 // arguments
                 for (ast.store.typeAnnoSlice(a.args)) |b| {
@@ -1283,9 +1553,9 @@ pub const TypeAnno = union(enum) {
                 return ast.store.getTypeAnno(a.anno).toSExpr(env, ast);
             },
             .malformed => |a| {
-                var node = sexpr.Expr.init(env.gpa, "malformed_expr");
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
-                node.appendString(env.gpa, @tagName(a.reason));
+                var node = SExpr.init(env.gpa, "ty-malformed");
+                node.appendRegion(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
+                node.appendStringAttr(env.gpa, "tag", @tagName(a.reason));
                 return node;
             },
         }
@@ -1301,10 +1571,10 @@ pub const AnnoRecordField = struct {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
 
-    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ast: *AST) sexpr.Expr {
-        var node = sexpr.Expr.init(env.gpa, "anno_record_field");
-        node.appendRegionInfo(env.gpa, ast.calcRegionInfo(self.region, env.line_starts.items));
-        node.appendString(env.gpa, ast.resolve(self.name));
+    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ast: *AST) SExpr {
+        var node = SExpr.init(env.gpa, "anno-record-field");
+        node.appendRegion(env.gpa, ast.calcRegionInfo(self.region, env.line_starts.items));
+        node.appendStringAttr(env.gpa, "name", ast.resolve(self.name));
         const anno = ast.store.getTypeAnno(self.ty);
         var ty_node = anno.toSExpr(env, ast);
         node.appendNode(env.gpa, &ty_node);
@@ -1473,17 +1743,17 @@ pub const Expr = union(enum) {
         };
     }
 
-    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ast: *AST) sexpr.Expr {
+    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ast: *AST) SExpr {
         switch (self) {
             .int => |int| {
-                var node = sexpr.Expr.init(env.gpa, "int");
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(int.region, env.line_starts.items));
-                node.appendString(env.gpa, ast.resolve(int.token));
+                var node = SExpr.init(env.gpa, "e-int");
+                node.appendRegion(env.gpa, ast.calcRegionInfo(int.region, env.line_starts.items));
+                node.appendStringAttr(env.gpa, "raw", ast.resolve(int.token));
                 return node;
             },
             .string => |str| {
-                var node = sexpr.Expr.init(env.gpa, "string");
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(str.region, env.line_starts.items));
+                var node = SExpr.init(env.gpa, "e-string");
+                node.appendRegion(env.gpa, ast.calcRegionInfo(str.region, env.line_starts.items));
                 for (ast.store.exprSlice(str.parts)) |part_id| {
                     const part_expr = ast.store.getExpr(part_id);
                     var part_sexpr = part_expr.toSExpr(env, ast);
@@ -1492,53 +1762,54 @@ pub const Expr = union(enum) {
                 return node;
             },
             .string_part => |sp| {
-                var node = sexpr.Expr.init(env.gpa, "string_part");
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(sp.region, env.line_starts.items));
-                node.appendString(env.gpa, ast.resolve(sp.token));
+                var node = SExpr.init(env.gpa, "e-string-part");
+                node.appendRegion(env.gpa, ast.calcRegionInfo(sp.region, env.line_starts.items));
+                node.appendStringAttr(env.gpa, "raw", ast.resolve(sp.token));
                 return node;
             },
             // (tag <tag>)
             .tag => |tag| {
-                var node = sexpr.Expr.init(env.gpa, "tag");
+                var node = SExpr.init(env.gpa, "e-tag");
 
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(tag.region, env.line_starts.items));
+                node.appendRegion(env.gpa, ast.calcRegionInfo(tag.region, env.line_starts.items));
 
-                node.appendString(env.gpa, ast.resolve(tag.token));
+                node.appendStringAttr(env.gpa, "raw", ast.resolve(tag.token));
                 return node;
             },
             .block => |block| {
                 return block.toSExpr(env, ast);
             },
-            // (if_then_else <condition> <then> <else>)
             .if_then_else => |stmt| {
-                var node = sexpr.Expr.init(env.gpa, "if_then_else");
+                var node = SExpr.init(env.gpa, "e-if-then-else");
 
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(stmt.region, env.line_starts.items));
+                node.appendRegion(env.gpa, ast.calcRegionInfo(stmt.region, env.line_starts.items));
 
                 var condition = ast.store.getExpr(stmt.condition).toSExpr(env, ast);
+                node.appendNode(env.gpa, &condition);
+
                 var then = ast.store.getExpr(stmt.then).toSExpr(env, ast);
+                node.appendNode(env.gpa, &then);
+
                 var else_ = ast.store.getExpr(stmt.@"else").toSExpr(env, ast);
 
-                node.appendNode(env.gpa, &condition);
-                node.appendNode(env.gpa, &then);
                 node.appendNode(env.gpa, &else_);
 
                 return node;
             },
             .ident => |ident| {
-                var node = sexpr.Expr.init(env.gpa, "ident");
+                var node = SExpr.init(env.gpa, "e-ident");
 
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(ident.region, env.line_starts.items));
+                node.appendRegion(env.gpa, ast.calcRegionInfo(ident.region, env.line_starts.items));
 
-                node.appendString(env.gpa, if (ident.qualifier != null) ast.resolve(ident.qualifier.?) else "");
-                node.appendString(env.gpa, ast.resolve(ident.token));
+                node.appendStringAttr(env.gpa, "qaul", if (ident.qualifier != null) ast.resolve(ident.qualifier.?) else "");
+
+                node.appendStringAttr(env.gpa, "raw", ast.resolve(ident.token));
                 return node;
             },
-            // (list [<child>])
             .list => |a| {
-                var node = sexpr.Expr.init(env.gpa, "list");
+                var node = SExpr.init(env.gpa, "e-list");
 
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
+                node.appendRegion(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
 
                 for (ast.store.exprSlice(a.items)) |b| {
                     var child = ast.store.getExpr(b).toSExpr(env, ast);
@@ -1546,27 +1817,24 @@ pub const Expr = union(enum) {
                 }
                 return node;
             },
-            // (malformed_expr <reason>)
             .malformed => |a| {
-                var node = sexpr.Expr.init(env.gpa, "malformed_expr");
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
-                node.appendString(env.gpa, @tagName(a.reason));
+                var node = SExpr.init(env.gpa, "e-malformed");
+                node.appendRegion(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
+                node.appendStringAttr(env.gpa, "reason", @tagName(a.reason));
                 return node;
             },
-            // (frac <value>)
             .frac => |a| {
-                var node = sexpr.Expr.init(env.gpa, "frac");
+                var node = SExpr.init(env.gpa, "e-frac");
 
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
+                node.appendRegion(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
 
-                node.appendString(env.gpa, ast.resolve(a.token));
+                node.appendStringAttr(env.gpa, "raw", ast.resolve(a.token));
                 return node;
             },
-            // (tuple [<item>])
             .tuple => |a| {
-                var node = sexpr.Expr.init(env.gpa, "tuple");
+                var node = SExpr.init(env.gpa, "e-tuple");
 
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
+                node.appendRegion(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
 
                 for (ast.store.exprSlice(a.items)) |item| {
                     var child = ast.store.getExpr(item).toSExpr(env, ast);
@@ -1575,33 +1843,29 @@ pub const Expr = union(enum) {
 
                 return node;
             },
-            // (record [(field <name> <?value> ?optional)])
             .record => |a| {
-                var node = sexpr.Expr.init(env.gpa, "record");
+                var node = SExpr.init(env.gpa, "e-record");
 
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
+                node.appendRegion(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
 
                 for (ast.store.recordFieldSlice(a.fields)) |field_idx| {
                     const record_field = ast.store.getRecordField(field_idx);
-                    var record_field_node = sexpr.Expr.init(env.gpa, "field");
-                    record_field_node.appendString(env.gpa, ast.resolve(record_field.name));
+                    var record_field_node = SExpr.init(env.gpa, "field");
+                    record_field_node.appendStringAttr(env.gpa, "field", ast.resolve(record_field.name));
                     if (record_field.value != null) {
                         var value_node = ast.store.getExpr(record_field.value.?).toSExpr(env, ast);
                         record_field_node.appendNode(env.gpa, &value_node);
                     }
-                    if (record_field.optional) {
-                        record_field_node.appendString(env.gpa, "optional");
-                    }
+                    record_field_node.appendBoolAttr(env.gpa, "optional", record_field.optional);
                     node.appendNode(env.gpa, &record_field_node);
                 }
 
                 return node;
             },
-            // (apply <fn> [<args>])
             .apply => |a| {
-                var node = sexpr.Expr.init(env.gpa, "apply");
+                var node = SExpr.init(env.gpa, "e-apply");
 
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
+                node.appendRegion(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
 
                 var apply_fn = ast.store.getExpr(a.@"fn").toSExpr(env, ast);
                 node.appendNode(env.gpa, &apply_fn);
@@ -1614,17 +1878,17 @@ pub const Expr = union(enum) {
                 return node;
             },
             .field_access => |a| {
-                var node = sexpr.Expr.init(env.gpa, "field_access");
+                var node = SExpr.init(env.gpa, "e-field-access");
 
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
+                node.appendRegion(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
 
                 var child = a.toSExpr(env, ast);
                 node.appendNode(env.gpa, &child);
                 return node;
             },
             .local_dispatch => |a| {
-                var node = sexpr.Expr.init(env.gpa, "local_dispatch");
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
+                var node = SExpr.init(env.gpa, "e-local-dispatch");
+                node.appendRegion(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
 
                 var left = ast.store.getExpr(a.left).toSExpr(env, ast);
                 var right = ast.store.getExpr(a.right).toSExpr(env, ast);
@@ -1632,17 +1896,16 @@ pub const Expr = union(enum) {
                 node.appendNode(env.gpa, &right);
                 return node;
             },
-            // (binop <op> <lhs> <rhs>)
             .bin_op => |a| {
                 return a.toSExpr(env, ast);
             },
             .lambda => |a| {
-                var node = sexpr.Expr.init(env.gpa, "lambda");
+                var node = SExpr.init(env.gpa, "e-lambda");
 
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
+                node.appendRegion(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
 
                 // arguments
-                var args = sexpr.Expr.init(env.gpa, "args");
+                var args = SExpr.init(env.gpa, "args");
                 for (ast.store.patternSlice(a.args)) |arg| {
                     var arg_node = ast.store.getPattern(arg).toSExpr(env, ast);
                     args.appendNode(env.gpa, &arg_node);
@@ -1656,7 +1919,7 @@ pub const Expr = union(enum) {
                 return node;
             },
             .dbg => |a| {
-                var node = sexpr.Expr.init(env.gpa, "dbg");
+                var node = SExpr.init(env.gpa, "e-dbg");
 
                 var arg = ast.store.getExpr(a.expr).toSExpr(env, ast);
                 node.appendNode(env.gpa, &arg);
@@ -1664,12 +1927,12 @@ pub const Expr = union(enum) {
                 return node;
             },
             .match => |a| {
-                var node = sexpr.Expr.init(env.gpa, "match");
+                var node = SExpr.init(env.gpa, "e-match");
 
                 var expr = ast.store.getExpr(a.expr).toSExpr(env, ast);
 
                 // handle branches
-                var branches = sexpr.Expr.init(env.gpa, "branches");
+                var branches = SExpr.init(env.gpa, "branches");
                 for (ast.store.whenBranchSlice(a.branches)) |branch| {
                     var branch_node = ast.store.getBranch(branch).toSExpr(env, ast);
                     branches.appendNode(env.gpa, &branch_node);
@@ -1682,12 +1945,12 @@ pub const Expr = union(enum) {
                 return node;
             },
             .ellipsis => {
-                return sexpr.Expr.init(env.gpa, "ellipsis");
+                return SExpr.init(env.gpa, "e-ellipsis");
             },
             .suffix_single_question => |a| {
-                var node = sexpr.Expr.init(env.gpa, "suffix_single_question");
+                var node = SExpr.init(env.gpa, "e-question-suffix");
 
-                node.appendRegionInfo(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
+                node.appendRegion(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
 
                 var child = ast.store.getExpr(a.expr).toSExpr(env, ast);
                 node.appendNode(env.gpa, &child);
@@ -1722,10 +1985,10 @@ pub const RecordField = struct {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
 
-    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ast: *AST) sexpr.Expr {
-        var node = sexpr.Expr.init(env.gpa, "record_field");
-        node.appendRegionInfo(env.gpa, ast.calcRegionInfo(self.region, env.line_starts.items));
-        node.appendString(env.gpa, ast.resolve(self.name));
+    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ast: *AST) SExpr {
+        var node = SExpr.init(env.gpa, "record-field");
+        node.appendRegion(env.gpa, ast.calcRegionInfo(self.region, env.line_starts.items));
+        node.appendStringAttr(env.gpa, "name", ast.resolve(self.name));
         if (self.value) |idx| {
             const value = ast.store.getExpr(idx);
             var value_node = value.toSExpr(env, ast);
@@ -1754,9 +2017,9 @@ pub const WhenBranch = struct {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
 
-    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ast: *AST) sexpr.Expr {
-        var node = sexpr.Expr.init(env.gpa, "branch");
-        node.appendRegionInfo(env.gpa, ast.calcRegionInfo(self.region, env.line_starts.items));
+    pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ast: *AST) SExpr {
+        var node = SExpr.init(env.gpa, "branch");
+        node.appendRegion(env.gpa, ast.calcRegionInfo(self.region, env.line_starts.items));
         var pattern = ast.store.getPattern(self.pattern).toSExpr(env, ast);
         node.appendNode(env.gpa, &pattern);
         var body = ast.store.getExpr(self.body).toSExpr(env, ast);

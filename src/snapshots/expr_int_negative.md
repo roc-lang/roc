@@ -15,7 +15,7 @@ Int(1:1-1:5),EndOfFile(1:5-1:5),
 ~~~
 # PARSE
 ~~~clojure
-(int (1:1-1:5) "-123")
+(e-int @1-1-1-5 (raw "-123"))
 ~~~
 # FORMATTED
 ~~~roc
@@ -23,12 +23,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e_int (1:1-1:5)
-	(int_var 14)
-	(requirements (sign_needed "true") (bits_needed "types.types.Num.Int.BitsNeeded.7"))
-	(value "-123"))
+(e-int @1-1-1-5 (num-var 74) (sign-needed "true") (bits-needed "7") (value "-123") (id 74))
 ~~~
 # TYPES
 ~~~clojure
-(expr 14 (type "Num(Int(*))"))
+(expr (id 74) (type "Num(Int(*))"))
 ~~~

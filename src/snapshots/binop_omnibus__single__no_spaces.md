@@ -45,45 +45,33 @@ UpperIdent(1:1-1:4),NoSpaceOpenRound(1:4-1:5),LowerIdent(1:5-1:8),CloseRound(1:8
 ~~~
 # PARSE
 ~~~clojure
-(binop (1:1-1:51)
-	"or"
-	(binop (1:1-1:43)
-		"or"
-		(binop (1:1-1:20)
-			">"
-			(binop (1:1-1:14)
-				"??"
-				(apply (1:1-1:9)
-					(tag (1:1-1:4) "Err")
-					(ident (1:5-1:8) "" "foo"))
-				(int (1:11-1:13) "12"))
-			(binop (1:14-1:20)
-				"*"
-				(int (1:14-1:15) "5")
-				(int (1:16-1:17) "5")))
-		(binop (1:21-1:43)
-			"and"
-			(binop (1:21-1:31)
-				"<"
-				(binop (1:21-1:26)
-					"+"
-					(int (1:21-1:23) "13")
-					(int (1:24-1:25) "2"))
-				(int (1:26-1:27) "5"))
-			(binop (1:32-1:43)
-				">="
-				(binop (1:32-1:38)
-					"-"
-					(int (1:32-1:34) "10")
-					(int (1:35-1:36) "1"))
-				(int (1:38-1:40) "16"))))
-	(binop (1:44-1:51)
-		"<="
-		(int (1:44-1:46) "12")
-		(binop (1:48-1:51)
-			"/"
-			(int (1:48-1:49) "3")
-			(int (1:50-1:51) "5"))))
+(e-binop @1-1-1-51 (op "or")
+	(e-binop @1-1-1-43 (op "or")
+		(e-binop @1-1-1-20 (op ">")
+			(e-binop @1-1-1-14 (op "??")
+				(e-apply @1-1-1-9
+					(e-tag @1-1-1-4 (raw "Err"))
+					(e-ident @1-5-1-8 (qaul "") (raw "foo")))
+				(e-int @1-11-1-13 (raw "12")))
+			(e-binop @1-14-1-20 (op "*")
+				(e-int @1-14-1-15 (raw "5"))
+				(e-int @1-16-1-17 (raw "5"))))
+		(e-binop @1-21-1-43 (op "and")
+			(e-binop @1-21-1-31 (op "<")
+				(e-binop @1-21-1-26 (op "+")
+					(e-int @1-21-1-23 (raw "13"))
+					(e-int @1-24-1-25 (raw "2")))
+				(e-int @1-26-1-27 (raw "5")))
+			(e-binop @1-32-1-43 (op ">=")
+				(e-binop @1-32-1-38 (op "-")
+					(e-int @1-32-1-34 (raw "10"))
+					(e-int @1-35-1-36 (raw "1")))
+				(e-int @1-38-1-40 (raw "16")))))
+	(e-binop @1-44-1-51 (op "<=")
+		(e-int @1-44-1-46 (raw "12"))
+		(e-binop @1-48-1-51 (op "/")
+			(e-int @1-48-1-49 (raw "3"))
+			(e-int @1-50-1-51 (raw "5")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -91,9 +79,9 @@ Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e_runtime_error (1:1-1:51) "not_implemented")
+(e-runtime-error (tag "not_implemented") (id 133))
 ~~~
 # TYPES
 ~~~clojure
-(expr 73 (type "Error"))
+(expr (id 133) (type "Error"))
 ~~~

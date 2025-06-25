@@ -17,12 +17,7 @@ Decode(a) : a
 		module(a).decode(List(U8)) -> a,
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level type_decl
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level type_decl
-
+NIL
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:13),CloseSquare(1:13-1:14),Newline(1:1-1:1),
@@ -38,20 +33,21 @@ KwModule(10:3-10:9),NoSpaceOpenRound(10:9-10:10),LowerIdent(10:10-10:11),CloseRo
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-10:35)
-	(module (1:1-1:14)
-		(exposes (1:8-1:14) (exposed_item (upper_ident "Hash"))))
+(file @1-1-10-35
+	(module @1-1-1-14
+		(exposes @1-8-1-14
+			(exposed-upper-ident (text "Hash"))))
 	(statements
-		(type_decl (3:1-8:7)
-			(header (3:1-3:8)
-				"Hash"
-				(args (ty_var (3:6-3:7) "a")))
-			(ty_var (3:11-3:12) "a"))
-		(type_decl (8:1-10:35)
-			(header (8:1-8:10)
-				"Decode"
-				(args (ty_var (8:8-8:9) "a")))
-			(ty_var (8:13-8:14) "a"))))
+		(s-type-decl @3-1-8-7
+			(header @3-1-3-8 (name "Hash")
+				(args
+					(ty-var @3-6-3-7 (raw "a"))))
+			(ty-var @3-11-3-12 (raw "a")))
+		(s-type-decl @8-1-10-35
+			(header @8-1-8-10 (name "Decode")
+				(args
+					(ty-var @8-8-8-9 (raw "a"))))
+			(ty-var @8-13-8-14 (raw "a")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -59,9 +55,21 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir "empty")
+(can-ir
+	(s-type-decl @3-1-8-7 (id 75)
+		(ty-header @3-1-3-8 (name "Hash")
+			(ty-args
+				(ty-var @3-6-3-7 (name "a"))))
+		(ty-var @3-11-3-12 (name "a")))
+	(s-type-decl @8-1-10-35 (id 79)
+		(ty-header @8-1-8-10 (name "Decode")
+			(ty-args
+				(ty-var @8-8-8-9 (name "a"))))
+		(ty-var @8-13-8-14 (name "a"))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types (defs) (expressions))
+(inferred-types
+	(defs)
+	(expressions))
 ~~~

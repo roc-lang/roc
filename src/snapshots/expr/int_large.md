@@ -15,7 +15,7 @@ Int(1:1-1:31),EndOfFile(1:31-1:31),
 ~~~
 # PARSE
 ~~~clojure
-(int (1:1-1:31) "999999999999999999999999999999")
+(e-int @1-1-1-31 (raw "999999999999999999999999999999"))
 ~~~
 # FORMATTED
 ~~~roc
@@ -23,12 +23,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e_int (1:1-1:31)
-	(int_var 14)
-	(requirements (sign_needed "false") (bits_needed "types.types.Num.Int.BitsNeeded.65_to_127"))
-	(value "999999999999999999999999999999"))
+(e-int @1-1-1-31 (num-var 74) (sign-needed "false") (bits-needed "65_to_127") (value "999999999999999999999999999999") (id 74))
 ~~~
 # TYPES
 ~~~clojure
-(expr 14 (type "Num(Int(*))"))
+(expr (id 74) (type "Num(Int(*))"))
 ~~~

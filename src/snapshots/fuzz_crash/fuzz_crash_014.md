@@ -10,10 +10,54 @@ type=file
 0u22
 ~~~
 # PROBLEMS
-PARSER: missing_header
-PARSER: expr_unexpected_token
-PARSER: expr_unexpected_token
-PARSER: expr_unexpected_token
+**MISSING HEADER**
+Roc files must start with a module header.
+
+For example:
+        module [main]
+or for an app:
+        app [main!] { pf: platform "../basic-cli/platform.roc" }
+
+Here is the problematic code:
+**fuzz_crash_014.md:1:1:1:5:**
+```roc
+0b.0
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token  is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**fuzz_crash_014.md:1:3:1:3:**
+```roc
+0b.0
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token  is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**fuzz_crash_014.md:2:1:2:1:**
+```roc
+0bu22
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **0u22** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**fuzz_crash_014.md:3:1:3:5:**
+```roc
+0u22
+```
+
+
 **INVALID STATEMENT**
 The statement **expr** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
@@ -34,12 +78,12 @@ MalformedNumberBadSuffix(3:1-3:5),EndOfFile(3:5-3:5),
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-3:5)
-	(malformed_header (1:1-1:3) "missing_header")
+(file @1-1-3-5
+	(malformed-header @1-1-1-5 (tag "missing_header"))
 	(statements
-		(malformed_expr (1:3-1:5) "expr_unexpected_token")
-		(malformed_expr (2:1-2:6) "expr_unexpected_token")
-		(malformed_expr (3:1-3:5) "expr_unexpected_token")))
+		(e-malformed @1-1-1-1 (reason "expr_unexpected_token"))
+		(e-malformed @1-1-1-1 (reason "expr_unexpected_token"))
+		(e-malformed @3-1-3-5 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -49,9 +93,11 @@ MalformedNumberBadSuffix(3:1-3:5),EndOfFile(3:5-3:5),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir "empty")
+(can-ir (empty true))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types (defs) (expressions))
+(inferred-types
+	(defs)
+	(expressions))
 ~~~

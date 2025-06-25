@@ -15,11 +15,11 @@ KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:18),Comma(1:18-1:19),Uppe
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-1:30)
-	(module (1:1-1:30)
-		(exposes (1:8-1:30)
-			(exposed_item (lower_ident "something"))
-			(exposed_item (upper_ident "SomeType"))))
+(file @1-1-1-30
+	(module @1-1-1-30
+		(exposes @1-8-1-30
+			(exposed-lower-ident (text "something"))
+			(exposed-upper-ident (text "SomeType"))))
 	(statements))
 ~~~
 # FORMATTED
@@ -31,9 +31,11 @@ module [
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir "empty")
+(can-ir (empty true))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types (defs) (expressions))
+(inferred-types
+	(defs)
+	(expressions))
 ~~~

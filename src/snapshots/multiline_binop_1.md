@@ -29,13 +29,11 @@ Int(8:3-8:4),EndOfFile(8:4-8:4),
 ~~~
 # PARSE
 ~~~clojure
-(binop (1:1-8:4)
-	"+"
-	(int (1:1-1:2) "1")
-	(binop (6:2-8:4)
-		"*"
-		(int (6:2-6:3) "2")
-		(int (8:3-8:4) "3")))
+(e-binop @1-1-8-4 (op "+")
+	(e-int @1-1-1-2 (raw "1"))
+	(e-binop @6-2-8-4 (op "*")
+		(e-int @6-2-6-3 (raw "2"))
+		(e-int @8-3-8-4 (raw "3"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -43,24 +41,13 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e_binop (1:1-8:4)
-	"add"
-	(e_int (1:1-1:2)
-		(int_var 14)
-		(requirements (sign_needed "false") (bits_needed "types.types.Num.Int.BitsNeeded.7"))
-		(value "1"))
-	(e_binop (6:2-8:4)
-		"mul"
-		(e_int (6:2-6:3)
-			(int_var 17)
-			(requirements (sign_needed "false") (bits_needed "types.types.Num.Int.BitsNeeded.7"))
-			(value "2"))
-		(e_int (8:3-8:4)
-			(int_var 20)
-			(requirements (sign_needed "false") (bits_needed "types.types.Num.Int.BitsNeeded.7"))
-			(value "3"))))
+(e-binop @1-1-8-4 (op "add") (id 82)
+	(e-int @1-1-1-2 (num-var 74) (sign-needed "false") (bits-needed "7") (value "1"))
+	(e-binop @6-2-8-4 (op "mul")
+		(e-int @6-2-6-3 (num-var 77) (sign-needed "false") (bits-needed "7") (value "2"))
+		(e-int @8-3-8-4 (num-var 80) (sign-needed "false") (bits-needed "7") (value "3"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr 22 (type "*"))
+(expr (id 82) (type "*"))
 ~~~

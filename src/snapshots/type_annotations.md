@@ -15,23 +15,15 @@ main! : List(String) -> Result({}, _)
 tag_tuple : Value((a, b, c))
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level type_anno
+**UNDECLARED TYPE**
+The type ``String`` is not declared in this scope.
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level type_anno
+This type is referenced here:
+**type_annotations.md:7:14:7:20:**
+```roc
+main! : List(String) -> Result({}, _)
+```
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level type_anno
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level type_anno
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level type_anno
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level type_anno
 
 # TOKENS
 ~~~zig
@@ -46,47 +38,44 @@ LowerIdent(8:1-8:10),OpColon(8:11-8:12),UpperIdent(8:13-8:18),NoSpaceOpenRound(8
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-8:29)
-	(module (1:1-1:10) (exposes (1:8-1:10)))
+(file @1-1-8-29
+	(module @1-1-1-10
+		(exposes @1-8-1-10))
 	(statements
-		(type_anno (3:1-4:4) "foo" (ty "U64"))
-		(type_anno (4:1-5:4)
-			"bar"
-			(apply (4:7-4:21)
-				(ty "Thing")
-				(ty_var (4:13-4:14) "a")
-				(ty_var (4:16-4:17) "b")
+		(s-type-anno @3-1-4-4 (name "foo")
+			(ty (name "U64")))
+		(s-type-anno @4-1-5-4 (name "bar")
+			(ty-apply @4-7-4-21
+				(ty (name "Thing"))
+				(ty-var @4-13-4-14 (raw "a"))
+				(ty-var @4-16-4-17 (raw "b"))
 				(_)))
-		(type_anno (5:1-6:8)
-			"baz"
-			(tuple (5:7-5:16)
-				(ty_var (5:8-5:9) "a")
-				(ty_var (5:11-5:12) "b")
-				(ty_var (5:14-5:15) "c")))
-		(type_anno (6:1-7:6)
-			"add_one"
-			(fn (6:12-6:26)
-				(ty "U8")
-				(ty "U16")
-				(ty "U32")))
-		(type_anno (7:1-8:10)
-			"main!"
-			(fn (7:9-7:38)
-				(apply (7:9-7:21)
-					(ty "List")
-					(ty "String"))
-				(apply (7:25-7:38)
-					(ty "Result")
-					(record (7:32-7:34))
+		(s-type-anno @5-1-6-8 (name "baz")
+			(ty-tuple @5-7-5-16
+				(ty-var @5-8-5-9 (raw "a"))
+				(ty-var @5-11-5-12 (raw "b"))
+				(ty-var @5-14-5-15 (raw "c"))))
+		(s-type-anno @6-1-7-6 (name "add_one")
+			(ty-fn @6-12-6-26
+				(ty (name "U8"))
+				(ty (name "U16"))
+				(ty (name "U32"))))
+		(s-type-anno @7-1-8-10 (name "main!")
+			(ty-fn @7-9-7-38
+				(ty-apply @7-9-7-21
+					(ty (name "List"))
+					(ty (name "String")))
+				(ty-apply @7-25-7-38
+					(ty (name "Result"))
+					(ty-record @7-32-7-34)
 					(_))))
-		(type_anno (8:1-8:29)
-			"tag_tuple"
-			(apply (8:13-8:29)
-				(ty "Value")
-				(tuple (8:19-8:28)
-					(ty_var (8:20-8:21) "a")
-					(ty_var (8:23-8:24) "b")
-					(ty_var (8:26-8:27) "c"))))))
+		(s-type-anno @8-1-8-29 (name "tag_tuple")
+			(ty-apply @8-13-8-29
+				(ty (name "Value"))
+				(ty-tuple @8-19-8-28
+					(ty-var @8-20-8-21 (raw "a"))
+					(ty-var @8-23-8-24 (raw "b"))
+					(ty-var @8-26-8-27 (raw "c")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -94,9 +83,11 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir "empty")
+(can-ir (empty true))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types (defs) (expressions))
+(inferred-types
+	(defs)
+	(expressions))
 ~~~

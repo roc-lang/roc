@@ -22,7 +22,7 @@ UpperIdent(3:5-3:8),NoSpaceOpenRound(3:8-3:9),LowerIdent(3:9-3:12),CloseRound(3:
 ~~~
 # PARSE
 ~~~clojure
-(ident (1:1-1:5) "" "when")
+(e-ident @1-1-1-5 (qaul "") (raw "when"))
 ~~~
 # FORMATTED
 ~~~roc
@@ -30,9 +30,9 @@ when
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e_runtime_error (1:1-1:5) "ident_not_in_scope")
+(e-runtime-error (tag "ident_not_in_scope") (id 73))
 ~~~
 # TYPES
 ~~~clojure
-(expr 13 (type "Error"))
+(expr (id 73) (type "Error"))
 ~~~

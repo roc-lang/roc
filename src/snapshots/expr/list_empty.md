@@ -15,7 +15,7 @@ OpenSquare(1:1-1:2),CloseSquare(1:2-1:3),EndOfFile(1:3-1:3),
 ~~~
 # PARSE
 ~~~clojure
-(list (1:1-1:3))
+(e-list @1-1-1-3)
 ~~~
 # FORMATTED
 ~~~roc
@@ -23,9 +23,10 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e_list (1:1-1:3) (elem_var 12) (elems))
+(e-list @1-1-1-3 (elem-var 72) (id 73)
+	(elems))
 ~~~
 # TYPES
 ~~~clojure
-(expr 13 (type "List(*)"))
+(expr (id 73) (type "List(*)"))
 ~~~

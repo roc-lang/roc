@@ -25,7 +25,19 @@ type=expr
 ]
 ~~~
 # PROBLEMS
-PARSER: expr_unexpected_token
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token ** This tests that different fractional literals are canonicalized to the appropriate type
+[** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**expr_frac_split.md:1:2:2:2:**
+```roc
+# This tests that different fractional literals are canonicalized to the appropriate type
+[
+```
+
+
 # TOKENS
 ~~~zig
 Newline(1:2-1:90),
@@ -49,7 +61,7 @@ CloseSquare(18:1-18:2),EndOfFile(18:2-18:2),
 ~~~
 # PARSE
 ~~~clojure
-(malformed_expr (1:2-1:90) "expr_unexpected_token")
+(e-malformed @1-2-2-2 (reason "expr_unexpected_token"))
 ~~~
 # FORMATTED
 ~~~roc
@@ -57,9 +69,11 @@ CloseSquare(18:1-18:2),EndOfFile(18:2-18:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir "empty")
+(can-ir (empty true))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types (defs) (expressions))
+(inferred-types
+	(defs)
+	(expressions))
 ~~~

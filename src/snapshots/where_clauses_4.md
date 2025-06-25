@@ -13,12 +13,7 @@ decodeThings : List(List(U8)) -> List(a)
 	where a.Decode
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level import
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level type_anno
-
+NIL
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:15),CloseSquare(1:15-1:16),Newline(1:1-1:1),
@@ -30,24 +25,24 @@ KwWhere(6:2-6:7),LowerIdent(6:8-6:9),NoSpaceDotUpperIdent(6:9-6:16),EndOfFile(6:
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-6:16)
-	(module (1:1-1:16)
-		(exposes (1:8-1:16) (exposed_item (lower_ident "decode"))))
+(file @1-1-6-16
+	(module @1-1-1-16
+		(exposes @1-8-1-16
+			(exposed-lower-ident (text "decode"))))
 	(statements
-		(import (3:1-3:32)
-			"Decode"
-			(exposing (exposed_item (upper_ident "Decode"))))
-		(type_anno (5:1-6:16)
-			"decodeThings"
-			(fn (5:16-5:41)
-				(apply (5:16-5:30)
-					(ty "List")
-					(apply (5:21-5:29)
-						(ty "List")
-						(ty "U8")))
-				(apply (5:34-5:41)
-					(ty "List")
-					(ty_var (5:39-5:40) "a"))))))
+		(s-import @3-1-3-32 (module "Decode")
+			(exposing
+				(exposed-upper-ident (text "Decode"))))
+		(s-type-anno @5-1-6-16 (name "decodeThings")
+			(ty-fn @5-16-5-41
+				(ty-apply @5-16-5-30
+					(ty (name "List"))
+					(ty-apply @5-21-5-29
+						(ty (name "List"))
+						(ty (name "U8"))))
+				(ty-apply @5-34-5-41
+					(ty (name "List"))
+					(ty-var @5-39-5-40 (raw "a")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -55,9 +50,14 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir "empty")
+(can-ir
+	(s-import @3-1-3-32 (module "Decode") (id 73)
+		(exposes
+			(exposed (name "Decode") (wildcard false)))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types (defs) (expressions))
+(inferred-types
+	(defs)
+	(expressions))
 ~~~

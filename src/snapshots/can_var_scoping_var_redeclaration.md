@@ -22,17 +22,29 @@ result = redeclareTest({})
 The name `x_` is being redeclared in this scope.
 
 The redeclaration is here:
-**can_var_scoping_var_redeclaration.md:6-2:7:**
+**can_var_scoping_var_redeclaration.md:6:2:7:4:**
 ```roc
 	var x_ = 10 # Redeclare var - should warn but proceed
 	x_ = 15 # Reassign - should work without warning
 ```
 
 But `x_` was already defined here:
-**can_var_scoping_var_redeclaration.md:5-2:6:**
+**can_var_scoping_var_redeclaration.md:5:2:6:5:**
 ```roc
 	var x_ = 5
 	var x_ = 10 # Redeclare var - should warn but proceed
+```
+
+
+**UNUSED VARIABLE**
+Variable ``x_`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_x_` to suppress this warning.
+The unused variable is declared here:
+**can_var_scoping_var_redeclaration.md:6:2:7:4:**
+```roc
+	var x_ = 10 # Redeclare var - should warn but proceed
+	x_ = 15 # Reassign - should work without warning
 ```
 
 
@@ -55,30 +67,30 @@ LowerIdent(11:1-11:7),OpAssign(11:8-11:9),LowerIdent(11:10-11:23),NoSpaceOpenRou
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-11:27)
-	(module (1:1-1:10) (exposes (1:8-1:10)))
+(file @1-1-11-27
+	(module @1-1-1-10
+		(exposes @1-8-1-10))
 	(statements
-		(decl (4:1-9:2)
-			(ident (4:1-4:14) "redeclareTest")
-			(lambda (4:17-9:2)
-				(args (underscore))
-				(block (4:21-9:2)
+		(s-decl @4-1-9-2
+			(p-ident @4-1-4-14 (raw "redeclareTest"))
+			(e-lambda @4-17-9-2
+				(args
+					(p-underscore))
+				(e-block @4-21-9-2
 					(statements
-						(var (5:2-6:5)
-							(name "x_")
-							(int (5:11-5:12) "5"))
-						(var (6:2-7:4)
-							(name "x_")
-							(int (6:11-6:13) "10"))
-						(decl (7:2-7:9)
-							(ident (7:2-7:4) "x_")
-							(int (7:7-7:9) "15"))
-						(ident (8:2-8:4) "" "x_")))))
-		(decl (11:1-11:27)
-			(ident (11:1-11:7) "result")
-			(apply (11:10-11:27)
-				(ident (11:10-11:23) "" "redeclareTest")
-				(record (11:24-11:26))))))
+						(s-var @5-2-6-5 (name "x_")
+							(e-int @5-11-5-12 (raw "5")))
+						(s-var @6-2-7-4 (name "x_")
+							(e-int @6-11-6-13 (raw "10")))
+						(s-decl @7-2-7-9
+							(p-ident @7-2-7-4 (raw "x_"))
+							(e-int @7-7-7-9 (raw "15")))
+						(e-ident @8-2-8-4 (qaul "") (raw "x_"))))))
+		(s-decl @11-1-11-27
+			(p-ident @11-1-11-7 (raw "result"))
+			(e-apply @11-10-11-27
+				(e-ident @11-10-11-23 (qaul "") (raw "redeclareTest"))
+				(e-record @11-24-11-26)))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -86,58 +98,38 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir
-	(d_let
-		(def_pattern
-			(p_assign (4:1-4:14)
-				(pid 12)
-				(ident "redeclareTest")))
-		(def_expr
-			(e_lambda (4:17-9:2)
-				(args (p_underscore (4:18-4:19) (pid 13)))
-				(e_block (4:21-9:2)
-					(s_var (5:2-6:5)
-						(pid 17)
-						(p_assign (5:2-6:5)
-							(pid 17)
-							(ident "x_"))
-						(e_int (5:11-5:12)
-							(int_var 16)
-							(requirements (sign_needed "false") (bits_needed "types.types.Num.Int.BitsNeeded.7"))
-							(value "5")))
-					(s_var (6:2-7:4)
-						(pid 22)
-						(p_assign (6:2-7:4)
-							(pid 22)
-							(ident "x_"))
-						(e_int (6:11-6:13)
-							(int_var 21)
-							(requirements (sign_needed "false") (bits_needed "types.types.Num.Int.BitsNeeded.7"))
-							(value "10")))
-					(s_reassign (7:2-7:4)
-						(pid 17)
-						(e_int (7:7-7:9)
-							(int_var 27)
-							(requirements (sign_needed "false") (bits_needed "types.types.Num.Int.BitsNeeded.7"))
-							(value "15")))
-					(e_lookup (8:2-8:4) (pid 17))))))
-	(d_let
-		(def_pattern
-			(p_assign (11:1-11:7)
-				(pid 33)
-				(ident "result")))
-		(def_expr
-			(e_call (11:10-11:27)
-				(e_lookup (11:10-11:23) (pid 12))
-				(e_runtime_error (1:1-1:1) "not_implemented")))))
+(can-ir
+	(d-let (id 93)
+		(p-assign @4-1-4-14 (ident "redeclareTest") (id 72))
+		(e-lambda @4-17-9-2 (id 92)
+			(args
+				(p-underscore @4-18-4-19 (id 73)))
+			(e-block @4-21-9-2
+				(s-var @5-2-6-5
+					(p-assign @5-2-6-5 (ident "x_") (id 77))
+					(e-int @5-11-5-12 (num-var 76) (sign-needed "false") (bits-needed "7") (value "5") (id 76)))
+				(s-var @6-2-7-4
+					(p-assign @6-2-7-4 (ident "x_") (id 82))
+					(e-int @6-11-6-13 (num-var 81) (sign-needed "false") (bits-needed "7") (value "10") (id 81)))
+				(s-reassign @7-2-7-4
+					(p-assign @5-2-6-5 (ident "x_") (id 77))
+					(e-int @7-7-7-9 (num-var 87) (sign-needed "false") (bits-needed "7") (value "15") (id 87)))
+				(e-lookup-local @8-2-8-4
+					(pattern (id 77))))))
+	(d-let (id 99)
+		(p-assign @11-1-11-7 (ident "result") (id 94))
+		(e-call @11-10-11-27 (id 98)
+			(e-lookup-local @11-10-11-23
+				(pattern (id 72)))
+			(e-runtime-error (tag "not_implemented")))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types
+(inferred-types
 	(defs
-		(def "redeclareTest" 32 (type "*"))
-		(def "result" 38 (type "*")))
+		(def (name "redeclareTest") (type "*"))
+		(def (name "result") (type "*")))
 	(expressions
-		(expr (4:17-9:2) 31 (type "*"))
-		(expr (11:10-11:27) 37 (type "*"))))
+		(expr @4-17-9-2 (type "*"))
+		(expr @11-10-11-27 (type "*"))))
 ~~~

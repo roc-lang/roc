@@ -426,6 +426,15 @@ pub const RocDec = extern struct {
         }
     }
 
+    pub fn sqrt(self: RocDec) RocDec {
+        // sqrt(-n) is an error
+        if (self.num < 0) {
+            roc_panic("Square root by 0!", 0);
+        }
+
+        return fromF64(std.math.sqrt(self.toF64())).?;
+    }
+
     pub fn mul(self: RocDec, other: RocDec) RocDec {
         const answer = RocDec.mulWithOverflow(self, other);
 
@@ -1435,6 +1444,40 @@ test "pow: 0.5 ^ 2.0" {
     const dec = RocDec.fromStr(roc_str).?;
 
     try expectEqual(dec, RocDec.zero_point_five.pow(RocDec.two_point_zero));
+}
+
+test "sqrt: 1.0" {
+    const roc_str = RocStr.init("1.0", 3);
+    const dec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(dec, RocDec.sqrt(RocDec.one_point_zero));
+}
+
+test "sqrt: 0.0" {
+    const roc_str = RocStr.init("0.0", 3);
+    const dec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(dec, dec.sqrt());
+}
+
+test "sqrt: 9.0" {
+    const roc_str = RocStr.init("9.0", 3);
+    const dec = RocDec.fromStr(roc_str).?;
+
+    const roc_str_expected = RocStr.init("3.0", 3);
+    const expected = RocDec.fromStr(roc_str_expected).?;
+
+    try expectEqual(expected, dec.sqrt());
+}
+
+test "sqrt: 1.44" {
+    const roc_str = RocStr.init("1.44", 4);
+    const dec = RocDec.fromStr(roc_str).?;
+
+    const roc_str_expected = RocStr.init("1.2", 3);
+    const expected = RocDec.fromStr(roc_str_expected).?;
+
+    try expectEqual(expected, dec.sqrt());
 }
 
 // exports

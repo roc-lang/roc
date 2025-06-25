@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=
+description=Expected an open bracket for the header
 type=file
 ~~~
 # SOURCE
@@ -8,15 +8,25 @@ type=file
 module
 ~~~
 # PROBLEMS
-PARSER: header_expected_open_square
+**PARSE ERROR**
+A parsing error occurred: `header_expected_open_square`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**header_expected_open_bracket.md:1:7:1:7:**
+```roc
+module
+```
+
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),EndOfFile(1:7-1:7),
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-1:7)
-	(malformed_header (1:7-1:7) "header_expected_open_square")
+(file @1-1-1-7
+	(malformed-header @1-7-1-7 (tag "header_expected_open_square"))
 	(statements))
 ~~~
 # FORMATTED
@@ -25,9 +35,11 @@ KwModule(1:1-1:7),EndOfFile(1:7-1:7),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir "empty")
+(can-ir (empty true))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types (defs) (expressions))
+(inferred-types
+	(defs)
+	(expressions))
 ~~~

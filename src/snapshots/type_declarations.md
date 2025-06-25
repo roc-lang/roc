@@ -22,26 +22,35 @@ MyType : U64
 MyType2 : Module.Thingy
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level type_decl
+**UNDECLARED TYPE**
+The type ``Bar`` is not declared in this scope.
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level type_decl
+This type is referenced here:
+**type_declarations.md:5:8:5:11:**
+```roc
+Foo : (Bar, Baz)
+```
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level type_decl
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level type_decl
+**UNDECLARED TYPE**
+The type ``Baz`` is not declared in this scope.
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level type_decl
+This type is referenced here:
+**type_declarations.md:5:13:5:16:**
+```roc
+Foo : (Bar, Baz)
+```
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level type_decl
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level type_decl
+**UNDECLARED TYPE**
+The type ``Something`` is not declared in this scope.
+
+This type is referenced here:
+**type_declarations.md:7:32:7:41:**
+```roc
+Some(a) : { foo : Ok(a), bar : Something }
+```
+
 
 # TOKENS
 ~~~zig
@@ -63,77 +72,79 @@ UpperIdent(15:1-15:8),OpColon(15:9-15:10),UpperIdent(15:11-15:17),NoSpaceDotUppe
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-15:24)
-	(module (1:1-1:57)
-		(exposes (1:8-1:57)
-			(exposed_item (upper_ident "Map"))
-			(exposed_item (upper_ident "Foo"))
-			(exposed_item (upper_ident "Some"))
-			(exposed_item (upper_ident "Maybe"))
-			(exposed_item (upper_ident "SomeFunc"))
-			(exposed_item (lower_ident "add_one"))
-			(exposed_item (lower_ident "main!"))))
+(file @1-1-15-24
+	(module @1-1-1-57
+		(exposes @1-8-1-57
+			(exposed-upper-ident (text "Map"))
+			(exposed-upper-ident (text "Foo"))
+			(exposed-upper-ident (text "Some"))
+			(exposed-upper-ident (text "Maybe"))
+			(exposed-upper-ident (text "SomeFunc"))
+			(exposed-lower-ident (text "add_one"))
+			(exposed-lower-ident (text "main!"))))
 	(statements
-		(type_decl (3:1-5:4)
-			(header (3:1-3:10)
-				"Map"
+		(s-type-decl @3-1-5-4
+			(header @3-1-3-10 (name "Map")
 				(args
-					(ty_var (3:5-3:6) "a")
-					(ty_var (3:8-3:9) "b")))
-			(fn (3:13-3:41)
-				(apply (3:13-3:20)
-					(ty "List")
-					(ty_var (3:18-3:19) "a"))
-				(fn (3:23-3:29)
-					(ty_var (3:23-3:24) "a")
-					(ty_var (3:28-3:29) "b"))
-				(apply (3:34-3:41)
-					(ty "List")
-					(ty_var (3:39-3:40) "b"))))
-		(type_decl (5:1-7:5)
-			(header (5:1-5:4) "Foo" (args))
-			(tuple (5:7-5:17)
-				(ty "Bar")
-				(ty "Baz")))
-		(type_decl (7:1-9:6)
-			(header (7:1-7:8)
-				"Some"
-				(args (ty_var (7:6-7:7) "a")))
-			(record (7:11-7:43)
-				(anno_record_field (7:13-7:25)
-					"foo"
-					(apply (7:19-7:24)
-						(ty "Ok")
-						(ty_var (7:22-7:23) "a")))
-				(anno_record_field (7:26-7:43) "bar" (ty "Something"))))
-		(type_decl (9:1-11:9)
-			(header (9:1-9:9)
-				"Maybe"
-				(args (ty_var (9:7-9:8) "a")))
-			(tag_union (9:12-9:27)
+					(ty-var @3-5-3-6 (raw "a"))
+					(ty-var @3-8-3-9 (raw "b"))))
+			(ty-fn @3-13-3-41
+				(ty-apply @3-13-3-20
+					(ty (name "List"))
+					(ty-var @3-18-3-19 (raw "a")))
+				(ty-fn @3-23-3-29
+					(ty-var @3-23-3-24 (raw "a"))
+					(ty-var @3-28-3-29 (raw "b")))
+				(ty-apply @3-34-3-41
+					(ty (name "List"))
+					(ty-var @3-39-3-40 (raw "b")))))
+		(s-type-decl @5-1-7-5
+			(header @5-1-5-4 (name "Foo")
+				(args))
+			(ty-tuple @5-7-5-17
+				(ty (name "Bar"))
+				(ty (name "Baz"))))
+		(s-type-decl @7-1-9-6
+			(header @7-1-7-8 (name "Some")
+				(args
+					(ty-var @7-6-7-7 (raw "a"))))
+			(ty-record @7-11-7-43
+				(anno-record-field @7-13-7-25 (name "foo")
+					(ty-apply @7-19-7-24
+						(ty (name "Ok"))
+						(ty-var @7-22-7-23 (raw "a"))))
+				(anno-record-field @7-26-7-43 (name "bar")
+					(ty (name "Something")))))
+		(s-type-decl @9-1-11-9
+			(header @9-1-9-9 (name "Maybe")
+				(args
+					(ty-var @9-7-9-8 (raw "a"))))
+			(ty-tag-union @9-12-9-27
 				(tags
-					(apply (9:13-9:20)
-						(ty "Some")
-						(ty_var (9:18-9:19) "a"))
-					(ty "None"))))
-		(type_decl (11:1-13:7)
-			(header (11:1-11:12)
-				"SomeFunc"
-				(args (ty_var (11:10-11:11) "a")))
-			(fn (11:15-11:38)
-				(apply (11:15-11:23)
-					(ty "Maybe")
-					(ty_var (11:21-11:22) "a"))
-				(ty_var (11:25-11:26) "a")
-				(apply (11:30-11:38)
-					(ty "Maybe")
-					(ty_var (11:36-11:37) "a"))))
-		(type_decl (13:1-15:8)
-			(header (13:1-13:7) "MyType" (args))
-			(ty "U64"))
-		(type_decl (15:1-15:24)
-			(header (15:1-15:8) "MyType2" (args))
-			(mod_ty "Module" ".Thingy"))))
+					(ty-apply @9-13-9-20
+						(ty (name "Some"))
+						(ty-var @9-18-9-19 (raw "a")))
+					(ty (name "None")))))
+		(s-type-decl @11-1-13-7
+			(header @11-1-11-12 (name "SomeFunc")
+				(args
+					(ty-var @11-10-11-11 (raw "a"))))
+			(ty-fn @11-15-11-38
+				(ty-apply @11-15-11-23
+					(ty (name "Maybe"))
+					(ty-var @11-21-11-22 (raw "a")))
+				(ty-var @11-25-11-26 (raw "a"))
+				(ty-apply @11-30-11-38
+					(ty (name "Maybe"))
+					(ty-var @11-36-11-37 (raw "a")))))
+		(s-type-decl @13-1-15-8
+			(header @13-1-13-7 (name "MyType")
+				(args))
+			(ty (name "U64")))
+		(s-type-decl @15-1-15-24
+			(header @15-1-15-8 (name "MyType2")
+				(args))
+			(ty-mod (module "Thingy") (name "Module")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -141,9 +152,64 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir "empty")
+(can-ir
+	(s-type-decl @3-1-5-4 (id 84)
+		(ty-header @3-1-3-10 (name "Map")
+			(ty-args
+				(ty-var @3-5-3-6 (name "a"))
+				(ty-var @3-8-3-9 (name "b"))))
+		(ty-fn @3-13-3-41 (effectful false)
+			(ty-apply @3-13-3-20 (symbol "List")
+				(ty-var @3-18-3-19 (name "a")))
+			(ty-parens @3-22-3-30
+				(ty-fn @3-23-3-29 (effectful false)
+					(ty-var @3-23-3-24 (name "a"))
+					(ty-var @3-28-3-29 (name "b"))))
+			(ty-apply @3-34-3-41 (symbol "List")
+				(ty-var @3-39-3-40 (name "b")))))
+	(s-type-decl @5-1-7-5 (id 91)
+		(ty-header @5-1-5-4 (name "Foo"))
+		(ty-tuple @5-7-5-17
+			(ty @5-8-5-11 (name "Bar"))
+			(ty @5-13-5-16 (name "Baz"))))
+	(s-type-decl @7-1-9-6 (id 101)
+		(ty-header @7-1-7-8 (name "Some")
+			(ty-args
+				(ty-var @7-6-7-7 (name "a"))))
+		(ty-record @7-11-7-43
+			(field (field "foo")
+				(ty-apply @7-19-7-24 (symbol "Ok")
+					(ty-var @7-22-7-23 (name "a"))))
+			(field (field "bar")
+				(ty @7-32-7-41 (name "Something")))))
+	(s-type-decl @9-1-11-9 (id 108)
+		(ty-header @9-1-9-9 (name "Maybe")
+			(ty-args
+				(ty-var @9-7-9-8 (name "a"))))
+		(ty-tag-union @9-12-9-27
+			(ty-apply @9-13-9-20 (symbol "Some")
+				(ty-var @9-18-9-19 (name "a")))
+			(ty @9-22-9-26 (name "None"))))
+	(s-type-decl @11-1-13-7 (id 117)
+		(ty-header @11-1-11-12 (name "SomeFunc")
+			(ty-args
+				(ty-var @11-10-11-11 (name "a"))))
+		(ty-fn @11-15-11-38 (effectful false)
+			(ty-apply @11-15-11-23 (symbol "Maybe")
+				(ty-var @11-21-11-22 (name "a")))
+			(ty-var @11-25-11-26 (name "a"))
+			(ty-apply @11-30-11-38 (symbol "Maybe")
+				(ty-var @11-36-11-37 (name "a")))))
+	(s-type-decl @13-1-15-8 (id 120)
+		(ty-header @13-1-13-7 (name "MyType"))
+		(ty @13-10-13-13 (name "U64")))
+	(s-type-decl @15-1-15-24 (id 123)
+		(ty-header @15-1-15-8 (name "MyType2"))
+		(ty-mod @15-11-15-24 (module "Thingy") (type "Module"))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types (defs) (expressions))
+(inferred-types
+	(defs)
+	(expressions))
 ~~~

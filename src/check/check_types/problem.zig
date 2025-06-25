@@ -99,10 +99,10 @@ pub const Problem = union(enum) {
 
         try report.document.addSourceRegion(
             source,
-            region_info.start_line_idx + 1, // RegionInfo uses 0-based line numbers
-            region_info.start_col_idx + 1, // RegionInfo uses 0-based column numbers
-            region_info.end_line_idx + 1,
-            region_info.end_col_idx + 1,
+            region_info.start_line_idx,
+            region_info.start_col_idx,
+            region_info.end_line_idx,
+            region_info.end_col_idx,
             .error_highlight,
             filename,
         );

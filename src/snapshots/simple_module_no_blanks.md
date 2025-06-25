@@ -11,13 +11,7 @@ hello! = Stdout.line!("Hello")
 world = "World"
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: top-level import
-
-**UNDEFINED VARIABLE**
-Nothing is named `line!` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:15),Comma(1:15-1:16),LowerIdent(1:17-1:22),CloseSquare(1:22-1:23),Newline(1:1-1:1),
@@ -27,21 +21,23 @@ LowerIdent(4:1-4:6),OpAssign(4:7-4:8),StringStart(4:9-4:10),StringPart(4:10-4:15
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-4:16)
-	(module (1:1-1:23)
-		(exposes (1:8-1:23)
-			(exposed_item (lower_ident "hello!"))
-			(exposed_item (lower_ident "world"))))
+(file @1-1-4-16
+	(module @1-1-1-23
+		(exposes @1-8-1-23
+			(exposed-lower-ident (text "hello!"))
+			(exposed-lower-ident (text "world"))))
 	(statements
-		(import (2:1-2:17) ".Stdout" (qualifier "pf"))
-		(decl (3:1-3:31)
-			(ident (3:1-3:7) "hello!")
-			(apply (3:10-3:31)
-				(ident (3:10-3:22) "Stdout" ".line!")
-				(string (3:23-3:30) (string_part (3:24-3:29) "Hello"))))
-		(decl (4:1-4:16)
-			(ident (4:1-4:6) "world")
-			(string (4:9-4:16) (string_part (4:10-4:15) "World")))))
+		(s-import @2-1-2-17 (module ".Stdout") (qualifier "pf"))
+		(s-decl @3-1-3-31
+			(p-ident @3-1-3-7 (raw "hello!"))
+			(e-apply @3-10-3-31
+				(e-ident @3-10-3-22 (qaul "Stdout") (raw ".line!"))
+				(e-string @3-23-3-30
+					(e-string-part @3-24-3-29 (raw "Hello")))))
+		(s-decl @4-1-4-16
+			(p-ident @4-1-4-6 (raw "world"))
+			(e-string @4-9-4-16
+				(e-string-part @4-10-4-15 (raw "World"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -49,31 +45,28 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir
-	(d_let
-		(def_pattern
-			(p_assign (3:1-3:7)
-				(pid 13)
-				(ident "hello!")))
-		(def_expr
-			(e_call (3:10-3:31)
-				(e_runtime_error (3:10-3:22) "ident_not_in_scope")
-				(e_string (3:23-3:30) (e_literal (3:24-3:29) "Hello")))))
-	(d_let
-		(def_pattern
-			(p_assign (4:1-4:6)
-				(pid 20)
-				(ident "world")))
-		(def_expr
-			(e_string (4:9-4:16) (e_literal (4:10-4:15) "World")))))
+(can-ir
+	(d-let (id 79)
+		(p-assign @3-1-3-7 (ident "hello!") (id 73))
+		(e-call @3-10-3-31 (id 78)
+			(e-lookup-external
+				(ext-decl @3-10-3-22 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value") (type-var 74)))
+			(e-string @3-23-3-30
+				(e-literal @3-24-3-29 (string "Hello")))))
+	(d-let (id 83)
+		(p-assign @4-1-4-6 (ident "world") (id 80))
+		(e-string @4-9-4-16 (id 82)
+			(e-literal @4-10-4-15 (string "World"))))
+	(s-import @2-1-2-17 (module "pf.Stdout") (id 72)
+		(exposes)))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types
+(inferred-types
 	(defs
-		(def "hello!" 19 (type "*"))
-		(def "world" 23 (type "Str")))
+		(def (name "hello!") (type "*"))
+		(def (name "world") (type "Str")))
 	(expressions
-		(expr (3:10-3:31) 18 (type "*"))
-		(expr (4:9-4:16) 22 (type "Str"))))
+		(expr @3-10-3-31 (type "*"))
+		(expr @4-9-4-16 (type "Str"))))
 ~~~

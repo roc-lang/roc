@@ -10,7 +10,17 @@ module []
 foo = if tru then 0
 ~~~
 # PROBLEMS
-PARSER: no_else
+**PARSE ERROR**
+A parsing error occurred: `no_else`
+This is an unexpected parsing error. Please check your syntax.
+
+Here is the problematic code:
+**expr_if_missing_else.md:3:19:3:20:**
+```roc
+foo = if tru then 0
+```
+
+
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
 Check the spelling and make sure you're using a valid Roc operator.
@@ -23,12 +33,13 @@ LowerIdent(3:1-3:4),OpAssign(3:5-3:6),KwIf(3:7-3:9),LowerIdent(3:10-3:13),LowerI
 ~~~
 # PARSE
 ~~~clojure
-(file (1:1-3:20)
-	(module (1:1-1:10) (exposes (1:8-1:10)))
+(file @1-1-3-20
+	(module @1-1-1-10
+		(exposes @1-8-1-10))
 	(statements
-		(decl (3:1-3:20)
-			(ident (3:1-3:4) "foo")
-			(malformed_expr (3:19-3:20) "no_else"))))
+		(s-decl @3-1-3-20
+			(p-ident @3-1-3-4 (raw "foo"))
+			(e-malformed @3-19-3-20 (reason "no_else")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -38,19 +49,16 @@ foo =
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can_ir
-	(d_let
-		(def_pattern
-			(p_assign (3:1-3:4)
-				(pid 12)
-				(ident "foo")))
-		(def_expr (e_runtime_error (3:19-3:20) "expr_not_canonicalized"))))
+(can-ir
+	(d-let (id 75)
+		(p-assign @3-1-3-4 (ident "foo") (id 72))
+		(e-runtime-error (tag "expr_not_canonicalized") (id 74))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred_types
+(inferred-types
 	(defs
-		(def "foo" 15 (type "Error")))
+		(def (name "foo") (type "Error")))
 	(expressions
-		(expr (3:19-3:20) 14 (type "Error"))))
+		(expr @3-19-3-20 (type "Error"))))
 ~~~

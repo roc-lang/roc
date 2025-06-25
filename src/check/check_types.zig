@@ -129,6 +129,14 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
         .block => |_| {},
         .lambda => |_| {},
         .tuple => |_| {},
+        .dot_access => |_| {
+            // TODO: Implement type checking for dot access
+            // This will need to:
+            // 1. Check the receiver type
+            // 2. Determine if it's record field access or static dispatch
+            // 3. Validate the field/method exists and has correct type
+            // 4. Type check any arguments if it's a method call
+        },
         .runtime_error => |_| {},
     }
 }

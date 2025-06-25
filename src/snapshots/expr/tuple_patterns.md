@@ -26,11 +26,61 @@ type=expr
 }
 ~~~
 # PROBLEMS
-PARSER: expr_unexpected_token
-PARSER: expr_unexpected_token
-PARSER: expr_unexpected_token
-PARSER: expr_unexpected_token
-PARSER: expr_unexpected_token
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **= (** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**tuple_patterns.md:4:12:4:15:**
+```roc
+    (x, y) = (1, 2)
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **= (** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**tuple_patterns.md:7:22:7:25:**
+```roc
+    ((a, b), (c, d)) = ((10, 20), (30, 40))
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **= (** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**tuple_patterns.md:10:28:10:31:**
+```roc
+    (first, second, third) = (100, 42, 200)
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **= (** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**tuple_patterns.md:13:29:13:32:**
+```roc
+    (name, string, boolean) = ("Alice", "fixed", True)
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **= (** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**tuple_patterns.md:16:19:16:22:**
+```roc
+    (list, hello) = ([1, 2, 3], "hello")
+```
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -114,59 +164,62 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 ~~~
 # PARSE
 ~~~clojure
-(block (1:1-19:2)
+(e-block @1-1-19-2
 	(statements
-		(tuple (4:5-4:11)
-			(ident (4:6-4:7) "" "x")
-			(ident (4:9-4:10) "" "y"))
-		(malformed_expr (4:12-4:13) "expr_unexpected_token")
-		(tuple (4:14-4:20)
-			(int (4:15-4:16) "1")
-			(int (4:18-4:19) "2"))
-		(tuple (7:5-7:21)
-			(tuple (7:6-7:12)
-				(ident (7:7-7:8) "" "a")
-				(ident (7:10-7:11) "" "b"))
-			(tuple (7:14-7:20)
-				(ident (7:15-7:16) "" "c")
-				(ident (7:18-7:19) "" "d")))
-		(malformed_expr (7:22-7:23) "expr_unexpected_token")
-		(tuple (7:24-7:44)
-			(tuple (7:25-7:33)
-				(int (7:26-7:28) "10")
-				(int (7:30-7:32) "20"))
-			(tuple (7:35-7:43)
-				(int (7:36-7:38) "30")
-				(int (7:40-7:42) "40")))
-		(tuple (10:5-10:27)
-			(ident (10:6-10:11) "" "first")
-			(ident (10:13-10:19) "" "second")
-			(ident (10:21-10:26) "" "third"))
-		(malformed_expr (10:28-10:29) "expr_unexpected_token")
-		(tuple (10:30-10:44)
-			(int (10:31-10:34) "100")
-			(int (10:36-10:38) "42")
-			(int (10:40-10:43) "200"))
-		(tuple (13:5-13:28)
-			(ident (13:6-13:10) "" "name")
-			(ident (13:12-13:18) "" "string")
-			(ident (13:20-13:27) "" "boolean"))
-		(malformed_expr (13:29-13:30) "expr_unexpected_token")
-		(tuple (13:31-13:55)
-			(string (13:32-13:39) (string_part (13:33-13:38) "Alice"))
-			(string (13:41-13:48) (string_part (13:42-13:47) "fixed"))
-			(tag (13:50-13:54) "True"))
-		(tuple (16:5-16:18)
-			(ident (16:6-16:10) "" "list")
-			(ident (16:12-16:17) "" "hello"))
-		(malformed_expr (16:19-16:20) "expr_unexpected_token")
-		(tuple (16:21-16:41)
-			(list (16:22-16:31)
-				(int (16:23-16:24) "1")
-				(int (16:26-16:27) "2")
-				(int (16:29-16:30) "3"))
-			(string (16:33-16:40) (string_part (16:34-16:39) "hello")))
-		(record (18:5-18:7))))
+		(e-tuple @4-5-4-11
+			(e-ident @4-6-4-7 (qaul "") (raw "x"))
+			(e-ident @4-9-4-10 (qaul "") (raw "y")))
+		(e-malformed @4-12-4-15 (reason "expr_unexpected_token"))
+		(e-tuple @4-14-4-20
+			(e-int @4-15-4-16 (raw "1"))
+			(e-int @4-18-4-19 (raw "2")))
+		(e-tuple @7-5-7-21
+			(e-tuple @7-6-7-12
+				(e-ident @7-7-7-8 (qaul "") (raw "a"))
+				(e-ident @7-10-7-11 (qaul "") (raw "b")))
+			(e-tuple @7-14-7-20
+				(e-ident @7-15-7-16 (qaul "") (raw "c"))
+				(e-ident @7-18-7-19 (qaul "") (raw "d"))))
+		(e-malformed @7-22-7-25 (reason "expr_unexpected_token"))
+		(e-tuple @7-24-7-44
+			(e-tuple @7-25-7-33
+				(e-int @7-26-7-28 (raw "10"))
+				(e-int @7-30-7-32 (raw "20")))
+			(e-tuple @7-35-7-43
+				(e-int @7-36-7-38 (raw "30"))
+				(e-int @7-40-7-42 (raw "40"))))
+		(e-tuple @10-5-10-27
+			(e-ident @10-6-10-11 (qaul "") (raw "first"))
+			(e-ident @10-13-10-19 (qaul "") (raw "second"))
+			(e-ident @10-21-10-26 (qaul "") (raw "third")))
+		(e-malformed @10-28-10-31 (reason "expr_unexpected_token"))
+		(e-tuple @10-30-10-44
+			(e-int @10-31-10-34 (raw "100"))
+			(e-int @10-36-10-38 (raw "42"))
+			(e-int @10-40-10-43 (raw "200")))
+		(e-tuple @13-5-13-28
+			(e-ident @13-6-13-10 (qaul "") (raw "name"))
+			(e-ident @13-12-13-18 (qaul "") (raw "string"))
+			(e-ident @13-20-13-27 (qaul "") (raw "boolean")))
+		(e-malformed @13-29-13-32 (reason "expr_unexpected_token"))
+		(e-tuple @13-31-13-55
+			(e-string @13-32-13-39
+				(e-string-part @13-33-13-38 (raw "Alice")))
+			(e-string @13-41-13-48
+				(e-string-part @13-42-13-47 (raw "fixed")))
+			(e-tag @13-50-13-54 (raw "True")))
+		(e-tuple @16-5-16-18
+			(e-ident @16-6-16-10 (qaul "") (raw "list"))
+			(e-ident @16-12-16-17 (qaul "") (raw "hello")))
+		(e-malformed @16-19-16-22 (reason "expr_unexpected_token"))
+		(e-tuple @16-21-16-41
+			(e-list @16-22-16-31
+				(e-int @16-23-16-24 (raw "1"))
+				(e-int @16-26-16-27 (raw "2"))
+				(e-int @16-29-16-30 (raw "3")))
+			(e-string @16-33-16-40
+				(e-string-part @16-34-16-39 (raw "hello"))))
+		(e-record @18-5-18-7)))
 ~~~
 # FORMATTED
 ~~~roc
@@ -202,20 +255,83 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e_block (1:1-19:2)
-	(s_expr (4:5-4:13) "TODO")
-	(s_expr (4:14-7:6) "TODO")
-	(s_expr (7:5-7:23) "TODO")
-	(s_expr (7:24-10:6) "TODO")
-	(s_expr (10:5-10:29) "TODO")
-	(s_expr (10:30-13:6) "TODO")
-	(s_expr (13:5-13:30) "TODO")
-	(s_expr (13:31-16:6) "TODO")
-	(s_expr (16:5-16:20) "TODO")
-	(s_expr (16:21-18:6) "TODO")
-	(e_runtime_error (1:1-1:1) "not_implemented"))
+(e-block @1-1-19-2 (id 186)
+	(s-expr @4-5-4-13
+		(e-tuple @4-5-4-11 (tuple-var 76)
+			(elems
+				(e-runtime-error (tag "ident_not_in_scope"))
+				(e-runtime-error (tag "ident_not_in_scope")))))
+	(s-expr @4-14-7-6
+		(e-tuple @4-14-4-20 (tuple-var 85)
+			(elems
+				(e-int @4-15-4-16 (num-var 81) (sign-needed "false") (bits-needed "7") (value "1"))
+				(e-int @4-18-4-19 (num-var 84) (sign-needed "false") (bits-needed "7") (value "2")))))
+	(s-expr @7-5-7-23
+		(e-tuple @7-5-7-21 (tuple-var 100)
+			(elems
+				(e-tuple @7-6-7-12 (tuple-var 92)
+					(elems
+						(e-runtime-error (tag "ident_not_in_scope"))
+						(e-runtime-error (tag "ident_not_in_scope"))))
+				(e-tuple @7-14-7-20 (tuple-var 98)
+					(elems
+						(e-runtime-error (tag "ident_not_in_scope"))
+						(e-runtime-error (tag "ident_not_in_scope")))))))
+	(s-expr @7-24-10-6
+		(e-tuple @7-24-7-44 (tuple-var 119)
+			(elems
+				(e-tuple @7-25-7-33 (tuple-var 109)
+					(elems
+						(e-int @7-26-7-28 (num-var 105) (sign-needed "false") (bits-needed "7") (value "10"))
+						(e-int @7-30-7-32 (num-var 108) (sign-needed "false") (bits-needed "7") (value "20"))))
+				(e-tuple @7-35-7-43 (tuple-var 117)
+					(elems
+						(e-int @7-36-7-38 (num-var 113) (sign-needed "false") (bits-needed "7") (value "30"))
+						(e-int @7-40-7-42 (num-var 116) (sign-needed "false") (bits-needed "7") (value "40")))))))
+	(s-expr @10-5-10-29
+		(e-tuple @10-5-10-27 (tuple-var 128)
+			(elems
+				(e-runtime-error (tag "ident_not_in_scope"))
+				(e-runtime-error (tag "ident_not_in_scope"))
+				(e-runtime-error (tag "ident_not_in_scope")))))
+	(s-expr @10-30-13-6
+		(e-tuple @10-30-10-44 (tuple-var 140)
+			(elems
+				(e-int @10-31-10-34 (num-var 133) (sign-needed "false") (bits-needed "7") (value "100"))
+				(e-int @10-36-10-38 (num-var 136) (sign-needed "false") (bits-needed "7") (value "42"))
+				(e-int @10-40-10-43 (num-var 139) (sign-needed "false") (bits-needed "8") (value "200")))))
+	(s-expr @13-5-13-30
+		(e-tuple @13-5-13-28 (tuple-var 149)
+			(elems
+				(e-runtime-error (tag "ident_not_in_scope"))
+				(e-runtime-error (tag "ident_not_in_scope"))
+				(e-runtime-error (tag "ident_not_in_scope")))))
+	(s-expr @13-31-16-6
+		(e-tuple @13-31-13-55 (tuple-var 158)
+			(elems
+				(e-string @13-32-13-39
+					(e-literal @13-33-13-38 (string "Alice")))
+				(e-string @13-41-13-48
+					(e-literal @13-42-13-47 (string "fixed")))
+				(e-tag @13-50-13-54 (ext-var 0) (name "True") (args "TODO")))))
+	(s-expr @16-5-16-20
+		(e-tuple @16-5-16-18 (tuple-var 165)
+			(elems
+				(e-runtime-error (tag "ident_not_in_scope"))
+				(e-runtime-error (tag "ident_not_in_scope")))))
+	(s-expr @16-21-18-6
+		(e-tuple @16-21-16-41 (tuple-var 181)
+			(elems
+				(e-list @16-22-16-31 (elem-var 177)
+					(elems
+						(e-int @16-23-16-24 (num-var 170) (sign-needed "false") (bits-needed "7") (value "1"))
+						(e-int @16-26-16-27 (num-var 173) (sign-needed "false") (bits-needed "7") (value "2"))
+						(e-int @16-29-16-30 (num-var 176) (sign-needed "false") (bits-needed "7") (value "3"))))
+				(e-string @16-33-16-40
+					(e-literal @16-34-16-39 (string "hello"))))))
+	(e-runtime-error (tag "not_implemented")))
 ~~~
 # TYPES
 ~~~clojure
-(expr 126 (type "*"))
+(expr (id 186) (type "*"))
 ~~~
