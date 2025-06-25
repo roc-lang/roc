@@ -895,7 +895,7 @@ pub const Expr = union(enum) {
                 value_node.appendString(gpa, value_str);
                 frac_node.appendNode(gpa, &value_node);
 
-                return dec_node;
+                return frac_node;
             },
             .dec_small => |small_expr| {
                 var small_node = sexpr.Expr.init(gpa, "e_dec_small");
@@ -923,8 +923,8 @@ pub const Expr = union(enum) {
                 num_node.appendString(gpa, num_str);
                 small_node.appendNode(gpa, &num_node);
 
-                // Add denominator_power_of_ten
-                var power_node = sexpr.Expr.init(gpa, "denominator_power_of_ten");
+                // Add power_of_ten
+                var power_node = sexpr.Expr.init(gpa, "power_of_ten");
                 var power_buf: [8]u8 = undefined;
                 const power_str = std.fmt.bufPrint(&power_buf, "{}", .{small_expr.denominator_power_of_ten}) catch "fmt_error";
                 power_node.appendString(gpa, power_str);
@@ -1829,8 +1829,8 @@ pub const Pattern = union(enum) {
                 num_node.appendString(gpa, num_str);
                 node.appendNode(gpa, &num_node);
 
-                // Add denominator_power_of_ten
-                var power_node = sexpr.Expr.init(gpa, "denominator_power_of_ten");
+                // Add power_of_ten
+                var power_node = sexpr.Expr.init(gpa, "power_of_ten");
                 var power_buf: [8]u8 = undefined;
                 const power_str = std.fmt.bufPrint(&power_buf, "{}", .{p.denominator_power_of_ten}) catch "fmt_error";
                 power_node.appendString(gpa, power_str);
