@@ -15,9 +15,7 @@ getUser = |id| if (id > 10) "big" else "small"
 main! = |_| getUser(100)
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: binop
-
+NIL
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),Newline(1:1-1:1),
@@ -81,36 +79,39 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 102)
+	(d-let (id 101)
 		(p-assign @6-1-6-8 (ident "getUser") (id 78))
-		(e-lambda @1-1-1-1 (id 96)
+		(e-lambda @1-1-1-1 (id 95)
 			(args
 				(p-assign @6-12-6-14 (ident "id") (id 79)))
 			(e-if @1-1-1-1 (cond-var 0) (branch-var 0)
 				(if-branches
 					(if-branch
-						(e-tuple @6-19-6-28 (tuple-var 86)
+						(e-tuple @6-19-6-28 (tuple-var 85)
 							(elems
-								(e-runtime-error (tag "not_implemented"))))
+								(e-binop @6-20-6-28 (op "gt")
+									(e-lookup-local @6-20-6-22
+										(pattern (id 79)))
+									(e-int @6-25-6-27 (int-var 82) (precision-var 81) (literal "10") (value "TODO") (bound "u8")))))
 						(e-string @6-29-6-34
 							(e-literal @6-30-6-33 (string "big")))))
 				(if-else
 					(e-string @6-40-6-47
 						(e-literal @6-41-6-46 (string "small"))))))
-		(annotation @6-1-6-8 (signature 100) (id 101)
+		(annotation @6-1-6-8 (signature 99) (id 100)
 			(declared-type
 				(ty-fn @5-11-5-24 (effectful false)
 					(ty @5-11-5-17 (name "UserId"))
 					(ty @5-21-5-24 (name "Str"))))))
-	(d-let (id 111)
-		(p-assign @8-1-8-6 (ident "main!") (id 103))
-		(e-lambda @8-9-8-25 (id 110)
+	(d-let (id 110)
+		(p-assign @8-1-8-6 (ident "main!") (id 102))
+		(e-lambda @8-9-8-25 (id 109)
 			(args
-				(p-underscore @8-10-8-11 (id 104)))
+				(p-underscore @8-10-8-11 (id 103)))
 			(e-call @8-13-8-25
 				(e-lookup-local @8-13-8-20
 					(pattern (id 78)))
-				(e-int @8-21-8-24 (int-var 107) (precision-var 106) (literal "100") (value "TODO") (bound "u8")))))
+				(e-int @8-21-8-24 (int-var 106) (precision-var 105) (literal "100") (value "TODO") (bound "u8")))))
 	(s-type-decl @3-1-5-8 (id 74)
 		(ty-header @3-1-3-7 (name "UserId"))
 		(ty @3-10-3-13 (name "U64"))))

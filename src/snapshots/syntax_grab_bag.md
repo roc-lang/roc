@@ -405,12 +405,6 @@ This feature is not yet implemented: binop
 This feature is not yet implemented: binop
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: binop
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: binop
-
-**NOT IMPLEMENTED**
 This feature is not yet implemented: canonicalize suffix_single_question expression
 
 **NOT IMPLEMENTED**
@@ -1302,9 +1296,9 @@ NO CHANGE
 				(p-assign @81-2-81-3 (ident "a") (id 230))
 				(p-assign @82-2-82-3 (ident "b") (id 231)))
 			(e-runtime-error (tag "not_implemented"))))
-	(d-let (id 472)
+	(d-let (id 470)
 		(p-assign @144-1-144-6 (ident "main!") (id 246))
-		(e-lambda @144-9-196-2 (id 466)
+		(e-lambda @144-9-196-2 (id 464)
 			(args
 				(p-underscore @144-10-144-11 (id 247)))
 			(e-block @144-13-196-2
@@ -1402,10 +1396,10 @@ NO CHANGE
 									(e-int @186-10-186-11 (int-var 367) (precision-var 366) (literal "3") (value "TODO") (bound "u8")))))))
 				(s-let @188-2-189-23
 					(p-assign @188-2-188-15 (ident "bin_op_result") (id 374))
-					(e-runtime-error (tag "not_implemented") (id 436)))
+					(e-runtime-error (tag "not_implemented") (id 434)))
 				(s-let @189-2-190-8
-					(p-assign @189-2-189-23 (ident "static_dispatch_style") (id 438))
-					(e-dot-access @189-26-190-8 (field "unknown") (id 443)
+					(p-assign @189-2-189-23 (ident "static_dispatch_style") (id 436))
+					(e-dot-access @189-26-190-8 (field "unknown") (id 441)
 						(receiver
 							(e-dot-access @189-26-189-110 (field "unknown")
 								(receiver
@@ -1416,7 +1410,7 @@ NO CHANGE
 					(e-runtime-error (tag "not_implemented")))
 				(e-call @191-2-195-3
 					(e-lookup-external
-						(ext-decl @191-2-191-14 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value") (type-var 448)))
+						(ext-decl @191-2-191-14 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value") (type-var 446)))
 					(e-string @192-3-194-18
 						(e-literal @192-4-192-14 (string "How about "))
 						(e-call @193-4-193-21
@@ -1424,7 +1418,7 @@ NO CHANGE
 							(e-lookup-local @193-14-193-20
 								(pattern (id 255))))
 						(e-literal @194-4-194-17 (string " as a string?"))))))
-		(annotation @144-1-144-6 (signature 470) (id 471)
+		(annotation @144-1-144-6 (signature 468) (id 469)
 			(declared-type
 				(ty-fn @143-9-143-38 (effectful false)
 					(ty-apply @143-9-143-21 (symbol "List")
@@ -1432,10 +1426,10 @@ NO CHANGE
 					(ty-apply @143-25-143-38 (symbol "Result")
 						(ty-record @143-32-143-34)
 						(ty-underscore @143-36-143-37))))))
-	(d-let (id 480)
-		(p-assign @199-1-199-6 (ident "empty") (id 474))
-		(e-runtime-error (tag "not_implemented") (id 476))
-		(annotation @199-1-199-6 (signature 478) (id 479)
+	(d-let (id 478)
+		(p-assign @199-1-199-6 (ident "empty") (id 472))
+		(e-runtime-error (tag "not_implemented") (id 474))
+		(annotation @199-1-199-6 (signature 476) (id 477)
 			(declared-type
 				(ty-record @198-9-198-11))))
 	(s-type-decl @22-1-23-6 (id 84)
