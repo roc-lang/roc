@@ -25,7 +25,12 @@ var_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
 /// Tracks which pattern indices have been used/referenced
 used_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
 /// Maps identifier names to pending type annotations awaiting connection to declarations
-pending_type_annos: std.StringHashMapUnmanaged(CIR.TypeAnno.Idx),
+pending_type_annos: std.ArrayListUnmanaged(PendingTypeAnno),
+
+const PendingTypeAnno = struct {
+    ident: base.Ident.Idx,
+    anno: CIR.TypeAnno.Idx,
+};
 
 const Ident = base.Ident;
 const Region = base.Region;
@@ -87,7 +92,7 @@ pub fn init(self: *CIR, parse_ir: *AST) Self {
         .var_function_regions = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, Region){},
         .var_patterns = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void){},
         .used_patterns = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void){},
-        .pending_type_annos = std.StringHashMapUnmanaged(CIR.TypeAnno.Idx){},
+        .pending_type_annos = std.ArrayListUnmanaged(PendingTypeAnno){},
     };
 
     // Top-level scope is not a function boundary
@@ -346,8 +351,7 @@ pub fn canonicalize_file(
                 const anno_idx = self.canonicalize_type_anno(ta.anno);
 
                 // Store annotation for connection to next declaration
-                const name_text = self.can_ir.env.idents.getText(name);
-                self.pending_type_annos.put(self.can_ir.env.gpa, name_text, anno_idx) catch |err| exitOnOom(err);
+                self.pending_type_annos.append(self.can_ir.env.gpa, .{ .ident = name, .anno = anno_idx }) catch |err| exitOnOom(err);
             },
             .malformed => |malformed| {
                 // We won't touch this since it's already a parse error.
@@ -724,10 +728,19 @@ fn canonicalize_decl(
     const pattern = self.can_ir.store.getPattern(pattern_idx);
     if (pattern == .assign) {
         const ident = pattern.assign.ident;
-        const ident_text = self.can_ir.env.idents.getText(ident);
 
         // Check if there's a pending type annotation for this identifier
-        if (self.pending_type_annos.get(ident_text)) |type_anno_idx| {
+        var found_anno_idx: ?CIR.TypeAnno.Idx = null;
+        var found_index: ?usize = null;
+        for (self.pending_type_annos.items, 0..) |pending, i| {
+            if (self.can_ir.env.idents.identsHaveSameText(ident, pending.ident)) {
+                found_anno_idx = pending.anno;
+                found_index = i;
+                break;
+            }
+        }
+
+        if (found_anno_idx) |type_anno_idx| {
             // Create a basic annotation from the type annotation
             const type_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), pattern_region);
 
@@ -735,7 +748,8 @@ fn canonicalize_decl(
             // TODO: Convert TypeAnno to proper type constraints and populate signature
             annotation = self.createAnnotationFromTypeAnno(type_anno_idx, type_var, pattern_region);
 
-            _ = self.pending_type_annos.remove(ident_text);
+            // Remove the used annotation
+            _ = self.pending_type_annos.swapRemove(found_index.?);
         }
     }
 
@@ -1266,8 +1280,9 @@ pub fn canonicalize_expr(
             const scratch_top = self.can_ir.store.scratch_record_fields.top();
 
             // Track field names to detect duplicates
-            var field_names = std.StringHashMapUnmanaged(base.Region){};
-            defer field_names.deinit(self.can_ir.env.gpa);
+            const FieldInfo = struct { ident: base.Ident.Idx, region: base.Region };
+            var seen_fields = std.ArrayListUnmanaged(FieldInfo){};
+            defer seen_fields.deinit(self.can_ir.env.gpa);
 
             // Iterate over the record fields, canonicalizing each one
             // Then append the result to the scratch list
@@ -1277,22 +1292,31 @@ pub fn canonicalize_expr(
                 // Get the field name identifier
                 if (self.parse_ir.tokens.resolveIdentifier(ast_field.name)) |field_name_ident| {
                     const field_name_region = self.parse_ir.tokens.resolve(ast_field.name);
-                    const field_name_text = self.can_ir.env.idents.getText(field_name_ident);
 
                     // Check for duplicate field names
-                    if (field_names.get(field_name_text)) |original_region| {
-                        // Found a duplicate - add diagnostic
-                        const diagnostic = CIR.Diagnostic{
-                            .duplicate_record_field = .{
-                                .field_name = field_name_ident,
-                                .duplicate_region = field_name_region,
-                                .original_region = original_region,
-                            },
-                        };
-                        self.can_ir.pushDiagnostic(diagnostic);
-                    } else {
+                    var found_duplicate = false;
+                    for (seen_fields.items) |seen_field| {
+                        if (self.can_ir.env.idents.identsHaveSameText(field_name_ident, seen_field.ident)) {
+                            // Found a duplicate - add diagnostic
+                            const diagnostic = CIR.Diagnostic{
+                                .duplicate_record_field = .{
+                                    .field_name = field_name_ident,
+                                    .duplicate_region = field_name_region,
+                                    .original_region = seen_field.region,
+                                },
+                            };
+                            self.can_ir.pushDiagnostic(diagnostic);
+                            found_duplicate = true;
+                            break;
+                        }
+                    }
+
+                    if (!found_duplicate) {
                         // First occurrence of this field name
-                        field_names.put(self.can_ir.env.gpa, field_name_text, field_name_region) catch |err| exitOnOom(err);
+                        seen_fields.append(self.can_ir.env.gpa, FieldInfo{
+                            .ident = field_name_ident,
+                            .region = field_name_region,
+                        }) catch |err| exitOnOom(err);
                     }
                 }
 
@@ -2888,8 +2912,7 @@ fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) ?CIR.Expr.Id
             self.extractTypeVarsFromAnno(type_anno_idx);
 
             // Store the type annotation for connection with the next declaration
-            const name_text = self.can_ir.env.idents.getText(name_ident);
-            self.pending_type_annos.put(self.can_ir.env.gpa, name_text, type_anno_idx) catch |err| exitOnOom(err);
+            self.pending_type_annos.append(self.can_ir.env.gpa, .{ .ident = name_ident, .anno = type_anno_idx }) catch |err| exitOnOom(err);
 
             // Type annotations don't produce runtime values, so return a unit expression
             // Create an empty tuple as a unit value
