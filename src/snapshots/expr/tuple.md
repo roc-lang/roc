@@ -27,7 +27,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tuple @1-1-1-19 (tuple-var 78) (id 79)
+(e-tuple @1-1-1-19 (id 78)
 	(elems
 		(e-int @1-2-1-3 (num-var 73) (value "1"))
 		(e-string @1-5-1-12
@@ -36,5 +36,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 79) (type "*"))
+(expr (id 78) (type "(Num(*), Str, [True, * *])"))
 ~~~

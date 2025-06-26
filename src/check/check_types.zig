@@ -283,7 +283,11 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
         .binop => |_| {},
         .block => |_| {},
         .lambda => |_| {},
-        .tuple => |_| {},
+        .tuple => |tuple| {
+            for (self.can_ir.store.exprSlice(tuple.elems)) |single_elem_expr_idx| {
+                self.checkExpr(single_elem_expr_idx);
+            }
+        },
         .dot_access => |_| {
             // TODO: Implement type checking for dot access
             // This will need to:

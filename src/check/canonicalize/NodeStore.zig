@@ -215,7 +215,6 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             return .{
                 .tuple = .{
                     .elems = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
-                    .tuple_var = @enumFromInt(node.data_3),
                     .region = node.region,
                 },
             };
@@ -467,7 +466,6 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
             .tuple = .{
                 .region = node.region,
                 .patterns = DataSpan.init(node.data_1, node.data_2).as(CIR.Pattern.Span),
-                .tuple_var = @enumFromInt(node.data_3),
             },
         },
         .pattern_num_literal => {
@@ -811,7 +809,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             node.tag = .expr_tuple;
             node.data_1 = e.elems.span.start;
             node.data_2 = e.elems.span.len;
-            node.data_3 = @intFromEnum(e.tuple_var);
         },
         .frac_f64 => |e| {
             node.region = e.region;
@@ -1046,7 +1043,6 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern) CIR.Pattern.Idx {
             node.region = p.region;
             node.data_1 = p.patterns.span.start;
             node.data_2 = p.patterns.span.len;
-            node.data_3 = @intFromEnum(p.tuple_var);
         },
         .int_literal => |p| {
             node.tag = .pattern_int_literal;

@@ -241,6 +241,11 @@ pub const Store = struct {
         return self.alias_args.appendSlice(self.gpa, slice);
     }
 
+    /// Append a tuple elem to the backing list, returning the idx
+    pub fn appendTupleElem(self: *Self, v: Var) VarSafeList.Idx {
+        return self.tuple_elems.append(self.gpa, v);
+    }
+
     /// Append a slice of tuple elems to the backing list, returning the range
     pub fn appendTupleElems(self: *Self, slice: []const Var) VarSafeList.Range {
         return self.tuple_elems.appendSlice(self.gpa, slice);
