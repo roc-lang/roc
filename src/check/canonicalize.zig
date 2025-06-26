@@ -1353,11 +1353,37 @@ pub fn canonicalize_expr(
                 },
             });
 
-            // Insert concrete type variable for record
-            // TODO: Implement proper record type structure when record types are available
+            // Create fresh type variables for each record field
+            const cir_fields = self.can_ir.store.sliceRecordFields(fields_span);
+
+            // Reserve additional type variable slots for field types
+            const field_count = cir_fields.len;
+            const total_vars_needed = 2 + field_count; // record_var + ext_var + field_vars
+            const record_with_fields_expr_idx = self.can_ir.store.predictNodeIndex(@intCast(total_vars_needed));
+
+            // Create fresh type variables for each field
+            var type_record_fields = std.ArrayList(types.RecordField).init(self.can_ir.env.gpa);
+            defer type_record_fields.deinit();
+
+            for (cir_fields) |cir_field_idx| {
+                const cir_field = self.can_ir.store.getRecordField(cir_field_idx);
+
+                // Create a fresh type variable for this field
+                const field_type_var = self.can_ir.pushFreshTypeVar(record_with_fields_expr_idx, region);
+
+                type_record_fields.append(types.RecordField{
+                    .name = cir_field.name,
+                    .var_ = field_type_var,
+                }) catch |err| exitOnOom(err);
+            }
+
+            // Create the record type structure
+            const type_fields_range = self.can_ir.env.types.appendRecordFields(type_record_fields.items);
+            const ext_var = self.can_ir.env.types.freshFromContent(.{ .structure = .empty_record });
+
             _ = self.can_ir.setTypeVarAtExpr(
                 expr_idx,
-                Content{ .flex_var = null },
+                Content{ .structure = .{ .record = .{ .fields = type_fields_range, .ext = ext_var } } },
             );
 
             return expr_idx;

@@ -38,5 +38,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 81) (type "*"))
+(expr (id 81) (type "{ name: *, age: * }"))
 ~~~
