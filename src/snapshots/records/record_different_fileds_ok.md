@@ -17,24 +17,32 @@ This feature is not yet implemented: canonicalize record expression
 
 # TOKENS
 ~~~zig
-OpenCurly(1:1-1:2),LowerIdent(1:3-1:25),OpColon(1:25-1:26),StringStart(1:27-1:28),StringPart(1:28-1:38),StringEnd(1:38-1:39),Comma(1:39-1:40),LowerIdent(1:41-1:49),OpColon(1:49-1:50),StringStart(1:51-1:52),StringPart(1:52-1:59),StringEnd(1:59-1:60),Comma(1:60-1:61),LowerIdent(1:62-1:71),OpColon(1:71-1:72),StringStart(1:73-1:74),StringPart(1:74-1:79),StringEnd(1:79-1:80),CloseCurly(1:81-1:82),EndOfFile(1:82-1:82),
+OpenCurly(1:1-1:2),Newline(1:1-1:1),
+LowerIdent(2:5-2:27),OpColon(2:27-2:28),StringStart(2:29-2:30),StringPart(2:30-2:40),StringEnd(2:40-2:41),Comma(2:41-2:42),Newline(1:1-1:1),
+LowerIdent(3:5-3:13),OpColon(3:13-3:14),StringStart(3:15-3:16),StringPart(3:16-3:23),StringEnd(3:23-3:24),Comma(3:24-3:25),Newline(1:1-1:1),
+LowerIdent(4:5-4:14),OpColon(4:14-4:15),StringStart(4:16-4:17),StringPart(4:17-4:22),StringEnd(4:22-4:23),Comma(4:23-4:24),Newline(1:1-1:1),
+CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 ~~~
 # PARSE
 ~~~clojure
-(e-record @1-1-1-82
+(e-record @1-1-5-2
 	(field (field "field_with_underscores") (optional false)
-		(e-string @1-27-1-39
-			(e-string-part @1-28-1-38 (raw "underscore"))))
+		(e-string @2-29-2-41
+			(e-string-part @2-30-2-40 (raw "underscore"))))
 	(field (field "field123") (optional false)
-		(e-string @1-51-1-60
-			(e-string-part @1-52-1-59 (raw "numbers"))))
+		(e-string @3-15-3-24
+			(e-string-part @3-16-3-23 (raw "numbers"))))
 	(field (field "camelCase") (optional false)
-		(e-string @1-73-1-80
-			(e-string-part @1-74-1-79 (raw "camel")))))
+		(e-string @4-16-4-23
+			(e-string-part @4-17-4-22 (raw "camel")))))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+{
+	field_with_underscores: "underscore",
+	field123: "numbers",
+	camelCase: "camel",
+}
 ~~~
 # TYPES
 ~~~clojure

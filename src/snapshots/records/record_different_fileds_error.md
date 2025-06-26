@@ -20,9 +20,9 @@ The token **"leading underscore** is not expected in a type annotation.
 Type annotations should contain types like _Str_, _Num a_, or _List U64_.
 
 Here is the problematic code:
-**record_different_fileds_error.md:1:18:1:37:**
+**record_different_fileds_error.md:2:20:2:39:**
 ```roc
-{ _privateField: "leading underscore", field_: "trailing underscore", PascalCase: "pascal", kebab-case: "kebab", field$special: "dollar", field@symbol: "at symbol" }
+    _privateField: "leading underscore",
 ```
 
 
@@ -31,9 +31,9 @@ The token **leading underscore"** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_different_fileds_error.md:1:19:1:38:**
+**record_different_fileds_error.md:2:21:2:40:**
 ```roc
-{ _privateField: "leading underscore", field_: "trailing underscore", PascalCase: "pascal", kebab-case: "kebab", field$special: "dollar", field@symbol: "at symbol" }
+    _privateField: "leading underscore",
 ```
 
 
@@ -42,20 +42,20 @@ The token **",** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_different_fileds_error.md:1:37:1:39:**
+**record_different_fileds_error.md:2:39:2:41:**
 ```roc
-{ _privateField: "leading underscore", field_: "trailing underscore", PascalCase: "pascal", kebab-case: "kebab", field$special: "dollar", field@symbol: "at symbol" }
+    _privateField: "leading underscore",
 ```
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **, field_** is not expected in an expression.
+The token  is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_different_fileds_error.md:1:38:1:46:**
+**record_different_fileds_error.md:2:40:2:40:**
 ```roc
-{ _privateField: "leading underscore", field_: "trailing underscore", PascalCase: "pascal", kebab-case: "kebab", field$special: "dollar", field@symbol: "at symbol" }
+    _privateField: "leading underscore",
 ```
 
 
@@ -64,9 +64,9 @@ The token **"trailing underscore** is not expected in a type annotation.
 Type annotations should contain types like _Str_, _Num a_, or _List U64_.
 
 Here is the problematic code:
-**record_different_fileds_error.md:1:48:1:68:**
+**record_different_fileds_error.md:3:13:3:33:**
 ```roc
-{ _privateField: "leading underscore", field_: "trailing underscore", PascalCase: "pascal", kebab-case: "kebab", field$special: "dollar", field@symbol: "at symbol" }
+    field_: "trailing underscore",
 ```
 
 
@@ -75,9 +75,9 @@ The token **trailing underscore"** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_different_fileds_error.md:1:49:1:69:**
+**record_different_fileds_error.md:3:14:3:34:**
 ```roc
-{ _privateField: "leading underscore", field_: "trailing underscore", PascalCase: "pascal", kebab-case: "kebab", field$special: "dollar", field@symbol: "at symbol" }
+    field_: "trailing underscore",
 ```
 
 
@@ -86,42 +86,20 @@ The token **",** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_different_fileds_error.md:1:68:1:70:**
+**record_different_fileds_error.md:3:33:3:35:**
 ```roc
-{ _privateField: "leading underscore", field_: "trailing underscore", PascalCase: "pascal", kebab-case: "kebab", field$special: "dollar", field@symbol: "at symbol" }
+    field_: "trailing underscore",
 ```
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **, PascalCase** is not expected in an expression.
+The token  is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_different_fileds_error.md:1:69:1:81:**
+**record_different_fileds_error.md:3:34:3:34:**
 ```roc
-{ _privateField: "leading underscore", field_: "trailing underscore", PascalCase: "pascal", kebab-case: "kebab", field$special: "dollar", field@symbol: "at symbol" }
-```
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **: "** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**record_different_fileds_error.md:1:81:1:84:**
-```roc
-{ _privateField: "leading underscore", field_: "trailing underscore", PascalCase: "pascal", kebab-case: "kebab", field$special: "dollar", field@symbol: "at symbol" }
-```
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **, kebab** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**record_different_fileds_error.md:1:91:1:98:**
-```roc
-{ _privateField: "leading underscore", field_: "trailing underscore", PascalCase: "pascal", kebab-case: "kebab", field$special: "dollar", field@symbol: "at symbol" }
+    field_: "trailing underscore",
 ```
 
 
@@ -130,20 +108,42 @@ The token **: "** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_different_fileds_error.md:1:103:1:106:**
+**record_different_fileds_error.md:4:15:4:18:**
 ```roc
-{ _privateField: "leading underscore", field_: "trailing underscore", PascalCase: "pascal", kebab-case: "kebab", field$special: "dollar", field@symbol: "at symbol" }
+    PascalCase: "pascal",
 ```
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **, field** is not expected in an expression.
+The token  is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_different_fileds_error.md:1:112:1:119:**
+**record_different_fileds_error.md:4:25:4:25:**
 ```roc
-{ _privateField: "leading underscore", field_: "trailing underscore", PascalCase: "pascal", kebab-case: "kebab", field$special: "dollar", field@symbol: "at symbol" }
+    PascalCase: "pascal",
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **: "** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**record_different_fileds_error.md:5:15:5:18:**
+```roc
+    kebab-case: "kebab",
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token  is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**record_different_fileds_error.md:5:24:5:24:**
+```roc
+    kebab-case: "kebab",
 ```
 
 
@@ -152,9 +152,9 @@ The token **$special** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_different_fileds_error.md:1:119:1:127:**
+**record_different_fileds_error.md:6:10:6:18:**
 ```roc
-{ _privateField: "leading underscore", field_: "trailing underscore", PascalCase: "pascal", kebab-case: "kebab", field$special: "dollar", field@symbol: "at symbol" }
+    field$special: "dollar",
 ```
 
 
@@ -163,9 +163,9 @@ The token **"dollar** is not expected in a type annotation.
 Type annotations should contain types like _Str_, _Num a_, or _List U64_.
 
 Here is the problematic code:
-**record_different_fileds_error.md:1:129:1:136:**
+**record_different_fileds_error.md:6:20:6:27:**
 ```roc
-{ _privateField: "leading underscore", field_: "trailing underscore", PascalCase: "pascal", kebab-case: "kebab", field$special: "dollar", field@symbol: "at symbol" }
+    field$special: "dollar",
 ```
 
 
@@ -174,9 +174,9 @@ The token **dollar"** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_different_fileds_error.md:1:130:1:137:**
+**record_different_fileds_error.md:6:21:6:28:**
 ```roc
-{ _privateField: "leading underscore", field_: "trailing underscore", PascalCase: "pascal", kebab-case: "kebab", field$special: "dollar", field@symbol: "at symbol" }
+    field$special: "dollar",
 ```
 
 
@@ -185,20 +185,20 @@ The token **",** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_different_fileds_error.md:1:136:1:138:**
+**record_different_fileds_error.md:6:27:6:29:**
 ```roc
-{ _privateField: "leading underscore", field_: "trailing underscore", PascalCase: "pascal", kebab-case: "kebab", field$special: "dollar", field@symbol: "at symbol" }
+    field$special: "dollar",
 ```
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **, field** is not expected in an expression.
+The token  is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_different_fileds_error.md:1:137:1:144:**
+**record_different_fileds_error.md:6:28:6:28:**
 ```roc
-{ _privateField: "leading underscore", field_: "trailing underscore", PascalCase: "pascal", kebab-case: "kebab", field$special: "dollar", field@symbol: "at symbol" }
+    field$special: "dollar",
 ```
 
 
@@ -207,9 +207,9 @@ The token **@symbol:** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_different_fileds_error.md:1:144:1:152:**
+**record_different_fileds_error.md:7:10:7:18:**
 ```roc
-{ _privateField: "leading underscore", field_: "trailing underscore", PascalCase: "pascal", kebab-case: "kebab", field$special: "dollar", field@symbol: "at symbol" }
+    field@symbol: "at symbol",
 ```
 
 
@@ -218,9 +218,20 @@ The token **: "** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**record_different_fileds_error.md:1:151:1:154:**
+**record_different_fileds_error.md:7:17:7:20:**
 ```roc
-{ _privateField: "leading underscore", field_: "trailing underscore", PascalCase: "pascal", kebab-case: "kebab", field$special: "dollar", field@symbol: "at symbol" }
+    field@symbol: "at symbol",
+```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token  is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**record_different_fileds_error.md:7:30:7:30:**
+```roc
+    field@symbol: "at symbol",
 ```
 
 
@@ -251,79 +262,88 @@ Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
-OpenCurly(1:1-1:2),NamedUnderscore(1:3-1:16),OpColon(1:16-1:17),StringStart(1:18-1:19),StringPart(1:19-1:37),StringEnd(1:37-1:38),Comma(1:38-1:39),LowerIdent(1:40-1:46),OpColon(1:46-1:47),StringStart(1:48-1:49),StringPart(1:49-1:68),StringEnd(1:68-1:69),Comma(1:69-1:70),UpperIdent(1:71-1:81),OpColon(1:81-1:82),StringStart(1:83-1:84),StringPart(1:84-1:90),StringEnd(1:90-1:91),Comma(1:91-1:92),LowerIdent(1:93-1:98),OpBinaryMinus(1:98-1:99),LowerIdent(1:99-1:103),OpColon(1:103-1:104),StringStart(1:105-1:106),StringPart(1:106-1:111),StringEnd(1:111-1:112),Comma(1:112-1:113),LowerIdent(1:114-1:119),MalformedUnknownToken(1:119-1:120),LowerIdent(1:120-1:127),OpColon(1:127-1:128),StringStart(1:129-1:130),StringPart(1:130-1:136),StringEnd(1:136-1:137),Comma(1:137-1:138),LowerIdent(1:139-1:144),OpaqueName(1:144-1:151),OpColon(1:151-1:152),StringStart(1:153-1:154),StringPart(1:154-1:163),StringEnd(1:163-1:164),CloseCurly(1:165-1:166),EndOfFile(1:166-1:166),
+OpenCurly(1:1-1:2),Newline(1:1-1:1),
+NamedUnderscore(2:5-2:18),OpColon(2:18-2:19),StringStart(2:20-2:21),StringPart(2:21-2:39),StringEnd(2:39-2:40),Comma(2:40-2:41),Newline(1:1-1:1),
+LowerIdent(3:5-3:11),OpColon(3:11-3:12),StringStart(3:13-3:14),StringPart(3:14-3:33),StringEnd(3:33-3:34),Comma(3:34-3:35),Newline(1:1-1:1),
+UpperIdent(4:5-4:15),OpColon(4:15-4:16),StringStart(4:17-4:18),StringPart(4:18-4:24),StringEnd(4:24-4:25),Comma(4:25-4:26),Newline(1:1-1:1),
+LowerIdent(5:5-5:10),OpBinaryMinus(5:10-5:11),LowerIdent(5:11-5:15),OpColon(5:15-5:16),StringStart(5:17-5:18),StringPart(5:18-5:23),StringEnd(5:23-5:24),Comma(5:24-5:25),Newline(1:1-1:1),
+LowerIdent(6:5-6:10),MalformedUnknownToken(6:10-6:11),LowerIdent(6:11-6:18),OpColon(6:18-6:19),StringStart(6:20-6:21),StringPart(6:21-6:27),StringEnd(6:27-6:28),Comma(6:28-6:29),Newline(1:1-1:1),
+LowerIdent(7:5-7:10),OpaqueName(7:10-7:17),OpColon(7:17-7:18),StringStart(7:19-7:20),StringPart(7:20-7:29),StringEnd(7:29-7:30),Comma(7:30-7:31),Newline(1:1-1:1),
+CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 ~~~
 # PARSE
 ~~~clojure
-(e-block @1-1-1-166
+(e-block @1-1-8-2
 	(statements
-		(s-type-anno @1-3-1-37 (name "_privateField")
-			(ty-malformed @1-18-1-37 (tag "ty_anno_unexpected_token")))
-		(e-malformed @1-19-1-38 (reason "expr_unexpected_token"))
-		(e-malformed @1-37-1-39 (reason "expr_unexpected_token"))
-		(e-malformed @1-38-1-46 (reason "expr_unexpected_token"))
-		(s-type-anno @1-40-1-68 (name "field_")
-			(ty-malformed @1-48-1-68 (tag "ty_anno_unexpected_token")))
-		(e-malformed @1-49-1-69 (reason "expr_unexpected_token"))
-		(e-malformed @1-68-1-70 (reason "expr_unexpected_token"))
-		(e-malformed @1-69-1-81 (reason "expr_unexpected_token"))
-		(e-tag @1-71-1-81 (raw "PascalCase"))
-		(e-malformed @1-81-1-84 (reason "expr_unexpected_token"))
-		(e-string @1-83-1-91
-			(e-string-part @1-84-1-90 (raw "pascal")))
-		(e-malformed @1-91-1-98 (reason "expr_unexpected_token"))
-		(e-binop @1-93-1-104 (op "-")
-			(e-ident @1-93-1-98 (qaul "") (raw "kebab"))
-			(e-ident @1-99-1-103 (qaul "") (raw "case")))
-		(e-malformed @1-103-1-106 (reason "expr_unexpected_token"))
-		(e-string @1-105-1-112
-			(e-string-part @1-106-1-111 (raw "kebab")))
-		(e-malformed @1-112-1-119 (reason "expr_unexpected_token"))
-		(e-ident @1-114-1-119 (qaul "") (raw "field"))
-		(e-malformed @1-119-1-127 (reason "expr_unexpected_token"))
-		(s-type-anno @1-120-1-136 (name "special")
-			(ty-malformed @1-129-1-136 (tag "ty_anno_unexpected_token")))
-		(e-malformed @1-130-1-137 (reason "expr_unexpected_token"))
-		(e-malformed @1-136-1-138 (reason "expr_unexpected_token"))
-		(e-malformed @1-137-1-144 (reason "expr_unexpected_token"))
-		(e-ident @1-139-1-144 (qaul "") (raw "field"))
-		(e-malformed @1-144-1-152 (reason "expr_unexpected_token"))
-		(e-malformed @1-151-1-154 (reason "expr_unexpected_token"))
-		(e-string @1-153-1-164
-			(e-string-part @1-154-1-163 (raw "at symbol")))))
+		(s-type-anno @2-5-2-39 (name "_privateField")
+			(ty-malformed @2-20-2-39 (tag "ty_anno_unexpected_token")))
+		(e-malformed @2-21-2-40 (reason "expr_unexpected_token"))
+		(e-malformed @2-39-2-41 (reason "expr_unexpected_token"))
+		(e-malformed @1-1-1-1 (reason "expr_unexpected_token"))
+		(s-type-anno @3-5-3-33 (name "field_")
+			(ty-malformed @3-13-3-33 (tag "ty_anno_unexpected_token")))
+		(e-malformed @3-14-3-34 (reason "expr_unexpected_token"))
+		(e-malformed @3-33-3-35 (reason "expr_unexpected_token"))
+		(e-malformed @1-1-1-1 (reason "expr_unexpected_token"))
+		(e-tag @4-5-4-15 (raw "PascalCase"))
+		(e-malformed @4-15-4-18 (reason "expr_unexpected_token"))
+		(e-string @4-17-4-25
+			(e-string-part @4-18-4-24 (raw "pascal")))
+		(e-malformed @1-1-1-1 (reason "expr_unexpected_token"))
+		(e-binop @5-5-5-16 (op "-")
+			(e-ident @5-5-5-10 (qaul "") (raw "kebab"))
+			(e-ident @5-11-5-15 (qaul "") (raw "case")))
+		(e-malformed @5-15-5-18 (reason "expr_unexpected_token"))
+		(e-string @5-17-5-24
+			(e-string-part @5-18-5-23 (raw "kebab")))
+		(e-malformed @1-1-1-1 (reason "expr_unexpected_token"))
+		(e-ident @6-5-6-10 (qaul "") (raw "field"))
+		(e-malformed @6-10-6-18 (reason "expr_unexpected_token"))
+		(s-type-anno @6-11-6-27 (name "special")
+			(ty-malformed @6-20-6-27 (tag "ty_anno_unexpected_token")))
+		(e-malformed @6-21-6-28 (reason "expr_unexpected_token"))
+		(e-malformed @6-27-6-29 (reason "expr_unexpected_token"))
+		(e-malformed @1-1-1-1 (reason "expr_unexpected_token"))
+		(e-ident @7-5-7-10 (qaul "") (raw "field"))
+		(e-malformed @7-10-7-18 (reason "expr_unexpected_token"))
+		(e-malformed @7-17-7-20 (reason "expr_unexpected_token"))
+		(e-string @7-19-7-30
+			(e-string-part @7-20-7-29 (raw "at symbol")))
+		(e-malformed @1-1-1-1 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
 {
-	_privateField :
-
-
-
-	field_ :
-
-
-
+	_privateField : 
+	
+	
+	
+	field_ : 
+	
+	
+	
 	PascalCase
-
+	
 	"pascal"
-
+	
 	kebab - case
-
+	
 	"kebab"
-
+	
 	field
-
-	special :
-
-
-
+	
+	special : 
+	
+	
+	
 	field
-
-
+	
+	
 	"at symbol"
+	
 }
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 107) (type "*"))
+(expr (id 109) (type "*"))
 ~~~
