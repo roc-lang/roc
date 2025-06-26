@@ -139,6 +139,96 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 	},
 }
 ~~~
+# CANONICALIZE
+~~~clojure
+(e-record @1-1-15-2 (record-var 187) (ext-var 0) (id 189)
+	(fields
+		(field (name "name")
+			(e-string @2-11-2-18
+				(e-literal @2-12-2-17 (string "Alice"))))
+		(field (name "scores")
+			(e-list @3-13-3-29 (elem-var 87)
+				(elems
+					(e-int @3-14-3-16 (num-var 77) (sign-needed "false") (bits-needed "7") (value "95"))
+					(e-int @3-18-3-20 (num-var 80) (sign-needed "false") (bits-needed "7") (value "87"))
+					(e-int @3-22-3-24 (num-var 83) (sign-needed "false") (bits-needed "7") (value "92"))
+					(e-int @3-26-3-28 (num-var 86) (sign-needed "false") (bits-needed "7") (value "78")))))
+		(field (name "status")
+			(e-call @4-13-4-44
+				(e-tag @4-13-4-19 (ext-var 0) (name "Active") (args "TODO"))
+				(e-record @4-20-4-43 (record-var 95) (ext-var 0)
+					(fields
+						(field (name "since")
+							(e-string @4-29-4-41
+								(e-literal @4-30-4-40 (string "2023-01-15"))))))))
+		(field (name "preferences")
+			(e-record @5-18-5-76 (record-var 109) (ext-var 0)
+				(fields
+					(field (name "theme")
+						(e-tag @5-27-5-31 (ext-var 0) (name "Dark") (args "TODO")))
+					(field (name "notifications")
+						(e-call @5-48-5-74
+							(e-tag @5-48-5-53 (ext-var 0) (name "Email") (args "TODO"))
+							(e-string @5-54-5-73
+								(e-literal @5-55-5-72 (string "alice@example.com"))))))))
+		(field (name "metadata")
+			(e-call @6-15-9-7
+				(e-tag @6-15-6-17 (ext-var 0) (name "Ok") (args "TODO"))
+				(e-record @6-18-9-6 (record-var 133) (ext-var 0)
+					(fields
+						(field (name "tags")
+							(e-list @7-15-7-51 (elem-var 121)
+								(elems
+									(e-string @7-16-7-27
+										(e-literal @7-17-7-26 (string "developer")))
+									(e-string @7-29-7-37
+										(e-literal @7-30-7-36 (string "senior")))
+									(e-string @7-39-7-50
+										(e-literal @7-40-7-49 (string "fullstack"))))))
+						(field (name "permissions")
+							(e-list @8-22-8-42 (elem-var 130)
+								(elems
+									(e-tag @8-23-8-27 (ext-var 0) (name "Read") (args "TODO"))
+									(e-tag @8-29-8-34 (ext-var 0) (name "Write") (args "TODO"))
+									(e-tag @8-36-8-41 (ext-var 0) (name "Admin") (args "TODO")))))))))
+		(field (name "callback")
+			(e-lambda @10-15-10-25
+				(args
+					(p-assign @10-16-10-17 (ident "x") (id 138)))
+				(e-binop @10-19-10-25 (op "add")
+					(e-lookup-local @10-19-10-20
+						(pattern (id 138)))
+					(e-int @10-23-10-24 (num-var 142) (sign-needed "false") (bits-needed "7") (value "1")))))
+		(field (name "nested")
+			(e-record @11-13-14-6 (record-var 183) (ext-var 0)
+				(fields
+					(field (name "items")
+						(e-list @12-16-12-52 (elem-var 158)
+							(elems
+								(e-call @12-17-12-30
+									(e-tag @12-17-12-21 (ext-var 0) (name "Some") (args "TODO"))
+									(e-string @12-22-12-29
+										(e-literal @12-23-12-28 (string "first"))))
+								(e-tag @12-32-12-36 (ext-var 0) (name "None") (args "TODO"))
+								(e-call @12-38-12-51
+									(e-tag @12-38-12-42 (ext-var 0) (name "Some") (args "TODO"))
+									(e-string @12-43-12-50
+										(e-literal @12-44-12-49 (string "third")))))))
+					(field (name "result")
+						(e-call @13-17-13-70
+							(e-tag @13-17-13-24 (ext-var 0) (name "Success") (args "TODO"))
+							(e-record @13-25-13-69 (record-var 178) (ext-var 0)
+								(fields
+									(field (name "data")
+										(e-list @13-33-13-42 (elem-var 172)
+											(elems
+												(e-int @13-34-13-35 (num-var 165) (sign-needed "false") (bits-needed "7") (value "1"))
+												(e-int @13-37-13-38 (num-var 168) (sign-needed "false") (bits-needed "7") (value "2"))
+												(e-int @13-40-13-41 (num-var 171) (sign-needed "false") (bits-needed "7") (value "3")))))
+									(field (name "timestamp")
+										(e-string @13-55-13-67
+											(e-literal @13-56-13-66 (string "2024-01-01")))))))))))))
+~~~
 # TYPES
 ~~~clojure
 (expr (id 189) (type "*"))

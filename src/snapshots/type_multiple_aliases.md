@@ -140,9 +140,8 @@ CloseCurly(17:1-17:2),EndOfFile(17:2-17:2),
 				(args
 					(p-ident @12-16-12-20 (raw "user")))
 				(e-field-access @12-22-14-6
-					(e-binop @12-22-14-6 (op "app")
-						(e-ident @12-22-12-26 (qaul "") (raw "user"))
-						(e-ident @12-26-12-31 (qaul "") (raw ".name"))))))
+					(e-ident @12-22-12-26 (qaul "") (raw "user"))
+					(e-ident @12-26-12-31 (qaul "") (raw ".name")))))
 		(s-decl @14-1-17-2
 			(p-ident @14-1-14-6 (raw "main!"))
 			(e-lambda @14-9-17-2

@@ -34,18 +34,6 @@ Here is the problematic code:
 ```
 
 
-**UNDECLARED TYPE VARIABLE**
-The type variable ``elem`` is not declared in this scope.
-
-Type variables must be introduced in a type annotation before they can be used.
-
-This type variable is referenced here:
-**type_var_namespace.md:10:14:10:18:**
-```roc
-    result : elem
-```
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `first` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -146,18 +134,20 @@ main! = |_| {}
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 109)
+	(d-let (id 110)
 		(p-assign @5-1-5-8 (ident "process") (id 78))
-		(e-lambda @5-11-14-2 (id 102)
+		(e-lambda @5-11-14-2 (id 103)
 			(args
 				(p-assign @5-12-5-16 (ident "list") (id 79)))
 			(e-block @5-18-14-2
 				(s-let @7-5-7-14
 					(p-assign @7-5-7-9 (ident "elem") (id 80))
 					(e-int @7-12-7-14 (num-var 83) (sign-needed "false") (bits-needed "7") (value "42") (id 83)))
+				(s-type-anno @10-5-11-11 (name "result")
+					(ty-var @10-14-10-18 (name "elem")))
 				(s-let @11-5-11-30
-					(p-assign @11-5-11-11 (ident "result") (id 89))
-					(e-call @11-14-11-30 (id 93)
+					(p-assign @11-5-11-11 (ident "result") (id 90))
+					(e-call @11-14-11-30 (id 94)
 						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-lookup-local @11-25-11-29
 							(pattern (id 79)))))
@@ -167,18 +157,18 @@ main! = |_| {}
 						(e-lookup-local @11-53-11-57
 							(pattern (id 80)))))
 				(e-lookup-local @13-5-13-11
-					(pattern (id 89)))))
-		(annotation @5-1-5-8 (signature 107) (id 108)
+					(pattern (id 90)))))
+		(annotation @5-1-5-8 (signature 108) (id 109)
 			(declared-type
 				(ty-fn @4-11-4-29 (effectful false)
 					(ty-apply @4-11-4-21 (symbol "List")
 						(ty-var @4-16-4-20 (name "elem")))
 					(ty-var @4-25-4-29 (name "elem"))))))
-	(d-let (id 114)
-		(p-assign @16-1-16-6 (ident "main!") (id 110))
-		(e-lambda @16-9-16-15 (id 113)
+	(d-let (id 115)
+		(p-assign @16-1-16-6 (ident "main!") (id 111))
+		(e-lambda @16-9-16-15 (id 114)
 			(args
-				(p-underscore @16-10-16-11 (id 111)))
+				(p-underscore @16-10-16-11 (id 112)))
 			(e-empty_record @16-13-16-15))))
 ~~~
 # TYPES

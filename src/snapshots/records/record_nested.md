@@ -88,6 +88,50 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 	},
 }
 ~~~
+# CANONICALIZE
+~~~clojure
+(e-record @1-1-12-2 (record-var 122) (ext-var 0) (id 124)
+	(fields
+		(field (name "person")
+			(e-record @2-13-2-39 (record-var 79) (ext-var 0)
+				(fields
+					(field (name "name")
+						(e-string @2-21-2-28
+							(e-literal @2-22-2-27 (string "Alice"))))
+					(field (name "age")
+						(e-int @2-35-2-37 (num-var 77) (sign-needed "false") (bits-needed "7") (value "30"))))))
+		(field (name "address")
+			(e-record @3-14-7-6 (record-var 101) (ext-var 0)
+				(fields
+					(field (name "street")
+						(e-string @4-17-4-30
+							(e-literal @4-18-4-29 (string "123 Main St"))))
+					(field (name "city")
+						(e-string @5-15-5-28
+							(e-literal @5-16-5-27 (string "Springfield"))))
+					(field (name "coordinates")
+						(e-record @6-22-6-53 (record-var 97) (ext-var 0)
+							(fields
+								(field (name "lat")
+									(e-frac-dec @6-29-6-36 (frac-var 91) (fits-in-f32 "true") (fits-in-dec "true") (value "42.1234")))
+								(field (name "lng")
+									(e-frac-dec @6-43-6-51 (frac-var 95) (fits-in-f32 "true") (fits-in-dec "true") (value "-71.5678")))))))))
+		(field (name "contact")
+			(e-record @8-14-11-6 (record-var 118) (ext-var 0)
+				(fields
+					(field (name "email")
+						(e-string @9-16-9-35
+							(e-literal @9-17-9-34 (string "alice@example.com"))))
+					(field (name "phone")
+						(e-record @10-16-10-54 (record-var 114) (ext-var 0)
+							(fields
+								(field (name "home")
+									(e-string @10-24-10-34
+										(e-literal @10-25-10-33 (string "555-1234"))))
+								(field (name "work")
+									(e-string @10-42-10-52
+										(e-literal @10-43-10-51 (string "555-5678"))))))))))))
+~~~
 # TYPES
 ~~~clojure
 (expr (id 124) (type "*"))

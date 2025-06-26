@@ -13,18 +13,7 @@ getField = |record| record.field
 main! = |_| {}
 ~~~
 # PROBLEMS
-**UNDECLARED TYPE VARIABLE**
-The type variable ``b`` is not declared in this scope.
-
-Type variables must be introduced in a type annotation before they can be used.
-
-This type variable is referenced here:
-**type_record_with_vars.md:3:31:3:32:**
-```roc
-getField : { field: a, other: b } -> a
-```
-
-
+NIL
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),Newline(1:1-1:1),
@@ -62,9 +51,8 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 				(args
 					(p-ident @4-13-4-19 (raw "record")))
 				(e-field-access @4-21-6-6
-					(e-binop @4-21-6-6 (op "app")
-						(e-ident @4-21-4-27 (qaul "") (raw "record"))
-						(e-ident @4-27-4-33 (qaul "") (raw ".field"))))))
+					(e-ident @4-21-4-27 (qaul "") (raw "record"))
+					(e-ident @4-27-4-33 (qaul "") (raw ".field")))))
 		(s-decl @6-1-6-15
 			(p-ident @6-1-6-6 (raw "main!"))
 			(e-lambda @6-9-6-15
@@ -84,16 +72,16 @@ main! = |_| {}
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 92)
-		(p-assign @4-1-4-9 (ident "getField") (id 81))
-		(e-lambda @4-12-6-6 (id 85)
+	(d-let (id 93)
+		(p-assign @4-1-4-9 (ident "getField") (id 82))
+		(e-lambda @4-12-6-6 (id 86)
 			(args
-				(p-assign @4-13-4-19 (ident "record") (id 82)))
+				(p-assign @4-13-4-19 (ident "record") (id 83)))
 			(e-dot-access @4-21-6-6 (field "field")
 				(receiver
 					(e-lookup-local @4-21-4-27
-						(pattern (id 82))))))
-		(annotation @4-1-4-9 (signature 90) (id 91)
+						(pattern (id 83))))))
+		(annotation @4-1-4-9 (signature 91) (id 92)
 			(declared-type
 				(ty-fn @3-12-3-39 (effectful false)
 					(ty-record @3-12-3-34
@@ -102,11 +90,11 @@ main! = |_| {}
 						(field (field "other")
 							(ty-var @3-31-3-32 (name "b"))))
 					(ty-var @3-38-3-39 (name "a"))))))
-	(d-let (id 97)
-		(p-assign @6-1-6-6 (ident "main!") (id 93))
-		(e-lambda @6-9-6-15 (id 96)
+	(d-let (id 98)
+		(p-assign @6-1-6-6 (ident "main!") (id 94))
+		(e-lambda @6-9-6-15 (id 97)
 			(args
-				(p-underscore @6-10-6-11 (id 94)))
+				(p-underscore @6-10-6-11 (id 95)))
 			(e-empty_record @6-13-6-15))))
 ~~~
 # TYPES

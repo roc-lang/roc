@@ -53,6 +53,10 @@ OpBar(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:4-1:8),Comma(1:8-1:9),LowerIdent(
 ~~~roc
 
 ~~~
+# CANONICALIZE
+~~~clojure
+(can-ir (empty true))
+~~~
 # TYPES
 ~~~clojure
 (inferred-types

@@ -2760,7 +2760,8 @@ fn canonicalize_type_header(self: *Self, header_idx: AST.TypeHeader.Idx) CIR.Typ
     });
 }
 
-fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) ?CIR.Expr.Idx {
+/// Canonicalize a statement in the canonical IR.
+pub fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) ?CIR.Expr.Idx {
     const stmt = self.parse_ir.store.getStatement(stmt_idx);
 
     switch (stmt) {
@@ -2909,15 +2910,43 @@ fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) ?CIR.Expr.Id
                 } });
             };
 
-            // Canonicalize the type annotation
-            const type_anno_idx = self.canonicalize_type_anno(ta.anno);
+            // First, extract all type variables from the AST annotation
+            var type_vars = std.ArrayList(Ident.Idx).init(self.can_ir.env.gpa);
+            defer type_vars.deinit();
+            self.extractTypeVarsFromASTAnno(ta.anno, &type_vars);
 
-            // Extract type variables from the annotation and introduce them into scope
-            // This makes them available for the subsequent value declaration
-            self.extractTypeVarsFromAnno(type_anno_idx);
+            // Enter a new scope for type variables
+            self.scopeEnter(self.can_ir.env.gpa, false);
+            defer self.scopeExit(self.can_ir.env.gpa) catch {};
+
+            // Introduce type variables into scope
+            for (type_vars.items) |type_var| {
+                // Create a dummy type annotation for the type variable
+                const type_var_region = Region.zero(); // TODO: get proper region from type variable
+                const dummy_anno = self.can_ir.store.addTypeAnno(.{ .ty_var = .{
+                    .name = type_var,
+                    .region = type_var_region,
+                } });
+                self.scopeIntroduceTypeVar(type_var, dummy_anno);
+            }
+
+            // Now canonicalize the annotation with type variables in scope
+            const type_anno_idx = self.canonicalize_type_anno(ta.anno);
 
             // Store the type annotation for connection with the next declaration
             self.pending_type_annos.append(self.can_ir.env.gpa, .{ .ident = name_ident, .anno = type_anno_idx }) catch |err| exitOnOom(err);
+
+            // Create a type annotation statement
+            const type_anno_stmt = CIR.Statement{
+                .type_anno = .{
+                    .name = name_ident,
+                    .anno = type_anno_idx,
+                    .where = null, // TODO: handle where clauses when they're implemented
+                    .region = region,
+                },
+            };
+            const type_anno_stmt_idx = self.can_ir.store.addStatement(type_anno_stmt);
+            self.can_ir.store.addScratchStatement(type_anno_stmt_idx);
 
             // Type annotations don't produce runtime values, so return a unit expression
             // Create an empty tuple as a unit value
@@ -3119,9 +3148,13 @@ fn extractTypeVarsFromAnno(self: *Self, type_anno_idx: CIR.TypeAnno.Idx) void {
                 self.extractTypeVarsFromAnno(arg_idx);
             }
         },
-        .@"fn" => {
-            // Function type annotations are not yet implemented in CIR
-            // When implemented, extract from parameter and return types
+        .@"fn" => |fn_anno| {
+            // Extract type variables from function parameter types
+            for (self.can_ir.store.sliceTypeAnnos(fn_anno.args)) |param_idx| {
+                self.extractTypeVarsFromAnno(param_idx);
+            }
+            // Extract type variables from return type
+            self.extractTypeVarsFromAnno(fn_anno.ret);
         },
         .tuple => |tuple| {
             // Extract from tuple elements
@@ -3133,7 +3166,14 @@ fn extractTypeVarsFromAnno(self: *Self, type_anno_idx: CIR.TypeAnno.Idx) void {
             // Extract from inner annotation
             self.extractTypeVarsFromAnno(parens.anno);
         },
-        .ty, .underscore, .mod_ty, .record, .tag_union, .malformed => {
+        .record => |record| {
+            // Extract type variables from record field types
+            for (self.can_ir.store.sliceAnnoRecordFields(record.fields)) |field_idx| {
+                const field = self.can_ir.store.getAnnoRecordField(field_idx);
+                self.extractTypeVarsFromAnno(field.ty);
+            }
+        },
+        .ty, .underscore, .mod_ty, .tag_union, .malformed => {
             // These don't contain type variables to extract
         },
     }
@@ -3183,7 +3223,14 @@ fn extractTypeVarsFromASTAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, vars: *st
         .parens => |parens| {
             self.extractTypeVarsFromASTAnno(parens.anno, vars);
         },
-        .ty, .underscore, .mod_ty, .record, .tag_union, .malformed => {
+        .record => |record| {
+            // Extract type variables from record field types
+            for (self.parse_ir.store.annoRecordFieldSlice(record.fields)) |field_idx| {
+                const field = self.parse_ir.store.getAnnoRecordField(field_idx);
+                self.extractTypeVarsFromASTAnno(field.ty, vars);
+            }
+        },
+        .ty, .underscore, .mod_ty, .tag_union, .malformed => {
             // These don't contain type variables to extract
         },
     }

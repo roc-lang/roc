@@ -42,6 +42,20 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 	camelCase: "camel",
 }
 ~~~
+# CANONICALIZE
+~~~clojure
+(e-record @1-1-5-2 (record-var 81) (ext-var 0) (id 83)
+	(fields
+		(field (name "field_with_underscores")
+			(e-string @2-29-2-41
+				(e-literal @2-30-2-40 (string "underscore"))))
+		(field (name "field123")
+			(e-string @3-15-3-24
+				(e-literal @3-16-3-23 (string "numbers"))))
+		(field (name "camelCase")
+			(e-string @4-16-4-23
+				(e-literal @4-17-4-22 (string "camel"))))))
+~~~
 # TYPES
 ~~~clojure
 (expr (id 83) (type "*"))

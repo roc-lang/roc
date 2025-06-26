@@ -25,6 +25,11 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:7),Comma(1:7-1:8),LowerIdent(1:9-1:12),Comma
 ~~~roc
 NO CHANGE
 ~~~
+# CANONICALIZE
+~~~clojure
+(e-record @1-1-1-29 (record-var 0) (ext-var 0) (id 74)
+	(fields))
+~~~
 # TYPES
 ~~~clojure
 (expr (id 74) (type "*"))

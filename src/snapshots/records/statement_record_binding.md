@@ -31,6 +31,22 @@ LowerIdent(1:1-1:7),OpAssign(1:8-1:9),OpenCurly(1:10-1:11),LowerIdent(1:12-1:16)
 ~~~roc
 NO CHANGE
 ~~~
+# CANONICALIZE
+~~~clojure
+(can-ir
+	(s-let @1-1-1-64 (id 86)
+		(p-assign @1-1-1-7 (ident "person") (id 72))
+		(e-record @1-10-1-64 (record-var 83) (ext-var 0) (id 85)
+			(fields
+				(field (name "name")
+					(e-string @1-18-1-25
+						(e-literal @1-19-1-24 (string "Alice"))))
+				(field (name "age")
+					(e-int @1-32-1-34 (num-var 78) (sign-needed "false") (bits-needed "7") (value "30")))
+				(field (name "email")
+					(e-string @1-43-1-62
+						(e-literal @1-44-1-61 (string "alice@example.com"))))))))
+~~~
 # TYPES
 ~~~clojure
 (inferred-types

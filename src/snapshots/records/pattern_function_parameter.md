@@ -55,6 +55,10 @@ LowerIdent(1:1-1:11),OpAssign(1:12-1:13),OpBar(1:14-1:15),OpenCurly(1:15-1:16),L
 ~~~roc
 formatUser = 
 ~~~
+# CANONICALIZE
+~~~clojure
+(can-ir (empty true))
+~~~
 # TYPES
 ~~~clojure
 (inferred-types

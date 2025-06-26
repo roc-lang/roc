@@ -63,14 +63,13 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 				(e-apply @6-13-6-55
 					(e-ident @6-13-6-24 (qaul "") (raw "processDict"))
 					(e-field-access @6-25-6-55
-						(e-binop @6-25-6-55 (op "app")
-							(e-apply @6-25-6-37
-								(e-ident @6-25-6-35 (qaul "Dict") (raw ".empty")))
-							(e-apply @6-37-6-54
-								(e-ident @6-37-6-44 (qaul "") (raw ".insert"))
-								(e-string @6-45-6-50
-									(e-string-part @6-46-6-49 (raw "one")))
-								(e-int @6-52-6-53 (raw "1"))))))))))
+						(e-apply @6-25-6-37
+							(e-ident @6-25-6-35 (qaul "Dict") (raw ".empty")))
+						(e-apply @6-37-6-54
+							(e-ident @6-37-6-44 (qaul "") (raw ".insert"))
+							(e-string @6-45-6-50
+								(e-string-part @6-46-6-49 (raw "one")))
+							(e-int @6-52-6-53 (raw "1")))))))))
 ~~~
 # FORMATTED
 ~~~roc

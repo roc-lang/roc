@@ -51,9 +51,8 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 				(args
 					(p-ident @4-12-4-18 (raw "person")))
 				(e-field-access @4-20-6-6
-					(e-binop @4-20-6-6 (op "app")
-						(e-ident @4-20-4-26 (qaul "") (raw "person"))
-						(e-ident @4-26-4-31 (qaul "") (raw ".name"))))))
+					(e-ident @4-20-4-26 (qaul "") (raw "person"))
+					(e-ident @4-26-4-31 (qaul "") (raw ".name")))))
 		(s-decl @6-1-6-15
 			(p-ident @6-1-6-6 (raw "main!"))
 			(e-lambda @6-9-6-15

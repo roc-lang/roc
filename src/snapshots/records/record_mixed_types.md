@@ -38,6 +38,26 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:7),OpColon(1:7-1:8),StringStart(1:9-1:10),St
 ~~~roc
 NO CHANGE
 ~~~
+# CANONICALIZE
+~~~clojure
+(e-record @1-1-1-86 (record-var 98) (ext-var 0) (id 100)
+	(fields
+		(field (name "name")
+			(e-string @1-9-1-16
+				(e-literal @1-10-1-15 (string "Alice"))))
+		(field (name "age")
+			(e-int @1-23-1-25 (num-var 77) (sign-needed "false") (bits-needed "7") (value "30")))
+		(field (name "active")
+			(e-runtime-error (tag "ident_not_in_scope")))
+		(field (name "scores")
+			(e-list @1-54-1-66 (elem-var 91)
+				(elems
+					(e-int @1-55-1-57 (num-var 84) (sign-needed "false") (bits-needed "7") (value "95"))
+					(e-int @1-59-1-61 (num-var 87) (sign-needed "false") (bits-needed "7") (value "87"))
+					(e-int @1-63-1-65 (num-var 90) (sign-needed "false") (bits-needed "7") (value "92")))))
+		(field (name "balance")
+			(e-frac-dec @1-77-1-84 (frac-var 96) (fits-in-f32 "true") (fits-in-dec "true") (value "1250.75")))))
+~~~
 # TYPES
 ~~~clojure
 (expr (id 100) (type "*"))

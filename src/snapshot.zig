@@ -1548,7 +1548,11 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, maybe_f
             maybe_expr_idx = can.canonicalize_expr(expr_idx);
         },
         .statement => {
-            // TODO: implement canonicalize_statement when available
+            // Manually track scratch statements because we aren't using the file entrypoint
+            const stmt_idx: AST.Statement.Idx = @enumFromInt(parse_ast.root_node_idx);
+            const scratch_statements_start = can_ir.store.scratch_statements.top();
+            _ = can.canonicalize_statement(stmt_idx);
+            can_ir.all_statements = can_ir.store.statementSpanFrom(scratch_statements_start);
         },
     }
 

@@ -29,6 +29,16 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:7),Comma(1:7-1:8),LowerIdent(1:9-1:12),OpCol
 ~~~roc
 NO CHANGE
 ~~~
+# CANONICALIZE
+~~~clojure
+(e-record @1-1-1-52 (record-var 79) (ext-var 0) (id 81)
+	(fields
+		(field (name "age")
+			(e-int @1-14-1-16 (num-var 74) (sign-needed "false") (bits-needed "7") (value "30")))
+		(field (name "status")
+			(e-string @1-33-1-41
+				(e-literal @1-34-1-40 (string "active"))))))
+~~~
 # TYPES
 ~~~clojure
 (expr (id 81) (type "*"))

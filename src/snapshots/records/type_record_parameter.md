@@ -33,6 +33,24 @@ LowerIdent(1:1-1:15),OpColon(1:16-1:17),OpenCurly(1:18-1:19),LowerIdent(1:20-1:2
 ~~~roc
 process_things : { name : Str, age : U32, thing : a }, (a -> Str) -> Str
 ~~~
+# CANONICALIZE
+~~~clojure
+(can-ir
+	(s-type-anno @1-1-1-72 (name "process_things") (id 87)
+		(ty-fn @1-18-1-72 (effectful false)
+			(ty-record @1-18-1-53
+				(field (field "name")
+					(ty @1-27-1-30 (name "Str")))
+				(field (field "age")
+					(ty @1-38-1-41 (name "U32")))
+				(field (field "thing")
+					(ty-var @1-50-1-51 (name "a"))))
+			(ty-parens @1-55-1-65
+				(ty-fn @1-56-1-64 (effectful false)
+					(ty-var @1-56-1-57 (name "a"))
+					(ty @1-61-1-64 (name "Str"))))
+			(ty @1-69-1-72 (name "Str")))))
+~~~
 # TYPES
 ~~~clojure
 (inferred-types

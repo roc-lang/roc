@@ -21,6 +21,10 @@ OpenCurly(1:1-1:2),CloseCurly(1:2-1:3),EndOfFile(1:3-1:3),
 ~~~roc
 NO CHANGE
 ~~~
+# CANONICALIZE
+~~~clojure
+(e-empty_record @1-1-1-3 (id 72))
+~~~
 # TYPES
 ~~~clojure
 (expr (id 72) (type "{}"))
