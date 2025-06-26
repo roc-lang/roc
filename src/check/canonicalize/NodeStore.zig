@@ -1344,7 +1344,7 @@ pub fn getDef(store: *const NodeStore, def_idx: CIR.Def.Idx) CIR.Def {
 }
 
 /// Retrieves a record field from the store.
-pub fn getRecordField(store: *NodeStore, recordField: CIR.RecordField.Idx) CIR.RecordField {
+pub fn getRecordField(store: *const NodeStore, recordField: CIR.RecordField.Idx) CIR.RecordField {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(recordField)));
 
     return CIR.RecordField{

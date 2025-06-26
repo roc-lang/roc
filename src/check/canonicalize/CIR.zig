@@ -492,6 +492,13 @@ pub fn setTypeVarAtDef(self: *CIR, at_idx: Def.Idx, content: types.Content) type
 /// _ = self.can_ir.setTypeVarAtExpr(expr_idx,
 ///     Content{ .structure = .{ .num = .{ .num_poly = int_var } } });
 /// ```
+///
+/// **Record Special Case**: For records, you must ALSO set the type on the record_var:
+/// ```zig
+/// // Both assignments are required for records:
+/// _ = self.setTypeVarAt(@enumFromInt(@intFromEnum(record_type_var)), record_content);
+/// _ = self.setTypeVarAtExpr(expr_idx, record_content);
+/// ```
 pub fn setTypeVarAtExpr(self: *CIR, at_idx: Expr.Idx, content: types.Content) types.Var {
     return self.setTypeVarAt(@enumFromInt(@intFromEnum(at_idx)), content);
 }
@@ -515,6 +522,11 @@ pub fn setTypeVarAtPat(self: *CIR, at_idx: Pattern.Idx, content: types.Content) 
 ///
 /// **Usage**: Usually called indirectly through the typed wrapper functions
 /// (`setTypeVarAtExpr`, `setTypeVarAtDef`, etc.) rather than directly.
+///
+/// **Direct Usage**: Needed for record canonicalization to set types on record_var:
+/// ```zig
+/// _ = self.setTypeVarAt(@enumFromInt(@intFromEnum(record_type_var)), record_content);
+/// ```
 ///
 /// **How it works**:
 /// 1. Converts the node index to a type variable index (they use the same numbering)
