@@ -69,23 +69,18 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-record @1-1-1-77 (record-var 91) (ext-var 0) (id 93)
+(e-record @1-1-1-77 (record-var 84) (ext-var 0) (id 86)
 	(fields
 		(field (name "name")
 			(e-string @1-9-1-16
 				(e-literal @1-10-1-15 (string "Alice"))))
 		(field (name "age")
 			(e-int @1-23-1-25 (num-var 77) (sign-needed "false") (bits-needed "7") (value "30")))
-		(field (name "name")
-			(e-string @1-33-1-38
-				(e-literal @1-34-1-37 (string "Bob"))))
 		(field (name "email")
 			(e-string @1-47-1-66
-				(e-literal @1-48-1-65 (string "alice@example.com"))))
-		(field (name "age")
-			(e-int @1-73-1-75 (num-var 89) (sign-needed "false") (bits-needed "7") (value "25")))))
+				(e-literal @1-48-1-65 (string "alice@example.com"))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 93) (type "*"))
+(expr (id 86) (type "*"))
 ~~~

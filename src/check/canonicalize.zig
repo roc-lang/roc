@@ -1317,12 +1317,17 @@ pub fn canonicalize_expr(
                             .ident = field_name_ident,
                             .region = field_name_region,
                         }) catch |err| exitOnOom(err);
-                    }
-                }
 
-                // Continue with normal canonicalization
-                if (self.canonicalize_record_field(field)) |canonicalized| {
-                    self.can_ir.store.scratch_record_fields.append(self.can_ir.env.gpa, canonicalized);
+                        // Only canonicalize and include non-duplicate fields
+                        if (self.canonicalize_record_field(field)) |canonicalized| {
+                            self.can_ir.store.scratch_record_fields.append(self.can_ir.env.gpa, canonicalized);
+                        }
+                    }
+                } else {
+                    // Field name couldn't be resolved, still try to canonicalize
+                    if (self.canonicalize_record_field(field)) |canonicalized| {
+                        self.can_ir.store.scratch_record_fields.append(self.can_ir.env.gpa, canonicalized);
+                    }
                 }
             }
 
