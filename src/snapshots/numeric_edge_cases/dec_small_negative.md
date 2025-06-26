@@ -23,9 +23,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-frac-dec @1-1-1-9 (frac-var 74) (fits-in-f32 "true") (fits-in-dec "true") (value "-3.14159") (id 74))
+(e-frac-dec @1-1-1-9 (frac-var 74) (value "-3.14159") (id 74))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 74) (type "Num(Fraction(*))"))
+(expr (id 74) (type "Frac(*)"))
 ~~~

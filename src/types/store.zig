@@ -586,7 +586,12 @@ test "resolveVarAndCompressPath - no-op on already root" {
     defer store.deinit();
 
     const num_flex = store.fresh();
-    const num = types.Content{ .structure = .{ .num = .{ .num_poly = num_flex } } };
+    const requirements = types.Num.IntRequirements{
+        .var_ = num_flex,
+        .sign_needed = false,
+        .bits_needed = 0,
+    };
+    const num = types.Content{ .structure = .{ .num = .{ .num_poly = requirements } } };
     const num_var = store.freshFromContent(num);
 
     const result = store.resolveVarAndCompressPath(num_var);
@@ -603,7 +608,12 @@ test "resolveVarAndCompressPath - flattens redirect chain to structure" {
     defer store.deinit();
 
     const num_flex = store.fresh();
-    const num = types.Content{ .structure = .{ .num = .{ .num_poly = num_flex } } };
+    const requirements = types.Num.IntRequirements{
+        .var_ = num_flex,
+        .sign_needed = false,
+        .bits_needed = 0,
+    };
+    const num = types.Content{ .structure = .{ .num = .{ .num_poly = requirements } } };
     const c = store.freshFromContent(num);
     const b = store.freshRedirect(c);
     const a = store.freshRedirect(b);

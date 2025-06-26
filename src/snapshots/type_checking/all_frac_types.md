@@ -62,19 +62,19 @@ NO CHANGE
 (can-ir
 	(d-let (id 80)
 		(p-assign @4-1-4-2 (ident "a") (id 73))
-		(e-dec-small @4-5-4-9 (num-var 76) (fits-in-f32 "true") (fits-in-dec "true") (numerator "314") (denominator-power-of-ten "2") (value "3.14") (id 76))
+		(e-dec-small @4-5-4-9 (num-var 76) (numerator "314") (denominator-power-of-ten "2") (value "3.14") (id 76))
 		(annotation @4-1-4-2 (signature 78) (id 79)
 			(declared-type
 				(ty @3-5-3-8 (name "F32")))))
 	(d-let (id 89)
 		(p-assign @7-1-7-2 (ident "b") (id 82))
-		(e-frac-dec @7-5-7-12 (frac-var 85) (fits-in-f32 "true") (fits-in-dec "true") (value "2.71828") (id 85))
+		(e-frac-dec @7-5-7-12 (frac-var 85) (value "2.71828") (id 85))
 		(annotation @7-1-7-2 (signature 87) (id 88)
 			(declared-type
 				(ty @6-5-6-8 (name "F64")))))
 	(d-let (id 98)
 		(p-assign @10-1-10-2 (ident "c") (id 91))
-		(e-frac-dec @10-5-10-12 (frac-var 94) (fits-in-f32 "true") (fits-in-dec "true") (value "123.456") (id 94))
+		(e-frac-dec @10-5-10-12 (frac-var 94) (value "123.456") (id 94))
 		(annotation @10-1-10-2 (signature 96) (id 97)
 			(declared-type
 				(ty @9-5-9-8 (name "Dec"))))))
@@ -83,11 +83,11 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "a") (type "Num(Fraction(Binary32))"))
-		(def (name "b") (type "Num(Fraction(Binary64))"))
-		(def (name "c") (type "Num(Fraction(Decimal))")))
+		(def (name "a") (type "F32"))
+		(def (name "b") (type "F64"))
+		(def (name "c") (type "Dec")))
 	(expressions
-		(expr @4-5-4-9 (type "Num(Fraction(Binary32))"))
-		(expr @7-5-7-12 (type "Num(Fraction(Binary64))"))
-		(expr @10-5-10-12 (type "Num(Fraction(Decimal))"))))
+		(expr @4-5-4-9 (type "F32"))
+		(expr @7-5-7-12 (type "F64"))
+		(expr @10-5-10-12 (type "Dec"))))
 ~~~

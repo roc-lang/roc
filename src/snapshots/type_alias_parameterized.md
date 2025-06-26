@@ -109,16 +109,16 @@ NO CHANGE
 					(ty-apply @5-26-5-36 (symbol "Pair")
 						(ty-var @5-31-5-32 (name "b"))
 						(ty-var @5-34-5-35 (name "a")))))))
-	(d-let (id 115)
+	(d-let (id 113)
 		(p-assign @8-1-8-6 (ident "main!") (id 104))
-		(e-lambda @8-9-8-27 (id 114)
+		(e-lambda @8-9-8-27 (id 112)
 			(args
 				(p-underscore @8-10-8-11 (id 105)))
 			(e-call @8-13-8-27
 				(e-lookup-local @8-13-8-21
 					(pattern (id 90)))
-				(e-int @8-22-8-23 (num-var 109) (sign-needed "false") (bits-needed "7") (value "1"))
-				(e-int @8-25-8-26 (num-var 112) (sign-needed "false") (bits-needed "7") (value "2")))))
+				(e-int @8-22-8-23 (num-var 108) (value "1"))
+				(e-int @8-25-8-26 (num-var 110) (value "2")))))
 	(s-type-decl @3-1-5-9 (id 78)
 		(ty-header @3-1-3-11 (name "Pair")
 			(ty-args

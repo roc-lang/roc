@@ -31,5 +31,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 78) (type "*"))
+(expr (id 77) (type "*"))
 ~~~

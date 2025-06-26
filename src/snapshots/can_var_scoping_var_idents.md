@@ -67,9 +67,9 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 93)
+	(d-let (id 92)
 		(p-assign @4-1-4-9 (ident "testFunc") (id 72))
-		(e-lambda @4-12-10-2 (id 92)
+		(e-lambda @4-12-10-2 (id 91)
 			(args
 				(p-assign @4-13-4-18 (ident "input") (id 73)))
 			(e-block @4-20-10-2
@@ -78,23 +78,23 @@ NO CHANGE
 					(e-lookup-local @5-8-5-13 (id 75)
 						(pattern (id 73))))
 				(s-var @6-2-8-6
-					(p-assign @6-2-8-6 (ident "sum_") (id 82))
-					(e-binop @6-13-8-6 (op "mul") (id 81)
+					(p-assign @6-2-8-6 (ident "sum_") (id 81))
+					(e-binop @6-13-8-6 (op "mul") (id 80)
 						(e-lookup-local @6-13-6-18
 							(pattern (id 73)))
-						(e-int @6-21-6-22 (num-var 80) (sign-needed "false") (bits-needed "7") (value "2"))))
+						(e-int @6-21-6-22 (num-var 79) (value "2"))))
 				(s-reassign @8-2-8-6
-					(p-assign @6-2-8-6 (ident "sum_") (id 82))
-					(e-binop @8-9-9-5 (op "add") (id 86)
+					(p-assign @6-2-8-6 (ident "sum_") (id 81))
+					(e-binop @8-9-9-5 (op "add") (id 85)
 						(e-lookup-local @8-9-8-13
-							(pattern (id 82)))
+							(pattern (id 81)))
 						(e-lookup-local @8-16-8-19
 							(pattern (id 74)))))
 				(e-binop @9-2-10-2 (op "add")
 					(e-lookup-local @9-2-9-5
 						(pattern (id 74)))
 					(e-lookup-local @9-8-9-12
-						(pattern (id 82))))))))
+						(pattern (id 81))))))))
 ~~~
 # TYPES
 ~~~clojure

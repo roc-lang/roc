@@ -12,6 +12,7 @@
 //! these types, please consider their size impact and unification performance.
 
 const std = @import("std");
+const testing = std.testing;
 const collections = @import("../collections.zig");
 const Ident = @import("../base/Ident.zig");
 
@@ -214,9 +215,9 @@ pub const Tuple = struct {
 /// form always wins: we discard the polymorphic wrapper and store the
 /// concrete, memory-efficient version instead.
 pub const Num = union(enum) {
-    num_poly: Var,
-    int_poly: Var,
-    frac_poly: Var,
+    num_poly: IntRequirements,
+    int_poly: IntRequirements,
+    frac_poly: FracRequirements,
     int_precision: Int.Precision,
     frac_precision: Frac.Precision,
     num_compact: Compact,
@@ -230,6 +231,81 @@ pub const Num = union(enum) {
 
         pub fn placeholder() Compact {
             return Compact{ .int = .u8 };
+        }
+    };
+
+    /// Represents the type constraints of an integer literal: the minimum number of bits required
+    /// to store it in memory, and whether a sign is required because it's a negative integer.
+    ///
+    /// Here's an example:
+    ///
+    ///     if foo() 500 else -500
+    ///
+    /// The `500` literal has a requirement of 9 bits and it's not negative. The `-500` literal also
+    /// requires 9 bits but it *is* negative, which means we need a signed integer. Since both require
+    /// 9 bits, they don't fit in I8, and therefore only type annotations of I16, I32, I64, or I128
+    /// will avoid an "integer literal too large" error.
+    ///
+    /// Here's an example which demonstrates why we need to track sign separately:
+    ///
+    ///     if foo() 100 else 200
+    ///
+    /// The `100` literal has a requirement of 7 bits, and the `200` literal requires 8. If we didn't
+    /// track sign, we might write down that the `100` literal "fits in `I8`" - which is a true claim,
+    /// but it doesn't record whether the `I8` being signed is necessary. So when we get `200` in the mix,
+    /// we have an ambiguity that causes a problem:
+    /// * If we assume the sign was required, then if this is annotated `U8`, that would incorrectly give an error. `U8` should be fine here!
+    /// * If we assume the sign is not required, then if it had been `-100` instead, then a `U8` annotation would incorrectly *not* give an error.
+    ///
+    /// Putting all of this together, we need to track the required number of bits and the sign separately.
+    pub const IntRequirements = struct {
+        // The type variable (these are all polymorphic)
+        var_: Var,
+
+        // Whether the literal was negative, and therefore only unifies with signed ints
+        sign_needed: bool,
+
+        // The lowest number of bits that can represent the decimal value of the Int literal  *excluding* its sign.
+        bits_needed: u8,
+
+        /// Unifies two IntRequirements, returning the most restrictive combination
+        pub fn unify(self: IntRequirements, other: IntRequirements) IntRequirements {
+            return IntRequirements{
+                .var_ = self.var_,
+                .sign_needed = self.sign_needed or other.sign_needed,
+                .bits_needed = @max(self.bits_needed, other.bits_needed),
+            };
+        }
+    };
+
+    /// Represents the type constraints of a number literal that has a decimal point: whether it fits
+    /// in F32 and/or Dec.
+    ///
+    /// We don't bather tracking whether it can fit in F64, because:
+    /// - If it can fit in F32 without precision loss compared to F64, then it can definitely fit in F64 as well.
+    /// - If it can't fit in F32 or Dec, then clearly must have fit in F64, or else we would have errored out.
+    /// - If it can't fit in F32 but it can fit in Dec, then it can fit (with precision loss) in F64, which is fine.
+    ///
+    /// Examples:
+    ///
+    ///     3.14 - fits in f32, f64, and dec
+    ///     1e40 - fits only in f64 (exceeds f32's max of ~3.4e38, and is out of dec's range)
+    ///     0.1 - fits in f32, f64, and dec (though f32 and f64 use binary approximation)
+    ///     NaN - fits in f32 and f64, but not dec
+    ///     1.23456789012345 - may fit in f64 and dec, but not f32 (precision loss)
+    pub const FracRequirements = struct {
+        // The type variable (these are all polymorphic)
+        var_: Var,
+        fits_in_f32: bool,
+        fits_in_dec: bool,
+
+        /// Unifies two FracRequirements, returning the intersection of capabilities
+        pub fn unify(self: FracRequirements, other: FracRequirements) FracRequirements {
+            return FracRequirements{
+                .var_ = self.var_,
+                .fits_in_f32 = self.fits_in_f32 and other.fits_in_f32,
+                .fits_in_dec = self.fits_in_dec and other.fits_in_dec,
+            };
         }
     };
 
@@ -349,6 +425,22 @@ pub const Num = union(enum) {
                     65...127 => .@"65_to_127",
                     128 => .@"128",
                     else => unreachable,
+                };
+            }
+
+            /// Convert the BitsNeeded enum to the actual number of bits
+            pub fn toBits(self: BitsNeeded) u8 {
+                return switch (self) {
+                    .@"7" => 7,
+                    .@"8" => 8,
+                    .@"9_to_15" => 9,
+                    .@"16" => 16,
+                    .@"17_to_31" => 17,
+                    .@"32" => 32,
+                    .@"33_to_63" => 33,
+                    .@"64" => 64,
+                    .@"65_to_127" => 65,
+                    .@"128" => 128,
                 };
             }
         };
@@ -545,7 +637,6 @@ pub const TwoTags = struct {
 };
 
 test "Precision.size() and alignment()" {
-    const testing = @import("std").testing;
 
     // u8 and i8 should have size and alignment of 1
     try testing.expectEqual(1, Num.Int.Precision.u8.size());
@@ -588,4 +679,33 @@ test "Precision.size() and alignment()" {
     // dec should have size and alignment of 16
     try testing.expectEqual(16, Num.Frac.Precision.dec.size());
     try testing.expectEqual(16, Num.Frac.Precision.dec.alignment().toByteUnits());
+}
+
+test "BitsNeeded.fromValue calculates correct bits for various values" {
+    const BitsNeeded = Num.Int.BitsNeeded;
+
+    // Test minimum signed value adjustments
+    try testing.expectEqual(BitsNeeded.@"7", BitsNeeded.fromValue(127)); // -128 adjusted
+    try testing.expectEqual(BitsNeeded.@"8", BitsNeeded.fromValue(128)); // -128 not adjusted
+
+    // Test other values
+    try testing.expectEqual(BitsNeeded.@"7", BitsNeeded.fromValue(0));
+    try testing.expectEqual(BitsNeeded.@"7", BitsNeeded.fromValue(1));
+    try testing.expectEqual(BitsNeeded.@"7", BitsNeeded.fromValue(127));
+    try testing.expectEqual(BitsNeeded.@"8", BitsNeeded.fromValue(255));
+    try testing.expectEqual(BitsNeeded.@"9_to_15", BitsNeeded.fromValue(256));
+    try testing.expectEqual(BitsNeeded.@"16", BitsNeeded.fromValue(65535));
+    try testing.expectEqual(BitsNeeded.@"17_to_31", BitsNeeded.fromValue(65536));
+
+    // Test that toBits returns expected values
+    try testing.expectEqual(@as(u8, 7), BitsNeeded.@"7".toBits());
+    try testing.expectEqual(@as(u8, 8), BitsNeeded.@"8".toBits());
+    try testing.expectEqual(@as(u8, 9), BitsNeeded.@"9_to_15".toBits());
+    try testing.expectEqual(@as(u8, 16), BitsNeeded.@"16".toBits());
+    try testing.expectEqual(@as(u8, 17), BitsNeeded.@"17_to_31".toBits());
+    try testing.expectEqual(@as(u8, 32), BitsNeeded.@"32".toBits());
+    try testing.expectEqual(@as(u8, 33), BitsNeeded.@"33_to_63".toBits());
+    try testing.expectEqual(@as(u8, 64), BitsNeeded.@"64".toBits());
+    try testing.expectEqual(@as(u8, 65), BitsNeeded.@"65_to_127".toBits());
+    try testing.expectEqual(@as(u8, 128), BitsNeeded.@"128".toBits());
 }

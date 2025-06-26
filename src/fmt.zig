@@ -680,7 +680,7 @@ const Formatter = struct {
         const expr = fmt.ast.store.getExpr(ei);
         const region = fmt.nodeRegion(@intFromEnum(ei));
         const multiline = fmt.ast.regionIsMultiline(region);
-        const indent_modifier: u32 = if (format_behavior == .no_indent_on_access and fmt.curr_indent > 0) 1 else 0;
+        const indent_modifier: u32 = @intFromBool(format_behavior == .no_indent_on_access and fmt.curr_indent > 0);
         const curr_indent: u32 = fmt.curr_indent - indent_modifier;
         defer {
             fmt.curr_indent = curr_indent;

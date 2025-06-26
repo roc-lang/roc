@@ -11,7 +11,16 @@ x : U8
 x = 500
 ~~~
 # PROBLEMS
-NIL
+**NUMBER DOES NOT FIT IN TYPE**
+The number **500** does not fit in its inferred type:
+**u8_annotation_large_value.md:4:5:4:8:**
+```roc
+x = 500
+```
+
+Its inferred type is:
+    _U8_
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),
@@ -38,10 +47,10 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 80)
+	(d-let (id 79)
 		(p-assign @4-1-4-2 (ident "x") (id 73))
-		(e-int @4-5-4-8 (num-var 76) (sign-needed "false") (bits-needed "9_to_15") (value "500") (id 76))
-		(annotation @4-1-4-2 (signature 78) (id 79)
+		(e-int @4-5-4-8 (num-var 75) (value "500") (id 75))
+		(annotation @4-1-4-2 (signature 77) (id 78)
 			(declared-type
 				(ty @3-5-3-7 (name "U8"))))))
 ~~~
@@ -49,7 +58,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "x") (type "Num(Int(Unsigned8))")))
+		(def (name "x") (type "Error")))
 	(expressions
-		(expr @4-5-4-8 (type "Num(Int(Unsigned8))"))))
+		(expr @4-5-4-8 (type "Error"))))
 ~~~

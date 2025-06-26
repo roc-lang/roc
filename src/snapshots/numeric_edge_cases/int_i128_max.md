@@ -23,9 +23,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-int @1-1-1-40 (num-var 74) (sign-needed "false") (bits-needed "65_to_127") (value "170141183460469231731687303715884105727") (id 74))
+(e-int @1-1-1-40 (num-var 73) (value "170141183460469231731687303715884105727") (id 73))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 74) (type "Num(Int(*))"))
+(expr (id 73) (type "Num(*)"))
 ~~~

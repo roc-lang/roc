@@ -229,7 +229,7 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1-1-19-2 (id 179)
+(e-block @1-1-19-2 (id 162)
 	(s-let @3-5-3-21
 		(p-assign @3-5-3-12 (ident "add_one") (id 72))
 		(e-lambda @3-15-3-21 (id 76)
@@ -238,89 +238,89 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 			(e-runtime-error (tag "not_implemented"))))
 	(s-let @4-5-4-11
 		(p-assign @4-5-4-6 (ident "x") (id 78))
-		(e-int @4-9-4-11 (num-var 81) (sign-needed "false") (bits-needed "7") (value "10") (id 81)))
+		(e-int @4-9-4-11 (num-var 80) (value "10") (id 80)))
 	(s-let @5-5-5-11
-		(p-assign @5-5-5-6 (ident "y") (id 83))
-		(e-int @5-9-5-11 (num-var 86) (sign-needed "false") (bits-needed "7") (value "20") (id 86)))
+		(p-assign @5-5-5-6 (ident "y") (id 82))
+		(e-int @5-9-5-11 (num-var 84) (value "20") (id 84)))
 	(s-let @6-5-6-11
-		(p-assign @6-5-6-6 (ident "z") (id 88))
-		(e-int @6-9-6-11 (num-var 91) (sign-needed "false") (bits-needed "7") (value "30") (id 91)))
+		(p-assign @6-5-6-6 (ident "z") (id 86))
+		(e-int @6-9-6-11 (num-var 88) (value "30") (id 88)))
 	(s-let @9-2-9-12
-		(p-assign @9-2-9-7 (ident "empty") (id 93))
-		(e-tuple @9-10-9-12 (id 94)
+		(p-assign @9-2-9-7 (ident "empty") (id 90))
+		(e-tuple @9-10-9-12 (id 91)
 			(elems)))
 	(s-let @10-2-10-15
-		(p-assign @10-2-10-8 (ident "single") (id 96))
-		(e-tuple @10-11-10-15 (id 100)
+		(p-assign @10-2-10-8 (ident "single") (id 93))
+		(e-tuple @10-11-10-15 (id 96)
 			(elems
-				(e-int @10-12-10-14 (num-var 99) (sign-needed "false") (bits-needed "7") (value "42")))))
+				(e-int @10-12-10-14 (num-var 95) (value "42")))))
 	(s-let @11-2-11-15
-		(p-assign @11-2-11-6 (ident "pair") (id 102))
-		(e-tuple @11-9-11-15 (id 109)
+		(p-assign @11-2-11-6 (ident "pair") (id 98))
+		(e-tuple @11-9-11-15 (id 103)
 			(elems
-				(e-int @11-10-11-11 (num-var 105) (sign-needed "false") (bits-needed "7") (value "1"))
-				(e-int @11-13-11-14 (num-var 108) (sign-needed "false") (bits-needed "7") (value "2")))))
+				(e-int @11-10-11-11 (num-var 100) (value "1"))
+				(e-int @11-13-11-14 (num-var 102) (value "2")))))
 	(s-let @12-2-12-29
-		(p-assign @12-2-12-8 (ident "triple") (id 111))
-		(e-tuple @12-11-12-29 (id 119)
+		(p-assign @12-2-12-8 (ident "triple") (id 105))
+		(e-tuple @12-11-12-29 (id 112)
 			(elems
-				(e-int @12-12-12-13 (num-var 114) (sign-needed "false") (bits-needed "7") (value "1"))
+				(e-int @12-12-12-13 (num-var 107) (value "1"))
 				(e-string @12-15-12-22
 					(e-literal @12-16-12-21 (string "hello")))
 				(e-tag @12-24-12-28 (ext-var 0) (name "True") (args "TODO")))))
 	(s-let @13-2-13-27
-		(p-assign @13-2-13-8 (ident "nested") (id 121))
-		(e-tuple @13-11-13-27 (id 136)
+		(p-assign @13-2-13-8 (ident "nested") (id 114))
+		(e-tuple @13-11-13-27 (id 125)
 			(elems
 				(e-tuple @13-12-13-18
 					(elems
-						(e-int @13-13-13-14 (num-var 124) (sign-needed "false") (bits-needed "7") (value "1"))
-						(e-int @13-16-13-17 (num-var 127) (sign-needed "false") (bits-needed "7") (value "2"))))
+						(e-int @13-13-13-14 (num-var 116) (value "1"))
+						(e-int @13-16-13-17 (num-var 118) (value "2"))))
 				(e-tuple @13-20-13-26
 					(elems
-						(e-int @13-21-13-22 (num-var 131) (sign-needed "false") (bits-needed "7") (value "3"))
-						(e-int @13-24-13-25 (num-var 134) (sign-needed "false") (bits-needed "7") (value "4")))))))
+						(e-int @13-21-13-22 (num-var 121) (value "3"))
+						(e-int @13-24-13-25 (num-var 123) (value "4")))))))
 	(s-let @14-2-14-42
-		(p-assign @14-2-14-7 (ident "mixed") (id 138))
-		(e-tuple @14-10-14-42 (id 157)
+		(p-assign @14-2-14-7 (ident "mixed") (id 127))
+		(e-tuple @14-10-14-42 (id 142)
 			(elems
 				(e-call @14-11-14-21
 					(e-lookup-local @14-11-14-18
 						(pattern (id 72)))
-					(e-int @14-19-14-20 (num-var 142) (sign-needed "false") (bits-needed "7") (value "5")))
+					(e-int @14-19-14-20 (num-var 130) (value "5")))
 				(e-string @14-23-14-30
 					(e-literal @14-24-14-29 (string "world")))
-				(e-list @14-32-14-41 (elem-var 155)
+				(e-list @14-32-14-41 (elem-var 140)
 					(elems
-						(e-int @14-33-14-34 (num-var 148) (sign-needed "false") (bits-needed "7") (value "1"))
-						(e-int @14-36-14-37 (num-var 151) (sign-needed "false") (bits-needed "7") (value "2"))
-						(e-int @14-39-14-40 (num-var 154) (sign-needed "false") (bits-needed "7") (value "3")))))))
+						(e-int @14-33-14-34 (num-var 135) (value "1"))
+						(e-int @14-36-14-37 (num-var 137) (value "2"))
+						(e-int @14-39-14-40 (num-var 139) (value "3")))))))
 	(s-let @15-2-15-23
-		(p-assign @15-2-15-11 (ident "with_vars") (id 159))
-		(e-tuple @15-14-15-23 (id 163)
+		(p-assign @15-2-15-11 (ident "with_vars") (id 144))
+		(e-tuple @15-14-15-23 (id 148)
 			(elems
 				(e-lookup-local @15-15-15-16
 					(pattern (id 78)))
 				(e-lookup-local @15-18-15-19
-					(pattern (id 83)))
+					(pattern (id 82)))
 				(e-lookup-local @15-21-15-22
-					(pattern (id 88))))))
+					(pattern (id 86))))))
 	(s-let @16-2-16-31
-		(p-assign @16-2-16-13 (ident "with_lambda") (id 165))
-		(e-tuple @16-16-16-31 (id 176)
+		(p-assign @16-2-16-13 (ident "with_lambda") (id 150))
+		(e-tuple @16-16-16-31 (id 159)
 			(elems
 				(e-lambda @16-17-16-27
 					(args
-						(p-assign @16-18-16-19 (ident "n") (id 166)))
+						(p-assign @16-18-16-19 (ident "n") (id 151)))
 					(e-binop @16-21-16-27 (op "add")
 						(e-lookup-local @16-21-16-22
-							(pattern (id 166)))
-						(e-int @16-25-16-26 (num-var 170) (sign-needed "false") (bits-needed "7") (value "1"))))
-				(e-int @16-28-16-30 (num-var 175) (sign-needed "false") (bits-needed "7") (value "42")))))
+							(pattern (id 151)))
+						(e-int @16-25-16-26 (num-var 154) (value "1"))))
+				(e-int @16-28-16-30 (num-var 158) (value "42")))))
 	(e-lookup-local @18-2-18-7
-		(pattern (id 93))))
+		(pattern (id 90))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 179) (type "*"))
+(expr (id 162) (type "*"))
 ~~~
