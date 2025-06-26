@@ -8,8 +8,9 @@ type=expr
 { name: "Alice", age: 30, active: Bool.true, scores: [95, 87, 92], balance: 1250.75 }
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize record expression
+**UNDEFINED VARIABLE**
+Nothing is named `true` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
@@ -39,5 +40,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 73) (type "Error"))
+(expr (id 100) (type "*"))
 ~~~

@@ -117,19 +117,6 @@ Only definitions, type annotations, and imports are allowed at the top level.
 The statement **expr** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**type_alias_decl.md:33:5:33:11:**
-```roc
-    person = { name: "Alice", age: 30 }
-```
-
-It is of type:
-    _Person_
-
-But you are trying to use it as:
-    _Error_
-
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),Newline(1:1-1:1),
@@ -413,10 +400,10 @@ userId
 (inferred-types
 	(defs
 		(def (name "main!") (type "*"))
-		(def (name "person") (type "*"))
+		(def (name "person") (type "Person"))
 		(def (name "color") (type "[Red, * *]")))
 	(expressions
 		(expr @27-9-30-13 (type "*"))
-		(expr @33-14-33-40 (type "*"))
+		(expr @33-14-33-40 (type "Person"))
 		(expr @36-13-36-16 (type "[Red, * *]"))))
 ~~~

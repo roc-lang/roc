@@ -22,9 +22,7 @@ type=expr
 }
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize record expression
-
+NIL
 # TOKENS
 ~~~zig
 OpenCurly(1:1-1:2),Newline(1:1-1:1),
@@ -143,5 +141,5 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 73) (type "Error"))
+(expr (id 189) (type "*"))
 ~~~

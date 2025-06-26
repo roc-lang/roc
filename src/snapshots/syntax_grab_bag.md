@@ -470,19 +470,6 @@ The unused variable is declared here:
 **NOT IMPLEMENTED**
 This feature is not yet implemented: top-level expect
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**syntax_grab_bag.md:199:1:199:6:**
-```roc
-empty = {}
-```
-
-It is of type:
-    _{}_
-
-But you are trying to use it as:
-    _Error_
-
 # TOKENS
 ~~~zig
 Newline(1:2-1:28),
