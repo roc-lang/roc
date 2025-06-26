@@ -17,6 +17,8 @@ package # Comment after keyword
 ~~~
 # PROBLEMS
 NIL
+
+~~~
 # TOKENS
 ~~~zig
 KwPackage(1:1-1:8),Newline(1:10-1:32),
