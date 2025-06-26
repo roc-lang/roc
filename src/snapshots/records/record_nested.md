@@ -90,10 +90,10 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-record @1-1-12-2 (record-var 122) (ext-var 0) (id 124)
+(e-record @1-1-12-2 (ext-var 128) (id 129)
 	(fields
 		(field (name "person")
-			(e-record @2-13-2-39 (record-var 79) (ext-var 0)
+			(e-record @2-13-2-39 (ext-var 79)
 				(fields
 					(field (name "name")
 						(e-string @2-21-2-28
@@ -101,7 +101,7 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 					(field (name "age")
 						(e-int @2-35-2-37 (num-var 77) (sign-needed "false") (bits-needed "7") (value "30"))))))
 		(field (name "address")
-			(e-record @3-14-7-6 (record-var 101) (ext-var 0)
+			(e-record @3-14-7-6 (ext-var 103)
 				(fields
 					(field (name "street")
 						(e-string @4-17-4-30
@@ -110,20 +110,20 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 						(e-string @5-15-5-28
 							(e-literal @5-16-5-27 (string "Springfield"))))
 					(field (name "coordinates")
-						(e-record @6-22-6-53 (record-var 97) (ext-var 0)
+						(e-record @6-22-6-53 (ext-var 98)
 							(fields
 								(field (name "lat")
-									(e-frac-dec @6-29-6-36 (frac-var 91) (fits-in-f32 "true") (fits-in-dec "true") (value "42.1234")))
+									(e-frac-dec @6-29-6-36 (frac-var 92) (fits-in-f32 "true") (fits-in-dec "true") (value "42.1234")))
 								(field (name "lng")
-									(e-frac-dec @6-43-6-51 (frac-var 95) (fits-in-f32 "true") (fits-in-dec "true") (value "-71.5678")))))))))
+									(e-frac-dec @6-43-6-51 (frac-var 96) (fits-in-f32 "true") (fits-in-dec "true") (value "-71.5678")))))))))
 		(field (name "contact")
-			(e-record @8-14-11-6 (record-var 118) (ext-var 0)
+			(e-record @8-14-11-6 (ext-var 123)
 				(fields
 					(field (name "email")
 						(e-string @9-16-9-35
 							(e-literal @9-17-9-34 (string "alice@example.com"))))
 					(field (name "phone")
-						(e-record @10-16-10-54 (record-var 114) (ext-var 0)
+						(e-record @10-16-10-54 (ext-var 118)
 							(fields
 								(field (name "home")
 									(e-string @10-24-10-34
@@ -134,5 +134,5 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 124) (type "*"))
+(expr (id 129) (type "{ person: { name: Str, age: Num(Int(*)) }, address: { street: Str, city: Str, coordinates: { lat: Num(Fraction(*)), lng: Num(Fraction(*)) } }, contact: { email: Str, phone: { home: Str, work: Str } } }"))
 ~~~

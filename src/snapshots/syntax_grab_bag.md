@@ -365,6 +365,10 @@ This feature is not yet implemented: canonicalize dbg expression
 This feature is not yet implemented: statement type in block
 
 **UNDEFINED VARIABLE**
+Nothing is named `punned` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNDEFINED VARIABLE**
 Nothing is named `nested` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
@@ -1266,9 +1270,9 @@ NO CHANGE
 				(p-assign @81-2-81-3 (ident "a") (id 230))
 				(p-assign @82-2-82-3 (ident "b") (id 231)))
 			(e-runtime-error (tag "not_implemented"))))
-	(d-let (id 478)
+	(d-let (id 485)
 		(p-assign @144-1-144-6 (ident "main!") (id 246))
-		(e-lambda @144-9-196-2 (id 472)
+		(e-lambda @144-9-196-2 (id 479)
 			(args
 				(p-underscore @144-10-144-11 (id 247)))
 			(e-block @144-13-196-2
@@ -1318,7 +1322,7 @@ NO CHANGE
 							(e-int @172-3-172-6 (num-var 303) (sign-needed "false") (bits-needed "9_to_15") (value "789")))))
 				(s-let @178-2-178-71
 					(p-assign @178-2-178-8 (ident "record") (id 309))
-					(e-record @178-11-178-71 (record-var 324) (ext-var 0) (id 326)
+					(e-record @178-11-178-71 (ext-var 327) (id 328)
 						(fields
 							(field (name "foo")
 								(e-int @178-18-178-21 (num-var 312) (sign-needed "false") (bits-needed "7") (value "123")))
@@ -1332,12 +1336,14 @@ NO CHANGE
 								(e-call @178-52-178-61
 									(e-tag @178-52-178-54 (ext-var 0) (name "Ok") (args "TODO"))
 									(e-lookup-local @178-55-178-60
-										(pattern (id 248))))))))
+										(pattern (id 248)))))
+							(field (name "punned")
+								(e-runtime-error (tag "ident_not_in_scope"))))))
 				(s-let @179-2-179-68
-					(p-assign @179-2-179-7 (ident "tuple") (id 328))
-					(e-tuple @179-10-179-68 (tuple-var 355) (id 356)
+					(p-assign @179-2-179-7 (ident "tuple") (id 335))
+					(e-tuple @179-10-179-68 (tuple-var 362) (id 363)
 						(elems
-							(e-int @179-11-179-14 (num-var 331) (sign-needed "false") (bits-needed "7") (value "123"))
+							(e-int @179-11-179-14 (num-var 338) (sign-needed "false") (bits-needed "7") (value "123"))
 							(e-string @179-16-179-23
 								(e-literal @179-17-179-22 (string "World")))
 							(e-lookup-local @179-25-179-28
@@ -1346,21 +1352,21 @@ NO CHANGE
 								(e-tag @179-30-179-32 (ext-var 0) (name "Ok") (args "TODO"))
 								(e-lookup-local @179-33-179-38
 									(pattern (id 248))))
-							(e-tuple @179-41-179-56 (tuple-var 342)
+							(e-tuple @179-41-179-56 (tuple-var 349)
 								(elems
 									(e-runtime-error (tag "ident_not_in_scope"))
 									(e-lookup-local @179-50-179-55
-										(pattern (id 328)))))
-							(e-list @179-58-179-67 (elem-var 353)
+										(pattern (id 335)))))
+							(e-list @179-58-179-67 (elem-var 360)
 								(elems
-									(e-int @179-59-179-60 (num-var 346) (sign-needed "false") (bits-needed "7") (value "1"))
-									(e-int @179-62-179-63 (num-var 349) (sign-needed "false") (bits-needed "7") (value "2"))
-									(e-int @179-65-179-66 (num-var 352) (sign-needed "false") (bits-needed "7") (value "3")))))))
+									(e-int @179-59-179-60 (num-var 353) (sign-needed "false") (bits-needed "7") (value "1"))
+									(e-int @179-62-179-63 (num-var 356) (sign-needed "false") (bits-needed "7") (value "2"))
+									(e-int @179-65-179-66 (num-var 359) (sign-needed "false") (bits-needed "7") (value "3")))))))
 				(s-let @180-2-187-3
-					(p-assign @180-2-180-17 (ident "multiline_tuple") (id 358))
-					(e-tuple @180-20-187-3 (tuple-var 386) (id 387)
+					(p-assign @180-2-180-17 (ident "multiline_tuple") (id 365))
+					(e-tuple @180-20-187-3 (tuple-var 393) (id 394)
 						(elems
-							(e-int @181-3-181-6 (num-var 361) (sign-needed "false") (bits-needed "7") (value "123"))
+							(e-int @181-3-181-6 (num-var 368) (sign-needed "false") (bits-needed "7") (value "123"))
 							(e-string @182-3-182-10
 								(e-literal @182-4-182-9 (string "World")))
 							(e-runtime-error (tag "ident_not_in_scope"))
@@ -1368,48 +1374,48 @@ NO CHANGE
 								(e-tag @184-3-184-5 (ext-var 0) (name "Ok") (args "TODO"))
 								(e-lookup-local @184-6-184-11
 									(pattern (id 248))))
-							(e-tuple @185-3-185-18 (tuple-var 373)
+							(e-tuple @185-3-185-18 (tuple-var 380)
 								(elems
 									(e-runtime-error (tag "ident_not_in_scope"))
 									(e-lookup-local @185-12-185-17
-										(pattern (id 328)))))
-							(e-list @186-3-186-12 (elem-var 384)
+										(pattern (id 335)))))
+							(e-list @186-3-186-12 (elem-var 391)
 								(elems
-									(e-int @186-4-186-5 (num-var 377) (sign-needed "false") (bits-needed "7") (value "1"))
-									(e-int @186-7-186-8 (num-var 380) (sign-needed "false") (bits-needed "7") (value "2"))
-									(e-int @186-10-186-11 (num-var 383) (sign-needed "false") (bits-needed "7") (value "3")))))))
+									(e-int @186-4-186-5 (num-var 384) (sign-needed "false") (bits-needed "7") (value "1"))
+									(e-int @186-7-186-8 (num-var 387) (sign-needed "false") (bits-needed "7") (value "2"))
+									(e-int @186-10-186-11 (num-var 390) (sign-needed "false") (bits-needed "7") (value "3")))))))
 				(s-let @188-2-189-23
-					(p-assign @188-2-188-15 (ident "bin_op_result") (id 389))
-					(e-binop @188-18-189-23 (op "or") (id 442)
+					(p-assign @188-2-188-15 (ident "bin_op_result") (id 396))
+					(e-binop @188-18-189-23 (op "or") (id 449)
 						(e-binop @188-18-188-74 (op "or")
 							(e-binop @188-18-188-43 (op "gt")
 								(e-binop @188-18-188-34 (op "null_coalesce")
 									(e-call @188-18-188-26
 										(e-tag @188-18-188-21 (ext-var 0) (name "Err") (args "TODO"))
 										(e-runtime-error (tag "ident_not_in_scope")))
-									(e-int @188-30-188-32 (num-var 397) (sign-needed "false") (bits-needed "7") (value "12")))
+									(e-int @188-30-188-32 (num-var 404) (sign-needed "false") (bits-needed "7") (value "12")))
 								(e-binop @188-35-188-43 (op "mul")
-									(e-int @188-35-188-36 (num-var 401) (sign-needed "false") (bits-needed "7") (value "5"))
-									(e-int @188-39-188-40 (num-var 404) (sign-needed "false") (bits-needed "7") (value "5"))))
+									(e-int @188-35-188-36 (num-var 408) (sign-needed "false") (bits-needed "7") (value "5"))
+									(e-int @188-39-188-40 (num-var 411) (sign-needed "false") (bits-needed "7") (value "5"))))
 							(e-binop @188-44-188-74 (op "and")
 								(e-binop @188-44-188-58 (op "lt")
 									(e-binop @188-44-188-52 (op "add")
-										(e-int @188-44-188-46 (num-var 409) (sign-needed "false") (bits-needed "7") (value "13"))
-										(e-int @188-49-188-50 (num-var 412) (sign-needed "false") (bits-needed "7") (value "2")))
-									(e-int @188-53-188-54 (num-var 416) (sign-needed "false") (bits-needed "7") (value "5")))
+										(e-int @188-44-188-46 (num-var 416) (sign-needed "false") (bits-needed "7") (value "13"))
+										(e-int @188-49-188-50 (num-var 419) (sign-needed "false") (bits-needed "7") (value "2")))
+									(e-int @188-53-188-54 (num-var 423) (sign-needed "false") (bits-needed "7") (value "5")))
 								(e-binop @188-59-188-74 (op "ge")
 									(e-binop @188-59-188-68 (op "sub")
-										(e-int @188-59-188-61 (num-var 420) (sign-needed "false") (bits-needed "7") (value "10"))
-										(e-int @188-64-188-65 (num-var 423) (sign-needed "false") (bits-needed "7") (value "1")))
-									(e-int @188-69-188-71 (num-var 427) (sign-needed "false") (bits-needed "7") (value "16")))))
+										(e-int @188-59-188-61 (num-var 427) (sign-needed "false") (bits-needed "7") (value "10"))
+										(e-int @188-64-188-65 (num-var 430) (sign-needed "false") (bits-needed "7") (value "1")))
+									(e-int @188-69-188-71 (num-var 434) (sign-needed "false") (bits-needed "7") (value "16")))))
 						(e-binop @188-75-189-23 (op "le")
-							(e-int @188-75-188-77 (num-var 433) (sign-needed "false") (bits-needed "7") (value "12"))
+							(e-int @188-75-188-77 (num-var 440) (sign-needed "false") (bits-needed "7") (value "12"))
 							(e-binop @188-81-189-23 (op "div")
-								(e-int @188-81-188-82 (num-var 436) (sign-needed "false") (bits-needed "7") (value "3"))
-								(e-int @188-85-188-86 (num-var 439) (sign-needed "false") (bits-needed "7") (value "5"))))))
+								(e-int @188-81-188-82 (num-var 443) (sign-needed "false") (bits-needed "7") (value "3"))
+								(e-int @188-85-188-86 (num-var 446) (sign-needed "false") (bits-needed "7") (value "5"))))))
 				(s-let @189-2-190-8
-					(p-assign @189-2-189-23 (ident "static_dispatch_style") (id 444))
-					(e-dot-access @189-26-190-8 (field "unknown") (id 449)
+					(p-assign @189-2-189-23 (ident "static_dispatch_style") (id 451))
+					(e-dot-access @189-26-190-8 (field "unknown") (id 456)
 						(receiver
 							(e-dot-access @189-26-189-110 (field "unknown")
 								(receiver
@@ -1420,7 +1426,7 @@ NO CHANGE
 					(e-runtime-error (tag "not_implemented")))
 				(e-call @191-2-195-3
 					(e-lookup-external
-						(ext-decl @191-2-191-14 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value") (type-var 454)))
+						(ext-decl @191-2-191-14 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value") (type-var 461)))
 					(e-string @192-3-194-18
 						(e-literal @192-4-192-14 (string "How about "))
 						(e-call @193-4-193-21
@@ -1428,7 +1434,7 @@ NO CHANGE
 							(e-lookup-local @193-14-193-20
 								(pattern (id 255))))
 						(e-literal @194-4-194-17 (string " as a string?"))))))
-		(annotation @144-1-144-6 (signature 476) (id 477)
+		(annotation @144-1-144-6 (signature 483) (id 484)
 			(declared-type
 				(ty-fn @143-9-143-38 (effectful false)
 					(ty-apply @143-9-143-21 (symbol "List")
@@ -1436,10 +1442,10 @@ NO CHANGE
 					(ty-apply @143-25-143-38 (symbol "Result")
 						(ty-record @143-32-143-34)
 						(ty-underscore @143-36-143-37))))))
-	(d-let (id 485)
-		(p-assign @199-1-199-6 (ident "empty") (id 480))
-		(e-empty_record @199-9-199-11 (id 481))
-		(annotation @199-1-199-6 (signature 483) (id 484)
+	(d-let (id 492)
+		(p-assign @199-1-199-6 (ident "empty") (id 487))
+		(e-empty_record @199-9-199-11 (id 488))
+		(annotation @199-1-199-6 (signature 490) (id 491)
 			(declared-type
 				(ty-record @198-9-198-11))))
 	(s-type-decl @22-1-23-6 (id 84)

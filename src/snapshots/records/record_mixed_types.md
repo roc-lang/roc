@@ -40,7 +40,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-record @1-1-1-86 (record-var 98) (ext-var 0) (id 100)
+(e-record @1-1-1-86 (ext-var 98) (id 99)
 	(fields
 		(field (name "name")
 			(e-string @1-9-1-16
@@ -60,5 +60,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 100) (type "*"))
+(expr (id 99) (type "{ name: Str, age: Num(Int(*)), active: Error, scores: List(Num(Int(*))), balance: Num(Fraction(*)) }"))
 ~~~

@@ -24,39 +24,7 @@ main! = |_| {
 }
 ~~~
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable ``name`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_name` to suppress this warning.
-The unused variable is declared here:
-**type_multiple_aliases.md:9:19:9:23:**
-```roc
-createUser = |id, name, age| { id, name, age }
-```
-
-
-**UNUSED VARIABLE**
-Variable ``age`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_age` to suppress this warning.
-The unused variable is declared here:
-**type_multiple_aliases.md:9:25:9:28:**
-```roc
-createUser = |id, name, age| { id, name, age }
-```
-
-
-**UNUSED VARIABLE**
-Variable ``id`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_id` to suppress this warning.
-The unused variable is declared here:
-**type_multiple_aliases.md:9:15:9:17:**
-```roc
-createUser = |id, name, age| { id, name, age }
-```
-
-
+NIL
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),Newline(1:1-1:1),
@@ -184,56 +152,65 @@ main! = |_| {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 113)
+	(d-let (id 118)
 		(p-assign @9-1-9-11 (ident "createUser") (id 95))
-		(e-lambda @9-14-9-47 (id 102)
+		(e-lambda @9-14-9-47 (id 110)
 			(args
 				(p-assign @9-15-9-17 (ident "id") (id 96))
 				(p-assign @9-19-9-23 (ident "name") (id 97))
 				(p-assign @9-25-9-28 (ident "age") (id 98)))
-			(e-record @9-30-9-47 (record-var 0) (ext-var 0)
-				(fields)))
-		(annotation @9-1-9-11 (signature 111) (id 112)
+			(e-record @9-30-9-47 (ext-var 105)
+				(fields
+					(field (name "id")
+						(e-lookup-local @9-32-9-35
+							(pattern (id 96))))
+					(field (name "name")
+						(e-lookup-local @9-36-9-41
+							(pattern (id 97))))
+					(field (name "age")
+						(e-lookup-local @9-42-9-47
+							(pattern (id 98)))))))
+		(annotation @9-1-9-11 (signature 116) (id 117)
 			(declared-type
 				(ty-fn @8-14-8-47 (effectful false)
 					(ty @8-14-8-20 (name "UserId"))
 					(ty @8-22-8-30 (name "UserName"))
 					(ty @8-32-8-39 (name "UserAge"))
 					(ty @8-43-8-47 (name "User"))))))
-	(d-let (id 127)
-		(p-assign @12-1-12-12 (ident "getUserName") (id 117))
-		(e-lambda @12-15-14-6 (id 121)
+	(d-let (id 132)
+		(p-assign @12-1-12-12 (ident "getUserName") (id 122))
+		(e-lambda @12-15-14-6 (id 126)
 			(args
-				(p-assign @12-16-12-20 (ident "user") (id 118)))
+				(p-assign @12-16-12-20 (ident "user") (id 123)))
 			(e-dot-access @12-22-14-6 (field "name")
 				(receiver
 					(e-lookup-local @12-22-12-26
-						(pattern (id 118))))))
-		(annotation @12-1-12-12 (signature 125) (id 126)
+						(pattern (id 123))))))
+		(annotation @12-1-12-12 (signature 130) (id 131)
 			(declared-type
 				(ty-fn @11-15-11-31 (effectful false)
 					(ty @11-15-11-19 (name "User"))
 					(ty @11-23-11-31 (name "UserName"))))))
-	(d-let (id 147)
-		(p-assign @14-1-14-6 (ident "main!") (id 128))
-		(e-lambda @14-9-17-2 (id 146)
+	(d-let (id 152)
+		(p-assign @14-1-14-6 (ident "main!") (id 133))
+		(e-lambda @14-9-17-2 (id 151)
 			(args
-				(p-underscore @14-10-14-11 (id 129)))
+				(p-underscore @14-10-14-11 (id 134)))
 			(e-block @14-13-17-2
 				(s-let @15-5-15-40
-					(p-assign @15-5-15-9 (ident "user") (id 130))
-					(e-call @15-12-15-40 (id 140)
+					(p-assign @15-5-15-9 (ident "user") (id 135))
+					(e-call @15-12-15-40 (id 145)
 						(e-lookup-local @15-12-15-22
 							(pattern (id 95)))
-						(e-int @15-23-15-26 (num-var 134) (sign-needed "false") (bits-needed "7") (value "123"))
+						(e-int @15-23-15-26 (num-var 139) (sign-needed "false") (bits-needed "7") (value "123"))
 						(e-string @15-28-15-35
 							(e-literal @15-29-15-34 (string "Alice")))
-						(e-int @15-37-15-39 (num-var 139) (sign-needed "false") (bits-needed "7") (value "25"))))
+						(e-int @15-37-15-39 (num-var 144) (sign-needed "false") (bits-needed "7") (value "25"))))
 				(e-call @16-5-16-22
 					(e-lookup-local @16-5-16-16
-						(pattern (id 117)))
+						(pattern (id 122)))
 					(e-lookup-local @16-17-16-21
-						(pattern (id 130)))))))
+						(pattern (id 135)))))))
 	(s-type-decl @3-1-4-9 (id 74)
 		(ty-header @3-1-3-7 (name "UserId"))
 		(ty @3-10-3-13 (name "U64")))

@@ -317,22 +317,22 @@ userId
 			(args
 				(p-underscore @27-10-27-11 (id 129)))
 			(e-runtime-error (tag "lambda_body_not_canonicalized"))))
-	(d-let (id 151)
+	(d-let (id 152)
 		(p-assign @33-5-33-11 (ident "person") (id 137))
-		(e-record @33-14-33-40 (record-var 145) (ext-var 0) (id 147)
+		(e-record @33-14-33-40 (ext-var 145) (id 146)
 			(fields
 				(field (name "name")
 					(e-string @33-22-33-29
 						(e-literal @33-23-33-28 (string "Alice"))))
 				(field (name "age")
 					(e-int @33-36-33-38 (num-var 143) (sign-needed "false") (bits-needed "7") (value "30")))))
-		(annotation @33-5-33-11 (signature 149) (id 150)
+		(annotation @33-5-33-11 (signature 150) (id 151)
 			(declared-type
 				(ty @32-14-32-20 (name "Person")))))
-	(d-let (id 159)
-		(p-assign @36-5-36-10 (ident "color") (id 153))
-		(e-tag @36-13-36-16 (ext-var 0) (name "Red") (args "TODO") (id 155))
-		(annotation @36-5-36-10 (signature 157) (id 158)
+	(d-let (id 160)
+		(p-assign @36-5-36-10 (ident "color") (id 154))
+		(e-tag @36-13-36-16 (ext-var 0) (name "Red") (args "TODO") (id 156))
+		(annotation @36-5-36-10 (signature 158) (id 159)
 			(declared-type
 				(ty @35-13-35-18 (name "Color")))))
 	(s-type-decl @4-1-7-7 (id 74)
@@ -400,10 +400,10 @@ userId
 (inferred-types
 	(defs
 		(def (name "main!") (type "*"))
-		(def (name "person") (type "Person"))
+		(def (name "person") (type "{ name: Str, age: Num(Int(*)), * * }"))
 		(def (name "color") (type "[Red, * *]")))
 	(expressions
 		(expr @27-9-30-13 (type "*"))
-		(expr @33-14-33-40 (type "Person"))
+		(expr @33-14-33-40 (type "{ name: Str, age: Num(Int(*)), * * }"))
 		(expr @36-13-36-16 (type "[Red, * *]"))))
 ~~~

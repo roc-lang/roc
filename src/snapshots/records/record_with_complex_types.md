@@ -141,7 +141,7 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-record @1-1-15-2 (record-var 187) (ext-var 0) (id 189)
+(e-record @1-1-15-2 (ext-var 191) (id 192)
 	(fields
 		(field (name "name")
 			(e-string @2-11-2-18
@@ -156,13 +156,13 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 		(field (name "status")
 			(e-call @4-13-4-44
 				(e-tag @4-13-4-19 (ext-var 0) (name "Active") (args "TODO"))
-				(e-record @4-20-4-43 (record-var 95) (ext-var 0)
+				(e-record @4-20-4-43 (ext-var 95)
 					(fields
 						(field (name "since")
 							(e-string @4-29-4-41
 								(e-literal @4-30-4-40 (string "2023-01-15"))))))))
 		(field (name "preferences")
-			(e-record @5-18-5-76 (record-var 109) (ext-var 0)
+			(e-record @5-18-5-76 (ext-var 109)
 				(fields
 					(field (name "theme")
 						(e-tag @5-27-5-31 (ext-var 0) (name "Dark") (args "TODO")))
@@ -174,10 +174,10 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 		(field (name "metadata")
 			(e-call @6-15-9-7
 				(e-tag @6-15-6-17 (ext-var 0) (name "Ok") (args "TODO"))
-				(e-record @6-18-9-6 (record-var 133) (ext-var 0)
+				(e-record @6-18-9-6 (ext-var 134)
 					(fields
 						(field (name "tags")
-							(e-list @7-15-7-51 (elem-var 121)
+							(e-list @7-15-7-51 (elem-var 122)
 								(elems
 									(e-string @7-16-7-27
 										(e-literal @7-17-7-26 (string "developer")))
@@ -186,7 +186,7 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 									(e-string @7-39-7-50
 										(e-literal @7-40-7-49 (string "fullstack"))))))
 						(field (name "permissions")
-							(e-list @8-22-8-42 (elem-var 130)
+							(e-list @8-22-8-42 (elem-var 131)
 								(elems
 									(e-tag @8-23-8-27 (ext-var 0) (name "Read") (args "TODO"))
 									(e-tag @8-29-8-34 (ext-var 0) (name "Write") (args "TODO"))
@@ -194,16 +194,16 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 		(field (name "callback")
 			(e-lambda @10-15-10-25
 				(args
-					(p-assign @10-16-10-17 (ident "x") (id 138)))
+					(p-assign @10-16-10-17 (ident "x") (id 140)))
 				(e-binop @10-19-10-25 (op "add")
 					(e-lookup-local @10-19-10-20
-						(pattern (id 138)))
-					(e-int @10-23-10-24 (num-var 142) (sign-needed "false") (bits-needed "7") (value "1")))))
+						(pattern (id 140)))
+					(e-int @10-23-10-24 (num-var 144) (sign-needed "false") (bits-needed "7") (value "1")))))
 		(field (name "nested")
-			(e-record @11-13-14-6 (record-var 183) (ext-var 0)
+			(e-record @11-13-14-6 (ext-var 186)
 				(fields
 					(field (name "items")
-						(e-list @12-16-12-52 (elem-var 158)
+						(e-list @12-16-12-52 (elem-var 160)
 							(elems
 								(e-call @12-17-12-30
 									(e-tag @12-17-12-21 (ext-var 0) (name "Some") (args "TODO"))
@@ -217,19 +217,19 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 					(field (name "result")
 						(e-call @13-17-13-70
 							(e-tag @13-17-13-24 (ext-var 0) (name "Success") (args "TODO"))
-							(e-record @13-25-13-69 (record-var 178) (ext-var 0)
+							(e-record @13-25-13-69 (ext-var 180)
 								(fields
 									(field (name "data")
-										(e-list @13-33-13-42 (elem-var 172)
+										(e-list @13-33-13-42 (elem-var 174)
 											(elems
-												(e-int @13-34-13-35 (num-var 165) (sign-needed "false") (bits-needed "7") (value "1"))
-												(e-int @13-37-13-38 (num-var 168) (sign-needed "false") (bits-needed "7") (value "2"))
-												(e-int @13-40-13-41 (num-var 171) (sign-needed "false") (bits-needed "7") (value "3")))))
+												(e-int @13-34-13-35 (num-var 167) (sign-needed "false") (bits-needed "7") (value "1"))
+												(e-int @13-37-13-38 (num-var 170) (sign-needed "false") (bits-needed "7") (value "2"))
+												(e-int @13-40-13-41 (num-var 173) (sign-needed "false") (bits-needed "7") (value "3")))))
 									(field (name "timestamp")
 										(e-string @13-55-13-67
 											(e-literal @13-56-13-66 (string "2024-01-01")))))))))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 189) (type "*"))
+(expr (id 192) (type "{ name: Str, scores: List(Num(Int(*))), status: *, preferences: { theme: [Dark, * *], notifications: * }, metadata: *, callback: *, nested: { items: List([None, * *]), result: * } }"))
 ~~~

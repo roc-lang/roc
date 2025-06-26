@@ -69,7 +69,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-record @1-1-1-77 (record-var 84) (ext-var 0) (id 86)
+(e-record @1-1-1-77 (ext-var 84) (id 85)
 	(fields
 		(field (name "name")
 			(e-string @1-9-1-16
@@ -82,5 +82,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 86) (type "*"))
+(expr (id 85) (type "{ name: Str, age: Num(Int(*)), email: Str }"))
 ~~~

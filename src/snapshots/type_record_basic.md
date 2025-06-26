@@ -94,15 +94,15 @@ main! = |_| getName({ name: "luke", age: 21 })
 						(field (field "age")
 							(ty @3-29-3-32 (name "U64"))))
 					(ty @3-38-3-41 (name "Str"))))))
-	(d-let (id 105)
+	(d-let (id 106)
 		(p-assign @6-1-6-6 (ident "main!") (id 90))
-		(e-lambda @6-9-6-44 (id 104)
+		(e-lambda @6-9-6-44 (id 105)
 			(args
 				(p-underscore @6-10-6-11 (id 91)))
 			(e-call @6-13-6-44
 				(e-lookup-local @6-13-6-20
 					(pattern (id 79)))
-				(e-record @6-21-6-43 (record-var 100) (ext-var 0)
+				(e-record @6-21-6-43 (ext-var 100)
 					(fields
 						(field (name "name")
 							(e-string @6-28-6-34

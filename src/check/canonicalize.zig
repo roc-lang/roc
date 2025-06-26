@@ -779,10 +779,20 @@ fn canonicalize_record_field(
     };
 
     // Canonicalize the field value
-    const value = if (field.value) |v| self.canonicalize_expr(v) orelse {
-        return null;
-    } else {
-        return null;
+    const value = if (field.value) |v|
+        self.canonicalize_expr(v) orelse return null
+    else blk: {
+        // Shorthand syntax: create implicit identifier expression
+        // For { name, age }, this creates an implicit identifier lookup for "name" etc.
+        const ident_expr = AST.Expr{
+            .ident = .{
+                .token = field.name,
+                .qualifier = null,
+                .region = field.region,
+            },
+        };
+        const ident_expr_idx = self.parse_ir.store.addExpr(ident_expr);
+        break :blk self.canonicalize_expr(ident_expr_idx) orelse return null;
     };
 
     // Create the CIR record field
