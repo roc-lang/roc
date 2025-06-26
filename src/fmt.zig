@@ -1104,6 +1104,11 @@ const Formatter = struct {
                     i += 1;
                 }
             },
+            .as => |a| {
+                _ = try fmt.formatPattern(a.pattern);
+                try fmt.pushAll(" as ");
+                try fmt.pushTokenText(a.name);
+            },
             .malformed => {
                 // Output nothing for malformed node
             },

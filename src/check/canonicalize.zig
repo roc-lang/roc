@@ -1369,9 +1369,20 @@ pub fn canonicalize_expr(
                 .OpPlus => .add,
                 .OpBinaryMinus => .sub,
                 .OpStar => .mul,
+                .OpSlash => .div,
+                .OpPercent => .rem,
                 .OpLessThan => .lt,
                 .OpGreaterThan => .gt,
+                .OpLessThanOrEq => .le,
+                .OpGreaterThanOrEq => .ge,
                 .OpEquals => .eq,
+                .OpNotEquals => .ne,
+                .OpCaret => .pow,
+                .OpDoubleSlash => .div_trunc,
+                .OpAnd => .@"and",
+                .OpOr => .@"or",
+                .OpPizza => .pipe_forward,
+                .OpDoubleQuestion => .null_coalesce,
                 else => {
                     // Unknown operator
                     const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "binop");
@@ -1916,6 +1927,14 @@ fn canonicalize_pattern(
             return pattern_idx;
         },
         .alternatives => |_| {
+            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize alternatives pattern");
+            const pattern_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .not_implemented = .{
+                .feature = feature,
+                .region = Region.zero(),
+            } });
+            return pattern_idx;
+        },
+        .as => |_| {
             const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize alternatives pattern");
             const pattern_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .not_implemented = .{
                 .feature = feature,

@@ -4,6 +4,7 @@ const testing = std.testing;
 test {
     testing.refAllDeclsRecursive(@import("main.zig"));
     testing.refAllDeclsRecursive(@import("builtins/main.zig"));
+    testing.refAllDeclsRecursive(@import("cache.zig"));
 
     // TODO: Remove after hooking up
     testing.refAllDeclsRecursive(@import("reporting.zig"));

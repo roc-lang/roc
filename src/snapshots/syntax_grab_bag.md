@@ -384,27 +384,6 @@ Nothing is named `foo` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: binop
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: binop
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: binop
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: binop
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: binop
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: binop
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: binop
-
-**NOT IMPLEMENTED**
 This feature is not yet implemented: canonicalize suffix_single_question expression
 
 **NOT IMPLEMENTED**
@@ -1309,9 +1288,9 @@ NO CHANGE
 				(p-assign @81-2-81-3 (ident "a") (id 226))
 				(p-assign @82-2-82-3 (ident "b") (id 227)))
 			(e-runtime-error (tag "not_implemented"))))
-	(d-let (id 443)
+	(d-let (id 436)
 		(p-assign @144-1-144-6 (ident "main!") (id 242))
-		(e-lambda @144-9-196-2 (id 437)
+		(e-lambda @144-9-196-2 (id 430)
 			(args
 				(p-underscore @144-10-144-11 (id 243)))
 			(e-block @144-13-196-2
@@ -1409,10 +1388,36 @@ NO CHANGE
 									(e-int @186-10-186-11 (num-var 353) (value "3")))))))
 				(s-let @188-2-189-23
 					(p-assign @188-2-188-15 (ident "bin_op_result") (id 359))
-					(e-runtime-error (tag "not_implemented") (id 407)))
+					(e-binop @188-18-189-23 (op "or") (id 400)
+						(e-binop @188-18-188-74 (op "or")
+							(e-binop @188-18-188-43 (op "gt")
+								(e-binop @188-18-188-34 (op "null_coalesce")
+									(e-call @188-18-188-26
+										(e-tag @188-18-188-21 (ext-var 0) (name "Err") (args "TODO"))
+										(e-runtime-error (tag "ident_not_in_scope")))
+									(e-int @188-30-188-32 (num-var 366) (value "12")))
+								(e-binop @188-35-188-43 (op "mul")
+									(e-int @188-35-188-36 (num-var 369) (value "5"))
+									(e-int @188-39-188-40 (num-var 371) (value "5"))))
+							(e-binop @188-44-188-74 (op "and")
+								(e-binop @188-44-188-58 (op "lt")
+									(e-binop @188-44-188-52 (op "add")
+										(e-int @188-44-188-46 (num-var 375) (value "13"))
+										(e-int @188-49-188-50 (num-var 377) (value "2")))
+									(e-int @188-53-188-54 (num-var 380) (value "5")))
+								(e-binop @188-59-188-74 (op "ge")
+									(e-binop @188-59-188-68 (op "sub")
+										(e-int @188-59-188-61 (num-var 383) (value "10"))
+										(e-int @188-64-188-65 (num-var 385) (value "1")))
+									(e-int @188-69-188-71 (num-var 388) (value "16")))))
+						(e-binop @188-75-189-23 (op "le")
+							(e-int @188-75-188-77 (num-var 393) (value "12"))
+							(e-binop @188-81-189-23 (op "div")
+								(e-int @188-81-188-82 (num-var 395) (value "3"))
+								(e-int @188-85-188-86 (num-var 397) (value "5"))))))
 				(s-let @189-2-190-8
-					(p-assign @189-2-189-23 (ident "static_dispatch_style") (id 409))
-					(e-dot-access @189-26-190-8 (field "unknown") (id 414)
+					(p-assign @189-2-189-23 (ident "static_dispatch_style") (id 402))
+					(e-dot-access @189-26-190-8 (field "unknown") (id 407)
 						(receiver
 							(e-dot-access @189-26-189-110 (field "unknown")
 								(receiver
@@ -1423,7 +1428,7 @@ NO CHANGE
 					(e-runtime-error (tag "not_implemented")))
 				(e-call @191-2-195-3
 					(e-lookup-external
-						(ext-decl @191-2-191-14 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value") (type-var 419)))
+						(ext-decl @191-2-191-14 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value") (type-var 412)))
 					(e-string @192-3-194-18
 						(e-literal @192-4-192-14 (string "How about "))
 						(e-call @193-4-193-21
@@ -1431,7 +1436,7 @@ NO CHANGE
 							(e-lookup-local @193-14-193-20
 								(pattern (id 250))))
 						(e-literal @194-4-194-17 (string " as a string?"))))))
-		(annotation @144-1-144-6 (signature 441) (id 442)
+		(annotation @144-1-144-6 (signature 434) (id 435)
 			(declared-type
 				(ty-fn @143-9-143-38 (effectful false)
 					(ty-apply @143-9-143-21 (symbol "List")
@@ -1439,10 +1444,10 @@ NO CHANGE
 					(ty-apply @143-25-143-38 (symbol "Result")
 						(ty-record @143-32-143-34)
 						(ty-underscore @143-36-143-37))))))
-	(d-let (id 451)
-		(p-assign @199-1-199-6 (ident "empty") (id 445))
-		(e-runtime-error (tag "not_implemented") (id 447))
-		(annotation @199-1-199-6 (signature 449) (id 450)
+	(d-let (id 444)
+		(p-assign @199-1-199-6 (ident "empty") (id 438))
+		(e-runtime-error (tag "not_implemented") (id 440))
+		(annotation @199-1-199-6 (signature 442) (id 443)
 			(declared-type
 				(ty-record @198-9-198-11))))
 	(s-type-decl @22-1-23-6 (id 84)
