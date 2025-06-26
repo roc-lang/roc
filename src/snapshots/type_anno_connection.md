@@ -89,8 +89,8 @@ NO CHANGE
 (inferred-types
 	(defs
 		(def (name "add_one") (type "*"))
-		(def (name "my_number") (type "*")))
+		(def (name "my_number") (type "Num(Int(Unsigned64))")))
 	(expressions
 		(expr @4-11-6-10 (type "*"))
-		(expr @7-13-7-24 (type "*"))))
+		(expr @7-13-7-24 (type "Num(Int(Unsigned64))"))))
 ~~~

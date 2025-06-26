@@ -78,10 +78,35 @@ pub fn checkDefs(self: *Self) void {
         // TODO: Check patterns
         self.checkExpr(def.expr);
 
-        self.unify(
-            @enumFromInt(@intFromEnum(def_idx)),
-            @enumFromInt(@intFromEnum(def.expr)),
-        );
+        // If there's a type annotation, unify the expression with the annotation's signature
+        if (def.annotation) |anno_idx| {
+            const annotation = self.can_ir.store.getAnnotation(anno_idx);
+
+            if (self.can_ir.store.getExpr(def.expr).isNumberLiteral()) {
+                // For number literals with annotations, directly copy the annotation's type
+                const anno_resolved = self.types.resolveVar(annotation.signature);
+                self.types.setVarContent(@enumFromInt(@intFromEnum(def.expr)), anno_resolved.desc.content);
+                self.types.setVarContent(@enumFromInt(@intFromEnum(def_idx)), anno_resolved.desc.content);
+            } else {
+                // For anything other than number literals, use normal unification;
+                // unify the expression type with the annotation's signature type
+                self.unify(
+                    @enumFromInt(@intFromEnum(def.expr)),
+                    annotation.signature,
+                );
+                // Then unify the def variable with the annotation's signature
+                self.unify(
+                    @enumFromInt(@intFromEnum(def_idx)),
+                    annotation.signature,
+                );
+            }
+        } else {
+            // No annotation, just unify def with expr as normal
+            self.unify(
+                @enumFromInt(@intFromEnum(def_idx)),
+                @enumFromInt(@intFromEnum(def.expr)),
+            );
+        }
     }
 }
 
