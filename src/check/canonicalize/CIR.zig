@@ -1202,13 +1202,6 @@ pub const Expr = union(enum) {
 
     pub const Span = struct { span: DataSpan };
 
-    pub fn isNumberLiteral(self: @This()) bool {
-        return switch (self) {
-            .num, .int, .single_quote, .frac_f64, .frac_dec, .dec_small => true,
-            else => false,
-        };
-    }
-
     pub fn init_str(expr_span: Expr.Span, region: Region) Expr {
         return .{ .str = .{
             .span = expr_span,
