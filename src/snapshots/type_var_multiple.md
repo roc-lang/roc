@@ -122,25 +122,25 @@ main! = |_| {}
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 107)
+	(d-let (id 105)
 		(p-assign @5-1-5-5 (ident "swap") (id 83))
-		(e-lambda @5-8-8-2 (id 101)
+		(e-lambda @5-8-8-2 (id 99)
 			(args
 				(p-assign @5-9-5-13 (ident "pair") (id 84)))
 			(e-block @5-15-8-2
 				(s-expr @6-5-6-22
-					(e-tuple @6-5-6-20 (tuple-var 89)
+					(e-tuple @6-5-6-20
 						(elems
 							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-runtime-error (tag "ident_not_in_scope")))))
 				(s-expr @6-23-7-6
 					(e-lookup-local @6-23-6-27
 						(pattern (id 84))))
-				(e-tuple @7-5-7-20 (tuple-var 98)
+				(e-tuple @7-5-7-20
 					(elems
 						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-runtime-error (tag "ident_not_in_scope"))))))
-		(annotation @5-1-5-5 (signature 105) (id 106)
+		(annotation @5-1-5-5 (signature 103) (id 104)
 			(declared-type
 				(ty-fn @4-8-4-24 (effectful false)
 					(ty-tuple @4-8-4-14
@@ -149,11 +149,11 @@ main! = |_| {}
 					(ty-tuple @4-18-4-24
 						(ty-var @4-19-4-20 (name "b"))
 						(ty-var @4-22-4-23 (name "a")))))))
-	(d-let (id 113)
-		(p-assign @10-1-10-6 (ident "main!") (id 108))
-		(e-lambda @10-9-10-15 (id 112)
+	(d-let (id 111)
+		(p-assign @10-1-10-6 (ident "main!") (id 106))
+		(e-lambda @10-9-10-15 (id 110)
 			(args
-				(p-underscore @10-10-10-11 (id 109)))
+				(p-underscore @10-10-10-11 (id 107)))
 			(e-runtime-error (tag "not_implemented")))))
 ~~~
 # TYPES

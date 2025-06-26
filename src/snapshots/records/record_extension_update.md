@@ -108,5 +108,5 @@ CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 83) (type "*"))
+(expr (id 81) (type "*"))
 ~~~
