@@ -116,24 +116,19 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
         .when => |_| {},
         .@"if" => |_| {},
         .call => |_| {},
+
         .record => |e| {
+
             // ## RECORD TYPE CHECKING IMPLEMENTATION
             //
             // This implementation performs field-by-field unification between the record
             // structure's field type variables and the actual field value expression types.
             //
-            // ### Prerequisites (set during canonicalization)
-            // - record_var must contain .structure.record (not .flex_var)
-            // - Each field in the structure must have a fresh type variable
-            // - Expression variable must also have the record structure for final output
-            //
             // ### Process
-            // 1. Resolve record_var to get the record structure
+            // 1. Resolve the expression var to get the record structure
             // 2. Type check each field value expression (to get concrete types)
             // 3. For each field, unify the field type var with the field value type var
             // 4. Unification propagates concrete types through the type system
-
-            // Get the record type content - this MUST be .structure.record for unification to work
 
             const expr_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
             const record_var_resolved = self.types.resolveVar(expr_var);

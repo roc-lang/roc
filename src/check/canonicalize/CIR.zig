@@ -1313,7 +1313,6 @@ pub const Expr = union(enum) {
         local: Lookup,
         external: ExternalDecl.Idx,
     },
-    // TODO introduce a new node for re-assign here, used by Var instead of lookup
     list: struct {
         elem_var: TypeVar,
         elems: Expr.Span,
@@ -1340,6 +1339,7 @@ pub const Expr = union(enum) {
         region: Region,
     },
     record: struct {
+        /// type var for the record extension
         ext_var: TypeVar,
         fields: RecordField.Span,
         region: Region,

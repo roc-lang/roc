@@ -1270,30 +1270,6 @@ pub fn canonicalize_expr(
 
             return expr_idx;
         },
-        // ## RECORD CANONICALIZATION WORKFLOW
-        //
-        // Records require careful coordination of multiple type variables for correct
-        // type checking. This workflow was debugged and refined to fix issues where
-        // record types were showing as `{ field: * }` instead of concrete types.
-        //
-        // ### Key Components
-        // 1. **record_var**: Must contain the concrete record structure for type checking
-        // 2. **ext_var**: For record extension (usually empty_record)
-        // 3. **Field type vars**: Fresh variables for each field that get unified with field values
-        // 4. **Expression var**: The final type variable for the entire record expression
-        //
-        // ### Critical Requirements
-        // - MUST set record structure on BOTH record_var AND expression variable
-        // - record_var must resolve to .structure.record (not .flex_var) for type checking
-        // - Each field needs a fresh type variable for unification with field value types
-        //
-        // ### Why Both Type Assignments Are Required
-        // - record_var assignment: Enables type checking to find field types and unify them
-        // - expression var assignment: Provides final concrete type for output/inference
-        //
-        // Missing either assignment causes:
-        // - Only record_var: Final output shows `*` instead of concrete types
-        // - Only expr_var: Type checking fails, no field unification occurs
         .record => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
