@@ -18,7 +18,7 @@ The number **500** does not fit in its inferred type:
 x = 500
 ```
 
-The expected type is:
+Its inferred type is:
     _U8_
 
 # TOKENS

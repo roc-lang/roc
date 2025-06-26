@@ -232,7 +232,7 @@ pub const Problem = union(enum) {
         );
         try report.document.addLineBreak();
 
-        try report.document.addText("The expected type is:");
+        try report.document.addText("Its inferred type is:");
         try report.document.addLineBreak();
         try report.document.addText("    ");
         try report.document.addAnnotated(owned_expected, .type_variable);
