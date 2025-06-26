@@ -749,7 +749,6 @@ pub fn parseAppHeader(self: *Parser) AST.Header.Idx {
     const packages_end = self.pos;
     if (self.peek() != .CloseCurly) {
         self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
-        std.debug.print("Tokens: {any}\n", .{self.tok_buf.tokens.items(.tag)[start..self.pos]});
         return self.pushMalformed(AST.Header.Idx, .expected_package_platform_close_curly, start);
     }
     self.advanceOne(); // Advance past CloseCurly
@@ -1252,7 +1251,6 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) AST.Pattern.Idx {
                 }
                 const fields = self.store.patternRecordFieldSpanFrom(scratch_top);
                 if (self.peek() != .CloseCurly) {
-                    std.debug.print("Expected CloseCurly, got {s}\n", .{@tagName(self.peek())});
                     return self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, start);
                 }
                 const end = self.pos;
@@ -1350,7 +1348,7 @@ fn parseAsPattern(self: *Parser, pattern: AST.Pattern.Idx) AST.Pattern.Idx {
         .pattern = pattern,
         .region = .{ .start = parent_region.start, .end = self.pos },
     } });
-    self.advance(); // Advance past LowerIdent();
+    self.advance(); // Advance past LowerIdent;
     return p;
 }
 
