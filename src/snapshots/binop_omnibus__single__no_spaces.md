@@ -73,9 +73,9 @@ Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "not_implemented") (id 131))
+(e-runtime-error (tag "not_implemented") (id 119))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 131) (type "Error"))
+(expr (id 119) (type "Error"))
 ~~~

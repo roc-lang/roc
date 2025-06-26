@@ -116,47 +116,47 @@ outerFunc = |_| {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 76)
+	(d-let (id 75)
 		(p-assign @4-1-4-2 (ident "x") (id 72))
-		(e-int @4-5-4-6 (num-var 75) (sign-needed "false") (bits-needed "7") (value "5") (id 75)))
-	(d-let (id 81)
-		(p-assign @5-1-5-2 (ident "y") (id 77))
-		(e-int @5-5-5-7 (num-var 80) (sign-needed "false") (bits-needed "7") (value "10") (id 80)))
-	(d-let (id 106)
-		(p-assign @8-1-8-10 (ident "outerFunc") (id 82))
-		(e-lambda @8-13-16-2 (id 105)
+		(e-int @4-5-4-6 (num-var 74) (value "5") (id 74)))
+	(d-let (id 79)
+		(p-assign @5-1-5-2 (ident "y") (id 76))
+		(e-int @5-5-5-7 (num-var 78) (value "10") (id 78)))
+	(d-let (id 102)
+		(p-assign @8-1-8-10 (ident "outerFunc") (id 80))
+		(e-lambda @8-13-16-2 (id 101)
 			(args
-				(p-underscore @8-14-8-15 (id 83)))
+				(p-underscore @8-14-8-15 (id 81)))
 			(e-block @8-17-16-2
 				(s-let @9-5-9-11
-					(p-assign @9-5-9-6 (ident "x") (id 84))
-					(e-int @9-9-9-11 (num-var 88) (sign-needed "false") (bits-needed "7") (value "20") (id 88)))
+					(p-assign @9-5-9-6 (ident "x") (id 82))
+					(e-int @9-9-9-11 (num-var 85) (value "20") (id 85)))
 				(s-let @10-5-14-6
-					(p-assign @10-5-10-16 (ident "innerResult") (id 90))
-					(e-block @10-19-14-6 (id 101)
+					(p-assign @10-5-10-16 (ident "innerResult") (id 87))
+					(e-block @10-19-14-6 (id 97)
 						(s-let @12-9-13-10
-							(p-assign @12-9-12-10 (ident "z") (id 91))
-							(e-binop @12-13-13-10 (op "add") (id 94)
+							(p-assign @12-9-12-10 (ident "z") (id 88))
+							(e-binop @12-13-13-10 (op "add") (id 91)
 								(e-lookup-local @12-13-12-14
-									(pattern (id 84)))
+									(pattern (id 82)))
 								(e-lookup-local @12-17-12-18
-									(pattern (id 77)))))
+									(pattern (id 76)))))
 						(e-binop @13-9-14-6 (op "add")
 							(e-lookup-local @13-9-13-10
-								(pattern (id 91)))
-							(e-int @13-13-13-14 (num-var 99) (sign-needed "false") (bits-needed "7") (value "1")))))
+								(pattern (id 88)))
+							(e-int @13-13-13-14 (num-var 95) (value "1")))))
 				(e-lookup-local @15-5-15-16
-					(pattern (id 90)))))))
+					(pattern (id 87)))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "x") (type "Num(Int(*))"))
-		(def (name "y") (type "Num(Int(*))"))
+		(def (name "x") (type "Num(*)"))
+		(def (name "y") (type "Num(*)"))
 		(def (name "outerFunc") (type "*")))
 	(expressions
-		(expr @4-5-4-6 (type "Num(Int(*))"))
-		(expr @5-5-5-7 (type "Num(Int(*))"))
+		(expr @4-5-4-6 (type "Num(*)"))
+		(expr @5-5-5-7 (type "Num(*)"))
 		(expr @8-13-16-2 (type "*"))))
 ~~~

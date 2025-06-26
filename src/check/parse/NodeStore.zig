@@ -631,7 +631,7 @@ pub fn addPatternRecordField(store: *NodeStore, field: AST.PatternRecordField) A
         .tag = .record_field_patt,
         .main_token = field.name,
         .data = .{
-            .lhs = if (field.rest) 1 else 0,
+            .lhs = @intFromBool(field.rest),
             .rhs = 0,
         },
         .region = field.region,
@@ -849,7 +849,7 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) AST.TypeAnno.Idx {
             node.region = f.region;
             node.data.lhs = f.args.span.start;
             node.data.rhs = @bitCast(AST.TypeAnno.TypeAnnoFnRhs{
-                .effectful = if (f.effectful) 1 else 0,
+                .effectful = @intFromBool(f.effectful),
                 .args_len = @intCast(f.args.span.len), // We hope a function has less than 2.147b args
             });
             const ret_idx = store.extra_data.items.len;

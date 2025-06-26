@@ -48,23 +48,23 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-list @1-1-9-2 (elem-var 95) (id 96)
+(e-list @1-1-9-2 (elem-var 90) (id 91)
 	(elems
-		(e-list @2-2-2-5 (elem-var 75)
+		(e-list @2-2-2-5 (elem-var 74)
 			(elems
-				(e-int @2-3-2-4 (num-var 74) (sign-needed "false") (bits-needed "7") (value "1"))))
-		(e-list @3-2-3-5 (elem-var 80)
+				(e-int @2-3-2-4 (num-var 73) (value "1"))))
+		(e-list @3-2-3-5 (elem-var 78)
 			(elems
-				(e-int @3-3-3-4 (num-var 79) (sign-needed "false") (bits-needed "7") (value "2"))))
-		(e-list @4-2-7-3 (elem-var 88)
+				(e-int @3-3-3-4 (num-var 77) (value "2"))))
+		(e-list @4-2-7-3 (elem-var 84)
 			(elems
-				(e-int @5-3-5-4 (num-var 84) (sign-needed "false") (bits-needed "7") (value "3"))
-				(e-int @6-3-6-4 (num-var 87) (sign-needed "false") (bits-needed "7") (value "4"))))
-		(e-list @8-2-8-5 (elem-var 93)
+				(e-int @5-3-5-4 (num-var 81) (value "3"))
+				(e-int @6-3-6-4 (num-var 83) (value "4"))))
+		(e-list @8-2-8-5 (elem-var 88)
 			(elems
-				(e-int @8-3-8-4 (num-var 92) (sign-needed "false") (bits-needed "7") (value "5"))))))
+				(e-int @8-3-8-4 (num-var 87) (value "5"))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 96) (type "List(List(Num(Int(*))))"))
+(expr (id 91) (type "List(List(Num(*)))"))
 ~~~

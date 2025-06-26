@@ -40,7 +40,7 @@ NO CHANGE
 (can-ir
 	(d-let (id 80)
 		(p-assign @4-1-4-2 (ident "x") (id 73))
-		(e-frac-dec @4-5-4-12 (frac-var 76) (fits-in-f32 "true") (fits-in-dec "true") (value "123.456") (id 76))
+		(e-frac-dec @4-5-4-12 (frac-var 76) (value "123.456") (id 76))
 		(annotation @4-1-4-2 (signature 78) (id 79)
 			(declared-type
 				(ty @3-5-3-8 (name "Dec"))))))
@@ -49,7 +49,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "x") (type "Num(Fraction(Decimal))")))
+		(def (name "x") (type "Dec")))
 	(expressions
-		(expr @4-5-4-12 (type "Num(Fraction(Decimal))"))))
+		(expr @4-5-4-12 (type "Dec"))))
 ~~~

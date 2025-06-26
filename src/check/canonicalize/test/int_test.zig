@@ -67,18 +67,15 @@ fn cleanup(allocator: std.mem.Allocator, resources: anytype) void {
     allocator.destroy(resources.module_env);
 }
 
-fn getIntValue(cir: *CIR, expr_idx: CIR.Expr.Idx) !struct { value: i128, requirements: types.Num.Int.Requirements } {
+fn getIntValue(cir: *CIR, expr_idx: CIR.Expr.Idx) !i128 {
     const expr = cir.store.getExpr(expr_idx);
     switch (expr) {
         .int => |int_expr| {
-            const value: i128 = @bitCast(int_expr.value.bytes);
-            return .{ .value = value, .requirements = int_expr.requirements };
+            return @bitCast(int_expr.value.bytes);
         },
         .num => |num_expr| {
             // For num expressions, we calculate requirements based on the value
-            const value: i128 = @bitCast(num_expr.value.bytes);
-            const requirements = calculateRequirements(value);
-            return .{ .value = value, .requirements = requirements };
+            return @bitCast(num_expr.value.bytes);
         },
         else => return error.NotAnInteger,
     }
@@ -95,11 +92,8 @@ test "canonicalize simple positive integer" {
     const resources = try parseAndCanonicalizeInt(test_allocator, source);
     defer cleanup(test_allocator, resources);
 
-    const int_data = try getIntValue(resources.cir, resources.expr_idx);
-    const value = int_data.value;
+    const value = try getIntValue(resources.cir, resources.expr_idx);
     try testing.expectEqual(@as(i128, 42), value);
-    try testing.expectEqual(false, int_data.requirements.sign_needed);
-    try testing.expectEqual(types.Num.Int.BitsNeeded.@"7", int_data.requirements.bits_needed);
 }
 
 test "canonicalize simple negative integer" {
@@ -107,11 +101,8 @@ test "canonicalize simple negative integer" {
     const resources = try parseAndCanonicalizeInt(test_allocator, source);
     defer cleanup(test_allocator, resources);
 
-    const int_data = try getIntValue(resources.cir, resources.expr_idx);
-    const value = int_data.value;
+    const value = try getIntValue(resources.cir, resources.expr_idx);
     try testing.expectEqual(@as(i128, -42), value);
-    try testing.expectEqual(true, int_data.requirements.sign_needed);
-    try testing.expectEqual(types.Num.Int.BitsNeeded.@"7", int_data.requirements.bits_needed);
 }
 
 test "canonicalize zero" {
@@ -119,8 +110,7 @@ test "canonicalize zero" {
     const resources = try parseAndCanonicalizeInt(test_allocator, source);
     defer cleanup(test_allocator, resources);
 
-    const int_data = try getIntValue(resources.cir, resources.expr_idx);
-    const value = int_data.value;
+    const value = try getIntValue(resources.cir, resources.expr_idx);
     try testing.expectEqual(@as(i128, 0), value);
 }
 
@@ -129,8 +119,7 @@ test "canonicalize large positive integer" {
     const resources = try parseAndCanonicalizeInt(test_allocator, source);
     defer cleanup(test_allocator, resources);
 
-    const int_data = try getIntValue(resources.cir, resources.expr_idx);
-    const value = int_data.value;
+    const value = try getIntValue(resources.cir, resources.expr_idx);
     try testing.expectEqual(@as(i128, 9223372036854775807), value);
 }
 
@@ -139,8 +128,7 @@ test "canonicalize large negative integer" {
     const resources = try parseAndCanonicalizeInt(test_allocator, source);
     defer cleanup(test_allocator, resources);
 
-    const int_data = try getIntValue(resources.cir, resources.expr_idx);
-    const value = int_data.value;
+    const value = try getIntValue(resources.cir, resources.expr_idx);
     try testing.expectEqual(@as(i128, -9223372036854775808), value);
 }
 
@@ -149,8 +137,7 @@ test "canonicalize very large integer" {
     const resources = try parseAndCanonicalizeInt(test_allocator, source);
     defer cleanup(test_allocator, resources);
 
-    const int_data = try getIntValue(resources.cir, resources.expr_idx);
-    const value = int_data.value;
+    const value = try getIntValue(resources.cir, resources.expr_idx);
     try testing.expectEqual(@as(i128, 170141183460469231731687303715884105727), value);
 }
 
@@ -159,8 +146,7 @@ test "canonicalize very large negative integer" {
     const resources = try parseAndCanonicalizeInt(test_allocator, source);
     defer cleanup(test_allocator, resources);
 
-    const int_data = try getIntValue(resources.cir, resources.expr_idx);
-    const value = int_data.value;
+    const value = try getIntValue(resources.cir, resources.expr_idx);
     try testing.expectEqual(@as(i128, -170141183460469231731687303715884105728), value);
 }
 
@@ -184,8 +170,7 @@ test "canonicalize small integers" {
         const resources = try parseAndCanonicalizeInt(test_allocator, tc.source);
         defer cleanup(test_allocator, resources);
 
-        const int_data = try getIntValue(resources.cir, resources.expr_idx);
-        const value = int_data.value;
+        const value = try getIntValue(resources.cir, resources.expr_idx);
         try testing.expectEqual(tc.expected, value);
     }
 }
@@ -203,8 +188,7 @@ test "canonicalize integer literals with underscores" {
         const resources = try parseAndCanonicalizeInt(test_allocator, tc.source);
         defer cleanup(test_allocator, resources);
 
-        const int_data = try getIntValue(resources.cir, resources.expr_idx);
-        const value = int_data.value;
+        const value = try getIntValue(resources.cir, resources.expr_idx);
         try testing.expectEqual(tc.expected, value);
     }
 }
@@ -220,7 +204,7 @@ test "canonicalize integer with specific requirements" {
         .{ .source = "128", .expected_value = 128, .expected_sign_needed = false, .expected_bits_needed = .@"8" },
         .{ .source = "255", .expected_value = 255, .expected_sign_needed = false, .expected_bits_needed = .@"8" },
         .{ .source = "256", .expected_value = 256, .expected_sign_needed = false, .expected_bits_needed = .@"9_to_15" },
-        .{ .source = "-128", .expected_value = -128, .expected_sign_needed = true, .expected_bits_needed = .@"8" },
+        .{ .source = "-128", .expected_value = -128, .expected_sign_needed = true, .expected_bits_needed = .@"7" },
         .{ .source = "-129", .expected_value = -129, .expected_sign_needed = true, .expected_bits_needed = .@"8" },
         .{ .source = "32767", .expected_value = 32767, .expected_sign_needed = false, .expected_bits_needed = .@"9_to_15" },
         .{ .source = "32768", .expected_value = 32768, .expected_sign_needed = false, .expected_bits_needed = .@"16" },
@@ -232,11 +216,8 @@ test "canonicalize integer with specific requirements" {
         const resources = try parseAndCanonicalizeInt(test_allocator, tc.source);
         defer cleanup(test_allocator, resources);
 
-        const int_data = try getIntValue(resources.cir, resources.expr_idx);
-        const value = int_data.value;
+        const value = try getIntValue(resources.cir, resources.expr_idx);
         try testing.expectEqual(tc.expected_value, value);
-        try testing.expectEqual(tc.expected_sign_needed, int_data.requirements.sign_needed);
-        try testing.expectEqual(tc.expected_bits_needed, int_data.requirements.bits_needed);
     }
 }
 
@@ -253,8 +234,6 @@ test "canonicalize integer literal creates correct type variables" {
             _ = int_expr.num_var;
 
             // Verify requirements were set
-            try testing.expect(int_expr.requirements.sign_needed == false);
-            try testing.expect(int_expr.requirements.bits_needed == .@"7");
         },
         else => return error.UnexpectedExprType,
     }
@@ -278,8 +257,7 @@ test "canonicalize invalid integer literal" {
         const expr = resources.cir.store.getExpr(resources.expr_idx);
         // This might actually parse as 123, so let's check if it's a valid integer
         if (expr != .runtime_error) {
-            const int_data = try getIntValue(resources.cir, resources.expr_idx);
-            const value = int_data.value;
+            const value = try getIntValue(resources.cir, resources.expr_idx);
             try testing.expectEqual(@as(i128, 123), value);
         }
     }
@@ -317,8 +295,8 @@ test "canonicalize integer preserves all bytes correctly" {
         const resources = try parseAndCanonicalizeInt(test_allocator, tc.source);
         defer cleanup(test_allocator, resources);
 
-        const int_data = try getIntValue(resources.cir, resources.expr_idx);
-        const value_bytes: [16]u8 = @bitCast(int_data.value);
+        const value = try getIntValue(resources.cir, resources.expr_idx);
+        const value_bytes: [16]u8 = @bitCast(value);
         try testing.expectEqualSlices(u8, &tc.expected_bytes, &value_bytes);
     }
 }
@@ -339,8 +317,7 @@ test "canonicalize integer round trip through NodeStore" {
         defer cleanup(test_allocator, resources);
 
         // Get the expression back from the store
-        const int_data = try getIntValue(resources.cir, resources.expr_idx);
-        const value = int_data.value;
+        const value = try getIntValue(resources.cir, resources.expr_idx);
 
         try testing.expectEqual(expected, value);
     }
@@ -358,8 +335,7 @@ test "canonicalize integer with maximum digits" {
         const resources = try parseAndCanonicalizeInt(test_allocator, tc.source);
         defer cleanup(test_allocator, resources);
 
-        const int_data = try getIntValue(resources.cir, resources.expr_idx);
-        const value = int_data.value;
+        const value = try getIntValue(resources.cir, resources.expr_idx);
         try testing.expectEqual(tc.expected, value);
     }
 }
@@ -387,14 +363,8 @@ test "canonicalize integer requirements determination" {
         const resources = try parseAndCanonicalizeInt(test_allocator, tc.source);
         defer cleanup(test_allocator, resources);
 
-        const int_data = try getIntValue(resources.cir, resources.expr_idx);
+        const value = try getIntValue(resources.cir, resources.expr_idx);
 
-        // Verify the requirements are what we expect
-        try testing.expectEqual(tc.expected_sign_needed, int_data.requirements.sign_needed);
-        try testing.expectEqual(tc.expected_bits_needed, int_data.requirements.bits_needed);
-
-        // Verify the value
-        const value = int_data.value;
         try testing.expectEqual(tc.expected_value, value);
     }
 }
@@ -545,8 +515,6 @@ test "integer literal - negative zero" {
             // -0 should be treated as 0
             try testing.expectEqual(@as(i128, @bitCast(int.value.bytes)), 0);
             // But it should still be marked as needing a sign
-            try testing.expect(int.requirements.sign_needed);
-            try testing.expectEqual(int.requirements.bits_needed, types.Num.Int.BitsNeeded.@"7");
         },
         else => {
             try testing.expect(false); // Should be int
@@ -563,8 +531,6 @@ test "integer literal - positive zero" {
         .int => |int| {
             try testing.expectEqual(@as(i128, @bitCast(int.value.bytes)), 0);
             // Positive zero should not need a sign
-            try testing.expect(!int.requirements.sign_needed);
-            try testing.expectEqual(int.requirements.bits_needed, types.Num.Int.BitsNeeded.@"7");
         },
         else => {
             try testing.expect(false); // Should be int

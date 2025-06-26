@@ -94,9 +94,9 @@ NO CHANGE
 						(ty @3-25-3-28 (name "U64")))
 					(ty-apply @3-33-3-42 (symbol "List")
 						(ty @3-38-3-41 (name "Str")))))))
-	(d-let (id 103)
+	(d-let (id 102)
 		(p-assign @6-1-6-6 (ident "main!") (id 89))
-		(e-lambda @6-9-6-55 (id 102)
+		(e-lambda @6-9-6-55 (id 101)
 			(args
 				(p-underscore @6-10-6-11 (id 90)))
 			(e-call @6-13-6-55
@@ -109,7 +109,7 @@ NO CHANGE
 					(args
 						(e-string @6-45-6-50
 							(e-literal @6-46-6-49 (string "one")))
-						(e-int @6-52-6-53 (num-var 99) (sign-needed "false") (bits-needed "7") (value "1"))))))))
+						(e-int @6-52-6-53 (num-var 98) (value "1"))))))))
 ~~~
 # TYPES
 ~~~clojure

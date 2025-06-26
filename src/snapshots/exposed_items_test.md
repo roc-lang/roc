@@ -43,9 +43,9 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 79)
+	(d-let (id 78)
 		(p-assign @5-1-5-5 (ident "main") (id 75))
-		(e-int @5-8-5-10 (num-var 78) (sign-needed "false") (bits-needed "7") (value "42") (id 78)))
+		(e-int @5-8-5-10 (num-var 77) (value "42") (id 77)))
 	(s-import @3-1-3-42 (module "pf.Stdout") (id 74)
 		(exposes
 			(exposed (name "line!") (wildcard false))
@@ -55,7 +55,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "main") (type "Num(Int(*))")))
+		(def (name "main") (type "Num(*)")))
 	(expressions
-		(expr @5-8-5-10 (type "Num(Int(*))"))))
+		(expr @5-8-5-10 (type "Num(*)"))))
 ~~~

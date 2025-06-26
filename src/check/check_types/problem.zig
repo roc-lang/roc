@@ -90,12 +90,9 @@ pub const Problem = union(enum) {
         try writer.write(vars.expected);
         const owned_expected = try report.addOwnedString(buf.items[0..]);
 
-        const buf_len = buf.items.len;
+        buf.clearRetainingCapacity();
         try writer.write(vars.actual);
-        const owned_actual = try report.addOwnedString(buf.items[buf_len..]);
-
-        try report.document.addReflowingText("This expression is used in an unexpected way:");
-        try report.document.addLineBreak();
+        const owned_actual = try report.addOwnedString(buf.items[0..]);
 
         const region = can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(vars.actual_var)));
 
@@ -109,6 +106,9 @@ pub const Problem = union(enum) {
                 .line_text = "",
             },
         };
+
+        try report.document.addReflowingText("This expression is used in an unexpected way:");
+        try report.document.addLineBreak();
 
         try report.document.addSourceRegion(
             source,
@@ -132,6 +132,29 @@ pub const Problem = union(enum) {
         try report.document.addLineBreak();
         try report.document.addText("    ");
         try report.document.addAnnotated(owned_expected, .type_variable);
+
+        // Add a hint if this looks like a numeric literal size issue
+        const actual_str = owned_actual;
+        const expected_str = owned_expected;
+
+        // Check if we're dealing with numeric types
+        const is_numeric_issue = (std.mem.indexOf(u8, actual_str, "Num(") != null and
+            std.mem.indexOf(u8, expected_str, "Num(") != null);
+
+        // Check if target is a concrete integer type
+        const has_unsigned = std.mem.indexOf(u8, expected_str, "Unsigned") != null;
+        const has_signed = std.mem.indexOf(u8, expected_str, "Signed") != null;
+
+        if (is_numeric_issue and (has_unsigned or has_signed)) {
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addAnnotated("Hint:", .emphasized);
+            if (has_unsigned) {
+                try report.document.addReflowingText(" This might be because the numeric literal is either negative or too large to fit in the unsigned type.");
+            } else {
+                try report.document.addReflowingText(" This might be because the numeric literal is too large to fit in the target type.");
+            }
+        }
 
         return report;
     }

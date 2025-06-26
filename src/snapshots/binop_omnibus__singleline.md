@@ -73,9 +73,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "not_implemented") (id 131))
+(e-runtime-error (tag "not_implemented") (id 119))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 131) (type "Error"))
+(expr (id 119) (type "Error"))
 ~~~

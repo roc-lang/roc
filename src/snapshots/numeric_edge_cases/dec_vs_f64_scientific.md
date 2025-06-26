@@ -23,9 +23,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dec-small @1-1-1-6 (num-var 74) (fits-in-f32 "true") (fits-in-dec "true") (numerator "150") (denominator-power-of-ten "0") (value "150") (id 74))
+(e-dec-small @1-1-1-6 (num-var 74) (numerator "150") (denominator-power-of-ten "0") (value "150") (id 74))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 74) (type "Num(Fraction(*))"))
+(expr (id 74) (type "Frac(*)"))
 ~~~

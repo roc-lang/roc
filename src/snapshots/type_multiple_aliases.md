@@ -217,21 +217,21 @@ main! = |_| {
 				(ty-fn @11-15-11-31 (effectful false)
 					(ty @11-15-11-19 (name "User"))
 					(ty @11-23-11-31 (name "UserName"))))))
-	(d-let (id 146)
+	(d-let (id 144)
 		(p-assign @14-1-14-6 (ident "main!") (id 127))
-		(e-lambda @14-9-17-2 (id 145)
+		(e-lambda @14-9-17-2 (id 143)
 			(args
 				(p-underscore @14-10-14-11 (id 128)))
 			(e-block @14-13-17-2
 				(s-let @15-5-15-40
 					(p-assign @15-5-15-9 (ident "user") (id 129))
-					(e-call @15-12-15-40 (id 139)
+					(e-call @15-12-15-40 (id 137)
 						(e-lookup-local @15-12-15-22
 							(pattern (id 95)))
-						(e-int @15-23-15-26 (num-var 133) (sign-needed "false") (bits-needed "7") (value "123"))
+						(e-int @15-23-15-26 (num-var 132) (value "123"))
 						(e-string @15-28-15-35
 							(e-literal @15-29-15-34 (string "Alice")))
-						(e-int @15-37-15-39 (num-var 138) (sign-needed "false") (bits-needed "7") (value "25"))))
+						(e-int @15-37-15-39 (num-var 136) (value "25"))))
 				(e-call @16-5-16-22
 					(e-lookup-local @16-5-16-16
 						(pattern (id 116)))

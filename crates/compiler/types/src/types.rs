@@ -3928,21 +3928,78 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
         }
         EffectfulFunc => buf.push_str("EffectfulFunc"),
         Type(symbol, arguments) => {
-            let write_parens = parens == Parens::InTypeParam && !arguments.is_empty();
+            // Special handling for Num types with concrete integer/float types
+            match (symbol, arguments.as_slice()) {
+                (Symbol::NUM_INTEGER, [Type(inner_symbol, _)]) => {
+                    match inner_symbol {
+                        &Symbol::NUM_UNSIGNED8 => buf.push_str("U8"),
+                        &Symbol::NUM_UNSIGNED16 => buf.push_str("U16"),
+                        &Symbol::NUM_UNSIGNED32 => buf.push_str("U32"),
+                        &Symbol::NUM_UNSIGNED64 => buf.push_str("U64"),
+                        &Symbol::NUM_UNSIGNED128 => buf.push_str("U128"),
+                        &Symbol::NUM_SIGNED8 => buf.push_str("I8"),
+                        &Symbol::NUM_SIGNED16 => buf.push_str("I16"),
+                        &Symbol::NUM_SIGNED32 => buf.push_str("I32"),
+                        &Symbol::NUM_SIGNED64 => buf.push_str("I64"),
+                        &Symbol::NUM_SIGNED128 => buf.push_str("I128"),
+                        _ => {
+                            // Fall back to Num(Integer(...))
+                            write!(buf, "{symbol:?}").unwrap();
+                            for arg in arguments {
+                                buf.push(' ');
+                                write_debug_error_type_help(arg, buf, Parens::InTypeParam);
+                            }
+                        }
+                    }
+                }
+                (Symbol::NUM_INTEGER, [arg]) => {
+                    // Integer with a variable, print as Int(a)
+                    buf.push_str("Int");
+                    buf.push('(');
+                    write_debug_error_type_help(arg.clone(), buf, Parens::InTypeParam);
+                    buf.push(')');
+                }
+                (Symbol::NUM_FLOATINGPOINT, [Type(inner_symbol, _)]) => {
+                    match inner_symbol {
+                        &Symbol::NUM_BINARY32 => buf.push_str("F32"),
+                        &Symbol::NUM_BINARY64 => buf.push_str("F64"),
+                        &Symbol::NUM_DECIMAL => buf.push_str("Dec"),
+                        _ => {
+                            // Fall back to Num(FloatingPoint(...))
+                            write!(buf, "{symbol:?}").unwrap();
+                            for arg in arguments {
+                                buf.push(' ');
+                                write_debug_error_type_help(arg, buf, Parens::InTypeParam);
+                            }
+                        }
+                    }
+                }
+                (Symbol::NUM_FLOATINGPOINT, [arg]) => {
+                    // FloatingPoint with a variable, print as Frac(a)
+                    buf.push_str("Frac");
+                    buf.push('(');
+                    write_debug_error_type_help(arg.clone(), buf, Parens::InTypeParam);
+                    buf.push(')');
+                }
+                _ => {
+                    // Default formatting
+                    let write_parens = parens == Parens::InTypeParam && !arguments.is_empty();
 
-            if write_parens {
-                buf.push('(');
-            }
-            write!(buf, "{symbol:?}").unwrap();
+                    if write_parens {
+                        buf.push('(');
+                    }
+                    write!(buf, "{symbol:?}").unwrap();
 
-            for arg in arguments {
-                buf.push(' ');
+                    for arg in arguments {
+                        buf.push(' ');
 
-                write_debug_error_type_help(arg, buf, Parens::InTypeParam);
-            }
+                        write_debug_error_type_help(arg, buf, Parens::InTypeParam);
+                    }
 
-            if write_parens {
-                buf.push(')');
+                    if write_parens {
+                        buf.push(')');
+                    }
+                }
             }
         }
         Alias(Symbol::NUM_NUM, mut arguments, _actual, _) => {
@@ -3951,11 +4008,76 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
             let argument = arguments.remove(0);
 
             match argument {
-                Type(Symbol::NUM_INTEGER, _) => {
-                    buf.push_str("Int");
+                Type(Symbol::NUM_INTEGER, args) => {
+                    if args.is_empty() {
+                        buf.push_str("Int");
+                    } else {
+                        // Check if it's a concrete integer type
+                        match &args[0] {
+                            Type(inner_symbol, _) => match inner_symbol {
+                                &Symbol::NUM_UNSIGNED8 => buf.push_str("U8"),
+                                &Symbol::NUM_UNSIGNED16 => buf.push_str("U16"),
+                                &Symbol::NUM_UNSIGNED32 => buf.push_str("U32"),
+                                &Symbol::NUM_UNSIGNED64 => buf.push_str("U64"),
+                                &Symbol::NUM_UNSIGNED128 => buf.push_str("U128"),
+                                &Symbol::NUM_SIGNED8 => buf.push_str("I8"),
+                                &Symbol::NUM_SIGNED16 => buf.push_str("I16"),
+                                &Symbol::NUM_SIGNED32 => buf.push_str("I32"),
+                                &Symbol::NUM_SIGNED64 => buf.push_str("I64"),
+                                &Symbol::NUM_SIGNED128 => buf.push_str("I128"),
+                                _ => {
+                                    buf.push_str("Int(");
+                                    write_debug_error_type_help(
+                                        args[0].clone(),
+                                        buf,
+                                        Parens::InTypeParam,
+                                    );
+                                    buf.push(')');
+                                }
+                            },
+                            _ => {
+                                buf.push_str("Int(");
+                                write_debug_error_type_help(
+                                    args[0].clone(),
+                                    buf,
+                                    Parens::InTypeParam,
+                                );
+                                buf.push(')');
+                            }
+                        }
+                    }
                 }
-                Type(Symbol::NUM_FLOATINGPOINT, _) => {
-                    buf.push_str("F64");
+                Type(Symbol::NUM_FLOATINGPOINT, args) => {
+                    if args.is_empty() {
+                        buf.push_str("F64");
+                    } else {
+                        // Check if it's a concrete float type
+                        match &args[0] {
+                            Type(inner_symbol, _) => match inner_symbol {
+                                &Symbol::NUM_BINARY32 => buf.push_str("F32"),
+                                &Symbol::NUM_BINARY64 => buf.push_str("F64"),
+                                &Symbol::NUM_DECIMAL => buf.push_str("Dec"),
+                                _ => {
+                                    buf.push_str("Frac(");
+                                    write_debug_error_type_help(
+                                        args[0].clone(),
+                                        buf,
+                                        Parens::InTypeParam,
+                                    );
+                                    buf.push(')');
+                                }
+                            },
+                            _ => {
+                                buf.push_str("Frac(");
+                                write_debug_error_type_help(
+                                    args[0].clone(),
+                                    buf,
+                                    Parens::InTypeParam,
+                                );
+                                buf.push(')');
+                            }
+                        }
+                    }
                 }
                 other => {
                     let write_parens = parens == Parens::InTypeParam;

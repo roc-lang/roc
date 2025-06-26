@@ -79,39 +79,39 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 101)
+	(d-let (id 100)
 		(p-assign @6-1-6-8 (ident "getUser") (id 78))
-		(e-lambda @1-1-1-1 (id 95)
+		(e-lambda @1-1-1-1 (id 94)
 			(args
 				(p-assign @6-12-6-14 (ident "id") (id 79)))
 			(e-if @1-1-1-1 (cond-var 0) (branch-var 0)
 				(if-branches
 					(if-branch
-						(e-tuple @6-19-6-28 (tuple-var 85)
+						(e-tuple @6-19-6-28 (tuple-var 84)
 							(elems
 								(e-binop @6-20-6-28 (op "gt")
 									(e-lookup-local @6-20-6-22
 										(pattern (id 79)))
-									(e-int @6-25-6-27 (num-var 83) (sign-needed "false") (bits-needed "7") (value "10")))))
+									(e-int @6-25-6-27 (num-var 82) (value "10")))))
 						(e-string @6-29-6-34
 							(e-literal @6-30-6-33 (string "big")))))
 				(if-else
 					(e-string @6-40-6-47
 						(e-literal @6-41-6-46 (string "small"))))))
-		(annotation @6-1-6-8 (signature 99) (id 100)
+		(annotation @6-1-6-8 (signature 98) (id 99)
 			(declared-type
 				(ty-fn @5-11-5-24 (effectful false)
 					(ty @5-11-5-17 (name "UserId"))
 					(ty @5-21-5-24 (name "Str"))))))
-	(d-let (id 110)
-		(p-assign @8-1-8-6 (ident "main!") (id 102))
-		(e-lambda @8-9-8-25 (id 109)
+	(d-let (id 108)
+		(p-assign @8-1-8-6 (ident "main!") (id 101))
+		(e-lambda @8-9-8-25 (id 107)
 			(args
-				(p-underscore @8-10-8-11 (id 103)))
+				(p-underscore @8-10-8-11 (id 102)))
 			(e-call @8-13-8-25
 				(e-lookup-local @8-13-8-20
 					(pattern (id 78)))
-				(e-int @8-21-8-24 (num-var 107) (sign-needed "false") (bits-needed "7") (value "100")))))
+				(e-int @8-21-8-24 (num-var 105) (value "100")))))
 	(s-type-decl @3-1-5-8 (id 74)
 		(ty-header @3-1-3-7 (name "UserId"))
 		(ty @3-10-3-13 (name "U64"))))

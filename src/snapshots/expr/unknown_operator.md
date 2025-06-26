@@ -39,11 +39,11 @@ Int(1:1-1:2),OpPlus(1:3-1:4),OpPlus(1:4-1:5),Int(1:6-1:7),EndOfFile(1:7-1:7),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop @1-1-1-7 (op "add") (id 77)
-	(e-int @1-1-1-2 (num-var 74) (sign-needed "false") (bits-needed "7") (value "1"))
+(e-binop @1-1-1-7 (op "add") (id 76)
+	(e-int @1-1-1-2 (num-var 73) (value "1"))
 	(e-runtime-error (tag "expr_not_canonicalized")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 77) (type "*"))
+(expr (id 76) (type "*"))
 ~~~
