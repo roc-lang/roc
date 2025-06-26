@@ -27,5 +27,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 74) (type "Num(FloatingPoint(*))"))
+(expr (id 74) (type "Num(Fraction(*))"))
 ~~~

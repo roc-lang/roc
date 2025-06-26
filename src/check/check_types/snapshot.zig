@@ -716,7 +716,7 @@ pub const SnapshotWriter = struct {
                 _ = try self.writer.write(")");
             },
             .frac_poly => |sub_var| {
-                _ = try self.writer.write("FloatingPoint(");
+                _ = try self.writer.write("Fraction(");
                 try self.write(sub_var);
                 _ = try self.writer.write(")");
             },
@@ -734,7 +734,7 @@ pub const SnapshotWriter = struct {
                         _ = try self.writer.write("))");
                     },
                     .frac => |prec| {
-                        _ = try self.writer.write("Num(FloatingPoint(");
+                        _ = try self.writer.write("Num(Fraction(");
                         try self.writeFracPrecision(prec);
                         _ = try self.writer.write("))");
                     },

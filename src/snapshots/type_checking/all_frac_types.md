@@ -83,11 +83,11 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "a") (type "Num(FloatingPoint(Binary32))"))
-		(def (name "b") (type "Num(FloatingPoint(Binary64))"))
-		(def (name "c") (type "Num(FloatingPoint(Decimal))")))
+		(def (name "a") (type "Num(Fraction(Binary32))"))
+		(def (name "b") (type "Num(Fraction(Binary64))"))
+		(def (name "c") (type "Num(Fraction(Decimal))")))
 	(expressions
-		(expr @4-5-4-9 (type "Num(FloatingPoint(Binary32))"))
-		(expr @7-5-7-12 (type "Num(FloatingPoint(Binary64))"))
-		(expr @10-5-10-12 (type "Num(FloatingPoint(Decimal))"))))
+		(expr @4-5-4-9 (type "Num(Fraction(Binary32))"))
+		(expr @7-5-7-12 (type "Num(Fraction(Binary64))"))
+		(expr @10-5-10-12 (type "Num(Fraction(Decimal))"))))
 ~~~

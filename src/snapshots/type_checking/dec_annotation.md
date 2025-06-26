@@ -49,7 +49,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "x") (type "Num(FloatingPoint(Decimal))")))
+		(def (name "x") (type "Num(Fraction(Decimal))")))
 	(expressions
-		(expr @4-5-4-12 (type "Num(FloatingPoint(Decimal))"))))
+		(expr @4-5-4-12 (type "Num(Fraction(Decimal))"))))
 ~~~
