@@ -2921,13 +2921,13 @@ pub fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) ?CIR.Exp
 
             // Introduce type variables into scope
             for (type_vars.items) |type_var| {
-                // Create a dummy type annotation for the type variable
-                const type_var_region = Region.zero(); // TODO: get proper region from type variable
-                const dummy_anno = self.can_ir.store.addTypeAnno(.{ .ty_var = .{
+                // Get the proper region for this type variable from the AST
+                const type_var_region = self.getTypeVarRegionFromAST(ta.anno, type_var) orelse region;
+                const type_var_anno = self.can_ir.store.addTypeAnno(.{ .ty_var = .{
                     .name = type_var,
                     .region = type_var_region,
                 } });
-                self.scopeIntroduceTypeVar(type_var, dummy_anno);
+                self.scopeIntroduceTypeVar(type_var, type_var_anno);
             }
 
             // Now canonicalize the annotation with type variables in scope
@@ -2941,7 +2941,7 @@ pub fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) ?CIR.Exp
                 .type_anno = .{
                     .name = name_ident,
                     .anno = type_anno_idx,
-                    .where = null, // TODO: handle where clauses when they're implemented
+                    .where = null, // Where clauses are not yet implemented in the parser
                     .region = region,
                 },
             };
@@ -3232,6 +3232,73 @@ fn extractTypeVarsFromASTAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, vars: *st
         },
         .ty, .underscore, .mod_ty, .tag_union, .malformed => {
             // These don't contain type variables to extract
+        },
+    }
+}
+
+/// Get the region of a specific type variable from an AST type annotation
+fn getTypeVarRegionFromAST(self: *Self, anno_idx: AST.TypeAnno.Idx, target_ident: Ident.Idx) ?Region {
+    const ast_anno = self.parse_ir.store.getTypeAnno(anno_idx);
+
+    switch (ast_anno) {
+        .ty_var => |ty_var| {
+            if (self.parse_ir.tokens.resolveIdentifier(ty_var.tok)) |ident| {
+                if (ident.idx == target_ident.idx) {
+                    return self.parse_ir.tokenizedRegionToRegion(ty_var.region);
+                }
+            }
+            return null;
+        },
+        .apply => |apply| {
+            for (self.parse_ir.store.typeAnnoSlice(apply.args)) |arg_idx| {
+                if (self.getTypeVarRegionFromAST(arg_idx, target_ident)) |region| {
+                    return region;
+                }
+            }
+            return null;
+        },
+        .@"fn" => |fn_anno| {
+            for (self.parse_ir.store.typeAnnoSlice(fn_anno.args)) |arg_idx| {
+                if (self.getTypeVarRegionFromAST(arg_idx, target_ident)) |region| {
+                    return region;
+                }
+            }
+            return self.getTypeVarRegionFromAST(fn_anno.ret, target_ident);
+        },
+        .tuple => |tuple| {
+            for (self.parse_ir.store.typeAnnoSlice(tuple.annos)) |elem_idx| {
+                if (self.getTypeVarRegionFromAST(elem_idx, target_ident)) |region| {
+                    return region;
+                }
+            }
+            return null;
+        },
+        .parens => |parens| {
+            return self.getTypeVarRegionFromAST(parens.anno, target_ident);
+        },
+        .record => |record| {
+            for (self.parse_ir.store.annoRecordFieldSlice(record.fields)) |field_idx| {
+                const field = self.parse_ir.store.getAnnoRecordField(field_idx);
+                if (self.getTypeVarRegionFromAST(field.ty, target_ident)) |region| {
+                    return region;
+                }
+            }
+            return null;
+        },
+        .tag_union => |tag_union| {
+            for (self.parse_ir.store.typeAnnoSlice(tag_union.tags)) |tag_idx| {
+                if (self.getTypeVarRegionFromAST(tag_idx, target_ident)) |region| {
+                    return region;
+                }
+            }
+            if (tag_union.open_anno) |open_idx| {
+                return self.getTypeVarRegionFromAST(open_idx, target_ident);
+            }
+            return null;
+        },
+        .ty, .underscore, .mod_ty, .malformed => {
+            // These don't contain type variables
+            return null;
         },
     }
 }

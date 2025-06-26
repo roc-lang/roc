@@ -105,6 +105,16 @@ pub fn pushDiagnostic(self: *CIR, reason: CIR.Diagnostic) void {
 ///
 /// Use this when you need to replace a node (expression, pattern, etc.) with
 /// something that represents a compilation error but allows the compiler to continue.
+/// Creates a malformed CIR node with an error type variable.
+///
+/// This follows the "Inform Don't Block" principle - when compilation encounters
+/// an error, it creates a placeholder node and continues rather than stopping.
+/// The error will be reported to the user later.
+///
+/// **Usage**: When parsing or canonicalization encounters an error but needs
+/// to continue compilation.
+///
+/// **Example**: Used when encountering invalid syntax that can't be parsed properly.
 pub fn pushMalformed(self: *CIR, comptime t: type, reason: CIR.Diagnostic) t {
     const malformed_idx = self.store.addMalformed(t, reason);
     _ = self.setTypeVarAt(@enumFromInt(@intFromEnum(malformed_idx)), .err);
@@ -319,13 +329,134 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
     };
 }
 
-/// Inserts a placeholder CIR node and creates a fresh variable in the types store at that index
+// ========================================================================
+// TYPE VARIABLE WORKFLOW DOCUMENTATION
+// ========================================================================
+//
+// The Roc type system uses a hierarchical approach to type variables during
+// canonicalization. Understanding this workflow is crucial for working with
+// the type checking system.
+//
+// ## TYPICAL WORKFLOW FOR EXPRESSIONS
+//
+// 1. **Reserve Node Slots**: Use `predictNodeIndex()` to reserve CIR node slots
+//    before creating type variables. This ensures consistent indexing.
+//
+// 2. **Create Type Hierarchy**: Build from most general to most specific:
+//    ```zig
+//    // For integer literal "42":
+//    const final_expr_idx = self.can_ir.store.predictNodeIndex(3);
+//
+//    // 1. Flexible polymorphic variable (can be any numeric type)
+//    const poly_var = self.can_ir.pushFreshTypeVar(final_expr_idx, region);
+//
+//    // 2. Integer-specific variable (references poly_var)
+//    const int_var = self.can_ir.pushTypeVar(
+//        Content{ .structure = .{ .num = .{ .int_poly = poly_var } } },
+//        final_expr_idx, region
+//    );
+//
+//    // 3. Numeric variable (references int_var)
+//    const num_var = self.can_ir.env.types.freshFromContent(
+//        Content{ .structure = .{ .num = .{ .num_poly = int_var } } }
+//    );
+//    ```
+//
+// 3. **Create Expression**: Add the actual CIR expression node:
+//    ```zig
+//    const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
+//        .int = .{
+//            .num_var = num_var,
+//            .requirements = requirements,
+//            .value = parsed_value,
+//            .region = region,
+//        },
+//    });
+//    ```
+//
+// 4. **Associate Final Type**: Link the expression with its type:
+//    ```zig
+//    _ = self.can_ir.setTypeVarAtExpr(expr_idx,
+//        Content{ .structure = .{ .num = .{ .num_poly = int_var } } }
+//    );
+//    ```
+//
+// ## TYPE ANNOTATION WORKFLOW
+//
+// Type annotations follow a different pattern focused on creating constraints
+// rather than inference placeholders:
+//
+// 1. **Extract Type Variables**: Find all type variables (like `a`, `b`) in the annotation
+// 2. **Create Scope**: Enter new scope for type variables
+// 3. **Introduce Type Variables**: Add them to scope as rigid variables
+// 4. **Canonicalize Annotation**: Convert AST type annotation to CIR format
+// 5. **Store for Connection**: Save annotation to connect with next definition
+//
+// ## COMMON PATTERNS
+//
+// **Polymorphic Types**: Use `pushFreshTypeVar` for the flexible part:
+// - Integer literals before knowing if they're U64, I32, etc.
+// - List elements before knowing the element type
+// - Function parameters in generic contexts
+//
+// **Structured Types**: Use `pushTypeVar` with specific content:
+// - Numeric types with hierarchy (num_poly -> int_poly -> flex_var)
+// - Record types with field information
+// - Function types with argument and return types
+//
+// **Error Recovery**: Use `pushMalformed` for compilation errors:
+// - Invalid syntax that can't be parsed
+// - Type errors that should be reported but don't stop compilation
+//
+// ========================================================================
+
+/// Creates a fresh flexible type variable that can be unified during type inference.
+///
+/// A flexible type variable (flex_var) represents an unknown type that the type
+/// checker will attempt to infer. This is the most common type variable used
+/// during canonicalization of expressions.
+///
+/// **Usage**:
+/// - For expressions where the type needs to be inferred (e.g., integer literals before knowing if they're U64, I32, etc.)
+/// - As polymorphic type variables in generic contexts
+/// - When you need a "placeholder" type that will be resolved later
+///
+/// **Example**: Integer literal `42` gets a fresh type var that will be unified
+/// with the specific integer type based on context (U64, I32, etc.).
+///
+/// **Relationship**: Often used as the "top level" in type hierarchies, with more
+/// specific types created using `pushTypeVar` that reference this flexible var.
 pub fn pushFreshTypeVar(self: *CIR, parent_node_idx: Node.Idx, region: base.Region) types.Var {
     return self.pushTypeVar(.{ .flex_var = null }, parent_node_idx, region);
 }
 
-/// Inserts a placeholder CIR node and creates a type variable with the
-/// specified content in the types store at that index
+/// Creates a type variable with specific type content.
+///
+/// Unlike `pushFreshTypeVar`, this creates a type variable with predetermined
+/// structure or constraints. The content parameter specifies what kind of type
+/// this represents.
+///
+/// **Usage**:
+/// - Creating structured types (e.g., `Content{ .structure = .{ .num = .{ .int_poly = poly_var } } }`)
+/// - Setting up type hierarchies where one type references another
+/// - Creating rigid type variables with specific names
+/// - Building complex types like records, functions, or tag unions
+///
+/// **Example**: For integer literal `42`:
+/// ```zig
+/// const poly_var = self.can_ir.pushFreshTypeVar(final_expr_idx, region);
+/// const int_var = self.can_ir.pushTypeVar(
+///     Content{ .structure = .{ .num = .{ .int_poly = poly_var } } },
+///     final_expr_idx, region
+/// );
+/// ```
+/// This creates an integer type that references the polymorphic variable.
+///
+/// **Common Content Types**:
+/// - `.flex_var` - Flexible type variable (same as pushFreshTypeVar)
+/// - `.rigid_var` - Named type variable (e.g., in generic type signatures)
+/// - `.structure` - Concrete types (nums, records, functions, etc.)
+/// - `.err` - Error type for malformed code
 pub fn pushTypeVar(self: *CIR, content: types.Content, parent_node_idx: Node.Idx, region: base.Region) types.Var {
     // insert a placeholder can node
     const var_slot = self.store.addTypeVarSlot(parent_node_idx, region);
@@ -340,22 +471,58 @@ pub fn pushTypeVar(self: *CIR, content: types.Content, parent_node_idx: Node.Idx
     return var_;
 }
 
-/// Set a type variable To the specified content at the specified CIR node index.
+/// Associates a type with an existing definition node.
+///
+/// **Usage**: After creating a definition (like a function or variable declaration),
+/// use this to set its concrete type based on type inference or annotation.
+///
+/// **Example**: Setting the final inferred type of a function definition.
 pub fn setTypeVarAtDef(self: *CIR, at_idx: Def.Idx, content: types.Content) types.Var {
     return self.setTypeVarAt(@enumFromInt(@intFromEnum(at_idx)), content);
 }
 
-/// Set a type variable To the specified content at the specified CIR node index.
+/// Associates a type with an existing expression node.
+///
+/// **Usage**: After creating an expression, use this to set its final type.
+/// This is commonly done after type inference determines the concrete type.
+///
+/// **Example**: For integer literal, after creating the expression with type variables,
+/// set the final unified type:
+/// ```zig
+/// _ = self.can_ir.setTypeVarAtExpr(expr_idx,
+///     Content{ .structure = .{ .num = .{ .num_poly = int_var } } });
+/// ```
 pub fn setTypeVarAtExpr(self: *CIR, at_idx: Expr.Idx, content: types.Content) types.Var {
     return self.setTypeVarAt(@enumFromInt(@intFromEnum(at_idx)), content);
 }
 
-/// Set a type variable To the specified content at the specified CIR node index.
+/// Associates a type with an existing pattern node.
+///
+/// **Usage**: After creating a pattern (like in function parameters or destructuring),
+/// use this to set its type based on inference or context.
+///
+/// **Example**: Setting the type of a pattern in a function parameter after
+/// the function's type signature is known.
 pub fn setTypeVarAtPat(self: *CIR, at_idx: Pattern.Idx, content: types.Content) types.Var {
     return self.setTypeVarAt(@enumFromInt(@intFromEnum(at_idx)), content);
 }
 
-/// Set a type variable To the specified content at the specified CIR node index.
+/// Core function that associates a type with any existing CIR node.
+///
+/// This is the fundamental operation used by all the `setTypeVarAt*` functions.
+/// It takes a node index (which corresponds to a type variable index) and
+/// sets the type content for that variable in the types store.
+///
+/// **Usage**: Usually called indirectly through the typed wrapper functions
+/// (`setTypeVarAtExpr`, `setTypeVarAtDef`, etc.) rather than directly.
+///
+/// **How it works**:
+/// 1. Converts the node index to a type variable index (they use the same numbering)
+/// 2. Ensures the types store has enough slots (backfilling if needed)
+/// 3. Sets the type content at that slot
+///
+/// **Note**: This assumes the node was already created - it doesn't create new nodes,
+/// only associates types with existing ones.
 pub fn setTypeVarAt(self: *CIR, at_idx: Node.Idx, content: types.Content) types.Var {
     // if the new can node idx is greater than the types store length, backfill
     const var_: types.Var = @enumFromInt(@intFromEnum(at_idx));
