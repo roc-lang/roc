@@ -641,7 +641,7 @@ pub fn getAnnoRecordField(store: *const NodeStore, annoRecordField: CIR.AnnoReco
 }
 
 /// Retrieves an annotation from the store.
-pub fn getAnnotation(store: *NodeStore, annotation: CIR.Annotation.Idx) CIR.Annotation {
+pub fn getAnnotation(store: *const NodeStore, annotation: CIR.Annotation.Idx) CIR.Annotation {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(annotation));
     const node = store.nodes.get(node_idx);
 
