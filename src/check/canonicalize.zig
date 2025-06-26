@@ -1359,19 +1359,12 @@ pub fn canonicalize_expr(
             const fields_span = self.can_ir.store.recordFieldSpanFrom(scratch_top);
 
             // create type vars, first "reserve" node slots
-            const record_expr_idx = self.can_ir.store.predictNodeIndex(2);
-
-            // then insert the type vars, setting the parent to be the final slot
-            const record_type_var = self.can_ir.pushFreshTypeVar(
-                record_expr_idx,
-                region,
-            );
+            const record_expr_idx = self.can_ir.store.predictNodeIndex(1);
 
             // then in the final slot the actual expr is inserted
             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
                 .record = .{
                     .fields = fields_span,
-                    .record_var = record_type_var,
                     .ext_var = self.can_ir.pushFreshTypeVar(record_expr_idx, region),
                     .region = region,
                 },
@@ -1383,7 +1376,7 @@ pub fn canonicalize_expr(
 
             // Reserve additional type variable slots for field types
             const field_count = cir_fields.len;
-            const total_vars_needed = 2 + field_count; // record_var + ext_var + field_vars
+            const total_vars_needed = 1 + field_count; // ext_var + field_vars
             const record_with_fields_expr_idx = self.can_ir.store.predictNodeIndex(@intCast(total_vars_needed));
 
             // Create fresh type variables for each field
@@ -1406,18 +1399,8 @@ pub fn canonicalize_expr(
             const type_fields_range = self.can_ir.env.types.appendRecordFields(type_record_fields.items);
             const ext_var = self.can_ir.env.types.freshFromContent(.{ .structure = .empty_record });
 
-            // CRITICAL: Set the record structure on BOTH variables
-            //
-            // 1. Set on record_var - Required for type checking
-            //    The type checker checks: record_var_content == .structure and .structure == .record
-            //    If record_var is flex_var, this condition fails and no field unification occurs
-            _ = self.can_ir.setTypeVarAt(
-                @enumFromInt(@intFromEnum(record_type_var)),
-                Content{ .structure = .{ .record = .{ .fields = type_fields_range, .ext = ext_var } } },
-            );
-
-            // 2. Set on expression variable - Required for final type output
-            //    Without this, the final type shows as `*` instead of `{ field: Type }`
+            // Set the record structure on the expression variable
+            // This provides the concrete type information for type checking and final output
             _ = self.can_ir.setTypeVarAtExpr(
                 expr_idx,
                 Content{ .structure = .{ .record = .{ .fields = type_fields_range, .ext = ext_var } } },

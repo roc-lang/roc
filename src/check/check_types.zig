@@ -134,7 +134,9 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
             // 4. Unification propagates concrete types through the type system
 
             // Get the record type content - this MUST be .structure.record for unification to work
-            const record_var_resolved = self.types.resolveVar(@enumFromInt(@intFromEnum(e.record_var)));
+
+            const expr_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
+            const record_var_resolved = self.types.resolveVar(expr_var);
             const record_var_content = record_var_resolved.desc.content;
 
             // Process each field
