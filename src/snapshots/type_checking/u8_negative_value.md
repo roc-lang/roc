@@ -12,7 +12,7 @@ x = -1
 ~~~
 # PROBLEMS
 **NEGATIVE UNSIGNED INTEGER**
-The number **-1** is a **signed** integer because it is negative:
+The number **-1** is **signed** because it is negative:
 **u8_negative_value.md:4:5:4:7:**
 ```roc
 x = -1

@@ -273,9 +273,9 @@ pub const Problem = union(enum) {
 
         try report.document.addReflowingText("The number ");
         try report.document.addAnnotated(literal_text, .emphasized);
-        try report.document.addReflowingText(" is a ");
+        try report.document.addReflowingText(" is ");
         try report.document.addAnnotated("signed", .emphasized);
-        try report.document.addReflowingText(" integer because it is negative:");
+        try report.document.addReflowingText(" because it is negative:");
         try report.document.addLineBreak();
 
         try report.document.addSourceRegion(
