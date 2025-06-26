@@ -1202,14 +1202,14 @@ pub const Expr = union(enum) {
 
     pub const Span = struct { span: DataSpan };
 
-    pub fn init_str(expr_span: Expr.Span, region: Region) Expr {
+    pub fn initStr(expr_span: Expr.Span, region: Region) Expr {
         return .{ .str = .{
             .span = expr_span,
             .region = region,
         } };
     }
 
-    pub fn init_str_segment(literal: StringLiteral.Idx, region: Region) Expr {
+    pub fn initStrSegment(literal: StringLiteral.Idx, region: Region) Expr {
         return .{ .str_segment = .{
             .literal = literal,
             .region = region,

@@ -291,11 +291,11 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 },
             };
         },
-        .expr_string_segment => return CIR.Expr.init_str_segment(
+        .expr_string_segment => return CIR.Expr.initStrSegment(
             @enumFromInt(node.data_1),
             node.region,
         ),
-        .expr_string => return CIR.Expr.init_str(
+        .expr_string => return CIR.Expr.initStr(
             DataSpan.init(node.data_1, node.data_2).as(CIR.Expr.Span),
             node.region,
         ),
