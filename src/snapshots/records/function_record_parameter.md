@@ -8,38 +8,16 @@ type=expr
 |{ name, age }| "Hello ${name}, you are ${age.to_str()} years old"
 ~~~
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `expected_colon_after_pat_field_name`
-This is an unexpected parsing error. Please check your syntax.
+**NOT IMPLEMENTED**
+This feature is not yet implemented: canonicalize record pattern
 
-Here is the problematic code:
-**function_record_parameter.md:1:4:1:9:**
-```roc
-|{ name, age }| "Hello ${name}, you are ${age.to_str()} years old"
-```
+**UNDEFINED VARIABLE**
+Nothing is named `name` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-
-**UNEXPECTED TOKEN IN PATTERN**
-The token **{ name** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
-
-Here is the problematic code:
-**function_record_parameter.md:1:2:1:8:**
-```roc
-|{ name, age }| "Hello ${name}, you are ${age.to_str()} years old"
-```
-
-
-**PARSE ERROR**
-A parsing error occurred: `expected_expr_bar`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**function_record_parameter.md:1:17:1:24:**
-```roc
-|{ name, age }| "Hello ${name}, you are ${age.to_str()} years old"
-```
-
+**UNDEFINED VARIABLE**
+Nothing is named `age` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
@@ -47,15 +25,27 @@ OpBar(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:4-1:8),Comma(1:8-1:9),LowerIdent(
 ~~~
 # PARSE
 ~~~clojure
-(e-malformed @1-17-1-24 (reason "expected_expr_bar"))
+(e-lambda @1-1-1-67
+	(args
+		(p-record @1-2-1-15
+			(field @1-4-1-9 (name "name") (rest false))
+			(field @1-10-1-15 (name "age") (rest false))))
+	(e-string @1-17-1-67
+		(e-string-part @1-18-1-24 (raw "Hello "))
+		(e-ident @1-26-1-30 (qaul "") (raw "name"))
+		(e-string-part @1-31-1-41 (raw ", you are "))
+		(e-field-access @1-43-1-56
+			(e-binop @1-43-1-56 (op "|")
+				(e-ident @1-43-1-46 (qaul "") (raw "age"))
+				(e-apply @1-46-1-55
+					(e-ident @1-46-1-53 (qaul "") (raw ".to_str")))))
+		(e-string-part @1-56-1-66 (raw " years old"))))
 ~~~
 # FORMATTED
 ~~~roc
-
+NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+(expr (id 83) (type "*"))
 ~~~

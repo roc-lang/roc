@@ -475,6 +475,7 @@ pub const Diagnostic = struct {
         header_unexpected_token,
         pattern_unexpected_token,
         pattern_unexpected_eof,
+        bad_as_pattern_name,
         ty_anno_unexpected_token,
         statement_unexpected_eof,
         statement_unexpected_token,
@@ -904,6 +905,11 @@ pub const Pattern = union(enum) {
         patterns: Pattern.Span,
         region: TokenizedRegion,
     },
+    as: struct {
+        pattern: Pattern.Idx,
+        name: Token.Idx,
+        region: TokenizedRegion,
+    },
     malformed: struct {
         reason: Diagnostic.Tag,
         region: TokenizedRegion,
@@ -925,6 +931,7 @@ pub const Pattern = union(enum) {
             .tuple => |p| p.region,
             .underscore => |p| p.region,
             .alternatives => |p| p.region,
+            .as => |p| p.region,
             .malformed => |p| p.region,
         };
     }
@@ -1037,6 +1044,15 @@ pub const Pattern = union(enum) {
                     var patNode = ast.store.getPattern(pat).toSExpr(env, ast);
                     node.appendNode(env.gpa, &patNode);
                 }
+                return node;
+            },
+            .as => |a| {
+                var node = SExpr.init(env.gpa, "p-as");
+                node.appendRegion(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
+
+                var pattern_node = ast.store.getPattern(a.pattern).toSExpr(env, ast);
+                node.appendStringAttr(env.gpa, "name", ast.resolve(a.name));
+                node.appendNode(env.gpa, &pattern_node);
                 return node;
             },
             .malformed => |a| {

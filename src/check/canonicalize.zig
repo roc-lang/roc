@@ -1876,6 +1876,14 @@ fn canonicalize_pattern(
             } });
             return pattern_idx;
         },
+        .as => |_| {
+            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize alternatives pattern");
+            const pattern_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .not_implemented = .{
+                .feature = feature,
+                .region = Region.zero(),
+            } });
+            return pattern_idx;
+        },
         .malformed => |malformed| {
             // We won't touch this since it's already a parse error.
             _ = malformed;

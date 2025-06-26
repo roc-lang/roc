@@ -462,6 +462,12 @@ pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) AST.Pattern.Idx {
             node.data.lhs = a.patterns.span.start;
             node.data.rhs = a.patterns.span.len;
         },
+        .as => |a| {
+            node.region = a.region;
+            node.tag = .as_patt;
+            node.main_token = a.name;
+            node.data.lhs = @intFromEnum(a.pattern);
+        },
         .malformed => {
             @panic("Use addMalformed instead");
         },
@@ -1194,6 +1200,13 @@ pub fn getPattern(store: *NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pattern {
         .underscore_patt => {
             return .{ .underscore = .{
                 .region = node.region,
+            } };
+        },
+        .as_patt => {
+            return .{ .as = .{
+                .region = node.region,
+                .name = node.main_token,
+                .pattern = @enumFromInt(node.data.lhs),
             } };
         },
         .malformed => {

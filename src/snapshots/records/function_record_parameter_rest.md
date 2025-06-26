@@ -8,38 +8,16 @@ type=expr
 |{ first_name, ..rest }| "Hello ${first_name} ${rest.last_name}"
 ~~~
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `expected_colon_after_pat_field_name`
-This is an unexpected parsing error. Please check your syntax.
+**NOT IMPLEMENTED**
+This feature is not yet implemented: canonicalize record pattern
 
-Here is the problematic code:
-**function_record_parameter_rest.md:1:4:1:15:**
-```roc
-|{ first_name, ..rest }| "Hello ${first_name} ${rest.last_name}"
-```
+**UNDEFINED VARIABLE**
+Nothing is named `first_name` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-
-**UNEXPECTED TOKEN IN PATTERN**
-The token **{ first_name** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
-
-Here is the problematic code:
-**function_record_parameter_rest.md:1:2:1:14:**
-```roc
-|{ first_name, ..rest }| "Hello ${first_name} ${rest.last_name}"
-```
-
-
-**PARSE ERROR**
-A parsing error occurred: `expected_expr_bar`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**function_record_parameter_rest.md:1:26:1:33:**
-```roc
-|{ first_name, ..rest }| "Hello ${first_name} ${rest.last_name}"
-```
-
+**UNDEFINED VARIABLE**
+Nothing is named `rest` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
@@ -47,15 +25,26 @@ OpBar(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:4-1:14),Comma(1:14-1:15),DoubleDo
 ~~~
 # PARSE
 ~~~clojure
-(e-malformed @1-26-1-33 (reason "expected_expr_bar"))
+(e-lambda @1-1-1-65
+	(args
+		(p-record @1-2-1-24
+			(field @1-4-1-15 (name "first_name") (rest false))
+			(field @1-16-1-24 (name "rest") (rest true))))
+	(e-string @1-26-1-65
+		(e-string-part @1-27-1-33 (raw "Hello "))
+		(e-ident @1-35-1-45 (qaul "") (raw "first_name"))
+		(e-string-part @1-46-1-47 (raw " "))
+		(e-field-access @1-49-1-64
+			(e-binop @1-49-1-64 (op "|")
+				(e-ident @1-49-1-53 (qaul "") (raw "rest"))
+				(e-ident @1-53-1-63 (qaul "") (raw ".last_name"))))
+		(e-string-part @1-64-1-64 (raw ""))))
 ~~~
 # FORMATTED
 ~~~roc
-
+NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+(expr (id 83) (type "*"))
 ~~~
