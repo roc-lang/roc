@@ -127,6 +127,58 @@ pub fn unify(
                         .actual = actual_snapshot,
                     } };
                 },
+                error.NumberDoesNotFit => {
+                    // For number literal errors, we need to determine which var is the literal
+                    // and which is the expected type
+                    const a_resolved = types.resolveVar(a);
+
+                    // Check if 'a' is the literal (has int_poly/num_poly) or 'b' is
+                    const literal_is_a = switch (a_resolved.desc.content) {
+                        .structure => |structure| switch (structure) {
+                            .num => |num| switch (num) {
+                                .int_poly, .num_poly => true,
+                                else => false,
+                            },
+                            else => false,
+                        },
+                        else => false,
+                    };
+
+                    const literal_var = if (literal_is_a) a else b;
+                    const expected_var = if (literal_is_a) b else a;
+                    const expected_snapshot = snapshots.createSnapshot(types, expected_var);
+
+                    break :blk .{ .number_does_not_fit = .{
+                        .literal_var = literal_var,
+                        .expected_type = expected_snapshot,
+                    } };
+                },
+                error.NegativeUnsignedInt => {
+                    // For number literal errors, we need to determine which var is the literal
+                    // and which is the expected type
+                    const a_resolved = types.resolveVar(a);
+
+                    // Check if 'a' is the literal (has int_poly/num_poly) or 'b' is
+                    const literal_is_a = switch (a_resolved.desc.content) {
+                        .structure => |structure| switch (structure) {
+                            .num => |num| switch (num) {
+                                .int_poly, .num_poly => true,
+                                else => false,
+                            },
+                            else => false,
+                        },
+                        else => false,
+                    };
+
+                    const literal_var = if (literal_is_a) a else b;
+                    const expected_var = if (literal_is_a) b else a;
+                    const expected_snapshot = snapshots.createSnapshot(types, expected_var);
+
+                    break :blk .{ .negative_unsigned_int = .{
+                        .literal_var = literal_var,
+                        .expected_type = expected_snapshot,
+                    } };
+                },
                 error.UnifyErr => {
                     // Unify can error in the following ways:
                     //
@@ -295,6 +347,8 @@ const Unifier = struct {
     const Error = error{
         TypeMismatch,
         UnifyErr,
+        NumberDoesNotFit,
+        NegativeUnsignedInt,
     };
 
     /// TODO: What should this be?
@@ -696,8 +750,11 @@ const Unifier = struct {
                         // num_poly always contains IntRequirements
                         switch (b_num_compact) {
                             .int => |prec| {
-                                if (!self.intPrecisionSatisfiesRequirements(prec, a_requirements)) {
-                                    return error.TypeMismatch;
+                                const result = self.checkIntPrecisionRequirements(prec, a_requirements);
+                                switch (result) {
+                                    .ok => {},
+                                    .negative_unsigned => return error.NegativeUnsignedInt,
+                                    .too_large => return error.NumberDoesNotFit,
                                 }
                             },
                             .frac => return error.TypeMismatch,
@@ -715,8 +772,11 @@ const Unifier = struct {
                     },
                     .int_precision => |prec| {
                         // num_poly always contains IntRequirements
-                        if (!self.intPrecisionSatisfiesRequirements(prec, a_requirements)) {
-                            return error.TypeMismatch;
+                        const result = self.checkIntPrecisionRequirements(prec, a_requirements);
+                        switch (result) {
+                            .ok => {},
+                            .negative_unsigned => return error.NegativeUnsignedInt,
+                            .too_large => return error.NumberDoesNotFit,
                         }
                         self.merge(vars, vars.b.desc.content);
                     },
@@ -740,8 +800,11 @@ const Unifier = struct {
                             return error.TypeMismatch;
                         }
                         // Check if the precision satisfies the requirements
-                        if (!self.intPrecisionSatisfiesRequirements(prec, a_requirements)) {
-                            return error.TypeMismatch;
+                        const result = self.checkIntPrecisionRequirements(prec, a_requirements);
+                        switch (result) {
+                            .ok => {},
+                            .negative_unsigned => return error.NegativeUnsignedInt,
+                            .too_large => return error.NumberDoesNotFit,
                         }
                         self.merge(vars, vars.b.desc.content);
                     },
@@ -848,8 +911,11 @@ const Unifier = struct {
                         // num_poly always contains IntRequirements
                         switch (a_num_compact) {
                             .int => |prec| {
-                                if (!self.intPrecisionSatisfiesRequirements(prec, b_requirements)) {
-                                    return error.TypeMismatch;
+                                const result = self.checkIntPrecisionRequirements(prec, b_requirements);
+                                switch (result) {
+                                    .ok => {},
+                                    .negative_unsigned => return error.NegativeUnsignedInt,
+                                    .too_large => return error.NumberDoesNotFit,
                                 }
                             },
                             .frac => return error.TypeMismatch,
@@ -903,7 +969,13 @@ const Unifier = struct {
         }
     }
 
-    fn intPrecisionSatisfiesRequirements(self: *Self, prec: Num.Int.Precision, requirements: Num.IntRequirements) bool {
+    const IntPrecisionCheckResult = enum {
+        ok,
+        negative_unsigned,
+        too_large,
+    };
+
+    fn checkIntPrecisionRequirements(self: *Self, prec: Num.Int.Precision, requirements: Num.IntRequirements) IntPrecisionCheckResult {
         _ = self;
 
         // Check sign requirement
@@ -912,11 +984,10 @@ const Unifier = struct {
             .u8, .u16, .u32, .u64, .u128 => false,
         };
 
-        // If we need signed values but have unsigned type, it can't work
+        // If we need signed values but have unsigned type, it's a negative literal error
         if (requirements.sign_needed and !is_signed) {
-            return false;
+            return .negative_unsigned;
         }
-        // If we need unsigned values, signed types are fine as long as they have enough bits
 
         // Check bits requirement
         const available_bits: u8 = switch (prec) {
@@ -943,13 +1014,17 @@ const Unifier = struct {
 
         // For unsigned types, we need exactly the required bits
         if (!is_signed) {
-            return available_bits >= required_bits;
+            return if (available_bits >= required_bits) .ok else .too_large;
         }
 
         // For signed types, we lose one bit to the sign
         const usable_bits = if (is_signed) available_bits - 1 else available_bits;
 
-        return usable_bits >= required_bits;
+        return if (usable_bits >= required_bits) .ok else .too_large;
+    }
+
+    fn intPrecisionSatisfiesRequirements(self: *Self, prec: Num.Int.Precision, requirements: Num.IntRequirements) bool {
+        return self.checkIntPrecisionRequirements(prec, requirements) == .ok;
     }
 
     fn fracPrecisionSatisfiesRequirements(self: *Self, prec: Num.Frac.Precision, requirements: Num.FracRequirements) bool {

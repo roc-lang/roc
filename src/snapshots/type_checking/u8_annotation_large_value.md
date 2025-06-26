@@ -11,18 +11,15 @@ x : U8
 x = 500
 ~~~
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**u8_annotation_large_value.md:4:1:4:2:**
+**NUMBER DOES NOT FIT IN TYPE**
+The number **500** does not fit in its inferred type:
+**u8_annotation_large_value.md:4:5:4:8:**
 ```roc
 x = 500
 ```
 
-It is of type:
+The expected type is:
     _U8_
-
-But you are trying to use it as:
-    _Num(*)_
 
 # TOKENS
 ~~~zig

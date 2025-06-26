@@ -11,18 +11,15 @@ x : U8
 x = -1
 ~~~
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**u8_negative_value.md:4:1:4:2:**
+**NEGATIVE UNSIGNED INTEGER**
+The number **-1** is a **signed** integer because it is negative:
+**u8_negative_value.md:4:5:4:7:**
 ```roc
 x = -1
 ```
 
-It is of type:
+However, its inferred type is **unsigned**:
     _U8_
-
-But you are trying to use it as:
-    _Num(*)_
 
 # TOKENS
 ~~~zig

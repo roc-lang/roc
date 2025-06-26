@@ -25,6 +25,8 @@ const Content = types.Content;
 /// The kind of problem we're dealing with
 pub const Problem = union(enum) {
     type_mismatch: VarProblem2,
+    number_does_not_fit: NumberDoesNotFit,
+    negative_unsigned_int: NegativeUnsignedInt,
     infinite_recursion: struct { var_: Var },
     anonymous_recursion: struct { var_: Var },
     invalid_number_type: VarProblem1,
@@ -61,6 +63,30 @@ pub const Problem = union(enum) {
                     can_ir,
                     &snapshot_writer,
                     vars,
+                    source,
+                    filename,
+                );
+            },
+            .number_does_not_fit => |data| {
+                return buildNumberDoesNotFitReport(
+                    gpa,
+                    buf,
+                    module_env,
+                    can_ir,
+                    &snapshot_writer,
+                    data,
+                    source,
+                    filename,
+                );
+            },
+            .negative_unsigned_int => |data| {
+                return buildNegativeUnsignedIntReport(
+                    gpa,
+                    buf,
+                    module_env,
+                    can_ir,
+                    &snapshot_writer,
+                    data,
                     source,
                     filename,
                 );
@@ -159,6 +185,120 @@ pub const Problem = union(enum) {
         return report;
     }
 
+    /// Build a report for "number does not fit in type" diagnostic
+    pub fn buildNumberDoesNotFitReport(
+        gpa: Allocator,
+        buf: *std.ArrayList(u8),
+        module_env: *const base.ModuleEnv,
+        can_ir: *const can.CIR,
+        writer: *snapshot.SnapshotWriter,
+        data: NumberDoesNotFit,
+        source: []const u8,
+        filename: []const u8,
+    ) !Report {
+        var report = Report.init(gpa, "NUMBER DOES NOT FIT IN TYPE", .runtime_error);
+
+        buf.clearRetainingCapacity();
+        try writer.write(data.expected_type);
+        const owned_expected = try report.addOwnedString(buf.items[0..]);
+
+        const region = can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(data.literal_var)));
+
+        // Add source region highlighting
+        const region_info = module_env.calcRegionInfo(source, region.start.offset, region.end.offset) catch |err| switch (err) {
+            else => base.RegionInfo{
+                .start_line_idx = 0,
+                .start_col_idx = 0,
+                .end_line_idx = 0,
+                .end_col_idx = 0,
+                .line_text = "",
+            },
+        };
+        const literal_text = source[region.start.offset..region.end.offset];
+
+        try report.document.addReflowingText("The number ");
+        try report.document.addAnnotated(literal_text, .emphasized);
+        try report.document.addReflowingText(" does not fit in its inferred type:");
+        try report.document.addLineBreak();
+
+        try report.document.addSourceRegion(
+            source,
+            region_info.start_line_idx,
+            region_info.start_col_idx,
+            region_info.end_line_idx,
+            region_info.end_col_idx,
+            .error_highlight,
+            filename,
+        );
+        try report.document.addLineBreak();
+
+        try report.document.addText("The expected type is:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(owned_expected, .type_variable);
+
+        return report;
+    }
+
+    /// Build a report for "negative unsigned integer" diagnostic
+    pub fn buildNegativeUnsignedIntReport(
+        gpa: Allocator,
+        buf: *std.ArrayList(u8),
+        module_env: *const base.ModuleEnv,
+        can_ir: *const can.CIR,
+        writer: *snapshot.SnapshotWriter,
+        data: NegativeUnsignedInt,
+        source: []const u8,
+        filename: []const u8,
+    ) !Report {
+        var report = Report.init(gpa, "NEGATIVE UNSIGNED INTEGER", .runtime_error);
+
+        buf.clearRetainingCapacity();
+        try writer.write(data.expected_type);
+        const owned_expected = try report.addOwnedString(buf.items[0..]);
+
+        const region = can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(data.literal_var)));
+
+        // Add source region highlighting
+        const region_info = module_env.calcRegionInfo(source, region.start.offset, region.end.offset) catch |err| switch (err) {
+            else => base.RegionInfo{
+                .start_line_idx = 0,
+                .start_col_idx = 0,
+                .end_line_idx = 0,
+                .end_col_idx = 0,
+                .line_text = "",
+            },
+        };
+        const literal_text = source[region.start.offset..region.end.offset];
+
+        try report.document.addReflowingText("The number ");
+        try report.document.addAnnotated(literal_text, .emphasized);
+        try report.document.addReflowingText(" is a ");
+        try report.document.addAnnotated("signed", .emphasized);
+        try report.document.addReflowingText(" integer because it is negative:");
+        try report.document.addLineBreak();
+
+        try report.document.addSourceRegion(
+            source,
+            region_info.start_line_idx,
+            region_info.start_col_idx,
+            region_info.end_line_idx,
+            region_info.end_col_idx,
+            .error_highlight,
+            filename,
+        );
+        try report.document.addLineBreak();
+
+        try report.document.addText("However, its inferred type is ");
+        try report.document.addAnnotated("unsigned", .emphasized);
+        try report.document.addReflowingText(":");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(owned_expected, .type_variable);
+
+        return report;
+    }
+
     /// Build a report for "invalid number literal" diagnostic
     pub fn buildUnimplementedReport(allocator: Allocator) !Report {
         const report = Report.init(allocator, "UNIMPLEMENTED", .runtime_error);
@@ -178,6 +318,18 @@ pub const VarProblem2 = struct {
     expected: SnapshotContentIdx,
     actual_var: Var,
     actual: SnapshotContentIdx,
+};
+
+/// Number literal doesn't fit in the expected type
+pub const NumberDoesNotFit = struct {
+    literal_var: Var,
+    expected_type: SnapshotContentIdx,
+};
+
+/// Negative literal assigned to unsigned type
+pub const NegativeUnsignedInt = struct {
+    literal_var: Var,
+    expected_type: SnapshotContentIdx,
 };
 
 /// Self-contained problems store with resolved snapshots of type content
