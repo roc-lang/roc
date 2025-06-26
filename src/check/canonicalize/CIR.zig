@@ -1116,7 +1116,6 @@ pub const Expr = union(enum) {
         region: Region,
     },
     tuple: struct {
-        tuple_var: TypeVar,
         elems: Expr.Span,
         region: Region,
     },
@@ -1466,9 +1465,6 @@ pub const Expr = union(enum) {
             .tuple => |t| {
                 var node = SExpr.init(gpa, "e-tuple");
                 node.appendRegion(gpa, ir.calcRegionInfo(t.region));
-
-                // Add tuple_var
-                node.appendTypeVar(gpa, "tuple-var", t.tuple_var);
 
                 // Add tuple elements
                 var elems_node = SExpr.init(gpa, "elems");
@@ -2219,7 +2215,6 @@ pub const Pattern = union(enum) {
         region: Region,
     },
     tuple: struct {
-        tuple_var: TypeVar,
         patterns: Pattern.Span,
         region: Region,
     },
@@ -2353,9 +2348,6 @@ pub const Pattern = union(enum) {
 
                 // var pattern_idx_node = formatPatternIdxNode(gpa, pattern_idx);
                 // node.appendNode(gpa, &pattern_idx_node);
-
-                // Add tuple_var
-                node.appendTypeVar(gpa, "tuple-var", p.tuple_var);
 
                 var patterns_node = SExpr.init(gpa, "patterns");
 

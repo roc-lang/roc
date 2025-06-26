@@ -60,13 +60,13 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:9),OpAmpersand(1:10-1:11),LowerIdent(1:12-1:
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1-1-1-21 (id 79)
+(e-block @1-1-1-21 (id 78)
 	(s-expr @1-3-1-11
 		(e-runtime-error (tag "ident_not_in_scope")))
-	(e-tuple @1-12-1-21 (tuple-var 77)
+	(e-tuple @1-12-1-21
 		(elems)))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 79) (type "*"))
+(expr (id 78) (type "*"))
 ~~~
