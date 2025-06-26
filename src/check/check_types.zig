@@ -78,10 +78,15 @@ pub fn checkDefs(self: *Self) void {
         // TODO: Check patterns
         self.checkExpr(def.expr);
 
-        self.unify(
-            @enumFromInt(@intFromEnum(def_idx)),
-            @enumFromInt(@intFromEnum(def.expr)),
-        );
+        // If there's a type annotation, unify the expression with the annotation's signature
+        if (def.annotation) |anno_idx| {
+            const annotation = self.can_ir.store.getAnnotation(anno_idx);
+
+            self.unify(@enumFromInt(@intFromEnum(def.expr)), annotation.signature);
+            self.unify(@enumFromInt(@intFromEnum(def_idx)), annotation.signature);
+        } else {
+            self.unify(@enumFromInt(@intFromEnum(def_idx)), @enumFromInt(@intFromEnum(def.expr)));
+        }
     }
 }
 

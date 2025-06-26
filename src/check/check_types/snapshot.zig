@@ -716,7 +716,7 @@ pub const SnapshotWriter = struct {
                 _ = try self.writer.write(")");
             },
             .frac_poly => |sub_var| {
-                _ = try self.writer.write("FloatingPoint(");
+                _ = try self.writer.write("Fraction(");
                 try self.write(sub_var);
                 _ = try self.writer.write(")");
             },
@@ -734,7 +734,7 @@ pub const SnapshotWriter = struct {
                         _ = try self.writer.write("))");
                     },
                     .frac => |prec| {
-                        _ = try self.writer.write("Num(FloatingPoint(");
+                        _ = try self.writer.write("Num(Fraction(");
                         try self.writeFracPrecision(prec);
                         _ = try self.writer.write("))");
                     },
@@ -762,7 +762,7 @@ pub const SnapshotWriter = struct {
         _ = switch (prec) {
             .f32 => try self.writer.write("Binary32"),
             .f64 => try self.writer.write("Binary64"),
-            .dec => try self.writer.write("Dec"),
+            .dec => try self.writer.write("Decimal"),
         };
     }
 };

@@ -41,7 +41,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "foo") (type "Num(FloatingPoint(*))")))
+		(def (name "foo") (type "Num(Fraction(*))")))
 	(expressions
-		(expr @2-7-2-12 (type "Num(FloatingPoint(*))"))))
+		(expr @2-7-2-12 (type "Num(Fraction(*))"))))
 ~~~

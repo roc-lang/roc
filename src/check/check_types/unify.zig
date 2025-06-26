@@ -703,6 +703,10 @@ const Unifier = struct {
                         try self.unifyGuarded(a_var, b_var);
                         self.merge(vars, vars.b.desc.content);
                     },
+                    .int_precision => |_| {
+                        // If we unify Int(a) with a concrete Int type, the concrete type wins.
+                        self.merge(vars, vars.b.desc.content);
+                    },
                     else => return error.TypeMismatch,
                 }
             },
@@ -711,6 +715,10 @@ const Unifier = struct {
                     .frac_poly => |b_var| {
                         // TODO: Error if sub vars are not numeric
                         try self.unifyGuarded(a_var, b_var);
+                        self.merge(vars, vars.b.desc.content);
+                    },
+                    .frac_precision => |_| {
+                        // If we unify Frac(a) with a concrete Frac type, the concrete type wins.
                         self.merge(vars, vars.b.desc.content);
                     },
                     else => return error.TypeMismatch,

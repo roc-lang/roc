@@ -3601,29 +3601,31 @@ fn canonicalizeBasicType(self: *Self, symbol: Ident.Idx, parent_node_idx: Node.I
         const num_var = self.can_ir.pushFreshTypeVar(parent_node_idx, region);
         return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_poly = num_var } } }, parent_node_idx, region);
     } else if (std.mem.eql(u8, name, "U8")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .int_precision = .u8 } } }, parent_node_idx, region);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } }, parent_node_idx, region);
     } else if (std.mem.eql(u8, name, "U16")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .int_precision = .u16 } } }, parent_node_idx, region);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u16 } } } }, parent_node_idx, region);
     } else if (std.mem.eql(u8, name, "U32")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .int_precision = .u32 } } }, parent_node_idx, region);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u32 } } } }, parent_node_idx, region);
     } else if (std.mem.eql(u8, name, "U64")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .int_precision = .u64 } } }, parent_node_idx, region);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u64 } } } }, parent_node_idx, region);
     } else if (std.mem.eql(u8, name, "U128")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .int_precision = .u128 } } }, parent_node_idx, region);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u128 } } } }, parent_node_idx, region);
     } else if (std.mem.eql(u8, name, "I8")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .int_precision = .i8 } } }, parent_node_idx, region);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i8 } } } }, parent_node_idx, region);
     } else if (std.mem.eql(u8, name, "I16")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .int_precision = .i16 } } }, parent_node_idx, region);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i16 } } } }, parent_node_idx, region);
     } else if (std.mem.eql(u8, name, "I32")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .int_precision = .i32 } } }, parent_node_idx, region);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i32 } } } }, parent_node_idx, region);
     } else if (std.mem.eql(u8, name, "I64")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .int_precision = .i64 } } }, parent_node_idx, region);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } }, parent_node_idx, region);
     } else if (std.mem.eql(u8, name, "I128")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .int_precision = .i128 } } }, parent_node_idx, region);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i128 } } } }, parent_node_idx, region);
     } else if (std.mem.eql(u8, name, "F32")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .frac_precision = .f32 } } }, parent_node_idx, region);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f32 } } } }, parent_node_idx, region);
     } else if (std.mem.eql(u8, name, "F64")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .frac_precision = .f64 } } }, parent_node_idx, region);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f64 } } } }, parent_node_idx, region);
+    } else if (std.mem.eql(u8, name, "Dec")) {
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = .dec } } } }, parent_node_idx, region);
     } else {
         // Look up user-defined type in scope
         const scope = self.currentScope();
