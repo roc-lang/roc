@@ -751,7 +751,9 @@ fn generateProblemsSection(output: *DualOutput, parse_ast: *AST, can_ir: *CIR, s
         log("reported {} type problems", .{check_types_problem});
     }
 
-    // Don't write out section end for markdown, as the problem reports are already in markdown format.
+    // Write section end delimiter for markdown
+    try output.md_writer.writeAll("\n");
+    try output.md_writer.writeAll(Section.SECTION_END);
 
     try output.html_writer.writeAll(
         \\                </div>
@@ -1654,6 +1656,16 @@ fn extractSections(gpa: Allocator, content: []const u8) !Content {
         if (Section.fromString(trimmed_section)) |section| {
             const start = processed_chars + section.asString().len;
             const end = processed_chars + section_with_header.len;
+
+            // Debug: Check if the content ends with ~~~
+            if (section == .source) {
+                const section_content = content[start..end];
+                if (std.mem.endsWith(u8, section_content, "~~~")) {
+                    std.debug.print("WARNING: SOURCE section content ends with ~~~\n", .{});
+                    std.debug.print("Section content: '{s}'\n", .{section_content});
+                }
+            }
+
             try ranges.put(section, .{ .start = start, .end = end });
 
             processed_chars += section_with_header.len + Section.SECTION_END.len;
