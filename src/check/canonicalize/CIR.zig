@@ -303,6 +303,19 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 filename,
             );
         },
+        .duplicate_record_field => |data| blk: {
+            const duplicate_region_info = self.calcRegionInfo(data.duplicate_region);
+            const original_region_info = self.calcRegionInfo(data.original_region);
+            const field_name = self.env.idents.getText(data.field_name);
+            break :blk try Diagnostic.buildDuplicateRecordFieldReport(
+                allocator,
+                field_name,
+                duplicate_region_info,
+                original_region_info,
+                source,
+                filename,
+            );
+        },
     };
 }
 

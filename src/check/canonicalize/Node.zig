@@ -149,4 +149,5 @@ pub const Tag = enum {
     diag_type_parameter_conflict,
     diag_unused_variable,
     diag_used_underscore_variable,
+    diag_duplicate_record_field,
 };

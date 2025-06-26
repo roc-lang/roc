@@ -337,12 +337,14 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             } };
         },
         .expr_record => {
-            return CIR.Expr{ .record = .{
-                .record_var = @enumFromInt(node.data_1),
-                .ext_var = @enumFromInt(0), // TODO: get from extra_data
-                .fields = .{ .span = .{ .start = node.data_2, .len = node.data_3 } },
-                .region = node.region,
-            } };
+            return CIR.Expr{
+                .record = .{
+                    .record_var = @enumFromInt(node.data_1),
+                    .ext_var = @enumFromInt(0), // TODO: get from extra_data
+                    .fields = .{ .span = .{ .start = node.data_2, .len = node.data_3 } },
+                    .region = node.region,
+                },
+            };
         },
         .expr_field_access,
         .expr_static_dispatch,
@@ -1821,6 +1823,13 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) CIR.Diagnostic.I
             node.region = r.region;
             node.data_1 = @bitCast(r.ident);
         },
+        .duplicate_record_field => |r| {
+            node.tag = .diag_duplicate_record_field;
+            node.region = r.duplicate_region;
+            node.data_1 = @bitCast(r.field_name);
+            node.data_2 = r.original_region.start.offset;
+            node.data_3 = r.original_region.end.offset;
+        },
     }
 
     const nid = @intFromEnum(store.nodes.append(store.gpa, node));
@@ -1978,6 +1987,14 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_used_underscore_variable => return CIR.Diagnostic{ .used_underscore_variable = .{
             .ident = @bitCast(node.data_1),
             .region = node.region,
+        } },
+        .diag_duplicate_record_field => return CIR.Diagnostic{ .duplicate_record_field = .{
+            .field_name = @bitCast(node.data_1),
+            .duplicate_region = node.region,
+            .original_region = .{
+                .start = .{ .offset = @intCast(node.data_2) },
+                .end = .{ .offset = @intCast(node.data_3) },
+            },
         } },
         else => {
             @panic("unreachable, node is not a diagnostic tag");

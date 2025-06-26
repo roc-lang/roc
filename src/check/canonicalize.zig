@@ -1265,9 +1265,38 @@ pub fn canonicalize_expr(
             // Mark the start of scratch record fields for the record
             const scratch_top = self.can_ir.store.scratch_record_fields.top();
 
+            // Track field names to detect duplicates
+            var field_names = std.StringHashMapUnmanaged(base.Region){};
+            defer field_names.deinit(self.can_ir.env.gpa);
+
             // Iterate over the record fields, canonicalizing each one
             // Then append the result to the scratch list
             for (fields_slice) |field| {
+                const ast_field = self.parse_ir.store.getRecordField(field);
+
+                // Get the field name identifier
+                if (self.parse_ir.tokens.resolveIdentifier(ast_field.name)) |field_name_ident| {
+                    const field_name_region = self.parse_ir.tokens.resolve(ast_field.name);
+                    const field_name_text = self.can_ir.env.idents.getText(field_name_ident);
+
+                    // Check for duplicate field names
+                    if (field_names.get(field_name_text)) |original_region| {
+                        // Found a duplicate - add diagnostic
+                        const diagnostic = CIR.Diagnostic{
+                            .duplicate_record_field = .{
+                                .field_name = field_name_ident,
+                                .duplicate_region = field_name_region,
+                                .original_region = original_region,
+                            },
+                        };
+                        self.can_ir.pushDiagnostic(diagnostic);
+                    } else {
+                        // First occurrence of this field name
+                        field_names.put(self.can_ir.env.gpa, field_name_text, field_name_region) catch |err| exitOnOom(err);
+                    }
+                }
+
+                // Continue with normal canonicalization
                 if (self.canonicalize_record_field(field)) |canonicalized| {
                     self.can_ir.store.scratch_record_fields.append(self.can_ir.env.gpa, canonicalized);
                 }
