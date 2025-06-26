@@ -1252,6 +1252,7 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) AST.Pattern.Idx {
                 }
                 const fields = self.store.patternRecordFieldSpanFrom(scratch_top);
                 if (self.peek() != .CloseCurly) {
+                    std.debug.print("Expected CloseCurly, got {s}\n", .{@tagName(self.peek())});
                     return self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, start);
                 }
                 const end = self.pos;
@@ -1309,11 +1310,11 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) AST.Pattern.Idx {
 
         if (pattern) |p| {
             if (alternatives == .alternatives_forbidden) {
-                return p;
+                return self.parseAsPattern(p);
             }
             if (self.peek() != .OpBar) {
                 if ((self.store.scratchPatternTop() - patterns_scratch_top) == 0) {
-                    return p;
+                    return self.parseAsPattern(p);
                 }
                 self.store.addScratchPattern(p);
                 break;
@@ -1332,6 +1333,25 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) AST.Pattern.Idx {
         .region = .{ .start = outer_start, .end = last_pattern_region.end },
         .patterns = patterns,
     } });
+}
+
+fn parseAsPattern(self: *Parser, pattern: AST.Pattern.Idx) AST.Pattern.Idx {
+    if (self.peek() != .KwAs) {
+        return pattern;
+    }
+    self.advance(); // Advance past KwAs
+    if (self.peek() != .LowerIdent) {
+        // The name of a pattern can only be a lower ident
+        return self.pushMalformed(AST.Pattern.Idx, .bad_as_pattern_name, self.pos);
+    }
+    const parent_region = self.store.getPattern(pattern).to_tokenized_region();
+    const p = self.store.addPattern(.{ .as = .{
+        .name = self.pos,
+        .pattern = pattern,
+        .region = .{ .start = parent_region.start, .end = self.pos },
+    } });
+    self.advance(); // Advance past LowerIdent();
+    return p;
 }
 
 fn parsePatternNoAlts(self: *Parser) AST.Pattern.Idx {
@@ -1359,7 +1379,10 @@ pub fn parsePatternRecordField(self: *Parser, alternatives: Alternatives) AST.Pa
         });
     }
     if (self.peek() != .LowerIdent) {
-        while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
+        while (self.peek() != .EndOfFile) {
+            if (self.peek() == .CloseCurly) {
+                break;
+            }
             self.advance();
         }
         return self.pushMalformed(AST.PatternRecordField.Idx, .expected_lower_ident_pat_field_name, field_start);
@@ -1367,14 +1390,17 @@ pub fn parsePatternRecordField(self: *Parser, alternatives: Alternatives) AST.Pa
     const name = self.pos;
     self.advance();
     var value: ?AST.Pattern.Idx = null;
-    if (self.peek() != .OpColon and (self.peekNext() != .Comma or self.peekNext() != .CloseCurly)) {
-        while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
-            self.advance();
+    // With shorthand the next token is a Comma or the ending CloseCurly
+    if (self.peek() != .Comma and self.peek() != .CloseCurly) {
+        // Otherwise we should see an OpColon to introduce the value
+        if (self.peek() != .OpColon) {
+            while (self.peek() != .EndOfFile) {
+                if (self.peek() == .CloseCurly) break;
+                self.advance();
+            }
+            return self.pushMalformed(AST.PatternRecordField.Idx, .expected_colon_after_pat_field_name, field_start);
         }
-        return self.pushMalformed(AST.PatternRecordField.Idx, .expected_colon_after_pat_field_name, field_start);
-    }
-    self.advance();
-    if (self.peekNext() != .Comma or self.peekNext() != .CloseCurly) {
+        self.advance();
         const patt = self.parsePattern(alternatives);
         value = patt;
     }
