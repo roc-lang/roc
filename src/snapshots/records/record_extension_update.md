@@ -1,11 +1,14 @@
 # META
 ~~~ini
-description=Record extension adding new fields
+description=Record update syntax
 type=expr
 ~~~
 # SOURCE
 ~~~roc
-{ person & age: 31, active: Bool.true }
+{ person &
+    age: 31,
+    active: Bool.true,
+}
 ~~~
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -80,11 +83,11 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:9),OpAmpersand(1:10-1:11),LowerIdent(1:12-1:
 ~~~roc
 {
 	person
-	
-	age : 
-	
+
+	age :
+
 	active : Bool
-	
+
 }
 ~~~
 # TYPES

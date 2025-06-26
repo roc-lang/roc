@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Malformed record syntax (error case)
+description=Malformed record syntax using equals instead of colon (error case)
 type=expr
 ~~~
 # SOURCE

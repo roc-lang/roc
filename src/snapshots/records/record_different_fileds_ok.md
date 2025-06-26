@@ -5,7 +5,11 @@ type=expr
 ~~~
 # SOURCE
 ~~~roc
-{ field_with_underscores: "underscore", field123: "numbers", camelCase: "camel" }
+{
+    field_with_underscores: "underscore",
+    field123: "numbers",
+    camelCase: "camel",
+}
 ~~~
 # PROBLEMS
 **NOT IMPLEMENTED**

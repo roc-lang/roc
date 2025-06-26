@@ -5,7 +5,14 @@ type=expr
 ~~~
 # SOURCE
 ~~~roc
-{ _privateField: "leading underscore", field_: "trailing underscore", PascalCase: "pascal", kebab-case: "kebab", field$special: "dollar", field@symbol: "at symbol" }
+{
+    _privateField: "leading underscore",
+    field_: "trailing underscore",
+    PascalCase: "pascal",
+    kebab-case: "kebab",
+    field$special: "dollar",
+    field@symbol: "at symbol",
+}
 ~~~
 # PROBLEMS
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
@@ -288,31 +295,31 @@ OpenCurly(1:1-1:2),NamedUnderscore(1:3-1:16),OpColon(1:16-1:17),StringStart(1:18
 # FORMATTED
 ~~~roc
 {
-	_privateField : 
-	
-	
-	
-	field_ : 
-	
-	
-	
+	_privateField :
+
+
+
+	field_ :
+
+
+
 	PascalCase
-	
+
 	"pascal"
-	
+
 	kebab - case
-	
+
 	"kebab"
-	
+
 	field
-	
-	special : 
-	
-	
-	
+
+	special :
+
+
+
 	field
-	
-	
+
+
 	"at symbol"
 }
 ~~~

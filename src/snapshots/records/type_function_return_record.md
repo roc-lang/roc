@@ -5,28 +5,28 @@ type=statement
 ~~~
 # SOURCE
 ~~~roc
-createUser! : Str, U32 => { name : Str, age : U32, id : U64, active : Bool }
+create_user! : Str, U32 => { name : Str, age : U32, id : U64, active : Bool }
 ~~~
 # PROBLEMS
 NIL
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:12),OpColon(1:13-1:14),UpperIdent(1:15-1:18),Comma(1:18-1:19),UpperIdent(1:20-1:23),OpFatArrow(1:24-1:26),OpenCurly(1:27-1:28),LowerIdent(1:29-1:33),OpColon(1:34-1:35),UpperIdent(1:36-1:39),Comma(1:39-1:40),LowerIdent(1:41-1:44),OpColon(1:45-1:46),UpperIdent(1:47-1:50),Comma(1:50-1:51),LowerIdent(1:52-1:54),OpColon(1:55-1:56),UpperIdent(1:57-1:60),Comma(1:60-1:61),LowerIdent(1:62-1:68),OpColon(1:69-1:70),UpperIdent(1:71-1:75),CloseCurly(1:76-1:77),EndOfFile(1:77-1:77),
+LowerIdent(1:1-1:13),OpColon(1:14-1:15),UpperIdent(1:16-1:19),Comma(1:19-1:20),UpperIdent(1:21-1:24),OpFatArrow(1:25-1:27),OpenCurly(1:28-1:29),LowerIdent(1:30-1:34),OpColon(1:35-1:36),UpperIdent(1:37-1:40),Comma(1:40-1:41),LowerIdent(1:42-1:45),OpColon(1:46-1:47),UpperIdent(1:48-1:51),Comma(1:51-1:52),LowerIdent(1:53-1:55),OpColon(1:56-1:57),UpperIdent(1:58-1:61),Comma(1:61-1:62),LowerIdent(1:63-1:69),OpColon(1:70-1:71),UpperIdent(1:72-1:76),CloseCurly(1:77-1:78),EndOfFile(1:78-1:78),
 ~~~
 # PARSE
 ~~~clojure
-(s-type-anno @1-1-1-77 (name "createUser!")
-	(ty-fn @1-15-1-77
+(s-type-anno @1-1-1-78 (name "create_user!")
+	(ty-fn @1-16-1-78
 		(ty (name "Str"))
 		(ty (name "U32"))
-		(ty-record @1-27-1-77
-			(anno-record-field @1-29-1-40 (name "name")
+		(ty-record @1-28-1-78
+			(anno-record-field @1-30-1-41 (name "name")
 				(ty (name "Str")))
-			(anno-record-field @1-41-1-51 (name "age")
+			(anno-record-field @1-42-1-52 (name "age")
 				(ty (name "U32")))
-			(anno-record-field @1-52-1-61 (name "id")
+			(anno-record-field @1-53-1-62 (name "id")
 				(ty (name "U64")))
-			(anno-record-field @1-62-1-77 (name "active")
+			(anno-record-field @1-63-1-78 (name "active")
 				(ty (name "Bool"))))))
 ~~~
 # FORMATTED

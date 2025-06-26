@@ -5,7 +5,14 @@ type=expr
 ~~~
 # SOURCE
 ~~~roc
-{ if: "conditional", when: "pattern match", expect: "test assertion", import: "module load", and: Bool.true, or: Bool.false }
+{
+    if: "conditional",
+    when: "pattern match",
+    expect: "test assertion",
+    import: "module load",
+    and: Bool.true,
+    or: Bool.false,
+}
 ~~~
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -236,24 +243,24 @@ OpenCurly(1:1-1:2),KwIf(1:3-1:5),OpColon(1:5-1:6),StringStart(1:7-1:8),StringPar
 # FORMATTED
 ~~~roc
 {
-	
-	when : 
-	
-	
-	
-	expect 
+
+	when :
+
+
+
+	expect
 	"test assertion"
-	
-	
-	
+
+
+
 	"module load"
-	
-	
-	
+
+
+
 	Bool.true
-	
-	
-	
+
+
+
 	Bool.false
 }
 ~~~
