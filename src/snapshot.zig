@@ -1583,9 +1583,7 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, maybe_f
     // Generate remaining sections
     try generateParseSection(&output, &content, &parse_ast, &module_env);
     try generateFormattedSection(&output, &content, &parse_ast);
-    if (content.has_canonicalize) {
-        try generateCanonicalizeSection(&output, &content, &can_ir, &module_env, maybe_expr_idx);
-    }
+    try generateCanonicalizeSection(&output, &content, &can_ir, &module_env, maybe_expr_idx);
     try generateTypesSection(&output, &content, &can_ir, maybe_expr_idx);
 
     // Generate HTML closing
