@@ -762,7 +762,7 @@ pub const SnapshotWriter = struct {
         _ = switch (prec) {
             .f32 => try self.writer.write("Binary32"),
             .f64 => try self.writer.write("Binary64"),
-            .dec => try self.writer.write("Dec"),
+            .dec => try self.writer.write("Decimal"),
         };
     }
 };
