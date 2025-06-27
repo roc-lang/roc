@@ -312,16 +312,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
                         if (self.can_ir.env.idents.identsHaveSameText(type_field_name, field.name)) {
                             // Extract the type variable from the field value expression
                             // Different expression types store their type variables in different places
-                            const field_expr = self.can_ir.store.getExpr(field.value);
-                            const field_expr_type_var = switch (field_expr) {
-                                .str, .str_segment => @as(Var, @enumFromInt(@intFromEnum(field.value))),
-                                .int => @as(Var, @enumFromInt(@intFromEnum(field.value))),
-                                .num => @as(Var, @enumFromInt(@intFromEnum(field.value))),
-                                .frac_f64 => @as(Var, @enumFromInt(@intFromEnum(field.value))),
-                                .frac_dec => @as(Var, @enumFromInt(@intFromEnum(field.value))),
-                                .dec_small => @as(Var, @enumFromInt(@intFromEnum(field.value))),
-                                else => @as(Var, @enumFromInt(@intFromEnum(field.value))),
-                            };
+                            const field_expr_type_var = @as(Var, @enumFromInt(@intFromEnum(field.value)));
 
                             // STEP 4: Unify field type variable with field value type variable
                             // This is where concrete types (like Str, Num) get propagated
