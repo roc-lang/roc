@@ -449,8 +449,12 @@ pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) AST.Pattern.Idx {
         .list => |l| {
             node.tag = .list_patt;
             node.region = l.region;
-            node.data.untyped.lhs = l.patterns.span.start;
-            node.data.untyped.rhs = l.patterns.span.len;
+            node.data = .{
+                .list = .{
+                    .items_start = l.patterns.span.start,
+                    .items_len = l.patterns.span.len,
+                },
+            };
         },
         .list_rest => |r| {
             node.tag = .list_rest_patt;
@@ -526,8 +530,12 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) AST.Expr.Idx {
             node.tag = .list;
             node.region = l.region;
             node.main_token = l.region.start;
-            node.data.untyped.lhs = l.items.span.start;
-            node.data.untyped.rhs = l.items.span.len;
+            node.data = .{
+                .list = .{
+                    .items_start = l.items.span.start,
+                    .items_len = l.items.span.len,
+                },
+            };
         },
         .tuple => |t| {
             node.tag = .tuple;
@@ -1200,8 +1208,8 @@ pub fn getPattern(store: *NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pattern {
             return .{ .list = .{
                 .region = node.region,
                 .patterns = .{ .span = .{
-                    .start = node.data.untyped.lhs,
-                    .len = node.data.untyped.rhs,
+                    .start = node.data.list.items_start,
+                    .len = node.data.list.items_len,
                 } },
             } };
         },
@@ -1305,8 +1313,8 @@ pub fn getExpr(store: *NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
         .list => {
             return .{ .list = .{
                 .items = .{ .span = base.DataSpan{
-                    .start = node.data.untyped.lhs,
-                    .len = node.data.untyped.rhs,
+                    .start = node.data.list.items_start,
+                    .len = node.data.list.items_len,
                 } },
                 .region = node.region,
             } };
@@ -2075,6 +2083,34 @@ fn getRecordShape(store: *NodeStore, node_idx: Node.Idx) struct {
     return .{
         .fields_start = node.data.record.fields_start,
         .fields_len = node.data.record.fields_len,
+        .region = node.region,
+    };
+}
+
+fn addListShape(store: *NodeStore, items_start: u32, items_len: u32, region: AST.TokenizedRegion, tag: Node.Tag) Node.Idx {
+    const node = Node{
+        .tag = tag,
+        .main_token = 0,
+        .data = .{
+            .list = .{
+                .items_start = items_start,
+                .items_len = items_len,
+            },
+        },
+        .region = region,
+    };
+    return store.nodes.append(store.gpa, node);
+}
+
+fn getListShape(store: *NodeStore, node_idx: Node.Idx) struct {
+    items_start: u32,
+    items_len: u32,
+    region: AST.TokenizedRegion,
+} {
+    const node = store.nodes.get(node_idx);
+    return .{
+        .items_start = node.data.list.items_start,
+        .items_len = node.data.list.items_len,
         .region = node.region,
     };
 }

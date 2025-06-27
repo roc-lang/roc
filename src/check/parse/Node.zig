@@ -444,4 +444,8 @@ pub const Data = union(enum) {
         fields_start: u32,
         fields_len: u32,
     },
+    list: struct {
+        items_start: u32,
+        items_len: u32,
+    },
 };
