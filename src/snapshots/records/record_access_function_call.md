@@ -31,7 +31,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call @1-1-1-23 (id 78)
+(e-call @1-1-1-23 (id 77)
 	(e-tuple @1-1-1-19
 		(elems
 			(e-dot-access @1-2-1-19 (field "transform")
@@ -41,5 +41,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 78) (type "*"))
+(expr (id 77) (type "*"))
 ~~~

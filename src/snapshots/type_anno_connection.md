@@ -60,27 +60,27 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 87)
+	(d-let (id 86)
 		(p-assign @4-1-4-8 (ident "add_one") (id 75))
-		(e-lambda @4-11-6-10 (id 81)
+		(e-lambda @4-11-6-10 (id 80)
 			(args
 				(p-assign @4-12-4-13 (ident "x") (id 76)))
 			(e-binop @4-15-6-10 (op "add")
 				(e-lookup-local @4-15-4-16
 					(pattern (id 76)))
 				(e-int @4-19-4-20 (value "1"))))
-		(annotation @4-1-4-8 (signature 85) (id 86)
+		(annotation @4-1-4-8 (signature 84) (id 85)
 			(declared-type
 				(ty-fn @3-11-3-21 (effectful false)
 					(ty @3-11-3-14 (name "U64"))
 					(ty @3-18-3-21 (name "U64"))))))
-	(d-let (id 97)
-		(p-assign @7-1-7-10 (ident "my_number") (id 89))
-		(e-call @7-13-7-24 (id 93)
+	(d-let (id 95)
+		(p-assign @7-1-7-10 (ident "my_number") (id 88))
+		(e-call @7-13-7-24 (id 91)
 			(e-lookup-local @7-13-7-20
 				(pattern (id 75)))
 			(e-int @7-21-7-23 (value "42")))
-		(annotation @7-1-7-10 (signature 95) (id 96)
+		(annotation @7-1-7-10 (signature 93) (id 94)
 			(declared-type
 				(ty @6-13-6-16 (name "U64"))))))
 ~~~

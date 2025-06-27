@@ -109,9 +109,9 @@ NO CHANGE
 					(ty-apply @5-26-5-36 (symbol "Pair")
 						(ty-var @5-31-5-32 (name "b"))
 						(ty-var @5-34-5-35 (name "a")))))))
-	(d-let (id 113)
+	(d-let (id 111)
 		(p-assign @8-1-8-6 (ident "main!") (id 104))
-		(e-lambda @8-9-8-27 (id 112)
+		(e-lambda @8-9-8-27 (id 110)
 			(args
 				(p-underscore @8-10-8-11 (id 105)))
 			(e-call @8-13-8-27

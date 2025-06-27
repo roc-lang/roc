@@ -168,18 +168,30 @@ pub const Store = struct {
 
     fn deepCopyNum(self: *Self, store: *const TypesStore, num: types.Num) SnapshotNum {
         switch (num) {
-            .num_poly => |requirements| {
-                const resolved_poly = store.resolveVar(requirements.var_);
+            .num_poly => |poly| {
+                const resolved_poly = store.resolveVar(poly.var_);
                 const deep_poly = self.deepCopyContent(store, resolved_poly.desc.content);
                 return SnapshotNum{ .num_poly = deep_poly };
             },
-            .int_poly => |requirements| {
-                const resolved_poly = store.resolveVar(requirements.var_);
+            .int_poly => |poly| {
+                const resolved_poly = store.resolveVar(poly.var_);
                 const deep_poly = self.deepCopyContent(store, resolved_poly.desc.content);
                 return SnapshotNum{ .int_poly = deep_poly };
             },
-            .frac_poly => |requirements| {
-                const resolved_poly = store.resolveVar(requirements.var_);
+            .num_unbound => |requirements| {
+                // For unbound types, we don't have a var to resolve, just return the requirements
+                return SnapshotNum{ .num_unbound = requirements };
+            },
+            .int_unbound => |requirements| {
+                // For unbound types, we don't have a var to resolve, just return the requirements
+                return SnapshotNum{ .int_unbound = requirements };
+            },
+            .frac_unbound => |requirements| {
+                // For unbound types, we don't have a var to resolve, just return the requirements
+                return SnapshotNum{ .frac_unbound = requirements };
+            },
+            .frac_poly => |poly| {
+                const resolved_poly = store.resolveVar(poly.var_);
                 const deep_poly = self.deepCopyContent(store, resolved_poly.desc.content);
                 return SnapshotNum{ .frac_poly = deep_poly };
             },
@@ -418,6 +430,9 @@ pub const SnapshotNum = union(enum) {
     num_poly: SnapshotContentIdx,
     int_poly: SnapshotContentIdx,
     frac_poly: SnapshotContentIdx,
+    num_unbound: types.Num.IntRequirements,
+    int_unbound: types.Num.IntRequirements,
+    frac_unbound: types.Num.FracRequirements,
     int_precision: types.Num.Int.Precision,
     frac_precision: types.Num.Frac.Precision,
     num_compact: types.Num.Compact,
@@ -719,6 +734,15 @@ pub const SnapshotWriter = struct {
                 _ = try self.writer.write("Frac(");
                 try self.write(sub_var);
                 _ = try self.writer.write(")");
+            },
+            .num_unbound => |_| {
+                _ = try self.writer.write("Num(*)");
+            },
+            .int_unbound => |_| {
+                _ = try self.writer.write("Int(*)");
+            },
+            .frac_unbound => |_| {
+                _ = try self.writer.write("Frac(*)");
             },
             .int_precision => |prec| {
                 try self.writeIntType(prec);

@@ -136,33 +136,33 @@ main! = |_| {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 101)
+	(d-let (id 97)
 		(p-assign @3-1-3-6 (ident "main!") (id 72))
-		(e-lambda @3-9-19-2 (id 100)
+		(e-lambda @3-9-19-2 (id 96)
 			(args
 				(p-underscore @3-10-3-11 (id 73)))
 			(e-block @3-13-19-2
 				(s-let @5-5-5-20
 					(p-assign @5-5-5-15 (ident "unused_var") (id 74))
-					(e-int @5-18-5-20 (value "42") (id 76)))
+					(e-int @5-18-5-20 (value "42") (id 75)))
 				(s-let @8-5-8-19
-					(p-assign @8-5-8-13 (ident "used_var") (id 78))
-					(e-int @8-16-8-19 (value "100") (id 80)))
+					(p-assign @8-5-8-13 (ident "used_var") (id 77))
+					(e-int @8-16-8-19 (value "100") (id 78)))
 				(s-let @11-5-11-29
-					(p-assign @11-5-11-19 (ident "another_unused") (id 82))
-					(e-string @11-22-11-29 (id 84)
+					(p-assign @11-5-11-19 (ident "another_unused") (id 80))
+					(e-string @11-22-11-29 (id 82)
 						(e-literal @11-23-11-28 (string "hello"))))
 				(s-let @14-5-14-19
-					(p-assign @14-5-14-13 (ident "_ignored") (id 86))
-					(e-int @14-16-14-19 (value "999") (id 88)))
+					(p-assign @14-5-14-13 (ident "_ignored") (id 84))
+					(e-int @14-16-14-19 (value "999") (id 85)))
 				(s-let @17-5-18-11
-					(p-assign @17-5-17-11 (ident "result") (id 90))
-					(e-binop @17-14-18-11 (op "add") (id 94)
+					(p-assign @17-5-17-11 (ident "result") (id 87))
+					(e-binop @17-14-18-11 (op "add") (id 90)
 						(e-lookup-local @17-14-17-22
-							(pattern (id 78)))
+							(pattern (id 77)))
 						(e-int @17-25-17-27 (value "10"))))
 				(e-lookup-local @18-5-18-11
-					(pattern (id 90)))))))
+					(pattern (id 87)))))))
 ~~~
 # TYPES
 ~~~clojure

@@ -1019,9 +1019,6 @@ pub fn canonicalize_expr(
             const sign: i128 = (@as(i128, @intFromBool(!is_negated or u128_val == min_i128_negated)) << 1) - 1;
             const i128_val: i128 = sign * @as(i128, @bitCast(u128_val));
 
-            // Reserve node slots for the type variable and expression
-            const final_expr_idx = self.can_ir.store.predictNodeIndex(2);
-
             // Calculate requirements based on the value
             // Special handling for minimum signed values (-128, -32768, etc.)
             // These are special because they have a power-of-2 magnitude that fits exactly
@@ -1037,10 +1034,7 @@ pub fn canonicalize_expr(
                 .bits_needed = types.Num.Int.BitsNeeded.fromValue(adjusted_val),
             };
 
-            // Create a fresh type variable for the integer
-            const fresh_var = self.can_ir.pushFreshTypeVar(final_expr_idx, region);
             const int_requirements = types.Num.IntRequirements{
-                .var_ = fresh_var,
                 .sign_needed = requirements.sign_needed,
                 .bits_needed = @intCast(@intFromEnum(requirements.bits_needed)),
             };
@@ -1057,13 +1051,11 @@ pub fn canonicalize_expr(
                 },
             });
 
-            std.debug.assert(@intFromEnum(expr_idx) == @intFromEnum(final_expr_idx));
-
             // Insert concrete type variable
             const type_content = if (is_non_decimal)
-                Content{ .structure = .{ .num = .{ .int_poly = int_requirements } } }
+                Content{ .structure = .{ .num = .{ .int_unbound = int_requirements } } }
             else
-                Content{ .structure = .{ .num = .{ .num_poly = int_requirements } } };
+                Content{ .structure = .{ .num = .{ .num_unbound = int_requirements } } };
             _ = self.can_ir.setTypeVarAtExpr(expr_idx, type_content);
 
             return expr_idx;
@@ -1073,9 +1065,6 @@ pub fn canonicalize_expr(
 
             // Resolve to a string slice from the source
             const token_text = self.parse_ir.resolve(e.token);
-
-            // Reserve node slots for the type variable and expression
-            const final_expr_idx = self.can_ir.store.predictNodeIndex(2);
 
             const parsed = parseFracLiteral(token_text) catch |err| switch (err) {
                 error.InvalidNumLiteral => {
@@ -1093,10 +1082,7 @@ pub fn canonicalize_expr(
                 .f64 => |f64_info| f64_info.requirements,
             };
 
-            // Create a fresh type variable for the fraction
-            const fresh_var = self.can_ir.pushFreshTypeVar(final_expr_idx, region);
             const frac_requirements = types.Num.FracRequirements{
-                .var_ = fresh_var,
                 .fits_in_f32 = requirements.fits_in_f32,
                 .fits_in_dec = requirements.fits_in_dec,
             };
@@ -1125,10 +1111,8 @@ pub fn canonicalize_expr(
 
             const expr_idx = self.can_ir.store.addExpr(cir_expr);
 
-            std.debug.assert(@intFromEnum(expr_idx) == @intFromEnum(final_expr_idx));
-
             // Insert concrete type variable
-            _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .structure = .{ .num = .{ .frac_poly = frac_requirements } } });
+            _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .structure = .{ .num = .{ .frac_unbound = frac_requirements } } });
 
             return expr_idx;
         },
@@ -1848,17 +1832,15 @@ fn canonicalize_pattern(
                 .bits_needed = types.Num.Int.BitsNeeded.fromValue(adjusted_val),
             };
 
-            // Reserve node slot for type var, then insert into it.
+            // Reserve node slot for the pattern
             const final_pattern_idx = self.can_ir.store.predictNodeIndex(1);
-            const poly_var = self.can_ir.pushFreshTypeVar(final_pattern_idx, region);
             const int_requirements = types.Num.IntRequirements{
-                .var_ = poly_var,
                 .sign_needed = requirements.sign_needed,
                 .bits_needed = @intCast(@intFromEnum(requirements.bits_needed)),
             };
             const int_pattern = CIR.Pattern{
                 .int_literal = .{
-                    .num_var = poly_var,
+                    .num_var = @enumFromInt(0), // Dummy value - not used with unbound types
                     .value = .{ .bytes = @bitCast(value), .kind = .i128 },
                     .region = region,
                 },
@@ -1868,7 +1850,7 @@ fn canonicalize_pattern(
             std.debug.assert(@intFromEnum(pattern_idx) == @intFromEnum(final_pattern_idx));
 
             _ = self.can_ir.setTypeVarAtPat(pattern_idx, Content{
-                .structure = .{ .num = .{ .num_poly = int_requirements } },
+                .structure = .{ .num = .{ .num_unbound = int_requirements } },
             });
 
             return pattern_idx;
@@ -1880,10 +1862,8 @@ fn canonicalize_pattern(
             const token_text = self.parse_ir.resolve(e.number_tok);
 
             // create type vars, first "reserve" node slots
+            // Reserve node slot for the pattern
             const final_pattern_idx = self.can_ir.store.predictNodeIndex(1);
-
-            // then insert the type vars, setting the parent to be the final slot
-            const poly_var = self.can_ir.pushFreshTypeVar(final_pattern_idx, region);
 
             const parsed = parseFracLiteral(token_text) catch |err| switch (err) {
                 error.InvalidNumLiteral => {
@@ -1902,7 +1882,6 @@ fn canonicalize_pattern(
             };
 
             const frac_requirements = types.Num.FracRequirements{
-                .var_ = poly_var,
                 .fits_in_f32 = requirements.fits_in_f32,
                 .fits_in_dec = requirements.fits_in_dec,
             };
@@ -1910,7 +1889,7 @@ fn canonicalize_pattern(
             const cir_pattern = switch (parsed) {
                 .small => |small_info| CIR.Pattern{
                     .small_dec_literal = .{
-                        .num_var = poly_var,
+                        .num_var = @enumFromInt(0), // Dummy value - not used with unbound types
                         .numerator = small_info.numerator,
                         .denominator_power_of_ten = small_info.denominator_power_of_ten,
                         .region = region,
@@ -1918,14 +1897,14 @@ fn canonicalize_pattern(
                 },
                 .dec => |dec_info| CIR.Pattern{
                     .dec_literal = .{
-                        .num_var = poly_var,
+                        .num_var = @enumFromInt(0), // Dummy value - not used with unbound types
                         .value = dec_info.value,
                         .region = region,
                     },
                 },
                 .f64 => |f64_info| CIR.Pattern{
                     .f64_literal = .{
-                        .num_var = poly_var,
+                        .num_var = @enumFromInt(0), // Dummy value - not used with unbound types
                         .value = f64_info.value,
                         .region = region,
                     },
@@ -1937,7 +1916,7 @@ fn canonicalize_pattern(
             std.debug.assert(@intFromEnum(pattern_idx) == @intFromEnum(final_pattern_idx));
 
             _ = self.can_ir.setTypeVarAtPat(pattern_idx, Content{
-                .structure = .{ .num = .{ .frac_poly = frac_requirements } },
+                .structure = .{ .num = .{ .frac_unbound = frac_requirements } },
             });
 
             return pattern_idx;
@@ -3183,19 +3162,13 @@ fn currentScope(self: *Self) *Scope {
 
 /// This will be used later for builtins like Num.nan, Num.infinity, etc.
 pub fn addNonFiniteFloat(self: *Self, value: f64, region: base.Region) CIR.Expr.Idx {
-    // Reserve node slot for the type variable and expression
-    const final_expr_idx = self.can_ir.store.predictNodeIndex(1);
-
     // Dec doesn't have infinity, -infinity, or NaN
     const requirements = types.Num.Frac.Requirements{
         .fits_in_f32 = true,
         .fits_in_dec = false,
     };
 
-    // Create a fresh type variable for the non-finite float
-    const fresh_var = self.can_ir.pushFreshTypeVar(final_expr_idx, region);
     const frac_requirements = types.Num.FracRequirements{
-        .var_ = fresh_var,
         .fits_in_f32 = requirements.fits_in_f32,
         .fits_in_dec = requirements.fits_in_dec,
     };
@@ -3208,12 +3181,10 @@ pub fn addNonFiniteFloat(self: *Self, value: f64, region: base.Region) CIR.Expr.
         },
     });
 
-    std.debug.assert(@intFromEnum(expr_idx) == @intFromEnum(final_expr_idx));
-
     // Insert concrete type variable
     _ = self.can_ir.setTypeVarAtExpr(
         expr_idx,
-        Content{ .structure = .{ .num = .{ .frac_poly = frac_requirements } } },
+        Content{ .structure = .{ .num = .{ .frac_unbound = frac_requirements } } },
     );
 
     return expr_idx;
@@ -4013,11 +3984,10 @@ fn canonicalizeBasicType(self: *Self, symbol: Ident.Idx, parent_node_idx: Node.I
         // Create a fresh TypeVar for the polymorphic number type
         const num_var = self.can_ir.pushFreshTypeVar(parent_node_idx, region);
         const num_requirements = types.Num.IntRequirements{
-            .var_ = num_var,
             .sign_needed = false,
             .bits_needed = 0, // 7 bits - most permissive for generic Num type
         };
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_poly = num_requirements } } }, parent_node_idx, region);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_poly = .{ .var_ = num_var, .requirements = num_requirements } } } }, parent_node_idx, region);
     } else if (std.mem.eql(u8, name, "U8")) {
         return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } }, parent_node_idx, region);
     } else if (std.mem.eql(u8, name, "U16")) {
@@ -4646,7 +4616,19 @@ test "hexadecimal integer literals" {
         switch (resolved.desc.content) {
             .structure => |structure| switch (structure) {
                 .num => |num| switch (num) {
-                    .num_poly, .int_poly => |requirements| {
+                    .num_poly => |poly| {
+                        try std.testing.expectEqual(tc.expected_sign_needed, poly.requirements.sign_needed);
+                        try std.testing.expectEqual(tc.expected_bits_needed, poly.requirements.bits_needed);
+                    },
+                    .int_poly => |poly| {
+                        try std.testing.expectEqual(tc.expected_sign_needed, poly.requirements.sign_needed);
+                        try std.testing.expectEqual(tc.expected_bits_needed, poly.requirements.bits_needed);
+                    },
+                    .num_unbound => |requirements| {
+                        try std.testing.expectEqual(tc.expected_sign_needed, requirements.sign_needed);
+                        try std.testing.expectEqual(tc.expected_bits_needed, requirements.bits_needed);
+                    },
+                    .int_unbound => |requirements| {
                         try std.testing.expectEqual(tc.expected_sign_needed, requirements.sign_needed);
                         try std.testing.expectEqual(tc.expected_bits_needed, requirements.bits_needed);
                     },
@@ -4724,7 +4706,19 @@ test "binary integer literals" {
         switch (resolved.desc.content) {
             .structure => |structure| switch (structure) {
                 .num => |num| switch (num) {
-                    .num_poly, .int_poly => |requirements| {
+                    .num_poly => |poly| {
+                        try std.testing.expectEqual(tc.expected_sign_needed, poly.requirements.sign_needed);
+                        try std.testing.expectEqual(tc.expected_bits_needed, poly.requirements.bits_needed);
+                    },
+                    .int_poly => |poly| {
+                        try std.testing.expectEqual(tc.expected_sign_needed, poly.requirements.sign_needed);
+                        try std.testing.expectEqual(tc.expected_bits_needed, poly.requirements.bits_needed);
+                    },
+                    .num_unbound => |requirements| {
+                        try std.testing.expectEqual(tc.expected_sign_needed, requirements.sign_needed);
+                        try std.testing.expectEqual(tc.expected_bits_needed, requirements.bits_needed);
+                    },
+                    .int_unbound => |requirements| {
                         try std.testing.expectEqual(tc.expected_sign_needed, requirements.sign_needed);
                         try std.testing.expectEqual(tc.expected_bits_needed, requirements.bits_needed);
                     },
@@ -4802,7 +4796,19 @@ test "octal integer literals" {
         switch (resolved.desc.content) {
             .structure => |structure| switch (structure) {
                 .num => |num| switch (num) {
-                    .num_poly, .int_poly => |requirements| {
+                    .num_poly => |poly| {
+                        try std.testing.expectEqual(tc.expected_sign_needed, poly.requirements.sign_needed);
+                        try std.testing.expectEqual(tc.expected_bits_needed, poly.requirements.bits_needed);
+                    },
+                    .int_poly => |poly| {
+                        try std.testing.expectEqual(tc.expected_sign_needed, poly.requirements.sign_needed);
+                        try std.testing.expectEqual(tc.expected_bits_needed, poly.requirements.bits_needed);
+                    },
+                    .num_unbound => |requirements| {
+                        try std.testing.expectEqual(tc.expected_sign_needed, requirements.sign_needed);
+                        try std.testing.expectEqual(tc.expected_bits_needed, requirements.bits_needed);
+                    },
+                    .int_unbound => |requirements| {
                         try std.testing.expectEqual(tc.expected_sign_needed, requirements.sign_needed);
                         try std.testing.expectEqual(tc.expected_bits_needed, requirements.bits_needed);
                     },
@@ -4880,7 +4886,19 @@ test "integer literals with uppercase base prefixes" {
         switch (resolved.desc.content) {
             .structure => |structure| switch (structure) {
                 .num => |num| switch (num) {
-                    .num_poly, .int_poly => |requirements| {
+                    .num_poly => |poly| {
+                        try std.testing.expectEqual(tc.expected_sign_needed, poly.requirements.sign_needed);
+                        try std.testing.expectEqual(tc.expected_bits_needed, poly.requirements.bits_needed);
+                    },
+                    .int_poly => |poly| {
+                        try std.testing.expectEqual(tc.expected_sign_needed, poly.requirements.sign_needed);
+                        try std.testing.expectEqual(tc.expected_bits_needed, poly.requirements.bits_needed);
+                    },
+                    .num_unbound => |requirements| {
+                        try std.testing.expectEqual(tc.expected_sign_needed, requirements.sign_needed);
+                        try std.testing.expectEqual(tc.expected_bits_needed, requirements.bits_needed);
+                    },
+                    .int_unbound => |requirements| {
                         try std.testing.expectEqual(tc.expected_sign_needed, requirements.sign_needed);
                         try std.testing.expectEqual(tc.expected_bits_needed, requirements.bits_needed);
                     },
