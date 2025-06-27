@@ -1,21 +1,21 @@
 # META
 ~~~ini
-description=Negative integer literal canonicalization
+description=Minimum value for i32 (-2147483648)
 type=expr
 ~~~
 # SOURCE
 ~~~roc
--123
+-2147483648
 ~~~
 # PROBLEMS
 NIL
 # TOKENS
 ~~~zig
-Int(1:1-1:5),EndOfFile(1:5-1:5),
+Int(1:1-1:12),EndOfFile(1:12-1:12),
 ~~~
 # PARSE
 ~~~clojure
-(e-int @1-1-1-5 (raw "-123"))
+(e-int @1-1-1-12 (raw "-2147483648"))
 ~~~
 # FORMATTED
 ~~~roc
@@ -23,7 +23,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-int @1-1-1-5 (num-var 73) (value "-123") (id 73))
+(e-int @1-1-1-12 (num-var 73) (value "-2147483648") (id 73))
 ~~~
 # TYPES
 ~~~clojure

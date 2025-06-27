@@ -132,55 +132,55 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 119)
+	(d-let (id 115)
 		(p-assign @4-1-4-13 (ident "processItems") (id 72))
-		(e-lambda @4-16-21-2 (id 117)
+		(e-lambda @4-16-21-2 (id 113)
 			(args
 				(p-assign @4-17-4-22 (ident "items") (id 73)))
 			(e-block @4-24-21-2
 				(s-var @5-2-6-5
-					(p-assign @5-2-6-5 (ident "count_") (id 77))
-					(e-int @5-15-5-16 (num-var 76) (sign-needed "false") (bits-needed "7") (value "0") (id 76)))
+					(p-assign @5-2-6-5 (ident "count_") (id 76))
+					(e-int @5-15-5-16 (num-var 75) (value "0") (id 75)))
 				(s-var @6-2-9-8
-					(p-assign @6-2-9-8 (ident "total_") (id 82))
-					(e-int @6-15-6-16 (num-var 81) (sign-needed "false") (bits-needed "7") (value "0") (id 81)))
+					(p-assign @6-2-9-8 (ident "total_") (id 80))
+					(e-int @6-15-6-16 (num-var 79) (value "0") (id 79)))
 				(s-reassign @9-2-9-8
-					(p-assign @5-2-6-5 (ident "count_") (id 77))
-					(e-binop @9-11-10-8 (op "add") (id 88)
+					(p-assign @5-2-6-5 (ident "count_") (id 76))
+					(e-binop @9-11-10-8 (op "add") (id 85)
 						(e-lookup-local @9-11-9-17
-							(pattern (id 77)))
-						(e-int @9-20-9-21 (num-var 87) (sign-needed "false") (bits-needed "7") (value "1"))))
+							(pattern (id 76)))
+						(e-int @9-20-9-21 (num-var 84) (value "1"))))
 				(s-reassign @10-2-10-8
-					(p-assign @6-2-9-8 (ident "total_") (id 82))
-					(e-binop @10-11-13-12 (op "add") (id 94)
+					(p-assign @6-2-9-8 (ident "total_") (id 80))
+					(e-binop @10-11-13-12 (op "add") (id 90)
 						(e-lookup-local @10-11-10-17
-							(pattern (id 82)))
-						(e-int @10-20-10-22 (num-var 93) (sign-needed "false") (bits-needed "7") (value "10"))))
+							(pattern (id 80)))
+						(e-int @10-20-10-22 (num-var 89) (value "10"))))
 				(s-let @13-2-17-3
-					(p-assign @13-2-13-12 (ident "nestedFunc") (id 96))
-					(e-lambda @13-15-17-3 (id 106)
+					(p-assign @13-2-13-12 (ident "nestedFunc") (id 92))
+					(e-lambda @13-15-17-3 (id 102)
 						(args
-							(p-underscore @13-16-13-17 (id 97)))
+							(p-underscore @13-16-13-17 (id 93)))
 						(e-block @13-19-17-3
 							(s-reassign @14-3-14-9
-								(p-assign @5-2-6-5 (ident "count_") (id 77))
-								(e-runtime-error (tag "var_across_function_boundary") (id 99)))
+								(p-assign @5-2-6-5 (ident "count_") (id 76))
+								(e-runtime-error (tag "var_across_function_boundary") (id 95)))
 							(s-reassign @15-3-15-9
-								(p-assign @6-2-9-8 (ident "total_") (id 82))
-								(e-runtime-error (tag "var_across_function_boundary") (id 102)))
+								(p-assign @6-2-9-8 (ident "total_") (id 80))
+								(e-runtime-error (tag "var_across_function_boundary") (id 98)))
 							(e-lookup-local @16-3-16-9
-								(pattern (id 77))))))
+								(pattern (id 76))))))
 				(s-let @19-2-19-25
-					(p-assign @19-2-19-8 (ident "result") (id 108))
-					(e-call @19-11-19-25 (id 111)
+					(p-assign @19-2-19-8 (ident "result") (id 104))
+					(e-call @19-11-19-25 (id 107)
 						(e-lookup-local @19-11-19-21
-							(pattern (id 96)))
+							(pattern (id 92)))
 						(e-empty_record @19-22-19-24)))
 				(e-binop @20-2-21-2 (op "add")
 					(e-lookup-local @20-2-20-8
-						(pattern (id 82)))
+						(pattern (id 80)))
 					(e-lookup-local @20-11-20-17
-						(pattern (id 108))))))))
+						(pattern (id 104))))))))
 ~~~
 # TYPES
 ~~~clojure

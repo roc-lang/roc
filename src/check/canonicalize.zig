@@ -3,7 +3,7 @@ const base = @import("../base.zig");
 const parse = @import("parse.zig");
 const tokenize = @import("parse/tokenize.zig");
 const collections = @import("../collections.zig");
-const types = @import("../types/types.zig");
+const types = @import("../types.zig");
 const RocDec = @import("../builtins/dec.zig").RocDec;
 
 const NodeStore = @import("./canonicalize/NodeStore.zig");
@@ -1020,25 +1020,44 @@ pub fn canonicalize_expr(
             const i128_val: i128 = sign * @as(i128, @bitCast(u128_val));
 
             // create type vars, first "reserve" node slots
-            const final_expr_idx = self.can_ir.store.predictNodeIndex(3);
+            const final_expr_idx = self.can_ir.store.predictNodeIndex(2);
 
             // Calculate requirements based on the value
-            const requirements = types.Num.Int.Requirements.fromIntLiteral(u128_val, is_negated);
+            // Special handling for minimum signed values (-128, -32768, etc.)
+            // These are special because they have a power-of-2 magnitude that fits exactly
+            // in their signed type. We report them as needing one less bit to make the
+            // standard "signed types have n-1 usable bits" logic work correctly.
+            const is_negative_u1 = @as(u1, @intFromBool(is_negated));
+            const is_power_of_2 = @as(u1, @intFromBool(u128_val != 0 and (u128_val & (u128_val - 1)) == 0));
+            const is_minimum_signed = is_negative_u1 & is_power_of_2;
+            const adjusted_val = u128_val - is_minimum_signed;
+
+            const requirements = types.Num.Int.Requirements{
+                .sign_needed = is_negated,
+                .bits_needed = types.Num.Int.BitsNeeded.fromValue(adjusted_val),
+            };
 
             // then insert the type vars, setting the parent to be the final slot
             const poly_var = self.can_ir.pushFreshTypeVar(final_expr_idx, region);
-            const int_var = self.can_ir.pushTypeVar(
-                Content{ .structure = .{ .num = .{ .int_poly = poly_var } } },
-                final_expr_idx,
-                region,
-            );
-            const num_var = self.can_ir.env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = int_var } } });
+            const int_requirements = types.Num.IntRequirements{
+                .var_ = poly_var,
+                .sign_needed = requirements.sign_needed,
+                .bits_needed = @intCast(@intFromEnum(requirements.bits_needed)),
+            };
+
+            // For non-decimal integers (hex, binary, octal), use int_poly directly
+            // For decimal integers, use num_poly so they can be either Int or Frac
+            const is_non_decimal = int_base != DEFAULT_BASE;
+            const num_var = if (is_non_decimal) blk: {
+                break :blk self.can_ir.env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_poly = int_requirements } } });
+            } else blk: {
+                break :blk self.can_ir.env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = int_requirements } } });
+            };
 
             // then in the final slot the actual expr is inserted
             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
                 .int = .{
                     .num_var = num_var,
-                    .requirements = requirements,
                     .value = .{ .bytes = @bitCast(i128_val), .kind = .i128 },
                     .region = region,
                 },
@@ -1047,10 +1066,11 @@ pub fn canonicalize_expr(
             std.debug.assert(@intFromEnum(expr_idx) == @intFromEnum(final_expr_idx));
 
             // Insert concrete type variable
-            _ = self.can_ir.setTypeVarAtExpr(
-                expr_idx,
-                Content{ .structure = .{ .num = .{ .num_poly = int_var } } },
-            );
+            const type_content = if (is_non_decimal)
+                Content{ .structure = .{ .num = .{ .int_poly = int_requirements } } }
+            else
+                Content{ .structure = .{ .num = .{ .num_poly = int_requirements } } };
+            _ = self.can_ir.setTypeVarAtExpr(expr_idx, type_content);
 
             return expr_idx;
         },
@@ -1065,11 +1085,6 @@ pub fn canonicalize_expr(
 
             // Create type variables
             const poly_var = self.can_ir.pushFreshTypeVar(final_expr_idx, region);
-            const frac_var = self.can_ir.pushTypeVar(
-                Content{ .structure = .{ .num = .{ .frac_poly = poly_var } } },
-                final_expr_idx,
-                region,
-            );
             const parsed = parseFracLiteral(token_text) catch |err| switch (err) {
                 error.InvalidNumLiteral => {
                     const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .invalid_num_literal = .{
@@ -1079,13 +1094,29 @@ pub fn canonicalize_expr(
                 },
             };
 
-            const num_var = self.can_ir.env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = frac_var } } });
+            // Parse the literal first to get requirements
+            const requirements = switch (parsed) {
+                .small => |small_info| small_info.requirements,
+                .dec => |dec_info| dec_info.requirements,
+                .f64 => |f64_info| f64_info.requirements,
+            };
+
+            const frac_requirements = types.Num.FracRequirements{
+                .var_ = poly_var,
+                .fits_in_f32 = requirements.fits_in_f32,
+                .fits_in_dec = requirements.fits_in_dec,
+            };
+            _ = self.can_ir.pushTypeVar(
+                Content{ .structure = .{ .num = .{ .frac_poly = frac_requirements } } },
+                final_expr_idx,
+                region,
+            );
+            const num_var = self.can_ir.env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = frac_requirements } } });
 
             const cir_expr = switch (parsed) {
                 .small => |small_info| CIR.Expr{
                     .dec_small = .{
                         .num_var = num_var,
-                        .requirements = small_info.requirements,
                         .numerator = small_info.numerator,
                         .denominator_power_of_ten = small_info.denominator_power_of_ten,
                         .region = region,
@@ -1094,7 +1125,6 @@ pub fn canonicalize_expr(
                 .dec => |dec_info| CIR.Expr{
                     .frac_dec = .{
                         .frac_var = num_var,
-                        .requirements = dec_info.requirements,
                         .value = dec_info.value,
                         .region = region,
                     },
@@ -1102,7 +1132,6 @@ pub fn canonicalize_expr(
                 .f64 => |f64_info| CIR.Expr{
                     .frac_f64 = .{
                         .frac_var = num_var,
-                        .requirements = f64_info.requirements,
                         .value = f64_info.value,
                         .region = region,
                     },
@@ -1114,7 +1143,7 @@ pub fn canonicalize_expr(
             std.debug.assert(@intFromEnum(expr_idx) == @intFromEnum(final_expr_idx));
 
             // Insert concrete type variable
-            _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .structure = .{ .num = .{ .num_poly = frac_var } } });
+            _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .structure = .{ .num = .{ .frac_poly = frac_requirements } } });
 
             return expr_idx;
         },
@@ -1234,38 +1263,35 @@ pub fn canonicalize_expr(
             // Iterate over the tuple items, canonicalizing each one
             // Then append the result to the scratch list
             const items_slice = self.parse_ir.store.exprSlice(e.items);
+            const elems_var_top = self.can_ir.env.types.tuple_elems.len();
             for (items_slice) |item| {
                 if (self.canonicalize_expr(item)) |canonicalized| {
                     self.can_ir.store.addScratchExpr(canonicalized);
+                    _ = self.can_ir.env.types.appendTupleElem(@enumFromInt(@intFromEnum(canonicalized)));
                 }
             }
+            const elems_var_range = types.Var.SafeList.Range{
+                .start = @enumFromInt(elems_var_top),
+                .end = @enumFromInt(self.can_ir.env.types.tuple_elems.len()),
+            };
 
             // Create span of the new scratch expressions
             const elems_span = self.can_ir.store.exprSpanFrom(scratch_top);
-
-            // create type vars, first "reserve" node slots
-            const tuple_expr_idx = self.can_ir.store.predictNodeIndex(2);
-
-            // then insert the type vars, setting the parent to be the final slot
-            const tuple_type_var = self.can_ir.pushFreshTypeVar(
-                tuple_expr_idx,
-                region,
-            );
 
             // then in the final slot the actual expr is inserted
             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
                 .tuple = .{
                     .elems = elems_span,
-                    .tuple_var = tuple_type_var,
                     .region = region,
                 },
             });
 
             // Insert concrete type variable for tuple
-            // TODO: Implement proper tuple type structure when tuple types are available
             _ = self.can_ir.setTypeVarAtExpr(
                 expr_idx,
-                Content{ .flex_var = null },
+                Content{ .structure = FlatType{
+                    .tuple = types.Tuple{ .elems = elems_var_range },
+                } },
             );
 
             return expr_idx;
@@ -1817,18 +1843,37 @@ fn canonicalize_pattern(
 
             // Calculate requirements based on the value
             const u128_val: u128 = if (value < 0) @as(u128, @intCast(-(value + 1))) + 1 else @as(u128, @intCast(value));
+
+            // Special handling for minimum signed values (-128, -32768, etc.)
+            // These are special because they have a power-of-2 magnitude that fits exactly
+            // in their signed type. We report them as needing one less bit to make the
+            // standard "signed types have n-1 usable bits" logic work correctly.
+            // This is done branchlessly by checking if the value is negative and its
+            // magnitude is a power of 2.
+            const is_negative = @as(u1, @intFromBool(value < 0));
+            const is_power_of_2 = @as(u1, @intFromBool(u128_val != 0 and (u128_val & (u128_val - 1)) == 0));
+            const is_minimum_signed = is_negative & is_power_of_2;
+
+            // If it's a minimum signed value, we subtract 1 from the magnitude before
+            // calculating bits needed. This makes -128 report as needing 7 bits instead of 8.
+            const adjusted_val = u128_val - is_minimum_signed;
+
             const requirements = types.Num.Int.Requirements{
                 .sign_needed = value < 0,
-                .bits_needed = types.Num.Int.BitsNeeded.fromValue(u128_val),
+                .bits_needed = types.Num.Int.BitsNeeded.fromValue(adjusted_val),
             };
 
             // Reserve node slots for type vars, then insert into them.
             const final_pattern_idx = self.can_ir.store.predictNodeIndex(2);
-            const num_type_var = self.can_ir.pushFreshTypeVar(final_pattern_idx, region);
+            const poly_var = self.can_ir.pushFreshTypeVar(final_pattern_idx, region);
+            const int_requirements = types.Num.IntRequirements{
+                .var_ = poly_var,
+                .sign_needed = requirements.sign_needed,
+                .bits_needed = @intCast(@intFromEnum(requirements.bits_needed)),
+            };
             const int_pattern = CIR.Pattern{
                 .int_literal = .{
-                    .num_var = num_type_var,
-                    .requirements = requirements,
+                    .num_var = poly_var,
                     .value = .{ .bytes = @bitCast(value), .kind = .i128 },
                     .region = region,
                 },
@@ -1838,7 +1883,7 @@ fn canonicalize_pattern(
             std.debug.assert(@intFromEnum(pattern_idx) == @intFromEnum(final_pattern_idx));
 
             _ = self.can_ir.setTypeVarAtPat(pattern_idx, Content{
-                .structure = .{ .num = .{ .num_poly = num_type_var } },
+                .structure = .{ .num = .{ .num_poly = int_requirements } },
             });
 
             return pattern_idx;
@@ -1853,7 +1898,7 @@ fn canonicalize_pattern(
             const final_pattern_idx = self.can_ir.store.predictNodeIndex(2);
 
             // then insert the type vars, setting the parent to be the final slot
-            const num_type_var = self.can_ir.pushFreshTypeVar(final_pattern_idx, region);
+            const poly_var = self.can_ir.pushFreshTypeVar(final_pattern_idx, region);
 
             const parsed = parseFracLiteral(token_text) catch |err| switch (err) {
                 error.InvalidNumLiteral => {
@@ -1864,11 +1909,23 @@ fn canonicalize_pattern(
                 },
             };
 
+            // Parse the literal first to get requirements
+            const requirements = switch (parsed) {
+                .small => |small_info| small_info.requirements,
+                .dec => |dec_info| dec_info.requirements,
+                .f64 => |f64_info| f64_info.requirements,
+            };
+
+            const frac_requirements = types.Num.FracRequirements{
+                .var_ = poly_var,
+                .fits_in_f32 = requirements.fits_in_f32,
+                .fits_in_dec = requirements.fits_in_dec,
+            };
+
             const cir_pattern = switch (parsed) {
                 .small => |small_info| CIR.Pattern{
                     .small_dec_literal = .{
-                        .num_var = num_type_var,
-                        .requirements = small_info.requirements,
+                        .num_var = poly_var,
                         .numerator = small_info.numerator,
                         .denominator_power_of_ten = small_info.denominator_power_of_ten,
                         .region = region,
@@ -1876,16 +1933,14 @@ fn canonicalize_pattern(
                 },
                 .dec => |dec_info| CIR.Pattern{
                     .dec_literal = .{
-                        .num_var = num_type_var,
-                        .requirements = dec_info.requirements,
+                        .num_var = poly_var,
                         .value = dec_info.value,
                         .region = region,
                     },
                 },
                 .f64 => |f64_info| CIR.Pattern{
                     .f64_literal = .{
-                        .num_var = num_type_var,
-                        .requirements = f64_info.requirements,
+                        .num_var = poly_var,
                         .value = f64_info.value,
                         .region = region,
                     },
@@ -1897,7 +1952,7 @@ fn canonicalize_pattern(
             std.debug.assert(@intFromEnum(pattern_idx) == @intFromEnum(final_pattern_idx));
 
             _ = self.can_ir.setTypeVarAtPat(pattern_idx, Content{
-                .structure = .{ .num = .{ .num_poly = num_type_var } },
+                .structure = .{ .num = .{ .frac_poly = frac_requirements } },
             });
 
             return pattern_idx;
@@ -1987,34 +2042,34 @@ fn canonicalize_pattern(
             // Iterate over the tuple patterns, canonicalizing each one
             // Then append the result to the scratch list
             const patterns_slice = self.parse_ir.store.patternSlice(e.patterns);
+            const elems_var_top = self.can_ir.env.types.tuple_elems.len();
             for (patterns_slice) |pattern| {
                 if (self.canonicalize_pattern(pattern)) |canonicalized| {
                     self.can_ir.store.addScratchPattern(canonicalized);
+                    _ = self.can_ir.env.types.appendTupleElem(@enumFromInt(@intFromEnum(canonicalized)));
                 }
             }
+            const elems_var_range = types.Var.SafeList.Range{
+                .start = @enumFromInt(elems_var_top),
+                .end = @enumFromInt(self.can_ir.env.types.tuple_elems.len()),
+            };
 
             // Create span of the new scratch patterns
             const patterns_span = self.can_ir.store.patternSpanFrom(scratch_top);
 
-            // Reserve node slots for type vars, then insert into them.
-            const tuple_pattern_idx = self.can_ir.store.predictNodeIndex(2);
-            const tuple_type_var = self.can_ir.pushFreshTypeVar(
-                tuple_pattern_idx,
-                region,
-            );
             const pattern_idx = self.can_ir.store.addPattern(CIR.Pattern{
                 .tuple = .{
                     .patterns = patterns_span,
-                    .tuple_var = tuple_type_var,
                     .region = region,
                 },
             });
 
             // Insert concrete type variable for tuple pattern
-            // TODO: Implement proper tuple type structure when tuple types are available
             _ = self.can_ir.setTypeVarAtPat(
                 pattern_idx,
-                Content{ .flex_var = null },
+                Content{ .structure = FlatType{
+                    .tuple = types.Tuple{ .elems = elems_var_range },
+                } },
             );
 
             return pattern_idx;
@@ -2036,6 +2091,14 @@ fn canonicalize_pattern(
             return pattern_idx;
         },
         .alternatives => |_| {
+            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize alternatives pattern");
+            const pattern_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .not_implemented = .{
+                .feature = feature,
+                .region = Region.zero(),
+            } });
+            return pattern_idx;
+        },
+        .as => |_| {
             const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize alternatives pattern");
             const pattern_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .not_implemented = .{
                 .feature = feature,
@@ -2984,7 +3047,6 @@ pub fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) ?CIR.Exp
             // Create an empty tuple as a unit value
             const empty_span = CIR.Expr.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } };
             const unit_expr = self.can_ir.store.addExpr(CIR.Expr{ .tuple = .{
-                .tuple_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region),
                 .elems = empty_span,
                 .region = region,
             } });
@@ -2998,7 +3060,6 @@ pub fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) ?CIR.Exp
             const region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
             const empty_span = CIR.Expr.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } };
             const unit_expr = self.can_ir.store.addExpr(CIR.Expr{ .tuple = .{
-                .tuple_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region),
                 .elems = empty_span,
                 .region = region,
             } });
@@ -3055,12 +3116,17 @@ pub fn addNonFiniteFloat(self: *Self, value: f64, region: base.Region) CIR.Expr.
 
     // Create a polymorphic frac type variable
     const poly_var = self.can_ir.env.types.fresh();
-    const frac_var = self.can_ir.env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = poly_var } } });
-    const num_var = self.can_ir.env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = frac_var } } });
+    const frac_requirements = types.Num.FracRequirements{
+        .var_ = poly_var,
+        .fits_in_f32 = requirements.fits_in_f32,
+        .fits_in_dec = requirements.fits_in_dec,
+    };
+    _ = self.can_ir.env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = frac_requirements } } });
+    const num_var = self.can_ir.env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = frac_requirements } } });
 
     // Store the type variable at the expression location
     _ = self.can_ir.pushTypeVar(
-        Content{ .structure = .{ .num = .{ .num_poly = frac_var } } },
+        Content{ .structure = .{ .num = .{ .frac_poly = frac_requirements } } },
         final_expr_idx,
         region,
     );
@@ -3069,7 +3135,6 @@ pub fn addNonFiniteFloat(self: *Self, value: f64, region: base.Region) CIR.Expr.
     const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
         .frac_f64 = .{
             .frac_var = num_var,
-            .requirements = requirements,
             .value = value,
             .region = region,
         },
@@ -3080,7 +3145,7 @@ pub fn addNonFiniteFloat(self: *Self, value: f64, region: base.Region) CIR.Expr.
     // Insert concrete type variable
     _ = self.can_ir.setTypeVarAtExpr(
         expr_idx,
-        Content{ .structure = .{ .num = .{ .num_poly = frac_var } } },
+        Content{ .structure = .{ .num = .{ .frac_poly = frac_requirements } } },
     );
 
     return expr_idx;
@@ -3879,7 +3944,12 @@ fn canonicalizeBasicType(self: *Self, symbol: Ident.Idx, parent_node_idx: Node.I
     } else if (std.mem.eql(u8, name, "Num")) {
         // Create a fresh TypeVar for the polymorphic number type
         const num_var = self.can_ir.pushFreshTypeVar(parent_node_idx, region);
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_poly = num_var } } }, parent_node_idx, region);
+        const num_requirements = types.Num.IntRequirements{
+            .var_ = num_var,
+            .sign_needed = false,
+            .bits_needed = 0, // 7 bits - most permissive for generic Num type
+        };
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_poly = num_requirements } } }, parent_node_idx, region);
     } else if (std.mem.eql(u8, name, "U8")) {
         return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } }, parent_node_idx, region);
     } else if (std.mem.eql(u8, name, "U16")) {
@@ -4443,34 +4513,34 @@ test "hexadecimal integer literals" {
         literal: []const u8,
         expected_value: i128,
         expected_sign_needed: bool,
-        expected_bits_needed: types.Num.Int.BitsNeeded,
+        expected_bits_needed: u8,
     }{
         // Basic hex literals
-        .{ .literal = "0x0", .expected_value = 0, .expected_sign_needed = false, .expected_bits_needed = .@"7" },
-        .{ .literal = "0x1", .expected_value = 1, .expected_sign_needed = false, .expected_bits_needed = .@"7" },
-        .{ .literal = "0xFF", .expected_value = 255, .expected_sign_needed = false, .expected_bits_needed = .@"8" },
-        .{ .literal = "0x100", .expected_value = 256, .expected_sign_needed = false, .expected_bits_needed = .@"9_to_15" },
-        .{ .literal = "0xFFFF", .expected_value = 65535, .expected_sign_needed = false, .expected_bits_needed = .@"16" },
-        .{ .literal = "0x10000", .expected_value = 65536, .expected_sign_needed = false, .expected_bits_needed = .@"17_to_31" },
-        .{ .literal = "0xFFFFFFFF", .expected_value = 4294967295, .expected_sign_needed = false, .expected_bits_needed = .@"32" },
-        .{ .literal = "0x100000000", .expected_value = 4294967296, .expected_sign_needed = false, .expected_bits_needed = .@"33_to_63" },
-        .{ .literal = "0xFFFFFFFFFFFFFFFF", .expected_value = @as(i128, @bitCast(@as(u128, 18446744073709551615))), .expected_sign_needed = false, .expected_bits_needed = .@"64" },
+        .{ .literal = "0x0", .expected_value = 0, .expected_sign_needed = false, .expected_bits_needed = 0 },
+        .{ .literal = "0x1", .expected_value = 1, .expected_sign_needed = false, .expected_bits_needed = 0 },
+        .{ .literal = "0xFF", .expected_value = 255, .expected_sign_needed = false, .expected_bits_needed = 1 },
+        .{ .literal = "0x100", .expected_value = 256, .expected_sign_needed = false, .expected_bits_needed = 2 },
+        .{ .literal = "0xFFFF", .expected_value = 65535, .expected_sign_needed = false, .expected_bits_needed = 3 },
+        .{ .literal = "0x10000", .expected_value = 65536, .expected_sign_needed = false, .expected_bits_needed = 4 },
+        .{ .literal = "0xFFFFFFFF", .expected_value = 4294967295, .expected_sign_needed = false, .expected_bits_needed = 5 },
+        .{ .literal = "0x100000000", .expected_value = 4294967296, .expected_sign_needed = false, .expected_bits_needed = 6 },
+        .{ .literal = "0xFFFFFFFFFFFFFFFF", .expected_value = @as(i128, @bitCast(@as(u128, 18446744073709551615))), .expected_sign_needed = false, .expected_bits_needed = 7 },
 
         // Hex with underscores
-        .{ .literal = "0x1_000", .expected_value = 4096, .expected_sign_needed = false, .expected_bits_needed = .@"9_to_15" },
-        .{ .literal = "0xFF_FF", .expected_value = 65535, .expected_sign_needed = false, .expected_bits_needed = .@"16" },
-        .{ .literal = "0x1234_5678_9ABC_DEF0", .expected_value = @as(i128, @bitCast(@as(u128, 0x123456789ABCDEF0))), .expected_sign_needed = false, .expected_bits_needed = .@"33_to_63" },
+        .{ .literal = "0x1_000", .expected_value = 4096, .expected_sign_needed = false, .expected_bits_needed = 2 },
+        .{ .literal = "0xFF_FF", .expected_value = 65535, .expected_sign_needed = false, .expected_bits_needed = 3 },
+        .{ .literal = "0x1234_5678_9ABC_DEF0", .expected_value = @as(i128, @bitCast(@as(u128, 0x123456789ABCDEF0))), .expected_sign_needed = false, .expected_bits_needed = 6 },
 
         // Negative hex literals
-        .{ .literal = "-0x1", .expected_value = -1, .expected_sign_needed = true, .expected_bits_needed = .@"7" },
-        .{ .literal = "-0x80", .expected_value = -128, .expected_sign_needed = true, .expected_bits_needed = .@"8" },
-        .{ .literal = "-0x81", .expected_value = -129, .expected_sign_needed = true, .expected_bits_needed = .@"8" },
-        .{ .literal = "-0x8000", .expected_value = -32768, .expected_sign_needed = true, .expected_bits_needed = .@"16" },
-        .{ .literal = "-0x8001", .expected_value = -32769, .expected_sign_needed = true, .expected_bits_needed = .@"16" },
-        .{ .literal = "-0x80000000", .expected_value = -2147483648, .expected_sign_needed = true, .expected_bits_needed = .@"32" },
-        .{ .literal = "-0x80000001", .expected_value = -2147483649, .expected_sign_needed = true, .expected_bits_needed = .@"32" },
-        .{ .literal = "-0x8000000000000000", .expected_value = -9223372036854775808, .expected_sign_needed = true, .expected_bits_needed = .@"64" },
-        .{ .literal = "-0x8000000000000001", .expected_value = @as(i128, -9223372036854775809), .expected_sign_needed = true, .expected_bits_needed = .@"64" },
+        .{ .literal = "-0x1", .expected_value = -1, .expected_sign_needed = true, .expected_bits_needed = 0 },
+        .{ .literal = "-0x80", .expected_value = -128, .expected_sign_needed = true, .expected_bits_needed = 0 },
+        .{ .literal = "-0x81", .expected_value = -129, .expected_sign_needed = true, .expected_bits_needed = 1 },
+        .{ .literal = "-0x8000", .expected_value = -32768, .expected_sign_needed = true, .expected_bits_needed = 2 },
+        .{ .literal = "-0x8001", .expected_value = -32769, .expected_sign_needed = true, .expected_bits_needed = 3 },
+        .{ .literal = "-0x80000000", .expected_value = -2147483648, .expected_sign_needed = true, .expected_bits_needed = 4 },
+        .{ .literal = "-0x80000001", .expected_value = -2147483649, .expected_sign_needed = true, .expected_bits_needed = 5 },
+        .{ .literal = "-0x8000000000000000", .expected_value = -9223372036854775808, .expected_sign_needed = true, .expected_bits_needed = 6 },
+        .{ .literal = "-0x8000000000000001", .expected_value = @as(i128, -9223372036854775809), .expected_sign_needed = true, .expected_bits_needed = 7 },
     };
 
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
@@ -4503,9 +4573,20 @@ test "hexadecimal integer literals" {
         // Check the value
         try std.testing.expectEqual(tc.expected_value, @as(i128, @bitCast(expr.int.value.bytes)));
 
-        // Check the requirements
-        try std.testing.expectEqual(tc.expected_sign_needed, expr.int.requirements.sign_needed);
-        try std.testing.expectEqual(tc.expected_bits_needed, expr.int.requirements.bits_needed);
+        const resolved = env.types.resolveVar(expr.int.num_var);
+        switch (resolved.desc.content) {
+            .structure => |structure| switch (structure) {
+                .num => |num| switch (num) {
+                    .num_poly, .int_poly => |requirements| {
+                        try std.testing.expectEqual(tc.expected_sign_needed, requirements.sign_needed);
+                        try std.testing.expectEqual(tc.expected_bits_needed, requirements.bits_needed);
+                    },
+                    else => return error.UnexpectedNumType,
+                },
+                else => return error.UnexpectedStructureType,
+            },
+            else => return error.UnexpectedContentType,
+        }
     }
 }
 
@@ -4514,29 +4595,29 @@ test "binary integer literals" {
         literal: []const u8,
         expected_value: i128,
         expected_sign_needed: bool,
-        expected_bits_needed: types.Num.Int.BitsNeeded,
+        expected_bits_needed: u8,
     }{
         // Basic binary literals
-        .{ .literal = "0b0", .expected_value = 0, .expected_sign_needed = false, .expected_bits_needed = .@"7" },
-        .{ .literal = "0b1", .expected_value = 1, .expected_sign_needed = false, .expected_bits_needed = .@"7" },
-        .{ .literal = "0b10", .expected_value = 2, .expected_sign_needed = false, .expected_bits_needed = .@"7" },
-        .{ .literal = "0b11111111", .expected_value = 255, .expected_sign_needed = false, .expected_bits_needed = .@"8" },
-        .{ .literal = "0b100000000", .expected_value = 256, .expected_sign_needed = false, .expected_bits_needed = .@"9_to_15" },
-        .{ .literal = "0b1111111111111111", .expected_value = 65535, .expected_sign_needed = false, .expected_bits_needed = .@"16" },
-        .{ .literal = "0b10000000000000000", .expected_value = 65536, .expected_sign_needed = false, .expected_bits_needed = .@"17_to_31" },
+        .{ .literal = "0b0", .expected_value = 0, .expected_sign_needed = false, .expected_bits_needed = 0 },
+        .{ .literal = "0b1", .expected_value = 1, .expected_sign_needed = false, .expected_bits_needed = 0 },
+        .{ .literal = "0b10", .expected_value = 2, .expected_sign_needed = false, .expected_bits_needed = 0 },
+        .{ .literal = "0b11111111", .expected_value = 255, .expected_sign_needed = false, .expected_bits_needed = 1 },
+        .{ .literal = "0b100000000", .expected_value = 256, .expected_sign_needed = false, .expected_bits_needed = 2 },
+        .{ .literal = "0b1111111111111111", .expected_value = 65535, .expected_sign_needed = false, .expected_bits_needed = 3 },
+        .{ .literal = "0b10000000000000000", .expected_value = 65536, .expected_sign_needed = false, .expected_bits_needed = 4 },
 
         // Binary with underscores
-        .{ .literal = "0b11_11", .expected_value = 15, .expected_sign_needed = false, .expected_bits_needed = .@"7" },
-        .{ .literal = "0b1111_1111", .expected_value = 255, .expected_sign_needed = false, .expected_bits_needed = .@"8" },
-        .{ .literal = "0b1010_1010_1010_1010", .expected_value = 43690, .expected_sign_needed = false, .expected_bits_needed = .@"16" },
+        .{ .literal = "0b11_11", .expected_value = 15, .expected_sign_needed = false, .expected_bits_needed = 0 },
+        .{ .literal = "0b1111_1111", .expected_value = 255, .expected_sign_needed = false, .expected_bits_needed = 1 },
+        .{ .literal = "0b1_0000_0000", .expected_value = 256, .expected_sign_needed = false, .expected_bits_needed = 2 },
+        .{ .literal = "0b1010_1010_1010_1010", .expected_value = 43690, .expected_sign_needed = false, .expected_bits_needed = 3 },
 
-        // Negative binary literals
-        .{ .literal = "-0b1", .expected_value = -1, .expected_sign_needed = true, .expected_bits_needed = .@"7" },
-        .{ .literal = "-0b1000000", .expected_value = -64, .expected_sign_needed = true, .expected_bits_needed = .@"7" },
-        .{ .literal = "-0b10000000", .expected_value = -128, .expected_sign_needed = true, .expected_bits_needed = .@"8" },
-        .{ .literal = "-0b10000001", .expected_value = -129, .expected_sign_needed = true, .expected_bits_needed = .@"8" },
-        .{ .literal = "-0b1000000000000000", .expected_value = -32768, .expected_sign_needed = true, .expected_bits_needed = .@"16" },
-        .{ .literal = "-0b1000000000000001", .expected_value = -32769, .expected_sign_needed = true, .expected_bits_needed = .@"16" },
+        // Negative binary
+        .{ .literal = "-0b1", .expected_value = -1, .expected_sign_needed = true, .expected_bits_needed = 0 },
+        .{ .literal = "-0b10000000", .expected_value = -128, .expected_sign_needed = true, .expected_bits_needed = 0 },
+        .{ .literal = "-0b10000001", .expected_value = -129, .expected_sign_needed = true, .expected_bits_needed = 1 },
+        .{ .literal = "-0b1000000000000000", .expected_value = -32768, .expected_sign_needed = true, .expected_bits_needed = 2 },
+        .{ .literal = "-0b1000000000000001", .expected_value = -32769, .expected_sign_needed = true, .expected_bits_needed = 3 },
     };
 
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
@@ -4569,9 +4650,20 @@ test "binary integer literals" {
         // Check the value
         try std.testing.expectEqual(tc.expected_value, @as(i128, @bitCast(expr.int.value.bytes)));
 
-        // Check the requirements
-        try std.testing.expectEqual(tc.expected_sign_needed, expr.int.requirements.sign_needed);
-        try std.testing.expectEqual(tc.expected_bits_needed, expr.int.requirements.bits_needed);
+        const resolved = env.types.resolveVar(expr.int.num_var);
+        switch (resolved.desc.content) {
+            .structure => |structure| switch (structure) {
+                .num => |num| switch (num) {
+                    .num_poly, .int_poly => |requirements| {
+                        try std.testing.expectEqual(tc.expected_sign_needed, requirements.sign_needed);
+                        try std.testing.expectEqual(tc.expected_bits_needed, requirements.bits_needed);
+                    },
+                    else => return error.UnexpectedNumType,
+                },
+                else => return error.UnexpectedStructureType,
+            },
+            else => return error.UnexpectedContentType,
+        }
     }
 }
 
@@ -4580,29 +4672,29 @@ test "octal integer literals" {
         literal: []const u8,
         expected_value: i128,
         expected_sign_needed: bool,
-        expected_bits_needed: types.Num.Int.BitsNeeded,
+        expected_bits_needed: u8,
     }{
         // Basic octal literals
-        .{ .literal = "0o0", .expected_value = 0, .expected_sign_needed = false, .expected_bits_needed = .@"7" },
-        .{ .literal = "0o1", .expected_value = 1, .expected_sign_needed = false, .expected_bits_needed = .@"7" },
-        .{ .literal = "0o7", .expected_value = 7, .expected_sign_needed = false, .expected_bits_needed = .@"7" },
-        .{ .literal = "0o10", .expected_value = 8, .expected_sign_needed = false, .expected_bits_needed = .@"7" },
-        .{ .literal = "0o377", .expected_value = 255, .expected_sign_needed = false, .expected_bits_needed = .@"8" },
-        .{ .literal = "0o400", .expected_value = 256, .expected_sign_needed = false, .expected_bits_needed = .@"9_to_15" },
-        .{ .literal = "0o177777", .expected_value = 65535, .expected_sign_needed = false, .expected_bits_needed = .@"16" },
-        .{ .literal = "0o200000", .expected_value = 65536, .expected_sign_needed = false, .expected_bits_needed = .@"17_to_31" },
+        .{ .literal = "0o0", .expected_value = 0, .expected_sign_needed = false, .expected_bits_needed = 0 },
+        .{ .literal = "0o1", .expected_value = 1, .expected_sign_needed = false, .expected_bits_needed = 0 },
+        .{ .literal = "0o7", .expected_value = 7, .expected_sign_needed = false, .expected_bits_needed = 0 },
+        .{ .literal = "0o10", .expected_value = 8, .expected_sign_needed = false, .expected_bits_needed = 0 },
+        .{ .literal = "0o377", .expected_value = 255, .expected_sign_needed = false, .expected_bits_needed = 1 },
+        .{ .literal = "0o400", .expected_value = 256, .expected_sign_needed = false, .expected_bits_needed = 2 },
+        .{ .literal = "0o177777", .expected_value = 65535, .expected_sign_needed = false, .expected_bits_needed = 3 },
+        .{ .literal = "0o200000", .expected_value = 65536, .expected_sign_needed = false, .expected_bits_needed = 4 },
 
         // Octal with underscores
-        .{ .literal = "0o377_377", .expected_value = 130815, .expected_sign_needed = false, .expected_bits_needed = .@"17_to_31" },
-        .{ .literal = "0o1_234_567", .expected_value = 342391, .expected_sign_needed = false, .expected_bits_needed = .@"17_to_31" },
+        .{ .literal = "0o377_377", .expected_value = 130815, .expected_sign_needed = false, .expected_bits_needed = 4 },
+        .{ .literal = "0o1_234_567", .expected_value = 342391, .expected_sign_needed = false, .expected_bits_needed = 4 },
 
         // Negative octal literals
-        .{ .literal = "-0o1", .expected_value = -1, .expected_sign_needed = true, .expected_bits_needed = .@"7" },
-        .{ .literal = "-0o100", .expected_value = -64, .expected_sign_needed = true, .expected_bits_needed = .@"7" },
-        .{ .literal = "-0o200", .expected_value = -128, .expected_sign_needed = true, .expected_bits_needed = .@"8" },
-        .{ .literal = "-0o201", .expected_value = -129, .expected_sign_needed = true, .expected_bits_needed = .@"8" },
-        .{ .literal = "-0o100000", .expected_value = -32768, .expected_sign_needed = true, .expected_bits_needed = .@"16" },
-        .{ .literal = "-0o100001", .expected_value = -32769, .expected_sign_needed = true, .expected_bits_needed = .@"16" },
+        .{ .literal = "-0o1", .expected_value = -1, .expected_sign_needed = true, .expected_bits_needed = 0 },
+        .{ .literal = "-0o100", .expected_value = -64, .expected_sign_needed = true, .expected_bits_needed = 0 },
+        .{ .literal = "-0o200", .expected_value = -128, .expected_sign_needed = true, .expected_bits_needed = 0 },
+        .{ .literal = "-0o201", .expected_value = -129, .expected_sign_needed = true, .expected_bits_needed = 1 },
+        .{ .literal = "-0o100000", .expected_value = -32768, .expected_sign_needed = true, .expected_bits_needed = 2 },
+        .{ .literal = "-0o100001", .expected_value = -32769, .expected_sign_needed = true, .expected_bits_needed = 3 },
     };
 
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
@@ -4635,9 +4727,20 @@ test "octal integer literals" {
         // Check the value
         try std.testing.expectEqual(tc.expected_value, @as(i128, @bitCast(expr.int.value.bytes)));
 
-        // Check the requirements
-        try std.testing.expectEqual(tc.expected_sign_needed, expr.int.requirements.sign_needed);
-        try std.testing.expectEqual(tc.expected_bits_needed, expr.int.requirements.bits_needed);
+        const resolved = env.types.resolveVar(expr.int.num_var);
+        switch (resolved.desc.content) {
+            .structure => |structure| switch (structure) {
+                .num => |num| switch (num) {
+                    .num_poly, .int_poly => |requirements| {
+                        try std.testing.expectEqual(tc.expected_sign_needed, requirements.sign_needed);
+                        try std.testing.expectEqual(tc.expected_bits_needed, requirements.bits_needed);
+                    },
+                    else => return error.UnexpectedNumType,
+                },
+                else => return error.UnexpectedStructureType,
+            },
+            else => return error.UnexpectedContentType,
+        }
     }
 }
 
@@ -4646,29 +4749,29 @@ test "integer literals with uppercase base prefixes" {
         literal: []const u8,
         expected_value: i128,
         expected_sign_needed: bool,
-        expected_bits_needed: types.Num.Int.BitsNeeded,
+        expected_bits_needed: u8,
     }{
         // Uppercase hex prefix
-        .{ .literal = "0X0", .expected_value = 0, .expected_sign_needed = false, .expected_bits_needed = .@"7" },
-        .{ .literal = "0X1", .expected_value = 1, .expected_sign_needed = false, .expected_bits_needed = .@"7" },
-        .{ .literal = "0XFF", .expected_value = 255, .expected_sign_needed = false, .expected_bits_needed = .@"8" },
-        .{ .literal = "0XABCD", .expected_value = 43981, .expected_sign_needed = false, .expected_bits_needed = .@"16" },
+        .{ .literal = "0X0", .expected_value = 0, .expected_sign_needed = false, .expected_bits_needed = 0 },
+        .{ .literal = "0X1", .expected_value = 1, .expected_sign_needed = false, .expected_bits_needed = 0 },
+        .{ .literal = "0XFF", .expected_value = 255, .expected_sign_needed = false, .expected_bits_needed = 1 },
+        .{ .literal = "0XABCD", .expected_value = 43981, .expected_sign_needed = false, .expected_bits_needed = 3 },
 
         // Uppercase binary prefix
-        .{ .literal = "0B0", .expected_value = 0, .expected_sign_needed = false, .expected_bits_needed = .@"7" },
-        .{ .literal = "0B1", .expected_value = 1, .expected_sign_needed = false, .expected_bits_needed = .@"7" },
-        .{ .literal = "0B1111", .expected_value = 15, .expected_sign_needed = false, .expected_bits_needed = .@"7" },
-        .{ .literal = "0B11111111", .expected_value = 255, .expected_sign_needed = false, .expected_bits_needed = .@"8" },
+        .{ .literal = "0B0", .expected_value = 0, .expected_sign_needed = false, .expected_bits_needed = 0 },
+        .{ .literal = "0B1", .expected_value = 1, .expected_sign_needed = false, .expected_bits_needed = 0 },
+        .{ .literal = "0B1111", .expected_value = 15, .expected_sign_needed = false, .expected_bits_needed = 0 },
+        .{ .literal = "0B11111111", .expected_value = 255, .expected_sign_needed = false, .expected_bits_needed = 1 },
 
         // Uppercase octal prefix
-        .{ .literal = "0O0", .expected_value = 0, .expected_sign_needed = false, .expected_bits_needed = .@"7" },
-        .{ .literal = "0O7", .expected_value = 7, .expected_sign_needed = false, .expected_bits_needed = .@"7" },
-        .{ .literal = "0O377", .expected_value = 255, .expected_sign_needed = false, .expected_bits_needed = .@"8" },
-        .{ .literal = "0O777", .expected_value = 511, .expected_sign_needed = false, .expected_bits_needed = .@"9_to_15" },
+        .{ .literal = "0O0", .expected_value = 0, .expected_sign_needed = false, .expected_bits_needed = 0 },
+        .{ .literal = "0O7", .expected_value = 7, .expected_sign_needed = false, .expected_bits_needed = 0 },
+        .{ .literal = "0O377", .expected_value = 255, .expected_sign_needed = false, .expected_bits_needed = 1 },
+        .{ .literal = "0O777", .expected_value = 511, .expected_sign_needed = false, .expected_bits_needed = 2 },
 
         // Mixed case in value (should still work)
-        .{ .literal = "0xAbCd", .expected_value = 43981, .expected_sign_needed = false, .expected_bits_needed = .@"16" },
-        .{ .literal = "0XaBcD", .expected_value = 43981, .expected_sign_needed = false, .expected_bits_needed = .@"16" },
+        .{ .literal = "0xAbCd", .expected_value = 43981, .expected_sign_needed = false, .expected_bits_needed = 3 },
+        .{ .literal = "0XaBcD", .expected_value = 43981, .expected_sign_needed = false, .expected_bits_needed = 3 },
     };
 
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
@@ -4701,8 +4804,19 @@ test "integer literals with uppercase base prefixes" {
         // Check the value
         try std.testing.expectEqual(tc.expected_value, @as(i128, @bitCast(expr.int.value.bytes)));
 
-        // Check the requirements
-        try std.testing.expectEqual(tc.expected_sign_needed, expr.int.requirements.sign_needed);
-        try std.testing.expectEqual(tc.expected_bits_needed, expr.int.requirements.bits_needed);
+        const resolved = env.types.resolveVar(expr.int.num_var);
+        switch (resolved.desc.content) {
+            .structure => |structure| switch (structure) {
+                .num => |num| switch (num) {
+                    .num_poly, .int_poly => |requirements| {
+                        try std.testing.expectEqual(tc.expected_sign_needed, requirements.sign_needed);
+                        try std.testing.expectEqual(tc.expected_bits_needed, requirements.bits_needed);
+                    },
+                    else => return error.UnexpectedNumType,
+                },
+                else => return error.UnexpectedStructureType,
+            },
+            else => return error.UnexpectedContentType,
+        }
     }
 }

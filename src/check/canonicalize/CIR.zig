@@ -1122,25 +1122,21 @@ pub const Expr = union(enum) {
     },
     int: struct {
         num_var: TypeVar,
-        requirements: types.Num.Int.Requirements,
         value: IntValue,
         region: Region,
     },
     frac_f64: struct {
         frac_var: TypeVar,
-        requirements: types.Num.Frac.Requirements,
         value: f64,
         region: Region,
     },
     frac_dec: struct {
         frac_var: TypeVar,
-        requirements: types.Num.Frac.Requirements,
         value: RocDec,
         region: Region,
     },
     dec_small: struct {
         num_var: TypeVar,
-        requirements: types.Num.Frac.Requirements,
         numerator: i16,
         denominator_power_of_ten: u8,
         region: Region,
@@ -1175,7 +1171,6 @@ pub const Expr = union(enum) {
         region: Region,
     },
     tuple: struct {
-        tuple_var: TypeVar,
         elems: Expr.Span,
         region: Region,
     },
@@ -1371,10 +1366,6 @@ pub const Expr = union(enum) {
                 // Add num_var
                 node.appendTypeVar(gpa, "num-var", int_expr.num_var);
 
-                // Add requirements
-                node.appendStringAttr(gpa, "sign-needed", if (int_expr.requirements.sign_needed) "true" else "false");
-                node.appendStringAttr(gpa, "bits-needed", @tagName(int_expr.requirements.bits_needed));
-
                 // Add value
                 const value_i128: i128 = @bitCast(int_expr.value.bytes);
                 var value_buf: [40]u8 = undefined;
@@ -1387,10 +1378,6 @@ pub const Expr = union(enum) {
                 var node = SExpr.init(gpa, "e-frac-f64");
                 node.appendRegion(gpa, ir.calcRegionInfo(e.region));
                 node.appendTypeVar(gpa, "frac-var", e.frac_var);
-
-                // Add requirements
-                node.appendStringAttr(gpa, "fits-in-f32", if (e.requirements.fits_in_f32) "true" else "false");
-                node.appendStringAttr(gpa, "fits-in-dec", if (e.requirements.fits_in_dec) "true" else "false");
 
                 // Add value
                 var value_buf: [512]u8 = undefined;
@@ -1409,10 +1396,6 @@ pub const Expr = union(enum) {
                 var node = SExpr.init(gpa, "e-frac-dec");
                 node.appendRegion(gpa, ir.calcRegionInfo(e.region));
                 node.appendTypeVar(gpa, "frac-var", e.frac_var);
-
-                // Add requirements
-                node.appendStringAttr(gpa, "fits-in-f32", if (e.requirements.fits_in_f32) "true" else "false");
-                node.appendStringAttr(gpa, "fits-in-dec", if (e.requirements.fits_in_dec) "true" else "false");
 
                 // Add value (convert RocDec to string)
                 // RocDec has 18 decimal places, so divide by 10^18
@@ -1433,10 +1416,6 @@ pub const Expr = union(enum) {
                 var node = SExpr.init(gpa, "e-dec-small");
                 node.appendRegion(gpa, ir.calcRegionInfo(e.region));
                 node.appendTypeVar(gpa, "num-var", e.num_var);
-
-                // Add requirements
-                node.appendStringAttr(gpa, "fits-in-f32", if (e.requirements.fits_in_f32) "true" else "false");
-                node.appendStringAttr(gpa, "fits-in-dec", if (e.requirements.fits_in_dec) "true" else "false");
 
                 // Add numerator and denominator_power_of_ten
                 var num_buf: [32]u8 = undefined;
@@ -1525,9 +1504,6 @@ pub const Expr = union(enum) {
             .tuple => |t| {
                 var node = SExpr.init(gpa, "e-tuple");
                 node.appendRegion(gpa, ir.calcRegionInfo(t.region));
-
-                // Add tuple_var
-                node.appendTypeVar(gpa, "tuple-var", t.tuple_var);
 
                 // Add tuple elements
                 var elems_node = SExpr.init(gpa, "elems");
@@ -2283,32 +2259,27 @@ pub const Pattern = union(enum) {
         region: Region,
     },
     tuple: struct {
-        tuple_var: TypeVar,
         patterns: Pattern.Span,
         region: Region,
     },
     int_literal: struct {
         num_var: TypeVar,
-        requirements: types.Num.Int.Requirements,
         value: IntValue,
         region: Region,
     },
     small_dec_literal: struct {
         num_var: TypeVar,
-        requirements: types.Num.Frac.Requirements,
         numerator: i16,
         denominator_power_of_ten: u8,
         region: Region,
     },
     dec_literal: struct {
         num_var: TypeVar,
-        requirements: types.Num.Frac.Requirements,
         value: RocDec,
         region: Region,
     },
     f64_literal: struct {
         num_var: TypeVar,
-        requirements: types.Num.Frac.Requirements,
         value: f64,
         region: Region,
     },
@@ -2417,9 +2388,6 @@ pub const Pattern = union(enum) {
 
                 // var pattern_idx_node = formatPatternIdxNode(gpa, pattern_idx);
                 // node.appendNode(gpa, &pattern_idx_node);
-
-                // Add tuple_var
-                node.appendTypeVar(gpa, "tuple-var", p.tuple_var);
 
                 var patterns_node = SExpr.init(gpa, "patterns");
 

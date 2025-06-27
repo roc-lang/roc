@@ -40,25 +40,25 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-record @1-1-1-86 (ext-var 98) (id 99)
+(e-record @1-1-1-86 (ext-var 94) (id 95)
 	(fields
 		(field (name "name")
 			(e-string @1-9-1-16
 				(e-literal @1-10-1-15 (string "Alice"))))
 		(field (name "age")
-			(e-int @1-23-1-25 (num-var 77) (sign-needed "false") (bits-needed "7") (value "30")))
+			(e-int @1-23-1-25 (num-var 76) (value "30")))
 		(field (name "active")
 			(e-runtime-error (tag "ident_not_in_scope")))
 		(field (name "scores")
-			(e-list @1-54-1-66 (elem-var 91)
+			(e-list @1-54-1-66 (elem-var 87)
 				(elems
-					(e-int @1-55-1-57 (num-var 84) (sign-needed "false") (bits-needed "7") (value "95"))
-					(e-int @1-59-1-61 (num-var 87) (sign-needed "false") (bits-needed "7") (value "87"))
-					(e-int @1-63-1-65 (num-var 90) (sign-needed "false") (bits-needed "7") (value "92")))))
+					(e-int @1-55-1-57 (num-var 82) (value "95"))
+					(e-int @1-59-1-61 (num-var 84) (value "87"))
+					(e-int @1-63-1-65 (num-var 86) (value "92")))))
 		(field (name "balance")
-			(e-frac-dec @1-77-1-84 (frac-var 96) (fits-in-f32 "true") (fits-in-dec "true") (value "1250.75")))))
+			(e-frac-dec @1-77-1-84 (frac-var 92) (value "1250.75")))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 99) (type "{ name: Str, age: Num(Int(*)), active: Error, scores: List(Num(Int(*))), balance: Num(Fraction(*)) }"))
+(expr (id 95) (type "{ name: Str, age: Num(*), active: Error, scores: List(Num(*)), balance: Frac(*) }"))
 ~~~

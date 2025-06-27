@@ -29,15 +29,15 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-if @1-1-1-17 (cond-var 0) (branch-var 0) (id 83)
+(e-if @1-1-1-17 (cond-var 0) (branch-var 0) (id 81)
 	(if-branches
 		(if-branch
 			(e-runtime-error (tag "ident_not_in_scope"))
-			(e-int @1-9-1-10 (num-var 76) (sign-needed "false") (bits-needed "7") (value "1"))))
+			(e-int @1-9-1-10 (num-var 75) (value "1"))))
 	(if-else
-		(e-int @1-16-1-17 (num-var 80) (sign-needed "false") (bits-needed "7") (value "2"))))
+		(e-int @1-16-1-17 (num-var 78) (value "2"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 83) (type "*"))
+(expr (id 81) (type "*"))
 ~~~

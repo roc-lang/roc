@@ -168,18 +168,18 @@ pub const Store = struct {
 
     fn deepCopyNum(self: *Self, store: *const TypesStore, num: types.Num) SnapshotNum {
         switch (num) {
-            .num_poly => |var_| {
-                const resolved_poly = store.resolveVar(var_);
+            .num_poly => |requirements| {
+                const resolved_poly = store.resolveVar(requirements.var_);
                 const deep_poly = self.deepCopyContent(store, resolved_poly.desc.content);
                 return SnapshotNum{ .num_poly = deep_poly };
             },
-            .int_poly => |var_| {
-                const resolved_poly = store.resolveVar(var_);
+            .int_poly => |requirements| {
+                const resolved_poly = store.resolveVar(requirements.var_);
                 const deep_poly = self.deepCopyContent(store, resolved_poly.desc.content);
                 return SnapshotNum{ .int_poly = deep_poly };
             },
-            .frac_poly => |var_| {
-                const resolved_poly = store.resolveVar(var_);
+            .frac_poly => |requirements| {
+                const resolved_poly = store.resolveVar(requirements.var_);
                 const deep_poly = self.deepCopyContent(store, resolved_poly.desc.content);
                 return SnapshotNum{ .frac_poly = deep_poly };
             },
@@ -716,53 +716,49 @@ pub const SnapshotWriter = struct {
                 _ = try self.writer.write(")");
             },
             .frac_poly => |sub_var| {
-                _ = try self.writer.write("Fraction(");
+                _ = try self.writer.write("Frac(");
                 try self.write(sub_var);
                 _ = try self.writer.write(")");
             },
             .int_precision => |prec| {
-                try self.writeIntPrecision(prec);
+                try self.writeIntType(prec);
             },
             .frac_precision => |prec| {
-                try self.writeFracPrecision(prec);
+                try self.writeFracType(prec);
             },
             .num_compact => |compact| {
                 switch (compact) {
                     .int => |prec| {
-                        _ = try self.writer.write("Num(Int(");
-                        try self.writeIntPrecision(prec);
-                        _ = try self.writer.write("))");
+                        try self.writeIntType(prec);
                     },
                     .frac => |prec| {
-                        _ = try self.writer.write("Num(Fraction(");
-                        try self.writeFracPrecision(prec);
-                        _ = try self.writer.write("))");
+                        try self.writeFracType(prec);
                     },
                 }
             },
         }
     }
 
-    pub fn writeIntPrecision(self: *Self, prec: types.Num.Int.Precision) Allocator.Error!void {
+    pub fn writeIntType(self: *Self, prec: types.Num.Int.Precision) Allocator.Error!void {
         _ = switch (prec) {
-            .u8 => try self.writer.write("Unsigned8"),
-            .i8 => try self.writer.write("Signed8"),
-            .u16 => try self.writer.write("Unsigned16"),
-            .i16 => try self.writer.write("Signed16"),
-            .u32 => try self.writer.write("Unsigned32"),
-            .i32 => try self.writer.write("Signed32"),
-            .u64 => try self.writer.write("Unsigned64"),
-            .i64 => try self.writer.write("Signed64"),
-            .u128 => try self.writer.write("Unsigned128"),
-            .i128 => try self.writer.write("Signed128"),
+            .u8 => try self.writer.write("U8"),
+            .i8 => try self.writer.write("I8"),
+            .u16 => try self.writer.write("U16"),
+            .i16 => try self.writer.write("I16"),
+            .u32 => try self.writer.write("U32"),
+            .i32 => try self.writer.write("I32"),
+            .u64 => try self.writer.write("U64"),
+            .i64 => try self.writer.write("I64"),
+            .u128 => try self.writer.write("U128"),
+            .i128 => try self.writer.write("I128"),
         };
     }
 
-    pub fn writeFracPrecision(self: *Self, prec: types.Num.Frac.Precision) Allocator.Error!void {
+    pub fn writeFracType(self: *Self, prec: types.Num.Frac.Precision) Allocator.Error!void {
         _ = switch (prec) {
-            .f32 => try self.writer.write("Binary32"),
-            .f64 => try self.writer.write("Binary64"),
-            .dec => try self.writer.write("Decimal"),
+            .f32 => try self.writer.write("F32"),
+            .f64 => try self.writer.write("F64"),
+            .dec => try self.writer.write("Dec"),
         };
     }
 };

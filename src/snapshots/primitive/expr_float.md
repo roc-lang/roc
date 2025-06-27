@@ -35,13 +35,13 @@ NO CHANGE
 (can-ir
 	(d-let (id 76)
 		(p-assign @2-1-2-4 (ident "foo") (id 72))
-		(e-dec-small @2-7-2-12 (num-var 75) (fits-in-f32 "true") (fits-in-dec "true") (numerator "1234") (denominator-power-of-ten "2") (value "12.34") (id 75))))
+		(e-dec-small @2-7-2-12 (num-var 75) (numerator "1234") (denominator-power-of-ten "2") (value "12.34") (id 75))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "foo") (type "Num(Fraction(*))")))
+		(def (name "foo") (type "Frac(*)")))
 	(expressions
-		(expr @2-7-2-12 (type "Num(Fraction(*))"))))
+		(expr @2-7-2-12 (type "Frac(*)"))))
 ~~~

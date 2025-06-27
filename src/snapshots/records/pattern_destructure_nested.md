@@ -10,17 +10,6 @@ match person {
 }
 ~~~
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `expected_colon_after_pat_field_name`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**pattern_destructure_nested.md:2:7:2:12:**
-```roc
-    { name, address: { street, city, zipCode } } => "${name} lives on ${street} in ${city}"
-```
-
-
 **UNEXPECTED TOKEN IN PATTERN**
 The token **match person {
     { name, address: { street, city, zipCode } } => "${name} lives on ${street} in ${city}"

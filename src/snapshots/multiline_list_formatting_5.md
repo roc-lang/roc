@@ -32,13 +32,13 @@ Int(2:3-2:4),CloseSquare(2:4-2:5),EndOfFile(2:5-2:5),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-list @1-1-2-5 (elem-var 81) (id 82)
+(e-list @1-1-2-5 (elem-var 78) (id 79)
 	(elems
-		(e-int @1-2-1-3 (num-var 74) (sign-needed "false") (bits-needed "7") (value "1"))
-		(e-int @1-5-1-6 (num-var 77) (sign-needed "false") (bits-needed "7") (value "2"))
-		(e-int @2-3-2-4 (num-var 80) (sign-needed "false") (bits-needed "7") (value "3"))))
+		(e-int @1-2-1-3 (num-var 73) (value "1"))
+		(e-int @1-5-1-6 (num-var 75) (value "2"))
+		(e-int @2-3-2-4 (num-var 77) (value "3"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 82) (type "List(Num(Int(*)))"))
+(expr (id 79) (type "List(Num(*))"))
 ~~~

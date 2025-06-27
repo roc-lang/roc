@@ -19,7 +19,7 @@ It is of type:
     _Str_
 
 But you are trying to use it as:
-    _Num(Int(*))_
+    _Num(*)_
 
 # TOKENS
 ~~~zig
@@ -39,14 +39,14 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-list @1-1-1-16 (elem-var 80) (id 81)
+(e-list @1-1-1-16 (elem-var 78) (id 79)
 	(elems
-		(e-int @1-2-1-3 (num-var 74) (sign-needed "false") (bits-needed "7") (value "1"))
-		(e-int @1-5-1-6 (num-var 77) (sign-needed "false") (bits-needed "7") (value "2"))
+		(e-int @1-2-1-3 (num-var 73) (value "1"))
+		(e-int @1-5-1-6 (num-var 75) (value "2"))
 		(e-string @1-8-1-15
 			(e-literal @1-9-1-14 (string "hello")))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 81) (type "List(Error)"))
+(expr (id 79) (type "List(Error)"))
 ~~~

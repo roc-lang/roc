@@ -28,15 +28,15 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-record @1-1-1-27 (ext-var 79) (id 80)
+(e-record @1-1-1-27 (ext-var 78) (id 79)
 	(fields
 		(field (name "name")
 			(e-string @1-9-1-16
 				(e-literal @1-10-1-15 (string "Alice"))))
 		(field (name "age")
-			(e-int @1-23-1-25 (num-var 77) (sign-needed "false") (bits-needed "7") (value "30")))))
+			(e-int @1-23-1-25 (num-var 76) (value "30")))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 80) (type "{ name: Str, age: Num(Int(*)) }"))
+(expr (id 79) (type "{ name: Str, age: Num(*) }"))
 ~~~

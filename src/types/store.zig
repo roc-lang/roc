@@ -241,6 +241,11 @@ pub const Store = struct {
         return self.alias_args.appendSlice(self.gpa, slice);
     }
 
+    /// Append a tuple elem to the backing list, returning the idx
+    pub fn appendTupleElem(self: *Self, v: Var) VarSafeList.Idx {
+        return self.tuple_elems.append(self.gpa, v);
+    }
+
     /// Append a slice of tuple elems to the backing list, returning the range
     pub fn appendTupleElems(self: *Self, slice: []const Var) VarSafeList.Range {
         return self.tuple_elems.appendSlice(self.gpa, slice);
@@ -581,7 +586,12 @@ test "resolveVarAndCompressPath - no-op on already root" {
     defer store.deinit();
 
     const num_flex = store.fresh();
-    const num = types.Content{ .structure = .{ .num = .{ .num_poly = num_flex } } };
+    const requirements = types.Num.IntRequirements{
+        .var_ = num_flex,
+        .sign_needed = false,
+        .bits_needed = 0,
+    };
+    const num = types.Content{ .structure = .{ .num = .{ .num_poly = requirements } } };
     const num_var = store.freshFromContent(num);
 
     const result = store.resolveVarAndCompressPath(num_var);
@@ -598,7 +608,12 @@ test "resolveVarAndCompressPath - flattens redirect chain to structure" {
     defer store.deinit();
 
     const num_flex = store.fresh();
-    const num = types.Content{ .structure = .{ .num = .{ .num_poly = num_flex } } };
+    const requirements = types.Num.IntRequirements{
+        .var_ = num_flex,
+        .sign_needed = false,
+        .bits_needed = 0,
+    };
+    const num = types.Content{ .structure = .{ .num = .{ .num_poly = requirements } } };
     const c = store.freshFromContent(num);
     const b = store.freshRedirect(c);
     const a = store.freshRedirect(b);

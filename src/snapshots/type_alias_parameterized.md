@@ -86,21 +86,21 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 105)
+	(d-let (id 103)
 		(p-assign @6-1-6-9 (ident "swapPair") (id 90))
-		(e-lambda @6-12-6-27 (id 99)
+		(e-lambda @6-12-6-27 (id 97)
 			(args
-				(p-tuple @6-13-6-19 (tuple-var 93) (id 94)
+				(p-tuple @6-13-6-19 (id 93)
 					(patterns
 						(p-assign @6-14-6-15 (ident "x") (id 91))
 						(p-assign @6-17-6-18 (ident "y") (id 92)))))
-			(e-tuple @6-21-6-27 (tuple-var 97)
+			(e-tuple @6-21-6-27
 				(elems
 					(e-lookup-local @6-22-6-23
 						(pattern (id 92)))
 					(e-lookup-local @6-25-6-26
 						(pattern (id 91))))))
-		(annotation @6-1-6-9 (signature 103) (id 104)
+		(annotation @6-1-6-9 (signature 101) (id 102)
 			(declared-type
 				(ty-fn @5-12-5-36 (effectful false)
 					(ty-apply @5-12-5-22 (symbol "Pair")
@@ -109,16 +109,16 @@ NO CHANGE
 					(ty-apply @5-26-5-36 (symbol "Pair")
 						(ty-var @5-31-5-32 (name "b"))
 						(ty-var @5-34-5-35 (name "a")))))))
-	(d-let (id 117)
-		(p-assign @8-1-8-6 (ident "main!") (id 106))
-		(e-lambda @8-9-8-27 (id 116)
+	(d-let (id 113)
+		(p-assign @8-1-8-6 (ident "main!") (id 104))
+		(e-lambda @8-9-8-27 (id 112)
 			(args
-				(p-underscore @8-10-8-11 (id 107)))
+				(p-underscore @8-10-8-11 (id 105)))
 			(e-call @8-13-8-27
 				(e-lookup-local @8-13-8-21
 					(pattern (id 90)))
-				(e-int @8-22-8-23 (num-var 111) (sign-needed "false") (bits-needed "7") (value "1"))
-				(e-int @8-25-8-26 (num-var 114) (sign-needed "false") (bits-needed "7") (value "2")))))
+				(e-int @8-22-8-23 (num-var 108) (value "1"))
+				(e-int @8-25-8-26 (num-var 110) (value "2")))))
 	(s-type-decl @3-1-5-9 (id 78)
 		(ty-header @3-1-3-11 (name "Pair")
 			(ty-args

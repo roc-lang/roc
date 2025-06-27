@@ -10,28 +10,6 @@ match person {
 }
 ~~~
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `expected_colon_after_pat_field_name`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**pattern_destructure_with_rest.md:2:7:2:18:**
-```roc
-    { first_name, ..others } => Str.len(first_name) > Str.len(others.last_name)
-```
-
-
-**UNEXPECTED TOKEN IN PATTERN**
-The token **{ first_name** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
-
-Here is the problematic code:
-**pattern_destructure_with_rest.md:2:5:2:17:**
-```roc
-    { first_name, ..others } => Str.len(first_name) > Str.len(others.last_name)
-```
-
-
 **NOT IMPLEMENTED**
 This feature is not yet implemented: canonicalize match expression
 
@@ -47,7 +25,9 @@ CloseCurly(3:1-3:2),EndOfFile(3:2-3:2),
 	(e-ident @1-7-1-13 (qaul "") (raw "person"))
 	(branches
 		(branch @2-5-3-2
-			(p-malformed @2-5-2-36 (tag "pattern_unexpected_token"))
+			(p-record @2-5-2-29
+				(field @2-7-2-18 (name "first_name") (rest false))
+				(field @2-19-2-29 (name "others") (rest true)))
 			(e-binop @2-33-3-2 (op ">")
 				(e-apply @2-33-2-52
 					(e-ident @2-33-2-40 (qaul "Str") (raw ".len"))
@@ -61,7 +41,7 @@ CloseCurly(3:1-3:2),EndOfFile(3:2-3:2),
 # FORMATTED
 ~~~roc
 match person {
-	 => Str.len(first_name) > Str.len(others.last_name)
+	{ first_name, ..others } => Str.len(first_name) > Str.len(others.last_name)
 }
 ~~~
 # CANONICALIZE

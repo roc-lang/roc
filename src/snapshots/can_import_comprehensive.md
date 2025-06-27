@@ -172,9 +172,9 @@ main = {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 121)
+	(d-let (id 120)
 		(p-assign @7-1-7-5 (ident "main") (id 77))
-		(e-block @7-8-35-2 (id 120)
+		(e-block @7-8-35-2 (id 119)
 			(s-let @8-5-8-22
 				(p-assign @8-5-8-11 (ident "client") (id 78))
 				(e-lookup-external (id 80)
@@ -207,7 +207,7 @@ main = {
 				(p-assign @23-5-23-13 (ident "combined") (id 106))
 				(e-lookup-external (id 108)
 					(ext-decl @23-16-23-26 (qualified "utils.String.concat") (module "utils.String") (local "concat") (kind "value") (type-var 107))))
-			(e-tuple @25-5-34-6 (tuple-var 118)
+			(e-tuple @25-5-34-6
 				(elems
 					(e-lookup-local @26-9-26-15
 						(pattern (id 78)))
