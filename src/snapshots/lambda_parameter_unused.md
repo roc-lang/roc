@@ -211,7 +211,7 @@ main! = |_| {
 		(e-lambda @5-7-5-18 (id 79)
 			(args
 				(p-assign @5-8-5-14 (ident "unused") (id 76)))
-			(e-int @5-16-5-18 (num-var 78) (value "42")))
+			(e-int @5-16-5-18 (value "42")))
 		(annotation @5-1-5-4 (signature 84) (id 85)
 			(declared-type
 				(ty-fn @4-7-4-17 (effectful false)
@@ -225,7 +225,7 @@ main! = |_| {
 			(e-binop @9-22-12-8 (op "mul")
 				(e-lookup-local @9-22-9-29
 					(pattern (id 91)))
-				(e-int @9-32-9-33 (num-var 95) (value "2"))))
+				(e-int @9-32-9-33 (value "2"))))
 		(annotation @9-1-9-9 (signature 101) (id 102)
 			(declared-type
 				(ty-fn @8-12-8-22 (effectful false)
@@ -236,7 +236,7 @@ main! = |_| {
 		(e-lambda @13-11-13-23 (id 111)
 			(args
 				(p-assign @13-12-13-18 (ident "_input") (id 108)))
-			(e-int @13-20-13-23 (num-var 110) (value "100")))
+			(e-int @13-20-13-23 (value "100")))
 		(annotation @13-1-13-8 (signature 115) (id 116)
 			(declared-type
 				(ty-fn @12-11-12-21 (effectful false)
@@ -250,7 +250,7 @@ main! = |_| {
 			(e-binop @17-18-19-6 (op "mul")
 				(e-lookup-local @17-18-17-23
 					(pattern (id 122)))
-				(e-int @17-26-17-27 (num-var 125) (value "2"))))
+				(e-int @17-26-17-27 (value "2"))))
 		(annotation @17-1-17-7 (signature 131) (id 132)
 			(declared-type
 				(ty-fn @16-10-16-20 (effectful false)
@@ -267,25 +267,25 @@ main! = |_| {
 					(e-call @20-15-20-21 (id 140)
 						(e-lookup-local @20-15-20-18
 							(pattern (id 75)))
-						(e-int @20-19-20-20 (num-var 139) (value "5"))))
+						(e-int @20-19-20-20 (value "5"))))
 				(s-let @21-5-21-26
 					(p-assign @21-5-21-12 (ident "result2") (id 142))
 					(e-call @21-15-21-26 (id 146)
 						(e-lookup-local @21-15-21-23
 							(pattern (id 90)))
-						(e-int @21-24-21-25 (num-var 145) (value "3"))))
+						(e-int @21-24-21-25 (value "3"))))
 				(s-let @22-5-22-25
 					(p-assign @22-5-22-12 (ident "result3") (id 148))
 					(e-call @22-15-22-25 (id 152)
 						(e-lookup-local @22-15-22-22
 							(pattern (id 107)))
-						(e-int @22-23-22-24 (num-var 151) (value "7"))))
+						(e-int @22-23-22-24 (value "7"))))
 				(s-let @23-5-23-24
 					(p-assign @23-5-23-12 (ident "result4") (id 154))
 					(e-call @23-15-23-24 (id 158)
 						(e-lookup-local @23-15-23-21
 							(pattern (id 121)))
-						(e-int @23-22-23-23 (num-var 157) (value "4"))))
+						(e-int @23-22-23-23 (value "4"))))
 				(e-binop @24-5-25-2 (op "add")
 					(e-lookup-local @24-5-24-12
 						(pattern (id 136)))

@@ -108,7 +108,7 @@ NO CHANGE
 					(args
 						(e-string @6-45-6-50
 							(e-literal @6-46-6-49 (string "one")))
-						(e-int @6-52-6-53 (num-var 98) (value "1"))))))))
+						(e-int @6-52-6-53 (value "1"))))))))
 ~~~
 # TYPES
 ~~~clojure

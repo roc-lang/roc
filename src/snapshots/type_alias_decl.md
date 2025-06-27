@@ -325,7 +325,7 @@ userId
 					(e-string @33-22-33-29
 						(e-literal @33-23-33-28 (string "Alice"))))
 				(field (name "age")
-					(e-int @33-36-33-38 (num-var 142) (value "30")))))
+					(e-int @33-36-33-38 (value "30")))))
 		(annotation @33-5-33-11 (signature 149) (id 150)
 			(declared-type
 				(ty @32-14-32-20 (name "Person")))))

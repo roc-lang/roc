@@ -173,7 +173,7 @@ NO CHANGE
 		(e-lambda @18-13-18-21 (id 127)
 			(args
 				(p-assign @18-14-18-18 (ident "_opt") (id 124)))
-			(e-int @18-20-18-21 (num-var 126) (value "0")))
+			(e-int @18-20-18-21 (value "0")))
 		(annotation @18-1-18-10 (signature 131) (id 132)
 			(declared-type
 				(ty-fn @17-13-17-31 (effectful false)

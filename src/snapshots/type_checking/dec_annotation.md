@@ -38,10 +38,10 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 80)
+	(d-let (id 79)
 		(p-assign @4-1-4-2 (ident "x") (id 73))
-		(e-frac-dec @4-5-4-12 (frac-var 76) (value "123.456") (id 76))
-		(annotation @4-1-4-2 (signature 78) (id 79)
+		(e-frac-dec @4-5-4-12 (value "123.456") (id 75))
+		(annotation @4-1-4-2 (signature 77) (id 78)
 			(declared-type
 				(ty @3-5-3-8 (name "Dec"))))))
 ~~~

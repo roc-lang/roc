@@ -322,7 +322,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 						(elems
 							(e-call @17-32-17-40
 								(e-tag @17-32-17-36 (ext-var 0) (name "Some") (args "TODO"))
-								(e-int @17-37-17-39 (num-var 147) (value "42")))
+								(e-int @17-37-17-39 (value "42")))
 							(e-tag @17-42-17-46 (ext-var 0) (name "None") (args "TODO"))))))))
 	(s-type-decl @15-1-17-6 (id 83)
 		(ty-header @15-1-15-18 (name "ComplexType")

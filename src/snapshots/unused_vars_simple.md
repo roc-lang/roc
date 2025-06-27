@@ -181,7 +181,7 @@ main! = |_| {
 		(e-lambda @4-18-4-24 (id 76)
 			(args
 				(p-assign @4-19-4-20 (ident "x") (id 73)))
-			(e-int @4-22-4-24 (num-var 75) (value "42"))))
+			(e-int @4-22-4-24 (value "42"))))
 	(d-let (id 84)
 		(p-assign @7-1-7-16 (ident "used_underscore") (id 79))
 		(e-lambda @7-19-7-34 (id 83)
@@ -194,7 +194,7 @@ main! = |_| {
 		(e-lambda @10-21-10-35 (id 89)
 			(args
 				(p-assign @10-22-10-30 (ident "_ignored") (id 86)))
-			(e-int @10-32-10-35 (num-var 88) (value "100"))))
+			(e-int @10-32-10-35 (value "100"))))
 	(d-let (id 98)
 		(p-assign @13-1-13-13 (ident "used_regular") (id 91))
 		(e-lambda @13-16-15-6 (id 97)
@@ -203,7 +203,7 @@ main! = |_| {
 			(e-binop @13-25-15-6 (op "add")
 				(e-lookup-local @13-25-13-31
 					(pattern (id 92)))
-				(e-int @13-34-13-35 (num-var 95) (value "1")))))
+				(e-int @13-34-13-35 (value "1")))))
 	(d-let (id 134)
 		(p-assign @15-1-15-6 (ident "main!") (id 99))
 		(e-lambda @15-9-21-2 (id 133)
@@ -215,25 +215,25 @@ main! = |_| {
 					(e-call @16-9-16-26 (id 105)
 						(e-lookup-local @16-9-16-23
 							(pattern (id 72)))
-						(e-int @16-24-16-25 (num-var 104) (value "5"))))
+						(e-int @16-24-16-25 (value "5"))))
 				(s-let @17-5-17-28
 					(p-assign @17-5-17-6 (ident "b") (id 107))
 					(e-call @17-9-17-28 (id 111)
 						(e-lookup-local @17-9-17-24
 							(pattern (id 79)))
-						(e-int @17-25-17-27 (num-var 110) (value "10"))))
+						(e-int @17-25-17-27 (value "10"))))
 				(s-let @18-5-18-30
 					(p-assign @18-5-18-6 (ident "c") (id 113))
 					(e-call @18-9-18-30 (id 117)
 						(e-lookup-local @18-9-18-26
 							(pattern (id 85)))
-						(e-int @18-27-18-29 (num-var 116) (value "15"))))
+						(e-int @18-27-18-29 (value "15"))))
 				(s-let @19-5-19-25
 					(p-assign @19-5-19-6 (ident "d") (id 119))
 					(e-call @19-9-19-25 (id 123)
 						(e-lookup-local @19-9-19-21
 							(pattern (id 91)))
-						(e-int @19-22-19-24 (num-var 122) (value "20"))))
+						(e-int @19-22-19-24 (value "20"))))
 				(e-binop @20-5-21-2 (op "add")
 					(e-lookup-local @20-5-20-6
 						(pattern (id 101)))

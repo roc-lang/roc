@@ -90,7 +90,7 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-record @1-1-12-2 (ext-var 127) (id 128)
+(e-record @1-1-12-2 (ext-var 125) (id 126)
 	(fields
 		(field (name "person")
 			(e-record @2-13-2-39 (ext-var 78)
@@ -99,9 +99,9 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 						(e-string @2-21-2-28
 							(e-literal @2-22-2-27 (string "Alice"))))
 					(field (name "age")
-						(e-int @2-35-2-37 (num-var 76) (value "30"))))))
+						(e-int @2-35-2-37 (value "30"))))))
 		(field (name "address")
-			(e-record @3-14-7-6 (ext-var 102)
+			(e-record @3-14-7-6 (ext-var 100)
 				(fields
 					(field (name "street")
 						(e-string @4-17-4-30
@@ -110,20 +110,20 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 						(e-string @5-15-5-28
 							(e-literal @5-16-5-27 (string "Springfield"))))
 					(field (name "coordinates")
-						(e-record @6-22-6-53 (ext-var 97)
+						(e-record @6-22-6-53 (ext-var 95)
 							(fields
 								(field (name "lat")
-									(e-frac-dec @6-29-6-36 (frac-var 91) (value "42.1234")))
+									(e-frac-dec @6-29-6-36 (value "42.1234")))
 								(field (name "lng")
-									(e-frac-dec @6-43-6-51 (frac-var 95) (value "-71.5678")))))))))
+									(e-frac-dec @6-43-6-51 (value "-71.5678")))))))))
 		(field (name "contact")
-			(e-record @8-14-11-6 (ext-var 122)
+			(e-record @8-14-11-6 (ext-var 120)
 				(fields
 					(field (name "email")
 						(e-string @9-16-9-35
 							(e-literal @9-17-9-34 (string "alice@example.com"))))
 					(field (name "phone")
-						(e-record @10-16-10-54 (ext-var 117)
+						(e-record @10-16-10-54 (ext-var 115)
 							(fields
 								(field (name "home")
 									(e-string @10-24-10-34
@@ -134,5 +134,5 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 128) (type "{ person: { name: Str, age: Num(*) }, address: { street: Str, city: Str, coordinates: { lat: Frac(*), lng: Frac(*) } }, contact: { email: Str, phone: { home: Str, work: Str } } }"))
+(expr (id 126) (type "{ person: { name: Str, age: Num(*) }, address: { street: Str, city: Str, coordinates: { lat: Frac(*), lng: Frac(*) } }, contact: { email: Str, phone: { home: Str, work: Str } } }"))
 ~~~

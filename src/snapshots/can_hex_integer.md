@@ -36,7 +36,7 @@ NO CHANGE
 (can-ir
 	(d-let (id 75)
 		(p-assign @3-1-3-2 (ident "x") (id 72))
-		(e-int @3-5-3-9 (num-var 74) (value "255") (id 74))))
+		(e-int @3-5-3-9 (value "255") (id 74))))
 ~~~
 # TYPES
 ~~~clojure

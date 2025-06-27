@@ -202,10 +202,10 @@ main! = |_| {
 					(e-call @15-12-15-40 (id 143)
 						(e-lookup-local @15-12-15-22
 							(pattern (id 95)))
-						(e-int @15-23-15-26 (num-var 138) (value "123"))
+						(e-int @15-23-15-26 (value "123"))
 						(e-string @15-28-15-35
 							(e-literal @15-29-15-34 (string "Alice")))
-						(e-int @15-37-15-39 (num-var 142) (value "25"))))
+						(e-int @15-37-15-39 (value "25"))))
 				(e-call @16-5-16-22
 					(e-lookup-local @16-5-16-16
 						(pattern (id 122)))

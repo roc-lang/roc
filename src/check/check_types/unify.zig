@@ -2336,7 +2336,6 @@ const TestEnv = struct {
             .sign_needed = false,
             .bits_needed = 0, // 7 bits, the minimum
         };
-        _ = self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_poly = int_requirements } } });
         return self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = int_requirements } } });
     }
 
@@ -2347,7 +2346,6 @@ const TestEnv = struct {
             .sign_needed = false,
             .bits_needed = 0, // 7 bits, the minimum
         };
-        _ = self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_poly = int_requirements } } });
         return self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = int_requirements } } });
     }
 
@@ -2358,7 +2356,6 @@ const TestEnv = struct {
             .sign_needed = false,
             .bits_needed = 0, // 7 bits, the minimum
         };
-        _ = self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_poly = int_requirements } } });
         return self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = int_requirements } } });
     }
 
@@ -2369,7 +2366,6 @@ const TestEnv = struct {
             .sign_needed = false,
             .bits_needed = 0, // 7 bits, the minimum
         };
-        _ = self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_poly = int_requirements } } });
         return self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = int_requirements } } });
     }
 

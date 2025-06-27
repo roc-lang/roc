@@ -117,8 +117,8 @@ NO CHANGE
 			(e-call @8-13-8-27
 				(e-lookup-local @8-13-8-21
 					(pattern (id 90)))
-				(e-int @8-22-8-23 (num-var 108) (value "1"))
-				(e-int @8-25-8-26 (num-var 110) (value "2")))))
+				(e-int @8-22-8-23 (value "1"))
+				(e-int @8-25-8-26 (value "2")))))
 	(s-type-decl @3-1-5-9 (id 78)
 		(ty-header @3-1-3-11 (name "Pair")
 			(ty-args

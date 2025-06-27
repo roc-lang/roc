@@ -144,23 +144,23 @@ main! = |_| {
 			(e-block @3-13-19-2
 				(s-let @5-5-5-20
 					(p-assign @5-5-5-15 (ident "unused_var") (id 74))
-					(e-int @5-18-5-20 (num-var 76) (value "42") (id 76)))
+					(e-int @5-18-5-20 (value "42") (id 76)))
 				(s-let @8-5-8-19
 					(p-assign @8-5-8-13 (ident "used_var") (id 78))
-					(e-int @8-16-8-19 (num-var 80) (value "100") (id 80)))
+					(e-int @8-16-8-19 (value "100") (id 80)))
 				(s-let @11-5-11-29
 					(p-assign @11-5-11-19 (ident "another_unused") (id 82))
 					(e-string @11-22-11-29 (id 84)
 						(e-literal @11-23-11-28 (string "hello"))))
 				(s-let @14-5-14-19
 					(p-assign @14-5-14-13 (ident "_ignored") (id 86))
-					(e-int @14-16-14-19 (num-var 88) (value "999") (id 88)))
+					(e-int @14-16-14-19 (value "999") (id 88)))
 				(s-let @17-5-18-11
 					(p-assign @17-5-17-11 (ident "result") (id 90))
 					(e-binop @17-14-18-11 (op "add") (id 94)
 						(e-lookup-local @17-14-17-22
 							(pattern (id 78)))
-						(e-int @17-25-17-27 (num-var 93) (value "10"))))
+						(e-int @17-25-17-27 (value "10"))))
 				(e-lookup-local @18-5-18-11
 					(pattern (id 90)))))))
 ~~~

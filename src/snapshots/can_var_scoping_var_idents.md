@@ -82,7 +82,7 @@ NO CHANGE
 					(e-binop @6-13-8-6 (op "mul") (id 80)
 						(e-lookup-local @6-13-6-18
 							(pattern (id 73)))
-						(e-int @6-21-6-22 (num-var 79) (value "2"))))
+						(e-int @6-21-6-22 (value "2"))))
 				(s-reassign @8-2-8-6
 					(p-assign @6-2-8-6 (ident "sum_") (id 81))
 					(e-binop @8-9-9-5 (op "add") (id 85)

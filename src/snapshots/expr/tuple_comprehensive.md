@@ -235,13 +235,13 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 			(e-empty_record @3-19-3-21)))
 	(s-let @4-5-4-11
 		(p-assign @4-5-4-6 (ident "x") (id 77))
-		(e-int @4-9-4-11 (num-var 79) (value "10") (id 79)))
+		(e-int @4-9-4-11 (value "10") (id 79)))
 	(s-let @5-5-5-11
 		(p-assign @5-5-5-6 (ident "y") (id 81))
-		(e-int @5-9-5-11 (num-var 83) (value "20") (id 83)))
+		(e-int @5-9-5-11 (value "20") (id 83)))
 	(s-let @6-5-6-11
 		(p-assign @6-5-6-6 (ident "z") (id 85))
-		(e-int @6-9-6-11 (num-var 87) (value "30") (id 87)))
+		(e-int @6-9-6-11 (value "30") (id 87)))
 	(s-let @9-2-9-12
 		(p-assign @9-2-9-7 (ident "empty") (id 89))
 		(e-tuple @9-10-9-12 (id 90)
@@ -250,18 +250,18 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 		(p-assign @10-2-10-8 (ident "single") (id 92))
 		(e-tuple @10-11-10-15 (id 95)
 			(elems
-				(e-int @10-12-10-14 (num-var 94) (value "42")))))
+				(e-int @10-12-10-14 (value "42")))))
 	(s-let @11-2-11-15
 		(p-assign @11-2-11-6 (ident "pair") (id 97))
 		(e-tuple @11-9-11-15 (id 102)
 			(elems
-				(e-int @11-10-11-11 (num-var 99) (value "1"))
-				(e-int @11-13-11-14 (num-var 101) (value "2")))))
+				(e-int @11-10-11-11 (value "1"))
+				(e-int @11-13-11-14 (value "2")))))
 	(s-let @12-2-12-29
 		(p-assign @12-2-12-8 (ident "triple") (id 104))
 		(e-tuple @12-11-12-29 (id 111)
 			(elems
-				(e-int @12-12-12-13 (num-var 106) (value "1"))
+				(e-int @12-12-12-13 (value "1"))
 				(e-string @12-15-12-22
 					(e-literal @12-16-12-21 (string "hello")))
 				(e-tag @12-24-12-28 (ext-var 0) (name "True") (args "TODO")))))
@@ -271,12 +271,12 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 			(elems
 				(e-tuple @13-12-13-18
 					(elems
-						(e-int @13-13-13-14 (num-var 115) (value "1"))
-						(e-int @13-16-13-17 (num-var 117) (value "2"))))
+						(e-int @13-13-13-14 (value "1"))
+						(e-int @13-16-13-17 (value "2"))))
 				(e-tuple @13-20-13-26
 					(elems
-						(e-int @13-21-13-22 (num-var 120) (value "3"))
-						(e-int @13-24-13-25 (num-var 122) (value "4")))))))
+						(e-int @13-21-13-22 (value "3"))
+						(e-int @13-24-13-25 (value "4")))))))
 	(s-let @14-2-14-42
 		(p-assign @14-2-14-7 (ident "mixed") (id 126))
 		(e-tuple @14-10-14-42 (id 141)
@@ -284,14 +284,14 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 				(e-call @14-11-14-21
 					(e-lookup-local @14-11-14-18
 						(pattern (id 72)))
-					(e-int @14-19-14-20 (num-var 129) (value "5")))
+					(e-int @14-19-14-20 (value "5")))
 				(e-string @14-23-14-30
 					(e-literal @14-24-14-29 (string "world")))
 				(e-list @14-32-14-41 (elem-var 139)
 					(elems
-						(e-int @14-33-14-34 (num-var 134) (value "1"))
-						(e-int @14-36-14-37 (num-var 136) (value "2"))
-						(e-int @14-39-14-40 (num-var 138) (value "3")))))))
+						(e-int @14-33-14-34 (value "1"))
+						(e-int @14-36-14-37 (value "2"))
+						(e-int @14-39-14-40 (value "3")))))))
 	(s-let @15-2-15-23
 		(p-assign @15-2-15-11 (ident "with_vars") (id 143))
 		(e-tuple @15-14-15-23 (id 147)
@@ -312,8 +312,8 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 					(e-binop @16-21-16-27 (op "add")
 						(e-lookup-local @16-21-16-22
 							(pattern (id 150)))
-						(e-int @16-25-16-26 (num-var 153) (value "1"))))
-				(e-int @16-28-16-30 (num-var 157) (value "42")))))
+						(e-int @16-25-16-26 (value "1"))))
+				(e-int @16-28-16-30 (value "42")))))
 	(e-lookup-local @18-2-18-7
 		(pattern (id 89))))
 ~~~

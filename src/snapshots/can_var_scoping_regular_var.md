@@ -140,22 +140,22 @@ NO CHANGE
 			(e-block @4-24-21-2
 				(s-var @5-2-6-5
 					(p-assign @5-2-6-5 (ident "count_") (id 76))
-					(e-int @5-15-5-16 (num-var 75) (value "0") (id 75)))
+					(e-int @5-15-5-16 (value "0") (id 75)))
 				(s-var @6-2-9-8
 					(p-assign @6-2-9-8 (ident "total_") (id 80))
-					(e-int @6-15-6-16 (num-var 79) (value "0") (id 79)))
+					(e-int @6-15-6-16 (value "0") (id 79)))
 				(s-reassign @9-2-9-8
 					(p-assign @5-2-6-5 (ident "count_") (id 76))
 					(e-binop @9-11-10-8 (op "add") (id 85)
 						(e-lookup-local @9-11-9-17
 							(pattern (id 76)))
-						(e-int @9-20-9-21 (num-var 84) (value "1"))))
+						(e-int @9-20-9-21 (value "1"))))
 				(s-reassign @10-2-10-8
 					(p-assign @6-2-9-8 (ident "total_") (id 80))
 					(e-binop @10-11-13-12 (op "add") (id 90)
 						(e-lookup-local @10-11-10-17
 							(pattern (id 80)))
-						(e-int @10-20-10-22 (num-var 89) (value "10"))))
+						(e-int @10-20-10-22 (value "10"))))
 				(s-let @13-2-17-3
 					(p-assign @13-2-13-12 (ident "nestedFunc") (id 92))
 					(e-lambda @13-15-17-3 (id 102)

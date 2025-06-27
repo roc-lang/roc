@@ -230,10 +230,9 @@ test "canonicalize integer literal creates correct type variables" {
 
     const expr = resources.cir.store.getExpr(resources.expr_idx);
     switch (expr) {
-        .int => |int_expr| {
-            // Verify type variables were created (they should be valid indices)
-            // Note: @enumFromInt(0) could be a valid type variable, so just check they exist
-            _ = int_expr.num_var;
+        .int => {
+            // Type variables are now the expression index itself
+            // No need to check a separate num_var field
 
             // Verify requirements were set
         },

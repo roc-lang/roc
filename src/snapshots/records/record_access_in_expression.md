@@ -34,7 +34,7 @@ NO CHANGE
 	(e-dot-access @1-1-1-13 (field "age")
 		(receiver
 			(e-runtime-error (tag "ident_not_in_scope"))))
-	(e-int @1-14-1-15 (num-var 76) (value "5")))
+	(e-int @1-14-1-15 (value "5")))
 ~~~
 # TYPES
 ~~~clojure
