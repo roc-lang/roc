@@ -476,4 +476,19 @@ pub const Data = union(enum) {
         branches_start: u32,
         branches_len: u32,
     },
+    decl: struct {
+        pattern: u32,
+        body: u32,
+    },
+    var_stmt: struct {
+        body: u32,
+    },
+    type_decl: struct {
+        header: u32,
+        anno: u32,
+    },
+    import_stmt: struct {
+        extra_data_start: u32,
+        packed_info: u32,
+    },
 };

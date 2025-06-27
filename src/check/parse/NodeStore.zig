@@ -298,14 +298,18 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) AST.Statement.I
     switch (statement) {
         .decl => |d| {
             node.tag = .decl;
-            node.data.untyped.lhs = @intFromEnum(d.pattern);
-            node.data.untyped.rhs = @intFromEnum(d.body);
+            node.data = .{ .decl = .{
+                .pattern = @intFromEnum(d.pattern),
+                .body = @intFromEnum(d.body),
+            } };
             node.region = d.region;
         },
         .@"var" => |v| {
             node.tag = .@"var";
             node.main_token = v.name;
-            node.data.untyped.lhs = @intFromEnum(v.body);
+            node.data = .{ .var_stmt = .{
+                .body = @intFromEnum(v.body),
+            } };
             node.region = v.region;
         },
         .expr => |expr| {
@@ -360,10 +364,11 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) AST.Statement.I
                 }
                 store.extra_data.append(store.gpa, tok) catch |err| exitOnOom(err);
             }
-            node.data.untyped.rhs = @as(u32, @bitCast(rhs));
-            if (node.data.untyped.rhs > 0) {
-                node.data.untyped.lhs = ed_start;
-            }
+            const packed_info = @as(u32, @bitCast(rhs));
+            node.data = .{ .import_stmt = .{
+                .extra_data_start = if (packed_info > 0) ed_start else 0,
+                .packed_info = packed_info,
+            } };
         },
         .type_decl => |d| {
             node.tag = .type_decl;
@@ -371,8 +376,10 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) AST.Statement.I
                 node.tag = .type_decl_nominal;
             }
             node.region = d.region;
-            node.data.untyped.lhs = @intFromEnum(d.header);
-            node.data.untyped.rhs = @intFromEnum(d.anno);
+            node.data = .{ .type_decl = .{
+                .header = @intFromEnum(d.header),
+                .anno = @intFromEnum(d.anno),
+            } };
             if (d.where) |w| {
                 node.main_token = @intFromEnum(w);
             }
@@ -1090,15 +1097,15 @@ pub fn getStatement(store: *NodeStore, statement_idx: AST.Statement.Idx) AST.Sta
     switch (node.tag) {
         .decl => {
             return .{ .decl = .{
-                .pattern = @enumFromInt(node.data.untyped.lhs),
-                .body = @enumFromInt(node.data.untyped.rhs),
+                .pattern = @enumFromInt(node.data.decl.pattern),
+                .body = @enumFromInt(node.data.decl.body),
                 .region = node.region,
             } };
         },
         .@"var" => {
             return .{ .@"var" = .{
                 .name = node.main_token,
-                .body = @enumFromInt(node.data.untyped.lhs),
+                .body = @enumFromInt(node.data.var_stmt.body),
                 .region = node.region,
             } };
         },
@@ -1109,8 +1116,8 @@ pub fn getStatement(store: *NodeStore, statement_idx: AST.Statement.Idx) AST.Sta
             } };
         },
         .import => {
-            const rhs = @as(AST.ImportRhs, @bitCast(node.data.untyped.rhs));
-            var extra_data_pos = node.data.untyped.lhs + rhs.num_exposes;
+            const rhs = @as(AST.ImportRhs, @bitCast(node.data.import_stmt.packed_info));
+            var extra_data_pos = node.data.import_stmt.extra_data_start + rhs.num_exposes;
             var qualifier_tok: ?Token.Idx = null;
             var alias_tok: ?Token.Idx = null;
             if (rhs.qualified == 1) {
@@ -1125,7 +1132,7 @@ pub fn getStatement(store: *NodeStore, statement_idx: AST.Statement.Idx) AST.Sta
                 .qualifier_tok = qualifier_tok,
                 .alias_tok = alias_tok,
                 .exposes = .{ .span = .{
-                    .start = node.data.untyped.lhs,
+                    .start = node.data.import_stmt.extra_data_start,
                     .len = rhs.num_exposes,
                 } },
                 .region = node.region,
@@ -1160,8 +1167,8 @@ pub fn getStatement(store: *NodeStore, statement_idx: AST.Statement.Idx) AST.Sta
         .type_decl => {
             return .{ .type_decl = .{
                 .region = node.region,
-                .header = @enumFromInt(node.data.untyped.lhs),
-                .anno = @enumFromInt(node.data.untyped.rhs),
+                .header = @enumFromInt(node.data.type_decl.header),
+                .anno = @enumFromInt(node.data.type_decl.anno),
                 .kind = .alias,
                 .where = if (node.main_token != 0) @enumFromInt(node.main_token) else null,
             } };
@@ -1169,8 +1176,8 @@ pub fn getStatement(store: *NodeStore, statement_idx: AST.Statement.Idx) AST.Sta
         .type_decl_nominal => {
             return .{ .type_decl = .{
                 .region = node.region,
-                .header = @enumFromInt(node.data.untyped.lhs),
-                .anno = @enumFromInt(node.data.untyped.rhs),
+                .header = @enumFromInt(node.data.type_decl.header),
+                .anno = @enumFromInt(node.data.type_decl.anno),
                 .kind = .nominal,
                 .where = if (node.main_token != 0) @enumFromInt(node.main_token) else null,
             } };
