@@ -439,8 +439,12 @@ pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) AST.Pattern.Idx {
         .record => |r| {
             node.tag = .record_patt;
             node.region = r.region;
-            node.data.untyped.lhs = r.fields.span.start;
-            node.data.untyped.rhs = r.fields.span.len;
+            node.data = .{
+                .record = .{
+                    .fields_start = r.fields.span.start,
+                    .fields_len = r.fields.span.len,
+                },
+            };
         },
         .list => |l| {
             node.tag = .list_patt;
@@ -534,8 +538,12 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) AST.Expr.Idx {
         .record => |r| {
             node.tag = .record;
             node.region = r.region;
-            node.data.untyped.lhs = r.fields.span.start;
-            node.data.untyped.rhs = r.fields.span.len;
+            node.data = .{
+                .record = .{
+                    .fields_start = r.fields.span.start,
+                    .fields_len = r.fields.span.len,
+                },
+            };
         },
         .tag => |e| {
             node.tag = .tag;
@@ -1183,8 +1191,8 @@ pub fn getPattern(store: *NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pattern {
             return .{ .record = .{
                 .region = node.region,
                 .fields = .{ .span = .{
-                    .start = node.data.untyped.lhs,
-                    .len = node.data.untyped.rhs,
+                    .start = node.data.record.fields_start,
+                    .len = node.data.record.fields_len,
                 } },
             } };
         },
@@ -1315,8 +1323,8 @@ pub fn getExpr(store: *NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
         .record => {
             return .{ .record = .{
                 .fields = .{ .span = .{
-                    .start = node.data.untyped.lhs,
-                    .len = node.data.untyped.rhs,
+                    .start = node.data.record.fields_start,
+                    .len = node.data.record.fields_len,
                 } },
                 .region = node.region,
             } };
@@ -2040,4 +2048,33 @@ pub fn clearScratchWhereClausesFrom(store: *NodeStore, start: u32) void {
 /// all items in the span.
 pub fn whereClauseSlice(store: *NodeStore, span: AST.WhereClause.Span) []AST.WhereClause.Idx {
     return store.sliceFromSpan(AST.WhereClause.Idx, span.span);
+}
+
+// Unified Record Helper Functions
+fn addRecordShape(store: *NodeStore, fields_start: u32, fields_len: u32, region: AST.TokenizedRegion, tag: Node.Tag) Node.Idx {
+    const node = Node{
+        .tag = tag,
+        .main_token = 0,
+        .data = .{
+            .record = .{
+                .fields_start = fields_start,
+                .fields_len = fields_len,
+            },
+        },
+        .region = region,
+    };
+    return store.nodes.append(store.gpa, node);
+}
+
+fn getRecordShape(store: *NodeStore, node_idx: Node.Idx) struct {
+    fields_start: u32,
+    fields_len: u32,
+    region: AST.TokenizedRegion,
+} {
+    const node = store.nodes.get(node_idx);
+    return .{
+        .fields_start = node.data.record.fields_start,
+        .fields_len = node.data.record.fields_len,
+        .region = node.region,
+    };
 }

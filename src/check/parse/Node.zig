@@ -440,4 +440,8 @@ pub const Data = union(enum) {
         lhs: u32,
         rhs: u32,
     },
+    record: struct {
+        fields_start: u32,
+        fields_len: u32,
+    },
 };
