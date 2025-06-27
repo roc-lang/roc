@@ -8,17 +8,7 @@ type=expr
 |{ name, age }| "Hello ${name}, you are ${age.to_str()} years old"
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize record pattern
-
-**UNDEFINED VARIABLE**
-Nothing is named `name` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `age` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 OpBar(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:4-1:8),Comma(1:8-1:9),LowerIdent(1:10-1:13),CloseCurly(1:14-1:15),OpBar(1:15-1:16),StringStart(1:17-1:18),StringPart(1:18-1:24),OpenStringInterpolation(1:24-1:26),LowerIdent(1:26-1:30),CloseStringInterpolation(1:30-1:31),StringPart(1:31-1:41),OpenStringInterpolation(1:41-1:43),LowerIdent(1:43-1:46),NoSpaceDotLowerIdent(1:46-1:53),NoSpaceOpenRound(1:53-1:54),CloseRound(1:54-1:55),CloseStringInterpolation(1:55-1:56),StringPart(1:56-1:66),StringEnd(1:66-1:67),EndOfFile(1:67-1:67),
@@ -46,20 +36,27 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-lambda @1-1-1-67 (id 83)
+(e-lambda @1-1-1-67 (id 84)
 	(args
-		(p-runtime-error @1-1-1-1 (tag "not_implemented") (id 73)))
+		(p-record-destructure @1-2-1-15 (id 76)
+			(destructs
+				(record-destruct @1-4-1-9 (label "name") (ident "name")
+					(required))
+				(record-destruct @1-10-1-15 (label "age") (ident "age")
+					(required)))))
 	(e-string @1-17-1-67
 		(e-literal @1-18-1-24 (string "Hello "))
-		(e-runtime-error (tag "ident_not_in_scope"))
+		(e-lookup-local @1-26-1-30
+			(pattern (id 73)))
 		(e-literal @1-31-1-41 (string ", you are "))
 		(e-dot-access @1-43-1-56 (field "to_str")
 			(receiver
-				(e-runtime-error (tag "ident_not_in_scope")))
+				(e-lookup-local @1-43-1-46
+					(pattern (id 75))))
 			(args))
 		(e-literal @1-56-1-66 (string " years old"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 83) (type "*"))
+(expr (id 84) (type "*"))
 ~~~

@@ -1,3 +1,5 @@
+//! Tests for numeric literal size and type unification logic.
+
 const std = @import("std");
 const types = @import("../../types/types.zig");
 const base = @import("../../base.zig");

@@ -990,6 +990,7 @@ pub fn addRecordField(store: *NodeStore, recordField: CIR.RecordField) CIR.Recor
     return @enumFromInt(@intFromEnum(nid));
 }
 
+/// Adds a record destructuring to the store.
 pub fn addRecordDestruct(store: *NodeStore, recordDestruct: CIR.RecordDestruct) CIR.RecordDestruct.Idx {
     const node = Node{
         .data_1 = @bitCast(recordDestruct.label),
@@ -1344,6 +1345,7 @@ pub fn getRecordField(store: *const NodeStore, idx: CIR.RecordField.Idx) CIR.Rec
     };
 }
 
+/// Retrieves a record destructure from the store.
 pub fn getRecordDestruct(store: *const NodeStore, idx: CIR.RecordDestruct.Idx) CIR.RecordDestruct {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(idx)));
     return CIR.RecordDestruct{
@@ -1549,6 +1551,7 @@ pub fn defSpanFrom(store: *NodeStore, start: u32) CIR.Def.Span {
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
 }
 
+/// Retrieves a slice of record destructures from the store.
 pub fn recordDestructSpanFrom(store: *NodeStore, start: u32) CIR.RecordDestruct.Span {
     const end = store.scratch_record_destructs.top();
     defer store.scratch_record_destructs.clearFrom(start);
@@ -1572,10 +1575,12 @@ pub fn addScratchPattern(store: *NodeStore, idx: CIR.Pattern.Idx) void {
     store.scratch_patterns.append(store.gpa, idx);
 }
 
+/// Gets the current top index of the scratch record destructures array.
 pub fn scratchRecordDestructTop(store: *NodeStore) u32 {
     return store.scratch_record_destructs.top();
 }
 
+/// Adds a record destruct index to the scratch record destructures array.
 pub fn addScratchRecordDestruct(store: *NodeStore, idx: CIR.RecordDestruct.Idx) void {
     store.scratch_record_destructs.append(store.gpa, idx);
 }
