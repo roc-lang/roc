@@ -641,16 +641,25 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) AST.Expr.Idx {
         .if_then_else => |i| {
             node.tag = .if_then_else;
             node.region = i.region;
-            node.data.untyped.lhs = @intFromEnum(i.condition);
-            node.data.untyped.rhs = @as(u32, @intCast(store.extra_data.items.len));
+            node.data = .{
+                .if_then_else = .{
+                    .condition = @intFromEnum(i.condition),
+                    .extra_data_idx = @as(u32, @intCast(store.extra_data.items.len)),
+                },
+            };
             store.extra_data.append(store.gpa, @intFromEnum(i.then)) catch |err| exitOnOom(err);
             store.extra_data.append(store.gpa, @intFromEnum(i.@"else")) catch |err| exitOnOom(err);
         },
         .match => |m| {
             node.tag = .match;
             node.region = m.region;
-            node.data.untyped.lhs = m.branches.span.start;
-            node.data.untyped.rhs = m.branches.span.len;
+            node.data = .{
+                .match_expr = .{
+                    .expr_extra_data_idx = @as(u32, @intCast(store.extra_data.items.len)),
+                    .branches_start = m.branches.span.start,
+                    .branches_len = m.branches.span.len,
+                },
+            };
             store.extra_data.append(store.gpa, @intFromEnum(m.expr)) catch |err| exitOnOom(err);
         },
         .ident => |id| {
@@ -1415,25 +1424,25 @@ pub fn getExpr(store: *NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
             } };
         },
         .if_then_else => {
-            const then_idx = @as(usize, @intCast(node.data.untyped.rhs));
+            const then_idx = @as(usize, @intCast(node.data.if_then_else.extra_data_idx));
             const else_idx = then_idx + 1;
             const then_ed = store.extra_data.items[then_idx];
             const else_ed = store.extra_data.items[else_idx];
             return .{ .if_then_else = .{
                 .region = node.region,
-                .condition = @enumFromInt(node.data.untyped.lhs),
+                .condition = @enumFromInt(node.data.if_then_else.condition),
                 .then = @enumFromInt(then_ed),
                 .@"else" = @enumFromInt(else_ed),
             } };
         },
         .match => {
-            const idx = @as(usize, @intCast(node.data.untyped.lhs + node.data.untyped.rhs));
+            const idx = @as(usize, @intCast(node.data.match_expr.expr_extra_data_idx));
             return .{ .match = .{
                 .region = node.region,
                 .expr = @enumFromInt(store.extra_data.items[idx]),
                 .branches = .{ .span = .{
-                    .start = node.data.untyped.lhs,
-                    .len = node.data.untyped.rhs,
+                    .start = node.data.match_expr.branches_start,
+                    .len = node.data.match_expr.branches_len,
                 } },
             } };
         },

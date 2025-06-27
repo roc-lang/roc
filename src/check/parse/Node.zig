@@ -467,4 +467,13 @@ pub const Data = union(enum) {
     unary_op: struct {
         expr: u32,
     },
+    if_then_else: struct {
+        condition: u32,
+        extra_data_idx: u32,
+    },
+    match_expr: struct {
+        expr_extra_data_idx: u32,
+        branches_start: u32,
+        branches_len: u32,
+    },
 };
