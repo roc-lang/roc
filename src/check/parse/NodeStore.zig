@@ -57,7 +57,7 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) NodeStore {
     _ = store.nodes.append(gpa, .{
         .tag = .root,
         .main_token = 0,
-        .data = .{ .lhs = 0, .rhs = 0 },
+        .data = .{ .untyped = .{ .lhs = 0, .rhs = 0 } },
         .region = .{ .start = 0, .end = 0 },
     });
     return store;
@@ -136,7 +136,7 @@ pub fn addMalformed(store: *NodeStore, comptime t: type, reason: Diagnostic.Tag,
     const nid = store.nodes.append(store.gpa, .{
         .tag = .malformed,
         .main_token = 0,
-        .data = .{ .lhs = @intFromEnum(reason), .rhs = 0 },
+        .data = .{ .untyped = .{ .lhs = @intFromEnum(reason), .rhs = 0 } },
         .region = region,
     });
     return @enumFromInt(@intFromEnum(nid));
@@ -148,7 +148,7 @@ pub fn addFile(store: *NodeStore, file: AST.File) void {
     store.nodes.set(@enumFromInt(0), .{
         .tag = .root,
         .main_token = 0,
-        .data = .{ .lhs = file.statements.span.start, .rhs = file.statements.span.len },
+        .data = .{ .untyped = .{ .lhs = file.statements.span.start, .rhs = file.statements.span.len } },
         .region = file.region,
     });
 }
@@ -159,8 +159,10 @@ pub fn addCollection(store: *NodeStore, tag: Node.Tag, collection: AST.Collectio
         .tag = tag,
         .main_token = 0,
         .data = .{
-            .lhs = collection.span.start,
-            .rhs = collection.span.len,
+            .untyped = .{
+                .lhs = collection.span.start,
+                .rhs = collection.span.len,
+            },
         },
         .region = collection.region,
     });
@@ -173,8 +175,10 @@ pub fn addHeader(store: *NodeStore, header: AST.Header) AST.Header.Idx {
         .tag = .statement,
         .main_token = 0,
         .data = .{
-            .lhs = 0,
-            .rhs = 0,
+            .untyped = .{
+                .lhs = 0,
+                .rhs = 0,
+            },
         },
         .region = AST.TokenizedRegion.empty(),
     };
@@ -184,26 +188,26 @@ pub fn addHeader(store: *NodeStore, header: AST.Header) AST.Header.Idx {
             // TODO this doesn't seem right, were giving it a record_field index instead of a token index
             node.main_token = @intFromEnum(app.platform_idx);
             // Store provides collection
-            node.data.lhs = @intFromEnum(app.provides);
-            node.data.rhs = @intFromEnum(app.packages);
+            node.data.untyped.lhs = @intFromEnum(app.provides);
+            node.data.untyped.rhs = @intFromEnum(app.packages);
             node.region = app.region;
 
             store.extra_data.append(store.gpa, @intFromEnum(app.platform_idx)) catch |err| exitOnOom(err);
         },
         .module => |mod| {
             node.tag = .module_header;
-            node.data.lhs = @intFromEnum(mod.exposes);
+            node.data.untyped.lhs = @intFromEnum(mod.exposes);
             node.region = mod.region;
         },
         .hosted => |hosted| {
             node.tag = .hosted_header;
-            node.data.lhs = @intFromEnum(hosted.exposes);
+            node.data.untyped.lhs = @intFromEnum(hosted.exposes);
             node.region = hosted.region;
         },
         .package => |package| {
             node.tag = .package_header;
-            node.data.lhs = @intFromEnum(package.exposes);
-            node.data.rhs = @intFromEnum(package.packages);
+            node.data.untyped.lhs = @intFromEnum(package.exposes);
+            node.data.untyped.rhs = @intFromEnum(package.packages);
             node.region = package.region;
         },
         .platform => |platform| {
@@ -218,8 +222,8 @@ pub fn addHeader(store: *NodeStore, header: AST.Header) AST.Header.Idx {
             store.extra_data.append(store.gpa, @intFromEnum(platform.provides)) catch |err| exitOnOom(err);
             const ed_len = store.extra_data.items.len - ed_start;
 
-            node.data.lhs = @intCast(ed_start);
-            node.data.rhs = @intCast(ed_len);
+            node.data.untyped.lhs = @intCast(ed_start);
+            node.data.untyped.rhs = @intCast(ed_len);
 
             node.region = platform.region;
         },
@@ -238,8 +242,10 @@ pub fn addExposedItem(store: *NodeStore, item: AST.ExposedItem) AST.ExposedItem.
         .tag = .malformed,
         .main_token = 0,
         .data = .{
-            .lhs = 0,
-            .rhs = 0,
+            .untyped = .{
+                .lhs = 0,
+                .rhs = 0,
+            },
         },
         .region = AST.TokenizedRegion.empty(),
     };
@@ -250,8 +256,8 @@ pub fn addExposedItem(store: *NodeStore, item: AST.ExposedItem) AST.ExposedItem.
             node.main_token = i.ident;
             if (i.as) |a| {
                 std.debug.assert(a > 0);
-                node.data.lhs = a;
-                node.data.rhs = 1;
+                node.data.untyped.lhs = a;
+                node.data.untyped.rhs = 1;
             }
             node.region = i.region;
         },
@@ -260,8 +266,8 @@ pub fn addExposedItem(store: *NodeStore, item: AST.ExposedItem) AST.ExposedItem.
             node.main_token = i.ident;
             if (i.as) |a| {
                 std.debug.assert(a > 0);
-                node.data.lhs = a;
-                node.data.rhs = 1;
+                node.data.untyped.lhs = a;
+                node.data.untyped.rhs = 1;
             }
             node.region = i.region;
         },
@@ -282,49 +288,51 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) AST.Statement.I
         .tag = .statement,
         .main_token = 0,
         .data = .{
-            .lhs = 0,
-            .rhs = 0,
+            .untyped = .{
+                .lhs = 0,
+                .rhs = 0,
+            },
         },
         .region = AST.TokenizedRegion.empty(),
     };
     switch (statement) {
         .decl => |d| {
             node.tag = .decl;
-            node.data.lhs = @intFromEnum(d.pattern);
-            node.data.rhs = @intFromEnum(d.body);
+            node.data.untyped.lhs = @intFromEnum(d.pattern);
+            node.data.untyped.rhs = @intFromEnum(d.body);
             node.region = d.region;
         },
         .@"var" => |v| {
             node.tag = .@"var";
             node.main_token = v.name;
-            node.data.lhs = @intFromEnum(v.body);
+            node.data.untyped.lhs = @intFromEnum(v.body);
             node.region = v.region;
         },
         .expr => |expr| {
             node.tag = .expr;
-            node.data.lhs = @intFromEnum(expr.expr);
+            node.data.untyped.lhs = @intFromEnum(expr.expr);
             node.region = expr.region;
         },
         .crash => |c| {
             node.tag = .crash;
-            node.data.lhs = @intFromEnum(c.expr);
+            node.data.untyped.lhs = @intFromEnum(c.expr);
             node.region = c.region;
         },
         .expect => |e| {
             node.tag = .expect;
-            node.data.lhs = @intFromEnum(e.body);
+            node.data.untyped.lhs = @intFromEnum(e.body);
             node.region = e.region;
         },
         .@"for" => |f| {
             node.tag = .@"for";
             node.main_token = @intFromEnum(f.patt);
-            node.data.lhs = @intFromEnum(f.expr);
-            node.data.rhs = @intFromEnum(f.body);
+            node.data.untyped.lhs = @intFromEnum(f.expr);
+            node.data.untyped.rhs = @intFromEnum(f.body);
             node.region = f.region;
         },
         .@"return" => |r| {
             node.tag = .@"return";
-            node.data.lhs = @intFromEnum(r.expr);
+            node.data.untyped.lhs = @intFromEnum(r.expr);
             node.region = r.region;
         },
         .import => |i| {
@@ -352,9 +360,9 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) AST.Statement.I
                 }
                 store.extra_data.append(store.gpa, tok) catch |err| exitOnOom(err);
             }
-            node.data.rhs = @as(u32, @bitCast(rhs));
-            if (node.data.rhs > 0) {
-                node.data.lhs = ed_start;
+            node.data.untyped.rhs = @as(u32, @bitCast(rhs));
+            if (node.data.untyped.rhs > 0) {
+                node.data.untyped.lhs = ed_start;
             }
         },
         .type_decl => |d| {
@@ -363,8 +371,8 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) AST.Statement.I
                 node.tag = .type_decl_nominal;
             }
             node.region = d.region;
-            node.data.lhs = @intFromEnum(d.header);
-            node.data.rhs = @intFromEnum(d.anno);
+            node.data.untyped.lhs = @intFromEnum(d.header);
+            node.data.untyped.rhs = @intFromEnum(d.anno);
             if (d.where) |w| {
                 node.main_token = @intFromEnum(w);
             }
@@ -372,8 +380,8 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) AST.Statement.I
         .type_anno => |a| {
             node.tag = .type_anno;
             node.region = a.region;
-            node.data.lhs = a.name;
-            node.data.rhs = @intFromEnum(a.anno);
+            node.data.untyped.lhs = a.name;
+            node.data.untyped.rhs = @intFromEnum(a.anno);
             if (a.where) |w| {
                 node.main_token = @intFromEnum(w);
             }
@@ -392,8 +400,10 @@ pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) AST.Pattern.Idx {
         .tag = .statement,
         .main_token = 0,
         .data = .{
-            .lhs = 0,
-            .rhs = 0,
+            .untyped = .{
+                .lhs = 0,
+                .rhs = 0,
+            },
         },
         .region = AST.TokenizedRegion.empty(),
     };
@@ -407,8 +417,8 @@ pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) AST.Pattern.Idx {
             node.tag = .tag_patt;
             node.region = t.region;
             node.main_token = t.tag_tok;
-            node.data.lhs = t.args.span.start;
-            node.data.rhs = t.args.span.len;
+            node.data.untyped.lhs = t.args.span.start;
+            node.data.untyped.rhs = t.args.span.len;
         },
         .int => |n| {
             node.tag = .int_patt;
@@ -424,32 +434,32 @@ pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) AST.Pattern.Idx {
             node.tag = .string_patt;
             node.region = s.region;
             node.main_token = s.string_tok;
-            node.data.lhs = @intFromEnum(s.expr);
+            node.data.untyped.lhs = @intFromEnum(s.expr);
         },
         .record => |r| {
             node.tag = .record_patt;
             node.region = r.region;
-            node.data.lhs = r.fields.span.start;
-            node.data.rhs = r.fields.span.len;
+            node.data.untyped.lhs = r.fields.span.start;
+            node.data.untyped.rhs = r.fields.span.len;
         },
         .list => |l| {
             node.tag = .list_patt;
             node.region = l.region;
-            node.data.lhs = l.patterns.span.start;
-            node.data.rhs = l.patterns.span.len;
+            node.data.untyped.lhs = l.patterns.span.start;
+            node.data.untyped.rhs = l.patterns.span.len;
         },
         .list_rest => |r| {
             node.tag = .list_rest_patt;
             node.region = r.region;
             if (r.name) |n| {
-                node.data.lhs = n;
+                node.data.untyped.lhs = n;
             }
         },
         .tuple => |t| {
             node.tag = .tuple_patt;
             node.region = t.region;
-            node.data.lhs = t.patterns.span.start;
-            node.data.rhs = t.patterns.span.len;
+            node.data.untyped.lhs = t.patterns.span.start;
+            node.data.untyped.rhs = t.patterns.span.len;
         },
         .underscore => |u| {
             node.tag = .underscore_patt;
@@ -459,14 +469,14 @@ pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) AST.Pattern.Idx {
             std.debug.assert(a.patterns.span.len > 1);
             node.region = a.region;
             node.tag = .alternatives_patt;
-            node.data.lhs = a.patterns.span.start;
-            node.data.rhs = a.patterns.span.len;
+            node.data.untyped.lhs = a.patterns.span.start;
+            node.data.untyped.rhs = a.patterns.span.len;
         },
         .as => |a| {
             node.region = a.region;
             node.tag = .as_patt;
             node.main_token = a.name;
-            node.data.lhs = @intFromEnum(a.pattern);
+            node.data.untyped.lhs = @intFromEnum(a.pattern);
         },
         .malformed => {
             @panic("Use addMalformed instead");
@@ -481,7 +491,7 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) AST.Expr.Idx {
     var node = Node{
         .tag = .statement,
         .main_token = 0,
-        .data = .{ .lhs = 0, .rhs = 0 },
+        .data = .{ .untyped = .{ .lhs = 0, .rhs = 0 } },
         .region = AST.TokenizedRegion.empty(),
     };
     switch (expr) {
@@ -505,27 +515,27 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) AST.Expr.Idx {
             node.tag = .string;
             node.region = e.region;
             node.main_token = e.token;
-            node.data.lhs = e.parts.span.start;
-            node.data.rhs = e.parts.span.len;
+            node.data.untyped.lhs = e.parts.span.start;
+            node.data.untyped.rhs = e.parts.span.len;
         },
         .list => |l| {
             node.tag = .list;
             node.region = l.region;
             node.main_token = l.region.start;
-            node.data.lhs = l.items.span.start;
-            node.data.rhs = l.items.span.len;
+            node.data.untyped.lhs = l.items.span.start;
+            node.data.untyped.rhs = l.items.span.len;
         },
         .tuple => |t| {
             node.tag = .tuple;
             node.region = t.region;
-            node.data.lhs = t.items.span.start;
-            node.data.rhs = t.items.span.len;
+            node.data.untyped.lhs = t.items.span.start;
+            node.data.untyped.rhs = t.items.span.len;
         },
         .record => |r| {
             node.tag = .record;
             node.region = r.region;
-            node.data.lhs = r.fields.span.start;
-            node.data.rhs = r.fields.span.len;
+            node.data.untyped.lhs = r.fields.span.start;
+            node.data.untyped.rhs = r.fields.span.len;
         },
         .tag => |e| {
             node.tag = .tag;
@@ -535,8 +545,8 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) AST.Expr.Idx {
         .lambda => |l| {
             node.tag = .lambda;
             node.region = l.region;
-            node.data.lhs = l.args.span.start;
-            node.data.rhs = l.args.span.len;
+            node.data.untyped.lhs = l.args.span.start;
+            node.data.untyped.rhs = l.args.span.len;
             const body_idx = store.extra_data.items.len;
             store.extra_data.append(store.gpa, @intFromEnum(l.body)) catch |err| exitOnOom(err);
             node.main_token = @as(u32, @intCast(body_idx));
@@ -544,8 +554,8 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) AST.Expr.Idx {
         .apply => |app| {
             node.tag = .apply;
             node.region = app.region;
-            node.data.lhs = app.args.span.start;
-            node.data.rhs = app.args.span.len;
+            node.data.untyped.lhs = app.args.span.start;
+            node.data.untyped.rhs = app.args.span.len;
             const fn_ed_idx = store.extra_data.items.len;
             store.extra_data.append(store.gpa, @intFromEnum(app.@"fn")) catch |err| exitOnOom(err);
             node.main_token = @as(u32, @intCast(fn_ed_idx));
@@ -554,47 +564,47 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) AST.Expr.Idx {
         .field_access => |fa| {
             node.tag = .field_access;
             node.region = fa.region;
-            node.data.lhs = @intFromEnum(fa.left);
-            node.data.rhs = @intFromEnum(fa.right);
+            node.data.untyped.lhs = @intFromEnum(fa.left);
+            node.data.untyped.rhs = @intFromEnum(fa.right);
         },
         .local_dispatch => |ld| {
             node.tag = .local_dispatch;
             node.region = ld.region;
             node.main_token = ld.operator;
-            node.data.lhs = @intFromEnum(ld.left);
-            node.data.rhs = @intFromEnum(ld.right);
+            node.data.untyped.lhs = @intFromEnum(ld.left);
+            node.data.untyped.rhs = @intFromEnum(ld.right);
         },
         .bin_op => |op| {
             node.tag = .bin_op;
             node.region = op.region;
             node.main_token = op.operator;
-            node.data.lhs = @intFromEnum(op.left);
-            node.data.rhs = @intFromEnum(op.right);
+            node.data.untyped.lhs = @intFromEnum(op.left);
+            node.data.untyped.rhs = @intFromEnum(op.right);
         },
         .suffix_single_question => |op| {
             node.tag = .suffix_single_question;
             node.region = op.region;
-            node.data.lhs = @intFromEnum(op.expr);
+            node.data.untyped.lhs = @intFromEnum(op.expr);
         },
         .unary_op => |u| {
             node.tag = .unary_op;
             node.region = u.region;
             node.main_token = u.operator;
-            node.data.lhs = @intFromEnum(u.expr);
+            node.data.untyped.lhs = @intFromEnum(u.expr);
         },
         .if_then_else => |i| {
             node.tag = .if_then_else;
             node.region = i.region;
-            node.data.lhs = @intFromEnum(i.condition);
-            node.data.rhs = @as(u32, @intCast(store.extra_data.items.len));
+            node.data.untyped.lhs = @intFromEnum(i.condition);
+            node.data.untyped.rhs = @as(u32, @intCast(store.extra_data.items.len));
             store.extra_data.append(store.gpa, @intFromEnum(i.then)) catch |err| exitOnOom(err);
             store.extra_data.append(store.gpa, @intFromEnum(i.@"else")) catch |err| exitOnOom(err);
         },
         .match => |m| {
             node.tag = .match;
             node.region = m.region;
-            node.data.lhs = m.branches.span.start;
-            node.data.rhs = m.branches.span.len;
+            node.data.untyped.lhs = m.branches.span.start;
+            node.data.untyped.rhs = m.branches.span.len;
             store.extra_data.append(store.gpa, @intFromEnum(m.expr)) catch |err| exitOnOom(err);
         },
         .ident => |id| {
@@ -602,22 +612,22 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) AST.Expr.Idx {
             node.region = id.region;
             node.main_token = id.token;
             if (id.qualifier) |qualifier| {
-                node.data.lhs = qualifier;
-                node.data.rhs = 1;
+                node.data.untyped.lhs = qualifier;
+                node.data.untyped.rhs = 1;
             }
         },
         .dbg => |d| {
             node.tag = .dbg;
             node.region = d.region;
-            node.data.lhs = @intFromEnum(d.expr);
+            node.data.untyped.lhs = @intFromEnum(d.expr);
         },
         .record_builder => |_| {},
         .block => |body| {
             node.tag = .block;
             node.region = body.region;
             node.main_token = 0;
-            node.data.lhs = body.statements.span.start;
-            node.data.rhs = body.statements.span.len;
+            node.data.untyped.lhs = body.statements.span.start;
+            node.data.untyped.rhs = body.statements.span.len;
         },
         .ellipsis => |e| {
             node.tag = .ellipsis;
@@ -637,13 +647,15 @@ pub fn addPatternRecordField(store: *NodeStore, field: AST.PatternRecordField) A
         .tag = .record_field_patt,
         .main_token = field.name,
         .data = .{
-            .lhs = @intFromBool(field.rest),
-            .rhs = 0,
+            .untyped = .{
+                .lhs = @intFromBool(field.rest),
+                .rhs = 0,
+            },
         },
         .region = field.region,
     };
     if (field.value) |value| {
-        node.data.rhs = @intFromEnum(value);
+        node.data.untyped.rhs = @intFromEnum(value);
     }
     const nid = store.nodes.append(store.gpa, node);
     return @enumFromInt(@intFromEnum(nid));
@@ -654,8 +666,8 @@ pub fn getPatternRecordField(store: *NodeStore, field: AST.PatternRecordField.Id
     const node = store.nodes.get(@enumFromInt(@intFromEnum(field)));
     return .{
         .name = node.main_token,
-        .value = if (node.data.rhs == 0) null else @enumFromInt(node.data.rhs),
-        .rest = node.data.lhs == 1,
+        .value = if (node.data.untyped.rhs == 0) null else @enumFromInt(node.data.untyped.rhs),
+        .rest = node.data.untyped.lhs == 1,
         .region = node.region,
     };
 }
@@ -666,18 +678,20 @@ pub fn addRecordField(store: *NodeStore, field: AST.RecordField) AST.RecordField
         .tag = .statement,
         .main_token = 0,
         .data = .{
-            .lhs = 0,
-            .rhs = 0,
+            .untyped = .{
+                .lhs = 0,
+                .rhs = 0,
+            },
         },
         .region = field.region,
     };
     node.tag = .record_field;
     node.main_token = field.name;
     if (field.value) |v| {
-        node.data.lhs = @intFromEnum(v);
+        node.data.untyped.lhs = @intFromEnum(v);
     }
     if (field.optional) {
-        node.data.rhs = 1;
+        node.data.untyped.rhs = 1;
     }
 
     const nid = store.nodes.append(store.gpa, node);
@@ -690,8 +704,10 @@ pub fn addWhenBranch(store: *NodeStore, branch: AST.WhenBranch) AST.WhenBranch.I
         .tag = .branch,
         .main_token = 0,
         .data = .{
-            .lhs = @intFromEnum(branch.pattern),
-            .rhs = @intFromEnum(branch.body),
+            .untyped = .{
+                .lhs = @intFromEnum(branch.pattern),
+                .rhs = @intFromEnum(branch.body),
+            },
         },
         .region = branch.region,
     };
@@ -706,14 +722,16 @@ pub fn addTypeHeader(store: *NodeStore, header: AST.TypeHeader) AST.TypeHeader.I
         .tag = .ty_header,
         .main_token = header.name,
         .data = .{
-            .lhs = 0,
-            .rhs = 0,
+            .untyped = .{
+                .lhs = 0,
+                .rhs = 0,
+            },
         },
         .region = header.region,
     };
 
-    node.data.lhs = header.args.span.start;
-    node.data.rhs = header.args.span.len;
+    node.data.untyped.lhs = header.args.span.start;
+    node.data.untyped.rhs = header.args.span.len;
 
     const nid = store.nodes.append(store.gpa, node);
     return @enumFromInt(@intFromEnum(nid));
@@ -725,8 +743,10 @@ pub fn addAnnoRecordField(store: *NodeStore, field: AST.AnnoRecordField) AST.Ann
         .tag = .ty_record_field,
         .main_token = 0,
         .data = .{
-            .lhs = field.name,
-            .rhs = @intFromEnum(field.ty),
+            .untyped = .{
+                .lhs = field.name,
+                .rhs = @intFromEnum(field.ty),
+            },
         },
         .region = field.region,
     };
@@ -741,8 +761,10 @@ pub fn addWhereClause(store: *NodeStore, clause: AST.WhereClause) AST.WhereClaus
         .tag = .where_alias,
         .main_token = 0,
         .data = .{
-            .lhs = 0,
-            .rhs = 0,
+            .untyped = .{
+                .lhs = 0,
+                .rhs = 0,
+            },
         },
         .region = AST.TokenizedRegion.empty(),
     };
@@ -752,7 +774,7 @@ pub fn addWhereClause(store: *NodeStore, clause: AST.WhereClause) AST.WhereClaus
             node.tag = .where_alias;
             node.region = c.region;
             node.main_token = c.var_tok;
-            node.data.lhs = c.alias_tok;
+            node.data.untyped.lhs = c.alias_tok;
         },
         .method => |c| {
             node.tag = .where_method;
@@ -762,7 +784,7 @@ pub fn addWhereClause(store: *NodeStore, clause: AST.WhereClause) AST.WhereClaus
             store.extra_data.append(store.gpa, c.name_tok) catch |e| exitOnOom(e);
             store.extra_data.append(store.gpa, @intFromEnum(c.args)) catch |e| exitOnOom(e);
             store.extra_data.append(store.gpa, @intFromEnum(c.ret_anno)) catch |e| exitOnOom(e);
-            node.data.lhs = @intCast(ed_start);
+            node.data.untyped.lhs = @intCast(ed_start);
         },
         .mod_method => |c| {
             node.tag = .where_mod_method;
@@ -772,7 +794,7 @@ pub fn addWhereClause(store: *NodeStore, clause: AST.WhereClause) AST.WhereClaus
             store.extra_data.append(store.gpa, c.name_tok) catch |e| exitOnOom(e);
             store.extra_data.append(store.gpa, @intFromEnum(c.args)) catch |e| exitOnOom(e);
             store.extra_data.append(store.gpa, @intFromEnum(c.ret_anno)) catch |e| exitOnOom(e);
-            node.data.lhs = @intCast(ed_start);
+            node.data.untyped.lhs = @intCast(ed_start);
         },
         .malformed => {
             @panic("Use addMalformed instead");
@@ -789,8 +811,10 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) AST.TypeAnno.Idx {
         .tag = .branch,
         .main_token = 0,
         .data = .{
-            .lhs = 0,
-            .rhs = 0,
+            .untyped = .{
+                .lhs = 0,
+                .rhs = 0,
+            },
         },
         .region = AST.TokenizedRegion.empty(),
     };
@@ -799,8 +823,8 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) AST.TypeAnno.Idx {
         .apply => |a| {
             node.tag = .ty_apply;
             node.region = a.region;
-            node.data.lhs = a.args.span.start;
-            node.data.rhs = a.args.span.len;
+            node.data.untyped.lhs = a.args.span.start;
+            node.data.untyped.rhs = a.args.span.len;
         },
         .ty_var => |v| {
             node.tag = .ty_var;
@@ -815,19 +839,19 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) AST.TypeAnno.Idx {
             node.tag = .ty_ty;
             node.region = t.region;
             node.main_token = t.region.start;
-            node.data.rhs = @bitCast(t.ident);
+            node.data.untyped.rhs = @bitCast(t.ident);
         },
         .mod_ty => |t| {
             node.tag = .ty_mod_ty;
             node.region = t.region;
             node.main_token = t.region.start;
-            node.data.lhs = @bitCast(t.mod_ident);
-            node.data.rhs = @bitCast(t.ty_ident);
+            node.data.untyped.lhs = @bitCast(t.mod_ident);
+            node.data.untyped.rhs = @bitCast(t.ty_ident);
         },
         .tag_union => |tu| {
             node.tag = .ty_union;
             node.region = tu.region;
-            node.data.lhs = tu.tags.span.start;
+            node.data.untyped.lhs = tu.tags.span.start;
             var rhs = AST.TypeAnno.TagUnionRhs{
                 .open = 0,
                 .tags_len = @as(u31, @intCast(tu.tags.span.len)),
@@ -836,25 +860,25 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) AST.TypeAnno.Idx {
                 rhs.open = 1;
                 store.extra_data.append(store.gpa, @intFromEnum(a)) catch |err| exitOnOom(err);
             }
-            node.data.rhs = @as(u32, @bitCast(rhs));
+            node.data.untyped.rhs = @as(u32, @bitCast(rhs));
         },
         .tuple => |t| {
             node.tag = .ty_tuple;
             node.region = t.region;
-            node.data.lhs = t.annos.span.start;
-            node.data.rhs = t.annos.span.len;
+            node.data.untyped.lhs = t.annos.span.start;
+            node.data.untyped.rhs = t.annos.span.len;
         },
         .record => |r| {
             node.tag = .ty_record;
             node.region = r.region;
-            node.data.lhs = r.fields.span.start;
-            node.data.rhs = r.fields.span.len;
+            node.data.untyped.lhs = r.fields.span.start;
+            node.data.untyped.rhs = r.fields.span.len;
         },
         .@"fn" => |f| {
             node.tag = .ty_fn;
             node.region = f.region;
-            node.data.lhs = f.args.span.start;
-            node.data.rhs = @bitCast(AST.TypeAnno.TypeAnnoFnRhs{
+            node.data.untyped.lhs = f.args.span.start;
+            node.data.untyped.rhs = @bitCast(AST.TypeAnno.TypeAnnoFnRhs{
                 .effectful = @intFromBool(f.effectful),
                 .args_len = @intCast(f.args.span.len), // We hope a function has less than 2.147b args
             });
@@ -865,7 +889,7 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) AST.TypeAnno.Idx {
         .parens => |p| {
             node.tag = .ty_parens;
             node.region = p.region;
-            node.data.lhs = @intFromEnum(p.anno);
+            node.data.untyped.lhs = @intFromEnum(p.anno);
         },
         .malformed => {
             @panic("Use addMalformed instead");
@@ -883,11 +907,11 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) AST.TypeAnno.Idx {
 /// TODO
 pub fn getFile(store: *NodeStore) AST.File {
     const node = store.nodes.get(@enumFromInt(0));
-    const header_ed_idx = @as(usize, @intCast(node.data.lhs + node.data.rhs));
+    const header_ed_idx = @as(usize, @intCast(node.data.untyped.lhs + node.data.untyped.rhs));
     const header = store.extra_data.items[header_ed_idx];
     return .{
         .header = @enumFromInt(header),
-        .statements = .{ .span = .{ .start = node.data.lhs, .len = node.data.rhs } },
+        .statements = .{ .span = .{ .start = node.data.untyped.lhs, .len = node.data.untyped.rhs } },
         .region = node.region,
     };
 }
@@ -897,8 +921,8 @@ pub fn getCollection(store: *NodeStore, collection_idx: AST.Collection.Idx) AST.
     const node = store.nodes.get(@enumFromInt(@intFromEnum(collection_idx)));
     return .{
         .span = .{
-            .start = node.data.lhs,
-            .len = node.data.rhs,
+            .start = node.data.untyped.lhs,
+            .len = node.data.untyped.rhs,
         },
         .region = node.region,
     };
@@ -911,33 +935,33 @@ pub fn getHeader(store: *NodeStore, header_idx: AST.Header.Idx) AST.Header {
         .app_header => {
             return .{ .app = .{
                 .platform_idx = @enumFromInt(node.main_token),
-                .provides = @enumFromInt(node.data.lhs),
-                .packages = @enumFromInt(node.data.rhs),
+                .provides = @enumFromInt(node.data.untyped.lhs),
+                .packages = @enumFromInt(node.data.untyped.rhs),
                 .region = node.region,
             } };
         },
         .module_header => {
             return .{ .module = .{
-                .exposes = @enumFromInt(node.data.lhs),
+                .exposes = @enumFromInt(node.data.untyped.lhs),
                 .region = node.region,
             } };
         },
         .hosted_header => {
             return .{ .hosted = .{
-                .exposes = @enumFromInt(node.data.lhs),
+                .exposes = @enumFromInt(node.data.untyped.lhs),
                 .region = node.region,
             } };
         },
         .package_header => {
             return .{ .package = .{
-                .exposes = @enumFromInt(node.data.lhs),
-                .packages = @enumFromInt(node.data.rhs),
+                .exposes = @enumFromInt(node.data.untyped.lhs),
+                .packages = @enumFromInt(node.data.untyped.rhs),
                 .region = node.region,
             } };
         },
         .platform_header => {
-            const ed_start = node.data.lhs;
-            std.debug.assert(node.data.rhs == 5);
+            const ed_start = node.data.untyped.lhs;
+            std.debug.assert(node.data.untyped.rhs == 5);
 
             return .{ .platform = .{
                 .name = node.main_token,
@@ -951,7 +975,7 @@ pub fn getHeader(store: *NodeStore, header_idx: AST.Header.Idx) AST.Header {
         },
         .malformed => {
             return .{ .malformed = .{
-                .reason = @enumFromInt(node.data.lhs),
+                .reason = @enumFromInt(node.data.untyped.lhs),
                 .region = node.region,
             } };
         },
@@ -966,11 +990,11 @@ pub fn getExposedItem(store: *NodeStore, exposed_item_idx: AST.ExposedItem.Idx) 
     const node = store.nodes.get(@enumFromInt(@intFromEnum(exposed_item_idx)));
     switch (node.tag) {
         .exposed_item_lower => {
-            if (node.data.rhs == 1) {
+            if (node.data.untyped.rhs == 1) {
                 return .{ .lower_ident = .{
                     .region = node.region,
                     .ident = node.main_token,
-                    .as = node.data.lhs,
+                    .as = node.data.untyped.lhs,
                 } };
             }
             return .{ .lower_ident = .{
@@ -980,11 +1004,11 @@ pub fn getExposedItem(store: *NodeStore, exposed_item_idx: AST.ExposedItem.Idx) 
             } };
         },
         .exposed_item_upper => {
-            if (node.data.rhs == 1) {
+            if (node.data.untyped.rhs == 1) {
                 return .{ .upper_ident = .{
                     .region = node.region,
                     .ident = node.main_token,
-                    .as = node.data.lhs,
+                    .as = node.data.untyped.lhs,
                 } };
             }
             return .{ .upper_ident = .{
@@ -1011,27 +1035,27 @@ pub fn getStatement(store: *NodeStore, statement_idx: AST.Statement.Idx) AST.Sta
     switch (node.tag) {
         .decl => {
             return .{ .decl = .{
-                .pattern = @enumFromInt(node.data.lhs),
-                .body = @enumFromInt(node.data.rhs),
+                .pattern = @enumFromInt(node.data.untyped.lhs),
+                .body = @enumFromInt(node.data.untyped.rhs),
                 .region = node.region,
             } };
         },
         .@"var" => {
             return .{ .@"var" = .{
                 .name = node.main_token,
-                .body = @enumFromInt(node.data.lhs),
+                .body = @enumFromInt(node.data.untyped.lhs),
                 .region = node.region,
             } };
         },
         .expr => {
             return .{ .expr = .{
-                .expr = @enumFromInt(node.data.lhs),
+                .expr = @enumFromInt(node.data.untyped.lhs),
                 .region = node.region,
             } };
         },
         .import => {
-            const rhs = @as(AST.ImportRhs, @bitCast(node.data.rhs));
-            var extra_data_pos = node.data.lhs + rhs.num_exposes;
+            const rhs = @as(AST.ImportRhs, @bitCast(node.data.untyped.rhs));
+            var extra_data_pos = node.data.untyped.lhs + rhs.num_exposes;
             var qualifier_tok: ?Token.Idx = null;
             var alias_tok: ?Token.Idx = null;
             if (rhs.qualified == 1) {
@@ -1046,7 +1070,7 @@ pub fn getStatement(store: *NodeStore, statement_idx: AST.Statement.Idx) AST.Sta
                 .qualifier_tok = qualifier_tok,
                 .alias_tok = alias_tok,
                 .exposes = .{ .span = .{
-                    .start = node.data.lhs,
+                    .start = node.data.untyped.lhs,
                     .len = rhs.num_exposes,
                 } },
                 .region = node.region,
@@ -1054,35 +1078,35 @@ pub fn getStatement(store: *NodeStore, statement_idx: AST.Statement.Idx) AST.Sta
         },
         .expect => {
             return .{ .expect = .{
-                .body = @enumFromInt(node.data.lhs),
+                .body = @enumFromInt(node.data.untyped.lhs),
                 .region = node.region,
             } };
         },
         .@"for" => {
             return .{ .@"for" = .{
                 .patt = @enumFromInt(node.main_token),
-                .expr = @enumFromInt(node.data.lhs),
-                .body = @enumFromInt(node.data.rhs),
+                .expr = @enumFromInt(node.data.untyped.lhs),
+                .body = @enumFromInt(node.data.untyped.rhs),
                 .region = node.region,
             } };
         },
         .crash => {
             return .{ .crash = .{
-                .expr = @enumFromInt(node.data.lhs),
+                .expr = @enumFromInt(node.data.untyped.lhs),
                 .region = node.region,
             } };
         },
         .@"return" => {
             return .{ .@"return" = .{
-                .expr = @enumFromInt(node.data.lhs),
+                .expr = @enumFromInt(node.data.untyped.lhs),
                 .region = node.region,
             } };
         },
         .type_decl => {
             return .{ .type_decl = .{
                 .region = node.region,
-                .header = @enumFromInt(node.data.lhs),
-                .anno = @enumFromInt(node.data.rhs),
+                .header = @enumFromInt(node.data.untyped.lhs),
+                .anno = @enumFromInt(node.data.untyped.rhs),
                 .kind = .alias,
                 .where = if (node.main_token != 0) @enumFromInt(node.main_token) else null,
             } };
@@ -1090,8 +1114,8 @@ pub fn getStatement(store: *NodeStore, statement_idx: AST.Statement.Idx) AST.Sta
         .type_decl_nominal => {
             return .{ .type_decl = .{
                 .region = node.region,
-                .header = @enumFromInt(node.data.lhs),
-                .anno = @enumFromInt(node.data.rhs),
+                .header = @enumFromInt(node.data.untyped.lhs),
+                .anno = @enumFromInt(node.data.untyped.rhs),
                 .kind = .nominal,
                 .where = if (node.main_token != 0) @enumFromInt(node.main_token) else null,
             } };
@@ -1099,14 +1123,14 @@ pub fn getStatement(store: *NodeStore, statement_idx: AST.Statement.Idx) AST.Sta
         .type_anno => {
             return .{ .type_anno = .{
                 .region = node.region,
-                .name = node.data.lhs,
-                .anno = @enumFromInt(node.data.rhs),
+                .name = node.data.untyped.lhs,
+                .anno = @enumFromInt(node.data.untyped.rhs),
                 .where = if (node.main_token != 0) @enumFromInt(node.main_token) else null,
             } };
         },
         .malformed => {
             return .{ .malformed = .{
-                .reason = @enumFromInt(node.data.lhs),
+                .reason = @enumFromInt(node.data.untyped.lhs),
                 .region = node.region,
             } };
         },
@@ -1130,8 +1154,8 @@ pub fn getPattern(store: *NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pattern {
             return .{ .tag = .{
                 .tag_tok = node.main_token,
                 .args = .{ .span = .{
-                    .start = node.data.lhs,
-                    .len = node.data.rhs,
+                    .start = node.data.untyped.lhs,
+                    .len = node.data.untyped.rhs,
                 } },
                 .region = node.region,
             } };
@@ -1140,7 +1164,7 @@ pub fn getPattern(store: *NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pattern {
             return .{ .string = .{
                 .string_tok = node.main_token,
                 .region = node.region,
-                .expr = @enumFromInt(node.data.lhs),
+                .expr = @enumFromInt(node.data.untyped.lhs),
             } };
         },
         .int_patt => {
@@ -1159,8 +1183,8 @@ pub fn getPattern(store: *NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pattern {
             return .{ .record = .{
                 .region = node.region,
                 .fields = .{ .span = .{
-                    .start = node.data.lhs,
-                    .len = node.data.rhs,
+                    .start = node.data.untyped.lhs,
+                    .len = node.data.untyped.rhs,
                 } },
             } };
         },
@@ -1168,23 +1192,23 @@ pub fn getPattern(store: *NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pattern {
             return .{ .list = .{
                 .region = node.region,
                 .patterns = .{ .span = .{
-                    .start = node.data.lhs,
-                    .len = node.data.rhs,
+                    .start = node.data.untyped.lhs,
+                    .len = node.data.untyped.rhs,
                 } },
             } };
         },
         .list_rest_patt => {
             return .{ .list_rest = .{
                 .region = node.region,
-                .name = if (node.data.lhs == 0) null else node.data.lhs,
+                .name = if (node.data.untyped.lhs == 0) null else node.data.untyped.lhs,
             } };
         },
         .tuple_patt => {
             return .{ .tuple = .{
                 .region = node.region,
                 .patterns = .{ .span = .{
-                    .start = node.data.lhs,
-                    .len = node.data.rhs,
+                    .start = node.data.untyped.lhs,
+                    .len = node.data.untyped.rhs,
                 } },
             } };
         },
@@ -1192,8 +1216,8 @@ pub fn getPattern(store: *NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pattern {
             return .{ .alternatives = .{
                 .region = node.region,
                 .patterns = .{ .span = .{
-                    .start = node.data.lhs,
-                    .len = node.data.rhs,
+                    .start = node.data.untyped.lhs,
+                    .len = node.data.untyped.rhs,
                 } },
             } };
         },
@@ -1206,12 +1230,12 @@ pub fn getPattern(store: *NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pattern {
             return .{ .as = .{
                 .region = node.region,
                 .name = node.main_token,
-                .pattern = @enumFromInt(node.data.lhs),
+                .pattern = @enumFromInt(node.data.untyped.lhs),
             } };
         },
         .malformed => {
             return .{ .malformed = .{
-                .reason = @enumFromInt(node.data.lhs),
+                .reason = @enumFromInt(node.data.untyped.lhs),
                 .region = node.region,
             } };
         },
@@ -1239,8 +1263,8 @@ pub fn getExpr(store: *NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
         },
         .ident => {
             var qualifier: ?Token.Idx = null;
-            if (node.data.rhs == 1) {
-                qualifier = node.data.lhs;
+            if (node.data.untyped.rhs == 1) {
+                qualifier = node.data.untyped.lhs;
             }
             return .{ .ident = .{
                 .token = node.main_token,
@@ -1264,8 +1288,8 @@ pub fn getExpr(store: *NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
             return .{ .string = .{
                 .token = node.main_token,
                 .parts = .{ .span = base.DataSpan{
-                    .start = node.data.lhs,
-                    .len = node.data.rhs,
+                    .start = node.data.untyped.lhs,
+                    .len = node.data.untyped.rhs,
                 } },
                 .region = node.region,
             } };
@@ -1273,8 +1297,8 @@ pub fn getExpr(store: *NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
         .list => {
             return .{ .list = .{
                 .items = .{ .span = base.DataSpan{
-                    .start = node.data.lhs,
-                    .len = node.data.rhs,
+                    .start = node.data.untyped.lhs,
+                    .len = node.data.untyped.rhs,
                 } },
                 .region = node.region,
             } };
@@ -1282,8 +1306,8 @@ pub fn getExpr(store: *NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
         .tuple => {
             return .{ .tuple = .{
                 .items = .{ .span = base.DataSpan{
-                    .start = node.data.lhs,
-                    .len = node.data.rhs,
+                    .start = node.data.untyped.lhs,
+                    .len = node.data.untyped.rhs,
                 } },
                 .region = node.region,
             } };
@@ -1291,24 +1315,24 @@ pub fn getExpr(store: *NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
         .record => {
             return .{ .record = .{
                 .fields = .{ .span = .{
-                    .start = node.data.lhs,
-                    .len = node.data.rhs,
+                    .start = node.data.untyped.lhs,
+                    .len = node.data.untyped.rhs,
                 } },
                 .region = node.region,
             } };
         },
         .field_access => {
             return .{ .field_access = .{
-                .left = @enumFromInt(node.data.lhs),
-                .right = @enumFromInt(node.data.rhs),
+                .left = @enumFromInt(node.data.untyped.lhs),
+                .right = @enumFromInt(node.data.untyped.rhs),
                 .operator = node.main_token,
                 .region = node.region,
             } };
         },
         .local_dispatch => {
             return .{ .local_dispatch = .{
-                .left = @enumFromInt(node.data.lhs),
-                .right = @enumFromInt(node.data.rhs),
+                .left = @enumFromInt(node.data.untyped.lhs),
+                .right = @enumFromInt(node.data.untyped.rhs),
                 .operator = node.main_token,
                 .region = node.region,
             } };
@@ -1316,7 +1340,7 @@ pub fn getExpr(store: *NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
         .lambda => {
             return .{ .lambda = .{
                 .body = @enumFromInt(store.extra_data.items[node.main_token]),
-                .args = .{ .span = .{ .start = node.data.lhs, .len = node.data.rhs } },
+                .args = .{ .span = .{ .start = node.data.untyped.lhs, .len = node.data.untyped.rhs } },
                 .region = node.region,
             } };
         },
@@ -1324,8 +1348,8 @@ pub fn getExpr(store: *NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
             return .{ .apply = .{
                 .@"fn" = @enumFromInt(store.extra_data.items[node.main_token]),
                 .args = .{ .span = base.DataSpan{
-                    .start = node.data.lhs,
-                    .len = node.data.rhs,
+                    .start = node.data.untyped.lhs,
+                    .len = node.data.untyped.rhs,
                 } },
                 .region = node.region,
             } };
@@ -1334,50 +1358,50 @@ pub fn getExpr(store: *NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
             return .{ .suffix_single_question = .{
                 .region = node.region,
                 .operator = node.main_token,
-                .expr = @enumFromInt(node.data.lhs),
+                .expr = @enumFromInt(node.data.untyped.lhs),
             } };
         },
         .if_then_else => {
-            const then_idx = @as(usize, @intCast(node.data.rhs));
+            const then_idx = @as(usize, @intCast(node.data.untyped.rhs));
             const else_idx = then_idx + 1;
             const then_ed = store.extra_data.items[then_idx];
             const else_ed = store.extra_data.items[else_idx];
             return .{ .if_then_else = .{
                 .region = node.region,
-                .condition = @enumFromInt(node.data.lhs),
+                .condition = @enumFromInt(node.data.untyped.lhs),
                 .then = @enumFromInt(then_ed),
                 .@"else" = @enumFromInt(else_ed),
             } };
         },
         .match => {
-            const idx = @as(usize, @intCast(node.data.lhs + node.data.rhs));
+            const idx = @as(usize, @intCast(node.data.untyped.lhs + node.data.untyped.rhs));
             return .{ .match = .{
                 .region = node.region,
                 .expr = @enumFromInt(store.extra_data.items[idx]),
                 .branches = .{ .span = .{
-                    .start = node.data.lhs,
-                    .len = node.data.rhs,
+                    .start = node.data.untyped.lhs,
+                    .len = node.data.untyped.rhs,
                 } },
             } };
         },
         .dbg => {
             return .{ .dbg = .{
                 .region = node.region,
-                .expr = @enumFromInt(node.data.lhs),
+                .expr = @enumFromInt(node.data.untyped.lhs),
             } };
         },
         .bin_op => {
             return .{ .bin_op = .{
-                .left = @enumFromInt(node.data.lhs),
-                .right = @enumFromInt(node.data.rhs),
+                .left = @enumFromInt(node.data.untyped.lhs),
+                .right = @enumFromInt(node.data.untyped.rhs),
                 .operator = node.main_token,
                 .region = node.region,
             } };
         },
         .block => {
             const statements = AST.Statement.Span{ .span = .{
-                .start = node.data.lhs,
-                .len = node.data.rhs,
+                .start = node.data.untyped.lhs,
+                .len = node.data.untyped.rhs,
             } };
             return .{ .block = .{
                 .statements = statements,
@@ -1391,7 +1415,7 @@ pub fn getExpr(store: *NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
         },
         .malformed => {
             return .{ .malformed = .{
-                .reason = @enumFromInt(node.data.lhs),
+                .reason = @enumFromInt(node.data.untyped.lhs),
                 .region = node.region,
             } };
         },
@@ -1405,8 +1429,8 @@ pub fn getExpr(store: *NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
 pub fn getRecordField(store: *NodeStore, field_idx: AST.RecordField.Idx) AST.RecordField {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(field_idx)));
     const name = node.main_token;
-    const value: ?AST.Expr.Idx = if (node.data.lhs > 0) @enumFromInt(node.data.lhs) else null;
-    const optional = node.data.rhs == 1;
+    const value: ?AST.Expr.Idx = if (node.data.untyped.lhs > 0) @enumFromInt(node.data.untyped.lhs) else null;
+    const optional = node.data.untyped.rhs == 1;
 
     return .{
         .name = name,
@@ -1421,8 +1445,8 @@ pub fn getBranch(store: *NodeStore, branch_idx: AST.WhenBranch.Idx) AST.WhenBran
     const node = store.nodes.get(@enumFromInt(@intFromEnum(branch_idx)));
     return .{
         .region = node.region,
-        .pattern = @enumFromInt(node.data.lhs),
-        .body = @enumFromInt(node.data.rhs),
+        .pattern = @enumFromInt(node.data.untyped.lhs),
+        .body = @enumFromInt(node.data.untyped.rhs),
     };
 }
 
@@ -1434,8 +1458,8 @@ pub fn getTypeHeader(store: *NodeStore, header_idx: AST.TypeHeader.Idx) AST.Type
         .region = node.region,
         .name = node.main_token,
         .args = .{ .span = .{
-            .start = node.data.lhs,
-            .len = node.data.rhs,
+            .start = node.data.untyped.lhs,
+            .len = node.data.untyped.rhs,
         } },
     };
 }
@@ -1445,8 +1469,8 @@ pub fn getAnnoRecordField(store: *NodeStore, anno_record_field_idx: AST.AnnoReco
     const node = store.nodes.get(@enumFromInt(@intFromEnum(anno_record_field_idx)));
     return .{
         .region = node.region,
-        .name = node.data.lhs,
-        .ty = @enumFromInt(node.data.rhs),
+        .name = node.data.untyped.lhs,
+        .ty = @enumFromInt(node.data.untyped.rhs),
     };
 }
 
@@ -1458,11 +1482,11 @@ pub fn getWhereClause(store: *NodeStore, where_clause_idx: AST.WhereClause.Idx) 
             return .{ .alias = .{
                 .region = node.region,
                 .var_tok = node.main_token,
-                .alias_tok = node.data.lhs,
+                .alias_tok = node.data.untyped.lhs,
             } };
         },
         .where_method => {
-            const ed_start = @as(usize, @intCast(node.data.lhs));
+            const ed_start = @as(usize, @intCast(node.data.untyped.lhs));
             const name_tok = store.extra_data.items[ed_start];
             const args = store.extra_data.items[ed_start + 1];
             const ret_anno = store.extra_data.items[ed_start + 2];
@@ -1475,7 +1499,7 @@ pub fn getWhereClause(store: *NodeStore, where_clause_idx: AST.WhereClause.Idx) 
             } };
         },
         .where_mod_method => {
-            const ed_start = @as(usize, @intCast(node.data.lhs));
+            const ed_start = @as(usize, @intCast(node.data.untyped.lhs));
             const name_tok = store.extra_data.items[ed_start];
             const args = store.extra_data.items[ed_start + 1];
             const ret_anno = store.extra_data.items[ed_start + 2];
@@ -1489,7 +1513,7 @@ pub fn getWhereClause(store: *NodeStore, where_clause_idx: AST.WhereClause.Idx) 
         },
         .malformed => {
             return .{ .malformed = .{
-                .reason = @enumFromInt(node.data.lhs),
+                .reason = @enumFromInt(node.data.untyped.lhs),
                 .region = node.region,
             } };
         },
@@ -1508,8 +1532,8 @@ pub fn getTypeAnno(store: *NodeStore, ty_anno_idx: AST.TypeAnno.Idx) AST.TypeAnn
             return .{ .apply = .{
                 .region = node.region,
                 .args = .{ .span = .{
-                    .start = node.data.lhs,
-                    .len = node.data.rhs,
+                    .start = node.data.untyped.lhs,
+                    .len = node.data.untyped.rhs,
                 } },
             } };
         },
@@ -1526,26 +1550,26 @@ pub fn getTypeAnno(store: *NodeStore, ty_anno_idx: AST.TypeAnno.Idx) AST.TypeAnn
         },
         .ty_ty => {
             return .{ .ty = .{
-                .ident = @bitCast(node.data.rhs),
+                .ident = @bitCast(node.data.untyped.rhs),
                 .region = node.region,
             } };
         },
         .ty_mod_ty => {
             return .{ .mod_ty = .{
-                .mod_ident = @bitCast(node.data.lhs),
-                .ty_ident = @bitCast(node.data.rhs),
+                .mod_ident = @bitCast(node.data.untyped.lhs),
+                .ty_ident = @bitCast(node.data.untyped.rhs),
                 .region = node.region,
             } };
         },
         .ty_union => {
-            const rhs = @as(AST.TypeAnno.TagUnionRhs, @bitCast(node.data.rhs));
-            const tags_ed_end = node.data.lhs + rhs.tags_len;
+            const rhs = @as(AST.TypeAnno.TagUnionRhs, @bitCast(node.data.untyped.rhs));
+            const tags_ed_end = node.data.untyped.lhs + rhs.tags_len;
 
             return .{ .tag_union = .{
                 .region = node.region,
                 .open_anno = if (rhs.open == 1) @enumFromInt(store.extra_data.items[tags_ed_end]) else null,
                 .tags = .{ .span = .{
-                    .start = node.data.lhs,
+                    .start = node.data.untyped.lhs,
                     .len = @as(u32, @intCast(rhs.tags_len)),
                 } },
             } };
@@ -1554,8 +1578,8 @@ pub fn getTypeAnno(store: *NodeStore, ty_anno_idx: AST.TypeAnno.Idx) AST.TypeAnn
             return .{ .tuple = .{
                 .region = node.region,
                 .annos = .{ .span = .{
-                    .start = node.data.lhs,
-                    .len = node.data.rhs,
+                    .start = node.data.untyped.lhs,
+                    .len = node.data.untyped.rhs,
                 } },
             } };
         },
@@ -1563,18 +1587,18 @@ pub fn getTypeAnno(store: *NodeStore, ty_anno_idx: AST.TypeAnno.Idx) AST.TypeAnn
             return .{ .record = .{
                 .region = node.region,
                 .fields = .{ .span = .{
-                    .start = node.data.lhs,
-                    .len = node.data.rhs,
+                    .start = node.data.untyped.lhs,
+                    .len = node.data.untyped.rhs,
                 } },
             } };
         },
         .ty_fn => {
-            const rhs = @as(AST.TypeAnno.TypeAnnoFnRhs, @bitCast(node.data.rhs));
+            const rhs = @as(AST.TypeAnno.TypeAnnoFnRhs, @bitCast(node.data.untyped.rhs));
             return .{ .@"fn" = .{
                 .region = node.region,
                 .ret = @enumFromInt(store.extra_data.items[@as(usize, @intCast(node.main_token))]),
                 .args = .{ .span = .{
-                    .start = node.data.lhs,
+                    .start = node.data.untyped.lhs,
                     .len = @intCast(rhs.args_len),
                 } },
                 .effectful = rhs.effectful == 1,
@@ -1583,12 +1607,12 @@ pub fn getTypeAnno(store: *NodeStore, ty_anno_idx: AST.TypeAnno.Idx) AST.TypeAnn
         .ty_parens => {
             return .{ .parens = .{
                 .region = node.region,
-                .anno = @enumFromInt(node.data.lhs),
+                .anno = @enumFromInt(node.data.untyped.lhs),
             } };
         },
         .malformed => {
             return .{ .malformed = .{
-                .reason = @enumFromInt(node.data.lhs),
+                .reason = @enumFromInt(node.data.untyped.lhs),
                 .region = node.region,
             } };
         },

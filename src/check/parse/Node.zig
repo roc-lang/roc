@@ -435,7 +435,9 @@ pub const Tag = enum {
 ///
 /// The conventions should be documented for each Node
 /// Tag.
-pub const Data = struct {
-    lhs: u32,
-    rhs: u32,
+pub const Data = union(enum) {
+    untyped: struct {
+        lhs: u32,
+        rhs: u32,
+    },
 };
