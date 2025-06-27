@@ -12,7 +12,7 @@ permissions: {}
 jobs:
   nix-linux-x86:
     name: nix-linux-x86
-    runs-on: [self-hosted, i5-4690K]
+    runs-on: [self-hosted, amd-ryzen-7-5800-x]
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
