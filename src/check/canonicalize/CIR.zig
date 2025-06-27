@@ -1114,27 +1114,22 @@ pub const ExposedItem = struct {
 /// An expression that has been canonicalized.
 pub const Expr = union(enum) {
     num: struct {
-        num_var: TypeVar,
         value: IntValue,
         region: Region,
     },
     int: struct {
-        num_var: TypeVar,
         value: IntValue,
         region: Region,
     },
     frac_f64: struct {
-        frac_var: TypeVar,
         value: f64,
         region: Region,
     },
     frac_dec: struct {
-        frac_var: TypeVar,
         value: RocDec,
         region: Region,
     },
     dec_small: struct {
-        num_var: TypeVar,
         numerator: i16,
         denominator_power_of_ten: u8,
         region: Region,
