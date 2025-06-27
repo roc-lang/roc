@@ -260,7 +260,6 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
         .dec_small => |_| {},
         .str_segment => |_| {},
         .str => |_| {},
-        .single_quote => |_| {},
         .lookup => |_| {},
         .list => |list| {
             const elem_var = list.elem_var;

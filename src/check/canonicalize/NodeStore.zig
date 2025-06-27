@@ -901,10 +901,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             @panic("TODO addExpr num");
         },
 
-        .single_quote => |e| {
-            node.region = e.region;
-            @panic("TODO addExpr single_quote");
-        },
         .when => |e| {
             node.region = e.region;
             @panic("TODO addExpr when");

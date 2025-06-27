@@ -1115,9 +1115,7 @@ pub const ExposedItem = struct {
 pub const Expr = union(enum) {
     num: struct {
         num_var: TypeVar,
-        literal: StringLiteral.Idx,
         value: IntValue,
-        bound: types.Num.Int.Precision,
         region: Region,
     },
     int: struct {
@@ -1152,13 +1150,6 @@ pub const Expr = union(enum) {
     // An interpolated string contains one or more non-string_segment's in the span
     str: struct {
         span: Expr.Span,
-        region: Region,
-    },
-    single_quote: struct {
-        num_var: TypeVar,
-        precision_var: TypeVar,
-        value: u32,
-        bound: types.Num.Int.Precision,
         region: Region,
     },
     lookup: union(enum) {
@@ -1310,7 +1301,6 @@ pub const Expr = union(enum) {
             .dec_small => |e| return e.region,
             .str_segment => |e| return e.region,
             .str => |e| return e.region,
-            .single_quote => |e| return e.region,
             .lookup => |e| switch (e) {
                 .local => |local| return local.region,
                 .external => |_| {
@@ -1347,15 +1337,10 @@ pub const Expr = union(enum) {
                 // Add num_var
                 node.appendTypeVar(gpa, "num-var", num_expr.num_var);
 
-                // Add literal
-                node.appendStringAttr(gpa, "literal", ir.env.strings.get(num_expr.literal));
-
                 // Add value info
-                // TODO: Format the actual integer value properly
-                node.appendStringAttr(gpa, "value", "TODO");
-
-                // Add bound info
-                node.appendStringAttr(gpa, "bound", @tagName(num_expr.bound));
+                const value_str = std.fmt.allocPrint(gpa, "{}", .{num_expr.value}) catch |err| exitOnOom(err);
+                defer gpa.free(value_str);
+                node.appendStringAttr(gpa, "value", value_str);
 
                 return node;
             },
@@ -1463,26 +1448,6 @@ pub const Expr = union(enum) {
                 }
 
                 return str_node;
-            },
-            .single_quote => |e| {
-                var node = SExpr.init(gpa, "e-single-quote");
-                node.appendRegion(gpa, ir.calcRegionInfo(e.region));
-
-                // Add num_var
-                node.appendTypeVar(gpa, "num-var", e.num_var);
-
-                // Add precision_var
-                node.appendTypeVar(gpa, "precision-var", e.precision_var);
-
-                // Add value
-                const value_str = std.fmt.allocPrint(gpa, "'\\u{{{x}}}'", .{e.value}) catch |err| exitOnOom(err);
-                defer gpa.free(value_str);
-                node.appendStringAttr(gpa, "value", value_str);
-
-                // Add bound info
-                node.appendStringAttr(gpa, "bound", @tagName(e.bound));
-
-                return node;
             },
             .list => |l| {
                 var list_node = SExpr.init(gpa, "e-list");
