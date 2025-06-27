@@ -452,4 +452,8 @@ pub const Data = union(enum) {
         items_start: u32,
         items_len: u32,
     },
+    tag: struct {
+        args_start: u32,
+        args_len: u32,
+    },
 };

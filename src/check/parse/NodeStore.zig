@@ -417,8 +417,12 @@ pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) AST.Pattern.Idx {
             node.tag = .tag_patt;
             node.region = t.region;
             node.main_token = t.tag_tok;
-            node.data.untyped.lhs = t.args.span.start;
-            node.data.untyped.rhs = t.args.span.len;
+            node.data = .{
+                .tag = .{
+                    .args_start = t.args.span.start,
+                    .args_len = t.args.span.len,
+                },
+            };
         },
         .int => |n| {
             node.tag = .int_patt;
@@ -565,6 +569,12 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) AST.Expr.Idx {
             node.tag = .tag;
             node.region = e.region;
             node.main_token = e.token;
+            node.data = .{
+                .tag = .{
+                    .args_start = 0,
+                    .args_len = 0,
+                },
+            };
         },
         .lambda => |l| {
             node.tag = .lambda;
@@ -1178,8 +1188,8 @@ pub fn getPattern(store: *NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pattern {
             return .{ .tag = .{
                 .tag_tok = node.main_token,
                 .args = .{ .span = .{
-                    .start = node.data.untyped.lhs,
-                    .len = node.data.untyped.rhs,
+                    .start = node.data.tag.args_start,
+                    .len = node.data.tag.args_len,
                 } },
                 .region = node.region,
             } };
@@ -2147,6 +2157,34 @@ fn getTupleShape(store: *NodeStore, node_idx: Node.Idx) struct {
     return .{
         .items_start = node.data.tuple.items_start,
         .items_len = node.data.tuple.items_len,
+        .region = node.region,
+    };
+}
+
+fn addTagShape(store: *NodeStore, args_start: u32, args_len: u32, region: AST.TokenizedRegion, tag: Node.Tag) Node.Idx {
+    const node = Node{
+        .tag = tag,
+        .main_token = 0,
+        .data = .{
+            .tag = .{
+                .args_start = args_start,
+                .args_len = args_len,
+            },
+        },
+        .region = region,
+    };
+    return store.nodes.append(node);
+}
+
+fn getTagShape(store: *NodeStore, node_idx: Node.Idx) struct {
+    args_start: u32,
+    args_len: u32,
+    region: AST.TokenizedRegion,
+} {
+    const node = store.nodes.get(node_idx);
+    return .{
+        .args_start = node.data.tag.args_start,
+        .args_len = node.data.tag.args_len,
         .region = node.region,
     };
 }
