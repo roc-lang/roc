@@ -35,15 +35,29 @@ OpBar(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:4-1:8),Comma(1:8-1:9),LowerIdent(
 		(e-ident @1-26-1-30 (qaul "") (raw "name"))
 		(e-string-part @1-31-1-41 (raw ", you are "))
 		(e-field-access @1-43-1-56
-			(e-binop @1-43-1-56 (op "|")
-				(e-ident @1-43-1-46 (qaul "") (raw "age"))
-				(e-apply @1-46-1-55
-					(e-ident @1-46-1-53 (qaul "") (raw ".to_str")))))
+			(e-ident @1-43-1-46 (qaul "") (raw "age"))
+			(e-apply @1-46-1-55
+				(e-ident @1-46-1-53 (qaul "") (raw ".to_str"))))
 		(e-string-part @1-56-1-66 (raw " years old"))))
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
+~~~
+# CANONICALIZE
+~~~clojure
+(e-lambda @1-1-1-67 (id 83)
+	(args
+		(p-runtime-error @1-1-1-1 (tag "not_implemented") (id 73)))
+	(e-string @1-17-1-67
+		(e-literal @1-18-1-24 (string "Hello "))
+		(e-runtime-error (tag "ident_not_in_scope"))
+		(e-literal @1-31-1-41 (string ", you are "))
+		(e-dot-access @1-43-1-56 (field "to_str")
+			(receiver
+				(e-runtime-error (tag "ident_not_in_scope")))
+			(args))
+		(e-literal @1-56-1-66 (string " years old"))))
 ~~~
 # TYPES
 ~~~clojure

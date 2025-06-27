@@ -31,6 +31,13 @@ LowerIdent(3:1-3:2),OpAssign(3:3-3:4),Int(3:5-3:9),EndOfFile(3:9-3:9),
 ~~~roc
 NO CHANGE
 ~~~
+# CANONICALIZE
+~~~clojure
+(can-ir
+	(d-let (id 75)
+		(p-assign @3-1-3-2 (ident "x") (id 72))
+		(e-int @3-5-3-9 (num-var 74) (value "255") (id 74))))
+~~~
 # TYPES
 ~~~clojure
 (inferred-types

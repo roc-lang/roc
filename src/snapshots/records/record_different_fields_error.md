@@ -343,7 +343,37 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 	
 }
 ~~~
+# CANONICALIZE
+~~~clojure
+(e-block @1-1-8-2 (id 109)
+	(s-type-anno @2-5-2-39 (name "_privateField")
+		(ty-malformed @2-20-2-39))
+	(s-type-anno @3-5-3-33 (name "field_")
+		(ty-malformed @3-13-3-33))
+	(s-expr @4-5-4-16
+		(e-tag @4-5-4-15 (ext-var 0) (name "PascalCase") (args "TODO")))
+	(s-expr @4-17-4-26
+		(e-string @4-17-4-25
+			(e-literal @4-18-4-24 (string "pascal"))))
+	(s-expr @5-5-5-16
+		(e-binop @5-5-5-16 (op "sub")
+			(e-runtime-error (tag "ident_not_in_scope"))
+			(e-runtime-error (tag "ident_not_in_scope"))))
+	(s-expr @5-17-5-25
+		(e-string @5-17-5-24
+			(e-literal @5-18-5-23 (string "kebab"))))
+	(s-expr @6-5-6-11
+		(e-runtime-error (tag "ident_not_in_scope")))
+	(s-type-anno @6-11-6-27 (name "special")
+		(ty-malformed @6-20-6-27))
+	(s-expr @7-5-7-17
+		(e-runtime-error (tag "ident_not_in_scope")))
+	(s-expr @7-19-7-31
+		(e-string @7-19-7-30
+			(e-literal @7-20-7-29 (string "at symbol"))))
+	(e-empty_record @1-1-8-2))
+~~~
 # TYPES
 ~~~clojure
-(expr (id 106) (type "*"))
+(expr (id 109) (type "*"))
 ~~~

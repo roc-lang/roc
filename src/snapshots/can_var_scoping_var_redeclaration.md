@@ -48,9 +48,6 @@ The unused variable is declared here:
 ```
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize record expression
-
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),
@@ -116,12 +113,12 @@ NO CHANGE
 					(e-int @7-7-7-9 (num-var 84) (value "15") (id 84)))
 				(e-lookup-local @8-2-8-4
 					(pattern (id 76))))))
-	(d-let (id 96)
+	(d-let (id 95)
 		(p-assign @11-1-11-7 (ident "result") (id 91))
-		(e-call @11-10-11-27 (id 95)
+		(e-call @11-10-11-27 (id 94)
 			(e-lookup-local @11-10-11-23
 				(pattern (id 72)))
-			(e-runtime-error (tag "not_implemented")))))
+			(e-empty_record @11-24-11-26))))
 ~~~
 # TYPES
 ~~~clojure

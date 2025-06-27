@@ -35,14 +35,27 @@ OpBar(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:4-1:14),Comma(1:14-1:15),DoubleDo
 		(e-ident @1-35-1-45 (qaul "") (raw "first_name"))
 		(e-string-part @1-46-1-47 (raw " "))
 		(e-field-access @1-49-1-64
-			(e-binop @1-49-1-64 (op "|")
-				(e-ident @1-49-1-53 (qaul "") (raw "rest"))
-				(e-ident @1-53-1-63 (qaul "") (raw ".last_name"))))
+			(e-ident @1-49-1-53 (qaul "") (raw "rest"))
+			(e-ident @1-53-1-63 (qaul "") (raw ".last_name")))
 		(e-string-part @1-64-1-64 (raw ""))))
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
+~~~
+# CANONICALIZE
+~~~clojure
+(e-lambda @1-1-1-65 (id 83)
+	(args
+		(p-runtime-error @1-1-1-1 (tag "not_implemented") (id 73)))
+	(e-string @1-26-1-65
+		(e-literal @1-27-1-33 (string "Hello "))
+		(e-runtime-error (tag "ident_not_in_scope"))
+		(e-literal @1-46-1-47 (string " "))
+		(e-dot-access @1-49-1-64 (field "last_name")
+			(receiver
+				(e-runtime-error (tag "ident_not_in_scope"))))
+		(e-literal @1-64-1-64 (string ""))))
 ~~~
 # TYPES
 ~~~clojure

@@ -35,15 +35,18 @@ CloseCurly(3:1-3:2),EndOfFile(3:2-3:2),
 				(e-apply @2-55-2-80
 					(e-ident @2-55-2-62 (qaul "Str") (raw ".len"))
 					(e-field-access @2-63-2-80
-						(e-binop @2-63-2-80 (op "match")
-							(e-ident @2-63-2-69 (qaul "") (raw "others"))
-							(e-ident @2-69-2-79 (qaul "") (raw ".last_name")))))))))
+						(e-ident @2-63-2-69 (qaul "") (raw "others"))
+						(e-ident @2-69-2-79 (qaul "") (raw ".last_name"))))))))
 ~~~
 # FORMATTED
 ~~~roc
 match person {
 	{ first_name, ..others } => Str.len(first_name) > Str.len(others.last_name)
 }
+~~~
+# CANONICALIZE
+~~~clojure
+(e-runtime-error (tag "not_implemented") (id 73))
 ~~~
 # TYPES
 ~~~clojure

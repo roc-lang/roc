@@ -11,8 +11,17 @@ type=expr
 **NOT IMPLEMENTED**
 This feature is not yet implemented: canonicalize alternatives pattern
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize record expression
+**UNDEFINED VARIABLE**
+Nothing is named `name` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNDEFINED VARIABLE**
+Nothing is named `person` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNDEFINED VARIABLE**
+Nothing is named `age` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
@@ -44,7 +53,26 @@ OpBar(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:4-1:8),Comma(1:8-1:9),LowerIdent(
 ~~~roc
 NO CHANGE
 ~~~
+# CANONICALIZE
+~~~clojure
+(e-lambda @1-1-1-103 (id 94)
+	(args
+		(p-runtime-error @1-1-1-1 (tag "not_implemented") (id 73)))
+	(e-record @1-32-1-103 (ext-var 89)
+		(fields
+			(field (name "greeting")
+				(e-string @1-44-1-59
+					(e-literal @1-45-1-51 (string "Hello "))
+					(e-runtime-error (tag "ident_not_in_scope"))
+					(e-literal @1-58-1-58 (string ""))))
+			(field (name "full_record")
+				(e-runtime-error (tag "ident_not_in_scope")))
+			(field (name "is_adult")
+				(e-binop @1-92-1-103 (op "ge")
+					(e-runtime-error (tag "ident_not_in_scope"))
+					(e-int @1-99-1-101 (num-var 86) (value "18")))))))
+~~~
 # TYPES
 ~~~clojure
-(expr (id 76) (type "*"))
+(expr (id 94) (type "*"))
 ~~~

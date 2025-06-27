@@ -275,7 +275,67 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
         .when => |_| {},
         .@"if" => |_| {},
         .call => |_| {},
-        .record => |_| {},
+
+        .record => |e| {
+
+            // ## RECORD TYPE CHECKING IMPLEMENTATION
+            //
+            // This implementation performs field-by-field unification between the record
+            // structure's field type variables and the actual field value expression types.
+            //
+            // ### Process
+            // 1. Resolve the expression var to get the record structure
+            // 2. Type check each field value expression (to get concrete types)
+            // 3. For each field, unify the field type var with the field value type var
+            // 4. Unification propagates concrete types through the type system
+
+            const expr_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
+            const record_var_resolved = self.types.resolveVar(expr_var);
+            const record_var_content = record_var_resolved.desc.content;
+
+            // Process each field
+            for (self.can_ir.store.sliceRecordFields(e.fields)) |field_idx| {
+                const field = self.can_ir.store.getRecordField(field_idx);
+
+                // STEP 1: Check the field value expression first
+                // This ensures the field value has a concrete type to unify with
+                self.checkExpr(field.value);
+
+                // STEP 2: Find the corresponding field type in the record structure
+                // This only works if record_var_content is .structure.record
+                if (record_var_content == .structure and record_var_content.structure == .record) {
+                    const record_fields = self.types.getRecordFieldsSlice(record_var_content.structure.record.fields);
+
+                    // STEP 3: Find the field with matching name and unify types
+                    const field_names = record_fields.items(.name);
+                    const field_vars = record_fields.items(.var_);
+                    for (field_names, field_vars) |type_field_name, type_field_var| {
+                        if (self.can_ir.env.idents.identsHaveSameText(type_field_name, field.name)) {
+                            // Extract the type variable from the field value expression
+                            // Different expression types store their type variables in different places
+                            const field_expr = self.can_ir.store.getExpr(field.value);
+                            const field_expr_type_var = switch (field_expr) {
+                                .str, .str_segment => @as(Var, @enumFromInt(@intFromEnum(field.value))),
+                                .int => |int_expr| int_expr.num_var,
+                                .num => |num_expr| num_expr.num_var,
+                                .frac_f64 => |frac_expr| frac_expr.frac_var,
+                                .frac_dec => |frac_expr| frac_expr.frac_var,
+                                .dec_small => |dec_expr| dec_expr.num_var,
+                                else => @as(Var, @enumFromInt(@intFromEnum(field.value))),
+                            };
+
+                            // STEP 4: Unify field type variable with field value type variable
+                            // This is where concrete types (like Str, Num) get propagated
+                            // from field values to the record structure
+                            self.unify(type_field_var, field_expr_type_var);
+                            break;
+                        }
+                    }
+                }
+                // If record_var_content is NOT .structure.record, unification is skipped
+                // This typically happens when canonicalization didn't set the record structure properly
+            }
+        },
         .empty_record => |_| {},
         .record_access => |_| {},
         .tag => |_| {},

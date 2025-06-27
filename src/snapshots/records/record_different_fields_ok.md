@@ -12,9 +12,7 @@ type=expr
 }
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize record expression
-
+NIL
 # TOKENS
 ~~~zig
 OpenCurly(1:1-1:2),Newline(1:1-1:1),
@@ -44,7 +42,21 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 	camelCase: "camel",
 }
 ~~~
+# CANONICALIZE
+~~~clojure
+(e-record @1-1-5-2 (ext-var 81) (id 82)
+	(fields
+		(field (name "field_with_underscores")
+			(e-string @2-29-2-41
+				(e-literal @2-30-2-40 (string "underscore"))))
+		(field (name "field123")
+			(e-string @3-15-3-24
+				(e-literal @3-16-3-23 (string "numbers"))))
+		(field (name "camelCase")
+			(e-string @4-16-4-23
+				(e-literal @4-17-4-22 (string "camel"))))))
+~~~
 # TYPES
 ~~~clojure
-(expr (id 73) (type "Error"))
+(expr (id 82) (type "{ field_with_underscores: Str, field123: Str, camelCase: Str }"))
 ~~~

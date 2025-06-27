@@ -40,11 +40,10 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 					(e-ident @3-14-3-15 (qaul "") (raw "x"))
 					(e-int @3-18-3-19 (raw "1")))))
 		(e-field-access @4-5-5-2
-			(e-binop @4-5-5-2 (op "{")
-				(e-ident @4-5-4-9 (qaul "") (raw "list"))
-				(e-apply @4-9-4-17
-					(e-ident @4-9-4-13 (qaul "") (raw ".map"))
-					(e-ident @4-14-4-16 (qaul "") (raw "fn")))))))
+			(e-ident @4-5-4-9 (qaul "") (raw "list"))
+			(e-apply @4-9-4-17
+				(e-ident @4-9-4-13 (qaul "") (raw ".map"))
+				(e-ident @4-14-4-16 (qaul "") (raw "fn"))))))
 ~~~
 # FORMATTED
 ~~~roc

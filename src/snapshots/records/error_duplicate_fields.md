@@ -8,8 +8,39 @@ type=expr
 { name: "Alice", age: 30, name: "Bob", email: "alice@example.com", age: 25 }
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize record expression
+**DUPLICATE RECORD FIELD**
+The record field ``name`` appears more than once in this record.
+
+This field is duplicated here:
+**error_duplicate_fields.md:1:27:1:31:**
+```roc
+{ name: "Alice", age: 30, name: "Bob", email: "alice@example.com", age: 25 }
+```
+
+The field ``name`` was first defined here:
+**error_duplicate_fields.md:1:3:1:7:**
+```roc
+{ name: "Alice", age: 30, name: "Bob", email: "alice@example.com", age: 25 }
+```
+
+Record fields must have unique names. Consider renaming one of these fields or removing the duplicate.
+
+**DUPLICATE RECORD FIELD**
+The record field ``age`` appears more than once in this record.
+
+This field is duplicated here:
+**error_duplicate_fields.md:1:68:1:71:**
+```roc
+{ name: "Alice", age: 30, name: "Bob", email: "alice@example.com", age: 25 }
+```
+
+The field ``age`` was first defined here:
+**error_duplicate_fields.md:1:18:1:21:**
+```roc
+{ name: "Alice", age: 30, name: "Bob", email: "alice@example.com", age: 25 }
+```
+
+Record fields must have unique names. Consider renaming one of these fields or removing the duplicate.
 
 # TOKENS
 ~~~zig
@@ -36,7 +67,20 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:7),OpColon(1:7-1:8),StringStart(1:9-1:10),St
 ~~~roc
 NO CHANGE
 ~~~
+# CANONICALIZE
+~~~clojure
+(e-record @1-1-1-77 (ext-var 83) (id 84)
+	(fields
+		(field (name "name")
+			(e-string @1-9-1-16
+				(e-literal @1-10-1-15 (string "Alice"))))
+		(field (name "age")
+			(e-int @1-23-1-25 (num-var 76) (value "30")))
+		(field (name "email")
+			(e-string @1-47-1-66
+				(e-literal @1-48-1-65 (string "alice@example.com"))))))
+~~~
 # TYPES
 ~~~clojure
-(expr (id 73) (type "Error"))
+(expr (id 84) (type "{ name: Str, age: Num(*), email: Str }"))
 ~~~

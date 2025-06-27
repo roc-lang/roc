@@ -106,7 +106,18 @@ CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 	
 }
 ~~~
+# CANONICALIZE
+~~~clojure
+(e-block @1-1-4-2 (id 83)
+	(s-expr @1-3-1-11
+		(e-runtime-error (tag "ident_not_in_scope")))
+	(s-type-anno @2-5-2-13 (name "age")
+		(ty-malformed @2-10-2-13))
+	(s-type-anno @3-5-3-22 (name "active")
+		(ty @3-13-3-17 (name "Bool")))
+	(e-empty_record @1-1-4-2))
+~~~
 # TYPES
 ~~~clojure
-(expr (id 81) (type "*"))
+(expr (id 83) (type "*"))
 ~~~

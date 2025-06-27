@@ -34,18 +34,6 @@ Here is the problematic code:
 ```
 
 
-**UNDECLARED TYPE VARIABLE**
-The type variable ``elem`` is not declared in this scope.
-
-Type variables must be introduced in a type annotation before they can be used.
-
-This type variable is referenced here:
-**type_var_namespace.md:10:14:10:18:**
-```roc
-    result : elem
-```
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `first` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -53,9 +41,6 @@ Is there an `import` or `exposing` missing up-top?
 **UNDEFINED VARIABLE**
 Nothing is named `withDefault` in this scope.
 Is there an `import` or `exposing` missing up-top?
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize record expression
 
 # TOKENS
 ~~~zig
@@ -149,18 +134,20 @@ main! = |_| {}
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 107)
+	(d-let (id 108)
 		(p-assign @5-1-5-8 (ident "process") (id 78))
-		(e-lambda @5-11-14-2 (id 100)
+		(e-lambda @5-11-14-2 (id 101)
 			(args
 				(p-assign @5-12-5-16 (ident "list") (id 79)))
 			(e-block @5-18-14-2
 				(s-let @7-5-7-14
 					(p-assign @7-5-7-9 (ident "elem") (id 80))
 					(e-int @7-12-7-14 (num-var 82) (value "42") (id 82)))
+				(s-type-anno @10-5-11-11 (name "result")
+					(ty-var @10-14-10-18 (name "elem")))
 				(s-let @11-5-11-30
-					(p-assign @11-5-11-11 (ident "result") (id 87))
-					(e-call @11-14-11-30 (id 91)
+					(p-assign @11-5-11-11 (ident "result") (id 88))
+					(e-call @11-14-11-30 (id 92)
 						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-lookup-local @11-25-11-29
 							(pattern (id 79)))))
@@ -170,19 +157,19 @@ main! = |_| {}
 						(e-lookup-local @11-53-11-57
 							(pattern (id 80)))))
 				(e-lookup-local @13-5-13-11
-					(pattern (id 87)))))
-		(annotation @5-1-5-8 (signature 105) (id 106)
+					(pattern (id 88)))))
+		(annotation @5-1-5-8 (signature 106) (id 107)
 			(declared-type
 				(ty-fn @4-11-4-29 (effectful false)
 					(ty-apply @4-11-4-21 (symbol "List")
 						(ty-var @4-16-4-20 (name "elem")))
 					(ty-var @4-25-4-29 (name "elem"))))))
 	(d-let (id 113)
-		(p-assign @16-1-16-6 (ident "main!") (id 108))
+		(p-assign @16-1-16-6 (ident "main!") (id 109))
 		(e-lambda @16-9-16-15 (id 112)
 			(args
-				(p-underscore @16-10-16-11 (id 109)))
-			(e-runtime-error (tag "not_implemented")))))
+				(p-underscore @16-10-16-11 (id 110)))
+			(e-empty_record @16-13-16-15))))
 ~~~
 # TYPES
 ~~~clojure

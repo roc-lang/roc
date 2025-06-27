@@ -49,10 +49,9 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 				(args
 					(p-ident @4-16-4-20 (raw "list")))
 				(e-field-access @4-22-6-6
-					(e-binop @4-22-6-6 (op "app")
-						(e-ident @4-22-4-26 (qaul "") (raw "list"))
-						(e-apply @4-26-4-32
-							(e-ident @4-26-4-30 (qaul "") (raw ".len")))))))
+					(e-ident @4-22-4-26 (qaul "") (raw "list"))
+					(e-apply @4-26-4-32
+						(e-ident @4-26-4-30 (qaul "") (raw ".len"))))))
 		(s-decl @6-1-6-47
 			(p-ident @6-1-6-6 (raw "main!"))
 			(e-lambda @6-9-6-47

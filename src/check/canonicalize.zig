@@ -25,7 +25,12 @@ var_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
 /// Tracks which pattern indices have been used/referenced
 used_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
 /// Maps identifier names to pending type annotations awaiting connection to declarations
-pending_type_annos: std.StringHashMapUnmanaged(CIR.TypeAnno.Idx),
+pending_type_annos: std.ArrayListUnmanaged(PendingTypeAnno),
+
+const PendingTypeAnno = struct {
+    ident: base.Ident.Idx,
+    anno: CIR.TypeAnno.Idx,
+};
 
 const Ident = base.Ident;
 const Region = base.Region;
@@ -87,7 +92,7 @@ pub fn init(self: *CIR, parse_ir: *AST) Self {
         .var_function_regions = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, Region){},
         .var_patterns = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void){},
         .used_patterns = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void){},
-        .pending_type_annos = std.StringHashMapUnmanaged(CIR.TypeAnno.Idx){},
+        .pending_type_annos = std.ArrayListUnmanaged(PendingTypeAnno){},
     };
 
     // Top-level scope is not a function boundary
@@ -346,8 +351,7 @@ pub fn canonicalize_file(
                 const anno_idx = self.canonicalize_type_anno(ta.anno);
 
                 // Store annotation for connection to next declaration
-                const name_text = self.can_ir.env.idents.getText(name);
-                self.pending_type_annos.put(self.can_ir.env.gpa, name_text, anno_idx) catch |err| exitOnOom(err);
+                self.pending_type_annos.append(self.can_ir.env.gpa, .{ .ident = name, .anno = anno_idx }) catch |err| exitOnOom(err);
             },
             .malformed => |malformed| {
                 // We won't touch this since it's already a parse error.
@@ -724,10 +728,19 @@ fn canonicalize_decl(
     const pattern = self.can_ir.store.getPattern(pattern_idx);
     if (pattern == .assign) {
         const ident = pattern.assign.ident;
-        const ident_text = self.can_ir.env.idents.getText(ident);
 
         // Check if there's a pending type annotation for this identifier
-        if (self.pending_type_annos.get(ident_text)) |type_anno_idx| {
+        var found_anno_idx: ?CIR.TypeAnno.Idx = null;
+        var found_index: ?usize = null;
+        for (self.pending_type_annos.items, 0..) |pending, i| {
+            if (self.can_ir.env.idents.identsHaveSameText(ident, pending.ident)) {
+                found_anno_idx = pending.anno;
+                found_index = i;
+                break;
+            }
+        }
+
+        if (found_anno_idx) |type_anno_idx| {
             // Create a basic annotation from the type annotation
             const type_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), pattern_region);
 
@@ -735,7 +748,8 @@ fn canonicalize_decl(
             // TODO: Convert TypeAnno to proper type constraints and populate signature
             annotation = self.createAnnotationFromTypeAnno(type_anno_idx, type_var, pattern_region);
 
-            _ = self.pending_type_annos.remove(ident_text);
+            // Remove the used annotation
+            _ = self.pending_type_annos.swapRemove(found_index.?);
         }
     }
 
@@ -751,6 +765,43 @@ fn canonicalize_decl(
     _ = self.can_ir.setTypeVarAtDef(def_idx, Content{ .flex_var = null });
 
     return def_idx;
+}
+
+fn canonicalize_record_field(
+    self: *Self,
+    ast_field_idx: AST.RecordField.Idx,
+) ?CIR.RecordField.Idx {
+    const field = self.parse_ir.store.getRecordField(ast_field_idx);
+
+    // Canonicalize the field name
+    const name = self.parse_ir.tokens.resolveIdentifier(field.name) orelse {
+        return null;
+    };
+
+    // Canonicalize the field value
+    const value = if (field.value) |v|
+        self.canonicalize_expr(v) orelse return null
+    else blk: {
+        // Shorthand syntax: create implicit identifier expression
+        // For { name, age }, this creates an implicit identifier lookup for "name" etc.
+        const ident_expr = AST.Expr{
+            .ident = .{
+                .token = field.name,
+                .qualifier = null,
+                .region = field.region,
+            },
+        };
+        const ident_expr_idx = self.parse_ir.store.addExpr(ident_expr);
+        break :blk self.canonicalize_expr(ident_expr_idx) orelse return null;
+    };
+
+    // Create the CIR record field
+    const cir_field = CIR.RecordField{
+        .name = name,
+        .value = value,
+    };
+
+    return self.can_ir.store.addRecordField(cir_field);
 }
 
 /// Canonicalize an expression.
@@ -1245,12 +1296,128 @@ pub fn canonicalize_expr(
 
             return expr_idx;
         },
-        .record => |_| {
-            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize record expression");
-            const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
-                .feature = feature,
-                .region = Region.zero(),
-            } });
+        .record => |e| {
+            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
+
+            const fields_slice = self.parse_ir.store.recordFieldSlice(e.fields);
+            if (fields_slice.len == 0) {
+                const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
+                    .empty_record = .{
+                        .region = region,
+                    },
+                });
+
+                _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .structure = .empty_record });
+
+                return expr_idx;
+            }
+
+            // Mark the start of scratch record fields for the record
+            const scratch_top = self.can_ir.store.scratch_record_fields.top();
+
+            // Track field names to detect duplicates
+            const FieldInfo = struct { ident: base.Ident.Idx, region: base.Region };
+            var seen_fields = std.ArrayListUnmanaged(FieldInfo){};
+            defer seen_fields.deinit(self.can_ir.env.gpa);
+
+            // Iterate over the record fields, canonicalizing each one
+            // Then append the result to the scratch list
+            for (fields_slice) |field| {
+                const ast_field = self.parse_ir.store.getRecordField(field);
+
+                // Get the field name identifier
+                if (self.parse_ir.tokens.resolveIdentifier(ast_field.name)) |field_name_ident| {
+                    const field_name_region = self.parse_ir.tokens.resolve(ast_field.name);
+
+                    // Check for duplicate field names
+                    var found_duplicate = false;
+                    for (seen_fields.items) |seen_field| {
+                        if (self.can_ir.env.idents.identsHaveSameText(field_name_ident, seen_field.ident)) {
+                            // Found a duplicate - add diagnostic
+                            const diagnostic = CIR.Diagnostic{
+                                .duplicate_record_field = .{
+                                    .field_name = field_name_ident,
+                                    .duplicate_region = field_name_region,
+                                    .original_region = seen_field.region,
+                                },
+                            };
+                            self.can_ir.pushDiagnostic(diagnostic);
+                            found_duplicate = true;
+                            break;
+                        }
+                    }
+
+                    if (!found_duplicate) {
+                        // First occurrence of this field name
+                        seen_fields.append(self.can_ir.env.gpa, FieldInfo{
+                            .ident = field_name_ident,
+                            .region = field_name_region,
+                        }) catch |err| exitOnOom(err);
+
+                        // Only canonicalize and include non-duplicate fields
+                        if (self.canonicalize_record_field(field)) |canonicalized| {
+                            self.can_ir.store.scratch_record_fields.append(self.can_ir.env.gpa, canonicalized);
+                        }
+                    }
+                } else {
+                    // Field name couldn't be resolved, still try to canonicalize
+                    if (self.canonicalize_record_field(field)) |canonicalized| {
+                        self.can_ir.store.scratch_record_fields.append(self.can_ir.env.gpa, canonicalized);
+                    }
+                }
+            }
+
+            // Create span of the new scratch record fields
+            const fields_span = self.can_ir.store.recordFieldSpanFrom(scratch_top);
+
+            // create type vars, first "reserve" node slots
+            const record_expr_idx = self.can_ir.store.predictNodeIndex(1);
+
+            // then in the final slot the actual expr is inserted
+            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
+                .record = .{
+                    .fields = fields_span,
+                    .ext_var = self.can_ir.pushFreshTypeVar(record_expr_idx, region),
+                    .region = region,
+                },
+            });
+
+            // Create fresh type variables for each record field
+            // The type checker will unify these with the field expression types
+            const cir_fields = self.can_ir.store.sliceRecordFields(fields_span);
+
+            // Reserve additional type variable slots for field types
+            const field_count = cir_fields.len;
+            const total_vars_needed = 1 + field_count; // ext_var + field_vars
+            const record_with_fields_expr_idx = self.can_ir.store.predictNodeIndex(@intCast(total_vars_needed));
+
+            // Create fresh type variables for each field
+            var type_record_fields = std.ArrayList(types.RecordField).init(self.can_ir.env.gpa);
+            defer type_record_fields.deinit();
+
+            for (cir_fields) |cir_field_idx| {
+                const cir_field = self.can_ir.store.getRecordField(cir_field_idx);
+
+                // Create a fresh type variable for this field
+                const field_type_var = self.can_ir.pushFreshTypeVar(record_with_fields_expr_idx, region);
+
+                type_record_fields.append(types.RecordField{
+                    .name = cir_field.name,
+                    .var_ = field_type_var,
+                }) catch |err| exitOnOom(err);
+            }
+
+            // Create the record type structure
+            const type_fields_range = self.can_ir.env.types.appendRecordFields(type_record_fields.items);
+            const ext_var = self.can_ir.env.types.freshFromContent(.{ .structure = .empty_record });
+
+            // Set the record structure on the expression variable
+            // This provides the concrete type information for type checking and final output
+            _ = self.can_ir.setTypeVarAtExpr(
+                expr_idx,
+                Content{ .structure = .{ .record = .{ .fields = type_fields_range, .ext = ext_var } } },
+            );
+
             return expr_idx;
         },
         .lambda => |e| {
@@ -2688,7 +2855,8 @@ fn canonicalize_type_header(self: *Self, header_idx: AST.TypeHeader.Idx) CIR.Typ
     });
 }
 
-fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) ?CIR.Expr.Idx {
+/// Canonicalize a statement in the canonical IR.
+pub fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) ?CIR.Expr.Idx {
     const stmt = self.parse_ir.store.getStatement(stmt_idx);
 
     switch (stmt) {
@@ -2837,16 +3005,43 @@ fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) ?CIR.Expr.Id
                 } });
             };
 
-            // Canonicalize the type annotation
+            // First, extract all type variables from the AST annotation
+            var type_vars = std.ArrayList(Ident.Idx).init(self.can_ir.env.gpa);
+            defer type_vars.deinit();
+            self.extractTypeVarsFromASTAnno(ta.anno, &type_vars);
+
+            // Enter a new scope for type variables
+            self.scopeEnter(self.can_ir.env.gpa, false);
+            defer self.scopeExit(self.can_ir.env.gpa) catch {};
+
+            // Introduce type variables into scope
+            for (type_vars.items) |type_var| {
+                // Get the proper region for this type variable from the AST
+                const type_var_region = self.getTypeVarRegionFromAST(ta.anno, type_var) orelse region;
+                const type_var_anno = self.can_ir.store.addTypeAnno(.{ .ty_var = .{
+                    .name = type_var,
+                    .region = type_var_region,
+                } });
+                self.scopeIntroduceTypeVar(type_var, type_var_anno);
+            }
+
+            // Now canonicalize the annotation with type variables in scope
             const type_anno_idx = self.canonicalize_type_anno(ta.anno);
 
-            // Extract type variables from the annotation and introduce them into scope
-            // This makes them available for the subsequent value declaration
-            self.extractTypeVarsFromAnno(type_anno_idx);
-
             // Store the type annotation for connection with the next declaration
-            const name_text = self.can_ir.env.idents.getText(name_ident);
-            self.pending_type_annos.put(self.can_ir.env.gpa, name_text, type_anno_idx) catch |err| exitOnOom(err);
+            self.pending_type_annos.append(self.can_ir.env.gpa, .{ .ident = name_ident, .anno = type_anno_idx }) catch |err| exitOnOom(err);
+
+            // Create a type annotation statement
+            const type_anno_stmt = CIR.Statement{
+                .type_anno = .{
+                    .name = name_ident,
+                    .anno = type_anno_idx,
+                    .where = null, // Where clauses are not yet implemented in the parser
+                    .region = region,
+                },
+            };
+            const type_anno_stmt_idx = self.can_ir.store.addStatement(type_anno_stmt);
+            self.can_ir.store.addScratchStatement(type_anno_stmt_idx);
 
             // Type annotations don't produce runtime values, so return a unit expression
             // Create an empty tuple as a unit value
@@ -3050,9 +3245,13 @@ fn extractTypeVarsFromAnno(self: *Self, type_anno_idx: CIR.TypeAnno.Idx) void {
                 self.extractTypeVarsFromAnno(arg_idx);
             }
         },
-        .@"fn" => {
-            // Function type annotations are not yet implemented in CIR
-            // When implemented, extract from parameter and return types
+        .@"fn" => |fn_anno| {
+            // Extract type variables from function parameter types
+            for (self.can_ir.store.sliceTypeAnnos(fn_anno.args)) |param_idx| {
+                self.extractTypeVarsFromAnno(param_idx);
+            }
+            // Extract type variables from return type
+            self.extractTypeVarsFromAnno(fn_anno.ret);
         },
         .tuple => |tuple| {
             // Extract from tuple elements
@@ -3064,7 +3263,14 @@ fn extractTypeVarsFromAnno(self: *Self, type_anno_idx: CIR.TypeAnno.Idx) void {
             // Extract from inner annotation
             self.extractTypeVarsFromAnno(parens.anno);
         },
-        .ty, .underscore, .mod_ty, .record, .tag_union, .malformed => {
+        .record => |record| {
+            // Extract type variables from record field types
+            for (self.can_ir.store.sliceAnnoRecordFields(record.fields)) |field_idx| {
+                const field = self.can_ir.store.getAnnoRecordField(field_idx);
+                self.extractTypeVarsFromAnno(field.ty);
+            }
+        },
+        .ty, .underscore, .mod_ty, .tag_union, .malformed => {
             // These don't contain type variables to extract
         },
     }
@@ -3114,8 +3320,82 @@ fn extractTypeVarsFromASTAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, vars: *st
         .parens => |parens| {
             self.extractTypeVarsFromASTAnno(parens.anno, vars);
         },
-        .ty, .underscore, .mod_ty, .record, .tag_union, .malformed => {
+        .record => |record| {
+            // Extract type variables from record field types
+            for (self.parse_ir.store.annoRecordFieldSlice(record.fields)) |field_idx| {
+                const field = self.parse_ir.store.getAnnoRecordField(field_idx);
+                self.extractTypeVarsFromASTAnno(field.ty, vars);
+            }
+        },
+        .ty, .underscore, .mod_ty, .tag_union, .malformed => {
             // These don't contain type variables to extract
+        },
+    }
+}
+
+/// Get the region of a specific type variable from an AST type annotation
+fn getTypeVarRegionFromAST(self: *Self, anno_idx: AST.TypeAnno.Idx, target_ident: Ident.Idx) ?Region {
+    const ast_anno = self.parse_ir.store.getTypeAnno(anno_idx);
+
+    switch (ast_anno) {
+        .ty_var => |ty_var| {
+            if (self.parse_ir.tokens.resolveIdentifier(ty_var.tok)) |ident| {
+                if (ident.idx == target_ident.idx) {
+                    return self.parse_ir.tokenizedRegionToRegion(ty_var.region);
+                }
+            }
+            return null;
+        },
+        .apply => |apply| {
+            for (self.parse_ir.store.typeAnnoSlice(apply.args)) |arg_idx| {
+                if (self.getTypeVarRegionFromAST(arg_idx, target_ident)) |region| {
+                    return region;
+                }
+            }
+            return null;
+        },
+        .@"fn" => |fn_anno| {
+            for (self.parse_ir.store.typeAnnoSlice(fn_anno.args)) |arg_idx| {
+                if (self.getTypeVarRegionFromAST(arg_idx, target_ident)) |region| {
+                    return region;
+                }
+            }
+            return self.getTypeVarRegionFromAST(fn_anno.ret, target_ident);
+        },
+        .tuple => |tuple| {
+            for (self.parse_ir.store.typeAnnoSlice(tuple.annos)) |elem_idx| {
+                if (self.getTypeVarRegionFromAST(elem_idx, target_ident)) |region| {
+                    return region;
+                }
+            }
+            return null;
+        },
+        .parens => |parens| {
+            return self.getTypeVarRegionFromAST(parens.anno, target_ident);
+        },
+        .record => |record| {
+            for (self.parse_ir.store.annoRecordFieldSlice(record.fields)) |field_idx| {
+                const field = self.parse_ir.store.getAnnoRecordField(field_idx);
+                if (self.getTypeVarRegionFromAST(field.ty, target_ident)) |region| {
+                    return region;
+                }
+            }
+            return null;
+        },
+        .tag_union => |tag_union| {
+            for (self.parse_ir.store.typeAnnoSlice(tag_union.tags)) |tag_idx| {
+                if (self.getTypeVarRegionFromAST(tag_idx, target_ident)) |region| {
+                    return region;
+                }
+            }
+            if (tag_union.open_anno) |open_idx| {
+                return self.getTypeVarRegionFromAST(open_idx, target_ident);
+            }
+            return null;
+        },
+        .ty, .underscore, .mod_ty, .malformed => {
+            // These don't contain type variables
+            return null;
         },
     }
 }

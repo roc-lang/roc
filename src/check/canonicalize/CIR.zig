@@ -105,6 +105,16 @@ pub fn pushDiagnostic(self: *CIR, reason: CIR.Diagnostic) void {
 ///
 /// Use this when you need to replace a node (expression, pattern, etc.) with
 /// something that represents a compilation error but allows the compiler to continue.
+/// Creates a malformed CIR node with an error type variable.
+///
+/// This follows the "Inform Don't Block" principle - when compilation encounters
+/// an error, it creates a placeholder node and continues rather than stopping.
+/// The error will be reported to the user later.
+///
+/// **Usage**: When parsing or canonicalization encounters an error but needs
+/// to continue compilation.
+///
+/// **Example**: Used when encountering invalid syntax that can't be parsed properly.
 pub fn pushMalformed(self: *CIR, comptime t: type, reason: CIR.Diagnostic) t {
     const malformed_idx = self.store.addMalformed(t, reason);
     _ = self.setTypeVarAt(@enumFromInt(@intFromEnum(malformed_idx)), .err);
@@ -303,16 +313,42 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 filename,
             );
         },
+        .duplicate_record_field => |data| blk: {
+            const duplicate_region_info = self.calcRegionInfo(data.duplicate_region);
+            const original_region_info = self.calcRegionInfo(data.original_region);
+            const field_name = self.env.idents.getText(data.field_name);
+            break :blk try Diagnostic.buildDuplicateRecordFieldReport(
+                allocator,
+                field_name,
+                duplicate_region_info,
+                original_region_info,
+                source,
+                filename,
+            );
+        },
     };
 }
 
-/// Inserts a placeholder CIR node and creates a fresh variable in the types store at that index
+/// Creates a fresh flexible type variable for type inference.
+///
+/// This is a convenience wrapper around `pushTypeVar(.{ .flex_var = null }, ...)`.
+/// Use this for expressions where the type needs to be inferred, like integer
+/// literals before knowing their specific type (U64, I32, etc.).
+///
 pub fn pushFreshTypeVar(self: *CIR, parent_node_idx: Node.Idx, region: base.Region) types.Var {
     return self.pushTypeVar(.{ .flex_var = null }, parent_node_idx, region);
 }
 
-/// Inserts a placeholder CIR node and creates a type variable with the
-/// specified content in the types store at that index
+/// Creates a type variable with specific type content.
+///
+/// Use this to create type variables with predetermined structure or constraints,
+/// unlike `pushFreshTypeVar` which creates unconstrained flexible variables.
+///
+/// **Common content types**:
+/// - `.flex_var` - Flexible (same as pushFreshTypeVar)
+/// - `.rigid_var` - Named type variable for generics
+/// - `.structure` - Concrete types (nums, records, functions)
+/// - `.err` - Error type for malformed code
 pub fn pushTypeVar(self: *CIR, content: types.Content, parent_node_idx: Node.Idx, region: base.Region) types.Var {
     // insert a placeholder can node
     const var_slot = self.store.addTypeVarSlot(parent_node_idx, region);
@@ -327,22 +363,34 @@ pub fn pushTypeVar(self: *CIR, content: types.Content, parent_node_idx: Node.Idx
     return var_;
 }
 
-/// Set a type variable To the specified content at the specified CIR node index.
+/// Associates a type with an existing definition node.
+///
+/// Use this to set the concrete type of a definition after type inference.
 pub fn setTypeVarAtDef(self: *CIR, at_idx: Def.Idx, content: types.Content) types.Var {
     return self.setTypeVarAt(@enumFromInt(@intFromEnum(at_idx)), content);
 }
 
-/// Set a type variable To the specified content at the specified CIR node index.
+/// Associates a type with an existing expression node.
+///
+/// Use this to set the final type of an expression after type inference.
 pub fn setTypeVarAtExpr(self: *CIR, at_idx: Expr.Idx, content: types.Content) types.Var {
     return self.setTypeVarAt(@enumFromInt(@intFromEnum(at_idx)), content);
 }
 
-/// Set a type variable To the specified content at the specified CIR node index.
+/// Associates a type with an existing pattern node.
+///
+/// Use this to set the type of a pattern after type inference or from context.
 pub fn setTypeVarAtPat(self: *CIR, at_idx: Pattern.Idx, content: types.Content) types.Var {
     return self.setTypeVarAt(@enumFromInt(@intFromEnum(at_idx)), content);
 }
 
-/// Set a type variable To the specified content at the specified CIR node index.
+/// Core function that associates a type with any existing CIR node.
+///
+/// This is used by all the `setTypeVarAt*` wrapper functions. Node indices
+/// correspond directly to type variable indices, allowing direct conversion.
+/// Usually called indirectly through the typed wrappers rather than directly.
+///
+/// **Note**: The node must already exist - this only sets types, not create nodes.
 pub fn setTypeVarAt(self: *CIR, at_idx: Node.Idx, content: types.Content) types.Var {
     // if the new can node idx is greater than the types store length, backfill
     const var_: types.Var = @enumFromInt(@intFromEnum(at_idx));
@@ -693,6 +741,18 @@ pub const RecordField = struct {
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
+
+    pub fn toSExpr(self: *const @This(), ir: *CIR, env: *ModuleEnv) SExpr {
+        const gpa = ir.env.gpa;
+        var node = SExpr.init(gpa, "field");
+
+        node.appendStringAttr(gpa, "name", ir.getIdentText(self.name));
+
+        var value_node = ir.store.getExpr(self.value).toSExpr(ir, env);
+        node.appendNode(gpa, &value_node);
+
+        return node;
+    }
 };
 
 /// TODO: implement WhereClause
@@ -1105,7 +1165,6 @@ pub const Expr = union(enum) {
         local: Lookup,
         external: ExternalDecl.Idx,
     },
-    // TODO introduce a new node for re-assign here, used by Var instead of lookup
     list: struct {
         elem_var: TypeVar,
         elems: Expr.Span,
@@ -1131,10 +1190,10 @@ pub const Expr = union(enum) {
         region: Region,
     },
     record: struct {
+        /// type var for the record extension
         ext_var: TypeVar,
+        fields: RecordField.Span,
         region: Region,
-        // TODO:
-        // fields: SendMap<Lowercase, Field>,
     },
     /// Empty record constant
     empty_record: struct {
@@ -1555,11 +1614,16 @@ pub const Expr = union(enum) {
                 var record_node = SExpr.init(gpa, "e-record");
                 record_node.appendRegion(gpa, ir.calcRegionInfo(record_expr.region));
 
-                // Add record_var
+                // Add ext_var
                 record_node.appendTypeVar(gpa, "ext-var", record_expr.ext_var);
 
-                // TODO: Add fields when implemented
-                record_node.appendStringAttr(gpa, "fields", "TODO");
+                // Add fields
+                var fields_node = SExpr.init(gpa, "fields");
+                for (ir.store.sliceRecordFields(record_expr.fields)) |field_idx| {
+                    var field_node = ir.store.getRecordField(field_idx).toSExpr(ir, env);
+                    fields_node.appendNode(gpa, &field_node);
+                }
+                record_node.appendNode(gpa, &fields_node);
 
                 return record_node;
             },

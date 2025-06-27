@@ -36,9 +36,6 @@ Variables declared with `var` can only be reassigned within the same function sc
 Cannot reassign a `var` from outside the function where it was declared.
 Variables declared with `var` can only be reassigned within the same function scope.
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize record expression
-
 **UNUSED VARIABLE**
 Variable ``items`` is not used anywhere in your code.
 
@@ -135,9 +132,9 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 116)
+	(d-let (id 115)
 		(p-assign @4-1-4-13 (ident "processItems") (id 72))
-		(e-lambda @4-16-21-2 (id 114)
+		(e-lambda @4-16-21-2 (id 113)
 			(args
 				(p-assign @4-17-4-22 (ident "items") (id 73)))
 			(e-block @4-24-21-2
@@ -175,10 +172,10 @@ NO CHANGE
 								(pattern (id 76))))))
 				(s-let @19-2-19-25
 					(p-assign @19-2-19-8 (ident "result") (id 104))
-					(e-call @19-11-19-25 (id 108)
+					(e-call @19-11-19-25 (id 107)
 						(e-lookup-local @19-11-19-21
 							(pattern (id 92)))
-						(e-runtime-error (tag "not_implemented"))))
+						(e-empty_record @19-22-19-24)))
 				(e-binop @20-2-21-2 (op "add")
 					(e-lookup-local @20-2-20-8
 						(pattern (id 80)))

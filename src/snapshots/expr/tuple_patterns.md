@@ -137,9 +137,6 @@ Is there an `import` or `exposing` missing up-top?
 Nothing is named `hello` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize record expression
-
 # TOKENS
 ~~~zig
 OpenCurly(1:1-1:2),Newline(1:1-1:1),
@@ -255,7 +252,7 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1-1-19-2 (id 160)
+(e-block @1-1-19-2 (id 159)
 	(s-expr @4-5-4-13
 		(e-tuple @4-5-4-11
 			(elems
@@ -329,9 +326,9 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 						(e-int @16-29-16-30 (num-var 151) (value "3"))))
 				(e-string @16-33-16-40
 					(e-literal @16-34-16-39 (string "hello"))))))
-	(e-runtime-error (tag "not_implemented")))
+	(e-empty_record @18-5-18-7))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 160) (type "*"))
+(expr (id 159) (type "*"))
 ~~~

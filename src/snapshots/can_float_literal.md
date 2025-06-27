@@ -41,6 +41,19 @@ LowerIdent(5:1-5:2),OpAssign(5:3-5:4),Float(5:5-5:8),EndOfFile(5:8-5:8),
 ~~~roc
 NO CHANGE
 ~~~
+# CANONICALIZE
+~~~clojure
+(can-ir
+	(d-let (id 76)
+		(p-assign @3-1-3-2 (ident "x") (id 72))
+		(e-dec-small @3-5-3-9 (num-var 75) (numerator "314") (denominator-power-of-ten "2") (value "3.14") (id 75)))
+	(d-let (id 81)
+		(p-assign @4-1-4-2 (ident "y") (id 77))
+		(e-frac-f64 @4-5-4-12 (frac-var 80) (value "1.23e45") (id 80)))
+	(d-let (id 86)
+		(p-assign @5-1-5-2 (ident "z") (id 82))
+		(e-dec-small @5-5-5-8 (num-var 85) (numerator "5") (denominator-power-of-ten "1") (value "0.5") (id 85))))
+~~~
 # TYPES
 ~~~clojure
 (inferred-types

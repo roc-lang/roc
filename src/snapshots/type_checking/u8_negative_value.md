@@ -44,6 +44,16 @@ LowerIdent(4:1-4:2),OpAssign(4:3-4:4),Int(4:5-4:7),EndOfFile(4:7-4:7),
 ~~~roc
 NO CHANGE
 ~~~
+# CANONICALIZE
+~~~clojure
+(can-ir
+	(d-let (id 79)
+		(p-assign @4-1-4-2 (ident "x") (id 73))
+		(e-int @4-5-4-7 (num-var 75) (value "-1") (id 75))
+		(annotation @4-1-4-2 (signature 77) (id 78)
+			(declared-type
+				(ty @3-5-3-7 (name "U8"))))))
+~~~
 # TYPES
 ~~~clojure
 (inferred-types

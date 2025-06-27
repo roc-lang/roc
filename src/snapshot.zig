@@ -1548,7 +1548,11 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, maybe_f
             maybe_expr_idx = can.canonicalize_expr(expr_idx);
         },
         .statement => {
-            // TODO: implement canonicalize_statement when available
+            // Manually track scratch statements because we aren't using the file entrypoint
+            const stmt_idx: AST.Statement.Idx = @enumFromInt(parse_ast.root_node_idx);
+            const scratch_statements_start = can_ir.store.scratch_statements.top();
+            _ = can.canonicalize_statement(stmt_idx);
+            can_ir.all_statements = can_ir.store.statementSpanFrom(scratch_statements_start);
         },
     }
 
@@ -1583,9 +1587,7 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, maybe_f
     // Generate remaining sections
     try generateParseSection(&output, &content, &parse_ast, &module_env);
     try generateFormattedSection(&output, &content, &parse_ast);
-    if (content.has_canonicalize) {
-        try generateCanonicalizeSection(&output, &content, &can_ir, &module_env, maybe_expr_idx);
-    }
+    try generateCanonicalizeSection(&output, &content, &can_ir, &module_env, maybe_expr_idx);
     try generateTypesSection(&output, &content, &can_ir, maybe_expr_idx);
 
     // Generate HTML closing

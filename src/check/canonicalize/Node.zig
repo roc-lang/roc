@@ -42,6 +42,8 @@ pub const Tag = enum {
     expr_list,
     expr_call,
     expr_record,
+    expr_empty_record,
+    record_field,
     expr_field_access,
     expr_static_dispatch,
     expr_external_lookup,
@@ -147,4 +149,5 @@ pub const Tag = enum {
     diag_type_parameter_conflict,
     diag_unused_variable,
     diag_used_underscore_variable,
+    diag_duplicate_record_field,
 };

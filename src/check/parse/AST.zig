@@ -1898,8 +1898,11 @@ pub const Expr = union(enum) {
 
                 node.appendRegion(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
 
-                var child = a.toSExpr(env, ast);
-                node.appendNode(env.gpa, &child);
+                var left = ast.store.getExpr(a.left).toSExpr(env, ast);
+                node.appendNode(env.gpa, &left);
+
+                var right = ast.store.getExpr(a.right).toSExpr(env, ast);
+                node.appendNode(env.gpa, &right);
                 return node;
             },
             .local_dispatch => |a| {

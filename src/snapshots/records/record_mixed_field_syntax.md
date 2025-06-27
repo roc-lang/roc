@@ -8,8 +8,17 @@ type=expr
 { name, age: 30, email, status: "active", balance }
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize record expression
+**UNDEFINED VARIABLE**
+Nothing is named `name` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNDEFINED VARIABLE**
+Nothing is named `email` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNDEFINED VARIABLE**
+Nothing is named `balance` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
@@ -31,7 +40,23 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:7),Comma(1:7-1:8),LowerIdent(1:9-1:12),OpCol
 ~~~roc
 NO CHANGE
 ~~~
+# CANONICALIZE
+~~~clojure
+(e-record @1-1-1-52 (ext-var 87) (id 88)
+	(fields
+		(field (name "name")
+			(e-runtime-error (tag "ident_not_in_scope")))
+		(field (name "age")
+			(e-int @1-14-1-16 (num-var 76) (value "30")))
+		(field (name "email")
+			(e-runtime-error (tag "ident_not_in_scope")))
+		(field (name "status")
+			(e-string @1-33-1-41
+				(e-literal @1-34-1-40 (string "active"))))
+		(field (name "balance")
+			(e-runtime-error (tag "ident_not_in_scope")))))
+~~~
 # TYPES
 ~~~clojure
-(expr (id 73) (type "Error"))
+(expr (id 88) (type "{ name: Error, age: Num(*), email: Error, status: Str, balance: Error }"))
 ~~~

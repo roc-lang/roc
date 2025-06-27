@@ -20,14 +20,21 @@ LowerIdent(1:1-1:7),NoSpaceDotLowerIdent(1:7-1:11),OpPlus(1:12-1:13),Int(1:14-1:
 ~~~clojure
 (e-binop @1-1-1-15 (op "+")
 	(e-field-access @1-1-1-13
-		(e-binop @1-1-1-13 (op "person")
-			(e-ident @1-1-1-7 (qaul "") (raw "person"))
-			(e-ident @1-7-1-11 (qaul "") (raw ".age"))))
+		(e-ident @1-1-1-7 (qaul "") (raw "person"))
+		(e-ident @1-7-1-11 (qaul "") (raw ".age")))
 	(e-int @1-14-1-15 (raw "5")))
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
+~~~
+# CANONICALIZE
+~~~clojure
+(e-binop @1-1-1-15 (op "add") (id 77)
+	(e-dot-access @1-1-1-13 (field "age")
+		(receiver
+			(e-runtime-error (tag "ident_not_in_scope"))))
+	(e-int @1-14-1-15 (num-var 76) (value "5")))
 ~~~
 # TYPES
 ~~~clojure

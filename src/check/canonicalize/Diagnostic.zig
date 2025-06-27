@@ -112,6 +112,11 @@ pub const Diagnostic = union(enum) {
         ident: Ident.Idx,
         region: Region,
     },
+    duplicate_record_field: struct {
+        field_name: Ident.Idx,
+        duplicate_region: Region,
+        original_region: Region,
+    },
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
@@ -145,6 +150,7 @@ pub const Diagnostic = union(enum) {
             .type_parameter_conflict => |d| d.region,
             .unused_variable => |d| d.region,
             .used_underscore_variable => |d| d.region,
+            .duplicate_record_field => |d| d.duplicate_region,
         };
     }
 
@@ -793,6 +799,57 @@ pub const Diagnostic = union(enum) {
             .error_highlight,
             filename,
         );
+
+        return report;
+    }
+
+    pub fn buildDuplicateRecordFieldReport(
+        allocator: Allocator,
+        field_name: []const u8,
+        duplicate_region_info: base.RegionInfo,
+        original_region_info: base.RegionInfo,
+        source: []const u8,
+        filename: []const u8,
+    ) !Report {
+        var report = Report.init(allocator, "DUPLICATE RECORD FIELD", .runtime_error);
+        const owned_field_name = try report.addOwnedString(field_name);
+
+        try report.document.addText("The record field `");
+        try report.document.addUnqualifiedSymbol(owned_field_name);
+        try report.document.addText("` appears more than once in this record.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        // Show where the duplicate field is
+        try report.document.addText("This field is duplicated here:");
+        try report.document.addLineBreak();
+        try report.document.addSourceRegion(
+            source,
+            duplicate_region_info.start_line_idx,
+            duplicate_region_info.start_col_idx,
+            duplicate_region_info.end_line_idx,
+            duplicate_region_info.end_col_idx,
+            .error_highlight,
+            filename,
+        );
+
+        try report.document.addLineBreak();
+        try report.document.addText("The field `");
+        try report.document.addUnqualifiedSymbol(owned_field_name);
+        try report.document.addText("` was first defined here:");
+        try report.document.addLineBreak();
+        try report.document.addSourceRegion(
+            source,
+            original_region_info.start_line_idx,
+            original_region_info.start_col_idx,
+            original_region_info.end_line_idx,
+            original_region_info.end_col_idx,
+            .dimmed,
+            filename,
+        );
+
+        try report.document.addLineBreak();
+        try report.document.addText("Record fields must have unique names. Consider renaming one of these fields or removing the duplicate.");
 
         return report;
     }
