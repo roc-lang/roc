@@ -160,11 +160,11 @@ fn processSourceInternal(
         const report = problem.buildReport(
             gpa,
             &problem_buf,
+            &module_env,
+            cir,
             &solver.snapshots,
-            &module_env.idents,
             owned_source,
             filename,
-            &module_env,
         ) catch continue;
         reports.append(report) catch continue;
     }

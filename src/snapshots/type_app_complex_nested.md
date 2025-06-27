@@ -308,9 +308,9 @@ main! = |_| processComplex(Ok([Some(42), None]))
 									(ty-var @11-42-11-43 (name "a"))))
 							(ty-var @11-47-11-48 (name "b"))))
 					(ty-var @11-54-11-55 (name "a"))))))
-	(d-let (id 157)
+	(d-let (id 156)
 		(p-assign @17-1-17-6 (ident "main!") (id 139))
-		(e-lambda @17-9-17-49 (id 156)
+		(e-lambda @17-9-17-49 (id 155)
 			(args
 				(p-underscore @17-10-17-11 (id 140)))
 			(e-call @17-13-17-49
@@ -318,11 +318,11 @@ main! = |_| processComplex(Ok([Some(42), None]))
 					(pattern (id 98)))
 				(e-call @17-28-17-48
 					(e-tag @17-28-17-30 (ext-var 0) (name "Ok") (args "TODO"))
-					(e-list @17-31-17-47 (elem-var 152)
+					(e-list @17-31-17-47 (elem-var 151)
 						(elems
 							(e-call @17-32-17-40
 								(e-tag @17-32-17-36 (ext-var 0) (name "Some") (args "TODO"))
-								(e-int @17-37-17-39 (int-var 147) (precision-var 146) (literal "42") (value "TODO") (bound "u8")))
+								(e-int @17-37-17-39 (num-var 147) (value "42")))
 							(e-tag @17-42-17-46 (ext-var 0) (name "None") (args "TODO"))))))))
 	(s-type-decl @15-1-17-6 (id 83)
 		(ty-header @15-1-15-18 (name "ComplexType")

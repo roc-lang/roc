@@ -3,6 +3,7 @@
 const std = @import("std");
 const base = @import("../../base.zig");
 const collections = @import("../../collections.zig");
+const can = @import("../canonicalize.zig");
 const types = @import("../../types/types.zig");
 const reporting = @import("../../reporting.zig");
 const store_mod = @import("../../types/store.zig");
@@ -24,6 +25,8 @@ const Content = types.Content;
 /// The kind of problem we're dealing with
 pub const Problem = union(enum) {
     type_mismatch: VarProblem2,
+    number_does_not_fit: NumberDoesNotFit,
+    negative_unsigned_int: NegativeUnsignedInt,
     infinite_recursion: struct { var_: Var },
     anonymous_recursion: struct { var_: Var },
     invalid_number_type: VarProblem1,
@@ -39,21 +42,54 @@ pub const Problem = union(enum) {
         problem: Problem,
         gpa: Allocator,
         buf: *std.ArrayList(u8),
+        module_env: *const base.ModuleEnv,
+        can_ir: *const can.CIR,
         snapshots: *const snapshot.Store,
-        idents: *const Ident.Store,
         source: []const u8,
         filename: []const u8,
-        module_env: *base.ModuleEnv,
     ) !Report {
         var snapshot_writer = snapshot.SnapshotWriter.init(
             buf.writer(),
             snapshots,
-            idents,
+            &module_env.idents,
         );
 
         switch (problem) {
             .type_mismatch => |vars| {
-                return buildTypeMismatchReport(gpa, buf, &snapshot_writer, vars, source, filename, module_env);
+                return buildTypeMismatchReport(
+                    gpa,
+                    buf,
+                    module_env,
+                    can_ir,
+                    &snapshot_writer,
+                    vars,
+                    source,
+                    filename,
+                );
+            },
+            .number_does_not_fit => |data| {
+                return buildNumberDoesNotFitReport(
+                    gpa,
+                    buf,
+                    module_env,
+                    can_ir,
+                    &snapshot_writer,
+                    data,
+                    source,
+                    filename,
+                );
+            },
+            .negative_unsigned_int => |data| {
+                return buildNegativeUnsignedIntReport(
+                    gpa,
+                    buf,
+                    module_env,
+                    can_ir,
+                    &snapshot_writer,
+                    data,
+                    source,
+                    filename,
+                );
             },
             .infinite_recursion => |_| return buildUnimplementedReport(gpa),
             .anonymous_recursion => |_| return buildUnimplementedReport(gpa),
@@ -66,28 +102,28 @@ pub const Problem = union(enum) {
 
     /// Build a report for type mismatch diagnostic
     pub fn buildTypeMismatchReport(
-        allocator: Allocator,
+        gpa: Allocator,
         buf: *std.ArrayList(u8),
+        module_env: *const base.ModuleEnv,
+        can_ir: *const can.CIR,
         writer: *snapshot.SnapshotWriter,
         vars: VarProblem2,
         source: []const u8,
         filename: []const u8,
-        module_env: *base.ModuleEnv,
     ) !Report {
-        var report = Report.init(allocator, "TYPE MISMATCH", .runtime_error);
+        var report = Report.init(gpa, "TYPE MISMATCH", .runtime_error);
 
         try writer.write(vars.expected);
         const owned_expected = try report.addOwnedString(buf.items[0..]);
 
-        const buf_len = buf.items.len;
+        buf.clearRetainingCapacity();
         try writer.write(vars.actual);
-        const owned_actual = try report.addOwnedString(buf.items[buf_len..]);
+        const owned_actual = try report.addOwnedString(buf.items[0..]);
 
-        try report.document.addReflowingText("This expression is used in an unexpected way:");
-        try report.document.addLineBreak();
+        const region = can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(vars.actual_var)));
 
         // Add source region highlighting
-        const region_info = module_env.calcRegionInfo(source, vars.region.start.offset, vars.region.end.offset) catch |err| switch (err) {
+        const region_info = module_env.calcRegionInfo(source, region.start.offset, region.end.offset) catch |err| switch (err) {
             else => base.RegionInfo{
                 .start_line_idx = 0,
                 .start_col_idx = 0,
@@ -96,6 +132,9 @@ pub const Problem = union(enum) {
                 .line_text = "",
             },
         };
+
+        try report.document.addReflowingText("This expression is used in an unexpected way:");
+        try report.document.addLineBreak();
 
         try report.document.addSourceRegion(
             source,
@@ -116,6 +155,143 @@ pub const Problem = union(enum) {
         try report.document.addLineBreak();
 
         try report.document.addText("But you are trying to use it as:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(owned_expected, .type_variable);
+
+        // Add a hint if this looks like a numeric literal size issue
+        const actual_str = owned_actual;
+        const expected_str = owned_expected;
+
+        // Check if we're dealing with numeric types
+        const is_numeric_issue = (std.mem.indexOf(u8, actual_str, "Num(") != null and
+            std.mem.indexOf(u8, expected_str, "Num(") != null);
+
+        // Check if target is a concrete integer type
+        const has_unsigned = std.mem.indexOf(u8, expected_str, "Unsigned") != null;
+        const has_signed = std.mem.indexOf(u8, expected_str, "Signed") != null;
+
+        if (is_numeric_issue and (has_unsigned or has_signed)) {
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addAnnotated("Hint:", .emphasized);
+            if (has_unsigned) {
+                try report.document.addReflowingText(" This might be because the numeric literal is either negative or too large to fit in the unsigned type.");
+            } else {
+                try report.document.addReflowingText(" This might be because the numeric literal is too large to fit in the target type.");
+            }
+        }
+
+        return report;
+    }
+
+    /// Build a report for "number does not fit in type" diagnostic
+    pub fn buildNumberDoesNotFitReport(
+        gpa: Allocator,
+        buf: *std.ArrayList(u8),
+        module_env: *const base.ModuleEnv,
+        can_ir: *const can.CIR,
+        writer: *snapshot.SnapshotWriter,
+        data: NumberDoesNotFit,
+        source: []const u8,
+        filename: []const u8,
+    ) !Report {
+        var report = Report.init(gpa, "NUMBER DOES NOT FIT IN TYPE", .runtime_error);
+
+        buf.clearRetainingCapacity();
+        try writer.write(data.expected_type);
+        const owned_expected = try report.addOwnedString(buf.items[0..]);
+
+        const region = can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(data.literal_var)));
+
+        // Add source region highlighting
+        const region_info = module_env.calcRegionInfo(source, region.start.offset, region.end.offset) catch |err| switch (err) {
+            else => base.RegionInfo{
+                .start_line_idx = 0,
+                .start_col_idx = 0,
+                .end_line_idx = 0,
+                .end_col_idx = 0,
+                .line_text = "",
+            },
+        };
+        const literal_text = source[region.start.offset..region.end.offset];
+
+        try report.document.addReflowingText("The number ");
+        try report.document.addAnnotated(literal_text, .emphasized);
+        try report.document.addReflowingText(" does not fit in its inferred type:");
+        try report.document.addLineBreak();
+
+        try report.document.addSourceRegion(
+            source,
+            region_info.start_line_idx,
+            region_info.start_col_idx,
+            region_info.end_line_idx,
+            region_info.end_col_idx,
+            .error_highlight,
+            filename,
+        );
+        try report.document.addLineBreak();
+
+        try report.document.addText("Its inferred type is:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(owned_expected, .type_variable);
+
+        return report;
+    }
+
+    /// Build a report for "negative unsigned integer" diagnostic
+    pub fn buildNegativeUnsignedIntReport(
+        gpa: Allocator,
+        buf: *std.ArrayList(u8),
+        module_env: *const base.ModuleEnv,
+        can_ir: *const can.CIR,
+        writer: *snapshot.SnapshotWriter,
+        data: NegativeUnsignedInt,
+        source: []const u8,
+        filename: []const u8,
+    ) !Report {
+        var report = Report.init(gpa, "NEGATIVE UNSIGNED INTEGER", .runtime_error);
+
+        buf.clearRetainingCapacity();
+        try writer.write(data.expected_type);
+        const owned_expected = try report.addOwnedString(buf.items[0..]);
+
+        const region = can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(data.literal_var)));
+
+        // Add source region highlighting
+        const region_info = module_env.calcRegionInfo(source, region.start.offset, region.end.offset) catch |err| switch (err) {
+            else => base.RegionInfo{
+                .start_line_idx = 0,
+                .start_col_idx = 0,
+                .end_line_idx = 0,
+                .end_col_idx = 0,
+                .line_text = "",
+            },
+        };
+        const literal_text = source[region.start.offset..region.end.offset];
+
+        try report.document.addReflowingText("The number ");
+        try report.document.addAnnotated(literal_text, .emphasized);
+        try report.document.addReflowingText(" is ");
+        try report.document.addAnnotated("signed", .emphasized);
+        try report.document.addReflowingText(" because it is negative:");
+        try report.document.addLineBreak();
+
+        try report.document.addSourceRegion(
+            source,
+            region_info.start_line_idx,
+            region_info.start_col_idx,
+            region_info.end_line_idx,
+            region_info.end_col_idx,
+            .error_highlight,
+            filename,
+        );
+        try report.document.addLineBreak();
+
+        try report.document.addText("However, its inferred type is ");
+        try report.document.addAnnotated("unsigned", .emphasized);
+        try report.document.addReflowingText(":");
         try report.document.addLineBreak();
         try report.document.addText("    ");
         try report.document.addAnnotated(owned_expected, .type_variable);
@@ -142,7 +318,18 @@ pub const VarProblem2 = struct {
     expected: SnapshotContentIdx,
     actual_var: Var,
     actual: SnapshotContentIdx,
-    region: base.Region,
+};
+
+/// Number literal doesn't fit in the expected type
+pub const NumberDoesNotFit = struct {
+    literal_var: Var,
+    expected_type: SnapshotContentIdx,
+};
+
+/// Negative literal assigned to unsigned type
+pub const NegativeUnsignedInt = struct {
+    literal_var: Var,
+    expected_type: SnapshotContentIdx,
 };
 
 /// Self-contained problems store with resolved snapshots of type content

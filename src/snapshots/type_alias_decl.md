@@ -109,9 +109,6 @@ Only definitions, type annotations, and imports are allowed at the top level.
 The statement **expr** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize record expression
-
 **INVALID STATEMENT**
 The statement **expr** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
@@ -320,16 +317,22 @@ userId
 			(args
 				(p-underscore @27-10-27-11 (id 129)))
 			(e-runtime-error (tag "lambda_body_not_canonicalized"))))
-	(d-let (id 143)
+	(d-let (id 151)
 		(p-assign @33-5-33-11 (ident "person") (id 137))
-		(e-runtime-error (tag "not_implemented") (id 139))
-		(annotation @33-5-33-11 (signature 141) (id 142)
+		(e-record @33-14-33-40 (ext-var 144) (id 145)
+			(fields
+				(field (name "name")
+					(e-string @33-22-33-29
+						(e-literal @33-23-33-28 (string "Alice"))))
+				(field (name "age")
+					(e-int @33-36-33-38 (num-var 142) (value "30")))))
+		(annotation @33-5-33-11 (signature 149) (id 150)
 			(declared-type
 				(ty @32-14-32-20 (name "Person")))))
-	(d-let (id 151)
-		(p-assign @36-5-36-10 (ident "color") (id 145))
-		(e-tag @36-13-36-16 (ext-var 0) (name "Red") (args "TODO") (id 147))
-		(annotation @36-5-36-10 (signature 149) (id 150)
+	(d-let (id 159)
+		(p-assign @36-5-36-10 (ident "color") (id 153))
+		(e-tag @36-13-36-16 (ext-var 0) (name "Red") (args "TODO") (id 155))
+		(annotation @36-5-36-10 (signature 157) (id 158)
 			(declared-type
 				(ty @35-13-35-18 (name "Color")))))
 	(s-type-decl @4-1-7-7 (id 74)
@@ -397,10 +400,10 @@ userId
 (inferred-types
 	(defs
 		(def (name "main!") (type "*"))
-		(def (name "person") (type "Error"))
+		(def (name "person") (type "{ name: Str, age: Num(*), * * }"))
 		(def (name "color") (type "[Red, * *]")))
 	(expressions
 		(expr @27-9-30-13 (type "*"))
-		(expr @33-14-33-40 (type "Error"))
+		(expr @33-14-33-40 (type "{ name: Str, age: Num(*), * * }"))
 		(expr @36-13-36-16 (type "[Red, * *]"))))
 ~~~

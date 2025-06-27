@@ -50,9 +50,6 @@ app [main!] { pf: platform "../basic-cli/main.roc" }
 ```
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize record expression
-
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),Newline(1:1-1:1),
@@ -209,12 +206,12 @@ NO CHANGE
 				(ty-fn @21-18-21-33 (effectful false)
 					(ty @21-18-21-26 (name "Response"))
 					(ty @21-30-21-33 (name "Str"))))))
-	(d-let (id 144)
+	(d-let (id 143)
 		(p-assign @24-1-24-6 (ident "main!") (id 139))
-		(e-lambda @24-9-24-15 (id 143)
+		(e-lambda @24-9-24-15 (id 142)
 			(args
 				(p-underscore @24-10-24-11 (id 140)))
-			(e-runtime-error (tag "not_implemented"))))
+			(e-empty_record @24-13-24-15)))
 	(s-type-decl @4-1-7-7 (id 77)
 		(ty-header @4-1-4-7 (name "Status"))
 		(ty-tag-union @4-10-4-37

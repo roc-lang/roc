@@ -27,9 +27,7 @@ getNumber = |_opt| 0
 main! = |_| {}
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize record expression
-
+NIL
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),Newline(1:1-1:1),
@@ -170,24 +168,24 @@ NO CHANGE
 					(ty-apply @14-13-14-24 (symbol "Option")
 						(ty @14-20-14-23 (name "Str")))
 					(ty @14-28-14-31 (name "Str"))))))
-	(d-let (id 134)
+	(d-let (id 133)
 		(p-assign @18-1-18-10 (ident "getNumber") (id 123))
-		(e-lambda @18-13-18-21 (id 128)
+		(e-lambda @18-13-18-21 (id 127)
 			(args
 				(p-assign @18-14-18-18 (ident "_opt") (id 124)))
-			(e-int @18-20-18-21 (int-var 126) (precision-var 125) (literal "0") (value "TODO") (bound "u8")))
-		(annotation @18-1-18-10 (signature 132) (id 133)
+			(e-int @18-20-18-21 (num-var 126) (value "0")))
+		(annotation @18-1-18-10 (signature 131) (id 132)
 			(declared-type
 				(ty-fn @17-13-17-31 (effectful false)
 					(ty-apply @17-13-17-24 (symbol "Option")
 						(ty @17-20-17-23 (name "I32")))
 					(ty @17-28-17-31 (name "I32"))))))
-	(d-let (id 140)
-		(p-assign @20-1-20-6 (ident "main!") (id 135))
-		(e-lambda @20-9-20-15 (id 139)
+	(d-let (id 138)
+		(p-assign @20-1-20-6 (ident "main!") (id 134))
+		(e-lambda @20-9-20-15 (id 137)
 			(args
-				(p-underscore @20-10-20-11 (id 136)))
-			(e-runtime-error (tag "not_implemented"))))
+				(p-underscore @20-10-20-11 (id 135)))
+			(e-empty_record @20-13-20-15)))
 	(s-type-decl @4-1-7-8 (id 80)
 		(ty-header @4-1-4-18 (name "MyResult")
 			(ty-args

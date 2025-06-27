@@ -48,9 +48,6 @@ The unused variable is declared here:
 ```
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize record expression
-
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),
@@ -99,29 +96,29 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 93)
+	(d-let (id 90)
 		(p-assign @4-1-4-14 (ident "redeclareTest") (id 72))
-		(e-lambda @4-17-9-2 (id 92)
+		(e-lambda @4-17-9-2 (id 89)
 			(args
 				(p-underscore @4-18-4-19 (id 73)))
 			(e-block @4-21-9-2
 				(s-var @5-2-6-5
-					(p-assign @5-2-6-5 (ident "x_") (id 77))
-					(e-int @5-11-5-12 (int-var 75) (precision-var 74) (literal "5") (value "TODO") (bound "u8") (id 76)))
+					(p-assign @5-2-6-5 (ident "x_") (id 76))
+					(e-int @5-11-5-12 (num-var 75) (value "5") (id 75)))
 				(s-var @6-2-7-4
-					(p-assign @6-2-7-4 (ident "x_") (id 82))
-					(e-int @6-11-6-13 (int-var 80) (precision-var 79) (literal "10") (value "TODO") (bound "u8") (id 81)))
+					(p-assign @6-2-7-4 (ident "x_") (id 80))
+					(e-int @6-11-6-13 (num-var 79) (value "10") (id 79)))
 				(s-reassign @7-2-7-4
-					(p-assign @5-2-6-5 (ident "x_") (id 77))
-					(e-int @7-7-7-9 (int-var 86) (precision-var 85) (literal "15") (value "TODO") (bound "u8") (id 87)))
+					(p-assign @5-2-6-5 (ident "x_") (id 76))
+					(e-int @7-7-7-9 (num-var 84) (value "15") (id 84)))
 				(e-lookup-local @8-2-8-4
-					(pattern (id 77))))))
-	(d-let (id 99)
-		(p-assign @11-1-11-7 (ident "result") (id 94))
-		(e-call @11-10-11-27 (id 98)
+					(pattern (id 76))))))
+	(d-let (id 95)
+		(p-assign @11-1-11-7 (ident "result") (id 91))
+		(e-call @11-10-11-27 (id 94)
 			(e-lookup-local @11-10-11-23
 				(pattern (id 72)))
-			(e-runtime-error (tag "not_implemented")))))
+			(e-empty_record @11-24-11-26))))
 ~~~
 # TYPES
 ~~~clojure

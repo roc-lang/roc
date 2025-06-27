@@ -13,9 +13,7 @@ getName = |_person| "hello"
 main! = |_| getName({name: "luke", age:21})
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize record expression
-
+NIL
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),Newline(1:1-1:1),
@@ -96,15 +94,21 @@ main! = |_| getName({ name: "luke", age: 21 })
 						(field (field "age")
 							(ty @3-29-3-32 (name "U64"))))
 					(ty @3-38-3-41 (name "Str"))))))
-	(d-let (id 97)
+	(d-let (id 105)
 		(p-assign @6-1-6-6 (ident "main!") (id 90))
-		(e-lambda @6-9-6-44 (id 96)
+		(e-lambda @6-9-6-44 (id 104)
 			(args
 				(p-underscore @6-10-6-11 (id 91)))
 			(e-call @6-13-6-44
 				(e-lookup-local @6-13-6-20
 					(pattern (id 79)))
-				(e-runtime-error (tag "not_implemented"))))))
+				(e-record @6-21-6-43 (ext-var 99)
+					(fields
+						(field (name "name")
+							(e-string @6-28-6-34
+								(e-literal @6-29-6-33 (string "luke"))))
+						(field (name "age")
+							(e-int @6-40-6-42 (num-var 97) (value "21")))))))))
 ~~~
 # TYPES
 ~~~clojure

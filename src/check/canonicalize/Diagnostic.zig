@@ -18,7 +18,6 @@ pub const Diagnostic = union(enum) {
         region: Region,
     },
     invalid_num_literal: struct {
-        literal: StringLiteral.Idx,
         region: Region,
     },
     ident_already_in_scope: struct {
@@ -48,6 +47,15 @@ pub const Diagnostic = union(enum) {
         region: Region,
     },
     lambda_body_not_canonicalized: struct {
+        region: Region,
+    },
+    if_condition_not_canonicalized: struct {
+        region: Region,
+    },
+    if_then_not_canonicalized: struct {
+        region: Region,
+    },
+    if_else_not_canonicalized: struct {
         region: Region,
     },
     malformed_type_annotation: struct {
@@ -104,6 +112,11 @@ pub const Diagnostic = union(enum) {
         ident: Ident.Idx,
         region: Region,
     },
+    duplicate_record_field: struct {
+        field_name: Ident.Idx,
+        duplicate_region: Region,
+        original_region: Region,
+    },
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
@@ -122,6 +135,9 @@ pub const Diagnostic = union(enum) {
             .pattern_not_canonicalized => |d| d.region,
             .can_lambda_not_implemented => |d| d.region,
             .lambda_body_not_canonicalized => |d| d.region,
+            .if_condition_not_canonicalized => |d| d.region,
+            .if_then_not_canonicalized => |d| d.region,
+            .if_else_not_canonicalized => |d| d.region,
             .malformed_type_annotation => |d| d.region,
             .var_across_function_boundary => |d| d.region,
             .shadowing_warning => |d| d.region,
@@ -134,6 +150,7 @@ pub const Diagnostic = union(enum) {
             .type_parameter_conflict => |d| d.region,
             .unused_variable => |d| d.region,
             .used_underscore_variable => |d| d.region,
+            .duplicate_record_field => |d| d.duplicate_region,
         };
     }
 
@@ -147,9 +164,13 @@ pub const Diagnostic = union(enum) {
     }
 
     /// Build a report for "invalid number literal" diagnostic
-    pub fn buildInvalidNumLiteralReport(allocator: Allocator, literal: []const u8) !Report {
+    pub fn buildInvalidNumLiteralReport(allocator: Allocator, region: Region, source: []const u8) !Report {
         var report = Report.init(allocator, "INVALID NUMBER", .runtime_error);
-        const owned_literal = try report.addOwnedString(literal);
+
+        // Extract the literal's text from the source using its region
+        const literal_text = source[region.start.offset..region.end.offset];
+        const owned_literal = try report.addOwnedString(literal_text);
+
         try report.document.addText("This number literal is not valid: ");
         try report.document.addText(owned_literal);
         return report;
@@ -238,6 +259,63 @@ pub const Diagnostic = union(enum) {
     pub fn buildLambdaBodyNotCanonicalizedReport(allocator: Allocator) !Report {
         var report = Report.init(allocator, "INVALID LAMBDA", .runtime_error);
         try report.document.addReflowingText("The body of this lambda expression is not valid.");
+        return report;
+    }
+
+    /// Build a report for "if condition not canonicalized" diagnostic
+    pub fn buildIfConditionNotCanonicalizedReport(allocator: Allocator) !Report {
+        var report = Report.init(allocator, "INVALID IF CONDITION", .runtime_error);
+        try report.document.addReflowingText("The condition in this ");
+        try report.document.addKeyword("if");
+        try report.document.addReflowingText(" expression could not be processed.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("The condition must be a valid expression that evaluates to a ");
+        try report.document.addKeyword("Bool");
+        try report.document.addReflowingText(" value (");
+        try report.document.addKeyword("Bool.true");
+        try report.document.addReflowingText(" or ");
+        try report.document.addKeyword("Bool.false");
+        try report.document.addReflowingText(").");
+        return report;
+    }
+
+    /// Build a report for "if then not canonicalized" diagnostic
+    pub fn buildIfThenNotCanonicalizedReport(allocator: Allocator) !Report {
+        var report = Report.init(allocator, "INVALID IF BRANCH", .runtime_error);
+        try report.document.addReflowingText("The ");
+        try report.document.addKeyword("then");
+        try report.document.addReflowingText(" branch of this ");
+        try report.document.addKeyword("if");
+        try report.document.addReflowingText(" expression could not be processed.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("The ");
+        try report.document.addKeyword("then");
+        try report.document.addReflowingText(" branch must contain a valid expression. Check for syntax errors or missing values.");
+        return report;
+    }
+
+    /// Build a report for "if else not canonicalized" diagnostic
+    pub fn buildIfElseNotCanonicalizedReport(allocator: Allocator) !Report {
+        var report = Report.init(allocator, "INVALID IF BRANCH", .runtime_error);
+        try report.document.addReflowingText("The ");
+        try report.document.addKeyword("else");
+        try report.document.addReflowingText(" branch of this ");
+        try report.document.addKeyword("if");
+        try report.document.addReflowingText(" expression could not be processed.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("The ");
+        try report.document.addKeyword("else");
+        try report.document.addReflowingText(" branch must contain a valid expression. Check for syntax errors or missing values.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Note: Every ");
+        try report.document.addKeyword("if");
+        try report.document.addReflowingText(" expression in Roc must have an ");
+        try report.document.addKeyword("else");
+        try report.document.addReflowingText(" branch, and both branches must have the same type.");
         return report;
     }
 
@@ -721,6 +799,57 @@ pub const Diagnostic = union(enum) {
             .error_highlight,
             filename,
         );
+
+        return report;
+    }
+
+    pub fn buildDuplicateRecordFieldReport(
+        allocator: Allocator,
+        field_name: []const u8,
+        duplicate_region_info: base.RegionInfo,
+        original_region_info: base.RegionInfo,
+        source: []const u8,
+        filename: []const u8,
+    ) !Report {
+        var report = Report.init(allocator, "DUPLICATE RECORD FIELD", .runtime_error);
+        const owned_field_name = try report.addOwnedString(field_name);
+
+        try report.document.addText("The record field `");
+        try report.document.addUnqualifiedSymbol(owned_field_name);
+        try report.document.addText("` appears more than once in this record.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        // Show where the duplicate field is
+        try report.document.addText("This field is duplicated here:");
+        try report.document.addLineBreak();
+        try report.document.addSourceRegion(
+            source,
+            duplicate_region_info.start_line_idx,
+            duplicate_region_info.start_col_idx,
+            duplicate_region_info.end_line_idx,
+            duplicate_region_info.end_col_idx,
+            .error_highlight,
+            filename,
+        );
+
+        try report.document.addLineBreak();
+        try report.document.addText("The field `");
+        try report.document.addUnqualifiedSymbol(owned_field_name);
+        try report.document.addText("` was first defined here:");
+        try report.document.addLineBreak();
+        try report.document.addSourceRegion(
+            source,
+            original_region_info.start_line_idx,
+            original_region_info.start_col_idx,
+            original_region_info.end_line_idx,
+            original_region_info.end_col_idx,
+            .dimmed,
+            filename,
+        );
+
+        try report.document.addLineBreak();
+        try report.document.addText("Record fields must have unique names. Consider renaming one of these fields or removing the duplicate.");
 
         return report;
     }

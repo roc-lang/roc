@@ -23,9 +23,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-int @1-1-1-5 (int-var 73) (precision-var 72) (literal "-123") (value "TODO") (bound "u8") (id 74))
+(e-int @1-1-1-5 (num-var 73) (value "-123") (id 73))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 74) (type "Num(Int(*))"))
+(expr (id 73) (type "Num(*)"))
 ~~~

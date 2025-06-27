@@ -18,6 +18,7 @@ const ModuleEnv = base.ModuleEnv;
 const StringLiteral = base.StringLiteral;
 const CalledVia = base.CalledVia;
 const TypeVar = types.Var;
+const RocDec = @import("../../builtins/dec.zig").RocDec;
 const Node = @import("Node.zig");
 const NodeStore = @import("NodeStore.zig");
 
@@ -104,6 +105,16 @@ pub fn pushDiagnostic(self: *CIR, reason: CIR.Diagnostic) void {
 ///
 /// Use this when you need to replace a node (expression, pattern, etc.) with
 /// something that represents a compilation error but allows the compiler to continue.
+/// Creates a malformed CIR node with an error type variable.
+///
+/// This follows the "Inform Don't Block" principle - when compilation encounters
+/// an error, it creates a placeholder node and continues rather than stopping.
+/// The error will be reported to the user later.
+///
+/// **Usage**: When parsing or canonicalization encounters an error but needs
+/// to continue compilation.
+///
+/// **Example**: Used when encountering invalid syntax that can't be parsed properly.
 pub fn pushMalformed(self: *CIR, comptime t: type, reason: CIR.Diagnostic) t {
     const malformed_idx = self.store.addMalformed(t, reason);
     _ = self.setTypeVarAt(@enumFromInt(@intFromEnum(malformed_idx)), .err);
@@ -139,10 +150,10 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
             break :blk Diagnostic.buildNotImplementedReport(allocator, feature_text);
         },
         .invalid_num_literal => |data| blk: {
-            const literal_text = self.env.strings.get(data.literal);
             break :blk Diagnostic.buildInvalidNumLiteralReport(
                 allocator,
-                literal_text,
+                data.region,
+                source,
             );
         },
         .ident_already_in_scope => |data| blk: {
@@ -172,6 +183,9 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
         .pattern_not_canonicalized => Diagnostic.buildPatternNotCanonicalizedReport(allocator),
         .can_lambda_not_implemented => Diagnostic.buildCanLambdaNotImplementedReport(allocator),
         .lambda_body_not_canonicalized => Diagnostic.buildLambdaBodyNotCanonicalizedReport(allocator),
+        .if_condition_not_canonicalized => Diagnostic.buildIfConditionNotCanonicalizedReport(allocator),
+        .if_then_not_canonicalized => Diagnostic.buildIfThenNotCanonicalizedReport(allocator),
+        .if_else_not_canonicalized => Diagnostic.buildIfElseNotCanonicalizedReport(allocator),
         .var_across_function_boundary => Diagnostic.buildVarAcrossFunctionBoundaryReport(allocator),
         .malformed_type_annotation => Diagnostic.buildMalformedTypeAnnotationReport(allocator),
         .shadowing_warning => |data| blk: {
@@ -299,16 +313,42 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 filename,
             );
         },
+        .duplicate_record_field => |data| blk: {
+            const duplicate_region_info = self.calcRegionInfo(data.duplicate_region);
+            const original_region_info = self.calcRegionInfo(data.original_region);
+            const field_name = self.env.idents.getText(data.field_name);
+            break :blk try Diagnostic.buildDuplicateRecordFieldReport(
+                allocator,
+                field_name,
+                duplicate_region_info,
+                original_region_info,
+                source,
+                filename,
+            );
+        },
     };
 }
 
-/// Inserts a placeholder CIR node and creates a fresh variable in the types store at that index
+/// Creates a fresh flexible type variable for type inference.
+///
+/// This is a convenience wrapper around `pushTypeVar(.{ .flex_var = null }, ...)`.
+/// Use this for expressions where the type needs to be inferred, like integer
+/// literals before knowing their specific type (U64, I32, etc.).
+///
 pub fn pushFreshTypeVar(self: *CIR, parent_node_idx: Node.Idx, region: base.Region) types.Var {
     return self.pushTypeVar(.{ .flex_var = null }, parent_node_idx, region);
 }
 
-/// Inserts a placeholder CIR node and creates a type variable with the
-/// specified content in the types store at that index
+/// Creates a type variable with specific type content.
+///
+/// Use this to create type variables with predetermined structure or constraints,
+/// unlike `pushFreshTypeVar` which creates unconstrained flexible variables.
+///
+/// **Common content types**:
+/// - `.flex_var` - Flexible (same as pushFreshTypeVar)
+/// - `.rigid_var` - Named type variable for generics
+/// - `.structure` - Concrete types (nums, records, functions)
+/// - `.err` - Error type for malformed code
 pub fn pushTypeVar(self: *CIR, content: types.Content, parent_node_idx: Node.Idx, region: base.Region) types.Var {
     // insert a placeholder can node
     const var_slot = self.store.addTypeVarSlot(parent_node_idx, region);
@@ -323,22 +363,34 @@ pub fn pushTypeVar(self: *CIR, content: types.Content, parent_node_idx: Node.Idx
     return var_;
 }
 
-/// Set a type variable To the specified content at the specified CIR node index.
+/// Associates a type with an existing definition node.
+///
+/// Use this to set the concrete type of a definition after type inference.
 pub fn setTypeVarAtDef(self: *CIR, at_idx: Def.Idx, content: types.Content) types.Var {
     return self.setTypeVarAt(@enumFromInt(@intFromEnum(at_idx)), content);
 }
 
-/// Set a type variable To the specified content at the specified CIR node index.
+/// Associates a type with an existing expression node.
+///
+/// Use this to set the final type of an expression after type inference.
 pub fn setTypeVarAtExpr(self: *CIR, at_idx: Expr.Idx, content: types.Content) types.Var {
     return self.setTypeVarAt(@enumFromInt(@intFromEnum(at_idx)), content);
 }
 
-/// Set a type variable To the specified content at the specified CIR node index.
+/// Associates a type with an existing pattern node.
+///
+/// Use this to set the type of a pattern after type inference or from context.
 pub fn setTypeVarAtPat(self: *CIR, at_idx: Pattern.Idx, content: types.Content) types.Var {
     return self.setTypeVarAt(@enumFromInt(@intFromEnum(at_idx)), content);
 }
 
-/// Set a type variable To the specified content at the specified CIR node index.
+/// Core function that associates a type with any existing CIR node.
+///
+/// This is used by all the `setTypeVarAt*` wrapper functions. Node indices
+/// correspond directly to type variable indices, allowing direct conversion.
+/// Usually called indirectly through the typed wrappers rather than directly.
+///
+/// **Note**: The node must already exist - this only sets types, not create nodes.
 pub fn setTypeVarAt(self: *CIR, at_idx: Node.Idx, content: types.Content) types.Var {
     // if the new can node idx is greater than the types store length, backfill
     const var_: types.Var = @enumFromInt(@intFromEnum(at_idx));
@@ -378,34 +430,6 @@ pub fn sliceExternalDecls(self: *const CIR, span: ExternalDecl.Span) []const Ext
 
 fn getIdentText(self: *const CIR, idx: Ident.Idx) []const u8 {
     return self.env.idents.getText(idx);
-}
-
-// Helper to add identifier info to a s-expr node
-fn appendIdent(node: *SExpr, gpa: std.mem.Allocator, ir: *const CIR, name: []const u8, ident_idx: Ident.Idx) void {
-    const ident_text = ir.env.idents.getText(ident_idx);
-
-    // Create a node with no pre-allocated children to avoid aliasing issues
-    const ident_node = SExpr{
-        .node = .{
-            .value = gpa.dupe(u8, name) catch @panic("Failed to duplicate name"),
-            .region = null,
-            .node_idx = null,
-            .attributes = .{},
-            .children = .{},
-        },
-    };
-
-    // Append the node to the parent first
-    switch (node.*) {
-        .node => |*n| {
-            n.children.append(gpa, ident_node) catch @panic("Failed to append node");
-
-            // Now add the string child directly to the node in its final location
-            const last_idx = n.children.items.len - 1;
-            n.children.items[last_idx].appendString(gpa, ident_text);
-        },
-        else => @panic("appendIdent called on non-node"),
-    }
 }
 
 // Helper to format pattern index for s-expr output
@@ -689,6 +713,18 @@ pub const RecordField = struct {
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
+
+    pub fn toSExpr(self: *const @This(), ir: *CIR, env: *ModuleEnv) SExpr {
+        const gpa = ir.env.gpa;
+        var node = SExpr.init(gpa, "field");
+
+        node.appendStringAttr(gpa, "name", ir.getIdentText(self.name));
+
+        var value_node = ir.store.getExpr(self.value).toSExpr(ir, env);
+        node.appendNode(gpa, &value_node);
+
+        return node;
+    }
 };
 
 /// TODO: implement WhereClause
@@ -1057,19 +1093,24 @@ pub const Expr = union(enum) {
         region: Region,
     },
     int: struct {
-        int_var: TypeVar,
-        precision_var: TypeVar,
-        literal: StringLiteral.Idx,
+        num_var: TypeVar,
         value: IntValue,
-        bound: types.Num.Int.Precision,
         region: Region,
     },
-    float: struct {
+    frac_f64: struct {
         frac_var: TypeVar,
-        precision_var: TypeVar,
-        literal: StringLiteral.Idx,
         value: f64,
-        bound: types.Num.Frac.Precision,
+        region: Region,
+    },
+    frac_dec: struct {
+        frac_var: TypeVar,
+        value: RocDec,
+        region: Region,
+    },
+    dec_small: struct {
+        num_var: TypeVar,
+        numerator: i16,
+        denominator_power_of_ten: u8,
         region: Region,
     },
     // A single segment of a string literal
@@ -1096,14 +1137,12 @@ pub const Expr = union(enum) {
         local: Lookup,
         external: ExternalDecl.Idx,
     },
-    // TODO introduce a new node for re-assign here, used by Var instead of lookup
     list: struct {
         elem_var: TypeVar,
         elems: Expr.Span,
         region: Region,
     },
     tuple: struct {
-        tuple_var: TypeVar,
         elems: Expr.Span,
         region: Region,
     },
@@ -1123,10 +1162,10 @@ pub const Expr = union(enum) {
         region: Region,
     },
     record: struct {
+        /// type var for the record extension
         ext_var: TypeVar,
+        fields: RecordField.Span,
         region: Region,
-        // TODO:
-        // fields: SendMap<Lowercase, Field>,
     },
     /// Empty record constant
     empty_record: struct {
@@ -1189,14 +1228,14 @@ pub const Expr = union(enum) {
 
     pub const Span = struct { span: DataSpan };
 
-    pub fn init_str(expr_span: Expr.Span, region: Region) Expr {
+    pub fn initStr(expr_span: Expr.Span, region: Region) Expr {
         return .{ .str = .{
             .span = expr_span,
             .region = region,
         } };
     }
 
-    pub fn init_str_segment(literal: StringLiteral.Idx, region: Region) Expr {
+    pub fn initStrSegment(literal: StringLiteral.Idx, region: Region) Expr {
         return .{ .str_segment = .{
             .literal = literal,
             .region = region,
@@ -1221,6 +1260,12 @@ pub const Expr = union(enum) {
             ge,
             eq,
             ne,
+            pow,
+            div_trunc,
+            @"and",
+            @"or",
+            pipe_forward,
+            null_coalesce,
         };
 
         pub fn init(op: Op, lhs: Expr.Idx, rhs: Expr.Idx, region: Region) Binop {
@@ -1232,7 +1277,9 @@ pub const Expr = union(enum) {
         switch (self.*) {
             .num => |e| return e.region,
             .int => |e| return e.region,
-            .float => |e| return e.region,
+            .frac_f64 => |e| return e.region,
+            .frac_dec => |e| return e.region,
+            .dec_small => |e| return e.region,
             .str_segment => |e| return e.region,
             .str => |e| return e.region,
             .single_quote => |e| return e.region,
@@ -1288,43 +1335,84 @@ pub const Expr = union(enum) {
                 var node = SExpr.init(gpa, "e-int");
                 node.appendRegion(gpa, ir.calcRegionInfo(int_expr.region));
 
-                // Add int_var
-                node.appendTypeVar(gpa, "int-var", int_expr.int_var);
+                // Add num_var
+                node.appendTypeVar(gpa, "num-var", int_expr.num_var);
 
-                // Add precision_var
-                node.appendTypeVar(gpa, "precision-var", int_expr.precision_var);
-
-                // Add literal
-                node.appendStringAttr(gpa, "literal", ir.env.strings.get(int_expr.literal));
-
-                // Add value info
-                node.appendStringAttr(gpa, "value", "TODO");
-
-                // Add bound info
-                node.appendStringAttr(gpa, "bound", @tagName(int_expr.bound));
+                // Add value
+                const value_i128: i128 = @bitCast(int_expr.value.bytes);
+                var value_buf: [40]u8 = undefined;
+                const value_str = std.fmt.bufPrint(&value_buf, "{}", .{value_i128}) catch "fmt_error";
+                node.appendStringAttr(gpa, "value", value_str);
 
                 return node;
             },
-            .float => |float_expr| {
-                var node = SExpr.init(gpa, "e-float");
-                node.appendRegion(gpa, ir.calcRegionInfo(float_expr.region));
-
-                // Add frac_var
-                node.appendTypeVar(gpa, "frac_var", float_expr.frac_var);
-
-                // Add precision_var
-                node.appendTypeVar(gpa, "precision-var", float_expr.precision_var);
-
-                // Add literal
-                node.appendStringAttr(gpa, "literal", ir.env.strings.get(float_expr.literal));
+            .frac_f64 => |e| {
+                var node = SExpr.init(gpa, "e-frac-f64");
+                node.appendRegion(gpa, ir.calcRegionInfo(e.region));
+                node.appendTypeVar(gpa, "frac-var", e.frac_var);
 
                 // Add value
-                const value_str = std.fmt.allocPrint(gpa, "{d}", .{float_expr.value}) catch |err| exitOnOom(err);
-                defer gpa.free(value_str);
+                var value_buf: [512]u8 = undefined;
+                // Use scientific notation for very large or very small numbers (but not zero)
+                const value_str = if (e.value == 0)
+                    "0.0"
+                else if (@abs(e.value) < 1e-10 or @abs(e.value) > 1e10)
+                    std.fmt.bufPrint(&value_buf, "{e}", .{e.value}) catch "fmt_error"
+                else
+                    std.fmt.bufPrint(&value_buf, "{d}", .{e.value}) catch "fmt_error";
                 node.appendStringAttr(gpa, "value", value_str);
 
-                // Add bound info
-                node.appendStringAttr(gpa, "bound", @tagName(float_expr.bound));
+                return node;
+            },
+            .frac_dec => |e| {
+                var node = SExpr.init(gpa, "e-frac-dec");
+                node.appendRegion(gpa, ir.calcRegionInfo(e.region));
+                node.appendTypeVar(gpa, "frac-var", e.frac_var);
+
+                // Add value (convert RocDec to string)
+                // RocDec has 18 decimal places, so divide by 10^18
+                const dec_value_f64: f64 = @as(f64, @floatFromInt(e.value.num)) / std.math.pow(f64, 10, 18);
+                var value_buf: [512]u8 = undefined;
+                // Use scientific notation for very large or very small numbers (but not zero)
+                const value_str = if (dec_value_f64 == 0)
+                    "0.0"
+                else if (@abs(dec_value_f64) < 1e-10 or @abs(dec_value_f64) > 1e10)
+                    std.fmt.bufPrint(&value_buf, "{e}", .{dec_value_f64}) catch "fmt_error"
+                else
+                    std.fmt.bufPrint(&value_buf, "{d}", .{dec_value_f64}) catch "fmt_error";
+                node.appendStringAttr(gpa, "value", value_str);
+
+                return node;
+            },
+            .dec_small => |e| {
+                var node = SExpr.init(gpa, "e-dec-small");
+                node.appendRegion(gpa, ir.calcRegionInfo(e.region));
+                node.appendTypeVar(gpa, "num-var", e.num_var);
+
+                // Add numerator and denominator_power_of_ten
+                var num_buf: [32]u8 = undefined;
+                const num_str = std.fmt.bufPrint(&num_buf, "{}", .{e.numerator}) catch "fmt_error";
+                node.appendStringAttr(gpa, "numerator", num_str);
+
+                var denom_buf: [32]u8 = undefined;
+                const denom_str = std.fmt.bufPrint(&denom_buf, "{}", .{e.denominator_power_of_ten}) catch "fmt_error";
+                node.appendStringAttr(gpa, "denominator-power-of-ten", denom_str);
+
+                // Calculate and add the decimal value
+                // Convert numerator to f64 and divide by 10^denominator_power_of_ten
+                const numerator_f64: f64 = @floatFromInt(e.numerator);
+                const denominator_f64: f64 = std.math.pow(f64, 10, @floatFromInt(e.denominator_power_of_ten));
+                const value_f64 = numerator_f64 / denominator_f64;
+
+                var value_buf: [512]u8 = undefined;
+                // Use scientific notation for very large or very small numbers (but not zero)
+                const value_str = if (value_f64 == 0)
+                    "0.0"
+                else if (@abs(value_f64) < 1e-10 or @abs(value_f64) > 1e10)
+                    std.fmt.bufPrint(&value_buf, "{e}", .{value_f64}) catch "fmt_error"
+                else
+                    std.fmt.bufPrint(&value_buf, "{d}", .{value_f64}) catch "fmt_error";
+                node.appendStringAttr(gpa, "value", value_str);
 
                 return node;
             },
@@ -1389,9 +1477,6 @@ pub const Expr = union(enum) {
                 var node = SExpr.init(gpa, "e-tuple");
                 node.appendRegion(gpa, ir.calcRegionInfo(t.region));
 
-                // Add tuple_var
-                node.appendTypeVar(gpa, "tuple-var", t.tuple_var);
-
                 // Add tuple elements
                 var elems_node = SExpr.init(gpa, "elems");
                 for (ir.store.sliceExpr(t.elems)) |elem_idx| {
@@ -1442,13 +1527,32 @@ pub const Expr = union(enum) {
                 node.appendTypeVar(gpa, "branch-var", if_expr.branch_var);
 
                 // Add branches
-                var branches_node = SExpr.init(gpa, "branches");
-                branches_node.appendStringAttr(gpa, "branches", "TODO");
+                var branches_node = SExpr.init(gpa, "if-branches");
+                const branch_indices = ir.store.sliceIfBranches(if_expr.branches);
+                for (branch_indices) |branch_idx| {
+                    const branch = ir.store.getIfBranch(branch_idx);
+
+                    var branch_node = SExpr.init(gpa, "if-branch");
+
+                    // Add condition
+                    const cond_expr = ir.store.getExpr(branch.cond);
+                    var cond_node = cond_expr.toSExpr(ir, env);
+                    branch_node.appendNode(gpa, &cond_node);
+
+                    // Add body
+                    const body_expr = ir.store.getExpr(branch.body);
+                    var body_node = body_expr.toSExpr(ir, env);
+                    branch_node.appendNode(gpa, &body_node);
+
+                    branches_node.appendNode(gpa, &branch_node);
+                }
                 node.appendNode(gpa, &branches_node);
 
                 // Add final_else
-                var else_node = SExpr.init(gpa, "else");
-                else_node.appendStringAttr(gpa, "else", "TODO");
+                var else_node = SExpr.init(gpa, "if-else");
+                const else_expr = ir.store.getExpr(if_expr.final_else);
+                var else_expr_node = else_expr.toSExpr(ir, env);
+                else_node.appendNode(gpa, &else_expr_node);
                 node.appendNode(gpa, &else_node);
 
                 return node;
@@ -1482,11 +1586,16 @@ pub const Expr = union(enum) {
                 var record_node = SExpr.init(gpa, "e-record");
                 record_node.appendRegion(gpa, ir.calcRegionInfo(record_expr.region));
 
-                // Add record_var
+                // Add ext_var
                 record_node.appendTypeVar(gpa, "ext-var", record_expr.ext_var);
 
-                // TODO: Add fields when implemented
-                record_node.appendStringAttr(gpa, "fields", "TODO");
+                // Add fields
+                var fields_node = SExpr.init(gpa, "fields");
+                for (ir.store.sliceRecordFields(record_expr.fields)) |field_idx| {
+                    var field_node = ir.store.getRecordField(field_idx).toSExpr(ir, env);
+                    fields_node.appendNode(gpa, &field_node);
+                }
+                record_node.appendNode(gpa, &fields_node);
 
                 return record_node;
             },
@@ -1659,7 +1768,10 @@ pub const IngestedFile = struct {
         const gpa = ir.env.gpa;
         var node = SExpr.init(gpa, "ingested-file");
         node.appendStringAttr(gpa, "path", "TODO");
-        appendIdent(&node, gpa, ir.env, "ident", self.ident);
+
+        const ident_text = ir.env.idents.getText(self.ident);
+        node.appendStringAttr(gpa, "ident", ident_text);
+
         var type_node = self.type.toSExpr(ir);
         node.appendNode(gpa, &type_node);
         return node;
@@ -2122,31 +2234,28 @@ pub const Pattern = union(enum) {
         region: Region,
     },
     tuple: struct {
-        tuple_var: TypeVar,
         patterns: Pattern.Span,
-        region: Region,
-    },
-    num_literal: struct {
-        num_var: TypeVar,
-        literal: StringLiteral.Idx,
-        value: IntValue,
-        bound: types.Num.Int.Precision,
         region: Region,
     },
     int_literal: struct {
         num_var: TypeVar,
-        precision_var: TypeVar,
-        literal: StringLiteral.Idx,
         value: IntValue,
-        bound: types.Num.Int.Precision,
         region: Region,
     },
-    float_literal: struct {
+    small_dec_literal: struct {
         num_var: TypeVar,
-        precision_var: TypeVar,
-        literal: StringLiteral.Idx,
+        numerator: i16,
+        denominator_power_of_ten: u8,
+        region: Region,
+    },
+    dec_literal: struct {
+        num_var: TypeVar,
+        value: RocDec,
+        region: Region,
+    },
+    f64_literal: struct {
+        num_var: TypeVar,
         value: f64,
-        bound: types.Num.Frac.Precision,
         region: Region,
     },
     str_literal: struct {
@@ -2155,9 +2264,8 @@ pub const Pattern = union(enum) {
     },
     char_literal: struct {
         num_var: TypeVar,
-        precision_var: TypeVar,
+        requirements: types.Num.Int.Requirements,
         value: u32,
-        bound: types.Num.Int.Precision,
         region: Region,
     },
     underscore: struct {
@@ -2180,9 +2288,10 @@ pub const Pattern = union(enum) {
             .record_destructure => |p| return p.region,
             .list => |p| return p.region,
             .tuple => |p| return p.region,
-            .num_literal => |p| return p.region,
             .int_literal => |p| return p.region,
-            .float_literal => |p| return p.region,
+            .small_dec_literal => |p| return p.region,
+            .dec_literal => |p| return p.region,
+            .f64_literal => |p| return p.region,
             .str_literal => |p| return p.region,
             .char_literal => |p| return p.region,
             .underscore => |p| return p.region,
@@ -2227,7 +2336,13 @@ pub const Pattern = union(enum) {
                 // node.appendNode(gpa, &pattern_idx_node);
 
                 var destructs_node = SExpr.init(gpa, "destructs");
-                destructs_node.appendStringAttr(gpa, "node", "TODO");
+
+                // Iterate through the destructs span and convert each to SExpr
+                for (ir.store.sliceRecordDestructs(p.destructs)) |destruct_idx| {
+                    var destruct_sexpr = ir.store.getRecordDestruct(destruct_idx).toSExpr(ir);
+                    destructs_node.appendNode(gpa, &destruct_sexpr);
+                }
+
                 node.appendNode(gpa, &destructs_node);
 
                 return node;
@@ -2255,9 +2370,6 @@ pub const Pattern = union(enum) {
                 // var pattern_idx_node = formatPatternIdxNode(gpa, pattern_idx);
                 // node.appendNode(gpa, &pattern_idx_node);
 
-                // Add tuple_var
-                node.appendTypeVar(gpa, "tuple-var", p.tuple_var);
-
                 var patterns_node = SExpr.init(gpa, "patterns");
 
                 for (ir.store.slicePatterns(p.patterns)) |patt_idx| {
@@ -2270,26 +2382,27 @@ pub const Pattern = union(enum) {
 
                 return node;
             },
-            .num_literal => |p| {
-                var node = SExpr.init(gpa, "p-num");
-                node.appendRegion(gpa, ir.calcRegionInfo(p.region));
-                return node;
-            },
             .int_literal => |p| {
                 var node = SExpr.init(gpa, "p-int");
                 node.appendRegion(gpa, ir.calcRegionInfo(p.region));
                 return node;
             },
-            .float_literal => |p| {
-                var node = SExpr.init(gpa, "p-float");
+            .small_dec_literal => |p| {
+                var node = SExpr.init(gpa, "p-small-dec");
                 node.appendRegion(gpa, ir.calcRegionInfo(p.region));
-
-                const val_str = std.fmt.allocPrint(gpa, "{d}", .{p.value}) catch "<oom>";
-                defer gpa.free(val_str);
-
-                node.appendStringAttr(gpa, "value", val_str);
-                node.appendStringAttr(gpa, "bound", @tagName(p.bound));
-
+                // TODO: add fields
+                return node;
+            },
+            .dec_literal => |p| {
+                var node = SExpr.init(gpa, "p-dec");
+                node.appendRegion(gpa, ir.calcRegionInfo(p.region));
+                // TODO: add fields
+                return node;
+            },
+            .f64_literal => |p| {
+                var node = SExpr.init(gpa, "p-f64");
+                node.appendRegion(gpa, ir.calcRegionInfo(p.region));
+                // TODO: add fields
                 return node;
             },
             .str_literal => |p| {
@@ -2308,7 +2421,7 @@ pub const Pattern = union(enum) {
                 const char_str = std.fmt.allocPrint(gpa, "'\\u({d})'", .{l.value}) catch "<oom>";
                 defer gpa.free(char_str);
                 node.appendStringAttr(gpa, "byte", char_str);
-                node.appendStringAttr(gpa, "bound", @tagName(l.bound));
+                // TODO: add num_var and requirements
                 return node;
             },
             .underscore => |p| {
@@ -2335,7 +2448,6 @@ pub const Pattern = union(enum) {
 
 /// todo
 pub const RecordDestruct = struct {
-    type_var: TypeVar,
     region: Region,
     label: Ident.Idx,
     ident: Ident.Idx,
@@ -2351,16 +2463,14 @@ pub const RecordDestruct = struct {
 
         pub fn toSExpr(self: *const @This(), ir: *const CIR, line_starts: std.ArrayList(u32)) SExpr {
             const gpa = ir.env.gpa;
+            _ = line_starts;
 
             switch (self.*) {
                 .Required => return SExpr.init(gpa, "required"),
                 .Guard => |guard_idx| {
                     var guard_kind_node = SExpr.init(gpa, "guard");
-
-                    const guard_patt = ir.typed_patterns_at_regions.get(guard_idx);
-                    var guard_sexpr = guard_patt.toSExpr(ir.env, ir, line_starts);
-                    guard_kind_node.appendNode(gpa, &guard_sexpr);
-
+                    _ = guard_idx; // TODO: implement guard pattern retrieval
+                    guard_kind_node.appendStringAttr(gpa, "pattern", "TODO");
                     return guard_kind_node;
                 },
             }
@@ -2370,18 +2480,19 @@ pub const RecordDestruct = struct {
     pub fn toSExpr(self: *const @This(), ir: *const CIR) SExpr {
         const gpa = ir.env.gpa;
 
-        var record_destruct_node = SExpr.init(gpa, "record-destruct");
+        var node = SExpr.init(gpa, "record-destruct");
 
-        record_destruct_node.appendTypeVar(&record_destruct_node, gpa, "type-var", self.type_var);
-        record_destruct_node.appendRegion(gpa, ir.calcRegionInfo(self.region));
+        node.appendRegion(gpa, ir.calcRegionInfo(self.region));
 
-        appendIdent(&record_destruct_node, gpa, ir, "label", self.label);
-        appendIdent(&record_destruct_node, gpa, ir, "ident", self.ident);
+        const label_text = ir.env.idents.getText(self.label);
+        const ident_text = ir.env.idents.getText(self.ident);
+        node.appendStringAttr(gpa, "label", label_text);
+        node.appendStringAttr(gpa, "ident", ident_text);
 
-        var kind_node = self.kind.toSExpr(ir);
-        record_destruct_node.appendNode(gpa, &kind_node);
+        var kind_node = self.kind.toSExpr(ir, std.ArrayList(u32).init(ir.env.gpa));
+        node.appendNode(gpa, &kind_node);
 
-        return record_destruct_node;
+        return node;
     }
 };
 

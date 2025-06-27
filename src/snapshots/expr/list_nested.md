@@ -31,21 +31,21 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-list @1-1-1-22 (elem-var 93) (id 94)
+(e-list @1-1-1-22 (elem-var 88) (id 89)
 	(elems
-		(e-list @1-2-1-8 (elem-var 78)
+		(e-list @1-2-1-8 (elem-var 76)
 			(elems
-				(e-int @1-3-1-4 (int-var 73) (precision-var 72) (literal "1") (value "TODO") (bound "u8"))
-				(e-int @1-6-1-7 (int-var 76) (precision-var 75) (literal "2") (value "TODO") (bound "u8"))))
-		(e-list @1-10-1-16 (elem-var 86)
+				(e-int @1-3-1-4 (num-var 73) (value "1"))
+				(e-int @1-6-1-7 (num-var 75) (value "2"))))
+		(e-list @1-10-1-16 (elem-var 82)
 			(elems
-				(e-int @1-11-1-12 (int-var 81) (precision-var 80) (literal "3") (value "TODO") (bound "u8"))
-				(e-int @1-14-1-15 (int-var 84) (precision-var 83) (literal "4") (value "TODO") (bound "u8"))))
-		(e-list @1-18-1-21 (elem-var 91)
+				(e-int @1-11-1-12 (num-var 79) (value "3"))
+				(e-int @1-14-1-15 (num-var 81) (value "4"))))
+		(e-list @1-18-1-21 (elem-var 86)
 			(elems
-				(e-int @1-19-1-20 (int-var 89) (precision-var 88) (literal "5") (value "TODO") (bound "u8"))))))
+				(e-int @1-19-1-20 (num-var 85) (value "5"))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 94) (type "List(List(Num(Int(*))))"))
+(expr (id 89) (type "List(List(Num(*)))"))
 ~~~

@@ -13,9 +13,7 @@ getName = |person| person.name
 main! = |_| {}
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize record expression
-
+NIL
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),Newline(1:1-1:1),
@@ -53,9 +51,8 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 				(args
 					(p-ident @4-12-4-18 (raw "person")))
 				(e-field-access @4-20-6-6
-					(e-binop @4-20-6-6 (op "app")
-						(e-ident @4-20-4-26 (qaul "") (raw "person"))
-						(e-ident @4-26-4-31 (qaul "") (raw ".name"))))))
+					(e-ident @4-20-4-26 (qaul "") (raw "person"))
+					(e-ident @4-26-4-31 (qaul "") (raw ".name")))))
 		(s-decl @6-1-6-15
 			(p-ident @6-1-6-6 (raw "main!"))
 			(e-lambda @6-9-6-15
@@ -93,12 +90,12 @@ main! = |_| {}
 						(field (field "age")
 							(ty @3-29-3-32 (name "U64"))))
 					(ty @3-38-3-41 (name "Str"))))))
-	(d-let (id 95)
+	(d-let (id 94)
 		(p-assign @6-1-6-6 (ident "main!") (id 90))
-		(e-lambda @6-9-6-15 (id 94)
+		(e-lambda @6-9-6-15 (id 93)
 			(args
 				(p-underscore @6-10-6-11 (id 91)))
-			(e-runtime-error (tag "not_implemented")))))
+			(e-empty_record @6-13-6-15))))
 ~~~
 # TYPES
 ~~~clojure

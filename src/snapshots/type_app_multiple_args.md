@@ -63,14 +63,13 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 				(e-apply @6-13-6-55
 					(e-ident @6-13-6-24 (qaul "") (raw "processDict"))
 					(e-field-access @6-25-6-55
-						(e-binop @6-25-6-55 (op "app")
-							(e-apply @6-25-6-37
-								(e-ident @6-25-6-35 (qaul "Dict") (raw ".empty")))
-							(e-apply @6-37-6-54
-								(e-ident @6-37-6-44 (qaul "") (raw ".insert"))
-								(e-string @6-45-6-50
-									(e-string-part @6-46-6-49 (raw "one")))
-								(e-int @6-52-6-53 (raw "1"))))))))))
+						(e-apply @6-25-6-37
+							(e-ident @6-25-6-35 (qaul "Dict") (raw ".empty")))
+						(e-apply @6-37-6-54
+							(e-ident @6-37-6-44 (qaul "") (raw ".insert"))
+							(e-string @6-45-6-50
+								(e-string-part @6-46-6-49 (raw "one")))
+							(e-int @6-52-6-53 (raw "1")))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -94,9 +93,9 @@ NO CHANGE
 						(ty @3-25-3-28 (name "U64")))
 					(ty-apply @3-33-3-42 (symbol "List")
 						(ty @3-38-3-41 (name "Str")))))))
-	(d-let (id 103)
+	(d-let (id 102)
 		(p-assign @6-1-6-6 (ident "main!") (id 89))
-		(e-lambda @6-9-6-55 (id 102)
+		(e-lambda @6-9-6-55 (id 101)
 			(args
 				(p-underscore @6-10-6-11 (id 90)))
 			(e-call @6-13-6-55
@@ -109,7 +108,7 @@ NO CHANGE
 					(args
 						(e-string @6-45-6-50
 							(e-literal @6-46-6-49 (string "one")))
-						(e-int @6-52-6-53 (int-var 98) (precision-var 97) (literal "1") (value "TODO") (bound "u8"))))))))
+						(e-int @6-52-6-53 (num-var 98) (value "1"))))))))
 ~~~
 # TYPES
 ~~~clojure

@@ -63,7 +63,9 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:9),OpAmpersand(1:10-1:11),LowerIdent(1:12-1:
 (e-block @1-1-1-21 (id 79)
 	(s-expr @1-3-1-11
 		(e-runtime-error (tag "ident_not_in_scope")))
-	(e-tuple @1-12-1-21 (tuple-var 77)
+	(s-type-anno @1-12-1-21 (name "age")
+		(ty-malformed @1-17-1-21))
+	(e-tuple @1-12-1-21
 		(elems)))
 ~~~
 # TYPES

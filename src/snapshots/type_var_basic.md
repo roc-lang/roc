@@ -14,9 +14,7 @@ identity = |a| a
 main! = |_| {}
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize record expression
-
+NIL
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),Newline(1:1-1:1),
@@ -77,12 +75,12 @@ NO CHANGE
 				(ty-fn @4-12-4-18 (effectful false)
 					(ty-var @4-12-4-13 (name "a"))
 					(ty-var @4-17-4-18 (name "a"))))))
-	(d-let (id 93)
+	(d-let (id 92)
 		(p-assign @7-1-7-6 (ident "main!") (id 88))
-		(e-lambda @7-9-7-15 (id 92)
+		(e-lambda @7-9-7-15 (id 91)
 			(args
 				(p-underscore @7-10-7-11 (id 89)))
-			(e-runtime-error (tag "not_implemented")))))
+			(e-empty_record @7-13-7-15))))
 ~~~
 # TYPES
 ~~~clojure

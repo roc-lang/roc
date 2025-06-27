@@ -203,19 +203,19 @@ main! = |_| {
 				(ty-fn @4-12-4-18 (effectful false)
 					(ty-var @4-12-4-13 (name "a"))
 					(ty-var @4-17-4-18 (name "a"))))))
-	(d-let (id 113)
+	(d-let (id 112)
 		(p-assign @9-1-9-8 (ident "combine") (id 98))
-		(e-lambda @9-11-9-42 (id 105)
+		(e-lambda @9-11-9-42 (id 104)
 			(args
 				(p-assign @9-12-9-17 (ident "first") (id 99))
 				(p-assign @9-19-9-25 (ident "second") (id 100)))
-			(e-tuple @9-27-9-42 (tuple-var 103)
+			(e-tuple @9-27-9-42
 				(elems
 					(e-lookup-local @9-28-9-33
 						(pattern (id 99)))
 					(e-lookup-local @9-35-9-41
 						(pattern (id 100))))))
-		(annotation @9-1-9-8 (signature 111) (id 112)
+		(annotation @9-1-9-8 (signature 110) (id 111)
 			(declared-type
 				(ty-fn @8-11-8-25 (effectful false)
 					(ty-var @8-11-8-12 (name "a"))
@@ -223,56 +223,56 @@ main! = |_| {
 					(ty-tuple @8-19-8-25
 						(ty-var @8-20-8-21 (name "a"))
 						(ty-var @8-23-8-24 (name "b")))))))
-	(d-let (id 130)
-		(p-assign @13-1-13-7 (ident "addOne") (id 117))
-		(e-lambda @13-10-15-6 (id 124)
+	(d-let (id 128)
+		(p-assign @13-1-13-7 (ident "addOne") (id 116))
+		(e-lambda @13-10-15-6 (id 122)
 			(args
-				(p-assign @13-11-13-12 (ident "n") (id 118)))
+				(p-assign @13-11-13-12 (ident "n") (id 117)))
 			(e-binop @13-14-15-6 (op "add")
 				(e-lookup-local @13-14-13-15
-					(pattern (id 118)))
-				(e-int @13-18-13-19 (int-var 121) (precision-var 120) (literal "1") (value "TODO") (bound "u8"))))
-		(annotation @13-1-13-7 (signature 128) (id 129)
+					(pattern (id 117)))
+				(e-int @13-18-13-19 (num-var 120) (value "1"))))
+		(annotation @13-1-13-7 (signature 126) (id 127)
 			(declared-type
 				(ty-fn @12-10-12-20 (effectful false)
 					(ty @12-10-12-13 (name "U64"))
 					(ty @12-17-12-20 (name "U64"))))))
-	(d-let (id 163)
-		(p-assign @15-1-15-6 (ident "main!") (id 131))
-		(e-lambda @15-9-27-2 (id 162)
+	(d-let (id 159)
+		(p-assign @15-1-15-6 (ident "main!") (id 129))
+		(e-lambda @15-9-27-2 (id 158)
 			(args
-				(p-underscore @15-10-15-11 (id 132)))
+				(p-underscore @15-10-15-11 (id 130)))
 			(e-block @15-13-27-2
 				(s-let @17-5-17-23
-					(p-assign @17-5-17-8 (ident "num") (id 133))
-					(e-call @17-11-17-23 (id 138)
+					(p-assign @17-5-17-8 (ident "num") (id 131))
+					(e-call @17-11-17-23 (id 135)
 						(e-lookup-local @17-11-17-19
 							(pattern (id 77)))
-						(e-int @17-20-17-22 (int-var 136) (precision-var 135) (literal "42") (value "TODO") (bound "u8"))))
+						(e-int @17-20-17-22 (num-var 134) (value "42"))))
 				(s-let @18-5-18-29
-					(p-assign @18-5-18-9 (ident "text") (id 140))
-					(e-call @18-12-18-29 (id 144)
+					(p-assign @18-5-18-9 (ident "text") (id 137))
+					(e-call @18-12-18-29 (id 141)
 						(e-lookup-local @18-12-18-20
 							(pattern (id 77)))
 						(e-string @18-21-18-28
 							(e-literal @18-22-18-27 (string "hello")))))
 				(s-let @21-5-21-30
-					(p-assign @21-5-21-9 (ident "pair") (id 146))
-					(e-call @21-12-21-30 (id 150)
+					(p-assign @21-5-21-9 (ident "pair") (id 143))
+					(e-call @21-12-21-30 (id 147)
 						(e-lookup-local @21-12-21-19
 							(pattern (id 98)))
 						(e-lookup-local @21-20-21-23
-							(pattern (id 133)))
+							(pattern (id 131)))
 						(e-lookup-local @21-25-21-29
-							(pattern (id 140)))))
+							(pattern (id 137)))))
 				(s-let @24-5-24-23
-					(p-assign @24-5-24-11 (ident "result") (id 152))
-					(e-call @24-14-24-23 (id 157)
+					(p-assign @24-5-24-11 (ident "result") (id 149))
+					(e-call @24-14-24-23 (id 153)
 						(e-lookup-local @24-14-24-20
-							(pattern (id 117)))
-						(e-int @24-21-24-22 (int-var 155) (precision-var 154) (literal "5") (value "TODO") (bound "u8"))))
+							(pattern (id 116)))
+						(e-int @24-21-24-22 (num-var 152) (value "5"))))
 				(e-lookup-local @26-5-26-11
-					(pattern (id 152)))))))
+					(pattern (id 149)))))))
 ~~~
 # TYPES
 ~~~clojure

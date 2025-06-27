@@ -1,0 +1,78 @@
+# META
+~~~ini
+description=Function with record parameter destructuring and rest pattern, capture whole record using `as`
+type=expr
+~~~
+# SOURCE
+~~~roc
+|{ name, age, ..a } as person| { greeting: "Hello ${name}", full_record: person, is_adult: age >= 18 }
+~~~
+# PROBLEMS
+**NOT IMPLEMENTED**
+This feature is not yet implemented: canonicalize alternatives pattern
+
+**UNDEFINED VARIABLE**
+Nothing is named `name` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNDEFINED VARIABLE**
+Nothing is named `person` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNDEFINED VARIABLE**
+Nothing is named `age` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+# TOKENS
+~~~zig
+OpBar(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:4-1:8),Comma(1:8-1:9),LowerIdent(1:10-1:13),Comma(1:13-1:14),DoubleDot(1:15-1:17),LowerIdent(1:17-1:18),CloseCurly(1:19-1:20),KwAs(1:21-1:23),LowerIdent(1:24-1:30),OpBar(1:30-1:31),OpenCurly(1:32-1:33),LowerIdent(1:34-1:42),OpColon(1:42-1:43),StringStart(1:44-1:45),StringPart(1:45-1:51),OpenStringInterpolation(1:51-1:53),LowerIdent(1:53-1:57),CloseStringInterpolation(1:57-1:58),StringPart(1:58-1:58),StringEnd(1:58-1:59),Comma(1:59-1:60),LowerIdent(1:61-1:72),OpColon(1:72-1:73),LowerIdent(1:74-1:80),Comma(1:80-1:81),LowerIdent(1:82-1:90),OpColon(1:90-1:91),LowerIdent(1:92-1:95),OpGreaterThanOrEq(1:96-1:98),Int(1:99-1:101),CloseCurly(1:102-1:103),EndOfFile(1:103-1:103),
+~~~
+# PARSE
+~~~clojure
+(e-lambda @1-1-1-103
+	(args
+		(p-as @1-2-1-30 (name "person")
+			(p-record @1-2-1-20
+				(field @1-4-1-9 (name "name") (rest false))
+				(field @1-10-1-14 (name "age") (rest false))
+				(field @1-15-1-20 (name "a") (rest true)))))
+	(e-record @1-32-1-103
+		(field (field "greeting") (optional false)
+			(e-string @1-44-1-59
+				(e-string-part @1-45-1-51 (raw "Hello "))
+				(e-ident @1-53-1-57 (qaul "") (raw "name"))
+				(e-string-part @1-58-1-58 (raw ""))))
+		(field (field "full_record") (optional false)
+			(e-ident @1-74-1-80 (qaul "") (raw "person")))
+		(field (field "is_adult") (optional false)
+			(e-binop @1-92-1-103 (op ">=")
+				(e-ident @1-92-1-95 (qaul "") (raw "age"))
+				(e-int @1-99-1-101 (raw "18"))))))
+~~~
+# FORMATTED
+~~~roc
+NO CHANGE
+~~~
+# CANONICALIZE
+~~~clojure
+(e-lambda @1-1-1-103 (id 94)
+	(args
+		(p-runtime-error @1-1-1-1 (tag "not_implemented") (id 73)))
+	(e-record @1-32-1-103 (ext-var 89)
+		(fields
+			(field (name "greeting")
+				(e-string @1-44-1-59
+					(e-literal @1-45-1-51 (string "Hello "))
+					(e-runtime-error (tag "ident_not_in_scope"))
+					(e-literal @1-58-1-58 (string ""))))
+			(field (name "full_record")
+				(e-runtime-error (tag "ident_not_in_scope")))
+			(field (name "is_adult")
+				(e-binop @1-92-1-103 (op "ge")
+					(e-runtime-error (tag "ident_not_in_scope"))
+					(e-int @1-99-1-101 (num-var 86) (value "18")))))))
+~~~
+# TYPES
+~~~clojure
+(expr (id 94) (type "*"))
+~~~

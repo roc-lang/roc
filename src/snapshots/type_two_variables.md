@@ -13,9 +13,7 @@ swap = |(x, y)| (y, x)
 main! = |_| {}
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize record expression
-
+NIL
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),Newline(1:1-1:1),
@@ -71,21 +69,21 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 98)
+	(d-let (id 96)
 		(p-assign @4-1-4-5 (ident "swap") (id 83))
-		(e-lambda @4-8-4-23 (id 92)
+		(e-lambda @4-8-4-23 (id 90)
 			(args
-				(p-tuple @4-9-4-15 (tuple-var 86) (id 87)
+				(p-tuple @4-9-4-15 (id 86)
 					(patterns
 						(p-assign @4-10-4-11 (ident "x") (id 84))
 						(p-assign @4-13-4-14 (ident "y") (id 85)))))
-			(e-tuple @4-17-4-23 (tuple-var 90)
+			(e-tuple @4-17-4-23
 				(elems
 					(e-lookup-local @4-18-4-19
 						(pattern (id 85)))
 					(e-lookup-local @4-21-4-22
 						(pattern (id 84))))))
-		(annotation @4-1-4-5 (signature 96) (id 97)
+		(annotation @4-1-4-5 (signature 94) (id 95)
 			(declared-type
 				(ty-fn @3-8-3-24 (effectful false)
 					(ty-tuple @3-8-3-14
@@ -94,12 +92,12 @@ NO CHANGE
 					(ty-tuple @3-18-3-24
 						(ty-var @3-19-3-20 (name "b"))
 						(ty-var @3-22-3-23 (name "a")))))))
-	(d-let (id 104)
-		(p-assign @6-1-6-6 (ident "main!") (id 99))
-		(e-lambda @6-9-6-15 (id 103)
+	(d-let (id 101)
+		(p-assign @6-1-6-6 (ident "main!") (id 97))
+		(e-lambda @6-9-6-15 (id 100)
 			(args
-				(p-underscore @6-10-6-11 (id 100)))
-			(e-runtime-error (tag "not_implemented")))))
+				(p-underscore @6-10-6-11 (id 98)))
+			(e-empty_record @6-13-6-15))))
 ~~~
 # TYPES
 ~~~clojure

@@ -53,9 +53,6 @@ mapResult = |result, transform| {
 Nothing is named `keepOks` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize record expression
-
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),Newline(1:1-1:1),
@@ -230,12 +227,12 @@ main! = |_| {}
 							(ty-var @12-27-12-28 (name "t"))))
 					(ty-apply @12-34-12-41 (symbol "List")
 						(ty-var @12-39-12-40 (name "t")))))))
-	(d-let (id 146)
+	(d-let (id 145)
 		(p-assign @17-1-17-6 (ident "main!") (id 141))
-		(e-lambda @17-9-17-15 (id 145)
+		(e-lambda @17-9-17-15 (id 144)
 			(args
 				(p-underscore @17-10-17-11 (id 142)))
-			(e-runtime-error (tag "not_implemented")))))
+			(e-empty_record @17-13-17-15))))
 ~~~
 # TYPES
 ~~~clojure

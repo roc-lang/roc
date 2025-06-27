@@ -8,9 +8,7 @@ type=expr
 0xFF
 ~~~
 # PROBLEMS
-**INVALID NUMBER**
-This number literal is not valid: 0xFF
-
+NIL
 # TOKENS
 ~~~zig
 Int(1:1-1:5),EndOfFile(1:5-1:5),
@@ -25,9 +23,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "invalid_num_literal") (id 73))
+(e-int @1-1-1-5 (num-var 73) (value "255") (id 73))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 73) (type "Error"))
+(expr (id 73) (type "Int(*)"))
 ~~~

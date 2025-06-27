@@ -3,7 +3,8 @@ const base = @import("../base.zig");
 const parse = @import("parse.zig");
 const tokenize = @import("parse/tokenize.zig");
 const collections = @import("../collections.zig");
-const types = @import("../types/types.zig");
+const types = @import("../types.zig");
+const RocDec = @import("../builtins/dec.zig").RocDec;
 
 const NodeStore = @import("./canonicalize/NodeStore.zig");
 const Scope = @import("./canonicalize/Scope.zig");
@@ -24,7 +25,12 @@ var_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
 /// Tracks which pattern indices have been used/referenced
 used_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
 /// Maps identifier names to pending type annotations awaiting connection to declarations
-pending_type_annos: std.StringHashMapUnmanaged(CIR.TypeAnno.Idx),
+pending_type_annos: std.ArrayListUnmanaged(PendingTypeAnno),
+
+const PendingTypeAnno = struct {
+    ident: base.Ident.Idx,
+    anno: CIR.TypeAnno.Idx,
+};
 
 const Ident = base.Ident;
 const Region = base.Region;
@@ -86,7 +92,7 @@ pub fn init(self: *CIR, parse_ir: *AST) Self {
         .var_function_regions = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, Region){},
         .var_patterns = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void){},
         .used_patterns = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void){},
-        .pending_type_annos = std.StringHashMapUnmanaged(CIR.TypeAnno.Idx){},
+        .pending_type_annos = std.ArrayListUnmanaged(PendingTypeAnno){},
     };
 
     // Top-level scope is not a function boundary
@@ -345,8 +351,7 @@ pub fn canonicalize_file(
                 const anno_idx = self.canonicalize_type_anno(ta.anno);
 
                 // Store annotation for connection to next declaration
-                const name_text = self.can_ir.env.idents.getText(name);
-                self.pending_type_annos.put(self.can_ir.env.gpa, name_text, anno_idx) catch |err| exitOnOom(err);
+                self.pending_type_annos.append(self.can_ir.env.gpa, .{ .ident = name, .anno = anno_idx }) catch |err| exitOnOom(err);
             },
             .malformed => |malformed| {
                 // We won't touch this since it's already a parse error.
@@ -723,10 +728,19 @@ fn canonicalize_decl(
     const pattern = self.can_ir.store.getPattern(pattern_idx);
     if (pattern == .assign) {
         const ident = pattern.assign.ident;
-        const ident_text = self.can_ir.env.idents.getText(ident);
 
         // Check if there's a pending type annotation for this identifier
-        if (self.pending_type_annos.get(ident_text)) |type_anno_idx| {
+        var found_anno_idx: ?CIR.TypeAnno.Idx = null;
+        var found_index: ?usize = null;
+        for (self.pending_type_annos.items, 0..) |pending, i| {
+            if (self.can_ir.env.idents.identsHaveSameText(ident, pending.ident)) {
+                found_anno_idx = pending.anno;
+                found_index = i;
+                break;
+            }
+        }
+
+        if (found_anno_idx) |type_anno_idx| {
             // Create a basic annotation from the type annotation
             const type_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), pattern_region);
 
@@ -734,7 +748,8 @@ fn canonicalize_decl(
             // TODO: Convert TypeAnno to proper type constraints and populate signature
             annotation = self.createAnnotationFromTypeAnno(type_anno_idx, type_var, pattern_region);
 
-            _ = self.pending_type_annos.remove(ident_text);
+            // Remove the used annotation
+            _ = self.pending_type_annos.swapRemove(found_index.?);
         }
     }
 
@@ -750,6 +765,43 @@ fn canonicalize_decl(
     _ = self.can_ir.setTypeVarAtDef(def_idx, Content{ .flex_var = null });
 
     return def_idx;
+}
+
+fn canonicalize_record_field(
+    self: *Self,
+    ast_field_idx: AST.RecordField.Idx,
+) ?CIR.RecordField.Idx {
+    const field = self.parse_ir.store.getRecordField(ast_field_idx);
+
+    // Canonicalize the field name
+    const name = self.parse_ir.tokens.resolveIdentifier(field.name) orelse {
+        return null;
+    };
+
+    // Canonicalize the field value
+    const value = if (field.value) |v|
+        self.canonicalize_expr(v) orelse return null
+    else blk: {
+        // Shorthand syntax: create implicit identifier expression
+        // For { name, age }, this creates an implicit identifier lookup for "name" etc.
+        const ident_expr = AST.Expr{
+            .ident = .{
+                .token = field.name,
+                .qualifier = null,
+                .region = field.region,
+            },
+        };
+        const ident_expr_idx = self.parse_ir.store.addExpr(ident_expr);
+        break :blk self.canonicalize_expr(ident_expr_idx) orelse return null;
+    };
+
+    // Create the CIR record field
+    const cir_field = CIR.RecordField{
+        .name = name,
+        .value = value,
+    };
+
+    return self.can_ir.store.addRecordField(cir_field);
 }
 
 /// Canonicalize an expression.
@@ -894,44 +946,119 @@ pub fn canonicalize_expr(
         .int => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
-            // resolve to a string slice from the source
+            // Resolve to a string slice from the source
             const token_text = self.parse_ir.resolve(e.token);
 
-            // intern the string slice
-            const literal = self.can_ir.env.strings.insert(self.can_ir.env.gpa, token_text);
+            // Parse the integer value
+            const is_negated = token_text[0] == '-'; // Drop the negation for now, so all valid literals fit in u128
+            const after_minus_sign = @as(usize, @intFromBool(is_negated));
 
-            // parse the integer value
-            const value = std.fmt.parseInt(i128, token_text, 10) catch {
-                // Invalid number literal
+            // The index the first *actual* digit (after minus sign, "0x" prefix, etc.) in the token
+            var first_digit: usize = undefined;
+
+            const DEFAULT_BASE: u8 = 10; // default to base-10, naturally
+            var int_base: u8 = undefined;
+
+            // If this begins with "0x" or "0b" or "Oo" then it's not base-10.
+            // We don't bother storing this info anywhere else besides token text,
+            // because we already have to look at the whole token to parse the digits
+            // into a number, so it will be in cache. It's also trivial to parse.
+            if (token_text[after_minus_sign] == '0' and token_text.len > after_minus_sign + 2) {
+                switch (token_text[after_minus_sign + 1]) {
+                    'x', 'X' => {
+                        int_base = 16;
+                        first_digit = after_minus_sign + 2;
+                    },
+                    'o', 'O' => {
+                        int_base = 8;
+                        first_digit = after_minus_sign + 2;
+                    },
+                    'b', 'B' => {
+                        int_base = 2;
+                        first_digit = after_minus_sign + 2;
+                    },
+                    else => {
+                        int_base = DEFAULT_BASE;
+                        first_digit = after_minus_sign;
+                    },
+                }
+            } else {
+                int_base = DEFAULT_BASE;
+                first_digit = after_minus_sign;
+            }
+
+            const u128_val: u128 = std.fmt.parseInt(u128, token_text[first_digit..], int_base) catch {
+                // Any number literal that is too large for u128 is invalid, regardless of whether it had a minus sign!
                 const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .invalid_num_literal = .{
-                    .literal = literal,
                     .region = region,
                 } });
                 return expr_idx;
             };
 
+            // If this had a minus sign, but negating it would result in a negative number
+            // that would be too low to fit in i128, then this int literal is also invalid.
+            if (is_negated and u128_val > min_i128_negated) {
+                const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .invalid_num_literal = .{
+                    .region = region,
+                } });
+                return expr_idx;
+            }
+
+            // Now we've confirmed that our int literal is one of these:
+            // * A signed integer that fits in i128
+            // * An unsigned integer that fits in u128
+            //
+            // We'll happily bitcast a u128 to i128 for storage (and bitcast it back later
+            // using its type information), but for negative numbers, we do need to actually
+            // negate them (branchlessly) if we skipped its minus sign earlier.
+            //
+            // This operation should never overflow i128, because we already would have errored out
+            // if the u128 portion was bigger than the lowest i128 without a minus sign.
+            // Special case: exactly i128 min already has the correct bit pattern when bitcast from u128,
+            // so if we try to negate it we'll get an overflow. We specifically *don't* negate that one.
+            const sign: i128 = (@as(i128, @intFromBool(!is_negated or u128_val == min_i128_negated)) << 1) - 1;
+            const i128_val: i128 = sign * @as(i128, @bitCast(u128_val));
+
             // create type vars, first "reserve" node slots
-            const final_expr_idx = self.can_ir.store.predictNodeIndex(3);
+            const final_expr_idx = self.can_ir.store.predictNodeIndex(2);
+
+            // Calculate requirements based on the value
+            // Special handling for minimum signed values (-128, -32768, etc.)
+            // These are special because they have a power-of-2 magnitude that fits exactly
+            // in their signed type. We report them as needing one less bit to make the
+            // standard "signed types have n-1 usable bits" logic work correctly.
+            const is_negative_u1 = @as(u1, @intFromBool(is_negated));
+            const is_power_of_2 = @as(u1, @intFromBool(u128_val != 0 and (u128_val & (u128_val - 1)) == 0));
+            const is_minimum_signed = is_negative_u1 & is_power_of_2;
+            const adjusted_val = u128_val - is_minimum_signed;
+
+            const requirements = types.Num.Int.Requirements{
+                .sign_needed = is_negated,
+                .bits_needed = types.Num.Int.BitsNeeded.fromValue(adjusted_val),
+            };
 
             // then insert the type vars, setting the parent to be the final slot
-            const precision_type_var = self.can_ir.pushFreshTypeVar(final_expr_idx, region);
-            const int_type_var = self.can_ir.pushTypeVar(
-                Content{ .structure = .{ .num = .{ .int_poly = precision_type_var } } },
-                final_expr_idx,
-                region,
-            );
+            const poly_var = self.can_ir.pushFreshTypeVar(final_expr_idx, region);
+            const int_requirements = types.Num.IntRequirements{
+                .var_ = poly_var,
+                .sign_needed = requirements.sign_needed,
+                .bits_needed = @intCast(@intFromEnum(requirements.bits_needed)),
+            };
+
+            // For non-decimal integers (hex, binary, octal), use int_poly directly
+            // For decimal integers, use num_poly so they can be either Int or Frac
+            const is_non_decimal = int_base != DEFAULT_BASE;
+            const num_var = if (is_non_decimal) blk: {
+                break :blk self.can_ir.env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_poly = int_requirements } } });
+            } else blk: {
+                break :blk self.can_ir.env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = int_requirements } } });
+            };
 
             // then in the final slot the actual expr is inserted
             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
                 .int = .{
-                    .int_var = int_type_var,
-                    .precision_var = precision_type_var,
-                    .literal = literal,
-                    .value = CIR.IntValue{
-                        .bytes = @bitCast(value),
-                        .kind = .i128,
-                    },
-                    .bound = Num.Int.Precision.fromValue(value),
+                    .num_var = num_var,
+                    .value = .{ .bytes = @bitCast(i128_val), .kind = .i128 },
                     .region = region,
                 },
             });
@@ -939,62 +1066,84 @@ pub fn canonicalize_expr(
             std.debug.assert(@intFromEnum(expr_idx) == @intFromEnum(final_expr_idx));
 
             // Insert concrete type variable
-            _ = self.can_ir.setTypeVarAtExpr(
-                expr_idx,
-                Content{ .structure = .{ .num = .{ .num_poly = int_type_var } } },
-            );
+            const type_content = if (is_non_decimal)
+                Content{ .structure = .{ .num = .{ .int_poly = int_requirements } } }
+            else
+                Content{ .structure = .{ .num = .{ .num_poly = int_requirements } } };
+            _ = self.can_ir.setTypeVarAtExpr(expr_idx, type_content);
 
             return expr_idx;
         },
-        .float => |e| {
+        .frac => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
             // resolve to a string slice from the source
             const token_text = self.parse_ir.resolve(e.token);
 
-            // intern the string slice
-            const literal = self.can_ir.env.strings.insert(self.can_ir.env.gpa, token_text);
-
-            // parse the float value
-            const value = std.fmt.parseFloat(f64, token_text) catch {
-                // Invalid number literal
-                const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .invalid_num_literal = .{
-                    .literal = literal,
-                    .region = region,
-                } });
-                return expr_idx;
-            };
-
-            // create type vars, first "reserve" 3 can node slots
+            // create type vars, first "reserve" node slots
             const final_expr_idx = self.can_ir.store.predictNodeIndex(3);
 
-            // then insert the type vars, setting the parent to be the final slot
-            const precision_type_var = self.can_ir.pushFreshTypeVar(final_expr_idx, region);
-            const float_type_var = self.can_ir.pushTypeVar(
-                Content{ .structure = .{ .num = .{ .frac_poly = precision_type_var } } },
+            // Create type variables
+            const poly_var = self.can_ir.pushFreshTypeVar(final_expr_idx, region);
+            const parsed = parseFracLiteral(token_text) catch |err| switch (err) {
+                error.InvalidNumLiteral => {
+                    const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .invalid_num_literal = .{
+                        .region = region,
+                    } });
+                    return expr_idx;
+                },
+            };
+
+            // Parse the literal first to get requirements
+            const requirements = switch (parsed) {
+                .small => |small_info| small_info.requirements,
+                .dec => |dec_info| dec_info.requirements,
+                .f64 => |f64_info| f64_info.requirements,
+            };
+
+            const frac_requirements = types.Num.FracRequirements{
+                .var_ = poly_var,
+                .fits_in_f32 = requirements.fits_in_f32,
+                .fits_in_dec = requirements.fits_in_dec,
+            };
+            _ = self.can_ir.pushTypeVar(
+                Content{ .structure = .{ .num = .{ .frac_poly = frac_requirements } } },
                 final_expr_idx,
                 region,
             );
+            const num_var = self.can_ir.env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = frac_requirements } } });
 
-            // then in the final slot the actual expr is inserted
-            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
-                .float = .{
-                    .frac_var = float_type_var,
-                    .precision_var = precision_type_var,
-                    .literal = literal,
-                    .value = value,
-                    .bound = Num.Frac.Precision.fromValue(value),
-                    .region = region,
+            const cir_expr = switch (parsed) {
+                .small => |small_info| CIR.Expr{
+                    .dec_small = .{
+                        .num_var = num_var,
+                        .numerator = small_info.numerator,
+                        .denominator_power_of_ten = small_info.denominator_power_of_ten,
+                        .region = region,
+                    },
                 },
-            });
+                .dec => |dec_info| CIR.Expr{
+                    .frac_dec = .{
+                        .frac_var = num_var,
+                        .value = dec_info.value,
+                        .region = region,
+                    },
+                },
+                .f64 => |f64_info| CIR.Expr{
+                    .frac_f64 = .{
+                        .frac_var = num_var,
+                        .value = f64_info.value,
+                        .region = region,
+                    },
+                },
+            };
+
+            const expr_idx = self.can_ir.store.addExpr(cir_expr);
 
             std.debug.assert(@intFromEnum(expr_idx) == @intFromEnum(final_expr_idx));
 
             // Insert concrete type variable
-            _ = self.can_ir.setTypeVarAtExpr(
-                expr_idx,
-                Content{ .structure = .{ .num = .{ .num_poly = float_type_var } } },
-            );
+            _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .structure = .{ .num = .{ .frac_poly = frac_requirements } } });
 
             return expr_idx;
         },
@@ -1071,12 +1220,12 @@ pub fn canonicalize_expr(
                 const final_expr_idx = self.can_ir.store.predictNodeIndex(2);
 
                 // then insert the type vars, setting the parent to be the final slot
-                const ext_type_var = self.can_ir.pushFreshTypeVar(final_expr_idx, region);
+                const poly_var = self.can_ir.pushFreshTypeVar(final_expr_idx, region);
 
                 // then in the final slot the actual expr is inserted
                 const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
                     .tag = .{
-                        .ext_var = ext_type_var,
+                        .ext_var = poly_var,
                         .name = tag_name,
                         .args = .{ .span = .{ .start = 0, .len = 0 } }, // empty arguments
                         .region = region,
@@ -1088,7 +1237,7 @@ pub fn canonicalize_expr(
                 // Insert concrete type variable
                 const tag_union = self.can_ir.env.types.mkTagUnion(
                     &[_]Tag{Tag{ .name = tag_name, .args = types.Var.SafeList.Range.empty }},
-                    ext_type_var,
+                    poly_var,
                 );
                 _ = self.can_ir.setTypeVarAtExpr(expr_idx, tag_union);
 
@@ -1114,48 +1263,161 @@ pub fn canonicalize_expr(
             // Iterate over the tuple items, canonicalizing each one
             // Then append the result to the scratch list
             const items_slice = self.parse_ir.store.exprSlice(e.items);
+            const elems_var_top = self.can_ir.env.types.tuple_elems.len();
             for (items_slice) |item| {
                 if (self.canonicalize_expr(item)) |canonicalized| {
                     self.can_ir.store.addScratchExpr(canonicalized);
+                    _ = self.can_ir.env.types.appendTupleElem(@enumFromInt(@intFromEnum(canonicalized)));
                 }
             }
+            const elems_var_range = types.Var.SafeList.Range{
+                .start = @enumFromInt(elems_var_top),
+                .end = @enumFromInt(self.can_ir.env.types.tuple_elems.len()),
+            };
 
             // Create span of the new scratch expressions
             const elems_span = self.can_ir.store.exprSpanFrom(scratch_top);
-
-            // create type vars, first "reserve" node slots
-            const tuple_expr_idx = self.can_ir.store.predictNodeIndex(2);
-
-            // then insert the type vars, setting the parent to be the final slot
-            const tuple_type_var = self.can_ir.pushFreshTypeVar(
-                tuple_expr_idx,
-                region,
-            );
 
             // then in the final slot the actual expr is inserted
             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
                 .tuple = .{
                     .elems = elems_span,
-                    .tuple_var = tuple_type_var,
                     .region = region,
                 },
             });
 
             // Insert concrete type variable for tuple
-            // TODO: Implement proper tuple type structure when tuple types are available
             _ = self.can_ir.setTypeVarAtExpr(
                 expr_idx,
-                Content{ .flex_var = null },
+                Content{ .structure = FlatType{
+                    .tuple = types.Tuple{ .elems = elems_var_range },
+                } },
             );
 
             return expr_idx;
         },
-        .record => |_| {
-            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize record expression");
-            const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
-                .feature = feature,
-                .region = Region.zero(),
-            } });
+        .record => |e| {
+            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
+
+            const fields_slice = self.parse_ir.store.recordFieldSlice(e.fields);
+            if (fields_slice.len == 0) {
+                const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
+                    .empty_record = .{
+                        .region = region,
+                    },
+                });
+
+                _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .structure = .empty_record });
+
+                return expr_idx;
+            }
+
+            // Mark the start of scratch record fields for the record
+            const scratch_top = self.can_ir.store.scratch_record_fields.top();
+
+            // Track field names to detect duplicates
+            const FieldInfo = struct { ident: base.Ident.Idx, region: base.Region };
+            var seen_fields = std.ArrayListUnmanaged(FieldInfo){};
+            defer seen_fields.deinit(self.can_ir.env.gpa);
+
+            // Iterate over the record fields, canonicalizing each one
+            // Then append the result to the scratch list
+            for (fields_slice) |field| {
+                const ast_field = self.parse_ir.store.getRecordField(field);
+
+                // Get the field name identifier
+                if (self.parse_ir.tokens.resolveIdentifier(ast_field.name)) |field_name_ident| {
+                    const field_name_region = self.parse_ir.tokens.resolve(ast_field.name);
+
+                    // Check for duplicate field names
+                    var found_duplicate = false;
+                    for (seen_fields.items) |seen_field| {
+                        if (self.can_ir.env.idents.identsHaveSameText(field_name_ident, seen_field.ident)) {
+                            // Found a duplicate - add diagnostic
+                            const diagnostic = CIR.Diagnostic{
+                                .duplicate_record_field = .{
+                                    .field_name = field_name_ident,
+                                    .duplicate_region = field_name_region,
+                                    .original_region = seen_field.region,
+                                },
+                            };
+                            self.can_ir.pushDiagnostic(diagnostic);
+                            found_duplicate = true;
+                            break;
+                        }
+                    }
+
+                    if (!found_duplicate) {
+                        // First occurrence of this field name
+                        seen_fields.append(self.can_ir.env.gpa, FieldInfo{
+                            .ident = field_name_ident,
+                            .region = field_name_region,
+                        }) catch |err| exitOnOom(err);
+
+                        // Only canonicalize and include non-duplicate fields
+                        if (self.canonicalize_record_field(field)) |canonicalized| {
+                            self.can_ir.store.scratch_record_fields.append(self.can_ir.env.gpa, canonicalized);
+                        }
+                    }
+                } else {
+                    // Field name couldn't be resolved, still try to canonicalize
+                    if (self.canonicalize_record_field(field)) |canonicalized| {
+                        self.can_ir.store.scratch_record_fields.append(self.can_ir.env.gpa, canonicalized);
+                    }
+                }
+            }
+
+            // Create span of the new scratch record fields
+            const fields_span = self.can_ir.store.recordFieldSpanFrom(scratch_top);
+
+            // create type vars, first "reserve" node slots
+            const record_expr_idx = self.can_ir.store.predictNodeIndex(1);
+
+            // then in the final slot the actual expr is inserted
+            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
+                .record = .{
+                    .fields = fields_span,
+                    .ext_var = self.can_ir.pushFreshTypeVar(record_expr_idx, region),
+                    .region = region,
+                },
+            });
+
+            // Create fresh type variables for each record field
+            // The type checker will unify these with the field expression types
+            const cir_fields = self.can_ir.store.sliceRecordFields(fields_span);
+
+            // Reserve additional type variable slots for field types
+            const field_count = cir_fields.len;
+            const total_vars_needed = 1 + field_count; // ext_var + field_vars
+            const record_with_fields_expr_idx = self.can_ir.store.predictNodeIndex(@intCast(total_vars_needed));
+
+            // Create fresh type variables for each field
+            var type_record_fields = std.ArrayList(types.RecordField).init(self.can_ir.env.gpa);
+            defer type_record_fields.deinit();
+
+            for (cir_fields) |cir_field_idx| {
+                const cir_field = self.can_ir.store.getRecordField(cir_field_idx);
+
+                // Create a fresh type variable for this field
+                const field_type_var = self.can_ir.pushFreshTypeVar(record_with_fields_expr_idx, region);
+
+                type_record_fields.append(types.RecordField{
+                    .name = cir_field.name,
+                    .var_ = field_type_var,
+                }) catch |err| exitOnOom(err);
+            }
+
+            // Create the record type structure
+            const type_fields_range = self.can_ir.env.types.appendRecordFields(type_record_fields.items);
+            const ext_var = self.can_ir.env.types.freshFromContent(.{ .structure = .empty_record });
+
+            // Set the record structure on the expression variable
+            // This provides the concrete type information for type checking and final output
+            _ = self.can_ir.setTypeVarAtExpr(
+                expr_idx,
+                Content{ .structure = .{ .record = .{ .fields = type_fields_range, .ext = ext_var } } },
+            );
+
             return expr_idx;
         },
         .lambda => |e| {
@@ -1271,6 +1533,20 @@ pub fn canonicalize_expr(
                 .OpPlus => .add,
                 .OpBinaryMinus => .sub,
                 .OpStar => .mul,
+                .OpSlash => .div,
+                .OpPercent => .rem,
+                .OpLessThan => .lt,
+                .OpGreaterThan => .gt,
+                .OpLessThanOrEq => .le,
+                .OpGreaterThanOrEq => .ge,
+                .OpEquals => .eq,
+                .OpNotEquals => .ne,
+                .OpCaret => .pow,
+                .OpDoubleSlash => .div_trunc,
+                .OpAnd => .@"and",
+                .OpOr => .@"or",
+                .OpPizza => .pipe_forward,
+                .OpDoubleQuestion => .null_coalesce,
                 else => {
                     // Unknown operator
                     const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "binop");
@@ -1306,12 +1582,30 @@ pub fn canonicalize_expr(
             } });
             return expr_idx;
         },
-        .if_then_else => |_| {
-            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize if_then_else expression");
-            const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
-                .feature = feature,
-                .region = Region.zero(),
-            } });
+        .if_then_else => |e| {
+            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
+
+            // Start collecting if-branches
+            const scratch_top = self.can_ir.store.scratchIfBranchTop();
+
+            // Flatten the if-then-else chain
+            const final_else = self.flattenIfThenElseChainRecursive(e);
+            const branches_span = self.can_ir.store.ifBranchSpanFrom(scratch_top);
+
+            // Create the if expression
+            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
+                .@"if" = .{
+                    .branches = branches_span,
+                    .final_else = final_else,
+                    .region = region,
+                    .cond_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region),
+                    .branch_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region),
+                },
+            });
+
+            // Set type variable for the entire if expression
+            _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
+
             return expr_idx;
         },
         .match => |_| {
@@ -1532,51 +1826,133 @@ fn canonicalize_pattern(
 
             return pattern_idx;
         },
-        .number => |e| {
+        .int => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
-            // resolve to a string slice from the source
+            // Resolve to a string slice from the source
             const token_text = self.parse_ir.resolve(e.number_tok);
 
-            // intern the string slice
-            const literal = self.can_ir.env.strings.insert(gpa, token_text);
-
-            // parse the integer value
+            // Parse as integer
             const value = std.fmt.parseInt(i128, token_text, 10) catch {
-                // Invalid num literal
+                // Invalid integer literal
                 const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .invalid_num_literal = .{
-                    .literal = literal,
                     .region = region,
                 } });
                 return malformed_idx;
             };
 
+            // Calculate requirements based on the value
+            const u128_val: u128 = if (value < 0) @as(u128, @intCast(-(value + 1))) + 1 else @as(u128, @intCast(value));
+
+            // Special handling for minimum signed values (-128, -32768, etc.)
+            // These are special because they have a power-of-2 magnitude that fits exactly
+            // in their signed type. We report them as needing one less bit to make the
+            // standard "signed types have n-1 usable bits" logic work correctly.
+            // This is done branchlessly by checking if the value is negative and its
+            // magnitude is a power of 2.
+            const is_negative = @as(u1, @intFromBool(value < 0));
+            const is_power_of_2 = @as(u1, @intFromBool(u128_val != 0 and (u128_val & (u128_val - 1)) == 0));
+            const is_minimum_signed = is_negative & is_power_of_2;
+
+            // If it's a minimum signed value, we subtract 1 from the magnitude before
+            // calculating bits needed. This makes -128 report as needing 7 bits instead of 8.
+            const adjusted_val = u128_val - is_minimum_signed;
+
+            const requirements = types.Num.Int.Requirements{
+                .sign_needed = value < 0,
+                .bits_needed = types.Num.Int.BitsNeeded.fromValue(adjusted_val),
+            };
+
+            // Reserve node slots for type vars, then insert into them.
+            const final_pattern_idx = self.can_ir.store.predictNodeIndex(2);
+            const poly_var = self.can_ir.pushFreshTypeVar(final_pattern_idx, region);
+            const int_requirements = types.Num.IntRequirements{
+                .var_ = poly_var,
+                .sign_needed = requirements.sign_needed,
+                .bits_needed = @intCast(@intFromEnum(requirements.bits_needed)),
+            };
+            const int_pattern = CIR.Pattern{
+                .int_literal = .{
+                    .num_var = poly_var,
+                    .value = .{ .bytes = @bitCast(value), .kind = .i128 },
+                    .region = region,
+                },
+            };
+            const pattern_idx = self.can_ir.store.addPattern(int_pattern);
+
+            std.debug.assert(@intFromEnum(pattern_idx) == @intFromEnum(final_pattern_idx));
+
+            _ = self.can_ir.setTypeVarAtPat(pattern_idx, Content{
+                .structure = .{ .num = .{ .num_poly = int_requirements } },
+            });
+
+            return pattern_idx;
+        },
+        .frac => |e| {
+            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
+
+            // Resolve to a string slice from the source
+            const token_text = self.parse_ir.resolve(e.number_tok);
+
             // create type vars, first "reserve" node slots
             const final_pattern_idx = self.can_ir.store.predictNodeIndex(2);
 
             // then insert the type vars, setting the parent to be the final slot
-            const num_type_var = self.can_ir.pushFreshTypeVar(final_pattern_idx, region);
+            const poly_var = self.can_ir.pushFreshTypeVar(final_pattern_idx, region);
 
-            // then in the final slot the actual pattern is inserted
-            const num_pattern = CIR.Pattern{
-                .num_literal = .{
-                    .num_var = num_type_var,
-                    .literal = literal,
-                    .value = CIR.IntValue{
-                        .bytes = @bitCast(value),
-                        .kind = .i128,
-                    },
-                    .bound = Num.Int.Precision.fromValue(value),
-                    .region = region,
+            const parsed = parseFracLiteral(token_text) catch |err| switch (err) {
+                error.InvalidNumLiteral => {
+                    const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .invalid_num_literal = .{
+                        .region = region,
+                    } });
+                    return malformed_idx;
                 },
             };
-            const pattern_idx = self.can_ir.store.addPattern(num_pattern);
+
+            // Parse the literal first to get requirements
+            const requirements = switch (parsed) {
+                .small => |small_info| small_info.requirements,
+                .dec => |dec_info| dec_info.requirements,
+                .f64 => |f64_info| f64_info.requirements,
+            };
+
+            const frac_requirements = types.Num.FracRequirements{
+                .var_ = poly_var,
+                .fits_in_f32 = requirements.fits_in_f32,
+                .fits_in_dec = requirements.fits_in_dec,
+            };
+
+            const cir_pattern = switch (parsed) {
+                .small => |small_info| CIR.Pattern{
+                    .small_dec_literal = .{
+                        .num_var = poly_var,
+                        .numerator = small_info.numerator,
+                        .denominator_power_of_ten = small_info.denominator_power_of_ten,
+                        .region = region,
+                    },
+                },
+                .dec => |dec_info| CIR.Pattern{
+                    .dec_literal = .{
+                        .num_var = poly_var,
+                        .value = dec_info.value,
+                        .region = region,
+                    },
+                },
+                .f64 => |f64_info| CIR.Pattern{
+                    .f64_literal = .{
+                        .num_var = poly_var,
+                        .value = f64_info.value,
+                        .region = region,
+                    },
+                },
+            };
+
+            const pattern_idx = self.can_ir.store.addPattern(cir_pattern);
 
             std.debug.assert(@intFromEnum(pattern_idx) == @intFromEnum(final_pattern_idx));
 
-            // Set the concrete type variable
             _ = self.can_ir.setTypeVarAtPat(pattern_idx, Content{
-                .structure = .{ .num = .{ .num_poly = num_type_var } },
+                .structure = .{ .num = .{ .frac_poly = frac_requirements } },
             });
 
             return pattern_idx;
@@ -1599,7 +1975,6 @@ fn canonicalize_pattern(
             };
             const pattern_idx = self.can_ir.store.addPattern(str_pattern);
 
-            // Set the concrete type variable
             _ = self.can_ir.setTypeVarAtPat(pattern_idx, Content{ .structure = .str });
 
             return pattern_idx;
@@ -1625,13 +2000,9 @@ fn canonicalize_pattern(
 
                 const args = self.can_ir.store.patternSpanFrom(start);
 
-                // create type vars, first "reserve" node slots
+                // Reserve node slots for type vars, then insert into them.
                 const final_pattern_idx = self.can_ir.store.predictNodeIndex(2);
-
-                // then insert the type vars, setting the parent to be the final slot
                 const ext_type_var = self.can_ir.pushFreshTypeVar(final_pattern_idx, region);
-
-                // then in the final slot the actual pattern is inserted
                 const tag_pattern = CIR.Pattern{
                     .applied_tag = .{
                         .ext_var = ext_type_var,
@@ -1644,7 +2015,6 @@ fn canonicalize_pattern(
 
                 std.debug.assert(@intFromEnum(pattern_idx) == @intFromEnum(final_pattern_idx));
 
-                // Set the concrete type variable
                 const tag_union_type = self.can_ir.env.types.mkTagUnion(
                     &[_]Tag{Tag{ .name = tag_name, .args = types.Var.SafeList.Range.empty }},
                     ext_type_var,
@@ -1655,12 +2025,105 @@ fn canonicalize_pattern(
             }
             return null;
         },
-        .record => |_| {
-            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize record pattern");
-            const pattern_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .not_implemented = .{
-                .feature = feature,
-                .region = Region.zero(),
-            } });
+        .record => |e| {
+            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
+
+            // Mark the start of scratch record destructs
+            const scratch_top = self.can_ir.store.scratchRecordDestructTop();
+
+            // Process each field in the record pattern
+            for (self.parse_ir.store.patternRecordFieldSlice(e.fields)) |field_idx| {
+                const field = self.parse_ir.store.getPatternRecordField(field_idx);
+                const field_region = self.parse_ir.tokenizedRegionToRegion(field.region);
+
+                // Resolve the field name
+                if (self.parse_ir.tokens.resolveIdentifier(field.name)) |field_name_ident| {
+                    // For simple destructuring like `{ name, age }`, both label and ident are the same
+                    if (field.value) |_| {
+                        // TODO: For patterns like `{ name: x }`, we'd need the value pattern, but that's not implemented yet
+                        // TODO: Handle patterns like `{ name: x }` where there's a sub-pattern
+                        const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "record pattern with sub-patterns");
+                        const pattern_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .not_implemented = .{
+                            .feature = feature,
+                            .region = field_region,
+                        } });
+                        return pattern_idx;
+                    }
+
+                    // Create the RecordDestruct for this field
+                    const record_destruct = CIR.RecordDestruct{
+                        .region = field_region,
+                        .label = field_name_ident,
+                        .ident = field_name_ident,
+                        .kind = .Required,
+                    };
+
+                    const destruct_idx = self.can_ir.store.addRecordDestruct(record_destruct);
+                    self.can_ir.store.addScratchRecordDestruct(destruct_idx);
+
+                    // Create an assign pattern for this identifier and introduce it into scope
+                    const assign_pattern_idx = self.can_ir.store.addPattern(CIR.Pattern{ .assign = .{
+                        .ident = field_name_ident,
+                        .region = field_region,
+                    } });
+                    _ = self.can_ir.setTypeVarAtPat(assign_pattern_idx, .{ .flex_var = null });
+
+                    // Introduce the identifier into scope
+                    switch (self.scopeIntroduceInternal(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, field_name_ident, assign_pattern_idx, false, true)) {
+                        .success => {},
+                        .shadowing_warning => |shadowed_pattern_idx| {
+                            const shadowed_pattern = self.can_ir.store.getPattern(shadowed_pattern_idx);
+                            const original_region = shadowed_pattern.toRegion();
+                            self.can_ir.pushDiagnostic(CIR.Diagnostic{ .shadowing_warning = .{
+                                .ident = field_name_ident,
+                                .region = field_region,
+                                .original_region = original_region,
+                            } });
+                        },
+                        .top_level_var_error => {
+                            const pattern_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .invalid_top_level_statement = .{
+                                .stmt = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "var"),
+                            } });
+                            return pattern_idx;
+                        },
+                        .var_across_function_boundary => {
+                            const pattern_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .ident_already_in_scope = .{
+                                .ident = field_name_ident,
+                                .region = field_region,
+                            } });
+                            return pattern_idx;
+                        },
+                    }
+                } else {
+                    const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "report an error when unable to resolve field identifier");
+                    const pattern_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .not_implemented = .{
+                        .feature = feature,
+                        .region = field_region,
+                    } });
+                    return pattern_idx;
+                }
+            }
+
+            // Create span of the new scratch record destructs
+            const destructs_span = self.can_ir.store.recordDestructSpanFrom(scratch_top);
+
+            // Create type variables for the record
+            const whole_var = self.can_ir.env.types.fresh();
+            const ext_var = self.can_ir.env.types.fresh();
+
+            // Create the record destructure pattern
+            const pattern_idx = self.can_ir.store.addPattern(CIR.Pattern{
+                .record_destructure = .{
+                    .whole_var = whole_var,
+                    .ext_var = ext_var,
+                    .destructs = destructs_span,
+                    .region = region,
+                },
+            });
+
+            // Set type variable for the pattern
+            _ = self.can_ir.setTypeVarAtPat(pattern_idx, .{ .flex_var = null });
+
             return pattern_idx;
         },
         .tuple => |e| {
@@ -1672,38 +2135,34 @@ fn canonicalize_pattern(
             // Iterate over the tuple patterns, canonicalizing each one
             // Then append the result to the scratch list
             const patterns_slice = self.parse_ir.store.patternSlice(e.patterns);
+            const elems_var_top = self.can_ir.env.types.tuple_elems.len();
             for (patterns_slice) |pattern| {
                 if (self.canonicalize_pattern(pattern)) |canonicalized| {
                     self.can_ir.store.addScratchPattern(canonicalized);
+                    _ = self.can_ir.env.types.appendTupleElem(@enumFromInt(@intFromEnum(canonicalized)));
                 }
             }
+            const elems_var_range = types.Var.SafeList.Range{
+                .start = @enumFromInt(elems_var_top),
+                .end = @enumFromInt(self.can_ir.env.types.tuple_elems.len()),
+            };
 
             // Create span of the new scratch patterns
             const patterns_span = self.can_ir.store.patternSpanFrom(scratch_top);
 
-            // create type vars, first "reserve" node slots
-            const tuple_pattern_idx = self.can_ir.store.predictNodeIndex(2);
-
-            // then insert the type vars, setting the parent to be the final slot
-            const tuple_type_var = self.can_ir.pushFreshTypeVar(
-                tuple_pattern_idx,
-                region,
-            );
-
-            // then in the final slot the actual pattern is inserted
             const pattern_idx = self.can_ir.store.addPattern(CIR.Pattern{
                 .tuple = .{
                     .patterns = patterns_span,
-                    .tuple_var = tuple_type_var,
                     .region = region,
                 },
             });
 
             // Insert concrete type variable for tuple pattern
-            // TODO: Implement proper tuple type structure when tuple types are available
             _ = self.can_ir.setTypeVarAtPat(
                 pattern_idx,
-                Content{ .flex_var = null },
+                Content{ .structure = FlatType{
+                    .tuple = types.Tuple{ .elems = elems_var_range },
+                } },
             );
 
             return pattern_idx;
@@ -1725,6 +2184,14 @@ fn canonicalize_pattern(
             return pattern_idx;
         },
         .alternatives => |_| {
+            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize alternatives pattern");
+            const pattern_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .not_implemented = .{
+                .feature = feature,
+                .region = Region.zero(),
+            } });
+            return pattern_idx;
+        },
+        .as => |_| {
             const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize alternatives pattern");
             const pattern_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .not_implemented = .{
                 .feature = feature,
@@ -1783,6 +2250,284 @@ fn isVarReassignmentAcrossFunctionBoundary(self: *const Self, pattern_idx: CIR.P
     return false;
 }
 
+// Check if the given f64 fits in f32 range (ignoring precision loss)
+fn fitsInF32(f64_val: f64) bool {
+    // Check if it's within the range that f32 can represent.
+    // This includes normal, subnormal, and zero values.
+    // (This is a magnitude check, so take the abs value to check
+    // positive and negative at the same time.)
+    const abs_val = @abs(f64_val);
+    return abs_val == 0.0 or (abs_val >= std.math.floatTrueMin(f32) and abs_val <= std.math.floatMax(f32));
+}
+
+// Check if a float value can be represented accurately in RocDec
+fn fitsInDec(value: f64) bool {
+    // RocDec uses i128 with 18 decimal places
+    const max_dec_value = 170141183460469231731.0;
+    const min_dec_value = -170141183460469231731.0;
+
+    return value >= min_dec_value and value <= max_dec_value;
+}
+
+// Result type for parsing fractional literals into small, Dec, or f64
+const FracLiteralResult = union(enum) {
+    small: struct {
+        numerator: i16,
+        denominator_power_of_ten: u8,
+        requirements: types.Num.Frac.Requirements,
+    },
+    dec: struct {
+        value: RocDec,
+        requirements: types.Num.Frac.Requirements,
+    },
+    f64: struct {
+        value: f64,
+        requirements: types.Num.Frac.Requirements,
+    },
+};
+
+// Try to parse a fractional literal as a small dec (numerator/10^power)
+fn parseSmallDec(token_text: []const u8) ?struct { numerator: i16, denominator_power_of_ten: u8 } {
+    // For negative zero, we'll return null to force f64 path
+    if (token_text.len > 0 and token_text[0] == '-') {
+        const rest = token_text[1..];
+        // Check if it's -0, -0.0, -0.00, etc.
+        var all_zeros = true;
+        for (rest) |c| {
+            if (c != '0' and c != '.') {
+                all_zeros = false;
+                break;
+            }
+        }
+        if (all_zeros) return null;
+    }
+
+    // Parse as a whole number by removing the decimal point
+    const dot_pos = std.mem.indexOf(u8, token_text, ".") orelse {
+        // No decimal point, parse as integer
+        const val = std.fmt.parseInt(i32, token_text, 10) catch return null;
+        if (val < -32768 or val > 32767) return null;
+        return .{ .numerator = @as(i16, @intCast(val)), .denominator_power_of_ten = 0 };
+    };
+
+    // Count digits after decimal point
+    const after_decimal_len = token_text.len - dot_pos - 1;
+    if (after_decimal_len > 255) return null; // Too many decimal places
+
+    // Build the string without the decimal point
+    var buf: [32]u8 = undefined;
+    var len: usize = 0;
+
+    // Copy part before decimal
+    @memcpy(buf[0..dot_pos], token_text[0..dot_pos]);
+    len = dot_pos;
+
+    // Copy part after decimal
+    if (after_decimal_len > 0) {
+        @memcpy(buf[len..][0..after_decimal_len], token_text[dot_pos + 1 ..]);
+        len += after_decimal_len;
+    }
+
+    // Parse the combined number
+    const val = std.fmt.parseInt(i32, buf[0..len], 10) catch return null;
+    if (val < -32768 or val > 32767) return null;
+
+    return .{ .numerator = @as(i16, @intCast(val)), .denominator_power_of_ten = @as(u8, @intCast(after_decimal_len)) };
+}
+
+// Parse a fractional literal from text and return small, Dec, or F64 value
+fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
+    // First, always parse as f64 to get the numeric value
+    const f64_val = std.fmt.parseFloat(f64, token_text) catch {
+        // If it can't be parsed as F64, it's too big to fit in any of Roc's Frac types.
+        return error.InvalidNumLiteral;
+    };
+
+    // Check if it has scientific notation
+    const has_scientific_notation = blk: {
+        for (token_text) |char| {
+            if (char == 'e' or char == 'E') {
+                break :blk true;
+            }
+        }
+        break :blk false;
+    };
+
+    // For non-scientific notation, try the original parseSmallDec first to preserve behavior
+    if (!has_scientific_notation) {
+        if (parseSmallDec(token_text)) |small| {
+            // Convert to f64 to check requirements
+            const numerator_f64 = @as(f64, @floatFromInt(small.numerator));
+            var divisor: f64 = 1.0;
+            var i: u8 = 0;
+            while (i < small.denominator_power_of_ten) : (i += 1) {
+                divisor *= 10.0;
+            }
+            const small_f64_val = numerator_f64 / divisor;
+
+            return FracLiteralResult{
+                .small = .{
+                    .numerator = small.numerator,
+                    .denominator_power_of_ten = small.denominator_power_of_ten,
+                    .requirements = types.Num.Frac.Requirements{
+                        .fits_in_f32 = fitsInF32(small_f64_val),
+                        .fits_in_dec = true,
+                    },
+                },
+            };
+        }
+    }
+
+    // For scientific notation or when parseSmallDec fails, check if it's a whole number
+    const rounded = @round(f64_val);
+    if (f64_val == rounded and rounded >= -32768 and rounded <= 32767) {
+        // It's a whole number in i16 range, can use small dec with denominator_power_of_ten = 0
+        return FracLiteralResult{
+            .small = .{
+                .numerator = @as(i16, @intFromFloat(rounded)),
+                .denominator_power_of_ten = 0,
+                .requirements = types.Num.Frac.Requirements{
+                    .fits_in_f32 = fitsInF32(f64_val),
+                    .fits_in_dec = true,
+                },
+            },
+        };
+    }
+
+    // Check if the value can fit in RocDec (whether or not it uses scientific notation)
+    // RocDec uses i128 with 18 decimal places
+    // We need to check if the value is within RocDec's range
+    if (fitsInDec(f64_val)) {
+        // Convert f64 to RocDec by multiplying by 10^18
+        const dec_scale = std.math.pow(f64, 10, 18);
+        const scaled_val = f64_val * dec_scale;
+
+        // i128 max is 170141183460469231731687303715884105727
+        // i128 min is -170141183460469231731687303715884105728
+        // We need to be more conservative to avoid overflow during conversion
+        const i128_max_f64 = 170141183460469231731687303715884105727.0;
+        const i128_min_f64 = -170141183460469231731687303715884105728.0;
+
+        if (scaled_val >= i128_min_f64 and scaled_val <= i128_max_f64) {
+            // Safe to convert - but check for special cases
+            const rounded_val = @round(scaled_val);
+
+            // Extra safety check for boundary values
+            if (rounded_val < i128_min_f64 or rounded_val > i128_max_f64) {
+                // Would overflow, use f64 instead
+                return FracLiteralResult{
+                    .f64 = .{
+                        .value = f64_val,
+                        .requirements = types.Num.Frac.Requirements{
+                            .fits_in_f32 = fitsInF32(f64_val),
+                            .fits_in_dec = false,
+                        },
+                    },
+                };
+            }
+
+            const dec_num = @as(i128, @intFromFloat(rounded_val));
+
+            // Check if the value is too small (would round to 0 or near 0)
+            // This prevents loss of precision for very small numbers like 1e-40
+            const min_representable = 1e-18; // Smallest non-zero value Dec can represent
+            if (@abs(f64_val) > 0 and @abs(f64_val) < min_representable) {
+                // Too small for Dec precision, use f64
+                return FracLiteralResult{
+                    .f64 = .{
+                        .value = f64_val,
+                        .requirements = types.Num.Frac.Requirements{
+                            .fits_in_f32 = fitsInF32(f64_val),
+                            .fits_in_dec = false,
+                        },
+                    },
+                };
+            }
+
+            return FracLiteralResult{
+                .dec = .{
+                    .value = RocDec{ .num = dec_num },
+                    .requirements = types.Num.Frac.Requirements{
+                        .fits_in_f32 = fitsInF32(f64_val),
+                        .fits_in_dec = true,
+                    },
+                },
+            };
+        }
+    }
+
+    // If it doesn't fit in small dec or RocDec, use f64
+    return FracLiteralResult{
+        .f64 = .{
+            .value = f64_val,
+            .requirements = types.Num.Frac.Requirements{
+                .fits_in_f32 = fitsInF32(f64_val),
+                .fits_in_dec = false,
+            },
+        },
+    };
+}
+
+test {
+    _ = @import("canonicalize/test/int_test.zig");
+    _ = @import("canonicalize/test/frac_test.zig");
+}
+
+/// Flatten a chain of if-then-else expressions into multiple if-branches
+/// Returns the final else expression that is not an if-then-else
+fn flattenIfThenElseChainRecursive(self: *Self, if_expr: anytype) CIR.Expr.Idx {
+    // Canonicalize and add the current condition/then pair
+    const cond_idx = blk: {
+        if (self.canonicalize_expr(if_expr.condition)) |idx| {
+            break :blk idx;
+        } else {
+            const ast_cond = self.parse_ir.store.getExpr(if_expr.condition);
+            const cond_region = self.parse_ir.tokenizedRegionToRegion(ast_cond.to_tokenized_region());
+            break :blk self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{
+                .if_condition_not_canonicalized = .{ .region = cond_region },
+            });
+        }
+    };
+
+    const then_idx = blk: {
+        if (self.canonicalize_expr(if_expr.then)) |idx| {
+            break :blk idx;
+        } else {
+            const ast_then = self.parse_ir.store.getExpr(if_expr.then);
+            const then_region = self.parse_ir.tokenizedRegionToRegion(ast_then.to_tokenized_region());
+            break :blk self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{
+                .if_then_not_canonicalized = .{ .region = then_region },
+            });
+        }
+    };
+
+    // Add this condition/then pair as an if-branch
+    const if_branch = CIR.IfBranch{
+        .cond = cond_idx,
+        .body = then_idx,
+    };
+    self.can_ir.store.addScratchIfBranch(if_branch);
+
+    // Check if the else clause is another if-then-else that we should flatten
+    const else_expr = self.parse_ir.store.getExpr(if_expr.@"else");
+    switch (else_expr) {
+        .if_then_else => |nested_if| {
+            // Recursively flatten the nested if-then-else
+            return self.flattenIfThenElseChainRecursive(nested_if);
+        },
+        else => {
+            // This is the final else - canonicalize and return it
+            if (self.canonicalize_expr(if_expr.@"else")) |else_idx| {
+                return else_idx;
+            } else {
+                const else_region = self.parse_ir.tokenizedRegionToRegion(else_expr.to_tokenized_region());
+                return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{
+                    .if_else_not_canonicalized = .{ .region = else_region },
+                });
+            }
+        },
+    }
+}
 /// Introduce a new identifier to the current scope, return an
 /// index if
 fn scopeIntroduceIdent(
@@ -2203,7 +2948,8 @@ fn canonicalize_type_header(self: *Self, header_idx: AST.TypeHeader.Idx) CIR.Typ
     });
 }
 
-fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) ?CIR.Expr.Idx {
+/// Canonicalize a statement in the canonical IR.
+pub fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) ?CIR.Expr.Idx {
     const stmt = self.parse_ir.store.getStatement(stmt_idx);
 
     switch (stmt) {
@@ -2352,22 +3098,48 @@ fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) ?CIR.Expr.Id
                 } });
             };
 
-            // Canonicalize the type annotation
+            // First, extract all type variables from the AST annotation
+            var type_vars = std.ArrayList(Ident.Idx).init(self.can_ir.env.gpa);
+            defer type_vars.deinit();
+            self.extractTypeVarsFromASTAnno(ta.anno, &type_vars);
+
+            // Enter a new scope for type variables
+            self.scopeEnter(self.can_ir.env.gpa, false);
+            defer self.scopeExit(self.can_ir.env.gpa) catch {};
+
+            // Introduce type variables into scope
+            for (type_vars.items) |type_var| {
+                // Get the proper region for this type variable from the AST
+                const type_var_region = self.getTypeVarRegionFromAST(ta.anno, type_var) orelse region;
+                const type_var_anno = self.can_ir.store.addTypeAnno(.{ .ty_var = .{
+                    .name = type_var,
+                    .region = type_var_region,
+                } });
+                self.scopeIntroduceTypeVar(type_var, type_var_anno);
+            }
+
+            // Now canonicalize the annotation with type variables in scope
             const type_anno_idx = self.canonicalize_type_anno(ta.anno);
 
-            // Extract type variables from the annotation and introduce them into scope
-            // This makes them available for the subsequent value declaration
-            self.extractTypeVarsFromAnno(type_anno_idx);
-
             // Store the type annotation for connection with the next declaration
-            const name_text = self.can_ir.env.idents.getText(name_ident);
-            self.pending_type_annos.put(self.can_ir.env.gpa, name_text, type_anno_idx) catch |err| exitOnOom(err);
+            self.pending_type_annos.append(self.can_ir.env.gpa, .{ .ident = name_ident, .anno = type_anno_idx }) catch |err| exitOnOom(err);
+
+            // Create a type annotation statement
+            const type_anno_stmt = CIR.Statement{
+                .type_anno = .{
+                    .name = name_ident,
+                    .anno = type_anno_idx,
+                    .where = null, // Where clauses are not yet implemented in the parser
+                    .region = region,
+                },
+            };
+            const type_anno_stmt_idx = self.can_ir.store.addStatement(type_anno_stmt);
+            self.can_ir.store.addScratchStatement(type_anno_stmt_idx);
 
             // Type annotations don't produce runtime values, so return a unit expression
             // Create an empty tuple as a unit value
             const empty_span = CIR.Expr.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } };
             const unit_expr = self.can_ir.store.addExpr(CIR.Expr{ .tuple = .{
-                .tuple_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region),
                 .elems = empty_span,
                 .region = region,
             } });
@@ -2381,7 +3153,6 @@ fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) ?CIR.Expr.Id
             const region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
             const empty_span = CIR.Expr.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } };
             const unit_expr = self.can_ir.store.addExpr(CIR.Expr{ .tuple = .{
-                .tuple_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region),
                 .elems = empty_span,
                 .region = region,
             } });
@@ -2423,6 +3194,54 @@ fn scopeExit(self: *Self, gpa: std.mem.Allocator) Scope.Error!void {
 fn currentScope(self: *Self) *Scope {
     std.debug.assert(self.scopes.items.len > 0);
     return &self.scopes.items[self.scopes.items.len - 1];
+}
+
+/// This will be used later for builtins like Num.nan, Num.infinity, etc.
+pub fn addNonFiniteFloat(self: *Self, value: f64, region: base.Region) CIR.Expr.Idx {
+    // Dec doesn't have infinity, -infinity, or NaN
+    const requirements = types.Num.Frac.Requirements{
+        .fits_in_f32 = true,
+        .fits_in_dec = false,
+    };
+
+    // Create type vars, first "reserve" node slots
+    const final_expr_idx = self.can_ir.store.predictNodeIndex(2);
+
+    // Create a polymorphic frac type variable
+    const poly_var = self.can_ir.env.types.fresh();
+    const frac_requirements = types.Num.FracRequirements{
+        .var_ = poly_var,
+        .fits_in_f32 = requirements.fits_in_f32,
+        .fits_in_dec = requirements.fits_in_dec,
+    };
+    _ = self.can_ir.env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = frac_requirements } } });
+    const num_var = self.can_ir.env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = frac_requirements } } });
+
+    // Store the type variable at the expression location
+    _ = self.can_ir.pushTypeVar(
+        Content{ .structure = .{ .num = .{ .frac_poly = frac_requirements } } },
+        final_expr_idx,
+        region,
+    );
+
+    // then in the final slot the actual expr is inserted
+    const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
+        .frac_f64 = .{
+            .frac_var = num_var,
+            .value = value,
+            .region = region,
+        },
+    });
+
+    std.debug.assert(@intFromEnum(expr_idx) == @intFromEnum(final_expr_idx));
+
+    // Insert concrete type variable
+    _ = self.can_ir.setTypeVarAtExpr(
+        expr_idx,
+        Content{ .structure = .{ .num = .{ .frac_poly = frac_requirements } } },
+    );
+
+    return expr_idx;
 }
 
 /// Check if an identifier is in scope
@@ -2519,9 +3338,13 @@ fn extractTypeVarsFromAnno(self: *Self, type_anno_idx: CIR.TypeAnno.Idx) void {
                 self.extractTypeVarsFromAnno(arg_idx);
             }
         },
-        .@"fn" => {
-            // Function type annotations are not yet implemented in CIR
-            // When implemented, extract from parameter and return types
+        .@"fn" => |fn_anno| {
+            // Extract type variables from function parameter types
+            for (self.can_ir.store.sliceTypeAnnos(fn_anno.args)) |param_idx| {
+                self.extractTypeVarsFromAnno(param_idx);
+            }
+            // Extract type variables from return type
+            self.extractTypeVarsFromAnno(fn_anno.ret);
         },
         .tuple => |tuple| {
             // Extract from tuple elements
@@ -2533,7 +3356,14 @@ fn extractTypeVarsFromAnno(self: *Self, type_anno_idx: CIR.TypeAnno.Idx) void {
             // Extract from inner annotation
             self.extractTypeVarsFromAnno(parens.anno);
         },
-        .ty, .underscore, .mod_ty, .record, .tag_union, .malformed => {
+        .record => |record| {
+            // Extract type variables from record field types
+            for (self.can_ir.store.sliceAnnoRecordFields(record.fields)) |field_idx| {
+                const field = self.can_ir.store.getAnnoRecordField(field_idx);
+                self.extractTypeVarsFromAnno(field.ty);
+            }
+        },
+        .ty, .underscore, .mod_ty, .tag_union, .malformed => {
             // These don't contain type variables to extract
         },
     }
@@ -2583,8 +3413,82 @@ fn extractTypeVarsFromASTAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, vars: *st
         .parens => |parens| {
             self.extractTypeVarsFromASTAnno(parens.anno, vars);
         },
-        .ty, .underscore, .mod_ty, .record, .tag_union, .malformed => {
+        .record => |record| {
+            // Extract type variables from record field types
+            for (self.parse_ir.store.annoRecordFieldSlice(record.fields)) |field_idx| {
+                const field = self.parse_ir.store.getAnnoRecordField(field_idx);
+                self.extractTypeVarsFromASTAnno(field.ty, vars);
+            }
+        },
+        .ty, .underscore, .mod_ty, .tag_union, .malformed => {
             // These don't contain type variables to extract
+        },
+    }
+}
+
+/// Get the region of a specific type variable from an AST type annotation
+fn getTypeVarRegionFromAST(self: *Self, anno_idx: AST.TypeAnno.Idx, target_ident: Ident.Idx) ?Region {
+    const ast_anno = self.parse_ir.store.getTypeAnno(anno_idx);
+
+    switch (ast_anno) {
+        .ty_var => |ty_var| {
+            if (self.parse_ir.tokens.resolveIdentifier(ty_var.tok)) |ident| {
+                if (ident.idx == target_ident.idx) {
+                    return self.parse_ir.tokenizedRegionToRegion(ty_var.region);
+                }
+            }
+            return null;
+        },
+        .apply => |apply| {
+            for (self.parse_ir.store.typeAnnoSlice(apply.args)) |arg_idx| {
+                if (self.getTypeVarRegionFromAST(arg_idx, target_ident)) |region| {
+                    return region;
+                }
+            }
+            return null;
+        },
+        .@"fn" => |fn_anno| {
+            for (self.parse_ir.store.typeAnnoSlice(fn_anno.args)) |arg_idx| {
+                if (self.getTypeVarRegionFromAST(arg_idx, target_ident)) |region| {
+                    return region;
+                }
+            }
+            return self.getTypeVarRegionFromAST(fn_anno.ret, target_ident);
+        },
+        .tuple => |tuple| {
+            for (self.parse_ir.store.typeAnnoSlice(tuple.annos)) |elem_idx| {
+                if (self.getTypeVarRegionFromAST(elem_idx, target_ident)) |region| {
+                    return region;
+                }
+            }
+            return null;
+        },
+        .parens => |parens| {
+            return self.getTypeVarRegionFromAST(parens.anno, target_ident);
+        },
+        .record => |record| {
+            for (self.parse_ir.store.annoRecordFieldSlice(record.fields)) |field_idx| {
+                const field = self.parse_ir.store.getAnnoRecordField(field_idx);
+                if (self.getTypeVarRegionFromAST(field.ty, target_ident)) |region| {
+                    return region;
+                }
+            }
+            return null;
+        },
+        .tag_union => |tag_union| {
+            for (self.parse_ir.store.typeAnnoSlice(tag_union.tags)) |tag_idx| {
+                if (self.getTypeVarRegionFromAST(tag_idx, target_ident)) |region| {
+                    return region;
+                }
+            }
+            if (tag_union.open_anno) |open_idx| {
+                return self.getTypeVarRegionFromAST(open_idx, target_ident);
+            }
+            return null;
+        },
+        .ty, .underscore, .mod_ty, .malformed => {
+            // These don't contain type variables
+            return null;
         },
     }
 }
@@ -3133,31 +4037,38 @@ fn canonicalizeBasicType(self: *Self, symbol: Ident.Idx, parent_node_idx: Node.I
     } else if (std.mem.eql(u8, name, "Num")) {
         // Create a fresh TypeVar for the polymorphic number type
         const num_var = self.can_ir.pushFreshTypeVar(parent_node_idx, region);
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_poly = num_var } } }, parent_node_idx, region);
+        const num_requirements = types.Num.IntRequirements{
+            .var_ = num_var,
+            .sign_needed = false,
+            .bits_needed = 0, // 7 bits - most permissive for generic Num type
+        };
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_poly = num_requirements } } }, parent_node_idx, region);
     } else if (std.mem.eql(u8, name, "U8")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .int_precision = .u8 } } }, parent_node_idx, region);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } }, parent_node_idx, region);
     } else if (std.mem.eql(u8, name, "U16")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .int_precision = .u16 } } }, parent_node_idx, region);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u16 } } } }, parent_node_idx, region);
     } else if (std.mem.eql(u8, name, "U32")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .int_precision = .u32 } } }, parent_node_idx, region);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u32 } } } }, parent_node_idx, region);
     } else if (std.mem.eql(u8, name, "U64")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .int_precision = .u64 } } }, parent_node_idx, region);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u64 } } } }, parent_node_idx, region);
     } else if (std.mem.eql(u8, name, "U128")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .int_precision = .u128 } } }, parent_node_idx, region);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u128 } } } }, parent_node_idx, region);
     } else if (std.mem.eql(u8, name, "I8")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .int_precision = .i8 } } }, parent_node_idx, region);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i8 } } } }, parent_node_idx, region);
     } else if (std.mem.eql(u8, name, "I16")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .int_precision = .i16 } } }, parent_node_idx, region);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i16 } } } }, parent_node_idx, region);
     } else if (std.mem.eql(u8, name, "I32")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .int_precision = .i32 } } }, parent_node_idx, region);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i32 } } } }, parent_node_idx, region);
     } else if (std.mem.eql(u8, name, "I64")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .int_precision = .i64 } } }, parent_node_idx, region);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } }, parent_node_idx, region);
     } else if (std.mem.eql(u8, name, "I128")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .int_precision = .i128 } } }, parent_node_idx, region);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i128 } } } }, parent_node_idx, region);
     } else if (std.mem.eql(u8, name, "F32")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .frac_precision = .f32 } } }, parent_node_idx, region);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f32 } } } }, parent_node_idx, region);
     } else if (std.mem.eql(u8, name, "F64")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .frac_precision = .f64 } } }, parent_node_idx, region);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f64 } } } }, parent_node_idx, region);
+    } else if (std.mem.eql(u8, name, "Dec")) {
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = .dec } } } }, parent_node_idx, region);
     } else {
         // Look up user-defined type in scope
         const scope = self.currentScope();
@@ -3440,6 +4351,21 @@ const ScopeTestContext = struct {
     }
 };
 
+// We write out this giant literal because it's actually annoying to try to
+// take std.math.minInt(i128), drop the minus sign, and convert it to u128
+// all at comptime. Instead we just have a test that verifies its correctness.
+const min_i128_negated: u128 = 170141183460469231731687303715884105728;
+
+test "min_i128_negated is actually the minimum i128, negated" {
+    var min_i128_buf: [64]u8 = undefined;
+    const min_i128_str = std.fmt.bufPrint(&min_i128_buf, "{}", .{std.math.minInt(i128)}) catch unreachable;
+
+    var negated_buf: [64]u8 = undefined;
+    const negated_str = std.fmt.bufPrint(&negated_buf, "-{}", .{min_i128_negated}) catch unreachable;
+
+    try std.testing.expectEqualStrings(min_i128_str, negated_str);
+}
+
 test "basic scope initialization" {
     const gpa = std.testing.allocator;
 
@@ -3673,4 +4599,317 @@ test "aliases work separately from idents" {
 
     try std.testing.expectEqual(Scope.LookupResult{ .found = ident_pattern }, ident_lookup);
     try std.testing.expectEqual(Scope.LookupResult{ .found = alias_pattern }, alias_lookup);
+}
+
+test "hexadecimal integer literals" {
+    const test_cases = [_]struct {
+        literal: []const u8,
+        expected_value: i128,
+        expected_sign_needed: bool,
+        expected_bits_needed: u8,
+    }{
+        // Basic hex literals
+        .{ .literal = "0x0", .expected_value = 0, .expected_sign_needed = false, .expected_bits_needed = 0 },
+        .{ .literal = "0x1", .expected_value = 1, .expected_sign_needed = false, .expected_bits_needed = 0 },
+        .{ .literal = "0xFF", .expected_value = 255, .expected_sign_needed = false, .expected_bits_needed = 1 },
+        .{ .literal = "0x100", .expected_value = 256, .expected_sign_needed = false, .expected_bits_needed = 2 },
+        .{ .literal = "0xFFFF", .expected_value = 65535, .expected_sign_needed = false, .expected_bits_needed = 3 },
+        .{ .literal = "0x10000", .expected_value = 65536, .expected_sign_needed = false, .expected_bits_needed = 4 },
+        .{ .literal = "0xFFFFFFFF", .expected_value = 4294967295, .expected_sign_needed = false, .expected_bits_needed = 5 },
+        .{ .literal = "0x100000000", .expected_value = 4294967296, .expected_sign_needed = false, .expected_bits_needed = 6 },
+        .{ .literal = "0xFFFFFFFFFFFFFFFF", .expected_value = @as(i128, @bitCast(@as(u128, 18446744073709551615))), .expected_sign_needed = false, .expected_bits_needed = 7 },
+
+        // Hex with underscores
+        .{ .literal = "0x1_000", .expected_value = 4096, .expected_sign_needed = false, .expected_bits_needed = 2 },
+        .{ .literal = "0xFF_FF", .expected_value = 65535, .expected_sign_needed = false, .expected_bits_needed = 3 },
+        .{ .literal = "0x1234_5678_9ABC_DEF0", .expected_value = @as(i128, @bitCast(@as(u128, 0x123456789ABCDEF0))), .expected_sign_needed = false, .expected_bits_needed = 6 },
+
+        // Negative hex literals
+        .{ .literal = "-0x1", .expected_value = -1, .expected_sign_needed = true, .expected_bits_needed = 0 },
+        .{ .literal = "-0x80", .expected_value = -128, .expected_sign_needed = true, .expected_bits_needed = 0 },
+        .{ .literal = "-0x81", .expected_value = -129, .expected_sign_needed = true, .expected_bits_needed = 1 },
+        .{ .literal = "-0x8000", .expected_value = -32768, .expected_sign_needed = true, .expected_bits_needed = 2 },
+        .{ .literal = "-0x8001", .expected_value = -32769, .expected_sign_needed = true, .expected_bits_needed = 3 },
+        .{ .literal = "-0x80000000", .expected_value = -2147483648, .expected_sign_needed = true, .expected_bits_needed = 4 },
+        .{ .literal = "-0x80000001", .expected_value = -2147483649, .expected_sign_needed = true, .expected_bits_needed = 5 },
+        .{ .literal = "-0x8000000000000000", .expected_value = -9223372036854775808, .expected_sign_needed = true, .expected_bits_needed = 6 },
+        .{ .literal = "-0x8000000000000001", .expected_value = @as(i128, -9223372036854775809), .expected_sign_needed = true, .expected_bits_needed = 7 },
+    };
+
+    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    defer std.debug.assert(gpa_state.deinit() == .ok);
+    const gpa = gpa_state.allocator();
+
+    for (test_cases) |tc| {
+        var env = base.ModuleEnv.init(gpa);
+        defer env.deinit();
+
+        var ast = parse.parseExpr(&env, tc.literal);
+        defer ast.deinit(gpa);
+
+        var cir = CIR.init(&env);
+        defer cir.deinit();
+
+        var can = init(&cir, &ast);
+        defer can.deinit();
+
+        const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+        const canonical_expr_idx = can.canonicalize_expr(expr_idx) orelse {
+            std.debug.print("Failed to canonicalize: {s}\n", .{tc.literal});
+            try std.testing.expect(false);
+            continue;
+        };
+
+        const expr = cir.store.getExpr(canonical_expr_idx);
+        try std.testing.expect(expr == .int);
+
+        // Check the value
+        try std.testing.expectEqual(tc.expected_value, @as(i128, @bitCast(expr.int.value.bytes)));
+
+        const resolved = env.types.resolveVar(expr.int.num_var);
+        switch (resolved.desc.content) {
+            .structure => |structure| switch (structure) {
+                .num => |num| switch (num) {
+                    .num_poly, .int_poly => |requirements| {
+                        try std.testing.expectEqual(tc.expected_sign_needed, requirements.sign_needed);
+                        try std.testing.expectEqual(tc.expected_bits_needed, requirements.bits_needed);
+                    },
+                    else => return error.UnexpectedNumType,
+                },
+                else => return error.UnexpectedStructureType,
+            },
+            else => return error.UnexpectedContentType,
+        }
+    }
+}
+
+test "binary integer literals" {
+    const test_cases = [_]struct {
+        literal: []const u8,
+        expected_value: i128,
+        expected_sign_needed: bool,
+        expected_bits_needed: u8,
+    }{
+        // Basic binary literals
+        .{ .literal = "0b0", .expected_value = 0, .expected_sign_needed = false, .expected_bits_needed = 0 },
+        .{ .literal = "0b1", .expected_value = 1, .expected_sign_needed = false, .expected_bits_needed = 0 },
+        .{ .literal = "0b10", .expected_value = 2, .expected_sign_needed = false, .expected_bits_needed = 0 },
+        .{ .literal = "0b11111111", .expected_value = 255, .expected_sign_needed = false, .expected_bits_needed = 1 },
+        .{ .literal = "0b100000000", .expected_value = 256, .expected_sign_needed = false, .expected_bits_needed = 2 },
+        .{ .literal = "0b1111111111111111", .expected_value = 65535, .expected_sign_needed = false, .expected_bits_needed = 3 },
+        .{ .literal = "0b10000000000000000", .expected_value = 65536, .expected_sign_needed = false, .expected_bits_needed = 4 },
+
+        // Binary with underscores
+        .{ .literal = "0b11_11", .expected_value = 15, .expected_sign_needed = false, .expected_bits_needed = 0 },
+        .{ .literal = "0b1111_1111", .expected_value = 255, .expected_sign_needed = false, .expected_bits_needed = 1 },
+        .{ .literal = "0b1_0000_0000", .expected_value = 256, .expected_sign_needed = false, .expected_bits_needed = 2 },
+        .{ .literal = "0b1010_1010_1010_1010", .expected_value = 43690, .expected_sign_needed = false, .expected_bits_needed = 3 },
+
+        // Negative binary
+        .{ .literal = "-0b1", .expected_value = -1, .expected_sign_needed = true, .expected_bits_needed = 0 },
+        .{ .literal = "-0b10000000", .expected_value = -128, .expected_sign_needed = true, .expected_bits_needed = 0 },
+        .{ .literal = "-0b10000001", .expected_value = -129, .expected_sign_needed = true, .expected_bits_needed = 1 },
+        .{ .literal = "-0b1000000000000000", .expected_value = -32768, .expected_sign_needed = true, .expected_bits_needed = 2 },
+        .{ .literal = "-0b1000000000000001", .expected_value = -32769, .expected_sign_needed = true, .expected_bits_needed = 3 },
+    };
+
+    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    defer std.debug.assert(gpa_state.deinit() == .ok);
+    const gpa = gpa_state.allocator();
+
+    for (test_cases) |tc| {
+        var env = base.ModuleEnv.init(gpa);
+        defer env.deinit();
+
+        var ast = parse.parseExpr(&env, tc.literal);
+        defer ast.deinit(gpa);
+
+        var cir = CIR.init(&env);
+        defer cir.deinit();
+
+        var can = init(&cir, &ast);
+        defer can.deinit();
+
+        const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+        const canonical_expr_idx = can.canonicalize_expr(expr_idx) orelse {
+            std.debug.print("Failed to canonicalize: {s}\n", .{tc.literal});
+            try std.testing.expect(false);
+            continue;
+        };
+
+        const expr = cir.store.getExpr(canonical_expr_idx);
+        try std.testing.expect(expr == .int);
+
+        // Check the value
+        try std.testing.expectEqual(tc.expected_value, @as(i128, @bitCast(expr.int.value.bytes)));
+
+        const resolved = env.types.resolveVar(expr.int.num_var);
+        switch (resolved.desc.content) {
+            .structure => |structure| switch (structure) {
+                .num => |num| switch (num) {
+                    .num_poly, .int_poly => |requirements| {
+                        try std.testing.expectEqual(tc.expected_sign_needed, requirements.sign_needed);
+                        try std.testing.expectEqual(tc.expected_bits_needed, requirements.bits_needed);
+                    },
+                    else => return error.UnexpectedNumType,
+                },
+                else => return error.UnexpectedStructureType,
+            },
+            else => return error.UnexpectedContentType,
+        }
+    }
+}
+
+test "octal integer literals" {
+    const test_cases = [_]struct {
+        literal: []const u8,
+        expected_value: i128,
+        expected_sign_needed: bool,
+        expected_bits_needed: u8,
+    }{
+        // Basic octal literals
+        .{ .literal = "0o0", .expected_value = 0, .expected_sign_needed = false, .expected_bits_needed = 0 },
+        .{ .literal = "0o1", .expected_value = 1, .expected_sign_needed = false, .expected_bits_needed = 0 },
+        .{ .literal = "0o7", .expected_value = 7, .expected_sign_needed = false, .expected_bits_needed = 0 },
+        .{ .literal = "0o10", .expected_value = 8, .expected_sign_needed = false, .expected_bits_needed = 0 },
+        .{ .literal = "0o377", .expected_value = 255, .expected_sign_needed = false, .expected_bits_needed = 1 },
+        .{ .literal = "0o400", .expected_value = 256, .expected_sign_needed = false, .expected_bits_needed = 2 },
+        .{ .literal = "0o177777", .expected_value = 65535, .expected_sign_needed = false, .expected_bits_needed = 3 },
+        .{ .literal = "0o200000", .expected_value = 65536, .expected_sign_needed = false, .expected_bits_needed = 4 },
+
+        // Octal with underscores
+        .{ .literal = "0o377_377", .expected_value = 130815, .expected_sign_needed = false, .expected_bits_needed = 4 },
+        .{ .literal = "0o1_234_567", .expected_value = 342391, .expected_sign_needed = false, .expected_bits_needed = 4 },
+
+        // Negative octal literals
+        .{ .literal = "-0o1", .expected_value = -1, .expected_sign_needed = true, .expected_bits_needed = 0 },
+        .{ .literal = "-0o100", .expected_value = -64, .expected_sign_needed = true, .expected_bits_needed = 0 },
+        .{ .literal = "-0o200", .expected_value = -128, .expected_sign_needed = true, .expected_bits_needed = 0 },
+        .{ .literal = "-0o201", .expected_value = -129, .expected_sign_needed = true, .expected_bits_needed = 1 },
+        .{ .literal = "-0o100000", .expected_value = -32768, .expected_sign_needed = true, .expected_bits_needed = 2 },
+        .{ .literal = "-0o100001", .expected_value = -32769, .expected_sign_needed = true, .expected_bits_needed = 3 },
+    };
+
+    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    defer std.debug.assert(gpa_state.deinit() == .ok);
+    const gpa = gpa_state.allocator();
+
+    for (test_cases) |tc| {
+        var env = base.ModuleEnv.init(gpa);
+        defer env.deinit();
+
+        var ast = parse.parseExpr(&env, tc.literal);
+        defer ast.deinit(gpa);
+
+        var cir = CIR.init(&env);
+        defer cir.deinit();
+
+        var can = init(&cir, &ast);
+        defer can.deinit();
+
+        const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+        const canonical_expr_idx = can.canonicalize_expr(expr_idx) orelse {
+            std.debug.print("Failed to canonicalize: {s}\n", .{tc.literal});
+            try std.testing.expect(false);
+            continue;
+        };
+
+        const expr = cir.store.getExpr(canonical_expr_idx);
+        try std.testing.expect(expr == .int);
+
+        // Check the value
+        try std.testing.expectEqual(tc.expected_value, @as(i128, @bitCast(expr.int.value.bytes)));
+
+        const resolved = env.types.resolveVar(expr.int.num_var);
+        switch (resolved.desc.content) {
+            .structure => |structure| switch (structure) {
+                .num => |num| switch (num) {
+                    .num_poly, .int_poly => |requirements| {
+                        try std.testing.expectEqual(tc.expected_sign_needed, requirements.sign_needed);
+                        try std.testing.expectEqual(tc.expected_bits_needed, requirements.bits_needed);
+                    },
+                    else => return error.UnexpectedNumType,
+                },
+                else => return error.UnexpectedStructureType,
+            },
+            else => return error.UnexpectedContentType,
+        }
+    }
+}
+
+test "integer literals with uppercase base prefixes" {
+    const test_cases = [_]struct {
+        literal: []const u8,
+        expected_value: i128,
+        expected_sign_needed: bool,
+        expected_bits_needed: u8,
+    }{
+        // Uppercase hex prefix
+        .{ .literal = "0X0", .expected_value = 0, .expected_sign_needed = false, .expected_bits_needed = 0 },
+        .{ .literal = "0X1", .expected_value = 1, .expected_sign_needed = false, .expected_bits_needed = 0 },
+        .{ .literal = "0XFF", .expected_value = 255, .expected_sign_needed = false, .expected_bits_needed = 1 },
+        .{ .literal = "0XABCD", .expected_value = 43981, .expected_sign_needed = false, .expected_bits_needed = 3 },
+
+        // Uppercase binary prefix
+        .{ .literal = "0B0", .expected_value = 0, .expected_sign_needed = false, .expected_bits_needed = 0 },
+        .{ .literal = "0B1", .expected_value = 1, .expected_sign_needed = false, .expected_bits_needed = 0 },
+        .{ .literal = "0B1111", .expected_value = 15, .expected_sign_needed = false, .expected_bits_needed = 0 },
+        .{ .literal = "0B11111111", .expected_value = 255, .expected_sign_needed = false, .expected_bits_needed = 1 },
+
+        // Uppercase octal prefix
+        .{ .literal = "0O0", .expected_value = 0, .expected_sign_needed = false, .expected_bits_needed = 0 },
+        .{ .literal = "0O7", .expected_value = 7, .expected_sign_needed = false, .expected_bits_needed = 0 },
+        .{ .literal = "0O377", .expected_value = 255, .expected_sign_needed = false, .expected_bits_needed = 1 },
+        .{ .literal = "0O777", .expected_value = 511, .expected_sign_needed = false, .expected_bits_needed = 2 },
+
+        // Mixed case in value (should still work)
+        .{ .literal = "0xAbCd", .expected_value = 43981, .expected_sign_needed = false, .expected_bits_needed = 3 },
+        .{ .literal = "0XaBcD", .expected_value = 43981, .expected_sign_needed = false, .expected_bits_needed = 3 },
+    };
+
+    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    defer std.debug.assert(gpa_state.deinit() == .ok);
+    const gpa = gpa_state.allocator();
+
+    for (test_cases) |tc| {
+        var env = base.ModuleEnv.init(gpa);
+        defer env.deinit();
+
+        var ast = parse.parseExpr(&env, tc.literal);
+        defer ast.deinit(gpa);
+
+        var cir = CIR.init(&env);
+        defer cir.deinit();
+
+        var can = init(&cir, &ast);
+        defer can.deinit();
+
+        const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+        const canonical_expr_idx = can.canonicalize_expr(expr_idx) orelse {
+            std.debug.print("Failed to canonicalize: {s}\n", .{tc.literal});
+            try std.testing.expect(false);
+            continue;
+        };
+
+        const expr = cir.store.getExpr(canonical_expr_idx);
+        try std.testing.expect(expr == .int);
+
+        // Check the value
+        try std.testing.expectEqual(tc.expected_value, @as(i128, @bitCast(expr.int.value.bytes)));
+
+        const resolved = env.types.resolveVar(expr.int.num_var);
+        switch (resolved.desc.content) {
+            .structure => |structure| switch (structure) {
+                .num => |num| switch (num) {
+                    .num_poly, .int_poly => |requirements| {
+                        try std.testing.expectEqual(tc.expected_sign_needed, requirements.sign_needed);
+                        try std.testing.expectEqual(tc.expected_bits_needed, requirements.bits_needed);
+                    },
+                    else => return error.UnexpectedNumType,
+                },
+                else => return error.UnexpectedStructureType,
+            },
+            else => return error.UnexpectedContentType,
+        }
+    }
 }

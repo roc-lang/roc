@@ -248,18 +248,18 @@ result3 = testCrashSimple(42)
 			(args
 				(p-underscore @15-10-15-11 (id 117)))
 			(e-runtime-error (tag "ident_not_in_scope"))))
-	(d-let (id 130)
+	(d-let (id 129)
 		(p-assign @17-5-17-12 (ident "result2") (id 124))
-		(e-call @17-15-17-28 (id 129)
+		(e-call @17-15-17-28 (id 128)
 			(e-lookup-local @17-15-17-24
 				(pattern (id 89)))
-			(e-int @17-25-17-27 (int-var 127) (precision-var 126) (literal "42") (value "TODO") (bound "u8"))))
-	(d-let (id 137)
-		(p-assign @18-5-18-12 (ident "result3") (id 131))
-		(e-call @18-15-18-34 (id 136)
+			(e-int @17-25-17-27 (num-var 127) (value "42"))))
+	(d-let (id 135)
+		(p-assign @18-5-18-12 (ident "result3") (id 130))
+		(e-call @18-15-18-34 (id 134)
 			(e-lookup-local @18-15-18-30
 				(pattern (id 104)))
-			(e-int @18-31-18-33 (int-var 134) (precision-var 133) (literal "42") (value "TODO") (bound "u8")))))
+			(e-int @18-31-18-33 (num-var 133) (value "42")))))
 ~~~
 # TYPES
 ~~~clojure

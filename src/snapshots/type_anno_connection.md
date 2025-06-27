@@ -60,27 +60,27 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 88)
+	(d-let (id 87)
 		(p-assign @4-1-4-8 (ident "add_one") (id 75))
-		(e-lambda @4-11-6-10 (id 82)
+		(e-lambda @4-11-6-10 (id 81)
 			(args
 				(p-assign @4-12-4-13 (ident "x") (id 76)))
 			(e-binop @4-15-6-10 (op "add")
 				(e-lookup-local @4-15-4-16
 					(pattern (id 76)))
-				(e-int @4-19-4-20 (int-var 79) (precision-var 78) (literal "1") (value "TODO") (bound "u8"))))
-		(annotation @4-1-4-8 (signature 86) (id 87)
+				(e-int @4-19-4-20 (num-var 79) (value "1"))))
+		(annotation @4-1-4-8 (signature 85) (id 86)
 			(declared-type
 				(ty-fn @3-11-3-21 (effectful false)
 					(ty @3-11-3-14 (name "U64"))
 					(ty @3-18-3-21 (name "U64"))))))
-	(d-let (id 99)
-		(p-assign @7-1-7-10 (ident "my_number") (id 90))
-		(e-call @7-13-7-24 (id 95)
+	(d-let (id 97)
+		(p-assign @7-1-7-10 (ident "my_number") (id 89))
+		(e-call @7-13-7-24 (id 93)
 			(e-lookup-local @7-13-7-20
 				(pattern (id 75)))
-			(e-int @7-21-7-23 (int-var 93) (precision-var 92) (literal "42") (value "TODO") (bound "u8")))
-		(annotation @7-1-7-10 (signature 97) (id 98)
+			(e-int @7-21-7-23 (num-var 92) (value "42")))
+		(annotation @7-1-7-10 (signature 95) (id 96)
 			(declared-type
 				(ty @6-13-6-16 (name "U64"))))))
 ~~~
@@ -89,8 +89,8 @@ NO CHANGE
 (inferred-types
 	(defs
 		(def (name "add_one") (type "*"))
-		(def (name "my_number") (type "*")))
+		(def (name "my_number") (type "U64")))
 	(expressions
 		(expr @4-11-6-10 (type "*"))
-		(expr @7-13-7-24 (type "*"))))
+		(expr @7-13-7-24 (type "U64"))))
 ~~~

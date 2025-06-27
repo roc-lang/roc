@@ -410,8 +410,13 @@ pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) AST.Pattern.Idx {
             node.data.lhs = t.args.span.start;
             node.data.rhs = t.args.span.len;
         },
-        .number => |n| {
-            node.tag = .number_patt;
+        .int => |n| {
+            node.tag = .int_patt;
+            node.region = n.region;
+            node.main_token = n.number_tok;
+        },
+        .frac => |n| {
+            node.tag = .frac_patt;
             node.region = n.region;
             node.main_token = n.number_tok;
         },
@@ -457,6 +462,12 @@ pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) AST.Pattern.Idx {
             node.data.lhs = a.patterns.span.start;
             node.data.rhs = a.patterns.span.len;
         },
+        .as => |a| {
+            node.region = a.region;
+            node.tag = .as_patt;
+            node.main_token = a.name;
+            node.data.lhs = @intFromEnum(a.pattern);
+        },
         .malformed => {
             @panic("Use addMalformed instead");
         },
@@ -479,11 +490,12 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) AST.Expr.Idx {
             node.region = e.region;
             node.main_token = e.token;
         },
-        .float => |e| {
-            node.tag = .float;
+        .frac => |e| {
+            node.tag = .frac;
             node.region = e.region;
             node.main_token = e.token;
         },
+
         .string_part => |e| {
             node.tag = .string_part;
             node.region = e.region;
@@ -625,7 +637,7 @@ pub fn addPatternRecordField(store: *NodeStore, field: AST.PatternRecordField) A
         .tag = .record_field_patt,
         .main_token = field.name,
         .data = .{
-            .lhs = if (field.rest) 1 else 0,
+            .lhs = @intFromBool(field.rest),
             .rhs = 0,
         },
         .region = field.region,
@@ -843,7 +855,7 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) AST.TypeAnno.Idx {
             node.region = f.region;
             node.data.lhs = f.args.span.start;
             node.data.rhs = @bitCast(AST.TypeAnno.TypeAnnoFnRhs{
-                .effectful = if (f.effectful) 1 else 0,
+                .effectful = @intFromBool(f.effectful),
                 .args_len = @intCast(f.args.span.len), // We hope a function has less than 2.147b args
             });
             const ret_idx = store.extra_data.items.len;
@@ -1131,8 +1143,14 @@ pub fn getPattern(store: *NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pattern {
                 .expr = @enumFromInt(node.data.lhs),
             } };
         },
-        .number_patt => {
-            return .{ .number = .{
+        .int_patt => {
+            return .{ .int = .{
+                .number_tok = node.main_token,
+                .region = node.region,
+            } };
+        },
+        .frac_patt => {
+            return .{ .frac = .{
                 .number_tok = node.main_token,
                 .region = node.region,
             } };
@@ -1184,6 +1202,13 @@ pub fn getPattern(store: *NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pattern {
                 .region = node.region,
             } };
         },
+        .as_patt => {
+            return .{ .as = .{
+                .region = node.region,
+                .name = node.main_token,
+                .pattern = @enumFromInt(node.data.lhs),
+            } };
+        },
         .malformed => {
             return .{ .malformed = .{
                 .reason = @enumFromInt(node.data.lhs),
@@ -1206,8 +1231,8 @@ pub fn getExpr(store: *NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
                 .region = node.region,
             } };
         },
-        .float => {
-            return .{ .float = .{
+        .frac => {
+            return .{ .frac = .{
                 .token = node.main_token,
                 .region = node.region,
             } };

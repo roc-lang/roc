@@ -80,9 +80,6 @@ Only definitions, type annotations, and imports are allowed at the top level.
 The statement **expr** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize record expression
-
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),Newline(1:1-1:1),
@@ -157,12 +154,12 @@ main! = |_| {}
 				(ty-fn @3-12-3-18 (effectful false)
 					(ty-var @3-12-3-13 (name "a"))
 					(ty-var @3-17-3-18 (name "a"))))))
-	(d-let (id 99)
+	(d-let (id 98)
 		(p-assign @10-1-10-6 (ident "main!") (id 94))
-		(e-lambda @10-9-10-15 (id 98)
+		(e-lambda @10-9-10-15 (id 97)
 			(args
 				(p-underscore @10-10-10-11 (id 95)))
-			(e-runtime-error (tag "not_implemented")))))
+			(e-empty_record @10-13-10-15))))
 ~~~
 # TYPES
 ~~~clojure

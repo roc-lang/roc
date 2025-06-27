@@ -23,11 +23,10 @@ LowerIdent(1:1-1:5),NoSpaceDotLowerIdent(1:5-1:9),NoSpaceOpenRound(1:9-1:10),Low
 # PARSE
 ~~~clojure
 (e-field-access @1-1-1-13
-	(e-binop @1-1-1-13 (op "list")
-		(e-ident @1-1-1-5 (qaul "") (raw "list"))
-		(e-apply @1-5-1-13
-			(e-ident @1-5-1-9 (qaul "") (raw ".map"))
-			(e-ident @1-10-1-12 (qaul "") (raw "fn")))))
+	(e-ident @1-1-1-5 (qaul "") (raw "list"))
+	(e-apply @1-5-1-13
+		(e-ident @1-5-1-9 (qaul "") (raw ".map"))
+		(e-ident @1-10-1-12 (qaul "") (raw "fn"))))
 ~~~
 # FORMATTED
 ~~~roc

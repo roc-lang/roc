@@ -260,3 +260,80 @@ test "readCacheInto after writeToCache" {
     const data_bytes = read_buffer[@sizeOf(CacheHeader)..expected_total_bytes];
     try std.testing.expectEqualStrings(test_data, data_bytes);
 }
+
+// TODO expand this test gradually to more of our Can IR until
+// we can round-trip a whole type-checked module from cache
+test "NodeStore cache round-trip" {
+    const NodeStore = @import("check/canonicalize/NodeStore.zig");
+    const Node = @import("check/canonicalize/Node.zig");
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    var abs_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const abs_cache_dir = try tmp_dir.dir.realpath(".", &abs_path_buf);
+
+    const fs = Filesystem.default();
+    const allocator = std.testing.allocator;
+    const test_hash = "0123456789abcdef";
+
+    var store = NodeStore.initCapacity(allocator, 10);
+    defer store.deinit();
+
+    const expr_node = Node{
+        .data_1 = 42,
+        .data_2 = 100,
+        .data_3 = 200,
+        .region = .{ .start = .{ .offset = 0 }, .end = .{ .offset = 10 } },
+        .tag = .expr_string,
+    };
+    const expr_idx = store.nodes.append(store.gpa, expr_node);
+
+    try store.extra_data.append(store.gpa, 1234);
+    try store.extra_data.append(store.gpa, 5678);
+
+    const store_size = store.serializedSize();
+    const store_buffer = try allocator.alignedAlloc(u8, @alignOf(Node), store_size);
+    defer allocator.free(store_buffer);
+    const serialized = try store.serializeInto(store_buffer);
+    try std.testing.expectEqual(store_size, serialized.len);
+
+    const header_size = @sizeOf(CacheHeader);
+    const aligned_header_size = std.mem.alignForward(usize, header_size, @alignOf(Node));
+    const total_size = aligned_header_size + store_size;
+    var write_buffer = try allocator.alignedAlloc(u8, @alignOf(Node), total_size);
+    defer allocator.free(write_buffer);
+
+    const header = @as(*CacheHeader, @ptrCast(write_buffer.ptr));
+    header.* = .{
+        .total_cached_bytes = @intCast(store_size),
+    };
+
+    @memcpy(write_buffer[aligned_header_size..total_size], serialized);
+
+    try writeToCache(abs_cache_dir, test_hash, header, fs, allocator);
+
+    var read_buffer: [4096]u8 align(@alignOf(Node)) = undefined;
+    const bytes_read = try readCacheInto(&read_buffer, abs_cache_dir, test_hash, fs, allocator);
+
+    const parsed_header = try CacheHeader.initFromBytes(read_buffer[0..bytes_read]);
+    try std.testing.expectEqual(header.total_cached_bytes, parsed_header.total_cached_bytes);
+
+    const data_start = std.mem.alignForward(usize, @sizeOf(CacheHeader), @alignOf(Node));
+    const data_end = data_start + parsed_header.total_cached_bytes;
+
+    var restored_store = try NodeStore.deserializeFrom(@as([]align(@alignOf(Node)) const u8, @alignCast(read_buffer[data_start..data_end])), allocator);
+    defer restored_store.deinit();
+
+    try std.testing.expectEqual(store.nodes.len(), restored_store.nodes.len());
+    try std.testing.expectEqual(store.extra_data.items.len, restored_store.extra_data.items.len);
+
+    const restored_node = restored_store.nodes.get(expr_idx);
+    try std.testing.expectEqual(expr_node.data_1, restored_node.data_1);
+    try std.testing.expectEqual(expr_node.data_2, restored_node.data_2);
+    try std.testing.expectEqual(expr_node.data_3, restored_node.data_3);
+    try std.testing.expectEqual(expr_node.tag, restored_node.tag);
+
+    try std.testing.expectEqual(@as(u32, 1234), restored_store.extra_data.items[0]);
+    try std.testing.expectEqual(@as(u32, 5678), restored_store.extra_data.items[1]);
+}

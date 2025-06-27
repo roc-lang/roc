@@ -24,7 +24,7 @@ LowerIdent(2:1-2:4),OpAssign(2:5-2:6),Float(2:7-2:12),EndOfFile(2:12-2:12),
 	(statements
 		(s-decl @2-1-2-12
 			(p-ident @2-1-2-4 (raw "foo"))
-			(e-float @2-7-2-12 (raw "12.34")))))
+			(e-frac @2-7-2-12 (raw "12.34")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -35,13 +35,13 @@ NO CHANGE
 (can-ir
 	(d-let (id 76)
 		(p-assign @2-1-2-4 (ident "foo") (id 72))
-		(e-float @2-7-2-12 (frac_var 74) (precision-var 73) (literal "12.34") (value "0") (bound "f32") (id 75))))
+		(e-dec-small @2-7-2-12 (num-var 75) (numerator "1234") (denominator-power-of-ten "2") (value "12.34") (id 75))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "foo") (type "Num(FloatingPoint(*))")))
+		(def (name "foo") (type "Frac(*)")))
 	(expressions
-		(expr @2-7-2-12 (type "Num(FloatingPoint(*))"))))
+		(expr @2-7-2-12 (type "Frac(*)"))))
 ~~~

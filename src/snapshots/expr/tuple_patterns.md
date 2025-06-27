@@ -137,9 +137,6 @@ Is there an `import` or `exposing` missing up-top?
 Nothing is named `hello` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize record expression
-
 # TOKENS
 ~~~zig
 OpenCurly(1:1-1:2),Newline(1:1-1:1),
@@ -255,59 +252,59 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1-1-19-2 (id 186)
+(e-block @1-1-19-2 (id 159)
 	(s-expr @4-5-4-13
-		(e-tuple @4-5-4-11 (tuple-var 76)
+		(e-tuple @4-5-4-11
 			(elems
 				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-runtime-error (tag "ident_not_in_scope")))))
 	(s-expr @4-14-7-6
-		(e-tuple @4-14-4-20 (tuple-var 85)
+		(e-tuple @4-14-4-20
 			(elems
-				(e-int @4-15-4-16 (int-var 80) (precision-var 79) (literal "1") (value "TODO") (bound "u8"))
-				(e-int @4-18-4-19 (int-var 83) (precision-var 82) (literal "2") (value "TODO") (bound "u8")))))
+				(e-int @4-15-4-16 (num-var 79) (value "1"))
+				(e-int @4-18-4-19 (num-var 81) (value "2")))))
 	(s-expr @7-5-7-23
-		(e-tuple @7-5-7-21 (tuple-var 100)
+		(e-tuple @7-5-7-21
 			(elems
-				(e-tuple @7-6-7-12 (tuple-var 92)
+				(e-tuple @7-6-7-12
 					(elems
 						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-runtime-error (tag "ident_not_in_scope"))))
-				(e-tuple @7-14-7-20 (tuple-var 98)
+				(e-tuple @7-14-7-20
 					(elems
 						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-runtime-error (tag "ident_not_in_scope")))))))
 	(s-expr @7-24-10-6
-		(e-tuple @7-24-7-44 (tuple-var 119)
+		(e-tuple @7-24-7-44
 			(elems
-				(e-tuple @7-25-7-33 (tuple-var 109)
+				(e-tuple @7-25-7-33
 					(elems
-						(e-int @7-26-7-28 (int-var 104) (precision-var 103) (literal "10") (value "TODO") (bound "u8"))
-						(e-int @7-30-7-32 (int-var 107) (precision-var 106) (literal "20") (value "TODO") (bound "u8"))))
-				(e-tuple @7-35-7-43 (tuple-var 117)
+						(e-int @7-26-7-28 (num-var 97) (value "10"))
+						(e-int @7-30-7-32 (num-var 99) (value "20"))))
+				(e-tuple @7-35-7-43
 					(elems
-						(e-int @7-36-7-38 (int-var 112) (precision-var 111) (literal "30") (value "TODO") (bound "u8"))
-						(e-int @7-40-7-42 (int-var 115) (precision-var 114) (literal "40") (value "TODO") (bound "u8")))))))
+						(e-int @7-36-7-38 (num-var 102) (value "30"))
+						(e-int @7-40-7-42 (num-var 104) (value "40")))))))
 	(s-expr @10-5-10-29
-		(e-tuple @10-5-10-27 (tuple-var 128)
+		(e-tuple @10-5-10-27
 			(elems
 				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-runtime-error (tag "ident_not_in_scope")))))
 	(s-expr @10-30-13-6
-		(e-tuple @10-30-10-44 (tuple-var 140)
+		(e-tuple @10-30-10-44
 			(elems
-				(e-int @10-31-10-34 (int-var 132) (precision-var 131) (literal "100") (value "TODO") (bound "u8"))
-				(e-int @10-36-10-38 (int-var 135) (precision-var 134) (literal "42") (value "TODO") (bound "u8"))
-				(e-int @10-40-10-43 (int-var 138) (precision-var 137) (literal "200") (value "TODO") (bound "u8")))))
+				(e-int @10-31-10-34 (num-var 117) (value "100"))
+				(e-int @10-36-10-38 (num-var 119) (value "42"))
+				(e-int @10-40-10-43 (num-var 121) (value "200")))))
 	(s-expr @13-5-13-30
-		(e-tuple @13-5-13-28 (tuple-var 149)
+		(e-tuple @13-5-13-28
 			(elems
 				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-runtime-error (tag "ident_not_in_scope")))))
 	(s-expr @13-31-16-6
-		(e-tuple @13-31-13-55 (tuple-var 158)
+		(e-tuple @13-31-13-55
 			(elems
 				(e-string @13-32-13-39
 					(e-literal @13-33-13-38 (string "Alice")))
@@ -315,23 +312,23 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 					(e-literal @13-42-13-47 (string "fixed")))
 				(e-tag @13-50-13-54 (ext-var 0) (name "True") (args "TODO")))))
 	(s-expr @16-5-16-20
-		(e-tuple @16-5-16-18 (tuple-var 165)
+		(e-tuple @16-5-16-18
 			(elems
 				(e-runtime-error (tag "ident_not_in_scope"))
 				(e-runtime-error (tag "ident_not_in_scope")))))
 	(s-expr @16-21-18-6
-		(e-tuple @16-21-16-41 (tuple-var 181)
+		(e-tuple @16-21-16-41
 			(elems
-				(e-list @16-22-16-31 (elem-var 177)
+				(e-list @16-22-16-31 (elem-var 152)
 					(elems
-						(e-int @16-23-16-24 (int-var 169) (precision-var 168) (literal "1") (value "TODO") (bound "u8"))
-						(e-int @16-26-16-27 (int-var 172) (precision-var 171) (literal "2") (value "TODO") (bound "u8"))
-						(e-int @16-29-16-30 (int-var 175) (precision-var 174) (literal "3") (value "TODO") (bound "u8"))))
+						(e-int @16-23-16-24 (num-var 147) (value "1"))
+						(e-int @16-26-16-27 (num-var 149) (value "2"))
+						(e-int @16-29-16-30 (num-var 151) (value "3"))))
 				(e-string @16-33-16-40
 					(e-literal @16-34-16-39 (string "hello"))))))
-	(e-runtime-error (tag "not_implemented")))
+	(e-empty_record @18-5-18-7))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 186) (type "*"))
+(expr (id 159) (type "*"))
 ~~~

@@ -27,14 +27,14 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tuple @1-1-1-19 (tuple-var 79) (id 80)
+(e-tuple @1-1-1-19 (id 78)
 	(elems
-		(e-int @1-2-1-3 (int-var 73) (precision-var 72) (literal "1") (value "TODO") (bound "u8"))
+		(e-int @1-2-1-3 (num-var 73) (value "1"))
 		(e-string @1-5-1-12
 			(e-literal @1-6-1-11 (string "hello")))
 		(e-tag @1-14-1-18 (ext-var 0) (name "True") (args "TODO"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 80) (type "*"))
+(expr (id 78) (type "(Num(*), Str, [True, * *])"))
 ~~~
