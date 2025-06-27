@@ -163,6 +163,9 @@ const CheckOccurs = struct {
                         .list => |sub_var| {
                             try self.occursSubVar(root, sub_var, ctx.allowRecursion());
                         },
+                        .list_unbound => {
+                            // list_unbound has no sub-variables to check
+                        },
                         .tuple => |tuple| {
                             const elems = self.types_store.getTupleElemsSlice(tuple.elems);
                             try self.occursSubVars(root, elems, ctx);

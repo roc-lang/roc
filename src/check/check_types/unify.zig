@@ -139,6 +139,7 @@ pub fn unify(
                                 .int_poly, .num_poly, .int_unbound, .num_unbound, .frac_unbound => true,
                                 else => false,
                             },
+                            .list_unbound => true,
                             else => false,
                         },
                         else => false,
@@ -165,6 +166,7 @@ pub fn unify(
                                 .int_poly, .num_poly, .int_unbound, .num_unbound, .frac_unbound => true,
                                 else => false,
                             },
+                            .list_unbound => true,
                             else => false,
                         },
                         else => false,
@@ -607,6 +609,23 @@ const Unifier = struct {
                     .list => |b_var| {
                         try self.unifyGuarded(a_var, b_var);
                         self.merge(vars, vars.b.desc.content);
+                    },
+                    .list_unbound => {
+                        // When unifying list with list_unbound, list wins
+                        self.merge(vars, vars.a.desc.content);
+                    },
+                    else => return error.TypeMismatch,
+                }
+            },
+            .list_unbound => {
+                switch (b_flat_type) {
+                    .list => |_| {
+                        // When unifying list_unbound with list, list wins
+                        self.merge(vars, vars.b.desc.content);
+                    },
+                    .list_unbound => {
+                        // Both are list_unbound - stay unbound
+                        self.merge(vars, vars.a.desc.content);
                     },
                     else => return error.TypeMismatch,
                 }

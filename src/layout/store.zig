@@ -545,6 +545,13 @@ pub const Store = struct {
                         current = self.types_store.resolveVar(elem_var);
                         continue;
                     },
+                    .list_unbound => {
+                        // For unbound lists (empty lists), use list of zero-sized type
+                        const layout = Layout.listOfZst();
+                        const idx = try self.insertLayout(layout);
+                        try self.layouts_by_var.put(self.env.gpa, current.var_, idx);
+                        return idx;
+                    },
                     .custom_type => |custom_type| {
                         // TODO special-case the builtin Num type here.
                         // If we have one of those, then convert it to a Num layout,

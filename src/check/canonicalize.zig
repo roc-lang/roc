@@ -1155,31 +1155,56 @@ pub fn canonicalize_expr(
             // Create span of the new scratch expressions
             const elems_span = self.can_ir.store.exprSpanFrom(scratch_top);
 
-            // create type vars, first "reserve" node slot
-            const list_expr_idx = self.can_ir.store.predictNodeIndex(1);
+            if (elems_span.span.len == 0) {
+                // Empty list - create elem type var but use list_unbound
+                const elem_type_var = self.can_ir.pushFreshTypeVar(
+                    self.can_ir.store.predictNodeIndex(0),
+                    region,
+                );
 
-            // then insert the type vars, setting the parent to be the final slot
-            const elem_type_var = self.can_ir.pushFreshTypeVar(
-                list_expr_idx,
-                region,
-            );
+                const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
+                    .list = .{
+                        .elems = elems_span,
+                        .elem_var = elem_type_var,
+                        .region = region,
+                    },
+                });
 
-            // then in the final slot the actual expr is inserted
-            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
-                .list = .{
-                    .elems = elems_span,
-                    .elem_var = elem_type_var,
-                    .region = region,
-                },
-            });
+                // Insert list_unbound type for empty list
+                _ = self.can_ir.setTypeVarAtExpr(
+                    expr_idx,
+                    Content{ .structure = .list_unbound },
+                );
 
-            // Insert concrete type variable
-            _ = self.can_ir.setTypeVarAtExpr(
-                expr_idx,
-                Content{ .structure = .{ .list = elem_type_var } },
-            );
+                return expr_idx;
+            } else {
+                // Non-empty list - use existing behavior
+                // create type vars, first "reserve" node slot
+                const list_expr_idx = self.can_ir.store.predictNodeIndex(1);
 
-            return expr_idx;
+                // then insert the type vars, setting the parent to be the final slot
+                const elem_type_var = self.can_ir.pushFreshTypeVar(
+                    list_expr_idx,
+                    region,
+                );
+
+                // then in the final slot the actual expr is inserted
+                const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
+                    .list = .{
+                        .elems = elems_span,
+                        .elem_var = elem_type_var,
+                        .region = region,
+                    },
+                });
+
+                // Insert concrete type variable
+                _ = self.can_ir.setTypeVarAtExpr(
+                    expr_idx,
+                    Content{ .structure = .{ .list = elem_type_var } },
+                );
+
+                return expr_idx;
+            }
         },
         .tag => |e| {
             if (self.parse_ir.tokens.resolveIdentifier(e.token)) |tag_name| {

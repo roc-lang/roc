@@ -106,6 +106,9 @@ pub const Store = struct {
                 const deep_content = self.deepCopyContent(store, resolved.desc.content);
                 return SnapshotFlatType{ .list = deep_content };
             },
+            .list_unbound => {
+                return SnapshotFlatType.list_unbound;
+            },
             .tuple => |tuple| SnapshotFlatType{ .tuple = self.deepCopyTuple(store, tuple) },
             .num => |num| SnapshotFlatType{ .num = self.deepCopyNum(store, num) },
             .custom_type => |custom_type| SnapshotFlatType{ .custom_type = self.deepCopyCustomType(store, custom_type) },
@@ -410,6 +413,7 @@ pub const SnapshotFlatType = union(enum) {
     str,
     box: SnapshotContentIdx, // Index into SnapshotStore.contents
     list: SnapshotContentIdx,
+    list_unbound,
     tuple: SnapshotTuple,
     num: SnapshotNum,
     custom_type: SnapshotCustomType,
@@ -554,6 +558,9 @@ pub const SnapshotWriter = struct {
                 _ = try self.writer.write("List(");
                 try self.write(sub_var);
                 _ = try self.writer.write(")");
+            },
+            .list_unbound => {
+                _ = try self.writer.write("List(*)");
             },
             .tuple => |tuple| {
                 try self.writeTuple(tuple);

@@ -177,6 +177,7 @@ pub const FlatType = union(enum) {
     str,
     box: Var,
     list: Var,
+    list_unbound,
     tuple: Tuple,
     num: Num,
     custom_type: CustomType,
