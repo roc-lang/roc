@@ -3556,6 +3556,8 @@ fn specialize_proc_help<'a>(
 
     let mut specialized_body = from_can(env, body_var, body, procs, layout_cache);
 
+    //dbg!(&specialized_body);
+
     let specialized_proc = match specialized {
         SpecializedLayout::FunctionPointerBody {
             ret_layout,

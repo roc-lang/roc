@@ -1,0 +1,80 @@
+procedure Test.1 (Test.5):
+    joinpoint Test.51 Test.47:
+        dec Test.47;
+        joinpoint Test.39 Test.35:
+            dec Test.35;
+            joinpoint Test.27 Test.23:
+                dec Test.23;
+                joinpoint Test.15 Test.11:
+                    dec Test.11;
+                    let Test.9 : Str = "5";
+                    let Test.8 : [C {}, C Str] = CallByName Test.2 Test.9;
+                    dec Test.9;
+                    ret Test.8;
+                in
+                let Test.22 : Str = "4";
+                let Test.14 : [C {}, C Str] = CallByName Test.2 Test.22;
+                dec Test.22;
+                let Test.19 : U8 = 1i64;
+                let Test.20 : U8 = GetTagId Test.14;
+                let Test.21 : Int1 = lowlevel Eq Test.19 Test.20;
+                if Test.21 then
+                    let Test.12 : Str = UnionAtIndex (Id 1) (Index 0) Test.14;
+                    jump Test.15 Test.12;
+                else
+                    let Test.13 : {} = UnionAtIndex (Id 0) (Index 0) Test.14;
+                    let Test.18 : [C {}, C Str] = TagId(0) Test.13;
+                    ret Test.18;
+            in
+            let Test.34 : Str = "3";
+            let Test.26 : [C {}, C Str] = CallByName Test.2 Test.34;
+            dec Test.34;
+            let Test.31 : U8 = 1i64;
+            let Test.32 : U8 = GetTagId Test.26;
+            let Test.33 : Int1 = lowlevel Eq Test.31 Test.32;
+            if Test.33 then
+                let Test.24 : Str = UnionAtIndex (Id 1) (Index 0) Test.26;
+                jump Test.27 Test.24;
+            else
+                let Test.25 : {} = UnionAtIndex (Id 0) (Index 0) Test.26;
+                let Test.30 : [C {}, C Str] = TagId(0) Test.25;
+                ret Test.30;
+        in
+        let Test.46 : Str = "2";
+        let Test.38 : [C {}, C Str] = CallByName Test.2 Test.46;
+        dec Test.46;
+        let Test.43 : U8 = 1i64;
+        let Test.44 : U8 = GetTagId Test.38;
+        let Test.45 : Int1 = lowlevel Eq Test.43 Test.44;
+        if Test.45 then
+            let Test.36 : Str = UnionAtIndex (Id 1) (Index 0) Test.38;
+            jump Test.39 Test.36;
+        else
+            let Test.37 : {} = UnionAtIndex (Id 0) (Index 0) Test.38;
+            let Test.42 : [C {}, C Str] = TagId(0) Test.37;
+            ret Test.42;
+    in
+    let Test.58 : Str = "1";
+    let Test.50 : [C {}, C Str] = CallByName Test.2 Test.58;
+    dec Test.58;
+    let Test.55 : U8 = 1i64;
+    let Test.56 : U8 = GetTagId Test.50;
+    let Test.57 : Int1 = lowlevel Eq Test.55 Test.56;
+    if Test.57 then
+        let Test.48 : Str = UnionAtIndex (Id 1) (Index 0) Test.50;
+        jump Test.51 Test.48;
+    else
+        let Test.49 : {} = UnionAtIndex (Id 0) (Index 0) Test.50;
+        let Test.54 : [C {}, C Str] = TagId(0) Test.49;
+        ret Test.54;
+
+procedure Test.2 (Test.3):
+    inc Test.3;
+    let Test.10 : [C {}, C Str] = TagId(1) Test.3;
+    ret Test.10;
+
+procedure Test.0 ():
+    let Test.7 : Str = "";
+    let Test.6 : [C {}, C Str] = CallByName Test.1 Test.7;
+    dec Test.7;
+    ret Test.6;

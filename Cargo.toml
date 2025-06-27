@@ -237,7 +237,7 @@ codegen-units = 1
 # debug = true # enable when profiling
 
 [profile.dev]
-debug = "line-tables-only"
+#debug = "line-tables-only"
 
 [profile.bench]
 codegen-units = 1

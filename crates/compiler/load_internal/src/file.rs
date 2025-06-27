@@ -1528,7 +1528,7 @@ pub fn load<'a>(
     roc_cache_dir: RocCacheDir<'_>,
     load_config: LoadConfig,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
-    enum Threads {
+    /*enum Threads {
         Single,
         Many(usize),
     }
@@ -1550,9 +1550,9 @@ pub fn load<'a>(
                 },
             }
         }
-    };
+    };*/
 
-    match threads {
+    /*match threads {
         Threads::Single => load_single_threaded(
             arena,
             load_start,
@@ -1578,7 +1578,20 @@ pub fn load<'a>(
             load_config.exec_mode,
             roc_cache_dir,
         ),
-    }
+    }*/
+
+    load_single_threaded(
+            arena,
+            load_start,
+            exposed_types,
+            load_config.target,
+            load_config.function_kind,
+            cached_types,
+            load_config.render,
+            load_config.palette,
+            load_config.exec_mode,
+            roc_cache_dir,
+        )
 }
 
 /// Load using only a single thread; used when compiling to webassembly
@@ -2519,6 +2532,14 @@ fn update<'a>(
             checkmate,
         } => {
             log!("solved types for {:?}", module_id);
+
+            //temp
+            /*let module_id_name = format!("{:?}", module_id);
+            if module_id_name == "#UserApp" {
+                dbg!("BINGO");
+                dbg!(&decls);
+            }*/
+
             module_timing.end_time = Instant::now();
 
             state

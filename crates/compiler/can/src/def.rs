@@ -56,6 +56,7 @@ use roc_types::types::LambdaSet;
 use roc_types::types::MemberImpl;
 use roc_types::types::OptAbleType;
 use roc_types::types::{Alias, Type};
+use core::panic;
 use std::fmt::Debug;
 use std::fs;
 use std::io::Read;

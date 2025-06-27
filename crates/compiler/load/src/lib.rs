@@ -244,6 +244,7 @@ fn deserialize_help(bytes: &[u8]) -> TypeState {
 }
 
 fn read_cached_types() -> MutMap<ModuleId, TypeState> {
+    dbg!(env!("OUT_DIR"));
     let mod_bool = include_bytes_align_as!(u128, concat!(env!("OUT_DIR"), "/Bool.dat"));
     let mod_dict = include_bytes_align_as!(u128, concat!(env!("OUT_DIR"), "/Dict.dat"));
     let mod_set = include_bytes_align_as!(u128, concat!(env!("OUT_DIR"), "/Set.dat"));

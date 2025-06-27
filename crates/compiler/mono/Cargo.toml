@@ -35,3 +35,5 @@ hashbrown.workspace = true
 parking_lot.workspace = true
 static_assertions.workspace = true
 indoc.workspace = true
+
+rand = "0.8"

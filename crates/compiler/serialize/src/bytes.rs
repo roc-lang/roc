@@ -37,6 +37,41 @@ pub fn deserialize_slice<T: Copy>(bytes: &[u8], length: usize, mut offset: usize
     (slice, offset + byte_length)
 }
 
+// We Copy the data into a new, aligned Vec<T>
+// Prevents panic in debug: `unsafe precondition(s) violated: slice::from_raw_parts requires the pointer to be aligned...`
+pub fn deserialize_slice_safe<T: Copy>(bytes: &[u8], length: usize, mut offset: usize) -> (Vec<T>, usize) {
+    let alignment = std::mem::align_of::<T>();
+    let size = std::mem::size_of::<T>();
+
+    // align the offset to avoid reading partial data
+    offset = next_multiple_of(offset, alignment);
+
+    let byte_length = length * size;
+    let byte_slice = &bytes[offset..offset + byte_length];
+
+    // A Vec<T> is guaranteed to have its backing buffer aligned correctly for T.
+    let mut result = Vec::with_capacity(length);
+
+    unsafe {
+        // Get a pointer to the start of the Vec's buffer. This pointer is aligned.
+        let dest_ptr = result.as_mut_ptr();
+
+        // Get a pointer to the source data. This pointer may be unaligned.
+        let src_ptr = byte_slice.as_ptr();
+
+        // Copy the bytes from the (potentially unaligned) source to the
+        // (guaranteed aligned) destination. `copy_nonoverlapping` handles
+        // unaligned sources correctly.
+        std::ptr::copy_nonoverlapping(src_ptr, dest_ptr as *mut u8, byte_length);
+
+        // Tell the Vec that we have initialized `length` elements.
+        // This is important, otherwise, the Vec thinks it's still empty.
+        result.set_len(length);
+    }
+
+    (result, offset + byte_length)
+}
+
 pub fn deserialize_vec<T: Clone + Copy>(
     bytes: &[u8],
     length: usize,

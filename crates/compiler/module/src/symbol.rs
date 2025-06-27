@@ -385,6 +385,11 @@ impl ModuleId {
         (self.0.get() - 1) as usize
     }
 
+    // TODO remove this function
+    pub const fn from_temp(id: usize) -> Self {
+        ModuleId(unsafe { NonZeroU32::new_unchecked(id as u32) })
+    }
+
     #[cfg(any(debug_assertions, feature = "debug-symbols"))]
     pub fn register_debug_idents(self, ident_ids: &IdentIds) {
         let mut all = DEBUG_IDENT_IDS_BY_MODULE_ID.lock().expect("Failed to acquire lock for Debug interning into DEBUG_MODULE_ID_NAMES, presumably because a thread panicked.");
@@ -671,7 +676,8 @@ mod ident_id {
             self.0
         }
 
-        pub(super) const fn from_raw(raw: u32) -> Self {
+        // TODO change this back to pub(super)
+        pub const fn from_raw(raw: u32) -> Self {
             Self(raw)
         }
 

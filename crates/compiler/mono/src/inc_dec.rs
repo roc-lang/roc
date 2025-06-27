@@ -5,13 +5,19 @@
 // Implementation based of Perceus: Garbage Free Reference Counting with Reuse
 // https://www.microsoft.com/en-us/research/uploads/prod/2021/06/perceus-pldi21.pdf
 
+use core::panic;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::{collections::HashMap, hash::BuildHasherDefault};
 
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
+use rand::Rng;
+use roc_can::env;
+use roc_collections::all::BumpSet;
 use roc_collections::{all::WyHash, MutMap, MutSet};
 use roc_error_macros::internal_error;
 use roc_module::low_level::LowLevel;
+use roc_module::symbol::{IdentId, ModuleId};
 use roc_module::{low_level::LowLevelWrapperType, symbol::Symbol};
 
 use crate::ir::ErasedField;
@@ -32,9 +38,18 @@ pub fn insert_inc_dec_operations<'a>(
     layout_interner: &STLayoutInterner<'a>,
     procedures: &mut HashMap<(Symbol, ProcLayout<'a>), Proc<'a>, BuildHasherDefault<WyHash>>,
 ) {
+    //dbg!("insert_inc_dec_operations");
+
     let borrow_signatures =
         crate::borrow::infer_borrow_signatures(arena, layout_interner, procedures);
     let borrow_signatures = arena.alloc(borrow_signatures);
+
+    //let mut unused_symbols = BumpSet::default();
+    // TODO get unussed symbols from earlier canonicalization pass.
+    //unused_symbols.insert(Symbol::new(ModuleId::from_temp(16), IdentId::from_raw(7)));
+
+    //let unused_symbols = arena.alloc(unused_symbols);
+
 
     // All calls to lowlevels are wrapped in another function to help with type inference and return/parameter layouts.
     // But this lowlevel might get inlined into the caller of the wrapper and thus removing any reference counting operations.
@@ -47,7 +62,8 @@ pub fn insert_inc_dec_operations<'a>(
             LowLevelWrapperType::NotALowLevelWrapper
         ) {
             let symbol_rc_types_env = SymbolRcTypesEnv::from_layout_interner(layout_interner);
-            insert_inc_dec_operations_proc(arena, symbol_rc_types_env, borrow_signatures, proc);
+            
+            insert_inc_dec_operations_proc(arena, symbol_rc_types_env, borrow_signatures,  proc);
         }
     }
 }
@@ -64,7 +80,7 @@ enum VarRcType {
 A map keeping track of which symbols are reference counted and which are not.
 Implemented as two sets for efficiency.
 */
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 struct SymbolRcTypes {
     reference_counted: MutSet<Symbol>,
     not_reference_counted: MutSet<Symbol>,
@@ -249,7 +265,7 @@ type JoinPointConsumption = MutSet<Symbol>;
 The environment for the reference counting pass.
 Contains the symbols rc types and the ownership.
 */
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct RefcountEnvironment<'v> {
     // Keep track which symbols are reference counted and which are not.
     symbols_rc_types: &'v SymbolRcTypes,
@@ -277,10 +293,12 @@ impl<'v> RefcountEnvironment<'v> {
     */
     fn consume_symbol(&mut self, symbol: &Symbol) -> Option<Ownership> {
         if !self.symbols_ownership.contains_key(symbol) {
+            //dbg!("None");
             return None;
         }
 
         // Consume the symbol and return the previous ownership.
+        //dbg!("Some");
         Some(self.consume_rc_symbol(*symbol))
     }
 
@@ -290,6 +308,15 @@ impl<'v> RefcountEnvironment<'v> {
     */
     fn consume_rc_symbol(&mut self, symbol: Symbol) -> Ownership {
         // Consume the symbol by setting it to borrowed (if it was owned before), and return the previous ownership.
+        /*if self.symbols_ownership.contains_key(&symbol) {
+            let own_ship = self.symbols_ownership.get(&symbol).unwrap();
+            if own_ship.is_borrowed() {
+                dbg!("No change");
+            } else {
+                dbg!("Change");
+            }
+        }*/
+
         match self.symbols_ownership.insert(symbol, Ownership::Borrowed) {
             Some(ownership) => ownership,
             None => internal_error!("Expected symbol {symbol:?} to be in environment"),
@@ -401,6 +428,33 @@ impl<'v> RefcountEnvironment<'v> {
             })
             .collect()
     }
+
+    /// Get all consumpomptiun values from joinpoint_closures
+    fn is_joinpoint_consumptions_all_empty_or_borrowed(&self) -> bool {
+        let out_bool = self.jointpoint_closures
+            .values()
+            .all(|consumption| consumption.is_empty() || consumption.iter().all(|symbol| {
+                matches!(
+                    self.symbols_ownership.get(symbol),
+                    Some(Ownership::Borrowed)
+                )
+            }));
+
+        /*if out_bool {
+            dbg!(&self.jointpoint_closures);
+        }*/
+
+        out_bool
+    }
+
+}
+
+macro_rules! cdbg {
+    ($($arg:tt)*) => {
+        if std::env::var("GO_DBG").map_or(false, |v| v == "1") {
+            dbg!($($arg)*);
+        }
+    };
 }
 
 /**
@@ -432,8 +486,27 @@ fn insert_inc_dec_operations_proc<'a>(
         environment.add_symbol_with(*symbol, ownership);
     }
 
+    let old_body_str = format!("{:?}", &proc.body);
+
+    /*if old_body_str.contains("UserApp.71") {
+        std::env::set_var("GO_DBG", "1");
+        dbg!(&proc.args);
+    }*/
+    std::env::set_var("GO_DBG", "1");
+    cdbg!(&old_body_str[..old_body_str.len().min(50)]);
+
+    // TODO only start tracking used symbols in the joinpoint loop
+    // TODO use MutSet instead of HashSet
+    //let mut used_symbols = std::collections::HashSet::new();
+
     // Update the body with reference count statements.
-    let new_body = insert_refcount_operations_stmt(arena, &mut environment, &proc.body);
+    let environment_str = format!("{:?}", &environment);
+    //dbg!(environment_str);
+    let mut call_counter = 0;
+    let new_body = insert_refcount_operations_stmt(arena, &mut environment, &proc.body, 0, &mut call_counter);
+    dbg!(call_counter);
+
+    std::env::set_var("GO_DBG", "0");
 
     // Insert decrement statements for unused parameters (which are still marked as owned).
     let rc_proc_symbols = proc
@@ -445,6 +518,8 @@ fn insert_inc_dec_operations_proc<'a>(
         .collect_in::<Vec<_>>(arena);
     let newer_body =
         consume_and_insert_dec_stmts(arena, &mut environment, rc_proc_symbols, new_body);
+
+    //dbg!(newer_body);
 
     // Assert that just the arguments are in the environment. And (after decrementing the unused ones) that they are all borrowed.
     debug_assert!(environment
@@ -458,6 +533,19 @@ fn insert_inc_dec_operations_proc<'a>(
     proc.body = newer_body.clone();
 }
 
+fn hash_two_strings(s1: &str, s2: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    s1.hash(&mut hasher);
+    s2.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn hash_string(s1: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    s1.hash(&mut hasher);
+    hasher.finish()
+}
+
 /**
 Given an environment, insert the reference counting operations for a statement.
 Assuming that a symbol can only be defined once (no binding to the same symbol multiple times).
@@ -466,7 +554,29 @@ fn insert_refcount_operations_stmt<'v, 'a>(
     arena: &'a Bump,
     environment: &mut RefcountEnvironment<'v>,
     stmt: &Stmt<'a>,
+    depth: usize,
+    call_counter: &mut usize,
 ) -> &'a Stmt<'a> {
+    *call_counter += 1;
+    dbg!(depth);
+    let stmt_str = format!("{:?}", &stmt);
+    let first_part = stmt_str.split(',').next().unwrap_or(&stmt_str);
+    cdbg!(first_part);
+    //let stmt_str = format!("{:?}", stmt);
+
+    if first_part == "Let(`#UserApp.9`" {
+        dbg!(&environment.jointpoint_closures);
+    }
+    //let environment_str = format!("{:?}", &environment);
+    //println!("hash {}", hash_two_strings(&stmt_str, &environment_str));
+
+    //dbg!(stmt_str);
+
+    /*if first_part.contains("Join { id: JoinPointId(`#UserApp.58`)") {
+        //dbg!(&environment);
+        //dbg!("58");
+    }*/
+
     match &stmt {
         // The expression borrows the values owned (used) by the continuation.
         Stmt::Let(_, _, _, _) => {
@@ -497,7 +607,7 @@ fn insert_refcount_operations_stmt<'v, 'a>(
                 .rev()
                 // First evaluate the continuation and let it consume it's free symbols.
                 .fold(
-                    insert_refcount_operations_stmt(arena, environment, current_stmt),
+                    insert_refcount_operations_stmt(arena, environment, current_stmt, depth + 1, call_counter),
                     |new_stmt, (binding, expr, layout)| {
                         // If the binding is still owned in the environment, it is not used in the continuation and we can drop it right away.
                         let new_stmt_without_unused = match environment
@@ -528,13 +638,14 @@ fn insert_refcount_operations_stmt<'v, 'a>(
             default_branch,
             ret_layout,
         } => {
+
             let new_branches = branches
                 .iter()
                 .map(|(label, info, branch)| {
                     let mut branch_env = environment.clone();
 
                     let new_branch =
-                        insert_refcount_operations_stmt(arena, &mut branch_env, branch);
+                        insert_refcount_operations_stmt(arena, &mut branch_env, branch, depth + 1, call_counter);
 
                     (*label, info.clone(), new_branch, branch_env)
                 })
@@ -544,7 +655,7 @@ fn insert_refcount_operations_stmt<'v, 'a>(
                 let (info, branch) = default_branch;
 
                 let mut branch_env = environment.clone();
-                let new_branch = insert_refcount_operations_stmt(arena, &mut branch_env, branch);
+                let new_branch = insert_refcount_operations_stmt(arena, &mut branch_env, branch, depth + 1, call_counter);
 
                 (info.clone(), new_branch, branch_env)
             };
@@ -649,6 +760,7 @@ fn insert_refcount_operations_stmt<'v, 'a>(
             })
         }
         Stmt::Ret(s) => {
+
             let ownership = environment.consume_symbol(s);
             debug_assert!(matches!(ownership, None | Some(Ownership::Owned))); // the return value should be owned or not reference counted at the return.
             return arena.alloc(Stmt::Ret(*s));
@@ -661,7 +773,7 @@ fn insert_refcount_operations_stmt<'v, 'a>(
             variables,
             remainder,
         } => {
-            let new_remainder = insert_refcount_operations_stmt(arena, environment, remainder);
+            let new_remainder = insert_refcount_operations_stmt(arena, environment, remainder, depth + 1, call_counter);
 
             let newer_remainder = consume_and_insert_dec_stmts(
                 arena,
@@ -685,7 +797,7 @@ fn insert_refcount_operations_stmt<'v, 'a>(
             variable,
             remainder,
         } => {
-            let new_remainder = insert_refcount_operations_stmt(arena, environment, remainder);
+            let new_remainder = insert_refcount_operations_stmt(arena, environment, remainder, depth + 1, call_counter);
 
             let newer_remainder = consume_and_insert_dec_stmts(
                 arena,
@@ -741,14 +853,27 @@ fn insert_refcount_operations_stmt<'v, 'a>(
             */
 
             let mut joinpoint_consumption = MutSet::default();
+    
+            let orig_env_hash: u64 = hash_string(&format!("{:?}", &environment));
+
+            let start_str = format!("{:?} loop at depth {:?}", orig_env_hash, depth);
+            cdbg!(start_str);
+            
+            let mut ii = 0;
 
             let (new_body, mut new_body_environment) = loop {
+                let iter_str = format!("{:?} loop iteration {}", orig_env_hash, ii);
+                cdbg!(iter_str);
+
+                ii += 1;
+
                 // Copy the env to make sure each iteration has a fresh environment.
                 let mut current_body_env = body_env.clone();
 
                 current_body_env
                     .add_joinpoint_consumption(*joinpoint_id, joinpoint_consumption.clone());
-                let new_body = insert_refcount_operations_stmt(arena, &mut current_body_env, body);
+
+                let new_body = insert_refcount_operations_stmt(arena, &mut current_body_env, body, depth + 1, call_counter);
                 current_body_env.remove_joinpoint_consumption(*joinpoint_id);
 
                 // We save the parameters consumed by this join point. So we can do the same when we jump to this joinpoint.
@@ -758,7 +883,13 @@ fn insert_refcount_operations_stmt<'v, 'a>(
                         .symbols_ownership
                         .iter()
                         .filter_map(|(symbol, ownership)| {
-                            ownership.is_borrowed().then_some(*symbol)
+                            if ownership.is_borrowed() {
+                                cdbg!(symbol);
+                                Some(*symbol)
+                            } else {
+                                None
+                            }
+                            //ownership.is_borrowed().then_some(*symbol)
                         })
                         .collect::<MutSet<_>>();
 
@@ -768,6 +899,9 @@ fn insert_refcount_operations_stmt<'v, 'a>(
                         .collect::<MutSet<Symbol>>()
                 };
 
+                // TODO if current_joinpoint_consumption values is all empty or borrowed, break 
+
+                //cdbg!("pre-if");
                 if joinpoint_consumption == current_joinpoint_consumption {
                     break (new_body, current_body_env);
                 } else {
@@ -777,9 +911,31 @@ fn insert_refcount_operations_stmt<'v, 'a>(
                         As the consumption should only ever increase.
                         Otherwise we will be looping forever."
                     );
+
+                    current_body_env
+                        .add_joinpoint_consumption(*joinpoint_id, joinpoint_consumption.clone());
+
+                    let all_empty_or_borrowed =
+                        current_body_env.is_joinpoint_consumptions_all_empty_or_borrowed();
+
+                    current_body_env.remove_joinpoint_consumption(*joinpoint_id);
+
                     joinpoint_consumption = current_joinpoint_consumption;
+
+                    if all_empty_or_borrowed {
+                        dbg!("New if triggered.");
+                        
+                        break (new_body, current_body_env);
+                    }
+
+                    
                 }
             };
+
+            dbg!(hash_string(&format!("{:?}", &new_body_environment)));
+
+            let end_str = format!("{:?} end loop at depth {:?}", orig_env_hash, depth);
+            dbg!(end_str);
 
             // Insert decrement statements for unused parameters (which are still marked as owned).
             // If the parameters are never dead, this could be skipped.
@@ -798,10 +954,28 @@ fn insert_refcount_operations_stmt<'v, 'a>(
                 dead_symbols,
                 new_body,
             );
+            let newer_body_str = format!("{:?}", &newer_body);
+            let old_remainder_str = format!("{:?}", &remainder);
+
+            dbg!(&newer_body_str);
+            dbg!(hash_string(&newer_body_str));
+
+            dbg!(&joinpoint_consumption);
 
             environment.add_joinpoint_consumption(*joinpoint_id, joinpoint_consumption);
-            let new_remainder = insert_refcount_operations_stmt(arena, environment, remainder);
+
+            dbg!(hash_string(&format!("{:?}", &environment)));
+
+
+            let new_remainder = insert_refcount_operations_stmt(arena, environment, remainder, depth + 1, call_counter);
             environment.remove_joinpoint_consumption(*joinpoint_id);
+
+            let new_remainder_str = format!("{:?}", &new_remainder);
+            
+            dbg!(&new_remainder_str);
+            dbg!(hash_string(&new_remainder_str));
+
+            dbg!(hash_string(&format!("{:?}", &environment)));
 
             arena.alloc(Stmt::Join {
                 id: *joinpoint_id,
@@ -812,9 +986,11 @@ fn insert_refcount_operations_stmt<'v, 'a>(
         }
         Stmt::Jump(joinpoint_id, arguments) => {
             let consumed_symbols = environment.get_joinpoint_consumption(*joinpoint_id);
+            dbg!(consumed_symbols);
             for consumed_symbol in consumed_symbols.clone().iter() {
                 environment.consume_symbol(consumed_symbol);
             }
+            dbg!("done");
 
             let new_jump = arena.alloc(Stmt::Jump(*joinpoint_id, arguments));
 
@@ -1209,6 +1385,11 @@ fn insert_dec_stmt<'a>(
     symbol: Symbol,
     continuation: &'a Stmt<'a>,
 ) -> &'a Stmt<'a> {
+    let symbol_str = symbol.to_string();
+    if symbol_str == "#UserApp.35" {
+        dbg!("35");
+    }
+
     arena.alloc(Stmt::Refcounting(ModifyRc::Dec(symbol), continuation))
 }
 

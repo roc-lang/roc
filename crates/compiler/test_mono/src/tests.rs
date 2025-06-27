@@ -484,6 +484,42 @@ fn list_len() {
 }
 
 #[mono_test]
+fn nested_joinpoints_unused_arg() {
+    r#"
+    wrappero = |_argso|
+        _ = bar_line("1")?
+        _ = bar_line("2")?
+        _ = bar_line("3")?
+        _ = bar_line("4")?
+        bar_line("5")
+
+    bar_line : Str -> Result Str {}
+    bar_line = |s| 
+        Ok(s)
+
+    wrappero("")
+    "#
+}
+
+#[mono_test]
+fn nested_joinpoints_used_arg() {
+    r#"
+    wrappero = |argso|
+        _ = bar_line("1")?
+        _ = bar_line(argso)?
+        _ = bar_line("3")?
+        _ = bar_line("4")?
+        bar_line("5")
+
+    bar_line : Str -> Result Str {}
+    bar_line = |s| 
+        Ok(s)
+
+    wrappero("")
+    "#
+}
+
+#[mono_test]
 fn when_joinpoint() {
     r"
     wrapper = \{} ->

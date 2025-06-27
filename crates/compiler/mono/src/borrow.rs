@@ -95,6 +95,7 @@ impl std::ops::Index<usize> for BorrowSignature {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct BorrowSignatures<'a> {
     pub(crate) procs: MutMap<(Symbol, ProcLayout<'a>), BorrowSignature>,
 }

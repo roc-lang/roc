@@ -76,6 +76,7 @@
           # faster builds - see https://github.com/roc-lang/roc/blob/main/BUILDING_FROM_SOURCE.md#use-lld-for-the-linker
           # provides lld
           pkgs.lld_18
+          pkgs.lldb_18
           # provides clang
           pkgs.clang_18
 
