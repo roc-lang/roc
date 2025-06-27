@@ -19,7 +19,7 @@ jobs:
 
       - name: run fuzz tests - ok to merge if this one fails # for now!
         run: |
-          cargo +nightly-2024-02-03 install --locked cargo-fuzz
+          cargo +nightly-2024-02-03 install --locked cargo-fuzz -Znext-lockfile-bump
           cd crates/compiler/test_syntax/fuzz && cargo +nightly-2024-02-03 fuzz run -j4 fuzz_expr --sanitizer=none -- -dict=dict.txt -max_total_time=60 || true
           cd ..
           if ls fuzz/artifacts/fuzz_expr/ | grep crash-; then

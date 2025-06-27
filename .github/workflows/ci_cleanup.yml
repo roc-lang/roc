@@ -17,7 +17,7 @@ jobs:
         run: nix-store --gc
 
   clean-small-ci:
-    runs-on: [self-hosted, i5-4690K]
+    runs-on: [self-hosted, amd-ryzen-7-5800-x]
     timeout-minutes: 120
     steps:
       - name: Clean up nix store
