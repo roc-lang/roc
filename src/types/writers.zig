@@ -144,6 +144,9 @@ pub const TypeWriter = struct {
                 try self.writeVar(sub_var);
                 _ = try self.writer.write(")");
             },
+            .list_unbound => {
+                _ = try self.writer.write("List(*)");
+            },
             .tuple => |tuple| {
                 try self.writeTuple(tuple);
             },
@@ -160,6 +163,9 @@ pub const TypeWriter = struct {
                 try self.writeFunc(func);
             },
             .record => |record| {
+                try self.writeRecord(record);
+            },
+            .record_unbound => |record| {
                 try self.writeRecord(record);
             },
             .empty_record => {
