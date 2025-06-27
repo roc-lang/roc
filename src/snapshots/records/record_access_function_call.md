@@ -37,7 +37,7 @@ NO CHANGE
 			(e-dot-access @1-2-1-19 (field "transform")
 				(receiver
 					(e-runtime-error (tag "ident_not_in_scope"))))))
-	(e-int @1-20-1-22 (num-var 77) (value "42")))
+	(e-int @1-20-1-22 (value "42")))
 ~~~
 # TYPES
 ~~~clojure

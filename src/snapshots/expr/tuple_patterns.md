@@ -261,8 +261,8 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 	(s-expr @4-14-7-6
 		(e-tuple @4-14-4-20
 			(elems
-				(e-int @4-15-4-16 (num-var 79) (value "1"))
-				(e-int @4-18-4-19 (num-var 81) (value "2")))))
+				(e-int @4-15-4-16 (value "1"))
+				(e-int @4-18-4-19 (value "2")))))
 	(s-expr @7-5-7-23
 		(e-tuple @7-5-7-21
 			(elems
@@ -279,12 +279,12 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 			(elems
 				(e-tuple @7-25-7-33
 					(elems
-						(e-int @7-26-7-28 (num-var 97) (value "10"))
-						(e-int @7-30-7-32 (num-var 99) (value "20"))))
+						(e-int @7-26-7-28 (value "10"))
+						(e-int @7-30-7-32 (value "20"))))
 				(e-tuple @7-35-7-43
 					(elems
-						(e-int @7-36-7-38 (num-var 102) (value "30"))
-						(e-int @7-40-7-42 (num-var 104) (value "40")))))))
+						(e-int @7-36-7-38 (value "30"))
+						(e-int @7-40-7-42 (value "40")))))))
 	(s-expr @10-5-10-29
 		(e-tuple @10-5-10-27
 			(elems
@@ -294,9 +294,9 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 	(s-expr @10-30-13-6
 		(e-tuple @10-30-10-44
 			(elems
-				(e-int @10-31-10-34 (num-var 117) (value "100"))
-				(e-int @10-36-10-38 (num-var 119) (value "42"))
-				(e-int @10-40-10-43 (num-var 121) (value "200")))))
+				(e-int @10-31-10-34 (value "100"))
+				(e-int @10-36-10-38 (value "42"))
+				(e-int @10-40-10-43 (value "200")))))
 	(s-expr @13-5-13-30
 		(e-tuple @13-5-13-28
 			(elems
@@ -321,9 +321,9 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 			(elems
 				(e-list @16-22-16-31 (elem-var 152)
 					(elems
-						(e-int @16-23-16-24 (num-var 147) (value "1"))
-						(e-int @16-26-16-27 (num-var 149) (value "2"))
-						(e-int @16-29-16-30 (num-var 151) (value "3"))))
+						(e-int @16-23-16-24 (value "1"))
+						(e-int @16-26-16-27 (value "2"))
+						(e-int @16-29-16-30 (value "3"))))
 				(e-string @16-33-16-40
 					(e-literal @16-34-16-39 (string "hello"))))))
 	(e-empty_record @18-5-18-7))

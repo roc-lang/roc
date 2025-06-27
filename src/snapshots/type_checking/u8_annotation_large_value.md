@@ -49,7 +49,7 @@ NO CHANGE
 (can-ir
 	(d-let (id 79)
 		(p-assign @4-1-4-2 (ident "x") (id 73))
-		(e-int @4-5-4-8 (num-var 75) (value "500") (id 75))
+		(e-int @4-5-4-8 (value "500") (id 75))
 		(annotation @4-1-4-2 (signature 77) (id 78)
 			(declared-type
 				(ty @3-5-3-7 (name "U8"))))))

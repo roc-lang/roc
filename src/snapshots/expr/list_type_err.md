@@ -41,8 +41,8 @@ NO CHANGE
 ~~~clojure
 (e-list @1-1-1-16 (elem-var 78) (id 79)
 	(elems
-		(e-int @1-2-1-3 (num-var 73) (value "1"))
-		(e-int @1-5-1-6 (num-var 75) (value "2"))
+		(e-int @1-2-1-3 (value "1"))
+		(e-int @1-5-1-6 (value "2"))
 		(e-string @1-8-1-15
 			(e-literal @1-9-1-14 (string "hello")))))
 ~~~

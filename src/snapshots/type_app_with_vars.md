@@ -119,11 +119,11 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 					(pattern (id 85)))
 				(e-list @6-21-6-32 (elem-var 116)
 					(elems
-						(e-int @6-22-6-23 (num-var 107) (value "1"))
-						(e-int @6-24-6-25 (num-var 109) (value "2"))
-						(e-int @6-26-6-27 (num-var 111) (value "3"))
-						(e-int @6-28-6-29 (num-var 113) (value "4"))
-						(e-int @6-30-6-31 (num-var 115) (value "5"))))))))
+						(e-int @6-22-6-23 (value "1"))
+						(e-int @6-24-6-25 (value "2"))
+						(e-int @6-26-6-27 (value "3"))
+						(e-int @6-28-6-29 (value "4"))
+						(e-int @6-30-6-31 (value "5"))))))))
 ~~~
 # TYPES
 ~~~clojure

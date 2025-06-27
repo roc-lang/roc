@@ -23,7 +23,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-int @1-1-1-12 (num-var 73) (value "-2147483648") (id 73))
+(e-int @1-1-1-12 (value "-2147483648") (id 73))
 ~~~
 # TYPES
 ~~~clojure

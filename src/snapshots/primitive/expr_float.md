@@ -33,9 +33,9 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 76)
+	(d-let (id 75)
 		(p-assign @2-1-2-4 (ident "foo") (id 72))
-		(e-dec-small @2-7-2-12 (num-var 75) (numerator "1234") (denominator-power-of-ten "2") (value "12.34") (id 75))))
+		(e-dec-small @2-7-2-12 (numerator "1234") (denominator-power-of-ten "2") (value "12.34") (id 74))))
 ~~~
 # TYPES
 ~~~clojure

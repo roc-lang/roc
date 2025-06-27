@@ -52,17 +52,17 @@ NO CHANGE
 	(elems
 		(e-list @2-2-2-5 (elem-var 74)
 			(elems
-				(e-int @2-3-2-4 (num-var 73) (value "1"))))
+				(e-int @2-3-2-4 (value "1"))))
 		(e-list @3-2-3-5 (elem-var 78)
 			(elems
-				(e-int @3-3-3-4 (num-var 77) (value "2"))))
+				(e-int @3-3-3-4 (value "2"))))
 		(e-list @4-2-7-3 (elem-var 84)
 			(elems
-				(e-int @5-3-5-4 (num-var 81) (value "3"))
-				(e-int @6-3-6-4 (num-var 83) (value "4"))))
+				(e-int @5-3-5-4 (value "3"))
+				(e-int @6-3-6-4 (value "4"))))
 		(e-list @8-2-8-5 (elem-var 88)
 			(elems
-				(e-int @8-3-8-4 (num-var 87) (value "5"))))))
+				(e-int @8-3-8-4 (value "5"))))))
 ~~~
 # TYPES
 ~~~clojure

@@ -68,7 +68,7 @@ NO CHANGE
 			(e-binop @4-15-6-10 (op "add")
 				(e-lookup-local @4-15-4-16
 					(pattern (id 76)))
-				(e-int @4-19-4-20 (num-var 79) (value "1"))))
+				(e-int @4-19-4-20 (value "1"))))
 		(annotation @4-1-4-8 (signature 85) (id 86)
 			(declared-type
 				(ty-fn @3-11-3-21 (effectful false)
@@ -79,7 +79,7 @@ NO CHANGE
 		(e-call @7-13-7-24 (id 93)
 			(e-lookup-local @7-13-7-20
 				(pattern (id 75)))
-			(e-int @7-21-7-23 (num-var 92) (value "42")))
+			(e-int @7-21-7-23 (value "42")))
 		(annotation @7-1-7-10 (signature 95) (id 96)
 			(declared-type
 				(ty @6-13-6-16 (name "U64"))))))

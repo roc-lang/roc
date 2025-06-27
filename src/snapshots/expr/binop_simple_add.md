@@ -26,8 +26,8 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (e-binop @1-1-1-6 (op "add") (id 76)
-	(e-int @1-1-1-2 (num-var 73) (value "1"))
-	(e-int @1-5-1-6 (num-var 75) (value "2")))
+	(e-int @1-1-1-2 (value "1"))
+	(e-int @1-5-1-6 (value "2")))
 ~~~
 # TYPES
 ~~~clojure

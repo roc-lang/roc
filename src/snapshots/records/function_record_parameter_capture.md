@@ -70,7 +70,7 @@ NO CHANGE
 			(field (name "is_adult")
 				(e-binop @1-92-1-103 (op "ge")
 					(e-runtime-error (tag "ident_not_in_scope"))
-					(e-int @1-99-1-101 (num-var 86) (value "18")))))))
+					(e-int @1-99-1-101 (value "18")))))))
 ~~~
 # TYPES
 ~~~clojure

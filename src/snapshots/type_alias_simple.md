@@ -92,7 +92,7 @@ NO CHANGE
 								(e-binop @6-20-6-28 (op "gt")
 									(e-lookup-local @6-20-6-22
 										(pattern (id 79)))
-									(e-int @6-25-6-27 (num-var 82) (value "10")))))
+									(e-int @6-25-6-27 (value "10")))))
 						(e-string @6-29-6-34
 							(e-literal @6-30-6-33 (string "big")))))
 				(if-else
@@ -111,7 +111,7 @@ NO CHANGE
 			(e-call @8-13-8-25
 				(e-lookup-local @8-13-8-20
 					(pattern (id 78)))
-				(e-int @8-21-8-24 (num-var 104) (value "100")))))
+				(e-int @8-21-8-24 (value "100")))))
 	(s-type-decl @3-1-5-8 (id 74)
 		(ty-header @3-1-3-7 (name "UserId"))
 		(ty @3-10-3-13 (name "U64"))))

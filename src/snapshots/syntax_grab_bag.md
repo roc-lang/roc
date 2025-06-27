@@ -1231,9 +1231,9 @@ NO CHANGE
 					(if-branch
 						(e-lookup-local @65-28-65-31
 							(pattern (id 180)))
-						(e-int @65-32-65-33 (num-var 183) (value "2"))))
+						(e-int @65-32-65-33 (value "2"))))
 				(if-else
-					(e-int @65-39-65-40 (num-var 186) (value "5"))))))
+					(e-int @65-39-65-40 (value "5"))))))
 	(d-let (id 224)
 		(p-assign @68-1-68-8 (ident "add_one") (id 195))
 		(e-lambda @68-11-78-2 (id 218)
@@ -1242,7 +1242,7 @@ NO CHANGE
 			(e-block @68-17-78-2
 				(s-let @69-2-69-11
 					(p-assign @69-2-69-7 (ident "other") (id 197))
-					(e-int @69-10-69-11 (num-var 199) (value "1") (id 199)))
+					(e-int @69-10-69-11 (value "1") (id 199)))
 				(e-if @70-2-78-2 (cond-var 0) (branch-var 0)
 					(if-branches
 						(if-branch
@@ -1251,7 +1251,7 @@ NO CHANGE
 							(e-block @70-9-74-3
 								(s-expr @71-3-73-4
 									(e-runtime-error (tag "not_implemented")))
-								(e-int @73-3-73-4 (num-var 206) (value "0")))))
+								(e-int @73-3-73-4 (value "0")))))
 					(if-else
 						(e-block @74-9-77-3
 							(s-expr @75-3-76-8
@@ -1282,7 +1282,7 @@ NO CHANGE
 						(e-literal @145-11-145-16 (string "World"))))
 				(s-var @146-2-147-8
 					(p-assign @146-2-147-8 (ident "number") (id 250))
-					(e-int @146-15-146-18 (num-var 249) (value "123") (id 249)))
+					(e-int @146-15-146-18 (value "123") (id 249)))
 				(s-let @148-2-148-12
 					(p-assign @148-2-148-5 (ident "tag") (id 254))
 					(e-tag @148-8-148-12 (ext-var 0) (name "Blue") (args "TODO") (id 256)))
@@ -1318,14 +1318,14 @@ NO CHANGE
 								(e-lookup-local @167-3-167-10
 									(pattern (id 195)))
 								(e-runtime-error (tag "not_implemented")))
-							(e-int @171-3-171-6 (num-var 294) (value "456"))
-							(e-int @172-3-172-6 (num-var 296) (value "789")))))
+							(e-int @171-3-171-6 (value "456"))
+							(e-int @172-3-172-6 (value "789")))))
 				(s-let @178-2-178-71
 					(p-assign @178-2-178-8 (ident "record") (id 302))
 					(e-record @178-11-178-71 (ext-var 319) (id 320)
 						(fields
 							(field (name "foo")
-								(e-int @178-18-178-21 (num-var 304) (value "123")))
+								(e-int @178-18-178-21 (value "123")))
 							(field (name "bar")
 								(e-string @178-28-178-35
 									(e-literal @178-29-178-34 (string "Hello"))))
@@ -1343,7 +1343,7 @@ NO CHANGE
 					(p-assign @179-2-179-7 (ident "tuple") (id 327))
 					(e-tuple @179-10-179-68 (id 349)
 						(elems
-							(e-int @179-11-179-14 (num-var 329) (value "123"))
+							(e-int @179-11-179-14 (value "123"))
 							(e-string @179-16-179-23
 								(e-literal @179-17-179-22 (string "World")))
 							(e-lookup-local @179-25-179-28
@@ -1359,14 +1359,14 @@ NO CHANGE
 										(pattern (id 327)))))
 							(e-list @179-58-179-67 (elem-var 347)
 								(elems
-									(e-int @179-59-179-60 (num-var 342) (value "1"))
-									(e-int @179-62-179-63 (num-var 344) (value "2"))
-									(e-int @179-65-179-66 (num-var 346) (value "3")))))))
+									(e-int @179-59-179-60 (value "1"))
+									(e-int @179-62-179-63 (value "2"))
+									(e-int @179-65-179-66 (value "3")))))))
 				(s-let @180-2-187-3
 					(p-assign @180-2-180-17 (ident "multiline_tuple") (id 351))
 					(e-tuple @180-20-187-3 (id 374)
 						(elems
-							(e-int @181-3-181-6 (num-var 353) (value "123"))
+							(e-int @181-3-181-6 (value "123"))
 							(e-string @182-3-182-10
 								(e-literal @182-4-182-9 (string "World")))
 							(e-runtime-error (tag "ident_not_in_scope"))
@@ -1381,9 +1381,9 @@ NO CHANGE
 										(pattern (id 327)))))
 							(e-list @186-3-186-12 (elem-var 372)
 								(elems
-									(e-int @186-4-186-5 (num-var 367) (value "1"))
-									(e-int @186-7-186-8 (num-var 369) (value "2"))
-									(e-int @186-10-186-11 (num-var 371) (value "3")))))))
+									(e-int @186-4-186-5 (value "1"))
+									(e-int @186-7-186-8 (value "2"))
+									(e-int @186-10-186-11 (value "3")))))))
 				(s-let @188-2-189-23
 					(p-assign @188-2-188-15 (ident "bin_op_result") (id 376))
 					(e-binop @188-18-189-23 (op "or") (id 417)
@@ -1393,26 +1393,26 @@ NO CHANGE
 									(e-call @188-18-188-26
 										(e-tag @188-18-188-21 (ext-var 0) (name "Err") (args "TODO"))
 										(e-runtime-error (tag "ident_not_in_scope")))
-									(e-int @188-30-188-32 (num-var 383) (value "12")))
+									(e-int @188-30-188-32 (value "12")))
 								(e-binop @188-35-188-43 (op "mul")
-									(e-int @188-35-188-36 (num-var 386) (value "5"))
-									(e-int @188-39-188-40 (num-var 388) (value "5"))))
+									(e-int @188-35-188-36 (value "5"))
+									(e-int @188-39-188-40 (value "5"))))
 							(e-binop @188-44-188-74 (op "and")
 								(e-binop @188-44-188-58 (op "lt")
 									(e-binop @188-44-188-52 (op "add")
-										(e-int @188-44-188-46 (num-var 392) (value "13"))
-										(e-int @188-49-188-50 (num-var 394) (value "2")))
-									(e-int @188-53-188-54 (num-var 397) (value "5")))
+										(e-int @188-44-188-46 (value "13"))
+										(e-int @188-49-188-50 (value "2")))
+									(e-int @188-53-188-54 (value "5")))
 								(e-binop @188-59-188-74 (op "ge")
 									(e-binop @188-59-188-68 (op "sub")
-										(e-int @188-59-188-61 (num-var 400) (value "10"))
-										(e-int @188-64-188-65 (num-var 402) (value "1")))
-									(e-int @188-69-188-71 (num-var 405) (value "16")))))
+										(e-int @188-59-188-61 (value "10"))
+										(e-int @188-64-188-65 (value "1")))
+									(e-int @188-69-188-71 (value "16")))))
 						(e-binop @188-75-189-23 (op "le")
-							(e-int @188-75-188-77 (num-var 410) (value "12"))
+							(e-int @188-75-188-77 (value "12"))
 							(e-binop @188-81-189-23 (op "div")
-								(e-int @188-81-188-82 (num-var 412) (value "3"))
-								(e-int @188-85-188-86 (num-var 414) (value "5"))))))
+								(e-int @188-81-188-82 (value "3"))
+								(e-int @188-85-188-86 (value "5"))))))
 				(s-let @189-2-190-8
 					(p-assign @189-2-189-23 (ident "static_dispatch_style") (id 419))
 					(e-dot-access @189-26-190-8 (field "unknown") (id 424)

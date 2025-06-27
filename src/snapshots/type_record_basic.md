@@ -108,7 +108,7 @@ main! = |_| getName({ name: "luke", age: 21 })
 							(e-string @6-28-6-34
 								(e-literal @6-29-6-33 (string "luke"))))
 						(field (name "age")
-							(e-int @6-40-6-42 (num-var 97) (value "21")))))))))
+							(e-int @6-40-6-42 (value "21")))))))))
 ~~~
 # TYPES
 ~~~clojure

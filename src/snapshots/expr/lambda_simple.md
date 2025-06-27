@@ -34,7 +34,7 @@ NO CHANGE
 	(e-binop @1-5-1-10 (op "add")
 		(e-lookup-local @1-5-1-6
 			(pattern (id 72)))
-		(e-int @1-9-1-10 (num-var 75) (value "1"))))
+		(e-int @1-9-1-10 (value "1"))))
 ~~~
 # TYPES
 ~~~clojure

@@ -142,7 +142,7 @@ main! = |_| {}
 			(e-block @5-18-14-2
 				(s-let @7-5-7-14
 					(p-assign @7-5-7-9 (ident "elem") (id 80))
-					(e-int @7-12-7-14 (num-var 82) (value "42") (id 82)))
+					(e-int @7-12-7-14 (value "42") (id 82)))
 				(s-type-anno @10-5-11-11 (name "result")
 					(ty-var @10-14-10-18 (name "elem")))
 				(s-let @11-5-11-30

@@ -42,7 +42,7 @@ NO CHANGE
 					(e-string @1-18-1-25
 						(e-literal @1-19-1-24 (string "Alice"))))
 				(field (name "age")
-					(e-int @1-32-1-34 (num-var 77) (value "30")))
+					(e-int @1-32-1-34 (value "30")))
 				(field (name "email")
 					(e-string @1-43-1-62
 						(e-literal @1-44-1-61 (string "alice@example.com"))))))))

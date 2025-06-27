@@ -34,9 +34,9 @@ Int(2:3-2:4),CloseSquare(2:4-2:5),EndOfFile(2:5-2:5),
 ~~~clojure
 (e-list @1-1-2-5 (elem-var 78) (id 79)
 	(elems
-		(e-int @1-2-1-3 (num-var 73) (value "1"))
-		(e-int @1-5-1-6 (num-var 75) (value "2"))
-		(e-int @2-3-2-4 (num-var 77) (value "3"))))
+		(e-int @1-2-1-3 (value "1"))
+		(e-int @1-5-1-6 (value "2"))
+		(e-int @2-3-2-4 (value "3"))))
 ~~~
 # TYPES
 ~~~clojure

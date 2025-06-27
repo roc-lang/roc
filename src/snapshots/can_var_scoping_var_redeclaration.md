@@ -104,13 +104,13 @@ NO CHANGE
 			(e-block @4-21-9-2
 				(s-var @5-2-6-5
 					(p-assign @5-2-6-5 (ident "x_") (id 76))
-					(e-int @5-11-5-12 (num-var 75) (value "5") (id 75)))
+					(e-int @5-11-5-12 (value "5") (id 75)))
 				(s-var @6-2-7-4
 					(p-assign @6-2-7-4 (ident "x_") (id 80))
-					(e-int @6-11-6-13 (num-var 79) (value "10") (id 79)))
+					(e-int @6-11-6-13 (value "10") (id 79)))
 				(s-reassign @7-2-7-4
 					(p-assign @5-2-6-5 (ident "x_") (id 76))
-					(e-int @7-7-7-9 (num-var 84) (value "15") (id 84)))
+					(e-int @7-7-7-9 (value "15") (id 84)))
 				(e-lookup-local @8-2-8-4
 					(pattern (id 76))))))
 	(d-let (id 95)

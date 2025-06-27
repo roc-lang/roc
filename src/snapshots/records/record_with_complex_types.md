@@ -149,10 +149,10 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 		(field (name "scores")
 			(e-list @3-13-3-29 (elem-var 83)
 				(elems
-					(e-int @3-14-3-16 (num-var 76) (value "95"))
-					(e-int @3-18-3-20 (num-var 78) (value "87"))
-					(e-int @3-22-3-24 (num-var 80) (value "92"))
-					(e-int @3-26-3-28 (num-var 82) (value "78")))))
+					(e-int @3-14-3-16 (value "95"))
+					(e-int @3-18-3-20 (value "87"))
+					(e-int @3-22-3-24 (value "92"))
+					(e-int @3-26-3-28 (value "78")))))
 		(field (name "status")
 			(e-call @4-13-4-44
 				(e-tag @4-13-4-19 (ext-var 0) (name "Active") (args "TODO"))
@@ -198,7 +198,7 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 				(e-binop @10-19-10-25 (op "add")
 					(e-lookup-local @10-19-10-20
 						(pattern (id 136)))
-					(e-int @10-23-10-24 (num-var 139) (value "1")))))
+					(e-int @10-23-10-24 (value "1")))))
 		(field (name "nested")
 			(e-record @11-13-14-6 (ext-var 178)
 				(fields
@@ -222,9 +222,9 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 									(field (name "data")
 										(e-list @13-33-13-42 (elem-var 166)
 											(elems
-												(e-int @13-34-13-35 (num-var 161) (value "1"))
-												(e-int @13-37-13-38 (num-var 163) (value "2"))
-												(e-int @13-40-13-41 (num-var 165) (value "3")))))
+												(e-int @13-34-13-35 (value "1"))
+												(e-int @13-37-13-38 (value "2"))
+												(e-int @13-40-13-41 (value "3")))))
 									(field (name "timestamp")
 										(e-string @13-55-13-67
 											(e-literal @13-56-13-66 (string "2024-01-01")))))))))))))

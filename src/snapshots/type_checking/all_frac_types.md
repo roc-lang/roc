@@ -60,22 +60,22 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 80)
+	(d-let (id 79)
 		(p-assign @4-1-4-2 (ident "a") (id 73))
-		(e-dec-small @4-5-4-9 (num-var 76) (numerator "314") (denominator-power-of-ten "2") (value "3.14") (id 76))
-		(annotation @4-1-4-2 (signature 78) (id 79)
+		(e-dec-small @4-5-4-9 (numerator "314") (denominator-power-of-ten "2") (value "3.14") (id 75))
+		(annotation @4-1-4-2 (signature 77) (id 78)
 			(declared-type
 				(ty @3-5-3-8 (name "F32")))))
-	(d-let (id 89)
-		(p-assign @7-1-7-2 (ident "b") (id 82))
-		(e-frac-dec @7-5-7-12 (frac-var 85) (value "2.71828") (id 85))
-		(annotation @7-1-7-2 (signature 87) (id 88)
+	(d-let (id 87)
+		(p-assign @7-1-7-2 (ident "b") (id 81))
+		(e-frac-dec @7-5-7-12 (value "2.71828") (id 83))
+		(annotation @7-1-7-2 (signature 85) (id 86)
 			(declared-type
 				(ty @6-5-6-8 (name "F64")))))
-	(d-let (id 98)
-		(p-assign @10-1-10-2 (ident "c") (id 91))
-		(e-frac-dec @10-5-10-12 (frac-var 94) (value "123.456") (id 94))
-		(annotation @10-1-10-2 (signature 96) (id 97)
+	(d-let (id 95)
+		(p-assign @10-1-10-2 (ident "c") (id 89))
+		(e-frac-dec @10-5-10-12 (value "123.456") (id 91))
+		(annotation @10-1-10-2 (signature 93) (id 94)
 			(declared-type
 				(ty @9-5-9-8 (name "Dec"))))))
 ~~~

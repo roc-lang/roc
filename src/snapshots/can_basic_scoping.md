@@ -118,10 +118,10 @@ outerFunc = |_| {
 (can-ir
 	(d-let (id 75)
 		(p-assign @4-1-4-2 (ident "x") (id 72))
-		(e-int @4-5-4-6 (num-var 74) (value "5") (id 74)))
+		(e-int @4-5-4-6 (value "5") (id 74)))
 	(d-let (id 79)
 		(p-assign @5-1-5-2 (ident "y") (id 76))
-		(e-int @5-5-5-7 (num-var 78) (value "10") (id 78)))
+		(e-int @5-5-5-7 (value "10") (id 78)))
 	(d-let (id 102)
 		(p-assign @8-1-8-10 (ident "outerFunc") (id 80))
 		(e-lambda @8-13-16-2 (id 101)
@@ -130,7 +130,7 @@ outerFunc = |_| {
 			(e-block @8-17-16-2
 				(s-let @9-5-9-11
 					(p-assign @9-5-9-6 (ident "x") (id 82))
-					(e-int @9-9-9-11 (num-var 85) (value "20") (id 85)))
+					(e-int @9-9-9-11 (value "20") (id 85)))
 				(s-let @10-5-14-6
 					(p-assign @10-5-10-16 (ident "innerResult") (id 87))
 					(e-block @10-19-14-6 (id 97)
@@ -144,7 +144,7 @@ outerFunc = |_| {
 						(e-binop @13-9-14-6 (op "add")
 							(e-lookup-local @13-9-13-10
 								(pattern (id 88)))
-							(e-int @13-13-13-14 (num-var 95) (value "1")))))
+							(e-int @13-13-13-14 (value "1")))))
 				(e-lookup-local @15-5-15-16
 					(pattern (id 87)))))))
 ~~~
