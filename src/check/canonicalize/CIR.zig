@@ -432,34 +432,6 @@ fn getIdentText(self: *const CIR, idx: Ident.Idx) []const u8 {
     return self.env.idents.getText(idx);
 }
 
-// Helper to add identifier info to a s-expr node
-fn appendIdent(node: *SExpr, gpa: std.mem.Allocator, ir: *const CIR, name: []const u8, ident_idx: Ident.Idx) void {
-    const ident_text = ir.env.idents.getText(ident_idx);
-
-    // Create a node with no pre-allocated children to avoid aliasing issues
-    const ident_node = SExpr{
-        .node = .{
-            .value = gpa.dupe(u8, name) catch @panic("Failed to duplicate name"),
-            .region = null,
-            .node_idx = null,
-            .attributes = .{},
-            .children = .{},
-        },
-    };
-
-    // Append the node to the parent first
-    switch (node.*) {
-        .node => |*n| {
-            n.children.append(gpa, ident_node) catch @panic("Failed to append node");
-
-            // Now add the string child directly to the node in its final location
-            const last_idx = n.children.items.len - 1;
-            n.children.items[last_idx].appendString(gpa, ident_text);
-        },
-        else => @panic("appendIdent called on non-node"),
-    }
-}
-
 // Helper to format pattern index for s-expr output
 fn formatPatternIdxNode(gpa: std.mem.Allocator, pattern_idx: Pattern.Idx) SExpr {
     var node = SExpr.init(gpa, "pid");
@@ -1796,7 +1768,10 @@ pub const IngestedFile = struct {
         const gpa = ir.env.gpa;
         var node = SExpr.init(gpa, "ingested-file");
         node.appendStringAttr(gpa, "path", "TODO");
-        appendIdent(&node, gpa, ir.env, "ident", self.ident);
+
+        const ident_text = ir.env.idents.getText(self.ident);
+        node.appendStringAttr(gpa, "ident", ident_text);
+
         var type_node = self.type.toSExpr(ir);
         node.appendNode(gpa, &type_node);
         return node;
@@ -2361,7 +2336,13 @@ pub const Pattern = union(enum) {
                 // node.appendNode(gpa, &pattern_idx_node);
 
                 var destructs_node = SExpr.init(gpa, "destructs");
-                destructs_node.appendStringAttr(gpa, "node", "TODO");
+
+                // Iterate through the destructs span and convert each to SExpr
+                for (ir.store.sliceRecordDestructs(p.destructs)) |destruct_idx| {
+                    var destruct_sexpr = ir.store.getRecordDestruct(destruct_idx).toSExpr(ir);
+                    destructs_node.appendNode(gpa, &destruct_sexpr);
+                }
+
                 node.appendNode(gpa, &destructs_node);
 
                 return node;
@@ -2467,7 +2448,6 @@ pub const Pattern = union(enum) {
 
 /// todo
 pub const RecordDestruct = struct {
-    type_var: TypeVar,
     region: Region,
     label: Ident.Idx,
     ident: Ident.Idx,
@@ -2483,16 +2463,14 @@ pub const RecordDestruct = struct {
 
         pub fn toSExpr(self: *const @This(), ir: *const CIR, line_starts: std.ArrayList(u32)) SExpr {
             const gpa = ir.env.gpa;
+            _ = line_starts;
 
             switch (self.*) {
                 .Required => return SExpr.init(gpa, "required"),
                 .Guard => |guard_idx| {
                     var guard_kind_node = SExpr.init(gpa, "guard");
-
-                    const guard_patt = ir.typed_patterns_at_regions.get(guard_idx);
-                    var guard_sexpr = guard_patt.toSExpr(ir.env, ir, line_starts);
-                    guard_kind_node.appendNode(gpa, &guard_sexpr);
-
+                    _ = guard_idx; // TODO: implement guard pattern retrieval
+                    guard_kind_node.appendStringAttr(gpa, "pattern", "TODO");
                     return guard_kind_node;
                 },
             }
@@ -2502,18 +2480,19 @@ pub const RecordDestruct = struct {
     pub fn toSExpr(self: *const @This(), ir: *const CIR) SExpr {
         const gpa = ir.env.gpa;
 
-        var record_destruct_node = SExpr.init(gpa, "record-destruct");
+        var node = SExpr.init(gpa, "record-destruct");
 
-        record_destruct_node.appendTypeVar(&record_destruct_node, gpa, "type-var", self.type_var);
-        record_destruct_node.appendRegion(gpa, ir.calcRegionInfo(self.region));
+        node.appendRegion(gpa, ir.calcRegionInfo(self.region));
 
-        appendIdent(&record_destruct_node, gpa, ir, "label", self.label);
-        appendIdent(&record_destruct_node, gpa, ir, "ident", self.ident);
+        const label_text = ir.env.idents.getText(self.label);
+        const ident_text = ir.env.idents.getText(self.ident);
+        node.appendStringAttr(gpa, "label", label_text);
+        node.appendStringAttr(gpa, "ident", ident_text);
 
-        var kind_node = self.kind.toSExpr(ir);
-        record_destruct_node.appendNode(gpa, &kind_node);
+        var kind_node = self.kind.toSExpr(ir, std.ArrayList(u32).init(ir.env.gpa));
+        node.appendNode(gpa, &kind_node);
 
-        return record_destruct_node;
+        return node;
     }
 };
 
