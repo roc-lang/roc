@@ -44,6 +44,7 @@ pub const Tag = enum {
     expr_record,
     expr_empty_record,
     record_field,
+    record_destruct,
     expr_field_access,
     expr_static_dispatch,
     expr_external_lookup,

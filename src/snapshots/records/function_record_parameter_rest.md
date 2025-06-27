@@ -8,17 +8,7 @@ type=expr
 |{ first_name, ..rest }| "Hello ${first_name} ${rest.last_name}"
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize record pattern
-
-**UNDEFINED VARIABLE**
-Nothing is named `first_name` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `rest` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 OpBar(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:4-1:14),Comma(1:14-1:15),DoubleDot(1:16-1:18),LowerIdent(1:18-1:22),CloseCurly(1:23-1:24),OpBar(1:24-1:25),StringStart(1:26-1:27),StringPart(1:27-1:33),OpenStringInterpolation(1:33-1:35),LowerIdent(1:35-1:45),CloseStringInterpolation(1:45-1:46),StringPart(1:46-1:47),OpenStringInterpolation(1:47-1:49),LowerIdent(1:49-1:53),NoSpaceDotLowerIdent(1:53-1:63),CloseStringInterpolation(1:63-1:64),StringPart(1:64-1:64),StringEnd(1:64-1:65),EndOfFile(1:65-1:65),
@@ -45,19 +35,26 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-lambda @1-1-1-65 (id 83)
+(e-lambda @1-1-1-65 (id 84)
 	(args
-		(p-runtime-error @1-1-1-1 (tag "not_implemented") (id 73)))
+		(p-record-destructure @1-2-1-24 (id 76)
+			(destructs
+				(record-destruct @1-4-1-15 (label "first_name") (ident "first_name")
+					(required))
+				(record-destruct @1-16-1-24 (label "rest") (ident "rest")
+					(required)))))
 	(e-string @1-26-1-65
 		(e-literal @1-27-1-33 (string "Hello "))
-		(e-runtime-error (tag "ident_not_in_scope"))
+		(e-lookup-local @1-35-1-45
+			(pattern (id 73)))
 		(e-literal @1-46-1-47 (string " "))
 		(e-dot-access @1-49-1-64 (field "last_name")
 			(receiver
-				(e-runtime-error (tag "ident_not_in_scope"))))
+				(e-lookup-local @1-49-1-53
+					(pattern (id 75)))))
 		(e-literal @1-64-1-64 (string ""))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 83) (type "*"))
+(expr (id 84) (type "*"))
 ~~~
