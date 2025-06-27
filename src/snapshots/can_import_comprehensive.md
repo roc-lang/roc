@@ -172,73 +172,73 @@ main = {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 120)
-		(p-assign @7-1-7-5 (ident "main") (id 77))
-		(e-block @7-8-35-2 (id 119)
+	(d-let (id 121)
+		(p-assign @7-1-7-5 (ident "main") (id 78))
+		(e-block @7-8-35-2 (id 120)
 			(s-let @8-5-8-22
-				(p-assign @8-5-8-11 (ident "client") (id 78))
-				(e-lookup-external (id 80)
-					(ext-decl @8-14-8-22 (qualified "http.Client.get") (module "http.Client") (local "get") (kind "value") (type-var 79))))
+				(p-assign @8-5-8-11 (ident "client") (id 79))
+				(e-lookup-external (id 81)
+					(ext-decl @8-14-8-22 (qualified "http.Client.get") (module "http.Client") (local "get") (kind "value") (type-var 80))))
 			(s-let @9-5-9-23
-				(p-assign @9-5-9-11 (ident "parser") (id 82))
-				(e-lookup-external (id 84)
-					(ext-decl @9-14-9-23 (qualified "json.Json.utf8") (module "json.Json") (local "utf8") (kind "value") (type-var 83))))
+				(p-assign @9-5-9-11 (ident "parser") (id 83))
+				(e-lookup-external (id 85)
+					(ext-decl @9-14-9-23 (qualified "json.Json.utf8") (module "json.Json") (local "utf8") (kind "value") (type-var 84))))
 			(s-let @10-5-10-22
-				(p-assign @10-5-10-11 (ident "helper") (id 86))
-				(e-lookup-external (id 88)
-					(ext-decl @10-14-10-22 (qualified "utils.String.trim") (module "utils.String") (local "trim") (kind "value") (type-var 87))))
+				(p-assign @10-5-10-11 (ident "helper") (id 87))
+				(e-lookup-external (id 89)
+					(ext-decl @10-14-10-22 (qualified "utils.String.trim") (module "utils.String") (local "trim") (kind "value") (type-var 88))))
 			(s-let @13-5-13-25
-				(p-assign @13-5-13-12 (ident "result1") (id 90))
-				(e-lookup-external (id 92)
-					(ext-decl @13-15-13-25 (qualified "json.Json.parse") (module "json.Json") (local "parse") (kind "value") (type-var 91))))
+				(p-assign @13-5-13-12 (ident "result1") (id 91))
+				(e-lookup-external (id 93)
+					(ext-decl @13-15-13-25 (qualified "json.Json.parse") (module "json.Json") (local "parse") (kind "value") (type-var 92))))
 			(s-let @16-5-16-24
-				(p-assign @16-5-16-12 (ident "result2") (id 94))
-				(e-lookup-external (id 96)
-					(ext-decl @16-15-16-24 (qualified "http.Client.post") (module "http.Client") (local "post") (kind "value") (type-var 95))))
+				(p-assign @16-5-16-12 (ident "result2") (id 95))
+				(e-lookup-external (id 97)
+					(ext-decl @16-15-16-24 (qualified "http.Client.post") (module "http.Client") (local "post") (kind "value") (type-var 96))))
 			(s-let @19-5-19-18
-				(p-assign @19-5-19-12 (ident "result3") (id 98))
-				(e-lookup-external (id 100)
-					(ext-decl @19-15-19-18 (qualified "http.Client.get") (module "http.Client") (local "get") (kind "value") (type-var 99))))
+				(p-assign @19-5-19-12 (ident "result3") (id 99))
+				(e-lookup-external (id 101)
+					(ext-decl @19-15-19-18 (qualified "http.Client.get") (module "http.Client") (local "get") (kind "value") (type-var 100))))
 			(s-let @20-5-20-19
-				(p-assign @20-5-20-12 (ident "result4") (id 102))
-				(e-lookup-external (id 104)
-					(ext-decl @20-15-20-19 (qualified "http.Client.post") (module "http.Client") (local "post") (kind "value") (type-var 103))))
+				(p-assign @20-5-20-12 (ident "result4") (id 103))
+				(e-lookup-external (id 105)
+					(ext-decl @20-15-20-19 (qualified "http.Client.post") (module "http.Client") (local "post") (kind "value") (type-var 104))))
 			(s-let @23-5-23-26
-				(p-assign @23-5-23-13 (ident "combined") (id 106))
-				(e-lookup-external (id 108)
-					(ext-decl @23-16-23-26 (qualified "utils.String.concat") (module "utils.String") (local "concat") (kind "value") (type-var 107))))
+				(p-assign @23-5-23-13 (ident "combined") (id 107))
+				(e-lookup-external (id 109)
+					(ext-decl @23-16-23-26 (qualified "utils.String.concat") (module "utils.String") (local "concat") (kind "value") (type-var 108))))
 			(e-tuple @25-5-34-6
 				(elems
 					(e-lookup-local @26-9-26-15
-						(pattern (id 78)))
+						(pattern (id 79)))
 					(e-lookup-local @27-9-27-15
-						(pattern (id 82)))
+						(pattern (id 83)))
 					(e-lookup-local @28-9-28-15
-						(pattern (id 86)))
+						(pattern (id 87)))
 					(e-lookup-local @29-9-29-16
-						(pattern (id 90)))
+						(pattern (id 91)))
 					(e-lookup-local @30-9-30-16
-						(pattern (id 94)))
+						(pattern (id 95)))
 					(e-lookup-local @31-9-31-16
-						(pattern (id 98)))
+						(pattern (id 99)))
 					(e-lookup-local @32-9-32-16
-						(pattern (id 102)))
+						(pattern (id 103)))
 					(e-lookup-local @33-9-33-17
-						(pattern (id 106)))))))
-	(s-import @3-1-3-17 (module "json.Json") (qualifier "json") (id 72)
+						(pattern (id 107)))))))
+	(s-import @3-1-3-17 (module "json.Json") (qualifier "json") (id 73)
 		(exposes))
-	(s-import @4-1-4-48 (module "http.Client") (qualifier "http") (alias "Http") (id 75)
+	(s-import @4-1-4-48 (module "http.Client") (qualifier "http") (alias "Http") (id 76)
 		(exposes
 			(exposed (name "get") (wildcard false))
 			(exposed (name "post") (wildcard false))))
-	(s-import @5-1-5-27 (module "utils.String") (qualifier "utils") (alias "Str") (id 76)
+	(s-import @5-1-5-27 (module "utils.String") (qualifier "utils") (alias "Str") (id 77)
 		(exposes)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "main") (def_var 120) (type "*")))
+		(d_assign (name "main") (def_var 121) (type "(*, *, *, *, *, *, *, *)")))
 	(expressions
-		(expr @7-8-35-2 (type "*"))))
+		(expr @7-8-35-2 (type "(*, *, *, *, *, *, *, *)"))))
 ~~~

@@ -406,7 +406,7 @@ const Unifier = struct {
             .structure => |a_flat_type| {
                 try self.unifyStructure(vars, a_flat_type, vars.b.desc.content);
             },
-            .err => return error.TypeMismatch,
+            .err => self.merge(vars, .err),
         }
     }
 

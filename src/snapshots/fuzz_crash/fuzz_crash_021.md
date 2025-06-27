@@ -107,7 +107,7 @@ main.roc" }"
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-type-decl @3-1-3-15 (id 75)
+	(s-type-decl @3-1-3-15 (id 76)
 		(ty-header @3-1-3-13 (name "Fli"))
 		(ty-malformed @3-14-3-15)))
 ~~~

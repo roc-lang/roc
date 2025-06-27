@@ -419,23 +419,24 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             } };
         },
         .expr_if_then_else => {
+            const extra_start = node.data_1;
+            const extra_data = store.extra_data.items[extra_start..];
+
+            const branches_span_start: u32 = extra_data[0];
+            const branches_span_end: u32 = extra_data[1];
+            const final_else: CIR.Expr.Idx = @enumFromInt(extra_data[2]);
+            const branch_var: types.Var = @enumFromInt(extra_data[3]);
+
             // Reconstruct the if expression from node data
             const branches_span = CIR.IfBranch.Span{ .span = .{
-                .start = node.data_1,
-                .len = node.data_2,
+                .start = branches_span_start,
+                .len = branches_span_end,
             } };
-            const final_else = @as(CIR.Expr.Idx, @enumFromInt(node.data_3));
-
-            // Type variables are stored in extra_data, but for now we'll create fresh ones
-            // TODO: Properly restore type variables from extra_data
-            const cond_var = @as(types.Var, @enumFromInt(0));
-            const branch_var = @as(types.Var, @enumFromInt(0));
 
             return CIR.Expr{ .e_if = .{
-                .cond_var = cond_var,
-                .branch_var = branch_var,
                 .branches = branches_span,
                 .final_else = final_else,
+                .branch_var = branch_var,
                 .region = node.region,
             } };
         },
@@ -1054,13 +1055,24 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             @panic("TODO addExpr when");
         },
         .e_if => |e| {
+            // Store def data in extra_data. We store the following fields:
+            // 1. Branches span start
+            // 2. Branches span end
+            // 3. Final else expr idx
+            // 4. Branches type var
+            const extra_start = @as(u32, @intCast(store.extra_data.items.len));
+            const num_extra_items = 4;
+            store.extra_data.append(store.gpa, e.branches.span.start) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, e.branches.span.len) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @intFromEnum(e.final_else)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @intFromEnum(e.branch_var)) catch |err| exitOnOom(err);
+
             node.region = e.region;
             node.tag = .expr_if_then_else;
-            // Store branches span start and len
-            node.data_1 = e.branches.span.start;
-            node.data_2 = e.branches.span.len;
-            // Store final_else expression index
-            node.data_3 = @intFromEnum(e.final_else);
+            node.data_1 = extra_start;
+            node.data_2 = extra_start + num_extra_items;
+
+            std.debug.assert(node.data_2 == store.extra_data.items.len);
         },
         .e_call => |e| {
             node.region = e.region;
@@ -1838,7 +1850,7 @@ pub fn ifBranchSpanFrom(store: *NodeStore, start: u32) CIR.IfBranch.Span {
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
 }
 
-/// TODO
+/// Retrieve a slice of IfBranch Idx's from a span
 pub fn sliceIfBranches(store: *const NodeStore, span: CIR.IfBranch.Span) []CIR.IfBranch.Idx {
     return store.sliceFromSpan(CIR.IfBranch.Idx, span.span);
 }

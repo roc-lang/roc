@@ -83,15 +83,15 @@ foo =
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 77)
-		(p-assign @2-1-2-4 (ident "foo") (id 74))
-		(e-runtime-error (tag "expr_not_canonicalized") (id 76))))
+	(d-let (id 78)
+		(p-assign @2-1-2-4 (ident "foo") (id 75))
+		(e-runtime-error (tag "expr_not_canonicalized") (id 77))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "foo") (def_var 77) (type "Error")))
+		(d_assign (name "foo") (def_var 78) (type "Error")))
 	(expressions
 		(expr @2-7-2-20 (type "Error"))))
 ~~~

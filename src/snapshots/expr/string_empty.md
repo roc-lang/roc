@@ -24,10 +24,10 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-string @1-1-1-3 (id 73)
+(e-string @1-1-1-3 (id 74)
 	(e-literal @1-2-1-2 (string "")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 73) (type "Str"))
+(expr (id 74) (type "Str"))
 ~~~

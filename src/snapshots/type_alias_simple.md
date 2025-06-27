@@ -15,7 +15,19 @@ getUser = |id| if (id > 10) "big" else "small"
 main! = |_| getUser(100)
 ~~~
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**type_alias_simple.md:6:19:6:28:**
+```roc
+getUser = |id| if (id > 10) "big" else "small"
+```
+
+It is of type:
+    _(*)_
+
+But you are trying to use it as:
+    _[True, False]_
+
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),Newline(1:1-1:1),
@@ -80,18 +92,18 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let (id 100)
-		(p-assign @6-1-6-8 (ident "getUser") (id 78))
+		(p-assign @6-1-6-8 (ident "getUser") (id 79))
 		(e-lambda @1-1-1-1 (id 93)
 			(args
-				(p-assign @6-12-6-14 (ident "id") (id 79)))
-			(e-if @1-1-1-1 (cond-var 0) (branch-var 0)
+				(p-assign @6-12-6-14 (ident "id") (id 80)))
+			(e-if @1-1-1-1 (branch-var 90)
 				(if-branches
 					(if-branch
 						(e-tuple @6-19-6-28
 							(elems
 								(e-binop @6-20-6-28 (op "gt")
 									(e-lookup-local @6-20-6-22
-										(pattern (id 79)))
+										(pattern (id 80)))
 									(e-int @6-25-6-27 (value "10")))))
 						(e-string @6-29-6-34
 							(e-literal @6-30-6-33 (string "big")))))
@@ -110,9 +122,9 @@ NO CHANGE
 				(p-underscore @8-10-8-11 (id 102)))
 			(e-call @8-13-8-25
 				(e-lookup-local @8-13-8-20
-					(pattern (id 78)))
+					(pattern (id 79)))
 				(e-int @8-21-8-24 (value "100")))))
-	(s-type-decl @3-1-5-8 (id 74)
+	(s-type-decl @3-1-5-8 (id 75)
 		(ty-header @3-1-3-7 (name "UserId"))
 		(ty @3-10-3-13 (name "U64"))))
 ~~~

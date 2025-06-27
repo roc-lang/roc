@@ -86,21 +86,21 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 105)
-		(p-assign @6-1-6-9 (ident "swapPair") (id 90))
-		(e-lambda @6-12-6-27 (id 98)
+	(d-let (id 106)
+		(p-assign @6-1-6-9 (ident "swapPair") (id 91))
+		(e-lambda @6-12-6-27 (id 99)
 			(args
-				(p-tuple @6-13-6-19 (id 93)
+				(p-tuple @6-13-6-19 (id 94)
 					(patterns
-						(p-assign @6-14-6-15 (ident "x") (id 91))
-						(p-assign @6-17-6-18 (ident "y") (id 92)))))
+						(p-assign @6-14-6-15 (ident "x") (id 92))
+						(p-assign @6-17-6-18 (ident "y") (id 93)))))
 			(e-tuple @6-21-6-27
 				(elems
 					(e-lookup-local @6-22-6-23
-						(pattern (id 92)))
+						(pattern (id 93)))
 					(e-lookup-local @6-25-6-26
-						(pattern (id 91))))))
-		(annotation @6-1-6-9 (signature 103) (id 104)
+						(pattern (id 92))))))
+		(annotation @6-1-6-9 (signature 104) (id 105)
 			(declared-type
 				(ty-fn @5-12-5-36 (effectful false)
 					(ty-apply @5-12-5-22 (symbol "Pair")
@@ -109,17 +109,17 @@ NO CHANGE
 					(ty-apply @5-26-5-36 (symbol "Pair")
 						(ty-var @5-31-5-32 (name "b"))
 						(ty-var @5-34-5-35 (name "a")))))))
-	(d-let (id 115)
-		(p-assign @8-1-8-6 (ident "main!") (id 106))
-		(e-lambda @8-9-8-27 (id 114)
+	(d-let (id 116)
+		(p-assign @8-1-8-6 (ident "main!") (id 107))
+		(e-lambda @8-9-8-27 (id 115)
 			(args
-				(p-underscore @8-10-8-11 (id 107)))
+				(p-underscore @8-10-8-11 (id 108)))
 			(e-call @8-13-8-27
 				(e-lookup-local @8-13-8-21
-					(pattern (id 90)))
+					(pattern (id 91)))
 				(e-int @8-22-8-23 (value "1"))
 				(e-int @8-25-8-26 (value "2")))))
-	(s-type-decl @3-1-5-9 (id 78)
+	(s-type-decl @3-1-5-9 (id 79)
 		(ty-header @3-1-3-11 (name "Pair")
 			(ty-args
 				(ty-var @3-6-3-7 (name "a"))
@@ -132,8 +132,8 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "swapPair") (def_var 105) (type "(*, *) -> (*, *)"))
-		(d_assign (name "main!") (def_var 115) (type "* ? *")))
+		(d_assign (name "swapPair") (def_var 106) (type "(*, *) -> (*, *)"))
+		(d_assign (name "main!") (def_var 116) (type "* ? *")))
 	(expressions
 		(expr @6-12-6-27 (type "(*, *) -> (*, *)"))
 		(expr @8-9-8-27 (type "* ? *"))))

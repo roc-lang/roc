@@ -182,43 +182,43 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 126)
-		(p-assign @18-1-18-14 (ident "processResult") (id 114))
-		(e-lambda @18-17-18-38 (id 119)
+	(d-let (id 127)
+		(p-assign @18-1-18-14 (ident "processResult") (id 115))
+		(e-lambda @18-17-18-38 (id 120)
 			(args
-				(p-assign @18-18-18-25 (ident "_result") (id 115)))
+				(p-assign @18-18-18-25 (ident "_result") (id 116)))
 			(e-string @18-27-18-38
 				(e-literal @18-28-18-37 (string "processed"))))
-		(annotation @18-1-18-14 (signature 124) (id 125)
+		(annotation @18-1-18-14 (signature 125) (id 126)
 			(declared-type
 				(ty-fn @17-17-17-30 (effectful false)
 					(ty @17-17-17-23 (name "Result"))
 					(ty @17-27-17-30 (name "Str"))))))
-	(d-let (id 142)
-		(p-assign @22-1-22-15 (ident "handleResponse") (id 130))
-		(e-lambda @22-18-22-39 (id 135)
+	(d-let (id 143)
+		(p-assign @22-1-22-15 (ident "handleResponse") (id 131))
+		(e-lambda @22-18-22-39 (id 136)
 			(args
-				(p-assign @22-19-22-28 (ident "_response") (id 131)))
+				(p-assign @22-19-22-28 (ident "_response") (id 132)))
 			(e-string @22-30-22-39
 				(e-literal @22-31-22-38 (string "handled"))))
-		(annotation @22-1-22-15 (signature 140) (id 141)
+		(annotation @22-1-22-15 (signature 141) (id 142)
 			(declared-type
 				(ty-fn @21-18-21-33 (effectful false)
 					(ty @21-18-21-26 (name "Response"))
 					(ty @21-30-21-33 (name "Str"))))))
-	(d-let (id 148)
-		(p-assign @24-1-24-6 (ident "main!") (id 143))
-		(e-lambda @24-9-24-15 (id 147)
+	(d-let (id 149)
+		(p-assign @24-1-24-6 (ident "main!") (id 144))
+		(e-lambda @24-9-24-15 (id 148)
 			(args
-				(p-underscore @24-10-24-11 (id 144)))
+				(p-underscore @24-10-24-11 (id 145)))
 			(e-empty_record @24-13-24-15)))
-	(s-type-decl @4-1-7-7 (id 77)
+	(s-type-decl @4-1-7-7 (id 78)
 		(ty-header @4-1-4-7 (name "Status"))
 		(ty-tag-union @4-10-4-37
 			(ty @4-11-4-18 (name "Loading"))
 			(ty @4-20-4-28 (name "Complete"))
 			(ty @4-30-4-36 (name "Failed"))))
-	(s-type-decl @7-1-10-9 (id 87)
+	(s-type-decl @7-1-10-9 (id 88)
 		(ty-header @7-1-7-7 (name "Result"))
 		(ty-tag-union @7-10-7-55
 			(ty-apply @7-11-7-23 (symbol "Success")
@@ -228,14 +228,14 @@ NO CHANGE
 			(ty-apply @7-37-7-54 (symbol "Warning")
 				(ty @7-45-7-48 (name "Str"))
 				(ty @7-50-7-53 (name "I32")))))
-	(s-type-decl @10-1-13-10 (id 95)
+	(s-type-decl @10-1-13-10 (id 96)
 		(ty-header @10-1-10-9 (name "Response"))
 		(ty-tag-union @10-12-10-50
 			(ty-apply @10-13-10-23 (symbol "Ok")
 				(ty @10-16-10-22 (name "Result")))
 			(ty @10-25-10-37 (name "NetworkError"))
 			(ty @10-39-10-49 (name "ParseError"))))
-	(s-type-decl @13-1-14-16 (id 103)
+	(s-type-decl @13-1-14-16 (id 104)
 		(ty-header @13-1-13-10 (name "UserState"))
 		(ty-tag-union @13-13-13-52
 			(ty-apply @13-14-13-25 (symbol "Active")
@@ -243,7 +243,7 @@ NO CHANGE
 			(ty @13-27-13-35 (name "Inactive"))
 			(ty-apply @13-37-13-51 (symbol "Suspended")
 				(ty @13-47-13-50 (name "Str")))))
-	(s-type-decl @14-1-17-14 (id 110)
+	(s-type-decl @14-1-17-14 (id 111)
 		(ty-header @14-1-14-16 (name "ConnectionState"))
 		(ty-tag-union @14-19-14-58
 			(ty @14-20-14-26 (name "Active"))
@@ -255,9 +255,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "processResult") (def_var 126) (type "Result -> Str"))
-		(d_assign (name "handleResponse") (def_var 142) (type "Response -> Str"))
-		(d_assign (name "main!") (def_var 148) (type "* ? {}")))
+		(d_assign (name "processResult") (def_var 127) (type "Result -> Str"))
+		(d_assign (name "handleResponse") (def_var 143) (type "Response -> Str"))
+		(d_assign (name "main!") (def_var 149) (type "* ? {}")))
 	(expressions
 		(expr @18-17-18-38 (type "Result -> Str"))
 		(expr @22-18-22-39 (type "Response -> Str"))

@@ -46,18 +46,30 @@ const Num = types.Num;
 const TagUnion = types.TagUnion;
 const Tag = types.Tag;
 
-const BUILTIN_BOOL: CIR.Pattern.Idx = @enumFromInt(0);
-const BUILTIN_BOX: CIR.Pattern.Idx = @enumFromInt(1);
-const BUILTIN_DECODE: CIR.Pattern.Idx = @enumFromInt(2);
-const BUILTIN_DICT: CIR.Pattern.Idx = @enumFromInt(3);
-const BUILTIN_ENCODE: CIR.Pattern.Idx = @enumFromInt(4);
-const BUILTIN_HASH: CIR.Pattern.Idx = @enumFromInt(5);
-const BUILTIN_INSPECT: CIR.Pattern.Idx = @enumFromInt(6);
-const BUILTIN_LIST: CIR.Pattern.Idx = @enumFromInt(7);
-const BUILTIN_NUM: CIR.Pattern.Idx = @enumFromInt(8);
-const BUILTIN_RESULT: CIR.Pattern.Idx = @enumFromInt(9);
-const BUILTIN_SET: CIR.Pattern.Idx = @enumFromInt(10);
-const BUILTIN_STR: CIR.Pattern.Idx = @enumFromInt(11);
+/// The idx of the builtin Bool
+pub const BUILTIN_BOOL: CIR.Pattern.Idx = @enumFromInt(0);
+/// The idx of the builtin Box
+pub const BUILTIN_BOX: CIR.Pattern.Idx = @enumFromInt(1);
+/// The idx of the builtin Decode
+pub const BUILTIN_DECODE: CIR.Pattern.Idx = @enumFromInt(2);
+/// The idx of the builtin Dict
+pub const BUILTIN_DICT: CIR.Pattern.Idx = @enumFromInt(3);
+/// The idx of the builtin Encode
+pub const BUILTIN_ENCODE: CIR.Pattern.Idx = @enumFromInt(4);
+/// The idx of the builtin Hash
+pub const BUILTIN_HASH: CIR.Pattern.Idx = @enumFromInt(5);
+/// The idx of the builtin Inspect
+pub const BUILTIN_INSPECT: CIR.Pattern.Idx = @enumFromInt(6);
+/// The idx of the builtin List
+pub const BUILTIN_LIST: CIR.Pattern.Idx = @enumFromInt(7);
+/// The idx of the builtin Num
+pub const BUILTIN_NUM: CIR.Pattern.Idx = @enumFromInt(8);
+/// The idx of the builtin Result
+pub const BUILTIN_RESULT: CIR.Pattern.Idx = @enumFromInt(9);
+/// The idx of the builtin Set
+pub const BUILTIN_SET: CIR.Pattern.Idx = @enumFromInt(10);
+/// The idx of the builtin Str
+pub const BUILTIN_STR: CIR.Pattern.Idx = @enumFromInt(11);
 
 /// Deinitialize canonicalizer resources
 pub fn deinit(
@@ -137,6 +149,18 @@ pub fn init(self: *CIR, parse_ir: *AST) Self {
     result.addBuiltinType(self, "Set");
     result.addBuiltinType(self, "Result");
     result.addBuiltinType(self, "Box");
+
+    // Set type for builtin Bool. In the future this will come from the builtin
+    // module. Also, it will be a nominal type, not a simple tag union
+    const bool_ext = self.pushTypeVar(
+        Content{ .structure = .empty_tag_union },
+        @enumFromInt(@intFromEnum(BUILTIN_BOOL)),
+        Region.zero(),
+    );
+    _ = self.setTypeVarAtPat(
+        BUILTIN_BOOL,
+        self.env.types.mkBool(self.env.gpa, &self.env.idents, bool_ext),
+    );
 
     return result;
 }
@@ -1594,18 +1618,24 @@ pub fn canonicalize_expr(
             const final_else = self.flattenIfThenElseChainRecursive(e);
             const branches_span = self.can_ir.store.ifBranchSpanFrom(scratch_top);
 
+            // Reserve extra node slot for branch var
+            const final_expr_idx = self.can_ir.store.predictNodeIndex(2);
+            const branch_var = self.can_ir.pushFreshTypeVar(final_expr_idx, region);
+
             // Create the if expression
             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
                 .e_if = .{
                     .branches = branches_span,
                     .final_else = final_else,
                     .region = region,
-                    .cond_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region),
-                    .branch_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region),
+                    .branch_var = branch_var,
                 },
             });
 
+            std.debug.assert(@intFromEnum(final_expr_idx) == @intFromEnum(expr_idx));
+
             // Set type variable for the entire if expression
+            // This will be unified with the return type of the if expr in type solving
             _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
 
             return expr_idx;
@@ -1681,7 +1711,6 @@ pub fn canonicalize_expr(
 
             // Determine the final expression
             const final_expr = if (last_expr) |expr_idx| blk: {
-                _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
                 break :blk expr_idx;
             } else blk: {
                 // Empty block - create empty record
@@ -1705,8 +1734,7 @@ pub fn canonicalize_expr(
             };
             const block_idx = self.can_ir.store.addExpr(block_expr);
 
-            // TODO: Propagate type from final expression during type checking
-            // For now, create a fresh type var for the block
+            // The root expr will be unified with the last expr in type solving
             _ = self.can_ir.setTypeVarAtExpr(block_idx, Content{ .flex_var = null });
 
             return block_idx;

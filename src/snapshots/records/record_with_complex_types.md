@@ -141,13 +141,13 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-record @1-1-15-2 (ext-var 182) (id 183)
+(e-record @1-1-15-2 (ext-var 183) (id 184)
 	(fields
 		(field (name "name")
 			(e-string @2-11-2-18
 				(e-literal @2-12-2-17 (string "Alice"))))
 		(field (name "scores")
-			(e-list @3-13-3-29 (elem-var 79)
+			(e-list @3-13-3-29 (elem-var 80)
 				(elems
 					(e-int @3-14-3-16 (value "95"))
 					(e-int @3-18-3-20 (value "87"))
@@ -156,13 +156,13 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 		(field (name "status")
 			(e-call @4-13-4-44
 				(e-tag @4-13-4-19 (ext-var 0) (name "Active") (args "TODO"))
-				(e-record @4-20-4-43 (ext-var 87)
+				(e-record @4-20-4-43 (ext-var 88)
 					(fields
 						(field (name "since")
 							(e-string @4-29-4-41
 								(e-literal @4-30-4-40 (string "2023-01-15"))))))))
 		(field (name "preferences")
-			(e-record @5-18-5-76 (ext-var 103)
+			(e-record @5-18-5-76 (ext-var 104)
 				(fields
 					(field (name "theme")
 						(e-tag @5-27-5-31 (ext-var 0) (name "Dark") (args "TODO")))
@@ -174,10 +174,10 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 		(field (name "metadata")
 			(e-call @6-15-9-7
 				(e-tag @6-15-6-17 (ext-var 0) (name "Ok") (args "TODO"))
-				(e-record @6-18-9-6 (ext-var 128)
+				(e-record @6-18-9-6 (ext-var 129)
 					(fields
 						(field (name "tags")
-							(e-list @7-15-7-51 (elem-var 116)
+							(e-list @7-15-7-51 (elem-var 117)
 								(elems
 									(e-string @7-16-7-27
 										(e-literal @7-17-7-26 (string "developer")))
@@ -186,7 +186,7 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 									(e-string @7-39-7-50
 										(e-literal @7-40-7-49 (string "fullstack"))))))
 						(field (name "permissions")
-							(e-list @8-22-8-42 (elem-var 125)
+							(e-list @8-22-8-42 (elem-var 126)
 								(elems
 									(e-tag @8-23-8-27 (ext-var 0) (name "Read") (args "TODO"))
 									(e-tag @8-29-8-34 (ext-var 0) (name "Write") (args "TODO"))
@@ -194,16 +194,16 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 		(field (name "callback")
 			(e-lambda @10-15-10-25
 				(args
-					(p-assign @10-16-10-17 (ident "x") (id 135)))
+					(p-assign @10-16-10-17 (ident "x") (id 136)))
 				(e-binop @10-19-10-25 (op "add")
 					(e-lookup-local @10-19-10-20
-						(pattern (id 135)))
+						(pattern (id 136)))
 					(e-int @10-23-10-24 (value "1")))))
 		(field (name "nested")
-			(e-record @11-13-14-6 (ext-var 177)
+			(e-record @11-13-14-6 (ext-var 178)
 				(fields
 					(field (name "items")
-						(e-list @12-16-12-52 (elem-var 156)
+						(e-list @12-16-12-52 (elem-var 157)
 							(elems
 								(e-call @12-17-12-30
 									(e-tag @12-17-12-21 (ext-var 0) (name "Some") (args "TODO"))
@@ -217,10 +217,10 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 					(field (name "result")
 						(e-call @13-17-13-70
 							(e-tag @13-17-13-24 (ext-var 0) (name "Success") (args "TODO"))
-							(e-record @13-25-13-69 (ext-var 170)
+							(e-record @13-25-13-69 (ext-var 171)
 								(fields
 									(field (name "data")
-										(e-list @13-33-13-42 (elem-var 164)
+										(e-list @13-33-13-42 (elem-var 165)
 											(elems
 												(e-int @13-34-13-35 (value "1"))
 												(e-int @13-37-13-38 (value "2"))
@@ -231,5 +231,5 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 183) (type "{ name: Str, scores: List(Num(*)), status: *, preferences: { theme: [Dark, * *], notifications: * }, metadata: *, callback: * ? *, nested: { items: List([None, * *]), result: * } }"))
+(expr (id 184) (type "{ name: Str, scores: List(Num(*)), status: *, preferences: { theme: [Dark]*, notifications: * }, metadata: *, callback: * ? *, nested: { items: List([None]*), result: * } }"))
 ~~~

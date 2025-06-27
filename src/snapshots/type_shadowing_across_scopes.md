@@ -174,19 +174,19 @@ InnerModule :
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 102)
-		(p-assign @6-1-6-12 (ident "processData") (id 89))
-		(e-lambda @6-15-7-16 (id 94)
+	(d-let (id 103)
+		(p-assign @6-1-6-12 (ident "processData") (id 90))
+		(e-lambda @6-15-7-16 (id 95)
 			(args
-				(p-assign @6-16-6-20 (ident "data") (id 90)))
+				(p-assign @6-16-6-20 (ident "data") (id 91)))
 			(e-string @7-5-7-16
 				(e-literal @7-6-7-15 (string "processed"))))
-		(annotation @6-1-6-12 (signature 100) (id 101)
+		(annotation @6-1-6-12 (signature 101) (id 102)
 			(declared-type
 				(ty-fn @5-15-5-25 (effectful false)
 					(ty @5-15-5-18 (name "Str"))
 					(ty @5-22-5-25 (name "Str"))))))
-	(s-type-decl @3-1-5-12 (id 80)
+	(s-type-decl @3-1-5-12 (id 81)
 		(ty-header @3-1-3-13 (name "Result")
 			(ty-args
 				(ty-var @3-8-3-9 (name "a"))
@@ -196,7 +196,7 @@ InnerModule :
 				(ty-var @3-20-3-21 (name "a")))
 			(ty-apply @3-24-3-30 (symbol "Err")
 				(ty-var @3-28-3-29 (name "b")))))
-	(s-type-decl @10-1-11-32 (id 85)
+	(s-type-decl @10-1-11-32 (id 86)
 		(ty-header @10-1-10-12 (name "InnerModule"))
 		(ty-malformed @11-24-11-32)))
 ~~~
@@ -204,7 +204,7 @@ InnerModule :
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "processData") (def_var 102) (type "Str -> Str")))
+		(d_assign (name "processData") (def_var 103) (type "Str -> Str")))
 	(expressions
 		(expr @6-15-7-16 (type "Str -> Str"))))
 ~~~

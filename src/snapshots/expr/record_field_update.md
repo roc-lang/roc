@@ -60,7 +60,7 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:9),OpAmpersand(1:10-1:11),LowerIdent(1:12-1:
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1-1-1-21 (id 79)
+(e-block @1-1-1-21 (id 80)
 	(s-expr @1-3-1-11
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(s-type-anno @1-12-1-21 (name "age")
@@ -70,5 +70,5 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:9),OpAmpersand(1:10-1:11),LowerIdent(1:12-1:
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 79) (type "*"))
+(expr (id 80) (type "*"))
 ~~~

@@ -55,10 +55,10 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-lambda @1-1-1-103 (id 94)
+(e-lambda @1-1-1-103 (id 95)
 	(args
-		(p-runtime-error @1-1-1-1 (tag "not_implemented") (id 73)))
-	(e-record @1-32-1-103 (ext-var 88)
+		(p-runtime-error @1-1-1-1 (tag "not_implemented") (id 74)))
+	(e-record @1-32-1-103 (ext-var 89)
 		(fields
 			(field (name "greeting")
 				(e-string @1-44-1-59
@@ -74,5 +74,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 94) (type "Error ? { greeting: Str, full_record: Error, is_adult: *, * * }"))
+(expr (id 95) (type "Error ? { greeting: Str, full_record: Error, is_adult: *, * * }"))
 ~~~

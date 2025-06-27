@@ -78,14 +78,14 @@ main! = |_| getName({ name: "luke", age: 21 })
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 94)
-		(p-assign @4-1-4-8 (ident "getName") (id 79))
-		(e-lambda @4-11-4-28 (id 84)
+	(d-let (id 95)
+		(p-assign @4-1-4-8 (ident "getName") (id 80))
+		(e-lambda @4-11-4-28 (id 85)
 			(args
-				(p-assign @4-12-4-19 (ident "_person") (id 80)))
+				(p-assign @4-12-4-19 (ident "_person") (id 81)))
 			(e-string @4-21-4-28
 				(e-literal @4-22-4-27 (string "hello"))))
-		(annotation @4-1-4-8 (signature 92) (id 93)
+		(annotation @4-1-4-8 (signature 93) (id 94)
 			(declared-type
 				(ty-fn @3-11-3-41 (effectful false)
 					(ty-record @3-11-3-34
@@ -94,15 +94,15 @@ main! = |_| getName({ name: "luke", age: 21 })
 						(field (field "age")
 							(ty @3-29-3-32 (name "U64"))))
 					(ty @3-38-3-41 (name "Str"))))))
-	(d-let (id 111)
-		(p-assign @6-1-6-6 (ident "main!") (id 95))
-		(e-lambda @6-9-6-44 (id 110)
+	(d-let (id 112)
+		(p-assign @6-1-6-6 (ident "main!") (id 96))
+		(e-lambda @6-9-6-44 (id 111)
 			(args
-				(p-underscore @6-10-6-11 (id 96)))
+				(p-underscore @6-10-6-11 (id 97)))
 			(e-call @6-13-6-44
 				(e-lookup-local @6-13-6-20
-					(pattern (id 79)))
-				(e-record @6-21-6-43 (ext-var 103)
+					(pattern (id 80)))
+				(e-record @6-21-6-43 (ext-var 104)
 					(fields
 						(field (name "name")
 							(e-string @6-28-6-34
@@ -114,8 +114,8 @@ main! = |_| getName({ name: "luke", age: 21 })
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "getName") (def_var 94) (type "{ name: Str, age: U64 } -> Str"))
-		(d_assign (name "main!") (def_var 111) (type "* ? *")))
+		(d_assign (name "getName") (def_var 95) (type "{ name: Str, age: U64 } -> Str"))
+		(d_assign (name "main!") (def_var 112) (type "* ? *")))
 	(expressions
 		(expr @4-11-4-28 (type "{ name: Str, age: U64 } -> Str"))
 		(expr @6-9-6-44 (type "* ? *"))))

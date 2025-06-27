@@ -28,11 +28,11 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dot-access @1-1-1-12 (field "name") (id 74)
+(e-dot-access @1-1-1-12 (field "name") (id 75)
 	(receiver
 		(e-runtime-error (tag "ident_not_in_scope"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 74) (type "*"))
+(expr (id 75) (type "*"))
 ~~~

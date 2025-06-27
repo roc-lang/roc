@@ -40,11 +40,11 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 79)
-		(p-assign @4-1-4-4 (ident "foo") (id 73))
-		(e-string @4-7-4-12 (id 75)
+	(d-let (id 80)
+		(p-assign @4-1-4-4 (ident "foo") (id 74))
+		(e-string @4-7-4-12 (id 76)
 			(e-literal @4-8-4-11 (string "one")))
-		(annotation @4-1-4-4 (signature 77) (id 78)
+		(annotation @4-1-4-4 (signature 78) (id 79)
 			(declared-type
 				(ty @3-7-3-10 (name "Str"))))))
 ~~~
@@ -52,7 +52,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "foo") (def_var 79) (type "Str")))
+		(d_assign (name "foo") (def_var 80) (type "Str")))
 	(expressions
 		(expr @4-7-4-12 (type "Str"))))
 ~~~

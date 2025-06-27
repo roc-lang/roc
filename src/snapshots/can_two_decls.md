@@ -49,22 +49,22 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 74)
-		(p-assign @3-1-3-2 (ident "a") (id 72))
-		(e-int @3-5-3-6 (value "5") (id 73)))
-	(d-let (id 79)
-		(p-assign @4-1-4-2 (ident "b") (id 75))
-		(e-binop @4-5-4-10 (op "add") (id 78)
+	(d-let (id 75)
+		(p-assign @3-1-3-2 (ident "a") (id 73))
+		(e-int @3-5-3-6 (value "5") (id 74)))
+	(d-let (id 80)
+		(p-assign @4-1-4-2 (ident "b") (id 76))
+		(e-binop @4-5-4-10 (op "add") (id 79)
 			(e-lookup-local @4-5-4-6
-				(pattern (id 72)))
+				(pattern (id 73)))
 			(e-int @4-9-4-10 (value "1")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "a") (def_var 74) (type "Num(*)"))
-		(d_assign (name "b") (def_var 79) (type "*")))
+		(d_assign (name "a") (def_var 75) (type "Num(*)"))
+		(d_assign (name "b") (def_var 80) (type "*")))
 	(expressions
 		(expr @3-5-3-6 (type "Num(*)"))
 		(expr @4-5-4-10 (type "*"))))

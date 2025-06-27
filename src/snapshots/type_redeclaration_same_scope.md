@@ -70,7 +70,7 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-type-decl @3-1-4-6 (id 78)
+	(s-type-decl @3-1-4-6 (id 79)
 		(ty-header @3-1-3-9 (name "Maybe")
 			(ty-args
 				(ty-var @3-7-3-8 (name "a"))))
@@ -78,7 +78,7 @@ NO CHANGE
 			(ty-apply @3-13-3-20 (symbol "Some")
 				(ty-var @3-18-3-19 (name "a")))
 			(ty @3-22-3-26 (name "None"))))
-	(s-type-decl @4-1-4-24 (id 85)
+	(s-type-decl @4-1-4-24 (id 86)
 		(ty-header @4-1-4-9 (name "Maybe")
 			(ty-args
 				(ty-var @4-7-4-8 (name "a"))))

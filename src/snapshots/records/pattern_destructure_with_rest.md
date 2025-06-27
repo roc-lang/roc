@@ -46,9 +46,9 @@ match person {
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "not_implemented") (id 73))
+(e-runtime-error (tag "not_implemented") (id 74))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 73) (type "Error"))
+(expr (id 74) (type "Error"))
 ~~~
