@@ -1832,22 +1832,17 @@ fn canonicalize_pattern(
                 .bits_needed = types.Num.Int.BitsNeeded.fromValue(adjusted_val),
             };
 
-            // Reserve node slot for the pattern
-            const final_pattern_idx = self.can_ir.store.predictNodeIndex(1);
             const int_requirements = types.Num.IntRequirements{
                 .sign_needed = requirements.sign_needed,
                 .bits_needed = @intCast(@intFromEnum(requirements.bits_needed)),
             };
             const int_pattern = CIR.Pattern{
                 .int_literal = .{
-                    .num_var = @enumFromInt(0), // Dummy value - not used with unbound types
                     .value = .{ .bytes = @bitCast(value), .kind = .i128 },
                     .region = region,
                 },
             };
             const pattern_idx = self.can_ir.store.addPattern(int_pattern);
-
-            std.debug.assert(@intFromEnum(pattern_idx) == @intFromEnum(final_pattern_idx));
 
             _ = self.can_ir.setTypeVarAtPat(pattern_idx, Content{
                 .structure = .{ .num = .{ .num_unbound = int_requirements } },
@@ -1860,10 +1855,6 @@ fn canonicalize_pattern(
 
             // Resolve to a string slice from the source
             const token_text = self.parse_ir.resolve(e.number_tok);
-
-            // create type vars, first "reserve" node slots
-            // Reserve node slot for the pattern
-            const final_pattern_idx = self.can_ir.store.predictNodeIndex(1);
 
             const parsed = parseFracLiteral(token_text) catch |err| switch (err) {
                 error.InvalidNumLiteral => {
@@ -1889,7 +1880,6 @@ fn canonicalize_pattern(
             const cir_pattern = switch (parsed) {
                 .small => |small_info| CIR.Pattern{
                     .small_dec_literal = .{
-                        .num_var = @enumFromInt(0), // Dummy value - not used with unbound types
                         .numerator = small_info.numerator,
                         .denominator_power_of_ten = small_info.denominator_power_of_ten,
                         .region = region,
@@ -1897,14 +1887,12 @@ fn canonicalize_pattern(
                 },
                 .dec => |dec_info| CIR.Pattern{
                     .dec_literal = .{
-                        .num_var = @enumFromInt(0), // Dummy value - not used with unbound types
                         .value = dec_info.value,
                         .region = region,
                     },
                 },
                 .f64 => |f64_info| CIR.Pattern{
                     .f64_literal = .{
-                        .num_var = @enumFromInt(0), // Dummy value - not used with unbound types
                         .value = f64_info.value,
                         .region = region,
                     },
@@ -1912,8 +1900,6 @@ fn canonicalize_pattern(
             };
 
             const pattern_idx = self.can_ir.store.addPattern(cir_pattern);
-
-            std.debug.assert(@intFromEnum(pattern_idx) == @intFromEnum(final_pattern_idx));
 
             _ = self.can_ir.setTypeVarAtPat(pattern_idx, Content{
                 .structure = .{ .num = .{ .frac_unbound = frac_requirements } },
@@ -4907,6 +4893,739 @@ test "integer literals with uppercase base prefixes" {
                 else => return error.UnexpectedStructureType,
             },
             else => return error.UnexpectedContentType,
+        }
+    }
+}
+
+test "numeric literal patterns use pattern idx as type var" {
+    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    defer std.debug.assert(gpa_state.deinit() == .ok);
+    const gpa = gpa_state.allocator();
+
+    // Test that int literal patterns work and use the pattern index as the type variable
+    {
+        var env = base.ModuleEnv.init(gpa);
+        defer env.deinit();
+
+        var cir = CIR.init(&env);
+        defer cir.deinit();
+
+        // Create an int literal pattern directly
+        const int_pattern = CIR.Pattern{
+            .int_literal = .{
+                .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
+                .region = Region.zero(),
+            },
+        };
+
+        const pattern_idx = cir.store.addPattern(int_pattern);
+
+        // Set the type variable for the pattern
+        _ = cir.setTypeVarAtPat(pattern_idx, Content{
+            .structure = .{ .num = .{ .num_unbound = .{
+                .sign_needed = false,
+                .bits_needed = 0,
+            } } },
+        });
+
+        // Verify the stored pattern
+        const stored_pattern = cir.store.getPattern(pattern_idx);
+        try std.testing.expect(stored_pattern == .int_literal);
+        try std.testing.expectEqual(@as(i128, 42), @as(i128, @bitCast(stored_pattern.int_literal.value.bytes)));
+
+        // Verify the pattern index can be used as a type variable
+        const pattern_as_type_var: types.Var = @enumFromInt(@intFromEnum(pattern_idx));
+        const resolved = env.types.resolveVar(pattern_as_type_var);
+        switch (resolved.desc.content) {
+            .structure => |structure| switch (structure) {
+                .num => |num| switch (num) {
+                    .num_unbound => |requirements| {
+                        try std.testing.expectEqual(false, requirements.sign_needed);
+                        try std.testing.expectEqual(@as(u8, 0), requirements.bits_needed);
+                    },
+                    else => return error.UnexpectedNumType,
+                },
+                else => return error.UnexpectedStructureType,
+            },
+            else => return error.UnexpectedContentType,
+        }
+    }
+
+    // Test that f64 literal patterns work
+    {
+        var env = base.ModuleEnv.init(gpa);
+        defer env.deinit();
+
+        var cir = CIR.init(&env);
+        defer cir.deinit();
+
+        // Create an f64 literal pattern directly
+        const f64_pattern = CIR.Pattern{
+            .f64_literal = .{
+                .value = 3.14,
+                .region = Region.zero(),
+            },
+        };
+
+        const pattern_idx = cir.store.addPattern(f64_pattern);
+
+        // Set the type variable for the pattern
+        _ = cir.setTypeVarAtPat(pattern_idx, Content{
+            .structure = .{ .num = .{ .frac_unbound = .{
+                .fits_in_f32 = true,
+                .fits_in_dec = true,
+            } } },
+        });
+
+        // Verify the stored pattern
+        const stored_pattern = cir.store.getPattern(pattern_idx);
+        try std.testing.expect(stored_pattern == .f64_literal);
+        try std.testing.expectApproxEqAbs(@as(f64, 3.14), stored_pattern.f64_literal.value, 0.001);
+
+        // Verify the pattern index can be used as a type variable
+        const pattern_as_type_var: types.Var = @enumFromInt(@intFromEnum(pattern_idx));
+        const resolved = env.types.resolveVar(pattern_as_type_var);
+        switch (resolved.desc.content) {
+            .structure => |structure| switch (structure) {
+                .num => |num| switch (num) {
+                    .frac_unbound => |requirements| {
+                        try std.testing.expectEqual(true, requirements.fits_in_f32);
+                        try std.testing.expectEqual(true, requirements.fits_in_dec);
+                    },
+                    else => return error.UnexpectedNumType,
+                },
+                else => return error.UnexpectedStructureType,
+            },
+            else => return error.UnexpectedContentType,
+        }
+    }
+}
+
+test "numeric pattern types: unbound vs polymorphic" {
+    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    defer std.debug.assert(gpa_state.deinit() == .ok);
+    const gpa = gpa_state.allocator();
+
+    // Test int_unbound pattern
+    {
+        var env = base.ModuleEnv.init(gpa);
+        defer env.deinit();
+
+        var cir = CIR.init(&env);
+        defer cir.deinit();
+
+        const pattern = CIR.Pattern{
+            .int_literal = .{
+                .value = .{ .bytes = @bitCast(@as(i128, -17)), .kind = .i128 },
+                .region = Region.zero(),
+            },
+        };
+
+        const pattern_idx = cir.store.addPattern(pattern);
+
+        // Set as int_unbound (used when pattern matching where type is not yet known)
+        _ = cir.setTypeVarAtPat(pattern_idx, Content{
+            .structure = .{ .num = .{ .int_unbound = .{
+                .sign_needed = true,
+                .bits_needed = 0,
+            } } },
+        });
+
+        const pattern_var: types.Var = @enumFromInt(@intFromEnum(pattern_idx));
+        const resolved = env.types.resolveVar(pattern_var);
+        switch (resolved.desc.content) {
+            .structure => |s| switch (s) {
+                .num => |n| switch (n) {
+                    .int_unbound => |req| {
+                        try std.testing.expectEqual(true, req.sign_needed);
+                        try std.testing.expectEqual(@as(u8, 0), req.bits_needed);
+                    },
+                    else => return error.ExpectedIntUnbound,
+                },
+                else => {},
+            },
+            else => {},
+        }
+    }
+
+    // Test int_poly pattern (polymorphic integer that can be different int types)
+    {
+        var env = base.ModuleEnv.init(gpa);
+        defer env.deinit();
+
+        var cir = CIR.init(&env);
+        defer cir.deinit();
+
+        const pattern = CIR.Pattern{
+            .int_literal = .{
+                .value = .{ .bytes = @bitCast(@as(i128, 255)), .kind = .i128 },
+                .region = Region.zero(),
+            },
+        };
+
+        const pattern_idx = cir.store.addPattern(pattern);
+
+        // Create a fresh type variable for polymorphic int
+        const poly_var = env.types.fresh();
+
+        // Set as int_poly (can be any integer type that satisfies requirements)
+        _ = cir.setTypeVarAtPat(pattern_idx, Content{
+            .structure = .{
+                .num = .{
+                    .int_poly = .{
+                        .var_ = poly_var,
+                        .requirements = .{
+                            .sign_needed = false,
+                            .bits_needed = 1, // Needs at least 8 bits for 255
+                        },
+                    },
+                },
+            },
+        });
+
+        const pattern_var: types.Var = @enumFromInt(@intFromEnum(pattern_idx));
+        const resolved = env.types.resolveVar(pattern_var);
+        switch (resolved.desc.content) {
+            .structure => |s| switch (s) {
+                .num => |n| switch (n) {
+                    .int_poly => |poly| {
+                        try std.testing.expectEqual(false, poly.requirements.sign_needed);
+                        try std.testing.expectEqual(@as(u8, 1), poly.requirements.bits_needed);
+                        try std.testing.expectEqual(poly_var, poly.var_);
+                    },
+                    else => return error.ExpectedIntPoly,
+                },
+                else => {},
+            },
+            else => {},
+        }
+    }
+
+    // Test num_unbound pattern (can be int or frac)
+    {
+        var env = base.ModuleEnv.init(gpa);
+        defer env.deinit();
+
+        var cir = CIR.init(&env);
+        defer cir.deinit();
+
+        const pattern = CIR.Pattern{
+            .int_literal = .{
+                .value = .{ .bytes = @bitCast(@as(i128, 10)), .kind = .i128 },
+                .region = Region.zero(),
+            },
+        };
+
+        const pattern_idx = cir.store.addPattern(pattern);
+
+        // Set as num_unbound (decimal literal that could be int or frac)
+        _ = cir.setTypeVarAtPat(pattern_idx, Content{
+            .structure = .{ .num = .{ .num_unbound = .{
+                .sign_needed = false,
+                .bits_needed = 0,
+            } } },
+        });
+
+        const pattern_var: types.Var = @enumFromInt(@intFromEnum(pattern_idx));
+        const resolved = env.types.resolveVar(pattern_var);
+        switch (resolved.desc.content) {
+            .structure => |s| switch (s) {
+                .num => |n| switch (n) {
+                    .num_unbound => |req| {
+                        try std.testing.expectEqual(false, req.sign_needed);
+                        try std.testing.expectEqual(@as(u8, 0), req.bits_needed);
+                    },
+                    else => return error.ExpectedNumUnbound,
+                },
+                else => {},
+            },
+            else => {},
+        }
+    }
+
+    // Test num_poly pattern (polymorphic num that can be int or frac)
+    {
+        var env = base.ModuleEnv.init(gpa);
+        defer env.deinit();
+
+        var cir = CIR.init(&env);
+        defer cir.deinit();
+
+        const pattern = CIR.Pattern{
+            .int_literal = .{
+                .value = .{ .bytes = @bitCast(@as(i128, 5)), .kind = .i128 },
+                .region = Region.zero(),
+            },
+        };
+
+        const pattern_idx = cir.store.addPattern(pattern);
+
+        // Create a fresh type variable for polymorphic num
+        const poly_var = env.types.fresh();
+
+        // Set as num_poly (can be any numeric type)
+        _ = cir.setTypeVarAtPat(pattern_idx, Content{
+            .structure = .{ .num = .{ .num_poly = .{
+                .var_ = poly_var,
+                .requirements = .{
+                    .sign_needed = false,
+                    .bits_needed = 0,
+                },
+            } } },
+        });
+
+        const pattern_var: types.Var = @enumFromInt(@intFromEnum(pattern_idx));
+        const resolved = env.types.resolveVar(pattern_var);
+        switch (resolved.desc.content) {
+            .structure => |s| switch (s) {
+                .num => |n| switch (n) {
+                    .num_poly => |poly| {
+                        try std.testing.expectEqual(false, poly.requirements.sign_needed);
+                        try std.testing.expectEqual(@as(u8, 0), poly.requirements.bits_needed);
+                        try std.testing.expectEqual(poly_var, poly.var_);
+                    },
+                    else => return error.ExpectedNumPoly,
+                },
+                else => {},
+            },
+            else => {},
+        }
+    }
+
+    // Test frac_unbound pattern
+    {
+        var env = base.ModuleEnv.init(gpa);
+        defer env.deinit();
+
+        var cir = CIR.init(&env);
+        defer cir.deinit();
+
+        const pattern = CIR.Pattern{
+            .f64_literal = .{
+                .value = 2.5,
+                .region = Region.zero(),
+            },
+        };
+
+        const pattern_idx = cir.store.addPattern(pattern);
+
+        // Set as frac_unbound
+        _ = cir.setTypeVarAtPat(pattern_idx, Content{
+            .structure = .{ .num = .{ .frac_unbound = .{
+                .fits_in_f32 = true,
+                .fits_in_dec = true,
+            } } },
+        });
+
+        const pattern_var: types.Var = @enumFromInt(@intFromEnum(pattern_idx));
+        const resolved = env.types.resolveVar(pattern_var);
+        switch (resolved.desc.content) {
+            .structure => |s| switch (s) {
+                .num => |n| switch (n) {
+                    .frac_unbound => |req| {
+                        try std.testing.expectEqual(true, req.fits_in_f32);
+                        try std.testing.expectEqual(true, req.fits_in_dec);
+                    },
+                    else => return error.ExpectedFracUnbound,
+                },
+                else => {},
+            },
+            else => {},
+        }
+    }
+
+    // Test frac_poly pattern
+    {
+        var env = base.ModuleEnv.init(gpa);
+        defer env.deinit();
+
+        var cir = CIR.init(&env);
+        defer cir.deinit();
+
+        const pattern = CIR.Pattern{
+            .f64_literal = .{
+                .value = std.math.inf(f64),
+                .region = Region.zero(),
+            },
+        };
+
+        const pattern_idx = cir.store.addPattern(pattern);
+
+        // Create a fresh type variable for polymorphic frac
+        const poly_var = env.types.fresh();
+
+        // Set as frac_poly (infinity doesn't fit in Dec)
+        _ = cir.setTypeVarAtPat(pattern_idx, Content{
+            .structure = .{
+                .num = .{
+                    .frac_poly = .{
+                        .var_ = poly_var,
+                        .requirements = .{
+                            .fits_in_f32 = true,
+                            .fits_in_dec = false, // Infinity doesn't fit in Dec
+                        },
+                    },
+                },
+            },
+        });
+
+        const pattern_var: types.Var = @enumFromInt(@intFromEnum(pattern_idx));
+        const resolved = env.types.resolveVar(pattern_var);
+        switch (resolved.desc.content) {
+            .structure => |s| switch (s) {
+                .num => |n| switch (n) {
+                    .frac_poly => |poly| {
+                        try std.testing.expectEqual(true, poly.requirements.fits_in_f32);
+                        try std.testing.expectEqual(false, poly.requirements.fits_in_dec);
+                        try std.testing.expectEqual(poly_var, poly.var_);
+                    },
+                    else => return error.ExpectedFracPoly,
+                },
+                else => {},
+            },
+            else => {},
+        }
+    }
+}
+
+test "pattern numeric literal value edge cases" {
+    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    defer std.debug.assert(gpa_state.deinit() == .ok);
+    const gpa = gpa_state.allocator();
+
+    // Test max/min integer values
+    {
+        var env = base.ModuleEnv.init(gpa);
+        defer env.deinit();
+
+        var cir = CIR.init(&env);
+        defer cir.deinit();
+
+        // Test i128 max
+        const max_pattern = CIR.Pattern{
+            .int_literal = .{
+                .value = .{ .bytes = @bitCast(@as(i128, std.math.maxInt(i128))), .kind = .i128 },
+                .region = Region.zero(),
+            },
+        };
+        const max_idx = cir.store.addPattern(max_pattern);
+        const stored_max = cir.store.getPattern(max_idx);
+        try std.testing.expectEqual(std.math.maxInt(i128), @as(i128, @bitCast(stored_max.int_literal.value.bytes)));
+
+        // Test i128 min
+        const min_pattern = CIR.Pattern{
+            .int_literal = .{
+                .value = .{ .bytes = @bitCast(@as(i128, std.math.minInt(i128))), .kind = .i128 },
+                .region = Region.zero(),
+            },
+        };
+        const min_idx = cir.store.addPattern(min_pattern);
+        const stored_min = cir.store.getPattern(min_idx);
+        try std.testing.expectEqual(std.math.minInt(i128), @as(i128, @bitCast(stored_min.int_literal.value.bytes)));
+    }
+
+    // Test small decimal pattern
+    {
+        var env = base.ModuleEnv.init(gpa);
+        defer env.deinit();
+
+        var cir = CIR.init(&env);
+        defer cir.deinit();
+
+        const small_dec_pattern = CIR.Pattern{
+            .small_dec_literal = .{
+                .numerator = 1234,
+                .denominator_power_of_ten = 2, // 12.34
+                .region = Region.zero(),
+            },
+        };
+
+        const pattern_idx = cir.store.addPattern(small_dec_pattern);
+        const stored = cir.store.getPattern(pattern_idx);
+
+        try std.testing.expect(stored == .small_dec_literal);
+        try std.testing.expectEqual(@as(i16, 1234), stored.small_dec_literal.numerator);
+        try std.testing.expectEqual(@as(u8, 2), stored.small_dec_literal.denominator_power_of_ten);
+    }
+
+    // Test dec literal pattern
+    {
+        var env = base.ModuleEnv.init(gpa);
+        defer env.deinit();
+
+        var cir = CIR.init(&env);
+        defer cir.deinit();
+
+        const dec_pattern = CIR.Pattern{
+            .dec_literal = .{
+                .value = RocDec{ .num = 314159265358979323 }, // π * 10^17
+                .region = Region.zero(),
+            },
+        };
+
+        const pattern_idx = cir.store.addPattern(dec_pattern);
+        const stored = cir.store.getPattern(pattern_idx);
+
+        try std.testing.expect(stored == .dec_literal);
+        try std.testing.expectEqual(@as(i128, 314159265358979323), stored.dec_literal.value.num);
+    }
+
+    // Test special float values
+    {
+        var env = base.ModuleEnv.init(gpa);
+        defer env.deinit();
+
+        var cir = CIR.init(&env);
+        defer cir.deinit();
+
+        // Test NaN
+        const nan_pattern = CIR.Pattern{
+            .f64_literal = .{
+                .value = std.math.nan(f64),
+                .region = Region.zero(),
+            },
+        };
+        const nan_idx = cir.store.addPattern(nan_pattern);
+        const stored_nan = cir.store.getPattern(nan_idx);
+        try std.testing.expect(std.math.isNan(stored_nan.f64_literal.value));
+
+        // Test negative zero
+        const neg_zero_pattern = CIR.Pattern{
+            .f64_literal = .{
+                .value = -0.0,
+                .region = Region.zero(),
+            },
+        };
+        const neg_zero_idx = cir.store.addPattern(neg_zero_pattern);
+        const stored_neg_zero = cir.store.getPattern(neg_zero_idx);
+        try std.testing.expect(std.math.signbit(stored_neg_zero.f64_literal.value));
+        try std.testing.expectEqual(@as(f64, -0.0), stored_neg_zero.f64_literal.value);
+    }
+}
+
+test "pattern literal type transitions" {
+    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    defer std.debug.assert(gpa_state.deinit() == .ok);
+    const gpa = gpa_state.allocator();
+
+    // Test transitioning from unbound to concrete type
+    {
+        var env = base.ModuleEnv.init(gpa);
+        defer env.deinit();
+
+        var cir = CIR.init(&env);
+        defer cir.deinit();
+
+        const pattern = CIR.Pattern{
+            .int_literal = .{
+                .value = .{ .bytes = @bitCast(@as(i128, 100)), .kind = .i128 },
+                .region = Region.zero(),
+            },
+        };
+
+        const pattern_idx = cir.store.addPattern(pattern);
+
+        // Start as num_unbound
+        _ = cir.setTypeVarAtPat(pattern_idx, Content{
+            .structure = .{ .num = .{ .num_unbound = .{
+                .sign_needed = false,
+                .bits_needed = 1,
+            } } },
+        });
+
+        // Simulate type inference determining it's a U8
+        const pattern_var: types.Var = @enumFromInt(@intFromEnum(pattern_idx));
+        _ = env.types.setVarContent(pattern_var, Content{
+            .structure = .{ .num = types.Num.int_u8 },
+        });
+
+        // Verify it resolved to U8
+        const resolved = env.types.resolveVar(pattern_var);
+        switch (resolved.desc.content) {
+            .structure => |s| switch (s) {
+                .num => |n| switch (n) {
+                    .num_compact => |compact| switch (compact) {
+                        .int => |int| {
+                            try std.testing.expect(int == .u8);
+                        },
+                        else => return error.ExpectedInt,
+                    },
+                    else => return error.ExpectedNumCompact,
+                },
+                else => {},
+            },
+            else => {},
+        }
+    }
+
+    // Test hex/binary/octal patterns must be integers
+    {
+        var env = base.ModuleEnv.init(gpa);
+        defer env.deinit();
+
+        var cir = CIR.init(&env);
+        defer cir.deinit();
+
+        // Hex pattern (0xFF)
+        const hex_pattern = CIR.Pattern{
+            .int_literal = .{
+                .value = .{ .bytes = @bitCast(@as(i128, 0xFF)), .kind = .i128 },
+                .region = Region.zero(),
+            },
+        };
+
+        const hex_idx = cir.store.addPattern(hex_pattern);
+
+        // Non-decimal literals use int_unbound (not num_unbound)
+        _ = cir.setTypeVarAtPat(hex_idx, Content{
+            .structure = .{ .num = .{ .int_unbound = .{
+                .sign_needed = false,
+                .bits_needed = 1,
+            } } },
+        });
+
+        const hex_var: types.Var = @enumFromInt(@intFromEnum(hex_idx));
+        const resolved = env.types.resolveVar(hex_var);
+        switch (resolved.desc.content) {
+            .structure => |s| switch (s) {
+                .num => |n| switch (n) {
+                    .int_unbound => |req| {
+                        // Verify it's constrained to integers only
+                        try std.testing.expectEqual(false, req.sign_needed);
+                        try std.testing.expectEqual(@as(u8, 1), req.bits_needed);
+                    },
+                    else => return error.ExpectedIntUnbound,
+                },
+                else => {},
+            },
+            else => {},
+        }
+    }
+}
+
+test "pattern type inference with numeric literals" {
+    var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    defer std.debug.assert(gpa_state.deinit() == .ok);
+    const gpa = gpa_state.allocator();
+
+    // Test that pattern indices work correctly as type variables with type inference
+    {
+        var env = base.ModuleEnv.init(gpa);
+        defer env.deinit();
+
+        var cir = CIR.init(&env);
+        defer cir.deinit();
+
+        // Create patterns representing different numeric literals
+        const patterns = [_]struct {
+            pattern: CIR.Pattern,
+            expected_type: types.Content,
+        }{
+            // Small positive int - could be any unsigned type
+            .{
+                .pattern = CIR.Pattern{
+                    .int_literal = .{
+                        .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
+                        .region = Region.zero(),
+                    },
+                },
+                .expected_type = Content{ .structure = .{ .num = .{ .num_unbound = .{
+                    .sign_needed = false,
+                    .bits_needed = 0,
+                } } } },
+            },
+            // Negative int - needs signed type
+            .{
+                .pattern = CIR.Pattern{
+                    .int_literal = .{
+                        .value = .{ .bytes = @bitCast(@as(i128, -42)), .kind = .i128 },
+                        .region = Region.zero(),
+                    },
+                },
+                .expected_type = Content{ .structure = .{ .num = .{ .num_unbound = .{
+                    .sign_needed = true,
+                    .bits_needed = 0,
+                } } } },
+            },
+            // Large int requiring more bits
+            .{
+                .pattern = CIR.Pattern{
+                    .int_literal = .{
+                        .value = .{ .bytes = @bitCast(@as(i128, 65536)), .kind = .i128 },
+                        .region = Region.zero(),
+                    },
+                },
+                .expected_type = Content{
+                    .structure = .{
+                        .num = .{
+                            .num_unbound = .{
+                                .sign_needed = false,
+                                .bits_needed = 4, // Needs at least 17 bits
+                            },
+                        },
+                    },
+                },
+            },
+        };
+
+        for (patterns) |test_case| {
+            const pattern_idx = cir.store.addPattern(test_case.pattern);
+            _ = cir.setTypeVarAtPat(pattern_idx, test_case.expected_type);
+
+            // Verify the pattern index works as a type variable
+            const pattern_var: types.Var = @enumFromInt(@intFromEnum(pattern_idx));
+            const resolved = env.types.resolveVar(pattern_var);
+
+            // Compare the resolved type with expected
+            try std.testing.expectEqual(test_case.expected_type, resolved.desc.content);
+        }
+    }
+
+    // Test patterns with type constraints from context
+    {
+        var env = base.ModuleEnv.init(gpa);
+        defer env.deinit();
+
+        var cir = CIR.init(&env);
+        defer cir.deinit();
+
+        // Create a pattern that will be constrained by context
+        const pattern = CIR.Pattern{
+            .int_literal = .{
+                .value = .{ .bytes = @bitCast(@as(i128, 100)), .kind = .i128 },
+                .region = Region.zero(),
+            },
+        };
+
+        const pattern_idx = cir.store.addPattern(pattern);
+
+        // Start as num_unbound
+        _ = cir.setTypeVarAtPat(pattern_idx, Content{
+            .structure = .{ .num = .{ .num_unbound = .{
+                .sign_needed = false,
+                .bits_needed = 1,
+            } } },
+        });
+
+        // Simulate type inference constraining it to U8
+        const pattern_var: types.Var = @enumFromInt(@intFromEnum(pattern_idx));
+        _ = env.types.setVarContent(pattern_var, Content{
+            .structure = .{ .num = types.Num.int_u8 },
+        });
+
+        // Verify it was constrained correctly
+        const resolved = env.types.resolveVar(pattern_var);
+        switch (resolved.desc.content) {
+            .structure => |s| switch (s) {
+                .num => |n| switch (n) {
+                    .num_compact => |compact| {
+                        try std.testing.expect(compact.int == .u8);
+                    },
+                    else => return error.ExpectedConcreteType,
+                },
+                else => {},
+            },
+            else => {},
         }
     }
 }
