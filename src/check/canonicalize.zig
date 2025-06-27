@@ -1171,8 +1171,8 @@ pub fn canonicalize_expr(
             // Create span of the new scratch expressions
             const elems_span = self.can_ir.store.exprSpanFrom(scratch_top);
 
-            // create type vars, first "reserve" node slots
-            const list_expr_idx = self.can_ir.store.predictNodeIndex(2);
+            // create type vars, first "reserve" node slot
+            const list_expr_idx = self.can_ir.store.predictNodeIndex(1);
 
             // then insert the type vars, setting the parent to be the final slot
             const elem_type_var = self.can_ir.pushFreshTypeVar(
@@ -1848,8 +1848,8 @@ fn canonicalize_pattern(
                 .bits_needed = types.Num.Int.BitsNeeded.fromValue(adjusted_val),
             };
 
-            // Reserve node slots for type vars, then insert into them.
-            const final_pattern_idx = self.can_ir.store.predictNodeIndex(2);
+            // Reserve node slot for type var, then insert into it.
+            const final_pattern_idx = self.can_ir.store.predictNodeIndex(1);
             const poly_var = self.can_ir.pushFreshTypeVar(final_pattern_idx, region);
             const int_requirements = types.Num.IntRequirements{
                 .var_ = poly_var,
@@ -1880,7 +1880,7 @@ fn canonicalize_pattern(
             const token_text = self.parse_ir.resolve(e.number_tok);
 
             // create type vars, first "reserve" node slots
-            const final_pattern_idx = self.can_ir.store.predictNodeIndex(2);
+            const final_pattern_idx = self.can_ir.store.predictNodeIndex(1);
 
             // then insert the type vars, setting the parent to be the final slot
             const poly_var = self.can_ir.pushFreshTypeVar(final_pattern_idx, region);
@@ -1986,7 +1986,7 @@ fn canonicalize_pattern(
                 const args = self.can_ir.store.patternSpanFrom(start);
 
                 // Reserve node slots for type vars, then insert into them.
-                const final_pattern_idx = self.can_ir.store.predictNodeIndex(2);
+                const final_pattern_idx = self.can_ir.store.predictNodeIndex(1);
                 const ext_type_var = self.can_ir.pushFreshTypeVar(final_pattern_idx, region);
                 const tag_pattern = CIR.Pattern{
                     .applied_tag = .{
@@ -3090,8 +3090,8 @@ fn currentScope(self: *Self) *Scope {
 
 /// This will be used later for builtins like Num.nan, Num.infinity, etc.
 pub fn addNonFiniteFloat(self: *Self, value: f64, region: base.Region) CIR.Expr.Idx {
-    // Reserve node slots for the type variable and expression
-    const final_expr_idx = self.can_ir.store.predictNodeIndex(2);
+    // Reserve node slot for the type variable and expression
+    const final_expr_idx = self.can_ir.store.predictNodeIndex(1);
 
     // Dec doesn't have infinity, -infinity, or NaN
     const requirements = types.Num.Frac.Requirements{
