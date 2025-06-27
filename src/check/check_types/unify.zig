@@ -616,6 +616,26 @@ const Unifier = struct {
                     .tuple => |b_tuple| {
                         try self.unifyTuple(vars, a_tuple, b_tuple);
                     },
+                    .tuple_unbound => |b_tuple| {
+                        // When unifying tuple with tuple_unbound, tuple wins
+                        try self.unifyTuple(vars, a_tuple, b_tuple);
+                    },
+                    else => return error.TypeMismatch,
+                }
+            },
+            .tuple_unbound => |a_tuple| {
+                switch (b_flat_type) {
+                    .tuple => |b_tuple| {
+                        // When unifying tuple_unbound with tuple, tuple wins
+                        try self.unifyTuple(vars, a_tuple, b_tuple);
+                        self.merge(vars, vars.b.desc.content);
+                    },
+                    .tuple_unbound => |b_tuple| {
+                        // Both are tuple_unbound - unify elements and stay unbound
+                        try self.unifyTuple(vars, a_tuple, b_tuple);
+                        // Explicitly merge to keep as tuple_unbound
+                        self.merge(vars, vars.a.desc.content);
+                    },
                     else => return error.TypeMismatch,
                 }
             },

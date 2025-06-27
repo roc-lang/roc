@@ -147,6 +147,9 @@ pub const TypeWriter = struct {
             .tuple => |tuple| {
                 try self.writeTuple(tuple);
             },
+            .tuple_unbound => |tuple| {
+                try self.writeTuple(tuple);
+            },
             .num => |num| {
                 try self.writeNum(num);
             },

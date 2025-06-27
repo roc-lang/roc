@@ -167,6 +167,10 @@ const CheckOccurs = struct {
                             const elems = self.types_store.getTupleElemsSlice(tuple.elems);
                             try self.occursSubVars(root, elems, ctx);
                         },
+                        .tuple_unbound => |tuple| {
+                            const elems = self.types_store.getTupleElemsSlice(tuple.elems);
+                            try self.occursSubVars(root, elems, ctx);
+                        },
                         .num => {},
                         .custom_type => |custom_type| {
                             const args = self.types_store.getCustomTypeArgsSlice(custom_type.args);
