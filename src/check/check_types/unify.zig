@@ -3186,6 +3186,62 @@ test "unify - a & b list with diff args (fail)" {
     try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
 }
 
+test "unify - empty list unifies with non-empty list" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create an empty list (list_unbound)
+    const empty_list = Content{ .structure = .list_unbound };
+    const empty_list_var = env.module_env.types.freshFromContent(empty_list);
+
+    // Create a list of numbers
+    const num_var = env.module_env.types.fresh();
+    _ = env.module_env.types.setVarContent(num_var, Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = false, .bits_needed = 0 } } } });
+    const list_num = Content{ .structure = .{ .list = num_var } };
+    const list_num_var = env.module_env.types.freshFromContent(list_num);
+
+    // Unify empty list with list of numbers
+    const result = env.unify(empty_list_var, list_num_var);
+    try std.testing.expect(result.isOk());
+
+    // Check that empty_list_var now points to list_num_var
+    const empty_resolved = env.module_env.types.resolveVar(empty_list_var);
+    const num_resolved = env.module_env.types.resolveVar(list_num_var);
+    try std.testing.expectEqual(empty_resolved.var_, num_resolved.var_);
+}
+
+test "unify - multiple empty lists stay unbound" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create two empty lists
+    const empty_list1 = Content{ .structure = .list_unbound };
+    const empty_list1_var = env.module_env.types.freshFromContent(empty_list1);
+
+    const empty_list2 = Content{ .structure = .list_unbound };
+    const empty_list2_var = env.module_env.types.freshFromContent(empty_list2);
+
+    // Unify the two empty lists
+    const result = env.unify(empty_list1_var, empty_list2_var);
+    try std.testing.expect(result.isOk());
+
+    // Check that the result is still list_unbound
+    const resolved = env.module_env.types.resolveVar(empty_list1_var);
+    switch (resolved.desc.content) {
+        .structure => |structure| {
+            switch (structure) {
+                .list_unbound => {}, // Expected
+                else => return error.ExpectedListUnbound,
+            }
+        },
+        else => return error.ExpectedStructure,
+    }
+}
+
 // unification - structure/structure - tuple
 
 test "unify - a & b are same tuple" {
