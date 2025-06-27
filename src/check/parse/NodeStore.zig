@@ -598,8 +598,12 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) AST.Expr.Idx {
         .field_access => |fa| {
             node.tag = .field_access;
             node.region = fa.region;
-            node.data.untyped.lhs = @intFromEnum(fa.left);
-            node.data.untyped.rhs = @intFromEnum(fa.right);
+            node.data = .{
+                .field_access = .{
+                    .left = @intFromEnum(fa.left),
+                    .right = @intFromEnum(fa.right),
+                },
+            };
         },
         .local_dispatch => |ld| {
             node.tag = .local_dispatch;
@@ -612,8 +616,12 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) AST.Expr.Idx {
             node.tag = .bin_op;
             node.region = op.region;
             node.main_token = op.operator;
-            node.data.untyped.lhs = @intFromEnum(op.left);
-            node.data.untyped.rhs = @intFromEnum(op.right);
+            node.data = .{
+                .bin_op = .{
+                    .left = @intFromEnum(op.left),
+                    .right = @intFromEnum(op.right),
+                },
+            };
         },
         .suffix_single_question => |op| {
             node.tag = .suffix_single_question;
@@ -624,7 +632,11 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) AST.Expr.Idx {
             node.tag = .unary_op;
             node.region = u.region;
             node.main_token = u.operator;
-            node.data.untyped.lhs = @intFromEnum(u.expr);
+            node.data = .{
+                .unary_op = .{
+                    .expr = @intFromEnum(u.expr),
+                },
+            };
         },
         .if_then_else => |i| {
             node.tag = .if_then_else;
@@ -1357,8 +1369,8 @@ pub fn getExpr(store: *NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
         },
         .field_access => {
             return .{ .field_access = .{
-                .left = @enumFromInt(node.data.untyped.lhs),
-                .right = @enumFromInt(node.data.untyped.rhs),
+                .left = @enumFromInt(node.data.field_access.left),
+                .right = @enumFromInt(node.data.field_access.right),
                 .operator = node.main_token,
                 .region = node.region,
             } };
@@ -1395,6 +1407,13 @@ pub fn getExpr(store: *NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
                 .expr = @enumFromInt(node.data.untyped.lhs),
             } };
         },
+        .unary_op => {
+            return .{ .unary_op = .{
+                .region = node.region,
+                .operator = node.main_token,
+                .expr = @enumFromInt(node.data.unary_op.expr),
+            } };
+        },
         .if_then_else => {
             const then_idx = @as(usize, @intCast(node.data.untyped.rhs));
             const else_idx = then_idx + 1;
@@ -1426,8 +1445,8 @@ pub fn getExpr(store: *NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
         },
         .bin_op => {
             return .{ .bin_op = .{
-                .left = @enumFromInt(node.data.untyped.lhs),
-                .right = @enumFromInt(node.data.untyped.rhs),
+                .left = @enumFromInt(node.data.bin_op.left),
+                .right = @enumFromInt(node.data.bin_op.right),
                 .operator = node.main_token,
                 .region = node.region,
             } };

@@ -456,4 +456,15 @@ pub const Data = union(enum) {
         args_start: u32,
         args_len: u32,
     },
+    bin_op: struct {
+        left: u32,
+        right: u32,
+    },
+    field_access: struct {
+        left: u32,
+        right: u32,
+    },
+    unary_op: struct {
+        expr: u32,
+    },
 };
