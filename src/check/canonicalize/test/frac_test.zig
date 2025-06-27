@@ -79,7 +79,8 @@ test "fractional literal - basic decimal" {
         .dec_small => |dec| {
             try testing.expectEqual(dec.numerator, 314);
             try testing.expectEqual(dec.denominator_power_of_ten, 2);
-            const resolved = result.cir.env.types.resolveVar(dec.num_var);
+            const expr_as_type_var: types.Var = @enumFromInt(@intFromEnum(result.expr_idx));
+            const resolved = result.cir.env.types.resolveVar(expr_as_type_var);
             switch (resolved.desc.content) {
                 .structure => |structure| switch (structure) {
                     .num => |num| switch (num) {
@@ -107,7 +108,8 @@ test "fractional literal - scientific notation small" {
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
         .frac_dec => |frac| {
-            const resolved = result.cir.env.types.resolveVar(frac.frac_var);
+            const expr_as_type_var: types.Var = @enumFromInt(@intFromEnum(result.expr_idx));
+            const resolved = result.cir.env.types.resolveVar(expr_as_type_var);
             switch (resolved.desc.content) {
                 .structure => |structure| switch (structure) {
                     .num => |num| switch (num) {
@@ -122,7 +124,7 @@ test "fractional literal - scientific notation small" {
                 else => return error.UnexpectedContentType,
             }
             // Check fits_in_f32 in the type system
-            const resolved2 = result.cir.env.types.resolveVar(frac.frac_var);
+            const resolved2 = result.cir.env.types.resolveVar(expr_as_type_var);
             switch (resolved2.desc.content) {
                 .structure => |structure| switch (structure) {
                     .num => |num| switch (num) {
@@ -152,7 +154,8 @@ test "fractional literal - scientific notation large (near f64 max)" {
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
         .frac_f64 => |frac| {
-            const resolved = result.cir.env.types.resolveVar(frac.frac_var);
+            const expr_as_type_var: types.Var = @enumFromInt(@intFromEnum(result.expr_idx));
+            const resolved = result.cir.env.types.resolveVar(expr_as_type_var);
             switch (resolved.desc.content) {
                 .structure => |structure| switch (structure) {
                     .num => |num| switch (num) {
@@ -167,7 +170,7 @@ test "fractional literal - scientific notation large (near f64 max)" {
                 else => return error.UnexpectedContentType,
             }
             // Check fits_in_f32 in the type system
-            const resolved2 = result.cir.env.types.resolveVar(frac.frac_var);
+            const resolved2 = result.cir.env.types.resolveVar(expr_as_type_var);
             switch (resolved2.desc.content) {
                 .structure => |structure| switch (structure) {
                     .num => |num| switch (num) {

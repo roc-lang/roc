@@ -192,11 +192,8 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             const value_as_u32s = store.extra_data.items[node.data_1..][0..4];
 
             // Retrieve type variable from data_2 and requirements from data_3
-            const int_var = @as(types.Var, @enumFromInt(node.data_2));
-
             return .{
                 .int = .{
-                    .num_var = int_var,
                     .value = .{ .bytes = @bitCast(value_as_u32s.*), .kind = .i128 },
                     .region = node.region,
                 },
@@ -229,9 +226,6 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             };
         },
         .expr_frac_f64 => {
-            // Retrieve type variable from data_2
-            const frac_var = @as(types.Var, @enumFromInt(node.data_2));
-
             // Get value from extra_data
             const extra_data_idx = node.data_1;
             const value_as_u32s = store.extra_data.items[extra_data_idx..][0..2];
@@ -240,16 +234,12 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
 
             return CIR.Expr{
                 .frac_f64 = .{
-                    .frac_var = frac_var,
                     .value = value,
                     .region = node.region,
                 },
             };
         },
         .expr_frac_dec => {
-            // Retrieve type variable from data_2
-            const frac_var = @as(types.Var, @enumFromInt(node.data_2));
-
             // Get value from extra_data
             const extra_data_idx = node.data_1;
             const value_as_u32s = store.extra_data.items[extra_data_idx..][0..4];
@@ -257,16 +247,12 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
 
             return CIR.Expr{
                 .frac_dec = .{
-                    .frac_var = frac_var,
                     .value = RocDec{ .num = value_as_i128 },
                     .region = node.region,
                 },
             };
         },
         .expr_dec_small => {
-            // Retrieve type variable from data_2
-            const num_var = @as(types.Var, @enumFromInt(node.data_2));
-
             // Unpack small dec data from data_1 and data_3
             // data_1: numerator (i16) stored as u32
             // data_3: denominator_power_of_ten (u8) in lower 8 bits
@@ -275,7 +261,6 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
 
             return CIR.Expr{
                 .dec_small = .{
-                    .num_var = num_var,
                     .numerator = numerator,
                     .denominator_power_of_ten = denominator_power_of_ten,
                     .region = node.region,
@@ -781,8 +766,8 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             node.region = e.region;
             node.tag = .expr_int;
 
-            // Store type variable in data_2
-            node.data_2 = @intFromEnum(e.num_var);
+            // data_2 is now unused for int expressions
+            node.data_2 = 0;
 
             // Store i128 value in extra_data
             const extra_data_start = store.extra_data.items.len;
@@ -815,8 +800,8 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             node.region = e.region;
             node.tag = .expr_frac_f64;
 
-            // Store type variable in data_2
-            node.data_2 = @intFromEnum(e.frac_var);
+            // data_2 is now unused for frac_f64 expressions
+            node.data_2 = 0;
 
             // Store the f64 value in extra_data
             const extra_data_start = store.extra_data.items.len;
@@ -833,8 +818,8 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             node.region = e.region;
             node.tag = .expr_frac_dec;
 
-            // Store type variable in data_2
-            node.data_2 = @intFromEnum(e.frac_var);
+            // data_2 is now unused for frac_dec expressions
+            node.data_2 = 0;
 
             // Store the RocDec value in extra_data
             const extra_data_start = store.extra_data.items.len;
@@ -851,8 +836,8 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             node.region = e.region;
             node.tag = .expr_dec_small;
 
-            // Store type variable in data_2
-            node.data_2 = @intFromEnum(e.num_var);
+            // data_2 is now unused for dec_small expressions
+            node.data_2 = 0;
 
             // Pack small dec data into data_1 and data_3
             // data_1: numerator (i16) - fits in lower 16 bits

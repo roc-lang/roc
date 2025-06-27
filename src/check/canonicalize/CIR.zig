@@ -1329,9 +1329,6 @@ pub const Expr = union(enum) {
                 var node = SExpr.init(gpa, "e-num");
                 node.appendRegion(gpa, ir.calcRegionInfo(num_expr.region));
 
-                // Add num_var
-                node.appendTypeVar(gpa, "num-var", num_expr.num_var);
-
                 // Add value info
                 const value_str = std.fmt.allocPrint(gpa, "{}", .{num_expr.value}) catch |err| exitOnOom(err);
                 defer gpa.free(value_str);
@@ -1342,9 +1339,6 @@ pub const Expr = union(enum) {
             .int => |int_expr| {
                 var node = SExpr.init(gpa, "e-int");
                 node.appendRegion(gpa, ir.calcRegionInfo(int_expr.region));
-
-                // Add num_var
-                node.appendTypeVar(gpa, "num-var", int_expr.num_var);
 
                 // Add value
                 const value_i128: i128 = @bitCast(int_expr.value.bytes);
@@ -1357,7 +1351,6 @@ pub const Expr = union(enum) {
             .frac_f64 => |e| {
                 var node = SExpr.init(gpa, "e-frac-f64");
                 node.appendRegion(gpa, ir.calcRegionInfo(e.region));
-                node.appendTypeVar(gpa, "frac-var", e.frac_var);
 
                 // Add value
                 var value_buf: [512]u8 = undefined;
@@ -1375,7 +1368,6 @@ pub const Expr = union(enum) {
             .frac_dec => |e| {
                 var node = SExpr.init(gpa, "e-frac-dec");
                 node.appendRegion(gpa, ir.calcRegionInfo(e.region));
-                node.appendTypeVar(gpa, "frac-var", e.frac_var);
 
                 // Add value (convert RocDec to string)
                 // RocDec has 18 decimal places, so divide by 10^18
@@ -1395,7 +1387,6 @@ pub const Expr = union(enum) {
             .dec_small => |e| {
                 var node = SExpr.init(gpa, "e-dec-small");
                 node.appendRegion(gpa, ir.calcRegionInfo(e.region));
-                node.appendTypeVar(gpa, "num-var", e.num_var);
 
                 // Add numerator and denominator_power_of_ten
                 var num_buf: [32]u8 = undefined;

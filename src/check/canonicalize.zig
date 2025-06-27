@@ -1019,7 +1019,7 @@ pub fn canonicalize_expr(
             const sign: i128 = (@as(i128, @intFromBool(!is_negated or u128_val == min_i128_negated)) << 1) - 1;
             const i128_val: i128 = sign * @as(i128, @bitCast(u128_val));
 
-            // create type vars, first "reserve" node slots
+            // Reserve node slots for the type variable and expression
             const final_expr_idx = self.can_ir.store.predictNodeIndex(2);
 
             // Calculate requirements based on the value
@@ -1037,10 +1037,10 @@ pub fn canonicalize_expr(
                 .bits_needed = types.Num.Int.BitsNeeded.fromValue(adjusted_val),
             };
 
-            // then insert the type vars, setting the parent to be the final slot
-            const poly_var = self.can_ir.pushFreshTypeVar(final_expr_idx, region);
+            // Create a fresh type variable for the integer
+            const fresh_var = self.can_ir.pushFreshTypeVar(final_expr_idx, region);
             const int_requirements = types.Num.IntRequirements{
-                .var_ = poly_var,
+                .var_ = fresh_var,
                 .sign_needed = requirements.sign_needed,
                 .bits_needed = @intCast(@intFromEnum(requirements.bits_needed)),
             };
@@ -1048,16 +1048,10 @@ pub fn canonicalize_expr(
             // For non-decimal integers (hex, binary, octal), use int_poly directly
             // For decimal integers, use num_poly so they can be either Int or Frac
             const is_non_decimal = int_base != DEFAULT_BASE;
-            const num_var = if (is_non_decimal) blk: {
-                break :blk self.can_ir.env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_poly = int_requirements } } });
-            } else blk: {
-                break :blk self.can_ir.env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = int_requirements } } });
-            };
 
-            // then in the final slot the actual expr is inserted
+            // Add the expression
             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
                 .int = .{
-                    .num_var = num_var,
                     .value = .{ .bytes = @bitCast(i128_val), .kind = .i128 },
                     .region = region,
                 },
@@ -1077,14 +1071,12 @@ pub fn canonicalize_expr(
         .frac => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
-            // resolve to a string slice from the source
+            // Resolve to a string slice from the source
             const token_text = self.parse_ir.resolve(e.token);
 
-            // create type vars, first "reserve" node slots
-            const final_expr_idx = self.can_ir.store.predictNodeIndex(3);
+            // Reserve node slots for the type variable and expression
+            const final_expr_idx = self.can_ir.store.predictNodeIndex(2);
 
-            // Create type variables
-            const poly_var = self.can_ir.pushFreshTypeVar(final_expr_idx, region);
             const parsed = parseFracLiteral(token_text) catch |err| switch (err) {
                 error.InvalidNumLiteral => {
                     const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .invalid_num_literal = .{
@@ -1101,22 +1093,17 @@ pub fn canonicalize_expr(
                 .f64 => |f64_info| f64_info.requirements,
             };
 
+            // Create a fresh type variable for the fraction
+            const fresh_var = self.can_ir.pushFreshTypeVar(final_expr_idx, region);
             const frac_requirements = types.Num.FracRequirements{
-                .var_ = poly_var,
+                .var_ = fresh_var,
                 .fits_in_f32 = requirements.fits_in_f32,
                 .fits_in_dec = requirements.fits_in_dec,
             };
-            _ = self.can_ir.pushTypeVar(
-                Content{ .structure = .{ .num = .{ .frac_poly = frac_requirements } } },
-                final_expr_idx,
-                region,
-            );
-            const num_var = self.can_ir.env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = frac_requirements } } });
 
             const cir_expr = switch (parsed) {
                 .small => |small_info| CIR.Expr{
                     .dec_small = .{
-                        .num_var = num_var,
                         .numerator = small_info.numerator,
                         .denominator_power_of_ten = small_info.denominator_power_of_ten,
                         .region = region,
@@ -1124,14 +1111,12 @@ pub fn canonicalize_expr(
                 },
                 .dec => |dec_info| CIR.Expr{
                     .frac_dec = .{
-                        .frac_var = num_var,
                         .value = dec_info.value,
                         .region = region,
                     },
                 },
                 .f64 => |f64_info| CIR.Expr{
                     .frac_f64 = .{
-                        .frac_var = num_var,
                         .value = f64_info.value,
                         .region = region,
                     },
@@ -3105,36 +3090,26 @@ fn currentScope(self: *Self) *Scope {
 
 /// This will be used later for builtins like Num.nan, Num.infinity, etc.
 pub fn addNonFiniteFloat(self: *Self, value: f64, region: base.Region) CIR.Expr.Idx {
+    // Reserve node slots for the type variable and expression
+    const final_expr_idx = self.can_ir.store.predictNodeIndex(2);
+
     // Dec doesn't have infinity, -infinity, or NaN
     const requirements = types.Num.Frac.Requirements{
         .fits_in_f32 = true,
         .fits_in_dec = false,
     };
 
-    // Create type vars, first "reserve" node slots
-    const final_expr_idx = self.can_ir.store.predictNodeIndex(2);
-
-    // Create a polymorphic frac type variable
-    const poly_var = self.can_ir.env.types.fresh();
+    // Create a fresh type variable for the non-finite float
+    const fresh_var = self.can_ir.pushFreshTypeVar(final_expr_idx, region);
     const frac_requirements = types.Num.FracRequirements{
-        .var_ = poly_var,
+        .var_ = fresh_var,
         .fits_in_f32 = requirements.fits_in_f32,
         .fits_in_dec = requirements.fits_in_dec,
     };
-    _ = self.can_ir.env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = frac_requirements } } });
-    const num_var = self.can_ir.env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = frac_requirements } } });
-
-    // Store the type variable at the expression location
-    _ = self.can_ir.pushTypeVar(
-        Content{ .structure = .{ .num = .{ .frac_poly = frac_requirements } } },
-        final_expr_idx,
-        region,
-    );
 
     // then in the final slot the actual expr is inserted
     const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
         .frac_f64 = .{
-            .frac_var = num_var,
             .value = value,
             .region = region,
         },
@@ -4573,7 +4548,8 @@ test "hexadecimal integer literals" {
         // Check the value
         try std.testing.expectEqual(tc.expected_value, @as(i128, @bitCast(expr.int.value.bytes)));
 
-        const resolved = env.types.resolveVar(expr.int.num_var);
+        const expr_as_type_var: types.Var = @enumFromInt(@intFromEnum(canonical_expr_idx));
+        const resolved = env.types.resolveVar(expr_as_type_var);
         switch (resolved.desc.content) {
             .structure => |structure| switch (structure) {
                 .num => |num| switch (num) {
@@ -4650,7 +4626,8 @@ test "binary integer literals" {
         // Check the value
         try std.testing.expectEqual(tc.expected_value, @as(i128, @bitCast(expr.int.value.bytes)));
 
-        const resolved = env.types.resolveVar(expr.int.num_var);
+        const expr_as_type_var: types.Var = @enumFromInt(@intFromEnum(canonical_expr_idx));
+        const resolved = env.types.resolveVar(expr_as_type_var);
         switch (resolved.desc.content) {
             .structure => |structure| switch (structure) {
                 .num => |num| switch (num) {
@@ -4727,7 +4704,8 @@ test "octal integer literals" {
         // Check the value
         try std.testing.expectEqual(tc.expected_value, @as(i128, @bitCast(expr.int.value.bytes)));
 
-        const resolved = env.types.resolveVar(expr.int.num_var);
+        const expr_as_type_var: types.Var = @enumFromInt(@intFromEnum(canonical_expr_idx));
+        const resolved = env.types.resolveVar(expr_as_type_var);
         switch (resolved.desc.content) {
             .structure => |structure| switch (structure) {
                 .num => |num| switch (num) {
@@ -4804,7 +4782,8 @@ test "integer literals with uppercase base prefixes" {
         // Check the value
         try std.testing.expectEqual(tc.expected_value, @as(i128, @bitCast(expr.int.value.bytes)));
 
-        const resolved = env.types.resolveVar(expr.int.num_var);
+        const expr_as_type_var: types.Var = @enumFromInt(@intFromEnum(canonical_expr_idx));
+        const resolved = env.types.resolveVar(expr_as_type_var);
         switch (resolved.desc.content) {
             .structure => |structure| switch (structure) {
                 .num => |num| switch (num) {

@@ -315,11 +315,11 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
                             const field_expr = self.can_ir.store.getExpr(field.value);
                             const field_expr_type_var = switch (field_expr) {
                                 .str, .str_segment => @as(Var, @enumFromInt(@intFromEnum(field.value))),
-                                .int => |int_expr| int_expr.num_var,
-                                .num => |num_expr| num_expr.num_var,
-                                .frac_f64 => |frac_expr| frac_expr.frac_var,
-                                .frac_dec => |frac_expr| frac_expr.frac_var,
-                                .dec_small => |dec_expr| dec_expr.num_var,
+                                .int => @as(Var, @enumFromInt(@intFromEnum(field.value))),
+                                .num => @as(Var, @enumFromInt(@intFromEnum(field.value))),
+                                .frac_f64 => @as(Var, @enumFromInt(@intFromEnum(field.value))),
+                                .frac_dec => @as(Var, @enumFromInt(@intFromEnum(field.value))),
+                                .dec_small => @as(Var, @enumFromInt(@intFromEnum(field.value))),
                                 else => @as(Var, @enumFromInt(@intFromEnum(field.value))),
                             };
 
