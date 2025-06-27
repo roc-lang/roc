@@ -466,8 +466,12 @@ pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) AST.Pattern.Idx {
         .tuple => |t| {
             node.tag = .tuple_patt;
             node.region = t.region;
-            node.data.untyped.lhs = t.patterns.span.start;
-            node.data.untyped.rhs = t.patterns.span.len;
+            node.data = .{
+                .tuple = .{
+                    .items_start = t.patterns.span.start,
+                    .items_len = t.patterns.span.len,
+                },
+            };
         },
         .underscore => |u| {
             node.tag = .underscore_patt;
@@ -540,8 +544,12 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) AST.Expr.Idx {
         .tuple => |t| {
             node.tag = .tuple;
             node.region = t.region;
-            node.data.untyped.lhs = t.items.span.start;
-            node.data.untyped.rhs = t.items.span.len;
+            node.data = .{
+                .tuple = .{
+                    .items_start = t.items.span.start,
+                    .items_len = t.items.span.len,
+                },
+            };
         },
         .record => |r| {
             node.tag = .record;
@@ -1223,8 +1231,8 @@ pub fn getPattern(store: *NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pattern {
             return .{ .tuple = .{
                 .region = node.region,
                 .patterns = .{ .span = .{
-                    .start = node.data.untyped.lhs,
-                    .len = node.data.untyped.rhs,
+                    .start = node.data.tuple.items_start,
+                    .len = node.data.tuple.items_len,
                 } },
             } };
         },
@@ -1322,8 +1330,8 @@ pub fn getExpr(store: *NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
         .tuple => {
             return .{ .tuple = .{
                 .items = .{ .span = base.DataSpan{
-                    .start = node.data.untyped.lhs,
-                    .len = node.data.untyped.rhs,
+                    .start = node.data.tuple.items_start,
+                    .len = node.data.tuple.items_len,
                 } },
                 .region = node.region,
             } };
@@ -2111,6 +2119,34 @@ fn getListShape(store: *NodeStore, node_idx: Node.Idx) struct {
     return .{
         .items_start = node.data.list.items_start,
         .items_len = node.data.list.items_len,
+        .region = node.region,
+    };
+}
+
+fn addTupleShape(store: *NodeStore, items_start: u32, items_len: u32, region: AST.TokenizedRegion, tag: Node.Tag) Node.Idx {
+    const node = Node{
+        .tag = tag,
+        .main_token = 0,
+        .data = .{
+            .tuple = .{
+                .items_start = items_start,
+                .items_len = items_len,
+            },
+        },
+        .region = region,
+    };
+    return store.nodes.append(store.gpa, node);
+}
+
+fn getTupleShape(store: *NodeStore, node_idx: Node.Idx) struct {
+    items_start: u32,
+    items_len: u32,
+    region: AST.TokenizedRegion,
+} {
+    const node = store.nodes.get(node_idx);
+    return .{
+        .items_start = node.data.tuple.items_start,
+        .items_len = node.data.tuple.items_len,
         .region = node.region,
     };
 }

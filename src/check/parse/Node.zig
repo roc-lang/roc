@@ -448,4 +448,8 @@ pub const Data = union(enum) {
         items_start: u32,
         items_len: u32,
     },
+    tuple: struct {
+        items_start: u32,
+        items_len: u32,
+    },
 };
