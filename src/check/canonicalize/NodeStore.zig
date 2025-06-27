@@ -766,9 +766,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             node.region = e.region;
             node.tag = .expr_int;
 
-            // data_2 is now unused for int expressions
-            node.data_2 = 0;
-
             // Store i128 value in extra_data
             const extra_data_start = store.extra_data.items.len;
 
@@ -800,9 +797,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             node.region = e.region;
             node.tag = .expr_frac_f64;
 
-            // data_2 is now unused for frac_f64 expressions
-            node.data_2 = 0;
-
             // Store the f64 value in extra_data
             const extra_data_start = store.extra_data.items.len;
             const value_as_u64: u64 = @bitCast(e.value);
@@ -818,9 +812,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             node.region = e.region;
             node.tag = .expr_frac_dec;
 
-            // data_2 is now unused for frac_dec expressions
-            node.data_2 = 0;
-
             // Store the RocDec value in extra_data
             const extra_data_start = store.extra_data.items.len;
             const value_as_i128: i128 = e.value.num;
@@ -835,9 +826,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
         .dec_small => |e| {
             node.region = e.region;
             node.tag = .expr_dec_small;
-
-            // data_2 is now unused for dec_small expressions
-            node.data_2 = 0;
 
             // Pack small dec data into data_1 and data_3
             // data_1: numerator (i16) - fits in lower 16 bits
