@@ -2583,7 +2583,7 @@ fn update<'a>(
                     .extend(solved_module.aliases.keys().copied());
             }
 
-            let finish_type_checking = is_host_exposed &&
+            let finish_type_checking = state.dependencies.solved_all() &&
                 (state.goal_phase() == Phase::SolveTypes)
                 // If we're running in check-and-then-build mode, only exit now there are errors.
                 && (!state.exec_mode.build_if_checks() || state.module_cache.has_errors());
