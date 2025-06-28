@@ -135,6 +135,7 @@ pub fn build(b: *std.Build) void {
     const names: []const []const u8 = &.{
         "tokenize",
         "parse",
+        "canonicalize",
     };
     for (names) |name| {
         add_fuzz_target(
