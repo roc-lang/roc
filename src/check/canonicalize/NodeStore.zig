@@ -2127,6 +2127,15 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_lambda_body_not_canonicalized => return CIR.Diagnostic{ .lambda_body_not_canonicalized = .{
             .region = node.region,
         } },
+        .diag_if_condition_not_canonicalized => return CIR.Diagnostic{ .if_condition_not_canonicalized = .{
+            .region = node.region,
+        } },
+        .diag_if_then_not_canonicalized => return CIR.Diagnostic{ .if_then_not_canonicalized = .{
+            .region = node.region,
+        } },
+        .diag_if_else_not_canonicalized => return CIR.Diagnostic{ .if_else_not_canonicalized = .{
+            .region = node.region,
+        } },
         .diag_var_across_function_boundary => return CIR.Diagnostic{ .var_across_function_boundary = .{
             .region = node.region,
         } },
@@ -2208,8 +2217,41 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             },
         } },
         else => {
+            std.debug.print("Error: getDiagnostic called with non-diagnostic node!\n", .{});
+            std.debug.print("  Node tag: {}\n", .{node.tag});
+            std.debug.print("  Diagnostic index: {}\n", .{diagnostic});
+            std.debug.print("  Node index: {}\n", .{node_idx});
+            std.debug.print("  Region: {}..{}\n", .{ node.region.start.offset, node.region.end.offset });
+            std.debug.print("\nThis indicates that a non-diagnostic node was added to the diagnostics list.\n", .{});
+            std.debug.print("Check that addDiagnostic is only called with CIR.Diagnostic values,\n", .{});
+            std.debug.print("and that no other nodes are being added to scratch_diagnostics.\n", .{});
             @panic("unreachable, node is not a diagnostic tag");
         },
+    }
+}
+
+comptime {
+    // This function validates that every field in CIR.Diagnostic has a corresponding
+    // case in both addDiagnostic and getDiagnostic functions
+    const diagnostic_fields = @typeInfo(CIR.Diagnostic).@"union".fields;
+
+    // Check that we have the expected number of cases
+    // If this fails at compile time, it means a new diagnostic was added
+    // but the corresponding cases weren't added to addDiagnostic or getDiagnostic
+    const expected_cases = diagnostic_fields.len;
+
+    // This will cause a compile error if new diagnostics are added without
+    // updating both functions. The developer will need to:
+    // 1. Add the case to addDiagnostic
+    // 2. Add the case to getDiagnostic
+    // 3. Update this count to match the new total
+    const actual_cases = 27; // Update this when adding new diagnostics
+
+    if (expected_cases != actual_cases) {
+        @compileError("Diagnostic case count mismatch! Expected " ++
+            std.fmt.comptimePrint("{}", .{expected_cases}) ++
+            " but found " ++ std.fmt.comptimePrint("{}", .{actual_cases}) ++
+            ". Please update addDiagnostic, getDiagnostic, and this count.");
     }
 }
 

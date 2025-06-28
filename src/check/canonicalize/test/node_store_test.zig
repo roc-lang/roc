@@ -262,3 +262,210 @@ test "NodeStore round trip - Expressions" {
         };
     }
 }
+
+test "NodeStore round trip - Diagnostics" {
+    const gpa = testing.allocator;
+    var store = NodeStore.init(gpa);
+    defer store.deinit();
+
+    var diagnostics = std.ArrayList(CIR.Diagnostic).init(gpa);
+    defer diagnostics.deinit();
+
+    // Test all diagnostic types to ensure complete coverage
+    try diagnostics.append(CIR.Diagnostic{
+        .not_implemented = .{
+            .feature = @enumFromInt(123),
+            .region = from_raw_offsets(10, 20),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .invalid_num_literal = .{
+            .region = from_raw_offsets(30, 40),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .ident_already_in_scope = .{
+            .ident = @bitCast(@as(u32, 456)),
+            .region = from_raw_offsets(50, 60),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .ident_not_in_scope = .{
+            .ident = @bitCast(@as(u32, 789)),
+            .region = from_raw_offsets(70, 80),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .invalid_top_level_statement = .{
+            .stmt = @enumFromInt(456),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .expr_not_canonicalized = .{
+            .region = from_raw_offsets(90, 100),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .invalid_string_interpolation = .{
+            .region = from_raw_offsets(110, 120),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .pattern_arg_invalid = .{
+            .region = from_raw_offsets(130, 140),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .pattern_not_canonicalized = .{
+            .region = from_raw_offsets(150, 160),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .can_lambda_not_implemented = .{
+            .region = from_raw_offsets(170, 180),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .lambda_body_not_canonicalized = .{
+            .region = from_raw_offsets(190, 200),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .if_condition_not_canonicalized = .{
+            .region = from_raw_offsets(210, 220),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .if_then_not_canonicalized = .{
+            .region = from_raw_offsets(230, 240),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .if_else_not_canonicalized = .{
+            .region = from_raw_offsets(250, 260),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .var_across_function_boundary = .{
+            .region = from_raw_offsets(270, 280),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .shadowing_warning = .{
+            .ident = @bitCast(@as(u32, 1011)),
+            .region = from_raw_offsets(290, 300),
+            .original_region = from_raw_offsets(310, 320),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .type_redeclared = .{
+            .name = @bitCast(@as(u32, 1213)),
+            .redeclared_region = from_raw_offsets(330, 340),
+            .original_region = from_raw_offsets(350, 360),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .undeclared_type = .{
+            .name = @bitCast(@as(u32, 1415)),
+            .region = from_raw_offsets(370, 380),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .undeclared_type_var = .{
+            .name = @bitCast(@as(u32, 1617)),
+            .region = from_raw_offsets(390, 400),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .malformed_type_annotation = .{
+            .region = from_raw_offsets(410, 420),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .unused_variable = .{
+            .ident = @bitCast(@as(u32, 1819)),
+            .region = from_raw_offsets(430, 440),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .used_underscore_variable = .{
+            .ident = @bitCast(@as(u32, 2021)),
+            .region = from_raw_offsets(450, 460),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .type_alias_redeclared = .{
+            .name = @bitCast(@as(u32, 2223)),
+            .original_region = from_raw_offsets(470, 480),
+            .redeclared_region = from_raw_offsets(490, 500),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .custom_type_redeclared = .{
+            .name = @bitCast(@as(u32, 2425)),
+            .original_region = from_raw_offsets(510, 520),
+            .redeclared_region = from_raw_offsets(530, 540),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .type_shadowed_warning = .{
+            .name = @bitCast(@as(u32, 2627)),
+            .region = from_raw_offsets(550, 560),
+            .original_region = from_raw_offsets(570, 580),
+            .cross_scope = true,
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .type_parameter_conflict = .{
+            .name = @bitCast(@as(u32, 2829)),
+            .parameter_name = @bitCast(@as(u32, 3031)),
+            .region = from_raw_offsets(590, 600),
+            .original_region = from_raw_offsets(610, 610),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .duplicate_record_field = .{
+            .field_name = @bitCast(@as(u32, 3233)),
+            .duplicate_region = from_raw_offsets(630, 640),
+            .original_region = from_raw_offsets(650, 660),
+        },
+    });
+
+    // Test the round-trip for all diagnostics
+    for (diagnostics.items) |diagnostic| {
+        const idx = store.addDiagnostic(diagnostic);
+        const retrieved = store.getDiagnostic(idx);
+
+        testing.expectEqualDeep(diagnostic, retrieved) catch |err| {
+            std.debug.print("\n\nOriginal:  {any}\n\n", .{diagnostic});
+            std.debug.print("Retrieved: {any}\n\n", .{retrieved});
+            return err;
+        };
+    }
+}
