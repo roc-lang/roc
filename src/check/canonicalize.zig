@@ -2271,6 +2271,9 @@ const FracLiteralResult = union(enum) {
 
 // Try to parse a fractional literal as a small dec (numerator/10^power)
 fn parseSmallDec(token_text: []const u8) ?struct { numerator: i16, denominator_power_of_ten: u8 } {
+    // Return null if input is too long to fit in our 32-byte buffer
+    if (token_text.len > 32) return null;
+
     // For negative zero, we'll return null to force f64 path
     if (token_text.len > 0 and token_text[0] == '-') {
         const rest = token_text[1..];
