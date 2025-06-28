@@ -270,6 +270,12 @@ pub fn addExposedItem(store: *NodeStore, item: AST.ExposedItem) AST.ExposedItem.
             node.main_token = i.ident;
             node.region = i.region;
         },
+        .malformed => |m| {
+            node.tag = .malformed;
+            node.data.lhs = @intFromEnum(m.reason);
+            node.data.rhs = 0;
+            node.region = m.region;
+        },
     }
 
     const nid = store.nodes.append(store.gpa, node);
@@ -997,6 +1003,12 @@ pub fn getExposedItem(store: *NodeStore, exposed_item_idx: AST.ExposedItem.Idx) 
             return .{ .upper_ident_star = .{
                 .region = node.region,
                 .ident = node.main_token,
+            } };
+        },
+        .malformed => {
+            return .{ .malformed = .{
+                .reason = @enumFromInt(node.data.lhs),
+                .region = node.region,
             } };
         },
         else => {

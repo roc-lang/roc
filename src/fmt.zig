@@ -1141,6 +1141,10 @@ const Formatter = struct {
                 try fmt.pushTokenText(i.ident);
                 try fmt.pushAll(".*");
             },
+            .malformed => |m| {
+                region = m.region;
+                // Don't format malformed exposed items - they'll be reported as errors
+            },
         }
 
         return region;
@@ -1474,6 +1478,14 @@ const Formatter = struct {
     }
 
     fn formatTypeHeader(fmt: *Formatter, header: AST.TypeHeader.Idx) !void {
+        // Check if the type header node is malformed before calling getTypeHeader
+        const header_node = fmt.ast.store.nodes.get(@enumFromInt(@intFromEnum(header)));
+        if (header_node.tag == .malformed) {
+            // Handle malformed type header by outputting placeholder text
+            try fmt.buffer.writer().writeAll("<malformed>");
+            return;
+        }
+
         const h = fmt.ast.store.getTypeHeader(header);
         try fmt.pushTokenText(h.name);
         if (h.args.span.len > 0) {

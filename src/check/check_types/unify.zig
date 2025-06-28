@@ -624,7 +624,8 @@ const Unifier = struct {
                         self.merge(vars, vars.b.desc.content);
                     },
                     .list_unbound => {
-                        // Both are list_unbound - stay unbound, no merge needed
+                        // Both are list_unbound - stay unbound
+                        self.merge(vars, vars.a.desc.content);
                     },
                     else => return error.TypeMismatch,
                 }

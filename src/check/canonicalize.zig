@@ -403,6 +403,10 @@ fn canonicalize_header_exposes(
                 // TODO -- do we need a Pattern for "exposed_upper_star" identifiers?
                 _ = type_with_constructors;
             },
+            .malformed => |malformed| {
+                // Malformed exposed items are already captured as diagnostics during parsing
+                _ = malformed;
+            },
         }
     }
 }
@@ -628,6 +632,7 @@ fn convertASTExposesToCIR(
                 .lower_ident => |ident| .{ ident.ident, ident.as, false },
                 .upper_ident => |ident| .{ ident.ident, ident.as, false },
                 .upper_ident_star => |star_ident| .{ star_ident.ident, null, true },
+                .malformed => |_| continue, // Skip malformed exposed items
             };
 
             // Resolve the main identifier name
@@ -2872,6 +2877,18 @@ fn canonicalize_type_anno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.
 }
 
 fn canonicalize_type_header(self: *Self, header_idx: AST.TypeHeader.Idx) CIR.TypeHeader.Idx {
+    // Check if the node is malformed before calling getTypeHeader
+    const node = self.parse_ir.store.nodes.get(@enumFromInt(@intFromEnum(header_idx)));
+    if (node.tag == .malformed) {
+        // Create a malformed type header with an invalid identifier
+        const region = self.parse_ir.tokenizedRegionToRegion(node.region);
+        return self.can_ir.store.addTypeHeader(.{
+            .name = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 }, // Invalid identifier
+            .args = .{ .span = .{ .start = 0, .len = 0 } },
+            .region = region,
+        });
+    }
+
     const ast_header = self.parse_ir.store.getTypeHeader(header_idx);
     const region = self.parse_ir.tokenizedRegionToRegion(ast_header.region);
 
