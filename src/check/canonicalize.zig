@@ -853,7 +853,7 @@ pub fn canonicalize_expr(
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
             // Reserve slot for call expression and create effect variable with proper node correspondence
-            const final_expr_idx = self.can_ir.store.predictNodeIndex(1);
+            const final_expr_idx = self.can_ir.store.predictNodeIndex(2);
             const effect_var = self.can_ir.pushTypeVar(Content{ .pure = {} }, final_expr_idx, region);
 
             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
@@ -1178,7 +1178,7 @@ pub fn canonicalize_expr(
             const elems_span = self.can_ir.store.exprSpanFrom(scratch_top);
 
             // create type vars, first "reserve" node slot
-            const list_expr_idx = self.can_ir.store.predictNodeIndex(1);
+            const list_expr_idx = self.can_ir.store.predictNodeIndex(2);
 
             // then insert the type vars, setting the parent to be the final slot
             const elem_type_var = self.can_ir.pushFreshTypeVar(
@@ -1363,7 +1363,7 @@ pub fn canonicalize_expr(
             const fields_span = self.can_ir.store.recordFieldSpanFrom(scratch_top);
 
             // create type vars, first "reserve" node slots
-            const record_expr_idx = self.can_ir.store.predictNodeIndex(1);
+            const record_expr_idx = self.can_ir.store.predictNodeIndex(2);
 
             // then in the final slot the actual expr is inserted
             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
@@ -1380,7 +1380,7 @@ pub fn canonicalize_expr(
 
             // Reserve additional type variable slots for field types
             const field_count = cir_fields.len;
-            const total_vars_needed = 1 + field_count; // ext_var + field_vars
+            const total_vars_needed = field_count; // field_vars (ext_var already created above)
             const record_with_fields_expr_idx = self.can_ir.store.predictNodeIndex(@intCast(total_vars_needed));
 
             // Create fresh type variables for each field
@@ -1979,7 +1979,7 @@ fn canonicalize_pattern(
                 const args = self.can_ir.store.patternSpanFrom(start);
 
                 // Reserve node slots for type vars, then insert into them.
-                const final_pattern_idx = self.can_ir.store.predictNodeIndex(1);
+                const final_pattern_idx = self.can_ir.store.predictNodeIndex(2);
                 const ext_type_var = self.can_ir.pushFreshTypeVar(final_pattern_idx, region);
                 const tag_pattern = CIR.Pattern{
                     .applied_tag = .{
