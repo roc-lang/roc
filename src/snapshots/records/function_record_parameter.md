@@ -36,7 +36,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-lambda @1-1-1-67 (id 84)
+(e-lambda @1-1-1-67 (id 85)
 	(args
 		(p-record-destructure @1-2-1-15 (id 76)
 			(destructs
@@ -58,5 +58,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 84) (type "*"))
+(expr (id 85) (type "* ? Str"))
 ~~~

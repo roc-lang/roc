@@ -58,7 +58,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "x") (type "Error")))
+		(d_assign (name "x") (def_var 78) (type "Error")))
 	(expressions
 		(expr @4-5-4-8 (type "Error"))))
 ~~~

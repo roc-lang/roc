@@ -55,7 +55,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-lambda @1-1-1-103 (id 93)
+(e-lambda @1-1-1-103 (id 94)
 	(args
 		(p-runtime-error @1-1-1-1 (tag "not_implemented") (id 73)))
 	(e-record @1-32-1-103 (ext-var 88)
@@ -74,5 +74,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 93) (type "*"))
+(expr (id 94) (type "Error ? { greeting: Str, full_record: Error, is_adult: *, * * }"))
 ~~~

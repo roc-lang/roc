@@ -333,8 +333,11 @@ pub fn SafeMultiList(comptime T: type) type {
             inline for (0..base.ptrs.len) |i| {
                 const cur_field = @as(Field, @enumFromInt(i));
                 const cur_items = base.items(cur_field);
+
                 new_ptrs[i] = if (cur_items.len == 0)
-                    undefined
+                    @as([*]u8, @ptrFromInt(@alignOf(u8)))
+                else if (start >= cur_items.len)
+                    @ptrCast(cur_items.ptr + cur_items.len)
                 else
                     @ptrCast(&cur_items[start]);
             }
@@ -546,6 +549,36 @@ test "SafeMultiList(u8) rangeToSlice" {
     const char_slice_b = slice_b.items(.char);
     try testing.expectEqual(1, char_slice_b.len);
     try testing.expectEqual('b', char_slice_b[0]);
+}
+
+test "SafeMultiList empty range at end" {
+    const gpa = testing.allocator;
+
+    const Struct = struct { num: u32, char: u8 };
+    const StructMultiList = SafeMultiList(Struct);
+
+    var multilist = StructMultiList.initCapacity(gpa, 5);
+    defer multilist.deinit(gpa);
+
+    // Add 5 items to fill the list
+    _ = multilist.appendSlice(gpa, &[_]Struct{
+        .{ .num = 100, .char = 'a' },
+        .{ .num = 200, .char = 'b' },
+        .{ .num = 300, .char = 'c' },
+        .{ .num = 400, .char = 'd' },
+        .{ .num = 500, .char = 'e' },
+    });
+
+    // Create an empty range at the end (start=5, end=5 for a list of length 5)
+    const empty_range = StructMultiList.Range{ .start = @enumFromInt(5), .end = @enumFromInt(5) };
+    const empty_slice = multilist.rangeToSlice(empty_range);
+
+    // The slice should be empty
+    const num_slice = empty_slice.items(.num);
+    try testing.expectEqual(0, num_slice.len);
+
+    const char_slice = empty_slice.items(.char);
+    try testing.expectEqual(0, char_slice.len);
 }
 
 test "SafeList(u32) serialization empty list" {

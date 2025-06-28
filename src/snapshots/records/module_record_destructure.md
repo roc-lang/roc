@@ -85,9 +85,9 @@ extract_age = |person| {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 94)
+	(d-let (id 98)
 		(p-assign @4-1-4-12 (ident "extract_age") (id 77))
-		(e-lambda @4-15-7-2 (id 88)
+		(e-lambda @4-15-7-2 (id 89)
 			(args
 				(p-assign @4-16-4-22 (ident "person") (id 78)))
 			(e-block @4-24-7-2
@@ -98,7 +98,7 @@ extract_age = |person| {
 					(e-lookup-local @5-15-5-21
 						(pattern (id 78))))
 				(e-runtime-error (tag "ident_not_in_scope"))))
-		(annotation @4-1-4-12 (signature 92) (id 93)
+		(annotation @4-1-4-12 (signature 96) (id 97)
 			(declared-type
 				(ty-fn @3-15-3-35 (effectful false)
 					(ty-record @3-15-3-28
@@ -110,7 +110,7 @@ extract_age = |person| {
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "extract_age") (type "*")))
+		(d_assign (name "extract_age") (def_var 98) (type "{ age: U64 } -> U64")))
 	(expressions
-		(expr @4-15-7-2 (type "*"))))
+		(expr @4-15-7-2 (type "{ age: U64 } -> U64"))))
 ~~~

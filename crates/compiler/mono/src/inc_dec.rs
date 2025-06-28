@@ -403,6 +403,19 @@ impl<'v> RefcountEnvironment<'v> {
             })
             .collect()
     }
+
+    /// Get all consumpomptiun values from joinpoint_closures
+    fn is_joinpoint_consumptions_all_empty_or_borrowed(&self) -> bool {
+        self.jointpoint_closures.values().all(|consumption| {
+            consumption.is_empty()
+                || consumption.iter().all(|symbol| {
+                    matches!(
+                        self.symbols_ownership.get(symbol),
+                        Some(Ownership::Borrowed)
+                    )
+                })
+        })
+    }
 }
 
 /**
@@ -779,7 +792,20 @@ fn insert_refcount_operations_stmt<'v, 'a>(
                         As the consumption should only ever increase.
                         Otherwise we will be looping forever."
                     );
+
+                    current_body_env
+                        .add_joinpoint_consumption(*joinpoint_id, joinpoint_consumption.clone());
+
+                    let all_empty_or_borrowed =
+                        current_body_env.is_joinpoint_consumptions_all_empty_or_borrowed();
+
+                    current_body_env.remove_joinpoint_consumption(*joinpoint_id);
+
                     joinpoint_consumption = current_joinpoint_consumption;
+
+                    if all_empty_or_borrowed {
+                        break (new_body, current_body_env);
+                    }
                 }
             };
 

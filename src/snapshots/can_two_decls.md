@@ -63,8 +63,8 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "a") (type "Num(*)"))
-		(def (name "b") (type "*")))
+		(d_assign (name "a") (def_var 74) (type "Num(*)"))
+		(d_assign (name "b") (def_var 79) (type "*")))
 	(expressions
 		(expr @3-5-3-6 (type "Num(*)"))
 		(expr @4-5-4-10 (type "*"))))

@@ -42,7 +42,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "x") (type "Int(*)")))
+		(d_assign (name "x") (def_var 74) (type "Int(*)")))
 	(expressions
 		(expr @3-5-3-9 (type "Int(*)"))))
 ~~~

@@ -96,9 +96,9 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 87)
+	(d-let (id 88)
 		(p-assign @4-1-4-14 (ident "redeclareTest") (id 72))
-		(e-lambda @4-17-9-2 (id 86)
+		(e-lambda @4-17-9-2 (id 87)
 			(args
 				(p-underscore @4-18-4-19 (id 73)))
 			(e-block @4-21-9-2
@@ -113,9 +113,9 @@ NO CHANGE
 					(e-int @7-7-7-9 (value "15") (id 81)))
 				(e-lookup-local @8-2-8-4
 					(pattern (id 75))))))
-	(d-let (id 92)
-		(p-assign @11-1-11-7 (ident "result") (id 88))
-		(e-call @11-10-11-27 (id 91)
+	(d-let (id 94)
+		(p-assign @11-1-11-7 (ident "result") (id 89))
+		(e-call @11-10-11-27 (id 93)
 			(e-lookup-local @11-10-11-23
 				(pattern (id 72)))
 			(e-empty_record @11-24-11-26))))
@@ -124,9 +124,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "redeclareTest") (type "*"))
-		(def (name "result") (type "*")))
+		(d_assign (name "redeclareTest") (def_var 88) (type "* ? *"))
+		(d_assign (name "result") (def_var 94) (type "*")))
 	(expressions
-		(expr @4-17-9-2 (type "*"))
+		(expr @4-17-9-2 (type "* ? *"))
 		(expr @11-10-11-27 (type "*"))))
 ~~~
