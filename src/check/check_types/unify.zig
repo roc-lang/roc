@@ -5654,3 +5654,32 @@ test "unify - num_unbound with int_unbound (reverse order)" {
         else => return error.ExpectedStructure,
     }
 }
+
+test "heterogeneous list reports only first incompatibility" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create a list type with three different elements
+    const num_var = env.module_env.types.freshFromContent(.{ .structure = .{ .num = .{ .int_unbound = .{ .sign_needed = false, .bits_needed = 7 } } } });
+    const str_var = env.module_env.types.freshFromContent(.{ .structure = .str });
+    const frac_var = env.module_env.types.freshFromContent(.{ .structure = .{ .num = .{ .frac_unbound = .{ .fits_in_f32 = true, .fits_in_dec = true } } } });
+
+    // Create a list element type variable
+    const elem_var = env.module_env.types.fresh();
+
+    // Unify first element (number) with elem_var - should succeed
+    const result1 = env.unify(elem_var, num_var);
+    try std.testing.expectEqual(.ok, result1);
+
+    // Unify second element (string) with elem_var - should fail
+    const result2 = env.unify(elem_var, str_var);
+    try std.testing.expectEqual(false, result2.isOk());
+
+    // Unify third element (fraction) with elem_var - should also fail
+    const result3 = env.unify(elem_var, frac_var);
+    try std.testing.expectEqual(false, result3.isOk());
+
+    // Check that we have problems recorded
+    try std.testing.expect(env.problems.problems.len() >= 2);
+}
