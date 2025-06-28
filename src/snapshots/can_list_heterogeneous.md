@@ -38,20 +38,6 @@ has the incompatible type:
 
 All elements in a list must have compatible types.
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**can_list_heterogeneous.md:1:14:1:18:**
-```roc
-[1, "hello", 3.14]
-```
-             ^^^^
-
-It is of type:
-    _Frac(*)_
-
-But you are trying to use it as:
-    _StrError_
-
 # TOKENS
 ~~~zig
 OpenSquare(1:1-1:2),Int(1:2-1:3),Comma(1:3-1:4),StringStart(1:5-1:6),StringPart(1:6-1:11),StringEnd(1:11-1:12),Comma(1:12-1:13),Float(1:14-1:18),CloseSquare(1:18-1:19),EndOfFile(1:19-1:19),

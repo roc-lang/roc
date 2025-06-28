@@ -276,29 +276,100 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
             // Track which element actually determined the list's type (not just the first element)
             var type_determining_elem_idx: ?CIR.Expr.Idx = null;
             var type_determining_snapshot: ?snapshot.SnapshotContentIdx = null;
+            var first_elem_idx: ?CIR.Expr.Idx = null;
+            var elem_var_snapshot: ?snapshot.SnapshotContentIdx = null;
 
             for (elems, 0..) |single_elem_expr_idx, i| {
                 self.checkExpr(single_elem_expr_idx);
 
-                // For non-first elements, capture snapshots BEFORE unification
-                var current_elem_snapshot: ?snapshot.SnapshotContentIdx = null;
-
-                if (i > 0 and !reported_incompatible) {
-                    // Create snapshot of current element BEFORE unification (while types are still intact)
-                    current_elem_snapshot = self.snapshots.createSnapshot(
-                        self.types,
-                        @enumFromInt(@intFromEnum(single_elem_expr_idx)),
-                    );
+                // Track the first element's index
+                if (i == 0) {
+                    first_elem_idx = single_elem_expr_idx;
                 }
 
-                // Unify the element with the list's element type
-                const result = self.unify(
-                    @enumFromInt(@intFromEnum(elem_var)),
+                // Capture snapshot of current element immediately after checking (before any unification)
+                const current_elem_snapshot = self.snapshots.createSnapshot(
+                    self.types,
                     @enumFromInt(@intFromEnum(single_elem_expr_idx)),
                 );
 
+                // For the first element, immediately track it as type-determining if it's concrete
+                if (i == 0) {
+                    // Check if this element has a concrete type
+                    const elem_content = self.types.resolveVar(@enumFromInt(@intFromEnum(single_elem_expr_idx))).desc.content;
+
+                    var is_concrete = true;
+                    if (elem_content == .structure) {
+                        switch (elem_content.structure) {
+                            .list_unbound, .record_unbound, .empty_record, .empty_tag_union => is_concrete = false,
+                            .num => |num| {
+                                switch (num) {
+                                    .int_unbound, .num_unbound, .frac_unbound => is_concrete = false,
+                                    else => {},
+                                }
+                            },
+                            else => {},
+                        }
+                    }
+
+                    if (is_concrete) {
+                        type_determining_elem_idx = single_elem_expr_idx;
+                        type_determining_snapshot = current_elem_snapshot;
+                    }
+
+                    // Now unify the first element with elem_var
+                    _ = self.unify(
+                        @enumFromInt(@intFromEnum(elem_var)),
+                        @enumFromInt(@intFromEnum(single_elem_expr_idx)),
+                    );
+
+                    // Capture elem_var's type after unification with first element
+                    elem_var_snapshot = self.snapshots.createSnapshot(
+                        self.types,
+                        elem_var,
+                    );
+
+                    // Don't process first element again in the main loop
+                    continue;
+                }
+
+                // For non-first elements that we'll check for incompatibility,
+                // use a temporary problem store to check if unification would fail
+                var will_fail = false;
+                var should_unify_for_real = true;
+
+                if (i > 0 and !reported_incompatible) {
+                    // Create temporary problem store
+                    var temp_problems = problem.Store.initCapacity(self.gpa, 1);
+                    defer temp_problems.deinit(self.gpa);
+
+                    // Check if unification would fail
+                    const test_result = unifier.unify(
+                        self.can_ir.env,
+                        self.types,
+                        &temp_problems,
+                        &self.snapshots,
+                        &self.unify_scratch,
+                        &self.occurs_scratch,
+                        @enumFromInt(@intFromEnum(elem_var)),
+                        @enumFromInt(@intFromEnum(single_elem_expr_idx)),
+                    );
+
+                    will_fail = (test_result == .problem);
+                    // If it will fail and we have a type determining element, don't unify for real yet
+                    if (will_fail and (type_determining_snapshot != null or i == 1)) {
+                        should_unify_for_real = false;
+                    }
+                }
+
+                // Do the real unification if needed
+                const result = if (should_unify_for_real) self.unify(
+                    @enumFromInt(@intFromEnum(elem_var)),
+                    @enumFromInt(@intFromEnum(single_elem_expr_idx)),
+                ) else unifier.Result.ok; // Pretend it's ok to continue checking
+
                 // Track which element determines the type (first element that successfully unified and has concrete type)
-                if (type_determining_elem_idx == null and result == .ok) {
+                if (type_determining_elem_idx == null and result == .ok and should_unify_for_real) {
                     // Check if this element has a concrete type (not unbound) AFTER unification
                     const unified_content = self.types.resolveVar(elem_var).desc.content;
 
@@ -318,19 +389,22 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
 
                     if (is_concrete) {
                         type_determining_elem_idx = single_elem_expr_idx;
-                        // Create snapshot from the unified type
+                        // Create snapshot from the element's variable, not the list's elem_var
                         type_determining_snapshot = self.snapshots.createSnapshot(
                             self.types,
-                            elem_var,
+                            @enumFromInt(@intFromEnum(single_elem_expr_idx)),
                         );
                     }
                 }
 
                 // For non-first elements that failed unification, report custom error
-                if (i > 0 and result == .problem and !reported_incompatible and type_determining_snapshot != null and current_elem_snapshot != null) {
-                    // Create temporary problem store
+                if (i > 0 and will_fail and !reported_incompatible) {
                     // Get expressions for regions
-                    const determining_elem_idx = type_determining_elem_idx orelse elems[0];
+                    const determining_elem_idx = type_determining_elem_idx orelse first_elem_idx.?;
+
+                    // If we don't have a type determining snapshot yet (first element was concrete), use elem_var snapshot
+                    const final_type_snapshot = type_determining_snapshot orelse elem_var_snapshot.?;
+
                     const determining_elem_expr = self.can_ir.store.getExpr(determining_elem_idx);
                     const incompatible_elem_expr = self.can_ir.store.getExpr(single_elem_expr_idx);
 
@@ -342,14 +416,23 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
                         .list_region = list.region,
                         .first_elem_region = determining_region orelse list.region,
                         .first_elem_var = @enumFromInt(@intFromEnum(determining_elem_idx)),
-                        .first_elem_snapshot = type_determining_snapshot.?,
+                        .first_elem_snapshot = final_type_snapshot,
                         .incompatible_elem_region = incomp_region orelse list.region,
                         .incompatible_elem_var = @enumFromInt(@intFromEnum(single_elem_expr_idx)),
-                        .incompatible_elem_snapshot = current_elem_snapshot.?,
+                        .incompatible_elem_snapshot = current_elem_snapshot,
                     } });
 
                     // Mark that we've reported an incompatible error
                     reported_incompatible = true;
+
+                    // Now do the real unification to mark types as errors
+                    _ = self.unify(
+                        @enumFromInt(@intFromEnum(elem_var)),
+                        @enumFromInt(@intFromEnum(single_elem_expr_idx)),
+                    );
+
+                    // Stop checking further elements to avoid cascading errors
+                    break;
                 }
             }
         },

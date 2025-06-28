@@ -17,14 +17,14 @@ This list contains elements with incompatible types:
 ^^^^^^^^^^^^^^^^^^^
 
 The first element with this type:
-**can_list_first_concrete.md:1:6:1:13:**
+**can_list_first_concrete.md:1:2:1:4:**
 ```roc
 [42, "world", 3.14]
 ```
-     ^^^^^^^
+ ^^
 
 has the type
-    _Str_
+    _Num(*)_
 
 However, this element:
 **can_list_first_concrete.md:1:6:1:13:**
@@ -37,20 +37,6 @@ has the incompatible type:
     _Str_
 
 All elements in a list must have compatible types.
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**can_list_first_concrete.md:1:15:1:19:**
-```roc
-[42, "world", 3.14]
-```
-              ^^^^
-
-It is of type:
-    _Frac(*)_
-
-But you are trying to use it as:
-    _StrError_
 
 # TOKENS
 ~~~zig
