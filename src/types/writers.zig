@@ -309,20 +309,29 @@ pub const TypeWriter = struct {
     /// Convert a num type to a type string
     pub fn writeNum(self: *Self, num: Num) Allocator.Error!void {
         switch (num) {
-            .num_poly => |requirements| {
+            .num_poly => |poly| {
                 _ = try self.writer.write("Num(");
-                try self.writeVar(requirements.var_);
+                try self.writeVar(poly.var_);
                 _ = try self.writer.write(")");
             },
-            .int_poly => |requirements| {
+            .int_poly => |poly| {
                 _ = try self.writer.write("Int(");
-                try self.writeVar(requirements.var_);
+                try self.writeVar(poly.var_);
                 _ = try self.writer.write(")");
             },
-            .frac_poly => |requirements| {
+            .frac_poly => |poly| {
                 _ = try self.writer.write("Frac(");
-                try self.writeVar(requirements.var_);
+                try self.writeVar(poly.var_);
                 _ = try self.writer.write(")");
+            },
+            .num_unbound => |_| {
+                _ = try self.writer.write("Num(*)");
+            },
+            .int_unbound => |_| {
+                _ = try self.writer.write("Int(*)");
+            },
+            .frac_unbound => |_| {
+                _ = try self.writer.write("Frac(*)");
             },
             .int_precision => |prec| {
                 try self.writeIntType(prec);

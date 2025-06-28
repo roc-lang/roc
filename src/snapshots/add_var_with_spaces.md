@@ -42,9 +42,9 @@ add2 = x + 2
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 78)
+	(d-let (id 77)
 		(p-assign @3-1-3-5 (ident "add2") (id 72))
-		(e-binop @3-8-3-18 (op "add") (id 77)
+		(e-binop @3-8-3-18 (op "add") (id 76)
 			(e-runtime-error (tag "ident_not_in_scope"))
 			(e-int @3-17-3-18 (value "2")))))
 ~~~

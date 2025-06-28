@@ -317,22 +317,22 @@ userId
 			(args
 				(p-underscore @27-10-27-11 (id 129)))
 			(e-runtime-error (tag "lambda_body_not_canonicalized"))))
-	(d-let (id 151)
+	(d-let (id 150)
 		(p-assign @33-5-33-11 (ident "person") (id 137))
-		(e-record @33-14-33-40 (ext-var 144) (id 145)
+		(e-record @33-14-33-40 (ext-var 143) (id 144)
 			(fields
 				(field (name "name")
 					(e-string @33-22-33-29
 						(e-literal @33-23-33-28 (string "Alice"))))
 				(field (name "age")
 					(e-int @33-36-33-38 (value "30")))))
-		(annotation @33-5-33-11 (signature 149) (id 150)
+		(annotation @33-5-33-11 (signature 148) (id 149)
 			(declared-type
 				(ty @32-14-32-20 (name "Person")))))
-	(d-let (id 159)
-		(p-assign @36-5-36-10 (ident "color") (id 153))
-		(e-tag @36-13-36-16 (ext-var 0) (name "Red") (args "TODO") (id 155))
-		(annotation @36-5-36-10 (signature 157) (id 158)
+	(d-let (id 158)
+		(p-assign @36-5-36-10 (ident "color") (id 152))
+		(e-tag @36-13-36-16 (ext-var 0) (name "Red") (args "TODO") (id 154))
+		(annotation @36-5-36-10 (signature 156) (id 157)
 			(declared-type
 				(ty @35-13-35-18 (name "Color")))))
 	(s-type-decl @4-1-7-7 (id 74)

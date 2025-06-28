@@ -116,7 +116,7 @@ CloseRound(17:1-17:2),EndOfFile(17:2-17:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tuple @1-1-17-2 (id 147)
+(e-tuple @1-1-17-2 (id 122)
 	(elems
 		(e-binop @2-5-2-11 (op "add")
 			(e-int @2-5-2-6 (value "4"))
@@ -166,5 +166,5 @@ CloseRound(17:1-17:2),EndOfFile(17:2-17:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 147) (type "(*, *, *, *, *, *, *, *, *, *, *, *, *, *, *)"))
+(expr (id 122) (type "(*, *, *, *, *, *, *, *, *, *, *, *, *, *, *)"))
 ~~~

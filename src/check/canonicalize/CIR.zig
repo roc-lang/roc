@@ -2189,23 +2189,19 @@ pub const Pattern = union(enum) {
         region: Region,
     },
     int_literal: struct {
-        num_var: TypeVar,
         value: IntValue,
         region: Region,
     },
     small_dec_literal: struct {
-        num_var: TypeVar,
         numerator: i16,
         denominator_power_of_ten: u8,
         region: Region,
     },
     dec_literal: struct {
-        num_var: TypeVar,
         value: RocDec,
         region: Region,
     },
     f64_literal: struct {
-        num_var: TypeVar,
         value: f64,
         region: Region,
     },

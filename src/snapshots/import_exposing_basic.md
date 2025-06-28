@@ -82,12 +82,12 @@ main = {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 102)
+	(d-let (id 101)
 		(p-assign @5-1-5-5 (ident "main") (id 75))
-		(e-block @5-8-10-2 (id 101)
+		(e-block @5-8-10-2 (id 100)
 			(s-let @6-5-6-38
 				(p-assign @6-5-6-9 (ident "data") (id 76))
-				(e-record @6-12-6-38 (ext-var 83) (id 84)
+				(e-record @6-12-6-38 (ext-var 82) (id 83)
 					(fields
 						(field (name "name")
 							(e-string @6-20-6-27
@@ -95,21 +95,21 @@ main = {
 						(field (name "age")
 							(e-int @6-34-6-36 (value "30"))))))
 			(s-let @7-5-7-27
-				(p-assign @7-5-7-12 (ident "encoded") (id 88))
-				(e-call @7-15-7-27 (id 92)
+				(p-assign @7-5-7-12 (ident "encoded") (id 87))
+				(e-call @7-15-7-27 (id 91)
 					(e-lookup-external
-						(ext-decl @7-15-7-21 (qualified "json.Json.encode") (module "json.Json") (local "encode") (kind "value") (type-var 89)))
+						(ext-decl @7-15-7-21 (qualified "json.Json.encode") (module "json.Json") (local "encode") (kind "value") (type-var 88)))
 					(e-lookup-local @7-22-7-26
 						(pattern (id 76)))))
 			(s-let @8-5-8-30
-				(p-assign @8-5-8-12 (ident "decoded") (id 94))
-				(e-call @8-15-8-30 (id 98)
+				(p-assign @8-5-8-12 (ident "decoded") (id 93))
+				(e-call @8-15-8-30 (id 97)
 					(e-lookup-external
-						(ext-decl @8-15-8-21 (qualified "json.Json.decode") (module "json.Json") (local "decode") (kind "value") (type-var 95)))
+						(ext-decl @8-15-8-21 (qualified "json.Json.decode") (module "json.Json") (local "decode") (kind "value") (type-var 94)))
 					(e-lookup-local @8-22-8-29
-						(pattern (id 88)))))
+						(pattern (id 87)))))
 			(e-lookup-local @9-5-9-12
-				(pattern (id 94)))))
+				(pattern (id 93)))))
 	(s-import @3-1-3-43 (module "json.Json") (id 74)
 		(exposes
 			(exposed (name "decode") (wildcard false))

@@ -23,9 +23,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-frac-dec @1-1-1-8 (value "0.000123") (id 73))
+(e-frac-dec @1-1-1-8 (value "0.000123") (id 72))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 73) (type "Frac(*)"))
+(expr (id 72) (type "Frac(*)"))
 ~~~

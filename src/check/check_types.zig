@@ -132,12 +132,11 @@ test "minimum signed values fit in their respective types" {
 
         // Create requirements based on adjusted value
         const requirements = types_mod.Num.IntRequirements{
-            .var_ = module_env.types.fresh(),
             .sign_needed = tc.value < 0,
             .bits_needed = @intFromEnum(types_mod.Num.Int.BitsNeeded.fromValue(adjusted_val)),
         };
 
-        const literal_var = module_env.types.freshFromContent(types_mod.Content{ .structure = .{ .num = .{ .num_poly = requirements } } });
+        const literal_var = module_env.types.freshFromContent(types_mod.Content{ .structure = .{ .num = .{ .num_unbound = requirements } } });
         const type_var = module_env.types.freshFromContent(types_mod.Content{ .structure = .{ .num = .{ .num_compact = .{ .int = tc.type } } } });
 
         const result = unifier.unify(
