@@ -20,69 +20,7 @@ outer = |x| {
 main! = |_| {}
 ~~~
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `expected_expr_close_curly_or_comma`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**type_var_shadowing.md:8:5:8:12:**
-```roc
-    inner = |y| y
-```
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **= |** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_var_shadowing.md:8:11:8:14:**
-```roc
-    inner = |y| y
-```
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_var_shadowing.md:11:1:11:1:**
-```roc
-}
-```
-
-
-**INVALID LAMBDA**
-The body of this lambda expression is not valid.
-
-**UNUSED VARIABLE**
-Variable ``x`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
-The unused variable is declared here:
-**type_var_shadowing.md:5:10:5:11:**
-```roc
-outer = |x| {
-```
-
-
-**INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
+NIL
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),Newline(1:1-1:1),
@@ -117,21 +55,26 @@ LowerIdent(13:1-13:6),OpAssign(13:7-13:8),OpBar(13:9-13:10),Underscore(13:10-13:
 			(ty-fn @4-9-4-15
 				(ty-var @4-9-4-10 (raw "a"))
 				(ty-var @4-14-4-15 (raw "a"))))
-		(s-decl @5-1-8-12
+		(s-decl @5-1-11-2
 			(p-ident @5-1-5-6 (raw "outer"))
-			(e-lambda @5-9-8-12
+			(e-lambda @5-9-11-2
 				(args
 					(p-ident @5-10-5-11 (raw "x")))
-				(e-malformed @8-5-8-12 (reason "expected_expr_close_curly_or_comma"))))
-		(e-malformed @8-11-8-14 (reason "expr_unexpected_token"))
-		(e-lambda @8-13-8-18
-			(args
-				(p-ident @8-14-8-15 (raw "y")))
-			(e-ident @8-17-8-18 (qaul "") (raw "y")))
-		(e-apply @10-5-10-13
-			(e-ident @10-5-10-10 (qaul "") (raw "inner"))
-			(e-ident @10-11-10-12 (qaul "") (raw "x")))
-		(e-malformed @1-1-1-1 (reason "expr_unexpected_token"))
+				(e-block @5-13-11-2
+					(statements
+						(s-type-anno @7-5-8-10 (name "inner")
+							(ty-fn @7-13-7-19
+								(ty-var @7-13-7-14 (raw "a"))
+								(ty-var @7-18-7-19 (raw "a"))))
+						(s-decl @8-5-8-18
+							(p-ident @8-5-8-10 (raw "inner"))
+							(e-lambda @8-13-8-18
+								(args
+									(p-ident @8-14-8-15 (raw "y")))
+								(e-ident @8-17-8-18 (qaul "") (raw "y"))))
+						(e-apply @10-5-10-13
+							(e-ident @10-5-10-10 (qaul "") (raw "inner"))
+							(e-ident @10-11-10-12 (qaul "") (raw "x")))))))
 		(s-decl @13-1-13-15
 			(p-ident @13-1-13-6 (raw "main!"))
 			(e-lambda @13-9-13-15
@@ -145,42 +88,60 @@ app [main!] { pf: platform "../basic-cli/platform.roc" }
 
 # Outer function with type variable 'a'
 outer : a -> a
-outer = |x|
-	|y| y
+outer = |x| {
+	# Inner function shadows outer 'a' with its own 'a'
+	inner : a -> a
+	inner = |y| y
 
-inner(x)
-
+	inner(x)
+}
 
 main! = |_| {}
 ~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 89)
+	(d-let (id 106)
 		(p-assign @5-1-5-6 (ident "outer") (id 77))
-		(e-lambda @5-9-8-12 (id 81)
+		(e-lambda @5-9-11-2 (id 98)
 			(args
 				(p-assign @5-10-5-11 (ident "x") (id 78)))
-			(e-runtime-error (tag "lambda_body_not_canonicalized")))
-		(annotation @5-1-5-6 (signature 87) (id 88)
+			(e-block @5-13-11-2
+				(s-type-anno @7-5-8-10 (name "inner")
+					(ty-fn @7-13-7-19 (effectful false)
+						(ty-var @7-13-7-14 (name "a"))
+						(ty-var @7-18-7-19 (name "a"))))
+				(s-let @8-5-8-18
+					(p-assign @8-5-8-10 (ident "inner") (id 86))
+					(e-lambda @8-13-8-18 (id 90)
+						(args
+							(p-assign @8-14-8-15 (ident "y") (id 87)))
+						(e-lookup-local @8-17-8-18
+							(pattern (id 87)))))
+				(e-call @10-5-10-13
+					(e-lookup-local @10-5-10-10
+						(pattern (id 86)))
+					(e-lookup-local @10-11-10-12
+						(pattern (id 78))))))
+		(annotation @5-1-5-6 (signature 104) (id 105)
 			(declared-type
 				(ty-fn @4-9-4-15 (effectful false)
 					(ty-var @4-9-4-10 (name "a"))
 					(ty-var @4-14-4-15 (name "a"))))))
-	(d-let (id 98)
-		(p-assign @13-1-13-6 (ident "main!") (id 94))
-		(e-lambda @13-9-13-15 (id 97)
+	(d-let (id 112)
+		(p-assign @13-1-13-6 (ident "main!") (id 107))
+		(e-lambda @13-9-13-15 (id 111)
 			(args
-				(p-underscore @13-10-13-11 (id 95)))
+				(p-underscore @13-10-13-11 (id 108)))
 			(e-empty_record @13-13-13-15))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "outer") (type "*"))
-		(def (name "main!") (type "*")))
+		(d_assign (name "outer") (def_var 106) (type "a -> a"))
+		(d_assign (name "main!") (def_var 112) (type "* ? {}")))
 	(expressions
-		(expr @5-9-8-12 (type "*"))
-		(expr @13-9-13-15 (type "*"))))
+		(expr @5-9-11-2 (type "a -> a"))
+		(expr @13-9-13-15 (type "* ? {}"))))
 ~~~

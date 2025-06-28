@@ -47,7 +47,7 @@ LowerIdent(2:1-2:2),CloseRound(2:2-2:3),CloseStringInterpolation(2:3-2:4),String
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-string @1-1-2-45 (id 81)
+(e-string @1-1-2-45 (id 82)
 	(e-literal @1-2-1-24 (string "This is a string with "))
 	(e-call @1-26-2-3
 		(e-runtime-error (tag "ident_not_in_scope"))
@@ -57,5 +57,5 @@ LowerIdent(2:1-2:2),CloseRound(2:2-2:3),CloseStringInterpolation(2:3-2:4),String
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 81) (type "Str"))
+(expr (id 82) (type "Str"))
 ~~~

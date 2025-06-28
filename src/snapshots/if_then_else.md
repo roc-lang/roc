@@ -72,7 +72,7 @@ foo = if true A
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "foo") (type "*")))
+		(d_assign (name "foo") (def_var 84) (type "*")))
 	(expressions
 		(expr @3-7-7-6 (type "*"))))
 ~~~

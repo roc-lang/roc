@@ -92,6 +92,32 @@ Only definitions, type annotations, and imports are allowed at the top level.
 The statement **expr** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**crash_and_ellipsis_test.md:9:1:9:10:**
+```roc
+testCrash = |_| crash "This is a crash message"
+```
+
+It is of type:
+    _U64 -> U64_
+
+But you are trying to use it as:
+    _U64 ? Error_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**crash_and_ellipsis_test.md:13:1:13:16:**
+```roc
+testCrashSimple = |_| crash "oops"
+```
+
+It is of type:
+    _U64 -> U64_
+
+But you are trying to use it as:
+    _U64 -> U64U64 ? Error_
+
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),Newline(1:1-1:1),
@@ -209,73 +235,73 @@ result3 = testCrashSimple(42)
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 85)
+	(d-let (id 87)
 		(p-assign @5-1-5-13 (ident "testEllipsis") (id 75))
-		(e-lambda @5-16-5-23 (id 79)
+		(e-lambda @5-16-5-23 (id 80)
 			(args
 				(p-underscore @5-17-5-18 (id 76)))
 			(e-runtime-error (tag "not_implemented")))
-		(annotation @5-1-5-13 (signature 83) (id 84)
+		(annotation @5-1-5-13 (signature 85) (id 86)
 			(declared-type
 				(ty-fn @4-16-4-26 (effectful false)
 					(ty @4-16-4-19 (name "U64"))
 					(ty @4-23-4-26 (name "U64"))))))
-	(d-let (id 99)
-		(p-assign @9-1-9-10 (ident "testCrash") (id 89))
-		(e-lambda @9-13-9-24 (id 93)
+	(d-let (id 103)
+		(p-assign @9-1-9-10 (ident "testCrash") (id 91))
+		(e-lambda @9-13-9-24 (id 96)
 			(args
-				(p-underscore @9-14-9-15 (id 90)))
+				(p-underscore @9-14-9-15 (id 92)))
 			(e-runtime-error (tag "lambda_body_not_canonicalized")))
-		(annotation @9-1-9-10 (signature 97) (id 98)
+		(annotation @9-1-9-10 (signature 101) (id 102)
 			(declared-type
 				(ty-fn @8-13-8-23 (effectful false)
 					(ty @8-13-8-16 (name "U64"))
 					(ty @8-20-8-23 (name "U64"))))))
-	(d-let (id 114)
-		(p-assign @13-1-13-16 (ident "testCrashSimple") (id 104))
-		(e-lambda @13-19-13-30 (id 108)
+	(d-let (id 120)
+		(p-assign @13-1-13-16 (ident "testCrashSimple") (id 108))
+		(e-lambda @13-19-13-30 (id 113)
 			(args
-				(p-underscore @13-20-13-21 (id 105)))
+				(p-underscore @13-20-13-21 (id 109)))
 			(e-runtime-error (tag "lambda_body_not_canonicalized")))
-		(annotation @13-1-13-16 (signature 112) (id 113)
+		(annotation @13-1-13-16 (signature 118) (id 119)
 			(declared-type
 				(ty-fn @12-19-12-29 (effectful false)
 					(ty @12-19-12-22 (name "U64"))
 					(ty @12-26-12-29 (name "U64"))))))
-	(d-let (id 121)
-		(p-assign @15-1-15-6 (ident "main!") (id 116))
-		(e-lambda @15-9-16-12 (id 120)
-			(args
-				(p-underscore @15-10-15-11 (id 117)))
-			(e-runtime-error (tag "ident_not_in_scope"))))
 	(d-let (id 128)
-		(p-assign @17-5-17-12 (ident "result2") (id 124))
-		(e-call @17-15-17-28 (id 127)
+		(p-assign @15-1-15-6 (ident "main!") (id 122))
+		(e-lambda @15-9-16-12 (id 127)
+			(args
+				(p-underscore @15-10-15-11 (id 123)))
+			(e-runtime-error (tag "ident_not_in_scope"))))
+	(d-let (id 136)
+		(p-assign @17-5-17-12 (ident "result2") (id 131))
+		(e-call @17-15-17-28 (id 135)
 			(e-lookup-local @17-15-17-24
-				(pattern (id 89)))
+				(pattern (id 91)))
 			(e-int @17-25-17-27 (value "42"))))
-	(d-let (id 133)
-		(p-assign @18-5-18-12 (ident "result3") (id 129))
-		(e-call @18-15-18-34 (id 132)
+	(d-let (id 142)
+		(p-assign @18-5-18-12 (ident "result3") (id 137))
+		(e-call @18-15-18-34 (id 141)
 			(e-lookup-local @18-15-18-30
-				(pattern (id 104)))
+				(pattern (id 108)))
 			(e-int @18-31-18-33 (value "42")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "testEllipsis") (type "*"))
-		(def (name "testCrash") (type "*"))
-		(def (name "testCrashSimple") (type "*"))
-		(def (name "main!") (type "*"))
-		(def (name "result2") (type "*"))
-		(def (name "result3") (type "*")))
+		(d_assign (name "testEllipsis") (def_var 87) (type "U64 -> U64"))
+		(d_assign (name "testCrash") (def_var 103) (type "Error"))
+		(d_assign (name "testCrashSimple") (def_var 120) (type "Error"))
+		(d_assign (name "main!") (def_var 128) (type "* ? Error"))
+		(d_assign (name "result2") (def_var 136) (type "*"))
+		(d_assign (name "result3") (def_var 142) (type "*")))
 	(expressions
-		(expr @5-16-5-23 (type "*"))
-		(expr @9-13-9-24 (type "*"))
-		(expr @13-19-13-30 (type "*"))
-		(expr @15-9-16-12 (type "*"))
+		(expr @5-16-5-23 (type "U64 -> U64"))
+		(expr @9-13-9-24 (type "Error"))
+		(expr @13-19-13-30 (type "Error"))
+		(expr @15-9-16-12 (type "* ? Error"))
 		(expr @17-15-17-28 (type "*"))
 		(expr @18-15-18-34 (type "*"))))
 ~~~

@@ -81,7 +81,7 @@ foo =
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "foo") (type "Str")))
+		(d_assign (name "foo") (def_var 76) (type "Str")))
 	(expressions
 		(expr @5-5-5-35 (type "Str"))))
 ~~~

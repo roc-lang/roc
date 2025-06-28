@@ -83,9 +83,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "a") (type "F32"))
-		(def (name "b") (type "F64"))
-		(def (name "c") (type "Dec")))
+		(d_assign (name "a") (def_var 78) (type "F32"))
+		(d_assign (name "b") (def_var 85) (type "F64"))
+		(d_assign (name "c") (def_var 92) (type "Dec")))
 	(expressions
 		(expr @4-5-4-9 (type "F32"))
 		(expr @7-5-7-12 (type "F64"))

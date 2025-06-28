@@ -40,7 +40,7 @@ import json.Json[foo, BAR]
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-import @3-1-3-17 (module "json.Json") (id 72)
+	(s-import @3-1-3-17 (module "json.Json") (qualifier "json") (id 72)
 		(exposes)))
 ~~~
 # TYPES

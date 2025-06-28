@@ -45,9 +45,9 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-let @1-1-1-109 (id 91)
+	(s-let @1-1-1-109 (id 92)
 		(p-assign @1-1-1-11 (ident "formatUser") (id 72))
-		(e-lambda @1-14-1-109 (id 90)
+		(e-lambda @1-14-1-109 (id 91)
 			(args
 				(p-record-destructure @1-15-1-35 (id 79)
 					(destructs

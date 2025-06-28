@@ -52,7 +52,7 @@ Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop @1-1-1-51 (op "or") (id 100)
+(e-binop @1-1-1-51 (op "or") (id 101)
 	(e-binop @1-1-1-43 (op "or")
 		(e-binop @1-1-1-20 (op "gt")
 			(e-binop @1-1-1-14 (op "null_coalesce")
@@ -82,5 +82,5 @@ Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 100) (type "*"))
+(expr (id 101) (type "*"))
 ~~~

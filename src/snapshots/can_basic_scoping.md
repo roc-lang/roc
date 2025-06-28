@@ -122,9 +122,9 @@ outerFunc = |_| {
 	(d-let (id 77)
 		(p-assign @5-1-5-2 (ident "y") (id 75))
 		(e-int @5-5-5-7 (value "10") (id 76)))
-	(d-let (id 98)
+	(d-let (id 99)
 		(p-assign @8-1-8-10 (ident "outerFunc") (id 78))
-		(e-lambda @8-13-16-2 (id 97)
+		(e-lambda @8-13-16-2 (id 98)
 			(args
 				(p-underscore @8-14-8-15 (id 79)))
 			(e-block @8-17-16-2
@@ -152,11 +152,11 @@ outerFunc = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "x") (type "Num(*)"))
-		(def (name "y") (type "Num(*)"))
-		(def (name "outerFunc") (type "*")))
+		(d_assign (name "x") (def_var 74) (type "Num(*)"))
+		(d_assign (name "y") (def_var 77) (type "Num(*)"))
+		(d_assign (name "outerFunc") (def_var 99) (type "* ? *")))
 	(expressions
 		(expr @4-5-4-6 (type "Num(*)"))
 		(expr @5-5-5-7 (type "Num(*)"))
-		(expr @8-13-16-2 (type "*"))))
+		(expr @8-13-16-2 (type "* ? *"))))
 ~~~

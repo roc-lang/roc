@@ -43,7 +43,7 @@ fn parseAndCanonicalizeFrac(allocator: std.mem.Allocator, source: []const u8) !s
             .parse_ast = parse_ast,
             .cir = cir,
             .can = can,
-            .expr_idx = cir.store.addExpr(.{ .runtime_error = .{
+            .expr_idx = cir.store.addExpr(CIR.Expr{ .e_runtime_error = .{
                 .diagnostic = diagnostic_idx,
                 .region = base.Region.zero(),
             } }),
@@ -76,7 +76,7 @@ test "fractional literal - basic decimal" {
 
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
-        .dec_small => |dec| {
+        .e_dec_small => |dec| {
             try testing.expectEqual(dec.numerator, 314);
             try testing.expectEqual(dec.denominator_power_of_ten, 2);
             const expr_as_type_var: types.Var = @enumFromInt(@intFromEnum(result.expr_idx));
@@ -110,7 +110,7 @@ test "fractional literal - scientific notation small" {
 
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
-        .frac_dec => |frac| {
+        .e_frac_dec => |frac| {
             const expr_as_type_var: types.Var = @enumFromInt(@intFromEnum(result.expr_idx));
             const resolved = result.cir.env.types.resolveVar(expr_as_type_var);
             switch (resolved.desc.content) {
@@ -163,7 +163,7 @@ test "fractional literal - scientific notation large (near f64 max)" {
 
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
-        .frac_f64 => |frac| {
+        .e_frac_f64 => |frac| {
             const expr_as_type_var: types.Var = @enumFromInt(@intFromEnum(result.expr_idx));
             const resolved = result.cir.env.types.resolveVar(expr_as_type_var);
             switch (resolved.desc.content) {
@@ -216,7 +216,7 @@ test "fractional literal - scientific notation at f32 boundary" {
 
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
-        .frac_f64 => |frac| {
+        .e_frac_f64 => |frac| {
             try testing.expect(true); // Infinity doesn't fit in Dec
             try testing.expect(true); // Above f32 max
             try testing.expectEqual(frac.value, 3.5e38);
@@ -233,20 +233,20 @@ test "fractional literal - negative zero" {
 
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
-        .dec_small => |small| {
+        .e_dec_small => |small| {
             // dec_small doesn't preserve sign for -0.0
             try testing.expectEqual(small.numerator, 0);
             try testing.expectEqual(small.denominator_power_of_ten, 0);
             try testing.expect(true); // -0.0 fits in Dec
             try testing.expect(true); // -0.0 fits in F32
         },
-        .frac_dec => |frac| {
+        .e_frac_dec => |frac| {
             try testing.expect(true); // -0.0 fits in Dec and F32
             const f64_val = frac.value.toF64();
             // RocDec may not preserve the sign bit for -0.0, so just check it's zero
             try testing.expectEqual(@abs(f64_val), 0.0);
         },
-        .frac_f64 => |frac| {
+        .e_frac_f64 => |frac| {
             // Also acceptable if it's parsed as f64
             try testing.expectEqual(frac.value, -0.0);
             try testing.expect(std.math.signbit(frac.value));
@@ -263,7 +263,7 @@ test "fractional literal - positive zero" {
 
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
-        .dec_small => |small| {
+        .e_dec_small => |small| {
             try testing.expectEqual(small.numerator, 0);
             try testing.expectEqual(small.denominator_power_of_ten, 1);
             try testing.expect(true); // 0.5 fits in F32
@@ -282,7 +282,7 @@ test "fractional literal - very small scientific notation" {
 
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
-        .frac_f64 => |frac| {
+        .e_frac_f64 => |frac| {
             try testing.expect(true); // This test is for minimum f64 value
             // 1e-40 is within f32's subnormal range, so it should fit (ignoring precision)
             try testing.expect(true); // 1e-40 fits in F32 subnormal range
@@ -344,7 +344,7 @@ test "fractional literal - scientific notation with capital E" {
 
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
-        .frac_dec => |frac| {
+        .e_frac_dec => |frac| {
             try testing.expect(true); // 1e7 fits in Dec
             try testing.expect(true); // 2.5e10 is within f32 range
             try testing.expectApproxEqAbs(@as(f64, @floatFromInt(frac.value.num)) / std.math.pow(f64, 10, 18), 2.5e10, 1e-5);
@@ -361,7 +361,7 @@ test "fractional literal - negative scientific notation" {
 
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
-        .frac_dec => |frac| {
+        .e_frac_dec => |frac| {
             try testing.expect(true); // 1e-7 fits in Dec
             // -1.5e-5 may not round-trip perfectly through f32
             // Let's just check the value is correct
@@ -405,7 +405,7 @@ test "negative zero forced to f64 parsing" {
 
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
-        .dec_small => |small| {
+        .e_dec_small => |small| {
             try testing.expectEqual(small.numerator, 0);
             try testing.expectEqual(small.denominator_power_of_ten, 0);
         },
@@ -439,7 +439,7 @@ test "small dec - basic positive decimal" {
 
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
-        .dec_small => |dec| {
+        .e_dec_small => |dec| {
             try testing.expectEqual(dec.numerator, 314);
             try testing.expectEqual(dec.denominator_power_of_ten, 2);
             try testing.expect(true); // 1.1 fits in Dec
@@ -456,11 +456,11 @@ test "negative zero preservation - uses f64" {
 
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
-        .dec_small => |small| {
+        .e_dec_small => |small| {
             try testing.expectEqual(small.numerator, 0);
             // Sign is lost with dec_small
         },
-        .frac_dec => |frac| {
+        .e_frac_dec => |frac| {
             // If it went through Dec path, check if sign is preserved
             if (std.mem.eql(u8, "-0.0", "-0.0")) {
                 const f64_val = @as(f64, @floatFromInt(frac.value.num)) / std.math.pow(f64, 10, 18);
@@ -481,7 +481,7 @@ test "negative zero with scientific notation - preserves sign via f64" {
 
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
-        .dec_small => |small| {
+        .e_dec_small => |small| {
             try testing.expectEqual(small.numerator, 0);
             try testing.expectEqual(small.denominator_power_of_ten, 0);
         },
@@ -497,7 +497,7 @@ test "small dec - positive zero" {
 
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
-        .dec_small => |dec| {
+        .e_dec_small => |dec| {
             try testing.expectEqual(dec.numerator, 0);
             try testing.expectEqual(dec.denominator_power_of_ten, 1);
 
@@ -516,7 +516,7 @@ test "small dec - precision preservation for 0.1" {
 
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
-        .dec_small => |dec| {
+        .e_dec_small => |dec| {
             try testing.expectEqual(dec.numerator, 1);
             try testing.expectEqual(dec.denominator_power_of_ten, 1);
         },
@@ -532,7 +532,7 @@ test "small dec - trailing zeros" {
 
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
-        .dec_small => |dec| {
+        .e_dec_small => |dec| {
             try testing.expectEqual(dec.numerator, 1100);
             try testing.expectEqual(dec.denominator_power_of_ten, 3);
         },
@@ -548,7 +548,7 @@ test "small dec - negative number" {
 
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
-        .dec_small => |dec| {
+        .e_dec_small => |dec| {
             try testing.expectEqual(dec.numerator, -525);
             try testing.expectEqual(dec.denominator_power_of_ten, 2);
         },
@@ -564,7 +564,7 @@ test "small dec - max i8 value" {
 
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
-        .dec_small => |dec| {
+        .e_dec_small => |dec| {
             try testing.expectEqual(dec.numerator, 12799);
             try testing.expectEqual(dec.denominator_power_of_ten, 2);
         },
@@ -580,7 +580,7 @@ test "small dec - min i8 value" {
 
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
-        .dec_small => |dec| {
+        .e_dec_small => |dec| {
             try testing.expectEqual(dec.numerator, -1280);
             try testing.expectEqual(dec.denominator_power_of_ten, 1);
         },
@@ -596,7 +596,7 @@ test "small dec - 128.0 now fits with new representation" {
 
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
-        .dec_small => |dec| {
+        .e_dec_small => |dec| {
             // With numerator/power representation, 128.0 = 1280/10^1 fits in i16
             try testing.expectEqual(dec.numerator, 1280);
             try testing.expectEqual(dec.denominator_power_of_ten, 1);
@@ -613,11 +613,11 @@ test "small dec - exceeds i16 range falls back to Dec" {
 
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
-        .frac_dec => {
+        .e_frac_dec => {
             // Should fall back to Dec because 327680 > 32767 (max i16)
             try testing.expect(true); // 3.141 fits in Dec
         },
-        .dec_small => {
+        .e_dec_small => {
             try testing.expect(false); // Should NOT be dec_small
         },
         else => {
@@ -632,7 +632,7 @@ test "small dec - too many fractional digits falls back to Dec" {
 
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
-        .dec_small => |dec| {
+        .e_dec_small => |dec| {
             try testing.expectEqual(dec.numerator, 1234);
             try testing.expectEqual(dec.denominator_power_of_ten, 3);
         },
@@ -648,7 +648,7 @@ test "small dec - complex example 0.001" {
 
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
-        .dec_small => |dec| {
+        .e_dec_small => |dec| {
             try testing.expectEqual(dec.numerator, 1);
             try testing.expectEqual(dec.denominator_power_of_ten, 3);
         },
@@ -664,7 +664,7 @@ test "small dec - negative example -0.05" {
 
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
-        .dec_small => |dec| {
+        .e_dec_small => |dec| {
             // -0.05 = -5 / 10^2
             try testing.expectEqual(dec.numerator, -5);
             try testing.expectEqual(dec.denominator_power_of_ten, 2);
@@ -682,7 +682,7 @@ test "negative zero with scientific notation preserves sign" {
 
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
-        .dec_small => |small| {
+        .e_dec_small => |small| {
             // With scientific notation, now uses dec_small and loses sign
             try testing.expectEqual(small.numerator, 0);
             try testing.expectEqual(small.denominator_power_of_ten, 0);
@@ -699,7 +699,7 @@ test "fractional literal - simple 1.0 uses small dec" {
 
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
-        .dec_small => |dec| {
+        .e_dec_small => |dec| {
             try testing.expectEqual(dec.numerator, 10);
             try testing.expectEqual(dec.denominator_power_of_ten, 1);
         },

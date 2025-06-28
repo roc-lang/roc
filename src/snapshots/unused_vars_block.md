@@ -136,9 +136,9 @@ main! = |_| {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 97)
+	(d-let (id 98)
 		(p-assign @3-1-3-6 (ident "main!") (id 72))
-		(e-lambda @3-9-19-2 (id 96)
+		(e-lambda @3-9-19-2 (id 97)
 			(args
 				(p-underscore @3-10-3-11 (id 73)))
 			(e-block @3-13-19-2
@@ -168,7 +168,7 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "main!") (type "*")))
+		(d_assign (name "main!") (def_var 98) (type "* ? *")))
 	(expressions
-		(expr @3-9-19-2 (type "*"))))
+		(expr @3-9-19-2 (type "* ? *"))))
 ~~~

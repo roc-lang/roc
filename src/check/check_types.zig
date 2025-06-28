@@ -17,6 +17,7 @@ const Region = base.Region;
 const ModuleWork = base.ModuleWork;
 
 const Var = types_mod.Var;
+const exitOnOom = collections.utils.exitOnOom;
 
 const Self = @This();
 
@@ -74,19 +75,24 @@ pub fn unify(self: *Self, a: Var, b: Var) void {
 pub fn checkDefs(self: *Self) void {
     const defs_slice = self.can_ir.store.sliceDefs(self.can_ir.all_defs);
     for (defs_slice) |def_idx| {
-        const def = self.can_ir.store.getDef(def_idx);
-        // TODO: Check patterns
-        self.checkExpr(def.expr);
+        self.checkDef(def_idx);
+    }
+}
 
-        // If there's a type annotation, unify the expression with the annotation's signature
-        if (def.annotation) |anno_idx| {
-            const annotation = self.can_ir.store.getAnnotation(anno_idx);
+/// Check the types for a single definition
+fn checkDef(self: *Self, def_idx: CIR.Def.Idx) void {
+    const def = self.can_ir.store.getDef(def_idx);
+    // TODO: Check patterns
+    self.checkExpr(def.expr);
 
-            self.unify(@enumFromInt(@intFromEnum(def.expr)), annotation.signature);
-            self.unify(@enumFromInt(@intFromEnum(def_idx)), annotation.signature);
-        } else {
-            self.unify(@enumFromInt(@intFromEnum(def_idx)), @enumFromInt(@intFromEnum(def.expr)));
-        }
+    // If there's a type annotation, unify the expression with the annotation's signature
+    if (def.annotation) |anno_idx| {
+        const annotation = self.can_ir.store.getAnnotation(anno_idx);
+
+        self.unify(@enumFromInt(@intFromEnum(def.expr)), annotation.signature);
+        self.unify(@enumFromInt(@intFromEnum(def_idx)), annotation.signature);
+    } else {
+        self.unify(@enumFromInt(@intFromEnum(def_idx)), @enumFromInt(@intFromEnum(def.expr)));
     }
 }
 
@@ -252,15 +258,15 @@ test "verify -128 produces 7 bits needed" {
 pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
     const expr = self.can_ir.store.getExpr(expr_idx);
     switch (expr) {
-        .num => |_| {},
-        .int => |_| {},
-        .frac_f64 => |_| {},
-        .frac_dec => |_| {},
-        .dec_small => |_| {},
-        .str_segment => |_| {},
-        .str => |_| {},
-        .lookup => |_| {},
-        .list => |list| {
+        .e_num => |_| {},
+        .e_int => |_| {},
+        .e_frac_f64 => |_| {},
+        .e_frac_dec => |_| {},
+        .e_dec_small => |_| {},
+        .e_str_segment => |_| {},
+        .e_str => |_| {},
+        .e_lookup => |_| {},
+        .e_list => |list| {
             const elem_var = list.elem_var;
             for (self.can_ir.store.exprSlice(list.elems)) |single_elem_expr_idx| {
                 self.checkExpr(single_elem_expr_idx);
@@ -270,11 +276,49 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
                 );
             }
         },
-        .when => |_| {},
-        .@"if" => |_| {},
-        .call => |_| {},
+        .e_when => |_| {},
+        .e_if => |_| {},
+        .e_call => |call| {
+            // Get all expressions - first is function, rest are arguments
+            const all_exprs = self.can_ir.store.sliceExpr(call.args);
 
-        .record => |e| {
+            if (all_exprs.len == 0) return; // No function to call
+
+            // First expression is the function being called
+            const func_expr_idx = all_exprs[0];
+            self.checkExpr(func_expr_idx);
+
+            // Rest are arguments
+            const args = all_exprs[1..];
+            for (args) |arg_expr_idx| {
+                self.checkExpr(arg_expr_idx);
+            }
+
+            // For function calls, we need to create a proper function type expectation
+            // But we need to be careful about runtime errors in the function position
+            const func_expr = self.can_ir.store.getExpr(func_expr_idx);
+            if (func_expr != .e_runtime_error) {
+                // Create type variables for proper function type checking
+                const call_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
+                const func_var = @as(Var, @enumFromInt(@intFromEnum(func_expr_idx)));
+                const return_var = call_var;
+
+                // Create argument type variables
+                var arg_vars = std.ArrayList(Var).init(self.gpa);
+                defer arg_vars.deinit();
+
+                for (args) |arg_expr_idx| {
+                    const arg_var = @as(Var, @enumFromInt(@intFromEnum(arg_expr_idx)));
+                    arg_vars.append(arg_var) catch |err| exitOnOom(err);
+                }
+
+                // Use the pre-created effect variable from canonicalization instead of creating temporary ones
+                const func_content = self.types.mkFunc(arg_vars.items, return_var, call.effect_var);
+                _ = self.types.setVarContent(func_var, func_content);
+            }
+        },
+
+        .e_record => |e| {
 
             // ## RECORD TYPE CHECKING IMPLEMENTATION
             //
@@ -325,26 +369,74 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
                 // This typically happens when canonicalization didn't set the record structure properly
             }
         },
-        .empty_record => |_| {},
-        .record_access => |_| {},
-        .tag => |_| {},
-        .zero_argument_tag => |_| {},
-        .binop => |_| {},
-        .block => |_| {},
-        .lambda => |_| {},
-        .tuple => |tuple| {
+        .e_empty_record => |_| {},
+        .e_record_access => |_| {},
+        .e_tag => |_| {},
+        .e_zero_argument_tag => |_| {},
+        .e_binop => |_| {},
+        .e_block => |block| {
+            // Check all statements in the block (safely)
+            const statements = self.can_ir.store.sliceStatements(block.stmts);
+            for (statements) |stmt_idx| {
+                const stmt = self.can_ir.store.getStatement(stmt_idx);
+                switch (stmt) {
+                    .s_decl => |decl_stmt| {
+                        // Just check the expression, don't try to unify with pattern
+                        self.checkExpr(decl_stmt.expr);
+                    },
+                    .s_reassign => |reassign| {
+                        self.checkExpr(reassign.expr);
+                    },
+                    .s_expr => |expr_stmt| {
+                        self.checkExpr(expr_stmt.expr);
+                    },
+                    else => {
+                        // Other statement types don't need expression checking
+                    },
+                }
+            }
+
+            // Check the final expression
+            self.checkExpr(block.final_expr);
+        },
+        .e_lambda => |lambda| {
+            // Check the lambda body
+            self.checkExpr(lambda.body);
+
+            // Improved lambda type inference: handle actual arguments
+            const lambda_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
+
+            // Get the actual lambda arguments
+            const arg_patterns = self.can_ir.store.slicePatterns(lambda.args);
+
+            // Create type variables for each argument pattern
+            var arg_vars = std.ArrayList(Var).init(self.gpa);
+            defer arg_vars.deinit();
+
+            for (arg_patterns) |pattern_idx| {
+                const pattern_var = @as(Var, @enumFromInt(@intFromEnum(pattern_idx)));
+                arg_vars.append(pattern_var) catch |err| exitOnOom(err);
+            }
+
+            // Create return type variable from lambda body
+            const return_var = @as(Var, @enumFromInt(@intFromEnum(lambda.body)));
+
+            // Create function type using pre-created effect variable from canonicalization
+            const func_content = self.types.mkFunc(arg_vars.items, return_var, lambda.effect_var);
+            _ = self.types.setVarContent(lambda_var, func_content);
+        },
+        .e_tuple => |tuple| {
             for (self.can_ir.store.exprSlice(tuple.elems)) |single_elem_expr_idx| {
+                // Check tuple elements
                 self.checkExpr(single_elem_expr_idx);
             }
         },
-        .dot_access => |_| {
-            // TODO: Implement type checking for dot access
-            // This will need to:
-            // 1. Check the receiver type
-            // 2. Determine if it's record field access or static dispatch
-            // 3. Validate the field/method exists and has correct type
-            // 4. Type check any arguments if it's a method call
+        .e_dot_access => |dot_access| {
+            // Check the receiver expression
+            self.checkExpr(dot_access.receiver);
+            // TODO: Implement proper field type checking
+            // For now, just check the receiver to avoid crashes
         },
-        .runtime_error => |_| {},
+        .e_runtime_error => |_| {},
     }
 }

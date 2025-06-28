@@ -79,9 +79,9 @@ main! = |_| processList(["one", "two", "three"])
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 86)
+	(d-let (id 88)
 		(p-assign @4-1-4-12 (ident "processList") (id 76))
-		(e-lambda @4-15-6-6 (id 80)
+		(e-lambda @4-15-6-6 (id 81)
 			(args
 				(p-assign @4-16-4-20 (ident "list") (id 77)))
 			(e-dot-access @4-22-6-6 (field "len")
@@ -89,21 +89,21 @@ main! = |_| processList(["one", "two", "three"])
 					(e-lookup-local @4-22-4-26
 						(pattern (id 77))))
 				(args)))
-		(annotation @4-1-4-12 (signature 84) (id 85)
+		(annotation @4-1-4-12 (signature 86) (id 87)
 			(declared-type
 				(ty-fn @3-15-3-31 (effectful false)
 					(ty-apply @3-15-3-24 (symbol "List")
 						(ty @3-20-3-23 (name "Str")))
 					(ty @3-28-3-31 (name "U64"))))))
-	(d-let (id 100)
-		(p-assign @6-1-6-6 (ident "main!") (id 87))
-		(e-lambda @6-9-6-47 (id 99)
+	(d-let (id 104)
+		(p-assign @6-1-6-6 (ident "main!") (id 89))
+		(e-lambda @6-9-6-47 (id 103)
 			(args
-				(p-underscore @6-10-6-11 (id 88)))
+				(p-underscore @6-10-6-11 (id 90)))
 			(e-call @6-13-6-47
 				(e-lookup-local @6-13-6-24
 					(pattern (id 76)))
-				(e-list @6-25-6-46 (elem-var 96)
+				(e-list @6-25-6-46 (elem-var 98)
 					(elems
 						(e-string @6-26-6-31
 							(e-literal @6-27-6-30 (string "one")))
@@ -116,9 +116,9 @@ main! = |_| processList(["one", "two", "three"])
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "processList") (type "*"))
-		(def (name "main!") (type "*")))
+		(d_assign (name "processList") (def_var 88) (type "List -> U64"))
+		(d_assign (name "main!") (def_var 104) (type "* ? *")))
 	(expressions
-		(expr @4-15-6-6 (type "*"))
-		(expr @6-9-6-47 (type "*"))))
+		(expr @4-15-6-6 (type "List -> U64"))
+		(expr @6-9-6-47 (type "* ? *"))))
 ~~~

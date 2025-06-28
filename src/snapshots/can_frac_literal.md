@@ -58,9 +58,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "x") (type "Frac(*)"))
-		(def (name "y") (type "Frac(*)"))
-		(def (name "z") (type "Frac(*)")))
+		(d_assign (name "x") (def_var 74) (type "Frac(*)"))
+		(d_assign (name "y") (def_var 77) (type "Frac(*)"))
+		(d_assign (name "z") (def_var 80) (type "Frac(*)")))
 	(expressions
 		(expr @3-5-3-9 (type "Frac(*)"))
 		(expr @4-5-4-12 (type "Frac(*)"))

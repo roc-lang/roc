@@ -43,14 +43,14 @@ NO CHANGE
 		(p-assign @5-1-5-5 (ident "main") (id 73))
 		(e-lookup-external (id 75)
 			(ext-decl @5-8-5-17 (qualified "json.Json.utf8") (module "json.Json") (local "utf8") (kind "value") (type-var 74))))
-	(s-import @3-1-3-17 (module "json.Json") (id 72)
+	(s-import @3-1-3-17 (module "json.Json") (qualifier "json") (id 72)
 		(exposes)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "main") (type "*")))
+		(d_assign (name "main") (def_var 76) (type "*")))
 	(expressions
 		(expr @5-8-5-17 (type "*"))))
 ~~~

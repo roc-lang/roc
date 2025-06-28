@@ -133,6 +133,19 @@ pub fn peekN(self: *Parser, n: u32) Token.Tag {
     return tags[next];
 }
 
+/// Peek at the current token, skipping any leading newlines
+pub fn peekSkippingNewlines(self: *Parser) Token.Tag {
+    var pos = self.pos;
+    const tags = self.tok_buf.tokens.items(.tag);
+    while (pos < self.tok_buf.tokens.len and tags[pos] == .Newline) {
+        pos += 1;
+    }
+    if (pos >= self.tok_buf.tokens.len) {
+        return .EndOfFile;
+    }
+    return tags[pos];
+}
+
 /// add a diagnostic error
 pub fn pushDiagnostic(self: *Parser, tag: AST.Diagnostic.Tag, region: AST.TokenizedRegion) void {
     self.diagnostics.append(self.gpa, .{
@@ -1518,21 +1531,140 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
         },
         .OpenCurly => {
             self.advance();
-            // Is this a Record or a Block?
-            if (self.peek() == .CloseCurly or (self.peek() == .LowerIdent and (self.peekNext() == .OpColon or self.peekNext() == .Comma))) {
-                // This is the best guesstimation of this being a Record for now.  I believe we have to have a NoSpaceOpColon
-                // for this to be full-proof without backtracking.
+
+            if (self.peekSkippingNewlines() == .CloseCurly) {
+                // Empty - treat as empty record
                 const scratch_top = self.store.scratchRecordFieldTop();
-                const end = self.parseCollectionSpan(AST.RecordField.Idx, .CloseCurly, NodeStore.addScratchRecordField, parseRecordField) catch {
+                const record_end = self.parseCollectionSpan(AST.RecordField.Idx, .CloseCurly, NodeStore.addScratchRecordField, parseRecordField) catch {
                     self.store.clearScratchRecordFieldsFrom(scratch_top);
                     return self.pushMalformed(AST.Expr.Idx, .expected_expr_close_curly_or_comma, self.pos);
                 };
                 const fields = self.store.recordFieldSpanFrom(scratch_top);
                 expr = self.store.addExpr(.{ .record = .{
                     .fields = fields,
-                    .region = .{ .start = start, .end = end },
+                    .region = .{ .start = start, .end = record_end },
                 } });
+            } else if (self.peekSkippingNewlines() == .LowerIdent and self.peekNext() == .Comma) {
+                // Definitely a record - has comma-separated fields
+                const scratch_top = self.store.scratchRecordFieldTop();
+                const record_end = self.parseCollectionSpan(AST.RecordField.Idx, .CloseCurly, NodeStore.addScratchRecordField, parseRecordField) catch {
+                    self.store.clearScratchRecordFieldsFrom(scratch_top);
+                    return self.pushMalformed(AST.Expr.Idx, .expected_expr_close_curly_or_comma, self.pos);
+                };
+                const fields = self.store.recordFieldSpanFrom(scratch_top);
+                expr = self.store.addExpr(.{ .record = .{
+                    .fields = fields,
+                    .region = .{ .start = start, .end = record_end },
+                } });
+            } else if (self.peekSkippingNewlines() == .LowerIdent and self.peekNext() == .OpColon) {
+                // Ambiguous case: could be record field or type annotation
+                // Use bounded lookahead to determine the context
+                var is_block = false;
+
+                // Save current position
+                const saved_pos = self.pos;
+
+                // Advance past LowerIdent : to see what follows
+                var lookahead_pos = self.pos + 2;
+
+                if (lookahead_pos < self.tok_buf.tokens.len) {
+                    var depth: u32 = 0;
+
+                    // Look ahead with proper bounds checking
+                    while (lookahead_pos < self.tok_buf.tokens.len) {
+                        const tok = self.tok_buf.tokens.items(.tag)[lookahead_pos];
+
+                        switch (tok) {
+                            .OpenRound, .NoSpaceOpenRound, .OpenSquare, .OpenCurly => depth += 1,
+                            .CloseRound, .CloseSquare, .CloseCurly => {
+                                if (depth == 0) break;
+                                depth -= 1;
+                            },
+                            .Newline => {
+                                // Skip newlines at depth 0 and check what follows
+                                if (depth == 0) {
+                                    var next_pos = lookahead_pos + 1;
+                                    // Skip multiple newlines
+                                    while (next_pos < self.tok_buf.tokens.len and
+                                        self.tok_buf.tokens.items(.tag)[next_pos] == .Newline)
+                                    {
+                                        next_pos += 1;
+                                    }
+                                    if (next_pos < self.tok_buf.tokens.len) {
+                                        const next_tok = self.tok_buf.tokens.items(.tag)[next_pos];
+                                        // Look for patterns that indicate a block vs record
+                                        if (next_tok == .LowerIdent) {
+                                            // Look ahead further to see if this is an assignment (block) or record field
+                                            var check_pos = next_pos + 1;
+                                            while (check_pos < self.tok_buf.tokens.len and
+                                                self.tok_buf.tokens.items(.tag)[check_pos] == .Newline)
+                                            {
+                                                check_pos += 1;
+                                            }
+                                            if (check_pos < self.tok_buf.tokens.len) {
+                                                const after_ident = self.tok_buf.tokens.items(.tag)[check_pos];
+                                                // If we see assignment, it's definitely a block
+                                                if (after_ident == .OpAssign) {
+                                                    is_block = true;
+                                                    break;
+                                                }
+                                                // If we see colon without comma later, it might be a block
+                                                // but for now, be conservative and assume record
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                            .EndOfFile => break,
+                            else => {
+                                // Ignore other tokens
+                            },
+                        }
+                        lookahead_pos += 1;
+
+                        // Limit lookahead to prevent infinite loops
+                        if (lookahead_pos > saved_pos + 100) break;
+                    }
+                }
+
+                // Restore parser position after lookahead
+                self.pos = saved_pos;
+
+                if (is_block) {
+                    // Parse as block
+                    const scratch_top = self.store.scratchStatementTop();
+                    var end = self.pos;
+
+                    while (self.peek() != .EndOfFile) {
+                        const statement = self.parseStmt() orelse break;
+                        self.store.addScratchStatement(statement);
+                        end = self.pos;
+                        if (self.peek() == .CloseCurly) {
+                            self.advance();
+                            break;
+                        }
+                    }
+
+                    const statements = self.store.statementSpanFrom(scratch_top);
+                    expr = self.store.addExpr(.{ .block = .{
+                        .statements = statements,
+                        .region = .{ .start = start, .end = end },
+                    } });
+                } else {
+                    // Parse as record
+                    const scratch_top = self.store.scratchRecordFieldTop();
+                    const record_end = self.parseCollectionSpan(AST.RecordField.Idx, .CloseCurly, NodeStore.addScratchRecordField, parseRecordField) catch {
+                        self.store.clearScratchRecordFieldsFrom(scratch_top);
+                        return self.pushMalformed(AST.Expr.Idx, .expected_expr_close_curly_or_comma, self.pos);
+                    };
+                    const fields = self.store.recordFieldSpanFrom(scratch_top);
+                    expr = self.store.addExpr(.{ .record = .{
+                        .fields = fields,
+                        .region = .{ .start = start, .end = record_end },
+                    } });
+                }
             } else {
+                // Not ambiguous - parse as block
                 const scratch_top = self.store.scratchStatementTop();
                 var end = self.pos;
 
@@ -1547,7 +1679,6 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
                 }
 
                 const statements = self.store.statementSpanFrom(scratch_top);
-
                 expr = self.store.addExpr(.{ .block = .{
                     .statements = statements,
                     .region = .{ .start = start, .end = end },

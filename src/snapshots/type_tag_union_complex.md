@@ -182,35 +182,35 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 124)
+	(d-let (id 126)
 		(p-assign @18-1-18-14 (ident "processResult") (id 114))
-		(e-lambda @18-17-18-38 (id 118)
+		(e-lambda @18-17-18-38 (id 119)
 			(args
 				(p-assign @18-18-18-25 (ident "_result") (id 115)))
 			(e-string @18-27-18-38
 				(e-literal @18-28-18-37 (string "processed"))))
-		(annotation @18-1-18-14 (signature 122) (id 123)
+		(annotation @18-1-18-14 (signature 124) (id 125)
 			(declared-type
 				(ty-fn @17-17-17-30 (effectful false)
 					(ty @17-17-17-23 (name "Result"))
 					(ty @17-27-17-30 (name "Str"))))))
-	(d-let (id 138)
-		(p-assign @22-1-22-15 (ident "handleResponse") (id 128))
-		(e-lambda @22-18-22-39 (id 132)
+	(d-let (id 142)
+		(p-assign @22-1-22-15 (ident "handleResponse") (id 130))
+		(e-lambda @22-18-22-39 (id 135)
 			(args
-				(p-assign @22-19-22-28 (ident "_response") (id 129)))
+				(p-assign @22-19-22-28 (ident "_response") (id 131)))
 			(e-string @22-30-22-39
 				(e-literal @22-31-22-38 (string "handled"))))
-		(annotation @22-1-22-15 (signature 136) (id 137)
+		(annotation @22-1-22-15 (signature 140) (id 141)
 			(declared-type
 				(ty-fn @21-18-21-33 (effectful false)
 					(ty @21-18-21-26 (name "Response"))
 					(ty @21-30-21-33 (name "Str"))))))
-	(d-let (id 143)
-		(p-assign @24-1-24-6 (ident "main!") (id 139))
-		(e-lambda @24-9-24-15 (id 142)
+	(d-let (id 148)
+		(p-assign @24-1-24-6 (ident "main!") (id 143))
+		(e-lambda @24-9-24-15 (id 147)
 			(args
-				(p-underscore @24-10-24-11 (id 140)))
+				(p-underscore @24-10-24-11 (id 144)))
 			(e-empty_record @24-13-24-15)))
 	(s-type-decl @4-1-7-7 (id 77)
 		(ty-header @4-1-4-7 (name "Status"))
@@ -255,11 +255,11 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "processResult") (type "*"))
-		(def (name "handleResponse") (type "*"))
-		(def (name "main!") (type "*")))
+		(d_assign (name "processResult") (def_var 126) (type "Result -> Str"))
+		(d_assign (name "handleResponse") (def_var 142) (type "Response -> Str"))
+		(d_assign (name "main!") (def_var 148) (type "* ? {}")))
 	(expressions
-		(expr @18-17-18-38 (type "*"))
-		(expr @22-18-22-39 (type "*"))
-		(expr @24-9-24-15 (type "*"))))
+		(expr @18-17-18-38 (type "Result -> Str"))
+		(expr @22-18-22-39 (type "Response -> Str"))
+		(expr @24-9-24-15 (type "* ? {}"))))
 ~~~
