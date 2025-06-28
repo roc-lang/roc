@@ -1255,11 +1255,11 @@ pub fn canonicalize_expr(
                 },
             });
 
-            // Insert concrete type variable for tuple
+            // Insert tuple_unbound type for tuple literals
             _ = self.can_ir.setTypeVarAtExpr(
                 expr_idx,
                 Content{ .structure = FlatType{
-                    .tuple = types.Tuple{ .elems = elems_var_range },
+                    .tuple_unbound = types.Tuple{ .elems = elems_var_range },
                 } },
             );
 
