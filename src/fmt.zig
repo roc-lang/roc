@@ -1141,6 +1141,10 @@ const Formatter = struct {
                 try fmt.pushTokenText(i.ident);
                 try fmt.pushAll(".*");
             },
+            .malformed => |m| {
+                region = m.region;
+                // Don't format malformed exposed items - they'll be reported as errors
+            },
         }
 
         return region;

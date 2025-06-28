@@ -403,6 +403,10 @@ fn canonicalize_header_exposes(
                 // TODO -- do we need a Pattern for "exposed_upper_star" identifiers?
                 _ = type_with_constructors;
             },
+            .malformed => |malformed| {
+                // Malformed exposed items are already captured as diagnostics during parsing
+                _ = malformed;
+            },
         }
     }
 }
@@ -628,6 +632,7 @@ fn convertASTExposesToCIR(
                 .lower_ident => |ident| .{ ident.ident, ident.as, false },
                 .upper_ident => |ident| .{ ident.ident, ident.as, false },
                 .upper_ident_star => |star_ident| .{ star_ident.ident, null, true },
+                .malformed => |_| continue, // Skip malformed exposed items
             };
 
             // Resolve the main identifier name

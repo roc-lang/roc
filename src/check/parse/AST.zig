@@ -1358,6 +1358,10 @@ pub const ExposedItem = union(enum) {
         ident: Token.Idx,
         region: TokenizedRegion,
     },
+    malformed: struct {
+        reason: Diagnostic.Tag,
+        region: TokenizedRegion,
+    },
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
@@ -1394,6 +1398,12 @@ pub const ExposedItem = union(enum) {
                 const token = ast.tokens.tokens.get(i.ident);
                 const text = env.idents.getText(token.extra.interned);
                 node.appendStringAttr(env.gpa, "text", text);
+                return node;
+            },
+            .malformed => |m| {
+                var node = SExpr.init(env.gpa, "exposed-malformed");
+                node.appendStringAttr(env.gpa, "reason", @tagName(m.reason));
+                node.appendRegion(env.gpa, ast.calcRegionInfo(m.region, env.line_starts.items));
                 return node;
             },
         }
