@@ -304,6 +304,24 @@ pub const Token = struct {
             };
         }
 
+        pub fn isInterned(tok: Tag) bool {
+            return switch (tok) {
+                .UpperIdent,
+                .LowerIdent,
+                .DotLowerIdent,
+                .DotUpperIdent,
+                .NoSpaceDotLowerIdent,
+                .NoSpaceDotUpperIdent,
+                .NamedUnderscore,
+                .MalformedNamedUnderscoreUnicode,
+                .MalformedNoSpaceDotUnicodeIdent,
+                .MalformedUnicodeIdent,
+                .MalformedDotUnicodeIdent,
+                => true,
+                else => false,
+            };
+        }
+
         /// This function is used to keep around the first malformed node.
         /// For example, if an integer has no digits and a bad suffix `0bu22`,
         /// we keep the first malformed node that the integer has no digits instead of pointing out the bad suffix.
@@ -387,25 +405,14 @@ pub const TokenizedBuffer = struct {
         const tag = self.tokens.items(.tag)[@intCast(token)];
         const start = self.tokens.items(.offset)[@intCast(token)];
         const extra = self.tokens.items(.extra)[@intCast(token)];
-        switch (tag) {
-            .LowerIdent,
-            .DotLowerIdent,
-            .NoSpaceDotLowerIdent,
-            .MalformedUnicodeIdent,
-            .MalformedDotUnicodeIdent,
-            .MalformedNoSpaceDotUnicodeIdent,
-            .DotUpperIdent,
-            .NoSpaceDotUpperIdent,
-            .UpperIdent,
-            .NamedUnderscore,
-            .MalformedNamedUnderscoreUnicode,
-            => {
-                return self.env.idents.getRegion(extra.interned);
-            },
-            else => {
-                const end = start + extra.length;
-                return .{ .start = base.Region.Position{ .offset = start }, .end = base.Region.Position{ .offset = end } };
-            },
+        if (tag.isInterned()) {
+            return self.env.idents.getRegion(extra.interned);
+        } else {
+            const end = start + extra.length;
+            return .{
+                .start = base.Region.Position{ .offset = start },
+                .end = base.Region.Position{ .offset = end },
+            };
         }
     }
 
@@ -413,30 +420,17 @@ pub const TokenizedBuffer = struct {
     /// Otherwise returns null.
     pub fn resolveIdentifier(self: *TokenizedBuffer, token: Token.Idx) ?base.Ident.Idx {
         const tag = self.tokens.items(.tag)[@intCast(token)];
-        const extra = self.tokens.items(.extra)[@intCast(token)];
-        switch (tag) {
-            .LowerIdent,
-            .DotLowerIdent,
-            .NoSpaceDotLowerIdent,
-            .MalformedUnicodeIdent,
-            .MalformedDotUnicodeIdent,
-            .MalformedNoSpaceDotUnicodeIdent,
-            .DotUpperIdent,
-            .NoSpaceDotUpperIdent,
-            .UpperIdent,
-            .NamedUnderscore,
-            .MalformedNamedUnderscoreUnicode,
-            => {
-                return extra.interned;
-            },
-            else => {
-                return null;
-            },
+        if (tag.isInterned()) {
+            const extra = self.tokens.items(.extra)[@intCast(token)];
+            return extra.interned;
+        } else {
+            return null;
         }
     }
 
     /// Pushes a token with the given tag, token offset, and extra.
     pub fn pushTokenNormal(self: *TokenizedBuffer, tag: Token.Tag, tok_offset: u32, length: u32) void {
+        std.debug.assert(!tag.isInterned());
         self.tokens.append(self.env.gpa, .{
             .tag = tag,
             .offset = tok_offset,
@@ -1076,6 +1070,7 @@ pub const Tokenizer = struct {
         tok_offset: u32,
         text_offset: u32,
     ) void {
+        std.debug.assert(tag.isInterned());
         const text = self.cursor.buf[text_offset..self.cursor.pos];
         const id = self.env.idents.insert(
             self.env.gpa,
