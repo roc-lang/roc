@@ -446,21 +446,21 @@ test "Node is 24 bytes" {
 /// A single statement - either at the top-level or within a block.
 pub const Statement = union(enum) {
     /// A simple immutable declaration
-    decl: struct {
+    s_decl: struct {
         pattern: Pattern.Idx,
         expr: Expr.Idx,
         region: Region,
     },
     /// A rebindable declaration using the "var" keyword
     /// Not valid at the top level of a module
-    @"var": struct {
+    s_var: struct {
         pattern_idx: Pattern.Idx,
         expr: Expr.Idx,
         region: Region,
     },
     /// Reassignment of a previously declared var
     /// Not valid at the top level of a module
-    reassign: struct {
+    s_reassign: struct {
         pattern_idx: Pattern.Idx,
         expr: Expr.Idx,
         region: Region,
@@ -468,26 +468,26 @@ pub const Statement = union(enum) {
     /// The "crash" keyword instruct a runtime crash with message
     ///
     /// Not valid at the top level of a module
-    crash: struct {
+    s_crash: struct {
         msg: StringLiteral.Idx,
         region: Region,
     },
     /// Just an expression - usually the return value for a block
     ///
     /// Not valid at the top level of a module
-    expr: struct {
+    s_expr: struct {
         expr: Expr.Idx,
         region: Region,
     },
     /// An expression that will cause a panic (or some other error handling mechanism) if it evaluates to false
-    expect: struct {
+    s_expect: struct {
         body: Expr.Idx,
         region: Region,
     },
     /// A block of code that will be ran multiple times for each item in a list.
     ///
     /// Not valid at the top level of a module
-    @"for": struct {
+    s_for: struct {
         patt: Pattern.Idx,
         expr: Expr.Idx,
         body: Expr.Idx,
@@ -496,14 +496,14 @@ pub const Statement = union(enum) {
     /// A early return of the enclosing function.
     ///
     /// Not valid at the top level of a module
-    @"return": struct {
+    s_return: struct {
         expr: Expr.Idx,
         region: Region,
     },
     /// Brings in another module for use in the current module, optionally exposing only certain members of that module.
     ///
     /// Only valid at the top level of a module
-    import: struct {
+    s_import: struct {
         module_name_tok: Ident.Idx,
         qualifier_tok: ?Ident.Idx,
         alias_tok: ?Ident.Idx,
@@ -513,14 +513,14 @@ pub const Statement = union(enum) {
     /// A declaration of a new type - whether an alias or a new nominal custom type
     ///
     /// Only valid at the top level of a module
-    type_decl: struct {
+    s_type_decl: struct {
         header: TypeHeader.Idx,
         anno: CIR.TypeAnno.Idx,
         where: ?WhereClause.Span,
         region: Region,
     },
     /// A type annotation, declaring that the value referred to by an ident in the same scope should be a given type.
-    type_anno: struct {
+    s_type_anno: struct {
         name: Ident.Idx,
         anno: CIR.TypeAnno.Idx,
         where: ?WhereClause.Span,
@@ -533,7 +533,7 @@ pub const Statement = union(enum) {
     pub fn toSExpr(self: *const @This(), ir: *CIR, env: *ModuleEnv) SExpr {
         const gpa = ir.env.gpa;
         switch (self.*) {
-            .decl => |d| {
+            .s_decl => |d| {
                 var node = SExpr.init(gpa, "s-let");
                 node.appendRegion(gpa, ir.calcRegionInfo(d.region));
 
@@ -547,7 +547,7 @@ pub const Statement = union(enum) {
 
                 return node;
             },
-            .@"var" => |v| {
+            .s_var => |v| {
                 var node = SExpr.init(gpa, "s-var");
                 node.appendRegion(gpa, ir.calcRegionInfo(v.region));
 
@@ -561,7 +561,7 @@ pub const Statement = union(enum) {
 
                 return node;
             },
-            .reassign => |r| {
+            .s_reassign => |r| {
                 var node = SExpr.init(gpa, "s-reassign");
                 node.appendRegion(gpa, ir.calcRegionInfo(r.region));
 
@@ -575,13 +575,13 @@ pub const Statement = union(enum) {
 
                 return node;
             },
-            .crash => |c| {
+            .s_crash => |c| {
                 var node = SExpr.init(gpa, "s-crash");
                 node.appendRegion(gpa, ir.calcRegionInfo(c.region));
                 node.appendStringAttr(gpa, "msg", env.strings.get(c.msg));
                 return node;
             },
-            .expr => |s| {
+            .s_expr => |s| {
                 var node = SExpr.init(gpa, "s-expr");
                 node.appendRegion(gpa, ir.calcRegionInfo(s.region));
 
@@ -590,7 +590,7 @@ pub const Statement = union(enum) {
 
                 return node;
             },
-            .expect => |s| {
+            .s_expect => |s| {
                 var node = SExpr.init(gpa, "s-expect");
                 node.appendRegion(gpa, ir.calcRegionInfo(s.region));
 
@@ -599,7 +599,7 @@ pub const Statement = union(enum) {
 
                 return node;
             },
-            .@"for" => |s| {
+            .s_for => |s| {
                 var node = SExpr.init(gpa, "s-for");
                 node.appendRegion(gpa, ir.calcRegionInfo(s.region));
 
@@ -617,7 +617,7 @@ pub const Statement = union(enum) {
 
                 return node;
             },
-            .@"return" => |s| {
+            .s_return => |s| {
                 var node = SExpr.init(gpa, "s-return");
                 node.appendRegion(gpa, ir.calcRegionInfo(s.region));
 
@@ -626,7 +626,7 @@ pub const Statement = union(enum) {
 
                 return node;
             },
-            .import => |s| {
+            .s_import => |s| {
                 var node = SExpr.init(gpa, "s-import");
                 node.appendRegion(gpa, ir.calcRegionInfo(s.region));
 
@@ -650,7 +650,7 @@ pub const Statement = union(enum) {
 
                 return node;
             },
-            .type_decl => |s| {
+            .s_type_decl => |s| {
                 var node = SExpr.init(gpa, "s-type-decl");
                 node.appendRegion(gpa, ir.calcRegionInfo(s.region));
 
@@ -669,7 +669,7 @@ pub const Statement = union(enum) {
 
                 return node;
             },
-            .type_anno => |s| {
+            .s_type_anno => |s| {
                 var node = SExpr.init(gpa, "s-type-anno");
                 node.appendRegion(gpa, ir.calcRegionInfo(s.region));
 
@@ -691,17 +691,17 @@ pub const Statement = union(enum) {
     /// Extract the region from any Statement variant
     pub fn toRegion(self: *const @This()) Region {
         switch (self.*) {
-            .decl => |s| return s.region,
-            .@"var" => |s| return s.region,
-            .reassign => |s| return s.region,
-            .crash => |s| return s.region,
-            .expr => |s| return s.region,
-            .expect => |s| return s.region,
-            .@"for" => |s| return s.region,
-            .@"return" => |s| return s.region,
-            .import => |s| return s.region,
-            .type_decl => |s| return s.region,
-            .type_anno => |s| return s.region,
+            .s_decl => |s| return s.region,
+            .s_var => |s| return s.region,
+            .s_reassign => |s| return s.region,
+            .s_crash => |s| return s.region,
+            .s_expr => |s| return s.region,
+            .s_expect => |s| return s.region,
+            .s_for => |s| return s.region,
+            .s_return => |s| return s.region,
+            .s_import => |s| return s.region,
+            .s_type_decl => |s| return s.region,
+            .s_type_anno => |s| return s.region,
         }
     }
 };
@@ -1145,6 +1145,8 @@ pub const Expr = union(enum) {
     call: struct {
         args: Expr.Span,
         called_via: CalledVia,
+        /// Tracks if this function is pure or effectful during type checking
+        effect_var: TypeVar,
         region: Region,
     },
     record: struct {
@@ -1188,6 +1190,8 @@ pub const Expr = union(enum) {
     lambda: struct {
         args: Pattern.Span,
         body: Expr.Idx,
+        /// Tracks if this function is pure or effectful during type checking
+        effect_var: TypeVar,
         region: Region,
     },
     binop: Binop,
@@ -2584,27 +2588,23 @@ pub fn toSexprTypesStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr
             const pattern = ir.store.getPattern(def.pattern);
             switch (pattern) {
                 .assign => |assign_pat| {
+                    var def_node = SExpr.init(gpa, "d_assign");
+                    def_node.appendStringAttr(gpa, "name", ir.env.idents.getText(assign_pat.ident));
+                    def_node.appendTypeVar(gpa, "def_var", def_idx);
 
-                    // Get the type of the expression
+                    // Get the type variable for this definition
+                    // Each definition has a type_var at its node index which represents the type of the definition
                     const def_var = @as(types.Var, @enumFromInt(@intFromEnum(def_idx)));
 
-                    var def_node = SExpr.init(gpa, "def");
-                    def_node.appendStringAttr(gpa, "name", ir.env.idents.getText(assign_pat.ident));
-                    // def_node.appendUnsignedInt(gpa, @intFromEnum(def_var));
+                    // Clear the buffer and write the type
+                    type_string_buf.clearRetainingCapacity();
 
-                    if (@intFromEnum(def_var) > ir.env.types.slots.backing.items.len) {
-                        const unknown_node = SExpr.init(gpa, "unknown");
-                        def_node.appendNode(gpa, &unknown_node);
-                    } else {
-
-                        // Clear the buffer and write the type
-                        type_string_buf.clearRetainingCapacity();
-                        if (type_writer.writeVar(def_var)) {
-                            def_node.appendStringAttr(gpa, "type", type_string_buf.items);
-                        } else |err| {
-                            exitOnOom(err);
-                        }
+                    if (type_writer.writeVar(def_var)) {
+                        def_node.appendStringAttr(gpa, "type", type_string_buf.items);
+                    } else |err| {
+                        exitOnOom(err);
                     }
+
                     defs_node.appendNode(gpa, &def_node);
                 },
                 else => {

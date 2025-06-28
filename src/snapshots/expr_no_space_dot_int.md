@@ -58,7 +58,7 @@ foo =
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "foo") (type "Error")))
+		(d_assign (name "foo") (def_var 75) (type "Error")))
 	(expressions
 		(expr @3-10-3-12 (type "Error"))))
 ~~~

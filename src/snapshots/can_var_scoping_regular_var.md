@@ -132,9 +132,9 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 115)
+	(d-let (id 118)
 		(p-assign @4-1-4-13 (ident "processItems") (id 72))
-		(e-lambda @4-16-21-2 (id 113)
+		(e-lambda @4-16-21-2 (id 116)
 			(args
 				(p-assign @4-17-4-22 (ident "items") (id 73)))
 			(e-block @4-24-21-2
@@ -158,7 +158,7 @@ NO CHANGE
 						(e-int @10-20-10-22 (value "10"))))
 				(s-let @13-2-17-3
 					(p-assign @13-2-13-12 (ident "nestedFunc") (id 92))
-					(e-lambda @13-15-17-3 (id 102)
+					(e-lambda @13-15-17-3 (id 103)
 						(args
 							(p-underscore @13-16-13-17 (id 93)))
 						(e-block @13-19-17-3
@@ -171,8 +171,8 @@ NO CHANGE
 							(e-lookup-local @16-3-16-9
 								(pattern (id 76))))))
 				(s-let @19-2-19-25
-					(p-assign @19-2-19-8 (ident "result") (id 104))
-					(e-call @19-11-19-25 (id 107)
+					(p-assign @19-2-19-8 (ident "result") (id 105))
+					(e-call @19-11-19-25 (id 109)
 						(e-lookup-local @19-11-19-21
 							(pattern (id 92)))
 						(e-empty_record @19-22-19-24)))
@@ -180,13 +180,13 @@ NO CHANGE
 					(e-lookup-local @20-2-20-8
 						(pattern (id 80)))
 					(e-lookup-local @20-11-20-17
-						(pattern (id 104))))))))
+						(pattern (id 105))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "processItems") (type "*")))
+		(d_assign (name "processItems") (def_var 118) (type "* ? *")))
 	(expressions
-		(expr @4-16-21-2 (type "*"))))
+		(expr @4-16-21-2 (type "* ? *"))))
 ~~~

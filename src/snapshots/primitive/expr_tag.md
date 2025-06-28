@@ -41,7 +41,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "foo") (type "[FortyTwo, * *]")))
+		(d_assign (name "foo") (def_var 75) (type "[FortyTwo, * *]")))
 	(expressions
 		(expr @2-7-2-15 (type "[FortyTwo, * *]"))))
 ~~~

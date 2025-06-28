@@ -72,16 +72,16 @@ main! = |_| {}
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 89)
+	(d-let (id 94)
 		(p-assign @4-1-4-8 (ident "getName") (id 79))
-		(e-lambda @4-11-6-6 (id 83)
+		(e-lambda @4-11-6-6 (id 84)
 			(args
 				(p-assign @4-12-4-18 (ident "person") (id 80)))
 			(e-dot-access @4-20-6-6 (field "name")
 				(receiver
 					(e-lookup-local @4-20-4-26
 						(pattern (id 80))))))
-		(annotation @4-1-4-8 (signature 87) (id 88)
+		(annotation @4-1-4-8 (signature 92) (id 93)
 			(declared-type
 				(ty-fn @3-11-3-41 (effectful false)
 					(ty-record @3-11-3-34
@@ -90,20 +90,20 @@ main! = |_| {}
 						(field (field "age")
 							(ty @3-29-3-32 (name "U64"))))
 					(ty @3-38-3-41 (name "Str"))))))
-	(d-let (id 94)
-		(p-assign @6-1-6-6 (ident "main!") (id 90))
-		(e-lambda @6-9-6-15 (id 93)
+	(d-let (id 100)
+		(p-assign @6-1-6-6 (ident "main!") (id 95))
+		(e-lambda @6-9-6-15 (id 99)
 			(args
-				(p-underscore @6-10-6-11 (id 91)))
+				(p-underscore @6-10-6-11 (id 96)))
 			(e-empty_record @6-13-6-15))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "getName") (type "*"))
-		(def (name "main!") (type "*")))
+		(d_assign (name "getName") (def_var 94) (type "{ name: Str, age: U64 } -> Str"))
+		(d_assign (name "main!") (def_var 100) (type "* ? {}")))
 	(expressions
-		(expr @4-11-6-6 (type "*"))
-		(expr @6-9-6-15 (type "*"))))
+		(expr @4-11-6-6 (type "{ name: Str, age: U64 } -> Str"))
+		(expr @6-9-6-15 (type "* ? {}"))))
 ~~~

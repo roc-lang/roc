@@ -87,9 +87,9 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 106)
+	(d-let (id 107)
 		(p-assign @3-1-3-12 (ident "checkNumber") (id 72))
-		(e-lambda @3-15-13-2 (id 105)
+		(e-lambda @3-15-13-2 (id 106)
 			(args
 				(p-assign @3-16-3-19 (ident "num") (id 73)))
 			(e-block @3-21-13-2
@@ -128,7 +128,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "checkNumber") (type "*")))
+		(d_assign (name "checkNumber") (def_var 107) (type "* ? *")))
 	(expressions
-		(expr @3-15-13-2 (type "*"))))
+		(expr @3-15-13-2 (type "* ? *"))))
 ~~~

@@ -58,7 +58,7 @@ topLevelVar_ = 0
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "topLevelVar_") (type "Num(*)")))
+		(d_assign (name "topLevelVar_") (def_var 75) (type "Num(*)")))
 	(expressions
 		(expr @4-20-4-21 (type "Num(*)"))))
 ~~~

@@ -46,39 +46,6 @@ main! = |_| {
 }
 ~~~
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `expected_expr_close_curly_or_comma`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**type_alias_decl.md:30:5:30:13:**
-```roc
-    userId = 123
-```
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **= 123** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_alias_decl.md:30:12:30:17:**
-```roc
-    userId = 123
-```
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **}** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_alias_decl.md:39:1:39:2:**
-```roc
-}
-```
-
-
 **TYPE REDECLARED**
 The type ``Result`` is being redeclared.
 
@@ -98,24 +65,27 @@ app [main!] { pf: platform "../basic-cli/main.roc" }
 ```
 
 
-**INVALID LAMBDA**
-The body of this lambda expression is not valid.
+**UNUSED VARIABLE**
+Variable ``color`` is not used anywhere in your code.
 
-**INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+If you don't need this variable, prefix it with an underscore like `_color` to suppress this warning.
+The unused variable is declared here:
+**type_alias_decl.md:36:5:36:10:**
+```roc
+    color = Red
+```
 
-**INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**UNUSED VARIABLE**
+Variable ``person`` is not used anywhere in your code.
 
-**INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+If you don't need this variable, prefix it with an underscore like `_person` to suppress this warning.
+The unused variable is declared here:
+**type_alias_decl.md:33:5:33:11:**
+```roc
+    person = { name: "Alice", age: 30 }
+```
+
 
 # TOKENS
 ~~~zig
@@ -242,31 +212,34 @@ CloseCurly(39:1-39:2),EndOfFile(39:2-39:2),
 							(ty (name "U64")))
 						(anno-record-field @24-30-24-45 (name "created")
 							(ty (name "Str")))))))
-		(s-decl @27-1-30-13
+		(s-decl @27-1-39-2
 			(p-ident @27-1-27-6 (raw "main!"))
-			(e-lambda @27-9-30-13
+			(e-lambda @27-9-39-2
 				(args
 					(p-underscore))
-				(e-malformed @30-5-30-13 (reason "expected_expr_close_curly_or_comma"))))
-		(e-malformed @30-12-30-17 (reason "expr_unexpected_token"))
-		(e-int @30-14-30-17 (raw "123"))
-		(s-type-anno @32-5-33-11 (name "person")
-			(ty (name "Person")))
-		(s-decl @33-5-33-40
-			(p-ident @33-5-33-11 (raw "person"))
-			(e-record @33-14-33-40
-				(field (field "name") (optional false)
-					(e-string @33-22-33-29
-						(e-string-part @33-23-33-28 (raw "Alice"))))
-				(field (field "age") (optional false)
-					(e-int @33-36-33-38 (raw "30")))))
-		(s-type-anno @35-5-36-10 (name "color")
-			(ty (name "Color")))
-		(s-decl @36-5-36-16
-			(p-ident @36-5-36-10 (raw "color"))
-			(e-tag @36-13-36-16 (raw "Red")))
-		(e-ident @38-5-38-11 (qaul "") (raw "userId"))
-		(e-malformed @39-1-39-2 (reason "expr_unexpected_token"))))
+				(e-block @27-13-39-2
+					(statements
+						(s-type-anno @29-5-30-11 (name "userId")
+							(ty (name "UserId")))
+						(s-decl @30-5-30-17
+							(p-ident @30-5-30-11 (raw "userId"))
+							(e-int @30-14-30-17 (raw "123")))
+						(s-type-anno @32-5-33-11 (name "person")
+							(ty (name "Person")))
+						(s-decl @33-5-33-40
+							(p-ident @33-5-33-11 (raw "person"))
+							(e-record @33-14-33-40
+								(field (field "name") (optional false)
+									(e-string @33-22-33-29
+										(e-string-part @33-23-33-28 (raw "Alice"))))
+								(field (field "age") (optional false)
+									(e-int @33-36-33-38 (raw "30")))))
+						(s-type-anno @35-5-36-10 (name "color")
+							(ty (name "Color")))
+						(s-decl @36-5-36-16
+							(p-ident @36-5-36-10 (raw "color"))
+							(e-tag @36-13-36-16 (raw "Red")))
+						(e-ident @38-5-38-11 (qaul "") (raw "userId"))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -296,45 +269,52 @@ Container(item) : {
 	metadata : { size : U64, created : Str },
 }
 
-main! = |_|
-	123
+main! = |_| {
+	# Use the types to validate they work
+	userId : UserId
+	userId = 123
 
-person : Person
-person = { name: "Alice", age: 30 }
+	person : Person
+	person = { name: "Alice", age: 30 }
 
-color : Color
-color = Red
+	color : Color
+	color = Red
 
-userId
-
+	userId
+}
 ~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 133)
+	(d-let (id 165)
 		(p-assign @27-1-27-6 (ident "main!") (id 128))
-		(e-lambda @27-9-30-13 (id 132)
+		(e-lambda @27-9-39-2 (id 164)
 			(args
 				(p-underscore @27-10-27-11 (id 129)))
-			(e-runtime-error (tag "lambda_body_not_canonicalized"))))
-	(d-let (id 151)
-		(p-assign @33-5-33-11 (ident "person") (id 137))
-		(e-record @33-14-33-40 (ext-var 144) (id 145)
-			(fields
-				(field (name "name")
-					(e-string @33-22-33-29
-						(e-literal @33-23-33-28 (string "Alice"))))
-				(field (name "age")
-					(e-int @33-36-33-38 (value "30")))))
-		(annotation @33-5-33-11 (signature 149) (id 150)
-			(declared-type
-				(ty @32-14-32-20 (name "Person")))))
-	(d-let (id 159)
-		(p-assign @36-5-36-10 (ident "color") (id 153))
-		(e-tag @36-13-36-16 (ext-var 0) (name "Red") (args "TODO") (id 155))
-		(annotation @36-5-36-10 (signature 157) (id 158)
-			(declared-type
-				(ty @35-13-35-18 (name "Color")))))
+			(e-block @27-13-39-2
+				(s-type-anno @29-5-30-11 (name "userId")
+					(ty @29-14-29-20 (name "UserId")))
+				(s-let @30-5-30-17
+					(p-assign @30-5-30-11 (ident "userId") (id 133))
+					(e-int @30-14-30-17 (value "123") (id 135)))
+				(s-type-anno @32-5-33-11 (name "person")
+					(ty @32-14-32-20 (name "Person")))
+				(s-let @33-5-33-40
+					(p-assign @33-5-33-11 (ident "person") (id 140))
+					(e-record @33-14-33-40 (ext-var 147) (id 148)
+						(fields
+							(field (name "name")
+								(e-string @33-22-33-29
+									(e-literal @33-23-33-28 (string "Alice"))))
+							(field (name "age")
+								(e-int @33-36-33-38 (value "30"))))))
+				(s-type-anno @35-5-36-10 (name "color")
+					(ty @35-13-35-18 (name "Color")))
+				(s-let @36-5-36-16
+					(p-assign @36-5-36-10 (ident "color") (id 155))
+					(e-tag @36-13-36-16 (ext-var 0) (name "Red") (args "TODO") (id 157)))
+				(e-lookup-local @38-5-38-11
+					(pattern (id 133))))))
 	(s-type-decl @4-1-7-7 (id 74)
 		(ty-header @4-1-4-7 (name "UserId"))
 		(ty @4-10-4-13 (name "U64")))
@@ -399,11 +379,7 @@ userId
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "main!") (type "*"))
-		(def (name "person") (type "{ name: Str, age: Num(*), * * }"))
-		(def (name "color") (type "[Red, * *]")))
+		(d_assign (name "main!") (def_var 165) (type "* ? *")))
 	(expressions
-		(expr @27-9-30-13 (type "*"))
-		(expr @33-14-33-40 (type "{ name: Str, age: Num(*), * * }"))
-		(expr @36-13-36-16 (type "[Red, * *]"))))
+		(expr @27-9-39-2 (type "* ? *"))))
 ~~~

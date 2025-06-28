@@ -49,7 +49,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "x") (type "Dec")))
+		(d_assign (name "x") (def_var 79) (type "Dec")))
 	(expressions
 		(expr @4-5-4-12 (type "Dec"))))
 ~~~

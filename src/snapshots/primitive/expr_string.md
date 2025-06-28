@@ -58,8 +58,8 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "name") (type "Str"))
-		(def (name "foo") (type "Str")))
+		(d_assign (name "name") (def_var 75) (type "Str"))
+		(d_assign (name "foo") (def_var 81) (type "Str")))
 	(expressions
 		(expr @2-8-2-13 (type "Str"))
 		(expr @3-7-3-22 (type "Str"))))

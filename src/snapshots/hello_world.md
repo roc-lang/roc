@@ -53,9 +53,9 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 81)
+	(d-let (id 83)
 		(p-assign @5-1-5-6 (ident "main!") (id 73))
-		(e-lambda @5-9-5-42 (id 80)
+		(e-lambda @5-9-5-42 (id 82)
 			(args
 				(p-underscore @5-10-5-11 (id 74)))
 			(e-call @5-13-5-42
@@ -63,14 +63,14 @@ NO CHANGE
 					(ext-decl @5-13-5-25 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value") (type-var 75)))
 				(e-string @5-26-5-41
 					(e-literal @5-27-5-40 (string "Hello, world!"))))))
-	(s-import @3-1-3-17 (module "pf.Stdout") (id 72)
+	(s-import @3-1-3-17 (module "pf.Stdout") (qualifier "pf") (id 72)
 		(exposes)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "main!") (type "*")))
+		(d_assign (name "main!") (def_var 83) (type "* ? *")))
 	(expressions
-		(expr @5-9-5-42 (type "*"))))
+		(expr @5-9-5-42 (type "* ? *"))))
 ~~~

@@ -202,16 +202,16 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "a") (type "U8"))
-		(def (name "b") (type "U16"))
-		(def (name "c") (type "U32"))
-		(def (name "d") (type "U64"))
-		(def (name "e") (type "U128"))
-		(def (name "f") (type "I8"))
-		(def (name "g") (type "I16"))
-		(def (name "h") (type "I32"))
-		(def (name "i") (type "I64"))
-		(def (name "j") (type "I128")))
+		(d_assign (name "a") (def_var 79) (type "U8"))
+		(d_assign (name "b") (def_var 87) (type "U16"))
+		(d_assign (name "c") (def_var 95) (type "U32"))
+		(d_assign (name "d") (def_var 103) (type "U64"))
+		(d_assign (name "e") (def_var 111) (type "U128"))
+		(d_assign (name "f") (def_var 119) (type "I8"))
+		(d_assign (name "g") (def_var 127) (type "I16"))
+		(d_assign (name "h") (def_var 135) (type "I32"))
+		(d_assign (name "i") (def_var 143) (type "I64"))
+		(d_assign (name "j") (def_var 151) (type "I128")))
 	(expressions
 		(expr @4-5-4-8 (type "U8"))
 		(expr @7-5-7-10 (type "U16"))

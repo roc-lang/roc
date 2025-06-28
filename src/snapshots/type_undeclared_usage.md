@@ -107,15 +107,15 @@ AnotherType : SomeModule.MissingType
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 95)
+	(d-let (id 97)
 		(p-assign @6-1-6-13 (ident "processValue") (id 83))
-		(e-lambda @6-16-8-2 (id 88)
+		(e-lambda @6-16-8-2 (id 89)
 			(args
 				(p-assign @6-17-6-22 (ident "value") (id 84)))
 			(e-block @6-24-8-2
 				(e-string @7-5-7-16
 					(e-literal @7-6-7-15 (string "processed")))))
-		(annotation @6-1-6-13 (signature 93) (id 94)
+		(annotation @6-1-6-13 (signature 95) (id 96)
 			(declared-type
 				(ty-fn @5-16-5-39 (effectful false)
 					(ty @5-16-5-32 (name "UndeclaredResult"))
@@ -131,7 +131,7 @@ AnotherType : SomeModule.MissingType
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "processValue") (type "*")))
+		(d_assign (name "processValue") (def_var 97) (type "Error -> Str")))
 	(expressions
-		(expr @6-16-8-2 (type "*"))))
+		(expr @6-16-8-2 (type "Error -> Str"))))
 ~~~

@@ -55,7 +55,7 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1-1-5-2 (id 93)
+(e-block @1-1-5-2 (id 94)
 	(s-let @2-5-2-21
 		(p-assign @2-5-2-9 (ident "list") (id 72))
 		(e-list @2-12-2-21 (elem-var 79) (id 80)
@@ -65,7 +65,7 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 				(e-int @2-19-2-20 (value "3")))))
 	(s-let @3-5-4-9
 		(p-assign @3-5-3-7 (ident "fn") (id 82))
-		(e-lambda @3-10-4-9 (id 88)
+		(e-lambda @3-10-4-9 (id 89)
 			(args
 				(p-assign @3-11-3-12 (ident "x") (id 83)))
 			(e-binop @3-14-4-9 (op "add")
@@ -82,5 +82,5 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 93) (type "*"))
+(expr (id 94) (type "*"))
 ~~~

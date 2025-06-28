@@ -174,14 +174,14 @@ InnerModule :
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 100)
+	(d-let (id 102)
 		(p-assign @6-1-6-12 (ident "processData") (id 89))
-		(e-lambda @6-15-7-16 (id 93)
+		(e-lambda @6-15-7-16 (id 94)
 			(args
 				(p-assign @6-16-6-20 (ident "data") (id 90)))
 			(e-string @7-5-7-16
 				(e-literal @7-6-7-15 (string "processed"))))
-		(annotation @6-1-6-12 (signature 98) (id 99)
+		(annotation @6-1-6-12 (signature 100) (id 101)
 			(declared-type
 				(ty-fn @5-15-5-25 (effectful false)
 					(ty @5-15-5-18 (name "Str"))
@@ -204,7 +204,7 @@ InnerModule :
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "processData") (type "*")))
+		(d_assign (name "processData") (def_var 102) (type "Str -> Str")))
 	(expressions
-		(expr @6-15-7-16 (type "*"))))
+		(expr @6-15-7-16 (type "Str -> Str"))))
 ~~~

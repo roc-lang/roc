@@ -463,7 +463,7 @@ pub const Store = struct {
 
     // helpers //
 
-    fn varToSlotIdx(var_: Var) SlotStore.Idx {
+    pub fn varToSlotIdx(var_: Var) SlotStore.Idx {
         return @enumFromInt(@intFromEnum(var_));
     }
 

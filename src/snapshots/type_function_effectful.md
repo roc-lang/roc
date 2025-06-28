@@ -51,6 +51,19 @@ Only definitions, type annotations, and imports are allowed at the top level.
 The statement **expr** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**type_function_effectful.md:4:1:4:11:**
+```roc
+runEffect! = |fn!, x| fn!(x)
+```
+
+It is of type:
+    _a => b_
+
+But you are trying to use it as:
+    _*, * ? *_
+
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),Newline(1:1-1:1),
@@ -110,9 +123,9 @@ main! = |_| {}
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 96)
+	(d-let (id 99)
 		(p-assign @4-1-4-11 (ident "runEffect!") (id 82))
-		(e-lambda @4-14-4-29 (id 88)
+		(e-lambda @4-14-4-29 (id 90)
 			(args
 				(p-assign @4-15-4-18 (ident "fn!") (id 83))
 				(p-assign @4-20-4-21 (ident "x") (id 84)))
@@ -121,26 +134,26 @@ main! = |_| {}
 					(pattern (id 83)))
 				(e-lookup-local @4-27-4-28
 					(pattern (id 84)))))
-		(annotation @4-1-4-11 (signature 94) (id 95)
+		(annotation @4-1-4-11 (signature 97) (id 98)
 			(declared-type
 				(ty-parens @3-14-3-22
 					(ty-fn @3-15-3-21 (effectful true)
 						(ty-var @3-15-3-16 (name "a"))
 						(ty-var @3-20-3-21 (name "b")))))))
-	(d-let (id 101)
-		(p-assign @6-1-6-6 (ident "main!") (id 97))
-		(e-lambda @6-9-6-15 (id 100)
+	(d-let (id 105)
+		(p-assign @6-1-6-6 (ident "main!") (id 100))
+		(e-lambda @6-9-6-15 (id 104)
 			(args
-				(p-underscore @6-10-6-11 (id 98)))
+				(p-underscore @6-10-6-11 (id 101)))
 			(e-empty_record @6-13-6-15))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "runEffect!") (type "*"))
-		(def (name "main!") (type "*")))
+		(d_assign (name "runEffect!") (def_var 99) (type "Error"))
+		(d_assign (name "main!") (def_var 105) (type "* ? {}")))
 	(expressions
-		(expr @4-14-4-29 (type "*"))
-		(expr @6-9-6-15 (type "*"))))
+		(expr @4-14-4-29 (type "Error"))
+		(expr @6-9-6-15 (type "* ? {}"))))
 ~~~

@@ -141,50 +141,50 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 103)
+	(d-let (id 105)
 		(p-assign @8-1-8-8 (ident "process") (id 93))
-		(e-lambda @8-11-8-32 (id 97)
+		(e-lambda @8-11-8-32 (id 98)
 			(args
 				(p-assign @8-12-8-19 (ident "_result") (id 94)))
 			(e-string @8-21-8-32
 				(e-literal @8-22-8-31 (string "processed"))))
-		(annotation @8-1-8-8 (signature 101) (id 102)
+		(annotation @8-1-8-8 (signature 103) (id 104)
 			(declared-type
 				(ty-fn @7-11-7-36 (effectful false)
 					(ty-apply @7-11-7-29 (symbol "MyResult")
 						(ty @7-20-7-23 (name "Str"))
 						(ty @7-25-7-28 (name "I32")))
 					(ty @7-33-7-36 (name "Str"))))))
-	(d-let (id 118)
-		(p-assign @15-1-15-10 (ident "getString") (id 108))
-		(e-lambda @15-13-15-29 (id 112)
+	(d-let (id 122)
+		(p-assign @15-1-15-10 (ident "getString") (id 110))
+		(e-lambda @15-13-15-29 (id 115)
 			(args
-				(p-assign @15-14-15-18 (ident "_opt") (id 109)))
+				(p-assign @15-14-15-18 (ident "_opt") (id 111)))
 			(e-string @15-20-15-29
 				(e-literal @15-21-15-28 (string "default"))))
-		(annotation @15-1-15-10 (signature 116) (id 117)
+		(annotation @15-1-15-10 (signature 120) (id 121)
 			(declared-type
 				(ty-fn @14-13-14-31 (effectful false)
 					(ty-apply @14-13-14-24 (symbol "Option")
 						(ty @14-20-14-23 (name "Str")))
 					(ty @14-28-14-31 (name "Str"))))))
-	(d-let (id 133)
-		(p-assign @18-1-18-10 (ident "getNumber") (id 123))
-		(e-lambda @18-13-18-21 (id 127)
+	(d-let (id 139)
+		(p-assign @18-1-18-10 (ident "getNumber") (id 127))
+		(e-lambda @18-13-18-21 (id 132)
 			(args
-				(p-assign @18-14-18-18 (ident "_opt") (id 124)))
+				(p-assign @18-14-18-18 (ident "_opt") (id 128)))
 			(e-int @18-20-18-21 (value "0")))
-		(annotation @18-1-18-10 (signature 131) (id 132)
+		(annotation @18-1-18-10 (signature 137) (id 138)
 			(declared-type
 				(ty-fn @17-13-17-31 (effectful false)
 					(ty-apply @17-13-17-24 (symbol "Option")
 						(ty @17-20-17-23 (name "I32")))
 					(ty @17-28-17-31 (name "I32"))))))
-	(d-let (id 138)
-		(p-assign @20-1-20-6 (ident "main!") (id 134))
-		(e-lambda @20-9-20-15 (id 137)
+	(d-let (id 145)
+		(p-assign @20-1-20-6 (ident "main!") (id 140))
+		(e-lambda @20-9-20-15 (id 144)
 			(args
-				(p-underscore @20-10-20-11 (id 135)))
+				(p-underscore @20-10-20-11 (id 141)))
 			(e-empty_record @20-13-20-15)))
 	(s-type-decl @4-1-7-8 (id 80)
 		(ty-header @4-1-4-18 (name "MyResult")
@@ -209,13 +209,13 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "process") (type "*"))
-		(def (name "getString") (type "*"))
-		(def (name "getNumber") (type "*"))
-		(def (name "main!") (type "*")))
+		(d_assign (name "process") (def_var 105) (type "MyResult -> Str"))
+		(d_assign (name "getString") (def_var 122) (type "Option -> Str"))
+		(d_assign (name "getNumber") (def_var 139) (type "Option -> I32"))
+		(d_assign (name "main!") (def_var 145) (type "* ? {}")))
 	(expressions
-		(expr @8-11-8-32 (type "*"))
-		(expr @15-13-15-29 (type "*"))
-		(expr @18-13-18-21 (type "*"))
-		(expr @20-9-20-15 (type "*"))))
+		(expr @8-11-8-32 (type "MyResult -> Str"))
+		(expr @15-13-15-29 (type "Option -> Str"))
+		(expr @18-13-18-21 (type "Option -> I32"))
+		(expr @20-9-20-15 (type "* ? {}"))))
 ~~~

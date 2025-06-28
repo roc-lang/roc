@@ -225,20 +225,20 @@ main = {
 						(pattern (id 102)))
 					(e-lookup-local @33-9-33-17
 						(pattern (id 106)))))))
-	(s-import @3-1-3-17 (module "json.Json") (id 72)
+	(s-import @3-1-3-17 (module "json.Json") (qualifier "json") (id 72)
 		(exposes))
-	(s-import @4-1-4-48 (module "http.Client") (id 75)
+	(s-import @4-1-4-48 (module "http.Client") (qualifier "http") (alias "Http") (id 75)
 		(exposes
 			(exposed (name "get") (wildcard false))
 			(exposed (name "post") (wildcard false))))
-	(s-import @5-1-5-27 (module "utils.String") (id 76)
+	(s-import @5-1-5-27 (module "utils.String") (qualifier "utils") (alias "Str") (id 76)
 		(exposes)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "main") (type "*")))
+		(d_assign (name "main") (def_var 120) (type "*")))
 	(expressions
 		(expr @7-8-35-2 (type "*"))))
 ~~~

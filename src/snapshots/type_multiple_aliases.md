@@ -152,9 +152,9 @@ main! = |_| {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 118)
+	(d-let (id 120)
 		(p-assign @9-1-9-11 (ident "createUser") (id 95))
-		(e-lambda @9-14-9-47 (id 110)
+		(e-lambda @9-14-9-47 (id 111)
 			(args
 				(p-assign @9-15-9-17 (ident "id") (id 96))
 				(p-assign @9-19-9-23 (ident "name") (id 97))
@@ -170,36 +170,36 @@ main! = |_| {
 					(field (name "age")
 						(e-lookup-local @9-42-9-47
 							(pattern (id 98)))))))
-		(annotation @9-1-9-11 (signature 116) (id 117)
+		(annotation @9-1-9-11 (signature 118) (id 119)
 			(declared-type
 				(ty-fn @8-14-8-47 (effectful false)
 					(ty @8-14-8-20 (name "UserId"))
 					(ty @8-22-8-30 (name "UserName"))
 					(ty @8-32-8-39 (name "UserAge"))
 					(ty @8-43-8-47 (name "User"))))))
-	(d-let (id 132)
-		(p-assign @12-1-12-12 (ident "getUserName") (id 122))
-		(e-lambda @12-15-14-6 (id 126)
+	(d-let (id 136)
+		(p-assign @12-1-12-12 (ident "getUserName") (id 124))
+		(e-lambda @12-15-14-6 (id 129)
 			(args
-				(p-assign @12-16-12-20 (ident "user") (id 123)))
+				(p-assign @12-16-12-20 (ident "user") (id 125)))
 			(e-dot-access @12-22-14-6 (field "name")
 				(receiver
 					(e-lookup-local @12-22-12-26
-						(pattern (id 123))))))
-		(annotation @12-1-12-12 (signature 130) (id 131)
+						(pattern (id 125))))))
+		(annotation @12-1-12-12 (signature 134) (id 135)
 			(declared-type
 				(ty-fn @11-15-11-31 (effectful false)
 					(ty @11-15-11-19 (name "User"))
 					(ty @11-23-11-31 (name "UserName"))))))
-	(d-let (id 150)
-		(p-assign @14-1-14-6 (ident "main!") (id 133))
-		(e-lambda @14-9-17-2 (id 149)
+	(d-let (id 157)
+		(p-assign @14-1-14-6 (ident "main!") (id 137))
+		(e-lambda @14-9-17-2 (id 156)
 			(args
-				(p-underscore @14-10-14-11 (id 134)))
+				(p-underscore @14-10-14-11 (id 138)))
 			(e-block @14-13-17-2
 				(s-let @15-5-15-40
-					(p-assign @15-5-15-9 (ident "user") (id 135))
-					(e-call @15-12-15-40 (id 143)
+					(p-assign @15-5-15-9 (ident "user") (id 139))
+					(e-call @15-12-15-40 (id 148)
 						(e-lookup-local @15-12-15-22
 							(pattern (id 95)))
 						(e-int @15-23-15-26 (value "123"))
@@ -208,9 +208,9 @@ main! = |_| {
 						(e-int @15-37-15-39 (value "25"))))
 				(e-call @16-5-16-22
 					(e-lookup-local @16-5-16-16
-						(pattern (id 122)))
+						(pattern (id 124)))
 					(e-lookup-local @16-17-16-21
-						(pattern (id 135)))))))
+						(pattern (id 139)))))))
 	(s-type-decl @3-1-4-9 (id 74)
 		(ty-header @3-1-3-7 (name "UserId"))
 		(ty @3-10-3-13 (name "U64")))
@@ -234,11 +234,11 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "createUser") (type "*"))
-		(def (name "getUserName") (type "*"))
-		(def (name "main!") (type "*")))
+		(d_assign (name "createUser") (def_var 120) (type "UserId, UserName, UserAge -> { id: *, name: *, age: *, * Pure }"))
+		(d_assign (name "getUserName") (def_var 136) (type "User -> UserName"))
+		(d_assign (name "main!") (def_var 157) (type "* ? *")))
 	(expressions
-		(expr @9-14-9-47 (type "*"))
-		(expr @12-15-14-6 (type "*"))
-		(expr @14-9-17-2 (type "*"))))
+		(expr @9-14-9-47 (type "UserId, UserName, UserAge -> { id: *, name: *, age: *, * Pure }"))
+		(expr @12-15-14-6 (type "User -> UserName"))
+		(expr @14-9-17-2 (type "* ? *"))))
 ~~~

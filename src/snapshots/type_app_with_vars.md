@@ -85,9 +85,9 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 102)
+	(d-let (id 105)
 		(p-assign @4-1-4-8 (ident "mapList") (id 85))
-		(e-lambda @4-11-6-6 (id 91)
+		(e-lambda @4-11-6-6 (id 92)
 			(args
 				(p-assign @4-12-4-16 (ident "list") (id 86))
 				(p-assign @4-18-4-20 (ident "fn") (id 87)))
@@ -98,7 +98,7 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 				(args
 					(e-lookup-local @4-31-4-33
 						(pattern (id 87))))))
-		(annotation @4-1-4-8 (signature 100) (id 101)
+		(annotation @4-1-4-8 (signature 103) (id 104)
 			(declared-type
 				(ty-fn @3-11-3-39 (effectful false)
 					(ty-apply @3-11-3-18 (symbol "List")
@@ -109,15 +109,15 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 							(ty-var @3-26-3-27 (name "b"))))
 					(ty-apply @3-32-3-39 (symbol "List")
 						(ty-var @3-37-3-38 (name "b")))))))
-	(d-let (id 120)
-		(p-assign @6-1-6-6 (ident "main!") (id 103))
-		(e-lambda @6-9-6-33 (id 119)
+	(d-let (id 125)
+		(p-assign @6-1-6-6 (ident "main!") (id 106))
+		(e-lambda @6-9-6-33 (id 124)
 			(args
-				(p-underscore @6-10-6-11 (id 104)))
+				(p-underscore @6-10-6-11 (id 107)))
 			(e-call @6-13-6-33
 				(e-lookup-local @6-13-6-20
 					(pattern (id 85)))
-				(e-list @6-21-6-32 (elem-var 116)
+				(e-list @6-21-6-32 (elem-var 119)
 					(elems
 						(e-int @6-22-6-23 (value "1"))
 						(e-int @6-24-6-25 (value "2"))
@@ -129,9 +129,9 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 ~~~clojure
 (inferred-types
 	(defs
-		(def (name "mapList") (type "*"))
-		(def (name "main!") (type "*")))
+		(d_assign (name "mapList") (def_var 105) (type "List, a -> b -> List"))
+		(d_assign (name "main!") (def_var 125) (type "* ? *")))
 	(expressions
-		(expr @4-11-6-6 (type "*"))
-		(expr @6-9-6-33 (type "*"))))
+		(expr @4-11-6-6 (type "List, a -> b -> List"))
+		(expr @6-9-6-33 (type "* ? *"))))
 ~~~
