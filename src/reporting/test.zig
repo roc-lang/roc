@@ -57,6 +57,7 @@ test "SYNTAX_PROBLEM report along with all four render types" {
         \\```roc
         \\example.roc
         \\```
+        \\         ^^^^^^^^^^
         \\
         \\
         \\
