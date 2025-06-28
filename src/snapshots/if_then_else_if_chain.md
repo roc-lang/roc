@@ -87,9 +87,9 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 106)
+	(d-let (id 103)
 		(p-assign @3-1-3-12 (ident "checkNumber") (id 72))
-		(e-lambda @3-15-13-2 (id 105)
+		(e-lambda @3-15-13-2 (id 102)
 			(args
 				(p-assign @3-16-3-19 (ident "num") (id 73)))
 			(e-block @3-21-13-2

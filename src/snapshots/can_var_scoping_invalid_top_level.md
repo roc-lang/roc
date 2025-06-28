@@ -50,9 +50,9 @@ topLevelVar_ = 0
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 75)
+	(d-let (id 74)
 		(p-assign @4-5-4-17 (ident "topLevelVar_") (id 72))
-		(e-int @4-20-4-21 (value "0") (id 74))))
+		(e-int @4-20-4-21 (value "0") (id 73))))
 ~~~
 # TYPES
 ~~~clojure

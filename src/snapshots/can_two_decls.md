@@ -49,12 +49,12 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 75)
+	(d-let (id 74)
 		(p-assign @3-1-3-2 (ident "a") (id 72))
-		(e-int @3-5-3-6 (value "5") (id 74)))
-	(d-let (id 81)
-		(p-assign @4-1-4-2 (ident "b") (id 76))
-		(e-binop @4-5-4-10 (op "add") (id 80)
+		(e-int @3-5-3-6 (value "5") (id 73)))
+	(d-let (id 79)
+		(p-assign @4-1-4-2 (ident "b") (id 75))
+		(e-binop @4-5-4-10 (op "add") (id 78)
 			(e-lookup-local @4-5-4-6
 				(pattern (id 72)))
 			(e-int @4-9-4-10 (value "1")))))

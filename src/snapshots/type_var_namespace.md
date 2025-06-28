@@ -134,20 +134,20 @@ main! = |_| {}
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 108)
+	(d-let (id 107)
 		(p-assign @5-1-5-8 (ident "process") (id 78))
-		(e-lambda @5-11-14-2 (id 101)
+		(e-lambda @5-11-14-2 (id 100)
 			(args
 				(p-assign @5-12-5-16 (ident "list") (id 79)))
 			(e-block @5-18-14-2
 				(s-let @7-5-7-14
 					(p-assign @7-5-7-9 (ident "elem") (id 80))
-					(e-int @7-12-7-14 (value "42") (id 82)))
+					(e-int @7-12-7-14 (value "42") (id 81)))
 				(s-type-anno @10-5-11-11 (name "result")
 					(ty-var @10-14-10-18 (name "elem")))
 				(s-let @11-5-11-30
-					(p-assign @11-5-11-11 (ident "result") (id 88))
-					(e-call @11-14-11-30 (id 92)
+					(p-assign @11-5-11-11 (ident "result") (id 87))
+					(e-call @11-14-11-30 (id 91)
 						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-lookup-local @11-25-11-29
 							(pattern (id 79)))))
@@ -157,18 +157,18 @@ main! = |_| {}
 						(e-lookup-local @11-53-11-57
 							(pattern (id 80)))))
 				(e-lookup-local @13-5-13-11
-					(pattern (id 88)))))
-		(annotation @5-1-5-8 (signature 106) (id 107)
+					(pattern (id 87)))))
+		(annotation @5-1-5-8 (signature 105) (id 106)
 			(declared-type
 				(ty-fn @4-11-4-29 (effectful false)
 					(ty-apply @4-11-4-21 (symbol "List")
 						(ty-var @4-16-4-20 (name "elem")))
 					(ty-var @4-25-4-29 (name "elem"))))))
-	(d-let (id 113)
-		(p-assign @16-1-16-6 (ident "main!") (id 109))
-		(e-lambda @16-9-16-15 (id 112)
+	(d-let (id 112)
+		(p-assign @16-1-16-6 (ident "main!") (id 108))
+		(e-lambda @16-9-16-15 (id 111)
 			(args
-				(p-underscore @16-10-16-11 (id 110)))
+				(p-underscore @16-10-16-11 (id 109)))
 			(e-empty_record @16-13-16-15))))
 ~~~
 # TYPES

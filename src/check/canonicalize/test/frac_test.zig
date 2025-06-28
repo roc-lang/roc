@@ -85,7 +85,10 @@ test "fractional literal - basic decimal" {
                 .structure => |structure| switch (structure) {
                     .num => |num| switch (num) {
                         .num_poly => return error.UnexpectedNumPolyType,
-                        .frac_poly => |requirements| {
+                        .frac_poly => |poly| {
+                            try testing.expect(poly.requirements.fits_in_dec);
+                        },
+                        .frac_unbound => |requirements| {
                             try testing.expect(requirements.fits_in_dec);
                         },
                         else => return error.UnexpectedNumType,
@@ -114,7 +117,10 @@ test "fractional literal - scientific notation small" {
                 .structure => |structure| switch (structure) {
                     .num => |num| switch (num) {
                         .num_poly => return error.UnexpectedNumPolyType,
-                        .frac_poly => |requirements| {
+                        .frac_poly => |poly| {
+                            try testing.expect(poly.requirements.fits_in_dec); // Scientific notation now supported by Dec
+                        },
+                        .frac_unbound => |requirements| {
                             try testing.expect(requirements.fits_in_dec); // Scientific notation now supported by Dec
                         },
                         else => return error.UnexpectedNumType,
@@ -129,7 +135,11 @@ test "fractional literal - scientific notation small" {
                 .structure => |structure| switch (structure) {
                     .num => |num| switch (num) {
                         .num_poly => return error.UnexpectedNumPolyType,
-                        .frac_poly => |requirements| {
+                        .frac_poly => |poly| {
+                            // 1.23e-10 is within f32 range, so it should fit (ignoring precision)
+                            try testing.expect(poly.requirements.fits_in_f32);
+                        },
+                        .frac_unbound => |requirements| {
                             // 1.23e-10 is within f32 range, so it should fit (ignoring precision)
                             try testing.expect(requirements.fits_in_f32);
                         },
@@ -160,7 +170,10 @@ test "fractional literal - scientific notation large (near f64 max)" {
                 .structure => |structure| switch (structure) {
                     .num => |num| switch (num) {
                         .num_poly => return error.UnexpectedNumPolyType,
-                        .frac_poly => |requirements| {
+                        .frac_poly => |poly| {
+                            try testing.expect(!poly.requirements.fits_in_dec); // Way out of Dec range
+                        },
+                        .frac_unbound => |requirements| {
                             try testing.expect(!requirements.fits_in_dec); // Way out of Dec range
                         },
                         else => return error.UnexpectedNumType,
@@ -175,7 +188,10 @@ test "fractional literal - scientific notation large (near f64 max)" {
                 .structure => |structure| switch (structure) {
                     .num => |num| switch (num) {
                         .num_poly => return error.UnexpectedNumPolyType,
-                        .frac_poly => |requirements| {
+                        .frac_poly => |poly| {
+                            try testing.expect(!poly.requirements.fits_in_f32); // Too large for f32
+                        },
+                        .frac_unbound => |requirements| {
                             try testing.expect(!requirements.fits_in_f32); // Too large for f32
                         },
                         else => return error.UnexpectedNumType,

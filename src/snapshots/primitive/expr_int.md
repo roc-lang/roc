@@ -33,9 +33,9 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 75)
+	(d-let (id 74)
 		(p-assign @2-1-2-4 (ident "foo") (id 72))
-		(e-int @2-7-2-9 (value "42") (id 74))))
+		(e-int @2-7-2-9 (value "42") (id 73))))
 ~~~
 # TYPES
 ~~~clojure

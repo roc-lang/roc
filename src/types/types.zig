@@ -215,11 +215,14 @@ pub const Tuple = struct {
 /// form always wins: we discard the polymorphic wrapper and store the
 /// concrete, memory-efficient version instead.
 pub const Num = union(enum) {
-    num_poly: IntRequirements,
-    int_poly: IntRequirements,
-    frac_poly: FracRequirements,
-    int_precision: Int.Precision,
-    frac_precision: Frac.Precision,
+    num_unbound: IntRequirements,
+    int_unbound: IntRequirements,
+    frac_unbound: FracRequirements,
+    num_poly: struct { var_: Var, requirements: IntRequirements },
+    int_poly: struct { var_: Var, requirements: IntRequirements },
+    frac_poly: struct { var_: Var, requirements: FracRequirements },
+    int_precision: Int.Precision, // TODO instead of storing this, can we just always store a num_compact instead?
+    frac_precision: Frac.Precision, // TODO instead of storing this, can we just always store a num_compact instead?
     num_compact: Compact,
 
     /// Represents a compact number
@@ -259,9 +262,6 @@ pub const Num = union(enum) {
     ///
     /// Putting all of this together, we need to track the required number of bits and the sign separately.
     pub const IntRequirements = struct {
-        // The type variable (these are all polymorphic)
-        var_: Var,
-
         // Whether the literal was negative, and therefore only unifies with signed ints
         sign_needed: bool,
 
@@ -271,7 +271,6 @@ pub const Num = union(enum) {
         /// Unifies two IntRequirements, returning the most restrictive combination
         pub fn unify(self: IntRequirements, other: IntRequirements) IntRequirements {
             return IntRequirements{
-                .var_ = self.var_,
                 .sign_needed = self.sign_needed or other.sign_needed,
                 .bits_needed = @max(self.bits_needed, other.bits_needed),
             };
@@ -294,15 +293,12 @@ pub const Num = union(enum) {
     ///     NaN - fits in f32 and f64, but not dec
     ///     1.23456789012345 - may fit in f64 and dec, but not f32 (precision loss)
     pub const FracRequirements = struct {
-        // The type variable (these are all polymorphic)
-        var_: Var,
         fits_in_f32: bool,
         fits_in_dec: bool,
 
         /// Unifies two FracRequirements, returning the intersection of capabilities
         pub fn unify(self: FracRequirements, other: FracRequirements) FracRequirements {
             return FracRequirements{
-                .var_ = self.var_,
                 .fits_in_f32 = self.fits_in_f32 and other.fits_in_f32,
                 .fits_in_dec = self.fits_in_dec and other.fits_in_dec,
             };

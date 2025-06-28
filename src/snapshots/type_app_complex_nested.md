@@ -308,9 +308,9 @@ main! = |_| processComplex(Ok([Some(42), None]))
 									(ty-var @11-42-11-43 (name "a"))))
 							(ty-var @11-47-11-48 (name "b"))))
 					(ty-var @11-54-11-55 (name "a"))))))
-	(d-let (id 156)
+	(d-let (id 155)
 		(p-assign @17-1-17-6 (ident "main!") (id 139))
-		(e-lambda @17-9-17-49 (id 155)
+		(e-lambda @17-9-17-49 (id 154)
 			(args
 				(p-underscore @17-10-17-11 (id 140)))
 			(e-call @17-13-17-49
@@ -318,7 +318,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 					(pattern (id 98)))
 				(e-call @17-28-17-48
 					(e-tag @17-28-17-30 (ext-var 0) (name "Ok") (args "TODO"))
-					(e-list @17-31-17-47 (elem-var 151)
+					(e-list @17-31-17-47 (elem-var 150)
 						(elems
 							(e-call @17-32-17-40
 								(e-tag @17-32-17-36 (ext-var 0) (name "Some") (args "TODO"))

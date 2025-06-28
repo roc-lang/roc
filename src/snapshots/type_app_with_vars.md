@@ -109,15 +109,15 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 							(ty-var @3-26-3-27 (name "b"))))
 					(ty-apply @3-32-3-39 (symbol "List")
 						(ty-var @3-37-3-38 (name "b")))))))
-	(d-let (id 120)
+	(d-let (id 115)
 		(p-assign @6-1-6-6 (ident "main!") (id 103))
-		(e-lambda @6-9-6-33 (id 119)
+		(e-lambda @6-9-6-33 (id 114)
 			(args
 				(p-underscore @6-10-6-11 (id 104)))
 			(e-call @6-13-6-33
 				(e-lookup-local @6-13-6-20
 					(pattern (id 85)))
-				(e-list @6-21-6-32 (elem-var 116)
+				(e-list @6-21-6-32 (elem-var 111)
 					(elems
 						(e-int @6-22-6-23 (value "1"))
 						(e-int @6-24-6-25 (value "2"))
