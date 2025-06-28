@@ -1128,6 +1128,10 @@ pub const Expr = union(enum) {
         elems: Expr.Span,
         region: Region,
     },
+    /// Empty list constant
+    e_empty_list: struct {
+        region: Region,
+    },
     e_tuple: struct {
         elems: Expr.Span,
         region: Region,
@@ -1288,6 +1292,7 @@ pub const Expr = union(enum) {
             .tuple => |e| return e.region,
             .when => |e| return e.region,
             .@"if" => |e| return e.region,
+            .empty_list => |e| return e.region,
             .call => |e| return e.region,
             .record => |e| return e.region,
             .empty_record => |e| return e.region,
@@ -1431,6 +1436,11 @@ pub const Expr = union(enum) {
                 list_node.appendNode(gpa, &elems_node);
 
                 return list_node;
+            },
+            .e_empty_list => |e| {
+                var empty_list_node = SExpr.init(gpa, "e-empty_list");
+                empty_list_node.appendRegion(gpa, ir.calcRegionInfo(e.region));
+                return empty_list_node;
             },
             .e_tuple => |t| {
                 var node = SExpr.init(gpa, "e-tuple");

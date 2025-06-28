@@ -392,6 +392,13 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 },
             };
         },
+        .expr_empty_list => {
+            return CIR.Expr{
+                .e_empty_list = .{
+                    .region = node.region,
+                },
+            };
+        },
         .expr_record => {
             return CIR.Expr{
                 .e_record = .{
@@ -948,6 +955,10 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             node.data_1 = e.elems.span.start;
             node.data_2 = e.elems.span.len;
             node.data_3 = @intFromEnum(e.elem_var);
+        },
+        .e_empty_list => |e| {
+            node.region = e.region;
+            node.tag = .expr_empty_list;
         },
         .e_tuple => |e| {
             node.region = e.region;

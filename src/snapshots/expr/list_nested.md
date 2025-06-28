@@ -31,21 +31,21 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-list @1-1-1-22 (elem-var 83) (id 84)
+(e-list @1-1-1-22 (elem-var 74) (id 80)
 	(elems
-		(e-list @1-2-1-8 (elem-var 74)
+		(e-list @1-2-1-8 (elem-var 72)
 			(elems
 				(e-int @1-3-1-4 (value "1"))
 				(e-int @1-6-1-7 (value "2"))))
-		(e-list @1-10-1-16 (elem-var 78)
+		(e-list @1-10-1-16 (elem-var 75)
 			(elems
 				(e-int @1-11-1-12 (value "3"))
 				(e-int @1-14-1-15 (value "4"))))
-		(e-list @1-18-1-21 (elem-var 81)
+		(e-list @1-18-1-21 (elem-var 78)
 			(elems
 				(e-int @1-19-1-20 (value "5"))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 84) (type "List(List(Num(*)))"))
+(expr (id 80) (type "List(List(Num(*)))"))
 ~~~

@@ -39,7 +39,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-list @1-1-1-16 (elem-var 76) (id 77)
+(e-list @1-1-1-16 (elem-var 72) (id 76)
 	(elems
 		(e-int @1-2-1-3 (value "1"))
 		(e-int @1-5-1-6 (value "2"))
@@ -48,5 +48,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 77) (type "List(Error)"))
+(expr (id 76) (type "List(Error)"))
 ~~~

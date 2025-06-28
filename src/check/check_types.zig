@@ -276,6 +276,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
                 );
             }
         },
+        .e_empty_list => |_| {},
         .e_when => |_| {},
         .e_if => |_| {},
         .e_call => |call| {

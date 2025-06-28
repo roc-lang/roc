@@ -1030,9 +1030,9 @@ expect {
 				(p-assign @50-2-50-3 (ident "a") (id 167))
 				(p-applied-tag @50-5-50-7 (id 169)))
 			(e-runtime-error (tag "not_implemented"))))
-	(d-let (id 348)
+	(d-let (id 345)
 		(p-assign @75-1-75-3 (ident "ma") (id 180))
-		(e-lambda @75-5-111-2 (id 347)
+		(e-lambda @75-5-111-2 (id 344)
 			(args
 				(p-underscore @75-6-75-7 (id 181)))
 			(e-block @75-9-111-2
@@ -1063,7 +1063,7 @@ expect {
 						(e-literal @87-13-87-13 (string ""))))
 				(s-let @88-1-91-3
 					(p-assign @88-1-88-2 (ident "t") (id 217))
-					(e-list @88-5-91-3 (elem-var 225) (id 226)
+					(e-list @88-5-91-3 (elem-var 222) (id 225)
 						(elems
 							(e-call @89-3-89-14
 								(e-runtime-error (tag "ident_not_in_scope"))
@@ -1072,8 +1072,8 @@ expect {
 							(e-int @89-16-89-19 (value "456"))
 							(e-int @90-1-90-2 (value "9")))))
 				(s-let @96-2-96-59
-					(p-assign @96-2-96-4 (ident "rd") (id 230))
-					(e-record @96-7-96-59 (ext-var 249) (id 250)
+					(p-assign @96-2-96-4 (ident "rd") (id 229))
+					(e-record @96-7-96-59 (ext-var 248) (id 249)
 						(fields
 							(field (name "foo")
 								(e-int @96-14-96-17 (value "123")))
@@ -1089,8 +1089,8 @@ expect {
 							(field (name "ned")
 								(e-runtime-error (tag "ident_not_in_scope"))))))
 				(s-let @97-2-97-48
-					(p-assign @97-2-97-3 (ident "t") (id 257))
-					(e-tuple @97-6-97-48 (id 275)
+					(p-assign @97-2-97-3 (ident "t") (id 256))
+					(e-tuple @97-6-97-48 (id 273)
 						(elems
 							(e-int @97-7-97-10 (value "123"))
 							(e-string @97-12-97-19
@@ -1101,8 +1101,8 @@ expect {
 								(elems
 									(e-runtime-error (tag "ident_not_in_scope"))
 									(e-lookup-local @97-34-97-35
-										(pattern (id 257)))))
-							(e-list @97-38-97-47 (elem-var 273)
+										(pattern (id 256)))))
+							(e-list @97-38-97-47 (elem-var 269)
 								(elems
 									(e-int @97-39-97-40 (value "1"))
 									(e-int @97-42-97-43 (value "2"))
@@ -1121,7 +1121,7 @@ expect {
 								(elems
 									(e-runtime-error (tag "ident_not_in_scope"))
 									(e-runtime-error (tag "ident_not_in_scope"))))
-							(e-list @103-3-103-12 (elem-var 295)
+							(e-list @103-3-103-12 (elem-var 290)
 								(elems
 									(e-int @103-4-103-5 (value "1"))
 									(e-int @103-7-103-8 (value "2"))
@@ -1164,9 +1164,9 @@ expect {
 							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-runtime-error (tag "ident_not_in_scope")))
 						(e-literal @109-4-109-5 (string " ")))))))
-	(d-let (id 352)
-		(p-assign @114-1-114-2 (ident "e") (id 350))
-		(e-empty_record @114-5-114-7 (id 351)))
+	(d-let (id 349)
+		(p-assign @114-1-114-2 (ident "e") (id 347))
+		(e-empty_record @114-5-114-7 (id 348)))
 	(s-type-decl @13-1-14-6 (id 83)
 		(ty-header @13-1-13-10 (name "Map")
 			(ty-args
@@ -1232,8 +1232,8 @@ expect {
 		(d_assign (name "ane") (def_var 138) (type "* ? *"))
 		(d_assign (name "add") (def_var 165) (type "* ? *"))
 		(d_assign (name "me") (def_var 175) (type "*, [Tb, * *] ? Error"))
-		(d_assign (name "ma") (def_var 348) (type "* ? *"))
-		(d_assign (name "e") (def_var 352) (type "{}")))
+		(d_assign (name "ma") (def_var 345) (type "* ? *"))
+		(d_assign (name "e") (def_var 349) (type "{}")))
 	(expressions
 		(expr @35-7-37-4 (type "* ? *"))
 		(expr @38-7-47-2 (type "* ? *"))

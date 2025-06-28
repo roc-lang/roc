@@ -279,9 +279,9 @@ main! = |_| {
 				(ty-fn @12-19-12-29 (effectful false)
 					(ty @12-19-12-22 (name "U64"))
 					(ty @12-26-12-29 (name "U64"))))))
-	(d-let (id 150)
+	(d-let (id 149)
 		(p-assign @15-1-15-6 (ident "main!") (id 122))
-		(e-lambda @15-9-20-2 (id 149)
+		(e-lambda @15-9-20-2 (id 148)
 			(args
 				(p-underscore @15-10-15-11 (id 123)))
 			(e-block @15-13-20-2
@@ -303,8 +303,7 @@ main! = |_| {
 						(e-lookup-local @18-15-18-30
 							(pattern (id 108)))
 						(e-int @18-31-18-33 (value "42"))))
-				(e-list @19-5-19-7 (elem-var 142)
-					(elems))))))
+				(e-empty_list @19-5-19-7)))))
 ~~~
 # TYPES
 ~~~clojure
@@ -313,7 +312,7 @@ main! = |_| {
 		(d_assign (name "testEllipsis") (def_var 87) (type "U64 -> U64"))
 		(d_assign (name "testCrash") (def_var 103) (type "Error"))
 		(d_assign (name "testCrashSimple") (def_var 120) (type "Error"))
-		(d_assign (name "main!") (def_var 150) (type "* ? *")))
+		(d_assign (name "main!") (def_var 149) (type "* ? *")))
 	(expressions
 		(expr @5-16-5-23 (type "U64 -> U64"))
 		(expr @9-13-9-24 (type "Error"))

@@ -226,7 +226,7 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1-1-19-2 (id 147)
+(e-block @1-1-19-2 (id 146)
 	(s-let @3-5-3-21
 		(p-assign @3-5-3-12 (ident "add_one") (id 72))
 		(e-lambda @3-15-3-21 (id 76)
@@ -279,7 +279,7 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 						(e-int @13-24-13-25 (value "4")))))))
 	(s-let @14-2-14-42
 		(p-assign @14-2-14-7 (ident "mixed") (id 116))
-		(e-tuple @14-10-14-42 (id 128)
+		(e-tuple @14-10-14-42 (id 127)
 			(elems
 				(e-call @14-11-14-21
 					(e-lookup-local @14-11-14-18
@@ -287,14 +287,14 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 					(e-int @14-19-14-20 (value "5")))
 				(e-string @14-23-14-30
 					(e-literal @14-24-14-29 (string "world")))
-				(e-list @14-32-14-41 (elem-var 126)
+				(e-list @14-32-14-41 (elem-var 123)
 					(elems
 						(e-int @14-33-14-34 (value "1"))
 						(e-int @14-36-14-37 (value "2"))
 						(e-int @14-39-14-40 (value "3")))))))
 	(s-let @15-2-15-23
-		(p-assign @15-2-15-11 (ident "with_vars") (id 130))
-		(e-tuple @15-14-15-23 (id 134)
+		(p-assign @15-2-15-11 (ident "with_vars") (id 129))
+		(e-tuple @15-14-15-23 (id 133)
 			(elems
 				(e-lookup-local @15-15-15-16
 					(pattern (id 78)))
@@ -303,15 +303,15 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 				(e-lookup-local @15-21-15-22
 					(pattern (id 84))))))
 	(s-let @16-2-16-31
-		(p-assign @16-2-16-13 (ident "with_lambda") (id 136))
-		(e-tuple @16-16-16-31 (id 144)
+		(p-assign @16-2-16-13 (ident "with_lambda") (id 135))
+		(e-tuple @16-16-16-31 (id 143)
 			(elems
 				(e-lambda @16-17-16-27
 					(args
-						(p-assign @16-18-16-19 (ident "n") (id 137)))
+						(p-assign @16-18-16-19 (ident "n") (id 136)))
 					(e-binop @16-21-16-27 (op "add")
 						(e-lookup-local @16-21-16-22
-							(pattern (id 137)))
+							(pattern (id 136)))
 						(e-int @16-25-16-26 (value "1"))))
 				(e-int @16-28-16-30 (value "42")))))
 	(e-lookup-local @18-2-18-7
@@ -319,5 +319,5 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 147) (type "*"))
+(expr (id 146) (type "*"))
 ~~~

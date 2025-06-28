@@ -40,6 +40,7 @@ pub const Tag = enum {
     expr_var,
     expr_tuple,
     expr_list,
+    expr_empty_list,
     expr_call,
     expr_record,
     expr_empty_record,

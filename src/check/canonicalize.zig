@@ -1167,12 +1167,30 @@ pub fn canonicalize_expr(
         .list => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
+            // Empty lists get the .list_unbound type
+            const items_slice = self.parse_ir.store.exprSlice(e.items);
+            if (items_slice.len == 0) {
+                // Empty list - use e_empty_list
+                const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
+                    .e_empty_list = .{
+                        .region = region,
+                    },
+                });
+
+                // Insert concrete type variable as list_unbound
+                _ = self.can_ir.setTypeVarAtExpr(
+                    expr_idx,
+                    Content{ .structure = .list_unbound },
+                );
+
+                return expr_idx;
+            }
+
             // Mark the start of scratch expressions for the list
             const scratch_top = self.can_ir.store.scratchExprTop();
 
             // Iterate over the list item, canonicalizing each one
             // Then append the result to the scratch list
-            const items_slice = self.parse_ir.store.exprSlice(e.items);
             for (items_slice) |item| {
                 if (self.canonicalize_expr(item)) |canonicalized| {
                     self.can_ir.store.addScratchExpr(canonicalized);
@@ -1182,16 +1200,13 @@ pub fn canonicalize_expr(
             // Create span of the new scratch expressions
             const elems_span = self.can_ir.store.exprSpanFrom(scratch_top);
 
-            // create type vars, first "reserve" node slot
-            const list_expr_idx = self.can_ir.store.predictNodeIndex(2);
+            // We should have at least one element since we checked for empty lists above
+            std.debug.assert(elems_span.span.len > 0);
 
-            // then insert the type vars, setting the parent to be the final slot
-            const elem_type_var = self.can_ir.pushFreshTypeVar(
-                list_expr_idx,
-                region,
-            );
-
-            // then in the final slot the actual expr is inserted
+            // Initialize the list's type variable to its first element's CIR Index
+            // (later steps will unify that type with the other elems' types)
+            const first_elem_idx = self.can_ir.store.sliceExpr(elems_span)[0];
+            const elem_type_var = @as(TypeVar, @enumFromInt(@intFromEnum(first_elem_idx)));
             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
                 .e_list = .{
                     .elems = elems_span,

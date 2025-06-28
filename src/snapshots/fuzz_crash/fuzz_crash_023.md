@@ -1896,9 +1896,9 @@ expect {
 				(p-assign @81-2-81-3 (ident "a") (id 225))
 				(p-assign @82-2-82-3 (ident "b") (id 226)))
 			(e-runtime-error (tag "not_implemented"))))
-	(d-let (id 423)
+	(d-let (id 420)
 		(p-assign @144-1-144-6 (ident "main!") (id 242))
-		(e-lambda @144-9-196-2 (id 416)
+		(e-lambda @144-9-196-2 (id 413)
 			(args
 				(p-underscore @144-10-144-11 (id 243)))
 			(e-block @144-13-196-2
@@ -1938,7 +1938,7 @@ expect {
 						(e-literal @165-33-165-33 (string ""))))
 				(s-let @166-2-173-3
 					(p-assign @166-2-166-6 (ident "list") (id 290))
-					(e-list @166-9-173-3 (elem-var 298) (id 299)
+					(e-list @166-9-173-3 (elem-var 295) (id 298)
 						(elems
 							(e-call @167-3-170-4
 								(e-lookup-local @167-3-167-10
@@ -1952,8 +1952,8 @@ expect {
 				(s-type-anno @1-1-1-1 (name "qux")
 					(ty-malformed @1-1-1-1))
 				(s-let @179-2-179-68
-					(p-assign @179-2-179-7 (ident "tuple") (id 310))
-					(e-tuple @179-10-179-68 (id 329)
+					(p-assign @179-2-179-7 (ident "tuple") (id 309))
+					(e-tuple @179-10-179-68 (id 327)
 						(elems
 							(e-int @179-11-179-14 (value "123"))
 							(e-string @179-16-179-23
@@ -1968,15 +1968,15 @@ expect {
 								(elems
 									(e-runtime-error (tag "ident_not_in_scope"))
 									(e-lookup-local @179-50-179-55
-										(pattern (id 310)))))
-							(e-list @179-58-179-67 (elem-var 327)
+										(pattern (id 309)))))
+							(e-list @179-58-179-67 (elem-var 323)
 								(elems
 									(e-int @179-59-179-60 (value "1"))
 									(e-int @179-62-179-63 (value "2"))
 									(e-int @179-65-179-66 (value "3")))))))
 				(s-let @180-2-187-3
-					(p-assign @180-2-180-17 (ident "multiline_tuple") (id 331))
-					(e-tuple @180-20-187-3 (id 351)
+					(p-assign @180-2-180-17 (ident "multiline_tuple") (id 329))
+					(e-tuple @180-20-187-3 (id 348)
 						(elems
 							(e-int @181-3-181-6 (value "123"))
 							(e-string @182-3-182-10
@@ -1990,15 +1990,15 @@ expect {
 								(elems
 									(e-runtime-error (tag "ident_not_in_scope"))
 									(e-lookup-local @185-12-185-17
-										(pattern (id 310)))))
-							(e-list @186-3-186-12 (elem-var 349)
+										(pattern (id 309)))))
+							(e-list @186-3-186-12 (elem-var 344)
 								(elems
 									(e-int @186-4-186-5 (value "1"))
 									(e-int @186-7-186-8 (value "2"))
 									(e-int @186-10-186-11 (value "3")))))))
 				(s-let @188-2-189-23
-					(p-assign @188-2-188-15 (ident "bin_op_result") (id 353))
-					(e-binop @188-18-189-23 (op "or") (id 383)
+					(p-assign @188-2-188-15 (ident "bin_op_result") (id 350))
+					(e-binop @188-18-189-23 (op "or") (id 380)
 						(e-binop @188-18-188-74 (op "or")
 							(e-binop @188-18-188-43 (op "gt")
 								(e-binop @188-18-188-34 (op "null_coalesce")
@@ -2026,8 +2026,8 @@ expect {
 								(e-int @188-81-188-82 (value "3"))
 								(e-int @188-85-188-86 (value "5"))))))
 				(s-let @189-2-190-8
-					(p-assign @189-2-189-23 (ident "static_dispatch_style") (id 385))
-					(e-dot-access @189-26-190-8 (field "unknown") (id 390)
+					(p-assign @189-2-189-23 (ident "static_dispatch_style") (id 382))
+					(e-dot-access @189-26-190-8 (field "unknown") (id 387)
 						(receiver
 							(e-dot-access @189-26-189-110 (field "unknown")
 								(receiver
@@ -2038,7 +2038,7 @@ expect {
 					(e-runtime-error (tag "not_implemented")))
 				(e-call @191-2-195-3
 					(e-lookup-external
-						(ext-decl @191-2-191-14 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value") (type-var 395)))
+						(ext-decl @191-2-191-14 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value") (type-var 392)))
 					(e-string @192-3-194-18
 						(e-literal @192-4-192-14 (string "How about "))
 						(e-call @193-4-193-21
@@ -2046,7 +2046,7 @@ expect {
 							(e-lookup-local @193-14-193-20
 								(pattern (id 249))))
 						(e-literal @194-4-194-17 (string " as a string?"))))))
-		(annotation @144-1-144-6 (signature 421) (id 422)
+		(annotation @144-1-144-6 (signature 418) (id 419)
 			(declared-type
 				(ty-fn @143-9-143-38 (effectful false)
 					(ty-apply @143-9-143-21 (symbol "List")
@@ -2054,10 +2054,10 @@ expect {
 					(ty-apply @143-25-143-38 (symbol "Result")
 						(ty-record @143-32-143-34)
 						(ty-underscore @143-36-143-37))))))
-	(d-let (id 431)
-		(p-assign @199-1-199-6 (ident "empty") (id 425))
-		(e-empty_record @199-9-199-11 (id 426))
-		(annotation @199-1-199-6 (signature 429) (id 430)
+	(d-let (id 428)
+		(p-assign @199-1-199-6 (ident "empty") (id 422))
+		(e-empty_record @199-9-199-11 (id 423))
+		(annotation @199-1-199-6 (signature 426) (id 427)
 			(declared-type
 				(ty-record @198-9-198-11))))
 	(s-type-decl @22-1-23-6 (id 84)
@@ -2180,8 +2180,8 @@ expect {
 		(d_assign (name "add_one_oneline") (def_var 190) (type "* ? *"))
 		(d_assign (name "add_one") (def_var 223) (type "U64 -> U64"))
 		(d_assign (name "match_time") (def_var 233) (type "*, * ? Error"))
-		(d_assign (name "main!") (def_var 423) (type "List -> Result"))
-		(d_assign (name "empty") (def_var 431) (type "{  }")))
+		(d_assign (name "main!") (def_var 420) (type "List -> Result"))
+		(d_assign (name "empty") (def_var 428) (type "{  }")))
 	(expressions
 		(expr @65-19-67-8 (type "* ? *"))
 		(expr @68-11-78-2 (type "U64 -> U64"))
