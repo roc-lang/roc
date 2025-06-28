@@ -139,6 +139,8 @@ pub fn unify(
                                 .int_poly, .num_poly, .int_unbound, .num_unbound, .frac_unbound => true,
                                 else => false,
                             },
+                            .list_unbound => true,
+                            .record_unbound => true,
                             else => false,
                         },
                         else => false,
@@ -165,6 +167,8 @@ pub fn unify(
                                 .int_poly, .num_poly, .int_unbound, .num_unbound, .frac_unbound => true,
                                 else => false,
                             },
+                            .list_unbound => true,
+                            .record_unbound => true,
                             else => false,
                         },
                         else => false,
@@ -587,9 +591,7 @@ const Unifier = struct {
         switch (a_flat_type) {
             .str => {
                 switch (b_flat_type) {
-                    .str => {
-                        self.merge(vars, vars.b.desc.content);
-                    },
+                    .str => self.merge(vars, vars.b.desc.content),
                     else => return error.TypeMismatch,
                 }
             },
@@ -608,6 +610,22 @@ const Unifier = struct {
                         try self.unifyGuarded(a_var, b_var);
                         self.merge(vars, vars.b.desc.content);
                     },
+                    .list_unbound => {
+                        // When unifying list with list_unbound, list wins
+                        self.merge(vars, vars.a.desc.content);
+                    },
+                    else => return error.TypeMismatch,
+                }
+            },
+            .list_unbound => {
+                switch (b_flat_type) {
+                    .list => |_| {
+                        // When unifying list_unbound with list, list wins
+                        self.merge(vars, vars.b.desc.content);
+                    },
+                    .list_unbound => {
+                        // Both are list_unbound - stay unbound, no merge needed
+                    },
                     else => return error.TypeMismatch,
                 }
             },
@@ -615,6 +633,26 @@ const Unifier = struct {
                 switch (b_flat_type) {
                     .tuple => |b_tuple| {
                         try self.unifyTuple(vars, a_tuple, b_tuple);
+                    },
+                    .tuple_unbound => |b_tuple| {
+                        // When unifying tuple with tuple_unbound, tuple wins
+                        try self.unifyTuple(vars, a_tuple, b_tuple);
+                    },
+                    else => return error.TypeMismatch,
+                }
+            },
+            .tuple_unbound => |a_tuple| {
+                switch (b_flat_type) {
+                    .tuple => |b_tuple| {
+                        // When unifying tuple_unbound with tuple, tuple wins
+                        try self.unifyTuple(vars, a_tuple, b_tuple);
+                        self.merge(vars, vars.b.desc.content);
+                    },
+                    .tuple_unbound => |b_tuple| {
+                        // Both are tuple_unbound - unify elements and stay unbound
+                        try self.unifyTuple(vars, a_tuple, b_tuple);
+                        // Explicitly merge to keep as tuple_unbound
+                        self.merge(vars, vars.a.desc.content);
                     },
                     else => return error.TypeMismatch,
                 }
@@ -654,6 +692,33 @@ const Unifier = struct {
                     },
                     .record => |b_record| {
                         try self.unifyTwoRecords(vars, a_record, b_record);
+                    },
+                    .record_unbound => |b_record| {
+                        // When unifying record with record_unbound, record wins
+                        try self.unifyTwoRecords(vars, a_record, b_record);
+                    },
+                    else => return error.TypeMismatch,
+                }
+            },
+            .record_unbound => |a_record| {
+                switch (b_flat_type) {
+                    .empty_record => {
+                        if (a_record.fields.len() == 0) {
+                            try self.unifyGuarded(a_record.ext, vars.b.var_);
+                        } else {
+                            return error.TypeMismatch;
+                        }
+                    },
+                    .record => |b_record| {
+                        // When unifying record_unbound with record, record wins
+                        try self.unifyTwoRecords(vars, a_record, b_record);
+                        self.merge(vars, vars.b.desc.content);
+                    },
+                    .record_unbound => |b_record| {
+                        // Both are record_unbound - unify fields and stay unbound
+                        try self.unifyTwoRecords(vars, a_record, b_record);
+                        // Explicitly merge to keep as record_unbound
+                        self.merge(vars, vars.a.desc.content);
                     },
                     else => return error.TypeMismatch,
                 }
@@ -956,6 +1021,10 @@ const Unifier = struct {
                         }
                         self.merge(vars, vars.b.desc.content);
                     },
+                    .frac_unbound => |b_requirements| {
+                        // When unifying num_unbound with frac_unbound, frac wins
+                        self.merge(vars, Content{ .structure = .{ .num = .{ .frac_unbound = b_requirements } } });
+                    },
                     else => return error.TypeMismatch,
                 }
             },
@@ -1042,6 +1111,12 @@ const Unifier = struct {
                             return error.TypeMismatch;
                         }
                         self.merge(vars, vars.b.desc.content);
+                    },
+                    .num_unbound => |b_requirements| {
+                        // When unifying frac_unbound with num_unbound, frac wins
+                        // Note: b_requirements are IntRequirements, we just keep our FracRequirements
+                        _ = b_requirements;
+                        self.merge(vars, Content{ .structure = .{ .num = .{ .frac_unbound = a_requirements } } });
                     },
                     else => return error.TypeMismatch,
                 }
@@ -1624,6 +1699,14 @@ const Unifier = struct {
                 .structure => |flat_type| {
                     switch (flat_type) {
                         .record => |ext_record| {
+                            const next_range = self.scratch.copyGatherFieldsFromMultiList(
+                                &self.types_store.record_fields,
+                                ext_record.fields,
+                            );
+                            range.end = next_range.end;
+                            ext_var = ext_record.ext;
+                        },
+                        .record_unbound => |ext_record| {
                             const next_range = self.scratch.copyGatherFieldsFromMultiList(
                                 &self.types_store.record_fields,
                                 ext_record.fields,
@@ -3216,6 +3299,87 @@ test "unify - a & b are tuples with args flipped (fail)" {
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
     try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
+}
+
+test "unify - tuple_unbound unifies with tuple" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create element type variables
+    const num_var = env.module_env.types.fresh();
+    _ = env.module_env.types.setVarContent(num_var, Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = false, .bits_needed = 0 } } } });
+
+    const str_var = env.module_env.types.fresh();
+    _ = env.module_env.types.setVarContent(str_var, Content{ .structure = .str });
+
+    // Create tuple elements
+    const elems = [_]types_mod.Var{ num_var, str_var };
+    const elems_range = env.module_env.types.appendTupleElems(&elems);
+
+    // Create a tuple_unbound
+    const tuple_unbound = Content{ .structure = .{ .tuple_unbound = .{ .elems = elems_range } } };
+    const tuple_unbound_var = env.module_env.types.freshFromContent(tuple_unbound);
+
+    // Create a regular tuple with same structure
+    const tuple = Content{ .structure = .{ .tuple = .{ .elems = elems_range } } };
+    const tuple_var = env.module_env.types.freshFromContent(tuple);
+
+    // Unify tuple_unbound with tuple
+    const result = env.unify(tuple_unbound_var, tuple_var);
+    try std.testing.expect(result.isOk());
+
+    // Check that tuple_unbound_var now points to tuple_var
+    const resolved = env.module_env.types.resolveVar(tuple_unbound_var);
+    const resolved_tuple = env.module_env.types.resolveVar(tuple_var);
+    try std.testing.expectEqual(resolved.var_, resolved_tuple.var_);
+}
+
+test "unify - multiple tuple_unbounds stay unbound" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create element type variables for first tuple
+    const num_var1 = env.module_env.types.fresh();
+    _ = env.module_env.types.setVarContent(num_var1, Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = false, .bits_needed = 0 } } } });
+
+    // Create tuple elements for first tuple
+    const elems1 = [_]types_mod.Var{num_var1};
+    const elems_range1 = env.module_env.types.appendTupleElems(&elems1);
+
+    // Create element type variables for second tuple
+    const num_var2 = env.module_env.types.fresh();
+    _ = env.module_env.types.setVarContent(num_var2, Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = false, .bits_needed = 0 } } } });
+
+    // Create tuple elements for second tuple
+    const elems2 = [_]types_mod.Var{num_var2};
+    const elems_range2 = env.module_env.types.appendTupleElems(&elems2);
+
+    // Create two tuple_unbounds
+    const tuple_unbound1 = Content{ .structure = .{ .tuple_unbound = .{ .elems = elems_range1 } } };
+    const tuple_unbound1_var = env.module_env.types.freshFromContent(tuple_unbound1);
+
+    const tuple_unbound2 = Content{ .structure = .{ .tuple_unbound = .{ .elems = elems_range2 } } };
+    const tuple_unbound2_var = env.module_env.types.freshFromContent(tuple_unbound2);
+
+    // Unify the two tuple_unbounds
+    const result = env.unify(tuple_unbound1_var, tuple_unbound2_var);
+    try std.testing.expect(result.isOk());
+
+    // Check that the result is still tuple_unbound
+    const resolved = env.module_env.types.resolveVar(tuple_unbound1_var);
+    switch (resolved.desc.content) {
+        .structure => |structure| {
+            switch (structure) {
+                .tuple_unbound => {}, // Expected
+                else => return error.ExpectedTupleUnbound,
+            }
+        },
+        else => return error.ExpectedStructure,
+    }
 }
 
 // unification - structure/structure - compact/compact
@@ -5314,4 +5478,178 @@ test "positive and negative literals unify with sign requirement" {
     // They should unify successfully (creating a signed type that can hold both)
     const result = env.unify(literal1_var, literal2_var);
     try std.testing.expect(result == .ok);
+}
+
+test "unify - num_unbound with frac_unbound" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create a num_unbound (like literal 1)
+    const num_requirements = Num.IntRequirements{
+        .sign_needed = false,
+        .bits_needed = @intFromEnum(Num.Int.BitsNeeded.@"7"),
+    };
+    const num_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_unbound = num_requirements } } });
+
+    // Create a frac_unbound (like literal 2.5)
+    const frac_requirements = Num.FracRequirements{
+        .fits_in_f32 = true,
+        .fits_in_dec = true,
+    };
+    const frac_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_unbound = frac_requirements } } });
+
+    // They should unify successfully with frac_unbound winning
+    const result = env.unify(num_var, frac_var);
+    try std.testing.expect(result == .ok);
+
+    // Check that the result is frac_unbound
+    const resolved = env.module_env.types.resolveVar(num_var);
+    switch (resolved.desc.content) {
+        .structure => |structure| {
+            switch (structure) {
+                .num => |num| {
+                    switch (num) {
+                        .frac_unbound => {}, // Expected
+                        else => return error.ExpectedFracUnbound,
+                    }
+                },
+                else => return error.ExpectedNum,
+            }
+        },
+        else => return error.ExpectedStructure,
+    }
+}
+
+test "unify - frac_unbound with num_unbound (reverse order)" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create a frac_unbound (like literal 2.5)
+    const frac_requirements = Num.FracRequirements{
+        .fits_in_f32 = true,
+        .fits_in_dec = true,
+    };
+    const frac_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_unbound = frac_requirements } } });
+
+    // Create a num_unbound (like literal 1)
+    const num_requirements = Num.IntRequirements{
+        .sign_needed = false,
+        .bits_needed = @intFromEnum(Num.Int.BitsNeeded.@"7"),
+    };
+    const num_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_unbound = num_requirements } } });
+
+    // They should unify successfully with frac_unbound winning
+    const result = env.unify(frac_var, num_var);
+    try std.testing.expect(result == .ok);
+
+    // Check that the result is frac_unbound
+    const resolved = env.module_env.types.resolveVar(frac_var);
+    switch (resolved.desc.content) {
+        .structure => |structure| {
+            switch (structure) {
+                .num => |num| {
+                    switch (num) {
+                        .frac_unbound => {}, // Expected
+                        else => return error.ExpectedFracUnbound,
+                    }
+                },
+                else => return error.ExpectedNum,
+            }
+        },
+        else => return error.ExpectedStructure,
+    }
+}
+
+test "unify - int_unbound with num_unbound" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create an int_unbound (like literal -5)
+    const int_requirements = Num.IntRequirements{
+        .sign_needed = true,
+        .bits_needed = @intFromEnum(Num.Int.BitsNeeded.@"7"),
+    };
+    const int_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_unbound = int_requirements } } });
+
+    // Create a num_unbound (like literal 1)
+    const num_requirements = Num.IntRequirements{
+        .sign_needed = false,
+        .bits_needed = @intFromEnum(Num.Int.BitsNeeded.@"7"),
+    };
+    const num_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_unbound = num_requirements } } });
+
+    // They should unify successfully with int_unbound winning
+    const result = env.unify(int_var, num_var);
+    try std.testing.expect(result == .ok);
+
+    // Check that the result is int_unbound
+    const resolved = env.module_env.types.resolveVar(int_var);
+    switch (resolved.desc.content) {
+        .structure => |structure| {
+            switch (structure) {
+                .num => |num| {
+                    switch (num) {
+                        .int_unbound => |requirements| {
+                            // Should have merged the requirements - sign_needed should be true
+                            try std.testing.expect(requirements.sign_needed == true);
+                        },
+                        else => return error.ExpectedIntUnbound,
+                    }
+                },
+                else => return error.ExpectedNum,
+            }
+        },
+        else => return error.ExpectedStructure,
+    }
+}
+
+test "unify - num_unbound with int_unbound (reverse order)" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create a num_unbound (like literal 1)
+    const num_requirements = Num.IntRequirements{
+        .sign_needed = false,
+        .bits_needed = @intFromEnum(Num.Int.BitsNeeded.@"7"),
+    };
+    const num_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_unbound = num_requirements } } });
+
+    // Create an int_unbound (like literal -5)
+    const int_requirements = Num.IntRequirements{
+        .sign_needed = true,
+        .bits_needed = @intFromEnum(Num.Int.BitsNeeded.@"7"),
+    };
+    const int_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_unbound = int_requirements } } });
+
+    // They should unify successfully with int_unbound winning
+    const result = env.unify(num_var, int_var);
+    try std.testing.expect(result == .ok);
+
+    // Check that the result is int_unbound
+    const resolved = env.module_env.types.resolveVar(num_var);
+    switch (resolved.desc.content) {
+        .structure => |structure| {
+            switch (structure) {
+                .num => |num| {
+                    switch (num) {
+                        .int_unbound => |requirements| {
+                            // Should have merged the requirements - sign_needed should be true
+                            try std.testing.expect(requirements.sign_needed == true);
+                        },
+                        else => return error.ExpectedIntUnbound,
+                    }
+                },
+                else => return error.ExpectedNum,
+            }
+        },
+        else => return error.ExpectedStructure,
+    }
 }

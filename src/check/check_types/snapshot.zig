@@ -106,11 +106,16 @@ pub const Store = struct {
                 const deep_content = self.deepCopyContent(store, resolved.desc.content);
                 return SnapshotFlatType{ .list = deep_content };
             },
+            .list_unbound => {
+                return SnapshotFlatType.list_unbound;
+            },
             .tuple => |tuple| SnapshotFlatType{ .tuple = self.deepCopyTuple(store, tuple) },
+            .tuple_unbound => |tuple| SnapshotFlatType{ .tuple_unbound = self.deepCopyTuple(store, tuple) },
             .num => |num| SnapshotFlatType{ .num = self.deepCopyNum(store, num) },
             .custom_type => |custom_type| SnapshotFlatType{ .custom_type = self.deepCopyCustomType(store, custom_type) },
             .func => |func| SnapshotFlatType{ .func = self.deepCopyFunc(store, func) },
             .record => |record| SnapshotFlatType{ .record = self.deepCopyRecord(store, record) },
+            .record_unbound => |record| SnapshotFlatType{ .record_unbound = self.deepCopyRecord(store, record) },
             .empty_record => SnapshotFlatType.empty_record,
             .tag_union => |tag_union| SnapshotFlatType{ .tag_union = self.deepCopyTagUnion(store, tag_union) },
             .empty_tag_union => SnapshotFlatType.empty_tag_union,
@@ -410,11 +415,14 @@ pub const SnapshotFlatType = union(enum) {
     str,
     box: SnapshotContentIdx, // Index into SnapshotStore.contents
     list: SnapshotContentIdx,
+    list_unbound,
     tuple: SnapshotTuple,
+    tuple_unbound: SnapshotTuple,
     num: SnapshotNum,
     custom_type: SnapshotCustomType,
     func: SnapshotFunc,
     record: SnapshotRecord,
+    record_unbound: SnapshotRecord,
     empty_record,
     tag_union: SnapshotTagUnion,
     empty_tag_union,
@@ -555,7 +563,13 @@ pub const SnapshotWriter = struct {
                 try self.write(sub_var);
                 _ = try self.writer.write(")");
             },
+            .list_unbound => {
+                _ = try self.writer.write("List(*)");
+            },
             .tuple => |tuple| {
+                try self.writeTuple(tuple);
+            },
+            .tuple_unbound => |tuple| {
                 try self.writeTuple(tuple);
             },
             .num => |num| {
@@ -568,6 +582,9 @@ pub const SnapshotWriter = struct {
                 try self.writeFunc(func);
             },
             .record => |record| {
+                try self.writeRecord(record);
+            },
+            .record_unbound => |record| {
                 try self.writeRecord(record);
             },
             .empty_record => {
