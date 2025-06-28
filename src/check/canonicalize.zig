@@ -3363,6 +3363,16 @@ fn introduceTypeParametersFromHeader(self: *Self, header_idx: CIR.TypeHeader.Idx
 }
 
 fn extractTypeVarsFromASTAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, vars: *std.ArrayList(Ident.Idx)) void {
+    // First check if this index actually points to a valid type annotation node
+    const node = self.parse_ir.store.nodes.get(@enumFromInt(@intFromEnum(anno_idx)));
+    switch (node.tag) {
+        .ty_apply, .ty_var, .ty_underscore, .ty_ty, .ty_mod_ty, .ty_union, .ty_tuple, .ty_record, .ty_fn, .ty_parens, .malformed => {},
+        else => {
+            // This index doesn't point to a type annotation node - skip it gracefully
+            return;
+        },
+    }
+
     const ast_anno = self.parse_ir.store.getTypeAnno(anno_idx);
 
     switch (ast_anno) {
