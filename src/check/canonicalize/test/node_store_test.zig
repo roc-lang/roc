@@ -133,7 +133,122 @@ test "NodeStore round trip - Expressions" {
     var expressions = std.ArrayList(CIR.Expr).init(gpa);
     defer expressions.deinit();
 
-    // try expressions.append(CIR.Expr{});
+    try expressions.append(CIR.Expr{
+        .e_num = .{
+            .region = from_raw_offsets(123, 345),
+            .value = CIR.IntValue.placeholder(),
+        },
+    });
+    // try expressions.append(CIR.Expr{
+    //     .e_int = .{
+
+    //     },
+    // });
+    // try expressions.append(CIR.Expr{
+    //     .e_frac_f64 = .{
+
+    //     },
+    // });
+    // try expressions.append(CIR.Expr{
+    //     .e_frac_dec = .{
+
+    //     },
+    // });
+    // try expressions.append(CIR.Expr{
+    //     .e_dec_small = .{
+
+    //     },
+    // });
+    // try expressions.append(CIR.Expr{
+    //     .e_str_segment = .{
+
+    //     },
+    // });
+    // try expressions.append(CIR.Expr{
+    //     .e_str = .{
+
+    //     },
+    // });
+    // try expressions.append(CIR.Expr{
+    //     .e_lookup = .{
+
+    //     },
+    // });
+    // try expressions.append(CIR.Expr{
+    //     .e_list = .{
+
+    //     },
+    // });
+    // try expressions.append(CIR.Expr{
+    //     .e_tuple = .{
+
+    //     },
+    // });
+    // try expressions.append(CIR.Expr{
+    //     .e_when = .{
+
+    //     },
+    // });
+    // try expressions.append(CIR.Expr{
+    //     .e_if = .{
+
+    //     },
+    // });
+    // try expressions.append(CIR.Expr{
+    //     .e_call = .{
+
+    //     },
+    // });
+    // try expressions.append(CIR.Expr{
+    //     .e_record = .{
+
+    //     },
+    // });
+    // try expressions.append(CIR.Expr{
+    //     .e_empty_record = .{
+
+    //     },
+    // });
+    // try expressions.append(CIR.Expr{
+    //     .e_block = .{
+
+    //     },
+    // });
+    // try expressions.append(CIR.Expr{
+    //     .e_record_access = .{
+
+    //     },
+    // });
+    // try expressions.append(CIR.Expr{
+    //     .e_tag = .{
+
+    //     },
+    // });
+    // try expressions.append(CIR.Expr{
+    //     .e_zero_argument_tag = .{
+
+    //     },
+    // });
+    // try expressions.append(CIR.Expr{
+    //     .e_lambda = .{
+
+    //     },
+    // });
+    // try expressions.append(CIR.Expr{
+    //     .e_binop = .{
+
+    //     },
+    // });
+    // try expressions.append(CIR.Expr{
+    //     .e_dot_access = .{
+
+    //     },
+    // });
+    // try expressions.append(CIR.Expr{
+    //     .e_runtime_error = .{
+
+    //     },
+    // });
 
     for (expressions.items) |expr| {
         const idx = store.addExpr(expr);

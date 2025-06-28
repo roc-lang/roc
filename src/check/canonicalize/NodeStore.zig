@@ -241,6 +241,17 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 },
             };
         },
+        .expr_num => {
+            // Read i128 from extra_data (stored as 4 u32s in data_1)
+            const value_as_u32s = store.extra_data.items[node.data_1..][0..4];
+
+            return CIR.Expr{
+                .e_num = .{
+                    .value = .{ .bytes = @bitCast(value_as_u32s.*), .kind = .i128 },
+                    .region = node.region,
+                },
+            };
+        },
         .expr_list => {
             return CIR.Expr{
                 .e_list = .{
@@ -993,7 +1004,21 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
         },
         .e_num => |e| {
             node.region = e.region;
-            @panic("TODO addExpr num");
+            node.tag = .expr_num;
+
+            // Store i128 value in extra_data
+            const extra_data_start = store.extra_data.items.len;
+
+            // Store the IntLiteralValue as i128 (16 bytes = 4 u32s)
+            // We always store as i128 internally
+            const value_as_i128: i128 = @bitCast(e.value.bytes);
+            const value_as_u32s: [4]u32 = @bitCast(value_as_i128);
+            for (value_as_u32s) |word| {
+                store.extra_data.append(store.gpa, word) catch |err| exitOnOom(err);
+            }
+
+            // Store the extra_data index in data_1
+            node.data_1 = @intCast(extra_data_start);
         },
         .e_when => |e| {
             node.region = e.region;
