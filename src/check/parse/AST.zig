@@ -736,18 +736,28 @@ pub const Statement = union(enum) {
 
                 // pattern
                 {
-                    const ty_header = ast.store.getTypeHeader(a.header);
-                    header.appendRegion(env.gpa, ast.calcRegionInfo(ty_header.region, env.line_starts.items));
-                    header.appendStringAttr(env.gpa, "name", ast.resolve(ty_header.name));
+                    // Check if the type header node is malformed before calling getTypeHeader
+                    const header_node = ast.store.nodes.get(@enumFromInt(@intFromEnum(a.header)));
+                    if (header_node.tag == .malformed) {
+                        // Handle malformed type header by creating a placeholder
+                        header.appendRegion(env.gpa, ast.calcRegionInfo(header_node.region, env.line_starts.items));
+                        header.appendStringAttr(env.gpa, "name", "<malformed>");
+                        var args_node = SExpr.init(env.gpa, "args");
+                        header.appendNode(env.gpa, &args_node);
+                    } else {
+                        const ty_header = ast.store.getTypeHeader(a.header);
+                        header.appendRegion(env.gpa, ast.calcRegionInfo(ty_header.region, env.line_starts.items));
+                        header.appendStringAttr(env.gpa, "name", ast.resolve(ty_header.name));
 
-                    var args_node = SExpr.init(env.gpa, "args");
+                        var args_node = SExpr.init(env.gpa, "args");
 
-                    for (ast.store.typeAnnoSlice(ty_header.args)) |b| {
-                        const anno = ast.store.getTypeAnno(b);
-                        var anno_sexpr = anno.toSExpr(env, ast);
-                        args_node.appendNode(env.gpa, &anno_sexpr);
+                        for (ast.store.typeAnnoSlice(ty_header.args)) |b| {
+                            const anno = ast.store.getTypeAnno(b);
+                            var anno_sexpr = anno.toSExpr(env, ast);
+                            args_node.appendNode(env.gpa, &anno_sexpr);
+                        }
+                        header.appendNode(env.gpa, &args_node);
                     }
-                    header.appendNode(env.gpa, &args_node);
 
                     node.appendNode(env.gpa, &header);
                 }
