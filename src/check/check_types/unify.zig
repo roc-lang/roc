@@ -1021,6 +1021,10 @@ const Unifier = struct {
                         }
                         self.merge(vars, vars.b.desc.content);
                     },
+                    .frac_unbound => |b_requirements| {
+                        // When unifying num_unbound with frac_unbound, frac wins
+                        self.merge(vars, Content{ .structure = .{ .num = .{ .frac_unbound = b_requirements } } });
+                    },
                     else => return error.TypeMismatch,
                 }
             },
@@ -1107,6 +1111,12 @@ const Unifier = struct {
                             return error.TypeMismatch;
                         }
                         self.merge(vars, vars.b.desc.content);
+                    },
+                    .num_unbound => |b_requirements| {
+                        // When unifying frac_unbound with num_unbound, frac wins
+                        // Note: b_requirements are IntRequirements, we just keep our FracRequirements
+                        _ = b_requirements;
+                        self.merge(vars, Content{ .structure = .{ .num = .{ .frac_unbound = a_requirements } } });
                     },
                     else => return error.TypeMismatch,
                 }
@@ -5468,4 +5478,88 @@ test "positive and negative literals unify with sign requirement" {
     // They should unify successfully (creating a signed type that can hold both)
     const result = env.unify(literal1_var, literal2_var);
     try std.testing.expect(result == .ok);
+}
+
+test "unify - num_unbound with frac_unbound" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create a num_unbound (like literal 1)
+    const num_requirements = Num.IntRequirements{
+        .sign_needed = false,
+        .bits_needed = @intFromEnum(Num.Int.BitsNeeded.@"7"),
+    };
+    const num_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_unbound = num_requirements } } });
+
+    // Create a frac_unbound (like literal 2.5)
+    const frac_requirements = Num.FracRequirements{
+        .fits_in_f32 = true,
+        .fits_in_dec = true,
+    };
+    const frac_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_unbound = frac_requirements } } });
+
+    // They should unify successfully with frac_unbound winning
+    const result = env.unify(num_var, frac_var);
+    try std.testing.expect(result == .ok);
+
+    // Check that the result is frac_unbound
+    const resolved = env.module_env.types.resolveVar(num_var);
+    switch (resolved.desc.content) {
+        .structure => |structure| {
+            switch (structure) {
+                .num => |num| {
+                    switch (num) {
+                        .frac_unbound => {}, // Expected
+                        else => return error.ExpectedFracUnbound,
+                    }
+                },
+                else => return error.ExpectedNum,
+            }
+        },
+        else => return error.ExpectedStructure,
+    }
+}
+
+test "unify - frac_unbound with num_unbound (reverse order)" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create a frac_unbound (like literal 2.5)
+    const frac_requirements = Num.FracRequirements{
+        .fits_in_f32 = true,
+        .fits_in_dec = true,
+    };
+    const frac_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_unbound = frac_requirements } } });
+
+    // Create a num_unbound (like literal 1)
+    const num_requirements = Num.IntRequirements{
+        .sign_needed = false,
+        .bits_needed = @intFromEnum(Num.Int.BitsNeeded.@"7"),
+    };
+    const num_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_unbound = num_requirements } } });
+
+    // They should unify successfully with frac_unbound winning
+    const result = env.unify(frac_var, num_var);
+    try std.testing.expect(result == .ok);
+
+    // Check that the result is frac_unbound
+    const resolved = env.module_env.types.resolveVar(frac_var);
+    switch (resolved.desc.content) {
+        .structure => |structure| {
+            switch (structure) {
+                .num => |num| {
+                    switch (num) {
+                        .frac_unbound => {}, // Expected
+                        else => return error.ExpectedFracUnbound,
+                    }
+                },
+                else => return error.ExpectedNum,
+            }
+        },
+        else => return error.ExpectedStructure,
+    }
 }

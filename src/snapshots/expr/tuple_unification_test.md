@@ -8,19 +8,7 @@ type=expr
 [(1, "a"), (2.5, "b")]
 ~~~
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**tuple_unification_test.md:1:12:1:22:**
-```roc
-[(1, "a"), (2.5, "b")]
-```
-
-It is of type:
-    _(Frac(*), Str)_
-
-But you are trying to use it as:
-    _(Num(*), Str)_
-
+NIL
 # TOKENS
 ~~~zig
 OpenSquare(1:1-1:2),NoSpaceOpenRound(1:2-1:3),Int(1:3-1:4),Comma(1:4-1:5),StringStart(1:6-1:7),StringPart(1:7-1:8),StringEnd(1:8-1:9),CloseRound(1:9-1:10),Comma(1:10-1:11),OpenRound(1:12-1:13),Float(1:13-1:16),Comma(1:16-1:17),StringStart(1:18-1:19),StringPart(1:19-1:20),StringEnd(1:20-1:21),CloseRound(1:21-1:22),CloseSquare(1:22-1:23),EndOfFile(1:23-1:23),
@@ -58,5 +46,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 81) (type "List(Error)"))
+(expr (id 81) (type "List((Frac(*), Str))"))
 ~~~
