@@ -17,11 +17,11 @@ This list contains elements with incompatible types:
 ^^^^^^^^^^^^^^^^^^^^
 
 The first element with this type:
-**can_list_nested_heterogeneous.md:1:2:1:4:**
+**can_list_nested_heterogeneous.md:1:6:1:9:**
 ```roc
 [[], [1], ["hello"]]
 ```
- ^^
+     ^^^
 
 has the type
     _List(Num(*))_

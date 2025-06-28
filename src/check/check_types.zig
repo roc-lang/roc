@@ -273,86 +273,83 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
             // Track if we've already reported an incompatible list element error
             var reported_incompatible = false;
 
+            // Track which element actually determined the list's type (not just the first element)
+            var type_determining_elem_idx: ?CIR.Expr.Idx = null;
+            var type_determining_snapshot: ?snapshot.SnapshotContentIdx = null;
+
             for (elems, 0..) |single_elem_expr_idx, i| {
                 self.checkExpr(single_elem_expr_idx);
 
                 // For non-first elements, capture snapshots BEFORE unification
-                var first_elem_snapshot: ?snapshot.SnapshotContentIdx = null;
                 var current_elem_snapshot: ?snapshot.SnapshotContentIdx = null;
 
                 if (i > 0 and !reported_incompatible) {
-                    // Create snapshots BEFORE unification (while types are still intact)
-                    const first_elem_idx = elems[0];
-                    first_elem_snapshot = self.snapshots.createSnapshot(
-                        self.types,
-                        @enumFromInt(@intFromEnum(first_elem_idx)),
-                    );
+                    // Create snapshot of current element BEFORE unification (while types are still intact)
                     current_elem_snapshot = self.snapshots.createSnapshot(
                         self.types,
                         @enumFromInt(@intFromEnum(single_elem_expr_idx)),
                     );
                 }
 
-                // For non-first elements that we'll report custom errors for,
-                // use a temporary problem store to avoid adding the generic type mismatch
-                if (i > 0 and !reported_incompatible and first_elem_snapshot != null and current_elem_snapshot != null) {
-                    // Create temporary problem store
-                    var temp_problems = problem.Store.initCapacity(self.gpa, 1);
-                    defer temp_problems.deinit(self.gpa);
+                // Unify the element with the list's element type
+                const result = self.unify(
+                    @enumFromInt(@intFromEnum(elem_var)),
+                    @enumFromInt(@intFromEnum(single_elem_expr_idx)),
+                );
 
-                    // Check if unification would fail
-                    const test_result = unifier.unify(
-                        self.can_ir.env,
-                        self.types,
-                        &temp_problems,
-                        &self.snapshots,
-                        &self.unify_scratch,
-                        &self.occurs_scratch,
-                        @enumFromInt(@intFromEnum(elem_var)),
-                        @enumFromInt(@intFromEnum(single_elem_expr_idx)),
-                    );
+                // Track which element determines the type (first element that successfully unified and has concrete type)
+                if (type_determining_elem_idx == null and result == .ok) {
+                    // Check if this element has a concrete type (not unbound) AFTER unification
+                    const unified_content = self.types.resolveVar(elem_var).desc.content;
 
-                    if (test_result == .problem) {
-                        // Get expressions for regions
-                        const first_elem_idx = elems[0];
-                        const first_elem_expr = self.can_ir.store.getExpr(first_elem_idx);
-                        const incompatible_elem_expr = self.can_ir.store.getExpr(single_elem_expr_idx);
+                    var is_concrete = true;
+                    if (unified_content == .structure) {
+                        switch (unified_content.structure) {
+                            .list_unbound, .record_unbound, .empty_record, .empty_tag_union => is_concrete = false,
+                            .num => |num| {
+                                switch (num) {
+                                    .int_unbound, .num_unbound, .frac_unbound => is_concrete = false,
+                                    else => {},
+                                }
+                            },
+                            else => {},
+                        }
+                    }
 
-                        const first_region = first_elem_expr.toRegion();
-                        const incomp_region = incompatible_elem_expr.toRegion();
-
-                        // Add the custom incompatible list elements error
-                        _ = self.problems.appendProblem(self.gpa, .{ .incompatible_list_elements = .{
-                            .list_region = list.region,
-                            .first_elem_region = first_region orelse list.region,
-                            .first_elem_var = @enumFromInt(@intFromEnum(first_elem_idx)),
-                            .first_elem_snapshot = first_elem_snapshot.?,
-                            .incompatible_elem_region = incomp_region orelse list.region,
-                            .incompatible_elem_var = @enumFromInt(@intFromEnum(single_elem_expr_idx)),
-                            .incompatible_elem_snapshot = current_elem_snapshot.?,
-                        } });
-
-                        // Mark that we've reported an incompatible error
-                        reported_incompatible = true;
-
-                        // Now do the real unification to mark types as errors
-                        _ = self.unify(
-                            @enumFromInt(@intFromEnum(elem_var)),
-                            @enumFromInt(@intFromEnum(single_elem_expr_idx)),
-                        );
-                    } else {
-                        // Unification succeeded, do it for real
-                        _ = self.unify(
-                            @enumFromInt(@intFromEnum(elem_var)),
-                            @enumFromInt(@intFromEnum(single_elem_expr_idx)),
+                    if (is_concrete) {
+                        type_determining_elem_idx = single_elem_expr_idx;
+                        // Create snapshot from the unified type
+                        type_determining_snapshot = self.snapshots.createSnapshot(
+                            self.types,
+                            elem_var,
                         );
                     }
-                } else {
-                    // For first element or when we've already reported, just unify normally
-                    _ = self.unify(
-                        @enumFromInt(@intFromEnum(elem_var)),
-                        @enumFromInt(@intFromEnum(single_elem_expr_idx)),
-                    );
+                }
+
+                // For non-first elements that failed unification, report custom error
+                if (i > 0 and result == .problem and !reported_incompatible and type_determining_snapshot != null and current_elem_snapshot != null) {
+                    // Create temporary problem store
+                    // Get expressions for regions
+                    const determining_elem_idx = type_determining_elem_idx orelse elems[0];
+                    const determining_elem_expr = self.can_ir.store.getExpr(determining_elem_idx);
+                    const incompatible_elem_expr = self.can_ir.store.getExpr(single_elem_expr_idx);
+
+                    const determining_region = determining_elem_expr.toRegion();
+                    const incomp_region = incompatible_elem_expr.toRegion();
+
+                    // Add the custom incompatible list elements error
+                    _ = self.problems.appendProblem(self.gpa, .{ .incompatible_list_elements = .{
+                        .list_region = list.region,
+                        .first_elem_region = determining_region orelse list.region,
+                        .first_elem_var = @enumFromInt(@intFromEnum(determining_elem_idx)),
+                        .first_elem_snapshot = type_determining_snapshot.?,
+                        .incompatible_elem_region = incomp_region orelse list.region,
+                        .incompatible_elem_var = @enumFromInt(@intFromEnum(single_elem_expr_idx)),
+                        .incompatible_elem_snapshot = current_elem_snapshot.?,
+                    } });
+
+                    // Mark that we've reported an incompatible error
+                    reported_incompatible = true;
                 }
             }
         },
