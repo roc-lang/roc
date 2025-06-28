@@ -29,20 +29,12 @@ This list contains elements with incompatible types:
 ```
 
 The element
-**list_type_err.md:1:2:1:3:**
-```roc
-[1, 2, "hello"]
-```
-
+    `1`
 has the type
     _Num(*)_
 
 However, the element
-**list_type_err.md:1:8:1:15:**
-```roc
-[1, 2, "hello"]
-```
-
+    `"hello"`
 has the incompatible type:
     _Str_
 

@@ -1,0 +1,77 @@
+# META
+~~~ini
+description=Heterogeneous nested list causes type mismatch
+type=expr
+~~~
+# SOURCE
+~~~roc
+[[], [1], ["hello"]]
+~~~
+# PROBLEMS
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**can_list_nested_heterogeneous.md:1:11:1:20:**
+```roc
+[[], [1], ["hello"]]
+```
+
+It is of type:
+    _List(Str)_
+
+But you are trying to use it as:
+    _List(Num(*))_
+
+**INCOMPATIBLE LIST ELEMENTS**
+This list contains elements with incompatible types:
+**can_list_nested_heterogeneous.md:1:1:1:21:**
+```roc
+[[], [1], ["hello"]]
+```
+
+The element
+    `[]`
+has the type
+    _List(Num(*))_
+
+However, the element
+    `["hello"]`
+has the incompatible type:
+    _List(Str)_
+
+All elements in a list must have compatible types.
+
+# TOKENS
+~~~zig
+OpenSquare(1:1-1:2),OpenSquare(1:2-1:3),CloseSquare(1:3-1:4),Comma(1:4-1:5),OpenSquare(1:6-1:7),Int(1:7-1:8),CloseSquare(1:8-1:9),Comma(1:9-1:10),OpenSquare(1:11-1:12),StringStart(1:12-1:13),StringPart(1:13-1:18),StringEnd(1:18-1:19),CloseSquare(1:19-1:20),CloseSquare(1:20-1:21),EndOfFile(1:21-1:21),
+~~~
+# PARSE
+~~~clojure
+(e-list @1-1-1-21
+	(e-list @1-2-1-4)
+	(e-list @1-6-1-9
+		(e-int @1-7-1-8 (raw "1")))
+	(e-list @1-11-1-20
+		(e-string @1-12-1-19
+			(e-string-part @1-13-1-18 (raw "hello")))))
+~~~
+# FORMATTED
+~~~roc
+NO CHANGE
+~~~
+# CANONICALIZE
+~~~clojure
+(e-list @1-1-1-21 (elem-var 72) (id 78)
+	(elems
+		(e-empty_list @1-2-1-4)
+		(e-list @1-6-1-9 (elem-var 73)
+			(elems
+				(e-int @1-7-1-8 (value "1"))))
+		(e-list @1-11-1-20 (elem-var 76)
+			(elems
+				(e-string @1-12-1-19
+					(e-literal @1-13-1-18 (string "hello")))))))
+~~~
+# TYPES
+~~~clojure
+(expr (id 78) (type "List(Error)"))
+~~~

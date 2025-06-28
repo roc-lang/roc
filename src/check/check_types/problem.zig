@@ -404,6 +404,7 @@ pub const VarProblem1 = struct {
     snapshot: SnapshotContentIdx,
 };
 
+/// Problem data for when list elements have incompatible types
 pub const IncompatibleListElements = struct {
     list_region: base.Region,
     first_elem_region: base.Region,
