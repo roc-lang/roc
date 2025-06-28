@@ -139,11 +139,12 @@ test "NodeStore round trip - Expressions" {
             .value = CIR.IntValue.placeholder(),
         },
     });
-    // try expressions.append(CIR.Expr{
-    //     .e_int = .{
-
-    //     },
-    // });
+    try expressions.append(CIR.Expr{
+        .e_int = .{
+            .region = from_raw_offsets(234, 345),
+            .value = CIR.IntValue.placeholder(),
+        },
+    });
     // try expressions.append(CIR.Expr{
     //     .e_frac_f64 = .{
 

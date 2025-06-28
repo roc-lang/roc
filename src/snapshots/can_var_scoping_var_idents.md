@@ -67,9 +67,9 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 93)
+	(d-let (id 92)
 		(p-assign @4-1-4-9 (ident "testFunc") (id 72))
-		(e-lambda @4-12-10-2 (id 92)
+		(e-lambda @4-12-10-2 (id 91)
 			(args
 				(p-assign @4-13-4-18 (ident "input") (id 73)))
 			(e-block @4-20-10-2
@@ -78,29 +78,29 @@ NO CHANGE
 					(e-lookup-local @5-8-5-13 (id 75)
 						(pattern (id 73))))
 				(s-var @6-2-8-6
-					(p-assign @6-2-8-6 (ident "sum_") (id 81))
-					(e-binop @6-13-8-6 (op "mul") (id 80)
+					(p-assign @6-2-8-6 (ident "sum_") (id 80))
+					(e-binop @6-13-8-6 (op "mul") (id 79)
 						(e-lookup-local @6-13-6-18
 							(pattern (id 73)))
 						(e-int @6-21-6-22 (value "2"))))
 				(s-reassign @8-2-8-6
-					(p-assign @6-2-8-6 (ident "sum_") (id 81))
-					(e-binop @8-9-9-5 (op "add") (id 85)
+					(p-assign @6-2-8-6 (ident "sum_") (id 80))
+					(e-binop @8-9-9-5 (op "add") (id 84)
 						(e-lookup-local @8-9-8-13
-							(pattern (id 81)))
+							(pattern (id 80)))
 						(e-lookup-local @8-16-8-19
 							(pattern (id 74)))))
 				(e-binop @9-2-10-2 (op "add")
 					(e-lookup-local @9-2-9-5
 						(pattern (id 74)))
 					(e-lookup-local @9-8-9-12
-						(pattern (id 81))))))))
+						(pattern (id 80))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "testFunc") (def_var 93) (type "* ? *")))
+		(d_assign (name "testFunc") (def_var 92) (type "* ? *")))
 	(expressions
 		(expr @4-12-10-2 (type "* ? *"))))
 ~~~

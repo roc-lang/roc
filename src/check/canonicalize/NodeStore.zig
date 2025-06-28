@@ -535,7 +535,6 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
             },
         },
         .pattern_num_literal => {
-            // Retrieve value from extra_data
             const extra_data_idx = node.data_1;
             const value_as_u32s = store.extra_data.items[extra_data_idx..][0..4];
             const value_as_i128: i128 = @bitCast(value_as_u32s.*);
@@ -543,31 +542,61 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
             return CIR.Pattern{
                 .int_literal = .{
                     .region = node.region,
-                    .num_var = @as(types.Var, @enumFromInt(node.data_2)),
                     .value = .{ .bytes = @bitCast(value_as_i128), .kind = .i128 },
                 },
             };
         },
-        .pattern_int_literal => return CIR.Pattern{
-            .int_literal = .{
-                .region = node.region,
-                .num_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
-                .value = .{ .bytes = @bitCast(@as(i128, 0)), .kind = .i128 }, // TODO need to store and retrieve from extra_data
-            },
+        .pattern_int_literal => {
+            const extra_data_idx = node.data_1;
+            const value_as_u32s = store.extra_data.items[extra_data_idx..][0..4];
+            const value_as_i128: i128 = @bitCast(value_as_u32s.*);
+
+            return CIR.Pattern{
+                .int_literal = .{
+                    .region = node.region,
+                    .value = .{ .bytes = @bitCast(value_as_i128), .kind = .i128 },
+                },
+            };
         },
-        .pattern_dec_literal => return CIR.Pattern{
-            .dec_literal = .{
-                .region = node.region,
-                .num_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
-                .value = RocDec{ .num = 0 }, // TODO need to store and retrieve from extra_data
-            },
+        .pattern_dec_literal => {
+            const extra_data_idx = node.data_1;
+            const value_as_u32s = store.extra_data.items[extra_data_idx..][0..4];
+            const value_as_i128: i128 = @bitCast(value_as_u32s.*);
+
+            return CIR.Pattern{
+                .dec_literal = .{
+                    .region = node.region,
+                    .value = RocDec{ .num = value_as_i128 },
+                },
+            };
         },
-        .pattern_f64_literal => return CIR.Pattern{
-            .f64_literal = .{
-                .region = node.region,
-                .num_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
-                .value = 0.0, // TODO need to store and retrieve from extra_data
-            },
+        .pattern_small_dec_literal => {
+            // Unpack small dec data from data_1 and data_3
+            // data_1: numerator (i16) stored as u32
+            // data_3: denominator_power_of_ten (u8) in lower 8 bits
+            const numerator: i16 = @intCast(@as(i32, @bitCast(node.data_1)));
+            const denominator_power_of_ten: u8 = @intCast(node.data_3 & 0xFF);
+
+            return CIR.Pattern{
+                .small_dec_literal = .{
+                    .region = node.region,
+                    .numerator = numerator,
+                    .denominator_power_of_ten = denominator_power_of_ten,
+                },
+            };
+        },
+        .pattern_f64_literal => {
+            const extra_data_idx = node.data_1;
+            const value_as_u32s = store.extra_data.items[extra_data_idx..][0..2];
+            const value_as_u64: u64 = @bitCast(value_as_u32s.*);
+            const value: f64 = @bitCast(value_as_u64);
+
+            return CIR.Pattern{
+                .f64_literal = .{
+                    .region = node.region,
+                    .value = value,
+                },
+            };
         },
         .pattern_str_literal => return CIR.Pattern{ .str_literal = .{
             .region = node.region,
@@ -1214,22 +1243,38 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern) CIR.Pattern.Idx {
                 store.extra_data.append(store.gpa, word) catch |err| exitOnOom(err);
             }
             node.data_1 = @intCast(extra_data_start);
-            // TODO store num_var
         },
         .small_dec_literal => |p| {
             node.tag = .pattern_small_dec_literal;
             node.region = p.region;
-            // TODO store num_var, numerator, denominator_power_of_ten
+            // Pack small dec data into data_1 and data_3
+            // data_1: numerator (i16) - fits in lower 16 bits
+            // data_3: denominator_power_of_ten (u8) in lower 8 bits
+            node.data_1 = @as(u32, @bitCast(@as(i32, p.numerator)));
+            node.data_3 = @as(u32, p.denominator_power_of_ten);
         },
         .dec_literal => |p| {
             node.tag = .pattern_dec_literal;
             node.region = p.region;
-            // TODO store num_var and value
+            // Store the RocDec value in extra_data
+            const extra_data_start = store.extra_data.items.len;
+            const value_as_u32s: [4]u32 = @bitCast(p.value.num);
+            for (value_as_u32s) |word| {
+                store.extra_data.append(store.gpa, word) catch |err| exitOnOom(err);
+            }
+            node.data_1 = @intCast(extra_data_start);
         },
         .f64_literal => |p| {
             node.tag = .pattern_f64_literal;
             node.region = p.region;
-            // TODO store num_var and value
+            // Store the f64 value in extra_data
+            const extra_data_start = store.extra_data.items.len;
+            const value_as_u64: u64 = @bitCast(p.value);
+            const value_as_u32s: [2]u32 = @bitCast(value_as_u64);
+            for (value_as_u32s) |word| {
+                store.extra_data.append(store.gpa, word) catch |err| exitOnOom(err);
+            }
+            node.data_1 = @intCast(extra_data_start);
         },
 
         .str_literal => |p| {

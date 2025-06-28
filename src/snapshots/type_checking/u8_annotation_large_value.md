@@ -47,10 +47,10 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 79)
+	(d-let (id 78)
 		(p-assign @4-1-4-2 (ident "x") (id 73))
-		(e-int @4-5-4-8 (value "500") (id 75))
-		(annotation @4-1-4-2 (signature 77) (id 78)
+		(e-int @4-5-4-8 (value "500") (id 74))
+		(annotation @4-1-4-2 (signature 76) (id 77)
 			(declared-type
 				(ty @3-5-3-7 (name "U8"))))))
 ~~~
@@ -58,7 +58,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "x") (def_var 79) (type "Error")))
+		(d_assign (name "x") (def_var 78) (type "Error")))
 	(expressions
 		(expr @4-5-4-8 (type "Error"))))
 ~~~

@@ -252,7 +252,7 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1-1-19-2 (id 159)
+(e-block @1-1-19-2 (id 147)
 	(s-expr @4-5-4-13
 		(e-tuple @4-5-4-11
 			(elems
@@ -319,7 +319,7 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 	(s-expr @16-21-18-6
 		(e-tuple @16-21-16-41
 			(elems
-				(e-list @16-22-16-31 (elem-var 152)
+				(e-list @16-22-16-31 (elem-var 140)
 					(elems
 						(e-int @16-23-16-24 (value "1"))
 						(e-int @16-26-16-27 (value "2"))
@@ -330,5 +330,5 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 159) (type "*"))
+(expr (id 147) (type "*"))
 ~~~

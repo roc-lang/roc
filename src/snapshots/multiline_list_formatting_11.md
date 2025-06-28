@@ -48,23 +48,23 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-list @1-1-9-2 (elem-var 90) (id 91)
+(e-list @1-1-9-2 (elem-var 85) (id 86)
 	(elems
-		(e-list @2-2-2-5 (elem-var 74)
+		(e-list @2-2-2-5 (elem-var 73)
 			(elems
 				(e-int @2-3-2-4 (value "1"))))
-		(e-list @3-2-3-5 (elem-var 78)
+		(e-list @3-2-3-5 (elem-var 76)
 			(elems
 				(e-int @3-3-3-4 (value "2"))))
-		(e-list @4-2-7-3 (elem-var 84)
+		(e-list @4-2-7-3 (elem-var 80)
 			(elems
 				(e-int @5-3-5-4 (value "3"))
 				(e-int @6-3-6-4 (value "4"))))
-		(e-list @8-2-8-5 (elem-var 88)
+		(e-list @8-2-8-5 (elem-var 83)
 			(elems
 				(e-int @8-3-8-4 (value "5"))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 91) (type "List(List(Num(*)))"))
+(expr (id 86) (type "List(List(Num(*)))"))
 ~~~

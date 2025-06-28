@@ -44,23 +44,23 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 75)
+	(d-let (id 74)
 		(p-assign @3-1-3-2 (ident "x") (id 72))
-		(e-dec-small @3-5-3-9 (numerator "314") (denominator-power-of-ten "2") (value "3.14") (id 74)))
-	(d-let (id 79)
-		(p-assign @4-1-4-2 (ident "y") (id 76))
-		(e-frac-f64 @4-5-4-12 (value "1.23e45") (id 78)))
-	(d-let (id 83)
-		(p-assign @5-1-5-2 (ident "z") (id 80))
-		(e-dec-small @5-5-5-8 (numerator "5") (denominator-power-of-ten "1") (value "0.5") (id 82))))
+		(e-dec-small @3-5-3-9 (numerator "314") (denominator-power-of-ten "2") (value "3.14") (id 73)))
+	(d-let (id 77)
+		(p-assign @4-1-4-2 (ident "y") (id 75))
+		(e-frac-f64 @4-5-4-12 (value "1.23e45") (id 76)))
+	(d-let (id 80)
+		(p-assign @5-1-5-2 (ident "z") (id 78))
+		(e-dec-small @5-5-5-8 (numerator "5") (denominator-power-of-ten "1") (value "0.5") (id 79))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "x") (def_var 75) (type "Frac(*)"))
-		(d_assign (name "y") (def_var 79) (type "Frac(*)"))
-		(d_assign (name "z") (def_var 83) (type "Frac(*)")))
+		(d_assign (name "x") (def_var 74) (type "Frac(*)"))
+		(d_assign (name "y") (def_var 77) (type "Frac(*)"))
+		(d_assign (name "z") (def_var 80) (type "Frac(*)")))
 	(expressions
 		(expr @3-5-3-9 (type "Frac(*)"))
 		(expr @4-5-4-12 (type "Frac(*)"))

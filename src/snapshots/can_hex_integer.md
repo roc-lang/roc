@@ -34,15 +34,15 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 75)
+	(d-let (id 74)
 		(p-assign @3-1-3-2 (ident "x") (id 72))
-		(e-int @3-5-3-9 (value "255") (id 74))))
+		(e-int @3-5-3-9 (value "255") (id 73))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "x") (def_var 75) (type "Int(*)")))
+		(d_assign (name "x") (def_var 74) (type "Int(*)")))
 	(expressions
 		(expr @3-5-3-9 (type "Int(*)"))))
 ~~~

@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Tuple expression
+description=Simple tuple literal
 type=expr
 ~~~
 # SOURCE

@@ -73,12 +73,12 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 104)
+	(d-let (id 103)
 		(p-assign @5-1-5-5 (ident "main") (id 75))
-		(e-block @5-8-10-2 (id 103)
+		(e-block @5-8-10-2 (id 102)
 			(s-let @6-2-6-33
 				(p-assign @6-2-6-6 (ident "data") (id 76))
-				(e-record @6-9-6-33 (ext-var 83) (id 84)
+				(e-record @6-9-6-33 (ext-var 82) (id 83)
 					(fields
 						(field (name "name")
 							(e-string @6-17-6-22
@@ -86,21 +86,21 @@ NO CHANGE
 						(field (name "age")
 							(e-int @6-29-6-31 (value "25"))))))
 			(s-let @7-2-7-24
-				(p-assign @7-2-7-9 (ident "encoded") (id 88))
-				(e-call @7-12-7-24 (id 93)
+				(p-assign @7-2-7-9 (ident "encoded") (id 87))
+				(e-call @7-12-7-24 (id 92)
 					(e-lookup-external
-						(ext-decl @7-12-7-18 (qualified "json.Json.encode") (module "json.Json") (local "toJson") (kind "value") (type-var 89)))
+						(ext-decl @7-12-7-18 (qualified "json.Json.encode") (module "json.Json") (local "toJson") (kind "value") (type-var 88)))
 					(e-lookup-local @7-19-7-23
 						(pattern (id 76)))))
 			(s-let @8-2-8-29
-				(p-assign @8-2-8-9 (ident "decoded") (id 95))
-				(e-call @8-12-8-29 (id 100)
+				(p-assign @8-2-8-9 (ident "decoded") (id 94))
+				(e-call @8-12-8-29 (id 99)
 					(e-lookup-external
-						(ext-decl @8-12-8-20 (qualified "json.Json.decode") (module "json.Json") (local "fromJson") (kind "value") (type-var 96)))
+						(ext-decl @8-12-8-20 (qualified "json.Json.decode") (module "json.Json") (local "fromJson") (kind "value") (type-var 95)))
 					(e-lookup-local @8-21-8-28
-						(pattern (id 88)))))
+						(pattern (id 87)))))
 			(e-lookup-local @9-2-9-9
-				(pattern (id 95)))))
+				(pattern (id 94)))))
 	(s-import @3-1-3-65 (module "json.Json") (qualifier "json") (id 74)
 		(exposes
 			(exposed (name "decode") (alias "fromJson") (wildcard false))
@@ -110,7 +110,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "main") (def_var 104) (type "*")))
+		(d_assign (name "main") (def_var 103) (type "*")))
 	(expressions
 		(expr @5-8-10-2 (type "*"))))
 ~~~

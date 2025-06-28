@@ -132,13 +132,15 @@ pub fn unify(
                     // and which is the expected type
                     const a_resolved = types.resolveVar(a);
 
-                    // Check if 'a' is the literal (has int_poly/num_poly) or 'b' is
+                    // Check if 'a' is the literal (has int_poly/num_poly/unbound types) or 'b' is
                     const literal_is_a = switch (a_resolved.desc.content) {
                         .structure => |structure| switch (structure) {
                             .num => |num| switch (num) {
-                                .int_poly, .num_poly => true,
+                                .int_poly, .num_poly, .int_unbound, .num_unbound, .frac_unbound => true,
                                 else => false,
                             },
+                            .list_unbound => true,
+                            .record_unbound => true,
                             else => false,
                         },
                         else => false,
@@ -158,13 +160,15 @@ pub fn unify(
                     // and which is the expected type
                     const a_resolved = types.resolveVar(a);
 
-                    // Check if 'a' is the literal (has int_poly/num_poly) or 'b' is
+                    // Check if 'a' is the literal (has int_poly/num_poly/unbound types) or 'b' is
                     const literal_is_a = switch (a_resolved.desc.content) {
                         .structure => |structure| switch (structure) {
                             .num => |num| switch (num) {
-                                .int_poly, .num_poly => true,
+                                .int_poly, .num_poly, .int_unbound, .num_unbound, .frac_unbound => true,
                                 else => false,
                             },
+                            .list_unbound => true,
+                            .record_unbound => true,
                             else => false,
                         },
                         else => false,
@@ -587,9 +591,7 @@ const Unifier = struct {
         switch (a_flat_type) {
             .str => {
                 switch (b_flat_type) {
-                    .str => {
-                        self.merge(vars, vars.b.desc.content);
-                    },
+                    .str => self.merge(vars, vars.b.desc.content),
                     else => return error.TypeMismatch,
                 }
             },
@@ -608,6 +610,22 @@ const Unifier = struct {
                         try self.unifyGuarded(a_var, b_var);
                         self.merge(vars, vars.b.desc.content);
                     },
+                    .list_unbound => {
+                        // When unifying list with list_unbound, list wins
+                        self.merge(vars, vars.a.desc.content);
+                    },
+                    else => return error.TypeMismatch,
+                }
+            },
+            .list_unbound => {
+                switch (b_flat_type) {
+                    .list => |_| {
+                        // When unifying list_unbound with list, list wins
+                        self.merge(vars, vars.b.desc.content);
+                    },
+                    .list_unbound => {
+                        // Both are list_unbound - stay unbound, no merge needed
+                    },
                     else => return error.TypeMismatch,
                 }
             },
@@ -615,6 +633,26 @@ const Unifier = struct {
                 switch (b_flat_type) {
                     .tuple => |b_tuple| {
                         try self.unifyTuple(vars, a_tuple, b_tuple);
+                    },
+                    .tuple_unbound => |b_tuple| {
+                        // When unifying tuple with tuple_unbound, tuple wins
+                        try self.unifyTuple(vars, a_tuple, b_tuple);
+                    },
+                    else => return error.TypeMismatch,
+                }
+            },
+            .tuple_unbound => |a_tuple| {
+                switch (b_flat_type) {
+                    .tuple => |b_tuple| {
+                        // When unifying tuple_unbound with tuple, tuple wins
+                        try self.unifyTuple(vars, a_tuple, b_tuple);
+                        self.merge(vars, vars.b.desc.content);
+                    },
+                    .tuple_unbound => |b_tuple| {
+                        // Both are tuple_unbound - unify elements and stay unbound
+                        try self.unifyTuple(vars, a_tuple, b_tuple);
+                        // Explicitly merge to keep as tuple_unbound
+                        self.merge(vars, vars.a.desc.content);
                     },
                     else => return error.TypeMismatch,
                 }
@@ -654,6 +692,33 @@ const Unifier = struct {
                     },
                     .record => |b_record| {
                         try self.unifyTwoRecords(vars, a_record, b_record);
+                    },
+                    .record_unbound => |b_record| {
+                        // When unifying record with record_unbound, record wins
+                        try self.unifyTwoRecords(vars, a_record, b_record);
+                    },
+                    else => return error.TypeMismatch,
+                }
+            },
+            .record_unbound => |a_record| {
+                switch (b_flat_type) {
+                    .empty_record => {
+                        if (a_record.fields.len() == 0) {
+                            try self.unifyGuarded(a_record.ext, vars.b.var_);
+                        } else {
+                            return error.TypeMismatch;
+                        }
+                    },
+                    .record => |b_record| {
+                        // When unifying record_unbound with record, record wins
+                        try self.unifyTwoRecords(vars, a_record, b_record);
+                        self.merge(vars, vars.b.desc.content);
+                    },
+                    .record_unbound => |b_record| {
+                        // Both are record_unbound - unify fields and stay unbound
+                        try self.unifyTwoRecords(vars, a_record, b_record);
+                        // Explicitly merge to keep as record_unbound
+                        self.merge(vars, vars.a.desc.content);
                     },
                     else => return error.TypeMismatch,
                 }
@@ -737,20 +802,30 @@ const Unifier = struct {
         b_num: Num,
     ) Error!void {
         switch (a_num) {
-            .num_poly => |a_requirements| {
+            .num_poly => |a_poly| {
                 switch (b_num) {
-                    .num_poly => |b_requirements| {
+                    .num_poly => |b_poly| {
                         // Unify the variables
-                        try self.unifyGuarded(a_requirements.var_, b_requirements.var_);
+                        try self.unifyGuarded(a_poly.var_, b_poly.var_);
 
                         // num_poly always contains IntRequirements
-                        self.merge(vars, Content{ .structure = .{ .num = .{ .num_poly = a_requirements.unify(b_requirements) } } });
+                        self.merge(vars, Content{ .structure = .{ .num = .{ .num_poly = .{
+                            .var_ = a_poly.var_,
+                            .requirements = a_poly.requirements.unify(b_poly.requirements),
+                        } } } });
+                    },
+                    .num_unbound => |b_requirements| {
+                        // When unifying num_poly with num_unbound, the unbound picks up the poly's var
+                        self.merge(vars, Content{ .structure = .{ .num = .{ .num_poly = .{
+                            .var_ = a_poly.var_,
+                            .requirements = a_poly.requirements.unify(b_requirements),
+                        } } } });
                     },
                     .num_compact => |b_num_compact| {
                         // num_poly always contains IntRequirements
                         switch (b_num_compact) {
                             .int => |prec| {
-                                const result = self.checkIntPrecisionRequirements(prec, a_requirements);
+                                const result = self.checkIntPrecisionRequirements(prec, a_poly.requirements);
                                 switch (result) {
                                     .ok => {},
                                     .negative_unsigned => return error.NegativeUnsignedInt,
@@ -761,18 +836,32 @@ const Unifier = struct {
                         }
                         self.merge(vars, vars.b.desc.content);
                     },
-                    .int_poly => |b_requirements| {
-                        // num_poly always contains IntRequirements, so they're compatible
-                        try self.unifyGuarded(a_requirements.var_, b_requirements.var_);
-                        self.merge(vars, Content{ .structure = .{ .num = .{ .int_poly = a_requirements.unify(b_requirements) } } });
+                    .int_poly => |b_poly| {
+                        // Both are int requirements - unify and merge
+                        try self.unifyGuarded(a_poly.var_, b_poly.var_);
+                        self.merge(vars, Content{ .structure = .{ .num = .{ .int_poly = .{
+                            .var_ = a_poly.var_,
+                            .requirements = a_poly.requirements.unify(b_poly.requirements),
+                        } } } });
+                    },
+                    .int_unbound => |b_requirements| {
+                        // When unifying int_poly with int_unbound, keep as int_poly
+                        self.merge(vars, Content{ .structure = .{ .num = .{ .int_poly = .{
+                            .var_ = a_poly.var_,
+                            .requirements = a_poly.requirements.unify(b_requirements),
+                        } } } });
                     },
                     .frac_poly => {
                         // num_poly has IntRequirements, frac_poly has FracRequirements - incompatible
                         return error.TypeMismatch;
                     },
+                    .frac_unbound => {
+                        // num_poly has IntRequirements, frac_unbound has FracRequirements - incompatible
+                        return error.TypeMismatch;
+                    },
                     .int_precision => |prec| {
                         // num_poly always contains IntRequirements
-                        const result = self.checkIntPrecisionRequirements(prec, a_requirements);
+                        const result = self.checkIntPrecisionRequirements(prec, a_poly.requirements);
                         switch (result) {
                             .ok => {},
                             .negative_unsigned => return error.NegativeUnsignedInt,
@@ -786,21 +875,45 @@ const Unifier = struct {
                     },
                 }
             },
-            .int_poly => |a_requirements| {
+            .int_poly => |a_poly| {
                 switch (b_num) {
-                    .int_poly => |b_requirements| {
-                        // Unify the variables
-                        try self.unifyGuarded(a_requirements.var_, b_requirements.var_);
-                        self.merge(vars, Content{ .structure = .{ .num = .{ .int_poly = a_requirements.unify(b_requirements) } } });
+                    .num_poly => |b_poly| {
+                        // Both are int requirements - unify and merge
+                        try self.unifyGuarded(a_poly.var_, b_poly.var_);
+                        self.merge(vars, Content{ .structure = .{ .num = .{ .int_poly = .{
+                            .var_ = a_poly.var_,
+                            .requirements = a_poly.requirements.unify(b_poly.requirements),
+                        } } } });
+                    },
+                    .num_unbound => |b_requirements| {
+                        // When unifying int_poly with num_unbound, keep as int_poly
+                        self.merge(vars, Content{ .structure = .{ .num = .{ .int_poly = .{
+                            .var_ = a_poly.var_,
+                            .requirements = a_poly.requirements.unify(b_requirements),
+                        } } } });
+                    },
+                    .int_poly => |b_poly| {
+                        try self.unifyGuarded(a_poly.var_, b_poly.var_);
+                        self.merge(vars, Content{ .structure = .{ .num = .{ .int_poly = .{
+                            .var_ = a_poly.var_,
+                            .requirements = a_poly.requirements.unify(b_poly.requirements),
+                        } } } });
+                    },
+                    .int_unbound => |b_requirements| {
+                        // When unifying int_poly with int_unbound, keep as int_poly
+                        self.merge(vars, Content{ .structure = .{ .num = .{ .int_poly = .{
+                            .var_ = a_poly.var_,
+                            .requirements = a_poly.requirements.unify(b_requirements),
+                        } } } });
                     },
                     .int_precision => |prec| {
                         // Check if the requirements variable is rigid
-                        const req_var_desc = self.module_env.types.resolveVar(a_requirements.var_).desc;
+                        const req_var_desc = self.module_env.types.resolveVar(a_poly.var_).desc;
                         if (req_var_desc.content == .rigid_var) {
                             return error.TypeMismatch;
                         }
                         // Check if the precision satisfies the requirements
-                        const result = self.checkIntPrecisionRequirements(prec, a_requirements);
+                        const result = self.checkIntPrecisionRequirements(prec, a_poly.requirements);
                         switch (result) {
                             .ok => {},
                             .negative_unsigned => return error.NegativeUnsignedInt,
@@ -808,24 +921,29 @@ const Unifier = struct {
                         }
                         self.merge(vars, vars.b.desc.content);
                     },
-                    .num_poly => |b_requirements| {
-                        // num_poly always contains IntRequirements, so they're compatible
-                        try self.unifyGuarded(a_requirements.var_, b_requirements.var_);
-                        self.merge(vars, Content{ .structure = .{ .num = .{ .int_poly = a_requirements.unify(b_requirements) } } });
-                    },
+
                     else => return error.TypeMismatch,
                 }
             },
-            .frac_poly => |a_requirements| {
+            .frac_poly => |a_poly| {
                 switch (b_num) {
-                    .frac_poly => |b_requirements| {
-                        // Unify the variables
-                        try self.unifyGuarded(a_requirements.var_, b_requirements.var_);
-                        self.merge(vars, Content{ .structure = .{ .num = .{ .frac_poly = a_requirements.unify(b_requirements) } } });
+                    .frac_poly => |b_poly| {
+                        try self.unifyGuarded(a_poly.var_, b_poly.var_);
+                        self.merge(vars, Content{ .structure = .{ .num = .{ .frac_poly = .{
+                            .var_ = a_poly.var_,
+                            .requirements = a_poly.requirements.unify(b_poly.requirements),
+                        } } } });
+                    },
+                    .frac_unbound => |b_requirements| {
+                        // When unifying frac_poly with frac_unbound, keep as frac_poly
+                        self.merge(vars, Content{ .structure = .{ .num = .{ .frac_poly = .{
+                            .var_ = a_poly.var_,
+                            .requirements = a_poly.requirements.unify(b_requirements),
+                        } } } });
                     },
                     .frac_precision => |prec| {
                         // Check if the precision satisfies the requirements
-                        if (!self.fracPrecisionSatisfiesRequirements(prec, a_requirements)) {
+                        if (!self.fracPrecisionSatisfiesRequirements(prec, a_poly.requirements)) {
                             return error.TypeMismatch;
                         }
                         self.merge(vars, vars.b.desc.content);
@@ -836,20 +954,169 @@ const Unifier = struct {
                     },
                     .num_compact => |b_compact| {
                         // Check if the requirements variable is rigid
-                        const req_var_desc = self.module_env.types.resolveVar(a_requirements.var_).desc;
+                        const req_var_desc = self.module_env.types.resolveVar(a_poly.var_).desc;
                         if (req_var_desc.content == .rigid_var) {
                             return error.TypeMismatch;
                         }
                         // Check if the compact frac type satisfies the requirements
                         switch (b_compact) {
                             .frac => |prec| {
-                                if (!self.fracPrecisionSatisfiesRequirements(prec, a_requirements)) {
+                                if (!self.fracPrecisionSatisfiesRequirements(prec, a_poly.requirements)) {
                                     return error.TypeMismatch;
                                 }
                                 self.merge(vars, vars.b.desc.content);
                             },
                             .int => return error.TypeMismatch,
                         }
+                    },
+                    else => return error.TypeMismatch,
+                }
+            },
+            .num_unbound => |a_requirements| {
+                switch (b_num) {
+                    .num_poly => |b_poly| {
+                        // When unifying num_unbound with num_poly, the unbound picks up the poly's var
+                        self.merge(vars, Content{ .structure = .{ .num = .{ .num_poly = .{
+                            .var_ = b_poly.var_,
+                            .requirements = a_requirements.unify(b_poly.requirements),
+                        } } } });
+                    },
+                    .num_unbound => |b_requirements| {
+                        // Both unbound - merge requirements, stay unbound
+                        self.merge(vars, Content{ .structure = .{ .num = .{ .num_unbound = a_requirements.unify(b_requirements) } } });
+                    },
+                    .int_poly => |b_poly| {
+                        // When unifying num_unbound with int_poly, keep as int_poly
+                        self.merge(vars, Content{ .structure = .{ .num = .{ .int_poly = .{
+                            .var_ = b_poly.var_,
+                            .requirements = a_requirements.unify(b_poly.requirements),
+                        } } } });
+                    },
+                    .int_unbound => |b_requirements| {
+                        // When unifying num_unbound with int_unbound, keep as int_unbound
+                        self.merge(vars, Content{ .structure = .{ .num = .{ .int_unbound = a_requirements.unify(b_requirements) } } });
+                    },
+                    .num_compact => |b_num_compact| {
+                        // Check if the compact type satisfies the requirements
+                        switch (b_num_compact) {
+                            .int => |int_prec| {
+                                const result = self.checkIntPrecisionRequirements(int_prec, a_requirements);
+                                switch (result) {
+                                    .ok => {},
+                                    .negative_unsigned => return error.NegativeUnsignedInt,
+                                    .too_large => return error.NumberDoesNotFit,
+                                }
+                            },
+                            .frac => return error.TypeMismatch,
+                        }
+                        self.merge(vars, vars.b.desc.content);
+                    },
+                    .int_precision => |prec| {
+                        // Check if the precision satisfies the requirements
+                        const result = self.checkIntPrecisionRequirements(prec, a_requirements);
+                        switch (result) {
+                            .ok => {},
+                            .negative_unsigned => return error.NegativeUnsignedInt,
+                            .too_large => return error.NumberDoesNotFit,
+                        }
+                        self.merge(vars, vars.b.desc.content);
+                    },
+                    .frac_unbound => |b_requirements| {
+                        // When unifying num_unbound with frac_unbound, frac wins
+                        self.merge(vars, Content{ .structure = .{ .num = .{ .frac_unbound = b_requirements } } });
+                    },
+                    else => return error.TypeMismatch,
+                }
+            },
+            .int_unbound => |a_requirements| {
+                switch (b_num) {
+                    .num_poly => |b_poly| {
+                        // When unifying int_unbound with num_poly, keep as int_poly
+                        self.merge(vars, Content{ .structure = .{ .num = .{ .int_poly = .{
+                            .var_ = b_poly.var_,
+                            .requirements = a_requirements.unify(b_poly.requirements),
+                        } } } });
+                    },
+                    .num_unbound => |b_requirements| {
+                        // When unifying int_unbound with num_unbound, keep as int_unbound
+                        self.merge(vars, Content{ .structure = .{ .num = .{ .int_unbound = a_requirements.unify(b_requirements) } } });
+                    },
+                    .int_poly => |b_poly| {
+                        // When unifying int_unbound with int_poly, keep as int_poly
+                        self.merge(vars, Content{ .structure = .{ .num = .{ .int_poly = .{
+                            .var_ = b_poly.var_,
+                            .requirements = a_requirements.unify(b_poly.requirements),
+                        } } } });
+                    },
+                    .int_unbound => |b_requirements| {
+                        // Both int_unbound - merge requirements
+                        self.merge(vars, Content{ .structure = .{ .num = .{ .int_unbound = a_requirements.unify(b_requirements) } } });
+                    },
+                    .num_compact => |b_num_compact| {
+                        // Check if it's an int
+                        switch (b_num_compact) {
+                            .int => |int_prec| {
+                                const result = self.checkIntPrecisionRequirements(int_prec, a_requirements);
+                                switch (result) {
+                                    .ok => {},
+                                    .negative_unsigned => return error.NegativeUnsignedInt,
+                                    .too_large => return error.NumberDoesNotFit,
+                                }
+                            },
+                            .frac => return error.TypeMismatch,
+                        }
+                        self.merge(vars, vars.b.desc.content);
+                    },
+                    .int_precision => |prec| {
+                        // Check if the precision satisfies the requirements
+                        const result = self.checkIntPrecisionRequirements(prec, a_requirements);
+                        switch (result) {
+                            .ok => {},
+                            .negative_unsigned => return error.NegativeUnsignedInt,
+                            .too_large => return error.NumberDoesNotFit,
+                        }
+                        self.merge(vars, vars.b.desc.content);
+                    },
+                    else => return error.TypeMismatch,
+                }
+            },
+            .frac_unbound => |a_requirements| {
+                switch (b_num) {
+                    .frac_poly => |b_poly| {
+                        // When unifying frac_unbound with frac_poly, keep as frac_poly
+                        self.merge(vars, Content{ .structure = .{ .num = .{ .frac_poly = .{
+                            .var_ = b_poly.var_,
+                            .requirements = a_requirements.unify(b_poly.requirements),
+                        } } } });
+                    },
+                    .frac_unbound => |b_requirements| {
+                        // Both frac_unbound - merge requirements
+                        self.merge(vars, Content{ .structure = .{ .num = .{ .frac_unbound = a_requirements.unify(b_requirements) } } });
+                    },
+                    .num_compact => |b_num_compact| {
+                        // Check if it's a frac
+                        switch (b_num_compact) {
+                            .frac => |frac_prec| {
+                                if (!self.fracPrecisionSatisfiesRequirements(frac_prec, a_requirements)) {
+                                    return error.TypeMismatch;
+                                }
+                            },
+                            .int => return error.TypeMismatch,
+                        }
+                        self.merge(vars, vars.b.desc.content);
+                    },
+                    .frac_precision => |prec| {
+                        // Check if the precision satisfies the requirements
+                        if (!self.fracPrecisionSatisfiesRequirements(prec, a_requirements)) {
+                            return error.TypeMismatch;
+                        }
+                        self.merge(vars, vars.b.desc.content);
+                    },
+                    .num_unbound => |b_requirements| {
+                        // When unifying frac_unbound with num_unbound, frac wins
+                        // Note: b_requirements are IntRequirements, we just keep our FracRequirements
+                        _ = b_requirements;
+                        self.merge(vars, Content{ .structure = .{ .num = .{ .frac_unbound = a_requirements } } });
                     },
                     else => return error.TypeMismatch,
                 }
@@ -907,11 +1174,11 @@ const Unifier = struct {
                     .num_compact => |b_num_compact| {
                         try self.unifyTwoCompactNums(vars, a_num_compact, b_num_compact);
                     },
-                    .num_poly => |b_requirements| {
+                    .num_poly => |b_poly| {
                         // num_poly always contains IntRequirements
                         switch (a_num_compact) {
                             .int => |prec| {
-                                const result = self.checkIntPrecisionRequirements(prec, b_requirements);
+                                const result = self.checkIntPrecisionRequirements(prec, b_poly.requirements);
                                 switch (result) {
                                     .ok => {},
                                     .negative_unsigned => return error.NegativeUnsignedInt,
@@ -946,16 +1213,16 @@ const Unifier = struct {
                             .int => return error.TypeMismatch,
                         }
                     },
-                    .frac_poly => |b_requirements| {
+                    .frac_poly => |b_poly| {
                         // Check if the requirements variable is rigid
-                        const req_var_desc = self.module_env.types.resolveVar(b_requirements.var_).desc;
+                        const req_var_desc = self.module_env.types.resolveVar(b_poly.var_).desc;
                         if (req_var_desc.content == .rigid_var) {
                             return error.TypeMismatch;
                         }
                         // Check if the compact frac type satisfies the requirements
                         switch (a_num_compact) {
                             .frac => |prec| {
-                                if (!self.fracPrecisionSatisfiesRequirements(prec, b_requirements)) {
+                                if (!self.fracPrecisionSatisfiesRequirements(prec, b_poly.requirements)) {
                                     return error.TypeMismatch;
                                 }
                                 self.merge(vars, vars.a.desc.content);
@@ -1432,6 +1699,14 @@ const Unifier = struct {
                 .structure => |flat_type| {
                     switch (flat_type) {
                         .record => |ext_record| {
+                            const next_range = self.scratch.copyGatherFieldsFromMultiList(
+                                &self.types_store.record_fields,
+                                ext_record.fields,
+                            );
+                            range.end = next_range.end;
+                            ext_var = ext_record.ext;
+                        },
+                        .record_unbound => |ext_record| {
                             const next_range = self.scratch.copyGatherFieldsFromMultiList(
                                 &self.types_store.record_fields,
                                 ext_record.fields,
@@ -2274,11 +2549,10 @@ const TestEnv = struct {
 
     fn mkNum(self: *Self, var_: Var) Var {
         const requirements = Num.IntRequirements{
-            .var_ = var_,
             .sign_needed = false,
-            .bits_needed = 0, // 7 bits, the minimum
+            .bits_needed = 0,
         };
-        return self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = requirements } } });
+        return self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = .{ .var_ = var_, .requirements = requirements } } } });
     }
 
     fn mkNumFlex(self: *Self) Var {
@@ -2298,31 +2572,28 @@ const TestEnv = struct {
     fn mkFracFlex(self: *Self) Var {
         const prec_var = self.module_env.types.fresh();
         const frac_requirements = Num.FracRequirements{
-            .var_ = prec_var,
             .fits_in_f32 = true,
             .fits_in_dec = true,
         };
-        return self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = frac_requirements } } });
+        return self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = .{ .var_ = prec_var, .requirements = frac_requirements } } } });
     }
 
     fn mkFracRigid(self: *Self, name: []const u8) Var {
         const rigid = self.module_env.types.freshFromContent(self.mkRigidVar(name));
         const frac_requirements = Num.FracRequirements{
-            .var_ = rigid,
             .fits_in_f32 = true,
             .fits_in_dec = true,
         };
-        return self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = frac_requirements } } });
+        return self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = .{ .var_ = rigid, .requirements = frac_requirements } } } });
     }
 
     fn mkFracPoly(self: *Self, prec: Num.Frac.Precision) Var {
         const prec_var = self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_precision = prec } } });
         const frac_requirements = Num.FracRequirements{
-            .var_ = prec_var,
             .fits_in_f32 = true,
             .fits_in_dec = true,
         };
-        return self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = frac_requirements } } });
+        return self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = .{ .var_ = prec_var, .requirements = frac_requirements } } } });
     }
 
     fn mkFracExact(self: *Self, prec: Num.Frac.Precision) Var {
@@ -2332,41 +2603,37 @@ const TestEnv = struct {
 
     fn mkInt(self: *Self, var_: Var) Var {
         const int_requirements = Num.IntRequirements{
-            .var_ = var_,
             .sign_needed = false,
             .bits_needed = 0, // 7 bits, the minimum
         };
-        return self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = int_requirements } } });
+        return self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = .{ .var_ = var_, .requirements = int_requirements } } } });
     }
 
     fn mkIntFlex(self: *Self) Var {
         const prec_var = self.module_env.types.fresh();
         const int_requirements = Num.IntRequirements{
-            .var_ = prec_var,
             .sign_needed = false,
             .bits_needed = 0, // 7 bits, the minimum
         };
-        return self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = int_requirements } } });
+        return self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = .{ .var_ = prec_var, .requirements = int_requirements } } } });
     }
 
     fn mkIntRigid(self: *Self, name: []const u8) Var {
         const rigid = self.module_env.types.freshFromContent(self.mkRigidVar(name));
         const int_requirements = Num.IntRequirements{
-            .var_ = rigid,
             .sign_needed = false,
             .bits_needed = 0, // 7 bits, the minimum
         };
-        return self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = int_requirements } } });
+        return self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = .{ .var_ = rigid, .requirements = int_requirements } } } });
     }
 
     fn mkIntPoly(self: *Self, prec: Num.Int.Precision) Var {
         const prec_var = self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_precision = prec } } });
         const int_requirements = Num.IntRequirements{
-            .var_ = prec_var,
             .sign_needed = false,
             .bits_needed = 0, // 7 bits, the minimum
         };
-        return self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = int_requirements } } });
+        return self.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_poly = .{ .var_ = prec_var, .requirements = int_requirements } } } });
     }
 
     fn mkIntExact(self: *Self, prec: Num.Int.Precision) Var {
@@ -3034,6 +3301,87 @@ test "unify - a & b are tuples with args flipped (fail)" {
     try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
 }
 
+test "unify - tuple_unbound unifies with tuple" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create element type variables
+    const num_var = env.module_env.types.fresh();
+    _ = env.module_env.types.setVarContent(num_var, Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = false, .bits_needed = 0 } } } });
+
+    const str_var = env.module_env.types.fresh();
+    _ = env.module_env.types.setVarContent(str_var, Content{ .structure = .str });
+
+    // Create tuple elements
+    const elems = [_]types_mod.Var{ num_var, str_var };
+    const elems_range = env.module_env.types.appendTupleElems(&elems);
+
+    // Create a tuple_unbound
+    const tuple_unbound = Content{ .structure = .{ .tuple_unbound = .{ .elems = elems_range } } };
+    const tuple_unbound_var = env.module_env.types.freshFromContent(tuple_unbound);
+
+    // Create a regular tuple with same structure
+    const tuple = Content{ .structure = .{ .tuple = .{ .elems = elems_range } } };
+    const tuple_var = env.module_env.types.freshFromContent(tuple);
+
+    // Unify tuple_unbound with tuple
+    const result = env.unify(tuple_unbound_var, tuple_var);
+    try std.testing.expect(result.isOk());
+
+    // Check that tuple_unbound_var now points to tuple_var
+    const resolved = env.module_env.types.resolveVar(tuple_unbound_var);
+    const resolved_tuple = env.module_env.types.resolveVar(tuple_var);
+    try std.testing.expectEqual(resolved.var_, resolved_tuple.var_);
+}
+
+test "unify - multiple tuple_unbounds stay unbound" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create element type variables for first tuple
+    const num_var1 = env.module_env.types.fresh();
+    _ = env.module_env.types.setVarContent(num_var1, Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = false, .bits_needed = 0 } } } });
+
+    // Create tuple elements for first tuple
+    const elems1 = [_]types_mod.Var{num_var1};
+    const elems_range1 = env.module_env.types.appendTupleElems(&elems1);
+
+    // Create element type variables for second tuple
+    const num_var2 = env.module_env.types.fresh();
+    _ = env.module_env.types.setVarContent(num_var2, Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = false, .bits_needed = 0 } } } });
+
+    // Create tuple elements for second tuple
+    const elems2 = [_]types_mod.Var{num_var2};
+    const elems_range2 = env.module_env.types.appendTupleElems(&elems2);
+
+    // Create two tuple_unbounds
+    const tuple_unbound1 = Content{ .structure = .{ .tuple_unbound = .{ .elems = elems_range1 } } };
+    const tuple_unbound1_var = env.module_env.types.freshFromContent(tuple_unbound1);
+
+    const tuple_unbound2 = Content{ .structure = .{ .tuple_unbound = .{ .elems = elems_range2 } } };
+    const tuple_unbound2_var = env.module_env.types.freshFromContent(tuple_unbound2);
+
+    // Unify the two tuple_unbounds
+    const result = env.unify(tuple_unbound1_var, tuple_unbound2_var);
+    try std.testing.expect(result.isOk());
+
+    // Check that the result is still tuple_unbound
+    const resolved = env.module_env.types.resolveVar(tuple_unbound1_var);
+    switch (resolved.desc.content) {
+        .structure => |structure| {
+            switch (structure) {
+                .tuple_unbound => {}, // Expected
+                else => return error.ExpectedTupleUnbound,
+            }
+        },
+        else => return error.ExpectedStructure,
+    }
+}
+
 // unification - structure/structure - compact/compact
 
 test "unify - two compact ints" {
@@ -3456,11 +3804,10 @@ test "unify - Num(rigid) and Num(rigid)" {
 
     const rigid = env.module_env.types.freshFromContent(env.mkRigidVar("b"));
     const requirements = Num.IntRequirements{
-        .var_ = rigid,
         .sign_needed = false,
         .bits_needed = 0,
     };
-    const num = Content{ .structure = .{ .num = .{ .num_poly = requirements } } };
+    const num = Content{ .structure = .{ .num = .{ .num_poly = .{ .var_ = rigid, .requirements = requirements } } } };
     const a = env.module_env.types.freshFromContent(num);
     const b = env.module_env.types.freshFromContent(num);
 
@@ -3479,18 +3826,13 @@ test "unify - Num(rigid_a) and Num(rigid_b)" {
 
     const rigid_a = env.module_env.types.freshFromContent(env.mkRigidVar("a"));
     const rigid_b = env.module_env.types.freshFromContent(env.mkRigidVar("b"));
-    const requirements_a = Num.IntRequirements{
-        .var_ = rigid_a,
+
+    const int_requirements = Num.IntRequirements{
         .sign_needed = false,
         .bits_needed = 0,
     };
-    const requirements_b = Num.IntRequirements{
-        .var_ = rigid_b,
-        .sign_needed = false,
-        .bits_needed = 0,
-    };
-    const a = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = requirements_a } } });
-    const b = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = requirements_b } } });
+    const a = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = .{ .var_ = rigid_a, .requirements = int_requirements } } } });
+    const b = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = .{ .var_ = rigid_b, .requirements = int_requirements } } } });
 
     const result = env.unify(a, b);
 
@@ -3507,12 +3849,11 @@ test "unify - Num(Int(rigid)) and Num(Int(rigid))" {
 
     const rigid = env.module_env.types.freshFromContent(env.mkRigidVar("b"));
     const int_requirements = Num.IntRequirements{
-        .var_ = rigid,
         .sign_needed = false,
         .bits_needed = 0,
     };
-    _ = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_poly = int_requirements } } });
-    const num = Content{ .structure = .{ .num = .{ .num_poly = int_requirements } } };
+    _ = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_poly = .{ .var_ = rigid, .requirements = int_requirements } } } });
+    const num = Content{ .structure = .{ .num = .{ .num_poly = .{ .var_ = rigid, .requirements = int_requirements } } } };
     const a = env.module_env.types.freshFromContent(num);
     const b = env.module_env.types.freshFromContent(num);
 
@@ -3531,17 +3872,15 @@ test "unify - Num(Frac(rigid)) and Num(Frac(rigid))" {
 
     const rigid = env.module_env.types.freshFromContent(env.mkRigidVar("b"));
     const frac_requirements = Num.FracRequirements{
-        .var_ = rigid,
         .fits_in_f32 = true,
         .fits_in_dec = true,
     };
-    const frac_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = frac_requirements } } });
+    const frac_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = .{ .var_ = rigid, .requirements = frac_requirements } } } });
     const int_requirements = Num.IntRequirements{
-        .var_ = frac_var,
         .sign_needed = false,
         .bits_needed = 0,
     };
-    const num = Content{ .structure = .{ .num = .{ .num_poly = int_requirements } } };
+    const num = Content{ .structure = .{ .num = .{ .num_poly = .{ .var_ = frac_var, .requirements = int_requirements } } } };
     const a = env.module_env.types.freshFromContent(num);
     const b = env.module_env.types.freshFromContent(num);
 
@@ -3635,11 +3974,10 @@ test "unify - func are same" {
     const int_i32 = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
     const num_flex = env.module_env.types.fresh();
     const requirements = Num.IntRequirements{
-        .var_ = num_flex,
         .sign_needed = false,
         .bits_needed = 0,
     };
-    const num = env.module_env.types.freshFromContent(types_mod.Content{ .structure = .{ .num = .{ .num_poly = requirements } } });
+    const num = env.module_env.types.freshFromContent(types_mod.Content{ .structure = .{ .num = .{ .num_poly = .{ .var_ = num_flex, .requirements = requirements } } } });
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
     const func = env.mkFuncFlex(&[_]Var{ str, num }, int_i32);
 
@@ -3698,15 +4036,14 @@ test "unify - same funcs pure" {
     defer env.deinit();
 
     const int_i32 = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
-    const num_flex = env.module_env.types.fresh();
-    const requirements = Num.IntRequirements{
-        .var_ = num_flex,
+    const int_poly_var = env.module_env.types.fresh();
+    const int_requirements = Num.IntRequirements{
         .sign_needed = false,
         .bits_needed = 0,
     };
-    const num = env.module_env.types.freshFromContent(types_mod.Content{ .structure = .{ .num = .{ .num_poly = requirements } } });
+    const int_poly = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_poly = .{ .var_ = int_poly_var, .requirements = int_requirements } } } });
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
-    const func = env.mkFuncPure(&[_]Var{ str, num }, int_i32);
+    const func = env.mkFuncPure(&[_]Var{ str, int_poly }, int_i32);
 
     const a = env.module_env.types.freshFromContent(func);
     const b = env.module_env.types.freshFromContent(func);
@@ -3725,15 +4062,14 @@ test "unify - same funcs effectful" {
     defer env.deinit();
 
     const int_i32 = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
-    const num_flex = env.module_env.types.fresh();
-    const requirements = Num.IntRequirements{
-        .var_ = num_flex,
+    const int_poly_var = env.module_env.types.fresh();
+    const int_requirements = Num.IntRequirements{
         .sign_needed = false,
         .bits_needed = 0,
     };
-    const num = env.module_env.types.freshFromContent(types_mod.Content{ .structure = .{ .num = .{ .num_poly = requirements } } });
+    const int_poly = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_poly = .{ .var_ = int_poly_var, .requirements = int_requirements } } } });
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
-    const func = env.mkFuncEff(&[_]Var{ str, num }, int_i32);
+    const func = env.mkFuncEff(&[_]Var{ str, int_poly }, int_i32);
 
     const a = env.module_env.types.freshFromContent(func);
     const b = env.module_env.types.freshFromContent(func);
@@ -3752,16 +4088,15 @@ test "unify - same funcs first eff, second pure (fail)" {
     defer env.deinit();
 
     const int_i32 = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
-    const num_flex = env.module_env.types.fresh();
-    const requirements = Num.IntRequirements{
-        .var_ = num_flex,
+    const int_poly_var = env.module_env.types.fresh();
+    const int_requirements = Num.IntRequirements{
         .sign_needed = false,
         .bits_needed = 0,
     };
-    const num = env.module_env.types.freshFromContent(types_mod.Content{ .structure = .{ .num = .{ .num_poly = requirements } } });
+    const int_poly = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_poly = .{ .var_ = int_poly_var, .requirements = int_requirements } } } });
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
-    const pure_func = env.mkFuncPure(&[_]Var{ str, num }, int_i32);
-    const eff_func = env.mkFuncEff(&[_]Var{ str, num }, int_i32);
+    const pure_func = env.mkFuncPure(&[_]Var{ str, int_poly }, int_i32);
+    const eff_func = env.mkFuncEff(&[_]Var{ str, int_poly }, int_i32);
 
     const a = env.module_env.types.freshFromContent(eff_func);
     const b = env.module_env.types.freshFromContent(pure_func);
@@ -3780,16 +4115,15 @@ test "unify - same funcs first pure, second eff" {
     defer env.deinit();
 
     const int_i32 = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
-    const num_flex = env.module_env.types.fresh();
-    const requirements = Num.IntRequirements{
-        .var_ = num_flex,
+    const int_poly_var = env.module_env.types.fresh();
+    const int_requirements = Num.IntRequirements{
         .sign_needed = false,
         .bits_needed = 0,
     };
-    const num = env.module_env.types.freshFromContent(types_mod.Content{ .structure = .{ .num = .{ .num_poly = requirements } } });
+    const int_poly = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_poly = .{ .var_ = int_poly_var, .requirements = int_requirements } } } });
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
-    const pure_func = env.mkFuncPure(&[_]Var{ str, num }, int_i32);
-    const eff_func = env.mkFuncEff(&[_]Var{ str, num }, int_i32);
+    const pure_func = env.mkFuncPure(&[_]Var{ str, int_poly }, int_i32);
+    const eff_func = env.mkFuncEff(&[_]Var{ str, int_poly }, int_i32);
 
     const a = env.module_env.types.freshFromContent(pure_func);
     const b = env.module_env.types.freshFromContent(eff_func);
@@ -4934,13 +5268,12 @@ test "integer literal 255 fits in U8" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    // Create a literal with value 255 (8 bits, no sign)
+    // Create a literal with value 255 (8 bits unsigned)
     const literal_requirements = Num.IntRequirements{
-        .var_ = env.module_env.types.fresh(),
         .sign_needed = false,
         .bits_needed = @intFromEnum(Num.Int.BitsNeeded.@"8"),
     };
-    const literal_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = literal_requirements } } });
+    const literal_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_unbound = literal_requirements } } });
 
     // Create U8 type
     const u8_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } });
@@ -4958,11 +5291,10 @@ test "integer literal 256 does not fit in U8" {
 
     // Create a literal with value 256 (9 bits, no sign)
     const literal_requirements = Num.IntRequirements{
-        .var_ = env.module_env.types.fresh(),
         .sign_needed = false,
         .bits_needed = @intFromEnum(Num.Int.BitsNeeded.@"9_to_15"),
     };
-    const literal_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = literal_requirements } } });
+    const literal_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_unbound = literal_requirements } } });
 
     // Create U8 type
     const u8_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } });
@@ -4978,13 +5310,12 @@ test "integer literal -128 fits in I8" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    // Create a literal with value -128 (7 bits magnitude, sign needed)
+    // Create a literal with value -128 (needs sign, 7 bits after adjustment)
     const literal_requirements = Num.IntRequirements{
-        .var_ = env.module_env.types.fresh(),
         .sign_needed = true,
         .bits_needed = @intFromEnum(Num.Int.BitsNeeded.@"7"),
     };
-    const literal_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = literal_requirements } } });
+    const literal_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_unbound = literal_requirements } } });
 
     // Create I8 type
     const i8_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_compact = .{ .int = .i8 } } } });
@@ -5000,13 +5331,12 @@ test "integer literal -129 does not fit in I8" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    // Create a literal with value -129 (8 bits magnitude, sign needed)
+    // Create a literal with value -129 (needs sign, 8 bits)
     const literal_requirements = Num.IntRequirements{
-        .var_ = env.module_env.types.fresh(),
         .sign_needed = true,
         .bits_needed = @intFromEnum(Num.Int.BitsNeeded.@"8"),
     };
-    const literal_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = literal_requirements } } });
+    const literal_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_unbound = literal_requirements } } });
 
     // Create I8 type
     const i8_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_compact = .{ .int = .i8 } } } });
@@ -5022,13 +5352,12 @@ test "negative literal cannot unify with unsigned type" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    // Create a literal with value -1 (sign needed)
+    // Create a literal with negative value (sign needed)
     const literal_requirements = Num.IntRequirements{
-        .var_ = env.module_env.types.fresh(),
         .sign_needed = true,
         .bits_needed = @intFromEnum(Num.Int.BitsNeeded.@"7"),
     };
-    const literal_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = literal_requirements } } });
+    const literal_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_unbound = literal_requirements } } });
 
     // Create U8 type
     const u8_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } });
@@ -5046,11 +5375,10 @@ test "float literal that fits in F32" {
 
     // Create a literal that fits in F32
     const literal_requirements = Num.FracRequirements{
-        .var_ = env.module_env.types.fresh(),
         .fits_in_f32 = true,
         .fits_in_dec = true,
     };
-    const literal_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = literal_requirements } } });
+    const literal_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_unbound = literal_requirements } } });
 
     // Create F32 type
     const f32_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f32 } } } });
@@ -5068,11 +5396,10 @@ test "float literal that doesn't fit in F32" {
 
     // Create a literal that doesn't fit in F32
     const literal_requirements = Num.FracRequirements{
-        .var_ = env.module_env.types.fresh(),
         .fits_in_f32 = false,
         .fits_in_dec = true,
     };
-    const literal_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = literal_requirements } } });
+    const literal_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_unbound = literal_requirements } } });
 
     // Create F32 type
     const f32_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f32 } } } });
@@ -5090,11 +5417,10 @@ test "float literal NaN doesn't fit in Dec" {
 
     // Create a literal like NaN that doesn't fit in Dec
     const literal_requirements = Num.FracRequirements{
-        .var_ = env.module_env.types.fresh(),
         .fits_in_f32 = true,
         .fits_in_dec = false,
     };
-    const literal_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = literal_requirements } } });
+    const literal_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_unbound = literal_requirements } } });
 
     // Create Dec type
     const dec_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_compact = .{ .frac = .dec } } } });
@@ -5112,19 +5438,17 @@ test "two integer literals with different requirements unify to most restrictive
 
     // Create a literal with value 100 (7 bits, no sign)
     const literal1_requirements = Num.IntRequirements{
-        .var_ = env.module_env.types.fresh(),
         .sign_needed = false,
         .bits_needed = @intFromEnum(Num.Int.BitsNeeded.@"7"),
     };
-    const literal1_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = literal1_requirements } } });
+    const literal1_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_unbound = literal1_requirements } } });
 
     // Create a literal with value 200 (8 bits, no sign)
     const literal2_requirements = Num.IntRequirements{
-        .var_ = env.module_env.types.fresh(),
         .sign_needed = false,
         .bits_needed = @intFromEnum(Num.Int.BitsNeeded.@"8"),
     };
-    const literal2_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = literal2_requirements } } });
+    const literal2_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_unbound = literal2_requirements } } });
 
     // They should unify successfully
     const result = env.unify(literal1_var, literal2_var);
@@ -5137,23 +5461,195 @@ test "positive and negative literals unify with sign requirement" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    // Create a literal with value 100 (no sign needed)
+    // Create an unsigned literal
     const literal1_requirements = Num.IntRequirements{
-        .var_ = env.module_env.types.fresh(),
         .sign_needed = false,
         .bits_needed = @intFromEnum(Num.Int.BitsNeeded.@"7"),
     };
-    const literal1_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = literal1_requirements } } });
+    const literal1_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_unbound = literal1_requirements } } });
 
-    // Create a literal with value -100 (sign needed)
+    // Create a signed literal
     const literal2_requirements = Num.IntRequirements{
-        .var_ = env.module_env.types.fresh(),
         .sign_needed = true,
         .bits_needed = @intFromEnum(Num.Int.BitsNeeded.@"7"),
     };
-    const literal2_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = literal2_requirements } } });
+    const literal2_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_unbound = literal2_requirements } } });
 
     // They should unify successfully (creating a signed type that can hold both)
     const result = env.unify(literal1_var, literal2_var);
     try std.testing.expect(result == .ok);
+}
+
+test "unify - num_unbound with frac_unbound" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create a num_unbound (like literal 1)
+    const num_requirements = Num.IntRequirements{
+        .sign_needed = false,
+        .bits_needed = @intFromEnum(Num.Int.BitsNeeded.@"7"),
+    };
+    const num_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_unbound = num_requirements } } });
+
+    // Create a frac_unbound (like literal 2.5)
+    const frac_requirements = Num.FracRequirements{
+        .fits_in_f32 = true,
+        .fits_in_dec = true,
+    };
+    const frac_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_unbound = frac_requirements } } });
+
+    // They should unify successfully with frac_unbound winning
+    const result = env.unify(num_var, frac_var);
+    try std.testing.expect(result == .ok);
+
+    // Check that the result is frac_unbound
+    const resolved = env.module_env.types.resolveVar(num_var);
+    switch (resolved.desc.content) {
+        .structure => |structure| {
+            switch (structure) {
+                .num => |num| {
+                    switch (num) {
+                        .frac_unbound => {}, // Expected
+                        else => return error.ExpectedFracUnbound,
+                    }
+                },
+                else => return error.ExpectedNum,
+            }
+        },
+        else => return error.ExpectedStructure,
+    }
+}
+
+test "unify - frac_unbound with num_unbound (reverse order)" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create a frac_unbound (like literal 2.5)
+    const frac_requirements = Num.FracRequirements{
+        .fits_in_f32 = true,
+        .fits_in_dec = true,
+    };
+    const frac_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .frac_unbound = frac_requirements } } });
+
+    // Create a num_unbound (like literal 1)
+    const num_requirements = Num.IntRequirements{
+        .sign_needed = false,
+        .bits_needed = @intFromEnum(Num.Int.BitsNeeded.@"7"),
+    };
+    const num_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_unbound = num_requirements } } });
+
+    // They should unify successfully with frac_unbound winning
+    const result = env.unify(frac_var, num_var);
+    try std.testing.expect(result == .ok);
+
+    // Check that the result is frac_unbound
+    const resolved = env.module_env.types.resolveVar(frac_var);
+    switch (resolved.desc.content) {
+        .structure => |structure| {
+            switch (structure) {
+                .num => |num| {
+                    switch (num) {
+                        .frac_unbound => {}, // Expected
+                        else => return error.ExpectedFracUnbound,
+                    }
+                },
+                else => return error.ExpectedNum,
+            }
+        },
+        else => return error.ExpectedStructure,
+    }
+}
+
+test "unify - int_unbound with num_unbound" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create an int_unbound (like literal -5)
+    const int_requirements = Num.IntRequirements{
+        .sign_needed = true,
+        .bits_needed = @intFromEnum(Num.Int.BitsNeeded.@"7"),
+    };
+    const int_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_unbound = int_requirements } } });
+
+    // Create a num_unbound (like literal 1)
+    const num_requirements = Num.IntRequirements{
+        .sign_needed = false,
+        .bits_needed = @intFromEnum(Num.Int.BitsNeeded.@"7"),
+    };
+    const num_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_unbound = num_requirements } } });
+
+    // They should unify successfully with int_unbound winning
+    const result = env.unify(int_var, num_var);
+    try std.testing.expect(result == .ok);
+
+    // Check that the result is int_unbound
+    const resolved = env.module_env.types.resolveVar(int_var);
+    switch (resolved.desc.content) {
+        .structure => |structure| {
+            switch (structure) {
+                .num => |num| {
+                    switch (num) {
+                        .int_unbound => |requirements| {
+                            // Should have merged the requirements - sign_needed should be true
+                            try std.testing.expect(requirements.sign_needed == true);
+                        },
+                        else => return error.ExpectedIntUnbound,
+                    }
+                },
+                else => return error.ExpectedNum,
+            }
+        },
+        else => return error.ExpectedStructure,
+    }
+}
+
+test "unify - num_unbound with int_unbound (reverse order)" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create a num_unbound (like literal 1)
+    const num_requirements = Num.IntRequirements{
+        .sign_needed = false,
+        .bits_needed = @intFromEnum(Num.Int.BitsNeeded.@"7"),
+    };
+    const num_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_unbound = num_requirements } } });
+
+    // Create an int_unbound (like literal -5)
+    const int_requirements = Num.IntRequirements{
+        .sign_needed = true,
+        .bits_needed = @intFromEnum(Num.Int.BitsNeeded.@"7"),
+    };
+    const int_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_unbound = int_requirements } } });
+
+    // They should unify successfully with int_unbound winning
+    const result = env.unify(num_var, int_var);
+    try std.testing.expect(result == .ok);
+
+    // Check that the result is int_unbound
+    const resolved = env.module_env.types.resolveVar(num_var);
+    switch (resolved.desc.content) {
+        .structure => |structure| {
+            switch (structure) {
+                .num => |num| {
+                    switch (num) {
+                        .int_unbound => |requirements| {
+                            // Should have merged the requirements - sign_needed should be true
+                            try std.testing.expect(requirements.sign_needed == true);
+                        },
+                        else => return error.ExpectedIntUnbound,
+                    }
+                },
+                else => return error.ExpectedNum,
+            }
+        },
+        else => return error.ExpectedStructure,
+    }
 }

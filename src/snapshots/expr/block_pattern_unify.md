@@ -62,24 +62,24 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1-1-6-2 (id 87)
+(e-block @1-1-6-2 (id 85)
 	(s-let @2-5-2-11
 		(p-assign @2-5-2-6 (ident "x") (id 72))
-		(e-int @2-9-2-11 (value "42") (id 74)))
+		(e-int @2-9-2-11 (value "42") (id 73)))
 	(s-let @3-5-3-18
-		(p-assign @3-5-3-8 (ident "str") (id 76))
-		(e-string @3-11-3-18 (id 78)
+		(p-assign @3-5-3-8 (ident "str") (id 75))
+		(e-string @3-11-3-18 (id 77)
 			(e-literal @3-12-3-17 (string "hello"))))
 	(s-let @4-5-5-11
-		(p-assign @4-5-4-11 (ident "result") (id 80))
-		(e-binop @4-14-5-11 (op "add") (id 84)
+		(p-assign @4-5-4-11 (ident "result") (id 79))
+		(e-binop @4-14-5-11 (op "add") (id 82)
 			(e-lookup-local @4-14-4-15
 				(pattern (id 72)))
 			(e-int @4-18-4-19 (value "5"))))
 	(e-lookup-local @5-5-5-11
-		(pattern (id 80))))
+		(pattern (id 79))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 87) (type "*"))
+(expr (id 85) (type "*"))
 ~~~

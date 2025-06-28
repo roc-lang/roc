@@ -258,6 +258,20 @@ pub const Store = struct {
                             break;
                         }
                     },
+                    .record_unbound => |ext_record| {
+                        if (ext_record.fields.len() > 0) {
+                            num_fields += ext_record.fields.len();
+                            const ext_field_slice = self.types_store.getRecordFieldsSlice(ext_record.fields);
+                            for (ext_field_slice.items(.name), ext_field_slice.items(.var_)) |name, var_| {
+                                // TODO is it possible that here we're adding fields with names
+                                // already in the list? Would type-checking have already collapsed these?
+                                // We would certainly rather not spend time doing hashmap things
+                                // if we can avoid it here.
+                                try self.work.pending_record_fields.append(self.env.gpa, .{ .name = name, .var_ = var_ });
+                            }
+                        }
+                        current_ext = ext_record.ext;
+                    },
                     else => return LayoutError.InvalidRecordExtension,
                 },
                 .alias => |alias| {
@@ -545,6 +559,13 @@ pub const Store = struct {
                         current = self.types_store.resolveVar(elem_var);
                         continue;
                     },
+                    .list_unbound => {
+                        // For unbound lists (empty lists), use list of zero-sized type
+                        const layout = Layout.listOfZst();
+                        const idx = try self.insertLayout(layout);
+                        try self.layouts_by_var.put(self.env.gpa, current.var_, idx);
+                        return idx;
+                    },
                     .custom_type => |custom_type| {
                         // TODO special-case the builtin Num type here.
                         // If we have one of those, then convert it to a Num layout,
@@ -563,11 +584,38 @@ pub const Store = struct {
                         .int_precision => |precision| Layout.int(precision),
                         .frac_precision => |precision| Layout.frac(precision),
                         // For polymorphic types, use default precision
+                        .num_unbound => Layout.int(types.Num.Int.Precision.default),
+                        .int_unbound => Layout.int(types.Num.Int.Precision.default),
+                        .frac_unbound => Layout.frac(types.Num.Frac.Precision.default),
                         .num_poly => Layout.int(types.Num.Int.Precision.default),
                         .int_poly => Layout.int(types.Num.Int.Precision.default),
                         .frac_poly => Layout.frac(types.Num.Frac.Precision.default),
                     },
                     .tuple => |tuple_type| {
+                        const num_fields = try self.gatherTupleFields(tuple_type);
+
+                        if (num_fields == 0) {
+                            continue :flat_type .empty_record; // Empty tuple is like empty record
+                        }
+
+                        try self.work.pending_containers.append(self.env.gpa, .{
+                            .var_ = current.var_,
+                            .container = .{
+                                .tuple = .{
+                                    .num_fields = @intCast(num_fields),
+                                    .pending_fields = @intCast(num_fields),
+                                    .resolved_fields_start = @intCast(self.work.resolved_tuple_fields.len),
+                                },
+                            },
+                        });
+
+                        // Start working on the last pending field (we want to pop them).
+                        const last_field_idx = self.work.pending_tuple_fields.len - 1;
+                        const last_pending_field = self.work.pending_tuple_fields.get(last_field_idx);
+                        current = self.types_store.resolveVar(last_pending_field.var_);
+                        continue :outer;
+                    },
+                    .tuple_unbound => |tuple_type| {
                         const num_fields = try self.gatherTupleFields(tuple_type);
 
                         if (num_fields == 0) {
@@ -624,6 +672,30 @@ pub const Store = struct {
                         // TODO
                         _ = tag_union;
                         @panic("TODO: tag_union layout");
+                    },
+                    .record_unbound => |record_type| {
+                        const num_fields = try self.gatherRecordFields(record_type);
+
+                        if (num_fields == 0) {
+                            continue :flat_type .empty_record;
+                        }
+
+                        try self.work.pending_containers.append(self.env.gpa, .{
+                            .var_ = current.var_,
+                            .container = .{
+                                .record = .{
+                                    .num_fields = @intCast(num_fields),
+                                    .resolved_fields_start = @intCast(self.work.resolved_record_fields.len),
+                                    .pending_fields = @intCast(num_fields),
+                                },
+                            },
+                        });
+
+                        // Start working on the last pending field (we want to pop them).
+                        const field = self.work.pending_record_fields.get(self.work.pending_record_fields.len - 1);
+
+                        current = self.types_store.resolveVar(field.var_);
+                        continue;
                     },
                     .empty_record, .empty_tag_union => blk: {
                         // Empty records and tag unions are zero-sized, so we need to do something different

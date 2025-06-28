@@ -25,11 +25,11 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call @1-1-1-9 (id 77)
+(e-call @1-1-1-9 (id 76)
 	(e-tag @1-1-1-5 (ext-var 0) (name "Some") (args "TODO"))
 	(e-int @1-6-1-8 (value "42")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 77) (type "*"))
+(expr (id 76) (type "*"))
 ~~~

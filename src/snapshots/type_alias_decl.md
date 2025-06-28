@@ -286,9 +286,9 @@ main! = |_| {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 165)
+	(d-let (id 163)
 		(p-assign @27-1-27-6 (ident "main!") (id 128))
-		(e-lambda @27-9-39-2 (id 164)
+		(e-lambda @27-9-39-2 (id 162)
 			(args
 				(p-underscore @27-10-27-11 (id 129)))
 			(e-block @27-13-39-2
@@ -296,12 +296,12 @@ main! = |_| {
 					(ty @29-14-29-20 (name "UserId")))
 				(s-let @30-5-30-17
 					(p-assign @30-5-30-11 (ident "userId") (id 133))
-					(e-int @30-14-30-17 (value "123") (id 135)))
+					(e-int @30-14-30-17 (value "123") (id 134)))
 				(s-type-anno @32-5-33-11 (name "person")
 					(ty @32-14-32-20 (name "Person")))
 				(s-let @33-5-33-40
-					(p-assign @33-5-33-11 (ident "person") (id 140))
-					(e-record @33-14-33-40 (ext-var 147) (id 148)
+					(p-assign @33-5-33-11 (ident "person") (id 139))
+					(e-record @33-14-33-40 (ext-var 145) (id 146)
 						(fields
 							(field (name "name")
 								(e-string @33-22-33-29
@@ -311,8 +311,8 @@ main! = |_| {
 				(s-type-anno @35-5-36-10 (name "color")
 					(ty @35-13-35-18 (name "Color")))
 				(s-let @36-5-36-16
-					(p-assign @36-5-36-10 (ident "color") (id 155))
-					(e-tag @36-13-36-16 (ext-var 0) (name "Red") (args "TODO") (id 157)))
+					(p-assign @36-5-36-10 (ident "color") (id 153))
+					(e-tag @36-13-36-16 (ext-var 0) (name "Red") (args "TODO") (id 155)))
 				(e-lookup-local @38-5-38-11
 					(pattern (id 133))))))
 	(s-type-decl @4-1-7-7 (id 74)
@@ -379,7 +379,7 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "main!") (def_var 165) (type "* ? *")))
+		(d_assign (name "main!") (def_var 163) (type "* ? *")))
 	(expressions
 		(expr @27-9-39-2 (type "* ? *"))))
 ~~~

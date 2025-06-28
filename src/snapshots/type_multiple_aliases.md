@@ -191,15 +191,15 @@ main! = |_| {
 				(ty-fn @11-15-11-31 (effectful false)
 					(ty @11-15-11-19 (name "User"))
 					(ty @11-23-11-31 (name "UserName"))))))
-	(d-let (id 157)
+	(d-let (id 155)
 		(p-assign @14-1-14-6 (ident "main!") (id 137))
-		(e-lambda @14-9-17-2 (id 156)
+		(e-lambda @14-9-17-2 (id 154)
 			(args
 				(p-underscore @14-10-14-11 (id 138)))
 			(e-block @14-13-17-2
 				(s-let @15-5-15-40
 					(p-assign @15-5-15-9 (ident "user") (id 139))
-					(e-call @15-12-15-40 (id 148)
+					(e-call @15-12-15-40 (id 146)
 						(e-lookup-local @15-12-15-22
 							(pattern (id 95)))
 						(e-int @15-23-15-26 (value "123"))
@@ -236,7 +236,7 @@ main! = |_| {
 	(defs
 		(d_assign (name "createUser") (def_var 120) (type "UserId, UserName, UserAge -> { id: *, name: *, age: *, * Pure }"))
 		(d_assign (name "getUserName") (def_var 136) (type "User -> UserName"))
-		(d_assign (name "main!") (def_var 157) (type "* ? *")))
+		(d_assign (name "main!") (def_var 155) (type "* ? *")))
 	(expressions
 		(expr @9-14-9-47 (type "UserId, UserName, UserAge -> { id: *, name: *, age: *, * Pure }"))
 		(expr @12-15-14-6 (type "User -> UserName"))

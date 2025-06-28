@@ -23,9 +23,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-int @1-1-1-20 (value "9223372036854775807") (id 73))
+(e-int @1-1-1-20 (value "9223372036854775807") (id 72))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 73) (type "Num(*)"))
+(expr (id 72) (type "Num(*)"))
 ~~~
