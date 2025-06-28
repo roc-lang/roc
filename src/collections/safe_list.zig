@@ -335,7 +335,7 @@ pub fn SafeMultiList(comptime T: type) type {
                 const cur_items = base.items(cur_field);
 
                 new_ptrs[i] = if (cur_items.len == 0)
-                    @as([*]u8, @ptrFromInt(@alignOf(u8)))
+                    @as([*]u8, @ptrFromInt(@alignOf(std.meta.Elem(@TypeOf(cur_items)))))
                 else if (start >= cur_items.len)
                     @ptrCast(cur_items.ptr + cur_items.len)
                 else
