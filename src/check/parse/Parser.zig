@@ -1334,8 +1334,15 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) AST.Pattern.Idx {
             self.advance();
         }
     }
-    if ((self.store.scratchPatternTop() - patterns_scratch_top) == 0) {
+    const pattern_count = self.store.scratchPatternTop() - patterns_scratch_top;
+    if (pattern_count == 0) {
         return self.store.addMalformed(AST.Pattern.Idx, .pattern_unexpected_eof, .{ .start = outer_start, .end = self.pos });
+    }
+    if (pattern_count == 1) {
+        // Only one pattern, return it directly instead of wrapping in alternatives
+        const single_pattern = self.store.scratch_patterns.items.items[self.store.scratchPatternTop() - 1];
+        self.store.clearScratchPatternsFrom(patterns_scratch_top);
+        return self.parseAsPattern(single_pattern);
     }
     const last_pattern = self.store.scratch_patterns.items.items[self.store.scratchPatternTop() - 1];
     const last_pattern_region = self.store.nodes.items.items(.region)[@intFromEnum(last_pattern)];

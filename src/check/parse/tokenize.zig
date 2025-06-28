@@ -393,10 +393,12 @@ pub const TokenizedBuffer = struct {
             .NoSpaceDotLowerIdent,
             .MalformedUnicodeIdent,
             .MalformedDotUnicodeIdent,
+            .MalformedNoSpaceDotUnicodeIdent,
             .DotUpperIdent,
             .NoSpaceDotUpperIdent,
             .UpperIdent,
             .NamedUnderscore,
+            .MalformedNamedUnderscoreUnicode,
             => {
                 return self.env.idents.getRegion(extra.interned);
             },
@@ -418,10 +420,12 @@ pub const TokenizedBuffer = struct {
             .NoSpaceDotLowerIdent,
             .MalformedUnicodeIdent,
             .MalformedDotUnicodeIdent,
+            .MalformedNoSpaceDotUnicodeIdent,
             .DotUpperIdent,
             .NoSpaceDotUpperIdent,
             .UpperIdent,
             .NamedUnderscore,
+            .MalformedNamedUnderscoreUnicode,
             => {
                 return extra.interned;
             },
