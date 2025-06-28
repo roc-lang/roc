@@ -43,6 +43,7 @@ The unused variable is declared here:
 ```roc
     pair = combine(num, text)
 ```
+    ^^^^
 
 
 # TOKENS

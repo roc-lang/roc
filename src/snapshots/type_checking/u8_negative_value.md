@@ -17,6 +17,7 @@ The number **-1** is **signed** because it is negative:
 ```roc
 x = -1
 ```
+    ^^
 
 However, its inferred type is **unsigned**:
     _U8_

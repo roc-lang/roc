@@ -17,6 +17,7 @@ Here is the problematic code:
 ```roc
 { name: "Alice", : 30, , email: , active Bool.true, "invalid": value, 42: "number key", : }
 ```
+                 ^^^^
 
 
 **PARSE ERROR**
@@ -28,6 +29,7 @@ Here is the problematic code:
 ```roc
 { name: "Alice", : 30, , email: , active Bool.true, "invalid": value, 42: "number key", : }
 ```
+                   ^^^
 
 
 # TOKENS

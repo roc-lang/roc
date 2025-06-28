@@ -14,12 +14,14 @@ This list contains elements with incompatible types:
 ```roc
 [1, "hello", 3.14]
 ```
+^^^^^^^^^^^^^^^^^^
 
 The first element with this type:
 **can_list_heterogeneous.md:1:2:1:3:**
 ```roc
 [1, "hello", 3.14]
 ```
+ ^
 
 has the type
     _Num(*)_
@@ -29,6 +31,7 @@ However, this element:
 ```roc
 [1, "hello", 3.14]
 ```
+    ^^^^^^^
 
 has the incompatible type:
     _Str_
@@ -41,6 +44,7 @@ This expression is used in an unexpected way:
 ```roc
 [1, "hello", 3.14]
 ```
+             ^^^^
 
 It is of type:
     _Frac(*)_

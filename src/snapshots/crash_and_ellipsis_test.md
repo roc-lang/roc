@@ -36,6 +36,7 @@ Here is the problematic code:
 ```roc
 testCrash = |_| crash "This is a crash message"
 ```
+                ^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -47,6 +48,7 @@ Here is the problematic code:
 ```roc
 testCrashSimple = |_| crash "oops"
 ```
+                      ^^^^^^^
 
 
 **NOT IMPLEMENTED**
@@ -75,6 +77,7 @@ The unused variable is declared here:
 ```roc
     result1 = testEllipsis(42)
 ```
+    ^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -86,6 +89,7 @@ The unused variable is declared here:
 ```roc
     result2 = testCrash(42)
 ```
+    ^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -97,6 +101,7 @@ The unused variable is declared here:
 ```roc
     result3 = testCrashSimple(42)
 ```
+    ^^^^^^^
 
 
 **TYPE MISMATCH**
@@ -105,6 +110,7 @@ This expression is used in an unexpected way:
 ```roc
 testCrash = |_| crash "This is a crash message"
 ```
+^^^^^^^^^
 
 It is of type:
     _U64 -> U64_
@@ -118,6 +124,7 @@ This expression is used in an unexpected way:
 ```roc
 testCrashSimple = |_| crash "oops"
 ```
+^^^^^^^^^^^^^^^
 
 It is of type:
     _U64 -> U64_

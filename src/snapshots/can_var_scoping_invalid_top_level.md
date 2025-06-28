@@ -20,6 +20,7 @@ Here is the problematic code:
 ```roc
 var topLevelVar_ = 0
 ```
+^^^^^^^^^^^^^^^^
 
 
 # TOKENS

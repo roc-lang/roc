@@ -22,6 +22,7 @@ Here is the problematic code:
 ```roc
 curry : (a, b -> c) -> (a -> b -> c)
 ```
+                    ^^^^
 
 
 **INVALID STATEMENT**
@@ -38,6 +39,7 @@ This expression is used in an unexpected way:
 ```roc
 curry = |fn| |x| |y| fn(x, y)
 ```
+^^^^^
 
 It is of type:
     _a, b -> c_

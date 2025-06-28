@@ -47,6 +47,7 @@ The unused variable is declared here:
 ```roc
 mapResult = |result, transform| {
 ```
+                     ^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**

@@ -24,6 +24,7 @@ Here is the problematic code:
 ```roc
 = "te
 ```
+^^^
 
 
 **INVALID STATEMENT**

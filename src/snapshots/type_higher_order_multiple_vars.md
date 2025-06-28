@@ -22,6 +22,7 @@ Here is the problematic code:
 ```roc
 compose : (b -> c), (a -> b) -> (a -> c)
 ```
+                  ^^^
 
 
 **PARSE ERROR**
@@ -33,6 +34,7 @@ Here is the problematic code:
 ```roc
 compose : (b -> c), (a -> b) -> (a -> c)
 ```
+                                ^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -44,6 +46,7 @@ Here is the problematic code:
 ```roc
 compose : (b -> c), (a -> b) -> (a -> c)
 ```
+                                       
 
 
 **INVALID STATEMENT**
@@ -68,6 +71,7 @@ This expression is used in an unexpected way:
 ```roc
 compose = |f, g| |x| f(g(x))
 ```
+^^^^^^^
 
 It is of type:
     _b -> c_

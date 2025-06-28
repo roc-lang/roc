@@ -16,12 +16,14 @@ This field is duplicated here:
 ```roc
 { name: "Alice", age: 30, name: "Bob", email: "alice@example.com", age: 25 }
 ```
+                          ^^^^
 
 The field ``name`` was first defined here:
 **error_duplicate_fields.md:1:3:1:7:**
 ```roc
 { name: "Alice", age: 30, name: "Bob", email: "alice@example.com", age: 25 }
 ```
+  ^^^^
 
 Record fields must have unique names. Consider renaming one of these fields or removing the duplicate.
 
@@ -33,12 +35,14 @@ This field is duplicated here:
 ```roc
 { name: "Alice", age: 30, name: "Bob", email: "alice@example.com", age: 25 }
 ```
+                                                                   ^^^
 
 The field ``age`` was first defined here:
 **error_duplicate_fields.md:1:18:1:21:**
 ```roc
 { name: "Alice", age: 30, name: "Bob", email: "alice@example.com", age: 25 }
 ```
+                 ^^^
 
 Record fields must have unique names. Consider renaming one of these fields or removing the duplicate.
 

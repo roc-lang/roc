@@ -19,6 +19,7 @@ The redeclaration is here:
 ```roc
 Maybe(a) : [Ok(a), Err]
 ```
+^^^^^^^^^^^^^^^^^^^^^^^
 
 But ``Maybe`` was already declared here:
 **type_redeclaration_same_scope.md:3:1:4:6:**

@@ -35,6 +35,7 @@ The unused variable is declared here:
 ```roc
 	with_lambda = (|n| n + 1, 42)
 ```
+ ^^^^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -46,6 +47,7 @@ The unused variable is declared here:
 ```roc
 	single = (42)
 ```
+ ^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -57,6 +59,7 @@ The unused variable is declared here:
 ```roc
 	pair = (1, 2)
 ```
+ ^^^^
 
 
 **UNUSED VARIABLE**
@@ -68,6 +71,7 @@ The unused variable is declared here:
 ```roc
 	nested = ((1, 2), (3, 4))
 ```
+ ^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -79,6 +83,7 @@ The unused variable is declared here:
 ```roc
 	triple = (1, "hello", True)
 ```
+ ^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -90,6 +95,7 @@ The unused variable is declared here:
 ```roc
 	mixed = (add_one(5), "world", [1, 2, 3])
 ```
+ ^^^^^
 
 
 **UNUSED VARIABLE**
@@ -101,6 +107,7 @@ The unused variable is declared here:
 ```roc
 	with_vars = (x, y, z)
 ```
+ ^^^^^^^^^
 
 
 # TOKENS

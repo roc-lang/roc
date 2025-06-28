@@ -14,12 +14,14 @@ This list contains elements with incompatible types:
 ```roc
 [[], [[], [1]], [[], ["hello"]]]
 ```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 The first element with this type:
 **can_list_triple_nested_heterogeneous.md:1:2:1:4:**
 ```roc
 [[], [[], [1]], [[], ["hello"]]]
 ```
+ ^^
 
 has the type
     _List(List(Num(*)))_
@@ -29,6 +31,7 @@ However, this element:
 ```roc
 [[], [[], [1]], [[], ["hello"]]]
 ```
+                ^^^^^^^^^^^^^^^
 
 has the incompatible type:
     _List(List(Str))_

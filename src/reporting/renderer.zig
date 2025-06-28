@@ -496,6 +496,23 @@ fn renderElementToMarkdown(element: DocumentElement, writer: anytype, config: Re
             const lines = source_region.extractLines(region.source, region.start_line, region.end_line);
             try writer.writeAll(lines);
             try writer.writeAll("\n```\n");
+
+            // Add underline for single-line regions in markdown
+            if (region.start_line == region.end_line) {
+                // Print spaces up to the start column
+                var i: u32 = 0;
+                while (i < region.start_column - 1) : (i += 1) {
+                    try writer.writeAll(" ");
+                }
+
+                // Print the underline
+                const underline_len = source_region.calculateUnderlineLength(region.start_column, region.end_column);
+                i = 0;
+                while (i < underline_len) : (i += 1) {
+                    try writer.writeAll("^");
+                }
+                try writer.writeAll("\n");
+            }
         },
         .source_code_multi_region => |multi| {
             if (multi.filename) |filename| {

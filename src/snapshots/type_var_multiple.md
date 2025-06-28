@@ -26,6 +26,7 @@ Here is the problematic code:
 ```roc
     (first, second) = pair
 ```
+                    ^^^^^^
 
 
 **UNDEFINED VARIABLE**

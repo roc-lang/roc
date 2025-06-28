@@ -21,6 +21,7 @@ This type is referenced here:
 ```roc
 processNested : List(Result(Str, Err)) -> List(Str)
 ```
+                                 ^^^
 
 
 # TOKENS

@@ -21,6 +21,7 @@ Here is the problematic code:
 ```roc
 0 (
 ```
+^^^
 
 
 **PARSE ERROR**
@@ -32,6 +33,7 @@ Here is the problematic code:
 ```roc
 0 (
 ```
+   
 
 
 **INVALID STATEMENT**

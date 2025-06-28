@@ -23,6 +23,7 @@ This type is referenced here:
 ```roc
 main! : List(String) -> Result({}, _)
 ```
+             ^^^^^^
 
 
 # TOKENS

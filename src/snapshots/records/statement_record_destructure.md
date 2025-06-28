@@ -21,6 +21,7 @@ Here is the problematic code:
 ```roc
 { name, age, email } = person
 ```
+^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -32,6 +33,7 @@ Here is the problematic code:
 ```roc
 { name, age, email } = person
 ```
+      ^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -43,6 +45,7 @@ Here is the problematic code:
 ```roc
 { name, age, email } = person
 ```
+           ^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -54,6 +57,7 @@ Here is the problematic code:
 ```roc
 { name, age, email } = person
 ```
+                   ^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -65,6 +69,7 @@ Here is the problematic code:
 ```roc
 { name, age, email } = person
 ```
+                     ^^^^^^^^
 
 
 **INVALID STATEMENT**

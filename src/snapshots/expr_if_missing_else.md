@@ -19,6 +19,7 @@ Here is the problematic code:
 ```roc
 foo = if tru then 0
 ```
+                  ^
 
 
 **UNKNOWN OPERATOR**

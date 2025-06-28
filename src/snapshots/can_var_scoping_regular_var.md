@@ -45,6 +45,7 @@ The unused variable is declared here:
 ```roc
 processItems = |items| {
 ```
+                ^^^^^
 
 
 # TOKENS

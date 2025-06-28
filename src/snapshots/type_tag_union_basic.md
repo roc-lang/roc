@@ -22,6 +22,7 @@ The unused variable is declared here:
 ```roc
 process = |maybe| "result"
 ```
+           ^^^^^
 
 
 # TOKENS

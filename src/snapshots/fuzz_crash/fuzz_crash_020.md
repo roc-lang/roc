@@ -136,6 +136,7 @@ This type is referenced here:
 ```roc
 Map(a, b) : Lis, (ab) -> List(b)
 ```
+            ^^^
 
 
 **UNDECLARED TYPE VARIABLE**
@@ -148,6 +149,7 @@ This type variable is referenced here:
 ```roc
 Map(a, b) : Lis, (ab) -> List(b)
 ```
+                  ^^
 
 
 **UNDECLARED TYPE VARIABLE**
@@ -160,6 +162,7 @@ This type variable is referenced here:
 ```roc
 		(ab) -> # row
 ```
+   ^^
 
 
 **UNDECLARED TYPE VARIABLE**
@@ -172,6 +175,7 @@ This type variable is referenced here:
 ```roc
 			List(			b	) #z)
 ```
+           ^
 
 
 **UNDECLARED TYPE**
@@ -182,6 +186,7 @@ This type is referenced here:
 ```roc
 Som : { foo : O, bar : g }
 ```
+              ^
 
 
 **UNDECLARED TYPE VARIABLE**
@@ -194,6 +199,7 @@ This type variable is referenced here:
 ```roc
 Som : { foo : O, bar : g }
 ```
+                       ^
 
 
 **UNDECLARED TYPE**
@@ -204,6 +210,7 @@ This type is referenced here:
 ```roc
 one : U6
 ```
+      ^^
 
 
 **UNDEFINED VARIABLE**
@@ -236,6 +243,7 @@ The unused variable is declared here:
 ```roc
 	a, #b,
 ```
+ ^
 
 
 **NOT IMPLEMENTED**
@@ -291,12 +299,14 @@ The redeclaration is here:
 ```roc
 	t = (123, "World", tag, O, (nd, t), [1, 2, 3])
 ```
+ ^
 
 But `t` was already defined here:
 **fuzz_crash_020.md:88:1:88:2:**
 ```roc
 t = [
 ```
+^
 
 
 **UNDEFINED VARIABLE**
@@ -347,6 +357,7 @@ The unused variable is declared here:
 ```roc
 t = [
 ```
+^
 
 
 **UNUSED VARIABLE**
@@ -358,6 +369,7 @@ The unused variable is declared here:
 ```roc
 	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
 ```
+ ^^
 
 
 **UNUSED VARIABLE**
@@ -369,6 +381,7 @@ The unused variable is declared here:
 ```roc
 	w = "d"
 ```
+ ^
 
 
 **UNUSED VARIABLE**
@@ -380,6 +393,7 @@ The unused variable is declared here:
 ```roc
 	i= "H, ${d}"
 ```
+ ^
 
 
 **NOT IMPLEMENTED**

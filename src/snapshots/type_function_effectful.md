@@ -22,6 +22,7 @@ Here is the problematic code:
 ```roc
 runEffect! : (a => b), a => b
 ```
+                     ^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -33,6 +34,7 @@ Here is the problematic code:
 ```roc
 runEffect! : (a => b), a => b
 ```
+                         ^^^^
 
 
 **INVALID STATEMENT**
@@ -57,6 +59,7 @@ This expression is used in an unexpected way:
 ```roc
 runEffect! = |fn!, x| fn!(x)
 ```
+^^^^^^^^^^
 
 It is of type:
     _a => b_

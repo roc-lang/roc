@@ -28,6 +28,7 @@ The unused variable is declared here:
 ```roc
 	world = "World"
 ```
+ ^^^^^
 
 
 # TOKENS

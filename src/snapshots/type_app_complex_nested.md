@@ -45,6 +45,7 @@ Here is the problematic code:
 ```roc
         Ok(maybeList) -> []
 ```
+        ^^^
 
 
 **PARSE ERROR**
@@ -56,6 +57,7 @@ Here is the problematic code:
 ```roc
         Err(_) -> []
 ```
+            ^^
 
 
 **PARSE ERROR**
@@ -79,6 +81,7 @@ Here is the problematic code:
 ```roc
         Err(_) -> []
 ```
+        ^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -90,6 +93,7 @@ Here is the problematic code:
 ```roc
 deepNested = |_| crash "not implemented"
 ```
+                 ^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -105,6 +109,7 @@ The unused variable is declared here:
 ```roc
 processComplex = |result|
 ```
+                  ^^^^^^
 
 
 **INVALID STATEMENT**
@@ -136,6 +141,7 @@ This expression is used in an unexpected way:
 ```roc
 processComplex = |result|
 ```
+^^^^^^^^^^^^^^
 
 It is of type:
     _Result -> List_
@@ -149,6 +155,7 @@ This expression is used in an unexpected way:
 ```roc
 deepNested = |_| crash "not implemented"
 ```
+^^^^^^^^^^
 
 It is of type:
     _Maybe -> a_

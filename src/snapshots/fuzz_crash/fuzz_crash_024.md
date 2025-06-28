@@ -29,6 +29,7 @@ Here is the problematic code:
 ```roc
 module [module ] { pf: platform ".-/main._]where # A
 ```
+        ^^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -40,6 +41,7 @@ Here is the problematic code:
 ```roc
 module [module ] { pf: platform ".-/main._]where # A
 ```
+                       ^^^^^^^^^^
 
 
 **PARSE ERROR**
@@ -51,6 +53,7 @@ Here is the problematic code:
 ```roc
 module [module ] { pf: platform ".-/main._]where # A
 ```
+                                ^^^^^^^^^^^^^^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -62,6 +65,7 @@ Here is the problematic code:
 ```roc
 module [module ] { pf: platform ".-/main._]where # A
 ```
+                                 ^^^^^^^^^^^^^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -73,6 +77,7 @@ Here is the problematic code:
 ```roc
 module [module ] { pf: platform ".-/main._]where # A
 ```
+                                                    
 
 
 **PARSE ERROR**
@@ -84,6 +89,7 @@ Here is the problematic code:
 ```roc
 var t= ]
 ```
+^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -95,6 +101,7 @@ Here is the problematic code:
 ```roc
 var t= ]
 ```
+       
 
 
 **PARSE ERROR**
@@ -106,6 +113,7 @@ Here is the problematic code:
 ```roc
 var t= 0
 ```
+^^^^^
 
 
 **INVALID STATEMENT**
@@ -132,12 +140,14 @@ The redeclaration is here:
 ```roc
 var t= 0
 ```
+    ^
 
 But `t` was already defined here:
 **fuzz_crash_024.md:4:5:4:6:**
 ```roc
 var t= ]
 ```
+    ^
 
 
 # TOKENS

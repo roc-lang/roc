@@ -34,6 +34,7 @@ Here is the problematic code:
 ```roc
 }
 ```
+^
 
 
 **PARSE ERROR**
@@ -45,6 +46,7 @@ Here is the problematic code:
 ```roc
 }
 ```
+ 
 
 
 # TOKENS

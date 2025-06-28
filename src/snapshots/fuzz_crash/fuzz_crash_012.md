@@ -21,6 +21,7 @@ Here is the problematic code:
 ```roc
 ||(|(l888888888|
 ```
+^^
 
 
 **UNEXPECTED TOKEN IN PATTERN**
@@ -32,6 +33,7 @@ Here is the problematic code:
 ```roc
 ||(|(l888888888|
 ```
+   ^^
 
 
 **UNEXPECTED TOKEN IN PATTERN**
@@ -43,6 +45,7 @@ Here is the problematic code:
 ```roc
 ||(|(l888888888|
 ```
+  ^^
 
 
 **PARSE ERROR**
@@ -54,6 +57,7 @@ Here is the problematic code:
 ```roc
 ||(|(l888888888|
 ```
+                
 
 
 **INVALID STATEMENT**

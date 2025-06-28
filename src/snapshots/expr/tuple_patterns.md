@@ -35,6 +35,7 @@ Here is the problematic code:
 ```roc
     (x, y) = (1, 2)
 ```
+           ^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -46,6 +47,7 @@ Here is the problematic code:
 ```roc
     ((a, b), (c, d)) = ((10, 20), (30, 40))
 ```
+                     ^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -57,6 +59,7 @@ Here is the problematic code:
 ```roc
     (first, second, third) = (100, 42, 200)
 ```
+                           ^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -68,6 +71,7 @@ Here is the problematic code:
 ```roc
     (name, string, boolean) = ("Alice", "fixed", True)
 ```
+                            ^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -79,6 +83,7 @@ Here is the problematic code:
 ```roc
     (list, hello) = ([1, 2, 3], "hello")
 ```
+                  ^^^
 
 
 **UNDEFINED VARIABLE**

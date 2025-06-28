@@ -37,6 +37,7 @@ The unused variable is declared here:
 ```roc
 unused_regular = |x| 42
 ```
+                  ^
 
 
 **UNDERSCORE VARIABLE USED**
@@ -48,6 +49,7 @@ The underscore variable is declared here:
 ```roc
 used_underscore = |_value| _value
 ```
+                           ^^^^^^
 
 
 # TOKENS

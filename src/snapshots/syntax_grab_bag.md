@@ -222,6 +222,7 @@ This type is referenced here:
 ```roc
 Foo : (Bar, Baz)
 ```
+       ^^^
 
 
 **UNDECLARED TYPE**
@@ -232,6 +233,7 @@ This type is referenced here:
 ```roc
 Foo : (Bar, Baz)
 ```
+            ^^^
 
 
 **UNDECLARED TYPE**
@@ -242,6 +244,7 @@ This type is referenced here:
 ```roc
 	Bar, # Comment after pattern tuple item
 ```
+ ^^^
 
 
 **UNDECLARED TYPE**
@@ -252,6 +255,7 @@ This type is referenced here:
 ```roc
 	Baz, # Another after pattern tuple item
 ```
+ ^^^
 
 
 **UNDECLARED TYPE**
@@ -262,6 +266,7 @@ This type is referenced here:
 ```roc
 Some(a) : { foo : Ok(a), bar : Something }
 ```
+                               ^^^^^^^^^
 
 
 **UNDECLARED TYPE**
@@ -272,6 +277,7 @@ This type is referenced here:
 ```roc
 	bar : Something, # After last field
 ```
+       ^^^^^^^^^
 
 
 **UNDECLARED TYPE**
@@ -282,6 +288,7 @@ This type is referenced here:
 ```roc
 	bar : Something, # Another after pattern record field
 ```
+       ^^^^^^^^^
 
 
 **NOT IMPLEMENTED**
@@ -310,6 +317,7 @@ The unused variable is declared here:
 ```roc
 	b,
 ```
+ ^
 
 
 **UNUSED VARIABLE**
@@ -321,6 +329,7 @@ The unused variable is declared here:
 ```roc
 	a, # After arg
 ```
+ ^
 
 
 **NOT IMPLEMENTED**
@@ -334,6 +343,7 @@ This type is referenced here:
 ```roc
 main! : List(String) -> Result({}, _)
 ```
+             ^^^^^^
 
 
 **NOT IMPLEMENTED**
@@ -403,6 +413,7 @@ The unused variable is declared here:
 ```roc
 	multiline_tuple = (
 ```
+ ^^^^^^^^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -414,6 +425,7 @@ The unused variable is declared here:
 ```roc
 	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
 ```
+ ^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -425,6 +437,7 @@ The unused variable is declared here:
 ```roc
 	tag_with_payload = Ok(number)
 ```
+ ^^^^^^^^^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -436,6 +449,7 @@ The unused variable is declared here:
 ```roc
 	list = [
 ```
+ ^^^^
 
 
 **UNUSED VARIABLE**
@@ -447,6 +461,7 @@ The unused variable is declared here:
 ```roc
 	bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
 ```
+ ^^^^^^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -458,6 +473,7 @@ The unused variable is declared here:
 ```roc
 	static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
 ```
+ ^^^^^^^^^^^^^^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -469,6 +485,7 @@ The unused variable is declared here:
 ```roc
 	interpolated = "Hello, ${world}"
 ```
+ ^^^^^^^^^^^^
 
 
 **NOT IMPLEMENTED**

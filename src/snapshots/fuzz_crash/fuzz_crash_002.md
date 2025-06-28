@@ -21,6 +21,7 @@ Here is the problematic code:
 ```roc
 modu:;::::::::::::::le[%
 ```
+^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -32,6 +33,7 @@ Here is the problematic code:
 ```roc
 modu:;::::::::::::::le[%
 ```
+    ^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -43,6 +45,7 @@ Here is the problematic code:
 ```roc
 modu:;::::::::::::::le[%
 ```
+     ^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -54,6 +57,7 @@ Here is the problematic code:
 ```roc
 modu:;::::::::::::::le[%
 ```
+      ^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -65,6 +69,7 @@ Here is the problematic code:
 ```roc
 modu:;::::::::::::::le[%
 ```
+       ^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -76,6 +81,7 @@ Here is the problematic code:
 ```roc
 modu:;::::::::::::::le[%
 ```
+        ^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -87,6 +93,7 @@ Here is the problematic code:
 ```roc
 modu:;::::::::::::::le[%
 ```
+         ^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -98,6 +105,7 @@ Here is the problematic code:
 ```roc
 modu:;::::::::::::::le[%
 ```
+          ^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -109,6 +117,7 @@ Here is the problematic code:
 ```roc
 modu:;::::::::::::::le[%
 ```
+           ^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -120,6 +129,7 @@ Here is the problematic code:
 ```roc
 modu:;::::::::::::::le[%
 ```
+            ^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -131,6 +141,7 @@ Here is the problematic code:
 ```roc
 modu:;::::::::::::::le[%
 ```
+             ^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -142,6 +153,7 @@ Here is the problematic code:
 ```roc
 modu:;::::::::::::::le[%
 ```
+              ^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -153,6 +165,7 @@ Here is the problematic code:
 ```roc
 modu:;::::::::::::::le[%
 ```
+               ^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -164,6 +177,7 @@ Here is the problematic code:
 ```roc
 modu:;::::::::::::::le[%
 ```
+                ^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -175,6 +189,7 @@ Here is the problematic code:
 ```roc
 modu:;::::::::::::::le[%
 ```
+                 ^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -186,6 +201,7 @@ Here is the problematic code:
 ```roc
 modu:;::::::::::::::le[%
 ```
+                  ^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -197,6 +213,7 @@ Here is the problematic code:
 ```roc
 modu:;::::::::::::::le[%
 ```
+                   ^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -208,6 +225,7 @@ Here is the problematic code:
 ```roc
 modu:;::::::::::::::le[%
 ```
+                       ^
 
 
 **LIST NOT CLOSED**
@@ -220,6 +238,7 @@ Here is the problematic code:
 ```roc
 modu:;::::::::::::::le[%
 ```
+                        
 
 
 **INVALID STATEMENT**

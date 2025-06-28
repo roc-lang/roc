@@ -32,6 +32,7 @@ Here is the problematic code:
 ```roc
     result = List.first(list) |> Result.withDefault(elem)
 ```
+                              ^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**

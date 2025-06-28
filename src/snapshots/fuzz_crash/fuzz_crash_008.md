@@ -24,6 +24,7 @@ Here is the problematic code:
 ```roc
 ||1
 ```
+^^^
 
 
 **PARSE ERROR**
@@ -35,6 +36,7 @@ Here is the problematic code:
 ```roc
 ||1
 ```
+    
 
 
 **INVALID STATEMENT**

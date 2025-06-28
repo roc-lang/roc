@@ -19,6 +19,7 @@ Here is the problematic code:
 ```roc
 foo = asd.0
 ```
+         ^^
 
 
 **UNKNOWN OPERATOR**
