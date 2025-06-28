@@ -1979,7 +1979,7 @@ fn canonicalize_pattern(
                 const args = self.can_ir.store.patternSpanFrom(start);
 
                 // Reserve node slots for type vars, then insert into them.
-                const final_pattern_idx = self.can_ir.store.predictNodeIndex(1);
+                const final_pattern_idx = self.can_ir.store.predictNodeIndex(2);
                 const ext_type_var = self.can_ir.pushFreshTypeVar(final_pattern_idx, region);
                 const tag_pattern = CIR.Pattern{
                     .applied_tag = .{
