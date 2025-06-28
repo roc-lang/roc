@@ -242,13 +242,24 @@ pub const Problem = union(enum) {
         );
         try report.document.addLineBreak();
 
-        // Show the first element type
-        try report.document.addText("The element");
+        // Show the first element with full context
+        try report.document.addText("The first element with this type:");
         try report.document.addLineBreak();
-        // Extract just the element text from the source
-        const first_elem_text = source[data.first_elem_region.start.offset..data.first_elem_region.end.offset];
-        try report.document.addText("    ");
-        try report.document.addAnnotated(first_elem_text, .inline_code);
+        const first_elem_region_info = base.RegionInfo.position(
+            source,
+            module_env.line_starts.items,
+            data.first_elem_region.start.offset,
+            data.first_elem_region.end.offset,
+        ) catch return report;
+        try report.document.addSourceRegion(
+            source,
+            first_elem_region_info.start_line_idx,
+            first_elem_region_info.start_col_idx,
+            first_elem_region_info.end_line_idx,
+            first_elem_region_info.end_col_idx,
+            .error_highlight,
+            filename,
+        );
         try report.document.addLineBreak();
         try report.document.addText("has the type");
         try report.document.addLineBreak();
@@ -257,13 +268,24 @@ pub const Problem = union(enum) {
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
-        // Show the incompatible element
-        try report.document.addText("However, the element");
+        // Show the incompatible element with full context
+        try report.document.addText("However, this element:");
         try report.document.addLineBreak();
-        // Extract just the element text from the source
-        const incompatible_elem_text = source[data.incompatible_elem_region.start.offset..data.incompatible_elem_region.end.offset];
-        try report.document.addText("    ");
-        try report.document.addAnnotated(incompatible_elem_text, .inline_code);
+        const incompatible_elem_region_info = base.RegionInfo.position(
+            source,
+            module_env.line_starts.items,
+            data.incompatible_elem_region.start.offset,
+            data.incompatible_elem_region.end.offset,
+        ) catch return report;
+        try report.document.addSourceRegion(
+            source,
+            incompatible_elem_region_info.start_line_idx,
+            incompatible_elem_region_info.start_col_idx,
+            incompatible_elem_region_info.end_line_idx,
+            incompatible_elem_region_info.end_col_idx,
+            .error_highlight,
+            filename,
+        );
         try report.document.addLineBreak();
         try report.document.addText("has the incompatible type:");
         try report.document.addLineBreak();

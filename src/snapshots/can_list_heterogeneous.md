@@ -8,19 +8,6 @@ type=expr
 [1, "hello", 3.14]
 ~~~
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**can_list_heterogeneous.md:1:5:1:12:**
-```roc
-[1, "hello", 3.14]
-```
-
-It is of type:
-    _Str_
-
-But you are trying to use it as:
-    _Num(*)_
-
 **INCOMPATIBLE LIST ELEMENTS**
 This list contains elements with incompatible types:
 **can_list_heterogeneous.md:1:1:1:19:**
@@ -28,13 +15,21 @@ This list contains elements with incompatible types:
 [1, "hello", 3.14]
 ```
 
-The element
-    `1`
+The first element with this type:
+**can_list_heterogeneous.md:1:2:1:3:**
+```roc
+[1, "hello", 3.14]
+```
+
 has the type
     _Num(*)_
 
-However, the element
-    `"hello"`
+However, this element:
+**can_list_heterogeneous.md:1:5:1:12:**
+```roc
+[1, "hello", 3.14]
+```
+
 has the incompatible type:
     _Str_
 

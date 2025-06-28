@@ -15,13 +15,21 @@ This list contains elements with incompatible types:
 [[], [1], ["hello"]]
 ```
 
-The element
-    `[]`
+The first element with this type:
+**can_list_nested_heterogeneous.md:1:2:1:4:**
+```roc
+[[], [1], ["hello"]]
+```
+
 has the type
     _List(Num(*))_
 
-However, the element
-    `["hello"]`
+However, this element:
+**can_list_nested_heterogeneous.md:1:11:1:20:**
+```roc
+[[], [1], ["hello"]]
+```
+
 has the incompatible type:
     _List(Str)_
 
