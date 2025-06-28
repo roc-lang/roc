@@ -293,45 +293,66 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
                     );
                 }
 
-                // Track the number of problems before unification
-                const problems_before = self.problems.problems.len();
+                // For non-first elements that we'll report custom errors for,
+                // use a temporary problem store to avoid adding the generic type mismatch
+                if (i > 0 and !reported_incompatible and first_elem_snapshot != null and current_elem_snapshot != null) {
+                    // Create temporary problem store
+                    var temp_problems = problem.Store.initCapacity(self.gpa, 1);
+                    defer temp_problems.deinit(self.gpa);
 
-                const result = self.unify(
-                    @enumFromInt(@intFromEnum(elem_var)),
-                    @enumFromInt(@intFromEnum(single_elem_expr_idx)),
-                );
+                    // Check if unification would fail
+                    const test_result = unifier.unify(
+                        self.can_ir.env,
+                        self.types,
+                        &temp_problems,
+                        &self.snapshots,
+                        &self.unify_scratch,
+                        &self.occurs_scratch,
+                        @enumFromInt(@intFromEnum(elem_var)),
+                        @enumFromInt(@intFromEnum(single_elem_expr_idx)),
+                    );
 
-                // If this is not the first element and unification failed with a type mismatch
-                if (i > 0 and result == .problem and !reported_incompatible) {
-                    // Check if the last problem was a type mismatch
-                    if (self.problems.problems.len() > problems_before) {
-                        const last_problem_idx = @as(problem.Problem.SafeMultiList.Idx, @enumFromInt(self.problems.problems.len() - 1));
-                        const last_problem = self.problems.problems.get(last_problem_idx);
+                    if (test_result == .problem) {
+                        // Get expressions for regions
+                        const first_elem_idx = elems[0];
+                        const first_elem_expr = self.can_ir.store.getExpr(first_elem_idx);
+                        const incompatible_elem_expr = self.can_ir.store.getExpr(single_elem_expr_idx);
 
-                        if (last_problem == .type_mismatch and first_elem_snapshot != null and current_elem_snapshot != null) {
-                            // Get expressions for regions
-                            const first_elem_idx = elems[0];
-                            const first_elem_expr = self.can_ir.store.getExpr(first_elem_idx);
-                            const incompatible_elem_expr = self.can_ir.store.getExpr(single_elem_expr_idx);
+                        const first_region = first_elem_expr.toRegion();
+                        const incomp_region = incompatible_elem_expr.toRegion();
 
-                            const first_region = first_elem_expr.toRegion();
-                            const incomp_region = incompatible_elem_expr.toRegion();
+                        // Add the custom incompatible list elements error
+                        _ = self.problems.appendProblem(self.gpa, .{ .incompatible_list_elements = .{
+                            .list_region = list.region,
+                            .first_elem_region = first_region orelse list.region,
+                            .first_elem_var = @enumFromInt(@intFromEnum(first_elem_idx)),
+                            .first_elem_snapshot = first_elem_snapshot.?,
+                            .incompatible_elem_region = incomp_region orelse list.region,
+                            .incompatible_elem_var = @enumFromInt(@intFromEnum(single_elem_expr_idx)),
+                            .incompatible_elem_snapshot = current_elem_snapshot.?,
+                        } });
 
-                            // Add the custom incompatible list elements error
-                            _ = self.problems.appendProblem(self.gpa, .{ .incompatible_list_elements = .{
-                                .list_region = list.region,
-                                .first_elem_region = first_region orelse list.region,
-                                .first_elem_var = @enumFromInt(@intFromEnum(first_elem_idx)),
-                                .first_elem_snapshot = first_elem_snapshot.?,
-                                .incompatible_elem_region = incomp_region orelse list.region,
-                                .incompatible_elem_var = @enumFromInt(@intFromEnum(single_elem_expr_idx)),
-                                .incompatible_elem_snapshot = current_elem_snapshot.?,
-                            } });
+                        // Mark that we've reported an incompatible error
+                        reported_incompatible = true;
 
-                            // Mark that we've reported an incompatible error
-                            reported_incompatible = true;
-                        }
+                        // Now do the real unification to mark types as errors
+                        _ = self.unify(
+                            @enumFromInt(@intFromEnum(elem_var)),
+                            @enumFromInt(@intFromEnum(single_elem_expr_idx)),
+                        );
+                    } else {
+                        // Unification succeeded, do it for real
+                        _ = self.unify(
+                            @enumFromInt(@intFromEnum(elem_var)),
+                            @enumFromInt(@intFromEnum(single_elem_expr_idx)),
+                        );
                     }
+                } else {
+                    // For first element or when we've already reported, just unify normally
+                    _ = self.unify(
+                        @enumFromInt(@intFromEnum(elem_var)),
+                        @enumFromInt(@intFromEnum(single_elem_expr_idx)),
+                    );
                 }
             }
         },

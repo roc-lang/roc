@@ -8,19 +8,6 @@ type=expr
 [[], [1], ["hello"]]
 ~~~
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**can_list_nested_heterogeneous.md:1:11:1:20:**
-```roc
-[[], [1], ["hello"]]
-```
-
-It is of type:
-    _List(Str)_
-
-But you are trying to use it as:
-    _List(Num(*))_
-
 **INCOMPATIBLE LIST ELEMENTS**
 This list contains elements with incompatible types:
 **can_list_nested_heterogeneous.md:1:1:1:21:**
