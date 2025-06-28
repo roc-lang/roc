@@ -17,14 +17,14 @@ This list contains elements with incompatible types:
 ^^^^^^^^^^^^^^^
 
 The first element with this type:
-**list_type_err.md:1:8:1:15:**
+**list_type_err.md:1:2:1:3:**
 ```roc
 [1, 2, "hello"]
 ```
-       ^^^^^^^
+ ^
 
 has the type
-    _Error_
+    _Num(*)_
 
 However, this element:
 **list_type_err.md:1:8:1:15:**

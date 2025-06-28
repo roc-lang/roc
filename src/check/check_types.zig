@@ -356,8 +356,8 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
                     );
 
                     will_fail = (test_result == .problem);
-                    // If it will fail and we have a type determining element, don't unify for real yet
-                    if (will_fail and (type_determining_snapshot != null or i == 1)) {
+                    // If it will fail, don't unify for real yet to avoid corrupting types
+                    if (will_fail) {
                         should_unify_for_real = false;
                     }
                 }
