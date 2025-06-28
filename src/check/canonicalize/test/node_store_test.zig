@@ -47,7 +47,7 @@ test "NodeStore round trip - Statements" {
     try statements.append(CIR.Statement{
         .s_expr = .{
             .expr = @enumFromInt(3456),
-            .region = from_raw_offsets(12, 34),
+            .region = from_raw_offsets(12, 213),
         },
     });
 
@@ -96,6 +96,23 @@ test "NodeStore round trip - Statements" {
         },
     });
 
+    try statements.append(CIR.Statement{
+        .s_type_decl = .{
+            .anno = @enumFromInt(8676),
+            .header = @enumFromInt(723),
+            .where = CIR.WhereClause.Span{ .span = base.DataSpan.init(234, 45645) },
+            .region = from_raw_offsets(3453, 1232),
+        },
+    });
+
+    const name: Ident.Idx = @bitCast(@as(u32, 23423));
+    try statements.append(CIR.Statement{ .s_type_anno = .{
+        .anno = @enumFromInt(8676),
+        .name = name,
+        .where = CIR.WhereClause.Span{ .span = base.DataSpan.init(234, 34534) },
+        .region = from_raw_offsets(3453, 1232),
+    } });
+
     for (statements.items) |statement| {
         const idx = store.addStatement(statement);
         const retrieved = store.getStatement(idx);
@@ -107,29 +124,3 @@ test "NodeStore round trip - Statements" {
         };
     }
 }
-
-// /// Only valid at the top level of a module
-// import: struct {
-//     module_name_tok: Ident.Idx,
-//     qualifier_tok: ?Ident.Idx,
-//     alias_tok: ?Ident.Idx,
-//     exposes: ExposedItem.Span,
-//     region: Region,
-// },
-// /// A declaration of a new type - whether an alias or a new nominal custom type
-// ///
-// /// Only valid at the top level of a module
-// type_decl: struct {
-//     header: TypeHeader.Idx,
-//     anno: CIR.TypeAnno.Idx,
-//     where: ?WhereClause.Span,
-//     region: Region,
-// },
-// /// A type annotation, declaring that the value referred to by an ident in the same scope should be a given type.
-// type_anno: struct {
-//     name: Ident.Idx,
-//     anno: CIR.TypeAnno.Idx,
-//     where: ?WhereClause.Span,
-//     region: Region,
-
-// },

@@ -165,23 +165,45 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
 
             const anno: CIR.TypeAnno.Idx = @enumFromInt(extra_data[0]);
             const header: CIR.TypeHeader.Idx = @enumFromInt(extra_data[1]);
+            const where_flag = extra_data[2];
+
+            const where_clause = if (where_flag == 1) blk: {
+                const where_start = extra_data[3];
+                const where_len = extra_data[4];
+                break :blk CIR.WhereClause.Span{ .span = DataSpan.init(where_start, where_len) };
+            } else null;
 
             return CIR.Statement{
                 .s_type_decl = .{
                     .region = node.region,
                     .anno = anno,
                     .header = header,
-                    .where = null, // Where clauses not implemented yet
+                    .where = where_clause,
                 },
             };
         },
-        .statement_type_anno => return CIR.Statement{
-            .s_type_anno = .{
-                .region = node.region,
-                .name = @bitCast(node.data_2),
-                .anno = @enumFromInt(node.data_1),
-                .where = null, // TODO save these in extra_data and then insert them here
-            },
+        .statement_type_anno => {
+            const extra_start = node.data_1;
+            const extra_data = store.extra_data.items[extra_start..];
+
+            const anno: CIR.TypeAnno.Idx = @enumFromInt(extra_data[0]);
+            const name: Ident.Idx = @bitCast(extra_data[1]);
+            const where_flag = extra_data[2];
+
+            const where_clause = if (where_flag == 1) blk: {
+                const where_start = extra_data[3];
+                const where_len = extra_data[4];
+                break :blk CIR.WhereClause.Span{ .span = DataSpan.init(where_start, where_len) };
+            } else null;
+
+            return CIR.Statement{
+                .s_type_anno = .{
+                    .region = node.region,
+                    .name = name,
+                    .anno = anno,
+                    .where = where_clause,
+                },
+            };
         },
         else => {
             @panic("unreachable, node is not an expression tag");
@@ -779,7 +801,17 @@ pub fn addStatement(store: *NodeStore, statement: CIR.Statement) CIR.Statement.I
             store.extra_data.append(store.gpa, @intFromEnum(s.anno)) catch |err| exitOnOom(err);
             // Store header idx
             store.extra_data.append(store.gpa, @intFromEnum(s.header)) catch |err| exitOnOom(err);
-            // Where clauses not implemented yet, so we don't store them
+            // Store where clause information
+            if (s.where) |where_clause| {
+                // Store flag indicating where clause is present
+                store.extra_data.append(store.gpa, 1) catch |err| exitOnOom(err);
+                // Store where clause span start and len
+                store.extra_data.append(store.gpa, where_clause.span.start) catch |err| exitOnOom(err);
+                store.extra_data.append(store.gpa, where_clause.span.len) catch |err| exitOnOom(err);
+            } else {
+                // Store flag indicating where clause is not present
+                store.extra_data.append(store.gpa, 0) catch |err| exitOnOom(err);
+            }
 
             // Store the extra data start position in the node
             node.data_1 = extra_start;
@@ -787,9 +819,28 @@ pub fn addStatement(store: *NodeStore, statement: CIR.Statement) CIR.Statement.I
         .s_type_anno => |s| {
             node.tag = .statement_type_anno;
             node.region = s.region;
-            node.data_1 = @intFromEnum(s.anno);
-            node.data_2 = @bitCast(s.name);
-            // TODO store the optional where clause data in extra_data
+
+            // Store type_anno data in extra_data
+            const extra_start = @as(u32, @intCast(store.extra_data.items.len));
+
+            // Store anno idx
+            store.extra_data.append(store.gpa, @intFromEnum(s.anno)) catch |err| exitOnOom(err);
+            // Store name
+            store.extra_data.append(store.gpa, @bitCast(s.name)) catch |err| exitOnOom(err);
+            // Store where clause information
+            if (s.where) |where_clause| {
+                // Store flag indicating where clause is present
+                store.extra_data.append(store.gpa, 1) catch |err| exitOnOom(err);
+                // Store where clause span start and len
+                store.extra_data.append(store.gpa, where_clause.span.start) catch |err| exitOnOom(err);
+                store.extra_data.append(store.gpa, where_clause.span.len) catch |err| exitOnOom(err);
+            } else {
+                // Store flag indicating where clause is not present
+                store.extra_data.append(store.gpa, 0) catch |err| exitOnOom(err);
+            }
+
+            // Store the extra data start position in the node
+            node.data_1 = extra_start;
         },
     }
 
