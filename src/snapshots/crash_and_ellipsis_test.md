@@ -19,11 +19,12 @@ testCrash = |_| crash "This is a crash message"
 testCrashSimple : U64 -> U64
 testCrashSimple = |_| crash "oops"
 
-main! = |_|
+main! = |_| {
     result1 = testEllipsis(42)
     result2 = testCrash(42)
     result3 = testCrashSimple(42)
     []
+}
 ~~~
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -48,17 +49,6 @@ testCrashSimple = |_| crash "oops"
 ```
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **= testEllipsis** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**crash_and_ellipsis_test.md:16:13:16:27:**
-```roc
-    result1 = testEllipsis(42)
-```
-
-
 **NOT IMPLEMENTED**
 This feature is not yet implemented: ...
 
@@ -76,21 +66,38 @@ The body of this lambda expression is not valid.
 The statement **expr** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**UNDEFINED VARIABLE**
-Nothing is named `result1` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**UNUSED VARIABLE**
+Variable ``result1`` is not used anywhere in your code.
 
-**INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+If you don't need this variable, prefix it with an underscore like `_result1` to suppress this warning.
+The unused variable is declared here:
+**crash_and_ellipsis_test.md:16:5:16:12:**
+```roc
+    result1 = testEllipsis(42)
+```
 
-**INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**UNUSED VARIABLE**
+Variable ``result2`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_result2` to suppress this warning.
+The unused variable is declared here:
+**crash_and_ellipsis_test.md:17:5:17:12:**
+```roc
+    result2 = testCrash(42)
+```
+
+
+**UNUSED VARIABLE**
+Variable ``result3`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_result3` to suppress this warning.
+The unused variable is declared here:
+**crash_and_ellipsis_test.md:18:5:18:12:**
+```roc
+    result3 = testCrashSimple(42)
+```
+
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -134,15 +141,16 @@ Newline(11:2-11:36),
 LowerIdent(12:1-12:16),OpColon(12:17-12:18),UpperIdent(12:19-12:22),OpArrow(12:23-12:25),UpperIdent(12:26-12:29),Newline(1:1-1:1),
 LowerIdent(13:1-13:16),OpAssign(13:17-13:18),OpBar(13:19-13:20),Underscore(13:20-13:21),OpBar(13:21-13:22),KwCrash(13:23-13:28),StringStart(13:29-13:30),StringPart(13:30-13:34),StringEnd(13:34-13:35),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(15:1-15:6),OpAssign(15:7-15:8),OpBar(15:9-15:10),Underscore(15:10-15:11),OpBar(15:11-15:12),Newline(1:1-1:1),
+LowerIdent(15:1-15:6),OpAssign(15:7-15:8),OpBar(15:9-15:10),Underscore(15:10-15:11),OpBar(15:11-15:12),OpenCurly(15:13-15:14),Newline(1:1-1:1),
 LowerIdent(16:5-16:12),OpAssign(16:13-16:14),LowerIdent(16:15-16:27),NoSpaceOpenRound(16:27-16:28),Int(16:28-16:30),CloseRound(16:30-16:31),Newline(1:1-1:1),
 LowerIdent(17:5-17:12),OpAssign(17:13-17:14),LowerIdent(17:15-17:24),NoSpaceOpenRound(17:24-17:25),Int(17:25-17:27),CloseRound(17:27-17:28),Newline(1:1-1:1),
 LowerIdent(18:5-18:12),OpAssign(18:13-18:14),LowerIdent(18:15-18:30),NoSpaceOpenRound(18:30-18:31),Int(18:31-18:33),CloseRound(18:33-18:34),Newline(1:1-1:1),
-OpenSquare(19:5-19:6),CloseSquare(19:6-19:7),EndOfFile(19:7-19:7),
+OpenSquare(19:5-19:6),CloseSquare(19:6-19:7),Newline(1:1-1:1),
+CloseCurly(20:1-20:2),EndOfFile(20:2-20:2),
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-19-7
+(file @1-1-20-2
 	(app @1-1-1-57
 		(provides @1-6-1-12
 			(exposed-lower-ident (text "main!")))
@@ -188,27 +196,29 @@ OpenSquare(19:5-19:6),CloseSquare(19:6-19:7),EndOfFile(19:7-19:7),
 				(e-malformed @13-23-13-30 (reason "expr_unexpected_token"))))
 		(e-string @13-29-13-35
 			(e-string-part @13-30-13-34 (raw "oops")))
-		(s-decl @15-1-16-12
+		(s-decl @15-1-20-2
 			(p-ident @15-1-15-6 (raw "main!"))
-			(e-lambda @15-9-16-12
+			(e-lambda @15-9-20-2
 				(args
 					(p-underscore))
-				(e-ident @16-5-16-12 (qaul "") (raw "result1"))))
-		(e-malformed @16-13-16-27 (reason "expr_unexpected_token"))
-		(e-apply @16-15-16-31
-			(e-ident @16-15-16-27 (qaul "") (raw "testEllipsis"))
-			(e-int @16-28-16-30 (raw "42")))
-		(s-decl @17-5-17-28
-			(p-ident @17-5-17-12 (raw "result2"))
-			(e-apply @17-15-17-28
-				(e-ident @17-15-17-24 (qaul "") (raw "testCrash"))
-				(e-int @17-25-17-27 (raw "42"))))
-		(s-decl @18-5-18-34
-			(p-ident @18-5-18-12 (raw "result3"))
-			(e-apply @18-15-18-34
-				(e-ident @18-15-18-30 (qaul "") (raw "testCrashSimple"))
-				(e-int @18-31-18-33 (raw "42"))))
-		(e-list @19-5-19-7)))
+				(e-block @15-13-20-2
+					(statements
+						(s-decl @16-5-16-31
+							(p-ident @16-5-16-12 (raw "result1"))
+							(e-apply @16-15-16-31
+								(e-ident @16-15-16-27 (qaul "") (raw "testEllipsis"))
+								(e-int @16-28-16-30 (raw "42"))))
+						(s-decl @17-5-17-28
+							(p-ident @17-5-17-12 (raw "result2"))
+							(e-apply @17-15-17-28
+								(e-ident @17-15-17-24 (qaul "") (raw "testCrash"))
+								(e-int @17-25-17-27 (raw "42"))))
+						(s-decl @18-5-18-34
+							(p-ident @18-5-18-12 (raw "result3"))
+							(e-apply @18-15-18-34
+								(e-ident @18-15-18-30 (qaul "") (raw "testCrashSimple"))
+								(e-int @18-31-18-33 (raw "42"))))
+						(e-list @19-5-19-7)))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -226,11 +236,12 @@ testCrash = |_| "This is a crash message"
 testCrashSimple : U64 -> U64
 testCrashSimple = |_| "oops"
 
-main! = |_|
-	result1testEllipsis(42)
-result2 = testCrash(42)
-result3 = testCrashSimple(42)
-[]
+main! = |_| {
+	result1 = testEllipsis(42)
+	result2 = testCrash(42)
+	result3 = testCrashSimple(42)
+	[]
+}
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -268,24 +279,32 @@ result3 = testCrashSimple(42)
 				(ty-fn @12-19-12-29 (effectful false)
 					(ty @12-19-12-22 (name "U64"))
 					(ty @12-26-12-29 (name "U64"))))))
-	(d-let (id 128)
+	(d-let (id 150)
 		(p-assign @15-1-15-6 (ident "main!") (id 122))
-		(e-lambda @15-9-16-12 (id 127)
+		(e-lambda @15-9-20-2 (id 149)
 			(args
 				(p-underscore @15-10-15-11 (id 123)))
-			(e-runtime-error (tag "ident_not_in_scope"))))
-	(d-let (id 136)
-		(p-assign @17-5-17-12 (ident "result2") (id 131))
-		(e-call @17-15-17-28 (id 135)
-			(e-lookup-local @17-15-17-24
-				(pattern (id 91)))
-			(e-int @17-25-17-27 (value "42"))))
-	(d-let (id 142)
-		(p-assign @18-5-18-12 (ident "result3") (id 137))
-		(e-call @18-15-18-34 (id 141)
-			(e-lookup-local @18-15-18-30
-				(pattern (id 108)))
-			(e-int @18-31-18-33 (value "42")))))
+			(e-block @15-13-20-2
+				(s-let @16-5-16-31
+					(p-assign @16-5-16-12 (ident "result1") (id 124))
+					(e-call @16-15-16-31 (id 128)
+						(e-lookup-local @16-15-16-27
+							(pattern (id 75)))
+						(e-int @16-28-16-30 (value "42"))))
+				(s-let @17-5-17-28
+					(p-assign @17-5-17-12 (ident "result2") (id 130))
+					(e-call @17-15-17-28 (id 134)
+						(e-lookup-local @17-15-17-24
+							(pattern (id 91)))
+						(e-int @17-25-17-27 (value "42"))))
+				(s-let @18-5-18-34
+					(p-assign @18-5-18-12 (ident "result3") (id 136))
+					(e-call @18-15-18-34 (id 140)
+						(e-lookup-local @18-15-18-30
+							(pattern (id 108)))
+						(e-int @18-31-18-33 (value "42"))))
+				(e-list @19-5-19-7 (elem-var 142)
+					(elems))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -294,14 +313,10 @@ result3 = testCrashSimple(42)
 		(d_assign (name "testEllipsis") (def_var 87) (type "U64 -> U64"))
 		(d_assign (name "testCrash") (def_var 103) (type "Error"))
 		(d_assign (name "testCrashSimple") (def_var 120) (type "Error"))
-		(d_assign (name "main!") (def_var 128) (type "* ? Error"))
-		(d_assign (name "result2") (def_var 136) (type "*"))
-		(d_assign (name "result3") (def_var 142) (type "*")))
+		(d_assign (name "main!") (def_var 150) (type "* ? *")))
 	(expressions
 		(expr @5-16-5-23 (type "U64 -> U64"))
 		(expr @9-13-9-24 (type "Error"))
 		(expr @13-19-13-30 (type "Error"))
-		(expr @15-9-16-12 (type "* ? Error"))
-		(expr @17-15-17-28 (type "*"))
-		(expr @18-15-18-34 (type "*"))))
+		(expr @15-9-20-2 (type "* ? *"))))
 ~~~
