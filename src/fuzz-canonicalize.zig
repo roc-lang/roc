@@ -71,9 +71,9 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
     if (debug) {
         std.debug.print("Processing completed with {} reports\n", .{result.reports.len});
         if (result.reports.len > 0) {
-            std.debug.print("Reports:\n");
+            std.debug.print("Reports:\n", .{});
             for (result.reports) |report| {
-                std.debug.print("  - {s}\n", .{@tagName(report.tag)});
+                std.debug.print("  - {s}\n", .{report.title});
             }
         }
     }
