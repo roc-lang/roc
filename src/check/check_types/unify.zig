@@ -5563,3 +5563,93 @@ test "unify - frac_unbound with num_unbound (reverse order)" {
         else => return error.ExpectedStructure,
     }
 }
+
+test "unify - int_unbound with num_unbound" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create an int_unbound (like literal -5)
+    const int_requirements = Num.IntRequirements{
+        .sign_needed = true,
+        .bits_needed = @intFromEnum(Num.Int.BitsNeeded.@"7"),
+    };
+    const int_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_unbound = int_requirements } } });
+
+    // Create a num_unbound (like literal 1)
+    const num_requirements = Num.IntRequirements{
+        .sign_needed = false,
+        .bits_needed = @intFromEnum(Num.Int.BitsNeeded.@"7"),
+    };
+    const num_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_unbound = num_requirements } } });
+
+    // They should unify successfully with int_unbound winning
+    const result = env.unify(int_var, num_var);
+    try std.testing.expect(result == .ok);
+
+    // Check that the result is int_unbound
+    const resolved = env.module_env.types.resolveVar(int_var);
+    switch (resolved.desc.content) {
+        .structure => |structure| {
+            switch (structure) {
+                .num => |num| {
+                    switch (num) {
+                        .int_unbound => |requirements| {
+                            // Should have merged the requirements - sign_needed should be true
+                            try std.testing.expect(requirements.sign_needed == true);
+                        },
+                        else => return error.ExpectedIntUnbound,
+                    }
+                },
+                else => return error.ExpectedNum,
+            }
+        },
+        else => return error.ExpectedStructure,
+    }
+}
+
+test "unify - num_unbound with int_unbound (reverse order)" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create a num_unbound (like literal 1)
+    const num_requirements = Num.IntRequirements{
+        .sign_needed = false,
+        .bits_needed = @intFromEnum(Num.Int.BitsNeeded.@"7"),
+    };
+    const num_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .num_unbound = num_requirements } } });
+
+    // Create an int_unbound (like literal -5)
+    const int_requirements = Num.IntRequirements{
+        .sign_needed = true,
+        .bits_needed = @intFromEnum(Num.Int.BitsNeeded.@"7"),
+    };
+    const int_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_unbound = int_requirements } } });
+
+    // They should unify successfully with int_unbound winning
+    const result = env.unify(num_var, int_var);
+    try std.testing.expect(result == .ok);
+
+    // Check that the result is int_unbound
+    const resolved = env.module_env.types.resolveVar(num_var);
+    switch (resolved.desc.content) {
+        .structure => |structure| {
+            switch (structure) {
+                .num => |num| {
+                    switch (num) {
+                        .int_unbound => |requirements| {
+                            // Should have merged the requirements - sign_needed should be true
+                            try std.testing.expect(requirements.sign_needed == true);
+                        },
+                        else => return error.ExpectedIntUnbound,
+                    }
+                },
+                else => return error.ExpectedNum,
+            }
+        },
+        else => return error.ExpectedStructure,
+    }
+}
