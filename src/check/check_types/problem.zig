@@ -25,6 +25,7 @@ const Content = types.Content;
 /// The kind of problem we're dealing with
 pub const Problem = union(enum) {
     type_mismatch: VarProblem2,
+    incompatible_list_elements: IncompatibleListElements,
     number_does_not_fit: NumberDoesNotFit,
     negative_unsigned_int: NegativeUnsignedInt,
     infinite_recursion: struct { var_: Var },
@@ -63,6 +64,18 @@ pub const Problem = union(enum) {
                     can_ir,
                     &snapshot_writer,
                     vars,
+                    source,
+                    filename,
+                );
+            },
+            .incompatible_list_elements => |data| {
+                return buildIncompatibleListElementsReport(
+                    gpa,
+                    buf,
+                    module_env,
+                    can_ir,
+                    &snapshot_writer,
+                    data,
                     source,
                     filename,
                 );
@@ -181,6 +194,85 @@ pub const Problem = union(enum) {
                 try report.document.addReflowingText(" This might be because the numeric literal is too large to fit in the target type.");
             }
         }
+
+        return report;
+    }
+
+    /// Build a report for incompatible list elements
+    pub fn buildIncompatibleListElementsReport(
+        gpa: Allocator,
+        buf: *std.ArrayList(u8),
+        module_env: *const base.ModuleEnv,
+        _: *const can.CIR,
+        snapshot_writer: *snapshot.SnapshotWriter,
+        data: IncompatibleListElements,
+        source: []const u8,
+        filename: []const u8,
+    ) !Report {
+        var report = Report.init(gpa, "INCOMPATIBLE LIST ELEMENTS", .runtime_error);
+
+        // Format the type strings
+        buf.clearRetainingCapacity();
+        try snapshot_writer.write(data.first_elem_snapshot);
+        const owned_first_type = try report.addOwnedString(buf.items);
+
+        buf.clearRetainingCapacity();
+        try snapshot_writer.write(data.incompatible_elem_snapshot);
+        const owned_incompatible_type = try report.addOwnedString(buf.items);
+
+        // Add description (title already set in Report.init)
+        try report.document.addText("This list contains elements with incompatible types:");
+        try report.document.addLineBreak();
+
+        // Show the list
+        const list_region_info = base.RegionInfo.position(
+            source,
+            module_env.line_starts.items,
+            data.list_region.start.offset,
+            data.list_region.end.offset,
+        ) catch return report;
+        try report.document.addSourceRegion(
+            source,
+            list_region_info.start_line_idx,
+            list_region_info.start_col_idx,
+            list_region_info.end_line_idx,
+            list_region_info.end_col_idx,
+            .error_highlight,
+            filename,
+        );
+        try report.document.addLineBreak();
+
+        // Show the first element type
+        try report.document.addText("The element");
+        try report.document.addLineBreak();
+        // Extract just the element text from the source
+        const first_elem_text = source[data.first_elem_region.start.offset..data.first_elem_region.end.offset];
+        try report.document.addText("    ");
+        try report.document.addAnnotated(first_elem_text, .inline_code);
+        try report.document.addLineBreak();
+        try report.document.addText("has the type");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(owned_first_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        // Show the incompatible element
+        try report.document.addText("However, the element");
+        try report.document.addLineBreak();
+        // Extract just the element text from the source
+        const incompatible_elem_text = source[data.incompatible_elem_region.start.offset..data.incompatible_elem_region.end.offset];
+        try report.document.addText("    ");
+        try report.document.addAnnotated(incompatible_elem_text, .inline_code);
+        try report.document.addLineBreak();
+        try report.document.addText("has the incompatible type:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(owned_incompatible_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addText("All elements in a list must have compatible types.");
 
         return report;
     }
@@ -310,6 +402,16 @@ pub const Problem = union(enum) {
 pub const VarProblem1 = struct {
     var_: Var,
     snapshot: SnapshotContentIdx,
+};
+
+pub const IncompatibleListElements = struct {
+    list_region: base.Region,
+    first_elem_region: base.Region,
+    first_elem_var: Var,
+    first_elem_snapshot: SnapshotContentIdx,
+    incompatible_elem_region: base.Region,
+    incompatible_elem_var: Var,
+    incompatible_elem_snapshot: SnapshotContentIdx,
 };
 
 /// A two var problem

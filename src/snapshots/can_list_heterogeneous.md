@@ -21,6 +21,25 @@ It is of type:
 But you are trying to use it as:
     _Num(*)_
 
+**INCOMPATIBLE LIST ELEMENTS**
+This list contains elements with incompatible types:
+**can_list_heterogeneous.md:1:1:1:19:**
+```roc
+[1, "hello", 3.14]
+```
+
+The element
+    `1`
+has the type
+    _Num(*)_
+
+However, the element
+    `"hello"`
+has the incompatible type:
+    _Str_
+
+All elements in a list must have compatible types.
+
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
 **can_list_heterogeneous.md:1:14:1:18:**
