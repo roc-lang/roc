@@ -37,11 +37,7 @@
 //! Other afl commands also available in `./zig-out/AFLplusplus/bin`
 
 const std = @import("std");
-const base = @import("base.zig");
-const parse = @import("check/parse.zig");
-const canonicalize = @import("check/canonicalize.zig");
-const collections = @import("collections.zig");
-const types = @import("types.zig");
+const coordinate_simple = @import("coordinate_simple.zig");
 
 /// Hook for AFL++ to initialize the fuzz test environment.
 pub export fn zig_fuzz_init() void {}
@@ -63,61 +59,26 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
 
     const input = buf[0..@intCast(len)];
 
-    // Create a module environment for parsing and canonicalization
-    var env = base.ModuleEnv.init(gpa);
-    defer env.deinit();
-
-    // Try to parse the input as a file
-    var parse_ir = parse.parse(&env, input);
-    defer parse_ir.deinit(gpa);
-
-    // Initialize the CIR
-    var can_ir = canonicalize.CIR.init(&env);
-    defer can_ir.deinit();
-
-    // Check if parsing succeeded
-    const has_parse_errors = parse_ir.hasErrors();
-    if (has_parse_errors) {
+    // Process the input through the full compiler pipeline
+    var result = coordinate_simple.processSource(gpa, input, "<fuzz>") catch |err| {
         if (debug) {
-            std.debug.print("Input has parse errors, skipping canonicalization\n", .{});
-            // Print tokenize errors
-            if (parse_ir.tokenize_diagnostics.items.len > 0) {
-                std.debug.print("Tokenize errors:\n", .{});
-                for (parse_ir.tokenize_diagnostics.items) |diag| {
-                    std.debug.print("  - {s}\n", .{@tagName(diag.tag)});
-                }
-            }
-            // Print parse errors
-            if (parse_ir.parse_diagnostics.items.len > 0) {
-                std.debug.print("Parse errors:\n", .{});
-                for (parse_ir.parse_diagnostics.items) |diag| {
-                    std.debug.print("  - {s}\n", .{@tagName(diag.tag)});
-                }
-            }
+            std.debug.print("Processing failed with error: {}\n", .{err});
         }
-        // We want to bias toward inputs that parse successfully
         return;
-    }
+    };
+    defer result.deinit(gpa);
 
-    // Try to canonicalize
-    var canonicalizer = canonicalize.init(&can_ir, &parse_ir);
-    defer canonicalizer.deinit();
-
-    // Perform canonicalization
-    canonicalizer.canonicalize_file();
-
-    // Check if we have any canonicalization problems
-    const diagnostics = can_ir.getDiagnostics();
-    defer gpa.free(diagnostics);
-
-    if (debug and diagnostics.len > 0) {
-        std.debug.print("Canonicalization produced {} diagnostics\n", .{diagnostics.len});
-        for (diagnostics) |diag| {
-            std.debug.print("  - {s}\n", .{@tagName(diag)});
+    if (debug) {
+        std.debug.print("Processing completed with {} reports\n", .{result.reports.len});
+        if (result.reports.len > 0) {
+            std.debug.print("Reports:\n");
+            for (result.reports) |report| {
+                std.debug.print("  - {s}\n", .{@tagName(report.tag)});
+            }
         }
     }
 
-    // Success! The input passed through canonicalization
+    // Success! The input passed through the full compiler pipeline
     // The fuzzer will be biased toward inputs that reach this point
     // since they provide more code coverage
 }
