@@ -42,7 +42,7 @@ fn parseAndCanonicalizeInt(allocator: std.mem.Allocator, source: []const u8) !st
             .parse_ast = parse_ast,
             .cir = cir,
             .can = can,
-            .expr_idx = cir.store.addExpr(.{ .runtime_error = .{
+            .expr_idx = cir.store.addExpr(CIR.Expr{ .e_runtime_error = .{
                 .diagnostic = diagnostic_idx,
                 .region = base.Region.zero(),
             } }),
@@ -72,10 +72,10 @@ fn cleanup(allocator: std.mem.Allocator, resources: anytype) void {
 fn getIntValue(cir: *CIR, expr_idx: CIR.Expr.Idx) !i128 {
     const expr = cir.store.getExpr(expr_idx);
     switch (expr) {
-        .int => |int_expr| {
+        .e_int => |int_expr| {
             return @bitCast(int_expr.value.bytes);
         },
-        .num => |num_expr| {
+        .e_num => |num_expr| {
             // For num expressions, we calculate requirements based on the value
             return @bitCast(num_expr.value.bytes);
         },
@@ -230,7 +230,7 @@ test "canonicalize integer literal creates correct type variables" {
 
     const expr = resources.cir.store.getExpr(resources.expr_idx);
     switch (expr) {
-        .int => {
+        .e_int => {
             // Type variables are now the expression index itself
             // No need to check a separate num_var field
 
@@ -248,7 +248,7 @@ test "canonicalize invalid integer literal" {
         const resources = try parseAndCanonicalizeInt(test_allocator, "12abc");
         defer cleanup(test_allocator, resources);
         const expr = resources.cir.store.getExpr(resources.expr_idx);
-        try testing.expect(expr == .runtime_error);
+        try testing.expect(expr == .e_runtime_error);
     }
 
     // Leading zeros with digits
@@ -257,7 +257,7 @@ test "canonicalize invalid integer literal" {
         defer cleanup(test_allocator, resources);
         const expr = resources.cir.store.getExpr(resources.expr_idx);
         // This might actually parse as 123, so let's check if it's a valid integer
-        if (expr != .runtime_error) {
+        if (expr != .e_runtime_error) {
             const value = try getIntValue(resources.cir, resources.expr_idx);
             try testing.expectEqual(@as(i128, 123), value);
         }
@@ -386,7 +386,7 @@ test "canonicalize integer literals outside supported range" {
         defer cleanup(test_allocator, resources);
 
         const expr = resources.cir.store.getExpr(resources.expr_idx);
-        try testing.expect(expr == .runtime_error);
+        try testing.expect(expr == .e_runtime_error);
     }
 }
 
@@ -408,7 +408,7 @@ test "invalid number literal - too large for u128" {
 
     // Should have produced a runtime error
     const expr = resources.cir.store.getExpr(resources.expr_idx);
-    try testing.expect(expr == .runtime_error);
+    try testing.expect(expr == .e_runtime_error);
 
     // Check that we have an invalid_num_literal diagnostic
     const diagnostics = resources.cir.getDiagnostics();
@@ -466,7 +466,7 @@ test "invalid number literal - negative too large for i128" {
 
     // Should have produced a runtime error
     const expr = resources.cir.store.getExpr(resources.expr_idx);
-    try testing.expect(expr == .runtime_error);
+    try testing.expect(expr == .e_runtime_error);
 
     // Check that we have an invalid_num_literal diagnostic
     const diagnostics = resources.cir.getDiagnostics();
@@ -512,7 +512,7 @@ test "integer literal - negative zero" {
 
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
-        .int => |int| {
+        .e_int => |int| {
             // -0 should be treated as 0
             try testing.expectEqual(@as(i128, @bitCast(int.value.bytes)), 0);
             // But it should still be marked as needing a sign
@@ -529,7 +529,7 @@ test "integer literal - positive zero" {
 
     const expr = result.cir.store.getExpr(result.expr_idx);
     switch (expr) {
-        .int => |int| {
+        .e_int => |int| {
             try testing.expectEqual(@as(i128, @bitCast(int.value.bytes)), 0);
             // Positive zero should not need a sign
         },

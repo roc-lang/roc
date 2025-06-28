@@ -1085,23 +1085,23 @@ pub const ExposedItem = struct {
 
 /// An expression that has been canonicalized.
 pub const Expr = union(enum) {
-    num: struct {
+    e_num: struct {
         value: IntValue,
         region: Region,
     },
-    int: struct {
+    e_int: struct {
         value: IntValue,
         region: Region,
     },
-    frac_f64: struct {
+    e_frac_f64: struct {
         value: f64,
         region: Region,
     },
-    frac_dec: struct {
+    e_frac_dec: struct {
         value: RocDec,
         region: Region,
     },
-    dec_small: struct {
+    e_dec_small: struct {
         numerator: i16,
         denominator_power_of_ten: u8,
         region: Region,
@@ -1109,31 +1109,31 @@ pub const Expr = union(enum) {
     // A single segment of a string literal
     // a single string may be made up of a span sequential segments
     // for example if it was split across multiple lines
-    str_segment: struct {
+    e_str_segment: struct {
         literal: StringLiteral.Idx,
         region: Region,
     },
     // A string is combined of one or more segments, some of which may be interpolated
     // An interpolated string contains one or more non-string_segment's in the span
-    str: struct {
+    e_str: struct {
         span: Expr.Span,
         region: Region,
     },
-    lookup: union(enum) {
+    e_lookup: union(enum) {
         local: Lookup,
         external: ExternalDecl.Idx,
     },
-    list: struct {
+    e_list: struct {
         elem_var: TypeVar,
         elems: Expr.Span,
         region: Region,
     },
-    tuple: struct {
+    e_tuple: struct {
         elems: Expr.Span,
         region: Region,
     },
-    when: When,
-    @"if": struct {
+    e_when: When,
+    e_if: struct {
         cond_var: TypeVar,
         branch_var: TypeVar,
         branches: IfBranch.Span,
@@ -1142,31 +1142,31 @@ pub const Expr = union(enum) {
     },
     /// This is *only* for calling functions, not for tag application.
     /// The Tag variant contains any applied values inside it.
-    call: struct {
+    e_call: struct {
         args: Expr.Span,
         called_via: CalledVia,
         /// Tracks if this function is pure or effectful during type checking
         effect_var: TypeVar,
         region: Region,
     },
-    record: struct {
+    e_record: struct {
         /// type var for the record extension
         ext_var: TypeVar,
         fields: RecordField.Span,
         region: Region,
     },
     /// Empty record constant
-    empty_record: struct {
+    e_empty_record: struct {
         region: Region,
     },
-    block: struct {
+    e_block: struct {
         /// Statements executed in sequence
         stmts: Statement.Span,
         /// Final expression that produces the block's value
         final_expr: Expr.Idx,
         region: Region,
     },
-    record_access: struct {
+    e_record_access: struct {
         record_var: TypeVar,
         ext_var: TypeVar,
         field_var: TypeVar,
@@ -1174,37 +1174,37 @@ pub const Expr = union(enum) {
         field: Ident.Idx,
         region: Region,
     },
-    tag: struct {
+    e_tag: struct {
         ext_var: TypeVar,
         name: Ident.Idx,
         args: Expr.Span,
         region: Region,
     },
-    zero_argument_tag: struct {
+    e_zero_argument_tag: struct {
         closure_name: Ident.Idx,
         variant_var: TypeVar,
         ext_var: TypeVar,
         name: Ident.Idx,
         region: Region,
     },
-    lambda: struct {
+    e_lambda: struct {
         args: Pattern.Span,
         body: Expr.Idx,
         /// Tracks if this function is pure or effectful during type checking
         effect_var: TypeVar,
         region: Region,
     },
-    binop: Binop,
+    e_binop: Binop,
     /// Dot access that could be either record field access or static dispatch
     /// The decision is deferred until after type inference based on the receiver's type
-    dot_access: struct {
+    e_dot_access: struct {
         receiver: Expr.Idx, // Expression before the dot (e.g., `list` in `list.map`)
         field_name: Ident.Idx, // Identifier after the dot (e.g., `map` in `list.map`)
         args: ?Expr.Span, // Optional arguments for method calls (e.g., `fn` in `list.map(fn)`)
         region: Region,
     },
     /// Compiles, but will crash if reached
-    runtime_error: struct {
+    e_runtime_error: struct {
         diagnostic: Diagnostic.Idx,
         region: Region,
     },
@@ -1219,17 +1219,21 @@ pub const Expr = union(enum) {
     pub const Span = struct { span: DataSpan };
 
     pub fn initStr(expr_span: Expr.Span, region: Region) Expr {
-        return .{ .str = .{
-            .span = expr_span,
-            .region = region,
-        } };
+        return CIR.Expr{
+            .e_str = .{
+                .span = expr_span,
+                .region = region,
+            },
+        };
     }
 
     pub fn initStrSegment(literal: StringLiteral.Idx, region: Region) Expr {
-        return .{ .str_segment = .{
-            .literal = literal,
-            .region = region,
-        } };
+        return CIR.Expr{
+            .e_str_segment = .{
+                .literal = literal,
+                .region = region,
+            },
+        };
     }
 
     pub const Binop = struct {
@@ -1301,7 +1305,7 @@ pub const Expr = union(enum) {
     pub fn toSExpr(self: *const @This(), ir: *CIR, env: *ModuleEnv) SExpr {
         const gpa = ir.env.gpa;
         switch (self.*) {
-            .num => |num_expr| {
+            .e_num => |num_expr| {
                 var node = SExpr.init(gpa, "e-num");
                 node.appendRegion(gpa, ir.calcRegionInfo(num_expr.region));
 
@@ -1312,7 +1316,7 @@ pub const Expr = union(enum) {
 
                 return node;
             },
-            .int => |int_expr| {
+            .e_int => |int_expr| {
                 var node = SExpr.init(gpa, "e-int");
                 node.appendRegion(gpa, ir.calcRegionInfo(int_expr.region));
 
@@ -1324,7 +1328,7 @@ pub const Expr = union(enum) {
 
                 return node;
             },
-            .frac_f64 => |e| {
+            .e_frac_f64 => |e| {
                 var node = SExpr.init(gpa, "e-frac-f64");
                 node.appendRegion(gpa, ir.calcRegionInfo(e.region));
 
@@ -1341,7 +1345,7 @@ pub const Expr = union(enum) {
 
                 return node;
             },
-            .frac_dec => |e| {
+            .e_frac_dec => |e| {
                 var node = SExpr.init(gpa, "e-frac-dec");
                 node.appendRegion(gpa, ir.calcRegionInfo(e.region));
 
@@ -1360,7 +1364,7 @@ pub const Expr = union(enum) {
 
                 return node;
             },
-            .dec_small => |e| {
+            .e_dec_small => |e| {
                 var node = SExpr.init(gpa, "e-dec-small");
                 node.appendRegion(gpa, ir.calcRegionInfo(e.region));
 
@@ -1391,7 +1395,7 @@ pub const Expr = union(enum) {
 
                 return node;
             },
-            .str_segment => |e| {
+            .e_str_segment => |e| {
                 var str_node = SExpr.init(gpa, "e-literal");
                 str_node.appendRegion(gpa, ir.calcRegionInfo(e.region));
 
@@ -1400,7 +1404,7 @@ pub const Expr = union(enum) {
 
                 return str_node;
             },
-            .str => |e| {
+            .e_str => |e| {
                 var str_node = SExpr.init(gpa, "e-string");
                 str_node.appendRegion(gpa, ir.calcRegionInfo(e.region));
 
@@ -1411,7 +1415,7 @@ pub const Expr = union(enum) {
 
                 return str_node;
             },
-            .list => |l| {
+            .e_list => |l| {
                 var list_node = SExpr.init(gpa, "e-list");
                 list_node.appendRegion(gpa, ir.calcRegionInfo(l.region));
 
@@ -1428,7 +1432,7 @@ pub const Expr = union(enum) {
 
                 return list_node;
             },
-            .tuple => |t| {
+            .e_tuple => |t| {
                 var node = SExpr.init(gpa, "e-tuple");
                 node.appendRegion(gpa, ir.calcRegionInfo(t.region));
 
@@ -1442,7 +1446,7 @@ pub const Expr = union(enum) {
 
                 return node;
             },
-            .lookup => |l| {
+            .e_lookup => |l| {
                 switch (l) {
                     .local => |local| {
                         var lookup_node = SExpr.init(gpa, "e-lookup-local");
@@ -1464,14 +1468,14 @@ pub const Expr = union(enum) {
                     },
                 }
             },
-            .when => |e| {
+            .e_when => |e| {
                 var node = SExpr.init(gpa, "e-match");
                 node.appendRegion(gpa, ir.calcRegionInfo(e.region));
                 node.appendStringAttr(gpa, "match", "TODO");
 
                 return node;
             },
-            .@"if" => |if_expr| {
+            .e_if => |if_expr| {
                 var node = SExpr.init(gpa, "e-if");
                 node.appendRegion(gpa, ir.calcRegionInfo(if_expr.region));
 
@@ -1512,7 +1516,7 @@ pub const Expr = union(enum) {
 
                 return node;
             },
-            .call => |c| {
+            .e_call => |c| {
                 var call_node = SExpr.init(gpa, "e-call");
                 call_node.appendRegion(gpa, ir.calcRegionInfo(c.region));
 
@@ -1537,7 +1541,7 @@ pub const Expr = union(enum) {
 
                 return call_node;
             },
-            .record => |record_expr| {
+            .e_record => |record_expr| {
                 var record_node = SExpr.init(gpa, "e-record");
                 record_node.appendRegion(gpa, ir.calcRegionInfo(record_expr.region));
 
@@ -1554,12 +1558,12 @@ pub const Expr = union(enum) {
 
                 return record_node;
             },
-            .empty_record => |e| {
+            .e_empty_record => |e| {
                 var empty_record_node = SExpr.init(gpa, "e-empty_record");
                 empty_record_node.appendRegion(gpa, ir.calcRegionInfo(e.region));
                 return empty_record_node;
             },
-            .block => |block_expr| {
+            .e_block => |block_expr| {
                 var block_node = SExpr.init(gpa, "e-block");
                 block_node.appendRegion(gpa, ir.calcRegionInfo(block_expr.region));
 
@@ -1575,7 +1579,7 @@ pub const Expr = union(enum) {
 
                 return block_node;
             },
-            .record_access => |access_expr| {
+            .e_record_access => |access_expr| {
                 var node = SExpr.init(gpa, "e-record_access");
                 node.appendRegion(gpa, ir.calcRegionInfo(access_expr.region));
 
@@ -1597,7 +1601,7 @@ pub const Expr = union(enum) {
 
                 return node;
             },
-            .tag => |tag_expr| {
+            .e_tag => |tag_expr| {
                 var node = SExpr.init(gpa, "e-tag");
                 node.appendRegion(gpa, ir.calcRegionInfo(tag_expr.region));
 
@@ -1612,7 +1616,7 @@ pub const Expr = union(enum) {
 
                 return node;
             },
-            .zero_argument_tag => |tag_expr| {
+            .e_zero_argument_tag => |tag_expr| {
                 var node = SExpr.init(gpa, "e-zero-argument-tag");
                 node.appendRegion(gpa, ir.calcRegionInfo(tag_expr.region));
 
@@ -1630,7 +1634,7 @@ pub const Expr = union(enum) {
 
                 return node;
             },
-            .lambda => |lambda_expr| {
+            .e_lambda => |lambda_expr| {
                 var node = SExpr.init(gpa, "e-lambda");
                 node.appendRegion(gpa, ir.calcRegionInfo(lambda_expr.region));
 
@@ -1649,7 +1653,7 @@ pub const Expr = union(enum) {
 
                 return node;
             },
-            .binop => |e| {
+            .e_binop => |e| {
                 var node = SExpr.init(gpa, "e-binop");
                 node.appendRegion(gpa, ir.calcRegionInfo(e.region));
 
@@ -1663,7 +1667,7 @@ pub const Expr = union(enum) {
 
                 return node;
             },
-            .dot_access => |e| {
+            .e_dot_access => |e| {
                 var node = SExpr.init(gpa, "e-dot-access");
                 node.appendRegion(gpa, ir.calcRegionInfo(e.region));
 
@@ -1685,7 +1689,7 @@ pub const Expr = union(enum) {
 
                 return node;
             },
-            .runtime_error => |e| {
+            .e_runtime_error => |e| {
                 var node = SExpr.init(gpa, "e-runtime-error");
 
                 // get our diagnostic

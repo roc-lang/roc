@@ -259,15 +259,15 @@ test "verify -128 produces 7 bits needed" {
 pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
     const expr = self.can_ir.store.getExpr(expr_idx);
     switch (expr) {
-        .num => |_| {},
-        .int => |_| {},
-        .frac_f64 => |_| {},
-        .frac_dec => |_| {},
-        .dec_small => |_| {},
-        .str_segment => |_| {},
-        .str => |_| {},
-        .lookup => |_| {},
-        .list => |list| {
+        .e_num => |_| {},
+        .e_int => |_| {},
+        .e_frac_f64 => |_| {},
+        .e_frac_dec => |_| {},
+        .e_dec_small => |_| {},
+        .e_str_segment => |_| {},
+        .e_str => |_| {},
+        .e_lookup => |_| {},
+        .e_list => |list| {
             const elem_var = list.elem_var;
             for (self.can_ir.store.exprSlice(list.elems)) |single_elem_expr_idx| {
                 self.checkExpr(single_elem_expr_idx);
@@ -277,9 +277,9 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
                 );
             }
         },
-        .when => |_| {},
-        .@"if" => |_| {},
-        .call => |call| {
+        .e_when => |_| {},
+        .e_if => |_| {},
+        .e_call => |call| {
             // Get all expressions - first is function, rest are arguments
             const all_exprs = self.can_ir.store.sliceExpr(call.args);
 
@@ -298,7 +298,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
             // For function calls, we need to create a proper function type expectation
             // But we need to be careful about runtime errors in the function position
             const func_expr = self.can_ir.store.getExpr(func_expr_idx);
-            if (func_expr != .runtime_error) {
+            if (func_expr != .e_runtime_error) {
                 // Create type variables for proper function type checking
                 const call_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
                 const func_var = @as(Var, @enumFromInt(@intFromEnum(func_expr_idx)));
@@ -319,7 +319,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
             }
         },
 
-        .record => |e| {
+        .e_record => |e| {
 
             // ## RECORD TYPE CHECKING IMPLEMENTATION
             //
@@ -370,12 +370,12 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
                 // This typically happens when canonicalization didn't set the record structure properly
             }
         },
-        .empty_record => |_| {},
-        .record_access => |_| {},
-        .tag => |_| {},
-        .zero_argument_tag => |_| {},
-        .binop => |_| {},
-        .block => |block| {
+        .e_empty_record => |_| {},
+        .e_record_access => |_| {},
+        .e_tag => |_| {},
+        .e_zero_argument_tag => |_| {},
+        .e_binop => |_| {},
+        .e_block => |block| {
             // Check all statements in the block (safely)
             const statements = self.can_ir.store.sliceStatements(block.stmts);
             for (statements) |stmt_idx| {
@@ -400,7 +400,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
             // Check the final expression
             self.checkExpr(block.final_expr);
         },
-        .lambda => |lambda| {
+        .e_lambda => |lambda| {
             // Check the lambda body
             self.checkExpr(lambda.body);
 
@@ -426,18 +426,18 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
             const func_content = self.types.mkFunc(arg_vars.items, return_var, lambda.effect_var);
             _ = self.types.setVarContent(lambda_var, func_content);
         },
-        .tuple => |tuple| {
+        .e_tuple => |tuple| {
             for (self.can_ir.store.exprSlice(tuple.elems)) |single_elem_expr_idx| {
                 // Check tuple elements
                 self.checkExpr(single_elem_expr_idx);
             }
         },
-        .dot_access => |dot_access| {
+        .e_dot_access => |dot_access| {
             // Check the receiver expression
             self.checkExpr(dot_access.receiver);
             // TODO: Implement proper field type checking
             // For now, just check the receiver to avoid crashes
         },
-        .runtime_error => |_| {},
+        .e_runtime_error => |_| {},
     }
 }

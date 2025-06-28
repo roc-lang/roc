@@ -124,3 +124,25 @@ test "NodeStore round trip - Statements" {
         };
     }
 }
+
+test "NodeStore round trip - Expressions" {
+    const gpa = testing.allocator;
+    var store = NodeStore.init(gpa);
+    defer store.deinit();
+
+    var expressions = std.ArrayList(CIR.Expr).init(gpa);
+    defer expressions.deinit();
+
+    // try expressions.append(CIR.Expr{});
+
+    for (expressions.items) |expr| {
+        const idx = store.addExpr(expr);
+        const retrieved = store.getExpr(idx);
+
+        testing.expectEqualDeep(expr, retrieved) catch |err| {
+            std.debug.print("\n\nOriginal:  {any}\n\n", .{expr});
+            std.debug.print("Retrieved: {any}\n\n", .{retrieved});
+            return err;
+        };
+    }
+}

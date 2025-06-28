@@ -857,7 +857,7 @@ pub fn canonicalize_expr(
             const effect_var = self.can_ir.pushTypeVar(Content{ .pure = {} }, final_expr_idx, region);
 
             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
-                .call = .{
+                .e_call = .{
                     .args = args_span,
                     .called_via = CalledVia.apply,
                     .effect_var = effect_var,
@@ -901,7 +901,7 @@ pub fn canonicalize_expr(
                             const external_idx = self.can_ir.pushExternalDecl(external_decl);
 
                             // Create lookup expression for external declaration
-                            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .lookup = .{ .external = external_idx } });
+                            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_lookup = .{ .external = external_idx } });
                             _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
                             return expr_idx;
                         }
@@ -919,7 +919,7 @@ pub fn canonicalize_expr(
 
                         // We found the ident in scope, lookup to reference the pattern
                         const expr_idx =
-                            self.can_ir.store.addExpr(CIR.Expr{ .lookup = .{ .local = .{
+                            self.can_ir.store.addExpr(CIR.Expr{ .e_lookup = .{ .local = .{
                                 .pattern_idx = pattern_idx,
                                 .region = region,
                             } } });
@@ -945,7 +945,7 @@ pub fn canonicalize_expr(
                             const external_idx = self.can_ir.pushExternalDecl(external_decl);
 
                             // Create lookup expression for external declaration
-                            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .lookup = .{ .external = external_idx } });
+                            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_lookup = .{ .external = external_idx } });
                             _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
                             return expr_idx;
                         }
@@ -1073,7 +1073,7 @@ pub fn canonicalize_expr(
 
             // Add the expression
             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
-                .int = .{
+                .e_int = .{
                     .value = .{ .bytes = @bitCast(i128_val), .kind = .i128 },
                     .region = region,
                 },
@@ -1125,20 +1125,20 @@ pub fn canonicalize_expr(
 
             const cir_expr = switch (parsed) {
                 .small => |small_info| CIR.Expr{
-                    .dec_small = .{
+                    .e_dec_small = .{
                         .numerator = small_info.numerator,
                         .denominator_power_of_ten = small_info.denominator_power_of_ten,
                         .region = region,
                     },
                 },
                 .dec => |dec_info| CIR.Expr{
-                    .frac_dec = .{
+                    .e_frac_dec = .{
                         .value = dec_info.value,
                         .region = region,
                     },
                 },
                 .f64 => |f64_info| CIR.Expr{
-                    .frac_f64 = .{
+                    .e_frac_f64 = .{
                         .value = f64_info.value,
                         .region = region,
                     },
@@ -1165,7 +1165,7 @@ pub fn canonicalize_expr(
             // a string may consist of multiple string literal or expression segments
             const str_segments_span = self.extractStringSegments(parts);
 
-            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .str = .{
+            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_str = .{
                 .span = str_segments_span,
                 .region = self.parse_ir.tokenizedRegionToRegion(e.region),
             } });
@@ -1204,7 +1204,7 @@ pub fn canonicalize_expr(
 
             // then in the final slot the actual expr is inserted
             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
-                .list = .{
+                .e_list = .{
                     .elems = elems_span,
                     .elem_var = elem_type_var,
                     .region = region,
@@ -1231,7 +1231,7 @@ pub fn canonicalize_expr(
 
                 // then in the final slot the actual expr is inserted
                 const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
-                    .tag = .{
+                    .e_tag = .{
                         .ext_var = poly_var,
                         .name = tag_name,
                         .args = .{ .span = .{ .start = 0, .len = 0 } }, // empty arguments
@@ -1288,7 +1288,7 @@ pub fn canonicalize_expr(
 
             // then in the final slot the actual expr is inserted
             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
-                .tuple = .{
+                .e_tuple = .{
                     .elems = elems_span,
                     .region = region,
                 },
@@ -1310,7 +1310,7 @@ pub fn canonicalize_expr(
             const fields_slice = self.parse_ir.store.recordFieldSlice(e.fields);
             if (fields_slice.len == 0) {
                 const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
-                    .empty_record = .{
+                    .e_empty_record = .{
                         .region = region,
                     },
                 });
@@ -1383,7 +1383,7 @@ pub fn canonicalize_expr(
 
             // then in the final slot the actual expr is inserted
             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
-                .record = .{
+                .e_record = .{
                     .fields = fields_span,
                     .ext_var = self.can_ir.pushFreshTypeVar(record_expr_idx, region),
                     .region = region,
@@ -1474,7 +1474,7 @@ pub fn canonicalize_expr(
 
             // Create lambda expression
             const lambda_expr = CIR.Expr{
-                .lambda = .{
+                .e_lambda = .{
                     .args = args_span,
                     .body = body_idx,
                     .effect_var = effect_var,
@@ -1572,7 +1572,7 @@ pub fn canonicalize_expr(
             };
 
             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
-                .binop = CIR.Expr.Binop.init(op, lhs, rhs, region),
+                .e_binop = CIR.Expr.Binop.init(op, lhs, rhs, region),
             });
 
             _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
@@ -1607,7 +1607,7 @@ pub fn canonicalize_expr(
 
             // Create the if expression
             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
-                .@"if" = .{
+                .e_if = .{
                     .branches = branches_span,
                     .final_else = final_else,
                     .region = region,
@@ -1652,7 +1652,7 @@ pub fn canonicalize_expr(
                 .feature = feature,
                 .region = region,
             } });
-            const ellipsis_expr = self.can_ir.store.addExpr(CIR.Expr{ .runtime_error = .{
+            const ellipsis_expr = self.can_ir.store.addExpr(CIR.Expr{ .e_runtime_error = .{
                 .diagnostic = diagnostic,
                 .region = region,
             } });
@@ -1697,7 +1697,7 @@ pub fn canonicalize_expr(
             } else blk: {
                 // Empty block - create empty record
                 const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
-                    .empty_record = .{ .region = region },
+                    .e_empty_record = .{ .region = region },
                 });
                 _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .structure = .empty_record });
                 break :blk expr_idx;
@@ -1708,7 +1708,7 @@ pub fn canonicalize_expr(
 
             // Create and return block expression
             const block_expr = CIR.Expr{
-                .block = .{
+                .e_block = .{
                     .stmts = stmt_span,
                     .final_expr = final_expr,
                     .region = region,
@@ -1746,7 +1746,7 @@ fn extractStringSegments(self: *Self, parts: []const AST.Expr.Idx) CIR.Expr.Span
                 const string_idx = self.can_ir.env.strings.insert(gpa, part_text);
 
                 // create a node for the string literal
-                const str_expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .str_segment = .{
+                const str_expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_str_segment = .{
                     .literal = string_idx,
                     .region = self.parse_ir.tokenizedRegionToRegion(part_node.to_tokenized_region()),
                 } });
@@ -3085,7 +3085,7 @@ pub fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) ?CIR.Exp
                 .feature = feature,
                 .region = region,
             } });
-            const crash_expr = self.can_ir.store.addExpr(CIR.Expr{ .runtime_error = .{
+            const crash_expr = self.can_ir.store.addExpr(CIR.Expr{ .e_runtime_error = .{
                 .diagnostic = diagnostic,
                 .region = region,
             } });
@@ -3153,7 +3153,7 @@ pub fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) ?CIR.Exp
             // Type annotations don't produce runtime values, so return a unit expression
             // Create an empty tuple as a unit value
             const empty_span = CIR.Expr.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } };
-            const unit_expr = self.can_ir.store.addExpr(CIR.Expr{ .tuple = .{
+            const unit_expr = self.can_ir.store.addExpr(CIR.Expr{ .e_tuple = .{
                 .elems = empty_span,
                 .region = region,
             } });
@@ -3166,7 +3166,7 @@ pub fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) ?CIR.Exp
             // Import statements don't produce runtime values, so return a unit expression
             const region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
             const empty_span = CIR.Expr.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } };
-            const unit_expr = self.can_ir.store.addExpr(CIR.Expr{ .tuple = .{
+            const unit_expr = self.can_ir.store.addExpr(CIR.Expr{ .e_tuple = .{
                 .elems = empty_span,
                 .region = region,
             } });
@@ -3231,7 +3231,7 @@ pub fn addNonFiniteFloat(self: *Self, value: f64, region: base.Region) CIR.Expr.
 
     // then in the final slot the actual expr is inserted
     const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
-        .frac_f64 = .{
+        .e_frac_f64 = .{
             .value = value,
             .region = region,
         },
@@ -4245,7 +4245,7 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) ?CIR.Expr.Idx 
     const external_idx = self.can_ir.pushExternalDecl(external_decl);
 
     // Create lookup expression for external declaration
-    const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .lookup = .{ .external = external_idx } });
+    const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_lookup = .{ .external = external_idx } });
     _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
     return expr_idx;
 }
@@ -4264,7 +4264,7 @@ fn canonicalizeRegularFieldAccess(self: *Self, field_access: AST.BinOp) ?CIR.Exp
     const field_name, const args = self.parseFieldAccessRight(field_access);
 
     const dot_access_expr = CIR.Expr{
-        .dot_access = .{
+        .e_dot_access = .{
             .receiver = receiver_idx,
             .field_name = field_name,
             .args = args,
@@ -4706,10 +4706,10 @@ test "hexadecimal integer literals" {
         };
 
         const expr = cir.store.getExpr(canonical_expr_idx);
-        try std.testing.expect(expr == .int);
+        try std.testing.expect(expr == .e_int);
 
         // Check the value
-        try std.testing.expectEqual(tc.expected_value, @as(i128, @bitCast(expr.int.value.bytes)));
+        try std.testing.expectEqual(tc.expected_value, @as(i128, @bitCast(expr.e_int.value.bytes)));
 
         const expr_as_type_var: types.Var = @enumFromInt(@intFromEnum(canonical_expr_idx));
         const resolved = env.types.resolveVar(expr_as_type_var);
@@ -4784,10 +4784,10 @@ test "binary integer literals" {
         };
 
         const expr = cir.store.getExpr(canonical_expr_idx);
-        try std.testing.expect(expr == .int);
+        try std.testing.expect(expr == .e_int);
 
         // Check the value
-        try std.testing.expectEqual(tc.expected_value, @as(i128, @bitCast(expr.int.value.bytes)));
+        try std.testing.expectEqual(tc.expected_value, @as(i128, @bitCast(expr.e_int.value.bytes)));
 
         const expr_as_type_var: types.Var = @enumFromInt(@intFromEnum(canonical_expr_idx));
         const resolved = env.types.resolveVar(expr_as_type_var);
@@ -4862,10 +4862,10 @@ test "octal integer literals" {
         };
 
         const expr = cir.store.getExpr(canonical_expr_idx);
-        try std.testing.expect(expr == .int);
+        try std.testing.expect(expr == .e_int);
 
         // Check the value
-        try std.testing.expectEqual(tc.expected_value, @as(i128, @bitCast(expr.int.value.bytes)));
+        try std.testing.expectEqual(tc.expected_value, @as(i128, @bitCast(expr.e_int.value.bytes)));
 
         const expr_as_type_var: types.Var = @enumFromInt(@intFromEnum(canonical_expr_idx));
         const resolved = env.types.resolveVar(expr_as_type_var);
@@ -4940,10 +4940,10 @@ test "integer literals with uppercase base prefixes" {
         };
 
         const expr = cir.store.getExpr(canonical_expr_idx);
-        try std.testing.expect(expr == .int);
+        try std.testing.expect(expr == .e_int);
 
         // Check the value
-        try std.testing.expectEqual(tc.expected_value, @as(i128, @bitCast(expr.int.value.bytes)));
+        try std.testing.expectEqual(tc.expected_value, @as(i128, @bitCast(expr.e_int.value.bytes)));
 
         const expr_as_type_var: types.Var = @enumFromInt(@intFromEnum(canonical_expr_idx));
         const resolved = env.types.resolveVar(expr_as_type_var);
