@@ -25,7 +25,7 @@ test {
     // If it went up, please make sure your changes are absolutely required!
     try std.testing.expectEqual(32, @sizeOf(Descriptor));
     try std.testing.expectEqual(24, @sizeOf(Content));
-    try std.testing.expectEqual(16, @sizeOf(Alias));
+    try std.testing.expectEqual(8, @sizeOf(Alias));
     try std.testing.expectEqual(20, @sizeOf(FlatType));
     try std.testing.expectEqual(12, @sizeOf(Record));
 }
@@ -146,8 +146,43 @@ pub const Content = union(enum) {
 /// A named alias to a different type
 pub const Alias = struct {
     ident: TypeIdent,
-    args: Var.SafeList.Range,
-    backing_var: Var,
+    num_args: u32,
+
+    /// Get the backing var for this alias given the alias var
+    pub fn getBackingVar(self: Alias, alias_var: Var) Var {
+        _ = self;
+        const backing_var = @as(Var, @enumFromInt(@intFromEnum(alias_var) + 1));
+
+        // Debug assertion: verify the backing var index is reasonable
+        if (std.debug.runtime_safety) {
+            std.debug.assert(@intFromEnum(backing_var) > @intFromEnum(alias_var));
+        }
+
+        return backing_var;
+    }
+
+    /// Iterator for getting all argument vars
+    pub const ArgIterator = struct {
+        alias_var: Var,
+        num_args: u32,
+        current: u32,
+
+        pub fn next(self: *ArgIterator) ?Var {
+            if (self.current >= self.num_args) return null;
+            const result = @as(Var, @enumFromInt(@intFromEnum(self.alias_var) + 2 + self.current));
+            self.current += 1;
+            return result;
+        }
+    };
+
+    /// Get an iterator over all argument vars
+    pub fn argIterator(self: Alias, alias_var: Var) ArgIterator {
+        return ArgIterator{
+            .alias_var = alias_var,
+            .num_args = self.num_args,
+            .current = 0,
+        };
+    }
 };
 
 /// Represents an ident of a type

@@ -535,7 +535,7 @@ pub const NegativeUnsignedInt = struct {
 /// looses essential error information. So before doing this, we create a fully
 /// resolved snapshot of the type that we can use in reporting
 ///
-/// Entry points are `appendProblem` and `createSnapshot`
+/// Entry points are `appendProblem` and `deepCopyVar`
 pub const Store = struct {
     const Self = @This();
 

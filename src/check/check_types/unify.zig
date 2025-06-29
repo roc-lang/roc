@@ -118,8 +118,8 @@ pub fn unify(
         const problem: Problem = blk: {
             switch (err) {
                 error.TypeMismatch => {
-                    const expected_snapshot = snapshots.createSnapshot(types, a);
-                    const actual_snapshot = snapshots.createSnapshot(types, b);
+                    const expected_snapshot = snapshots.deepCopyVar(types, a);
+                    const actual_snapshot = snapshots.deepCopyVar(types, b);
                     break :blk .{ .type_mismatch = .{
                         .expected_var = a,
                         .expected = expected_snapshot,
@@ -148,7 +148,7 @@ pub fn unify(
 
                     const literal_var = if (literal_is_a) a else b;
                     const expected_var = if (literal_is_a) b else a;
-                    const expected_snapshot = snapshots.createSnapshot(types, expected_var);
+                    const expected_snapshot = snapshots.deepCopyVar(types, expected_var);
 
                     break :blk .{ .number_does_not_fit = .{
                         .literal_var = literal_var,
@@ -176,7 +176,7 @@ pub fn unify(
 
                     const literal_var = if (literal_is_a) a else b;
                     const expected_var = if (literal_is_a) b else a;
-                    const expected_snapshot = snapshots.createSnapshot(types, expected_var);
+                    const expected_snapshot = snapshots.deepCopyVar(types, expected_var);
 
                     break :blk .{ .negative_unsigned_int = .{
                         .literal_var = literal_var,
@@ -200,34 +200,34 @@ pub fn unify(
                         switch (unify_err) {
                             .recursion_anonymous => |var_| {
                                 // TODO: Snapshot infinite recursion
-                                // const snapshot = snapshots.createSnapshot(types, var_);
+                                // const snapshot = snapshots.deepCopyVar(types, var_);
                                 break :blk .{ .anonymous_recursion = .{
                                     .var_ = var_,
                                 } };
                             },
                             .recursion_infinite => |var_| {
                                 // TODO: Snapshot infinite recursion
-                                // const snapshot = snapshots.createSnapshot(types, var_);
+                                // const snapshot = snapshots.deepCopyVar(types, var_);
                                 break :blk .{ .infinite_recursion = .{
                                     .var_ = var_,
                                 } };
                             },
                             .invalid_number_type => |var_| {
-                                const snapshot = snapshots.createSnapshot(types, var_);
+                                const snapshot = snapshots.deepCopyVar(types, var_);
                                 break :blk .{ .invalid_number_type = .{
                                     .var_ = var_,
                                     .snapshot = snapshot,
                                 } };
                             },
                             .invalid_record_ext => |var_| {
-                                const snapshot = snapshots.createSnapshot(types, var_);
+                                const snapshot = snapshots.deepCopyVar(types, var_);
                                 break :blk .{ .invalid_record_ext = .{
                                     .var_ = var_,
                                     .snapshot = snapshot,
                                 } };
                             },
                             .invalid_tag_union_ext => |var_| {
-                                const snapshot = snapshots.createSnapshot(types, var_);
+                                const snapshot = snapshots.deepCopyVar(types, var_);
                                 break :blk .{ .invalid_tag_union_ext = .{
                                     .var_ = var_,
                                     .snapshot = snapshot,
@@ -237,9 +237,9 @@ pub fn unify(
                     } else {
                         break :blk .{ .bug = .{
                             .expected_var = a,
-                            .expected = snapshots.createSnapshot(types, a),
+                            .expected = snapshots.deepCopyVar(types, a),
                             .actual_var = b,
-                            .actual = snapshots.createSnapshot(types, b),
+                            .actual = snapshots.deepCopyVar(types, b),
                         } };
                     }
                 },
@@ -486,18 +486,24 @@ const Unifier = struct {
                 self.merge(vars, Content{ .alias = a_alias });
             },
             .rigid_var => |_| {
-                try self.unifyGuarded(a_alias.backing_var, vars.b.var_);
+                const backing_var = a_alias.getBackingVar(vars.a.var_);
+                try self.unifyGuarded(backing_var, vars.b.var_);
             },
             .alias => |b_alias| {
                 if (TypeIdent.eql(&self.module_env.idents, a_alias.ident, b_alias.ident)) {
                     try self.unifyTwoAliases(vars, a_alias, b_alias);
                 } else {
-                    try self.unifyGuarded(a_alias.backing_var, b_alias.backing_var);
+                    const a_backing_var = a_alias.getBackingVar(vars.a.var_);
+                    const b_backing_var = b_alias.getBackingVar(vars.b.var_);
+                    try self.unifyGuarded(a_backing_var, b_backing_var);
                 }
             },
             .effectful => return error.TypeMismatch,
             .pure => return error.TypeMismatch,
-            .structure => try self.unifyGuarded(a_alias.backing_var, vars.b.var_),
+            .structure => {
+                const backing_var = a_alias.getBackingVar(vars.a.var_);
+                try self.unifyGuarded(backing_var, vars.b.var_);
+            },
             .err => self.merge(vars, .err),
         }
     }
@@ -513,19 +519,23 @@ const Unifier = struct {
     /// NOTE: the rust version of this function `unify_two_aliases` is *significantly* more
     /// complicated than the version here
     fn unifyTwoAliases(self: *Self, vars: *const ResolvedVarDescs, a_alias: Alias, b_alias: Alias) Error!void {
-        if (a_alias.args.len() != b_alias.args.len()) {
+        if (a_alias.num_args != b_alias.num_args) {
             return error.TypeMismatch;
         }
 
-        const a_args = self.types_store.getAliasArgsSlice(a_alias.args);
-        const b_args = self.types_store.getAliasArgsSlice(b_alias.args);
-        for (a_args, b_args) |a_arg, b_arg| {
+        // Unify each pair of arguments using iterators
+        var a_iter = a_alias.argIterator(vars.a.var_);
+        var b_iter = b_alias.argIterator(vars.b.var_);
+        while (a_iter.next()) |a_arg| {
+            const b_arg = b_iter.next().?; // Safe because we checked num_args match
             try self.unifyGuarded(a_arg, b_arg);
         }
 
         // Rust compiler comment:
         // Don't report real_var mismatches, because they must always be surfaced higher, from the argument types.
-        self.unifyGuarded(a_alias.backing_var, b_alias.backing_var) catch {};
+        const a_backing_var = a_alias.getBackingVar(vars.a.var_);
+        const b_backing_var = b_alias.getBackingVar(vars.b.var_);
+        self.unifyGuarded(a_backing_var, b_backing_var) catch {};
 
         self.merge(vars, vars.b.desc.content);
     }
@@ -569,8 +579,10 @@ const Unifier = struct {
                 self.merge(vars, Content{ .structure = a_flat_type });
             },
             .rigid_var => return error.TypeMismatch,
-            .alias => |alias| {
-                try self.unifyGuarded(vars.a.var_, alias.backing_var);
+            .alias => |_| {
+                const alias = self.types_store.resolveVar(vars.b.var_).desc.content.alias;
+                const backing_var = alias.getBackingVar(vars.b.var_);
+                try self.unifyGuarded(vars.a.var_, backing_var);
             },
             .effectful => return error.TypeMismatch,
             .pure => return error.TypeMismatch,
@@ -1694,8 +1706,9 @@ const Unifier = struct {
                 .rigid_var => {
                     return .{ .ext = ext_var, .range = range };
                 },
-                .alias => |alias| {
-                    ext_var = alias.backing_var;
+                .alias => |_| {
+                    const alias = self.types_store.resolveVar(ext_var).desc.content.alias;
+                    ext_var = alias.getBackingVar(ext_var);
                 },
                 .structure => |flat_type| {
                     switch (flat_type) {
@@ -2104,8 +2117,9 @@ const Unifier = struct {
                 .rigid_var => {
                     return .{ .ext = ext_var, .range = range };
                 },
-                .alias => |alias| {
-                    ext_var = alias.backing_var;
+                .alias => |_| {
+                    const alias = self.types_store.resolveVar(ext_var).desc.content.alias;
+                    ext_var = alias.getBackingVar(ext_var);
                 },
                 .structure => |flat_type| {
                     switch (flat_type) {
@@ -2537,13 +2551,31 @@ const TestEnv = struct {
 
     // helpers - alias
 
-    fn mkAlias(self: *Self, name: []const u8, args: []const Var, backing_var: Var) Alias {
-        const args_range = self.module_env.types.appendAliasArgs(args);
-        return .{
+    /// Create an Alias struct with the given name and number of args.
+    ///
+    /// The `args` parameter is only used to determine the count - the actual arg types
+    /// passed here are just for reference/documentation and aren't stored.
+    ///
+    /// IMPORTANT: The caller is responsible for creating the vars in the right order:
+    /// 1. alias var
+    /// 2. backing var (alias var + 1)
+    /// 3. arg vars (alias var + 2, alias var + 3, etc.)
+    ///
+    /// For example, to create an alias `MyAlias(Str, Int)`:
+    /// ```
+    /// const alias = mkAlias("MyAlias", &[_]Var{str_var, int_var}); // args just for count
+    /// const alias_var = types_store.freshFromContent(.{ .alias = alias });
+    /// const backing_var = types_store.fresh(); // Must be created immediately after
+    /// const arg1_redirect = types_store.freshRedirect(str_var); // Must be next
+    /// const arg2_redirect = types_store.freshRedirect(int_var); // Must be next
+    /// ```
+    fn mkAlias(self: *Self, name: []const u8, args: []const Var) Alias {
+        const alias = Alias{
             .ident = self.mkTypeIdent(name),
-            .args = args_range,
-            .backing_var = backing_var,
+            .num_args = @intCast(args.len),
         };
+
+        return alias;
     }
 
     // helpers - nums
@@ -2854,11 +2886,19 @@ test "unify - alias with same args" {
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
     const bool_ = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i8 } });
 
-    const backing = env.module_env.types.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ }));
-    const alias = Content{ .alias = env.mkAlias("AliasName", &[_]Var{ str, bool_ }, backing) };
+    const alias = Content{ .alias = env.mkAlias("AliasName", &[_]Var{ str, bool_ }) };
 
+    // Create alias `a` with its backing var and args in sequence
     const a = env.module_env.types.freshFromContent(alias);
+    _ = env.module_env.types.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ })); // backing var
+    _ = env.module_env.types.freshRedirect(str); // arg 1 -> str
+    _ = env.module_env.types.freshRedirect(bool_); // arg 2 -> bool_
+
+    // Create alias `b` with its backing var and args in sequence
     const b = env.module_env.types.freshFromContent(alias);
+    _ = env.module_env.types.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ })); // backing var
+    _ = env.module_env.types.freshRedirect(str); // arg 1 -> str
+    _ = env.module_env.types.freshRedirect(bool_); // arg 2 -> bool_
 
     const result = env.unify(a, b);
 
@@ -2874,12 +2914,18 @@ test "unify - aliases with different names but same backing" {
 
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
 
-    const backing = env.module_env.types.freshFromContent(env.mkTuple(&[_]Var{str}));
-    const a_alias = Content{ .alias = env.mkAlias("AliasA", &[_]Var{str}, backing) };
-    const b_alias = Content{ .alias = env.mkAlias("AliasB", &[_]Var{str}, backing) };
+    const a_alias = Content{ .alias = env.mkAlias("AliasA", &[_]Var{str}) };
+    const b_alias = Content{ .alias = env.mkAlias("AliasB", &[_]Var{str}) };
 
+    // Create alias `a` with its backing var and arg
     const a = env.module_env.types.freshFromContent(a_alias);
+    _ = env.module_env.types.freshFromContent(env.mkTuple(&[_]Var{str})); // backing var
+    _ = env.module_env.types.freshRedirect(str); // arg -> str
+
+    // Create alias `b` with its backing var and arg
     const b = env.module_env.types.freshFromContent(b_alias);
+    _ = env.module_env.types.freshFromContent(env.mkTuple(&[_]Var{str})); // backing var
+    _ = env.module_env.types.freshRedirect(str); // arg -> str
 
     const result = env.unify(a, b);
 
@@ -2896,13 +2942,18 @@ test "unify - alias with different args (fail)" {
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
     const bool_ = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i8 } });
 
-    const backing = env.module_env.types.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ }));
+    const a_alias = Content{ .alias = env.mkAlias("Alias", &[_]Var{str}) };
+    const b_alias = Content{ .alias = env.mkAlias("Alias", &[_]Var{bool_}) };
 
-    const a_alias = Content{ .alias = env.mkAlias("Alias", &[_]Var{str}, backing) };
-    const b_alias = Content{ .alias = env.mkAlias("Alias", &[_]Var{bool_}, backing) };
-
+    // Create alias `a` with its backing var and arg
     const a = env.module_env.types.freshFromContent(a_alias);
+    _ = env.module_env.types.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ })); // backing var
+    _ = env.module_env.types.freshRedirect(str); // arg -> str
+
+    // Create alias `b` with its backing var and arg
     const b = env.module_env.types.freshFromContent(b_alias);
+    _ = env.module_env.types.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ })); // backing var
+    _ = env.module_env.types.freshRedirect(bool_); // arg -> bool_
 
     const result = env.unify(a, b);
 
@@ -2918,11 +2969,14 @@ test "unify - alias with flex" {
 
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
     const bool_ = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i8 } });
-    const backing = env.module_env.types.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ }));
 
-    const a_alias = Content{ .alias = env.mkAlias("Alias", &[_]Var{bool_}, backing) };
+    const a_alias = Content{ .alias = env.mkAlias("Alias", &[_]Var{bool_}) };
 
+    // Create alias `a` with its backing var and arg
     const a = env.module_env.types.freshFromContent(a_alias);
+    _ = env.module_env.types.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ })); // backing var
+    _ = env.module_env.types.freshRedirect(bool_); // arg -> bool_
+
     const b = env.module_env.types.fresh();
 
     const result = env.unify(a, b);

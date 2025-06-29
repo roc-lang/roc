@@ -209,9 +209,13 @@ const CheckOccurs = struct {
                     }
                 },
                 .alias => |alias| {
-                    const args = self.types_store.getAliasArgsSlice(alias.args);
-                    try self.occursSubVars(root, args, ctx);
-                    try self.occursSubVar(root, alias.backing_var, ctx);
+                    // Check all argument vars using iterator
+                    var arg_iter = alias.argIterator(var_);
+                    while (arg_iter.next()) |arg_var| {
+                        try self.occursSubVar(root, arg_var, ctx);
+                    }
+                    const backing_var = alias.getBackingVar(var_);
+                    try self.occursSubVar(root, backing_var, ctx);
                 },
                 .flex_var => {},
                 .rigid_var => {},
@@ -482,16 +486,14 @@ test "occurs: recursive alias (v = Alias(List v))" {
     var scratch = Scratch.init(gpa);
     defer scratch.deinit();
 
-    const backing_var = types_store.fresh();
     const v = types_store.fresh();
-
-    const args = types_store.appendAliasArgs(&[_]Var{v});
+    _ = types_store.fresh(); // backing var at v+1
+    _ = types_store.freshRedirect(v); // arg at v+2 redirecting to v (creating infinite recursion on purpose for the test)
 
     try types_store.setRootVarContent(v, Content{
         .alias = .{
             .ident = types.TypeIdent{ .ident_idx = undefined },
-            .args = args,
-            .backing_var = backing_var,
+            .num_args = 1,
         },
     });
 
@@ -511,16 +513,16 @@ test "occurs: alias with no recursion (v = Alias Str)" {
     var scratch = Scratch.init(gpa);
     defer scratch.deinit();
 
-    const backing_var = types_store.fresh();
-    const str_var = types_store.freshFromContent(Content{ .structure = .str });
-    const args = types_store.appendAliasArgs(&[_]Var{str_var});
-
     const alias_var = types_store.fresh();
+    const backing_var = types_store.fresh(); // backing var at alias_var+1
+    const arg_var = types_store.fresh(); // arg at alias_var+2
+
     try types_store.setRootVarContent(alias_var, Content{ .alias = .{
         .ident = types.TypeIdent{ .ident_idx = undefined },
-        .args = args,
-        .backing_var = backing_var,
+        .num_args = 1,
     } });
+    try types_store.setRootVarContent(backing_var, Content{ .structure = .str });
+    try types_store.setRootVarContent(arg_var, Content{ .structure = .str });
 
     const result = occurs(&types_store, &scratch, alias_var);
     try std.testing.expectEqual(.not_recursive, result);

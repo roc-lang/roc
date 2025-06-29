@@ -275,7 +275,7 @@ pub const Store = struct {
                     else => return LayoutError.InvalidRecordExtension,
                 },
                 .alias => |alias| {
-                    current_ext = alias.backing_var;
+                    current_ext = alias.getBackingVar(current_ext);
                 },
                 else => return LayoutError.InvalidRecordExtension,
             }
@@ -811,7 +811,8 @@ pub const Store = struct {
                 },
                 .alias => |alias| {
                     // Follow the alias by updating the work item
-                    current = self.types_store.resolveVar(alias.backing_var);
+                    const backing_var = alias.getBackingVar(current.var_);
+                    current = self.types_store.resolveVar(backing_var);
                     continue;
                 },
                 .effectful => @panic("TODO: effectful doesn't make sense as a layout; should be moved out of Content"),
