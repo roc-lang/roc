@@ -194,7 +194,6 @@ pub const TypeWriter = struct {
         _ = try self.writer.write(self.env.idents.getText(nominal_type.ident.ident_idx));
         if (nominal_type.num_args > 0) {
             _ = try self.writer.write("(");
-            // Use iterator to get argument vars
             var arg_iter = nominal_type.argIterator(nominal_var);
             // Write first arg without comma
             if (arg_iter.next()) |arg_var| {
