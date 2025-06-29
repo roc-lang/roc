@@ -336,6 +336,11 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
                             },
                         });
 
+                        // Check remaining elements to catch their individual errors
+                        for (elems[i + 1 ..]) |remaining_elem_id| {
+                            self.checkExpr(remaining_elem_id);
+                        }
+
                         // Break to avoid cascading errors
                         break;
                     },
