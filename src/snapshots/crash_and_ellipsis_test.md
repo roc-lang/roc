@@ -99,32 +99,6 @@ The unused variable is declared here:
 ```
 
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**crash_and_ellipsis_test.md:9:1:9:10:**
-```roc
-testCrash = |_| crash "This is a crash message"
-```
-
-It is of type:
-    _U64 -> U64_
-
-But you are trying to use it as:
-    _U64 ? Error_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**crash_and_ellipsis_test.md:13:1:13:16:**
-```roc
-testCrashSimple = |_| crash "oops"
-```
-
-It is of type:
-    _U64 -> U64_
-
-But you are trying to use it as:
-    _U64 -> U64U64 ? Error_
-
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),Newline(1:1-1:1),
@@ -246,77 +220,77 @@ main! = |_| {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 87)
-		(p-assign @5-1-5-13 (ident "testEllipsis") (id 75))
-		(e-lambda @5-16-5-23 (id 80)
+	(d-let (id 88)
+		(p-assign @5-1-5-13 (ident "testEllipsis") (id 76))
+		(e-lambda @5-16-5-23 (id 81)
 			(args
-				(p-underscore @5-17-5-18 (id 76)))
+				(p-underscore @5-17-5-18 (id 77)))
 			(e-runtime-error (tag "not_implemented")))
-		(annotation @5-1-5-13 (signature 85) (id 86)
+		(annotation @5-1-5-13 (signature 86) (id 87)
 			(declared-type
 				(ty-fn @4-16-4-26 (effectful false)
 					(ty @4-16-4-19 (name "U64"))
 					(ty @4-23-4-26 (name "U64"))))))
-	(d-let (id 103)
-		(p-assign @9-1-9-10 (ident "testCrash") (id 91))
-		(e-lambda @9-13-9-24 (id 96)
+	(d-let (id 104)
+		(p-assign @9-1-9-10 (ident "testCrash") (id 92))
+		(e-lambda @9-13-9-24 (id 97)
 			(args
-				(p-underscore @9-14-9-15 (id 92)))
+				(p-underscore @9-14-9-15 (id 93)))
 			(e-runtime-error (tag "lambda_body_not_canonicalized")))
-		(annotation @9-1-9-10 (signature 101) (id 102)
+		(annotation @9-1-9-10 (signature 102) (id 103)
 			(declared-type
 				(ty-fn @8-13-8-23 (effectful false)
 					(ty @8-13-8-16 (name "U64"))
 					(ty @8-20-8-23 (name "U64"))))))
-	(d-let (id 120)
-		(p-assign @13-1-13-16 (ident "testCrashSimple") (id 108))
-		(e-lambda @13-19-13-30 (id 113)
+	(d-let (id 121)
+		(p-assign @13-1-13-16 (ident "testCrashSimple") (id 109))
+		(e-lambda @13-19-13-30 (id 114)
 			(args
-				(p-underscore @13-20-13-21 (id 109)))
+				(p-underscore @13-20-13-21 (id 110)))
 			(e-runtime-error (tag "lambda_body_not_canonicalized")))
-		(annotation @13-1-13-16 (signature 118) (id 119)
+		(annotation @13-1-13-16 (signature 119) (id 120)
 			(declared-type
 				(ty-fn @12-19-12-29 (effectful false)
 					(ty @12-19-12-22 (name "U64"))
 					(ty @12-26-12-29 (name "U64"))))))
-	(d-let (id 150)
-		(p-assign @15-1-15-6 (ident "main!") (id 122))
-		(e-lambda @15-9-20-2 (id 149)
+	(d-let (id 151)
+		(p-assign @15-1-15-6 (ident "main!") (id 123))
+		(e-lambda @15-9-20-2 (id 150)
 			(args
-				(p-underscore @15-10-15-11 (id 123)))
+				(p-underscore @15-10-15-11 (id 124)))
 			(e-block @15-13-20-2
 				(s-let @16-5-16-31
-					(p-assign @16-5-16-12 (ident "result1") (id 124))
-					(e-call @16-15-16-31 (id 128)
+					(p-assign @16-5-16-12 (ident "result1") (id 125))
+					(e-call @16-15-16-31 (id 129)
 						(e-lookup-local @16-15-16-27
-							(pattern (id 75)))
+							(pattern (id 76)))
 						(e-int @16-28-16-30 (value "42"))))
 				(s-let @17-5-17-28
-					(p-assign @17-5-17-12 (ident "result2") (id 130))
-					(e-call @17-15-17-28 (id 134)
+					(p-assign @17-5-17-12 (ident "result2") (id 131))
+					(e-call @17-15-17-28 (id 135)
 						(e-lookup-local @17-15-17-24
-							(pattern (id 91)))
+							(pattern (id 92)))
 						(e-int @17-25-17-27 (value "42"))))
 				(s-let @18-5-18-34
-					(p-assign @18-5-18-12 (ident "result3") (id 136))
-					(e-call @18-15-18-34 (id 140)
+					(p-assign @18-5-18-12 (ident "result3") (id 137))
+					(e-call @18-15-18-34 (id 141)
 						(e-lookup-local @18-15-18-30
-							(pattern (id 108)))
+							(pattern (id 109)))
 						(e-int @18-31-18-33 (value "42"))))
-				(e-list @19-5-19-7 (elem-var 142)
+				(e-list @19-5-19-7 (elem-var 143)
 					(elems))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "testEllipsis") (def_var 87) (type "U64 -> U64"))
-		(d_assign (name "testCrash") (def_var 103) (type "Error"))
-		(d_assign (name "testCrashSimple") (def_var 120) (type "Error"))
-		(d_assign (name "main!") (def_var 150) (type "* ? *")))
+		(d_assign (name "testEllipsis") (def_var 88) (type "U64 -> U64"))
+		(d_assign (name "testCrash") (def_var 104) (type "U64 -> Error"))
+		(d_assign (name "testCrashSimple") (def_var 121) (type "U64 -> Error"))
+		(d_assign (name "main!") (def_var 151) (type "* ? List(*)")))
 	(expressions
 		(expr @5-16-5-23 (type "U64 -> U64"))
-		(expr @9-13-9-24 (type "Error"))
-		(expr @13-19-13-30 (type "Error"))
-		(expr @15-9-20-2 (type "* ? *"))))
+		(expr @9-13-9-24 (type "U64 -> Error"))
+		(expr @13-19-13-30 (type "U64 -> Error"))
+		(expr @15-9-20-2 (type "* ? List(*)"))))
 ~~~

@@ -42,9 +42,9 @@ add2 = x + 2
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 77)
-		(p-assign @3-1-3-5 (ident "add2") (id 72))
-		(e-binop @3-8-3-18 (op "add") (id 76)
+	(d-let (id 78)
+		(p-assign @3-1-3-5 (ident "add2") (id 73))
+		(e-binop @3-8-3-18 (op "add") (id 77)
 			(e-runtime-error (tag "ident_not_in_scope"))
 			(e-int @3-17-3-18 (value "2")))))
 ~~~
@@ -52,7 +52,7 @@ add2 = x + 2
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "add2") (def_var 77) (type "*")))
+		(d_assign (name "add2") (def_var 78) (type "*")))
 	(expressions
 		(expr @3-8-3-18 (type "*"))))
 ~~~

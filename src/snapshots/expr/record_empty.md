@@ -23,9 +23,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-empty_record @1-1-1-3 (id 72))
+(e-empty_record @1-1-1-3 (id 73))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 72) (type "{}"))
+(expr (id 73) (type "{}"))
 ~~~

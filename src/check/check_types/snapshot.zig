@@ -700,24 +700,17 @@ pub const SnapshotWriter = struct {
             try self.writeTag(tag);
         }
 
+        _ = try self.writer.write("]");
+
         // Show extension variable if it's not empty
         switch (self.snapshots.contents.get(tag_union.ext).*) {
+            .flex_var => _ = try self.writer.write("*"),
             .structure => |flat_type| switch (flat_type) {
                 .empty_tag_union => {}, // Don't show empty extension
-                else => {
-                    if (tag_union.tags.len() > 0) _ = try self.writer.write(", ");
-                    _ = try self.writer.write("* ");
-                    try self.write(tag_union.ext);
-                },
+                else => {}, // TODO: Error?
             },
-            else => {
-                if (tag_union.tags.len() > 0) _ = try self.writer.write(", ");
-                _ = try self.writer.write("* ");
-                try self.write(tag_union.ext);
-            },
+            else => {}, // TODO: Error?
         }
-
-        _ = try self.writer.write("]");
     }
 
     /// Write a single tag

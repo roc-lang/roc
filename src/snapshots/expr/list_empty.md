@@ -23,10 +23,10 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-list @1-1-1-3 (elem-var 72) (id 73)
+(e-list @1-1-1-3 (elem-var 73) (id 74)
 	(elems))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 73) (type "List(*)"))
+(expr (id 74) (type "List(*)"))
 ~~~

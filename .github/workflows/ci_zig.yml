@@ -93,6 +93,13 @@ jobs:
             exit 1;
           }
 
+      - name: check snapshots with valgrind (ubuntu)
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          sudo apt install -y valgrind
+          valgrind --version
+          valgrind --leak-check=full --error-exitcode=1 --errors-for-leak-kinds=definite,possible ./zig-out/bin/snapshot
+         
       - name: check if statically linked (ubuntu)
         if: startsWith(matrix.os, 'ubuntu')
         run: |

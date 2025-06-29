@@ -61,31 +61,31 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 89)
-		(p-assign @4-1-4-9 (ident "identity") (id 77))
-		(e-lambda @4-12-4-17 (id 81)
+	(d-let (id 90)
+		(p-assign @4-1-4-9 (ident "identity") (id 78))
+		(e-lambda @4-12-4-17 (id 82)
 			(args
-				(p-assign @4-13-4-14 (ident "x") (id 78)))
+				(p-assign @4-13-4-14 (ident "x") (id 79)))
 			(e-lookup-local @4-16-4-17
-				(pattern (id 78))))
-		(annotation @4-1-4-9 (signature 87) (id 88)
+				(pattern (id 79))))
+		(annotation @4-1-4-9 (signature 88) (id 89)
 			(declared-type
 				(ty-fn @3-12-3-18 (effectful false)
 					(ty-var @3-12-3-13 (name "a"))
 					(ty-var @3-17-3-18 (name "a"))))))
-	(d-let (id 95)
-		(p-assign @6-1-6-6 (ident "main!") (id 90))
-		(e-lambda @6-9-6-15 (id 94)
+	(d-let (id 96)
+		(p-assign @6-1-6-6 (ident "main!") (id 91))
+		(e-lambda @6-9-6-15 (id 95)
 			(args
-				(p-underscore @6-10-6-11 (id 91)))
+				(p-underscore @6-10-6-11 (id 92)))
 			(e-empty_record @6-13-6-15))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "identity") (def_var 89) (type "a -> a"))
-		(d_assign (name "main!") (def_var 95) (type "* ? {}")))
+		(d_assign (name "identity") (def_var 90) (type "a -> a"))
+		(d_assign (name "main!") (def_var 96) (type "* ? {}")))
 	(expressions
 		(expr @4-12-4-17 (type "a -> a"))
 		(expr @6-9-6-15 (type "* ? {}"))))

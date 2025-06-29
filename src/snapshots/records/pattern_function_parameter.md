@@ -45,11 +45,11 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-let @1-1-1-109 (id 92)
-		(p-assign @1-1-1-11 (ident "formatUser") (id 72))
-		(e-lambda @1-14-1-109 (id 91)
+	(s-let @1-1-1-109 (id 93)
+		(p-assign @1-1-1-11 (ident "formatUser") (id 73))
+		(e-lambda @1-14-1-109 (id 92)
 			(args
-				(p-record-destructure @1-15-1-35 (id 79)
+				(p-record-destructure @1-15-1-35 (id 80)
 					(destructs
 						(record-destruct @1-17-1-22 (label "name") (ident "name")
 							(required))
@@ -60,18 +60,18 @@ NO CHANGE
 			(e-string @1-37-1-109
 				(e-literal @1-38-1-44 (string "User: "))
 				(e-lookup-local @1-46-1-50
-					(pattern (id 74)))
+					(pattern (id 75)))
 				(e-literal @1-51-1-53 (string " ("))
 				(e-dot-access @1-55-1-67 (field "toStr")
 					(receiver
 						(e-lookup-local @1-55-1-58
-							(pattern (id 76))))
+							(pattern (id 77))))
 					(args))
 				(e-literal @1-67-1-90 (string " years old) - Contact: "))
 				(e-dot-access @1-92-1-108 (field "display")
 					(receiver
 						(e-lookup-local @1-92-1-97
-							(pattern (id 78))))
+							(pattern (id 79))))
 					(args))
 				(e-literal @1-108-1-108 (string ""))))))
 ~~~

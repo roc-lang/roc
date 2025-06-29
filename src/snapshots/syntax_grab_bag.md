@@ -1222,28 +1222,28 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let (id 190)
-		(p-assign @65-1-65-16 (ident "add_one_oneline") (id 179))
+		(p-assign @65-1-65-16 (ident "add_one_oneline") (id 180))
 		(e-lambda @65-19-67-8 (id 189)
 			(args
-				(p-assign @65-20-65-23 (ident "num") (id 180)))
-			(e-if @65-25-67-8 (cond-var 0) (branch-var 0)
+				(p-assign @65-20-65-23 (ident "num") (id 181)))
+			(e-if @65-25-67-8 (branch-var 186)
 				(if-branches
 					(if-branch
 						(e-lookup-local @65-28-65-31
-							(pattern (id 180)))
+							(pattern (id 181)))
 						(e-int @65-32-65-33 (value "2"))))
 				(if-else
 					(e-int @65-39-65-40 (value "5"))))))
-	(d-let (id 223)
+	(d-let (id 222)
 		(p-assign @68-1-68-8 (ident "add_one") (id 194))
-		(e-lambda @68-11-78-2 (id 216)
+		(e-lambda @68-11-78-2 (id 215)
 			(args
 				(p-assign @68-12-68-15 (ident "num") (id 195)))
 			(e-block @68-17-78-2
 				(s-let @69-2-69-11
 					(p-assign @69-2-69-7 (ident "other") (id 196))
 					(e-int @69-10-69-11 (value "1") (id 197)))
-				(e-if @70-2-78-2 (cond-var 0) (branch-var 0)
+				(e-if @70-2-78-2 (branch-var 211)
 					(if-branches
 						(if-branch
 							(e-lookup-local @70-5-70-8
@@ -1258,61 +1258,61 @@ NO CHANGE
 								(e-runtime-error (tag "not_implemented")))
 							(e-lookup-local @76-3-76-8
 								(pattern (id 196))))))))
-		(annotation @68-1-68-8 (signature 221) (id 222)
+		(annotation @68-1-68-8 (signature 220) (id 221)
 			(declared-type
 				(ty-fn @67-11-67-21 (effectful false)
 					(ty @67-11-67-14 (name "U64"))
 					(ty @67-18-67-21 (name "U64"))))))
-	(d-let (id 233)
-		(p-assign @80-1-80-11 (ident "match_time") (id 224))
-		(e-lambda @80-14-140-7 (id 230)
+	(d-let (id 232)
+		(p-assign @80-1-80-11 (ident "match_time") (id 223))
+		(e-lambda @80-14-140-7 (id 229)
 			(args
-				(p-assign @81-2-81-3 (ident "a") (id 225))
-				(p-assign @82-2-82-3 (ident "b") (id 226)))
+				(p-assign @81-2-81-3 (ident "a") (id 224))
+				(p-assign @82-2-82-3 (ident "b") (id 225)))
 			(e-runtime-error (tag "not_implemented"))))
-	(d-let (id 441)
-		(p-assign @144-1-144-6 (ident "main!") (id 242))
-		(e-lambda @144-9-196-2 (id 434)
+	(d-let (id 440)
+		(p-assign @144-1-144-6 (ident "main!") (id 241))
+		(e-lambda @144-9-196-2 (id 433)
 			(args
-				(p-underscore @144-10-144-11 (id 243)))
+				(p-underscore @144-10-144-11 (id 242)))
 			(e-block @144-13-196-2
 				(s-let @145-2-145-17
-					(p-assign @145-2-145-7 (ident "world") (id 244))
-					(e-string @145-10-145-17 (id 246)
+					(p-assign @145-2-145-7 (ident "world") (id 243))
+					(e-string @145-10-145-17 (id 245)
 						(e-literal @145-11-145-16 (string "World"))))
 				(s-var @146-2-147-8
-					(p-assign @146-2-147-8 (ident "number") (id 249))
-					(e-int @146-15-146-18 (value "123") (id 248)))
+					(p-assign @146-2-147-8 (ident "number") (id 248))
+					(e-int @146-15-146-18 (value "123") (id 247)))
 				(s-let @148-2-148-12
-					(p-assign @148-2-148-5 (ident "tag") (id 253))
-					(e-tag @148-8-148-12 (ext-var 0) (name "Blue") (args "TODO") (id 255)))
+					(p-assign @148-2-148-5 (ident "tag") (id 252))
+					(e-tag @148-8-148-12 (ext-var 0) (name "Blue") (args "TODO") (id 254)))
 				(s-expr @154-2-155-12
 					(e-runtime-error (tag "not_implemented")))
 				(s-expr @155-2-158-11
 					(e-call @155-2-157-3
 						(e-lookup-local @155-2-155-12
-							(pattern (id 224)))
+							(pattern (id 223)))
 						(e-runtime-error (tag "not_implemented"))))
 				(s-expr @158-2-162-7
 					(e-call @158-2-161-3
 						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-runtime-error (tag "not_implemented"))))
 				(s-let @164-2-164-31
-					(p-assign @164-2-164-18 (ident "tag_with_payload") (id 277))
-					(e-call @164-21-164-31 (id 282)
+					(p-assign @164-2-164-18 (ident "tag_with_payload") (id 276))
+					(e-call @164-21-164-31 (id 281)
 						(e-tag @164-21-164-23 (ext-var 0) (name "Ok") (args "TODO"))
 						(e-lookup-local @164-24-164-30
-							(pattern (id 249)))))
+							(pattern (id 248)))))
 				(s-let @165-2-165-34
-					(p-assign @165-2-165-14 (ident "interpolated") (id 284))
-					(e-string @165-17-165-34 (id 288)
+					(p-assign @165-2-165-14 (ident "interpolated") (id 283))
+					(e-string @165-17-165-34 (id 287)
 						(e-literal @165-18-165-25 (string "Hello, "))
 						(e-lookup-local @165-27-165-32
-							(pattern (id 244)))
+							(pattern (id 243)))
 						(e-literal @165-33-165-33 (string ""))))
 				(s-let @166-2-173-3
-					(p-assign @166-2-166-6 (ident "list") (id 290))
-					(e-list @166-9-173-3 (elem-var 298) (id 299)
+					(p-assign @166-2-166-6 (ident "list") (id 289))
+					(e-list @166-9-173-3 (elem-var 297) (id 298)
 						(elems
 							(e-call @167-3-170-4
 								(e-lookup-local @167-3-167-10
@@ -1321,8 +1321,8 @@ NO CHANGE
 							(e-int @171-3-171-6 (value "456"))
 							(e-int @172-3-172-6 (value "789")))))
 				(s-let @178-2-178-71
-					(p-assign @178-2-178-8 (ident "record") (id 303))
-					(e-record @178-11-178-71 (ext-var 320) (id 321)
+					(p-assign @178-2-178-8 (ident "record") (id 302))
+					(e-record @178-11-178-71 (ext-var 319) (id 320)
 						(fields
 							(field (name "foo")
 								(e-int @178-18-178-21 (value "123")))
@@ -1331,40 +1331,40 @@ NO CHANGE
 									(e-literal @178-29-178-34 (string "Hello"))))
 							(field (name "baz")
 								(e-lookup-local @178-42-178-45
-									(pattern (id 253))))
+									(pattern (id 252))))
 							(field (name "qux")
 								(e-call @178-52-178-61
 									(e-tag @178-52-178-54 (ext-var 0) (name "Ok") (args "TODO"))
 									(e-lookup-local @178-55-178-60
-										(pattern (id 244)))))
+										(pattern (id 243)))))
 							(field (name "punned")
 								(e-runtime-error (tag "ident_not_in_scope"))))))
 				(s-let @179-2-179-68
-					(p-assign @179-2-179-7 (ident "tuple") (id 328))
-					(e-tuple @179-10-179-68 (id 347)
+					(p-assign @179-2-179-7 (ident "tuple") (id 327))
+					(e-tuple @179-10-179-68 (id 346)
 						(elems
 							(e-int @179-11-179-14 (value "123"))
 							(e-string @179-16-179-23
 								(e-literal @179-17-179-22 (string "World")))
 							(e-lookup-local @179-25-179-28
-								(pattern (id 253)))
+								(pattern (id 252)))
 							(e-call @179-30-179-39
 								(e-tag @179-30-179-32 (ext-var 0) (name "Ok") (args "TODO"))
 								(e-lookup-local @179-33-179-38
-									(pattern (id 244))))
+									(pattern (id 243))))
 							(e-tuple @179-41-179-56
 								(elems
 									(e-runtime-error (tag "ident_not_in_scope"))
 									(e-lookup-local @179-50-179-55
-										(pattern (id 328)))))
-							(e-list @179-58-179-67 (elem-var 345)
+										(pattern (id 327)))))
+							(e-list @179-58-179-67 (elem-var 344)
 								(elems
 									(e-int @179-59-179-60 (value "1"))
 									(e-int @179-62-179-63 (value "2"))
 									(e-int @179-65-179-66 (value "3")))))))
 				(s-let @180-2-187-3
-					(p-assign @180-2-180-17 (ident "multiline_tuple") (id 349))
-					(e-tuple @180-20-187-3 (id 369)
+					(p-assign @180-2-180-17 (ident "multiline_tuple") (id 348))
+					(e-tuple @180-20-187-3 (id 368)
 						(elems
 							(e-int @181-3-181-6 (value "123"))
 							(e-string @182-3-182-10
@@ -1373,20 +1373,20 @@ NO CHANGE
 							(e-call @184-3-184-12
 								(e-tag @184-3-184-5 (ext-var 0) (name "Ok") (args "TODO"))
 								(e-lookup-local @184-6-184-11
-									(pattern (id 244))))
+									(pattern (id 243))))
 							(e-tuple @185-3-185-18
 								(elems
 									(e-runtime-error (tag "ident_not_in_scope"))
 									(e-lookup-local @185-12-185-17
-										(pattern (id 328)))))
-							(e-list @186-3-186-12 (elem-var 367)
+										(pattern (id 327)))))
+							(e-list @186-3-186-12 (elem-var 366)
 								(elems
 									(e-int @186-4-186-5 (value "1"))
 									(e-int @186-7-186-8 (value "2"))
 									(e-int @186-10-186-11 (value "3")))))))
 				(s-let @188-2-189-23
-					(p-assign @188-2-188-15 (ident "bin_op_result") (id 371))
-					(e-binop @188-18-189-23 (op "or") (id 401)
+					(p-assign @188-2-188-15 (ident "bin_op_result") (id 370))
+					(e-binop @188-18-189-23 (op "or") (id 400)
 						(e-binop @188-18-188-74 (op "or")
 							(e-binop @188-18-188-43 (op "gt")
 								(e-binop @188-18-188-34 (op "null_coalesce")
@@ -1414,8 +1414,8 @@ NO CHANGE
 								(e-int @188-81-188-82 (value "3"))
 								(e-int @188-85-188-86 (value "5"))))))
 				(s-let @189-2-190-8
-					(p-assign @189-2-189-23 (ident "static_dispatch_style") (id 403))
-					(e-dot-access @189-26-190-8 (field "unknown") (id 408)
+					(p-assign @189-2-189-23 (ident "static_dispatch_style") (id 402))
+					(e-dot-access @189-26-190-8 (field "unknown") (id 407)
 						(receiver
 							(e-dot-access @189-26-189-110 (field "unknown")
 								(receiver
@@ -1426,15 +1426,15 @@ NO CHANGE
 					(e-runtime-error (tag "not_implemented")))
 				(e-call @191-2-195-3
 					(e-lookup-external
-						(ext-decl @191-2-191-14 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value") (type-var 413)))
+						(ext-decl @191-2-191-14 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value") (type-var 412)))
 					(e-string @192-3-194-18
 						(e-literal @192-4-192-14 (string "How about "))
 						(e-call @193-4-193-21
 							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-lookup-local @193-14-193-20
-								(pattern (id 249))))
+								(pattern (id 248))))
 						(e-literal @194-4-194-17 (string " as a string?"))))))
-		(annotation @144-1-144-6 (signature 439) (id 440)
+		(annotation @144-1-144-6 (signature 438) (id 439)
 			(declared-type
 				(ty-fn @143-9-143-38 (effectful false)
 					(ty-apply @143-9-143-21 (symbol "List")
@@ -1442,13 +1442,13 @@ NO CHANGE
 					(ty-apply @143-25-143-38 (symbol "Result")
 						(ty-record @143-32-143-34)
 						(ty-underscore @143-36-143-37))))))
-	(d-let (id 449)
-		(p-assign @199-1-199-6 (ident "empty") (id 443))
-		(e-empty_record @199-9-199-11 (id 444))
-		(annotation @199-1-199-6 (signature 447) (id 448)
+	(d-let (id 448)
+		(p-assign @199-1-199-6 (ident "empty") (id 442))
+		(e-empty_record @199-9-199-11 (id 443))
+		(annotation @199-1-199-6 (signature 446) (id 447)
 			(declared-type
 				(ty-record @198-9-198-11))))
-	(s-type-decl @22-1-23-6 (id 84)
+	(s-type-decl @22-1-23-6 (id 85)
 		(ty-header @22-1-22-10 (name "Map")
 			(ty-args
 				(ty-var @22-5-22-6 (name "a"))
@@ -1462,7 +1462,7 @@ NO CHANGE
 					(ty-var @22-28-22-29 (name "b"))))
 			(ty-apply @22-34-22-41 (symbol "List")
 				(ty-var @22-39-22-40 (name "b")))))
-	(s-type-decl @23-1-36-4 (id 97)
+	(s-type-decl @23-1-36-4 (id 98)
 		(ty-header @23-1-26-2 (name "MapML")
 			(ty-args
 				(ty-var @24-2-24-3 (name "a"))
@@ -1476,17 +1476,17 @@ NO CHANGE
 					(ty-var @31-9-31-10 (name "b"))))
 			(ty-apply @32-4-34-5 (symbol "List")
 				(ty-var @33-5-33-6 (name "b")))))
-	(s-type-decl @36-1-38-13 (id 104)
+	(s-type-decl @36-1-38-13 (id 105)
 		(ty-header @36-1-36-4 (name "Foo"))
 		(ty-tuple @36-7-36-17
 			(ty @36-8-36-11 (name "Bar"))
 			(ty @36-13-36-16 (name "Baz"))))
-	(s-type-decl @38-1-43-5 (id 111)
+	(s-type-decl @38-1-43-5 (id 112)
 		(ty-header @38-1-38-13 (name "FooMultiline"))
 		(ty-tuple @38-16-41-2
 			(ty @39-2-39-5 (name "Bar"))
 			(ty @40-2-40-5 (name "Baz"))))
-	(s-type-decl @43-1-44-7 (id 121)
+	(s-type-decl @43-1-44-7 (id 122)
 		(ty-header @43-1-43-8 (name "Some")
 			(ty-args
 				(ty-var @43-6-43-7 (name "a"))))
@@ -1496,7 +1496,7 @@ NO CHANGE
 					(ty-var @43-22-43-23 (name "a"))))
 			(field (field "bar")
 				(ty @43-32-43-41 (name "Something")))))
-	(s-type-decl @44-1-49-14 (id 131)
+	(s-type-decl @44-1-49-14 (id 132)
 		(ty-header @44-1-44-10 (name "SomeMl")
 			(ty-args
 				(ty-var @44-8-44-9 (name "a"))))
@@ -1506,7 +1506,7 @@ NO CHANGE
 					(ty-var @45-11-45-12 (name "a"))))
 			(field (field "bar")
 				(ty @46-8-46-17 (name "Something")))))
-	(s-type-decl @49-1-56-6 (id 141)
+	(s-type-decl @49-1-56-6 (id 142)
 		(ty-header @49-1-49-17 (name "SomeMultiline")
 			(ty-args
 				(ty-var @49-15-49-16 (name "a"))))
@@ -1516,7 +1516,7 @@ NO CHANGE
 					(ty-var @52-7-52-8 (name "a"))))
 			(field (field "bar")
 				(ty @53-8-53-17 (name "Something")))))
-	(s-type-decl @56-1-58-15 (id 148)
+	(s-type-decl @56-1-58-15 (id 149)
 		(ty-header @56-1-56-9 (name "Maybe")
 			(ty-args
 				(ty-var @56-7-56-8 (name "a"))))
@@ -1524,7 +1524,7 @@ NO CHANGE
 			(ty-apply @56-13-56-20 (symbol "Some")
 				(ty-var @56-18-56-19 (name "a")))
 			(ty @56-22-56-26 (name "None"))))
-	(s-type-decl @58-1-63-9 (id 155)
+	(s-type-decl @58-1-63-9 (id 156)
 		(ty-header @58-1-58-18 (name "MaybeMultiline")
 			(ty-args
 				(ty-var @58-16-58-17 (name "a"))))
@@ -1532,7 +1532,7 @@ NO CHANGE
 			(ty-apply @59-2-59-9 (symbol "Some")
 				(ty-var @59-7-59-8 (name "a")))
 			(ty @60-2-60-6 (name "None"))))
-	(s-type-decl @63-1-65-16 (id 164)
+	(s-type-decl @63-1-65-16 (id 165)
 		(ty-header @63-1-63-12 (name "SomeFunc")
 			(ty-args
 				(ty-var @63-10-63-11 (name "a"))))
@@ -1542,36 +1542,36 @@ NO CHANGE
 			(ty-var @63-25-63-26 (name "a"))
 			(ty-apply @63-30-63-38 (symbol "Maybe")
 				(ty-var @63-36-63-37 (name "a")))))
-	(s-import @4-1-4-42 (module "pf.Stdout") (qualifier "pf") (id 167)
+	(s-import @4-1-4-42 (module "pf.Stdout") (qualifier "pf") (id 168)
 		(exposes
 			(exposed (name "line!") (wildcard false))
 			(exposed (name "write!") (wildcard false))))
 	(s-import @6-1-12-4 (module "pf # Comment after qualifier
-		.StdoutMultiline") (qualifier "pf") (id 172)
+		.StdoutMultiline") (qualifier "pf") (id 173)
 		(exposes
 			(exposed (name "line!") (wildcard false))
 			(exposed (name "write!") (wildcard false))))
-	(s-import @14-1-14-82 (module "pkg.Something") (qualifier "pkg") (id 176)
+	(s-import @14-1-14-82 (module "pkg.Something") (qualifier "pkg") (id 177)
 		(exposes
 			(exposed (name "func") (alias "function") (wildcard false))
 			(exposed (name "Type") (alias "ValueCategory") (wildcard false))
 			(exposed (name "Custom") (wildcard true))))
-	(s-import @16-1-16-27 (module "BadName") (alias "GoodName") (id 177)
+	(s-import @16-1-16-27 (module "BadName") (alias "GoodName") (id 178)
 		(exposes))
-	(s-import @17-1-20-20 (module "BadNameMultiline") (alias "GoodNameMultiline") (id 178)
+	(s-import @17-1-20-20 (module "BadNameMultiline") (alias "GoodNameMultiline") (id 179)
 		(exposes)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "add_one_oneline") (def_var 190) (type "* ? *"))
-		(d_assign (name "add_one") (def_var 223) (type "U64 -> U64"))
-		(d_assign (name "match_time") (def_var 233) (type "*, * ? Error"))
-		(d_assign (name "main!") (def_var 441) (type "List -> Result"))
-		(d_assign (name "empty") (def_var 449) (type "{  }")))
+		(d_assign (name "add_one_oneline") (def_var 190) (type "* ? Num(*)"))
+		(d_assign (name "add_one") (def_var 222) (type "U64 -> U64"))
+		(d_assign (name "match_time") (def_var 232) (type "*, * ? Error"))
+		(d_assign (name "main!") (def_var 440) (type "List -> Result"))
+		(d_assign (name "empty") (def_var 448) (type "{  }")))
 	(expressions
-		(expr @65-19-67-8 (type "* ? *"))
+		(expr @65-19-67-8 (type "* ? Num(*)"))
 		(expr @68-11-78-2 (type "U64 -> U64"))
 		(expr @80-14-140-7 (type "*, * ? Error"))
 		(expr @144-9-196-2 (type "List -> Result"))

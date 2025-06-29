@@ -92,25 +92,25 @@ main! = |_| {}
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 103)
-		(p-assign @6-1-6-10 (ident "printName") (id 80))
-		(e-lambda @6-13-9-2 (id 93)
+	(d-let (id 104)
+		(p-assign @6-1-6-10 (ident "printName") (id 81))
+		(e-lambda @6-13-9-2 (id 94)
 			(args
-				(p-assign @6-14-6-20 (ident "person") (id 81)))
+				(p-assign @6-14-6-20 (ident "person") (id 82)))
 			(e-block @6-22-9-2
 				(s-expr @7-5-8-11
 					(e-call @7-5-7-30
 						(e-lookup-external
-							(ext-decl @7-5-7-17 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value") (type-var 82)))
+							(ext-decl @7-5-7-17 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value") (type-var 83)))
 						(e-dot-access @7-18-7-30 (field "name")
 							(receiver
 								(e-lookup-local @7-18-7-24
-									(pattern (id 81)))))))
+									(pattern (id 82)))))))
 				(e-dot-access @8-5-9-2 (field "name")
 					(receiver
 						(e-lookup-local @8-5-8-11
-							(pattern (id 81)))))))
-		(annotation @6-1-6-10 (signature 101) (id 102)
+							(pattern (id 82)))))))
+		(annotation @6-1-6-10 (signature 102) (id 103)
 			(declared-type
 				(ty-fn @5-13-5-43 (effectful true)
 					(ty-record @5-13-5-36
@@ -119,21 +119,21 @@ main! = |_| {}
 						(field (field "age")
 							(ty @5-31-5-34 (name "U64"))))
 					(ty @5-40-5-43 (name "Str"))))))
-	(d-let (id 109)
-		(p-assign @10-1-10-6 (ident "main!") (id 104))
-		(e-lambda @10-9-10-15 (id 108)
+	(d-let (id 110)
+		(p-assign @10-1-10-6 (ident "main!") (id 105))
+		(e-lambda @10-9-10-15 (id 109)
 			(args
-				(p-underscore @10-10-10-11 (id 105)))
+				(p-underscore @10-10-10-11 (id 106)))
 			(e-empty_record @10-13-10-15)))
-	(s-import @3-1-3-17 (module "pf.Stdout") (qualifier "pf") (id 72)
+	(s-import @3-1-3-17 (module "pf.Stdout") (qualifier "pf") (id 73)
 		(exposes)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "printName") (def_var 103) (type "{ name: Str, age: U64 } => Str"))
-		(d_assign (name "main!") (def_var 109) (type "* ? {}")))
+		(d_assign (name "printName") (def_var 104) (type "{ name: Str, age: U64 } => Str"))
+		(d_assign (name "main!") (def_var 110) (type "* ? {}")))
 	(expressions
 		(expr @6-13-9-2 (type "{ name: Str, age: U64 } => Str"))
 		(expr @10-9-10-15 (type "* ? {}"))))

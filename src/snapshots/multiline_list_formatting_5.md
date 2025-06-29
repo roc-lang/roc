@@ -32,7 +32,7 @@ Int(2:3-2:4),CloseSquare(2:4-2:5),EndOfFile(2:5-2:5),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-list @1-1-2-5 (elem-var 75) (id 76)
+(e-list @1-1-2-5 (elem-var 76) (id 77)
 	(elems
 		(e-int @1-2-1-3 (value "1"))
 		(e-int @1-5-1-6 (value "2"))
@@ -40,5 +40,5 @@ Int(2:3-2:4),CloseSquare(2:4-2:5),EndOfFile(2:5-2:5),
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 76) (type "List(Num(*))"))
+(expr (id 77) (type "List(Num(*))"))
 ~~~

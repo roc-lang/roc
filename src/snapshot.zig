@@ -3,6 +3,7 @@ const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const base = @import("base.zig");
 const canonicalize = @import("check/canonicalize.zig");
+const types_mod = @import("types.zig");
 const Solver = @import("check/check_types.zig");
 const CIR = canonicalize.CIR;
 const parse = @import("check/parse.zig");
@@ -10,6 +11,7 @@ const fmt = @import("fmt.zig");
 const types = @import("types.zig");
 const reporting = @import("reporting.zig");
 const tokenize = @import("check/parse/tokenize.zig");
+const SExpr = @import("base/SExpr.zig");
 
 const AST = parse.AST;
 const Report = reporting.Report;
@@ -465,6 +467,29 @@ const DualOutput = struct {
             .gpa = gpa,
         };
     }
+
+    fn begin_section(self: *DualOutput, name: []const u8) !void {
+        try self.md_writer.print("# {s}\n", .{name});
+        try self.html_writer.print(
+            \\        <div class="section" data-section="{s}">
+            \\            <div class="section-content">
+        , .{name});
+    }
+
+    fn end_section(self: *DualOutput) !void {
+        try self.html_writer.writeAll(
+            \\            </div>
+            \\        </div>
+        );
+    }
+
+    fn begin_code_block(self: *DualOutput, language: []const u8) !void {
+        try self.md_writer.print("~~~{s}\n", .{language});
+    }
+
+    fn end_code_block(self: *DualOutput) !void {
+        try self.md_writer.writeAll("~~~\n");
+    }
 };
 
 /// Helper function to escape HTML characters
@@ -481,17 +506,13 @@ fn escapeHtmlChar(writer: anytype, char: u8) !void {
 
 /// Generate META section for both markdown and HTML
 fn generateMetaSection(output: *DualOutput, content: *const Content) !void {
-    // Markdown META section
-    try output.md_writer.writeAll(Section.META);
+    try output.begin_section("META");
+    try output.begin_code_block("ini");
     try content.meta.format(output.md_writer);
     try output.md_writer.writeAll("\n");
-    try output.md_writer.writeAll(Section.SECTION_END);
 
     // HTML META section
     try output.html_writer.writeAll(
-        \\        <div class="section">
-        \\            <div class="section-header">META</div>
-        \\            <div class="section-content">
         \\                <div class="meta-info">
         \\                    <p><strong>Description:</strong>
     );
@@ -501,27 +522,23 @@ fn generateMetaSection(output: *DualOutput, content: *const Content) !void {
     try output.html_writer.writeAll(
         \\</p>
         \\                </div>
-        \\            </div>
-        \\        </div>
         \\
     );
+
+    try output.end_code_block();
+    try output.end_section();
 }
 
 /// Generate SOURCE section for both markdown and HTML
 fn generateSourceSection(output: *DualOutput, content: *const Content, parse_ast: *AST) !void {
-    // Markdown SOURCE section
-    try output.md_writer.writeAll(Section.SOURCE);
+    try output.begin_section("SOURCE");
+    try output.begin_code_block("roc");
     try output.md_writer.writeAll(content.source);
     try output.md_writer.writeAll("\n");
-    try output.md_writer.writeAll(Section.SECTION_END);
 
     // HTML SOURCE section with syntax highlighting
     try output.html_writer.writeAll(
-        \\        <div class="section">
-        \\            <div class="section-header">SOURCE</div>
-        \\            <div class="section-content">
         \\                <div class="source-code">
-        \\                    <div id="source-content">
     );
     // Apply syntax highlighting by processing tokens in order
     var tokenizedBuffer = parse_ast.tokens;
@@ -530,7 +547,7 @@ fn generateSourceSection(output: *DualOutput, content: *const Content, parse_ast
     var line_num: u32 = 1;
     var col_num: u32 = 1;
 
-    try output.html_writer.print("                        <span class=\"source-line\" data-line=\"{d}\">", .{line_num});
+    try output.html_writer.print("<span class=\"source-line\" data-line=\"{d}\">", .{line_num});
 
     for (tokens, 0..) |tok, i| {
         const region = tokenizedBuffer.resolve(@intCast(i));
@@ -539,17 +556,17 @@ fn generateSourceSection(output: *DualOutput, content: *const Content, parse_ast
         while (source_offset < region.start.offset) {
             const char = content.source[source_offset];
             if (char == '\n') {
-                try output.html_writer.writeAll("</span>\n");
+                try output.html_writer.writeAll("\n</span>");
                 line_num += 1;
                 col_num = 1;
-                try output.html_writer.print("                        <span class=\"source-line\" data-line=\"{d}\">", .{line_num});
+                try output.html_writer.print("<span class=\"source-line\" data-line=\"{d}\">", .{line_num});
             } else if (char == ' ') {
-                // Render space as &nbsp; to preserve indentation
-                try output.html_writer.writeAll("&nbsp;");
+                // Render space as regular space for wrapping
+                try output.html_writer.writeAll(" ");
                 col_num += 1;
             } else if (char == '\t') {
-                // Render tab as 4 non-breaking spaces (or adjust as needed)
-                try output.html_writer.writeAll("&nbsp;&nbsp;&nbsp;&nbsp;");
+                // Render tab as 4 spaces
+                try output.html_writer.writeAll("    ");
                 col_num += 4;
             } else {
                 try escapeHtmlChar(output.html_writer, char);
@@ -571,10 +588,10 @@ fn generateSourceSection(output: *DualOutput, content: *const Content, parse_ast
 
         for (token_text) |char| {
             if (char == ' ') {
-                try output.html_writer.writeAll("&nbsp;");
+                try output.html_writer.writeAll(" ");
                 col_num += 1;
             } else if (char == '\t') {
-                try output.html_writer.writeAll("&nbsp;&nbsp;&nbsp;&nbsp;");
+                try output.html_writer.writeAll("    ");
                 col_num += 4;
             } else {
                 try escapeHtmlChar(output.html_writer, char);
@@ -590,17 +607,17 @@ fn generateSourceSection(output: *DualOutput, content: *const Content, parse_ast
     while (source_offset < content.source.len) {
         const char = content.source[source_offset];
         if (char == '\n') {
-            try output.html_writer.writeAll("</span>\n");
+            try output.html_writer.writeAll("\n</span>");
             line_num += 1;
             col_num = 1;
             if (source_offset + 1 < content.source.len) {
-                try output.html_writer.print("                        <span class=\"source-line\" data-line=\"{d}\">", .{line_num});
+                try output.html_writer.print("<span class=\"source-line\" data-line=\"{d}\">", .{line_num});
             }
         } else if (char == ' ') {
-            try output.html_writer.writeAll("&nbsp;");
+            try output.html_writer.writeAll(" ");
             col_num += 1;
         } else if (char == '\t') {
-            try output.html_writer.writeAll("&nbsp;&nbsp;&nbsp;&nbsp;");
+            try output.html_writer.writeAll("    ");
             col_num += 4;
         } else {
             try escapeHtmlChar(output.html_writer, char);
@@ -613,24 +630,19 @@ fn generateSourceSection(output: *DualOutput, content: *const Content, parse_ast
 
     try output.html_writer.writeAll(
         \\
-        \\                    </div>
         \\                </div>
-        \\            </div>
-        \\        </div>
         \\
     );
+    try output.end_code_block();
+    try output.end_section();
 }
 
 /// Generate PROBLEMS section for both markdown and HTML
 fn generateProblemsSection(output: *DualOutput, parse_ast: *AST, can_ir: *CIR, solver: *Solver, content: *const Content, snapshot_path: []const u8, module_env: *base.ModuleEnv) !void {
-    // Markdown PROBLEMS section
-    try output.md_writer.writeAll(Section.PROBLEMS);
+    try output.begin_section("PROBLEMS");
 
     // HTML PROBLEMS section
     try output.html_writer.writeAll(
-        \\        <div class="section">
-        \\            <div class="section-header">PROBLEMS</div>
-        \\            <div class="section-content">
         \\                <div class="problems">
     );
 
@@ -751,26 +763,20 @@ fn generateProblemsSection(output: *DualOutput, parse_ast: *AST, can_ir: *CIR, s
         log("reported {} type problems", .{check_types_problem});
     }
 
-    // Don't write out section end for markdown, as the problem reports are already in markdown format.
-
     try output.html_writer.writeAll(
         \\                </div>
-        \\            </div>
-        \\        </div>
         \\
     );
+
+    try output.end_section();
 }
 
 /// Generate TOKENS section for both markdown and HTML
 fn generateTokensSection(output: *DualOutput, parse_ast: *AST, content: *const Content, module_env: *base.ModuleEnv) !void {
-    // Markdown TOKENS section
-    try output.md_writer.writeAll(Section.TOKENS);
+    try output.begin_section("TOKENS");
+    try output.begin_code_block("zig");
 
-    // HTML TOKENS section
     try output.html_writer.writeAll(
-        \\        <div class="section">
-        \\            <div class="section-header">TOKENS</div>
-        \\            <div class="section-content">
         \\                <div class="token-list">
     );
 
@@ -811,14 +817,13 @@ fn generateTokensSection(output: *DualOutput, parse_ast: *AST, content: *const C
     }
 
     try output.md_writer.writeAll("\n");
-    try output.md_writer.writeAll(Section.SECTION_END);
 
     try output.html_writer.writeAll(
         \\                </div>
-        \\            </div>
-        \\        </div>
         \\
     );
+    try output.end_code_block();
+    try output.end_section();
 }
 
 /// Generate PARSE section for both markdown and HTML
@@ -826,58 +831,55 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
     var parse_buffer = std.ArrayList(u8).init(output.gpa);
     defer parse_buffer.deinit();
 
+    // Generate S-expression node based on content type
+    var node_opt: ?SExpr = null;
+    defer if (node_opt) |*node| node.deinit(output.gpa);
+
     switch (content.meta.node_type) {
         .file => {
-            try parse_ast.toSExprStr(module_env, parse_buffer.writer().any());
+            // Inline the toSExprStr logic for file case
+            const file = parse_ast.store.getFile();
+            node_opt = file.toSExpr(module_env, parse_ast);
         },
         .header => {
             const header = parse_ast.store.getHeader(@enumFromInt(parse_ast.root_node_idx));
-            var node = header.toSExpr(module_env, parse_ast);
-            defer node.deinit(output.gpa);
-
-            node.toStringPretty(parse_buffer.writer().any());
+            node_opt = header.toSExpr(module_env, parse_ast);
         },
         .expr => {
             const expr = parse_ast.store.getExpr(@enumFromInt(parse_ast.root_node_idx));
-            var node = expr.toSExpr(module_env, parse_ast);
-            defer node.deinit(output.gpa);
-
-            node.toStringPretty(parse_buffer.writer().any());
+            node_opt = expr.toSExpr(module_env, parse_ast);
         },
         .statement => {
             const stmt = parse_ast.store.getStatement(@enumFromInt(parse_ast.root_node_idx));
-            var node = stmt.toSExpr(module_env, parse_ast);
-            defer node.deinit(output.gpa);
-
-            node.toStringPretty(parse_buffer.writer().any());
+            node_opt = stmt.toSExpr(module_env, parse_ast);
         },
     }
 
-    // Markdown PARSE section
-    try output.md_writer.writeAll(Section.PARSE);
-    try output.md_writer.writeAll(parse_buffer.items);
-    try output.md_writer.writeAll("\n");
-    try output.md_writer.writeAll(Section.SECTION_END);
+    if (node_opt) |node| {
+        // Generate markdown output
+        node.toStringPretty(parse_buffer.writer().any());
 
-    // HTML PARSE section
-    try output.html_writer.writeAll(
-        \\        <div class="section">
-        \\            <div class="section-header">PARSE</div>
-        \\            <div class="section-content">
-        \\                <pre>
-    );
+        try output.begin_section("PARSE");
+        try output.begin_code_block("clojure");
 
-    // Escape HTML in parse content
-    for (parse_buffer.items) |char| {
-        try escapeHtmlChar(output.html_writer, char);
+        try output.md_writer.writeAll(parse_buffer.items);
+        try output.md_writer.writeAll("\n");
+
+        // Generate HTML output with syntax highlighting
+        try output.html_writer.writeAll(
+            \\                <pre class="ast-parse">
+        );
+
+        node.toHtml(output.html_writer.any());
+
+        try output.html_writer.writeAll(
+            \\</pre>
+            \\
+        );
+
+        try output.end_code_block();
+        try output.end_section();
     }
-
-    try output.html_writer.writeAll(
-        \\</pre>
-        \\            </div>
-        \\        </div>
-        \\
-    );
 }
 
 /// Generate FORMATTED section for both markdown and HTML
@@ -903,17 +905,14 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
     const is_changed = !std.mem.eql(u8, formatted.items, content.source);
     const display_content = if (is_changed) formatted.items else "NO CHANGE";
 
-    // Markdown FORMATTED section
-    try output.md_writer.writeAll(Section.FORMATTED);
+    try output.begin_section("FORMATTED");
+    try output.begin_code_block("roc");
+
     try output.md_writer.writeAll(display_content);
     try output.md_writer.writeAll("\n");
-    try output.md_writer.writeAll(Section.SECTION_END);
 
     // HTML FORMATTED section
     try output.html_writer.writeAll(
-        \\        <div class="section">
-        \\            <div class="section-header">FORMATTED</div>
-        \\            <div class="section-content">
         \\                <pre>
     );
 
@@ -924,10 +923,10 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
 
     try output.html_writer.writeAll(
         \\</pre>
-        \\            </div>
-        \\        </div>
         \\
     );
+    try output.end_code_block();
+    try output.end_section();
 }
 
 /// Generate CANONICALIZE section for both markdown and HTML
@@ -937,17 +936,13 @@ fn generateCanonicalizeSection(output: *DualOutput, content: *const Content, can
 
     try can_ir.toSExprStr(module_env, canonicalized.writer().any(), maybe_expr_idx, content.source);
 
-    // Markdown CANONICALIZE section
-    try output.md_writer.writeAll(Section.CANONICALIZE);
+    try output.begin_section("CANONICALIZE");
+    try output.begin_code_block("clojure");
     try output.md_writer.writeAll(canonicalized.items);
     try output.md_writer.writeAll("\n");
-    try output.md_writer.writeAll(Section.SECTION_END);
 
     // HTML CANONICALIZE section
     try output.html_writer.writeAll(
-        \\        <div class="section">
-        \\            <div class="section-header">CANONICALIZE</div>
-        \\            <div class="section-content">
         \\                <pre>
     );
 
@@ -958,10 +953,11 @@ fn generateCanonicalizeSection(output: *DualOutput, content: *const Content, can
 
     try output.html_writer.writeAll(
         \\</pre>
-        \\            </div>
-        \\        </div>
         \\
     );
+
+    try output.end_code_block();
+    try output.end_section();
 }
 
 /// Generate TYPES section for both markdown and HTML
@@ -971,11 +967,42 @@ fn generateTypesSection(output: *DualOutput, content: *const Content, can_ir: *C
 
     try can_ir.toSexprTypesStr(solved.writer().any(), maybe_expr_idx, content.source);
 
+    try output.begin_section("TYPES");
+    try output.begin_code_block("clojure");
+    try output.md_writer.writeAll(solved.items);
+    try output.md_writer.writeAll("\n");
+
+    // HTML TYPES section
+    try output.html_writer.writeAll(
+        \\                <pre>
+    );
+
+    // Escape HTML in types content
+    for (solved.items) |char| {
+        try escapeHtmlChar(output.html_writer, char);
+    }
+
+    try output.html_writer.writeAll(
+        \\</pre>
+        \\
+    );
+    try output.end_code_block();
+    try output.end_section();
+}
+
+/// Generate TYPES section displaying types store for both markdown and HTML
+/// This is used for debugging.
+fn generateTypesStoreSection(gpa: std.mem.Allocator, output: *DualOutput, can_ir: *CIR) !void {
+    var solved = std.ArrayList(u8).init(output.gpa);
+    defer solved.deinit();
+
+    try types_mod.writers.SExprWriter.allVarsToSExprStr(solved.writer().any(), gpa, can_ir.env);
+
     // Markdown TYPES section
     try output.md_writer.writeAll(Section.TYPES);
     try output.md_writer.writeAll(solved.items);
     try output.md_writer.writeAll("\n");
-    try output.md_writer.writeAll(Section.SECTION_END);
+    try output.md_writer.writeAll(Section.SECTION_END[0 .. Section.SECTION_END.len - 1]);
 
     // HTML TYPES section
     try output.html_writer.writeAll(
@@ -1013,436 +1040,64 @@ fn generateHtmlWrapper(output: *DualOutput, content: *const Content) !void {
     try output.html_writer.writeAll(
         \\</title>
         \\    <style>
-        \\        body { font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace; margin: 20px; background: #fafafa; }
-        \\        .container { max-width: 1200px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        \\        .section { margin: 20px 0; border: 1px solid #e0e0e0; border-radius: 4px; }
-        \\        .section-header { background: #f5f5f5; padding: 10px 15px; border-bottom: 1px solid #e0e0e0; font-weight: bold; color: #333; }
-        \\        .section-content { padding: 15px; }
-        \\        .source-code { background: #f8f8f8; border: 1px solid #e8e8e8; border-radius: 4px; padding: 12px; position: relative; }
-        \\        .source-line { display: block; line-height: 1.4; position: relative; }
-        \\        .char { cursor: pointer; position: relative; }
-        \\        .char.highlighted { background-color: #ffffcc; outline: 2px solid #ffd700; }
-        \\        .token-list .token-item { padding: 2px 4px; margin: 1px; border-radius: 2px; cursor: pointer; display: inline-block; font-size: 0.9em; }
-        \\        .token-item.highlighted { background-color: #e3f2fd; outline: 1px solid #2196f3; }
         \\
-        \\        /* Source token highlighting - higher specificity */
-        \\        #source-content span.highlighted { background-color: #ffffcc !important; outline: 2px solid #ffd700 !important; }
-        \\        #source-content span[data-token-id] { cursor: pointer; }
-        \\        #source-content span[data-token-id]:hover { background-color: #f0f0f0; }
-        \\        .problems { background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 4px; padding: 10px; }
-        \\        .meta-info { background: #e8f4fd; border: 1px solid #bee5eb; border-radius: 4px; padding: 10px; }
-        \\        .meta-info strong { color: #0c5460; }
-        \\
-        \\        /* Syntax highlighting */
-        \\        .token-keyword { color: #0000ff; font-weight: bold; }
-        \\        .token-identifier { color: #000000; }
-        \\        .token-string { color: #008000; }
-        \\        .token-number { color: #ff8c00; }
-        \\        .token-operator { color: #800080; }
-        \\        .token-bracket { color: #808080; font-weight: bold; }
-        \\        .token-punctuation { color: #808080; }
-        \\        .token-comment { color: #008000; font-style: italic; }
-        \\        .token-default { color: #000000; }
+    );
+    try output.html_writer.writeAll(@embedFile("snapshot.css"));
+    try output.html_writer.writeAll(
         \\    </style>
         \\</head>
         \\<body>
-        \\    <div class="container">
-        \\        <h1>Roc Snapshot:
+        \\    <!-- Two-column layout (main and only view) -->
+        \\    <div class="two-column-layout">
+        \\        <div class="left-pane">
+        \\            <div class="pane-header">
+        \\                <select class="section-dropdown" id="left-selector" onchange="switchLeftPane()">
+        \\                    <option value="META">META</option>
+        \\                    <option value="SOURCE" selected>SOURCE</option>
+        \\                </select>
+        \\            </div>
+        \\            <div class="pane-content" id="left-pane-content">
+        \\                <!-- Left pane content will be shown here -->
+        \\            </div>
+        \\        </div>
+        \\        <div class="right-pane">
+        \\            <div class="pane-header">
+        \\                <select class="section-dropdown" id="right-selector" onchange="switchRightPane()">
+        \\                    <option value="TOKENS" selected>TOKENS</option>
+        \\                    <option value="PARSE">PARSE</option>
+        \\                    <option value="FORMATTED">FORMATTED</option>
+        \\                    <option value="CANONICALIZE">CANONICALIZE</option>
+        \\                    <option value="TYPES">TYPES</option>
+        \\                </select>
+        \\            </div>
+        \\            <div class="pane-content" id="right-pane-content">
+        \\                <!-- Right pane content will be shown here -->
+        \\            </div>
+        \\        </div>
+        \\    </div>
+        \\
+        \\    <!-- Hidden sections for data storage -->
+        \\    <div id="data-sections" style="display: none;">
     );
-    try output.html_writer.writeAll(content.meta.description);
-    try output.html_writer.writeAll("</h1>\n");
 }
 
 /// Generate HTML closing tags and JavaScript
 fn generateHtmlClosing(output: *DualOutput) !void {
-    // JavaScript for interactivity
+    // Close data sections container and add JavaScript
     try output.html_writer.writeAll(
-        \\        <script>
-        \\            // Token highlighting functionality
-        \\            document.addEventListener('DOMContentLoaded', function() {
-        \\                const tokenItems = document.querySelectorAll('.token-item');
-        \\                const sourceTokens = document.querySelectorAll('#source-content [data-token-id]');
-        \\
-        \\                // Token list -> Source highlighting
-        \\                tokenItems.forEach(tokenItem => {
-        \\                    tokenItem.addEventListener('mouseenter', function() {
-        \\                        const tokenId = this.dataset.tokenId;
-        \\
-        \\                        // Highlight this token in the list
-        \\                        this.classList.add('highlighted');
-        \\
-        \\                        // Find and highlight corresponding token in source
-        \\                        const sourceToken = document.querySelector(`#source-content [data-token-id="${tokenId}"]`);
-        \\                        if (sourceToken) {
-        \\                            sourceToken.classList.add('highlighted');
-        \\                        }
-        \\                    });
-        \\
-        \\                    tokenItem.addEventListener('mouseleave', function() {
-        \\                        // Remove highlights
-        \\                        this.classList.remove('highlighted');
-        \\                        sourceTokens.forEach(token => token.classList.remove('highlighted'));
-        \\                    });
-        \\                });
-        \\
-        \\                // Source -> Token list highlighting
-        \\                sourceTokens.forEach(sourceToken => {
-        \\                    sourceToken.addEventListener('mouseenter', function() {
-        \\                        const tokenId = this.dataset.tokenId;
-        \\
-        \\                        // Highlight this token in the source
-        \\                        this.classList.add('highlighted');
-        \\
-        \\                        // Find and highlight corresponding token in the list
-        \\                        const tokenItem = document.querySelector(`.token-item[data-token-id="${tokenId}"]`);
-        \\                        if (tokenItem) {
-        \\                            tokenItem.classList.add('highlighted');
-        \\                        }
-        \\                    });
-        \\
-        \\                    sourceToken.addEventListener('mouseleave', function() {
-        \\                        // Remove highlights
-        \\                        this.classList.remove('highlighted');
-        \\                        tokenItems.forEach(token => token.classList.remove('highlighted'));
-        \\                    });
-        \\                });
-        \\            });
-        \\        </script>
         \\    </div>
+        \\
+        \\    <script>
+        \\
+    );
+    // Embed snapshot.js directly into the HTML
+    try output.html_writer.writeAll(@embedFile("snapshot.js"));
+    try output.html_writer.writeAll(
+        \\    </script>
         \\</body>
         \\</html>
-    );
-}
-
-fn generateHtmlVersion(gpa: Allocator, snapshot_path: []const u8, content: *const Content, parse_ast: *AST, module_env: *base.ModuleEnv) !void {
-    // Convert .md path to .html path
-    const html_path = blk: {
-        if (std.mem.endsWith(u8, snapshot_path, ".md")) {
-            const base_path = snapshot_path[0 .. snapshot_path.len - 3];
-            break :blk try std.fmt.allocPrint(gpa, "{s}.html", .{base_path});
-        } else {
-            break :blk try std.fmt.allocPrint(gpa, "{s}.html", .{snapshot_path});
-        }
-    };
-    defer gpa.free(html_path);
-
-    var html_buffer = std.ArrayList(u8).init(gpa);
-    defer html_buffer.deinit();
-
-    var html_writer = html_buffer.writer();
-
-    // Write HTML document structure
-    try html_writer.writeAll(
-        \\<!DOCTYPE html>
-        \\<html lang="en">
-        \\<head>
-        \\    <meta charset="UTF-8">
-        \\    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        \\    <title>Roc Snapshot:
-    );
-    try html_writer.writeAll(content.meta.description);
-    try html_writer.writeAll(
-        \\</title>
-        \\    <style>
-        \\        body { font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace; margin: 20px; background: #fafafa; }
-        \\        .container { max-width: 1200px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        \\        .section { margin: 20px 0; border: 1px solid #e0e0e0; border-radius: 4px; }
-        \\        .section-header { background: #f5f5f5; padding: 10px 15px; border-bottom: 1px solid #e0e0e0; font-weight: bold; color: #333; }
-        \\        .section-content { padding: 15px; }
-        \\        .source-code { background: #f8f8f8; border: 1px solid #e8e8e8; border-radius: 4px; padding: 12px; position: relative; }
-        \\        .source-line { display: block; line-height: 1.4; position: relative; }
-        \\        .char { cursor: pointer; position: relative; }
-        \\        .char.highlighted { background-color: #ffffcc; outline: 2px solid #ffd700; }
-        \\        .token-list .token-item { padding: 2px 4px; margin: 1px; border-radius: 2px; cursor: pointer; display: inline-block; font-size: 0.9em; }
-        \\        .token-item.highlighted { background-color: #e3f2fd; outline: 1px solid #2196f3; }
-        \\
-        \\        /* Source token highlighting - higher specificity */
-        \\        #source-content span.highlighted { background-color: #ffffcc !important; outline: 2px solid #ffd700 !important; }
-        \\        #source-content span[data-token-id] { cursor: pointer; }
-        \\        #source-content span[data-token-id]:hover { background-color: #f0f0f0; }
-        \\        .problems { background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 4px; padding: 10px; }
-        \\        .meta-info { background: #e8f4fd; border: 1px solid #bee5eb; border-radius: 4px; padding: 10px; }
-        \\        .meta-info strong { color: #0c5460; }
-        \\
-        \\        /* Syntax highlighting */
-        \\        .token-keyword { color: #0000ff; font-weight: bold; }
-        \\        .token-identifier { color: #000000; }
-        \\        .token-string { color: #008000; }
-        \\        .token-number { color: #ff8c00; }
-        \\        .token-operator { color: #800080; }
-        \\        .token-bracket { color: #808080; font-weight: bold; }
-        \\        .token-punctuation { color: #808080; }
-        \\        .token-comment { color: #008000; font-style: italic; }
-        \\        .token-default { color: #000000; }
-        \\    </style>
-        \\</head>
-        \\<body>
-        \\    <div class="container">
-        \\        <h1>Roc Snapshot:
-    );
-    try html_writer.writeAll(content.meta.description);
-    try html_writer.writeAll("</h1>\n");
-
-    // META section
-    try html_writer.writeAll(
-        \\        <div class="section">
-        \\            <div class="section-header">META</div>
-        \\            <div class="section-content">
-        \\                <div class="meta-info">
-        \\                    <p><strong>Description:</strong>
-    );
-    try html_writer.writeAll(content.meta.description);
-    try html_writer.writeAll("</p>\n                    <p><strong>Type:</strong> ");
-    try html_writer.writeAll(content.meta.node_type.toString());
-    try html_writer.writeAll(
-        \\</p>
-        \\                </div>
-        \\            </div>
-        \\        </div>
         \\
     );
-
-    // SOURCE section with syntax highlighting
-    try html_writer.writeAll(
-        \\        <div class="section">
-        \\            <div class="section-header">SOURCE</div>
-        \\            <div class="section-content">
-        \\                <div class="source-code">
-        \\                    <div id="source-content">
-    );
-
-    // Apply syntax highlighting by processing tokens in order
-    var tokenizedBuffer = parse_ast.tokens;
-    const tokens = tokenizedBuffer.tokens.items(.tag);
-    var source_offset: u32 = 0;
-    var line_num: u32 = 1;
-    var col_num: u32 = 1;
-
-    try html_writer.print("                        <span class=\"source-line\" data-line=\"{d}\">", .{line_num});
-
-    for (tokens, 0..) |tok, i| {
-        const region = tokenizedBuffer.resolve(@intCast(i));
-        const info = try module_env.calcRegionInfo(content.source, region.start.offset, region.end.offset);
-
-        // Output any characters between last token and this token (whitespace, etc.)
-        while (source_offset < region.start.offset) {
-            const char = content.source[source_offset];
-            if (char == '\n') {
-                try html_writer.writeAll("</span>\n");
-                line_num += 1;
-                col_num = 1;
-                try html_writer.print("                        <span class=\"source-line\" data-line=\"{d}\">", .{line_num});
-            } else {
-                try escapeHtmlChar(html_writer, char);
-                col_num += 1;
-            }
-            source_offset += 1;
-        }
-
-        // Skip newline tokens since we handle newlines in whitespace above
-        if (tok == .Newline) {
-            continue;
-        }
-
-        // Output the token with syntax highlighting
-        const category = tokenToCategory(tok);
-        const token_text = content.source[region.start.offset..region.end.offset];
-
-        try html_writer.print("<span class=\"{s}\" data-token-id=\"{d}\">", .{ category.toCssClass(), i });
-
-        for (token_text) |char| {
-            try escapeHtmlChar(html_writer, char);
-        }
-
-        try html_writer.writeAll("</span>");
-        source_offset = region.end.offset;
-        col_num = @intCast(info.end_col_idx + 1);
-    }
-
-    // Output any remaining characters
-    while (source_offset < content.source.len) {
-        const char = content.source[source_offset];
-        if (char == '\n') {
-            try html_writer.writeAll("</span>\n");
-            line_num += 1;
-            col_num = 1;
-            if (source_offset + 1 < content.source.len) {
-                try html_writer.print("                        <span class=\"source-line\" data-line=\"{d}\">", .{line_num});
-            }
-        } else {
-            try escapeHtmlChar(html_writer, char);
-            col_num += 1;
-        }
-        source_offset += 1;
-    }
-
-    try html_writer.writeAll("</span>");
-
-    try html_writer.writeAll(
-        \\
-        \\                    </div>
-        \\                </div>
-        \\            </div>
-        \\        </div>
-        \\
-    );
-
-    // PROBLEMS section
-    try html_writer.writeAll(
-        \\        <div class="section">
-        \\            <div class="section-header">PROBLEMS</div>
-        \\            <div class="section-content">
-        \\                <div class="problems">
-    );
-
-    // Add problems output (we'll use the same logic as the markdown version)
-    var tokenize_problems: usize = 0;
-    var parser_problems: usize = 0;
-
-    for (parse_ast.tokenize_diagnostics.items) |diagnostic| {
-        tokenize_problems += 1;
-        var report: reporting.Report = parse_ast.tokenizeDiagnosticToReport(diagnostic, gpa) catch |err| {
-            try html_writer.print("                    <p>Error creating tokenize report: {}</p>\n", .{err});
-            continue;
-        };
-        defer report.deinit();
-
-        // Render as HTML instead of markdown
-        try html_writer.writeAll("                    <div class=\"problem\">");
-        report.render(html_writer.any(), .markdown) catch |err| {
-            try html_writer.print("Error rendering report: {}", .{err});
-        };
-        try html_writer.writeAll("</div>\n");
-    }
-
-    for (parse_ast.parse_diagnostics.items) |diagnostic| {
-        parser_problems += 1;
-        var report: reporting.Report = parse_ast.parseDiagnosticToReport(diagnostic, gpa, snapshot_path) catch |err| {
-            try html_writer.print("                    <p>Error creating parse report: {}</p>\n", .{err});
-            continue;
-        };
-        defer report.deinit();
-
-        try html_writer.writeAll("                    <div class=\"problem\">");
-        report.render(html_writer.any(), .markdown) catch |err| {
-            try html_writer.print("Error rendering report: {}", .{err});
-        };
-        try html_writer.writeAll("</div>\n");
-    }
-
-    if (tokenize_problems == 0 and parser_problems == 0) {
-        try html_writer.writeAll("                    <p>NIL</p>\n");
-    }
-
-    try html_writer.writeAll(
-        \\                </div>
-        \\            </div>
-        \\        </div>
-        \\
-    );
-
-    // TOKENS section
-    try html_writer.writeAll(
-        \\        <div class="section">
-        \\            <div class="section-header">TOKENS</div>
-        \\            <div class="section-content">
-        \\                <div class="token-list">
-    );
-
-    var tokenizedBuffer2 = parse_ast.tokens;
-    const tokens2 = tokenizedBuffer2.tokens.items(.tag);
-    for (tokens2, 0..) |tok, i| {
-        const category = tokenToCategory(tok);
-
-        try html_writer.print("                    <span class=\"token-item {s}\" data-token-id=\"{d}\">{s}</span>", .{
-            category.toCssClass(),
-            i,
-            @tagName(tok),
-        });
-
-        if (tok == .Newline) {
-            try html_writer.writeAll("\n");
-        } else {
-            try html_writer.writeAll(" ");
-        }
-    }
-
-    try html_writer.writeAll(
-        \\                </div>
-        \\            </div>
-        \\        </div>
-        \\
-    );
-
-    // JavaScript for interactivity
-    try html_writer.writeAll(
-        \\        <script>
-        \\            // Token highlighting functionality
-        \\            document.addEventListener('DOMContentLoaded', function() {
-        \\                const tokenItems = document.querySelectorAll('.token-item');
-        \\                const sourceTokens = document.querySelectorAll('#source-content [data-token-id]');
-        \\
-        \\                // Token list -> Source highlighting
-        \\                tokenItems.forEach(tokenItem => {
-        \\                    tokenItem.addEventListener('mouseenter', function() {
-        \\                        const tokenId = this.dataset.tokenId;
-        \\
-        \\                        // Highlight this token in the list
-        \\                        this.classList.add('highlighted');
-        \\
-        \\                        // Find and highlight corresponding token in source
-        \\                        const sourceToken = document.querySelector(`#source-content [data-token-id="${tokenId}"]`);
-        \\                        if (sourceToken) {
-        \\                            sourceToken.classList.add('highlighted');
-        \\                        }
-        \\                    });
-        \\
-        \\                    tokenItem.addEventListener('mouseleave', function() {
-        \\                        // Remove highlights
-        \\                        this.classList.remove('highlighted');
-        \\                        sourceTokens.forEach(token => token.classList.remove('highlighted'));
-        \\                    });
-        \\                });
-        \\
-        \\                // Source -> Token list highlighting
-        \\                sourceTokens.forEach(sourceToken => {
-        \\                    sourceToken.addEventListener('mouseenter', function() {
-        \\                        const tokenId = this.dataset.tokenId;
-        \\
-        \\                        // Highlight this token in the source
-        \\                        this.classList.add('highlighted');
-        \\
-        \\                        // Find and highlight corresponding token in the list
-        \\                        const tokenItem = document.querySelector(`.token-item[data-token-id="${tokenId}"]`);
-        \\                        if (tokenItem) {
-        \\                            tokenItem.classList.add('highlighted');
-        \\                            // Scroll token into view if needed
-        \\                            tokenItem.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-        \\                        }
-        \\                    });
-        \\
-        \\                    sourceToken.addEventListener('mouseleave', function() {
-        \\                        // Remove highlights
-        \\                        this.classList.remove('highlighted');
-        \\                        tokenItems.forEach(token => token.classList.remove('highlighted'));
-        \\                    });
-        \\                });
-        \\            });
-        \\        </script>
-        \\    </div>
-        \\</body>
-        \\</html>
-    );
-
-    // Write HTML file
-    var html_file = std.fs.cwd().createFile(html_path, .{}) catch |err| {
-        log("failed to create HTML file '{s}': {s}", .{ html_path, @errorName(err) });
-        return;
-    };
-    defer html_file.close();
-    try html_file.writer().writeAll(html_buffer.items);
-
-    log("generated HTML version: {s}", .{html_path});
 }
 
 /// Write HTML buffer to file
@@ -1589,6 +1244,8 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, maybe_f
     try generateFormattedSection(&output, &content, &parse_ast);
     try generateCanonicalizeSection(&output, &content, &can_ir, &module_env, maybe_expr_idx);
     try generateTypesSection(&output, &content, &can_ir, maybe_expr_idx);
+    // TODO: Include to emit entire types store. Can be helpful for debugging
+    // try generateTypesStoreSection(gpa, &output, &can_ir);
 
     // Generate HTML closing
     try generateHtmlClosing(&output);

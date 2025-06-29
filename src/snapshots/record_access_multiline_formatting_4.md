@@ -45,7 +45,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dot-access @1-1-4-16 (field "unknown") (id 76)
+(e-dot-access @1-1-4-16 (field "unknown") (id 77)
 	(receiver
 		(e-dot-access @1-1-4-15 (field "unknown")
 			(receiver
@@ -55,5 +55,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 76) (type "*"))
+(expr (id 77) (type "*"))
 ~~~

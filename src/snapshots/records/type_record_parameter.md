@@ -36,7 +36,7 @@ process_things : { name : Str, age : U32, thing : a }, (a -> Str) -> Str
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-type-anno @1-1-1-72 (name "process_things") (id 87)
+	(s-type-anno @1-1-1-72 (name "process_things") (id 88)
 		(ty-fn @1-18-1-72 (effectful false)
 			(ty-record @1-18-1-53
 				(field (field "name")

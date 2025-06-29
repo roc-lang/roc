@@ -35,9 +35,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-lambda @1-1-1-65 (id 85)
+(e-lambda @1-1-1-65 (id 86)
 	(args
-		(p-record-destructure @1-2-1-24 (id 76)
+		(p-record-destructure @1-2-1-24 (id 77)
 			(destructs
 				(record-destruct @1-4-1-15 (label "first_name") (ident "first_name")
 					(required))
@@ -46,15 +46,15 @@ NO CHANGE
 	(e-string @1-26-1-65
 		(e-literal @1-27-1-33 (string "Hello "))
 		(e-lookup-local @1-35-1-45
-			(pattern (id 73)))
+			(pattern (id 74)))
 		(e-literal @1-46-1-47 (string " "))
 		(e-dot-access @1-49-1-64 (field "last_name")
 			(receiver
 				(e-lookup-local @1-49-1-53
-					(pattern (id 75)))))
+					(pattern (id 76)))))
 		(e-literal @1-64-1-64 (string ""))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 85) (type "* ? Str"))
+(expr (id 86) (type "* ? Str"))
 ~~~

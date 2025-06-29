@@ -27,10 +27,8 @@ pub const SExprWriter = struct {
         var root_node = SExpr.init(gpa, "types_store");
         defer root_node.deinit(gpa);
 
-        var vars_node = SExpr.init(gpa, "vars");
-
         if (env.types.slots.backing.items.len == 0) {
-            vars_node.appendString(gpa, "empty");
+            root_node.appendStringAttr(gpa, "vars", "empty");
         }
 
         var buffer = std.ArrayList(u8).init(gpa);
@@ -43,15 +41,14 @@ pub const SExprWriter = struct {
             try type_writer.writeVar(var_);
 
             var var_node = SExpr.init(gpa, "var");
-            var_node.appendUnsignedInt(gpa, slot_idx);
-            var_node.appendString(gpa, buffer.items);
+            var_node.appendTypeVar(gpa, "var", @as(Var, @enumFromInt(slot_idx)));
+            var_node.appendStringAttr(gpa, "type", buffer.items);
 
-            vars_node.appendNode(gpa, &var_node);
+            root_node.appendNode(gpa, &var_node);
 
             buffer.clearRetainingCapacity();
         }
 
-        root_node.appendNode(gpa, &vars_node);
         root_node.toStringPretty(writer);
     }
 
@@ -60,7 +57,7 @@ pub const SExprWriter = struct {
         try type_writer.writerVar(var_);
 
         var node = SExpr.init(gpa, "type");
-        node.appendString(gpa, type_writer.writer.context);
+        node.appendStringAttr(gpa, type_writer.writer.context);
         return node;
     }
 };
@@ -267,8 +264,6 @@ pub const TypeWriter = struct {
 
     /// Write a tag union type
     pub fn writeTagUnion(self: *Self, tag_union: types.TagUnion) Allocator.Error!void {
-        const tags = self.env.types.getTagsSlice(tag_union.tags);
-
         _ = try self.writer.write("[");
         var iter = tag_union.tags.iterIndices();
         while (iter.next()) |tag_idx| {
@@ -280,25 +275,18 @@ pub const TypeWriter = struct {
             try self.writeTag(tag);
         }
 
+        _ = try self.writer.write("]");
+
         // Show extension variable if it's not empty
         const ext_resolved = self.env.types.resolveVar(tag_union.ext);
         switch (ext_resolved.desc.content) {
+            .flex_var => _ = try self.writer.write("*"),
             .structure => |flat_type| switch (flat_type) {
                 .empty_tag_union => {}, // Don't show empty extension
-                else => {
-                    if (tags.len > 0) _ = try self.writer.write(", ");
-                    _ = try self.writer.write("* ");
-                    try self.writeVar(tag_union.ext);
-                },
+                else => {}, // TODO: Error?
             },
-            else => {
-                if (tags.len > 0) _ = try self.writer.write(", ");
-                _ = try self.writer.write("* ");
-                try self.writeVar(tag_union.ext);
-            },
+            else => {}, // TODO: Error?
         }
-
-        _ = try self.writer.write("]");
     }
 
     /// Write a single tag

@@ -52,7 +52,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop @1-1-1-69 (op "or") (id 101)
+(e-binop @1-1-1-69 (op "or") (id 102)
 	(e-binop @1-1-1-57 (op "or")
 		(e-binop @1-1-1-26 (op "gt")
 			(e-binop @1-1-1-17 (op "null_coalesce")
@@ -82,5 +82,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 101) (type "*"))
+(expr (id 102) (type "*"))
 ~~~

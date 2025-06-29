@@ -206,107 +206,107 @@ main! = |_| {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 87)
-		(p-assign @5-1-5-4 (ident "add") (id 75))
-		(e-lambda @5-7-5-18 (id 79)
+	(d-let (id 88)
+		(p-assign @5-1-5-4 (ident "add") (id 76))
+		(e-lambda @5-7-5-18 (id 80)
 			(args
-				(p-assign @5-8-5-14 (ident "unused") (id 76)))
+				(p-assign @5-8-5-14 (ident "unused") (id 77)))
 			(e-int @5-16-5-18 (value "42")))
-		(annotation @5-1-5-4 (signature 85) (id 86)
+		(annotation @5-1-5-4 (signature 86) (id 87)
 			(declared-type
 				(ty-fn @4-7-4-17 (effectful false)
 					(ty @4-7-4-10 (name "U64"))
 					(ty @4-14-4-17 (name "U64"))))))
-	(d-let (id 105)
-		(p-assign @9-1-9-9 (ident "multiply") (id 91))
-		(e-lambda @9-12-12-8 (id 98)
+	(d-let (id 106)
+		(p-assign @9-1-9-9 (ident "multiply") (id 92))
+		(e-lambda @9-12-12-8 (id 99)
 			(args
-				(p-assign @9-13-9-20 (ident "_factor") (id 92)))
+				(p-assign @9-13-9-20 (ident "_factor") (id 93)))
 			(e-binop @9-22-12-8 (op "mul")
 				(e-lookup-local @9-22-9-29
-					(pattern (id 92)))
+					(pattern (id 93)))
 				(e-int @9-32-9-33 (value "2"))))
-		(annotation @9-1-9-9 (signature 103) (id 104)
+		(annotation @9-1-9-9 (signature 104) (id 105)
 			(declared-type
 				(ty-fn @8-12-8-22 (effectful false)
 					(ty @8-12-8-15 (name "U64"))
 					(ty @8-19-8-22 (name "U64"))))))
-	(d-let (id 120)
-		(p-assign @13-1-13-8 (ident "process") (id 109))
-		(e-lambda @13-11-13-23 (id 113)
+	(d-let (id 121)
+		(p-assign @13-1-13-8 (ident "process") (id 110))
+		(e-lambda @13-11-13-23 (id 114)
 			(args
-				(p-assign @13-12-13-18 (ident "_input") (id 110)))
+				(p-assign @13-12-13-18 (ident "_input") (id 111)))
 			(e-int @13-20-13-23 (value "100")))
-		(annotation @13-1-13-8 (signature 118) (id 119)
+		(annotation @13-1-13-8 (signature 119) (id 120)
 			(declared-type
 				(ty-fn @12-11-12-21 (effectful false)
 					(ty @12-11-12-14 (name "U64"))
 					(ty @12-18-12-21 (name "U64"))))))
-	(d-let (id 137)
-		(p-assign @17-1-17-7 (ident "double") (id 124))
-		(e-lambda @17-10-19-6 (id 130)
+	(d-let (id 138)
+		(p-assign @17-1-17-7 (ident "double") (id 125))
+		(e-lambda @17-10-19-6 (id 131)
 			(args
-				(p-assign @17-11-17-16 (ident "value") (id 125)))
+				(p-assign @17-11-17-16 (ident "value") (id 126)))
 			(e-binop @17-18-19-6 (op "mul")
 				(e-lookup-local @17-18-17-23
-					(pattern (id 125)))
+					(pattern (id 126)))
 				(e-int @17-26-17-27 (value "2"))))
-		(annotation @17-1-17-7 (signature 135) (id 136)
+		(annotation @17-1-17-7 (signature 136) (id 137)
 			(declared-type
 				(ty-fn @16-10-16-20 (effectful false)
 					(ty @16-10-16-13 (name "U64"))
 					(ty @16-17-16-20 (name "U64"))))))
-	(d-let (id 174)
-		(p-assign @19-1-19-6 (ident "main!") (id 138))
-		(e-lambda @19-9-25-2 (id 173)
+	(d-let (id 175)
+		(p-assign @19-1-19-6 (ident "main!") (id 139))
+		(e-lambda @19-9-25-2 (id 174)
 			(args
-				(p-underscore @19-10-19-11 (id 139)))
+				(p-underscore @19-10-19-11 (id 140)))
 			(e-block @19-13-25-2
 				(s-let @20-5-20-21
-					(p-assign @20-5-20-12 (ident "result1") (id 140))
-					(e-call @20-15-20-21 (id 144)
+					(p-assign @20-5-20-12 (ident "result1") (id 141))
+					(e-call @20-15-20-21 (id 145)
 						(e-lookup-local @20-15-20-18
-							(pattern (id 75)))
+							(pattern (id 76)))
 						(e-int @20-19-20-20 (value "5"))))
 				(s-let @21-5-21-26
-					(p-assign @21-5-21-12 (ident "result2") (id 146))
-					(e-call @21-15-21-26 (id 150)
+					(p-assign @21-5-21-12 (ident "result2") (id 147))
+					(e-call @21-15-21-26 (id 151)
 						(e-lookup-local @21-15-21-23
-							(pattern (id 91)))
+							(pattern (id 92)))
 						(e-int @21-24-21-25 (value "3"))))
 				(s-let @22-5-22-25
-					(p-assign @22-5-22-12 (ident "result3") (id 152))
-					(e-call @22-15-22-25 (id 156)
+					(p-assign @22-5-22-12 (ident "result3") (id 153))
+					(e-call @22-15-22-25 (id 157)
 						(e-lookup-local @22-15-22-22
-							(pattern (id 109)))
+							(pattern (id 110)))
 						(e-int @22-23-22-24 (value "7"))))
 				(s-let @23-5-23-24
-					(p-assign @23-5-23-12 (ident "result4") (id 158))
-					(e-call @23-15-23-24 (id 162)
+					(p-assign @23-5-23-12 (ident "result4") (id 159))
+					(e-call @23-15-23-24 (id 163)
 						(e-lookup-local @23-15-23-21
-							(pattern (id 124)))
+							(pattern (id 125)))
 						(e-int @23-22-23-23 (value "4"))))
 				(e-binop @24-5-25-2 (op "add")
 					(e-lookup-local @24-5-24-12
-						(pattern (id 140)))
+						(pattern (id 141)))
 					(e-binop @24-15-25-2 (op "add")
 						(e-lookup-local @24-15-24-22
-							(pattern (id 146)))
+							(pattern (id 147)))
 						(e-binop @24-25-25-2 (op "add")
 							(e-lookup-local @24-25-24-32
-								(pattern (id 152)))
+								(pattern (id 153)))
 							(e-lookup-local @24-35-24-42
-								(pattern (id 158))))))))))
+								(pattern (id 159))))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "add") (def_var 87) (type "U64 -> U64"))
-		(d_assign (name "multiply") (def_var 105) (type "U64 -> U64"))
-		(d_assign (name "process") (def_var 120) (type "U64 -> U64"))
-		(d_assign (name "double") (def_var 137) (type "U64 -> U64"))
-		(d_assign (name "main!") (def_var 174) (type "* ? *")))
+		(d_assign (name "add") (def_var 88) (type "U64 -> U64"))
+		(d_assign (name "multiply") (def_var 106) (type "U64 -> U64"))
+		(d_assign (name "process") (def_var 121) (type "U64 -> U64"))
+		(d_assign (name "double") (def_var 138) (type "U64 -> U64"))
+		(d_assign (name "main!") (def_var 175) (type "* ? *")))
 	(expressions
 		(expr @5-7-5-18 (type "U64 -> U64"))
 		(expr @9-12-12-8 (type "U64 -> U64"))

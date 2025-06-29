@@ -60,7 +60,7 @@ process_user! :
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-type-anno @1-1-1-53 (name "process_user!") (id 74)
+	(s-type-anno @1-1-1-53 (name "process_user!") (id 75)
 		(ty-malformed @1-47-1-53)))
 ~~~
 # TYPES
