@@ -9,17 +9,17 @@ type=expr
 ~~~
 # PROBLEMS
 **INCOMPATIBLE LIST ELEMENTS**
-These two elements in this list have incompatible types:
+The 1st and 2nd elements in this list have incompatible types:
 **can_list_first_concrete.md:1:2:1:13:**
 ```roc
 [42, "world", 3.14]
 ```
  ^^^^^^^^^^^
 
-The first element has this type:
+The 1st element has this type:
     _Num(*)_
 
-The second element has this type:
+However, the 2nd element has this type:
     _Str_
 
 All elements in a list must have compatible types.

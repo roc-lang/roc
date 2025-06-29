@@ -221,7 +221,15 @@ pub const Problem = union(enum) {
         const owned_incompatible_type = try report.addOwnedString(buf.items);
 
         // Add description
-        try report.document.addText("These two elements in this list have incompatible types:");
+        const first_ordinal = try ordinalString(gpa, data.first_elem_index + 1);
+        defer gpa.free(first_ordinal);
+        const second_ordinal = try ordinalString(gpa, data.incompatible_elem_index + 1);
+        defer gpa.free(second_ordinal);
+
+        const description = try std.fmt.allocPrint(gpa, "The {s} and {s} elements in this list have incompatible types:", .{ first_ordinal, second_ordinal });
+        defer gpa.free(description);
+        const owned_description = try report.addOwnedString(description);
+        try report.document.addText(owned_description);
         try report.document.addLineBreak();
 
         // Show a single region spanning both mismatched elements
@@ -253,7 +261,10 @@ pub const Problem = union(enum) {
         try report.document.addLineBreak();
 
         // Show the type of the first element
-        try report.document.addText("The first element has this type:");
+        const first_type_desc = try std.fmt.allocPrint(gpa, "The {s} element has this type:", .{first_ordinal});
+        defer gpa.free(first_type_desc);
+        const owned_first_type_desc = try report.addOwnedString(first_type_desc);
+        try report.document.addText(owned_first_type_desc);
         try report.document.addLineBreak();
         try report.document.addText("    ");
         try report.document.addAnnotated(owned_first_type, .type_variable);
@@ -261,7 +272,10 @@ pub const Problem = union(enum) {
         try report.document.addLineBreak();
 
         // Show the type of the second element
-        try report.document.addText("The second element has this type:");
+        const second_type_desc = try std.fmt.allocPrint(gpa, "However, the {s} element has this type:", .{second_ordinal});
+        defer gpa.free(second_type_desc);
+        const owned_second_type_desc = try report.addOwnedString(second_type_desc);
+        try report.document.addText(owned_second_type_desc);
         try report.document.addLineBreak();
         try report.document.addText("    ");
         try report.document.addAnnotated(owned_incompatible_type, .type_variable);
@@ -394,6 +408,31 @@ pub const Problem = union(enum) {
         const report = Report.init(allocator, "UNIMPLEMENTED", .runtime_error);
         return report;
     }
+
+    fn ordinalString(allocator: Allocator, n: usize) ![]u8 {
+        const suffix = switch (n) {
+            1 => "st",
+            2 => "nd",
+            3 => "rd",
+            else => blk: {
+                // For numbers ending in 1, 2, or 3 (except 11, 12, 13), use st, nd, rd
+                const last_digit = n % 10;
+                const last_two_digits = n % 100;
+                if (last_two_digits >= 11 and last_two_digits <= 13) {
+                    break :blk "th"; // 11th, 12th, 13th
+                } else if (last_digit == 1) {
+                    break :blk "st"; // 21st, 31st, etc.
+                } else if (last_digit == 2) {
+                    break :blk "nd"; // 22nd, 32nd, etc.
+                } else if (last_digit == 3) {
+                    break :blk "rd"; // 23rd, 33rd, etc.
+                } else {
+                    break :blk "th"; // 4th, 5th, ... 20th, 24th, etc.
+                }
+            },
+        };
+        return std.fmt.allocPrint(allocator, "{d}{s}", .{ n, suffix });
+    }
 };
 
 /// A single var problem
@@ -408,9 +447,11 @@ pub const IncompatibleListElements = struct {
     first_elem_region: base.Region,
     first_elem_var: Var,
     first_elem_snapshot: SnapshotContentIdx,
+    first_elem_index: usize, // 0-based index of the first element
     incompatible_elem_region: base.Region,
     incompatible_elem_var: Var,
     incompatible_elem_snapshot: SnapshotContentIdx,
+    incompatible_elem_index: usize, // 0-based index of the incompatible element
 };
 
 /// A two var problem
