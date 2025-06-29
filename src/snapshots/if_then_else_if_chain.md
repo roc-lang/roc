@@ -87,13 +87,13 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 104)
+	(d-let (id 103)
 		(p-assign @3.1-3.12 (ident "checkNumber") (id 73))
-		(e-lambda @3.15-13.2 (id 103)
+		(e-lambda @3.15-13.2 (id 102)
 			(args
 				(p-assign @3.16-3.19 (ident "num") (id 74)))
 			(e-block @3.21-13.2
-				(e-if @4.2-13.2 (branch-var 99)
+				(e-if @4.2-13.2
 					(if-branches
 						(if-branch
 							(e-binop @4.5-4.14 (op "lt")
@@ -128,7 +128,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "checkNumber") (def_var 104) (type "* ? Str")))
+		(d_assign (name "checkNumber") (def_var 103) (type "* ? Str")))
 	(expressions
 		(expr @3.15-13.2 (type "* ? Str"))))
 ~~~

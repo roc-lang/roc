@@ -124,7 +124,7 @@ fn loadOrCompileCanIr(
         var scope = Scope.init(can_ir.env.gpa);
         defer scope.deinit(gpa);
         var can = Can.init(&can_ir, &parse_ir, &scope);
-        can.canonicalize_file();
+        try can.canonicalize_file();
 
         break :blk can_ir;
     };

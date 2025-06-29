@@ -507,7 +507,7 @@ const SlotStore = struct {
     }
 
     /// Set a value in the store
-    fn set(self: *Self, idx: Idx, val: Slot) void {
+    pub fn set(self: *Self, idx: Idx, val: Slot) void {
         self.backing.items[@intFromEnum(idx)] = val;
     }
 

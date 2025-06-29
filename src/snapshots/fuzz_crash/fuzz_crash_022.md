@@ -171,12 +171,12 @@ ain! = |_| getUser(900)
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 97)
+	(d-let (id 96)
 		(p-assign @6.1-6.8 (ident "getUser") (id 83))
-		(e-lambda @1.1-1.1 (id 95)
+		(e-lambda @1.1-1.1 (id 94)
 			(args
 				(p-assign @6.12-6.14 (ident "id") (id 84)))
-			(e-if @1.1-1.1 (branch-var 92)
+			(e-if @1.1-1.1
 				(if-branches
 					(if-branch
 						(e-runtime-error (tag "if_condition_not_canonicalized"))
@@ -185,11 +185,11 @@ ain! = |_| getUser(900)
 				(if-else
 					(e-string @6.40-6.43
 						(e-literal @6.41-6.42 (string "l")))))))
-	(d-let (id 107)
-		(p-assign @8.2-8.6 (ident "ain!") (id 99))
-		(e-lambda @8.9-8.25 (id 106)
+	(d-let (id 106)
+		(p-assign @8.2-8.6 (ident "ain!") (id 98))
+		(e-lambda @8.9-8.25 (id 105)
 			(args
-				(p-underscore @8.10-8.11 (id 100)))
+				(p-underscore @8.10-8.11 (id 99)))
 			(e-call @8.13-8.25
 				(e-lookup-local @8.13-8.20
 					(pattern (id 83)))
@@ -202,8 +202,8 @@ ain! = |_| getUser(900)
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "getUser") (def_var 97) (type "* ? Str"))
-		(d_assign (name "ain!") (def_var 107) (type "* ? *")))
+		(d_assign (name "getUser") (def_var 96) (type "* ? Str"))
+		(d_assign (name "ain!") (def_var 106) (type "* ? *")))
 	(expressions
 		(expr @1.1-1.1 (type "* ? Str"))
 		(expr @8.9-8.25 (type "* ? *"))))

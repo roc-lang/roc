@@ -1194,19 +1194,19 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, maybe_f
     var maybe_expr_idx: ?CIR.Expr.Idx = null;
 
     switch (content.meta.node_type) {
-        .file => can.canonicalize_file(),
+        .file => try can.canonicalize_file(),
         .header => {
             // TODO: implement canonicalize_header when available
         },
         .expr => {
             const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-            maybe_expr_idx = can.canonicalize_expr(expr_idx);
+            maybe_expr_idx = try can.canonicalize_expr(expr_idx);
         },
         .statement => {
             // Manually track scratch statements because we aren't using the file entrypoint
             const stmt_idx: AST.Statement.Idx = @enumFromInt(parse_ast.root_node_idx);
             const scratch_statements_start = can_ir.store.scratch_statements.top();
-            _ = can.canonicalize_statement(stmt_idx);
+            _ = try can.canonicalize_statement(stmt_idx);
             can_ir.all_statements = can_ir.store.statementSpanFrom(scratch_statements_start);
         },
     }

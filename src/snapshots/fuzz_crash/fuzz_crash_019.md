@@ -1002,12 +1002,12 @@ expect {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 138)
+	(d-let (id 137)
 		(p-assign @35.1-35.4 (ident "ane") (id 128))
-		(e-lambda @35.7-37.4 (id 137)
+		(e-lambda @35.7-37.4 (id 136)
 			(args
 				(p-assign @35.8-35.11 (ident "num") (id 129)))
-			(e-if @35.13-37.4 (branch-var 134)
+			(e-if @35.13-37.4
 				(if-branches
 					(if-branch
 						(e-lookup-local @35.16-35.19
@@ -1015,19 +1015,19 @@ expect {
 						(e-int @35.20-35.21 (value "2"))))
 				(if-else
 					(e-int @35.27-35.28 (value "5"))))))
-	(d-let (id 164)
-		(p-assign @38.1-38.4 (ident "add") (id 141))
-		(e-lambda @38.7-47.2 (id 163)
+	(d-let (id 162)
+		(p-assign @38.1-38.4 (ident "add") (id 140))
+		(e-lambda @38.7-47.2 (id 161)
 			(args
-				(p-assign @38.8-38.11 (ident "num") (id 142)))
+				(p-assign @38.8-38.11 (ident "num") (id 141)))
 			(e-block @38.13-47.2
 				(s-expr @39.2-40.4
 					(e-int @39.2-39.3 (value "1")))
-				(e-if @40.2-47.2 (branch-var 159)
+				(e-if @40.2-47.2
 					(if-branches
 						(if-branch
 							(e-lookup-local @40.5-40.8
-								(pattern (id 142)))
+								(pattern (id 141)))
 							(e-block @40.9-43.3
 								(s-expr @41.3-42.10
 									(e-runtime-error (tag "not_implemented")))
@@ -1037,57 +1037,57 @@ expect {
 							(s-expr @44.3-45.4
 								(e-runtime-error (tag "not_implemented")))
 							(e-runtime-error (tag "ident_not_in_scope"))))))))
-	(d-let (id 174)
-		(p-assign @49.1-49.3 (ident "me") (id 165))
-		(e-lambda @49.6-71.7 (id 172)
+	(d-let (id 172)
+		(p-assign @49.1-49.3 (ident "me") (id 163))
+		(e-lambda @49.6-71.7 (id 170)
 			(args
-				(p-assign @50.2-50.3 (ident "a") (id 166))
-				(p-applied-tag @50.5-50.7 (id 168)))
+				(p-assign @50.2-50.3 (ident "a") (id 164))
+				(p-applied-tag @50.5-50.7 (id 166)))
 			(e-runtime-error (tag "not_implemented"))))
-	(d-let (id 344)
-		(p-assign @75.1-75.3 (ident "ma") (id 179))
-		(e-lambda @75.5-111.2 (id 343)
+	(d-let (id 342)
+		(p-assign @75.1-75.3 (ident "ma") (id 177))
+		(e-lambda @75.5-111.2 (id 341)
 			(args
-				(p-underscore @75.6-75.7 (id 180)))
+				(p-underscore @75.6-75.7 (id 178)))
 			(e-block @75.9-111.2
 				(s-expr @75.11-76.3
 					(e-runtime-error (tag "ident_not_in_scope")))
 				(s-let @76.2-76.9
-					(p-assign @76.2-76.3 (ident "w") (id 184))
-					(e-string @76.6-76.9 (id 186)
+					(p-assign @76.2-76.3 (ident "w") (id 182))
+					(e-string @76.6-76.9 (id 184)
 						(e-literal @76.7-76.8 (string "d"))))
 				(s-var @77.2-78.8
-					(p-assign @77.2-78.8 (ident "er") (id 189))
-					(e-int @77.11-77.14 (value "123") (id 188)))
+					(p-assign @77.2-78.8 (ident "er") (id 187))
+					(e-int @77.11-77.14 (value "123") (id 186)))
 				(s-expr @83.2-84.4
 					(e-runtime-error (tag "not_implemented")))
 				(s-expr @84.2-86.8
 					(e-call @84.2-86.3
 						(e-lookup-local @84.2-84.4
-							(pattern (id 165)))
+							(pattern (id 163)))
 						(e-runtime-error (tag "not_implemented"))))
 				(s-expr @86.11-86.20
 					(e-string @86.11-86.17
 						(e-literal @86.12-86.16 (string "Unr!"))))
 				(s-let @87.2-87.14
-					(p-assign @87.2-87.3 (ident "i") (id 209))
-					(e-string @87.5-87.14 (id 214)
+					(p-assign @87.2-87.3 (ident "i") (id 207))
+					(e-string @87.5-87.14 (id 212)
 						(e-literal @87.6-87.9 (string "H, "))
 						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-literal @87.13-87.13 (string ""))))
 				(s-let @88.1-91.3
-					(p-assign @88.1-88.2 (ident "t") (id 216))
-					(e-list @88.5-91.3 (elem-var 221) (id 224)
+					(p-assign @88.1-88.2 (ident "t") (id 214))
+					(e-list @88.5-91.3 (elem-var 219) (id 222)
 						(elems
 							(e-call @89.3-89.14
 								(e-runtime-error (tag "ident_not_in_scope"))
 								(e-lookup-local @89.7-89.9
-									(pattern (id 189))))
+									(pattern (id 187))))
 							(e-int @89.16-89.19 (value "456"))
 							(e-int @90.1-90.2 (value "9")))))
 				(s-let @96.2-96.59
-					(p-assign @96.2-96.4 (ident "rd") (id 228))
-					(e-record @96.7-96.59 (ext-var 247) (id 248)
+					(p-assign @96.2-96.4 (ident "rd") (id 226))
+					(e-record @96.7-96.59 (ext-var 245) (id 246)
 						(fields
 							(field (name "foo")
 								(e-int @96.14-96.17 (value "123")))
@@ -1103,8 +1103,8 @@ expect {
 							(field (name "ned")
 								(e-runtime-error (tag "ident_not_in_scope"))))))
 				(s-let @97.2-97.48
-					(p-assign @97.2-97.3 (ident "t") (id 255))
-					(e-tuple @97.6-97.48 (id 272)
+					(p-assign @97.2-97.3 (ident "t") (id 253))
+					(e-tuple @97.6-97.48 (id 270)
 						(elems
 							(e-int @97.7-97.10 (value "123"))
 							(e-string @97.12-97.19
@@ -1115,8 +1115,8 @@ expect {
 								(elems
 									(e-runtime-error (tag "ident_not_in_scope"))
 									(e-lookup-local @97.34-97.35
-										(pattern (id 255)))))
-							(e-list @97.38-97.47 (elem-var 268)
+										(pattern (id 253)))))
+							(e-list @97.38-97.47 (elem-var 266)
 								(elems
 									(e-int @97.39-97.40 (value "1"))
 									(e-int @97.42-97.43 (value "2"))
@@ -1135,7 +1135,7 @@ expect {
 								(elems
 									(e-runtime-error (tag "ident_not_in_scope"))
 									(e-runtime-error (tag "ident_not_in_scope"))))
-							(e-list @103.3-103.12 (elem-var 289)
+							(e-list @103.3-103.12 (elem-var 287)
 								(elems
 									(e-int @103.4-103.5 (value "1"))
 									(e-int @103.7-103.8 (value "2"))
@@ -1178,9 +1178,9 @@ expect {
 							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-runtime-error (tag "ident_not_in_scope")))
 						(e-literal @109.4-109.5 (string " ")))))))
-	(d-let (id 348)
-		(p-assign @114.1-114.2 (ident "e") (id 346))
-		(e-empty_record @114.5-114.7 (id 347)))
+	(d-let (id 346)
+		(p-assign @114.1-114.2 (ident "e") (id 344))
+		(e-empty_record @114.5-114.7 (id 345)))
 	(s-type-decl @13.1-14.6 (id 84)
 		(ty-header @13.1-13.10 (name "Map")
 			(ty-args
@@ -1243,11 +1243,11 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "ane") (def_var 138) (type "* ? Num(*)"))
-		(d_assign (name "add") (def_var 164) (type "* ? Error"))
-		(d_assign (name "me") (def_var 174) (type "*, [Tb]* ? Error"))
-		(d_assign (name "ma") (def_var 344) (type "* ? *"))
-		(d_assign (name "e") (def_var 348) (type "{}")))
+		(d_assign (name "ane") (def_var 137) (type "* ? Num(*)"))
+		(d_assign (name "add") (def_var 162) (type "* ? Error"))
+		(d_assign (name "me") (def_var 172) (type "*, [Tb]* ? Error"))
+		(d_assign (name "ma") (def_var 342) (type "* ? *"))
+		(d_assign (name "e") (def_var 346) (type "{}")))
 	(expressions
 		(expr @35.7-37.4 (type "* ? Num(*)"))
 		(expr @38.7-47.2 (type "* ? Error"))
