@@ -61,8 +61,12 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
 
     // Process the input through the full compiler pipeline
     var result = coordinate_simple.processSource(gpa, input, "<fuzz>") catch |err| {
-        if (debug) {
-            std.debug.print("Processing failed with error: {}\n", .{err});
+        switch (err) {
+            error.OutOfMemory => {
+                // The small inputs used for fuzzing should never OOM.
+                // Any OOM here is definitely a bug.
+                @panic("OOM");
+            },
         }
         return;
     };
