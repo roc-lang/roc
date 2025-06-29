@@ -270,37 +270,8 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
             const elem_var = list.elem_var;
             const elems = self.can_ir.store.exprSlice(list.elems);
 
-            // Track which element determines the type
-            var type_determining_elem_idx: ?CIR.Expr.Idx = null;
-            var first_elem_idx: ?CIR.Expr.Idx = null;
-
-            for (elems, 0..) |single_elem_expr_idx, i| {
+            for (elems) |single_elem_expr_idx| {
                 self.checkExpr(single_elem_expr_idx);
-
-                if (i == 0) {
-                    first_elem_idx = single_elem_expr_idx;
-
-                    // Check if first element has a concrete type
-                    const elem_content = self.types.resolveVar(@enumFromInt(@intFromEnum(single_elem_expr_idx))).desc.content;
-                    var is_concrete = true;
-                    if (elem_content == .structure) {
-                        switch (elem_content.structure) {
-                            .list_unbound, .record_unbound, .empty_record, .empty_tag_union => is_concrete = false,
-                            .num => |num| {
-                                switch (num) {
-                                    .int_unbound, .num_unbound, .frac_unbound => is_concrete = false,
-                                    else => {},
-                                }
-                            },
-                            else => {},
-                        }
-                    }
-                    if (is_concrete) {
-                        type_determining_elem_idx = single_elem_expr_idx;
-                    }
-
-                    continue;
-                }
 
                 // For subsequent elements, unify and check result
                 const result = self.unify(
@@ -343,20 +314,20 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
                     // Remove the TYPE_MISMATCH problem we don't want
                     self.problems.problems.items.len = problem_count - 1;
 
-                    // Create our custom error
-                    const determining_elem_idx = type_determining_elem_idx orelse first_elem_idx.?;
+                    // Always use the first element for error reporting since it established the list type
+                    const first_elem_idx = elems[0];
 
-                    const determining_elem_expr = self.can_ir.store.getExpr(determining_elem_idx);
+                    const first_elem_expr = self.can_ir.store.getExpr(first_elem_idx);
                     const incompatible_elem_expr = self.can_ir.store.getExpr(single_elem_expr_idx);
 
-                    const determining_region = determining_elem_expr.toRegion();
+                    const first_region = first_elem_expr.toRegion();
                     const incomp_region = incompatible_elem_expr.toRegion();
 
                     // Add the custom incompatible list elements error
                     _ = self.problems.appendProblem(self.gpa, .{ .incompatible_list_elements = .{
                         .list_region = list.region,
-                        .first_elem_region = determining_region orelse list.region,
-                        .first_elem_var = @enumFromInt(@intFromEnum(determining_elem_idx)),
+                        .first_elem_region = first_region orelse list.region,
+                        .first_elem_var = @enumFromInt(@intFromEnum(first_elem_idx)),
                         .first_elem_snapshot = elem_var_snapshot,
                         .incompatible_elem_region = incomp_region orelse list.region,
                         .incompatible_elem_var = @enumFromInt(@intFromEnum(single_elem_expr_idx)),
@@ -365,27 +336,6 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
 
                     // Stop checking further elements to avoid cascading errors
                     break;
-                }
-
-                // Track type determining element after successful unification
-                if (type_determining_elem_idx == null) {
-                    const unified_content = self.types.resolveVar(elem_var).desc.content;
-                    var is_concrete = true;
-                    if (unified_content == .structure) {
-                        switch (unified_content.structure) {
-                            .list_unbound, .record_unbound, .empty_record, .empty_tag_union => is_concrete = false,
-                            .num => |num| {
-                                switch (num) {
-                                    .int_unbound, .num_unbound, .frac_unbound => is_concrete = false,
-                                    else => {},
-                                }
-                            },
-                            else => {},
-                        }
-                    }
-                    if (is_concrete) {
-                        type_determining_elem_idx = single_elem_expr_idx;
-                    }
                 }
             }
         },
