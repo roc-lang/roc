@@ -28,6 +28,7 @@ test {
     try std.testing.expectEqual(8, @sizeOf(Alias));
     try std.testing.expectEqual(20, @sizeOf(FlatType));
     try std.testing.expectEqual(12, @sizeOf(Record));
+    try std.testing.expectEqual(8, @sizeOf(NominalType));
 }
 
 /// A type variable
@@ -125,13 +126,13 @@ pub const Content = union(enum) {
         }
     }
 
-    /// Unwrap a custom type or return null
-    pub fn unwrapCustomType(content: Self) ?CustomType {
+    /// Unwrap a nominal type or return null
+    pub fn unwrapNominalType(content: Self) ?NominalType {
         switch (content) {
             .structure => |flat_type| {
                 switch (flat_type) {
-                    .custom_type => |custom_type| {
-                        return custom_type;
+                    .nominal_type => |nominal_type| {
+                        return nominal_type;
                     },
                     else => return null,
                 }
@@ -217,7 +218,7 @@ pub const FlatType = union(enum) {
     tuple: Tuple,
     tuple_unbound: Tuple,
     num: Num,
-    custom_type: CustomType,
+    nominal_type: NominalType,
     func: Func,
     record: Record,
     empty_record,
@@ -553,13 +554,92 @@ pub const Num = union(enum) {
     pub const int_i128: Num = Num{ .num_compact = Compact{ .int = .i128 } };
 };
 
-// custom types //
+// nominal types //
 
 /// A nominal user-defined type
-pub const CustomType = struct {
+pub const NominalType = struct {
     ident: TypeIdent,
-    args: Var.SafeList.Range,
-    backing_var: Var,
+    num_args: u32,
+
+    /// Get the backing var for this nominal type given the nominal type var
+    pub fn getBackingVar(self: NominalType, nominal_var: Var) Var {
+        _ = self;
+        const backing_var = @as(Var, @enumFromInt(@intFromEnum(nominal_var) + 1));
+
+        // Debug assertion: verify the backing var index is reasonable
+        if (std.debug.runtime_safety) {
+            std.debug.assert(@intFromEnum(backing_var) > @intFromEnum(nominal_var));
+        }
+
+        return backing_var;
+    }
+
+    /// Get the first argument var for this nominal type given the nominal type var
+    pub fn getFirstArgVar(self: NominalType, nominal_var: Var) Var {
+        const first_arg = @as(Var, @enumFromInt(@intFromEnum(nominal_var) + 2));
+
+        // Debug assertion: verify we have at least one arg
+        if (std.debug.runtime_safety) {
+            std.debug.assert(self.num_args > 0);
+        }
+
+        return first_arg;
+    }
+
+    /// Get the argument var at the given index for this nominal type given the nominal type var
+    pub fn getArgVar(self: NominalType, nominal_var: Var, arg_index: usize) Var {
+        std.debug.assert(arg_index < self.num_args);
+        const arg_var = @as(Var, @enumFromInt(@intFromEnum(nominal_var) + 2 + arg_index));
+
+        // Debug assertion: verify the arg var index is reasonable
+        if (std.debug.runtime_safety) {
+            // Should be after backing var
+            const backing_var = self.getBackingVar(nominal_var);
+            std.debug.assert(@intFromEnum(arg_var) > @intFromEnum(backing_var));
+        }
+
+        return arg_var;
+    }
+
+    /// Iterator for getting all argument vars
+    pub const ArgIterator = struct {
+        nominal_var: Var,
+        num_args: u32,
+        current: u32,
+
+        pub fn next(self: *ArgIterator) ?Var {
+            if (self.current >= self.num_args) return null;
+            const result = @as(Var, @enumFromInt(@intFromEnum(self.nominal_var) + 2 + self.current));
+            self.current += 1;
+            return result;
+        }
+    };
+
+    /// Get an iterator over all argument vars
+    pub fn argIterator(self: NominalType, nominal_var: Var) ArgIterator {
+        return ArgIterator{
+            .nominal_var = nominal_var,
+            .num_args = self.num_args,
+            .current = 0,
+        };
+    }
+
+    /// Get a slice of all argument vars (requires allocation)
+    pub fn getArgVarsAlloc(self: NominalType, allocator: std.mem.Allocator, nominal_var: Var) ![]Var {
+        const args = try allocator.alloc(Var, self.num_args);
+        for (0..self.num_args) |i| {
+            args[i] = self.getArgVar(nominal_var, i);
+        }
+        return args;
+    }
+
+    /// Fill a pre-allocated buffer with argument vars
+    pub fn getArgVarsBuf(self: NominalType, nominal_var: Var, buffer: []Var) void {
+        std.debug.assert(buffer.len >= self.num_args);
+        for (0..self.num_args) |i| {
+            buffer[i] = self.getArgVar(nominal_var, i);
+        }
+    }
 };
 
 // functions //

@@ -93,7 +93,7 @@ pub const TypeWriter = struct {
                 try self.writeAlias(alias, var_);
             },
             .structure => |flat_type| {
-                try self.writeFlatType(flat_type);
+                try self.writeFlatType(flat_type, var_);
             },
             .effectful => {
                 _ = try self.writer.write("Effectful");
@@ -127,7 +127,7 @@ pub const TypeWriter = struct {
     }
 
     /// Convert a flat type to a type string
-    pub fn writeFlatType(self: *Self, flat_type: FlatType) Allocator.Error!void {
+    pub fn writeFlatType(self: *Self, flat_type: FlatType, var_: types.Var) Allocator.Error!void {
         switch (flat_type) {
             .str => {
                 _ = try self.writer.write("Str");
@@ -154,8 +154,8 @@ pub const TypeWriter = struct {
             .num => |num| {
                 try self.writeNum(num);
             },
-            .custom_type => |custom_type| {
-                try self.writeCustomType(custom_type);
+            .nominal_type => |nominal_type| {
+                try self.writeNominalType(nominal_type, var_);
             },
             .func => |func| {
                 try self.writeFunc(func);
@@ -189,15 +189,21 @@ pub const TypeWriter = struct {
         _ = try self.writer.write(")");
     }
 
-    /// Write a custom type
-    pub fn writeCustomType(self: *Self, custom_type: types.CustomType) Allocator.Error!void {
-        _ = try self.writer.write(self.env.idents.getText(custom_type.ident.ident_idx));
-        const args = self.env.types.getCustomTypeArgsSlice(custom_type.args);
-        if (args.len > 0) {
+    /// Write a nominal type
+    pub fn writeNominalType(self: *Self, nominal_type: types.NominalType, nominal_var: types.Var) Allocator.Error!void {
+        _ = try self.writer.write(self.env.idents.getText(nominal_type.ident.ident_idx));
+        if (nominal_type.num_args > 0) {
             _ = try self.writer.write("(");
-            for (args, 0..) |arg, i| {
-                if (i > 0) _ = try self.writer.write(", ");
-                try self.writeVar(arg);
+            // Use iterator to get argument vars
+            var arg_iter = nominal_type.argIterator(nominal_var);
+            // Write first arg without comma
+            if (arg_iter.next()) |arg_var| {
+                try self.writeVar(arg_var);
+            }
+            // Write remaining args with comma prefix
+            while (arg_iter.next()) |arg_var| {
+                _ = try self.writer.write(", ");
+                try self.writeVar(arg_var);
             }
             _ = try self.writer.write(")");
         }

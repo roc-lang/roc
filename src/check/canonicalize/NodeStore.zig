@@ -2026,8 +2026,8 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) CIR.Diagnostic.I
             node.data_2 = r.original_region.start.offset;
             node.data_3 = r.original_region.end.offset;
         },
-        .custom_type_redeclared => |r| {
-            node.tag = .diag_custom_type_redeclared;
+        .nominal_type_redeclared => |r| {
+            node.tag = .diag_nominal_type_redeclared;
             node.region = r.redeclared_region;
             node.data_1 = @bitCast(r.name);
             node.data_2 = r.original_region.start.offset;
@@ -2197,7 +2197,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
                 .end = .{ .offset = @intCast(node.data_3) },
             },
         } },
-        .diag_custom_type_redeclared => return CIR.Diagnostic{ .custom_type_redeclared = .{
+        .diag_nominal_type_redeclared => return CIR.Diagnostic{ .nominal_type_redeclared = .{
             .name = @bitCast(node.data_1),
             .redeclared_region = node.region,
             .original_region = .{

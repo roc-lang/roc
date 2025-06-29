@@ -566,14 +566,15 @@ pub const Store = struct {
                         try self.layouts_by_var.put(self.env.gpa, current.var_, idx);
                         return idx;
                     },
-                    .custom_type => |custom_type| {
+                    .nominal_type => |nominal_type| {
                         // TODO special-case the builtin Num type here.
                         // If we have one of those, then convert it to a Num layout,
                         // or to a runtime error if it's an invalid elem type.
 
-                        // From a layout perspective, custom types are identical to type aliases:
+                        // From a layout perspective, nominal types are identical to type aliases:
                         // all we care about is what's inside, so just unroll it.
-                        current = self.types_store.resolveVar(custom_type.backing_var);
+                        const backing_var = nominal_type.getBackingVar(current.var_);
+                        current = self.types_store.resolveVar(backing_var);
                         continue;
                     },
                     .num => |num| switch (num) {

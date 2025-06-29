@@ -3749,11 +3749,11 @@ fn scopeIntroduceTypeDecl(
                 },
             });
         },
-        .custom_type_redeclared => |original_stmt| {
+        .nominal_type_redeclared => |original_stmt| {
             const original_statement = self.can_ir.store.getStatement(original_stmt);
             const original_region = original_statement.toRegion();
             self.can_ir.pushDiagnostic(CIR.Diagnostic{
-                .custom_type_redeclared = .{
+                .nominal_type_redeclared = .{
                     .name = name_ident,
                     .original_region = original_region,
                     .redeclared_region = region,
