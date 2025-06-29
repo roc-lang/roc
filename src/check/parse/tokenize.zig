@@ -681,9 +681,8 @@ pub const Cursor = struct {
         return null;
     }
 
-    pub fn chompNumber(self: *Cursor, initialDigit: u8) Token.Tag {
-        // Consume the initial digit.
-        std.debug.assert(initialDigit == self.buf[self.pos]);
+    pub fn chompNumber(self: *Cursor) Token.Tag {
+        const initialDigit = self.buf[self.pos];
         self.pos += 1;
 
         var tok = Token.Tag.Int;
@@ -1211,7 +1210,7 @@ pub const Tokenizer = struct {
                             self.output.pushTokenNormal(.OpBinaryMinus, start, 1);
                         } else if (n >= '0' and n <= '9' and sp) {
                             self.cursor.pos += 1;
-                            const tag = self.cursor.chompNumber(n);
+                            const tag = self.cursor.chompNumber();
                             const len = self.cursor.pos - start;
                             self.output.pushTokenNormal(tag, start, len);
                         } else {
@@ -1430,7 +1429,7 @@ pub const Tokenizer = struct {
 
                 // Numbers starting with 0-9
                 '0'...'9' => {
-                    const tag = self.cursor.chompNumber(b);
+                    const tag = self.cursor.chompNumber();
                     const len = self.cursor.pos - start;
                     self.output.pushTokenNormal(tag, start, len);
                 },
