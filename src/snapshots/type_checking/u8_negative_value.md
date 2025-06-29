@@ -17,6 +17,7 @@ The number **-1** is **signed** because it is negative:
 ```roc
 x = -1
 ```
+    ^^
 
 However, its inferred type is **unsigned**:
     _U8_
@@ -30,15 +31,15 @@ LowerIdent(4:1-4:2),OpAssign(4:3-4:4),Int(4:5-4:7),EndOfFile(4:7-4:7),
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-4-7
-	(module @1-1-1-10
-		(exposes @1-8-1-10))
+(file @1.1-4.7
+	(module @1.1-1.10
+		(exposes @1.8-1.10))
 	(statements
-		(s-type-anno @3-1-4-2 (name "x")
+		(s-type-anno @3.1-4.2 (name "x")
 			(ty (name "U8")))
-		(s-decl @4-1-4-7
-			(p-ident @4-1-4-2 (raw "x"))
-			(e-int @4-5-4-7 (raw "-1")))))
+		(s-decl @4.1-4.7
+			(p-ident @4.1-4.2 (raw "x"))
+			(e-int @4.5-4.7 (raw "-1")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -48,11 +49,11 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let (id 79)
-		(p-assign @4-1-4-2 (ident "x") (id 74))
-		(e-int @4-5-4-7 (value "-1") (id 75))
-		(annotation @4-1-4-2 (signature 77) (id 78)
+		(p-assign @4.1-4.2 (ident "x") (id 74))
+		(e-int @4.5-4.7 (value "-1") (id 75))
+		(annotation @4.1-4.2 (signature 77) (id 78)
 			(declared-type
-				(ty @3-5-3-7 (name "U8"))))))
+				(ty @3.5-3.7 (name "U8"))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -60,5 +61,5 @@ NO CHANGE
 	(defs
 		(d_assign (name "x") (def_var 79) (type "Error")))
 	(expressions
-		(expr @4-5-4-7 (type "Error"))))
+		(expr @4.5-4.7 (type "Error"))))
 ~~~

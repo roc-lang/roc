@@ -15,9 +15,9 @@ KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),EndOfFile(1:10-1:10)
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-1-10
-	(module @1-1-1-10
-		(exposes @1-8-1-10))
+(file @1.1-1.10
+	(module @1.1-1.10
+		(exposes @1.8-1.10))
 	(statements))
 ~~~
 # FORMATTED

@@ -87,7 +87,7 @@ pub const Diagnostic = union(enum) {
         original_region: Region,
         redeclared_region: Region,
     },
-    custom_type_redeclared: struct {
+    nominal_type_redeclared: struct {
         name: Ident.Idx,
         original_region: Region,
         redeclared_region: Region,
@@ -145,7 +145,7 @@ pub const Diagnostic = union(enum) {
             .undeclared_type => |d| d.region,
             .undeclared_type_var => |d| d.region,
             .type_alias_redeclared => |d| d.redeclared_region,
-            .custom_type_redeclared => |d| d.redeclared_region,
+            .nominal_type_redeclared => |d| d.redeclared_region,
             .type_shadowed_warning => |d| d.region,
             .type_parameter_conflict => |d| d.region,
             .unused_variable => |d| d.region,
@@ -551,8 +551,8 @@ pub const Diagnostic = union(enum) {
         return report;
     }
 
-    /// Build a report for "custom type redeclared" diagnostic
-    pub fn buildCustomTypeRedeclaredReport(
+    /// Build a report for "nominal type redeclared" diagnostic
+    pub fn buildNominalTypeRedeclaredReport(
         allocator: Allocator,
         type_name: []const u8,
         original_region_info: base.RegionInfo,
@@ -562,7 +562,7 @@ pub const Diagnostic = union(enum) {
     ) !Report {
         var report = Report.init(allocator, "CUSTOM TYPE REDECLARED", .runtime_error);
         const owned_type_name = try report.addOwnedString(type_name);
-        try report.document.addText("The custom type `");
+        try report.document.addText("The nominal type `");
         try report.document.addUnqualifiedSymbol(owned_type_name);
         try report.document.addText("` is being redeclared.");
         try report.document.addLineBreak();

@@ -21,26 +21,26 @@ LowerIdent(4:1-4:2),OpAssign(4:3-4:4),LowerIdent(4:5-4:6),OpPlus(4:7-4:8),Int(4:
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-4-10
-	(app @1-1-1-57
-		(provides @1-6-1-12
+(file @1.1-4.10
+	(app @1.1-1.57
+		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @1-15-1-57 (name "pf")
-			(e-string @1-28-1-55
-				(e-string-part @1-29-1-54 (raw "../basic-cli/platform.roc"))))
-		(packages @1-13-1-57
-			(record-field @1-15-1-57 (name "pf")
-				(e-string @1-28-1-55
-					(e-string-part @1-29-1-54 (raw "../basic-cli/platform.roc"))))))
+		(record-field @1.15-1.57 (name "pf")
+			(e-string @1.28-1.55
+				(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))
+		(packages @1.13-1.57
+			(record-field @1.15-1.57 (name "pf")
+				(e-string @1.28-1.55
+					(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))))
 	(statements
-		(s-decl @3-1-3-6
-			(p-ident @3-1-3-2 (raw "a"))
-			(e-int @3-5-3-6 (raw "5")))
-		(s-decl @4-1-4-10
-			(p-ident @4-1-4-2 (raw "b"))
-			(e-binop @4-5-4-10 (op "+")
-				(e-ident @4-5-4-6 (qaul "") (raw "a"))
-				(e-int @4-9-4-10 (raw "1"))))))
+		(s-decl @3.1-3.6
+			(p-ident @3.1-3.2 (raw "a"))
+			(e-int @3.5-3.6 (raw "5")))
+		(s-decl @4.1-4.10
+			(p-ident @4.1-4.2 (raw "b"))
+			(e-binop @4.5-4.10 (op "+")
+				(e-ident @4.5-4.6 (qaul "") (raw "a"))
+				(e-int @4.9-4.10 (raw "1"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -50,14 +50,14 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let (id 75)
-		(p-assign @3-1-3-2 (ident "a") (id 73))
-		(e-int @3-5-3-6 (value "5") (id 74)))
+		(p-assign @3.1-3.2 (ident "a") (id 73))
+		(e-int @3.5-3.6 (value "5") (id 74)))
 	(d-let (id 80)
-		(p-assign @4-1-4-2 (ident "b") (id 76))
-		(e-binop @4-5-4-10 (op "add") (id 79)
-			(e-lookup-local @4-5-4-6
+		(p-assign @4.1-4.2 (ident "b") (id 76))
+		(e-binop @4.5-4.10 (op "add") (id 79)
+			(e-lookup-local @4.5-4.6
 				(pattern (id 73)))
-			(e-int @4-9-4-10 (value "1")))))
+			(e-int @4.9-4.10 (value "1")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -66,6 +66,6 @@ NO CHANGE
 		(d_assign (name "a") (def_var 75) (type "Num(*)"))
 		(d_assign (name "b") (def_var 80) (type "*")))
 	(expressions
-		(expr @3-5-3-6 (type "Num(*)"))
-		(expr @4-5-4-10 (type "*"))))
+		(expr @3.5-3.6 (type "Num(*)"))
+		(expr @4.5-4.10 (type "*"))))
 ~~~

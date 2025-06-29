@@ -21,6 +21,7 @@ Here is the problematic code:
 ```roc
 F
 ```
+^
 
 
 # TOKENS
@@ -29,8 +30,8 @@ UpperIdent(1:1-1:2),EndOfFile(1:2-1:2),
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-1-2
-	(malformed-header @1-1-1-2 (tag "missing_header"))
+(file @1.1-1.2
+	(malformed-header @1.1-1.2 (tag "missing_header"))
 	(statements))
 ~~~
 # FORMATTED

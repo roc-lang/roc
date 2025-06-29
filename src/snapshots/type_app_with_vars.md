@@ -25,53 +25,53 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-6-33
-	(app @1-1-1-53
-		(provides @1-6-1-12
+(file @1.1-6.33
+	(app @1.1-1.53
+		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @1-15-1-53 (name "pf")
-			(e-string @1-28-1-51
-				(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))
-		(packages @1-13-1-53
-			(record-field @1-15-1-53 (name "pf")
-				(e-string @1-28-1-51
-					(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))))
+		(record-field @1.15-1.53 (name "pf")
+			(e-string @1.28-1.51
+				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
+		(packages @1.13-1.53
+			(record-field @1.15-1.53 (name "pf")
+				(e-string @1.28-1.51
+					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @3-1-4-8 (name "mapList")
-			(ty-fn @3-11-3-39
-				(ty-apply @3-11-3-18
+		(s-type-anno @3.1-4.8 (name "mapList")
+			(ty-fn @3.11-3.39
+				(ty-apply @3.11-3.18
 					(ty (name "List"))
-					(ty-var @3-16-3-17 (raw "a")))
-				(ty-fn @3-21-3-27
-					(ty-var @3-21-3-22 (raw "a"))
-					(ty-var @3-26-3-27 (raw "b")))
-				(ty-apply @3-32-3-39
+					(ty-var @3.16-3.17 (raw "a")))
+				(ty-fn @3.21-3.27
+					(ty-var @3.21-3.22 (raw "a"))
+					(ty-var @3.26-3.27 (raw "b")))
+				(ty-apply @3.32-3.39
 					(ty (name "List"))
-					(ty-var @3-37-3-38 (raw "b")))))
-		(s-decl @4-1-6-6
-			(p-ident @4-1-4-8 (raw "mapList"))
-			(e-lambda @4-11-6-6
+					(ty-var @3.37-3.38 (raw "b")))))
+		(s-decl @4.1-6.6
+			(p-ident @4.1-4.8 (raw "mapList"))
+			(e-lambda @4.11-6.6
 				(args
-					(p-ident @4-12-4-16 (raw "list"))
-					(p-ident @4-18-4-20 (raw "fn")))
-				(e-field-access @4-22-6-6
-					(e-ident @4-22-4-26 (qaul "") (raw "list"))
-					(e-apply @4-26-4-34
-						(e-ident @4-26-4-30 (qaul "") (raw ".map"))
-						(e-ident @4-31-4-33 (qaul "") (raw "fn"))))))
-		(s-decl @6-1-6-33
-			(p-ident @6-1-6-6 (raw "main!"))
-			(e-lambda @6-9-6-33
+					(p-ident @4.12-4.16 (raw "list"))
+					(p-ident @4.18-4.20 (raw "fn")))
+				(e-field-access @4.22-6.6
+					(e-ident @4.22-4.26 (qaul "") (raw "list"))
+					(e-apply @4.26-4.34
+						(e-ident @4.26-4.30 (qaul "") (raw ".map"))
+						(e-ident @4.31-4.33 (qaul "") (raw "fn"))))))
+		(s-decl @6.1-6.33
+			(p-ident @6.1-6.6 (raw "main!"))
+			(e-lambda @6.9-6.33
 				(args
 					(p-underscore))
-				(e-apply @6-13-6-33
-					(e-ident @6-13-6-20 (qaul "") (raw "mapList"))
-					(e-list @6-21-6-32
-						(e-int @6-22-6-23 (raw "1"))
-						(e-int @6-24-6-25 (raw "2"))
-						(e-int @6-26-6-27 (raw "3"))
-						(e-int @6-28-6-29 (raw "4"))
-						(e-int @6-30-6-31 (raw "5"))))))))
+				(e-apply @6.13-6.33
+					(e-ident @6.13-6.20 (qaul "") (raw "mapList"))
+					(e-list @6.21-6.32
+						(e-int @6.22-6.23 (raw "1"))
+						(e-int @6.24-6.25 (raw "2"))
+						(e-int @6.26-6.27 (raw "3"))
+						(e-int @6.28-6.29 (raw "4"))
+						(e-int @6.30-6.31 (raw "5"))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -86,52 +86,52 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 ~~~clojure
 (can-ir
 	(d-let (id 106)
-		(p-assign @4-1-4-8 (ident "mapList") (id 86))
-		(e-lambda @4-11-6-6 (id 93)
+		(p-assign @4.1-4.8 (ident "mapList") (id 86))
+		(e-lambda @4.11-6.6 (id 93)
 			(args
-				(p-assign @4-12-4-16 (ident "list") (id 87))
-				(p-assign @4-18-4-20 (ident "fn") (id 88)))
-			(e-dot-access @4-22-6-6 (field "map")
+				(p-assign @4.12-4.16 (ident "list") (id 87))
+				(p-assign @4.18-4.20 (ident "fn") (id 88)))
+			(e-dot-access @4.22-6.6 (field "map")
 				(receiver
-					(e-lookup-local @4-22-4-26
+					(e-lookup-local @4.22-4.26
 						(pattern (id 87))))
 				(args
-					(e-lookup-local @4-31-4-33
+					(e-lookup-local @4.31-4.33
 						(pattern (id 88))))))
-		(annotation @4-1-4-8 (signature 104) (id 105)
+		(annotation @4.1-4.8 (signature 104) (id 105)
 			(declared-type
-				(ty-fn @3-11-3-39 (effectful false)
-					(ty-apply @3-11-3-18 (symbol "List")
-						(ty-var @3-16-3-17 (name "a")))
-					(ty-parens @3-20-3-28
-						(ty-fn @3-21-3-27 (effectful false)
-							(ty-var @3-21-3-22 (name "a"))
-							(ty-var @3-26-3-27 (name "b"))))
-					(ty-apply @3-32-3-39 (symbol "List")
-						(ty-var @3-37-3-38 (name "b")))))))
-	(d-let (id 121)
-		(p-assign @6-1-6-6 (ident "main!") (id 107))
-		(e-lambda @6-9-6-33 (id 120)
+				(ty-fn @3.11-3.39 (effectful false)
+					(ty-apply @3.11-3.18 (symbol "List")
+						(ty-var @3.16-3.17 (name "a")))
+					(ty-parens @3.20-3.28
+						(ty-fn @3.21-3.27 (effectful false)
+							(ty-var @3.21-3.22 (name "a"))
+							(ty-var @3.26-3.27 (name "b"))))
+					(ty-apply @3.32-3.39 (symbol "List")
+						(ty-var @3.37-3.38 (name "b")))))))
+	(d-let (id 120)
+		(p-assign @6.1-6.6 (ident "main!") (id 107))
+		(e-lambda @6.9-6.33 (id 119)
 			(args
-				(p-underscore @6-10-6-11 (id 108)))
-			(e-call @6-13-6-33
-				(e-lookup-local @6-13-6-20
+				(p-underscore @6.10-6.11 (id 108)))
+			(e-call @6.13-6.33
+				(e-lookup-local @6.13-6.20
 					(pattern (id 86)))
-				(e-list @6-21-6-32 (elem-var 115)
+				(e-list @6.21-6.32 (elem-var 110)
 					(elems
-						(e-int @6-22-6-23 (value "1"))
-						(e-int @6-24-6-25 (value "2"))
-						(e-int @6-26-6-27 (value "3"))
-						(e-int @6-28-6-29 (value "4"))
-						(e-int @6-30-6-31 (value "5"))))))))
+						(e-int @6.22-6.23 (value "1"))
+						(e-int @6.24-6.25 (value "2"))
+						(e-int @6.26-6.27 (value "3"))
+						(e-int @6.28-6.29 (value "4"))
+						(e-int @6.30-6.31 (value "5"))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(d_assign (name "mapList") (def_var 106) (type "List, a -> b -> List"))
-		(d_assign (name "main!") (def_var 121) (type "* ? *")))
+		(d_assign (name "main!") (def_var 120) (type "* ? *")))
 	(expressions
-		(expr @4-11-6-6 (type "List, a -> b -> List"))
-		(expr @6-9-6-33 (type "* ? *"))))
+		(expr @4.11-6.6 (type "List, a -> b -> List"))
+		(expr @6.9-6.33 (type "* ? *"))))
 ~~~

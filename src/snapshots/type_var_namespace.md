@@ -32,6 +32,7 @@ Here is the problematic code:
 ```roc
     result = List.first(list) |> Result.withDefault(elem)
 ```
+                              ^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -63,52 +64,52 @@ LowerIdent(16:1-16:6),OpAssign(16:7-16:8),OpBar(16:9-16:10),Underscore(16:10-16:
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-16-15
-	(app @1-1-1-57
-		(provides @1-6-1-12
+(file @1.1-16.15
+	(app @1.1-1.57
+		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @1-15-1-57 (name "pf")
-			(e-string @1-28-1-55
-				(e-string-part @1-29-1-54 (raw "../basic-cli/platform.roc"))))
-		(packages @1-13-1-57
-			(record-field @1-15-1-57 (name "pf")
-				(e-string @1-28-1-55
-					(e-string-part @1-29-1-54 (raw "../basic-cli/platform.roc"))))))
+		(record-field @1.15-1.57 (name "pf")
+			(e-string @1.28-1.55
+				(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))
+		(packages @1.13-1.57
+			(record-field @1.15-1.57 (name "pf")
+				(e-string @1.28-1.55
+					(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))))
 	(statements
-		(s-type-anno @4-1-5-8 (name "process")
-			(ty-fn @4-11-4-29
-				(ty-apply @4-11-4-21
+		(s-type-anno @4.1-5.8 (name "process")
+			(ty-fn @4.11-4.29
+				(ty-apply @4.11-4.21
 					(ty (name "List"))
-					(ty-var @4-16-4-20 (raw "elem")))
-				(ty-var @4-25-4-29 (raw "elem"))))
-		(s-decl @5-1-14-2
-			(p-ident @5-1-5-8 (raw "process"))
-			(e-lambda @5-11-14-2
+					(ty-var @4.16-4.20 (raw "elem")))
+				(ty-var @4.25-4.29 (raw "elem"))))
+		(s-decl @5.1-14.2
+			(p-ident @5.1-5.8 (raw "process"))
+			(e-lambda @5.11-14.2
 				(args
-					(p-ident @5-12-5-16 (raw "list")))
-				(e-block @5-18-14-2
+					(p-ident @5.12-5.16 (raw "list")))
+				(e-block @5.18-14.2
 					(statements
-						(s-decl @7-5-7-14
-							(p-ident @7-5-7-9 (raw "elem"))
-							(e-int @7-12-7-14 (raw "42")))
-						(s-type-anno @10-5-11-11 (name "result")
-							(ty-var @10-14-10-18 (raw "elem")))
-						(s-decl @11-5-11-30
-							(p-ident @11-5-11-11 (raw "result"))
-							(e-apply @11-14-11-30
-								(e-ident @11-14-11-24 (qaul "List") (raw ".first"))
-								(e-ident @11-25-11-29 (qaul "") (raw "list"))))
-						(e-malformed @11-31-11-40 (reason "expr_unexpected_token"))
-						(e-apply @11-34-11-58
-							(e-ident @11-34-11-52 (qaul "Result") (raw ".withDefault"))
-							(e-ident @11-53-11-57 (qaul "") (raw "elem")))
-						(e-ident @13-5-13-11 (qaul "") (raw "result"))))))
-		(s-decl @16-1-16-15
-			(p-ident @16-1-16-6 (raw "main!"))
-			(e-lambda @16-9-16-15
+						(s-decl @7.5-7.14
+							(p-ident @7.5-7.9 (raw "elem"))
+							(e-int @7.12-7.14 (raw "42")))
+						(s-type-anno @10.5-11.11 (name "result")
+							(ty-var @10.14-10.18 (raw "elem")))
+						(s-decl @11.5-11.30
+							(p-ident @11.5-11.11 (raw "result"))
+							(e-apply @11.14-11.30
+								(e-ident @11.14-11.24 (qaul "List") (raw ".first"))
+								(e-ident @11.25-11.29 (qaul "") (raw "list"))))
+						(e-malformed @11.31-11.40 (reason "expr_unexpected_token"))
+						(e-apply @11.34-11.58
+							(e-ident @11.34-11.52 (qaul "Result") (raw ".withDefault"))
+							(e-ident @11.53-11.57 (qaul "") (raw "elem")))
+						(e-ident @13.5-13.11 (qaul "") (raw "result"))))))
+		(s-decl @16.1-16.15
+			(p-ident @16.1-16.6 (raw "main!"))
+			(e-lambda @16.9-16.15
 				(args
 					(p-underscore))
-				(e-record @16-13-16-15)))))
+				(e-record @16.13-16.15)))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -135,41 +136,41 @@ main! = |_| {}
 ~~~clojure
 (can-ir
 	(d-let (id 112)
-		(p-assign @5-1-5-8 (ident "process") (id 79))
-		(e-lambda @5-11-14-2 (id 104)
+		(p-assign @5.1-5.8 (ident "process") (id 79))
+		(e-lambda @5.11-14.2 (id 104)
 			(args
-				(p-assign @5-12-5-16 (ident "list") (id 80)))
-			(e-block @5-18-14-2
-				(s-let @7-5-7-14
-					(p-assign @7-5-7-9 (ident "elem") (id 81))
-					(e-int @7-12-7-14 (value "42") (id 82)))
-				(s-type-anno @10-5-11-11 (name "result")
-					(ty-var @10-14-10-18 (name "elem")))
-				(s-let @11-5-11-30
-					(p-assign @11-5-11-11 (ident "result") (id 88))
-					(e-call @11-14-11-30 (id 93)
+				(p-assign @5.12-5.16 (ident "list") (id 80)))
+			(e-block @5.18-14.2
+				(s-let @7.5-7.14
+					(p-assign @7.5-7.9 (ident "elem") (id 81))
+					(e-int @7.12-7.14 (value "42") (id 82)))
+				(s-type-anno @10.5-11.11 (name "result")
+					(ty-var @10.14-10.18 (name "elem")))
+				(s-let @11.5-11.30
+					(p-assign @11.5-11.11 (ident "result") (id 88))
+					(e-call @11.14-11.30 (id 93)
 						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-lookup-local @11-25-11-29
+						(e-lookup-local @11.25-11.29
 							(pattern (id 80)))))
-				(s-expr @11-34-13-11
-					(e-call @11-34-11-58
+				(s-expr @11.34-13.11
+					(e-call @11.34-11.58
 						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-lookup-local @11-53-11-57
+						(e-lookup-local @11.53-11.57
 							(pattern (id 81)))))
-				(e-lookup-local @13-5-13-11
+				(e-lookup-local @13.5-13.11
 					(pattern (id 88)))))
-		(annotation @5-1-5-8 (signature 110) (id 111)
+		(annotation @5.1-5.8 (signature 110) (id 111)
 			(declared-type
-				(ty-fn @4-11-4-29 (effectful false)
-					(ty-apply @4-11-4-21 (symbol "List")
-						(ty-var @4-16-4-20 (name "elem")))
-					(ty-var @4-25-4-29 (name "elem"))))))
+				(ty-fn @4.11-4.29 (effectful false)
+					(ty-apply @4.11-4.21 (symbol "List")
+						(ty-var @4.16-4.20 (name "elem")))
+					(ty-var @4.25-4.29 (name "elem"))))))
 	(d-let (id 118)
-		(p-assign @16-1-16-6 (ident "main!") (id 113))
-		(e-lambda @16-9-16-15 (id 117)
+		(p-assign @16.1-16.6 (ident "main!") (id 113))
+		(e-lambda @16.9-16.15 (id 117)
 			(args
-				(p-underscore @16-10-16-11 (id 114)))
-			(e-empty_record @16-13-16-15))))
+				(p-underscore @16.10-16.11 (id 114)))
+			(e-empty_record @16.13-16.15))))
 ~~~
 # TYPES
 ~~~clojure
@@ -178,6 +179,6 @@ main! = |_| {}
 		(d_assign (name "process") (def_var 112) (type "List -> elem"))
 		(d_assign (name "main!") (def_var 118) (type "* ? {}")))
 	(expressions
-		(expr @5-11-14-2 (type "List -> elem"))
-		(expr @16-9-16-15 (type "* ? {}"))))
+		(expr @5.11-14.2 (type "List -> elem"))
+		(expr @16.9-16.15 (type "* ? {}"))))
 ~~~

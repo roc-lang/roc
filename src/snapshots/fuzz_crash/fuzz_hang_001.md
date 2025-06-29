@@ -21,6 +21,7 @@ Here is the problematic code:
 ```roc
 0 (
 ```
+^^^
 
 
 **PARSE ERROR**
@@ -32,6 +33,7 @@ Here is the problematic code:
 ```roc
 0 (
 ```
+   
 
 
 **INVALID STATEMENT**
@@ -44,10 +46,10 @@ Int(1:1-1:2),OpenRound(1:3-1:4),EndOfFile(1:4-1:4),
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-1-4
-	(malformed-header @1-1-1-4 (tag "missing_header"))
+(file @1.1-1.4
+	(malformed-header @1.1-1.4 (tag "missing_header"))
 	(statements
-		(e-malformed @1-4-1-4 (reason "expected_expr_close_round_or_comma"))))
+		(e-malformed @1.4-1.4 (reason "expected_expr_close_round_or_comma"))))
 ~~~
 # FORMATTED
 ~~~roc

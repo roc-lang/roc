@@ -22,6 +22,7 @@ Here is the problematic code:
 ```roc
 curry : (a, b -> c) -> (a -> b -> c)
 ```
+                    ^^^^
 
 
 **INVALID STATEMENT**
@@ -38,6 +39,7 @@ This expression is used in an unexpected way:
 ```roc
 curry = |fn| |x| |y| fn(x, y)
 ```
+^^^^^
 
 It is of type:
     _a, b -> c_
@@ -56,51 +58,51 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-6-15
-	(app @1-1-1-53
-		(provides @1-6-1-12
+(file @1.1-6.15
+	(app @1.1-1.53
+		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @1-15-1-53 (name "pf")
-			(e-string @1-28-1-51
-				(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))
-		(packages @1-13-1-53
-			(record-field @1-15-1-53 (name "pf")
-				(e-string @1-28-1-51
-					(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))))
+		(record-field @1.15-1.53 (name "pf")
+			(e-string @1.28-1.51
+				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
+		(packages @1.13-1.53
+			(record-field @1.15-1.53 (name "pf")
+				(e-string @1.28-1.51
+					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @3-1-3-23 (name "curry")
-			(ty-fn @3-10-3-19
-				(ty-var @3-10-3-11 (raw "a"))
-				(ty-var @3-13-3-14 (raw "b"))
-				(ty-var @3-18-3-19 (raw "c"))))
-		(e-malformed @3-21-3-25 (reason "expr_unexpected_token"))
-		(e-tuple @3-24-3-37
-			(e-local-dispatch @3-25-3-37
-				(e-local-dispatch @3-25-3-34
-					(e-ident @3-25-3-26 (qaul "") (raw "a"))
-					(e-ident @3-30-3-31 (qaul "") (raw "b")))
-				(e-ident @3-35-3-36 (qaul "") (raw "c"))))
-		(s-decl @4-1-4-30
-			(p-ident @4-1-4-6 (raw "curry"))
-			(e-lambda @4-9-4-30
+		(s-type-anno @3.1-3.23 (name "curry")
+			(ty-fn @3.10-3.19
+				(ty-var @3.10-3.11 (raw "a"))
+				(ty-var @3.13-3.14 (raw "b"))
+				(ty-var @3.18-3.19 (raw "c"))))
+		(e-malformed @3.21-3.25 (reason "expr_unexpected_token"))
+		(e-tuple @3.24-3.37
+			(e-local-dispatch @3.25-3.37
+				(e-local-dispatch @3.25-3.34
+					(e-ident @3.25-3.26 (qaul "") (raw "a"))
+					(e-ident @3.30-3.31 (qaul "") (raw "b")))
+				(e-ident @3.35-3.36 (qaul "") (raw "c"))))
+		(s-decl @4.1-4.30
+			(p-ident @4.1-4.6 (raw "curry"))
+			(e-lambda @4.9-4.30
 				(args
-					(p-ident @4-10-4-12 (raw "fn")))
-				(e-lambda @4-14-4-30
+					(p-ident @4.10-4.12 (raw "fn")))
+				(e-lambda @4.14-4.30
 					(args
-						(p-ident @4-15-4-16 (raw "x")))
-					(e-lambda @4-18-4-30
+						(p-ident @4.15-4.16 (raw "x")))
+					(e-lambda @4.18-4.30
 						(args
-							(p-ident @4-19-4-20 (raw "y")))
-						(e-apply @4-22-4-30
-							(e-ident @4-22-4-24 (qaul "") (raw "fn"))
-							(e-ident @4-25-4-26 (qaul "") (raw "x"))
-							(e-ident @4-28-4-29 (qaul "") (raw "y")))))))
-		(s-decl @6-1-6-15
-			(p-ident @6-1-6-6 (raw "main!"))
-			(e-lambda @6-9-6-15
+							(p-ident @4.19-4.20 (raw "y")))
+						(e-apply @4.22-4.30
+							(e-ident @4.22-4.24 (qaul "") (raw "fn"))
+							(e-ident @4.25-4.26 (qaul "") (raw "x"))
+							(e-ident @4.28-4.29 (qaul "") (raw "y")))))))
+		(s-decl @6.1-6.15
+			(p-ident @6.1-6.6 (raw "main!"))
+			(e-lambda @6.9-6.15
 				(args
 					(p-underscore))
-				(e-record @6-13-6-15)))))
+				(e-record @6.13-6.15)))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -115,36 +117,36 @@ main! = |_| {}
 ~~~clojure
 (can-ir
 	(d-let (id 108)
-		(p-assign @4-1-4-6 (ident "curry") (id 83))
-		(e-lambda @4-9-4-30 (id 97)
+		(p-assign @4.1-4.6 (ident "curry") (id 83))
+		(e-lambda @4.9-4.30 (id 97)
 			(args
-				(p-assign @4-10-4-12 (ident "fn") (id 84)))
-			(e-lambda @4-14-4-30
+				(p-assign @4.10-4.12 (ident "fn") (id 84)))
+			(e-lambda @4.14-4.30
 				(args
-					(p-assign @4-15-4-16 (ident "x") (id 85)))
-				(e-lambda @4-18-4-30
+					(p-assign @4.15-4.16 (ident "x") (id 85)))
+				(e-lambda @4.18-4.30
 					(args
-						(p-assign @4-19-4-20 (ident "y") (id 86)))
-					(e-call @4-22-4-30
-						(e-lookup-local @4-22-4-24
+						(p-assign @4.19-4.20 (ident "y") (id 86)))
+					(e-call @4.22-4.30
+						(e-lookup-local @4.22-4.24
 							(pattern (id 84)))
-						(e-lookup-local @4-25-4-26
+						(e-lookup-local @4.25-4.26
 							(pattern (id 85)))
-						(e-lookup-local @4-28-4-29
+						(e-lookup-local @4.28-4.29
 							(pattern (id 86)))))))
-		(annotation @4-1-4-6 (signature 106) (id 107)
+		(annotation @4.1-4.6 (signature 106) (id 107)
 			(declared-type
-				(ty-parens @3-9-3-20
-					(ty-fn @3-10-3-19 (effectful false)
-						(ty-var @3-10-3-11 (name "a"))
-						(ty-var @3-13-3-14 (name "b"))
-						(ty-var @3-18-3-19 (name "c")))))))
+				(ty-parens @3.9-3.20
+					(ty-fn @3.10-3.19 (effectful false)
+						(ty-var @3.10-3.11 (name "a"))
+						(ty-var @3.13-3.14 (name "b"))
+						(ty-var @3.18-3.19 (name "c")))))))
 	(d-let (id 114)
-		(p-assign @6-1-6-6 (ident "main!") (id 109))
-		(e-lambda @6-9-6-15 (id 113)
+		(p-assign @6.1-6.6 (ident "main!") (id 109))
+		(e-lambda @6.9-6.15 (id 113)
 			(args
-				(p-underscore @6-10-6-11 (id 110)))
-			(e-empty_record @6-13-6-15))))
+				(p-underscore @6.10-6.11 (id 110)))
+			(e-empty_record @6.13-6.15))))
 ~~~
 # TYPES
 ~~~clojure
@@ -153,6 +155,6 @@ main! = |_| {}
 		(d_assign (name "curry") (def_var 108) (type "Error"))
 		(d_assign (name "main!") (def_var 114) (type "* ? {}")))
 	(expressions
-		(expr @4-9-4-30 (type "Error"))
-		(expr @6-9-6-15 (type "* ? {}"))))
+		(expr @4.9-4.30 (type "Error"))
+		(expr @6.9-6.15 (type "* ? {}"))))
 ~~~

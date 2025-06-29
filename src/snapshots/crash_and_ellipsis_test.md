@@ -36,6 +36,7 @@ Here is the problematic code:
 ```roc
 testCrash = |_| crash "This is a crash message"
 ```
+                ^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -47,6 +48,7 @@ Here is the problematic code:
 ```roc
 testCrashSimple = |_| crash "oops"
 ```
+                      ^^^^^^^
 
 
 **NOT IMPLEMENTED**
@@ -75,6 +77,7 @@ The unused variable is declared here:
 ```roc
     result1 = testEllipsis(42)
 ```
+    ^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -86,6 +89,7 @@ The unused variable is declared here:
 ```roc
     result2 = testCrash(42)
 ```
+    ^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -97,6 +101,7 @@ The unused variable is declared here:
 ```roc
     result3 = testCrashSimple(42)
 ```
+    ^^^^^^^
 
 
 # TOKENS
@@ -124,75 +129,75 @@ CloseCurly(20:1-20:2),EndOfFile(20:2-20:2),
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-20-2
-	(app @1-1-1-57
-		(provides @1-6-1-12
+(file @1.1-20.2
+	(app @1.1-1.57
+		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @1-15-1-57 (name "pf")
-			(e-string @1-28-1-55
-				(e-string-part @1-29-1-54 (raw "../basic-cli/platform.roc"))))
-		(packages @1-13-1-57
-			(record-field @1-15-1-57 (name "pf")
-				(e-string @1-28-1-55
-					(e-string-part @1-29-1-54 (raw "../basic-cli/platform.roc"))))))
+		(record-field @1.15-1.57 (name "pf")
+			(e-string @1.28-1.55
+				(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))
+		(packages @1.13-1.57
+			(record-field @1.15-1.57 (name "pf")
+				(e-string @1.28-1.55
+					(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))))
 	(statements
-		(s-type-anno @4-1-5-13 (name "testEllipsis")
-			(ty-fn @4-16-4-26
+		(s-type-anno @4.1-5.13 (name "testEllipsis")
+			(ty-fn @4.16-4.26
 				(ty (name "U64"))
 				(ty (name "U64"))))
-		(s-decl @5-1-5-23
-			(p-ident @5-1-5-13 (raw "testEllipsis"))
-			(e-lambda @5-16-5-23
+		(s-decl @5.1-5.23
+			(p-ident @5.1-5.13 (raw "testEllipsis"))
+			(e-lambda @5.16-5.23
 				(args
 					(p-underscore))
 				(e-ellipsis)))
-		(s-type-anno @8-1-9-10 (name "testCrash")
-			(ty-fn @8-13-8-23
+		(s-type-anno @8.1-9.10 (name "testCrash")
+			(ty-fn @8.13-8.23
 				(ty (name "U64"))
 				(ty (name "U64"))))
-		(s-decl @9-1-9-24
-			(p-ident @9-1-9-10 (raw "testCrash"))
-			(e-lambda @9-13-9-24
+		(s-decl @9.1-9.24
+			(p-ident @9.1-9.10 (raw "testCrash"))
+			(e-lambda @9.13-9.24
 				(args
 					(p-underscore))
-				(e-malformed @9-17-9-24 (reason "expr_unexpected_token"))))
-		(e-string @9-23-9-48
-			(e-string-part @9-24-9-47 (raw "This is a crash message")))
-		(s-type-anno @12-1-13-16 (name "testCrashSimple")
-			(ty-fn @12-19-12-29
+				(e-malformed @9.17-9.24 (reason "expr_unexpected_token"))))
+		(e-string @9.23-9.48
+			(e-string-part @9.24-9.47 (raw "This is a crash message")))
+		(s-type-anno @12.1-13.16 (name "testCrashSimple")
+			(ty-fn @12.19-12.29
 				(ty (name "U64"))
 				(ty (name "U64"))))
-		(s-decl @13-1-13-30
-			(p-ident @13-1-13-16 (raw "testCrashSimple"))
-			(e-lambda @13-19-13-30
+		(s-decl @13.1-13.30
+			(p-ident @13.1-13.16 (raw "testCrashSimple"))
+			(e-lambda @13.19-13.30
 				(args
 					(p-underscore))
-				(e-malformed @13-23-13-30 (reason "expr_unexpected_token"))))
-		(e-string @13-29-13-35
-			(e-string-part @13-30-13-34 (raw "oops")))
-		(s-decl @15-1-20-2
-			(p-ident @15-1-15-6 (raw "main!"))
-			(e-lambda @15-9-20-2
+				(e-malformed @13.23-13.30 (reason "expr_unexpected_token"))))
+		(e-string @13.29-13.35
+			(e-string-part @13.30-13.34 (raw "oops")))
+		(s-decl @15.1-20.2
+			(p-ident @15.1-15.6 (raw "main!"))
+			(e-lambda @15.9-20.2
 				(args
 					(p-underscore))
-				(e-block @15-13-20-2
+				(e-block @15.13-20.2
 					(statements
-						(s-decl @16-5-16-31
-							(p-ident @16-5-16-12 (raw "result1"))
-							(e-apply @16-15-16-31
-								(e-ident @16-15-16-27 (qaul "") (raw "testEllipsis"))
-								(e-int @16-28-16-30 (raw "42"))))
-						(s-decl @17-5-17-28
-							(p-ident @17-5-17-12 (raw "result2"))
-							(e-apply @17-15-17-28
-								(e-ident @17-15-17-24 (qaul "") (raw "testCrash"))
-								(e-int @17-25-17-27 (raw "42"))))
-						(s-decl @18-5-18-34
-							(p-ident @18-5-18-12 (raw "result3"))
-							(e-apply @18-15-18-34
-								(e-ident @18-15-18-30 (qaul "") (raw "testCrashSimple"))
-								(e-int @18-31-18-33 (raw "42"))))
-						(e-list @19-5-19-7)))))))
+						(s-decl @16.5-16.31
+							(p-ident @16.5-16.12 (raw "result1"))
+							(e-apply @16.15-16.31
+								(e-ident @16.15-16.27 (qaul "") (raw "testEllipsis"))
+								(e-int @16.28-16.30 (raw "42"))))
+						(s-decl @17.5-17.28
+							(p-ident @17.5-17.12 (raw "result2"))
+							(e-apply @17.15-17.28
+								(e-ident @17.15-17.24 (qaul "") (raw "testCrash"))
+								(e-int @17.25-17.27 (raw "42"))))
+						(s-decl @18.5-18.34
+							(p-ident @18.5-18.12 (raw "result3"))
+							(e-apply @18.15-18.34
+								(e-ident @18.15-18.30 (qaul "") (raw "testCrashSimple"))
+								(e-int @18.31-18.33 (raw "42"))))
+						(e-list @19.5-19.7)))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -221,64 +226,63 @@ main! = |_| {
 ~~~clojure
 (can-ir
 	(d-let (id 88)
-		(p-assign @5-1-5-13 (ident "testEllipsis") (id 76))
-		(e-lambda @5-16-5-23 (id 81)
+		(p-assign @5.1-5.13 (ident "testEllipsis") (id 76))
+		(e-lambda @5.16-5.23 (id 81)
 			(args
-				(p-underscore @5-17-5-18 (id 77)))
+				(p-underscore @5.17-5.18 (id 77)))
 			(e-runtime-error (tag "not_implemented")))
-		(annotation @5-1-5-13 (signature 86) (id 87)
+		(annotation @5.1-5.13 (signature 86) (id 87)
 			(declared-type
-				(ty-fn @4-16-4-26 (effectful false)
-					(ty @4-16-4-19 (name "U64"))
-					(ty @4-23-4-26 (name "U64"))))))
+				(ty-fn @4.16-4.26 (effectful false)
+					(ty @4.16-4.19 (name "U64"))
+					(ty @4.23-4.26 (name "U64"))))))
 	(d-let (id 104)
-		(p-assign @9-1-9-10 (ident "testCrash") (id 92))
-		(e-lambda @9-13-9-24 (id 97)
+		(p-assign @9.1-9.10 (ident "testCrash") (id 92))
+		(e-lambda @9.13-9.24 (id 97)
 			(args
-				(p-underscore @9-14-9-15 (id 93)))
+				(p-underscore @9.14-9.15 (id 93)))
 			(e-runtime-error (tag "lambda_body_not_canonicalized")))
-		(annotation @9-1-9-10 (signature 102) (id 103)
+		(annotation @9.1-9.10 (signature 102) (id 103)
 			(declared-type
-				(ty-fn @8-13-8-23 (effectful false)
-					(ty @8-13-8-16 (name "U64"))
-					(ty @8-20-8-23 (name "U64"))))))
+				(ty-fn @8.13-8.23 (effectful false)
+					(ty @8.13-8.16 (name "U64"))
+					(ty @8.20-8.23 (name "U64"))))))
 	(d-let (id 121)
-		(p-assign @13-1-13-16 (ident "testCrashSimple") (id 109))
-		(e-lambda @13-19-13-30 (id 114)
+		(p-assign @13.1-13.16 (ident "testCrashSimple") (id 109))
+		(e-lambda @13.19-13.30 (id 114)
 			(args
-				(p-underscore @13-20-13-21 (id 110)))
+				(p-underscore @13.20-13.21 (id 110)))
 			(e-runtime-error (tag "lambda_body_not_canonicalized")))
-		(annotation @13-1-13-16 (signature 119) (id 120)
+		(annotation @13.1-13.16 (signature 119) (id 120)
 			(declared-type
-				(ty-fn @12-19-12-29 (effectful false)
-					(ty @12-19-12-22 (name "U64"))
-					(ty @12-26-12-29 (name "U64"))))))
-	(d-let (id 151)
-		(p-assign @15-1-15-6 (ident "main!") (id 123))
-		(e-lambda @15-9-20-2 (id 150)
+				(ty-fn @12.19-12.29 (effectful false)
+					(ty @12.19-12.22 (name "U64"))
+					(ty @12.26-12.29 (name "U64"))))))
+	(d-let (id 150)
+		(p-assign @15.1-15.6 (ident "main!") (id 123))
+		(e-lambda @15.9-20.2 (id 149)
 			(args
-				(p-underscore @15-10-15-11 (id 124)))
-			(e-block @15-13-20-2
-				(s-let @16-5-16-31
-					(p-assign @16-5-16-12 (ident "result1") (id 125))
-					(e-call @16-15-16-31 (id 129)
-						(e-lookup-local @16-15-16-27
+				(p-underscore @15.10-15.11 (id 124)))
+			(e-block @15.13-20.2
+				(s-let @16.5-16.31
+					(p-assign @16.5-16.12 (ident "result1") (id 125))
+					(e-call @16.15-16.31 (id 129)
+						(e-lookup-local @16.15-16.27
 							(pattern (id 76)))
-						(e-int @16-28-16-30 (value "42"))))
-				(s-let @17-5-17-28
-					(p-assign @17-5-17-12 (ident "result2") (id 131))
-					(e-call @17-15-17-28 (id 135)
-						(e-lookup-local @17-15-17-24
+						(e-int @16.28-16.30 (value "42"))))
+				(s-let @17.5-17.28
+					(p-assign @17.5-17.12 (ident "result2") (id 131))
+					(e-call @17.15-17.28 (id 135)
+						(e-lookup-local @17.15-17.24
 							(pattern (id 92)))
-						(e-int @17-25-17-27 (value "42"))))
-				(s-let @18-5-18-34
-					(p-assign @18-5-18-12 (ident "result3") (id 137))
-					(e-call @18-15-18-34 (id 141)
-						(e-lookup-local @18-15-18-30
+						(e-int @17.25-17.27 (value "42"))))
+				(s-let @18.5-18.34
+					(p-assign @18.5-18.12 (ident "result3") (id 137))
+					(e-call @18.15-18.34 (id 141)
+						(e-lookup-local @18.15-18.30
 							(pattern (id 109)))
-						(e-int @18-31-18-33 (value "42"))))
-				(e-list @19-5-19-7 (elem-var 143)
-					(elems))))))
+						(e-int @18.31-18.33 (value "42"))))
+				(e-empty_list @19.5-19.7)))))
 ~~~
 # TYPES
 ~~~clojure
@@ -287,10 +291,10 @@ main! = |_| {
 		(d_assign (name "testEllipsis") (def_var 88) (type "U64 -> U64"))
 		(d_assign (name "testCrash") (def_var 104) (type "U64 -> Error"))
 		(d_assign (name "testCrashSimple") (def_var 121) (type "U64 -> Error"))
-		(d_assign (name "main!") (def_var 151) (type "* ? List(*)")))
+		(d_assign (name "main!") (def_var 150) (type "* ? List(*)")))
 	(expressions
-		(expr @5-16-5-23 (type "U64 -> U64"))
-		(expr @9-13-9-24 (type "U64 -> Error"))
-		(expr @13-19-13-30 (type "U64 -> Error"))
-		(expr @15-9-20-2 (type "* ? List(*)"))))
+		(expr @5.16-5.23 (type "U64 -> U64"))
+		(expr @9.13-9.24 (type "U64 -> Error"))
+		(expr @13.19-13.30 (type "U64 -> Error"))
+		(expr @15.9-20.2 (type "* ? List(*)"))))
 ~~~

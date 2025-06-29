@@ -21,6 +21,7 @@ Here is the problematic code:
 ```roc
 mo|%
 ```
+^^^
 
 
 **UNEXPECTED TOKEN IN PATTERN**
@@ -32,6 +33,7 @@ Here is the problematic code:
 ```roc
 mo|%
 ```
+   ^
 
 
 **PARSE ERROR**
@@ -43,6 +45,7 @@ Here is the problematic code:
 ```roc
 mo|%
 ```
+    
 
 
 **INVALID STATEMENT**
@@ -55,10 +58,10 @@ LowerIdent(1:1-1:3),OpBar(1:3-1:4),OpPercent(1:4-1:5),EndOfFile(1:5-1:5),
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-1-5
-	(malformed-header @1-1-1-4 (tag "missing_header"))
+(file @1.1-1.5
+	(malformed-header @1.1-1.4 (tag "missing_header"))
 	(statements
-		(e-malformed @1-5-1-5 (reason "expected_expr_bar"))))
+		(e-malformed @1.5-1.5 (reason "expected_expr_bar"))))
 ~~~
 # FORMATTED
 ~~~roc

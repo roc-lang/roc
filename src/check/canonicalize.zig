@@ -234,7 +234,7 @@ pub const CIR = @import("canonicalize/CIR.zig");
 /// The canonicalization occurs on a single module (file) in isolation. This allows for this work to be easily parallelized and also cached. So where the source code for a module has not changed, the CanIR can simply be loaded from disk and used immediately.
 pub fn canonicalize_file(
     self: *Self,
-) void {
+) std.mem.Allocator.Error!void {
     const file = self.parse_ir.store.getFile();
 
     // canonicalize_header_packages();
@@ -296,7 +296,7 @@ pub fn canonicalize_file(
                 _ = self.canonicalizeImportStatement(import_stmt);
             },
             .decl => |decl| {
-                const def_idx = self.canonicalize_decl(decl);
+                const def_idx = try self.canonicalize_decl(decl);
                 self.can_ir.store.addScratchDef(def_idx);
             },
             .@"var" => {
@@ -737,7 +737,7 @@ fn introduceExposedItemsIntoScope(
 fn canonicalize_decl(
     self: *Self,
     decl: AST.Statement.Decl,
-) CIR.Def.Idx {
+) std.mem.Allocator.Error!CIR.Def.Idx {
     const pattern_region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getPattern(decl.pattern).to_tokenized_region());
     const expr_region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getExpr(decl.body).to_tokenized_region());
 
@@ -753,7 +753,7 @@ fn canonicalize_decl(
     };
 
     const expr_idx = blk: {
-        if (self.canonicalize_expr(decl.body)) |idx| {
+        if (try self.canonicalize_expr(decl.body)) |idx| {
             break :blk idx;
         } else {
             const malformed_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .expr_not_canonicalized = .{
@@ -828,7 +828,7 @@ fn canonicalize_decl(
 fn canonicalize_record_field(
     self: *Self,
     ast_field_idx: AST.RecordField.Idx,
-) ?CIR.RecordField.Idx {
+) std.mem.Allocator.Error!?CIR.RecordField.Idx {
     const field = self.parse_ir.store.getRecordField(ast_field_idx);
 
     // Canonicalize the field name
@@ -838,7 +838,7 @@ fn canonicalize_record_field(
 
     // Canonicalize the field value
     const value = if (field.value) |v|
-        self.canonicalize_expr(v) orelse return null
+        try self.canonicalize_expr(v) orelse return null
     else blk: {
         // Shorthand syntax: create implicit identifier expression
         // For { name, age }, this creates an implicit identifier lookup for "name" etc.
@@ -850,7 +850,7 @@ fn canonicalize_record_field(
             },
         };
         const ident_expr_idx = self.parse_ir.store.addExpr(ident_expr);
-        break :blk self.canonicalize_expr(ident_expr_idx) orelse return null;
+        break :blk try self.canonicalize_expr(ident_expr_idx) orelse return null;
     };
 
     // Create the CIR record field
@@ -866,7 +866,7 @@ fn canonicalize_record_field(
 pub fn canonicalize_expr(
     self: *Self,
     ast_expr_idx: AST.Expr.Idx,
-) ?CIR.Expr.Idx {
+) std.mem.Allocator.Error!?CIR.Expr.Idx {
     const expr = self.parse_ir.store.getExpr(ast_expr_idx);
 
     switch (expr) {
@@ -875,7 +875,7 @@ pub fn canonicalize_expr(
             const scratch_top = self.can_ir.store.scratchExprTop();
 
             // Canonicalize the function being called and add as first element
-            const fn_expr = self.canonicalize_expr(e.@"fn") orelse {
+            const fn_expr = try self.canonicalize_expr(e.@"fn") orelse {
                 self.can_ir.store.clearScratchExprsFrom(scratch_top);
                 return null;
             };
@@ -884,7 +884,7 @@ pub fn canonicalize_expr(
             // Canonicalize and add all arguments
             const args_slice = self.parse_ir.store.exprSlice(e.args);
             for (args_slice) |arg| {
-                if (self.canonicalize_expr(arg)) |canonicalized_arg_expr_idx| {
+                if (try self.canonicalize_expr(arg)) |canonicalized_arg_expr_idx| {
                     self.can_ir.store.addScratchExpr(canonicalized_arg_expr_idx);
                 }
             }
@@ -1189,7 +1189,7 @@ pub fn canonicalize_expr(
             //
             // Returns a Expr.Span containing the canonicalized string segments
             // a string may consist of multiple string literal or expression segments
-            const str_segments_span = self.extractStringSegments(parts);
+            const str_segments_span = try self.extractStringSegments(parts);
 
             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_str = .{
                 .span = str_segments_span,
@@ -1204,14 +1204,32 @@ pub fn canonicalize_expr(
         .list => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
+            // Empty lists get the .list_unbound type
+            const items_slice = self.parse_ir.store.exprSlice(e.items);
+            if (items_slice.len == 0) {
+                // Empty list - use e_empty_list
+                const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
+                    .e_empty_list = .{
+                        .region = region,
+                    },
+                });
+
+                // Insert concrete type variable as list_unbound
+                _ = self.can_ir.setTypeVarAtExpr(
+                    expr_idx,
+                    Content{ .structure = .list_unbound },
+                );
+
+                return expr_idx;
+            }
+
             // Mark the start of scratch expressions for the list
             const scratch_top = self.can_ir.store.scratchExprTop();
 
             // Iterate over the list item, canonicalizing each one
             // Then append the result to the scratch list
-            const items_slice = self.parse_ir.store.exprSlice(e.items);
             for (items_slice) |item| {
-                if (self.canonicalize_expr(item)) |canonicalized| {
+                if (try self.canonicalize_expr(item)) |canonicalized| {
                     self.can_ir.store.addScratchExpr(canonicalized);
                 }
             }
@@ -1219,16 +1237,13 @@ pub fn canonicalize_expr(
             // Create span of the new scratch expressions
             const elems_span = self.can_ir.store.exprSpanFrom(scratch_top);
 
-            // create type vars, first "reserve" node slot
-            const list_expr_idx = self.can_ir.store.predictNodeIndex(2);
+            // We should have at least one element since we checked for empty lists above
+            std.debug.assert(elems_span.span.len > 0);
 
-            // then insert the type vars, setting the parent to be the final slot
-            const elem_type_var = self.can_ir.pushFreshTypeVar(
-                list_expr_idx,
-                region,
-            );
-
-            // then in the final slot the actual expr is inserted
+            // Initialize the list's type variable to its first element's CIR Index
+            // (later steps will unify that type with the other elems' types)
+            const first_elem_idx = self.can_ir.store.sliceExpr(elems_span)[0];
+            const elem_type_var = @as(TypeVar, @enumFromInt(@intFromEnum(first_elem_idx)));
             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
                 .e_list = .{
                     .elems = elems_span,
@@ -1299,7 +1314,7 @@ pub fn canonicalize_expr(
             const items_slice = self.parse_ir.store.exprSlice(e.items);
             const elems_var_top = self.can_ir.env.types.tuple_elems.len();
             for (items_slice) |item| {
-                if (self.canonicalize_expr(item)) |canonicalized| {
+                if (try self.canonicalize_expr(item)) |canonicalized| {
                     self.can_ir.store.addScratchExpr(canonicalized);
                     _ = self.can_ir.env.types.appendTupleElem(@enumFromInt(@intFromEnum(canonicalized)));
                 }
@@ -1389,13 +1404,13 @@ pub fn canonicalize_expr(
                         }) catch |err| exitOnOom(err);
 
                         // Only canonicalize and include non-duplicate fields
-                        if (self.canonicalize_record_field(field)) |canonicalized| {
+                        if (try self.canonicalize_record_field(field)) |canonicalized| {
                             self.can_ir.store.scratch_record_fields.append(self.can_ir.env.gpa, canonicalized);
                         }
                     }
                 } else {
                     // Field name couldn't be resolved, still try to canonicalize
-                    if (self.canonicalize_record_field(field)) |canonicalized| {
+                    if (try self.canonicalize_record_field(field)) |canonicalized| {
                         self.can_ir.store.scratch_record_fields.append(self.can_ir.env.gpa, canonicalized);
                     }
                 }
@@ -1484,7 +1499,7 @@ pub fn canonicalize_expr(
 
             // body
             const body_idx = blk: {
-                if (self.canonicalize_expr(e.body)) |idx| {
+                if (try self.canonicalize_expr(e.body)) |idx| {
                     break :blk idx;
                 } else {
                     const ast_body = self.parse_ir.store.getExpr(e.body);
@@ -1527,7 +1542,7 @@ pub fn canonicalize_expr(
             }
 
             // Regular field access canonicalization
-            return self.canonicalizeRegularFieldAccess(field_access);
+            return try self.canonicalizeRegularFieldAccess(field_access);
         },
         .local_dispatch => |_| {
             const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize local_dispatch expression");
@@ -1542,7 +1557,7 @@ pub fn canonicalize_expr(
 
             // Canonicalize left and right operands
             const lhs = blk: {
-                if (self.canonicalize_expr(e.left)) |left_expr_idx| {
+                if (try self.canonicalize_expr(e.left)) |left_expr_idx| {
                     break :blk left_expr_idx;
                 } else {
                     // TODO should probably use LHS region here
@@ -1554,7 +1569,7 @@ pub fn canonicalize_expr(
             };
 
             const rhs = blk: {
-                if (self.canonicalize_expr(e.right)) |right_expr_idx| {
+                if (try self.canonicalize_expr(e.right)) |right_expr_idx| {
                     break :blk right_expr_idx;
                 } else {
                     // TODO should probably use RHS region here
@@ -1628,12 +1643,14 @@ pub fn canonicalize_expr(
             const scratch_top = self.can_ir.store.scratchIfBranchTop();
 
             // Flatten the if-then-else chain
-            const final_else = self.flattenIfThenElseChainRecursive(e);
+            const final_else = try self.flattenIfThenElseChainRecursive(e);
             const branches_span = self.can_ir.store.ifBranchSpanFrom(scratch_top);
 
-            // Reserve extra node slot for branch var
-            const final_expr_idx = self.can_ir.store.predictNodeIndex(2);
-            const branch_var = self.can_ir.pushFreshTypeVar(final_expr_idx, region);
+            // Get the first branch's body to redirect to it
+            const branches = self.can_ir.store.sliceIfBranches(branches_span);
+            std.debug.assert(branches.len > 0);
+            const first_branch = self.can_ir.store.getIfBranch(branches[0]);
+            const first_branch_type_var = @as(TypeVar, @enumFromInt(@intFromEnum(first_branch.body)));
 
             // Create the if expression
             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
@@ -1641,15 +1658,18 @@ pub fn canonicalize_expr(
                     .branches = branches_span,
                     .final_else = final_else,
                     .region = region,
-                    .branch_var = branch_var,
                 },
             });
 
-            std.debug.assert(@intFromEnum(final_expr_idx) == @intFromEnum(expr_idx));
+            // Immediately redirect the if expression's type variable to the first branch's body
+            // This is similar to how lists unify with their first element
+            const expr_var = @as(TypeVar, @enumFromInt(@intFromEnum(expr_idx)));
 
-            // Set type variable for the entire if expression
-            // This will be unified with the return type of the if expr in type solving
-            _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
+            // Ensure the type store has slots up to the expression variable
+            try self.can_ir.env.types.fillInSlotsThru(expr_var);
+
+            const slot_idx = types.Store.varToSlotIdx(expr_var);
+            self.can_ir.env.types.slots.set(slot_idx, .{ .redirect = first_branch_type_var });
 
             return expr_idx;
         },
@@ -1712,10 +1732,10 @@ pub fn canonicalize_expr(
                 if (is_last and stmt == .expr) {
                     // For the last expression statement, canonicalize it directly as the final expression
                     // without adding it as a statement
-                    last_expr = self.canonicalize_expr(stmt.expr.expr);
+                    last_expr = try self.canonicalize_expr(stmt.expr.expr);
                 } else {
                     // Regular statement processing
-                    const result = self.canonicalize_statement(stmt_idx);
+                    const result = try self.canonicalize_statement(stmt_idx);
                     if (result) |expr_idx| {
                         last_expr = expr_idx;
                     }
@@ -1761,7 +1781,7 @@ pub fn canonicalize_expr(
 }
 
 /// Extract string segments from parsed string parts
-fn extractStringSegments(self: *Self, parts: []const AST.Expr.Idx) CIR.Expr.Span {
+fn extractStringSegments(self: *Self, parts: []const AST.Expr.Idx) std.mem.Allocator.Error!CIR.Expr.Span {
     const gpa = self.can_ir.env.gpa;
     const start = self.can_ir.store.scratchExprTop();
 
@@ -1787,7 +1807,7 @@ fn extractStringSegments(self: *Self, parts: []const AST.Expr.Idx) CIR.Expr.Span
             else => {
 
                 // Any non-string-part is an interpolation
-                if (self.canonicalize_expr(part)) |expr_idx| {
+                if (try self.canonicalize_expr(part)) |expr_idx| {
                     // append our interpolated expression
                     self.can_ir.store.addScratchExpr(expr_idx);
                 } else {
@@ -2503,10 +2523,10 @@ test {
 
 /// Flatten a chain of if-then-else expressions into multiple if-branches
 /// Returns the final else expression that is not an if-then-else
-fn flattenIfThenElseChainRecursive(self: *Self, if_expr: anytype) CIR.Expr.Idx {
+fn flattenIfThenElseChainRecursive(self: *Self, if_expr: anytype) std.mem.Allocator.Error!CIR.Expr.Idx {
     // Canonicalize and add the current condition/then pair
     const cond_idx = blk: {
-        if (self.canonicalize_expr(if_expr.condition)) |idx| {
+        if (try self.canonicalize_expr(if_expr.condition)) |idx| {
             break :blk idx;
         } else {
             const ast_cond = self.parse_ir.store.getExpr(if_expr.condition);
@@ -2518,7 +2538,7 @@ fn flattenIfThenElseChainRecursive(self: *Self, if_expr: anytype) CIR.Expr.Idx {
     };
 
     const then_idx = blk: {
-        if (self.canonicalize_expr(if_expr.then)) |idx| {
+        if (try self.canonicalize_expr(if_expr.then)) |idx| {
             break :blk idx;
         } else {
             const ast_then = self.parse_ir.store.getExpr(if_expr.then);
@@ -2540,12 +2560,12 @@ fn flattenIfThenElseChainRecursive(self: *Self, if_expr: anytype) CIR.Expr.Idx {
     const else_expr = self.parse_ir.store.getExpr(if_expr.@"else");
     switch (else_expr) {
         .if_then_else => |nested_if| {
-            // Recursively flatten the nested if-then-else
-            return self.flattenIfThenElseChainRecursive(nested_if);
+            // Recursively process the nested if-then-else
+            return try self.flattenIfThenElseChainRecursive(nested_if);
         },
         else => {
             // This is the final else - canonicalize and return it
-            if (self.canonicalize_expr(if_expr.@"else")) |else_idx| {
+            if (try self.canonicalize_expr(if_expr.@"else")) |else_idx| {
                 return else_idx;
             } else {
                 const else_region = self.parse_ir.tokenizedRegionToRegion(else_expr.to_tokenized_region());
@@ -2989,7 +3009,7 @@ fn canonicalize_type_header(self: *Self, header_idx: AST.TypeHeader.Idx) CIR.Typ
 }
 
 /// Canonicalize a statement in the canonical IR.
-pub fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) ?CIR.Expr.Idx {
+pub fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.Allocator.Error!?CIR.Expr.Idx {
     const stmt = self.parse_ir.store.getStatement(stmt_idx);
 
     switch (stmt) {
@@ -3026,7 +3046,7 @@ pub fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) ?CIR.Exp
                             // Check if this was declared as a var
                             if (self.isVarPattern(existing_pattern_idx)) {
                                 // This is a var reassignment - canonicalize the expression and create reassign statement
-                                const expr_idx = self.canonicalize_expr(d.body) orelse return null;
+                                const expr_idx = try self.canonicalize_expr(d.body) orelse return null;
 
                                 // Create reassign statement
                                 const reassign_stmt = CIR.Statement{ .s_reassign = .{
@@ -3049,7 +3069,7 @@ pub fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) ?CIR.Exp
 
             // Regular declaration - canonicalize as usual
             const pattern_idx = self.canonicalize_pattern(d.pattern) orelse return null;
-            const expr_idx = self.canonicalize_expr(d.body) orelse return null;
+            const expr_idx = try self.canonicalize_expr(d.body) orelse return null;
 
             // Create a declaration statement
             const decl_stmt = CIR.Statement{ .s_decl = .{
@@ -3068,7 +3088,7 @@ pub fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) ?CIR.Exp
             const region = self.parse_ir.tokenizedRegionToRegion(v.region);
 
             // Canonicalize the initial value
-            const init_expr_idx = self.canonicalize_expr(v.body) orelse return null;
+            const init_expr_idx = try self.canonicalize_expr(v.body) orelse return null;
 
             // Create pattern for the var
             const pattern_idx = self.can_ir.store.addPattern(CIR.Pattern{ .assign = .{ .ident = var_name, .region = region } });
@@ -3089,7 +3109,7 @@ pub fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) ?CIR.Exp
         },
         .expr => |e| {
             // Expression statement
-            const expr_idx = self.canonicalize_expr(e.expr) orelse return null;
+            const expr_idx = try self.canonicalize_expr(e.expr) orelse return null;
 
             // Create expression statement
             const expr_stmt = CIR.Statement{ .s_expr = .{
@@ -3750,11 +3770,11 @@ fn scopeIntroduceTypeDecl(
                 },
             });
         },
-        .custom_type_redeclared => |original_stmt| {
+        .nominal_type_redeclared => |original_stmt| {
             const original_statement = self.can_ir.store.getStatement(original_stmt);
             const original_region = original_statement.toRegion();
             self.can_ir.pushDiagnostic(CIR.Diagnostic{
-                .custom_type_redeclared = .{
+                .nominal_type_redeclared = .{
                     .name = name_ident,
                     .original_region = original_region,
                     .redeclared_region = region,
@@ -4273,12 +4293,12 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) ?CIR.Expr.Idx 
 /// - `user.name` - accessing a field on a record
 /// - `list.map(transform)` - calling a method with arguments
 /// - `result.isOk` - accessing a field that might be a function
-fn canonicalizeRegularFieldAccess(self: *Self, field_access: AST.BinOp) ?CIR.Expr.Idx {
+fn canonicalizeRegularFieldAccess(self: *Self, field_access: AST.BinOp) std.mem.Allocator.Error!?CIR.Expr.Idx {
     // Canonicalize the receiver (left side of the dot)
-    const receiver_idx = self.canonicalizeFieldAccessReceiver(field_access) orelse return null;
+    const receiver_idx = try self.canonicalizeFieldAccessReceiver(field_access) orelse return null;
 
     // Parse the right side - this could be just a field name or a method call
-    const field_name, const args = self.parseFieldAccessRight(field_access);
+    const field_name, const args = try self.parseFieldAccessRight(field_access);
 
     const dot_access_expr = CIR.Expr{
         .e_dot_access = .{
@@ -4300,8 +4320,8 @@ fn canonicalizeRegularFieldAccess(self: *Self, field_access: AST.BinOp) ?CIR.Exp
 /// - In `user.name`, canonicalizes `user`
 /// - In `getUser().email`, canonicalizes `getUser()`
 /// - In `[1,2,3].map(fn)`, canonicalizes `[1,2,3]`
-fn canonicalizeFieldAccessReceiver(self: *Self, field_access: AST.BinOp) ?CIR.Expr.Idx {
-    if (self.canonicalize_expr(field_access.left)) |idx| {
+fn canonicalizeFieldAccessReceiver(self: *Self, field_access: AST.BinOp) std.mem.Allocator.Error!?CIR.Expr.Idx {
+    if (try self.canonicalize_expr(field_access.left)) |idx| {
         return idx;
     } else {
         // Failed to canonicalize receiver, return malformed
@@ -4318,7 +4338,7 @@ fn canonicalizeFieldAccessReceiver(self: *Self, field_access: AST.BinOp) ?CIR.Ex
 /// - `user.name` - returns `("name", null)` for plain field access
 /// - `list.map(fn)` - returns `("map", args)` where args contains the canonicalized function
 /// - `obj.method(a, b)` - returns `("method", args)` where args contains canonicalized a and b
-fn parseFieldAccessRight(self: *Self, field_access: AST.BinOp) struct { Ident.Idx, ?CIR.Expr.Span } {
+fn parseFieldAccessRight(self: *Self, field_access: AST.BinOp) std.mem.Allocator.Error!struct { Ident.Idx, ?CIR.Expr.Span } {
     const right_expr = self.parse_ir.store.getExpr(field_access.right);
 
     return switch (right_expr) {
@@ -4334,7 +4354,7 @@ fn parseFieldAccessRight(self: *Self, field_access: AST.BinOp) struct { Ident.Id
 /// - `.map(transform)` - extracts "map" as method name and canonicalizes `transform` argument
 /// - `.filter(predicate)` - extracts "filter" and canonicalizes `predicate`
 /// - `.fold(0, combine)` - extracts "fold" and canonicalizes both `0` and `combine` arguments
-fn parseMethodCall(self: *Self, apply: @TypeOf(@as(AST.Expr, undefined).apply)) struct { Ident.Idx, ?CIR.Expr.Span } {
+fn parseMethodCall(self: *Self, apply: @TypeOf(@as(AST.Expr, undefined).apply)) std.mem.Allocator.Error!struct { Ident.Idx, ?CIR.Expr.Span } {
     const method_expr = self.parse_ir.store.getExpr(apply.@"fn");
     const field_name = switch (method_expr) {
         .ident => |ident| self.resolveIdentOrFallback(ident.token),
@@ -4344,7 +4364,7 @@ fn parseMethodCall(self: *Self, apply: @TypeOf(@as(AST.Expr, undefined).apply)) 
     // Canonicalize the arguments using scratch system
     const scratch_top = self.can_ir.store.scratchExprTop();
     for (self.parse_ir.store.exprSlice(apply.args)) |arg_idx| {
-        if (self.canonicalize_expr(arg_idx)) |canonicalized| {
+        if (try self.canonicalize_expr(arg_idx)) |canonicalized| {
             self.can_ir.store.addScratchExpr(canonicalized);
         } else {
             self.can_ir.store.clearScratchExprsFrom(scratch_top);
@@ -4716,7 +4736,7 @@ test "hexadecimal integer literals" {
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
-        const canonical_expr_idx = can.canonicalize_expr(expr_idx) orelse {
+        const canonical_expr_idx = try can.canonicalize_expr(expr_idx) orelse {
             std.debug.print("Failed to canonicalize: {s}\n", .{tc.literal});
             try std.testing.expect(false);
             continue;
@@ -4806,7 +4826,7 @@ test "binary integer literals" {
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
-        const canonical_expr_idx = can.canonicalize_expr(expr_idx) orelse {
+        const canonical_expr_idx = try can.canonicalize_expr(expr_idx) orelse {
             std.debug.print("Failed to canonicalize: {s}\n", .{tc.literal});
             try std.testing.expect(false);
             continue;
@@ -4896,7 +4916,7 @@ test "octal integer literals" {
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
-        const canonical_expr_idx = can.canonicalize_expr(expr_idx) orelse {
+        const canonical_expr_idx = try can.canonicalize_expr(expr_idx) orelse {
             std.debug.print("Failed to canonicalize: {s}\n", .{tc.literal});
             try std.testing.expect(false);
             continue;
@@ -4986,7 +5006,7 @@ test "integer literals with uppercase base prefixes" {
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
-        const canonical_expr_idx = can.canonicalize_expr(expr_idx) orelse {
+        const canonical_expr_idx = try can.canonicalize_expr(expr_idx) orelse {
             std.debug.print("Failed to canonicalize: {s}\n", .{tc.literal});
             try std.testing.expect(false);
             continue;

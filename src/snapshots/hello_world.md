@@ -23,28 +23,28 @@ LowerIdent(5:1-5:6),OpAssign(5:7-5:8),OpBar(5:9-5:10),Underscore(5:10-5:11),OpBa
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-5-42
-	(app @1-1-1-57
-		(provides @1-6-1-12
+(file @1.1-5.42
+	(app @1.1-1.57
+		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @1-15-1-57 (name "pf")
-			(e-string @1-28-1-55
-				(e-string-part @1-29-1-54 (raw "../basic-cli/platform.roc"))))
-		(packages @1-13-1-57
-			(record-field @1-15-1-57 (name "pf")
-				(e-string @1-28-1-55
-					(e-string-part @1-29-1-54 (raw "../basic-cli/platform.roc"))))))
+		(record-field @1.15-1.57 (name "pf")
+			(e-string @1.28-1.55
+				(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))
+		(packages @1.13-1.57
+			(record-field @1.15-1.57 (name "pf")
+				(e-string @1.28-1.55
+					(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))))
 	(statements
-		(s-import @3-1-3-17 (module ".Stdout") (qualifier "pf"))
-		(s-decl @5-1-5-42
-			(p-ident @5-1-5-6 (raw "main!"))
-			(e-lambda @5-9-5-42
+		(s-import @3.1-3.17 (module ".Stdout") (qualifier "pf"))
+		(s-decl @5.1-5.42
+			(p-ident @5.1-5.6 (raw "main!"))
+			(e-lambda @5.9-5.42
 				(args
 					(p-underscore))
-				(e-apply @5-13-5-42
-					(e-ident @5-13-5-25 (qaul "Stdout") (raw ".line!"))
-					(e-string @5-26-5-41
-						(e-string-part @5-27-5-40 (raw "Hello, world!"))))))))
+				(e-apply @5.13-5.42
+					(e-ident @5.13-5.25 (qaul "Stdout") (raw ".line!"))
+					(e-string @5.26-5.41
+						(e-string-part @5.27-5.40 (raw "Hello, world!"))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -54,16 +54,16 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let (id 84)
-		(p-assign @5-1-5-6 (ident "main!") (id 74))
-		(e-lambda @5-9-5-42 (id 83)
+		(p-assign @5.1-5.6 (ident "main!") (id 74))
+		(e-lambda @5.9-5.42 (id 83)
 			(args
-				(p-underscore @5-10-5-11 (id 75)))
-			(e-call @5-13-5-42
+				(p-underscore @5.10-5.11 (id 75)))
+			(e-call @5.13-5.42
 				(e-lookup-external
-					(ext-decl @5-13-5-25 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value") (type-var 76)))
-				(e-string @5-26-5-41
-					(e-literal @5-27-5-40 (string "Hello, world!"))))))
-	(s-import @3-1-3-17 (module "pf.Stdout") (qualifier "pf") (id 73)
+					(ext-decl @5.13-5.25 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value") (type-var 76)))
+				(e-string @5.26-5.41
+					(e-literal @5.27-5.40 (string "Hello, world!"))))))
+	(s-import @3.1-3.17 (module "pf.Stdout") (qualifier "pf") (id 73)
 		(exposes)))
 ~~~
 # TYPES
@@ -72,5 +72,5 @@ NO CHANGE
 	(defs
 		(d_assign (name "main!") (def_var 84) (type "* ? *")))
 	(expressions
-		(expr @5-9-5-42 (type "* ? *"))))
+		(expr @5.9-5.42 (type "* ? *"))))
 ~~~

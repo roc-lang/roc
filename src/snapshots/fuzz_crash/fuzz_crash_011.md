@@ -20,6 +20,7 @@ Here is the problematic code:
 ```roc
 module P]F
 ```
+       ^^^
 
 
 **PARSE ERROR**
@@ -43,6 +44,7 @@ Here is the problematic code:
 ```roc
 module P]F
 ```
+          
 
 
 # TOKENS
@@ -51,10 +53,10 @@ KwModule(1:1-1:7),UpperIdent(1:8-1:9),UpperIdent(1:10-1:11),EndOfFile(1:11-1:11)
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-1-11
-	(malformed-header @1-8-1-11 (tag "header_expected_open_square"))
+(file @1.1-1.11
+	(malformed-header @1.8-1.11 (tag "header_expected_open_square"))
 	(statements
-		(s-malformed @1-10-1-11 (tag "expected_colon_after_type_annotation"))))
+		(s-malformed @1.10-1.11 (tag "expected_colon_after_type_annotation"))))
 ~~~
 # FORMATTED
 ~~~roc

@@ -45,6 +45,7 @@ Here is the problematic code:
 ```roc
         Ok(maybeList) -> []
 ```
+        ^^^
 
 
 **PARSE ERROR**
@@ -56,6 +57,7 @@ Here is the problematic code:
 ```roc
         Err(_) -> []
 ```
+            ^^
 
 
 **PARSE ERROR**
@@ -79,6 +81,7 @@ Here is the problematic code:
 ```roc
         Err(_) -> []
 ```
+        ^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -90,6 +93,7 @@ Here is the problematic code:
 ```roc
 deepNested = |_| crash "not implemented"
 ```
+                 ^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -105,6 +109,7 @@ The unused variable is declared here:
 ```roc
 processComplex = |result|
 ```
+                  ^^^^^^
 
 
 **INVALID STATEMENT**
@@ -152,102 +157,102 @@ LowerIdent(17:1-17:6),OpAssign(17:7-17:8),OpBar(17:9-17:10),Underscore(17:10-17:
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-17-49
-	(app @1-1-1-53
-		(provides @1-6-1-12
+(file @1.1-17.49
+	(app @1.1-1.53
+		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @1-15-1-53 (name "pf")
-			(e-string @1-28-1-51
-				(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))
-		(packages @1-13-1-53
-			(record-field @1-15-1-53 (name "pf")
-				(e-string @1-28-1-51
-					(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))))
+		(record-field @1.15-1.53 (name "pf")
+			(e-string @1.28-1.51
+				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
+		(packages @1.13-1.53
+			(record-field @1.15-1.53 (name "pf")
+				(e-string @1.28-1.51
+					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @4-1-5-15 (name "processComplex")
-			(ty-fn @4-18-4-72
-				(ty-apply @4-18-4-61
+		(s-type-anno @4.1-5.15 (name "processComplex")
+			(ty-fn @4.18-4.72
+				(ty-apply @4.18-4.61
 					(ty (name "Result"))
-					(ty-apply @4-25-4-39
+					(ty-apply @4.25-4.39
 						(ty (name "List"))
-						(ty-apply @4-30-4-38
+						(ty-apply @4.30-4.38
 							(ty (name "Maybe"))
-							(ty-var @4-36-4-37 (raw "a"))))
-					(ty-apply @4-41-4-60
+							(ty-var @4.36-4.37 (raw "a"))))
+					(ty-apply @4.41-4.60
 						(ty (name "Dict"))
 						(ty (name "Str"))
-						(ty-apply @4-51-4-59
+						(ty-apply @4.51-4.59
 							(ty (name "Error"))
-							(ty-var @4-57-4-58 (raw "b")))))
-				(ty-apply @4-65-4-72
+							(ty-var @4.57-4.58 (raw "b")))))
+				(ty-apply @4.65-4.72
 					(ty (name "List"))
-					(ty-var @4-70-4-71 (raw "a")))))
-		(s-decl @5-1-6-9
-			(p-ident @5-1-5-15 (raw "processComplex"))
-			(e-lambda @5-18-6-9
+					(ty-var @4.70-4.71 (raw "a")))))
+		(s-decl @5.1-6.9
+			(p-ident @5.1-5.15 (raw "processComplex"))
+			(e-lambda @5.18-6.9
 				(args
-					(p-ident @5-19-5-25 (raw "result")))
-				(e-ident @6-5-6-9 (qaul "") (raw "when"))))
-		(e-ident @6-10-6-16 (qaul "") (raw "result"))
-		(e-ident @6-17-6-19 (qaul "") (raw "is"))
-		(s-malformed @7-9-7-27 (tag "expected_colon_after_type_annotation"))
-		(e-list @7-26-7-28)
-		(s-malformed @8-9-8-20 (tag "expected_colon_after_type_annotation"))
-		(e-list @8-19-8-21)
-		(s-type-anno @11-1-12-11 (name "deepNested")
-			(ty-fn @11-14-11-55
-				(ty-apply @11-14-11-50
+					(p-ident @5.19-5.25 (raw "result")))
+				(e-ident @6.5-6.9 (qaul "") (raw "when"))))
+		(e-ident @6.10-6.16 (qaul "") (raw "result"))
+		(e-ident @6.17-6.19 (qaul "") (raw "is"))
+		(s-malformed @7.9-7.27 (tag "expected_colon_after_type_annotation"))
+		(e-list @7.26-7.28)
+		(s-malformed @8.9-8.20 (tag "expected_colon_after_type_annotation"))
+		(e-list @8.19-8.21)
+		(s-type-anno @11.1-12.11 (name "deepNested")
+			(ty-fn @11.14-11.55
+				(ty-apply @11.14-11.50
 					(ty (name "Maybe"))
-					(ty-apply @11-20-11-49
+					(ty-apply @11.20-11.49
 						(ty (name "Result"))
-						(ty-apply @11-27-11-45
+						(ty-apply @11.27-11.45
 							(ty (name "List"))
-							(ty-apply @11-32-11-44
+							(ty-apply @11.32-11.44
 								(ty (name "Dict"))
 								(ty (name "Str"))
-								(ty-var @11-42-11-43 (raw "a"))))
-						(ty-var @11-47-11-48 (raw "b"))))
-				(ty-var @11-54-11-55 (raw "a"))))
-		(s-decl @12-1-12-25
-			(p-ident @12-1-12-11 (raw "deepNested"))
-			(e-lambda @12-14-12-25
+								(ty-var @11.42-11.43 (raw "a"))))
+						(ty-var @11.47-11.48 (raw "b"))))
+				(ty-var @11.54-11.55 (raw "a"))))
+		(s-decl @12.1-12.25
+			(p-ident @12.1-12.11 (raw "deepNested"))
+			(e-lambda @12.14-12.25
 				(args
 					(p-underscore))
-				(e-malformed @12-18-12-25 (reason "expr_unexpected_token"))))
-		(e-string @12-24-12-41
-			(e-string-part @12-25-12-40 (raw "not implemented")))
-		(s-type-decl @15-1-17-6
-			(header @15-1-15-18 (name "ComplexType")
+				(e-malformed @12.18-12.25 (reason "expr_unexpected_token"))))
+		(e-string @12.24-12.41
+			(e-string-part @12.25-12.40 (raw "not implemented")))
+		(s-type-decl @15.1-17.6
+			(header @15.1-15.18 (name "ComplexType")
 				(args
-					(ty-var @15-13-15-14 (raw "a"))
-					(ty-var @15-16-15-17 (raw "b"))))
-			(ty-apply @15-21-15-64
+					(ty-var @15.13-15.14 (raw "a"))
+					(ty-var @15.16-15.17 (raw "b"))))
+			(ty-apply @15.21-15.64
 				(ty (name "Result"))
-				(ty-apply @15-28-15-42
+				(ty-apply @15.28-15.42
 					(ty (name "List"))
-					(ty-apply @15-33-15-41
+					(ty-apply @15.33-15.41
 						(ty (name "Maybe"))
-						(ty-var @15-39-15-40 (raw "a"))))
-				(ty-apply @15-44-15-63
+						(ty-var @15.39-15.40 (raw "a"))))
+				(ty-apply @15.44-15.63
 					(ty (name "Dict"))
 					(ty (name "Str"))
-					(ty-apply @15-54-15-62
+					(ty-apply @15.54-15.62
 						(ty (name "Error"))
-						(ty-var @15-60-15-61 (raw "b"))))))
-		(s-decl @17-1-17-49
-			(p-ident @17-1-17-6 (raw "main!"))
-			(e-lambda @17-9-17-49
+						(ty-var @15.60-15.61 (raw "b"))))))
+		(s-decl @17.1-17.49
+			(p-ident @17.1-17.6 (raw "main!"))
+			(e-lambda @17.9-17.49
 				(args
 					(p-underscore))
-				(e-apply @17-13-17-49
-					(e-ident @17-13-17-27 (qaul "") (raw "processComplex"))
-					(e-apply @17-28-17-48
-						(e-tag @17-28-17-30 (raw "Ok"))
-						(e-list @17-31-17-47
-							(e-apply @17-32-17-40
-								(e-tag @17-32-17-36 (raw "Some"))
-								(e-int @17-37-17-39 (raw "42")))
-							(e-tag @17-42-17-46 (raw "None")))))))))
+				(e-apply @17.13-17.49
+					(e-ident @17.13-17.27 (qaul "") (raw "processComplex"))
+					(e-apply @17.28-17.48
+						(e-tag @17.28-17.30 (raw "Ok"))
+						(e-list @17.31-17.47
+							(e-apply @17.32-17.40
+								(e-tag @17.32-17.36 (raw "Some"))
+								(e-int @17.37-17.39 (raw "42")))
+							(e-tag @17.42-17.46 (raw "None")))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -273,70 +278,70 @@ main! = |_| processComplex(Ok([Some(42), None]))
 ~~~clojure
 (can-ir
 	(d-let (id 112)
-		(p-assign @5-1-5-15 (ident "processComplex") (id 99))
-		(e-lambda @5-18-6-9 (id 104)
+		(p-assign @5.1-5.15 (ident "processComplex") (id 99))
+		(e-lambda @5.18-6.9 (id 104)
 			(args
-				(p-assign @5-19-5-25 (ident "result") (id 100)))
+				(p-assign @5.19-5.25 (ident "result") (id 100)))
 			(e-runtime-error (tag "ident_not_in_scope")))
-		(annotation @5-1-5-15 (signature 110) (id 111)
+		(annotation @5.1-5.15 (signature 110) (id 111)
 			(declared-type
-				(ty-fn @4-18-4-72 (effectful false)
-					(ty-apply @4-18-4-61 (symbol "Result")
-						(ty-apply @4-25-4-39 (symbol "List")
-							(ty-apply @4-30-4-38 (symbol "Maybe")
-								(ty-var @4-36-4-37 (name "a"))))
-						(ty-apply @4-41-4-60 (symbol "Dict")
-							(ty @4-46-4-49 (name "Str"))
-							(ty-apply @4-51-4-59 (symbol "Error")
-								(ty-var @4-57-4-58 (name "b")))))
-					(ty-apply @4-65-4-72 (symbol "List")
-						(ty-var @4-70-4-71 (name "a")))))))
+				(ty-fn @4.18-4.72 (effectful false)
+					(ty-apply @4.18-4.61 (symbol "Result")
+						(ty-apply @4.25-4.39 (symbol "List")
+							(ty-apply @4.30-4.38 (symbol "Maybe")
+								(ty-var @4.36-4.37 (name "a"))))
+						(ty-apply @4.41-4.60 (symbol "Dict")
+							(ty @4.46-4.49 (name "Str"))
+							(ty-apply @4.51-4.59 (symbol "Error")
+								(ty-var @4.57-4.58 (name "b")))))
+					(ty-apply @4.65-4.72 (symbol "List")
+						(ty-var @4.70-4.71 (name "a")))))))
 	(d-let (id 142)
-		(p-assign @12-1-12-11 (ident "deepNested") (id 129))
-		(e-lambda @12-14-12-25 (id 134)
+		(p-assign @12.1-12.11 (ident "deepNested") (id 129))
+		(e-lambda @12.14-12.25 (id 134)
 			(args
-				(p-underscore @12-15-12-16 (id 130)))
+				(p-underscore @12.15-12.16 (id 130)))
 			(e-runtime-error (tag "lambda_body_not_canonicalized")))
-		(annotation @12-1-12-11 (signature 140) (id 141)
+		(annotation @12.1-12.11 (signature 140) (id 141)
 			(declared-type
-				(ty-fn @11-14-11-55 (effectful false)
-					(ty-apply @11-14-11-50 (symbol "Maybe")
-						(ty-apply @11-20-11-49 (symbol "Result")
-							(ty-apply @11-27-11-45 (symbol "List")
-								(ty-apply @11-32-11-44 (symbol "Dict")
-									(ty @11-37-11-40 (name "Str"))
-									(ty-var @11-42-11-43 (name "a"))))
-							(ty-var @11-47-11-48 (name "b"))))
-					(ty-var @11-54-11-55 (name "a"))))))
-	(d-let (id 164)
-		(p-assign @17-1-17-6 (ident "main!") (id 144))
-		(e-lambda @17-9-17-49 (id 163)
+				(ty-fn @11.14-11.55 (effectful false)
+					(ty-apply @11.14-11.50 (symbol "Maybe")
+						(ty-apply @11.20-11.49 (symbol "Result")
+							(ty-apply @11.27-11.45 (symbol "List")
+								(ty-apply @11.32-11.44 (symbol "Dict")
+									(ty @11.37-11.40 (name "Str"))
+									(ty-var @11.42-11.43 (name "a"))))
+							(ty-var @11.47-11.48 (name "b"))))
+					(ty-var @11.54-11.55 (name "a"))))))
+	(d-let (id 163)
+		(p-assign @17.1-17.6 (ident "main!") (id 144))
+		(e-lambda @17.9-17.49 (id 162)
 			(args
-				(p-underscore @17-10-17-11 (id 145)))
-			(e-call @17-13-17-49
-				(e-lookup-local @17-13-17-27
+				(p-underscore @17.10-17.11 (id 145)))
+			(e-call @17.13-17.49
+				(e-lookup-local @17.13-17.27
 					(pattern (id 99)))
-				(e-call @17-28-17-48
-					(e-tag @17-28-17-30 (ext-var 0) (name "Ok") (args "TODO"))
-					(e-list @17-31-17-47 (elem-var 156)
+				(e-call @17.28-17.48
+					(e-tag @17.28-17.30 (ext-var 0) (name "Ok") (args "TODO"))
+					(e-list @17.31-17.47 (elem-var 153)
 						(elems
-							(e-call @17-32-17-40
-								(e-tag @17-32-17-36 (ext-var 0) (name "Some") (args "TODO"))
-								(e-int @17-37-17-39 (value "42")))
-							(e-tag @17-42-17-46 (ext-var 0) (name "None") (args "TODO"))))))))
-	(s-type-decl @15-1-17-6 (id 84)
-		(ty-header @15-1-15-18 (name "ComplexType")
+							(e-call @17.32-17.40
+								(e-tag @17.32-17.36 (ext-var 0) (name "Some") (args "TODO"))
+								(e-int @17.37-17.39 (value "42")))
+							(e-tag @17.42-17.46 (ext-var 0) (name "None") (args "TODO"))))))))
+	(s-type-decl @15.1-17.6 (id 84)
+		(ty-header @15.1-15.18 (name "ComplexType")
 			(ty-args
-				(ty-var @15-13-15-14 (name "a"))
-				(ty-var @15-16-15-17 (name "b"))))
-		(ty-apply @15-21-15-64 (symbol "Result")
-			(ty-apply @15-28-15-42 (symbol "List")
-				(ty-apply @15-33-15-41 (symbol "Maybe")
-					(ty-var @15-39-15-40 (name "a"))))
-			(ty-apply @15-44-15-63 (symbol "Dict")
-				(ty @15-49-15-52 (name "Str"))
-				(ty-apply @15-54-15-62 (symbol "Error")
-					(ty-var @15-60-15-61 (name "b")))))))
+				(ty-var @15.13-15.14 (name "a"))
+				(ty-var @15.16-15.17 (name "b"))))
+		(ty-apply @15.21-15.64 (symbol "Result")
+			(ty-apply @15.28-15.42 (symbol "List")
+				(ty-apply @15.33-15.41 (symbol "Maybe")
+					(ty-var @15.39-15.40 (name "a"))))
+			(ty-apply @15.44-15.63 (symbol "Dict")
+				(ty @15.49-15.52 (name "Str"))
+				(ty-apply @15.54-15.62 (symbol "Error")
+					(ty-var @15.60-15.61 (name "b")))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -344,9 +349,9 @@ main! = |_| processComplex(Ok([Some(42), None]))
 	(defs
 		(d_assign (name "processComplex") (def_var 112) (type "Result -> Error"))
 		(d_assign (name "deepNested") (def_var 142) (type "Maybe -> Error"))
-		(d_assign (name "main!") (def_var 164) (type "* ? *")))
+		(d_assign (name "main!") (def_var 163) (type "* ? *")))
 	(expressions
-		(expr @5-18-6-9 (type "Result -> Error"))
-		(expr @12-14-12-25 (type "Maybe -> Error"))
-		(expr @17-9-17-49 (type "* ? *"))))
+		(expr @5.18-6.9 (type "Result -> Error"))
+		(expr @12.14-12.25 (type "Maybe -> Error"))
+		(expr @17.9-17.49 (type "* ? *"))))
 ~~~

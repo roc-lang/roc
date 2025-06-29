@@ -31,24 +31,24 @@ LowerIdent(9:5-9:6),NoSpaceDotUpperIdent(9:6-9:13),Comma(9:13-9:14),EndOfFile(9:
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-9-14
-	(module @1-1-1-16
-		(exposes @1-8-1-16
+(file @1.1-9.14
+	(module @1.1-1.16
+		(exposes @1.8-1.16
 			(exposed-lower-ident (text "decode"))))
 	(statements
-		(s-import @3-1-3-32 (module "Decode")
+		(s-import @3.1-3.32 (module "Decode")
 			(exposing
 				(exposed-upper-ident (text "Decode"))))
-		(s-type-anno @5-1-9-14 (name "decodeThings")
-			(ty-fn @7-3-7-28
-				(ty-apply @7-3-7-17
+		(s-type-anno @5.1-9.14 (name "decodeThings")
+			(ty-fn @7.3-7.28
+				(ty-apply @7.3-7.17
 					(ty (name "List"))
-					(ty-apply @7-8-7-16
+					(ty-apply @7.8-7.16
 						(ty (name "List"))
 						(ty (name "U8"))))
-				(ty-apply @7-21-7-28
+				(ty-apply @7.21-7.28
 					(ty (name "List"))
-					(ty-var @7-26-7-27 (raw "a")))))))
+					(ty-var @7.26-7.27 (raw "a")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -57,7 +57,7 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-import @3-1-3-32 (module "Decode") (id 74)
+	(s-import @3.1-3.32 (module "Decode") (id 74)
 		(exposes
 			(exposed (name "Decode") (wildcard false)))))
 ~~~

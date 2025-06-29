@@ -33,41 +33,41 @@ LowerIdent(10:1-10:6),OpAssign(10:7-10:8),OpBar(10:9-10:10),Underscore(10:10-10:
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-10-15
-	(app @1-1-1-53
-		(provides @1-6-1-12
+(file @1.1-10.15
+	(app @1.1-1.53
+		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @1-15-1-53 (name "pf")
-			(e-string @1-28-1-51
-				(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))
-		(packages @1-13-1-53
-			(record-field @1-15-1-53 (name "pf")
-				(e-string @1-28-1-51
-					(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))))
+		(record-field @1.15-1.53 (name "pf")
+			(e-string @1.28-1.51
+				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
+		(packages @1.13-1.53
+			(record-field @1.15-1.53 (name "pf")
+				(e-string @1.28-1.51
+					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @3-1-4-9 (name "identity")
-			(ty-fn @3-12-3-18
-				(ty-var @3-12-3-13 (raw "a"))
-				(ty-var @3-17-3-18 (raw "a"))))
-		(s-decl @4-1-8-2
-			(p-ident @4-1-4-9 (raw "identity"))
-			(e-lambda @4-12-8-2
+		(s-type-anno @3.1-4.9 (name "identity")
+			(ty-fn @3.12-3.18
+				(ty-var @3.12-3.13 (raw "a"))
+				(ty-var @3.17-3.18 (raw "a"))))
+		(s-decl @4.1-8.2
+			(p-ident @4.1-4.9 (raw "identity"))
+			(e-lambda @4.12-8.2
 				(args
-					(p-ident @4-13-4-14 (raw "x")))
-				(e-block @4-16-8-2
+					(p-ident @4.13-4.14 (raw "x")))
+				(e-block @4.16-8.2
 					(statements
-						(s-type-anno @5-5-6-10 (name "thing")
-							(ty-var @5-13-5-14 (raw "a")))
-						(s-decl @6-5-6-14
-							(p-ident @6-5-6-10 (raw "thing"))
-							(e-ident @6-13-6-14 (qaul "") (raw "x")))
-						(e-ident @7-5-7-10 (qaul "") (raw "thing"))))))
-		(s-decl @10-1-10-15
-			(p-ident @10-1-10-6 (raw "main!"))
-			(e-lambda @10-9-10-15
+						(s-type-anno @5.5-6.10 (name "thing")
+							(ty-var @5.13-5.14 (raw "a")))
+						(s-decl @6.5-6.14
+							(p-ident @6.5-6.10 (raw "thing"))
+							(e-ident @6.13-6.14 (qaul "") (raw "x")))
+						(e-ident @7.5-7.10 (qaul "") (raw "thing"))))))
+		(s-decl @10.1-10.15
+			(p-ident @10.1-10.6 (raw "main!"))
+			(e-lambda @10.9-10.15
 				(args
 					(p-underscore))
-				(e-record @10-13-10-15)))))
+				(e-record @10.13-10.15)))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -86,30 +86,30 @@ main! = |_| {}
 ~~~clojure
 (can-ir
 	(d-let (id 98)
-		(p-assign @4-1-4-9 (ident "identity") (id 78))
-		(e-lambda @4-12-8-2 (id 90)
+		(p-assign @4.1-4.9 (ident "identity") (id 78))
+		(e-lambda @4.12-8.2 (id 90)
 			(args
-				(p-assign @4-13-4-14 (ident "x") (id 79)))
-			(e-block @4-16-8-2
-				(s-type-anno @5-5-6-10 (name "thing")
-					(ty-var @5-13-5-14 (name "a")))
-				(s-let @6-5-6-14
-					(p-assign @6-5-6-10 (ident "thing") (id 84))
-					(e-lookup-local @6-13-6-14 (id 85)
+				(p-assign @4.13-4.14 (ident "x") (id 79)))
+			(e-block @4.16-8.2
+				(s-type-anno @5.5-6.10 (name "thing")
+					(ty-var @5.13-5.14 (name "a")))
+				(s-let @6.5-6.14
+					(p-assign @6.5-6.10 (ident "thing") (id 84))
+					(e-lookup-local @6.13-6.14 (id 85)
 						(pattern (id 79))))
-				(e-lookup-local @7-5-7-10
+				(e-lookup-local @7.5-7.10
 					(pattern (id 84)))))
-		(annotation @4-1-4-9 (signature 96) (id 97)
+		(annotation @4.1-4.9 (signature 96) (id 97)
 			(declared-type
-				(ty-fn @3-12-3-18 (effectful false)
-					(ty-var @3-12-3-13 (name "a"))
-					(ty-var @3-17-3-18 (name "a"))))))
+				(ty-fn @3.12-3.18 (effectful false)
+					(ty-var @3.12-3.13 (name "a"))
+					(ty-var @3.17-3.18 (name "a"))))))
 	(d-let (id 104)
-		(p-assign @10-1-10-6 (ident "main!") (id 99))
-		(e-lambda @10-9-10-15 (id 103)
+		(p-assign @10.1-10.6 (ident "main!") (id 99))
+		(e-lambda @10.9-10.15 (id 103)
 			(args
-				(p-underscore @10-10-10-11 (id 100)))
-			(e-empty_record @10-13-10-15))))
+				(p-underscore @10.10-10.11 (id 100)))
+			(e-empty_record @10.13-10.15))))
 ~~~
 # TYPES
 ~~~clojure
@@ -118,6 +118,6 @@ main! = |_| {}
 		(d_assign (name "identity") (def_var 98) (type "a -> a"))
 		(d_assign (name "main!") (def_var 104) (type "* ? {}")))
 	(expressions
-		(expr @4-12-8-2 (type "a -> a"))
-		(expr @10-9-10-15 (type "* ? {}"))))
+		(expr @4.12-8.2 (type "a -> a"))
+		(expr @10.9-10.15 (type "* ? {}"))))
 ~~~

@@ -122,7 +122,7 @@ fn processSourceInternal(
     // Canonicalize the AST
     var canonicalizer = canonicalize.init(cir, &parse_ast);
     defer canonicalizer.deinit();
-    canonicalizer.canonicalize_file();
+    try canonicalizer.canonicalize_file();
 
     // Get diagnostic Reports from CIR
     const diagnostics = cir.getDiagnostics();

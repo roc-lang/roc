@@ -15,7 +15,7 @@ Float(1:1-1:7),EndOfFile(1:7-1:7),
 ~~~
 # PARSE
 ~~~clojure
-(e-frac @1-1-1-7 (raw "327.67"))
+(e-frac @1.1-1.7 (raw "327.67"))
 ~~~
 # FORMATTED
 ~~~roc
@@ -23,7 +23,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dec-small @1-1-1-7 (numerator "32767") (denominator-power-of-ten "2") (value "327.67") (id 73))
+(e-dec-small @1.1-1.7 (numerator "32767") (denominator-power-of-ten "2") (value "327.67") (id 73))
 ~~~
 # TYPES
 ~~~clojure

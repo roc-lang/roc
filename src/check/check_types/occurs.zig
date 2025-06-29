@@ -34,7 +34,7 @@ const Desc = types.Descriptor;
 const Content = types.Content;
 const Mark = types.Mark;
 const Var = types.Var;
-const CustomType = types.CustomType;
+const NominalType = types.NominalType;
 const TagUnion = types.TagUnion;
 const Tag = types.Tag;
 
@@ -70,9 +70,16 @@ pub fn occurs(types_store: *Store, scratch: *Scratch, var_: Var) Result {
 
     var result: Result = .not_recursive;
 
+    // Check if we're starting from a nominal type
+    const root = types_store.resolveVar(var_);
+    const initial_context = if (root.desc.content == .structure and root.desc.content.structure == .nominal_type)
+        Context.init().markNominal()
+    else
+        Context.init();
+
     // Check for recursion
     var check_occurs = CheckOccurs.init(types_store, scratch);
-    check_occurs.occurs(var_, Context.init()) catch |err| switch (err) {
+    check_occurs.occurs(var_, initial_context) catch |err| switch (err) {
         error.InfiniteType => {
             result = .infinite;
         },
@@ -175,10 +182,15 @@ const CheckOccurs = struct {
                             try self.occursSubVars(root, elems, ctx);
                         },
                         .num => {},
-                        .custom_type => |custom_type| {
-                            const args = self.types_store.getCustomTypeArgsSlice(custom_type.args);
-                            try self.occursSubVars(root, args, ctx);
-                            try self.occursSubVar(root, custom_type.backing_var, ctx.markNominal());
+                        .nominal_type => |nominal_type| {
+                            // Check all argument vars using iterator
+                            var arg_iter = nominal_type.argIterator(root.var_);
+                            while (arg_iter.next()) |arg_var| {
+                                try self.occursSubVar(root, arg_var, ctx);
+                            }
+                            // Check backing var using helper method
+                            const backing_var = nominal_type.getBackingVar(root.var_);
+                            try self.occursSubVar(root, backing_var, ctx.markNominal());
                         },
                         .func => |func| {
                             const args = self.types_store.getFuncArgsSlice(func.args);
@@ -209,9 +221,13 @@ const CheckOccurs = struct {
                     }
                 },
                 .alias => |alias| {
-                    const args = self.types_store.getAliasArgsSlice(alias.args);
-                    try self.occursSubVars(root, args, ctx);
-                    try self.occursSubVar(root, alias.backing_var, ctx);
+                    // Check all argument vars using iterator
+                    var arg_iter = alias.argIterator(var_);
+                    while (arg_iter.next()) |arg_var| {
+                        try self.occursSubVar(root, arg_var, ctx);
+                    }
+                    const backing_var = alias.getBackingVar(var_);
+                    try self.occursSubVar(root, backing_var, ctx);
                 },
                 .flex_var => {},
                 .rigid_var => {},
@@ -231,7 +247,7 @@ const CheckOccurs = struct {
     fn occursSubVar(self: *Self, root: ResolvedVarDesc, sub_var: Var, ctx: Context) Error!void {
         self.occurs(sub_var, ctx) catch |err| {
             self.scratch.appendErrChain(root.var_);
-            if (root.desc.content.unwrapCustomType() != null) {
+            if (root.desc.content.unwrapNominalType() != null) {
                 self.scratch.appendErrChainNominalVar(root.var_);
             }
             return err;
@@ -482,16 +498,14 @@ test "occurs: recursive alias (v = Alias(List v))" {
     var scratch = Scratch.init(gpa);
     defer scratch.deinit();
 
-    const backing_var = types_store.fresh();
     const v = types_store.fresh();
-
-    const args = types_store.appendAliasArgs(&[_]Var{v});
+    _ = types_store.fresh(); // backing var at v+1
+    _ = types_store.freshRedirect(v); // arg at v+2 redirecting to v (creating infinite recursion on purpose for the test)
 
     try types_store.setRootVarContent(v, Content{
         .alias = .{
             .ident = types.TypeIdent{ .ident_idx = undefined },
-            .args = args,
-            .backing_var = backing_var,
+            .num_args = 1,
         },
     });
 
@@ -511,16 +525,16 @@ test "occurs: alias with no recursion (v = Alias Str)" {
     var scratch = Scratch.init(gpa);
     defer scratch.deinit();
 
-    const backing_var = types_store.fresh();
-    const str_var = types_store.freshFromContent(Content{ .structure = .str });
-    const args = types_store.appendAliasArgs(&[_]Var{str_var});
-
     const alias_var = types_store.fresh();
+    const backing_var = types_store.fresh(); // backing var at alias_var+1
+    const arg_var = types_store.fresh(); // arg at alias_var+2
+
     try types_store.setRootVarContent(alias_var, Content{ .alias = .{
         .ident = types.TypeIdent{ .ident_idx = undefined },
-        .args = args,
-        .backing_var = backing_var,
+        .num_args = 1,
     } });
+    try types_store.setRootVarContent(backing_var, Content{ .structure = .str });
+    try types_store.setRootVarContent(arg_var, Content{ .structure = .str });
 
     const result = occurs(&types_store, &scratch, alias_var);
     try std.testing.expectEqual(.not_recursive, result);
@@ -608,39 +622,40 @@ test "occurs: recursive tag union (v = List: [ Cons(Elem, List), Nil ])" {
     var scratch = Scratch.init(gpa);
     defer scratch.deinit();
 
-    const custom_type = types_store.fresh();
+    const nominal_type = types_store.fresh();
+    // Create backing var immediately after nominal_type to ensure it's at nominal_type + 1
+    const backing_var = types_store.fresh();
 
     const elem = types_store.fresh();
     const ext = types_store.fresh();
 
-    const cons_tag_args = types_store.appendTagArgs(&[_]Var{ elem, custom_type });
+    const cons_tag_args = types_store.appendTagArgs(&[_]Var{ elem, nominal_type });
     const cons_tag = types.Tag{ .name = undefined, .args = cons_tag_args };
 
     const nil_tag = types.Tag{ .name = undefined, .args = Var.SafeList.Range.empty };
 
     const tags = types_store.appendTags(&[_]Tag{ cons_tag, nil_tag });
 
-    const tag_union = types_store.freshFromContent(.{ .structure = .{ .tag_union = TagUnion{ .tags = tags, .ext = ext } } });
-
-    try types_store.setRootVarContent(custom_type, .{ .structure = .{ .custom_type = CustomType{
+    try types_store.setRootVarContent(nominal_type, .{ .structure = .{ .nominal_type = NominalType{
         .ident = undefined,
-        .args = Var.SafeList.Range.empty,
-        .backing_var = tag_union,
+        .num_args = 0,
     } } });
+
+    try types_store.setRootVarContent(backing_var, .{ .structure = .{ .tag_union = TagUnion{ .tags = tags, .ext = ext } } });
 
     // assert that starting from the nominal type, it works
 
-    const result1 = occurs(&types_store, &scratch, custom_type);
+    const result1 = occurs(&types_store, &scratch, nominal_type);
     try std.testing.expectEqual(.recursive_nominal, result1);
 
     const err_chain1 = scratch.errChainSlice();
     try std.testing.expectEqual(2, err_chain1.len);
-    try std.testing.expectEqual(tag_union, err_chain1[0]);
-    try std.testing.expectEqual(custom_type, err_chain1[1]);
+    try std.testing.expectEqual(backing_var, err_chain1[0]);
+    try std.testing.expectEqual(nominal_type, err_chain1[1]);
 
     const err_chain_nominal1 = scratch.errChainNominalVarsSlice();
     try std.testing.expectEqual(1, err_chain_nominal1.len);
-    try std.testing.expectEqual(custom_type, err_chain_nominal1[0]);
+    try std.testing.expectEqual(nominal_type, err_chain_nominal1[0]);
 
     for (scratch.visited.items.items[0..]) |visited_desc_idx| {
         try std.testing.expectEqual(Mark.none, types_store.getDesc(visited_desc_idx).mark);
@@ -648,17 +663,17 @@ test "occurs: recursive tag union (v = List: [ Cons(Elem, List), Nil ])" {
 
     // assert that starting from the the tag union, it works
 
-    const result2 = occurs(&types_store, &scratch, tag_union);
+    const result2 = occurs(&types_store, &scratch, backing_var);
     try std.testing.expectEqual(.recursive_nominal, result2);
 
     const err_chain2 = scratch.errChainSlice();
     try std.testing.expectEqual(2, err_chain2.len);
-    try std.testing.expectEqual(custom_type, err_chain2[0]);
-    try std.testing.expectEqual(tag_union, err_chain2[1]);
+    try std.testing.expectEqual(nominal_type, err_chain2[0]);
+    try std.testing.expectEqual(backing_var, err_chain2[1]);
 
     const err_chain_nominal2 = scratch.errChainNominalVarsSlice();
     try std.testing.expectEqual(1, err_chain_nominal2.len);
-    try std.testing.expectEqual(custom_type, err_chain_nominal2[0]);
+    try std.testing.expectEqual(nominal_type, err_chain_nominal2[0]);
 
     for (scratch.visited.items.items[0..]) |visited_desc_idx| {
         try std.testing.expectEqual(Mark.none, types_store.getDesc(visited_desc_idx).mark);
@@ -673,40 +688,44 @@ test "occurs: recursive tag union with multiple nominals (TypeA := TypeB, TypeB 
     var scratch = Scratch.init(gpa);
     defer scratch.deinit();
 
-    const type_a_nominal = types_store.fresh();
-    const type_b_nominal = types_store.fresh();
+    // Create vars in the required order for adjacency to work out
+    const type_b_nominal = types_store.fresh(); // Var(0)
+    const type_b_backing = types_store.fresh(); // Var(1)
+    const type_a_nominal = types_store.fresh(); // Var(2)
+    const type_a_backing = types_store.fresh(); // Var(3)
+    const elem = types_store.fresh(); // Var(4)
+    const ext = types_store.fresh(); // Var(5)
 
-    const elem = types_store.fresh();
-    const ext = types_store.fresh();
-
+    // Create the tag union content that references type_a_nominal
     const cons_tag_args = types_store.appendTagArgs(&[_]Var{ elem, type_a_nominal });
     const cons_tag = types.Tag{ .name = undefined, .args = cons_tag_args };
     const nil_tag = types.Tag{ .name = undefined, .args = Var.SafeList.Range.empty };
     const tags = types_store.appendTags(&[_]Tag{ cons_tag, nil_tag });
-    const tag_union = types_store.freshFromContent(.{ .structure = .{ .tag_union = TagUnion{ .tags = tags, .ext = ext } } });
 
-    // TypeB = [ Cons(Elem, TypeA), Nil ]
-    try types_store.setRootVarContent(type_b_nominal, .{ .structure = .{ .custom_type = CustomType{
+    // Set up TypeB = [ Cons(Elem, TypeA), Nil ]
+    try types_store.setRootVarContent(type_b_nominal, .{ .structure = .{ .nominal_type = NominalType{
         .ident = undefined,
-        .args = Var.SafeList.Range.empty,
-        .backing_var = tag_union,
+        .num_args = 0,
+    } } });
+    try types_store.setRootVarContent(type_b_backing, .{ .structure = .{ .tag_union = TagUnion{ .tags = tags, .ext = ext } } });
+
+    // Set up TypeA to be a nominal type
+    try types_store.setRootVarContent(type_a_nominal, .{ .structure = .{ .nominal_type = NominalType{
+        .ident = undefined,
+        .num_args = 0,
     } } });
 
-    // TypeA = TypeB
-    try types_store.setRootVarContent(type_a_nominal, .{ .structure = .{ .custom_type = CustomType{
-        .ident = undefined,
-        .args = Var.SafeList.Range.empty,
-        .backing_var = type_b_nominal,
-    } } });
+    // Set up TypeA's backing var to redirect to TypeB
+    const type_b_desc = types_store.resolveVar(type_b_nominal).desc;
+    types_store.union_(type_a_backing, type_b_nominal, type_b_desc);
 
     // assert that starting from the `TypeA` nominal, it works
-
     const result1 = occurs(&types_store, &scratch, type_a_nominal);
     try std.testing.expectEqual(.recursive_nominal, result1);
 
     const err_chain1 = scratch.errChainSlice();
     try std.testing.expectEqual(3, err_chain1.len);
-    try std.testing.expectEqual(tag_union, err_chain1[0]);
+    try std.testing.expectEqual(type_b_backing, err_chain1[0]);
     try std.testing.expectEqual(type_b_nominal, err_chain1[1]);
     try std.testing.expectEqual(type_a_nominal, err_chain1[2]);
 
@@ -727,7 +746,7 @@ test "occurs: recursive tag union with multiple nominals (TypeA := TypeB, TypeB 
     const err_chain2 = scratch.errChainSlice();
     try std.testing.expectEqual(3, err_chain2.len);
     try std.testing.expectEqual(type_a_nominal, err_chain2[0]);
-    try std.testing.expectEqual(tag_union, err_chain2[1]);
+    try std.testing.expectEqual(type_b_backing, err_chain2[1]);
     try std.testing.expectEqual(type_b_nominal, err_chain2[2]);
 
     const err_chain_nominal2 = scratch.errChainNominalVarsSlice();
@@ -741,14 +760,14 @@ test "occurs: recursive tag union with multiple nominals (TypeA := TypeB, TypeB 
 
     // assert that starting from the the tag union, it works
 
-    const result3 = occurs(&types_store, &scratch, tag_union);
+    const result3 = occurs(&types_store, &scratch, type_b_backing);
     try std.testing.expectEqual(.recursive_nominal, result3);
 
     const err_chain3 = scratch.errChainSlice();
     try std.testing.expectEqual(3, err_chain3.len);
     try std.testing.expectEqual(type_b_nominal, err_chain3[0]);
     try std.testing.expectEqual(type_a_nominal, err_chain3[1]);
-    try std.testing.expectEqual(tag_union, err_chain3[2]);
+    try std.testing.expectEqual(type_b_backing, err_chain3[2]);
 
     const err_chain_nominal3 = scratch.errChainNominalVarsSlice();
     try std.testing.expectEqual(2, err_chain_nominal3.len);

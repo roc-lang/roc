@@ -520,7 +520,7 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(CIR.Diagnostic{
-        .custom_type_redeclared = .{
+        .nominal_type_redeclared = .{
             .name = @bitCast(@as(u32, 2425)),
             .original_region = from_raw_offsets(510, 520),
             .redeclared_region = from_raw_offsets(530, 540),

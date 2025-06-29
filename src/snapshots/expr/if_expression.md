@@ -17,6 +17,7 @@ Here is the problematic code:
 ```roc
 if x > 5 then "big" else "small"
 ```
+              ^^^^
 
 
 # TOKENS
@@ -25,7 +26,7 @@ KwIf(1:1-1:3),LowerIdent(1:4-1:5),OpGreaterThan(1:6-1:7),Int(1:8-1:9),LowerIdent
 ~~~
 # PARSE
 ~~~clojure
-(e-malformed @1-15-1-19 (reason "no_else"))
+(e-malformed @1.15-1.19 (reason "no_else"))
 ~~~
 # FORMATTED
 ~~~roc

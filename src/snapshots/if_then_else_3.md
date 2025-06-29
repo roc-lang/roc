@@ -20,6 +20,7 @@ This expression is used in an unexpected way:
 ```roc
 } else 2
 ```
+       ^
 
 It is of type:
     _Num(*)_
@@ -35,12 +36,12 @@ CloseCurly(3:1-3:2),KwElse(3:3-3:7),Int(3:8-3:9),EndOfFile(3:9-3:9),
 ~~~
 # PARSE
 ~~~clojure
-(e-if-then-else @1-1-3-9
-	(e-ident @1-4-1-8 (qaul "") (raw "bool"))
-	(e-block @1-9-3-2
+(e-if-then-else @1.1-3.9
+	(e-ident @1.4-1.8 (qaul "") (raw "bool"))
+	(e-block @1.9-3.2
 		(statements
-			(e-tag @2-2-2-3 (raw "A"))))
-	(e-int @3-8-3-9 (raw "2")))
+			(e-tag @2.2-2.3 (raw "A"))))
+	(e-int @3.8-3.9 (raw "2")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -48,16 +49,16 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-if @1-1-3-9 (branch-var 80) (id 81)
+(e-if @1.1-3.9 (id 80)
 	(if-branches
 		(if-branch
 			(e-runtime-error (tag "ident_not_in_scope"))
-			(e-block @1-9-3-2
-				(e-tag @2-2-2-3 (ext-var 0) (name "A") (args "TODO")))))
+			(e-block @1.9-3.2
+				(e-tag @2.2-2.3 (ext-var 0) (name "A") (args "TODO")))))
 	(if-else
-		(e-int @3-8-3-9 (value "2"))))
+		(e-int @3.8-3.9 (value "2"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 81) (type "Error"))
+(expr (id 80) (type "Error"))
 ~~~

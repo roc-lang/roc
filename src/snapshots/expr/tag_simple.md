@@ -15,7 +15,7 @@ UpperIdent(1:1-1:3),EndOfFile(1:3-1:3),
 ~~~
 # PARSE
 ~~~clojure
-(e-tag @1-1-1-3 (raw "Ok"))
+(e-tag @1.1-1.3 (raw "Ok"))
 ~~~
 # FORMATTED
 ~~~roc
@@ -23,7 +23,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tag @1-1-1-3 (ext-var 0) (name "Ok") (args "TODO") (id 74))
+(e-tag @1.1-1.3 (ext-var 0) (name "Ok") (args "TODO") (id 74))
 ~~~
 # TYPES
 ~~~clojure

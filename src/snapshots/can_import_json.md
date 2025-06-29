@@ -23,14 +23,14 @@ LowerIdent(5:1-5:5),OpAssign(5:6-5:7),UpperIdent(5:8-5:12),NoSpaceDotLowerIdent(
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-5-17
-	(module @1-1-1-10
-		(exposes @1-8-1-10))
+(file @1.1-5.17
+	(module @1.1-1.10
+		(exposes @1.8-1.10))
 	(statements
-		(s-import @3-1-3-17 (module ".Json") (qualifier "json"))
-		(s-decl @5-1-5-17
-			(p-ident @5-1-5-5 (raw "main"))
-			(e-ident @5-8-5-17 (qaul "Json") (raw ".utf8")))))
+		(s-import @3.1-3.17 (module ".Json") (qualifier "json"))
+		(s-decl @5.1-5.17
+			(p-ident @5.1-5.5 (raw "main"))
+			(e-ident @5.8-5.17 (qaul "Json") (raw ".utf8")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -40,10 +40,10 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let (id 77)
-		(p-assign @5-1-5-5 (ident "main") (id 74))
+		(p-assign @5.1-5.5 (ident "main") (id 74))
 		(e-lookup-external (id 76)
-			(ext-decl @5-8-5-17 (qualified "json.Json.utf8") (module "json.Json") (local "utf8") (kind "value") (type-var 75))))
-	(s-import @3-1-3-17 (module "json.Json") (qualifier "json") (id 73)
+			(ext-decl @5.8-5.17 (qualified "json.Json.utf8") (module "json.Json") (local "utf8") (kind "value") (type-var 75))))
+	(s-import @3.1-3.17 (module "json.Json") (qualifier "json") (id 73)
 		(exposes)))
 ~~~
 # TYPES
@@ -52,5 +52,5 @@ NO CHANGE
 	(defs
 		(d_assign (name "main") (def_var 77) (type "*")))
 	(expressions
-		(expr @5-8-5-17 (type "*"))))
+		(expr @5.8-5.17 (type "*"))))
 ~~~

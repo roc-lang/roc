@@ -19,21 +19,21 @@ LowerIdent(3:1-3:4),OpAssign(3:5-3:6),StringStart(3:7-3:8),StringPart(3:8-3:14),
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-3-22
-	(module @1-1-1-13
-		(exposes @1-8-1-13
+(file @1.1-3.22
+	(module @1.1-1.13
+		(exposes @1.8-1.13
 			(exposed-lower-ident (text "foo"))))
 	(statements
-		(s-decl @2-1-2-13
-			(p-ident @2-1-2-5 (raw "name"))
-			(e-string @2-8-2-13
-				(e-string-part @2-9-2-12 (raw "luc"))))
-		(s-decl @3-1-3-22
-			(p-ident @3-1-3-4 (raw "foo"))
-			(e-string @3-7-3-22
-				(e-string-part @3-8-3-14 (raw "hello "))
-				(e-ident @3-16-3-20 (qaul "") (raw "name"))
-				(e-string-part @3-21-3-21 (raw ""))))))
+		(s-decl @2.1-2.13
+			(p-ident @2.1-2.5 (raw "name"))
+			(e-string @2.8-2.13
+				(e-string-part @2.9-2.12 (raw "luc"))))
+		(s-decl @3.1-3.22
+			(p-ident @3.1-3.4 (raw "foo"))
+			(e-string @3.7-3.22
+				(e-string-part @3.8-3.14 (raw "hello "))
+				(e-ident @3.16-3.20 (qaul "") (raw "name"))
+				(e-string-part @3.21-3.21 (raw ""))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -43,16 +43,16 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let (id 76)
-		(p-assign @2-1-2-5 (ident "name") (id 73))
-		(e-string @2-8-2-13 (id 75)
-			(e-literal @2-9-2-12 (string "luc"))))
+		(p-assign @2.1-2.5 (ident "name") (id 73))
+		(e-string @2.8-2.13 (id 75)
+			(e-literal @2.9-2.12 (string "luc"))))
 	(d-let (id 82)
-		(p-assign @3-1-3-4 (ident "foo") (id 77))
-		(e-string @3-7-3-22 (id 81)
-			(e-literal @3-8-3-14 (string "hello "))
-			(e-lookup-local @3-16-3-20
+		(p-assign @3.1-3.4 (ident "foo") (id 77))
+		(e-string @3.7-3.22 (id 81)
+			(e-literal @3.8-3.14 (string "hello "))
+			(e-lookup-local @3.16-3.20
 				(pattern (id 73)))
-			(e-literal @3-21-3-21 (string "")))))
+			(e-literal @3.21-3.21 (string "")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -61,6 +61,6 @@ NO CHANGE
 		(d_assign (name "name") (def_var 76) (type "Str"))
 		(d_assign (name "foo") (def_var 82) (type "Str")))
 	(expressions
-		(expr @2-8-2-13 (type "Str"))
-		(expr @3-7-3-22 (type "Str"))))
+		(expr @2.8-2.13 (type "Str"))
+		(expr @3.7-3.22 (type "Str"))))
 ~~~
