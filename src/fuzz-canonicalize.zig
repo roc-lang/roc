@@ -59,6 +59,10 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
 
     const input = buf[0..@intCast(len)];
 
+    if (debug) {
+        std.debug.print("Input:\n==========\n{s}\n==========\n\n", .{input});
+    }
+
     // Process the input through the full compiler pipeline
     var result = coordinate_simple.processSource(gpa, input, "<fuzz>") catch |err| {
         if (debug) {
