@@ -214,7 +214,6 @@ const CheckOccurs = struct {
                     while (arg_iter.next()) |arg_var| {
                         try self.occursSubVar(root, arg_var, ctx);
                     }
-                    // Check backing var using helper method
                     const backing_var = alias.getBackingVar(var_);
                     try self.occursSubVar(root, backing_var, ctx);
                 },

@@ -486,7 +486,6 @@ const Unifier = struct {
                 self.merge(vars, Content{ .alias = a_alias });
             },
             .rigid_var => |_| {
-                // Get backing var using helper method
                 const backing_var = a_alias.getBackingVar(vars.a.var_);
                 try self.unifyGuarded(backing_var, vars.b.var_);
             },
@@ -494,7 +493,6 @@ const Unifier = struct {
                 if (TypeIdent.eql(&self.module_env.idents, a_alias.ident, b_alias.ident)) {
                     try self.unifyTwoAliases(vars, a_alias, b_alias);
                 } else {
-                    // Get backing vars using helper methods
                     const a_backing_var = a_alias.getBackingVar(vars.a.var_);
                     const b_backing_var = b_alias.getBackingVar(vars.b.var_);
                     try self.unifyGuarded(a_backing_var, b_backing_var);
@@ -503,7 +501,6 @@ const Unifier = struct {
             .effectful => return error.TypeMismatch,
             .pure => return error.TypeMismatch,
             .structure => {
-                // Get backing var using helper method
                 const backing_var = a_alias.getBackingVar(vars.a.var_);
                 try self.unifyGuarded(backing_var, vars.b.var_);
             },
@@ -536,7 +533,6 @@ const Unifier = struct {
 
         // Rust compiler comment:
         // Don't report real_var mismatches, because they must always be surfaced higher, from the argument types.
-        // Unify backing vars using helper methods
         const a_backing_var = a_alias.getBackingVar(vars.a.var_);
         const b_backing_var = b_alias.getBackingVar(vars.b.var_);
         self.unifyGuarded(a_backing_var, b_backing_var) catch {};
@@ -584,7 +580,6 @@ const Unifier = struct {
             },
             .rigid_var => return error.TypeMismatch,
             .alias => |_| {
-                // Get backing var using helper method
                 const alias = self.types_store.resolveVar(vars.b.var_).desc.content.alias;
                 const backing_var = alias.getBackingVar(vars.b.var_);
                 try self.unifyGuarded(vars.a.var_, backing_var);
@@ -1712,7 +1707,6 @@ const Unifier = struct {
                     return .{ .ext = ext_var, .range = range };
                 },
                 .alias => |_| {
-                    // Get backing var using helper method
                     const alias = self.types_store.resolveVar(ext_var).desc.content.alias;
                     ext_var = alias.getBackingVar(ext_var);
                 },
@@ -2124,7 +2118,6 @@ const Unifier = struct {
                     return .{ .ext = ext_var, .range = range };
                 },
                 .alias => |_| {
-                    // Get backing var using helper method
                     const alias = self.types_store.resolveVar(ext_var).desc.content.alias;
                     ext_var = alias.getBackingVar(ext_var);
                 },

@@ -275,7 +275,6 @@ pub const Store = struct {
                     else => return LayoutError.InvalidRecordExtension,
                 },
                 .alias => |alias| {
-                    // Get backing var using helper method
                     current_ext = alias.getBackingVar(current_ext);
                 },
                 else => return LayoutError.InvalidRecordExtension,
