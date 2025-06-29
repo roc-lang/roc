@@ -1,0 +1,11 @@
+List with 2 elements, both incompatible:
+[1, "hello"]
+→ "The two elements in this list have incompatible types"
+
+List with 3+ elements, first two incompatible:
+[1, "hello", 3.14]
+→ "The first two elements in this list have incompatible types"
+
+List with 3+ elements, later elements incompatible:
+[1, 2, "hello"]
+→ "The second and third elements in this list have incompatible types"

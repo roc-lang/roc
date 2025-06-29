@@ -9,12 +9,17 @@ type=expr
 ~~~
 # PROBLEMS
 **INCOMPATIBLE LIST ELEMENTS**
-The first and second elements in this list have incompatible types:
-**can_list_heterogeneous.md:1:2:1:12:**
+The first two elements in this list have incompatible types:
+**can_list_heterogeneous.md:1:2:1:3:**
 ```roc
 [1, "hello", 3.14]
 ```
- ^^^^^^^^^^
+ ^
+**can_list_heterogeneous.md:1:5:1:12:**
+```roc
+[1, "hello", 3.14]
+```
+    ^^^^^^^
 
 The first element has this type:
     _Num(*)_

@@ -332,6 +332,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
                                 .incompatible_elem_var = @enumFromInt(@intFromEnum(elem_expr_id)),
                                 .incompatible_elem_snapshot = incompatible_snapshot,
                                 .incompatible_elem_index = i,
+                                .list_length = elems.len,
                             },
                         });
 

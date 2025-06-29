@@ -222,38 +222,54 @@ pub const Problem = union(enum) {
 
         // Add description
         buf.clearRetainingCapacity();
-        try buf.appendSlice("The ");
-        try appendOrdinal(buf, data.first_elem_index + 1);
-        try buf.appendSlice(" and ");
-        try appendOrdinal(buf, data.incompatible_elem_index + 1);
-        try buf.appendSlice(" elements in this list have incompatible types:");
+        if (data.list_length == 2) {
+            // Special case for lists with exactly 2 elements
+            try buf.appendSlice("The two elements in this list have incompatible types:");
+        } else if (data.first_elem_index == 0 and data.incompatible_elem_index == 1) {
+            // Special case for first two elements in longer lists
+            try buf.appendSlice("The first two elements in this list have incompatible types:");
+        } else {
+            try buf.appendSlice("The ");
+            try appendOrdinal(buf, data.first_elem_index + 1);
+            try buf.appendSlice(" and ");
+            try appendOrdinal(buf, data.incompatible_elem_index + 1);
+            try buf.appendSlice(" elements in this list have incompatible types:");
+        }
         const owned_description = try report.addOwnedString(buf.items);
         try report.document.addText(owned_description);
         try report.document.addLineBreak();
 
-        // Show a single region spanning both mismatched elements
-        const span_start = if (data.first_elem_region.start.offset < data.incompatible_elem_region.start.offset)
-            data.first_elem_region.start
-        else
-            data.incompatible_elem_region.start;
-
-        const span_end = if (data.first_elem_region.end.offset > data.incompatible_elem_region.end.offset)
-            data.first_elem_region.end
-        else
-            data.incompatible_elem_region.end;
-
-        const span_region_info = base.RegionInfo.position(
+        // Show the two elements with separate underlines
+        // First element
+        const first_elem_region_info = base.RegionInfo.position(
             source,
             module_env.line_starts.items,
-            span_start.offset,
-            span_end.offset,
+            data.first_elem_region.start.offset,
+            data.first_elem_region.end.offset,
         ) catch return report;
         try report.document.addSourceRegion(
             source,
-            span_region_info.start_line_idx,
-            span_region_info.start_col_idx,
-            span_region_info.end_line_idx,
-            span_region_info.end_col_idx,
+            first_elem_region_info.start_line_idx,
+            first_elem_region_info.start_col_idx,
+            first_elem_region_info.end_line_idx,
+            first_elem_region_info.end_col_idx,
+            .error_highlight,
+            filename,
+        );
+
+        // Second element
+        const incompatible_elem_region_info = base.RegionInfo.position(
+            source,
+            module_env.line_starts.items,
+            data.incompatible_elem_region.start.offset,
+            data.incompatible_elem_region.end.offset,
+        ) catch return report;
+        try report.document.addSourceRegion(
+            source,
+            incompatible_elem_region_info.start_line_idx,
+            incompatible_elem_region_info.start_col_idx,
+            incompatible_elem_region_info.end_line_idx,
+            incompatible_elem_region_info.end_col_idx,
             .error_highlight,
             filename,
         );
@@ -454,6 +470,7 @@ pub const IncompatibleListElements = struct {
     incompatible_elem_var: Var,
     incompatible_elem_snapshot: SnapshotContentIdx,
     incompatible_elem_index: usize, // 0-based index of the incompatible element
+    list_length: usize, // Total number of elements in the list
 };
 
 /// A two var problem
