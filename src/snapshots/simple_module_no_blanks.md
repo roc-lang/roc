@@ -46,16 +46,16 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 81)
+	(d-let (id 80)
 		(p-assign @3.1-3.7 (ident "hello!") (id 74))
-		(e-call @3.10-3.31 (id 80)
+		(e-call @3.10-3.31 (id 79)
 			(e-lookup-external
 				(ext-decl @3.10-3.22 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value") (type-var 75)))
 			(e-string @3.23-3.30
 				(e-literal @3.24-3.29 (string "Hello")))))
-	(d-let (id 85)
-		(p-assign @4.1-4.6 (ident "world") (id 82))
-		(e-string @4.9-4.16 (id 84)
+	(d-let (id 84)
+		(p-assign @4.1-4.6 (ident "world") (id 81))
+		(e-string @4.9-4.16 (id 83)
 			(e-literal @4.10-4.15 (string "World"))))
 	(s-import @2.1-2.17 (module "pf.Stdout") (qualifier "pf") (id 73)
 		(exposes)))
@@ -64,8 +64,8 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "hello!") (def_var 81) (type "*"))
-		(d_assign (name "world") (def_var 85) (type "Str")))
+		(d_assign (name "hello!") (def_var 80) (type "*"))
+		(d_assign (name "world") (def_var 84) (type "Str")))
 	(expressions
 		(expr @3.10-3.31 (type "*"))
 		(expr @4.9-4.16 (type "Str"))))

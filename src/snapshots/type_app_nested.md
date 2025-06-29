@@ -109,9 +109,9 @@ main! = |_| processNested([])
 							(ty @3.34-3.37 (name "Err"))))
 					(ty-apply @3.43-3.52 (symbol "List")
 						(ty @3.48-3.51 (name "Str")))))))
-	(d-let (id 105)
+	(d-let (id 104)
 		(p-assign @6.1-6.6 (ident "main!") (id 97))
-		(e-lambda @6.9-6.30 (id 104)
+		(e-lambda @6.9-6.30 (id 103)
 			(args
 				(p-underscore @6.10-6.11 (id 98)))
 			(e-call @6.13-6.30
@@ -124,7 +124,7 @@ main! = |_| processNested([])
 (inferred-types
 	(defs
 		(d_assign (name "processNested") (def_var 96) (type "List -> List(Str)"))
-		(d_assign (name "main!") (def_var 105) (type "* ? *")))
+		(d_assign (name "main!") (def_var 104) (type "* ? *")))
 	(expressions
 		(expr @4.17-4.38 (type "List -> List(Str)"))
 		(expr @6.9-6.30 (type "* ? *"))))

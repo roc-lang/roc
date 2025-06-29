@@ -14,7 +14,20 @@ my_number : U64
 my_number = add_one(42)
 ~~~
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**type_anno_connection.md:7:1:7:10:**
+```roc
+my_number = add_one(42)
+```
+^^^^^^^^^
+
+It is of type:
+    _U64_
+
+But you are trying to use it as:
+    _*_
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:16),Comma(1:16-1:17),LowerIdent(1:18-1:27),CloseSquare(1:27-1:28),Newline(1:1-1:1),
@@ -74,13 +87,13 @@ NO CHANGE
 				(ty-fn @3.11-3.21 (effectful false)
 					(ty @3.11-3.14 (name "U64"))
 					(ty @3.18-3.21 (name "U64"))))))
-	(d-let (id 99)
+	(d-let (id 98)
 		(p-assign @7.1-7.10 (ident "my_number") (id 91))
-		(e-call @7.13-7.24 (id 95)
+		(e-call @7.13-7.24 (id 94)
 			(e-lookup-local @7.13-7.20
 				(pattern (id 76)))
 			(e-int @7.21-7.23 (value "42")))
-		(annotation @7.1-7.10 (signature 97) (id 98)
+		(annotation @7.1-7.10 (signature 96) (id 97)
 			(declared-type
 				(ty @6.13-6.16 (name "U64"))))))
 ~~~
@@ -89,8 +102,8 @@ NO CHANGE
 (inferred-types
 	(defs
 		(d_assign (name "add_one") (def_var 89) (type "U64 -> U64"))
-		(d_assign (name "my_number") (def_var 99) (type "U64")))
+		(d_assign (name "my_number") (def_var 98) (type "Error")))
 	(expressions
 		(expr @4.11-6.10 (type "U64 -> U64"))
-		(expr @7.13-7.24 (type "U64"))))
+		(expr @7.13-7.24 (type "Error"))))
 ~~~

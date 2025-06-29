@@ -84,9 +84,9 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 90)
+	(d-let (id 89)
 		(p-assign @8.1-8.6 (ident "main!") (id 74))
-		(e-lambda @8.9-12.2 (id 89)
+		(e-lambda @8.9-12.2 (id 88)
 			(args
 				(p-underscore @8.10-8.11 (id 75)))
 			(e-block @8.13-12.2
@@ -106,7 +106,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "main!") (def_var 90) (type "* ? *")))
+		(d_assign (name "main!") (def_var 89) (type "* ? *")))
 	(expressions
 		(expr @8.9-12.2 (type "* ? *"))))
 ~~~

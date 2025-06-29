@@ -101,9 +101,9 @@ main! = |_| {}
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 107)
+	(d-let (id 106)
 		(p-assign @5.1-5.6 (ident "outer") (id 78))
-		(e-lambda @5.9-11.2 (id 99)
+		(e-lambda @5.9-11.2 (id 98)
 			(args
 				(p-assign @5.10-5.11 (ident "x") (id 79)))
 			(e-block @5.13-11.2
@@ -123,25 +123,25 @@ main! = |_| {}
 						(pattern (id 87)))
 					(e-lookup-local @10.11-10.12
 						(pattern (id 79))))))
-		(annotation @5.1-5.6 (signature 105) (id 106)
+		(annotation @5.1-5.6 (signature 104) (id 105)
 			(declared-type
 				(ty-fn @4.9-4.15 (effectful false)
 					(ty-var @4.9-4.10 (name "a"))
 					(ty-var @4.14-4.15 (name "a"))))))
-	(d-let (id 113)
-		(p-assign @13.1-13.6 (ident "main!") (id 108))
-		(e-lambda @13.9-13.15 (id 112)
+	(d-let (id 112)
+		(p-assign @13.1-13.6 (ident "main!") (id 107))
+		(e-lambda @13.9-13.15 (id 111)
 			(args
-				(p-underscore @13.10-13.11 (id 109)))
+				(p-underscore @13.10-13.11 (id 108)))
 			(e-empty_record @13.13-13.15))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "outer") (def_var 107) (type "a -> a"))
-		(d_assign (name "main!") (def_var 113) (type "* ? {}")))
+		(d_assign (name "outer") (def_var 106) (type "a -> *"))
+		(d_assign (name "main!") (def_var 112) (type "* ? {}")))
 	(expressions
-		(expr @5.9-11.2 (type "a -> a"))
+		(expr @5.9-11.2 (type "a -> *"))
 		(expr @13.9-13.15 (type "* ? {}"))))
 ~~~

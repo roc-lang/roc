@@ -881,20 +881,16 @@ pub fn canonicalize_expr(
 
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
-            // Reserve slot for call expression and create effect variable with proper node correspondence
-            const final_expr_idx = self.can_ir.store.predictNodeIndex(2);
-            const effect_var = self.can_ir.pushTypeVar(Content{ .pure = {} }, final_expr_idx, region);
-
             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
                 .e_call = .{
                     .args = args_span,
                     .called_via = CalledVia.apply,
-                    .effect_var = effect_var,
                     .region = region,
                 },
             });
-            // Insert flex type variable
-            _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
+
+            // For call expressions, start with pure and let it unify to effectful when needed
+            _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .pure = {} });
 
             return expr_idx;
         },

@@ -92,9 +92,9 @@ NO CHANGE
 						(ty @3.25-3.28 (name "U64")))
 					(ty-apply @3.33-3.42 (symbol "List")
 						(ty @3.38-3.41 (name "Str")))))))
-	(d-let (id 106)
+	(d-let (id 104)
 		(p-assign @6.1-6.6 (ident "main!") (id 91))
-		(e-lambda @6.9-6.55 (id 105)
+		(e-lambda @6.9-6.55 (id 103)
 			(args
 				(p-underscore @6.10-6.11 (id 92)))
 			(e-call @6.13-6.55
@@ -114,7 +114,7 @@ NO CHANGE
 (inferred-types
 	(defs
 		(d_assign (name "processDict") (def_var 90) (type "Dict -> List(*)"))
-		(d_assign (name "main!") (def_var 106) (type "* ? *")))
+		(d_assign (name "main!") (def_var 104) (type "* ? *")))
 	(expressions
 		(expr @4.15-4.25 (type "Dict -> List(*)"))
 		(expr @6.9-6.55 (type "* ? *"))))

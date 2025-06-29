@@ -419,8 +419,8 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
                     arg_vars.append(arg_var) catch |err| exitOnOom(err);
                 }
 
-                // Use the pre-created effect variable from canonicalization instead of creating temporary ones
-                const func_content = self.types.mkFunc(arg_vars.items, return_var, call.effect_var);
+                // Create a function type with flexible effectfulness
+                const func_content = self.types.mkFuncFlex(arg_vars.items, return_var);
                 _ = self.types.setVarContent(func_var, func_content);
             }
         },

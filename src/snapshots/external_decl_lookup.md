@@ -80,22 +80,22 @@ main! = |_| {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 93)
+	(d-let (id 91)
 		(p-assign @6.1-6.6 (ident "main!") (id 75))
-		(e-lambda @6.9-10.2 (id 92)
+		(e-lambda @6.9-10.2 (id 90)
 			(args
 				(p-underscore @6.10-6.11 (id 76)))
 			(e-block @6.13-10.2
 				(s-let @8.5-8.54
 					(p-assign @8.5-8.11 (ident "result") (id 77))
-					(e-call @8.14-8.54 (id 83)
+					(e-call @8.14-8.54 (id 82)
 						(e-lookup-external
 							(ext-decl @8.14-8.23 (qualified "json.Json.utf8") (module "json.Json") (local "utf8") (kind "value") (type-var 78)))
 						(e-string @8.24-8.53
 							(e-literal @8.25-8.52 (string "Hello from external module!")))))
 				(e-call @9.5-9.25
 					(e-lookup-external
-						(ext-decl @9.5-9.17 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value") (type-var 85)))
+						(ext-decl @9.5-9.17 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value") (type-var 84)))
 					(e-lookup-local @9.18-9.24
 						(pattern (id 77)))))))
 	(s-import @3.1-3.17 (module "pf.Stdout") (qualifier "pf") (id 73)
@@ -107,7 +107,7 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "main!") (def_var 93) (type "* ? *")))
+		(d_assign (name "main!") (def_var 91) (type "* ? *")))
 	(expressions
 		(expr @6.9-10.2 (type "* ? *"))))
 ~~~

@@ -93,9 +93,9 @@ main! = |_| processList(["one", "two"])
 					(ty-apply @3.15-3.24 (symbol "List")
 						(ty @3.20-3.23 (name "Str")))
 					(ty @3.28-3.31 (name "U64"))))))
-	(d-let (id 102)
+	(d-let (id 101)
 		(p-assign @6.1-6.6 (ident "main!") (id 90))
-		(e-lambda @6.9-6.39 (id 101)
+		(e-lambda @6.9-6.39 (id 100)
 			(args
 				(p-underscore @6.10-6.11 (id 91)))
 			(e-call @6.13-6.39
@@ -113,7 +113,7 @@ main! = |_| processList(["one", "two"])
 (inferred-types
 	(defs
 		(d_assign (name "processList") (def_var 89) (type "List -> U64"))
-		(d_assign (name "main!") (def_var 102) (type "* ? *")))
+		(d_assign (name "main!") (def_var 101) (type "* ? *")))
 	(expressions
 		(expr @4.15-6.6 (type "List -> U64"))
 		(expr @6.9-6.39 (type "* ? *"))))

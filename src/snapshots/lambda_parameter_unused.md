@@ -258,33 +258,33 @@ main! = |_| {
 				(ty-fn @16.10-16.20 (effectful false)
 					(ty @16.10-16.13 (name "U64"))
 					(ty @16.17-16.20 (name "U64"))))))
-	(d-let (id 175)
+	(d-let (id 171)
 		(p-assign @19.1-19.6 (ident "main!") (id 139))
-		(e-lambda @19.9-25.2 (id 174)
+		(e-lambda @19.9-25.2 (id 170)
 			(args
 				(p-underscore @19.10-19.11 (id 140)))
 			(e-block @19.13-25.2
 				(s-let @20.5-20.21
 					(p-assign @20.5-20.12 (ident "result1") (id 141))
-					(e-call @20.15-20.21 (id 145)
+					(e-call @20.15-20.21 (id 144)
 						(e-lookup-local @20.15-20.18
 							(pattern (id 76)))
 						(e-int @20.19-20.20 (value "5"))))
 				(s-let @21.5-21.26
-					(p-assign @21.5-21.12 (ident "result2") (id 147))
-					(e-call @21.15-21.26 (id 151)
+					(p-assign @21.5-21.12 (ident "result2") (id 146))
+					(e-call @21.15-21.26 (id 149)
 						(e-lookup-local @21.15-21.23
 							(pattern (id 92)))
 						(e-int @21.24-21.25 (value "3"))))
 				(s-let @22.5-22.25
-					(p-assign @22.5-22.12 (ident "result3") (id 153))
-					(e-call @22.15-22.25 (id 157)
+					(p-assign @22.5-22.12 (ident "result3") (id 151))
+					(e-call @22.15-22.25 (id 154)
 						(e-lookup-local @22.15-22.22
 							(pattern (id 110)))
 						(e-int @22.23-22.24 (value "7"))))
 				(s-let @23.5-23.24
-					(p-assign @23.5-23.12 (ident "result4") (id 159))
-					(e-call @23.15-23.24 (id 163)
+					(p-assign @23.5-23.12 (ident "result4") (id 156))
+					(e-call @23.15-23.24 (id 159)
 						(e-lookup-local @23.15-23.21
 							(pattern (id 125)))
 						(e-int @23.22-23.23 (value "4"))))
@@ -293,12 +293,12 @@ main! = |_| {
 						(pattern (id 141)))
 					(e-binop @24.15-25.2 (op "add")
 						(e-lookup-local @24.15-24.22
-							(pattern (id 147)))
+							(pattern (id 146)))
 						(e-binop @24.25-25.2 (op "add")
 							(e-lookup-local @24.25-24.32
-								(pattern (id 153)))
+								(pattern (id 151)))
 							(e-lookup-local @24.35-24.42
-								(pattern (id 159))))))))))
+								(pattern (id 156))))))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -308,7 +308,7 @@ main! = |_| {
 		(d_assign (name "multiply") (def_var 106) (type "U64 -> U64"))
 		(d_assign (name "process") (def_var 121) (type "U64 -> U64"))
 		(d_assign (name "double") (def_var 138) (type "U64 -> U64"))
-		(d_assign (name "main!") (def_var 175) (type "* ? *")))
+		(d_assign (name "main!") (def_var 171) (type "* ? *")))
 	(expressions
 		(expr @5.7-5.18 (type "U64 -> U64"))
 		(expr @9.12-12.8 (type "U64 -> U64"))

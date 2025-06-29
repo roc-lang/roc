@@ -258,27 +258,27 @@ main! = |_| {
 				(ty-fn @12.19-12.29 (effectful false)
 					(ty @12.19-12.22 (name "U64"))
 					(ty @12.26-12.29 (name "U64"))))))
-	(d-let (id 150)
+	(d-let (id 147)
 		(p-assign @15.1-15.6 (ident "main!") (id 123))
-		(e-lambda @15.9-20.2 (id 149)
+		(e-lambda @15.9-20.2 (id 146)
 			(args
 				(p-underscore @15.10-15.11 (id 124)))
 			(e-block @15.13-20.2
 				(s-let @16.5-16.31
 					(p-assign @16.5-16.12 (ident "result1") (id 125))
-					(e-call @16.15-16.31 (id 129)
+					(e-call @16.15-16.31 (id 128)
 						(e-lookup-local @16.15-16.27
 							(pattern (id 76)))
 						(e-int @16.28-16.30 (value "42"))))
 				(s-let @17.5-17.28
-					(p-assign @17.5-17.12 (ident "result2") (id 131))
-					(e-call @17.15-17.28 (id 135)
+					(p-assign @17.5-17.12 (ident "result2") (id 130))
+					(e-call @17.15-17.28 (id 133)
 						(e-lookup-local @17.15-17.24
 							(pattern (id 92)))
 						(e-int @17.25-17.27 (value "42"))))
 				(s-let @18.5-18.34
-					(p-assign @18.5-18.12 (ident "result3") (id 137))
-					(e-call @18.15-18.34 (id 141)
+					(p-assign @18.5-18.12 (ident "result3") (id 135))
+					(e-call @18.15-18.34 (id 138)
 						(e-lookup-local @18.15-18.30
 							(pattern (id 109)))
 						(e-int @18.31-18.33 (value "42"))))
@@ -291,7 +291,7 @@ main! = |_| {
 		(d_assign (name "testEllipsis") (def_var 88) (type "U64 -> U64"))
 		(d_assign (name "testCrash") (def_var 104) (type "U64 -> Error"))
 		(d_assign (name "testCrashSimple") (def_var 121) (type "U64 -> Error"))
-		(d_assign (name "main!") (def_var 150) (type "* ? List(*)")))
+		(d_assign (name "main!") (def_var 147) (type "* ? List(*)")))
 	(expressions
 		(expr @5.16-5.23 (type "U64 -> U64"))
 		(expr @9.13-9.24 (type "U64 -> Error"))

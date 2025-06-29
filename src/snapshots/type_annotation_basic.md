@@ -238,42 +238,42 @@ main! = |_| {
 				(ty-fn @12.10-12.20 (effectful false)
 					(ty @12.10-12.13 (name "U64"))
 					(ty @12.17-12.20 (name "U64"))))))
-	(d-let (id 168)
+	(d-let (id 164)
 		(p-assign @15.1-15.6 (ident "main!") (id 135))
-		(e-lambda @15.9-27.2 (id 167)
+		(e-lambda @15.9-27.2 (id 163)
 			(args
 				(p-underscore @15.10-15.11 (id 136)))
 			(e-block @15.13-27.2
 				(s-let @17.5-17.23
 					(p-assign @17.5-17.8 (ident "num") (id 137))
-					(e-call @17.11-17.23 (id 141)
+					(e-call @17.11-17.23 (id 140)
 						(e-lookup-local @17.11-17.19
 							(pattern (id 78)))
 						(e-int @17.20-17.22 (value "42"))))
 				(s-let @18.5-18.29
-					(p-assign @18.5-18.9 (ident "text") (id 143))
-					(e-call @18.12-18.29 (id 148)
+					(p-assign @18.5-18.9 (ident "text") (id 142))
+					(e-call @18.12-18.29 (id 146)
 						(e-lookup-local @18.12-18.20
 							(pattern (id 78)))
 						(e-string @18.21-18.28
 							(e-literal @18.22-18.27 (string "hello")))))
 				(s-let @21.5-21.30
-					(p-assign @21.5-21.9 (ident "pair") (id 150))
-					(e-call @21.12-21.30 (id 155)
+					(p-assign @21.5-21.9 (ident "pair") (id 148))
+					(e-call @21.12-21.30 (id 152)
 						(e-lookup-local @21.12-21.19
 							(pattern (id 101)))
 						(e-lookup-local @21.20-21.23
 							(pattern (id 137)))
 						(e-lookup-local @21.25-21.29
-							(pattern (id 143)))))
+							(pattern (id 142)))))
 				(s-let @24.5-24.23
-					(p-assign @24.5-24.11 (ident "result") (id 157))
-					(e-call @24.14-24.23 (id 161)
+					(p-assign @24.5-24.11 (ident "result") (id 154))
+					(e-call @24.14-24.23 (id 157)
 						(e-lookup-local @24.14-24.20
 							(pattern (id 121)))
 						(e-int @24.21-24.22 (value "5"))))
 				(e-lookup-local @26.5-26.11
-					(pattern (id 157)))))))
+					(pattern (id 154)))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -282,7 +282,7 @@ main! = |_| {
 		(d_assign (name "identity") (def_var 90) (type "a -> a"))
 		(d_assign (name "combine") (def_var 117) (type "a, b -> (*, *)"))
 		(d_assign (name "addOne") (def_var 134) (type "U64 -> U64"))
-		(d_assign (name "main!") (def_var 168) (type "* ? *")))
+		(d_assign (name "main!") (def_var 164) (type "* ? *")))
 	(expressions
 		(expr @5.12-5.17 (type "a -> a"))
 		(expr @9.11-9.42 (type "a, b -> (*, *)"))

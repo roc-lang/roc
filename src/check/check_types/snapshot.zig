@@ -524,7 +524,7 @@ pub const SnapshotWriter = struct {
                 _ = try self.writer.write("Effectful");
             },
             .pure => {
-                _ = try self.writer.write("Pure");
+                _ = try self.writer.write("*");
             },
             .err => {
                 _ = try self.writer.write("Error");

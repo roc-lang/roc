@@ -133,9 +133,9 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 115)
+	(d-let (id 114)
 		(p-assign @4.1-4.13 (ident "processItems") (id 73))
-		(e-lambda @4.16-21.2 (id 113)
+		(e-lambda @4.16-21.2 (id 112)
 			(args
 				(p-assign @4.17-4.22 (ident "items") (id 74)))
 			(e-block @4.24-21.2
@@ -173,7 +173,7 @@ NO CHANGE
 								(pattern (id 76))))))
 				(s-let @19.2-19.25
 					(p-assign @19.2-19.8 (ident "result") (id 102))
-					(e-call @19.11-19.25 (id 106)
+					(e-call @19.11-19.25 (id 105)
 						(e-lookup-local @19.11-19.21
 							(pattern (id 89)))
 						(e-empty_record @19.22-19.24)))
@@ -187,7 +187,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "processItems") (def_var 115) (type "* ? *")))
+		(d_assign (name "processItems") (def_var 114) (type "* ? *")))
 	(expressions
 		(expr @4.16-21.2 (type "* ? *"))))
 ~~~

@@ -185,9 +185,9 @@ ain! = |_| getUser(900)
 				(if-else
 					(e-string @6.40-6.43
 						(e-literal @6.41-6.42 (string "l")))))))
-	(d-let (id 106)
+	(d-let (id 105)
 		(p-assign @8.2-8.6 (ident "ain!") (id 98))
-		(e-lambda @8.9-8.25 (id 105)
+		(e-lambda @8.9-8.25 (id 104)
 			(args
 				(p-underscore @8.10-8.11 (id 99)))
 			(e-call @8.13-8.25
@@ -203,7 +203,7 @@ ain! = |_| getUser(900)
 (inferred-types
 	(defs
 		(d_assign (name "getUser") (def_var 96) (type "* ? Str"))
-		(d_assign (name "ain!") (def_var 106) (type "* ? *")))
+		(d_assign (name "ain!") (def_var 105) (type "* ? *")))
 	(expressions
 		(expr @1.1-1.1 (type "* ? Str"))
 		(expr @8.9-8.25 (type "* ? *"))))

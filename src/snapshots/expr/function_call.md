@@ -29,12 +29,12 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call @1.1-1.10 (id 78)
+(e-call @1.1-1.10 (id 77)
 	(e-runtime-error (tag "ident_not_in_scope"))
 	(e-int @1.5-1.6 (value "5"))
 	(e-int @1.8-1.9 (value "3")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 78) (type "*"))
+(expr (id 77) (type "*"))
 ~~~

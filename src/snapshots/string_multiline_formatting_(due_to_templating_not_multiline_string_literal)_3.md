@@ -50,7 +50,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-string @1.1-6.43 (id 83)
+(e-string @1.1-6.43 (id 82)
 	(e-literal @1.2-1.24 (string "This is a string with "))
 	(e-call @2.2-5.3
 		(e-runtime-error (tag "ident_not_in_scope"))
@@ -60,5 +60,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 83) (type "Str"))
+(expr (id 82) (type "Str"))
 ~~~

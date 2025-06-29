@@ -270,19 +270,17 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             };
         },
         .expr_call => {
-            // Retrieve effect_var and args span from extra_data
+            // Retrieve args span from extra_data
             const extra_start = node.data_1;
             const extra_data = store.extra_data.items[extra_start..];
 
-            const effect_var = @as(types.Var, @enumFromInt(extra_data[0]));
-            const args_start = extra_data[1];
-            const args_len = extra_data[2];
+            const args_start = extra_data[0];
+            const args_len = extra_data[1];
 
             return CIR.Expr{
                 .e_call = .{
                     .args = .{ .span = .{ .start = args_start, .len = args_len } },
                     .called_via = @enumFromInt(node.data_2),
-                    .effect_var = effect_var,
                     .region = node.region,
                 },
             };
@@ -1087,9 +1085,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
 
             // Store call data in extra_data
             const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
-
-            // Store effect_var
-            store.extra_data.append(store.gpa, @intFromEnum(e.effect_var)) catch |err| exitOnOom(err);
             // Store args span start
             store.extra_data.append(store.gpa, e.args.span.start) catch |err| exitOnOom(err);
             // Store args span len

@@ -1147,8 +1147,6 @@ pub const Expr = union(enum) {
     e_call: struct {
         args: Expr.Span,
         called_via: CalledVia,
-        /// Tracks if this function is pure or effectful during type checking
-        effect_var: TypeVar,
         region: Region,
     },
     e_record: struct {

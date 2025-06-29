@@ -135,6 +135,25 @@ The body of this lambda expression is not valid.
 The statement **expr** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
+**INCOMPATIBLE LIST ELEMENTS**
+The two elements in this list have incompatible types:
+**type_app_complex_nested.md:17:32:**
+```roc
+main! = |_| processComplex(Ok([Some(42), None]))
+```
+                               ^^^^^^^^  ^^^^
+
+The first element has this type:
+    _*_
+
+However, the second element has this type:
+    _[None]*_
+
+All elements in a list must have compatible types.
+
+Note: You can wrap each element in a tag to make them compatible.
+To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
+
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),Newline(1:1-1:1),
@@ -313,9 +332,9 @@ main! = |_| processComplex(Ok([Some(42), None]))
 									(ty-var @11.42-11.43 (name "a"))))
 							(ty-var @11.47-11.48 (name "b"))))
 					(ty-var @11.54-11.55 (name "a"))))))
-	(d-let (id 163)
+	(d-let (id 160)
 		(p-assign @17.1-17.6 (ident "main!") (id 144))
-		(e-lambda @17.9-17.49 (id 162)
+		(e-lambda @17.9-17.49 (id 159)
 			(args
 				(p-underscore @17.10-17.11 (id 145)))
 			(e-call @17.13-17.49
@@ -323,7 +342,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 					(pattern (id 99)))
 				(e-call @17.28-17.48
 					(e-tag @17.28-17.30 (ext-var 0) (name "Ok") (args "TODO"))
-					(e-list @17.31-17.47 (elem-var 153)
+					(e-list @17.31-17.47 (elem-var 152)
 						(elems
 							(e-call @17.32-17.40
 								(e-tag @17.32-17.36 (ext-var 0) (name "Some") (args "TODO"))
@@ -349,7 +368,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 	(defs
 		(d_assign (name "processComplex") (def_var 112) (type "Result -> Error"))
 		(d_assign (name "deepNested") (def_var 142) (type "Maybe -> Error"))
-		(d_assign (name "main!") (def_var 163) (type "* ? *")))
+		(d_assign (name "main!") (def_var 160) (type "* ? *")))
 	(expressions
 		(expr @5.18-6.9 (type "Result -> Error"))
 		(expr @12.14-12.25 (type "Maybe -> Error"))

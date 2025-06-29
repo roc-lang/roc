@@ -109,9 +109,9 @@ NO CHANGE
 					(ty-apply @5.26-5.36 (symbol "Pair")
 						(ty-var @5.31-5.32 (name "b"))
 						(ty-var @5.34-5.35 (name "a")))))))
-	(d-let (id 116)
+	(d-let (id 115)
 		(p-assign @8.1-8.6 (ident "main!") (id 107))
-		(e-lambda @8.9-8.27 (id 115)
+		(e-lambda @8.9-8.27 (id 114)
 			(args
 				(p-underscore @8.10-8.11 (id 108)))
 			(e-call @8.13-8.27
@@ -133,7 +133,7 @@ NO CHANGE
 (inferred-types
 	(defs
 		(d_assign (name "swapPair") (def_var 106) (type "(*, *) -> (*, *)"))
-		(d_assign (name "main!") (def_var 116) (type "* ? *")))
+		(d_assign (name "main!") (def_var 115) (type "* ? *")))
 	(expressions
 		(expr @6.12-6.27 (type "(*, *) -> (*, *)"))
 		(expr @8.9-8.27 (type "* ? *"))))

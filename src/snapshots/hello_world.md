@@ -53,9 +53,9 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 84)
+	(d-let (id 83)
 		(p-assign @5.1-5.6 (ident "main!") (id 74))
-		(e-lambda @5.9-5.42 (id 83)
+		(e-lambda @5.9-5.42 (id 82)
 			(args
 				(p-underscore @5.10-5.11 (id 75)))
 			(e-call @5.13-5.42
@@ -70,7 +70,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "main!") (def_var 84) (type "* ? *")))
+		(d_assign (name "main!") (def_var 83) (type "* ? *")))
 	(expressions
 		(expr @5.9-5.42 (type "* ? *"))))
 ~~~
