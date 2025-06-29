@@ -77,16 +77,10 @@ pub const Store = struct {
     /// Deep copy a type variable's content into self-contained snapshot storage
     pub fn deepCopyVar(self: *Self, store: *const TypesStore, var_: types.Var) SnapshotContentIdx {
         const resolved = store.resolveVar(var_);
-        return self.deepCopyContentWithVar(store, resolved.desc.content, var_);
+        return self.deepCopyContent(store, resolved.desc.content, var_);
     }
 
-    fn deepCopyContent(self: *Self, store: *const TypesStore, content: Content) SnapshotContentIdx {
-        // For cases where we don't have a var context, we can't properly handle aliases
-        // This should only be called for non-alias content
-        return self.deepCopyContentWithVar(store, content, @enumFromInt(0));
-    }
-
-    fn deepCopyContentWithVar(self: *Self, store: *const TypesStore, content: Content, var_: types.Var) SnapshotContentIdx {
+    fn deepCopyContent(self: *Self, store: *const TypesStore, content: Content, var_: types.Var) SnapshotContentIdx {
         const deep_content = switch (content) {
             .flex_var => |ident| SnapshotContent{ .flex_var = ident },
             .rigid_var => |ident| SnapshotContent{ .rigid_var = ident },
@@ -105,12 +99,12 @@ pub const Store = struct {
             .str => SnapshotFlatType.str,
             .box => |var_| {
                 const resolved = store.resolveVar(var_);
-                const deep_content = self.deepCopyContent(store, resolved.desc.content);
+                const deep_content = self.deepCopyContent(store, resolved.desc.content, var_);
                 return SnapshotFlatType{ .box = deep_content };
             },
             .list => |var_| {
                 const resolved = store.resolveVar(var_);
-                const deep_content = self.deepCopyContent(store, resolved.desc.content);
+                const deep_content = self.deepCopyContent(store, resolved.desc.content, var_);
                 return SnapshotFlatType{ .list = deep_content };
             },
             .list_unbound => {
@@ -133,11 +127,11 @@ pub const Store = struct {
         // Mark starting position in the centralized array
         const start_idx = self.alias_args.len();
 
-        // Copy all argument vars using the helper method
+        // Iterate and append directly to centralized array
         for (0..alias.num_args) |i| {
             const arg_var = alias.getArgVar(alias_var, i);
             const arg_resolved = store.resolveVar(arg_var);
-            const deep_arg = self.deepCopyContent(store, arg_resolved.desc.content);
+            const deep_arg = self.deepCopyContent(store, arg_resolved.desc.content, arg_var);
             _ = self.alias_args.append(self.gpa, deep_arg);
         }
 
@@ -162,7 +156,7 @@ pub const Store = struct {
         // Iterate and append directly
         for (elems_slice) |elem_var| {
             const elem_resolved = store.resolveVar(elem_var);
-            const deep_elem = self.deepCopyContent(store, elem_resolved.desc.content);
+            const deep_elem = self.deepCopyContent(store, elem_resolved.desc.content, elem_var);
             _ = self.tuple_elems.append(self.gpa, deep_elem);
         }
 
@@ -181,12 +175,12 @@ pub const Store = struct {
         switch (num) {
             .num_poly => |poly| {
                 const resolved_poly = store.resolveVar(poly.var_);
-                const deep_poly = self.deepCopyContent(store, resolved_poly.desc.content);
+                const deep_poly = self.deepCopyContent(store, resolved_poly.desc.content, poly.var_);
                 return SnapshotNum{ .num_poly = deep_poly };
             },
             .int_poly => |poly| {
                 const resolved_poly = store.resolveVar(poly.var_);
-                const deep_poly = self.deepCopyContent(store, resolved_poly.desc.content);
+                const deep_poly = self.deepCopyContent(store, resolved_poly.desc.content, poly.var_);
                 return SnapshotNum{ .int_poly = deep_poly };
             },
             .num_unbound => |requirements| {
@@ -203,7 +197,7 @@ pub const Store = struct {
             },
             .frac_poly => |poly| {
                 const resolved_poly = store.resolveVar(poly.var_);
-                const deep_poly = self.deepCopyContent(store, resolved_poly.desc.content);
+                const deep_poly = self.deepCopyContent(store, resolved_poly.desc.content, poly.var_);
                 return SnapshotNum{ .frac_poly = deep_poly };
             },
             .int_precision => |prec| {
@@ -227,7 +221,7 @@ pub const Store = struct {
         // Iterate and append directly
         for (args_slice) |arg_var| {
             const arg_resolved = store.resolveVar(arg_var);
-            const deep_arg = self.deepCopyContent(store, arg_resolved.desc.content);
+            const deep_arg = self.deepCopyContent(store, arg_resolved.desc.content, arg_var);
             _ = self.custom_type_args.append(self.gpa, deep_arg);
         }
 
@@ -252,7 +246,7 @@ pub const Store = struct {
         // Iterate and append directly
         for (args_slice) |arg_var| {
             const arg_resolved = store.resolveVar(arg_var);
-            const deep_arg = self.deepCopyContent(store, arg_resolved.desc.content);
+            const deep_arg = self.deepCopyContent(store, arg_resolved.desc.content, arg_var);
             _ = self.func_args.append(self.gpa, deep_arg);
         }
 
@@ -264,11 +258,11 @@ pub const Store = struct {
 
         // Deep copy return type
         const ret_resolved = store.resolveVar(func.ret);
-        const deep_ret = self.deepCopyContent(store, ret_resolved.desc.content);
+        const deep_ret = self.deepCopyContent(store, ret_resolved.desc.content, func.ret);
 
         // Deep copy effect type
         const eff_resolved = store.resolveVar(func.eff);
-        const deep_eff = self.deepCopyContent(store, eff_resolved.desc.content);
+        const deep_eff = self.deepCopyContent(store, eff_resolved.desc.content, func.eff);
 
         return SnapshotFunc{
             .args = args_range,
@@ -287,7 +281,7 @@ pub const Store = struct {
             const field = store.record_fields.get(field_idx);
 
             const field_resolved = store.resolveVar(field.var_);
-            const deep_field_content = self.deepCopyContent(store, field_resolved.desc.content);
+            const deep_field_content = self.deepCopyContent(store, field_resolved.desc.content, field.var_);
 
             const snapshot_field = SnapshotRecordField{
                 .name = field.name,
@@ -305,7 +299,7 @@ pub const Store = struct {
 
         // Deep copy extension type
         const ext_resolved = store.resolveVar(record.ext);
-        const deep_ext = self.deepCopyContent(store, ext_resolved.desc.content);
+        const deep_ext = self.deepCopyContent(store, ext_resolved.desc.content, record.ext);
 
         return SnapshotRecord{
             .fields = fields_range,
@@ -330,7 +324,7 @@ pub const Store = struct {
             // Iterate over tag arguments and append directly
             for (tag_args_slice) |tag_arg_var| {
                 const tag_arg_resolved = store.resolveVar(tag_arg_var);
-                const deep_tag_arg = self.deepCopyContent(store, tag_arg_resolved.desc.content);
+                const deep_tag_arg = self.deepCopyContent(store, tag_arg_resolved.desc.content, tag_arg_var);
                 _ = self.tag_args.append(self.gpa, deep_tag_arg);
             }
 
@@ -357,7 +351,7 @@ pub const Store = struct {
 
         // Deep copy extension type
         const ext_resolved = store.resolveVar(tag_union.ext);
-        const deep_ext = self.deepCopyContent(store, ext_resolved.desc.content);
+        const deep_ext = self.deepCopyContent(store, ext_resolved.desc.content, tag_union.ext);
 
         return SnapshotTagUnion{
             .tags = tags_range,
