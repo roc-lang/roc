@@ -15,7 +15,7 @@ Int(1:1-1:11),EndOfFile(1:11-1:11),
 ~~~
 # PARSE
 ~~~clojure
-(e-int @1-1-1-11 (raw "2147483647"))
+(e-int @1.1-1.11 (raw "2147483647"))
 ~~~
 # FORMATTED
 ~~~roc
@@ -23,7 +23,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-int @1-1-1-11 (value "2147483647") (id 73))
+(e-int @1.1-1.11 (value "2147483647") (id 73))
 ~~~
 # TYPES
 ~~~clojure

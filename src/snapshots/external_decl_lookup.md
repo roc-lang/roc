@@ -33,36 +33,36 @@ CloseCurly(10:1-10:2),EndOfFile(10:2-10:2),
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-10-2
-	(app @1-1-1-57
-		(provides @1-6-1-12
+(file @1.1-10.2
+	(app @1.1-1.57
+		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @1-15-1-57 (name "pf")
-			(e-string @1-28-1-55
-				(e-string-part @1-29-1-54 (raw "../basic-cli/platform.roc"))))
-		(packages @1-13-1-57
-			(record-field @1-15-1-57 (name "pf")
-				(e-string @1-28-1-55
-					(e-string-part @1-29-1-54 (raw "../basic-cli/platform.roc"))))))
+		(record-field @1.15-1.57 (name "pf")
+			(e-string @1.28-1.55
+				(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))
+		(packages @1.13-1.57
+			(record-field @1.15-1.57 (name "pf")
+				(e-string @1.28-1.55
+					(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))))
 	(statements
-		(s-import @3-1-3-17 (module ".Stdout") (qualifier "pf"))
-		(s-import @4-1-4-17 (module ".Json") (qualifier "json"))
-		(s-decl @6-1-10-2
-			(p-ident @6-1-6-6 (raw "main!"))
-			(e-lambda @6-9-10-2
+		(s-import @3.1-3.17 (module ".Stdout") (qualifier "pf"))
+		(s-import @4.1-4.17 (module ".Json") (qualifier "json"))
+		(s-decl @6.1-10.2
+			(p-ident @6.1-6.6 (raw "main!"))
+			(e-lambda @6.9-10.2
 				(args
 					(p-underscore))
-				(e-block @6-13-10-2
+				(e-block @6.13-10.2
 					(statements
-						(s-decl @8-5-8-54
-							(p-ident @8-5-8-11 (raw "result"))
-							(e-apply @8-14-8-54
-								(e-ident @8-14-8-23 (qaul "Json") (raw ".utf8"))
-								(e-string @8-24-8-53
-									(e-string-part @8-25-8-52 (raw "Hello from external module!")))))
-						(e-apply @9-5-9-25
-							(e-ident @9-5-9-17 (qaul "Stdout") (raw ".line!"))
-							(e-ident @9-18-9-24 (qaul "") (raw "result")))))))))
+						(s-decl @8.5-8.54
+							(p-ident @8.5-8.11 (raw "result"))
+							(e-apply @8.14-8.54
+								(e-ident @8.14-8.23 (qaul "Json") (raw ".utf8"))
+								(e-string @8.24-8.53
+									(e-string-part @8.25-8.52 (raw "Hello from external module!")))))
+						(e-apply @9.5-9.25
+							(e-ident @9.5-9.17 (qaul "Stdout") (raw ".line!"))
+							(e-ident @9.18-9.24 (qaul "") (raw "result")))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -81,26 +81,26 @@ main! = |_| {
 ~~~clojure
 (can-ir
 	(d-let (id 93)
-		(p-assign @6-1-6-6 (ident "main!") (id 75))
-		(e-lambda @6-9-10-2 (id 92)
+		(p-assign @6.1-6.6 (ident "main!") (id 75))
+		(e-lambda @6.9-10.2 (id 92)
 			(args
-				(p-underscore @6-10-6-11 (id 76)))
-			(e-block @6-13-10-2
-				(s-let @8-5-8-54
-					(p-assign @8-5-8-11 (ident "result") (id 77))
-					(e-call @8-14-8-54 (id 83)
+				(p-underscore @6.10-6.11 (id 76)))
+			(e-block @6.13-10.2
+				(s-let @8.5-8.54
+					(p-assign @8.5-8.11 (ident "result") (id 77))
+					(e-call @8.14-8.54 (id 83)
 						(e-lookup-external
-							(ext-decl @8-14-8-23 (qualified "json.Json.utf8") (module "json.Json") (local "utf8") (kind "value") (type-var 78)))
-						(e-string @8-24-8-53
-							(e-literal @8-25-8-52 (string "Hello from external module!")))))
-				(e-call @9-5-9-25
+							(ext-decl @8.14-8.23 (qualified "json.Json.utf8") (module "json.Json") (local "utf8") (kind "value") (type-var 78)))
+						(e-string @8.24-8.53
+							(e-literal @8.25-8.52 (string "Hello from external module!")))))
+				(e-call @9.5-9.25
 					(e-lookup-external
-						(ext-decl @9-5-9-17 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value") (type-var 85)))
-					(e-lookup-local @9-18-9-24
+						(ext-decl @9.5-9.17 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value") (type-var 85)))
+					(e-lookup-local @9.18-9.24
 						(pattern (id 77)))))))
-	(s-import @3-1-3-17 (module "pf.Stdout") (qualifier "pf") (id 73)
+	(s-import @3.1-3.17 (module "pf.Stdout") (qualifier "pf") (id 73)
 		(exposes))
-	(s-import @4-1-4-17 (module "json.Json") (qualifier "json") (id 74)
+	(s-import @4.1-4.17 (module "json.Json") (qualifier "json") (id 74)
 		(exposes)))
 ~~~
 # TYPES
@@ -109,5 +109,5 @@ main! = |_| {
 	(defs
 		(d_assign (name "main!") (def_var 93) (type "* ? *")))
 	(expressions
-		(expr @6-9-10-2 (type "* ? *"))))
+		(expr @6.9-10.2 (type "* ? *"))))
 ~~~

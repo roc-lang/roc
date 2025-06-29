@@ -29,11 +29,11 @@ Int(8:3-8:4),EndOfFile(8:4-8:4),
 ~~~
 # PARSE
 ~~~clojure
-(e-binop @1-1-8-4 (op "+")
-	(e-int @1-1-1-2 (raw "1"))
-	(e-binop @6-2-8-4 (op "*")
-		(e-int @6-2-6-3 (raw "2"))
-		(e-int @8-3-8-4 (raw "3"))))
+(e-binop @1.1-8.4 (op "+")
+	(e-int @1.1-1.2 (raw "1"))
+	(e-binop @6.2-8.4 (op "*")
+		(e-int @6.2-6.3 (raw "2"))
+		(e-int @8.3-8.4 (raw "3"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -41,11 +41,11 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop @1-1-8-4 (op "add") (id 77)
-	(e-int @1-1-1-2 (value "1"))
-	(e-binop @6-2-8-4 (op "mul")
-		(e-int @6-2-6-3 (value "2"))
-		(e-int @8-3-8-4 (value "3"))))
+(e-binop @1.1-8.4 (op "add") (id 77)
+	(e-int @1.1-1.2 (value "1"))
+	(e-binop @6.2-8.4 (op "mul")
+		(e-int @6.2-6.3 (value "2"))
+		(e-int @8.3-8.4 (value "3"))))
 ~~~
 # TYPES
 ~~~clojure

@@ -17,21 +17,21 @@ LowerIdent(1:1-1:8),NoSpaceOpenRound(1:8-1:9),LowerIdent(1:9-1:13),CloseRound(1:
 ~~~
 # PARSE
 ~~~clojure
-(e-field-access @1-1-1-86
-	(e-field-access @1-1-1-85
-		(e-field-access @1-1-1-69
-			(e-question-suffix @1-1-1-15
-				(e-apply @1-1-1-14
-					(e-ident @1-1-1-8 (qaul "") (raw "some_fn"))
-					(e-ident @1-9-1-13 (qaul "") (raw "arg1"))))
-			(e-question-suffix @1-15-1-41
-				(e-apply @1-15-1-40
-					(e-ident @1-15-1-38 (qaul "") (raw ".static_dispatch_method")))))
-		(e-question-suffix @1-41-1-72
-			(e-apply @1-41-1-71
-				(e-ident @1-41-1-69 (qaul "") (raw ".next_static_dispatch_method")))))
-	(e-question-suffix @1-72-1-86
-		(e-ident @1-72-1-85 (qaul "") (raw ".record_field"))))
+(e-field-access @1.1-1.86
+	(e-field-access @1.1-1.85
+		(e-field-access @1.1-1.69
+			(e-question-suffix @1.1-1.15
+				(e-apply @1.1-1.14
+					(e-ident @1.1-1.8 (qaul "") (raw "some_fn"))
+					(e-ident @1.9-1.13 (qaul "") (raw "arg1"))))
+			(e-question-suffix @1.15-1.41
+				(e-apply @1.15-1.40
+					(e-ident @1.15-1.38 (qaul "") (raw ".static_dispatch_method")))))
+		(e-question-suffix @1.41-1.72
+			(e-apply @1.41-1.71
+				(e-ident @1.41-1.69 (qaul "") (raw ".next_static_dispatch_method")))))
+	(e-question-suffix @1.72-1.86
+		(e-ident @1.72-1.85 (qaul "") (raw ".record_field"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -39,11 +39,11 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dot-access @1-1-1-86 (field "unknown") (id 77)
+(e-dot-access @1.1-1.86 (field "unknown") (id 77)
 	(receiver
-		(e-dot-access @1-1-1-85 (field "unknown")
+		(e-dot-access @1.1-1.85 (field "unknown")
 			(receiver
-				(e-dot-access @1-1-1-69 (field "unknown")
+				(e-dot-access @1.1-1.69 (field "unknown")
 					(receiver
 						(e-runtime-error (tag "not_implemented"))))))))
 ~~~

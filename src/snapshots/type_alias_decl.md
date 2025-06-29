@@ -131,115 +131,115 @@ CloseCurly(39:1-39:2),EndOfFile(39:2-39:2),
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-39-2
-	(app @1-1-1-53
-		(provides @1-6-1-12
+(file @1.1-39.2
+	(app @1.1-1.53
+		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @1-15-1-53 (name "pf")
-			(e-string @1-28-1-51
-				(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))
-		(packages @1-13-1-53
-			(record-field @1-15-1-53 (name "pf")
-				(e-string @1-28-1-51
-					(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))))
+		(record-field @1.15-1.53 (name "pf")
+			(e-string @1.28-1.51
+				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
+		(packages @1.13-1.53
+			(record-field @1.15-1.53 (name "pf")
+				(e-string @1.28-1.51
+					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-decl @4-1-7-7
-			(header @4-1-4-7 (name "UserId")
+		(s-type-decl @4.1-7.7
+			(header @4.1-4.7 (name "UserId")
 				(args))
 			(ty (name "U64")))
-		(s-type-decl @7-1-10-7
-			(header @7-1-7-16 (name "Result")
+		(s-type-decl @7.1-10.7
+			(header @7.1-7.16 (name "Result")
 				(args
-					(ty-var @7-8-7-10 (raw "ok"))
-					(ty-var @7-12-7-15 (raw "err"))))
-			(ty-tag-union @7-19-7-37
+					(ty-var @7.8-7.10 (raw "ok"))
+					(ty-var @7.12-7.15 (raw "err"))))
+			(ty-tag-union @7.19-7.37
 				(tags
-					(ty-apply @7-20-7-26
+					(ty-apply @7.20-7.26
 						(ty (name "Ok"))
-						(ty-var @7-23-7-25 (raw "ok")))
-					(ty-apply @7-28-7-36
+						(ty-var @7.23-7.25 (raw "ok")))
+					(ty-apply @7.28-7.36
 						(ty (name "Err"))
-						(ty-var @7-32-7-35 (raw "err"))))))
-		(s-type-decl @10-1-13-6
-			(header @10-1-10-7 (name "Person")
+						(ty-var @7.32-7.35 (raw "err"))))))
+		(s-type-decl @10.1-13.6
+			(header @10.1-10.7 (name "Person")
 				(args))
-			(ty-record @10-10-10-35
-				(anno-record-field @10-12-10-23 (name "name")
+			(ty-record @10.10-10.35
+				(anno-record-field @10.12-10.23 (name "name")
 					(ty (name "Str")))
-				(anno-record-field @10-24-10-35 (name "age")
+				(anno-record-field @10.24-10.35 (name "age")
 					(ty (name "U64")))))
-		(s-type-decl @13-1-16-12
-			(header @13-1-13-12 (name "MapFn")
+		(s-type-decl @13.1-16.12
+			(header @13.1-13.12 (name "MapFn")
 				(args
-					(ty-var @13-7-13-8 (raw "a"))
-					(ty-var @13-10-13-11 (raw "b"))))
-			(ty-fn @13-15-13-21
-				(ty-var @13-15-13-16 (raw "a"))
-				(ty-var @13-20-13-21 (raw "b"))))
-		(s-type-decl @16-1-19-6
-			(header @16-1-16-18 (name "ApiResponse")
+					(ty-var @13.7-13.8 (raw "a"))
+					(ty-var @13.10-13.11 (raw "b"))))
+			(ty-fn @13.15-13.21
+				(ty-var @13.15-13.16 (raw "a"))
+				(ty-var @13.20-13.21 (raw "b"))))
+		(s-type-decl @16.1-19.6
+			(header @16.1-16.18 (name "ApiResponse")
 				(args
-					(ty-var @16-13-16-17 (raw "data"))))
-			(ty-apply @16-21-16-38
+					(ty-var @16.13-16.17 (raw "data"))))
+			(ty-apply @16.21-16.38
 				(ty (name "Result"))
-				(ty-var @16-28-16-32 (raw "data"))
+				(ty-var @16.28-16.32 (raw "data"))
 				(ty (name "Str"))))
-		(s-type-decl @19-1-22-10
-			(header @19-1-19-6 (name "Color")
+		(s-type-decl @19.1-22.10
+			(header @19.1-19.6 (name "Color")
 				(args))
-			(ty-tag-union @19-9-19-47
+			(ty-tag-union @19.9-19.47
 				(tags
 					(ty (name "Red"))
 					(ty (name "Green"))
 					(ty (name "Blue"))
-					(ty-apply @19-28-19-46
+					(ty-apply @19.28-19.46
 						(ty (name "Custom"))
 						(ty (name "U8"))
 						(ty (name "U8"))
 						(ty (name "U8"))))))
-		(s-type-decl @22-1-27-6
-			(header @22-1-22-16 (name "Container")
+		(s-type-decl @22.1-27.6
+			(header @22.1-22.16 (name "Container")
 				(args
-					(ty-var @22-11-22-15 (raw "item"))))
-			(ty-record @22-19-25-2
-				(anno-record-field @23-5-23-27 (name "contents")
-					(ty-apply @23-16-23-26
+					(ty-var @22.11-22.15 (raw "item"))))
+			(ty-record @22.19-25.2
+				(anno-record-field @23.5-23.27 (name "contents")
+					(ty-apply @23.16-23.26
 						(ty (name "List"))
-						(ty-var @23-21-23-25 (raw "item"))))
-				(anno-record-field @24-5-25-2 (name "metadata")
-					(ty-record @24-16-24-45
-						(anno-record-field @24-18-24-29 (name "size")
+						(ty-var @23.21-23.25 (raw "item"))))
+				(anno-record-field @24.5-25.2 (name "metadata")
+					(ty-record @24.16-24.45
+						(anno-record-field @24.18-24.29 (name "size")
 							(ty (name "U64")))
-						(anno-record-field @24-30-24-45 (name "created")
+						(anno-record-field @24.30-24.45 (name "created")
 							(ty (name "Str")))))))
-		(s-decl @27-1-39-2
-			(p-ident @27-1-27-6 (raw "main!"))
-			(e-lambda @27-9-39-2
+		(s-decl @27.1-39.2
+			(p-ident @27.1-27.6 (raw "main!"))
+			(e-lambda @27.9-39.2
 				(args
 					(p-underscore))
-				(e-block @27-13-39-2
+				(e-block @27.13-39.2
 					(statements
-						(s-type-anno @29-5-30-11 (name "userId")
+						(s-type-anno @29.5-30.11 (name "userId")
 							(ty (name "UserId")))
-						(s-decl @30-5-30-17
-							(p-ident @30-5-30-11 (raw "userId"))
-							(e-int @30-14-30-17 (raw "123")))
-						(s-type-anno @32-5-33-11 (name "person")
+						(s-decl @30.5-30.17
+							(p-ident @30.5-30.11 (raw "userId"))
+							(e-int @30.14-30.17 (raw "123")))
+						(s-type-anno @32.5-33.11 (name "person")
 							(ty (name "Person")))
-						(s-decl @33-5-33-40
-							(p-ident @33-5-33-11 (raw "person"))
-							(e-record @33-14-33-40
+						(s-decl @33.5-33.40
+							(p-ident @33.5-33.11 (raw "person"))
+							(e-record @33.14-33.40
 								(field (field "name") (optional false)
-									(e-string @33-22-33-29
-										(e-string-part @33-23-33-28 (raw "Alice"))))
+									(e-string @33.22-33.29
+										(e-string-part @33.23-33.28 (raw "Alice"))))
 								(field (field "age") (optional false)
-									(e-int @33-36-33-38 (raw "30")))))
-						(s-type-anno @35-5-36-10 (name "color")
+									(e-int @33.36-33.38 (raw "30")))))
+						(s-type-anno @35.5-36.10 (name "color")
 							(ty (name "Color")))
-						(s-decl @36-5-36-16
-							(p-ident @36-5-36-10 (raw "color"))
-							(e-tag @36-13-36-16 (raw "Red")))
-						(e-ident @38-5-38-11 (qaul "") (raw "userId"))))))))
+						(s-decl @36.5-36.16
+							(p-ident @36.5-36.10 (raw "color"))
+							(e-tag @36.13-36.16 (raw "Red")))
+						(e-ident @38.5-38.11 (qaul "") (raw "userId"))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -287,93 +287,93 @@ main! = |_| {
 ~~~clojure
 (can-ir
 	(d-let (id 164)
-		(p-assign @27-1-27-6 (ident "main!") (id 129))
-		(e-lambda @27-9-39-2 (id 163)
+		(p-assign @27.1-27.6 (ident "main!") (id 129))
+		(e-lambda @27.9-39.2 (id 163)
 			(args
-				(p-underscore @27-10-27-11 (id 130)))
-			(e-block @27-13-39-2
-				(s-type-anno @29-5-30-11 (name "userId")
-					(ty @29-14-29-20 (name "UserId")))
-				(s-let @30-5-30-17
-					(p-assign @30-5-30-11 (ident "userId") (id 134))
-					(e-int @30-14-30-17 (value "123") (id 135)))
-				(s-type-anno @32-5-33-11 (name "person")
-					(ty @32-14-32-20 (name "Person")))
-				(s-let @33-5-33-40
-					(p-assign @33-5-33-11 (ident "person") (id 140))
-					(e-record @33-14-33-40 (ext-var 146) (id 147)
+				(p-underscore @27.10-27.11 (id 130)))
+			(e-block @27.13-39.2
+				(s-type-anno @29.5-30.11 (name "userId")
+					(ty @29.14-29.20 (name "UserId")))
+				(s-let @30.5-30.17
+					(p-assign @30.5-30.11 (ident "userId") (id 134))
+					(e-int @30.14-30.17 (value "123") (id 135)))
+				(s-type-anno @32.5-33.11 (name "person")
+					(ty @32.14-32.20 (name "Person")))
+				(s-let @33.5-33.40
+					(p-assign @33.5-33.11 (ident "person") (id 140))
+					(e-record @33.14-33.40 (ext-var 146) (id 147)
 						(fields
 							(field (name "name")
-								(e-string @33-22-33-29
-									(e-literal @33-23-33-28 (string "Alice"))))
+								(e-string @33.22-33.29
+									(e-literal @33.23-33.28 (string "Alice"))))
 							(field (name "age")
-								(e-int @33-36-33-38 (value "30"))))))
-				(s-type-anno @35-5-36-10 (name "color")
-					(ty @35-13-35-18 (name "Color")))
-				(s-let @36-5-36-16
-					(p-assign @36-5-36-10 (ident "color") (id 154))
-					(e-tag @36-13-36-16 (ext-var 0) (name "Red") (args "TODO") (id 156)))
-				(e-lookup-local @38-5-38-11
+								(e-int @33.36-33.38 (value "30"))))))
+				(s-type-anno @35.5-36.10 (name "color")
+					(ty @35.13-35.18 (name "Color")))
+				(s-let @36.5-36.16
+					(p-assign @36.5-36.10 (ident "color") (id 154))
+					(e-tag @36.13-36.16 (ext-var 0) (name "Red") (args "TODO") (id 156)))
+				(e-lookup-local @38.5-38.11
 					(pattern (id 134))))))
-	(s-type-decl @4-1-7-7 (id 75)
-		(ty-header @4-1-4-7 (name "UserId"))
-		(ty @4-10-4-13 (name "U64")))
-	(s-type-decl @7-1-10-7 (id 84)
-		(ty-header @7-1-7-16 (name "Result")
+	(s-type-decl @4.1-7.7 (id 75)
+		(ty-header @4.1-4.7 (name "UserId"))
+		(ty @4.10-4.13 (name "U64")))
+	(s-type-decl @7.1-10.7 (id 84)
+		(ty-header @7.1-7.16 (name "Result")
 			(ty-args
-				(ty-var @7-8-7-10 (name "ok"))
-				(ty-var @7-12-7-15 (name "err"))))
-		(ty-tag-union @7-19-7-37
-			(ty-apply @7-20-7-26 (symbol "Ok")
-				(ty-var @7-23-7-25 (name "ok")))
-			(ty-apply @7-28-7-36 (symbol "Err")
-				(ty-var @7-32-7-35 (name "err")))))
-	(s-type-decl @10-1-13-6 (id 92)
-		(ty-header @10-1-10-7 (name "Person"))
-		(ty-record @10-10-10-35
+				(ty-var @7.8-7.10 (name "ok"))
+				(ty-var @7.12-7.15 (name "err"))))
+		(ty-tag-union @7.19-7.37
+			(ty-apply @7.20-7.26 (symbol "Ok")
+				(ty-var @7.23-7.25 (name "ok")))
+			(ty-apply @7.28-7.36 (symbol "Err")
+				(ty-var @7.32-7.35 (name "err")))))
+	(s-type-decl @10.1-13.6 (id 92)
+		(ty-header @10.1-10.7 (name "Person"))
+		(ty-record @10.10-10.35
 			(field (field "name")
-				(ty @10-19-10-22 (name "Str")))
+				(ty @10.19-10.22 (name "Str")))
 			(field (field "age")
-				(ty @10-30-10-33 (name "U64")))))
-	(s-type-decl @13-1-16-12 (id 99)
-		(ty-header @13-1-13-12 (name "MapFn")
+				(ty @10.30-10.33 (name "U64")))))
+	(s-type-decl @13.1-16.12 (id 99)
+		(ty-header @13.1-13.12 (name "MapFn")
 			(ty-args
-				(ty-var @13-7-13-8 (name "a"))
-				(ty-var @13-10-13-11 (name "b"))))
-		(ty-fn @13-15-13-21 (effectful false)
-			(ty-var @13-15-13-16 (name "a"))
-			(ty-var @13-20-13-21 (name "b"))))
-	(s-type-decl @16-1-19-6 (id 105)
-		(ty-header @16-1-16-18 (name "ApiResponse")
+				(ty-var @13.7-13.8 (name "a"))
+				(ty-var @13.10-13.11 (name "b"))))
+		(ty-fn @13.15-13.21 (effectful false)
+			(ty-var @13.15-13.16 (name "a"))
+			(ty-var @13.20-13.21 (name "b"))))
+	(s-type-decl @16.1-19.6 (id 105)
+		(ty-header @16.1-16.18 (name "ApiResponse")
 			(ty-args
-				(ty-var @16-13-16-17 (name "data"))))
-		(ty-apply @16-21-16-38 (symbol "Result")
-			(ty-var @16-28-16-32 (name "data"))
-			(ty @16-34-16-37 (name "Str"))))
-	(s-type-decl @19-1-22-10 (id 115)
-		(ty-header @19-1-19-6 (name "Color"))
-		(ty-tag-union @19-9-19-47
-			(ty @19-10-19-13 (name "Red"))
-			(ty @19-15-19-20 (name "Green"))
-			(ty @19-22-19-26 (name "Blue"))
-			(ty-apply @19-28-19-46 (symbol "Custom")
-				(ty @19-35-19-37 (name "U8"))
-				(ty @19-39-19-41 (name "U8"))
-				(ty @19-43-19-45 (name "U8")))))
-	(s-type-decl @22-1-27-6 (id 128)
-		(ty-header @22-1-22-16 (name "Container")
+				(ty-var @16.13-16.17 (name "data"))))
+		(ty-apply @16.21-16.38 (symbol "Result")
+			(ty-var @16.28-16.32 (name "data"))
+			(ty @16.34-16.37 (name "Str"))))
+	(s-type-decl @19.1-22.10 (id 115)
+		(ty-header @19.1-19.6 (name "Color"))
+		(ty-tag-union @19.9-19.47
+			(ty @19.10-19.13 (name "Red"))
+			(ty @19.15-19.20 (name "Green"))
+			(ty @19.22-19.26 (name "Blue"))
+			(ty-apply @19.28-19.46 (symbol "Custom")
+				(ty @19.35-19.37 (name "U8"))
+				(ty @19.39-19.41 (name "U8"))
+				(ty @19.43-19.45 (name "U8")))))
+	(s-type-decl @22.1-27.6 (id 128)
+		(ty-header @22.1-22.16 (name "Container")
 			(ty-args
-				(ty-var @22-11-22-15 (name "item"))))
-		(ty-record @22-19-25-2
+				(ty-var @22.11-22.15 (name "item"))))
+		(ty-record @22.19-25.2
 			(field (field "contents")
-				(ty-apply @23-16-23-26 (symbol "List")
-					(ty-var @23-21-23-25 (name "item"))))
+				(ty-apply @23.16-23.26 (symbol "List")
+					(ty-var @23.21-23.25 (name "item"))))
 			(field (field "metadata")
-				(ty-record @24-16-24-45
+				(ty-record @24.16-24.45
 					(field (field "size")
-						(ty @24-25-24-28 (name "U64")))
+						(ty @24.25-24.28 (name "U64")))
 					(field (field "created")
-						(ty @24-40-24-43 (name "Str"))))))))
+						(ty @24.40-24.43 (name "Str"))))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -381,5 +381,5 @@ main! = |_| {
 	(defs
 		(d_assign (name "main!") (def_var 164) (type "* ? *")))
 	(expressions
-		(expr @27-9-39-2 (type "* ? *"))))
+		(expr @27.9-39.2 (type "* ? *"))))
 ~~~

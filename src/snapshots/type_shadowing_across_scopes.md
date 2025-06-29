@@ -120,42 +120,42 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-12-2
-	(module @1-1-1-29
-		(exposes @1-8-1-29
+(file @1.1-12.2
+	(module @1.1-1.29
+		(exposes @1.8-1.29
 			(exposed-upper-ident (text "Result"))
 			(exposed-lower-ident (text "processData"))))
 	(statements
-		(s-type-decl @3-1-5-12
-			(header @3-1-3-13 (name "Result")
+		(s-type-decl @3.1-5.12
+			(header @3.1-3.13 (name "Result")
 				(args
-					(ty-var @3-8-3-9 (raw "a"))
-					(ty-var @3-11-3-12 (raw "b"))))
-			(ty-tag-union @3-16-3-31
+					(ty-var @3.8-3.9 (raw "a"))
+					(ty-var @3.11-3.12 (raw "b"))))
+			(ty-tag-union @3.16-3.31
 				(tags
-					(ty-apply @3-17-3-22
+					(ty-apply @3.17-3.22
 						(ty (name "Ok"))
-						(ty-var @3-20-3-21 (raw "a")))
-					(ty-apply @3-24-3-30
+						(ty-var @3.20-3.21 (raw "a")))
+					(ty-apply @3.24-3.30
 						(ty (name "Err"))
-						(ty-var @3-28-3-29 (raw "b"))))))
-		(s-type-anno @5-1-6-12 (name "processData")
-			(ty-fn @5-15-5-25
+						(ty-var @3.28-3.29 (raw "b"))))))
+		(s-type-anno @5.1-6.12 (name "processData")
+			(ty-fn @5.15-5.25
 				(ty (name "Str"))
 				(ty (name "Str"))))
-		(s-decl @6-1-7-16
-			(p-ident @6-1-6-12 (raw "processData"))
-			(e-lambda @6-15-7-16
+		(s-decl @6.1-7.16
+			(p-ident @6.1-6.12 (raw "processData"))
+			(e-lambda @6.15-7.16
 				(args
-					(p-ident @6-16-6-20 (raw "data")))
-				(e-string @7-5-7-16
-					(e-string-part @7-6-7-15 (raw "processed")))))
-		(s-type-decl @10-1-11-32
-			(header @10-1-10-12 (name "InnerModule")
+					(p-ident @6.16-6.20 (raw "data")))
+				(e-string @7.5-7.16
+					(e-string-part @7.6-7.15 (raw "processed")))))
+		(s-type-decl @10.1-11.32
+			(header @10.1-10.12 (name "InnerModule")
 				(args))
-			(ty-malformed @11-24-11-32 (tag "expected_ty_close_curly_or_comma")))
-		(e-malformed @1-1-1-1 (reason "expr_unexpected_token"))
-		(e-malformed @12-1-12-2 (reason "expr_unexpected_token"))))
+			(ty-malformed @11.24-11.32 (tag "expected_ty_close_curly_or_comma")))
+		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
+		(e-malformed @12.1-12.2 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -175,30 +175,30 @@ InnerModule :
 ~~~clojure
 (can-ir
 	(d-let (id 103)
-		(p-assign @6-1-6-12 (ident "processData") (id 90))
-		(e-lambda @6-15-7-16 (id 95)
+		(p-assign @6.1-6.12 (ident "processData") (id 90))
+		(e-lambda @6.15-7.16 (id 95)
 			(args
-				(p-assign @6-16-6-20 (ident "data") (id 91)))
-			(e-string @7-5-7-16
-				(e-literal @7-6-7-15 (string "processed"))))
-		(annotation @6-1-6-12 (signature 101) (id 102)
+				(p-assign @6.16-6.20 (ident "data") (id 91)))
+			(e-string @7.5-7.16
+				(e-literal @7.6-7.15 (string "processed"))))
+		(annotation @6.1-6.12 (signature 101) (id 102)
 			(declared-type
-				(ty-fn @5-15-5-25 (effectful false)
-					(ty @5-15-5-18 (name "Str"))
-					(ty @5-22-5-25 (name "Str"))))))
-	(s-type-decl @3-1-5-12 (id 81)
-		(ty-header @3-1-3-13 (name "Result")
+				(ty-fn @5.15-5.25 (effectful false)
+					(ty @5.15-5.18 (name "Str"))
+					(ty @5.22-5.25 (name "Str"))))))
+	(s-type-decl @3.1-5.12 (id 81)
+		(ty-header @3.1-3.13 (name "Result")
 			(ty-args
-				(ty-var @3-8-3-9 (name "a"))
-				(ty-var @3-11-3-12 (name "b"))))
-		(ty-tag-union @3-16-3-31
-			(ty-apply @3-17-3-22 (symbol "Ok")
-				(ty-var @3-20-3-21 (name "a")))
-			(ty-apply @3-24-3-30 (symbol "Err")
-				(ty-var @3-28-3-29 (name "b")))))
-	(s-type-decl @10-1-11-32 (id 86)
-		(ty-header @10-1-10-12 (name "InnerModule"))
-		(ty-malformed @11-24-11-32)))
+				(ty-var @3.8-3.9 (name "a"))
+				(ty-var @3.11-3.12 (name "b"))))
+		(ty-tag-union @3.16-3.31
+			(ty-apply @3.17-3.22 (symbol "Ok")
+				(ty-var @3.20-3.21 (name "a")))
+			(ty-apply @3.24-3.30 (symbol "Err")
+				(ty-var @3.28-3.29 (name "b")))))
+	(s-type-decl @10.1-11.32 (id 86)
+		(ty-header @10.1-10.12 (name "InnerModule"))
+		(ty-malformed @11.24-11.32)))
 ~~~
 # TYPES
 ~~~clojure
@@ -206,5 +206,5 @@ InnerModule :
 	(defs
 		(d_assign (name "processData") (def_var 103) (type "Str -> Str")))
 	(expressions
-		(expr @6-15-7-16 (type "Str -> Str"))))
+		(expr @6.15-7.16 (type "Str -> Str"))))
 ~~~

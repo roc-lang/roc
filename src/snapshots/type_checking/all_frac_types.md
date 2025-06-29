@@ -33,25 +33,25 @@ LowerIdent(10:1-10:2),OpAssign(10:3-10:4),Float(10:5-10:12),EndOfFile(10:12-10:1
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-10-12
-	(module @1-1-1-10
-		(exposes @1-8-1-10))
+(file @1.1-10.12
+	(module @1.1-1.10
+		(exposes @1.8-1.10))
 	(statements
-		(s-type-anno @3-1-4-2 (name "a")
+		(s-type-anno @3.1-4.2 (name "a")
 			(ty (name "F32")))
-		(s-decl @4-1-4-9
-			(p-ident @4-1-4-2 (raw "a"))
-			(e-frac @4-5-4-9 (raw "3.14")))
-		(s-type-anno @6-1-7-2 (name "b")
+		(s-decl @4.1-4.9
+			(p-ident @4.1-4.2 (raw "a"))
+			(e-frac @4.5-4.9 (raw "3.14")))
+		(s-type-anno @6.1-7.2 (name "b")
 			(ty (name "F64")))
-		(s-decl @7-1-7-12
-			(p-ident @7-1-7-2 (raw "b"))
-			(e-frac @7-5-7-12 (raw "2.71828")))
-		(s-type-anno @9-1-10-2 (name "c")
+		(s-decl @7.1-7.12
+			(p-ident @7.1-7.2 (raw "b"))
+			(e-frac @7.5-7.12 (raw "2.71828")))
+		(s-type-anno @9.1-10.2 (name "c")
 			(ty (name "Dec")))
-		(s-decl @10-1-10-12
-			(p-ident @10-1-10-2 (raw "c"))
-			(e-frac @10-5-10-12 (raw "123.456")))))
+		(s-decl @10.1-10.12
+			(p-ident @10.1-10.2 (raw "c"))
+			(e-frac @10.5-10.12 (raw "123.456")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -61,23 +61,23 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let (id 79)
-		(p-assign @4-1-4-2 (ident "a") (id 74))
-		(e-dec-small @4-5-4-9 (numerator "314") (denominator-power-of-ten "2") (value "3.14") (id 75))
-		(annotation @4-1-4-2 (signature 77) (id 78)
+		(p-assign @4.1-4.2 (ident "a") (id 74))
+		(e-dec-small @4.5-4.9 (numerator "314") (denominator-power-of-ten "2") (value "3.14") (id 75))
+		(annotation @4.1-4.2 (signature 77) (id 78)
 			(declared-type
-				(ty @3-5-3-8 (name "F32")))))
+				(ty @3.5-3.8 (name "F32")))))
 	(d-let (id 86)
-		(p-assign @7-1-7-2 (ident "b") (id 81))
-		(e-frac-dec @7-5-7-12 (value "2.71828") (id 82))
-		(annotation @7-1-7-2 (signature 84) (id 85)
+		(p-assign @7.1-7.2 (ident "b") (id 81))
+		(e-frac-dec @7.5-7.12 (value "2.71828") (id 82))
+		(annotation @7.1-7.2 (signature 84) (id 85)
 			(declared-type
-				(ty @6-5-6-8 (name "F64")))))
+				(ty @6.5-6.8 (name "F64")))))
 	(d-let (id 93)
-		(p-assign @10-1-10-2 (ident "c") (id 88))
-		(e-frac-dec @10-5-10-12 (value "123.456") (id 89))
-		(annotation @10-1-10-2 (signature 91) (id 92)
+		(p-assign @10.1-10.2 (ident "c") (id 88))
+		(e-frac-dec @10.5-10.12 (value "123.456") (id 89))
+		(annotation @10.1-10.2 (signature 91) (id 92)
 			(declared-type
-				(ty @9-5-9-8 (name "Dec"))))))
+				(ty @9.5-9.8 (name "Dec"))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -87,7 +87,7 @@ NO CHANGE
 		(d_assign (name "b") (def_var 86) (type "F64"))
 		(d_assign (name "c") (def_var 93) (type "Dec")))
 	(expressions
-		(expr @4-5-4-9 (type "F32"))
-		(expr @7-5-7-12 (type "F64"))
-		(expr @10-5-10-12 (type "Dec"))))
+		(expr @4.5-4.9 (type "F32"))
+		(expr @7.5-7.12 (type "F64"))
+		(expr @10.5-10.12 (type "Dec"))))
 ~~~

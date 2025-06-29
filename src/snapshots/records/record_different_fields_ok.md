@@ -23,16 +23,16 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 ~~~
 # PARSE
 ~~~clojure
-(e-record @1-1-5-2
+(e-record @1.1-5.2
 	(field (field "field_with_underscores") (optional false)
-		(e-string @2-29-2-41
-			(e-string-part @2-30-2-40 (raw "underscore"))))
+		(e-string @2.29-2.41
+			(e-string-part @2.30-2.40 (raw "underscore"))))
 	(field (field "field123") (optional false)
-		(e-string @3-15-3-24
-			(e-string-part @3-16-3-23 (raw "numbers"))))
+		(e-string @3.15-3.24
+			(e-string-part @3.16-3.23 (raw "numbers"))))
 	(field (field "camelCase") (optional false)
-		(e-string @4-16-4-23
-			(e-string-part @4-17-4-22 (raw "camel")))))
+		(e-string @4.16-4.23
+			(e-string-part @4.17-4.22 (raw "camel")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -44,17 +44,17 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-record @1-1-5-2 (ext-var 82) (id 83)
+(e-record @1.1-5.2 (ext-var 82) (id 83)
 	(fields
 		(field (name "field_with_underscores")
-			(e-string @2-29-2-41
-				(e-literal @2-30-2-40 (string "underscore"))))
+			(e-string @2.29-2.41
+				(e-literal @2.30-2.40 (string "underscore"))))
 		(field (name "field123")
-			(e-string @3-15-3-24
-				(e-literal @3-16-3-23 (string "numbers"))))
+			(e-string @3.15-3.24
+				(e-literal @3.16-3.23 (string "numbers"))))
 		(field (name "camelCase")
-			(e-string @4-16-4-23
-				(e-literal @4-17-4-22 (string "camel"))))))
+			(e-string @4.16-4.23
+				(e-literal @4.17-4.22 (string "camel"))))))
 ~~~
 # TYPES
 ~~~clojure

@@ -28,13 +28,13 @@ LowerIdent(2:1-2:2),CloseRound(2:2-2:3),CloseStringInterpolation(2:3-2:4),String
 ~~~
 # PARSE
 ~~~clojure
-(e-string @1-1-2-45
-	(e-string-part @1-2-1-24 (raw "This is a string with "))
-	(e-apply @1-26-2-3
-		(e-ident @1-26-1-35 (qaul "") (raw "some_func"))
-		(e-ident @1-36-1-37 (qaul "") (raw "a"))
-		(e-ident @2-1-2-2 (qaul "") (raw "b")))
-	(e-string-part @2-4-2-44 (raw " lines of text due to the template parts")))
+(e-string @1.1-2.45
+	(e-string-part @1.2-1.24 (raw "This is a string with "))
+	(e-apply @1.26-2.3
+		(e-ident @1.26-1.35 (qaul "") (raw "some_func"))
+		(e-ident @1.36-1.37 (qaul "") (raw "a"))
+		(e-ident @2.1-2.2 (qaul "") (raw "b")))
+	(e-string-part @2.4-2.44 (raw " lines of text due to the template parts")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -47,13 +47,13 @@ LowerIdent(2:1-2:2),CloseRound(2:2-2:3),CloseStringInterpolation(2:3-2:4),String
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-string @1-1-2-45 (id 83)
-	(e-literal @1-2-1-24 (string "This is a string with "))
-	(e-call @1-26-2-3
+(e-string @1.1-2.45 (id 83)
+	(e-literal @1.2-1.24 (string "This is a string with "))
+	(e-call @1.26-2.3
 		(e-runtime-error (tag "ident_not_in_scope"))
 		(e-runtime-error (tag "ident_not_in_scope"))
 		(e-runtime-error (tag "ident_not_in_scope")))
-	(e-literal @2-4-2-44 (string " lines of text due to the template parts")))
+	(e-literal @2.4-2.44 (string " lines of text due to the template parts")))
 ~~~
 # TYPES
 ~~~clojure

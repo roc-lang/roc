@@ -31,14 +31,14 @@ KwVar(4:1-4:4),LowerIdent(4:5-4:17),OpAssign(4:18-4:19),Int(4:20-4:21),EndOfFile
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-4-21
-	(module @1-1-1-10
-		(exposes @1-8-1-10))
+(file @1.1-4.21
+	(module @1.1-1.10
+		(exposes @1.8-1.10))
 	(statements
-		(s-malformed @4-1-4-17 (tag "var_only_allowed_in_a_body"))
-		(s-decl @4-5-4-21
-			(p-ident @4-5-4-17 (raw "topLevelVar_"))
-			(e-int @4-20-4-21 (raw "0")))))
+		(s-malformed @4.1-4.17 (tag "var_only_allowed_in_a_body"))
+		(s-decl @4.5-4.21
+			(p-ident @4.5-4.17 (raw "topLevelVar_"))
+			(e-int @4.20-4.21 (raw "0")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -51,8 +51,8 @@ topLevelVar_ = 0
 ~~~clojure
 (can-ir
 	(d-let (id 75)
-		(p-assign @4-5-4-17 (ident "topLevelVar_") (id 73))
-		(e-int @4-20-4-21 (value "0") (id 74))))
+		(p-assign @4.5-4.17 (ident "topLevelVar_") (id 73))
+		(e-int @4.20-4.21 (value "0") (id 74))))
 ~~~
 # TYPES
 ~~~clojure
@@ -60,5 +60,5 @@ topLevelVar_ = 0
 	(defs
 		(d_assign (name "topLevelVar_") (def_var 75) (type "Num(*)")))
 	(expressions
-		(expr @4-20-4-21 (type "Num(*)"))))
+		(expr @4.20-4.21 (type "Num(*)"))))
 ~~~

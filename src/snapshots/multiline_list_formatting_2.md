@@ -23,10 +23,10 @@ CloseSquare(5:1-5:2),EndOfFile(5:2-5:2),
 ~~~
 # PARSE
 ~~~clojure
-(e-list @1-1-5-2
-	(e-int @2-2-2-3 (raw "1"))
-	(e-int @3-2-3-3 (raw "2"))
-	(e-int @4-2-4-3 (raw "3")))
+(e-list @1.1-5.2
+	(e-int @2.2-2.3 (raw "1"))
+	(e-int @3.2-3.3 (raw "2"))
+	(e-int @4.2-4.3 (raw "3")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -34,11 +34,11 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-list @1-1-5-2 (elem-var 76) (id 77)
+(e-list @1.1-5.2 (elem-var 76) (id 77)
 	(elems
-		(e-int @2-2-2-3 (value "1"))
-		(e-int @3-2-3-3 (value "2"))
-		(e-int @4-2-4-3 (value "3"))))
+		(e-int @2.2-2.3 (value "1"))
+		(e-int @3.2-3.3 (value "2"))
+		(e-int @4.2-4.3 (value "3"))))
 ~~~
 # TYPES
 ~~~clojure

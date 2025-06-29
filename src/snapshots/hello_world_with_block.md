@@ -47,34 +47,34 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 ~~~
 # PARSE
 ~~~clojure
-(file @1-2-12-2
-	(app @4-1-4-57
-		(provides @4-6-4-12
+(file @1.2-12.2
+	(app @4.1-4.57
+		(provides @4.6-4.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @4-15-4-57 (name "pf")
-			(e-string @4-28-4-55
-				(e-string-part @4-29-4-54 (raw "../basic-cli/platform.roc"))))
-		(packages @4-13-4-57
-			(record-field @4-15-4-57 (name "pf")
-				(e-string @4-28-4-55
-					(e-string-part @4-29-4-54 (raw "../basic-cli/platform.roc"))))))
+		(record-field @4.15-4.57 (name "pf")
+			(e-string @4.28-4.55
+				(e-string-part @4.29-4.54 (raw "../basic-cli/platform.roc"))))
+		(packages @4.13-4.57
+			(record-field @4.15-4.57 (name "pf")
+				(e-string @4.28-4.55
+					(e-string-part @4.29-4.54 (raw "../basic-cli/platform.roc"))))))
 	(statements
-		(s-import @6-1-6-17 (module ".Stdout") (qualifier "pf"))
-		(s-decl @8-1-12-2
-			(p-ident @8-1-8-6 (raw "main!"))
-			(e-lambda @8-9-12-2
+		(s-import @6.1-6.17 (module ".Stdout") (qualifier "pf"))
+		(s-decl @8.1-12.2
+			(p-ident @8.1-8.6 (raw "main!"))
+			(e-lambda @8.9-12.2
 				(args
 					(p-underscore))
-				(e-block @8-13-12-2
+				(e-block @8.13-12.2
 					(statements
-						(s-decl @9-2-9-17
-							(p-ident @9-2-9-7 (raw "world"))
-							(e-string @9-10-9-17
-								(e-string-part @9-11-9-16 (raw "World"))))
-						(e-apply @11-2-11-31
-							(e-ident @11-2-11-14 (qaul "Stdout") (raw ".line!"))
-							(e-string @11-15-11-30
-								(e-string-part @11-16-11-29 (raw "Hello, world!"))))))))))
+						(s-decl @9.2-9.17
+							(p-ident @9.2-9.7 (raw "world"))
+							(e-string @9.10-9.17
+								(e-string-part @9.11-9.16 (raw "World"))))
+						(e-apply @11.2-11.31
+							(e-ident @11.2-11.14 (qaul "Stdout") (raw ".line!"))
+							(e-string @11.15-11.30
+								(e-string-part @11.16-11.29 (raw "Hello, world!"))))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -84,21 +84,21 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let (id 90)
-		(p-assign @8-1-8-6 (ident "main!") (id 74))
-		(e-lambda @8-9-12-2 (id 89)
+		(p-assign @8.1-8.6 (ident "main!") (id 74))
+		(e-lambda @8.9-12.2 (id 89)
 			(args
-				(p-underscore @8-10-8-11 (id 75)))
-			(e-block @8-13-12-2
-				(s-let @9-2-9-17
-					(p-assign @9-2-9-7 (ident "world") (id 76))
-					(e-string @9-10-9-17 (id 78)
-						(e-literal @9-11-9-16 (string "World"))))
-				(e-call @11-2-11-31
+				(p-underscore @8.10-8.11 (id 75)))
+			(e-block @8.13-12.2
+				(s-let @9.2-9.17
+					(p-assign @9.2-9.7 (ident "world") (id 76))
+					(e-string @9.10-9.17 (id 78)
+						(e-literal @9.11-9.16 (string "World"))))
+				(e-call @11.2-11.31
 					(e-lookup-external
-						(ext-decl @11-2-11-14 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value") (type-var 80)))
-					(e-string @11-15-11-30
-						(e-literal @11-16-11-29 (string "Hello, world!")))))))
-	(s-import @6-1-6-17 (module "pf.Stdout") (qualifier "pf") (id 73)
+						(ext-decl @11.2-11.14 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value") (type-var 80)))
+					(e-string @11.15-11.30
+						(e-literal @11.16-11.29 (string "Hello, world!")))))))
+	(s-import @6.1-6.17 (module "pf.Stdout") (qualifier "pf") (id 73)
 		(exposes)))
 ~~~
 # TYPES
@@ -107,5 +107,5 @@ NO CHANGE
 	(defs
 		(d_assign (name "main!") (def_var 90) (type "* ? *")))
 	(expressions
-		(expr @8-9-12-2 (type "* ? *"))))
+		(expr @8.9-12.2 (type "* ? *"))))
 ~~~

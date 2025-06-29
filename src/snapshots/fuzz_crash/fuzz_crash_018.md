@@ -31,10 +31,10 @@ DotUpperIdent(2:1-2:3),EndOfFile(2:3-2:3),
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-2-3
-	(malformed-header @1-1-1-4 (tag "missing_header"))
+(file @1.1-2.3
+	(malformed-header @1.1-1.4 (tag "missing_header"))
 	(statements
-		(s-type-anno @1-3-2-3 (name "b")
+		(s-type-anno @1.3-2.3 (name "b")
 			(ty-mod (module "R") (name "S")))))
 ~~~
 # FORMATTED

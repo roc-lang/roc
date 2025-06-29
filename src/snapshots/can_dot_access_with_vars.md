@@ -23,27 +23,27 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 ~~~
 # PARSE
 ~~~clojure
-(e-block @1-1-5-2
+(e-block @1.1-5.2
 	(statements
-		(s-decl @2-5-2-21
-			(p-ident @2-5-2-9 (raw "list"))
-			(e-list @2-12-2-21
-				(e-int @2-13-2-14 (raw "1"))
-				(e-int @2-16-2-17 (raw "2"))
-				(e-int @2-19-2-20 (raw "3"))))
-		(s-decl @3-5-4-9
-			(p-ident @3-5-3-7 (raw "fn"))
-			(e-lambda @3-10-4-9
+		(s-decl @2.5-2.21
+			(p-ident @2.5-2.9 (raw "list"))
+			(e-list @2.12-2.21
+				(e-int @2.13-2.14 (raw "1"))
+				(e-int @2.16-2.17 (raw "2"))
+				(e-int @2.19-2.20 (raw "3"))))
+		(s-decl @3.5-4.9
+			(p-ident @3.5-3.7 (raw "fn"))
+			(e-lambda @3.10-4.9
 				(args
-					(p-ident @3-11-3-12 (raw "x")))
-				(e-binop @3-14-4-9 (op "+")
-					(e-ident @3-14-3-15 (qaul "") (raw "x"))
-					(e-int @3-18-3-19 (raw "1")))))
-		(e-field-access @4-5-5-2
-			(e-ident @4-5-4-9 (qaul "") (raw "list"))
-			(e-apply @4-9-4-17
-				(e-ident @4-9-4-13 (qaul "") (raw ".map"))
-				(e-ident @4-14-4-16 (qaul "") (raw "fn"))))))
+					(p-ident @3.11-3.12 (raw "x")))
+				(e-binop @3.14-4.9 (op "+")
+					(e-ident @3.14-3.15 (qaul "") (raw "x"))
+					(e-int @3.18-3.19 (raw "1")))))
+		(e-field-access @4.5-5.2
+			(e-ident @4.5-4.9 (qaul "") (raw "list"))
+			(e-apply @4.9-4.17
+				(e-ident @4.9-4.13 (qaul "") (raw ".map"))
+				(e-ident @4.14-4.16 (qaul "") (raw "fn"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -55,29 +55,29 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1-1-5-2 (id 91)
-	(s-let @2-5-2-21
-		(p-assign @2-5-2-9 (ident "list") (id 73))
-		(e-list @2-12-2-21 (elem-var 77) (id 78)
+(e-block @1.1-5.2 (id 91)
+	(s-let @2.5-2.21
+		(p-assign @2.5-2.9 (ident "list") (id 73))
+		(e-list @2.12-2.21 (elem-var 77) (id 78)
 			(elems
-				(e-int @2-13-2-14 (value "1"))
-				(e-int @2-16-2-17 (value "2"))
-				(e-int @2-19-2-20 (value "3")))))
-	(s-let @3-5-4-9
-		(p-assign @3-5-3-7 (ident "fn") (id 80))
-		(e-lambda @3-10-4-9 (id 86)
+				(e-int @2.13-2.14 (value "1"))
+				(e-int @2.16-2.17 (value "2"))
+				(e-int @2.19-2.20 (value "3")))))
+	(s-let @3.5-4.9
+		(p-assign @3.5-3.7 (ident "fn") (id 80))
+		(e-lambda @3.10-4.9 (id 86)
 			(args
-				(p-assign @3-11-3-12 (ident "x") (id 81)))
-			(e-binop @3-14-4-9 (op "add")
-				(e-lookup-local @3-14-3-15
+				(p-assign @3.11-3.12 (ident "x") (id 81)))
+			(e-binop @3.14-4.9 (op "add")
+				(e-lookup-local @3.14-3.15
 					(pattern (id 81)))
-				(e-int @3-18-3-19 (value "1")))))
-	(e-dot-access @4-5-5-2 (field "map")
+				(e-int @3.18-3.19 (value "1")))))
+	(e-dot-access @4.5-5.2 (field "map")
 		(receiver
-			(e-lookup-local @4-5-4-9
+			(e-lookup-local @4.5-4.9
 				(pattern (id 73))))
 		(args
-			(e-lookup-local @4-14-4-16
+			(e-lookup-local @4.14-4.16
 				(pattern (id 80))))))
 ~~~
 # TYPES

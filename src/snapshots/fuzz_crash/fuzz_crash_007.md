@@ -59,11 +59,11 @@ LowerIdent(1:1-1:4),NoSpaceDotInt(1:4-1:6),NoSpaceDotLowerIdent(1:6-1:8),EndOfFi
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-1-8
-	(malformed-header @1-1-1-6 (tag "missing_header"))
+(file @1.1-1.8
+	(malformed-header @1.1-1.6 (tag "missing_header"))
 	(statements
-		(e-malformed @1-4-1-8 (reason "expr_unexpected_token"))
-		(e-malformed @1-6-1-8 (reason "expr_unexpected_token"))))
+		(e-malformed @1.4-1.8 (reason "expr_unexpected_token"))
+		(e-malformed @1.6-1.8 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc

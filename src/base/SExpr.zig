@@ -338,7 +338,7 @@ fn toStringImpl(node: SExpr, writer_impl: anytype, indent: usize) !void {
             .region => |r| {
                 try writer_impl.print(" ", .{});
                 try writer_impl.setColor(.region);
-                try writer_impl.print("@{d}-{d}-{d}-{d}", .{
+                try writer_impl.print("@{d}.{d}-{d}.{d}", .{
                     // add one to display numbers instead of index
                     r.start_line_idx + 1,
                     r.start_col_idx + 1,
@@ -351,7 +351,7 @@ fn toStringImpl(node: SExpr, writer_impl: anytype, indent: usize) !void {
                 try writer_impl.print(" ", .{});
                 try writer_impl.beginSourceRange(tr.start_token, tr.end_token);
                 try writer_impl.setColor(.region);
-                try writer_impl.print("@{d}-{d}-{d}-{d}", .{
+                try writer_impl.print("@{d}.{d}-{d}.{d}", .{
                     // add one to display numbers instead of index
                     tr.region.start_line_idx + 1,
                     tr.region.start_col_idx + 1,

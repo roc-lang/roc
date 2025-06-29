@@ -41,48 +41,48 @@ LowerIdent(8:1-8:6),OpAssign(8:7-8:8),OpBar(8:9-8:10),Underscore(8:10-8:11),OpBa
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-8-25
-	(app @1-1-1-53
-		(provides @1-6-1-12
+(file @1.1-8.25
+	(app @1.1-1.53
+		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @1-15-1-53 (name "pf")
-			(e-string @1-28-1-51
-				(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))
-		(packages @1-13-1-53
-			(record-field @1-15-1-53 (name "pf")
-				(e-string @1-28-1-51
-					(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))))
+		(record-field @1.15-1.53 (name "pf")
+			(e-string @1.28-1.51
+				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
+		(packages @1.13-1.53
+			(record-field @1.15-1.53 (name "pf")
+				(e-string @1.28-1.51
+					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-decl @3-1-5-8
-			(header @3-1-3-7 (name "UserId")
+		(s-type-decl @3.1-5.8
+			(header @3.1-3.7 (name "UserId")
 				(args))
 			(ty (name "U64")))
-		(s-type-anno @5-1-6-8 (name "getUser")
-			(ty-fn @5-11-5-24
+		(s-type-anno @5.1-6.8 (name "getUser")
+			(ty-fn @5.11-5.24
 				(ty (name "UserId"))
 				(ty (name "Str"))))
-		(s-decl @1-1-1-1
-			(p-ident @6-1-6-8 (raw "getUser"))
-			(e-lambda @1-1-1-1
+		(s-decl @1.1-1.1
+			(p-ident @6.1-6.8 (raw "getUser"))
+			(e-lambda @1.1-1.1
 				(args
-					(p-ident @6-12-6-14 (raw "id")))
-				(e-if-then-else @1-1-1-1
-					(e-tuple @6-19-6-28
-						(e-binop @6-20-6-28 (op ">")
-							(e-ident @6-20-6-22 (qaul "") (raw "id"))
-							(e-int @6-25-6-27 (raw "10"))))
-					(e-string @6-29-6-34
-						(e-string-part @6-30-6-33 (raw "big")))
-					(e-string @6-40-6-47
-						(e-string-part @6-41-6-46 (raw "small"))))))
-		(s-decl @8-1-8-25
-			(p-ident @8-1-8-6 (raw "main!"))
-			(e-lambda @8-9-8-25
+					(p-ident @6.12-6.14 (raw "id")))
+				(e-if-then-else @1.1-1.1
+					(e-tuple @6.19-6.28
+						(e-binop @6.20-6.28 (op ">")
+							(e-ident @6.20-6.22 (qaul "") (raw "id"))
+							(e-int @6.25-6.27 (raw "10"))))
+					(e-string @6.29-6.34
+						(e-string-part @6.30-6.33 (raw "big")))
+					(e-string @6.40-6.47
+						(e-string-part @6.41-6.46 (raw "small"))))))
+		(s-decl @8.1-8.25
+			(p-ident @8.1-8.6 (raw "main!"))
+			(e-lambda @8.9-8.25
 				(args
 					(p-underscore))
-				(e-apply @8-13-8-25
-					(e-ident @8-13-8-20 (qaul "") (raw "getUser"))
-					(e-int @8-21-8-24 (raw "100")))))))
+				(e-apply @8.13-8.25
+					(e-ident @8.13-8.20 (qaul "") (raw "getUser"))
+					(e-int @8.21-8.24 (raw "100")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -92,41 +92,41 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let (id 100)
-		(p-assign @6-1-6-8 (ident "getUser") (id 79))
-		(e-lambda @1-1-1-1 (id 93)
+		(p-assign @6.1-6.8 (ident "getUser") (id 79))
+		(e-lambda @1.1-1.1 (id 93)
 			(args
-				(p-assign @6-12-6-14 (ident "id") (id 80)))
-			(e-if @1-1-1-1 (branch-var 90)
+				(p-assign @6.12-6.14 (ident "id") (id 80)))
+			(e-if @1.1-1.1 (branch-var 90)
 				(if-branches
 					(if-branch
-						(e-tuple @6-19-6-28
+						(e-tuple @6.19-6.28
 							(elems
-								(e-binop @6-20-6-28 (op "gt")
-									(e-lookup-local @6-20-6-22
+								(e-binop @6.20-6.28 (op "gt")
+									(e-lookup-local @6.20-6.22
 										(pattern (id 80)))
-									(e-int @6-25-6-27 (value "10")))))
-						(e-string @6-29-6-34
-							(e-literal @6-30-6-33 (string "big")))))
+									(e-int @6.25-6.27 (value "10")))))
+						(e-string @6.29-6.34
+							(e-literal @6.30-6.33 (string "big")))))
 				(if-else
-					(e-string @6-40-6-47
-						(e-literal @6-41-6-46 (string "small"))))))
-		(annotation @6-1-6-8 (signature 98) (id 99)
+					(e-string @6.40-6.47
+						(e-literal @6.41-6.46 (string "small"))))))
+		(annotation @6.1-6.8 (signature 98) (id 99)
 			(declared-type
-				(ty-fn @5-11-5-24 (effectful false)
-					(ty @5-11-5-17 (name "UserId"))
-					(ty @5-21-5-24 (name "Str"))))))
+				(ty-fn @5.11-5.24 (effectful false)
+					(ty @5.11-5.17 (name "UserId"))
+					(ty @5.21-5.24 (name "Str"))))))
 	(d-let (id 109)
-		(p-assign @8-1-8-6 (ident "main!") (id 101))
-		(e-lambda @8-9-8-25 (id 108)
+		(p-assign @8.1-8.6 (ident "main!") (id 101))
+		(e-lambda @8.9-8.25 (id 108)
 			(args
-				(p-underscore @8-10-8-11 (id 102)))
-			(e-call @8-13-8-25
-				(e-lookup-local @8-13-8-20
+				(p-underscore @8.10-8.11 (id 102)))
+			(e-call @8.13-8.25
+				(e-lookup-local @8.13-8.20
 					(pattern (id 79)))
-				(e-int @8-21-8-24 (value "100")))))
-	(s-type-decl @3-1-5-8 (id 75)
-		(ty-header @3-1-3-7 (name "UserId"))
-		(ty @3-10-3-13 (name "U64"))))
+				(e-int @8.21-8.24 (value "100")))))
+	(s-type-decl @3.1-5.8 (id 75)
+		(ty-header @3.1-3.7 (name "UserId"))
+		(ty @3.10-3.13 (name "U64"))))
 ~~~
 # TYPES
 ~~~clojure
@@ -135,6 +135,6 @@ NO CHANGE
 		(d_assign (name "getUser") (def_var 100) (type "UserId -> Str"))
 		(d_assign (name "main!") (def_var 109) (type "* ? *")))
 	(expressions
-		(expr @1-1-1-1 (type "UserId -> Str"))
-		(expr @8-9-8-25 (type "* ? *"))))
+		(expr @1.1-1.1 (type "UserId -> Str"))
+		(expr @8.9-8.25 (type "* ? *"))))
 ~~~

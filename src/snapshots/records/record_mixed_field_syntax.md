@@ -26,14 +26,14 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:7),Comma(1:7-1:8),LowerIdent(1:9-1:12),OpCol
 ~~~
 # PARSE
 ~~~clojure
-(e-record @1-1-1-52
+(e-record @1.1-1.52
 	(field (field "name") (optional false))
 	(field (field "age") (optional false)
-		(e-int @1-14-1-16 (raw "30")))
+		(e-int @1.14-1.16 (raw "30")))
 	(field (field "email") (optional false))
 	(field (field "status") (optional false)
-		(e-string @1-33-1-41
-			(e-string-part @1-34-1-40 (raw "active"))))
+		(e-string @1.33-1.41
+			(e-string-part @1.34-1.40 (raw "active"))))
 	(field (field "balance") (optional false)))
 ~~~
 # FORMATTED
@@ -42,17 +42,17 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-record @1-1-1-52 (ext-var 87) (id 88)
+(e-record @1.1-1.52 (ext-var 87) (id 88)
 	(fields
 		(field (name "name")
 			(e-runtime-error (tag "ident_not_in_scope")))
 		(field (name "age")
-			(e-int @1-14-1-16 (value "30")))
+			(e-int @1.14-1.16 (value "30")))
 		(field (name "email")
 			(e-runtime-error (tag "ident_not_in_scope")))
 		(field (name "status")
-			(e-string @1-33-1-41
-				(e-literal @1-34-1-40 (string "active"))))
+			(e-string @1.33-1.41
+				(e-literal @1.34-1.40 (string "active"))))
 		(field (name "balance")
 			(e-runtime-error (tag "ident_not_in_scope")))))
 ~~~

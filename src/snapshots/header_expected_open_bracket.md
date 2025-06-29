@@ -25,8 +25,8 @@ KwModule(1:1-1:7),EndOfFile(1:7-1:7),
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-1-7
-	(malformed-header @1-7-1-7 (tag "header_expected_open_square"))
+(file @1.1-1.7
+	(malformed-header @1.7-1.7 (tag "header_expected_open_square"))
 	(statements))
 ~~~
 # FORMATTED

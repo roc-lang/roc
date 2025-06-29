@@ -21,16 +21,16 @@ LowerIdent(4:1-4:2),OpAssign(4:3-4:4),StringStart(4:5-4:6),StringPart(4:6-4:11),
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-4-12
-	(module @1-1-1-10
-		(exposes @1-8-1-10))
+(file @1.1-4.12
+	(module @1.1-1.10
+		(exposes @1.8-1.10))
 	(statements
-		(s-type-anno @3-1-4-2 (name "x")
+		(s-type-anno @3.1-4.2 (name "x")
 			(ty (name "Str")))
-		(s-decl @4-1-4-12
-			(p-ident @4-1-4-2 (raw "x"))
-			(e-string @4-5-4-12
-				(e-string-part @4-6-4-11 (raw "hello"))))))
+		(s-decl @4.1-4.12
+			(p-ident @4.1-4.2 (raw "x"))
+			(e-string @4.5-4.12
+				(e-string-part @4.6-4.11 (raw "hello"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -40,12 +40,12 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let (id 80)
-		(p-assign @4-1-4-2 (ident "x") (id 74))
-		(e-string @4-5-4-12 (id 76)
-			(e-literal @4-6-4-11 (string "hello")))
-		(annotation @4-1-4-2 (signature 78) (id 79)
+		(p-assign @4.1-4.2 (ident "x") (id 74))
+		(e-string @4.5-4.12 (id 76)
+			(e-literal @4.6-4.11 (string "hello")))
+		(annotation @4.1-4.2 (signature 78) (id 79)
 			(declared-type
-				(ty @3-5-3-8 (name "Str"))))))
+				(ty @3.5-3.8 (name "Str"))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -53,5 +53,5 @@ NO CHANGE
 	(defs
 		(d_assign (name "x") (def_var 80) (type "Str")))
 	(expressions
-		(expr @4-5-4-12 (type "Str"))))
+		(expr @4.5-4.12 (type "Str"))))
 ~~~

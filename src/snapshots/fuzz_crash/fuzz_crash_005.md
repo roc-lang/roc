@@ -29,8 +29,8 @@ LowerIdent(1:1-1:5),EndOfFile(1:5-1:5),
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-1-5
-	(malformed-header @1-1-1-5 (tag "missing_header"))
+(file @1.1-1.5
+	(malformed-header @1.1-1.5 (tag "missing_header"))
 	(statements))
 ~~~
 # FORMATTED
