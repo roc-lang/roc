@@ -446,7 +446,7 @@ pub const TokenizedBuffer = struct {
         };
         if (comment) |c| {
             token.offset = c.begin;
-            token.extra = .{ .length = if (c.end > c.begin) c.end - c.begin else 0 };
+            token.extra = .{ .length = c.end - c.begin };
         }
         self.tokens.append(self.env.gpa, token) catch |err| exitOnOom(err);
     }
@@ -463,6 +463,15 @@ pub const TokenizedBuffer = struct {
 pub const Comment = struct {
     begin: u32,
     end: u32,
+
+    pub fn init(begin: u32, end: u32) Comment {
+        std.debug.assert(begin <= end);
+
+        return Comment{
+            .begin = begin,
+            .end = end,
+        };
+    }
 };
 
 /// Represents a diagnostic message including its position in the source.
@@ -656,7 +665,7 @@ pub const Cursor = struct {
                 while (self.pos < self.buf.len and self.buf[self.pos] != '\n' and self.buf[self.pos] != '\r') {
                     self.pos += 1;
                 }
-                self.comment = Comment{ .begin = comment_start, .end = self.pos };
+                self.comment = Comment.init(comment_start, self.pos);
             } else if (b >= 0 and b <= 31) {
                 self.pushMessageHere(.AsciiControl);
                 self.pos += 1;
