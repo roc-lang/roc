@@ -332,7 +332,8 @@ pub const Problem = union(enum) {
         // TODO link to a speceific explanation of how to mix element types using tag unions
         try report.document.addText("Note: You can wrap each element in a tag to make them compatible.");
         try report.document.addLineBreak();
-        try report.document.addText("To learn about tags, see <https://www.roc-lang.org/tutorial#tags>");
+        try report.document.addText("To learn about tags, see ");
+        try report.document.addLink("https://www.roc-lang.org/tutorial#tags");
 
         return report;
     }

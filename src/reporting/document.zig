@@ -181,6 +181,9 @@ pub const DocumentElement = union(enum) {
     /// Text that should be reflowed/wrapped automatically
     reflowing_text: []const u8,
 
+    /// Link URL
+    link: []const u8,
+
     /// Vertical stack of elements
     vertical_stack: []DocumentElement,
 
@@ -237,7 +240,7 @@ pub const DocumentElement = union(enum) {
     /// Returns true if this element represents actual content.
     pub fn hasContent(self: DocumentElement) bool {
         return switch (self) {
-            .text, .annotated, .raw, .reflowing_text, .vertical_stack, .horizontal_concat, .source_code_region, .source_code_multi_region => true,
+            .text, .annotated, .raw, .reflowing_text, .link, .vertical_stack, .horizontal_concat, .source_code_region, .source_code_multi_region => true,
             else => false,
         };
     }
@@ -262,6 +265,7 @@ pub const Document = struct {
                 .vertical_stack => |stack| self.allocator.free(stack),
                 .horizontal_concat => |concat| self.allocator.free(concat),
                 .source_code_multi_region => |multi| self.allocator.free(multi.regions),
+                .source_code_with_underlines => |underlines| self.allocator.free(underlines.underline_regions),
                 else => {},
             }
         }
@@ -459,6 +463,12 @@ pub const Document = struct {
         try self.addAnnotated(operator, .binary_operator);
     }
 
+    /// Add a link with proper formatting.
+    pub fn addLink(self: *Document, url: []const u8) !void {
+        if (url.len == 0) return;
+        try self.elements.append(.{ .link = url });
+    }
+
     /// Add a source code region with highlighting.
     /// Accepts 0-based line and column coordinates, converts to 1-based for display.
     pub fn addSourceRegion(
@@ -636,6 +646,11 @@ pub const DocumentBuilder = struct {
 
     pub fn binaryOperator(self: *DocumentBuilder, operator: []const u8) *DocumentBuilder {
         self.document.addBinaryOperator(operator) catch |err| exitOnOom(err);
+        return self;
+    }
+
+    pub fn link(self: *DocumentBuilder, url: []const u8) *DocumentBuilder {
+        self.document.addLink(url) catch |err| exitOnOom(err);
         return self;
     }
 

@@ -196,6 +196,11 @@ fn renderElementToTerminal(element: DocumentElement, writer: anytype, palette: C
             try writer.writeAll(palette.reset);
         },
         .line_break => try writer.writeAll("\n"),
+        .link => |url| {
+            try writer.writeAll("<");
+            try writer.writeAll(url);
+            try writer.writeAll(">");
+        },
         .indent => |levels| {
             var i: u32 = 0;
             while (i < levels) : (i += 1) {
@@ -442,7 +447,7 @@ fn renderElementToMarkdown(element: DocumentElement, writer: anytype, config: Re
                     try writer.writeAll(annotated.content);
                     try writer.writeAll("**");
                 },
-                .keyword => {
+                .keyword, .inline_code, .symbol, .symbol_qualified, .symbol_unqualified, .record_field, .tag_name, .binary_operator => {
                     try writer.writeAll("`");
                     try writer.writeAll(annotated.content);
                     try writer.writeAll("`");
@@ -472,16 +477,7 @@ fn renderElementToMarkdown(element: DocumentElement, writer: anytype, config: Re
                     try writer.writeAll(annotated.content);
                     try writer.writeAll("\n```");
                 },
-                .inline_code => {
-                    try writer.writeAll("`");
-                    try writer.writeAll(annotated.content);
-                    try writer.writeAll("`");
-                },
-                .symbol => {
-                    try writer.writeAll("`");
-                    try writer.writeAll(annotated.content);
-                    try writer.writeAll("`");
-                },
+
                 .path => {
                     try writer.writeAll("`");
                     try writer.writeAll(annotated.content);
@@ -507,36 +503,21 @@ fn renderElementToMarkdown(element: DocumentElement, writer: anytype, config: Re
                     try writer.writeAll(annotated.content);
                     try writer.writeAll("`");
                 },
-                .symbol_qualified, .symbol_unqualified => {
-                    try writer.writeAll("`");
-                    try writer.writeAll(annotated.content);
-                    try writer.writeAll("`");
-                },
                 .module_name => {
                     try writer.writeAll("**");
                     try writer.writeAll(annotated.content);
                     try writer.writeAll("**");
-                },
-                .record_field => {
-                    try writer.writeAll("`");
-                    try writer.writeAll(annotated.content);
-                    try writer.writeAll("`");
-                },
-                .tag_name => {
-                    try writer.writeAll("`");
-                    try writer.writeAll(annotated.content);
-                    try writer.writeAll("`");
-                },
-                .binary_operator => {
-                    try writer.writeAll("`");
-                    try writer.writeAll(annotated.content);
-                    try writer.writeAll("`");
                 },
                 .source_region => try writer.writeAll(annotated.content),
                 .reflowing_text => try writer.writeAll(annotated.content),
             }
         },
         .line_break => try writer.writeAll("\n"),
+        .link => |url| {
+            try writer.writeAll("<");
+            try writer.writeAll(url);
+            try writer.writeAll(">");
+        },
         .indent => |levels| {
             var i: u32 = 0;
             while (i < levels) : (i += 1) {
@@ -670,6 +651,13 @@ fn renderElementToHtml(element: DocumentElement, writer: anytype, annotation_sta
             try writer.print("</{s}>", .{tag});
         },
         .line_break => try writer.writeAll("<br>\n"),
+        .link => |url| {
+            try writer.writeAll("&lt;<a href=\"");
+            try writeEscapedHtml(writer, url);
+            try writer.writeAll("\">");
+            try writeEscapedHtml(writer, url);
+            try writer.writeAll("</a>&gt;");
+        },
         .indent => |levels| {
             var i: u32 = 0;
             while (i < levels) : (i += 1) {
@@ -788,6 +776,11 @@ fn renderElementToLsp(element: DocumentElement, writer: anytype, config: Reporti
         .text => |text| try writer.writeAll(text),
         .annotated => |annotated| try writer.writeAll(annotated.content),
         .line_break => try writer.writeAll("\n"),
+        .link => |url| {
+            try writer.writeAll("<");
+            try writer.writeAll(url);
+            try writer.writeAll(">");
+        },
         .indent => |levels| {
             var i: u32 = 0;
             while (i < levels) : (i += 1) {
