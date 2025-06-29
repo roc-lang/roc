@@ -14,15 +14,12 @@ type=expr
 # PROBLEMS
 **INCOMPATIBLE LIST ELEMENTS**
 The first two elements in this list have incompatible types:
-**can_list_multiline_mismatch.md:2:5:2:7:**
+**can_list_multiline_mismatch.md:2:5:**
 ```roc
     42,
-```
-    ^^
-**can_list_multiline_mismatch.md:3:5:3:18:**
-```roc
     "hello world",
 ```
+    ^^
     ^^^^^^^^^^^^^
 
 The first element has this type:

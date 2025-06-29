@@ -10,15 +10,11 @@ type=expr
 # PROBLEMS
 **INCOMPATIBLE LIST ELEMENTS**
 The second and third elements in this list have incompatible types:
-**can_list_triple_nested_heterogeneous.md:1:6:1:15:**
+**can_list_triple_nested_heterogeneous.md:1:6:**
 ```roc
 [[], [[], [1]], [[], ["hello"]]]
 ```
      ^^^^^^^^^
-**can_list_triple_nested_heterogeneous.md:1:17:1:32:**
-```roc
-[[], [[], [1]], [[], ["hello"]]]
-```
                 ^^^^^^^^^^^^^^^
 
 The second element has this type:

@@ -308,6 +308,69 @@ fn renderElementToTerminal(element: DocumentElement, writer: anytype, palette: C
                 line_num += 1;
             }
         },
+        .source_code_with_underlines => |data| {
+            // Calculate the width needed for line numbers
+            const line_num_width = source_region.calculateLineNumberWidth(data.display_region.end_line);
+
+            // Print location header with proper alignment
+            try source_region.printSpaces(writer, line_num_width);
+            try writer.writeAll(palette.secondary);
+            if (data.display_region.filename) |filename| {
+                try writer.print(" ┌─ {s}:{}:{}\n", .{ sanitisePathForSnapshots(filename), data.display_region.start_line, data.display_region.start_column });
+            } else {
+                try writer.print(" ┌─ <source>:{}:{}\n", .{ data.display_region.start_line, data.display_region.start_column });
+            }
+            try writer.writeAll(palette.reset);
+
+            // Print separator line
+            try source_region.printSpaces(writer, line_num_width);
+            try writer.writeAll(palette.secondary);
+            try writer.writeAll(" │\n");
+            try writer.writeAll(palette.reset);
+
+            // Extract and print the source lines with line numbers
+            const lines = source_region.extractLines(data.source, data.display_region.start_line, data.display_region.end_line);
+            var line_num = data.display_region.start_line;
+            var iter = std.mem.tokenizeScalar(u8, lines, '\n');
+            while (iter.next()) |line| {
+                // Print line number
+                try writer.writeAll(palette.secondary);
+                try source_region.formatLineNumber(writer, line_num, line_num_width);
+                try writer.writeAll(" │ ");
+                try writer.writeAll(palette.reset);
+
+                // Print the line content
+                try writer.writeAll(line);
+                try writer.writeAll("\n");
+
+                // Check if any underline regions apply to this line
+                for (data.underline_regions) |underline| {
+                    if (underline.start_line == line_num and underline.start_line == underline.end_line) {
+                        // Single-line underline
+                        try writer.writeAll(palette.secondary);
+                        try source_region.printSpaces(writer, line_num_width);
+                        try writer.writeAll(" │ ");
+                        try writer.writeAll(palette.reset);
+
+                        // Print spaces up to the start column
+                        try source_region.printSpaces(writer, underline.start_column - 1);
+
+                        // Print the underline
+                        const color = getAnnotationColor(underline.annotation, palette);
+                        try writer.writeAll(color);
+                        const underline_len = source_region.calculateUnderlineLength(underline.start_column, underline.end_column);
+                        var i: u32 = 0;
+                        while (i < underline_len) : (i += 1) {
+                            try writer.writeAll("^");
+                        }
+                        try writer.writeAll(palette.reset);
+                        try writer.writeAll("\n");
+                    }
+                }
+
+                line_num += 1;
+            }
+        },
         .source_code_multi_region => |multi| {
             if (multi.filename) |filename| {
                 try writer.print("{s}: ", .{sanitisePathForSnapshots(filename)});
@@ -514,6 +577,36 @@ fn renderElementToMarkdown(element: DocumentElement, writer: anytype, config: Re
                 try writer.writeAll("\n");
             }
         },
+        .source_code_with_underlines => |data| {
+            if (data.display_region.filename) |filename| {
+                try writer.print("**{s}:{}:{}:**\n", .{ sanitisePathForSnapshots(filename), data.display_region.start_line, data.display_region.start_column });
+            }
+            try writer.writeAll("```roc\n");
+            const lines = source_region.extractLines(data.source, data.display_region.start_line, data.display_region.end_line);
+            try writer.writeAll(lines);
+            try writer.writeAll("\n```\n");
+
+            // Show underlines as text
+            var line_num = data.display_region.start_line;
+            var iter = std.mem.tokenizeScalar(u8, lines, '\n');
+            while (iter.next()) |_| {
+                for (data.underline_regions) |underline| {
+                    if (underline.start_line == line_num and underline.start_line == underline.end_line) {
+                        var i: u32 = 0;
+                        while (i < underline.start_column - 1) : (i += 1) {
+                            try writer.writeAll(" ");
+                        }
+                        const underline_len = source_region.calculateUnderlineLength(underline.start_column, underline.end_column);
+                        i = 0;
+                        while (i < underline_len) : (i += 1) {
+                            try writer.writeAll("^");
+                        }
+                        try writer.writeAll("\n");
+                    }
+                }
+                line_num += 1;
+            }
+        },
         .source_code_multi_region => |multi| {
             if (multi.filename) |filename| {
                 try writer.print("**{s}:**\n", .{filename});
@@ -596,6 +689,16 @@ fn renderElementToHtml(element: DocumentElement, writer: anytype, annotation_sta
             const class = getAnnotationHtmlClass(region.region_annotation);
             try writer.print("<pre class=\"{s}\">", .{class});
             const lines = source_region.extractLines(region.source, region.start_line, region.end_line);
+            try writeEscapedHtml(writer, lines);
+            try writer.writeAll("</pre></div>");
+        },
+        .source_code_with_underlines => |data| {
+            try writer.writeAll("<div class=\"source-region\">");
+            if (data.display_region.filename) |filename| {
+                try writer.print("<div class=\"source-location\">{s}:{}:{}</div>", .{ filename, data.display_region.start_line, data.display_region.start_column });
+            }
+            try writer.writeAll("<pre class=\"source-code\">");
+            const lines = source_region.extractLines(data.source, data.display_region.start_line, data.display_region.end_line);
             try writeEscapedHtml(writer, lines);
             try writer.writeAll("</pre></div>");
         },
@@ -687,6 +790,14 @@ fn renderElementToLsp(element: DocumentElement, writer: anytype, config: Reporti
                 try writer.print("{s}:{}:{}:{}:{}: ", .{ sanitisePathForSnapshots(filename), region.start_line, region.start_column, region.end_line, region.end_column });
             }
             const lines = source_region.extractLines(region.source, region.start_line, region.end_line);
+            try writer.writeAll(lines);
+            try writer.writeAll("\n");
+        },
+        .source_code_with_underlines => |data| {
+            if (data.display_region.filename) |filename| {
+                try writer.print("{s}:{}:{}: ", .{ filename, data.display_region.start_line, data.display_region.start_column });
+            }
+            const lines = source_region.extractLines(data.source, data.display_region.start_line, data.display_region.end_line);
             try writer.writeAll(lines);
             try writer.writeAll("\n");
         },

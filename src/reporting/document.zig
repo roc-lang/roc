@@ -22,6 +22,25 @@ pub const SourceRegion = struct {
     annotation: Annotation,
 };
 
+/// A region to underline within displayed source code
+pub const UnderlineRegion = struct {
+    start_line: u32,
+    start_column: u32,
+    end_line: u32,
+    end_column: u32,
+    annotation: Annotation,
+};
+
+/// Display region for source code with underlines
+pub const SourceCodeDisplayRegion = struct {
+    start_line: u32,
+    start_column: u32,
+    end_line: u32,
+    end_column: u32,
+    region_annotation: Annotation,
+    filename: ?[]const u8,
+};
+
 /// Annotations that can be applied to document content for styling and semantics.
 pub const Annotation = enum {
     /// Basic emphasis (usually bold or bright)
@@ -195,6 +214,14 @@ pub const DocumentElement = union(enum) {
         /// Optional filename for context
         filename: ?[]const u8,
     },
+    source_code_with_underlines: struct {
+        /// The source code to display
+        source: []const u8,
+        /// Overall region to display (determines which lines to show)
+        display_region: SourceCodeDisplayRegion,
+        /// Regions to underline within the displayed code
+        underline_regions: []UnderlineRegion,
+    },
 
     /// Get the text content if this is a text element, null otherwise.
     pub fn getText(self: DocumentElement) ?[]const u8 {
@@ -295,6 +322,23 @@ pub const Document = struct {
     pub fn addReflowingText(self: *Document, text: []const u8) !void {
         if (text.len == 0) return;
         try self.elements.append(.{ .reflowing_text = text });
+    }
+
+    /// Add a source code display with multiple underlines.
+    pub fn addSourceCodeWithUnderlines(
+        self: *Document,
+        source: []const u8,
+        display_region: SourceCodeDisplayRegion,
+        underline_regions: []const UnderlineRegion,
+    ) !void {
+        const owned_regions = try self.allocator.dupe(UnderlineRegion, underline_regions);
+        try self.elements.append(.{
+            .source_code_with_underlines = .{
+                .source = source,
+                .display_region = display_region,
+                .underline_regions = owned_regions,
+            },
+        });
     }
 
     /// Add a vertical stack of elements.

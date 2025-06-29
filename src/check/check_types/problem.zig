@@ -10,6 +10,9 @@ const store_mod = @import("../../types/store.zig");
 const snapshot = @import("./snapshot.zig");
 
 const Report = reporting.Report;
+const Document = reporting.Document;
+const UnderlineRegion = @import("../../reporting/document.zig").UnderlineRegion;
+const SourceCodeDisplayRegion = @import("../../reporting/document.zig").SourceCodeDisplayRegion;
 
 const TypesStore = store_mod.Store;
 const Allocator = std.mem.Allocator;
@@ -239,40 +242,63 @@ pub const Problem = union(enum) {
         try report.document.addText(owned_description);
         try report.document.addLineBreak();
 
-        // Show the two elements with separate underlines
-        // First element
+        // Determine the overall region that encompasses both elements
+        const overall_start_offset = @min(data.first_elem_region.start.offset, data.incompatible_elem_region.start.offset);
+        const overall_end_offset = @max(data.first_elem_region.end.offset, data.incompatible_elem_region.end.offset);
+
+        const overall_region_info = base.RegionInfo.position(
+            source,
+            module_env.line_starts.items,
+            overall_start_offset,
+            overall_end_offset,
+        ) catch return report;
+
+        // Get region info for both elements
         const first_elem_region_info = base.RegionInfo.position(
             source,
             module_env.line_starts.items,
             data.first_elem_region.start.offset,
             data.first_elem_region.end.offset,
         ) catch return report;
-        try report.document.addSourceRegion(
-            source,
-            first_elem_region_info.start_line_idx,
-            first_elem_region_info.start_col_idx,
-            first_elem_region_info.end_line_idx,
-            first_elem_region_info.end_col_idx,
-            .error_highlight,
-            filename,
-        );
 
-        // Second element
         const incompatible_elem_region_info = base.RegionInfo.position(
             source,
             module_env.line_starts.items,
             data.incompatible_elem_region.start.offset,
             data.incompatible_elem_region.end.offset,
         ) catch return report;
-        try report.document.addSourceRegion(
-            source,
-            incompatible_elem_region_info.start_line_idx,
-            incompatible_elem_region_info.start_col_idx,
-            incompatible_elem_region_info.end_line_idx,
-            incompatible_elem_region_info.end_col_idx,
-            .error_highlight,
-            filename,
-        );
+
+        // Create the display region
+        const display_region = SourceCodeDisplayRegion{
+            .start_line = overall_region_info.start_line_idx + 1,
+            .start_column = overall_region_info.start_col_idx + 1,
+            .end_line = overall_region_info.end_line_idx + 1,
+            .end_column = overall_region_info.end_col_idx + 1,
+            .region_annotation = .dimmed,
+            .filename = filename,
+        };
+
+        // Create underline regions
+        var underline_regions = try gpa.alloc(UnderlineRegion, 2);
+        defer gpa.free(underline_regions);
+
+        underline_regions[0] = .{
+            .start_line = first_elem_region_info.start_line_idx + 1,
+            .start_column = first_elem_region_info.start_col_idx + 1,
+            .end_line = first_elem_region_info.end_line_idx + 1,
+            .end_column = first_elem_region_info.end_col_idx + 1,
+            .annotation = .error_highlight,
+        };
+
+        underline_regions[1] = .{
+            .start_line = incompatible_elem_region_info.start_line_idx + 1,
+            .start_column = incompatible_elem_region_info.start_col_idx + 1,
+            .end_line = incompatible_elem_region_info.end_line_idx + 1,
+            .end_column = incompatible_elem_region_info.end_col_idx + 1,
+            .annotation = .error_highlight,
+        };
+
+        try report.document.addSourceCodeWithUnderlines(source, display_region, underline_regions);
         try report.document.addLineBreak();
 
         // Show the type of the first element

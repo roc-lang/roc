@@ -10,15 +10,11 @@ type=expr
 # PROBLEMS
 **INCOMPATIBLE LIST ELEMENTS**
 The first two elements in this list have incompatible types:
-**can_list_heterogeneous.md:1:2:1:3:**
+**can_list_heterogeneous.md:1:2:**
 ```roc
 [1, "hello", 3.14]
 ```
  ^
-**can_list_heterogeneous.md:1:5:1:12:**
-```roc
-[1, "hello", 3.14]
-```
     ^^^^^^^
 
 The first element has this type:

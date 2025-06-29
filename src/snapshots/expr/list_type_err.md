@@ -10,15 +10,11 @@ type=expr
 # PROBLEMS
 **INCOMPATIBLE LIST ELEMENTS**
 The second and third elements in this list have incompatible types:
-**list_type_err.md:1:5:1:6:**
+**list_type_err.md:1:5:**
 ```roc
 [1, 2, "hello"]
 ```
     ^
-**list_type_err.md:1:8:1:15:**
-```roc
-[1, 2, "hello"]
-```
        ^^^^^^^
 
 The second element has this type:

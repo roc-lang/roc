@@ -16,15 +16,11 @@ This number literal is not valid: 2u8
 
 **INCOMPATIBLE LIST ELEMENTS**
 The first two elements in this list have incompatible types:
-**can_list_number_doesnt_fit.md:1:2:1:5:**
+**can_list_number_doesnt_fit.md:1:2:**
 ```roc
 [1u8, 2u8, 300]
 ```
  ^^^
-**can_list_number_doesnt_fit.md:1:7:1:10:**
-```roc
-[1u8, 2u8, 300]
-```
       ^^^
 
 The first element has this type:
