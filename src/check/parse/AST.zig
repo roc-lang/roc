@@ -658,10 +658,7 @@ pub const Statement = union(enum) {
         where: ?Collection.Idx,
         region: TokenizedRegion,
     },
-    malformed: struct {
-        reason: Diagnostic.Tag,
-        region: TokenizedRegion,
-    },
+    malformed: MalformedNode,
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
@@ -877,62 +874,67 @@ pub const Body = struct {
     }
 };
 
+pub const TokenWithRegion = struct {
+    ident_tok: Token.Idx,
+    region: TokenizedRegion,
+};
+
+pub const MalformedNode = struct {
+    reason: Diagnostic.Tag,
+    region: TokenizedRegion,
+};
+
+pub fn ItemsWithRegion(comptime Item: type) type {
+    return struct {
+        items: Item,
+        region: TokenizedRegion,
+    };
+}
+
+pub fn TagNode(comptime Args: type) type {
+    return struct {
+        tag_tok: Token.Idx,
+        args: Args,
+        region: TokenizedRegion,
+    };
+}
+
+pub const Underscore = struct {
+    region: TokenizedRegion,
+};
+
 /// Represents a Pattern used in pattern matching.
 pub const Pattern = union(enum) {
-    ident: struct {
-        ident_tok: Token.Idx,
-        region: TokenizedRegion,
-    },
-    tag: struct {
-        tag_tok: Token.Idx,
-        args: Pattern.Span,
-        region: TokenizedRegion,
-    },
-    int: struct {
-        number_tok: Token.Idx,
-        region: TokenizedRegion,
-    },
-    frac: struct {
-        number_tok: Token.Idx,
-        region: TokenizedRegion,
-    },
-    string: struct {
-        string_tok: Token.Idx,
-        region: TokenizedRegion,
-        expr: Expr.Idx,
-    },
-    record: struct {
-        fields: PatternRecordField.Span,
-        region: TokenizedRegion,
-    },
-    list: struct {
-        patterns: Pattern.Span,
-        region: TokenizedRegion,
-    },
-    list_rest: struct {
-        name: ?Token.Idx,
-        region: TokenizedRegion,
-    },
-    tuple: struct {
-        patterns: Pattern.Span,
-        region: TokenizedRegion,
-    },
-    underscore: struct {
-        region: TokenizedRegion,
-    },
-    alternatives: struct {
-        patterns: Pattern.Span,
-        region: TokenizedRegion,
-    },
-    as: struct {
+    ident: TokenWithRegion,
+    tag: TagNode(Pattern.Span),
+    int: TokenWithRegion,
+    frac: TokenWithRegion,
+    string: Pattern.String,
+    record: ItemsWithRegion(PatternRecordField.Span),
+    list: ItemsWithRegion(Pattern.Span),
+    list_rest: Pattern.Rest,
+    tuple: ItemsWithRegion(Pattern.Span),
+    underscore: Underscore,
+    alternatives: ItemsWithRegion(Pattern.Span),
+    as: Pattern.As,
+    malformed: MalformedNode,
+
+    pub const As = struct {
         pattern: Pattern.Idx,
         name: Token.Idx,
         region: TokenizedRegion,
-    },
-    malformed: struct {
-        reason: Diagnostic.Tag,
+    };
+
+    pub const Rest = struct {
+        name: ?Token.Idx,
         region: TokenizedRegion,
-    },
+    };
+
+    pub const String = struct {
+        string_tok: Token.Idx,
+        region: TokenizedRegion,
+        expr: Expr.Idx,
+    };
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
@@ -1193,10 +1195,7 @@ pub const Header = union(enum) {
         exposes: Collection.Idx,
         region: TokenizedRegion,
     },
-    malformed: struct {
-        reason: Diagnostic.Tag,
-        region: TokenizedRegion,
-    },
+    malformed: MalformedNode,
 
     pub const Idx = enum(u32) { _ };
 
@@ -1367,10 +1366,7 @@ pub const ExposedItem = union(enum) {
         ident: Token.Idx,
         region: TokenizedRegion,
     },
-    malformed: struct {
-        reason: Diagnostic.Tag,
-        region: TokenizedRegion,
-    },
+    malformed: MalformedNode,
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
@@ -1430,55 +1426,41 @@ pub const TypeHeader = struct {
 
 /// TODO
 pub const TypeAnno = union(enum) {
-    apply: struct {
-        args: TypeAnno.Span,
-        region: TokenizedRegion,
-    },
-    ty_var: struct {
-        tok: Token.Idx,
-        region: TokenizedRegion,
-    },
-    underscore: struct {
-        region: TokenizedRegion,
-    },
-    ty: struct {
+    ty_var: TokenWithRegion,
+    underscore: Underscore,
+    ty: TypeAnno.Ty,
+    tag_union: TypeAnno.TagUnion,
+    tuple: ItemsWithRegion(TypeAnno.Span),
+    record: ItemsWithRegion(AnnoRecordField.Span),
+    @"fn": TypeAnno.Fn,
+    parens: TypeAnno.Parens,
+    malformed: MalformedNode,
+
+    const Ty = struct {
+        mod_ident: ?base.Ident.Idx,
         ident: base.Ident.Idx,
+        args: TypeAnno.Span,
         // Region starts with the type token.
         region: TokenizedRegion,
-    },
-    mod_ty: struct {
-        mod_ident: base.Ident.Idx,
-        ty_ident: base.Ident.Idx,
-        // Region starts with the mod token and ends with the type token.
-        region: TokenizedRegion,
-    },
-    tag_union: struct {
+    };
+
+    const TagUnion = struct {
         tags: TypeAnno.Span,
         open_anno: ?TypeAnno.Idx,
         region: TokenizedRegion,
-    },
-    tuple: struct {
-        annos: TypeAnno.Span,
-        region: TokenizedRegion,
-    },
-    record: struct {
-        fields: AnnoRecordField.Span,
-        region: TokenizedRegion,
-    },
-    @"fn": struct {
+    };
+
+    const Fn = struct {
         args: TypeAnno.Span,
         ret: TypeAnno.Idx,
         effectful: bool,
         region: TokenizedRegion,
-    },
-    parens: struct {
+    };
+
+    const Parens = struct {
         anno: TypeAnno.Idx,
         region: TokenizedRegion,
-    },
-    malformed: struct {
-        reason: Diagnostic.Tag,
-        region: TokenizedRegion,
-    },
+    };
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
@@ -1651,10 +1633,7 @@ pub const WhereClause = union(enum) {
         ret_anno: TypeAnno.Idx,
         region: TokenizedRegion,
     },
-    malformed: struct {
-        reason: Diagnostic.Tag,
-        region: TokenizedRegion,
-    },
+    malformed: MalformedNode,
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
@@ -1662,92 +1641,88 @@ pub const WhereClause = union(enum) {
 
 /// Represents an expression.
 pub const Expr = union(enum) {
-    int: struct {
-        token: Token.Idx,
-        region: TokenizedRegion,
-    },
-    frac: struct {
-        token: Token.Idx,
-        region: TokenizedRegion,
-    },
-
-    string_part: struct { // TODO: this should be more properly represented in its own union enum
-        token: Token.Idx,
-        region: TokenizedRegion,
-    },
-    string: struct {
-        token: Token.Idx,
-        region: TokenizedRegion,
-        parts: Expr.Span,
-    },
-    list: struct {
-        items: Expr.Span,
-        region: TokenizedRegion,
-    },
-    tuple: struct {
-        items: Expr.Span,
-        region: TokenizedRegion,
-    },
-    record: struct {
-        fields: RecordField.Span,
-        region: TokenizedRegion,
-    },
-    tag: struct {
-        token: Token.Idx,
-        region: TokenizedRegion,
-    },
-    lambda: struct {
-        args: Pattern.Span,
-        body: Expr.Idx,
-        region: TokenizedRegion,
-    },
-    apply: struct {
-        args: Expr.Span,
-        @"fn": Expr.Idx,
-        region: TokenizedRegion,
-    },
-    record_updater: struct {
-        token: Token.Idx,
-        region: TokenizedRegion,
-    },
+    int: TokenWithRegion,
+    frac: TokenWithRegion,
+    string_part: Expr.StringPart,
+    string: Expr.String,
+    list: ItemsWithRegion(Expr.Span),
+    tuple: ItemsWithRegion(Expr.Span),
+    record: ItemsWithRegion(RecordField.Span),
+    tag: TagNode,
+    lambda: Expr.Lambda,
+    apply: Expr.Apply,
+    record_updater: Expr.RecordUpdater,
     field_access: BinOp,
     local_dispatch: BinOp,
     bin_op: BinOp,
     suffix_single_question: Unary,
     unary_op: Unary,
-    if_then_else: struct {
+    if_then_else: Expr.IfThenElse,
+    match: Expr.Match,
+    ident: Expr.Ident,
+    dbg: Expr.Dbg,
+    record_builder: RecordBuilder,
+    ellipsis: Underscore,
+    block: Body,
+    malformed: MalformedNode,
+
+    const Ident = struct {
+        token: Token.Idx,
+        qualifier: ?Token.Idx,
+        region: TokenizedRegion,
+    };
+
+    const StringPart = struct { // TODO: this should be more properly represented in its own union enum
+        token: Token.Idx,
+        region: TokenizedRegion,
+    };
+
+    const String = struct {
+        token: Token.Idx,
+        region: TokenizedRegion,
+        parts: Expr.Span,
+    };
+
+    const Lambda = struct {
+        args: Pattern.Span,
+        body: Expr.Idx,
+        region: TokenizedRegion,
+    };
+
+    const Apply = struct {
+        args: Expr.Span,
+        @"fn": Expr.Idx,
+        region: TokenizedRegion,
+    };
+
+    const RecordUpdater = struct { // TODO: This hasn't been implemented yet
+        token: Token.Idx,
+        region: TokenizedRegion,
+    };
+
+    const IfThenElse = struct {
         condition: Expr.Idx,
         then: Expr.Idx,
         @"else": Expr.Idx,
         region: TokenizedRegion,
-    },
-    match: struct {
+    };
+
+    const Match = struct {
         expr: Expr.Idx,
         branches: WhenBranch.Span,
         region: TokenizedRegion,
-    },
-    ident: struct {
-        token: Token.Idx,
-        qualifier: ?Token.Idx,
-        region: TokenizedRegion,
-    },
-    dbg: struct {
+    };
+
+    const Dbg = struct {
         expr: Expr.Idx,
         region: TokenizedRegion,
-    },
-    record_builder: struct {
+    };
+
+    const RecordBuilder = struct {
         mapper: Expr.Idx,
         fields: RecordField.Idx,
         region: TokenizedRegion,
-    },
-    ellipsis: struct {
-        region: TokenizedRegion,
-    },
-    block: Body,
-    malformed: struct {
-        reason: Diagnostic.Tag,
-        region: TokenizedRegion,
-    },
+    };
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
@@ -2074,4 +2049,35 @@ pub const WhenBranch = struct {
         node.appendNode(env.gpa, &body);
         return node;
     }
+};
+
+pub const Untyped = union(enum) {
+    record: Untyped.Record,
+    ident: TokenWithRegion,
+    tag: Untyped.Tag,
+    list: Untyped.List,
+    tuple: Untyped.Tuple,
+    int: TokenWithRegion,
+    frac: TokenWithRegion,
+    string: Untyped.String,
+
+    const Record = struct {
+        fields: Untyped.RecordField.Span,
+    };
+
+    const Tag = struct {};
+
+    const List = struct {};
+
+    const Tuple = struct {};
+
+    const String = struct {};
+
+    const Idx = enum(u32) { _ };
+    const Span = struct { span: base.DataSpan };
+
+    const RecordField = struct {
+        const Idx = enum(u32) { _ };
+        const Span = struct { span: base.DataSpan };
+    };
 };
