@@ -221,14 +221,13 @@ pub const Problem = union(enum) {
         const owned_incompatible_type = try report.addOwnedString(buf.items);
 
         // Add description
-        const first_ordinal = try ordinalString(gpa, data.first_elem_index + 1);
-        defer gpa.free(first_ordinal);
-        const second_ordinal = try ordinalString(gpa, data.incompatible_elem_index + 1);
-        defer gpa.free(second_ordinal);
-
-        const description = try std.fmt.allocPrint(gpa, "The {s} and {s} elements in this list have incompatible types:", .{ first_ordinal, second_ordinal });
-        defer gpa.free(description);
-        const owned_description = try report.addOwnedString(description);
+        buf.clearRetainingCapacity();
+        try buf.appendSlice("The ");
+        try appendOrdinal(buf, data.first_elem_index + 1);
+        try buf.appendSlice(" and ");
+        try appendOrdinal(buf, data.incompatible_elem_index + 1);
+        try buf.appendSlice(" elements in this list have incompatible types:");
+        const owned_description = try report.addOwnedString(buf.items);
         try report.document.addText(owned_description);
         try report.document.addLineBreak();
 
@@ -261,9 +260,11 @@ pub const Problem = union(enum) {
         try report.document.addLineBreak();
 
         // Show the type of the first element
-        const first_type_desc = try std.fmt.allocPrint(gpa, "The {s} element has this type:", .{first_ordinal});
-        defer gpa.free(first_type_desc);
-        const owned_first_type_desc = try report.addOwnedString(first_type_desc);
+        buf.clearRetainingCapacity();
+        try buf.appendSlice("The ");
+        try appendOrdinal(buf, data.first_elem_index + 1);
+        try buf.appendSlice(" element has this type:");
+        const owned_first_type_desc = try report.addOwnedString(buf.items);
         try report.document.addText(owned_first_type_desc);
         try report.document.addLineBreak();
         try report.document.addText("    ");
@@ -272,9 +273,11 @@ pub const Problem = union(enum) {
         try report.document.addLineBreak();
 
         // Show the type of the second element
-        const second_type_desc = try std.fmt.allocPrint(gpa, "However, the {s} element has this type:", .{second_ordinal});
-        defer gpa.free(second_type_desc);
-        const owned_second_type_desc = try report.addOwnedString(second_type_desc);
+        buf.clearRetainingCapacity();
+        try buf.appendSlice("However, the ");
+        try appendOrdinal(buf, data.incompatible_elem_index + 1);
+        try buf.appendSlice(" element has this type:");
+        const owned_second_type_desc = try report.addOwnedString(buf.items);
         try report.document.addText(owned_second_type_desc);
         try report.document.addLineBreak();
         try report.document.addText("    ");
@@ -409,29 +412,28 @@ pub const Problem = union(enum) {
         return report;
     }
 
-    fn ordinalString(allocator: Allocator, n: usize) ![]u8 {
-        const suffix = switch (n) {
-            1 => "st",
-            2 => "nd",
-            3 => "rd",
-            else => blk: {
-                // For numbers ending in 1, 2, or 3 (except 11, 12, 13), use st, nd, rd
-                const last_digit = n % 10;
-                const last_two_digits = n % 100;
-                if (last_two_digits >= 11 and last_two_digits <= 13) {
-                    break :blk "th"; // 11th, 12th, 13th
-                } else if (last_digit == 1) {
-                    break :blk "st"; // 21st, 31st, etc.
-                } else if (last_digit == 2) {
-                    break :blk "nd"; // 22nd, 32nd, etc.
-                } else if (last_digit == 3) {
-                    break :blk "rd"; // 23rd, 33rd, etc.
-                } else {
-                    break :blk "th"; // 4th, 5th, ... 20th, 24th, etc.
-                }
+    fn appendOrdinal(buf: *std.ArrayList(u8), n: usize) !void {
+        switch (n) {
+            1 => try buf.appendSlice("first"),
+            2 => try buf.appendSlice("second"),
+            3 => try buf.appendSlice("third"),
+            4 => try buf.appendSlice("fourth"),
+            5 => try buf.appendSlice("fifth"),
+            6 => try buf.appendSlice("sixth"),
+            7 => try buf.appendSlice("seventh"),
+            8 => try buf.appendSlice("eighth"),
+            9 => try buf.appendSlice("ninth"),
+            10 => try buf.appendSlice("tenth"),
+            else => {
+                const suffix = if (n >= 11 and n <= 13) "th" else switch (n % 10) {
+                    1 => "st",
+                    2 => "nd",
+                    3 => "rd",
+                    else => "th",
+                };
+                try buf.writer().print("{d}{s}", .{ n, suffix });
             },
-        };
-        return std.fmt.allocPrint(allocator, "{d}{s}", .{ n, suffix });
+        }
     }
 };
 

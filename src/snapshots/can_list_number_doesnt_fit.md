@@ -15,17 +15,17 @@ This number literal is not valid: 1u8
 This number literal is not valid: 2u8
 
 **INCOMPATIBLE LIST ELEMENTS**
-The 1st and 2nd elements in this list have incompatible types:
+The first and second elements in this list have incompatible types:
 **can_list_number_doesnt_fit.md:1:2:1:10:**
 ```roc
 [1u8, 2u8, 300]
 ```
  ^^^^^^^^
 
-The 1st element has this type:
+The first element has this type:
     _Error_
 
-However, the 2nd element has this type:
+However, the second element has this type:
     _Error_
 
 All elements in a list must have compatible types.
