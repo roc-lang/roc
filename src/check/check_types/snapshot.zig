@@ -42,7 +42,7 @@ pub const Store = struct {
     // Backing arrays for ranges (like Store)
     alias_args: SnapshotContentIdxSafeList,
     tuple_elems: SnapshotContentIdxSafeList,
-    custom_type_args: SnapshotContentIdxSafeList,
+    nominal_type_args: SnapshotContentIdxSafeList,
     func_args: SnapshotContentIdxSafeList,
     record_fields: SnapshotRecordFieldSafeList,
     tags: SnapshotTagSafeList,
@@ -54,7 +54,7 @@ pub const Store = struct {
             .contents = SnapshotContentList.initCapacity(gpa, capacity),
             .alias_args = SnapshotContentIdxSafeList.initCapacity(gpa, capacity),
             .tuple_elems = SnapshotContentIdxSafeList.initCapacity(gpa, capacity),
-            .custom_type_args = SnapshotContentIdxSafeList.initCapacity(gpa, capacity),
+            .nominal_type_args = SnapshotContentIdxSafeList.initCapacity(gpa, capacity),
             .func_args = SnapshotContentIdxSafeList.initCapacity(gpa, capacity),
             .record_fields = SnapshotRecordFieldSafeList.initCapacity(gpa, capacity),
             .tags = SnapshotTagSafeList.initCapacity(gpa, capacity),
@@ -66,7 +66,7 @@ pub const Store = struct {
         self.contents.deinit(self.gpa);
         self.alias_args.deinit(self.gpa);
         self.tuple_elems.deinit(self.gpa);
-        self.custom_type_args.deinit(self.gpa);
+        self.nominal_type_args.deinit(self.gpa);
         self.func_args.deinit(self.gpa);
         self.record_fields.deinit(self.gpa);
         self.tags.deinit(self.gpa);
@@ -87,24 +87,24 @@ pub const Store = struct {
             .alias => |alias| SnapshotContent{ .alias = self.deepCopyAlias(store, alias, var_) },
             .effectful => SnapshotContent.effectful,
             .pure => SnapshotContent.pure,
-            .structure => |flat_type| SnapshotContent{ .structure = self.deepCopyFlatType(store, flat_type) },
+            .structure => |flat_type| SnapshotContent{ .structure = self.deepCopyFlatType(store, flat_type, var_) },
             .err => SnapshotContent.err,
         };
 
         return self.contents.append(self.gpa, deep_content);
     }
 
-    fn deepCopyFlatType(self: *Self, store: *const TypesStore, flat_type: types.FlatType) SnapshotFlatType {
+    fn deepCopyFlatType(self: *Self, store: *const TypesStore, flat_type: types.FlatType, var_: types.Var) SnapshotFlatType {
         return switch (flat_type) {
             .str => SnapshotFlatType.str,
-            .box => |var_| {
-                const resolved = store.resolveVar(var_);
-                const deep_content = self.deepCopyContent(store, resolved.desc.content, var_);
+            .box => |box_var| {
+                const resolved = store.resolveVar(box_var);
+                const deep_content = self.deepCopyContent(store, resolved.desc.content, box_var);
                 return SnapshotFlatType{ .box = deep_content };
             },
-            .list => |var_| {
-                const resolved = store.resolveVar(var_);
-                const deep_content = self.deepCopyContent(store, resolved.desc.content, var_);
+            .list => |list_var| {
+                const resolved = store.resolveVar(list_var);
+                const deep_content = self.deepCopyContent(store, resolved.desc.content, list_var);
                 return SnapshotFlatType{ .list = deep_content };
             },
             .list_unbound => {
@@ -113,7 +113,7 @@ pub const Store = struct {
             .tuple => |tuple| SnapshotFlatType{ .tuple = self.deepCopyTuple(store, tuple) },
             .tuple_unbound => |tuple| SnapshotFlatType{ .tuple_unbound = self.deepCopyTuple(store, tuple) },
             .num => |num| SnapshotFlatType{ .num = self.deepCopyNum(store, num) },
-            .custom_type => |custom_type| SnapshotFlatType{ .custom_type = self.deepCopyCustomType(store, custom_type) },
+            .nominal_type => |nominal_type| SnapshotFlatType{ .nominal_type = self.deepCopyNominalType(store, nominal_type, var_) },
             .func => |func| SnapshotFlatType{ .func = self.deepCopyFunc(store, func) },
             .record => |record| SnapshotFlatType{ .record = self.deepCopyRecord(store, record) },
             .record_unbound => |record| SnapshotFlatType{ .record_unbound = self.deepCopyRecord(store, record) },
@@ -212,27 +212,26 @@ pub const Store = struct {
         }
     }
 
-    fn deepCopyCustomType(self: *Self, store: *const TypesStore, custom_type: types.CustomType) SnapshotCustomType {
-        const args_slice = store.getCustomTypeArgsSlice(custom_type.args);
+    fn deepCopyNominalType(self: *Self, store: *const TypesStore, nominal_type: types.NominalType, nominal_var: types.Var) SnapshotNominalType {
+        // Mark starting position in the centralized array
+        const start_idx = self.nominal_type_args.len();
 
-        // Mark starting position
-        const start_idx = self.custom_type_args.len();
-
-        // Iterate and append directly
-        for (args_slice) |arg_var| {
+        // // Iterate and append directly
+        var arg_iter = nominal_type.argIterator(nominal_var);
+        while (arg_iter.next()) |arg_var| {
             const arg_resolved = store.resolveVar(arg_var);
             const deep_arg = self.deepCopyContent(store, arg_resolved.desc.content, arg_var);
-            _ = self.custom_type_args.append(self.gpa, deep_arg);
+            _ = self.nominal_type_args.append(self.gpa, deep_arg);
         }
 
         // Create range
         const args_range = SnapshotContentIdxSafeList.Range{
             .start = @enumFromInt(start_idx),
-            .end = @enumFromInt(self.custom_type_args.len()),
+            .end = @enumFromInt(self.nominal_type_args.len()),
         };
 
-        return SnapshotCustomType{
-            .ident = custom_type.ident,
+        return SnapshotNominalType{
+            .ident = nominal_type.ident,
             .args = args_range,
         };
     }
@@ -368,8 +367,8 @@ pub const Store = struct {
         return self.tuple_elems.rangeToSlice(range);
     }
 
-    pub fn getCustomTypeArgsSlice(self: *const Self, range: SnapshotContentIdxSafeList.Range) []const SnapshotContentIdx {
-        return self.custom_type_args.rangeToSlice(range);
+    pub fn getNominalTypeArgsSlice(self: *const Self, range: SnapshotContentIdxSafeList.Range) []const SnapshotContentIdx {
+        return self.nominal_type_args.rangeToSlice(range);
     }
 
     pub fn getFuncArgsSlice(self: *const Self, range: SnapshotContentIdxSafeList.Range) []const SnapshotContentIdx {
@@ -419,7 +418,7 @@ pub const SnapshotFlatType = union(enum) {
     tuple: SnapshotTuple,
     tuple_unbound: SnapshotTuple,
     num: SnapshotNum,
-    custom_type: SnapshotCustomType,
+    nominal_type: SnapshotNominalType,
     func: SnapshotFunc,
     record: SnapshotRecord,
     record_unbound: SnapshotRecord,
@@ -447,9 +446,9 @@ pub const SnapshotNum = union(enum) {
 };
 
 /// TODO
-pub const SnapshotCustomType = struct {
+pub const SnapshotNominalType = struct {
     ident: types.TypeIdent,
-    args: SnapshotContentIdxSafeList.Range, // Range into SnapshotStore.custom_type_args
+    args: SnapshotContentIdxSafeList.Range, // Range into SnapshotStore.nominal_type_args
 };
 
 /// TODO
@@ -575,8 +574,8 @@ pub const SnapshotWriter = struct {
             .num => |num| {
                 try self.writeNum(num);
             },
-            .custom_type => |custom_type| {
-                try self.writeCustomType(custom_type);
+            .nominal_type => |nominal_type| {
+                try self.writeNominalType(nominal_type);
             },
             .func => |func| {
                 try self.writeFunc(func);
@@ -610,10 +609,10 @@ pub const SnapshotWriter = struct {
         _ = try self.writer.write(")");
     }
 
-    /// Write a custom type
-    pub fn writeCustomType(self: *Self, custom_type: SnapshotCustomType) Allocator.Error!void {
-        _ = try self.writer.write(self.idents.getText(custom_type.ident.ident_idx));
-        const args = self.snapshots.getCustomTypeArgsSlice(custom_type.args);
+    /// Write a nominal type
+    pub fn writeNominalType(self: *Self, nominal_type: SnapshotNominalType) Allocator.Error!void {
+        _ = try self.writer.write(self.idents.getText(nominal_type.ident.ident_idx));
+        const args = self.snapshots.getNominalTypeArgsSlice(nominal_type.args);
         if (args.len > 0) {
             _ = try self.writer.write("(");
             for (args, 0..) |arg, i| {

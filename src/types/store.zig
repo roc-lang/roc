@@ -54,7 +54,6 @@ pub const Store = struct {
 
     // Everything else
     tuple_elems: VarSafeList,
-    custom_type_args: VarSafeList,
     func_args: VarSafeList,
     record_fields: RecordFieldSafeMultiList,
     tags: TagSafeMultiList,
@@ -77,7 +76,6 @@ pub const Store = struct {
 
             // everything else
             .tuple_elems = VarSafeList.initCapacity(gpa, child_capacity),
-            .custom_type_args = VarSafeList.initCapacity(gpa, child_capacity),
             .func_args = VarSafeList.initCapacity(gpa, child_capacity),
             .record_fields = RecordFieldSafeMultiList.initCapacity(gpa, child_capacity),
             .tags = TagSafeMultiList.initCapacity(gpa, child_capacity),
@@ -99,7 +97,6 @@ pub const Store = struct {
 
         // everything else
         self.tuple_elems.deinit(self.gpa);
-        self.custom_type_args.deinit(self.gpa);
         self.func_args.deinit(self.gpa);
         self.record_fields.deinit(self.gpa);
         self.tags.deinit(self.gpa);
@@ -261,11 +258,6 @@ pub const Store = struct {
         return self.tuple_elems.appendSlice(self.gpa, slice);
     }
 
-    /// Append a slice of type apply args to the backing list, returning the range
-    pub fn appendCustomTypeArgs(self: *Self, slice: []const Var) VarSafeList.Range {
-        return self.custom_type_args.appendSlice(self.gpa, slice);
-    }
-
     /// Append a slice of func args to the backing list, returning the range
     pub fn appendFuncArgs(self: *Self, slice: []const Var) VarSafeList.Range {
         return self.func_args.appendSlice(self.gpa, slice);
@@ -291,11 +283,6 @@ pub const Store = struct {
     /// Given a range, get a slice of tuple from the backing list
     pub fn getTupleElemsSlice(self: *const Self, range: VarSafeList.Range) VarSafeList.Slice {
         return self.tuple_elems.rangeToSlice(range);
-    }
-
-    /// Given a range, get a slice of type from to the backing
-    pub fn getCustomTypeArgsSlice(self: *const Self, range: VarSafeList.Range) VarSafeList.Slice {
-        return self.custom_type_args.rangeToSlice(range);
     }
 
     /// Given a range, get a slice of func from the backing list
