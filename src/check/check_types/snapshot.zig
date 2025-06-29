@@ -128,8 +128,9 @@ pub const Store = struct {
         const start_idx = self.alias_args.len();
 
         // Iterate and append directly to centralized array
-        for (0..alias.num_args) |i| {
-            const arg_var = alias.getArgVar(alias_var, i);
+        // Copy all argument vars using iterator
+        var arg_iter = alias.argIterator(alias_var);
+        while (arg_iter.next()) |arg_var| {
             const arg_resolved = store.resolveVar(arg_var);
             const deep_arg = self.deepCopyContent(store, arg_resolved.desc.content, arg_var);
             _ = self.alias_args.append(self.gpa, deep_arg);

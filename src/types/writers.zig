@@ -121,10 +121,11 @@ pub const TypeWriter = struct {
         _ = try self.writer.write(self.env.idents.getText(alias.ident.ident_idx));
         if (alias.num_args > 0) {
             _ = try self.writer.write("(");
-            // Use helper method to get argument vars
-            for (0..alias.num_args) |i| {
-                if (i > 0) _ = try self.writer.write(", ");
-                const arg_var = alias.getArgVar(alias_var, i);
+            var arg_iter = alias.argIterator(alias_var);
+            var first = true;
+            while (arg_iter.next()) |arg_var| {
+                if (!first) _ = try self.writer.write(", ");
+                first = false;
                 try self.writeVar(arg_var);
             }
             _ = try self.writer.write(")");

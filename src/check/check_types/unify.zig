@@ -526,10 +526,11 @@ const Unifier = struct {
             return error.TypeMismatch;
         }
 
-        // Unify each pair of arguments using helper methods
-        for (0..a_alias.num_args) |i| {
-            const a_arg = a_alias.getArgVar(vars.a.var_, i);
-            const b_arg = b_alias.getArgVar(vars.b.var_, i);
+        // Unify each pair of arguments using iterators
+        var a_iter = a_alias.argIterator(vars.a.var_);
+        var b_iter = b_alias.argIterator(vars.b.var_);
+        while (a_iter.next()) |a_arg| {
+            const b_arg = b_iter.next().?; // Safe because we checked num_args match
             try self.unifyGuarded(a_arg, b_arg);
         }
 

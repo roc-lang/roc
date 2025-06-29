@@ -209,11 +209,12 @@ const CheckOccurs = struct {
                     }
                 },
                 .alias => |alias| {
-                    // Check alias args and backing var
-                    for (0..alias.num_args) |i| {
-                        const arg_var = alias.getArgVar(var_, i);
+                    // Check all argument vars using iterator
+                    var arg_iter = alias.argIterator(var_);
+                    while (arg_iter.next()) |arg_var| {
                         try self.occursSubVar(root, arg_var, ctx);
                     }
+                    // Check backing var using helper method
                     const backing_var = alias.getBackingVar(var_);
                     try self.occursSubVar(root, backing_var, ctx);
                 },

@@ -161,21 +161,6 @@ pub const Alias = struct {
         return backing_var;
     }
 
-    /// Get the argument var at the given index for this alias given the alias var
-    pub fn getArgVar(self: Alias, alias_var: Var, arg_index: usize) Var {
-        std.debug.assert(arg_index < self.num_args);
-        const arg_var = @as(Var, @enumFromInt(@intFromEnum(alias_var) + 2 + arg_index));
-
-        // Debug assertion: verify the arg var index is reasonable
-        if (std.debug.runtime_safety) {
-            // Should be after backing var
-            const backing_var = self.getBackingVar(alias_var);
-            std.debug.assert(@intFromEnum(arg_var) > @intFromEnum(backing_var));
-        }
-
-        return arg_var;
-    }
-
     /// Iterator for getting all argument vars
     pub const ArgIterator = struct {
         alias_var: Var,
