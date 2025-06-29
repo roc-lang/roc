@@ -3,6 +3,7 @@ const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const base = @import("base.zig");
 const canonicalize = @import("check/canonicalize.zig");
+const types_mod = @import("types.zig");
 const Solver = @import("check/check_types.zig");
 const CIR = canonicalize.CIR;
 const parse = @import("check/parse.zig");
@@ -989,6 +990,41 @@ fn generateTypesSection(output: *DualOutput, content: *const Content, can_ir: *C
     try output.end_section();
 }
 
+/// Generate TYPES section displaying types store for both markdown and HTML
+/// This is used for debugging.
+fn generateTypesStoreSection(gpa: std.mem.Allocator, output: *DualOutput, can_ir: *CIR) !void {
+    var solved = std.ArrayList(u8).init(output.gpa);
+    defer solved.deinit();
+
+    try types_mod.writers.SExprWriter.allVarsToSExprStr(solved.writer().any(), gpa, can_ir.env);
+
+    // Markdown TYPES section
+    try output.md_writer.writeAll(Section.TYPES);
+    try output.md_writer.writeAll(solved.items);
+    try output.md_writer.writeAll("\n");
+    try output.md_writer.writeAll(Section.SECTION_END[0 .. Section.SECTION_END.len - 1]);
+
+    // HTML TYPES section
+    try output.html_writer.writeAll(
+        \\        <div class="section">
+        \\            <div class="section-header">TYPES</div>
+        \\            <div class="section-content">
+        \\                <pre>
+    );
+
+    // Escape HTML in types content
+    for (solved.items) |char| {
+        try escapeHtmlChar(output.html_writer, char);
+    }
+
+    try output.html_writer.writeAll(
+        \\</pre>
+        \\            </div>
+        \\        </div>
+        \\
+    );
+}
+
 /// Generate HTML document structure and JavaScript
 fn generateHtmlWrapper(output: *DualOutput, content: *const Content) !void {
     // Write HTML document structure
@@ -1208,6 +1244,8 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, maybe_f
     try generateFormattedSection(&output, &content, &parse_ast);
     try generateCanonicalizeSection(&output, &content, &can_ir, &module_env, maybe_expr_idx);
     try generateTypesSection(&output, &content, &can_ir, maybe_expr_idx);
+    // TODO: Include to emit entire types store. Can be helpful for debugging
+    // try generateTypesStoreSection(gpa, &output, &can_ir);
 
     // Generate HTML closing
     try generateHtmlClosing(&output);

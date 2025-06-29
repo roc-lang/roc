@@ -44,7 +44,7 @@ Foo(a, b) : (a, b, Str, U64)
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-type-decl @3-1-3-25 (id 80)
+	(s-type-decl @3-1-3-25 (id 81)
 		(ty-header @3-1-3-9 (name "Foo")
 			(ty-args
 				(ty-var @3-5-3-6 (name "a"))

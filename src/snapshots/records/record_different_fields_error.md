@@ -345,7 +345,7 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1-1-8-2 (id 109)
+(e-block @1-1-8-2 (id 110)
 	(s-type-anno @2-5-2-39 (name "_privateField")
 		(ty-malformed @2-20-2-39))
 	(s-type-anno @3-5-3-33 (name "field_")
@@ -375,5 +375,5 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 109) (type "*"))
+(expr (id 110) (type "{}"))
 ~~~

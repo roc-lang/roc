@@ -40,7 +40,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-record @1-1-1-86 (ext-var 88) (id 89)
+(e-record @1-1-1-86 (ext-var 89) (id 90)
 	(fields
 		(field (name "name")
 			(e-string @1-9-1-16
@@ -50,7 +50,7 @@ NO CHANGE
 		(field (name "active")
 			(e-runtime-error (tag "ident_not_in_scope")))
 		(field (name "scores")
-			(e-list @1-54-1-66 (elem-var 83)
+			(e-list @1-54-1-66 (elem-var 84)
 				(elems
 					(e-int @1-55-1-57 (value "95"))
 					(e-int @1-59-1-61 (value "87"))
@@ -60,5 +60,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 89) (type "{ name: Str, age: Num(*), active: Error, scores: List(Num(*)), balance: Frac(*) }"))
+(expr (id 90) (type "{ name: Str, age: Num(*), active: Error, scores: List(Num(*)), balance: Frac(*) }"))
 ~~~

@@ -29,12 +29,12 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-string @1-1-1-17 (id 76)
+(e-string @1-1-1-17 (id 77)
 	(e-literal @1-2-1-8 (string "Hello "))
 	(e-runtime-error (tag "ident_not_in_scope"))
 	(e-literal @1-15-1-16 (string "!")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 76) (type "Str"))
+(expr (id 77) (type "Str"))
 ~~~

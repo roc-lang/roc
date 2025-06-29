@@ -95,46 +95,46 @@ main! = |_| {}
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 106)
-		(p-assign @4-1-4-6 (ident "outer") (id 77))
-		(e-lambda @4-9-9-2 (id 98)
+	(d-let (id 107)
+		(p-assign @4-1-4-6 (ident "outer") (id 78))
+		(e-lambda @4-9-9-2 (id 99)
 			(args
-				(p-assign @4-10-4-11 (ident "x") (id 78)))
+				(p-assign @4-10-4-11 (ident "x") (id 79)))
 			(e-block @4-13-9-2
 				(s-type-anno @5-5-6-10 (name "inner")
 					(ty-fn @5-13-5-19 (effectful false)
 						(ty-var @5-13-5-14 (name "a"))
 						(ty-var @5-18-5-19 (name "a"))))
 				(s-let @6-5-6-18
-					(p-assign @6-5-6-10 (ident "inner") (id 86))
-					(e-lambda @6-13-6-18 (id 90)
+					(p-assign @6-5-6-10 (ident "inner") (id 87))
+					(e-lambda @6-13-6-18 (id 91)
 						(args
-							(p-assign @6-14-6-15 (ident "y") (id 87)))
+							(p-assign @6-14-6-15 (ident "y") (id 88)))
 						(e-lookup-local @6-17-6-18
-							(pattern (id 87)))))
+							(pattern (id 88)))))
 				(e-call @8-5-8-13
 					(e-lookup-local @8-5-8-10
-						(pattern (id 86)))
+						(pattern (id 87)))
 					(e-lookup-local @8-11-8-12
-						(pattern (id 78))))))
-		(annotation @4-1-4-6 (signature 104) (id 105)
+						(pattern (id 79))))))
+		(annotation @4-1-4-6 (signature 105) (id 106)
 			(declared-type
 				(ty-fn @3-9-3-15 (effectful false)
 					(ty-var @3-9-3-10 (name "a"))
 					(ty-var @3-14-3-15 (name "a"))))))
-	(d-let (id 112)
-		(p-assign @11-1-11-6 (ident "main!") (id 107))
-		(e-lambda @11-9-11-15 (id 111)
+	(d-let (id 113)
+		(p-assign @11-1-11-6 (ident "main!") (id 108))
+		(e-lambda @11-9-11-15 (id 112)
 			(args
-				(p-underscore @11-10-11-11 (id 108)))
+				(p-underscore @11-10-11-11 (id 109)))
 			(e-empty_record @11-13-11-15))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "outer") (def_var 106) (type "a -> a"))
-		(d_assign (name "main!") (def_var 112) (type "* ? {}")))
+		(d_assign (name "outer") (def_var 107) (type "a -> a"))
+		(d_assign (name "main!") (def_var 113) (type "* ? {}")))
 	(expressions
 		(expr @4-9-9-2 (type "a -> a"))
 		(expr @11-9-11-15 (type "* ? {}"))))

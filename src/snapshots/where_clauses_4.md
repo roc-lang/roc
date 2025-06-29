@@ -51,7 +51,7 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-import @3-1-3-32 (module "Decode") (id 73)
+	(s-import @3-1-3-32 (module "Decode") (id 74)
 		(exposes
 			(exposed (name "Decode") (wildcard false)))))
 ~~~

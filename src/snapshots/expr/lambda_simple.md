@@ -28,15 +28,15 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-lambda @1-1-1-10 (id 77)
+(e-lambda @1-1-1-10 (id 78)
 	(args
-		(p-assign @1-2-1-3 (ident "x") (id 72)))
+		(p-assign @1-2-1-3 (ident "x") (id 73)))
 	(e-binop @1-5-1-10 (op "add")
 		(e-lookup-local @1-5-1-6
-			(pattern (id 72)))
+			(pattern (id 73)))
 		(e-int @1-9-1-10 (value "1"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 77) (type "* ? *"))
+(expr (id 78) (type "* ? *"))
 ~~~

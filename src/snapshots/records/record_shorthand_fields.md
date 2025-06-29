@@ -42,7 +42,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-record @1-1-1-29 (ext-var 84) (id 85)
+(e-record @1-1-1-29 (ext-var 85) (id 86)
 	(fields
 		(field (name "name")
 			(e-runtime-error (tag "ident_not_in_scope")))
@@ -55,5 +55,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 85) (type "{ name: Error, age: Error, email: Error, active: Error }"))
+(expr (id 86) (type "{ name: Error, age: Error, email: Error, active: Error }"))
 ~~~

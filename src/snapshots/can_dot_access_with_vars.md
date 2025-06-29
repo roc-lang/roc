@@ -55,32 +55,32 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1-1-5-2 (id 90)
+(e-block @1-1-5-2 (id 91)
 	(s-let @2-5-2-21
-		(p-assign @2-5-2-9 (ident "list") (id 72))
-		(e-list @2-12-2-21 (elem-var 76) (id 77)
+		(p-assign @2-5-2-9 (ident "list") (id 73))
+		(e-list @2-12-2-21 (elem-var 77) (id 78)
 			(elems
 				(e-int @2-13-2-14 (value "1"))
 				(e-int @2-16-2-17 (value "2"))
 				(e-int @2-19-2-20 (value "3")))))
 	(s-let @3-5-4-9
-		(p-assign @3-5-3-7 (ident "fn") (id 79))
-		(e-lambda @3-10-4-9 (id 85)
+		(p-assign @3-5-3-7 (ident "fn") (id 80))
+		(e-lambda @3-10-4-9 (id 86)
 			(args
-				(p-assign @3-11-3-12 (ident "x") (id 80)))
+				(p-assign @3-11-3-12 (ident "x") (id 81)))
 			(e-binop @3-14-4-9 (op "add")
 				(e-lookup-local @3-14-3-15
-					(pattern (id 80)))
+					(pattern (id 81)))
 				(e-int @3-18-3-19 (value "1")))))
 	(e-dot-access @4-5-5-2 (field "map")
 		(receiver
 			(e-lookup-local @4-5-4-9
-				(pattern (id 72))))
+				(pattern (id 73))))
 		(args
 			(e-lookup-local @4-14-4-16
-				(pattern (id 79))))))
+				(pattern (id 80))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 90) (type "*"))
+(expr (id 91) (type "*"))
 ~~~

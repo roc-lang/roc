@@ -77,14 +77,14 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 91)
-		(p-assign @4-1-4-8 (ident "process") (id 78))
-		(e-lambda @4-11-4-27 (id 83)
+	(d-let (id 92)
+		(p-assign @4-1-4-8 (ident "process") (id 79))
+		(e-lambda @4-11-4-27 (id 84)
 			(args
-				(p-assign @4-12-4-17 (ident "maybe") (id 79)))
+				(p-assign @4-12-4-17 (ident "maybe") (id 80)))
 			(e-string @4-19-4-27
 				(e-literal @4-20-4-26 (string "result"))))
-		(annotation @4-1-4-8 (signature 89) (id 90)
+		(annotation @4-1-4-8 (signature 90) (id 91)
 			(declared-type
 				(ty-fn @3-11-3-35 (effectful false)
 					(ty-tag-union @3-11-3-28
@@ -92,19 +92,19 @@ NO CHANGE
 							(ty @3-17-3-20 (name "Str")))
 						(ty @3-23-3-27 (name "None")))
 					(ty @3-32-3-35 (name "Str"))))))
-	(d-let (id 97)
-		(p-assign @6-1-6-6 (ident "main!") (id 92))
-		(e-lambda @6-9-6-15 (id 96)
+	(d-let (id 98)
+		(p-assign @6-1-6-6 (ident "main!") (id 93))
+		(e-lambda @6-9-6-15 (id 97)
 			(args
-				(p-underscore @6-10-6-11 (id 93)))
+				(p-underscore @6-10-6-11 (id 94)))
 			(e-empty_record @6-13-6-15))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "process") (def_var 91) (type "* -> Str"))
-		(d_assign (name "main!") (def_var 97) (type "* ? {}")))
+		(d_assign (name "process") (def_var 92) (type "* -> Str"))
+		(d_assign (name "main!") (def_var 98) (type "* ? {}")))
 	(expressions
 		(expr @4-11-4-27 (type "* -> Str"))
 		(expr @6-9-6-15 (type "* ? {}"))))

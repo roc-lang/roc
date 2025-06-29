@@ -34,9 +34,9 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-let @1-1-1-64 (id 86)
-		(p-assign @1-1-1-7 (ident "person") (id 72))
-		(e-record @1-10-1-64 (ext-var 81) (id 82)
+	(s-let @1-1-1-64 (id 87)
+		(p-assign @1-1-1-7 (ident "person") (id 73))
+		(e-record @1-10-1-64 (ext-var 82) (id 83)
 			(fields
 				(field (name "name")
 					(e-string @1-18-1-25

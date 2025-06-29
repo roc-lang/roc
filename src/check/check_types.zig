@@ -277,7 +277,39 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
             }
         },
         .e_when => |_| {},
-        .e_if => |_| {},
+        .e_if => |if_expr| {
+            // Check branches
+            for (self.can_ir.store.sliceIfBranches(if_expr.branches)) |if_branch_idx| {
+                const if_branch = self.can_ir.store.getIfBranch(if_branch_idx);
+
+                // Check the branch's condition
+                self.checkExpr(if_branch.cond);
+                self.unify(
+                    @enumFromInt(@intFromEnum(can.BUILTIN_BOOL)),
+                    @enumFromInt(@intFromEnum(if_branch.cond)),
+                );
+
+                // Check the branch's body
+                self.checkExpr(if_branch.body);
+                self.unify(
+                    @enumFromInt(@intFromEnum(if_expr.branch_var)),
+                    @enumFromInt(@intFromEnum(if_branch.body)),
+                );
+            }
+
+            // Check the final else
+            self.checkExpr(if_expr.final_else);
+            self.unify(
+                @enumFromInt(@intFromEnum(if_expr.branch_var)),
+                @enumFromInt(@intFromEnum(if_expr.final_else)),
+            );
+
+            // Then, unify the root expression with the final else
+            self.unify(
+                @enumFromInt(@intFromEnum(if_expr.final_else)),
+                @enumFromInt(@intFromEnum(expr_idx)),
+            );
+        },
         .e_call => |call| {
             // Get all expressions - first is function, rest are arguments
             const all_exprs = self.can_ir.store.sliceExpr(call.args);
@@ -398,6 +430,12 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
 
             // Check the final expression
             self.checkExpr(block.final_expr);
+
+            // Link the root expr with the final expr
+            self.unify(
+                @enumFromInt(@intFromEnum(expr_idx)),
+                @enumFromInt(@intFromEnum(block.final_expr)),
+            );
         },
         .e_lambda => |lambda| {
             // Check the lambda body

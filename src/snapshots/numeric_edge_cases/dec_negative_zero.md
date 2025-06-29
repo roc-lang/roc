@@ -23,9 +23,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dec-small @1-1-1-5 (numerator "0") (denominator-power-of-ten "0") (value "0.0") (id 72))
+(e-dec-small @1-1-1-5 (numerator "0") (denominator-power-of-ten "0") (value "0.0") (id 73))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 72) (type "Frac(*)"))
+(expr (id 73) (type "Frac(*)"))
 ~~~

@@ -50,15 +50,15 @@ topLevelVar_ = 0
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 74)
-		(p-assign @4-5-4-17 (ident "topLevelVar_") (id 72))
-		(e-int @4-20-4-21 (value "0") (id 73))))
+	(d-let (id 75)
+		(p-assign @4-5-4-17 (ident "topLevelVar_") (id 73))
+		(e-int @4-20-4-21 (value "0") (id 74))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "topLevelVar_") (def_var 74) (type "Num(*)")))
+		(d_assign (name "topLevelVar_") (def_var 75) (type "Num(*)")))
 	(expressions
 		(expr @4-20-4-21 (type "Num(*)"))))
 ~~~

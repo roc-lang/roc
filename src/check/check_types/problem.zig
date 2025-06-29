@@ -48,6 +48,7 @@ pub const Problem = union(enum) {
         source: []const u8,
         filename: []const u8,
     ) !Report {
+        buf.clearRetainingCapacity();
         var snapshot_writer = snapshot.SnapshotWriter.init(
             buf.writer(),
             snapshots,
