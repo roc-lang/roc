@@ -115,7 +115,7 @@ pub const TypeWriter = struct {
             var arg_iter = alias.argIterator(alias_var);
             // Write first arg without comma
             const first_arg = arg_iter.next();
-            std.debug.assert(first_arg != null); // It shouldn't be null becasue we checked num_args > 0
+            std.debug.assert(first_arg != null); // It shouldn't be null because we checked num_args > 0
             try self.writeVar(first_arg.?);
             // Write remaining args with comma prefix
             while (arg_iter.next()) |arg_var| {
