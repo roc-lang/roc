@@ -32,7 +32,7 @@ fn parseAndCanonicalizeInt(allocator: std.mem.Allocator, source: []const u8) !st
     can.* = canonicalize.init(cir, parse_ast);
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-    const canonical_expr_idx = can.canonicalize_expr(expr_idx) orelse {
+    const canonical_expr_idx = try can.canonicalize_expr(expr_idx) orelse {
         const diagnostic_idx = cir.store.addDiagnostic(.{ .not_implemented = .{
             .feature = cir.env.strings.insert(allocator, "canonicalization failed"),
             .region = base.Region.zero(),
