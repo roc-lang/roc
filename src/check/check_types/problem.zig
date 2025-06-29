@@ -279,26 +279,24 @@ pub const Problem = union(enum) {
         };
 
         // Create underline regions
-        var underline_regions = try gpa.alloc(UnderlineRegion, 2);
-        defer gpa.free(underline_regions);
-
-        underline_regions[0] = .{
-            .start_line = first_elem_region_info.start_line_idx + 1,
-            .start_column = first_elem_region_info.start_col_idx + 1,
-            .end_line = first_elem_region_info.end_line_idx + 1,
-            .end_column = first_elem_region_info.end_col_idx + 1,
-            .annotation = .error_highlight,
+        const underline_regions = [_]UnderlineRegion{
+            .{
+                .start_line = first_elem_region_info.start_line_idx + 1,
+                .start_column = first_elem_region_info.start_col_idx + 1,
+                .end_line = first_elem_region_info.end_line_idx + 1,
+                .end_column = first_elem_region_info.end_col_idx + 1,
+                .annotation = .error_highlight,
+            },
+            .{
+                .start_line = incompatible_elem_region_info.start_line_idx + 1,
+                .start_column = incompatible_elem_region_info.start_col_idx + 1,
+                .end_line = incompatible_elem_region_info.end_line_idx + 1,
+                .end_column = incompatible_elem_region_info.end_col_idx + 1,
+                .annotation = .error_highlight,
+            },
         };
 
-        underline_regions[1] = .{
-            .start_line = incompatible_elem_region_info.start_line_idx + 1,
-            .start_column = incompatible_elem_region_info.start_col_idx + 1,
-            .end_line = incompatible_elem_region_info.end_line_idx + 1,
-            .end_column = incompatible_elem_region_info.end_col_idx + 1,
-            .annotation = .error_highlight,
-        };
-
-        try report.document.addSourceCodeWithUnderlines(source, display_region, underline_regions);
+        try report.document.addSourceCodeWithUnderlines(source, display_region, &underline_regions);
         try report.document.addLineBreak();
 
         // Show the type of the first element
