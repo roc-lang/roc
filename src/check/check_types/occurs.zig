@@ -211,7 +211,9 @@ const CheckOccurs = struct {
                 .alias => |alias| {
                     const args = self.types_store.getAliasArgsSlice(alias.args);
                     try self.occursSubVars(root, args, ctx);
-                    try self.occursSubVar(root, alias.backing_var, ctx);
+                    // backing var is always the next var after the alias var
+                    const backing_var = @as(Var, @enumFromInt(@intFromEnum(var_) + 1));
+                    try self.occursSubVar(root, backing_var, ctx);
                 },
                 .flex_var => {},
                 .rigid_var => {},
@@ -482,8 +484,8 @@ test "occurs: recursive alias (v = Alias(List v))" {
     var scratch = Scratch.init(gpa);
     defer scratch.deinit();
 
-    const backing_var = types_store.fresh();
     const v = types_store.fresh();
+    _ = types_store.fresh(); // Must be created after v to be v+1
 
     const args = types_store.appendAliasArgs(&[_]Var{v});
 
@@ -491,7 +493,6 @@ test "occurs: recursive alias (v = Alias(List v))" {
         .alias = .{
             .ident = types.TypeIdent{ .ident_idx = undefined },
             .args = args,
-            .backing_var = backing_var,
         },
     });
 
@@ -511,16 +512,16 @@ test "occurs: alias with no recursion (v = Alias Str)" {
     var scratch = Scratch.init(gpa);
     defer scratch.deinit();
 
-    const backing_var = types_store.fresh();
+    const alias_var = types_store.fresh();
+    const backing_var = types_store.fresh(); // Must be created after alias_var to be alias_var+1
     const str_var = types_store.freshFromContent(Content{ .structure = .str });
     const args = types_store.appendAliasArgs(&[_]Var{str_var});
 
-    const alias_var = types_store.fresh();
     try types_store.setRootVarContent(alias_var, Content{ .alias = .{
         .ident = types.TypeIdent{ .ident_idx = undefined },
         .args = args,
-        .backing_var = backing_var,
     } });
+    try types_store.setRootVarContent(backing_var, Content{ .structure = .str });
 
     const result = occurs(&types_store, &scratch, alias_var);
     try std.testing.expectEqual(.not_recursive, result);

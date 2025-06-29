@@ -486,18 +486,27 @@ const Unifier = struct {
                 self.merge(vars, Content{ .alias = a_alias });
             },
             .rigid_var => |_| {
-                try self.unifyGuarded(a_alias.backing_var, vars.b.var_);
+                // backing var is always the next var after the alias var
+                const backing_var = @as(Var, @enumFromInt(@intFromEnum(vars.a.var_) + 1));
+                try self.unifyGuarded(backing_var, vars.b.var_);
             },
             .alias => |b_alias| {
                 if (TypeIdent.eql(&self.module_env.idents, a_alias.ident, b_alias.ident)) {
                     try self.unifyTwoAliases(vars, a_alias, b_alias);
                 } else {
-                    try self.unifyGuarded(a_alias.backing_var, b_alias.backing_var);
+                    // backing vars are always the next var after the alias var
+                    const a_backing_var = @as(Var, @enumFromInt(@intFromEnum(vars.a.var_) + 1));
+                    const b_backing_var = @as(Var, @enumFromInt(@intFromEnum(vars.b.var_) + 1));
+                    try self.unifyGuarded(a_backing_var, b_backing_var);
                 }
             },
             .effectful => return error.TypeMismatch,
             .pure => return error.TypeMismatch,
-            .structure => try self.unifyGuarded(a_alias.backing_var, vars.b.var_),
+            .structure => {
+                // backing var is always the next var after the alias var
+                const backing_var = @as(Var, @enumFromInt(@intFromEnum(vars.a.var_) + 1));
+                try self.unifyGuarded(backing_var, vars.b.var_);
+            },
             .err => self.merge(vars, .err),
         }
     }
@@ -525,7 +534,10 @@ const Unifier = struct {
 
         // Rust compiler comment:
         // Don't report real_var mismatches, because they must always be surfaced higher, from the argument types.
-        self.unifyGuarded(a_alias.backing_var, b_alias.backing_var) catch {};
+        // backing vars are always the next var after the alias var
+        const a_backing_var = @as(Var, @enumFromInt(@intFromEnum(vars.a.var_) + 1));
+        const b_backing_var = @as(Var, @enumFromInt(@intFromEnum(vars.b.var_) + 1));
+        self.unifyGuarded(a_backing_var, b_backing_var) catch {};
 
         self.merge(vars, vars.b.desc.content);
     }
@@ -569,8 +581,10 @@ const Unifier = struct {
                 self.merge(vars, Content{ .structure = a_flat_type });
             },
             .rigid_var => return error.TypeMismatch,
-            .alias => |alias| {
-                try self.unifyGuarded(vars.a.var_, alias.backing_var);
+            .alias => |_| {
+                // backing var is always the next var after the alias var
+                const backing_var = @as(Var, @enumFromInt(@intFromEnum(vars.b.var_) + 1));
+                try self.unifyGuarded(vars.a.var_, backing_var);
             },
             .effectful => return error.TypeMismatch,
             .pure => return error.TypeMismatch,
@@ -1694,8 +1708,9 @@ const Unifier = struct {
                 .rigid_var => {
                     return .{ .ext = ext_var, .range = range };
                 },
-                .alias => |alias| {
-                    ext_var = alias.backing_var;
+                .alias => |_| {
+                    // backing var is always the next var after the alias var
+                    ext_var = @as(Var, @enumFromInt(@intFromEnum(ext_var) + 1));
                 },
                 .structure => |flat_type| {
                     switch (flat_type) {
@@ -2104,8 +2119,9 @@ const Unifier = struct {
                 .rigid_var => {
                     return .{ .ext = ext_var, .range = range };
                 },
-                .alias => |alias| {
-                    ext_var = alias.backing_var;
+                .alias => |_| {
+                    // backing var is always the next var after the alias var
+                    ext_var = @as(Var, @enumFromInt(@intFromEnum(ext_var) + 1));
                 },
                 .structure => |flat_type| {
                     switch (flat_type) {
@@ -2537,12 +2553,11 @@ const TestEnv = struct {
 
     // helpers - alias
 
-    fn mkAlias(self: *Self, name: []const u8, args: []const Var, backing_var: Var) Alias {
+    fn mkAlias(self: *Self, name: []const u8, args: []const Var) Alias {
         const args_range = self.module_env.types.appendAliasArgs(args);
         return .{
             .ident = self.mkTypeIdent(name),
             .args = args_range,
-            .backing_var = backing_var,
         };
     }
 
@@ -2854,11 +2869,13 @@ test "unify - alias with same args" {
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
     const bool_ = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i8 } });
 
-    const backing = env.module_env.types.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ }));
-    const alias = Content{ .alias = env.mkAlias("AliasName", &[_]Var{ str, bool_ }, backing) };
+    const alias = Content{ .alias = env.mkAlias("AliasName", &[_]Var{ str, bool_ }) };
 
     const a = env.module_env.types.freshFromContent(alias);
+    _ = env.module_env.types.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ }));
+
     const b = env.module_env.types.freshFromContent(alias);
+    _ = env.module_env.types.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ }));
 
     const result = env.unify(a, b);
 
@@ -2874,12 +2891,14 @@ test "unify - aliases with different names but same backing" {
 
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
 
-    const backing = env.module_env.types.freshFromContent(env.mkTuple(&[_]Var{str}));
-    const a_alias = Content{ .alias = env.mkAlias("AliasA", &[_]Var{str}, backing) };
-    const b_alias = Content{ .alias = env.mkAlias("AliasB", &[_]Var{str}, backing) };
+    const a_alias = Content{ .alias = env.mkAlias("AliasA", &[_]Var{str}) };
+    const b_alias = Content{ .alias = env.mkAlias("AliasB", &[_]Var{str}) };
 
     const a = env.module_env.types.freshFromContent(a_alias);
+    _ = env.module_env.types.freshFromContent(env.mkTuple(&[_]Var{str}));
+
     const b = env.module_env.types.freshFromContent(b_alias);
+    _ = env.module_env.types.freshFromContent(env.mkTuple(&[_]Var{str}));
 
     const result = env.unify(a, b);
 
@@ -2896,13 +2915,14 @@ test "unify - alias with different args (fail)" {
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
     const bool_ = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i8 } });
 
-    const backing = env.module_env.types.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ }));
-
-    const a_alias = Content{ .alias = env.mkAlias("Alias", &[_]Var{str}, backing) };
-    const b_alias = Content{ .alias = env.mkAlias("Alias", &[_]Var{bool_}, backing) };
+    const a_alias = Content{ .alias = env.mkAlias("Alias", &[_]Var{str}) };
+    const b_alias = Content{ .alias = env.mkAlias("Alias", &[_]Var{bool_}) };
 
     const a = env.module_env.types.freshFromContent(a_alias);
+    _ = env.module_env.types.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ }));
+
     const b = env.module_env.types.freshFromContent(b_alias);
+    _ = env.module_env.types.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ }));
 
     const result = env.unify(a, b);
 
@@ -2918,11 +2938,11 @@ test "unify - alias with flex" {
 
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
     const bool_ = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i8 } });
-    const backing = env.module_env.types.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ }));
 
-    const a_alias = Content{ .alias = env.mkAlias("Alias", &[_]Var{bool_}, backing) };
+    const a_alias = Content{ .alias = env.mkAlias("Alias", &[_]Var{bool_}) };
 
     const a = env.module_env.types.freshFromContent(a_alias);
+    _ = env.module_env.types.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ }));
     const b = env.module_env.types.fresh();
 
     const result = env.unify(a, b);

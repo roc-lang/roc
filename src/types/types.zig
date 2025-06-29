@@ -25,7 +25,7 @@ test {
     // If it went up, please make sure your changes are absolutely required!
     try std.testing.expectEqual(32, @sizeOf(Descriptor));
     try std.testing.expectEqual(24, @sizeOf(Content));
-    try std.testing.expectEqual(16, @sizeOf(Alias));
+    try std.testing.expectEqual(12, @sizeOf(Alias));
     try std.testing.expectEqual(20, @sizeOf(FlatType));
     try std.testing.expectEqual(12, @sizeOf(Record));
 }
@@ -147,7 +147,6 @@ pub const Content = union(enum) {
 pub const Alias = struct {
     ident: TypeIdent,
     args: Var.SafeList.Range,
-    backing_var: Var,
 };
 
 /// Represents an ident of a type
@@ -707,4 +706,79 @@ test "BitsNeeded.fromValue calculates correct bits for various values" {
     try testing.expectEqual(@as(u8, 64), BitsNeeded.@"64".toBits());
     try testing.expectEqual(@as(u8, 65), BitsNeeded.@"65_to_127".toBits());
     try testing.expectEqual(@as(u8, 128), BitsNeeded.@"128".toBits());
+}
+
+test "Content size is 4 bytes" {
+    const actual_size = @sizeOf(Content);
+    const expected_size = 4;
+
+    // Print diagnostic information about Content's size
+    std.debug.print("\n=== Content Size Analysis ===\n", .{});
+    std.debug.print("Current Content size: {} bytes (expected: {} bytes)\n", .{ actual_size, expected_size });
+    std.debug.print("Content is a union with the following variants:\n", .{});
+    std.debug.print("  - flex_var: ?Ident.Idx\n", .{});
+    std.debug.print("  - rigid_var: Ident.Idx\n", .{});
+    std.debug.print("  - alias: Alias\n", .{});
+    std.debug.print("  - effectful (empty)\n", .{});
+    std.debug.print("  - pure (empty)\n", .{});
+    std.debug.print("  - structure: FlatType\n", .{});
+    std.debug.print("  - err (empty)\n", .{});
+    std.debug.print("\nSizes of key types:\n", .{});
+    std.debug.print("  - Ident.Idx: {} bytes\n", .{@sizeOf(Ident.Idx)});
+    std.debug.print("  - ?Ident.Idx: {} bytes\n", .{@sizeOf(?Ident.Idx)});
+    std.debug.print("  - Alias: {} bytes\n", .{@sizeOf(Alias)});
+    std.debug.print("  - FlatType: {} bytes\n", .{@sizeOf(FlatType)});
+    std.debug.print("===========================\n\n", .{});
+
+    try testing.expectEqual(expected_size, actual_size);
+}
+
+test "Alias size is 12 bytes" {
+    const actual_size = @sizeOf(Alias);
+    const expected_size = 12;
+
+    // Print diagnostic information about Alias's size
+    std.debug.print("\n=== Alias Size Analysis ===\n", .{});
+    std.debug.print("Current Alias size: {} bytes (expected: {} bytes)\n", .{ actual_size, expected_size });
+    std.debug.print("Alias struct fields:\n", .{});
+    std.debug.print("  - ident: TypeIdent (size: {} bytes)\n", .{@sizeOf(TypeIdent)});
+    std.debug.print("  - args: Var.SafeList.Range (size: {} bytes)\n", .{@sizeOf(Var.SafeList.Range)});
+    std.debug.print("===========================\n\n", .{});
+
+    try testing.expectEqual(expected_size, actual_size);
+}
+
+test "FlatType size is 4 bytes" {
+    const actual_size = @sizeOf(FlatType);
+    const expected_size = 4;
+
+    // Print diagnostic information about FlatType's size
+    std.debug.print("\n=== FlatType Size Analysis ===\n", .{});
+    std.debug.print("Current FlatType size: {} bytes (expected: {} bytes)\n", .{ actual_size, expected_size });
+    std.debug.print("FlatType is a union with the following variants:\n", .{});
+    std.debug.print("  - str (empty)\n", .{});
+    std.debug.print("  - box (empty)\n", .{});
+    std.debug.print("  - list: Var\n", .{});
+    std.debug.print("  - list_unbound (empty)\n", .{});
+    std.debug.print("  - record_unbound (empty)\n", .{});
+    std.debug.print("  - tuple: Tuple\n", .{});
+    std.debug.print("  - tuple_unbound (empty)\n", .{});
+    std.debug.print("  - num: Num\n", .{});
+    std.debug.print("  - custom_type: CustomType\n", .{});
+    std.debug.print("  - func: Func\n", .{});
+    std.debug.print("  - record: Record\n", .{});
+    std.debug.print("  - empty_record (empty)\n", .{});
+    std.debug.print("  - tag_union: TagUnion\n", .{});
+    std.debug.print("  - empty_tag_union (empty)\n", .{});
+    std.debug.print("\nSizes of key types:\n", .{});
+    std.debug.print("  - Var: {} bytes\n", .{@sizeOf(Var)});
+    std.debug.print("  - Tuple: {} bytes\n", .{@sizeOf(Tuple)});
+    std.debug.print("  - Num: {} bytes\n", .{@sizeOf(Num)});
+    std.debug.print("  - CustomType: {} bytes\n", .{@sizeOf(CustomType)});
+    std.debug.print("  - Func: {} bytes\n", .{@sizeOf(Func)});
+    std.debug.print("  - Record: {} bytes\n", .{@sizeOf(Record)});
+    std.debug.print("  - TagUnion: {} bytes\n", .{@sizeOf(TagUnion)});
+    std.debug.print("===========================\n\n", .{});
+
+    try testing.expectEqual(expected_size, actual_size);
 }

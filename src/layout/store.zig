@@ -274,8 +274,9 @@ pub const Store = struct {
                     },
                     else => return LayoutError.InvalidRecordExtension,
                 },
-                .alias => |alias| {
-                    current_ext = alias.backing_var;
+                .alias => |_| {
+                    // backing var is always the next var after the alias var
+                    current_ext = @as(types.Var, @enumFromInt(@intFromEnum(current_ext) + 1));
                 },
                 else => return LayoutError.InvalidRecordExtension,
             }
@@ -809,9 +810,11 @@ pub const Store = struct {
                     std.debug.assert(false);
                     return LayoutError.BugUnboxedRigidVar;
                 },
-                .alias => |alias| {
+                .alias => |_| {
                     // Follow the alias by updating the work item
-                    current = self.types_store.resolveVar(alias.backing_var);
+                    // backing var is always the next var after the alias var
+                    const backing_var = @as(types.Var, @enumFromInt(@intFromEnum(current.var_) + 1));
+                    current = self.types_store.resolveVar(backing_var);
                     continue;
                 },
                 .effectful => @panic("TODO: effectful doesn't make sense as a layout; should be moved out of Content"),
