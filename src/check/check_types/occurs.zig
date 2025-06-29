@@ -688,7 +688,7 @@ test "occurs: recursive tag union with multiple nominals (TypeA := TypeB, TypeB 
     var scratch = Scratch.init(gpa);
     defer scratch.deinit();
 
-    // Create vars in the right order
+    // Create vars in the required order for adjacency to work out
     const type_b_nominal = types_store.fresh(); // Var(0)
     const type_b_backing = types_store.fresh(); // Var(1)
     const type_a_nominal = types_store.fresh(); // Var(2)
