@@ -30,7 +30,7 @@ const Content = types.Content;
 /// looses essential error information. So before doing this, we create a fully
 /// resolved snapshot of the type that we can use in reporting
 ///
-/// Entry point is `createSnapshot`
+/// Entry point is `deepCopyVar`
 pub const Store = struct {
     const Self = @This();
 
@@ -79,9 +79,6 @@ pub const Store = struct {
         const resolved = store.resolveVar(var_);
         return self.deepCopyContentWithVar(store, resolved.desc.content, var_);
     }
-
-    /// Alias for deepCopyVar for backward compatibility
-    pub const createSnapshot = deepCopyVar;
 
     fn deepCopyContent(self: *Self, store: *const TypesStore, content: Content) SnapshotContentIdx {
         // For cases where we don't have a var context, we can't properly handle aliases

@@ -118,8 +118,8 @@ pub fn unify(
         const problem: Problem = blk: {
             switch (err) {
                 error.TypeMismatch => {
-                    const expected_snapshot = snapshots.createSnapshot(types, a);
-                    const actual_snapshot = snapshots.createSnapshot(types, b);
+                    const expected_snapshot = snapshots.deepCopyVar(types, a);
+                    const actual_snapshot = snapshots.deepCopyVar(types, b);
                     break :blk .{ .type_mismatch = .{
                         .expected_var = a,
                         .expected = expected_snapshot,
@@ -148,7 +148,7 @@ pub fn unify(
 
                     const literal_var = if (literal_is_a) a else b;
                     const expected_var = if (literal_is_a) b else a;
-                    const expected_snapshot = snapshots.createSnapshot(types, expected_var);
+                    const expected_snapshot = snapshots.deepCopyVar(types, expected_var);
 
                     break :blk .{ .number_does_not_fit = .{
                         .literal_var = literal_var,
@@ -176,7 +176,7 @@ pub fn unify(
 
                     const literal_var = if (literal_is_a) a else b;
                     const expected_var = if (literal_is_a) b else a;
-                    const expected_snapshot = snapshots.createSnapshot(types, expected_var);
+                    const expected_snapshot = snapshots.deepCopyVar(types, expected_var);
 
                     break :blk .{ .negative_unsigned_int = .{
                         .literal_var = literal_var,
@@ -200,34 +200,34 @@ pub fn unify(
                         switch (unify_err) {
                             .recursion_anonymous => |var_| {
                                 // TODO: Snapshot infinite recursion
-                                // const snapshot = snapshots.createSnapshot(types, var_);
+                                // const snapshot = snapshots.deepCopyVar(types, var_);
                                 break :blk .{ .anonymous_recursion = .{
                                     .var_ = var_,
                                 } };
                             },
                             .recursion_infinite => |var_| {
                                 // TODO: Snapshot infinite recursion
-                                // const snapshot = snapshots.createSnapshot(types, var_);
+                                // const snapshot = snapshots.deepCopyVar(types, var_);
                                 break :blk .{ .infinite_recursion = .{
                                     .var_ = var_,
                                 } };
                             },
                             .invalid_number_type => |var_| {
-                                const snapshot = snapshots.createSnapshot(types, var_);
+                                const snapshot = snapshots.deepCopyVar(types, var_);
                                 break :blk .{ .invalid_number_type = .{
                                     .var_ = var_,
                                     .snapshot = snapshot,
                                 } };
                             },
                             .invalid_record_ext => |var_| {
-                                const snapshot = snapshots.createSnapshot(types, var_);
+                                const snapshot = snapshots.deepCopyVar(types, var_);
                                 break :blk .{ .invalid_record_ext = .{
                                     .var_ = var_,
                                     .snapshot = snapshot,
                                 } };
                             },
                             .invalid_tag_union_ext => |var_| {
-                                const snapshot = snapshots.createSnapshot(types, var_);
+                                const snapshot = snapshots.deepCopyVar(types, var_);
                                 break :blk .{ .invalid_tag_union_ext = .{
                                     .var_ = var_,
                                     .snapshot = snapshot,
@@ -237,9 +237,9 @@ pub fn unify(
                     } else {
                         break :blk .{ .bug = .{
                             .expected_var = a,
-                            .expected = snapshots.createSnapshot(types, a),
+                            .expected = snapshots.deepCopyVar(types, a),
                             .actual_var = b,
-                            .actual = snapshots.createSnapshot(types, b),
+                            .actual = snapshots.deepCopyVar(types, b),
                         } };
                     }
                 },
