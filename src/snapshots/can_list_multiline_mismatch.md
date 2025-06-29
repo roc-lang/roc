@@ -30,6 +30,9 @@ However, the second element has this type:
 
 All elements in a list must have compatible types.
 
+Note: You can wrap each element in a tag to make them compatible.
+To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
+
 # TOKENS
 ~~~zig
 OpenSquare(1:1-1:2),Newline(1:1-1:1),

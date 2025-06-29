@@ -24,6 +24,9 @@ However, the second element has this type:
 
 All elements in a list must have compatible types.
 
+Note: You can wrap each element in a tag to make them compatible.
+To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
+
 **INCOMPATIBLE LIST ELEMENTS**
 The two elements in this list have incompatible types:
 **can_nested_heterogeneous_lists.md:1:2:**
@@ -39,6 +42,9 @@ However, the second element has this type:
     _List(Num(*))_
 
 All elements in a list must have compatible types.
+
+Note: You can wrap each element in a tag to make them compatible.
+To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig

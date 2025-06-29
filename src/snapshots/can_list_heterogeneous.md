@@ -24,6 +24,9 @@ However, the second element has this type:
 
 All elements in a list must have compatible types.
 
+Note: You can wrap each element in a tag to make them compatible.
+To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
+
 # TOKENS
 ~~~zig
 OpenSquare(1:1-1:2),Int(1:2-1:3),Comma(1:3-1:4),StringStart(1:5-1:6),StringPart(1:6-1:11),StringEnd(1:11-1:12),Comma(1:12-1:13),Float(1:14-1:18),CloseSquare(1:18-1:19),EndOfFile(1:19-1:19),

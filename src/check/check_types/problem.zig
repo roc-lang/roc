@@ -326,8 +326,13 @@ pub const Problem = union(enum) {
         try report.document.addLineBreak();
 
         // TODO we should categorize this as a tip/hint (maybe relevant to how editors display it)
-        // TODO we should include a separate tip/hint linking to an explanation of how to mix element types using tag unions
         try report.document.addText("All elements in a list must have compatible types.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        // TODO link to a speceific explanation of how to mix element types using tag unions
+        try report.document.addText("Note: You can wrap each element in a tag to make them compatible.");
+        try report.document.addLineBreak();
+        try report.document.addText("To learn about tags, see <https://www.roc-lang.org/tutorial#tags>");
 
         return report;
     }
