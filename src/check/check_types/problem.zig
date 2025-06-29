@@ -268,6 +268,8 @@ pub const Problem = union(enum) {
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
+        // TODO we should categorize this as a tip/hint (maybe relevant to how editors display it)
+        // TODO we should include a separate tip/hint linking to an explanation of how to mix element types using tag unions
         try report.document.addText("All elements in a list must have compatible types.");
 
         return report;
