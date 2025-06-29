@@ -267,33 +267,39 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
         .e_str => |_| {},
         .e_lookup => |_| {},
         .e_list => |list| {
-            const elem_var = list.elem_var;
+            const elem_var = @as(Var, @enumFromInt(@intFromEnum(list.elem_var)));
             const elems = self.can_ir.store.exprSlice(list.elems);
 
-            var last_unified_idx: ?CIR.Expr.Idx = null;
+            std.debug.assert(elems.len > 0); // Should never be 0 here, because this is not an .empty_list
 
-            for (elems) |single_elem_expr_idx| {
-                self.checkExpr(single_elem_expr_idx);
+            // We need to type-check the first element, but we don't need to unify it with
+            // anything because we already pre-unified the list's elem var with it.
+            const first_elem_idx = elems[0];
+            var last_unified_idx: CIR.Expr.Idx = first_elem_idx;
+            self.checkExpr(first_elem_idx);
 
-                // For subsequent elements, unify and check result
-                const result = self.unify(
-                    @enumFromInt(@intFromEnum(elem_var)),
-                    @enumFromInt(@intFromEnum(single_elem_expr_idx)),
-                );
+            for (elems[1..]) |elem_expr_id| {
+                self.checkExpr(elem_expr_id);
+
+                // Unify each element's var with the list's elem var
+                const result = self.unify(elem_var, @enumFromInt(@intFromEnum(elem_expr_id)));
 
                 if (result == .problem) {
-                    // Unification failed - we know it added a TYPE_MISMATCH problem
-                    // Get the last problem that was added
+                    // Unification failed, so we know it appended a generic type mismatch to self.problems
+                    // We'll translate that generic type mismatch between the two elements into
+                    // a more helpful list-specific error report.
+
+                    // Get the last problem that was appended to problems
                     const problem_count = self.problems.problems.items.len;
-                    if (problem_count == 0) continue; // Safety check
+                    std.debug.assert(problem_count > 0); // Should never be 0 here, because result was .problem
 
                     const last_idx: problem.Problem.SafeMultiList.Idx = @enumFromInt(problem_count - 1);
 
-                    // Extract info from the TYPE_MISMATCH problem
+                    // Extract info from the type mismatch problem
                     var elem_var_snapshot: snapshot.SnapshotContentIdx = undefined;
                     var incompatible_snapshot: snapshot.SnapshotContentIdx = undefined;
 
-                    // Extract snapshots from the TYPE_MISMATCH problem
+                    // Extract snapshots from the type mismatch problem
                     switch (self.problems.problems.get(last_idx)) {
                         .type_mismatch => |mismatch| {
                             // The expected type is elem_var, actual is the incompatible element
@@ -308,40 +314,37 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
                             );
                             incompatible_snapshot = self.snapshots.createSnapshot(
                                 self.types,
-                                @enumFromInt(@intFromEnum(single_elem_expr_idx)),
+                                @enumFromInt(@intFromEnum(elem_expr_id)),
                             );
                         },
                     }
 
-                    // Remove the TYPE_MISMATCH problem we don't want
-                    self.problems.problems.items.len = problem_count - 1;
-
-                    // Use the most recent successfully unified element (or first if none)
-                    const prev_elem_idx = last_unified_idx orelse elems[0];
-
-                    const prev_elem_expr = self.can_ir.store.getExpr(prev_elem_idx);
-                    const incompatible_elem_expr = self.can_ir.store.getExpr(single_elem_expr_idx);
-
+                    // Include the previous element in the error message, since it's the one
+                    // that the current element failed to unify with.
+                    const prev_elem_expr = self.can_ir.store.getExpr(last_unified_idx);
+                    const incompatible_elem_expr = self.can_ir.store.getExpr(elem_expr_id);
                     const prev_region = prev_elem_expr.toRegion();
                     const incomp_region = incompatible_elem_expr.toRegion();
 
-                    // Add the custom incompatible list elements error
-                    _ = self.problems.appendProblem(self.gpa, .{ .incompatible_list_elements = .{
-                        .list_region = list.region,
-                        .first_elem_region = prev_region orelse list.region,
-                        .first_elem_var = @enumFromInt(@intFromEnum(prev_elem_idx)),
-                        .first_elem_snapshot = elem_var_snapshot,
-                        .incompatible_elem_region = incomp_region orelse list.region,
-                        .incompatible_elem_var = @enumFromInt(@intFromEnum(single_elem_expr_idx)),
-                        .incompatible_elem_snapshot = incompatible_snapshot,
-                    } });
+                    // Replace the last problem in the MultiArrayList with a list-specific one
+                    self.problems.problems.items.set(problem_count - 1, .{
+                        .incompatible_list_elements = .{
+                            .list_region = list.region,
+                            .first_elem_region = prev_region orelse list.region,
+                            .first_elem_var = @enumFromInt(@intFromEnum(last_unified_idx)),
+                            .first_elem_snapshot = elem_var_snapshot,
+                            .incompatible_elem_region = incomp_region orelse list.region,
+                            .incompatible_elem_var = @enumFromInt(@intFromEnum(elem_expr_id)),
+                            .incompatible_elem_snapshot = incompatible_snapshot,
+                        },
+                    });
 
-                    // Stop checking further elements to avoid cascading errors
+                    // Break to avoid cascading errors
                     break;
                 }
 
                 // Track the last successfully unified element
-                last_unified_idx = single_elem_expr_idx;
+                last_unified_idx = elem_expr_id;
             }
         },
         .e_empty_list => |_| {},
