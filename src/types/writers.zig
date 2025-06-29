@@ -77,12 +77,8 @@ pub const TypeWriter = struct {
     /// Convert a var to a type string
     pub fn writeVar(self: *Self, var_: types.Var) Allocator.Error!void {
         const resolved = self.env.types.resolveVar(var_);
-        return self.writeContent(resolved.desc.content, var_);
-    }
 
-    /// Convert a content to a type string with var context
-    pub fn writeContent(self: *Self, content: types.Content, var_: types.Var) Allocator.Error!void {
-        switch (content) {
+        switch (resolved.desc.content) {
             .flex_var => |mb_ident_idx| {
                 if (mb_ident_idx) |ident_idx| {
                     _ = try self.writer.write(self.env.idents.getText(ident_idx));
