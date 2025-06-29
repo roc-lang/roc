@@ -55,6 +55,7 @@ Here is the problematic code:
 ```roc
 c = 429496729 U64
 ```
+              
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -66,6 +67,7 @@ Here is the problematic code:
 ```roc
 d = 18446744073709551615
 ```
+  ^^^^^^^^^^^^^^^^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -77,6 +79,7 @@ Here is the problematic code:
 ```roc
 e = 3402823669209384634633746074317682114553.14: I8
 ```
+                                               ^^^^
 
 
 **PARSE ERROR**
@@ -100,6 +103,7 @@ Here is the problematic code:
 ```roc
 e = 3402823669209384634633746074317682114553.14: I8
 ```
+                                                 
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -111,6 +115,7 @@ Here is the problematic code:
 ```roc
 f =8
 ```
+  ^^
 
 
 **INVALID STATEMENT**
@@ -139,6 +144,7 @@ This expression is used in an unexpected way:
 ```roc
 e = 3402823669209384634633746074317682114553.14: I8
 ```
+^
 
 It is of type:
     _U128_
@@ -178,57 +184,57 @@ LowerIdent(27:1-27:2),OpAssign(27:3-27:4),Int(27:5-27:29),EndOfFile(27:29-27:29)
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-27-29
-	(module @1-1-1-10
-		(exposes @1-8-1-10))
+(file @1.1-27.29
+	(module @1.1-1.10
+		(exposes @1.8-1.10))
 	(statements
-		(s-type-anno @3-1-4-2 (name "a")
+		(s-type-anno @3.1-4.2 (name "a")
 			(ty (name "U8")))
-		(s-decl @4-1-4-8
-			(p-ident @4-1-4-2 (raw "a"))
-			(e-int @4-5-4-8 (raw "255")))
-		(s-type-anno @6-1-7-2 (name "b")
+		(s-decl @4.1-4.8
+			(p-ident @4.1-4.2 (raw "a"))
+			(e-int @4.5-4.8 (raw "255")))
+		(s-type-anno @6.1-7.2 (name "b")
 			(ty (name "U16")))
-		(s-decl @7-1-7-10
-			(p-ident @7-1-7-2 (raw "b"))
-			(e-int @7-5-7-10 (raw "65535")))
-		(s-type-anno @9-1-10-2 (name "c")
+		(s-decl @7.1-7.10
+			(p-ident @7.1-7.2 (raw "b"))
+			(e-int @7.5-7.10 (raw "65535")))
+		(s-type-anno @9.1-10.2 (name "c")
 			(ty (name "U32")))
-		(s-decl @10-1-10-14
-			(p-ident @10-1-10-2 (raw "c"))
-			(e-int @10-5-10-14 (raw "429496729")))
-		(s-malformed @10-15-11-4 (tag "expected_colon_after_type_annotation"))
-		(e-malformed @11-3-11-25 (reason "expr_unexpected_token"))
-		(e-int @11-5-11-25 (raw "18446744073709551615"))
-		(s-type-anno @13-1-14-2 (name "e")
+		(s-decl @10.1-10.14
+			(p-ident @10.1-10.2 (raw "c"))
+			(e-int @10.5-10.14 (raw "429496729")))
+		(s-malformed @10.15-11.4 (tag "expected_colon_after_type_annotation"))
+		(e-malformed @11.3-11.25 (reason "expr_unexpected_token"))
+		(e-int @11.5-11.25 (raw "18446744073709551615"))
+		(s-type-anno @13.1-14.2 (name "e")
 			(ty (name "U128")))
-		(s-decl @14-1-14-48
-			(p-ident @14-1-14-2 (raw "e"))
-			(e-frac @14-5-14-48 (raw "3402823669209384634633746074317682114553.14")))
-		(e-malformed @14-48-14-52 (reason "expr_unexpected_token"))
-		(s-malformed @14-50-15-4 (tag "expected_colon_after_type_annotation"))
-		(e-malformed @15-3-15-5 (reason "expr_unexpected_token"))
-		(e-int @15-4-15-5 (raw "8"))
-		(s-type-anno @17-1-18-2 (name "g")
+		(s-decl @14.1-14.48
+			(p-ident @14.1-14.2 (raw "e"))
+			(e-frac @14.5-14.48 (raw "3402823669209384634633746074317682114553.14")))
+		(e-malformed @14.48-14.52 (reason "expr_unexpected_token"))
+		(s-malformed @14.50-15.4 (tag "expected_colon_after_type_annotation"))
+		(e-malformed @15.3-15.5 (reason "expr_unexpected_token"))
+		(e-int @15.4-15.5 (raw "8"))
+		(s-type-anno @17.1-18.2 (name "g")
 			(ty (name "I16")))
-		(s-decl @18-1-18-11
-			(p-ident @18-1-18-2 (raw "g"))
-			(e-int @18-5-18-11 (raw "-32768")))
-		(s-type-anno @20-1-21-2 (name "h")
+		(s-decl @18.1-18.11
+			(p-ident @18.1-18.2 (raw "g"))
+			(e-int @18.5-18.11 (raw "-32768")))
+		(s-type-anno @20.1-21.2 (name "h")
 			(ty (name "I32")))
-		(s-decl @21-1-21-12
-			(p-ident @21-1-21-2 (raw "h"))
-			(e-int @21-5-21-12 (raw "-483648")))
-		(s-type-anno @23-1-24-2 (name "i")
+		(s-decl @21.1-21.12
+			(p-ident @21.1-21.2 (raw "h"))
+			(e-int @21.5-21.12 (raw "-483648")))
+		(s-type-anno @23.1-24.2 (name "i")
 			(ty (name "I64")))
-		(s-decl @24-1-24-17
-			(p-ident @24-1-24-2 (raw "i"))
-			(e-int @24-5-24-17 (raw "-92233725808")))
-		(s-type-anno @26-1-27-2 (name "j")
+		(s-decl @24.1-24.17
+			(p-ident @24.1-24.2 (raw "i"))
+			(e-int @24.5-24.17 (raw "-92233725808")))
+		(s-type-anno @26.1-27.2 (name "j")
 			(ty (name "I128")))
-		(s-decl @27-1-27-29
-			(p-ident @27-1-27-2 (raw "j"))
-			(e-int @27-5-27-29 (raw "-17011687303715884105728")))))
+		(s-decl @27.1-27.29
+			(p-ident @27.1-27.2 (raw "j"))
+			(e-int @27.5-27.29 (raw "-17011687303715884105728")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -262,53 +268,53 @@ j = -17011687303715884105728
 ~~~clojure
 (can-ir
 	(d-let (id 79)
-		(p-assign @4-1-4-2 (ident "a") (id 74))
-		(e-int @4-5-4-8 (value "255") (id 75))
-		(annotation @4-1-4-2 (signature 77) (id 78)
+		(p-assign @4.1-4.2 (ident "a") (id 74))
+		(e-int @4.5-4.8 (value "255") (id 75))
+		(annotation @4.1-4.2 (signature 77) (id 78)
 			(declared-type
-				(ty @3-5-3-7 (name "U8")))))
+				(ty @3.5-3.7 (name "U8")))))
 	(d-let (id 86)
-		(p-assign @7-1-7-2 (ident "b") (id 81))
-		(e-int @7-5-7-10 (value "65535") (id 82))
-		(annotation @7-1-7-2 (signature 84) (id 85)
+		(p-assign @7.1-7.2 (ident "b") (id 81))
+		(e-int @7.5-7.10 (value "65535") (id 82))
+		(annotation @7.1-7.2 (signature 84) (id 85)
 			(declared-type
-				(ty @6-5-6-8 (name "U16")))))
+				(ty @6.5-6.8 (name "U16")))))
 	(d-let (id 93)
-		(p-assign @10-1-10-2 (ident "c") (id 88))
-		(e-int @10-5-10-14 (value "429496729") (id 89))
-		(annotation @10-1-10-2 (signature 91) (id 92)
+		(p-assign @10.1-10.2 (ident "c") (id 88))
+		(e-int @10.5-10.14 (value "429496729") (id 89))
+		(annotation @10.1-10.2 (signature 91) (id 92)
 			(declared-type
-				(ty @9-5-9-8 (name "U32")))))
+				(ty @9.5-9.8 (name "U32")))))
 	(d-let (id 102)
-		(p-assign @14-1-14-2 (ident "e") (id 97))
-		(e-frac-f64 @14-5-14-48 (value "3.4028236692093846e39") (id 98))
-		(annotation @14-1-14-2 (signature 100) (id 101)
+		(p-assign @14.1-14.2 (ident "e") (id 97))
+		(e-frac-f64 @14.5-14.48 (value "3.4028236692093846e39") (id 98))
+		(annotation @14.1-14.2 (signature 100) (id 101)
 			(declared-type
-				(ty @13-5-13-9 (name "U128")))))
+				(ty @13.5-13.9 (name "U128")))))
 	(d-let (id 112)
-		(p-assign @18-1-18-2 (ident "g") (id 107))
-		(e-int @18-5-18-11 (value "-32768") (id 108))
-		(annotation @18-1-18-2 (signature 110) (id 111)
+		(p-assign @18.1-18.2 (ident "g") (id 107))
+		(e-int @18.5-18.11 (value "-32768") (id 108))
+		(annotation @18.1-18.2 (signature 110) (id 111)
 			(declared-type
-				(ty @17-5-17-8 (name "I16")))))
+				(ty @17.5-17.8 (name "I16")))))
 	(d-let (id 119)
-		(p-assign @21-1-21-2 (ident "h") (id 114))
-		(e-int @21-5-21-12 (value "-483648") (id 115))
-		(annotation @21-1-21-2 (signature 117) (id 118)
+		(p-assign @21.1-21.2 (ident "h") (id 114))
+		(e-int @21.5-21.12 (value "-483648") (id 115))
+		(annotation @21.1-21.2 (signature 117) (id 118)
 			(declared-type
-				(ty @20-5-20-8 (name "I32")))))
+				(ty @20.5-20.8 (name "I32")))))
 	(d-let (id 126)
-		(p-assign @24-1-24-2 (ident "i") (id 121))
-		(e-int @24-5-24-17 (value "-92233725808") (id 122))
-		(annotation @24-1-24-2 (signature 124) (id 125)
+		(p-assign @24.1-24.2 (ident "i") (id 121))
+		(e-int @24.5-24.17 (value "-92233725808") (id 122))
+		(annotation @24.1-24.2 (signature 124) (id 125)
 			(declared-type
-				(ty @23-5-23-8 (name "I64")))))
+				(ty @23.5-23.8 (name "I64")))))
 	(d-let (id 133)
-		(p-assign @27-1-27-2 (ident "j") (id 128))
-		(e-int @27-5-27-29 (value "-17011687303715884105728") (id 129))
-		(annotation @27-1-27-2 (signature 131) (id 132)
+		(p-assign @27.1-27.2 (ident "j") (id 128))
+		(e-int @27.5-27.29 (value "-17011687303715884105728") (id 129))
+		(annotation @27.1-27.2 (signature 131) (id 132)
 			(declared-type
-				(ty @26-5-26-9 (name "I128"))))))
+				(ty @26.5-26.9 (name "I128"))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -323,12 +329,12 @@ j = -17011687303715884105728
 		(d_assign (name "i") (def_var 126) (type "I64"))
 		(d_assign (name "j") (def_var 133) (type "I128")))
 	(expressions
-		(expr @4-5-4-8 (type "U8"))
-		(expr @7-5-7-10 (type "U16"))
-		(expr @10-5-10-14 (type "U32"))
-		(expr @14-5-14-48 (type "Error"))
-		(expr @18-5-18-11 (type "I16"))
-		(expr @21-5-21-12 (type "I32"))
-		(expr @24-5-24-17 (type "I64"))
-		(expr @27-5-27-29 (type "I128"))))
+		(expr @4.5-4.8 (type "U8"))
+		(expr @7.5-7.10 (type "U16"))
+		(expr @10.5-10.14 (type "U32"))
+		(expr @14.5-14.48 (type "Error"))
+		(expr @18.5-18.11 (type "I16"))
+		(expr @21.5-21.12 (type "I32"))
+		(expr @24.5-24.17 (type "I64"))
+		(expr @27.5-27.29 (type "I128"))))
 ~~~
