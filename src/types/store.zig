@@ -53,7 +53,6 @@ pub const Store = struct {
     descs: DescStore,
 
     // Everything else
-    alias_args: VarSafeList,
     tuple_elems: VarSafeList,
     custom_type_args: VarSafeList,
     func_args: VarSafeList,
@@ -77,7 +76,6 @@ pub const Store = struct {
             .slots = SlotStore.init(gpa, root_capacity),
 
             // everything else
-            .alias_args = VarSafeList.initCapacity(gpa, child_capacity),
             .tuple_elems = VarSafeList.initCapacity(gpa, child_capacity),
             .custom_type_args = VarSafeList.initCapacity(gpa, child_capacity),
             .func_args = VarSafeList.initCapacity(gpa, child_capacity),
@@ -100,7 +98,6 @@ pub const Store = struct {
         self.slots.deinit(self.gpa);
 
         // everything else
-        self.alias_args.deinit(self.gpa);
         self.tuple_elems.deinit(self.gpa);
         self.custom_type_args.deinit(self.gpa);
         self.func_args.deinit(self.gpa);
@@ -254,11 +251,6 @@ pub const Store = struct {
 
     // sub list setters //
 
-    /// Append a slice of alias args to the backing list, returning the range
-    pub fn appendAliasArgs(self: *Self, slice: []const Var) VarSafeList.Range {
-        return self.alias_args.appendSlice(self.gpa, slice);
-    }
-
     /// Append a tuple elem to the backing list, returning the idx
     pub fn appendTupleElem(self: *Self, v: Var) VarSafeList.Idx {
         return self.tuple_elems.append(self.gpa, v);
@@ -295,11 +287,6 @@ pub const Store = struct {
     }
 
     // sub list getters //
-
-    /// Given a range, get a slice of alias args from the backing array
-    pub fn getAliasArgsSlice(self: *const Self, range: VarSafeList.Range) VarSafeList.Slice {
-        return self.alias_args.rangeToSlice(range);
-    }
 
     /// Given a range, get a slice of tuple from the backing list
     pub fn getTupleElemsSlice(self: *const Self, range: VarSafeList.Range) VarSafeList.Slice {

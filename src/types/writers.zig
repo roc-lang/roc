@@ -75,13 +75,18 @@ pub const TypeWriter = struct {
     }
 
     /// Convert a var to a type string
-    pub fn writeVar(self: *Self, var_: Var) Allocator.Error!void {
+    pub fn writeVar(self: *Self, var_: types.Var) Allocator.Error!void {
         const resolved = self.env.types.resolveVar(var_);
-        return self.writeContent(resolved.desc.content);
+        return self.writeContentWithVar(resolved.desc.content, var_);
     }
 
     /// Convert a content to a type string
     pub fn writeContent(self: *Self, content: types.Content) Allocator.Error!void {
+        return self.writeContentWithVar(content, @enumFromInt(0));
+    }
+
+    /// Convert a content to a type string with var context
+    pub fn writeContentWithVar(self: *Self, content: types.Content, var_: types.Var) Allocator.Error!void {
         switch (content) {
             .flex_var => |mb_ident_idx| {
                 if (mb_ident_idx) |ident_idx| {
@@ -94,7 +99,7 @@ pub const TypeWriter = struct {
                 _ = try self.writer.write(self.env.idents.getText(ident_idx));
             },
             .alias => |alias| {
-                try self.writeAlias(alias);
+                try self.writeAlias(alias, var_);
             },
             .structure => |flat_type| {
                 try self.writeFlatType(flat_type);
@@ -112,14 +117,15 @@ pub const TypeWriter = struct {
     }
 
     /// Write an alias type
-    pub fn writeAlias(self: *Self, alias: types.Alias) Allocator.Error!void {
+    pub fn writeAlias(self: *Self, alias: types.Alias, alias_var: types.Var) Allocator.Error!void {
         _ = try self.writer.write(self.env.idents.getText(alias.ident.ident_idx));
-        const args = self.env.types.getAliasArgsSlice(alias.args);
-        if (args.len > 0) {
+        if (alias.num_args > 0) {
             _ = try self.writer.write("(");
-            for (args, 0..) |arg, i| {
+            // Use helper method to get argument vars
+            for (0..alias.num_args) |i| {
                 if (i > 0) _ = try self.writer.write(", ");
-                try self.writeVar(arg);
+                const arg_var = alias.getArgVar(alias_var, i);
+                try self.writeVar(arg_var);
             }
             _ = try self.writer.write(")");
         }

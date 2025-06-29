@@ -74,16 +74,26 @@ pub const Store = struct {
     }
 
     /// Create a deep snapshot from a Var, storing it in this SnapshotStore
-    pub fn createSnapshot(self: *Self, store: *const TypesStore, var_: types.Var) SnapshotContentIdx {
+    /// Deep copy a type variable's content into self-contained snapshot storage
+    pub fn deepCopyVar(self: *Self, store: *const TypesStore, var_: types.Var) SnapshotContentIdx {
         const resolved = store.resolveVar(var_);
-        return self.deepCopyContent(store, resolved.desc.content);
+        return self.deepCopyContentWithVar(store, resolved.desc.content, var_);
     }
 
-    fn deepCopyContent(self: *Self, store: *const TypesStore, content: types.Content) SnapshotContentIdx {
+    /// Alias for deepCopyVar for backward compatibility
+    pub const createSnapshot = deepCopyVar;
+
+    fn deepCopyContent(self: *Self, store: *const TypesStore, content: Content) SnapshotContentIdx {
+        // For cases where we don't have a var context, we can't properly handle aliases
+        // This should only be called for non-alias content
+        return self.deepCopyContentWithVar(store, content, @enumFromInt(0));
+    }
+
+    fn deepCopyContentWithVar(self: *Self, store: *const TypesStore, content: Content, var_: types.Var) SnapshotContentIdx {
         const deep_content = switch (content) {
             .flex_var => |ident| SnapshotContent{ .flex_var = ident },
             .rigid_var => |ident| SnapshotContent{ .rigid_var = ident },
-            .alias => |alias| SnapshotContent{ .alias = self.deepCopyAlias(store, alias) },
+            .alias => |alias| SnapshotContent{ .alias = self.deepCopyAlias(store, alias, var_) },
             .effectful => SnapshotContent.effectful,
             .pure => SnapshotContent.pure,
             .structure => |flat_type| SnapshotContent{ .structure = self.deepCopyFlatType(store, flat_type) },
@@ -122,14 +132,13 @@ pub const Store = struct {
         };
     }
 
-    fn deepCopyAlias(self: *Self, store: *const TypesStore, alias: types.Alias) SnapshotAlias {
-        const args_slice = store.getAliasArgsSlice(alias.args);
-
+    fn deepCopyAlias(self: *Self, store: *const TypesStore, alias: types.Alias, alias_var: types.Var) SnapshotAlias {
         // Mark starting position in the centralized array
         const start_idx = self.alias_args.len();
 
-        // Iterate and append directly to centralized array
-        for (args_slice) |arg_var| {
+        // Copy all argument vars using the helper method
+        for (0..alias.num_args) |i| {
+            const arg_var = alias.getArgVar(alias_var, i);
             const arg_resolved = store.resolveVar(arg_var);
             const deep_arg = self.deepCopyContent(store, arg_resolved.desc.content);
             _ = self.alias_args.append(self.gpa, deep_arg);

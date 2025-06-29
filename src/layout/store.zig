@@ -274,9 +274,9 @@ pub const Store = struct {
                     },
                     else => return LayoutError.InvalidRecordExtension,
                 },
-                .alias => |_| {
-                    // backing var is always the next var after the alias var
-                    current_ext = @as(types.Var, @enumFromInt(@intFromEnum(current_ext) + 1));
+                .alias => |alias| {
+                    // Get backing var using helper method
+                    current_ext = alias.getBackingVar(current_ext);
                 },
                 else => return LayoutError.InvalidRecordExtension,
             }
@@ -810,10 +810,9 @@ pub const Store = struct {
                     std.debug.assert(false);
                     return LayoutError.BugUnboxedRigidVar;
                 },
-                .alias => |_| {
+                .alias => |alias| {
                     // Follow the alias by updating the work item
-                    // backing var is always the next var after the alias var
-                    const backing_var = @as(types.Var, @enumFromInt(@intFromEnum(current.var_) + 1));
+                    const backing_var = alias.getBackingVar(current.var_);
                     current = self.types_store.resolveVar(backing_var);
                     continue;
                 },

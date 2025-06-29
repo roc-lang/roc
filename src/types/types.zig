@@ -25,7 +25,7 @@ test {
     // If it went up, please make sure your changes are absolutely required!
     try std.testing.expectEqual(32, @sizeOf(Descriptor));
     try std.testing.expectEqual(24, @sizeOf(Content));
-    try std.testing.expectEqual(12, @sizeOf(Alias));
+    try std.testing.expectEqual(8, @sizeOf(Alias));
     try std.testing.expectEqual(20, @sizeOf(FlatType));
     try std.testing.expectEqual(12, @sizeOf(Record));
 }
@@ -146,7 +146,65 @@ pub const Content = union(enum) {
 /// A named alias to a different type
 pub const Alias = struct {
     ident: TypeIdent,
-    args: Var.SafeList.Range,
+    num_args: u32,
+
+    /// Get the backing var for this alias given the alias var
+    pub fn getBackingVar(self: Alias, alias_var: Var) Var {
+        _ = self;
+        return @as(Var, @enumFromInt(@intFromEnum(alias_var) + 1));
+    }
+
+    /// Get the first argument var for this alias given the alias var
+    pub fn getFirstArgVar(self: Alias, alias_var: Var) Var {
+        _ = self;
+        return @as(Var, @enumFromInt(@intFromEnum(alias_var) + 2));
+    }
+
+    /// Get the argument var at the given index for this alias given the alias var
+    pub fn getArgVar(self: Alias, alias_var: Var, arg_index: usize) Var {
+        std.debug.assert(arg_index < self.num_args);
+        return @as(Var, @enumFromInt(@intFromEnum(alias_var) + 2 + arg_index));
+    }
+
+    /// Iterator for getting all argument vars
+    pub const ArgIterator = struct {
+        alias_var: Var,
+        num_args: u32,
+        current: u32,
+
+        pub fn next(self: *ArgIterator) ?Var {
+            if (self.current >= self.num_args) return null;
+            const result = @as(Var, @enumFromInt(@intFromEnum(self.alias_var) + 2 + self.current));
+            self.current += 1;
+            return result;
+        }
+    };
+
+    /// Get an iterator over all argument vars
+    pub fn argIterator(self: Alias, alias_var: Var) ArgIterator {
+        return ArgIterator{
+            .alias_var = alias_var,
+            .num_args = self.num_args,
+            .current = 0,
+        };
+    }
+
+    /// Get a slice of all argument vars (requires allocation)
+    pub fn getArgVarsAlloc(self: Alias, allocator: std.mem.Allocator, alias_var: Var) ![]Var {
+        const args = try allocator.alloc(Var, self.num_args);
+        for (0..self.num_args) |i| {
+            args[i] = self.getArgVar(alias_var, i);
+        }
+        return args;
+    }
+
+    /// Fill a pre-allocated buffer with argument vars
+    pub fn getArgVarsBuf(self: Alias, alias_var: Var, buffer: []Var) void {
+        std.debug.assert(buffer.len >= self.num_args);
+        for (0..self.num_args) |i| {
+            buffer[i] = self.getArgVar(alias_var, i);
+        }
+    }
 };
 
 /// Represents an ident of a type
@@ -733,16 +791,16 @@ test "Content size is 4 bytes" {
     try testing.expectEqual(expected_size, actual_size);
 }
 
-test "Alias size is 12 bytes" {
+test "Alias size is 8 bytes" {
     const actual_size = @sizeOf(Alias);
-    const expected_size = 12;
+    const expected_size = 8;
 
     // Print diagnostic information about Alias's size
     std.debug.print("\n=== Alias Size Analysis ===\n", .{});
     std.debug.print("Current Alias size: {} bytes (expected: {} bytes)\n", .{ actual_size, expected_size });
     std.debug.print("Alias struct fields:\n", .{});
     std.debug.print("  - ident: TypeIdent (size: {} bytes)\n", .{@sizeOf(TypeIdent)});
-    std.debug.print("  - args: Var.SafeList.Range (size: {} bytes)\n", .{@sizeOf(Var.SafeList.Range)});
+    std.debug.print("  - num_args: u32 (size: {} bytes)\n", .{@sizeOf(u32)});
     std.debug.print("===========================\n\n", .{});
 
     try testing.expectEqual(expected_size, actual_size);
