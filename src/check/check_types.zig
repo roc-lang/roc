@@ -299,11 +299,6 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
                         type_determining_elem_idx = single_elem_expr_idx;
                     }
 
-                    // Unify the first element
-                    _ = self.unify(
-                        @enumFromInt(@intFromEnum(elem_var)),
-                        @enumFromInt(@intFromEnum(single_elem_expr_idx)),
-                    );
                     continue;
                 }
 
