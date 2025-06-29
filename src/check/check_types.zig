@@ -270,6 +270,8 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
             const elem_var = list.elem_var;
             const elems = self.can_ir.store.exprSlice(list.elems);
 
+            var last_unified_idx: ?CIR.Expr.Idx = null;
+
             for (elems) |single_elem_expr_idx| {
                 self.checkExpr(single_elem_expr_idx);
 
@@ -314,20 +316,20 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
                     // Remove the TYPE_MISMATCH problem we don't want
                     self.problems.problems.items.len = problem_count - 1;
 
-                    // Always use the first element for error reporting since it established the list type
-                    const first_elem_idx = elems[0];
+                    // Use the most recent successfully unified element (or first if none)
+                    const prev_elem_idx = last_unified_idx orelse elems[0];
 
-                    const first_elem_expr = self.can_ir.store.getExpr(first_elem_idx);
+                    const prev_elem_expr = self.can_ir.store.getExpr(prev_elem_idx);
                     const incompatible_elem_expr = self.can_ir.store.getExpr(single_elem_expr_idx);
 
-                    const first_region = first_elem_expr.toRegion();
+                    const prev_region = prev_elem_expr.toRegion();
                     const incomp_region = incompatible_elem_expr.toRegion();
 
                     // Add the custom incompatible list elements error
                     _ = self.problems.appendProblem(self.gpa, .{ .incompatible_list_elements = .{
                         .list_region = list.region,
-                        .first_elem_region = first_region orelse list.region,
-                        .first_elem_var = @enumFromInt(@intFromEnum(first_elem_idx)),
+                        .first_elem_region = prev_region orelse list.region,
+                        .first_elem_var = @enumFromInt(@intFromEnum(prev_elem_idx)),
                         .first_elem_snapshot = elem_var_snapshot,
                         .incompatible_elem_region = incomp_region orelse list.region,
                         .incompatible_elem_var = @enumFromInt(@intFromEnum(single_elem_expr_idx)),
@@ -337,6 +339,9 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
                     // Stop checking further elements to avoid cascading errors
                     break;
                 }
+
+                // Track the last successfully unified element
+                last_unified_idx = single_elem_expr_idx;
             }
         },
         .e_empty_list => |_| {},
