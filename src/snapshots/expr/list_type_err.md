@@ -9,31 +9,17 @@ type=expr
 ~~~
 # PROBLEMS
 **INCOMPATIBLE LIST ELEMENTS**
-This list contains elements with incompatible types:
-**list_type_err.md:1:1:1:16:**
+These two elements in this list have incompatible types:
+**list_type_err.md:1:5:1:15:**
 ```roc
 [1, 2, "hello"]
 ```
-^^^^^^^^^^^^^^^
+    ^^^^^^^^^^
 
-The first element with this type:
-**list_type_err.md:1:5:1:6:**
-```roc
-[1, 2, "hello"]
-```
-    ^
-
-has the type
+The first element has this type:
     _Num(*)_
 
-However, this element:
-**list_type_err.md:1:8:1:15:**
-```roc
-[1, 2, "hello"]
-```
-       ^^^^^^^
-
-has the incompatible type:
+The second element has this type:
     _Str_
 
 All elements in a list must have compatible types.

@@ -9,31 +9,17 @@ type=expr
 ~~~
 # PROBLEMS
 **INCOMPATIBLE LIST ELEMENTS**
-This list contains elements with incompatible types:
-**can_list_triple_nested_heterogeneous.md:1:1:1:33:**
+These two elements in this list have incompatible types:
+**can_list_triple_nested_heterogeneous.md:1:6:1:32:**
 ```roc
 [[], [[], [1]], [[], ["hello"]]]
 ```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-The first element with this type:
-**can_list_triple_nested_heterogeneous.md:1:6:1:15:**
-```roc
-[[], [[], [1]], [[], ["hello"]]]
-```
-     ^^^^^^^^^
-
-has the type
+The first element has this type:
     _List(List(Num(*)))_
 
-However, this element:
-**can_list_triple_nested_heterogeneous.md:1:17:1:32:**
-```roc
-[[], [[], [1]], [[], ["hello"]]]
-```
-                ^^^^^^^^^^^^^^^
-
-has the incompatible type:
+The second element has this type:
     _List(List(Str))_
 
 All elements in a list must have compatible types.

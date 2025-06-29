@@ -220,74 +220,48 @@ pub const Problem = union(enum) {
         try snapshot_writer.write(data.incompatible_elem_snapshot);
         const owned_incompatible_type = try report.addOwnedString(buf.items);
 
-        // Add description (title already set in Report.init)
-        try report.document.addText("This list contains elements with incompatible types:");
+        // Add description
+        try report.document.addText("These two elements in this list have incompatible types:");
         try report.document.addLineBreak();
 
-        // Show the list
-        const list_region_info = base.RegionInfo.position(
+        // Show a single region spanning both mismatched elements
+        const span_start = if (data.first_elem_region.start.offset < data.incompatible_elem_region.start.offset)
+            data.first_elem_region.start
+        else
+            data.incompatible_elem_region.start;
+
+        const span_end = if (data.first_elem_region.end.offset > data.incompatible_elem_region.end.offset)
+            data.first_elem_region.end
+        else
+            data.incompatible_elem_region.end;
+
+        const span_region_info = base.RegionInfo.position(
             source,
             module_env.line_starts.items,
-            data.list_region.start.offset,
-            data.list_region.end.offset,
+            span_start.offset,
+            span_end.offset,
         ) catch return report;
         try report.document.addSourceRegion(
             source,
-            list_region_info.start_line_idx,
-            list_region_info.start_col_idx,
-            list_region_info.end_line_idx,
-            list_region_info.end_col_idx,
+            span_region_info.start_line_idx,
+            span_region_info.start_col_idx,
+            span_region_info.end_line_idx,
+            span_region_info.end_col_idx,
             .error_highlight,
             filename,
         );
         try report.document.addLineBreak();
 
-        // Show the first element with full context
-        try report.document.addText("The first element with this type:");
-        try report.document.addLineBreak();
-        const first_elem_region_info = base.RegionInfo.position(
-            source,
-            module_env.line_starts.items,
-            data.first_elem_region.start.offset,
-            data.first_elem_region.end.offset,
-        ) catch return report;
-        try report.document.addSourceRegion(
-            source,
-            first_elem_region_info.start_line_idx,
-            first_elem_region_info.start_col_idx,
-            first_elem_region_info.end_line_idx,
-            first_elem_region_info.end_col_idx,
-            .error_highlight,
-            filename,
-        );
-        try report.document.addLineBreak();
-        try report.document.addText("has the type");
+        // Show the type of the first element
+        try report.document.addText("The first element has this type:");
         try report.document.addLineBreak();
         try report.document.addText("    ");
         try report.document.addAnnotated(owned_first_type, .type_variable);
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
-        // Show the incompatible element with full context
-        try report.document.addText("However, this element:");
-        try report.document.addLineBreak();
-        const incompatible_elem_region_info = base.RegionInfo.position(
-            source,
-            module_env.line_starts.items,
-            data.incompatible_elem_region.start.offset,
-            data.incompatible_elem_region.end.offset,
-        ) catch return report;
-        try report.document.addSourceRegion(
-            source,
-            incompatible_elem_region_info.start_line_idx,
-            incompatible_elem_region_info.start_col_idx,
-            incompatible_elem_region_info.end_line_idx,
-            incompatible_elem_region_info.end_col_idx,
-            .error_highlight,
-            filename,
-        );
-        try report.document.addLineBreak();
-        try report.document.addText("has the incompatible type:");
+        // Show the type of the second element
+        try report.document.addText("The second element has this type:");
         try report.document.addLineBreak();
         try report.document.addText("    ");
         try report.document.addAnnotated(owned_incompatible_type, .type_variable);
