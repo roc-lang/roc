@@ -1633,24 +1633,18 @@ pub fn canonicalize_expr(
             const final_else = self.flattenIfThenElseChainRecursive(e);
             const branches_span = self.can_ir.store.ifBranchSpanFrom(scratch_top);
 
-            // Reserve extra node slot for branch var
-            const final_expr_idx = self.can_ir.store.predictNodeIndex(2);
-            const branch_var = self.can_ir.pushFreshTypeVar(final_expr_idx, region);
-
             // Create the if expression
             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
                 .e_if = .{
                     .branches = branches_span,
                     .final_else = final_else,
                     .region = region,
-                    .branch_var = branch_var,
                 },
             });
 
-            std.debug.assert(@intFromEnum(final_expr_idx) == @intFromEnum(expr_idx));
-
             // Set type variable for the entire if expression
-            // This will be unified with the return type of the if expr in type solving
+            // The if expression's type variable (its CIR index) will be unified with all branches
+            // during type checking, similar to how list elements are unified
             _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
 
             return expr_idx;

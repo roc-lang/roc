@@ -367,7 +367,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
                 // Check the branch's body
                 self.checkExpr(if_branch.body);
                 _ = self.unify(
-                    @enumFromInt(@intFromEnum(if_expr.branch_var)),
+                    @enumFromInt(@intFromEnum(expr_idx)),
                     @enumFromInt(@intFromEnum(if_branch.body)),
                 );
             }
@@ -375,7 +375,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
             // Check the final else
             self.checkExpr(if_expr.final_else);
             _ = self.unify(
-                @enumFromInt(@intFromEnum(if_expr.branch_var)),
+                @enumFromInt(@intFromEnum(expr_idx)),
                 @enumFromInt(@intFromEnum(if_expr.final_else)),
             );
 
