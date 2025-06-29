@@ -87,6 +87,30 @@ pub fn deinit(store: *NodeStore) void {
     store.scratch_diagnostics.items.deinit(store.gpa);
 }
 
+// Compile-time constants for union variant counts to ensure we don't miss cases
+// when adding/removing variants from CIR unions. Update these when modifying the unions.
+pub const CIR_DIAGNOSTIC_NODE_COUNT = 27;
+pub const CIR_EXPR_NODE_COUNT = 24;
+pub const CIR_STATEMENT_NODE_COUNT = 11;
+
+comptime {
+    // Check the number of CIR.Diagnostic nodes
+    const diagnostic_fields = @typeInfo(CIR.Diagnostic).@"union".fields;
+    std.debug.assert(diagnostic_fields.len == CIR_DIAGNOSTIC_NODE_COUNT);
+}
+
+comptime {
+    // Check the number of CIR.Expr nodes
+    const expr_fields = @typeInfo(CIR.Expr).@"union".fields;
+    std.debug.assert(expr_fields.len == CIR_EXPR_NODE_COUNT);
+}
+
+comptime {
+    // Check the number of CIR.Statement nodes
+    const statement_fields = @typeInfo(CIR.Statement).@"union".fields;
+    std.debug.assert(statement_fields.len == CIR_STATEMENT_NODE_COUNT);
+}
+
 /// Retrieves a region from node from the store.
 pub fn getNodeRegion(store: *const NodeStore, node_idx: Node.Idx) Region {
     const node = store.nodes.get(node_idx);
@@ -2581,31 +2605,6 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             std.debug.print("and that no other nodes are being added to scratch_diagnostics.\n", .{});
             @panic("unreachable, node is not a diagnostic tag");
         },
-    }
-}
-
-comptime {
-    // This function validates that every field in CIR.Diagnostic has a corresponding
-    // case in both addDiagnostic and getDiagnostic functions
-    const diagnostic_fields = @typeInfo(CIR.Diagnostic).@"union".fields;
-
-    // Check that we have the expected number of cases
-    // If this fails at compile time, it means a new diagnostic was added
-    // but the corresponding cases weren't added to addDiagnostic or getDiagnostic
-    const expected_cases = diagnostic_fields.len;
-
-    // This will cause a compile error if new diagnostics are added without
-    // updating both functions. The developer will need to:
-    // 1. Add the case to addDiagnostic
-    // 2. Add the case to getDiagnostic
-    // 3. Update this count to match the new total
-    const actual_cases = 27; // Update this when adding new diagnostics
-
-    if (expected_cases != actual_cases) {
-        @compileError("Diagnostic case count mismatch! Expected " ++
-            std.fmt.comptimePrint("{}", .{expected_cases}) ++
-            " but found " ++ std.fmt.comptimePrint("{}", .{actual_cases}) ++
-            ". Please update addDiagnostic, getDiagnostic, and this count.");
     }
 }
 

@@ -114,15 +114,23 @@ test "NodeStore round trip - Statements" {
         .region = from_raw_offsets(3453, 1232),
     } });
 
-    for (statements.items) |statement| {
-        const idx = store.addStatement(statement);
+    for (statements.items) |stmt| {
+        const idx = store.addStatement(stmt);
         const retrieved = store.getStatement(idx);
 
-        testing.expectEqualDeep(statement, retrieved) catch |err| {
-            std.debug.print("\n\nOriginal:  {any}\n\n", .{statement});
+        testing.expectEqualDeep(stmt, retrieved) catch |err| {
+            std.debug.print("\n\nOriginal:  {any}\n\n", .{stmt});
             std.debug.print("Retrieved: {any}\n\n", .{retrieved});
             return err;
         };
+    }
+
+    // Runtime validation: ensure we have minimum test coverage for all statement variants
+    const actual_test_count = statements.items.len;
+    if (actual_test_count < NodeStore.CIR_STATEMENT_NODE_COUNT) {
+        std.debug.print("Statement test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.CIR_STATEMENT_NODE_COUNT, actual_test_count });
+        std.debug.print("Please add test cases for missing statement variants.\n", .{});
+        return error.IncompleteStatementTestCoverage;
     }
 }
 
@@ -327,6 +335,14 @@ test "NodeStore round trip - Expressions" {
             std.debug.print("Retrieved: {any}\n\n", .{retrieved});
             return err;
         };
+    }
+
+    // Runtime validation: ensure we have minimum test coverage for all expression variants
+    const actual_test_count = expressions.items.len;
+    if (actual_test_count < NodeStore.CIR_EXPR_NODE_COUNT) {
+        std.debug.print("Expression test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.CIR_EXPR_NODE_COUNT, actual_test_count });
+        std.debug.print("Please add test cases for missing expression variants.\n", .{});
+        return error.IncompleteExpressionTestCoverage;
     }
 }
 
@@ -534,5 +550,13 @@ test "NodeStore round trip - Diagnostics" {
             std.debug.print("Retrieved: {any}\n\n", .{retrieved});
             return err;
         };
+    }
+
+    // Runtime validation: ensure we have minimum test coverage for all diagnostic variants
+    const actual_test_count = diagnostics.items.len;
+    if (actual_test_count < NodeStore.CIR_DIAGNOSTIC_NODE_COUNT) {
+        std.debug.print("Diagnostic test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.CIR_DIAGNOSTIC_NODE_COUNT, actual_test_count });
+        std.debug.print("Please add test cases for missing diagnostic variants.\n", .{});
+        return error.IncompleteDiagnosticTestCoverage;
     }
 }
