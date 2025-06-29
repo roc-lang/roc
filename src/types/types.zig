@@ -574,21 +574,6 @@ pub const NominalType = struct {
         return backing_var;
     }
 
-    /// Get the argument var at the given index for this nominal type given the nominal type var
-    pub fn getArgVar(self: NominalType, nominal_var: Var, arg_index: usize) Var {
-        std.debug.assert(arg_index < self.num_args);
-        const arg_var = @as(Var, @enumFromInt(@intFromEnum(nominal_var) + 2 + arg_index));
-
-        // Debug assertion: verify the arg var index is reasonable
-        if (std.debug.runtime_safety) {
-            // Should be after backing var
-            const backing_var = self.getBackingVar(nominal_var);
-            std.debug.assert(@intFromEnum(arg_var) > @intFromEnum(backing_var));
-        }
-
-        return arg_var;
-    }
-
     /// Iterator for getting all argument vars
     pub const ArgIterator = struct {
         nominal_var: Var,
@@ -610,23 +595,6 @@ pub const NominalType = struct {
             .num_args = self.num_args,
             .current = 0,
         };
-    }
-
-    /// Get a slice of all argument vars (requires allocation)
-    pub fn getArgVarsAlloc(self: NominalType, allocator: std.mem.Allocator, nominal_var: Var) ![]Var {
-        const args = try allocator.alloc(Var, self.num_args);
-        for (0..self.num_args) |i| {
-            args[i] = self.getArgVar(nominal_var, i);
-        }
-        return args;
-    }
-
-    /// Fill a pre-allocated buffer with argument vars
-    pub fn getArgVarsBuf(self: NominalType, nominal_var: Var, buffer: []Var) void {
-        std.debug.assert(buffer.len >= self.num_args);
-        for (0..self.num_args) |i| {
-            buffer[i] = self.getArgVar(nominal_var, i);
-        }
     }
 };
 
