@@ -21,6 +21,7 @@ This type is referenced here:
 ```roc
 processNested : List(Result(Str, Err)) -> List(Str)
 ```
+                                 ^^^
 
 
 # TOKENS
@@ -88,18 +89,18 @@ main! = |_| processNested([])
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 97)
+	(d-let (id 96)
 		(p-assign @4.1-4.14 (ident "processNested") (id 81))
-		(e-lambda @4.17-4.38 (id 90)
+		(e-lambda @4.17-4.38 (id 89)
 			(args
 				(p-assign @4.18-4.23 (ident "_list") (id 82)))
-			(e-list @4.25-4.38 (elem-var 87)
+			(e-list @4.25-4.38 (elem-var 84)
 				(elems
 					(e-string @4.26-4.31
 						(e-literal @4.27-4.30 (string "one")))
 					(e-string @4.32-4.37
 						(e-literal @4.33-4.36 (string "two"))))))
-		(annotation @4.1-4.14 (signature 95) (id 96)
+		(annotation @4.1-4.14 (signature 94) (id 95)
 			(declared-type
 				(ty-fn @3.17-3.52 (effectful false)
 					(ty-apply @3.17-3.39 (symbol "List")
@@ -108,23 +109,22 @@ main! = |_| processNested([])
 							(ty @3.34-3.37 (name "Err"))))
 					(ty-apply @3.43-3.52 (symbol "List")
 						(ty @3.48-3.51 (name "Str")))))))
-	(d-let (id 107)
-		(p-assign @6.1-6.6 (ident "main!") (id 98))
-		(e-lambda @6.9-6.30 (id 106)
+	(d-let (id 105)
+		(p-assign @6.1-6.6 (ident "main!") (id 97))
+		(e-lambda @6.9-6.30 (id 104)
 			(args
-				(p-underscore @6.10-6.11 (id 99)))
+				(p-underscore @6.10-6.11 (id 98)))
 			(e-call @6.13-6.30
 				(e-lookup-local @6.13-6.26
 					(pattern (id 81)))
-				(e-list @6.27-6.29 (elem-var 101)
-					(elems))))))
+				(e-empty_list @6.27-6.29)))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "processNested") (def_var 97) (type "List -> List(Str)"))
-		(d_assign (name "main!") (def_var 107) (type "* ? *")))
+		(d_assign (name "processNested") (def_var 96) (type "List -> List(Str)"))
+		(d_assign (name "main!") (def_var 105) (type "* ? *")))
 	(expressions
 		(expr @4.17-4.38 (type "List -> List(Str)"))
 		(expr @6.9-6.30 (type "* ? *"))))

@@ -20,6 +20,7 @@ This expression is used in an unexpected way:
 ```roc
 } else 2
 ```
+       ^
 
 It is of type:
     _Num(*)_

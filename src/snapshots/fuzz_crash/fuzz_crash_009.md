@@ -32,6 +32,7 @@ Here is the problematic code:
 ```roc
  f{o,
 ```
+ ^^
 
 
 **INVALID STATEMENT**

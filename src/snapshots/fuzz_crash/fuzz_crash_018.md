@@ -22,6 +22,7 @@ Here is the problematic code:
 ```roc
 0 b:S
 ```
+^^^
 
 
 # TOKENS

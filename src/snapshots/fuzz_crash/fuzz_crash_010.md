@@ -34,6 +34,7 @@ Here is the problematic code:
 ```roc
 H{o,
 ```
+^^
 
 
 **INVALID STATEMENT**

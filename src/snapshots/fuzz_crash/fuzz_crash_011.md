@@ -20,6 +20,7 @@ Here is the problematic code:
 ```roc
 module P]F
 ```
+       ^^^
 
 
 **PARSE ERROR**
@@ -43,6 +44,7 @@ Here is the problematic code:
 ```roc
 module P]F
 ```
+          
 
 
 # TOKENS

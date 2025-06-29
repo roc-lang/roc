@@ -17,6 +17,7 @@ Here is the problematic code:
 ```roc
 process_user! : { name : Str, age : U32, ..a } => Str
 ```
+                                         ^^^
 
 
 **PARSE ERROR**
@@ -28,6 +29,7 @@ Here is the problematic code:
 ```roc
 process_user! : { name : Str, age : U32, ..a } => Str
 ```
+                                    ^^^^
 
 
 **MALFORMED TYPE**

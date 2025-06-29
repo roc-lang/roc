@@ -17,6 +17,7 @@ Here is the problematic code:
 ```roc
 if x > 5 then "big" else "small"
 ```
+              ^^^^
 
 
 # TOKENS

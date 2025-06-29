@@ -95,15 +95,15 @@ main! = |_| processList(["one", "two", "three"])
 					(ty-apply @3.15-3.24 (symbol "List")
 						(ty @3.20-3.23 (name "Str")))
 					(ty @3.28-3.31 (name "U64"))))))
-	(d-let (id 105)
+	(d-let (id 104)
 		(p-assign @6.1-6.6 (ident "main!") (id 90))
-		(e-lambda @6.9-6.47 (id 104)
+		(e-lambda @6.9-6.47 (id 103)
 			(args
 				(p-underscore @6.10-6.11 (id 91)))
 			(e-call @6.13-6.47
 				(e-lookup-local @6.13-6.24
 					(pattern (id 77)))
-				(e-list @6.25-6.46 (elem-var 99)
+				(e-list @6.25-6.46 (elem-var 94)
 					(elems
 						(e-string @6.26-6.31
 							(e-literal @6.27-6.30 (string "one")))
@@ -117,7 +117,7 @@ main! = |_| processList(["one", "two", "three"])
 (inferred-types
 	(defs
 		(d_assign (name "processList") (def_var 89) (type "List -> U64"))
-		(d_assign (name "main!") (def_var 105) (type "* ? *")))
+		(d_assign (name "main!") (def_var 104) (type "* ? *")))
 	(expressions
 		(expr @4.15-6.6 (type "List -> U64"))
 		(expr @6.9-6.47 (type "* ? *"))))

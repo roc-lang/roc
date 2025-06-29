@@ -222,6 +222,7 @@ This type is referenced here:
 ```roc
 Foo : (Bar, Baz)
 ```
+       ^^^
 
 
 **UNDECLARED TYPE**
@@ -232,6 +233,7 @@ This type is referenced here:
 ```roc
 Foo : (Bar, Baz)
 ```
+            ^^^
 
 
 **UNDECLARED TYPE**
@@ -242,6 +244,7 @@ This type is referenced here:
 ```roc
 	Bar, # Comment after pattern tuple item
 ```
+ ^^^
 
 
 **UNDECLARED TYPE**
@@ -252,6 +255,7 @@ This type is referenced here:
 ```roc
 	Baz, # Another after pattern tuple item
 ```
+ ^^^
 
 
 **UNDECLARED TYPE**
@@ -262,6 +266,7 @@ This type is referenced here:
 ```roc
 Some(a) : { foo : Ok(a), bar : Something }
 ```
+                               ^^^^^^^^^
 
 
 **UNDECLARED TYPE**
@@ -272,6 +277,7 @@ This type is referenced here:
 ```roc
 	bar : Something, # After last field
 ```
+       ^^^^^^^^^
 
 
 **UNDECLARED TYPE**
@@ -282,6 +288,7 @@ This type is referenced here:
 ```roc
 	bar : Something, # Another after pattern record field
 ```
+       ^^^^^^^^^
 
 
 **NOT IMPLEMENTED**
@@ -310,6 +317,7 @@ The unused variable is declared here:
 ```roc
 	b,
 ```
+ ^
 
 
 **UNUSED VARIABLE**
@@ -321,6 +329,7 @@ The unused variable is declared here:
 ```roc
 	a, # After arg
 ```
+ ^
 
 
 **NOT IMPLEMENTED**
@@ -334,6 +343,7 @@ This type is referenced here:
 ```roc
 main! : List(String) -> Result({}, _)
 ```
+             ^^^^^^
 
 
 **NOT IMPLEMENTED**
@@ -403,6 +413,7 @@ The unused variable is declared here:
 ```roc
 	multiline_tuple = (
 ```
+ ^^^^^^^^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -414,6 +425,7 @@ The unused variable is declared here:
 ```roc
 	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
 ```
+ ^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -425,6 +437,7 @@ The unused variable is declared here:
 ```roc
 	tag_with_payload = Ok(number)
 ```
+ ^^^^^^^^^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -436,6 +449,7 @@ The unused variable is declared here:
 ```roc
 	list = [
 ```
+ ^^^^
 
 
 **UNUSED VARIABLE**
@@ -447,6 +461,7 @@ The unused variable is declared here:
 ```roc
 	bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
 ```
+ ^^^^^^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -458,6 +473,7 @@ The unused variable is declared here:
 ```roc
 	static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
 ```
+ ^^^^^^^^^^^^^^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -469,6 +485,7 @@ The unused variable is declared here:
 ```roc
 	interpolated = "Hello, ${world}"
 ```
+ ^^^^^^^^^^^^
 
 
 **NOT IMPLEMENTED**
@@ -1270,9 +1287,9 @@ NO CHANGE
 				(p-assign @81.2-81.3 (ident "a") (id 224))
 				(p-assign @82.2-82.3 (ident "b") (id 225)))
 			(e-runtime-error (tag "not_implemented"))))
-	(d-let (id 440)
+	(d-let (id 437)
 		(p-assign @144.1-144.6 (ident "main!") (id 241))
-		(e-lambda @144.9-196.2 (id 433)
+		(e-lambda @144.9-196.2 (id 430)
 			(args
 				(p-underscore @144.10-144.11 (id 242)))
 			(e-block @144.13-196.2
@@ -1312,7 +1329,7 @@ NO CHANGE
 						(e-literal @165.33-165.33 (string ""))))
 				(s-let @166.2-173.3
 					(p-assign @166.2-166.6 (ident "list") (id 289))
-					(e-list @166.9-173.3 (elem-var 297) (id 298)
+					(e-list @166.9-173.3 (elem-var 294) (id 297)
 						(elems
 							(e-call @167.3-170.4
 								(e-lookup-local @167.3-167.10
@@ -1321,8 +1338,8 @@ NO CHANGE
 							(e-int @171.3-171.6 (value "456"))
 							(e-int @172.3-172.6 (value "789")))))
 				(s-let @178.2-178.71
-					(p-assign @178.2-178.8 (ident "record") (id 302))
-					(e-record @178.11-178.71 (ext-var 319) (id 320)
+					(p-assign @178.2-178.8 (ident "record") (id 301))
+					(e-record @178.11-178.71 (ext-var 318) (id 319)
 						(fields
 							(field (name "foo")
 								(e-int @178.18-178.21 (value "123")))
@@ -1340,8 +1357,8 @@ NO CHANGE
 							(field (name "punned")
 								(e-runtime-error (tag "ident_not_in_scope"))))))
 				(s-let @179.2-179.68
-					(p-assign @179.2-179.7 (ident "tuple") (id 327))
-					(e-tuple @179.10-179.68 (id 346)
+					(p-assign @179.2-179.7 (ident "tuple") (id 326))
+					(e-tuple @179.10-179.68 (id 344)
 						(elems
 							(e-int @179.11-179.14 (value "123"))
 							(e-string @179.16-179.23
@@ -1356,15 +1373,15 @@ NO CHANGE
 								(elems
 									(e-runtime-error (tag "ident_not_in_scope"))
 									(e-lookup-local @179.50-179.55
-										(pattern (id 327)))))
-							(e-list @179.58-179.67 (elem-var 344)
+										(pattern (id 326)))))
+							(e-list @179.58-179.67 (elem-var 340)
 								(elems
 									(e-int @179.59-179.60 (value "1"))
 									(e-int @179.62-179.63 (value "2"))
 									(e-int @179.65-179.66 (value "3")))))))
 				(s-let @180.2-187.3
-					(p-assign @180.2-180.17 (ident "multiline_tuple") (id 348))
-					(e-tuple @180.20-187.3 (id 368)
+					(p-assign @180.2-180.17 (ident "multiline_tuple") (id 346))
+					(e-tuple @180.20-187.3 (id 365)
 						(elems
 							(e-int @181.3-181.6 (value "123"))
 							(e-string @182.3-182.10
@@ -1378,15 +1395,15 @@ NO CHANGE
 								(elems
 									(e-runtime-error (tag "ident_not_in_scope"))
 									(e-lookup-local @185.12-185.17
-										(pattern (id 327)))))
-							(e-list @186.3-186.12 (elem-var 366)
+										(pattern (id 326)))))
+							(e-list @186.3-186.12 (elem-var 361)
 								(elems
 									(e-int @186.4-186.5 (value "1"))
 									(e-int @186.7-186.8 (value "2"))
 									(e-int @186.10-186.11 (value "3")))))))
 				(s-let @188.2-189.23
-					(p-assign @188.2-188.15 (ident "bin_op_result") (id 370))
-					(e-binop @188.18-189.23 (op "or") (id 400)
+					(p-assign @188.2-188.15 (ident "bin_op_result") (id 367))
+					(e-binop @188.18-189.23 (op "or") (id 397)
 						(e-binop @188.18-188.74 (op "or")
 							(e-binop @188.18-188.43 (op "gt")
 								(e-binop @188.18-188.34 (op "null_coalesce")
@@ -1414,8 +1431,8 @@ NO CHANGE
 								(e-int @188.81-188.82 (value "3"))
 								(e-int @188.85-188.86 (value "5"))))))
 				(s-let @189.2-190.8
-					(p-assign @189.2-189.23 (ident "static_dispatch_style") (id 402))
-					(e-dot-access @189.26-190.8 (field "unknown") (id 407)
+					(p-assign @189.2-189.23 (ident "static_dispatch_style") (id 399))
+					(e-dot-access @189.26-190.8 (field "unknown") (id 404)
 						(receiver
 							(e-dot-access @189.26-189.110 (field "unknown")
 								(receiver
@@ -1426,7 +1443,7 @@ NO CHANGE
 					(e-runtime-error (tag "not_implemented")))
 				(e-call @191.2-195.3
 					(e-lookup-external
-						(ext-decl @191.2-191.14 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value") (type-var 412)))
+						(ext-decl @191.2-191.14 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value") (type-var 409)))
 					(e-string @192.3-194.18
 						(e-literal @192.4-192.14 (string "How about "))
 						(e-call @193.4-193.21
@@ -1434,7 +1451,7 @@ NO CHANGE
 							(e-lookup-local @193.14-193.20
 								(pattern (id 248))))
 						(e-literal @194.4-194.17 (string " as a string?"))))))
-		(annotation @144.1-144.6 (signature 438) (id 439)
+		(annotation @144.1-144.6 (signature 435) (id 436)
 			(declared-type
 				(ty-fn @143.9-143.38 (effectful false)
 					(ty-apply @143.9-143.21 (symbol "List")
@@ -1442,10 +1459,10 @@ NO CHANGE
 					(ty-apply @143.25-143.38 (symbol "Result")
 						(ty-record @143.32-143.34)
 						(ty-underscore @143.36-143.37))))))
-	(d-let (id 448)
-		(p-assign @199.1-199.6 (ident "empty") (id 442))
-		(e-empty_record @199.9-199.11 (id 443))
-		(annotation @199.1-199.6 (signature 446) (id 447)
+	(d-let (id 445)
+		(p-assign @199.1-199.6 (ident "empty") (id 439))
+		(e-empty_record @199.9-199.11 (id 440))
+		(annotation @199.1-199.6 (signature 443) (id 444)
 			(declared-type
 				(ty-record @198.9-198.11))))
 	(s-type-decl @22.1-23.6 (id 85)
@@ -1568,8 +1585,8 @@ NO CHANGE
 		(d_assign (name "add_one_oneline") (def_var 190) (type "* ? Num(*)"))
 		(d_assign (name "add_one") (def_var 222) (type "U64 -> U64"))
 		(d_assign (name "match_time") (def_var 232) (type "*, * ? Error"))
-		(d_assign (name "main!") (def_var 440) (type "List -> Result"))
-		(d_assign (name "empty") (def_var 448) (type "{  }")))
+		(d_assign (name "main!") (def_var 437) (type "List -> Result"))
+		(d_assign (name "empty") (def_var 445) (type "{  }")))
 	(expressions
 		(expr @65.19-67.8 (type "* ? Num(*)"))
 		(expr @68.11-78.2 (type "U64 -> U64"))

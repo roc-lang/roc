@@ -41,6 +41,7 @@ The unused variable is declared here:
 ```roc
 add = |unused| 42
 ```
+       ^^^^^^
 
 
 **UNDERSCORE VARIABLE USED**
@@ -52,6 +53,7 @@ The underscore variable is declared here:
 ```roc
 multiply = |_factor| _factor * 2
 ```
+                     ^^^^^^^
 
 
 # TOKENS

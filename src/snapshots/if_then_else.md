@@ -20,6 +20,7 @@ This expression is used in an unexpected way:
 ```roc
 foo = if 1 A
 ```
+         ^
 
 It is of type:
     _Num(*)_

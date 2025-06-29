@@ -24,6 +24,7 @@ Here is the problematic code:
 ```roc
     if: "conditional",
 ```
+      ^^^
 
 
 **PARSE ERROR**
@@ -35,6 +36,7 @@ Here is the problematic code:
 ```roc
     if: "conditional",
 ```
+                     
 
 
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
@@ -46,6 +48,7 @@ Here is the problematic code:
 ```roc
     when: "pattern match",
 ```
+          ^^^^^^^^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -57,6 +60,7 @@ Here is the problematic code:
 ```roc
     when: "pattern match",
 ```
+           ^^^^^^^^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -68,6 +72,7 @@ Here is the problematic code:
 ```roc
     when: "pattern match",
 ```
+                        ^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -79,6 +84,7 @@ Here is the problematic code:
 ```roc
     when: "pattern match",
 ```
+                         
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -90,6 +96,7 @@ Here is the problematic code:
 ```roc
     expect: "test assertion",
 ```
+          ^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -101,6 +108,7 @@ Here is the problematic code:
 ```roc
     expect: "test assertion",
 ```
+                            
 
 
 **IMPORT MUST BE TOP LEVEL**
@@ -112,6 +120,7 @@ Here is the problematic code:
 ```roc
     import: "module load",
 ```
+    ^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -123,6 +132,7 @@ Here is the problematic code:
 ```roc
     import: "module load",
 ```
+          ^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -134,6 +144,7 @@ Here is the problematic code:
 ```roc
     import: "module load",
 ```
+                         
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -145,6 +156,7 @@ Here is the problematic code:
 ```roc
     and: Bool.true,
 ```
+    ^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -156,6 +168,7 @@ Here is the problematic code:
 ```roc
     and: Bool.true,
 ```
+       ^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -167,6 +180,7 @@ Here is the problematic code:
 ```roc
     and: Bool.true,
 ```
+                  
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -178,6 +192,7 @@ Here is the problematic code:
 ```roc
     or: Bool.false,
 ```
+    ^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -189,6 +204,7 @@ Here is the problematic code:
 ```roc
     or: Bool.false,
 ```
+      ^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -200,6 +216,7 @@ Here is the problematic code:
 ```roc
     or: Bool.false,
 ```
+                  
 
 
 **MALFORMED TYPE**

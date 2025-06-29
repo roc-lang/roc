@@ -24,6 +24,7 @@ Here is the problematic code:
 ```roc
 app [main!] { |f: platform "c" }
 ```
+^^^^^
 
 
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
@@ -35,6 +36,7 @@ Here is the problematic code:
 ```roc
 app [main!] { |f: platform "c" }
 ```
+                  ^^^^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -46,6 +48,7 @@ Here is the problematic code:
 ```roc
 app [main!] { |f: platform "c" }
 ```
+                               
 
 
 **PARSE ERROR**
@@ -57,6 +60,7 @@ Here is the problematic code:
 ```roc
 getUser = |id| if (id > 1!) "big" else "l"
 ```
+                          ^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -68,6 +72,7 @@ Here is the problematic code:
 ```roc
 -ain! = |_| getUser(900)
 ```
+^^^^^
 
 
 **MALFORMED TYPE**
@@ -95,6 +100,7 @@ The unused variable is declared here:
 ```roc
 getUser = |id| if (id > 1!) "big" else "l"
 ```
+           ^^
 
 
 **INVALID STATEMENT**

@@ -109,15 +109,15 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 							(ty-var @3.26-3.27 (name "b"))))
 					(ty-apply @3.32-3.39 (symbol "List")
 						(ty-var @3.37-3.38 (name "b")))))))
-	(d-let (id 121)
+	(d-let (id 120)
 		(p-assign @6.1-6.6 (ident "main!") (id 107))
-		(e-lambda @6.9-6.33 (id 120)
+		(e-lambda @6.9-6.33 (id 119)
 			(args
 				(p-underscore @6.10-6.11 (id 108)))
 			(e-call @6.13-6.33
 				(e-lookup-local @6.13-6.20
 					(pattern (id 86)))
-				(e-list @6.21-6.32 (elem-var 115)
+				(e-list @6.21-6.32 (elem-var 110)
 					(elems
 						(e-int @6.22-6.23 (value "1"))
 						(e-int @6.24-6.25 (value "2"))
@@ -130,7 +130,7 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 (inferred-types
 	(defs
 		(d_assign (name "mapList") (def_var 106) (type "List, a -> b -> List"))
-		(d_assign (name "main!") (def_var 121) (type "* ? *")))
+		(d_assign (name "main!") (def_var 120) (type "* ? *")))
 	(expressions
 		(expr @4.11-6.6 (type "List, a -> b -> List"))
 		(expr @6.9-6.33 (type "* ? *"))))

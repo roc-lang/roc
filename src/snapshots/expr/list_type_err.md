@@ -8,18 +8,24 @@ type=expr
 [1, 2, "hello"]
 ~~~
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**list_type_err.md:1:8:1:15:**
+**INCOMPATIBLE LIST ELEMENTS**
+The second and third elements in this list have incompatible types:
+**list_type_err.md:1:5:**
 ```roc
 [1, 2, "hello"]
 ```
+    ^  ^^^^^^^
 
-It is of type:
+The second element has this type:
+    _Num(*)_
+
+However, the third element has this type:
     _Str_
 
-But you are trying to use it as:
-    _Num(*)_
+All elements in a list must have compatible types.
+
+Note: You can wrap each element in a tag to make them compatible.
+To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig
@@ -39,7 +45,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-list @1.1-1.16 (elem-var 77) (id 78)
+(e-list @1.1-1.16 (elem-var 73) (id 77)
 	(elems
 		(e-int @1.2-1.3 (value "1"))
 		(e-int @1.5-1.6 (value "2"))
@@ -48,5 +54,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 78) (type "List(Error)"))
+(expr (id 77) (type "List(Error)"))
 ~~~

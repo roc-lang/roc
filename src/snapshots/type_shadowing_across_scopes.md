@@ -28,6 +28,7 @@ Here is the problematic code:
 ```roc
     Result : [Success, Failure]
 ```
+    ^^^^^^^^
 
 
 **PARSE ERROR**
@@ -39,6 +40,7 @@ Here is the problematic code:
 ```roc
     Result : [Success, Failure]
 ```
+                       ^^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -50,6 +52,7 @@ Here is the problematic code:
 ```roc
     Result : [Success, Failure]
 ```
+                              
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -61,6 +64,7 @@ Here is the problematic code:
 ```roc
 }
 ```
+^
 
 
 **TYPE REDECLARED**
@@ -81,6 +85,7 @@ module [Result, processData]
 ```
 
 
+
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
 
@@ -93,6 +98,7 @@ The unused variable is declared here:
 ```roc
 processData = |data|
 ```
+               ^^^^
 
 
 **INVALID STATEMENT**

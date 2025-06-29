@@ -31,12 +31,14 @@ The redeclaration is here:
 ```roc
     x = 20  # Should shadow top-level x
 ```
+    ^
 
 But `x` was already defined here:
 **can_basic_scoping.md:4:1:4:2:**
 ```roc
 x = 5
 ```
+^
 
 
 # TOKENS

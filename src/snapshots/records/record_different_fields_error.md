@@ -24,6 +24,7 @@ Here is the problematic code:
 ```roc
     _privateField: "leading underscore",
 ```
+                   ^^^^^^^^^^^^^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -35,6 +36,7 @@ Here is the problematic code:
 ```roc
     _privateField: "leading underscore",
 ```
+                    ^^^^^^^^^^^^^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -46,6 +48,7 @@ Here is the problematic code:
 ```roc
     _privateField: "leading underscore",
 ```
+                                      ^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -57,6 +60,7 @@ Here is the problematic code:
 ```roc
     _privateField: "leading underscore",
 ```
+                                       
 
 
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
@@ -68,6 +72,7 @@ Here is the problematic code:
 ```roc
     field_: "trailing underscore",
 ```
+            ^^^^^^^^^^^^^^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -79,6 +84,7 @@ Here is the problematic code:
 ```roc
     field_: "trailing underscore",
 ```
+             ^^^^^^^^^^^^^^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -90,6 +96,7 @@ Here is the problematic code:
 ```roc
     field_: "trailing underscore",
 ```
+                                ^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -101,6 +108,7 @@ Here is the problematic code:
 ```roc
     field_: "trailing underscore",
 ```
+                                 
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -112,6 +120,7 @@ Here is the problematic code:
 ```roc
     PascalCase: "pascal",
 ```
+              ^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -123,6 +132,7 @@ Here is the problematic code:
 ```roc
     PascalCase: "pascal",
 ```
+                        
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -134,6 +144,7 @@ Here is the problematic code:
 ```roc
     kebab-case: "kebab",
 ```
+              ^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -145,6 +156,7 @@ Here is the problematic code:
 ```roc
     kebab-case: "kebab",
 ```
+                       
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -156,6 +168,7 @@ Here is the problematic code:
 ```roc
     field$special: "dollar",
 ```
+         ^^^^^^^^
 
 
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
@@ -167,6 +180,7 @@ Here is the problematic code:
 ```roc
     field$special: "dollar",
 ```
+                   ^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -178,6 +192,7 @@ Here is the problematic code:
 ```roc
     field$special: "dollar",
 ```
+                    ^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -189,6 +204,7 @@ Here is the problematic code:
 ```roc
     field$special: "dollar",
 ```
+                          ^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -200,6 +216,7 @@ Here is the problematic code:
 ```roc
     field$special: "dollar",
 ```
+                           
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -211,6 +228,7 @@ Here is the problematic code:
 ```roc
     field@symbol: "at symbol",
 ```
+         ^^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -222,6 +240,7 @@ Here is the problematic code:
 ```roc
     field@symbol: "at symbol",
 ```
+                ^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -233,6 +252,7 @@ Here is the problematic code:
 ```roc
     field@symbol: "at symbol",
 ```
+                             
 
 
 **MALFORMED TYPE**

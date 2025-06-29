@@ -25,6 +25,7 @@ This type is referenced here:
 ```roc
 MyType : UnknownType
 ```
+         ^^^^^^^^^^^
 
 
 **UNDECLARED TYPE**
@@ -35,6 +36,7 @@ This type is referenced here:
 ```roc
 processValue : UndeclaredResult -> Str
 ```
+               ^^^^^^^^^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -46,6 +48,7 @@ The unused variable is declared here:
 ```roc
 processValue = |value| {
 ```
+                ^^^^^
 
 
 # TOKENS

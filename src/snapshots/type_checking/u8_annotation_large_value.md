@@ -17,6 +17,7 @@ The number **500** does not fit in its inferred type:
 ```roc
 x = 500
 ```
+    ^^^
 
 Its inferred type is:
     _U8_

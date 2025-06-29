@@ -21,6 +21,7 @@ Here is the problematic code:
 ```roc
 mo|%
 ```
+^^^
 
 
 **UNEXPECTED TOKEN IN PATTERN**
@@ -32,6 +33,7 @@ Here is the problematic code:
 ```roc
 mo|%
 ```
+   ^
 
 
 **PARSE ERROR**
@@ -43,6 +45,7 @@ Here is the problematic code:
 ```roc
 mo|%
 ```
+    
 
 
 **INVALID STATEMENT**

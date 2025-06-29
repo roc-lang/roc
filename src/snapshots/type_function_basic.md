@@ -22,6 +22,7 @@ Here is the problematic code:
 ```roc
 apply : (a -> b), a -> b
 ```
+                ^^^
 
 
 **INVALID STATEMENT**
@@ -38,6 +39,7 @@ This expression is used in an unexpected way:
 ```roc
 apply = |fn, x| fn(x)
 ```
+^^^^^
 
 It is of type:
     _a -> b_

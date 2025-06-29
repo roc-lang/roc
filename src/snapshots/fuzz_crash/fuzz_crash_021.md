@@ -26,6 +26,7 @@ Here is the problematic code:
 ```roc
 Fli/main.roc" }
 ```
+^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -37,6 +38,7 @@ Here is the problematic code:
 ```roc
 Fli/main.roc" }
 ```
+   ^^^^^
 
 
 **PARSE ERROR**
@@ -48,6 +50,7 @@ Here is the problematic code:
 ```roc
 Pair(a, b+ : (
 ```
+^^^^^
 
 
 **PARSE ERROR**
@@ -59,6 +62,7 @@ Here is the problematic code:
 ```roc
 Pair(a, b+ : (
 ```
+              
 
 
 **MALFORMED TYPE**

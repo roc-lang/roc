@@ -136,6 +136,7 @@ This type is referenced here:
 ```roc
 Map(a, b) : Lis, (ab) -> List(b)
 ```
+            ^^^
 
 
 **UNDECLARED TYPE VARIABLE**
@@ -148,6 +149,7 @@ This type variable is referenced here:
 ```roc
 Map(a, b) : Lis, (ab) -> List(b)
 ```
+                  ^^
 
 
 **UNDECLARED TYPE VARIABLE**
@@ -160,6 +162,7 @@ This type variable is referenced here:
 ```roc
 		(ab) -> # row
 ```
+   ^^
 
 
 **UNDECLARED TYPE VARIABLE**
@@ -172,6 +175,7 @@ This type variable is referenced here:
 ```roc
 			List(			b	) #z)
 ```
+           ^
 
 
 **UNDECLARED TYPE**
@@ -182,6 +186,7 @@ This type is referenced here:
 ```roc
 Som : { foo : O, bar : g }
 ```
+              ^
 
 
 **UNDECLARED TYPE VARIABLE**
@@ -194,6 +199,7 @@ This type variable is referenced here:
 ```roc
 Som : { foo : O, bar : g }
 ```
+                       ^
 
 
 **UNDECLARED TYPE**
@@ -204,6 +210,7 @@ This type is referenced here:
 ```roc
 one : U6
 ```
+      ^^
 
 
 **NOT IMPLEMENTED**
@@ -232,6 +239,7 @@ The unused variable is declared here:
 ```roc
 	a, Tb,
 ```
+ ^
 
 
 **NOT IMPLEMENTED**
@@ -287,12 +295,14 @@ The redeclaration is here:
 ```roc
 	t = (123, "World", tag, O, (nd, t), [1, 2, 3])
 ```
+ ^
 
 But `t` was already defined here:
 **fuzz_crash_019.md:88:1:88:2:**
 ```roc
 t = [
 ```
+^
 
 
 **UNDEFINED VARIABLE**
@@ -343,6 +353,7 @@ The unused variable is declared here:
 ```roc
 	i= "H, ${d}"
 ```
+ ^
 
 
 **UNUSED VARIABLE**
@@ -354,6 +365,7 @@ The unused variable is declared here:
 ```roc
 	w = "d"
 ```
+ ^
 
 
 **UNUSED VARIABLE**
@@ -365,6 +377,7 @@ The unused variable is declared here:
 ```roc
 t = [
 ```
+^
 
 
 **UNUSED VARIABLE**
@@ -376,6 +389,7 @@ The unused variable is declared here:
 ```roc
 	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
 ```
+ ^^
 
 
 **NOT IMPLEMENTED**
@@ -1030,9 +1044,9 @@ expect {
 				(p-assign @50.2-50.3 (ident "a") (id 166))
 				(p-applied-tag @50.5-50.7 (id 168)))
 			(e-runtime-error (tag "not_implemented"))))
-	(d-let (id 347)
+	(d-let (id 344)
 		(p-assign @75.1-75.3 (ident "ma") (id 179))
-		(e-lambda @75.5-111.2 (id 346)
+		(e-lambda @75.5-111.2 (id 343)
 			(args
 				(p-underscore @75.6-75.7 (id 180)))
 			(e-block @75.9-111.2
@@ -1063,7 +1077,7 @@ expect {
 						(e-literal @87.13-87.13 (string ""))))
 				(s-let @88.1-91.3
 					(p-assign @88.1-88.2 (ident "t") (id 216))
-					(e-list @88.5-91.3 (elem-var 224) (id 225)
+					(e-list @88.5-91.3 (elem-var 221) (id 224)
 						(elems
 							(e-call @89.3-89.14
 								(e-runtime-error (tag "ident_not_in_scope"))
@@ -1072,8 +1086,8 @@ expect {
 							(e-int @89.16-89.19 (value "456"))
 							(e-int @90.1-90.2 (value "9")))))
 				(s-let @96.2-96.59
-					(p-assign @96.2-96.4 (ident "rd") (id 229))
-					(e-record @96.7-96.59 (ext-var 248) (id 249)
+					(p-assign @96.2-96.4 (ident "rd") (id 228))
+					(e-record @96.7-96.59 (ext-var 247) (id 248)
 						(fields
 							(field (name "foo")
 								(e-int @96.14-96.17 (value "123")))
@@ -1089,8 +1103,8 @@ expect {
 							(field (name "ned")
 								(e-runtime-error (tag "ident_not_in_scope"))))))
 				(s-let @97.2-97.48
-					(p-assign @97.2-97.3 (ident "t") (id 256))
-					(e-tuple @97.6-97.48 (id 274)
+					(p-assign @97.2-97.3 (ident "t") (id 255))
+					(e-tuple @97.6-97.48 (id 272)
 						(elems
 							(e-int @97.7-97.10 (value "123"))
 							(e-string @97.12-97.19
@@ -1101,8 +1115,8 @@ expect {
 								(elems
 									(e-runtime-error (tag "ident_not_in_scope"))
 									(e-lookup-local @97.34-97.35
-										(pattern (id 256)))))
-							(e-list @97.38-97.47 (elem-var 272)
+										(pattern (id 255)))))
+							(e-list @97.38-97.47 (elem-var 268)
 								(elems
 									(e-int @97.39-97.40 (value "1"))
 									(e-int @97.42-97.43 (value "2"))
@@ -1121,7 +1135,7 @@ expect {
 								(elems
 									(e-runtime-error (tag "ident_not_in_scope"))
 									(e-runtime-error (tag "ident_not_in_scope"))))
-							(e-list @103.3-103.12 (elem-var 294)
+							(e-list @103.3-103.12 (elem-var 289)
 								(elems
 									(e-int @103.4-103.5 (value "1"))
 									(e-int @103.7-103.8 (value "2"))
@@ -1164,9 +1178,9 @@ expect {
 							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-runtime-error (tag "ident_not_in_scope")))
 						(e-literal @109.4-109.5 (string " ")))))))
-	(d-let (id 351)
-		(p-assign @114.1-114.2 (ident "e") (id 349))
-		(e-empty_record @114.5-114.7 (id 350)))
+	(d-let (id 348)
+		(p-assign @114.1-114.2 (ident "e") (id 346))
+		(e-empty_record @114.5-114.7 (id 347)))
 	(s-type-decl @13.1-14.6 (id 84)
 		(ty-header @13.1-13.10 (name "Map")
 			(ty-args
@@ -1232,8 +1246,8 @@ expect {
 		(d_assign (name "ane") (def_var 138) (type "* ? Num(*)"))
 		(d_assign (name "add") (def_var 164) (type "* ? Error"))
 		(d_assign (name "me") (def_var 174) (type "*, [Tb]* ? Error"))
-		(d_assign (name "ma") (def_var 347) (type "* ? *"))
-		(d_assign (name "e") (def_var 351) (type "{}")))
+		(d_assign (name "ma") (def_var 344) (type "* ? *"))
+		(d_assign (name "e") (def_var 348) (type "{}")))
 	(expressions
 		(expr @35.7-37.4 (type "* ? Num(*)"))
 		(expr @38.7-47.2 (type "* ? Error"))

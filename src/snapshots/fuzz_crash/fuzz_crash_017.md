@@ -22,6 +22,7 @@ Here is the problematic code:
 ```roc
 me = "luc"
 ```
+^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -33,6 +34,7 @@ Here is the problematic code:
 ```roc
 me = "luc"
 ```
+   ^^^
 
 
 **PARSE ERROR**
@@ -44,6 +46,7 @@ Here is the problematic code:
 ```roc
 foo = "hello ${namF
 ```
+      ^^^^^^^
 
 
 **INVALID STATEMENT**

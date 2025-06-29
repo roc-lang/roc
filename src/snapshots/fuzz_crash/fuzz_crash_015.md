@@ -27,6 +27,7 @@ Here is the problematic code:
 ```roc
 0o0.0
 ```
+^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -38,6 +39,7 @@ Here is the problematic code:
 ```roc
 0o0.0
 ```
+   
 
 
 **PARSE ERROR**
@@ -49,6 +51,7 @@ Here is the problematic code:
 ```roc
 0u8.0
 ```
+   
 
 
 **INVALID STATEMENT**

@@ -30,6 +30,7 @@ This type is referenced here:
 ```roc
 Foo : (Bar, Baz)
 ```
+       ^^^
 
 
 **UNDECLARED TYPE**
@@ -40,6 +41,7 @@ This type is referenced here:
 ```roc
 Foo : (Bar, Baz)
 ```
+            ^^^
 
 
 **UNDECLARED TYPE**
@@ -50,6 +52,7 @@ This type is referenced here:
 ```roc
 Some(a) : { foo : Ok(a), bar : Something }
 ```
+                               ^^^^^^^^^
 
 
 # TOKENS

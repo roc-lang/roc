@@ -21,6 +21,7 @@ Here is the problematic code:
 ```roc
 0{
 ```
+^^
 
 
 **INVALID STATEMENT**

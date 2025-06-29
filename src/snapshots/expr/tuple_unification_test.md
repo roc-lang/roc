@@ -31,7 +31,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-list @1.1-1.23 (elem-var 81) (id 82)
+(e-list @1.1-1.23 (elem-var 76) (id 81)
 	(elems
 		(e-tuple @1.2-1.10
 			(elems
@@ -46,5 +46,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 82) (type "List((Frac(*), Str))"))
+(expr (id 81) (type "List((Frac(*), Str))"))
 ~~~

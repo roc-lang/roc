@@ -17,6 +17,7 @@ Here is the problematic code:
 ```roc
 { person & age: 31 }
 ```
+         ^^^^^
 
 
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
@@ -28,6 +29,7 @@ Here is the problematic code:
 ```roc
 { person & age: 31 }
 ```
+                ^^^^
 
 
 **UNDEFINED VARIABLE**

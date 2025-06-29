@@ -50,6 +50,7 @@ This type is referenced here:
 ```roc
 Bar : SomeUndeclaredType
 ```
+      ^^^^^^^^^^^^^^^^^^
 
 
 # TOKENS

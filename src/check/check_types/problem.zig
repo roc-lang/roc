@@ -10,6 +10,9 @@ const store_mod = @import("../../types/store.zig");
 const snapshot = @import("./snapshot.zig");
 
 const Report = reporting.Report;
+const Document = reporting.Document;
+const UnderlineRegion = @import("../../reporting/document.zig").UnderlineRegion;
+const SourceCodeDisplayRegion = @import("../../reporting/document.zig").SourceCodeDisplayRegion;
 
 const TypesStore = store_mod.Store;
 const Allocator = std.mem.Allocator;
@@ -25,6 +28,7 @@ const Content = types.Content;
 /// The kind of problem we're dealing with
 pub const Problem = union(enum) {
     type_mismatch: VarProblem2,
+    incompatible_list_elements: IncompatibleListElements,
     number_does_not_fit: NumberDoesNotFit,
     negative_unsigned_int: NegativeUnsignedInt,
     infinite_recursion: struct { var_: Var },
@@ -64,6 +68,18 @@ pub const Problem = union(enum) {
                     can_ir,
                     &snapshot_writer,
                     vars,
+                    source,
+                    filename,
+                );
+            },
+            .incompatible_list_elements => |data| {
+                return buildIncompatibleListElementsReport(
+                    gpa,
+                    buf,
+                    module_env,
+                    can_ir,
+                    &snapshot_writer,
+                    data,
                     source,
                     filename,
                 );
@@ -182,6 +198,143 @@ pub const Problem = union(enum) {
                 try report.document.addReflowingText(" This might be because the numeric literal is too large to fit in the target type.");
             }
         }
+
+        return report;
+    }
+
+    /// Build a report for incompatible list elements
+    pub fn buildIncompatibleListElementsReport(
+        gpa: Allocator,
+        buf: *std.ArrayList(u8),
+        module_env: *const base.ModuleEnv,
+        _: *const can.CIR,
+        snapshot_writer: *snapshot.SnapshotWriter,
+        data: IncompatibleListElements,
+        source: []const u8,
+        filename: []const u8,
+    ) !Report {
+        var report = Report.init(gpa, "INCOMPATIBLE LIST ELEMENTS", .runtime_error);
+
+        // Format the type strings
+        buf.clearRetainingCapacity();
+        try snapshot_writer.write(data.first_elem_snapshot);
+        const owned_first_type = try report.addOwnedString(buf.items);
+
+        buf.clearRetainingCapacity();
+        try snapshot_writer.write(data.incompatible_elem_snapshot);
+        const owned_incompatible_type = try report.addOwnedString(buf.items);
+
+        // Add description
+        buf.clearRetainingCapacity();
+        if (data.list_length == 2) {
+            // Special case for lists with exactly 2 elements
+            try buf.appendSlice("The two elements in this list have incompatible types:");
+        } else if (data.first_elem_index == 0 and data.incompatible_elem_index == 1) {
+            // Special case for first two elements in longer lists
+            try buf.appendSlice("The first two elements in this list have incompatible types:");
+        } else {
+            try buf.appendSlice("The ");
+            try appendOrdinal(buf, data.first_elem_index + 1);
+            try buf.appendSlice(" and ");
+            try appendOrdinal(buf, data.incompatible_elem_index + 1);
+            try buf.appendSlice(" elements in this list have incompatible types:");
+        }
+        const owned_description = try report.addOwnedString(buf.items);
+        try report.document.addText(owned_description);
+        try report.document.addLineBreak();
+
+        // Determine the overall region that encompasses both elements
+        const overall_start_offset = @min(data.first_elem_region.start.offset, data.incompatible_elem_region.start.offset);
+        const overall_end_offset = @max(data.first_elem_region.end.offset, data.incompatible_elem_region.end.offset);
+
+        const overall_region_info = base.RegionInfo.position(
+            source,
+            module_env.line_starts.items,
+            overall_start_offset,
+            overall_end_offset,
+        ) catch return report;
+
+        // Get region info for both elements
+        const first_elem_region_info = base.RegionInfo.position(
+            source,
+            module_env.line_starts.items,
+            data.first_elem_region.start.offset,
+            data.first_elem_region.end.offset,
+        ) catch return report;
+
+        const incompatible_elem_region_info = base.RegionInfo.position(
+            source,
+            module_env.line_starts.items,
+            data.incompatible_elem_region.start.offset,
+            data.incompatible_elem_region.end.offset,
+        ) catch return report;
+
+        // Create the display region
+        const display_region = SourceCodeDisplayRegion{
+            .start_line = overall_region_info.start_line_idx + 1,
+            .start_column = overall_region_info.start_col_idx + 1,
+            .end_line = overall_region_info.end_line_idx + 1,
+            .end_column = overall_region_info.end_col_idx + 1,
+            .region_annotation = .dimmed,
+            .filename = filename,
+        };
+
+        // Create underline regions
+        const underline_regions = [_]UnderlineRegion{
+            .{
+                .start_line = first_elem_region_info.start_line_idx + 1,
+                .start_column = first_elem_region_info.start_col_idx + 1,
+                .end_line = first_elem_region_info.end_line_idx + 1,
+                .end_column = first_elem_region_info.end_col_idx + 1,
+                .annotation = .error_highlight,
+            },
+            .{
+                .start_line = incompatible_elem_region_info.start_line_idx + 1,
+                .start_column = incompatible_elem_region_info.start_col_idx + 1,
+                .end_line = incompatible_elem_region_info.end_line_idx + 1,
+                .end_column = incompatible_elem_region_info.end_col_idx + 1,
+                .annotation = .error_highlight,
+            },
+        };
+
+        try report.document.addSourceCodeWithUnderlines(source, display_region, &underline_regions);
+        try report.document.addLineBreak();
+
+        // Show the type of the first element
+        buf.clearRetainingCapacity();
+        try buf.appendSlice("The ");
+        try appendOrdinal(buf, data.first_elem_index + 1);
+        try buf.appendSlice(" element has this type:");
+        const owned_first_type_desc = try report.addOwnedString(buf.items);
+        try report.document.addText(owned_first_type_desc);
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(owned_first_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        // Show the type of the second element
+        buf.clearRetainingCapacity();
+        try buf.appendSlice("However, the ");
+        try appendOrdinal(buf, data.incompatible_elem_index + 1);
+        try buf.appendSlice(" element has this type:");
+        const owned_second_type_desc = try report.addOwnedString(buf.items);
+        try report.document.addText(owned_second_type_desc);
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(owned_incompatible_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        // TODO we should categorize this as a tip/hint (maybe relevant to how editors display it)
+        try report.document.addText("All elements in a list must have compatible types.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        // TODO link to a speceific explanation of how to mix element types using tag unions
+        try report.document.addText("Note: You can wrap each element in a tag to make them compatible.");
+        try report.document.addLineBreak();
+        try report.document.addText("To learn about tags, see ");
+        try report.document.addLink("https://www.roc-lang.org/tutorial#tags");
 
         return report;
     }
@@ -305,12 +458,54 @@ pub const Problem = union(enum) {
         const report = Report.init(allocator, "UNIMPLEMENTED", .runtime_error);
         return report;
     }
+
+    fn appendOrdinal(buf: *std.ArrayList(u8), n: usize) !void {
+        switch (n) {
+            1 => try buf.appendSlice("first"),
+            2 => try buf.appendSlice("second"),
+            3 => try buf.appendSlice("third"),
+            4 => try buf.appendSlice("fourth"),
+            5 => try buf.appendSlice("fifth"),
+            6 => try buf.appendSlice("sixth"),
+            7 => try buf.appendSlice("seventh"),
+            8 => try buf.appendSlice("eighth"),
+            9 => try buf.appendSlice("ninth"),
+            10 => try buf.appendSlice("tenth"),
+            else => {
+                // Using character arrays to avoid typo checker flagging these strings as typos
+                // (e.g. it thinks ['n', 'd'] is a typo of "and") - and that's a useful typo
+                // to catch, so we're sacrificing readability of this particular code snippet
+                // for the sake of catching actual typos of "and" elsewhere in the code base.
+                const suffix = if (n % 100 >= 11 and n % 100 <= 13) &[_]u8{ 't', 'h' } else switch (n % 10) {
+                    1 => &[_]u8{ 's', 't' },
+                    2 => &[_]u8{ 'n', 'd' },
+                    3 => &[_]u8{ 'r', 'd' },
+                    else => &[_]u8{ 't', 'h' },
+                };
+                try buf.writer().print("{d}{s}", .{ n, suffix });
+            },
+        }
+    }
 };
 
 /// A single var problem
 pub const VarProblem1 = struct {
     var_: Var,
     snapshot: SnapshotContentIdx,
+};
+
+/// Problem data for when list elements have incompatible types
+pub const IncompatibleListElements = struct {
+    list_region: base.Region,
+    first_elem_region: base.Region,
+    first_elem_var: Var,
+    first_elem_snapshot: SnapshotContentIdx,
+    first_elem_index: usize, // 0-based index of the first element
+    incompatible_elem_region: base.Region,
+    incompatible_elem_var: Var,
+    incompatible_elem_snapshot: SnapshotContentIdx,
+    incompatible_elem_index: usize, // 0-based index of the incompatible element
+    list_length: usize, // Total number of elements in the list
 };
 
 /// A two var problem

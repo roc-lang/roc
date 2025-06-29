@@ -20,6 +20,7 @@ Here is the problematic code:
 ```roc
 { person &
 ```
+         
 
 
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
@@ -31,6 +32,7 @@ Here is the problematic code:
 ```roc
     age: 31,
 ```
+         ^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -42,6 +44,7 @@ Here is the problematic code:
 ```roc
     age: 31,
 ```
+           
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -53,6 +56,7 @@ Here is the problematic code:
 ```roc
     active: Bool.true,
 ```
+                ^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -64,6 +68,7 @@ Here is the problematic code:
 ```roc
     active: Bool.true,
 ```
+                     
 
 
 **UNDEFINED VARIABLE**

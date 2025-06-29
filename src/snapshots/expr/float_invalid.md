@@ -17,6 +17,7 @@ Here is the problematic code:
 ```roc
 3.14.15
 ```
+    ^^^
 
 
 # TOKENS

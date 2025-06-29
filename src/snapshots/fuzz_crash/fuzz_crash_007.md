@@ -21,6 +21,7 @@ Here is the problematic code:
 ```roc
 ff8.8.d
 ```
+^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -32,6 +33,7 @@ Here is the problematic code:
 ```roc
 ff8.8.d
 ```
+   ^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -43,6 +45,7 @@ Here is the problematic code:
 ```roc
 ff8.8.d
 ```
+     ^^
 
 
 **INVALID STATEMENT**

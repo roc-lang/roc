@@ -65,6 +65,7 @@ app [main!] { pf: platform "../basic-cli/main.roc" }
 ```
 
 
+
 **UNUSED VARIABLE**
 Variable ``color`` is not used anywhere in your code.
 
@@ -74,6 +75,7 @@ The unused variable is declared here:
 ```roc
     color = Red
 ```
+    ^^^^^
 
 
 **UNUSED VARIABLE**
@@ -85,6 +87,7 @@ The unused variable is declared here:
 ```roc
     person = { name: "Alice", age: 30 }
 ```
+    ^^^^^^
 
 
 # TOKENS

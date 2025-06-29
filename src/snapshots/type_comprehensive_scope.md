@@ -64,6 +64,7 @@ module [MyU64, Person, Result, Tree, Node]
 ```
 
 
+
 **TYPE REDECLARED**
 The type ``Person`` is being redeclared.
 
@@ -94,6 +95,7 @@ This type is referenced here:
 ```roc
 BadType : SomeUndeclaredType
 ```
+          ^^^^^^^^^^^^^^^^^^
 
 
 # TOKENS

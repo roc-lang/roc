@@ -17,6 +17,7 @@ Here is the problematic code:
 ```roc
 !isValid
 ```
+^^^^^^^^
 
 
 # TOKENS

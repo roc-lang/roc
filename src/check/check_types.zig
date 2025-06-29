@@ -57,9 +57,9 @@ pub fn deinit(self: *Self) void {
     self.occurs_scratch.deinit();
 }
 
-/// Deinit owned fields
-pub fn unify(self: *Self, a: Var, b: Var) void {
-    _ = unifier.unify(
+/// Unify two types
+pub fn unify(self: *Self, a: Var, b: Var) unifier.Result {
+    return unifier.unify(
         self.can_ir.env,
         self.types,
         &self.problems,
@@ -89,10 +89,10 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx) void {
     if (def.annotation) |anno_idx| {
         const annotation = self.can_ir.store.getAnnotation(anno_idx);
 
-        self.unify(@enumFromInt(@intFromEnum(def.expr)), annotation.signature);
-        self.unify(@enumFromInt(@intFromEnum(def_idx)), annotation.signature);
+        _ = self.unify(@enumFromInt(@intFromEnum(def.expr)), annotation.signature);
+        _ = self.unify(@enumFromInt(@intFromEnum(def_idx)), annotation.signature);
     } else {
-        self.unify(@enumFromInt(@intFromEnum(def_idx)), @enumFromInt(@intFromEnum(def.expr)));
+        _ = self.unify(@enumFromInt(@intFromEnum(def_idx)), @enumFromInt(@intFromEnum(def.expr)));
     }
 }
 
@@ -267,15 +267,90 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
         .e_str => |_| {},
         .e_lookup => |_| {},
         .e_list => |list| {
-            const elem_var = list.elem_var;
-            for (self.can_ir.store.exprSlice(list.elems)) |single_elem_expr_idx| {
-                self.checkExpr(single_elem_expr_idx);
-                self.unify(
-                    @enumFromInt(@intFromEnum(elem_var)),
-                    @enumFromInt(@intFromEnum(single_elem_expr_idx)),
-                );
+            const elem_var = @as(Var, @enumFromInt(@intFromEnum(list.elem_var)));
+            const elems = self.can_ir.store.exprSlice(list.elems);
+
+            std.debug.assert(elems.len > 0); // Should never be 0 here, because this is not an .empty_list
+
+            // We need to type-check the first element, but we don't need to unify it with
+            // anything because we already pre-unified the list's elem var with it.
+            const first_elem_idx = elems[0];
+            var last_unified_idx: CIR.Expr.Idx = first_elem_idx;
+            var last_unified_index: usize = 0; // Track the index for error messages
+            self.checkExpr(first_elem_idx);
+
+            for (elems[1..], 1..) |elem_expr_id, i| {
+                self.checkExpr(elem_expr_id);
+
+                // Unify each element's var with the list's elem var
+                const result = self.unify(elem_var, @enumFromInt(@intFromEnum(elem_expr_id)));
+
+                switch (result) {
+                    .ok => {},
+                    .problem => |problem_idx| {
+                        // Unification failed, so we know it appended a type mismatch to self.problems.
+                        // We'll translate that generic type mismatch between the two elements into
+                        // a more helpful list-specific error report.
+
+                        // Extract info from the type mismatch problem
+                        var elem_var_snapshot: snapshot.SnapshotContentIdx = undefined;
+                        var incompatible_snapshot: snapshot.SnapshotContentIdx = undefined;
+
+                        // Extract snapshots from the type mismatch problem
+                        switch (self.problems.problems.get(problem_idx)) {
+                            .type_mismatch => |mismatch| {
+                                // The expected type is elem_var, actual is the incompatible element
+                                elem_var_snapshot = mismatch.expected;
+                                incompatible_snapshot = mismatch.actual;
+
+                                // Include the previous element in the error message, since it's the one
+                                // that the current element failed to unify with.
+                                const prev_elem_expr = self.can_ir.store.getExpr(last_unified_idx);
+                                const incompatible_elem_expr = self.can_ir.store.getExpr(elem_expr_id);
+                                const prev_region = prev_elem_expr.toRegion();
+                                const incomp_region = incompatible_elem_expr.toRegion();
+
+                                // Replace the generic Problem in the MultiArrayList with a list-specific one
+                                self.problems.problems.set(problem_idx, .{
+                                    .incompatible_list_elements = .{
+                                        .list_region = list.region,
+                                        .first_elem_region = prev_region orelse list.region,
+                                        .first_elem_var = @enumFromInt(@intFromEnum(last_unified_idx)),
+                                        .first_elem_snapshot = elem_var_snapshot,
+                                        .first_elem_index = last_unified_index,
+                                        .incompatible_elem_region = incomp_region orelse list.region,
+                                        .incompatible_elem_var = @enumFromInt(@intFromEnum(elem_expr_id)),
+                                        .incompatible_elem_snapshot = incompatible_snapshot,
+                                        .incompatible_elem_index = i,
+                                        .list_length = elems.len,
+                                    },
+                                });
+                            },
+                            else => {
+                                // For other problem types (e.g., number_does_not_fit), the original
+                                // problem is already more specific than our generic "incompatible list
+                                // elements" message, so we should keep it as-is and not replace it.
+                                // Note: if an element has an error type (e.g., from a nested heterogeneous
+                                // list), unification would succeed, not fail, so we wouldn't reach this branch.
+                            },
+                        }
+
+                        // Check remaining elements to catch their individual errors
+                        for (elems[i + 1 ..]) |remaining_elem_id| {
+                            self.checkExpr(remaining_elem_id);
+                        }
+
+                        // Break to avoid cascading errors
+                        break;
+                    },
+                }
+
+                // Track the last successfully unified element
+                last_unified_idx = elem_expr_id;
+                last_unified_index = i;
             }
         },
+        .e_empty_list => |_| {},
         .e_when => |_| {},
         .e_if => |if_expr| {
             // Check branches
@@ -284,14 +359,14 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
 
                 // Check the branch's condition
                 self.checkExpr(if_branch.cond);
-                self.unify(
+                _ = self.unify(
                     @enumFromInt(@intFromEnum(can.BUILTIN_BOOL)),
                     @enumFromInt(@intFromEnum(if_branch.cond)),
                 );
 
                 // Check the branch's body
                 self.checkExpr(if_branch.body);
-                self.unify(
+                _ = self.unify(
                     @enumFromInt(@intFromEnum(if_expr.branch_var)),
                     @enumFromInt(@intFromEnum(if_branch.body)),
                 );
@@ -299,13 +374,13 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
 
             // Check the final else
             self.checkExpr(if_expr.final_else);
-            self.unify(
+            _ = self.unify(
                 @enumFromInt(@intFromEnum(if_expr.branch_var)),
                 @enumFromInt(@intFromEnum(if_expr.final_else)),
             );
 
             // Then, unify the root expression with the final else
-            self.unify(
+            _ = self.unify(
                 @enumFromInt(@intFromEnum(if_expr.final_else)),
                 @enumFromInt(@intFromEnum(expr_idx)),
             );
@@ -392,7 +467,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
                             // STEP 4: Unify field type variable with field value type variable
                             // This is where concrete types (like Str, Num) get propagated
                             // from field values to the record structure
-                            self.unify(type_field_var, field_expr_type_var);
+                            _ = self.unify(type_field_var, field_expr_type_var);
                             break;
                         }
                     }
@@ -432,7 +507,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
             self.checkExpr(block.final_expr);
 
             // Link the root expr with the final expr
-            self.unify(
+            _ = self.unify(
                 @enumFromInt(@intFromEnum(expr_idx)),
                 @enumFromInt(@intFromEnum(block.final_expr)),
             );

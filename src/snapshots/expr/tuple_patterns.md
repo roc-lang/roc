@@ -35,6 +35,7 @@ Here is the problematic code:
 ```roc
     (x, y) = (1, 2)
 ```
+           ^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -46,6 +47,7 @@ Here is the problematic code:
 ```roc
     ((a, b), (c, d)) = ((10, 20), (30, 40))
 ```
+                     ^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -57,6 +59,7 @@ Here is the problematic code:
 ```roc
     (first, second, third) = (100, 42, 200)
 ```
+                           ^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -68,6 +71,7 @@ Here is the problematic code:
 ```roc
     (name, string, boolean) = ("Alice", "fixed", True)
 ```
+                            ^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -79,6 +83,7 @@ Here is the problematic code:
 ```roc
     (list, hello) = ([1, 2, 3], "hello")
 ```
+                  ^^^
 
 
 **UNDEFINED VARIABLE**
@@ -252,7 +257,7 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1.1-19.2 (id 148)
+(e-block @1.1-19.2 (id 147)
 	(s-expr @4.5-4.13
 		(e-tuple @4.5-4.11
 			(elems
@@ -319,7 +324,7 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 	(s-expr @16.21-18.6
 		(e-tuple @16.21-16.41
 			(elems
-				(e-list @16.22-16.31 (elem-var 141)
+				(e-list @16.22-16.31 (elem-var 138)
 					(elems
 						(e-int @16.23-16.24 (value "1"))
 						(e-int @16.26-16.27 (value "2"))
@@ -330,5 +335,5 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 148) (type "{}"))
+(expr (id 147) (type "{}"))
 ~~~

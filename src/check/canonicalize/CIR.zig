@@ -1128,6 +1128,10 @@ pub const Expr = union(enum) {
         elems: Expr.Span,
         region: Region,
     },
+    /// Empty list constant
+    e_empty_list: struct {
+        region: Region,
+    },
     e_tuple: struct {
         elems: Expr.Span,
         region: Region,
@@ -1268,14 +1272,14 @@ pub const Expr = union(enum) {
 
     pub fn toRegion(self: *const @This()) ?Region {
         switch (self.*) {
-            .num => |e| return e.region,
-            .int => |e| return e.region,
-            .frac_f64 => |e| return e.region,
-            .frac_dec => |e| return e.region,
-            .dec_small => |e| return e.region,
-            .str_segment => |e| return e.region,
-            .str => |e| return e.region,
-            .lookup => |e| switch (e) {
+            .e_num => |e| return e.region,
+            .e_int => |e| return e.region,
+            .e_frac_f64 => |e| return e.region,
+            .e_frac_dec => |e| return e.region,
+            .e_dec_small => |e| return e.region,
+            .e_str_segment => |e| return e.region,
+            .e_str => |e| return e.region,
+            .e_lookup => |e| switch (e) {
                 .local => |local| return local.region,
                 .external => |_| {
                     // External lookups don't have a direct region access from Expr context
@@ -1283,21 +1287,22 @@ pub const Expr = union(enum) {
                     return null;
                 },
             },
-            .list => |e| return e.region,
-            .tuple => |e| return e.region,
-            .when => |e| return e.region,
-            .@"if" => |e| return e.region,
-            .call => |e| return e.region,
-            .record => |e| return e.region,
-            .empty_record => |e| return e.region,
-            .record_access => |e| return e.region,
-            .dot_access => |e| return e.region,
-            .tag => |e| return e.region,
-            .zero_argument_tag => |e| return e.region,
-            .binop => |e| return e.region,
-            .block => |e| return e.region,
-            .lambda => |e| return e.region,
-            .runtime_error => |e| return e.region,
+            .e_list => |e| return e.region,
+            .e_tuple => |e| return e.region,
+            .e_when => |e| return e.region,
+            .e_if => |e| return e.region,
+            .e_empty_list => |e| return e.region,
+            .e_call => |e| return e.region,
+            .e_record => |e| return e.region,
+            .e_empty_record => |e| return e.region,
+            .e_record_access => |e| return e.region,
+            .e_dot_access => |e| return e.region,
+            .e_tag => |e| return e.region,
+            .e_zero_argument_tag => |e| return e.region,
+            .e_binop => |e| return e.region,
+            .e_block => |e| return e.region,
+            .e_lambda => |e| return e.region,
+            .e_runtime_error => |e| return e.region,
         }
     }
 
@@ -1430,6 +1435,11 @@ pub const Expr = union(enum) {
                 list_node.appendNode(gpa, &elems_node);
 
                 return list_node;
+            },
+            .e_empty_list => |e| {
+                var empty_list_node = SExpr.init(gpa, "e-empty_list");
+                empty_list_node.appendRegion(gpa, ir.calcRegionInfo(e.region));
+                return empty_list_node;
             },
             .e_tuple => |t| {
                 var node = SExpr.init(gpa, "e-tuple");

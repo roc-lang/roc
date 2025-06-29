@@ -35,6 +35,7 @@ The unused variable is declared here:
 ```roc
     unused_var = 42
 ```
+    ^^^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -46,6 +47,7 @@ The unused variable is declared here:
 ```roc
     another_unused = "hello"
 ```
+    ^^^^^^^^^^^^^^
 
 
 # TOKENS

@@ -21,6 +21,7 @@ This expression is used in an unexpected way:
 ```roc
 getUser = |id| if (id > 10) "big" else "small"
 ```
+                  ^^^^^^^^^
 
 It is of type:
     _(*)_

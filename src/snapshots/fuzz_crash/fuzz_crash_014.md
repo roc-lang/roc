@@ -23,6 +23,7 @@ Here is the problematic code:
 ```roc
 0b.0
 ```
+^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -34,6 +35,7 @@ Here is the problematic code:
 ```roc
 0b.0
 ```
+  
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -47,6 +49,7 @@ Here is the problematic code:
 ```
 
 
+
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **0u22** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
@@ -56,6 +59,7 @@ Here is the problematic code:
 ```roc
 0u22
 ```
+^^^^
 
 
 **INVALID STATEMENT**

@@ -23,6 +23,7 @@ Here is the problematic code:
 ```roc
     { age } = person
 ```
+            ^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
