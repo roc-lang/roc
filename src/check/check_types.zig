@@ -284,63 +284,59 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
                 // Unify each element's var with the list's elem var
                 const result = self.unify(elem_var, @enumFromInt(@intFromEnum(elem_expr_id)));
 
-                if (result == .problem) {
-                    // Unification failed, so we know it appended a generic type mismatch to self.problems
-                    // We'll translate that generic type mismatch between the two elements into
-                    // a more helpful list-specific error report.
+                switch (result) {
+                    .ok => {},
+                    .problem => |problem_idx| {
+                        // Unification failed, so we know it appended a type mismatch to self.problems.
+                        // We'll translate that generic type mismatch between the two elements into
+                        // a more helpful list-specific error report.
 
-                    // Get the last problem that was appended to problems
-                    const problem_count = self.problems.problems.items.len;
-                    std.debug.assert(problem_count > 0); // Should never be 0 here, because result was .problem
+                        // Extract info from the type mismatch problem
+                        var elem_var_snapshot: snapshot.SnapshotContentIdx = undefined;
+                        var incompatible_snapshot: snapshot.SnapshotContentIdx = undefined;
 
-                    const last_idx: problem.Problem.SafeMultiList.Idx = @enumFromInt(problem_count - 1);
+                        // Extract snapshots from the type mismatch problem
+                        switch (self.problems.problems.get(problem_idx)) {
+                            .type_mismatch => |mismatch| {
+                                elem_var_snapshot = mismatch.expected;
+                                incompatible_snapshot = mismatch.actual;
+                            },
+                            else => {
+                                // Shouldn't happen, but handle gracefully
+                                elem_var_snapshot = self.snapshots.createSnapshot(
+                                    self.types,
+                                    elem_var,
+                                );
+                                incompatible_snapshot = self.snapshots.createSnapshot(
+                                    self.types,
+                                    @enumFromInt(@intFromEnum(elem_expr_id)),
+                                );
+                            },
+                        }
 
-                    // Extract info from the type mismatch problem
-                    var elem_var_snapshot: snapshot.SnapshotContentIdx = undefined;
-                    var incompatible_snapshot: snapshot.SnapshotContentIdx = undefined;
+                        // Include the previous element in the error message, since it's the one
+                        // that the current element failed to unify with.
+                        const prev_elem_expr = self.can_ir.store.getExpr(last_unified_idx);
+                        const incompatible_elem_expr = self.can_ir.store.getExpr(elem_expr_id);
+                        const prev_region = prev_elem_expr.toRegion();
+                        const incomp_region = incompatible_elem_expr.toRegion();
 
-                    // Extract snapshots from the type mismatch problem
-                    switch (self.problems.problems.get(last_idx)) {
-                        .type_mismatch => |mismatch| {
-                            // The expected type is elem_var, actual is the incompatible element
-                            elem_var_snapshot = mismatch.expected;
-                            incompatible_snapshot = mismatch.actual;
-                        },
-                        else => {
-                            // Shouldn't happen, but handle gracefully
-                            elem_var_snapshot = self.snapshots.createSnapshot(
-                                self.types,
-                                elem_var,
-                            );
-                            incompatible_snapshot = self.snapshots.createSnapshot(
-                                self.types,
-                                @enumFromInt(@intFromEnum(elem_expr_id)),
-                            );
-                        },
-                    }
+                        // Replace the generic Problem in the MultiArrayList with a list-specific one
+                        self.problems.problems.set(problem_idx, .{
+                            .incompatible_list_elements = .{
+                                .list_region = list.region,
+                                .first_elem_region = prev_region orelse list.region,
+                                .first_elem_var = @enumFromInt(@intFromEnum(last_unified_idx)),
+                                .first_elem_snapshot = elem_var_snapshot,
+                                .incompatible_elem_region = incomp_region orelse list.region,
+                                .incompatible_elem_var = @enumFromInt(@intFromEnum(elem_expr_id)),
+                                .incompatible_elem_snapshot = incompatible_snapshot,
+                            },
+                        });
 
-                    // Include the previous element in the error message, since it's the one
-                    // that the current element failed to unify with.
-                    const prev_elem_expr = self.can_ir.store.getExpr(last_unified_idx);
-                    const incompatible_elem_expr = self.can_ir.store.getExpr(elem_expr_id);
-                    const prev_region = prev_elem_expr.toRegion();
-                    const incomp_region = incompatible_elem_expr.toRegion();
-
-                    // Replace the last problem in the MultiArrayList with a list-specific one
-                    self.problems.problems.items.set(problem_count - 1, .{
-                        .incompatible_list_elements = .{
-                            .list_region = list.region,
-                            .first_elem_region = prev_region orelse list.region,
-                            .first_elem_var = @enumFromInt(@intFromEnum(last_unified_idx)),
-                            .first_elem_snapshot = elem_var_snapshot,
-                            .incompatible_elem_region = incomp_region orelse list.region,
-                            .incompatible_elem_var = @enumFromInt(@intFromEnum(elem_expr_id)),
-                            .incompatible_elem_snapshot = incompatible_snapshot,
-                        },
-                    });
-
-                    // Break to avoid cascading errors
-                    break;
+                        // Break to avoid cascading errors
+                        break;
+                    },
                 }
 
                 // Track the last successfully unified element
