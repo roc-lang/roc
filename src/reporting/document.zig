@@ -22,6 +22,25 @@ pub const SourceRegion = struct {
     annotation: Annotation,
 };
 
+/// A region to underline within displayed source code
+pub const UnderlineRegion = struct {
+    start_line: u32,
+    start_column: u32,
+    end_line: u32,
+    end_column: u32,
+    annotation: Annotation,
+};
+
+/// Display region for source code with underlines
+pub const SourceCodeDisplayRegion = struct {
+    start_line: u32,
+    start_column: u32,
+    end_line: u32,
+    end_column: u32,
+    region_annotation: Annotation,
+    filename: ?[]const u8,
+};
+
 /// Annotations that can be applied to document content for styling and semantics.
 pub const Annotation = enum {
     /// Basic emphasis (usually bold or bright)
@@ -162,6 +181,9 @@ pub const DocumentElement = union(enum) {
     /// Text that should be reflowed/wrapped automatically
     reflowing_text: []const u8,
 
+    /// Link URL
+    link: []const u8,
+
     /// Vertical stack of elements
     vertical_stack: []DocumentElement,
 
@@ -195,6 +217,14 @@ pub const DocumentElement = union(enum) {
         /// Optional filename for context
         filename: ?[]const u8,
     },
+    source_code_with_underlines: struct {
+        /// The source code to display
+        source: []const u8,
+        /// Overall region to display (determines which lines to show)
+        display_region: SourceCodeDisplayRegion,
+        /// Regions to underline within the displayed code
+        underline_regions: []UnderlineRegion,
+    },
 
     /// Get the text content if this is a text element, null otherwise.
     pub fn getText(self: DocumentElement) ?[]const u8 {
@@ -210,7 +240,7 @@ pub const DocumentElement = union(enum) {
     /// Returns true if this element represents actual content.
     pub fn hasContent(self: DocumentElement) bool {
         return switch (self) {
-            .text, .annotated, .raw, .reflowing_text, .vertical_stack, .horizontal_concat, .source_code_region, .source_code_multi_region => true,
+            .text, .annotated, .raw, .reflowing_text, .link, .vertical_stack, .horizontal_concat, .source_code_region, .source_code_multi_region => true,
             else => false,
         };
     }
@@ -235,6 +265,7 @@ pub const Document = struct {
                 .vertical_stack => |stack| self.allocator.free(stack),
                 .horizontal_concat => |concat| self.allocator.free(concat),
                 .source_code_multi_region => |multi| self.allocator.free(multi.regions),
+                .source_code_with_underlines => |underlines| self.allocator.free(underlines.underline_regions),
                 else => {},
             }
         }
@@ -295,6 +326,23 @@ pub const Document = struct {
     pub fn addReflowingText(self: *Document, text: []const u8) !void {
         if (text.len == 0) return;
         try self.elements.append(.{ .reflowing_text = text });
+    }
+
+    /// Add a source code display with multiple underlines.
+    pub fn addSourceCodeWithUnderlines(
+        self: *Document,
+        source: []const u8,
+        display_region: SourceCodeDisplayRegion,
+        underline_regions: []const UnderlineRegion,
+    ) !void {
+        const owned_regions = try self.allocator.dupe(UnderlineRegion, underline_regions);
+        try self.elements.append(.{
+            .source_code_with_underlines = .{
+                .source = source,
+                .display_region = display_region,
+                .underline_regions = owned_regions,
+            },
+        });
     }
 
     /// Add a vertical stack of elements.
@@ -413,6 +461,12 @@ pub const Document = struct {
     /// Add a binary operator with proper styling.
     pub fn addBinaryOperator(self: *Document, operator: []const u8) !void {
         try self.addAnnotated(operator, .binary_operator);
+    }
+
+    /// Add a link with proper formatting.
+    pub fn addLink(self: *Document, url: []const u8) !void {
+        if (url.len == 0) return;
+        try self.elements.append(.{ .link = url });
     }
 
     /// Add a source code region with highlighting.
@@ -592,6 +646,11 @@ pub const DocumentBuilder = struct {
 
     pub fn binaryOperator(self: *DocumentBuilder, operator: []const u8) *DocumentBuilder {
         self.document.addBinaryOperator(operator) catch |err| exitOnOom(err);
+        return self;
+    }
+
+    pub fn link(self: *DocumentBuilder, url: []const u8) *DocumentBuilder {
+        self.document.addLink(url) catch |err| exitOnOom(err);
         return self;
     }
 

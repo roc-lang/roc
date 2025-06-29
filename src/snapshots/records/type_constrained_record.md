@@ -17,6 +17,7 @@ Here is the problematic code:
 ```roc
 process_user! : { name : Str, age : U32, ..a } => Str
 ```
+                                         ^^^
 
 
 **PARSE ERROR**
@@ -28,6 +29,7 @@ Here is the problematic code:
 ```roc
 process_user! : { name : Str, age : U32, ..a } => Str
 ```
+                                    ^^^^
 
 
 **MALFORMED TYPE**
@@ -39,13 +41,13 @@ LowerIdent(1:1-1:14),OpColon(1:15-1:16),OpenCurly(1:17-1:18),LowerIdent(1:19-1:2
 ~~~
 # PARSE
 ~~~clojure
-(s-type-anno @1-1-1-54 (name "process_user!")
-	(ty-fn @1-17-1-54
-		(ty-record @1-17-1-47
-			(anno-record-field @1-19-1-30 (name "name")
+(s-type-anno @1.1-1.54 (name "process_user!")
+	(ty-fn @1.17-1.54
+		(ty-record @1.17-1.47
+			(anno-record-field @1.19-1.30 (name "name")
 				(ty (name "Str")))
-			(anno-record-field @1-31-1-47 (name "age")
-				(ty-malformed @1-37-1-47 (tag "expected_arrow"))))
+			(anno-record-field @1.31-1.47 (name "age")
+				(ty-malformed @1.37-1.47 (tag "expected_arrow"))))
 		(ty (name "Str"))))
 ~~~
 # FORMATTED
@@ -55,14 +57,14 @@ process_user! : { name : Str, age :  } => Str
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-type-anno @1-1-1-54 (name "process_user!") (id 81)
-		(ty-fn @1-17-1-54 (effectful true)
-			(ty-record @1-17-1-47
+	(s-type-anno @1.1-1.54 (name "process_user!") (id 81)
+		(ty-fn @1.17-1.54 (effectful true)
+			(ty-record @1.17-1.47
 				(field (field "name")
-					(ty @1-26-1-29 (name "Str")))
+					(ty @1.26-1.29 (name "Str")))
 				(field (field "age")
-					(ty-malformed @1-37-1-47)))
-			(ty @1-51-1-54 (name "Str")))))
+					(ty-malformed @1.37-1.47)))
+			(ty @1.51-1.54 (name "Str")))))
 ~~~
 # TYPES
 ~~~clojure

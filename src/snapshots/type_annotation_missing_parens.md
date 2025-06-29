@@ -31,6 +31,7 @@ Here is the problematic code:
 ```roc
 nums : List U8
 ```
+              
 
 
 # TOKENS
@@ -41,14 +42,14 @@ LowerIdent(3:1-3:5),OpColon(3:6-3:7),UpperIdent(3:8-3:12),UpperIdent(3:13-3:15),
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-3-15
-	(module @1-1-1-14
-		(exposes @1-8-1-14
+(file @1.1-3.15
+	(module @1.1-1.14
+		(exposes @1.8-1.14
 			(exposed-lower-ident (text "nums"))))
 	(statements
-		(s-type-anno @3-1-3-15 (name "nums")
+		(s-type-anno @3.1-3.15 (name "nums")
 			(ty (name "List")))
-		(s-malformed @3-13-3-15 (tag "expected_colon_after_type_annotation"))))
+		(s-malformed @3.13-3.15 (tag "expected_colon_after_type_annotation"))))
 ~~~
 # FORMATTED
 ~~~roc

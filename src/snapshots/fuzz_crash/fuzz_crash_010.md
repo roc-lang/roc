@@ -34,6 +34,7 @@ Here is the problematic code:
 ```roc
 H{o,
 ```
+^^
 
 
 **INVALID STATEMENT**
@@ -50,15 +51,15 @@ StringStart(5:5-5:6),StringPart(5:6-5:35),EndOfFile(5:35-5:35),
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-5-35
-	(malformed-header @1-1-1-3 (tag "missing_header"))
+(file @1.1-5.35
+	(malformed-header @1.1-1.3 (tag "missing_header"))
 	(statements
-		(e-record @1-2-2-7
+		(e-record @1.2-2.7
 			(field (field "o") (optional false)))
-		(s-decl @3-1-5-35
-			(p-ident @3-1-3-4 (raw "foo"))
-			(e-string @5-5-5-35
-				(e-string-part @5-6-5-35 (raw "on        (string 'onmo %')))"))))))
+		(s-decl @3.1-5.35
+			(p-ident @3.1-3.4 (raw "foo"))
+			(e-string @5.5-5.35
+				(e-string-part @5.6-5.35 (raw "on        (string 'onmo %')))"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -73,9 +74,9 @@ foo =
 ~~~clojure
 (can-ir
 	(d-let (id 77)
-		(p-assign @3-1-3-4 (ident "foo") (id 74))
-		(e-string @5-5-5-35 (id 76)
-			(e-literal @5-6-5-35 (string "on        (string 'onmo %')))")))))
+		(p-assign @3.1-3.4 (ident "foo") (id 74))
+		(e-string @5.5-5.35 (id 76)
+			(e-literal @5.6-5.35 (string "on        (string 'onmo %')))")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -83,5 +84,5 @@ foo =
 	(defs
 		(d_assign (name "foo") (def_var 77) (type "Str")))
 	(expressions
-		(expr @5-5-5-35 (type "Str"))))
+		(expr @5.5-5.35 (type "Str"))))
 ~~~

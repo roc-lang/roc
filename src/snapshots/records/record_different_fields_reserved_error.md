@@ -24,6 +24,7 @@ Here is the problematic code:
 ```roc
     if: "conditional",
 ```
+      ^^^
 
 
 **PARSE ERROR**
@@ -35,6 +36,7 @@ Here is the problematic code:
 ```roc
     if: "conditional",
 ```
+                     
 
 
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
@@ -46,6 +48,7 @@ Here is the problematic code:
 ```roc
     when: "pattern match",
 ```
+          ^^^^^^^^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -57,6 +60,7 @@ Here is the problematic code:
 ```roc
     when: "pattern match",
 ```
+           ^^^^^^^^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -68,6 +72,7 @@ Here is the problematic code:
 ```roc
     when: "pattern match",
 ```
+                        ^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -79,6 +84,7 @@ Here is the problematic code:
 ```roc
     when: "pattern match",
 ```
+                         
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -90,6 +96,7 @@ Here is the problematic code:
 ```roc
     expect: "test assertion",
 ```
+          ^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -101,6 +108,7 @@ Here is the problematic code:
 ```roc
     expect: "test assertion",
 ```
+                            
 
 
 **IMPORT MUST BE TOP LEVEL**
@@ -112,6 +120,7 @@ Here is the problematic code:
 ```roc
     import: "module load",
 ```
+    ^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -123,6 +132,7 @@ Here is the problematic code:
 ```roc
     import: "module load",
 ```
+          ^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -134,6 +144,7 @@ Here is the problematic code:
 ```roc
     import: "module load",
 ```
+                         
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -145,6 +156,7 @@ Here is the problematic code:
 ```roc
     and: Bool.true,
 ```
+    ^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -156,6 +168,7 @@ Here is the problematic code:
 ```roc
     and: Bool.true,
 ```
+       ^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -167,6 +180,7 @@ Here is the problematic code:
 ```roc
     and: Bool.true,
 ```
+                  
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -178,6 +192,7 @@ Here is the problematic code:
 ```roc
     or: Bool.false,
 ```
+    ^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -189,6 +204,7 @@ Here is the problematic code:
 ```roc
     or: Bool.false,
 ```
+      ^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -200,6 +216,7 @@ Here is the problematic code:
 ```roc
     or: Bool.false,
 ```
+                  
 
 
 **MALFORMED TYPE**
@@ -232,32 +249,32 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 ~~~
 # PARSE
 ~~~clojure
-(e-block @1-1-8-2
+(e-block @1.1-8.2
 	(statements
-		(e-malformed @1-1-1-1 (reason "no_else"))
-		(s-type-anno @3-5-3-25 (name "when")
-			(ty-malformed @3-11-3-25 (tag "ty_anno_unexpected_token")))
-		(e-malformed @3-12-3-26 (reason "expr_unexpected_token"))
-		(e-malformed @3-25-3-27 (reason "expr_unexpected_token"))
-		(e-malformed @1-1-1-1 (reason "expr_unexpected_token"))
-		(s-expect @4-5-4-14
-			(e-malformed @4-11-4-14 (reason "expr_unexpected_token")))
-		(e-string @4-13-4-29
-			(e-string-part @4-14-4-28 (raw "test assertion")))
-		(e-malformed @1-1-1-1 (reason "expr_unexpected_token"))
-		(s-malformed @5-5-5-12 (tag "import_must_be_top_level"))
-		(e-malformed @5-11-5-14 (reason "expr_unexpected_token"))
-		(e-string @5-13-5-26
-			(e-string-part @5-14-5-25 (raw "module load")))
-		(e-malformed @1-1-1-1 (reason "expr_unexpected_token"))
-		(e-malformed @6-5-6-9 (reason "expr_unexpected_token"))
-		(e-malformed @6-8-6-14 (reason "expr_unexpected_token"))
-		(e-ident @6-10-6-19 (qaul "Bool") (raw ".true"))
-		(e-malformed @1-1-1-1 (reason "expr_unexpected_token"))
-		(e-malformed @7-5-7-8 (reason "expr_unexpected_token"))
-		(e-malformed @7-7-7-13 (reason "expr_unexpected_token"))
-		(e-ident @7-9-7-19 (qaul "Bool") (raw ".false"))
-		(e-malformed @1-1-1-1 (reason "expr_unexpected_token"))))
+		(e-malformed @1.1-1.1 (reason "no_else"))
+		(s-type-anno @3.5-3.25 (name "when")
+			(ty-malformed @3.11-3.25 (tag "ty_anno_unexpected_token")))
+		(e-malformed @3.12-3.26 (reason "expr_unexpected_token"))
+		(e-malformed @3.25-3.27 (reason "expr_unexpected_token"))
+		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
+		(s-expect @4.5-4.14
+			(e-malformed @4.11-4.14 (reason "expr_unexpected_token")))
+		(e-string @4.13-4.29
+			(e-string-part @4.14-4.28 (raw "test assertion")))
+		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
+		(s-malformed @5.5-5.12 (tag "import_must_be_top_level"))
+		(e-malformed @5.11-5.14 (reason "expr_unexpected_token"))
+		(e-string @5.13-5.26
+			(e-string-part @5.14-5.25 (raw "module load")))
+		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
+		(e-malformed @6.5-6.9 (reason "expr_unexpected_token"))
+		(e-malformed @6.8-6.14 (reason "expr_unexpected_token"))
+		(e-ident @6.10-6.19 (qaul "Bool") (raw ".true"))
+		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
+		(e-malformed @7.5-7.8 (reason "expr_unexpected_token"))
+		(e-malformed @7.7-7.13 (reason "expr_unexpected_token"))
+		(e-ident @7.9-7.19 (qaul "Bool") (raw ".false"))
+		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -286,20 +303,20 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1-1-8-2 (id 94)
-	(s-type-anno @3-5-3-25 (name "when")
-		(ty-malformed @3-11-3-25))
-	(s-expr @4-13-4-30
-		(e-string @4-13-4-29
-			(e-literal @4-14-4-28 (string "test assertion"))))
-	(s-expr @5-13-5-27
-		(e-string @5-13-5-26
-			(e-literal @5-14-5-25 (string "module load"))))
-	(s-expr @6-10-6-20
+(e-block @1.1-8.2 (id 94)
+	(s-type-anno @3.5-3.25 (name "when")
+		(ty-malformed @3.11-3.25))
+	(s-expr @4.13-4.30
+		(e-string @4.13-4.29
+			(e-literal @4.14-4.28 (string "test assertion"))))
+	(s-expr @5.13-5.27
+		(e-string @5.13-5.26
+			(e-literal @5.14-5.25 (string "module load"))))
+	(s-expr @6.10-6.20
 		(e-runtime-error (tag "ident_not_in_scope")))
-	(s-expr @7-9-7-20
+	(s-expr @7.9-7.20
 		(e-runtime-error (tag "ident_not_in_scope")))
-	(e-empty_record @1-1-8-2))
+	(e-empty_record @1.1-8.2))
 ~~~
 # TYPES
 ~~~clojure

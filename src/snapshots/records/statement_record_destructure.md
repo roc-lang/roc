@@ -21,6 +21,7 @@ Here is the problematic code:
 ```roc
 { name, age, email } = person
 ```
+^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -32,6 +33,7 @@ Here is the problematic code:
 ```roc
 { name, age, email } = person
 ```
+      ^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -43,6 +45,7 @@ Here is the problematic code:
 ```roc
 { name, age, email } = person
 ```
+           ^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -54,6 +57,7 @@ Here is the problematic code:
 ```roc
 { name, age, email } = person
 ```
+                   ^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -65,6 +69,7 @@ Here is the problematic code:
 ```roc
 { name, age, email } = person
 ```
+                     ^^^^^^^^
 
 
 **INVALID STATEMENT**
@@ -105,17 +110,17 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:7),Comma(1:7-1:8),LowerIdent(1:9-1:12),Comma
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-1-30
-	(malformed-header @1-1-1-7 (tag "missing_header"))
+(file @1.1-1.30
+	(malformed-header @1.1-1.7 (tag "missing_header"))
 	(statements
-		(e-ident @1-3-1-7 (qaul "") (raw "name"))
-		(e-malformed @1-7-1-12 (reason "expr_unexpected_token"))
-		(e-ident @1-9-1-12 (qaul "") (raw "age"))
-		(e-malformed @1-12-1-19 (reason "expr_unexpected_token"))
-		(e-ident @1-14-1-19 (qaul "") (raw "email"))
-		(e-malformed @1-20-1-23 (reason "expr_unexpected_token"))
-		(e-malformed @1-22-1-30 (reason "expr_unexpected_token"))
-		(e-ident @1-24-1-30 (qaul "") (raw "person"))))
+		(e-ident @1.3-1.7 (qaul "") (raw "name"))
+		(e-malformed @1.7-1.12 (reason "expr_unexpected_token"))
+		(e-ident @1.9-1.12 (qaul "") (raw "age"))
+		(e-malformed @1.12-1.19 (reason "expr_unexpected_token"))
+		(e-ident @1.14-1.19 (qaul "") (raw "email"))
+		(e-malformed @1.20-1.23 (reason "expr_unexpected_token"))
+		(e-malformed @1.22-1.30 (reason "expr_unexpected_token"))
+		(e-ident @1.24-1.30 (qaul "") (raw "person"))))
 ~~~
 # FORMATTED
 ~~~roc

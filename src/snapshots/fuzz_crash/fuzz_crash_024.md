@@ -29,6 +29,7 @@ Here is the problematic code:
 ```roc
 module [module ] { pf: platform ".-/main._]where # A
 ```
+        ^^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -40,6 +41,7 @@ Here is the problematic code:
 ```roc
 module [module ] { pf: platform ".-/main._]where # A
 ```
+                       ^^^^^^^^^^
 
 
 **PARSE ERROR**
@@ -51,6 +53,7 @@ Here is the problematic code:
 ```roc
 module [module ] { pf: platform ".-/main._]where # A
 ```
+                                ^^^^^^^^^^^^^^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -62,6 +65,7 @@ Here is the problematic code:
 ```roc
 module [module ] { pf: platform ".-/main._]where # A
 ```
+                                 ^^^^^^^^^^^^^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -73,6 +77,7 @@ Here is the problematic code:
 ```roc
 module [module ] { pf: platform ".-/main._]where # A
 ```
+                                                    
 
 
 **PARSE ERROR**
@@ -84,6 +89,7 @@ Here is the problematic code:
 ```roc
 var t= ]
 ```
+^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -95,6 +101,7 @@ Here is the problematic code:
 ```roc
 var t= ]
 ```
+       
 
 
 **PARSE ERROR**
@@ -106,6 +113,7 @@ Here is the problematic code:
 ```roc
 var t= 0
 ```
+^^^^^
 
 
 **INVALID STATEMENT**
@@ -132,12 +140,14 @@ The redeclaration is here:
 ```roc
 var t= 0
 ```
+    ^
 
 But `t` was already defined here:
 **fuzz_crash_024.md:4:5:4:6:**
 ```roc
 var t= ]
 ```
+    ^
 
 
 # TOKENS
@@ -152,22 +162,22 @@ KwVar(7:1-7:4),LowerIdent(7:5-7:6),OpAssign(7:6-7:7),Int(7:8-7:9),EndOfFile(7:9-
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-7-9
-	(module @1-1-1-17
-		(exposes @1-8-1-17
-			(exposed-malformed (reason "exposed_item_unexpected_token") @1-9-1-17)))
+(file @1.1-7.9
+	(module @1.1-1.17
+		(exposes @1.8-1.17
+			(exposed-malformed (reason "exposed_item_unexpected_token") @1.9-1.17)))
 	(statements
-		(e-malformed @1-33-1-53 (reason "expected_expr_close_curly_or_comma"))
-		(e-malformed @1-34-1-53 (reason "expr_unexpected_token"))
-		(e-malformed @1-1-1-1 (reason "expr_unexpected_token"))
-		(s-malformed @4-1-4-6 (tag "var_only_allowed_in_a_body"))
-		(s-decl @1-1-1-1
-			(p-ident @4-5-4-6 (raw "t"))
-			(e-malformed @1-1-1-1 (reason "expr_unexpected_token")))
-		(s-malformed @7-1-7-6 (tag "var_only_allowed_in_a_body"))
-		(s-decl @7-5-7-9
-			(p-ident @7-5-7-6 (raw "t"))
-			(e-int @7-8-7-9 (raw "0")))))
+		(e-malformed @1.33-1.53 (reason "expected_expr_close_curly_or_comma"))
+		(e-malformed @1.34-1.53 (reason "expr_unexpected_token"))
+		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
+		(s-malformed @4.1-4.6 (tag "var_only_allowed_in_a_body"))
+		(s-decl @1.1-1.1
+			(p-ident @4.5-4.6 (raw "t"))
+			(e-malformed @1.1-1.1 (reason "expr_unexpected_token")))
+		(s-malformed @7.1-7.6 (tag "var_only_allowed_in_a_body"))
+		(s-decl @7.5-7.9
+			(p-ident @7.5-7.6 (raw "t"))
+			(e-int @7.8-7.9 (raw "0")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -183,11 +193,11 @@ t = 0
 ~~~clojure
 (can-ir
 	(d-let (id 79)
-		(p-assign @4-5-4-6 (ident "t") (id 76))
+		(p-assign @4.5-4.6 (ident "t") (id 76))
 		(e-runtime-error (tag "expr_not_canonicalized") (id 78)))
 	(d-let (id 83)
-		(p-assign @7-5-7-6 (ident "t") (id 80))
-		(e-int @7-8-7-9 (value "0") (id 82))))
+		(p-assign @7.5-7.6 (ident "t") (id 80))
+		(e-int @7.8-7.9 (value "0") (id 82))))
 ~~~
 # TYPES
 ~~~clojure
@@ -196,6 +206,6 @@ t = 0
 		(d_assign (name "t") (def_var 79) (type "Error"))
 		(d_assign (name "t") (def_var 83) (type "Num(*)")))
 	(expressions
-		(expr @1-1-1-1 (type "Error"))
-		(expr @7-8-7-9 (type "Num(*)"))))
+		(expr @1.1-1.1 (type "Error"))
+		(expr @7.8-7.9 (type "Num(*)"))))
 ~~~

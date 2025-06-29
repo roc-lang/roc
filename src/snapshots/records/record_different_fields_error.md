@@ -24,6 +24,7 @@ Here is the problematic code:
 ```roc
     _privateField: "leading underscore",
 ```
+                   ^^^^^^^^^^^^^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -35,6 +36,7 @@ Here is the problematic code:
 ```roc
     _privateField: "leading underscore",
 ```
+                    ^^^^^^^^^^^^^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -46,6 +48,7 @@ Here is the problematic code:
 ```roc
     _privateField: "leading underscore",
 ```
+                                      ^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -57,6 +60,7 @@ Here is the problematic code:
 ```roc
     _privateField: "leading underscore",
 ```
+                                       
 
 
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
@@ -68,6 +72,7 @@ Here is the problematic code:
 ```roc
     field_: "trailing underscore",
 ```
+            ^^^^^^^^^^^^^^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -79,6 +84,7 @@ Here is the problematic code:
 ```roc
     field_: "trailing underscore",
 ```
+             ^^^^^^^^^^^^^^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -90,6 +96,7 @@ Here is the problematic code:
 ```roc
     field_: "trailing underscore",
 ```
+                                ^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -101,6 +108,7 @@ Here is the problematic code:
 ```roc
     field_: "trailing underscore",
 ```
+                                 
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -112,6 +120,7 @@ Here is the problematic code:
 ```roc
     PascalCase: "pascal",
 ```
+              ^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -123,6 +132,7 @@ Here is the problematic code:
 ```roc
     PascalCase: "pascal",
 ```
+                        
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -134,6 +144,7 @@ Here is the problematic code:
 ```roc
     kebab-case: "kebab",
 ```
+              ^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -145,6 +156,7 @@ Here is the problematic code:
 ```roc
     kebab-case: "kebab",
 ```
+                       
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -156,6 +168,7 @@ Here is the problematic code:
 ```roc
     field$special: "dollar",
 ```
+         ^^^^^^^^
 
 
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
@@ -167,6 +180,7 @@ Here is the problematic code:
 ```roc
     field$special: "dollar",
 ```
+                   ^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -178,6 +192,7 @@ Here is the problematic code:
 ```roc
     field$special: "dollar",
 ```
+                    ^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -189,6 +204,7 @@ Here is the problematic code:
 ```roc
     field$special: "dollar",
 ```
+                          ^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -200,6 +216,7 @@ Here is the problematic code:
 ```roc
     field$special: "dollar",
 ```
+                           
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -211,6 +228,7 @@ Here is the problematic code:
 ```roc
     field@symbol: "at symbol",
 ```
+         ^^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -222,6 +240,7 @@ Here is the problematic code:
 ```roc
     field@symbol: "at symbol",
 ```
+                ^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -233,6 +252,7 @@ Here is the problematic code:
 ```roc
     field@symbol: "at symbol",
 ```
+                             
 
 
 **MALFORMED TYPE**
@@ -273,43 +293,43 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 ~~~
 # PARSE
 ~~~clojure
-(e-block @1-1-8-2
+(e-block @1.1-8.2
 	(statements
-		(s-type-anno @2-5-2-39 (name "_privateField")
-			(ty-malformed @2-20-2-39 (tag "ty_anno_unexpected_token")))
-		(e-malformed @2-21-2-40 (reason "expr_unexpected_token"))
-		(e-malformed @2-39-2-41 (reason "expr_unexpected_token"))
-		(e-malformed @1-1-1-1 (reason "expr_unexpected_token"))
-		(s-type-anno @3-5-3-33 (name "field_")
-			(ty-malformed @3-13-3-33 (tag "ty_anno_unexpected_token")))
-		(e-malformed @3-14-3-34 (reason "expr_unexpected_token"))
-		(e-malformed @3-33-3-35 (reason "expr_unexpected_token"))
-		(e-malformed @1-1-1-1 (reason "expr_unexpected_token"))
-		(e-tag @4-5-4-15 (raw "PascalCase"))
-		(e-malformed @4-15-4-18 (reason "expr_unexpected_token"))
-		(e-string @4-17-4-25
-			(e-string-part @4-18-4-24 (raw "pascal")))
-		(e-malformed @1-1-1-1 (reason "expr_unexpected_token"))
-		(e-binop @5-5-5-16 (op "-")
-			(e-ident @5-5-5-10 (qaul "") (raw "kebab"))
-			(e-ident @5-11-5-15 (qaul "") (raw "case")))
-		(e-malformed @5-15-5-18 (reason "expr_unexpected_token"))
-		(e-string @5-17-5-24
-			(e-string-part @5-18-5-23 (raw "kebab")))
-		(e-malformed @1-1-1-1 (reason "expr_unexpected_token"))
-		(e-ident @6-5-6-10 (qaul "") (raw "field"))
-		(e-malformed @6-10-6-18 (reason "expr_unexpected_token"))
-		(s-type-anno @6-11-6-27 (name "special")
-			(ty-malformed @6-20-6-27 (tag "ty_anno_unexpected_token")))
-		(e-malformed @6-21-6-28 (reason "expr_unexpected_token"))
-		(e-malformed @6-27-6-29 (reason "expr_unexpected_token"))
-		(e-malformed @1-1-1-1 (reason "expr_unexpected_token"))
-		(e-ident @7-5-7-10 (qaul "") (raw "field"))
-		(e-malformed @7-10-7-18 (reason "expr_unexpected_token"))
-		(e-malformed @7-17-7-20 (reason "expr_unexpected_token"))
-		(e-string @7-19-7-30
-			(e-string-part @7-20-7-29 (raw "at symbol")))
-		(e-malformed @1-1-1-1 (reason "expr_unexpected_token"))))
+		(s-type-anno @2.5-2.39 (name "_privateField")
+			(ty-malformed @2.20-2.39 (tag "ty_anno_unexpected_token")))
+		(e-malformed @2.21-2.40 (reason "expr_unexpected_token"))
+		(e-malformed @2.39-2.41 (reason "expr_unexpected_token"))
+		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
+		(s-type-anno @3.5-3.33 (name "field_")
+			(ty-malformed @3.13-3.33 (tag "ty_anno_unexpected_token")))
+		(e-malformed @3.14-3.34 (reason "expr_unexpected_token"))
+		(e-malformed @3.33-3.35 (reason "expr_unexpected_token"))
+		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
+		(e-tag @4.5-4.15 (raw "PascalCase"))
+		(e-malformed @4.15-4.18 (reason "expr_unexpected_token"))
+		(e-string @4.17-4.25
+			(e-string-part @4.18-4.24 (raw "pascal")))
+		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
+		(e-binop @5.5-5.16 (op "-")
+			(e-ident @5.5-5.10 (qaul "") (raw "kebab"))
+			(e-ident @5.11-5.15 (qaul "") (raw "case")))
+		(e-malformed @5.15-5.18 (reason "expr_unexpected_token"))
+		(e-string @5.17-5.24
+			(e-string-part @5.18-5.23 (raw "kebab")))
+		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
+		(e-ident @6.5-6.10 (qaul "") (raw "field"))
+		(e-malformed @6.10-6.18 (reason "expr_unexpected_token"))
+		(s-type-anno @6.11-6.27 (name "special")
+			(ty-malformed @6.20-6.27 (tag "ty_anno_unexpected_token")))
+		(e-malformed @6.21-6.28 (reason "expr_unexpected_token"))
+		(e-malformed @6.27-6.29 (reason "expr_unexpected_token"))
+		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
+		(e-ident @7.5-7.10 (qaul "") (raw "field"))
+		(e-malformed @7.10-7.18 (reason "expr_unexpected_token"))
+		(e-malformed @7.17-7.20 (reason "expr_unexpected_token"))
+		(e-string @7.19-7.30
+			(e-string-part @7.20-7.29 (raw "at symbol")))
+		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -345,33 +365,33 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1-1-8-2 (id 110)
-	(s-type-anno @2-5-2-39 (name "_privateField")
-		(ty-malformed @2-20-2-39))
-	(s-type-anno @3-5-3-33 (name "field_")
-		(ty-malformed @3-13-3-33))
-	(s-expr @4-5-4-16
-		(e-tag @4-5-4-15 (ext-var 0) (name "PascalCase") (args "TODO")))
-	(s-expr @4-17-4-26
-		(e-string @4-17-4-25
-			(e-literal @4-18-4-24 (string "pascal"))))
-	(s-expr @5-5-5-16
-		(e-binop @5-5-5-16 (op "sub")
+(e-block @1.1-8.2 (id 110)
+	(s-type-anno @2.5-2.39 (name "_privateField")
+		(ty-malformed @2.20-2.39))
+	(s-type-anno @3.5-3.33 (name "field_")
+		(ty-malformed @3.13-3.33))
+	(s-expr @4.5-4.16
+		(e-tag @4.5-4.15 (ext-var 0) (name "PascalCase") (args "TODO")))
+	(s-expr @4.17-4.26
+		(e-string @4.17-4.25
+			(e-literal @4.18-4.24 (string "pascal"))))
+	(s-expr @5.5-5.16
+		(e-binop @5.5-5.16 (op "sub")
 			(e-runtime-error (tag "ident_not_in_scope"))
 			(e-runtime-error (tag "ident_not_in_scope"))))
-	(s-expr @5-17-5-25
-		(e-string @5-17-5-24
-			(e-literal @5-18-5-23 (string "kebab"))))
-	(s-expr @6-5-6-11
+	(s-expr @5.17-5.25
+		(e-string @5.17-5.24
+			(e-literal @5.18-5.23 (string "kebab"))))
+	(s-expr @6.5-6.11
 		(e-runtime-error (tag "ident_not_in_scope")))
-	(s-type-anno @6-11-6-27 (name "special")
-		(ty-malformed @6-20-6-27))
-	(s-expr @7-5-7-17
+	(s-type-anno @6.11-6.27 (name "special")
+		(ty-malformed @6.20-6.27))
+	(s-expr @7.5-7.17
 		(e-runtime-error (tag "ident_not_in_scope")))
-	(s-expr @7-19-7-31
-		(e-string @7-19-7-30
-			(e-literal @7-20-7-29 (string "at symbol"))))
-	(e-empty_record @1-1-8-2))
+	(s-expr @7.19-7.31
+		(e-string @7.19-7.30
+			(e-literal @7.20-7.29 (string "at symbol"))))
+	(e-empty_record @1.1-8.2))
 ~~~
 # TYPES
 ~~~clojure

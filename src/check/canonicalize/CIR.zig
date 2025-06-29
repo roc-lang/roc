@@ -249,11 +249,11 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 filename,
             );
         },
-        .custom_type_redeclared => |data| blk: {
+        .nominal_type_redeclared => |data| blk: {
             const type_name = self.env.idents.getText(data.name);
             const original_region_info = self.calcRegionInfo(data.original_region);
             const redeclared_region_info = self.calcRegionInfo(data.redeclared_region);
-            break :blk Diagnostic.buildCustomTypeRedeclaredReport(
+            break :blk Diagnostic.buildNominalTypeRedeclaredReport(
                 allocator,
                 type_name,
                 original_region_info,
@@ -510,7 +510,7 @@ pub const Statement = union(enum) {
         exposes: ExposedItem.Span,
         region: Region,
     },
-    /// A declaration of a new type - whether an alias or a new nominal custom type
+    /// A declaration of a new type - whether an alias or a new nominal nominal type
     ///
     /// Only valid at the top level of a module
     s_type_decl: struct {
@@ -1128,13 +1128,16 @@ pub const Expr = union(enum) {
         elems: Expr.Span,
         region: Region,
     },
+    /// Empty list constant
+    e_empty_list: struct {
+        region: Region,
+    },
     e_tuple: struct {
         elems: Expr.Span,
         region: Region,
     },
     e_when: When,
     e_if: struct {
-        branch_var: TypeVar,
         branches: IfBranch.Span,
         final_else: Expr.Idx,
         region: Region,
@@ -1268,14 +1271,14 @@ pub const Expr = union(enum) {
 
     pub fn toRegion(self: *const @This()) ?Region {
         switch (self.*) {
-            .num => |e| return e.region,
-            .int => |e| return e.region,
-            .frac_f64 => |e| return e.region,
-            .frac_dec => |e| return e.region,
-            .dec_small => |e| return e.region,
-            .str_segment => |e| return e.region,
-            .str => |e| return e.region,
-            .lookup => |e| switch (e) {
+            .e_num => |e| return e.region,
+            .e_int => |e| return e.region,
+            .e_frac_f64 => |e| return e.region,
+            .e_frac_dec => |e| return e.region,
+            .e_dec_small => |e| return e.region,
+            .e_str_segment => |e| return e.region,
+            .e_str => |e| return e.region,
+            .e_lookup => |e| switch (e) {
                 .local => |local| return local.region,
                 .external => |_| {
                     // External lookups don't have a direct region access from Expr context
@@ -1283,21 +1286,22 @@ pub const Expr = union(enum) {
                     return null;
                 },
             },
-            .list => |e| return e.region,
-            .tuple => |e| return e.region,
-            .when => |e| return e.region,
-            .@"if" => |e| return e.region,
-            .call => |e| return e.region,
-            .record => |e| return e.region,
-            .empty_record => |e| return e.region,
-            .record_access => |e| return e.region,
-            .dot_access => |e| return e.region,
-            .tag => |e| return e.region,
-            .zero_argument_tag => |e| return e.region,
-            .binop => |e| return e.region,
-            .block => |e| return e.region,
-            .lambda => |e| return e.region,
-            .runtime_error => |e| return e.region,
+            .e_list => |e| return e.region,
+            .e_tuple => |e| return e.region,
+            .e_when => |e| return e.region,
+            .e_if => |e| return e.region,
+            .e_empty_list => |e| return e.region,
+            .e_call => |e| return e.region,
+            .e_record => |e| return e.region,
+            .e_empty_record => |e| return e.region,
+            .e_record_access => |e| return e.region,
+            .e_dot_access => |e| return e.region,
+            .e_tag => |e| return e.region,
+            .e_zero_argument_tag => |e| return e.region,
+            .e_binop => |e| return e.region,
+            .e_block => |e| return e.region,
+            .e_lambda => |e| return e.region,
+            .e_runtime_error => |e| return e.region,
         }
     }
 
@@ -1431,6 +1435,11 @@ pub const Expr = union(enum) {
 
                 return list_node;
             },
+            .e_empty_list => |e| {
+                var empty_list_node = SExpr.init(gpa, "e-empty_list");
+                empty_list_node.appendRegion(gpa, ir.calcRegionInfo(e.region));
+                return empty_list_node;
+            },
             .e_tuple => |t| {
                 var node = SExpr.init(gpa, "e-tuple");
                 node.appendRegion(gpa, ir.calcRegionInfo(t.region));
@@ -1477,9 +1486,6 @@ pub const Expr = union(enum) {
             .e_if => |if_expr| {
                 var node = SExpr.init(gpa, "e-if");
                 node.appendRegion(gpa, ir.calcRegionInfo(if_expr.region));
-
-                // Add branch_var
-                node.appendTypeVar(gpa, "branch-var", if_expr.branch_var);
 
                 // Add branches
                 var branches_node = SExpr.init(gpa, "if-branches");

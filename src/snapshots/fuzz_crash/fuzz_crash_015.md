@@ -27,6 +27,7 @@ Here is the problematic code:
 ```roc
 0o0.0
 ```
+^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -38,6 +39,7 @@ Here is the problematic code:
 ```roc
 0o0.0
 ```
+   
 
 
 **PARSE ERROR**
@@ -49,6 +51,7 @@ Here is the problematic code:
 ```roc
 0u8.0
 ```
+   
 
 
 **INVALID STATEMENT**
@@ -76,13 +79,13 @@ Int(4:1-4:3),EndOfFile(4:3-4:3),
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-4-3
-	(malformed-header @1-1-1-6 (tag "missing_header"))
+(file @1.1-4.3
+	(malformed-header @1.1-1.6 (tag "missing_header"))
 	(statements
-		(e-malformed @1-1-1-1 (reason "expr_unexpected_token"))
-		(e-int @2-1-2-4 (raw "0_0"))
-		(e-malformed @1-1-1-1 (reason "expr_no_space_dot_int"))
-		(e-int @4-1-4-3 (raw "0_"))))
+		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
+		(e-int @2.1-2.4 (raw "0_0"))
+		(e-malformed @1.1-1.1 (reason "expr_no_space_dot_int"))
+		(e-int @4.1-4.3 (raw "0_"))))
 ~~~
 # FORMATTED
 ~~~roc

@@ -67,7 +67,7 @@ const Rank = types_mod.Rank;
 const Mark = types_mod.Mark;
 const Content = types_mod.Content;
 const Alias = types_mod.Alias;
-const CustomType = types_mod.CustomType;
+const NominalType = types_mod.NominalType;
 const FlatType = types_mod.FlatType;
 const Builtin = types_mod.Builtin;
 const Tuple = types_mod.Tuple;
@@ -118,8 +118,8 @@ pub fn unify(
         const problem: Problem = blk: {
             switch (err) {
                 error.TypeMismatch => {
-                    const expected_snapshot = snapshots.createSnapshot(types, a);
-                    const actual_snapshot = snapshots.createSnapshot(types, b);
+                    const expected_snapshot = snapshots.deepCopyVar(types, a);
+                    const actual_snapshot = snapshots.deepCopyVar(types, b);
                     break :blk .{ .type_mismatch = .{
                         .expected_var = a,
                         .expected = expected_snapshot,
@@ -148,7 +148,7 @@ pub fn unify(
 
                     const literal_var = if (literal_is_a) a else b;
                     const expected_var = if (literal_is_a) b else a;
-                    const expected_snapshot = snapshots.createSnapshot(types, expected_var);
+                    const expected_snapshot = snapshots.deepCopyVar(types, expected_var);
 
                     break :blk .{ .number_does_not_fit = .{
                         .literal_var = literal_var,
@@ -176,7 +176,7 @@ pub fn unify(
 
                     const literal_var = if (literal_is_a) a else b;
                     const expected_var = if (literal_is_a) b else a;
-                    const expected_snapshot = snapshots.createSnapshot(types, expected_var);
+                    const expected_snapshot = snapshots.deepCopyVar(types, expected_var);
 
                     break :blk .{ .negative_unsigned_int = .{
                         .literal_var = literal_var,
@@ -200,34 +200,34 @@ pub fn unify(
                         switch (unify_err) {
                             .recursion_anonymous => |var_| {
                                 // TODO: Snapshot infinite recursion
-                                // const snapshot = snapshots.createSnapshot(types, var_);
+                                // const snapshot = snapshots.deepCopyVar(types, var_);
                                 break :blk .{ .anonymous_recursion = .{
                                     .var_ = var_,
                                 } };
                             },
                             .recursion_infinite => |var_| {
                                 // TODO: Snapshot infinite recursion
-                                // const snapshot = snapshots.createSnapshot(types, var_);
+                                // const snapshot = snapshots.deepCopyVar(types, var_);
                                 break :blk .{ .infinite_recursion = .{
                                     .var_ = var_,
                                 } };
                             },
                             .invalid_number_type => |var_| {
-                                const snapshot = snapshots.createSnapshot(types, var_);
+                                const snapshot = snapshots.deepCopyVar(types, var_);
                                 break :blk .{ .invalid_number_type = .{
                                     .var_ = var_,
                                     .snapshot = snapshot,
                                 } };
                             },
                             .invalid_record_ext => |var_| {
-                                const snapshot = snapshots.createSnapshot(types, var_);
+                                const snapshot = snapshots.deepCopyVar(types, var_);
                                 break :blk .{ .invalid_record_ext = .{
                                     .var_ = var_,
                                     .snapshot = snapshot,
                                 } };
                             },
                             .invalid_tag_union_ext => |var_| {
-                                const snapshot = snapshots.createSnapshot(types, var_);
+                                const snapshot = snapshots.deepCopyVar(types, var_);
                                 break :blk .{ .invalid_tag_union_ext = .{
                                     .var_ = var_,
                                     .snapshot = snapshot,
@@ -237,9 +237,9 @@ pub fn unify(
                     } else {
                         break :blk .{ .bug = .{
                             .expected_var = a,
-                            .expected = snapshots.createSnapshot(types, a),
+                            .expected = snapshots.deepCopyVar(types, a),
                             .actual_var = b,
-                            .actual = snapshots.createSnapshot(types, b),
+                            .actual = snapshots.deepCopyVar(types, b),
                         } };
                     }
                 },
@@ -486,18 +486,24 @@ const Unifier = struct {
                 self.merge(vars, Content{ .alias = a_alias });
             },
             .rigid_var => |_| {
-                try self.unifyGuarded(a_alias.backing_var, vars.b.var_);
+                const backing_var = a_alias.getBackingVar(vars.a.var_);
+                try self.unifyGuarded(backing_var, vars.b.var_);
             },
             .alias => |b_alias| {
                 if (TypeIdent.eql(&self.module_env.idents, a_alias.ident, b_alias.ident)) {
                     try self.unifyTwoAliases(vars, a_alias, b_alias);
                 } else {
-                    try self.unifyGuarded(a_alias.backing_var, b_alias.backing_var);
+                    const a_backing_var = a_alias.getBackingVar(vars.a.var_);
+                    const b_backing_var = b_alias.getBackingVar(vars.b.var_);
+                    try self.unifyGuarded(a_backing_var, b_backing_var);
                 }
             },
             .effectful => return error.TypeMismatch,
             .pure => return error.TypeMismatch,
-            .structure => try self.unifyGuarded(a_alias.backing_var, vars.b.var_),
+            .structure => {
+                const backing_var = a_alias.getBackingVar(vars.a.var_);
+                try self.unifyGuarded(backing_var, vars.b.var_);
+            },
             .err => self.merge(vars, .err),
         }
     }
@@ -513,19 +519,23 @@ const Unifier = struct {
     /// NOTE: the rust version of this function `unify_two_aliases` is *significantly* more
     /// complicated than the version here
     fn unifyTwoAliases(self: *Self, vars: *const ResolvedVarDescs, a_alias: Alias, b_alias: Alias) Error!void {
-        if (a_alias.args.len() != b_alias.args.len()) {
+        if (a_alias.num_args != b_alias.num_args) {
             return error.TypeMismatch;
         }
 
-        const a_args = self.types_store.getAliasArgsSlice(a_alias.args);
-        const b_args = self.types_store.getAliasArgsSlice(b_alias.args);
-        for (a_args, b_args) |a_arg, b_arg| {
+        // Unify each pair of arguments
+        var a_iter = a_alias.argIterator(vars.a.var_);
+        var b_iter = b_alias.argIterator(vars.b.var_);
+        while (a_iter.next()) |a_arg| {
+            const b_arg = b_iter.next().?; // Safe because we checked num_args match
             try self.unifyGuarded(a_arg, b_arg);
         }
 
         // Rust compiler comment:
         // Don't report real_var mismatches, because they must always be surfaced higher, from the argument types.
-        self.unifyGuarded(a_alias.backing_var, b_alias.backing_var) catch {};
+        const a_backing_var = a_alias.getBackingVar(vars.a.var_);
+        const b_backing_var = b_alias.getBackingVar(vars.b.var_);
+        self.unifyGuarded(a_backing_var, b_backing_var) catch {};
 
         self.merge(vars, vars.b.desc.content);
     }
@@ -569,8 +579,10 @@ const Unifier = struct {
                 self.merge(vars, Content{ .structure = a_flat_type });
             },
             .rigid_var => return error.TypeMismatch,
-            .alias => |alias| {
-                try self.unifyGuarded(vars.a.var_, alias.backing_var);
+            .alias => |_| {
+                const alias = self.types_store.resolveVar(vars.b.var_).desc.content.alias;
+                const backing_var = alias.getBackingVar(vars.b.var_);
+                try self.unifyGuarded(vars.a.var_, backing_var);
             },
             .effectful => return error.TypeMismatch,
             .pure => return error.TypeMismatch,
@@ -666,10 +678,10 @@ const Unifier = struct {
                     else => return error.TypeMismatch,
                 }
             },
-            .custom_type => |a_type| {
+            .nominal_type => |a_type| {
                 switch (b_flat_type) {
-                    .custom_type => |b_type| {
-                        try self.unifyCustomType(vars, a_type, b_type);
+                    .nominal_type => |b_type| {
+                        try self.unifyNominalType(vars, a_type, b_type);
                     },
                     else => return error.TypeMismatch,
                 }
@@ -1400,17 +1412,23 @@ const Unifier = struct {
         }
     }
 
-    // Unify custom type //
+    // Unify nominal type //
 
-    /// Unify when `a` was a custom type
-    fn unifyCustomType(self: *Self, vars: *const ResolvedVarDescs, a_type: CustomType, b_type: CustomType) Error!void {
+    /// Unify when `a` was a nominal type
+    fn unifyNominalType(self: *Self, vars: *const ResolvedVarDescs, a_type: NominalType, b_type: NominalType) Error!void {
         if (!TypeIdent.eql(&self.module_env.idents, a_type.ident, b_type.ident)) {
             return error.TypeMismatch;
         }
 
-        const a_args = self.types_store.getCustomTypeArgsSlice(a_type.args);
-        const b_args = self.types_store.getCustomTypeArgsSlice(b_type.args);
-        for (a_args, b_args) |a_arg, b_arg| {
+        if (a_type.num_args != b_type.num_args) {
+            return error.TypeMismatch;
+        }
+
+        // Unify each pair of arguments using iterators
+        var a_iter = a_type.argIterator(vars.a.var_);
+        var b_iter = b_type.argIterator(vars.b.var_);
+        while (a_iter.next()) |a_arg| {
+            const b_arg = b_iter.next().?; // Safe because we checked num_args match
             try self.unifyGuarded(a_arg, b_arg);
         }
 
@@ -1694,8 +1712,9 @@ const Unifier = struct {
                 .rigid_var => {
                     return .{ .ext = ext_var, .range = range };
                 },
-                .alias => |alias| {
-                    ext_var = alias.backing_var;
+                .alias => |_| {
+                    const alias = self.types_store.resolveVar(ext_var).desc.content.alias;
+                    ext_var = alias.getBackingVar(ext_var);
                 },
                 .structure => |flat_type| {
                     switch (flat_type) {
@@ -2104,8 +2123,9 @@ const Unifier = struct {
                 .rigid_var => {
                     return .{ .ext = ext_var, .range = range };
                 },
-                .alias => |alias| {
-                    ext_var = alias.backing_var;
+                .alias => |_| {
+                    const alias = self.types_store.resolveVar(ext_var).desc.content.alias;
+                    ext_var = alias.getBackingVar(ext_var);
                 },
                 .structure => |flat_type| {
                     switch (flat_type) {
@@ -2537,13 +2557,31 @@ const TestEnv = struct {
 
     // helpers - alias
 
-    fn mkAlias(self: *Self, name: []const u8, args: []const Var, backing_var: Var) Alias {
-        const args_range = self.module_env.types.appendAliasArgs(args);
-        return .{
+    /// Create an Alias struct with the given name and number of args.
+    ///
+    /// The `args` parameter is only used to determine the count - the actual arg types
+    /// passed here are just for reference/documentation and aren't stored.
+    ///
+    /// IMPORTANT: The caller is responsible for creating the vars in the right order:
+    /// 1. alias var
+    /// 2. backing var (alias var + 1)
+    /// 3. arg vars (alias var + 2, alias var + 3, etc.)
+    ///
+    /// For example, to create an alias `MyAlias(Str, Int)`:
+    /// ```
+    /// const alias = mkAlias("MyAlias", &[_]Var{str_var, int_var}); // args just for count
+    /// const alias_var = types_store.freshFromContent(.{ .alias = alias });
+    /// const backing_var = types_store.fresh(); // Must be created immediately after
+    /// const arg1_redirect = types_store.freshRedirect(str_var); // Must be next
+    /// const arg2_redirect = types_store.freshRedirect(int_var); // Must be next
+    /// ```
+    fn mkAlias(self: *Self, name: []const u8, args: []const Var) Alias {
+        const alias = Alias{
             .ident = self.mkTypeIdent(name),
-            .args = args_range,
-            .backing_var = backing_var,
+            .num_args = @intCast(args.len),
         };
+
+        return alias;
     }
 
     // helpers - nums
@@ -2649,14 +2687,30 @@ const TestEnv = struct {
         return Content{ .structure = .{ .tuple = .{ .elems = elems_range } } };
     }
 
-    // helpers - custom type
+    // helpers - nominal type
 
-    fn mkCustomType(self: *Self, name: []const u8, args: []const Var, backing_var: Var) Content {
-        const args_range = self.module_env.types.appendCustomTypeArgs(args);
-        return Content{ .structure = .{ .custom_type = .{
+    /// Create a NominalType struct with the given name and number of args.
+    ///
+    /// The `args` parameter is only used to determine the count - the actual arg types
+    /// passed here are just for reference/documentation and aren't stored.
+    ///
+    /// IMPORTANT: The caller is responsible for creating the vars in the right order:
+    /// 1. nominal type var
+    /// 2. backing var (nominal type var + 1)
+    /// 3. arg vars (nominal type var + 2, nominal type var + 3, etc.)
+    ///
+    /// For example, to create a nominal type `MyType(Str, Int)`:
+    /// ```
+    /// const nominal = mkNominalType("MyType", &[_]Var{str_var, int_var});
+    /// const nominal_var = types_store.freshFromContent(nominal);
+    /// const backing_var = types_store.fresh(); // Must be created immediately after
+    /// const arg1_redirect = types_store.freshRedirect(str_var); // Must be next
+    /// const arg2_redirect = types_store.freshRedirect(int_var); // Must be next
+    /// ```
+    fn mkNominalType(self: *Self, name: []const u8, args: []const Var) Content {
+        return Content{ .structure = .{ .nominal_type = .{
             .ident = self.mkTypeIdent(name),
-            .args = args_range,
-            .backing_var = backing_var,
+            .num_args = @intCast(args.len),
         } } };
     }
 
@@ -2854,11 +2908,19 @@ test "unify - alias with same args" {
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
     const bool_ = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i8 } });
 
-    const backing = env.module_env.types.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ }));
-    const alias = Content{ .alias = env.mkAlias("AliasName", &[_]Var{ str, bool_ }, backing) };
+    const alias = Content{ .alias = env.mkAlias("AliasName", &[_]Var{ str, bool_ }) };
 
+    // Create alias `a` with its backing var and args in sequence
     const a = env.module_env.types.freshFromContent(alias);
+    _ = env.module_env.types.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ })); // backing var
+    _ = env.module_env.types.freshRedirect(str); // arg 1 -> str
+    _ = env.module_env.types.freshRedirect(bool_); // arg 2 -> bool_
+
+    // Create alias `b` with its backing var and args in sequence
     const b = env.module_env.types.freshFromContent(alias);
+    _ = env.module_env.types.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ })); // backing var
+    _ = env.module_env.types.freshRedirect(str); // arg 1 -> str
+    _ = env.module_env.types.freshRedirect(bool_); // arg 2 -> bool_
 
     const result = env.unify(a, b);
 
@@ -2874,12 +2936,18 @@ test "unify - aliases with different names but same backing" {
 
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
 
-    const backing = env.module_env.types.freshFromContent(env.mkTuple(&[_]Var{str}));
-    const a_alias = Content{ .alias = env.mkAlias("AliasA", &[_]Var{str}, backing) };
-    const b_alias = Content{ .alias = env.mkAlias("AliasB", &[_]Var{str}, backing) };
+    const a_alias = Content{ .alias = env.mkAlias("AliasA", &[_]Var{str}) };
+    const b_alias = Content{ .alias = env.mkAlias("AliasB", &[_]Var{str}) };
 
+    // Create alias `a` with its backing var and arg
     const a = env.module_env.types.freshFromContent(a_alias);
+    _ = env.module_env.types.freshFromContent(env.mkTuple(&[_]Var{str})); // backing var
+    _ = env.module_env.types.freshRedirect(str); // arg -> str
+
+    // Create alias `b` with its backing var and arg
     const b = env.module_env.types.freshFromContent(b_alias);
+    _ = env.module_env.types.freshFromContent(env.mkTuple(&[_]Var{str})); // backing var
+    _ = env.module_env.types.freshRedirect(str); // arg -> str
 
     const result = env.unify(a, b);
 
@@ -2896,13 +2964,18 @@ test "unify - alias with different args (fail)" {
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
     const bool_ = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i8 } });
 
-    const backing = env.module_env.types.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ }));
+    const a_alias = Content{ .alias = env.mkAlias("Alias", &[_]Var{str}) };
+    const b_alias = Content{ .alias = env.mkAlias("Alias", &[_]Var{bool_}) };
 
-    const a_alias = Content{ .alias = env.mkAlias("Alias", &[_]Var{str}, backing) };
-    const b_alias = Content{ .alias = env.mkAlias("Alias", &[_]Var{bool_}, backing) };
-
+    // Create alias `a` with its backing var and arg
     const a = env.module_env.types.freshFromContent(a_alias);
+    _ = env.module_env.types.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ })); // backing var
+    _ = env.module_env.types.freshRedirect(str); // arg -> str
+
+    // Create alias `b` with its backing var and arg
     const b = env.module_env.types.freshFromContent(b_alias);
+    _ = env.module_env.types.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ })); // backing var
+    _ = env.module_env.types.freshRedirect(bool_); // arg -> bool_
 
     const result = env.unify(a, b);
 
@@ -2918,11 +2991,14 @@ test "unify - alias with flex" {
 
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
     const bool_ = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i8 } });
-    const backing = env.module_env.types.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ }));
 
-    const a_alias = Content{ .alias = env.mkAlias("Alias", &[_]Var{bool_}, backing) };
+    const a_alias = Content{ .alias = env.mkAlias("Alias", &[_]Var{bool_}) };
 
+    // Create alias `a` with its backing var and arg
     const a = env.module_env.types.freshFromContent(a_alias);
+    _ = env.module_env.types.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ })); // backing var
+    _ = env.module_env.types.freshRedirect(bool_); // arg -> bool_
+
     const b = env.module_env.types.fresh();
 
     const result = env.unify(a, b);
@@ -4136,41 +4212,48 @@ test "unify - same funcs first pure, second eff" {
     try std.testing.expectEqual(eff_func, (try env.getDescForRootVar(b)).content);
 }
 
-// unification - structure/structure - custom type
+// unification - structure/structure - nominal type
 
-test "unify - a & b are both the same custom type" {
+test "unify - a & b are both the same nominal type" {
     const gpa = std.testing.allocator;
 
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const backing_var = env.module_env.types.freshFromContent(Content{ .structure = .str });
     const arg_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_u8 } });
-    const custom_type = env.mkCustomType("MyType", &[_]Var{arg_var}, backing_var);
+    const nominal_type = env.mkNominalType("MyType", &[_]Var{arg_var});
 
-    const a = env.module_env.types.freshFromContent(custom_type);
-    const b = env.module_env.types.freshFromContent(custom_type);
+    const a = env.module_env.types.freshFromContent(nominal_type);
+    _ = env.module_env.types.freshFromContent(Content{ .structure = .str }); // backing var
+    _ = env.module_env.types.freshRedirect(arg_var); // arg
+
+    const b = env.module_env.types.freshFromContent(nominal_type);
+    _ = env.module_env.types.freshFromContent(Content{ .structure = .str }); // backing var
+    _ = env.module_env.types.freshRedirect(arg_var); // arg
     const result = env.unify(a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(custom_type, (try env.getDescForRootVar(b)).content);
+    try std.testing.expectEqual(nominal_type, (try env.getDescForRootVar(b)).content);
 }
 
-test "unify - a & b are diff custom types (fail)" {
+test "unify - a & b are diff nominal types (fail)" {
     const gpa = std.testing.allocator;
 
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const backing_var = env.module_env.types.freshFromContent(Content{ .structure = .str });
     const arg_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_u8 } });
 
-    const custom_type_a = env.mkCustomType("MyType", &[_]Var{arg_var}, backing_var);
-    const a = env.module_env.types.freshFromContent(custom_type_a);
+    const nominal_type_a = env.mkNominalType("MyType", &[_]Var{arg_var});
+    const a = env.module_env.types.freshFromContent(nominal_type_a);
+    _ = env.module_env.types.freshFromContent(Content{ .structure = .str }); // backing var
+    _ = env.module_env.types.freshRedirect(arg_var); // arg
 
-    const custom_type_b = env.mkCustomType("AnotherType", &[_]Var{arg_var}, backing_var);
-    const b = env.module_env.types.freshFromContent(custom_type_b);
+    const nominal_type_b = env.mkNominalType("AnotherType", &[_]Var{arg_var});
+    const b = env.module_env.types.freshFromContent(nominal_type_b);
+    _ = env.module_env.types.freshFromContent(Content{ .structure = .str }); // backing var
+    _ = env.module_env.types.freshRedirect(arg_var); // arg
 
     const result = env.unify(a, b);
 
@@ -4179,20 +4262,24 @@ test "unify - a & b are diff custom types (fail)" {
     try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
 }
 
-test "unify - a & b are both the same custom type with diff args (fail)" {
+test "unify - a & b are both the same nominal type with diff args (fail)" {
     const gpa = std.testing.allocator;
 
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const backing_var = env.module_env.types.freshFromContent(Content{ .structure = .str });
     const arg_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_u8 } });
+    const str_var = env.module_env.types.freshFromContent(Content{ .structure = .str });
 
-    const custom_type_a = env.mkCustomType("MyType", &[_]Var{arg_var}, backing_var);
-    const a = env.module_env.types.freshFromContent(custom_type_a);
+    const nominal_type_a = env.mkNominalType("MyType", &[_]Var{arg_var});
+    const a = env.module_env.types.freshFromContent(nominal_type_a);
+    _ = env.module_env.types.freshFromContent(Content{ .structure = .str }); // backing var
+    _ = env.module_env.types.freshRedirect(arg_var); // arg
 
-    const custom_type_b = env.mkCustomType("MyType", &[_]Var{backing_var}, backing_var);
-    const b = env.module_env.types.freshFromContent(custom_type_b);
+    const nominal_type_b = env.mkNominalType("MyType", &[_]Var{str_var});
+    const b = env.module_env.types.freshFromContent(nominal_type_b);
+    _ = env.module_env.types.freshFromContent(Content{ .structure = .str }); // backing var
+    _ = env.module_env.types.freshRedirect(str_var); // arg
 
     const result = env.unify(a, b);
 
@@ -5240,24 +5327,24 @@ test "unify - succeeds on nominal, tag union recursion" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const a_custom_type_var = env.module_env.types.fresh();
+    const a_nominal_type_var = env.module_env.types.fresh();
     const a_elem_var = env.module_env.types.fresh();
     const a_nil_tag = env.mkTag("Nil", &[_]Var{});
-    const a_cons_tag = env.mkTag("Cons", &[_]Var{ a_elem_var, a_custom_type_var });
+    const a_cons_tag = env.mkTag("Cons", &[_]Var{ a_elem_var, a_nominal_type_var });
+    const a_nominal_type = env.mkNominalType("List", &[_]Var{});
+    try env.module_env.types.setRootVarContent(a_nominal_type_var, a_nominal_type);
     const a_tag_union_var = env.module_env.types.freshFromContent(env.mkTagUnionOpen(&[_]Tag{ a_nil_tag, a_cons_tag }).content);
-    const a_custom_type = env.mkCustomType("List", &[_]Var{}, a_tag_union_var);
-    try env.module_env.types.setRootVarContent(a_custom_type_var, a_custom_type);
 
-    const b_custom_type_var = env.module_env.types.fresh();
+    const b_nominal_type_var = env.module_env.types.fresh();
     const b_elem_var = env.module_env.types.fresh();
     const b_nil_tag = env.mkTag("Nil", &[_]Var{});
-    const b_cons_tag = env.mkTag("Cons", &[_]Var{ b_elem_var, b_custom_type_var });
+    const b_cons_tag = env.mkTag("Cons", &[_]Var{ b_elem_var, b_nominal_type_var });
+    const b_nominal_type = env.mkNominalType("List", &[_]Var{});
+    try env.module_env.types.setRootVarContent(b_nominal_type_var, b_nominal_type);
     const b_tag_union_var = env.module_env.types.freshFromContent(env.mkTagUnionOpen(&[_]Tag{ b_nil_tag, b_cons_tag }).content);
-    const b_custom_type = env.mkCustomType("List", &[_]Var{}, b_tag_union_var);
-    try env.module_env.types.setRootVarContent(b_custom_type_var, b_custom_type);
 
-    const result_custom_type = env.unify(a_custom_type_var, b_custom_type_var);
-    try std.testing.expectEqual(.ok, result_custom_type);
+    const result_nominal_type = env.unify(a_nominal_type_var, b_nominal_type_var);
+    try std.testing.expectEqual(.ok, result_nominal_type);
 
     const result_tag_union = env.unify(a_tag_union_var, b_tag_union_var);
     try std.testing.expectEqual(.ok, result_tag_union);
@@ -5653,4 +5740,33 @@ test "unify - num_unbound with int_unbound (reverse order)" {
         },
         else => return error.ExpectedStructure,
     }
+}
+
+test "heterogeneous list reports only first incompatibility" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create a list type with three different elements
+    const num_var = env.module_env.types.freshFromContent(.{ .structure = .{ .num = .{ .int_unbound = .{ .sign_needed = false, .bits_needed = 7 } } } });
+    const str_var = env.module_env.types.freshFromContent(.{ .structure = .str });
+    const frac_var = env.module_env.types.freshFromContent(.{ .structure = .{ .num = .{ .frac_unbound = .{ .fits_in_f32 = true, .fits_in_dec = true } } } });
+
+    // Create a list element type variable
+    const elem_var = env.module_env.types.fresh();
+
+    // Unify first element (number) with elem_var - should succeed
+    const result1 = env.unify(elem_var, num_var);
+    try std.testing.expectEqual(.ok, result1);
+
+    // Unify second element (string) with elem_var - should fail
+    const result2 = env.unify(elem_var, str_var);
+    try std.testing.expectEqual(false, result2.isOk());
+
+    // Unify third element (fraction) with elem_var - should succeed (int can be promoted to frac)
+    const result3 = env.unify(elem_var, frac_var);
+    try std.testing.expectEqual(.ok, result3);
+
+    // Check that we have exactly one problem recorded (from the string unification)
+    try std.testing.expect(env.problems.problems.len() == 1);
 }

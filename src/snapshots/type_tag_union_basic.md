@@ -22,6 +22,7 @@ The unused variable is declared here:
 ```roc
 process = |maybe| "result"
 ```
+           ^^^^^
 
 
 # TOKENS
@@ -35,40 +36,40 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-6-15
-	(app @1-1-1-53
-		(provides @1-6-1-12
+(file @1.1-6.15
+	(app @1.1-1.53
+		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @1-15-1-53 (name "pf")
-			(e-string @1-28-1-51
-				(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))
-		(packages @1-13-1-53
-			(record-field @1-15-1-53 (name "pf")
-				(e-string @1-28-1-51
-					(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))))
+		(record-field @1.15-1.53 (name "pf")
+			(e-string @1.28-1.51
+				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
+		(packages @1.13-1.53
+			(record-field @1.15-1.53 (name "pf")
+				(e-string @1.28-1.51
+					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @3-1-4-8 (name "process")
-			(ty-fn @3-11-3-35
-				(ty-tag-union @3-11-3-28
+		(s-type-anno @3.1-4.8 (name "process")
+			(ty-fn @3.11-3.35
+				(ty-tag-union @3.11-3.28
 					(tags
-						(ty-apply @3-12-3-21
+						(ty-apply @3.12-3.21
 							(ty (name "Some"))
 							(ty (name "Str")))
 						(ty (name "None"))))
 				(ty (name "Str"))))
-		(s-decl @4-1-4-27
-			(p-ident @4-1-4-8 (raw "process"))
-			(e-lambda @4-11-4-27
+		(s-decl @4.1-4.27
+			(p-ident @4.1-4.8 (raw "process"))
+			(e-lambda @4.11-4.27
 				(args
-					(p-ident @4-12-4-17 (raw "maybe")))
-				(e-string @4-19-4-27
-					(e-string-part @4-20-4-26 (raw "result")))))
-		(s-decl @6-1-6-15
-			(p-ident @6-1-6-6 (raw "main!"))
-			(e-lambda @6-9-6-15
+					(p-ident @4.12-4.17 (raw "maybe")))
+				(e-string @4.19-4.27
+					(e-string-part @4.20-4.26 (raw "result")))))
+		(s-decl @6.1-6.15
+			(p-ident @6.1-6.6 (raw "main!"))
+			(e-lambda @6.9-6.15
 				(args
 					(p-underscore))
-				(e-record @6-13-6-15)))))
+				(e-record @6.13-6.15)))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -78,26 +79,26 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let (id 92)
-		(p-assign @4-1-4-8 (ident "process") (id 79))
-		(e-lambda @4-11-4-27 (id 84)
+		(p-assign @4.1-4.8 (ident "process") (id 79))
+		(e-lambda @4.11-4.27 (id 84)
 			(args
-				(p-assign @4-12-4-17 (ident "maybe") (id 80)))
-			(e-string @4-19-4-27
-				(e-literal @4-20-4-26 (string "result"))))
-		(annotation @4-1-4-8 (signature 90) (id 91)
+				(p-assign @4.12-4.17 (ident "maybe") (id 80)))
+			(e-string @4.19-4.27
+				(e-literal @4.20-4.26 (string "result"))))
+		(annotation @4.1-4.8 (signature 90) (id 91)
 			(declared-type
-				(ty-fn @3-11-3-35 (effectful false)
-					(ty-tag-union @3-11-3-28
-						(ty-apply @3-12-3-21 (symbol "Some")
-							(ty @3-17-3-20 (name "Str")))
-						(ty @3-23-3-27 (name "None")))
-					(ty @3-32-3-35 (name "Str"))))))
+				(ty-fn @3.11-3.35 (effectful false)
+					(ty-tag-union @3.11-3.28
+						(ty-apply @3.12-3.21 (symbol "Some")
+							(ty @3.17-3.20 (name "Str")))
+						(ty @3.23-3.27 (name "None")))
+					(ty @3.32-3.35 (name "Str"))))))
 	(d-let (id 98)
-		(p-assign @6-1-6-6 (ident "main!") (id 93))
-		(e-lambda @6-9-6-15 (id 97)
+		(p-assign @6.1-6.6 (ident "main!") (id 93))
+		(e-lambda @6.9-6.15 (id 97)
 			(args
-				(p-underscore @6-10-6-11 (id 94)))
-			(e-empty_record @6-13-6-15))))
+				(p-underscore @6.10-6.11 (id 94)))
+			(e-empty_record @6.13-6.15))))
 ~~~
 # TYPES
 ~~~clojure
@@ -106,6 +107,6 @@ NO CHANGE
 		(d_assign (name "process") (def_var 92) (type "* -> Str"))
 		(d_assign (name "main!") (def_var 98) (type "* ? {}")))
 	(expressions
-		(expr @4-11-4-27 (type "* -> Str"))
-		(expr @6-9-6-15 (type "* ? {}"))))
+		(expr @4.11-4.27 (type "* -> Str"))
+		(expr @6.9-6.15 (type "* ? {}"))))
 ~~~

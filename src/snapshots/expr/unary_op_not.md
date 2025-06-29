@@ -17,6 +17,7 @@ Here is the problematic code:
 ```roc
 !isValid
 ```
+^^^^^^^^
 
 
 # TOKENS
@@ -25,7 +26,7 @@ OpBang(1:1-1:2),LowerIdent(1:2-1:9),EndOfFile(1:9-1:9),
 ~~~
 # PARSE
 ~~~clojure
-(e-malformed @1-1-1-9 (reason "expr_unexpected_token"))
+(e-malformed @1.1-1.9 (reason "expr_unexpected_token"))
 ~~~
 # FORMATTED
 ~~~roc

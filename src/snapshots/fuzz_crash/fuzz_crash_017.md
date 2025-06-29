@@ -22,6 +22,7 @@ Here is the problematic code:
 ```roc
 me = "luc"
 ```
+^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -33,6 +34,7 @@ Here is the problematic code:
 ```roc
 me = "luc"
 ```
+   ^^^
 
 
 **PARSE ERROR**
@@ -44,6 +46,7 @@ Here is the problematic code:
 ```roc
 foo = "hello ${namF
 ```
+      ^^^^^^^
 
 
 **INVALID STATEMENT**
@@ -65,15 +68,15 @@ LowerIdent(2:1-2:4),OpAssign(2:5-2:6),StringStart(2:7-2:8),StringPart(2:8-2:14),
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-2-20
-	(malformed-header @1-1-1-5 (tag "missing_header"))
+(file @1.1-2.20
+	(malformed-header @1.1-1.5 (tag "missing_header"))
 	(statements
-		(e-malformed @1-4-1-7 (reason "expr_unexpected_token"))
-		(e-string @1-6-1-11
-			(e-string-part @1-7-1-10 (raw "luc")))
-		(s-decl @2-1-2-20
-			(p-ident @2-1-2-4 (raw "foo"))
-			(e-malformed @2-7-2-20 (reason "string_expected_close_interpolation")))))
+		(e-malformed @1.4-1.7 (reason "expr_unexpected_token"))
+		(e-string @1.6-1.11
+			(e-string-part @1.7-1.10 (raw "luc")))
+		(s-decl @2.1-2.20
+			(p-ident @2.1-2.4 (raw "foo"))
+			(e-malformed @2.7-2.20 (reason "string_expected_close_interpolation")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -84,7 +87,7 @@ foo =
 ~~~clojure
 (can-ir
 	(d-let (id 78)
-		(p-assign @2-1-2-4 (ident "foo") (id 75))
+		(p-assign @2.1-2.4 (ident "foo") (id 75))
 		(e-runtime-error (tag "expr_not_canonicalized") (id 77))))
 ~~~
 # TYPES
@@ -93,5 +96,5 @@ foo =
 	(defs
 		(d_assign (name "foo") (def_var 78) (type "Error")))
 	(expressions
-		(expr @2-7-2-20 (type "Error"))))
+		(expr @2.7-2.20 (type "Error"))))
 ~~~

@@ -26,6 +26,7 @@ Here is the problematic code:
 ```roc
 Fli/main.roc" }
 ```
+^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -37,6 +38,7 @@ Here is the problematic code:
 ```roc
 Fli/main.roc" }
 ```
+   ^^^^^
 
 
 **PARSE ERROR**
@@ -48,6 +50,7 @@ Here is the problematic code:
 ```roc
 Pair(a, b+ : (
 ```
+^^^^^
 
 
 **PARSE ERROR**
@@ -59,6 +62,7 @@ Here is the problematic code:
 ```roc
 Pair(a, b+ : (
 ```
+              
 
 
 **MALFORMED TYPE**
@@ -84,19 +88,19 @@ UpperIdent(3:1-3:5),NoSpaceOpenRound(3:5-3:6),LowerIdent(3:6-3:7),Comma(3:7-3:8)
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-3-15
-	(malformed-header @1-1-1-5 (tag "missing_header"))
+(file @1.1-3.15
+	(malformed-header @1.1-1.5 (tag "missing_header"))
 	(statements
-		(e-malformed @1-4-1-9 (reason "expr_unexpected_token"))
-		(e-field-access @1-5-1-14
-			(e-ident @1-5-1-9 (qaul "") (raw "main"))
-			(e-ident @1-9-1-13 (qaul "") (raw ".roc")))
-		(e-string @1-13-1-16
-			(e-string-part @1-14-1-16 (raw " }")))
-		(s-type-decl @3-1-3-15
-			(header @3-1-3-13 (name "<malformed>")
+		(e-malformed @1.4-1.9 (reason "expr_unexpected_token"))
+		(e-field-access @1.5-1.14
+			(e-ident @1.5-1.9 (qaul "") (raw "main"))
+			(e-ident @1.9-1.13 (qaul "") (raw ".roc")))
+		(e-string @1.13-1.16
+			(e-string-part @1.14-1.16 (raw " }")))
+		(s-type-decl @3.1-3.15
+			(header @3.1-3.13 (name "<malformed>")
 				(args))
-			(ty-malformed @3-14-3-15 (tag "expected_ty_anno_end")))))
+			(ty-malformed @3.14-3.15 (tag "expected_ty_anno_end")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -107,9 +111,9 @@ main.roc" }"
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-type-decl @3-1-3-15 (id 76)
-		(ty-header @3-1-3-13 (name "Fli"))
-		(ty-malformed @3-14-3-15)))
+	(s-type-decl @3.1-3.15 (id 76)
+		(ty-header @3.1-3.13 (name "Fli"))
+		(ty-malformed @3.14-3.15)))
 ~~~
 # TYPES
 ~~~clojure

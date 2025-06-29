@@ -22,7 +22,7 @@ UpperIdent(3:5-3:8),NoSpaceOpenRound(3:8-3:9),LowerIdent(3:9-3:12),CloseRound(3:
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1-1-1-5 (qaul "") (raw "when"))
+(e-ident @1.1-1.5 (qaul "") (raw "when"))
 ~~~
 # FORMATTED
 ~~~roc

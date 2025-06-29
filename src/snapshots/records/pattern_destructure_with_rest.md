@@ -22,21 +22,21 @@ CloseCurly(3:1-3:2),EndOfFile(3:2-3:2),
 # PARSE
 ~~~clojure
 (e-match
-	(e-ident @1-7-1-13 (qaul "") (raw "person"))
+	(e-ident @1.7-1.13 (qaul "") (raw "person"))
 	(branches
-		(branch @2-5-3-2
-			(p-record @2-5-2-29
-				(field @2-7-2-18 (name "first_name") (rest false))
-				(field @2-19-2-29 (name "others") (rest true)))
-			(e-binop @2-33-3-2 (op ">")
-				(e-apply @2-33-2-52
-					(e-ident @2-33-2-40 (qaul "Str") (raw ".len"))
-					(e-ident @2-41-2-51 (qaul "") (raw "first_name")))
-				(e-apply @2-55-2-80
-					(e-ident @2-55-2-62 (qaul "Str") (raw ".len"))
-					(e-field-access @2-63-2-80
-						(e-ident @2-63-2-69 (qaul "") (raw "others"))
-						(e-ident @2-69-2-79 (qaul "") (raw ".last_name"))))))))
+		(branch @2.5-3.2
+			(p-record @2.5-2.29
+				(field @2.7-2.18 (name "first_name") (rest false))
+				(field @2.19-2.29 (name "others") (rest true)))
+			(e-binop @2.33-3.2 (op ">")
+				(e-apply @2.33-2.52
+					(e-ident @2.33-2.40 (qaul "Str") (raw ".len"))
+					(e-ident @2.41-2.51 (qaul "") (raw "first_name")))
+				(e-apply @2.55-2.80
+					(e-ident @2.55-2.62 (qaul "Str") (raw ".len"))
+					(e-field-access @2.63-2.80
+						(e-ident @2.63-2.69 (qaul "") (raw "others"))
+						(e-ident @2.69-2.79 (qaul "") (raw ".last_name"))))))))
 ~~~
 # FORMATTED
 ~~~roc

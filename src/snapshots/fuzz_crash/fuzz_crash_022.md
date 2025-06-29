@@ -24,6 +24,7 @@ Here is the problematic code:
 ```roc
 app [main!] { |f: platform "c" }
 ```
+^^^^^
 
 
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
@@ -35,6 +36,7 @@ Here is the problematic code:
 ```roc
 app [main!] { |f: platform "c" }
 ```
+                  ^^^^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -46,6 +48,7 @@ Here is the problematic code:
 ```roc
 app [main!] { |f: platform "c" }
 ```
+                               
 
 
 **PARSE ERROR**
@@ -57,6 +60,7 @@ Here is the problematic code:
 ```roc
 getUser = |id| if (id > 1!) "big" else "l"
 ```
+                          ^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -68,6 +72,7 @@ Here is the problematic code:
 ```roc
 -ain! = |_| getUser(900)
 ```
+^^^^^
 
 
 **MALFORMED TYPE**
@@ -95,6 +100,7 @@ The unused variable is declared here:
 ```roc
 getUser = |id| if (id > 1!) "big" else "l"
 ```
+           ^^
 
 
 **INVALID STATEMENT**
@@ -114,42 +120,42 @@ OpUnaryMinus(8:1-8:2),LowerIdent(8:2-8:6),OpAssign(8:7-8:8),OpBar(8:9-8:10),Unde
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-8-25
-	(malformed-header @1-1-1-17 (tag "expected_package_or_platform_name"))
+(file @1.1-8.25
+	(malformed-header @1.1-1.17 (tag "expected_package_or_platform_name"))
 	(statements
-		(s-type-anno @1-16-1-29 (name "f")
-			(ty-malformed @1-19-1-29 (tag "ty_anno_unexpected_token")))
-		(e-string @1-28-1-31
-			(e-string-part @1-29-1-30 (raw "c")))
-		(e-malformed @1-1-1-1 (reason "expr_unexpected_token"))
-		(s-type-decl @3-1-5-4
-			(header @3-1-3-7 (name "UserId")
+		(s-type-anno @1.16-1.29 (name "f")
+			(ty-malformed @1.19-1.29 (tag "ty_anno_unexpected_token")))
+		(e-string @1.28-1.31
+			(e-string-part @1.29-1.30 (raw "c")))
+		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
+		(s-type-decl @3.1-5.4
+			(header @3.1-3.7 (name "UserId")
 				(args))
 			(ty (name "U64")))
-		(s-type-anno @5-1-6-8 (name "ser")
-			(ty-fn @5-7-5-20
+		(s-type-anno @5.1-6.8 (name "ser")
+			(ty-fn @5.7-5.20
 				(ty (name "UserId"))
 				(ty (name "Str"))))
-		(s-decl @1-1-1-1
-			(p-ident @6-1-6-8 (raw "getUser"))
-			(e-lambda @1-1-1-1
+		(s-decl @1.1-1.1
+			(p-ident @6.1-6.8 (raw "getUser"))
+			(e-lambda @1.1-1.1
 				(args
-					(p-ident @6-12-6-14 (raw "id")))
-				(e-if-then-else @1-1-1-1
-					(e-malformed @6-27-6-30 (reason "expected_expr_close_round_or_comma"))
-					(e-string @6-29-6-34
-						(e-string-part @6-30-6-33 (raw "big")))
-					(e-string @6-40-6-43
-						(e-string-part @6-41-6-42 (raw "l"))))))
-		(e-malformed @8-1-8-6 (reason "expr_unexpected_token"))
-		(s-decl @8-2-8-25
-			(p-ident @8-2-8-6 (raw "ain!"))
-			(e-lambda @8-9-8-25
+					(p-ident @6.12-6.14 (raw "id")))
+				(e-if-then-else @1.1-1.1
+					(e-malformed @6.27-6.30 (reason "expected_expr_close_round_or_comma"))
+					(e-string @6.29-6.34
+						(e-string-part @6.30-6.33 (raw "big")))
+					(e-string @6.40-6.43
+						(e-string-part @6.41-6.42 (raw "l"))))))
+		(e-malformed @8.1-8.6 (reason "expr_unexpected_token"))
+		(s-decl @8.2-8.25
+			(p-ident @8.2-8.6 (raw "ain!"))
+			(e-lambda @8.9-8.25
 				(args
 					(p-underscore))
-				(e-apply @8-13-8-25
-					(e-ident @8-13-8-20 (qaul "") (raw "getUser"))
-					(e-int @8-21-8-24 (raw "900")))))))
+				(e-apply @8.13-8.25
+					(e-ident @8.13-8.20 (qaul "") (raw "getUser"))
+					(e-int @8.21-8.24 (raw "900")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -165,40 +171,40 @@ ain! = |_| getUser(900)
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 97)
-		(p-assign @6-1-6-8 (ident "getUser") (id 83))
-		(e-lambda @1-1-1-1 (id 95)
+	(d-let (id 96)
+		(p-assign @6.1-6.8 (ident "getUser") (id 83))
+		(e-lambda @1.1-1.1 (id 94)
 			(args
-				(p-assign @6-12-6-14 (ident "id") (id 84)))
-			(e-if @1-1-1-1 (branch-var 92)
+				(p-assign @6.12-6.14 (ident "id") (id 84)))
+			(e-if @1.1-1.1
 				(if-branches
 					(if-branch
 						(e-runtime-error (tag "if_condition_not_canonicalized"))
-						(e-string @6-29-6-34
-							(e-literal @6-30-6-33 (string "big")))))
+						(e-string @6.29-6.34
+							(e-literal @6.30-6.33 (string "big")))))
 				(if-else
-					(e-string @6-40-6-43
-						(e-literal @6-41-6-42 (string "l")))))))
-	(d-let (id 107)
-		(p-assign @8-2-8-6 (ident "ain!") (id 99))
-		(e-lambda @8-9-8-25 (id 106)
+					(e-string @6.40-6.43
+						(e-literal @6.41-6.42 (string "l")))))))
+	(d-let (id 106)
+		(p-assign @8.2-8.6 (ident "ain!") (id 98))
+		(e-lambda @8.9-8.25 (id 105)
 			(args
-				(p-underscore @8-10-8-11 (id 100)))
-			(e-call @8-13-8-25
-				(e-lookup-local @8-13-8-20
+				(p-underscore @8.10-8.11 (id 99)))
+			(e-call @8.13-8.25
+				(e-lookup-local @8.13-8.20
 					(pattern (id 83)))
-				(e-int @8-21-8-24 (value "900")))))
-	(s-type-decl @3-1-5-4 (id 75)
-		(ty-header @3-1-3-7 (name "UserId"))
-		(ty @3-10-3-13 (name "U64"))))
+				(e-int @8.21-8.24 (value "900")))))
+	(s-type-decl @3.1-5.4 (id 75)
+		(ty-header @3.1-3.7 (name "UserId"))
+		(ty @3.10-3.13 (name "U64"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "getUser") (def_var 97) (type "* ? Str"))
-		(d_assign (name "ain!") (def_var 107) (type "* ? *")))
+		(d_assign (name "getUser") (def_var 96) (type "* ? Str"))
+		(d_assign (name "ain!") (def_var 106) (type "* ? *")))
 	(expressions
-		(expr @1-1-1-1 (type "* ? Str"))
-		(expr @8-9-8-25 (type "* ? *"))))
+		(expr @1.1-1.1 (type "* ? Str"))
+		(expr @8.9-8.25 (type "* ? *"))))
 ~~~

@@ -17,14 +17,14 @@ LowerIdent(2:1-2:4),OpAssign(2:5-2:6),Int(2:7-2:9),EndOfFile(2:9-2:9),
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-2-9
-	(module @1-1-1-13
-		(exposes @1-8-1-13
+(file @1.1-2.9
+	(module @1.1-1.13
+		(exposes @1.8-1.13
 			(exposed-lower-ident (text "foo"))))
 	(statements
-		(s-decl @2-1-2-9
-			(p-ident @2-1-2-4 (raw "foo"))
-			(e-int @2-7-2-9 (raw "42")))))
+		(s-decl @2.1-2.9
+			(p-ident @2.1-2.4 (raw "foo"))
+			(e-int @2.7-2.9 (raw "42")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -34,8 +34,8 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let (id 75)
-		(p-assign @2-1-2-4 (ident "foo") (id 73))
-		(e-int @2-7-2-9 (value "42") (id 74))))
+		(p-assign @2.1-2.4 (ident "foo") (id 73))
+		(e-int @2.7-2.9 (value "42") (id 74))))
 ~~~
 # TYPES
 ~~~clojure
@@ -43,5 +43,5 @@ NO CHANGE
 	(defs
 		(d_assign (name "foo") (def_var 75) (type "Num(*)")))
 	(expressions
-		(expr @2-7-2-9 (type "Num(*)"))))
+		(expr @2.7-2.9 (type "Num(*)"))))
 ~~~

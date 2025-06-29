@@ -15,9 +15,9 @@ Int(1:1-1:2),OpPlus(1:3-1:4),Int(1:5-1:6),EndOfFile(1:6-1:6),
 ~~~
 # PARSE
 ~~~clojure
-(e-binop @1-1-1-6 (op "+")
-	(e-int @1-1-1-2 (raw "1"))
-	(e-int @1-5-1-6 (raw "2")))
+(e-binop @1.1-1.6 (op "+")
+	(e-int @1.1-1.2 (raw "1"))
+	(e-int @1.5-1.6 (raw "2")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -25,9 +25,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop @1-1-1-6 (op "add") (id 75)
-	(e-int @1-1-1-2 (value "1"))
-	(e-int @1-5-1-6 (value "2")))
+(e-binop @1.1-1.6 (op "add") (id 75)
+	(e-int @1.1-1.2 (value "1"))
+	(e-int @1.5-1.6 (value "2")))
 ~~~
 # TYPES
 ~~~clojure

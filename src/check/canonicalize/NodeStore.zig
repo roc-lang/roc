@@ -392,6 +392,13 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 },
             };
         },
+        .expr_empty_list => {
+            return CIR.Expr{
+                .e_empty_list = .{
+                    .region = node.region,
+                },
+            };
+        },
         .expr_record => {
             return CIR.Expr{
                 .e_record = .{
@@ -425,7 +432,6 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             const branches_span_start: u32 = extra_data[0];
             const branches_span_end: u32 = extra_data[1];
             const final_else: CIR.Expr.Idx = @enumFromInt(extra_data[2]);
-            const branch_var: types.Var = @enumFromInt(extra_data[3]);
 
             // Reconstruct the if expression from node data
             const branches_span = CIR.IfBranch.Span{ .span = .{
@@ -436,7 +442,6 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             return CIR.Expr{ .e_if = .{
                 .branches = branches_span,
                 .final_else = final_else,
-                .branch_var = branch_var,
                 .region = node.region,
             } };
         },
@@ -950,6 +955,10 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             node.data_2 = e.elems.span.len;
             node.data_3 = @intFromEnum(e.elem_var);
         },
+        .e_empty_list => |e| {
+            node.region = e.region;
+            node.tag = .expr_empty_list;
+        },
         .e_tuple => |e| {
             node.region = e.region;
             node.tag = .expr_tuple;
@@ -1059,13 +1068,11 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             // 1. Branches span start
             // 2. Branches span end
             // 3. Final else expr idx
-            // 4. Branches type var
             const extra_start = @as(u32, @intCast(store.extra_data.items.len));
-            const num_extra_items = 4;
+            const num_extra_items = 3;
             store.extra_data.append(store.gpa, e.branches.span.start) catch |err| exitOnOom(err);
             store.extra_data.append(store.gpa, e.branches.span.len) catch |err| exitOnOom(err);
             store.extra_data.append(store.gpa, @intFromEnum(e.final_else)) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @intFromEnum(e.branch_var)) catch |err| exitOnOom(err);
 
             node.region = e.region;
             node.tag = .expr_if_then_else;
@@ -2015,8 +2022,8 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) CIR.Diagnostic.I
             node.data_2 = r.original_region.start.offset;
             node.data_3 = r.original_region.end.offset;
         },
-        .custom_type_redeclared => |r| {
-            node.tag = .diag_custom_type_redeclared;
+        .nominal_type_redeclared => |r| {
+            node.tag = .diag_nominal_type_redeclared;
             node.region = r.redeclared_region;
             node.data_1 = @bitCast(r.name);
             node.data_2 = r.original_region.start.offset;
@@ -2186,7 +2193,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
                 .end = .{ .offset = @intCast(node.data_3) },
             },
         } },
-        .diag_custom_type_redeclared => return CIR.Diagnostic{ .custom_type_redeclared = .{
+        .diag_nominal_type_redeclared => return CIR.Diagnostic{ .nominal_type_redeclared = .{
             .name = @bitCast(node.data_1),
             .redeclared_region = node.region,
             .original_region = .{

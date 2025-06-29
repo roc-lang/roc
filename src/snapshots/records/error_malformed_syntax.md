@@ -17,6 +17,7 @@ Here is the problematic code:
 ```roc
 { name: "Alice", : 30, , email: , active Bool.true, "invalid": value, 42: "number key", : }
 ```
+                 ^^^^
 
 
 **PARSE ERROR**
@@ -28,6 +29,7 @@ Here is the problematic code:
 ```roc
 { name: "Alice", : 30, , email: , active Bool.true, "invalid": value, 42: "number key", : }
 ```
+                   ^^^
 
 
 # TOKENS
@@ -36,7 +38,7 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:7),OpColon(1:7-1:8),StringStart(1:9-1:10),St
 ~~~
 # PARSE
 ~~~clojure
-(e-malformed @1-20-1-23 (reason "expected_expr_close_curly_or_comma"))
+(e-malformed @1.20-1.23 (reason "expected_expr_close_curly_or_comma"))
 ~~~
 # FORMATTED
 ~~~roc
