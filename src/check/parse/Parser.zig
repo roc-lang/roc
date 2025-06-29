@@ -2396,6 +2396,35 @@ pub fn parseWhereClause(self: *Parser) AST.WhereClause.Idx {
     }
 }
 
+pub const UntypedNodeType = enum {
+    /// The nodes that were parsed could any type.
+    /// The next token should reveal intent based on context.
+    any,
+    /// The nodes that were parsed were clearly a type.
+    /// This might never naturally occur.
+    ty_header,
+    /// The nodes that were parsed were clearly a pattern.
+    /// This means we encountered a `|` or a `where` clause.
+    patt,
+    /// The nodes that were parsed were clearly an expr.
+    /// We encountered a keyword besides `where` or `as`,
+    /// string interpolation, a lambda, a apply with lower ident,
+    /// a unary operator,  binop, ellipsis, or some sort of field
+    /// access
+    expr,
+};
+
+/// Parses a syntactic node that is ambiguous in terms of node type -
+/// storing it in as an `Untyped` node until we discover what type it
+/// should be.  We then return an [UntypedNodeType] of the appropriate type to the
+/// caller you will use that information to continue parsing.
+///
+/// The caller should get the top of the untypedScratch and untypedRecordFieldScratch
+/// before calling this function.
+pub fn parseUntypedStmtStart(self: *Parser) UntypedNodeType {
+    _ = self;
+}
+
 /// todo
 pub fn addProblem(self: *Parser, diagnostic: AST.Diagnostic) void {
     self.diagnostics.append(diagnostic) catch |err| exitOnOom(err);
