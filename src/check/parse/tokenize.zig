@@ -681,12 +681,6 @@ pub const Cursor = struct {
         return null;
     }
 
-    fn maybeMessageForUppercaseBase(self: *Cursor, b: u8) void {
-        if (b == 'X' or b == 'O' or b == 'B') {
-            self.pushMessageHere(.UppercaseBase);
-        }
-    }
-
     pub fn chompNumber(self: *Cursor, initialDigit: u8) Token.Tag {
         // Consume the initial digit.
         std.debug.assert(initialDigit == self.buf[self.pos]);
@@ -698,7 +692,9 @@ pub const Cursor = struct {
                 const c = self.peek() orelse 0;
                 switch (c) {
                     'x', 'X' => {
-                        maybeMessageForUppercaseBase(self, c);
+                        if (c == 'X') {
+                            self.pushMessageHere(.UppercaseBase);
+                        }
                         self.pos += 1;
                         self.chompIntegerBase16() catch {
                             tok = .MalformedNumberNoDigits;
@@ -707,7 +703,9 @@ pub const Cursor = struct {
                         break;
                     },
                     'o', 'O' => {
-                        maybeMessageForUppercaseBase(self, c);
+                        if (c == 'O') {
+                            self.pushMessageHere(.UppercaseBase);
+                        }
                         self.pos += 1;
                         self.chompIntegerBase8() catch {
                             tok = .MalformedNumberNoDigits;
@@ -716,7 +714,9 @@ pub const Cursor = struct {
                         break;
                     },
                     'b', 'B' => {
-                        maybeMessageForUppercaseBase(self, c);
+                        if (c == 'B') {
+                            self.pushMessageHere(.UppercaseBase);
+                        }
                         self.pos += 1;
                         self.chompIntegerBase2() catch {
                             tok = .MalformedNumberNoDigits;
