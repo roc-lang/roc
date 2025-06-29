@@ -523,7 +523,7 @@ const Unifier = struct {
             return error.TypeMismatch;
         }
 
-        // Unify each pair of arguments using iterators
+        // Unify each pair of arguments
         var a_iter = a_alias.argIterator(vars.a.var_);
         var b_iter = b_alias.argIterator(vars.b.var_);
         while (a_iter.next()) |a_arg| {

@@ -716,8 +716,6 @@ test "occurs: recursive tag union with multiple nominals (TypeA := TypeB, TypeB 
     } } });
 
     // Set up TypeA's backing var to redirect to TypeB
-    // First create it as a flex var, then union it with type_b_nominal
-    try types_store.setRootVarContent(type_a_backing, Content{ .flex_var = null });
     const type_b_desc = types_store.resolveVar(type_b_nominal).desc;
     types_store.union_(type_a_backing, type_b_nominal, type_b_desc);
 

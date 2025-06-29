@@ -216,7 +216,7 @@ pub const Store = struct {
         // Mark starting position in the centralized array
         const start_idx = self.nominal_type_args.len();
 
-        // Copy all argument vars using iterator
+        // // Iterate and append directly
         var arg_iter = nominal_type.argIterator(nominal_var);
         while (arg_iter.next()) |arg_var| {
             const arg_resolved = store.resolveVar(arg_var);

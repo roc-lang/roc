@@ -574,18 +574,6 @@ pub const NominalType = struct {
         return backing_var;
     }
 
-    /// Get the first argument var for this nominal type given the nominal type var
-    pub fn getFirstArgVar(self: NominalType, nominal_var: Var) Var {
-        const first_arg = @as(Var, @enumFromInt(@intFromEnum(nominal_var) + 2));
-
-        // Debug assertion: verify we have at least one arg
-        if (std.debug.runtime_safety) {
-            std.debug.assert(self.num_args > 0);
-        }
-
-        return first_arg;
-    }
-
     /// Get the argument var at the given index for this nominal type given the nominal type var
     pub fn getArgVar(self: NominalType, nominal_var: Var, arg_index: usize) Var {
         std.debug.assert(arg_index < self.num_args);
