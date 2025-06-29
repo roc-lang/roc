@@ -1,4 +1,5 @@
 const std = @import("std");
+const testing = std.testing;
 const base = @import("../base.zig");
 const parse = @import("parse.zig");
 const tokenize = @import("parse/tokenize.zig");
@@ -1406,14 +1407,10 @@ pub fn canonicalize_expr(
             // Create span of the new scratch record fields
             const fields_span = self.can_ir.store.recordFieldSpanFrom(scratch_top);
 
-            // create type vars, first "reserve" node slots
-            const record_expr_idx = self.can_ir.store.predictNodeIndex(2);
-
-            // then in the final slot the actual expr is inserted
+            // Create the expression
             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
                 .e_record = .{
                     .fields = fields_span,
-                    .ext_var = self.can_ir.pushFreshTypeVar(record_expr_idx, region),
                     .region = region,
                 },
             });
@@ -1421,11 +1418,6 @@ pub fn canonicalize_expr(
             // Create fresh type variables for each record field
             // The type checker will unify these with the field expression types
             const cir_fields = self.can_ir.store.sliceRecordFields(fields_span);
-
-            // Reserve additional type variable slots for field types
-            const field_count = cir_fields.len;
-            const total_vars_needed = field_count; // field_vars (ext_var already created above)
-            const record_with_fields_expr_idx = self.can_ir.store.predictNodeIndex(@intCast(total_vars_needed));
 
             // Create fresh type variables for each field
             var type_record_fields = std.ArrayList(types.RecordField).init(self.can_ir.env.gpa);
@@ -1435,7 +1427,7 @@ pub fn canonicalize_expr(
                 const cir_field = self.can_ir.store.getRecordField(cir_field_idx);
 
                 // Create a fresh type variable for this field
-                const field_type_var = self.can_ir.pushFreshTypeVar(record_with_fields_expr_idx, region);
+                const field_type_var = self.can_ir.env.types.fresh();
 
                 type_record_fields.append(types.RecordField{
                     .name = cir_field.name,
@@ -1445,13 +1437,12 @@ pub fn canonicalize_expr(
 
             // Create the record type structure
             const type_fields_range = self.can_ir.env.types.appendRecordFields(type_record_fields.items);
-            const ext_var = self.can_ir.env.types.freshFromContent(.{ .structure = .empty_record });
 
-            // Set the record structure on the expression variable
-            // This provides the concrete type information for type checking and final output
+            // Set record_unbound on the expression variable
+            // We use the expression's own index as its type variable
             _ = self.can_ir.setTypeVarAtExpr(
                 expr_idx,
-                Content{ .structure = .{ .record = .{ .fields = type_fields_range, .ext = ext_var } } },
+                Content{ .structure = .{ .record_unbound = type_fields_range } },
             );
 
             return expr_idx;
@@ -5368,6 +5359,285 @@ test "numeric pattern types: unbound vs polymorphic" {
             else => {},
         }
     }
+}
+
+test "record literal uses record_unbound" {
+    const gpa = std.testing.allocator;
+
+    // Test a simple record literal
+    {
+        var env = base.ModuleEnv.init(gpa);
+        defer env.deinit();
+
+        var ast = parse.parseExpr(&env, "{ x: 42, y: \"hello\" }");
+        defer ast.deinit(gpa);
+
+        var cir = CIR.init(&env);
+        defer cir.deinit();
+
+        var can = Self.init(&cir, &ast);
+        defer can.deinit();
+
+        const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+        const canonical_expr_idx = try can.canonicalize_expr(expr_idx) orelse {
+            return error.CanonicalizeError;
+        };
+
+        // Get the type of the expression
+        const expr_var = @as(types.Var, @enumFromInt(@intFromEnum(canonical_expr_idx)));
+        const resolved = env.types.resolveVar(expr_var);
+
+        // Check that it's a record_unbound
+        switch (resolved.desc.content) {
+            .structure => |structure| switch (structure) {
+                .record_unbound => |fields| {
+                    // Success! The record literal created a record_unbound type
+                    try testing.expect(fields.len() == 2);
+                },
+                else => return error.ExpectedRecordUnbound,
+            },
+            else => return error.ExpectedStructure,
+        }
+    }
+
+    // Test an empty record literal
+    {
+        var env = base.ModuleEnv.init(gpa);
+        defer env.deinit();
+
+        var ast = parse.parseExpr(&env, "{}");
+        defer ast.deinit(gpa);
+
+        var cir = CIR.init(&env);
+        defer cir.deinit();
+
+        var can = Self.init(&cir, &ast);
+        defer can.deinit();
+
+        const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+        const canonical_expr_idx = try can.canonicalize_expr(expr_idx) orelse {
+            return error.CanonicalizeError;
+        };
+
+        // Get the type of the expression
+        const expr_var = @as(types.Var, @enumFromInt(@intFromEnum(canonical_expr_idx)));
+        const resolved = env.types.resolveVar(expr_var);
+
+        // Check that it's an empty_record
+        switch (resolved.desc.content) {
+            .structure => |structure| switch (structure) {
+                .empty_record => {
+                    // Success! Empty record literal created empty_record type
+                },
+                else => return error.ExpectedEmptyRecord,
+            },
+            else => return error.ExpectedStructure,
+        }
+    }
+
+    // Test a record with a single field
+    {
+        var env = base.ModuleEnv.init(gpa);
+        defer env.deinit();
+
+        var ast = parse.parseExpr(&env, "{ value: 123 }");
+        defer ast.deinit(gpa);
+
+        var cir = CIR.init(&env);
+        defer cir.deinit();
+
+        var can = Self.init(&cir, &ast);
+        defer can.deinit();
+
+        const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+        const canonical_expr_idx = try can.canonicalize_expr(expr_idx) orelse {
+            return error.CanonicalizeError;
+        };
+
+        // Get the type of the expression
+        const expr_var = @as(types.Var, @enumFromInt(@intFromEnum(canonical_expr_idx)));
+        const resolved = env.types.resolveVar(expr_var);
+
+        // Check that it's a record_unbound
+        switch (resolved.desc.content) {
+            .structure => |structure| switch (structure) {
+                .record_unbound => |fields| {
+                    // Success! The record literal created a record_unbound type
+                    try testing.expect(fields.len() == 1);
+
+                    // Check the field
+                    const fields_slice = env.types.getRecordFieldsSlice(fields);
+                    const field_name = env.idents.getText(fields_slice.get(0).name);
+                    try testing.expectEqualStrings("value", field_name);
+                },
+                else => return error.ExpectedRecordUnbound,
+            },
+            else => return error.ExpectedStructure,
+        }
+    }
+}
+
+test "record_unbound basic functionality" {
+    const gpa = std.testing.allocator;
+
+    // Test that record literals create record_unbound types
+    var env = base.ModuleEnv.init(gpa);
+    defer env.deinit();
+
+    var ast = parse.parseExpr(&env, "{ x: 42, y: 99 }");
+    defer ast.deinit(gpa);
+
+    var cir = CIR.init(&env);
+    defer cir.deinit();
+
+    var can = Self.init(&cir, &ast);
+    defer can.deinit();
+
+    const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+    const canonical_expr_idx = try can.canonicalize_expr(expr_idx) orelse {
+        return error.CanonicalizeError;
+    };
+
+    // Get the type of the expression
+    const expr_var = @as(types.Var, @enumFromInt(@intFromEnum(canonical_expr_idx)));
+    const resolved = env.types.resolveVar(expr_var);
+
+    // Verify it starts as record_unbound
+    switch (resolved.desc.content) {
+        .structure => |structure| switch (structure) {
+            .record_unbound => |fields| {
+                // Success! Record literal created record_unbound type
+                try testing.expect(fields.len() == 2);
+
+                // Check field names
+                const field_slice = env.types.getRecordFieldsSlice(fields);
+                try testing.expectEqualStrings("x", env.idents.getText(field_slice.get(0).name));
+                try testing.expectEqualStrings("y", env.idents.getText(field_slice.get(1).name));
+            },
+            else => return error.ExpectedRecordUnbound,
+        },
+        else => return error.ExpectedStructure,
+    }
+}
+
+test "record_unbound with multiple fields" {
+    const gpa = std.testing.allocator;
+
+    var env = base.ModuleEnv.init(gpa);
+    defer env.deinit();
+
+    // Create record_unbound with multiple fields
+    var ast = parse.parseExpr(&env, "{ a: 123, b: 456, c: 789 }");
+    defer ast.deinit(gpa);
+
+    var cir = CIR.init(&env);
+    defer cir.deinit();
+
+    var can = Self.init(&cir, &ast);
+    defer can.deinit();
+
+    const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+    const canonical_expr_idx = try can.canonicalize_expr(expr_idx) orelse {
+        return error.CanonicalizeError;
+    };
+
+    const expr_var = @as(types.Var, @enumFromInt(@intFromEnum(canonical_expr_idx)));
+    const resolved = env.types.resolveVar(expr_var);
+
+    // Should be record_unbound
+    switch (resolved.desc.content) {
+        .structure => |s| switch (s) {
+            .record_unbound => |fields| {
+                try testing.expect(fields.len() == 3);
+
+                // Check field names
+                const field_slice = env.types.getRecordFieldsSlice(fields);
+                try testing.expectEqualStrings("a", env.idents.getText(field_slice.get(0).name));
+                try testing.expectEqualStrings("b", env.idents.getText(field_slice.get(1).name));
+                try testing.expectEqualStrings("c", env.idents.getText(field_slice.get(2).name));
+            },
+            else => return error.ExpectedRecordUnbound,
+        },
+        else => return error.ExpectedStructure,
+    }
+}
+
+test "record with extension variable" {
+    const gpa = std.testing.allocator;
+
+    var env = base.ModuleEnv.init(gpa);
+    defer env.deinit();
+
+    var cir = CIR.init(&env);
+    defer cir.deinit();
+
+    // Test that regular records have extension variables
+    // Create { x: 42, y: "hi" }* (open record)
+    const num_var = env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_precision = .i32 } } });
+    const str_var = env.types.freshFromContent(Content{ .structure = .str });
+
+    const fields = [_]types.RecordField{
+        .{ .name = env.idents.insert(gpa, base.Ident.for_text("x"), base.Region.zero()), .var_ = num_var },
+        .{ .name = env.idents.insert(gpa, base.Ident.for_text("y"), base.Region.zero()), .var_ = str_var },
+    };
+    const fields_range = env.types.appendRecordFields(&fields);
+    const ext_var = env.types.fresh(); // Open extension
+    const record_content = Content{ .structure = .{ .record = .{ .fields = fields_range, .ext = ext_var } } };
+    const record_var = env.types.freshFromContent(record_content);
+
+    // Verify the record has an extension variable
+    const resolved = env.types.resolveVar(record_var);
+    switch (resolved.desc.content) {
+        .structure => |structure| switch (structure) {
+            .record => |record| {
+                try testing.expect(record.fields.len() == 2);
+
+                // Check that extension is a flex var (open record)
+                const ext_resolved = env.types.resolveVar(record.ext);
+                switch (ext_resolved.desc.content) {
+                    .flex_var => {
+                        // Success! The record has an open extension
+                    },
+                    else => return error.ExpectedFlexVar,
+                }
+            },
+            else => return error.ExpectedRecord,
+        },
+        else => return error.ExpectedStructure,
+    }
+
+    // Now test a closed record
+    const closed_ext_var = env.types.freshFromContent(Content{ .structure = .empty_record });
+    const closed_record_content = Content{ .structure = .{ .record = .{ .fields = fields_range, .ext = closed_ext_var } } };
+    const closed_record_var = env.types.freshFromContent(closed_record_content);
+
+    // Verify the closed record has empty_record as extension
+    const closed_resolved = env.types.resolveVar(closed_record_var);
+    switch (closed_resolved.desc.content) {
+        .structure => |structure| switch (structure) {
+            .record => |record| {
+                try testing.expect(record.fields.len() == 2);
+
+                // Check that extension is empty_record (closed record)
+                const ext_resolved = env.types.resolveVar(record.ext);
+                switch (ext_resolved.desc.content) {
+                    .structure => |ext_structure| switch (ext_structure) {
+                        .empty_record => {
+                            // Success! The record is closed
+                        },
+                        else => return error.ExpectedEmptyRecord,
+                    },
+                    else => return error.ExpectedStructure,
+                }
+            },
+            else => return error.ExpectedRecord,
+        },
+        else => return error.ExpectedStructure,
+    }
+}
+
+test "numeric pattern types: unbound vs polymorphic - frac" {
+    const gpa = std.testing.allocator;
 
     // Test frac_poly pattern
     {

@@ -694,32 +694,225 @@ const Unifier = struct {
                     .record => |b_record| {
                         try self.unifyTwoRecords(vars, a_record, b_record);
                     },
-                    .record_unbound => |b_record| {
+                    .record_unbound => |b_fields| {
                         // When unifying record with record_unbound, record wins
-                        try self.unifyTwoRecords(vars, a_record, b_record);
+                        // First gather the fields from the record
+                        const a_gathered_fields = try self.gatherRecordFields(a_record);
+
+                        // For record_unbound, we just have the fields directly (no extension)
+                        const b_gathered_range = self.scratch.copyGatherFieldsFromMultiList(
+                            &self.types_store.record_fields,
+                            b_fields,
+                        );
+
+                        // Partition the fields
+                        const partitioned = partitionFields(
+                            &self.module_env.idents,
+                            self.scratch,
+                            a_gathered_fields.range,
+                            b_gathered_range,
+                        );
+
+                        // Check that they have the same fields
+                        if (partitioned.only_in_a.len() > 0 or partitioned.only_in_b.len() > 0) {
+                            return error.TypeMismatch;
+                        }
+
+                        // Unify shared fields
+                        try self.unifySharedFields(
+                            vars,
+                            self.scratch.in_both_fields.rangeToSlice(partitioned.in_both),
+                            null,
+                            null,
+                            a_gathered_fields.ext,
+                        );
+
+                        // Record wins (keeps its extension)
+                        self.merge(vars, vars.a.desc.content);
+                    },
+                    .record_poly => |b_poly| {
+                        // When unifying record with record_poly, unify the records
+                        try self.unifyTwoRecords(vars, a_record, b_poly.record);
                     },
                     else => return error.TypeMismatch,
                 }
             },
-            .record_unbound => |a_record| {
+            .record_unbound => |a_fields| {
                 switch (b_flat_type) {
                     .empty_record => {
-                        if (a_record.fields.len() == 0) {
-                            try self.unifyGuarded(a_record.ext, vars.b.var_);
+                        if (a_fields.len() == 0) {
+                            // Both are empty, merge as empty_record
+                            self.merge(vars, Content{ .structure = .empty_record });
                         } else {
                             return error.TypeMismatch;
                         }
                     },
                     .record => |b_record| {
                         // When unifying record_unbound with record, record wins
-                        try self.unifyTwoRecords(vars, a_record, b_record);
+                        // Copy unbound fields into scratch
+                        const a_gathered_range = self.scratch.copyGatherFieldsFromMultiList(
+                            &self.types_store.record_fields,
+                            a_fields,
+                        );
+
+                        // Gather fields from the record
+                        const b_gathered_fields = try self.gatherRecordFields(b_record);
+
+                        // Partition the fields
+                        const partitioned = partitionFields(
+                            &self.module_env.idents,
+                            self.scratch,
+                            a_gathered_range,
+                            b_gathered_fields.range,
+                        );
+
+                        // Check that they have the same fields
+                        if (partitioned.only_in_a.len() > 0 or partitioned.only_in_b.len() > 0) {
+                            return error.TypeMismatch;
+                        }
+
+                        // Unify shared fields
+                        try self.unifySharedFields(
+                            vars,
+                            self.scratch.in_both_fields.rangeToSlice(partitioned.in_both),
+                            null,
+                            null,
+                            b_gathered_fields.ext,
+                        );
+
+                        // Record wins
                         self.merge(vars, vars.b.desc.content);
                     },
-                    .record_unbound => |b_record| {
+                    .record_unbound => |b_fields| {
                         // Both are record_unbound - unify fields and stay unbound
-                        try self.unifyTwoRecords(vars, a_record, b_record);
-                        // Explicitly merge to keep as record_unbound
+                        // Copy both field sets into scratch
+                        const a_gathered_range = self.scratch.copyGatherFieldsFromMultiList(
+                            &self.types_store.record_fields,
+                            a_fields,
+                        );
+                        const b_gathered_range = self.scratch.copyGatherFieldsFromMultiList(
+                            &self.types_store.record_fields,
+                            b_fields,
+                        );
+
+                        // Partition the fields
+                        const partitioned = partitionFields(
+                            &self.module_env.idents,
+                            self.scratch,
+                            a_gathered_range,
+                            b_gathered_range,
+                        );
+
+                        // Check that they have the same fields
+                        if (partitioned.only_in_a.len() > 0 or partitioned.only_in_b.len() > 0) {
+                            return error.TypeMismatch;
+                        }
+
+                        // Unify shared fields (no extension since both are unbound)
+                        const dummy_ext = self.fresh(vars, .{ .structure = .empty_record });
+                        try self.unifySharedFields(
+                            vars,
+                            self.scratch.in_both_fields.rangeToSlice(partitioned.in_both),
+                            null,
+                            null,
+                            dummy_ext,
+                        );
+
+                        // Stay unbound (use the first one's fields since they're unified now)
                         self.merge(vars, vars.a.desc.content);
+                    },
+                    .record_poly => |b_poly| {
+                        // When unifying record_unbound with record_poly, poly wins
+                        // Copy unbound fields into scratch
+                        const a_gathered_range = self.scratch.copyGatherFieldsFromMultiList(
+                            &self.types_store.record_fields,
+                            a_fields,
+                        );
+
+                        // Gather fields from the poly record
+                        const b_gathered_fields = try self.gatherRecordFields(b_poly.record);
+
+                        // Partition the fields
+                        const partitioned = partitionFields(
+                            &self.module_env.idents,
+                            self.scratch,
+                            a_gathered_range,
+                            b_gathered_fields.range,
+                        );
+
+                        // Check that they have the same fields
+                        if (partitioned.only_in_a.len() > 0 or partitioned.only_in_b.len() > 0) {
+                            return error.TypeMismatch;
+                        }
+
+                        // Unify shared fields
+                        try self.unifySharedFields(
+                            vars,
+                            self.scratch.in_both_fields.rangeToSlice(partitioned.in_both),
+                            null,
+                            null,
+                            b_gathered_fields.ext,
+                        );
+
+                        // Poly wins
+                        self.merge(vars, vars.b.desc.content);
+                    },
+                    else => return error.TypeMismatch,
+                }
+            },
+            .record_poly => |a_poly| {
+                switch (b_flat_type) {
+                    .empty_record => {
+                        if (a_poly.record.fields.len() == 0) {
+                            try self.unifyGuarded(a_poly.record.ext, vars.b.var_);
+                        } else {
+                            return error.TypeMismatch;
+                        }
+                    },
+                    .record => |b_record| {
+                        // When unifying record_poly with record, unify the records
+                        try self.unifyTwoRecords(vars, a_poly.record, b_record);
+                    },
+                    .record_unbound => |b_fields| {
+                        // When unifying record_poly with record_unbound, poly wins
+                        // Gather fields from the poly record
+                        const a_gathered_fields = try self.gatherRecordFields(a_poly.record);
+
+                        // Copy unbound fields into scratch
+                        const b_gathered_range = self.scratch.copyGatherFieldsFromMultiList(
+                            &self.types_store.record_fields,
+                            b_fields,
+                        );
+
+                        // Partition the fields
+                        const partitioned = partitionFields(
+                            &self.module_env.idents,
+                            self.scratch,
+                            a_gathered_fields.range,
+                            b_gathered_range,
+                        );
+
+                        // Check that they have the same fields
+                        if (partitioned.only_in_a.len() > 0 or partitioned.only_in_b.len() > 0) {
+                            return error.TypeMismatch;
+                        }
+
+                        // Unify shared fields
+                        try self.unifySharedFields(
+                            vars,
+                            self.scratch.in_both_fields.rangeToSlice(partitioned.in_both),
+                            null,
+                            null,
+                            a_gathered_fields.ext,
+                        );
+
+                        // Poly wins
+                        self.merge(vars, vars.a.desc.content);
+                    },
+                    .record_poly => |b_poly| {
+                        // Both are record_poly - unify the records and vars
+                        try self.unifyTwoRecords(vars, a_poly.record, b_poly.record);
+                        try self.unifyGuarded(a_poly.var_, b_poly.var_);
                     },
                     else => return error.TypeMismatch,
                 }
@@ -732,6 +925,21 @@ const Unifier = struct {
                     .record => |b_record| {
                         if (b_record.fields.len() == 0) {
                             try self.unifyGuarded(vars.a.var_, b_record.ext);
+                        } else {
+                            return error.TypeMismatch;
+                        }
+                    },
+                    .record_unbound => |b_fields| {
+                        if (b_fields.len() == 0) {
+                            // Both are empty, merge as empty_record
+                            self.merge(vars, Content{ .structure = .empty_record });
+                        } else {
+                            return error.TypeMismatch;
+                        }
+                    },
+                    .record_poly => |b_poly| {
+                        if (b_poly.record.fields.len() == 0) {
+                            try self.unifyGuarded(vars.a.var_, b_poly.record.ext);
                         } else {
                             return error.TypeMismatch;
                         }
@@ -1707,13 +1915,22 @@ const Unifier = struct {
                             range.end = next_range.end;
                             ext_var = ext_record.ext;
                         },
-                        .record_unbound => |ext_record| {
+                        .record_unbound => |fields| {
                             const next_range = self.scratch.copyGatherFieldsFromMultiList(
                                 &self.types_store.record_fields,
-                                ext_record.fields,
+                                fields,
                             );
                             range.end = next_range.end;
-                            ext_var = ext_record.ext;
+                            // record_unbound has no extension, so we're done
+                            return .{ .ext = ext_var, .range = range };
+                        },
+                        .record_poly => |poly| {
+                            const next_range = self.scratch.copyGatherFieldsFromMultiList(
+                                &self.types_store.record_fields,
+                                poly.record.fields,
+                            );
+                            range.end = next_range.end;
+                            ext_var = poly.record.ext;
                         },
                         .empty_record => {
                             return .{ .ext = ext_var, .range = range };

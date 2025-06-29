@@ -162,8 +162,12 @@ pub const TypeWriter = struct {
             .record => |record| {
                 try self.writeRecord(record);
             },
-            .record_unbound => |record| {
-                try self.writeRecord(record);
+            .record_unbound => |fields| {
+                try self.writeRecordFields(fields);
+            },
+            .record_poly => |poly| {
+                try self.writeRecord(poly.record);
+                try self.writeVar(poly.var_);
             },
             .empty_record => {
                 _ = try self.writer.write("{}");
@@ -200,6 +204,25 @@ pub const TypeWriter = struct {
             }
             _ = try self.writer.write(")");
         }
+    }
+
+    /// Write record fields without extension
+    pub fn writeRecordFields(self: *Self, fields: types.RecordField.SafeMultiList.Range) Allocator.Error!void {
+        _ = try self.writer.write("{ ");
+
+        const fields_slice = self.env.types.getRecordFieldsSlice(fields);
+        var is_first = true;
+        for (fields_slice.items(.name), fields_slice.items(.var_)) |name, var_| {
+            if (!is_first) {
+                _ = try self.writer.write(", ");
+            }
+            is_first = false;
+            _ = try self.writer.write(self.env.idents.getText(name));
+            _ = try self.writer.write(": ");
+            try self.writeVar(var_);
+        }
+
+        _ = try self.writer.write(" }");
     }
 
     /// Write a function type

@@ -246,15 +246,13 @@ test "NodeStore round trip - Expressions" {
     //     },
     // });
 
-    // TODO: Test e_record when NodeStore properly handles TypeVar fields
-    // Currently doesn't restore ext_var properly
-    // try expressions.append(CIR.Expr{
-    //     .e_record = .{
-    //         .ext_var = @enumFromInt(1456),
-    //         .fields = CIR.RecordField.Span{ .span = base.DataSpan.init(789, 1012) },
-    //         .region = from_raw_offsets(1567, 1890),
-    //     },
-    // });
+    // Test e_record
+    try expressions.append(CIR.Expr{
+        .e_record = .{
+            .fields = CIR.RecordField.Span{ .span = base.DataSpan.init(789, 1012) },
+            .region = from_raw_offsets(1567, 1890),
+        },
+    });
 
     try expressions.append(CIR.Expr{
         .e_empty_record = .{

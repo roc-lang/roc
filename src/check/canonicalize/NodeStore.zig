@@ -402,7 +402,6 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         .expr_record => {
             return CIR.Expr{
                 .e_record = .{
-                    .ext_var = @enumFromInt(node.data_1),
                     .fields = .{ .span = .{ .start = node.data_2, .len = node.data_3 } },
                     .region = node.region,
                 },
@@ -1102,11 +1101,9 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
         .e_record => |e| {
             node.region = e.region;
             node.tag = .expr_record;
-            node.data_1 = @intFromEnum(e.ext_var);
-            if (e.fields.span.len > 0) {
-                node.data_2 = e.fields.span.start;
-                node.data_3 = e.fields.span.len;
-            }
+            node.data_1 = 0; // unused - ext_var removed
+            node.data_2 = e.fields.span.start;
+            node.data_3 = e.fields.span.len;
         },
         .e_empty_record => |e| {
             node.region = e.region;
