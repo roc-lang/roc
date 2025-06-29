@@ -25,46 +25,46 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-6-44
-	(app @1-1-1-53
-		(provides @1-6-1-12
+(file @1.1-6.44
+	(app @1.1-1.53
+		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @1-15-1-53 (name "pf")
-			(e-string @1-28-1-51
-				(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))
-		(packages @1-13-1-53
-			(record-field @1-15-1-53 (name "pf")
-				(e-string @1-28-1-51
-					(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))))
+		(record-field @1.15-1.53 (name "pf")
+			(e-string @1.28-1.51
+				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
+		(packages @1.13-1.53
+			(record-field @1.15-1.53 (name "pf")
+				(e-string @1.28-1.51
+					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @3-1-4-8 (name "getName")
-			(ty-fn @3-11-3-41
-				(ty-record @3-11-3-34
-					(anno-record-field @3-13-3-23 (name "name")
+		(s-type-anno @3.1-4.8 (name "getName")
+			(ty-fn @3.11-3.41
+				(ty-record @3.11-3.34
+					(anno-record-field @3.13-3.23 (name "name")
 						(ty (name "Str")))
-					(anno-record-field @3-24-3-34 (name "age")
+					(anno-record-field @3.24-3.34 (name "age")
 						(ty (name "U64"))))
 				(ty (name "Str"))))
-		(s-decl @4-1-4-28
-			(p-ident @4-1-4-8 (raw "getName"))
-			(e-lambda @4-11-4-28
+		(s-decl @4.1-4.28
+			(p-ident @4.1-4.8 (raw "getName"))
+			(e-lambda @4.11-4.28
 				(args
-					(p-ident @4-12-4-19 (raw "_person")))
-				(e-string @4-21-4-28
-					(e-string-part @4-22-4-27 (raw "hello")))))
-		(s-decl @6-1-6-44
-			(p-ident @6-1-6-6 (raw "main!"))
-			(e-lambda @6-9-6-44
+					(p-ident @4.12-4.19 (raw "_person")))
+				(e-string @4.21-4.28
+					(e-string-part @4.22-4.27 (raw "hello")))))
+		(s-decl @6.1-6.44
+			(p-ident @6.1-6.6 (raw "main!"))
+			(e-lambda @6.9-6.44
 				(args
 					(p-underscore))
-				(e-apply @6-13-6-44
-					(e-ident @6-13-6-20 (qaul "") (raw "getName"))
-					(e-record @6-21-6-43
+				(e-apply @6.13-6.44
+					(e-ident @6.13-6.20 (qaul "") (raw "getName"))
+					(e-record @6.21-6.43
 						(field (field "name") (optional false)
-							(e-string @6-28-6-34
-								(e-string-part @6-29-6-33 (raw "luke"))))
+							(e-string @6.28-6.34
+								(e-string-part @6.29-6.33 (raw "luke"))))
 						(field (field "age") (optional false)
-							(e-int @6-40-6-42 (raw "21")))))))))
+							(e-int @6.40-6.42 (raw "21")))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -78,45 +78,45 @@ main! = |_| getName({ name: "luke", age: 21 })
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 94)
-		(p-assign @4-1-4-8 (ident "getName") (id 79))
-		(e-lambda @4-11-4-28 (id 84)
+	(d-let (id 95)
+		(p-assign @4.1-4.8 (ident "getName") (id 80))
+		(e-lambda @4.11-4.28 (id 85)
 			(args
-				(p-assign @4-12-4-19 (ident "_person") (id 80)))
-			(e-string @4-21-4-28
-				(e-literal @4-22-4-27 (string "hello"))))
-		(annotation @4-1-4-8 (signature 92) (id 93)
+				(p-assign @4.12-4.19 (ident "_person") (id 81)))
+			(e-string @4.21-4.28
+				(e-literal @4.22-4.27 (string "hello"))))
+		(annotation @4.1-4.8 (signature 93) (id 94)
 			(declared-type
-				(ty-fn @3-11-3-41 (effectful false)
-					(ty-record @3-11-3-34
+				(ty-fn @3.11-3.41 (effectful false)
+					(ty-record @3.11-3.34
 						(field (field "name")
-							(ty @3-19-3-22 (name "Str")))
+							(ty @3.19-3.22 (name "Str")))
 						(field (field "age")
-							(ty @3-29-3-32 (name "U64"))))
-					(ty @3-38-3-41 (name "Str"))))))
-	(d-let (id 111)
-		(p-assign @6-1-6-6 (ident "main!") (id 95))
-		(e-lambda @6-9-6-44 (id 110)
+							(ty @3.29-3.32 (name "U64"))))
+					(ty @3.38-3.41 (name "Str"))))))
+	(d-let (id 112)
+		(p-assign @6.1-6.6 (ident "main!") (id 96))
+		(e-lambda @6.9-6.44 (id 111)
 			(args
-				(p-underscore @6-10-6-11 (id 96)))
-			(e-call @6-13-6-44
-				(e-lookup-local @6-13-6-20
-					(pattern (id 79)))
-				(e-record @6-21-6-43 (ext-var 103)
+				(p-underscore @6.10-6.11 (id 97)))
+			(e-call @6.13-6.44
+				(e-lookup-local @6.13-6.20
+					(pattern (id 80)))
+				(e-record @6.21-6.43 (ext-var 104)
 					(fields
 						(field (name "name")
-							(e-string @6-28-6-34
-								(e-literal @6-29-6-33 (string "luke"))))
+							(e-string @6.28-6.34
+								(e-literal @6.29-6.33 (string "luke"))))
 						(field (name "age")
-							(e-int @6-40-6-42 (value "21")))))))))
+							(e-int @6.40-6.42 (value "21")))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "getName") (def_var 94) (type "{ name: Str, age: U64 } -> Str"))
-		(d_assign (name "main!") (def_var 111) (type "* ? *")))
+		(d_assign (name "getName") (def_var 95) (type "{ name: Str, age: U64 } -> Str"))
+		(d_assign (name "main!") (def_var 112) (type "* ? *")))
 	(expressions
-		(expr @4-11-4-28 (type "{ name: Str, age: U64 } -> Str"))
-		(expr @6-9-6-44 (type "* ? *"))))
+		(expr @4.11-4.28 (type "{ name: Str, age: U64 } -> Str"))
+		(expr @6.9-6.44 (type "* ? *"))))
 ~~~

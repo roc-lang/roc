@@ -17,10 +17,10 @@ Int(2:3-2:4),CloseSquare(2:4-2:5),EndOfFile(2:5-2:5),
 ~~~
 # PARSE
 ~~~clojure
-(e-list @1-1-2-5
-	(e-int @1-2-1-3 (raw "1"))
-	(e-int @1-5-1-6 (raw "2"))
-	(e-int @2-3-2-4 (raw "3")))
+(e-list @1.1-2.5
+	(e-int @1.2-1.3 (raw "1"))
+	(e-int @1.5-1.6 (raw "2"))
+	(e-int @2.3-2.4 (raw "3")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -32,13 +32,13 @@ Int(2:3-2:4),CloseSquare(2:4-2:5),EndOfFile(2:5-2:5),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-list @1-1-2-5 (elem-var 72) (id 75)
+(e-list @1.1-2.5 (elem-var 73) (id 76)
 	(elems
-		(e-int @1-2-1-3 (value "1"))
-		(e-int @1-5-1-6 (value "2"))
-		(e-int @2-3-2-4 (value "3"))))
+		(e-int @1.2-1.3 (value "1"))
+		(e-int @1.5-1.6 (value "2"))
+		(e-int @2.3-2.4 (value "3"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 75) (type "List(Num(*))"))
+(expr (id 76) (type "List(Num(*))"))
 ~~~

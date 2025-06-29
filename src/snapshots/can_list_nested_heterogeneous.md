@@ -33,13 +33,13 @@ OpenSquare(1:1-1:2),OpenSquare(1:2-1:3),CloseSquare(1:3-1:4),Comma(1:4-1:5),Open
 ~~~
 # PARSE
 ~~~clojure
-(e-list @1-1-1-21
-	(e-list @1-2-1-4)
-	(e-list @1-6-1-9
-		(e-int @1-7-1-8 (raw "1")))
-	(e-list @1-11-1-20
-		(e-string @1-12-1-19
-			(e-string-part @1-13-1-18 (raw "hello")))))
+(e-list @1.1-1.21
+	(e-list @1.2-1.4)
+	(e-list @1.6-1.9
+		(e-int @1.7-1.8 (raw "1")))
+	(e-list @1.11-1.20
+		(e-string @1.12-1.19
+			(e-string-part @1.13-1.18 (raw "hello")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -47,18 +47,18 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-list @1-1-1-21 (elem-var 72) (id 78)
+(e-list @1.1-1.21 (elem-var 73) (id 79)
 	(elems
-		(e-empty_list @1-2-1-4)
-		(e-list @1-6-1-9 (elem-var 73)
+		(e-empty_list @1.2-1.4)
+		(e-list @1.6-1.9 (elem-var 74)
 			(elems
-				(e-int @1-7-1-8 (value "1"))))
-		(e-list @1-11-1-20 (elem-var 76)
+				(e-int @1.7-1.8 (value "1"))))
+		(e-list @1.11-1.20 (elem-var 77)
 			(elems
-				(e-string @1-12-1-19
-					(e-literal @1-13-1-18 (string "hello")))))))
+				(e-string @1.12-1.19
+					(e-literal @1.13-1.18 (string "hello")))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 78) (type "List(Error)"))
+(expr (id 79) (type "List(Error)"))
 ~~~

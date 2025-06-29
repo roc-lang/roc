@@ -15,19 +15,19 @@ OpBar(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:4-1:14),Comma(1:14-1:15),DoubleDo
 ~~~
 # PARSE
 ~~~clojure
-(e-lambda @1-1-1-65
+(e-lambda @1.1-1.65
 	(args
-		(p-record @1-2-1-24
-			(field @1-4-1-15 (name "first_name") (rest false))
-			(field @1-16-1-24 (name "rest") (rest true))))
-	(e-string @1-26-1-65
-		(e-string-part @1-27-1-33 (raw "Hello "))
-		(e-ident @1-35-1-45 (qaul "") (raw "first_name"))
-		(e-string-part @1-46-1-47 (raw " "))
-		(e-field-access @1-49-1-64
-			(e-ident @1-49-1-53 (qaul "") (raw "rest"))
-			(e-ident @1-53-1-63 (qaul "") (raw ".last_name")))
-		(e-string-part @1-64-1-64 (raw ""))))
+		(p-record @1.2-1.24
+			(field @1.4-1.15 (name "first_name") (rest false))
+			(field @1.16-1.24 (name "rest") (rest true))))
+	(e-string @1.26-1.65
+		(e-string-part @1.27-1.33 (raw "Hello "))
+		(e-ident @1.35-1.45 (qaul "") (raw "first_name"))
+		(e-string-part @1.46-1.47 (raw " "))
+		(e-field-access @1.49-1.64
+			(e-ident @1.49-1.53 (qaul "") (raw "rest"))
+			(e-ident @1.53-1.63 (qaul "") (raw ".last_name")))
+		(e-string-part @1.64-1.64 (raw ""))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -35,26 +35,26 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-lambda @1-1-1-65 (id 85)
+(e-lambda @1.1-1.65 (id 86)
 	(args
-		(p-record-destructure @1-2-1-24 (id 76)
+		(p-record-destructure @1.2-1.24 (id 77)
 			(destructs
-				(record-destruct @1-4-1-15 (label "first_name") (ident "first_name")
+				(record-destruct @1.4-1.15 (label "first_name") (ident "first_name")
 					(required))
-				(record-destruct @1-16-1-24 (label "rest") (ident "rest")
+				(record-destruct @1.16-1.24 (label "rest") (ident "rest")
 					(required)))))
-	(e-string @1-26-1-65
-		(e-literal @1-27-1-33 (string "Hello "))
-		(e-lookup-local @1-35-1-45
-			(pattern (id 73)))
-		(e-literal @1-46-1-47 (string " "))
-		(e-dot-access @1-49-1-64 (field "last_name")
+	(e-string @1.26-1.65
+		(e-literal @1.27-1.33 (string "Hello "))
+		(e-lookup-local @1.35-1.45
+			(pattern (id 74)))
+		(e-literal @1.46-1.47 (string " "))
+		(e-dot-access @1.49-1.64 (field "last_name")
 			(receiver
-				(e-lookup-local @1-49-1-53
-					(pattern (id 75)))))
-		(e-literal @1-64-1-64 (string ""))))
+				(e-lookup-local @1.49-1.53
+					(pattern (id 76)))))
+		(e-literal @1.64-1.64 (string ""))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 85) (type "* ? Str"))
+(expr (id 86) (type "* ? Str"))
 ~~~

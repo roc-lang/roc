@@ -162,22 +162,22 @@ KwVar(7:1-7:4),LowerIdent(7:5-7:6),OpAssign(7:6-7:7),Int(7:8-7:9),EndOfFile(7:9-
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-7-9
-	(module @1-1-1-17
-		(exposes @1-8-1-17
-			(exposed-malformed (reason "exposed_item_unexpected_token") @1-9-1-17)))
+(file @1.1-7.9
+	(module @1.1-1.17
+		(exposes @1.8-1.17
+			(exposed-malformed (reason "exposed_item_unexpected_token") @1.9-1.17)))
 	(statements
-		(e-malformed @1-33-1-53 (reason "expected_expr_close_curly_or_comma"))
-		(e-malformed @1-34-1-53 (reason "expr_unexpected_token"))
-		(e-malformed @1-1-1-1 (reason "expr_unexpected_token"))
-		(s-malformed @4-1-4-6 (tag "var_only_allowed_in_a_body"))
-		(s-decl @1-1-1-1
-			(p-ident @4-5-4-6 (raw "t"))
-			(e-malformed @1-1-1-1 (reason "expr_unexpected_token")))
-		(s-malformed @7-1-7-6 (tag "var_only_allowed_in_a_body"))
-		(s-decl @7-5-7-9
-			(p-ident @7-5-7-6 (raw "t"))
-			(e-int @7-8-7-9 (raw "0")))))
+		(e-malformed @1.33-1.53 (reason "expected_expr_close_curly_or_comma"))
+		(e-malformed @1.34-1.53 (reason "expr_unexpected_token"))
+		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
+		(s-malformed @4.1-4.6 (tag "var_only_allowed_in_a_body"))
+		(s-decl @1.1-1.1
+			(p-ident @4.5-4.6 (raw "t"))
+			(e-malformed @1.1-1.1 (reason "expr_unexpected_token")))
+		(s-malformed @7.1-7.6 (tag "var_only_allowed_in_a_body"))
+		(s-decl @7.5-7.9
+			(p-ident @7.5-7.6 (raw "t"))
+			(e-int @7.8-7.9 (raw "0")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -192,20 +192,20 @@ t = 0
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 78)
-		(p-assign @4-5-4-6 (ident "t") (id 75))
-		(e-runtime-error (tag "expr_not_canonicalized") (id 77)))
-	(d-let (id 82)
-		(p-assign @7-5-7-6 (ident "t") (id 79))
-		(e-int @7-8-7-9 (value "0") (id 81))))
+	(d-let (id 79)
+		(p-assign @4.5-4.6 (ident "t") (id 76))
+		(e-runtime-error (tag "expr_not_canonicalized") (id 78)))
+	(d-let (id 83)
+		(p-assign @7.5-7.6 (ident "t") (id 80))
+		(e-int @7.8-7.9 (value "0") (id 82))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "t") (def_var 78) (type "Error"))
-		(d_assign (name "t") (def_var 82) (type "Num(*)")))
+		(d_assign (name "t") (def_var 79) (type "Error"))
+		(d_assign (name "t") (def_var 83) (type "Num(*)")))
 	(expressions
-		(expr @1-1-1-1 (type "Error"))
-		(expr @7-8-7-9 (type "Num(*)"))))
+		(expr @1.1-1.1 (type "Error"))
+		(expr @7.8-7.9 (type "Num(*)"))))
 ~~~

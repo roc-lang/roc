@@ -33,32 +33,32 @@ CloseCurly(10:1-10:2),EndOfFile(10:2-10:2),
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-10-2
-	(module @1-1-1-10
-		(exposes @1-8-1-10))
+(file @1.1-10.2
+	(module @1.1-1.10
+		(exposes @1.8-1.10))
 	(statements
-		(s-decl @4-1-10-2
-			(p-ident @4-1-4-9 (raw "testFunc"))
-			(e-lambda @4-12-10-2
+		(s-decl @4.1-10.2
+			(p-ident @4.1-4.9 (raw "testFunc"))
+			(e-lambda @4.12-10.2
 				(args
-					(p-ident @4-13-4-18 (raw "input")))
-				(e-block @4-20-10-2
+					(p-ident @4.13-4.18 (raw "input")))
+				(e-block @4.20-10.2
 					(statements
-						(s-decl @5-2-5-13
-							(p-ident @5-2-5-5 (raw "sum"))
-							(e-ident @5-8-5-13 (qaul "") (raw "input")))
-						(s-var @6-2-8-6 (name "sum_")
-							(e-binop @6-13-8-6 (op "*")
-								(e-ident @6-13-6-18 (qaul "") (raw "input"))
-								(e-int @6-21-6-22 (raw "2"))))
-						(s-decl @8-2-9-5
-							(p-ident @8-2-8-6 (raw "sum_"))
-							(e-binop @8-9-9-5 (op "+")
-								(e-ident @8-9-8-13 (qaul "") (raw "sum_"))
-								(e-ident @8-16-8-19 (qaul "") (raw "sum"))))
-						(e-binop @9-2-10-2 (op "+")
-							(e-ident @9-2-9-5 (qaul "") (raw "sum"))
-							(e-ident @9-8-9-12 (qaul "") (raw "sum_")))))))))
+						(s-decl @5.2-5.13
+							(p-ident @5.2-5.5 (raw "sum"))
+							(e-ident @5.8-5.13 (qaul "") (raw "input")))
+						(s-var @6.2-8.6 (name "sum_")
+							(e-binop @6.13-8.6 (op "*")
+								(e-ident @6.13-6.18 (qaul "") (raw "input"))
+								(e-int @6.21-6.22 (raw "2"))))
+						(s-decl @8.2-9.5
+							(p-ident @8.2-8.6 (raw "sum_"))
+							(e-binop @8.9-9.5 (op "+")
+								(e-ident @8.9-8.13 (qaul "") (raw "sum_"))
+								(e-ident @8.16-8.19 (qaul "") (raw "sum"))))
+						(e-binop @9.2-10.2 (op "+")
+							(e-ident @9.2-9.5 (qaul "") (raw "sum"))
+							(e-ident @9.8-9.12 (qaul "") (raw "sum_")))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -67,40 +67,40 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 92)
-		(p-assign @4-1-4-9 (ident "testFunc") (id 72))
-		(e-lambda @4-12-10-2 (id 91)
+	(d-let (id 93)
+		(p-assign @4.1-4.9 (ident "testFunc") (id 73))
+		(e-lambda @4.12-10.2 (id 92)
 			(args
-				(p-assign @4-13-4-18 (ident "input") (id 73)))
-			(e-block @4-20-10-2
-				(s-let @5-2-5-13
-					(p-assign @5-2-5-5 (ident "sum") (id 74))
-					(e-lookup-local @5-8-5-13 (id 75)
-						(pattern (id 73))))
-				(s-var @6-2-8-6
-					(p-assign @6-2-8-6 (ident "sum_") (id 80))
-					(e-binop @6-13-8-6 (op "mul") (id 79)
-						(e-lookup-local @6-13-6-18
-							(pattern (id 73)))
-						(e-int @6-21-6-22 (value "2"))))
-				(s-reassign @8-2-8-6
-					(p-assign @6-2-8-6 (ident "sum_") (id 80))
-					(e-binop @8-9-9-5 (op "add") (id 84)
-						(e-lookup-local @8-9-8-13
-							(pattern (id 80)))
-						(e-lookup-local @8-16-8-19
-							(pattern (id 74)))))
-				(e-binop @9-2-10-2 (op "add")
-					(e-lookup-local @9-2-9-5
-						(pattern (id 74)))
-					(e-lookup-local @9-8-9-12
-						(pattern (id 80))))))))
+				(p-assign @4.13-4.18 (ident "input") (id 74)))
+			(e-block @4.20-10.2
+				(s-let @5.2-5.13
+					(p-assign @5.2-5.5 (ident "sum") (id 75))
+					(e-lookup-local @5.8-5.13 (id 76)
+						(pattern (id 74))))
+				(s-var @6.2-8.6
+					(p-assign @6.2-8.6 (ident "sum_") (id 81))
+					(e-binop @6.13-8.6 (op "mul") (id 80)
+						(e-lookup-local @6.13-6.18
+							(pattern (id 74)))
+						(e-int @6.21-6.22 (value "2"))))
+				(s-reassign @8.2-8.6
+					(p-assign @6.2-8.6 (ident "sum_") (id 81))
+					(e-binop @8.9-9.5 (op "add") (id 85)
+						(e-lookup-local @8.9-8.13
+							(pattern (id 81)))
+						(e-lookup-local @8.16-8.19
+							(pattern (id 75)))))
+				(e-binop @9.2-10.2 (op "add")
+					(e-lookup-local @9.2-9.5
+						(pattern (id 75)))
+					(e-lookup-local @9.8-9.12
+						(pattern (id 81))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "testFunc") (def_var 92) (type "* ? *")))
+		(d_assign (name "testFunc") (def_var 93) (type "* ? *")))
 	(expressions
-		(expr @4-12-10-2 (type "* ? *"))))
+		(expr @4.12-10.2 (type "* ? *"))))
 ~~~

@@ -406,7 +406,7 @@ const Unifier = struct {
             .structure => |a_flat_type| {
                 try self.unifyStructure(vars, a_flat_type, vars.b.desc.content);
             },
-            .err => return error.TypeMismatch,
+            .err => self.merge(vars, .err),
         }
     }
 
@@ -5676,10 +5676,10 @@ test "heterogeneous list reports only first incompatibility" {
     const result2 = env.unify(elem_var, str_var);
     try std.testing.expectEqual(false, result2.isOk());
 
-    // Unify third element (fraction) with elem_var - should also fail
+    // Unify third element (fraction) with elem_var - should succeed (int can be promoted to frac)
     const result3 = env.unify(elem_var, frac_var);
-    try std.testing.expectEqual(false, result3.isOk());
+    try std.testing.expectEqual(.ok, result3);
 
-    // Check that we have problems recorded
-    try std.testing.expect(env.problems.problems.len() >= 2);
+    // Check that we have exactly one problem recorded (from the string unification)
+    try std.testing.expect(env.problems.problems.len() == 1);
 }

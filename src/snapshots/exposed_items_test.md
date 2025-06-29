@@ -23,18 +23,18 @@ LowerIdent(5:1-5:5),OpAssign(5:6-5:7),Int(5:8-5:10),EndOfFile(5:10-5:10),
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-5-10
-	(module @1-1-1-14
-		(exposes @1-8-1-14
+(file @1.1-5.10
+	(module @1.1-1.14
+		(exposes @1.8-1.14
 			(exposed-lower-ident (text "main"))))
 	(statements
-		(s-import @3-1-3-42 (module ".Stdout") (qualifier "pf")
+		(s-import @3.1-3.42 (module ".Stdout") (qualifier "pf")
 			(exposing
 				(exposed-lower-ident (text "line!"))
 				(exposed-lower-ident (text "write!"))))
-		(s-decl @5-1-5-10
-			(p-ident @5-1-5-5 (raw "main"))
-			(e-int @5-8-5-10 (raw "42")))))
+		(s-decl @5.1-5.10
+			(p-ident @5.1-5.5 (raw "main"))
+			(e-int @5.8-5.10 (raw "42")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -43,10 +43,10 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 77)
-		(p-assign @5-1-5-5 (ident "main") (id 75))
-		(e-int @5-8-5-10 (value "42") (id 76)))
-	(s-import @3-1-3-42 (module "pf.Stdout") (qualifier "pf") (id 74)
+	(d-let (id 78)
+		(p-assign @5.1-5.5 (ident "main") (id 76))
+		(e-int @5.8-5.10 (value "42") (id 77)))
+	(s-import @3.1-3.42 (module "pf.Stdout") (qualifier "pf") (id 75)
 		(exposes
 			(exposed (name "line!") (wildcard false))
 			(exposed (name "write!") (wildcard false)))))
@@ -55,7 +55,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "main") (def_var 77) (type "Num(*)")))
+		(d_assign (name "main") (def_var 78) (type "Num(*)")))
 	(expressions
-		(expr @5-8-5-10 (type "Num(*)"))))
+		(expr @5.8-5.10 (type "Num(*)"))))
 ~~~

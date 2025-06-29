@@ -1138,7 +1138,6 @@ pub const Expr = union(enum) {
     },
     e_when: When,
     e_if: struct {
-        cond_var: TypeVar,
         branch_var: TypeVar,
         branches: IfBranch.Span,
         final_else: Expr.Idx,
@@ -1488,9 +1487,6 @@ pub const Expr = union(enum) {
             .e_if => |if_expr| {
                 var node = SExpr.init(gpa, "e-if");
                 node.appendRegion(gpa, ir.calcRegionInfo(if_expr.region));
-
-                // Add cond_var
-                node.appendTypeVar(gpa, "cond-var", if_expr.cond_var);
 
                 // Add branch_var
                 node.appendTypeVar(gpa, "branch-var", if_expr.branch_var);

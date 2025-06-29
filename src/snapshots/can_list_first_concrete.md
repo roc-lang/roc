@@ -33,11 +33,11 @@ OpenSquare(1:1-1:2),Int(1:2-1:4),Comma(1:4-1:5),StringStart(1:6-1:7),StringPart(
 ~~~
 # PARSE
 ~~~clojure
-(e-list @1-1-1-20
-	(e-int @1-2-1-4 (raw "42"))
-	(e-string @1-6-1-13
-		(e-string-part @1-7-1-12 (raw "world")))
-	(e-frac @1-15-1-19 (raw "3.14")))
+(e-list @1.1-1.20
+	(e-int @1.2-1.4 (raw "42"))
+	(e-string @1.6-1.13
+		(e-string-part @1.7-1.12 (raw "world")))
+	(e-frac @1.15-1.19 (raw "3.14")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -45,14 +45,14 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-list @1-1-1-20 (elem-var 72) (id 76)
+(e-list @1.1-1.20 (elem-var 73) (id 77)
 	(elems
-		(e-int @1-2-1-4 (value "42"))
-		(e-string @1-6-1-13
-			(e-literal @1-7-1-12 (string "world")))
-		(e-dec-small @1-15-1-19 (numerator "314") (denominator-power-of-ten "2") (value "3.14"))))
+		(e-int @1.2-1.4 (value "42"))
+		(e-string @1.6-1.13
+			(e-literal @1.7-1.12 (string "world")))
+		(e-dec-small @1.15-1.19 (numerator "314") (denominator-power-of-ten "2") (value "3.14"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 76) (type "List(Error)"))
+(expr (id 77) (type "List(Error)"))
 ~~~

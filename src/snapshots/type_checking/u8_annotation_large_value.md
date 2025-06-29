@@ -31,15 +31,15 @@ LowerIdent(4:1-4:2),OpAssign(4:3-4:4),Int(4:5-4:8),EndOfFile(4:8-4:8),
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-4-8
-	(module @1-1-1-10
-		(exposes @1-8-1-10))
+(file @1.1-4.8
+	(module @1.1-1.10
+		(exposes @1.8-1.10))
 	(statements
-		(s-type-anno @3-1-4-2 (name "x")
+		(s-type-anno @3.1-4.2 (name "x")
 			(ty (name "U8")))
-		(s-decl @4-1-4-8
-			(p-ident @4-1-4-2 (raw "x"))
-			(e-int @4-5-4-8 (raw "500")))))
+		(s-decl @4.1-4.8
+			(p-ident @4.1-4.2 (raw "x"))
+			(e-int @4.5-4.8 (raw "500")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -48,18 +48,18 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 78)
-		(p-assign @4-1-4-2 (ident "x") (id 73))
-		(e-int @4-5-4-8 (value "500") (id 74))
-		(annotation @4-1-4-2 (signature 76) (id 77)
+	(d-let (id 79)
+		(p-assign @4.1-4.2 (ident "x") (id 74))
+		(e-int @4.5-4.8 (value "500") (id 75))
+		(annotation @4.1-4.2 (signature 77) (id 78)
 			(declared-type
-				(ty @3-5-3-7 (name "U8"))))))
+				(ty @3.5-3.7 (name "U8"))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "x") (def_var 78) (type "Error")))
+		(d_assign (name "x") (def_var 79) (type "Error")))
 	(expressions
-		(expr @4-5-4-8 (type "Error"))))
+		(expr @4.5-4.8 (type "Error"))))
 ~~~

@@ -21,17 +21,17 @@ LowerIdent(4:1-4:4),OpAssign(4:5-4:6),StringStart(4:7-4:8),StringPart(4:8-4:11),
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-4-12
-	(module @1-1-1-13
-		(exposes @1-8-1-13
+(file @1.1-4.12
+	(module @1.1-1.13
+		(exposes @1.8-1.13
 			(exposed-lower-ident (text "foo"))))
 	(statements
-		(s-type-anno @3-1-4-4 (name "foo")
+		(s-type-anno @3.1-4.4 (name "foo")
 			(ty (name "Str")))
-		(s-decl @4-1-4-12
-			(p-ident @4-1-4-4 (raw "foo"))
-			(e-string @4-7-4-12
-				(e-string-part @4-8-4-11 (raw "one"))))))
+		(s-decl @4.1-4.12
+			(p-ident @4.1-4.4 (raw "foo"))
+			(e-string @4.7-4.12
+				(e-string-part @4.8-4.11 (raw "one"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -40,19 +40,19 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 79)
-		(p-assign @4-1-4-4 (ident "foo") (id 73))
-		(e-string @4-7-4-12 (id 75)
-			(e-literal @4-8-4-11 (string "one")))
-		(annotation @4-1-4-4 (signature 77) (id 78)
+	(d-let (id 80)
+		(p-assign @4.1-4.4 (ident "foo") (id 74))
+		(e-string @4.7-4.12 (id 76)
+			(e-literal @4.8-4.11 (string "one")))
+		(annotation @4.1-4.4 (signature 78) (id 79)
 			(declared-type
-				(ty @3-7-3-10 (name "Str"))))))
+				(ty @3.7-3.10 (name "Str"))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "foo") (def_var 79) (type "Str")))
+		(d_assign (name "foo") (def_var 80) (type "Str")))
 	(expressions
-		(expr @4-7-4-12 (type "Str"))))
+		(expr @4.7-4.12 (type "Str"))))
 ~~~

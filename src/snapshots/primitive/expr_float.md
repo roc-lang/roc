@@ -17,14 +17,14 @@ LowerIdent(2:1-2:4),OpAssign(2:5-2:6),Float(2:7-2:12),EndOfFile(2:12-2:12),
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-2-12
-	(module @1-1-1-13
-		(exposes @1-8-1-13
+(file @1.1-2.12
+	(module @1.1-1.13
+		(exposes @1.8-1.13
 			(exposed-lower-ident (text "foo"))))
 	(statements
-		(s-decl @2-1-2-12
-			(p-ident @2-1-2-4 (raw "foo"))
-			(e-frac @2-7-2-12 (raw "12.34")))))
+		(s-decl @2.1-2.12
+			(p-ident @2.1-2.4 (raw "foo"))
+			(e-frac @2.7-2.12 (raw "12.34")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -33,15 +33,15 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 74)
-		(p-assign @2-1-2-4 (ident "foo") (id 72))
-		(e-dec-small @2-7-2-12 (numerator "1234") (denominator-power-of-ten "2") (value "12.34") (id 73))))
+	(d-let (id 75)
+		(p-assign @2.1-2.4 (ident "foo") (id 73))
+		(e-dec-small @2.7-2.12 (numerator "1234") (denominator-power-of-ten "2") (value "12.34") (id 74))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "foo") (def_var 74) (type "Frac(*)")))
+		(d_assign (name "foo") (def_var 75) (type "Frac(*)")))
 	(expressions
-		(expr @2-7-2-12 (type "Frac(*)"))))
+		(expr @2.7-2.12 (type "Frac(*)"))))
 ~~~

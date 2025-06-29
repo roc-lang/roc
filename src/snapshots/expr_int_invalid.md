@@ -17,7 +17,7 @@ Int(1:1-1:42),EndOfFile(1:42-1:42),
 ~~~
 # PARSE
 ~~~clojure
-(e-int @1-1-1-42 (raw "99999999999999999999999999999999999999999"))
+(e-int @1.1-1.42 (raw "99999999999999999999999999999999999999999"))
 ~~~
 # FORMATTED
 ~~~roc
@@ -25,9 +25,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "invalid_num_literal") (id 73))
+(e-runtime-error (tag "invalid_num_literal") (id 74))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 73) (type "Error"))
+(expr (id 74) (type "Error"))
 ~~~

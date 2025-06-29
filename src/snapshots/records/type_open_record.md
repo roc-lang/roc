@@ -53,8 +53,8 @@ LowerIdent(1:1-1:14),OpColon(1:15-1:16),OpenCurly(1:17-1:18),LowerIdent(1:19-1:2
 ~~~
 # PARSE
 ~~~clojure
-(s-type-anno @1-1-1-53 (name "process_user!")
-	(ty-malformed @1-47-1-53 (tag "expected_ty_close_curly_or_comma")))
+(s-type-anno @1.1-1.53 (name "process_user!")
+	(ty-malformed @1.47-1.53 (tag "expected_ty_close_curly_or_comma")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -63,8 +63,8 @@ process_user! :
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-type-anno @1-1-1-53 (name "process_user!") (id 74)
-		(ty-malformed @1-47-1-53)))
+	(s-type-anno @1.1-1.53 (name "process_user!") (id 75)
+		(ty-malformed @1.47-1.53)))
 ~~~
 # TYPES
 ~~~clojure

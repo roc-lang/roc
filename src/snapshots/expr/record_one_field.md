@@ -15,10 +15,10 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:7),OpColon(1:7-1:8),StringStart(1:9-1:10),St
 ~~~
 # PARSE
 ~~~clojure
-(e-record @1-1-1-18
+(e-record @1.1-1.18
 	(field (field "name") (optional false)
-		(e-string @1-9-1-16
-			(e-string-part @1-10-1-15 (raw "Alice")))))
+		(e-string @1.9-1.16
+			(e-string-part @1.10-1.15 (raw "Alice")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -26,13 +26,13 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-record @1-1-1-18 (ext-var 75) (id 76)
+(e-record @1.1-1.18 (ext-var 76) (id 77)
 	(fields
 		(field (name "name")
-			(e-string @1-9-1-16
-				(e-literal @1-10-1-15 (string "Alice"))))))
+			(e-string @1.9-1.16
+				(e-literal @1.10-1.15 (string "Alice"))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 76) (type "{ name: Str }"))
+(expr (id 77) (type "{ name: Str }"))
 ~~~

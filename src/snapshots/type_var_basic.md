@@ -27,34 +27,34 @@ LowerIdent(7:1-7:6),OpAssign(7:7-7:8),OpBar(7:9-7:10),Underscore(7:10-7:11),OpBa
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-7-15
-	(app @1-1-1-57
-		(provides @1-6-1-12
+(file @1.1-7.15
+	(app @1.1-1.57
+		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @1-15-1-57 (name "pf")
-			(e-string @1-28-1-55
-				(e-string-part @1-29-1-54 (raw "../basic-cli/platform.roc"))))
-		(packages @1-13-1-57
-			(record-field @1-15-1-57 (name "pf")
-				(e-string @1-28-1-55
-					(e-string-part @1-29-1-54 (raw "../basic-cli/platform.roc"))))))
+		(record-field @1.15-1.57 (name "pf")
+			(e-string @1.28-1.55
+				(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))
+		(packages @1.13-1.57
+			(record-field @1.15-1.57 (name "pf")
+				(e-string @1.28-1.55
+					(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))))
 	(statements
-		(s-type-anno @4-1-5-9 (name "identity")
-			(ty-fn @4-12-4-18
-				(ty-var @4-12-4-13 (raw "a"))
-				(ty-var @4-17-4-18 (raw "a"))))
-		(s-decl @5-1-5-17
-			(p-ident @5-1-5-9 (raw "identity"))
-			(e-lambda @5-12-5-17
+		(s-type-anno @4.1-5.9 (name "identity")
+			(ty-fn @4.12-4.18
+				(ty-var @4.12-4.13 (raw "a"))
+				(ty-var @4.17-4.18 (raw "a"))))
+		(s-decl @5.1-5.17
+			(p-ident @5.1-5.9 (raw "identity"))
+			(e-lambda @5.12-5.17
 				(args
-					(p-ident @5-13-5-14 (raw "a")))
-				(e-ident @5-16-5-17 (qaul "") (raw "a"))))
-		(s-decl @7-1-7-15
-			(p-ident @7-1-7-6 (raw "main!"))
-			(e-lambda @7-9-7-15
+					(p-ident @5.13-5.14 (raw "a")))
+				(e-ident @5.16-5.17 (qaul "") (raw "a"))))
+		(s-decl @7.1-7.15
+			(p-ident @7.1-7.6 (raw "main!"))
+			(e-lambda @7.9-7.15
 				(args
 					(p-underscore))
-				(e-record @7-13-7-15)))))
+				(e-record @7.13-7.15)))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -63,32 +63,32 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 89)
-		(p-assign @5-1-5-9 (ident "identity") (id 77))
-		(e-lambda @5-12-5-17 (id 81)
+	(d-let (id 90)
+		(p-assign @5.1-5.9 (ident "identity") (id 78))
+		(e-lambda @5.12-5.17 (id 82)
 			(args
-				(p-assign @5-13-5-14 (ident "a") (id 78)))
-			(e-lookup-local @5-16-5-17
-				(pattern (id 78))))
-		(annotation @5-1-5-9 (signature 87) (id 88)
+				(p-assign @5.13-5.14 (ident "a") (id 79)))
+			(e-lookup-local @5.16-5.17
+				(pattern (id 79))))
+		(annotation @5.1-5.9 (signature 88) (id 89)
 			(declared-type
-				(ty-fn @4-12-4-18 (effectful false)
-					(ty-var @4-12-4-13 (name "a"))
-					(ty-var @4-17-4-18 (name "a"))))))
-	(d-let (id 95)
-		(p-assign @7-1-7-6 (ident "main!") (id 90))
-		(e-lambda @7-9-7-15 (id 94)
+				(ty-fn @4.12-4.18 (effectful false)
+					(ty-var @4.12-4.13 (name "a"))
+					(ty-var @4.17-4.18 (name "a"))))))
+	(d-let (id 96)
+		(p-assign @7.1-7.6 (ident "main!") (id 91))
+		(e-lambda @7.9-7.15 (id 95)
 			(args
-				(p-underscore @7-10-7-11 (id 91)))
-			(e-empty_record @7-13-7-15))))
+				(p-underscore @7.10-7.11 (id 92)))
+			(e-empty_record @7.13-7.15))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "identity") (def_var 89) (type "a -> a"))
-		(d_assign (name "main!") (def_var 95) (type "* ? {}")))
+		(d_assign (name "identity") (def_var 90) (type "a -> a"))
+		(d_assign (name "main!") (def_var 96) (type "* ? {}")))
 	(expressions
-		(expr @5-12-5-17 (type "a -> a"))
-		(expr @7-9-7-15 (type "* ? {}"))))
+		(expr @5.12-5.17 (type "a -> a"))
+		(expr @7.9-7.15 (type "* ? {}"))))
 ~~~

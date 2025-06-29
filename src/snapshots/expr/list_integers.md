@@ -15,10 +15,10 @@ OpenSquare(1:1-1:2),Int(1:2-1:3),Comma(1:3-1:4),Int(1:5-1:6),Comma(1:6-1:7),Int(
 ~~~
 # PARSE
 ~~~clojure
-(e-list @1-1-1-10
-	(e-int @1-2-1-3 (raw "1"))
-	(e-int @1-5-1-6 (raw "2"))
-	(e-int @1-8-1-9 (raw "3")))
+(e-list @1.1-1.10
+	(e-int @1.2-1.3 (raw "1"))
+	(e-int @1.5-1.6 (raw "2"))
+	(e-int @1.8-1.9 (raw "3")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -26,13 +26,13 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-list @1-1-1-10 (elem-var 72) (id 75)
+(e-list @1.1-1.10 (elem-var 73) (id 76)
 	(elems
-		(e-int @1-2-1-3 (value "1"))
-		(e-int @1-5-1-6 (value "2"))
-		(e-int @1-8-1-9 (value "3"))))
+		(e-int @1.2-1.3 (value "1"))
+		(e-int @1.5-1.6 (value "2"))
+		(e-int @1.8-1.9 (value "3"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 75) (type "List(Num(*))"))
+(expr (id 76) (type "List(Num(*))"))
 ~~~

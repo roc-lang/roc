@@ -23,9 +23,9 @@ CloseSquare(5:2-5:3),EndOfFile(5:3-5:3),
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-5-3
-	(module @1-1-5-3
-		(exposes @2-2-5-3
+(file @1.1-5.3
+	(module @1.1-5.3
+		(exposes @2.2-5.3
 			(exposed-lower-ident (text "something"))
 			(exposed-upper-ident (text "SomeType"))))
 	(statements))

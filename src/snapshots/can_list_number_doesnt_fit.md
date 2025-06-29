@@ -14,35 +14,16 @@ This number literal is not valid: 1u8
 **INVALID NUMBER**
 This number literal is not valid: 2u8
 
-**INCOMPATIBLE LIST ELEMENTS**
-The first two elements in this list have incompatible types:
-**can_list_number_doesnt_fit.md:1:2:**
-```roc
-[1u8, 2u8, 300]
-```
- ^^^  ^^^
-
-The first element has this type:
-    _Error_
-
-However, the second element has this type:
-    _Error_
-
-All elements in a list must have compatible types.
-
-Note: You can wrap each element in a tag to make them compatible.
-To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
-
 # TOKENS
 ~~~zig
 OpenSquare(1:1-1:2),Int(1:2-1:5),Comma(1:5-1:6),Int(1:7-1:10),Comma(1:10-1:11),Int(1:12-1:15),CloseSquare(1:15-1:16),EndOfFile(1:16-1:16),
 ~~~
 # PARSE
 ~~~clojure
-(e-list @1-1-1-16
-	(e-int @1-2-1-5 (raw "1u8"))
-	(e-int @1-7-1-10 (raw "2u8"))
-	(e-int @1-12-1-15 (raw "300")))
+(e-list @1.1-1.16
+	(e-int @1.2-1.5 (raw "1u8"))
+	(e-int @1.7-1.10 (raw "2u8"))
+	(e-int @1.12-1.15 (raw "300")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -50,13 +31,13 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-list @1-1-1-16 (elem-var 73) (id 77)
+(e-list @1.1-1.16 (elem-var 74) (id 78)
 	(elems
 		(e-runtime-error (tag "invalid_num_literal"))
 		(e-runtime-error (tag "invalid_num_literal"))
-		(e-int @1-12-1-15 (value "300"))))
+		(e-int @1.12-1.15 (value "300"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 77) (type "List(Error)"))
+(expr (id 78) (type "List(Error)"))
 ~~~

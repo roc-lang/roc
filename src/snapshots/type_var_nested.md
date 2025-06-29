@@ -76,84 +76,84 @@ LowerIdent(17:1-17:6),OpAssign(17:7-17:8),OpBar(17:9-17:10),Underscore(17:10-17:
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-17-15
-	(app @1-1-1-57
-		(provides @1-6-1-12
+(file @1.1-17.15
+	(app @1.1-1.57
+		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @1-15-1-57 (name "pf")
-			(e-string @1-28-1-55
-				(e-string-part @1-29-1-54 (raw "../basic-cli/platform.roc"))))
-		(packages @1-13-1-57
-			(record-field @1-15-1-57 (name "pf")
-				(e-string @1-28-1-55
-					(e-string-part @1-29-1-54 (raw "../basic-cli/platform.roc"))))))
+		(record-field @1.15-1.57 (name "pf")
+			(e-string @1.28-1.55
+				(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))
+		(packages @1.13-1.57
+			(record-field @1.15-1.57 (name "pf")
+				(e-string @1.28-1.55
+					(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))))
 	(statements
-		(s-type-anno @4-1-5-10 (name "mapResult")
-			(ty-fn @4-13-4-51
-				(ty-apply @4-13-4-25
+		(s-type-anno @4.1-5.10 (name "mapResult")
+			(ty-fn @4.13-4.51
+				(ty-apply @4.13-4.25
 					(ty (name "Result"))
-					(ty-var @4-20-4-21 (raw "a"))
-					(ty-var @4-23-4-24 (raw "e")))
-				(ty-fn @4-28-4-34
-					(ty-var @4-28-4-29 (raw "a"))
-					(ty-var @4-33-4-34 (raw "b")))
-				(ty-apply @4-39-4-51
+					(ty-var @4.20-4.21 (raw "a"))
+					(ty-var @4.23-4.24 (raw "e")))
+				(ty-fn @4.28-4.34
+					(ty-var @4.28-4.29 (raw "a"))
+					(ty-var @4.33-4.34 (raw "b")))
+				(ty-apply @4.39-4.51
 					(ty (name "Result"))
-					(ty-var @4-46-4-47 (raw "b"))
-					(ty-var @4-49-4-50 (raw "e")))))
-		(s-decl @5-1-9-2
-			(p-ident @5-1-5-10 (raw "mapResult"))
-			(e-lambda @5-13-9-2
+					(ty-var @4.46-4.47 (raw "b"))
+					(ty-var @4.49-4.50 (raw "e")))))
+		(s-decl @5.1-9.2
+			(p-ident @5.1-5.10 (raw "mapResult"))
+			(e-lambda @5.13-9.2
 				(args
-					(p-ident @5-14-5-20 (raw "result"))
-					(p-ident @5-22-5-31 (raw "transform")))
-				(e-block @5-33-9-2
+					(p-ident @5.14-5.20 (raw "result"))
+					(p-ident @5.22-5.31 (raw "transform")))
+				(e-block @5.33-9.2
 					(statements
-						(e-ident @6-5-6-9 (qaul "") (raw "when"))
-						(e-ident @6-10-6-16 (qaul "") (raw "result"))
-						(e-ident @6-17-6-19 (qaul "") (raw "is"))
-						(e-local-dispatch @7-9-8-12
-							(e-apply @7-9-7-18
-								(e-tag @7-9-7-11 (raw "Ok"))
-								(e-ident @7-12-7-17 (qaul "") (raw "value")))
-							(e-apply @7-19-7-42
-								(e-tag @7-22-7-24 (raw "Ok"))
-								(e-apply @7-25-7-41
-									(e-ident @7-25-7-34 (qaul "") (raw "transform"))
-									(e-ident @7-35-7-40 (qaul "") (raw "value")))))
-						(e-local-dispatch @8-9-9-2
-							(e-apply @8-9-8-19
-								(e-tag @8-9-8-12 (raw "Err"))
-								(e-ident @8-13-8-18 (qaul "") (raw "error")))
-							(e-apply @8-20-8-33
-								(e-tag @8-23-8-26 (raw "Err"))
-								(e-ident @8-27-8-32 (qaul "") (raw "error"))))))))
-		(s-type-anno @12-1-13-13 (name "filterMaybes")
-			(ty-fn @12-16-12-41
-				(ty-apply @12-16-12-30
+						(e-ident @6.5-6.9 (qaul "") (raw "when"))
+						(e-ident @6.10-6.16 (qaul "") (raw "result"))
+						(e-ident @6.17-6.19 (qaul "") (raw "is"))
+						(e-local-dispatch @7.9-8.12
+							(e-apply @7.9-7.18
+								(e-tag @7.9-7.11 (raw "Ok"))
+								(e-ident @7.12-7.17 (qaul "") (raw "value")))
+							(e-apply @7.19-7.42
+								(e-tag @7.22-7.24 (raw "Ok"))
+								(e-apply @7.25-7.41
+									(e-ident @7.25-7.34 (qaul "") (raw "transform"))
+									(e-ident @7.35-7.40 (qaul "") (raw "value")))))
+						(e-local-dispatch @8.9-9.2
+							(e-apply @8.9-8.19
+								(e-tag @8.9-8.12 (raw "Err"))
+								(e-ident @8.13-8.18 (qaul "") (raw "error")))
+							(e-apply @8.20-8.33
+								(e-tag @8.23-8.26 (raw "Err"))
+								(e-ident @8.27-8.32 (qaul "") (raw "error"))))))))
+		(s-type-anno @12.1-13.13 (name "filterMaybes")
+			(ty-fn @12.16-12.41
+				(ty-apply @12.16-12.30
 					(ty (name "List"))
-					(ty-apply @12-21-12-29
+					(ty-apply @12.21-12.29
 						(ty (name "Maybe"))
-						(ty-var @12-27-12-28 (raw "t"))))
-				(ty-apply @12-34-12-41
+						(ty-var @12.27-12.28 (raw "t"))))
+				(ty-apply @12.34-12.41
 					(ty (name "List"))
-					(ty-var @12-39-12-40 (raw "t")))))
-		(s-decl @13-1-15-2
-			(p-ident @13-1-13-13 (raw "filterMaybes"))
-			(e-lambda @13-16-15-2
+					(ty-var @12.39-12.40 (raw "t")))))
+		(s-decl @13.1-15.2
+			(p-ident @13.1-13.13 (raw "filterMaybes"))
+			(e-lambda @13.16-15.2
 				(args
-					(p-ident @13-17-13-21 (raw "list")))
-				(e-block @13-23-15-2
+					(p-ident @13.17-13.21 (raw "list")))
+				(e-block @13.23-15.2
 					(statements
-						(e-apply @14-5-14-23
-							(e-ident @14-5-14-17 (qaul "List") (raw ".keepOks"))
-							(e-ident @14-18-14-22 (qaul "") (raw "list")))))))
-		(s-decl @17-1-17-15
-			(p-ident @17-1-17-6 (raw "main!"))
-			(e-lambda @17-9-17-15
+						(e-apply @14.5-14.23
+							(e-ident @14.5-14.17 (qaul "List") (raw ".keepOks"))
+							(e-ident @14.18-14.22 (qaul "") (raw "list")))))))
+		(s-decl @17.1-17.15
+			(p-ident @17.1-17.6 (raw "main!"))
+			(e-lambda @17.9-17.15
 				(args
 					(p-underscore))
-				(e-record @17-13-17-15)))))
+				(e-record @17.13-17.15)))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -180,70 +180,70 @@ main! = |_| {}
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 121)
-		(p-assign @5-1-5-10 (ident "mapResult") (id 89))
-		(e-lambda @5-13-9-2 (id 107)
+	(d-let (id 122)
+		(p-assign @5.1-5.10 (ident "mapResult") (id 90))
+		(e-lambda @5.13-9.2 (id 108)
 			(args
-				(p-assign @5-14-5-20 (ident "result") (id 90))
-				(p-assign @5-22-5-31 (ident "transform") (id 91)))
-			(e-block @5-33-9-2
-				(s-expr @6-5-6-16
+				(p-assign @5.14-5.20 (ident "result") (id 91))
+				(p-assign @5.22-5.31 (ident "transform") (id 92)))
+			(e-block @5.33-9.2
+				(s-expr @6.5-6.16
 					(e-runtime-error (tag "ident_not_in_scope")))
-				(s-expr @6-10-6-19
-					(e-lookup-local @6-10-6-16
-						(pattern (id 90))))
-				(s-expr @6-17-7-11
+				(s-expr @6.10-6.19
+					(e-lookup-local @6.10-6.16
+						(pattern (id 91))))
+				(s-expr @6.17-7.11
 					(e-runtime-error (tag "ident_not_in_scope")))
-				(s-expr @7-9-8-12
+				(s-expr @7.9-8.12
 					(e-runtime-error (tag "not_implemented")))
 				(e-runtime-error (tag "not_implemented"))))
-		(annotation @5-1-5-10 (signature 119) (id 120)
+		(annotation @5.1-5.10 (signature 120) (id 121)
 			(declared-type
-				(ty-fn @4-13-4-51 (effectful false)
-					(ty-apply @4-13-4-25 (symbol "Result")
-						(ty-var @4-20-4-21 (name "a"))
-						(ty-var @4-23-4-24 (name "e")))
-					(ty-parens @4-27-4-35
-						(ty-fn @4-28-4-34 (effectful false)
-							(ty-var @4-28-4-29 (name "a"))
-							(ty-var @4-33-4-34 (name "b"))))
-					(ty-apply @4-39-4-51 (symbol "Result")
-						(ty-var @4-46-4-47 (name "b"))
-						(ty-var @4-49-4-50 (name "e")))))))
-	(d-let (id 146)
-		(p-assign @13-1-13-13 (ident "filterMaybes") (id 130))
-		(e-lambda @13-16-15-2 (id 139)
+				(ty-fn @4.13-4.51 (effectful false)
+					(ty-apply @4.13-4.25 (symbol "Result")
+						(ty-var @4.20-4.21 (name "a"))
+						(ty-var @4.23-4.24 (name "e")))
+					(ty-parens @4.27-4.35
+						(ty-fn @4.28-4.34 (effectful false)
+							(ty-var @4.28-4.29 (name "a"))
+							(ty-var @4.33-4.34 (name "b"))))
+					(ty-apply @4.39-4.51 (symbol "Result")
+						(ty-var @4.46-4.47 (name "b"))
+						(ty-var @4.49-4.50 (name "e")))))))
+	(d-let (id 147)
+		(p-assign @13.1-13.13 (ident "filterMaybes") (id 131))
+		(e-lambda @13.16-15.2 (id 140)
 			(args
-				(p-assign @13-17-13-21 (ident "list") (id 131)))
-			(e-block @13-23-15-2
-				(e-call @14-5-14-23
+				(p-assign @13.17-13.21 (ident "list") (id 132)))
+			(e-block @13.23-15.2
+				(e-call @14.5-14.23
 					(e-runtime-error (tag "ident_not_in_scope"))
-					(e-lookup-local @14-18-14-22
-						(pattern (id 131))))))
-		(annotation @13-1-13-13 (signature 144) (id 145)
+					(e-lookup-local @14.18-14.22
+						(pattern (id 132))))))
+		(annotation @13.1-13.13 (signature 145) (id 146)
 			(declared-type
-				(ty-fn @12-16-12-41 (effectful false)
-					(ty-apply @12-16-12-30 (symbol "List")
-						(ty-apply @12-21-12-29 (symbol "Maybe")
-							(ty-var @12-27-12-28 (name "t"))))
-					(ty-apply @12-34-12-41 (symbol "List")
-						(ty-var @12-39-12-40 (name "t")))))))
-	(d-let (id 152)
-		(p-assign @17-1-17-6 (ident "main!") (id 147))
-		(e-lambda @17-9-17-15 (id 151)
+				(ty-fn @12.16-12.41 (effectful false)
+					(ty-apply @12.16-12.30 (symbol "List")
+						(ty-apply @12.21-12.29 (symbol "Maybe")
+							(ty-var @12.27-12.28 (name "t"))))
+					(ty-apply @12.34-12.41 (symbol "List")
+						(ty-var @12.39-12.40 (name "t")))))))
+	(d-let (id 153)
+		(p-assign @17.1-17.6 (ident "main!") (id 148))
+		(e-lambda @17.9-17.15 (id 152)
 			(args
-				(p-underscore @17-10-17-11 (id 148)))
-			(e-empty_record @17-13-17-15))))
+				(p-underscore @17.10-17.11 (id 149)))
+			(e-empty_record @17.13-17.15))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "mapResult") (def_var 121) (type "Result, a -> b -> Result"))
-		(d_assign (name "filterMaybes") (def_var 146) (type "List -> List"))
-		(d_assign (name "main!") (def_var 152) (type "* ? {}")))
+		(d_assign (name "mapResult") (def_var 122) (type "Result, a -> b -> Error"))
+		(d_assign (name "filterMaybes") (def_var 147) (type "List -> List"))
+		(d_assign (name "main!") (def_var 153) (type "* ? {}")))
 	(expressions
-		(expr @5-13-9-2 (type "Result, a -> b -> Result"))
-		(expr @13-16-15-2 (type "List -> List"))
-		(expr @17-9-17-15 (type "* ? {}"))))
+		(expr @5.13-9.2 (type "Result, a -> b -> Error"))
+		(expr @13.16-15.2 (type "List -> List"))
+		(expr @17.9-17.15 (type "* ? {}"))))
 ~~~

@@ -15,15 +15,15 @@ OpenSquare(1:1-1:2),OpenSquare(1:2-1:3),Int(1:3-1:4),Comma(1:4-1:5),Int(1:6-1:7)
 ~~~
 # PARSE
 ~~~clojure
-(e-list @1-1-1-22
-	(e-list @1-2-1-8
-		(e-int @1-3-1-4 (raw "1"))
-		(e-int @1-6-1-7 (raw "2")))
-	(e-list @1-10-1-16
-		(e-int @1-11-1-12 (raw "3"))
-		(e-int @1-14-1-15 (raw "4")))
-	(e-list @1-18-1-21
-		(e-int @1-19-1-20 (raw "5"))))
+(e-list @1.1-1.22
+	(e-list @1.2-1.8
+		(e-int @1.3-1.4 (raw "1"))
+		(e-int @1.6-1.7 (raw "2")))
+	(e-list @1.10-1.16
+		(e-int @1.11-1.12 (raw "3"))
+		(e-int @1.14-1.15 (raw "4")))
+	(e-list @1.18-1.21
+		(e-int @1.19-1.20 (raw "5"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -31,21 +31,21 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-list @1-1-1-22 (elem-var 74) (id 80)
+(e-list @1.1-1.22 (elem-var 75) (id 81)
 	(elems
-		(e-list @1-2-1-8 (elem-var 72)
+		(e-list @1.2-1.8 (elem-var 73)
 			(elems
-				(e-int @1-3-1-4 (value "1"))
-				(e-int @1-6-1-7 (value "2"))))
-		(e-list @1-10-1-16 (elem-var 75)
+				(e-int @1.3-1.4 (value "1"))
+				(e-int @1.6-1.7 (value "2"))))
+		(e-list @1.10-1.16 (elem-var 76)
 			(elems
-				(e-int @1-11-1-12 (value "3"))
-				(e-int @1-14-1-15 (value "4"))))
-		(e-list @1-18-1-21 (elem-var 78)
+				(e-int @1.11-1.12 (value "3"))
+				(e-int @1.14-1.15 (value "4"))))
+		(e-list @1.18-1.21 (elem-var 79)
 			(elems
-				(e-int @1-19-1-20 (value "5"))))))
+				(e-int @1.19-1.20 (value "5"))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 80) (type "List(List(Num(*)))"))
+(expr (id 81) (type "List(List(Num(*)))"))
 ~~~

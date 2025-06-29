@@ -18,21 +18,21 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:7),OpColon(1:7-1:8),StringStart(1:9-1:10),St
 ~~~
 # PARSE
 ~~~clojure
-(e-record @1-1-1-86
+(e-record @1.1-1.86
 	(field (field "name") (optional false)
-		(e-string @1-9-1-16
-			(e-string-part @1-10-1-15 (raw "Alice"))))
+		(e-string @1.9-1.16
+			(e-string-part @1.10-1.15 (raw "Alice"))))
 	(field (field "age") (optional false)
-		(e-int @1-23-1-25 (raw "30")))
+		(e-int @1.23-1.25 (raw "30")))
 	(field (field "active") (optional false)
-		(e-ident @1-35-1-44 (qaul "Bool") (raw ".true")))
+		(e-ident @1.35-1.44 (qaul "Bool") (raw ".true")))
 	(field (field "scores") (optional false)
-		(e-list @1-54-1-66
-			(e-int @1-55-1-57 (raw "95"))
-			(e-int @1-59-1-61 (raw "87"))
-			(e-int @1-63-1-65 (raw "92"))))
+		(e-list @1.54-1.66
+			(e-int @1.55-1.57 (raw "95"))
+			(e-int @1.59-1.61 (raw "87"))
+			(e-int @1.63-1.65 (raw "92"))))
 	(field (field "balance") (optional false)
-		(e-frac @1-77-1-84 (raw "1250.75"))))
+		(e-frac @1.77-1.84 (raw "1250.75"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -40,25 +40,25 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-record @1-1-1-86 (ext-var 87) (id 88)
+(e-record @1.1-1.86 (ext-var 88) (id 89)
 	(fields
 		(field (name "name")
-			(e-string @1-9-1-16
-				(e-literal @1-10-1-15 (string "Alice"))))
+			(e-string @1.9-1.16
+				(e-literal @1.10-1.15 (string "Alice"))))
 		(field (name "age")
-			(e-int @1-23-1-25 (value "30")))
+			(e-int @1.23-1.25 (value "30")))
 		(field (name "active")
 			(e-runtime-error (tag "ident_not_in_scope")))
 		(field (name "scores")
-			(e-list @1-54-1-66 (elem-var 80)
+			(e-list @1.54-1.66 (elem-var 81)
 				(elems
-					(e-int @1-55-1-57 (value "95"))
-					(e-int @1-59-1-61 (value "87"))
-					(e-int @1-63-1-65 (value "92")))))
+					(e-int @1.55-1.57 (value "95"))
+					(e-int @1.59-1.61 (value "87"))
+					(e-int @1.63-1.65 (value "92")))))
 		(field (name "balance")
-			(e-frac-dec @1-77-1-84 (value "1250.75")))))
+			(e-frac-dec @1.77-1.84 (value "1250.75")))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 88) (type "{ name: Str, age: Num(*), active: Error, scores: List(Num(*)), balance: Frac(*) }"))
+(expr (id 89) (type "{ name: Str, age: Num(*), active: Error, scores: List(Num(*)), balance: Frac(*) }"))
 ~~~

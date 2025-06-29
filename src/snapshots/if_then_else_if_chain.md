@@ -39,46 +39,46 @@ CloseCurly(13:1-13:2),EndOfFile(13:2-13:2),
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-13-2
-	(module @1-1-1-21
-		(exposes @1-8-1-21
+(file @1.1-13.2
+	(module @1.1-1.21
+		(exposes @1.8-1.21
 			(exposed-lower-ident (text "checkNumber"))))
 	(statements
-		(s-decl @3-1-13-2
-			(p-ident @3-1-3-12 (raw "checkNumber"))
-			(e-lambda @3-15-13-2
+		(s-decl @3.1-13.2
+			(p-ident @3.1-3.12 (raw "checkNumber"))
+			(e-lambda @3.15-13.2
 				(args
-					(p-ident @3-16-3-19 (raw "num")))
-				(e-block @3-21-13-2
+					(p-ident @3.16-3.19 (raw "num")))
+				(e-block @3.21-13.2
 					(statements
-						(e-if-then-else @4-2-13-2
-							(e-binop @4-5-4-14 (op "<")
-								(e-ident @4-5-4-8 (qaul "") (raw "num"))
-								(e-int @4-11-4-12 (raw "0")))
-							(e-block @4-13-6-3
+						(e-if-then-else @4.2-13.2
+							(e-binop @4.5-4.14 (op "<")
+								(e-ident @4.5-4.8 (qaul "") (raw "num"))
+								(e-int @4.11-4.12 (raw "0")))
+							(e-block @4.13-6.3
 								(statements
-									(e-string @5-3-5-13
-										(e-string-part @5-4-5-12 (raw "negative")))))
-							(e-if-then-else @6-9-13-2
-								(e-binop @6-12-6-22 (op "==")
-									(e-ident @6-12-6-15 (qaul "") (raw "num"))
-									(e-int @6-19-6-20 (raw "0")))
-								(e-block @6-21-8-3
+									(e-string @5.3-5.13
+										(e-string-part @5.4-5.12 (raw "negative")))))
+							(e-if-then-else @6.9-13.2
+								(e-binop @6.12-6.22 (op "==")
+									(e-ident @6.12-6.15 (qaul "") (raw "num"))
+									(e-int @6.19-6.20 (raw "0")))
+								(e-block @6.21-8.3
 									(statements
-										(e-string @7-3-7-9
-											(e-string-part @7-4-7-8 (raw "zero")))))
-								(e-if-then-else @8-9-13-2
-									(e-binop @8-12-8-23 (op ">")
-										(e-ident @8-12-8-15 (qaul "") (raw "num"))
-										(e-int @8-18-8-21 (raw "100")))
-									(e-block @8-22-10-3
+										(e-string @7.3-7.9
+											(e-string-part @7.4-7.8 (raw "zero")))))
+								(e-if-then-else @8.9-13.2
+									(e-binop @8.12-8.23 (op ">")
+										(e-ident @8.12-8.15 (qaul "") (raw "num"))
+										(e-int @8.18-8.21 (raw "100")))
+									(e-block @8.22-10.3
 										(statements
-											(e-string @9-3-9-10
-												(e-string-part @9-4-9-9 (raw "large")))))
-									(e-block @10-9-12-3
+											(e-string @9.3-9.10
+												(e-string-part @9.4-9.9 (raw "large")))))
+									(e-block @10.9-12.3
 										(statements
-											(e-string @11-3-11-13
-												(e-string-part @11-4-11-12 (raw "positive"))))))))))))))
+											(e-string @11.3-11.13
+												(e-string-part @11.4-11.12 (raw "positive"))))))))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -88,47 +88,47 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let (id 104)
-		(p-assign @3-1-3-12 (ident "checkNumber") (id 72))
-		(e-lambda @3-15-13-2 (id 103)
+		(p-assign @3.1-3.12 (ident "checkNumber") (id 73))
+		(e-lambda @3.15-13.2 (id 103)
 			(args
-				(p-assign @3-16-3-19 (ident "num") (id 73)))
-			(e-block @3-21-13-2
-				(e-if @4-2-13-2 (cond-var 0) (branch-var 0)
+				(p-assign @3.16-3.19 (ident "num") (id 74)))
+			(e-block @3.21-13.2
+				(e-if @4.2-13.2 (branch-var 99)
 					(if-branches
 						(if-branch
-							(e-binop @4-5-4-14 (op "lt")
-								(e-lookup-local @4-5-4-8
-									(pattern (id 73)))
-								(e-int @4-11-4-12 (value "0")))
-							(e-block @4-13-6-3
-								(e-string @5-3-5-13
-									(e-literal @5-4-5-12 (string "negative")))))
+							(e-binop @4.5-4.14 (op "lt")
+								(e-lookup-local @4.5-4.8
+									(pattern (id 74)))
+								(e-int @4.11-4.12 (value "0")))
+							(e-block @4.13-6.3
+								(e-string @5.3-5.13
+									(e-literal @5.4-5.12 (string "negative")))))
 						(if-branch
-							(e-binop @6-12-6-22 (op "eq")
-								(e-lookup-local @6-12-6-15
-									(pattern (id 73)))
-								(e-int @6-19-6-20 (value "0")))
-							(e-block @6-21-8-3
-								(e-string @7-3-7-9
-									(e-literal @7-4-7-8 (string "zero")))))
+							(e-binop @6.12-6.22 (op "eq")
+								(e-lookup-local @6.12-6.15
+									(pattern (id 74)))
+								(e-int @6.19-6.20 (value "0")))
+							(e-block @6.21-8.3
+								(e-string @7.3-7.9
+									(e-literal @7.4-7.8 (string "zero")))))
 						(if-branch
-							(e-binop @8-12-8-23 (op "gt")
-								(e-lookup-local @8-12-8-15
-									(pattern (id 73)))
-								(e-int @8-18-8-21 (value "100")))
-							(e-block @8-22-10-3
-								(e-string @9-3-9-10
-									(e-literal @9-4-9-9 (string "large"))))))
+							(e-binop @8.12-8.23 (op "gt")
+								(e-lookup-local @8.12-8.15
+									(pattern (id 74)))
+								(e-int @8.18-8.21 (value "100")))
+							(e-block @8.22-10.3
+								(e-string @9.3-9.10
+									(e-literal @9.4-9.9 (string "large"))))))
 					(if-else
-						(e-block @10-9-12-3
-							(e-string @11-3-11-13
-								(e-literal @11-4-11-12 (string "positive"))))))))))
+						(e-block @10.9-12.3
+							(e-string @11.3-11.13
+								(e-literal @11.4-11.12 (string "positive"))))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "checkNumber") (def_var 104) (type "* ? *")))
+		(d_assign (name "checkNumber") (def_var 104) (type "* ? Str")))
 	(expressions
-		(expr @3-15-13-2 (type "* ? *"))))
+		(expr @3.15-13.2 (type "* ? Str"))))
 ~~~

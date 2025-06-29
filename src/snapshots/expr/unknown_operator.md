@@ -30,9 +30,9 @@ Int(1:1-1:2),OpPlus(1:3-1:4),OpPlus(1:4-1:5),Int(1:6-1:7),EndOfFile(1:7-1:7),
 ~~~
 # PARSE
 ~~~clojure
-(e-binop @1-1-1-7 (op "+")
-	(e-int @1-1-1-2 (raw "1"))
-	(e-malformed @1-4-1-7 (reason "expr_unexpected_token")))
+(e-binop @1.1-1.7 (op "+")
+	(e-int @1.1-1.2 (raw "1"))
+	(e-malformed @1.4-1.7 (reason "expr_unexpected_token")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -40,11 +40,11 @@ Int(1:1-1:2),OpPlus(1:3-1:4),OpPlus(1:4-1:5),Int(1:6-1:7),EndOfFile(1:7-1:7),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop @1-1-1-7 (op "add") (id 75)
-	(e-int @1-1-1-2 (value "1"))
+(e-binop @1.1-1.7 (op "add") (id 76)
+	(e-int @1.1-1.2 (value "1"))
 	(e-runtime-error (tag "expr_not_canonicalized")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 75) (type "*"))
+(expr (id 76) (type "*"))
 ~~~

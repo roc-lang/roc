@@ -43,81 +43,81 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 ~~~
 # PARSE
 ~~~clojure
-(e-record @1-1-15-2
+(e-record @1.1-15.2
 	(field (field "name") (optional false)
-		(e-string @2-11-2-18
-			(e-string-part @2-12-2-17 (raw "Alice"))))
+		(e-string @2.11-2.18
+			(e-string-part @2.12-2.17 (raw "Alice"))))
 	(field (field "scores") (optional false)
-		(e-list @3-13-3-29
-			(e-int @3-14-3-16 (raw "95"))
-			(e-int @3-18-3-20 (raw "87"))
-			(e-int @3-22-3-24 (raw "92"))
-			(e-int @3-26-3-28 (raw "78"))))
+		(e-list @3.13-3.29
+			(e-int @3.14-3.16 (raw "95"))
+			(e-int @3.18-3.20 (raw "87"))
+			(e-int @3.22-3.24 (raw "92"))
+			(e-int @3.26-3.28 (raw "78"))))
 	(field (field "status") (optional false)
-		(e-apply @4-13-4-44
-			(e-tag @4-13-4-19 (raw "Active"))
-			(e-record @4-20-4-43
+		(e-apply @4.13-4.44
+			(e-tag @4.13-4.19 (raw "Active"))
+			(e-record @4.20-4.43
 				(field (field "since") (optional false)
-					(e-string @4-29-4-41
-						(e-string-part @4-30-4-40 (raw "2023-01-15")))))))
+					(e-string @4.29-4.41
+						(e-string-part @4.30-4.40 (raw "2023-01-15")))))))
 	(field (field "preferences") (optional false)
-		(e-record @5-18-5-76
+		(e-record @5.18-5.76
 			(field (field "theme") (optional false)
-				(e-tag @5-27-5-31 (raw "Dark")))
+				(e-tag @5.27-5.31 (raw "Dark")))
 			(field (field "notifications") (optional false)
-				(e-apply @5-48-5-74
-					(e-tag @5-48-5-53 (raw "Email"))
-					(e-string @5-54-5-73
-						(e-string-part @5-55-5-72 (raw "alice@example.com")))))))
+				(e-apply @5.48-5.74
+					(e-tag @5.48-5.53 (raw "Email"))
+					(e-string @5.54-5.73
+						(e-string-part @5.55-5.72 (raw "alice@example.com")))))))
 	(field (field "metadata") (optional false)
-		(e-apply @6-15-9-7
-			(e-tag @6-15-6-17 (raw "Ok"))
-			(e-record @6-18-9-6
+		(e-apply @6.15-9.7
+			(e-tag @6.15-6.17 (raw "Ok"))
+			(e-record @6.18-9.6
 				(field (field "tags") (optional false)
-					(e-list @7-15-7-51
-						(e-string @7-16-7-27
-							(e-string-part @7-17-7-26 (raw "developer")))
-						(e-string @7-29-7-37
-							(e-string-part @7-30-7-36 (raw "senior")))
-						(e-string @7-39-7-50
-							(e-string-part @7-40-7-49 (raw "fullstack")))))
+					(e-list @7.15-7.51
+						(e-string @7.16-7.27
+							(e-string-part @7.17-7.26 (raw "developer")))
+						(e-string @7.29-7.37
+							(e-string-part @7.30-7.36 (raw "senior")))
+						(e-string @7.39-7.50
+							(e-string-part @7.40-7.49 (raw "fullstack")))))
 				(field (field "permissions") (optional false)
-					(e-list @8-22-8-42
-						(e-tag @8-23-8-27 (raw "Read"))
-						(e-tag @8-29-8-34 (raw "Write"))
-						(e-tag @8-36-8-41 (raw "Admin")))))))
+					(e-list @8.22-8.42
+						(e-tag @8.23-8.27 (raw "Read"))
+						(e-tag @8.29-8.34 (raw "Write"))
+						(e-tag @8.36-8.41 (raw "Admin")))))))
 	(field (field "callback") (optional false)
-		(e-lambda @10-15-10-25
+		(e-lambda @10.15-10.25
 			(args
-				(p-ident @10-16-10-17 (raw "x")))
-			(e-binop @10-19-10-25 (op "+")
-				(e-ident @10-19-10-20 (qaul "") (raw "x"))
-				(e-int @10-23-10-24 (raw "1")))))
+				(p-ident @10.16-10.17 (raw "x")))
+			(e-binop @10.19-10.25 (op "+")
+				(e-ident @10.19-10.20 (qaul "") (raw "x"))
+				(e-int @10.23-10.24 (raw "1")))))
 	(field (field "nested") (optional false)
-		(e-record @11-13-14-6
+		(e-record @11.13-14.6
 			(field (field "items") (optional false)
-				(e-list @12-16-12-52
-					(e-apply @12-17-12-30
-						(e-tag @12-17-12-21 (raw "Some"))
-						(e-string @12-22-12-29
-							(e-string-part @12-23-12-28 (raw "first"))))
-					(e-tag @12-32-12-36 (raw "None"))
-					(e-apply @12-38-12-51
-						(e-tag @12-38-12-42 (raw "Some"))
-						(e-string @12-43-12-50
-							(e-string-part @12-44-12-49 (raw "third"))))))
+				(e-list @12.16-12.52
+					(e-apply @12.17-12.30
+						(e-tag @12.17-12.21 (raw "Some"))
+						(e-string @12.22-12.29
+							(e-string-part @12.23-12.28 (raw "first"))))
+					(e-tag @12.32-12.36 (raw "None"))
+					(e-apply @12.38-12.51
+						(e-tag @12.38-12.42 (raw "Some"))
+						(e-string @12.43-12.50
+							(e-string-part @12.44-12.49 (raw "third"))))))
 			(field (field "result") (optional false)
-				(e-apply @13-17-13-70
-					(e-tag @13-17-13-24 (raw "Success"))
-					(e-record @13-25-13-69
+				(e-apply @13.17-13.70
+					(e-tag @13.17-13.24 (raw "Success"))
+					(e-record @13.25-13.69
 						(field (field "data") (optional false)
-							(e-list @13-33-13-42
-								(e-int @13-34-13-35 (raw "1"))
-								(e-int @13-37-13-38 (raw "2"))
-								(e-int @13-40-13-41 (raw "3"))))
+							(e-list @13.33-13.42
+								(e-int @13.34-13.35 (raw "1"))
+								(e-int @13.37-13.38 (raw "2"))
+								(e-int @13.40-13.41 (raw "3"))))
 						(field (field "timestamp") (optional false)
-							(e-string @13-55-13-67
-								(e-string-part @13-56-13-66 (raw "2024-01-01"))))))))))
+							(e-string @13.55-13.67
+								(e-string-part @13.56-13.66 (raw "2024-01-01"))))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -141,95 +141,95 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-record @1-1-15-2 (ext-var 177) (id 178)
+(e-record @1.1-15.2 (ext-var 178) (id 179)
 	(fields
 		(field (name "name")
-			(e-string @2-11-2-18
-				(e-literal @2-12-2-17 (string "Alice"))))
+			(e-string @2.11-2.18
+				(e-literal @2.12-2.17 (string "Alice"))))
 		(field (name "scores")
-			(e-list @3-13-3-29 (elem-var 75)
+			(e-list @3.13-3.29 (elem-var 76)
 				(elems
-					(e-int @3-14-3-16 (value "95"))
-					(e-int @3-18-3-20 (value "87"))
-					(e-int @3-22-3-24 (value "92"))
-					(e-int @3-26-3-28 (value "78")))))
+					(e-int @3.14-3.16 (value "95"))
+					(e-int @3.18-3.20 (value "87"))
+					(e-int @3.22-3.24 (value "92"))
+					(e-int @3.26-3.28 (value "78")))))
 		(field (name "status")
-			(e-call @4-13-4-44
-				(e-tag @4-13-4-19 (ext-var 0) (name "Active") (args "TODO"))
-				(e-record @4-20-4-43 (ext-var 86)
+			(e-call @4.13-4.44
+				(e-tag @4.13-4.19 (ext-var 0) (name "Active") (args "TODO"))
+				(e-record @4.20-4.43 (ext-var 87)
 					(fields
 						(field (name "since")
-							(e-string @4-29-4-41
-								(e-literal @4-30-4-40 (string "2023-01-15"))))))))
+							(e-string @4.29-4.41
+								(e-literal @4.30-4.40 (string "2023-01-15"))))))))
 		(field (name "preferences")
-			(e-record @5-18-5-76 (ext-var 102)
+			(e-record @5.18-5.76 (ext-var 103)
 				(fields
 					(field (name "theme")
-						(e-tag @5-27-5-31 (ext-var 0) (name "Dark") (args "TODO")))
+						(e-tag @5.27-5.31 (ext-var 0) (name "Dark") (args "TODO")))
 					(field (name "notifications")
-						(e-call @5-48-5-74
-							(e-tag @5-48-5-53 (ext-var 0) (name "Email") (args "TODO"))
-							(e-string @5-54-5-73
-								(e-literal @5-55-5-72 (string "alice@example.com"))))))))
+						(e-call @5.48-5.74
+							(e-tag @5.48-5.53 (ext-var 0) (name "Email") (args "TODO"))
+							(e-string @5.54-5.73
+								(e-literal @5.55-5.72 (string "alice@example.com"))))))))
 		(field (name "metadata")
-			(e-call @6-15-9-7
-				(e-tag @6-15-6-17 (ext-var 0) (name "Ok") (args "TODO"))
-				(e-record @6-18-9-6 (ext-var 125)
+			(e-call @6.15-9.7
+				(e-tag @6.15-6.17 (ext-var 0) (name "Ok") (args "TODO"))
+				(e-record @6.18-9.6 (ext-var 126)
 					(fields
 						(field (name "tags")
-							(e-list @7-15-7-51 (elem-var 110)
+							(e-list @7.15-7.51 (elem-var 111)
 								(elems
-									(e-string @7-16-7-27
-										(e-literal @7-17-7-26 (string "developer")))
-									(e-string @7-29-7-37
-										(e-literal @7-30-7-36 (string "senior")))
-									(e-string @7-39-7-50
-										(e-literal @7-40-7-49 (string "fullstack"))))))
+									(e-string @7.16-7.27
+										(e-literal @7.17-7.26 (string "developer")))
+									(e-string @7.29-7.37
+										(e-literal @7.30-7.36 (string "senior")))
+									(e-string @7.39-7.50
+										(e-literal @7.40-7.49 (string "fullstack"))))))
 						(field (name "permissions")
-							(e-list @8-22-8-42 (elem-var 118)
+							(e-list @8.22-8.42 (elem-var 119)
 								(elems
-									(e-tag @8-23-8-27 (ext-var 0) (name "Read") (args "TODO"))
-									(e-tag @8-29-8-34 (ext-var 0) (name "Write") (args "TODO"))
-									(e-tag @8-36-8-41 (ext-var 0) (name "Admin") (args "TODO")))))))))
+									(e-tag @8.23-8.27 (ext-var 0) (name "Read") (args "TODO"))
+									(e-tag @8.29-8.34 (ext-var 0) (name "Write") (args "TODO"))
+									(e-tag @8.36-8.41 (ext-var 0) (name "Admin") (args "TODO")))))))))
 		(field (name "callback")
-			(e-lambda @10-15-10-25
+			(e-lambda @10.15-10.25
 				(args
-					(p-assign @10-16-10-17 (ident "x") (id 132)))
-				(e-binop @10-19-10-25 (op "add")
-					(e-lookup-local @10-19-10-20
-						(pattern (id 132)))
-					(e-int @10-23-10-24 (value "1")))))
+					(p-assign @10.16-10.17 (ident "x") (id 133)))
+				(e-binop @10.19-10.25 (op "add")
+					(e-lookup-local @10.19-10.20
+						(pattern (id 133)))
+					(e-int @10.23-10.24 (value "1")))))
 		(field (name "nested")
-			(e-record @11-13-14-6 (ext-var 172)
+			(e-record @11.13-14.6 (ext-var 173)
 				(fields
 					(field (name "items")
-						(e-list @12-16-12-52 (elem-var 144)
+						(e-list @12.16-12.52 (elem-var 145)
 							(elems
-								(e-call @12-17-12-30
-									(e-tag @12-17-12-21 (ext-var 0) (name "Some") (args "TODO"))
-									(e-string @12-22-12-29
-										(e-literal @12-23-12-28 (string "first"))))
-								(e-tag @12-32-12-36 (ext-var 0) (name "None") (args "TODO"))
-								(e-call @12-38-12-51
-									(e-tag @12-38-12-42 (ext-var 0) (name "Some") (args "TODO"))
-									(e-string @12-43-12-50
-										(e-literal @12-44-12-49 (string "third")))))))
+								(e-call @12.17-12.30
+									(e-tag @12.17-12.21 (ext-var 0) (name "Some") (args "TODO"))
+									(e-string @12.22-12.29
+										(e-literal @12.23-12.28 (string "first"))))
+								(e-tag @12.32-12.36 (ext-var 0) (name "None") (args "TODO"))
+								(e-call @12.38-12.51
+									(e-tag @12.38-12.42 (ext-var 0) (name "Some") (args "TODO"))
+									(e-string @12.43-12.50
+										(e-literal @12.44-12.49 (string "third")))))))
 					(field (name "result")
-						(e-call @13-17-13-70
-							(e-tag @13-17-13-24 (ext-var 0) (name "Success") (args "TODO"))
-							(e-record @13-25-13-69 (ext-var 165)
+						(e-call @13.17-13.70
+							(e-tag @13.17-13.24 (ext-var 0) (name "Success") (args "TODO"))
+							(e-record @13.25-13.69 (ext-var 166)
 								(fields
 									(field (name "data")
-										(e-list @13-33-13-42 (elem-var 157)
+										(e-list @13.33-13.42 (elem-var 158)
 											(elems
-												(e-int @13-34-13-35 (value "1"))
-												(e-int @13-37-13-38 (value "2"))
-												(e-int @13-40-13-41 (value "3")))))
+												(e-int @13.34-13.35 (value "1"))
+												(e-int @13.37-13.38 (value "2"))
+												(e-int @13.40-13.41 (value "3")))))
 									(field (name "timestamp")
-										(e-string @13-55-13-67
-											(e-literal @13-56-13-66 (string "2024-01-01")))))))))))))
+										(e-string @13.55-13.67
+											(e-literal @13.56-13.66 (string "2024-01-01")))))))))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 178) (type "{ name: Str, scores: List(Num(*)), status: *, preferences: { theme: [Dark, * *], notifications: * }, metadata: *, callback: * ? *, nested: { items: List([None, * *]), result: * } }"))
+(expr (id 179) (type "{ name: Str, scores: List(Num(*)), status: *, preferences: { theme: [Dark]*, notifications: * }, metadata: *, callback: * ? *, nested: { items: List([None]*), result: * } }"))
 ~~~

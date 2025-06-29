@@ -196,6 +196,17 @@ pub const Store = struct {
         }
     }
 
+    // make builtin types //
+
+    pub fn mkBool(self: *Self, gpa: Allocator, idents: *base.Ident.Store, ext_var: Var) Content {
+        const true_ident = idents.insert(gpa, base.Ident.for_text("True"), base.Region.zero());
+        const false_ident = idents.insert(gpa, base.Ident.for_text("False"), base.Region.zero());
+
+        const true_tag = self.mkTag(true_ident, &[_]Var{});
+        const false_tag = self.mkTag(false_ident, &[_]Var{});
+        return self.mkTagUnion(&[_]Tag{ true_tag, false_tag }, ext_var);
+    }
+
     // make content types //
 
     /// Make a tag union data type
@@ -204,6 +215,13 @@ pub const Store = struct {
         const tags_range = self.appendTags(tags);
         const tag_union = TagUnion{ .tags = tags_range, .ext = ext_var };
         return Content{ .structure = .{ .tag_union = tag_union } };
+    }
+
+    /// Make a tag data type
+    /// Does not insert content into the types store
+    pub fn mkTag(self: *Self, name: base.Ident.Idx, args: []const Var) Tag {
+        const args_range = self.appendTagArgs(args);
+        return Tag{ .name = name, .args = args_range };
     }
 
     // Make a function data type

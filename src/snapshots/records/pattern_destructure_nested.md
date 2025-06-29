@@ -57,7 +57,7 @@ CloseCurly(3:1-3:2),EndOfFile(3:2-3:2),
 ~~~
 # PARSE
 ~~~clojure
-(e-malformed @3-2-3-2 (reason "expected_close_curly_at_end_of_match"))
+(e-malformed @3.2-3.2 (reason "expected_close_curly_at_end_of_match"))
 ~~~
 # FORMATTED
 ~~~roc

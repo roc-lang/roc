@@ -52,14 +52,14 @@ OpenSquare(1:1-1:2),Int(1:2-1:3),Comma(1:3-1:4),StringStart(1:5-1:6),StringPart(
 ~~~
 # PARSE
 ~~~clojure
-(e-list @1-1-1-27
-	(e-int @1-2-1-3 (raw "1"))
-	(e-string @1-5-1-12
-		(e-string-part @1-6-1-11 (raw "hello")))
-	(e-list @1-14-1-26
-		(e-int @1-15-1-16 (raw "3"))
-		(e-string @1-18-1-25
-			(e-string-part @1-19-1-24 (raw "world")))))
+(e-list @1.1-1.27
+	(e-int @1.2-1.3 (raw "1"))
+	(e-string @1.5-1.12
+		(e-string-part @1.6-1.11 (raw "hello")))
+	(e-list @1.14-1.26
+		(e-int @1.15-1.16 (raw "3"))
+		(e-string @1.18-1.25
+			(e-string-part @1.19-1.24 (raw "world")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -67,18 +67,18 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-list @1-1-1-27 (elem-var 72) (id 79)
+(e-list @1.1-1.27 (elem-var 73) (id 80)
 	(elems
-		(e-int @1-2-1-3 (value "1"))
-		(e-string @1-5-1-12
-			(e-literal @1-6-1-11 (string "hello")))
-		(e-list @1-14-1-26 (elem-var 75)
+		(e-int @1.2-1.3 (value "1"))
+		(e-string @1.5-1.12
+			(e-literal @1.6-1.11 (string "hello")))
+		(e-list @1.14-1.26 (elem-var 76)
 			(elems
-				(e-int @1-15-1-16 (value "3"))
-				(e-string @1-18-1-25
-					(e-literal @1-19-1-24 (string "world")))))))
+				(e-int @1.15-1.16 (value "3"))
+				(e-string @1.18-1.25
+					(e-literal @1.19-1.24 (string "world")))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 79) (type "List(Error)"))
+(expr (id 80) (type "List(Error)"))
 ~~~

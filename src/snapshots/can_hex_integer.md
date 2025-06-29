@@ -19,13 +19,13 @@ LowerIdent(3:1-3:2),OpAssign(3:3-3:4),Int(3:5-3:9),EndOfFile(3:9-3:9),
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-3-9
-	(module @1-1-1-10
-		(exposes @1-8-1-10))
+(file @1.1-3.9
+	(module @1.1-1.10
+		(exposes @1.8-1.10))
 	(statements
-		(s-decl @3-1-3-9
-			(p-ident @3-1-3-2 (raw "x"))
-			(e-int @3-5-3-9 (raw "0xFF")))))
+		(s-decl @3.1-3.9
+			(p-ident @3.1-3.2 (raw "x"))
+			(e-int @3.5-3.9 (raw "0xFF")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -34,15 +34,15 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 74)
-		(p-assign @3-1-3-2 (ident "x") (id 72))
-		(e-int @3-5-3-9 (value "255") (id 73))))
+	(d-let (id 75)
+		(p-assign @3.1-3.2 (ident "x") (id 73))
+		(e-int @3.5-3.9 (value "255") (id 74))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "x") (def_var 74) (type "Int(*)")))
+		(d_assign (name "x") (def_var 75) (type "Int(*)")))
 	(expressions
-		(expr @3-5-3-9 (type "Int(*)"))))
+		(expr @3.5-3.9 (type "Int(*)"))))
 ~~~

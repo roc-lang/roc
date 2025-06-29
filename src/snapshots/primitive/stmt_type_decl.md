@@ -19,19 +19,19 @@ UpperIdent(3:1-3:4),NoSpaceOpenRound(3:4-3:5),LowerIdent(3:5-3:6),Comma(3:6-3:7)
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-3-25
-	(module @1-1-1-13
-		(exposes @1-8-1-13
+(file @1.1-3.25
+	(module @1.1-1.13
+		(exposes @1.8-1.13
 			(exposed-upper-ident (text "Foo"))))
 	(statements
-		(s-type-decl @3-1-3-25
-			(header @3-1-3-9 (name "Foo")
+		(s-type-decl @3.1-3.25
+			(header @3.1-3.9 (name "Foo")
 				(args
-					(ty-var @3-5-3-6 (raw "a"))
-					(ty-var @3-7-3-8 (raw "b"))))
-			(ty-tuple @3-12-3-25
-				(ty-var @3-13-3-14 (raw "a"))
-				(ty-var @3-15-3-16 (raw "b"))
+					(ty-var @3.5-3.6 (raw "a"))
+					(ty-var @3.7-3.8 (raw "b"))))
+			(ty-tuple @3.12-3.25
+				(ty-var @3.13-3.14 (raw "a"))
+				(ty-var @3.15-3.16 (raw "b"))
 				(ty (name "Str"))
 				(ty (name "U64"))))))
 ~~~
@@ -44,16 +44,16 @@ Foo(a, b) : (a, b, Str, U64)
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-type-decl @3-1-3-25 (id 80)
-		(ty-header @3-1-3-9 (name "Foo")
+	(s-type-decl @3.1-3.25 (id 81)
+		(ty-header @3.1-3.9 (name "Foo")
 			(ty-args
-				(ty-var @3-5-3-6 (name "a"))
-				(ty-var @3-7-3-8 (name "b"))))
-		(ty-tuple @3-12-3-25
-			(ty-var @3-13-3-14 (name "a"))
-			(ty-var @3-15-3-16 (name "b"))
-			(ty @3-17-3-20 (name "Str"))
-			(ty @3-21-3-24 (name "U64")))))
+				(ty-var @3.5-3.6 (name "a"))
+				(ty-var @3.7-3.8 (name "b"))))
+		(ty-tuple @3.12-3.25
+			(ty-var @3.13-3.14 (name "a"))
+			(ty-var @3.15-3.16 (name "b"))
+			(ty @3.17-3.20 (name "Str"))
+			(ty @3.21-3.24 (name "U64")))))
 ~~~
 # TYPES
 ~~~clojure

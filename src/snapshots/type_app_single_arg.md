@@ -25,45 +25,45 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-6-39
-	(app @1-1-1-53
-		(provides @1-6-1-12
+(file @1.1-6.39
+	(app @1.1-1.53
+		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @1-15-1-53 (name "pf")
-			(e-string @1-28-1-51
-				(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))
-		(packages @1-13-1-53
-			(record-field @1-15-1-53 (name "pf")
-				(e-string @1-28-1-51
-					(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))))
+		(record-field @1.15-1.53 (name "pf")
+			(e-string @1.28-1.51
+				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
+		(packages @1.13-1.53
+			(record-field @1.15-1.53 (name "pf")
+				(e-string @1.28-1.51
+					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @3-1-4-12 (name "processList")
-			(ty-fn @3-15-3-31
-				(ty-apply @3-15-3-24
+		(s-type-anno @3.1-4.12 (name "processList")
+			(ty-fn @3.15-3.31
+				(ty-apply @3.15-3.24
 					(ty (name "List"))
 					(ty (name "Str")))
 				(ty (name "U64"))))
-		(s-decl @4-1-6-6
-			(p-ident @4-1-4-12 (raw "processList"))
-			(e-lambda @4-15-6-6
+		(s-decl @4.1-6.6
+			(p-ident @4.1-4.12 (raw "processList"))
+			(e-lambda @4.15-6.6
 				(args
-					(p-ident @4-16-4-20 (raw "list")))
-				(e-field-access @4-22-6-6
-					(e-ident @4-22-4-26 (qaul "") (raw "list"))
-					(e-apply @4-26-4-32
-						(e-ident @4-26-4-30 (qaul "") (raw ".len"))))))
-		(s-decl @6-1-6-39
-			(p-ident @6-1-6-6 (raw "main!"))
-			(e-lambda @6-9-6-39
+					(p-ident @4.16-4.20 (raw "list")))
+				(e-field-access @4.22-6.6
+					(e-ident @4.22-4.26 (qaul "") (raw "list"))
+					(e-apply @4.26-4.32
+						(e-ident @4.26-4.30 (qaul "") (raw ".len"))))))
+		(s-decl @6.1-6.39
+			(p-ident @6.1-6.6 (raw "main!"))
+			(e-lambda @6.9-6.39
 				(args
 					(p-underscore))
-				(e-apply @6-13-6-39
-					(e-ident @6-13-6-24 (qaul "") (raw "processList"))
-					(e-list @6-25-6-38
-						(e-string @6-26-6-31
-							(e-string-part @6-27-6-30 (raw "one")))
-						(e-string @6-32-6-37
-							(e-string-part @6-33-6-36 (raw "two")))))))))
+				(e-apply @6.13-6.39
+					(e-ident @6.13-6.24 (qaul "") (raw "processList"))
+					(e-list @6.25-6.38
+						(e-string @6.26-6.31
+							(e-string-part @6.27-6.30 (raw "one")))
+						(e-string @6.32-6.37
+							(e-string-part @6.33-6.36 (raw "two")))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -77,44 +77,44 @@ main! = |_| processList(["one", "two"])
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 88)
-		(p-assign @4-1-4-12 (ident "processList") (id 76))
-		(e-lambda @4-15-6-6 (id 81)
+	(d-let (id 89)
+		(p-assign @4.1-4.12 (ident "processList") (id 77))
+		(e-lambda @4.15-6.6 (id 82)
 			(args
-				(p-assign @4-16-4-20 (ident "list") (id 77)))
-			(e-dot-access @4-22-6-6 (field "len")
+				(p-assign @4.16-4.20 (ident "list") (id 78)))
+			(e-dot-access @4.22-6.6 (field "len")
 				(receiver
-					(e-lookup-local @4-22-4-26
-						(pattern (id 77))))
+					(e-lookup-local @4.22-4.26
+						(pattern (id 78))))
 				(args)))
-		(annotation @4-1-4-12 (signature 86) (id 87)
+		(annotation @4.1-4.12 (signature 87) (id 88)
 			(declared-type
-				(ty-fn @3-15-3-31 (effectful false)
-					(ty-apply @3-15-3-24 (symbol "List")
-						(ty @3-20-3-23 (name "Str")))
-					(ty @3-28-3-31 (name "U64"))))))
-	(d-let (id 101)
-		(p-assign @6-1-6-6 (ident "main!") (id 89))
-		(e-lambda @6-9-6-39 (id 100)
+				(ty-fn @3.15-3.31 (effectful false)
+					(ty-apply @3.15-3.24 (symbol "List")
+						(ty @3.20-3.23 (name "Str")))
+					(ty @3.28-3.31 (name "U64"))))))
+	(d-let (id 102)
+		(p-assign @6.1-6.6 (ident "main!") (id 90))
+		(e-lambda @6.9-6.39 (id 101)
 			(args
-				(p-underscore @6-10-6-11 (id 90)))
-			(e-call @6-13-6-39
-				(e-lookup-local @6-13-6-24
-					(pattern (id 76)))
-				(e-list @6-25-6-38 (elem-var 93)
+				(p-underscore @6.10-6.11 (id 91)))
+			(e-call @6.13-6.39
+				(e-lookup-local @6.13-6.24
+					(pattern (id 77)))
+				(e-list @6.25-6.38 (elem-var 94)
 					(elems
-						(e-string @6-26-6-31
-							(e-literal @6-27-6-30 (string "one")))
-						(e-string @6-32-6-37
-							(e-literal @6-33-6-36 (string "two")))))))))
+						(e-string @6.26-6.31
+							(e-literal @6.27-6.30 (string "one")))
+						(e-string @6.32-6.37
+							(e-literal @6.33-6.36 (string "two")))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "processList") (def_var 88) (type "List -> U64"))
-		(d_assign (name "main!") (def_var 101) (type "* ? *")))
+		(d_assign (name "processList") (def_var 89) (type "List -> U64"))
+		(d_assign (name "main!") (def_var 102) (type "* ? *")))
 	(expressions
-		(expr @4-15-6-6 (type "List -> U64"))
-		(expr @6-9-6-39 (type "* ? *"))))
+		(expr @4.15-6.6 (type "List -> U64"))
+		(expr @6.9-6.39 (type "* ? *"))))
 ~~~

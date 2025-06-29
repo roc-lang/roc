@@ -29,25 +29,25 @@ OpBar(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:4-1:8),Comma(1:8-1:9),LowerIdent(
 ~~~
 # PARSE
 ~~~clojure
-(e-lambda @1-1-1-103
+(e-lambda @1.1-1.103
 	(args
-		(p-as @1-2-1-30 (name "person")
-			(p-record @1-2-1-20
-				(field @1-4-1-9 (name "name") (rest false))
-				(field @1-10-1-14 (name "age") (rest false))
-				(field @1-15-1-20 (name "a") (rest true)))))
-	(e-record @1-32-1-103
+		(p-as @1.2-1.30 (name "person")
+			(p-record @1.2-1.20
+				(field @1.4-1.9 (name "name") (rest false))
+				(field @1.10-1.14 (name "age") (rest false))
+				(field @1.15-1.20 (name "a") (rest true)))))
+	(e-record @1.32-1.103
 		(field (field "greeting") (optional false)
-			(e-string @1-44-1-59
-				(e-string-part @1-45-1-51 (raw "Hello "))
-				(e-ident @1-53-1-57 (qaul "") (raw "name"))
-				(e-string-part @1-58-1-58 (raw ""))))
+			(e-string @1.44-1.59
+				(e-string-part @1.45-1.51 (raw "Hello "))
+				(e-ident @1.53-1.57 (qaul "") (raw "name"))
+				(e-string-part @1.58-1.58 (raw ""))))
 		(field (field "full_record") (optional false)
-			(e-ident @1-74-1-80 (qaul "") (raw "person")))
+			(e-ident @1.74-1.80 (qaul "") (raw "person")))
 		(field (field "is_adult") (optional false)
-			(e-binop @1-92-1-103 (op ">=")
-				(e-ident @1-92-1-95 (qaul "") (raw "age"))
-				(e-int @1-99-1-101 (raw "18"))))))
+			(e-binop @1.92-1.103 (op ">=")
+				(e-ident @1.92-1.95 (qaul "") (raw "age"))
+				(e-int @1.99-1.101 (raw "18"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -55,24 +55,24 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-lambda @1-1-1-103 (id 94)
+(e-lambda @1.1-1.103 (id 95)
 	(args
-		(p-runtime-error @1-1-1-1 (tag "not_implemented") (id 73)))
-	(e-record @1-32-1-103 (ext-var 88)
+		(p-runtime-error @1.1-1.1 (tag "not_implemented") (id 74)))
+	(e-record @1.32-1.103 (ext-var 89)
 		(fields
 			(field (name "greeting")
-				(e-string @1-44-1-59
-					(e-literal @1-45-1-51 (string "Hello "))
+				(e-string @1.44-1.59
+					(e-literal @1.45-1.51 (string "Hello "))
 					(e-runtime-error (tag "ident_not_in_scope"))
-					(e-literal @1-58-1-58 (string ""))))
+					(e-literal @1.58-1.58 (string ""))))
 			(field (name "full_record")
 				(e-runtime-error (tag "ident_not_in_scope")))
 			(field (name "is_adult")
-				(e-binop @1-92-1-103 (op "ge")
+				(e-binop @1.92-1.103 (op "ge")
 					(e-runtime-error (tag "ident_not_in_scope"))
-					(e-int @1-99-1-101 (value "18")))))))
+					(e-int @1.99-1.101 (value "18")))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 94) (type "Error ? { greeting: Str, full_record: Error, is_adult: *, * * }"))
+(expr (id 95) (type "Error ? { greeting: Str, full_record: Error, is_adult: *, * * }"))
 ~~~

@@ -87,17 +87,17 @@ CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~
 # PARSE
 ~~~clojure
-(e-block @1-1-4-2
+(e-block @1.1-4.2
 	(statements
-		(e-ident @1-3-1-9 (qaul "") (raw "person"))
-		(e-malformed @1-1-1-1 (reason "expr_unexpected_token"))
-		(s-type-anno @2-5-2-13 (name "age")
-			(ty-malformed @2-10-2-13 (tag "ty_anno_unexpected_token")))
-		(e-malformed @1-1-1-1 (reason "expr_unexpected_token"))
-		(s-type-anno @3-5-3-22 (name "active")
+		(e-ident @1.3-1.9 (qaul "") (raw "person"))
+		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
+		(s-type-anno @2.5-2.13 (name "age")
+			(ty-malformed @2.10-2.13 (tag "ty_anno_unexpected_token")))
+		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
+		(s-type-anno @3.5-3.22 (name "active")
 			(ty (name "Bool")))
-		(e-malformed @3-17-3-23 (reason "expr_unexpected_token"))
-		(e-malformed @1-1-1-1 (reason "expr_unexpected_token"))))
+		(e-malformed @3.17-3.23 (reason "expr_unexpected_token"))
+		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -113,16 +113,16 @@ CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1-1-4-2 (id 83)
-	(s-expr @1-3-1-11
+(e-block @1.1-4.2 (id 84)
+	(s-expr @1.3-1.11
 		(e-runtime-error (tag "ident_not_in_scope")))
-	(s-type-anno @2-5-2-13 (name "age")
-		(ty-malformed @2-10-2-13))
-	(s-type-anno @3-5-3-22 (name "active")
-		(ty @3-13-3-17 (name "Bool")))
-	(e-empty_record @1-1-4-2))
+	(s-type-anno @2.5-2.13 (name "age")
+		(ty-malformed @2.10-2.13))
+	(s-type-anno @3.5-3.22 (name "active")
+		(ty @3.13-3.17 (name "Bool")))
+	(e-empty_record @1.1-4.2))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 83) (type "*"))
+(expr (id 84) (type "{}"))
 ~~~

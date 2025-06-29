@@ -22,14 +22,14 @@ KwImport(3:1-3:7),LowerIdent(3:8-3:12),NoSpaceDotUpperIdent(3:12-3:17),OpenSquar
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-3-28
-	(module @1-1-1-10
-		(exposes @1-8-1-10))
+(file @1.1-3.28
+	(module @1.1-1.10
+		(exposes @1.8-1.10))
 	(statements
-		(s-import @3-1-3-17 (module ".Json") (qualifier "json"))
-		(e-list @3-18-3-28
-			(e-ident @3-19-3-22 (qaul "") (raw "foo"))
-			(e-tag @3-24-3-27 (raw "BAR")))))
+		(s-import @3.1-3.17 (module ".Json") (qualifier "json"))
+		(e-list @3.18-3.28
+			(e-ident @3.19-3.22 (qaul "") (raw "foo"))
+			(e-tag @3.24-3.27 (raw "BAR")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -40,7 +40,7 @@ import json.Json[foo, BAR]
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-import @3-1-3-17 (module "json.Json") (qualifier "json") (id 72)
+	(s-import @3.1-3.17 (module "json.Json") (qualifier "json") (id 73)
 		(exposes)))
 ~~~
 # TYPES

@@ -53,86 +53,86 @@ LowerIdent(20:1-20:6),OpAssign(20:7-20:8),OpBar(20:9-20:10),Underscore(20:10-20:
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-20-15
-	(app @1-1-1-53
-		(provides @1-6-1-12
+(file @1.1-20.15
+	(app @1.1-1.53
+		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @1-15-1-53 (name "pf")
-			(e-string @1-28-1-51
-				(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))
-		(packages @1-13-1-53
-			(record-field @1-15-1-53 (name "pf")
-				(e-string @1-28-1-51
-					(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))))
+		(record-field @1.15-1.53 (name "pf")
+			(e-string @1.28-1.51
+				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
+		(packages @1.13-1.53
+			(record-field @1.15-1.53 (name "pf")
+				(e-string @1.28-1.51
+					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-decl @4-1-7-8
-			(header @4-1-4-18 (name "MyResult")
+		(s-type-decl @4.1-7.8
+			(header @4.1-4.18 (name "MyResult")
 				(args
-					(ty-var @4-10-4-12 (raw "ok"))
-					(ty-var @4-14-4-17 (raw "err"))))
-			(ty-tag-union @4-21-4-41
+					(ty-var @4.10-4.12 (raw "ok"))
+					(ty-var @4.14-4.17 (raw "err"))))
+			(ty-tag-union @4.21-4.41
 				(tags
-					(ty-apply @4-22-4-30
+					(ty-apply @4.22-4.30
 						(ty (name "Good"))
-						(ty-var @4-27-4-29 (raw "ok")))
-					(ty-apply @4-32-4-40
+						(ty-var @4.27-4.29 (raw "ok")))
+					(ty-apply @4.32-4.40
 						(ty (name "Bad"))
-						(ty-var @4-36-4-39 (raw "err"))))))
-		(s-type-anno @7-1-8-8 (name "process")
-			(ty-fn @7-11-7-36
-				(ty-apply @7-11-7-29
+						(ty-var @4.36-4.39 (raw "err"))))))
+		(s-type-anno @7.1-8.8 (name "process")
+			(ty-fn @7.11-7.36
+				(ty-apply @7.11-7.29
 					(ty (name "MyResult"))
 					(ty (name "Str"))
 					(ty (name "I32")))
 				(ty (name "Str"))))
-		(s-decl @8-1-8-32
-			(p-ident @8-1-8-8 (raw "process"))
-			(e-lambda @8-11-8-32
+		(s-decl @8.1-8.32
+			(p-ident @8.1-8.8 (raw "process"))
+			(e-lambda @8.11-8.32
 				(args
-					(p-ident @8-12-8-19 (raw "_result")))
-				(e-string @8-21-8-32
-					(e-string-part @8-22-8-31 (raw "processed")))))
-		(s-type-decl @11-1-14-10
-			(header @11-1-11-10 (name "Option")
+					(p-ident @8.12-8.19 (raw "_result")))
+				(e-string @8.21-8.32
+					(e-string-part @8.22-8.31 (raw "processed")))))
+		(s-type-decl @11.1-14.10
+			(header @11.1-11.10 (name "Option")
 				(args
-					(ty-var @11-8-11-9 (raw "a"))))
-			(ty-tag-union @11-13-11-28
+					(ty-var @11.8-11.9 (raw "a"))))
+			(ty-tag-union @11.13-11.28
 				(tags
-					(ty-apply @11-14-11-21
+					(ty-apply @11.14-11.21
 						(ty (name "Some"))
-						(ty-var @11-19-11-20 (raw "a")))
+						(ty-var @11.19-11.20 (raw "a")))
 					(ty (name "None")))))
-		(s-type-anno @14-1-15-10 (name "getString")
-			(ty-fn @14-13-14-31
-				(ty-apply @14-13-14-24
+		(s-type-anno @14.1-15.10 (name "getString")
+			(ty-fn @14.13-14.31
+				(ty-apply @14.13-14.24
 					(ty (name "Option"))
 					(ty (name "Str")))
 				(ty (name "Str"))))
-		(s-decl @15-1-15-29
-			(p-ident @15-1-15-10 (raw "getString"))
-			(e-lambda @15-13-15-29
+		(s-decl @15.1-15.29
+			(p-ident @15.1-15.10 (raw "getString"))
+			(e-lambda @15.13-15.29
 				(args
-					(p-ident @15-14-15-18 (raw "_opt")))
-				(e-string @15-20-15-29
-					(e-string-part @15-21-15-28 (raw "default")))))
-		(s-type-anno @17-1-18-10 (name "getNumber")
-			(ty-fn @17-13-17-31
-				(ty-apply @17-13-17-24
+					(p-ident @15.14-15.18 (raw "_opt")))
+				(e-string @15.20-15.29
+					(e-string-part @15.21-15.28 (raw "default")))))
+		(s-type-anno @17.1-18.10 (name "getNumber")
+			(ty-fn @17.13-17.31
+				(ty-apply @17.13-17.24
 					(ty (name "Option"))
 					(ty (name "I32")))
 				(ty (name "I32"))))
-		(s-decl @18-1-18-21
-			(p-ident @18-1-18-10 (raw "getNumber"))
-			(e-lambda @18-13-18-21
+		(s-decl @18.1-18.21
+			(p-ident @18.1-18.10 (raw "getNumber"))
+			(e-lambda @18.13-18.21
 				(args
-					(p-ident @18-14-18-18 (raw "_opt")))
-				(e-int @18-20-18-21 (raw "0"))))
-		(s-decl @20-1-20-15
-			(p-ident @20-1-20-6 (raw "main!"))
-			(e-lambda @20-9-20-15
+					(p-ident @18.14-18.18 (raw "_opt")))
+				(e-int @18.20-18.21 (raw "0"))))
+		(s-decl @20.1-20.15
+			(p-ident @20.1-20.6 (raw "main!"))
+			(e-lambda @20.9-20.15
 				(args
 					(p-underscore))
-				(e-record @20-13-20-15)))))
+				(e-record @20.13-20.15)))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -141,81 +141,81 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 105)
-		(p-assign @8-1-8-8 (ident "process") (id 93))
-		(e-lambda @8-11-8-32 (id 98)
+	(d-let (id 106)
+		(p-assign @8.1-8.8 (ident "process") (id 94))
+		(e-lambda @8.11-8.32 (id 99)
 			(args
-				(p-assign @8-12-8-19 (ident "_result") (id 94)))
-			(e-string @8-21-8-32
-				(e-literal @8-22-8-31 (string "processed"))))
-		(annotation @8-1-8-8 (signature 103) (id 104)
+				(p-assign @8.12-8.19 (ident "_result") (id 95)))
+			(e-string @8.21-8.32
+				(e-literal @8.22-8.31 (string "processed"))))
+		(annotation @8.1-8.8 (signature 104) (id 105)
 			(declared-type
-				(ty-fn @7-11-7-36 (effectful false)
-					(ty-apply @7-11-7-29 (symbol "MyResult")
-						(ty @7-20-7-23 (name "Str"))
-						(ty @7-25-7-28 (name "I32")))
-					(ty @7-33-7-36 (name "Str"))))))
-	(d-let (id 122)
-		(p-assign @15-1-15-10 (ident "getString") (id 110))
-		(e-lambda @15-13-15-29 (id 115)
+				(ty-fn @7.11-7.36 (effectful false)
+					(ty-apply @7.11-7.29 (symbol "MyResult")
+						(ty @7.20-7.23 (name "Str"))
+						(ty @7.25-7.28 (name "I32")))
+					(ty @7.33-7.36 (name "Str"))))))
+	(d-let (id 123)
+		(p-assign @15.1-15.10 (ident "getString") (id 111))
+		(e-lambda @15.13-15.29 (id 116)
 			(args
-				(p-assign @15-14-15-18 (ident "_opt") (id 111)))
-			(e-string @15-20-15-29
-				(e-literal @15-21-15-28 (string "default"))))
-		(annotation @15-1-15-10 (signature 120) (id 121)
+				(p-assign @15.14-15.18 (ident "_opt") (id 112)))
+			(e-string @15.20-15.29
+				(e-literal @15.21-15.28 (string "default"))))
+		(annotation @15.1-15.10 (signature 121) (id 122)
 			(declared-type
-				(ty-fn @14-13-14-31 (effectful false)
-					(ty-apply @14-13-14-24 (symbol "Option")
-						(ty @14-20-14-23 (name "Str")))
-					(ty @14-28-14-31 (name "Str"))))))
-	(d-let (id 138)
-		(p-assign @18-1-18-10 (ident "getNumber") (id 127))
-		(e-lambda @18-13-18-21 (id 131)
+				(ty-fn @14.13-14.31 (effectful false)
+					(ty-apply @14.13-14.24 (symbol "Option")
+						(ty @14.20-14.23 (name "Str")))
+					(ty @14.28-14.31 (name "Str"))))))
+	(d-let (id 139)
+		(p-assign @18.1-18.10 (ident "getNumber") (id 128))
+		(e-lambda @18.13-18.21 (id 132)
 			(args
-				(p-assign @18-14-18-18 (ident "_opt") (id 128)))
-			(e-int @18-20-18-21 (value "0")))
-		(annotation @18-1-18-10 (signature 136) (id 137)
+				(p-assign @18.14-18.18 (ident "_opt") (id 129)))
+			(e-int @18.20-18.21 (value "0")))
+		(annotation @18.1-18.10 (signature 137) (id 138)
 			(declared-type
-				(ty-fn @17-13-17-31 (effectful false)
-					(ty-apply @17-13-17-24 (symbol "Option")
-						(ty @17-20-17-23 (name "I32")))
-					(ty @17-28-17-31 (name "I32"))))))
-	(d-let (id 144)
-		(p-assign @20-1-20-6 (ident "main!") (id 139))
-		(e-lambda @20-9-20-15 (id 143)
+				(ty-fn @17.13-17.31 (effectful false)
+					(ty-apply @17.13-17.24 (symbol "Option")
+						(ty @17.20-17.23 (name "I32")))
+					(ty @17.28-17.31 (name "I32"))))))
+	(d-let (id 145)
+		(p-assign @20.1-20.6 (ident "main!") (id 140))
+		(e-lambda @20.9-20.15 (id 144)
 			(args
-				(p-underscore @20-10-20-11 (id 140)))
-			(e-empty_record @20-13-20-15)))
-	(s-type-decl @4-1-7-8 (id 80)
-		(ty-header @4-1-4-18 (name "MyResult")
+				(p-underscore @20.10-20.11 (id 141)))
+			(e-empty_record @20.13-20.15)))
+	(s-type-decl @4.1-7.8 (id 81)
+		(ty-header @4.1-4.18 (name "MyResult")
 			(ty-args
-				(ty-var @4-10-4-12 (name "ok"))
-				(ty-var @4-14-4-17 (name "err"))))
-		(ty-tag-union @4-21-4-41
-			(ty-apply @4-22-4-30 (symbol "Good")
-				(ty-var @4-27-4-29 (name "ok")))
-			(ty-apply @4-32-4-40 (symbol "Bad")
-				(ty-var @4-36-4-39 (name "err")))))
-	(s-type-decl @11-1-14-10 (id 87)
-		(ty-header @11-1-11-10 (name "Option")
+				(ty-var @4.10-4.12 (name "ok"))
+				(ty-var @4.14-4.17 (name "err"))))
+		(ty-tag-union @4.21-4.41
+			(ty-apply @4.22-4.30 (symbol "Good")
+				(ty-var @4.27-4.29 (name "ok")))
+			(ty-apply @4.32-4.40 (symbol "Bad")
+				(ty-var @4.36-4.39 (name "err")))))
+	(s-type-decl @11.1-14.10 (id 88)
+		(ty-header @11.1-11.10 (name "Option")
 			(ty-args
-				(ty-var @11-8-11-9 (name "a"))))
-		(ty-tag-union @11-13-11-28
-			(ty-apply @11-14-11-21 (symbol "Some")
-				(ty-var @11-19-11-20 (name "a")))
-			(ty @11-23-11-27 (name "None")))))
+				(ty-var @11.8-11.9 (name "a"))))
+		(ty-tag-union @11.13-11.28
+			(ty-apply @11.14-11.21 (symbol "Some")
+				(ty-var @11.19-11.20 (name "a")))
+			(ty @11.23-11.27 (name "None")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "process") (def_var 105) (type "MyResult -> Str"))
-		(d_assign (name "getString") (def_var 122) (type "Option -> Str"))
-		(d_assign (name "getNumber") (def_var 138) (type "Option -> I32"))
-		(d_assign (name "main!") (def_var 144) (type "* ? {}")))
+		(d_assign (name "process") (def_var 106) (type "MyResult -> Str"))
+		(d_assign (name "getString") (def_var 123) (type "Option -> Str"))
+		(d_assign (name "getNumber") (def_var 139) (type "Option -> I32"))
+		(d_assign (name "main!") (def_var 145) (type "* ? {}")))
 	(expressions
-		(expr @8-11-8-32 (type "MyResult -> Str"))
-		(expr @15-13-15-29 (type "Option -> Str"))
-		(expr @18-13-18-21 (type "Option -> I32"))
-		(expr @20-9-20-15 (type "* ? {}"))))
+		(expr @8.11-8.32 (type "MyResult -> Str"))
+		(expr @15.13-15.29 (type "Option -> Str"))
+		(expr @18.13-18.21 (type "Option -> I32"))
+		(expr @20.9-20.15 (type "* ? {}"))))
 ~~~

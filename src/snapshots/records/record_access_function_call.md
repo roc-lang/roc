@@ -18,12 +18,12 @@ OpenRound(1:1-1:2),LowerIdent(1:2-1:8),NoSpaceDotLowerIdent(1:8-1:18),CloseRound
 ~~~
 # PARSE
 ~~~clojure
-(e-apply @1-1-1-23
-	(e-tuple @1-1-1-19
-		(e-field-access @1-2-1-19
-			(e-ident @1-2-1-8 (qaul "") (raw "person"))
-			(e-ident @1-8-1-18 (qaul "") (raw ".transform"))))
-	(e-int @1-20-1-22 (raw "42")))
+(e-apply @1.1-1.23
+	(e-tuple @1.1-1.19
+		(e-field-access @1.2-1.19
+			(e-ident @1.2-1.8 (qaul "") (raw "person"))
+			(e-ident @1.8-1.18 (qaul "") (raw ".transform"))))
+	(e-int @1.20-1.22 (raw "42")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -31,15 +31,15 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call @1-1-1-23 (id 78)
-	(e-tuple @1-1-1-19
+(e-call @1.1-1.23 (id 79)
+	(e-tuple @1.1-1.19
 		(elems
-			(e-dot-access @1-2-1-19 (field "transform")
+			(e-dot-access @1.2-1.19 (field "transform")
 				(receiver
 					(e-runtime-error (tag "ident_not_in_scope"))))))
-	(e-int @1-20-1-22 (value "42")))
+	(e-int @1.20-1.22 (value "42")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 78) (type "*"))
+(expr (id 79) (type "*"))
 ~~~

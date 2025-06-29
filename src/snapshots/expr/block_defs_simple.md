@@ -23,19 +23,19 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 ~~~
 # PARSE
 ~~~clojure
-(e-block @1-1-5-2
+(e-block @1.1-5.2
 	(statements
-		(s-decl @2-5-2-11
-			(p-ident @2-5-2-6 (raw "x"))
-			(e-int @2-9-2-11 (raw "42")))
-		(s-decl @3-5-4-6
-			(p-ident @3-5-3-6 (raw "y"))
-			(e-binop @3-9-4-6 (op "+")
-				(e-ident @3-9-3-10 (qaul "") (raw "x"))
-				(e-int @3-13-3-14 (raw "1"))))
-		(e-binop @4-5-5-2 (op "*")
-			(e-ident @4-5-4-6 (qaul "") (raw "y"))
-			(e-int @4-9-4-10 (raw "2")))))
+		(s-decl @2.5-2.11
+			(p-ident @2.5-2.6 (raw "x"))
+			(e-int @2.9-2.11 (raw "42")))
+		(s-decl @3.5-4.6
+			(p-ident @3.5-3.6 (raw "y"))
+			(e-binop @3.9-4.6 (op "+")
+				(e-ident @3.9-3.10 (qaul "") (raw "x"))
+				(e-int @3.13-3.14 (raw "1"))))
+		(e-binop @4.5-5.2 (op "*")
+			(e-ident @4.5-4.6 (qaul "") (raw "y"))
+			(e-int @4.9-4.10 (raw "2")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -47,22 +47,22 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1-1-5-2 (id 83)
-	(s-let @2-5-2-11
-		(p-assign @2-5-2-6 (ident "x") (id 72))
-		(e-int @2-9-2-11 (value "42") (id 73)))
-	(s-let @3-5-4-6
-		(p-assign @3-5-3-6 (ident "y") (id 75))
-		(e-binop @3-9-4-6 (op "add") (id 78)
-			(e-lookup-local @3-9-3-10
-				(pattern (id 72)))
-			(e-int @3-13-3-14 (value "1"))))
-	(e-binop @4-5-5-2 (op "mul")
-		(e-lookup-local @4-5-4-6
-			(pattern (id 75)))
-		(e-int @4-9-4-10 (value "2"))))
+(e-block @1.1-5.2 (id 84)
+	(s-let @2.5-2.11
+		(p-assign @2.5-2.6 (ident "x") (id 73))
+		(e-int @2.9-2.11 (value "42") (id 74)))
+	(s-let @3.5-4.6
+		(p-assign @3.5-3.6 (ident "y") (id 76))
+		(e-binop @3.9-4.6 (op "add") (id 79)
+			(e-lookup-local @3.9-3.10
+				(pattern (id 73)))
+			(e-int @3.13-3.14 (value "1"))))
+	(e-binop @4.5-5.2 (op "mul")
+		(e-lookup-local @4.5-4.6
+			(pattern (id 76)))
+		(e-int @4.9-4.10 (value "2"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 83) (type "*"))
+(expr (id 84) (type "*"))
 ~~~

@@ -521,348 +521,348 @@ CloseCurly(121:1-121:2),EndOfFile(121:2-121:2),
 ~~~
 # PARSE
 ~~~clojure
-(file @1-2-121-2
-	(app @2-1-2-33
-		(provides @2-6-2-12
+(file @1.2-121.2
+	(app @2.1-2.33
+		(provides @2.6-2.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @2-15-2-33 (name "pf")
-			(e-string @2-28-2-31
-				(e-string-part @2-29-2-30 (raw "c"))))
-		(packages @2-13-2-33
-			(record-field @2-15-2-33 (name "pf")
-				(e-string @2-28-2-31
-					(e-string-part @2-29-2-30 (raw "c"))))))
+		(record-field @2.15-2.33 (name "pf")
+			(e-string @2.28-2.31
+				(e-string-part @2.29-2.30 (raw "c"))))
+		(packages @2.13-2.33
+			(record-field @2.15-2.33 (name "pf")
+				(e-string @2.28-2.31
+					(e-string-part @2.29-2.30 (raw "c"))))))
 	(statements
-		(s-import @4-1-4-34 (module ".Stdout") (qualifier "pf")
+		(s-import @4.1-4.34 (module ".Stdout") (qualifier "pf")
 			(exposing
 				(exposed-lower-ident (text "line!"))))
-		(s-import @6-1-8-6 (module "Stdot")
+		(s-import @6.1-8.6 (module "Stdot")
 			(exposing
 				(exposed-upper-ident (text "Cust"))))
-		(s-import @10-1-10-19 (module "Bae") (alias "Gooe"))
-		(s-import @11-1-12-4 (module "Ba"))
-		(s-type-decl @13-1-14-6
-			(header @13-1-13-10 (name "Map")
+		(s-import @10.1-10.19 (module "Bae") (alias "Gooe"))
+		(s-import @11.1-12.4 (module "Ba"))
+		(s-type-decl @13.1-14.6
+			(header @13.1-13.10 (name "Map")
 				(args
-					(ty-var @13-5-13-6 (raw "a"))
-					(ty-var @13-8-13-9 (raw "b"))))
-			(ty-fn @13-13-13-33
+					(ty-var @13.5-13.6 (raw "a"))
+					(ty-var @13.8-13.9 (raw "b"))))
+			(ty-fn @13.13-13.33
 				(ty (name "Lis"))
-				(ty-tuple @13-18-13-22
-					(ty-var @13-19-13-21 (raw "ab")))
-				(ty-apply @13-26-13-33
+				(ty-tuple @13.18-13.22
+					(ty-var @13.19-13.21 (raw "ab")))
+				(ty-apply @13.26-13.33
 					(ty (name "List"))
-					(ty-var @13-31-13-32 (raw "b")))))
-		(s-type-decl @14-1-22-5
-			(header @14-1-15-2 (name "MapML")
+					(ty-var @13.31-13.32 (raw "b")))))
+		(s-type-decl @14.1-22.5
+			(header @14.1-15.2 (name "MapML")
 				(args))
-			(ty-fn @17-3-20-15
-				(ty-apply @17-3-18-4
+			(ty-fn @17.3-20.15
+				(ty-apply @17.3-18.4
 					(ty (name "List")))
-				(ty-tuple @19-3-19-7
-					(ty-var @19-4-19-6 (raw "ab")))
-				(ty-apply @20-4-20-15
+				(ty-tuple @19.3-19.7
+					(ty-var @19.4-19.6 (raw "ab")))
+				(ty-apply @20.4-20.15
 					(ty (name "List"))
-					(ty-var @20-12-20-13 (raw "b")))))
-		(s-type-anno @22-1-24-4 (name "line")
-			(ty-tuple @22-8-23-2))
-		(s-type-decl @24-1-25-3
-			(header @24-1-24-4 (name "Som")
+					(ty-var @20.12-20.13 (raw "b")))))
+		(s-type-anno @22.1-24.4 (name "line")
+			(ty-tuple @22.8-23.2))
+		(s-type-decl @24.1-25.3
+			(header @24.1-24.4 (name "Som")
 				(args))
-			(ty-record @24-7-24-27
-				(anno-record-field @24-9-24-17 (name "foo")
+			(ty-record @24.7-24.27
+				(anno-record-field @24.9-24.17 (name "foo")
 					(ty (name "O")))
-				(anno-record-field @24-18-24-27 (name "bar")
-					(ty-var @24-24-24-25 (raw "g")))))
-		(s-type-decl @25-1-28-6
-			(header @25-1-25-6 (name "Ml")
+				(anno-record-field @24.18-24.27 (name "bar")
+					(ty-var @24.24-24.25 (raw "g")))))
+		(s-type-decl @25.1-28.6
+			(header @25.1-25.6 (name "Ml")
 				(args
-					(ty-var @25-4-25-5 (raw "a"))))
-			(ty-record @25-9-26-2))
-		(s-type-decl @28-1-30-6
-			(header @28-1-28-9 (name "Soine")
+					(ty-var @25.4-25.5 (raw "a"))))
+			(ty-record @25.9-26.2))
+		(s-type-decl @28.1-30.6
+			(header @28.1-28.9 (name "Soine")
 				(args
-					(ty-var @28-7-28-8 (raw "a"))))
-			(ty-record @28-12-29-2))
-		(s-type-decl @30-1-32-7
-			(header @30-1-30-9 (name "Maybe")
+					(ty-var @28.7-28.8 (raw "a"))))
+			(ty-record @28.12-29.2))
+		(s-type-decl @30.1-32.7
+			(header @30.1-30.9 (name "Maybe")
 				(args
-					(ty-var @30-7-30-8 (raw "a"))))
-			(ty-tag-union @30-12-30-19
+					(ty-var @30.7-30.8 (raw "a"))))
+			(ty-tag-union @30.12-30.19
 				(tags
 					(ty (name "Somne")))))
-		(s-type-decl @32-1-35-4
-			(header @32-1-32-10 (name "Mayine")
+		(s-type-decl @32.1-35.4
+			(header @32.1-32.10 (name "Mayine")
 				(args
-					(ty-var @32-8-32-9 (raw "a"))))
-			(ty-tag-union @32-13-33-2
+					(ty-var @32.8-32.9 (raw "a"))))
+			(ty-tag-union @32.13-33.2
 				(tags)))
-		(s-decl @35-1-37-4
-			(p-ident @35-1-35-4 (raw "ane"))
-			(e-lambda @35-7-37-4
+		(s-decl @35.1-37.4
+			(p-ident @35.1-35.4 (raw "ane"))
+			(e-lambda @35.7-37.4
 				(args
-					(p-ident @35-8-35-11 (raw "num")))
-				(e-if-then-else @35-13-37-4
-					(e-ident @35-16-35-19 (qaul "") (raw "num"))
-					(e-int @35-20-35-21 (raw "2"))
-					(e-int @35-27-35-28 (raw "5")))))
-		(s-type-anno @37-1-38-4 (name "one")
+					(p-ident @35.8-35.11 (raw "num")))
+				(e-if-then-else @35.13-37.4
+					(e-ident @35.16-35.19 (qaul "") (raw "num"))
+					(e-int @35.20-35.21 (raw "2"))
+					(e-int @35.27-35.28 (raw "5")))))
+		(s-type-anno @37.1-38.4 (name "one")
 			(ty (name "U6")))
-		(s-decl @38-1-47-2
-			(p-ident @38-1-38-4 (raw "add"))
-			(e-lambda @38-7-47-2
+		(s-decl @38.1-47.2
+			(p-ident @38.1-38.4 (raw "add"))
+			(e-lambda @38.7-47.2
 				(args
-					(p-ident @38-8-38-11 (raw "num")))
-				(e-block @38-13-47-2
+					(p-ident @38.8-38.11 (raw "num")))
+				(e-block @38.13-47.2
 					(statements
-						(e-int @39-2-39-3 (raw "1"))
-						(e-if-then-else @40-2-47-2
-							(e-ident @40-5-40-8 (qaul "") (raw "num"))
-							(e-block @40-9-43-3
+						(e-int @39.2-39.3 (raw "1"))
+						(e-if-then-else @40.2-47.2
+							(e-ident @40.5-40.8 (qaul "") (raw "num"))
+							(e-block @40.9-43.3
 								(statements
 									(e-dbg
-										(e-ident @42-4-42-5 (qaul "") (raw "s")))
-									(e-ident @42-6-42-10 (qaul "") (raw "exp0"))))
-							(e-block @43-9-46-3
+										(e-ident @42.4-42.5 (qaul "") (raw "s")))
+									(e-ident @42.6-42.10 (qaul "") (raw "exp0"))))
+							(e-block @43.9-46.3
 								(statements
 									(e-dbg
-										(e-int @44-7-44-10 (raw "123")))
-									(e-ident @45-3-45-4 (qaul "") (raw "r")))))))))
-		(s-decl @49-1-71-7
-			(p-ident @49-1-49-3 (raw "me"))
-			(e-lambda @49-6-71-7
+										(e-int @44.7-44.10 (raw "123")))
+									(e-ident @45.3-45.4 (qaul "") (raw "r")))))))))
+		(s-decl @49.1-71.7
+			(p-ident @49.1-49.3 (raw "me"))
+			(e-lambda @49.6-71.7
 				(args
-					(p-ident @50-2-50-3 (raw "a"))
-					(p-tag @50-5-50-7 (raw "Tb")))
+					(p-ident @50.2-50.3 (raw "a"))
+					(p-tag @50.5-50.7 (raw "Tb")))
 				(e-match
-					(e-ident @52-8-52-9 (qaul "") (raw "a"))
+					(e-ident @52.8-52.9 (qaul "") (raw "a"))
 					(branches
-						(branch @52-11-55-7
-							(p-ident @52-11-52-14 (raw "lue"))
-							(e-block @52-16-54-4
+						(branch @52.11-55.7
+							(p-ident @52.11-52.14 (raw "lue"))
+							(e-block @52.16-54.4
 								(statements
-									(e-ident @53-2-53-3 (qaul "") (raw "x")))))
-						(branch @55-3-57-4
-							(p-tag @55-3-55-7 (raw "Blue"))
-							(e-block @55-10-56-5
+									(e-ident @53.2-53.3 (qaul "") (raw "x")))))
+						(branch @55.3-57.4
+							(p-tag @55.3-55.7 (raw "Blue"))
+							(e-block @55.10-56.5
 								(statements
-									(e-ident @55-11-55-12 (qaul "") (raw "x")))))
-						(branch @57-2-58-7
-							(p-ident @57-2-57-4 (raw "er"))
-							(e-int @58-4-58-5 (raw "1")))
-						(branch @58-6-58-18
-							(p-string @58-6-58-7 (raw """))
-							(e-int @58-15-58-17 (raw "20")))
-						(branch @58-17-60-4
-							(p-list @58-17-58-22
-								(p-int @58-18-58-19 (raw "1")))
-							(e-ident @59-3-59-7 (qaul "") (raw "ment")))
-						(branch @60-3-61-4
-							(p-list @60-3-60-16
-								(p-int @60-4-60-5 (raw "1"))
-								(p-int @60-7-60-8 (raw "2"))
-								(p-int @60-10-60-11 (raw "3"))
-								(p-ident @60-12-60-15 (raw "est")))
-							(e-int @60-16-60-19 (raw "123")))
-						(branch @61-3-63-6
-							(p-list @61-3-62-4)
-							(e-int @62-5-62-7 (raw "23")))
-						(branch @63-3-64-7
-							(p-frac @63-3-63-6 (raw "3.1"))
-							(e-int @63-7-63-10 (raw "314")))
-						(branch @64-3-65-4
+									(e-ident @55.11-55.12 (qaul "") (raw "x")))))
+						(branch @57.2-58.7
+							(p-ident @57.2-57.4 (raw "er"))
+							(e-int @58.4-58.5 (raw "1")))
+						(branch @58.6-58.18
+							(p-string @58.6-58.7 (raw """))
+							(e-int @58.15-58.17 (raw "20")))
+						(branch @58.17-60.4
+							(p-list @58.17-58.22
+								(p-int @58.18-58.19 (raw "1")))
+							(e-ident @59.3-59.7 (qaul "") (raw "ment")))
+						(branch @60.3-61.4
+							(p-list @60.3-60.16
+								(p-int @60.4-60.5 (raw "1"))
+								(p-int @60.7-60.8 (raw "2"))
+								(p-int @60.10-60.11 (raw "3"))
+								(p-ident @60.12-60.15 (raw "est")))
+							(e-int @60.16-60.19 (raw "123")))
+						(branch @61.3-63.6
+							(p-list @61.3-62.4)
+							(e-int @62.5-62.7 (raw "23")))
+						(branch @63.3-64.7
+							(p-frac @63.3-63.6 (raw "3.1"))
+							(e-int @63.7-63.10 (raw "314")))
+						(branch @64.3-65.4
 							(p-alternatives
-								(p-frac @64-3-64-7 (raw "3.14"))
-								(p-frac @64-10-64-14 (raw "6.28")))
-							(e-int @64-18-64-21 (raw "314")))
-						(branch @65-3-66-4
-							(p-tuple @65-3-65-8
-								(p-int @65-4-65-5 (raw "1")))
-							(e-int @65-12-65-15 (raw "123")))
-						(branch @66-3-67-4
-							(p-tuple @66-3-66-12
-								(p-int @66-4-66-5 (raw "1"))
-								(p-int @66-7-66-8 (raw "2"))
-								(p-int @66-10-66-11 (raw "3")))
-							(e-int @66-12-66-15 (raw "123")))
-						(branch @67-3-68-5
-							(p-record @67-3-67-7)
-							(e-int @67-11-67-13 (raw "12")))
-						(branch @68-3-69-3
-							(p-tag @68-3-68-10 (raw "Ok")
-								(p-int @68-6-68-9 (raw "123")))
-							(e-int @68-14-68-16 (raw "12")))))))
-		(s-expect @71-1-74-6
-			(e-ident @72-2-72-4 (qaul "") (raw "nt")))
-		(s-type-anno @74-1-75-3 (name "main!")
-			(ty-apply @74-9-74-22
+								(p-frac @64.3-64.7 (raw "3.14"))
+								(p-frac @64.10-64.14 (raw "6.28")))
+							(e-int @64.18-64.21 (raw "314")))
+						(branch @65.3-66.4
+							(p-tuple @65.3-65.8
+								(p-int @65.4-65.5 (raw "1")))
+							(e-int @65.12-65.15 (raw "123")))
+						(branch @66.3-67.4
+							(p-tuple @66.3-66.12
+								(p-int @66.4-66.5 (raw "1"))
+								(p-int @66.7-66.8 (raw "2"))
+								(p-int @66.10-66.11 (raw "3")))
+							(e-int @66.12-66.15 (raw "123")))
+						(branch @67.3-68.5
+							(p-record @67.3-67.7)
+							(e-int @67.11-67.13 (raw "12")))
+						(branch @68.3-69.3
+							(p-tag @68.3-68.10 (raw "Ok")
+								(p-int @68.6-68.9 (raw "123")))
+							(e-int @68.14-68.16 (raw "12")))))))
+		(s-expect @71.1-74.6
+			(e-ident @72.2-72.4 (qaul "") (raw "nt")))
+		(s-type-anno @74.1-75.3 (name "main!")
+			(ty-apply @74.9-74.22
 				(ty (name "Listlt"))
-				(ty-record @74-16-74-18)
+				(ty-record @74.16-74.18)
 				(_)))
-		(s-decl @75-1-111-2
-			(p-ident @75-1-75-3 (raw "ma"))
-			(e-lambda @75-5-111-2
+		(s-decl @75.1-111.2
+			(p-ident @75.1-75.3 (raw "ma"))
+			(e-lambda @75.5-111.2
 				(args
 					(p-underscore))
-				(e-block @75-9-111-2
+				(e-block @75.9-111.2
 					(statements
-						(e-ident @75-11-75-12 (qaul "") (raw "e"))
-						(s-decl @76-2-76-9
-							(p-ident @76-2-76-3 (raw "w"))
-							(e-string @76-6-76-9
-								(e-string-part @76-7-76-8 (raw "d"))))
-						(s-var @77-2-78-8 (name "er")
-							(e-int @77-11-77-14 (raw "123")))
-						(s-expect @78-2-79-8
-							(e-ident @78-9-78-14 (qaul "") (raw "blaue")))
-						(s-return @79-2-83-5
-							(e-ident @80-3-80-6 (qaul "") (raw "tag")))
+						(e-ident @75.11-75.12 (qaul "") (raw "e"))
+						(s-decl @76.2-76.9
+							(p-ident @76.2-76.3 (raw "w"))
+							(e-string @76.6-76.9
+								(e-string-part @76.7-76.8 (raw "d"))))
+						(s-var @77.2-78.8 (name "er")
+							(e-int @77.11-77.14 (raw "123")))
+						(s-expect @78.2-79.8
+							(e-ident @78.9-78.14 (qaul "") (raw "blaue")))
+						(s-return @79.2-83.5
+							(e-ident @80.3-80.6 (qaul "") (raw "tag")))
 						(e-ellipsis)
-						(e-apply @84-2-86-3
-							(e-ident @84-2-84-4 (qaul "") (raw "me"))
+						(e-apply @84.2-86.3
+							(e-ident @84.2-84.4 (qaul "") (raw "me"))
 							(e-ellipsis))
-						(s-crash @86-3-86-12
-							(e-ident @86-9-86-11 (qaul "") (raw "ke")))
-						(e-string @86-11-86-17
-							(e-string-part @86-12-86-16 (raw "Unr!")))
-						(s-decl @87-2-87-14
-							(p-ident @87-2-87-3 (raw "i"))
-							(e-string @87-5-87-14
-								(e-string-part @87-6-87-9 (raw "H, "))
-								(e-ident @87-11-87-12 (qaul "") (raw "d"))
-								(e-string-part @87-13-87-13 (raw ""))))
-						(s-decl @88-1-91-3
-							(p-ident @88-1-88-2 (raw "t"))
-							(e-list @88-5-91-3
-								(e-apply @89-3-89-14
-									(e-ident @89-3-89-6 (qaul "") (raw "one"))
-									(e-ident @89-7-89-9 (qaul "") (raw "er")))
-								(e-int @89-16-89-19 (raw "456"))
-								(e-int @90-1-90-2 (raw "9"))))
+						(s-crash @86.3-86.12
+							(e-ident @86.9-86.11 (qaul "") (raw "ke")))
+						(e-string @86.11-86.17
+							(e-string-part @86.12-86.16 (raw "Unr!")))
+						(s-decl @87.2-87.14
+							(p-ident @87.2-87.3 (raw "i"))
+							(e-string @87.5-87.14
+								(e-string-part @87.6-87.9 (raw "H, "))
+								(e-ident @87.11-87.12 (qaul "") (raw "d"))
+								(e-string-part @87.13-87.13 (raw ""))))
+						(s-decl @88.1-91.3
+							(p-ident @88.1-88.2 (raw "t"))
+							(e-list @88.5-91.3
+								(e-apply @89.3-89.14
+									(e-ident @89.3-89.6 (qaul "") (raw "one"))
+									(e-ident @89.7-89.9 (qaul "") (raw "er")))
+								(e-int @89.16-89.19 (raw "456"))
+								(e-int @90.1-90.2 (raw "9"))))
 						(s-for
-							(p-ident @92-6-92-7 (raw "n"))
-							(e-ident @92-11-92-15 (qaul "") (raw "list"))
-							(e-block @92-16-95-3
+							(p-ident @92.6-92.7 (raw "n"))
+							(e-ident @92.11-92.15 (qaul "") (raw "list"))
+							(e-block @92.16-95.3
 								(statements
-									(e-apply @93-2-93-27
-										(e-ident @93-2-93-7 (qaul "") (raw "line!"))
-										(e-string @93-8-93-26
-											(e-string-part @93-9-93-12 (raw "Ag "))
-											(e-ident @93-14-93-15 (qaul "") (raw "n"))
-											(e-string-part @93-16-93-20 (raw " to "))
-											(e-ident @93-22-93-24 (qaul "") (raw "er"))
-											(e-string-part @93-25-93-25 (raw ""))))
-									(e-binop @94-3-95-3 (op "+")
-										(e-ident @94-3-94-6 (qaul "") (raw "ber"))
-										(e-ident @94-9-94-10 (qaul "") (raw "n"))))))
-						(s-decl @96-2-96-59
-							(p-ident @96-2-96-4 (raw "rd"))
-							(e-record @96-7-96-59
+									(e-apply @93.2-93.27
+										(e-ident @93.2-93.7 (qaul "") (raw "line!"))
+										(e-string @93.8-93.26
+											(e-string-part @93.9-93.12 (raw "Ag "))
+											(e-ident @93.14-93.15 (qaul "") (raw "n"))
+											(e-string-part @93.16-93.20 (raw " to "))
+											(e-ident @93.22-93.24 (qaul "") (raw "er"))
+											(e-string-part @93.25-93.25 (raw ""))))
+									(e-binop @94.3-95.3 (op "+")
+										(e-ident @94.3-94.6 (qaul "") (raw "ber"))
+										(e-ident @94.9-94.10 (qaul "") (raw "n"))))))
+						(s-decl @96.2-96.59
+							(p-ident @96.2-96.4 (raw "rd"))
+							(e-record @96.7-96.59
 								(field (field "foo") (optional false)
-									(e-int @96-14-96-17 (raw "123")))
+									(e-int @96.14-96.17 (raw "123")))
 								(field (field "bar") (optional false)
-									(e-string @96-24-96-27
-										(e-string-part @96-25-96-26 (raw "H"))))
+									(e-string @96.24-96.27
+										(e-string-part @96.25-96.26 (raw "H"))))
 								(field (field "baz") (optional false)
-									(e-ident @96-34-96-37 (qaul "") (raw "tag")))
+									(e-ident @96.34-96.37 (qaul "") (raw "tag")))
 								(field (field "qux") (optional false)
-									(e-apply @96-44-96-53
-										(e-tag @96-44-96-46 (raw "Ok"))
-										(e-ident @96-47-96-52 (qaul "") (raw "world"))))
+									(e-apply @96.44-96.53
+										(e-tag @96.44-96.46 (raw "Ok"))
+										(e-ident @96.47-96.52 (qaul "") (raw "world"))))
 								(field (field "ned") (optional false))))
-						(s-decl @97-2-97-48
-							(p-ident @97-2-97-3 (raw "t"))
-							(e-tuple @97-6-97-48
-								(e-int @97-7-97-10 (raw "123"))
-								(e-string @97-12-97-19
-									(e-string-part @97-13-97-18 (raw "World")))
-								(e-ident @97-21-97-24 (qaul "") (raw "tag"))
-								(e-tag @97-26-97-27 (raw "O"))
-								(e-tuple @97-29-97-36
-									(e-ident @97-30-97-32 (qaul "") (raw "nd"))
-									(e-ident @97-34-97-35 (qaul "") (raw "t")))
-								(e-list @97-38-97-47
-									(e-int @97-39-97-40 (raw "1"))
-									(e-int @97-42-97-43 (raw "2"))
-									(e-int @97-45-97-46 (raw "3")))))
-						(e-ident @98-2-98-3 (qaul "") (raw "m"))
-						(e-tuple @98-4-104-3
-							(e-int @99-3-99-6 (raw "123"))
-							(e-string @100-3-100-10
-								(e-string-part @100-4-100-9 (raw "World")))
-							(e-ident @100-11-100-14 (qaul "") (raw "ag1"))
-							(e-tag @101-3-101-4 (raw "O"))
-							(e-tuple @102-3-102-14
-								(e-ident @102-4-102-6 (qaul "") (raw "ne"))
-								(e-ident @102-8-102-13 (qaul "") (raw "tuple")))
-							(e-list @103-3-103-12
-								(e-int @103-4-103-5 (raw "1"))
-								(e-int @103-7-103-8 (raw "2"))
-								(e-int @103-10-103-11 (raw "3"))))
-						(e-binop @105-2-105-59 (op "or")
-							(e-binop @105-2-105-46 (op "or")
-								(e-binop @105-2-105-15 (op ">")
-									(e-binop @105-2-105-10 (op "??")
-										(e-ident @105-2-105-3 (qaul "") (raw "b"))
-										(e-int @105-6-105-8 (raw "12")))
-									(e-int @105-11-105-12 (raw "5")))
-								(e-binop @105-16-105-46 (op "and")
-									(e-binop @105-16-105-30 (op "<")
-										(e-binop @105-16-105-24 (op "+")
-											(e-int @105-16-105-18 (raw "13"))
-											(e-int @105-21-105-22 (raw "2")))
-										(e-int @105-25-105-26 (raw "5")))
-									(e-binop @105-31-105-46 (op ">=")
-										(e-binop @105-31-105-40 (op "-")
-											(e-int @105-31-105-33 (raw "10"))
-											(e-int @105-36-105-37 (raw "1")))
-										(e-int @105-41-105-43 (raw "16")))))
-							(e-binop @105-47-105-59 (op "<=")
-								(e-int @105-47-105-49 (raw "12"))
-								(e-int @105-53-105-54 (raw "3"))))
-						(e-field-access @105-55-106-7
-							(e-field-access @105-55-105-84
-								(e-field-access @105-55-105-76
-									(e-question-suffix @105-55-105-66
-										(e-apply @105-55-105-65
-											(e-ident @105-55-105-59 (qaul "") (raw "e_fn"))
-											(e-ident @105-60-105-64 (qaul "") (raw "arg1"))))
-									(e-question-suffix @105-66-105-72
-										(e-apply @105-66-105-71
-											(e-ident @105-66-105-69 (qaul "") (raw ".od")))))
-								(e-question-suffix @105-72-105-79
-									(e-apply @105-72-105-78
-										(e-ident @105-72-105-76 (qaul "") (raw ".ned")))))
-							(e-question-suffix @105-79-105-85
-								(e-ident @105-79-105-84 (qaul "") (raw ".recd"))))
-						(e-apply @106-2-110-3
-							(e-tag @106-2-106-7 (raw "Stdo!"))
-							(e-string @107-3-109-6
-								(e-string-part @107-4-107-6 (raw "Ho"))
-								(e-apply @108-4-108-9
-									(e-ident @108-4-108-5 (qaul "") (raw "r"))
-									(e-ident @108-6-108-8 (qaul "") (raw "nu")))
-								(e-string-part @109-4-109-5 (raw " "))))))))
-		(s-type-anno @113-1-114-2 (name "y")
-			(ty-record @113-5-113-7))
-		(s-decl @114-1-114-7
-			(p-ident @114-1-114-2 (raw "e"))
-			(e-record @114-5-114-7))
-		(s-type-anno @116-1-118-7 (name "t")
-			(ty-apply @116-5-116-13
+						(s-decl @97.2-97.48
+							(p-ident @97.2-97.3 (raw "t"))
+							(e-tuple @97.6-97.48
+								(e-int @97.7-97.10 (raw "123"))
+								(e-string @97.12-97.19
+									(e-string-part @97.13-97.18 (raw "World")))
+								(e-ident @97.21-97.24 (qaul "") (raw "tag"))
+								(e-tag @97.26-97.27 (raw "O"))
+								(e-tuple @97.29-97.36
+									(e-ident @97.30-97.32 (qaul "") (raw "nd"))
+									(e-ident @97.34-97.35 (qaul "") (raw "t")))
+								(e-list @97.38-97.47
+									(e-int @97.39-97.40 (raw "1"))
+									(e-int @97.42-97.43 (raw "2"))
+									(e-int @97.45-97.46 (raw "3")))))
+						(e-ident @98.2-98.3 (qaul "") (raw "m"))
+						(e-tuple @98.4-104.3
+							(e-int @99.3-99.6 (raw "123"))
+							(e-string @100.3-100.10
+								(e-string-part @100.4-100.9 (raw "World")))
+							(e-ident @100.11-100.14 (qaul "") (raw "ag1"))
+							(e-tag @101.3-101.4 (raw "O"))
+							(e-tuple @102.3-102.14
+								(e-ident @102.4-102.6 (qaul "") (raw "ne"))
+								(e-ident @102.8-102.13 (qaul "") (raw "tuple")))
+							(e-list @103.3-103.12
+								(e-int @103.4-103.5 (raw "1"))
+								(e-int @103.7-103.8 (raw "2"))
+								(e-int @103.10-103.11 (raw "3"))))
+						(e-binop @105.2-105.59 (op "or")
+							(e-binop @105.2-105.46 (op "or")
+								(e-binop @105.2-105.15 (op ">")
+									(e-binop @105.2-105.10 (op "??")
+										(e-ident @105.2-105.3 (qaul "") (raw "b"))
+										(e-int @105.6-105.8 (raw "12")))
+									(e-int @105.11-105.12 (raw "5")))
+								(e-binop @105.16-105.46 (op "and")
+									(e-binop @105.16-105.30 (op "<")
+										(e-binop @105.16-105.24 (op "+")
+											(e-int @105.16-105.18 (raw "13"))
+											(e-int @105.21-105.22 (raw "2")))
+										(e-int @105.25-105.26 (raw "5")))
+									(e-binop @105.31-105.46 (op ">=")
+										(e-binop @105.31-105.40 (op "-")
+											(e-int @105.31-105.33 (raw "10"))
+											(e-int @105.36-105.37 (raw "1")))
+										(e-int @105.41-105.43 (raw "16")))))
+							(e-binop @105.47-105.59 (op "<=")
+								(e-int @105.47-105.49 (raw "12"))
+								(e-int @105.53-105.54 (raw "3"))))
+						(e-field-access @105.55-106.7
+							(e-field-access @105.55-105.84
+								(e-field-access @105.55-105.76
+									(e-question-suffix @105.55-105.66
+										(e-apply @105.55-105.65
+											(e-ident @105.55-105.59 (qaul "") (raw "e_fn"))
+											(e-ident @105.60-105.64 (qaul "") (raw "arg1"))))
+									(e-question-suffix @105.66-105.72
+										(e-apply @105.66-105.71
+											(e-ident @105.66-105.69 (qaul "") (raw ".od")))))
+								(e-question-suffix @105.72-105.79
+									(e-apply @105.72-105.78
+										(e-ident @105.72-105.76 (qaul "") (raw ".ned")))))
+							(e-question-suffix @105.79-105.85
+								(e-ident @105.79-105.84 (qaul "") (raw ".recd"))))
+						(e-apply @106.2-110.3
+							(e-tag @106.2-106.7 (raw "Stdo!"))
+							(e-string @107.3-109.6
+								(e-string-part @107.4-107.6 (raw "Ho"))
+								(e-apply @108.4-108.9
+									(e-ident @108.4-108.5 (qaul "") (raw "r"))
+									(e-ident @108.6-108.8 (qaul "") (raw "nu")))
+								(e-string-part @109.4-109.5 (raw " "))))))))
+		(s-type-anno @113.1-114.2 (name "y")
+			(ty-record @113.5-113.7))
+		(s-decl @114.1-114.7
+			(p-ident @114.1-114.2 (raw "e"))
+			(e-record @114.5-114.7))
+		(s-type-anno @116.1-118.7 (name "t")
+			(ty-apply @116.5-116.13
 				(ty (name "V"))
-				(ty-tuple @116-7-116-12
-					(ty-var @116-8-116-9 (raw "a"))
-					(ty-var @116-10-116-11 (raw "c")))))
-		(s-expect @118-1-121-2
-			(e-block @118-8-121-2
+				(ty-tuple @116.7-116.12
+					(ty-var @116.8-116.9 (raw "a"))
+					(ty-var @116.10-116.11 (raw "c")))))
+		(s-expect @118.1-121.2
+			(e-block @118.8-121.2
 				(statements
-					(e-binop @119-2-120-2 (op "==")
-						(e-ident @119-2-119-5 (qaul "") (raw "foo"))
-						(e-int @119-9-119-10 (raw "1")))
-					(e-binop @120-1-121-2 (op "==")
-						(e-ident @120-1-120-2 (qaul "") (raw "h"))
-						(e-ident @120-6-120-9 (qaul "") (raw "foo"))))))))
+					(e-binop @119.2-120.2 (op "==")
+						(e-ident @119.2-119.5 (qaul "") (raw "foo"))
+						(e-int @119.9-119.10 (raw "1")))
+					(e-binop @120.1-121.2 (op "==")
+						(e-ident @120.1-120.2 (qaul "") (raw "h"))
+						(e-ident @120.6-120.9 (qaul "") (raw "foo"))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -1003,255 +1003,255 @@ expect {
 ~~~clojure
 (can-ir
 	(d-let (id 138)
-		(p-assign @35-1-35-4 (ident "ane") (id 127))
-		(e-lambda @35-7-37-4 (id 137)
+		(p-assign @35.1-35.4 (ident "ane") (id 128))
+		(e-lambda @35.7-37.4 (id 137)
 			(args
-				(p-assign @35-8-35-11 (ident "num") (id 128)))
-			(e-if @35-13-37-4 (cond-var 0) (branch-var 0)
+				(p-assign @35.8-35.11 (ident "num") (id 129)))
+			(e-if @35.13-37.4 (branch-var 134)
 				(if-branches
 					(if-branch
-						(e-lookup-local @35-16-35-19
-							(pattern (id 128)))
-						(e-int @35-20-35-21 (value "2"))))
+						(e-lookup-local @35.16-35.19
+							(pattern (id 129)))
+						(e-int @35.20-35.21 (value "2"))))
 				(if-else
-					(e-int @35-27-35-28 (value "5"))))))
-	(d-let (id 165)
-		(p-assign @38-1-38-4 (ident "add") (id 141))
-		(e-lambda @38-7-47-2 (id 164)
+					(e-int @35.27-35.28 (value "5"))))))
+	(d-let (id 164)
+		(p-assign @38.1-38.4 (ident "add") (id 141))
+		(e-lambda @38.7-47.2 (id 163)
 			(args
-				(p-assign @38-8-38-11 (ident "num") (id 142)))
-			(e-block @38-13-47-2
-				(s-expr @39-2-40-4
-					(e-int @39-2-39-3 (value "1")))
-				(e-if @40-2-47-2 (cond-var 0) (branch-var 0)
+				(p-assign @38.8-38.11 (ident "num") (id 142)))
+			(e-block @38.13-47.2
+				(s-expr @39.2-40.4
+					(e-int @39.2-39.3 (value "1")))
+				(e-if @40.2-47.2 (branch-var 159)
 					(if-branches
 						(if-branch
-							(e-lookup-local @40-5-40-8
+							(e-lookup-local @40.5-40.8
 								(pattern (id 142)))
-							(e-block @40-9-43-3
-								(s-expr @41-3-42-10
+							(e-block @40.9-43.3
+								(s-expr @41.3-42.10
 									(e-runtime-error (tag "not_implemented")))
 								(e-runtime-error (tag "ident_not_in_scope")))))
 					(if-else
-						(e-block @43-9-46-3
-							(s-expr @44-3-45-4
+						(e-block @43.9-46.3
+							(s-expr @44.3-45.4
 								(e-runtime-error (tag "not_implemented")))
 							(e-runtime-error (tag "ident_not_in_scope"))))))))
-	(d-let (id 175)
-		(p-assign @49-1-49-3 (ident "me") (id 166))
-		(e-lambda @49-6-71-7 (id 173)
+	(d-let (id 174)
+		(p-assign @49.1-49.3 (ident "me") (id 165))
+		(e-lambda @49.6-71.7 (id 172)
 			(args
-				(p-assign @50-2-50-3 (ident "a") (id 167))
-				(p-applied-tag @50-5-50-7 (id 169)))
+				(p-assign @50.2-50.3 (ident "a") (id 166))
+				(p-applied-tag @50.5-50.7 (id 168)))
 			(e-runtime-error (tag "not_implemented"))))
-	(d-let (id 345)
-		(p-assign @75-1-75-3 (ident "ma") (id 180))
-		(e-lambda @75-5-111-2 (id 344)
+	(d-let (id 344)
+		(p-assign @75.1-75.3 (ident "ma") (id 179))
+		(e-lambda @75.5-111.2 (id 343)
 			(args
-				(p-underscore @75-6-75-7 (id 181)))
-			(e-block @75-9-111-2
-				(s-expr @75-11-76-3
+				(p-underscore @75.6-75.7 (id 180)))
+			(e-block @75.9-111.2
+				(s-expr @75.11-76.3
 					(e-runtime-error (tag "ident_not_in_scope")))
-				(s-let @76-2-76-9
-					(p-assign @76-2-76-3 (ident "w") (id 185))
-					(e-string @76-6-76-9 (id 187)
-						(e-literal @76-7-76-8 (string "d"))))
-				(s-var @77-2-78-8
-					(p-assign @77-2-78-8 (ident "er") (id 190))
-					(e-int @77-11-77-14 (value "123") (id 189)))
-				(s-expr @83-2-84-4
+				(s-let @76.2-76.9
+					(p-assign @76.2-76.3 (ident "w") (id 184))
+					(e-string @76.6-76.9 (id 186)
+						(e-literal @76.7-76.8 (string "d"))))
+				(s-var @77.2-78.8
+					(p-assign @77.2-78.8 (ident "er") (id 189))
+					(e-int @77.11-77.14 (value "123") (id 188)))
+				(s-expr @83.2-84.4
 					(e-runtime-error (tag "not_implemented")))
-				(s-expr @84-2-86-8
-					(e-call @84-2-86-3
-						(e-lookup-local @84-2-84-4
-							(pattern (id 166)))
+				(s-expr @84.2-86.8
+					(e-call @84.2-86.3
+						(e-lookup-local @84.2-84.4
+							(pattern (id 165)))
 						(e-runtime-error (tag "not_implemented"))))
-				(s-expr @86-11-86-20
-					(e-string @86-11-86-17
-						(e-literal @86-12-86-16 (string "Unr!"))))
-				(s-let @87-2-87-14
-					(p-assign @87-2-87-3 (ident "i") (id 210))
-					(e-string @87-5-87-14 (id 215)
-						(e-literal @87-6-87-9 (string "H, "))
+				(s-expr @86.11-86.20
+					(e-string @86.11-86.17
+						(e-literal @86.12-86.16 (string "Unr!"))))
+				(s-let @87.2-87.14
+					(p-assign @87.2-87.3 (ident "i") (id 209))
+					(e-string @87.5-87.14 (id 214)
+						(e-literal @87.6-87.9 (string "H, "))
 						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-literal @87-13-87-13 (string ""))))
-				(s-let @88-1-91-3
-					(p-assign @88-1-88-2 (ident "t") (id 217))
-					(e-list @88-5-91-3 (elem-var 222) (id 225)
+						(e-literal @87.13-87.13 (string ""))))
+				(s-let @88.1-91.3
+					(p-assign @88.1-88.2 (ident "t") (id 216))
+					(e-list @88.5-91.3 (elem-var 221) (id 224)
 						(elems
-							(e-call @89-3-89-14
+							(e-call @89.3-89.14
 								(e-runtime-error (tag "ident_not_in_scope"))
-								(e-lookup-local @89-7-89-9
-									(pattern (id 190))))
-							(e-int @89-16-89-19 (value "456"))
-							(e-int @90-1-90-2 (value "9")))))
-				(s-let @96-2-96-59
-					(p-assign @96-2-96-4 (ident "rd") (id 229))
-					(e-record @96-7-96-59 (ext-var 248) (id 249)
+								(e-lookup-local @89.7-89.9
+									(pattern (id 189))))
+							(e-int @89.16-89.19 (value "456"))
+							(e-int @90.1-90.2 (value "9")))))
+				(s-let @96.2-96.59
+					(p-assign @96.2-96.4 (ident "rd") (id 228))
+					(e-record @96.7-96.59 (ext-var 247) (id 248)
 						(fields
 							(field (name "foo")
-								(e-int @96-14-96-17 (value "123")))
+								(e-int @96.14-96.17 (value "123")))
 							(field (name "bar")
-								(e-string @96-24-96-27
-									(e-literal @96-25-96-26 (string "H"))))
+								(e-string @96.24-96.27
+									(e-literal @96.25-96.26 (string "H"))))
 							(field (name "baz")
 								(e-runtime-error (tag "ident_not_in_scope")))
 							(field (name "qux")
-								(e-call @96-44-96-53
-									(e-tag @96-44-96-46 (ext-var 0) (name "Ok") (args "TODO"))
+								(e-call @96.44-96.53
+									(e-tag @96.44-96.46 (ext-var 0) (name "Ok") (args "TODO"))
 									(e-runtime-error (tag "ident_not_in_scope"))))
 							(field (name "ned")
 								(e-runtime-error (tag "ident_not_in_scope"))))))
-				(s-let @97-2-97-48
-					(p-assign @97-2-97-3 (ident "t") (id 256))
-					(e-tuple @97-6-97-48 (id 273)
+				(s-let @97.2-97.48
+					(p-assign @97.2-97.3 (ident "t") (id 255))
+					(e-tuple @97.6-97.48 (id 272)
 						(elems
-							(e-int @97-7-97-10 (value "123"))
-							(e-string @97-12-97-19
-								(e-literal @97-13-97-18 (string "World")))
+							(e-int @97.7-97.10 (value "123"))
+							(e-string @97.12-97.19
+								(e-literal @97.13-97.18 (string "World")))
 							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-tag @97-26-97-27 (ext-var 0) (name "O") (args "TODO"))
-							(e-tuple @97-29-97-36
+							(e-tag @97.26-97.27 (ext-var 0) (name "O") (args "TODO"))
+							(e-tuple @97.29-97.36
 								(elems
 									(e-runtime-error (tag "ident_not_in_scope"))
-									(e-lookup-local @97-34-97-35
-										(pattern (id 256)))))
-							(e-list @97-38-97-47 (elem-var 269)
+									(e-lookup-local @97.34-97.35
+										(pattern (id 255)))))
+							(e-list @97.38-97.47 (elem-var 268)
 								(elems
-									(e-int @97-39-97-40 (value "1"))
-									(e-int @97-42-97-43 (value "2"))
-									(e-int @97-45-97-46 (value "3")))))))
-				(s-expr @98-2-98-5
+									(e-int @97.39-97.40 (value "1"))
+									(e-int @97.42-97.43 (value "2"))
+									(e-int @97.45-97.46 (value "3")))))))
+				(s-expr @98.2-98.5
 					(e-runtime-error (tag "ident_not_in_scope")))
-				(s-expr @98-4-105-3
-					(e-tuple @98-4-104-3
+				(s-expr @98.4-105.3
+					(e-tuple @98.4-104.3
 						(elems
-							(e-int @99-3-99-6 (value "123"))
-							(e-string @100-3-100-10
-								(e-literal @100-4-100-9 (string "World")))
+							(e-int @99.3-99.6 (value "123"))
+							(e-string @100.3-100.10
+								(e-literal @100.4-100.9 (string "World")))
 							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-tag @101-3-101-4 (ext-var 0) (name "O") (args "TODO"))
-							(e-tuple @102-3-102-14
+							(e-tag @101.3-101.4 (ext-var 0) (name "O") (args "TODO"))
+							(e-tuple @102.3-102.14
 								(elems
 									(e-runtime-error (tag "ident_not_in_scope"))
 									(e-runtime-error (tag "ident_not_in_scope"))))
-							(e-list @103-3-103-12 (elem-var 290)
+							(e-list @103.3-103.12 (elem-var 289)
 								(elems
-									(e-int @103-4-103-5 (value "1"))
-									(e-int @103-7-103-8 (value "2"))
-									(e-int @103-10-103-11 (value "3")))))))
-				(s-expr @105-2-105-59
-					(e-binop @105-2-105-59 (op "or")
-						(e-binop @105-2-105-46 (op "or")
-							(e-binop @105-2-105-15 (op "gt")
-								(e-binop @105-2-105-10 (op "null_coalesce")
+									(e-int @103.4-103.5 (value "1"))
+									(e-int @103.7-103.8 (value "2"))
+									(e-int @103.10-103.11 (value "3")))))))
+				(s-expr @105.2-105.59
+					(e-binop @105.2-105.59 (op "or")
+						(e-binop @105.2-105.46 (op "or")
+							(e-binop @105.2-105.15 (op "gt")
+								(e-binop @105.2-105.10 (op "null_coalesce")
 									(e-runtime-error (tag "ident_not_in_scope"))
-									(e-int @105-6-105-8 (value "12")))
-								(e-int @105-11-105-12 (value "5")))
-							(e-binop @105-16-105-46 (op "and")
-								(e-binop @105-16-105-30 (op "lt")
-									(e-binop @105-16-105-24 (op "add")
-										(e-int @105-16-105-18 (value "13"))
-										(e-int @105-21-105-22 (value "2")))
-									(e-int @105-25-105-26 (value "5")))
-								(e-binop @105-31-105-46 (op "ge")
-									(e-binop @105-31-105-40 (op "sub")
-										(e-int @105-31-105-33 (value "10"))
-										(e-int @105-36-105-37 (value "1")))
-									(e-int @105-41-105-43 (value "16")))))
-						(e-binop @105-47-105-59 (op "le")
-							(e-int @105-47-105-49 (value "12"))
-							(e-int @105-53-105-54 (value "3")))))
-				(s-expr @105-55-106-7
-					(e-dot-access @105-55-106-7 (field "unknown")
+									(e-int @105.6-105.8 (value "12")))
+								(e-int @105.11-105.12 (value "5")))
+							(e-binop @105.16-105.46 (op "and")
+								(e-binop @105.16-105.30 (op "lt")
+									(e-binop @105.16-105.24 (op "add")
+										(e-int @105.16-105.18 (value "13"))
+										(e-int @105.21-105.22 (value "2")))
+									(e-int @105.25-105.26 (value "5")))
+								(e-binop @105.31-105.46 (op "ge")
+									(e-binop @105.31-105.40 (op "sub")
+										(e-int @105.31-105.33 (value "10"))
+										(e-int @105.36-105.37 (value "1")))
+									(e-int @105.41-105.43 (value "16")))))
+						(e-binop @105.47-105.59 (op "le")
+							(e-int @105.47-105.49 (value "12"))
+							(e-int @105.53-105.54 (value "3")))))
+				(s-expr @105.55-106.7
+					(e-dot-access @105.55-106.7 (field "unknown")
 						(receiver
-							(e-dot-access @105-55-105-84 (field "unknown")
+							(e-dot-access @105.55-105.84 (field "unknown")
 								(receiver
-									(e-dot-access @105-55-105-76 (field "unknown")
+									(e-dot-access @105.55-105.76 (field "unknown")
 										(receiver
 											(e-runtime-error (tag "not_implemented")))))))))
-				(e-call @106-2-110-3
-					(e-tag @106-2-106-7 (ext-var 0) (name "Stdo!") (args "TODO"))
-					(e-string @107-3-109-6
-						(e-literal @107-4-107-6 (string "Ho"))
-						(e-call @108-4-108-9
+				(e-call @106.2-110.3
+					(e-tag @106.2-106.7 (ext-var 0) (name "Stdo!") (args "TODO"))
+					(e-string @107.3-109.6
+						(e-literal @107.4-107.6 (string "Ho"))
+						(e-call @108.4-108.9
 							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-runtime-error (tag "ident_not_in_scope")))
-						(e-literal @109-4-109-5 (string " ")))))))
-	(d-let (id 349)
-		(p-assign @114-1-114-2 (ident "e") (id 347))
-		(e-empty_record @114-5-114-7 (id 348)))
-	(s-type-decl @13-1-14-6 (id 83)
-		(ty-header @13-1-13-10 (name "Map")
+						(e-literal @109.4-109.5 (string " ")))))))
+	(d-let (id 348)
+		(p-assign @114.1-114.2 (ident "e") (id 346))
+		(e-empty_record @114.5-114.7 (id 347)))
+	(s-type-decl @13.1-14.6 (id 84)
+		(ty-header @13.1-13.10 (name "Map")
 			(ty-args
-				(ty-var @13-5-13-6 (name "a"))
-				(ty-var @13-8-13-9 (name "b"))))
-		(ty-fn @13-13-13-33 (effectful false)
-			(ty @13-13-13-16 (name "Lis"))
-			(ty-tuple @13-18-13-22
-				(ty-var @13-19-13-21 (name "ab")))
-			(ty-apply @13-26-13-33 (symbol "List")
-				(ty-var @13-31-13-32 (name "b")))))
-	(s-type-decl @14-1-22-5 (id 93)
-		(ty-header @14-1-15-2 (name "MapML"))
-		(ty-fn @17-3-20-15 (effectful false)
-			(ty-apply @17-3-18-4 (symbol "List"))
-			(ty-tuple @19-3-19-7
-				(ty-var @19-4-19-6 (name "ab")))
-			(ty-apply @20-4-20-15 (symbol "List")
-				(ty-var @20-12-20-13 (name "b")))))
-	(s-type-decl @24-1-25-3 (id 102)
-		(ty-header @24-1-24-4 (name "Som"))
-		(ty-record @24-7-24-27
+				(ty-var @13.5-13.6 (name "a"))
+				(ty-var @13.8-13.9 (name "b"))))
+		(ty-fn @13.13-13.33 (effectful false)
+			(ty @13.13-13.16 (name "Lis"))
+			(ty-tuple @13.18-13.22
+				(ty-var @13.19-13.21 (name "ab")))
+			(ty-apply @13.26-13.33 (symbol "List")
+				(ty-var @13.31-13.32 (name "b")))))
+	(s-type-decl @14.1-22.5 (id 94)
+		(ty-header @14.1-15.2 (name "MapML"))
+		(ty-fn @17.3-20.15 (effectful false)
+			(ty-apply @17.3-18.4 (symbol "List"))
+			(ty-tuple @19.3-19.7
+				(ty-var @19.4-19.6 (name "ab")))
+			(ty-apply @20.4-20.15 (symbol "List")
+				(ty-var @20.12-20.13 (name "b")))))
+	(s-type-decl @24.1-25.3 (id 103)
+		(ty-header @24.1-24.4 (name "Som"))
+		(ty-record @24.7-24.27
 			(field (field "foo")
-				(ty @24-15-24-16 (name "O")))
+				(ty @24.15-24.16 (name "O")))
 			(field (field "bar")
-				(ty-var @24-24-24-25 (name "g")))))
-	(s-type-decl @25-1-28-6 (id 106)
-		(ty-header @25-1-25-6 (name "Ml")
+				(ty-var @24.24-24.25 (name "g")))))
+	(s-type-decl @25.1-28.6 (id 107)
+		(ty-header @25.1-25.6 (name "Ml")
 			(ty-args
-				(ty-var @25-4-25-5 (name "a"))))
-		(ty-record @25-9-26-2))
-	(s-type-decl @28-1-30-6 (id 110)
-		(ty-header @28-1-28-9 (name "Soine")
+				(ty-var @25.4-25.5 (name "a"))))
+		(ty-record @25.9-26.2))
+	(s-type-decl @28.1-30.6 (id 111)
+		(ty-header @28.1-28.9 (name "Soine")
 			(ty-args
-				(ty-var @28-7-28-8 (name "a"))))
-		(ty-record @28-12-29-2))
-	(s-type-decl @30-1-32-7 (id 115)
-		(ty-header @30-1-30-9 (name "Maybe")
+				(ty-var @28.7-28.8 (name "a"))))
+		(ty-record @28.12-29.2))
+	(s-type-decl @30.1-32.7 (id 116)
+		(ty-header @30.1-30.9 (name "Maybe")
 			(ty-args
-				(ty-var @30-7-30-8 (name "a"))))
-		(ty-tag-union @30-12-30-19
-			(ty @30-13-30-18 (name "Somne"))))
-	(s-type-decl @32-1-35-4 (id 119)
-		(ty-header @32-1-32-10 (name "Mayine")
+				(ty-var @30.7-30.8 (name "a"))))
+		(ty-tag-union @30.12-30.19
+			(ty @30.13-30.18 (name "Somne"))))
+	(s-type-decl @32.1-35.4 (id 120)
+		(ty-header @32.1-32.10 (name "Mayine")
 			(ty-args
-				(ty-var @32-8-32-9 (name "a"))))
-		(ty-tag-union @32-13-33-2))
-	(s-import @4-1-4-34 (module "pf.Stdout") (qualifier "pf") (id 121)
+				(ty-var @32.8-32.9 (name "a"))))
+		(ty-tag-union @32.13-33.2))
+	(s-import @4.1-4.34 (module "pf.Stdout") (qualifier "pf") (id 122)
 		(exposes
 			(exposed (name "line!") (wildcard false))))
-	(s-import @6-1-8-6 (module "Stdot") (id 123)
+	(s-import @6.1-8.6 (module "Stdot") (id 124)
 		(exposes
 			(exposed (name "Cust") (wildcard false))))
-	(s-import @10-1-10-19 (module "Bae") (alias "Gooe") (id 124)
+	(s-import @10.1-10.19 (module "Bae") (alias "Gooe") (id 125)
 		(exposes))
-	(s-import @11-1-12-4 (module "Ba") (id 125)
+	(s-import @11.1-12.4 (module "Ba") (id 126)
 		(exposes)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "ane") (def_var 138) (type "* ? *"))
-		(d_assign (name "add") (def_var 165) (type "* ? *"))
-		(d_assign (name "me") (def_var 175) (type "*, [Tb, * *] ? Error"))
-		(d_assign (name "ma") (def_var 345) (type "* ? *"))
-		(d_assign (name "e") (def_var 349) (type "{}")))
+		(d_assign (name "ane") (def_var 138) (type "* ? Num(*)"))
+		(d_assign (name "add") (def_var 164) (type "* ? Error"))
+		(d_assign (name "me") (def_var 174) (type "*, [Tb]* ? Error"))
+		(d_assign (name "ma") (def_var 344) (type "* ? *"))
+		(d_assign (name "e") (def_var 348) (type "{}")))
 	(expressions
-		(expr @35-7-37-4 (type "* ? *"))
-		(expr @38-7-47-2 (type "* ? *"))
-		(expr @49-6-71-7 (type "*, [Tb, * *] ? Error"))
-		(expr @75-5-111-2 (type "* ? *"))
-		(expr @114-5-114-7 (type "{}"))))
+		(expr @35.7-37.4 (type "* ? Num(*)"))
+		(expr @38.7-47.2 (type "* ? Error"))
+		(expr @49.6-71.7 (type "*, [Tb]* ? Error"))
+		(expr @75.5-111.2 (type "* ? *"))
+		(expr @114.5-114.7 (type "{}"))))
 ~~~
