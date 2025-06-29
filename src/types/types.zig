@@ -151,19 +151,29 @@ pub const Alias = struct {
     /// Get the backing var for this alias given the alias var
     pub fn getBackingVar(self: Alias, alias_var: Var) Var {
         _ = self;
-        return @as(Var, @enumFromInt(@intFromEnum(alias_var) + 1));
-    }
+        const backing_var = @as(Var, @enumFromInt(@intFromEnum(alias_var) + 1));
 
-    /// Get the first argument var for this alias given the alias var
-    pub fn getFirstArgVar(self: Alias, alias_var: Var) Var {
-        _ = self;
-        return @as(Var, @enumFromInt(@intFromEnum(alias_var) + 2));
+        // Debug assertion: verify the backing var index is reasonable
+        if (std.debug.runtime_safety) {
+            std.debug.assert(@intFromEnum(backing_var) > @intFromEnum(alias_var));
+        }
+
+        return backing_var;
     }
 
     /// Get the argument var at the given index for this alias given the alias var
     pub fn getArgVar(self: Alias, alias_var: Var, arg_index: usize) Var {
         std.debug.assert(arg_index < self.num_args);
-        return @as(Var, @enumFromInt(@intFromEnum(alias_var) + 2 + arg_index));
+        const arg_var = @as(Var, @enumFromInt(@intFromEnum(alias_var) + 2 + arg_index));
+
+        // Debug assertion: verify the arg var index is reasonable
+        if (std.debug.runtime_safety) {
+            // Should be after backing var
+            const backing_var = self.getBackingVar(alias_var);
+            std.debug.assert(@intFromEnum(arg_var) > @intFromEnum(backing_var));
+        }
+
+        return arg_var;
     }
 
     /// Iterator for getting all argument vars
@@ -187,23 +197,6 @@ pub const Alias = struct {
             .num_args = self.num_args,
             .current = 0,
         };
-    }
-
-    /// Get a slice of all argument vars (requires allocation)
-    pub fn getArgVarsAlloc(self: Alias, allocator: std.mem.Allocator, alias_var: Var) ![]Var {
-        const args = try allocator.alloc(Var, self.num_args);
-        for (0..self.num_args) |i| {
-            args[i] = self.getArgVar(alias_var, i);
-        }
-        return args;
-    }
-
-    /// Fill a pre-allocated buffer with argument vars
-    pub fn getArgVarsBuf(self: Alias, alias_var: Var, buffer: []Var) void {
-        std.debug.assert(buffer.len >= self.num_args);
-        for (0..self.num_args) |i| {
-            buffer[i] = self.getArgVar(alias_var, i);
-        }
     }
 };
 

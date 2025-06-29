@@ -2557,17 +2557,30 @@ const TestEnv = struct {
 
     // helpers - alias
 
+    /// Create an Alias struct with the given name and number of args.
+    ///
+    /// The `args` parameter is only used to determine the count - the actual arg types
+    /// passed here are just for reference/documentation and aren't stored.
+    ///
+    /// IMPORTANT: The caller is responsible for creating the vars in the right order:
+    /// 1. alias var
+    /// 2. backing var (alias var + 1)
+    /// 3. arg vars (alias var + 2, alias var + 3, etc.)
+    ///
+    /// For example, to create an alias `MyAlias(Str, Int)`:
+    /// ```
+    /// const alias = mkAlias("MyAlias", &[_]Var{str_var, int_var}); // args just for count
+    /// const alias_var = types_store.freshFromContent(.{ .alias = alias });
+    /// const backing_var = types_store.fresh(); // Must be created immediately after
+    /// const arg1_redirect = types_store.freshRedirect(str_var); // Must be next
+    /// const arg2_redirect = types_store.freshRedirect(int_var); // Must be next
+    /// ```
     fn mkAlias(self: *Self, name: []const u8, args: []const Var) Alias {
-        // First create the alias with num_args
         const alias = Alias{
             .ident = self.mkTypeIdent(name),
             .num_args = @intCast(args.len),
         };
 
-        // Note: The caller is responsible for creating the vars in the right order:
-        // 1. alias var
-        // 2. backing var (alias var + 1)
-        // 3. arg vars (alias var + 2, alias var + 3, etc.)
         return alias;
     }
 
@@ -2881,13 +2894,13 @@ test "unify - alias with same args" {
 
     const alias = Content{ .alias = env.mkAlias("AliasName", &[_]Var{ str, bool_ }) };
 
-    // Create alias a with its backing var and args in sequence
+    // Create alias `a` with its backing var and args in sequence
     const a = env.module_env.types.freshFromContent(alias);
     _ = env.module_env.types.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ })); // backing var
     _ = env.module_env.types.freshRedirect(str); // arg 1 -> str
     _ = env.module_env.types.freshRedirect(bool_); // arg 2 -> bool_
 
-    // Create alias b with its backing var and args in sequence
+    // Create alias `b` with its backing var and args in sequence
     const b = env.module_env.types.freshFromContent(alias);
     _ = env.module_env.types.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ })); // backing var
     _ = env.module_env.types.freshRedirect(str); // arg 1 -> str
@@ -2910,12 +2923,12 @@ test "unify - aliases with different names but same backing" {
     const a_alias = Content{ .alias = env.mkAlias("AliasA", &[_]Var{str}) };
     const b_alias = Content{ .alias = env.mkAlias("AliasB", &[_]Var{str}) };
 
-    // Create alias a with its backing var and arg
+    // Create alias `a` with its backing var and arg
     const a = env.module_env.types.freshFromContent(a_alias);
     _ = env.module_env.types.freshFromContent(env.mkTuple(&[_]Var{str})); // backing var
     _ = env.module_env.types.freshRedirect(str); // arg -> str
 
-    // Create alias b with its backing var and arg
+    // Create alias `b` with its backing var and arg
     const b = env.module_env.types.freshFromContent(b_alias);
     _ = env.module_env.types.freshFromContent(env.mkTuple(&[_]Var{str})); // backing var
     _ = env.module_env.types.freshRedirect(str); // arg -> str
@@ -2938,12 +2951,12 @@ test "unify - alias with different args (fail)" {
     const a_alias = Content{ .alias = env.mkAlias("Alias", &[_]Var{str}) };
     const b_alias = Content{ .alias = env.mkAlias("Alias", &[_]Var{bool_}) };
 
-    // Create alias a with its backing var and arg
+    // Create alias `a` with its backing var and arg
     const a = env.module_env.types.freshFromContent(a_alias);
     _ = env.module_env.types.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ })); // backing var
     _ = env.module_env.types.freshRedirect(str); // arg -> str
 
-    // Create alias b with its backing var and arg
+    // Create alias `b` with its backing var and arg
     const b = env.module_env.types.freshFromContent(b_alias);
     _ = env.module_env.types.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ })); // backing var
     _ = env.module_env.types.freshRedirect(bool_); // arg -> bool_
@@ -2965,7 +2978,7 @@ test "unify - alias with flex" {
 
     const a_alias = Content{ .alias = env.mkAlias("Alias", &[_]Var{bool_}) };
 
-    // Create alias a with its backing var and arg
+    // Create alias `a` with its backing var and arg
     const a = env.module_env.types.freshFromContent(a_alias);
     _ = env.module_env.types.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ })); // backing var
     _ = env.module_env.types.freshRedirect(bool_); // arg -> bool_
