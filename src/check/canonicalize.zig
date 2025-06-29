@@ -321,15 +321,27 @@ pub fn canonicalize_file(
                 // Already processed in first pass, skip
             },
             .type_anno => |ta| {
+                const gpa = self.can_ir.env.gpa;
+                const region = self.parse_ir.tokenizedRegionToRegion(ta.region);
+
                 // Top-level type annotation - store for connection to next declaration
                 const name = self.parse_ir.tokens.resolveIdentifier(ta.name) orelse {
                     // Malformed identifier - skip this annotation
+                    const feature = self.can_ir.env.strings.insert(gpa, "handle malformed identifier for a type annotation");
+                    self.can_ir.pushDiagnostic(CIR.Diagnostic{
+                        .not_implemented = .{
+                            .feature = feature,
+                            .region = region,
+                        },
+                    });
                     continue;
                 };
 
                 // First, extract all type variables from the AST annotation
                 var type_vars = std.ArrayList(Ident.Idx).init(self.can_ir.env.gpa);
                 defer type_vars.deinit();
+
+                // Extract type variables from the AST annotation
                 self.extractTypeVarsFromASTAnno(ta.anno, &type_vars);
 
                 // Enter a new scope for type variables
@@ -339,11 +351,12 @@ pub fn canonicalize_file(
                 // Introduce type variables into scope
                 for (type_vars.items) |type_var| {
                     // Create a dummy type annotation for the type variable
-                    const region = Region.zero(); // TODO: get proper region from type variable
-                    const dummy_anno = self.can_ir.store.addTypeAnno(.{ .ty_var = .{
-                        .name = type_var,
-                        .region = region,
-                    } });
+                    const dummy_anno = self.can_ir.store.addTypeAnno(.{
+                        .ty_var = .{
+                            .name = type_var,
+                            .region = region, // TODO we may want to use the region for the type_var instead of the whole annotation
+                        },
+                    });
                     self.scopeIntroduceTypeVar(type_var, dummy_anno);
                 }
 
@@ -3100,6 +3113,8 @@ pub fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) ?CIR.Exp
             // First, extract all type variables from the AST annotation
             var type_vars = std.ArrayList(Ident.Idx).init(self.can_ir.env.gpa);
             defer type_vars.deinit();
+
+            // Extract type variables from the AST annotation
             self.extractTypeVarsFromASTAnno(ta.anno, &type_vars);
 
             // Enter a new scope for type variables
@@ -3363,19 +3378,7 @@ fn introduceTypeParametersFromHeader(self: *Self, header_idx: CIR.TypeHeader.Idx
 }
 
 fn extractTypeVarsFromASTAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, vars: *std.ArrayList(Ident.Idx)) void {
-    // First check if this index actually points to a valid type annotation node
-    const node = self.parse_ir.store.nodes.get(@enumFromInt(@intFromEnum(anno_idx)));
-    switch (node.tag) {
-        .ty_apply, .ty_var, .ty_underscore, .ty_ty, .ty_mod_ty, .ty_union, .ty_tuple, .ty_record, .ty_fn, .ty_parens, .malformed => {},
-        else => {
-            // This index doesn't point to a type annotation node - skip it gracefully
-            return;
-        },
-    }
-
-    const ast_anno = self.parse_ir.store.getTypeAnno(anno_idx);
-
-    switch (ast_anno) {
+    switch (self.parse_ir.store.getTypeAnno(anno_idx)) {
         .ty_var => |ty_var| {
             if (self.parse_ir.tokens.resolveIdentifier(ty_var.tok)) |ident| {
                 // Check if we already have this type variable
