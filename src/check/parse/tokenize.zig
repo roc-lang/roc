@@ -465,20 +465,6 @@ pub const Comment = struct {
     end: u32,
 };
 
-/// Represents a unicode character parse from the source.
-const Unicode = struct {
-    tag: Tag,
-    length: u32,
-
-    const Tag = enum {
-        LetterUpper,
-        LetterNotUpper,
-        Digit,
-        Other,
-        Invalid,
-    };
-};
-
 /// Represents a diagnostic message including its position in the source.
 pub const Diagnostic = struct {
     tag: Tag,
