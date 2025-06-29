@@ -190,72 +190,52 @@ test "NodeStore round trip - Expressions" {
             .external = @enumFromInt(345),
         },
     });
-
-    // TODO: Test e_list when NodeStore properly handles TypeVar fields
-    // The NodeStore getExpr method currently hardcodes TypeVars to @enumFromInt(0)
-    // instead of restoring the original values from storage
-    // try expressions.append(CIR.Expr{
-    //     .e_list = .{
-    //         .elem_var = @enumFromInt(456),
-    //         .elems = CIR.Expr.Span{ .span = base.DataSpan.init(234, 567) },
-    //         .region = from_raw_offsets(1012, 1345),
-    //     },
-    // });
-
+    try expressions.append(CIR.Expr{
+        .e_list = .{
+            .elem_var = @enumFromInt(456),
+            .elems = CIR.Expr.Span{ .span = base.DataSpan.init(234, 567) },
+            .region = from_raw_offsets(1012, 1345),
+        },
+    });
     try expressions.append(CIR.Expr{
         .e_tuple = .{
             .elems = CIR.Expr.Span{ .span = base.DataSpan.init(345, 678) },
             .region = from_raw_offsets(1123, 1456),
         },
     });
-
-    // TODO: Test e_when when NodeStore implements addExpr for this variant
-    // Currently panics with "TODO addExpr when"
-    // try expressions.append(CIR.Expr{
-    //     .e_when = CIR.When{
-    //         .loc_cond = @enumFromInt(567),
-    //         .cond_var = @enumFromInt(678),
-    //         .expr_var = @enumFromInt(789),
-    //         .region = from_raw_offsets(1234, 1567),
-    //         .branches = CIR.WhenBranch.Span{ .span = base.DataSpan.init(456, 789) },
-    //         .branches_cond_var = @enumFromInt(890),
-    //         .exhaustive = @enumFromInt(901),
-    //     },
-    // });
-
-    // TODO: Test e_if when NodeStore properly handles TypeVar fields
-    // Currently hardcodes cond_var and branch_var to @enumFromInt(0)
-    // try expressions.append(CIR.Expr{
-    //     .e_if = .{
-    //         .cond_var = @enumFromInt(1012),
-    //         .branch_var = @enumFromInt(1123),
-    //         .branches = CIR.IfBranch.Span{ .span = base.DataSpan.init(567, 890) },
-    //         .final_else = @enumFromInt(1234),
-    //         .region = from_raw_offsets(1345, 1678),
-    //     },
-    // });
-
-    // TODO: Test e_call when NodeStore properly handles TypeVar fields
-    // Currently doesn't restore effect_var properly
-    // try expressions.append(CIR.Expr{
-    //     .e_call = .{
-    //         .args = CIR.Expr.Span{ .span = base.DataSpan.init(678, 901) },
-    //         .called_via = base.CalledVia.apply,
-    //         .effect_var = @enumFromInt(1345),
-    //         .region = from_raw_offsets(1456, 1789),
-    //     },
-    // });
-
-    // TODO: Test e_record when NodeStore properly handles TypeVar fields
-    // Currently doesn't restore ext_var properly
-    // try expressions.append(CIR.Expr{
-    //     .e_record = .{
-    //         .ext_var = @enumFromInt(1456),
-    //         .fields = CIR.RecordField.Span{ .span = base.DataSpan.init(789, 1012) },
-    //         .region = from_raw_offsets(1567, 1890),
-    //     },
-    // });
-
+    try expressions.append(CIR.Expr{
+        .e_when = CIR.When{
+            .loc_cond = @enumFromInt(567),
+            .cond_var = @enumFromInt(678),
+            .expr_var = @enumFromInt(789),
+            .region = from_raw_offsets(1234, 1567),
+            .branches = CIR.WhenBranch.Span{ .span = base.DataSpan.init(456, 789) },
+            .branches_cond_var = @enumFromInt(890),
+            .exhaustive = @enumFromInt(901),
+        },
+    });
+    try expressions.append(CIR.Expr{
+        .e_if = .{
+            .branches = CIR.IfBranch.Span{ .span = base.DataSpan.init(567, 890) },
+            .final_else = @enumFromInt(1234),
+            .region = from_raw_offsets(1345, 1678),
+        },
+    });
+    try expressions.append(CIR.Expr{
+        .e_call = .{
+            .args = CIR.Expr.Span{ .span = base.DataSpan.init(678, 901) },
+            .called_via = base.CalledVia.apply,
+            .effect_var = @enumFromInt(1345),
+            .region = from_raw_offsets(1456, 1789),
+        },
+    });
+    try expressions.append(CIR.Expr{
+        .e_record = .{
+            .ext_var = @enumFromInt(1456),
+            .fields = CIR.RecordField.Span{ .span = base.DataSpan.init(789, 1012) },
+            .region = from_raw_offsets(1567, 1890),
+        },
+    });
     try expressions.append(CIR.Expr{
         .e_empty_record = .{
             .region = from_raw_offsets(1678, 1901),
@@ -268,53 +248,44 @@ test "NodeStore round trip - Expressions" {
             .region = from_raw_offsets(1789, 2012),
         },
     });
+    try expressions.append(CIR.Expr{
+        .e_record_access = .{
+            .record_var = @enumFromInt(1678),
+            .ext_var = @enumFromInt(1789),
+            .field_var = @enumFromInt(1890),
+            .loc_expr = @enumFromInt(1901),
+            .field = @bitCast(@as(u32, 2012)),
+            .region = from_raw_offsets(1890, 2123),
+        },
+    });
 
-    // TODO: Test e_record_access when NodeStore implements addExpr for this variant
-    // Currently panics with "TODO addExpr record_access"
-    // try expressions.append(CIR.Expr{
-    //     .e_record_access = .{
-    //         .record_var = @enumFromInt(1678),
-    //         .ext_var = @enumFromInt(1789),
-    //         .field_var = @enumFromInt(1890),
-    //         .loc_expr = @enumFromInt(1901),
-    //         .field = @bitCast(@as(u32, 2012)),
-    //         .region = from_raw_offsets(1890, 2123),
-    //     },
-    // });
+    try expressions.append(CIR.Expr{
+        .e_tag = .{
+            .ext_var = @enumFromInt(2012),
+            .name = @bitCast(@as(u32, 2123)),
+            .args = CIR.Expr.Span{ .span = base.DataSpan.init(901, 1234) },
+            .region = from_raw_offsets(1901, 2234),
+        },
+    });
 
-    // TODO: Test e_tag when NodeStore properly handles TypeVar fields
-    // Currently doesn't restore ext_var properly
-    // try expressions.append(CIR.Expr{
-    //     .e_tag = .{
-    //         .ext_var = @enumFromInt(2012),
-    //         .name = @bitCast(@as(u32, 2123)),
-    //         .args = CIR.Expr.Span{ .span = base.DataSpan.init(901, 1234) },
-    //         .region = from_raw_offsets(1901, 2234),
-    //     },
-    // });
+    try expressions.append(CIR.Expr{
+        .e_zero_argument_tag = .{
+            .closure_name = @bitCast(@as(u32, 2234)),
+            .variant_var = @enumFromInt(2345),
+            .ext_var = @enumFromInt(2456),
+            .name = @bitCast(@as(u32, 2567)),
+            .region = from_raw_offsets(2012, 2345),
+        },
+    });
 
-    // TODO: Test e_zero_argument_tag when NodeStore implements addExpr for this variant
-    // Currently panics with "TODO addExpr zero_argument_tag"
-    // try expressions.append(CIR.Expr{
-    //     .e_zero_argument_tag = .{
-    //         .closure_name = @bitCast(@as(u32, 2234)),
-    //         .variant_var = @enumFromInt(2345),
-    //         .ext_var = @enumFromInt(2456),
-    //         .name = @bitCast(@as(u32, 2567)),
-    //         .region = from_raw_offsets(2012, 2345),
-    //     },
-    // });
-
-    // TODO: Test e_lambda when NodeStore properly handles TypeVar fields
-    // Currently doesn't restore effect_var properly
-    // try expressions.append(CIR.Expr{
-    //     .e_lambda = .{
-    //         .args = CIR.Pattern.Span{ .span = base.DataSpan.init(1012, 1345) },
-    //         .body = @enumFromInt(2678),
-    //         .effect_var = @enumFromInt(2789),
-    //         .region = from_raw_offsets(2123, 2456),
-    //     },
-    // });
+    try expressions.append(CIR.Expr{
+        .e_lambda = .{
+            .args = CIR.Pattern.Span{ .span = base.DataSpan.init(1012, 1345) },
+            .body = @enumFromInt(2678),
+            .effect_var = @enumFromInt(2789),
+            .region = from_raw_offsets(2123, 2456),
+        },
+    });
 
     try expressions.append(CIR.Expr{
         .e_binop = CIR.Expr.Binop.init(
