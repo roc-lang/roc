@@ -25,7 +25,7 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:6),OpColon(1:6-1:7),Int(1:8-1:10),Comma(1:10
 ~~~
 # PARSE
 ~~~clojure
-(e-malformed @1-17-1-20 (reason "expected_expr_close_curly_or_comma"))
+(e-malformed @1.17-1.20 (reason "expected_expr_close_curly_or_comma"))
 ~~~
 # FORMATTED
 ~~~roc

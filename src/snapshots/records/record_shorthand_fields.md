@@ -30,7 +30,7 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:7),Comma(1:7-1:8),LowerIdent(1:9-1:12),Comma
 ~~~
 # PARSE
 ~~~clojure
-(e-record @1-1-1-29
+(e-record @1.1-1.29
 	(field (field "name") (optional false))
 	(field (field "age") (optional false))
 	(field (field "email") (optional false))
@@ -42,7 +42,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-record @1-1-1-29 (ext-var 85) (id 86)
+(e-record @1.1-1.29 (ext-var 85) (id 86)
 	(fields
 		(field (name "name")
 			(e-runtime-error (tag "ident_not_in_scope")))

@@ -33,13 +33,13 @@ LowerIdent(3:1-3:4),OpAssign(3:5-3:6),LowerIdent(3:7-3:10),NoSpaceDotInt(3:10-3:
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-3-12
-	(module @1-1-1-10
-		(exposes @1-8-1-10))
+(file @1.1-3.12
+	(module @1.1-1.10
+		(exposes @1.8-1.10))
 	(statements
-		(s-decl @3-1-3-12
-			(p-ident @3-1-3-4 (raw "foo"))
-			(e-malformed @3-10-3-12 (reason "expr_no_space_dot_int")))))
+		(s-decl @3.1-3.12
+			(p-ident @3.1-3.4 (raw "foo"))
+			(e-malformed @3.10-3.12 (reason "expr_no_space_dot_int")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -51,7 +51,7 @@ foo =
 ~~~clojure
 (can-ir
 	(d-let (id 76)
-		(p-assign @3-1-3-4 (ident "foo") (id 73))
+		(p-assign @3.1-3.4 (ident "foo") (id 73))
 		(e-runtime-error (tag "expr_not_canonicalized") (id 75))))
 ~~~
 # TYPES
@@ -60,5 +60,5 @@ foo =
 	(defs
 		(d_assign (name "foo") (def_var 76) (type "Error")))
 	(expressions
-		(expr @3-10-3-12 (type "Error"))))
+		(expr @3.10-3.12 (type "Error"))))
 ~~~

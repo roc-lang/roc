@@ -15,7 +15,7 @@ Float(1:1-1:24),EndOfFile(1:24-1:24),
 ~~~
 # PARSE
 ~~~clojure
-(e-frac @1-1-1-24 (raw "1.23456789012345678e-10"))
+(e-frac @1.1-1.24 (raw "1.23456789012345678e-10"))
 ~~~
 # FORMATTED
 ~~~roc
@@ -23,7 +23,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-frac-dec @1-1-1-24 (value "0.000000000123456789") (id 73))
+(e-frac-dec @1.1-1.24 (value "0.000000000123456789") (id 73))
 ~~~
 # TYPES
 ~~~clojure

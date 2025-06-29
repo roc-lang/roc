@@ -33,10 +33,10 @@ Int(1:1-1:2),OpenCurly(1:2-1:3),EndOfFile(1:3-1:3),
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-1-3
-	(malformed-header @1-1-1-3 (tag "missing_header"))
+(file @1.1-1.3
+	(malformed-header @1.1-1.3 (tag "missing_header"))
 	(statements
-		(e-block @1-2-1-3
+		(e-block @1.2-1.3
 			(statements))))
 ~~~
 # FORMATTED

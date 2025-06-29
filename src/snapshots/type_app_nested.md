@@ -34,47 +34,47 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-6-30
-	(app @1-1-1-53
-		(provides @1-6-1-12
+(file @1.1-6.30
+	(app @1.1-1.53
+		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @1-15-1-53 (name "pf")
-			(e-string @1-28-1-51
-				(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))
-		(packages @1-13-1-53
-			(record-field @1-15-1-53 (name "pf")
-				(e-string @1-28-1-51
-					(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))))
+		(record-field @1.15-1.53 (name "pf")
+			(e-string @1.28-1.51
+				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
+		(packages @1.13-1.53
+			(record-field @1.15-1.53 (name "pf")
+				(e-string @1.28-1.51
+					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @3-1-4-14 (name "processNested")
-			(ty-fn @3-17-3-52
-				(ty-apply @3-17-3-39
+		(s-type-anno @3.1-4.14 (name "processNested")
+			(ty-fn @3.17-3.52
+				(ty-apply @3.17-3.39
 					(ty (name "List"))
-					(ty-apply @3-22-3-38
+					(ty-apply @3.22-3.38
 						(ty (name "Result"))
 						(ty (name "Str"))
 						(ty (name "Err"))))
-				(ty-apply @3-43-3-52
+				(ty-apply @3.43-3.52
 					(ty (name "List"))
 					(ty (name "Str")))))
-		(s-decl @4-1-4-38
-			(p-ident @4-1-4-14 (raw "processNested"))
-			(e-lambda @4-17-4-38
+		(s-decl @4.1-4.38
+			(p-ident @4.1-4.14 (raw "processNested"))
+			(e-lambda @4.17-4.38
 				(args
-					(p-ident @4-18-4-23 (raw "_list")))
-				(e-list @4-25-4-38
-					(e-string @4-26-4-31
-						(e-string-part @4-27-4-30 (raw "one")))
-					(e-string @4-32-4-37
-						(e-string-part @4-33-4-36 (raw "two"))))))
-		(s-decl @6-1-6-30
-			(p-ident @6-1-6-6 (raw "main!"))
-			(e-lambda @6-9-6-30
+					(p-ident @4.18-4.23 (raw "_list")))
+				(e-list @4.25-4.38
+					(e-string @4.26-4.31
+						(e-string-part @4.27-4.30 (raw "one")))
+					(e-string @4.32-4.37
+						(e-string-part @4.33-4.36 (raw "two"))))))
+		(s-decl @6.1-6.30
+			(p-ident @6.1-6.6 (raw "main!"))
+			(e-lambda @6.9-6.30
 				(args
 					(p-underscore))
-				(e-apply @6-13-6-30
-					(e-ident @6-13-6-26 (qaul "") (raw "processNested"))
-					(e-list @6-27-6-29))))))
+				(e-apply @6.13-6.30
+					(e-ident @6.13-6.26 (qaul "") (raw "processNested"))
+					(e-list @6.27-6.29))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -89,34 +89,34 @@ main! = |_| processNested([])
 ~~~clojure
 (can-ir
 	(d-let (id 97)
-		(p-assign @4-1-4-14 (ident "processNested") (id 81))
-		(e-lambda @4-17-4-38 (id 90)
+		(p-assign @4.1-4.14 (ident "processNested") (id 81))
+		(e-lambda @4.17-4.38 (id 90)
 			(args
-				(p-assign @4-18-4-23 (ident "_list") (id 82)))
-			(e-list @4-25-4-38 (elem-var 87)
+				(p-assign @4.18-4.23 (ident "_list") (id 82)))
+			(e-list @4.25-4.38 (elem-var 87)
 				(elems
-					(e-string @4-26-4-31
-						(e-literal @4-27-4-30 (string "one")))
-					(e-string @4-32-4-37
-						(e-literal @4-33-4-36 (string "two"))))))
-		(annotation @4-1-4-14 (signature 95) (id 96)
+					(e-string @4.26-4.31
+						(e-literal @4.27-4.30 (string "one")))
+					(e-string @4.32-4.37
+						(e-literal @4.33-4.36 (string "two"))))))
+		(annotation @4.1-4.14 (signature 95) (id 96)
 			(declared-type
-				(ty-fn @3-17-3-52 (effectful false)
-					(ty-apply @3-17-3-39 (symbol "List")
-						(ty-apply @3-22-3-38 (symbol "Result")
-							(ty @3-29-3-32 (name "Str"))
-							(ty @3-34-3-37 (name "Err"))))
-					(ty-apply @3-43-3-52 (symbol "List")
-						(ty @3-48-3-51 (name "Str")))))))
+				(ty-fn @3.17-3.52 (effectful false)
+					(ty-apply @3.17-3.39 (symbol "List")
+						(ty-apply @3.22-3.38 (symbol "Result")
+							(ty @3.29-3.32 (name "Str"))
+							(ty @3.34-3.37 (name "Err"))))
+					(ty-apply @3.43-3.52 (symbol "List")
+						(ty @3.48-3.51 (name "Str")))))))
 	(d-let (id 107)
-		(p-assign @6-1-6-6 (ident "main!") (id 98))
-		(e-lambda @6-9-6-30 (id 106)
+		(p-assign @6.1-6.6 (ident "main!") (id 98))
+		(e-lambda @6.9-6.30 (id 106)
 			(args
-				(p-underscore @6-10-6-11 (id 99)))
-			(e-call @6-13-6-30
-				(e-lookup-local @6-13-6-26
+				(p-underscore @6.10-6.11 (id 99)))
+			(e-call @6.13-6.30
+				(e-lookup-local @6.13-6.26
 					(pattern (id 81)))
-				(e-list @6-27-6-29 (elem-var 101)
+				(e-list @6.27-6.29 (elem-var 101)
 					(elems))))))
 ~~~
 # TYPES
@@ -126,6 +126,6 @@ main! = |_| processNested([])
 		(d_assign (name "processNested") (def_var 97) (type "List -> List(Str)"))
 		(d_assign (name "main!") (def_var 107) (type "* ? *")))
 	(expressions
-		(expr @4-17-4-38 (type "List -> List(Str)"))
-		(expr @6-9-6-30 (type "* ? *"))))
+		(expr @4.17-4.38 (type "List -> List(Str)"))
+		(expr @6.9-6.30 (type "* ? *"))))
 ~~~

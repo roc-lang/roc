@@ -23,13 +23,13 @@ KwProvides(5:2-5:10),OpenSquare(5:11-5:12),CloseSquare(5:12-5:13),EndOfFile(5:13
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-5-13
-	(platform @1-1-5-13 (name "foo")
-		(rigids @2-11-2-13)
-		(ty-record @2-14-2-16)
-		(exposes @3-10-3-12)
-		(packages @4-11-4-13)
-		(provides @5-11-5-13))
+(file @1.1-5.13
+	(platform @1.1-5.13 (name "foo")
+		(rigids @2.11-2.13)
+		(ty-record @2.14-2.16)
+		(exposes @3.10-3.12)
+		(packages @4.11-4.13)
+		(provides @5.11-5.13))
 	(statements))
 ~~~
 # FORMATTED

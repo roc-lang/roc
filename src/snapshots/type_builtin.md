@@ -21,18 +21,18 @@ UpperIdent(4:1-4:9),OpColon(4:10-4:11),UpperIdent(4:12-4:15),EndOfFile(4:15-4:15
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-4-15
-	(module @1-1-1-28
-		(exposes @1-8-1-28
+(file @1.1-4.15
+	(module @1.1-1.28
+		(exposes @1.8-1.28
 			(exposed-upper-ident (text "MyNumber"))
 			(exposed-upper-ident (text "MyString"))))
 	(statements
-		(s-type-decl @3-1-4-9
-			(header @3-1-3-9 (name "MyNumber")
+		(s-type-decl @3.1-4.9
+			(header @3.1-3.9 (name "MyNumber")
 				(args))
 			(ty (name "U64")))
-		(s-type-decl @4-1-4-15
-			(header @4-1-4-9 (name "MyString")
+		(s-type-decl @4.1-4.15
+			(header @4.1-4.9 (name "MyString")
 				(args))
 			(ty (name "Str")))))
 ~~~
@@ -43,12 +43,12 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-type-decl @3-1-4-9 (id 75)
-		(ty-header @3-1-3-9 (name "MyNumber"))
-		(ty @3-12-3-15 (name "U64")))
-	(s-type-decl @4-1-4-15 (id 78)
-		(ty-header @4-1-4-9 (name "MyString"))
-		(ty @4-12-4-15 (name "Str"))))
+	(s-type-decl @3.1-4.9 (id 75)
+		(ty-header @3.1-3.9 (name "MyNumber"))
+		(ty @3.12-3.15 (name "U64")))
+	(s-type-decl @4.1-4.15 (id 78)
+		(ty-header @4.1-4.9 (name "MyString"))
+		(ty @4.12-4.15 (name "Str"))))
 ~~~
 # TYPES
 ~~~clojure

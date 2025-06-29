@@ -300,27 +300,27 @@ LowerIdent(1:1-1:5),OpColon(1:5-1:6),MalformedUnknownToken(1:6-1:7),OpColon(1:7-
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-1-25
-	(malformed-header @1-1-1-6 (tag "missing_header"))
+(file @1.1-1.25
+	(malformed-header @1.1-1.6 (tag "missing_header"))
 	(statements
-		(e-malformed @1-5-1-7 (reason "expr_unexpected_token"))
-		(e-malformed @1-6-1-8 (reason "expr_unexpected_token"))
-		(e-malformed @1-7-1-9 (reason "expr_unexpected_token"))
-		(e-malformed @1-8-1-10 (reason "expr_unexpected_token"))
-		(e-malformed @1-9-1-11 (reason "expr_unexpected_token"))
-		(e-malformed @1-10-1-12 (reason "expr_unexpected_token"))
-		(e-malformed @1-11-1-13 (reason "expr_unexpected_token"))
-		(e-malformed @1-12-1-14 (reason "expr_unexpected_token"))
-		(e-malformed @1-13-1-15 (reason "expr_unexpected_token"))
-		(e-malformed @1-14-1-16 (reason "expr_unexpected_token"))
-		(e-malformed @1-15-1-17 (reason "expr_unexpected_token"))
-		(e-malformed @1-16-1-18 (reason "expr_unexpected_token"))
-		(e-malformed @1-17-1-19 (reason "expr_unexpected_token"))
-		(e-malformed @1-18-1-20 (reason "expr_unexpected_token"))
-		(e-malformed @1-19-1-21 (reason "expr_unexpected_token"))
-		(e-malformed @1-20-1-23 (reason "expr_unexpected_token"))
-		(e-ident @1-21-1-23 (qaul "") (raw "le"))
-		(e-malformed @1-25-1-25 (reason "expected_expr_close_square_or_comma"))))
+		(e-malformed @1.5-1.7 (reason "expr_unexpected_token"))
+		(e-malformed @1.6-1.8 (reason "expr_unexpected_token"))
+		(e-malformed @1.7-1.9 (reason "expr_unexpected_token"))
+		(e-malformed @1.8-1.10 (reason "expr_unexpected_token"))
+		(e-malformed @1.9-1.11 (reason "expr_unexpected_token"))
+		(e-malformed @1.10-1.12 (reason "expr_unexpected_token"))
+		(e-malformed @1.11-1.13 (reason "expr_unexpected_token"))
+		(e-malformed @1.12-1.14 (reason "expr_unexpected_token"))
+		(e-malformed @1.13-1.15 (reason "expr_unexpected_token"))
+		(e-malformed @1.14-1.16 (reason "expr_unexpected_token"))
+		(e-malformed @1.15-1.17 (reason "expr_unexpected_token"))
+		(e-malformed @1.16-1.18 (reason "expr_unexpected_token"))
+		(e-malformed @1.17-1.19 (reason "expr_unexpected_token"))
+		(e-malformed @1.18-1.20 (reason "expr_unexpected_token"))
+		(e-malformed @1.19-1.21 (reason "expr_unexpected_token"))
+		(e-malformed @1.20-1.23 (reason "expr_unexpected_token"))
+		(e-ident @1.21-1.23 (qaul "") (raw "le"))
+		(e-malformed @1.25-1.25 (reason "expected_expr_close_square_or_comma"))))
 ~~~
 # FORMATTED
 ~~~roc

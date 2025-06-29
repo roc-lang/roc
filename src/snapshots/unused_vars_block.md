@@ -72,44 +72,44 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-19-2
-	(app @1-1-1-53
-		(provides @1-6-1-12
+(file @1.1-19.2
+	(app @1.1-1.53
+		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @1-15-1-53 (name "pf")
-			(e-string @1-28-1-51
-				(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))
-		(packages @1-13-1-53
-			(record-field @1-15-1-53 (name "pf")
-				(e-string @1-28-1-51
-					(e-string-part @1-29-1-50 (raw "../basic-cli/main.roc"))))))
+		(record-field @1.15-1.53 (name "pf")
+			(e-string @1.28-1.51
+				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
+		(packages @1.13-1.53
+			(record-field @1.15-1.53 (name "pf")
+				(e-string @1.28-1.51
+					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-decl @3-1-19-2
-			(p-ident @3-1-3-6 (raw "main!"))
-			(e-lambda @3-9-19-2
+		(s-decl @3.1-19.2
+			(p-ident @3.1-3.6 (raw "main!"))
+			(e-lambda @3.9-19.2
 				(args
 					(p-underscore))
-				(e-block @3-13-19-2
+				(e-block @3.13-19.2
 					(statements
-						(s-decl @5-5-5-20
-							(p-ident @5-5-5-15 (raw "unused_var"))
-							(e-int @5-18-5-20 (raw "42")))
-						(s-decl @8-5-8-19
-							(p-ident @8-5-8-13 (raw "used_var"))
-							(e-int @8-16-8-19 (raw "100")))
-						(s-decl @11-5-11-29
-							(p-ident @11-5-11-19 (raw "another_unused"))
-							(e-string @11-22-11-29
-								(e-string-part @11-23-11-28 (raw "hello"))))
-						(s-decl @14-5-14-19
-							(p-ident @14-5-14-13 (raw "_ignored"))
-							(e-int @14-16-14-19 (raw "999")))
-						(s-decl @17-5-18-11
-							(p-ident @17-5-17-11 (raw "result"))
-							(e-binop @17-14-18-11 (op "+")
-								(e-ident @17-14-17-22 (qaul "") (raw "used_var"))
-								(e-int @17-25-17-27 (raw "10"))))
-						(e-ident @18-5-18-11 (qaul "") (raw "result"))))))))
+						(s-decl @5.5-5.20
+							(p-ident @5.5-5.15 (raw "unused_var"))
+							(e-int @5.18-5.20 (raw "42")))
+						(s-decl @8.5-8.19
+							(p-ident @8.5-8.13 (raw "used_var"))
+							(e-int @8.16-8.19 (raw "100")))
+						(s-decl @11.5-11.29
+							(p-ident @11.5-11.19 (raw "another_unused"))
+							(e-string @11.22-11.29
+								(e-string-part @11.23-11.28 (raw "hello"))))
+						(s-decl @14.5-14.19
+							(p-ident @14.5-14.13 (raw "_ignored"))
+							(e-int @14.16-14.19 (raw "999")))
+						(s-decl @17.5-18.11
+							(p-ident @17.5-17.11 (raw "result"))
+							(e-binop @17.14-18.11 (op "+")
+								(e-ident @17.14-17.22 (qaul "") (raw "used_var"))
+								(e-int @17.25-17.27 (raw "10"))))
+						(e-ident @18.5-18.11 (qaul "") (raw "result"))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -137,31 +137,31 @@ main! = |_| {
 ~~~clojure
 (can-ir
 	(d-let (id 99)
-		(p-assign @3-1-3-6 (ident "main!") (id 73))
-		(e-lambda @3-9-19-2 (id 98)
+		(p-assign @3.1-3.6 (ident "main!") (id 73))
+		(e-lambda @3.9-19.2 (id 98)
 			(args
-				(p-underscore @3-10-3-11 (id 74)))
-			(e-block @3-13-19-2
-				(s-let @5-5-5-20
-					(p-assign @5-5-5-15 (ident "unused_var") (id 75))
-					(e-int @5-18-5-20 (value "42") (id 76)))
-				(s-let @8-5-8-19
-					(p-assign @8-5-8-13 (ident "used_var") (id 78))
-					(e-int @8-16-8-19 (value "100") (id 79)))
-				(s-let @11-5-11-29
-					(p-assign @11-5-11-19 (ident "another_unused") (id 81))
-					(e-string @11-22-11-29 (id 83)
-						(e-literal @11-23-11-28 (string "hello"))))
-				(s-let @14-5-14-19
-					(p-assign @14-5-14-13 (ident "_ignored") (id 85))
-					(e-int @14-16-14-19 (value "999") (id 86)))
-				(s-let @17-5-18-11
-					(p-assign @17-5-17-11 (ident "result") (id 88))
-					(e-binop @17-14-18-11 (op "add") (id 91)
-						(e-lookup-local @17-14-17-22
+				(p-underscore @3.10-3.11 (id 74)))
+			(e-block @3.13-19.2
+				(s-let @5.5-5.20
+					(p-assign @5.5-5.15 (ident "unused_var") (id 75))
+					(e-int @5.18-5.20 (value "42") (id 76)))
+				(s-let @8.5-8.19
+					(p-assign @8.5-8.13 (ident "used_var") (id 78))
+					(e-int @8.16-8.19 (value "100") (id 79)))
+				(s-let @11.5-11.29
+					(p-assign @11.5-11.19 (ident "another_unused") (id 81))
+					(e-string @11.22-11.29 (id 83)
+						(e-literal @11.23-11.28 (string "hello"))))
+				(s-let @14.5-14.19
+					(p-assign @14.5-14.13 (ident "_ignored") (id 85))
+					(e-int @14.16-14.19 (value "999") (id 86)))
+				(s-let @17.5-18.11
+					(p-assign @17.5-17.11 (ident "result") (id 88))
+					(e-binop @17.14-18.11 (op "add") (id 91)
+						(e-lookup-local @17.14-17.22
 							(pattern (id 78)))
-						(e-int @17-25-17-27 (value "10"))))
-				(e-lookup-local @18-5-18-11
+						(e-int @17.25-17.27 (value "10"))))
+				(e-lookup-local @18.5-18.11
 					(pattern (id 88)))))))
 ~~~
 # TYPES
@@ -170,5 +170,5 @@ main! = |_| {
 	(defs
 		(d_assign (name "main!") (def_var 99) (type "* ? *")))
 	(expressions
-		(expr @3-9-19-2 (type "* ? *"))))
+		(expr @3.9-19.2 (type "* ? *"))))
 ~~~

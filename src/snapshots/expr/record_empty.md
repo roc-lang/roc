@@ -15,7 +15,7 @@ OpenCurly(1:1-1:2),CloseCurly(1:2-1:3),EndOfFile(1:3-1:3),
 ~~~
 # PARSE
 ~~~clojure
-(e-record @1-1-1-3)
+(e-record @1.1-1.3)
 ~~~
 # FORMATTED
 ~~~roc
@@ -23,7 +23,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-empty_record @1-1-1-3 (id 73))
+(e-empty_record @1.1-1.3 (id 73))
 ~~~
 # TYPES
 ~~~clojure

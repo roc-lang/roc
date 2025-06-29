@@ -70,26 +70,26 @@ UpperIdent(13:1-13:4),OpColon(13:5-13:6),UpperIdent(13:7-13:10),EndOfFile(13:10-
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-13-10
-	(module @1-1-1-18
-		(exposes @1-8-1-18
+(file @1.1-13.10
+	(module @1.1-1.18
+		(exposes @1.8-1.18
 			(exposed-upper-ident (text "Foo"))
 			(exposed-upper-ident (text "Bar"))))
 	(statements
-		(s-type-decl @4-1-7-4
-			(header @4-1-4-4 (name "Foo")
+		(s-type-decl @4.1-7.4
+			(header @4.1-4.4 (name "Foo")
 				(args))
 			(ty (name "U64")))
-		(s-type-decl @7-1-10-4
-			(header @7-1-7-4 (name "Foo")
+		(s-type-decl @7.1-10.4
+			(header @7.1-7.4 (name "Foo")
 				(args))
 			(ty (name "Str")))
-		(s-type-decl @10-1-13-4
-			(header @10-1-10-4 (name "Bar")
+		(s-type-decl @10.1-13.4
+			(header @10.1-10.4 (name "Bar")
 				(args))
 			(ty (name "SomeUndeclaredType")))
-		(s-type-decl @13-1-13-10
-			(header @13-1-13-4 (name "Baz")
+		(s-type-decl @13.1-13.10
+			(header @13.1-13.4 (name "Baz")
 				(args))
 			(ty (name "Foo")))))
 ~~~
@@ -100,18 +100,18 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-type-decl @4-1-7-4 (id 75)
-		(ty-header @4-1-4-4 (name "Foo"))
-		(ty @4-7-4-10 (name "U64")))
-	(s-type-decl @7-1-10-4 (id 78)
-		(ty-header @7-1-7-4 (name "Foo"))
-		(ty @7-7-7-10 (name "Str")))
-	(s-type-decl @10-1-13-4 (id 83)
-		(ty-header @10-1-10-4 (name "Bar"))
-		(ty @10-7-10-25 (name "SomeUndeclaredType")))
-	(s-type-decl @13-1-13-10 (id 86)
-		(ty-header @13-1-13-4 (name "Baz"))
-		(ty @13-7-13-10 (name "Foo"))))
+	(s-type-decl @4.1-7.4 (id 75)
+		(ty-header @4.1-4.4 (name "Foo"))
+		(ty @4.7-4.10 (name "U64")))
+	(s-type-decl @7.1-10.4 (id 78)
+		(ty-header @7.1-7.4 (name "Foo"))
+		(ty @7.7-7.10 (name "Str")))
+	(s-type-decl @10.1-13.4 (id 83)
+		(ty-header @10.1-10.4 (name "Bar"))
+		(ty @10.7-10.25 (name "SomeUndeclaredType")))
+	(s-type-decl @13.1-13.10 (id 86)
+		(ty-header @13.1-13.4 (name "Baz"))
+		(ty @13.7-13.10 (name "Foo"))))
 ~~~
 # TYPES
 ~~~clojure

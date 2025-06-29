@@ -34,14 +34,14 @@ CloseCurly(9:5-9:6),EndOfFile(9:6-9:6),
 ~~~
 # PARSE
 ~~~clojure
-(e-if-then-else @1-1-9-6
-	(e-ident @2-2-2-6 (qaul "") (raw "bool"))
-	(e-block @3-3-5-4
+(e-if-then-else @1.1-9.6
+	(e-ident @2.2-2.6 (qaul "") (raw "bool"))
+	(e-block @3.3-5.4
 		(statements
-			(e-int @4-4-4-5 (raw "1"))))
-	(e-block @7-5-9-6
+			(e-int @4.4-4.5 (raw "1"))))
+	(e-block @7.5-9.6
 		(statements
-			(e-int @8-6-8-7 (raw "2")))))
+			(e-int @8.6-8.7 (raw "2")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -49,15 +49,15 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-if @1-1-9-6 (branch-var 80) (id 81)
+(e-if @1.1-9.6 (branch-var 80) (id 81)
 	(if-branches
 		(if-branch
 			(e-runtime-error (tag "ident_not_in_scope"))
-			(e-block @3-3-5-4
-				(e-int @4-4-4-5 (value "1")))))
+			(e-block @3.3-5.4
+				(e-int @4.4-4.5 (value "1")))))
 	(if-else
-		(e-block @7-5-9-6
-			(e-int @8-6-8-7 (value "2")))))
+		(e-block @7.5-9.6
+			(e-int @8.6-8.7 (value "2")))))
 ~~~
 # TYPES
 ~~~clojure

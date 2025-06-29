@@ -33,38 +33,38 @@ CloseCurly(10:1-10:2),EndOfFile(10:2-10:2),
 ~~~
 # PARSE
 ~~~clojure
-(file @1-1-10-2
-	(module @1-1-1-14
-		(exposes @1-8-1-14
+(file @1.1-10.2
+	(module @1.1-1.14
+		(exposes @1.8-1.14
 			(exposed-lower-ident (text "main"))))
 	(statements
-		(s-import @3-1-3-65 (module ".Json") (qualifier "json")
+		(s-import @3.1-3.65 (module ".Json") (qualifier "json")
 			(exposing
 				(exposed-lower-ident (text "decode") (as "fromJson"))
 				(exposed-lower-ident (text "encode") (as "toJson"))))
-		(s-decl @5-1-10-2
-			(p-ident @5-1-5-5 (raw "main"))
-			(e-block @5-8-10-2
+		(s-decl @5.1-10.2
+			(p-ident @5.1-5.5 (raw "main"))
+			(e-block @5.8-10.2
 				(statements
-					(s-decl @6-2-6-33
-						(p-ident @6-2-6-6 (raw "data"))
-						(e-record @6-9-6-33
+					(s-decl @6.2-6.33
+						(p-ident @6.2-6.6 (raw "data"))
+						(e-record @6.9-6.33
 							(field (field "name") (optional false)
-								(e-string @6-17-6-22
-									(e-string-part @6-18-6-21 (raw "Bob"))))
+								(e-string @6.17-6.22
+									(e-string-part @6.18-6.21 (raw "Bob"))))
 							(field (field "age") (optional false)
-								(e-int @6-29-6-31 (raw "25")))))
-					(s-decl @7-2-7-24
-						(p-ident @7-2-7-9 (raw "encoded"))
-						(e-apply @7-12-7-24
-							(e-ident @7-12-7-18 (qaul "") (raw "toJson"))
-							(e-ident @7-19-7-23 (qaul "") (raw "data"))))
-					(s-decl @8-2-8-29
-						(p-ident @8-2-8-9 (raw "decoded"))
-						(e-apply @8-12-8-29
-							(e-ident @8-12-8-20 (qaul "") (raw "fromJson"))
-							(e-ident @8-21-8-28 (qaul "") (raw "encoded"))))
-					(e-ident @9-2-9-9 (qaul "") (raw "decoded")))))))
+								(e-int @6.29-6.31 (raw "25")))))
+					(s-decl @7.2-7.24
+						(p-ident @7.2-7.9 (raw "encoded"))
+						(e-apply @7.12-7.24
+							(e-ident @7.12-7.18 (qaul "") (raw "toJson"))
+							(e-ident @7.19-7.23 (qaul "") (raw "data"))))
+					(s-decl @8.2-8.29
+						(p-ident @8.2-8.9 (raw "decoded"))
+						(e-apply @8.12-8.29
+							(e-ident @8.12-8.20 (qaul "") (raw "fromJson"))
+							(e-ident @8.21-8.28 (qaul "") (raw "encoded"))))
+					(e-ident @9.2-9.9 (qaul "") (raw "decoded")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -74,34 +74,34 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let (id 104)
-		(p-assign @5-1-5-5 (ident "main") (id 76))
-		(e-block @5-8-10-2 (id 103)
-			(s-let @6-2-6-33
-				(p-assign @6-2-6-6 (ident "data") (id 77))
-				(e-record @6-9-6-33 (ext-var 83) (id 84)
+		(p-assign @5.1-5.5 (ident "main") (id 76))
+		(e-block @5.8-10.2 (id 103)
+			(s-let @6.2-6.33
+				(p-assign @6.2-6.6 (ident "data") (id 77))
+				(e-record @6.9-6.33 (ext-var 83) (id 84)
 					(fields
 						(field (name "name")
-							(e-string @6-17-6-22
-								(e-literal @6-18-6-21 (string "Bob"))))
+							(e-string @6.17-6.22
+								(e-literal @6.18-6.21 (string "Bob"))))
 						(field (name "age")
-							(e-int @6-29-6-31 (value "25"))))))
-			(s-let @7-2-7-24
-				(p-assign @7-2-7-9 (ident "encoded") (id 88))
-				(e-call @7-12-7-24 (id 93)
+							(e-int @6.29-6.31 (value "25"))))))
+			(s-let @7.2-7.24
+				(p-assign @7.2-7.9 (ident "encoded") (id 88))
+				(e-call @7.12-7.24 (id 93)
 					(e-lookup-external
-						(ext-decl @7-12-7-18 (qualified "json.Json.encode") (module "json.Json") (local "toJson") (kind "value") (type-var 89)))
-					(e-lookup-local @7-19-7-23
+						(ext-decl @7.12-7.18 (qualified "json.Json.encode") (module "json.Json") (local "toJson") (kind "value") (type-var 89)))
+					(e-lookup-local @7.19-7.23
 						(pattern (id 77)))))
-			(s-let @8-2-8-29
-				(p-assign @8-2-8-9 (ident "decoded") (id 95))
-				(e-call @8-12-8-29 (id 100)
+			(s-let @8.2-8.29
+				(p-assign @8.2-8.9 (ident "decoded") (id 95))
+				(e-call @8.12-8.29 (id 100)
 					(e-lookup-external
-						(ext-decl @8-12-8-20 (qualified "json.Json.decode") (module "json.Json") (local "fromJson") (kind "value") (type-var 96)))
-					(e-lookup-local @8-21-8-28
+						(ext-decl @8.12-8.20 (qualified "json.Json.decode") (module "json.Json") (local "fromJson") (kind "value") (type-var 96)))
+					(e-lookup-local @8.21-8.28
 						(pattern (id 88)))))
-			(e-lookup-local @9-2-9-9
+			(e-lookup-local @9.2-9.9
 				(pattern (id 95)))))
-	(s-import @3-1-3-65 (module "json.Json") (qualifier "json") (id 75)
+	(s-import @3.1-3.65 (module "json.Json") (qualifier "json") (id 75)
 		(exposes
 			(exposed (name "decode") (alias "fromJson") (wildcard false))
 			(exposed (name "encode") (alias "toJson") (wildcard false)))))
@@ -112,5 +112,5 @@ NO CHANGE
 	(defs
 		(d_assign (name "main") (def_var 104) (type "*")))
 	(expressions
-		(expr @5-8-10-2 (type "*"))))
+		(expr @5.8-10.2 (type "*"))))
 ~~~

@@ -19,19 +19,19 @@ OpenCurly(3:2-3:3),LowerIdent(3:4-3:11),OpColon(3:11-3:12),StringStart(3:13-3:14
 ~~~
 # PARSE
 ~~~clojure
-(app @1-1-3-57
-	(provides @2-3-2-10
+(app @1.1-3.57
+	(provides @2.3-2.10
 		(exposed-lower-ident (text "main!")))
-	(record-field @3-28-3-55 (name "pf")
-		(e-string @3-41-3-54
-			(e-string-part @3-42-3-53 (raw "../main.roc"))))
-	(packages @3-2-3-57
-		(record-field @3-4-3-27 (name "somePkg")
-			(e-string @3-13-3-26
-				(e-string-part @3-14-3-25 (raw "../main.roc"))))
-		(record-field @3-28-3-55 (name "pf")
-			(e-string @3-41-3-54
-				(e-string-part @3-42-3-53 (raw "../main.roc"))))))
+	(record-field @3.28-3.55 (name "pf")
+		(e-string @3.41-3.54
+			(e-string-part @3.42-3.53 (raw "../main.roc"))))
+	(packages @3.2-3.57
+		(record-field @3.4-3.27 (name "somePkg")
+			(e-string @3.13-3.26
+				(e-string-part @3.14-3.25 (raw "../main.roc"))))
+		(record-field @3.28-3.55 (name "pf")
+			(e-string @3.41-3.54
+				(e-string-part @3.42-3.53 (raw "../main.roc"))))))
 ~~~
 # FORMATTED
 ~~~roc

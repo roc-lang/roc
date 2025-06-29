@@ -25,7 +25,7 @@ Float(1:1-1:5),NoSpaceDotInt(1:5-1:8),EndOfFile(1:8-1:8),
 ~~~
 # PARSE
 ~~~clojure
-(e-malformed @1-5-1-8 (reason "expr_no_space_dot_int"))
+(e-malformed @1.5-1.8 (reason "expr_no_space_dot_int"))
 ~~~
 # FORMATTED
 ~~~roc

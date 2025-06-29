@@ -37,41 +37,41 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 ~~~
 # PARSE
 ~~~clojure
-(e-record @1-1-12-2
+(e-record @1.1-12.2
 	(field (field "person") (optional false)
-		(e-record @2-13-2-39
+		(e-record @2.13-2.39
 			(field (field "name") (optional false)
-				(e-string @2-21-2-28
-					(e-string-part @2-22-2-27 (raw "Alice"))))
+				(e-string @2.21-2.28
+					(e-string-part @2.22-2.27 (raw "Alice"))))
 			(field (field "age") (optional false)
-				(e-int @2-35-2-37 (raw "30")))))
+				(e-int @2.35-2.37 (raw "30")))))
 	(field (field "address") (optional false)
-		(e-record @3-14-7-6
+		(e-record @3.14-7.6
 			(field (field "street") (optional false)
-				(e-string @4-17-4-30
-					(e-string-part @4-18-4-29 (raw "123 Main St"))))
+				(e-string @4.17-4.30
+					(e-string-part @4.18-4.29 (raw "123 Main St"))))
 			(field (field "city") (optional false)
-				(e-string @5-15-5-28
-					(e-string-part @5-16-5-27 (raw "Springfield"))))
+				(e-string @5.15-5.28
+					(e-string-part @5.16-5.27 (raw "Springfield"))))
 			(field (field "coordinates") (optional false)
-				(e-record @6-22-6-53
+				(e-record @6.22-6.53
 					(field (field "lat") (optional false)
-						(e-frac @6-29-6-36 (raw "42.1234")))
+						(e-frac @6.29-6.36 (raw "42.1234")))
 					(field (field "lng") (optional false)
-						(e-frac @6-43-6-51 (raw "-71.5678")))))))
+						(e-frac @6.43-6.51 (raw "-71.5678")))))))
 	(field (field "contact") (optional false)
-		(e-record @8-14-11-6
+		(e-record @8.14-11.6
 			(field (field "email") (optional false)
-				(e-string @9-16-9-35
-					(e-string-part @9-17-9-34 (raw "alice@example.com"))))
+				(e-string @9.16-9.35
+					(e-string-part @9.17-9.34 (raw "alice@example.com"))))
 			(field (field "phone") (optional false)
-				(e-record @10-16-10-54
+				(e-record @10.16-10.54
 					(field (field "home") (optional false)
-						(e-string @10-24-10-34
-							(e-string-part @10-25-10-33 (raw "555-1234"))))
+						(e-string @10.24-10.34
+							(e-string-part @10.25-10.33 (raw "555-1234"))))
 					(field (field "work") (optional false)
-						(e-string @10-42-10-52
-							(e-string-part @10-43-10-51 (raw "555-5678")))))))))
+						(e-string @10.42-10.52
+							(e-string-part @10.43-10.51 (raw "555-5678")))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -90,47 +90,47 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-record @1-1-12-2 (ext-var 123) (id 124)
+(e-record @1.1-12.2 (ext-var 123) (id 124)
 	(fields
 		(field (name "person")
-			(e-record @2-13-2-39 (ext-var 78)
+			(e-record @2.13-2.39 (ext-var 78)
 				(fields
 					(field (name "name")
-						(e-string @2-21-2-28
-							(e-literal @2-22-2-27 (string "Alice"))))
+						(e-string @2.21-2.28
+							(e-literal @2.22-2.27 (string "Alice"))))
 					(field (name "age")
-						(e-int @2-35-2-37 (value "30"))))))
+						(e-int @2.35-2.37 (value "30"))))))
 		(field (name "address")
-			(e-record @3-14-7-6 (ext-var 98)
+			(e-record @3.14-7.6 (ext-var 98)
 				(fields
 					(field (name "street")
-						(e-string @4-17-4-30
-							(e-literal @4-18-4-29 (string "123 Main St"))))
+						(e-string @4.17-4.30
+							(e-literal @4.18-4.29 (string "123 Main St"))))
 					(field (name "city")
-						(e-string @5-15-5-28
-							(e-literal @5-16-5-27 (string "Springfield"))))
+						(e-string @5.15-5.28
+							(e-literal @5.16-5.27 (string "Springfield"))))
 					(field (name "coordinates")
-						(e-record @6-22-6-53 (ext-var 93)
+						(e-record @6.22-6.53 (ext-var 93)
 							(fields
 								(field (name "lat")
-									(e-frac-dec @6-29-6-36 (value "42.1234")))
+									(e-frac-dec @6.29-6.36 (value "42.1234")))
 								(field (name "lng")
-									(e-frac-dec @6-43-6-51 (value "-71.5678")))))))))
+									(e-frac-dec @6.43-6.51 (value "-71.5678")))))))))
 		(field (name "contact")
-			(e-record @8-14-11-6 (ext-var 118)
+			(e-record @8.14-11.6 (ext-var 118)
 				(fields
 					(field (name "email")
-						(e-string @9-16-9-35
-							(e-literal @9-17-9-34 (string "alice@example.com"))))
+						(e-string @9.16-9.35
+							(e-literal @9.17-9.34 (string "alice@example.com"))))
 					(field (name "phone")
-						(e-record @10-16-10-54 (ext-var 113)
+						(e-record @10.16-10.54 (ext-var 113)
 							(fields
 								(field (name "home")
-									(e-string @10-24-10-34
-										(e-literal @10-25-10-33 (string "555-1234"))))
+									(e-string @10.24-10.34
+										(e-literal @10.25-10.33 (string "555-1234"))))
 								(field (name "work")
-									(e-string @10-42-10-52
-										(e-literal @10-43-10-51 (string "555-5678"))))))))))))
+									(e-string @10.42-10.52
+										(e-literal @10.43-10.51 (string "555-5678"))))))))))))
 ~~~
 # TYPES
 ~~~clojure
