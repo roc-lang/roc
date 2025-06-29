@@ -344,28 +344,45 @@ fn renderElementToTerminal(element: DocumentElement, writer: anytype, palette: C
                 try writer.writeAll("\n");
 
                 // Check if any underline regions apply to this line
+                var has_underlines = false;
                 for (data.underline_regions) |underline| {
                     if (underline.start_line == line_num and underline.start_line == underline.end_line) {
-                        // Single-line underline
-                        try writer.writeAll(palette.secondary);
-                        try source_region.printSpaces(writer, line_num_width);
-                        try writer.writeAll(" │ ");
-                        try writer.writeAll(palette.reset);
-
-                        // Print spaces up to the start column
-                        try source_region.printSpaces(writer, underline.start_column - 1);
-
-                        // Print the underline
-                        const color = getAnnotationColor(underline.annotation, palette);
-                        try writer.writeAll(color);
-                        const underline_len = source_region.calculateUnderlineLength(underline.start_column, underline.end_column);
-                        var i: u32 = 0;
-                        while (i < underline_len) : (i += 1) {
-                            try writer.writeAll("^");
-                        }
-                        try writer.writeAll(palette.reset);
-                        try writer.writeAll("\n");
+                        has_underlines = true;
+                        break;
                     }
+                }
+
+                if (has_underlines) {
+                    // Print the line prefix
+                    try writer.writeAll(palette.secondary);
+                    try source_region.printSpaces(writer, line_num_width);
+                    try writer.writeAll(" │ ");
+                    try writer.writeAll(palette.reset);
+
+                    // Print all underlines for this line on the same line
+                    var col_position: u32 = 1;
+                    for (data.underline_regions) |underline| {
+                        if (underline.start_line == line_num and underline.start_line == underline.end_line) {
+                            // Print spaces up to the start column
+                            if (underline.start_column > col_position) {
+                                try source_region.printSpaces(writer, underline.start_column - col_position);
+                            }
+
+                            // Print the underline
+                            const color = getAnnotationColor(underline.annotation, palette);
+                            try writer.writeAll(color);
+                            const underline_len = source_region.calculateUnderlineLength(underline.start_column, underline.end_column);
+                            var i: u32 = 0;
+                            while (i < underline_len) : (i += 1) {
+                                try writer.writeAll("^");
+                            }
+                            try writer.writeAll(palette.reset);
+
+                            // Update column position
+                            col_position = underline.end_column;
+                        }
+                    }
+                    try writer.writeAll("\n");
                 }
 
                 line_num += 1;
@@ -590,19 +607,38 @@ fn renderElementToMarkdown(element: DocumentElement, writer: anytype, config: Re
             var line_num = data.display_region.start_line;
             var iter = std.mem.tokenizeScalar(u8, lines, '\n');
             while (iter.next()) |_| {
+                var has_underlines = false;
                 for (data.underline_regions) |underline| {
                     if (underline.start_line == line_num and underline.start_line == underline.end_line) {
-                        var i: u32 = 0;
-                        while (i < underline.start_column - 1) : (i += 1) {
-                            try writer.writeAll(" ");
-                        }
-                        const underline_len = source_region.calculateUnderlineLength(underline.start_column, underline.end_column);
-                        i = 0;
-                        while (i < underline_len) : (i += 1) {
-                            try writer.writeAll("^");
-                        }
-                        try writer.writeAll("\n");
+                        has_underlines = true;
+                        break;
                     }
+                }
+
+                if (has_underlines) {
+                    var col_position: u32 = 1;
+                    for (data.underline_regions) |underline| {
+                        if (underline.start_line == line_num and underline.start_line == underline.end_line) {
+                            // Print spaces up to the start column
+                            if (underline.start_column > col_position) {
+                                var i: u32 = 0;
+                                while (i < underline.start_column - col_position) : (i += 1) {
+                                    try writer.writeAll(" ");
+                                }
+                            }
+
+                            // Print the underline
+                            const underline_len = source_region.calculateUnderlineLength(underline.start_column, underline.end_column);
+                            var i: u32 = 0;
+                            while (i < underline_len) : (i += 1) {
+                                try writer.writeAll("^");
+                            }
+
+                            // Update column position
+                            col_position = underline.end_column;
+                        }
+                    }
+                    try writer.writeAll("\n");
                 }
                 line_num += 1;
             }

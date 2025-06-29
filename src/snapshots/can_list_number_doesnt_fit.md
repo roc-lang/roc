@@ -20,8 +20,7 @@ The first two elements in this list have incompatible types:
 ```roc
 [1u8, 2u8, 300]
 ```
- ^^^
-      ^^^
+ ^^^  ^^^
 
 The first element has this type:
     _Error_

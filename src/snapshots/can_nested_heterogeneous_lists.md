@@ -14,8 +14,7 @@ The two elements in this list have incompatible types:
 ```roc
 [[1, "hello"], [2, 3]]
 ```
-  ^
-     ^^^^^^^
+  ^  ^^^^^^^
 
 The first element has this type:
     _Num(*)_
@@ -31,8 +30,7 @@ The two elements in this list have incompatible types:
 ```roc
 [[1, "hello"], [2, 3]]
 ```
- ^^^^^^^^^^^^
-               ^^^^^^
+ ^^^^^^^^^^^^  ^^^^^^
 
 The first element has this type:
     _List(Error)_

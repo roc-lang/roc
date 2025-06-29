@@ -14,8 +14,7 @@ The two elements in this list have incompatible types:
 ```roc
 [1, "hello"]
 ```
- ^
-    ^^^^^^^
+ ^  ^^^^^^^
 
 The first element has this type:
     _Num(*)_
