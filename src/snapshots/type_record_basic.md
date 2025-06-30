@@ -94,15 +94,15 @@ main! = |_| getName({ name: "luke", age: 21 })
 						(field (field "age")
 							(ty @3.29-3.32 (name "U64"))))
 					(ty @3.38-3.41 (name "Str"))))))
-	(d-let (id 112)
+	(d-let (id 109)
 		(p-assign @6.1-6.6 (ident "main!") (id 96))
-		(e-lambda @6.9-6.44 (id 111)
+		(e-lambda @6.9-6.44 (id 108)
 			(args
 				(p-underscore @6.10-6.11 (id 97)))
 			(e-call @6.13-6.44
 				(e-lookup-local @6.13-6.20
 					(pattern (id 80)))
-				(e-record @6.21-6.43 (ext-var 104)
+				(e-record @6.21-6.43
 					(fields
 						(field (name "name")
 							(e-string @6.28-6.34
@@ -115,7 +115,7 @@ main! = |_| getName({ name: "luke", age: 21 })
 (inferred-types
 	(defs
 		(d_assign (name "getName") (def_var 95) (type "{ name: Str, age: U64 } -> Str"))
-		(d_assign (name "main!") (def_var 112) (type "* ? *")))
+		(d_assign (name "main!") (def_var 109) (type "* ? *")))
 	(expressions
 		(expr @4.11-4.28 (type "{ name: Str, age: U64 } -> Str"))
 		(expr @6.9-6.44 (type "* ? *"))))

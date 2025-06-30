@@ -238,7 +238,6 @@ test "NodeStore round trip - Expressions" {
     });
     try expressions.append(CIR.Expr{
         .e_record = .{
-            .ext_var = @enumFromInt(1456),
             .fields = CIR.RecordField.Span{ .span = base.DataSpan.init(789, 1012) },
             .region = from_raw_offsets(1567, 1890),
         },

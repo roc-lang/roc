@@ -116,7 +116,11 @@ pub const Store = struct {
             .nominal_type => |nominal_type| SnapshotFlatType{ .nominal_type = self.deepCopyNominalType(store, nominal_type, var_) },
             .func => |func| SnapshotFlatType{ .func = self.deepCopyFunc(store, func) },
             .record => |record| SnapshotFlatType{ .record = self.deepCopyRecord(store, record) },
-            .record_unbound => |record| SnapshotFlatType{ .record_unbound = self.deepCopyRecord(store, record) },
+            .record_unbound => |fields| SnapshotFlatType{ .record_unbound = self.deepCopyRecordFields(store, fields) },
+            .record_poly => |poly| SnapshotFlatType{ .record_poly = .{
+                .record = self.deepCopyRecord(store, poly.record),
+                .var_ = self.deepCopyContent(store, store.resolveVar(poly.var_).desc.content, poly.var_),
+            } },
             .empty_record => SnapshotFlatType.empty_record,
             .tag_union => |tag_union| SnapshotFlatType{ .tag_union = self.deepCopyTagUnion(store, tag_union) },
             .empty_tag_union => SnapshotFlatType.empty_tag_union,
@@ -270,6 +274,25 @@ pub const Store = struct {
         };
     }
 
+    fn deepCopyRecordFields(self: *Self, store: *const TypesStore, fields: types.RecordField.SafeMultiList.Range) SnapshotRecordFieldSafeList.Range {
+        const fields_start = @as(SnapshotRecordFieldSafeList.Idx, @enumFromInt(self.record_fields.len()));
+        const fields_slice = store.getRecordFieldsSlice(fields);
+        for (fields_slice.items(.name), fields_slice.items(.var_)) |name, var_| {
+            const field_resolved = store.resolveVar(var_);
+            const deep_field_content = self.deepCopyContent(store, field_resolved.desc.content, var_);
+
+            const snapshot_field = SnapshotRecordField{
+                .name = name,
+                .content = deep_field_content,
+            };
+
+            _ = self.record_fields.append(self.gpa, snapshot_field);
+        }
+
+        const fields_end = @as(SnapshotRecordFieldSafeList.Idx, @enumFromInt(self.record_fields.len()));
+        return .{ .start = fields_start, .end = fields_end };
+    }
+
     fn deepCopyRecord(self: *Self, store: *const TypesStore, record: types.Record) SnapshotRecord {
         // Mark starting position
         const start_idx = self.record_fields.len();
@@ -421,7 +444,8 @@ pub const SnapshotFlatType = union(enum) {
     nominal_type: SnapshotNominalType,
     func: SnapshotFunc,
     record: SnapshotRecord,
-    record_unbound: SnapshotRecord,
+    record_unbound: SnapshotRecordFieldSafeList.Range,
+    record_poly: struct { record: SnapshotRecord, var_: SnapshotContentIdx },
     empty_record,
     tag_union: SnapshotTagUnion,
     empty_tag_union,
@@ -583,8 +607,12 @@ pub const SnapshotWriter = struct {
             .record => |record| {
                 try self.writeRecord(record);
             },
-            .record_unbound => |record| {
-                try self.writeRecord(record);
+            .record_unbound => |fields| {
+                try self.writeRecordFields(fields);
+            },
+            .record_poly => |poly| {
+                try self.writeRecord(poly.record);
+                try self.write(poly.var_);
             },
             .empty_record => {
                 _ = try self.writer.write("{}");
@@ -686,7 +714,34 @@ pub const SnapshotWriter = struct {
         _ = try self.writer.write(" }");
     }
 
-    /// Write a tag union type
+    /// Write record fields without extension
+    pub fn writeRecordFields(self: *Self, fields: SnapshotRecordFieldSafeList.Range) Allocator.Error!void {
+        if (fields.isEmpty()) {
+            _ = try self.writer.write("{}");
+            return;
+        }
+
+        const fields_slice = self.snapshots.record_fields.rangeToSlice(fields);
+
+        _ = try self.writer.write("{ ");
+
+        // Write first field - we already verified that there is at least one field.
+        _ = try self.writer.write(self.idents.getText(fields_slice.items(.name)[0]));
+        _ = try self.writer.write(": ");
+        try self.write(fields_slice.items(.content)[0]);
+
+        // Write remaining fields
+        for (fields_slice.items(.name)[1..], fields_slice.items(.content)[1..]) |name, content| {
+            _ = try self.writer.write(", ");
+            _ = try self.writer.write(self.idents.getText(name));
+            _ = try self.writer.write(": ");
+            try self.write(content);
+        }
+
+        _ = try self.writer.write(" }");
+    }
+
+    /// Write a tag union
     pub fn writeTagUnion(self: *Self, tag_union: SnapshotTagUnion) Allocator.Error!void {
         _ = try self.writer.write("[");
         var iter = tag_union.tags.iterIndices();

@@ -29,6 +29,11 @@ pub fn SafeRange(comptime Idx: type) type {
             return @intFromEnum(self.end) - @intFromEnum(self.start);
         }
 
+        /// Return whether the range is empty
+        pub fn isEmpty(self: @This()) bool {
+            return self.start == self.end;
+        }
+
         /// Get the length of a range slice
         pub fn iterIndices(self: @This()) IndexIterator {
             return IndexIterator{
