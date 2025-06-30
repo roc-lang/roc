@@ -1,10 +1,19 @@
 [files]
-extend-exclude = ["design/language/Abilities.md", "src/snapshots/fuzz_crash", "crates/vendor/", "authors", "crates", "examples/static-site-gen/input/", "COPYRIGHT", "crates/compiler/checkmate/www/package-lock.json", "src/zig_llvm.h"]
+extend-exclude = [
+    "design/language/Abilities.md",
+    "src/snapshots/fuzz_crash",
+    "crates/vendor/",
+    "authors",
+    "crates",
+    "examples/static-site-gen/input/",
+    "COPYRIGHT",
+    "crates/compiler/checkmate/www/package-lock.json",
+    "src/zig_llvm.h",
+    "src/snapshots/",
+]
 
 [default]
-extend-ignore-identifiers-re = [
-    ".*_SME_.*"
-]
+extend-ignore-identifiers-re = [".*_SME_.*"]
 
 [default.extend-words]
 HSA = "HSA"
