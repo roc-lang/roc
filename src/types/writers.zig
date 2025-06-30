@@ -216,9 +216,8 @@ pub const TypeWriter = struct {
         _ = try self.writer.write("{ ");
 
         const fields_slice = self.env.types.getRecordFieldsSlice(fields);
-        std.debug.assert(fields_slice.len > 0);
 
-        // Write first field
+        // Write first field - we already verified that there's at least one field
         _ = try self.writer.write(self.env.idents.getText(fields_slice.items(.name)[0]));
         _ = try self.writer.write(": ");
         try self.writeVar(fields_slice.items(.var_)[0]);

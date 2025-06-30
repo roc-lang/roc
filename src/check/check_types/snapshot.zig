@@ -722,12 +722,11 @@ pub const SnapshotWriter = struct {
             return;
         }
 
+        const fields_slice = self.snapshots.record_fields.rangeToSlice(fields);
+
         _ = try self.writer.write("{ ");
 
-        const fields_slice = self.snapshots.record_fields.rangeToSlice(fields);
-        std.debug.assert(fields_slice.len > 0);
-
-        // Write first field
+        // Write first field - we already verified that there is at least one field.
         _ = try self.writer.write(self.idents.getText(fields_slice.items(.name)[0]));
         _ = try self.writer.write(": ");
         try self.write(fields_slice.items(.content)[0]);
