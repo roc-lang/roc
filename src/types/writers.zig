@@ -208,6 +208,11 @@ pub const TypeWriter = struct {
 
     /// Write record fields without extension
     pub fn writeRecordFields(self: *Self, fields: types.RecordField.SafeMultiList.Range) Allocator.Error!void {
+        if (fields.isEmpty()) {
+            _ = try self.writer.write("{}");
+            return;
+        }
+
         _ = try self.writer.write("{ ");
 
         const fields_slice = self.env.types.getRecordFieldsSlice(fields);

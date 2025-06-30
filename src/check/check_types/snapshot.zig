@@ -719,6 +719,11 @@ pub const SnapshotWriter = struct {
 
     /// Write record fields without extension
     pub fn writeRecordFields(self: *Self, fields: SnapshotRecordFieldSafeList.Range) Allocator.Error!void {
+        if (fields.isEmpty()) {
+            _ = try self.writer.write("{}");
+            return;
+        }
+
         _ = try self.writer.write("{ ");
 
         const fields_slice = self.snapshots.record_fields.rangeToSlice(fields);
