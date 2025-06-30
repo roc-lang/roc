@@ -52,7 +52,24 @@ pub fn deinit(self: *Self) void {
 /// Calculate and store line starts from the source text
 pub fn calcLineStarts(self: *Self, source: []const u8) !void {
     self.line_starts.clearRetainingCapacity();
-    self.line_starts = try RegionInfo.findLineStarts(self.gpa, source);
+
+    // if the source is empty, we're done
+    if (source.len == 0) {
+        return;
+    }
+
+    // the first line starts at offset 0
+    try self.line_starts.append(0);
+
+    // find all newlines in the source, save their offset
+    var pos: u32 = 0;
+    for (source) |c| {
+        if (c == '\n') {
+            // next line starts after the newline in the current position
+            try self.line_starts.append(pos + 1);
+        }
+        pos += 1;
+    }
 }
 
 /// Get diagnostic position information for a given range
