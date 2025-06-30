@@ -87,11 +87,17 @@ pub fn deinit(store: *NodeStore) void {
     store.scratch_diagnostics.items.deinit(store.gpa);
 }
 
-// Compile-time constants for union variant counts to ensure we don't miss cases
-// when adding/removing variants from CIR unions. Update these when modifying the unions.
+/// Compile-time constants for union variant counts to ensure we don't miss cases
+/// when adding/removing variants from CIR unions. Update these when modifying the unions.
+///
+/// Count of the diagnostic nodes in the CIR
 pub const CIR_DIAGNOSTIC_NODE_COUNT = 27;
+/// Count of the expression nodes in the CIR
 pub const CIR_EXPR_NODE_COUNT = 24;
+/// Count of the statement nodes in the CIR
 pub const CIR_STATEMENT_NODE_COUNT = 11;
+/// Count of the type annotation nodes in the CIR
+pub const CIR_TYPE_ANNO_NODE_COUNT = 11;
 
 comptime {
     // Check the number of CIR.Diagnostic nodes
@@ -109,6 +115,12 @@ comptime {
     // Check the number of CIR.Statement nodes
     const statement_fields = @typeInfo(CIR.Statement).@"union".fields;
     std.debug.assert(statement_fields.len == CIR_STATEMENT_NODE_COUNT);
+}
+
+comptime {
+    // Check the number of CIR.TypeAnno nodes
+    const type_anno_fields = @typeInfo(CIR.TypeAnno).@"union".fields;
+    std.debug.assert(type_anno_fields.len == CIR_TYPE_ANNO_NODE_COUNT);
 }
 
 /// Retrieves a region from node from the store.
@@ -908,6 +920,10 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
         },
         .ty_parens => return CIR.TypeAnno{ .parens = .{
             .anno = @enumFromInt(node.data_1),
+            .region = node.region,
+        } },
+        .ty_malformed => return CIR.TypeAnno{ .malformed = .{
+            .diagnostic = @enumFromInt(node.data_1),
             .region = node.region,
         } },
         .malformed => return CIR.TypeAnno{ .malformed = .{

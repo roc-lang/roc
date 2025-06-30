@@ -315,7 +315,7 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 					(e-literal @13.33-13.38 (string "Alice")))
 				(e-string @13.41-13.48
 					(e-literal @13.42-13.47 (string "fixed")))
-				(e-tag @13.50-13.54 (ext-var 0) (name "True") (args "TODO")))))
+				(e-tag @13.50-13.54 (ext-var 128) (name "True") (args "TODO")))))
 	(s-expr @16.5-16.20
 		(e-tuple @16.5-16.18
 			(elems

@@ -125,7 +125,6 @@ test "NodeStore round trip - Statements" {
         };
     }
 
-    // Runtime validation: ensure we have minimum test coverage for all statement variants
     const actual_test_count = statements.items.len;
     if (actual_test_count < NodeStore.CIR_STATEMENT_NODE_COUNT) {
         std.debug.print("Statement test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.CIR_STATEMENT_NODE_COUNT, actual_test_count });
@@ -337,7 +336,6 @@ test "NodeStore round trip - Expressions" {
         };
     }
 
-    // Runtime validation: ensure we have minimum test coverage for all expression variants
     const actual_test_count = expressions.items.len;
     if (actual_test_count < NodeStore.CIR_EXPR_NODE_COUNT) {
         std.debug.print("Expression test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.CIR_EXPR_NODE_COUNT, actual_test_count });
@@ -552,11 +550,120 @@ test "NodeStore round trip - Diagnostics" {
         };
     }
 
-    // Runtime validation: ensure we have minimum test coverage for all diagnostic variants
     const actual_test_count = diagnostics.items.len;
     if (actual_test_count < NodeStore.CIR_DIAGNOSTIC_NODE_COUNT) {
         std.debug.print("Diagnostic test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.CIR_DIAGNOSTIC_NODE_COUNT, actual_test_count });
         std.debug.print("Please add test cases for missing diagnostic variants.\n", .{});
         return error.IncompleteDiagnosticTestCoverage;
+    }
+}
+
+test "NodeStore round trip - TypeAnno" {
+    const gpa = testing.allocator;
+    var store = NodeStore.init(gpa);
+    defer store.deinit();
+
+    var type_annos = std.ArrayList(CIR.TypeAnno).init(gpa);
+    defer type_annos.deinit();
+
+    // Test all TypeAnno variants to ensure complete coverage
+    try type_annos.append(CIR.TypeAnno{
+        .apply = .{
+            .symbol = @bitCast(@as(u32, 123)),
+            .args = CIR.TypeAnno.Span{ .span = base.DataSpan.init(456, 789) },
+            .region = from_raw_offsets(10, 20),
+        },
+    });
+
+    try type_annos.append(CIR.TypeAnno{
+        .ty_var = .{
+            .name = @bitCast(@as(u32, 234)),
+            .region = from_raw_offsets(30, 40),
+        },
+    });
+
+    try type_annos.append(CIR.TypeAnno{
+        .underscore = .{
+            .region = from_raw_offsets(50, 60),
+        },
+    });
+
+    try type_annos.append(CIR.TypeAnno{
+        .ty = .{
+            .symbol = @bitCast(@as(u32, 345)),
+            .region = from_raw_offsets(70, 80),
+        },
+    });
+
+    try type_annos.append(CIR.TypeAnno{
+        .mod_ty = .{
+            .mod_symbol = @bitCast(@as(u32, 456)),
+            .ty_symbol = @bitCast(@as(u32, 567)),
+            .region = from_raw_offsets(90, 100),
+        },
+    });
+
+    try type_annos.append(CIR.TypeAnno{
+        .tag_union = .{
+            .tags = CIR.TypeAnno.Span{ .span = base.DataSpan.init(678, 890) },
+            .open_anno = @enumFromInt(901),
+            .region = from_raw_offsets(110, 120),
+        },
+    });
+
+    try type_annos.append(CIR.TypeAnno{
+        .tuple = .{
+            .annos = CIR.TypeAnno.Span{ .span = base.DataSpan.init(1012, 1234) },
+            .region = from_raw_offsets(130, 140),
+        },
+    });
+
+    try type_annos.append(CIR.TypeAnno{
+        .record = .{
+            .fields = CIR.AnnoRecordField.Span{ .span = base.DataSpan.init(1345, 1567) },
+            .region = from_raw_offsets(150, 160),
+        },
+    });
+
+    try type_annos.append(CIR.TypeAnno{
+        .@"fn" = .{
+            .args = CIR.TypeAnno.Span{ .span = base.DataSpan.init(1678, 1890) },
+            .ret = @enumFromInt(1901),
+            .effectful = true,
+            .region = from_raw_offsets(170, 180),
+        },
+    });
+
+    try type_annos.append(CIR.TypeAnno{
+        .parens = .{
+            .anno = @enumFromInt(2012),
+            .region = from_raw_offsets(190, 200),
+        },
+    });
+
+    try type_annos.append(CIR.TypeAnno{
+        .malformed = .{
+            .diagnostic = @enumFromInt(2123),
+            .region = from_raw_offsets(210, 220),
+        },
+    });
+
+    // Test the round-trip for all type annotations
+    for (type_annos.items) |type_anno| {
+        const idx = store.addTypeAnno(type_anno);
+        const retrieved = store.getTypeAnno(idx);
+
+        testing.expectEqualDeep(type_anno, retrieved) catch |err| {
+            std.debug.print("\n\nOriginal:  {any}\n\n", .{type_anno});
+            std.debug.print("Retrieved: {any}\n\n", .{retrieved});
+            return err;
+        };
+    }
+
+    const actual_test_count = type_annos.items.len;
+    if (actual_test_count < NodeStore.CIR_TYPE_ANNO_NODE_COUNT) {
+        std.debug.print("CIR.TypeAnno test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.CIR_TYPE_ANNO_NODE_COUNT, actual_test_count });
+        std.debug.print("Please add test cases for missing type annotation variants.\n", .{});
+        return error.IncompleteTypeAnnoTestCoverage;
     }
 }

@@ -89,7 +89,7 @@ foo = if 1 A
 			(if-branches
 				(if-branch
 					(e-int @3.10-3.11 (value "1"))
-					(e-tag @3.12-3.13 (ext-var 0) (name "A") (args "TODO"))))
+					(e-tag @3.12-3.13 (ext-var 75) (name "A") (args "TODO"))))
 			(if-else
 				(e-block @5.10-7.6
 					(e-string @6.2-6.9

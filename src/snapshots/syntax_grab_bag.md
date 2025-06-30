@@ -1302,7 +1302,7 @@ NO CHANGE
 					(e-int @146.15-146.18 (value "123") (id 245)))
 				(s-let @148.2-148.12
 					(p-assign @148.2-148.5 (ident "tag") (id 250))
-					(e-tag @148.8-148.12 (ext-var 0) (name "Blue") (args "TODO") (id 252)))
+					(e-tag @148.8-148.12 (ext-var 251) (name "Blue") (args "TODO") (id 252)))
 				(s-expr @154.2-155.12
 					(e-runtime-error (tag "not_implemented")))
 				(s-expr @155.2-158.11
@@ -1317,7 +1317,7 @@ NO CHANGE
 				(s-let @164.2-164.31
 					(p-assign @164.2-164.18 (ident "tag_with_payload") (id 274))
 					(e-call @164.21-164.31 (id 279)
-						(e-tag @164.21-164.23 (ext-var 0) (name "Ok") (args "TODO"))
+						(e-tag @164.21-164.23 (ext-var 275) (name "Ok") (args "TODO"))
 						(e-lookup-local @164.24-164.30
 							(pattern (id 246)))))
 				(s-let @165.2-165.34
@@ -1351,7 +1351,7 @@ NO CHANGE
 									(pattern (id 250))))
 							(field (name "qux")
 								(e-call @178.52-178.61
-									(e-tag @178.52-178.54 (ext-var 0) (name "Ok") (args "TODO"))
+									(e-tag @178.52-178.54 (ext-var 307) (name "Ok") (args "TODO"))
 									(e-lookup-local @178.55-178.60
 										(pattern (id 241)))))
 							(field (name "punned")
@@ -1366,7 +1366,7 @@ NO CHANGE
 							(e-lookup-local @179.25-179.28
 								(pattern (id 250)))
 							(e-call @179.30-179.39
-								(e-tag @179.30-179.32 (ext-var 0) (name "Ok") (args "TODO"))
+								(e-tag @179.30-179.32 (ext-var 329) (name "Ok") (args "TODO"))
 								(e-lookup-local @179.33-179.38
 									(pattern (id 241))))
 							(e-tuple @179.41-179.56
@@ -1388,7 +1388,7 @@ NO CHANGE
 								(e-literal @182.4-182.9 (string "World")))
 							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-call @184.3-184.12
-								(e-tag @184.3-184.5 (ext-var 0) (name "Ok") (args "TODO"))
+								(e-tag @184.3-184.5 (ext-var 350) (name "Ok") (args "TODO"))
 								(e-lookup-local @184.6-184.11
 									(pattern (id 241))))
 							(e-tuple @185.3-185.18
@@ -1408,7 +1408,7 @@ NO CHANGE
 							(e-binop @188.18-188.43 (op "gt")
 								(e-binop @188.18-188.34 (op "null_coalesce")
 									(e-call @188.18-188.26
-										(e-tag @188.18-188.21 (ext-var 0) (name "Err") (args "TODO"))
+										(e-tag @188.18-188.21 (ext-var 366) (name "Err") (args "TODO"))
 										(e-runtime-error (tag "ident_not_in_scope")))
 									(e-int @188.30-188.32 (value "12")))
 								(e-binop @188.35-188.43 (op "mul")
