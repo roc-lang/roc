@@ -1220,10 +1220,7 @@ pub fn canonicalize_expr(
 
             var iterator = view.iterator();
             const firstEndpoint = iterator.nextCodepoint();
-            // log
-            std.debug.print("firstEndpoint: {any}\n", .{firstEndpoint});
             const secondEndpoint = iterator.nextCodepoint();
-            std.debug.print("secondEndpoint: {any}\n", .{secondEndpoint});
 
             if (secondEndpoint != null) {
                 // TODO: report too long utf8 seq
