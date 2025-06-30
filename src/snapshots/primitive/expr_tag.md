@@ -35,7 +35,7 @@ NO CHANGE
 (can-ir
 	(d-let (id 76)
 		(p-assign @2.1-2.4 (ident "foo") (id 73))
-		(e-tag @2.7-2.15 (ext-var 0) (name "FortyTwo") (args "TODO") (id 75))))
+		(e-tag @2.7-2.15 (ext-var 74) (name "FortyTwo") (args "TODO") (id 75))))
 ~~~
 # TYPES
 ~~~clojure

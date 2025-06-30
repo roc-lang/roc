@@ -315,7 +315,7 @@ main! = |_| {
 					(ty @35.13-35.18 (name "Color")))
 				(s-let @36.5-36.16
 					(p-assign @36.5-36.10 (ident "color") (id 151))
-					(e-tag @36.13-36.16 (ext-var 0) (name "Red") (args "TODO") (id 153)))
+					(e-tag @36.13-36.16 (ext-var 152) (name "Red") (args "TODO") (id 153)))
 				(e-lookup-local @38.5-38.11
 					(pattern (id 134))))))
 	(s-type-decl @4.1-7.7 (id 75)

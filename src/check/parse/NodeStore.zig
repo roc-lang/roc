@@ -1605,7 +1605,12 @@ pub fn getTypeAnno(store: *NodeStore, ty_anno_idx: AST.TypeAnno.Idx) AST.TypeAnn
             } };
         },
         else => {
-            std.debug.panic("Expected a valid type annotation node, found {s}", .{@tagName(node.tag)});
+            // Return a malformed type annotation instead of panicking
+            // This handles cases where an invalid node type is encountered
+            return .{ .malformed = .{
+                .reason = .ty_anno_unexpected_token,
+                .region = node.region,
+            } };
         },
     }
 

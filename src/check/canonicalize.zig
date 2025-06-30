@@ -346,15 +346,27 @@ pub fn canonicalize_file(
                 // Already processed in first pass, skip
             },
             .type_anno => |ta| {
+                const gpa = self.can_ir.env.gpa;
+                const region = self.parse_ir.tokenizedRegionToRegion(ta.region);
+
                 // Top-level type annotation - store for connection to next declaration
                 const name = self.parse_ir.tokens.resolveIdentifier(ta.name) orelse {
                     // Malformed identifier - skip this annotation
+                    const feature = self.can_ir.env.strings.insert(gpa, "handle malformed identifier for a type annotation");
+                    self.can_ir.pushDiagnostic(CIR.Diagnostic{
+                        .not_implemented = .{
+                            .feature = feature,
+                            .region = region,
+                        },
+                    });
                     continue;
                 };
 
                 // First, extract all type variables from the AST annotation
                 var type_vars = std.ArrayList(Ident.Idx).init(self.can_ir.env.gpa);
                 defer type_vars.deinit();
+
+                // Extract type variables from the AST annotation
                 self.extractTypeVarsFromASTAnno(ta.anno, &type_vars);
 
                 // Enter a new scope for type variables
@@ -364,11 +376,12 @@ pub fn canonicalize_file(
                 // Introduce type variables into scope
                 for (type_vars.items) |type_var| {
                     // Create a dummy type annotation for the type variable
-                    const region = Region.zero(); // TODO: get proper region from type variable
-                    const dummy_anno = self.can_ir.store.addTypeAnno(.{ .ty_var = .{
-                        .name = type_var,
-                        .region = region,
-                    } });
+                    const dummy_anno = self.can_ir.store.addTypeAnno(.{
+                        .ty_var = .{
+                            .name = type_var,
+                            .region = region, // TODO we may want to use the region for the type_var instead of the whole annotation
+                        },
+                    });
                     self.scopeIntroduceTypeVar(type_var, dummy_anno);
                 }
 
@@ -2303,6 +2316,9 @@ const FracLiteralResult = union(enum) {
 
 // Try to parse a fractional literal as a small dec (numerator/10^power)
 fn parseSmallDec(token_text: []const u8) ?struct { numerator: i16, denominator_power_of_ten: u8 } {
+    // Return null if input is too long to fit in our 32-byte buffer
+    if (token_text.len > 32) return null;
+
     // For negative zero, we'll return null to force f64 path
     if (token_text.len > 0 and token_text[0] == '-') {
         const rest = token_text[1..];
@@ -3129,6 +3145,8 @@ pub fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.
             // First, extract all type variables from the AST annotation
             var type_vars = std.ArrayList(Ident.Idx).init(self.can_ir.env.gpa);
             defer type_vars.deinit();
+
+            // Extract type variables from the AST annotation
             self.extractTypeVarsFromASTAnno(ta.anno, &type_vars);
 
             // Enter a new scope for type variables
@@ -3392,9 +3410,7 @@ fn introduceTypeParametersFromHeader(self: *Self, header_idx: CIR.TypeHeader.Idx
 }
 
 fn extractTypeVarsFromASTAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, vars: *std.ArrayList(Ident.Idx)) void {
-    const ast_anno = self.parse_ir.store.getTypeAnno(anno_idx);
-
-    switch (ast_anno) {
+    switch (self.parse_ir.store.getTypeAnno(anno_idx)) {
         .ty_var => |ty_var| {
             if (self.parse_ir.tokens.resolveIdentifier(ty_var.tok)) |ident| {
                 // Check if we already have this type variable
@@ -3738,11 +3754,11 @@ fn scopeIntroduceTypeDecl(
                 },
             });
         },
-        .custom_type_redeclared => |original_stmt| {
+        .nominal_type_redeclared => |original_stmt| {
             const original_statement = self.can_ir.store.getStatement(original_stmt);
             const original_region = original_statement.toRegion();
             self.can_ir.pushDiagnostic(CIR.Diagnostic{
-                .custom_type_redeclared = .{
+                .nominal_type_redeclared = .{
                     .name = name_ident,
                     .original_region = original_region,
                     .redeclared_region = region,

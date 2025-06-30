@@ -24,6 +24,9 @@ const NodeStore = @import("NodeStore.zig");
 
 pub const Diagnostic = @import("Diagnostic.zig").Diagnostic;
 
+// TODO what should this number be? build flag?
+const NODE_STORE_CAPACITY = 10_000;
+
 const CIR = @This();
 
 /// Reference to data that persists between compiler stages
@@ -62,8 +65,6 @@ external_decls: std.ArrayList(ExternalDecl),
 ///
 /// Takes ownership of the module_env
 pub fn init(env: *ModuleEnv) CIR {
-    const NODE_STORE_CAPACITY = 10_000;
-
     return CIR{
         .env = env,
         .store = NodeStore.initCapacity(env.gpa, NODE_STORE_CAPACITY),
@@ -249,11 +250,11 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 filename,
             );
         },
-        .custom_type_redeclared => |data| blk: {
+        .nominal_type_redeclared => |data| blk: {
             const type_name = self.env.idents.getText(data.name);
             const original_region_info = self.calcRegionInfo(data.original_region);
             const redeclared_region_info = self.calcRegionInfo(data.redeclared_region);
-            break :blk Diagnostic.buildCustomTypeRedeclaredReport(
+            break :blk Diagnostic.buildNominalTypeRedeclaredReport(
                 allocator,
                 type_name,
                 original_region_info,
@@ -510,7 +511,7 @@ pub const Statement = union(enum) {
         exposes: ExposedItem.Span,
         region: Region,
     },
-    /// A declaration of a new type - whether an alias or a new nominal custom type
+    /// A declaration of a new type - whether an alias or a new nominal nominal type
     ///
     /// Only valid at the top level of a module
     s_type_decl: struct {

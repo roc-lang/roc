@@ -104,7 +104,7 @@ pub const TypeIntroduceResult = union(enum) {
     shadowing_warning: CIR.Statement.Idx, // The type declaration that was shadowed
     redeclared_error: CIR.Statement.Idx, // The type declaration that was redeclared
     type_alias_redeclared: CIR.Statement.Idx, // The type alias that was redeclared
-    custom_type_redeclared: CIR.Statement.Idx, // The custom type that was redeclared
+    nominal_type_redeclared: CIR.Statement.Idx, // The nominal type that was redeclared
     cross_scope_shadowing: CIR.Statement.Idx, // Type shadowed across different scopes
     parameter_conflict: struct {
         original_stmt: CIR.Statement.Idx,

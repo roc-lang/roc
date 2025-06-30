@@ -271,7 +271,7 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 				(e-int @12.12-12.13 (value "1"))
 				(e-string @12.15-12.22
 					(e-literal @12.16-12.21 (string "hello")))
-				(e-tag @12.24-12.28 (ext-var 0) (name "True") (args "TODO")))))
+				(e-tag @12.24-12.28 (ext-var 104) (name "True") (args "TODO")))))
 	(s-let @13.2-13.27
 		(p-assign @13.2-13.8 (ident "nested") (id 108))
 		(e-tuple @13.11-13.27 (id 115)

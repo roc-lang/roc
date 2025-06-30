@@ -40,9 +40,9 @@ NO CHANGE
 		(if-branch
 			(e-runtime-error (tag "ident_not_in_scope"))
 			(e-block @1.9-3.2
-				(e-tag @2.2-2.3 (ext-var 0) (name "A") (args "TODO")))))
+				(e-tag @2.2-2.3 (ext-var 75) (name "A") (args "TODO")))))
 	(if-else
-		(e-tag @3.8-3.9 (ext-var 0) (name "B") (args "TODO"))))
+		(e-tag @3.8-3.9 (ext-var 79) (name "B") (args "TODO"))))
 ~~~
 # TYPES
 ~~~clojure
