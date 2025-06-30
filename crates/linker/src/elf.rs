@@ -1458,7 +1458,7 @@ fn surgery_elf_help(
                         }
                     } else {
                         internal_error!(
-                            "Undefined Symbol in relocation, {:+x?}: {:+x?}\n\nTIP: try compiling with `--linker legacy`",
+                            "Undefined Symbol in relocation, {:+x?}: {:+x?}\n\nTIPS:\n\t- try compiling with `--linker legacy`\n\t- If you're building a platform from source and you added functionality, you may have forgotten to rebuild the platform before running.",
                             rel,
                             app_obj.symbol_by_index(index)
                         );
