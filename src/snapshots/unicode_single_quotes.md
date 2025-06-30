@@ -76,7 +76,7 @@ CloseRound(11:1-11:2),EndOfFile(11:2-11:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tuple @1.1-11.2 (id 87)
+(e-tuple @1.1-11.2
 	(elems
 		(e-int @2.5-2.8 (value "97"))
 		(e-int @3.5-3.9 (value "233"))
@@ -90,5 +90,5 @@ CloseRound(11:1-11:2),EndOfFile(11:2-11:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 87) (type "(Num(*), Num(*), Num(*), Num(*), Error, Error, Error, Error, Error)"))
+(expr @1.1-11.2 (type "(Num(*), Num(*), Num(*), Num(*), Error, Error, Error, Error, Error)"))
 ~~~

@@ -8,9 +8,6 @@ type=expr
 -'i'
 ~~~
 # PROBLEMS
-**UNCLOSED SINGLE QUOTE**
-This character literal is missing a closing single quote.
-
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **-'i'** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
