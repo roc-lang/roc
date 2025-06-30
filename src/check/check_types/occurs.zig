@@ -194,7 +194,6 @@ const CheckOccurs = struct {
                         .record_unbound => |fields| {
                             const fields_slice = self.types_store.getRecordFieldsSlice(fields);
                             try self.occursSubVars(root, fields_slice.items(.var_), ctx.allowRecursion());
-                            // record_unbound has no extension variable
                         },
                         .record_poly => |poly| {
                             const fields = self.types_store.getRecordFieldsSlice(poly.record.fields);

@@ -277,8 +277,6 @@ pub const Store = struct {
 
     fn deepCopyRecordFields(self: *Self, store: *const TypesStore, fields: types.RecordField.SafeMultiList.Range) SnapshotRecordFieldSafeList.Range {
         const fields_start = @as(SnapshotRecordFieldSafeList.Idx, @enumFromInt(self.record_fields.len()));
-
-        // Deep copy fields
         const fields_slice = store.getRecordFieldsSlice(fields);
         for (fields_slice.items(.name), fields_slice.items(.var_)) |name, var_| {
             const field_resolved = store.resolveVar(var_);
@@ -727,12 +725,16 @@ pub const SnapshotWriter = struct {
         _ = try self.writer.write("{ ");
 
         const fields_slice = self.snapshots.record_fields.rangeToSlice(fields);
-        var is_first = true;
-        for (fields_slice.items(.name), fields_slice.items(.content)) |name, content| {
-            if (!is_first) {
-                _ = try self.writer.write(", ");
-            }
-            is_first = false;
+        std.debug.assert(fields_slice.len > 0);
+
+        // Write first field
+        _ = try self.writer.write(self.idents.getText(fields_slice.items(.name)[0]));
+        _ = try self.writer.write(": ");
+        try self.write(fields_slice.items(.content)[0]);
+
+        // Write remaining fields
+        for (fields_slice.items(.name)[1..], fields_slice.items(.content)[1..]) |name, content| {
+            _ = try self.writer.write(", ");
             _ = try self.writer.write(self.idents.getText(name));
             _ = try self.writer.write(": ");
             try self.write(content);

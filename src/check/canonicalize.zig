@@ -1406,8 +1406,6 @@ pub fn canonicalize_expr(
 
             // Create span of the new scratch record fields
             const fields_span = self.can_ir.store.recordFieldSpanFrom(scratch_top);
-
-            // Create the expression
             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
                 .e_record = .{
                     .fields = fields_span,
@@ -1435,8 +1433,6 @@ pub fn canonicalize_expr(
             // Create the record type structure
             const type_fields_range = self.can_ir.env.types.appendRecordFields(type_record_fields.items);
 
-            // Set record_unbound on the expression variable
-            // We use the expression's own index as its type variable
             _ = self.can_ir.setTypeVarAtExpr(
                 expr_idx,
                 Content{ .structure = .{ .record_unbound = type_fields_range } },

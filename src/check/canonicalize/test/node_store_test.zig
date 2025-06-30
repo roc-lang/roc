@@ -246,7 +246,6 @@ test "NodeStore round trip - Expressions" {
     //     },
     // });
 
-    // Test e_record
     try expressions.append(CIR.Expr{
         .e_record = .{
             .fields = CIR.RecordField.Span{ .span = base.DataSpan.init(789, 1012) },

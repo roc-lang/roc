@@ -216,12 +216,16 @@ pub const TypeWriter = struct {
         _ = try self.writer.write("{ ");
 
         const fields_slice = self.env.types.getRecordFieldsSlice(fields);
-        var is_first = true;
-        for (fields_slice.items(.name), fields_slice.items(.var_)) |name, var_| {
-            if (!is_first) {
-                _ = try self.writer.write(", ");
-            }
-            is_first = false;
+        std.debug.assert(fields_slice.len > 0);
+
+        // Write first field
+        _ = try self.writer.write(self.env.idents.getText(fields_slice.items(.name)[0]));
+        _ = try self.writer.write(": ");
+        try self.writeVar(fields_slice.items(.var_)[0]);
+
+        // Write remaining fields
+        for (fields_slice.items(.name)[1..], fields_slice.items(.var_)[1..]) |name, var_| {
+            _ = try self.writer.write(", ");
             _ = try self.writer.write(self.env.idents.getText(name));
             _ = try self.writer.write(": ");
             try self.writeVar(var_);
