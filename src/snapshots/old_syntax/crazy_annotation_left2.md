@@ -17,6 +17,20 @@ e
 Nothing is named `ts` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**crazy_annotation_left2.md:1:1:1:2:**
+```roc
+1(ts((0
+```
+^
+
+It is of type:
+    _Num(*)_
+
+But you are trying to use it as:
+    _* -> *_
+
 # TOKENS
 ~~~zig
 Int(1:1-1:2),NoSpaceOpenRound(1:2-1:3),LowerIdent(1:3-1:5),NoSpaceOpenRound(1:5-1:6),NoSpaceOpenRound(1:6-1:7),Int(1:7-1:8),Newline(1:1-1:1),

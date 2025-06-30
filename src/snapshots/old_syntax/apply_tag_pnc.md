@@ -8,7 +8,20 @@ type=expr
 Whee(12, 34)
 ~~~
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**apply_tag_pnc.md:1:1:1:5:**
+```roc
+Whee(12, 34)
+```
+^^^^
+
+It is of type:
+    _[Whee]*_
+
+But you are trying to use it as:
+    _Num(*), Num(*) -> *_
+
 # TOKENS
 ~~~zig
 UpperIdent(1:1-1:5),NoSpaceOpenRound(1:5-1:6),Int(1:6-1:8),Comma(1:8-1:9),Int(1:10-1:12),CloseRound(1:12-1:13),EndOfFile(1:13-1:13),

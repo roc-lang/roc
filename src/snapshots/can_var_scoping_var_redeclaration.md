@@ -124,9 +124,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.14 (type "* ? *"))
+		(patt @4.1-4.14 (type "{} -> *"))
 		(patt @11.1-11.7 (type "*")))
 	(expressions
-		(expr @4.17-9.2 (type "* ? *"))
+		(expr @4.17-9.2 (type "{} -> *"))
 		(expr @11.10-11.27 (type "*"))))
 ~~~

@@ -192,11 +192,20 @@ const CheckOccurs = struct {
                             const backing_var = nominal_type.getBackingVar(root.var_);
                             try self.occursSubVar(root, backing_var, ctx.markNominal());
                         },
-                        .func => |func| {
+                        .fn_pure => |func| {
                             const args = self.types_store.getFuncArgsSlice(func.args);
                             try self.occursSubVars(root, args, ctx);
                             try self.occursSubVar(root, func.ret, ctx);
-                            try self.occursSubVar(root, func.eff, ctx);
+                        },
+                        .fn_effectful => |func| {
+                            const args = self.types_store.getFuncArgsSlice(func.args);
+                            try self.occursSubVars(root, args, ctx);
+                            try self.occursSubVar(root, func.ret, ctx);
+                        },
+                        .fn_unbound => |func| {
+                            const args = self.types_store.getFuncArgsSlice(func.args);
+                            try self.occursSubVars(root, args, ctx);
+                            try self.occursSubVar(root, func.ret, ctx);
                         },
                         .record => |record| {
                             const fields = self.types_store.getRecordFieldsSlice(record.fields);
@@ -236,8 +245,6 @@ const CheckOccurs = struct {
                 },
                 .flex_var => {},
                 .rigid_var => {},
-                .effectful => {},
-                .pure => {},
                 .err => {},
             }
             self.scratch.popSeen();

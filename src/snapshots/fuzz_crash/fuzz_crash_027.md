@@ -606,6 +606,104 @@ The unused variable is declared here:
  ^^^^
 
 
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**fuzz_crash_027.md:48:1:48:8:**
+```roc
+add_one = |num| {
+```
+^^^^^^^
+
+It is of type:
+    _U64 -> U64_
+
+But you are trying to use it as:
+    _[True, False] -> Num(*)_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**fuzz_crash_027.md:111:2:111:12:**
+```roc
+	match_time(
+```
+ ^^^^^^^^^^
+
+It is of type:
+    _*, * -> *_
+
+But you are trying to use it as:
+    _* -> *_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**fuzz_crash_027.md:119:13:119:15:**
+```roc
+	tag_with = Ok(number)
+```
+            ^^
+
+It is of type:
+    _[Ok]*_
+
+But you are trying to use it as:
+    _* -> *_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**fuzz_crash_027.md:131:52:131:54:**
+```roc
+	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
+```
+                                                   ^^
+
+It is of type:
+    _[Ok]*_
+
+But you are trying to use it as:
+    _* -> *_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**fuzz_crash_027.md:132:30:132:32:**
+```roc
+	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
+```
+                             ^^
+
+It is of type:
+    _[Ok]*_
+
+But you are trying to use it as:
+    _* -> *_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**fuzz_crash_027.md:137:3:137:5:**
+```roc
+		Ok(world), # Thisnt
+```
+  ^^
+
+It is of type:
+    _[Ok]*_
+
+But you are trying to use it as:
+    _* -> *_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**fuzz_crash_027.md:143:2:143:11:**
+```roc
+	Stdoline!(
+```
+ ^^^^^^^^^
+
+It is of type:
+    _[Stdoline!]*_
+
+But you are trying to use it as:
+    _Str -> *_
+
 # TOKENS
 ~~~zig
 Newline(1:2-1:8),
@@ -1820,13 +1918,13 @@ main! = |_| { # Yeah Ie
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @45.1-45.4 (type "* ? Num(*)"))
-		(patt @48.1-48.8 (type "U64 -> U64"))
-		(patt @60.1-60.11 (type "*, * ? *"))
-		(patt @100.1-100.6 (type "List -> Error")))
+		(patt @45.1-45.4 (type "[True, False] -> Num(*)"))
+		(patt @48.1-48.8 (type "Error"))
+		(patt @60.1-60.11 (type "Error"))
+		(patt @100.1-100.6 (type "Error -> Error")))
 	(expressions
-		(expr @45.7-47.8 (type "* ? Num(*)"))
-		(expr @48.11-58.2 (type "U64 -> U64"))
-		(expr @60.14-96.7 (type "*, * ? *"))
-		(expr @100.9-159.2 (type "List -> Error"))))
+		(expr @45.7-47.8 (type "[True, False] -> Num(*)"))
+		(expr @48.11-58.2 (type "Error"))
+		(expr @60.14-96.7 (type "Error"))
+		(expr @100.9-159.2 (type "Error -> Error"))))
 ~~~

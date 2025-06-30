@@ -89,8 +89,6 @@ pub const Content = union(enum) {
     flex_var: ?Ident.Idx,
     rigid_var: Ident.Idx,
     alias: Alias,
-    effectful,
-    pure,
     structure: FlatType,
     err,
 
@@ -221,7 +219,9 @@ pub const FlatType = union(enum) {
     tuple_unbound: Tuple,
     num: Num,
     nominal_type: NominalType,
-    func: Func,
+    fn_pure: Func,
+    fn_effectful: Func,
+    fn_unbound: Func,
     record: Record,
     empty_record,
     tag_union: TagUnion,
@@ -606,7 +606,6 @@ pub const NominalType = struct {
 pub const Func = struct {
     args: Var.SafeList.Range,
     ret: Var,
-    eff: Var,
 };
 
 // records //

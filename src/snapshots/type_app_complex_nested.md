@@ -131,9 +131,48 @@ Only definitions, type annotations, and imports are allowed at the top level.
 **INVALID LAMBDA**
 The body of this lambda expression is not valid.
 
+**UNDECLARED TYPE**
+The type ``Maybe`` is not declared in this scope.
+
+This type is referenced here:
+**type_app_complex_nested.md:12:1:12:11:**
+```roc
+deepNested = |_| crash "not implemented"
+```
+^^^^^^^^^^
+
+
 **INVALID STATEMENT**
 The statement **expr** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**type_app_complex_nested.md:17:32:17:36:**
+```roc
+main! = |_| processComplex(Ok([Some(42), None]))
+```
+                               ^^^^
+
+It is of type:
+    _[Some]*_
+
+But you are trying to use it as:
+    _Num(*) -> *_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**type_app_complex_nested.md:17:28:17:30:**
+```roc
+main! = |_| processComplex(Ok([Some(42), None]))
+```
+                           ^^
+
+It is of type:
+    _[Ok]*_
+
+But you are trying to use it as:
+    _List([None]*) -> *_
 
 # TOKENS
 ~~~zig
@@ -347,11 +386,11 @@ main! = |_| processComplex(Ok([Some(42), None]))
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.15 (type "Result -> Error"))
-		(patt @12.1-12.11 (type "Maybe -> Error"))
-		(patt @17.1-17.6 (type "* ? *")))
+		(patt @5.1-5.15 (type "Error -> Error"))
+		(patt @12.1-12.11 (type "Error -> Error"))
+		(patt @17.1-17.6 (type "* -> Error")))
 	(expressions
-		(expr @5.18-6.9 (type "Result -> Error"))
-		(expr @12.14-12.25 (type "Maybe -> Error"))
-		(expr @17.9-17.49 (type "* ? *"))))
+		(expr @5.18-6.9 (type "Error -> Error"))
+		(expr @12.14-12.25 (type "Error -> Error"))
+		(expr @17.9-17.49 (type "* -> Error"))))
 ~~~

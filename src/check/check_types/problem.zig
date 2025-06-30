@@ -164,7 +164,39 @@ pub const Problem = union(enum) {
         try writer.write(vars.actual);
         const owned_actual = try report.addOwnedString(buf.items[0..]);
 
-        const region = can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(vars.actual_var)));
+        // Try to find a region for the type mismatch
+        const region = blk: {
+            // First try to interpret actual_var as an expression index
+            const expr_idx = @as(can.CIR.Expr.Idx, @enumFromInt(@intFromEnum(vars.actual_var)));
+            const node_idx = @intFromEnum(expr_idx);
+            if (node_idx < can_ir.store.nodes.len()) {
+                break :blk can_ir.store.getNodeRegion(@enumFromInt(node_idx));
+            }
+
+            // Try expected_var as an expression index
+            const expected_expr_idx = @as(can.CIR.Expr.Idx, @enumFromInt(@intFromEnum(vars.expected_var)));
+            const expected_node_idx = @intFromEnum(expected_expr_idx);
+            if (expected_node_idx < can_ir.store.nodes.len()) {
+                break :blk can_ir.store.getNodeRegion(@enumFromInt(expected_node_idx));
+            }
+
+            // Try to find a def that matches these variables
+            const defs_slice = can_ir.store.sliceDefs(can_ir.all_defs);
+            for (defs_slice) |def_idx| {
+                const def = can_ir.store.getDef(def_idx);
+                if (@intFromEnum(def_idx) == @intFromEnum(vars.actual_var) or
+                    @intFromEnum(def.expr) == @intFromEnum(vars.actual_var) or
+                    @intFromEnum(def_idx) == @intFromEnum(vars.expected_var) or
+                    @intFromEnum(def.expr) == @intFromEnum(vars.expected_var))
+                {
+                    // Use the expression region for the def
+                    break :blk def.expr_region;
+                }
+            }
+
+            // Fallback: use a minimal region instead of entire source
+            break :blk base.Region{ .start = .{ .offset = 0 }, .end = .{ .offset = 0 } };
+        };
 
         // Add source region highlighting
         const region_info = module_env.calcRegionInfo(source, region.start.offset, region.end.offset) catch |err| switch (err) {

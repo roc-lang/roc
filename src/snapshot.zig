@@ -1216,9 +1216,9 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, maybe_f
     defer solver.deinit();
 
     if (maybe_expr_idx) |expr_idx| {
-        solver.checkExpr(expr_idx);
+        _ = try solver.checkExpr(expr_idx);
     } else {
-        solver.checkDefs();
+        try solver.checkDefs();
     }
 
     // Buffer all output in memory before writing files

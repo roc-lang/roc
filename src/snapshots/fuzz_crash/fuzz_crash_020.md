@@ -447,6 +447,34 @@ The unused variable is declared here:
 This feature is not yet implemented or doesn't have a proper error report yet: top-level expect
 Let us know if you want to help!
 
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**fuzz_crash_020.md:96:44:96:46:**
+```roc
+	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
+```
+                                           ^^
+
+It is of type:
+    _[Ok]*_
+
+But you are trying to use it as:
+    _Error -> *_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**fuzz_crash_020.md:106:2:106:7:**
+```roc
+	Stdo!(
+```
+ ^^^^^
+
+It is of type:
+    _[Stdo!]*_
+
+But you are trying to use it as:
+    _Str -> *_
+
 # TOKENS
 ~~~zig
 Newline(1:2-1:8),
@@ -1378,15 +1406,15 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @35.1-35.4 (type "* ? Num(*)"))
-		(patt @38.1-38.4 (type "[Rum]* ? Error"))
-		(patt @49.1-49.3 (type "* ? *"))
-		(patt @75.1-75.3 (type "* ? *"))
+		(patt @35.1-35.4 (type "[True, False] -> Num(*)"))
+		(patt @38.1-38.4 (type "[Rum]* -> Error"))
+		(patt @49.1-49.3 (type "* -> *"))
+		(patt @75.1-75.3 (type "* -> *"))
 		(patt @114.1-114.2 (type "{}")))
 	(expressions
-		(expr @35.7-37.4 (type "* ? Num(*)"))
-		(expr @38.7-47.2 (type "[Rum]* ? Error"))
-		(expr @49.6-71.7 (type "* ? *"))
-		(expr @75.5-111.2 (type "* ? *"))
+		(expr @35.7-37.4 (type "[True, False] -> Num(*)"))
+		(expr @38.7-47.2 (type "[Rum]* -> Error"))
+		(expr @49.6-71.7 (type "* -> *"))
+		(expr @75.5-111.2 (type "* -> *"))
 		(expr @114.5-114.7 (type "{}"))))
 ~~~

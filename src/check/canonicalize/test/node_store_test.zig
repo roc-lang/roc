@@ -229,7 +229,7 @@ test "NodeStore round trip - Expressions" {
         .e_call = .{
             .args = CIR.Expr.Span{ .span = base.DataSpan.init(678, 901) },
             .called_via = base.CalledVia.apply,
-            .effect_var = @enumFromInt(1345),
+
             .region = from_raw_offsets(1456, 1789),
         },
     });
@@ -285,7 +285,7 @@ test "NodeStore round trip - Expressions" {
         .e_lambda = .{
             .args = CIR.Pattern.Span{ .span = base.DataSpan.init(1012, 1345) },
             .body = @enumFromInt(2678),
-            .effect_var = @enumFromInt(2789),
+
             .region = from_raw_offsets(2123, 2456),
         },
     });

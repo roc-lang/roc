@@ -104,8 +104,8 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt @4.1-4.5 (type "(*, *) -> (*, *)"))
-		(patt @6.1-6.6 (type "* ? {}")))
+		(patt @6.1-6.6 (type "* -> {}")))
 	(expressions
 		(expr @4.8-4.23 (type "(*, *) -> (*, *)"))
-		(expr @6.9-6.15 (type "* ? {}"))))
+		(expr @6.9-6.15 (type "* -> {}"))))
 ~~~

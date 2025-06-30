@@ -13,7 +13,20 @@ getName = |person| person.name
 main! = |_| {}
 ~~~
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**type_record_simple.md:4:1:4:8:**
+```roc
+getName = |person| person.name
+```
+^^^^^^^
+
+It is of type:
+    _{ name: *name: Strage: U64 } -> Str_
+
+But you are trying to use it as:
+    _{ name: * } -> *_
+
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),Newline(1:1-1:1),
@@ -101,9 +114,9 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.8 (type "{ name: Str, age: U64 } -> Str"))
-		(patt @6.1-6.6 (type "* ? {}")))
+		(patt @4.1-4.8 (type "Error"))
+		(patt @6.1-6.6 (type "* -> {}")))
 	(expressions
-		(expr @4.11-6.6 (type "{ name: Str, age: U64 } -> Str"))
-		(expr @6.9-6.15 (type "* ? {}"))))
+		(expr @4.11-6.6 (type "Error"))
+		(expr @6.9-6.15 (type "* -> {}"))))
 ~~~

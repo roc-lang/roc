@@ -137,7 +137,7 @@ fn processSourceInternal(
     defer solver.deinit();
 
     // Check for type errors
-    solver.checkDefs();
+    try solver.checkDefs();
 
     // Ensure ProcessResult owns the source
     // We have two cases:

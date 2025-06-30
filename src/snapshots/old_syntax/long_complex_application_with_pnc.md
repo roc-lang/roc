@@ -36,6 +36,20 @@ Is there an `import` or `exposing` missing up-top?
 Nothing is named `orange` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**long_complex_application_with_pnc.md:1:26:1:32:**
+```roc
+combine(mix(vodka, gin), Juices({
+```
+                         ^^^^^^
+
+It is of type:
+    _[Juices]*_
+
+But you are trying to use it as:
+    _{ color: Error, flavor: Error, amount: * } -> *_
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:8),NoSpaceOpenRound(1:8-1:9),LowerIdent(1:9-1:12),NoSpaceOpenRound(1:12-1:13),LowerIdent(1:13-1:18),Comma(1:18-1:19),LowerIdent(1:20-1:23),CloseRound(1:23-1:24),Comma(1:24-1:25),UpperIdent(1:26-1:32),NoSpaceOpenRound(1:32-1:33),OpenCurly(1:33-1:34),Newline(1:1-1:1),

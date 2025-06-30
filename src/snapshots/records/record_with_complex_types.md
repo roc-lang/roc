@@ -22,7 +22,90 @@ type=expr
 }
 ~~~
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**record_with_complex_types.md:4:13:4:19:**
+```roc
+    status: Active({ since: "2023-01-15" }),
+```
+            ^^^^^^
+
+It is of type:
+    _[Active]*_
+
+But you are trying to use it as:
+    _{ since: Str } -> *_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**record_with_complex_types.md:5:48:5:53:**
+```roc
+    preferences: { theme: Dark, notifications: Email("alice@example.com") },
+```
+                                               ^^^^^
+
+It is of type:
+    _[Email]*_
+
+But you are trying to use it as:
+    _Str -> *_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**record_with_complex_types.md:6:15:6:17:**
+```roc
+    metadata: Ok({
+```
+              ^^
+
+It is of type:
+    _[Ok]*_
+
+But you are trying to use it as:
+    _{ tags: List(Str), permissions: List([Read, Write, Admin]*) } -> *_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**record_with_complex_types.md:12:17:12:21:**
+```roc
+        items: [Some("first"), None, Some("third")],
+```
+                ^^^^
+
+It is of type:
+    _[Some]*_
+
+But you are trying to use it as:
+    _Str -> *_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**record_with_complex_types.md:12:38:12:42:**
+```roc
+        items: [Some("first"), None, Some("third")],
+```
+                                     ^^^^
+
+It is of type:
+    _[Some]*_
+
+But you are trying to use it as:
+    _Str -> *_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**record_with_complex_types.md:13:17:13:24:**
+```roc
+        result: Success({ data: [1, 2, 3], timestamp: "2024-01-01" }),
+```
+                ^^^^^^^
+
+It is of type:
+    _[Success]*_
+
+But you are trying to use it as:
+    _{ data: List(Num(*)), timestamp: Str } -> *_
+
 # TOKENS
 ~~~zig
 OpenCurly(1:1-1:2),Newline(1:1-1:1),
@@ -231,5 +314,5 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-15.2 (type "{ name: Str, scores: List(Num(*)), status: *, preferences: { theme: [Dark]*, notifications: * }, metadata: *, callback: * ? *, nested: { items: List([None]*), result: * } }"))
+(expr @1.1-15.2 (type "{ name: Str, scores: List(Num(*)), status: *, preferences: { theme: [Dark]*, notifications: * }, metadata: *, callback: * -> *, nested: { items: List([None]*), result: * } }"))
 ~~~

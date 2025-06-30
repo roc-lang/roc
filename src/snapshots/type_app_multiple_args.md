@@ -113,9 +113,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.12 (type "Dict -> List(*)"))
-		(patt @6.1-6.6 (type "* ? *")))
+		(patt @4.1-4.12 (type "Error -> Error"))
+		(patt @6.1-6.6 (type "* -> Error")))
 	(expressions
-		(expr @4.15-4.25 (type "Dict -> List(*)"))
-		(expr @6.9-6.55 (type "* ? *"))))
+		(expr @4.15-4.25 (type "Error -> Error"))
+		(expr @6.9-6.55 (type "* -> Error"))))
 ~~~

@@ -95,12 +95,6 @@ pub const TypeWriter = struct {
             .structure => |flat_type| {
                 try self.writeFlatType(flat_type, var_);
             },
-            .effectful => {
-                _ = try self.writer.write("Effectful");
-            },
-            .pure => {
-                _ = try self.writer.write("Pure");
-            },
             .err => {
                 _ = try self.writer.write("Error");
             },
@@ -157,8 +151,14 @@ pub const TypeWriter = struct {
             .nominal_type => |nominal_type| {
                 try self.writeNominalType(nominal_type, var_);
             },
-            .func => |func| {
-                try self.writeFunc(func);
+            .fn_pure => |func| {
+                try self.writeFuncWithArrow(func, " -> ");
+            },
+            .fn_effectful => |func| {
+                try self.writeFuncWithArrow(func, " => ");
+            },
+            .fn_unbound => |func| {
+                try self.writeFuncWithArrow(func, " -> ");
             },
             .record => |record| {
                 try self.writeRecord(record);
@@ -239,8 +239,8 @@ pub const TypeWriter = struct {
         _ = try self.writer.write(" }");
     }
 
-    /// Write a function type
-    pub fn writeFunc(self: *Self, func: types.Func) Allocator.Error!void {
+    /// Write a function type with a specific arrow (`->` or `=>`)
+    pub fn writeFuncWithArrow(self: *Self, func: types.Func, arrow: []const u8) Allocator.Error!void {
         const args = self.env.types.getFuncArgsSlice(func.args);
 
         // Write arguments
@@ -255,13 +255,7 @@ pub const TypeWriter = struct {
             }
         }
 
-        // Only show effect if it's not pure
-        const effect_resolved = self.env.types.resolveVar(func.eff);
-        switch (effect_resolved.desc.content) {
-            .pure => _ = try self.writer.write(" -> "),
-            .effectful => _ = try self.writer.write(" => "),
-            else => _ = try self.writer.write(" ? "),
-        }
+        _ = try self.writer.write(arrow);
 
         try self.writeVar(func.ret);
     }
