@@ -1237,8 +1237,23 @@ pub fn canonicalize_expr(
             // Create span of the new scratch expressions
             const elems_span = self.can_ir.store.exprSpanFrom(scratch_top);
 
-            // We should have at least one element since we checked for empty lists above
-            std.debug.assert(elems_span.span.len > 0);
+            // If all elements failed to canonicalize, treat as empty list
+            if (elems_span.span.len == 0) {
+                // All elements failed to canonicalize - create empty list
+                const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
+                    .e_empty_list = .{
+                        .region = region,
+                    },
+                });
+
+                // Insert concrete type variable as list_unbound
+                _ = self.can_ir.setTypeVarAtExpr(
+                    expr_idx,
+                    Content{ .structure = .list_unbound },
+                );
+
+                return expr_idx;
+            }
 
             // Initialize the list's type variable to its first element's CIR Index
             // (later steps will unify that type with the other elems' types)
