@@ -15,7 +15,8 @@ type=expr
 ~~~
 # PROBLEMS
 **NOT IMPLEMENTED**
-This feature is not yet implemented: crash statement
+This feature is not yet implemented or doesn't have a proper error report yet: crash statement
+Let us know if you want to help!
 
 # TOKENS
 ~~~zig

@@ -33,10 +33,12 @@ Nothing is named `is` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize local_dispatch expression
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize local_dispatch expression
+Let us know if you want to help!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize local_dispatch expression
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize local_dispatch expression
+Let us know if you want to help!
 
 **UNUSED VARIABLE**
 Variable ``transform`` is not used anywhere in your code.

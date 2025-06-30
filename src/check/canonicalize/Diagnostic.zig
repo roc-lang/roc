@@ -158,8 +158,10 @@ pub const Diagnostic = union(enum) {
     pub fn buildNotImplementedReport(allocator: Allocator, feature: []const u8) !Report {
         var report = Report.init(allocator, "NOT IMPLEMENTED", .fatal);
         const owned_feature = try report.addOwnedString(feature);
-        try report.document.addText("This feature is not yet implemented: ");
+        try report.document.addReflowingText("This feature is not yet implemented or doesn't have a proper error report yet: ");
         try report.document.addText(owned_feature);
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Let us know if you want to help!");
         return report;
     }
 

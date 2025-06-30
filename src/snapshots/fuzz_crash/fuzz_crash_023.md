@@ -719,21 +719,28 @@ This type is referenced here:
 
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: Exposed item 'line!' already imported from module 'pf.Stdout', cannot import again from module 'pf # Comment after qualifier
-		.StdoutMultiline'
+This feature is not yet implemented or doesn't have a proper error report yet: malformed import module name contains invalid control characters
+Let us know if you want to help!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: Exposed item 'write!' already imported from module 'pf.Stdout', cannot import again from module 'pf # Comment after qualifier
-		.StdoutMultiline'
+This feature is not yet implemented or doesn't have a proper error report yet: Exposed item 'line!' already imported from module 'pf.Stdout', cannot import again from module 'MALFORMED_IMPORT'
+Let us know if you want to help!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize dbg expression
+This feature is not yet implemented or doesn't have a proper error report yet: Exposed item 'write!' already imported from module 'pf.Stdout', cannot import again from module 'MALFORMED_IMPORT'
+Let us know if you want to help!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize dbg expression
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
+Let us know if you want to help!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize match expression
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize match expression
+Let us know if you want to help!
 
 **UNUSED VARIABLE**
 Variable ``b`` is not used anywhere in your code.
@@ -760,7 +767,8 @@ The unused variable is declared here:
 
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: top-level expect
+This feature is not yet implemented or doesn't have a proper error report yet: top-level expect
+Let us know if you want to help!
 
 **UNDECLARED TYPE**
 The type ``String`` is not declared in this scope.
@@ -774,32 +782,40 @@ main! : List(String) -> Result({}, _)
 
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: statement type in block
+This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
+Let us know if you want to help!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: statement type in block
+This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
+Let us know if you want to help!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: ...
+This feature is not yet implemented or doesn't have a proper error report yet: ...
+Let us know if you want to help!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: ...
+This feature is not yet implemented or doesn't have a proper error report yet: ...
+Let us know if you want to help!
 
 **UNDEFINED VARIABLE**
 Nothing is named `some_func` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize dbg expression
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
+Let us know if you want to help!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: crash statement
+This feature is not yet implemented or doesn't have a proper error report yet: crash statement
+Let us know if you want to help!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize dbg expression
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
+Let us know if you want to help!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: statement type in block
+This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
+Let us know if you want to help!
 
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
@@ -821,10 +837,12 @@ Nothing is named `foo` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize suffix_single_question expression
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize suffix_single_question expression
+Let us know if you want to help!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize suffix_single_question expression
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize suffix_single_question expression
+Let us know if you want to help!
 
 **UNDEFINED VARIABLE**
 Nothing is named `toStr` in this scope.
@@ -915,7 +933,8 @@ The unused variable is declared here:
 
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: top-level expect
+This feature is not yet implemented or doesn't have a proper error report yet: top-level expect
+Let us know if you want to help!
 
 # TOKENS
 ~~~zig
@@ -1869,33 +1888,33 @@ expect {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 189)
-		(p-assign @65.1-65.16 (ident "add_one_oneline") (id 180))
-		(e-lambda @65.19-67.8 (id 188)
+	(d-let (id 190)
+		(p-assign @65.1-65.16 (ident "add_one_oneline") (id 181))
+		(e-lambda @65.19-67.8 (id 189)
 			(args
-				(p-assign @65.20-65.23 (ident "num") (id 181)))
+				(p-assign @65.20-65.23 (ident "num") (id 182)))
 			(e-if @65.25-67.8
 				(if-branches
 					(if-branch
 						(e-lookup-local @65.28-65.31
-							(pattern (id 181)))
+							(pattern (id 182)))
 						(e-int @65.32-65.33 (value "2"))))
 				(if-else
 					(e-int @65.39-65.40 (value "5"))))))
-	(d-let (id 220)
-		(p-assign @68.1-68.8 (ident "add_one") (id 193))
-		(e-lambda @68.11-78.2 (id 213)
+	(d-let (id 221)
+		(p-assign @68.1-68.8 (ident "add_one") (id 194))
+		(e-lambda @68.11-78.2 (id 214)
 			(args
-				(p-assign @68.12-68.15 (ident "num") (id 194)))
+				(p-assign @68.12-68.15 (ident "num") (id 195)))
 			(e-block @68.17-78.2
 				(s-let @69.2-69.11
-					(p-assign @69.2-69.7 (ident "other") (id 195))
-					(e-int @69.10-69.11 (value "1") (id 196)))
+					(p-assign @69.2-69.7 (ident "other") (id 196))
+					(e-int @69.10-69.11 (value "1") (id 197)))
 				(e-if @70.2-78.2
 					(if-branches
 						(if-branch
 							(e-lookup-local @70.5-70.8
-								(pattern (id 194)))
+								(pattern (id 195)))
 							(e-block @70.9-74.3
 								(s-expr @71.3-73.4
 									(e-runtime-error (tag "not_implemented")))
@@ -1905,127 +1924,127 @@ expect {
 							(s-expr @75.3-76.8
 								(e-runtime-error (tag "not_implemented")))
 							(e-lookup-local @76.3-76.8
-								(pattern (id 195))))))))
-		(annotation @68.1-68.8 (signature 218) (id 219)
+								(pattern (id 196))))))))
+		(annotation @68.1-68.8 (signature 219) (id 220)
 			(declared-type
 				(ty-fn @67.11-67.21 (effectful false)
 					(ty @67.11-67.14 (name "U64"))
 					(ty @67.18-67.21 (name "U64"))))))
-	(d-let (id 230)
-		(p-assign @80.1-80.11 (ident "match_time") (id 221))
-		(e-lambda @80.14-140.7 (id 227)
+	(d-let (id 231)
+		(p-assign @80.1-80.11 (ident "match_time") (id 222))
+		(e-lambda @80.14-140.7 (id 228)
 			(args
-				(p-assign @81.2-81.3 (ident "a") (id 222))
-				(p-assign @82.2-82.3 (ident "b") (id 223)))
+				(p-assign @81.2-81.3 (ident "a") (id 223))
+				(p-assign @82.2-82.3 (ident "b") (id 224)))
 			(e-runtime-error (tag "not_implemented"))))
-	(d-let (id 417)
-		(p-assign @144.1-144.6 (ident "main!") (id 239))
-		(e-lambda @144.9-196.2 (id 410)
+	(d-let (id 418)
+		(p-assign @144.1-144.6 (ident "main!") (id 240))
+		(e-lambda @144.9-196.2 (id 411)
 			(args
-				(p-underscore @144.10-144.11 (id 240)))
+				(p-underscore @144.10-144.11 (id 241)))
 			(e-block @144.13-196.2
 				(s-let @145.2-145.17
-					(p-assign @145.2-145.7 (ident "world") (id 241))
-					(e-string @145.10-145.17 (id 243)
+					(p-assign @145.2-145.7 (ident "world") (id 242))
+					(e-string @145.10-145.17 (id 244)
 						(e-literal @145.11-145.16 (string "World"))))
 				(s-var @146.2-147.8
-					(p-assign @146.2-147.8 (ident "number") (id 246))
-					(e-int @146.15-146.18 (value "123") (id 245)))
+					(p-assign @146.2-147.8 (ident "number") (id 247))
+					(e-int @146.15-146.18 (value "123") (id 246)))
 				(s-let @148.2-148.12
-					(p-assign @148.2-148.5 (ident "tag") (id 250))
-					(e-tag @148.8-148.12 (ext-var 251) (name "Blue") (args "TODO") (id 252)))
+					(p-assign @148.2-148.5 (ident "tag") (id 251))
+					(e-tag @148.8-148.12 (ext-var 252) (name "Blue") (args "TODO") (id 253)))
 				(s-expr @154.2-155.12
 					(e-runtime-error (tag "not_implemented")))
 				(s-expr @155.2-158.11
 					(e-call @155.2-157.3
 						(e-lookup-local @155.2-155.12
-							(pattern (id 221)))
+							(pattern (id 222)))
 						(e-runtime-error (tag "not_implemented"))))
 				(s-expr @158.2-162.7
 					(e-call @158.2-161.3
 						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-runtime-error (tag "not_implemented"))))
 				(s-let @164.2-164.31
-					(p-assign @164.2-164.18 (ident "tag_with_payload") (id 274))
-					(e-call @164.21-164.31 (id 279)
-						(e-tag @164.21-164.23 (ext-var 275) (name "Ok") (args "TODO"))
+					(p-assign @164.2-164.18 (ident "tag_with_payload") (id 275))
+					(e-call @164.21-164.31 (id 280)
+						(e-tag @164.21-164.23 (ext-var 276) (name "Ok") (args "TODO"))
 						(e-lookup-local @164.24-164.30
-							(pattern (id 246)))))
+							(pattern (id 247)))))
 				(s-let @165.2-165.34
-					(p-assign @165.2-165.14 (ident "interpolated") (id 281))
-					(e-string @165.17-165.34 (id 285)
+					(p-assign @165.2-165.14 (ident "interpolated") (id 282))
+					(e-string @165.17-165.34 (id 286)
 						(e-literal @165.18-165.25 (string "Hello, "))
 						(e-lookup-local @165.27-165.32
-							(pattern (id 241)))
+							(pattern (id 242)))
 						(e-literal @165.33-165.33 (string ""))))
 				(s-let @166.2-173.3
-					(p-assign @166.2-166.6 (ident "list") (id 287))
-					(e-list @166.9-173.3 (elem-var 292) (id 295)
+					(p-assign @166.2-166.6 (ident "list") (id 288))
+					(e-list @166.9-173.3 (elem-var 293) (id 296)
 						(elems
 							(e-call @167.3-170.4
 								(e-lookup-local @167.3-167.10
-									(pattern (id 193)))
+									(pattern (id 194)))
 								(e-runtime-error (tag "not_implemented")))
 							(e-int @171.3-171.6 (value "456"))
 							(e-int @172.3-172.6 (value "789")))))
 				(s-expr @178.42-178.46
 					(e-lookup-local @178.42-178.45
-						(pattern (id 250))))
+						(pattern (id 251))))
 				(s-type-anno @1.1-1.1 (name "qux")
 					(ty-malformed @1.1-1.1))
 				(s-let @179.2-179.68
-					(p-assign @179.2-179.7 (ident "tuple") (id 306))
-					(e-tuple @179.10-179.68 (id 324)
+					(p-assign @179.2-179.7 (ident "tuple") (id 307))
+					(e-tuple @179.10-179.68 (id 325)
 						(elems
 							(e-int @179.11-179.14 (value "123"))
 							(e-string @179.16-179.23
 								(e-literal @179.17-179.22 (string "World")))
 							(e-lookup-local @179.25-179.28
-								(pattern (id 250)))
+								(pattern (id 251)))
 							(e-call @179.30-179.39
-								(e-tag @179.30-179.32 (ext-var 311) (name "Ok") (args "TODO"))
+								(e-tag @179.30-179.32 (ext-var 312) (name "Ok") (args "TODO"))
 								(e-lookup-local @179.33-179.38
-									(pattern (id 241))))
+									(pattern (id 242))))
 							(e-tuple @179.41-179.56
 								(elems
 									(e-runtime-error (tag "ident_not_in_scope"))
 									(e-lookup-local @179.50-179.55
-										(pattern (id 306)))))
-							(e-list @179.58-179.67 (elem-var 320)
+										(pattern (id 307)))))
+							(e-list @179.58-179.67 (elem-var 321)
 								(elems
 									(e-int @179.59-179.60 (value "1"))
 									(e-int @179.62-179.63 (value "2"))
 									(e-int @179.65-179.66 (value "3")))))))
 				(s-let @180.2-187.3
-					(p-assign @180.2-180.17 (ident "multiline_tuple") (id 326))
-					(e-tuple @180.20-187.3 (id 345)
+					(p-assign @180.2-180.17 (ident "multiline_tuple") (id 327))
+					(e-tuple @180.20-187.3 (id 346)
 						(elems
 							(e-int @181.3-181.6 (value "123"))
 							(e-string @182.3-182.10
 								(e-literal @182.4-182.9 (string "World")))
 							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-call @184.3-184.12
-								(e-tag @184.3-184.5 (ext-var 332) (name "Ok") (args "TODO"))
+								(e-tag @184.3-184.5 (ext-var 333) (name "Ok") (args "TODO"))
 								(e-lookup-local @184.6-184.11
-									(pattern (id 241))))
+									(pattern (id 242))))
 							(e-tuple @185.3-185.18
 								(elems
 									(e-runtime-error (tag "ident_not_in_scope"))
 									(e-lookup-local @185.12-185.17
-										(pattern (id 306)))))
-							(e-list @186.3-186.12 (elem-var 341)
+										(pattern (id 307)))))
+							(e-list @186.3-186.12 (elem-var 342)
 								(elems
 									(e-int @186.4-186.5 (value "1"))
 									(e-int @186.7-186.8 (value "2"))
 									(e-int @186.10-186.11 (value "3")))))))
 				(s-let @188.2-189.23
-					(p-assign @188.2-188.15 (ident "bin_op_result") (id 347))
-					(e-binop @188.18-189.23 (op "or") (id 377)
+					(p-assign @188.2-188.15 (ident "bin_op_result") (id 348))
+					(e-binop @188.18-189.23 (op "or") (id 378)
 						(e-binop @188.18-188.74 (op "or")
 							(e-binop @188.18-188.43 (op "gt")
 								(e-binop @188.18-188.34 (op "null_coalesce")
 									(e-call @188.18-188.26
-										(e-tag @188.18-188.21 (ext-var 348) (name "Err") (args "TODO"))
+										(e-tag @188.18-188.21 (ext-var 349) (name "Err") (args "TODO"))
 										(e-runtime-error (tag "ident_not_in_scope")))
 									(e-int @188.30-188.32 (value "12")))
 								(e-binop @188.35-188.43 (op "mul")
@@ -2048,8 +2067,8 @@ expect {
 								(e-int @188.81-188.82 (value "3"))
 								(e-int @188.85-188.86 (value "5"))))))
 				(s-let @189.2-190.8
-					(p-assign @189.2-189.23 (ident "static_dispatch_style") (id 379))
-					(e-dot-access @189.26-190.8 (field "unknown") (id 384)
+					(p-assign @189.2-189.23 (ident "static_dispatch_style") (id 380))
+					(e-dot-access @189.26-190.8 (field "unknown") (id 385)
 						(receiver
 							(e-dot-access @189.26-189.110 (field "unknown")
 								(receiver
@@ -2060,15 +2079,15 @@ expect {
 					(e-runtime-error (tag "not_implemented")))
 				(e-call @191.2-195.3
 					(e-lookup-external
-						(ext-decl @191.2-191.14 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value") (type-var 389)))
+						(ext-decl @191.2-191.14 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value") (type-var 390)))
 					(e-string @192.3-194.18
 						(e-literal @192.4-192.14 (string "How about "))
 						(e-call @193.4-193.21
 							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-lookup-local @193.14-193.20
-								(pattern (id 246))))
+								(pattern (id 247))))
 						(e-literal @194.4-194.17 (string " as a string?"))))))
-		(annotation @144.1-144.6 (signature 415) (id 416)
+		(annotation @144.1-144.6 (signature 416) (id 417)
 			(declared-type
 				(ty-fn @143.9-143.38 (effectful false)
 					(ty-apply @143.9-143.21 (symbol "List")
@@ -2076,10 +2095,10 @@ expect {
 					(ty-apply @143.25-143.38 (symbol "Result")
 						(ty-record @143.32-143.34)
 						(ty-underscore @143.36-143.37))))))
-	(d-let (id 425)
-		(p-assign @199.1-199.6 (ident "empty") (id 419))
-		(e-empty_record @199.9-199.11 (id 420))
-		(annotation @199.1-199.6 (signature 423) (id 424)
+	(d-let (id 426)
+		(p-assign @199.1-199.6 (ident "empty") (id 420))
+		(e-empty_record @199.9-199.11 (id 421))
+		(annotation @199.1-199.6 (signature 424) (id 425)
 			(declared-type
 				(ty-record @198.9-198.11))))
 	(s-type-decl @22.1-23.6 (id 85)
@@ -2180,30 +2199,29 @@ expect {
 		(exposes
 			(exposed (name "line!") (wildcard false))
 			(exposed (name "write!") (wildcard false))))
-	(s-import @6.1-12.4 (module "pf # Comment after qualifier
-		.StdoutMultiline") (qualifier "pf") (id 173)
+	(s-import @6.1-12.4 (module "MALFORMED_IMPORT") (qualifier "pf") (id 174)
 		(exposes
 			(exposed (name "line!") (wildcard false))
 			(exposed (name "write!") (wildcard false))))
-	(s-import @14.1-14.82 (module "pkg.Something") (qualifier "pkg") (id 177)
+	(s-import @14.1-14.82 (module "pkg.Something") (qualifier "pkg") (id 178)
 		(exposes
 			(exposed (name "func") (alias "function") (wildcard false))
 			(exposed (name "Type") (alias "ValueCategory") (wildcard false))
 			(exposed (name "Custom") (wildcard true))))
-	(s-import @16.1-16.27 (module "BadName") (alias "GoodName") (id 178)
+	(s-import @16.1-16.27 (module "BadName") (alias "GoodName") (id 179)
 		(exposes))
-	(s-import @17.1-20.20 (module "BadNameMultiline") (alias "GoodNameMultiline") (id 179)
+	(s-import @17.1-20.20 (module "BadNameMultiline") (alias "GoodNameMultiline") (id 180)
 		(exposes)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "add_one_oneline") (def_var 189) (type "* ? Num(*)"))
-		(d_assign (name "add_one") (def_var 220) (type "U64 -> U64"))
-		(d_assign (name "match_time") (def_var 230) (type "*, * ? Error"))
-		(d_assign (name "main!") (def_var 417) (type "List -> Result"))
-		(d_assign (name "empty") (def_var 425) (type "{  }")))
+		(d_assign (name "add_one_oneline") (def_var 190) (type "* ? Num(*)"))
+		(d_assign (name "add_one") (def_var 221) (type "U64 -> U64"))
+		(d_assign (name "match_time") (def_var 231) (type "*, * ? Error"))
+		(d_assign (name "main!") (def_var 418) (type "List -> Result"))
+		(d_assign (name "empty") (def_var 426) (type "{  }")))
 	(expressions
 		(expr @65.19-67.8 (type "* ? Num(*)"))
 		(expr @68.11-78.2 (type "U64 -> U64"))

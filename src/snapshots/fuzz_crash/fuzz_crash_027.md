@@ -324,13 +324,16 @@ This type is referenced here:
 
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize dbg expression
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
+Let us know if you want to help!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize dbg expression
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
+Let us know if you want to help!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize match expression
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize match expression
+Let us know if you want to help!
 
 **UNUSED VARIABLE**
 Variable ``a`` is not used anywhere in your code.
@@ -357,7 +360,8 @@ The unused variable is declared here:
 
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: top-level expect
+This feature is not yet implemented or doesn't have a proper error report yet: top-level expect
+Let us know if you want to help!
 
 **UNDECLARED TYPE**
 The type ``String`` is not declared in this scope.
@@ -371,29 +375,36 @@ main! : List(String) -> Result({}, _)
 
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: statement type in block
+This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
+Let us know if you want to help!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: statement type in block
+This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
+Let us know if you want to help!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: ...
+This feature is not yet implemented or doesn't have a proper error report yet: ...
+Let us know if you want to help!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: ...
+This feature is not yet implemented or doesn't have a proper error report yet: ...
+Let us know if you want to help!
 
 **UNDEFINED VARIABLE**
 Nothing is named `some_func` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize dbg expression
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
+Let us know if you want to help!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: crash statement
+This feature is not yet implemented or doesn't have a proper error report yet: crash statement
+Let us know if you want to help!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: statement type in block
+This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
+Let us know if you want to help!
 
 **UNDEFINED VARIABLE**
 Nothing is named `punned` in this scope.
@@ -416,14 +427,16 @@ Nothing is named `foo` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize suffix_single_question expression
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize suffix_single_question expression
+Let us know if you want to help!
 
 **UNDEFINED VARIABLE**
 Nothing is named `toStr` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: statement type in block
+This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
+Let us know if you want to help!
 
 **UNUSED VARIABLE**
 Variable ``record`` is not used anywhere in your code.
