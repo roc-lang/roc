@@ -84,7 +84,7 @@ pub fn advanceOne(self: *Parser) void {
 const ExpectError = error{expected_not_found};
 
 /// look ahead at the next token and return an error if it does not have the expected tag
-pub fn expect(self: *Parser, expected: Token.Tag) !void {
+pub fn expect(self: *Parser, expected: Token.Tag) ExpectError!void {
     if (self.peek() != expected) {
         return ExpectError.expected_not_found;
     }
@@ -341,7 +341,7 @@ pub fn parsePlatformHeader(self: *Parser) AST.Header.Idx {
         NodeStore.addScratchExposedItem,
         Parser.parseExposedItem,
     ) catch {
-        self.store.clearScratchExposedItemsFrom(rigids_start);
+        self.store.clearScratchExposedItemsFrom(rigids_top);
         return self.pushMalformed(
             AST.Header.Idx,
             .expected_requires_rigids_close_curly,
@@ -379,7 +379,7 @@ pub fn parsePlatformHeader(self: *Parser) AST.Header.Idx {
         return self.pushMalformed(
             AST.Header.Idx,
             .expected_requires_signatures_close_curly,
-            rigids_start,
+            signatures_start,
         );
     };
     const signatures_span = self.store.annoRecordFieldSpanFrom(signatures_top);
