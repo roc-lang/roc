@@ -1498,7 +1498,12 @@ const Formatter = struct {
         defer {
             fmt.curr_indent = curr_indent;
         }
-        const field = fmt.ast.store.getAnnoRecordField(idx);
+        const field = fmt.ast.store.getAnnoRecordField(idx) catch |err| switch (err) {
+            error.MalformedNode => {
+                // Return empty region for malformed fields - they were already handled during parsing
+                return AST.TokenizedRegion{ .start = 0, .end = 0 };
+            },
+        };
         const multiline = fmt.ast.regionIsMultiline(field.region);
         try fmt.pushTokenText(field.name);
         if (multiline and try fmt.flushCommentsAfter(field.name)) {

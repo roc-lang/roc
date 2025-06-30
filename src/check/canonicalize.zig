@@ -1237,8 +1237,23 @@ pub fn canonicalize_expr(
             // Create span of the new scratch expressions
             const elems_span = self.can_ir.store.exprSpanFrom(scratch_top);
 
-            // We should have at least one element since we checked for empty lists above
-            std.debug.assert(elems_span.span.len > 0);
+            // If all elements failed to canonicalize, treat as empty list
+            if (elems_span.span.len == 0) {
+                // All elements failed to canonicalize - create empty list
+                const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
+                    .e_empty_list = .{
+                        .region = region,
+                    },
+                });
+
+                // Insert concrete type variable as list_unbound
+                _ = self.can_ir.setTypeVarAtExpr(
+                    expr_idx,
+                    Content{ .structure = .list_unbound },
+                );
+
+                return expr_idx;
+            }
 
             // Initialize the list's type variable to its first element's CIR Index
             // (later steps will unify that type with the other elems' types)
@@ -2834,7 +2849,12 @@ fn canonicalize_type_anno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.
             defer self.can_ir.store.clearScratchAnnoRecordFieldsFrom(scratch_top);
 
             for (self.parse_ir.store.annoRecordFieldSlice(record.fields)) |field_idx| {
-                const ast_field = self.parse_ir.store.getAnnoRecordField(field_idx);
+                const ast_field = self.parse_ir.store.getAnnoRecordField(field_idx) catch |err| switch (err) {
+                    error.MalformedNode => {
+                        // Skip malformed field entirely - it was already handled during parsing
+                        continue;
+                    },
+                };
 
                 // Resolve field name
                 const field_name = self.parse_ir.tokens.resolveIdentifier(ast_field.name) orelse {
@@ -3458,7 +3478,9 @@ fn extractTypeVarsFromASTAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, vars: *st
         .record => |record| {
             // Extract type variables from record field types
             for (self.parse_ir.store.annoRecordFieldSlice(record.fields)) |field_idx| {
-                const field = self.parse_ir.store.getAnnoRecordField(field_idx);
+                const field = self.parse_ir.store.getAnnoRecordField(field_idx) catch |err| switch (err) {
+                    error.MalformedNode => continue,
+                };
                 self.extractTypeVarsFromASTAnno(field.ty, vars);
             }
         },
@@ -3510,7 +3532,9 @@ fn getTypeVarRegionFromAST(self: *Self, anno_idx: AST.TypeAnno.Idx, target_ident
         },
         .record => |record| {
             for (self.parse_ir.store.annoRecordFieldSlice(record.fields)) |field_idx| {
-                const field = self.parse_ir.store.getAnnoRecordField(field_idx);
+                const field = self.parse_ir.store.getAnnoRecordField(field_idx) catch |err| switch (err) {
+                    error.MalformedNode => continue,
+                };
                 if (self.getTypeVarRegionFromAST(field.ty, target_ident)) |region| {
                     return region;
                 }

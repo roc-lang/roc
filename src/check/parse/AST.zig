@@ -1569,7 +1569,14 @@ pub const TypeAnno = union(enum) {
                 ast.appendRegionInfoToSexprNode(env, &node, a.region);
 
                 for (ast.store.annoRecordFieldSlice(a.fields)) |f_idx| {
-                    const field = ast.store.getAnnoRecordField(f_idx);
+                    const field = ast.store.getAnnoRecordField(f_idx) catch |err| switch (err) {
+                        error.MalformedNode => {
+                            // Create a malformed-field SExpr node for debugging
+                            var malformed_node = SExpr.init(env.gpa, "malformed-field");
+                            node.appendNode(env.gpa, &malformed_node);
+                            continue;
+                        },
+                    };
                     var field_node = field.toSExpr(env, ast);
                     node.appendNode(env.gpa, &field_node);
                 }
