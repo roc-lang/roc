@@ -322,13 +322,13 @@ main! = |_| processComplex(Ok([Some(42), None]))
 				(e-lookup-local @17.13-17.27
 					(pattern (id 99)))
 				(e-call @17.28-17.48
-					(e-tag @17.28-17.30 (ext-var 0) (name "Ok") (args "TODO"))
+					(e-tag @17.28-17.30 (ext-var 147) (name "Ok") (args "TODO"))
 					(e-list @17.31-17.47 (elem-var 153)
 						(elems
 							(e-call @17.32-17.40
-								(e-tag @17.32-17.36 (ext-var 0) (name "Some") (args "TODO"))
+								(e-tag @17.32-17.36 (ext-var 149) (name "Some") (args "TODO"))
 								(e-int @17.37-17.39 (value "42")))
-							(e-tag @17.42-17.46 (ext-var 0) (name "None") (args "TODO"))))))))
+							(e-tag @17.42-17.46 (ext-var 154) (name "None") (args "TODO"))))))))
 	(s-type-decl @15.1-17.6 (id 84)
 		(ty-header @15.1-15.18 (name "ComplexType")
 			(ty-args

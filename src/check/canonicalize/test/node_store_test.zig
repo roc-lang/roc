@@ -114,15 +114,22 @@ test "NodeStore round trip - Statements" {
         .region = from_raw_offsets(3453, 1232),
     } });
 
-    for (statements.items) |statement| {
-        const idx = store.addStatement(statement);
+    for (statements.items) |stmt| {
+        const idx = store.addStatement(stmt);
         const retrieved = store.getStatement(idx);
 
-        testing.expectEqualDeep(statement, retrieved) catch |err| {
-            std.debug.print("\n\nOriginal:  {any}\n\n", .{statement});
+        testing.expectEqualDeep(stmt, retrieved) catch |err| {
+            std.debug.print("\n\nOriginal:  {any}\n\n", .{stmt});
             std.debug.print("Retrieved: {any}\n\n", .{retrieved});
             return err;
         };
+    }
+
+    const actual_test_count = statements.items.len;
+    if (actual_test_count < NodeStore.CIR_STATEMENT_NODE_COUNT) {
+        std.debug.print("Statement test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.CIR_STATEMENT_NODE_COUNT, actual_test_count });
+        std.debug.print("Please add test cases for missing statement variants.\n", .{});
+        return error.IncompleteStatementTestCoverage;
     }
 }
 
@@ -190,72 +197,52 @@ test "NodeStore round trip - Expressions" {
             .external = @enumFromInt(345),
         },
     });
-
-    // TODO: Test e_list when NodeStore properly handles TypeVar fields
-    // The NodeStore getExpr method currently hardcodes TypeVars to @enumFromInt(0)
-    // instead of restoring the original values from storage
-    // try expressions.append(CIR.Expr{
-    //     .e_list = .{
-    //         .elem_var = @enumFromInt(456),
-    //         .elems = CIR.Expr.Span{ .span = base.DataSpan.init(234, 567) },
-    //         .region = from_raw_offsets(1012, 1345),
-    //     },
-    // });
-
+    try expressions.append(CIR.Expr{
+        .e_list = .{
+            .elem_var = @enumFromInt(456),
+            .elems = CIR.Expr.Span{ .span = base.DataSpan.init(234, 567) },
+            .region = from_raw_offsets(1012, 1345),
+        },
+    });
     try expressions.append(CIR.Expr{
         .e_tuple = .{
             .elems = CIR.Expr.Span{ .span = base.DataSpan.init(345, 678) },
             .region = from_raw_offsets(1123, 1456),
         },
     });
-
-    // TODO: Test e_when when NodeStore implements addExpr for this variant
-    // Currently panics with "TODO addExpr when"
-    // try expressions.append(CIR.Expr{
-    //     .e_when = CIR.When{
-    //         .loc_cond = @enumFromInt(567),
-    //         .cond_var = @enumFromInt(678),
-    //         .expr_var = @enumFromInt(789),
-    //         .region = from_raw_offsets(1234, 1567),
-    //         .branches = CIR.WhenBranch.Span{ .span = base.DataSpan.init(456, 789) },
-    //         .branches_cond_var = @enumFromInt(890),
-    //         .exhaustive = @enumFromInt(901),
-    //     },
-    // });
-
-    // TODO: Test e_if when NodeStore properly handles TypeVar fields
-    // Currently hardcodes cond_var and branch_var to @enumFromInt(0)
-    // try expressions.append(CIR.Expr{
-    //     .e_if = .{
-    //         .cond_var = @enumFromInt(1012),
-    //         .branch_var = @enumFromInt(1123),
-    //         .branches = CIR.IfBranch.Span{ .span = base.DataSpan.init(567, 890) },
-    //         .final_else = @enumFromInt(1234),
-    //         .region = from_raw_offsets(1345, 1678),
-    //     },
-    // });
-
-    // TODO: Test e_call when NodeStore properly handles TypeVar fields
-    // Currently doesn't restore effect_var properly
-    // try expressions.append(CIR.Expr{
-    //     .e_call = .{
-    //         .args = CIR.Expr.Span{ .span = base.DataSpan.init(678, 901) },
-    //         .called_via = base.CalledVia.apply,
-    //         .effect_var = @enumFromInt(1345),
-    //         .region = from_raw_offsets(1456, 1789),
-    //     },
-    // });
-
-    // TODO: Test e_record when NodeStore properly handles TypeVar fields
-    // Currently doesn't restore ext_var properly
-    // try expressions.append(CIR.Expr{
-    //     .e_record = .{
-    //         .ext_var = @enumFromInt(1456),
-    //         .fields = CIR.RecordField.Span{ .span = base.DataSpan.init(789, 1012) },
-    //         .region = from_raw_offsets(1567, 1890),
-    //     },
-    // });
-
+    try expressions.append(CIR.Expr{
+        .e_when = CIR.When{
+            .loc_cond = @enumFromInt(567),
+            .cond_var = @enumFromInt(678),
+            .expr_var = @enumFromInt(789),
+            .region = from_raw_offsets(1234, 1567),
+            .branches = CIR.WhenBranch.Span{ .span = base.DataSpan.init(456, 789) },
+            .branches_cond_var = @enumFromInt(890),
+            .exhaustive = @enumFromInt(901),
+        },
+    });
+    try expressions.append(CIR.Expr{
+        .e_if = .{
+            .branches = CIR.IfBranch.Span{ .span = base.DataSpan.init(567, 890) },
+            .final_else = @enumFromInt(1234),
+            .region = from_raw_offsets(1345, 1678),
+        },
+    });
+    try expressions.append(CIR.Expr{
+        .e_call = .{
+            .args = CIR.Expr.Span{ .span = base.DataSpan.init(678, 901) },
+            .called_via = base.CalledVia.apply,
+            .effect_var = @enumFromInt(1345),
+            .region = from_raw_offsets(1456, 1789),
+        },
+    });
+    try expressions.append(CIR.Expr{
+        .e_record = .{
+            .ext_var = @enumFromInt(1456),
+            .fields = CIR.RecordField.Span{ .span = base.DataSpan.init(789, 1012) },
+            .region = from_raw_offsets(1567, 1890),
+        },
+    });
     try expressions.append(CIR.Expr{
         .e_empty_record = .{
             .region = from_raw_offsets(1678, 1901),
@@ -268,53 +255,44 @@ test "NodeStore round trip - Expressions" {
             .region = from_raw_offsets(1789, 2012),
         },
     });
+    try expressions.append(CIR.Expr{
+        .e_record_access = .{
+            .record_var = @enumFromInt(1678),
+            .ext_var = @enumFromInt(1789),
+            .field_var = @enumFromInt(1890),
+            .loc_expr = @enumFromInt(1901),
+            .field = @bitCast(@as(u32, 2012)),
+            .region = from_raw_offsets(1890, 2123),
+        },
+    });
 
-    // TODO: Test e_record_access when NodeStore implements addExpr for this variant
-    // Currently panics with "TODO addExpr record_access"
-    // try expressions.append(CIR.Expr{
-    //     .e_record_access = .{
-    //         .record_var = @enumFromInt(1678),
-    //         .ext_var = @enumFromInt(1789),
-    //         .field_var = @enumFromInt(1890),
-    //         .loc_expr = @enumFromInt(1901),
-    //         .field = @bitCast(@as(u32, 2012)),
-    //         .region = from_raw_offsets(1890, 2123),
-    //     },
-    // });
+    try expressions.append(CIR.Expr{
+        .e_tag = .{
+            .ext_var = @enumFromInt(2012),
+            .name = @bitCast(@as(u32, 2123)),
+            .args = CIR.Expr.Span{ .span = base.DataSpan.init(901, 1234) },
+            .region = from_raw_offsets(1901, 2234),
+        },
+    });
 
-    // TODO: Test e_tag when NodeStore properly handles TypeVar fields
-    // Currently doesn't restore ext_var properly
-    // try expressions.append(CIR.Expr{
-    //     .e_tag = .{
-    //         .ext_var = @enumFromInt(2012),
-    //         .name = @bitCast(@as(u32, 2123)),
-    //         .args = CIR.Expr.Span{ .span = base.DataSpan.init(901, 1234) },
-    //         .region = from_raw_offsets(1901, 2234),
-    //     },
-    // });
+    try expressions.append(CIR.Expr{
+        .e_zero_argument_tag = .{
+            .closure_name = @bitCast(@as(u32, 2234)),
+            .variant_var = @enumFromInt(2345),
+            .ext_var = @enumFromInt(2456),
+            .name = @bitCast(@as(u32, 2567)),
+            .region = from_raw_offsets(2012, 2345),
+        },
+    });
 
-    // TODO: Test e_zero_argument_tag when NodeStore implements addExpr for this variant
-    // Currently panics with "TODO addExpr zero_argument_tag"
-    // try expressions.append(CIR.Expr{
-    //     .e_zero_argument_tag = .{
-    //         .closure_name = @bitCast(@as(u32, 2234)),
-    //         .variant_var = @enumFromInt(2345),
-    //         .ext_var = @enumFromInt(2456),
-    //         .name = @bitCast(@as(u32, 2567)),
-    //         .region = from_raw_offsets(2012, 2345),
-    //     },
-    // });
-
-    // TODO: Test e_lambda when NodeStore properly handles TypeVar fields
-    // Currently doesn't restore effect_var properly
-    // try expressions.append(CIR.Expr{
-    //     .e_lambda = .{
-    //         .args = CIR.Pattern.Span{ .span = base.DataSpan.init(1012, 1345) },
-    //         .body = @enumFromInt(2678),
-    //         .effect_var = @enumFromInt(2789),
-    //         .region = from_raw_offsets(2123, 2456),
-    //     },
-    // });
+    try expressions.append(CIR.Expr{
+        .e_lambda = .{
+            .args = CIR.Pattern.Span{ .span = base.DataSpan.init(1012, 1345) },
+            .body = @enumFromInt(2678),
+            .effect_var = @enumFromInt(2789),
+            .region = from_raw_offsets(2123, 2456),
+        },
+    });
 
     try expressions.append(CIR.Expr{
         .e_binop = CIR.Expr.Binop.init(
@@ -356,6 +334,13 @@ test "NodeStore round trip - Expressions" {
             std.debug.print("Retrieved: {any}\n\n", .{retrieved});
             return err;
         };
+    }
+
+    const actual_test_count = expressions.items.len;
+    if (actual_test_count < NodeStore.CIR_EXPR_NODE_COUNT) {
+        std.debug.print("Expression test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.CIR_EXPR_NODE_COUNT, actual_test_count });
+        std.debug.print("Please add test cases for missing expression variants.\n", .{});
+        return error.IncompleteExpressionTestCoverage;
     }
 }
 
@@ -563,5 +548,251 @@ test "NodeStore round trip - Diagnostics" {
             std.debug.print("Retrieved: {any}\n\n", .{retrieved});
             return err;
         };
+    }
+
+    const actual_test_count = diagnostics.items.len;
+    if (actual_test_count < NodeStore.CIR_DIAGNOSTIC_NODE_COUNT) {
+        std.debug.print("Diagnostic test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.CIR_DIAGNOSTIC_NODE_COUNT, actual_test_count });
+        std.debug.print("Please add test cases for missing diagnostic variants.\n", .{});
+        return error.IncompleteDiagnosticTestCoverage;
+    }
+}
+
+test "NodeStore round trip - TypeAnno" {
+    const gpa = testing.allocator;
+    var store = NodeStore.init(gpa);
+    defer store.deinit();
+
+    var type_annos = std.ArrayList(CIR.TypeAnno).init(gpa);
+    defer type_annos.deinit();
+
+    // Test all TypeAnno variants to ensure complete coverage
+    try type_annos.append(CIR.TypeAnno{
+        .apply = .{
+            .symbol = @bitCast(@as(u32, 123)),
+            .args = CIR.TypeAnno.Span{ .span = base.DataSpan.init(456, 789) },
+            .region = from_raw_offsets(10, 20),
+        },
+    });
+
+    try type_annos.append(CIR.TypeAnno{
+        .ty_var = .{
+            .name = @bitCast(@as(u32, 234)),
+            .region = from_raw_offsets(30, 40),
+        },
+    });
+
+    try type_annos.append(CIR.TypeAnno{
+        .underscore = .{
+            .region = from_raw_offsets(50, 60),
+        },
+    });
+
+    try type_annos.append(CIR.TypeAnno{
+        .ty = .{
+            .symbol = @bitCast(@as(u32, 345)),
+            .region = from_raw_offsets(70, 80),
+        },
+    });
+
+    try type_annos.append(CIR.TypeAnno{
+        .mod_ty = .{
+            .mod_symbol = @bitCast(@as(u32, 456)),
+            .ty_symbol = @bitCast(@as(u32, 567)),
+            .region = from_raw_offsets(90, 100),
+        },
+    });
+
+    try type_annos.append(CIR.TypeAnno{
+        .tag_union = .{
+            .tags = CIR.TypeAnno.Span{ .span = base.DataSpan.init(678, 890) },
+            .open_anno = @enumFromInt(901),
+            .region = from_raw_offsets(110, 120),
+        },
+    });
+
+    try type_annos.append(CIR.TypeAnno{
+        .tuple = .{
+            .annos = CIR.TypeAnno.Span{ .span = base.DataSpan.init(1012, 1234) },
+            .region = from_raw_offsets(130, 140),
+        },
+    });
+
+    try type_annos.append(CIR.TypeAnno{
+        .record = .{
+            .fields = CIR.AnnoRecordField.Span{ .span = base.DataSpan.init(1345, 1567) },
+            .region = from_raw_offsets(150, 160),
+        },
+    });
+
+    try type_annos.append(CIR.TypeAnno{
+        .@"fn" = .{
+            .args = CIR.TypeAnno.Span{ .span = base.DataSpan.init(1678, 1890) },
+            .ret = @enumFromInt(1901),
+            .effectful = true,
+            .region = from_raw_offsets(170, 180),
+        },
+    });
+
+    try type_annos.append(CIR.TypeAnno{
+        .parens = .{
+            .anno = @enumFromInt(2012),
+            .region = from_raw_offsets(190, 200),
+        },
+    });
+
+    try type_annos.append(CIR.TypeAnno{
+        .malformed = .{
+            .diagnostic = @enumFromInt(2123),
+            .region = from_raw_offsets(210, 220),
+        },
+    });
+
+    // Test the round-trip for all type annotations
+    for (type_annos.items) |type_anno| {
+        const idx = store.addTypeAnno(type_anno);
+        const retrieved = store.getTypeAnno(idx);
+
+        testing.expectEqualDeep(type_anno, retrieved) catch |err| {
+            std.debug.print("\n\nOriginal:  {any}\n\n", .{type_anno});
+            std.debug.print("Retrieved: {any}\n\n", .{retrieved});
+            return err;
+        };
+    }
+
+    const actual_test_count = type_annos.items.len;
+    if (actual_test_count < NodeStore.CIR_TYPE_ANNO_NODE_COUNT) {
+        std.debug.print("CIR.TypeAnno test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.CIR_TYPE_ANNO_NODE_COUNT, actual_test_count });
+        std.debug.print("Please add test cases for missing type annotation variants.\n", .{});
+        return error.IncompleteTypeAnnoTestCoverage;
+    }
+}
+
+test "NodeStore round trip - Pattern" {
+    const gpa = testing.allocator;
+    var store = NodeStore.init(gpa);
+    defer store.deinit();
+
+    var patterns = std.ArrayList(CIR.Pattern).init(gpa);
+    defer patterns.deinit();
+
+    // Test all Pattern variants to ensure complete coverage
+    try patterns.append(CIR.Pattern{
+        .assign = .{
+            .ident = @bitCast(@as(u32, 123)),
+            .region = from_raw_offsets(10, 20),
+        },
+    });
+    try patterns.append(CIR.Pattern{
+        .as = .{
+            .pattern = @enumFromInt(234),
+            .ident = @bitCast(@as(u32, 345)),
+            .region = from_raw_offsets(30, 40),
+        },
+    });
+    try patterns.append(CIR.Pattern{
+        .applied_tag = .{
+            .ext_var = @enumFromInt(456),
+            .tag_name = @bitCast(@as(u32, 567)),
+            .arguments = CIR.Pattern.Span{ .span = base.DataSpan.init(678, 789) },
+            .region = from_raw_offsets(50, 60),
+        },
+    });
+    try patterns.append(CIR.Pattern{
+        .record_destructure = .{
+            .whole_var = @enumFromInt(890),
+            .ext_var = @enumFromInt(901),
+            .destructs = CIR.RecordDestruct.Span{ .span = base.DataSpan.init(1012, 1123) },
+            .region = from_raw_offsets(70, 80),
+        },
+    });
+    try patterns.append(CIR.Pattern{
+        .list = .{
+            .list_var = @enumFromInt(1234),
+            .elem_var = @enumFromInt(1345),
+            .patterns = CIR.Pattern.Span{ .span = base.DataSpan.init(1456, 1567) },
+            .region = from_raw_offsets(90, 100),
+        },
+    });
+    try patterns.append(CIR.Pattern{
+        .tuple = .{
+            .patterns = CIR.Pattern.Span{ .span = base.DataSpan.init(1678, 1789) },
+            .region = from_raw_offsets(110, 120),
+        },
+    });
+    try patterns.append(CIR.Pattern{
+        .int_literal = .{
+            .value = CIR.IntValue{
+                .bytes = @bitCast(@as(i128, 42)),
+                .kind = .i128,
+            },
+            .region = from_raw_offsets(130, 140),
+        },
+    });
+    try patterns.append(CIR.Pattern{
+        .small_dec_literal = .{
+            .numerator = 123,
+            .denominator_power_of_ten = 2,
+            .region = from_raw_offsets(150, 160),
+        },
+    });
+    try patterns.append(CIR.Pattern{
+        .dec_literal = .{
+            .value = RocDec.fromU64(1890),
+            .region = from_raw_offsets(170, 180),
+        },
+    });
+    try patterns.append(CIR.Pattern{
+        .f64_literal = .{
+            .value = 3.14,
+            .region = from_raw_offsets(190, 200),
+        },
+    });
+    try patterns.append(CIR.Pattern{
+        .str_literal = .{
+            .literal = @enumFromInt(1901),
+            .region = from_raw_offsets(210, 220),
+        },
+    });
+    try patterns.append(CIR.Pattern{
+        .char_literal = .{
+            .num_var = @enumFromInt(2012),
+            .requirements = types.Num.Int.Requirements{
+                .sign_needed = false,
+                .bits_needed = .@"7",
+            },
+            .value = 65, // 'A'
+            .region = from_raw_offsets(230, 240),
+        },
+    });
+    try patterns.append(CIR.Pattern{
+        .underscore = .{
+            .region = from_raw_offsets(250, 260),
+        },
+    });
+    try patterns.append(CIR.Pattern{
+        .runtime_error = .{
+            .diagnostic = @enumFromInt(2123),
+            .region = from_raw_offsets(270, 280),
+        },
+    });
+
+    // Test the round-trip for all patterns
+    for (patterns.items) |pattern| {
+        const idx = store.addPattern(pattern);
+        const retrieved = store.getPattern(idx);
+
+        testing.expectEqualDeep(pattern, retrieved) catch |err| {
+            std.debug.print("\n\nOriginal:  {any}\n\n", .{pattern});
+            std.debug.print("Retrieved: {any}\n\n", .{retrieved});
+            return err;
+        };
+    }
+
+    const actual_test_count = patterns.items.len;
+    if (actual_test_count < NodeStore.CIR_PATTERN_NODE_COUNT) {
+        std.debug.print("CIR.Pattern test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.CIR_PATTERN_NODE_COUNT, actual_test_count });
+        std.debug.print("Please add test cases for missing pattern variants.\n", .{});
+        return error.IncompletePatternTestCoverage;
     }
 }

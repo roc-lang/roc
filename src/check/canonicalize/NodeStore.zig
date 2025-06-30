@@ -87,6 +87,50 @@ pub fn deinit(store: *NodeStore) void {
     store.scratch_diagnostics.items.deinit(store.gpa);
 }
 
+/// Compile-time constants for union variant counts to ensure we don't miss cases
+/// when adding/removing variants from CIR unions. Update these when modifying the unions.
+///
+/// Count of the diagnostic nodes in the CIR
+pub const CIR_DIAGNOSTIC_NODE_COUNT = 27;
+/// Count of the expression nodes in the CIR
+pub const CIR_EXPR_NODE_COUNT = 24;
+/// Count of the statement nodes in the CIR
+pub const CIR_STATEMENT_NODE_COUNT = 11;
+/// Count of the type annotation nodes in the CIR
+pub const CIR_TYPE_ANNO_NODE_COUNT = 11;
+/// Count of the pattern nodes in the CIR
+pub const CIR_PATTERN_NODE_COUNT = 14;
+
+comptime {
+    // Check the number of CIR.Diagnostic nodes
+    const diagnostic_fields = @typeInfo(CIR.Diagnostic).@"union".fields;
+    std.debug.assert(diagnostic_fields.len == CIR_DIAGNOSTIC_NODE_COUNT);
+}
+
+comptime {
+    // Check the number of CIR.Expr nodes
+    const expr_fields = @typeInfo(CIR.Expr).@"union".fields;
+    std.debug.assert(expr_fields.len == CIR_EXPR_NODE_COUNT);
+}
+
+comptime {
+    // Check the number of CIR.Statement nodes
+    const statement_fields = @typeInfo(CIR.Statement).@"union".fields;
+    std.debug.assert(statement_fields.len == CIR_STATEMENT_NODE_COUNT);
+}
+
+comptime {
+    // Check the number of CIR.TypeAnno nodes
+    const type_anno_fields = @typeInfo(CIR.TypeAnno).@"union".fields;
+    std.debug.assert(type_anno_fields.len == CIR_TYPE_ANNO_NODE_COUNT);
+}
+
+comptime {
+    // Check the number of CIR.Pattern nodes
+    const pattern_fields = @typeInfo(CIR.Pattern).@"union".fields;
+    std.debug.assert(pattern_fields.len == CIR_PATTERN_NODE_COUNT);
+}
+
 /// Retrieves a region from node from the store.
 pub fn getNodeRegion(store: *const NodeStore, node_idx: Node.Idx) Region {
     const node = store.nodes.get(node_idx);
@@ -338,11 +382,19 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             node.region,
         ),
         .expr_tag => {
+            const extra_start = node.data_1;
+            const extra_data = store.extra_data.items[extra_start..];
+
+            const ext_var = @as(types.Var, @enumFromInt(extra_data[0]));
+            const name = @as(Ident.Idx, @bitCast(extra_data[1]));
+            const args_start = extra_data[2];
+            const args_len = extra_data[3];
+
             return CIR.Expr{
                 .e_tag = .{
-                    .ext_var = @enumFromInt(0), // Placeholder
-                    .name = @bitCast(@as(base.Ident.Idx, @bitCast(node.data_1))),
-                    .args = .{ .span = .{ .start = 0, .len = 0 } }, // Empty args for now
+                    .ext_var = ext_var,
+                    .name = name,
+                    .args = .{ .span = .{ .start = args_start, .len = args_len } },
                     .region = node.region,
                 },
             };
@@ -408,13 +460,75 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 },
             };
         },
-        .expr_field_access,
+        .expr_match => {
+            const extra_start = node.data_1;
+            const extra_data = store.extra_data.items[extra_start..];
+
+            const loc_cond = @as(CIR.Expr.Idx, @enumFromInt(extra_data[0]));
+            const cond_var = @as(types.Var, @enumFromInt(extra_data[1]));
+            const expr_var = @as(types.Var, @enumFromInt(extra_data[2]));
+            const branches_start = extra_data[3];
+            const branches_len = extra_data[4];
+            const branches_cond_var = @as(types.Var, @enumFromInt(extra_data[5]));
+            const exhaustive = @as(types.Var, @enumFromInt(extra_data[6]));
+
+            return CIR.Expr{
+                .e_when = CIR.When{
+                    .loc_cond = loc_cond,
+                    .cond_var = cond_var,
+                    .expr_var = expr_var,
+                    .region = node.region,
+                    .branches = .{ .span = .{ .start = branches_start, .len = branches_len } },
+                    .branches_cond_var = branches_cond_var,
+                    .exhaustive = exhaustive,
+                },
+            };
+        },
+        .expr_field_access => {
+            const extra_start = node.data_1;
+            const extra_data = store.extra_data.items[extra_start..];
+
+            const record_var = @as(types.Var, @enumFromInt(extra_data[0]));
+            const ext_var = @as(types.Var, @enumFromInt(extra_data[1]));
+            const field_var = @as(types.Var, @enumFromInt(extra_data[2]));
+            const loc_expr = @as(CIR.Expr.Idx, @enumFromInt(extra_data[3]));
+            const field = @as(Ident.Idx, @bitCast(extra_data[4]));
+
+            return CIR.Expr{
+                .e_record_access = .{
+                    .record_var = record_var,
+                    .ext_var = ext_var,
+                    .field_var = field_var,
+                    .loc_expr = loc_expr,
+                    .field = field,
+                    .region = node.region,
+                },
+            };
+        },
+        .expr_zero_argument_tag => {
+            const extra_start = node.data_1;
+            const extra_data = store.extra_data.items[extra_start..];
+
+            const closure_name = @as(Ident.Idx, @bitCast(extra_data[0]));
+            const variant_var = @as(types.Var, @enumFromInt(extra_data[1]));
+            const ext_var = @as(types.Var, @enumFromInt(extra_data[2]));
+            const name = @as(Ident.Idx, @bitCast(extra_data[3]));
+
+            return CIR.Expr{
+                .e_zero_argument_tag = .{
+                    .closure_name = closure_name,
+                    .variant_var = variant_var,
+                    .ext_var = ext_var,
+                    .name = name,
+                    .region = node.region,
+                },
+            };
+        },
         .expr_static_dispatch,
         .expr_apply,
         .expr_record_update,
         .expr_unary,
         .expr_suffix_single_question,
-        .expr_match,
         .expr_dbg,
         .expr_ellipsis,
         .expr_record_builder,
@@ -478,16 +592,99 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
 
 /// Retrieves a 'when' branch from the store.
 pub fn getWhenBranch(store: *const NodeStore, whenBranch: CIR.WhenBranch.Idx) CIR.WhenBranch {
-    _ = store;
-    _ = whenBranch;
-    @panic("TODO: implement getWhenBranch");
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(whenBranch));
+    const node = store.nodes.get(node_idx);
+
+    std.debug.assert(node.tag == .when_branch);
+
+    // Retrieve when branch data from extra_data
+    const extra_start = node.data_1;
+    const extra_data = store.extra_data.items[extra_start..];
+
+    const patterns_start = extra_data[0];
+    const patterns_len = extra_data[1];
+    const value_idx = @as(CIR.Expr.Idx, @enumFromInt(extra_data[2]));
+    const guard_idx_raw = extra_data[3];
+    const guard_idx = if (guard_idx_raw == 0) null else @as(CIR.Expr.Idx, @enumFromInt(guard_idx_raw));
+    const redundant = @as(CIR.RedundantMark, @enumFromInt(extra_data[4]));
+
+    return CIR.WhenBranch{
+        .patterns = .{ .span = .{ .start = patterns_start, .len = patterns_len } },
+        .value = value_idx,
+        .guard = guard_idx,
+        .redundant = redundant,
+    };
 }
 
 /// Retrieves a 'where' clause from the store.
 pub fn getWhereClause(store: *NodeStore, whereClause: CIR.WhereClause.Idx) CIR.WhereClause {
-    _ = store;
-    _ = whereClause;
-    @panic("TODO: implement getWhereClause");
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(whereClause));
+    const node = store.nodes.get(node_idx);
+
+    std.debug.assert(node.tag == .where_clause);
+
+    // Retrieve where clause data from extra_data
+    const extra_start = node.data_1;
+    const extra_data = store.extra_data.items[extra_start..];
+
+    const discriminant = extra_data[0];
+
+    switch (discriminant) {
+        0 => { // alias
+            const var_tok = @as(Ident.Idx, @bitCast(extra_data[1]));
+            const alias_tok = @as(Ident.Idx, @bitCast(extra_data[2]));
+            const region_start = extra_data[3];
+            const region_end = extra_data[4];
+
+            return CIR.WhereClause{
+                .alias = .{
+                    .var_tok = var_tok,
+                    .alias_tok = alias_tok,
+                    .region = Region{ .start = region_start, .end = region_end },
+                },
+            };
+        },
+        1 => { // method
+            const var_tok = @as(Ident.Idx, @bitCast(extra_data[1]));
+            const name_tok = @as(Ident.Idx, @bitCast(extra_data[2]));
+            const args_start = extra_data[3];
+            const args_len = extra_data[4];
+            const ret_anno = @as(CIR.TypeAnno.Idx, @enumFromInt(extra_data[5]));
+            const region_start = extra_data[6];
+            const region_end = extra_data[7];
+
+            return CIR.WhereClause{
+                .method = .{
+                    .var_tok = var_tok,
+                    .name_tok = name_tok,
+                    .args = .{ .span = .{ .start = args_start, .len = args_len } },
+                    .ret_anno = ret_anno,
+                    .region = Region{ .start = region_start, .end = region_end },
+                },
+            };
+        },
+        2 => { // mod_method
+            const var_tok = @as(Ident.Idx, @bitCast(extra_data[1]));
+            const name_tok = @as(Ident.Idx, @bitCast(extra_data[2]));
+            const args_start = extra_data[3];
+            const args_len = extra_data[4];
+            const ret_anno_start = extra_data[5];
+            const ret_anno_len = extra_data[6];
+            const region_start = extra_data[7];
+            const region_end = extra_data[8];
+
+            return CIR.WhereClause{
+                .mod_method = .{
+                    .var_tok = var_tok,
+                    .name_tok = name_tok,
+                    .args = .{ .span = .{ .start = args_start, .len = args_len } },
+                    .ret_anno = .{ .span = .{ .start = ret_anno_start, .len = ret_anno_len } },
+                    .region = Region{ .start = region_start, .end = region_end },
+                },
+            };
+        },
+        else => @panic("Invalid where clause discriminant"),
+    }
 }
 
 /// Retrieves a pattern from the store.
@@ -509,30 +706,59 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
                 .region = node.region,
             },
         },
-        .pattern_applied_tag => return CIR.Pattern{
-            .applied_tag = .{
-                .region = node.region,
-                .arguments = DataSpan.init(node.data_1, node.data_2).as(CIR.Pattern.Span),
-                .tag_name = @bitCast(node.data_3),
+        .pattern_applied_tag => {
+            const extra_start = node.data_1;
+            const extra_data = store.extra_data.items[extra_start..];
 
-                .ext_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
-            },
+            const arguments_start = extra_data[0];
+            const arguments_len = extra_data[1];
+            const tag_name = @as(Ident.Idx, @bitCast(extra_data[2]));
+            const ext_var = @as(types.Var, @enumFromInt(extra_data[3]));
+
+            return CIR.Pattern{
+                .applied_tag = .{
+                    .region = node.region,
+                    .arguments = DataSpan.init(arguments_start, arguments_len).as(CIR.Pattern.Span),
+                    .tag_name = tag_name,
+                    .ext_var = ext_var,
+                },
+            };
         },
-        .pattern_record_destructure => return CIR.Pattern{
-            .record_destructure = .{
-                .region = node.region,
-                .destructs = DataSpan.init(node.data_1, node.data_2).as(CIR.RecordDestruct.Span),
-                .ext_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
-                .whole_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
-            },
+        .pattern_record_destructure => {
+            const extra_start = node.data_1;
+            const extra_data = store.extra_data.items[extra_start..];
+
+            const destructs_start = extra_data[0];
+            const destructs_len = extra_data[1];
+            const ext_var = @as(types.Var, @enumFromInt(extra_data[2]));
+            const whole_var = @as(types.Var, @enumFromInt(extra_data[3]));
+
+            return CIR.Pattern{
+                .record_destructure = .{
+                    .region = node.region,
+                    .destructs = DataSpan.init(destructs_start, destructs_len).as(CIR.RecordDestruct.Span),
+                    .ext_var = ext_var,
+                    .whole_var = whole_var,
+                },
+            };
         },
-        .pattern_list => return CIR.Pattern{
-            .list = .{
-                .region = node.region,
-                .patterns = DataSpan.init(node.data_1, node.data_2).as(CIR.Pattern.Span),
-                .elem_var = @enumFromInt(0), // TODO need to store elem_var separately
-                .list_var = @enumFromInt(node.data_3),
-            },
+        .pattern_list => {
+            const extra_start = node.data_1;
+            const extra_data = store.extra_data.items[extra_start..];
+
+            const patterns_start = extra_data[0];
+            const patterns_len = extra_data[1];
+            const elem_var = @as(types.Var, @enumFromInt(extra_data[2]));
+            const list_var = @as(types.Var, @enumFromInt(extra_data[3]));
+
+            return CIR.Pattern{
+                .list = .{
+                    .region = node.region,
+                    .patterns = DataSpan.init(patterns_start, patterns_len).as(CIR.Pattern.Span),
+                    .elem_var = elem_var,
+                    .list_var = list_var,
+                },
+            };
         },
         .pattern_tuple => return CIR.Pattern{
             .tuple = .{
@@ -608,13 +834,23 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
             .region = node.region,
             .literal = @enumFromInt(node.data_1),
         } },
-        .pattern_char_literal => return CIR.Pattern{
-            .char_literal = .{
-                .region = node.region,
-                .num_var = @enumFromInt(0), // TODO need to store and retrieve from extra_data
-                .requirements = .{ .sign_needed = false, .bits_needed = .@"32" }, // TODO need to store and retrieve from extra_data
-                .value = node.data_1,
-            },
+        .pattern_char_literal => {
+            const extra_start = node.data_1;
+            const extra_data = store.extra_data.items[extra_start..];
+
+            const value = extra_data[0];
+            const num_var = @as(types.Var, @enumFromInt(extra_data[1]));
+            const sign_needed = extra_data[2] != 0;
+            const bits_needed = @as(types.Num.Int.BitsNeeded, @enumFromInt(extra_data[3]));
+
+            return CIR.Pattern{
+                .char_literal = .{
+                    .region = node.region,
+                    .num_var = num_var,
+                    .requirements = .{ .sign_needed = sign_needed, .bits_needed = bits_needed },
+                    .value = value,
+                },
+            };
         },
         .pattern_underscore => return CIR.Pattern{ .underscore = .{
             .region = node.region,
@@ -635,7 +871,8 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
 pub fn getPatternRecordField(store: *NodeStore, patternRecordField: CIR.PatternRecordField.Idx) CIR.PatternRecordField {
     _ = store;
     _ = patternRecordField;
-    @panic("TODO: implement getPatternRecordField");
+    // Return empty placeholder since PatternRecordField has no fields yet
+    return CIR.PatternRecordField{};
 }
 
 /// Retrieves a type annotation from the store.
@@ -691,6 +928,10 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
         },
         .ty_parens => return CIR.TypeAnno{ .parens = .{
             .anno = @enumFromInt(node.data_1),
+            .region = node.region,
+        } },
+        .ty_malformed => return CIR.TypeAnno{ .malformed = .{
+            .diagnostic = @enumFromInt(node.data_1),
             .region = node.region,
         } },
         .malformed => return CIR.TypeAnno{ .malformed = .{
@@ -1019,8 +1260,14 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
         .e_tag => |e| {
             node.region = e.region;
             node.tag = .expr_tag;
-            // Store the full Ident.Idx as a u32
-            node.data_1 = @bitCast(@as(u32, @bitCast(e.name)));
+
+            // Store tag data in extra_data
+            const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
+            store.extra_data.append(store.gpa, @intFromEnum(e.ext_var)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @bitCast(e.name)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, e.args.span.start) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, e.args.span.len) catch |err| exitOnOom(err);
+            node.data_1 = extra_data_start;
         },
         .e_dot_access => |e| {
             node.region = e.region;
@@ -1061,7 +1308,18 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
         },
         .e_when => |e| {
             node.region = e.region;
-            @panic("TODO addExpr when");
+            node.tag = .expr_match;
+
+            // Store when data in extra_data
+            const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
+            store.extra_data.append(store.gpa, @intFromEnum(e.loc_cond)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @intFromEnum(e.cond_var)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @intFromEnum(e.expr_var)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, e.branches.span.start) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, e.branches.span.len) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @intFromEnum(e.branches_cond_var)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @intFromEnum(e.exhaustive)) catch |err| exitOnOom(err);
+            node.data_1 = extra_data_start;
         },
         .e_if => |e| {
             // Store def data in extra_data. We store the following fields:
@@ -1114,11 +1372,28 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
         },
         .e_record_access => |e| {
             node.region = e.region;
-            @panic("TODO addExpr record_access");
+            node.tag = .expr_field_access;
+
+            // Store record access data in extra_data
+            const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
+            store.extra_data.append(store.gpa, @intFromEnum(e.record_var)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @intFromEnum(e.ext_var)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @intFromEnum(e.field_var)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @intFromEnum(e.loc_expr)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @bitCast(e.field)) catch |err| exitOnOom(err);
+            node.data_1 = extra_data_start;
         },
         .e_zero_argument_tag => |e| {
             node.region = e.region;
-            @panic("TODO addExpr zero_argument_tag");
+            node.tag = .expr_zero_argument_tag;
+
+            // Store zero argument tag data in extra_data
+            const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
+            store.extra_data.append(store.gpa, @bitCast(e.closure_name)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @intFromEnum(e.variant_var)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @intFromEnum(e.ext_var)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @bitCast(e.name)) catch |err| exitOnOom(err);
+            node.data_1 = extra_data_start;
         },
         .e_lambda => |e| {
             node.region = e.region;
@@ -1173,33 +1448,108 @@ pub fn addRecordField(store: *NodeStore, recordField: CIR.RecordField) CIR.Recor
 }
 
 /// Adds a record destructuring to the store.
-pub fn addRecordDestruct(store: *NodeStore, recordDestruct: CIR.RecordDestruct) CIR.RecordDestruct.Idx {
-    const node = Node{
-        .data_1 = @bitCast(recordDestruct.label),
-        .data_2 = @bitCast(recordDestruct.ident),
+pub fn addRecordDestruct(store: *NodeStore, record_destruct: CIR.RecordDestruct) CIR.RecordDestruct.Idx {
+    var node = Node{
+        .data_1 = @bitCast(record_destruct.label),
+        .data_2 = @bitCast(record_destruct.ident),
         .data_3 = 0,
-        .region = recordDestruct.region,
+        .region = record_destruct.region,
         .tag = .record_destruct,
     };
 
-    const nid = store.nodes.append(store.gpa, node);
-    return @enumFromInt(@intFromEnum(nid));
+    // Store kind in extra_data if it's not Required
+    switch (record_destruct.kind) {
+        .Required => {
+            // No extra data needed
+        },
+        .Guard => |guard_pattern| {
+            const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
+
+            // Store kind tag (1 for Guard)
+            store.extra_data.append(store.gpa, 1) catch |err| exitOnOom(err);
+            // Store guard pattern index
+            store.extra_data.append(store.gpa, @intFromEnum(guard_pattern)) catch |err| exitOnOom(err);
+
+            node.data_3 = extra_data_start;
+        },
+    }
+
+    return @enumFromInt(@intFromEnum(store.nodes.append(store.gpa, node)));
 }
 
 /// Adds a 'when' branch to the store.
 pub fn addWhenBranch(store: *NodeStore, whenBranch: CIR.WhenBranch) CIR.WhenBranch.Idx {
-    _ = store;
-    _ = whenBranch;
+    var node = Node{
+        .data_1 = 0,
+        .data_2 = 0,
+        .data_3 = 0,
+        .region = base.Region.empty(), // TODO should WhenBranch have a region field?
+        .tag = .when_branch,
+    };
 
-    return .{ .id = @enumFromInt(0) };
+    // Store when branch data in extra_data
+    const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
+    store.extra_data.append(store.gpa, whenBranch.patterns.span.start) catch |err| exitOnOom(err);
+    store.extra_data.append(store.gpa, whenBranch.patterns.span.len) catch |err| exitOnOom(err);
+    store.extra_data.append(store.gpa, @intFromEnum(whenBranch.value)) catch |err| exitOnOom(err);
+    const guard_idx = if (whenBranch.guard) |g| @intFromEnum(g) else 0;
+    store.extra_data.append(store.gpa, guard_idx) catch |err| exitOnOom(err);
+    store.extra_data.append(store.gpa, @intFromEnum(whenBranch.redundant)) catch |err| exitOnOom(err);
+    node.data_1 = extra_data_start;
+
+    return @enumFromInt(@intFromEnum(store.nodes.append(store.gpa, node)));
 }
 
 /// Adds a 'where' clause to the store.
 pub fn addWhereClause(store: *NodeStore, whereClause: CIR.WhereClause) CIR.WhereClause.Idx {
-    _ = store;
-    _ = whereClause;
+    var node = Node{
+        .data_1 = 0,
+        .data_2 = 0,
+        .data_3 = 0,
+        .region = base.Region.empty(),
+        .tag = .where_clause,
+    };
 
-    return .{ .id = @enumFromInt(0) };
+    // Store where clause data in extra_data
+    const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
+
+    switch (whereClause) {
+        .alias => |alias| {
+            // Store discriminant (0 for alias)
+            store.extra_data.append(store.gpa, 0) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @bitCast(alias.var_tok)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @bitCast(alias.alias_tok)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, alias.region.start) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, alias.region.end) catch |err| exitOnOom(err);
+        },
+        .method => |method| {
+            // Store discriminant (1 for method)
+            store.extra_data.append(store.gpa, 1) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @bitCast(method.var_tok)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @bitCast(method.name_tok)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, method.args.span.start) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, method.args.span.len) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @intFromEnum(method.ret_anno)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, method.region.start) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, method.region.end) catch |err| exitOnOom(err);
+        },
+        .mod_method => |mod_method| {
+            // Store discriminant (2 for mod_method)
+            store.extra_data.append(store.gpa, 2) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @bitCast(mod_method.var_tok)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @bitCast(mod_method.name_tok)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, mod_method.args.span.start) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, mod_method.args.span.len) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, mod_method.ret_anno.span.start) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, mod_method.ret_anno.span.len) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, mod_method.region.start) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, mod_method.region.end) catch |err| exitOnOom(err);
+        },
+    }
+
+    node.data_1 = extra_data_start;
+
+    return @enumFromInt(@intFromEnum(store.nodes.append(store.gpa, node)));
 }
 
 /// Adds a pattern to the store.
@@ -1227,24 +1577,38 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern) CIR.Pattern.Idx {
         .applied_tag => |p| {
             node.tag = .pattern_applied_tag;
             node.region = p.region;
-            node.data_1 = p.arguments.span.start;
-            node.data_2 = p.arguments.span.len;
-            node.data_3 = @bitCast(p.tag_name);
-            // TODO store type vars in extra data
+
+            // Store applied tag data in extra_data
+            const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
+            store.extra_data.append(store.gpa, p.arguments.span.start) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, p.arguments.span.len) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @bitCast(p.tag_name)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @intFromEnum(p.ext_var)) catch |err| exitOnOom(err);
+            node.data_1 = extra_data_start;
         },
         .record_destructure => |p| {
             node.tag = .pattern_record_destructure;
             node.region = p.region;
-            node.data_1 = p.destructs.span.start;
-            node.data_2 = p.destructs.span.len;
-            // TODO store type vars in extra data
+
+            // Store record destructure data in extra_data
+            const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
+            store.extra_data.append(store.gpa, p.destructs.span.start) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, p.destructs.span.len) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @intFromEnum(p.ext_var)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @intFromEnum(p.whole_var)) catch |err| exitOnOom(err);
+            node.data_1 = extra_data_start;
         },
         .list => |p| {
             node.tag = .pattern_list;
             node.region = p.region;
-            node.data_1 = p.patterns.span.start;
-            node.data_2 = p.patterns.span.len;
-            node.data_3 = @intFromEnum(p.list_var);
+
+            // Store list pattern data in extra_data
+            const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
+            store.extra_data.append(store.gpa, p.patterns.span.start) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, p.patterns.span.len) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @intFromEnum(p.elem_var)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @intFromEnum(p.list_var)) catch |err| exitOnOom(err);
+            node.data_1 = extra_data_start;
         },
         .tuple => |p| {
             node.tag = .pattern_tuple;
@@ -1300,13 +1664,18 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern) CIR.Pattern.Idx {
             node.tag = .pattern_str_literal;
             node.region = p.region;
             node.data_1 = @intFromEnum(p.literal);
-            // TODO store other data
         },
         .char_literal => |p| {
             node.tag = .pattern_char_literal;
             node.region = p.region;
-            node.data_1 = p.value;
-            // TODO store other data
+
+            // Store char literal data in extra_data
+            const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
+            store.extra_data.append(store.gpa, p.value) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @intFromEnum(p.num_var)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, if (p.requirements.sign_needed) 1 else 0) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @intFromEnum(p.requirements.bits_needed)) catch |err| exitOnOom(err);
+            node.data_1 = extra_data_start;
         },
         .underscore => |p| {
             node.tag = .pattern_underscore;
@@ -1546,11 +1915,25 @@ pub fn getRecordField(store: *const NodeStore, idx: CIR.RecordField.Idx) CIR.Rec
 /// Retrieves a record destructure from the store.
 pub fn getRecordDestruct(store: *const NodeStore, idx: CIR.RecordDestruct.Idx) CIR.RecordDestruct {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(idx)));
+
+    // Retrieve kind from extra_data if it exists
+    const kind = if (node.data_3 != 0) blk: {
+        const extra_start = node.data_3;
+        const extra_data = store.extra_data.items[extra_start..];
+        const kind_tag = extra_data[0];
+
+        break :blk switch (kind_tag) {
+            0 => CIR.RecordDestruct.Kind.Required,
+            1 => CIR.RecordDestruct.Kind{ .Guard = @enumFromInt(extra_data[1]) },
+            else => CIR.RecordDestruct.Kind.Required,
+        };
+    } else CIR.RecordDestruct.Kind.Required;
+
     return CIR.RecordDestruct{
         .label = @bitCast(node.data_1),
         .ident = @bitCast(node.data_2),
         .region = node.region,
-        .kind = .Required, // TODO: Need to store and retrieve kind from extra_data
+        .kind = kind,
     };
 }
 
@@ -1577,7 +1960,7 @@ pub fn addScratchExpr(store: *NodeStore, idx: CIR.Expr.Idx) void {
     store.scratch_exprs.append(store.gpa, idx);
 }
 
-/// TODO
+/// Adds a statement index to the scratch statements list for building spans.
 pub fn addScratchStatement(store: *NodeStore, idx: CIR.Statement.Idx) void {
     store.scratch_statements.append(store.gpa, idx);
 }
@@ -1596,7 +1979,7 @@ pub fn exprSpanFrom(store: *NodeStore, start: u32) CIR.Expr.Span {
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
 }
 
-/// TODO
+/// Creates a statement span from the given start position to the current top of scratch statements.
 pub fn statementSpanFrom(store: *NodeStore, start: u32) CIR.Statement.Span {
     const end = store.scratch_statements.top();
     defer store.scratch_statements.clearFrom(start);
@@ -1837,13 +2220,13 @@ pub fn scratchIfBranchTop(store: *NodeStore) u32 {
     return store.scratch_if_branches.top();
 }
 
-/// TODO
+/// Adds an if branch to the scratch if branches list for building spans.
 pub fn addScratchIfBranch(store: *NodeStore, if_branch: CIR.IfBranch) void {
     const if_branch_idx = store.addIfBranch(if_branch);
     store.scratch_if_branches.append(store.gpa, if_branch_idx);
 }
 
-/// TODO
+/// Creates an if branch span from the given start position to the current top of scratch if branches.
 pub fn ifBranchSpanFrom(store: *NodeStore, start: u32) CIR.IfBranch.Span {
     const end = store.scratch_if_branches.top();
     defer store.scratch_if_branches.clearFrom(start);
@@ -1862,7 +2245,7 @@ pub fn sliceIfBranches(store: *const NodeStore, span: CIR.IfBranch.Span) []CIR.I
     return store.sliceFromSpan(CIR.IfBranch.Idx, span.span);
 }
 
-/// TODO
+/// Adds an if branch to the store and returns its index.
 pub fn addIfBranch(store: *NodeStore, if_branch: CIR.IfBranch) CIR.IfBranch.Idx {
     const node = Node{
         .data_1 = @intFromEnum(if_branch.cond),
@@ -2092,7 +2475,7 @@ pub fn addMalformed(store: *NodeStore, comptime t: type, reason: CIR.Diagnostic)
         .data_1 = @intFromEnum(diagnostic_idx),
         .data_2 = 0,
         .data_3 = 0,
-        // TODO add a toRegion() helper on the Diagnostic type
+
         .region = reason.toRegion(),
         .tag = .malformed,
     };
@@ -2246,31 +2629,6 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             std.debug.print("and that no other nodes are being added to scratch_diagnostics.\n", .{});
             @panic("unreachable, node is not a diagnostic tag");
         },
-    }
-}
-
-comptime {
-    // This function validates that every field in CIR.Diagnostic has a corresponding
-    // case in both addDiagnostic and getDiagnostic functions
-    const diagnostic_fields = @typeInfo(CIR.Diagnostic).@"union".fields;
-
-    // Check that we have the expected number of cases
-    // If this fails at compile time, it means a new diagnostic was added
-    // but the corresponding cases weren't added to addDiagnostic or getDiagnostic
-    const expected_cases = diagnostic_fields.len;
-
-    // This will cause a compile error if new diagnostics are added without
-    // updating both functions. The developer will need to:
-    // 1. Add the case to addDiagnostic
-    // 2. Add the case to getDiagnostic
-    // 3. Update this count to match the new total
-    const actual_cases = 27; // Update this when adding new diagnostics
-
-    if (expected_cases != actual_cases) {
-        @compileError("Diagnostic case count mismatch! Expected " ++
-            std.fmt.comptimePrint("{}", .{expected_cases}) ++
-            " but found " ++ std.fmt.comptimePrint("{}", .{actual_cases}) ++
-            ". Please update addDiagnostic, getDiagnostic, and this count.");
     }
 }
 

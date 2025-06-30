@@ -155,7 +155,7 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 					(e-int @3.26-3.28 (value "78")))))
 		(field (name "status")
 			(e-call @4.13-4.44
-				(e-tag @4.13-4.19 (ext-var 0) (name "Active") (args "TODO"))
+				(e-tag @4.13-4.19 (ext-var 82) (name "Active") (args "TODO"))
 				(e-record @4.20-4.43 (ext-var 87)
 					(fields
 						(field (name "since")
@@ -165,15 +165,15 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 			(e-record @5.18-5.76 (ext-var 103)
 				(fields
 					(field (name "theme")
-						(e-tag @5.27-5.31 (ext-var 0) (name "Dark") (args "TODO")))
+						(e-tag @5.27-5.31 (ext-var 93) (name "Dark") (args "TODO")))
 					(field (name "notifications")
 						(e-call @5.48-5.74
-							(e-tag @5.48-5.53 (ext-var 0) (name "Email") (args "TODO"))
+							(e-tag @5.48-5.53 (ext-var 96) (name "Email") (args "TODO"))
 							(e-string @5.54-5.73
 								(e-literal @5.55-5.72 (string "alice@example.com"))))))))
 		(field (name "metadata")
 			(e-call @6.15-9.7
-				(e-tag @6.15-6.17 (ext-var 0) (name "Ok") (args "TODO"))
+				(e-tag @6.15-6.17 (ext-var 108) (name "Ok") (args "TODO"))
 				(e-record @6.18-9.6 (ext-var 126)
 					(fields
 						(field (name "tags")
@@ -188,9 +188,9 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 						(field (name "permissions")
 							(e-list @8.22-8.42 (elem-var 119)
 								(elems
-									(e-tag @8.23-8.27 (ext-var 0) (name "Read") (args "TODO"))
-									(e-tag @8.29-8.34 (ext-var 0) (name "Write") (args "TODO"))
-									(e-tag @8.36-8.41 (ext-var 0) (name "Admin") (args "TODO")))))))))
+									(e-tag @8.23-8.27 (ext-var 118) (name "Read") (args "TODO"))
+									(e-tag @8.29-8.34 (ext-var 120) (name "Write") (args "TODO"))
+									(e-tag @8.36-8.41 (ext-var 122) (name "Admin") (args "TODO")))))))))
 		(field (name "callback")
 			(e-lambda @10.15-10.25
 				(args
@@ -206,17 +206,17 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 						(e-list @12.16-12.52 (elem-var 145)
 							(elems
 								(e-call @12.17-12.30
-									(e-tag @12.17-12.21 (ext-var 0) (name "Some") (args "TODO"))
+									(e-tag @12.17-12.21 (ext-var 140) (name "Some") (args "TODO"))
 									(e-string @12.22-12.29
 										(e-literal @12.23-12.28 (string "first"))))
-								(e-tag @12.32-12.36 (ext-var 0) (name "None") (args "TODO"))
+								(e-tag @12.32-12.36 (ext-var 146) (name "None") (args "TODO"))
 								(e-call @12.38-12.51
-									(e-tag @12.38-12.42 (ext-var 0) (name "Some") (args "TODO"))
+									(e-tag @12.38-12.42 (ext-var 148) (name "Some") (args "TODO"))
 									(e-string @12.43-12.50
 										(e-literal @12.44-12.49 (string "third")))))))
 					(field (name "result")
 						(e-call @13.17-13.70
-							(e-tag @13.17-13.24 (ext-var 0) (name "Success") (args "TODO"))
+							(e-tag @13.17-13.24 (ext-var 156) (name "Success") (args "TODO"))
 							(e-record @13.25-13.69 (ext-var 166)
 								(fields
 									(field (name "data")

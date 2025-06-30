@@ -24,6 +24,9 @@ const NodeStore = @import("NodeStore.zig");
 
 pub const Diagnostic = @import("Diagnostic.zig").Diagnostic;
 
+// TODO what should this number be? build flag?
+const NODE_STORE_CAPACITY = 10_000;
+
 const CIR = @This();
 
 /// Reference to data that persists between compiler stages
@@ -62,8 +65,6 @@ external_decls: std.ArrayList(ExternalDecl),
 ///
 /// Takes ownership of the module_env
 pub fn init(env: *ModuleEnv) CIR {
-    const NODE_STORE_CAPACITY = 10_000;
-
     return CIR{
         .env = env,
         .store = NodeStore.initCapacity(env.gpa, NODE_STORE_CAPACITY),

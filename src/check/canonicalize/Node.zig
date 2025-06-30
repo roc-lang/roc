@@ -59,6 +59,7 @@ pub const Tag = enum {
     expr_frac_dec,
     expr_dec_small,
     expr_tag,
+    expr_zero_argument_tag,
     expr_lambda,
     expr_record_update,
     expr_bin_op,
@@ -70,9 +71,9 @@ pub const Tag = enum {
     expr_block,
     expr_ellipsis,
     expr_record_builder,
-    // Type Header
+    when_branch,
+    where_clause,
     type_header,
-    // Annotation
     annotation,
     // Type Annotation
     ty_apply,

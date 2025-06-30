@@ -1098,7 +1098,7 @@ expect {
 								(e-runtime-error (tag "ident_not_in_scope")))
 							(field (name "qux")
 								(e-call @96.44-96.53
-									(e-tag @96.44-96.46 (ext-var 0) (name "Ok") (args "TODO"))
+									(e-tag @96.44-96.46 (ext-var 235) (name "Ok") (args "TODO"))
 									(e-runtime-error (tag "ident_not_in_scope"))))
 							(field (name "ned")
 								(e-runtime-error (tag "ident_not_in_scope"))))))
@@ -1110,7 +1110,7 @@ expect {
 							(e-string @97.12-97.19
 								(e-literal @97.13-97.18 (string "World")))
 							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-tag @97.26-97.27 (ext-var 0) (name "O") (args "TODO"))
+							(e-tag @97.26-97.27 (ext-var 260) (name "O") (args "TODO"))
 							(e-tuple @97.29-97.36
 								(elems
 									(e-runtime-error (tag "ident_not_in_scope"))
@@ -1130,7 +1130,7 @@ expect {
 							(e-string @100.3-100.10
 								(e-literal @100.4-100.9 (string "World")))
 							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-tag @101.3-101.4 (ext-var 0) (name "O") (args "TODO"))
+							(e-tag @101.3-101.4 (ext-var 280) (name "O") (args "TODO"))
 							(e-tuple @102.3-102.14
 								(elems
 									(e-runtime-error (tag "ident_not_in_scope"))
@@ -1171,7 +1171,7 @@ expect {
 										(receiver
 											(e-runtime-error (tag "not_implemented")))))))))
 				(e-call @106.2-110.3
-					(e-tag @106.2-106.7 (ext-var 0) (name "Stdo!") (args "TODO"))
+					(e-tag @106.2-106.7 (ext-var 322) (name "Stdo!") (args "TODO"))
 					(e-string @107.3-109.6
 						(e-literal @107.4-107.6 (string "Ho"))
 						(e-call @108.4-108.9
