@@ -567,7 +567,28 @@ fn canonicalizeImportStatement(
             const qualifier_region = self.parse_ir.tokens.resolve(qualifier_tok);
             const module_region = self.parse_ir.tokens.resolve(import_stmt.module_name_tok);
             const full_name = self.parse_ir.source[qualifier_region.start.offset..module_region.end.offset];
-            break :blk self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(full_name), Region.zero());
+
+            // Validate the full_name using Ident.from_bytes
+            if (base.Ident.from_bytes(full_name)) |valid_ident| {
+                break :blk self.can_ir.env.idents.insert(self.can_ir.env.gpa, valid_ident, Region.zero());
+            } else |err| {
+                // Invalid identifier - create diagnostic and use placeholder
+                const region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
+                const error_msg = switch (err) {
+                    base.Ident.Error.EmptyText => "malformed import module name is empty",
+                    base.Ident.Error.ContainsNullByte => "malformed import module name contains null bytes",
+                    base.Ident.Error.ContainsControlCharacters => "malformed import module name contains invalid control characters",
+                };
+                const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, error_msg);
+                self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                    .feature = feature,
+                    .region = region,
+                } });
+
+                // Use a placeholder identifier instead
+                const placeholder_text = "MALFORMED_IMPORT";
+                break :blk self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(placeholder_text), Region.zero());
+            }
         } else {
             // No qualifier, just use the module name directly
             break :blk self.parse_ir.tokens.resolveIdentifier(import_stmt.module_name_tok).?;
@@ -4271,7 +4292,25 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) ?CIR.Expr.Idx 
     const region = self.parse_ir.tokenizedRegionToRegion(field_access.region);
     const source_text = self.parse_ir.source[region.start.offset..region.end.offset];
 
-    const qualified_name = self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(source_text), region);
+    const qualified_name = if (base.Ident.from_bytes(source_text)) |valid_ident|
+        self.can_ir.env.idents.insert(self.can_ir.env.gpa, valid_ident, region)
+    else |err| blk: {
+        // Invalid qualified name - create diagnostic and use placeholder
+        const error_msg = switch (err) {
+            base.Ident.Error.EmptyText => "malformed qualified name is empty",
+            base.Ident.Error.ContainsNullByte => "malformed qualified name contains null bytes",
+            base.Ident.Error.ContainsControlCharacters => "malformed qualified name contains invalid control characters",
+        };
+        const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, error_msg);
+        self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+            .feature = feature,
+            .region = region,
+        } });
+
+        // Use a placeholder identifier instead
+        const placeholder_text = "MALFORMED_QUALIFIED_NAME";
+        break :blk self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(placeholder_text), region);
+    };
 
     // Create external declaration
     const external_decl = CIR.ExternalDecl{

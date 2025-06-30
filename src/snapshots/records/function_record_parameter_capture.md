@@ -9,7 +9,8 @@ type=expr
 ~~~
 # PROBLEMS
 **NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize alternatives pattern
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
+Let us know if you want to help!
 
 **UNDEFINED VARIABLE**
 Nothing is named `name` in this scope.

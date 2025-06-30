@@ -52,7 +52,8 @@ testCrashSimple = |_| crash "oops"
 
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: ...
+This feature is not yet implemented or doesn't have a proper error report yet: ...
+Let us know if you want to help!
 
 **INVALID LAMBDA**
 The body of this lambda expression is not valid.

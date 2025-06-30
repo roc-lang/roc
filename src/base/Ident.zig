@@ -38,6 +38,51 @@ pub fn for_text(text: []const u8) Ident {
     };
 }
 
+/// Errors that can occur when creating an identifier from text.
+pub const Error = error{
+    /// The identifier text is empty.
+    EmptyText,
+    /// The identifier text contains null bytes.
+    ContainsNullByte,
+    /// The identifier text contains control characters that could cause issues.
+    ContainsControlCharacters,
+};
+
+/// Create a new identifier from a byte slice with validation.
+/// Returns an error if the bytes are malformed or the Ident is invalid.
+pub fn from_bytes(bytes: []const u8) Error!Ident {
+    // Validate the bytes
+    if (bytes.len == 0) {
+        return Error.EmptyText;
+    }
+
+    // Check for null bytes (causes crashes in string interner)
+    if (std.mem.indexOfScalar(u8, bytes, 0) != null) {
+        return Error.ContainsNullByte;
+    }
+
+    // Check for other problematic control characters including space, tab, newline, and carriage return
+    for (bytes) |byte| {
+        if (byte < 32 or byte == ' ' or byte == '\t' or byte == '\n' or byte == '\r') {
+            return Error.ContainsControlCharacters;
+        }
+    }
+
+    // Parse identifier attributes from the bytes
+    const is_ignored = std.mem.startsWith(u8, bytes, "_");
+    const is_effectful = std.mem.endsWith(u8, bytes, "!");
+    // TODO: parse reassignable attribute (var keyword handling)
+
+    return Ident{
+        .raw_text = bytes,
+        .attributes = Attributes{
+            .effectful = is_effectful,
+            .ignored = is_ignored,
+            .reassignable = false,
+        },
+    };
+}
+
 /// The index from the store, with the attributes packed into unused bytes.
 ///
 /// With 29-bits for the ID we can store up to 536,870,912 identifiers.
@@ -127,6 +172,7 @@ pub const Store = struct {
             .ignored = false,
             .reassignable = false,
         };
+
         self.attributes.append(gpa, attributes) catch |err| exitOnOom(err);
 
         return Idx{
@@ -176,3 +222,54 @@ pub const Store = struct {
         self.exposing_modules.items[@as(usize, idx.idx)] = exposing_module;
     }
 };
+
+test "from_bytes validates empty text" {
+    const result = Ident.from_bytes("");
+    try std.testing.expectError(Error.EmptyText, result);
+}
+
+test "from_bytes validates null bytes" {
+    const text_with_null = "hello\x00world";
+    const result = Ident.from_bytes(text_with_null);
+    try std.testing.expectError(Error.ContainsNullByte, result);
+}
+
+test "from_bytes validates control characters" {
+    const text_with_control = "hello\x01world";
+    const result = Ident.from_bytes(text_with_control);
+    try std.testing.expectError(Error.ContainsControlCharacters, result);
+}
+
+test "from_bytes disallows common whitespace" {
+    const text_with_space = "hello world";
+    const result = Ident.from_bytes(text_with_space);
+    try std.testing.expect(result == Error.ContainsControlCharacters);
+
+    const text_with_tab = "hello\tworld";
+    const result2 = Ident.from_bytes(text_with_tab);
+    try std.testing.expect(result2 == Error.ContainsControlCharacters);
+
+    const text_with_newline = "hello\nworld";
+    const result3 = Ident.from_bytes(text_with_newline);
+    try std.testing.expect(result3 == Error.ContainsControlCharacters);
+
+    const text_with_cr = "hello\rworld";
+    const result4 = Ident.from_bytes(text_with_cr);
+    try std.testing.expect(result4 == Error.ContainsControlCharacters);
+}
+
+test "from_bytes creates valid identifier" {
+    const result = try Ident.from_bytes("valid_name!");
+    try std.testing.expectEqualStrings("valid_name!", result.raw_text);
+    try std.testing.expect(result.attributes.effectful == true);
+    try std.testing.expect(result.attributes.ignored == false);
+    try std.testing.expect(result.attributes.reassignable == false);
+}
+
+test "from_bytes creates ignored identifier" {
+    const result = try Ident.from_bytes("_ignored");
+    try std.testing.expectEqualStrings("_ignored", result.raw_text);
+    try std.testing.expect(result.attributes.effectful == false);
+    try std.testing.expect(result.attributes.ignored == true);
+    try std.testing.expect(result.attributes.reassignable == false);
+}
