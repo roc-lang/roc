@@ -187,7 +187,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(d-assign @4.1-4.13 (type "* ? *")))
+		(patt @4.1-4.13 (type "* ? *")))
 	(expressions
 		(expr @4.16-21.2 (type "* ? *"))))
 ~~~

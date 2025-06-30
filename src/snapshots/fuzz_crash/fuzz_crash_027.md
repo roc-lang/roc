@@ -1638,10 +1638,10 @@ main! = |_| { # Yeah Ie
 ~~~clojure
 (inferred-types
 	(defs
-		(d-assign @45.1-45.4 (type "* ? Num(*)"))
-		(d-assign @48.1-48.8 (type "U64 -> U64"))
-		(d-assign @60.1-60.11 (type "*, * ? Error"))
-		(d-assign @100.1-100.6 (type "List -> Error")))
+		(patt @45.1-45.4 (type "* ? Num(*)"))
+		(patt @48.1-48.8 (type "U64 -> U64"))
+		(patt @60.1-60.11 (type "*, * ? Error"))
+		(patt @100.1-100.6 (type "List -> Error")))
 	(expressions
 		(expr @45.7-47.8 (type "* ? Num(*)"))
 		(expr @48.11-58.2 (type "U64 -> U64"))

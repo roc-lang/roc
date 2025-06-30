@@ -234,9 +234,9 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(d-assign @9.1-9.11 (type "UserId, UserName, UserAge -> { id: *, name: *, age: * }"))
-		(d-assign @12.1-12.12 (type "User -> UserName"))
-		(d-assign @14.1-14.6 (type "* ? *")))
+		(patt @9.1-9.11 (type "UserId, UserName, UserAge -> { id: *, name: *, age: * }"))
+		(patt @12.1-12.12 (type "User -> UserName"))
+		(patt @14.1-14.6 (type "* ? *")))
 	(expressions
 		(expr @9.14-9.47 (type "UserId, UserName, UserAge -> { id: *, name: *, age: * }"))
 		(expr @12.15-14.6 (type "User -> UserName"))

@@ -203,8 +203,8 @@ t = 0
 ~~~clojure
 (inferred-types
 	(defs
-		(d-assign @4.5-4.6 (type "Error"))
-		(d-assign @7.5-7.6 (type "Num(*)")))
+		(patt @4.5-4.6 (type "Error"))
+		(patt @7.5-7.6 (type "Num(*)")))
 	(expressions
 		(expr @1.1-1.1 (type "Error"))
 		(expr @7.8-7.9 (type "Num(*)"))))

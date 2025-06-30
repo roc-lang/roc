@@ -209,10 +209,10 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(d-assign @8.1-8.8 (type "MyResult -> Str"))
-		(d-assign @15.1-15.10 (type "Option -> Str"))
-		(d-assign @18.1-18.10 (type "Option -> I32"))
-		(d-assign @20.1-20.6 (type "* ? {}")))
+		(patt @8.1-8.8 (type "MyResult -> Str"))
+		(patt @15.1-15.10 (type "Option -> Str"))
+		(patt @18.1-18.10 (type "Option -> I32"))
+		(patt @20.1-20.6 (type "* ? {}")))
 	(expressions
 		(expr @8.11-8.32 (type "MyResult -> Str"))
 		(expr @15.13-15.29 (type "Option -> Str"))

@@ -58,8 +58,8 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(d-assign @2.1-2.5 (type "Str"))
-		(d-assign @3.1-3.4 (type "Str")))
+		(patt @2.1-2.5 (type "Str"))
+		(patt @3.1-3.4 (type "Str")))
 	(expressions
 		(expr @2.8-2.13 (type "Str"))
 		(expr @3.7-3.22 (type "Str"))))

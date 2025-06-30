@@ -51,7 +51,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(d-assign @4.1-4.2 (type "Str")))
+		(patt @4.1-4.2 (type "Str")))
 	(expressions
 		(expr @4.5-4.12 (type "Str"))))
 ~~~

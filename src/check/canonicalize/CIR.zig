@@ -2548,7 +2548,7 @@ pub fn toSexprTypesStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr
             const pattern = ir.store.getPattern(def.pattern);
             switch (pattern) {
                 .assign => |assign_pat| {
-                    var def_node = SExpr.init(gpa, "d-assign");
+                    var def_node = SExpr.init(gpa, "patt");
 
                     def_node.appendRegion(gpa, ir.calcRegionInfo(assign_pat.region));
 
@@ -2558,12 +2558,8 @@ pub fn toSexprTypesStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr
 
                     // Clear the buffer and write the type
                     type_string_buf.clearRetainingCapacity();
-
-                    if (type_writer.writeVar(def_var)) {
-                        def_node.appendStringAttr(gpa, "type", type_string_buf.items);
-                    } else |err| {
-                        exitOnOom(err);
-                    }
+                    try type_writer.writeVar(def_var);
+                    def_node.appendStringAttr(gpa, "type", type_string_buf.items);
 
                     defs_node.appendNode(gpa, &def_node);
                 },
@@ -2597,11 +2593,8 @@ pub fn toSexprTypesStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr
             } else {
                 // Clear the buffer and write the type
                 type_string_buf.clearRetainingCapacity();
-                if (type_writer.writeVar(expr_var)) {
-                    expr_node.appendStringAttr(gpa, "type", type_string_buf.items);
-                } else |err| {
-                    exitOnOom(err);
-                }
+                try type_writer.writeVar(expr_var);
+                expr_node.appendStringAttr(gpa, "type", type_string_buf.items);
             }
 
             expressions_node.appendNode(gpa, &expr_node);

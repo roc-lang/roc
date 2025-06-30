@@ -94,8 +94,8 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(d-assign @4.1-4.5 (type "a -> (*, *)"))
-		(d-assign @6.1-6.6 (type "* ? {}")))
+		(patt @4.1-4.5 (type "a -> (*, *)"))
+		(patt @6.1-6.6 (type "* ? {}")))
 	(expressions
 		(expr @4.8-4.18 (type "a -> (*, *)"))
 		(expr @6.9-6.15 (type "* ? {}"))))

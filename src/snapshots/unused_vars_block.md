@@ -170,7 +170,7 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(d-assign @3.1-3.6 (type "* ? *")))
+		(patt @3.1-3.6 (type "* ? *")))
 	(expressions
 		(expr @3.9-19.2 (type "* ? *"))))
 ~~~

@@ -59,7 +59,7 @@ foo =
 ~~~clojure
 (inferred-types
 	(defs
-		(d-assign @3.1-3.4 (type "Error")))
+		(patt @3.1-3.4 (type "Error")))
 	(expressions
 		(expr @3.19-3.20 (type "Error"))))
 ~~~

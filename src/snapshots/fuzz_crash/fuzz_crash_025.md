@@ -320,14 +320,14 @@ j = -17011687303715884105728
 ~~~clojure
 (inferred-types
 	(defs
-		(d-assign @4.1-4.2 (type "U8"))
-		(d-assign @7.1-7.2 (type "U16"))
-		(d-assign @10.1-10.2 (type "U32"))
-		(d-assign @14.1-14.2 (type "Error"))
-		(d-assign @18.1-18.2 (type "I16"))
-		(d-assign @21.1-21.2 (type "I32"))
-		(d-assign @24.1-24.2 (type "I64"))
-		(d-assign @27.1-27.2 (type "I128")))
+		(patt @4.1-4.2 (type "U8"))
+		(patt @7.1-7.2 (type "U16"))
+		(patt @10.1-10.2 (type "U32"))
+		(patt @14.1-14.2 (type "Error"))
+		(patt @18.1-18.2 (type "I16"))
+		(patt @21.1-21.2 (type "I32"))
+		(patt @24.1-24.2 (type "I64"))
+		(patt @27.1-27.2 (type "I128")))
 	(expressions
 		(expr @4.5-4.8 (type "U8"))
 		(expr @7.5-7.10 (type "U16"))

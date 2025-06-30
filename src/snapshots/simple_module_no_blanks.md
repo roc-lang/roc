@@ -64,8 +64,8 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(d-assign @3.1-3.7 (type "*"))
-		(d-assign @4.1-4.6 (type "Str")))
+		(patt @3.1-3.7 (type "*"))
+		(patt @4.1-4.6 (type "Str")))
 	(expressions
 		(expr @3.10-3.31 (type "*"))
 		(expr @4.9-4.16 (type "Str"))))

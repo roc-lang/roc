@@ -133,8 +133,8 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(d-assign @4.1-4.6 (type "a -> a"))
-		(d-assign @11.1-11.6 (type "* ? {}")))
+		(patt @4.1-4.6 (type "a -> a"))
+		(patt @11.1-11.6 (type "* ? {}")))
 	(expressions
 		(expr @4.9-9.2 (type "a -> a"))
 		(expr @11.9-11.15 (type "* ? {}"))))

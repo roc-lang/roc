@@ -103,8 +103,8 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(d-assign @4.1-4.5 (type "(*, *) -> (*, *)"))
-		(d-assign @6.1-6.6 (type "* ? {}")))
+		(patt @4.1-4.5 (type "(*, *) -> (*, *)"))
+		(patt @6.1-6.6 (type "* ? {}")))
 	(expressions
 		(expr @4.8-4.23 (type "(*, *) -> (*, *)"))
 		(expr @6.9-6.15 (type "* ? {}"))))

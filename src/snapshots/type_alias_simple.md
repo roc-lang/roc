@@ -132,8 +132,8 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(d-assign @6.1-6.8 (type "UserId -> Str"))
-		(d-assign @8.1-8.6 (type "* ? *")))
+		(patt @6.1-6.8 (type "UserId -> Str"))
+		(patt @8.1-8.6 (type "* ? *")))
 	(expressions
 		(expr @1.1-1.1 (type "UserId -> Str"))
 		(expr @8.9-8.25 (type "* ? *"))))

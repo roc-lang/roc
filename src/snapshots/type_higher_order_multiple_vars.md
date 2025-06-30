@@ -179,8 +179,8 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(d-assign @4.1-4.8 (type "Error"))
-		(d-assign @6.1-6.6 (type "* ? {}")))
+		(patt @4.1-4.8 (type "Error"))
+		(patt @6.1-6.6 (type "* ? {}")))
 	(expressions
 		(expr @4.11-4.29 (type "Error"))
 		(expr @6.9-6.15 (type "* ? {}"))))

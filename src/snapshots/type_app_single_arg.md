@@ -112,8 +112,8 @@ main! = |_| processList(["one", "two"])
 ~~~clojure
 (inferred-types
 	(defs
-		(d-assign @4.1-4.12 (type "List -> U64"))
-		(d-assign @6.1-6.6 (type "* ? *")))
+		(patt @4.1-4.12 (type "List -> U64"))
+		(patt @6.1-6.6 (type "* ? *")))
 	(expressions
 		(expr @4.15-6.6 (type "List -> U64"))
 		(expr @6.9-6.39 (type "* ? *"))))

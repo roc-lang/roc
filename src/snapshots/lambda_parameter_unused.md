@@ -304,11 +304,11 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(d-assign @5.1-5.4 (type "U64 -> U64"))
-		(d-assign @9.1-9.9 (type "U64 -> U64"))
-		(d-assign @13.1-13.8 (type "U64 -> U64"))
-		(d-assign @17.1-17.7 (type "U64 -> U64"))
-		(d-assign @19.1-19.6 (type "* ? *")))
+		(patt @5.1-5.4 (type "U64 -> U64"))
+		(patt @9.1-9.9 (type "U64 -> U64"))
+		(patt @13.1-13.8 (type "U64 -> U64"))
+		(patt @17.1-17.7 (type "U64 -> U64"))
+		(patt @19.1-19.6 (type "* ? *")))
 	(expressions
 		(expr @5.7-5.18 (type "U64 -> U64"))
 		(expr @9.12-12.8 (type "U64 -> U64"))

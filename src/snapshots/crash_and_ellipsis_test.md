@@ -289,10 +289,10 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(d-assign @5.1-5.13 (type "U64 -> U64"))
-		(d-assign @9.1-9.10 (type "U64 -> Error"))
-		(d-assign @13.1-13.16 (type "U64 -> Error"))
-		(d-assign @15.1-15.6 (type "* ? List(*)")))
+		(patt @5.1-5.13 (type "U64 -> U64"))
+		(patt @9.1-9.10 (type "U64 -> Error"))
+		(patt @13.1-13.16 (type "U64 -> Error"))
+		(patt @15.1-15.6 (type "* ? List(*)")))
 	(expressions
 		(expr @5.16-5.23 (type "U64 -> U64"))
 		(expr @9.13-9.24 (type "U64 -> Error"))

@@ -279,10 +279,10 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(d-assign @5.1-5.9 (type "a -> a"))
-		(d-assign @9.1-9.8 (type "a, b -> (*, *)"))
-		(d-assign @13.1-13.7 (type "U64 -> U64"))
-		(d-assign @15.1-15.6 (type "* ? *")))
+		(patt @5.1-5.9 (type "a -> a"))
+		(patt @9.1-9.8 (type "a, b -> (*, *)"))
+		(patt @13.1-13.7 (type "U64 -> U64"))
+		(patt @15.1-15.6 (type "* ? *")))
 	(expressions
 		(expr @5.12-5.17 (type "a -> a"))
 		(expr @9.11-9.42 (type "a, b -> (*, *)"))

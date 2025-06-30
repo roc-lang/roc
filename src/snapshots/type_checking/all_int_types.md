@@ -202,16 +202,16 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(d-assign @4.1-4.2 (type "U8"))
-		(d-assign @7.1-7.2 (type "U16"))
-		(d-assign @10.1-10.2 (type "U32"))
-		(d-assign @13.1-13.2 (type "U64"))
-		(d-assign @16.1-16.2 (type "U128"))
-		(d-assign @19.1-19.2 (type "I8"))
-		(d-assign @22.1-22.2 (type "I16"))
-		(d-assign @25.1-25.2 (type "I32"))
-		(d-assign @28.1-28.2 (type "I64"))
-		(d-assign @31.1-31.2 (type "I128")))
+		(patt @4.1-4.2 (type "U8"))
+		(patt @7.1-7.2 (type "U16"))
+		(patt @10.1-10.2 (type "U32"))
+		(patt @13.1-13.2 (type "U64"))
+		(patt @16.1-16.2 (type "U128"))
+		(patt @19.1-19.2 (type "I8"))
+		(patt @22.1-22.2 (type "I16"))
+		(patt @25.1-25.2 (type "I32"))
+		(patt @28.1-28.2 (type "I64"))
+		(patt @31.1-31.2 (type "I128")))
 	(expressions
 		(expr @4.5-4.8 (type "U8"))
 		(expr @7.5-7.10 (type "U16"))

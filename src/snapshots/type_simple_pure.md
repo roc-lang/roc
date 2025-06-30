@@ -84,8 +84,8 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(d-assign @4.1-4.9 (type "Str -> Str"))
-		(d-assign @6.1-6.6 (type "* ? {}")))
+		(patt @4.1-4.9 (type "Str -> Str"))
+		(patt @6.1-6.6 (type "* ? {}")))
 	(expressions
 		(expr @4.12-4.17 (type "Str -> Str"))
 		(expr @6.9-6.15 (type "* ? {}"))))

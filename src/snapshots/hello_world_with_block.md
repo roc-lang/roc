@@ -106,7 +106,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(d-assign @8.1-8.6 (type "* ? *")))
+		(patt @8.1-8.6 (type "* ? *")))
 	(expressions
 		(expr @8.9-12.2 (type "* ? *"))))
 ~~~

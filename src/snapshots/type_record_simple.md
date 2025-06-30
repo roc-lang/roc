@@ -101,8 +101,8 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(d-assign @4.1-4.8 (type "{ name: Str, age: U64 } -> Str"))
-		(d-assign @6.1-6.6 (type "* ? {}")))
+		(patt @4.1-4.8 (type "{ name: Str, age: U64 } -> Str"))
+		(patt @6.1-6.6 (type "* ? {}")))
 	(expressions
 		(expr @4.11-6.6 (type "{ name: Str, age: U64 } -> Str"))
 		(expr @6.9-6.15 (type "* ? {}"))))

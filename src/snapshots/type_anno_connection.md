@@ -88,8 +88,8 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(d-assign @4.1-4.8 (type "U64 -> U64"))
-		(d-assign @7.1-7.10 (type "U64")))
+		(patt @4.1-4.8 (type "U64 -> U64"))
+		(patt @7.1-7.10 (type "U64")))
 	(expressions
 		(expr @4.11-6.10 (type "U64 -> U64"))
 		(expr @7.13-7.24 (type "U64"))))

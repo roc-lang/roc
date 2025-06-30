@@ -210,7 +210,7 @@ InnerModule :
 ~~~clojure
 (inferred-types
 	(defs
-		(d-assign @6.1-6.12 (type "Str -> Str")))
+		(patt @6.1-6.12 (type "Str -> Str")))
 	(expressions
 		(expr @6.15-7.16 (type "Str -> Str"))))
 ~~~

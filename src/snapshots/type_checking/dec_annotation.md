@@ -49,7 +49,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(d-assign @4.1-4.2 (type "Dec")))
+		(patt @4.1-4.2 (type "Dec")))
 	(expressions
 		(expr @4.5-4.12 (type "Dec"))))
 ~~~

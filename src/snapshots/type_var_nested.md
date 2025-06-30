@@ -241,9 +241,9 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(d-assign @5.1-5.10 (type "Result, a -> b -> Error"))
-		(d-assign @13.1-13.13 (type "List -> List"))
-		(d-assign @17.1-17.6 (type "* ? {}")))
+		(patt @5.1-5.10 (type "Result, a -> b -> Error"))
+		(patt @13.1-13.13 (type "List -> List"))
+		(patt @17.1-17.6 (type "* ? {}")))
 	(expressions
 		(expr @5.13-9.2 (type "Result, a -> b -> Error"))
 		(expr @13.16-15.2 (type "List -> List"))

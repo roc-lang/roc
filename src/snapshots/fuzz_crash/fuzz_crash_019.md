@@ -1255,11 +1255,11 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(d-assign @35.1-35.4 (type "* ? Num(*)"))
-		(d-assign @38.1-38.4 (type "* ? Error"))
-		(d-assign @49.1-49.3 (type "*, [Tb]* ? Error"))
-		(d-assign @75.1-75.3 (type "* ? *"))
-		(d-assign @114.1-114.2 (type "{}")))
+		(patt @35.1-35.4 (type "* ? Num(*)"))
+		(patt @38.1-38.4 (type "* ? Error"))
+		(patt @49.1-49.3 (type "*, [Tb]* ? Error"))
+		(patt @75.1-75.3 (type "* ? *"))
+		(patt @114.1-114.2 (type "{}")))
 	(expressions
 		(expr @35.7-37.4 (type "* ? Num(*)"))
 		(expr @38.7-47.2 (type "* ? Error"))

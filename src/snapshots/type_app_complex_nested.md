@@ -347,9 +347,9 @@ main! = |_| processComplex(Ok([Some(42), None]))
 ~~~clojure
 (inferred-types
 	(defs
-		(d-assign @5.1-5.15 (type "Result -> Error"))
-		(d-assign @12.1-12.11 (type "Maybe -> Error"))
-		(d-assign @17.1-17.6 (type "* ? *")))
+		(patt @5.1-5.15 (type "Result -> Error"))
+		(patt @12.1-12.11 (type "Maybe -> Error"))
+		(patt @17.1-17.6 (type "* ? *")))
 	(expressions
 		(expr @5.18-6.9 (type "Result -> Error"))
 		(expr @12.14-12.25 (type "Maybe -> Error"))

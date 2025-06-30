@@ -82,7 +82,7 @@ foo =
 ~~~clojure
 (inferred-types
 	(defs
-		(d-assign @4.1-4.4 (type "Str")))
+		(patt @4.1-4.4 (type "Str")))
 	(expressions
 		(expr @6.5-6.12 (type "Str"))))
 ~~~

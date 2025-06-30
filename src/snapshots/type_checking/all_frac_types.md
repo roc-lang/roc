@@ -83,9 +83,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(d-assign @4.1-4.2 (type "F32"))
-		(d-assign @7.1-7.2 (type "F64"))
-		(d-assign @10.1-10.2 (type "Dec")))
+		(patt @4.1-4.2 (type "F32"))
+		(patt @7.1-7.2 (type "F64"))
+		(patt @10.1-10.2 (type "Dec")))
 	(expressions
 		(expr @4.5-4.9 (type "F32"))
 		(expr @7.5-7.12 (type "F64"))

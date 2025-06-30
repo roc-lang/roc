@@ -256,9 +256,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(d-assign @18.1-18.14 (type "Result -> Str"))
-		(d-assign @22.1-22.15 (type "Response -> Str"))
-		(d-assign @24.1-24.6 (type "* ? {}")))
+		(patt @18.1-18.14 (type "Result -> Str"))
+		(patt @22.1-22.15 (type "Response -> Str"))
+		(patt @24.1-24.6 (type "* ? {}")))
 	(expressions
 		(expr @18.17-18.38 (type "Result -> Str"))
 		(expr @22.18-22.39 (type "Response -> Str"))

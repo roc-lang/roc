@@ -129,8 +129,8 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 ~~~clojure
 (inferred-types
 	(defs
-		(d-assign @4.1-4.8 (type "List, a -> b -> List"))
-		(d-assign @6.1-6.6 (type "* ? *")))
+		(patt @4.1-4.8 (type "List, a -> b -> List"))
+		(patt @6.1-6.6 (type "* ? *")))
 	(expressions
 		(expr @4.11-6.6 (type "List, a -> b -> List"))
 		(expr @6.9-6.33 (type "* ? *"))))

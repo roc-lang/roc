@@ -134,7 +134,7 @@ AnotherType : SomeModule.MissingType
 ~~~clojure
 (inferred-types
 	(defs
-		(d-assign @6.1-6.13 (type "Error -> Str")))
+		(patt @6.1-6.13 (type "Error -> Str")))
 	(expressions
 		(expr @6.16-8.2 (type "Error -> Str"))))
 ~~~

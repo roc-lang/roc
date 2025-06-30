@@ -42,7 +42,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(d-assign @3.1-3.2 (type "Int(*)")))
+		(patt @3.1-3.2 (type "Int(*)")))
 	(expressions
 		(expr @3.5-3.9 (type "Int(*)"))))
 ~~~
