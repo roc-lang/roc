@@ -15,19 +15,18 @@ getUser = |id| if (id > 10) "big" else "small"
 main! = |_| getUser(100)
 ~~~
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**type_alias_simple.md:6:19:6:28:**
+**INVALID IF CONDITION**
+This `if` condition needs to be a _Bool_:
+**type_alias_simple.md:6:19:**
 ```roc
 getUser = |id| if (id > 10) "big" else "small"
 ```
                   ^^^^^^^^^
 
-It is of type:
+Right now, it has the type:
     _(*)_
 
-But you are trying to use it as:
-    _[True, False]_
+Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
 
 # TOKENS
 ~~~zig

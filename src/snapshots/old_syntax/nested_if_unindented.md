@@ -44,19 +44,31 @@ The `else` branch must contain a valid expression. Check for syntax errors or mi
 
 Note: Every `if` expression in Roc must have an `else` branch, and both branches must have the same type.
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**nested_if_unindented.md:1:3:1:5:**
+**INVALID IF CONDITION**
+This `if` condition needs to be a _Bool_:
+**nested_if_unindented.md:1:3:**
 ```roc
 if""then-p else
 ```
   ^^
 
-It is of type:
+Right now, it has the type:
     _Str_
 
-But you are trying to use it as:
-    _[True, False]_
+Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
+
+**INVALID IF CONDITION**
+This `if` condition needs to be a _Bool_:
+**nested_if_unindented.md:2:3:**
+```roc
+if""then-p else.e
+```
+  ^^
+
+Right now, it has the type:
+    _Str_
+
+Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
 
 # TOKENS
 ~~~zig

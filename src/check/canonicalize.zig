@@ -157,7 +157,7 @@ pub fn init(self: *CIR, parse_ir: *AST) Self {
         Content{ .structure = .empty_tag_union },
         @enumFromInt(@intFromEnum(BUILTIN_BOOL)),
         Region.zero(),
-    );
+    ) catch |err| exitOnOom(err);
     _ = self.setTypeVarAtPat(
         BUILTIN_BOOL,
         self.env.types.mkBool(self.env.gpa, &self.env.idents, bool_ext),
@@ -644,7 +644,7 @@ fn createExternalDeclaration(
         .qualified_name = qualified_name,
         .module_name = module_name,
         .local_name = local_name,
-        .type_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region),
+        .type_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region) catch |err| exitOnOom(err),
         .kind = kind,
         .region = region,
     };
@@ -785,7 +785,7 @@ fn canonicalize_decl(
 
         if (found_anno_idx) |type_anno_idx| {
             // Create a basic annotation from the type annotation
-            const type_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), pattern_region);
+            const type_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), pattern_region) catch |err| exitOnOom(err);
 
             // For now, create a simple annotation with just the signature and region
             // TODO: Convert TypeAnno to proper type constraints and populate signature
@@ -897,7 +897,7 @@ pub fn canonicalize_expr(
 
             // Reserve slot for call expression and create effect variable with proper node correspondence
             const final_expr_idx = self.can_ir.store.predictNodeIndex(2);
-            const effect_var = self.can_ir.pushTypeVar(Content{ .pure = {} }, final_expr_idx, region);
+            const effect_var = self.can_ir.pushTypeVar(Content{ .pure = {} }, final_expr_idx, region) catch |err| exitOnOom(err);
 
             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
                 .e_call = .{
@@ -936,7 +936,7 @@ pub fn canonicalize_expr(
                                 .qualified_name = qualified_name,
                                 .module_name = module_name,
                                 .local_name = ident,
-                                .type_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region),
+                                .type_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region) catch |err| exitOnOom(err),
                                 .kind = .value,
                                 .region = region,
                             };
@@ -980,7 +980,7 @@ pub fn canonicalize_expr(
                                 .qualified_name = qualified_name,
                                 .module_name = exposed_info.module_name,
                                 .local_name = ident,
-                                .type_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region),
+                                .type_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region) catch |err| exitOnOom(err),
                                 .kind = .value,
                                 .region = region,
                             };
@@ -1284,7 +1284,7 @@ pub fn canonicalize_expr(
                 const final_expr_idx = self.can_ir.store.predictNodeIndex(2);
 
                 // then insert the type vars, setting the parent to be the final slot
-                const poly_var = self.can_ir.pushFreshTypeVar(final_expr_idx, region);
+                const poly_var = self.can_ir.pushFreshTypeVar(final_expr_idx, region) catch |err| exitOnOom(err);
 
                 // then in the final slot the actual expr is inserted
                 const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
@@ -1510,7 +1510,7 @@ pub fn canonicalize_expr(
             };
 
             // Create effect variable using dummy index (like other expressions do)
-            const effect_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region);
+            const effect_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region) catch |err| exitOnOom(err);
 
             // Create lambda expression
             const lambda_expr = CIR.Expr{
@@ -1648,8 +1648,6 @@ pub fn canonicalize_expr(
             // Get the first branch's body to redirect to it
             const branches = self.can_ir.store.sliceIfBranches(branches_span);
             std.debug.assert(branches.len > 0);
-            const first_branch = self.can_ir.store.getIfBranch(branches[0]);
-            const first_branch_type_var = @as(TypeVar, @enumFromInt(@intFromEnum(first_branch.body)));
 
             // Create the if expression
             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
@@ -1661,14 +1659,10 @@ pub fn canonicalize_expr(
             });
 
             // Immediately redirect the if expression's type variable to the first branch's body
-            // This is similar to how lists unify with their first element
+            const first_branch = self.can_ir.store.getIfBranch(branches[0]);
+            const first_branch_type_var = @as(TypeVar, @enumFromInt(@intFromEnum(first_branch.body)));
             const expr_var = @as(TypeVar, @enumFromInt(@intFromEnum(expr_idx)));
-
-            // Ensure the type store has slots up to the expression variable
-            try self.can_ir.env.types.fillInSlotsThru(expr_var);
-
-            const slot_idx = types.Store.varToSlotIdx(expr_var);
-            self.can_ir.env.types.slots.set(slot_idx, .{ .redirect = first_branch_type_var });
+            try self.can_ir.env.types.setVarRedirect(expr_var, first_branch_type_var);
 
             return expr_idx;
         },
@@ -1752,6 +1746,7 @@ pub fn canonicalize_expr(
                 _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .structure = .empty_record });
                 break :blk expr_idx;
             };
+            const final_expr_var = @as(TypeVar, @enumFromInt(@intFromEnum(final_expr)));
 
             // Create statement span
             const stmt_span = self.can_ir.store.statementSpanFrom(stmt_start);
@@ -1765,9 +1760,10 @@ pub fn canonicalize_expr(
                 },
             };
             const block_idx = self.can_ir.store.addExpr(block_expr);
+            const block_var = @as(TypeVar, @enumFromInt(@intFromEnum(block_idx)));
 
-            // The root expr will be unified with the last expr in type solving
-            _ = self.can_ir.setTypeVarAtExpr(block_idx, Content{ .flex_var = null });
+            // Set the root block expr to redirect to the final expr var
+            try self.can_ir.env.types.setVarRedirect(block_var, final_expr_var);
 
             return block_idx;
         },
@@ -2045,7 +2041,7 @@ fn canonicalize_pattern(
 
                 // Reserve node slots for type vars, then insert into them.
                 const final_pattern_idx = self.can_ir.store.predictNodeIndex(2);
-                const ext_type_var = self.can_ir.pushFreshTypeVar(final_pattern_idx, region);
+                const ext_type_var = self.can_ir.pushFreshTypeVar(final_pattern_idx, region) catch |err| exitOnOom(err);
                 const tag_pattern = CIR.Pattern{
                     .applied_tag = .{
                         .ext_var = ext_type_var,
@@ -4016,11 +4012,11 @@ fn canonicalizeTypeAnnoToTypeVar(self: *Self, type_anno_idx: CIR.TypeAnno.Idx, p
             switch (scope.lookupTypeVar(ident_store, tv.name)) {
                 .found => |_| {
                     // Type variable already exists, create fresh var with same name
-                    return self.can_ir.pushTypeVar(.{ .flex_var = tv.name }, parent_node_idx, region);
+                    return self.can_ir.pushTypeVar(.{ .flex_var = tv.name }, parent_node_idx, region) catch |err| exitOnOom(err);
                 },
                 .not_found => {
                     // Create fresh flex var and add to scope
-                    const fresh_var = self.can_ir.pushTypeVar(.{ .flex_var = tv.name }, parent_node_idx, region);
+                    const fresh_var = self.can_ir.pushTypeVar(.{ .flex_var = tv.name }, parent_node_idx, region) catch |err| exitOnOom(err);
 
                     // Create a basic type annotation for the scope
                     const ty_var_anno = self.can_ir.store.addTypeAnno(.{ .ty_var = .{ .name = tv.name, .region = region } });
@@ -4034,7 +4030,7 @@ fn canonicalizeTypeAnnoToTypeVar(self: *Self, type_anno_idx: CIR.TypeAnno.Idx, p
         },
         .underscore => {
             // Create anonymous flex var
-            return self.can_ir.pushFreshTypeVar(parent_node_idx, region);
+            return self.can_ir.pushFreshTypeVar(parent_node_idx, region) catch |err| exitOnOom(err);
         },
         .ty => |t| {
             // Look up built-in or user-defined type
@@ -4070,7 +4066,7 @@ fn canonicalizeTypeAnnoToTypeVar(self: *Self, type_anno_idx: CIR.TypeAnno.Idx, p
         },
         .malformed => {
             // Return error type for malformed annotations
-            return self.can_ir.pushTypeVar(.err, parent_node_idx, region);
+            return self.can_ir.pushTypeVar(.err, parent_node_idx, region) catch |err| exitOnOom(err);
         },
     }
 }
@@ -4081,43 +4077,43 @@ fn canonicalizeBasicType(self: *Self, symbol: Ident.Idx, parent_node_idx: Node.I
 
     // Built-in types mapping
     if (std.mem.eql(u8, name, "Bool")) {
-        return self.can_ir.pushTypeVar(.{ .flex_var = symbol }, parent_node_idx, region);
+        return self.can_ir.pushTypeVar(.{ .flex_var = symbol }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "Str")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .str }, parent_node_idx, region);
+        return self.can_ir.pushTypeVar(.{ .structure = .str }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "Num")) {
         // Create a fresh TypeVar for the polymorphic number type
-        const num_var = self.can_ir.pushFreshTypeVar(parent_node_idx, region);
+        const num_var = self.can_ir.pushFreshTypeVar(parent_node_idx, region) catch |err| exitOnOom(err);
         const num_requirements = types.Num.IntRequirements{
             .sign_needed = false,
             .bits_needed = 0, // 7 bits - most permissive for generic Num type
         };
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_poly = .{ .var_ = num_var, .requirements = num_requirements } } } }, parent_node_idx, region);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_poly = .{ .var_ = num_var, .requirements = num_requirements } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "U8")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } }, parent_node_idx, region);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "U16")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u16 } } } }, parent_node_idx, region);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u16 } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "U32")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u32 } } } }, parent_node_idx, region);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u32 } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "U64")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u64 } } } }, parent_node_idx, region);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u64 } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "U128")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u128 } } } }, parent_node_idx, region);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u128 } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "I8")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i8 } } } }, parent_node_idx, region);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i8 } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "I16")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i16 } } } }, parent_node_idx, region);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i16 } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "I32")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i32 } } } }, parent_node_idx, region);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i32 } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "I64")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } }, parent_node_idx, region);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "I128")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i128 } } } }, parent_node_idx, region);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i128 } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "F32")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f32 } } } }, parent_node_idx, region);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f32 } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "F64")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f64 } } } }, parent_node_idx, region);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f64 } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "Dec")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = .dec } } } }, parent_node_idx, region);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = .dec } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else {
         // Look up user-defined type in scope
         const scope = self.currentScope();
@@ -4125,11 +4121,11 @@ fn canonicalizeBasicType(self: *Self, symbol: Ident.Idx, parent_node_idx: Node.I
 
         switch (scope.lookupTypeDecl(ident_store, symbol)) {
             .found => |_| {
-                return self.can_ir.pushTypeVar(.{ .flex_var = symbol }, parent_node_idx, region);
+                return self.can_ir.pushTypeVar(.{ .flex_var = symbol }, parent_node_idx, region) catch |err| exitOnOom(err);
             },
             .not_found => {
                 // Unknown type - create error type
-                return self.can_ir.pushTypeVar(.err, parent_node_idx, region);
+                return self.can_ir.pushTypeVar(.err, parent_node_idx, region) catch |err| exitOnOom(err);
             },
         }
     }
@@ -4138,7 +4134,7 @@ fn canonicalizeBasicType(self: *Self, symbol: Ident.Idx, parent_node_idx: Node.I
 /// Handle type applications like List(a), Dict(k, v)
 fn canonicalizeTypeApplication(self: *Self, apply: anytype, parent_node_idx: Node.Idx, region: Region) TypeVar {
     // Simplified implementation - create a flex var for the applied type
-    return self.can_ir.pushTypeVar(.{ .flex_var = apply.symbol }, parent_node_idx, region);
+    return self.can_ir.pushTypeVar(.{ .flex_var = apply.symbol }, parent_node_idx, region) catch |err| exitOnOom(err);
 }
 
 /// Handle function types like a -> b
@@ -4166,23 +4162,23 @@ fn canonicalizeFunctionType(self: *Self, func: anytype, parent_node_idx: Node.Id
 
     // Create effect variable based on effectfulness
     const eff_var = if (func.effectful)
-        self.can_ir.pushTypeVar(.effectful, parent_node_idx, region)
+        self.can_ir.pushTypeVar(.effectful, parent_node_idx, region) catch |err| exitOnOom(err)
     else
-        self.can_ir.pushTypeVar(.pure, parent_node_idx, region);
+        self.can_ir.pushTypeVar(.pure, parent_node_idx, region) catch |err| exitOnOom(err);
 
     // Create the complete function structure
     return self.can_ir.pushTypeVar(
         .{ .structure = .{ .func = .{ .args = args_range, .ret = ret_type_var, .eff = eff_var } } },
         parent_node_idx,
         region,
-    );
+    ) catch |err| exitOnOom(err);
 }
 
 /// Handle tuple types like (a, b, c)
 fn canonicalizeTupleType(self: *Self, tuple: anytype, parent_node_idx: Node.Idx, region: Region) TypeVar {
     _ = tuple;
     // Simplified implementation - create flex var for tuples
-    return self.can_ir.pushFreshTypeVar(parent_node_idx, region);
+    return self.can_ir.pushFreshTypeVar(parent_node_idx, region) catch |err| exitOnOom(err);
 }
 
 /// Handle record types like { name: Str, age: Num }
@@ -4206,26 +4202,26 @@ fn canonicalizeRecordType(self: *Self, record: anytype, parent_node_idx: Node.Id
 
     // Create the record type structure
     const type_fields_range = self.can_ir.env.types.appendRecordFields(type_record_fields.items);
-    const ext_var = self.can_ir.pushTypeVar(.{ .structure = .empty_record }, parent_node_idx, region);
+    const ext_var = self.can_ir.pushTypeVar(.{ .structure = .empty_record }, parent_node_idx, region) catch |err| exitOnOom(err);
 
     return self.can_ir.pushTypeVar(
         .{ .structure = .{ .record = .{ .fields = type_fields_range, .ext = ext_var } } },
         parent_node_idx,
         region,
-    );
+    ) catch |err| exitOnOom(err);
 }
 
 /// Handle tag union types like [Some(a), None]
 fn canonicalizeTagUnionType(self: *Self, tag_union: anytype, parent_node_idx: Node.Idx, region: Region) TypeVar {
     _ = tag_union;
     // Simplified implementation - create flex var for tag unions
-    return self.can_ir.pushFreshTypeVar(parent_node_idx, region);
+    return self.can_ir.pushFreshTypeVar(parent_node_idx, region) catch |err| exitOnOom(err);
 }
 
 /// Handle module-qualified types like Json.Decoder
 fn canonicalizeModuleType(self: *Self, mod_ty: anytype, parent_node_idx: Node.Idx, region: Region) TypeVar {
     // Simplified implementation - create flex var for module types
-    return self.can_ir.pushTypeVar(.{ .flex_var = mod_ty.ty_symbol }, parent_node_idx, region);
+    return self.can_ir.pushTypeVar(.{ .flex_var = mod_ty.ty_symbol }, parent_node_idx, region) catch |err| exitOnOom(err);
 }
 
 /// Create an annotation from a type annotation
@@ -4282,7 +4278,7 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) ?CIR.Expr.Idx 
         .qualified_name = qualified_name,
         .module_name = module_name,
         .local_name = field_name,
-        .type_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region),
+        .type_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region) catch |err| exitOnOom(err),
         .kind = .value,
         .region = region,
     };
@@ -5873,7 +5869,7 @@ test "pattern literal type transitions" {
 
         // Simulate type inference determining it's a U8
         const pattern_var: types.Var = @enumFromInt(@intFromEnum(pattern_idx));
-        _ = env.types.setVarContent(pattern_var, Content{
+        _ = try env.types.setVarContent(pattern_var, Content{
             .structure = .{ .num = types.Num.int_u8 },
         });
 
@@ -6047,7 +6043,7 @@ test "pattern type inference with numeric literals" {
 
         // Simulate type inference constraining it to U8
         const pattern_var: types.Var = @enumFromInt(@intFromEnum(pattern_idx));
-        _ = env.types.setVarContent(pattern_var, Content{
+        _ = try env.types.setVarContent(pattern_var, Content{
             .structure = .{ .num = types.Num.int_u8 },
         });
 

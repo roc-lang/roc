@@ -589,6 +589,22 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
     }
 }
 
+/// Get the more-specific expr index. Used to make error messages nicer.
+///
+/// For example, if the provided expr is a `block`, then this will return the
+/// expr idx of the last expr in that block. This allows the error message to
+/// reference the exact expr that has a problem, making the problem easier to
+/// understand.
+///
+/// But for most exprs, this just returns the same expr idx provided.
+pub fn getExprSpecific(store: *const NodeStore, expr_idx: CIR.Expr.Idx) CIR.Expr.Idx {
+    const expr = store.getExpr(expr_idx);
+    switch (expr) {
+        .e_block => |block| return block.final_expr,
+        else => return expr_idx,
+    }
+}
+
 /// Retrieves a 'when' branch from the store.
 pub fn getWhenBranch(store: *const NodeStore, whenBranch: CIR.WhenBranch.Idx) CIR.WhenBranch {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(whenBranch));
@@ -2211,6 +2227,31 @@ pub fn sliceRecordFields(store: *const NodeStore, span: CIR.RecordField.Span) []
     return store.sliceFromSpan(CIR.RecordField.Idx, span.span);
 }
 
+/// Retrieve a slice of IfBranch Idx's from a span
+pub fn sliceIfBranches(store: *const NodeStore, span: CIR.IfBranch.Span) []CIR.IfBranch.Idx {
+    return store.sliceFromSpan(CIR.IfBranch.Idx, span.span);
+}
+
+/// Creates a slice corresponding to a span.
+pub fn firstFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan) T {
+    return @as(T, @enumFromInt(store.extra_data.items[span.start]));
+}
+
+/// Creates a slice corresponding to a span.
+pub fn lastFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan) T {
+    return @as(T, @enumFromInt(store.extra_data.items[span.start + span.len - 1]));
+}
+
+/// Retrieve a slice of IfBranch Idx's from a span
+pub fn firstFromIfBranches(store: *const NodeStore, span: CIR.IfBranch.Span) CIR.IfBranch.Idx {
+    return store.firstFromSpan(CIR.IfBranch.Idx, span.span);
+}
+
+/// Retrieve a slice of IfBranch Idx's from a span
+pub fn lastFromStatements(store: *const NodeStore, span: CIR.Statement.Span) CIR.Statement.Idx {
+    return store.lastFromSpan(CIR.Statement.Idx, span.span);
+}
+
 /// Returns a slice of if branches from the store.
 pub fn scratchIfBranchTop(store: *NodeStore) u32 {
     return store.scratch_if_branches.top();
@@ -2234,11 +2275,6 @@ pub fn ifBranchSpanFrom(store: *NodeStore, start: u32) CIR.IfBranch.Span {
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
-}
-
-/// Retrieve a slice of IfBranch Idx's from a span
-pub fn sliceIfBranches(store: *const NodeStore, span: CIR.IfBranch.Span) []CIR.IfBranch.Idx {
-    return store.sliceFromSpan(CIR.IfBranch.Idx, span.span);
 }
 
 /// Adds an if branch to the store and returns its index.

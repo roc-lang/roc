@@ -93,6 +93,25 @@ const TwoTagsSafeList = TwoTags.SafeList;
 const Problem = problem_mod.Problem;
 const ProblemStore = problem_mod.Store;
 
+/// The result of unification
+pub const Result = union(enum) {
+    const Self = @This();
+
+    ok,
+    problem: Problem.SafeMultiList.Idx,
+
+    pub fn isOk(self: Self) bool {
+        return self == .ok;
+    }
+
+    pub fn isProblem(self: Self) bool {
+        switch (self) {
+            .ok => return false,
+            .problem => return true,
+        }
+    }
+};
+
 /// Unify two type variables
 ///
 /// This function
@@ -109,11 +128,49 @@ pub fn unify(
     a: Var,
     b: Var,
 ) Result {
+    return unifyMode(
+        .bidirectional,
+        module_env,
+        types,
+        problems,
+        snapshots,
+        unify_scratch,
+        occurs_scratch,
+        a,
+        b,
+    );
+}
+
+/// How we should unify
+pub const UnifyMode = enum {
+    /// Standard unification - both types are merged together
+    bidirectional,
+    /// Special unification - left type is untouched
+    preserve_a,
+};
+
+/// Unify two type variables
+///
+/// This function
+/// * Resolves type variables & compresses paths
+/// * Compares variable contents for equality
+/// * Merges unified variables so 1 is "root" and the other is "redirect"
+pub fn unifyMode(
+    mode: UnifyMode,
+    module_env: *const base.ModuleEnv,
+    types: *types_root_mod.Store,
+    problems: *problem_mod.Store,
+    snapshots: *snapshot_mod.Store,
+    unify_scratch: *Scratch,
+    occurs_scratch: *occurs.Scratch,
+    a: Var,
+    b: Var,
+) Result {
     // First reset the scratch store
     unify_scratch.reset();
 
     // Unify
-    var unifier = Unifier.init(module_env, types, unify_scratch, occurs_scratch);
+    var unifier = Unifier.init(mode, module_env, types, unify_scratch, occurs_scratch);
     unifier.unifyGuarded(a, b) catch |err| {
         const problem: Problem = blk: {
             switch (err) {
@@ -246,35 +303,23 @@ pub fn unify(
             }
         };
         const problem_idx = problems.appendProblem(module_env.gpa, problem);
-        types.union_(a, b, .{
-            .content = .err,
-            .rank = Rank.generalized,
-            .mark = Mark.none,
-        });
+        switch (mode) {
+            .bidirectional => {
+                types.union_(a, b, .{
+                    .content = .err,
+                    .rank = Rank.generalized,
+                    .mark = Mark.none,
+                });
+            },
+            .preserve_a => {
+                types.setVarContent(b, .err) catch |oom_err| exitOnOutOfMemory(oom_err);
+            },
+        }
         return Result{ .problem = problem_idx };
     };
 
     return .ok;
 }
-
-/// The result of unification
-pub const Result = union(enum) {
-    const Self = @This();
-
-    ok,
-    problem: Problem.SafeMultiList.Idx,
-
-    pub fn isOk(self: Self) bool {
-        return self == .ok;
-    }
-
-    pub fn isProblem(self: Self) bool {
-        switch (self) {
-            .ok => return false,
-            .problem => return true,
-        }
-    }
-};
 
 /// A temporary unification context used to unify two type variables within a `Store`.
 ///
@@ -297,6 +342,7 @@ pub const Result = union(enum) {
 const Unifier = struct {
     const Self = @This();
 
+    mode: UnifyMode,
     module_env: *const base.ModuleEnv,
     types_store: *store.Store,
     scratch: *Scratch,
@@ -307,12 +353,14 @@ const Unifier = struct {
     /// Init a unifier
     /// Caller owns the memory of the provided values
     fn init(
+        mode: UnifyMode,
         module_env: *const base.ModuleEnv,
         types_store: *store.Store,
         scratch: *Scratch,
         occurs_scratch: *occurs.Scratch,
     ) Self {
         return .{
+            .mode = mode,
             .module_env = module_env,
             .types_store = types_store,
             .scratch = scratch,
@@ -327,11 +375,18 @@ const Unifier = struct {
     /// Link the variables & updated the content in the type_store
     /// In the old compiler, this function was called "merge"
     fn merge(self: *Self, vars: *const ResolvedVarDescs, new_content: Content) void {
-        self.types_store.union_(vars.a.var_, vars.b.var_, .{
-            .content = new_content,
-            .rank = Rank.min(vars.a.desc.rank, vars.b.desc.rank),
-            .mark = Mark.none,
-        });
+        switch (self.mode) {
+            .bidirectional => {
+                self.types_store.union_(vars.a.var_, vars.b.var_, .{
+                    .content = new_content,
+                    .rank = Rank.min(vars.a.desc.rank, vars.b.desc.rank),
+                    .mark = Mark.none,
+                });
+            },
+            .preserve_a => {
+                self.types_store.setVarContent(vars.b.var_, new_content) catch |err| exitOnOutOfMemory(err);
+            },
+        }
     }
 
     /// Create a new type variable *in this pool*
@@ -2618,6 +2673,7 @@ pub const Scratch = struct {
         self.only_in_b_tags.items.clearRetainingCapacity();
         self.in_both_tags.items.clearRetainingCapacity();
         self.occurs_scratch.reset();
+        self.err = null;
     }
 
     // helpers //
@@ -3602,11 +3658,13 @@ test "unify - tuple_unbound unifies with tuple" {
     defer env.deinit();
 
     // Create element type variables
-    const num_var = env.module_env.types.fresh();
-    _ = env.module_env.types.setVarContent(num_var, Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = false, .bits_needed = 0 } } } });
+    const num_var = env.module_env.types.freshFromContent(
+        Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = false, .bits_needed = 0 } } } },
+    );
 
-    const str_var = env.module_env.types.fresh();
-    _ = env.module_env.types.setVarContent(str_var, Content{ .structure = .str });
+    const str_var = env.module_env.types.freshFromContent(
+        Content{ .structure = .str },
+    );
 
     // Create tuple elements
     const elems = [_]types_mod.Var{ num_var, str_var };
@@ -3637,16 +3695,18 @@ test "unify - multiple tuple_unbounds stay unbound" {
     defer env.deinit();
 
     // Create element type variables for first tuple
-    const num_var1 = env.module_env.types.fresh();
-    _ = env.module_env.types.setVarContent(num_var1, Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = false, .bits_needed = 0 } } } });
+    const num_var1 = env.module_env.types.freshFromContent(
+        Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = false, .bits_needed = 0 } } } },
+    );
 
     // Create tuple elements for first tuple
     const elems1 = [_]types_mod.Var{num_var1};
     const elems_range1 = env.module_env.types.appendTupleElems(&elems1);
 
     // Create element type variables for second tuple
-    const num_var2 = env.module_env.types.fresh();
-    _ = env.module_env.types.setVarContent(num_var2, Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = false, .bits_needed = 0 } } } });
+    const num_var2 = env.module_env.types.freshFromContent(
+        Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = false, .bits_needed = 0 } } } },
+    );
 
     // Create tuple elements for second tuple
     const elems2 = [_]types_mod.Var{num_var2};

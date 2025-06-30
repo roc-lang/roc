@@ -14,34 +14,41 @@ foo = if 1 A
     }
 ~~~
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**if_then_else.md:3:10:3:11:**
+**INVALID IF CONDITION**
+This `if` condition needs to be a _Bool_:
+**if_then_else.md:3:10:**
 ```roc
 foo = if 1 A
 ```
          ^
 
-It is of type:
+Right now, it has the type:
     _Num(*)_
 
-But you are trying to use it as:
-    _[True, False]_
+Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**if_then_else.md:5:10:7:6:**
+**INCOMPATIBLE IF BRANCHES**
+This `if` has an `else` branch with a different type from it's `then` branch:
+**if_then_else.md:3:7:**
 ```roc
+foo = if 1 A
+
     else {
 	"hello"
     }
 ```
+ ^^^^^^^
 
-It is of type:
+The `else` branch has the type:
     _Str_
 
-But you are trying to use it as:
+But the `then` branch has the type:
     _[A]*_
+
+All branches in an `if` must have compatible types.
+
+Note: You can wrap branches in a tag to make them compatible.
+To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig

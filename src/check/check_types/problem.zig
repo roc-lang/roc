@@ -14,6 +14,7 @@ const Document = reporting.Document;
 const UnderlineRegion = @import("../../reporting/document.zig").UnderlineRegion;
 const SourceCodeDisplayRegion = @import("../../reporting/document.zig").SourceCodeDisplayRegion;
 
+const CIR = can.CIR;
 const TypesStore = store_mod.Store;
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
@@ -29,6 +30,8 @@ const Content = types.Content;
 pub const Problem = union(enum) {
     type_mismatch: VarProblem2,
     incompatible_list_elements: IncompatibleListElements,
+    invalid_if_condition: InvalidIfCondition,
+    incompatible_if_branches: IncompatibleIfBranches,
     number_does_not_fit: NumberDoesNotFit,
     negative_unsigned_int: NegativeUnsignedInt,
     infinite_recursion: struct { var_: Var },
@@ -74,6 +77,30 @@ pub const Problem = union(enum) {
             },
             .incompatible_list_elements => |data| {
                 return buildIncompatibleListElementsReport(
+                    gpa,
+                    buf,
+                    module_env,
+                    can_ir,
+                    &snapshot_writer,
+                    data,
+                    source,
+                    filename,
+                );
+            },
+            .invalid_if_condition => |data| {
+                return buildInvalidIfCondition(
+                    gpa,
+                    buf,
+                    module_env,
+                    can_ir,
+                    &snapshot_writer,
+                    data,
+                    source,
+                    filename,
+                );
+            },
+            .incompatible_if_branches => |data| {
+                return buildIncompatibleIfBranches(
                     gpa,
                     buf,
                     module_env,
@@ -339,6 +366,228 @@ pub const Problem = union(enum) {
         return report;
     }
 
+    /// Build a report for incompatible list elements
+    pub fn buildInvalidIfCondition(
+        gpa: Allocator,
+        buf: *std.ArrayList(u8),
+        module_env: *const base.ModuleEnv,
+        can_ir: *const can.CIR,
+        snapshot_writer: *snapshot.SnapshotWriter,
+        data: InvalidIfCondition,
+        source: []const u8,
+        filename: []const u8,
+    ) !Report {
+        var report = Report.init(gpa, "INVALID IF CONDITION", .runtime_error);
+
+        // Format the type strings
+        buf.clearRetainingCapacity();
+        try snapshot_writer.write(data.invalid_cond_snapshot);
+        const owned_invalid_type = try report.addOwnedString(buf.items);
+
+        // Add title
+        try report.document.addText("This ");
+        try report.document.addAnnotated("if", .keyword);
+        try report.document.addText(" condition needs to be a ");
+        try report.document.addAnnotated("Bool", .type_variable);
+        try report.document.addText(":");
+        try report.document.addLineBreak();
+
+        // Get the region info for the invalid condition
+        const invalid_cond_region = can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(data.invalid_cond_var)));
+        const invalid_cond_region_info = base.RegionInfo.position(
+            source,
+            module_env.line_starts.items,
+            invalid_cond_region.start.offset,
+            invalid_cond_region.end.offset,
+        ) catch return report;
+
+        // Create the display region
+        const display_region = SourceCodeDisplayRegion{
+            .start_line = invalid_cond_region_info.start_line_idx + 1,
+            .start_column = invalid_cond_region_info.start_col_idx + 1,
+            .end_line = invalid_cond_region_info.end_line_idx + 1,
+            .end_column = invalid_cond_region_info.end_col_idx + 1,
+            .region_annotation = .dimmed,
+            .filename = filename,
+        };
+
+        // Create underline regions
+        const underline_regions = [_]UnderlineRegion{
+            .{
+                .start_line = invalid_cond_region_info.start_line_idx + 1,
+                .start_column = invalid_cond_region_info.start_col_idx + 1,
+                .end_line = invalid_cond_region_info.end_line_idx + 1,
+                .end_column = invalid_cond_region_info.end_col_idx + 1,
+                .annotation = .error_highlight,
+            },
+        };
+
+        try report.document.addSourceCodeWithUnderlines(source, display_region, &underline_regions);
+        try report.document.addLineBreak();
+
+        // Add description
+        try report.document.addText("Right now, it has the type:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(owned_invalid_type, .type_variable);
+        try report.document.addLineBreak();
+
+        // Add explanation
+        try report.document.addLineBreak();
+        try report.document.addText("Every ");
+        try report.document.addAnnotated("if", .keyword);
+        try report.document.addText(" condition must evaluate to a ");
+        try report.document.addAnnotated("Bool", .type_variable);
+        try report.document.addText("–either ");
+        try report.document.addAnnotated("True", .tag_name);
+        try report.document.addText(" or ");
+        try report.document.addAnnotated("False", .tag_name);
+        try report.document.addText(".");
+
+        return report;
+    }
+
+    /// Build a report for incompatible list elements
+    pub fn buildIncompatibleIfBranches(
+        gpa: Allocator,
+        buf: *std.ArrayList(u8),
+        module_env: *const base.ModuleEnv,
+        can_ir: *const can.CIR,
+        snapshot_writer: *snapshot.SnapshotWriter,
+        data: IncompatibleIfBranches,
+        source: []const u8,
+        filename: []const u8,
+    ) !Report {
+        // The first branch of an if statement can never be invalid, since that
+        // branch determines the type of the entire expression
+        std.debug.assert(data.invalid_index > 0);
+
+        // Is this error for a if statement with only 2 branches?
+        const is_only_if_else = data.branches_len == 2;
+
+        var report = Report.init(gpa, "INCOMPATIBLE IF BRANCHES", .runtime_error);
+
+        // Format the type strings
+        buf.clearRetainingCapacity();
+        try snapshot_writer.write(data.invalid_snapshot);
+        const actual_type = try report.addOwnedString(buf.items);
+
+        buf.clearRetainingCapacity();
+        try snapshot_writer.write(data.expected_snapshot);
+        const expected_type = try report.addOwnedString(buf.items);
+
+        // Add title
+        if (is_only_if_else) {
+            try report.document.addText("This ");
+            try report.document.addAnnotated("if", .keyword);
+            try report.document.addText(" has an ");
+            try report.document.addAnnotated("else", .keyword);
+            try report.document.addText(" branch with a different type from it's ");
+            try report.document.addAnnotated("then", .keyword);
+            try report.document.addText(" branch:");
+        } else {
+            buf.clearRetainingCapacity();
+            try buf.appendSlice("The type of the ");
+            try appendOrdinal(buf, data.invalid_index + 1);
+            try buf.appendSlice(" branch of this ");
+            const title_prefix = try report.addOwnedString(buf.items);
+            try report.document.addText(title_prefix);
+
+            try report.document.addAnnotated("if", .keyword);
+            try report.document.addText(" does not match the previous branches:");
+        }
+        try report.document.addLineBreak();
+
+        // Determine the overall region that encompasses both elements
+        const if_expr_region = can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(data.if_expr)));
+        const overall_region_info = base.RegionInfo.position(
+            source,
+            module_env.line_starts.items,
+            if_expr_region.start.offset,
+            if_expr_region.end.offset,
+        ) catch return report;
+
+        // Get region info for invalid branch
+        const invalid_var_region = can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(data.invalid_var)));
+        const invalid_var_region_info = base.RegionInfo.position(
+            source,
+            module_env.line_starts.items,
+            invalid_var_region.start.offset,
+            invalid_var_region.end.offset,
+        ) catch return report;
+
+        // Create the display region
+        const display_region = SourceCodeDisplayRegion{
+            .start_line = overall_region_info.start_line_idx + 1,
+            .start_column = overall_region_info.start_col_idx + 1,
+            .end_line = overall_region_info.end_line_idx + 1,
+            .end_column = overall_region_info.end_col_idx + 1,
+            .region_annotation = .dimmed,
+            .filename = filename,
+        };
+
+        // Create underline regions
+        const underline_regions = [_]UnderlineRegion{
+            .{
+                .start_line = invalid_var_region_info.start_line_idx + 1,
+                .start_column = invalid_var_region_info.start_col_idx + 1,
+                .end_line = invalid_var_region_info.end_line_idx + 1,
+                .end_column = invalid_var_region_info.end_col_idx + 1,
+                .annotation = .error_highlight,
+            },
+        };
+
+        try report.document.addSourceCodeWithUnderlines(source, display_region, &underline_regions);
+        try report.document.addLineBreak();
+
+        // Show the type of the invalid branch
+        if (is_only_if_else) {
+            try report.document.addText("The ");
+            try report.document.addAnnotated("else", .keyword);
+            try report.document.addText(" branch has the type:");
+        } else {
+            buf.clearRetainingCapacity();
+            try buf.appendSlice("The ");
+            try appendOrdinal(buf, data.invalid_index + 1);
+            try buf.appendSlice(" branch has this type:");
+            const branch_ord = try report.addOwnedString(buf.items);
+            try report.document.addText(branch_ord);
+        }
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(actual_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        // Show the type of the other branches
+        if (is_only_if_else) {
+            try report.document.addText("But the ");
+            try report.document.addAnnotated("then", .keyword);
+            try report.document.addText(" branch has the type:");
+        } else {
+            try report.document.addText("But all the other branches have this type:");
+        }
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(expected_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        // TODO we should categorize this as a tip/hint (maybe relevant to how editors display it)
+        try report.document.addText("All branches in an ");
+        try report.document.addAnnotated("if", .keyword);
+        try report.document.addText(" must have compatible types.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        // TODO link to a speceific explanation of how to mix element types using tag unions
+        try report.document.addText("Note: You can wrap branches in a tag to make them compatible.");
+        try report.document.addLineBreak();
+        try report.document.addText("To learn about tags, see ");
+        try report.document.addLink("https://www.roc-lang.org/tutorial#tags");
+
+        return report;
+    }
+
     /// Build a report for "number does not fit in type" diagnostic
     pub fn buildNumberDoesNotFitReport(
         gpa: Allocator,
@@ -506,6 +755,23 @@ pub const IncompatibleListElements = struct {
     incompatible_elem_snapshot: SnapshotContentIdx,
     incompatible_elem_index: usize, // 0-based index of the incompatible element
     list_length: usize, // Total number of elements in the list
+};
+
+/// Problem data for when an if condition is not a Bool
+pub const InvalidIfCondition = struct {
+    if_branch: CIR.IfBranch.Idx,
+    invalid_cond_var: Var,
+    invalid_cond_snapshot: SnapshotContentIdx,
+};
+
+/// Problem data for when if branches have have incompatible types
+pub const IncompatibleIfBranches = struct {
+    if_expr: CIR.Expr.Idx,
+    expected_snapshot: SnapshotContentIdx,
+    invalid_var: Var,
+    invalid_snapshot: SnapshotContentIdx,
+    invalid_index: usize,
+    branches_len: usize,
 };
 
 /// A two var problem

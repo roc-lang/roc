@@ -153,12 +153,31 @@ pub const Store = struct {
     /// current capacities of descs or slots.
     ///
     /// Used in canonicalization when creating type slots
-    pub fn setVarContent(self: *Self, target_var: Var, content: Content) void {
-        const resolved = self.resolveVar(target_var);
+    ///
+    /// If the store size is less than the specified target_var, fill in slots
+    /// thru that index
+    pub fn setVarContent(self: *Self, target_var: Var, content: Content) Allocator.Error!void {
+        try self.fillInSlotsThru(target_var);
 
+        const resolved = self.resolveVar(target_var);
         var desc = resolved.desc;
         desc.content = content;
         self.descs.set(resolved.desc_idx, desc);
+    }
+
+    /// Create a new variable with the provided desc at the given index
+    ///
+    /// This function may allocate if the provided index is greater than the
+    /// current capacities of descs or slots.
+    ///
+    /// Used in canonicalization when creating type slots
+    ///
+    /// If the store size is less than the specified target_var, fill in slots
+    /// thru that index
+    pub fn setVarRedirect(self: *Self, target_var: Var, redirect_to: Var) Allocator.Error!void {
+        try self.fillInSlotsThru(target_var);
+        const slot_idx = Self.varToSlotIdx(target_var);
+        self.slots.set(slot_idx, .{ .redirect = redirect_to });
     }
 
     /// Given a target variable, check that the var is in bounds

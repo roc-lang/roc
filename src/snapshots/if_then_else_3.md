@@ -14,19 +14,26 @@ if bool {
 Nothing is named `bool` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**if_then_else_3.md:3:8:3:9:**
+**INCOMPATIBLE IF BRANCHES**
+This `if` has an `else` branch with a different type from it's `then` branch:
+**if_then_else_3.md:1:1:**
 ```roc
+if bool {
+	A
 } else 2
 ```
        ^
 
-It is of type:
+The `else` branch has the type:
     _Num(*)_
 
-But you are trying to use it as:
+But the `then` branch has the type:
     _[A]*_
+
+All branches in an `if` must have compatible types.
+
+Note: You can wrap branches in a tag to make them compatible.
+To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig
