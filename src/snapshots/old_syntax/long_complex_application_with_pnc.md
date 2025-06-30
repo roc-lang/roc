@@ -79,7 +79,7 @@ combine(
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call @1.1-5.4 (id 103)
+(e-call @1.1-5.4 (id 99)
 	(e-runtime-error (tag "ident_not_in_scope"))
 	(e-call @1.9-1.24
 		(e-runtime-error (tag "ident_not_in_scope"))
@@ -87,7 +87,7 @@ combine(
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(e-call @1.26-5.3
 		(e-tag @1.26-1.32 (ext-var 83) (name "Juices") (args "TODO"))
-		(e-record @1.33-5.2 (ext-var 95)
+		(e-record @1.33-5.2
 			(fields
 				(field (name "color")
 					(e-runtime-error (tag "ident_not_in_scope")))
@@ -100,5 +100,5 @@ combine(
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 103) (type "*"))
+(expr (id 99) (type "*"))
 ~~~

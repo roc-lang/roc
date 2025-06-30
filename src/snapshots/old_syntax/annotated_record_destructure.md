@@ -38,7 +38,7 @@ LowerIdent(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-record @1.1-1.9 (ext-var 79) (id 80)
+(e-record @1.1-1.9 (id 79)
 	(fields
 		(field (name "x")
 			(e-runtime-error (tag "ident_not_in_scope")))
@@ -47,5 +47,5 @@ LowerIdent(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 80) (type "{ x: Error, y: Error }"))
+(expr (id 79) (type "{ x: Error, y: Error }"))
 ~~~

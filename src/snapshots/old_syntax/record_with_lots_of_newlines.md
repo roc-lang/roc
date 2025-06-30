@@ -36,12 +36,12 @@ CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-record @1.1-4.2 (ext-var 76) (id 77)
+(e-record @1.1-4.2 (id 76)
 	(fields
 		(field (name "t")
 			(e-runtime-error (tag "ident_not_in_scope")))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 77) (type "{ t: Error }"))
+(expr (id 76) (type "{ t: Error }"))
 ~~~

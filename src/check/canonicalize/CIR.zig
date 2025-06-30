@@ -24,6 +24,8 @@ const NodeStore = @import("NodeStore.zig");
 
 pub const Diagnostic = @import("Diagnostic.zig").Diagnostic;
 
+const Allocator = std.mem.Allocator;
+
 // TODO what should this number be? build flag?
 const NODE_STORE_CAPACITY = 10_000;
 
@@ -336,7 +338,7 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
 /// Use this for expressions where the type needs to be inferred, like integer
 /// literals before knowing their specific type (U64, I32, etc.).
 ///
-pub fn pushFreshTypeVar(self: *CIR, parent_node_idx: Node.Idx, region: base.Region) types.Var {
+pub fn pushFreshTypeVar(self: *CIR, parent_node_idx: Node.Idx, region: base.Region) Allocator.Error!types.Var {
     return self.pushTypeVar(.{ .flex_var = null }, parent_node_idx, region);
 }
 
@@ -350,16 +352,16 @@ pub fn pushFreshTypeVar(self: *CIR, parent_node_idx: Node.Idx, region: base.Regi
 /// - `.rigid_var` - Named type variable for generics
 /// - `.structure` - Concrete types (nums, records, functions)
 /// - `.err` - Error type for malformed code
-pub fn pushTypeVar(self: *CIR, content: types.Content, parent_node_idx: Node.Idx, region: base.Region) types.Var {
+pub fn pushTypeVar(self: *CIR, content: types.Content, parent_node_idx: Node.Idx, region: base.Region) Allocator.Error!types.Var {
     // insert a placeholder can node
     const var_slot = self.store.addTypeVarSlot(parent_node_idx, region);
 
     // if the new can node idx is greater than the types store length, backfill
     const var_: types.Var = @enumFromInt(@intFromEnum(var_slot));
-    self.env.types.fillInSlotsThru(var_) catch |err| exitOnOom(err);
+    try self.env.types.fillInSlotsThru(var_);
 
     // set the type store slot based on the placeholder node idx
-    self.env.types.setVarContent(var_, content);
+    try self.env.types.setVarContent(var_, content);
 
     return var_;
 }
@@ -398,7 +400,7 @@ pub fn setTypeVarAt(self: *CIR, at_idx: Node.Idx, content: types.Content) types.
     self.env.types.fillInSlotsThru(var_) catch |err| exitOnOom(err);
 
     // set the type store slot based on the placeholder node idx
-    self.env.types.setVarContent(var_, content);
+    self.env.types.setVarContent(var_, content) catch |err| exitOnOom(err);
 
     return var_;
 }
@@ -1138,11 +1140,7 @@ pub const Expr = union(enum) {
         region: Region,
     },
     e_when: When,
-    e_if: struct {
-        branches: IfBranch.Span,
-        final_else: Expr.Idx,
-        region: Region,
-    },
+    e_if: If,
     /// This is *only* for calling functions, not for tag application.
     /// The Tag variant contains any applied values inside it.
     e_call: struct {
@@ -2157,6 +2155,13 @@ pub const WhenBranch = struct {
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
+};
+
+/// A canonicalized if statement
+pub const If = struct {
+    branches: IfBranch.Span,
+    final_else: Expr.Idx,
+    region: Region,
 };
 
 /// A pattern, including possible problems (e.g. shadowing) so that
