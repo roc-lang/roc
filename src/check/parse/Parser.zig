@@ -1500,6 +1500,13 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
                 .region = .{ .start = start, .end = start },
             } });
         },
+        .SingleQuote => {
+            self.advance();
+            expr = self.store.addExpr(.{ .single_quote = .{
+                .token = start,
+                .region = .{ .start = start, .end = start },
+            } });
+        },
         .StringStart => {
             expr = self.parseStringExpr();
         },

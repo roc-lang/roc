@@ -501,7 +501,11 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) AST.Expr.Idx {
             node.region = e.region;
             node.main_token = e.token;
         },
-
+        .single_quote => |e| {
+            node.tag = .single_quote;
+            node.region = e.region;
+            node.main_token = e.token;
+        },
         .string_part => |e| {
             node.tag = .string_part;
             node.region = e.region;
@@ -1245,6 +1249,12 @@ pub fn getExpr(store: *NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
         },
         .frac => {
             return .{ .frac = .{
+                .token = node.main_token,
+                .region = node.region,
+            } };
+        },
+        .single_quote => {
+            return .{ .single_quote = .{
                 .token = node.main_token,
                 .region = node.region,
             } };

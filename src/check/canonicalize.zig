@@ -1202,6 +1202,65 @@ pub fn canonicalize_expr(
 
             return expr_idx;
         },
+        .single_quote => |e| {
+            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
+
+            // Resolve to a string slice from the source
+            const token_text = self.parse_ir.resolve(e.token);
+            const inner_text = token_text[1 .. token_text.len - 1];
+
+            const view = std.unicode.Utf8View.init(inner_text) catch |err| switch (err) {
+                error.InvalidUtf8 => {
+                    const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .invalid_single_quote = .{
+                        .region = region,
+                    } });
+                    return expr_idx;
+                },
+            };
+
+            var iterator = view.iterator();
+            const firstEndpoint = iterator.nextCodepoint();
+            // log
+            std.debug.print("firstEndpoint: {any}\n", .{firstEndpoint});
+            const secondEndpoint = iterator.nextCodepoint();
+            std.debug.print("secondEndpoint: {any}\n", .{secondEndpoint});
+
+            if (secondEndpoint != null) {
+                // TODO: report too long utf8 seq
+                const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .invalid_single_quote = .{
+                    .region = region,
+                } });
+                return expr_idx;
+            }
+
+            if (firstEndpoint) |u21_val| {
+                // Add the expression
+                const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
+                    .e_int = .{
+                        .value = .{ .bytes = @bitCast(@as(u128, @intCast(u21_val))), .kind = .u128 },
+                        .region = region,
+                    },
+                });
+
+                const int_requirements = types.Num.IntRequirements{
+                    .sign_needed = false,
+                    .bits_needed = @intCast(@sizeOf(@TypeOf(u21_val))),
+                };
+
+                // Insert concrete type variable
+                const type_content = Content{ .structure = .{ .num = .{ .num_unbound = int_requirements } } };
+                _ = self.can_ir.setTypeVarAtExpr(expr_idx, type_content);
+
+                return expr_idx;
+            } else {
+                // TODO: report too short utf8 seq
+                const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .invalid_single_quote = .{
+                    .region = region,
+                } });
+
+                return expr_idx;
+            }
+        },
         .string => |e| {
             // Get all the string parts
             const parts = self.parse_ir.store.exprSlice(e.parts);

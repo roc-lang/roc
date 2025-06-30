@@ -731,6 +731,9 @@ const Formatter = struct {
                 }
                 try fmt.push('"');
             },
+            .single_quote => |s| {
+                try fmt.pushTokenText(s.token);
+            },
             .ident => |i| {
                 try fmt.formatIdent(i.token, i.qualifier);
             },

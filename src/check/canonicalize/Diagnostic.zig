@@ -20,6 +20,9 @@ pub const Diagnostic = union(enum) {
     invalid_num_literal: struct {
         region: Region,
     },
+    invalid_single_quote: struct {
+        region: Region,
+    },
     ident_already_in_scope: struct {
         ident: Ident.Idx,
         region: Region,
@@ -151,6 +154,7 @@ pub const Diagnostic = union(enum) {
             .unused_variable => |d| d.region,
             .used_underscore_variable => |d| d.region,
             .duplicate_record_field => |d| d.duplicate_region,
+            .invalid_single_quote => |d| d.region,
         };
     }
 
@@ -170,11 +174,10 @@ pub const Diagnostic = union(enum) {
         var report = Report.init(allocator, "INVALID NUMBER", .runtime_error);
 
         // Extract the literal's text from the source using its region
-        const literal_text = source[region.start.offset..region.end.offset];
-        const owned_literal = try report.addOwnedString(literal_text);
+        // const literal_text = source[region.start.offset..region.end.offset];
 
         try report.document.addText("This number literal is not valid: ");
-        try report.document.addText(owned_literal);
+        try report.document.addText(source[region.start.offset..region.end.offset]);
         return report;
     }
 
@@ -338,6 +341,18 @@ pub const Diagnostic = union(enum) {
     pub fn buildMalformedTypeAnnotationReport(allocator: Allocator) !Report {
         var report = Report.init(allocator, "MALFORMED TYPE", .runtime_error);
         try report.document.addReflowingText("This type annotation is malformed or contains invalid syntax.");
+        return report;
+    }
+
+    /// Build a report for "invalid single quote" diagnostic
+    pub fn buildInvalidSingleQuoteReport(
+        allocator: Allocator,
+    ) !Report {
+        var report = Report.init(allocator, "INVALID SCALAR", .runtime_error);
+
+        // Extract the literal's text from the source
+        try report.document.addReflowingText("I am part way through parsing this scalar literal (character literal), but it appears to be invalid.");
+
         return report;
     }
 
