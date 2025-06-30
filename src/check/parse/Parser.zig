@@ -414,7 +414,7 @@ pub fn parsePlatformHeader(self: *Parser) AST.Header.Idx {
         NodeStore.addScratchExposedItem,
         Parser.parseExposedItem,
     ) catch {
-        self.store.clearScratchExposedItemsFrom(exposes_start);
+        self.store.clearScratchExposedItemsFrom(exposes_top);
         return self.pushMalformed(
             AST.Header.Idx,
             .expected_exposes_close_square,
