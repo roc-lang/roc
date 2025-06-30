@@ -89,7 +89,7 @@ fn warn(comptime fmt_str: []const u8, args: anytype) void {
     std.log.warn(fmt_str, args);
 }
 
-fn generateSummaryFile(gpa: Allocator, snapshots_dir: []const u8, file_count: usize, duration_ms: u64) !void {
+fn generateSummaryFile(gpa: Allocator, snapshots_dir: []const u8, file_count: usize) !void {
     const summary_path = try std.fs.path.join(gpa, &[_][]const u8{ snapshots_dir, "README.md" });
     defer gpa.free(summary_path);
 
@@ -179,7 +179,7 @@ pub fn main() !void {
     const duration_ms = timer.read() / std.time.ns_per_ms;
 
     // Generate summary file
-    generateSummaryFile(gpa, snapshots_dir, file_count, duration_ms) catch |err| {
+    generateSummaryFile(gpa, snapshots_dir, file_count) catch |err| {
         std.log.warn("failed to generate summary file: {s}", .{@errorName(err)});
     };
 
