@@ -1426,12 +1426,9 @@ pub fn canonicalize_expr(
             for (cir_fields) |cir_field_idx| {
                 const cir_field = self.can_ir.store.getRecordField(cir_field_idx);
 
-                // Create a fresh type variable for this field
-                const field_type_var = self.can_ir.env.types.fresh();
-
                 type_record_fields.append(types.RecordField{
                     .name = cir_field.name,
-                    .var_ = field_type_var,
+                    .var_ = @enumFromInt(@intFromEnum(cir_field.value)),
                 }) catch |err| exitOnOom(err);
             }
 
