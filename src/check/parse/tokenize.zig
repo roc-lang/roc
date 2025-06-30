@@ -1451,10 +1451,8 @@ pub const Tokenizer = struct {
                 },
 
                 '\'' => {
-                    const quote_start = self.cursor.pos;
                     self.cursor.chompSingleQuoteLiteral();
-                    const len = self.cursor.pos - quote_start;
-                    self.output.pushTokenNormal(.SingleQuote, quote_start, len);
+                    self.output.pushTokenNormal(.SingleQuote, start, self.cursor.pos - start);
                 },
 
                 '"' => {
