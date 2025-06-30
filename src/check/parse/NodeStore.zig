@@ -1453,8 +1453,13 @@ pub fn getTypeHeader(store: *NodeStore, header_idx: AST.TypeHeader.Idx) AST.Type
 }
 
 /// Retrieves annotation record field data from a stored annotation record field node.
-pub fn getAnnoRecordField(store: *NodeStore, anno_record_field_idx: AST.AnnoRecordField.Idx) AST.AnnoRecordField {
+pub fn getAnnoRecordField(store: *NodeStore, anno_record_field_idx: AST.AnnoRecordField.Idx) !AST.AnnoRecordField {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(anno_record_field_idx)));
+
+    if (node.tag == .malformed) {
+        return error.MalformedNode;
+    }
+
     return .{
         .region = node.region,
         .name = node.data.lhs,

@@ -2834,7 +2834,12 @@ fn canonicalize_type_anno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.
             defer self.can_ir.store.clearScratchAnnoRecordFieldsFrom(scratch_top);
 
             for (self.parse_ir.store.annoRecordFieldSlice(record.fields)) |field_idx| {
-                const ast_field = self.parse_ir.store.getAnnoRecordField(field_idx);
+                const ast_field = self.parse_ir.store.getAnnoRecordField(field_idx) catch |err| switch (err) {
+                    error.MalformedNode => {
+                        // Skip malformed field entirely - it was already handled during parsing
+                        continue;
+                    },
+                };
 
                 // Resolve field name
                 const field_name = self.parse_ir.tokens.resolveIdentifier(ast_field.name) orelse {
@@ -3458,7 +3463,9 @@ fn extractTypeVarsFromASTAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, vars: *st
         .record => |record| {
             // Extract type variables from record field types
             for (self.parse_ir.store.annoRecordFieldSlice(record.fields)) |field_idx| {
-                const field = self.parse_ir.store.getAnnoRecordField(field_idx);
+                const field = self.parse_ir.store.getAnnoRecordField(field_idx) catch |err| switch (err) {
+                    error.MalformedNode => continue,
+                };
                 self.extractTypeVarsFromASTAnno(field.ty, vars);
             }
         },
@@ -3510,7 +3517,9 @@ fn getTypeVarRegionFromAST(self: *Self, anno_idx: AST.TypeAnno.Idx, target_ident
         },
         .record => |record| {
             for (self.parse_ir.store.annoRecordFieldSlice(record.fields)) |field_idx| {
-                const field = self.parse_ir.store.getAnnoRecordField(field_idx);
+                const field = self.parse_ir.store.getAnnoRecordField(field_idx) catch |err| switch (err) {
+                    error.MalformedNode => continue,
+                };
                 if (self.getTypeVarRegionFromAST(field.ty, target_ident)) |region| {
                     return region;
                 }
