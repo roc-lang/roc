@@ -446,7 +446,7 @@ pub const TokenizedBuffer = struct {
         };
         if (comment) |c| {
             token.offset = c.begin;
-            token.extra = .{ .length = if (c.end > c.begin) c.end - c.begin else 0 };
+            token.extra = .{ .length = c.end - c.begin };
         }
         self.tokens.append(self.env.gpa, token) catch |err| exitOnOom(err);
     }
@@ -463,20 +463,15 @@ pub const TokenizedBuffer = struct {
 pub const Comment = struct {
     begin: u32,
     end: u32,
-};
 
-/// Represents a unicode character parse from the source.
-const Unicode = struct {
-    tag: Tag,
-    length: u32,
+    pub fn init(begin: u32, end: u32) Comment {
+        std.debug.assert(begin <= end);
 
-    const Tag = enum {
-        LetterUpper,
-        LetterNotUpper,
-        Digit,
-        Other,
-        Invalid,
-    };
+        return Comment{
+            .begin = begin,
+            .end = end,
+        };
+    }
 };
 
 /// Represents a diagnostic message including its position in the source.
@@ -524,7 +519,7 @@ pub const Diagnostic = struct {
         var carets = std.ArrayList(u8).init(gpa);
         defer carets.deinit();
 
-        const caret_length = if (self.end > self.begin) self.end - self.begin else 1;
+        const caret_length = @max(self.end - self.begin, 1);
         for (0..caret_length) |_| {
             try carets.append('^');
         }
@@ -670,7 +665,7 @@ pub const Cursor = struct {
                 while (self.pos < self.buf.len and self.buf[self.pos] != '\n' and self.buf[self.pos] != '\r') {
                     self.pos += 1;
                 }
-                self.comment = Comment{ .begin = comment_start, .end = self.pos };
+                self.comment = Comment.init(comment_start, self.pos);
             } else if (b >= 0 and b <= 31) {
                 self.pushMessageHere(.AsciiControl);
                 self.pos += 1;
@@ -681,15 +676,8 @@ pub const Cursor = struct {
         return null;
     }
 
-    fn maybeMessageForUppercaseBase(self: *Cursor, b: u8) void {
-        if (b == 'X' or b == 'O' or b == 'B') {
-            self.pushMessageHere(.UppercaseBase);
-        }
-    }
-
-    pub fn chompNumber(self: *Cursor, initialDigit: u8) Token.Tag {
-        // Consume the initial digit.
-        std.debug.assert(initialDigit == self.buf[self.pos]);
+    pub fn chompNumber(self: *Cursor) Token.Tag {
+        const initialDigit = self.buf[self.pos];
         self.pos += 1;
 
         var tok = Token.Tag.Int;
@@ -698,7 +686,9 @@ pub const Cursor = struct {
                 const c = self.peek() orelse 0;
                 switch (c) {
                     'x', 'X' => {
-                        maybeMessageForUppercaseBase(self, c);
+                        if (c == 'X') {
+                            self.pushMessageHere(.UppercaseBase);
+                        }
                         self.pos += 1;
                         self.chompIntegerBase16() catch {
                             tok = .MalformedNumberNoDigits;
@@ -707,7 +697,9 @@ pub const Cursor = struct {
                         break;
                     },
                     'o', 'O' => {
-                        maybeMessageForUppercaseBase(self, c);
+                        if (c == 'O') {
+                            self.pushMessageHere(.UppercaseBase);
+                        }
                         self.pos += 1;
                         self.chompIntegerBase8() catch {
                             tok = .MalformedNumberNoDigits;
@@ -716,7 +708,9 @@ pub const Cursor = struct {
                         break;
                     },
                     'b', 'B' => {
-                        maybeMessageForUppercaseBase(self, c);
+                        if (c == 'B') {
+                            self.pushMessageHere(.UppercaseBase);
+                        }
                         self.pos += 1;
                         self.chompIntegerBase2() catch {
                             tok = .MalformedNumberNoDigits;
@@ -1211,7 +1205,7 @@ pub const Tokenizer = struct {
                             self.output.pushTokenNormal(.OpBinaryMinus, start, 1);
                         } else if (n >= '0' and n <= '9' and sp) {
                             self.cursor.pos += 1;
-                            const tag = self.cursor.chompNumber(n);
+                            const tag = self.cursor.chompNumber();
                             const len = self.cursor.pos - start;
                             self.output.pushTokenNormal(tag, start, len);
                         } else {
@@ -1430,7 +1424,7 @@ pub const Tokenizer = struct {
 
                 // Numbers starting with 0-9
                 '0'...'9' => {
-                    const tag = self.cursor.chompNumber(b);
+                    const tag = self.cursor.chompNumber();
                     const len = self.cursor.pos - start;
                     self.output.pushTokenNormal(tag, start, len);
                 },
