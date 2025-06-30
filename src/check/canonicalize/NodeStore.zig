@@ -98,6 +98,8 @@ pub const CIR_EXPR_NODE_COUNT = 24;
 pub const CIR_STATEMENT_NODE_COUNT = 11;
 /// Count of the type annotation nodes in the CIR
 pub const CIR_TYPE_ANNO_NODE_COUNT = 11;
+/// Count of the pattern nodes in the CIR
+pub const CIR_PATTERN_NODE_COUNT = 14;
 
 comptime {
     // Check the number of CIR.Diagnostic nodes
@@ -121,6 +123,12 @@ comptime {
     // Check the number of CIR.TypeAnno nodes
     const type_anno_fields = @typeInfo(CIR.TypeAnno).@"union".fields;
     std.debug.assert(type_anno_fields.len == CIR_TYPE_ANNO_NODE_COUNT);
+}
+
+comptime {
+    // Check the number of CIR.Pattern nodes
+    const pattern_fields = @typeInfo(CIR.Pattern).@"union".fields;
+    std.debug.assert(pattern_fields.len == CIR_PATTERN_NODE_COUNT);
 }
 
 /// Retrieves a region from node from the store.

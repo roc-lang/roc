@@ -667,3 +667,132 @@ test "NodeStore round trip - TypeAnno" {
         return error.IncompleteTypeAnnoTestCoverage;
     }
 }
+
+test "NodeStore round trip - Pattern" {
+    const gpa = testing.allocator;
+    var store = NodeStore.init(gpa);
+    defer store.deinit();
+
+    var patterns = std.ArrayList(CIR.Pattern).init(gpa);
+    defer patterns.deinit();
+
+    // Test all Pattern variants to ensure complete coverage
+    try patterns.append(CIR.Pattern{
+        .assign = .{
+            .ident = @bitCast(@as(u32, 123)),
+            .region = from_raw_offsets(10, 20),
+        },
+    });
+    try patterns.append(CIR.Pattern{
+        .as = .{
+            .pattern = @enumFromInt(234),
+            .ident = @bitCast(@as(u32, 345)),
+            .region = from_raw_offsets(30, 40),
+        },
+    });
+    try patterns.append(CIR.Pattern{
+        .applied_tag = .{
+            .ext_var = @enumFromInt(456),
+            .tag_name = @bitCast(@as(u32, 567)),
+            .arguments = CIR.Pattern.Span{ .span = base.DataSpan.init(678, 789) },
+            .region = from_raw_offsets(50, 60),
+        },
+    });
+    try patterns.append(CIR.Pattern{
+        .record_destructure = .{
+            .whole_var = @enumFromInt(890),
+            .ext_var = @enumFromInt(901),
+            .destructs = CIR.RecordDestruct.Span{ .span = base.DataSpan.init(1012, 1123) },
+            .region = from_raw_offsets(70, 80),
+        },
+    });
+    try patterns.append(CIR.Pattern{
+        .list = .{
+            .list_var = @enumFromInt(1234),
+            .elem_var = @enumFromInt(1345),
+            .patterns = CIR.Pattern.Span{ .span = base.DataSpan.init(1456, 1567) },
+            .region = from_raw_offsets(90, 100),
+        },
+    });
+    try patterns.append(CIR.Pattern{
+        .tuple = .{
+            .patterns = CIR.Pattern.Span{ .span = base.DataSpan.init(1678, 1789) },
+            .region = from_raw_offsets(110, 120),
+        },
+    });
+    try patterns.append(CIR.Pattern{
+        .int_literal = .{
+            .value = CIR.IntValue{
+                .bytes = @bitCast(@as(i128, 42)),
+                .kind = .i128,
+            },
+            .region = from_raw_offsets(130, 140),
+        },
+    });
+    try patterns.append(CIR.Pattern{
+        .small_dec_literal = .{
+            .numerator = 123,
+            .denominator_power_of_ten = 2,
+            .region = from_raw_offsets(150, 160),
+        },
+    });
+    try patterns.append(CIR.Pattern{
+        .dec_literal = .{
+            .value = RocDec.fromU64(1890),
+            .region = from_raw_offsets(170, 180),
+        },
+    });
+    try patterns.append(CIR.Pattern{
+        .f64_literal = .{
+            .value = 3.14,
+            .region = from_raw_offsets(190, 200),
+        },
+    });
+    try patterns.append(CIR.Pattern{
+        .str_literal = .{
+            .literal = @enumFromInt(1901),
+            .region = from_raw_offsets(210, 220),
+        },
+    });
+    try patterns.append(CIR.Pattern{
+        .char_literal = .{
+            .num_var = @enumFromInt(2012),
+            .requirements = types.Num.Int.Requirements{
+                .sign_needed = false,
+                .bits_needed = .@"7",
+            },
+            .value = 65, // 'A'
+            .region = from_raw_offsets(230, 240),
+        },
+    });
+    try patterns.append(CIR.Pattern{
+        .underscore = .{
+            .region = from_raw_offsets(250, 260),
+        },
+    });
+    try patterns.append(CIR.Pattern{
+        .runtime_error = .{
+            .diagnostic = @enumFromInt(2123),
+            .region = from_raw_offsets(270, 280),
+        },
+    });
+
+    // Test the round-trip for all patterns
+    for (patterns.items) |pattern| {
+        const idx = store.addPattern(pattern);
+        const retrieved = store.getPattern(idx);
+
+        testing.expectEqualDeep(pattern, retrieved) catch |err| {
+            std.debug.print("\n\nOriginal:  {any}\n\n", .{pattern});
+            std.debug.print("Retrieved: {any}\n\n", .{retrieved});
+            return err;
+        };
+    }
+
+    const actual_test_count = patterns.items.len;
+    if (actual_test_count < NodeStore.CIR_PATTERN_NODE_COUNT) {
+        std.debug.print("CIR.Pattern test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.CIR_PATTERN_NODE_COUNT, actual_test_count });
+        std.debug.print("Please add test cases for missing pattern variants.\n", .{});
+        return error.IncompletePatternTestCoverage;
+    }
+}
