@@ -73,12 +73,12 @@ OpenCurly(1:1-1:2),LowerIdent(1:2-1:3),NoSpaceOpQuestion(1:3-1:4),MultilineStrin
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1.1-1.11 (id 77)
+(e-block @1.1-1.11
 	(s-expr @1.2-1.7
 		(e-runtime-error (tag "not_implemented")))
 	(e-empty_record @1.1-1.11))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 77) (type "{}"))
+(expr @1.1-1.11 (type "{}"))
 ~~~

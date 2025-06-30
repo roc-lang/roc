@@ -33,11 +33,11 @@ CloseSquare(3:1-3:2),EndOfFile(3:2-3:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-list @1.1-3.2 (elem-var 74) (id 75)
+(e-list @1.1-3.2
 	(elems
 		(e-runtime-error (tag "ident_not_in_scope"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 75) (type "List(Error)"))
+(expr @1.1-3.2 (type "List(Error)"))
 ~~~

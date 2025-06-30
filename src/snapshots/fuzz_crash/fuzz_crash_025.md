@@ -267,52 +267,52 @@ j = -17011687303715884105728
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 79)
-		(p-assign @4.1-4.2 (ident "a") (id 74))
-		(e-int @4.5-4.8 (value "255") (id 75))
-		(annotation @4.1-4.2 (signature 77) (id 78)
+	(d-let
+		(p-assign @4.1-4.2 (ident "a"))
+		(e-int @4.5-4.8 (value "255"))
+		(annotation @4.1-4.2
 			(declared-type
 				(ty @3.5-3.7 (name "U8")))))
-	(d-let (id 86)
-		(p-assign @7.1-7.2 (ident "b") (id 81))
-		(e-int @7.5-7.10 (value "65535") (id 82))
-		(annotation @7.1-7.2 (signature 84) (id 85)
+	(d-let
+		(p-assign @7.1-7.2 (ident "b"))
+		(e-int @7.5-7.10 (value "65535"))
+		(annotation @7.1-7.2
 			(declared-type
 				(ty @6.5-6.8 (name "U16")))))
-	(d-let (id 93)
-		(p-assign @10.1-10.2 (ident "c") (id 88))
-		(e-int @10.5-10.14 (value "429496729") (id 89))
-		(annotation @10.1-10.2 (signature 91) (id 92)
+	(d-let
+		(p-assign @10.1-10.2 (ident "c"))
+		(e-int @10.5-10.14 (value "429496729"))
+		(annotation @10.1-10.2
 			(declared-type
 				(ty @9.5-9.8 (name "U32")))))
-	(d-let (id 102)
-		(p-assign @14.1-14.2 (ident "e") (id 97))
-		(e-frac-f64 @14.5-14.48 (value "3.4028236692093846e39") (id 98))
-		(annotation @14.1-14.2 (signature 100) (id 101)
+	(d-let
+		(p-assign @14.1-14.2 (ident "e"))
+		(e-frac-f64 @14.5-14.48 (value "3.4028236692093846e39"))
+		(annotation @14.1-14.2
 			(declared-type
 				(ty @13.5-13.9 (name "U128")))))
-	(d-let (id 112)
-		(p-assign @18.1-18.2 (ident "g") (id 107))
-		(e-int @18.5-18.11 (value "-32768") (id 108))
-		(annotation @18.1-18.2 (signature 110) (id 111)
+	(d-let
+		(p-assign @18.1-18.2 (ident "g"))
+		(e-int @18.5-18.11 (value "-32768"))
+		(annotation @18.1-18.2
 			(declared-type
 				(ty @17.5-17.8 (name "I16")))))
-	(d-let (id 119)
-		(p-assign @21.1-21.2 (ident "h") (id 114))
-		(e-int @21.5-21.12 (value "-483648") (id 115))
-		(annotation @21.1-21.2 (signature 117) (id 118)
+	(d-let
+		(p-assign @21.1-21.2 (ident "h"))
+		(e-int @21.5-21.12 (value "-483648"))
+		(annotation @21.1-21.2
 			(declared-type
 				(ty @20.5-20.8 (name "I32")))))
-	(d-let (id 126)
-		(p-assign @24.1-24.2 (ident "i") (id 121))
-		(e-int @24.5-24.17 (value "-92233725808") (id 122))
-		(annotation @24.1-24.2 (signature 124) (id 125)
+	(d-let
+		(p-assign @24.1-24.2 (ident "i"))
+		(e-int @24.5-24.17 (value "-92233725808"))
+		(annotation @24.1-24.2
 			(declared-type
 				(ty @23.5-23.8 (name "I64")))))
-	(d-let (id 133)
-		(p-assign @27.1-27.2 (ident "j") (id 128))
-		(e-int @27.5-27.29 (value "-17011687303715884105728") (id 129))
-		(annotation @27.1-27.2 (signature 131) (id 132)
+	(d-let
+		(p-assign @27.1-27.2 (ident "j"))
+		(e-int @27.5-27.29 (value "-17011687303715884105728"))
+		(annotation @27.1-27.2
 			(declared-type
 				(ty @26.5-26.9 (name "I128"))))))
 ~~~
@@ -320,14 +320,14 @@ j = -17011687303715884105728
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "a") (def_var 79) (type "U8"))
-		(d_assign (name "b") (def_var 86) (type "U16"))
-		(d_assign (name "c") (def_var 93) (type "U32"))
-		(d_assign (name "e") (def_var 102) (type "Error"))
-		(d_assign (name "g") (def_var 112) (type "I16"))
-		(d_assign (name "h") (def_var 119) (type "I32"))
-		(d_assign (name "i") (def_var 126) (type "I64"))
-		(d_assign (name "j") (def_var 133) (type "I128")))
+		(d-assign @4.1-4.2 (type "U8"))
+		(d-assign @7.1-7.2 (type "U16"))
+		(d-assign @10.1-10.2 (type "U32"))
+		(d-assign @14.1-14.2 (type "Error"))
+		(d-assign @18.1-18.2 (type "I16"))
+		(d-assign @21.1-21.2 (type "I32"))
+		(d-assign @24.1-24.2 (type "I64"))
+		(d-assign @27.1-27.2 (type "I128")))
 	(expressions
 		(expr @4.5-4.8 (type "U8"))
 		(expr @7.5-7.10 (type "U16"))

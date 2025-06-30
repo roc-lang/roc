@@ -257,7 +257,7 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1.1-19.2 (id 147)
+(e-block @1.1-19.2
 	(s-expr @4.5-4.13
 		(e-tuple @4.5-4.11
 			(elems
@@ -315,7 +315,7 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 					(e-literal @13.33-13.38 (string "Alice")))
 				(e-string @13.41-13.48
 					(e-literal @13.42-13.47 (string "fixed")))
-				(e-tag @13.50-13.54 (ext-var 128) (name "True") (args "TODO")))))
+				(e-tag @13.50-13.54 (name "True") (args "TODO")))))
 	(s-expr @16.5-16.20
 		(e-tuple @16.5-16.18
 			(elems
@@ -324,7 +324,7 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 	(s-expr @16.21-18.6
 		(e-tuple @16.21-16.41
 			(elems
-				(e-list @16.22-16.31 (elem-var 138)
+				(e-list @16.22-16.31
 					(elems
 						(e-int @16.23-16.24 (value "1"))
 						(e-int @16.26-16.27 (value "2"))
@@ -335,5 +335,5 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 147) (type "{}"))
+(expr @1.1-19.2 (type "{}"))
 ~~~

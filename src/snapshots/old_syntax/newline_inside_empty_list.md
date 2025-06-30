@@ -25,9 +25,9 @@ CloseSquare(2:1-2:2),EndOfFile(2:2-2:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-empty_list @1.1-2.2 (id 73))
+(e-empty_list @1.1-2.2)
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 73) (type "List(*)"))
+(expr @1.1-2.2 (type "List(*)"))
 ~~~

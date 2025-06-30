@@ -84,29 +84,29 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 90)
-		(p-assign @8.1-8.6 (ident "main!") (id 74))
-		(e-lambda @8.9-12.2 (id 89)
+	(d-let
+		(p-assign @8.1-8.6 (ident "main!"))
+		(e-lambda @8.9-12.2
 			(args
-				(p-underscore @8.10-8.11 (id 75)))
+				(p-underscore @8.10-8.11))
 			(e-block @8.13-12.2
 				(s-let @9.2-9.17
-					(p-assign @9.2-9.7 (ident "world") (id 76))
-					(e-string @9.10-9.17 (id 78)
+					(p-assign @9.2-9.7 (ident "world"))
+					(e-string @9.10-9.17
 						(e-literal @9.11-9.16 (string "World"))))
 				(e-call @11.2-11.31
 					(e-lookup-external
-						(ext-decl @11.2-11.14 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value") (type-var 80)))
+						(ext-decl @11.2-11.14 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value")))
 					(e-string @11.15-11.30
 						(e-literal @11.16-11.29 (string "Hello, world!")))))))
-	(s-import @6.1-6.17 (module "pf.Stdout") (qualifier "pf") (id 73)
+	(s-import @6.1-6.17 (module "pf.Stdout") (qualifier "pf")
 		(exposes)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "main!") (def_var 90) (type "* ? *")))
+		(d-assign @8.1-8.6 (type "* ? *")))
 	(expressions
 		(expr @8.9-12.2 (type "* ? *"))))
 ~~~

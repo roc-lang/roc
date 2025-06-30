@@ -31,9 +31,9 @@ MEq
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tag @1.1-1.4 (ext-var 73) (name "MEq") (args "TODO") (id 74))
+(e-tag @1.1-1.4 (name "MEq") (args "TODO"))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 74) (type "[MEq]*"))
+(expr @1.1-1.4 (type "[MEq]*"))
 ~~~

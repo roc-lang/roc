@@ -192,19 +192,19 @@ t = 0
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 79)
-		(p-assign @4.5-4.6 (ident "t") (id 76))
-		(e-runtime-error (tag "expr_not_canonicalized") (id 78)))
-	(d-let (id 83)
-		(p-assign @7.5-7.6 (ident "t") (id 80))
-		(e-int @7.8-7.9 (value "0") (id 82))))
+	(d-let
+		(p-assign @4.5-4.6 (ident "t"))
+		(e-runtime-error (tag "expr_not_canonicalized")))
+	(d-let
+		(p-assign @7.5-7.6 (ident "t"))
+		(e-int @7.8-7.9 (value "0"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "t") (def_var 79) (type "Error"))
-		(d_assign (name "t") (def_var 83) (type "Num(*)")))
+		(d-assign @4.5-4.6 (type "Error"))
+		(d-assign @7.5-7.6 (type "Num(*)")))
 	(expressions
 		(expr @1.1-1.1 (type "Error"))
 		(expr @7.8-7.9 (type "Num(*)"))))

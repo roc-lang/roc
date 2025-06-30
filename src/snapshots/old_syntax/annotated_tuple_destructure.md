@@ -38,12 +38,12 @@ LowerIdent(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tuple @1.1-1.9 (id 77)
+(e-tuple @1.1-1.9
 	(elems
 		(e-runtime-error (tag "ident_not_in_scope"))
 		(e-runtime-error (tag "ident_not_in_scope"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 77) (type "(Error, Error)"))
+(expr @1.1-1.9 (type "(Error, Error)"))
 ~~~

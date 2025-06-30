@@ -43,10 +43,10 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-type-decl @3.1-4.9 (id 75)
+	(s-type-decl @3.1-4.9
 		(ty-header @3.1-3.9 (name "MyNumber"))
 		(ty @3.12-3.15 (name "U64")))
-	(s-type-decl @4.1-4.15 (id 78)
+	(s-type-decl @4.1-4.15
 		(ty-header @4.1-4.9 (name "MyString"))
 		(ty @4.12-4.15 (name "Str"))))
 ~~~

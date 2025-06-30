@@ -29,17 +29,17 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-lambda @1.1-1.13 (id 79)
+(e-lambda @1.1-1.13
 	(args
-		(p-assign @1.2-1.3 (ident "x") (id 73))
-		(p-assign @1.5-1.6 (ident "y") (id 74)))
+		(p-assign @1.2-1.3 (ident "x"))
+		(p-assign @1.5-1.6 (ident "y")))
 	(e-binop @1.8-1.13 (op "add")
 		(e-lookup-local @1.8-1.9
-			(pattern (id 73)))
+			(pattern @1.2-1.3))
 		(e-lookup-local @1.12-1.13
-			(pattern (id 74)))))
+			(pattern @1.5-1.6))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 79) (type "*, * ? *"))
+(expr @1.1-1.13 (type "*, * ? *"))
 ~~~

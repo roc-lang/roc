@@ -44,7 +44,7 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-record @1.1-5.2 (id 82)
+(e-record @1.1-5.2
 	(fields
 		(field (name "field_with_underscores")
 			(e-string @2.29-2.41
@@ -58,5 +58,5 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 82) (type "{ field_with_underscores: Str, field123: Str, camelCase: Str }"))
+(expr @1.1-5.2 (type "{ field_with_underscores: Str, field123: Str, camelCase: Str }"))
 ~~~

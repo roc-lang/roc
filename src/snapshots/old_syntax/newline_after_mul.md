@@ -28,11 +28,11 @@ Int(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop @1.1-2.4 (op "mul") (id 75)
+(e-binop @1.1-2.4 (op "mul")
 	(e-int @1.1-1.2 (value "3"))
 	(e-int @2.3-2.4 (value "4")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 75) (type "*"))
+(expr @1.1-2.4 (type "*"))
 ~~~

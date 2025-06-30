@@ -92,25 +92,25 @@ main! = |_| {}
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 104)
-		(p-assign @6.1-6.10 (ident "printName") (id 81))
-		(e-lambda @6.13-9.2 (id 94)
+	(d-let
+		(p-assign @6.1-6.10 (ident "printName"))
+		(e-lambda @6.13-9.2
 			(args
-				(p-assign @6.14-6.20 (ident "person") (id 82)))
+				(p-assign @6.14-6.20 (ident "person")))
 			(e-block @6.22-9.2
 				(s-expr @7.5-8.11
 					(e-call @7.5-7.30
 						(e-lookup-external
-							(ext-decl @7.5-7.17 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value") (type-var 83)))
+							(ext-decl @7.5-7.17 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value")))
 						(e-dot-access @7.18-7.30 (field "name")
 							(receiver
 								(e-lookup-local @7.18-7.24
-									(pattern (id 82)))))))
+									(pattern @6.14-6.20))))))
 				(e-dot-access @8.5-9.2 (field "name")
 					(receiver
 						(e-lookup-local @8.5-8.11
-							(pattern (id 82)))))))
-		(annotation @6.1-6.10 (signature 102) (id 103)
+							(pattern @6.14-6.20))))))
+		(annotation @6.1-6.10
 			(declared-type
 				(ty-fn @5.13-5.43 (effectful true)
 					(ty-record @5.13-5.36
@@ -119,21 +119,21 @@ main! = |_| {}
 						(field (field "age")
 							(ty @5.31-5.34 (name "U64"))))
 					(ty @5.40-5.43 (name "Str"))))))
-	(d-let (id 110)
-		(p-assign @10.1-10.6 (ident "main!") (id 105))
-		(e-lambda @10.9-10.15 (id 109)
+	(d-let
+		(p-assign @10.1-10.6 (ident "main!"))
+		(e-lambda @10.9-10.15
 			(args
-				(p-underscore @10.10-10.11 (id 106)))
+				(p-underscore @10.10-10.11))
 			(e-empty_record @10.13-10.15)))
-	(s-import @3.1-3.17 (module "pf.Stdout") (qualifier "pf") (id 73)
+	(s-import @3.1-3.17 (module "pf.Stdout") (qualifier "pf")
 		(exposes)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "printName") (def_var 104) (type "{ name: Str, age: U64 } => Str"))
-		(d_assign (name "main!") (def_var 110) (type "* ? {}")))
+		(d-assign @6.1-6.10 (type "{ name: Str, age: U64 } => Str"))
+		(d-assign @10.1-10.6 (type "* ? {}")))
 	(expressions
 		(expr @6.13-9.2 (type "{ name: Str, age: U64 } => Str"))
 		(expr @10.9-10.15 (type "* ? {}"))))

@@ -35,9 +35,9 @@ Pair
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tag @1.1-1.5 (ext-var 73) (name "Pair") (args "TODO") (id 74))
+(e-tag @1.1-1.5 (name "Pair") (args "TODO"))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 74) (type "[Pair]*"))
+(expr @1.1-1.5 (type "[Pair]*"))
 ~~~

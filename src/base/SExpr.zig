@@ -236,18 +236,6 @@ pub fn appendStringAttr(self: *SExpr, gpa: Allocator, key: []const u8, string: [
     self.addAttribute(gpa, key, .{ .string = owned_string });
 }
 
-/// Append a node index
-pub fn appendIdx(self: *SExpr, gpa: Allocator, node_idx: anytype) void {
-    const node_idx_u32 = @intFromEnum(node_idx);
-    self.addAttribute(gpa, "id", .{ .node_idx = node_idx_u32 });
-}
-
-/// Append a type variable attribute in the format :key=#123
-pub fn appendTypeVar(self: *SExpr, gpa: Allocator, key: []const u8, type_var: anytype) void {
-    const var_value = @intFromEnum(type_var);
-    self.addAttribute(gpa, key, .{ .node_idx = var_value });
-}
-
 /// Append a boolean attribute in the format :key=true/false
 pub fn appendBoolAttr(self: *SExpr, gpa: Allocator, key: []const u8, value: bool) void {
     self.addAttribute(gpa, key, .{ .boolean = value });

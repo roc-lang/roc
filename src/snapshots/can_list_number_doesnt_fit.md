@@ -31,7 +31,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-list @1.1-1.16 (elem-var 74) (id 78)
+(e-list @1.1-1.16
 	(elems
 		(e-runtime-error (tag "invalid_num_literal"))
 		(e-runtime-error (tag "invalid_num_literal"))
@@ -39,5 +39,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 78) (type "List(Error)"))
+(expr @1.1-1.16 (type "List(Error)"))
 ~~~

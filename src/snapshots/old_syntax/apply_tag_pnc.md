@@ -26,12 +26,12 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call @1.1-1.13 (id 78)
-	(e-tag @1.1-1.5 (ext-var 73) (name "Whee") (args "TODO"))
+(e-call @1.1-1.13
+	(e-tag @1.1-1.5 (name "Whee") (args "TODO"))
 	(e-int @1.6-1.8 (value "12"))
 	(e-int @1.10-1.12 (value "34")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 78) (type "*"))
+(expr @1.1-1.13 (type "*"))
 ~~~

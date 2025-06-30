@@ -61,7 +61,7 @@ if
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-if @1.1-4.7 (id 80)
+(e-if @1.1-4.7
 	(if-branches
 		(if-branch
 			(e-runtime-error (tag "ident_not_in_scope"))
@@ -71,5 +71,5 @@ if
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 80) (type "Error"))
+(expr @1.1-4.7 (type "Error"))
 ~~~

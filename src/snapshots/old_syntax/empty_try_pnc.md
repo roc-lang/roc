@@ -27,10 +27,10 @@ try()
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call @1.1-1.6 (id 76)
+(e-call @1.1-1.6
 	(e-runtime-error (tag "ident_not_in_scope")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 76) (type "*"))
+(expr @1.1-1.6 (type "*"))
 ~~~

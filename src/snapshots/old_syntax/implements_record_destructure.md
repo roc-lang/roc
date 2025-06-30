@@ -38,10 +38,10 @@ UpperIdent(2:1-2:2),EndOfFile(2:2-2:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1.1-1.13 (id 74)
+(e-block @1.1-1.13
 	(e-empty_record @1.1-1.13))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 74) (type "{}"))
+(expr @1.1-1.13 (type "{}"))
 ~~~

@@ -305,7 +305,7 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1.1-8.2 (id 94)
+(e-block @1.1-8.2
 	(s-type-anno @3.5-3.25 (name "when")
 		(ty-malformed @3.11-3.25))
 	(s-expr @4.13-4.30
@@ -322,5 +322,5 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 94) (type "{}"))
+(expr @1.1-8.2 (type "{}"))
 ~~~

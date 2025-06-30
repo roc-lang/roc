@@ -29,12 +29,12 @@ whee(12, 34)
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call @1.1-1.14 (id 78)
+(e-call @1.1-1.14
 	(e-runtime-error (tag "ident_not_in_scope"))
 	(e-int @1.6-1.8 (value "12"))
 	(e-int @1.11-1.13 (value "34")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 78) (type "*"))
+(expr @1.1-1.14 (type "*"))
 ~~~

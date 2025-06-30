@@ -99,7 +99,7 @@ if "" then - p
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-if @1.1-2.18 (id 91)
+(e-if @1.1-2.18
 	(if-branches
 		(if-branch
 			(e-string @1.3-1.5
@@ -118,5 +118,5 @@ if "" then - p
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 91) (type "Error"))
+(expr @1.1-2.18 (type "Error"))
 ~~~

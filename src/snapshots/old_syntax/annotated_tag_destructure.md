@@ -29,9 +29,9 @@ UserId
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tag @1.1-1.7 (ext-var 73) (name "UserId") (args "TODO") (id 74))
+(e-tag @1.1-1.7 (name "UserId") (args "TODO"))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 74) (type "[UserId]*"))
+(expr @1.1-1.7 (type "[UserId]*"))
 ~~~

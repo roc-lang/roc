@@ -32,11 +32,11 @@ x - y
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop @1.1-1.5 (op "sub") (id 77)
+(e-binop @1.1-1.5 (op "sub")
 	(e-runtime-error (tag "ident_not_in_scope"))
 	(e-runtime-error (tag "ident_not_in_scope")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 77) (type "*"))
+(expr @1.1-1.5 (type "*"))
 ~~~

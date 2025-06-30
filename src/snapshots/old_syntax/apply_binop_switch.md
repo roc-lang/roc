@@ -30,11 +30,11 @@ i < 2
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop @1.1-2.2 (op "lt") (id 76)
+(e-binop @1.1-2.2 (op "lt")
 	(e-runtime-error (tag "ident_not_in_scope"))
 	(e-int @1.3-1.4 (value "2")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 76) (type "*"))
+(expr @1.1-2.2 (type "*"))
 ~~~

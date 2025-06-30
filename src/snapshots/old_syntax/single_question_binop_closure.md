@@ -46,9 +46,9 @@ fallible!(args) ? |my_err|
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "not_implemented") (id 86))
+(e-runtime-error (tag "not_implemented"))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 86) (type "Error"))
+(expr @1.1-2.15 (type "Error"))
 ~~~

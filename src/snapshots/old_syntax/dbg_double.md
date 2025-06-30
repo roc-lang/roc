@@ -28,9 +28,9 @@ dbg dbg g
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "not_implemented") (id 74))
+(e-runtime-error (tag "not_implemented"))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 74) (type "Error"))
+(expr @1.1-1.1 (type "Error"))
 ~~~

@@ -26,10 +26,10 @@ OpPizza(2:8-2:10),LowerIdent(2:11-2:14),UpperIdent(2:15-2:18),NoSpaceDotLowerIde
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-string @1.1-1.6 (id 74)
+(e-string @1.1-1.6
 	(e-literal @1.2-1.5 (string "123")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 74) (type "Str"))
+(expr @1.1-1.6 (type "Str"))
 ~~~

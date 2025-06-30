@@ -24,11 +24,11 @@ OpenSquare(1:1-1:2),Int(1:3-1:4),CloseSquare(1:5-1:6),EndOfFile(1:6-1:6),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-list @1.1-1.6 (elem-var 73) (id 74)
+(e-list @1.1-1.6
 	(elems
 		(e-int @1.3-1.4 (value "1"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 74) (type "List(Num(*))"))
+(expr @1.1-1.6 (type "List(Num(*))"))
 ~~~

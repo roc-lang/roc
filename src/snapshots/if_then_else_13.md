@@ -45,7 +45,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-if @1.1-7.4 (id 80)
+(e-if @1.1-7.4
 	(if-branches
 		(if-branch
 			(e-runtime-error (tag "ident_not_in_scope"))
@@ -57,5 +57,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 80) (type "Num(*)"))
+(expr @1.1-7.4 (type "Num(*)"))
 ~~~

@@ -47,22 +47,22 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1.1-5.2 (id 84)
+(e-block @1.1-5.2
 	(s-let @2.5-2.11
-		(p-assign @2.5-2.6 (ident "x") (id 73))
-		(e-int @2.9-2.11 (value "42") (id 74)))
+		(p-assign @2.5-2.6 (ident "x"))
+		(e-int @2.9-2.11 (value "42")))
 	(s-let @3.5-4.6
-		(p-assign @3.5-3.6 (ident "y") (id 76))
-		(e-binop @3.9-4.6 (op "add") (id 79)
+		(p-assign @3.5-3.6 (ident "y"))
+		(e-binop @3.9-4.6 (op "add")
 			(e-lookup-local @3.9-3.10
-				(pattern (id 73)))
+				(pattern @2.5-2.6))
 			(e-int @3.13-3.14 (value "1"))))
 	(e-binop @4.5-5.2 (op "mul")
 		(e-lookup-local @4.5-4.6
-			(pattern (id 76)))
+			(pattern @3.5-3.6))
 		(e-int @4.9-4.10 (value "2"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 84) (type "*"))
+(expr @1.1-5.2 (type "*"))
 ~~~

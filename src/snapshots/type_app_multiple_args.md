@@ -78,13 +78,13 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 90)
-		(p-assign @4.1-4.12 (ident "processDict") (id 79))
-		(e-lambda @4.15-4.25 (id 83)
+	(d-let
+		(p-assign @4.1-4.12 (ident "processDict"))
+		(e-lambda @4.15-4.25
 			(args
-				(p-assign @4.16-4.21 (ident "_dict") (id 80)))
+				(p-assign @4.16-4.21 (ident "_dict")))
 			(e-empty_list @4.23-4.25))
-		(annotation @4.1-4.12 (signature 88) (id 89)
+		(annotation @4.1-4.12
 			(declared-type
 				(ty-fn @3.15-3.42 (effectful false)
 					(ty-apply @3.15-3.29 (symbol "Dict")
@@ -92,14 +92,14 @@ NO CHANGE
 						(ty @3.25-3.28 (name "U64")))
 					(ty-apply @3.33-3.42 (symbol "List")
 						(ty @3.38-3.41 (name "Str")))))))
-	(d-let (id 106)
-		(p-assign @6.1-6.6 (ident "main!") (id 91))
-		(e-lambda @6.9-6.55 (id 105)
+	(d-let
+		(p-assign @6.1-6.6 (ident "main!"))
+		(e-lambda @6.9-6.55
 			(args
-				(p-underscore @6.10-6.11 (id 92)))
+				(p-underscore @6.10-6.11))
 			(e-call @6.13-6.55
 				(e-lookup-local @6.13-6.24
-					(pattern (id 79)))
+					(pattern @4.1-4.12))
 				(e-dot-access @6.25-6.55 (field "insert")
 					(receiver
 						(e-call @6.25-6.37
@@ -113,8 +113,8 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "processDict") (def_var 90) (type "Dict -> List(*)"))
-		(d_assign (name "main!") (def_var 106) (type "* ? *")))
+		(d-assign @4.1-4.12 (type "Dict -> List(*)"))
+		(d-assign @6.1-6.6 (type "* ? *")))
 	(expressions
 		(expr @4.15-4.25 (type "Dict -> List(*)"))
 		(expr @6.9-6.55 (type "* ? *"))))

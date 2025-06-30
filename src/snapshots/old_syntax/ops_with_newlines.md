@@ -34,11 +34,11 @@ Int(4:3-4:4),EndOfFile(4:4-4:4),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop @1.1-4.4 (op "add") (id 75)
+(e-binop @1.1-4.4 (op "add")
 	(e-int @1.1-1.2 (value "3"))
 	(e-int @4.3-4.4 (value "4")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 75) (type "*"))
+(expr @1.1-4.4 (type "*"))
 ~~~

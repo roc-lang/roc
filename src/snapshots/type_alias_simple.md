@@ -91,11 +91,11 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 99)
-		(p-assign @6.1-6.8 (ident "getUser") (id 79))
-		(e-lambda @1.1-1.1 (id 92)
+	(d-let
+		(p-assign @6.1-6.8 (ident "getUser"))
+		(e-lambda @1.1-1.1
 			(args
-				(p-assign @6.12-6.14 (ident "id") (id 80)))
+				(p-assign @6.12-6.14 (ident "id")))
 			(e-if @1.1-1.1
 				(if-branches
 					(if-branch
@@ -103,28 +103,28 @@ NO CHANGE
 							(elems
 								(e-binop @6.20-6.28 (op "gt")
 									(e-lookup-local @6.20-6.22
-										(pattern (id 80)))
+										(pattern @6.12-6.14))
 									(e-int @6.25-6.27 (value "10")))))
 						(e-string @6.29-6.34
 							(e-literal @6.30-6.33 (string "big")))))
 				(if-else
 					(e-string @6.40-6.47
 						(e-literal @6.41-6.46 (string "small"))))))
-		(annotation @6.1-6.8 (signature 97) (id 98)
+		(annotation @6.1-6.8
 			(declared-type
 				(ty-fn @5.11-5.24 (effectful false)
 					(ty @5.11-5.17 (name "UserId"))
 					(ty @5.21-5.24 (name "Str"))))))
-	(d-let (id 108)
-		(p-assign @8.1-8.6 (ident "main!") (id 100))
-		(e-lambda @8.9-8.25 (id 107)
+	(d-let
+		(p-assign @8.1-8.6 (ident "main!"))
+		(e-lambda @8.9-8.25
 			(args
-				(p-underscore @8.10-8.11 (id 101)))
+				(p-underscore @8.10-8.11))
 			(e-call @8.13-8.25
 				(e-lookup-local @8.13-8.20
-					(pattern (id 79)))
+					(pattern @6.1-6.8))
 				(e-int @8.21-8.24 (value "100")))))
-	(s-type-decl @3.1-5.8 (id 75)
+	(s-type-decl @3.1-5.8
 		(ty-header @3.1-3.7 (name "UserId"))
 		(ty @3.10-3.13 (name "U64"))))
 ~~~
@@ -132,8 +132,8 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "getUser") (def_var 99) (type "UserId -> Str"))
-		(d_assign (name "main!") (def_var 108) (type "* ? *")))
+		(d-assign @6.1-6.8 (type "UserId -> Str"))
+		(d-assign @8.1-8.6 (type "* ? *")))
 	(expressions
 		(expr @1.1-1.1 (type "UserId -> Str"))
 		(expr @8.9-8.25 (type "* ? *"))))

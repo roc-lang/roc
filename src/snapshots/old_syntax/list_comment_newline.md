@@ -33,11 +33,11 @@ CloseSquare(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-list @1.1-4.2 (elem-var 74) (id 75)
+(e-list @1.1-4.2
 	(elems
-		(e-tag @1.2-1.3 (ext-var 73) (name "L") (args "TODO"))))
+		(e-tag @1.2-1.3 (name "L") (args "TODO"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 75) (type "List([L]*)"))
+(expr @1.1-4.2 (type "List([L]*)"))
 ~~~

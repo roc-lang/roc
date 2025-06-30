@@ -44,11 +44,11 @@ Stdout.line ??
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop @1.1-1.15 (op "null_coalesce") (id 77)
+(e-binop @1.1-1.15 (op "null_coalesce")
 	(e-runtime-error (tag "ident_not_in_scope"))
 	(e-runtime-error (tag "expr_not_canonicalized")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 77) (type "*"))
+(expr @1.1-1.15 (type "*"))
 ~~~

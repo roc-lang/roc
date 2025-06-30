@@ -30,11 +30,11 @@ CloseSquare(3:1-3:2),EndOfFile(3:2-3:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-list @1.1-3.2 (elem-var 73) (id 74)
+(e-list @1.1-3.2
 	(elems
 		(e-int @2.1-2.2 (value "1"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 74) (type "List(Num(*))"))
+(expr @1.1-3.2 (type "List(Num(*))"))
 ~~~

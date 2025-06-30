@@ -1324,33 +1324,33 @@ main! = |_| { # Yeah Ie
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 164)
-		(p-assign @45.1-45.4 (ident "ane") (id 155))
-		(e-lambda @45.7-47.8 (id 163)
+	(d-let
+		(p-assign @45.1-45.4 (ident "ane"))
+		(e-lambda @45.7-47.8
 			(args
-				(p-assign @45.8-45.11 (ident "num") (id 156)))
+				(p-assign @45.8-45.11 (ident "num")))
 			(e-if @45.13-47.8
 				(if-branches
 					(if-branch
 						(e-lookup-local @45.16-45.19
-							(pattern (id 156)))
+							(pattern @45.8-45.11))
 						(e-int @45.20-45.21 (value "2"))))
 				(if-else
 					(e-int @45.27-45.28 (value "5"))))))
-	(d-let (id 195)
-		(p-assign @48.1-48.8 (ident "add_one") (id 168))
-		(e-lambda @48.11-58.2 (id 188)
+	(d-let
+		(p-assign @48.1-48.8 (ident "add_one"))
+		(e-lambda @48.11-58.2
 			(args
-				(p-assign @48.12-48.15 (ident "num") (id 169)))
+				(p-assign @48.12-48.15 (ident "num")))
 			(e-block @48.17-58.2
 				(s-let @49.2-49.11
-					(p-assign @49.2-49.7 (ident "other") (id 170))
-					(e-int @49.10-49.11 (value "1") (id 171)))
+					(p-assign @49.2-49.7 (ident "other"))
+					(e-int @49.10-49.11 (value "1")))
 				(e-if @50.2-58.2
 					(if-branches
 						(if-branch
 							(e-lookup-local @50.5-50.8
-								(pattern (id 169)))
+								(pattern @48.12-48.15))
 							(e-block @50.9-54.3
 								(s-expr @51.3-53.4
 									(e-runtime-error (tag "not_implemented")))
@@ -1360,67 +1360,67 @@ main! = |_| { # Yeah Ie
 							(s-expr @55.3-56.8
 								(e-runtime-error (tag "not_implemented")))
 							(e-lookup-local @56.3-56.8
-								(pattern (id 170))))))))
-		(annotation @48.1-48.8 (signature 193) (id 194)
+								(pattern @49.2-49.7)))))))
+		(annotation @48.1-48.8
 			(declared-type
 				(ty-fn @47.11-47.21 (effectful false)
 					(ty @47.11-47.14 (name "U64"))
 					(ty @47.18-47.21 (name "U64"))))))
-	(d-let (id 205)
-		(p-assign @60.1-60.11 (ident "match_time") (id 196))
-		(e-lambda @60.14-96.7 (id 202)
+	(d-let
+		(p-assign @60.1-60.11 (ident "match_time"))
+		(e-lambda @60.14-96.7
 			(args
-				(p-assign @61.2-61.3 (ident "a") (id 197))
-				(p-assign @62.2-62.3 (ident "b") (id 198)))
+				(p-assign @61.2-61.3 (ident "a"))
+				(p-assign @62.2-62.3 (ident "b")))
 			(e-runtime-error (tag "not_implemented"))))
-	(d-let (id 416)
-		(p-assign @100.1-100.6 (ident "main!") (id 214))
-		(e-lambda @100.9-159.2 (id 409)
+	(d-let
+		(p-assign @100.1-100.6 (ident "main!"))
+		(e-lambda @100.9-159.2
 			(args
-				(p-underscore @100.10-100.11 (id 215)))
+				(p-underscore @100.10-100.11))
 			(e-block @100.13-159.2
 				(s-let @101.2-101.17
-					(p-assign @101.2-101.7 (ident "world") (id 216))
-					(e-string @101.10-101.17 (id 218)
+					(p-assign @101.2-101.7 (ident "world"))
+					(e-string @101.10-101.17
 						(e-literal @101.11-101.16 (string "World"))))
 				(s-var @102.2-103.8
-					(p-assign @102.2-103.8 (ident "number") (id 221))
-					(e-int @102.15-102.18 (value "123") (id 220)))
+					(p-assign @102.2-103.8 (ident "number"))
+					(e-int @102.15-102.18 (value "123")))
 				(s-let @104.2-104.12
-					(p-assign @104.2-104.5 (ident "tag") (id 225))
-					(e-tag @104.8-104.12 (ext-var 226) (name "Blue") (args "TODO") (id 227)))
+					(p-assign @104.2-104.5 (ident "tag"))
+					(e-tag @104.8-104.12 (name "Blue") (args "TODO")))
 				(s-expr @110.2-111.12
 					(e-runtime-error (tag "not_implemented")))
 				(s-expr @111.2-114.11
 					(e-call @111.2-113.3
 						(e-lookup-local @111.2-111.12
-							(pattern (id 196)))
+							(pattern @60.1-60.11))
 						(e-runtime-error (tag "not_implemented"))))
 				(s-expr @114.2-118.7
 					(e-call @114.2-117.3
 						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-runtime-error (tag "not_implemented"))))
 				(s-let @119.2-119.23
-					(p-assign @119.2-119.10 (ident "tag_with") (id 249))
-					(e-call @119.13-119.23 (id 254)
-						(e-tag @119.13-119.15 (ext-var 250) (name "Ok") (args "TODO"))
+					(p-assign @119.2-119.10 (ident "tag_with"))
+					(e-call @119.13-119.23
+						(e-tag @119.13-119.15 (name "Ok") (args "TODO"))
 						(e-lookup-local @119.16-119.22
-							(pattern (id 221)))))
+							(pattern @102.2-103.8))))
 				(s-let @120.2-120.26
-					(p-assign @120.2-120.6 (ident "ited") (id 256))
-					(e-string @120.9-120.26 (id 260)
+					(p-assign @120.2-120.6 (ident "ited"))
+					(e-string @120.9-120.26
 						(e-literal @120.10-120.17 (string "Hello, "))
 						(e-lookup-local @120.19-120.24
-							(pattern (id 216)))
+							(pattern @101.2-101.7))
 						(e-literal @120.25-120.25 (string ""))))
 				(s-let @121.2-125.4
-					(p-assign @121.2-121.6 (ident "list") (id 262))
-					(e-empty_list @121.9-125.4 (id 263)))
+					(p-assign @121.2-121.6 (ident "list"))
+					(e-empty_list @121.9-125.4))
 				(s-expr @125.6-125.10
 					(e-int @125.6-125.9 (value "456")))
 				(s-let @131.2-131.71
-					(p-assign @131.2-131.8 (ident "record") (id 269))
-					(e-record @131.11-131.71 (id 286)
+					(p-assign @131.2-131.8 (ident "record"))
+					(e-record @131.11-131.71
 						(fields
 							(field (name "foo")
 								(e-int @131.18-131.21 (value "123")))
@@ -1429,67 +1429,67 @@ main! = |_| { # Yeah Ie
 									(e-literal @131.29-131.34 (string "Hello"))))
 							(field (name "baz")
 								(e-lookup-local @131.42-131.45
-									(pattern (id 225))))
+									(pattern @104.2-104.5)))
 							(field (name "qux")
 								(e-call @131.52-131.61
-									(e-tag @131.52-131.54 (ext-var 277) (name "Ok") (args "TODO"))
+									(e-tag @131.52-131.54 (name "Ok") (args "TODO"))
 									(e-lookup-local @131.55-131.60
-										(pattern (id 216)))))
+										(pattern @101.2-101.7))))
 							(field (name "punned")
 								(e-runtime-error (tag "ident_not_in_scope"))))))
 				(s-let @132.2-132.68
-					(p-assign @132.2-132.7 (ident "tuple") (id 288))
-					(e-tuple @132.10-132.68 (id 306)
+					(p-assign @132.2-132.7 (ident "tuple"))
+					(e-tuple @132.10-132.68
 						(elems
 							(e-int @132.11-132.14 (value "123"))
 							(e-string @132.16-132.23
 								(e-literal @132.17-132.22 (string "World")))
 							(e-lookup-local @132.25-132.28
-								(pattern (id 225)))
+								(pattern @104.2-104.5))
 							(e-call @132.30-132.39
-								(e-tag @132.30-132.32 (ext-var 293) (name "Ok") (args "TODO"))
+								(e-tag @132.30-132.32 (name "Ok") (args "TODO"))
 								(e-lookup-local @132.33-132.38
-									(pattern (id 216))))
+									(pattern @101.2-101.7)))
 							(e-tuple @132.41-132.56
 								(elems
 									(e-runtime-error (tag "ident_not_in_scope"))
 									(e-lookup-local @132.50-132.55
-										(pattern (id 288)))))
-							(e-list @132.58-132.67 (elem-var 302)
+										(pattern @132.2-132.7))))
+							(e-list @132.58-132.67
 								(elems
 									(e-int @132.59-132.60 (value "1"))
 									(e-int @132.62-132.63 (value "2"))
 									(e-int @132.65-132.66 (value "3")))))))
 				(s-let @133.2-140.3
-					(p-assign @133.2-133.9 (ident "m_tuple") (id 308))
-					(e-tuple @133.12-140.3 (id 327)
+					(p-assign @133.2-133.9 (ident "m_tuple"))
+					(e-tuple @133.12-140.3
 						(elems
 							(e-int @134.3-134.6 (value "123"))
 							(e-string @135.3-135.10
 								(e-literal @135.4-135.9 (string "World")))
 							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-call @137.3-137.12
-								(e-tag @137.3-137.5 (ext-var 314) (name "Ok") (args "TODO"))
+								(e-tag @137.3-137.5 (name "Ok") (args "TODO"))
 								(e-lookup-local @137.6-137.11
-									(pattern (id 216))))
+									(pattern @101.2-101.7)))
 							(e-tuple @138.3-138.18
 								(elems
 									(e-runtime-error (tag "ident_not_in_scope"))
 									(e-lookup-local @138.12-138.17
-										(pattern (id 288)))))
-							(e-list @139.3-139.12 (elem-var 323)
+										(pattern @132.2-132.7))))
+							(e-list @139.3-139.12
 								(elems
 									(e-int @139.4-139.5 (value "1"))
 									(e-int @139.7-139.8 (value "2"))
 									(e-int @139.10-139.11 (value "3")))))))
 				(s-let @141.2-142.7
-					(p-assign @141.2-141.7 (ident "bsult") (id 329))
-					(e-binop @141.10-142.7 (op "or") (id 359)
+					(p-assign @141.2-141.7 (ident "bsult"))
+					(e-binop @141.10-142.7 (op "or")
 						(e-binop @141.10-141.66 (op "or")
 							(e-binop @141.10-141.35 (op "gt")
 								(e-binop @141.10-141.26 (op "null_coalesce")
 									(e-call @141.10-141.18
-										(e-tag @141.10-141.13 (ext-var 330) (name "Err") (args "TODO"))
+										(e-tag @141.10-141.13 (name "Err") (args "TODO"))
 										(e-runtime-error (tag "ident_not_in_scope")))
 									(e-int @141.22-141.24 (value "12")))
 								(e-binop @141.27-141.35 (op "mul")
@@ -1512,8 +1512,8 @@ main! = |_| { # Yeah Ie
 								(e-int @141.73-141.74 (value "3"))
 								(e-int @141.77-141.78 (value "5"))))))
 				(s-let @142.2-143.11
-					(p-assign @142.2-142.7 (ident "stale") (id 361))
-					(e-dot-access @142.10-143.11 (field "unknown") (id 366)
+					(p-assign @142.2-142.7 (ident "stale"))
+					(e-dot-access @142.10-143.11 (field "unknown")
 						(receiver
 							(e-dot-access @142.10-142.46 (field "unknown")
 								(receiver
@@ -1522,19 +1522,19 @@ main! = |_| { # Yeah Ie
 											(e-runtime-error (tag "not_implemented")))))))))
 				(s-expr @143.2-148.2
 					(e-call @143.2-147.3
-						(e-tag @143.2-143.11 (ext-var 368) (name "Stdoline!") (args "TODO"))
+						(e-tag @143.2-143.11 (name "Stdoline!") (args "TODO"))
 						(e-string @144.3-146.10
 							(e-literal @144.4-144.14 (string "How about "))
 							(e-call @145.4-145.21
 								(e-runtime-error (tag "ident_not_in_scope"))
 								(e-lookup-local @145.14-145.20
-									(pattern (id 221))))
+									(pattern @102.2-103.8)))
 							(e-literal @146.4-146.9 (string " as a")))))
 				(s-type-anno @150.1-151.6 (name "empty")
 					(ty-record @150.9-150.11))
 				(s-let @151.1-151.11
-					(p-assign @151.1-151.6 (ident "empty") (id 384))
-					(e-empty_record @151.9-151.11 (id 385)))
+					(p-assign @151.1-151.6 (ident "empty"))
+					(e-empty_record @151.9-151.11))
 				(s-type-anno @153.1-155.7 (name "tuple")
 					(ty-apply @153.9-153.25 (symbol "Value")
 						(ty-tuple @153.15-153.24
@@ -1542,7 +1542,7 @@ main! = |_| { # Yeah Ie
 							(ty-var @153.19-153.20 (name "b"))
 							(ty-var @153.22-153.23 (name "c")))))
 				(e-runtime-error (tag "not_implemented"))))
-		(annotation @100.1-100.6 (signature 414) (id 415)
+		(annotation @100.1-100.6
 			(declared-type
 				(ty-fn @99.9-99.38 (effectful false)
 					(ty-apply @99.9-99.21 (symbol "List")
@@ -1550,7 +1550,7 @@ main! = |_| { # Yeah Ie
 					(ty-apply @99.25-99.38 (symbol "Result")
 						(ty-record @99.32-99.34)
 						(ty-underscore @99.36-99.37))))))
-	(s-type-decl @15.1-16.6 (id 85)
+	(s-type-decl @15.1-16.6
 		(ty-header @15.1-15.10 (name "Map")
 			(ty-args
 				(ty-var @15.5-15.6 (name "a"))
@@ -1564,7 +1564,7 @@ main! = |_| { # Yeah Ie
 					(ty-var @15.28-15.29 (name "b"))))
 			(ty-apply @15.34-15.41 (symbol "List")
 				(ty-var @15.39-15.40 (name "b")))))
-	(s-type-decl @16.1-26.4 (id 97)
+	(s-type-decl @16.1-26.4
 		(ty-header @16.1-19.2 (name "MapML")
 			(ty-args
 				(ty-var @17.2-17.3 (name "a"))
@@ -1577,12 +1577,12 @@ main! = |_| { # Yeah Ie
 					(ty-var @23.9-23.10 (name "b"))))
 			(ty-apply @24.4-24.15 (symbol "List")
 				(ty-var @24.12-24.13 (name "b")))))
-	(s-type-decl @26.1-28.5 (id 104)
+	(s-type-decl @26.1-28.5
 		(ty-header @26.1-26.4 (name "Foo"))
 		(ty-tuple @26.7-26.17
 			(ty @26.8-26.11 (name "Bar"))
 			(ty @26.13-26.16 (name "Baz"))))
-	(s-type-decl @32.1-33.3 (id 114)
+	(s-type-decl @32.1-33.3
 		(ty-header @32.1-32.8 (name "Some")
 			(ty-args
 				(ty-var @32.6-32.7 (name "a"))))
@@ -1592,24 +1592,24 @@ main! = |_| { # Yeah Ie
 					(ty-var @32.22-32.23 (name "a"))))
 			(field (field "bar")
 				(ty-var @32.32-32.33 (name "g")))))
-	(s-type-decl @33.1-37.6 (id 121)
+	(s-type-decl @33.1-37.6
 		(ty-header @33.1-33.6 (name "Ml")
 			(ty-args
 				(ty-var @33.4-33.5 (name "a"))))
 		(ty-record @33.9-35.2
 			(field (field "bar")
 				(ty @34.8-34.11 (name "Som")))))
-	(s-type-decl @37.1-40.5 (id 128)
+	(s-type-decl @37.1-40.5
 		(ty-header @37.1-37.9 (name "Soine")
 			(ty-args
 				(ty-var @37.7-37.8 (name "a"))))
 		(ty-record @37.12-39.2
 			(field (field "bar")
 				(ty @38.8-38.11 (name "Som")))))
-	(s-type-decl @40.1-43.5 (id 131)
+	(s-type-decl @40.1-43.5
 		(ty-header @40.1-40.5 (name "Maya"))
 		(ty-tag-union @40.9-41.2))
-	(s-type-decl @43.1-45.4 (id 140)
+	(s-type-decl @43.1-45.4
 		(ty-header @43.1-43.8 (name "Func")
 			(ty-args
 				(ty-var @43.6-43.7 (name "a"))))
@@ -1619,29 +1619,29 @@ main! = |_| { # Yeah Ie
 			(ty-var @43.21-43.22 (name "a"))
 			(ty-apply @43.26-43.34 (symbol "Maybe")
 				(ty-var @43.32-43.33 (name "a")))))
-	(s-import @4.1-4.38 (module "pf.Stdout") (qualifier "pf") (id 143)
+	(s-import @4.1-4.38 (module "pf.Stdout") (qualifier "pf")
 		(exposes
 			(exposed (name "line!") (wildcard false))
 			(exposed (name "e!") (wildcard false))))
-	(s-import @6.1-8.4 (module "Stdot") (id 144)
+	(s-import @6.1-8.4 (module "Stdot")
 		(exposes))
-	(s-import @10.1-10.46 (module "pkg.S") (qualifier "pkg") (id 147)
+	(s-import @10.1-10.46 (module "pkg.S") (qualifier "pkg")
 		(exposes
 			(exposed (name "func") (alias "fry") (wildcard false))
 			(exposed (name "Custom") (wildcard true))))
-	(s-import @12.1-12.19 (module "Bae") (alias "Gooe") (id 148)
+	(s-import @12.1-12.19 (module "Bae") (alias "Gooe")
 		(exposes))
-	(s-import @13.1-14.4 (module "Ba") (id 149)
+	(s-import @13.1-14.4 (module "Ba")
 		(exposes)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "ane") (def_var 164) (type "* ? Num(*)"))
-		(d_assign (name "add_one") (def_var 195) (type "U64 -> U64"))
-		(d_assign (name "match_time") (def_var 205) (type "*, * ? Error"))
-		(d_assign (name "main!") (def_var 416) (type "List -> Error")))
+		(d-assign @45.1-45.4 (type "* ? Num(*)"))
+		(d-assign @48.1-48.8 (type "U64 -> U64"))
+		(d-assign @60.1-60.11 (type "*, * ? Error"))
+		(d-assign @100.1-100.6 (type "List -> Error")))
 	(expressions
 		(expr @45.7-47.8 (type "* ? Num(*)"))
 		(expr @48.11-58.2 (type "U64 -> U64"))

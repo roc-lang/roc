@@ -59,7 +59,7 @@ CloseSquare(5:1-5:2),EndOfFile(5:2-5:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-list @1.1-5.2 (elem-var 73) (id 77)
+(e-list @1.1-5.2
 	(elems
 		(e-int @2.5-2.7 (value "42"))
 		(e-string @3.5-3.18
@@ -68,5 +68,5 @@ CloseSquare(5:1-5:2),EndOfFile(5:2-5:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 77) (type "List(Error)"))
+(expr @1.1-5.2 (type "List(Error)"))
 ~~~

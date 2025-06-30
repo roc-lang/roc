@@ -25,11 +25,11 @@ Int(1:1-1:2),OpBinaryMinus(1:4-1:5),Int(1:8-1:9),EndOfFile(1:9-1:9),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop @1.1-1.9 (op "sub") (id 75)
+(e-binop @1.1-1.9 (op "sub")
 	(e-int @1.1-1.2 (value "1"))
 	(e-int @1.8-1.9 (value "2")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 75) (type "*"))
+(expr @1.1-1.9 (type "*"))
 ~~~

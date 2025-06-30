@@ -32,10 +32,10 @@ LowerIdent(2:1-2:2),CloseCurly(2:2-2:3),EndOfFile(2:3-2:3),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1.1-2.3 (id 75)
+(e-block @1.1-2.3
 	(e-runtime-error (tag "ident_not_in_scope")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 75) (type "Error"))
+(expr @1.1-2.3 (type "Error"))
 ~~~

@@ -40,11 +40,11 @@ Int(1:1-1:2),OpStar(1:3-1:4),KwIf(1:5-1:7),UpperIdent(1:8-1:12),NoSpaceDotLowerI
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop @1.1-1.29 (op "mul") (id 76)
+(e-binop @1.1-1.29 (op "mul")
 	(e-int @1.1-1.2 (value "1"))
 	(e-runtime-error (tag "expr_not_canonicalized")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 76) (type "*"))
+(expr @1.1-1.29 (type "*"))
 ~~~

@@ -35,11 +35,11 @@ UpperIdent(4:9-4:12),OpArrow(4:13-4:15),Int(4:16-4:17),EndOfFile(4:17-4:17),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop @1.1-2.13 (op "add") (id 76)
+(e-binop @1.1-2.13 (op "add")
 	(e-int @1.1-1.2 (value "1"))
 	(e-runtime-error (tag "ident_not_in_scope")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 76) (type "*"))
+(expr @1.1-2.13 (type "*"))
 ~~~

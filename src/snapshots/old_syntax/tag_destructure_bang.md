@@ -27,9 +27,9 @@ Config
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tag @1.1-1.7 (ext-var 73) (name "Config") (args "TODO") (id 74))
+(e-tag @1.1-1.7 (name "Config") (args "TODO"))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 74) (type "[Config]*"))
+(expr @1.1-1.7 (type "[Config]*"))
 ~~~

@@ -51,24 +51,24 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-list @1.1-1.33 (elem-var 73) (id 83)
+(e-list @1.1-1.33
 	(elems
 		(e-empty_list @1.2-1.4)
-		(e-list @1.6-1.15 (elem-var 74)
+		(e-list @1.6-1.15
 			(elems
 				(e-empty_list @1.7-1.9)
-				(e-list @1.11-1.14 (elem-var 75)
+				(e-list @1.11-1.14
 					(elems
 						(e-int @1.12-1.13 (value "1"))))))
-		(e-list @1.17-1.32 (elem-var 78)
+		(e-list @1.17-1.32
 			(elems
 				(e-empty_list @1.18-1.20)
-				(e-list @1.22-1.31 (elem-var 80)
+				(e-list @1.22-1.31
 					(elems
 						(e-string @1.23-1.30
 							(e-literal @1.24-1.29 (string "hello")))))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 83) (type "List(Error)"))
+(expr @1.1-1.33 (type "List(Error)"))
 ~~~

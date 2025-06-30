@@ -69,21 +69,21 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 99)
-		(p-assign @4.1-4.5 (ident "swap") (id 84))
-		(e-lambda @4.8-4.23 (id 92)
+	(d-let
+		(p-assign @4.1-4.5 (ident "swap"))
+		(e-lambda @4.8-4.23
 			(args
-				(p-tuple @4.9-4.15 (id 87)
+				(p-tuple @4.9-4.15
 					(patterns
-						(p-assign @4.10-4.11 (ident "x") (id 85))
-						(p-assign @4.13-4.14 (ident "y") (id 86)))))
+						(p-assign @4.10-4.11 (ident "x"))
+						(p-assign @4.13-4.14 (ident "y")))))
 			(e-tuple @4.17-4.23
 				(elems
 					(e-lookup-local @4.18-4.19
-						(pattern (id 86)))
+						(pattern @4.13-4.14))
 					(e-lookup-local @4.21-4.22
-						(pattern (id 85))))))
-		(annotation @4.1-4.5 (signature 97) (id 98)
+						(pattern @4.10-4.11)))))
+		(annotation @4.1-4.5
 			(declared-type
 				(ty-fn @3.8-3.24 (effectful false)
 					(ty-tuple @3.8-3.14
@@ -92,19 +92,19 @@ NO CHANGE
 					(ty-tuple @3.18-3.24
 						(ty-var @3.19-3.20 (name "b"))
 						(ty-var @3.22-3.23 (name "a")))))))
-	(d-let (id 105)
-		(p-assign @6.1-6.6 (ident "main!") (id 100))
-		(e-lambda @6.9-6.15 (id 104)
+	(d-let
+		(p-assign @6.1-6.6 (ident "main!"))
+		(e-lambda @6.9-6.15
 			(args
-				(p-underscore @6.10-6.11 (id 101)))
+				(p-underscore @6.10-6.11))
 			(e-empty_record @6.13-6.15))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "swap") (def_var 99) (type "(*, *) -> (*, *)"))
-		(d_assign (name "main!") (def_var 105) (type "* ? {}")))
+		(d-assign @4.1-4.5 (type "(*, *) -> (*, *)"))
+		(d-assign @6.1-6.6 (type "* ? {}")))
 	(expressions
 		(expr @4.8-4.23 (type "(*, *) -> (*, *)"))
 		(expr @6.9-6.15 (type "* ? {}"))))

@@ -41,7 +41,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop @1.1-8.4 (op "add") (id 77)
+(e-binop @1.1-8.4 (op "add")
 	(e-int @1.1-1.2 (value "1"))
 	(e-binop @6.2-8.4 (op "mul")
 		(e-int @6.2-6.3 (value "2"))
@@ -49,5 +49,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 77) (type "*"))
+(expr @1.1-8.4 (type "*"))
 ~~~

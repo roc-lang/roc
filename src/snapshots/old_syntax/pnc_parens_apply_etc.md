@@ -31,12 +31,12 @@ OpenRound(3:1-3:2),LowerIdent(3:2-3:3),CloseRound(3:3-3:4),EndOfFile(3:4-3:4),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call @1.1-2.5 (id 76)
+(e-call @1.1-2.5
 	(e-tuple @1.1-2.3
 		(elems
 			(e-int @2.1-2.2 (value "3")))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 76) (type "*"))
+(expr @1.1-2.5 (type "*"))
 ~~~

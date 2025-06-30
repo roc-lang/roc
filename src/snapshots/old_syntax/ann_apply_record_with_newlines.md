@@ -29,9 +29,9 @@ UpperIdent(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-int @1.1-1.2 (value "8") (id 73))
+(e-int @1.1-1.2 (value "8"))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 73) (type "Num(*)"))
+(expr @1.1-1.2 (type "Num(*)"))
 ~~~

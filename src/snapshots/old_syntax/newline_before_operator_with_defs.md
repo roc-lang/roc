@@ -43,11 +43,11 @@ OpEquals(2:1-2:3),NoSpaceOpenRound(2:3-2:4),UpperIdent(2:4-2:5),OpColon(2:5-2:6)
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop @1.1-2.11 (op "eq") (id 76)
+(e-binop @1.1-2.11 (op "eq")
 	(e-int @1.1-1.2 (value "7"))
 	(e-runtime-error (tag "expr_not_canonicalized")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 76) (type "*"))
+(expr @1.1-2.11 (type "*"))
 ~~~

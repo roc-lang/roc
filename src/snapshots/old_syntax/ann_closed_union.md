@@ -85,15 +85,15 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1.1-6.2 (id 82)
+(e-block @1.1-6.2
 	(s-type-anno @2.5-2.32 (name "foo")
 		(ty-malformed @2.26-2.32))
 	(s-let @3.5-3.15
-		(p-assign @3.5-3.8 (ident "foo") (id 77))
-		(e-tag @3.11-3.15 (ext-var 78) (name "True") (args "TODO") (id 79)))
+		(p-assign @3.5-3.8 (ident "foo"))
+		(e-tag @3.11-3.15 (name "True") (args "TODO")))
 	(e-int @5.5-5.7 (value "42")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 82) (type "Num(*)"))
+(expr @1.1-6.2 (type "Num(*)"))
 ~~~

@@ -34,7 +34,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dot-access @1.1-1.13 (field "map") (id 77)
+(e-dot-access @1.1-1.13 (field "map")
 	(receiver
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(args
@@ -42,5 +42,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 77) (type "*"))
+(expr @1.1-1.13 (type "*"))
 ~~~

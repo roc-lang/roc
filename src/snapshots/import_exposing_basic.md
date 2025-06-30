@@ -82,12 +82,12 @@ main = {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 101)
-		(p-assign @5.1-5.5 (ident "main") (id 76))
-		(e-block @5.8-10.2 (id 100)
+	(d-let
+		(p-assign @5.1-5.5 (ident "main"))
+		(e-block @5.8-10.2
 			(s-let @6.5-6.38
-				(p-assign @6.5-6.9 (ident "data") (id 77))
-				(e-record @6.12-6.38 (id 83)
+				(p-assign @6.5-6.9 (ident "data"))
+				(e-record @6.12-6.38
 					(fields
 						(field (name "name")
 							(e-string @6.20-6.27
@@ -95,22 +95,22 @@ main = {
 						(field (name "age")
 							(e-int @6.34-6.36 (value "30"))))))
 			(s-let @7.5-7.27
-				(p-assign @7.5-7.12 (ident "encoded") (id 85))
-				(e-call @7.15-7.27 (id 90)
+				(p-assign @7.5-7.12 (ident "encoded"))
+				(e-call @7.15-7.27
 					(e-lookup-external
-						(ext-decl @7.15-7.21 (qualified "json.Json.encode") (module "json.Json") (local "encode") (kind "value") (type-var 86)))
+						(ext-decl @7.15-7.21 (qualified "json.Json.encode") (module "json.Json") (local "encode") (kind "value")))
 					(e-lookup-local @7.22-7.26
-						(pattern (id 77)))))
+						(pattern @6.5-6.9))))
 			(s-let @8.5-8.30
-				(p-assign @8.5-8.12 (ident "decoded") (id 92))
-				(e-call @8.15-8.30 (id 97)
+				(p-assign @8.5-8.12 (ident "decoded"))
+				(e-call @8.15-8.30
 					(e-lookup-external
-						(ext-decl @8.15-8.21 (qualified "json.Json.decode") (module "json.Json") (local "decode") (kind "value") (type-var 93)))
+						(ext-decl @8.15-8.21 (qualified "json.Json.decode") (module "json.Json") (local "decode") (kind "value")))
 					(e-lookup-local @8.22-8.29
-						(pattern (id 85)))))
+						(pattern @7.5-7.12))))
 			(e-lookup-local @9.5-9.12
-				(pattern (id 92)))))
-	(s-import @3.1-3.43 (module "json.Json") (qualifier "json") (id 75)
+				(pattern @8.5-8.12))))
+	(s-import @3.1-3.43 (module "json.Json") (qualifier "json")
 		(exposes
 			(exposed (name "decode") (wildcard false))
 			(exposed (name "encode") (wildcard false)))))
@@ -119,7 +119,7 @@ main = {
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "main") (def_var 101) (type "*")))
+		(d-assign @5.1-5.5 (type "*")))
 	(expressions
 		(expr @5.8-10.2 (type "*"))))
 ~~~

@@ -28,11 +28,11 @@ if! == 9
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop @1.1-1.7 (op "eq") (id 76)
+(e-binop @1.1-1.7 (op "eq")
 	(e-runtime-error (tag "ident_not_in_scope"))
 	(e-int @1.6-1.7 (value "9")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 76) (type "*"))
+(expr @1.1-1.7 (type "*"))
 ~~~

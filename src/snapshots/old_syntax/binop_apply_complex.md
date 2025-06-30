@@ -28,11 +28,11 @@ N < l
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop @1.1-1.6 (op "lt") (id 77)
-	(e-tag @1.1-1.2 (ext-var 73) (name "N") (args "TODO"))
+(e-binop @1.1-1.6 (op "lt")
+	(e-tag @1.1-1.2 (name "N") (args "TODO"))
 	(e-runtime-error (tag "ident_not_in_scope")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 77) (type "*"))
+(expr @1.1-1.6 (type "*"))
 ~~~

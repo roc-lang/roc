@@ -45,7 +45,7 @@ LowerIdent(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1.1-2.3 (id 80)
+(e-block @1.1-2.3
 	(s-expr @1.2-1.5
 		(e-runtime-error (tag "not_implemented")))
 	(s-expr @1.4-2.2
@@ -54,5 +54,5 @@ LowerIdent(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 80) (type "Num(*)"))
+(expr @1.1-2.3 (type "Num(*)"))
 ~~~

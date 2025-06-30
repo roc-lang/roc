@@ -26,11 +26,11 @@ LowerIdent(2:1-2:2),EndOfFile(2:2-2:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tuple @1.1-1.4 (id 75)
+(e-tuple @1.1-1.4
 	(elems
-		(e-tag @1.2-1.3 (ext-var 73) (name "D") (args "TODO"))))
+		(e-tag @1.2-1.3 (name "D") (args "TODO"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 75) (type "([D]*)"))
+(expr @1.1-1.4 (type "([D]*)"))
 ~~~

@@ -88,7 +88,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-if @1.1-7.2 (id 85)
+(e-if @1.1-7.2
 	(if-branches
 		(if-branch
 			(e-runtime-error (tag "ident_not_in_scope"))
@@ -97,12 +97,12 @@ NO CHANGE
 		(if-branch
 			(e-int @3.11-3.13 (value "10"))
 			(e-block @3.14-5.2
-				(e-tag @4.2-4.3 (ext-var 79) (name "A") (args "TODO")))))
+				(e-tag @4.2-4.3 (name "A") (args "TODO")))))
 	(if-else
 		(e-block @5.8-7.2
 			(e-int @6.2-6.3 (value "3")))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 85) (type "Error"))
+(expr @1.1-7.2 (type "Error"))
 ~~~

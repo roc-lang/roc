@@ -281,7 +281,7 @@ CloseCurly(34:1-34:2),EndOfFile(34:2-34:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-record @1.1-34.2 (id 169)
+(e-record @1.1-34.2
 	(fields
 		(field (name "u8")
 			(e-runtime-error (tag "invalid_num_literal")))
@@ -350,5 +350,5 @@ CloseCurly(34:1-34:2),EndOfFile(34:2-34:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 169) (type "{ u8: Error, u16: Error, u32: Error, u64: Error, u128: Error, i8: Error, i16: Error, i32: Error, i64: Error, i128: Error, dec: Error, u8Neg: Error, u16Neg: Error, u32Neg: Error, u64Neg: Error, u128Neg: Error, i8Neg: Error, i16Neg: Error, i32Neg: Error, i64Neg: Error, i128Neg: Error, decNeg: Error, u8Bin: Error, u16Bin: Error, u32Bin: Error, u64Bin: Error, u128Bin: Error, i8Bin: Error, i16Bin: Error, i32Bin: Error, i64Bin: Error, i128Bin: Error }"))
+(expr @1.1-34.2 (type "{ u8: Error, u16: Error, u32: Error, u64: Error, u128: Error, i8: Error, i16: Error, i32: Error, i64: Error, i128: Error, dec: Error, u8Neg: Error, u16Neg: Error, u32Neg: Error, u64Neg: Error, u128Neg: Error, i8Neg: Error, i16Neg: Error, i32Neg: Error, i64Neg: Error, i128Neg: Error, decNeg: Error, u8Bin: Error, u16Bin: Error, u32Bin: Error, u64Bin: Error, u128Bin: Error, i8Bin: Error, i16Bin: Error, i32Bin: Error, i64Bin: Error, i128Bin: Error }"))
 ~~~

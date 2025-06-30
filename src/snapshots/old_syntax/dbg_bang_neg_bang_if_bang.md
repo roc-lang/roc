@@ -44,11 +44,11 @@ dbg! -
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop @1.1-1.10 (op "sub") (id 77)
+(e-binop @1.1-1.10 (op "sub")
 	(e-runtime-error (tag "ident_not_in_scope"))
 	(e-runtime-error (tag "expr_not_canonicalized")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 77) (type "*"))
+(expr @1.1-1.10 (type "*"))
 ~~~

@@ -43,12 +43,12 @@ LowerIdent(6:1-6:2),CloseSquare(6:2-6:3),EndOfFile(6:3-6:3),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-list @1.1-6.3 (elem-var 74) (id 77)
+(e-list @1.1-6.3
 	(elems
-		(e-tag @1.2-1.3 (ext-var 73) (name "J") (args "TODO"))
+		(e-tag @1.2-1.3 (name "J") (args "TODO"))
 		(e-runtime-error (tag "ident_not_in_scope"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 77) (type "List(Error)"))
+(expr @1.1-6.3 (type "List(Error)"))
 ~~~
