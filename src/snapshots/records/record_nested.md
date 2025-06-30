@@ -90,7 +90,7 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-record @1.1-12.2 (id 107)
+(e-record @1.1-12.2
 	(fields
 		(field (name "person")
 			(e-record @2.13-2.39
@@ -134,5 +134,5 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 107) (type "{ person: { name: Str, age: Num(*) }, address: { street: Str, city: Str, coordinates: { lat: Frac(*), lng: Frac(*) } }, contact: { email: Str, phone: { home: Str, work: Str } } }"))
+(expr @1.1-12.2 (type "{ person: { name: Str, age: Num(*) }, address: { street: Str, city: Str, coordinates: { lat: Frac(*), lng: Frac(*) } }, contact: { email: Str, phone: { home: Str, work: Str } } }"))
 ~~~

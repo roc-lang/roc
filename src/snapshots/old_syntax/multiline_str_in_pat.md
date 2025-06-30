@@ -25,9 +25,9 @@ StringStart(2:1-2:2),StringPart(2:2-2:2),StringEnd(2:2-2:3),EndOfFile(2:3-2:3),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-int @1.1-1.2 (value "1") (id 73))
+(e-int @1.1-1.2 (value "1"))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 73) (type "Num(*)"))
+(expr @1.1-1.2 (type "Num(*)"))
 ~~~

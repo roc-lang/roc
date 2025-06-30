@@ -39,18 +39,18 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 77)
-		(p-assign @5.1-5.5 (ident "main") (id 74))
-		(e-lookup-external (id 76)
-			(ext-decl @5.8-5.21 (qualified "json.Json.decode") (module "json.Json") (local "decode") (kind "value") (type-var 75))))
-	(s-import @3.1-3.27 (module "json.Json") (qualifier "json") (alias "MyJson") (id 73)
+	(d-let
+		(p-assign @5.1-5.5 (ident "main"))
+		(e-lookup-external
+			(ext-decl @5.8-5.21 (qualified "json.Json.decode") (module "json.Json") (local "decode") (kind "value"))))
+	(s-import @3.1-3.27 (module "json.Json") (qualifier "json") (alias "MyJson")
 		(exposes)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "main") (def_var 77) (type "*")))
+		(patt @5.1-5.5 (type "*")))
 	(expressions
 		(expr @5.8-5.21 (type "*"))))
 ~~~

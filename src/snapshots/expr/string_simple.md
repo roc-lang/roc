@@ -24,10 +24,10 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-string @1.1-1.14 (id 74)
+(e-string @1.1-1.14
 	(e-literal @1.2-1.13 (string "hello world")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 74) (type "Str"))
+(expr @1.1-1.14 (type "Str"))
 ~~~

@@ -33,13 +33,13 @@ CloseSquare(2:1-2:2),OpBinaryMinus(2:2-2:3),LowerIdent(2:3-2:4),EndOfFile(2:4-2:
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop @1.1-2.4 (op "sub") (id 78)
-	(e-list @1.1-2.2 (elem-var 74)
+(e-binop @1.1-2.4 (op "sub")
+	(e-list @1.1-2.2
 		(elems
-			(e-tag @1.2-1.3 (ext-var 73) (name "K") (args "TODO"))))
+			(e-tag @1.2-1.3 (name "K") (args "TODO"))))
 	(e-runtime-error (tag "ident_not_in_scope")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 78) (type "*"))
+(expr @1.1-2.4 (type "*"))
 ~~~

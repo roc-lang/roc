@@ -32,7 +32,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dot-access @1.1-1.16 (field "ghi") (id 77)
+(e-dot-access @1.1-1.16 (field "ghi")
 	(receiver
 		(e-dot-access @1.1-1.16 (field "def")
 			(receiver
@@ -42,5 +42,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 77) (type "*"))
+(expr @1.1-1.16 (type "*"))
 ~~~

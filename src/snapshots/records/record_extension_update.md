@@ -113,7 +113,7 @@ CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1.1-4.2 (id 84)
+(e-block @1.1-4.2
 	(s-expr @1.3-1.11
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(s-type-anno @2.5-2.13 (name "age")
@@ -124,5 +124,5 @@ CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 84) (type "{}"))
+(expr @1.1-4.2 (type "{}"))
 ~~~

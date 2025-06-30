@@ -182,24 +182,24 @@ main! = |_| {}
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 122)
-		(p-assign @5.1-5.10 (ident "mapResult") (id 90))
-		(e-lambda @5.13-9.2 (id 108)
+	(d-let
+		(p-assign @5.1-5.10 (ident "mapResult"))
+		(e-lambda @5.13-9.2
 			(args
-				(p-assign @5.14-5.20 (ident "result") (id 91))
-				(p-assign @5.22-5.31 (ident "transform") (id 92)))
+				(p-assign @5.14-5.20 (ident "result"))
+				(p-assign @5.22-5.31 (ident "transform")))
 			(e-block @5.33-9.2
 				(s-expr @6.5-6.16
 					(e-runtime-error (tag "ident_not_in_scope")))
 				(s-expr @6.10-6.19
 					(e-lookup-local @6.10-6.16
-						(pattern (id 91))))
+						(pattern @5.14-5.20)))
 				(s-expr @6.17-7.11
 					(e-runtime-error (tag "ident_not_in_scope")))
 				(s-expr @7.9-8.12
 					(e-runtime-error (tag "not_implemented")))
 				(e-runtime-error (tag "not_implemented"))))
-		(annotation @5.1-5.10 (signature 120) (id 121)
+		(annotation @5.1-5.10
 			(declared-type
 				(ty-fn @4.13-4.51 (effectful false)
 					(ty-apply @4.13-4.25 (symbol "Result")
@@ -212,17 +212,17 @@ main! = |_| {}
 					(ty-apply @4.39-4.51 (symbol "Result")
 						(ty-var @4.46-4.47 (name "b"))
 						(ty-var @4.49-4.50 (name "e")))))))
-	(d-let (id 147)
-		(p-assign @13.1-13.13 (ident "filterMaybes") (id 131))
-		(e-lambda @13.16-15.2 (id 140)
+	(d-let
+		(p-assign @13.1-13.13 (ident "filterMaybes"))
+		(e-lambda @13.16-15.2
 			(args
-				(p-assign @13.17-13.21 (ident "list") (id 132)))
+				(p-assign @13.17-13.21 (ident "list")))
 			(e-block @13.23-15.2
 				(e-call @14.5-14.23
 					(e-runtime-error (tag "ident_not_in_scope"))
 					(e-lookup-local @14.18-14.22
-						(pattern (id 132))))))
-		(annotation @13.1-13.13 (signature 145) (id 146)
+						(pattern @13.17-13.21)))))
+		(annotation @13.1-13.13
 			(declared-type
 				(ty-fn @12.16-12.41 (effectful false)
 					(ty-apply @12.16-12.30 (symbol "List")
@@ -230,20 +230,20 @@ main! = |_| {}
 							(ty-var @12.27-12.28 (name "t"))))
 					(ty-apply @12.34-12.41 (symbol "List")
 						(ty-var @12.39-12.40 (name "t")))))))
-	(d-let (id 153)
-		(p-assign @17.1-17.6 (ident "main!") (id 148))
-		(e-lambda @17.9-17.15 (id 152)
+	(d-let
+		(p-assign @17.1-17.6 (ident "main!"))
+		(e-lambda @17.9-17.15
 			(args
-				(p-underscore @17.10-17.11 (id 149)))
+				(p-underscore @17.10-17.11))
 			(e-empty_record @17.13-17.15))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "mapResult") (def_var 122) (type "Result, a -> b -> Error"))
-		(d_assign (name "filterMaybes") (def_var 147) (type "List -> List"))
-		(d_assign (name "main!") (def_var 153) (type "* ? {}")))
+		(patt @5.1-5.10 (type "Result, a -> b -> Error"))
+		(patt @13.1-13.13 (type "List -> List"))
+		(patt @17.1-17.6 (type "* ? {}")))
 	(expressions
 		(expr @5.13-9.2 (type "Result, a -> b -> Error"))
 		(expr @13.16-15.2 (type "List -> List"))

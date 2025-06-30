@@ -30,10 +30,10 @@ OpPizza(4:1-4:3),UpperIdent(4:4-4:8),NoSpaceDotLowerIdent(4:8-4:16),EndOfFile(4:
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-string @1.1-1.11 (id 74)
+(e-string @1.1-1.11
 	(e-literal @1.2-1.10 (string "a string")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 74) (type "Str"))
+(expr @1.1-1.11 (type "Str"))
 ~~~

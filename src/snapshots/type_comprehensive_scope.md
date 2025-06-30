@@ -298,23 +298,23 @@ Complex : {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-type-decl @4.1-5.9 (id 75)
+	(s-type-decl @4.1-5.9
 		(ty-header @4.1-4.6 (name "MyU64"))
 		(ty @4.9-4.12 (name "U64")))
-	(s-type-decl @5.1-6.7 (id 78)
+	(s-type-decl @5.1-6.7
 		(ty-header @5.1-5.9 (name "MyString"))
 		(ty @5.12-5.15 (name "Str")))
-	(s-type-decl @6.1-9.7 (id 81)
+	(s-type-decl @6.1-9.7
 		(ty-header @6.1-6.7 (name "MyBool"))
 		(ty @6.10-6.14 (name "Bool")))
-	(s-type-decl @9.1-12.7 (id 88)
+	(s-type-decl @9.1-12.7
 		(ty-header @9.1-9.7 (name "Person"))
 		(ty-record @9.10-9.33
 			(field (field "name")
 				(ty @9.18-9.21 (name "Str")))
 			(field (field "age")
 				(ty @9.28-9.31 (name "U64")))))
-	(s-type-decl @12.1-15.5 (id 97)
+	(s-type-decl @12.1-15.5
 		(ty-header @12.1-12.16 (name "Result")
 			(ty-args
 				(ty-var @12.8-12.10 (name "ok"))
@@ -324,7 +324,7 @@ Complex : {
 				(ty-var @12.23-12.25 (name "ok")))
 			(ty-apply @12.28-12.36 (symbol "Err")
 				(ty-var @12.32-12.35 (name "err")))))
-	(s-type-decl @15.1-18.5 (id 107)
+	(s-type-decl @15.1-18.5
 		(ty-header @15.1-15.8 (name "Tree")
 			(ty-args
 				(ty-var @15.6-15.7 (name "a"))))
@@ -334,7 +334,7 @@ Complex : {
 					(ty-var @15.24-15.25 (name "a"))))
 			(ty-apply @15.29-15.36 (symbol "Leaf")
 				(ty-var @15.34-15.35 (name "a")))))
-	(s-type-decl @18.1-21.9 (id 117)
+	(s-type-decl @18.1-21.9
 		(ty-header @18.1-18.8 (name "Node")
 			(ty-args
 				(ty-var @18.6-18.7 (name "a"))))
@@ -345,27 +345,27 @@ Complex : {
 				(ty-apply @18.33-18.46 (symbol "List")
 					(ty-apply @18.38-18.45 (symbol "Tree")
 						(ty-var @18.43-18.44 (name "a")))))))
-	(s-type-decl @21.1-24.7 (id 122)
+	(s-type-decl @21.1-24.7
 		(ty-header @21.1-21.9 (name "MyResult"))
 		(ty-apply @21.12-21.28 (symbol "Result")
 			(ty @21.19-21.22 (name "Str"))
 			(ty @21.24-21.27 (name "U64"))))
-	(s-type-decl @24.1-27.8 (id 125)
+	(s-type-decl @24.1-27.8
 		(ty-header @24.1-24.7 (name "Person"))
 		(ty @24.10-24.13 (name "U64")))
-	(s-type-decl @27.1-30.7 (id 130)
+	(s-type-decl @27.1-30.7
 		(ty-header @27.1-27.8 (name "BadType"))
 		(ty @27.11-27.29 (name "SomeUndeclaredType")))
-	(s-type-decl @30.1-31.7 (id 134)
+	(s-type-decl @30.1-31.7
 		(ty-header @30.1-30.7 (name "MyList"))
 		(ty-apply @30.10-30.19 (symbol "List")
 			(ty @30.15-30.18 (name "Str"))))
-	(s-type-decl @31.1-34.8 (id 139)
+	(s-type-decl @31.1-34.8
 		(ty-header @31.1-31.7 (name "MyDict"))
 		(ty-apply @31.10-31.24 (symbol "Dict")
 			(ty @31.15-31.18 (name "Str"))
 			(ty @31.20-31.23 (name "U64"))))
-	(s-type-decl @34.1-38.2 (id 151)
+	(s-type-decl @34.1-38.2
 		(ty-header @34.1-34.8 (name "Complex"))
 		(ty-record @34.11-38.2
 			(field (field "person")

@@ -226,62 +226,62 @@ main! = |_| {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 88)
-		(p-assign @5.1-5.13 (ident "testEllipsis") (id 76))
-		(e-lambda @5.16-5.23 (id 81)
+	(d-let
+		(p-assign @5.1-5.13 (ident "testEllipsis"))
+		(e-lambda @5.16-5.23
 			(args
-				(p-underscore @5.17-5.18 (id 77)))
+				(p-underscore @5.17-5.18))
 			(e-runtime-error (tag "not_implemented")))
-		(annotation @5.1-5.13 (signature 86) (id 87)
+		(annotation @5.1-5.13
 			(declared-type
 				(ty-fn @4.16-4.26 (effectful false)
 					(ty @4.16-4.19 (name "U64"))
 					(ty @4.23-4.26 (name "U64"))))))
-	(d-let (id 104)
-		(p-assign @9.1-9.10 (ident "testCrash") (id 92))
-		(e-lambda @9.13-9.24 (id 97)
+	(d-let
+		(p-assign @9.1-9.10 (ident "testCrash"))
+		(e-lambda @9.13-9.24
 			(args
-				(p-underscore @9.14-9.15 (id 93)))
+				(p-underscore @9.14-9.15))
 			(e-runtime-error (tag "lambda_body_not_canonicalized")))
-		(annotation @9.1-9.10 (signature 102) (id 103)
+		(annotation @9.1-9.10
 			(declared-type
 				(ty-fn @8.13-8.23 (effectful false)
 					(ty @8.13-8.16 (name "U64"))
 					(ty @8.20-8.23 (name "U64"))))))
-	(d-let (id 121)
-		(p-assign @13.1-13.16 (ident "testCrashSimple") (id 109))
-		(e-lambda @13.19-13.30 (id 114)
+	(d-let
+		(p-assign @13.1-13.16 (ident "testCrashSimple"))
+		(e-lambda @13.19-13.30
 			(args
-				(p-underscore @13.20-13.21 (id 110)))
+				(p-underscore @13.20-13.21))
 			(e-runtime-error (tag "lambda_body_not_canonicalized")))
-		(annotation @13.1-13.16 (signature 119) (id 120)
+		(annotation @13.1-13.16
 			(declared-type
 				(ty-fn @12.19-12.29 (effectful false)
 					(ty @12.19-12.22 (name "U64"))
 					(ty @12.26-12.29 (name "U64"))))))
-	(d-let (id 150)
-		(p-assign @15.1-15.6 (ident "main!") (id 123))
-		(e-lambda @15.9-20.2 (id 149)
+	(d-let
+		(p-assign @15.1-15.6 (ident "main!"))
+		(e-lambda @15.9-20.2
 			(args
-				(p-underscore @15.10-15.11 (id 124)))
+				(p-underscore @15.10-15.11))
 			(e-block @15.13-20.2
 				(s-let @16.5-16.31
-					(p-assign @16.5-16.12 (ident "result1") (id 125))
-					(e-call @16.15-16.31 (id 129)
+					(p-assign @16.5-16.12 (ident "result1"))
+					(e-call @16.15-16.31
 						(e-lookup-local @16.15-16.27
-							(pattern (id 76)))
+							(pattern @5.1-5.13))
 						(e-int @16.28-16.30 (value "42"))))
 				(s-let @17.5-17.28
-					(p-assign @17.5-17.12 (ident "result2") (id 131))
-					(e-call @17.15-17.28 (id 135)
+					(p-assign @17.5-17.12 (ident "result2"))
+					(e-call @17.15-17.28
 						(e-lookup-local @17.15-17.24
-							(pattern (id 92)))
+							(pattern @9.1-9.10))
 						(e-int @17.25-17.27 (value "42"))))
 				(s-let @18.5-18.34
-					(p-assign @18.5-18.12 (ident "result3") (id 137))
-					(e-call @18.15-18.34 (id 141)
+					(p-assign @18.5-18.12 (ident "result3"))
+					(e-call @18.15-18.34
 						(e-lookup-local @18.15-18.30
-							(pattern (id 109)))
+							(pattern @13.1-13.16))
 						(e-int @18.31-18.33 (value "42"))))
 				(e-empty_list @19.5-19.7)))))
 ~~~
@@ -289,10 +289,10 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "testEllipsis") (def_var 88) (type "U64 -> U64"))
-		(d_assign (name "testCrash") (def_var 104) (type "U64 -> Error"))
-		(d_assign (name "testCrashSimple") (def_var 121) (type "U64 -> Error"))
-		(d_assign (name "main!") (def_var 150) (type "* ? List(*)")))
+		(patt @5.1-5.13 (type "U64 -> U64"))
+		(patt @9.1-9.10 (type "U64 -> Error"))
+		(patt @13.1-13.16 (type "U64 -> Error"))
+		(patt @15.1-15.6 (type "* ? List(*)")))
 	(expressions
 		(expr @5.16-5.23 (type "U64 -> U64"))
 		(expr @9.13-9.24 (type "U64 -> Error"))

@@ -137,64 +137,64 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 79)
-		(p-assign @4.1-4.2 (ident "a") (id 74))
-		(e-int @4.5-4.8 (value "255") (id 75))
-		(annotation @4.1-4.2 (signature 77) (id 78)
+	(d-let
+		(p-assign @4.1-4.2 (ident "a"))
+		(e-int @4.5-4.8 (value "255"))
+		(annotation @4.1-4.2
 			(declared-type
 				(ty @3.5-3.7 (name "U8")))))
-	(d-let (id 86)
-		(p-assign @7.1-7.2 (ident "b") (id 81))
-		(e-int @7.5-7.10 (value "65535") (id 82))
-		(annotation @7.1-7.2 (signature 84) (id 85)
+	(d-let
+		(p-assign @7.1-7.2 (ident "b"))
+		(e-int @7.5-7.10 (value "65535"))
+		(annotation @7.1-7.2
 			(declared-type
 				(ty @6.5-6.8 (name "U16")))))
-	(d-let (id 93)
-		(p-assign @10.1-10.2 (ident "c") (id 88))
-		(e-int @10.5-10.15 (value "4294967295") (id 89))
-		(annotation @10.1-10.2 (signature 91) (id 92)
+	(d-let
+		(p-assign @10.1-10.2 (ident "c"))
+		(e-int @10.5-10.15 (value "4294967295"))
+		(annotation @10.1-10.2
 			(declared-type
 				(ty @9.5-9.8 (name "U32")))))
-	(d-let (id 100)
-		(p-assign @13.1-13.2 (ident "d") (id 95))
-		(e-int @13.5-13.25 (value "18446744073709551615") (id 96))
-		(annotation @13.1-13.2 (signature 98) (id 99)
+	(d-let
+		(p-assign @13.1-13.2 (ident "d"))
+		(e-int @13.5-13.25 (value "18446744073709551615"))
+		(annotation @13.1-13.2
 			(declared-type
 				(ty @12.5-12.8 (name "U64")))))
-	(d-let (id 107)
-		(p-assign @16.1-16.2 (ident "e") (id 102))
-		(e-int @16.5-16.44 (value "-1") (id 103))
-		(annotation @16.1-16.2 (signature 105) (id 106)
+	(d-let
+		(p-assign @16.1-16.2 (ident "e"))
+		(e-int @16.5-16.44 (value "-1"))
+		(annotation @16.1-16.2
 			(declared-type
 				(ty @15.5-15.9 (name "U128")))))
-	(d-let (id 114)
-		(p-assign @19.1-19.2 (ident "f") (id 109))
-		(e-int @19.5-19.9 (value "-128") (id 110))
-		(annotation @19.1-19.2 (signature 112) (id 113)
+	(d-let
+		(p-assign @19.1-19.2 (ident "f"))
+		(e-int @19.5-19.9 (value "-128"))
+		(annotation @19.1-19.2
 			(declared-type
 				(ty @18.5-18.7 (name "I8")))))
-	(d-let (id 121)
-		(p-assign @22.1-22.2 (ident "g") (id 116))
-		(e-int @22.5-22.11 (value "-32768") (id 117))
-		(annotation @22.1-22.2 (signature 119) (id 120)
+	(d-let
+		(p-assign @22.1-22.2 (ident "g"))
+		(e-int @22.5-22.11 (value "-32768"))
+		(annotation @22.1-22.2
 			(declared-type
 				(ty @21.5-21.8 (name "I16")))))
-	(d-let (id 128)
-		(p-assign @25.1-25.2 (ident "h") (id 123))
-		(e-int @25.5-25.16 (value "-2147483648") (id 124))
-		(annotation @25.1-25.2 (signature 126) (id 127)
+	(d-let
+		(p-assign @25.1-25.2 (ident "h"))
+		(e-int @25.5-25.16 (value "-2147483648"))
+		(annotation @25.1-25.2
 			(declared-type
 				(ty @24.5-24.8 (name "I32")))))
-	(d-let (id 135)
-		(p-assign @28.1-28.2 (ident "i") (id 130))
-		(e-int @28.5-28.25 (value "-9223372036854775808") (id 131))
-		(annotation @28.1-28.2 (signature 133) (id 134)
+	(d-let
+		(p-assign @28.1-28.2 (ident "i"))
+		(e-int @28.5-28.25 (value "-9223372036854775808"))
+		(annotation @28.1-28.2
 			(declared-type
 				(ty @27.5-27.8 (name "I64")))))
-	(d-let (id 142)
-		(p-assign @31.1-31.2 (ident "j") (id 137))
-		(e-int @31.5-31.45 (value "-170141183460469231731687303715884105728") (id 138))
-		(annotation @31.1-31.2 (signature 140) (id 141)
+	(d-let
+		(p-assign @31.1-31.2 (ident "j"))
+		(e-int @31.5-31.45 (value "-170141183460469231731687303715884105728"))
+		(annotation @31.1-31.2
 			(declared-type
 				(ty @30.5-30.9 (name "I128"))))))
 ~~~
@@ -202,16 +202,16 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "a") (def_var 79) (type "U8"))
-		(d_assign (name "b") (def_var 86) (type "U16"))
-		(d_assign (name "c") (def_var 93) (type "U32"))
-		(d_assign (name "d") (def_var 100) (type "U64"))
-		(d_assign (name "e") (def_var 107) (type "U128"))
-		(d_assign (name "f") (def_var 114) (type "I8"))
-		(d_assign (name "g") (def_var 121) (type "I16"))
-		(d_assign (name "h") (def_var 128) (type "I32"))
-		(d_assign (name "i") (def_var 135) (type "I64"))
-		(d_assign (name "j") (def_var 142) (type "I128")))
+		(patt @4.1-4.2 (type "U8"))
+		(patt @7.1-7.2 (type "U16"))
+		(patt @10.1-10.2 (type "U32"))
+		(patt @13.1-13.2 (type "U64"))
+		(patt @16.1-16.2 (type "U128"))
+		(patt @19.1-19.2 (type "I8"))
+		(patt @22.1-22.2 (type "I16"))
+		(patt @25.1-25.2 (type "I32"))
+		(patt @28.1-28.2 (type "I64"))
+		(patt @31.1-31.2 (type "I128")))
 	(expressions
 		(expr @4.5-4.8 (type "U8"))
 		(expr @7.5-7.10 (type "U16"))

@@ -37,9 +37,9 @@ Model
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tag @1.1-1.6 (ext-var 73) (name "Model") (args "TODO") (id 74))
+(e-tag @1.1-1.6 (name "Model") (args "TODO"))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 74) (type "[Model]*"))
+(expr @1.1-1.6 (type "[Model]*"))
 ~~~

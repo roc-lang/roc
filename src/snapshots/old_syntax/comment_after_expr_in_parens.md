@@ -31,11 +31,11 @@ CloseRound(2:1-2:2),EndOfFile(2:2-2:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tuple @1.1-2.2 (id 75)
+(e-tuple @1.1-2.2
 	(elems
 		(e-runtime-error (tag "ident_not_in_scope"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 75) (type "(Error)"))
+(expr @1.1-2.2 (type "(Error)"))
 ~~~

@@ -116,7 +116,7 @@ CloseRound(17:1-17:2),EndOfFile(17:2-17:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tuple @1.1-17.2 (id 123)
+(e-tuple @1.1-17.2
 	(elems
 		(e-binop @2.5-2.11 (op "add")
 			(e-int @2.5-2.6 (value "4"))
@@ -155,16 +155,16 @@ CloseRound(17:1-17:2),EndOfFile(17:2-17:2),
 			(e-int @13.5-13.6 (value "4"))
 			(e-int @13.10-13.11 (value "2")))
 		(e-binop @14.5-14.19 (op "and")
-			(e-tag @14.5-14.9 (ext-var 109) (name "True") (args "TODO"))
-			(e-tag @14.14-14.18 (ext-var 111) (name "True") (args "TODO")))
+			(e-tag @14.5-14.9 (name "True") (args "TODO"))
+			(e-tag @14.14-14.18 (name "True") (args "TODO")))
 		(e-binop @15.5-15.18 (op "or")
-			(e-tag @15.5-15.9 (ext-var 114) (name "True") (args "TODO"))
-			(e-tag @15.13-15.17 (ext-var 116) (name "True") (args "TODO")))
+			(e-tag @15.5-15.9 (name "True") (args "TODO"))
+			(e-tag @15.13-15.17 (name "True") (args "TODO")))
 		(e-binop @16.5-16.15 (op "null_coalesce")
-			(e-tag @16.5-16.9 (ext-var 119) (name "None") (args "TODO"))
+			(e-tag @16.5-16.9 (name "None") (args "TODO"))
 			(e-int @16.13-16.14 (value "0")))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 123) (type "(*, *, *, *, *, *, *, *, *, *, *, *, *, *, *)"))
+(expr @1.1-17.2 (type "(*, *, *, *, *, *, *, *, *, *, *, *, *, *, *)"))
 ~~~

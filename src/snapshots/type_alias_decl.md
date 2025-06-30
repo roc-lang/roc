@@ -289,22 +289,22 @@ main! = |_| {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 161)
-		(p-assign @27.1-27.6 (ident "main!") (id 129))
-		(e-lambda @27.9-39.2 (id 160)
+	(d-let
+		(p-assign @27.1-27.6 (ident "main!"))
+		(e-lambda @27.9-39.2
 			(args
-				(p-underscore @27.10-27.11 (id 130)))
+				(p-underscore @27.10-27.11))
 			(e-block @27.13-39.2
 				(s-type-anno @29.5-30.11 (name "userId")
 					(ty @29.14-29.20 (name "UserId")))
 				(s-let @30.5-30.17
-					(p-assign @30.5-30.11 (ident "userId") (id 134))
-					(e-int @30.14-30.17 (value "123") (id 135)))
+					(p-assign @30.5-30.11 (ident "userId"))
+					(e-int @30.14-30.17 (value "123")))
 				(s-type-anno @32.5-33.11 (name "person")
 					(ty @32.14-32.20 (name "Person")))
 				(s-let @33.5-33.40
-					(p-assign @33.5-33.11 (ident "person") (id 140))
-					(e-record @33.14-33.40 (id 146)
+					(p-assign @33.5-33.11 (ident "person"))
+					(e-record @33.14-33.40
 						(fields
 							(field (name "name")
 								(e-string @33.22-33.29
@@ -314,14 +314,14 @@ main! = |_| {
 				(s-type-anno @35.5-36.10 (name "color")
 					(ty @35.13-35.18 (name "Color")))
 				(s-let @36.5-36.16
-					(p-assign @36.5-36.10 (ident "color") (id 151))
-					(e-tag @36.13-36.16 (ext-var 152) (name "Red") (args "TODO") (id 153)))
+					(p-assign @36.5-36.10 (ident "color"))
+					(e-tag @36.13-36.16 (name "Red") (args "TODO")))
 				(e-lookup-local @38.5-38.11
-					(pattern (id 134))))))
-	(s-type-decl @4.1-7.7 (id 75)
+					(pattern @30.5-30.11)))))
+	(s-type-decl @4.1-7.7
 		(ty-header @4.1-4.7 (name "UserId"))
 		(ty @4.10-4.13 (name "U64")))
-	(s-type-decl @7.1-10.7 (id 84)
+	(s-type-decl @7.1-10.7
 		(ty-header @7.1-7.16 (name "Result")
 			(ty-args
 				(ty-var @7.8-7.10 (name "ok"))
@@ -331,14 +331,14 @@ main! = |_| {
 				(ty-var @7.23-7.25 (name "ok")))
 			(ty-apply @7.28-7.36 (symbol "Err")
 				(ty-var @7.32-7.35 (name "err")))))
-	(s-type-decl @10.1-13.6 (id 92)
+	(s-type-decl @10.1-13.6
 		(ty-header @10.1-10.7 (name "Person"))
 		(ty-record @10.10-10.35
 			(field (field "name")
 				(ty @10.19-10.22 (name "Str")))
 			(field (field "age")
 				(ty @10.30-10.33 (name "U64")))))
-	(s-type-decl @13.1-16.12 (id 99)
+	(s-type-decl @13.1-16.12
 		(ty-header @13.1-13.12 (name "MapFn")
 			(ty-args
 				(ty-var @13.7-13.8 (name "a"))
@@ -346,14 +346,14 @@ main! = |_| {
 		(ty-fn @13.15-13.21 (effectful false)
 			(ty-var @13.15-13.16 (name "a"))
 			(ty-var @13.20-13.21 (name "b"))))
-	(s-type-decl @16.1-19.6 (id 105)
+	(s-type-decl @16.1-19.6
 		(ty-header @16.1-16.18 (name "ApiResponse")
 			(ty-args
 				(ty-var @16.13-16.17 (name "data"))))
 		(ty-apply @16.21-16.38 (symbol "Result")
 			(ty-var @16.28-16.32 (name "data"))
 			(ty @16.34-16.37 (name "Str"))))
-	(s-type-decl @19.1-22.10 (id 115)
+	(s-type-decl @19.1-22.10
 		(ty-header @19.1-19.6 (name "Color"))
 		(ty-tag-union @19.9-19.47
 			(ty @19.10-19.13 (name "Red"))
@@ -363,7 +363,7 @@ main! = |_| {
 				(ty @19.35-19.37 (name "U8"))
 				(ty @19.39-19.41 (name "U8"))
 				(ty @19.43-19.45 (name "U8")))))
-	(s-type-decl @22.1-27.6 (id 128)
+	(s-type-decl @22.1-27.6
 		(ty-header @22.1-22.16 (name "Container")
 			(ty-args
 				(ty-var @22.11-22.15 (name "item"))))
@@ -382,7 +382,7 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "main!") (def_var 161) (type "* ? *")))
+		(patt @27.1-27.6 (type "* ? *")))
 	(expressions
 		(expr @27.9-39.2 (type "* ? *"))))
 ~~~

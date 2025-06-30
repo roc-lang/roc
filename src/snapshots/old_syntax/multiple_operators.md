@@ -27,7 +27,7 @@ Int(1:1-1:3),OpStar(1:3-1:4),Int(1:4-1:6),OpPlus(1:6-1:7),Int(1:7-1:10),EndOfFil
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop @1.1-1.10 (op "add") (id 77)
+(e-binop @1.1-1.10 (op "add")
 	(e-binop @1.1-1.7 (op "mul")
 		(e-int @1.1-1.3 (value "31"))
 		(e-int @1.4-1.6 (value "42")))
@@ -35,5 +35,5 @@ Int(1:1-1:3),OpStar(1:3-1:4),Int(1:4-1:6),OpPlus(1:6-1:7),Int(1:7-1:10),EndOfFil
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 77) (type "*"))
+(expr @1.1-1.10 (type "*"))
 ~~~

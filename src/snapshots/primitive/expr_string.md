@@ -42,24 +42,24 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 76)
-		(p-assign @2.1-2.5 (ident "name") (id 73))
-		(e-string @2.8-2.13 (id 75)
+	(d-let
+		(p-assign @2.1-2.5 (ident "name"))
+		(e-string @2.8-2.13
 			(e-literal @2.9-2.12 (string "luc"))))
-	(d-let (id 82)
-		(p-assign @3.1-3.4 (ident "foo") (id 77))
-		(e-string @3.7-3.22 (id 81)
+	(d-let
+		(p-assign @3.1-3.4 (ident "foo"))
+		(e-string @3.7-3.22
 			(e-literal @3.8-3.14 (string "hello "))
 			(e-lookup-local @3.16-3.20
-				(pattern (id 73)))
+				(pattern @2.1-2.5))
 			(e-literal @3.21-3.21 (string "")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "name") (def_var 76) (type "Str"))
-		(d_assign (name "foo") (def_var 82) (type "Str")))
+		(patt @2.1-2.5 (type "Str"))
+		(patt @3.1-3.4 (type "Str")))
 	(expressions
 		(expr @2.8-2.13 (type "Str"))
 		(expr @3.7-3.22 (type "Str"))))

@@ -85,38 +85,38 @@ main! = |_| {}
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 98)
-		(p-assign @4.1-4.9 (ident "identity") (id 78))
-		(e-lambda @4.12-8.2 (id 90)
+	(d-let
+		(p-assign @4.1-4.9 (ident "identity"))
+		(e-lambda @4.12-8.2
 			(args
-				(p-assign @4.13-4.14 (ident "x") (id 79)))
+				(p-assign @4.13-4.14 (ident "x")))
 			(e-block @4.16-8.2
 				(s-type-anno @5.5-6.10 (name "thing")
 					(ty-var @5.13-5.14 (name "a")))
 				(s-let @6.5-6.14
-					(p-assign @6.5-6.10 (ident "thing") (id 84))
-					(e-lookup-local @6.13-6.14 (id 85)
-						(pattern (id 79))))
+					(p-assign @6.5-6.10 (ident "thing"))
+					(e-lookup-local @6.13-6.14
+						(pattern @4.13-4.14)))
 				(e-lookup-local @7.5-7.10
-					(pattern (id 84)))))
-		(annotation @4.1-4.9 (signature 96) (id 97)
+					(pattern @6.5-6.10))))
+		(annotation @4.1-4.9
 			(declared-type
 				(ty-fn @3.12-3.18 (effectful false)
 					(ty-var @3.12-3.13 (name "a"))
 					(ty-var @3.17-3.18 (name "a"))))))
-	(d-let (id 104)
-		(p-assign @10.1-10.6 (ident "main!") (id 99))
-		(e-lambda @10.9-10.15 (id 103)
+	(d-let
+		(p-assign @10.1-10.6 (ident "main!"))
+		(e-lambda @10.9-10.15
 			(args
-				(p-underscore @10.10-10.11 (id 100)))
+				(p-underscore @10.10-10.11))
 			(e-empty_record @10.13-10.15))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "identity") (def_var 98) (type "a -> a"))
-		(d_assign (name "main!") (def_var 104) (type "* ? {}")))
+		(patt @4.1-4.9 (type "a -> a"))
+		(patt @10.1-10.6 (type "* ? {}")))
 	(expressions
 		(expr @4.12-8.2 (type "a -> a"))
 		(expr @10.9-10.15 (type "* ? {}"))))

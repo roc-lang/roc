@@ -40,7 +40,7 @@ LowerIdent(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call @1.1-3.3 (id 80)
+(e-call @1.1-3.3
 	(e-int @1.1-1.2 (value "1"))
 	(e-tuple @1.3-3.2
 		(elems
@@ -50,5 +50,5 @@ LowerIdent(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 80) (type "*"))
+(expr @1.1-3.3 (type "*"))
 ~~~

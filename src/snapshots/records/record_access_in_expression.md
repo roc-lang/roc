@@ -30,7 +30,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop @1.1-1.15 (op "add") (id 77)
+(e-binop @1.1-1.15 (op "add")
 	(e-dot-access @1.1-1.13 (field "age")
 		(receiver
 			(e-runtime-error (tag "ident_not_in_scope"))))
@@ -38,5 +38,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 77) (type "*"))
+(expr @1.1-1.15 (type "*"))
 ~~~

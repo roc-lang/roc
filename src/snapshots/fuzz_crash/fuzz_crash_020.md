@@ -1016,24 +1016,24 @@ expect {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 137)
-		(p-assign @35.1-35.4 (ident "ane") (id 128))
-		(e-lambda @35.7-37.4 (id 136)
+	(d-let
+		(p-assign @35.1-35.4 (ident "ane"))
+		(e-lambda @35.7-37.4
 			(args
-				(p-assign @35.8-35.11 (ident "num") (id 129)))
+				(p-assign @35.8-35.11 (ident "num")))
 			(e-if @35.13-37.4
 				(if-branches
 					(if-branch
 						(e-lookup-local @35.16-35.19
-							(pattern (id 129)))
+							(pattern @35.8-35.11))
 						(e-int @35.20-35.21 (value "2"))))
 				(if-else
 					(e-int @35.27-35.28 (value "5"))))))
-	(d-let (id 164)
-		(p-assign @38.1-38.4 (ident "add") (id 140))
-		(e-lambda @38.7-47.2 (id 163)
+	(d-let
+		(p-assign @38.1-38.4 (ident "add"))
+		(e-lambda @38.7-47.2
 			(args
-				(p-applied-tag @38.8-38.11 (id 142)))
+				(p-applied-tag @38.8-38.11))
 			(e-block @38.13-47.2
 				(s-expr @39.2-40.4
 					(e-int @39.2-39.3 (value "1")))
@@ -1050,56 +1050,56 @@ expect {
 							(s-expr @44.3-45.4
 								(e-runtime-error (tag "not_implemented")))
 							(e-runtime-error (tag "ident_not_in_scope"))))))))
-	(d-let (id 172)
-		(p-assign @49.1-49.3 (ident "me") (id 165))
-		(e-lambda @49.6-71.7 (id 170)
+	(d-let
+		(p-assign @49.1-49.3 (ident "me"))
+		(e-lambda @49.6-71.7
 			(args
-				(p-assign @50.2-50.3 (ident "a") (id 166)))
+				(p-assign @50.2-50.3 (ident "a")))
 			(e-runtime-error (tag "not_implemented"))))
-	(d-let (id 336)
-		(p-assign @75.1-75.3 (ident "ma") (id 177))
-		(e-lambda @75.5-111.2 (id 335)
+	(d-let
+		(p-assign @75.1-75.3 (ident "ma"))
+		(e-lambda @75.5-111.2
 			(args
-				(p-underscore @75.6-75.7 (id 178)))
+				(p-underscore @75.6-75.7))
 			(e-block @75.9-111.2
 				(s-expr @75.11-76.3
 					(e-runtime-error (tag "ident_not_in_scope")))
 				(s-let @76.2-76.9
-					(p-assign @76.2-76.3 (ident "w") (id 182))
-					(e-string @76.6-76.9 (id 184)
+					(p-assign @76.2-76.3 (ident "w"))
+					(e-string @76.6-76.9
 						(e-literal @76.7-76.8 (string "d"))))
 				(s-var @77.2-78.8
-					(p-assign @77.2-78.8 (ident "er") (id 187))
-					(e-int @77.11-77.14 (value "123") (id 186)))
+					(p-assign @77.2-78.8 (ident "er"))
+					(e-int @77.11-77.14 (value "123")))
 				(s-expr @83.2-84.4
 					(e-runtime-error (tag "not_implemented")))
 				(s-expr @84.2-86.8
 					(e-call @84.2-86.3
 						(e-lookup-local @84.2-84.4
-							(pattern (id 165)))
+							(pattern @49.1-49.3))
 						(e-runtime-error (tag "not_implemented"))))
 				(s-expr @86.11-86.20
 					(e-string @86.11-86.17
 						(e-literal @86.12-86.16 (string "Unr!"))))
 				(s-let @87.2-87.14
-					(p-assign @87.2-87.3 (ident "i") (id 207))
-					(e-string @87.5-87.14 (id 212)
+					(p-assign @87.2-87.3 (ident "i"))
+					(e-string @87.5-87.14
 						(e-literal @87.6-87.9 (string "H, "))
 						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-literal @87.13-87.13 (string ""))))
 				(s-let @88.1-91.3
-					(p-assign @88.1-88.2 (ident "t") (id 214))
-					(e-list @88.5-91.3 (elem-var 219) (id 222)
+					(p-assign @88.1-88.2 (ident "t"))
+					(e-list @88.5-91.3
 						(elems
 							(e-call @89.3-89.14
 								(e-runtime-error (tag "ident_not_in_scope"))
 								(e-lookup-local @89.7-89.9
-									(pattern (id 187))))
+									(pattern @77.2-78.8)))
 							(e-int @89.16-89.19 (value "456"))
 							(e-int @90.1-90.2 (value "9")))))
 				(s-let @96.2-96.59
-					(p-assign @96.2-96.4 (ident "rd") (id 226))
-					(e-record @96.7-96.59 (id 245)
+					(p-assign @96.2-96.4 (ident "rd"))
+					(e-record @96.7-96.59
 						(fields
 							(field (name "foo")
 								(e-int @96.14-96.17 (value "123")))
@@ -1110,25 +1110,25 @@ expect {
 								(e-runtime-error (tag "ident_not_in_scope")))
 							(field (name "qux")
 								(e-call @96.44-96.53
-									(e-tag @96.44-96.46 (ext-var 235) (name "Ok") (args "TODO"))
+									(e-tag @96.44-96.46 (name "Ok") (args "TODO"))
 									(e-runtime-error (tag "ident_not_in_scope"))))
 							(field (name "ned")
 								(e-runtime-error (tag "ident_not_in_scope"))))))
 				(s-let @97.2-97.48
-					(p-assign @97.2-97.3 (ident "t") (id 247))
-					(e-tuple @97.6-97.48 (id 264)
+					(p-assign @97.2-97.3 (ident "t"))
+					(e-tuple @97.6-97.48
 						(elems
 							(e-int @97.7-97.10 (value "123"))
 							(e-string @97.12-97.19
 								(e-literal @97.13-97.18 (string "World")))
 							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-tag @97.26-97.27 (ext-var 254) (name "O") (args "TODO"))
+							(e-tag @97.26-97.27 (name "O") (args "TODO"))
 							(e-tuple @97.29-97.36
 								(elems
 									(e-runtime-error (tag "ident_not_in_scope"))
 									(e-lookup-local @97.34-97.35
-										(pattern (id 247)))))
-							(e-list @97.38-97.47 (elem-var 260)
+										(pattern @97.2-97.3))))
+							(e-list @97.38-97.47
 								(elems
 									(e-int @97.39-97.40 (value "1"))
 									(e-int @97.42-97.43 (value "2"))
@@ -1142,12 +1142,12 @@ expect {
 							(e-string @100.3-100.10
 								(e-literal @100.4-100.9 (string "World")))
 							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-tag @101.3-101.4 (ext-var 274) (name "O") (args "TODO"))
+							(e-tag @101.3-101.4 (name "O") (args "TODO"))
 							(e-tuple @102.3-102.14
 								(elems
 									(e-runtime-error (tag "ident_not_in_scope"))
 									(e-runtime-error (tag "ident_not_in_scope"))))
-							(e-list @103.3-103.12 (elem-var 281)
+							(e-list @103.3-103.12
 								(elems
 									(e-int @103.4-103.5 (value "1"))
 									(e-int @103.7-103.8 (value "2"))
@@ -1183,17 +1183,17 @@ expect {
 										(receiver
 											(e-runtime-error (tag "not_implemented")))))))))
 				(e-call @106.2-110.3
-					(e-tag @106.2-106.7 (ext-var 316) (name "Stdo!") (args "TODO"))
+					(e-tag @106.2-106.7 (name "Stdo!") (args "TODO"))
 					(e-string @107.3-109.6
 						(e-literal @107.4-107.6 (string "Ho"))
 						(e-call @108.4-108.9
 							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-runtime-error (tag "ident_not_in_scope")))
 						(e-literal @109.4-109.5 (string " ")))))))
-	(d-let (id 340)
-		(p-assign @114.1-114.2 (ident "e") (id 338))
-		(e-empty_record @114.5-114.7 (id 339)))
-	(s-type-decl @13.1-14.6 (id 84)
+	(d-let
+		(p-assign @114.1-114.2 (ident "e"))
+		(e-empty_record @114.5-114.7))
+	(s-type-decl @13.1-14.6
 		(ty-header @13.1-13.10 (name "Map")
 			(ty-args
 				(ty-var @13.5-13.6 (name "a"))
@@ -1204,7 +1204,7 @@ expect {
 				(ty-var @13.19-13.21 (name "ab")))
 			(ty-apply @13.26-13.33 (symbol "List")
 				(ty-var @13.31-13.32 (name "b")))))
-	(s-type-decl @14.1-22.5 (id 94)
+	(s-type-decl @14.1-22.5
 		(ty-header @14.1-15.2 (name "MapML"))
 		(ty-fn @17.3-20.15 (effectful false)
 			(ty-apply @17.3-18.4 (symbol "List"))
@@ -1212,54 +1212,54 @@ expect {
 				(ty-var @19.4-19.6 (name "ab")))
 			(ty-apply @20.4-20.15 (symbol "List")
 				(ty-var @20.12-20.13 (name "b")))))
-	(s-type-decl @24.1-25.3 (id 103)
+	(s-type-decl @24.1-25.3
 		(ty-header @24.1-24.4 (name "Som"))
 		(ty-record @24.7-24.27
 			(field (field "foo")
 				(ty @24.15-24.16 (name "O")))
 			(field (field "bar")
 				(ty-var @24.24-24.25 (name "g")))))
-	(s-type-decl @25.1-28.6 (id 107)
+	(s-type-decl @25.1-28.6
 		(ty-header @25.1-25.6 (name "Ml")
 			(ty-args
 				(ty-var @25.4-25.5 (name "a"))))
 		(ty-record @25.9-26.2))
-	(s-type-decl @28.1-30.6 (id 111)
+	(s-type-decl @28.1-30.6
 		(ty-header @28.1-28.9 (name "Soine")
 			(ty-args
 				(ty-var @28.7-28.8 (name "a"))))
 		(ty-record @28.12-29.2))
-	(s-type-decl @30.1-32.7 (id 116)
+	(s-type-decl @30.1-32.7
 		(ty-header @30.1-30.9 (name "Maybe")
 			(ty-args
 				(ty-var @30.7-30.8 (name "a"))))
 		(ty-tag-union @30.12-30.19
 			(ty @30.13-30.18 (name "Somne"))))
-	(s-type-decl @32.1-35.4 (id 120)
+	(s-type-decl @32.1-35.4
 		(ty-header @32.1-32.10 (name "Mayine")
 			(ty-args
 				(ty-var @32.8-32.9 (name "a"))))
 		(ty-tag-union @32.13-33.2))
-	(s-import @4.1-4.34 (module "pf.Stdout") (qualifier "pf") (id 122)
+	(s-import @4.1-4.34 (module "pf.Stdout") (qualifier "pf")
 		(exposes
 			(exposed (name "line!") (wildcard false))))
-	(s-import @6.1-8.6 (module "Stdot") (id 124)
+	(s-import @6.1-8.6 (module "Stdot")
 		(exposes
 			(exposed (name "Cust") (wildcard false))))
-	(s-import @10.1-10.19 (module "Bae") (alias "Gooe") (id 125)
+	(s-import @10.1-10.19 (module "Bae") (alias "Gooe")
 		(exposes))
-	(s-import @11.1-12.4 (module "Ba") (id 126)
+	(s-import @11.1-12.4 (module "Ba")
 		(exposes)))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "ane") (def_var 137) (type "* ? Num(*)"))
-		(d_assign (name "add") (def_var 164) (type "[Rum]* ? Error"))
-		(d_assign (name "me") (def_var 172) (type "* ? Error"))
-		(d_assign (name "ma") (def_var 336) (type "* ? *"))
-		(d_assign (name "e") (def_var 340) (type "{}")))
+		(patt @35.1-35.4 (type "* ? Num(*)"))
+		(patt @38.1-38.4 (type "[Rum]* ? Error"))
+		(patt @49.1-49.3 (type "* ? Error"))
+		(patt @75.1-75.3 (type "* ? *"))
+		(patt @114.1-114.2 (type "{}")))
 	(expressions
 		(expr @35.7-37.4 (type "* ? Num(*)"))
 		(expr @38.7-47.2 (type "[Rum]* ? Error"))

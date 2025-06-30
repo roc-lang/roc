@@ -27,9 +27,9 @@ OpAmpersand(3:1-3:2),LowerIdent(3:2-3:3),NoSpaceDotLowerIdent(3:3-3:5),EndOfFile
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-int @1.1-1.2 (value "4") (id 73))
+(e-int @1.1-1.2 (value "4"))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 73) (type "Num(*)"))
+(expr @1.1-1.2 (type "Num(*)"))
 ~~~

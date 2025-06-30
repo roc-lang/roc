@@ -135,9 +135,9 @@ CloseCurly(2:1-2:2),EndOfFile(2:2-2:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1.1-2.2 (id 85)
+(e-block @1.1-2.2
 	(s-expr @1.3-1.10
-		(e-tag @1.3-1.6 (ext-var 73) (name "Foo") (args "TODO")))
+		(e-tag @1.3-1.6 (name "Foo") (args "TODO")))
 	(s-type-anno @1.18-1.23 (name "x")
 		(ty-malformed @1.21-1.23))
 	(s-type-anno @1.1-1.1 (name "y")
@@ -146,5 +146,5 @@ CloseCurly(2:1-2:2),EndOfFile(2:2-2:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 85) (type "{}"))
+(expr @1.1-2.2 (type "{}"))
 ~~~

@@ -141,52 +141,52 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 106)
-		(p-assign @8.1-8.8 (ident "process") (id 94))
-		(e-lambda @8.11-8.32 (id 99)
+	(d-let
+		(p-assign @8.1-8.8 (ident "process"))
+		(e-lambda @8.11-8.32
 			(args
-				(p-assign @8.12-8.19 (ident "_result") (id 95)))
+				(p-assign @8.12-8.19 (ident "_result")))
 			(e-string @8.21-8.32
 				(e-literal @8.22-8.31 (string "processed"))))
-		(annotation @8.1-8.8 (signature 104) (id 105)
+		(annotation @8.1-8.8
 			(declared-type
 				(ty-fn @7.11-7.36 (effectful false)
 					(ty-apply @7.11-7.29 (symbol "MyResult")
 						(ty @7.20-7.23 (name "Str"))
 						(ty @7.25-7.28 (name "I32")))
 					(ty @7.33-7.36 (name "Str"))))))
-	(d-let (id 123)
-		(p-assign @15.1-15.10 (ident "getString") (id 111))
-		(e-lambda @15.13-15.29 (id 116)
+	(d-let
+		(p-assign @15.1-15.10 (ident "getString"))
+		(e-lambda @15.13-15.29
 			(args
-				(p-assign @15.14-15.18 (ident "_opt") (id 112)))
+				(p-assign @15.14-15.18 (ident "_opt")))
 			(e-string @15.20-15.29
 				(e-literal @15.21-15.28 (string "default"))))
-		(annotation @15.1-15.10 (signature 121) (id 122)
+		(annotation @15.1-15.10
 			(declared-type
 				(ty-fn @14.13-14.31 (effectful false)
 					(ty-apply @14.13-14.24 (symbol "Option")
 						(ty @14.20-14.23 (name "Str")))
 					(ty @14.28-14.31 (name "Str"))))))
-	(d-let (id 139)
-		(p-assign @18.1-18.10 (ident "getNumber") (id 128))
-		(e-lambda @18.13-18.21 (id 132)
+	(d-let
+		(p-assign @18.1-18.10 (ident "getNumber"))
+		(e-lambda @18.13-18.21
 			(args
-				(p-assign @18.14-18.18 (ident "_opt") (id 129)))
+				(p-assign @18.14-18.18 (ident "_opt")))
 			(e-int @18.20-18.21 (value "0")))
-		(annotation @18.1-18.10 (signature 137) (id 138)
+		(annotation @18.1-18.10
 			(declared-type
 				(ty-fn @17.13-17.31 (effectful false)
 					(ty-apply @17.13-17.24 (symbol "Option")
 						(ty @17.20-17.23 (name "I32")))
 					(ty @17.28-17.31 (name "I32"))))))
-	(d-let (id 145)
-		(p-assign @20.1-20.6 (ident "main!") (id 140))
-		(e-lambda @20.9-20.15 (id 144)
+	(d-let
+		(p-assign @20.1-20.6 (ident "main!"))
+		(e-lambda @20.9-20.15
 			(args
-				(p-underscore @20.10-20.11 (id 141)))
+				(p-underscore @20.10-20.11))
 			(e-empty_record @20.13-20.15)))
-	(s-type-decl @4.1-7.8 (id 81)
+	(s-type-decl @4.1-7.8
 		(ty-header @4.1-4.18 (name "MyResult")
 			(ty-args
 				(ty-var @4.10-4.12 (name "ok"))
@@ -196,7 +196,7 @@ NO CHANGE
 				(ty-var @4.27-4.29 (name "ok")))
 			(ty-apply @4.32-4.40 (symbol "Bad")
 				(ty-var @4.36-4.39 (name "err")))))
-	(s-type-decl @11.1-14.10 (id 88)
+	(s-type-decl @11.1-14.10
 		(ty-header @11.1-11.10 (name "Option")
 			(ty-args
 				(ty-var @11.8-11.9 (name "a"))))
@@ -209,10 +209,10 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "process") (def_var 106) (type "MyResult -> Str"))
-		(d_assign (name "getString") (def_var 123) (type "Option -> Str"))
-		(d_assign (name "getNumber") (def_var 139) (type "Option -> I32"))
-		(d_assign (name "main!") (def_var 145) (type "* ? {}")))
+		(patt @8.1-8.8 (type "MyResult -> Str"))
+		(patt @15.1-15.10 (type "Option -> Str"))
+		(patt @18.1-18.10 (type "Option -> I32"))
+		(patt @20.1-20.6 (type "* ? {}")))
 	(expressions
 		(expr @8.11-8.32 (type "MyResult -> Str"))
 		(expr @15.13-15.29 (type "Option -> Str"))

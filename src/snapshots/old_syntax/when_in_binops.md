@@ -42,7 +42,7 @@ di < s < when
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop @1.1-1.12 (op "lt") (id 80)
+(e-binop @1.1-1.12 (op "lt")
 	(e-runtime-error (tag "ident_not_in_scope"))
 	(e-binop @1.4-1.12 (op "lt")
 		(e-runtime-error (tag "ident_not_in_scope"))
@@ -50,5 +50,5 @@ di < s < when
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 80) (type "*"))
+(expr @1.1-1.12 (type "*"))
 ~~~

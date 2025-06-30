@@ -23,9 +23,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-empty_list @1.1-1.3 (id 73))
+(e-empty_list @1.1-1.3)
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 73) (type "List(*)"))
+(expr @1.1-1.3 (type "List(*)"))
 ~~~

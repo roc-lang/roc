@@ -27,9 +27,9 @@ LowerIdent(3:1-3:3),EndOfFile(3:3-3:3),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-empty_record @1.1-2.2 (id 73))
+(e-empty_record @1.1-2.2)
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 73) (type "{}"))
+(expr @1.1-2.2 (type "{}"))
 ~~~

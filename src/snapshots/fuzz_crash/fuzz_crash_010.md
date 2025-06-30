@@ -73,16 +73,16 @@ foo =
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 77)
-		(p-assign @3.1-3.4 (ident "foo") (id 74))
-		(e-string @5.5-5.35 (id 76)
+	(d-let
+		(p-assign @3.1-3.4 (ident "foo"))
+		(e-string @5.5-5.35
 			(e-literal @5.6-5.35 (string "on        (string 'onmo %')))")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "foo") (def_var 77) (type "Str")))
+		(patt @3.1-3.4 (type "Str")))
 	(expressions
 		(expr @5.5-5.35 (type "Str"))))
 ~~~

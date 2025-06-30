@@ -36,7 +36,7 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-type-anno @1.1-1.78 (name "create_user!") (id 85)
+	(s-type-anno @1.1-1.78 (name "create_user!")
 		(ty-fn @1.16-1.78 (effectful true)
 			(ty @1.16-1.19 (name "Str"))
 			(ty @1.21-1.24 (name "U32"))

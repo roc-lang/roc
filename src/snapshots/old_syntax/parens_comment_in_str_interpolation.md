@@ -33,14 +33,14 @@ CloseRound(2:1-2:2),CloseStringInterpolation(2:2-2:3),StringPart(2:3-2:3),String
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-string @1.1-2.4 (id 78)
+(e-string @1.1-2.4
 	(e-literal @1.2-1.2 (string ""))
 	(e-tuple @1.4-2.2
 		(elems
-			(e-tag @1.5-1.6 (ext-var 74) (name "S") (args "TODO"))))
+			(e-tag @1.5-1.6 (name "S") (args "TODO"))))
 	(e-literal @2.3-2.3 (string "")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 78) (type "Str"))
+(expr @1.1-2.4 (type "Str"))
 ~~~

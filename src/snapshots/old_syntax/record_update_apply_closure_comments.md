@@ -48,12 +48,12 @@ LowerIdent(3:2-3:3),OpArrow(3:3-3:5),Int(3:5-3:6),EndOfFile(3:6-3:6),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1.1-2.4 (id 77)
+(e-block @1.1-2.4
 	(s-expr @2.1-2.3
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(e-empty_record @1.1-2.4))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 77) (type "{}"))
+(expr @1.1-2.4 (type "{}"))
 ~~~

@@ -40,12 +40,12 @@ LowerIdent(3:1-3:2),EndOfFile(3:2-3:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call @1.1-2.2 (id 79)
+(e-call @1.1-2.2
 	(e-int @1.1-1.2 (value "1"))
 	(e-runtime-error (tag "ident_not_in_scope"))
 	(e-runtime-error (tag "ident_not_in_scope")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 79) (type "*"))
+(expr @1.1-2.2 (type "*"))
 ~~~

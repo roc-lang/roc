@@ -52,12 +52,12 @@ Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop @1.1-1.51 (op "or") (id 102)
+(e-binop @1.1-1.51 (op "or")
 	(e-binop @1.1-1.43 (op "or")
 		(e-binop @1.1-1.20 (op "gt")
 			(e-binop @1.1-1.14 (op "null_coalesce")
 				(e-call @1.1-1.9
-					(e-tag @1.1-1.4 (ext-var 73) (name "Err") (args "TODO"))
+					(e-tag @1.1-1.4 (name "Err") (args "TODO"))
 					(e-runtime-error (tag "ident_not_in_scope")))
 				(e-int @1.11-1.13 (value "12")))
 			(e-binop @1.14-1.20 (op "mul")
@@ -82,5 +82,5 @@ Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 102) (type "*"))
+(expr @1.1-1.51 (type "*"))
 ~~~

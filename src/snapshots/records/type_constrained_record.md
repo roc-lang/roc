@@ -57,7 +57,7 @@ process_user! : { name : Str, age :  } => Str
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-type-anno @1.1-1.54 (name "process_user!") (id 81)
+	(s-type-anno @1.1-1.54 (name "process_user!")
 		(ty-fn @1.17-1.54 (effectful true)
 			(ty-record @1.17-1.47
 				(field (field "name")

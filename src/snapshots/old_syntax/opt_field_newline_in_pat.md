@@ -44,10 +44,10 @@ UpperIdent(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1.1-3.3 (id 79)
+(e-block @1.1-3.3
 	(e-runtime-error (tag "not_implemented")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 79) (type "Error"))
+(expr @1.1-3.3 (type "Error"))
 ~~~

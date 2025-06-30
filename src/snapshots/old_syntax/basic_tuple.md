@@ -26,7 +26,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tuple @1.1-1.10 (id 76)
+(e-tuple @1.1-1.10
 	(elems
 		(e-int @1.2-1.3 (value "1"))
 		(e-int @1.5-1.6 (value "2"))
@@ -34,5 +34,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 76) (type "(Num(*), Num(*), Num(*))"))
+(expr @1.1-1.10 (type "(Num(*), Num(*), Num(*))"))
 ~~~

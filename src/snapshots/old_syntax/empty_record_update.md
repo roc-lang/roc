@@ -44,12 +44,12 @@ OpenCurly(1:1-1:2),LowerIdent(1:2-1:3),OpAmpersand(1:3-1:4),CloseCurly(1:4-1:5),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1.1-1.5 (id 77)
+(e-block @1.1-1.5
 	(s-expr @1.2-1.4
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(e-empty_record @1.1-1.5))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 77) (type "{}"))
+(expr @1.1-1.5 (type "{}"))
 ~~~

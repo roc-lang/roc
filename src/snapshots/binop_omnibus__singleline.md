@@ -52,12 +52,12 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop @1.1-1.69 (op "or") (id 102)
+(e-binop @1.1-1.69 (op "or")
 	(e-binop @1.1-1.57 (op "or")
 		(e-binop @1.1-1.26 (op "gt")
 			(e-binop @1.1-1.17 (op "null_coalesce")
 				(e-call @1.1-1.9
-					(e-tag @1.1-1.4 (ext-var 73) (name "Err") (args "TODO"))
+					(e-tag @1.1-1.4 (name "Err") (args "TODO"))
 					(e-runtime-error (tag "ident_not_in_scope")))
 				(e-int @1.13-1.15 (value "12")))
 			(e-binop @1.18-1.26 (op "mul")
@@ -82,5 +82,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 102) (type "*"))
+(expr @1.1-1.69 (type "*"))
 ~~~

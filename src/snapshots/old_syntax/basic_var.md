@@ -26,9 +26,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "ident_not_in_scope") (id 74))
+(e-runtime-error (tag "ident_not_in_scope"))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 74) (type "Error"))
+(expr @1.1-1.5 (type "Error"))
 ~~~

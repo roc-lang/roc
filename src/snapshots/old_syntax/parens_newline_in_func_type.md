@@ -27,9 +27,9 @@ C
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tag @1.1-1.2 (ext-var 73) (name "C") (args "TODO") (id 74))
+(e-tag @1.1-1.2 (name "C") (args "TODO"))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 74) (type "[C]*"))
+(expr @1.1-1.2 (type "[C]*"))
 ~~~

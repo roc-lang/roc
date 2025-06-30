@@ -25,9 +25,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "invalid_num_literal") (id 74))
+(e-runtime-error (tag "invalid_num_literal"))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 74) (type "Error"))
+(expr @1.1-1.42 (type "Error"))
 ~~~

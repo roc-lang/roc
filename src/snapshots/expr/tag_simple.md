@@ -23,9 +23,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tag @1.1-1.3 (ext-var 73) (name "Ok") (args "TODO") (id 74))
+(e-tag @1.1-1.3 (name "Ok") (args "TODO"))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 74) (type "[Ok]*"))
+(expr @1.1-1.3 (type "[Ok]*"))
 ~~~

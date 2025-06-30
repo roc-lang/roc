@@ -33,9 +33,9 @@ M
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tag @1.1-1.2 (ext-var 73) (name "M") (args "TODO") (id 74))
+(e-tag @1.1-1.2 (name "M") (args "TODO"))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 74) (type "[M]*"))
+(expr @1.1-1.2 (type "[M]*"))
 ~~~

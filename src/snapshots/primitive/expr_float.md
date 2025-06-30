@@ -33,15 +33,15 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 75)
-		(p-assign @2.1-2.4 (ident "foo") (id 73))
-		(e-dec-small @2.7-2.12 (numerator "1234") (denominator-power-of-ten "2") (value "12.34") (id 74))))
+	(d-let
+		(p-assign @2.1-2.4 (ident "foo"))
+		(e-dec-small @2.7-2.12 (numerator "1234") (denominator-power-of-ten "2") (value "12.34"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "foo") (def_var 75) (type "Frac(*)")))
+		(patt @2.1-2.4 (type "Frac(*)")))
 	(expressions
 		(expr @2.7-2.12 (type "Frac(*)"))))
 ~~~

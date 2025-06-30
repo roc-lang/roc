@@ -66,29 +66,29 @@ CloseCurly(7:1-7:2),EndOfFile(7:2-7:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1.1-7.2 (id 96)
+(e-block @1.1-7.2
 	(s-type-anno @2.5-2.39 (name "launchTheNukes")
 		(ty-fn @2.22-2.34 (effectful true)
 			(ty-record @2.22-2.24)
 			(ty @2.28-2.34 (name "Result"))))
 	(s-expr @2.35-2.53
-		(e-tag @2.35-2.39 (ext-var 78) (name "Bool") (args "TODO")))
+		(e-tag @2.35-2.39 (name "Bool") (args "TODO")))
 	(s-expr @2.40-3.19
-		(e-tag @2.40-2.53 (ext-var 81) (name "LaunchNukeErr") (args "TODO")))
+		(e-tag @2.40-2.53 (name "LaunchNukeErr") (args "TODO")))
 	(s-let @3.5-5.6
-		(p-assign @3.5-3.19 (ident "launchTheNukes") (id 84))
-		(e-lambda @3.22-5.6 (id 90)
+		(p-assign @3.5-3.19 (ident "launchTheNukes"))
+		(e-lambda @3.22-5.6
 			(args
-				(p-record-destructure @3.23-3.25 (id 85)
+				(p-record-destructure @3.23-3.25
 					(destructs)))
 			(e-block @3.27-5.6
 				(e-runtime-error (tag "not_implemented")))))
 	(e-call @6.5-6.23
 		(e-lookup-local @6.5-6.19
-			(pattern (id 84)))
+			(pattern @3.5-3.19))
 		(e-empty_record @6.20-6.22)))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 96) (type "*"))
+(expr @1.1-7.2 (type "*"))
 ~~~

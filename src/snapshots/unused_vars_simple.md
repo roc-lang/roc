@@ -178,85 +178,85 @@ main! = |_| {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 79)
-		(p-assign @4.1-4.15 (ident "unused_regular") (id 73))
-		(e-lambda @4.18-4.24 (id 77)
+	(d-let
+		(p-assign @4.1-4.15 (ident "unused_regular"))
+		(e-lambda @4.18-4.24
 			(args
-				(p-assign @4.19-4.20 (ident "x") (id 74)))
+				(p-assign @4.19-4.20 (ident "x")))
 			(e-int @4.22-4.24 (value "42"))))
-	(d-let (id 86)
-		(p-assign @7.1-7.16 (ident "used_underscore") (id 80))
-		(e-lambda @7.19-7.34 (id 85)
+	(d-let
+		(p-assign @7.1-7.16 (ident "used_underscore"))
+		(e-lambda @7.19-7.34
 			(args
-				(p-assign @7.20-7.26 (ident "_value") (id 81)))
+				(p-assign @7.20-7.26 (ident "_value")))
 			(e-lookup-local @7.28-7.34
-				(pattern (id 81)))))
-	(d-let (id 92)
-		(p-assign @10.1-10.18 (ident "unused_underscore") (id 87))
-		(e-lambda @10.21-10.35 (id 91)
+				(pattern @7.20-7.26))))
+	(d-let
+		(p-assign @10.1-10.18 (ident "unused_underscore"))
+		(e-lambda @10.21-10.35
 			(args
-				(p-assign @10.22-10.30 (ident "_ignored") (id 88)))
+				(p-assign @10.22-10.30 (ident "_ignored")))
 			(e-int @10.32-10.35 (value "100"))))
-	(d-let (id 100)
-		(p-assign @13.1-13.13 (ident "used_regular") (id 93))
-		(e-lambda @13.16-15.6 (id 99)
+	(d-let
+		(p-assign @13.1-13.13 (ident "used_regular"))
+		(e-lambda @13.16-15.6
 			(args
-				(p-assign @13.17-13.23 (ident "number") (id 94)))
+				(p-assign @13.17-13.23 (ident "number")))
 			(e-binop @13.25-15.6 (op "add")
 				(e-lookup-local @13.25-13.31
-					(pattern (id 94)))
+					(pattern @13.17-13.23))
 				(e-int @13.34-13.35 (value "1")))))
-	(d-let (id 137)
-		(p-assign @15.1-15.6 (ident "main!") (id 101))
-		(e-lambda @15.9-21.2 (id 136)
+	(d-let
+		(p-assign @15.1-15.6 (ident "main!"))
+		(e-lambda @15.9-21.2
 			(args
-				(p-underscore @15.10-15.11 (id 102)))
+				(p-underscore @15.10-15.11))
 			(e-block @15.13-21.2
 				(s-let @16.5-16.26
-					(p-assign @16.5-16.6 (ident "a") (id 103))
-					(e-call @16.9-16.26 (id 107)
+					(p-assign @16.5-16.6 (ident "a"))
+					(e-call @16.9-16.26
 						(e-lookup-local @16.9-16.23
-							(pattern (id 73)))
+							(pattern @4.1-4.15))
 						(e-int @16.24-16.25 (value "5"))))
 				(s-let @17.5-17.28
-					(p-assign @17.5-17.6 (ident "b") (id 109))
-					(e-call @17.9-17.28 (id 113)
+					(p-assign @17.5-17.6 (ident "b"))
+					(e-call @17.9-17.28
 						(e-lookup-local @17.9-17.24
-							(pattern (id 80)))
+							(pattern @7.1-7.16))
 						(e-int @17.25-17.27 (value "10"))))
 				(s-let @18.5-18.30
-					(p-assign @18.5-18.6 (ident "c") (id 115))
-					(e-call @18.9-18.30 (id 119)
+					(p-assign @18.5-18.6 (ident "c"))
+					(e-call @18.9-18.30
 						(e-lookup-local @18.9-18.26
-							(pattern (id 87)))
+							(pattern @10.1-10.18))
 						(e-int @18.27-18.29 (value "15"))))
 				(s-let @19.5-19.25
-					(p-assign @19.5-19.6 (ident "d") (id 121))
-					(e-call @19.9-19.25 (id 125)
+					(p-assign @19.5-19.6 (ident "d"))
+					(e-call @19.9-19.25
 						(e-lookup-local @19.9-19.21
-							(pattern (id 93)))
+							(pattern @13.1-13.13))
 						(e-int @19.22-19.24 (value "20"))))
 				(e-binop @20.5-21.2 (op "add")
 					(e-lookup-local @20.5-20.6
-						(pattern (id 103)))
+						(pattern @16.5-16.6))
 					(e-binop @20.9-21.2 (op "add")
 						(e-lookup-local @20.9-20.10
-							(pattern (id 109)))
+							(pattern @17.5-17.6))
 						(e-binop @20.13-21.2 (op "add")
 							(e-lookup-local @20.13-20.14
-								(pattern (id 115)))
+								(pattern @18.5-18.6))
 							(e-lookup-local @20.17-20.18
-								(pattern (id 121))))))))))
+								(pattern @19.5-19.6)))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "unused_regular") (def_var 79) (type "* ? Num(*)"))
-		(d_assign (name "used_underscore") (def_var 86) (type "* ? *"))
-		(d_assign (name "unused_underscore") (def_var 92) (type "* ? Num(*)"))
-		(d_assign (name "used_regular") (def_var 100) (type "* ? *"))
-		(d_assign (name "main!") (def_var 137) (type "* ? *")))
+		(patt @4.1-4.15 (type "* ? Num(*)"))
+		(patt @7.1-7.16 (type "* ? *"))
+		(patt @10.1-10.18 (type "* ? Num(*)"))
+		(patt @13.1-13.13 (type "* ? *"))
+		(patt @15.1-15.6 (type "* ? *")))
 	(expressions
 		(expr @4.18-4.24 (type "* ? Num(*)"))
 		(expr @7.19-7.34 (type "* ? *"))

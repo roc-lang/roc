@@ -33,15 +33,15 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 76)
-		(p-assign @2.1-2.4 (ident "foo") (id 73))
-		(e-tag @2.7-2.15 (ext-var 74) (name "FortyTwo") (args "TODO") (id 75))))
+	(d-let
+		(p-assign @2.1-2.4 (ident "foo"))
+		(e-tag @2.7-2.15 (name "FortyTwo") (args "TODO"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "foo") (def_var 76) (type "[FortyTwo]*")))
+		(patt @2.1-2.4 (type "[FortyTwo]*")))
 	(expressions
 		(expr @2.7-2.15 (type "[FortyTwo]*"))))
 ~~~

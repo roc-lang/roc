@@ -277,13 +277,13 @@ main! = |_| processComplex(Ok([Some(42), None]))
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 112)
-		(p-assign @5.1-5.15 (ident "processComplex") (id 99))
-		(e-lambda @5.18-6.9 (id 104)
+	(d-let
+		(p-assign @5.1-5.15 (ident "processComplex"))
+		(e-lambda @5.18-6.9
 			(args
-				(p-assign @5.19-5.25 (ident "result") (id 100)))
+				(p-assign @5.19-5.25 (ident "result")))
 			(e-runtime-error (tag "ident_not_in_scope")))
-		(annotation @5.1-5.15 (signature 110) (id 111)
+		(annotation @5.1-5.15
 			(declared-type
 				(ty-fn @4.18-4.72 (effectful false)
 					(ty-apply @4.18-4.61 (symbol "Result")
@@ -296,13 +296,13 @@ main! = |_| processComplex(Ok([Some(42), None]))
 								(ty-var @4.57-4.58 (name "b")))))
 					(ty-apply @4.65-4.72 (symbol "List")
 						(ty-var @4.70-4.71 (name "a")))))))
-	(d-let (id 142)
-		(p-assign @12.1-12.11 (ident "deepNested") (id 129))
-		(e-lambda @12.14-12.25 (id 134)
+	(d-let
+		(p-assign @12.1-12.11 (ident "deepNested"))
+		(e-lambda @12.14-12.25
 			(args
-				(p-underscore @12.15-12.16 (id 130)))
+				(p-underscore @12.15-12.16))
 			(e-runtime-error (tag "lambda_body_not_canonicalized")))
-		(annotation @12.1-12.11 (signature 140) (id 141)
+		(annotation @12.1-12.11
 			(declared-type
 				(ty-fn @11.14-11.55 (effectful false)
 					(ty-apply @11.14-11.50 (symbol "Maybe")
@@ -313,23 +313,23 @@ main! = |_| processComplex(Ok([Some(42), None]))
 									(ty-var @11.42-11.43 (name "a"))))
 							(ty-var @11.47-11.48 (name "b"))))
 					(ty-var @11.54-11.55 (name "a"))))))
-	(d-let (id 163)
-		(p-assign @17.1-17.6 (ident "main!") (id 144))
-		(e-lambda @17.9-17.49 (id 162)
+	(d-let
+		(p-assign @17.1-17.6 (ident "main!"))
+		(e-lambda @17.9-17.49
 			(args
-				(p-underscore @17.10-17.11 (id 145)))
+				(p-underscore @17.10-17.11))
 			(e-call @17.13-17.49
 				(e-lookup-local @17.13-17.27
-					(pattern (id 99)))
+					(pattern @5.1-5.15))
 				(e-call @17.28-17.48
-					(e-tag @17.28-17.30 (ext-var 147) (name "Ok") (args "TODO"))
-					(e-list @17.31-17.47 (elem-var 153)
+					(e-tag @17.28-17.30 (name "Ok") (args "TODO"))
+					(e-list @17.31-17.47
 						(elems
 							(e-call @17.32-17.40
-								(e-tag @17.32-17.36 (ext-var 149) (name "Some") (args "TODO"))
+								(e-tag @17.32-17.36 (name "Some") (args "TODO"))
 								(e-int @17.37-17.39 (value "42")))
-							(e-tag @17.42-17.46 (ext-var 154) (name "None") (args "TODO"))))))))
-	(s-type-decl @15.1-17.6 (id 84)
+							(e-tag @17.42-17.46 (name "None") (args "TODO"))))))))
+	(s-type-decl @15.1-17.6
 		(ty-header @15.1-15.18 (name "ComplexType")
 			(ty-args
 				(ty-var @15.13-15.14 (name "a"))
@@ -347,9 +347,9 @@ main! = |_| processComplex(Ok([Some(42), None]))
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "processComplex") (def_var 112) (type "Result -> Error"))
-		(d_assign (name "deepNested") (def_var 142) (type "Maybe -> Error"))
-		(d_assign (name "main!") (def_var 163) (type "* ? *")))
+		(patt @5.1-5.15 (type "Result -> Error"))
+		(patt @12.1-12.11 (type "Maybe -> Error"))
+		(patt @17.1-17.6 (type "* ? *")))
 	(expressions
 		(expr @5.18-6.9 (type "Result -> Error"))
 		(expr @12.14-12.25 (type "Maybe -> Error"))

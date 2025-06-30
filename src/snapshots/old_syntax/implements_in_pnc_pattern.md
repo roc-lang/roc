@@ -47,11 +47,11 @@ g(, x)
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call @1.1-1.16 (id 78)
+(e-call @1.1-1.16
 	(e-runtime-error (tag "ident_not_in_scope"))
 	(e-runtime-error (tag "ident_not_in_scope")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 78) (type "*"))
+(expr @1.1-1.16 (type "*"))
 ~~~

@@ -48,7 +48,7 @@ LowerIdent(6:1-6:2),EndOfFile(6:2-6:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call @1.1-5.2 (id 81)
+(e-call @1.1-5.2
 	(e-int @1.1-1.2 (value "1"))
 	(e-call @1.3-4.2
 		(e-runtime-error (tag "ident_not_in_scope"))
@@ -58,5 +58,5 @@ LowerIdent(6:1-6:2),EndOfFile(6:2-6:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 81) (type "*"))
+(expr @1.1-5.2 (type "*"))
 ~~~

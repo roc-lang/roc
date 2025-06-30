@@ -43,12 +43,12 @@ Int(3:1-3:2),CloseRound(3:2-3:3),CloseRound(3:3-3:4),EndOfFile(3:4-3:4),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop @1.1-3.2 (op "sub") (id 75)
+(e-binop @1.1-3.2 (op "sub")
 	(e-int @1.1-1.2 (value "5"))
 	(e-tuple @1.3-2.4
 		(elems)))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 75) (type "*"))
+(expr @1.1-3.2 (type "*"))
 ~~~

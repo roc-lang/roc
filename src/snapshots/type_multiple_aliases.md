@@ -152,75 +152,75 @@ main! = |_| {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 117)
-		(p-assign @9.1-9.11 (ident "createUser") (id 96))
-		(e-lambda @9.14-9.47 (id 108)
+	(d-let
+		(p-assign @9.1-9.11 (ident "createUser"))
+		(e-lambda @9.14-9.47
 			(args
-				(p-assign @9.15-9.17 (ident "id") (id 97))
-				(p-assign @9.19-9.23 (ident "name") (id 98))
-				(p-assign @9.25-9.28 (ident "age") (id 99)))
+				(p-assign @9.15-9.17 (ident "id"))
+				(p-assign @9.19-9.23 (ident "name"))
+				(p-assign @9.25-9.28 (ident "age")))
 			(e-record @9.30-9.47
 				(fields
 					(field (name "id")
 						(e-lookup-local @9.32-9.35
-							(pattern (id 97))))
+							(pattern @9.15-9.17)))
 					(field (name "name")
 						(e-lookup-local @9.36-9.41
-							(pattern (id 98))))
+							(pattern @9.19-9.23)))
 					(field (name "age")
 						(e-lookup-local @9.42-9.47
-							(pattern (id 99)))))))
-		(annotation @9.1-9.11 (signature 115) (id 116)
+							(pattern @9.25-9.28))))))
+		(annotation @9.1-9.11
 			(declared-type
 				(ty-fn @8.14-8.47 (effectful false)
 					(ty @8.14-8.20 (name "UserId"))
 					(ty @8.22-8.30 (name "UserName"))
 					(ty @8.32-8.39 (name "UserAge"))
 					(ty @8.43-8.47 (name "User"))))))
-	(d-let (id 133)
-		(p-assign @12.1-12.12 (ident "getUserName") (id 121))
-		(e-lambda @12.15-14.6 (id 126)
+	(d-let
+		(p-assign @12.1-12.12 (ident "getUserName"))
+		(e-lambda @12.15-14.6
 			(args
-				(p-assign @12.16-12.20 (ident "user") (id 122)))
+				(p-assign @12.16-12.20 (ident "user")))
 			(e-dot-access @12.22-14.6 (field "name")
 				(receiver
 					(e-lookup-local @12.22-12.26
-						(pattern (id 122))))))
-		(annotation @12.1-12.12 (signature 131) (id 132)
+						(pattern @12.16-12.20)))))
+		(annotation @12.1-12.12
 			(declared-type
 				(ty-fn @11.15-11.31 (effectful false)
 					(ty @11.15-11.19 (name "User"))
 					(ty @11.23-11.31 (name "UserName"))))))
-	(d-let (id 152)
-		(p-assign @14.1-14.6 (ident "main!") (id 134))
-		(e-lambda @14.9-17.2 (id 151)
+	(d-let
+		(p-assign @14.1-14.6 (ident "main!"))
+		(e-lambda @14.9-17.2
 			(args
-				(p-underscore @14.10-14.11 (id 135)))
+				(p-underscore @14.10-14.11))
 			(e-block @14.13-17.2
 				(s-let @15.5-15.40
-					(p-assign @15.5-15.9 (ident "user") (id 136))
-					(e-call @15.12-15.40 (id 143)
+					(p-assign @15.5-15.9 (ident "user"))
+					(e-call @15.12-15.40
 						(e-lookup-local @15.12-15.22
-							(pattern (id 96)))
+							(pattern @9.1-9.11))
 						(e-int @15.23-15.26 (value "123"))
 						(e-string @15.28-15.35
 							(e-literal @15.29-15.34 (string "Alice")))
 						(e-int @15.37-15.39 (value "25"))))
 				(e-call @16.5-16.22
 					(e-lookup-local @16.5-16.16
-						(pattern (id 121)))
+						(pattern @12.1-12.12))
 					(e-lookup-local @16.17-16.21
-						(pattern (id 136)))))))
-	(s-type-decl @3.1-4.9 (id 75)
+						(pattern @15.5-15.9))))))
+	(s-type-decl @3.1-4.9
 		(ty-header @3.1-3.7 (name "UserId"))
 		(ty @3.10-3.13 (name "U64")))
-	(s-type-decl @4.1-5.8 (id 78)
+	(s-type-decl @4.1-5.8
 		(ty-header @4.1-4.9 (name "UserName"))
 		(ty @4.12-4.15 (name "Str")))
-	(s-type-decl @5.1-6.5 (id 81)
+	(s-type-decl @5.1-6.5
 		(ty-header @5.1-5.8 (name "UserAge"))
 		(ty @5.11-5.13 (name "U8")))
-	(s-type-decl @6.1-8.11 (id 90)
+	(s-type-decl @6.1-8.11
 		(ty-header @6.1-6.5 (name "User"))
 		(ty-record @6.8-6.52
 			(field (field "id")
@@ -234,9 +234,9 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "createUser") (def_var 117) (type "UserId, UserName, UserAge -> { id: *, name: *, age: * }"))
-		(d_assign (name "getUserName") (def_var 133) (type "User -> UserName"))
-		(d_assign (name "main!") (def_var 152) (type "* ? *")))
+		(patt @9.1-9.11 (type "UserId, UserName, UserAge -> { id: *, name: *, age: * }"))
+		(patt @12.1-12.12 (type "User -> UserName"))
+		(patt @14.1-14.6 (type "* ? *")))
 	(expressions
 		(expr @9.14-9.47 (type "UserId, UserName, UserAge -> { id: *, name: *, age: * }"))
 		(expr @12.15-14.6 (type "User -> UserName"))

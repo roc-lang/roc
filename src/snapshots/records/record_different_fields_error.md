@@ -365,13 +365,13 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1.1-8.2 (id 110)
+(e-block @1.1-8.2
 	(s-type-anno @2.5-2.39 (name "_privateField")
 		(ty-malformed @2.20-2.39))
 	(s-type-anno @3.5-3.33 (name "field_")
 		(ty-malformed @3.13-3.33))
 	(s-expr @4.5-4.16
-		(e-tag @4.5-4.15 (ext-var 81) (name "PascalCase") (args "TODO")))
+		(e-tag @4.5-4.15 (name "PascalCase") (args "TODO")))
 	(s-expr @4.17-4.26
 		(e-string @4.17-4.25
 			(e-literal @4.18-4.24 (string "pascal"))))
@@ -395,5 +395,5 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 110) (type "{}"))
+(expr @1.1-8.2 (type "{}"))
 ~~~

@@ -145,42 +145,42 @@ main! = |_| {}
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 106)
-		(p-assign @4.1-4.8 (ident "compose") (id 83))
-		(e-lambda @4.11-4.29 (id 97)
+	(d-let
+		(p-assign @4.1-4.8 (ident "compose"))
+		(e-lambda @4.11-4.29
 			(args
-				(p-assign @4.12-4.13 (ident "f") (id 84))
-				(p-assign @4.15-4.16 (ident "g") (id 85)))
+				(p-assign @4.12-4.13 (ident "f"))
+				(p-assign @4.15-4.16 (ident "g")))
 			(e-lambda @4.18-4.29
 				(args
-					(p-assign @4.19-4.20 (ident "x") (id 86)))
+					(p-assign @4.19-4.20 (ident "x")))
 				(e-call @4.22-4.29
 					(e-lookup-local @4.22-4.23
-						(pattern (id 84)))
+						(pattern @4.12-4.13))
 					(e-call @4.24-4.28
 						(e-lookup-local @4.24-4.25
-							(pattern (id 85)))
+							(pattern @4.15-4.16))
 						(e-lookup-local @4.26-4.27
-							(pattern (id 86)))))))
-		(annotation @4.1-4.8 (signature 104) (id 105)
+							(pattern @4.19-4.20))))))
+		(annotation @4.1-4.8
 			(declared-type
 				(ty-parens @3.11-3.19
 					(ty-fn @3.12-3.18 (effectful false)
 						(ty-var @3.12-3.13 (name "b"))
 						(ty-var @3.17-3.18 (name "c")))))))
-	(d-let (id 112)
-		(p-assign @6.1-6.6 (ident "main!") (id 107))
-		(e-lambda @6.9-6.15 (id 111)
+	(d-let
+		(p-assign @6.1-6.6 (ident "main!"))
+		(e-lambda @6.9-6.15
 			(args
-				(p-underscore @6.10-6.11 (id 108)))
+				(p-underscore @6.10-6.11))
 			(e-empty_record @6.13-6.15))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "compose") (def_var 106) (type "Error"))
-		(d_assign (name "main!") (def_var 112) (type "* ? {}")))
+		(patt @4.1-4.8 (type "Error"))
+		(patt @6.1-6.6 (type "* ? {}")))
 	(expressions
 		(expr @4.11-4.29 (type "Error"))
 		(expr @6.9-6.15 (type "* ? {}"))))

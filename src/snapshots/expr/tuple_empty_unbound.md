@@ -23,10 +23,10 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tuple @1.1-1.3 (id 73)
+(e-tuple @1.1-1.3
 	(elems))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 73) (type "()"))
+(expr @1.1-1.3 (type "()"))
 ~~~

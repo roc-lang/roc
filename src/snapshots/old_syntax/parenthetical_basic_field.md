@@ -29,7 +29,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dot-access @1.1-1.12 (field "field") (id 76)
+(e-dot-access @1.1-1.12 (field "field")
 	(receiver
 		(e-tuple @1.1-1.6
 			(elems
@@ -37,5 +37,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 76) (type "*"))
+(expr @1.1-1.12 (type "*"))
 ~~~

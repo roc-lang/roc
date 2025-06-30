@@ -25,9 +25,9 @@ Email
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tag @1.1-1.6 (ext-var 73) (name "Email") (args "TODO") (id 74))
+(e-tag @1.1-1.6 (name "Email") (args "TODO"))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 74) (type "[Email]*"))
+(expr @1.1-1.6 (type "[Email]*"))
 ~~~

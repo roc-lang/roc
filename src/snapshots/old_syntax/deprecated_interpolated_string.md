@@ -26,10 +26,10 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-string @1.1-1.7 (id 74)
+(e-string @1.1-1.7
 	(e-literal @1.2-1.6 (string "\(e)")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 74) (type "Str"))
+(expr @1.1-1.7 (type "Str"))
 ~~~

@@ -30,7 +30,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dot-access @1.1-1.22 (field "street") (id 76)
+(e-dot-access @1.1-1.22 (field "street")
 	(receiver
 		(e-dot-access @1.1-1.22 (field "address")
 			(receiver
@@ -38,5 +38,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 76) (type "*"))
+(expr @1.1-1.22 (type "*"))
 ~~~

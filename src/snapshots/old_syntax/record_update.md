@@ -118,9 +118,9 @@ OpenCurly(1:1-1:2),UpperIdent(1:3-1:6),NoSpaceDotUpperIdent(1:6-1:10),NoSpaceDot
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block @1.1-1.29 (id 84)
+(e-block @1.1-1.29
 	(s-expr @1.3-1.10
-		(e-tag @1.3-1.6 (ext-var 73) (name "Foo") (args "TODO")))
+		(e-tag @1.3-1.6 (name "Foo") (args "TODO")))
 	(s-type-anno @1.17-1.22 (name "x")
 		(ty-malformed @1.20-1.22))
 	(s-type-anno @1.23-1.29 (name "y")
@@ -130,5 +130,5 @@ OpenCurly(1:1-1:2),UpperIdent(1:3-1:6),NoSpaceDotUpperIdent(1:6-1:10),NoSpaceDot
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 84) (type "*"))
+(expr @1.1-1.29 (type "*"))
 ~~~
