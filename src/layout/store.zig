@@ -258,11 +258,11 @@ pub const Store = struct {
                             break;
                         }
                     },
-                    .record_unbound => |ext_record| {
-                        if (ext_record.fields.len() > 0) {
-                            num_fields += ext_record.fields.len();
-                            const ext_field_slice = self.types_store.getRecordFieldsSlice(ext_record.fields);
-                            for (ext_field_slice.items(.name), ext_field_slice.items(.var_)) |name, var_| {
+                    .record_unbound => |fields| {
+                        if (fields.len() > 0) {
+                            num_fields += fields.len();
+                            const unbound_field_slice = self.types_store.getRecordFieldsSlice(fields);
+                            for (unbound_field_slice.items(.name), unbound_field_slice.items(.var_)) |name, var_| {
                                 // TODO is it possible that here we're adding fields with names
                                 // already in the list? Would type-checking have already collapsed these?
                                 // We would certainly rather not spend time doing hashmap things
@@ -270,7 +270,22 @@ pub const Store = struct {
                                 try self.work.pending_record_fields.append(self.env.gpa, .{ .name = name, .var_ = var_ });
                             }
                         }
-                        current_ext = ext_record.ext;
+                        // record_unbound has no extension, so stop here
+                        break;
+                    },
+                    .record_poly => |poly| {
+                        if (poly.record.fields.len() > 0) {
+                            num_fields += poly.record.fields.len();
+                            const poly_field_slice = self.types_store.getRecordFieldsSlice(poly.record.fields);
+                            for (poly_field_slice.items(.name), poly_field_slice.items(.var_)) |name, var_| {
+                                // TODO is it possible that here we're adding fields with names
+                                // already in the list? Would type-checking have already collapsed these?
+                                // We would certainly rather not spend time doing hashmap things
+                                // if we can avoid it here.
+                                try self.work.pending_record_fields.append(self.env.gpa, .{ .name = name, .var_ = var_ });
+                            }
+                        }
+                        current_ext = poly.record.ext;
                     },
                     else => return LayoutError.InvalidRecordExtension,
                 },
@@ -674,8 +689,41 @@ pub const Store = struct {
                         _ = tag_union;
                         @panic("TODO: tag_union layout");
                     },
-                    .record_unbound => |record_type| {
-                        const num_fields = try self.gatherRecordFields(record_type);
+                    .record_unbound => |fields| {
+                        // For record_unbound, we need to gather fields directly since it has no Record struct
+                        var num_fields: usize = 0;
+
+                        if (fields.len() > 0) {
+                            num_fields = fields.len();
+                            const unbound_field_slice = self.types_store.getRecordFieldsSlice(fields);
+                            for (unbound_field_slice.items(.name), unbound_field_slice.items(.var_)) |name, var_| {
+                                try self.work.pending_record_fields.append(self.env.gpa, .{ .name = name, .var_ = var_ });
+                            }
+                        }
+
+                        if (num_fields == 0) {
+                            continue :flat_type .empty_record;
+                        }
+
+                        try self.work.pending_containers.append(self.env.gpa, .{
+                            .var_ = current.var_,
+                            .container = .{
+                                .record = .{
+                                    .num_fields = @intCast(num_fields),
+                                    .resolved_fields_start = @intCast(self.work.resolved_record_fields.len),
+                                    .pending_fields = @intCast(num_fields),
+                                },
+                            },
+                        });
+
+                        // Start working on the last pending field (we want to pop them).
+                        const field = self.work.pending_record_fields.get(self.work.pending_record_fields.len - 1);
+
+                        current = self.types_store.resolveVar(field.var_);
+                        continue;
+                    },
+                    .record_poly => |poly| {
+                        const num_fields = try self.gatherRecordFields(poly.record);
 
                         if (num_fields == 0) {
                             continue :flat_type .empty_record;

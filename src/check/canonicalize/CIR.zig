@@ -1153,8 +1153,6 @@ pub const Expr = union(enum) {
         region: Region,
     },
     e_record: struct {
-        /// type var for the record extension
-        ext_var: TypeVar,
         fields: RecordField.Span,
         region: Region,
     },
@@ -1547,9 +1545,6 @@ pub const Expr = union(enum) {
             .e_record => |record_expr| {
                 var record_node = SExpr.init(gpa, "e-record");
                 record_node.appendRegion(gpa, ir.calcRegionInfo(record_expr.region));
-
-                // Add ext_var
-                record_node.appendTypeVar(gpa, "ext-var", record_expr.ext_var);
 
                 // Add fields
                 var fields_node = SExpr.init(gpa, "fields");

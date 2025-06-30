@@ -141,7 +141,7 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-record @1.1-15.2 (ext-var 178) (id 179)
+(e-record @1.1-15.2 (id 164)
 	(fields
 		(field (name "name")
 			(e-string @2.11-2.18
@@ -156,28 +156,28 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 		(field (name "status")
 			(e-call @4.13-4.44
 				(e-tag @4.13-4.19 (ext-var 82) (name "Active") (args "TODO"))
-				(e-record @4.20-4.43 (ext-var 87)
+				(e-record @4.20-4.43
 					(fields
 						(field (name "since")
 							(e-string @4.29-4.41
 								(e-literal @4.30-4.40 (string "2023-01-15"))))))))
 		(field (name "preferences")
-			(e-record @5.18-5.76 (ext-var 103)
+			(e-record @5.18-5.76
 				(fields
 					(field (name "theme")
-						(e-tag @5.27-5.31 (ext-var 93) (name "Dark") (args "TODO")))
+						(e-tag @5.27-5.31 (ext-var 91) (name "Dark") (args "TODO")))
 					(field (name "notifications")
 						(e-call @5.48-5.74
-							(e-tag @5.48-5.53 (ext-var 96) (name "Email") (args "TODO"))
+							(e-tag @5.48-5.53 (ext-var 94) (name "Email") (args "TODO"))
 							(e-string @5.54-5.73
 								(e-literal @5.55-5.72 (string "alice@example.com"))))))))
 		(field (name "metadata")
 			(e-call @6.15-9.7
-				(e-tag @6.15-6.17 (ext-var 108) (name "Ok") (args "TODO"))
-				(e-record @6.18-9.6 (ext-var 126)
+				(e-tag @6.15-6.17 (ext-var 103) (name "Ok") (args "TODO"))
+				(e-record @6.18-9.6
 					(fields
 						(field (name "tags")
-							(e-list @7.15-7.51 (elem-var 111)
+							(e-list @7.15-7.51 (elem-var 106)
 								(elems
 									(e-string @7.16-7.27
 										(e-literal @7.17-7.26 (string "developer")))
@@ -186,41 +186,41 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 									(e-string @7.39-7.50
 										(e-literal @7.40-7.49 (string "fullstack"))))))
 						(field (name "permissions")
-							(e-list @8.22-8.42 (elem-var 119)
+							(e-list @8.22-8.42 (elem-var 114)
 								(elems
-									(e-tag @8.23-8.27 (ext-var 118) (name "Read") (args "TODO"))
-									(e-tag @8.29-8.34 (ext-var 120) (name "Write") (args "TODO"))
-									(e-tag @8.36-8.41 (ext-var 122) (name "Admin") (args "TODO")))))))))
+									(e-tag @8.23-8.27 (ext-var 113) (name "Read") (args "TODO"))
+									(e-tag @8.29-8.34 (ext-var 115) (name "Write") (args "TODO"))
+									(e-tag @8.36-8.41 (ext-var 117) (name "Admin") (args "TODO")))))))))
 		(field (name "callback")
 			(e-lambda @10.15-10.25
 				(args
-					(p-assign @10.16-10.17 (ident "x") (id 133)))
+					(p-assign @10.16-10.17 (ident "x") (id 125)))
 				(e-binop @10.19-10.25 (op "add")
 					(e-lookup-local @10.19-10.20
-						(pattern (id 133)))
+						(pattern (id 125)))
 					(e-int @10.23-10.24 (value "1")))))
 		(field (name "nested")
-			(e-record @11.13-14.6 (ext-var 173)
+			(e-record @11.13-14.6
 				(fields
 					(field (name "items")
-						(e-list @12.16-12.52 (elem-var 145)
+						(e-list @12.16-12.52 (elem-var 137)
 							(elems
 								(e-call @12.17-12.30
-									(e-tag @12.17-12.21 (ext-var 140) (name "Some") (args "TODO"))
+									(e-tag @12.17-12.21 (ext-var 132) (name "Some") (args "TODO"))
 									(e-string @12.22-12.29
 										(e-literal @12.23-12.28 (string "first"))))
-								(e-tag @12.32-12.36 (ext-var 146) (name "None") (args "TODO"))
+								(e-tag @12.32-12.36 (ext-var 138) (name "None") (args "TODO"))
 								(e-call @12.38-12.51
-									(e-tag @12.38-12.42 (ext-var 148) (name "Some") (args "TODO"))
+									(e-tag @12.38-12.42 (ext-var 140) (name "Some") (args "TODO"))
 									(e-string @12.43-12.50
 										(e-literal @12.44-12.49 (string "third")))))))
 					(field (name "result")
 						(e-call @13.17-13.70
-							(e-tag @13.17-13.24 (ext-var 156) (name "Success") (args "TODO"))
-							(e-record @13.25-13.69 (ext-var 166)
+							(e-tag @13.17-13.24 (ext-var 148) (name "Success") (args "TODO"))
+							(e-record @13.25-13.69
 								(fields
 									(field (name "data")
-										(e-list @13.33-13.42 (elem-var 158)
+										(e-list @13.33-13.42 (elem-var 150)
 											(elems
 												(e-int @13.34-13.35 (value "1"))
 												(e-int @13.37-13.38 (value "2"))
@@ -231,5 +231,5 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 179) (type "{ name: Str, scores: List(Num(*)), status: *, preferences: { theme: [Dark]*, notifications: * }, metadata: *, callback: * ? *, nested: { items: List([None]*), result: * } }"))
+(expr (id 164) (type "{ name: Str, scores: List(Num(*)), status: *, preferences: { theme: [Dark]*, notifications: * }, metadata: *, callback: * ? *, nested: { items: List([None]*), result: * } }"))
 ~~~

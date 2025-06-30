@@ -289,9 +289,9 @@ main! = |_| {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(d-let (id 164)
+	(d-let (id 161)
 		(p-assign @27.1-27.6 (ident "main!") (id 129))
-		(e-lambda @27.9-39.2 (id 163)
+		(e-lambda @27.9-39.2 (id 160)
 			(args
 				(p-underscore @27.10-27.11 (id 130)))
 			(e-block @27.13-39.2
@@ -304,7 +304,7 @@ main! = |_| {
 					(ty @32.14-32.20 (name "Person")))
 				(s-let @33.5-33.40
 					(p-assign @33.5-33.11 (ident "person") (id 140))
-					(e-record @33.14-33.40 (ext-var 146) (id 147)
+					(e-record @33.14-33.40 (id 146)
 						(fields
 							(field (name "name")
 								(e-string @33.22-33.29
@@ -314,8 +314,8 @@ main! = |_| {
 				(s-type-anno @35.5-36.10 (name "color")
 					(ty @35.13-35.18 (name "Color")))
 				(s-let @36.5-36.16
-					(p-assign @36.5-36.10 (ident "color") (id 154))
-					(e-tag @36.13-36.16 (ext-var 155) (name "Red") (args "TODO") (id 156)))
+					(p-assign @36.5-36.10 (ident "color") (id 151))
+					(e-tag @36.13-36.16 (ext-var 152) (name "Red") (args "TODO") (id 153)))
 				(e-lookup-local @38.5-38.11
 					(pattern (id 134))))))
 	(s-type-decl @4.1-7.7 (id 75)
@@ -382,7 +382,7 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(d_assign (name "main!") (def_var 164) (type "* ? *")))
+		(d_assign (name "main!") (def_var 161) (type "* ? *")))
 	(expressions
 		(expr @27.9-39.2 (type "* ? *"))))
 ~~~
