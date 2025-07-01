@@ -15,21 +15,13 @@ match numbers {
 Nothing is named `numbers` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize list pattern
-Let us know if you want to help!
-
 **UNDEFINED VARIABLE**
 Nothing is named `acc` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize list pattern
+This feature is not yet implemented or doesn't have a proper error report yet: list rest patterns in match expressions
 Let us know if you want to help!
-
-**UNDEFINED VARIABLE**
-Nothing is named `first` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
 **UNDEFINED VARIABLE**
 Nothing is named `acc` in this scope.
@@ -74,15 +66,20 @@ match numbers {
 		(branches
 			(branch
 				(patterns
-					(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+					(p-list @2.5-2.7 (degenerate false)
+						(patterns)))
 				(value
 					(e-runtime-error (tag "ident_not_in_scope"))))
 			(branch
 				(patterns
-					(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+					(p-list @3.5-3.24 (degenerate false)
+						(patterns
+							(p-assign @3.6-3.11 (ident "first"))
+							(p-runtime-error @3.13-3.23 (tag "not_implemented")))))
 				(value
 					(e-binop @3.28-4.2 (op "add")
-						(e-runtime-error (tag "ident_not_in_scope"))
+						(e-lookup-local @3.28-3.33
+							(pattern @3.6-3.11))
 						(e-runtime-error (tag "ident_not_in_scope"))))))))
 ~~~
 # TYPES

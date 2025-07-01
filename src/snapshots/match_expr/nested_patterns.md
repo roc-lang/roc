@@ -37,18 +37,6 @@ Is there an `import` or `exposing` missing up-top?
 This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
 Let us know if you want to help!
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize list pattern
-Let us know if you want to help!
-
-**UNDEFINED VARIABLE**
-Nothing is named `value` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `y` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
 # TOKENS
 ~~~zig
 KwMatch(1:1-1:6),LowerIdent(1:7-1:11),OpenCurly(1:12-1:13),Newline(1:1-1:1),
@@ -132,8 +120,10 @@ match data {
 					(p-applied-tag @4.5-4.36 (degenerate false)))
 				(value
 					(e-binop @4.40-5.11 (op "add")
-						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-runtime-error (tag "ident_not_in_scope")))))
+						(e-lookup-local @4.40-4.45
+							(pattern @4.18-4.23))
+						(e-lookup-local @4.48-4.49
+							(pattern @4.32-4.33)))))
 			(branch
 				(patterns
 					(p-applied-tag @5.5-5.14 (degenerate false)))

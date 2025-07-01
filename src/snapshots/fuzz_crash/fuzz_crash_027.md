@@ -348,7 +348,7 @@ This feature is not yet implemented or doesn't have a proper error report yet: c
 Let us know if you want to help!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize list pattern
+This feature is not yet implemented or doesn't have a proper error report yet: list rest patterns in match expressions
 Let us know if you want to help!
 
 **UNDEFINED VARIABLE**
@@ -356,11 +356,11 @@ Nothing is named `ment` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize list pattern
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
 Let us know if you want to help!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize list pattern
+This feature is not yet implemented or doesn't have a proper error report yet: list rest patterns in match expressions
 Let us know if you want to help!
 
 **NOT IMPLEMENTED**
@@ -390,6 +390,18 @@ Let us know if you want to help!
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
 Let us know if you want to help!
+
+**UNUSED VARIABLE**
+Variable ``ist`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_ist` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_027.md:76:1:76:4:**
+```roc
+ist
+```
+^^^
+
 
 **UNUSED VARIABLE**
 Variable ``b`` is not used anywhere in your code.
@@ -1447,17 +1459,29 @@ main! = |_| { # Yeah Ie
 								(e-int @70.20-70.22 (value "20"))))
 						(branch
 							(patterns
-								(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+								(p-list @70.22-70.43 (degenerate false)
+									(patterns
+										(p-int @70.23-70.24)
+										(p-int @70.26-70.27)
+										(p-int @70.29-70.30)
+										(p-runtime-error @70.32-70.42 (tag "not_implemented")))))
 							(value
 								(e-runtime-error (tag "ident_not_in_scope"))))
 						(branch
 							(patterns
-								(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+								(p-list @74.3-74.28 (degenerate false)
+									(patterns
+										(p-int @74.4-74.5)
+										(p-runtime-error @1.1-1.1 (tag "not_implemented"))
+										(p-int @74.14-74.15)
+										(p-runtime-error @74.17-74.27 (tag "not_implemented")))))
 							(value
 								(e-int @74.32-74.35 (value "123"))))
 						(branch
 							(patterns
-								(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+								(p-list @75.3-77.4 (degenerate false)
+									(patterns
+										(p-assign @76.1-76.4 (ident "ist")))))
 							(value
 								(e-int @77.8-77.11 (value "123"))))
 						(branch

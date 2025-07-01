@@ -751,15 +751,23 @@ This feature is not yet implemented or doesn't have a proper error report yet: c
 Let us know if you want to help!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize list pattern
+This feature is not yet implemented or doesn't have a proper error report yet: list rest patterns in match expressions
 Let us know if you want to help!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize list pattern
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
 Let us know if you want to help!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize list pattern
+This feature is not yet implemented or doesn't have a proper error report yet: list rest patterns in match expressions
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: list rest patterns in match expressions
 Let us know if you want to help!
 
 **NOT IMPLEMENTED**
@@ -2027,17 +2035,32 @@ expect {
 								(e-int @101.20-101.23 (value "200"))))
 						(branch
 							(patterns
-								(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+								(p-list @102.3-102.24 (degenerate false)
+									(patterns
+										(p-int @102.4-102.5)
+										(p-int @102.7-102.8)
+										(p-int @102.10-102.11)
+										(p-runtime-error @102.13-102.23 (tag "not_implemented")))))
 							(value
 								(e-int @104.5-104.8 (value "123"))))
 						(branch
 							(patterns
-								(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+								(p-list @108.3-108.28 (degenerate false)
+									(patterns
+										(p-int @108.4-108.5)
+										(p-runtime-error @1.1-1.1 (tag "not_implemented"))
+										(p-int @108.14-108.15)
+										(p-runtime-error @108.17-108.27 (tag "not_implemented")))))
 							(value
 								(e-int @108.32-108.35 (value "123"))))
 						(branch
 							(patterns
-								(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+								(p-list @109.3-116.4 (degenerate false)
+									(patterns
+										(p-int @110.4-110.5)
+										(p-runtime-error @1.1-1.1 (tag "not_implemented"))
+										(p-int @112.4-112.5)
+										(p-runtime-error @113.4-115.10 (tag "not_implemented")))))
 							(value
 								(e-int @116.8-116.11 (value "123"))))
 						(branch

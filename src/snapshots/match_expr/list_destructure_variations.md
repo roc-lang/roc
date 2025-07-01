@@ -20,56 +20,34 @@ Nothing is named `list` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize list pattern
+This feature is not yet implemented or doesn't have a proper error report yet: list rest patterns in match expressions
 Let us know if you want to help!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize list pattern
+This feature is not yet implemented or doesn't have a proper error report yet: list rest patterns in match expressions
 Let us know if you want to help!
 
-**UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**DUPLICATE DEFINITION**
+The name `x` is being redeclared in this scope.
+
+The redeclaration is here:
+**list_destructure_variations.md:7:6:7:7:**
+```roc
+    [x, y, z, .. as more] => x + y + z
+```
+     ^
+
+But `x` was already defined here:
+**list_destructure_variations.md:3:6:3:7:**
+```roc
+    [x] => x
+```
+     ^
+
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize list pattern
+This feature is not yet implemented or doesn't have a proper error report yet: list rest patterns in match expressions
 Let us know if you want to help!
-
-**UNDEFINED VARIABLE**
-Nothing is named `first` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `second` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize list pattern
-Let us know if you want to help!
-
-**UNDEFINED VARIABLE**
-Nothing is named `head` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize list pattern
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize list pattern
-Let us know if you want to help!
-
-**UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `y` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `z` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
@@ -144,40 +122,65 @@ match list {
 		(branches
 			(branch
 				(patterns
-					(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+					(p-list @2.5-2.7 (degenerate false)
+						(patterns)))
 				(value
 					(e-int @2.11-2.12 (value "0"))))
 			(branch
 				(patterns
-					(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+					(p-list @3.5-3.8 (degenerate false)
+						(patterns
+							(p-assign @3.6-3.7 (ident "x")))))
 				(value
-					(e-runtime-error (tag "ident_not_in_scope"))))
+					(e-lookup-local @3.12-3.13
+						(pattern @3.6-3.7))))
 			(branch
 				(patterns
-					(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+					(p-list @4.5-4.20 (degenerate false)
+						(patterns
+							(p-assign @4.6-4.11 (ident "first"))
+							(p-assign @4.13-4.19 (ident "second")))))
 				(value
 					(e-binop @4.24-5.6 (op "add")
-						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-runtime-error (tag "ident_not_in_scope")))))
+						(e-lookup-local @4.24-4.29
+							(pattern @4.6-4.11))
+						(e-lookup-local @4.32-4.38
+							(pattern @4.13-4.19)))))
 			(branch
 				(patterns
-					(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+					(p-list @5.5-5.23 (degenerate false)
+						(patterns
+							(p-assign @5.6-5.10 (ident "head"))
+							(p-runtime-error @5.12-5.22 (tag "not_implemented")))))
 				(value
-					(e-runtime-error (tag "ident_not_in_scope"))))
+					(e-lookup-local @5.27-5.31
+						(pattern @5.6-5.10))))
 			(branch
 				(patterns
-					(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+					(p-list @6.5-6.27 (degenerate false)
+						(patterns
+							(p-applied-tag @6.6-6.9)
+							(p-applied-tag @6.11-6.14)
+							(p-runtime-error @6.16-6.26 (tag "not_implemented")))))
 				(value
 					(e-int @6.31-6.32 (value "3"))))
 			(branch
 				(patterns
-					(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+					(p-list @7.5-7.26 (degenerate false)
+						(patterns
+							(p-assign @7.6-7.7 (ident "x"))
+							(p-assign @7.9-7.10 (ident "y"))
+							(p-assign @7.12-7.13 (ident "z"))
+							(p-runtime-error @7.15-7.25 (tag "not_implemented")))))
 				(value
 					(e-binop @7.30-8.2 (op "add")
-						(e-runtime-error (tag "ident_not_in_scope"))
+						(e-lookup-local @7.30-7.31
+							(pattern @7.6-7.7))
 						(e-binop @7.34-8.2 (op "add")
-							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-runtime-error (tag "ident_not_in_scope")))))))))
+							(e-lookup-local @7.34-7.35
+								(pattern @7.9-7.10))
+							(e-lookup-local @7.38-7.39
+								(pattern @7.12-7.13)))))))))
 ~~~
 # TYPES
 ~~~clojure

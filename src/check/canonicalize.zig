@@ -2278,19 +2278,70 @@ fn canonicalize_pattern(
 
             return pattern_idx;
         },
-        .list => |_| {
-            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize list pattern");
-            const pattern_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .not_implemented = .{
-                .feature = feature,
-                .region = Region.zero(),
-            } });
+        .list => |e| {
+            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
+
+            // Mark the start of scratch patterns for the list elements
+            const scratch_top = self.can_ir.store.scratchPatternTop();
+
+            // Iterate over the list patterns, canonicalizing each one
+            const patterns_slice = self.parse_ir.store.patternSlice(e.patterns);
+            for (patterns_slice) |pattern_idx| {
+                const ast_pattern = self.parse_ir.store.getPattern(pattern_idx);
+
+                // Handle list_rest patterns specially
+                if (ast_pattern == .list_rest) {
+                    // For now, we'll handle list_rest as a runtime error since it's not fully implemented in CIR
+                    const list_rest_region = self.parse_ir.tokenizedRegionToRegion(ast_pattern.list_rest.region);
+                    const feature = self.can_ir.env.strings.insert(gpa, "list rest patterns in match expressions");
+                    const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .not_implemented = .{
+                        .feature = feature,
+                        .region = list_rest_region,
+                    } });
+                    self.can_ir.store.scratch_patterns.append(gpa, malformed_idx);
+                } else {
+                    // Regular pattern - canonicalize it
+                    if (self.canonicalize_pattern(pattern_idx)) |canonicalized| {
+                        self.can_ir.store.scratch_patterns.append(gpa, canonicalized);
+                    } else {
+                        const pattern_region = self.parse_ir.tokenizedRegionToRegion(ast_pattern.to_tokenized_region());
+                        const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .pattern_not_canonicalized = .{
+                            .region = pattern_region,
+                        } });
+                        self.can_ir.store.scratch_patterns.append(gpa, malformed_idx);
+                    }
+                }
+            }
+
+            // Create span of the canonicalized patterns
+            const patterns_span = self.can_ir.store.patternSpanFrom(scratch_top);
+
+            // Create fresh type variables for the list and elements
+            const list_var = self.can_ir.env.types.fresh();
+            const elem_var = self.can_ir.env.types.fresh();
+
+            // Create the list pattern
+            const pattern_idx = self.can_ir.store.addPattern(CIR.Pattern{
+                .list = .{
+                    .list_var = list_var,
+                    .elem_var = elem_var,
+                    .patterns = patterns_span,
+                    .region = region,
+                },
+            });
+
+            // Set type variable for the pattern - this should be the list type
+            const list_type = Content{ .structure = .{ .list = elem_var } };
+            _ = self.can_ir.setTypeVarAtPat(pattern_idx, list_type);
+
             return pattern_idx;
         },
-        .list_rest => |_| {
-            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize list rest pattern");
+        .list_rest => |e| {
+            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
+            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "standalone list rest pattern");
             const pattern_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .not_implemented = .{
                 .feature = feature,
-                .region = Region.zero(),
+                .region = region,
             } });
             return pattern_idx;
         },

@@ -241,21 +241,9 @@ Is there an `import` or `exposing` missing up-top?
 Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize list pattern
-Let us know if you want to help!
-
 **UNDEFINED VARIABLE**
 Nothing is named `ment` in this scope.
 Is there an `import` or `exposing` missing up-top?
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize list pattern
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize list pattern
-Let us know if you want to help!
 
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
@@ -283,6 +271,18 @@ The unused variable is declared here:
 	er #ent
 ```
  ^^
+
+
+**UNUSED VARIABLE**
+Variable ``est`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_est` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_020.md:60:12:60:15:**
+```roc
+		[1, 2, 3,est]123
+```
+           ^^^
 
 
 **NOT IMPLEMENTED**
@@ -1121,17 +1121,25 @@ expect {
 								(e-int @58.15-58.17 (value "20"))))
 						(branch
 							(patterns
-								(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+								(p-list @58.17-58.22 (degenerate false)
+									(patterns
+										(p-int @58.18-58.19))))
 							(value
 								(e-runtime-error (tag "ident_not_in_scope"))))
 						(branch
 							(patterns
-								(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+								(p-list @60.3-60.16 (degenerate false)
+									(patterns
+										(p-int @60.4-60.5)
+										(p-int @60.7-60.8)
+										(p-int @60.10-60.11)
+										(p-assign @60.12-60.15 (ident "est")))))
 							(value
 								(e-int @60.16-60.19 (value "123"))))
 						(branch
 							(patterns
-								(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+								(p-list @61.3-62.4 (degenerate false)
+									(patterns)))
 							(value
 								(e-int @62.5-62.7 (value "23"))))
 						(branch
