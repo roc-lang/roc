@@ -1235,16 +1235,65 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) AST.Pattern.Idx {
                 self.advance();
             },
             .OpenSquare => {
-                // List
+                // List - custom parsing to handle DoubleDot rest patterns
                 self.advance();
                 const scratch_top = self.store.scratchPatternTop();
-                const end = self.parseCollectionSpan(AST.Pattern.Idx, .CloseSquare, NodeStore.addScratchPattern, parsePatternWithAlts) catch {
-                    while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
-                        self.advance();
+
+                // Parse list elements with support for rest patterns
+                while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
+                    if (self.peek() == .DoubleDot) {
+                        // Handle rest pattern .. as name or .. (unnamed)
+                        const rest_start = self.pos;
+                        self.advance(); // consume DoubleDot
+
+                        var rest_name: ?Token.Idx = null;
+                        if (self.peek() == .KwAs) {
+                            self.advance(); // consume KwAs
+                            if (self.peek() == .LowerIdent) {
+                                rest_name = self.pos;
+                                self.advance();
+                            }
+                        } else if (self.peek() == .LowerIdent) {
+                            // Old syntax ..name - add diagnostic but continue parsing
+                            rest_name = self.pos;
+                            self.advance();
+
+                            // Add diagnostic for old syntax
+                            self.pushDiagnostic(.pattern_unexpected_token, .{
+                                .start = rest_start,
+                                .end = self.pos,
+                            });
+                        }
+
+                        const rest_pattern = self.store.addPattern(.{ .list_rest = .{
+                            .name = rest_name,
+                            .region = .{ .start = rest_start, .end = self.pos },
+                        } });
+
+                        self.store.addScratchPattern(rest_pattern);
+                    } else {
+                        // Regular pattern
+                        const pat = self.parsePattern(.alternatives_allowed);
+                        self.store.addScratchPattern(pat);
                     }
+
+                    // Handle comma or end of list
+                    if (self.peek() == .Comma) {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+
+                const end = self.pos;
+                if (self.peek() == .CloseSquare) {
+                    self.advance();
+                } else {
+                    // List not properly closed, but continue with "inform don't block"
                     self.store.clearScratchPatternsFrom(scratch_top);
                     return self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, start);
-                };
+                }
+
                 const patterns = self.store.patternSpanFrom(scratch_top);
 
                 pattern = self.store.addPattern(.{ .list = .{
@@ -1274,7 +1323,7 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) AST.Pattern.Idx {
                 } });
             },
             .DoubleDot => {
-                var name: ?TokenIdx = null;
+                var name: ?Token.Idx = null;
                 var end: u32 = self.pos;
                 self.advance();
                 if (self.peek() == .KwAs) {
@@ -1285,6 +1334,9 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) AST.Pattern.Idx {
                     name = self.pos;
                     end = self.pos;
                     self.advance();
+                } else if (self.peek() == .LowerIdent) {
+                    // Old syntax ..name - create malformed pattern with helpful diagnostic
+                    return self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, self.pos);
                 }
                 pattern = self.store.addPattern(.{ .list_rest = .{
                     .region = .{ .start = start, .end = end },
