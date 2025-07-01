@@ -430,7 +430,7 @@ pub const Comment = struct {
     pub fn init(begin: u32, end: u32) Comment {
         std.debug.assert(begin <= end);
 
-        return Comment{ .region = base.Region{ .start = base.Region.Position{ .offset = begin }, .end = base.Region.Position{ .offset = end } } };
+        return Comment{ .region = base.Region.from_raw_offsets(begin, end) };
     }
 };
 
@@ -487,7 +487,7 @@ pub const Cursor = struct {
         if (self.message_count < self.messages.len) {
             self.messages[self.message_count] = Diagnostic{
                 .tag = tag,
-                .region = base.Region{ .start = base.Region.Position{ .offset = begin }, .end = base.Region.Position{ .offset = end } },
+                .region = base.Region.from_raw_offsets(begin, end),
             };
         }
         self.message_count += 1;
@@ -972,15 +972,15 @@ pub const Tokenizer = struct {
         std.debug.assert(!tag.isInterned());
         self.output.tokens.append(self.env.gpa, .{
             .tag = tag,
-            .extra = .{ .region = base.Region{ .start = base.Region.Position{ .offset = tok_offset }, .end = base.Region.Position{ .offset = self.cursor.pos } } },
+            .extra = .{ .region = base.Region.from_raw_offsets(tok_offset, self.cursor.pos) },
         }) catch |err| exitOnOom(err);
     }
 
     fn pushNewlineHere(self: *Tokenizer, comment: ?Comment) void {
         var token = Token{
             .tag = .Newline,
-            // TODO: do we need it to be 0-0 region?
-            .extra = .{ .region = base.Region{ .start = base.Region.Position{ .offset = 0 }, .end = base.Region.Position{ .offset = 0 } } },
+            // TODO: should it be zero region?
+            .extra = .{ .region = base.Region.zero() },
         };
         if (comment) |c| {
             token.extra = .{ .region = c.region };
@@ -999,7 +999,7 @@ pub const Tokenizer = struct {
         const id = self.env.idents.insert(
             self.env.gpa,
             base.Ident.for_text(text),
-            base.Region{ .start = base.Region.Position{ .offset = tok_offset }, .end = base.Region.Position{ .offset = self.cursor.pos } },
+            base.Region.from_raw_offsets(tok_offset, self.cursor.pos),
         );
         self.output.tokens.append(self.env.gpa, .{
             .tag = tag,
