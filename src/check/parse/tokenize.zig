@@ -15,7 +15,7 @@ pub const Token = struct {
     extra: Extra,
 
     pub const Extra = union {
-        length: u32,
+        end: u32,
         interned: base.Ident.Idx,
     };
 
@@ -408,10 +408,9 @@ pub const TokenizedBuffer = struct {
         if (tag.isInterned()) {
             return self.env.idents.getRegion(extra.interned);
         } else {
-            const end = start + extra.length;
             return .{
                 .start = base.Region.Position{ .offset = start },
-                .end = base.Region.Position{ .offset = end },
+                .end = base.Region.Position{ .offset = extra.end },
             };
         }
     }
@@ -1041,7 +1040,7 @@ pub const Tokenizer = struct {
         self.output.tokens.append(self.env.gpa, .{
             .tag = tag,
             .offset = tok_offset,
-            .extra = .{ .length = self.cursor.pos - tok_offset },
+            .extra = .{ .end = self.cursor.pos },
         }) catch |err| exitOnOom(err);
     }
 
@@ -1049,11 +1048,11 @@ pub const Tokenizer = struct {
         var token = Token{
             .tag = .Newline,
             .offset = 0, // store the Comment start - if it is exists here
-            .extra = .{ .length = 0 },
+            .extra = .{ .end = 0 },
         };
         if (comment) |c| {
             token.offset = c.begin;
-            token.extra = .{ .length = c.end - c.begin };
+            token.extra = .{ .end = c.end };
         }
         self.output.tokens.append(self.env.gpa, token) catch |err| exitOnOom(err);
     }

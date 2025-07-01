@@ -1760,7 +1760,7 @@ const Formatter = struct {
             const newline_tok = fmt.ast.tokens.tokens.get(i);
             std.debug.assert(newline_tok.tag == .Newline);
             const start = newline_tok.offset;
-            const end = start + newline_tok.extra.length;
+            const end = newline_tok.extra.end;
             if (end > start) {
                 if (i == 0 or i > first) {
                     try fmt.pushIndent();
@@ -1795,7 +1795,7 @@ const Formatter = struct {
         while (nextNewline < tags.len and tags[nextNewline] == .Newline) {
             const newline_tok = fmt.ast.tokens.tokens.get(nextNewline);
             const start = newline_tok.offset;
-            const end = start + newline_tok.extra.length;
+            const end = newline_tok.extra.end;
             if (end > start) {
                 try fmt.pushAll(" #");
                 const comment_text = fmt.ast.source[start..end];
