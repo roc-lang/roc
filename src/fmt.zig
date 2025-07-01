@@ -902,7 +902,7 @@ const Formatter = struct {
                 try fmt.pushAll(" {");
                 fmt.curr_indent += 1;
                 const branch_indent = fmt.curr_indent;
-                const branches = fmt.ast.store.whenBranchSlice(m.branches);
+                const branches = fmt.ast.store.matchBranchSlice(m.branches);
                 if (branches.len == 0) {
                     try fmt.push('}');
                     return region;

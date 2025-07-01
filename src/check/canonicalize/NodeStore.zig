@@ -25,7 +25,7 @@ extra_data: std.ArrayListUnmanaged(u32),
 scratch_statements: base.Scratch(CIR.Statement.Idx),
 scratch_exprs: base.Scratch(CIR.Expr.Idx),
 scratch_record_fields: base.Scratch(CIR.RecordField.Idx),
-scratch_when_branches: base.Scratch(CIR.WhenBranch.Idx),
+scratch_match_branches: base.Scratch(CIR.Match.Branch.Idx),
 scratch_if_branches: base.Scratch(CIR.IfBranch.Idx),
 scratch_where_clauses: base.Scratch(CIR.WhereClause.Idx),
 scratch_patterns: base.Scratch(CIR.Pattern.Idx),
@@ -56,7 +56,7 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) NodeStore {
         .scratch_record_fields = base.Scratch(CIR.RecordField.Idx).init(gpa),
         .scratch_pattern_record_fields = base.Scratch(CIR.PatternRecordField.Idx).init(gpa),
         .scratch_record_destructs = base.Scratch(CIR.RecordDestruct.Idx).init(gpa),
-        .scratch_when_branches = base.Scratch(CIR.WhenBranch.Idx).init(gpa),
+        .scratch_match_branches = base.Scratch(CIR.Match.Branch.Idx).init(gpa),
         .scratch_if_branches = base.Scratch(CIR.IfBranch.Idx).init(gpa),
         .scratch_type_annos = base.Scratch(CIR.TypeAnno.Idx).init(gpa),
         .scratch_anno_record_fields = base.Scratch(CIR.AnnoRecordField.Idx).init(gpa),
@@ -77,7 +77,7 @@ pub fn deinit(store: *NodeStore) void {
     store.scratch_record_fields.items.deinit(store.gpa);
     store.scratch_pattern_record_fields.items.deinit(store.gpa);
     store.scratch_record_destructs.items.deinit(store.gpa);
-    store.scratch_when_branches.items.deinit(store.gpa);
+    store.scratch_match_branches.items.deinit(store.gpa);
     store.scratch_if_branches.items.deinit(store.gpa);
     store.scratch_type_annos.items.deinit(store.gpa);
     store.scratch_anno_record_fields.items.deinit(store.gpa);
@@ -464,21 +464,15 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             const extra_data = store.extra_data.items[extra_start..];
 
             const loc_cond = @as(CIR.Expr.Idx, @enumFromInt(extra_data[0]));
-            const cond_var = @as(types.Var, @enumFromInt(extra_data[1]));
-            const expr_var = @as(types.Var, @enumFromInt(extra_data[2]));
-            const branches_start = extra_data[3];
-            const branches_len = extra_data[4];
-            const branches_cond_var = @as(types.Var, @enumFromInt(extra_data[5]));
-            const exhaustive = @as(types.Var, @enumFromInt(extra_data[6]));
+            const branches_start = extra_data[1];
+            const branches_len = extra_data[2];
+            const exhaustive = @as(types.Var, @enumFromInt(extra_data[3]));
 
             return CIR.Expr{
-                .e_when = CIR.When{
+                .e_match = CIR.Match{
                     .loc_cond = loc_cond,
-                    .cond_var = cond_var,
-                    .expr_var = expr_var,
                     .region = node.region,
                     .branches = .{ .span = .{ .start = branches_start, .len = branches_len } },
-                    .branches_cond_var = branches_cond_var,
                     .exhaustive = exhaustive,
                 },
             };
@@ -606,8 +600,8 @@ pub fn getExprSpecific(store: *const NodeStore, expr_idx: CIR.Expr.Idx) CIR.Expr
 }
 
 /// Retrieves a 'when' branch from the store.
-pub fn getWhenBranch(store: *const NodeStore, whenBranch: CIR.WhenBranch.Idx) CIR.WhenBranch {
-    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(whenBranch));
+pub fn getMatchBranch(store: *const NodeStore, branch: CIR.Match.Branch.Idx) CIR.Match.Branch {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(branch));
     const node = store.nodes.get(node_idx);
 
     std.debug.assert(node.tag == .when_branch);
@@ -623,7 +617,7 @@ pub fn getWhenBranch(store: *const NodeStore, whenBranch: CIR.WhenBranch.Idx) CI
     const guard_idx = if (guard_idx_raw == 0) null else @as(CIR.Expr.Idx, @enumFromInt(guard_idx_raw));
     const redundant = @as(CIR.RedundantMark, @enumFromInt(extra_data[4]));
 
-    return CIR.WhenBranch{
+    return CIR.Match.Branch{
         .patterns = .{ .span = .{ .start = patterns_start, .len = patterns_len } },
         .value = value_idx,
         .guard = guard_idx,
@@ -1321,18 +1315,15 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             // Store the extra_data index in data_1
             node.data_1 = @intCast(extra_data_start);
         },
-        .e_when => |e| {
+        .e_match => |e| {
             node.region = e.region;
             node.tag = .expr_match;
 
             // Store when data in extra_data
             const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
             store.extra_data.append(store.gpa, @intFromEnum(e.loc_cond)) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @intFromEnum(e.cond_var)) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @intFromEnum(e.expr_var)) catch |err| exitOnOom(err);
             store.extra_data.append(store.gpa, e.branches.span.start) catch |err| exitOnOom(err);
             store.extra_data.append(store.gpa, e.branches.span.len) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @intFromEnum(e.branches_cond_var)) catch |err| exitOnOom(err);
             store.extra_data.append(store.gpa, @intFromEnum(e.exhaustive)) catch |err| exitOnOom(err);
             node.data_1 = extra_data_start;
         },
@@ -1489,8 +1480,8 @@ pub fn addRecordDestruct(store: *NodeStore, record_destruct: CIR.RecordDestruct)
     return @enumFromInt(@intFromEnum(store.nodes.append(store.gpa, node)));
 }
 
-/// Adds a 'when' branch to the store.
-pub fn addWhenBranch(store: *NodeStore, whenBranch: CIR.WhenBranch) CIR.WhenBranch.Idx {
+/// Adds a 'match' branch to the store.
+pub fn addMatchBranch(store: *NodeStore, whenBranch: CIR.Match.Branch) CIR.Match.Branch.Idx {
     var node = Node{
         .data_1 = 0,
         .data_2 = 0,
@@ -2769,7 +2760,7 @@ pub fn deserializeFrom(buffer: []align(@alignOf(Node)) const u8, allocator: std.
         .scratch_statements = base.Scratch(CIR.Statement.Idx){ .items = .{} },
         .scratch_exprs = base.Scratch(CIR.Expr.Idx){ .items = .{} },
         .scratch_record_fields = base.Scratch(CIR.RecordField.Idx){ .items = .{} },
-        .scratch_when_branches = base.Scratch(CIR.WhenBranch.Idx){ .items = .{} },
+        .scratch_match_branches = base.Scratch(CIR.Match.Branch.Idx){ .items = .{} },
         .scratch_if_branches = base.Scratch(CIR.IfBranch.Idx){ .items = .{} },
         .scratch_where_clauses = base.Scratch(CIR.WhereClause.Idx){ .items = .{} },
         .scratch_patterns = base.Scratch(CIR.Pattern.Idx){ .items = .{} },
