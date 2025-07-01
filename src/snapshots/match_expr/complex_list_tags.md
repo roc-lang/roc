@@ -559,11 +559,11 @@ Variable ``rest`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
 The unused variable is declared here:
-**complex_list_tags.md:4:21:4:31:**
+**complex_list_tags.md:4:27:4:31:**
 ```roc
     [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr (List.len rest)} more events"
 ```
-                    ^^^^^^^^^^
+                          ^^^^
 
 
 **UNUSED VARIABLE**
@@ -583,11 +583,11 @@ Variable ``others`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_others` to suppress this warning.
 The unused variable is declared here:
-**complex_list_tags.md:5:36:5:48:**
+**complex_list_tags.md:5:42:5:48:**
 ```roc
     [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
 ```
-                                   ^^^^^^^^^^^^
+                                         ^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -679,11 +679,11 @@ Variable ``remaining`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_remaining` to suppress this warning.
 The unused variable is declared here:
-**complex_list_tags.md:6:35:6:50:**
+**complex_list_tags.md:6:41:6:50:**
 ```roc
     [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
 ```
-                                  ^^^^^^^^^^^^^^^
+                                        ^^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -788,7 +788,7 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 			(p-list @4.5-4.32
 				(p-tag @4.6-4.19 (raw "KeyPress")
 					(p-ident @4.15-4.18 (raw "key")))
-				(p-list-rest @4.21-4.31 (name "rest")))
+				(p-list-rest @4.21-4.32 (name "rest")))
 			(e-malformed @4.36-4.74 (reason "string_expected_close_interpolation")))
 		(branch @4.70-4.83
 			(p-tag @4.70-4.74 (raw "List"))
@@ -810,7 +810,7 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 				(p-tag @5.20-5.34 (raw "Move")
 					(p-ident @5.25-5.28 (raw "dx2"))
 					(p-ident @5.30-5.33 (raw "dy2")))
-				(p-list-rest @5.36-5.48 (name "others")))
+				(p-list-rest @5.36-5.49 (name "others")))
 			(e-malformed @5.53-5.75 (reason "string_expected_close_interpolation")))
 		(branch @5.74-5.78
 			(p-malformed @5.74-5.76 (tag "pattern_unexpected_token"))
@@ -849,7 +849,7 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 				(p-tag @6.22-6.33 (raw "Click")
 					(p-ident @6.28-6.29 (raw "x"))
 					(p-ident @6.31-6.32 (raw "y")))
-				(p-list-rest @6.35-6.50 (name "remaining")))
+				(p-list-rest @6.35-6.51 (name "remaining")))
 			(e-malformed @6.55-6.82 (reason "string_expected_close_interpolation")))
 		(branch @6.81-6.99
 			(p-malformed @6.81-6.97 (tag "pattern_unexpected_token"))

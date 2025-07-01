@@ -22,11 +22,11 @@ Variable ``middle`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_middle` to suppress this warning.
 The unused variable is declared here:
-**middle_rest.md:3:12:3:24:**
+**middle_rest.md:3:18:3:24:**
 ```roc
     [a, b, .. as middle, x, y] => a + b + x + y  
 ```
-           ^^^^^^^^^^^^
+                 ^^^^^^
 
 
 # TOKENS
@@ -46,7 +46,7 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 		(branch @2.5-3.6
 			(p-list @2.5-2.22
 				(p-ident @2.6-2.11 (raw "first"))
-				(p-list-rest @2.13-2.15)
+				(p-list-rest @2.13-2.16)
 				(p-ident @2.17-2.21 (raw "last")))
 			(e-binop @2.26-3.6 (op "+")
 				(e-ident @2.26-2.31 (qaul "") (raw "first"))
@@ -55,7 +55,7 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 			(p-list @3.5-3.31
 				(p-ident @3.6-3.7 (raw "a"))
 				(p-ident @3.9-3.10 (raw "b"))
-				(p-list-rest @3.12-3.24 (name "middle"))
+				(p-list-rest @3.12-3.25 (name "middle"))
 				(p-ident @3.26-3.27 (raw "x"))
 				(p-ident @3.29-3.30 (raw "y")))
 			(e-binop @3.35-4.6 (op "+")
@@ -111,7 +111,7 @@ match items {
 							(p-assign @3.26-3.27 (ident "x"))
 							(p-assign @3.29-3.30 (ident "y")))
 						(rest-at (index 2)
-							(p-assign @3.12-3.24 (ident "middle")))))
+							(p-assign @3.18-3.24 (ident "middle")))))
 				(value
 					(e-binop @3.35-4.6 (op "add")
 						(e-lookup-local @3.35-3.36

@@ -46,9 +46,9 @@ CloseCurly(3:1-3:2),EndOfFile(3:2-3:2),
 	(branches
 		(branch @2.5-3.2
 			(p-list @2.5-2.21
-				(p-list-rest @2.6-2.8)
+				(p-list-rest @2.6-2.9)
 				(p-ident @2.10-2.16 (raw "middle"))
-				(p-list-rest @2.18-2.20))
+				(p-list-rest @2.18-2.21))
 			(e-ellipsis))))
 ~~~
 # FORMATTED

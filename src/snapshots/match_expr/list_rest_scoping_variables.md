@@ -13,52 +13,52 @@ match data {
 }
 ~~~
 # PROBLEMS
-**UNEXPECTED TOKEN IN PATTERN**
-The token **..items]** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
+**BAD LIST REST PATTERN SYNTAX**
+List rest patterns should use the `.. as name` syntax, not `..name`.
+For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
 
 Here is the problematic code:
-**list_rest_scoping_variables.md:2:6:2:14:**
+**list_rest_scoping_variables.md:2:6:2:13:**
 ```roc
     [..items] => 1
 ```
-     ^^^^^^^^
+     ^^^^^^^
 
 
-**UNEXPECTED TOKEN IN PATTERN**
-The token **..items]** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
+**BAD LIST REST PATTERN SYNTAX**
+List rest patterns should use the `.. as name` syntax, not `..name`.
+For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
 
 Here is the problematic code:
-**list_rest_scoping_variables.md:3:13:3:21:**
+**list_rest_scoping_variables.md:3:13:3:20:**
 ```roc
     [first, ..items] => first
 ```
-            ^^^^^^^^
+            ^^^^^^^
 
 
-**UNEXPECTED TOKEN IN PATTERN**
-The token **..items,** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
+**BAD LIST REST PATTERN SYNTAX**
+List rest patterns should use the `.. as name` syntax, not `..name`.
+For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
 
 Here is the problematic code:
-**list_rest_scoping_variables.md:4:6:4:14:**
+**list_rest_scoping_variables.md:4:6:4:13:**
 ```roc
     [..items, last] => last
 ```
-     ^^^^^^^^
+     ^^^^^^^
 
 
-**UNEXPECTED TOKEN IN PATTERN**
-The token **..items,** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
+**BAD LIST REST PATTERN SYNTAX**
+List rest patterns should use the `.. as name` syntax, not `..name`.
+For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
 
 Here is the problematic code:
-**list_rest_scoping_variables.md:5:13:5:21:**
+**list_rest_scoping_variables.md:5:13:5:20:**
 ```roc
     [first, ..items, last] => first + last
 ```
-            ^^^^^^^^
+            ^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -70,11 +70,11 @@ Variable ``items`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_items` to suppress this warning.
 The unused variable is declared here:
-**list_rest_scoping_variables.md:2:6:2:14:**
+**list_rest_scoping_variables.md:2:8:2:13:**
 ```roc
     [..items] => 1
 ```
-     ^^^^^^^^
+       ^^^^^
 
 
 **UNUSED VARIABLE**
@@ -82,11 +82,11 @@ Variable ``items`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_items` to suppress this warning.
 The unused variable is declared here:
-**list_rest_scoping_variables.md:3:13:3:21:**
+**list_rest_scoping_variables.md:3:15:3:20:**
 ```roc
     [first, ..items] => first
 ```
-            ^^^^^^^^
+              ^^^^^
 
 
 **UNUSED VARIABLE**
@@ -94,11 +94,11 @@ Variable ``items`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_items` to suppress this warning.
 The unused variable is declared here:
-**list_rest_scoping_variables.md:4:6:4:14:**
+**list_rest_scoping_variables.md:4:8:4:13:**
 ```roc
     [..items, last] => last
 ```
-     ^^^^^^^^
+       ^^^^^
 
 
 **UNUSED VARIABLE**
@@ -106,11 +106,11 @@ Variable ``items`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_items` to suppress this warning.
 The unused variable is declared here:
-**list_rest_scoping_variables.md:5:13:5:21:**
+**list_rest_scoping_variables.md:5:15:5:20:**
 ```roc
     [first, ..items, last] => first + last
 ```
-            ^^^^^^^^
+              ^^^^^
 
 
 # TOKENS
@@ -171,7 +171,7 @@ match data {
 					(p-list @2.5-2.14 (degenerate false)
 						(patterns)
 						(rest-at (index 0)
-							(p-assign @2.6-2.14 (ident "items")))))
+							(p-assign @2.8-2.13 (ident "items")))))
 				(value
 					(e-int @2.18-2.19 (value "1"))))
 			(branch
@@ -180,7 +180,7 @@ match data {
 						(patterns
 							(p-assign @3.6-3.11 (ident "first")))
 						(rest-at (index 1)
-							(p-assign @3.13-3.21 (ident "items")))))
+							(p-assign @3.15-3.20 (ident "items")))))
 				(value
 					(e-lookup-local @3.25-3.30
 						(pattern @3.6-3.11))))
@@ -190,7 +190,7 @@ match data {
 						(patterns
 							(p-assign @4.15-4.19 (ident "last")))
 						(rest-at (index 0)
-							(p-assign @4.6-4.14 (ident "items")))))
+							(p-assign @4.8-4.13 (ident "items")))))
 				(value
 					(e-lookup-local @4.24-4.28
 						(pattern @4.15-4.19))))
@@ -201,7 +201,7 @@ match data {
 							(p-assign @5.6-5.11 (ident "first"))
 							(p-assign @5.22-5.26 (ident "last")))
 						(rest-at (index 1)
-							(p-assign @5.13-5.21 (ident "items")))))
+							(p-assign @5.15-5.20 (ident "items")))))
 				(value
 					(e-binop @5.31-6.2 (op "add")
 						(e-lookup-local @5.31-5.36

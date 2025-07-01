@@ -12,40 +12,40 @@ match items {
 }
 ~~~
 # PROBLEMS
-**UNEXPECTED TOKEN IN PATTERN**
-The token **..rest]** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
+**BAD LIST REST PATTERN SYNTAX**
+List rest patterns should use the `.. as name` syntax, not `..name`.
+For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
 
 Here is the problematic code:
-**list_rest_scoping.md:2:13:2:20:**
+**list_rest_scoping.md:2:13:2:19:**
 ```roc
     [first, ..rest] => first + 1
 ```
-            ^^^^^^^
+            ^^^^^^
 
 
-**UNEXPECTED TOKEN IN PATTERN**
-The token **..rest,** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
+**BAD LIST REST PATTERN SYNTAX**
+List rest patterns should use the `.. as name` syntax, not `..name`.
+For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
 
 Here is the problematic code:
-**list_rest_scoping.md:3:6:3:13:**
+**list_rest_scoping.md:3:6:3:12:**
 ```roc
     [..rest, last] => last + 2
 ```
-     ^^^^^^^
+     ^^^^^^
 
 
-**UNEXPECTED TOKEN IN PATTERN**
-The token **..rest,** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
+**BAD LIST REST PATTERN SYNTAX**
+List rest patterns should use the `.. as name` syntax, not `..name`.
+For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
 
 Here is the problematic code:
-**list_rest_scoping.md:4:9:4:16:**
+**list_rest_scoping.md:4:9:4:15:**
 ```roc
     [x, ..rest, y] => x + y
 ```
-        ^^^^^^^
+        ^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -57,11 +57,11 @@ Variable ``rest`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
 The unused variable is declared here:
-**list_rest_scoping.md:2:13:2:20:**
+**list_rest_scoping.md:2:15:2:19:**
 ```roc
     [first, ..rest] => first + 1
 ```
-            ^^^^^^^
+              ^^^^
 
 
 **UNUSED VARIABLE**
@@ -69,11 +69,11 @@ Variable ``rest`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
 The unused variable is declared here:
-**list_rest_scoping.md:3:6:3:13:**
+**list_rest_scoping.md:3:8:3:12:**
 ```roc
     [..rest, last] => last + 2
 ```
-     ^^^^^^^
+       ^^^^
 
 
 **UNUSED VARIABLE**
@@ -81,11 +81,11 @@ Variable ``rest`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
 The unused variable is declared here:
-**list_rest_scoping.md:4:9:4:16:**
+**list_rest_scoping.md:4:11:4:15:**
 ```roc
     [x, ..rest, y] => x + y
 ```
-        ^^^^^^^
+          ^^^^
 
 
 # TOKENS
@@ -145,7 +145,7 @@ match items {
 						(patterns
 							(p-assign @2.6-2.11 (ident "first")))
 						(rest-at (index 1)
-							(p-assign @2.13-2.20 (ident "rest")))))
+							(p-assign @2.15-2.19 (ident "rest")))))
 				(value
 					(e-binop @2.24-3.6 (op "add")
 						(e-lookup-local @2.24-2.29
@@ -157,7 +157,7 @@ match items {
 						(patterns
 							(p-assign @3.14-3.18 (ident "last")))
 						(rest-at (index 0)
-							(p-assign @3.6-3.13 (ident "rest")))))
+							(p-assign @3.8-3.12 (ident "rest")))))
 				(value
 					(e-binop @3.23-4.6 (op "add")
 						(e-lookup-local @3.23-3.27
@@ -170,7 +170,7 @@ match items {
 							(p-assign @4.6-4.7 (ident "x"))
 							(p-assign @4.17-4.18 (ident "y")))
 						(rest-at (index 1)
-							(p-assign @4.9-4.16 (ident "rest")))))
+							(p-assign @4.11-4.15 (ident "rest")))))
 				(value
 					(e-binop @4.23-5.2 (op "add")
 						(e-lookup-local @4.23-4.24

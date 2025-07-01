@@ -41,13 +41,13 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 			(e-int @2.12-2.13 (raw "1")))
 		(branch @3.5-4.6
 			(p-list @3.5-3.15
-				(p-list-rest @3.6-3.8)
+				(p-list-rest @3.6-3.9)
 				(p-ident @3.10-3.14 (raw "last")))
 			(e-ident @3.19-3.23 (qaul "") (raw "last")))
 		(branch @4.5-5.6
 			(p-list @4.5-4.16
 				(p-ident @4.6-4.11 (raw "first"))
-				(p-list-rest @4.13-4.15))
+				(p-list-rest @4.13-4.16))
 			(e-ident @4.20-4.25 (qaul "") (raw "first")))
 		(branch @5.5-6.6
 			(p-list @5.5-5.18

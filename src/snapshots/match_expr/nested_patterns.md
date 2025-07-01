@@ -58,7 +58,7 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 						(p-list @2.24-2.46
 							(p-tag @2.25-2.33 (raw "First")
 								(p-ident @2.31-2.32 (raw "x")))
-							(p-list-rest @2.35-2.45 (name "rest"))))))
+							(p-list-rest @2.35-2.46 (name "rest"))))))
 			(e-binop @2.53-3.14 (op "+")
 				(e-ident @2.53-2.54 (qaul "") (raw "x"))
 				(e-apply @2.57-2.71

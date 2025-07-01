@@ -24,11 +24,11 @@ Variable ``tail`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_tail` to suppress this warning.
 The unused variable is declared here:
-**list_destructure_variations.md:5:12:5:22:**
+**list_destructure_variations.md:5:18:5:22:**
 ```roc
     [head, .. as tail] => head
 ```
-           ^^^^^^^^^^
+                 ^^^^
 
 
 **UNUSED VARIABLE**
@@ -36,11 +36,11 @@ Variable ``rest`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
 The unused variable is declared here:
-**list_destructure_variations.md:6:16:6:26:**
+**list_destructure_variations.md:6:22:6:26:**
 ```roc
     [One, Two, .. as rest] => 3
 ```
-               ^^^^^^^^^^
+                     ^^^^
 
 
 **UNUSED VARIABLE**
@@ -48,11 +48,11 @@ Variable ``more`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_more` to suppress this warning.
 The unused variable is declared here:
-**list_destructure_variations.md:7:15:7:25:**
+**list_destructure_variations.md:7:21:7:25:**
 ```roc
     [x, y, z, .. as more] => x + y + z
 ```
-              ^^^^^^^^^^
+                    ^^^^
 
 
 # TOKENS
@@ -88,20 +88,20 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 		(branch @5.5-6.6
 			(p-list @5.5-5.23
 				(p-ident @5.6-5.10 (raw "head"))
-				(p-list-rest @5.12-5.22 (name "tail")))
+				(p-list-rest @5.12-5.23 (name "tail")))
 			(e-ident @5.27-5.31 (qaul "") (raw "head")))
 		(branch @6.5-7.6
 			(p-list @6.5-6.27
 				(p-tag @6.6-6.9 (raw "One"))
 				(p-tag @6.11-6.14 (raw "Two"))
-				(p-list-rest @6.16-6.26 (name "rest")))
+				(p-list-rest @6.16-6.27 (name "rest")))
 			(e-int @6.31-6.32 (raw "3")))
 		(branch @7.5-8.2
 			(p-list @7.5-7.26
 				(p-ident @7.6-7.7 (raw "x"))
 				(p-ident @7.9-7.10 (raw "y"))
 				(p-ident @7.12-7.13 (raw "z"))
-				(p-list-rest @7.15-7.25 (name "more")))
+				(p-list-rest @7.15-7.26 (name "more")))
 			(e-binop @7.30-8.2 (op "+")
 				(e-ident @7.30-7.31 (qaul "") (raw "x"))
 				(e-binop @7.34-8.2 (op "+")
@@ -158,7 +158,7 @@ match list {
 						(patterns
 							(p-assign @5.6-5.10 (ident "head")))
 						(rest-at (index 1)
-							(p-assign @5.12-5.22 (ident "tail")))))
+							(p-assign @5.18-5.22 (ident "tail")))))
 				(value
 					(e-lookup-local @5.27-5.31
 						(pattern @5.6-5.10))))
@@ -169,7 +169,7 @@ match list {
 							(p-applied-tag @6.6-6.9)
 							(p-applied-tag @6.11-6.14))
 						(rest-at (index 2)
-							(p-assign @6.16-6.26 (ident "rest")))))
+							(p-assign @6.22-6.26 (ident "rest")))))
 				(value
 					(e-int @6.31-6.32 (value "3"))))
 			(branch
@@ -180,7 +180,7 @@ match list {
 							(p-assign @7.9-7.10 (ident "y"))
 							(p-assign @7.12-7.13 (ident "z")))
 						(rest-at (index 3)
-							(p-assign @7.15-7.25 (ident "more")))))
+							(p-assign @7.21-7.25 (ident "more")))))
 				(value
 					(e-binop @7.30-8.2 (op "add")
 						(e-lookup-local @7.30-7.31

@@ -356,11 +356,11 @@ Variable ``rest`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
 The unused variable is declared here:
-**fuzz_crash_027.md:70:32:70:42:**
+**fuzz_crash_027.md:70:38:70:42:**
 ```roc
 		"foo" | "bar" => 20[1, 2, 3, .. as rest] # Aftet
 ```
-                               ^^^^^^^^^^
+                                     ^^^^
 
 
 **NOT IMPLEMENTED**
@@ -372,11 +372,11 @@ Variable ``rest`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
 The unused variable is declared here:
-**fuzz_crash_027.md:74:17:74:27:**
+**fuzz_crash_027.md:74:23:74:27:**
 ```roc
 		[1, 2 | 5, 3, .. as rest] => 123
 ```
-                ^^^^^^^^^^
+                      ^^^^
 
 
 **UNUSED VARIABLE**
@@ -942,7 +942,7 @@ CloseCurly(159:1-159:2),EndOfFile(159:2-159:2),
 								(p-int @70.23-70.24 (raw "1"))
 								(p-int @70.26-70.27 (raw "2"))
 								(p-int @70.29-70.30 (raw "3"))
-								(p-list-rest @70.32-70.42 (name "rest")))
+								(p-list-rest @70.32-70.43 (name "rest")))
 							(e-ident @71.7-71.11 (qaul "") (raw "ment")))
 						(branch @74.3-75.4
 							(p-list @74.3-74.28
@@ -951,7 +951,7 @@ CloseCurly(159:1-159:2),EndOfFile(159:2-159:2),
 									(p-int @74.7-74.8 (raw "2"))
 									(p-int @74.11-74.12 (raw "5")))
 								(p-int @74.14-74.15 (raw "3"))
-								(p-list-rest @74.17-74.27 (name "rest")))
+								(p-list-rest @74.17-74.28 (name "rest")))
 							(e-int @74.32-74.35 (raw "123")))
 						(branch @75.3-78.7
 							(p-list @75.3-77.4
@@ -1481,7 +1481,7 @@ main! = |_| { # Yeah Ie
 										(p-int @70.26-70.27)
 										(p-int @70.29-70.30))
 									(rest-at (index 3)
-										(p-assign @70.32-70.42 (ident "rest")))))
+										(p-assign @70.38-70.42 (ident "rest")))))
 							(value
 								(e-runtime-error (tag "ident_not_in_scope"))))
 						(branch
@@ -1492,7 +1492,7 @@ main! = |_| { # Yeah Ie
 										(p-runtime-error @1.1-1.1 (tag "not_implemented"))
 										(p-int @74.14-74.15))
 									(rest-at (index 3)
-										(p-assign @74.17-74.27 (ident "rest")))))
+										(p-assign @74.23-74.27 (ident "rest")))))
 							(value
 								(e-int @74.32-74.35 (value "123"))))
 						(branch

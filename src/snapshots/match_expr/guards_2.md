@@ -225,11 +225,11 @@ Variable ``rest`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
 The unused variable is declared here:
-**guards_2.md:2:13:2:23:**
+**guards_2.md:2:19:2:23:**
 ```roc
     [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
 ```
-            ^^^^^^^^^^
+                  ^^^^
 
 
 **UNUSED VARIABLE**
@@ -296,7 +296,7 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 		(branch @2.5-2.75
 			(p-list @2.5-2.24
 				(p-ident @2.6-2.11 (raw "first"))
-				(p-list-rest @2.13-2.23 (name "rest")))
+				(p-list-rest @2.13-2.24 (name "rest")))
 			(e-malformed @2.50-2.75 (reason "no_else")))
 		(branch @2.51-2.80
 			(p-malformed @2.51-2.77 (tag "pattern_unexpected_token"))

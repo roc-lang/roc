@@ -767,11 +767,11 @@ Variable ``rest`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
 The unused variable is declared here:
-**fuzz_crash_023.md:102:13:102:23:**
+**fuzz_crash_023.md:102:19:102:23:**
 ```roc
 		[1, 2, 3, .. as rest] # After pattern comment
 ```
-            ^^^^^^^^^^
+                  ^^^^
 
 
 **NOT IMPLEMENTED**
@@ -783,11 +783,11 @@ Variable ``rest`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
 The unused variable is declared here:
-**fuzz_crash_023.md:108:17:108:27:**
+**fuzz_crash_023.md:108:23:108:27:**
 ```roc
 		[1, 2 | 5, 3, .. as rest] => 123
 ```
-                ^^^^^^^^^^
+                      ^^^^
 
 
 **NOT IMPLEMENTED**
@@ -799,12 +799,11 @@ Variable ``rest`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
 The unused variable is declared here:
-**fuzz_crash_023.md:113:4:115:10:**
+**fuzz_crash_023.md:115:6:115:10:**
 ```roc
-			.. # After DoubleDot
-				as # Before alias
 					rest, # After last pattern in list
 ```
+     ^^^^
 
 
 **NOT IMPLEMENTED**
@@ -1446,7 +1445,7 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 								(p-int @102.4-102.5 (raw "1"))
 								(p-int @102.7-102.8 (raw "2"))
 								(p-int @102.10-102.11 (raw "3"))
-								(p-list-rest @102.13-102.23 (name "rest")))
+								(p-list-rest @102.13-102.24 (name "rest")))
 							(e-int @104.5-104.8 (raw "123")))
 						(branch @108.3-109.4
 							(p-list @108.3-108.28
@@ -1455,7 +1454,7 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 									(p-int @108.7-108.8 (raw "2"))
 									(p-int @108.11-108.12 (raw "5")))
 								(p-int @108.14-108.15 (raw "3"))
-								(p-list-rest @108.17-108.27 (name "rest")))
+								(p-list-rest @108.17-108.28 (name "rest")))
 							(e-int @108.32-108.35 (raw "123")))
 						(branch @109.3-117.7
 							(p-list @109.3-116.4
@@ -1464,7 +1463,7 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 									(p-int @111.4-111.5 (raw "2"))
 									(p-int @111.8-111.9 (raw "5")))
 								(p-int @112.4-112.5 (raw "3"))
-								(p-list-rest @113.4-115.10 (name "rest")))
+								(p-list-rest @113.4-115.11 (name "rest")))
 							(e-int @116.8-116.11 (raw "123")))
 						(branch @117.3-118.7
 							(p-frac @117.3-117.7 (raw "3.14"))
@@ -2066,7 +2065,7 @@ expect {
 										(p-int @102.7-102.8)
 										(p-int @102.10-102.11))
 									(rest-at (index 3)
-										(p-assign @102.13-102.23 (ident "rest")))))
+										(p-assign @102.19-102.23 (ident "rest")))))
 							(value
 								(e-int @104.5-104.8 (value "123"))))
 						(branch
@@ -2077,7 +2076,7 @@ expect {
 										(p-runtime-error @1.1-1.1 (tag "not_implemented"))
 										(p-int @108.14-108.15))
 									(rest-at (index 3)
-										(p-assign @108.17-108.27 (ident "rest")))))
+										(p-assign @108.23-108.27 (ident "rest")))))
 							(value
 								(e-int @108.32-108.35 (value "123"))))
 						(branch
@@ -2088,7 +2087,7 @@ expect {
 										(p-runtime-error @1.1-1.1 (tag "not_implemented"))
 										(p-int @112.4-112.5))
 									(rest-at (index 3)
-										(p-assign @113.4-115.10 (ident "rest")))))
+										(p-assign @115.6-115.10 (ident "rest")))))
 							(value
 								(e-int @116.8-116.11 (value "123"))))
 						(branch

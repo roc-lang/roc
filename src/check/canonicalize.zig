@@ -2317,9 +2317,11 @@ fn canonicalize_pattern(
                     if (ast_pattern.list_rest.name) |name_tok| {
                         if (self.parse_ir.tokens.resolveIdentifier(name_tok)) |ident_idx| {
                             // Create an assign pattern for the rest variable
+                            // Use the region of just the identifier token, not the full rest pattern
+                            const name_region = self.parse_ir.tokenizedRegionToRegion(.{ .start = name_tok, .end = name_tok });
                             const assign_idx = try self.can_ir.store.addPattern(CIR.Pattern{ .assign = .{
                                 .ident = ident_idx,
-                                .region = list_rest_region,
+                                .region = name_region,
                             } });
 
                             // Set the rest variable's type to be a list of the same element type
@@ -2334,7 +2336,7 @@ fn canonicalize_pattern(
                                     const original_region = shadowed_pattern.toRegion();
                                     self.can_ir.pushDiagnostic(CIR.Diagnostic{ .shadowing_warning = .{
                                         .ident = ident_idx,
-                                        .region = list_rest_region,
+                                        .region = name_region,
                                         .original_region = original_region,
                                     } });
                                 },
