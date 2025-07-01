@@ -1223,8 +1223,8 @@ pub fn canonicalize_expr(
             const secondEndpoint = iterator.nextCodepoint();
 
             if (secondEndpoint != null) {
-                // TODO: report too long utf8 seq
-                const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .invalid_single_quote = .{
+                // TODO: Handle escape sequences
+                const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .too_long_single_quote = .{
                     .region = region,
                 } });
                 return expr_idx;
@@ -1250,8 +1250,7 @@ pub fn canonicalize_expr(
 
                 return expr_idx;
             } else {
-                // TODO: report too short utf8 seq
-                const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .invalid_single_quote = .{
+                const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .empty_single_quote = .{
                     .region = region,
                 } });
 

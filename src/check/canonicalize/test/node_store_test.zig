@@ -540,6 +540,18 @@ test "NodeStore round trip - Diagnostics" {
         },
     });
 
+    try diagnostics.append(CIR.Diagnostic{
+        .too_long_single_quote = .{
+            .region = from_raw_offsets(690, 700),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
+        .empty_single_quote = .{
+            .region = from_raw_offsets(710, 720),
+        },
+    });
+
     // Test the round-trip for all diagnostics
     for (diagnostics.items) |diagnostic| {
         const idx = store.addDiagnostic(diagnostic);

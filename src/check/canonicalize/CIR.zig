@@ -181,6 +181,8 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
             );
         },
         .invalid_single_quote => Diagnostic.buildInvalidSingleQuoteReport(allocator),
+        .too_long_single_quote => Diagnostic.buildTooLongSingleQuoteReport(allocator),
+        .empty_single_quote => Diagnostic.buildEmptySingleQuoteReport(allocator),
         .expr_not_canonicalized => Diagnostic.buildExprNotCanonicalizedReport(allocator),
         .invalid_string_interpolation => Diagnostic.buildInvalidStringInterpolationReport(allocator),
         .pattern_arg_invalid => Diagnostic.buildPatternArgInvalidReport(allocator),

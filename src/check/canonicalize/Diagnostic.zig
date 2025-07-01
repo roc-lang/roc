@@ -23,6 +23,12 @@ pub const Diagnostic = union(enum) {
     invalid_single_quote: struct {
         region: Region,
     },
+    too_long_single_quote: struct {
+        region: Region,
+    },
+    empty_single_quote: struct {
+        region: Region,
+    },
     ident_already_in_scope: struct {
         ident: Ident.Idx,
         region: Region,
@@ -155,6 +161,8 @@ pub const Diagnostic = union(enum) {
             .used_underscore_variable => |d| d.region,
             .duplicate_record_field => |d| d.duplicate_region,
             .invalid_single_quote => |d| d.region,
+            .too_long_single_quote => |d| d.region,
+            .empty_single_quote => |d| d.region,
         };
     }
 
@@ -353,6 +361,28 @@ pub const Diagnostic = union(enum) {
         // Extract the literal's text from the source
         try report.document.addReflowingText("I am part way through parsing this scalar literal (character literal), but it appears to be invalid.");
 
+        return report;
+    }
+
+    /// Build a report for "too long single quote" diagnostic
+    pub fn buildTooLongSingleQuoteReport(
+        allocator: Allocator,
+    ) !Report {
+        var report = Report.init(allocator, "INVALID SCALAR", .runtime_error);
+        try report.document.addReflowingText("I am part way through parsing this scalar literal (character literal), but it contains more than one character.");
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("A single-quoted literal must contain exactly one character, e.g. 'a'.");
+        return report;
+    }
+
+    /// Build a report for "empty single quote" diagnostic
+    pub fn buildEmptySingleQuoteReport(
+        allocator: Allocator,
+    ) !Report {
+        var report = Report.init(allocator, "INVALID SCALAR", .runtime_error);
+        try report.document.addReflowingText("I am part way through parsing this scalar literal (character literal), but it is empty.");
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("A single-quoted literal must contain exactly one character, e.g. 'a'.");
         return report;
     }
 

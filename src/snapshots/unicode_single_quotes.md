@@ -19,19 +19,24 @@ type=expr
 ~~~
 # PROBLEMS
 **INVALID SCALAR**
-I am part way through parsing this scalar literal (character literal), but it appears to be invalid.
+I am part way through parsing this scalar literal (character literal), but it contains more than one character.
+A single-quoted literal must contain exactly one character, e.g. 'a'.
 
 **INVALID SCALAR**
-I am part way through parsing this scalar literal (character literal), but it appears to be invalid.
+I am part way through parsing this scalar literal (character literal), but it contains more than one character.
+A single-quoted literal must contain exactly one character, e.g. 'a'.
 
 **INVALID SCALAR**
-I am part way through parsing this scalar literal (character literal), but it appears to be invalid.
+I am part way through parsing this scalar literal (character literal), but it is empty.
+A single-quoted literal must contain exactly one character, e.g. 'a'.
 
 **INVALID SCALAR**
-I am part way through parsing this scalar literal (character literal), but it appears to be invalid.
+I am part way through parsing this scalar literal (character literal), but it contains more than one character.
+A single-quoted literal must contain exactly one character, e.g. 'a'.
 
 **INVALID SCALAR**
-I am part way through parsing this scalar literal (character literal), but it appears to be invalid.
+I am part way through parsing this scalar literal (character literal), but it contains more than one character.
+A single-quoted literal must contain exactly one character, e.g. 'a'.
 
 # TOKENS
 ~~~zig
@@ -82,11 +87,11 @@ CloseRound(11:1-11:2),EndOfFile(11:2-11:2),
 		(e-int @3.5-3.9 (value "233"))
 		(e-int @4.5-4.9 (value "241"))
 		(e-int @5.5-5.11 (value "128640"))
-		(e-runtime-error (tag "invalid_single_quote"))
-		(e-runtime-error (tag "invalid_single_quote"))
-		(e-runtime-error (tag "invalid_single_quote"))
-		(e-runtime-error (tag "invalid_single_quote"))
-		(e-runtime-error (tag "invalid_single_quote"))))
+		(e-runtime-error (tag "too_long_single_quote"))
+		(e-runtime-error (tag "too_long_single_quote"))
+		(e-runtime-error (tag "empty_single_quote"))
+		(e-runtime-error (tag "too_long_single_quote"))
+		(e-runtime-error (tag "too_long_single_quote"))))
 ~~~
 # TYPES
 ~~~clojure

@@ -9,7 +9,8 @@ type=expr
 ~~~
 # PROBLEMS
 **INVALID SCALAR**
-I am part way through parsing this scalar literal (character literal), but it appears to be invalid.
+I am part way through parsing this scalar literal (character literal), but it contains more than one character.
+A single-quoted literal must contain exactly one character, e.g. 'a'.
 
 # TOKENS
 ~~~zig
@@ -25,7 +26,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "invalid_single_quote"))
+(e-runtime-error (tag "too_long_single_quote"))
 ~~~
 # TYPES
 ~~~clojure
