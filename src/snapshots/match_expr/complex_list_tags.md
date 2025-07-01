@@ -506,6 +506,10 @@ Here is the problematic code:
 Nothing is named `events` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
 **UNUSED VARIABLE**
 Variable ``y`` is not used anywhere in your code.
 
@@ -530,6 +534,24 @@ The unused variable is declared here:
            ^
 
 
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
+
+**UNDEFINED VARIABLE**
+Nothing is named `toStr` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
 **UNUSED VARIABLE**
 Variable ``y`` is not used anywhere in your code.
 
@@ -541,6 +563,17 @@ The unused variable is declared here:
 ```
                                                                    ^
 
+
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
 
 **UNUSED VARIABLE**
 Variable ``key`` is not used anywhere in your code.
@@ -566,6 +599,14 @@ The unused variable is declared here:
                           ^^^^
 
 
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
 **UNUSED VARIABLE**
 Variable ``rest`` is not used anywhere in your code.
 
@@ -577,6 +618,24 @@ The unused variable is declared here:
 ```
                                                                               ^^^^
 
+
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
 
 **UNUSED VARIABLE**
 Variable ``others`` is not used anywhere in your code.
@@ -638,6 +697,24 @@ The unused variable is declared here:
               ^^
 
 
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
+
+**UNDEFINED VARIABLE**
+Nothing is named `toStr` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
 **UNUSED VARIABLE**
 Variable ``dy`` is not used anywhere in your code.
 
@@ -649,6 +726,21 @@ The unused variable is declared here:
 ```
                                                                                        ^^
 
+
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
 
 **UNUSED VARIABLE**
 Variable ``dx2`` is not used anywhere in your code.
@@ -662,6 +754,21 @@ The unused variable is declared here:
                                                                                                             ^^^
 
 
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
 **UNUSED VARIABLE**
 Variable ``dy2`` is not used anywhere in your code.
 
@@ -673,6 +780,17 @@ The unused variable is declared here:
 ```
                                                                                                                              ^^^
 
+
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
 
 **UNUSED VARIABLE**
 Variable ``remaining`` is not used anywhere in your code.
@@ -722,6 +840,24 @@ The unused variable is declared here:
                            ^
 
 
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
+
+**UNDEFINED VARIABLE**
+Nothing is named `toStr` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
 **UNUSED VARIABLE**
 Variable ``x`` is not used anywhere in your code.
 
@@ -734,6 +870,21 @@ The unused variable is declared here:
                                                                                                             ^
 
 
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
 **UNUSED VARIABLE**
 Variable ``y`` is not used anywhere in your code.
 
@@ -745,6 +896,13 @@ The unused variable is declared here:
 ```
                                                                                                                            ^
 
+
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
 
 # TOKENS
 ~~~zig
@@ -902,6 +1060,167 @@ match events {
 				(value
 					(e-string @2.11-2.22
 						(e-literal @2.12-2.21 (string "no events")))))
+			(branch
+				(patterns
+					(p-list @3.5-3.18 (degenerate false)
+						(patterns
+							(p-applied-tag @3.6-3.17))))
+				(value
+					(e-runtime-error (tag "expr_not_canonicalized"))))
+			(branch
+				(patterns
+					(p-runtime-error @3.53-3.56 (tag "pattern_not_canonicalized") (degenerate false)))
+				(value
+					(e-runtime-error (tag "expr_not_canonicalized"))))
+			(branch
+				(patterns
+					(p-runtime-error @3.56-3.61 (tag "pattern_not_canonicalized") (degenerate false)))
+				(value
+					(e-runtime-error (tag "ident_not_in_scope"))))
+			(branch
+				(patterns
+					(p-assign @3.68-3.69 (ident "y") (degenerate false)))
+				(value
+					(e-runtime-error (tag "expr_not_canonicalized"))))
+			(branch
+				(patterns
+					(p-runtime-error @3.70-3.72 (tag "pattern_not_canonicalized") (degenerate false)))
+				(value
+					(e-runtime-error (tag "expr_not_canonicalized"))))
+			(branch
+				(patterns
+					(p-list @4.5-4.32 (degenerate false)
+						(patterns
+							(p-applied-tag @4.6-4.19))
+						(rest-at (index 1)
+							(p-assign @4.27-4.31 (ident "rest")))))
+				(value
+					(e-runtime-error (tag "expr_not_canonicalized"))))
+			(branch
+				(patterns
+					(p-applied-tag @4.70-4.74 (degenerate false)))
+				(value
+					(e-runtime-error (tag "expr_not_canonicalized"))))
+			(branch
+				(patterns
+					(p-assign @4.79-4.83 (ident "rest") (degenerate false)))
+				(value
+					(e-runtime-error (tag "expr_not_canonicalized"))))
+			(branch
+				(patterns
+					(p-runtime-error @4.84-4.97 (tag "pattern_not_canonicalized") (degenerate false)))
+				(value
+					(e-runtime-error (tag "expr_not_canonicalized"))))
+			(branch
+				(patterns
+					(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized") (degenerate false)))
+				(value
+					(e-runtime-error (tag "expr_not_canonicalized"))))
+			(branch
+				(patterns
+					(p-list @5.5-5.49 (degenerate false)
+						(patterns
+							(p-applied-tag @5.6-5.18)
+							(p-applied-tag @5.20-5.34))
+						(rest-at (index 2)
+							(p-assign @5.42-5.48 (ident "others")))))
+				(value
+					(e-runtime-error (tag "expr_not_canonicalized"))))
+			(branch
+				(patterns
+					(p-runtime-error @5.74-5.76 (tag "pattern_not_canonicalized") (degenerate false)))
+				(value
+					(e-runtime-error (tag "expr_not_canonicalized"))))
+			(branch
+				(patterns
+					(p-runtime-error @5.76-5.81 (tag "pattern_not_canonicalized") (degenerate false)))
+				(value
+					(e-runtime-error (tag "ident_not_in_scope"))))
+			(branch
+				(patterns
+					(p-assign @5.88-5.90 (ident "dy") (degenerate false)))
+				(value
+					(e-runtime-error (tag "expr_not_canonicalized"))))
+			(branch
+				(patterns
+					(p-runtime-error @5.91-5.99 (tag "pattern_not_canonicalized") (degenerate false)))
+				(value
+					(e-runtime-error (tag "expr_not_canonicalized"))))
+			(branch
+				(patterns
+					(p-applied-tag @5.99-5.102 (degenerate false)))
+				(value
+					(e-runtime-error (tag "expr_not_canonicalized"))))
+			(branch
+				(patterns
+					(p-assign @5.109-5.112 (ident "dx2") (degenerate false)))
+				(value
+					(e-runtime-error (tag "expr_not_canonicalized"))))
+			(branch
+				(patterns
+					(p-runtime-error @5.113-5.116 (tag "pattern_not_canonicalized") (degenerate false)))
+				(value
+					(e-runtime-error (tag "expr_not_canonicalized"))))
+			(branch
+				(patterns
+					(p-applied-tag @5.116-5.119 (degenerate false)))
+				(value
+					(e-runtime-error (tag "expr_not_canonicalized"))))
+			(branch
+				(patterns
+					(p-assign @5.126-5.129 (ident "dy2") (degenerate false)))
+				(value
+					(e-runtime-error (tag "expr_not_canonicalized"))))
+			(branch
+				(patterns
+					(p-runtime-error @5.130-5.131 (tag "pattern_not_canonicalized") (degenerate false)))
+				(value
+					(e-runtime-error (tag "expr_not_canonicalized"))))
+			(branch
+				(patterns
+					(p-list @6.5-6.51 (degenerate false)
+						(patterns
+							(p-applied-tag @6.6-6.20)
+							(p-applied-tag @6.22-6.33))
+						(rest-at (index 2)
+							(p-assign @6.41-6.50 (ident "remaining")))))
+				(value
+					(e-runtime-error (tag "expr_not_canonicalized"))))
+			(branch
+				(patterns
+					(p-runtime-error @6.81-6.97 (tag "pattern_not_canonicalized") (degenerate false)))
+				(value
+					(e-runtime-error (tag "expr_not_canonicalized"))))
+			(branch
+				(patterns
+					(p-runtime-error @6.97-6.102 (tag "pattern_not_canonicalized") (degenerate false)))
+				(value
+					(e-runtime-error (tag "ident_not_in_scope"))))
+			(branch
+				(patterns
+					(p-assign @6.109-6.110 (ident "x") (degenerate false)))
+				(value
+					(e-runtime-error (tag "expr_not_canonicalized"))))
+			(branch
+				(patterns
+					(p-runtime-error @6.111-6.114 (tag "pattern_not_canonicalized") (degenerate false)))
+				(value
+					(e-runtime-error (tag "expr_not_canonicalized"))))
+			(branch
+				(patterns
+					(p-applied-tag @6.114-6.117 (degenerate false)))
+				(value
+					(e-runtime-error (tag "expr_not_canonicalized"))))
+			(branch
+				(patterns
+					(p-assign @6.124-6.125 (ident "y") (degenerate false)))
+				(value
+					(e-runtime-error (tag "expr_not_canonicalized"))))
+			(branch
+				(patterns
+					(p-runtime-error @6.126-6.127 (tag "pattern_not_canonicalized") (degenerate false)))
+				(value
+					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
 					(p-underscore @7.5-7.6 (degenerate false)))

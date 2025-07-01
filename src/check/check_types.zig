@@ -274,6 +274,12 @@ test "verify -128 produces 7 bits needed" {
     try std.testing.expectEqual(@as(u8, 7), bits_needed.toBits());
 }
 
+/// Check the types for the provided pattern
+pub fn checkPattern(self: *Self, expr_idx: CIR.Pattern.Idx) void {
+    _ = self;
+    _ = expr_idx;
+}
+
 /// Check the types for the provided expr
 pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
     const expr = self.can_ir.store.getExpr(expr_idx);
@@ -371,7 +377,9 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
             }
         },
         .e_empty_list => |_| {},
-        .e_match => |_| {},
+        .e_match => |match| {
+            return self.checkMatchExpr(expr_idx, match);
+        },
         .e_if => |if_expr| {
             return self.checkIfElseExpr(expr_idx, if_expr);
         },
@@ -544,6 +552,8 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
     }
 }
 
+// if-else //
+
 /// Check the types for an if-else expr
 pub fn checkIfElseExpr(self: *Self, if_expr_idx: CIR.Expr.Idx, if_: CIR.If) void {
     const branches = self.can_ir.store.sliceIfBranches(if_.branches);
@@ -695,4 +705,26 @@ pub fn checkIfBranchBody(
     }
 
     return result;
+}
+
+// match //
+
+/// Check the types for an if-else expr
+pub fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, match: CIR.Match) void {
+    _ = expr_idx;
+
+    // Check the match's condition
+    self.checkExpr(match.cond);
+
+    // Should never be 0
+    std.debug.assert(match.branches.span.len > 0);
+
+    // Then iterate over the branches
+    const branch_idxs = self.can_ir.store.sliceMatchBranches(match.branches);
+    for (branch_idxs, 0..) |branch_idx, index| {
+        const branch = self.can_ir.store.getMatchBranch(branch_idx);
+
+        _ = index;
+        _ = branch;
+    }
 }

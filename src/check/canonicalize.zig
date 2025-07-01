@@ -1763,30 +1763,54 @@ pub fn canonicalize_expr(
                 self.scopeEnter(self.can_ir.env.gpa, false);
                 defer self.scopeExit(self.can_ir.env.gpa) catch {};
 
-                // Canonicalize the pattern
-                if (try self.canonicalize_pattern(ast_branch.pattern)) |cir_pattern| {
-                    // Canonicalize the branch body
-                    if (try self.canonicalize_expr(ast_branch.body)) |body_expr| {
-                        // For now, create a span with just one pattern by storing it directly in extra_data
-                        const patterns_start = @as(u32, @intCast(self.can_ir.store.extra_data.items.len));
-                        self.can_ir.store.extra_data.append(self.can_ir.env.gpa, @intFromEnum(cir_pattern)) catch |err| exitOnOom(err);
-                        self.can_ir.store.extra_data.append(self.can_ir.env.gpa, @intFromBool(false)) catch |err| exitOnOom(err); // degenerate flag
+                // Mark the start of the scratch match branch patterns
+                const branch_pat_scratch_top = self.can_ir.store.scratchMatchBranchPatternTop();
 
-                        const patterns_span = CIR.Match.BranchPattern.Span{ .span = .{ .start = patterns_start, .len = 1 } };
+                // Canonicalized the branch pattern
 
-                        // Create the branch
-                        const cir_branch = CIR.Match.Branch{
-                            .patterns = patterns_span,
-                            .value = body_expr,
-                            .guard = null, // TODO: implement guard support
-                            .redundant = self.can_ir.pushFreshTypeVar(@enumFromInt(0), branch_region) catch |err| exitOnOom(err),
-                        };
-
-                        // Add the branch to the store and to scratch
-                        const branch_idx = self.can_ir.store.addMatchBranch(cir_branch);
-                        self.can_ir.store.addScratchMatchBranch(branch_idx);
+                // TODO: Using scratch is overkill rn, but will make updating
+                // this  to handle more than 1 branches once parse AST is
+                // updated easier
+                const pattern = self.parse_ir.store.getPattern(ast_branch.pattern);
+                const pattern_region = self.parse_ir.tokenizedRegionToRegion(pattern.to_tokenized_region());
+                const pattern_idx = blk: {
+                    if (try self.canonicalize_pattern(ast_branch.pattern)) |pattern_idx| {
+                        break :blk pattern_idx;
+                    } else {
+                        const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .pattern_not_canonicalized = .{
+                            .region = pattern_region,
+                        } });
+                        break :blk malformed_idx;
                     }
-                }
+                };
+                self.can_ir.store.addScratchMatchBranchPattern(CIR.Match.BranchPattern{
+                    .pattern = pattern_idx,
+                    .degenerate = false,
+                    .region = pattern_region,
+                });
+
+                // Get the pattern span
+                const branch_pat_span = self.can_ir.store.matchBranchPatternSpanFrom(branch_pat_scratch_top);
+
+                // Canonicalize the branch's body
+                const value_idx = blk: {
+                    if (try self.canonicalize_expr(ast_branch.body)) |body_idx| {
+                        break :blk body_idx;
+                    } else {
+                        const malformed_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .expr_not_canonicalized = .{
+                            .region = pattern_region,
+                        } });
+                        break :blk malformed_idx;
+                    }
+                };
+
+                self.can_ir.store.addScratchMatchBranch(.{
+                    .patterns = branch_pat_span,
+                    .value = value_idx,
+                    .guard = null,
+                    .redundant = @enumFromInt(0), // TODO
+                    .region = branch_region,
+                });
             }
 
             // Create span from scratch branches
@@ -1794,7 +1818,7 @@ pub fn canonicalize_expr(
 
             // Create the match expression
             const match_expr = CIR.Match{
-                .loc_cond = cond_expr,
+                .cond = cond_expr,
                 .branches = branches_span,
                 .exhaustive = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region) catch |err| exitOnOom(err),
                 .region = region,
