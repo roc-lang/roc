@@ -711,20 +711,124 @@ pub fn checkIfBranchBody(
 
 /// Check the types for an if-else expr
 pub fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, match: CIR.Match) void {
-    _ = expr_idx;
-
     // Check the match's condition
     self.checkExpr(match.cond);
+    const cond_var: Var = @enumFromInt(@intFromEnum(match.cond));
 
-    // Should never be 0
-    std.debug.assert(match.branches.span.len > 0);
+    // Bail if we somehow have 0 branches
+    // TODO: Should this be an error? Here or in Can?
+    if (match.branches.span.len == 0) return;
 
-    // Then iterate over the branches
+    // Get slice of branches
     const branch_idxs = self.can_ir.store.sliceMatchBranches(match.branches);
-    for (branch_idxs, 0..) |branch_idx, index| {
+
+    // Manually check the 1st branch
+    // The type of the branch's body becomes the var other branch bodies must unify
+    // against.
+    const first_branch_idx = branch_idxs[0];
+    const first_branch = self.can_ir.store.getMatchBranch(first_branch_idx);
+
+    const first_branch_ptrn_idxs = self.can_ir.store.sliceMatchBranchPatterns(first_branch.patterns);
+
+    for (first_branch_ptrn_idxs, 0..) |branch_ptrn_idx, cur_ptrn_index| {
+        const branch_ptrn = self.can_ir.store.getMatchBranchPattern(branch_ptrn_idx);
+        self.checkPattern(branch_ptrn.pattern);
+        const branch_ptrn_var: Var = @enumFromInt(@intFromEnum(branch_ptrn_idx));
+
+        const ptrn_result = self.unify(cond_var, branch_ptrn_var);
+        self.setDetailIfTypeMismatch(ptrn_result, problem.TypeMismatchDetail{ .incompatible_match_patterns = .{
+            .match_expr = expr_idx,
+            .num_branches = match.branches.span.len,
+            .problem_branch_index = 0,
+            .num_patterns = first_branch_ptrn_idxs.len,
+            .problem_pattern_index = cur_ptrn_index,
+        } });
+    }
+
+    // Check the first branch's value, then use that at the branch_var
+    self.checkExpr(first_branch.value);
+    const branch_var: Var = @enumFromInt(@intFromEnum(first_branch.value));
+
+    // Then iterate over the rest of the branches
+    for (branch_idxs[1..], 1..) |branch_idx, branch_cur_index| {
         const branch = self.can_ir.store.getMatchBranch(branch_idx);
 
-        _ = index;
-        _ = branch;
+        // First, check the patterns of this branch
+        const branch_ptrn_idxs = self.can_ir.store.sliceMatchBranchPatterns(branch.patterns);
+        for (branch_ptrn_idxs, 0..) |branch_ptrn_idx, cur_ptrn_index| {
+            // Check the pattern's sub types
+            const branch_ptrn = self.can_ir.store.getMatchBranchPattern(branch_ptrn_idx);
+            self.checkPattern(branch_ptrn.pattern);
+
+            // Check the pattern against the cond
+            const branch_ptrn_var: Var = @enumFromInt(@intFromEnum(branch_ptrn_idx));
+            const ptrn_result = self.unify(cond_var, branch_ptrn_var);
+            self.setDetailIfTypeMismatch(ptrn_result, problem.TypeMismatchDetail{ .incompatible_match_patterns = .{
+                .match_expr = expr_idx,
+                .num_branches = match.branches.span.len,
+                .problem_branch_index = 0,
+                .num_patterns = branch_ptrn_idxs.len,
+                .problem_pattern_index = cur_ptrn_index,
+            } });
+        }
+
+        // Then, check the body
+        self.checkExpr(branch.value);
+        const branch_result = self.unify(branch_var, @enumFromInt(@intFromEnum(branch.value)));
+        self.setDetailIfTypeMismatch(branch_result, problem.TypeMismatchDetail{ .incompatible_match_branches = .{
+            .match_expr = expr_idx,
+            .num_branches = match.branches.span.len,
+            .problem_branch_index = branch_cur_index,
+        } });
+
+        if (!branch_result.isOk()) {
+            // If there was a body mismatch, do not check other branches to stop
+            // cascading errors. But still check each other branch's sub types
+            for (branch_idxs[branch_cur_index + 1 ..]) |other_branch_idx| {
+                const other_branch_ptrn_idxs = self.can_ir.store.sliceMatchBranchPatterns(branch.patterns);
+                for (other_branch_ptrn_idxs) |other_branch_ptrn_idx| {
+                    const branch_ptrn = self.can_ir.store.getMatchBranchPattern(other_branch_ptrn_idx);
+                    self.checkPattern(branch_ptrn.pattern);
+                }
+
+                const other_branch = self.can_ir.store.getMatchBranch(other_branch_idx);
+                self.checkExpr(other_branch.value);
+            }
+            break;
+        }
+    }
+}
+
+// problems //
+
+fn setDetailIfTypeMismatch(self: *Self, result: unifier.Result, mismatch_detail: problem.TypeMismatchDetail) void {
+    switch (result) {
+        .ok => {},
+        .problem => |problem_idx| {
+            // Unification failed, so we know it appended a type mismatch to self.problems.
+            // We'll translate that generic type mismatch between the two elements into
+            // a more helpful if-condition-specific error report.
+
+            // Extract snapshots from the type mismatch problem
+            switch (self.problems.problems.get(problem_idx)) {
+                .type_mismatch => |mismatch| {
+                    self.problems.problems.set(problem_idx, .{
+                        .type_mismatch = .{
+                            .expected_var = mismatch.expected_var,
+                            .expected = mismatch.expected,
+                            .actual_var = mismatch.actual_var,
+                            .actual = mismatch.actual,
+                            // Add detail to type mismatch
+                            .detail = mismatch_detail,
+                        },
+                    });
+                },
+                else => {
+                    // For other problem types (e.g., number_does_not_fit), the
+                    // original problem is already more specific than our custom
+                    // problem, so we should keep it as-is and not replace it.
+                },
+            }
+        },
     }
 }

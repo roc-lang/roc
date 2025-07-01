@@ -182,6 +182,7 @@ pub fn unifyMode(
                         .expected = expected_snapshot,
                         .actual_var = b,
                         .actual = actual_snapshot,
+                        .detail = null,
                     } };
                 },
                 error.NumberDoesNotFit => {
