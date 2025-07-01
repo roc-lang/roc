@@ -1737,6 +1737,8 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
                 self.store.addScratchMatchBranch(self.parseBranch());
                 if (self.peek() == .Comma) {
                     self.advance();
+                } else if (self.peek() == .Newline) {
+                    self.advance();
                 }
             }
             const branches = self.store.matchBranchSpanFrom(scratch_top);
