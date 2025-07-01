@@ -1732,14 +1732,14 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
             self.expect(.OpenCurly) catch {
                 return self.pushMalformed(AST.Expr.Idx, .expected_open_curly_after_match, self.pos);
             };
-            const scratch_top = self.store.scratchWhenBranchTop();
+            const scratch_top = self.store.scratchMatchBranchTop();
             while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
-                self.store.addScratchWhenBranch(self.parseBranch());
+                self.store.addScratchMatchBranch(self.parseBranch());
                 if (self.peek() == .Comma) {
                     self.advance();
                 }
             }
-            const branches = self.store.whenBranchSpanFrom(scratch_top);
+            const branches = self.store.matchBranchSpanFrom(scratch_top);
             if (self.peek() != .CloseCurly) {
                 return self.pushMalformed(AST.Expr.Idx, .expected_close_curly_at_end_of_match, self.pos);
             }
@@ -1898,14 +1898,14 @@ pub fn parseRecordField(self: *Parser) AST.RecordField.Idx {
 }
 
 /// todo
-pub fn parseBranch(self: *Parser) AST.WhenBranch.Idx {
+pub fn parseBranch(self: *Parser) AST.MatchBranch.Idx {
     const start = self.pos;
     const p = self.parsePattern(.alternatives_allowed);
     if (self.peek() == .OpFatArrow) {
         self.advance();
     }
     const b = self.parseExpr();
-    return self.store.addWhenBranch(.{
+    return self.store.addMatchBranch(.{
         .region = .{ .start = start, .end = self.pos },
         .pattern = p,
         .body = b,

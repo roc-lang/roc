@@ -371,7 +371,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) void {
             }
         },
         .e_empty_list => |_| {},
-        .e_when => |_| {},
+        .e_match => |_| {},
         .e_if => |if_expr| {
             return self.checkIfElseExpr(expr_idx, if_expr);
         },

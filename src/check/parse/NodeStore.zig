@@ -27,7 +27,7 @@ scratch_exprs: base.Scratch(AST.Expr.Idx),
 scratch_patterns: base.Scratch(AST.Pattern.Idx),
 scratch_record_fields: base.Scratch(AST.RecordField.Idx),
 scratch_pattern_record_fields: base.Scratch(AST.PatternRecordField.Idx),
-scratch_when_branches: base.Scratch(AST.WhenBranch.Idx),
+scratch_match_branches: base.Scratch(AST.MatchBranch.Idx),
 scratch_type_annos: base.Scratch(AST.TypeAnno.Idx),
 scratch_anno_record_fields: base.Scratch(AST.AnnoRecordField.Idx),
 scratch_exposed_items: base.Scratch(AST.ExposedItem.Idx),
@@ -47,7 +47,7 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) NodeStore {
         .scratch_patterns = base.Scratch(AST.Pattern.Idx).init(gpa),
         .scratch_record_fields = base.Scratch(AST.RecordField.Idx).init(gpa),
         .scratch_pattern_record_fields = base.Scratch(AST.PatternRecordField.Idx).init(gpa),
-        .scratch_when_branches = base.Scratch(AST.WhenBranch.Idx).init(gpa),
+        .scratch_match_branches = base.Scratch(AST.MatchBranch.Idx).init(gpa),
         .scratch_type_annos = base.Scratch(AST.TypeAnno.Idx).init(gpa),
         .scratch_anno_record_fields = base.Scratch(AST.AnnoRecordField.Idx).init(gpa),
         .scratch_exposed_items = base.Scratch(AST.ExposedItem.Idx).init(gpa),
@@ -81,7 +81,7 @@ pub fn deinit(store: *NodeStore) void {
     store.scratch_patterns.deinit(store.gpa);
     store.scratch_record_fields.deinit(store.gpa);
     store.scratch_pattern_record_fields.deinit(store.gpa);
-    store.scratch_when_branches.deinit(store.gpa);
+    store.scratch_match_branches.deinit(store.gpa);
     store.scratch_type_annos.deinit(store.gpa);
     store.scratch_anno_record_fields.deinit(store.gpa);
     store.scratch_exposed_items.deinit(store.gpa);
@@ -97,7 +97,7 @@ pub fn emptyScratch(store: *NodeStore) void {
     store.scratch_patterns.clearFrom(0);
     store.scratch_record_fields.clearFrom(0);
     store.scratch_pattern_record_fields.clearFrom(0);
-    store.scratch_when_branches.clearFrom(0);
+    store.scratch_match_branches.clearFrom(0);
     store.scratch_type_annos.clearFrom(0);
     store.scratch_anno_record_fields.clearFrom(0);
     store.scratch_exposed_items.clearFrom(0);
@@ -119,7 +119,7 @@ pub fn debug(store: *NodeStore) void {
     std.debug.print("Scratch patterns: {any}\n", .{store.scratch_patterns.items});
     std.debug.print("Scratch record fields: {any}\n", .{store.scratch_record_fields.items});
     std.debug.print("Scratch pattern record fields: {any}\n", .{store.scratch_pattern_record_fields.items});
-    std.debug.print("Scratch when branches: {any}\n", .{store.scratch_when_branches.items});
+    std.debug.print("Scratch match branches: {any}\n", .{store.scratch_match_branches.items});
     std.debug.print("Scratch type annos: {any}\n", .{store.scratch_type_annos.items});
     std.debug.print("Scratch anno record fields: {any}\n", .{store.scratch_anno_record_fields.items});
     std.debug.print("Scratch exposes items: {any}\n", .{store.scratch_exposed_items.items});
@@ -691,7 +691,7 @@ pub fn addRecordField(store: *NodeStore, field: AST.RecordField) AST.RecordField
 }
 
 /// TODO
-pub fn addWhenBranch(store: *NodeStore, branch: AST.WhenBranch) AST.WhenBranch.Idx {
+pub fn addMatchBranch(store: *NodeStore, branch: AST.MatchBranch) AST.MatchBranch.Idx {
     const node = Node{
         .tag = .branch,
         .main_token = 0,
@@ -1429,7 +1429,7 @@ pub fn getRecordField(store: *NodeStore, field_idx: AST.RecordField.Idx) AST.Rec
 }
 
 /// Retrieves when branch data from a stored when branch node.
-pub fn getBranch(store: *NodeStore, branch_idx: AST.WhenBranch.Idx) AST.WhenBranch {
+pub fn getBranch(store: *NodeStore, branch_idx: AST.MatchBranch.Idx) AST.MatchBranch {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(branch_idx)));
     return .{
         .region = node.region,
@@ -1819,40 +1819,40 @@ pub fn clearScratchRecordFieldsFrom(store: *NodeStore, start: u32) void {
 }
 
 /// Returns the start position for a new Span of _LOWER_Idxs in scratch
-pub fn scratchWhenBranchTop(store: *NodeStore) u32 {
-    return store.scratch_when_branches.top();
+pub fn scratchMatchBranchTop(store: *NodeStore) u32 {
+    return store.scratch_match_branches.top();
 }
 
 /// Places a new AST.WhenBranch.Idx in the scratch.  Will panic on OOM.
-pub fn addScratchWhenBranch(store: *NodeStore, idx: AST.WhenBranch.Idx) void {
-    store.scratch_when_branches.append(store.gpa, idx);
+pub fn addScratchMatchBranch(store: *NodeStore, idx: AST.MatchBranch.Idx) void {
+    store.scratch_match_branches.append(store.gpa, idx);
 }
 
 /// Creates a new span starting at start.  Moves the items from scratch
 /// to extra_data as appropriate.
-pub fn whenBranchSpanFrom(store: *NodeStore, start: u32) AST.WhenBranch.Span {
-    const end = store.scratch_when_branches.top();
-    defer store.scratch_when_branches.clearFrom(start);
+pub fn matchBranchSpanFrom(store: *NodeStore, start: u32) AST.MatchBranch.Span {
+    const end = store.scratch_match_branches.top();
+    defer store.scratch_match_branches.clearFrom(start);
     var i = @as(usize, @intCast(start));
     const ed_start = @as(u32, @intCast(store.extra_data.items.len));
     while (i < end) {
-        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_when_branches.items.items[i])) catch |err| exitOnOom(err);
+        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_match_branches.items.items[i])) catch |err| exitOnOom(err);
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
 }
 
-/// Clears any WhenBranchIds added to scratch from start until the end.
+/// Clears any MatchBranchIds added to scratch from start until the end.
 /// Should be used wherever the scratch items will not be used,
 /// as in when parsing fails.
-pub fn clearScratchWhenBranchesFrom(store: *NodeStore, start: u32) void {
-    store.scratch_when_branches.clearFrom(start);
+pub fn clearScratchMatchBranchesFrom(store: *NodeStore, start: u32) void {
+    store.scratch_match_branches.clearFrom(start);
 }
 
 /// Returns a new WhenBranch slice so that the caller can iterate through
 /// all items in the span.
-pub fn whenBranchSlice(store: *NodeStore, span: AST.WhenBranch.Span) []AST.WhenBranch.Idx {
-    return store.sliceFromSpan(AST.WhenBranch.Idx, span.span);
+pub fn matchBranchSlice(store: *NodeStore, span: AST.MatchBranch.Span) []AST.MatchBranch.Idx {
+    return store.sliceFromSpan(AST.MatchBranch.Idx, span.span);
 }
 
 /// Returns the start position for a new Span of typeAnnoIdxs in scratch

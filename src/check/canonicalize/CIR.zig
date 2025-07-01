@@ -1130,7 +1130,7 @@ pub const Expr = union(enum) {
         elems: Expr.Span,
         region: Region,
     },
-    e_when: When,
+    e_match: Match,
     e_if: If,
     /// This is *only* for calling functions, not for tag application.
     /// The Tag variant contains any applied values inside it.
@@ -1276,7 +1276,7 @@ pub const Expr = union(enum) {
             },
             .e_list => |e| return e.region,
             .e_tuple => |e| return e.region,
-            .e_when => |e| return e.region,
+            .e_match => |e| return e.region,
             .e_if => |e| return e.region,
             .e_empty_list => |e| return e.region,
             .e_call => |e| return e.region,
@@ -1461,7 +1461,7 @@ pub const Expr = union(enum) {
                     },
                 }
             },
-            .e_when => |e| {
+            .e_match => |e| {
                 var node = SExpr.init(gpa, "e-match");
                 node.appendRegion(gpa, ir.calcRegionInfo(e.region));
                 node.appendStringAttr(gpa, "match", "TODO");
@@ -2010,27 +2010,87 @@ pub const IfBranch = struct {
     // Note: toSExpr is handled within Expr.if because the slice reference is there
 };
 
-/// TODO
-pub const When = struct {
-    /// The actual condition of the when expression.
+/// TODO describe match expression
+///
+/// ```roc
+/// match fruit_rank {
+///     Apple => 1,
+///     Banana => 2,
+///     Orange => 3,
+/// }
+/// ```
+pub const Match = struct {
+    /// The condition of the match expression.
     loc_cond: Expr.Idx,
-    cond_var: TypeVar,
-    /// Type of each branch (and therefore the type of the entire `when` expression)
-    expr_var: TypeVar,
+    /// The branches of the `match`
+    branches: Branch.Span,
+    /// Marks whether a match expression is exhaustive using a variable.
+    exhaustive: TypeVar,
     region: Region,
-    /// The branches of the when, and the type of the condition that they expect to be matched
-    /// against.
-    branches: WhenBranch.Span,
-    branches_cond_var: TypeVar,
-    /// Whether the branches are exhaustive.
-    exhaustive: ExhaustiveMark,
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
 
+    /// TODO
+    pub const Branch = struct {
+        patterns: Match.BranchPattern.Span,
+        value: Expr.Idx,
+        guard: ?Expr.Idx,
+        /// Marks whether a match branch is redundant using a variable.
+        redundant: TypeVar,
+
+        pub fn toSExpr(self: *const Match.Branch, ir: *const CIR, line_starts: std.ArrayList(u32)) SExpr {
+            const gpa = ir.env.gpa;
+            var node = SExpr.init(gpa, "branch");
+
+            var patterns_node = SExpr.init(gpa, "patterns");
+            patterns_node.appendStringAttr(gpa, "match", "TODO");
+            node.appendNode(gpa, &patterns_node);
+
+            var value_node = SExpr.init(gpa, "value");
+            const value_expr = ir.exprs_at_regions.get(self.value);
+            var value_sexpr = value_expr.toSExpr(ir, line_starts);
+            value_node.appendNode(gpa, &value_sexpr);
+            node.appendNode(gpa, &value_node);
+
+            if (self.guard) |guard_idx| {
+                var guard_node = SExpr.init(gpa, "guard");
+                const guard_expr = ir.exprs_at_regions.get(guard_idx);
+                var guard_sexpr = guard_expr.toSExpr(ir, line_starts);
+                guard_node.appendNode(gpa, &guard_sexpr);
+                node.appendNode(gpa, &guard_node);
+            }
+
+            return node;
+        }
+
+        pub const Idx = enum(u32) { _ };
+        pub const Span = struct { span: DataSpan };
+    };
+
+    /// TODO
+    pub const BranchPattern = struct {
+        pattern: Pattern.Idx,
+        /// Degenerate branch patterns are those that don't fully bind symbols that the branch body
+        /// needs. For example, in `A x | B y -> x`, the `B y` pattern is degenerate.
+        /// Degenerate patterns emit a runtime error if reached in a program.
+        degenerate: bool,
+
+        pub const Idx = enum(u32) { _ };
+        pub const Span = struct { span: base.DataSpan };
+
+        pub fn toSExpr(self: *const @This(), ir: *const CIR, line_starts: std.ArrayList(u32)) SExpr {
+            _ = line_starts;
+            const gpa = ir.gpa;
+            var node = self.pattern.toSExpr(ir);
+            node.appendBoolAttr(gpa, "degenerate", self.degenerate);
+            return node;
+        }
+    };
+
     pub fn toSExpr(self: *const @This(), ir: *const CIR, line_starts: std.ArrayList(u32)) SExpr {
         const gpa = ir.env.gpa;
-        var node = SExpr.init(gpa, "when");
+        var node = SExpr.init(gpa, "match");
 
         node.appendRegion(gpa, self.region);
 
@@ -2042,8 +2102,8 @@ pub const When = struct {
         node.appendNode(gpa, &cond_node);
 
         var branches_node = SExpr.init(gpa, "branches");
-        for (ir.store.whenBranchSlice(self.branches)) |branch_idx| {
-            const branch = ir.store.getWhenBranch(branch_idx);
+        for (ir.store.matchBranchSlice(self.branches)) |branch_idx| {
+            const branch = ir.store.getMatchBranch(branch_idx);
 
             var branch_sexpr = branch.toSExpr(ir);
             branches_node.appendNode(gpa, &branch_sexpr);
@@ -2052,65 +2112,6 @@ pub const When = struct {
 
         return node;
     }
-};
-
-/// todo - evaluate if we need this?
-pub const WhenBranchPattern = struct {
-    pattern: Pattern.Idx,
-    /// Degenerate branch patterns are those that don't fully bind symbols that the branch body
-    /// needs. For example, in `A x | B y -> x`, the `B y` pattern is degenerate.
-    /// Degenerate patterns emit a runtime error if reached in a program.
-    degenerate: bool,
-
-    pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: base.DataSpan };
-
-    pub fn toSExpr(self: *const @This(), ir: *const CIR, line_starts: std.ArrayList(u32)) SExpr {
-        _ = line_starts;
-        const gpa = ir.gpa;
-        var node = SExpr.init(gpa, "match-branch-pattern");
-        var pattern_sexpr = self.pattern.toSExpr(ir);
-        node.appendNode(gpa, &pattern_sexpr);
-        node.appendBoolAttr(gpa, "degenerate", self.degenerate);
-        return node;
-    }
-};
-
-/// todo - evaluate if we need this?
-pub const WhenBranch = struct {
-    patterns: WhenBranchPattern.Span,
-    value: Expr.Idx,
-    guard: ?Expr.Idx,
-    /// Whether this branch is redundant in the `when` it appears in
-    redundant: RedundantMark,
-
-    pub fn toSExpr(self: *const @This(), ir: *const CIR, line_starts: std.ArrayList(u32)) SExpr {
-        const gpa = ir.env.gpa;
-        var node = SExpr.init(gpa, "match-branch");
-
-        var patterns_node = SExpr.init(gpa, "patterns");
-        patterns_node.appendStringAttr(gpa, "match", "TODO");
-        node.appendNode(gpa, &patterns_node);
-
-        var value_node = SExpr.init(gpa, "value");
-        const value_expr = ir.exprs_at_regions.get(self.value);
-        var value_sexpr = value_expr.toSExpr(ir, line_starts);
-        value_node.appendNode(gpa, &value_sexpr);
-        node.appendNode(gpa, &value_node);
-
-        if (self.guard) |guard_idx| {
-            var guard_node = SExpr.init(gpa, "guard");
-            const guard_expr = ir.exprs_at_regions.get(guard_idx);
-            var guard_sexpr = guard_expr.toSExpr(ir, line_starts);
-            guard_node.appendNode(gpa, &guard_sexpr);
-            node.appendNode(gpa, &guard_node);
-        }
-
-        return node;
-    }
-
-    pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: DataSpan };
 };
 
 /// A canonicalized if statement
@@ -2407,12 +2408,6 @@ pub const RecordDestruct = struct {
         return node;
     }
 };
-
-/// Marks whether a when branch is redundant using a variable.
-pub const RedundantMark = TypeVar;
-
-/// Marks whether a when expression is exhaustive using a variable.
-pub const ExhaustiveMark = TypeVar;
 
 /// Helper function to convert the entire Canonical IR to a string in S-expression format
 /// and write it to the given writer.

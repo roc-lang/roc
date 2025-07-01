@@ -1730,7 +1730,7 @@ pub const Expr = union(enum) {
     },
     match: struct {
         expr: Expr.Idx,
-        branches: WhenBranch.Span,
+        branches: MatchBranch.Span,
         region: TokenizedRegion,
     },
     ident: struct {
@@ -1988,7 +1988,7 @@ pub const Expr = union(enum) {
 
                 // handle branches
                 var branches = SExpr.init(env.gpa, "branches");
-                for (ast.store.whenBranchSlice(a.branches)) |branch| {
+                for (ast.store.matchBranchSlice(a.branches)) |branch| {
                     var branch_node = ast.store.getBranch(branch).toSExpr(env, ast);
                     branches.appendNode(env.gpa, &branch_node);
                 }
@@ -2064,7 +2064,7 @@ pub const IfElse = struct {
 };
 
 /// TODO
-pub const WhenBranch = struct {
+pub const MatchBranch = struct {
     pattern: Pattern.Idx,
     body: Expr.Idx,
     region: TokenizedRegion,
