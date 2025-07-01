@@ -1259,9 +1259,9 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) AST.Pattern.Idx {
                             self.advance();
 
                             // Add diagnostic for old syntax
-                            self.pushDiagnostic(.pattern_unexpected_token, .{
+                            self.pushDiagnostic(.pattern_list_rest_old_syntax, .{
                                 .start = rest_start,
-                                .end = self.pos,
+                                .end = rest_name.?,
                             });
                         }
 
@@ -1336,7 +1336,7 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) AST.Pattern.Idx {
                     self.advance();
                 } else if (self.peek() == .LowerIdent) {
                     // Old syntax ..name - create malformed pattern with helpful diagnostic
-                    return self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, self.pos);
+                    return self.pushMalformed(AST.Pattern.Idx, .pattern_list_rest_old_syntax, self.pos);
                 }
                 pattern = self.store.addPattern(.{ .list_rest = .{
                     .region = .{ .start = start, .end = end },
