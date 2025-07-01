@@ -437,8 +437,7 @@ pub const Comment = struct {
 /// Represents a diagnostic message including its position in the source.
 pub const Diagnostic = struct {
     tag: Tag,
-    begin: u32,
-    end: u32,
+    region: base.Region,
 
     /// Represents the type of diagnostic message.
     pub const Tag = enum {
@@ -460,7 +459,7 @@ pub const Diagnostic = struct {
         defer newlines.deinit();
 
         // Get position information
-        const info = try base.RegionInfo.position(source, newlines.items, self.begin, self.end);
+        const info = try base.RegionInfo.position(source, newlines.items, self.region.start.offest, self.region.end.offset);
 
         // Strip trailing newline for display
         const display_text = if (info.line_text.len > 0 and
@@ -535,10 +534,9 @@ pub const Cursor = struct {
 
     fn pushMessage(self: *Cursor, tag: Diagnostic.Tag, begin: u32, end: u32) void {
         if (self.message_count < self.messages.len) {
-            self.messages[self.message_count] = .{
+            self.messages[self.message_count] = Diagnostic{
                 .tag = tag,
-                .begin = begin,
-                .end = end,
+                .region = base.Region{ .start = base.Region.Position{ .offset = begin }, .end = base.Region.Position{ .offset = end } },
             };
         }
         self.message_count += 1;
