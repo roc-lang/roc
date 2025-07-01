@@ -1677,7 +1677,10 @@ pub const Expr = union(enum) {
         token: Token.Idx,
         region: TokenizedRegion,
     },
-
+    single_quote: struct {
+        token: Token.Idx,
+        region: TokenizedRegion,
+    },
     string_part: struct { // TODO: this should be more properly represented in its own union enum
         token: Token.Idx,
         region: TokenizedRegion,
@@ -1792,6 +1795,7 @@ pub const Expr = union(enum) {
             .ellipsis => |e| e.region,
             .malformed => |e| e.region,
             .string_part => |e| e.region,
+            .single_quote => |e| e.region,
         };
     }
 
@@ -1880,6 +1884,12 @@ pub const Expr = union(enum) {
 
                 ast.appendRegionInfoToSexprNode(env, &node, a.region);
 
+                node.appendStringAttr(env.gpa, "raw", ast.resolve(a.token));
+                return node;
+            },
+            .single_quote => |a| {
+                var node = SExpr.init(env.gpa, "e-single-quote");
+                ast.appendRegionInfoToSexprNode(env, &node, a.region);
                 node.appendStringAttr(env.gpa, "raw", ast.resolve(a.token));
                 return node;
             },

@@ -184,7 +184,7 @@ pub fn parseFile(self: *Parser) void {
     defer trace.end();
 
     self.store.emptyScratch();
-    _ = self.store.addFile(.{
+    self.store.addFile(.{
         .header = @as(AST.Header.Idx, @enumFromInt(0)),
         .statements = AST.Statement.Span{ .span = base.DataSpan.empty() },
         .region = AST.TokenizedRegion.empty(),
@@ -208,7 +208,7 @@ pub fn parseFile(self: *Parser) void {
         }
     }
 
-    _ = self.store.addFile(.{
+    self.store.addFile(.{
         .header = header,
         .statements = self.store.statementSpanFrom(scratch_top),
         .region = .{ .start = 0, .end = @intCast(self.tok_buf.tokens.len - 1) },
@@ -1496,6 +1496,13 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
         .Float => {
             self.advance();
             expr = self.store.addExpr(.{ .frac = .{
+                .token = start,
+                .region = .{ .start = start, .end = start },
+            } });
+        },
+        .SingleQuote => {
+            self.advance();
+            expr = self.store.addExpr(.{ .single_quote = .{
                 .token = start,
                 .region = .{ .start = start, .end = start },
             } });

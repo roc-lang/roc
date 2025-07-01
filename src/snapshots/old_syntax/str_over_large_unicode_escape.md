@@ -8,20 +8,9 @@ type=expr
 '\u(FFFFFFFFF)'
 ~~~
 # PROBLEMS
-**UNCLOSED SINGLE QUOTE**
-This character literal is missing a closing single quote.
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **'\u(FFFFFFFFF)'** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**str_over_large_unicode_escape.md:1:1:1:16:**
-```roc
-'\u(FFFFFFFFF)'
-```
-^^^^^^^^^^^^^^^
-
+**INVALID SCALAR**
+I am part way through parsing this scalar literal (character literal), but it contains more than one character.
+A single-quoted literal must contain exactly one character, e.g. 'a'.
 
 # TOKENS
 ~~~zig
@@ -29,19 +18,17 @@ SingleQuote(1:1-1:16),EndOfFile(1:16-1:16),
 ~~~
 # PARSE
 ~~~clojure
-(e-malformed @1.1-1.16 (reason "expr_unexpected_token"))
+(e-single-quote @1.1-1.16 (raw "'\u(FFFFFFFFF)'"))
 ~~~
 # FORMATTED
 ~~~roc
-
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(e-runtime-error (tag "too_long_single_quote"))
 ~~~
 # TYPES
 ~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+(expr @1.1-1.16 (type "Error"))
 ~~~
