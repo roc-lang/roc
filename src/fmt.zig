@@ -179,9 +179,9 @@ fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST) 
     const stderr = std.io.getStdErr().writer();
     try stderr.print("Errors:\n", .{});
     for (parse_ast.parse_diagnostics.items) |err| {
-        const token_offset = parse_ast.tokens.tokens.items(.offset)[err.region.start];
-        const line = binarySearch(line_offsets.items, token_offset) orelse unreachable;
-        const column = token_offset - line_offsets.items[line];
+        const region = parse_ast.tokens.resolve(@intCast(err.region.start));
+        const line = binarySearch(line_offsets.items, region.start.offset) orelse unreachable;
+        const column = region.start.offset - line_offsets.items[line];
         const token = parse_ast.tokens.tokens.items(.tag)[err.region.start];
         // TODO: pretty print the parse failures.
         try stderr.print("\t{s}, at token {s} at {d}:{d}\n", .{ @tagName(err.tag), @tagName(token), line + 1, column });
@@ -1759,8 +1759,9 @@ const Formatter = struct {
         while (i <= prevNewline) {
             const newline_tok = fmt.ast.tokens.tokens.get(i);
             std.debug.assert(newline_tok.tag == .Newline);
-            const start = newline_tok.offset;
-            const end = newline_tok.extra.end;
+            const region = fmt.ast.tokens.resolve(i);
+            const start = region.start.offset;
+            const end = region.end.offset;
             if (end > start) {
                 if (i == 0 or i > first) {
                     try fmt.pushIndent();
@@ -1793,9 +1794,9 @@ const Formatter = struct {
             return false;
         }
         while (nextNewline < tags.len and tags[nextNewline] == .Newline) {
-            const newline_tok = fmt.ast.tokens.tokens.get(nextNewline);
-            const start = newline_tok.offset;
-            const end = newline_tok.extra.end;
+            const region = fmt.ast.tokens.resolve(nextNewline);
+            const start = region.start.offset;
+            const end = region.end.offset;
             if (end > start) {
                 try fmt.pushAll(" #");
                 const comment_text = fmt.ast.source[start..end];

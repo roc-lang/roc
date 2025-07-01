@@ -11,11 +11,10 @@ const tracy = @import("../../tracy.zig");
 /// an index into the string interner
 pub const Token = struct {
     tag: Tag,
-    offset: u32,
     extra: Extra,
 
     pub const Extra = union {
-        end: u32,
+        region: base.Region,
         interned: base.Ident.Idx,
     };
 
@@ -401,17 +400,13 @@ pub const TokenizedBuffer = struct {
         self.tokens.deinit(self.env.gpa);
     }
 
-    pub fn resolve(self: *TokenizedBuffer, token: Token.Idx) base.Region {
+    pub fn resolve(self: *const TokenizedBuffer, token: Token.Idx) base.Region {
         const tag = self.tokens.items(.tag)[@intCast(token)];
-        const start = self.tokens.items(.offset)[@intCast(token)];
         const extra = self.tokens.items(.extra)[@intCast(token)];
         if (tag.isInterned()) {
             return self.env.idents.getRegion(extra.interned);
         } else {
-            return .{
-                .start = base.Region.Position{ .offset = start },
-                .end = base.Region.Position{ .offset = extra.end },
-            };
+            return extra.region;
         }
     }
 
@@ -425,13 +420,6 @@ pub const TokenizedBuffer = struct {
         } else {
             return null;
         }
-    }
-
-    /// Returns the offset of the token at index `idx`.
-    pub fn offset(self: *TokenizedBuffer, idx: u32) u32 {
-        // newline tokens don't have offsets - that field is used to store the indent.
-        std.debug.assert(self.tokens.items(.tag)[idx] != .Newline);
-        return self.tokens.items(.offset)[@intCast(idx)];
     }
 };
 
@@ -1035,24 +1023,23 @@ pub const Tokenizer = struct {
     }
 
     /// Pushes a token with the given tag, token offset, and extra.
-    fn pushTokenNormalHere(self: *Tokenizer, tag: Token.Tag, tok_offset: u32) void {
+    fn pushTokenNormalHere(self: *Tokenizer, tag: Token.Tag, tok_offset: Token.Idx) void {
         std.debug.assert(!tag.isInterned());
         self.output.tokens.append(self.env.gpa, .{
             .tag = tag,
-            .offset = tok_offset,
-            .extra = .{ .end = self.cursor.pos },
+            .extra = .{ .region = base.Region{ .start = base.Region.Position{ .offset = tok_offset }, .end = base.Region.Position{ .offset = self.cursor.pos } } },
         }) catch |err| exitOnOom(err);
     }
 
     fn pushNewlineHere(self: *Tokenizer, comment: ?Comment) void {
         var token = Token{
             .tag = .Newline,
-            .offset = 0, // store the Comment start - if it is exists here
-            .extra = .{ .end = 0 },
+            // store the Comment start - if it is exists here
+            // TODO: do we need it to be 0-0 region?
+            .extra = .{ .region = base.Region{ .start = base.Region.Position{ .offset = 0 }, .end = base.Region.Position{ .offset = 0 } } },
         };
         if (comment) |c| {
-            token.offset = c.begin;
-            token.extra = .{ .end = c.end };
+            token.extra = .{ .region = base.Region{ .start = base.Region.Position{ .offset = c.begin }, .end = base.Region.Position{ .offset = c.end } } };
         }
         self.output.tokens.append(self.env.gpa, token) catch |err| exitOnOom(err);
     }
@@ -1072,7 +1059,6 @@ pub const Tokenizer = struct {
         );
         self.output.tokens.append(self.env.gpa, .{
             .tag = tag,
-            .offset = tok_offset,
             .extra = .{ .interned = id },
         }) catch |err| exitOnOom(err);
     }
@@ -1634,7 +1620,6 @@ pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug
         const length1 = region1.end.offset - region1.start.offset;
         const length2 = region2.end.offset - region2.start.offset;
         same = same and (token.tag == token2.tag);
-        same = same and (token.offset == token2.offset);
         same = same and (length1 == length2);
     }
 
@@ -1644,7 +1629,10 @@ pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug
         while (prefix_len < output.tokens.tokens.len and prefix_len < output2.tokens.tokens.len) : (prefix_len += 1) {
             const token = output.tokens.tokens.get(prefix_len);
             const token2 = output2.tokens.tokens.get(prefix_len);
-            if (token.tag != token2.tag or token.offset != token2.offset) {
+            const region1 = output.tokens.resolve(@intCast(prefix_len));
+            const region2 = output2.tokens.resolve(@intCast(prefix_len));
+
+            if (token.tag != token2.tag or region1.start.offset != region2.start.offset) {
                 break;
             }
         }
@@ -1652,7 +1640,10 @@ pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug
         while (suffix_len < output.tokens.tokens.len - prefix_len and suffix_len < output2.tokens.tokens.len - prefix_len) : (suffix_len += 1) {
             const token = output.tokens.tokens.get(output.tokens.tokens.len - suffix_len - 1);
             const token2 = output2.tokens.tokens.get(output2.tokens.tokens.len - suffix_len - 1);
-            if (token.tag != token2.tag or token.offset != token2.offset) {
+            const region1 = output.tokens.resolve(@intCast(output.tokens.tokens.len - suffix_len - 1));
+            const region2 = output2.tokens.resolve(@intCast(output2.tokens.tokens.len - suffix_len - 1));
+
+            if (token.tag != token2.tag or region1.start.offset != region2.start.offset) {
                 break;
             }
         }
@@ -1661,12 +1652,12 @@ pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug
         for (prefix_len..output.tokens.tokens.len - suffix_len) |token_index| {
             const region = output.tokens.resolve(@intCast(token_index));
             const token = output.tokens.tokens.get(token_index);
-            std.debug.print("\x1b[31m\t- {any}\x1b[0m: {s}\n", .{ token, input[token.offset..region.end.offset] });
+            std.debug.print("\x1b[31m\t- {any}\x1b[0m: {s}\n", .{ token, input[region.start.offset..region.end.offset] });
         }
         for (prefix_len..output2.tokens.tokens.len - suffix_len) |token_index| {
             const region = output2.tokens.resolve(@intCast(token_index));
             const token = output2.tokens.tokens.get(token_index);
-            std.debug.print("\x1b[32m\t+ {any}\x1b[0m: {s}\n", .{ token, buf2.items[token.offset..region.end.offset] });
+            std.debug.print("\x1b[32m\t+ {any}\x1b[0m: {s}\n", .{ token, buf2.items[region.start.offset..region.end.offset] });
         }
         std.debug.print("...\n", .{});
 
@@ -1695,7 +1686,8 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
 
         // Copy over limited whitespace.
         // TODO: Long term, we should switch to dummy whitespace, but currently, Roc still has WSS.
-        for (last_end..token.offset) |i| {
+        const region = tokens.resolve(@intCast(token_index));
+        for (last_end..region.start.offset) |i| {
             // Leave tabs and newlines alone, they are special to roc.
             // Replace everything else with spaces.
             if (buf[i] != '\t' and buf[i] != '\r' and buf[i] != '\n' and buf[i] != '#') {
@@ -1707,8 +1699,6 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
         if (token.tag == .EndOfFile) {
             break;
         }
-        const region = tokens.resolve(@intCast(token_index));
-        std.debug.assert(region.start.offset == token.offset);
         std.debug.assert(region.end.offset >= region.start.offset);
         std.debug.assert(region.end.offset <= buf.len);
         std.debug.assert(region.start.offset >= last_end);
