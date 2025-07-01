@@ -453,55 +453,6 @@ pub const Diagnostic = struct {
         MismatchedBrace,
         NonPrintableUnicodeInStrLiteral,
     };
-
-    pub fn toStr(self: Diagnostic, gpa: Allocator, source: []const u8, writer: anytype) !void {
-        var newlines = try base.RegionInfo.findLineStarts(gpa, source);
-        defer newlines.deinit();
-
-        // Get position information
-        const info = try base.RegionInfo.position(source, newlines.items, self.region.start.offest, self.region.end.offset);
-
-        // Strip trailing newline for display
-        const display_text = if (info.line_text.len > 0 and
-            (info.line_text[info.line_text.len - 1] == '\n' or
-                info.line_text[info.line_text.len - 1] == '\r'))
-            info.line_text[0 .. info.line_text.len - 1]
-        else
-            info.line_text;
-
-        var spaces = std.ArrayList(u8).init(gpa);
-        defer spaces.deinit();
-        for (0..info.start_col_idx) |_| {
-            try spaces.append(' ');
-        }
-
-        var carets = std.ArrayList(u8).init(gpa);
-        defer carets.deinit();
-
-        const caret_length = @max(self.end - self.begin, 1);
-        for (0..caret_length) |_| {
-            try carets.append('^');
-        }
-
-        const error_message = try std.fmt.allocPrint(
-            gpa,
-            "TOKENIZE: ({d}:{d}-{d}:{d}) {s}:\n{s}\n{s}{s}",
-            .{
-                // add one to display numbers instead of index
-                info.start_line_idx + 1,
-                info.start_col_idx + 1,
-                info.end_line_idx + 1,
-                info.end_col_idx + 1,
-                @tagName(self.tag),
-                display_text,
-                spaces.items,
-                carets.items,
-            },
-        );
-        defer gpa.free(error_message);
-
-        try writer.writeAll(error_message);
-    }
 };
 
 /// The cursor is our current position in the input text, and it collects messages.
