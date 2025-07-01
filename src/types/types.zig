@@ -208,7 +208,8 @@ pub const TypeIdent = struct {
 
 // flat types //
 
-/// A "flat" data type
+/// Represents type without indirection, it's the concrete form that a type
+/// takes after resolving type variables and aliases.
 pub const FlatType = union(enum) {
     str,
     box: Var,

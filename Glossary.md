@@ -401,6 +401,14 @@ Related definitions in the compiler:
 - old compiler: search "pub enum Content" in [types/src/subs.rs](crates/compiler/types/src/subs.rs)
 - new compiler: search "pub const Content" in [check/canonicalize/CIR.zig](src/check/canonicalize/CIR.zig)
 
+## Flat Type
+
+Represents types without indirection, it's the concrete form that types take after
+resolving [variables](#type-variable) and [aliases](#type-alias).
+
+definitions in the compiler:
+- old compiler: search "pub enum FlatType" in [types/src/subs.rs](crates/compiler/types/src/subs.rs)
+- new compiler: search "pub const FlatType" in [types/types.zig](src/types/types.zig)
 
 ## Canonicalization
 
