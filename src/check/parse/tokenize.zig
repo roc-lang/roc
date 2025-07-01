@@ -400,7 +400,7 @@ pub const TokenizedBuffer = struct {
         self.tokens.deinit(self.env.gpa);
     }
 
-    pub fn resolve(self: *TokenizedBuffer, idx: usize) base.Region {
+    pub fn resolve(self: *const TokenizedBuffer, idx: usize) base.Region {
         const tag = self.tokens.items(.tag)[idx];
         const extra = self.tokens.items(.extra)[idx];
         if (tag.isInterned()) {
