@@ -351,26 +351,44 @@ Let us know if you want to help!
 Nothing is named `ment` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**UNUSED VARIABLE**
+Variable ``rest`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_027.md:70:32:70:42:**
+```roc
+		"foo" | "bar" => 20[1, 2, 3, .. as rest] # Aftet
+```
+                               ^^^^^^^^^^
+
+
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
 Let us know if you want to help!
 
-**DUPLICATE DEFINITION**
-The name `rest` is being redeclared in this scope.
+**UNUSED VARIABLE**
+Variable ``rest`` is not used anywhere in your code.
 
-The redeclaration is here:
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+The unused variable is declared here:
 **fuzz_crash_027.md:74:17:74:27:**
 ```roc
 		[1, 2 | 5, 3, .. as rest] => 123
 ```
                 ^^^^^^^^^^
 
-But `rest` was already defined here:
-**fuzz_crash_027.md:70:32:70:42:**
+
+**UNUSED VARIABLE**
+Variable ``ist`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_ist` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_027.md:76:1:76:4:**
 ```roc
-		"foo" | "bar" => 20[1, 2, 3, .. as rest] # Aftet
+ist
 ```
-                               ^^^^^^^^^^
+^^^
 
 
 **NOT IMPLEMENTED**
@@ -400,42 +418,6 @@ Let us know if you want to help!
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
 Let us know if you want to help!
-
-**UNUSED VARIABLE**
-Variable ``rest`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:70:32:70:42:**
-```roc
-		"foo" | "bar" => 20[1, 2, 3, .. as rest] # Aftet
-```
-                               ^^^^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable ``ist`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_ist` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:76:1:76:4:**
-```roc
-ist
-```
-^^^
-
-
-**UNUSED VARIABLE**
-Variable ``rest`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:74:17:74:27:**
-```roc
-		[1, 2 | 5, 3, .. as rest] => 123
-```
-                ^^^^^^^^^^
-
 
 **UNUSED VARIABLE**
 Variable ``b`` is not used anywhere in your code.

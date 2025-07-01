@@ -319,25 +319,27 @@ Let us know if you want to help!
 This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
 Let us know if you want to help!
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
-Let us know if you want to help!
+**UNUSED VARIABLE**
+Variable ``lower`` is not used anywhere in your code.
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
-Let us know if you want to help!
-
-**DUPLICATE DEFINITION**
-The name `rest` is being redeclared in this scope.
-
-The redeclaration is here:
-**syntax_grab_bag.md:108:17:108:27:**
+If you don't need this variable, prefix it with an underscore like `_lower` to suppress this warning.
+The unused variable is declared here:
+**syntax_grab_bag.md:97:3:97:8:**
 ```roc
-		[1, 2 | 5, 3, .. as rest] => 123
+		lower # After pattern comment
 ```
-                ^^^^^^^^^^
+  ^^^^^
 
-But `rest` was already defined here:
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
+Let us know if you want to help!
+
+**UNUSED VARIABLE**
+Variable ``rest`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+The unused variable is declared here:
 **syntax_grab_bag.md:102:13:102:23:**
 ```roc
 		[1, 2, 3, .. as rest] # After pattern comment
@@ -349,23 +351,33 @@ But `rest` was already defined here:
 This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
 Let us know if you want to help!
 
-**DUPLICATE DEFINITION**
-The name `rest` is being redeclared in this scope.
+**UNUSED VARIABLE**
+Variable ``rest`` is not used anywhere in your code.
 
-The redeclaration is here:
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+The unused variable is declared here:
+**syntax_grab_bag.md:108:17:108:27:**
+```roc
+		[1, 2 | 5, 3, .. as rest] => 123
+```
+                ^^^^^^^^^^
+
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
+Let us know if you want to help!
+
+**UNUSED VARIABLE**
+Variable ``rest`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+The unused variable is declared here:
 **syntax_grab_bag.md:113:4:115:10:**
 ```roc
 			.. # After DoubleDot
 				as # Before alias
 					rest, # After last pattern in list
 ```
-
-But `rest` was already defined here:
-**syntax_grab_bag.md:108:17:108:27:**
-```roc
-		[1, 2 | 5, 3, .. as rest] => 123
-```
-                ^^^^^^^^^^
 
 
 **NOT IMPLEMENTED**
@@ -397,42 +409,6 @@ This feature is not yet implemented or doesn't have a proper error report yet: r
 Let us know if you want to help!
 
 **UNUSED VARIABLE**
-Variable ``rest`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-The unused variable is declared here:
-**syntax_grab_bag.md:102:13:102:23:**
-```roc
-		[1, 2, 3, .. as rest] # After pattern comment
-```
-            ^^^^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable ``lower`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_lower` to suppress this warning.
-The unused variable is declared here:
-**syntax_grab_bag.md:97:3:97:8:**
-```roc
-		lower # After pattern comment
-```
-  ^^^^^
-
-
-**UNUSED VARIABLE**
-Variable ``rest`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-The unused variable is declared here:
-**syntax_grab_bag.md:108:17:108:27:**
-```roc
-		[1, 2 | 5, 3, .. as rest] => 123
-```
-                ^^^^^^^^^^
-
-
-**UNUSED VARIABLE**
 Variable ``b`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
@@ -442,19 +418,6 @@ The unused variable is declared here:
 	b,
 ```
  ^
-
-
-**UNUSED VARIABLE**
-Variable ``rest`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-The unused variable is declared here:
-**syntax_grab_bag.md:113:4:115:10:**
-```roc
-			.. # After DoubleDot
-				as # Before alias
-					rest, # After last pattern in list
-```
 
 
 **NOT IMPLEMENTED**

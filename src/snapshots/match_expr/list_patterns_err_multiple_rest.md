@@ -21,6 +21,18 @@ This pattern contains invalid syntax or uses unsupported features.
 This feature is not yet implemented or doesn't have a proper error report yet: ...
 Let us know if you want to help!
 
+**UNUSED VARIABLE**
+Variable ``middle`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_middle` to suppress this warning.
+The unused variable is declared here:
+**list_patterns_err_multiple_rest.md:2:10:2:16:**
+```roc
+    [.., middle, ..] => ... # error, multiple rest patterns not allowed
+```
+         ^^^^^^
+
+
 # TOKENS
 ~~~zig
 KwMatch(1:1-1:6),LowerIdent(1:7-1:14),OpenCurly(1:15-1:16),Newline(1:1-1:1),

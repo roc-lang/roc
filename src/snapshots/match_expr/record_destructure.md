@@ -16,22 +16,16 @@ match person {
 Nothing is named `person` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**DUPLICATE DEFINITION**
-The name `name` is being redeclared in this scope.
+**UNUSED VARIABLE**
+Variable ``age`` is not used anywhere in your code.
 
-The redeclaration is here:
-**record_destructure.md:3:7:3:12:**
-```roc
-    { name, address: { city } } => city
-```
-      ^^^^^
-
-But `name` was already defined here:
-**record_destructure.md:2:7:2:12:**
+If you don't need this variable, prefix it with an underscore like `_age` to suppress this warning.
+The unused variable is declared here:
+**record_destructure.md:2:13:2:18:**
 ```roc
     { name, age } => name
 ```
-      ^^^^^
+            ^^^^^
 
 
 **NOT IMPLEMENTED**
@@ -41,6 +35,18 @@ Let us know if you want to help!
 **UNDEFINED VARIABLE**
 Nothing is named `city` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**UNUSED VARIABLE**
+Variable ``name`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_name` to suppress this warning.
+The unused variable is declared here:
+**record_destructure.md:3:7:3:12:**
+```roc
+    { name, address: { city } } => city
+```
+      ^^^^^
+
 
 # TOKENS
 ~~~zig

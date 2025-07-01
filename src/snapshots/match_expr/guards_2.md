@@ -208,17 +208,11 @@ Here is the problematic code:
 Nothing is named `value` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**DUPLICATE DEFINITION**
-The name `first` is being redeclared in this scope.
+**UNUSED VARIABLE**
+Variable ``first`` is not used anywhere in your code.
 
-The redeclaration is here:
-**guards_2.md:2:87:2:92:**
-```roc
-    [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
-```
-                                                                                      ^^^^^
-
-But `first` was already defined here:
+If you don't need this variable, prefix it with an underscore like `_first` to suppress this warning.
+The unused variable is declared here:
 **guards_2.md:2:6:2:11:**
 ```roc
     [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
@@ -226,22 +220,64 @@ But `first` was already defined here:
      ^^^^^
 
 
-**DUPLICATE DEFINITION**
-The name `x` is being redeclared in this scope.
+**UNUSED VARIABLE**
+Variable ``rest`` is not used anywhere in your code.
 
-The redeclaration is here:
-**guards_2.md:3:60:3:61:**
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+The unused variable is declared here:
+**guards_2.md:2:13:2:23:**
 ```roc
-    [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
+    [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
 ```
-                                                           ^
+            ^^^^^^^^^^
 
-But `x` was already defined here:
+
+**UNUSED VARIABLE**
+Variable ``first`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_first` to suppress this warning.
+The unused variable is declared here:
+**guards_2.md:2:87:2:92:**
+```roc
+    [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
+```
+                                                                                      ^^^^^
+
+
+**UNUSED VARIABLE**
+Variable ``x`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+The unused variable is declared here:
 **guards_2.md:3:6:3:7:**
 ```roc
     [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
 ```
      ^
+
+
+**UNUSED VARIABLE**
+Variable ``y`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
+The unused variable is declared here:
+**guards_2.md:3:9:3:10:**
+```roc
+    [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
+```
+        ^
+
+
+**UNUSED VARIABLE**
+Variable ``x`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+The unused variable is declared here:
+**guards_2.md:3:60:3:61:**
+```roc
+    [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
+```
+                                                           ^
 
 
 # TOKENS

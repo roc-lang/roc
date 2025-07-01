@@ -23,6 +23,18 @@ Is there an `import` or `exposing` missing up-top?
 Nothing is named `acc` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**UNUSED VARIABLE**
+Variable ``rest`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+The unused variable is declared here:
+**list_patterns.md:3:13:3:23:**
+```roc
+    [first, .. as rest] => first + acc
+```
+            ^^^^^^^^^^
+
+
 # TOKENS
 ~~~zig
 KwMatch(1:1-1:6),LowerIdent(1:7-1:14),OpenCurly(1:15-1:16),Newline(1:1-1:1),

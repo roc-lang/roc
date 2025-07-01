@@ -233,17 +233,37 @@ Is there an `import` or `exposing` missing up-top?
 Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**UNUSED VARIABLE**
+Variable ``lue`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_lue` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_019.md:52:11:52:14:**
+```roc
+	match a {lue  {
+```
+          ^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**UNUSED VARIABLE**
+Variable ``er`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_er` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_019.md:57:2:57:4:**
+```roc
+	er #ent
+```
+ ^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `ment` in this scope.
 Is there an `import` or `exposing` missing up-top?
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
-Let us know if you want to help!
 
 **UNUSED VARIABLE**
 Variable ``est`` is not used anywhere in your code.
@@ -257,29 +277,9 @@ The unused variable is declared here:
            ^^^
 
 
-**UNUSED VARIABLE**
-Variable ``lue`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_lue` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_019.md:52:11:52:14:**
-```roc
-	match a {lue  {
-```
-          ^^^
-
-
-**UNUSED VARIABLE**
-Variable ``er`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_er` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_019.md:57:2:57:4:**
-```roc
-	er #ent
-```
- ^^
-
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
+Let us know if you want to help!
 
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: top-level expect

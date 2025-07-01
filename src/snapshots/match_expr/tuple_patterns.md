@@ -17,40 +17,16 @@ match coord {
 Nothing is named `coord` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**DUPLICATE DEFINITION**
-The name `x` is being redeclared in this scope.
+**UNUSED VARIABLE**
+Variable ``y`` is not used anywhere in your code.
 
-The redeclaration is here:
-**tuple_patterns.md:5:6:5:7:**
-```roc
-    (x, y) => x
-```
-     ^
-
-But `x` was already defined here:
-**tuple_patterns.md:3:6:3:7:**
-```roc
-    (x, Zero) => x
-```
-     ^
-
-
-**DUPLICATE DEFINITION**
-The name `y` is being redeclared in this scope.
-
-The redeclaration is here:
+If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
+The unused variable is declared here:
 **tuple_patterns.md:5:9:5:10:**
 ```roc
     (x, y) => x
 ```
         ^
-
-But `y` was already defined here:
-**tuple_patterns.md:4:12:4:13:**
-```roc
-    (Zero, y) => y
-```
-           ^
 
 
 # TOKENS

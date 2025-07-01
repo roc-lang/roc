@@ -16,24 +16,6 @@ match shape {
 Nothing is named `shape` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**DUPLICATE DEFINITION**
-The name `height` is being redeclared in this scope.
-
-The redeclaration is here:
-**tag_with_payload.md:4:20:4:26:**
-```roc
-    Triangle(base, height) => 0.5 * base * height
-```
-                   ^^^^^^
-
-But `height` was already defined here:
-**tag_with_payload.md:3:22:3:28:**
-```roc
-    Rectangle(width, height) => width * height
-```
-                     ^^^^^^
-
-
 # TOKENS
 ~~~zig
 KwMatch(1:1-1:6),LowerIdent(1:7-1:12),OpenCurly(1:13-1:14),Newline(1:1-1:1),

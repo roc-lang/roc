@@ -19,22 +19,40 @@ match list {
 Nothing is named `list` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**DUPLICATE DEFINITION**
-The name `x` is being redeclared in this scope.
+**UNUSED VARIABLE**
+Variable ``tail`` is not used anywhere in your code.
 
-The redeclaration is here:
-**list_destructure_variations.md:7:6:7:7:**
+If you don't need this variable, prefix it with an underscore like `_tail` to suppress this warning.
+The unused variable is declared here:
+**list_destructure_variations.md:5:12:5:22:**
+```roc
+    [head, .. as tail] => head
+```
+           ^^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable ``rest`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+The unused variable is declared here:
+**list_destructure_variations.md:6:16:6:26:**
+```roc
+    [One, Two, .. as rest] => 3
+```
+               ^^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable ``more`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_more` to suppress this warning.
+The unused variable is declared here:
+**list_destructure_variations.md:7:15:7:25:**
 ```roc
     [x, y, z, .. as more] => x + y + z
 ```
-     ^
-
-But `x` was already defined here:
-**list_destructure_variations.md:3:6:3:7:**
-```roc
-    [x] => x
-```
-     ^
+              ^^^^^^^^^^
 
 
 # TOKENS

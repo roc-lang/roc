@@ -2116,9 +2116,7 @@ pub const Match = struct {
 
         var branches_node = SExpr.init(gpa, "branches");
         for (ir.store.matchBranchSlice(self.branches)) |branch_idx| {
-            const branch = ir.store.getMatchBranch(branch_idx);
-
-            var branch_sexpr = branch.toSExpr(ir);
+            var branch_sexpr = ir.store.getMatchBranch(branch_idx).toSExpr(ir);
             branches_node.appendNode(gpa, &branch_sexpr);
         }
         node.appendNode(gpa, &branches_node);

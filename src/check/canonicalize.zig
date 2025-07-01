@@ -1704,6 +1704,10 @@ pub fn canonicalize_expr(
                 const ast_branch = self.parse_ir.store.getBranch(ast_branch_idx);
                 const branch_region = self.parse_ir.tokenizedRegionToRegion(ast_branch.region);
 
+                // Enter a new scope for this branch so pattern variables are isolated
+                self.scopeEnter(self.can_ir.env.gpa, false);
+                defer self.scopeExit(self.can_ir.env.gpa) catch {};
+
                 // Canonicalize the pattern
                 if (try self.canonicalize_pattern(ast_branch.pattern)) |cir_pattern| {
                     // Canonicalize the branch body

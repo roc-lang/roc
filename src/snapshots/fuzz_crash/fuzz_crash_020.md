@@ -237,18 +237,6 @@ Is there an `import` or `exposing` missing up-top?
 Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `ment` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
-Let us know if you want to help!
-
 **UNUSED VARIABLE**
 Variable ``lue`` is not used anywhere in your code.
 
@@ -260,6 +248,10 @@ The unused variable is declared here:
 ```
           ^^^
 
+
+**UNDEFINED VARIABLE**
+Nothing is named `x` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 **UNUSED VARIABLE**
 Variable ``er`` is not used anywhere in your code.
@@ -273,6 +265,10 @@ The unused variable is declared here:
  ^^
 
 
+**UNDEFINED VARIABLE**
+Nothing is named `ment` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 **UNUSED VARIABLE**
 Variable ``est`` is not used anywhere in your code.
 
@@ -284,6 +280,10 @@ The unused variable is declared here:
 ```
            ^^^
 
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
+Let us know if you want to help!
 
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: top-level expect

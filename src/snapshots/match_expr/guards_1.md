@@ -208,17 +208,11 @@ Here is the problematic code:
 Nothing is named `value` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**DUPLICATE DEFINITION**
-The name `x` is being redeclared in this scope.
+**UNUSED VARIABLE**
+Variable ``x`` is not used anywhere in your code.
 
-The redeclaration is here:
-**guards_1.md:2:42:2:43:**
-```roc
-    x if x > 0 => "positive: ${Num.toStr x}"
-```
-                                         ^
-
-But `x` was already defined here:
+If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+The unused variable is declared here:
 **guards_1.md:2:5:2:6:**
 ```roc
     x if x > 0 => "positive: ${Num.toStr x}"
@@ -226,38 +220,38 @@ But `x` was already defined here:
     ^
 
 
-**DUPLICATE DEFINITION**
-The name `x` is being redeclared in this scope.
+**UNUSED VARIABLE**
+Variable ``x`` is not used anywhere in your code.
 
-The redeclaration is here:
+If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+The unused variable is declared here:
+**guards_1.md:2:42:2:43:**
+```roc
+    x if x > 0 => "positive: ${Num.toStr x}"
+```
+                                         ^
+
+
+**UNUSED VARIABLE**
+Variable ``x`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+The unused variable is declared here:
 **guards_1.md:3:5:3:6:**
 ```roc
     x if x < 0 => "negative: ${Num.toStr x}"
 ```
     ^
 
-But `x` was already defined here:
-**guards_1.md:2:42:2:43:**
-```roc
-    x if x > 0 => "positive: ${Num.toStr x}"
-```
-                                         ^
 
+**UNUSED VARIABLE**
+Variable ``x`` is not used anywhere in your code.
 
-**DUPLICATE DEFINITION**
-The name `x` is being redeclared in this scope.
-
-The redeclaration is here:
+If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+The unused variable is declared here:
 **guards_1.md:3:42:3:43:**
 ```roc
     x if x < 0 => "negative: ${Num.toStr x}"
-```
-                                         ^
-
-But `x` was already defined here:
-**guards_1.md:2:42:2:43:**
-```roc
-    x if x > 0 => "positive: ${Num.toStr x}"
 ```
                                          ^
 
