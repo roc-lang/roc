@@ -425,16 +425,12 @@ pub const TokenizedBuffer = struct {
 
 /// Represents a comment in roc source e.g. `## some comment`
 pub const Comment = struct {
-    begin: u32,
-    end: u32,
+    region: base.Region,
 
     pub fn init(begin: u32, end: u32) Comment {
         std.debug.assert(begin <= end);
 
-        return Comment{
-            .begin = begin,
-            .end = end,
-        };
+        return Comment{ .region = base.Region{ .start = base.Region.Position{ .offset = begin }, .end = base.Region.Position{ .offset = end } } };
     }
 };
 
@@ -1034,12 +1030,11 @@ pub const Tokenizer = struct {
     fn pushNewlineHere(self: *Tokenizer, comment: ?Comment) void {
         var token = Token{
             .tag = .Newline,
-            // store the Comment start - if it is exists here
             // TODO: do we need it to be 0-0 region?
             .extra = .{ .region = base.Region{ .start = base.Region.Position{ .offset = 0 }, .end = base.Region.Position{ .offset = 0 } } },
         };
         if (comment) |c| {
-            token.extra = .{ .region = base.Region{ .start = base.Region.Position{ .offset = c.begin }, .end = base.Region.Position{ .offset = c.end } } };
+            token.extra = .{ .region = c.region };
         }
         self.output.tokens.append(self.env.gpa, token) catch |err| exitOnOom(err);
     }
