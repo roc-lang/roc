@@ -16,7 +16,8 @@ match list {
 ~~~
 # PROBLEMS
 **NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize match expression
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize match expression
+Let us know if you want to help!
 
 # TOKENS
 ~~~zig
@@ -84,9 +85,9 @@ match list {
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "not_implemented") (id 74))
+(e-runtime-error (tag "not_implemented"))
 ~~~
 # TYPES
 ~~~clojure
-(expr (id 74) (type "Error"))
+(expr @1.1-1.1 (type "Error"))
 ~~~
