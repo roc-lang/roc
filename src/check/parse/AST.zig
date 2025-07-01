@@ -191,6 +191,7 @@ pub fn parseDiagnosticToReport(self: *AST, diagnostic: Diagnostic, allocator: st
         .expected_imports_open_curly => "EXPECTED OPENING BRACE",
         .header_unexpected_token => "UNEXPECTED TOKEN IN HEADER",
         .pattern_unexpected_token => "UNEXPECTED TOKEN IN PATTERN",
+        .pattern_list_rest_old_syntax => "BAD LIST REST PATTERN SYNTAX",
         .pattern_unexpected_eof => "UNEXPECTED END OF FILE IN PATTERN",
         .ty_anno_unexpected_token => "UNEXPECTED TOKEN IN TYPE ANNOTATION",
         .statement_unexpected_eof => "UNEXPECTED END OF FILE",
@@ -290,6 +291,11 @@ pub fn parseDiagnosticToReport(self: *AST, diagnostic: Diagnostic, allocator: st
             try report.document.addText(" is not expected in a pattern.");
             try report.document.addLineBreak();
             try report.document.addReflowingText("Patterns can contain identifiers, literals, lists, records, or tags.");
+        },
+        .pattern_list_rest_old_syntax => {
+            try report.document.addReflowingText("List rest patterns should use the `.. as name` syntax, not `..name`.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("For example, use `[first, .. as rest]` instead of `[first, ..rest]`.");
         },
         .pattern_unexpected_eof => {
             try report.document.addReflowingText("This pattern is incomplete - the file ended unexpectedly.");
@@ -484,6 +490,7 @@ pub const Diagnostic = struct {
         header_expected_close_square,
         header_unexpected_token,
         pattern_unexpected_token,
+        pattern_list_rest_old_syntax,
         pattern_unexpected_eof,
         bad_as_pattern_name,
         ty_anno_unexpected_token,

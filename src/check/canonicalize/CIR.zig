@@ -536,7 +536,7 @@ pub const Statement = union(enum) {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
 
-    pub fn toSExpr(self: *const @This(), ir: *CIR, env: *ModuleEnv) SExpr {
+    pub fn toSExpr(self: *const @This(), ir: *const CIR) SExpr {
         const gpa = ir.env.gpa;
         switch (self.*) {
             .s_decl => |d| {
@@ -546,7 +546,7 @@ pub const Statement = union(enum) {
                 var pattern_node = ir.store.getPattern(d.pattern).toSExpr(ir);
                 node.appendNode(gpa, &pattern_node);
 
-                var expr_node = ir.store.getExpr(d.expr).toSExpr(ir, env);
+                var expr_node = ir.store.getExpr(d.expr).toSExpr(ir);
                 node.appendNode(gpa, &expr_node);
 
                 return node;
@@ -558,7 +558,7 @@ pub const Statement = union(enum) {
                 var pattern_node = ir.store.getPattern(v.pattern_idx).toSExpr(ir);
                 node.appendNode(gpa, &pattern_node);
 
-                var expr_node = ir.store.getExpr(v.expr).toSExpr(ir, env);
+                var expr_node = ir.store.getExpr(v.expr).toSExpr(ir);
                 node.appendNode(gpa, &expr_node);
 
                 return node;
@@ -570,7 +570,7 @@ pub const Statement = union(enum) {
                 var pattern_node = ir.store.getPattern(r.pattern_idx).toSExpr(ir);
                 node.appendNode(gpa, &pattern_node);
 
-                var expr_node = ir.store.getExpr(r.expr).toSExpr(ir, env);
+                var expr_node = ir.store.getExpr(r.expr).toSExpr(ir);
                 node.appendNode(gpa, &expr_node);
 
                 return node;
@@ -578,14 +578,14 @@ pub const Statement = union(enum) {
             .s_crash => |c| {
                 var node = SExpr.init(gpa, "s-crash");
                 node.appendRegion(gpa, ir.calcRegionInfo(c.region));
-                node.appendStringAttr(gpa, "msg", env.strings.get(c.msg));
+                node.appendStringAttr(gpa, "msg", ir.env.strings.get(c.msg));
                 return node;
             },
             .s_expr => |s| {
                 var node = SExpr.init(gpa, "s-expr");
                 node.appendRegion(gpa, ir.calcRegionInfo(s.region));
 
-                var expr_node = ir.store.getExpr(s.expr).toSExpr(ir, env);
+                var expr_node = ir.store.getExpr(s.expr).toSExpr(ir);
                 node.appendNode(gpa, &expr_node);
 
                 return node;
@@ -594,7 +594,7 @@ pub const Statement = union(enum) {
                 var node = SExpr.init(gpa, "s-expect");
                 node.appendRegion(gpa, ir.calcRegionInfo(s.region));
 
-                var body_node = ir.store.getExpr(s.body).toSExpr(ir, env);
+                var body_node = ir.store.getExpr(s.body).toSExpr(ir);
                 node.appendNode(gpa, &body_node);
 
                 return node;
@@ -606,10 +606,10 @@ pub const Statement = union(enum) {
                 var pattern_node = ir.store.getPattern(s.patt).toSExpr(ir);
                 node.appendNode(gpa, &pattern_node);
 
-                var expr_node = ir.store.getExpr(s.expr).toSExpr(ir, env);
+                var expr_node = ir.store.getExpr(s.expr).toSExpr(ir);
                 node.appendNode(gpa, &expr_node);
 
-                var body_node = ir.store.getExpr(s.body).toSExpr(ir, env);
+                var body_node = ir.store.getExpr(s.body).toSExpr(ir);
                 node.appendNode(gpa, &body_node);
 
                 return node;
@@ -618,7 +618,7 @@ pub const Statement = union(enum) {
                 var node = SExpr.init(gpa, "s-return");
                 node.appendRegion(gpa, ir.calcRegionInfo(s.region));
 
-                var expr_node = ir.store.getExpr(s.expr).toSExpr(ir, env);
+                var expr_node = ir.store.getExpr(s.expr).toSExpr(ir);
                 node.appendNode(gpa, &expr_node);
 
                 return node;
@@ -627,7 +627,7 @@ pub const Statement = union(enum) {
                 var node = SExpr.init(gpa, "s-import");
                 node.appendRegion(gpa, ir.calcRegionInfo(s.region));
 
-                node.appendStringAttr(gpa, "module", env.idents.getText(s.module_name_tok));
+                node.appendStringAttr(gpa, "module", ir.env.idents.getText(s.module_name_tok));
 
                 if (s.qualifier_tok) |qualifier| {
                     node.appendStringAttr(gpa, "qualifier", ir.getIdentText(qualifier));
@@ -640,7 +640,7 @@ pub const Statement = union(enum) {
                 var exposes_node = SExpr.init(gpa, "exposes");
                 const exposes_slice = ir.store.sliceExposedItems(s.exposes);
                 for (exposes_slice) |exposed_idx| {
-                    const exposed_sexpr = ir.store.getExposedItem(exposed_idx).toSExpr(gpa, ir.env);
+                    const exposed_sexpr = ir.store.getExposedItem(exposed_idx).toSExpr(ir);
                     exposes_node.appendNode(gpa, &exposed_sexpr);
                 }
                 node.appendNode(gpa, &exposes_node);
@@ -652,11 +652,11 @@ pub const Statement = union(enum) {
                 node.appendRegion(gpa, ir.calcRegionInfo(s.region));
 
                 // Add the type header
-                var header_node = ir.store.getTypeHeader(s.header).toSExpr(ir, env);
+                var header_node = ir.store.getTypeHeader(s.header).toSExpr(ir);
                 node.appendNode(gpa, &header_node);
 
                 // Add the type annotation
-                var anno_node = ir.store.getTypeAnno(s.anno).toSExpr(ir, env);
+                var anno_node = ir.store.getTypeAnno(s.anno).toSExpr(ir);
                 node.appendNode(gpa, &anno_node);
 
                 // TODO: Add where clause when implemented
@@ -672,7 +672,7 @@ pub const Statement = union(enum) {
 
                 node.appendStringAttr(gpa, "name", ir.getIdentText(s.name));
 
-                var anno_node = ir.store.getTypeAnno(s.anno).toSExpr(ir, env);
+                var anno_node = ir.store.getTypeAnno(s.anno).toSExpr(ir);
                 node.appendNode(gpa, &anno_node);
 
                 if (s.where) |_| {
@@ -711,13 +711,13 @@ pub const RecordField = struct {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
 
-    pub fn toSExpr(self: *const @This(), ir: *CIR, env: *ModuleEnv) SExpr {
+    pub fn toSExpr(self: *const @This(), ir: *const CIR) SExpr {
         const gpa = ir.env.gpa;
         var node = SExpr.init(gpa, "field");
 
         node.appendStringAttr(gpa, "name", ir.getIdentText(self.name));
 
-        var value_node = ir.store.getExpr(self.value).toSExpr(ir, env);
+        var value_node = ir.store.getExpr(self.value).toSExpr(ir);
         node.appendNode(gpa, &value_node);
 
         return node;
@@ -850,7 +850,7 @@ pub const TypeAnno = union(enum) {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
 
-    pub fn toSExpr(self: *const @This(), ir: *const CIR, env: *ModuleEnv) SExpr {
+    pub fn toSExpr(self: *const @This(), ir: *const CIR) SExpr {
         const gpa = ir.env.gpa;
         switch (self.*) {
             .apply => |a| {
@@ -862,7 +862,7 @@ pub const TypeAnno = union(enum) {
                 const args_slice = ir.store.sliceTypeAnnos(a.args);
                 for (args_slice) |arg_idx| {
                     const arg = ir.store.getTypeAnno(arg_idx);
-                    var arg_node = arg.toSExpr(ir, env);
+                    var arg_node = arg.toSExpr(ir);
                     node.appendNode(gpa, &arg_node);
                 }
 
@@ -899,13 +899,13 @@ pub const TypeAnno = union(enum) {
                 const tags_slice = ir.store.sliceTypeAnnos(tu.tags);
                 for (tags_slice) |tag_idx| {
                     const tag = ir.store.getTypeAnno(tag_idx);
-                    var tag_node = tag.toSExpr(ir, env);
+                    var tag_node = tag.toSExpr(ir);
                     node.appendNode(gpa, &tag_node);
                 }
 
                 if (tu.open_anno) |open_idx| {
                     const open_anno = ir.store.getTypeAnno(open_idx);
-                    var open_node = open_anno.toSExpr(ir, env);
+                    var open_node = open_anno.toSExpr(ir);
                     node.appendNode(gpa, &open_node);
                 }
 
@@ -918,7 +918,7 @@ pub const TypeAnno = union(enum) {
                 const annos_slice = ir.store.sliceTypeAnnos(tup.annos);
                 for (annos_slice) |anno_idx| {
                     const anno = ir.store.getTypeAnno(anno_idx);
-                    var anno_node = anno.toSExpr(ir, env);
+                    var anno_node = anno.toSExpr(ir);
                     node.appendNode(gpa, &anno_node);
                 }
 
@@ -934,7 +934,7 @@ pub const TypeAnno = union(enum) {
                     var field_node = SExpr.init(gpa, "field");
                     field_node.appendStringAttr(gpa, "field", ir.getIdentText(field.name));
 
-                    var type_node = ir.store.getTypeAnno(field.ty).toSExpr(ir, env);
+                    var type_node = ir.store.getTypeAnno(field.ty).toSExpr(ir);
                     field_node.appendNode(gpa, &type_node);
 
                     node.appendNode(gpa, &field_node);
@@ -949,11 +949,11 @@ pub const TypeAnno = union(enum) {
                 const args_slice = ir.store.sliceTypeAnnos(f.args);
                 for (args_slice) |arg_idx| {
                     const arg = ir.store.getTypeAnno(arg_idx);
-                    var arg_node = arg.toSExpr(ir, env);
+                    var arg_node = arg.toSExpr(ir);
                     node.appendNode(gpa, &arg_node);
                 }
 
-                var ret_node = ir.store.getTypeAnno(f.ret).toSExpr(ir, env);
+                var ret_node = ir.store.getTypeAnno(f.ret).toSExpr(ir);
                 node.appendNode(gpa, &ret_node);
 
                 node.appendBoolAttr(gpa, "effectful", f.effectful);
@@ -965,7 +965,7 @@ pub const TypeAnno = union(enum) {
                 node.appendRegion(gpa, ir.calcRegionInfo(p.region));
 
                 const inner_anno = ir.store.getTypeAnno(p.anno);
-                var inner_node = inner_anno.toSExpr(ir, env);
+                var inner_node = inner_anno.toSExpr(ir);
                 node.appendNode(gpa, &inner_node);
 
                 return node;
@@ -1015,7 +1015,7 @@ pub const TypeHeader = struct {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
 
-    pub fn toSExpr(self: *const @This(), ir: *CIR, env: *ModuleEnv) SExpr {
+    pub fn toSExpr(self: *const @This(), ir: *const CIR) SExpr {
         const gpa = ir.env.gpa;
         var node = SExpr.init(gpa, "ty-header");
         node.appendRegion(gpa, ir.calcRegionInfo(self.region));
@@ -1029,7 +1029,7 @@ pub const TypeHeader = struct {
             var args_node = SExpr.init(gpa, "ty-args");
             for (args_slice) |arg_idx| {
                 const arg = ir.store.getTypeAnno(arg_idx);
-                var arg_node = arg.toSExpr(ir, env);
+                var arg_node = arg.toSExpr(ir);
                 args_node.appendNode(gpa, &arg_node);
             }
             node.appendNode(gpa, &args_node);
@@ -1062,15 +1062,17 @@ pub const ExposedItem = struct {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
 
-    pub fn toSExpr(self: ExposedItem, gpa: std.mem.Allocator, env: *const ModuleEnv) SExpr {
+    pub fn toSExpr(self: ExposedItem, ir: *const CIR) SExpr {
+        const gpa = ir.env.gpa;
+
         var node = SExpr.init(gpa, "exposed");
 
         // Add the original name
-        node.appendStringAttr(gpa, "name", env.idents.getText(self.name));
+        node.appendStringAttr(gpa, "name", ir.env.idents.getText(self.name));
 
         // Add the alias if present
         if (self.alias) |alias_idx| {
-            node.appendStringAttr(gpa, "alias", env.idents.getText(alias_idx));
+            node.appendStringAttr(gpa, "alias", ir.env.idents.getText(alias_idx));
         }
 
         // Add wildcard indicator if needed
@@ -1296,7 +1298,7 @@ pub const Expr = union(enum) {
         }
     }
 
-    pub fn toSExpr(self: *const @This(), ir: *CIR, env: *ModuleEnv) SExpr {
+    pub fn toSExpr(self: *const @This(), ir: *const CIR) SExpr {
         const gpa = ir.env.gpa;
         switch (self.*) {
             .e_num => |num_expr| {
@@ -1403,7 +1405,7 @@ pub const Expr = union(enum) {
                 str_node.appendRegion(gpa, ir.calcRegionInfo(e.region));
 
                 for (ir.store.sliceExpr(e.span)) |segment| {
-                    var segment_node = ir.store.getExpr(segment).toSExpr(ir, env);
+                    var segment_node = ir.store.getExpr(segment).toSExpr(ir);
                     str_node.appendNode(gpa, &segment_node);
                 }
 
@@ -1416,7 +1418,7 @@ pub const Expr = union(enum) {
                 // Add list elements
                 var elems_node = SExpr.init(gpa, "elems");
                 for (ir.store.sliceExpr(l.elems)) |elem_idx| {
-                    var elem_node = ir.store.getExpr(elem_idx).toSExpr(ir, env);
+                    var elem_node = ir.store.getExpr(elem_idx).toSExpr(ir);
                     elems_node.appendNode(gpa, &elem_node);
                 }
                 list_node.appendNode(gpa, &elems_node);
@@ -1435,7 +1437,7 @@ pub const Expr = union(enum) {
                 // Add tuple elements
                 var elems_node = SExpr.init(gpa, "elems");
                 for (ir.store.sliceExpr(t.elems)) |elem_idx| {
-                    var elem_node = ir.store.getExpr(elem_idx).toSExpr(ir, env);
+                    var elem_node = ir.store.getExpr(elem_idx).toSExpr(ir);
                     elems_node.appendNode(gpa, &elem_node);
                 }
                 node.appendNode(gpa, &elems_node);
@@ -1467,7 +1469,9 @@ pub const Expr = union(enum) {
             .e_match => |e| {
                 var node = SExpr.init(gpa, "e-match");
                 node.appendRegion(gpa, ir.calcRegionInfo(e.region));
-                node.appendStringAttr(gpa, "match", "TODO");
+
+                var match_sexpr = e.toSExpr(ir);
+                node.appendNode(gpa, &match_sexpr);
 
                 return node;
             },
@@ -1485,12 +1489,12 @@ pub const Expr = union(enum) {
 
                     // Add condition
                     const cond_expr = ir.store.getExpr(branch.cond);
-                    var cond_node = cond_expr.toSExpr(ir, env);
+                    var cond_node = cond_expr.toSExpr(ir);
                     branch_node.appendNode(gpa, &cond_node);
 
                     // Add body
                     const body_expr = ir.store.getExpr(branch.body);
-                    var body_node = body_expr.toSExpr(ir, env);
+                    var body_node = body_expr.toSExpr(ir);
                     branch_node.appendNode(gpa, &body_node);
 
                     branches_node.appendNode(gpa, &branch_node);
@@ -1500,7 +1504,7 @@ pub const Expr = union(enum) {
                 // Add final_else
                 var else_node = SExpr.init(gpa, "if-else");
                 const else_expr = ir.store.getExpr(if_expr.final_else);
-                var else_expr_node = else_expr.toSExpr(ir, env);
+                var else_expr_node = else_expr.toSExpr(ir);
                 else_node.appendNode(gpa, &else_expr_node);
                 node.appendNode(gpa, &else_node);
 
@@ -1516,7 +1520,7 @@ pub const Expr = union(enum) {
                 // First element is the function being called
                 if (all_exprs.len > 0) {
                     const fn_expr = ir.store.getExpr(all_exprs[0]);
-                    var fn_node = fn_expr.toSExpr(ir, env);
+                    var fn_node = fn_expr.toSExpr(ir);
                     call_node.appendNode(gpa, &fn_node);
                 }
 
@@ -1524,7 +1528,7 @@ pub const Expr = union(enum) {
                 if (all_exprs.len > 1) {
                     for (all_exprs[1..]) |arg_idx| {
                         const arg_expr = ir.store.getExpr(arg_idx);
-                        var arg_node = arg_expr.toSExpr(ir, env);
+                        var arg_node = arg_expr.toSExpr(ir);
                         call_node.appendNode(gpa, &arg_node);
                     }
                 }
@@ -1538,7 +1542,7 @@ pub const Expr = union(enum) {
                 // Add fields
                 var fields_node = SExpr.init(gpa, "fields");
                 for (ir.store.sliceRecordFields(record_expr.fields)) |field_idx| {
-                    var field_node = ir.store.getRecordField(field_idx).toSExpr(ir, env);
+                    var field_node = ir.store.getRecordField(field_idx).toSExpr(ir);
                     fields_node.appendNode(gpa, &field_node);
                 }
                 record_node.appendNode(gpa, &fields_node);
@@ -1556,12 +1560,12 @@ pub const Expr = union(enum) {
 
                 // Add statements
                 for (ir.store.sliceStatements(block_expr.stmts)) |stmt_idx| {
-                    var stmt_node = ir.store.getStatement(stmt_idx).toSExpr(ir, env);
+                    var stmt_node = ir.store.getStatement(stmt_idx).toSExpr(ir);
                     block_node.appendNode(gpa, &stmt_node);
                 }
 
                 // Add final expression
-                var expr_node = ir.store.getExpr(block_expr.final_expr).toSExpr(ir, env);
+                var expr_node = ir.store.getExpr(block_expr.final_expr).toSExpr(ir);
                 block_node.appendNode(gpa, &expr_node);
 
                 return block_node;
@@ -1571,7 +1575,7 @@ pub const Expr = union(enum) {
                 node.appendRegion(gpa, ir.calcRegionInfo(access_expr.region));
 
                 // Add loc_expr
-                var loc_expr_node = ir.store.getExpr(access_expr.loc_expr).toSExpr(ir, env);
+                var loc_expr_node = ir.store.getExpr(access_expr.loc_expr).toSExpr(ir);
                 node.appendNode(gpa, &loc_expr_node);
 
                 // Add field
@@ -1616,7 +1620,7 @@ pub const Expr = union(enum) {
                 node.appendNode(gpa, &args_node);
 
                 // Handle body
-                var body_node = ir.store.getExpr(lambda_expr.body).toSExpr(ir, env);
+                var body_node = ir.store.getExpr(lambda_expr.body).toSExpr(ir);
                 node.appendNode(gpa, &body_node);
 
                 return node;
@@ -1627,10 +1631,10 @@ pub const Expr = union(enum) {
 
                 node.appendStringAttr(gpa, "op", @tagName(e.op));
 
-                var lhs_node = ir.store.getExpr(e.lhs).toSExpr(ir, env);
+                var lhs_node = ir.store.getExpr(e.lhs).toSExpr(ir);
                 node.appendNode(gpa, &lhs_node);
 
-                var rhs_node = ir.store.getExpr(e.rhs).toSExpr(ir, env);
+                var rhs_node = ir.store.getExpr(e.rhs).toSExpr(ir);
                 node.appendNode(gpa, &rhs_node);
 
                 return node;
@@ -1640,7 +1644,7 @@ pub const Expr = union(enum) {
                 node.appendRegion(gpa, ir.calcRegionInfo(e.region));
 
                 var receiver_node = SExpr.init(gpa, "receiver");
-                var expr_node = ir.store.getExpr(e.receiver).toSExpr(ir, env);
+                var expr_node = ir.store.getExpr(e.receiver).toSExpr(ir);
                 receiver_node.appendNode(gpa, &expr_node);
                 node.appendNode(gpa, &receiver_node);
 
@@ -1649,7 +1653,7 @@ pub const Expr = union(enum) {
                 if (e.args) |args| {
                     var args_node = SExpr.init(gpa, "args");
                     for (ir.store.exprSlice(args)) |arg_idx| {
-                        var arg_node = ir.store.getExpr(arg_idx).toSExpr(ir, env);
+                        var arg_node = ir.store.getExpr(arg_idx).toSExpr(ir);
                         args_node.appendNode(gpa, &arg_node);
                     }
                     node.appendNode(gpa, &args_node);
@@ -1771,7 +1775,7 @@ pub const Def = struct {
     pub const Span = struct { span: DataSpan };
     pub const Range = struct { start: u32, len: u32 };
 
-    pub fn toSExpr(self: *const @This(), ir: *CIR, env: *ModuleEnv) SExpr {
+    pub fn toSExpr(self: *const @This(), ir: *const CIR) SExpr {
         const gpa = ir.env.gpa;
 
         const kind = switch (self.kind) {
@@ -1785,11 +1789,11 @@ pub const Def = struct {
         var pattern_node = ir.store.getPattern(self.pattern).toSExpr(ir);
         node.appendNode(gpa, &pattern_node);
 
-        var expr_node = ir.store.getExpr(self.expr).toSExpr(ir, env);
+        var expr_node = ir.store.getExpr(self.expr).toSExpr(ir);
         node.appendNode(gpa, &expr_node);
 
         if (self.annotation) |anno_idx| {
-            var anno_node = ir.store.getAnnotation(anno_idx).toSExpr(ir, env.line_starts);
+            var anno_node = ir.store.getAnnotation(anno_idx).toSExpr(ir, ir.env.line_starts);
             node.appendNode(gpa, &anno_node);
         }
 
@@ -1819,7 +1823,7 @@ pub const Annotation = struct {
         // Add the declared type annotation structure
         var type_anno_node = SExpr.init(gpa, "declared-type");
         const type_anno = ir.store.getTypeAnno(self.type_anno);
-        var anno_sexpr = type_anno.toSExpr(ir, ir.env);
+        var anno_sexpr = type_anno.toSExpr(ir);
         type_anno_node.appendNode(gpa, &anno_sexpr);
         node.appendNode(gpa, &type_anno_node);
 
@@ -2042,24 +2046,34 @@ pub const Match = struct {
         /// Marks whether a match branch is redundant using a variable.
         redundant: TypeVar,
 
-        pub fn toSExpr(self: *const Match.Branch, ir: *const CIR, line_starts: std.ArrayList(u32)) SExpr {
+        pub fn toSExpr(self: *const Match.Branch, ir: *const CIR) SExpr {
             const gpa = ir.env.gpa;
             var node = SExpr.init(gpa, "branch");
 
             var patterns_node = SExpr.init(gpa, "patterns");
-            patterns_node.appendStringAttr(gpa, "match", "TODO");
+            // Process each pattern in the span
+            const patterns_data = ir.store.extra_data.items[self.patterns.span.start..(self.patterns.span.start + self.patterns.span.len * 2)];
+            var i: usize = 0;
+            while (i < patterns_data.len) : (i += 2) {
+                const pattern_idx = @as(CIR.Pattern.Idx, @enumFromInt(patterns_data[i]));
+                const degenerate = patterns_data[i + 1] != 0;
+                const pattern = ir.store.getPattern(pattern_idx);
+                var pattern_sexpr = pattern.toSExpr(ir);
+                pattern_sexpr.appendBoolAttr(gpa, "degenerate", degenerate);
+                patterns_node.appendNode(gpa, &pattern_sexpr);
+            }
             node.appendNode(gpa, &patterns_node);
 
             var value_node = SExpr.init(gpa, "value");
-            const value_expr = ir.exprs_at_regions.get(self.value);
-            var value_sexpr = value_expr.toSExpr(ir, line_starts);
+            const value_expr = ir.store.getExpr(self.value);
+            var value_sexpr = value_expr.toSExpr(ir);
             value_node.appendNode(gpa, &value_sexpr);
             node.appendNode(gpa, &value_node);
 
             if (self.guard) |guard_idx| {
                 var guard_node = SExpr.init(gpa, "guard");
-                const guard_expr = ir.exprs_at_regions.get(guard_idx);
-                var guard_sexpr = guard_expr.toSExpr(ir, line_starts);
+                const guard_expr = ir.store.getExpr(guard_idx);
+                var guard_sexpr = guard_expr.toSExpr(ir);
                 guard_node.appendNode(gpa, &guard_sexpr);
                 node.appendNode(gpa, &guard_node);
             }
@@ -2082,8 +2096,7 @@ pub const Match = struct {
         pub const Idx = enum(u32) { _ };
         pub const Span = struct { span: base.DataSpan };
 
-        pub fn toSExpr(self: *const @This(), ir: *const CIR, line_starts: std.ArrayList(u32)) SExpr {
-            _ = line_starts;
+        pub fn toSExpr(self: *const @This(), ir: *const CIR) SExpr {
             const gpa = ir.gpa;
             var node = self.pattern.toSExpr(ir);
             node.appendBoolAttr(gpa, "degenerate", self.degenerate);
@@ -2091,24 +2104,22 @@ pub const Match = struct {
         }
     };
 
-    pub fn toSExpr(self: *const @This(), ir: *const CIR, line_starts: std.ArrayList(u32)) SExpr {
+    pub fn toSExpr(self: *const @This(), ir: *const CIR) SExpr {
         const gpa = ir.env.gpa;
         var node = SExpr.init(gpa, "match");
 
-        node.appendRegion(gpa, self.region);
+        node.appendRegion(gpa, ir.calcRegionInfo(self.region));
 
         var cond_node = SExpr.init(gpa, "cond");
         const cond_expr = ir.store.getExpr(self.loc_cond);
-        var cond_sexpr = cond_expr.toSExpr(ir, line_starts);
+        var cond_sexpr = cond_expr.toSExpr(ir);
         cond_node.appendNode(gpa, &cond_sexpr);
 
         node.appendNode(gpa, &cond_node);
 
         var branches_node = SExpr.init(gpa, "branches");
         for (ir.store.matchBranchSlice(self.branches)) |branch_idx| {
-            const branch = ir.store.getMatchBranch(branch_idx);
-
-            var branch_sexpr = branch.toSExpr(ir);
+            var branch_sexpr = ir.store.getMatchBranch(branch_idx).toSExpr(ir);
             branches_node.appendNode(gpa, &branch_sexpr);
         }
         node.appendNode(gpa, &branches_node);
@@ -2152,7 +2163,11 @@ pub const Pattern = union(enum) {
     list: struct {
         list_var: TypeVar,
         elem_var: TypeVar,
-        patterns: Pattern.Span,
+        patterns: Pattern.Span, // All non-rest patterns
+        rest_info: ?struct {
+            index: u32, // Where the rest appears (split point)
+            pattern: ?Pattern.Idx, // None for `..`, Some(assign) for `.. as name`
+        },
         region: Region,
     },
     tuple: struct {
@@ -2217,7 +2232,7 @@ pub const Pattern = union(enum) {
         }
     }
 
-    pub fn toSExpr(self: *const @This(), ir: *CIR) SExpr {
+    pub fn toSExpr(self: *const @This(), ir: *const CIR) SExpr {
         const gpa = ir.env.gpa;
         switch (self.*) {
             .assign => |p| {
@@ -2277,6 +2292,24 @@ pub const Pattern = union(enum) {
                 }
 
                 node.appendNode(gpa, &patterns_node);
+
+                // Add rest information if present
+                if (p.rest_info) |rest| {
+                    var rest_node = SExpr.init(gpa, "rest-at");
+
+                    // Add the index where rest appears
+                    const index_str = std.fmt.allocPrint(gpa, "{d}", .{rest.index}) catch |err| exitOnOom(err);
+                    defer gpa.free(index_str);
+                    rest_node.appendRawAttr(gpa, "index", index_str);
+
+                    // Add the rest pattern if it has a name
+                    if (rest.pattern) |rest_pattern_idx| {
+                        var rest_pattern_sexpr = ir.store.getPattern(rest_pattern_idx).toSExpr(ir);
+                        rest_node.appendNode(gpa, &rest_pattern_sexpr);
+                    }
+
+                    node.appendNode(gpa, &rest_node);
+                }
 
                 return node;
             },
@@ -2416,7 +2449,7 @@ pub const RecordDestruct = struct {
 /// and write it to the given writer.
 ///
 /// If a single expression is provided we only print that expression
-pub fn toSExprStr(ir: *CIR, env: *ModuleEnv, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr.Idx, source: []const u8) !void {
+pub fn toSExprStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr.Idx, source: []const u8) !void {
     // Set temporary source for region info calculation during SExpr generation
     ir.temp_source_for_sexpr = source;
     defer ir.temp_source_for_sexpr = null;
@@ -2424,7 +2457,7 @@ pub fn toSExprStr(ir: *CIR, env: *ModuleEnv, writer: std.io.AnyWriter, maybe_exp
 
     if (maybe_expr_idx) |expr_idx| {
         // Get the expression from the store
-        var expr_node = ir.store.getExpr(expr_idx).toSExpr(ir, env);
+        var expr_node = ir.store.getExpr(expr_idx).toSExpr(ir);
         defer expr_node.deinit(gpa);
 
         expr_node.toStringPretty(writer);
@@ -2441,12 +2474,12 @@ pub fn toSExprStr(ir: *CIR, env: *ModuleEnv, writer: std.io.AnyWriter, maybe_exp
         }
 
         for (defs_slice) |def_idx| {
-            var def_node = ir.store.getDef(def_idx).toSExpr(ir, env);
+            var def_node = ir.store.getDef(def_idx).toSExpr(ir);
             root_node.appendNode(gpa, &def_node);
         }
 
         for (statements_slice) |stmt_idx| {
-            var stmt_node = ir.store.getStatement(stmt_idx).toSExpr(ir, env);
+            var stmt_node = ir.store.getStatement(stmt_idx).toSExpr(ir);
             root_node.appendNode(gpa, &stmt_node);
         }
 
@@ -2490,7 +2523,7 @@ pub fn calcRegionInfo(self: *const CIR, region: Region) base.RegionInfo {
 }
 
 /// Get region information for a node in the Canonical IR.
-pub fn getNodeRegionInfo(ir: *CIR, idx: anytype) base.RegionInfo {
+pub fn getNodeRegionInfo(ir: *const CIR, idx: anytype) base.RegionInfo {
     const region = ir.store.getNodeRegion(@enumFromInt(@intFromEnum(idx)));
     return ir.calcRegionInfo(region);
 }

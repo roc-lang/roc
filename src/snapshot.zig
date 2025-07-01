@@ -930,11 +930,11 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
 }
 
 /// Generate CANONICALIZE section for both markdown and HTML
-fn generateCanonicalizeSection(output: *DualOutput, content: *const Content, can_ir: *CIR, module_env: *base.ModuleEnv, maybe_expr_idx: ?CIR.Expr.Idx) !void {
+fn generateCanonicalizeSection(output: *DualOutput, content: *const Content, can_ir: *CIR, maybe_expr_idx: ?CIR.Expr.Idx) !void {
     var canonicalized = std.ArrayList(u8).init(output.gpa);
     defer canonicalized.deinit();
 
-    try can_ir.toSExprStr(module_env, canonicalized.writer().any(), maybe_expr_idx, content.source);
+    try can_ir.toSExprStr(canonicalized.writer().any(), maybe_expr_idx, content.source);
 
     try output.begin_section("CANONICALIZE");
     try output.begin_code_block("clojure");
@@ -1188,7 +1188,7 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, maybe_f
     var can_ir = CIR.init(&module_env);
     defer can_ir.deinit();
 
-    var can = canonicalize.init(&can_ir, &parse_ast);
+    var can = try canonicalize.init(&can_ir, &parse_ast);
     defer can.deinit();
 
     var maybe_expr_idx: ?CIR.Expr.Idx = null;
@@ -1242,7 +1242,7 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, maybe_f
     // Generate remaining sections
     try generateParseSection(&output, &content, &parse_ast, &module_env);
     try generateFormattedSection(&output, &content, &parse_ast);
-    try generateCanonicalizeSection(&output, &content, &can_ir, &module_env, maybe_expr_idx);
+    try generateCanonicalizeSection(&output, &content, &can_ir, maybe_expr_idx);
     try generateTypesSection(&output, &content, &can_ir, maybe_expr_idx);
     // TODO: Include to emit entire types store. Can be helpful for debugging
     // try generateTypesStoreSection(gpa, &output, &can_ir);

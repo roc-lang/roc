@@ -12,47 +12,40 @@ match person {
 }
 ~~~
 # PROBLEMS
-**UNEXPECTED TOKEN IN PATTERN**
-The token **match person {
+**UNDEFINED VARIABLE**
+Nothing is named `person` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNUSED VARIABLE**
+Variable ``age`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_age` to suppress this warning.
+The unused variable is declared here:
+**record_destructure.md:2:13:2:18:**
+```roc
     { name, age } => name
+```
+            ^^^^^
+
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
+Let us know if you want to help!
+
+**UNDEFINED VARIABLE**
+Nothing is named `city` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNUSED VARIABLE**
+Variable ``name`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_name` to suppress this warning.
+The unused variable is declared here:
+**record_destructure.md:3:7:3:12:**
+```roc
     { name, address: { city } } => city
-    {} => "empty"
-}** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
-
-Here is the problematic code:
-**record_destructure.md:1:1:5:2:**
-```roc
-match person {
-    { name, age } => name
-    { name, address: { city } } => city
-    {} => "empty"
-}
 ```
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **}** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**record_destructure.md:5:1:5:2:**
-```roc
-}
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `expected_close_curly_at_end_of_match`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**record_destructure.md:5:2:5:2:**
-```roc
-}
-```
- 
+      ^^^^^
 
 
 # TOKENS
@@ -65,19 +58,66 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 ~~~
 # PARSE
 ~~~clojure
-(e-malformed @5.2-5.2 (reason "expected_close_curly_at_end_of_match"))
+(e-match
+	(e-ident @1.7-1.13 (qaul "") (raw "person"))
+	(branches
+		(branch @2.5-3.6
+			(p-record @2.5-2.18
+				(field @2.7-2.12 (name "name") (rest false))
+				(field @2.13-2.18 (name "age") (rest false)))
+			(e-ident @2.22-2.26 (qaul "") (raw "name")))
+		(branch @3.5-4.6
+			(p-record @3.5-3.32
+				(field @3.7-3.12 (name "name") (rest false))
+				(field @3.13-3.32 (name "address") (rest false)
+					(p-record @3.22-3.30
+						(field @3.24-3.30 (name "city") (rest false)))))
+			(e-ident @3.36-3.40 (qaul "") (raw "city")))
+		(branch @1.1-1.1
+			(p-record @4.5-4.7)
+			(e-string @4.11-4.18
+				(e-string-part @4.12-4.17 (raw "empty"))))))
 ~~~
 # FORMATTED
 ~~~roc
-
+match person {
+	{ name, age } => name
+	{ name, address: { city } } => city
+	{} => "empty"
+}
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(e-match @1.1-5.2
+	(match @1.1-5.2
+		(cond
+			(e-runtime-error (tag "ident_not_in_scope")))
+		(branches
+			(branch
+				(patterns
+					(p-record-destructure @2.5-2.18 (degenerate false)
+						(destructs
+							(record-destruct @2.7-2.12 (label "name") (ident "name")
+								(required))
+							(record-destruct @2.13-2.18 (label "age") (ident "age")
+								(required)))))
+				(value
+					(e-lookup-local @2.22-2.26
+						(pattern @2.7-2.12))))
+			(branch
+				(patterns
+					(p-runtime-error @3.13-3.32 (tag "not_implemented") (degenerate false)))
+				(value
+					(e-runtime-error (tag "ident_not_in_scope"))))
+			(branch
+				(patterns
+					(p-record-destructure @4.5-4.7 (degenerate false)
+						(destructs)))
+				(value
+					(e-string @4.11-4.18
+						(e-literal @4.12-4.17 (string "empty"))))))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+(expr @1.1-5.2 (type "*"))
 ~~~

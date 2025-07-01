@@ -120,7 +120,7 @@ fn processSourceInternal(
 
     // Create scope for semantic analysis
     // Canonicalize the AST
-    var canonicalizer = canonicalize.init(cir, &parse_ast);
+    var canonicalizer = try canonicalize.init(cir, &parse_ast);
     defer canonicalizer.deinit();
     try canonicalizer.canonicalize_file();
 

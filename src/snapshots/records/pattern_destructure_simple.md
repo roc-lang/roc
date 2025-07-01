@@ -10,9 +10,21 @@ match person {
 }
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize match expression
-Let us know if you want to help!
+**UNDEFINED VARIABLE**
+Nothing is named `person` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNUSED VARIABLE**
+Variable ``age`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_age` to suppress this warning.
+The unused variable is declared here:
+**pattern_destructure_simple.md:2:13:2:18:**
+```roc
+    { name, age } => name
+```
+            ^^^^^
+
 
 # TOKENS
 ~~~zig
@@ -39,9 +51,24 @@ match person {
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "not_implemented"))
+(e-match @1.1-3.2
+	(match @1.1-3.2
+		(cond
+			(e-runtime-error (tag "ident_not_in_scope")))
+		(branches
+			(branch
+				(patterns
+					(p-record-destructure @2.5-2.18 (degenerate false)
+						(destructs
+							(record-destruct @2.7-2.12 (label "name") (ident "name")
+								(required))
+							(record-destruct @2.13-2.18 (label "age") (ident "age")
+								(required)))))
+				(value
+					(e-lookup-local @2.22-2.26
+						(pattern @2.7-2.12)))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.1 (type "Error"))
+(expr @1.1-3.2 (type "*"))
 ~~~

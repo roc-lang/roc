@@ -10,44 +10,21 @@ match person {
 }
 ~~~
 # PROBLEMS
-**UNEXPECTED TOKEN IN PATTERN**
-The token **match person {
-    { name, address: { street, city, zipCode } } => "${name} lives on ${street} in ${city}"
-}** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
+**UNDEFINED VARIABLE**
+Nothing is named `person` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-Here is the problematic code:
-**pattern_destructure_nested.md:1:1:3:2:**
-```roc
-match person {
-    { name, address: { street, city, zipCode } } => "${name} lives on ${street} in ${city}"
-}
-```
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
+Let us know if you want to help!
 
+**UNDEFINED VARIABLE**
+Nothing is named `street` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **}** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**pattern_destructure_nested.md:3:1:3:2:**
-```roc
-}
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `expected_close_curly_at_end_of_match`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**pattern_destructure_nested.md:3:2:3:2:**
-```roc
-}
-```
- 
-
+**UNDEFINED VARIABLE**
+Nothing is named `city` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
@@ -57,19 +34,54 @@ CloseCurly(3:1-3:2),EndOfFile(3:2-3:2),
 ~~~
 # PARSE
 ~~~clojure
-(e-malformed @3.2-3.2 (reason "expected_close_curly_at_end_of_match"))
+(e-match
+	(e-ident @1.7-1.13 (qaul "") (raw "person"))
+	(branches
+		(branch @1.1-1.1
+			(p-record @2.5-2.49
+				(field @2.7-2.12 (name "name") (rest false))
+				(field @2.13-2.49 (name "address") (rest false)
+					(p-record @2.22-2.47
+						(field @2.24-2.31 (name "street") (rest false))
+						(field @2.32-2.37 (name "city") (rest false))
+						(field @2.38-2.47 (name "zipCode") (rest false)))))
+			(e-string @2.53-2.92
+				(e-string-part @2.54-2.54 (raw ""))
+				(e-ident @2.56-2.60 (qaul "") (raw "name"))
+				(e-string-part @2.61-2.71 (raw " lives on "))
+				(e-ident @2.73-2.79 (qaul "") (raw "street"))
+				(e-string-part @2.80-2.84 (raw " in "))
+				(e-ident @2.86-2.90 (qaul "") (raw "city"))
+				(e-string-part @2.91-2.91 (raw ""))))))
 ~~~
 # FORMATTED
 ~~~roc
-
+match person {
+	{ name, address: { street, city, zipCode } } => "${name} lives on ${street} in ${city}"
+}
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(e-match @1.1-3.2
+	(match @1.1-3.2
+		(cond
+			(e-runtime-error (tag "ident_not_in_scope")))
+		(branches
+			(branch
+				(patterns
+					(p-runtime-error @2.13-2.49 (tag "not_implemented") (degenerate false)))
+				(value
+					(e-string @2.53-2.92
+						(e-literal @2.54-2.54 (string ""))
+						(e-lookup-local @2.56-2.60
+							(pattern @2.7-2.12))
+						(e-literal @2.61-2.71 (string " lives on "))
+						(e-runtime-error (tag "ident_not_in_scope"))
+						(e-literal @2.80-2.84 (string " in "))
+						(e-runtime-error (tag "ident_not_in_scope"))
+						(e-literal @2.91-2.91 (string ""))))))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+(expr @1.1-3.2 (type "*"))
 ~~~
