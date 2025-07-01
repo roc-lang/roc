@@ -647,23 +647,27 @@ pub const Problem = union(enum) {
         try appendOrdinal(buf, data.problem_branch_index + 1);
         const branch_ord = try report.addOwnedString(buf.items);
 
+        buf.clearRetainingCapacity();
+        try appendOrdinal(buf, data.problem_pattern_index + 1);
+        const pattern_ord = try report.addOwnedString(buf.items);
+
         // title
-        if (data.num_patterns == 1) {
+        if (data.num_patterns > 1) {
             buf.clearRetainingCapacity();
-            try report.document.addText("The the ");
-            try report.document.addText(branch_ord);
+            try report.document.addText("The pattern ");
+            try report.document.addText(pattern_ord);
             try report.document.addText(" pattern in this ");
             try report.document.addText(branch_ord);
             try report.document.addAnnotated("match", .keyword);
-            try report.document.addText(" is different from the previous ones:");
+            try report.document.addText(" differs from previous ones:");
             try report.document.addLineBreak();
         } else {
             buf.clearRetainingCapacity();
-            try report.document.addText("This pattern in the ");
+            try report.document.addText("The pattern in the ");
             try report.document.addText(branch_ord);
             try report.document.addText(" branch of this ");
             try report.document.addAnnotated("match", .keyword);
-            try report.document.addText(" is different from the previous ones:");
+            try report.document.addText(" differs from previous ones:");
             try report.document.addLineBreak();
         }
 
@@ -713,7 +717,7 @@ pub const Problem = union(enum) {
         buf.clearRetainingCapacity();
         try report.document.addText("The ");
         try report.document.addText(branch_ord);
-        try report.document.addText(" pattern is has this type:");
+        try report.document.addText(" pattern has this type:");
         try report.document.addLineBreak();
         try report.document.addText("    ");
         try report.document.addAnnotated(actual_type, .type_variable);
@@ -721,10 +725,10 @@ pub const Problem = union(enum) {
         try report.document.addLineBreak();
 
         // Show the type of the other branches
-        if (data.num_branches > 1) {
-            try report.document.addText("But the other pattern has this type: ");
+        if (data.num_branches > 2) {
+            try report.document.addText("But all the the other patterns have this type: ");
         } else {
-            try report.document.addText("But all the other patterns have this type:");
+            try report.document.addText("But the other pattern has this type:");
         }
         try report.document.addLineBreak();
         try report.document.addText("    ");
@@ -1057,7 +1061,7 @@ pub const IncompatibleIfBranches = struct {
     branches_len: usize,
 };
 
-/// A bug that occured during unification
+/// A bug that occurred during unification
 pub const Bug = struct {
     expected_var: Var,
     expected: SnapshotContentIdx,

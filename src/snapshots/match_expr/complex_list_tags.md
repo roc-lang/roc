@@ -1230,5 +1230,5 @@ match events {
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-8.2 (type "*"))
+(expr @1.1-8.2 (type "Error"))
 ~~~

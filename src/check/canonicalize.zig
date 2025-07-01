@@ -1754,8 +1754,9 @@ pub fn canonicalize_expr(
             const scratch_top = self.can_ir.store.scratchMatchBranchTop();
 
             // Process each branch
+            var mb_branch_var: ?TypeVar = null;
             const branches_slice = self.parse_ir.store.matchBranchSlice(m.branches);
-            for (branches_slice) |ast_branch_idx| {
+            for (branches_slice, 0..) |ast_branch_idx, index| {
                 const ast_branch = self.parse_ir.store.getBranch(ast_branch_idx);
                 const branch_region = self.parse_ir.tokenizedRegionToRegion(ast_branch.region);
 
@@ -1768,26 +1769,27 @@ pub fn canonicalize_expr(
 
                 // Canonicalized the branch pattern
 
-                // TODO: Using scratch is overkill rn, but will make updating
-                // this  to handle more than 1 branches once parse AST is
-                // updated easier
-                const pattern = self.parse_ir.store.getPattern(ast_branch.pattern);
-                const pattern_region = self.parse_ir.tokenizedRegionToRegion(pattern.to_tokenized_region());
-                const pattern_idx = blk: {
-                    if (try self.canonicalize_pattern(ast_branch.pattern)) |pattern_idx| {
-                        break :blk pattern_idx;
-                    } else {
-                        const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .pattern_not_canonicalized = .{
-                            .region = pattern_region,
-                        } });
-                        break :blk malformed_idx;
-                    }
-                };
-                self.can_ir.store.addScratchMatchBranchPattern(CIR.Match.BranchPattern{
-                    .pattern = pattern_idx,
-                    .degenerate = false,
-                    .region = pattern_region,
-                });
+                // TODO: Using scratch is overkill rn, but using it will make updating
+                // this to handle more than 1 branches (once parse AST is updated) easier
+                {
+                    const pattern = self.parse_ir.store.getPattern(ast_branch.pattern);
+                    const pattern_region = self.parse_ir.tokenizedRegionToRegion(pattern.to_tokenized_region());
+                    const pattern_idx = blk: {
+                        if (try self.canonicalize_pattern(ast_branch.pattern)) |pattern_idx| {
+                            break :blk pattern_idx;
+                        } else {
+                            const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .pattern_not_canonicalized = .{
+                                .region = pattern_region,
+                            } });
+                            break :blk malformed_idx;
+                        }
+                    };
+                    self.can_ir.store.addScratchMatchBranchPattern(CIR.Match.BranchPattern{
+                        .pattern = pattern_idx,
+                        .degenerate = false,
+                        .region = pattern_region,
+                    });
+                }
 
                 // Get the pattern span
                 const branch_pat_span = self.can_ir.store.matchBranchPatternSpanFrom(branch_pat_scratch_top);
@@ -1797,8 +1799,10 @@ pub fn canonicalize_expr(
                     if (try self.canonicalize_expr(ast_branch.body)) |body_idx| {
                         break :blk body_idx;
                     } else {
+                        const body = self.parse_ir.store.getExpr(ast_branch.body);
+                        const body_region = self.parse_ir.tokenizedRegionToRegion(body.to_tokenized_region());
                         const malformed_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .expr_not_canonicalized = .{
-                            .region = pattern_region,
+                            .region = body_region,
                         } });
                         break :blk malformed_idx;
                     }
@@ -1811,6 +1815,11 @@ pub fn canonicalize_expr(
                     .redundant = @enumFromInt(0), // TODO
                     .region = branch_region,
                 });
+
+                // Set the branch var
+                if (index == 0) {
+                    mb_branch_var = @enumFromInt(@intFromEnum(value_idx));
+                }
             }
 
             // Create span from scratch branches
@@ -1825,7 +1834,15 @@ pub fn canonicalize_expr(
             };
 
             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_match = match_expr });
-            _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
+
+            // If there is at least 1 branch, then set the root expr to redirect
+            // to the type of the match branch
+            const expr_var = @as(TypeVar, @enumFromInt(@intFromEnum(expr_idx)));
+            if (mb_branch_var) |branch_var| {
+                try self.can_ir.env.types.setVarRedirect(expr_var, branch_var);
+            } else {
+                try self.can_ir.env.types.setVarContent(expr_var, .err);
+            }
 
             return expr_idx;
         },
