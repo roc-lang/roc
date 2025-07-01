@@ -707,6 +707,7 @@ test "NodeStore round trip - Pattern" {
             .list_var = @enumFromInt(1234),
             .elem_var = @enumFromInt(1345),
             .patterns = CIR.Pattern.Span{ .span = base.DataSpan.init(1456, 1567) },
+            .rest_info = .{ .index = 3, .pattern = @enumFromInt(5676) },
             .region = from_raw_offsets(90, 100),
         },
     });
@@ -775,7 +776,7 @@ test "NodeStore round trip - Pattern" {
 
     // Test the round-trip for all patterns
     for (patterns.items) |pattern| {
-        const idx = store.addPattern(pattern);
+        const idx = try store.addPattern(pattern);
         const retrieved = store.getPattern(idx);
 
         testing.expectEqualDeep(pattern, retrieved) catch |err| {

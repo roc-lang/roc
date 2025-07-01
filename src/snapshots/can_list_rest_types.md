@@ -15,10 +15,6 @@ match numbers {
 Nothing is named `numbers` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: full list rest pattern matching
-Let us know if you want to help!
-
 # TOKENS
 ~~~zig
 KwMatch(1:1-1:6),LowerIdent(1:7-1:14),OpenCurly(1:15-1:16),Newline(1:1-1:1),
@@ -58,7 +54,8 @@ match numbers {
 				(patterns
 					(p-list @2.5-2.28 (degenerate false)
 						(patterns
-							(p-assign @2.6-2.11 (ident "first"))
+							(p-assign @2.6-2.11 (ident "first")))
+						(rest-at (index 1)
 							(p-assign @2.13-2.27 (ident "restNums")))))
 				(value
 					(e-lookup-local @2.32-2.40

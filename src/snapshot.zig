@@ -1188,7 +1188,7 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, maybe_f
     var can_ir = CIR.init(&module_env);
     defer can_ir.deinit();
 
-    var can = canonicalize.init(&can_ir, &parse_ast);
+    var can = try canonicalize.init(&can_ir, &parse_ast);
     defer can.deinit();
 
     var maybe_expr_idx: ?CIR.Expr.Idx = null;

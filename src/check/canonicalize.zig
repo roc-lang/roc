@@ -93,7 +93,7 @@ pub fn deinit(
     self.pending_type_annos.deinit(gpa);
 }
 
-pub fn init(self: *CIR, parse_ir: *AST) Self {
+pub fn init(self: *CIR, parse_ir: *AST) std.mem.Allocator.Error!Self {
     const gpa = self.env.gpa;
 
     // Create the canonicalizer with scopes
@@ -115,18 +115,18 @@ pub fn init(self: *CIR, parse_ir: *AST) Self {
     // Not sure if this is how we want to do it long term, but want something to
     // make a start on canonicalization.
 
-    result.addBuiltin(self, "Bool", BUILTIN_BOOL);
-    result.addBuiltin(self, "Box", BUILTIN_BOX);
-    result.addBuiltin(self, "Decode", BUILTIN_DECODE);
-    result.addBuiltin(self, "Dict", BUILTIN_DICT);
-    result.addBuiltin(self, "Encode", BUILTIN_ENCODE);
-    result.addBuiltin(self, "Hash", BUILTIN_HASH);
-    result.addBuiltin(self, "Inspect", BUILTIN_INSPECT);
-    result.addBuiltin(self, "List", BUILTIN_LIST);
-    result.addBuiltin(self, "Num", BUILTIN_NUM);
-    result.addBuiltin(self, "Result", BUILTIN_RESULT);
-    result.addBuiltin(self, "Set", BUILTIN_SET);
-    result.addBuiltin(self, "Str", BUILTIN_STR);
+    try result.addBuiltin(self, "Bool", BUILTIN_BOOL);
+    try result.addBuiltin(self, "Box", BUILTIN_BOX);
+    try result.addBuiltin(self, "Decode", BUILTIN_DECODE);
+    try result.addBuiltin(self, "Dict", BUILTIN_DICT);
+    try result.addBuiltin(self, "Encode", BUILTIN_ENCODE);
+    try result.addBuiltin(self, "Hash", BUILTIN_HASH);
+    try result.addBuiltin(self, "Inspect", BUILTIN_INSPECT);
+    try result.addBuiltin(self, "List", BUILTIN_LIST);
+    try result.addBuiltin(self, "Num", BUILTIN_NUM);
+    try result.addBuiltin(self, "Result", BUILTIN_RESULT);
+    try result.addBuiltin(self, "Set", BUILTIN_SET);
+    try result.addBuiltin(self, "Str", BUILTIN_STR);
 
     // Add built-in types to the type scope
     // TODO: These should ultimately come from the platform/builtin files rather than being hardcoded
@@ -166,11 +166,11 @@ pub fn init(self: *CIR, parse_ir: *AST) Self {
     return result;
 }
 
-fn addBuiltin(self: *Self, ir: *CIR, ident_text: []const u8, idx: CIR.Pattern.Idx) void {
+fn addBuiltin(self: *Self, ir: *CIR, ident_text: []const u8, idx: CIR.Pattern.Idx) std.mem.Allocator.Error!void {
     const gpa = ir.env.gpa;
     const ident_store = &ir.env.idents;
     const ident_add = ir.env.idents.insert(gpa, base.Ident.for_text(ident_text), Region.zero());
-    const pattern_idx_add = ir.store.addPattern(CIR.Pattern{ .assign = .{ .ident = ident_add, .region = Region.zero() } });
+    const pattern_idx_add = try ir.store.addPattern(CIR.Pattern{ .assign = .{ .ident = ident_add, .region = Region.zero() } });
     _ = self.scopeIntroduceInternal(gpa, ident_store, .ident, ident_add, pattern_idx_add, false, true);
     std.debug.assert(idx == pattern_idx_add);
 
@@ -764,7 +764,7 @@ fn canonicalize_decl(
     const expr_region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getExpr(decl.body).to_tokenized_region());
 
     const pattern_idx = blk: {
-        if (self.canonicalize_pattern(decl.pattern)) |idx| {
+        if (try self.canonicalize_pattern(decl.pattern)) |idx| {
             break :blk idx;
         } else {
             const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .pattern_not_canonicalized = .{
@@ -1504,7 +1504,7 @@ pub fn canonicalize_expr(
             const gpa = self.can_ir.env.gpa;
             const args_start = self.can_ir.store.scratch_patterns.top();
             for (self.parse_ir.store.patternSlice(e.args)) |arg_pattern_idx| {
-                if (self.canonicalize_pattern(arg_pattern_idx)) |pattern_idx| {
+                if (try self.canonicalize_pattern(arg_pattern_idx)) |pattern_idx| {
                     self.can_ir.store.scratch_patterns.append(gpa, pattern_idx);
                 } else {
                     const arg = self.parse_ir.store.getPattern(arg_pattern_idx);
@@ -1705,7 +1705,7 @@ pub fn canonicalize_expr(
                 const branch_region = self.parse_ir.tokenizedRegionToRegion(ast_branch.region);
 
                 // Canonicalize the pattern
-                if (self.canonicalize_pattern(ast_branch.pattern)) |cir_pattern| {
+                if (try self.canonicalize_pattern(ast_branch.pattern)) |cir_pattern| {
                     // Canonicalize the branch body
                     if (try self.canonicalize_expr(ast_branch.body)) |body_expr| {
                         // For now, create a span with just one pattern by storing it directly in extra_data
@@ -1895,14 +1895,14 @@ fn extractStringSegments(self: *Self, parts: []const AST.Expr.Idx) std.mem.Alloc
 fn canonicalize_pattern(
     self: *Self,
     ast_pattern_idx: AST.Pattern.Idx,
-) ?CIR.Pattern.Idx {
+) std.mem.Allocator.Error!?CIR.Pattern.Idx {
     const gpa = self.can_ir.env.gpa;
     switch (self.parse_ir.store.getPattern(ast_pattern_idx)) {
         .ident => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
             if (self.parse_ir.tokens.resolveIdentifier(e.ident_tok)) |ident_idx| {
                 // Push a Pattern node for our identifier
-                const assign_idx = self.can_ir.store.addPattern(CIR.Pattern{ .assign = .{
+                const assign_idx = try self.can_ir.store.addPattern(CIR.Pattern{ .assign = .{
                     .ident = ident_idx,
                     .region = region,
                 } });
@@ -1950,7 +1950,7 @@ fn canonicalize_pattern(
                 },
             };
 
-            const pattern_idx = self.can_ir.store.addPattern(underscore_pattern);
+            const pattern_idx = try self.can_ir.store.addPattern(underscore_pattern);
 
             _ = self.can_ir.setTypeVarAtPat(pattern_idx, Content{ .flex_var = null });
 
@@ -2003,7 +2003,7 @@ fn canonicalize_pattern(
                     .region = region,
                 },
             };
-            const pattern_idx = self.can_ir.store.addPattern(int_pattern);
+            const pattern_idx = try self.can_ir.store.addPattern(int_pattern);
 
             _ = self.can_ir.setTypeVarAtPat(pattern_idx, Content{
                 .structure = .{ .num = .{ .num_unbound = int_requirements } },
@@ -2060,7 +2060,7 @@ fn canonicalize_pattern(
                 },
             };
 
-            const pattern_idx = self.can_ir.store.addPattern(cir_pattern);
+            const pattern_idx = try self.can_ir.store.addPattern(cir_pattern);
 
             _ = self.can_ir.setTypeVarAtPat(pattern_idx, Content{
                 .structure = .{ .num = .{ .frac_unbound = frac_requirements } },
@@ -2084,7 +2084,7 @@ fn canonicalize_pattern(
                     .region = region,
                 },
             };
-            const pattern_idx = self.can_ir.store.addPattern(str_pattern);
+            const pattern_idx = try self.can_ir.store.addPattern(str_pattern);
 
             _ = self.can_ir.setTypeVarAtPat(pattern_idx, Content{ .structure = .str });
 
@@ -2095,7 +2095,7 @@ fn canonicalize_pattern(
                 const start = self.can_ir.store.scratch_patterns.top();
 
                 for (self.parse_ir.store.patternSlice(e.args)) |sub_ast_pattern_idx| {
-                    if (self.canonicalize_pattern(sub_ast_pattern_idx)) |idx| {
+                    if (try self.canonicalize_pattern(sub_ast_pattern_idx)) |idx| {
                         self.can_ir.store.scratch_patterns.append(gpa, idx);
                     } else {
                         const arg = self.parse_ir.store.getPattern(sub_ast_pattern_idx);
@@ -2122,7 +2122,7 @@ fn canonicalize_pattern(
                         .region = region,
                     },
                 };
-                const pattern_idx = self.can_ir.store.addPattern(tag_pattern);
+                const pattern_idx = try self.can_ir.store.addPattern(tag_pattern);
 
                 std.debug.assert(@intFromEnum(pattern_idx) == @intFromEnum(final_pattern_idx));
 
@@ -2173,7 +2173,7 @@ fn canonicalize_pattern(
                     self.can_ir.store.addScratchRecordDestruct(destruct_idx);
 
                     // Create an assign pattern for this identifier and introduce it into scope
-                    const assign_pattern_idx = self.can_ir.store.addPattern(CIR.Pattern{ .assign = .{
+                    const assign_pattern_idx = try self.can_ir.store.addPattern(CIR.Pattern{ .assign = .{
                         .ident = field_name_ident,
                         .region = field_region,
                     } });
@@ -2223,7 +2223,7 @@ fn canonicalize_pattern(
             const ext_var = self.can_ir.env.types.fresh();
 
             // Create the record destructure pattern
-            const pattern_idx = self.can_ir.store.addPattern(CIR.Pattern{
+            const pattern_idx = try self.can_ir.store.addPattern(CIR.Pattern{
                 .record_destructure = .{
                     .whole_var = whole_var,
                     .ext_var = ext_var,
@@ -2248,7 +2248,7 @@ fn canonicalize_pattern(
             const patterns_slice = self.parse_ir.store.patternSlice(e.patterns);
             const elems_var_top = self.can_ir.env.types.tuple_elems.len();
             for (patterns_slice) |pattern| {
-                if (self.canonicalize_pattern(pattern)) |canonicalized| {
+                if (try self.canonicalize_pattern(pattern)) |canonicalized| {
                     self.can_ir.store.addScratchPattern(canonicalized);
                     _ = self.can_ir.env.types.appendTupleElem(@enumFromInt(@intFromEnum(canonicalized)));
                 }
@@ -2261,7 +2261,7 @@ fn canonicalize_pattern(
             // Create span of the new scratch patterns
             const patterns_span = self.can_ir.store.patternSpanFrom(scratch_top);
 
-            const pattern_idx = self.can_ir.store.addPattern(CIR.Pattern{
+            const pattern_idx = try self.can_ir.store.addPattern(CIR.Pattern{
                 .tuple = .{
                     .patterns = patterns_span,
                     .region = region,
@@ -2281,52 +2281,48 @@ fn canonicalize_pattern(
         .list => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
-            // Mark the start of scratch patterns for the list elements
+            // Mark the start of scratch patterns for non-rest patterns only
             const scratch_top = self.can_ir.store.scratchPatternTop();
 
             // Create element type variable early so list rest patterns can use it
             const elem_var = self.can_ir.env.types.fresh();
 
-            // Iterate over the list patterns, canonicalizing each one
+            // Track rest pattern information
+            var rest_index: ?u32 = null;
+            var rest_pattern: ?CIR.Pattern.Idx = null;
+
+            // Process all patterns, tracking rest position and canonicalizing non-rest patterns
             const patterns_slice = self.parse_ir.store.patternSlice(e.patterns);
             for (patterns_slice, 0..) |pattern_idx, i| {
                 const ast_pattern = self.parse_ir.store.getPattern(pattern_idx);
 
-                // Handle list_rest patterns specially
                 if (ast_pattern == .list_rest) {
-                    // Validate that list rest patterns only appear at the end
-                    if (i != patterns_slice.len - 1) {
+                    // Check for multiple rest patterns (not allowed)
+                    if (rest_index != null) {
                         const list_rest_region = self.parse_ir.tokenizedRegionToRegion(ast_pattern.list_rest.region);
-                        const feature = self.can_ir.env.strings.insert(gpa, "list rest patterns must appear at the end of list patterns");
                         self.can_ir.pushDiagnostic(CIR.Diagnostic{ .pattern_not_canonicalized = .{
                             .region = list_rest_region,
                         } });
-                        self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
-                            .feature = feature,
-                            .region = list_rest_region,
-                        } });
-                        // Continue processing but mark as malformed
-                        const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .pattern_not_canonicalized = .{
-                            .region = list_rest_region,
-                        } });
-                        self.can_ir.store.scratch_patterns.append(gpa, malformed_idx);
                         continue;
                     }
+
                     const list_rest_region = self.parse_ir.tokenizedRegionToRegion(ast_pattern.list_rest.region);
 
-                    // If the list rest pattern has a name, introduce it as a variable
+                    // Handle named vs unnamed rest patterns
+                    var current_rest_pattern: ?CIR.Pattern.Idx = null;
                     if (ast_pattern.list_rest.name) |name_tok| {
                         if (self.parse_ir.tokens.resolveIdentifier(name_tok)) |ident_idx| {
                             // Create an assign pattern for the rest variable
-                            const assign_idx = self.can_ir.store.addPattern(CIR.Pattern{ .assign = .{
+                            const assign_idx = try self.can_ir.store.addPattern(CIR.Pattern{ .assign = .{
                                 .ident = ident_idx,
                                 .region = list_rest_region,
                             } });
+
                             // Set the rest variable's type to be a list of the same element type
                             const rest_list_type = Content{ .structure = .{ .list = elem_var } };
                             _ = self.can_ir.setTypeVarAtPat(assign_idx, rest_list_type);
 
-                            // Introduce the identifier into scope mapping to this pattern node
+                            // Introduce the identifier into scope
                             switch (self.scopeIntroduceInternal(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, ident_idx, assign_idx, false, true)) {
                                 .success => {},
                                 .shadowing_warning => |shadowed_pattern_idx| {
@@ -2347,35 +2343,24 @@ fn canonicalize_pattern(
                                 },
                             }
 
-                            // Add the assignment pattern, but still mark list rest as not fully implemented
-                            self.can_ir.store.scratch_patterns.append(gpa, assign_idx);
+                            current_rest_pattern = assign_idx;
                         } else {
                             const feature = self.can_ir.env.strings.insert(gpa, "list rest pattern with unresolvable name");
                             const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .not_implemented = .{
                                 .feature = feature,
                                 .region = list_rest_region,
                             } });
-                            self.can_ir.store.scratch_patterns.append(gpa, malformed_idx);
+                            current_rest_pattern = malformed_idx;
                         }
-                    } else {
-                        // Unnamed list rest pattern i.e. `_ => ...`
-                        const feature = self.can_ir.env.strings.insert(gpa, "unnamed list rest patterns");
-                        const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .not_implemented = .{
-                            .feature = feature,
-                            .region = list_rest_region,
-                        } });
-                        self.can_ir.store.scratch_patterns.append(gpa, malformed_idx);
                     }
+                    // For unnamed rest patterns, current_rest_pattern remains null
 
-                    // Add a diagnostic indicating list rest patterns are not fully implemented yet
-                    const feature = self.can_ir.env.strings.insert(gpa, "full list rest pattern matching");
-                    self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
-                        .feature = feature,
-                        .region = list_rest_region,
-                    } });
+                    // Store rest information
+                    rest_index = @intCast(i);
+                    rest_pattern = current_rest_pattern;
                 } else {
-                    // Regular pattern - canonicalize it
-                    if (self.canonicalize_pattern(pattern_idx)) |canonicalized| {
+                    // Regular pattern - canonicalize it and add to scratch patterns
+                    if (try self.canonicalize_pattern(pattern_idx)) |canonicalized| {
                         self.can_ir.store.scratch_patterns.append(gpa, canonicalized);
                     } else {
                         const pattern_region = self.parse_ir.tokenizedRegionToRegion(ast_pattern.to_tokenized_region());
@@ -2387,18 +2372,19 @@ fn canonicalize_pattern(
                 }
             }
 
-            // Create span of the canonicalized patterns
+            // Create span of the canonicalized non-rest patterns
             const patterns_span = self.can_ir.store.patternSpanFrom(scratch_top);
 
-            // Create fresh type variable for the list (element var was created earlier)
+            // Create fresh type variable for the list
             const list_var = self.can_ir.env.types.fresh();
 
-            // Create the list pattern
-            const pattern_idx = self.can_ir.store.addPattern(CIR.Pattern{
+            // Create the list pattern with rest info
+            const pattern_idx = try self.can_ir.store.addPattern(CIR.Pattern{
                 .list = .{
                     .list_var = list_var,
                     .elem_var = elem_var,
                     .patterns = patterns_span,
+                    .rest_info = if (rest_index) |idx| .{ .index = idx, .pattern = rest_pattern } else null,
                     .region = region,
                 },
             });
@@ -3264,7 +3250,7 @@ pub fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.
             }
 
             // Regular declaration - canonicalize as usual
-            const pattern_idx = self.canonicalize_pattern(d.pattern) orelse return null;
+            const pattern_idx = try self.canonicalize_pattern(d.pattern) orelse return null;
             const expr_idx = try self.canonicalize_expr(d.body) orelse return null;
 
             // Create a declaration statement
@@ -3287,7 +3273,7 @@ pub fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.
             const init_expr_idx = try self.canonicalize_expr(v.body) orelse return null;
 
             // Create pattern for the var
-            const pattern_idx = self.can_ir.store.addPattern(CIR.Pattern{ .assign = .{ .ident = var_name, .region = region } });
+            const pattern_idx = try self.can_ir.store.addPattern(CIR.Pattern{ .assign = .{ .ident = var_name, .region = region } });
 
             // Introduce the var with function boundary tracking
             _ = self.scopeIntroduceVar(var_name, pattern_idx, region, true, CIR.Pattern.Idx);
@@ -4625,7 +4611,7 @@ const ScopeTestContext = struct {
     env: *base.ModuleEnv,
     gpa: std.mem.Allocator,
 
-    fn init(gpa: std.mem.Allocator) !ScopeTestContext {
+    fn init(gpa: std.mem.Allocator) std.mem.Allocator.Error!ScopeTestContext {
         // heap allocate env for testing
         const env = try gpa.create(base.ModuleEnv);
         env.* = base.ModuleEnv.init(gpa);
@@ -4635,7 +4621,7 @@ const ScopeTestContext = struct {
         cir.* = CIR.init(env);
 
         return ScopeTestContext{
-            .self = Self.init(cir, undefined),
+            .self = try Self.init(cir, undefined),
             .cir = cir,
             .env = env,
             .gpa = gpa,
@@ -4950,7 +4936,7 @@ test "hexadecimal integer literals" {
         var cir = CIR.init(&env);
         defer cir.deinit();
 
-        var can = init(&cir, &ast);
+        var can = try init(&cir, &ast);
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -5040,7 +5026,7 @@ test "binary integer literals" {
         var cir = CIR.init(&env);
         defer cir.deinit();
 
-        var can = init(&cir, &ast);
+        var can = try init(&cir, &ast);
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -5130,7 +5116,7 @@ test "octal integer literals" {
         var cir = CIR.init(&env);
         defer cir.deinit();
 
-        var can = init(&cir, &ast);
+        var can = try init(&cir, &ast);
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -5220,7 +5206,7 @@ test "integer literals with uppercase base prefixes" {
         var cir = CIR.init(&env);
         defer cir.deinit();
 
-        var can = init(&cir, &ast);
+        var can = try init(&cir, &ast);
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -5287,7 +5273,7 @@ test "numeric literal patterns use pattern idx as type var" {
             },
         };
 
-        const pattern_idx = cir.store.addPattern(int_pattern);
+        const pattern_idx = try cir.store.addPattern(int_pattern);
 
         // Set the type variable for the pattern
         _ = cir.setTypeVarAtPat(pattern_idx, Content{
@@ -5336,7 +5322,7 @@ test "numeric literal patterns use pattern idx as type var" {
             },
         };
 
-        const pattern_idx = cir.store.addPattern(f64_pattern);
+        const pattern_idx = try cir.store.addPattern(f64_pattern);
 
         // Set the type variable for the pattern
         _ = cir.setTypeVarAtPat(pattern_idx, Content{
@@ -5390,7 +5376,7 @@ test "numeric pattern types: unbound vs polymorphic" {
             },
         };
 
-        const pattern_idx = cir.store.addPattern(pattern);
+        const pattern_idx = try cir.store.addPattern(pattern);
 
         // Set as int_unbound (used when pattern matching where type is not yet known)
         _ = cir.setTypeVarAtPat(pattern_idx, Content{
@@ -5432,7 +5418,7 @@ test "numeric pattern types: unbound vs polymorphic" {
             },
         };
 
-        const pattern_idx = cir.store.addPattern(pattern);
+        const pattern_idx = try cir.store.addPattern(pattern);
 
         // Create a fresh type variable for polymorphic int
         const poly_var = env.types.fresh();
@@ -5485,7 +5471,7 @@ test "numeric pattern types: unbound vs polymorphic" {
             },
         };
 
-        const pattern_idx = cir.store.addPattern(pattern);
+        const pattern_idx = try cir.store.addPattern(pattern);
 
         // Set as num_unbound (decimal literal that could be int or frac)
         _ = cir.setTypeVarAtPat(pattern_idx, Content{
@@ -5527,7 +5513,7 @@ test "numeric pattern types: unbound vs polymorphic" {
             },
         };
 
-        const pattern_idx = cir.store.addPattern(pattern);
+        const pattern_idx = try cir.store.addPattern(pattern);
 
         // Create a fresh type variable for polymorphic num
         const poly_var = env.types.fresh();
@@ -5576,7 +5562,7 @@ test "numeric pattern types: unbound vs polymorphic" {
             },
         };
 
-        const pattern_idx = cir.store.addPattern(pattern);
+        const pattern_idx = try cir.store.addPattern(pattern);
 
         // Set as frac_unbound
         _ = cir.setTypeVarAtPat(pattern_idx, Content{
@@ -5618,7 +5604,7 @@ test "record literal uses record_unbound" {
         var cir = CIR.init(&env);
         defer cir.deinit();
 
-        var can = Self.init(&cir, &ast);
+        var can = try Self.init(&cir, &ast);
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -5654,7 +5640,7 @@ test "record literal uses record_unbound" {
         var cir = CIR.init(&env);
         defer cir.deinit();
 
-        var can = Self.init(&cir, &ast);
+        var can = try Self.init(&cir, &ast);
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -5689,7 +5675,7 @@ test "record literal uses record_unbound" {
         var cir = CIR.init(&env);
         defer cir.deinit();
 
-        var can = Self.init(&cir, &ast);
+        var can = try Self.init(&cir, &ast);
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -5733,7 +5719,7 @@ test "record_unbound basic functionality" {
     var cir = CIR.init(&env);
     defer cir.deinit();
 
-    var can = Self.init(&cir, &ast);
+    var can = try Self.init(&cir, &ast);
     defer can.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -5776,7 +5762,7 @@ test "record_unbound with multiple fields" {
     var cir = CIR.init(&env);
     defer cir.deinit();
 
-    var can = Self.init(&cir, &ast);
+    var can = try Self.init(&cir, &ast);
     defer can.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
@@ -5897,7 +5883,7 @@ test "numeric pattern types: unbound vs polymorphic - frac" {
             },
         };
 
-        const pattern_idx = cir.store.addPattern(pattern);
+        const pattern_idx = try cir.store.addPattern(pattern);
 
         // Create a fresh type variable for polymorphic frac
         const poly_var = env.types.fresh();
@@ -5956,7 +5942,7 @@ test "pattern numeric literal value edge cases" {
                 .region = Region.zero(),
             },
         };
-        const max_idx = cir.store.addPattern(max_pattern);
+        const max_idx = try cir.store.addPattern(max_pattern);
         const stored_max = cir.store.getPattern(max_idx);
         try std.testing.expectEqual(std.math.maxInt(i128), @as(i128, @bitCast(stored_max.int_literal.value.bytes)));
 
@@ -5967,7 +5953,7 @@ test "pattern numeric literal value edge cases" {
                 .region = Region.zero(),
             },
         };
-        const min_idx = cir.store.addPattern(min_pattern);
+        const min_idx = try cir.store.addPattern(min_pattern);
         const stored_min = cir.store.getPattern(min_idx);
         try std.testing.expectEqual(std.math.minInt(i128), @as(i128, @bitCast(stored_min.int_literal.value.bytes)));
     }
@@ -5988,7 +5974,7 @@ test "pattern numeric literal value edge cases" {
             },
         };
 
-        const pattern_idx = cir.store.addPattern(small_dec_pattern);
+        const pattern_idx = try cir.store.addPattern(small_dec_pattern);
         const stored = cir.store.getPattern(pattern_idx);
 
         try std.testing.expect(stored == .small_dec_literal);
@@ -6011,7 +5997,7 @@ test "pattern numeric literal value edge cases" {
             },
         };
 
-        const pattern_idx = cir.store.addPattern(dec_pattern);
+        const pattern_idx = try cir.store.addPattern(dec_pattern);
         const stored = cir.store.getPattern(pattern_idx);
 
         try std.testing.expect(stored == .dec_literal);
@@ -6033,7 +6019,7 @@ test "pattern numeric literal value edge cases" {
                 .region = Region.zero(),
             },
         };
-        const nan_idx = cir.store.addPattern(nan_pattern);
+        const nan_idx = try cir.store.addPattern(nan_pattern);
         const stored_nan = cir.store.getPattern(nan_idx);
         try std.testing.expect(std.math.isNan(stored_nan.f64_literal.value));
 
@@ -6044,7 +6030,7 @@ test "pattern numeric literal value edge cases" {
                 .region = Region.zero(),
             },
         };
-        const neg_zero_idx = cir.store.addPattern(neg_zero_pattern);
+        const neg_zero_idx = try cir.store.addPattern(neg_zero_pattern);
         const stored_neg_zero = cir.store.getPattern(neg_zero_idx);
         try std.testing.expect(std.math.signbit(stored_neg_zero.f64_literal.value));
         try std.testing.expectEqual(@as(f64, -0.0), stored_neg_zero.f64_literal.value);
@@ -6071,7 +6057,7 @@ test "pattern literal type transitions" {
             },
         };
 
-        const pattern_idx = cir.store.addPattern(pattern);
+        const pattern_idx = try cir.store.addPattern(pattern);
 
         // Start as num_unbound
         _ = cir.setTypeVarAtPat(pattern_idx, Content{
@@ -6122,7 +6108,7 @@ test "pattern literal type transitions" {
             },
         };
 
-        const hex_idx = cir.store.addPattern(hex_pattern);
+        const hex_idx = try cir.store.addPattern(hex_pattern);
 
         // Non-decimal literals use int_unbound (not num_unbound)
         _ = cir.setTypeVarAtPat(hex_idx, Content{
@@ -6217,7 +6203,7 @@ test "pattern type inference with numeric literals" {
         };
 
         for (patterns) |test_case| {
-            const pattern_idx = cir.store.addPattern(test_case.pattern);
+            const pattern_idx = try cir.store.addPattern(test_case.pattern);
             _ = cir.setTypeVarAtPat(pattern_idx, test_case.expected_type);
 
             // Verify the pattern index works as a type variable
@@ -6245,7 +6231,7 @@ test "pattern type inference with numeric literals" {
             },
         };
 
-        const pattern_idx = cir.store.addPattern(pattern);
+        const pattern_idx = try cir.store.addPattern(pattern);
 
         // Start as num_unbound
         _ = cir.setTypeVarAtPat(pattern_idx, Content{

@@ -13,36 +13,27 @@ match coord {
 }
 ~~~
 # PROBLEMS
-**UNEXPECTED TOKEN IN PATTERN**
-The token **match coord {
-    (Zero, Zero) => "origin"
-    (** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
-
-Here is the problematic code:
-**tuple_patterns.md:1:1:3:6:**
-```roc
-match coord {
-    (Zero, Zero) => "origin"
-    (x, Zero) => x
-```
-
-
-**UNEXPECTED TOKEN IN PATTERN**
-The token **=> x** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
-
-Here is the problematic code:
-**tuple_patterns.md:3:15:3:19:**
-```roc
-    (x, Zero) => x
-```
-              ^^^^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `coord` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**DUPLICATE DEFINITION**
+The name `x` is being redeclared in this scope.
+
+The redeclaration is here:
+**tuple_patterns.md:5:6:5:7:**
+```roc
+    (x, y) => x
+```
+     ^
+
+But `x` was already defined here:
+**tuple_patterns.md:3:6:3:7:**
+```roc
+    (x, Zero) => x
+```
+     ^
+
 
 **DUPLICATE DEFINITION**
 The name `y` is being redeclared in this scope.
@@ -82,13 +73,10 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 				(p-tag @2.12-2.16 (raw "Zero")))
 			(e-string @2.21-2.29
 				(e-string-part @2.22-2.28 (raw "origin"))))
-		(branch @1.1-3.17
-			(p-malformed @1.1-3.6 (tag "pattern_unexpected_token"))
-			(e-tuple @3.5-3.14
-				(e-ident @3.6-3.7 (qaul "") (raw "x"))
-				(e-tag @3.9-3.13 (raw "Zero"))))
-		(branch @3.15-4.6
-			(p-malformed @3.15-3.19 (tag "pattern_unexpected_token"))
+		(branch @3.5-4.6
+			(p-tuple @3.5-3.14
+				(p-ident @3.6-3.7 (raw "x"))
+				(p-tag @3.9-3.13 (raw "Zero")))
 			(e-ident @3.18-3.19 (qaul "") (raw "x")))
 		(branch @4.5-5.6
 			(p-tuple @4.5-4.14
@@ -104,8 +92,8 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 # FORMATTED
 ~~~roc
 match coord {
-	(Zero, Zero) => "origin"	 =>
-		(x, Zero)	 => x
+	(Zero, Zero) => "origin"
+	(x, Zero) => x
 	(Zero, y) => y
 	(x, y) => x
 }
@@ -126,6 +114,15 @@ match coord {
 				(value
 					(e-string @2.21-2.29
 						(e-literal @2.22-2.28 (string "origin")))))
+			(branch
+				(patterns
+					(p-tuple @3.5-3.14 (degenerate false)
+						(patterns
+							(p-assign @3.6-3.7 (ident "x"))
+							(p-applied-tag @3.9-3.13))))
+				(value
+					(e-lookup-local @3.18-3.19
+						(pattern @3.6-3.7))))
 			(branch
 				(patterns
 					(p-tuple @4.5-4.14 (degenerate false)

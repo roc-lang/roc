@@ -2162,7 +2162,11 @@ pub const Pattern = union(enum) {
     list: struct {
         list_var: TypeVar,
         elem_var: TypeVar,
-        patterns: Pattern.Span,
+        patterns: Pattern.Span, // All non-rest patterns
+        rest_info: ?struct {
+            index: u32, // Where the rest appears (split point)
+            pattern: ?Pattern.Idx, // None for `..`, Some(assign) for `.. as name`
+        },
         region: Region,
     },
     tuple: struct {
@@ -2287,6 +2291,24 @@ pub const Pattern = union(enum) {
                 }
 
                 node.appendNode(gpa, &patterns_node);
+
+                // Add rest information if present
+                if (p.rest_info) |rest| {
+                    var rest_node = SExpr.init(gpa, "rest-at");
+
+                    // Add the index where rest appears
+                    const index_str = std.fmt.allocPrint(gpa, "{d}", .{rest.index}) catch |err| exitOnOom(err);
+                    defer gpa.free(index_str);
+                    rest_node.appendRawAttr(gpa, "index", index_str);
+
+                    // Add the rest pattern if it has a name
+                    if (rest.pattern) |rest_pattern_idx| {
+                        var rest_pattern_sexpr = ir.store.getPattern(rest_pattern_idx).toSExpr(ir);
+                        rest_node.appendNode(gpa, &rest_pattern_sexpr);
+                    }
+
+                    node.appendNode(gpa, &rest_node);
+                }
 
                 return node;
             },

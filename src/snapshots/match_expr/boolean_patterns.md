@@ -6,101 +6,61 @@ type=expr
 # SOURCE
 ~~~roc
 match isReady {
-    True => "ready to go!"
-    False => "not ready yet"
+	True => "ready to go!"
+	False => "not ready yet"
 }
 ~~~
 # PROBLEMS
-**UNEXPECTED TOKEN IN PATTERN**
-The token **match isReady {
-    True => "ready to go!"
-    False** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
-
-Here is the problematic code:
-**boolean_patterns.md:1:1:3:10:**
-```roc
-match isReady {
-    True => "ready to go!"
-    False => "not ready yet"
-```
-
-
-**UNEXPECTED TOKEN IN PATTERN**
-The token **=> "** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
-
-Here is the problematic code:
-**boolean_patterns.md:3:11:3:15:**
-```roc
-    False => "not ready yet"
-```
-          ^^^^
-
-
-**UNEXPECTED TOKEN IN PATTERN**
-The token **match isReady {
-    True => "ready to go!"
-    False => "not ready yet"
-}** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
-
-Here is the problematic code:
-**boolean_patterns.md:1:1:4:2:**
-```roc
-match isReady {
-    True => "ready to go!"
-    False => "not ready yet"
-}
-```
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **}** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**boolean_patterns.md:4:1:4:2:**
-```roc
-}
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `expected_close_curly_at_end_of_match`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**boolean_patterns.md:4:2:4:2:**
-```roc
-}
-```
- 
-
+**UNDEFINED VARIABLE**
+Nothing is named `isReady` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
 KwMatch(1:1-1:6),LowerIdent(1:7-1:14),OpenCurly(1:15-1:16),Newline(1:1-1:1),
-UpperIdent(2:5-2:9),OpFatArrow(2:10-2:12),StringStart(2:13-2:14),StringPart(2:14-2:26),StringEnd(2:26-2:27),Newline(1:1-1:1),
-UpperIdent(3:5-3:10),OpFatArrow(3:11-3:13),StringStart(3:14-3:15),StringPart(3:15-3:28),StringEnd(3:28-3:29),Newline(1:1-1:1),
+UpperIdent(2:2-2:6),OpFatArrow(2:7-2:9),StringStart(2:10-2:11),StringPart(2:11-2:23),StringEnd(2:23-2:24),Newline(1:1-1:1),
+UpperIdent(3:2-3:7),OpFatArrow(3:8-3:10),StringStart(3:11-3:12),StringPart(3:12-3:25),StringEnd(3:25-3:26),Newline(1:1-1:1),
 CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~
 # PARSE
 ~~~clojure
-(e-malformed @4.2-4.2 (reason "expected_close_curly_at_end_of_match"))
+(e-match
+	(e-ident @1.7-1.14 (qaul "") (raw "isReady"))
+	(branches
+		(branch @1.1-1.1
+			(p-tag @2.2-2.6 (raw "True"))
+			(e-string @2.10-2.24
+				(e-string-part @2.11-2.23 (raw "ready to go!"))))
+		(branch @1.1-1.1
+			(p-tag @3.2-3.7 (raw "False"))
+			(e-string @3.11-3.26
+				(e-string-part @3.12-3.25 (raw "not ready yet"))))))
 ~~~
 # FORMATTED
 ~~~roc
-
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(e-match @1.1-4.2
+	(match @1.1-4.2
+		(cond
+			(e-runtime-error (tag "ident_not_in_scope")))
+		(branches
+			(branch
+				(patterns
+					(p-applied-tag @2.2-2.6 (degenerate false)))
+				(value
+					(e-string @2.10-2.24
+						(e-literal @2.11-2.23 (string "ready to go!")))))
+			(branch
+				(patterns
+					(p-applied-tag @3.2-3.7 (degenerate false)))
+				(value
+					(e-string @3.11-3.26
+						(e-literal @3.12-3.25 (string "not ready yet"))))))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+(expr @1.1-4.2 (type "*"))
 ~~~

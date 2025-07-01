@@ -12,104 +12,9 @@ match value {
 }
 ~~~
 # PROBLEMS
-**UNEXPECTED TOKEN IN PATTERN**
-The token **match value {
-    Answer => "the answer"
-    Zero** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
-
-Here is the problematic code:
-**wildcard_patterns.md:1:1:3:9:**
-```roc
-match value {
-    Answer => "the answer"
-    Zero => "zero"
-```
-
-
-**UNEXPECTED TOKEN IN PATTERN**
-The token **=> "** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
-
-Here is the problematic code:
-**wildcard_patterns.md:3:10:3:14:**
-```roc
-    Zero => "zero"
-```
-         ^^^^
-
-
-**UNEXPECTED TOKEN IN PATTERN**
-The token **match value {
-    Answer => "the answer"
-    Zero => "zero"
-    other** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
-
-Here is the problematic code:
-**wildcard_patterns.md:1:1:4:10:**
-```roc
-match value {
-    Answer => "the answer"
-    Zero => "zero"
-    other => "something else"
-```
-
-
-**UNEXPECTED TOKEN IN PATTERN**
-The token **=> "** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
-
-Here is the problematic code:
-**wildcard_patterns.md:4:11:4:15:**
-```roc
-    other => "something else"
-```
-          ^^^^
-
-
-**UNEXPECTED TOKEN IN PATTERN**
-The token **match value {
-    Answer => "the answer"
-    Zero => "zero"
-    other => "something else"
-}** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
-
-Here is the problematic code:
-**wildcard_patterns.md:1:1:5:2:**
-```roc
-match value {
-    Answer => "the answer"
-    Zero => "zero"
-    other => "something else"
-}
-```
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **}** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**wildcard_patterns.md:5:1:5:2:**
-```roc
-}
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `expected_close_curly_at_end_of_match`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**wildcard_patterns.md:5:2:5:2:**
-```roc
-}
-```
- 
-
+**UNDEFINED VARIABLE**
+Nothing is named `value` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
@@ -121,19 +26,57 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 ~~~
 # PARSE
 ~~~clojure
-(e-malformed @5.2-5.2 (reason "expected_close_curly_at_end_of_match"))
+(e-match
+	(e-ident @1.7-1.12 (qaul "") (raw "value"))
+	(branches
+		(branch @1.1-1.1
+			(p-tag @2.5-2.11 (raw "Answer"))
+			(e-string @2.15-2.27
+				(e-string-part @2.16-2.26 (raw "the answer"))))
+		(branch @1.1-1.1
+			(p-tag @3.5-3.9 (raw "Zero"))
+			(e-string @3.13-3.19
+				(e-string-part @3.14-3.18 (raw "zero"))))
+		(branch @1.1-1.1
+			(p-ident @4.5-4.10 (raw "other"))
+			(e-string @4.14-4.30
+				(e-string-part @4.15-4.29 (raw "something else"))))))
 ~~~
 # FORMATTED
 ~~~roc
-
+match value {
+	Answer => "the answer"
+	Zero => "zero"
+	other => "something else"
+}
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(e-match @1.1-5.2
+	(match @1.1-5.2
+		(cond
+			(e-runtime-error (tag "ident_not_in_scope")))
+		(branches
+			(branch
+				(patterns
+					(p-applied-tag @2.5-2.11 (degenerate false)))
+				(value
+					(e-string @2.15-2.27
+						(e-literal @2.16-2.26 (string "the answer")))))
+			(branch
+				(patterns
+					(p-applied-tag @3.5-3.9 (degenerate false)))
+				(value
+					(e-string @3.13-3.19
+						(e-literal @3.14-3.18 (string "zero")))))
+			(branch
+				(patterns
+					(p-assign @4.5-4.10 (ident "other") (degenerate false)))
+				(value
+					(e-string @4.14-4.30
+						(e-literal @4.15-4.29 (string "something else"))))))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+(expr @1.1-5.2 (type "*"))
 ~~~

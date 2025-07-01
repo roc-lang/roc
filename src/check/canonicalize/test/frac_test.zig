@@ -30,7 +30,7 @@ fn parseAndCanonicalizeFrac(allocator: std.mem.Allocator, source: []const u8) !s
     cir.* = CIR.init(module_env);
 
     const can = try allocator.create(canonicalize);
-    can.* = canonicalize.init(cir, parse_ast);
+    can.* = try canonicalize.init(cir, parse_ast);
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
     const canonical_expr_idx = try can.canonicalize_expr(expr_idx) orelse {

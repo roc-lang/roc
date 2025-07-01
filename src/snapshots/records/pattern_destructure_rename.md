@@ -10,44 +10,21 @@ match person {
 }
 ~~~
 # PROBLEMS
-**UNEXPECTED TOKEN IN PATTERN**
-The token **match person {
-    { name: userName, age: userAge } => "User ${userName} is ${userAge.to_str()} years old"
-}** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
+**UNDEFINED VARIABLE**
+Nothing is named `person` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-Here is the problematic code:
-**pattern_destructure_rename.md:1:1:3:2:**
-```roc
-match person {
-    { name: userName, age: userAge } => "User ${userName} is ${userAge.to_str()} years old"
-}
-```
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
+Let us know if you want to help!
 
+**UNDEFINED VARIABLE**
+Nothing is named `userName` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **}** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**pattern_destructure_rename.md:3:1:3:2:**
-```roc
-}
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `expected_close_curly_at_end_of_match`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**pattern_destructure_rename.md:3:2:3:2:**
-```roc
-}
-```
- 
-
+**UNDEFINED VARIABLE**
+Nothing is named `userAge` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
@@ -57,19 +34,53 @@ CloseCurly(3:1-3:2),EndOfFile(3:2-3:2),
 ~~~
 # PARSE
 ~~~clojure
-(e-malformed @3.2-3.2 (reason "expected_close_curly_at_end_of_match"))
+(e-match
+	(e-ident @1.7-1.13 (qaul "") (raw "person"))
+	(branches
+		(branch @1.1-1.1
+			(p-record @2.5-2.37
+				(field @2.7-2.22 (name "name") (rest false)
+					(p-ident @2.13-2.21 (raw "userName")))
+				(field @2.23-2.37 (name "age") (rest false)
+					(p-ident @2.28-2.35 (raw "userAge"))))
+			(e-string @2.41-2.92
+				(e-string-part @2.42-2.47 (raw "User "))
+				(e-ident @2.49-2.57 (qaul "") (raw "userName"))
+				(e-string-part @2.58-2.62 (raw " is "))
+				(e-field-access @2.64-2.81
+					(e-ident @2.64-2.71 (qaul "") (raw "userAge"))
+					(e-apply @2.71-2.80
+						(e-ident @2.71-2.78 (qaul "") (raw ".to_str"))))
+				(e-string-part @2.81-2.91 (raw " years old"))))))
 ~~~
 # FORMATTED
 ~~~roc
-
+match person {
+	{ name: userName, age: userAge } => "User ${userName} is ${userAge.to_str()} years old"
+}
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(e-match @1.1-3.2
+	(match @1.1-3.2
+		(cond
+			(e-runtime-error (tag "ident_not_in_scope")))
+		(branches
+			(branch
+				(patterns
+					(p-runtime-error @2.7-2.22 (tag "not_implemented") (degenerate false)))
+				(value
+					(e-string @2.41-2.92
+						(e-literal @2.42-2.47 (string "User "))
+						(e-runtime-error (tag "ident_not_in_scope"))
+						(e-literal @2.58-2.62 (string " is "))
+						(e-dot-access @2.64-2.81 (field "to_str")
+							(receiver
+								(e-runtime-error (tag "ident_not_in_scope")))
+							(args))
+						(e-literal @2.81-2.91 (string " years old"))))))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+(expr @1.1-3.2 (type "*"))
 ~~~

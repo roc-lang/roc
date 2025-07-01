@@ -347,10 +347,6 @@ Is there an `import` or `exposing` missing up-top?
 This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
 Let us know if you want to help!
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: list rest patterns in match expressions
-Let us know if you want to help!
-
 **UNDEFINED VARIABLE**
 Nothing is named `ment` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -359,9 +355,23 @@ Is there an `import` or `exposing` missing up-top?
 This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
 Let us know if you want to help!
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: list rest patterns in match expressions
-Let us know if you want to help!
+**DUPLICATE DEFINITION**
+The name `rest` is being redeclared in this scope.
+
+The redeclaration is here:
+**fuzz_crash_027.md:74:17:74:27:**
+```roc
+		[1, 2 | 5, 3, .. as rest] => 123
+```
+                ^^^^^^^^^^
+
+But `rest` was already defined here:
+**fuzz_crash_027.md:70:32:70:42:**
+```roc
+		"foo" | "bar" => 20[1, 2, 3, .. as rest] # Aftet
+```
+                               ^^^^^^^^^^
+
 
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
@@ -392,6 +402,18 @@ This feature is not yet implemented or doesn't have a proper error report yet: r
 Let us know if you want to help!
 
 **UNUSED VARIABLE**
+Variable ``rest`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_027.md:70:32:70:42:**
+```roc
+		"foo" | "bar" => 20[1, 2, 3, .. as rest] # Aftet
+```
+                               ^^^^^^^^^^
+
+
+**UNUSED VARIABLE**
 Variable ``ist`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_ist` to suppress this warning.
@@ -401,6 +423,18 @@ The unused variable is declared here:
 ist
 ```
 ^^^
+
+
+**UNUSED VARIABLE**
+Variable ``rest`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_027.md:74:17:74:27:**
+```roc
+		[1, 2 | 5, 3, .. as rest] => 123
+```
+                ^^^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -1463,8 +1497,9 @@ main! = |_| { # Yeah Ie
 									(patterns
 										(p-int @70.23-70.24)
 										(p-int @70.26-70.27)
-										(p-int @70.29-70.30)
-										(p-runtime-error @70.32-70.42 (tag "not_implemented")))))
+										(p-int @70.29-70.30))
+									(rest-at (index 3)
+										(p-assign @70.32-70.42 (ident "rest")))))
 							(value
 								(e-runtime-error (tag "ident_not_in_scope"))))
 						(branch
@@ -1473,8 +1508,9 @@ main! = |_| { # Yeah Ie
 									(patterns
 										(p-int @74.4-74.5)
 										(p-runtime-error @1.1-1.1 (tag "not_implemented"))
-										(p-int @74.14-74.15)
-										(p-runtime-error @74.17-74.27 (tag "not_implemented")))))
+										(p-int @74.14-74.15))
+									(rest-at (index 3)
+										(p-assign @74.17-74.27 (ident "rest")))))
 							(value
 								(e-int @74.32-74.35 (value "123"))))
 						(branch
