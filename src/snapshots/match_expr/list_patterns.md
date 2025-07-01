@@ -20,7 +20,7 @@ Nothing is named `acc` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: list rest patterns in match expressions
+This feature is not yet implemented or doesn't have a proper error report yet: full list rest pattern matching
 Let us know if you want to help!
 
 **UNDEFINED VARIABLE**
@@ -75,7 +75,7 @@ match numbers {
 					(p-list @3.5-3.24 (degenerate false)
 						(patterns
 							(p-assign @3.6-3.11 (ident "first"))
-							(p-runtime-error @3.13-3.23 (tag "not_implemented")))))
+							(p-assign @3.13-3.23 (ident "rest")))))
 				(value
 					(e-binop @3.28-4.2 (op "add")
 						(e-lookup-local @3.28-3.33

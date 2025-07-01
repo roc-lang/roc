@@ -20,11 +20,11 @@ Nothing is named `list` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: list rest patterns in match expressions
+This feature is not yet implemented or doesn't have a proper error report yet: full list rest pattern matching
 Let us know if you want to help!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: list rest patterns in match expressions
+This feature is not yet implemented or doesn't have a proper error report yet: full list rest pattern matching
 Let us know if you want to help!
 
 **DUPLICATE DEFINITION**
@@ -46,7 +46,7 @@ But `x` was already defined here:
 
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: list rest patterns in match expressions
+This feature is not yet implemented or doesn't have a proper error report yet: full list rest pattern matching
 Let us know if you want to help!
 
 # TOKENS
@@ -151,7 +151,7 @@ match list {
 					(p-list @5.5-5.23 (degenerate false)
 						(patterns
 							(p-assign @5.6-5.10 (ident "head"))
-							(p-runtime-error @5.12-5.22 (tag "not_implemented")))))
+							(p-assign @5.12-5.22 (ident "tail")))))
 				(value
 					(e-lookup-local @5.27-5.31
 						(pattern @5.6-5.10))))
@@ -161,7 +161,7 @@ match list {
 						(patterns
 							(p-applied-tag @6.6-6.9)
 							(p-applied-tag @6.11-6.14)
-							(p-runtime-error @6.16-6.26 (tag "not_implemented")))))
+							(p-assign @6.16-6.26 (ident "rest")))))
 				(value
 					(e-int @6.31-6.32 (value "3"))))
 			(branch
@@ -171,7 +171,7 @@ match list {
 							(p-assign @7.6-7.7 (ident "x"))
 							(p-assign @7.9-7.10 (ident "y"))
 							(p-assign @7.12-7.13 (ident "z"))
-							(p-runtime-error @7.15-7.25 (tag "not_implemented")))))
+							(p-assign @7.15-7.25 (ident "more")))))
 				(value
 					(e-binop @7.30-8.2 (op "add")
 						(e-lookup-local @7.30-7.31

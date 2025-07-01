@@ -2284,21 +2284,95 @@ fn canonicalize_pattern(
             // Mark the start of scratch patterns for the list elements
             const scratch_top = self.can_ir.store.scratchPatternTop();
 
+            // Create element type variable early so list rest patterns can use it
+            const elem_var = self.can_ir.env.types.fresh();
+
             // Iterate over the list patterns, canonicalizing each one
             const patterns_slice = self.parse_ir.store.patternSlice(e.patterns);
-            for (patterns_slice) |pattern_idx| {
+            for (patterns_slice, 0..) |pattern_idx, i| {
                 const ast_pattern = self.parse_ir.store.getPattern(pattern_idx);
 
                 // Handle list_rest patterns specially
                 if (ast_pattern == .list_rest) {
-                    // For now, we'll handle list_rest as a runtime error since it's not fully implemented in CIR
+                    // Validate that list rest patterns only appear at the end
+                    if (i != patterns_slice.len - 1) {
+                        const list_rest_region = self.parse_ir.tokenizedRegionToRegion(ast_pattern.list_rest.region);
+                        const feature = self.can_ir.env.strings.insert(gpa, "list rest patterns must appear at the end of list patterns");
+                        self.can_ir.pushDiagnostic(CIR.Diagnostic{ .pattern_not_canonicalized = .{
+                            .region = list_rest_region,
+                        } });
+                        self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
+                            .feature = feature,
+                            .region = list_rest_region,
+                        } });
+                        // Continue processing but mark as malformed
+                        const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .pattern_not_canonicalized = .{
+                            .region = list_rest_region,
+                        } });
+                        self.can_ir.store.scratch_patterns.append(gpa, malformed_idx);
+                        continue;
+                    }
                     const list_rest_region = self.parse_ir.tokenizedRegionToRegion(ast_pattern.list_rest.region);
-                    const feature = self.can_ir.env.strings.insert(gpa, "list rest patterns in match expressions");
-                    const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .not_implemented = .{
+
+                    // If the list rest pattern has a name, introduce it as a variable
+                    if (ast_pattern.list_rest.name) |name_tok| {
+                        if (self.parse_ir.tokens.resolveIdentifier(name_tok)) |ident_idx| {
+                            // Create an assign pattern for the rest variable
+                            const assign_idx = self.can_ir.store.addPattern(CIR.Pattern{ .assign = .{
+                                .ident = ident_idx,
+                                .region = list_rest_region,
+                            } });
+                            // Set the rest variable's type to be a list of the same element type
+                            const rest_list_type = Content{ .structure = .{ .list = elem_var } };
+                            _ = self.can_ir.setTypeVarAtPat(assign_idx, rest_list_type);
+
+                            // Introduce the identifier into scope mapping to this pattern node
+                            switch (self.scopeIntroduceInternal(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, ident_idx, assign_idx, false, true)) {
+                                .success => {},
+                                .shadowing_warning => |shadowed_pattern_idx| {
+                                    const shadowed_pattern = self.can_ir.store.getPattern(shadowed_pattern_idx);
+                                    const original_region = shadowed_pattern.toRegion();
+                                    self.can_ir.pushDiagnostic(CIR.Diagnostic{ .shadowing_warning = .{
+                                        .ident = ident_idx,
+                                        .region = list_rest_region,
+                                        .original_region = original_region,
+                                    } });
+                                },
+                                .top_level_var_error => {},
+                                .var_across_function_boundary => {
+                                    self.can_ir.pushDiagnostic(CIR.Diagnostic{ .ident_already_in_scope = .{
+                                        .ident = ident_idx,
+                                        .region = list_rest_region,
+                                    } });
+                                },
+                            }
+
+                            // Add the assignment pattern, but still mark list rest as not fully implemented
+                            self.can_ir.store.scratch_patterns.append(gpa, assign_idx);
+                        } else {
+                            const feature = self.can_ir.env.strings.insert(gpa, "list rest pattern with unresolvable name");
+                            const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .not_implemented = .{
+                                .feature = feature,
+                                .region = list_rest_region,
+                            } });
+                            self.can_ir.store.scratch_patterns.append(gpa, malformed_idx);
+                        }
+                    } else {
+                        // Unnamed list rest pattern i.e. `_ => ...`
+                        const feature = self.can_ir.env.strings.insert(gpa, "unnamed list rest patterns");
+                        const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .not_implemented = .{
+                            .feature = feature,
+                            .region = list_rest_region,
+                        } });
+                        self.can_ir.store.scratch_patterns.append(gpa, malformed_idx);
+                    }
+
+                    // Add a diagnostic indicating list rest patterns are not fully implemented yet
+                    const feature = self.can_ir.env.strings.insert(gpa, "full list rest pattern matching");
+                    self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
                         .feature = feature,
                         .region = list_rest_region,
                     } });
-                    self.can_ir.store.scratch_patterns.append(gpa, malformed_idx);
                 } else {
                     // Regular pattern - canonicalize it
                     if (self.canonicalize_pattern(pattern_idx)) |canonicalized| {
@@ -2316,9 +2390,8 @@ fn canonicalize_pattern(
             // Create span of the canonicalized patterns
             const patterns_span = self.can_ir.store.patternSpanFrom(scratch_top);
 
-            // Create fresh type variables for the list and elements
+            // Create fresh type variable for the list (element var was created earlier)
             const list_var = self.can_ir.env.types.fresh();
-            const elem_var = self.can_ir.env.types.fresh();
 
             // Create the list pattern
             const pattern_idx = self.can_ir.store.addPattern(CIR.Pattern{
