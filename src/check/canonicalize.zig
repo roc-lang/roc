@@ -1687,12 +1687,63 @@ pub fn canonicalize_expr(
 
             return expr_idx;
         },
-        .match => |_| {
-            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize match expression");
-            const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
-                .feature = feature,
-                .region = Region.zero(),
-            } });
+        .match => |m| {
+            const region = self.parse_ir.tokenizedRegionToRegion(m.region);
+
+            // Canonicalize the condition expression
+            const cond_expr = try self.canonicalize_expr(m.expr) orelse {
+                return null;
+            };
+
+            // Mark the start of scratch match branches
+            const scratch_top = self.can_ir.store.scratchMatchBranchTop();
+
+            // Process each branch
+            const branches_slice = self.parse_ir.store.matchBranchSlice(m.branches);
+            for (branches_slice) |ast_branch_idx| {
+                const ast_branch = self.parse_ir.store.getBranch(ast_branch_idx);
+                const branch_region = self.parse_ir.tokenizedRegionToRegion(ast_branch.region);
+
+                // Canonicalize the pattern
+                if (self.canonicalize_pattern(ast_branch.pattern)) |cir_pattern| {
+                    // Canonicalize the branch body
+                    if (try self.canonicalize_expr(ast_branch.body)) |body_expr| {
+                        // For now, create a span with just one pattern by storing it directly in extra_data
+                        const patterns_start = @as(u32, @intCast(self.can_ir.store.extra_data.items.len));
+                        self.can_ir.store.extra_data.append(self.can_ir.env.gpa, @intFromEnum(cir_pattern)) catch |err| exitOnOom(err);
+                        self.can_ir.store.extra_data.append(self.can_ir.env.gpa, @intFromBool(false)) catch |err| exitOnOom(err); // degenerate flag
+
+                        const patterns_span = CIR.Match.BranchPattern.Span{ .span = .{ .start = patterns_start, .len = 1 } };
+
+                        // Create the branch
+                        const cir_branch = CIR.Match.Branch{
+                            .patterns = patterns_span,
+                            .value = body_expr,
+                            .guard = null, // TODO: implement guard support
+                            .redundant = self.can_ir.pushFreshTypeVar(@enumFromInt(0), branch_region) catch |err| exitOnOom(err),
+                        };
+
+                        // Add the branch to the store and to scratch
+                        const branch_idx = self.can_ir.store.addMatchBranch(cir_branch);
+                        self.can_ir.store.addScratchMatchBranch(branch_idx);
+                    }
+                }
+            }
+
+            // Create span from scratch branches
+            const branches_span = self.can_ir.store.matchBranchSpanFrom(scratch_top);
+
+            // Create the match expression
+            const match_expr = CIR.Match{
+                .loc_cond = cond_expr,
+                .branches = branches_span,
+                .exhaustive = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region) catch |err| exitOnOom(err),
+                .region = region,
+            };
+
+            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_match = match_expr });
+            _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
+
             return expr_idx;
         },
         .dbg => |_| {

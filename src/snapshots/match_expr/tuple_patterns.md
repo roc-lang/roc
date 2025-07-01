@@ -40,9 +40,27 @@ Here is the problematic code:
               ^^^^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize match expression
-Let us know if you want to help!
+**UNDEFINED VARIABLE**
+Nothing is named `coord` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**DUPLICATE DEFINITION**
+The name `y` is being redeclared in this scope.
+
+The redeclaration is here:
+**tuple_patterns.md:5:9:5:10:**
+```roc
+    (x, y) => x
+```
+        ^
+
+But `y` was already defined here:
+**tuple_patterns.md:4:12:4:13:**
+```roc
+    (Zero, y) => y
+```
+           ^
+
 
 # TOKENS
 ~~~zig
@@ -94,9 +112,40 @@ match coord {
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "not_implemented"))
+(e-match @1.1-6.2
+	(match @1.1-6.2
+		(cond
+			(e-runtime-error (tag "ident_not_in_scope")))
+		(branches
+			(branch
+				(patterns
+					(p-tuple @2.5-2.17 (degenerate false)
+						(patterns
+							(p-applied-tag @2.6-2.10)
+							(p-applied-tag @2.12-2.16))))
+				(value
+					(e-string @2.21-2.29
+						(e-literal @2.22-2.28 (string "origin")))))
+			(branch
+				(patterns
+					(p-tuple @4.5-4.14 (degenerate false)
+						(patterns
+							(p-applied-tag @4.6-4.10)
+							(p-assign @4.12-4.13 (ident "y")))))
+				(value
+					(e-lookup-local @4.18-4.19
+						(pattern @4.12-4.13))))
+			(branch
+				(patterns
+					(p-tuple @5.5-5.11 (degenerate false)
+						(patterns
+							(p-assign @5.6-5.7 (ident "x"))
+							(p-assign @5.9-5.10 (ident "y")))))
+				(value
+					(e-lookup-local @5.15-5.16
+						(pattern @5.6-5.7)))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.1 (type "Error"))
+(expr @1.1-6.2 (type "*"))
 ~~~

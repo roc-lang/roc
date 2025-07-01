@@ -15,9 +15,61 @@ match list {
 }
 ~~~
 # PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `list` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize match expression
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize list pattern
 Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize list pattern
+Let us know if you want to help!
+
+**UNDEFINED VARIABLE**
+Nothing is named `x` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize list pattern
+Let us know if you want to help!
+
+**UNDEFINED VARIABLE**
+Nothing is named `first` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNDEFINED VARIABLE**
+Nothing is named `second` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize list pattern
+Let us know if you want to help!
+
+**UNDEFINED VARIABLE**
+Nothing is named `head` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize list pattern
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize list pattern
+Let us know if you want to help!
+
+**UNDEFINED VARIABLE**
+Nothing is named `x` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNDEFINED VARIABLE**
+Nothing is named `y` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNDEFINED VARIABLE**
+Nothing is named `z` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
@@ -85,9 +137,49 @@ match list {
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "not_implemented"))
+(e-match @1.1-8.2
+	(match @1.1-8.2
+		(cond
+			(e-runtime-error (tag "ident_not_in_scope")))
+		(branches
+			(branch
+				(patterns
+					(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+				(value
+					(e-int @2.11-2.12 (value "0"))))
+			(branch
+				(patterns
+					(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+				(value
+					(e-runtime-error (tag "ident_not_in_scope"))))
+			(branch
+				(patterns
+					(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+				(value
+					(e-binop @4.24-5.6 (op "add")
+						(e-runtime-error (tag "ident_not_in_scope"))
+						(e-runtime-error (tag "ident_not_in_scope")))))
+			(branch
+				(patterns
+					(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+				(value
+					(e-runtime-error (tag "ident_not_in_scope"))))
+			(branch
+				(patterns
+					(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+				(value
+					(e-int @6.31-6.32 (value "3"))))
+			(branch
+				(patterns
+					(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+				(value
+					(e-binop @7.30-8.2 (op "add")
+						(e-runtime-error (tag "ident_not_in_scope"))
+						(e-binop @7.34-8.2 (op "add")
+							(e-runtime-error (tag "ident_not_in_scope"))
+							(e-runtime-error (tag "ident_not_in_scope")))))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.1 (type "Error"))
+(expr @1.1-8.2 (type "*"))
 ~~~

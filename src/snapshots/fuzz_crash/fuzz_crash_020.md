@@ -233,20 +233,56 @@ Let us know if you want to help!
 Nothing is named `r` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**UNDEFINED VARIABLE**
+Nothing is named `x` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNDEFINED VARIABLE**
+Nothing is named `x` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize match expression
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize list pattern
+Let us know if you want to help!
+
+**UNDEFINED VARIABLE**
+Nothing is named `ment` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize list pattern
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize list pattern
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
 Let us know if you want to help!
 
 **UNUSED VARIABLE**
-Variable ``a`` is not used anywhere in your code.
+Variable ``lue`` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_a` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_lue` to suppress this warning.
 The unused variable is declared here:
-**fuzz_crash_020.md:50:2:50:3:**
+**fuzz_crash_020.md:52:11:52:14:**
 ```roc
-	a, #b,
+	match a {lue  {
 ```
- ^
+          ^^^
+
+
+**UNUSED VARIABLE**
+Variable ``er`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_er` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_020.md:57:2:57:4:**
+```roc
+	er #ent
+```
+ ^^
 
 
 **NOT IMPLEMENTED**
@@ -1055,7 +1091,86 @@ expect {
 		(e-lambda @49.6-71.7
 			(args
 				(p-assign @50.2-50.3 (ident "a")))
-			(e-runtime-error (tag "not_implemented"))))
+			(e-match @52.2-71.7
+				(match @52.2-71.7
+					(cond
+						(e-lookup-local @52.8-52.9
+							(pattern @50.2-50.3)))
+					(branches
+						(branch
+							(patterns
+								(p-assign @52.11-52.14 (ident "lue") (degenerate false)))
+							(value
+								(e-block @52.16-54.4
+									(e-runtime-error (tag "ident_not_in_scope")))))
+						(branch
+							(patterns
+								(p-applied-tag @55.3-55.7 (degenerate false)))
+							(value
+								(e-block @55.10-56.5
+									(e-runtime-error (tag "ident_not_in_scope")))))
+						(branch
+							(patterns
+								(p-assign @57.2-57.4 (ident "er") (degenerate false)))
+							(value
+								(e-int @58.4-58.5 (value "1"))))
+						(branch
+							(patterns
+								(p-str @58.6-58.7 (text """) (degenerate false)))
+							(value
+								(e-int @58.15-58.17 (value "20"))))
+						(branch
+							(patterns
+								(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+							(value
+								(e-runtime-error (tag "ident_not_in_scope"))))
+						(branch
+							(patterns
+								(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+							(value
+								(e-int @60.16-60.19 (value "123"))))
+						(branch
+							(patterns
+								(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+							(value
+								(e-int @62.5-62.7 (value "23"))))
+						(branch
+							(patterns
+								(p-small-dec @63.3-63.6 (degenerate false)))
+							(value
+								(e-int @63.7-63.10 (value "314"))))
+						(branch
+							(patterns
+								(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+							(value
+								(e-int @64.18-64.21 (value "314"))))
+						(branch
+							(patterns
+								(p-tuple @65.3-65.8 (degenerate false)
+									(patterns
+										(p-int @65.4-65.5))))
+							(value
+								(e-int @65.12-65.15 (value "123"))))
+						(branch
+							(patterns
+								(p-tuple @66.3-66.12 (degenerate false)
+									(patterns
+										(p-int @66.4-66.5)
+										(p-int @66.7-66.8)
+										(p-int @66.10-66.11))))
+							(value
+								(e-int @66.12-66.15 (value "123"))))
+						(branch
+							(patterns
+								(p-record-destructure @67.3-67.7 (degenerate false)
+									(destructs)))
+							(value
+								(e-int @67.11-67.13 (value "12"))))
+						(branch
+							(patterns
+								(p-applied-tag @68.3-68.10 (degenerate false)))
+							(value
+								(e-int @68.14-68.16 (value "12")))))))))
 	(d-let
 		(p-assign @75.1-75.3 (ident "ma"))
 		(e-lambda @75.5-111.2
@@ -1257,13 +1372,13 @@ expect {
 	(defs
 		(patt @35.1-35.4 (type "* ? Num(*)"))
 		(patt @38.1-38.4 (type "[Rum]* ? Error"))
-		(patt @49.1-49.3 (type "* ? Error"))
+		(patt @49.1-49.3 (type "* ? *"))
 		(patt @75.1-75.3 (type "* ? *"))
 		(patt @114.1-114.2 (type "{}")))
 	(expressions
 		(expr @35.7-37.4 (type "* ? Num(*)"))
 		(expr @38.7-47.2 (type "[Rum]* ? Error"))
-		(expr @49.6-71.7 (type "* ? Error"))
+		(expr @49.6-71.7 (type "* ? *"))
 		(expr @75.5-111.2 (type "* ? *"))
 		(expr @114.5-114.7 (type "{}"))))
 ~~~

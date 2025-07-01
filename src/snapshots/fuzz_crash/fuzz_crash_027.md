@@ -332,20 +332,64 @@ This feature is not yet implemented or doesn't have a proper error report yet: c
 Let us know if you want to help!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize match expression
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
 Let us know if you want to help!
 
-**UNUSED VARIABLE**
-Variable ``a`` is not used anywhere in your code.
+**UNDEFINED VARIABLE**
+Nothing is named `x` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-If you don't need this variable, prefix it with an underscore like `_a` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:61:2:61:3:**
-```roc
-	a, #rg
-```
- ^
+**UNDEFINED VARIABLE**
+Nothing is named `x` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize list pattern
+Let us know if you want to help!
+
+**UNDEFINED VARIABLE**
+Nothing is named `ment` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize list pattern
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize list pattern
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize local_dispatch expression
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
+Let us know if you want to help!
 
 **UNUSED VARIABLE**
 Variable ``b`` is not used anywhere in your code.
@@ -1372,7 +1416,103 @@ main! = |_| { # Yeah Ie
 			(args
 				(p-assign @61.2-61.3 (ident "a"))
 				(p-assign @62.2-62.3 (ident "b")))
-			(e-runtime-error (tag "not_implemented"))))
+			(e-match @64.2-96.7
+				(match @64.2-96.7
+					(cond
+						(e-lookup-local @64.8-64.9
+							(pattern @61.2-61.3)))
+					(branches
+						(branch
+							(patterns
+								(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+							(value
+								(e-block @64.24-66.4
+									(s-expr @65.4-65.7
+										(e-runtime-error (tag "ident_not_in_scope")))
+									(e-runtime-error (tag "ident_not_in_scope")))))
+						(branch
+							(patterns
+								(p-applied-tag @67.3-67.7 (degenerate false)))
+							(value
+								(e-int @67.12-67.13 (value "1"))))
+						(branch
+							(patterns
+								(p-str @68.3-68.4 (text """) (degenerate false)))
+							(value
+								(e-int @69.1-69.3 (value "0"))))
+						(branch
+							(patterns
+								(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+							(value
+								(e-int @70.20-70.22 (value "20"))))
+						(branch
+							(patterns
+								(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+							(value
+								(e-runtime-error (tag "ident_not_in_scope"))))
+						(branch
+							(patterns
+								(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+							(value
+								(e-int @74.32-74.35 (value "123"))))
+						(branch
+							(patterns
+								(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+							(value
+								(e-int @77.8-77.11 (value "123"))))
+						(branch
+							(patterns
+								(p-small-dec @78.3-78.7 (degenerate false)))
+							(value
+								(e-int @78.11-78.14 (value "314"))))
+						(branch
+							(patterns
+								(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+							(value
+								(e-int @79.18-79.21 (value "314"))))
+						(branch
+							(patterns
+								(p-tuple @80.3-80.12 (degenerate false)
+									(patterns
+										(p-int @80.4-80.5)
+										(p-int @80.7-80.8)
+										(p-int @80.10-80.11))))
+							(value
+								(e-int @80.16-80.19 (value "123"))))
+						(branch
+							(patterns
+								(p-tuple @81.3-81.16 (degenerate false)
+									(patterns
+										(p-int @81.4-81.5)
+										(p-runtime-error @1.1-1.1 (tag "not_implemented"))
+										(p-int @81.14-81.15))))
+							(value
+								(e-int @81.20-81.23 (value "123"))))
+						(branch
+							(patterns
+								(p-runtime-error @82.5-82.12 (tag "not_implemented") (degenerate false)))
+							(value
+								(e-runtime-error (tag "not_implemented"))))
+						(branch
+							(patterns
+								(p-runtime-error @84.4-86.8 (tag "not_implemented") (degenerate false)))
+							(value
+								(e-int @88.11-88.13 (value "12"))))
+						(branch
+							(patterns
+								(p-runtime-error @89.5-89.12 (tag "not_implemented") (degenerate false)))
+							(value
+								(e-int @89.29-89.31 (value "12"))))
+						(branch
+							(patterns
+								(p-runtime-error @91.4-91.11 (tag "not_implemented") (degenerate false)))
+							(value
+								(e-int @92.9-92.11 (value "12"))))
+						(branch
+							(patterns
+								(p-applied-tag @93.3-93.10 (degenerate false)))
+							(value
+								(e-int @93.14-93.20 (value "121000")))))))))
 	(d-let
 		(p-assign @100.1-100.6 (ident "main!"))
 		(e-lambda @100.9-159.2
@@ -1640,11 +1780,11 @@ main! = |_| { # Yeah Ie
 	(defs
 		(patt @45.1-45.4 (type "* ? Num(*)"))
 		(patt @48.1-48.8 (type "U64 -> U64"))
-		(patt @60.1-60.11 (type "*, * ? Error"))
+		(patt @60.1-60.11 (type "*, * ? *"))
 		(patt @100.1-100.6 (type "List -> Error")))
 	(expressions
 		(expr @45.7-47.8 (type "* ? Num(*)"))
 		(expr @48.11-58.2 (type "U64 -> U64"))
-		(expr @60.14-96.7 (type "*, * ? Error"))
+		(expr @60.14-96.7 (type "*, * ? *"))
 		(expr @100.9-159.2 (type "List -> Error"))))
 ~~~

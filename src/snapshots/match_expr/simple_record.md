@@ -11,9 +11,9 @@ match person {
 }
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize match expression
-Let us know if you want to help!
+**UNDEFINED VARIABLE**
+Nothing is named `person` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
@@ -45,9 +45,31 @@ match person {
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "not_implemented"))
+(e-match @1.1-4.2
+	(match @1.1-4.2
+		(cond
+			(e-runtime-error (tag "ident_not_in_scope")))
+		(branches
+			(branch
+				(patterns
+					(p-record-destructure @2.5-2.13 (degenerate false)
+						(destructs
+							(record-destruct @2.7-2.13 (label "name") (ident "name")
+								(required)))))
+				(value
+					(e-lookup-local @2.17-2.21
+						(pattern @2.7-2.13))))
+			(branch
+				(patterns
+					(p-record-destructure @3.5-3.12 (degenerate false)
+						(destructs
+							(record-destruct @3.7-3.12 (label "age") (ident "age")
+								(required)))))
+				(value
+					(e-lookup-local @3.16-3.19
+						(pattern @3.7-3.12)))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.1 (type "Error"))
+(expr @1.1-4.2 (type "*"))
 ~~~

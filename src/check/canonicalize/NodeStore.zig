@@ -610,19 +610,24 @@ pub fn getMatchBranch(store: *const NodeStore, branch: CIR.Match.Branch.Idx) CIR
     const extra_start = node.data_1;
     const extra_data = store.extra_data.items[extra_start..];
 
-    const patterns_start = extra_data[0];
-    const patterns_len = extra_data[1];
-    const value_idx = @as(CIR.Expr.Idx, @enumFromInt(extra_data[2]));
-    const guard_idx_raw = extra_data[3];
-    const guard_idx = if (guard_idx_raw == 0) null else @as(CIR.Expr.Idx, @enumFromInt(guard_idx_raw));
-    const redundant = @as(CIR.RedundantMark, @enumFromInt(extra_data[4]));
+    const patterns: CIR.Match.BranchPattern.Span = .{ .span = .{ .start = extra_data[0], .len = extra_data[1] } };
+    const value_idx: CIR.Expr.Idx = @enumFromInt(extra_data[2]);
+    const guard_idx: ?CIR.Expr.Idx = if (extra_data[3] == 0) null else @enumFromInt(extra_data[3]);
+    const redundant: types.Var = @enumFromInt(extra_data[4]);
 
     return CIR.Match.Branch{
-        .patterns = .{ .span = .{ .start = patterns_start, .len = patterns_len } },
+        .patterns = patterns,
         .value = value_idx,
         .guard = guard_idx,
         .redundant = redundant,
     };
+}
+
+/// Returns a slice of match branches from the given span.
+pub fn matchBranchSlice(store: *const NodeStore, span: CIR.Match.Branch.Span) []CIR.Match.Branch.Idx {
+    const slice = store.extra_data.items[span.span.start..(span.span.start + span.span.len)];
+    const result: []CIR.Match.Branch.Idx = @ptrCast(@alignCast(slice));
+    return result;
 }
 
 /// Retrieves a 'where' clause from the store.
@@ -992,7 +997,7 @@ pub fn getAnnotation(store: *const NodeStore, annotation: CIR.Annotation.Idx) CI
 }
 
 /// Retrieves an exposed item from the store.
-pub fn getExposedItem(store: *NodeStore, exposedItem: CIR.ExposedItem.Idx) CIR.ExposedItem {
+pub fn getExposedItem(store: *const NodeStore, exposedItem: CIR.ExposedItem.Idx) CIR.ExposedItem {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(exposedItem));
     const node = store.nodes.get(node_idx);
 
@@ -1486,7 +1491,7 @@ pub fn addMatchBranch(store: *NodeStore, whenBranch: CIR.Match.Branch) CIR.Match
         .data_1 = 0,
         .data_2 = 0,
         .data_3 = 0,
-        .region = base.Region.empty(), // TODO should WhenBranch have a region field?
+        .region = base.Region.zero(), // TODO should WhenBranch have a region field?
         .tag = .when_branch,
     };
 
@@ -2688,6 +2693,30 @@ pub fn addTypeVarSlot(store: *NodeStore, parent_node_idx: Node.Idx, region: base
         .region = region,
     });
     return @enumFromInt(@intFromEnum(nid));
+}
+
+/// Returns the top index for scratch match branches.
+pub fn scratchMatchBranchTop(store: *NodeStore) u32 {
+    return store.scratch_match_branches.top();
+}
+
+/// Adds a scratch match branch to temporary storage.
+pub fn addScratchMatchBranch(store: *NodeStore, idx: CIR.Match.Branch.Idx) void {
+    store.scratch_match_branches.append(store.gpa, idx);
+}
+
+/// Creates a span from the scratch match branches starting at the given index.
+pub fn matchBranchSpanFrom(store: *NodeStore, start: u32) CIR.Match.Branch.Span {
+    const end = store.scratch_match_branches.top();
+    defer store.scratch_match_branches.clearFrom(start);
+    var i = @as(usize, @intCast(start));
+    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
+    std.debug.assert(end >= i);
+    while (i < end) {
+        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_match_branches.items.items[i])) catch |err| exitOnOom(err);
+        i += 1;
+    }
+    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
 }
 
 /// Calculate the size needed to serialize this NodeStore

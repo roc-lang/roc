@@ -11,9 +11,29 @@ match numbers {
 }
 ~~~
 # PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `numbers` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize match expression
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize list pattern
 Let us know if you want to help!
+
+**UNDEFINED VARIABLE**
+Nothing is named `acc` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize list pattern
+Let us know if you want to help!
+
+**UNDEFINED VARIABLE**
+Nothing is named `first` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNDEFINED VARIABLE**
+Nothing is named `acc` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
@@ -47,9 +67,25 @@ match numbers {
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "not_implemented"))
+(e-match @1.1-4.2
+	(match @1.1-4.2
+		(cond
+			(e-runtime-error (tag "ident_not_in_scope")))
+		(branches
+			(branch
+				(patterns
+					(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+				(value
+					(e-runtime-error (tag "ident_not_in_scope"))))
+			(branch
+				(patterns
+					(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+				(value
+					(e-binop @3.28-4.2 (op "add")
+						(e-runtime-error (tag "ident_not_in_scope"))
+						(e-runtime-error (tag "ident_not_in_scope"))))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.1 (type "Error"))
+(expr @1.1-4.2 (type "*"))
 ~~~

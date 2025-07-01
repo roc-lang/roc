@@ -12,9 +12,9 @@ match color {
 }
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize match expression
-Let us know if you want to help!
+**UNDEFINED VARIABLE**
+Nothing is named `color` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
@@ -49,9 +49,28 @@ match color {
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "not_implemented"))
+(e-match @1.1-5.2
+	(match @1.1-5.2
+		(cond
+			(e-runtime-error (tag "ident_not_in_scope")))
+		(branches
+			(branch
+				(patterns
+					(p-applied-tag @2.5-2.8 (degenerate false)))
+				(value
+					(e-int @2.12-2.13 (value "1"))))
+			(branch
+				(patterns
+					(p-applied-tag @3.5-3.9 (degenerate false)))
+				(value
+					(e-int @3.13-3.14 (value "2"))))
+			(branch
+				(patterns
+					(p-applied-tag @4.5-4.10 (degenerate false)))
+				(value
+					(e-int @4.14-4.15 (value "3")))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.1 (type "Error"))
+(expr @1.1-5.2 (type "*"))
 ~~~

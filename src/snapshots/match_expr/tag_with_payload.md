@@ -12,9 +12,27 @@ match shape {
 }
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize match expression
-Let us know if you want to help!
+**UNDEFINED VARIABLE**
+Nothing is named `shape` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**DUPLICATE DEFINITION**
+The name `height` is being redeclared in this scope.
+
+The redeclaration is here:
+**tag_with_payload.md:4:20:4:26:**
+```roc
+    Triangle(base, height) => 0.5 * base * height
+```
+                   ^^^^^^
+
+But `height` was already defined here:
+**tag_with_payload.md:3:22:3:28:**
+```roc
+    Rectangle(width, height) => width * height
+```
+                     ^^^^^^
+
 
 # TOKENS
 ~~~zig
@@ -64,9 +82,44 @@ match shape {
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "not_implemented"))
+(e-match @1.1-5.2
+	(match @1.1-5.2
+		(cond
+			(e-runtime-error (tag "ident_not_in_scope")))
+		(branches
+			(branch
+				(patterns
+					(p-applied-tag @2.5-2.19 (degenerate false)))
+				(value
+					(e-binop @2.23-3.14 (op "mul")
+						(e-dec-small @2.23-2.27 (numerator "314") (denominator-power-of-ten "2") (value "3.14"))
+						(e-binop @2.30-3.14 (op "mul")
+							(e-lookup-local @2.30-2.36
+								(pattern @2.12-2.18))
+							(e-lookup-local @2.39-2.45
+								(pattern @2.12-2.18))))))
+			(branch
+				(patterns
+					(p-applied-tag @3.5-3.29 (degenerate false)))
+				(value
+					(e-binop @3.33-4.13 (op "mul")
+						(e-lookup-local @3.33-3.38
+							(pattern @3.15-3.20))
+						(e-lookup-local @3.41-3.47
+							(pattern @3.22-3.28)))))
+			(branch
+				(patterns
+					(p-applied-tag @4.5-4.27 (degenerate false)))
+				(value
+					(e-binop @4.31-5.2 (op "mul")
+						(e-dec-small @4.31-4.34 (numerator "5") (denominator-power-of-ten "1") (value "0.5"))
+						(e-binop @4.37-5.2 (op "mul")
+							(e-lookup-local @4.37-4.41
+								(pattern @4.14-4.18))
+							(e-lookup-local @4.44-4.50
+								(pattern @4.20-4.26)))))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.1 (type "Error"))
+(expr @1.1-5.2 (type "*"))
 ~~~

@@ -13,9 +13,41 @@ match data {
 }
 ~~~
 # PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `data` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize match expression
+This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
 Let us know if you want to help!
+
+**UNDEFINED VARIABLE**
+Nothing is named `x` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNDEFINED VARIABLE**
+Nothing is named `len` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNDEFINED VARIABLE**
+Nothing is named `rest` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize list pattern
+Let us know if you want to help!
+
+**UNDEFINED VARIABLE**
+Nothing is named `value` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNDEFINED VARIABLE**
+Nothing is named `y` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
@@ -76,9 +108,40 @@ match data {
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "not_implemented"))
+(e-match @1.1-6.2
+	(match @1.1-6.2
+		(cond
+			(e-runtime-error (tag "ident_not_in_scope")))
+		(branches
+			(branch
+				(patterns
+					(p-applied-tag @2.5-2.49 (degenerate false)))
+				(value
+					(e-binop @2.53-3.14 (op "add")
+						(e-runtime-error (tag "ident_not_in_scope"))
+						(e-call @2.57-2.71
+							(e-runtime-error (tag "ident_not_in_scope"))
+							(e-runtime-error (tag "ident_not_in_scope"))))))
+			(branch
+				(patterns
+					(p-applied-tag @3.5-3.29 (degenerate false)))
+				(value
+					(e-int @3.33-3.34 (value "0"))))
+			(branch
+				(patterns
+					(p-applied-tag @4.5-4.36 (degenerate false)))
+				(value
+					(e-binop @4.40-5.11 (op "add")
+						(e-runtime-error (tag "ident_not_in_scope"))
+						(e-runtime-error (tag "ident_not_in_scope")))))
+			(branch
+				(patterns
+					(p-applied-tag @5.5-5.14 (degenerate false)))
+				(value
+					(e-lookup-local @5.18-5.19
+						(pattern @5.12-5.13)))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.1 (type "Error"))
+(expr @1.1-6.2 (type "*"))
 ~~~
