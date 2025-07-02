@@ -4,6 +4,7 @@ const Allocator = std.mem.Allocator;
 const base = @import("base.zig");
 const canonicalize = @import("check/canonicalize.zig");
 const types_mod = @import("types.zig");
+const types_problem_mod = @import("check/check_types/problem.zig");
 const Solver = @import("check/check_types.zig");
 const CIR = canonicalize.CIR;
 const parse = @import("check/parse.zig");
@@ -914,22 +915,21 @@ fn generateProblemsSection(output: *DualOutput, parse_ast: *AST, can_ir: *CIR, s
     }
 
     // Check Types Problems
-    var problem_buf = std.ArrayList(u8).init(output.gpa);
-    defer problem_buf.deinit();
+    var report_builder = types_problem_mod.ReportBuilder.init(
+        output.gpa,
+        module_env,
+        can_ir,
+        &solver.snapshots,
+        content.source,
+        snapshot_path,
+    );
+    defer report_builder.deinit();
 
     var problems_itr = solver.problems.problems.iterIndices();
     while (problems_itr.next()) |problem_idx| {
         check_types_problem += 1;
         const problem = solver.problems.problems.get(problem_idx);
-        var report: reporting.Report = problem.buildReport(
-            output.gpa,
-            &problem_buf,
-            module_env,
-            can_ir,
-            &solver.snapshots,
-            content.source,
-            snapshot_path,
-        ) catch |err| {
+        var report: reporting.Report = report_builder.build(problem) catch |err| {
             try output.md_writer.print("Error creating type checking report: {}\n", .{err});
             try output.html_writer.print("                    <p>Error creating type checking report: {}</p>\n", .{err});
             continue;

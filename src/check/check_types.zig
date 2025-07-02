@@ -311,8 +311,8 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!void {
                 const result = self.unify(elem_var, @enumFromInt(@intFromEnum(elem_expr_id)));
                 self.setDetailIfTypeMismatch(result, problem.TypeMismatchDetail{ .incompatible_list_elements = .{
                     .last_elem_expr = last_elem_idx,
-                    .incompatible_elem_index = i,
-                    .list_length = elems.len,
+                    .incompatible_elem_index = @intCast(i),
+                    .list_length = @intCast(elems.len),
                 } });
 
                 if (!result.isOk()) {
@@ -531,7 +531,7 @@ pub fn checkIfElseExpr(self: *Self, if_expr_idx: CIR.Expr.Idx, if_: CIR.If) Allo
     const branch_var = @as(Var, @enumFromInt(@intFromEnum(first_branch.body)));
 
     // Total number of branches (including final else)
-    const num_branches = branches.len + 1;
+    const num_branches: u32 = @intCast(branches.len + 1);
 
     var last_if_branch = first_branch_idx;
     for (branches[1..], 1..) |branch_idx, cur_index| {
@@ -551,7 +551,7 @@ pub fn checkIfElseExpr(self: *Self, if_expr_idx: CIR.Expr.Idx, if_: CIR.If) Allo
             .parent_if_expr = if_expr_idx,
             .last_if_branch = last_if_branch,
             .num_branches = num_branches,
-            .problem_branch_index = cur_index,
+            .problem_branch_index = @intCast(cur_index),
         } });
 
         if (!body_result.isOk()) {
@@ -617,10 +617,10 @@ pub fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, match: CIR.Match) All
         const ptrn_result = self.unify(cond_var, branch_ptrn_var);
         self.setDetailIfTypeMismatch(ptrn_result, problem.TypeMismatchDetail{ .incompatible_match_patterns = .{
             .match_expr = expr_idx,
-            .num_branches = match.branches.span.len,
+            .num_branches = @intCast(match.branches.span.len),
             .problem_branch_index = 0,
-            .num_patterns = first_branch_ptrn_idxs.len,
-            .problem_pattern_index = cur_ptrn_index,
+            .num_patterns = @intCast(first_branch_ptrn_idxs.len),
+            .problem_pattern_index = @intCast(cur_ptrn_index),
         } });
     }
 
@@ -644,10 +644,10 @@ pub fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, match: CIR.Match) All
             const ptrn_result = self.unify(cond_var, branch_ptrn_var);
             self.setDetailIfTypeMismatch(ptrn_result, problem.TypeMismatchDetail{ .incompatible_match_patterns = .{
                 .match_expr = expr_idx,
-                .num_branches = match.branches.span.len,
-                .problem_branch_index = branch_cur_index,
-                .num_patterns = branch_ptrn_idxs.len,
-                .problem_pattern_index = cur_ptrn_index,
+                .num_branches = @intCast(match.branches.span.len),
+                .problem_branch_index = @intCast(branch_cur_index),
+                .num_patterns = @intCast(branch_ptrn_idxs.len),
+                .problem_pattern_index = @intCast(cur_ptrn_index),
             } });
         }
 
@@ -656,8 +656,8 @@ pub fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, match: CIR.Match) All
         const branch_result = self.unify(branch_var, @enumFromInt(@intFromEnum(branch.value)));
         self.setDetailIfTypeMismatch(branch_result, problem.TypeMismatchDetail{ .incompatible_match_branches = .{
             .match_expr = expr_idx,
-            .num_branches = match.branches.span.len,
-            .problem_branch_index = branch_cur_index,
+            .num_branches = @intCast(match.branches.span.len),
+            .problem_branch_index = @intCast(branch_cur_index),
         } });
 
         if (!branch_result.isOk()) {
@@ -678,10 +678,10 @@ pub fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, match: CIR.Match) All
                     const ptrn_result = self.unify(cond_var, other_branch_ptrn_var);
                     self.setDetailIfTypeMismatch(ptrn_result, problem.TypeMismatchDetail{ .incompatible_match_patterns = .{
                         .match_expr = expr_idx,
-                        .num_branches = match.branches.span.len,
-                        .problem_branch_index = other_branch_cur_index,
-                        .num_patterns = other_branch_ptrn_idxs.len,
-                        .problem_pattern_index = other_cur_ptrn_index,
+                        .num_branches = @intCast(match.branches.span.len),
+                        .problem_branch_index = @intCast(other_branch_cur_index),
+                        .num_patterns = @intCast(other_branch_ptrn_idxs.len),
+                        .problem_pattern_index = @intCast(other_cur_ptrn_index),
                     } });
                 }
 
@@ -711,11 +711,7 @@ fn setDetailIfTypeMismatch(self: *Self, result: unifier.Result, mismatch_detail:
                 .type_mismatch => |mismatch| {
                     self.problems.problems.set(problem_idx, .{
                         .type_mismatch = .{
-                            .expected_var = mismatch.expected_var,
-                            .expected = mismatch.expected,
-                            .actual_var = mismatch.actual_var,
-                            .actual = mismatch.actual,
-                            // Add detail to type mismatch
+                            .types = mismatch.types,
                             .detail = mismatch_detail,
                         },
                     });
