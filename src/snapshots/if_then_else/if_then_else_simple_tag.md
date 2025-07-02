@@ -34,13 +34,9 @@ NO CHANGE
 	(if-branches
 		(if-branch
 			(e-tag @1.4-1.8 (name "True") (args "TODO"))
-			(e-call @1.9-1.14
-				(e-tag @1.9-1.11 (name "Ok") (args "TODO"))
-				(e-int @1.12-1.13 (value "0")))))
+			(e-tag @1.9-1.14 (name "Ok") (args "TODO"))))
 	(if-else
-		(e-call @1.20-1.26
-			(e-tag @1.20-1.23 (name "Err") (args "TODO"))
-			(e-int @1.24-1.25 (value "1")))))
+		(e-tag @1.20-1.26 (name "Err") (args "TODO"))))
 ~~~
 # TYPES
 ~~~clojure

@@ -292,7 +292,7 @@ fn processRocFileAsSnapshot(allocator: Allocator, output_path: []const u8, roc_c
     };
     defer solver.deinit();
 
-    solver.checkDefs();
+    try solver.checkDefs();
 
     // Create content structure
     const content = Content{
