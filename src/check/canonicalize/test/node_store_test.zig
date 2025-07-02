@@ -185,17 +185,13 @@ test "NodeStore round trip - Expressions" {
         },
     });
     try expressions.append(CIR.Expr{
-        .e_lookup = .{
-            .local = .{
-                .pattern_idx = @enumFromInt(234),
-                .region = from_raw_offsets(901, 1234),
-            },
+        .e_lookup_local = .{
+            .pattern_idx = @enumFromInt(234),
+            .region = from_raw_offsets(901, 1234),
         },
     });
     try expressions.append(CIR.Expr{
-        .e_lookup = .{
-            .external = @enumFromInt(345),
-        },
+        .e_lookup_external = @enumFromInt(345),
     });
     try expressions.append(CIR.Expr{
         .e_list = .{
@@ -220,7 +216,7 @@ test "NodeStore round trip - Expressions" {
     });
     try expressions.append(CIR.Expr{
         .e_if = .{
-            .branches = CIR.IfBranch.Span{ .span = base.DataSpan.init(567, 890) },
+            .branches = CIR.Expr.IfBranch.Span{ .span = base.DataSpan.init(567, 890) },
             .final_else = @enumFromInt(1234),
             .region = from_raw_offsets(1345, 1678),
         },

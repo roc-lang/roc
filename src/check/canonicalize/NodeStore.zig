@@ -27,7 +27,7 @@ scratch_exprs: base.Scratch(CIR.Expr.Idx),
 scratch_record_fields: base.Scratch(CIR.RecordField.Idx),
 scratch_match_branches: base.Scratch(CIR.Expr.Match.Branch.Idx),
 scratch_match_branch_patterns: base.Scratch(CIR.Expr.Match.BranchPattern.Idx),
-scratch_if_branches: base.Scratch(CIR.IfBranch.Idx),
+scratch_if_branches: base.Scratch(CIR.Expr.IfBranch.Idx),
 scratch_where_clauses: base.Scratch(CIR.WhereClause.Idx),
 scratch_patterns: base.Scratch(CIR.Pattern.Idx),
 scratch_pattern_record_fields: base.Scratch(CIR.PatternRecordField.Idx),
@@ -59,7 +59,7 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) NodeStore {
         .scratch_record_destructs = base.Scratch(CIR.Pattern.RecordDestruct.Idx).init(gpa),
         .scratch_match_branches = base.Scratch(CIR.Expr.Match.Branch.Idx).init(gpa),
         .scratch_match_branch_patterns = base.Scratch(CIR.Expr.Match.BranchPattern.Idx).init(gpa),
-        .scratch_if_branches = base.Scratch(CIR.IfBranch.Idx).init(gpa),
+        .scratch_if_branches = base.Scratch(CIR.Expr.IfBranch.Idx).init(gpa),
         .scratch_type_annos = base.Scratch(CIR.TypeAnno.Idx).init(gpa),
         .scratch_anno_record_fields = base.Scratch(CIR.TypeAnno.RecordField.Idx).init(gpa),
         .scratch_exposed_items = base.Scratch(CIR.ExposedItem.Idx).init(gpa),
@@ -96,7 +96,7 @@ pub fn deinit(store: *NodeStore) void {
 /// Count of the diagnostic nodes in the CIR
 pub const CIR_DIAGNOSTIC_NODE_COUNT = 30;
 /// Count of the expression nodes in the CIR
-pub const CIR_EXPR_NODE_COUNT = 24;
+pub const CIR_EXPR_NODE_COUNT = 25;
 /// Count of the statement nodes in the CIR
 pub const CIR_STATEMENT_NODE_COUNT = 11;
 /// Count of the type annotation nodes in the CIR
@@ -266,15 +266,15 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
     switch (node.tag) {
         .expr_var => {
             return CIR.Expr{
-                .e_lookup = .{ .local = .{
+                .e_lookup_local = .{
                     .pattern_idx = @enumFromInt(node.data_1),
                     .region = node.region,
-                } },
+                },
             };
         },
         .expr_external_lookup => {
             // Handle external lookups
-            return CIR.Expr{ .e_lookup = .{ .external = @enumFromInt(node.data_1) } };
+            return CIR.Expr{ .e_lookup_external = @enumFromInt(node.data_1) };
         },
         .expr_int => {
             // Read i128 from extra_data (stored as 4 u32s in data_1)
@@ -540,7 +540,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             const final_else: CIR.Expr.Idx = @enumFromInt(extra_data[2]);
 
             // Reconstruct the if expression from node data
-            const branches_span = CIR.IfBranch.Span{ .span = .{
+            const branches_span = CIR.Expr.IfBranch.Span{ .span = .{
                 .start = branches_span_start,
                 .len = branches_span_end,
             } };
@@ -1199,21 +1199,17 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
     };
 
     switch (expr) {
-        .e_lookup => |e| {
-            switch (e) {
-                .local => |local| {
-                    node.region = local.region;
-                    node.tag = .expr_var;
-                    node.data_1 = @intFromEnum(local.pattern_idx);
-                },
-                .external => |external_idx| {
-                    // For external lookups, store the external decl index
-                    // Use external lookup tag to distinguish from local lookups
-                    node.region = base.Region.zero();
-                    node.tag = .expr_external_lookup;
-                    node.data_1 = @intFromEnum(external_idx);
-                },
-            }
+        .e_lookup_local => |local| {
+            node.region = local.region;
+            node.tag = .expr_var;
+            node.data_1 = @intFromEnum(local.pattern_idx);
+        },
+        .e_lookup_external => |external_idx| {
+            // For external lookups, store the external decl index
+            // Use external lookup tag to distinguish from local lookups
+            node.region = base.Region.zero();
+            node.tag = .expr_external_lookup;
+            node.data_1 = @intFromEnum(external_idx);
         },
         .e_int => |e| {
             node.region = e.region;
@@ -1997,13 +1993,13 @@ pub fn getRecordDestruct(store: *const NodeStore, idx: CIR.Pattern.RecordDestruc
 }
 
 /// Retrieves an if branch from the store.
-pub fn getIfBranch(store: *const NodeStore, if_branch_idx: CIR.IfBranch.Idx) CIR.IfBranch {
+pub fn getIfBranch(store: *const NodeStore, if_branch_idx: CIR.Expr.IfBranch.Idx) CIR.Expr.IfBranch {
     const nid: Node.Idx = @enumFromInt(@intFromEnum(if_branch_idx));
     const node = store.nodes.get(nid);
 
     std.debug.assert(node.tag == .if_branch);
 
-    return CIR.IfBranch{
+    return CIR.Expr.IfBranch{
         .cond = @enumFromInt(node.data_1),
         .body = @enumFromInt(node.data_2),
         .region = node.region,
@@ -2276,8 +2272,8 @@ pub fn sliceRecordFields(store: *const NodeStore, span: CIR.RecordField.Span) []
 }
 
 /// Retrieve a slice of IfBranch Idx's from a span
-pub fn sliceIfBranches(store: *const NodeStore, span: CIR.IfBranch.Span) []CIR.IfBranch.Idx {
-    return store.sliceFromSpan(CIR.IfBranch.Idx, span.span);
+pub fn sliceIfBranches(store: *const NodeStore, span: CIR.Expr.IfBranch.Span) []CIR.Expr.IfBranch.Idx {
+    return store.sliceFromSpan(CIR.Expr.IfBranch.Idx, span.span);
 }
 
 /// Retrieve a slice of Match.Branch Idx's from a span
@@ -2301,8 +2297,8 @@ pub fn lastFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSp
 }
 
 /// Retrieve a slice of IfBranch Idx's from a span
-pub fn firstFromIfBranches(store: *const NodeStore, span: CIR.IfBranch.Span) CIR.IfBranch.Idx {
-    return store.firstFromSpan(CIR.IfBranch.Idx, span.span);
+pub fn firstFromIfBranches(store: *const NodeStore, span: CIR.Expr.IfBranch.Span) CIR.Expr.IfBranch.Idx {
+    return store.firstFromSpan(CIR.Expr.IfBranch.Idx, span.span);
 }
 
 /// Retrieve a slice of IfBranch Idx's from a span
@@ -2316,13 +2312,13 @@ pub fn scratchIfBranchTop(store: *NodeStore) u32 {
 }
 
 /// Adds an if branch to the scratch if branches list for building spans.
-pub fn addScratchIfBranch(store: *NodeStore, if_branch: CIR.IfBranch) void {
+pub fn addScratchIfBranch(store: *NodeStore, if_branch: CIR.Expr.IfBranch) void {
     const if_branch_idx = store.addIfBranch(if_branch);
     store.scratch_if_branches.append(store.gpa, if_branch_idx);
 }
 
 /// Creates an if branch span from the given start position to the current top of scratch if branches.
-pub fn ifBranchSpanFrom(store: *NodeStore, start: u32) CIR.IfBranch.Span {
+pub fn ifBranchSpanFrom(store: *NodeStore, start: u32) CIR.Expr.IfBranch.Span {
     const end = store.scratch_if_branches.top();
     defer store.scratch_if_branches.clearFrom(start);
     var i = @as(usize, @intCast(start));
@@ -2336,7 +2332,7 @@ pub fn ifBranchSpanFrom(store: *NodeStore, start: u32) CIR.IfBranch.Span {
 }
 
 /// Adds an if branch to the store and returns its index.
-pub fn addIfBranch(store: *NodeStore, if_branch: CIR.IfBranch) CIR.IfBranch.Idx {
+pub fn addIfBranch(store: *NodeStore, if_branch: CIR.Expr.IfBranch) CIR.Expr.IfBranch.Idx {
     const node = Node{
         .data_1 = @intFromEnum(if_branch.cond),
         .data_2 = @intFromEnum(if_branch.body),
@@ -2900,7 +2896,7 @@ pub fn deserializeFrom(buffer: []align(@alignOf(Node)) const u8, allocator: std.
         .scratch_record_fields = base.Scratch(CIR.RecordField.Idx){ .items = .{} },
         .scratch_match_branches = base.Scratch(CIR.Expr.Match.Branch.Idx){ .items = .{} },
         .scratch_match_branch_patterns = base.Scratch(CIR.Expr.Match.BranchPattern.Idx){ .items = .{} },
-        .scratch_if_branches = base.Scratch(CIR.IfBranch.Idx){ .items = .{} },
+        .scratch_if_branches = base.Scratch(CIR.Expr.IfBranch.Idx){ .items = .{} },
         .scratch_where_clauses = base.Scratch(CIR.WhereClause.Idx){ .items = .{} },
         .scratch_patterns = base.Scratch(CIR.Pattern.Idx){ .items = .{} },
         .scratch_pattern_record_fields = base.Scratch(CIR.PatternRecordField.Idx){ .items = .{} },

@@ -922,25 +922,6 @@ pub const IntValue = struct {
     }
 };
 
-/// todo - evaluate if we need this?
-pub const IfBranch = struct {
-    cond: Expr.Idx,
-    body: Expr.Idx,
-    region: Region,
-
-    pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: base.DataSpan };
-
-    // Note: toSExpr is handled within Expr.if because the slice reference is there
-};
-
-/// A canonicalized if statement
-pub const If = struct {
-    branches: IfBranch.Span,
-    final_else: Expr.Idx,
-    region: Region,
-};
-
 /// Helper function to convert the entire Canonical IR to a string in S-expression format
 /// and write it to the given writer.
 ///

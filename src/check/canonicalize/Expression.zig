@@ -59,25 +59,57 @@ pub const Expr = union(enum) {
         span: Expr.Span,
         region: Region,
     },
-    e_lookup: union(enum) {
-        local: Lookup,
-        external: ExternalDecl.Idx,
+    /// Lookup defined in this module
+    /// ```roc
+    /// foo = 42
+    /// bar = foo + 1 # the "foo" here references the local "foo"
+    /// ```
+    e_lookup_local: struct {
+        pattern_idx: Pattern.Idx,
+        region: Region,
     },
+    /// Lookup defined in another module
+    /// ```roc
+    /// import json.Utf8
+    /// foo = Utf8.encode("hello") # "Utf8.encode" is defined in another module
+    /// ```
+    e_lookup_external: ExternalDecl.Idx,
+    /// A sequence of zero or more elements of the same type
+    /// ```roc
+    /// ["one", "two", "three"]
+    /// ```
     e_list: struct {
         elem_var: TypeVar,
         elems: Expr.Span,
         region: Region,
     },
-    /// Empty list constant
+    /// Empty list constant `[]`
     e_empty_list: struct {
         region: Region,
     },
+    /// Tuple expression zero or more elements of arbitrary type
+    /// ```roc
+    /// (1, "two", True)
+    /// ```
     e_tuple: struct {
         elems: Expr.Span,
         region: Region,
     },
+    /// Match expression with one or more branches
+    /// ```roc
+    /// match x {
+    ///     1 => "one",
+    ///     a if a > 1 => "positive",
+    ///     _ => "non-positive",
+    /// }
+    /// ```
     e_match: Match,
-    e_if: If,
+    ///
+    e_if: struct {
+        branches: IfBranch.Span,
+        final_else: Expr.Idx,
+        region: Region,
+    },
     /// This is *only* for calling functions, not for tag application.
     /// The Tag variant contains any applied values inside it.
     e_call: struct {
@@ -144,9 +176,16 @@ pub const Expr = union(enum) {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
 
-    pub const Lookup = struct {
-        pattern_idx: Pattern.Idx,
+    /// todo - evaluate if we need this?
+    pub const IfBranch = struct {
+        cond: Expr.Idx,
+        body: Expr.Idx,
         region: Region,
+
+        pub const Idx = enum(u32) { _ };
+        pub const Span = struct { span: base.DataSpan };
+
+        // Note: toSExpr is handled within Expr.if because the slice reference is there
     };
 
     pub fn initStr(expr_span: Expr.Span, region: Region) Expr {
@@ -207,13 +246,11 @@ pub const Expr = union(enum) {
             .e_dec_small => |e| return e.region,
             .e_str_segment => |e| return e.region,
             .e_str => |e| return e.region,
-            .e_lookup => |e| switch (e) {
-                .local => |local| return local.region,
-                .external => |_| {
-                    // External lookups don't have a direct region access from Expr context
-                    // The region should be handled where the CIR context is available
-                    return null;
-                },
+            .e_lookup_local => |e| return e.region,
+            .e_lookup_external => {
+                // External lookups don't have a direct region access from Expr context
+                // The region should be handled where the CIR context is available
+                return null;
             },
             .e_list => |e| return e.region,
             .e_tuple => |e| return e.region,
@@ -380,27 +417,23 @@ pub const Expr = union(enum) {
 
                 return node;
             },
-            .e_lookup => |l| {
-                switch (l) {
-                    .local => |local| {
-                        var lookup_node = SExpr.init(gpa, "e-lookup-local");
-                        lookup_node.appendRegion(gpa, ir.calcRegionInfo(local.region));
+            .e_lookup_local => |local| {
+                var lookup_node = SExpr.init(gpa, "e-lookup-local");
+                lookup_node.appendRegion(gpa, ir.calcRegionInfo(local.region));
 
-                        var pattern_node = SExpr.init(gpa, "pattern");
-                        pattern_node.appendRegion(gpa, ir.getNodeRegionInfo(local.pattern_idx));
-                        lookup_node.appendNode(gpa, &pattern_node);
+                var pattern_node = SExpr.init(gpa, "pattern");
+                pattern_node.appendRegion(gpa, ir.getNodeRegionInfo(local.pattern_idx));
+                lookup_node.appendNode(gpa, &pattern_node);
 
-                        return lookup_node;
-                    },
-                    .external => |external_idx| {
-                        var node = SExpr.init(gpa, "e-lookup-external");
+                return lookup_node;
+            },
+            .e_lookup_external => |external_idx| {
+                var node = SExpr.init(gpa, "e-lookup-external");
 
-                        var external_sexpr = ir.getExternalDecl(external_idx).toSExpr(ir);
-                        node.appendNode(gpa, &external_sexpr);
+                var external_sexpr = ir.getExternalDecl(external_idx).toSExpr(ir);
+                node.appendNode(gpa, &external_sexpr);
 
-                        return node;
-                    },
-                }
+                return node;
             },
             .e_match => |e| {
                 var node = SExpr.init(gpa, "e-match");

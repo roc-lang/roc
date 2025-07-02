@@ -1008,7 +1008,7 @@ pub fn canonicalize_expr(
                             const external_idx = self.can_ir.pushExternalDecl(external_decl);
 
                             // Create lookup expression for external declaration
-                            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_lookup = .{ .external = external_idx } });
+                            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_lookup_external = external_idx });
                             _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
                             return expr_idx;
                         }
@@ -1026,10 +1026,10 @@ pub fn canonicalize_expr(
 
                         // We found the ident in scope, lookup to reference the pattern
                         const expr_idx =
-                            self.can_ir.store.addExpr(CIR.Expr{ .e_lookup = .{ .local = .{
+                            self.can_ir.store.addExpr(CIR.Expr{ .e_lookup_local = .{
                                 .pattern_idx = pattern_idx,
                                 .region = region,
-                            } } });
+                            } });
                         _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
                         return expr_idx;
                     },
@@ -1052,7 +1052,7 @@ pub fn canonicalize_expr(
                             const external_idx = self.can_ir.pushExternalDecl(external_decl);
 
                             // Create lookup expression for external declaration
-                            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_lookup = .{ .external = external_idx } });
+                            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_lookup_external = external_idx });
                             _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
                             return expr_idx;
                         }
@@ -2866,7 +2866,7 @@ fn flattenIfThenElseChainRecursive(self: *Self, if_expr: anytype) std.mem.Alloca
     };
 
     // Add this condition/then pair as an if-branch
-    const if_branch = CIR.IfBranch{
+    const if_branch = CIR.Expr.IfBranch{
         .cond = cond_idx,
         .body = then_idx,
         .region = self.parse_ir.tokenizedRegionToRegion(if_expr.region),
@@ -4677,7 +4677,7 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) ?CIR.Expr.Idx 
     const external_idx = self.can_ir.pushExternalDecl(external_decl);
 
     // Create lookup expression for external declaration
-    const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_lookup = .{ .external = external_idx } });
+    const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_lookup_external = external_idx });
     _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
     return expr_idx;
 }

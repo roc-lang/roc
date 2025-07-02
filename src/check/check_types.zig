@@ -700,22 +700,19 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
         .e_dec_small => |_| {},
         .e_str_segment => |_| {},
         .e_str => |_| {},
-        .e_lookup => |lookup| {
+        .e_lookup_local => |local| {
             // For lookups, we need to connect the lookup expression to the actual variable
-            switch (lookup) {
-                .local => |local| {
-                    // The lookup expression should have the same type as the pattern it refers to
-                    const lookup_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
-                    const pattern_var = @as(Var, @enumFromInt(@intFromEnum(local.pattern_idx)));
-                    _ = self.unify(lookup_var, pattern_var);
-                },
-                .external => |external_idx| {
-                    // For external lookups, connect to the external declaration's type
-                    const lookup_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
-                    const external_decl = self.can_ir.external_decls.items[@intFromEnum(external_idx)];
-                    _ = self.unify(lookup_var, external_decl.type_var);
-                },
-            }
+            // The lookup expression should have the same type as the pattern it refers to
+            const lookup_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
+            const pattern_var = @as(Var, @enumFromInt(@intFromEnum(local.pattern_idx)));
+            _ = self.unify(lookup_var, pattern_var);
+        },
+        .e_lookup_external => |external_idx| {
+            // For lookups, we need to connect the lookup expression to the actual variable
+            // For external lookups, connect to the external declaration's type
+            const lookup_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
+            const external_decl = self.can_ir.external_decls.items[@intFromEnum(external_idx)];
+            _ = self.unify(lookup_var, external_decl.type_var);
         },
         .e_list => |list| {
             const elem_var = @as(Var, @enumFromInt(@intFromEnum(list.elem_var)));
@@ -1072,7 +1069,11 @@ fn checkLambdaWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, lambda: anytype,
 }
 
 /// Check the types for an if-else expr
-pub fn checkIfElseExpr(self: *Self, if_expr_idx: CIR.Expr.Idx, if_: CIR.If) std.mem.Allocator.Error!bool {
+pub fn checkIfElseExpr(
+    self: *Self,
+    if_expr_idx: CIR.Expr.Idx,
+    if_: anytype, // TODO this should restrict to CIR.Expr.if variant, look this up
+) std.mem.Allocator.Error!bool {
     const branches = self.can_ir.store.sliceIfBranches(if_.branches);
 
     // Should never be 0
