@@ -33,7 +33,7 @@ scratch_patterns: base.Scratch(CIR.Pattern.Idx),
 scratch_pattern_record_fields: base.Scratch(CIR.PatternRecordField.Idx),
 scratch_record_destructs: base.Scratch(CIR.Pattern.RecordDestruct.Idx),
 scratch_type_annos: base.Scratch(CIR.TypeAnno.Idx),
-scratch_anno_record_fields: base.Scratch(CIR.AnnoRecordField.Idx),
+scratch_anno_record_fields: base.Scratch(CIR.TypeAnno.RecordField.Idx),
 scratch_exposed_items: base.Scratch(CIR.ExposedItem.Idx),
 scratch_defs: base.Scratch(CIR.Def.Idx),
 scratch_diagnostics: base.Scratch(CIR.Diagnostic.Idx),
@@ -61,7 +61,7 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) NodeStore {
         .scratch_match_branch_patterns = base.Scratch(CIR.Expr.Match.BranchPattern.Idx).init(gpa),
         .scratch_if_branches = base.Scratch(CIR.IfBranch.Idx).init(gpa),
         .scratch_type_annos = base.Scratch(CIR.TypeAnno.Idx).init(gpa),
-        .scratch_anno_record_fields = base.Scratch(CIR.AnnoRecordField.Idx).init(gpa),
+        .scratch_anno_record_fields = base.Scratch(CIR.TypeAnno.RecordField.Idx).init(gpa),
         .scratch_exposed_items = base.Scratch(CIR.ExposedItem.Idx).init(gpa),
         .scratch_defs = base.Scratch(CIR.Def.Idx).init(gpa),
         .scratch_where_clauses = base.Scratch(CIR.WhereClause.Idx).init(gpa),
@@ -1003,7 +1003,7 @@ pub fn getTypeHeader(store: *const NodeStore, typeHeader: CIR.TypeHeader.Idx) CI
 }
 
 /// Retrieves an annotation record field from the store.
-pub fn getAnnoRecordField(store: *const NodeStore, annoRecordField: CIR.AnnoRecordField.Idx) CIR.AnnoRecordField {
+pub fn getAnnoRecordField(store: *const NodeStore, annoRecordField: CIR.TypeAnno.RecordField.Idx) CIR.TypeAnno.RecordField {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(annoRecordField)));
     return .{
         .name = @bitCast(node.data_1),
@@ -1853,7 +1853,7 @@ pub fn addTypeHeader(store: *NodeStore, typeHeader: CIR.TypeHeader) CIR.TypeHead
 }
 
 /// Adds an annotation record field to the store.
-pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: CIR.AnnoRecordField) CIR.AnnoRecordField.Idx {
+pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: CIR.TypeAnno.RecordField) CIR.TypeAnno.RecordField.Idx {
     const node = Node{
         .data_1 = @bitCast(annoRecordField.name),
         .data_2 = @intFromEnum(annoRecordField.ty),
@@ -2104,7 +2104,7 @@ pub fn typeAnnoSpanFrom(store: *NodeStore, start: u32) CIR.TypeAnno.Span {
 }
 
 /// Returns a span from the scratch anno record fields starting at the given index.
-pub fn annoRecordFieldSpanFrom(store: *NodeStore, start: u32) CIR.AnnoRecordField.Span {
+pub fn annoRecordFieldSpanFrom(store: *NodeStore, start: u32) CIR.TypeAnno.RecordField.Span {
     const end = store.scratch_anno_record_fields.top();
     defer store.scratch_anno_record_fields.clearFrom(start);
     var i = @as(usize, @intCast(start));
@@ -2162,8 +2162,8 @@ pub fn scratchAnnoRecordFieldTop(store: *NodeStore) u32 {
     return store.scratch_anno_record_fields.top();
 }
 
-/// Places a new CIR.AnnoRecordField.Idx in the scratch. Will panic on OOM.
-pub fn addScratchAnnoRecordField(store: *NodeStore, idx: CIR.AnnoRecordField.Idx) void {
+/// Places a new CIR.TypeAnno.RecordField.Idx in the scratch. Will panic on OOM.
+pub fn addScratchAnnoRecordField(store: *NodeStore, idx: CIR.TypeAnno.RecordField.Idx) void {
     store.scratch_anno_record_fields.append(store.gpa, idx);
 }
 
@@ -2174,8 +2174,8 @@ pub fn clearScratchAnnoRecordFieldsFrom(store: *NodeStore, start: u32) void {
 
 /// Returns a new AnnoRecordField slice so that the caller can iterate through
 /// all items in the span.
-pub fn annoRecordFieldSlice(store: *NodeStore, span: CIR.AnnoRecordField.Span) []CIR.AnnoRecordField.Idx {
-    return store.sliceFromSpan(CIR.AnnoRecordField.Idx, span.span);
+pub fn annoRecordFieldSlice(store: *NodeStore, span: CIR.TypeAnno.RecordField.Span) []CIR.TypeAnno.RecordField.Idx {
+    return store.sliceFromSpan(CIR.TypeAnno.RecordField.Idx, span.span);
 }
 
 /// Computes the span of a definition starting from a given index.
@@ -2369,8 +2369,8 @@ pub fn sliceWhereClauses(store: *const NodeStore, span: CIR.WhereClause.Span) []
 }
 
 /// Returns a slice of annotation record fields from the store.
-pub fn sliceAnnoRecordFields(store: *const NodeStore, span: CIR.AnnoRecordField.Span) []CIR.AnnoRecordField.Idx {
-    return store.sliceFromSpan(CIR.AnnoRecordField.Idx, span.span);
+pub fn sliceAnnoRecordFields(store: *const NodeStore, span: CIR.TypeAnno.RecordField.Span) []CIR.TypeAnno.RecordField.Idx {
+    return store.sliceFromSpan(CIR.TypeAnno.RecordField.Idx, span.span);
 }
 
 /// Returns a slice of record destruct fields from the store.
@@ -2905,7 +2905,7 @@ pub fn deserializeFrom(buffer: []align(@alignOf(Node)) const u8, allocator: std.
         .scratch_patterns = base.Scratch(CIR.Pattern.Idx){ .items = .{} },
         .scratch_pattern_record_fields = base.Scratch(CIR.PatternRecordField.Idx){ .items = .{} },
         .scratch_type_annos = base.Scratch(CIR.TypeAnno.Idx){ .items = .{} },
-        .scratch_anno_record_fields = base.Scratch(CIR.AnnoRecordField.Idx){ .items = .{} },
+        .scratch_anno_record_fields = base.Scratch(CIR.TypeAnno.RecordField.Idx){ .items = .{} },
         .scratch_exposed_items = base.Scratch(CIR.ExposedItem.Idx){ .items = .{} },
         .scratch_defs = base.Scratch(CIR.Def.Idx){ .items = .{} },
         .scratch_diagnostics = base.Scratch(CIR.Diagnostic.Idx){ .items = .{} },

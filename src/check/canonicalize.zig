@@ -3166,7 +3166,7 @@ fn canonicalize_type_anno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.
                     const canonicalized_ty = self.canonicalize_type_anno(ast_field.ty);
                     const field_region = self.parse_ir.tokenizedRegionToRegion(ast_field.region);
 
-                    const cir_field = CIR.AnnoRecordField{
+                    const cir_field = CIR.TypeAnno.RecordField{
                         .name = malformed_ident,
                         .ty = canonicalized_ty,
                         .region = field_region,
@@ -3180,7 +3180,7 @@ fn canonicalize_type_anno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.
                 const canonicalized_ty = self.canonicalize_type_anno(ast_field.ty);
                 const field_region = self.parse_ir.tokenizedRegionToRegion(ast_field.region);
 
-                const cir_field = CIR.AnnoRecordField{
+                const cir_field = CIR.TypeAnno.RecordField{
                     .name = field_name,
                     .ty = canonicalized_ty,
                     .region = field_region,
