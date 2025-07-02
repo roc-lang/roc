@@ -166,9 +166,9 @@ none = Maybe
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.5 (type "a -> [Maybe]*"))
+		(patt @6.1-6.5 (type "a -> Maybe(a)"))
 		(patt @9.1-9.5 (type "[Maybe]*")))
 	(expressions
-		(expr @6.8-6.17 (type "a -> [Maybe]*"))
+		(expr @6.8-6.17 (type "a -> Maybe(a)"))
 		(expr @9.8-9.13 (type "[Maybe]*"))))
 ~~~

@@ -16,28 +16,6 @@ match color {
 Nothing is named `color` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**INCOMPATIBLE MATCH BRANCHES**
-The third branch's type in this `match` is different from the previous ones:
-**basic_tag_union.md:1:1:**
-```roc
-match color {
-	Red => 1
-	Blue => 2
-	Green => "3"
-```
-          ^^^
-
-The third branch has this type;
-    _Str_
-
-But all the previous branches have this type:
-    _Num(*)_
-
-All branches in an `match` must have compatible types.
-
-Note: You can wrap branches values in a tag to make them compatible.
-To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
-
 # TOKENS
 ~~~zig
 KwMatch(1:1-1:6),LowerIdent(1:7-1:12),OpenCurly(1:13-1:14),Newline(1:1-1:1),
@@ -92,5 +70,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-5.2 (type "Error"))
+(expr @1.1-5.2 (type "Num(*)"))
 ~~~

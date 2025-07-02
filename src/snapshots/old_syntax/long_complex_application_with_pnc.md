@@ -85,18 +85,7 @@ combine(
 		(e-runtime-error (tag "ident_not_in_scope"))
 		(e-runtime-error (tag "ident_not_in_scope"))
 		(e-runtime-error (tag "ident_not_in_scope")))
-	(e-call @1.26-5.3
-		(e-tag @1.26-1.32 (name "Juices") (args "TODO"))
-		(e-record @1.33-5.2
-			(fields
-				(field (name "color")
-					(e-runtime-error (tag "ident_not_in_scope")))
-				(field (name "flavor")
-					(e-runtime-error (tag "ident_not_in_scope")))
-				(field (name "amount")
-					(e-binop @4.13-5.2 (op "add")
-						(e-int @4.13-4.14 (value "1"))
-						(e-int @4.17-4.18 (value "2"))))))))
+	(e-tag @1.26-5.3 (name "Juices") (args "TODO")))
 ~~~
 # TYPES
 ~~~clojure

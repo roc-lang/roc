@@ -128,27 +128,6 @@ Check the spelling and make sure you're using a valid Roc operator.
 This looks like an operator, but it's not one I recognize!
 Check the spelling and make sure you're using a valid Roc operator.
 
-**INCOMPATIBLE MATCH PATTERNS**
-The pattern in the second branch of this `match` differs from previous ones:
-**nominal_tag_payload_two.md:9:18:**
-```roc
-is_ok = |result| match result {
-    Result.Ok(_) => True
-    Result.Err(_) => False
-}
-```
-             ^^^
-
-The second pattern has this type:
-    _(*)_
-
-But all the previous patterns have this type: 
-    _[Result]*_
-
-All patterns in an `match` must have compatible types.
-
-
-
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:15),Comma(1:15-1:16),LowerIdent(1:17-1:19),Comma(1:19-1:20),LowerIdent(1:21-1:26),CloseSquare(1:26-1:27),Newline(1:1-1:1),
@@ -320,9 +299,9 @@ is_ok = |result| match result {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.3 (type "a -> [Result]*"))
-		(patt @9.1-9.6 (type "Result -> Error")))
+		(patt @6.1-6.3 (type "a -> Error"))
+		(patt @9.1-9.6 (type "Error -> Error")))
 	(expressions
-		(expr @6.6-6.16 (type "a -> [Result]*"))
-		(expr @9.9-12.2 (type "Result -> Error"))))
+		(expr @6.6-6.16 (type "a -> Error"))
+		(expr @9.9-12.2 (type "Error -> Error"))))
 ~~~

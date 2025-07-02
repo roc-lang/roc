@@ -554,30 +554,19 @@ Only definitions, type annotations, and imports are allowed at the top level.
 Nothing is named `from_list` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**INCOMPATIBLE MATCH PATTERNS**
-The pattern in the second branch of this `match` differs from previous ones:
-**Color.md:49:18:**
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**Color.md:27:1:27:4:**
 ```roc
-to_str = |color| match color {
-    Color.RGB(r, g, b) => "rgb(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)})"
-    Color.RGBA(r, g, b, a) => "rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"
-    Color.Named(inner) => inner
-    Color.Hex(inner) => inner
-}
-
-expect rgb(124, 56, 245).to_str() == "rgb(124, 56, 245)"
+hex = |str| {
 ```
-             ^^^^^^^^^
+^^^
 
-The second pattern has this type:
-    _(*, *, *)_
+It is of type:
+    _Str_
 
-But all the previous patterns have this type: 
-    _[Color]*_
-
-All patterns in an `match` must have compatible types.
-
-
+But you are trying to use it as:
+    _{ to_utf8: * }_
 
 # TOKENS
 ~~~zig
@@ -1274,28 +1263,12 @@ is_named_color = |str| {
 										(s-expr @42.38-42.42
 											(e-lookup-local @42.38-42.41
 												(pattern @27.8-27.11)))
-										(e-call @42.49-42.125
-											(e-tag @42.49-42.52 (name "Err") (args "TODO"))
-											(e-call @42.53-42.124
-												(e-tag @42.53-42.63 (name "InvalidHex") (args "TODO"))
-												(e-string @42.64-42.123
-													(e-literal @42.65-42.116 (string "Expected Hex to be in the range 0-9, a-f, A-F, got "))
-													(e-lookup-local @42.118-42.121
-														(pattern @27.8-27.11))
-													(e-literal @42.122-42.122 (string ""))))))))
+										(e-tag @42.49-42.125 (name "Err") (args "TODO")))))
 							(branch
 								(patterns
 									(p-underscore @44.9-44.10 (degenerate false)))
 								(value
-									(e-call @44.14-44.100
-										(e-tag @44.14-44.17 (name "Err") (args "TODO"))
-										(e-call @44.18-44.99
-											(e-tag @44.18-44.28 (name "InvalidHex") (args "TODO"))
-											(e-string @44.29-44.98
-												(e-literal @44.30-44.91 (string "Expected Hex must start with # and be 7 characters long, got "))
-												(e-lookup-local @44.93-44.96
-													(pattern @27.8-27.11))
-												(e-literal @44.97-44.97 (string ""))))))))))))
+									(e-tag @44.14-44.100 (name "Err") (args "TODO")))))))))
 		(annotation @27.1-27.4
 			(declared-type
 				(ty-fn @26.7-26.46 (effectful false)
@@ -1479,16 +1452,16 @@ is_named_color = |str| {
 (inferred-types
 	(defs
 		(patt @18.1-18.4 (type "U8, U8, U8 -> [Color]*"))
-		(patt @21.1-21.5 (type "U8, U8, U8, U8 -> (*, *, *, *)"))
-		(patt @27.1-27.4 (type "Str -> Result"))
+		(patt @21.1-21.5 (type "U8, U8, U8, U8 -> (U8, U8, U8, *)"))
+		(patt @27.1-27.4 (type "Error -> Error"))
 		(patt @49.1-49.7 (type "Color -> Error"))
 		(patt @61.1-61.6 (type "Error"))
-		(patt @67.1-67.15 (type "* ? *")))
+		(patt @67.1-67.15 (type "* -> *")))
 	(expressions
 		(expr @18.7-18.22 (type "U8, U8, U8 -> [Color]*"))
-		(expr @21.8-24.2 (type "U8, U8, U8, U8 -> (*, *, *, *)"))
-		(expr @27.7-46.2 (type "Str -> Result"))
+		(expr @21.8-24.2 (type "U8, U8, U8, U8 -> (U8, U8, U8, *)"))
+		(expr @27.7-46.2 (type "Error -> Error"))
 		(expr @49.10-56.7 (type "Color -> Error"))
 		(expr @61.9-63.24 (type "Error"))
-		(expr @67.18-71.2 (type "* ? *"))))
+		(expr @67.18-71.2 (type "* -> *"))))
 ~~~

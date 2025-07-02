@@ -590,6 +590,57 @@ The unused variable is declared here:
 This feature is not yet implemented or doesn't have a proper error report yet: top-level expect
 Let us know if you want to help!
 
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**syntax_grab_bag.md:68:1:68:8:**
+```roc
+add_one = |num| {
+```
+^^^^^^^
+
+It is of type:
+    _U64_
+
+But you are trying to use it as:
+    _[True, False]_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**syntax_grab_bag.md:155:2:155:12:**
+```roc
+	match_time(
+```
+ ^^^^^^^^^^
+
+It is of type:
+    _*, * -> *_
+
+But you are trying to use it as:
+    _* -> *_
+
+**INCOMPATIBLE LIST ELEMENTS**
+The first two elements in this list have incompatible types:
+**syntax_grab_bag.md:167:3:**
+```roc
+		add_one(
+			dbg # After dbg in list
+				number, # after dbg expr as arg
+		), # Comment one
+		456, # Comment two
+```
+  ^^^
+
+The first element has this type:
+    _U64_
+
+However, the second element has this type:
+    _Num(*)_
+
+All elements in a list must have compatible types.
+
+Note: You can wrap each element in a tag to make them compatible.
+To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
+
 # TOKENS
 ~~~zig
 Newline(1:2-1:28),
@@ -1552,10 +1603,7 @@ NO CHANGE
 						(e-runtime-error (tag "not_implemented"))))
 				(s-let @164.2-164.31
 					(p-assign @164.2-164.18 (ident "tag_with_payload"))
-					(e-call @164.21-164.31
-						(e-tag @164.21-164.23 (name "Ok") (args "TODO"))
-						(e-lookup-local @164.24-164.30
-							(pattern @146.2-147.8))))
+					(e-tag @164.21-164.31 (name "Ok") (args "TODO")))
 				(s-let @165.2-165.34
 					(p-assign @165.2-165.14 (ident "interpolated"))
 					(e-string @165.17-165.34
@@ -1586,10 +1634,7 @@ NO CHANGE
 								(e-lookup-local @178.42-178.45
 									(pattern @148.2-148.5)))
 							(field (name "qux")
-								(e-call @178.52-178.61
-									(e-tag @178.52-178.54 (name "Ok") (args "TODO"))
-									(e-lookup-local @178.55-178.60
-										(pattern @145.2-145.7))))
+								(e-tag @178.52-178.61 (name "Ok") (args "TODO")))
 							(field (name "punned")
 								(e-runtime-error (tag "ident_not_in_scope"))))))
 				(s-let @179.2-179.68
@@ -1601,10 +1646,7 @@ NO CHANGE
 								(e-literal @179.17-179.22 (string "World")))
 							(e-lookup-local @179.25-179.28
 								(pattern @148.2-148.5))
-							(e-call @179.30-179.39
-								(e-tag @179.30-179.32 (name "Ok") (args "TODO"))
-								(e-lookup-local @179.33-179.38
-									(pattern @145.2-145.7)))
+							(e-tag @179.30-179.39 (name "Ok") (args "TODO"))
 							(e-tuple @179.41-179.56
 								(elems
 									(e-runtime-error (tag "ident_not_in_scope"))
@@ -1623,10 +1665,7 @@ NO CHANGE
 							(e-string @182.3-182.10
 								(e-literal @182.4-182.9 (string "World")))
 							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-call @184.3-184.12
-								(e-tag @184.3-184.5 (name "Ok") (args "TODO"))
-								(e-lookup-local @184.6-184.11
-									(pattern @145.2-145.7)))
+							(e-tag @184.3-184.12 (name "Ok") (args "TODO"))
 							(e-tuple @185.3-185.18
 								(elems
 									(e-runtime-error (tag "ident_not_in_scope"))
@@ -1643,9 +1682,7 @@ NO CHANGE
 						(e-binop @188.18-188.74 (op "or")
 							(e-binop @188.18-188.43 (op "gt")
 								(e-binop @188.18-188.34 (op "null_coalesce")
-									(e-call @188.18-188.26
-										(e-tag @188.18-188.21 (name "Err") (args "TODO"))
-										(e-runtime-error (tag "ident_not_in_scope")))
+									(e-tag @188.18-188.26 (name "Err") (args "TODO"))
 									(e-int @188.30-188.32 (value "12")))
 								(e-binop @188.35-188.43 (op "mul")
 									(e-int @188.35-188.36 (value "5"))
@@ -1817,15 +1854,15 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @65.1-65.16 (type "* ? Num(*)"))
-		(patt @68.1-68.8 (type "U64 -> U64"))
-		(patt @80.1-80.11 (type "*, * ? Error"))
-		(patt @144.1-144.6 (type "List -> Result"))
-		(patt @199.1-199.6 (type "{  }")))
+		(patt @65.1-65.16 (type "[False, True] -> Num(*)"))
+		(patt @68.1-68.8 (type "Error -> Error"))
+		(patt @80.1-80.11 (type "Error"))
+		(patt @144.1-144.6 (type "Error -> Error"))
+		(patt @199.1-199.6 (type "{}")))
 	(expressions
-		(expr @65.19-67.8 (type "* ? Num(*)"))
-		(expr @68.11-78.2 (type "U64 -> U64"))
-		(expr @80.14-140.7 (type "*, * ? Error"))
-		(expr @144.9-196.2 (type "List -> Result"))
+		(expr @65.19-67.8 (type "[False, True] -> Num(*)"))
+		(expr @68.11-78.2 (type "Error -> Error"))
+		(expr @80.14-140.7 (type "Error"))
+		(expr @144.9-196.2 (type "Error -> Error"))
 		(expr @199.9-199.11 (type "{}"))))
 ~~~

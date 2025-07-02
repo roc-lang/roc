@@ -810,7 +810,7 @@ fn canonicalize_decl(
 
             // For now, create a simple annotation with just the signature and region
             // TODO: Convert TypeAnno to proper type constraints and populate signature
-            annotation = self.createAnnotationFromTypeAnno(type_anno_idx, type_var, pattern_region);
+            annotation = try self.createAnnotationFromTypeAnno(type_anno_idx, type_var, pattern_region, @enumFromInt(@intFromEnum(pattern_idx)));
 
             // Remove the used annotation
             _ = self.pending_type_annos.swapRemove(found_index.?);
@@ -826,23 +826,21 @@ fn canonicalize_decl(
         .annotation = annotation,
         .kind = .let,
     });
-    // Set def type variable: use annotation signature if available, otherwise flex
+    // Set def type variable to a flex var
     //
-    // This is for proper type checking:
-    // 1. When there's an annotation, it's the programmer's explicit type declaration and should be ground truth
-    // 2. We copy the annotation's signature content to the def's type variable, ensuring the annotation type is authoritative
-    // 3. During type inference, the lambda implementation will be unified against this annotation type
-    // 4. If the implementation doesn't match the annotation, it will be caught as a type error
-    // 5. The final resolved type will be the annotation type (assuming type checking passes)
-    // 6. When there's no annotation, we use a flex variable for normal type inference
-    if (annotation) |anno_idx| {
-        const anno = self.can_ir.store.getAnnotation(anno_idx);
-        const signature_resolved = self.can_ir.env.types.resolveVar(anno.signature);
-
-        _ = self.can_ir.setTypeVarAtDef(def_idx, signature_resolved.desc.content);
-    } else {
-        _ = self.can_ir.setTypeVarAtDef(def_idx, Content{ .flex_var = null });
-    }
+    // We always use a flex variable for the definition, regardless of whether there's
+    // an annotation. This is because:
+    // 1. If there's no annotation, we need a flex var for normal type inference
+    // 2. If there IS an annotation, we still use a flex var to avoid copying the
+    //    annotation's type content. This is necessary because if the annotation contains
+    //    an alias (e.g., `empty : ConsList(a)`), that alias expects its type arguments
+    //    to live at specific memory offsets relative to the alias's own type variable.
+    //    Copying the alias content to a different type variable would break this assumption.
+    // 3. During type checking, the definition's flex var will be unified with the
+    //    annotation's type (if present) or with the inferred type from the expression
+    // 4. Type errors will be caught during unification if the implementation doesn't
+    //    match the annotation
+    _ = self.can_ir.setTypeVarAtDef(def_idx, Content{ .flex_var = null });
 
     return def_idx;
 }
@@ -893,6 +891,56 @@ pub fn canonicalize_expr(
 
     switch (expr) {
         .apply => |e| {
+            // Check if the function being applied is a tag
+            const ast_fn = self.parse_ir.store.getExpr(e.@"fn");
+            if (ast_fn == .tag) {
+                // This is a tag application, not a function call
+                const tag_expr = ast_fn.tag;
+
+                if (self.parse_ir.tokens.resolveIdentifier(tag_expr.token)) |tag_name| {
+                    // Mark the start of scratch expressions for tag arguments
+                    const scratch_top = self.can_ir.store.scratchExprTop();
+
+                    // Canonicalize all arguments
+                    const args_slice = self.parse_ir.store.exprSlice(e.args);
+                    for (args_slice) |arg| {
+                        if (try self.canonicalize_expr(arg)) |canonicalized_arg_expr_idx| {
+                            self.can_ir.store.addScratchExpr(canonicalized_arg_expr_idx);
+                        }
+                    }
+
+                    // Create span from scratch expressions
+                    const args_span = self.can_ir.store.exprSpanFrom(scratch_top);
+                    const region = self.parse_ir.tokenizedRegionToRegion(e.region);
+
+                    // Create type vars, first "reserve" node slots
+                    const final_expr_idx = self.can_ir.store.predictNodeIndex(2);
+
+                    // Then insert the type vars, setting the parent to be the final slot
+                    const poly_var = self.can_ir.pushFreshTypeVar(final_expr_idx, region) catch |err| exitOnOom(err);
+
+                    // Then in the final slot the actual expr is inserted
+                    const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
+                        .e_tag = .{
+                            .ext_var = poly_var,
+                            .name = tag_name,
+                            .args = args_span,
+                            .region = region,
+                        },
+                    });
+
+                    std.debug.assert(@intFromEnum(expr_idx) == @intFromEnum(final_expr_idx));
+
+                    // Insert flex type variable
+                    _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
+
+                    return expr_idx;
+                } else {
+                    return null;
+                }
+            }
+
+            // Not a tag application, proceed with normal function call
             // Mark the start of scratch expressions
             const scratch_top = self.can_ir.store.scratchExprTop();
 
@@ -916,15 +964,10 @@ pub fn canonicalize_expr(
 
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
-            // Reserve slot for call expression and create effect variable with proper node correspondence
-            const final_expr_idx = self.can_ir.store.predictNodeIndex(2);
-            const effect_var = self.can_ir.pushTypeVar(Content{ .pure = {} }, final_expr_idx, region) catch |err| exitOnOom(err);
-
             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
                 .e_call = .{
                     .args = args_span,
                     .called_via = CalledVia.apply,
-                    .effect_var = effect_var,
                     .region = region,
                 },
             });
@@ -1584,20 +1627,14 @@ pub fn canonicalize_expr(
                     });
                 }
             };
-
-            // Create effect variable using dummy index (like other expressions do)
-            const effect_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region) catch |err| exitOnOom(err);
-
             // Create lambda expression
-            const lambda_expr = CIR.Expr{
+            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
                 .e_lambda = .{
                     .args = args_span,
                     .body = body_idx,
-                    .effect_var = effect_var,
                     .region = region,
                 },
-            };
-            const expr_idx = self.can_ir.store.addExpr(lambda_expr);
+            });
 
             _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
             return expr_idx;
@@ -4285,7 +4322,7 @@ fn extractModuleName(self: *Self, module_name_ident: Ident.Idx) Ident.Idx {
 }
 
 /// Convert a parsed TypeAnno into a canonical TypeVar with appropriate Content
-fn canonicalizeTypeAnnoToTypeVar(self: *Self, type_anno_idx: CIR.TypeAnno.Idx, parent_node_idx: Node.Idx, region: Region) TypeVar {
+fn canonicalizeTypeAnnoToTypeVar(self: *Self, type_anno_idx: CIR.TypeAnno.Idx, parent_node_idx: Node.Idx, region: Region) std.mem.Allocator.Error!TypeVar {
     const type_anno = self.can_ir.store.getTypeAnno(type_anno_idx);
 
     switch (type_anno) {
@@ -4323,11 +4360,11 @@ fn canonicalizeTypeAnnoToTypeVar(self: *Self, type_anno_idx: CIR.TypeAnno.Idx, p
         },
         .apply => |apply| {
             // Handle type application like List(String), Dict(a, b)
-            return self.canonicalizeTypeApplication(apply, parent_node_idx, region);
+            return try self.canonicalizeTypeApplication(apply, parent_node_idx, region);
         },
         .@"fn" => |func| {
             // Create function type
-            return self.canonicalizeFunctionType(func, parent_node_idx, region);
+            return try self.canonicalizeFunctionType(func, parent_node_idx, region);
         },
         .tuple => |tuple| {
             // Create tuple type
@@ -4335,7 +4372,7 @@ fn canonicalizeTypeAnnoToTypeVar(self: *Self, type_anno_idx: CIR.TypeAnno.Idx, p
         },
         .record => |record| {
             // Create record type
-            return self.canonicalizeRecordType(record, parent_node_idx, region);
+            return try self.canonicalizeRecordType(record, parent_node_idx, region);
         },
         .tag_union => |tag_union| {
             // Create tag union type
@@ -4343,7 +4380,7 @@ fn canonicalizeTypeAnnoToTypeVar(self: *Self, type_anno_idx: CIR.TypeAnno.Idx, p
         },
         .parens => |parens| {
             // Recursively canonicalize the inner type
-            return self.canonicalizeTypeAnnoToTypeVar(parens.anno, parent_node_idx, region);
+            return try self.canonicalizeTypeAnnoToTypeVar(parens.anno, parent_node_idx, region);
         },
         .mod_ty => |mod_ty| {
             // Handle module-qualified types
@@ -4416,14 +4453,68 @@ fn canonicalizeBasicType(self: *Self, symbol: Ident.Idx, parent_node_idx: Node.I
     }
 }
 
-/// Handle type applications like List(a), Dict(k, v)
-fn canonicalizeTypeApplication(self: *Self, apply: anytype, parent_node_idx: Node.Idx, region: Region) TypeVar {
-    // Simplified implementation - create a flex var for the applied type
-    return self.can_ir.pushTypeVar(.{ .flex_var = apply.symbol }, parent_node_idx, region) catch |err| exitOnOom(err);
+/// Handle type applications like List(Str), Dict(k, v)
+fn canonicalizeTypeApplication(self: *Self, apply: anytype, parent_node_idx: Node.Idx, region: Region) std.mem.Allocator.Error!TypeVar {
+    // Look up the type name in scope
+    if (self.scopeLookupTypeDecl(apply.symbol)) |type_decl_idx| {
+        const type_decl = self.can_ir.store.getStatement(type_decl_idx);
+        const header = self.can_ir.store.getTypeHeader(type_decl.s_type_decl.header);
+        const expected_args = self.can_ir.store.sliceTypeAnnos(header.args).len;
+        const actual_args = self.can_ir.store.sliceTypeAnnos(apply.args);
+
+        // Check arity
+        if (expected_args != actual_args.len) {
+            return try self.can_ir.pushTypeVar(.err, parent_node_idx, region);
+        }
+
+        // Instantiate a new type alias that has the same shape as the alias we looked up,
+        // except that it has fresh vars for everything so we can override them with our application.
+        //
+        // Aliases uses a specific layout to minimize memory usage:
+        // - Position N: The alias variable itself (with Content.alias)
+        // - Position N+1: The backing variable (what the alias expands to)
+        // - Position N+2 onwards: The type arguments
+
+        // TODO in the future, we can skip this by reusing the Idx from CIR. This requires
+        // making the type decl itself laid out the same way as an Alias in memory.
+
+        // Create the main alias variable first
+        const alias_var = try self.can_ir.pushFreshTypeVar(parent_node_idx, region);
+
+        // Create backing var immediately after it
+        _ = try self.can_ir.pushFreshTypeVar(parent_node_idx, region);
+
+        // Create type argument variables sequentially after backing var
+        for (actual_args) |arg_idx| {
+            _ = try self.canonicalizeTypeAnnoToTypeVar(arg_idx, parent_node_idx, region);
+        }
+
+        // Now set the alias content on the main variable
+        const alias_content = Content{
+            .alias = .{
+                .ident = .{ .ident_idx = apply.symbol },
+                .num_args = @intCast(actual_args.len),
+            },
+        };
+
+        // Ensure slots exist for the alias and all its arguments
+        try self.can_ir.env.types.ensureAliasSlots(alias_var, @intCast(actual_args.len));
+
+        _ = self.can_ir.setTypeVarAt(@enumFromInt(@intFromEnum(alias_var)), alias_content);
+
+        return alias_var;
+    } else {
+        // Naming error: there's no type by that name in scope.
+        self.can_ir.pushDiagnostic(CIR.Diagnostic{ .undeclared_type = .{
+            .name = apply.symbol,
+            .region = region,
+        } });
+        return self.can_ir.pushTypeVar(.err, parent_node_idx, region);
+    }
 }
 
 /// Handle function types like a -> b
-fn canonicalizeFunctionType(self: *Self, func: anytype, parent_node_idx: Node.Idx, region: Region) TypeVar {
+fn canonicalizeFunctionType(self: *Self, func: anytype, parent_node_idx: Node.Idx, region: Region) std.mem.Allocator.Error!TypeVar {
     const gpa = self.can_ir.env.gpa;
 
     // Canonicalize argument types and return type
@@ -4435,25 +4526,22 @@ fn canonicalizeFunctionType(self: *Self, func: anytype, parent_node_idx: Node.Id
 
     // For each argument, canonicalize its type and collect the type var
     for (args_slice) |arg_anno_idx| {
-        const arg_type_var = self.canonicalizeTypeAnnoToTypeVar(arg_anno_idx, parent_node_idx, region);
+        const arg_type_var = try self.canonicalizeTypeAnnoToTypeVar(arg_anno_idx, parent_node_idx, region);
         arg_vars.append(arg_type_var) catch |err| exitOnOom(err);
     }
 
     // Canonicalize return type
-    const ret_type_var = self.canonicalizeTypeAnnoToTypeVar(func.ret, parent_node_idx, region);
+    const ret_type_var = try self.canonicalizeTypeAnnoToTypeVar(func.ret, parent_node_idx, region);
 
-    // Create the function args range
-    const args_range = self.can_ir.env.types.appendFuncArgs(arg_vars.items);
-
-    // Create effect variable based on effectfulness
-    const eff_var = if (func.effectful)
-        self.can_ir.pushTypeVar(.effectful, parent_node_idx, region) catch |err| exitOnOom(err)
+    // Create the appropriate function type based on effectfulness
+    const func_content = if (func.effectful)
+        self.can_ir.env.types.mkFuncEffectful(arg_vars.items, ret_type_var)
     else
-        self.can_ir.pushTypeVar(.pure, parent_node_idx, region) catch |err| exitOnOom(err);
+        self.can_ir.env.types.mkFuncPure(arg_vars.items, ret_type_var);
 
-    // Create the complete function structure
+    // Create and return the function type variable
     return self.can_ir.pushTypeVar(
-        .{ .structure = .{ .func = .{ .args = args_range, .ret = ret_type_var, .eff = eff_var } } },
+        func_content,
         parent_node_idx,
         region,
     ) catch |err| exitOnOom(err);
@@ -4467,7 +4555,7 @@ fn canonicalizeTupleType(self: *Self, tuple: anytype, parent_node_idx: Node.Idx,
 }
 
 /// Handle record types like { name: Str, age: Num }
-fn canonicalizeRecordType(self: *Self, record: anytype, parent_node_idx: Node.Idx, region: Region) TypeVar {
+fn canonicalizeRecordType(self: *Self, record: anytype, parent_node_idx: Node.Idx, region: Region) std.mem.Allocator.Error!TypeVar {
     // Create fresh type variables for each field
     var type_record_fields = std.ArrayList(types.RecordField).init(self.can_ir.env.gpa);
     defer type_record_fields.deinit();
@@ -4477,7 +4565,7 @@ fn canonicalizeRecordType(self: *Self, record: anytype, parent_node_idx: Node.Id
         const field = self.can_ir.store.getAnnoRecordField(field_idx);
 
         // Canonicalize the field's type annotation
-        const field_type_var = self.canonicalizeTypeAnnoToTypeVar(field.ty, parent_node_idx, region);
+        const field_type_var = try self.canonicalizeTypeAnnoToTypeVar(field.ty, parent_node_idx, region);
 
         type_record_fields.append(types.RecordField{
             .name = field.name,
@@ -4510,9 +4598,9 @@ fn canonicalizeModuleType(self: *Self, mod_ty: anytype, parent_node_idx: Node.Id
 }
 
 /// Create an annotation from a type annotation
-fn createAnnotationFromTypeAnno(self: *Self, type_anno_idx: CIR.TypeAnno.Idx, _: TypeVar, region: Region) ?CIR.Annotation.Idx {
+fn createAnnotationFromTypeAnno(self: *Self, type_anno_idx: CIR.TypeAnno.Idx, _: TypeVar, region: Region, parent_node_idx: Node.Idx) std.mem.Allocator.Error!?CIR.Annotation.Idx {
     // Convert the type annotation to a type variable
-    const signature = self.canonicalizeTypeAnnoToTypeVar(type_anno_idx, @enumFromInt(0), region);
+    const signature = try self.canonicalizeTypeAnnoToTypeVar(type_anno_idx, parent_node_idx, region);
 
     // Create the annotation structure
     const annotation = CIR.Annotation{

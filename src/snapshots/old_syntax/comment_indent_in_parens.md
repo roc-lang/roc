@@ -11,7 +11,20 @@ type=expr
 M
 ~~~
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**comment_indent_in_parens.md:1:1:1:2:**
+```roc
+1((0#
+```
+^
+
+It is of type:
+    _Num(*)_
+
+But you are trying to use it as:
+    _(Num(*)) -> *_
+
 # TOKENS
 ~~~zig
 Int(1:1-1:2),NoSpaceOpenRound(1:2-1:3),NoSpaceOpenRound(1:3-1:4),Int(1:4-1:5),Newline(1:6-1:6),

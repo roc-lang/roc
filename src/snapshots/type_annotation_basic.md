@@ -46,6 +46,20 @@ The unused variable is declared here:
     ^^^^
 
 
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**type_annotation_basic.md:18:12:18:20:**
+```roc
+    text = identity("hello")
+```
+           ^^^^^^^^
+
+It is of type:
+    _Num(*) -> Num(*)_
+
+But you are trying to use it as:
+    _Str -> *_
+
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),Newline(1:1-1:1),
@@ -279,13 +293,13 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.9 (type "a -> a"))
-		(patt @9.1-9.8 (type "a, b -> (*, *)"))
+		(patt @5.1-5.9 (type "Error"))
+		(patt @9.1-9.8 (type "a, b -> (a, b)"))
 		(patt @13.1-13.7 (type "U64 -> U64"))
-		(patt @15.1-15.6 (type "* ? *")))
+		(patt @15.1-15.6 (type "* -> *")))
 	(expressions
-		(expr @5.12-5.17 (type "a -> a"))
-		(expr @9.11-9.42 (type "a, b -> (*, *)"))
+		(expr @5.12-5.17 (type "Error"))
+		(expr @9.11-9.42 (type "a, b -> (a, b)"))
 		(expr @13.10-15.6 (type "U64 -> U64"))
-		(expr @15.9-27.2 (type "* ? *"))))
+		(expr @15.9-27.2 (type "* -> *"))))
 ~~~

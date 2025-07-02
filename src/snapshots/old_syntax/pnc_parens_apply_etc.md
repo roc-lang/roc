@@ -10,7 +10,20 @@ type=expr
 (z)
 ~~~
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**pnc_parens_apply_etc.md:1:1:2:3:**
+```roc
+(
+3)():B
+```
+
+It is of type:
+    _(Num(*))_
+
+But you are trying to use it as:
+    _({}) -> *_
+
 # TOKENS
 ~~~zig
 OpenRound(1:1-1:2),Newline(1:1-1:1),

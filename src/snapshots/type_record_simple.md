@@ -7,19 +7,32 @@ type=file
 ~~~roc
 app [main!] { pf: platform "../basic-cli/main.roc" }
 
-getName : { name: Str, age: U64 } -> Str
-getName = |person| person.name
+get_name : { name: Str, age: U64 } -> Str
+get_name = |person| person.name
 
 main! = |_| {}
 ~~~
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**type_record_simple.md:4:1:4:9:**
+```roc
+get_name = |person| person.name
+```
+^^^^^^^^
+
+It is of type:
+    _{ name: Str, age: U64 }_
+
+But you are trying to use it as:
+    _{ name: * }_
+
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(3:1-3:8),OpColon(3:9-3:10),OpenCurly(3:11-3:12),LowerIdent(3:13-3:17),OpColon(3:17-3:18),UpperIdent(3:19-3:22),Comma(3:22-3:23),LowerIdent(3:24-3:27),OpColon(3:27-3:28),UpperIdent(3:29-3:32),CloseCurly(3:33-3:34),OpArrow(3:35-3:37),UpperIdent(3:38-3:41),Newline(1:1-1:1),
-LowerIdent(4:1-4:8),OpAssign(4:9-4:10),OpBar(4:11-4:12),LowerIdent(4:12-4:18),OpBar(4:18-4:19),LowerIdent(4:20-4:26),NoSpaceDotLowerIdent(4:26-4:31),Newline(1:1-1:1),
+LowerIdent(3:1-3:9),OpColon(3:10-3:11),OpenCurly(3:12-3:13),LowerIdent(3:14-3:18),OpColon(3:18-3:19),UpperIdent(3:20-3:23),Comma(3:23-3:24),LowerIdent(3:25-3:28),OpColon(3:28-3:29),UpperIdent(3:30-3:33),CloseCurly(3:34-3:35),OpArrow(3:36-3:38),UpperIdent(3:39-3:42),Newline(1:1-1:1),
+LowerIdent(4:1-4:9),OpAssign(4:10-4:11),OpBar(4:12-4:13),LowerIdent(4:13-4:19),OpBar(4:19-4:20),LowerIdent(4:21-4:27),NoSpaceDotLowerIdent(4:27-4:32),Newline(1:1-1:1),
 Newline(1:1-1:1),
 LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBar(6:11-6:12),OpenCurly(6:13-6:14),CloseCurly(6:14-6:15),EndOfFile(6:15-6:15),
 ~~~
@@ -37,22 +50,22 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @3.1-4.8 (name "getName")
-			(ty-fn @3.11-3.41
-				(ty-record @3.11-3.34
-					(anno-record-field @3.13-3.23 (name "name")
+		(s-type-anno @3.1-4.9 (name "get_name")
+			(ty-fn @3.12-3.42
+				(ty-record @3.12-3.35
+					(anno-record-field @3.14-3.24 (name "name")
 						(ty (name "Str")))
-					(anno-record-field @3.24-3.34 (name "age")
+					(anno-record-field @3.25-3.35 (name "age")
 						(ty (name "U64"))))
 				(ty (name "Str"))))
 		(s-decl @4.1-6.6
-			(p-ident @4.1-4.8 (raw "getName"))
-			(e-lambda @4.11-6.6
+			(p-ident @4.1-4.9 (raw "get_name"))
+			(e-lambda @4.12-6.6
 				(args
-					(p-ident @4.12-4.18 (raw "person")))
-				(e-field-access @4.20-6.6
-					(e-ident @4.20-4.26 (qaul "") (raw "person"))
-					(e-ident @4.26-4.31 (qaul "") (raw ".name")))))
+					(p-ident @4.13-4.19 (raw "person")))
+				(e-field-access @4.21-6.6
+					(e-ident @4.21-4.27 (qaul "") (raw "person"))
+					(e-ident @4.27-4.32 (qaul "") (raw ".name")))))
 		(s-decl @6.1-6.15
 			(p-ident @6.1-6.6 (raw "main!"))
 			(e-lambda @6.9-6.15
@@ -64,8 +77,8 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 ~~~roc
 app [main!] { pf: platform "../basic-cli/main.roc" }
 
-getName : { name : Str, age : U64 } -> Str
-getName = |person| person.name
+get_name : { name : Str, age : U64 } -> Str
+get_name = |person| person.name
 
 main! = |_| {}
 ~~~
@@ -73,23 +86,23 @@ main! = |_| {}
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @4.1-4.8 (ident "getName"))
-		(e-lambda @4.11-6.6
+		(p-assign @4.1-4.9 (ident "get_name"))
+		(e-lambda @4.12-6.6
 			(args
-				(p-assign @4.12-4.18 (ident "person")))
-			(e-dot-access @4.20-6.6 (field "name")
+				(p-assign @4.13-4.19 (ident "person")))
+			(e-dot-access @4.21-6.6 (field "name")
 				(receiver
-					(e-lookup-local @4.20-4.26
-						(pattern @4.12-4.18)))))
-		(annotation @4.1-4.8
+					(e-lookup-local @4.21-4.27
+						(pattern @4.13-4.19)))))
+		(annotation @4.1-4.9
 			(declared-type
-				(ty-fn @3.11-3.41 (effectful false)
-					(ty-record @3.11-3.34
+				(ty-fn @3.12-3.42 (effectful false)
+					(ty-record @3.12-3.35
 						(field (field "name")
-							(ty @3.19-3.22 (name "Str")))
+							(ty @3.20-3.23 (name "Str")))
 						(field (field "age")
-							(ty @3.29-3.32 (name "U64"))))
-					(ty @3.38-3.41 (name "Str"))))))
+							(ty @3.30-3.33 (name "U64"))))
+					(ty @3.39-3.42 (name "Str"))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-lambda @6.9-6.15
@@ -101,9 +114,9 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.8 (type "{ name: Str, age: U64 } -> Str"))
-		(patt @6.1-6.6 (type "* ? {}")))
+		(patt @4.1-4.9 (type "Error -> Str"))
+		(patt @6.1-6.6 (type "* -> {}")))
 	(expressions
-		(expr @4.11-6.6 (type "{ name: Str, age: U64 } -> Str"))
-		(expr @6.9-6.15 (type "* ? {}"))))
+		(expr @4.12-6.6 (type "Error -> Str"))
+		(expr @6.9-6.15 (type "* -> {}"))))
 ~~~

@@ -42,5 +42,5 @@ CloseRound(2:1-2:2),Comma(2:2-2:3),UpperIdent(2:3-2:4),CloseRound(2:4-2:5),EndOf
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-2.5 (type "(Num(*), (Num(*)), [L]*)"))
+(expr @1.1-2.5 (type "((Num(*)), [L]*)"))
 ~~~

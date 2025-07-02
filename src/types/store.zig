@@ -48,11 +48,11 @@ pub const Store = struct {
 
     gpa: Allocator,
 
-    // Slots & descriptors
+    /// Type variable storage
     slots: SlotStore,
     descs: DescStore,
 
-    // Everything else
+    /// Storage for compound type parts
     tuple_elems: VarSafeList,
     func_args: VarSafeList,
     record_fields: RecordFieldSafeMultiList,
@@ -237,32 +237,25 @@ pub const Store = struct {
         return Tag{ .name = name, .args = args_range };
     }
 
-    // Make a function data type
+    // Make a function data type with unbound effectfulness
     // Does not insert content into the types store.
-    pub fn mkFunc(self: *Self, args: []const Var, ret: Var, eff: Var) Content {
+    pub fn mkFuncUnbound(self: *Self, args: []const Var, ret: Var) Content {
         const args_range = self.appendFuncArgs(args);
-        return Content{ .structure = .{ .func = .{ .args = args_range, .ret = ret, .eff = eff } } };
+        return Content{ .structure = .{ .fn_unbound = .{ .args = args_range, .ret = ret } } };
     }
 
-    // Make a function data type with flex effectfulness
-    // Does not insert content into the types store.
-    pub fn mkFuncFlex(self: *Self, args: []const Var, ret: Var) Content {
-        const eff_var = self.freshFromContent(.{ .flex_var = null });
-        return self.mkFunc(args, ret, eff_var);
-    }
-
-    // Make a pure function data type
+    // Make a pure function data type (as opposed to an effectful or unbound function)
     // Does not insert content into the types store.
     pub fn mkFuncPure(self: *Self, args: []const Var, ret: Var) Content {
-        const eff_var = self.freshFromContent(.pure);
-        return self.mkFunc(args, ret, eff_var);
+        const args_range = self.appendFuncArgs(args);
+        return Content{ .structure = .{ .fn_pure = .{ .args = args_range, .ret = ret } } };
     }
 
-    // Make an effectful function data type
+    // Make an effectful function data type (as opposed to a pure or unbound function)
     // Does not insert content into the types store.
-    pub fn mkFuncEff(self: *Self, args: []const Var, ret: Var) Content {
-        const eff_var = self.freshFromContent(.effectful);
-        return self.mkFunc(args, ret, eff_var);
+    pub fn mkFuncEffectful(self: *Self, args: []const Var, ret: Var) Content {
+        const args_range = self.appendFuncArgs(args);
+        return Content{ .structure = .{ .fn_effectful = .{ .args = args_range, .ret = ret } } };
     }
 
     // sub list setters //
@@ -319,7 +312,7 @@ pub const Store = struct {
         return self.tags.rangeToSlice(range);
     }
 
-    /// Given a range, get a slice of tag args from the backing array
+    /// Given a range, get a slice of tag args from the backing list
     pub fn getTagArgsSlice(self: *const Self, range: VarSafeList.Range) VarSafeList.Slice {
         return self.tag_args.rangeToSlice(range);
     }
@@ -410,6 +403,10 @@ pub const Store = struct {
     ///
     /// If the vars are *not equivalent, then return the resolved vars & descs
     pub fn checkVarsEquiv(self: *Self, a_var: Var, b_var: Var) VarEquivResult {
+        // Ensure both variables are in bounds before resolving
+        self.fillInSlotsThru(a_var) catch unreachable;
+        self.fillInSlotsThru(b_var) catch unreachable;
+
         const a = self.resolveVarAndCompressPath(a_var);
         const b = self.resolveVarAndCompressPath(b_var);
         if (a.desc_idx == b.desc_idx) {
@@ -417,6 +414,18 @@ pub const Store = struct {
         } else {
             return .{ .not_equiv = .{ .a = a, .b = b } };
         }
+    }
+
+    /// Ensure that all slots required for an alias or nominal type are allocated.
+    /// This includes:
+    /// - The type variable itself
+    /// - The backing variable at +1
+    /// - All argument variables starting at +2
+    pub fn ensureAliasSlots(self: *Self, alias_var: Var, num_args: u32) Allocator.Error!void {
+        // The highest index we need is alias_var + 1 + num_args
+        // (alias var, backing var, then each arg)
+        const max_idx = @intFromEnum(alias_var) + 1 + num_args;
+        try self.fillInSlotsThru(@enumFromInt(max_idx));
     }
 
     // union //

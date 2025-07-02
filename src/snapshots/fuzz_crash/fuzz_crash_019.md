@@ -443,42 +443,19 @@ The unused variable is declared here:
 This feature is not yet implemented or doesn't have a proper error report yet: top-level expect
 Let us know if you want to help!
 
-**INCOMPATIBLE MATCH PATTERNS**
-The pattern in the fourth branch of this `match` differs from previous ones:
-**fuzz_crash_019.md:52:2:**
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**fuzz_crash_019.md:84:2:84:4:**
 ```roc
-	match a {lue  {
-	x
-		}
-		Blue=> {x
-			}
-	er #ent
-			1	"for" => 20[1, ] # t
-		ment
-		[1, 2, 3,est]123
-		[
-		] 23
-		3.1 314
-		3.14 | 6.28 => 314
-		(1, ) => 123
-		(1, 2, 3)123
-		{ 	} => 12
-		Ok(123) => 12
-	}
-
-expect # Cord
+	me(
 ```
-     ^
+ ^^
 
-The fourth pattern has this type:
-    _Str_
+It is of type:
+    _*, [Tb]* -> Error_
 
-But all the previous patterns have this type: 
-    _[Blue]*_
-
-All patterns in an `match` must have compatible types.
-
-
+But you are trying to use it as:
+    _* -> *_
 
 # TOKENS
 ~~~zig
@@ -1269,9 +1246,7 @@ expect {
 							(field (name "baz")
 								(e-runtime-error (tag "ident_not_in_scope")))
 							(field (name "qux")
-								(e-call @96.44-96.53
-									(e-tag @96.44-96.46 (name "Ok") (args "TODO"))
-									(e-runtime-error (tag "ident_not_in_scope"))))
+								(e-tag @96.44-96.53 (name "Ok") (args "TODO")))
 							(field (name "ned")
 								(e-runtime-error (tag "ident_not_in_scope"))))))
 				(s-let @97.2-97.48
@@ -1342,14 +1317,7 @@ expect {
 									(e-dot-access @105.55-105.76 (field "unknown")
 										(receiver
 											(e-runtime-error (tag "not_implemented")))))))))
-				(e-call @106.2-110.3
-					(e-tag @106.2-106.7 (name "Stdo!") (args "TODO"))
-					(e-string @107.3-109.6
-						(e-literal @107.4-107.6 (string "Ho"))
-						(e-call @108.4-108.9
-							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-runtime-error (tag "ident_not_in_scope")))
-						(e-literal @109.4-109.5 (string " ")))))))
+				(e-tag @106.2-110.3 (name "Stdo!") (args "TODO")))))
 	(d-let
 		(p-assign @114.1-114.2 (ident "e"))
 		(e-empty_record @114.5-114.7))
@@ -1415,15 +1383,15 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @35.1-35.4 (type "* ? Num(*)"))
-		(patt @38.1-38.4 (type "* ? Error"))
-		(patt @49.1-49.3 (type "*, [Tb]* ? Error"))
-		(patt @75.1-75.3 (type "* ? *"))
+		(patt @35.1-35.4 (type "[False, True] -> Num(*)"))
+		(patt @38.1-38.4 (type "[False, True] -> Error"))
+		(patt @49.1-49.3 (type "Error"))
+		(patt @75.1-75.3 (type "* -> *"))
 		(patt @114.1-114.2 (type "{}")))
 	(expressions
-		(expr @35.7-37.4 (type "* ? Num(*)"))
-		(expr @38.7-47.2 (type "* ? Error"))
-		(expr @49.6-71.7 (type "*, [Tb]* ? Error"))
-		(expr @75.5-111.2 (type "* ? *"))
+		(expr @35.7-37.4 (type "[False, True] -> Num(*)"))
+		(expr @38.7-47.2 (type "[False, True] -> Error"))
+		(expr @49.6-71.7 (type "Error"))
+		(expr @75.5-111.2 (type "* -> *"))
 		(expr @114.5-114.7 (type "{}"))))
 ~~~

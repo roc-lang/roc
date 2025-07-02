@@ -9,6 +9,7 @@ const store_mod = @import("../../types/store.zig");
 const TypesStore = store_mod.Store;
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
+const exitOnOutOfMemory = collections.utils.exitOnOom;
 
 /// Index enum for SnapshotContentList
 pub const SnapshotContentIdx = SnapshotContentList.Idx;
@@ -56,9 +57,9 @@ pub const Store = struct {
             .tuple_elems = SnapshotContentIdxSafeList.initCapacity(gpa, capacity),
             .nominal_type_args = SnapshotContentIdxSafeList.initCapacity(gpa, capacity),
             .func_args = SnapshotContentIdxSafeList.initCapacity(gpa, capacity),
-            .record_fields = SnapshotRecordFieldSafeList.initCapacity(gpa, capacity),
-            .tags = SnapshotTagSafeList.initCapacity(gpa, capacity),
-            .tag_args = SnapshotContentIdxSafeList.initCapacity(gpa, capacity),
+            .record_fields = SnapshotRecordFieldSafeList.initCapacity(gpa, 256),
+            .tags = SnapshotTagSafeList.initCapacity(gpa, 256),
+            .tag_args = SnapshotContentIdxSafeList.initCapacity(gpa, 256),
         };
     }
 
@@ -85,8 +86,6 @@ pub const Store = struct {
             .flex_var => |ident| SnapshotContent{ .flex_var = ident },
             .rigid_var => |ident| SnapshotContent{ .rigid_var = ident },
             .alias => |alias| SnapshotContent{ .alias = self.deepCopyAlias(store, alias, var_) },
-            .effectful => SnapshotContent.effectful,
-            .pure => SnapshotContent.pure,
             .structure => |flat_type| SnapshotContent{ .structure = self.deepCopyFlatType(store, flat_type, var_) },
             .err => SnapshotContent.err,
         };
@@ -114,7 +113,9 @@ pub const Store = struct {
             .tuple_unbound => |tuple| SnapshotFlatType{ .tuple_unbound = self.deepCopyTuple(store, tuple) },
             .num => |num| SnapshotFlatType{ .num = self.deepCopyNum(store, num) },
             .nominal_type => |nominal_type| SnapshotFlatType{ .nominal_type = self.deepCopyNominalType(store, nominal_type, var_) },
-            .func => |func| SnapshotFlatType{ .func = self.deepCopyFunc(store, func) },
+            .fn_pure => |func| SnapshotFlatType{ .fn_pure = self.deepCopyFunc(store, func) },
+            .fn_effectful => |func| SnapshotFlatType{ .fn_effectful = self.deepCopyFunc(store, func) },
+            .fn_unbound => |func| SnapshotFlatType{ .fn_unbound = self.deepCopyFunc(store, func) },
             .record => |record| SnapshotFlatType{ .record = self.deepCopyRecord(store, record) },
             .record_unbound => |fields| SnapshotFlatType{ .record_unbound = self.deepCopyRecordFields(store, fields) },
             .record_poly => |poly| SnapshotFlatType{ .record_poly = .{
@@ -263,14 +264,9 @@ pub const Store = struct {
         const ret_resolved = store.resolveVar(func.ret);
         const deep_ret = self.deepCopyContent(store, ret_resolved.desc.content, func.ret);
 
-        // Deep copy effect type
-        const eff_resolved = store.resolveVar(func.eff);
-        const deep_eff = self.deepCopyContent(store, eff_resolved.desc.content, func.eff);
-
         return SnapshotFunc{
             .args = args_range,
             .ret = deep_ret,
-            .eff = deep_eff,
         };
     }
 
@@ -398,7 +394,7 @@ pub const Store = struct {
         return self.func_args.rangeToSlice(range);
     }
 
-    pub fn getRecordFieldsSlice(self: *const Self, range: SnapshotRecordFieldSafeList.Range) []const SnapshotRecordField {
+    pub fn getRecordFieldsSlice(self: *const Self, range: SnapshotRecordFieldSafeList.Range) SnapshotRecordFieldSafeList.Slice {
         return self.record_fields.rangeToSlice(range);
     }
 
@@ -420,8 +416,6 @@ pub const SnapshotContent = union(enum) {
     flex_var: ?Ident.Idx,
     rigid_var: Ident.Idx,
     alias: SnapshotAlias,
-    effectful,
-    pure,
     structure: SnapshotFlatType,
     err,
 };
@@ -442,7 +436,9 @@ pub const SnapshotFlatType = union(enum) {
     tuple_unbound: SnapshotTuple,
     num: SnapshotNum,
     nominal_type: SnapshotNominalType,
-    func: SnapshotFunc,
+    fn_pure: SnapshotFunc,
+    fn_effectful: SnapshotFunc,
+    fn_unbound: SnapshotFunc,
     record: SnapshotRecord,
     record_unbound: SnapshotRecordFieldSafeList.Range,
     record_poly: struct { record: SnapshotRecord, var_: SnapshotContentIdx },
@@ -479,7 +475,6 @@ pub const SnapshotNominalType = struct {
 pub const SnapshotFunc = struct {
     args: SnapshotContentIdxSafeList.Range, // Range into SnapshotStore.func_args
     ret: SnapshotContentIdx, // Index into SnapshotStore.contents
-    eff: SnapshotContentIdx, // Index into SnapshotStore.contents
 };
 
 /// TODO
@@ -544,12 +539,6 @@ pub const SnapshotWriter = struct {
             .structure => |flat_type| {
                 try self.writeFlatType(flat_type);
             },
-            .effectful => {
-                _ = try self.writer.write("Effectful");
-            },
-            .pure => {
-                _ = try self.writer.write("Pure");
-            },
             .err => {
                 _ = try self.writer.write("Error");
             },
@@ -601,8 +590,14 @@ pub const SnapshotWriter = struct {
             .nominal_type => |nominal_type| {
                 try self.writeNominalType(nominal_type);
             },
-            .func => |func| {
-                try self.writeFunc(func);
+            .fn_pure => |func| {
+                try self.writeFuncWithArrow(func, " -> ");
+            },
+            .fn_effectful => |func| {
+                try self.writeFuncWithArrow(func, " => ");
+            },
+            .fn_unbound => |func| {
+                try self.writeFuncWithArrow(func, " -> ");
             },
             .record => |record| {
                 try self.writeRecord(record);
@@ -651,8 +646,8 @@ pub const SnapshotWriter = struct {
         }
     }
 
-    /// Write a function type
-    pub fn writeFunc(self: *Self, func: SnapshotFunc) Allocator.Error!void {
+    /// Write a function type with a specific arrow
+    pub fn writeFuncWithArrow(self: *Self, func: SnapshotFunc, arrow: []const u8) Allocator.Error!void {
         const args = self.snapshots.getFuncArgsSlice(func.args);
 
         // Write arguments
@@ -667,12 +662,7 @@ pub const SnapshotWriter = struct {
             }
         }
 
-        // Only show effect if it's not pure
-        switch (self.snapshots.contents.get(func.eff).*) {
-            .pure => _ = try self.writer.write(" -> "),
-            .effectful => _ = try self.writer.write(" => "),
-            else => _ = try self.writer.write(" ? "),
-        }
+        _ = try self.writer.write(arrow);
 
         try self.write(func.ret);
     }
@@ -681,17 +671,21 @@ pub const SnapshotWriter = struct {
     pub fn writeRecord(self: *Self, record: SnapshotRecord) Allocator.Error!void {
         _ = try self.writer.write("{ ");
 
-        var field_iter = self.snapshots.record_fields.iterIndices();
-        var is_first = true;
-        while (field_iter.next()) |field_idx| {
-            if (!is_first) {
-                _ = try self.writer.write(", ");
-                is_first = false;
-            }
-            const field = self.snapshots.record_fields.get(field_idx);
-            _ = try self.writer.write(self.idents.getText(field.name));
+        const fields_slice = self.snapshots.record_fields.rangeToSlice(record.fields);
+
+        if (fields_slice.len > 0) {
+            // Write first field
+            _ = try self.writer.write(self.idents.getText(fields_slice.items(.name)[0]));
             _ = try self.writer.write(": ");
-            try self.write(field.content);
+            try self.write(fields_slice.items(.content)[0]);
+
+            // Write remaining fields
+            for (fields_slice.items(.name)[1..], fields_slice.items(.content)[1..]) |name, content| {
+                _ = try self.writer.write(", ");
+                _ = try self.writer.write(self.idents.getText(name));
+                _ = try self.writer.write(": ");
+                try self.write(content);
+            }
         }
 
         // Show extension variable if it's not empty
@@ -699,13 +693,13 @@ pub const SnapshotWriter = struct {
             .structure => |flat_type| switch (flat_type) {
                 .empty_record => {}, // Don't show empty extension
                 else => {
-                    if (record.fields.len() > 0) _ = try self.writer.write(", ");
+                    if (fields_slice.len > 0) _ = try self.writer.write(", ");
                     _ = try self.writer.write("* ");
                     try self.write(record.ext);
                 },
             },
             else => {
-                if (record.fields.len() > 0) _ = try self.writer.write(", ");
+                if (fields_slice.len > 0) _ = try self.writer.write(", ");
                 _ = try self.writer.write("* ");
                 try self.write(record.ext);
             },

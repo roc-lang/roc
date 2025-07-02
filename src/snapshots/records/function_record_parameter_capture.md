@@ -75,5 +75,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.103 (type "Error ? { greeting: Str, full_record: Error, is_adult: * }"))
+(expr @1.1-1.103 (type "Error -> { greeting: Str, full_record: Error, is_adult: * }"))
 ~~~

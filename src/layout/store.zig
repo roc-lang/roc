@@ -655,10 +655,20 @@ pub const Store = struct {
                         current = self.types_store.resolveVar(last_pending_field.var_);
                         continue :outer;
                     },
-                    .func => |func| {
+                    .fn_pure => |func| {
                         // TODO
                         _ = func;
-                        @panic("TODO: func layout");
+                        std.debug.panic("TODO addTypeVar: fn_pure", .{});
+                    },
+                    .fn_effectful => |func| {
+                        // TODO
+                        _ = func;
+                        std.debug.panic("TODO addTypeVar: fn_effectful", .{});
+                    },
+                    .fn_unbound => |func| {
+                        // TODO
+                        _ = func;
+                        std.debug.panic("TODO addTypeVar: fn_unbound", .{});
                     },
                     .record => |record_type| {
                         const num_fields = try self.gatherRecordFields(record_type);
@@ -864,8 +874,6 @@ pub const Store = struct {
                     current = self.types_store.resolveVar(backing_var);
                     continue;
                 },
-                .effectful => @panic("TODO: effectful doesn't make sense as a layout; should be moved out of Content"),
-                .pure => @panic("pure doesn't make sense as a layout; should be moved out of Content"),
                 .err => return LayoutError.TypeContainedMismatch,
             };
 

@@ -56,9 +56,7 @@ NO CHANGE
 	(e-binop @1.1-1.57 (op "or")
 		(e-binop @1.1-1.26 (op "gt")
 			(e-binop @1.1-1.17 (op "null_coalesce")
-				(e-call @1.1-1.9
-					(e-tag @1.1-1.4 (name "Err") (args "TODO"))
-					(e-runtime-error (tag "ident_not_in_scope")))
+				(e-tag @1.1-1.9 (name "Err") (args "TODO"))
 				(e-int @1.13-1.15 (value "12")))
 			(e-binop @1.18-1.26 (op "mul")
 				(e-int @1.18-1.19 (value "5"))

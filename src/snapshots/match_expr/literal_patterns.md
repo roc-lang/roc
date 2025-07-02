@@ -13,50 +13,7 @@ match Answer {
 }
 ~~~
 # PROBLEMS
-**INCOMPATIBLE MATCH BRANCHES**
-The second branch's type in this `match` is different from the previous ones:
-**literal_patterns.md:1:1:**
-```roc
-match Answer {
-    Answer => 1
-    Zero => "hello"
-```
-            ^^^^^^^
-
-The second branch has this type;
-    _Str_
-
-But the previous branch has this type:
-    _Num(*)_
-
-All branches in an `match` must have compatible types.
-
-Note: You can wrap branches values in a tag to make them compatible.
-To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
-
-**INCOMPATIBLE MATCH PATTERNS**
-The pattern in the fourth branch of this `match` differs from previous ones:
-**literal_patterns.md:1:1:**
-```roc
-match Answer {
-    Answer => 1
-    Zero => "hello"
-    Greeting => 3
-    10 => 4
-}
-```
-    ^^
-
-The fourth pattern has this type:
-    _Num(*)_
-
-But all the previous patterns have this type: 
-    _[Answer, Zero, Greeting]*_
-
-All patterns in an `match` must have compatible types.
-
-
-
+NIL
 # TOKENS
 ~~~zig
 KwMatch(1:1-1:6),UpperIdent(1:7-1:13),OpenCurly(1:14-1:15),Newline(1:1-1:1),
@@ -125,5 +82,5 @@ match Answer {
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-6.2 (type "Error"))
+(expr @1.1-6.2 (type "Num(*)"))
 ~~~

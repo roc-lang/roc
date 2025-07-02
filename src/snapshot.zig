@@ -915,20 +915,23 @@ fn generateProblemsSection(output: *DualOutput, parse_ast: *AST, can_ir: *CIR, s
     }
 
     // Check Types Problems
-    var report_builder = types_problem_mod.ReportBuilder.init(
-        output.gpa,
-        module_env,
-        can_ir,
-        &solver.snapshots,
-        content.source,
-        snapshot_path,
-    );
-    defer report_builder.deinit();
+    var problem_buf = std.ArrayList(u8).init(output.gpa);
+    defer problem_buf.deinit();
 
     var problems_itr = solver.problems.problems.iterIndices();
     while (problems_itr.next()) |problem_idx| {
         check_types_problem += 1;
         const problem = solver.problems.problems.get(problem_idx);
+        var report_builder = types_problem_mod.ReportBuilder.init(
+            output.gpa,
+            module_env,
+            can_ir,
+            &solver.snapshots,
+            content.source,
+            snapshot_path,
+        );
+        defer report_builder.deinit();
+
         var report: reporting.Report = report_builder.build(problem) catch |err| {
             try output.md_writer.print("Error creating type checking report: {}\n", .{err});
             try output.html_writer.print("                    <p>Error creating type checking report: {}</p>\n", .{err});
@@ -1440,7 +1443,7 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, maybe_f
     defer solver.deinit();
 
     if (maybe_expr_idx) |expr_idx| {
-        try solver.checkExpr(expr_idx);
+        _ = try solver.checkExpr(expr_idx);
     } else {
         try solver.checkDefs();
     }

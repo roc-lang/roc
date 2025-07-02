@@ -455,12 +455,6 @@ const Unifier = struct {
             .alias => |a_alias| {
                 try self.unifyAlias(vars, a_alias, vars.b.desc.content);
             },
-            .effectful => {
-                try self.unifyEffectful(vars, vars.b.desc.content);
-            },
-            .pure => {
-                try self.unifyPure(vars, vars.b.desc.content);
-            },
             .structure => |a_flat_type| {
                 try self.unifyStructure(vars, a_flat_type, vars.b.desc.content);
             },
@@ -512,9 +506,10 @@ const Unifier = struct {
                 }
             },
             .rigid_var => self.merge(vars, b_content),
-            .alias => self.merge(vars, b_content),
-            .effectful => self.merge(vars, b_content),
-            .pure => self.merge(vars, b_content),
+            .alias => |b_alias| {
+                self.types_store.ensureAliasSlots(vars.b.var_, b_alias.num_args) catch |err| exitOnOutOfMemory(err);
+                self.merge(vars, b_content);
+            },
             .structure => self.merge(vars, b_content),
             .err => self.merge(vars, .err),
         }
@@ -528,8 +523,6 @@ const Unifier = struct {
             .flex_var => self.merge(vars, vars.a.desc.content),
             .rigid_var => return error.TypeMismatch,
             .alias => return error.TypeMismatch,
-            .effectful => return error.TypeMismatch,
-            .pure => return error.TypeMismatch,
             .structure => return error.TypeMismatch,
             .err => self.merge(vars, .err),
         }
@@ -541,6 +534,8 @@ const Unifier = struct {
     fn unifyAlias(self: *Self, vars: *const ResolvedVarDescs, a_alias: Alias, b_content: Content) Error!void {
         switch (b_content) {
             .flex_var => |_| {
+                // Ensure the target variable has slots for the alias arguments
+                self.types_store.ensureAliasSlots(vars.b.var_, a_alias.num_args) catch |err| exitOnOutOfMemory(err);
                 self.merge(vars, Content{ .alias = a_alias });
             },
             .rigid_var => |_| {
@@ -556,8 +551,6 @@ const Unifier = struct {
                     try self.unifyGuarded(a_backing_var, b_backing_var);
                 }
             },
-            .effectful => return error.TypeMismatch,
-            .pure => return error.TypeMismatch,
             .structure => {
                 const backing_var = a_alias.getBackingVar(vars.a.var_);
                 try self.unifyGuarded(backing_var, vars.b.var_);
@@ -595,32 +588,9 @@ const Unifier = struct {
         const b_backing_var = b_alias.getBackingVar(vars.b.var_);
         self.unifyGuarded(a_backing_var, b_backing_var) catch {};
 
+        // Ensure the target variable has slots for the alias arguments
+        self.types_store.ensureAliasSlots(vars.b.var_, b_alias.num_args) catch |err| exitOnOutOfMemory(err);
         self.merge(vars, vars.b.desc.content);
-    }
-
-    // Unify effectful //
-
-    /// Unify when `a` was a effectful
-    fn unifyEffectful(self: *Self, vars: *const ResolvedVarDescs, b_content: Content) Error!void {
-        switch (b_content) {
-            .flex_var => self.merge(vars, .effectful),
-            .effectful => self.merge(vars, .effectful),
-            .err => self.merge(vars, .err),
-            else => return error.TypeMismatch,
-        }
-    }
-
-    // Unify pure //
-
-    /// Unify when `a` was a pure
-    fn unifyPure(self: *Self, vars: *const ResolvedVarDescs, b_content: Content) Error!void {
-        switch (b_content) {
-            .flex_var => self.merge(vars, .pure),
-            .pure => self.merge(vars, .pure),
-            .effectful => self.merge(vars, .effectful),
-            .err => self.merge(vars, .err),
-            else => return error.TypeMismatch,
-        }
     }
 
     // Unify structure //
@@ -642,8 +612,6 @@ const Unifier = struct {
                 const backing_var = alias.getBackingVar(vars.b.var_);
                 try self.unifyGuarded(vars.a.var_, backing_var);
             },
-            .effectful => return error.TypeMismatch,
-            .pure => return error.TypeMismatch,
             .structure => |b_flat_type| {
                 try self.unifyFlatType(vars, a_flat_type, b_flat_type);
             },
@@ -744,10 +712,58 @@ const Unifier = struct {
                     else => return error.TypeMismatch,
                 }
             },
-            .func => |a_func| {
+            .fn_pure => |a_func| {
                 switch (b_flat_type) {
-                    .func => |b_func| {
+                    .fn_pure => |b_func| {
                         try self.unifyFunc(vars, a_func, b_func);
+                        self.merge(vars, vars.a.desc.content);
+                    },
+                    .fn_unbound => |b_func| {
+                        // pure unifies with unbound -> pure
+                        try self.unifyFunc(vars, a_func, b_func);
+                        self.merge(vars, vars.a.desc.content);
+                    },
+                    .fn_effectful => {
+                        // pure cannot unify with effectful
+                        return error.TypeMismatch;
+                    },
+                    else => return error.TypeMismatch,
+                }
+            },
+            .fn_effectful => |a_func| {
+                switch (b_flat_type) {
+                    .fn_effectful => |b_func| {
+                        try self.unifyFunc(vars, a_func, b_func);
+                        self.merge(vars, vars.a.desc.content);
+                    },
+                    .fn_unbound => |b_func| {
+                        // effectful unifies with unbound -> effectful
+                        try self.unifyFunc(vars, a_func, b_func);
+                        self.merge(vars, vars.a.desc.content);
+                    },
+                    .fn_pure => {
+                        // effectful cannot unify with pure
+                        return error.TypeMismatch;
+                    },
+                    else => return error.TypeMismatch,
+                }
+            },
+            .fn_unbound => |a_func| {
+                switch (b_flat_type) {
+                    .fn_pure => |b_func| {
+                        // unbound unifies with pure -> pure
+                        try self.unifyFunc(vars, a_func, b_func);
+                        self.merge(vars, vars.b.desc.content);
+                    },
+                    .fn_effectful => |b_func| {
+                        // unbound unifies with effectful -> effectful
+                        try self.unifyFunc(vars, a_func, b_func);
+                        self.merge(vars, vars.b.desc.content);
+                    },
+                    .fn_unbound => |b_func| {
+                        // unbound unifies with unbound -> unbound
+                        try self.unifyFunc(vars, a_func, b_func);
+                        self.merge(vars, vars.a.desc.content);
                     },
                     else => return error.TypeMismatch,
                 }
@@ -1711,7 +1727,7 @@ const Unifier = struct {
     /// * that ret unifies
     fn unifyFunc(
         self: *Self,
-        vars: *const ResolvedVarDescs,
+        _: *const ResolvedVarDescs,
         a_func: Func,
         b_func: Func,
     ) Error!void {
@@ -1726,9 +1742,6 @@ const Unifier = struct {
         }
 
         try self.unifyGuarded(a_func.ret, b_func.ret);
-        try self.unifyGuarded(a_func.eff, b_func.eff);
-
-        self.merge(vars, vars.b.desc.content);
     }
 
     /// Unify two extensible records.
@@ -2992,24 +3005,21 @@ const TestEnv = struct {
 
     // helpers - structure - func
 
-    fn mkFunc(self: *Self, args: []const Var, ret: Var, eff: Var) Content {
-        const args_range = self.module_env.types.appendFuncArgs(args);
-        return Content{ .structure = .{ .func = .{ .args = args_range, .ret = ret, .eff = eff } } };
+    fn mkFuncPure(self: *Self, args: []const Var, ret: Var) Content {
+        return self.module_env.types.mkFuncPure(args, ret);
+    }
+
+    fn mkFuncEffectful(self: *Self, args: []const Var, ret: Var) Content {
+        return self.module_env.types.mkFuncEffectful(args, ret);
+    }
+
+    fn mkFuncUnbound(self: *Self, args: []const Var, ret: Var) Content {
+        return self.module_env.types.mkFuncUnbound(args, ret);
     }
 
     fn mkFuncFlex(self: *Self, args: []const Var, ret: Var) Content {
-        const eff_var = self.module_env.types.freshFromContent(.{ .flex_var = null });
-        return self.mkFunc(args, ret, eff_var);
-    }
-
-    fn mkFuncPure(self: *Self, args: []const Var, ret: Var) Content {
-        const eff_var = self.module_env.types.freshFromContent(.pure);
-        return self.mkFunc(args, ret, eff_var);
-    }
-
-    fn mkFuncEff(self: *Self, args: []const Var, ret: Var) Content {
-        const eff_var = self.module_env.types.freshFromContent(.effectful);
-        return self.mkFunc(args, ret, eff_var);
+        // For flex functions, we use unbound since we don't know the effectfulness yet
+        return self.module_env.types.mkFuncUnbound(args, ret);
     }
 
     // helpers - structure - records
@@ -3282,156 +3292,6 @@ test "unify - alias with flex" {
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
     try std.testing.expectEqual(a_alias, (try env.getDescForRootVar(b)).content);
-}
-
-// unification - pure/effectful
-
-test "unify - pure with pure" {
-    const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
-    defer env.deinit();
-
-    const a = env.module_env.types.freshFromContent(.pure);
-    const b = env.module_env.types.freshFromContent(.pure);
-
-    const result = env.unify(a, b);
-
-    try std.testing.expectEqual(.ok, result);
-    try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(.pure, (try env.getDescForRootVar(b)).content);
-}
-
-test "unify - effectful with effectful" {
-    const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
-    defer env.deinit();
-
-    const a = env.module_env.types.freshFromContent(.effectful);
-    const b = env.module_env.types.freshFromContent(.effectful);
-
-    const result = env.unify(a, b);
-
-    try std.testing.expectEqual(.ok, result);
-    try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(.effectful, (try env.getDescForRootVar(b)).content);
-}
-
-test "unify - pure with flex_var" {
-    const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
-    defer env.deinit();
-
-    const a = env.module_env.types.freshFromContent(.pure);
-    const b = env.module_env.types.fresh();
-
-    const result = env.unify(a, b);
-
-    try std.testing.expectEqual(.ok, result);
-    try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(.pure, (try env.getDescForRootVar(b)).content);
-}
-
-test "unify - effectful with flex_var" {
-    const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
-    defer env.deinit();
-
-    const a = env.module_env.types.freshFromContent(.effectful);
-    const b = env.module_env.types.fresh();
-
-    const result = env.unify(a, b);
-
-    try std.testing.expectEqual(.ok, result);
-    try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(.effectful, (try env.getDescForRootVar(b)).content);
-}
-
-test "unify - pure with effectful" {
-    const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
-    defer env.deinit();
-
-    const a = env.module_env.types.freshFromContent(.pure);
-    const b = env.module_env.types.freshFromContent(.effectful);
-
-    const result = env.unify(a, b);
-
-    try std.testing.expectEqual(.ok, result);
-    try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(.effectful, (try env.getDescForRootVar(b)).content);
-}
-
-test "unify - effectful with pure (fail)" {
-    const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
-    defer env.deinit();
-
-    const a = env.module_env.types.freshFromContent(.effectful);
-    const b = env.module_env.types.freshFromContent(.pure);
-
-    const result = env.unify(a, b);
-
-    try std.testing.expectEqual(false, result.isOk());
-    try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
-}
-
-test "unify - pure with err (fail)" {
-    const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
-    defer env.deinit();
-
-    const a = env.module_env.types.freshFromContent(.pure);
-    const b = env.module_env.types.freshFromContent(.err);
-
-    const result = env.unify(a, b);
-
-    try std.testing.expectEqual(.ok, result);
-    try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
-}
-
-test "unify - effectful with err (fail)" {
-    const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
-    defer env.deinit();
-
-    const a = env.module_env.types.freshFromContent(.effectful);
-    const b = env.module_env.types.freshFromContent(.err);
-
-    const result = env.unify(a, b);
-
-    try std.testing.expectEqual(.ok, result);
-    try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
-}
-
-test "unify - pure with structure type fails" {
-    const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
-    defer env.deinit();
-
-    const str = Content{ .structure = .str };
-    const a = env.module_env.types.freshFromContent(.pure);
-    const b = env.module_env.types.freshFromContent(str);
-
-    const result = env.unify(a, b);
-
-    try std.testing.expectEqual(false, result.isOk());
-}
-
-test "unify - effectful with structure type fails" {
-    const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
-    defer env.deinit();
-
-    const str = Content{ .structure = .str };
-    const a = env.module_env.types.freshFromContent(.effectful);
-    const b = env.module_env.types.freshFromContent(str);
-
-    const result = env.unify(a, b);
-
-    try std.testing.expectEqual(false, result.isOk());
 }
 
 // unification - structure/flex_vars
@@ -4426,7 +4286,7 @@ test "unify - same funcs effectful" {
     };
     const int_poly = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_poly = .{ .var_ = int_poly_var, .requirements = int_requirements } } } });
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
-    const func = env.mkFuncEff(&[_]Var{ str, int_poly }, int_i32);
+    const func = env.mkFuncEffectful(&[_]Var{ str, int_poly }, int_i32);
 
     const a = env.module_env.types.freshFromContent(func);
     const b = env.module_env.types.freshFromContent(func);
@@ -4453,7 +4313,7 @@ test "unify - same funcs first eff, second pure (fail)" {
     const int_poly = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_poly = .{ .var_ = int_poly_var, .requirements = int_requirements } } } });
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
     const pure_func = env.mkFuncPure(&[_]Var{ str, int_poly }, int_i32);
-    const eff_func = env.mkFuncEff(&[_]Var{ str, int_poly }, int_i32);
+    const eff_func = env.mkFuncEffectful(&[_]Var{ str, int_poly }, int_i32);
 
     const a = env.module_env.types.freshFromContent(eff_func);
     const b = env.module_env.types.freshFromContent(pure_func);
@@ -4480,16 +4340,14 @@ test "unify - same funcs first pure, second eff" {
     const int_poly = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_poly = .{ .var_ = int_poly_var, .requirements = int_requirements } } } });
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
     const pure_func = env.mkFuncPure(&[_]Var{ str, int_poly }, int_i32);
-    const eff_func = env.mkFuncEff(&[_]Var{ str, int_poly }, int_i32);
+    const eff_func = env.mkFuncEffectful(&[_]Var{ str, int_poly }, int_i32);
 
     const a = env.module_env.types.freshFromContent(pure_func);
     const b = env.module_env.types.freshFromContent(eff_func);
 
     const result = env.unify(a, b);
 
-    try std.testing.expectEqual(.ok, result);
-    try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
-    try std.testing.expectEqual(eff_func, (try env.getDescForRootVar(b)).content);
+    try std.testing.expectEqual(false, result.isOk());
 }
 
 // unification - structure/structure - nominal type

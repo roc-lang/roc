@@ -25,9 +25,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call @1.1-1.9
-	(e-tag @1.1-1.5 (name "Some") (args "TODO"))
-	(e-int @1.6-1.8 (value "42")))
+(e-tag @1.1-1.9 (name "Some") (args "TODO"))
 ~~~
 # TYPES
 ~~~clojure
