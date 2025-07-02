@@ -48,7 +48,7 @@ if bool {
 The second branch has this type:
     _[A]*_
 
-But all the other branches have this type:
+But the previous branch has this type:
     _Num(*)_
 
 All branches in an `if` must have compatible types.

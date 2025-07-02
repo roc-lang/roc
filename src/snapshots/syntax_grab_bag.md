@@ -590,18 +590,19 @@ The unused variable is declared here:
 This feature is not yet implemented or doesn't have a proper error report yet: top-level expect
 Let us know if you want to help!
 
-**INVALID IF CONDITION**
-This `if` condition needs to be a _Bool_:
-**syntax_grab_bag.md:70:5:**
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**syntax_grab_bag.md:68:1:68:8:**
 ```roc
-	if num {
+add_one = |num| {
 ```
-    ^^^
+^^^^^^^
 
-Right now, it has the type:
+It is of type:
     _U64_
 
-Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
+But you are trying to use it as:
+    _[True, False]_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -1853,14 +1854,14 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @65.1-65.16 (type "[True, False] -> Num(*)"))
-		(patt @68.1-68.8 (type "Error -> U64"))
+		(patt @65.1-65.16 (type "[False, True] -> Num(*)"))
+		(patt @68.1-68.8 (type "Error -> Error"))
 		(patt @80.1-80.11 (type "Error"))
 		(patt @144.1-144.6 (type "Error -> Error"))
 		(patt @199.1-199.6 (type "{}")))
 	(expressions
-		(expr @65.19-67.8 (type "[True, False] -> Num(*)"))
-		(expr @68.11-78.2 (type "Error -> U64"))
+		(expr @65.19-67.8 (type "[False, True] -> Num(*)"))
+		(expr @68.11-78.2 (type "Error -> Error"))
 		(expr @80.14-140.7 (type "Error"))
 		(expr @144.9-196.2 (type "Error -> Error"))
 		(expr @199.9-199.11 (type "{}"))))

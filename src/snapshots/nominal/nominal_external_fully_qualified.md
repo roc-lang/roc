@@ -93,6 +93,38 @@ Here is the problematic code:
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
 
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
+
+**UNDEFINED VARIABLE**
+Nothing is named `value` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
+
+**UNDEFINED VARIABLE**
+Nothing is named `value` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
+
+**UNDEFINED VARIABLE**
+Nothing is named `code` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:21),CloseSquare(1:21-1:22),Newline(1:1-1:1),
@@ -182,7 +214,42 @@ handleResult = |result| {
 						(cond
 							(e-lookup-local @7.11-7.17
 								(pattern @6.17-6.23)))
-						(branches)))))
+						(branches
+							(branch
+								(patterns
+									(p-applied-tag @8.9-8.23 (degenerate false)))
+								(value
+									(e-runtime-error (tag "expr_not_canonicalized"))))
+							(branch
+								(patterns
+									(p-runtime-error @8.36-8.40 (tag "pattern_not_canonicalized") (degenerate false)))
+								(value
+									(e-tuple @8.39-8.46
+										(elems
+											(e-runtime-error (tag "ident_not_in_scope"))))))
+							(branch
+								(patterns
+									(p-runtime-error @8.47-8.55 (tag "pattern_not_canonicalized") (degenerate false)))
+								(value
+									(e-runtime-error (tag "ident_not_in_scope"))))
+							(branch
+								(patterns
+									(p-applied-tag @9.9-9.23 (degenerate false)))
+								(value
+									(e-runtime-error (tag "expr_not_canonicalized"))))
+							(branch
+								(patterns
+									(p-runtime-error @9.36-9.41 (tag "pattern_not_canonicalized") (degenerate false)))
+								(value
+									(e-tuple @9.40-9.46
+										(elems
+											(e-runtime-error (tag "ident_not_in_scope"))))))
+							(branch
+								(patterns
+									(p-runtime-error @9.47-9.51 (tag "pattern_not_canonicalized") (degenerate false)))
+								(value
+									(e-string @9.50-9.74
+										(e-literal @9.51-9.73 (string "Error: $(code.toStr())"))))))))))
 		(annotation @6.1-6.13
 			(declared-type
 				(ty-fn @5.16-5.60 (effectful false)
@@ -195,7 +262,7 @@ handleResult = |result| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.13 (type "Error -> Str")))
+		(patt @6.1-6.13 (type "Error -> Error")))
 	(expressions
-		(expr @6.16-11.2 (type "Error -> Str"))))
+		(expr @6.16-11.2 (type "Error -> Error"))))
 ~~~

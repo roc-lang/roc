@@ -208,6 +208,10 @@ Here is the problematic code:
 Nothing is named `value` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
 **UNUSED VARIABLE**
 Variable ``first`` is not used anywhere in your code.
 
@@ -232,6 +236,21 @@ The unused variable is declared here:
                   ^^^^
 
 
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
 **UNUSED VARIABLE**
 Variable ``first`` is not used anywhere in your code.
 
@@ -243,6 +262,17 @@ The unused variable is declared here:
 ```
                                                                                       ^^^^^
 
+
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
 
 **UNUSED VARIABLE**
 Variable ``x`` is not used anywhere in your code.
@@ -268,6 +298,21 @@ The unused variable is declared here:
         ^
 
 
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
 **UNUSED VARIABLE**
 Variable ``x`` is not used anywhere in your code.
 
@@ -279,6 +324,13 @@ The unused variable is declared here:
 ```
                                                            ^
 
+
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
 
 # TOKENS
 ~~~zig
@@ -349,6 +401,63 @@ match value {
 		(branches
 			(branch
 				(patterns
+					(p-list @2.5-2.24 (degenerate false)
+						(patterns
+							(p-assign @2.6-2.11 (ident "first")))
+						(rest-at (index 1)
+							(p-assign @2.19-2.23 (ident "rest")))))
+				(value
+					(e-runtime-error (tag "expr_not_canonicalized"))))
+			(branch
+				(patterns
+					(p-runtime-error @2.51-2.77 (tag "pattern_not_canonicalized") (degenerate false)))
+				(value
+					(e-runtime-error (tag "expr_not_canonicalized"))))
+			(branch
+				(patterns
+					(p-applied-tag @2.77-2.80 (degenerate false)))
+				(value
+					(e-runtime-error (tag "expr_not_canonicalized"))))
+			(branch
+				(patterns
+					(p-assign @2.87-2.92 (ident "first") (degenerate false)))
+				(value
+					(e-runtime-error (tag "expr_not_canonicalized"))))
+			(branch
+				(patterns
+					(p-runtime-error @2.93-2.94 (tag "pattern_not_canonicalized") (degenerate false)))
+				(value
+					(e-runtime-error (tag "expr_not_canonicalized"))))
+			(branch
+				(patterns
+					(p-list @3.5-3.11 (degenerate false)
+						(patterns
+							(p-assign @3.6-3.7 (ident "x"))
+							(p-assign @3.9-3.10 (ident "y")))))
+				(value
+					(e-runtime-error (tag "expr_not_canonicalized"))))
+			(branch
+				(patterns
+					(p-runtime-error @3.26-3.50 (tag "pattern_not_canonicalized") (degenerate false)))
+				(value
+					(e-runtime-error (tag "expr_not_canonicalized"))))
+			(branch
+				(patterns
+					(p-applied-tag @3.50-3.53 (degenerate false)))
+				(value
+					(e-runtime-error (tag "expr_not_canonicalized"))))
+			(branch
+				(patterns
+					(p-assign @3.60-3.61 (ident "x") (degenerate false)))
+				(value
+					(e-runtime-error (tag "expr_not_canonicalized"))))
+			(branch
+				(patterns
+					(p-runtime-error @3.62-3.63 (tag "pattern_not_canonicalized") (degenerate false)))
+				(value
+					(e-runtime-error (tag "expr_not_canonicalized"))))
+			(branch
+				(patterns
 					(p-underscore @4.5-4.6 (degenerate false)))
 				(value
 					(e-string @4.10-4.17
@@ -356,5 +465,5 @@ match value {
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-5.2 (type "*"))
+(expr @1.1-5.2 (type "Error"))
 ~~~

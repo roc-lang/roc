@@ -452,7 +452,7 @@ This expression is used in an unexpected way:
  ^^
 
 It is of type:
-    _*, [Tb]* -> *_
+    _*, [Tb]* -> Error_
 
 But you are trying to use it as:
     _* -> *_
@@ -1383,14 +1383,14 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @35.1-35.4 (type "[True, False] -> Num(*)"))
-		(patt @38.1-38.4 (type "[True, False] -> Error"))
+		(patt @35.1-35.4 (type "[False, True] -> Num(*)"))
+		(patt @38.1-38.4 (type "[False, True] -> Error"))
 		(patt @49.1-49.3 (type "Error"))
 		(patt @75.1-75.3 (type "* -> *"))
 		(patt @114.1-114.2 (type "{}")))
 	(expressions
-		(expr @35.7-37.4 (type "[True, False] -> Num(*)"))
-		(expr @38.7-47.2 (type "[True, False] -> Error"))
+		(expr @35.7-37.4 (type "[False, True] -> Num(*)"))
+		(expr @38.7-47.2 (type "[False, True] -> Error"))
 		(expr @49.6-71.7 (type "Error"))
 		(expr @75.5-111.2 (type "* -> *"))
 		(expr @114.5-114.7 (type "{}"))))

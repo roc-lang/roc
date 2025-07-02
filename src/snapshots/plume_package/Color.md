@@ -474,6 +474,22 @@ The unused variable is declared here:
     ^^^^^^^^^^^^^^^^^^^^
 
 
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: top-level expect
 Let us know if you want to help!
@@ -537,6 +553,20 @@ Only definitions, type annotations, and imports are allowed at the top level.
 **UNDEFINED VARIABLE**
 Nothing is named `from_list` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**Color.md:27:1:27:4:**
+```roc
+hex = |str| {
+```
+^^^
+
+It is of type:
+    _Str_
+
+But you are trying to use it as:
+    _{ to_utf8: * }_
 
 # TOKENS
 ~~~zig
@@ -1261,6 +1291,11 @@ is_named_color = |str| {
 					(branches
 						(branch
 							(patterns
+								(p-applied-tag @50.5-50.10 (degenerate false)))
+							(value
+								(e-runtime-error (tag "expr_not_canonicalized"))))
+						(branch
+							(patterns
 								(p-tuple @50.14-50.23 (degenerate false)
 									(patterns
 										(p-assign @50.15-50.16 (ident "r"))
@@ -1287,6 +1322,11 @@ is_named_color = |str| {
 										(e-lookup-local @50.81-50.82
 											(pattern @50.21-50.22)))
 									(e-literal @50.84-50.85 (string ")")))))
+						(branch
+							(patterns
+								(p-applied-tag @51.5-51.10 (degenerate false)))
+							(value
+								(e-runtime-error (tag "expr_not_canonicalized"))))
 						(branch
 							(patterns
 								(p-tuple @51.15-51.27 (degenerate false)
@@ -1324,12 +1364,22 @@ is_named_color = |str| {
 									(e-literal @51.107-51.108 (string ")")))))
 						(branch
 							(patterns
+								(p-applied-tag @52.5-52.10 (degenerate false)))
+							(value
+								(e-runtime-error (tag "expr_not_canonicalized"))))
+						(branch
+							(patterns
 								(p-tuple @52.16-52.23 (degenerate false)
 									(patterns
 										(p-assign @52.17-52.22 (ident "inner")))))
 							(value
 								(e-lookup-local @52.27-52.32
 									(pattern @52.17-52.22))))
+						(branch
+							(patterns
+								(p-applied-tag @53.5-53.10 (degenerate false)))
+							(value
+								(e-runtime-error (tag "expr_not_canonicalized"))))
 						(branch
 							(patterns
 								(p-tuple @53.14-53.21 (degenerate false)
@@ -1403,15 +1453,15 @@ is_named_color = |str| {
 	(defs
 		(patt @18.1-18.4 (type "U8, U8, U8 -> [Color]*"))
 		(patt @21.1-21.5 (type "U8, U8, U8, U8 -> (U8, U8, U8, *)"))
-		(patt @27.1-27.4 (type "Str -> Error"))
-		(patt @49.1-49.7 (type "Color -> Str"))
+		(patt @27.1-27.4 (type "Error -> Error"))
+		(patt @49.1-49.7 (type "Color -> Error"))
 		(patt @61.1-61.6 (type "Error"))
 		(patt @67.1-67.15 (type "* -> *")))
 	(expressions
 		(expr @18.7-18.22 (type "U8, U8, U8 -> [Color]*"))
 		(expr @21.8-24.2 (type "U8, U8, U8, U8 -> (U8, U8, U8, *)"))
-		(expr @27.7-46.2 (type "Str -> Error"))
-		(expr @49.10-56.7 (type "Color -> Str"))
+		(expr @27.7-46.2 (type "Error -> Error"))
+		(expr @49.10-56.7 (type "Color -> Error"))
 		(expr @61.9-63.24 (type "Error"))
 		(expr @67.18-71.2 (type "* -> *"))))
 ~~~

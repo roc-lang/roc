@@ -270,6 +270,48 @@ processColor = |color| {
 This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
 Let us know if you want to help!
 
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
+
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
+
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
+
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:20),Comma(1:20-1:21),LowerIdent(1:22-1:34),CloseSquare(1:34-1:35),Newline(1:1-1:1),
@@ -386,7 +428,52 @@ processColor = |color| {
 						(cond
 							(e-lookup-local @11.11-11.16
 								(pattern @6.17-6.22)))
-						(branches)))))
+						(branches
+							(branch
+								(patterns
+									(p-applied-tag @12.9-12.12 (degenerate false)))
+								(value
+									(e-runtime-error (tag "expr_not_canonicalized"))))
+							(branch
+								(patterns
+									(p-runtime-error @12.17-12.31 (tag "pattern_not_canonicalized") (degenerate false)))
+								(value
+									(e-tag @12.20-12.31 (name "LocalStatus") (args "TODO"))))
+							(branch
+								(patterns
+									(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized") (degenerate false)))
+								(value
+									(e-runtime-error (tag "expr_not_canonicalized"))))
+							(branch
+								(patterns
+									(p-applied-tag @13.9-13.12 (degenerate false)))
+								(value
+									(e-runtime-error (tag "expr_not_canonicalized"))))
+							(branch
+								(patterns
+									(p-runtime-error @13.19-13.33 (tag "pattern_not_canonicalized") (degenerate false)))
+								(value
+									(e-tag @13.22-13.33 (name "LocalStatus") (args "TODO"))))
+							(branch
+								(patterns
+									(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized") (degenerate false)))
+								(value
+									(e-runtime-error (tag "expr_not_canonicalized"))))
+							(branch
+								(patterns
+									(p-applied-tag @14.9-14.12 (degenerate false)))
+								(value
+									(e-runtime-error (tag "expr_not_canonicalized"))))
+							(branch
+								(patterns
+									(p-runtime-error @14.18-14.32 (tag "pattern_not_canonicalized") (degenerate false)))
+								(value
+									(e-tag @14.21-14.32 (name "LocalStatus") (args "TODO"))))
+							(branch
+								(patterns
+									(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized") (degenerate false)))
+								(value
+									(e-runtime-error (tag "expr_not_canonicalized")))))))))
 		(annotation @6.1-6.13
 			(declared-type
 				(ty-fn @5.16-5.32 (effectful false)
@@ -402,7 +489,7 @@ processColor = |color| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.13 (type "* -> LocalStatus")))
+		(patt @6.1-6.13 (type "* -> Error")))
 	(expressions
-		(expr @6.16-16.2 (type "* -> LocalStatus"))))
+		(expr @6.16-16.2 (type "* -> Error"))))
 ~~~

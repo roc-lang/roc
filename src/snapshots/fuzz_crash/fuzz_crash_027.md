@@ -606,18 +606,19 @@ The unused variable is declared here:
  ^^^^
 
 
-**INVALID IF CONDITION**
-This `if` condition needs to be a _Bool_:
-**fuzz_crash_027.md:50:5:**
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**fuzz_crash_027.md:48:1:48:8:**
 ```roc
-	if num {
+add_one = |num| {
 ```
-    ^^^
+^^^^^^^
 
-Right now, it has the type:
+It is of type:
     _U64_
 
-Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
+But you are trying to use it as:
+    _[True, False]_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -628,7 +629,7 @@ This expression is used in an unexpected way:
  ^^^^^^^^^^
 
 It is of type:
-    _*, * -> *_
+    _*, * -> Error_
 
 But you are trying to use it as:
     _* -> *_
@@ -1825,12 +1826,12 @@ main! = |_| { # Yeah Ie
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @45.1-45.4 (type "[True, False] -> Num(*)"))
+		(patt @45.1-45.4 (type "[False, True] -> Num(*)"))
 		(patt @48.1-48.8 (type "Error -> U64"))
 		(patt @60.1-60.11 (type "Error"))
 		(patt @100.1-100.6 (type "Error -> Error")))
 	(expressions
-		(expr @45.7-47.8 (type "[True, False] -> Num(*)"))
+		(expr @45.7-47.8 (type "[False, True] -> Num(*)"))
 		(expr @48.11-58.2 (type "Error -> U64"))
 		(expr @60.14-96.7 (type "Error"))
 		(expr @100.9-159.2 (type "Error -> Error"))))
