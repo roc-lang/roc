@@ -2010,6 +2010,7 @@ pub const IntValue = struct {
 pub const IfBranch = struct {
     cond: Expr.Idx,
     body: Expr.Idx,
+    region: Region,
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };

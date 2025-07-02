@@ -29,16 +29,15 @@ Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
 
 **INCOMPATIBLE IF BRANCHES**
 This `if` has an `else` branch with a different type from it's `then` branch:
-**if_then_else_simple_file.md:1:1:**
+**if_then_else_simple_file.md:3:7:**
 ```roc
-module [foo]
-
 foo = if 1 A
 
     else {
 	"hello"
     }
 ```
+ ^^^^^^^
 
 The `else` branch has the type:
     _Str_

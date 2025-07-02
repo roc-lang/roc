@@ -40,12 +40,15 @@ if bool {
 } else if 10 { # Comment after else open
 	A
 } else { # Comment after else open
+	3
+}
 ```
+ ^
 
 The second branch has this type:
     _[A]*_
 
-But all the previous branches have this type:
+But the previous branch has this type:
     _Num(*)_
 
 All branches in an `if` must have compatible types.

@@ -559,11 +559,15 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         // Determine the overall region that encompasses both elements
-        const if_expr_region = self.can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(data.last_if_branch)));
-        const actual_region = self.can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(types.actual_var)));
+        const last_if_branch_region = self.can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(data.last_if_branch)));
 
-        const overall_start_offset = @min(if_expr_region.start.offset, actual_region.start.offset);
-        const overall_end_offset = @max(if_expr_region.end.offset, actual_region.end.offset);
+        // TODO: getExprSpecific will panic if actual_var is not an Expr
+        // It _should_ always be, but we should handle this better so it don't blow up
+        const zoomed_in_var = self.can_ir.store.getExprSpecific(@enumFromInt(@intFromEnum(types.actual_var)));
+        const actual_region = self.can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(zoomed_in_var)));
+
+        const overall_start_offset = @min(last_if_branch_region.start.offset, actual_region.start.offset);
+        const overall_end_offset = @max(last_if_branch_region.end.offset, actual_region.end.offset);
 
         const overall_region_info = base.RegionInfo.position(
             self.source,
@@ -625,6 +629,8 @@ pub const ReportBuilder = struct {
             try report.document.addText("But the ");
             try report.document.addAnnotated("then", .keyword);
             try report.document.addText(" branch has the type:");
+        } else if (data.problem_branch_index == 1) {
+            try report.document.addText("But the previous branch has this type:");
         } else {
             try report.document.addText("But all the previous branches have this type:");
         }
