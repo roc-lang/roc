@@ -12,23 +12,37 @@ const SExpr = base.SExpr;
 const Pattern = CIR.Pattern;
 const Expr = CIR.Expr;
 
-/// A single statement - either at the top-level or within a block.
+/// A single statement - either at the top-level or within a block expression.
 pub const Statement = union(enum) {
-    /// A simple immutable declaration
+    /// A simple immutable declaration.
+    ///
+    /// ```roc
+    /// foo = "bar"
+    /// ```
     s_decl: struct {
         pattern: Pattern.Idx,
         expr: Expr.Idx,
         region: Region,
     },
-    /// A rebindable declaration using the "var" keyword
-    /// Not valid at the top level of a module
+    /// A rebindable declaration using the "var" keyword.
+    ///
+    /// Not valid at the top level of a module.
+    ///
+    /// ```roc
+    /// var foo_ = "bar"
+    /// ```
     s_var: struct {
         pattern_idx: Pattern.Idx,
         expr: Expr.Idx,
         region: Region,
     },
     /// Reassignment of a previously declared var
+    ///
     /// Not valid at the top level of a module
+    ///
+    /// ```roc
+    /// foo_ = "bar"
+    /// ```
     s_reassign: struct {
         pattern_idx: Pattern.Idx,
         expr: Expr.Idx,
@@ -37,6 +51,10 @@ pub const Statement = union(enum) {
     /// The "crash" keyword instruct a runtime crash with message
     ///
     /// Not valid at the top level of a module
+    ///
+    /// ```roc
+    /// crash "something unrecoverable happened here"
+    /// ```
     s_crash: struct {
         msg: StringLiteral.Idx,
         region: Region,
@@ -49,6 +67,9 @@ pub const Statement = union(enum) {
         region: Region,
     },
     /// An expression that will cause a panic (or some other error handling mechanism) if it evaluates to false
+    /// ```roc
+    /// expect [1,2,3].len() == 3
+    /// ```
     s_expect: struct {
         body: Expr.Idx,
         region: Region,
@@ -56,6 +77,12 @@ pub const Statement = union(enum) {
     /// A block of code that will be ran multiple times for each item in a list.
     ///
     /// Not valid at the top level of a module
+    ///
+    /// ```roc
+    /// for item in [1,2,3] {
+    ///     print!(item.toStr())
+    /// }
+    /// ```
     s_for: struct {
         patt: Pattern.Idx,
         expr: Expr.Idx,
@@ -65,13 +92,19 @@ pub const Statement = union(enum) {
     /// A early return of the enclosing function.
     ///
     /// Not valid at the top level of a module
+    ///
+    /// ```roc
+    /// return Err(-1)
+    /// ```
     s_return: struct {
         expr: Expr.Idx,
         region: Region,
     },
     /// Brings in another module for use in the current module, optionally exposing only certain members of that module.
     ///
-    /// Only valid at the top level of a module
+    /// ```roc
+    /// import json.Utf8 as Json
+    /// ```
     s_import: struct {
         module_name_tok: Ident.Idx,
         qualifier_tok: ?Ident.Idx,
@@ -89,6 +122,10 @@ pub const Statement = union(enum) {
         region: Region,
     },
     /// A type annotation, declaring that the value referred to by an ident in the same scope should be a given type.
+    ///
+    /// ```roc
+    /// print! : Str => Result({}, [IOErr])
+    /// ```
     s_type_anno: struct {
         name: Ident.Idx,
         anno: CIR.TypeAnno.Idx,

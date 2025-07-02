@@ -68,8 +68,6 @@ external_decls: std.ArrayList(ExternalDecl),
 ///
 /// Since the can IR holds indices into the `ModuleEnv`, we need
 /// the `ModuleEnv` to also be owned by the can IR to cache it.
-///
-/// Takes ownership of the module_env
 pub fn init(env: *ModuleEnv) CIR {
     return CIR{
         .env = env,
