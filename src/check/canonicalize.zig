@@ -2299,7 +2299,7 @@ fn canonicalize_pattern(
                     }
 
                     // Create the RecordDestruct for this field
-                    const record_destruct = CIR.RecordDestruct{
+                    const record_destruct = CIR.Pattern.RecordDestruct{
                         .region = field_region,
                         .label = field_name_ident,
                         .ident = field_name_ident,

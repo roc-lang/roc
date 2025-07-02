@@ -714,7 +714,7 @@ test "NodeStore round trip - Pattern" {
         .record_destructure = .{
             .whole_var = @enumFromInt(890),
             .ext_var = @enumFromInt(901),
-            .destructs = CIR.RecordDestruct.Span{ .span = base.DataSpan.init(1012, 1123) },
+            .destructs = CIR.Pattern.RecordDestruct.Span{ .span = base.DataSpan.init(1012, 1123) },
             .region = from_raw_offsets(70, 80),
         },
     });

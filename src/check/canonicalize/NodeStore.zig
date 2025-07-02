@@ -31,7 +31,7 @@ scratch_if_branches: base.Scratch(CIR.IfBranch.Idx),
 scratch_where_clauses: base.Scratch(CIR.WhereClause.Idx),
 scratch_patterns: base.Scratch(CIR.Pattern.Idx),
 scratch_pattern_record_fields: base.Scratch(CIR.PatternRecordField.Idx),
-scratch_record_destructs: base.Scratch(CIR.RecordDestruct.Idx),
+scratch_record_destructs: base.Scratch(CIR.Pattern.RecordDestruct.Idx),
 scratch_type_annos: base.Scratch(CIR.TypeAnno.Idx),
 scratch_anno_record_fields: base.Scratch(CIR.AnnoRecordField.Idx),
 scratch_exposed_items: base.Scratch(CIR.ExposedItem.Idx),
@@ -56,7 +56,7 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) NodeStore {
         .scratch_patterns = base.Scratch(CIR.Pattern.Idx).init(gpa),
         .scratch_record_fields = base.Scratch(CIR.RecordField.Idx).init(gpa),
         .scratch_pattern_record_fields = base.Scratch(CIR.PatternRecordField.Idx).init(gpa),
-        .scratch_record_destructs = base.Scratch(CIR.RecordDestruct.Idx).init(gpa),
+        .scratch_record_destructs = base.Scratch(CIR.Pattern.RecordDestruct.Idx).init(gpa),
         .scratch_match_branches = base.Scratch(CIR.Expr.Match.Branch.Idx).init(gpa),
         .scratch_match_branch_patterns = base.Scratch(CIR.Expr.Match.BranchPattern.Idx).init(gpa),
         .scratch_if_branches = base.Scratch(CIR.IfBranch.Idx).init(gpa),
@@ -764,7 +764,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
             return CIR.Pattern{
                 .record_destructure = .{
                     .region = node.region,
-                    .destructs = DataSpan.init(destructs_start, destructs_len).as(CIR.RecordDestruct.Span),
+                    .destructs = DataSpan.init(destructs_start, destructs_len).as(CIR.Pattern.RecordDestruct.Span),
                     .ext_var = ext_var,
                     .whole_var = whole_var,
                 },
@@ -1480,7 +1480,7 @@ pub fn addRecordField(store: *NodeStore, recordField: CIR.RecordField) CIR.Recor
 }
 
 /// Adds a record destructuring to the store.
-pub fn addRecordDestruct(store: *NodeStore, record_destruct: CIR.RecordDestruct) CIR.RecordDestruct.Idx {
+pub fn addRecordDestruct(store: *NodeStore, record_destruct: CIR.Pattern.RecordDestruct) CIR.Pattern.RecordDestruct.Idx {
     var node = Node{
         .data_1 = @bitCast(record_destruct.label),
         .data_2 = @bitCast(record_destruct.ident),
@@ -1972,7 +1972,7 @@ pub fn getRecordField(store: *const NodeStore, idx: CIR.RecordField.Idx) CIR.Rec
 }
 
 /// Retrieves a record destructure from the store.
-pub fn getRecordDestruct(store: *const NodeStore, idx: CIR.RecordDestruct.Idx) CIR.RecordDestruct {
+pub fn getRecordDestruct(store: *const NodeStore, idx: CIR.Pattern.RecordDestruct.Idx) CIR.Pattern.RecordDestruct {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(idx)));
 
     // Retrieve kind from extra_data if it exists
@@ -1982,13 +1982,13 @@ pub fn getRecordDestruct(store: *const NodeStore, idx: CIR.RecordDestruct.Idx) C
         const kind_tag = extra_data[0];
 
         break :blk switch (kind_tag) {
-            0 => CIR.RecordDestruct.Kind.Required,
-            1 => CIR.RecordDestruct.Kind{ .Guard = @enumFromInt(extra_data[1]) },
-            else => CIR.RecordDestruct.Kind.Required,
+            0 => CIR.Pattern.RecordDestruct.Kind.Required,
+            1 => CIR.Pattern.RecordDestruct.Kind{ .Guard = @enumFromInt(extra_data[1]) },
+            else => CIR.Pattern.RecordDestruct.Kind.Required,
         };
-    } else CIR.RecordDestruct.Kind.Required;
+    } else CIR.Pattern.RecordDestruct.Kind.Required;
 
-    return CIR.RecordDestruct{
+    return CIR.Pattern.RecordDestruct{
         .label = @bitCast(node.data_1),
         .ident = @bitCast(node.data_2),
         .region = node.region,
@@ -2193,7 +2193,7 @@ pub fn defSpanFrom(store: *NodeStore, start: u32) CIR.Def.Span {
 }
 
 /// Retrieves a slice of record destructures from the store.
-pub fn recordDestructSpanFrom(store: *NodeStore, start: u32) CIR.RecordDestruct.Span {
+pub fn recordDestructSpanFrom(store: *NodeStore, start: u32) CIR.Pattern.RecordDestruct.Span {
     const end = store.scratch_record_destructs.top();
     defer store.scratch_record_destructs.clearFrom(start);
     var i = @as(usize, @intCast(start));
@@ -2222,7 +2222,7 @@ pub fn scratchRecordDestructTop(store: *NodeStore) u32 {
 }
 
 /// Adds a record destruct index to the scratch record destructures array.
-pub fn addScratchRecordDestruct(store: *NodeStore, idx: CIR.RecordDestruct.Idx) void {
+pub fn addScratchRecordDestruct(store: *NodeStore, idx: CIR.Pattern.RecordDestruct.Idx) void {
     store.scratch_record_destructs.append(store.gpa, idx);
 }
 
@@ -2374,8 +2374,8 @@ pub fn sliceAnnoRecordFields(store: *const NodeStore, span: CIR.AnnoRecordField.
 }
 
 /// Returns a slice of record destruct fields from the store.
-pub fn sliceRecordDestructs(store: *const NodeStore, span: CIR.RecordDestruct.Span) []CIR.RecordDestruct.Idx {
-    return store.sliceFromSpan(CIR.RecordDestruct.Idx, span.span);
+pub fn sliceRecordDestructs(store: *const NodeStore, span: CIR.Pattern.RecordDestruct.Span) []CIR.Pattern.RecordDestruct.Idx {
+    return store.sliceFromSpan(CIR.Pattern.RecordDestruct.Idx, span.span);
 }
 
 /// Creates a diagnostic node that stores error information.
@@ -2909,6 +2909,6 @@ pub fn deserializeFrom(buffer: []align(@alignOf(Node)) const u8, allocator: std.
         .scratch_exposed_items = base.Scratch(CIR.ExposedItem.Idx){ .items = .{} },
         .scratch_defs = base.Scratch(CIR.Def.Idx){ .items = .{} },
         .scratch_diagnostics = base.Scratch(CIR.Diagnostic.Idx){ .items = .{} },
-        .scratch_record_destructs = base.Scratch(CIR.RecordDestruct.Idx){ .items = .{} },
+        .scratch_record_destructs = base.Scratch(CIR.Pattern.RecordDestruct.Idx){ .items = .{} },
     };
 }
