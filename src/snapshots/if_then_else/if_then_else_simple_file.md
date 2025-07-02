@@ -16,7 +16,7 @@ foo = if 1 A
 # PROBLEMS
 **INVALID IF CONDITION**
 This `if` condition needs to be a _Bool_:
-**if_then_else.md:3:10:**
+**if_then_else_simple_file.md:3:10:**
 ```roc
 foo = if 1 A
 ```
@@ -29,7 +29,7 @@ Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
 
 **INCOMPATIBLE IF BRANCHES**
 This `if` has an `else` branch with a different type from it's `then` branch:
-**if_then_else.md:3:7:**
+**if_then_else_simple_file.md:3:7:**
 ```roc
 foo = if 1 A
 
