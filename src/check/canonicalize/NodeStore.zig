@@ -2006,166 +2006,144 @@ pub fn getIfBranch(store: *const NodeStore, if_branch_idx: CIR.Expr.IfBranch.Idx
     };
 }
 
-/// Returns the top index for scratch expressions.
+/// Generic function to get the top of any scratch buffer
+pub fn scratchTop(store: *NodeStore, comptime field_name: []const u8) u32 {
+    return @field(store, field_name).top();
+}
+
+/// Generic function to add an item to any scratch buffer
+pub fn addScratch(store: *NodeStore, comptime field_name: []const u8, idx: anytype) void {
+    @field(store, field_name).append(store.gpa, idx);
+}
+
+/// Generic function to clear any scratch buffer from a given position
+pub fn clearScratchFrom(store: *NodeStore, comptime field_name: []const u8, start: u32) void {
+    @field(store, field_name).clearFrom(start);
+}
+
+/// Generic function to create a span from any scratch buffer
+pub fn spanFrom(store: *NodeStore, comptime field_name: []const u8, comptime SpanType: type, start: u32) SpanType {
+    const scratch_field = &@field(store, field_name);
+    const end = scratch_field.top();
+    defer scratch_field.clearFrom(start);
+    var i = @as(usize, @intCast(start));
+    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
+    std.debug.assert(end >= i);
+    while (i < end) {
+        store.extra_data.append(store.gpa, @intFromEnum(scratch_field.items.items[i])) catch |err| exitOnOom(err);
+        i += 1;
+    }
+    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+}
+
+/// Returns the top of the scratch expressions buffer.
 pub fn scratchExprTop(store: *NodeStore) u32 {
-    return store.scratch_exprs.top();
+    return store.scratchTop("scratch_exprs");
 }
 
 /// Adds a scratch expression to temporary storage.
 pub fn addScratchExpr(store: *NodeStore, idx: CIR.Expr.Idx) void {
-    store.scratch_exprs.append(store.gpa, idx);
+    store.addScratch("scratch_exprs", idx);
 }
 
 /// Adds a statement index to the scratch statements list for building spans.
 pub fn addScratchStatement(store: *NodeStore, idx: CIR.Statement.Idx) void {
-    store.scratch_statements.append(store.gpa, idx);
+    store.addScratch("scratch_statements", idx);
 }
 
 /// Computes the span of an expression starting from a given index.
 pub fn exprSpanFrom(store: *NodeStore, start: u32) CIR.Expr.Span {
-    const end = store.scratch_exprs.top();
-    defer store.scratch_exprs.clearFrom(start);
-    var i = @as(usize, @intCast(start));
-    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
-    std.debug.assert(end >= i);
-    while (i < end) {
-        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_exprs.items.items[i])) catch |err| exitOnOom(err);
-        i += 1;
-    }
-    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+    return store.spanFrom("scratch_exprs", CIR.Expr.Span, start);
 }
 
 /// Creates a statement span from the given start position to the current top of scratch statements.
 pub fn statementSpanFrom(store: *NodeStore, start: u32) CIR.Statement.Span {
-    const end = store.scratch_statements.top();
-    defer store.scratch_statements.clearFrom(start);
-    var i = @as(usize, @intCast(start));
-    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
-    std.debug.assert(end >= i);
-    while (i < end) {
-        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_statements.items.items[i])) catch |err| exitOnOom(err);
-        i += 1;
-    }
-    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+    return store.spanFrom("scratch_statements", CIR.Statement.Span, start);
 }
 
 /// Clears scratch expressions starting from a specified index.
 pub fn clearScratchExprsFrom(store: *NodeStore, start: u32) void {
-    store.scratch_exprs.clearFrom(start);
+    store.clearScratchFrom("scratch_exprs", start);
 }
 
 /// Returns a slice of expressions from the scratch space.
 pub fn exprSlice(store: *const NodeStore, span: CIR.Expr.Span) []CIR.Expr.Idx {
-    const slice = store.extra_data.items[span.span.start..(span.span.start + span.span.len)];
-    const result: []CIR.Expr.Idx = @ptrCast(@alignCast(slice));
-    return result;
+    return store.sliceFromSpan(CIR.Expr.Idx, span.span);
 }
 
 /// Returns the top index for scratch definitions.
 pub fn scratchDefTop(store: *NodeStore) u32 {
-    return store.scratch_defs.top();
+    return store.scratchTop("scratch_defs");
 }
 
 /// Adds a scratch definition to temporary storage.
 pub fn addScratchDef(store: *NodeStore, idx: CIR.Def.Idx) void {
-    store.scratch_defs.append(store.gpa, idx);
+    store.addScratch("scratch_defs", idx);
 }
 
 /// Adds a type annotation to the scratch buffer.
 pub fn addScratchTypeAnno(store: *NodeStore, idx: CIR.TypeAnno.Idx) void {
-    store.scratch_type_annos.append(store.gpa, idx);
+    store.addScratch("scratch_type_annos", idx);
 }
 
 /// Returns the current top of the scratch type annotations buffer.
 pub fn scratchTypeAnnoTop(store: *NodeStore) u32 {
-    return store.scratch_type_annos.top();
+    return store.scratchTop("scratch_type_annos");
 }
 
 /// Clears scratch type annotations from the given index.
 pub fn clearScratchTypeAnnosFrom(store: *NodeStore, from: u32) void {
-    store.scratch_type_annos.items.shrinkRetainingCapacity(from);
+    store.clearScratchFrom("scratch_type_annos", from);
 }
 
 /// Creates a span from the scratch type annotations starting at the given index.
 pub fn typeAnnoSpanFrom(store: *NodeStore, start: u32) CIR.TypeAnno.Span {
-    const end = store.scratch_type_annos.top();
-    defer store.scratch_type_annos.clearFrom(start);
-    var i = @as(usize, @intCast(start));
-    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
-    while (i < end) {
-        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_type_annos.items.items[i])) catch |err| exitOnOom(err);
-        i += 1;
-    }
-    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+    return store.spanFrom("scratch_type_annos", CIR.TypeAnno.Span, start);
 }
 
 /// Returns a span from the scratch anno record fields starting at the given index.
 pub fn annoRecordFieldSpanFrom(store: *NodeStore, start: u32) CIR.TypeAnno.RecordField.Span {
-    const end = store.scratch_anno_record_fields.top();
-    defer store.scratch_anno_record_fields.clearFrom(start);
-    var i = @as(usize, @intCast(start));
-    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
-    while (i < end) {
-        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_anno_record_fields.items.items[i])) catch |err| exitOnOom(err);
-        i += 1;
-    }
-    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+    return store.spanFrom("scratch_anno_record_fields", CIR.TypeAnno.RecordField.Span, start);
 }
 
 /// Returns a span from the scratch record fields starting at the given index.
 pub fn recordFieldSpanFrom(store: *NodeStore, start: u32) CIR.RecordField.Span {
-    const end = store.scratch_record_fields.top();
-    defer store.scratch_record_fields.clearFrom(start);
-    var i = @as(usize, @intCast(start));
-    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
-    while (i < end) {
-        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_record_fields.items.items[i])) catch |err| exitOnOom(err);
-        i += 1;
-    }
-    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+    return store.spanFrom("scratch_record_fields", CIR.RecordField.Span, start);
 }
 
 /// Returns the current top of the scratch exposed items buffer.
 pub fn scratchExposedItemTop(store: *NodeStore) u32 {
-    return store.scratch_exposed_items.top();
+    return store.scratchTop("scratch_exposed_items");
 }
 
 /// Adds an exposed item to the scratch buffer.
 pub fn addScratchExposedItem(store: *NodeStore, idx: CIR.ExposedItem.Idx) void {
-    store.scratch_exposed_items.append(store.gpa, idx);
+    store.addScratch("scratch_exposed_items", idx);
 }
 
 /// Creates a span from the scratch exposed items starting at the given index.
 pub fn exposedItemSpanFrom(store: *NodeStore, start: u32) CIR.ExposedItem.Span {
-    const end = store.scratch_exposed_items.top();
-    defer store.scratch_exposed_items.clearFrom(start);
-    var i = @as(usize, @intCast(start));
-    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
-    while (i < end) {
-        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_exposed_items.items.items[i])) catch |err| exitOnOom(err);
-        i += 1;
-    }
-    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+    return store.spanFrom("scratch_exposed_items", CIR.ExposedItem.Span, start);
 }
 
 /// Clears scratch exposed items from the given index.
 pub fn clearScratchExposedItemsFrom(store: *NodeStore, start: u32) void {
-    store.scratch_exposed_items.clearFrom(start);
+    store.clearScratchFrom("scratch_exposed_items", start);
 }
 
 /// Returns the start position for a new Span of annoRecordFieldIdxs in scratch
 pub fn scratchAnnoRecordFieldTop(store: *NodeStore) u32 {
-    return store.scratch_anno_record_fields.top();
+    return store.scratchTop("scratch_anno_record_fields");
 }
 
 /// Places a new CIR.TypeAnno.RecordField.Idx in the scratch. Will panic on OOM.
 pub fn addScratchAnnoRecordField(store: *NodeStore, idx: CIR.TypeAnno.RecordField.Idx) void {
-    store.scratch_anno_record_fields.append(store.gpa, idx);
+    store.addScratch("scratch_anno_record_fields", idx);
 }
 
 /// Clears any AnnoRecordFieldIds added to scratch from start until the end.
 pub fn clearScratchAnnoRecordFieldsFrom(store: *NodeStore, start: u32) void {
-    store.scratch_anno_record_fields.clearFrom(start);
+    store.clearScratchFrom("scratch_anno_record_fields", start);
 }
 
 /// Returns a new AnnoRecordField slice so that the caller can iterate through
@@ -2176,69 +2154,42 @@ pub fn annoRecordFieldSlice(store: *NodeStore, span: CIR.TypeAnno.RecordField.Sp
 
 /// Computes the span of a definition starting from a given index.
 pub fn defSpanFrom(store: *NodeStore, start: u32) CIR.Def.Span {
-    const end = store.scratch_defs.top();
-    defer store.scratch_defs.clearFrom(start);
-    var i = @as(usize, @intCast(start));
-    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
-    std.debug.assert(end >= i);
-    while (i < end) {
-        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_defs.items.items[i])) catch |err| exitOnOom(err);
-        i += 1;
-    }
-    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+    return store.spanFrom("scratch_defs", CIR.Def.Span, start);
 }
 
 /// Retrieves a slice of record destructures from the store.
 pub fn recordDestructSpanFrom(store: *NodeStore, start: u32) CIR.Pattern.RecordDestruct.Span {
-    const end = store.scratch_record_destructs.top();
-    defer store.scratch_record_destructs.clearFrom(start);
-    var i = @as(usize, @intCast(start));
-    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
-    std.debug.assert(end >= i);
-    while (i < end) {
-        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_record_destructs.items.items[i])) catch |err| exitOnOom(err);
-        i += 1;
-    }
-    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+    return store.spanFrom("scratch_record_destructs", CIR.Pattern.RecordDestruct.Span, start);
 }
 
-/// Gets the current top index of the scratch patterns array.
+/// Returns the current top of the scratch patterns buffer.
 pub fn scratchPatternTop(store: *NodeStore) u32 {
-    return store.scratch_patterns.top();
+    return store.scratchTop("scratch_patterns");
 }
 
-/// Adds a pattern index to the scratch patterns array.
+/// Adds a pattern to the scratch patterns list for building spans.
 pub fn addScratchPattern(store: *NodeStore, idx: CIR.Pattern.Idx) void {
-    store.scratch_patterns.append(store.gpa, idx);
+    store.addScratch("scratch_patterns", idx);
 }
 
-/// Gets the current top index of the scratch record destructures array.
+/// Returns the current top of the scratch record destructures buffer.
 pub fn scratchRecordDestructTop(store: *NodeStore) u32 {
-    return store.scratch_record_destructs.top();
+    return store.scratchTop("scratch_record_destructs");
 }
 
-/// Adds a record destruct index to the scratch record destructures array.
+/// Adds a record destructure to the scratch record destructures list for building spans.
 pub fn addScratchRecordDestruct(store: *NodeStore, idx: CIR.Pattern.RecordDestruct.Idx) void {
-    store.scratch_record_destructs.append(store.gpa, idx);
+    store.addScratch("scratch_record_destructs", idx);
 }
 
-/// Computes the span of a pattern starting from a given index.
+/// Creates a pattern span from the given start position to the current top of scratch patterns.
 pub fn patternSpanFrom(store: *NodeStore, start: u32) CIR.Pattern.Span {
-    const end = store.scratch_patterns.top();
-    defer store.scratch_patterns.clearFrom(start);
-    var i = @as(usize, @intCast(start));
-    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
-    std.debug.assert(end >= i);
-    while (i < end) {
-        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_patterns.items.items[i])) catch |err| exitOnOom(err);
-        i += 1;
-    }
-    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+    return store.spanFrom("scratch_patterns", CIR.Pattern.Span, start);
 }
 
 /// Clears scratch definitions starting from a specified index.
 pub fn clearScratchDefsFrom(store: *NodeStore, start: u32) void {
-    store.scratch_defs.clearFrom(start);
+    store.clearScratchFrom("scratch_defs", start);
 }
 
 /// Creates a slice corresponding to a span.
@@ -2308,27 +2259,18 @@ pub fn lastFromStatements(store: *const NodeStore, span: CIR.Statement.Span) CIR
 
 /// Returns a slice of if branches from the store.
 pub fn scratchIfBranchTop(store: *NodeStore) u32 {
-    return store.scratch_if_branches.top();
+    return store.scratchTop("scratch_if_branches");
 }
 
 /// Adds an if branch to the scratch if branches list for building spans.
 pub fn addScratchIfBranch(store: *NodeStore, if_branch: CIR.Expr.IfBranch) void {
     const if_branch_idx = store.addIfBranch(if_branch);
-    store.scratch_if_branches.append(store.gpa, if_branch_idx);
+    store.addScratch("scratch_if_branches", if_branch_idx);
 }
 
 /// Creates an if branch span from the given start position to the current top of scratch if branches.
 pub fn ifBranchSpanFrom(store: *NodeStore, start: u32) CIR.Expr.IfBranch.Span {
-    const end = store.scratch_if_branches.top();
-    defer store.scratch_if_branches.clearFrom(start);
-    var i = @as(usize, @intCast(start));
-    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
-    std.debug.assert(end >= i);
-    while (i < end) {
-        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_if_branches.items.items[i])) catch |err| exitOnOom(err);
-        i += 1;
-    }
-    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+    return store.spanFrom("scratch_if_branches", CIR.Expr.IfBranch.Span, start);
 }
 
 /// Adds an if branch to the store and returns its index.
@@ -2546,7 +2488,7 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) CIR.Diagnostic.I
     const nid = @intFromEnum(store.nodes.append(store.gpa, node));
 
     // append to our scratch so we can get a span later of all our diagnostics
-    store.scratch_diagnostics.append(store.gpa, @enumFromInt(nid));
+    store.addScratch("scratch_diagnostics", @as(CIR.Diagnostic.Idx, @enumFromInt(nid)));
 
     return @enumFromInt(nid);
 }
@@ -2741,16 +2683,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
 
 /// Computes the span of a diagnostic starting from a given index.
 pub fn diagnosticSpanFrom(store: *NodeStore, start: u32) CIR.Diagnostic.Span {
-    const end = store.scratch_diagnostics.top();
-    defer store.scratch_diagnostics.clearFrom(start);
-    var i = @as(usize, @intCast(start));
-    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
-    std.debug.assert(end >= i);
-    while (i < end) {
-        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_diagnostics.items.items[i])) catch |err| exitOnOom(err);
-        i += 1;
-    }
-    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+    return store.spanFrom("scratch_diagnostics", CIR.Diagnostic.Span, start);
 }
 
 /// Ensure the node store has capacity for at least the requested number of
@@ -2774,54 +2707,34 @@ pub fn addTypeVarSlot(store: *NodeStore, parent_node_idx: Node.Idx, region: base
     return @enumFromInt(@intFromEnum(nid));
 }
 
-/// Returns the top index for scratch match branches.
+/// Return the current top index for scratch match branches.
 pub fn scratchMatchBranchTop(store: *NodeStore) u32 {
-    return store.scratch_match_branches.top();
+    return store.scratchTop("scratch_match_branches");
 }
 
-/// Adds a match branch pattern to the scratch f branches list for building spans.
-pub fn addScratchMatchBranch(store: *NodeStore, match_branch: CIR.Expr.Match.Branch) void {
-    const match_branch_idx = store.addMatchBranch(match_branch);
-    store.scratch_match_branches.append(store.gpa, match_branch_idx);
+/// Add a match branch index to the scratch buffer.
+pub fn addScratchMatchBranch(store: *NodeStore, branch_idx: CIR.Expr.Match.Branch.Idx) void {
+    store.addScratch("scratch_match_branches", branch_idx);
 }
 
-/// Creates a span from the scratch match branches starting at the given index.
+/// Create a span from the scratch match branches starting at the given index.
 pub fn matchBranchSpanFrom(store: *NodeStore, start: u32) CIR.Expr.Match.Branch.Span {
-    const end = store.scratch_match_branches.top();
-    defer store.scratch_match_branches.clearFrom(start);
-    var i = @as(usize, @intCast(start));
-    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
-    std.debug.assert(end >= i);
-    while (i < end) {
-        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_match_branches.items.items[i])) catch |err| exitOnOom(err);
-        i += 1;
-    }
-    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+    return store.spanFrom("scratch_match_branches", CIR.Expr.Match.Branch.Span, start);
 }
 
-/// Returns a slice of f branches from the store.
+/// Return the current top index for scratch match branch patterns.
 pub fn scratchMatchBranchPatternTop(store: *NodeStore) u32 {
-    return store.scratch_match_branch_patterns.top();
+    return store.scratchTop("scratch_match_branch_patterns");
 }
 
-/// Adds a match branch pattern to the scratch for building spans.
-pub fn addScratchMatchBranchPattern(store: *NodeStore, match_branch: CIR.Expr.Match.BranchPattern) void {
-    const match_branch_idx = store.addMatchBranchPattern(match_branch);
-    store.scratch_match_branch_patterns.append(store.gpa, match_branch_idx);
+/// Add a match branch pattern index to the scratch buffer.
+pub fn addScratchMatchBranchPattern(store: *NodeStore, pattern_idx: CIR.Expr.Match.BranchPattern.Idx) void {
+    store.addScratch("scratch_match_branch_patterns", pattern_idx);
 }
 
-/// Creates an f branch span from the given start position to the current top of scratch f branches.
+/// Create a span from the scratch match branch patterns starting at the given index.
 pub fn matchBranchPatternSpanFrom(store: *NodeStore, start: u32) CIR.Expr.Match.BranchPattern.Span {
-    const end = store.scratch_match_branch_patterns.top();
-    defer store.scratch_match_branch_patterns.clearFrom(start);
-    var i = @as(usize, @intCast(start));
-    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
-    std.debug.assert(end >= i);
-    while (i < end) {
-        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_match_branch_patterns.items.items[i])) catch |err| exitOnOom(err);
-        i += 1;
-    }
-    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+    return store.spanFrom("scratch_match_branch_patterns", CIR.Expr.Match.BranchPattern.Span, start);
 }
 
 /// Calculate the size needed to serialize this NodeStore

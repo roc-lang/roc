@@ -1821,11 +1821,12 @@ pub fn canonicalize_expr(
                             break :blk malformed_idx;
                         }
                     };
-                    self.can_ir.store.addScratchMatchBranchPattern(CIR.Expr.Match.BranchPattern{
+                    const branch_pattern_idx = self.can_ir.store.addMatchBranchPattern(CIR.Expr.Match.BranchPattern{
                         .pattern = pattern_idx,
                         .degenerate = false,
                         .region = pattern_region,
                     });
+                    self.can_ir.store.addScratchMatchBranchPattern(branch_pattern_idx);
                 }
 
                 // Get the pattern span
@@ -1845,7 +1846,7 @@ pub fn canonicalize_expr(
                     }
                 };
 
-                self.can_ir.store.addScratchMatchBranch(.{
+                const branch_idx = self.can_ir.store.addMatchBranch(CIR.Expr.Match.Branch{
                     .patterns = branch_pat_span,
                     .value = value_idx,
                     .guard = null,
@@ -1857,6 +1858,8 @@ pub fn canonicalize_expr(
                 if (index == 0) {
                     mb_branch_var = @enumFromInt(@intFromEnum(value_idx));
                 }
+
+                self.can_ir.store.addScratchMatchBranch(branch_idx);
             }
 
             // Create span from scratch branches
