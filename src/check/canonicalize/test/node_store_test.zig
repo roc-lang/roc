@@ -632,7 +632,7 @@ test "NodeStore round trip - TypeAnno" {
 
     try type_annos.append(CIR.TypeAnno{
         .record = .{
-            .fields = CIR.AnnoRecordField.Span{ .span = base.DataSpan.init(1345, 1567) },
+            .fields = CIR.TypeAnno.RecordField.Span{ .span = base.DataSpan.init(1345, 1567) },
             .region = from_raw_offsets(150, 160),
         },
     });
