@@ -8,20 +8,7 @@ type=expr
 Some(42)
 ~~~
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**tag_with_payload.md:1:1:1:5:**
-```roc
-Some(42)
-```
-^^^^
-
-It is of type:
-    _[Some]*_
-
-But you are trying to use it as:
-    _Num(*) -> *_
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent(1:1-1:5),NoSpaceOpenRound(1:5-1:6),Int(1:6-1:8),CloseRound(1:8-1:9),EndOfFile(1:9-1:9),
@@ -38,9 +25,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call @1.1-1.9
-	(e-tag @1.1-1.5 (name "Some") (args "TODO"))
-	(e-int @1.6-1.8 (value "42")))
+(e-tag @1.1-1.9 (name "Some") (args "TODO"))
 ~~~
 # TYPES
 ~~~clojure

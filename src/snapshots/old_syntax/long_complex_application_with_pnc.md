@@ -36,20 +36,6 @@ Is there an `import` or `exposing` missing up-top?
 Nothing is named `orange` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**long_complex_application_with_pnc.md:1:26:1:32:**
-```roc
-combine(mix(vodka, gin), Juices({
-```
-                         ^^^^^^
-
-It is of type:
-    _[Juices]*_
-
-But you are trying to use it as:
-    _{ color: Error, flavor: Error, amount: * } -> *_
-
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:8),NoSpaceOpenRound(1:8-1:9),LowerIdent(1:9-1:12),NoSpaceOpenRound(1:12-1:13),LowerIdent(1:13-1:18),Comma(1:18-1:19),LowerIdent(1:20-1:23),CloseRound(1:23-1:24),Comma(1:24-1:25),UpperIdent(1:26-1:32),NoSpaceOpenRound(1:32-1:33),OpenCurly(1:33-1:34),Newline(1:1-1:1),
@@ -99,18 +85,7 @@ combine(
 		(e-runtime-error (tag "ident_not_in_scope"))
 		(e-runtime-error (tag "ident_not_in_scope"))
 		(e-runtime-error (tag "ident_not_in_scope")))
-	(e-call @1.26-5.3
-		(e-tag @1.26-1.32 (name "Juices") (args "TODO"))
-		(e-record @1.33-5.2
-			(fields
-				(field (name "color")
-					(e-runtime-error (tag "ident_not_in_scope")))
-				(field (name "flavor")
-					(e-runtime-error (tag "ident_not_in_scope")))
-				(field (name "amount")
-					(e-binop @4.13-5.2 (op "add")
-						(e-int @4.13-4.14 (value "1"))
-						(e-int @4.17-4.18 (value "2"))))))))
+	(e-tag @1.26-5.3 (name "Juices") (args "TODO")))
 ~~~
 # TYPES
 ~~~clojure

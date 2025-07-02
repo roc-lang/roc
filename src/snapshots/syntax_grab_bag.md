@@ -618,62 +618,6 @@ It is of type:
 But you are trying to use it as:
     _* -> *_
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**syntax_grab_bag.md:164:21:164:23:**
-```roc
-	tag_with_payload = Ok(number)
-```
-                    ^^
-
-It is of type:
-    _[Ok]*_
-
-But you are trying to use it as:
-    _* -> *_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**syntax_grab_bag.md:178:52:178:54:**
-```roc
-	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
-```
-                                                   ^^
-
-It is of type:
-    _[Ok]*_
-
-But you are trying to use it as:
-    _* -> *_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**syntax_grab_bag.md:179:30:179:32:**
-```roc
-	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
-```
-                             ^^
-
-It is of type:
-    _[Ok]*_
-
-But you are trying to use it as:
-    _* -> *_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**syntax_grab_bag.md:184:3:184:5:**
-```roc
-		Ok(world), # This one has a comment
-```
-  ^^
-
-It is of type:
-    _[Ok]*_
-
-But you are trying to use it as:
-    _* -> *_
-
 # TOKENS
 ~~~zig
 Newline(1:2-1:28),
@@ -1636,10 +1580,7 @@ NO CHANGE
 						(e-runtime-error (tag "not_implemented"))))
 				(s-let @164.2-164.31
 					(p-assign @164.2-164.18 (ident "tag_with_payload"))
-					(e-call @164.21-164.31
-						(e-tag @164.21-164.23 (name "Ok") (args "TODO"))
-						(e-lookup-local @164.24-164.30
-							(pattern @146.2-147.8))))
+					(e-tag @164.21-164.31 (name "Ok") (args "TODO")))
 				(s-let @165.2-165.34
 					(p-assign @165.2-165.14 (ident "interpolated"))
 					(e-string @165.17-165.34
@@ -1670,10 +1611,7 @@ NO CHANGE
 								(e-lookup-local @178.42-178.45
 									(pattern @148.2-148.5)))
 							(field (name "qux")
-								(e-call @178.52-178.61
-									(e-tag @178.52-178.54 (name "Ok") (args "TODO"))
-									(e-lookup-local @178.55-178.60
-										(pattern @145.2-145.7))))
+								(e-tag @178.52-178.61 (name "Ok") (args "TODO")))
 							(field (name "punned")
 								(e-runtime-error (tag "ident_not_in_scope"))))))
 				(s-let @179.2-179.68
@@ -1685,10 +1623,7 @@ NO CHANGE
 								(e-literal @179.17-179.22 (string "World")))
 							(e-lookup-local @179.25-179.28
 								(pattern @148.2-148.5))
-							(e-call @179.30-179.39
-								(e-tag @179.30-179.32 (name "Ok") (args "TODO"))
-								(e-lookup-local @179.33-179.38
-									(pattern @145.2-145.7)))
+							(e-tag @179.30-179.39 (name "Ok") (args "TODO"))
 							(e-tuple @179.41-179.56
 								(elems
 									(e-runtime-error (tag "ident_not_in_scope"))
@@ -1707,10 +1642,7 @@ NO CHANGE
 							(e-string @182.3-182.10
 								(e-literal @182.4-182.9 (string "World")))
 							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-call @184.3-184.12
-								(e-tag @184.3-184.5 (name "Ok") (args "TODO"))
-								(e-lookup-local @184.6-184.11
-									(pattern @145.2-145.7)))
+							(e-tag @184.3-184.12 (name "Ok") (args "TODO"))
 							(e-tuple @185.3-185.18
 								(elems
 									(e-runtime-error (tag "ident_not_in_scope"))
@@ -1727,9 +1659,7 @@ NO CHANGE
 						(e-binop @188.18-188.74 (op "or")
 							(e-binop @188.18-188.43 (op "gt")
 								(e-binop @188.18-188.34 (op "null_coalesce")
-									(e-call @188.18-188.26
-										(e-tag @188.18-188.21 (name "Err") (args "TODO"))
-										(e-runtime-error (tag "ident_not_in_scope")))
+									(e-tag @188.18-188.26 (name "Err") (args "TODO"))
 									(e-int @188.30-188.32 (value "12")))
 								(e-binop @188.35-188.43 (op "mul")
 									(e-int @188.35-188.36 (value "5"))

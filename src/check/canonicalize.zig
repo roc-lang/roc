@@ -893,6 +893,56 @@ pub fn canonicalize_expr(
 
     switch (expr) {
         .apply => |e| {
+            // Check if the function being applied is a tag
+            const ast_fn = self.parse_ir.store.getExpr(e.@"fn");
+            if (ast_fn == .tag) {
+                // This is a tag application, not a function call
+                const tag_expr = ast_fn.tag;
+
+                if (self.parse_ir.tokens.resolveIdentifier(tag_expr.token)) |tag_name| {
+                    // Mark the start of scratch expressions for tag arguments
+                    const scratch_top = self.can_ir.store.scratchExprTop();
+
+                    // Canonicalize all arguments
+                    const args_slice = self.parse_ir.store.exprSlice(e.args);
+                    for (args_slice) |arg| {
+                        if (try self.canonicalize_expr(arg)) |canonicalized_arg_expr_idx| {
+                            self.can_ir.store.addScratchExpr(canonicalized_arg_expr_idx);
+                        }
+                    }
+
+                    // Create span from scratch expressions
+                    const args_span = self.can_ir.store.exprSpanFrom(scratch_top);
+                    const region = self.parse_ir.tokenizedRegionToRegion(e.region);
+
+                    // Create type vars, first "reserve" node slots
+                    const final_expr_idx = self.can_ir.store.predictNodeIndex(2);
+
+                    // Then insert the type vars, setting the parent to be the final slot
+                    const poly_var = self.can_ir.pushFreshTypeVar(final_expr_idx, region) catch |err| exitOnOom(err);
+
+                    // Then in the final slot the actual expr is inserted
+                    const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
+                        .e_tag = .{
+                            .ext_var = poly_var,
+                            .name = tag_name,
+                            .args = args_span,
+                            .region = region,
+                        },
+                    });
+
+                    std.debug.assert(@intFromEnum(expr_idx) == @intFromEnum(final_expr_idx));
+
+                    // Insert flex type variable
+                    _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
+
+                    return expr_idx;
+                } else {
+                    return null;
+                }
+            }
+
+            // Not a tag application, proceed with normal function call
             // Mark the start of scratch expressions
             const scratch_top = self.can_ir.store.scratchExprTop();
 

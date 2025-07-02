@@ -634,76 +634,6 @@ It is of type:
 But you are trying to use it as:
     _* -> *_
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**fuzz_crash_027.md:119:13:119:15:**
-```roc
-	tag_with = Ok(number)
-```
-            ^^
-
-It is of type:
-    _[Ok]*_
-
-But you are trying to use it as:
-    _* -> *_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**fuzz_crash_027.md:131:52:131:54:**
-```roc
-	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
-```
-                                                   ^^
-
-It is of type:
-    _[Ok]*_
-
-But you are trying to use it as:
-    _* -> *_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**fuzz_crash_027.md:132:30:132:32:**
-```roc
-	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
-```
-                             ^^
-
-It is of type:
-    _[Ok]*_
-
-But you are trying to use it as:
-    _* -> *_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**fuzz_crash_027.md:137:3:137:5:**
-```roc
-		Ok(world), # Thisnt
-```
-  ^^
-
-It is of type:
-    _[Ok]*_
-
-But you are trying to use it as:
-    _* -> *_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**fuzz_crash_027.md:143:2:143:11:**
-```roc
-	Stdoline!(
-```
- ^^^^^^^^^
-
-It is of type:
-    _[Stdoline!]*_
-
-But you are trying to use it as:
-    _Str -> *_
-
 # TOKENS
 ~~~zig
 Newline(1:2-1:8),
@@ -1682,10 +1612,7 @@ main! = |_| { # Yeah Ie
 						(e-runtime-error (tag "not_implemented"))))
 				(s-let @119.2-119.23
 					(p-assign @119.2-119.10 (ident "tag_with"))
-					(e-call @119.13-119.23
-						(e-tag @119.13-119.15 (name "Ok") (args "TODO"))
-						(e-lookup-local @119.16-119.22
-							(pattern @102.2-103.8))))
+					(e-tag @119.13-119.23 (name "Ok") (args "TODO")))
 				(s-let @120.2-120.26
 					(p-assign @120.2-120.6 (ident "ited"))
 					(e-string @120.9-120.26
@@ -1711,10 +1638,7 @@ main! = |_| { # Yeah Ie
 								(e-lookup-local @131.42-131.45
 									(pattern @104.2-104.5)))
 							(field (name "qux")
-								(e-call @131.52-131.61
-									(e-tag @131.52-131.54 (name "Ok") (args "TODO"))
-									(e-lookup-local @131.55-131.60
-										(pattern @101.2-101.7))))
+								(e-tag @131.52-131.61 (name "Ok") (args "TODO")))
 							(field (name "punned")
 								(e-runtime-error (tag "ident_not_in_scope"))))))
 				(s-let @132.2-132.68
@@ -1726,10 +1650,7 @@ main! = |_| { # Yeah Ie
 								(e-literal @132.17-132.22 (string "World")))
 							(e-lookup-local @132.25-132.28
 								(pattern @104.2-104.5))
-							(e-call @132.30-132.39
-								(e-tag @132.30-132.32 (name "Ok") (args "TODO"))
-								(e-lookup-local @132.33-132.38
-									(pattern @101.2-101.7)))
+							(e-tag @132.30-132.39 (name "Ok") (args "TODO"))
 							(e-tuple @132.41-132.56
 								(elems
 									(e-runtime-error (tag "ident_not_in_scope"))
@@ -1748,10 +1669,7 @@ main! = |_| { # Yeah Ie
 							(e-string @135.3-135.10
 								(e-literal @135.4-135.9 (string "World")))
 							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-call @137.3-137.12
-								(e-tag @137.3-137.5 (name "Ok") (args "TODO"))
-								(e-lookup-local @137.6-137.11
-									(pattern @101.2-101.7)))
+							(e-tag @137.3-137.12 (name "Ok") (args "TODO"))
 							(e-tuple @138.3-138.18
 								(elems
 									(e-runtime-error (tag "ident_not_in_scope"))
@@ -1768,9 +1686,7 @@ main! = |_| { # Yeah Ie
 						(e-binop @141.10-141.66 (op "or")
 							(e-binop @141.10-141.35 (op "gt")
 								(e-binop @141.10-141.26 (op "null_coalesce")
-									(e-call @141.10-141.18
-										(e-tag @141.10-141.13 (name "Err") (args "TODO"))
-										(e-runtime-error (tag "ident_not_in_scope")))
+									(e-tag @141.10-141.18 (name "Err") (args "TODO"))
 									(e-int @141.22-141.24 (value "12")))
 								(e-binop @141.27-141.35 (op "mul")
 									(e-int @141.27-141.28 (value "5"))
@@ -1801,15 +1717,7 @@ main! = |_| { # Yeah Ie
 										(receiver
 											(e-runtime-error (tag "not_implemented")))))))))
 				(s-expr @143.2-148.2
-					(e-call @143.2-147.3
-						(e-tag @143.2-143.11 (name "Stdoline!") (args "TODO"))
-						(e-string @144.3-146.10
-							(e-literal @144.4-144.14 (string "How about "))
-							(e-call @145.4-145.21
-								(e-runtime-error (tag "ident_not_in_scope"))
-								(e-lookup-local @145.14-145.20
-									(pattern @102.2-103.8)))
-							(e-literal @146.4-146.9 (string " as a")))))
+					(e-tag @143.2-147.3 (name "Stdoline!") (args "TODO")))
 				(s-type-anno @150.1-151.6 (name "empty")
 					(ty-record @150.9-150.11))
 				(s-let @151.1-151.11

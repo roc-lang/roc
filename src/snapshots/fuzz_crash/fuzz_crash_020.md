@@ -447,34 +447,6 @@ The unused variable is declared here:
 This feature is not yet implemented or doesn't have a proper error report yet: top-level expect
 Let us know if you want to help!
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**fuzz_crash_020.md:96:44:96:46:**
-```roc
-	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
-```
-                                           ^^
-
-It is of type:
-    _[Ok]*_
-
-But you are trying to use it as:
-    _Error -> *_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**fuzz_crash_020.md:106:2:106:7:**
-```roc
-	Stdo!(
-```
- ^^^^^
-
-It is of type:
-    _[Stdo!]*_
-
-But you are trying to use it as:
-    _Str -> *_
-
 # TOKENS
 ~~~zig
 Newline(1:2-1:8),
@@ -1260,9 +1232,7 @@ expect {
 							(field (name "baz")
 								(e-runtime-error (tag "ident_not_in_scope")))
 							(field (name "qux")
-								(e-call @96.44-96.53
-									(e-tag @96.44-96.46 (name "Ok") (args "TODO"))
-									(e-runtime-error (tag "ident_not_in_scope"))))
+								(e-tag @96.44-96.53 (name "Ok") (args "TODO")))
 							(field (name "ned")
 								(e-runtime-error (tag "ident_not_in_scope"))))))
 				(s-let @97.2-97.48
@@ -1333,14 +1303,7 @@ expect {
 									(e-dot-access @105.55-105.76 (field "unknown")
 										(receiver
 											(e-runtime-error (tag "not_implemented")))))))))
-				(e-call @106.2-110.3
-					(e-tag @106.2-106.7 (name "Stdo!") (args "TODO"))
-					(e-string @107.3-109.6
-						(e-literal @107.4-107.6 (string "Ho"))
-						(e-call @108.4-108.9
-							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-runtime-error (tag "ident_not_in_scope")))
-						(e-literal @109.4-109.5 (string " ")))))))
+				(e-tag @106.2-110.3 (name "Stdo!") (args "TODO")))))
 	(d-let
 		(p-assign @114.1-114.2 (ident "e"))
 		(e-empty_record @114.5-114.7))

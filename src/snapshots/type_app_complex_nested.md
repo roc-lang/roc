@@ -146,34 +146,6 @@ deepNested = |_| crash "not implemented"
 The statement **expr** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**type_app_complex_nested.md:17:32:17:36:**
-```roc
-main! = |_| processComplex(Ok([Some(42), None]))
-```
-                               ^^^^
-
-It is of type:
-    _[Some]*_
-
-But you are trying to use it as:
-    _Num(*) -> *_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**type_app_complex_nested.md:17:28:17:30:**
-```roc
-main! = |_| processComplex(Ok([Some(42), None]))
-```
-                           ^^
-
-It is of type:
-    _[Ok]*_
-
-But you are trying to use it as:
-    _List([None]*) -> *_
-
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),Newline(1:1-1:1),
@@ -360,14 +332,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 			(e-call @17.13-17.49
 				(e-lookup-local @17.13-17.27
 					(pattern @5.1-5.15))
-				(e-call @17.28-17.48
-					(e-tag @17.28-17.30 (name "Ok") (args "TODO"))
-					(e-list @17.31-17.47
-						(elems
-							(e-call @17.32-17.40
-								(e-tag @17.32-17.36 (name "Some") (args "TODO"))
-								(e-int @17.37-17.39 (value "42")))
-							(e-tag @17.42-17.46 (name "None") (args "TODO"))))))))
+				(e-tag @17.28-17.48 (name "Ok") (args "TODO")))))
 	(s-type-decl @15.1-17.6
 		(ty-header @15.1-15.18 (name "ComplexType")
 			(ty-args

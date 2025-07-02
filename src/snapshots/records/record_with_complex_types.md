@@ -22,90 +22,7 @@ type=expr
 }
 ~~~
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**record_with_complex_types.md:4:13:4:19:**
-```roc
-    status: Active({ since: "2023-01-15" }),
-```
-            ^^^^^^
-
-It is of type:
-    _[Active]*_
-
-But you are trying to use it as:
-    _{ since: Str } -> *_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**record_with_complex_types.md:5:48:5:53:**
-```roc
-    preferences: { theme: Dark, notifications: Email("alice@example.com") },
-```
-                                               ^^^^^
-
-It is of type:
-    _[Email]*_
-
-But you are trying to use it as:
-    _Str -> *_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**record_with_complex_types.md:6:15:6:17:**
-```roc
-    metadata: Ok({
-```
-              ^^
-
-It is of type:
-    _[Ok]*_
-
-But you are trying to use it as:
-    _{ tags: List(Str), permissions: List([Read, Write, Admin]*) } -> *_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**record_with_complex_types.md:12:17:12:21:**
-```roc
-        items: [Some("first"), None, Some("third")],
-```
-                ^^^^
-
-It is of type:
-    _[Some]*_
-
-But you are trying to use it as:
-    _Str -> *_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**record_with_complex_types.md:12:38:12:42:**
-```roc
-        items: [Some("first"), None, Some("third")],
-```
-                                     ^^^^
-
-It is of type:
-    _[Some]*_
-
-But you are trying to use it as:
-    _Str -> *_
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**record_with_complex_types.md:13:17:13:24:**
-```roc
-        result: Success({ data: [1, 2, 3], timestamp: "2024-01-01" }),
-```
-                ^^^^^^^
-
-It is of type:
-    _[Success]*_
-
-But you are trying to use it as:
-    _{ data: List(Num(*)), timestamp: Str } -> *_
-
+NIL
 # TOKENS
 ~~~zig
 OpenCurly(1:1-1:2),Newline(1:1-1:1),
@@ -237,43 +154,16 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 					(e-int @3.22-3.24 (value "92"))
 					(e-int @3.26-3.28 (value "78")))))
 		(field (name "status")
-			(e-call @4.13-4.44
-				(e-tag @4.13-4.19 (name "Active") (args "TODO"))
-				(e-record @4.20-4.43
-					(fields
-						(field (name "since")
-							(e-string @4.29-4.41
-								(e-literal @4.30-4.40 (string "2023-01-15"))))))))
+			(e-tag @4.13-4.44 (name "Active") (args "TODO")))
 		(field (name "preferences")
 			(e-record @5.18-5.76
 				(fields
 					(field (name "theme")
 						(e-tag @5.27-5.31 (name "Dark") (args "TODO")))
 					(field (name "notifications")
-						(e-call @5.48-5.74
-							(e-tag @5.48-5.53 (name "Email") (args "TODO"))
-							(e-string @5.54-5.73
-								(e-literal @5.55-5.72 (string "alice@example.com"))))))))
+						(e-tag @5.48-5.74 (name "Email") (args "TODO"))))))
 		(field (name "metadata")
-			(e-call @6.15-9.7
-				(e-tag @6.15-6.17 (name "Ok") (args "TODO"))
-				(e-record @6.18-9.6
-					(fields
-						(field (name "tags")
-							(e-list @7.15-7.51
-								(elems
-									(e-string @7.16-7.27
-										(e-literal @7.17-7.26 (string "developer")))
-									(e-string @7.29-7.37
-										(e-literal @7.30-7.36 (string "senior")))
-									(e-string @7.39-7.50
-										(e-literal @7.40-7.49 (string "fullstack"))))))
-						(field (name "permissions")
-							(e-list @8.22-8.42
-								(elems
-									(e-tag @8.23-8.27 (name "Read") (args "TODO"))
-									(e-tag @8.29-8.34 (name "Write") (args "TODO"))
-									(e-tag @8.36-8.41 (name "Admin") (args "TODO")))))))))
+			(e-tag @6.15-9.7 (name "Ok") (args "TODO")))
 		(field (name "callback")
 			(e-lambda @10.15-10.25
 				(args
@@ -288,29 +178,11 @@ CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 					(field (name "items")
 						(e-list @12.16-12.52
 							(elems
-								(e-call @12.17-12.30
-									(e-tag @12.17-12.21 (name "Some") (args "TODO"))
-									(e-string @12.22-12.29
-										(e-literal @12.23-12.28 (string "first"))))
+								(e-tag @12.17-12.30 (name "Some") (args "TODO"))
 								(e-tag @12.32-12.36 (name "None") (args "TODO"))
-								(e-call @12.38-12.51
-									(e-tag @12.38-12.42 (name "Some") (args "TODO"))
-									(e-string @12.43-12.50
-										(e-literal @12.44-12.49 (string "third")))))))
+								(e-tag @12.38-12.51 (name "Some") (args "TODO")))))
 					(field (name "result")
-						(e-call @13.17-13.70
-							(e-tag @13.17-13.24 (name "Success") (args "TODO"))
-							(e-record @13.25-13.69
-								(fields
-									(field (name "data")
-										(e-list @13.33-13.42
-											(elems
-												(e-int @13.34-13.35 (value "1"))
-												(e-int @13.37-13.38 (value "2"))
-												(e-int @13.40-13.41 (value "3")))))
-									(field (name "timestamp")
-										(e-string @13.55-13.67
-											(e-literal @13.56-13.66 (string "2024-01-01")))))))))))))
+						(e-tag @13.17-13.70 (name "Success") (args "TODO"))))))))
 ~~~
 # TYPES
 ~~~clojure
