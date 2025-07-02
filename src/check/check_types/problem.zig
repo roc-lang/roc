@@ -30,8 +30,6 @@ const Content = types.Content;
 pub const Problem = union(enum) {
     type_mismatch: TypeMismatch,
     incompatible_list_elements: IncompatibleListElements,
-    invalid_if_condition: InvalidIfCondition,
-    incompatible_if_branches: IncompatibleIfBranches,
     number_does_not_fit: NumberDoesNotFit,
     negative_unsigned_int: NegativeUnsignedInt,
     infinite_recursion: struct { var_: Var },
@@ -67,6 +65,31 @@ pub const Problem = union(enum) {
             .type_mismatch => |mismatch| {
                 if (mismatch.detail) |detail| {
                     switch (detail) {
+                        .incompatible_if_cond => {
+                            return buildInvalidIfCondition(
+                                gpa,
+                                buf,
+                                module_env,
+                                can_ir,
+                                &snapshot_writer,
+                                mismatch,
+                                source,
+                                filename,
+                            );
+                        },
+                        .incompatible_if_branches => |data| {
+                            return buildIncompatibleIfBranches(
+                                gpa,
+                                buf,
+                                module_env,
+                                can_ir,
+                                &snapshot_writer,
+                                mismatch,
+                                data,
+                                source,
+                                filename,
+                            );
+                        },
                         .incompatible_match_patterns => |data| {
                             return buildIncompatibleMatchPatterns(
                                 gpa,
@@ -109,30 +132,6 @@ pub const Problem = union(enum) {
             },
             .incompatible_list_elements => |data| {
                 return buildIncompatibleListElementsReport(
-                    gpa,
-                    buf,
-                    module_env,
-                    can_ir,
-                    &snapshot_writer,
-                    data,
-                    source,
-                    filename,
-                );
-            },
-            .invalid_if_condition => |data| {
-                return buildInvalidIfCondition(
-                    gpa,
-                    buf,
-                    module_env,
-                    can_ir,
-                    &snapshot_writer,
-                    data,
-                    source,
-                    filename,
-                );
-            },
-            .incompatible_if_branches => |data| {
-                return buildIncompatibleIfBranches(
                     gpa,
                     buf,
                     module_env,
@@ -405,7 +404,7 @@ pub const Problem = union(enum) {
         module_env: *const base.ModuleEnv,
         can_ir: *const can.CIR,
         snapshot_writer: *snapshot.SnapshotWriter,
-        data: InvalidIfCondition,
+        mismatch: TypeMismatch,
         source: []const u8,
         filename: []const u8,
     ) !Report {
@@ -413,8 +412,8 @@ pub const Problem = union(enum) {
 
         // Format the type strings
         buf.clearRetainingCapacity();
-        try snapshot_writer.write(data.invalid_cond_snapshot);
-        const owned_invalid_type = try report.addOwnedString(buf.items);
+        try snapshot_writer.write(mismatch.actual);
+        const actual_type = try report.addOwnedString(buf.items);
 
         // Add title
         try report.document.addText("This ");
@@ -425,20 +424,20 @@ pub const Problem = union(enum) {
         try report.document.addLineBreak();
 
         // Get the region info for the invalid condition
-        const invalid_cond_region = can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(data.invalid_cond_var)));
-        const invalid_cond_region_info = base.RegionInfo.position(
+        const actual_region = can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(mismatch.actual_var)));
+        const actual_region_info = base.RegionInfo.position(
             source,
             module_env.line_starts.items,
-            invalid_cond_region.start.offset,
-            invalid_cond_region.end.offset,
+            actual_region.start.offset,
+            actual_region.end.offset,
         ) catch return report;
 
         // Create the display region
         const display_region = SourceCodeDisplayRegion{
-            .start_line = invalid_cond_region_info.start_line_idx + 1,
-            .start_column = invalid_cond_region_info.start_col_idx + 1,
-            .end_line = invalid_cond_region_info.end_line_idx + 1,
-            .end_column = invalid_cond_region_info.end_col_idx + 1,
+            .start_line = actual_region_info.start_line_idx + 1,
+            .start_column = actual_region_info.start_col_idx + 1,
+            .end_line = actual_region_info.end_line_idx + 1,
+            .end_column = actual_region_info.end_col_idx + 1,
             .region_annotation = .dimmed,
             .filename = filename,
         };
@@ -446,10 +445,10 @@ pub const Problem = union(enum) {
         // Create underline regions
         const underline_regions = [_]UnderlineRegion{
             .{
-                .start_line = invalid_cond_region_info.start_line_idx + 1,
-                .start_column = invalid_cond_region_info.start_col_idx + 1,
-                .end_line = invalid_cond_region_info.end_line_idx + 1,
-                .end_column = invalid_cond_region_info.end_col_idx + 1,
+                .start_line = actual_region_info.start_line_idx + 1,
+                .start_column = actual_region_info.start_col_idx + 1,
+                .end_line = actual_region_info.end_line_idx + 1,
+                .end_column = actual_region_info.end_col_idx + 1,
                 .annotation = .error_highlight,
             },
         };
@@ -461,7 +460,7 @@ pub const Problem = union(enum) {
         try report.document.addText("Right now, it has the type:");
         try report.document.addLineBreak();
         try report.document.addText("    ");
-        try report.document.addAnnotated(owned_invalid_type, .type_variable);
+        try report.document.addAnnotated(actual_type, .type_variable);
         try report.document.addLineBreak();
 
         // Add explanation
@@ -486,26 +485,27 @@ pub const Problem = union(enum) {
         module_env: *const base.ModuleEnv,
         can_ir: *const can.CIR,
         snapshot_writer: *snapshot.SnapshotWriter,
+        mismatch: TypeMismatch,
         data: IncompatibleIfBranches,
         source: []const u8,
         filename: []const u8,
     ) !Report {
         // The first branch of an if statement can never be invalid, since that
         // branch determines the type of the entire expression
-        std.debug.assert(data.invalid_index > 0);
+        std.debug.assert(data.problem_branch_index > 0);
 
         // Is this error for a if statement with only 2 branches?
-        const is_only_if_else = data.branches_len == 2;
+        const is_only_if_else = data.num_branches == 2;
 
         var report = Report.init(gpa, "INCOMPATIBLE IF BRANCHES", .runtime_error);
 
         // Format the type strings
         buf.clearRetainingCapacity();
-        try snapshot_writer.write(data.invalid_snapshot);
+        try snapshot_writer.write(mismatch.actual);
         const actual_type = try report.addOwnedString(buf.items);
 
         buf.clearRetainingCapacity();
-        try snapshot_writer.write(data.expected_snapshot);
+        try snapshot_writer.write(mismatch.expected);
         const expected_type = try report.addOwnedString(buf.items);
 
         // Add title
@@ -520,7 +520,7 @@ pub const Problem = union(enum) {
         } else {
             buf.clearRetainingCapacity();
             try buf.appendSlice("The type of the ");
-            try appendOrdinal(buf, data.invalid_index + 1);
+            try appendOrdinal(buf, data.problem_branch_index + 1);
             try buf.appendSlice(" branch of this ");
             const title_prefix = try report.addOwnedString(buf.items);
             try report.document.addText(title_prefix);
@@ -531,21 +531,25 @@ pub const Problem = union(enum) {
         try report.document.addLineBreak();
 
         // Determine the overall region that encompasses both elements
-        const if_expr_region = can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(data.if_expr)));
+        const if_expr_region = can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(data.last_if_branch)));
+        const actual_region = can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(mismatch.actual_var)));
+
+        const overall_start_offset = @min(if_expr_region.start.offset, actual_region.start.offset);
+        const overall_end_offset = @max(if_expr_region.end.offset, actual_region.end.offset);
+
         const overall_region_info = base.RegionInfo.position(
             source,
             module_env.line_starts.items,
-            if_expr_region.start.offset,
-            if_expr_region.end.offset,
+            overall_start_offset,
+            overall_end_offset,
         ) catch return report;
 
         // Get region info for invalid branch
-        const invalid_var_region = can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(data.invalid_var)));
-        const invalid_var_region_info = base.RegionInfo.position(
+        const actual_region_info = base.RegionInfo.position(
             source,
             module_env.line_starts.items,
-            invalid_var_region.start.offset,
-            invalid_var_region.end.offset,
+            actual_region.start.offset,
+            actual_region.end.offset,
         ) catch return report;
 
         // Create the display region
@@ -561,10 +565,10 @@ pub const Problem = union(enum) {
         // Create underline regions
         const underline_regions = [_]UnderlineRegion{
             .{
-                .start_line = invalid_var_region_info.start_line_idx + 1,
-                .start_column = invalid_var_region_info.start_col_idx + 1,
-                .end_line = invalid_var_region_info.end_line_idx + 1,
-                .end_column = invalid_var_region_info.end_col_idx + 1,
+                .start_line = actual_region_info.start_line_idx + 1,
+                .start_column = actual_region_info.start_col_idx + 1,
+                .end_line = actual_region_info.end_line_idx + 1,
+                .end_column = actual_region_info.end_col_idx + 1,
                 .annotation = .error_highlight,
             },
         };
@@ -580,7 +584,7 @@ pub const Problem = union(enum) {
         } else {
             buf.clearRetainingCapacity();
             try buf.appendSlice("The ");
-            try appendOrdinal(buf, data.invalid_index + 1);
+            try appendOrdinal(buf, data.problem_branch_index + 1);
             try buf.appendSlice(" branch has this type:");
             const branch_ord = try report.addOwnedString(buf.items);
             try report.document.addText(branch_ord);
@@ -597,7 +601,7 @@ pub const Problem = union(enum) {
             try report.document.addAnnotated("then", .keyword);
             try report.document.addText(" branch has the type:");
         } else {
-            try report.document.addText("But all the other branches have this type:");
+            try report.document.addText("But all the previous branches have this type:");
         }
         try report.document.addLineBreak();
         try report.document.addText("    ");
@@ -726,7 +730,7 @@ pub const Problem = union(enum) {
 
         // Show the type of the other branches
         if (data.num_branches > 2) {
-            try report.document.addText("But all the the other patterns have this type: ");
+            try report.document.addText("But all the previous patterns have this type: ");
         } else {
             try report.document.addText("But the other pattern has this type:");
         }
@@ -1044,30 +1048,7 @@ pub const IncompatibleListElements = struct {
     list_length: usize, // Total number of elements in the list
 };
 
-/// Problem data for when an if condition is not a Bool
-pub const InvalidIfCondition = struct {
-    if_branch: CIR.IfBranch.Idx,
-    invalid_cond_var: Var,
-    invalid_cond_snapshot: SnapshotContentIdx,
-};
-
-/// Problem data for when if branches have have incompatible types
-pub const IncompatibleIfBranches = struct {
-    if_expr: CIR.Expr.Idx,
-    expected_snapshot: SnapshotContentIdx,
-    invalid_var: Var,
-    invalid_snapshot: SnapshotContentIdx,
-    invalid_index: usize,
-    branches_len: usize,
-};
-
-/// A bug that occurred during unification
-pub const Bug = struct {
-    expected_var: Var,
-    expected: SnapshotContentIdx,
-    actual_var: Var,
-    actual: SnapshotContentIdx,
-};
+// number problems //
 
 /// Number literal doesn't fit in the expected type
 pub const NumberDoesNotFit = struct {
@@ -1081,6 +1062,8 @@ pub const NegativeUnsignedInt = struct {
     expected_type: SnapshotContentIdx,
 };
 
+// type mismatch //
+
 /// These two variables mismatch. This should usually be cast into a more
 /// specific error depending on context.
 pub const TypeMismatch = struct {
@@ -1093,8 +1076,18 @@ pub const TypeMismatch = struct {
 
 /// More specific details about a particular type mismatch. k
 pub const TypeMismatchDetail = union(enum) {
+    incompatible_if_cond,
+    incompatible_if_branches: IncompatibleIfBranches,
     incompatible_match_patterns: IncompatibleMatchPatterns,
     incompatible_match_branches: IncompatibleMatchBranches,
+};
+
+/// Problem data for when if branches have have incompatible types
+pub const IncompatibleIfBranches = struct {
+    parent_if_expr: CIR.Expr.Idx,
+    last_if_branch: CIR.IfBranch.Idx,
+    num_branches: usize,
+    problem_branch_index: usize,
 };
 
 /// Problem data for when match patterns have have incompatible types
@@ -1112,6 +1105,18 @@ pub const IncompatibleMatchBranches = struct {
     num_branches: usize,
     problem_branch_index: usize,
 };
+
+// bug //
+
+/// A bug that occurred during unification
+pub const Bug = struct {
+    expected_var: Var,
+    expected: SnapshotContentIdx,
+    actual_var: Var,
+    actual: SnapshotContentIdx,
+};
+
+// store //
 
 /// Self-contained problems store with resolved snapshots of type content
 ///

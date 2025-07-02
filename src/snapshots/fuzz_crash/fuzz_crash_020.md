@@ -477,7 +477,7 @@ expect # Cord
 The fourth pattern has this type:
     _Str_
 
-But all the the other patterns have this type: 
+But all the previous patterns have this type: 
     _[Blue]*_
 
 All patterns in an `match` must have compatible types.

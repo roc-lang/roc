@@ -572,7 +572,7 @@ expect rgb(124, 56, 245).to_str() == "rgb(124, 56, 245)"
 The second pattern has this type:
     _(*, *, *)_
 
-But all the the other patterns have this type: 
+But all the previous patterns have this type: 
     _[Color]*_
 
 All patterns in an `match` must have compatible types.

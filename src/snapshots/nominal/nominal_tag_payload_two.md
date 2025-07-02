@@ -142,7 +142,7 @@ is_ok = |result| match result {
 The second pattern has this type:
     _(*)_
 
-But all the the other patterns have this type: 
+But all the previous patterns have this type: 
     _[Result]*_
 
 All patterns in an `match` must have compatible types.
