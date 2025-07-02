@@ -211,10 +211,10 @@ test "NodeStore round trip - Expressions" {
         },
     });
     try expressions.append(CIR.Expr{
-        .e_match = CIR.Match{
+        .e_match = CIR.Expr.Match{
             .cond = @enumFromInt(567),
             .region = from_raw_offsets(1234, 1567),
-            .branches = CIR.Match.Branch.Span{ .span = base.DataSpan.init(456, 789) },
+            .branches = CIR.Expr.Match.Branch.Span{ .span = base.DataSpan.init(456, 789) },
             .exhaustive = @enumFromInt(901),
         },
     });

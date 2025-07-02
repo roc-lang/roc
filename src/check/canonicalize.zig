@@ -1821,7 +1821,7 @@ pub fn canonicalize_expr(
                             break :blk malformed_idx;
                         }
                     };
-                    self.can_ir.store.addScratchMatchBranchPattern(CIR.Match.BranchPattern{
+                    self.can_ir.store.addScratchMatchBranchPattern(CIR.Expr.Match.BranchPattern{
                         .pattern = pattern_idx,
                         .degenerate = false,
                         .region = pattern_region,
@@ -1863,7 +1863,7 @@ pub fn canonicalize_expr(
             const branches_span = self.can_ir.store.matchBranchSpanFrom(scratch_top);
 
             // Create the match expression
-            const match_expr = CIR.Match{
+            const match_expr = CIR.Expr.Match{
                 .cond = cond_expr,
                 .branches = branches_span,
                 .exhaustive = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region) catch |err| exitOnOom(err),

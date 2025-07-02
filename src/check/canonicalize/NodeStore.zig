@@ -25,8 +25,8 @@ extra_data: std.ArrayListUnmanaged(u32),
 scratch_statements: base.Scratch(CIR.Statement.Idx),
 scratch_exprs: base.Scratch(CIR.Expr.Idx),
 scratch_record_fields: base.Scratch(CIR.RecordField.Idx),
-scratch_match_branches: base.Scratch(CIR.Match.Branch.Idx),
-scratch_match_branch_patterns: base.Scratch(CIR.Match.BranchPattern.Idx),
+scratch_match_branches: base.Scratch(CIR.Expr.Match.Branch.Idx),
+scratch_match_branch_patterns: base.Scratch(CIR.Expr.Match.BranchPattern.Idx),
 scratch_if_branches: base.Scratch(CIR.IfBranch.Idx),
 scratch_where_clauses: base.Scratch(CIR.WhereClause.Idx),
 scratch_patterns: base.Scratch(CIR.Pattern.Idx),
@@ -57,8 +57,8 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) NodeStore {
         .scratch_record_fields = base.Scratch(CIR.RecordField.Idx).init(gpa),
         .scratch_pattern_record_fields = base.Scratch(CIR.PatternRecordField.Idx).init(gpa),
         .scratch_record_destructs = base.Scratch(CIR.RecordDestruct.Idx).init(gpa),
-        .scratch_match_branches = base.Scratch(CIR.Match.Branch.Idx).init(gpa),
-        .scratch_match_branch_patterns = base.Scratch(CIR.Match.BranchPattern.Idx).init(gpa),
+        .scratch_match_branches = base.Scratch(CIR.Expr.Match.Branch.Idx).init(gpa),
+        .scratch_match_branch_patterns = base.Scratch(CIR.Expr.Match.BranchPattern.Idx).init(gpa),
         .scratch_if_branches = base.Scratch(CIR.IfBranch.Idx).init(gpa),
         .scratch_type_annos = base.Scratch(CIR.TypeAnno.Idx).init(gpa),
         .scratch_anno_record_fields = base.Scratch(CIR.AnnoRecordField.Idx).init(gpa),
@@ -468,7 +468,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             const exhaustive = @as(types.Var, @enumFromInt(extra_data[3]));
 
             return CIR.Expr{
-                .e_match = CIR.Match{
+                .e_match = CIR.Expr.Match{
                     .cond = cond,
                     .region = node.region,
                     .branches = .{ .span = .{ .start = branches_start, .len = branches_len } },
@@ -599,7 +599,7 @@ pub fn getExprSpecific(store: *const NodeStore, expr_idx: CIR.Expr.Idx) CIR.Expr
 }
 
 /// Retrieves a 'when' branch from the store.
-pub fn getMatchBranch(store: *const NodeStore, branch: CIR.Match.Branch.Idx) CIR.Match.Branch {
+pub fn getMatchBranch(store: *const NodeStore, branch: CIR.Expr.Match.Branch.Idx) CIR.Expr.Match.Branch {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(branch));
     const node = store.nodes.get(node_idx);
 
@@ -609,12 +609,12 @@ pub fn getMatchBranch(store: *const NodeStore, branch: CIR.Match.Branch.Idx) CIR
     const extra_start = node.data_1;
     const extra_data = store.extra_data.items[extra_start..];
 
-    const patterns: CIR.Match.BranchPattern.Span = .{ .span = .{ .start = extra_data[0], .len = extra_data[1] } };
+    const patterns: CIR.Expr.Match.BranchPattern.Span = .{ .span = .{ .start = extra_data[0], .len = extra_data[1] } };
     const value_idx: CIR.Expr.Idx = @enumFromInt(extra_data[2]);
     const guard_idx: ?CIR.Expr.Idx = if (extra_data[3] == 0) null else @enumFromInt(extra_data[3]);
     const redundant: types.Var = @enumFromInt(extra_data[4]);
 
-    return CIR.Match.Branch{
+    return CIR.Expr.Match.Branch{
         .patterns = patterns,
         .value = value_idx,
         .guard = guard_idx,
@@ -624,13 +624,13 @@ pub fn getMatchBranch(store: *const NodeStore, branch: CIR.Match.Branch.Idx) CIR
 }
 
 /// Retrieves a pattern of a 'match' branch from the store.
-pub fn getMatchBranchPattern(store: *const NodeStore, branch_pat: CIR.Match.BranchPattern.Idx) CIR.Match.BranchPattern {
+pub fn getMatchBranchPattern(store: *const NodeStore, branch_pat: CIR.Expr.Match.BranchPattern.Idx) CIR.Expr.Match.BranchPattern {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(branch_pat));
     const node = store.nodes.get(node_idx);
 
     std.debug.assert(node.tag == .match_branch_pattern);
 
-    return CIR.Match.BranchPattern{
+    return CIR.Expr.Match.BranchPattern{
         .pattern = @enumFromInt(node.data_1),
         .degenerate = if (node.data_2 == 0) false else true,
         .region = node.region,
@@ -638,9 +638,9 @@ pub fn getMatchBranchPattern(store: *const NodeStore, branch_pat: CIR.Match.Bran
 }
 
 /// Returns a slice of match branches from the given span.
-pub fn matchBranchSlice(store: *const NodeStore, span: CIR.Match.Branch.Span) []CIR.Match.Branch.Idx {
+pub fn matchBranchSlice(store: *const NodeStore, span: CIR.Expr.Match.Branch.Span) []CIR.Expr.Match.Branch.Idx {
     const slice = store.extra_data.items[span.span.start..(span.span.start + span.span.len)];
-    const result: []CIR.Match.Branch.Idx = @ptrCast(@alignCast(slice));
+    const result: []CIR.Expr.Match.Branch.Idx = @ptrCast(@alignCast(slice));
     return result;
 }
 
@@ -1510,7 +1510,7 @@ pub fn addRecordDestruct(store: *NodeStore, record_destruct: CIR.RecordDestruct)
 }
 
 /// Adds a 'match' branch to the store.
-pub fn addMatchBranch(store: *NodeStore, branch: CIR.Match.Branch) CIR.Match.Branch.Idx {
+pub fn addMatchBranch(store: *NodeStore, branch: CIR.Expr.Match.Branch) CIR.Expr.Match.Branch.Idx {
     var node = Node{
         .data_1 = 0,
         .data_2 = 0,
@@ -1533,7 +1533,7 @@ pub fn addMatchBranch(store: *NodeStore, branch: CIR.Match.Branch) CIR.Match.Bra
 }
 
 /// Adds a 'match' branch to the store.
-pub fn addMatchBranchPattern(store: *NodeStore, branchPattern: CIR.Match.BranchPattern) CIR.Match.BranchPattern.Idx {
+pub fn addMatchBranchPattern(store: *NodeStore, branchPattern: CIR.Expr.Match.BranchPattern) CIR.Expr.Match.BranchPattern.Idx {
     const node = Node{
         .data_1 = @intFromEnum(branchPattern.pattern),
         .data_2 = @as(u32, @intFromBool(branchPattern.degenerate)),
@@ -2281,13 +2281,13 @@ pub fn sliceIfBranches(store: *const NodeStore, span: CIR.IfBranch.Span) []CIR.I
 }
 
 /// Retrieve a slice of Match.Branch Idx's from a span
-pub fn sliceMatchBranches(store: *const NodeStore, span: CIR.Match.Branch.Span) []CIR.Match.Branch.Idx {
-    return store.sliceFromSpan(CIR.Match.Branch.Idx, span.span);
+pub fn sliceMatchBranches(store: *const NodeStore, span: CIR.Expr.Match.Branch.Span) []CIR.Expr.Match.Branch.Idx {
+    return store.sliceFromSpan(CIR.Expr.Match.Branch.Idx, span.span);
 }
 
 /// Retrieve a slice of Match.BranchPattern Idx's from a span
-pub fn sliceMatchBranchPatterns(store: *const NodeStore, span: CIR.Match.BranchPattern.Span) []CIR.Match.BranchPattern.Idx {
-    return store.sliceFromSpan(CIR.Match.BranchPattern.Idx, span.span);
+pub fn sliceMatchBranchPatterns(store: *const NodeStore, span: CIR.Expr.Match.BranchPattern.Span) []CIR.Expr.Match.BranchPattern.Idx {
+    return store.sliceFromSpan(CIR.Expr.Match.BranchPattern.Idx, span.span);
 }
 
 /// Creates a slice corresponding to a span.
@@ -2784,13 +2784,13 @@ pub fn scratchMatchBranchTop(store: *NodeStore) u32 {
 }
 
 /// Adds a match branch pattern to the scratch f branches list for building spans.
-pub fn addScratchMatchBranch(store: *NodeStore, match_branch: CIR.Match.Branch) void {
+pub fn addScratchMatchBranch(store: *NodeStore, match_branch: CIR.Expr.Match.Branch) void {
     const match_branch_idx = store.addMatchBranch(match_branch);
     store.scratch_match_branches.append(store.gpa, match_branch_idx);
 }
 
 /// Creates a span from the scratch match branches starting at the given index.
-pub fn matchBranchSpanFrom(store: *NodeStore, start: u32) CIR.Match.Branch.Span {
+pub fn matchBranchSpanFrom(store: *NodeStore, start: u32) CIR.Expr.Match.Branch.Span {
     const end = store.scratch_match_branches.top();
     defer store.scratch_match_branches.clearFrom(start);
     var i = @as(usize, @intCast(start));
@@ -2809,13 +2809,13 @@ pub fn scratchMatchBranchPatternTop(store: *NodeStore) u32 {
 }
 
 /// Adds a match branch pattern to the scratch for building spans.
-pub fn addScratchMatchBranchPattern(store: *NodeStore, match_branch: CIR.Match.BranchPattern) void {
+pub fn addScratchMatchBranchPattern(store: *NodeStore, match_branch: CIR.Expr.Match.BranchPattern) void {
     const match_branch_idx = store.addMatchBranchPattern(match_branch);
     store.scratch_match_branch_patterns.append(store.gpa, match_branch_idx);
 }
 
 /// Creates an f branch span from the given start position to the current top of scratch f branches.
-pub fn matchBranchPatternSpanFrom(store: *NodeStore, start: u32) CIR.Match.BranchPattern.Span {
+pub fn matchBranchPatternSpanFrom(store: *NodeStore, start: u32) CIR.Expr.Match.BranchPattern.Span {
     const end = store.scratch_match_branch_patterns.top();
     defer store.scratch_match_branch_patterns.clearFrom(start);
     var i = @as(usize, @intCast(start));
@@ -2898,8 +2898,8 @@ pub fn deserializeFrom(buffer: []align(@alignOf(Node)) const u8, allocator: std.
         .scratch_statements = base.Scratch(CIR.Statement.Idx){ .items = .{} },
         .scratch_exprs = base.Scratch(CIR.Expr.Idx){ .items = .{} },
         .scratch_record_fields = base.Scratch(CIR.RecordField.Idx){ .items = .{} },
-        .scratch_match_branches = base.Scratch(CIR.Match.Branch.Idx){ .items = .{} },
-        .scratch_match_branch_patterns = base.Scratch(CIR.Match.BranchPattern.Idx){ .items = .{} },
+        .scratch_match_branches = base.Scratch(CIR.Expr.Match.Branch.Idx){ .items = .{} },
+        .scratch_match_branch_patterns = base.Scratch(CIR.Expr.Match.BranchPattern.Idx){ .items = .{} },
         .scratch_if_branches = base.Scratch(CIR.IfBranch.Idx){ .items = .{} },
         .scratch_where_clauses = base.Scratch(CIR.WhereClause.Idx){ .items = .{} },
         .scratch_patterns = base.Scratch(CIR.Pattern.Idx){ .items = .{} },
