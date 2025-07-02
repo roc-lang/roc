@@ -826,23 +826,21 @@ fn canonicalize_decl(
         .annotation = annotation,
         .kind = .let,
     });
-    // Set def type variable: use annotation signature if available, otherwise flex
+    // Set def type variable to a flex var
     //
-    // This is for proper type checking:
-    // 1. When there's an annotation, it's the programmer's explicit type declaration and should be ground truth
-    // 2. We copy the annotation's signature content to the def's type variable, ensuring the annotation type is authoritative
-    // 3. During type inference, the lambda implementation will be unified against this annotation type
-    // 4. If the implementation doesn't match the annotation, it will be caught as a type error
-    // 5. The final resolved type will be the annotation type (assuming type checking passes)
-    // 6. When there's no annotation, we use a flex variable for normal type inference
-    if (annotation) |anno_idx| {
-        const anno = self.can_ir.store.getAnnotation(anno_idx);
-        const signature_resolved = self.can_ir.env.types.resolveVar(anno.signature);
-
-        _ = self.can_ir.setTypeVarAtDef(def_idx, signature_resolved.desc.content);
-    } else {
-        _ = self.can_ir.setTypeVarAtDef(def_idx, Content{ .flex_var = null });
-    }
+    // We always use a flex variable for the definition, regardless of whether there's
+    // an annotation. This is because:
+    // 1. If there's no annotation, we need a flex var for normal type inference
+    // 2. If there IS an annotation, we still use a flex var to avoid copying the
+    //    annotation's type content. This is necessary because if the annotation contains
+    //    an alias (e.g., `empty : ConsList(a)`), that alias expects its type arguments
+    //    to live at specific memory offsets relative to the alias's own type variable.
+    //    Copying the alias content to a different type variable would break this assumption.
+    // 3. During type checking, the definition's flex var will be unified with the
+    //    annotation's type (if present) or with the inferred type from the expression
+    // 4. Type errors will be caught during unification if the implementation doesn't
+    //    match the annotation
+    _ = self.can_ir.setTypeVarAtDef(def_idx, Content{ .flex_var = null });
 
     return def_idx;
 }
@@ -4456,6 +4454,9 @@ fn canonicalizeTypeApplication(self: *Self, apply: anytype, parent_node_idx: Nod
                 .num_args = @intCast(actual_args.len),
             },
         };
+
+        // Ensure slots exist for the alias and all its arguments
+        try self.can_ir.env.types.ensureAliasSlots(alias_var, @intCast(actual_args.len));
 
         _ = self.can_ir.setTypeVarAt(@enumFromInt(@intFromEnum(alias_var)), alias_content);
 

@@ -503,7 +503,10 @@ const Unifier = struct {
                 }
             },
             .rigid_var => self.merge(vars, b_content),
-            .alias => self.merge(vars, b_content),
+            .alias => |b_alias| {
+                self.types_store.ensureAliasSlots(vars.b.var_, b_alias.num_args) catch |err| exitOnOutOfMemory(err);
+                self.merge(vars, b_content);
+            },
             .structure => self.merge(vars, b_content),
             .err => self.merge(vars, .err),
         }
@@ -528,6 +531,8 @@ const Unifier = struct {
     fn unifyAlias(self: *Self, vars: *const ResolvedVarDescs, a_alias: Alias, b_content: Content) Error!void {
         switch (b_content) {
             .flex_var => |_| {
+                // Ensure the target variable has slots for the alias arguments
+                self.types_store.ensureAliasSlots(vars.b.var_, a_alias.num_args) catch |err| exitOnOutOfMemory(err);
                 self.merge(vars, Content{ .alias = a_alias });
             },
             .rigid_var => |_| {
@@ -580,6 +585,8 @@ const Unifier = struct {
         const b_backing_var = b_alias.getBackingVar(vars.b.var_);
         self.unifyGuarded(a_backing_var, b_backing_var) catch {};
 
+        // Ensure the target variable has slots for the alias arguments
+        self.types_store.ensureAliasSlots(vars.b.var_, b_alias.num_args) catch |err| exitOnOutOfMemory(err);
         self.merge(vars, vars.b.desc.content);
     }
 

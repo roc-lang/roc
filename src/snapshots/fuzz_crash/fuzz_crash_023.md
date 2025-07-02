@@ -2477,7 +2477,7 @@ expect {
 		(patt @68.1-68.8 (type "Error -> U64"))
 		(patt @80.1-80.11 (type "Error"))
 		(patt @144.1-144.6 (type "Error -> Error"))
-		(patt @199.1-199.6 (type "{  }")))
+		(patt @199.1-199.6 (type "{}")))
 	(expressions
 		(expr @65.19-67.8 (type "[True, False] -> Num(*)"))
 		(expr @68.11-78.2 (type "Error -> U64"))

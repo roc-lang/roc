@@ -376,6 +376,16 @@ pub fn setTypeVarAtDef(self: *CIR, at_idx: Def.Idx, content: types.Content) type
     return self.setTypeVarAt(@enumFromInt(@intFromEnum(at_idx)), content);
 }
 
+/// Convert any CIR index to a type variable, ensuring the slot exists.
+///
+/// This helper handles the conversion from CIR indices to type variables
+/// and ensures the type store has allocated the necessary slots.
+pub fn idxToTypeVar(_: *const CIR, types_store: *types.Store, idx: anytype) !types.Var {
+    const var_: types.Var = @enumFromInt(@intFromEnum(idx));
+    try types_store.fillInSlotsThru(var_);
+    return var_;
+}
+
 /// Associates a type with an existing expression node.
 ///
 /// Use this to set the final type of an expression after type inference.
@@ -396,7 +406,7 @@ pub fn setTypeVarAtPat(self: *CIR, at_idx: Pattern.Idx, content: types.Content) 
 /// correspond directly to type variable indices, allowing direct conversion.
 /// Usually called indirectly through the typed wrappers rather than directly.
 ///
-/// **Note**: The node must already exist - this only sets types, not create nodes.
+/// **Note**: The node must already exist - this only sets types; it does not create nodes.
 pub fn setTypeVarAt(self: *CIR, at_idx: Node.Idx, content: types.Content) types.Var {
     // if the new can node idx is greater than the types store length, backfill
     const var_: types.Var = @enumFromInt(@intFromEnum(at_idx));
@@ -2566,9 +2576,9 @@ pub fn toSexprTypesStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr
 
         // Collect definitions
         var defs_node = SExpr.init(gpa, "defs");
-        const defs_slice = ir.store.sliceDefs(ir.all_defs);
+        const all_defs = ir.store.sliceDefs(ir.all_defs);
 
-        for (defs_slice) |def_idx| {
+        for (all_defs) |def_idx| {
             const def = ir.store.getDef(def_idx);
 
             // Extract identifier name from the pattern (assuming it's an assign pattern)
@@ -2581,7 +2591,7 @@ pub fn toSexprTypesStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr
 
                     // Get the type variable for this definition
                     // Each definition has a type_var at its node index which represents the type of the definition
-                    const def_var = @as(types.Var, @enumFromInt(@intFromEnum(def_idx)));
+                    const def_var = try ir.idxToTypeVar(&ir.env.types, def_idx);
 
                     // Clear the buffer and write the type
                     type_string_buf.clearRetainingCapacity();
@@ -2604,7 +2614,7 @@ pub fn toSexprTypesStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr
 
         // Walk through all expressions and collect those with meaningful types
         // We'll collect expressions that have regions and aren't just intermediate nodes
-        for (defs_slice) |def_idx| {
+        for (all_defs) |def_idx| {
             const def = ir.store.getDef(def_idx);
 
             // Get the expression type

@@ -104,6 +104,9 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
     const def = self.can_ir.store.getDef(def_idx);
     // TODO: Check patterns
 
+    // Ensure the def has a type variable slot
+    const def_var = try self.can_ir.idxToTypeVar(self.types, def_idx);
+
     // Special handling for lambda expressions with annotations
     if (def.annotation) |anno_idx| {
         const annotation = self.can_ir.store.getAnnotation(anno_idx);
@@ -117,17 +120,17 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
         }
 
         // Unify the expression with its annotation
-        _ = self.unify(@enumFromInt(@intFromEnum(def.expr)), annotation.signature);
+        _ = self.unify(try self.can_ir.idxToTypeVar(self.types, def.expr), annotation.signature);
     } else {
         _ = try self.checkExpr(def.expr);
     }
 
     // Unify the def with its expression
-    _ = self.unify(@enumFromInt(@intFromEnum(def_idx)), @enumFromInt(@intFromEnum(def.expr)));
+    _ = self.unify(def_var, try self.can_ir.idxToTypeVar(self.types, def.expr));
 
     // Also unify the pattern with the def - needed so lookups work correctly
     // TODO could we unify directly with the pattern elsewhere, to save a type var and unify() here?
-    _ = self.unify(@enumFromInt(@intFromEnum(def.pattern)), @enumFromInt(@intFromEnum(def_idx)));
+    _ = self.unify(try self.can_ir.idxToTypeVar(self.types, def.pattern), def_var);
 }
 
 test "minimum signed values fit in their respective types" {

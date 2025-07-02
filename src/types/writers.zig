@@ -76,6 +76,9 @@ pub const TypeWriter = struct {
 
     /// Convert a var to a type string
     pub fn writeVar(self: *Self, var_: types.Var) Allocator.Error!void {
+        // Debug assert that the variable is in bounds - if not, we have a bug in type checking
+        std.debug.assert(@intFromEnum(var_) < self.env.types.slots.backing.items.len);
+
         const resolved = self.env.types.resolveVar(var_);
 
         switch (resolved.desc.content) {

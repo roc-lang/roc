@@ -403,6 +403,10 @@ pub const Store = struct {
     ///
     /// If the vars are *not equivalent, then return the resolved vars & descs
     pub fn checkVarsEquiv(self: *Self, a_var: Var, b_var: Var) VarEquivResult {
+        // Ensure both variables are in bounds before resolving
+        self.fillInSlotsThru(a_var) catch unreachable;
+        self.fillInSlotsThru(b_var) catch unreachable;
+
         const a = self.resolveVarAndCompressPath(a_var);
         const b = self.resolveVarAndCompressPath(b_var);
         if (a.desc_idx == b.desc_idx) {
@@ -410,6 +414,18 @@ pub const Store = struct {
         } else {
             return .{ .not_equiv = .{ .a = a, .b = b } };
         }
+    }
+
+    /// Ensure that all slots required for an alias or nominal type are allocated.
+    /// This includes:
+    /// - The type variable itself
+    /// - The backing variable at +1
+    /// - All argument variables starting at +2
+    pub fn ensureAliasSlots(self: *Self, alias_var: Var, num_args: u32) Allocator.Error!void {
+        // The highest index we need is alias_var + 1 + num_args
+        // (alias var, backing var, then each arg)
+        const max_idx = @intFromEnum(alias_var) + 1 + num_args;
+        try self.fillInSlotsThru(@enumFromInt(max_idx));
     }
 
     // union //
