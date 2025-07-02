@@ -301,79 +301,32 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!void {
             // We need to type-check the first element, but we don't need to unify it with
             // anything because we already pre-unified the list's elem var with it.
             const first_elem_idx = elems[0];
-            var last_unified_idx: CIR.Expr.Idx = first_elem_idx;
-            var last_unified_index: usize = 0; // Track the index for error messages
             try self.checkExpr(first_elem_idx);
 
+            var last_elem_idx = first_elem_idx;
             for (elems[1..], 1..) |elem_expr_id, i| {
                 try self.checkExpr(elem_expr_id);
 
                 // Unify each element's var with the list's elem var
                 const result = self.unify(elem_var, @enumFromInt(@intFromEnum(elem_expr_id)));
+                self.setDetailIfTypeMismatch(result, problem.TypeMismatchDetail{ .incompatible_list_elements = .{
+                    .last_elem_expr = last_elem_idx,
+                    .incompatible_elem_index = @intCast(i),
+                    .list_length = @intCast(elems.len),
+                } });
 
-                switch (result) {
-                    .ok => {},
-                    .problem => |problem_idx| {
-                        // Unification failed, so we know it appended a type mismatch to self.problems.
-                        // We'll translate that generic type mismatch between the two elements into
-                        // a more helpful list-specific error report.
+                if (!result.isOk()) {
 
-                        // Extract info from the type mismatch problem
-                        var elem_var_snapshot: snapshot.SnapshotContentIdx = undefined;
-                        var incompatible_snapshot: snapshot.SnapshotContentIdx = undefined;
+                    // Check remaining elements to catch their individual errors
+                    for (elems[i + 1 ..]) |remaining_elem_id| {
+                        try self.checkExpr(remaining_elem_id);
+                    }
 
-                        // Extract snapshots from the type mismatch problem
-                        switch (self.problems.problems.get(problem_idx)) {
-                            .type_mismatch => |mismatch| {
-                                // The expected type is elem_var, actual is the incompatible element
-                                elem_var_snapshot = mismatch.expected;
-                                incompatible_snapshot = mismatch.actual;
-
-                                // Include the previous element in the error message, since it's the one
-                                // that the current element failed to unify with.
-                                const prev_elem_expr = self.can_ir.store.getExpr(last_unified_idx);
-                                const incompatible_elem_expr = self.can_ir.store.getExpr(elem_expr_id);
-                                const prev_region = prev_elem_expr.toRegion();
-                                const incomp_region = incompatible_elem_expr.toRegion();
-
-                                // Replace the generic Problem in the MultiArrayList with a list-specific one
-                                self.problems.problems.set(problem_idx, .{
-                                    .incompatible_list_elements = .{
-                                        .list_region = list.region,
-                                        .first_elem_region = prev_region orelse list.region,
-                                        .first_elem_var = @enumFromInt(@intFromEnum(last_unified_idx)),
-                                        .first_elem_snapshot = elem_var_snapshot,
-                                        .first_elem_index = last_unified_index,
-                                        .incompatible_elem_region = incomp_region orelse list.region,
-                                        .incompatible_elem_var = @enumFromInt(@intFromEnum(elem_expr_id)),
-                                        .incompatible_elem_snapshot = incompatible_snapshot,
-                                        .incompatible_elem_index = i,
-                                        .list_length = elems.len,
-                                    },
-                                });
-                            },
-                            else => {
-                                // For other problem types (e.g., number_does_not_fit), the original
-                                // problem is already more specific than our generic "incompatible list
-                                // elements" message, so we should keep it as-is and not replace it.
-                                // Note: if an element has an error type (e.g., from a nested heterogeneous
-                                // list), unification would succeed, not fail, so we wouldn't reach this branch.
-                            },
-                        }
-
-                        // Check remaining elements to catch their individual errors
-                        for (elems[i + 1 ..]) |remaining_elem_id| {
-                            try self.checkExpr(remaining_elem_id);
-                        }
-
-                        // Break to avoid cascading errors
-                        break;
-                    },
+                    // Break to avoid cascading errors
+                    break;
                 }
 
-                // Track the last successfully unified element
-                last_unified_idx = elem_expr_id;
-                last_unified_index = i;
+                last_elem_idx = elem_expr_id;
             }
         },
         .e_empty_list => |_| {},
@@ -561,10 +514,15 @@ pub fn checkIfElseExpr(self: *Self, if_expr_idx: CIR.Expr.Idx, if_: CIR.If) Allo
     // Should never be 0
     std.debug.assert(branches.len > 0);
 
-    // First, check the condition of the 1st branch
+    // Get the first branch
     const first_branch_idx = branches[0];
     const first_branch = self.can_ir.store.getIfBranch(first_branch_idx);
-    try self.checkIfBranchCond(first_branch_idx, first_branch.cond);
+
+    // Check the condition of the 1st branch
+    try self.checkExpr(first_branch.cond);
+    const first_cond_var: Var = @enumFromInt(@intFromEnum(first_branch.cond));
+    const first_cond_result = self.unifyPreserveA(@enumFromInt(@intFromEnum(can.BUILTIN_BOOL)), first_cond_var);
+    self.setDetailIfTypeMismatch(first_cond_result, .incompatible_if_cond);
 
     // Then we check the 1st branch's body
     try self.checkExpr(first_branch.body);
@@ -573,139 +531,59 @@ pub fn checkIfElseExpr(self: *Self, if_expr_idx: CIR.Expr.Idx, if_: CIR.If) Allo
     const branch_var = @as(Var, @enumFromInt(@intFromEnum(first_branch.body)));
 
     // Total number of branches (including final else)
-    const branches_len = branches.len + 1;
+    const num_branches: u32 = @intCast(branches.len + 1);
 
+    var last_if_branch = first_branch_idx;
     for (branches[1..], 1..) |branch_idx, cur_index| {
         const branch = self.can_ir.store.getIfBranch(branch_idx);
 
-        // Check the branches condition/body
-        try self.checkIfBranchCond(branch_idx, branch.cond);
+        // Check the branches condition
+        try self.checkExpr(branch.cond);
+        const cond_var: Var = @enumFromInt(@intFromEnum(branch.cond));
+        const cond_result = self.unifyPreserveA(@enumFromInt(@intFromEnum(can.BUILTIN_BOOL)), cond_var);
+        self.setDetailIfTypeMismatch(cond_result, .incompatible_if_cond);
 
-        const result = try self.checkIfBranchBody(
-            branch_var,
-            cur_index,
-            branches_len,
-            if_expr_idx,
-            branch.body,
-        );
-        switch (result) {
-            .ok => {},
-            .problem => {
-                // Check remaining branches to catch their individual errors
-                for (branches[cur_index + 1 ..]) |remaining_branch_idx| {
-                    const remaining_branch = self.can_ir.store.getIfBranch(remaining_branch_idx);
-                    try self.checkIfBranchCond(remaining_branch_idx, remaining_branch.cond);
-                    try self.checkExpr(remaining_branch.body);
-                    try self.types.setVarContent(@enumFromInt(@intFromEnum(remaining_branch.body)), .err);
-                }
+        // Check the branch body
+        try self.checkExpr(branch.body);
+        const body_var: Var = @enumFromInt(@intFromEnum(branch.body));
+        const body_result = self.unify(branch_var, body_var);
+        self.setDetailIfTypeMismatch(body_result, problem.TypeMismatchDetail{ .incompatible_if_branches = .{
+            .parent_if_expr = if_expr_idx,
+            .last_if_branch = last_if_branch,
+            .num_branches = num_branches,
+            .problem_branch_index = @intCast(cur_index),
+        } });
 
-                // Break to avoid cascading errors
-                break;
-            },
+        if (!body_result.isOk()) {
+            // Check remaining branches to catch their individual errors
+            for (branches[cur_index + 1 ..]) |remaining_branch_idx| {
+                const remaining_branch = self.can_ir.store.getIfBranch(remaining_branch_idx);
+
+                const remaining_cond_var: Var = @enumFromInt(@intFromEnum(remaining_branch.cond));
+                const remaining_cond_result = self.unifyPreserveA(@enumFromInt(@intFromEnum(can.BUILTIN_BOOL)), remaining_cond_var);
+                self.setDetailIfTypeMismatch(remaining_cond_result, .incompatible_if_cond);
+
+                try self.checkExpr(remaining_branch.body);
+                try self.types.setVarContent(@enumFromInt(@intFromEnum(remaining_branch.body)), .err);
+            }
+
+            // Break to avoid cascading errors
+            break;
         }
+
+        last_if_branch = branch_idx;
     }
 
     // Check the final else
-    _ = try self.checkIfBranchBody(branch_var, branches.len, branches_len, if_expr_idx, if_.final_else);
-}
-
-/// Check the types for the provided if branch condition
-pub fn checkIfBranchCond(self: *Self, if_branch_idx: CIR.IfBranch.Idx, if_cond: CIR.Expr.Idx) Allocator.Error!void {
-    // Check the branch's condition
-    try self.checkExpr(if_cond);
-
-    // Get the var of the condition
-    const cond_var: Var = @enumFromInt(@intFromEnum(if_cond));
-
-    // Unify
-    const result = self.unifyPreserveA(@enumFromInt(@intFromEnum(can.BUILTIN_BOOL)), cond_var);
-    switch (result) {
-        .ok => {},
-        .problem => |problem_idx| {
-            // Unification failed, so we know it appended a type mismatch to self.problems.
-            // We'll translate that generic type mismatch between the two elements into
-            // a more helpful if-condition-specific error report.
-
-            // Extract snapshots from the type mismatch problem
-            switch (self.problems.problems.get(problem_idx)) {
-                .type_mismatch => |mismatch| {
-                    // Extract info from the type mismatch problem
-                    // The expected type is Bool, actual is the invalid cond_var
-                    const invalid_cond_snapshot: snapshot.SnapshotContentIdx = mismatch.actual;
-
-                    // Replace the generic Problem in the MultiArrayList with a list-specific one
-                    self.problems.problems.set(problem_idx, .{
-                        .invalid_if_condition = .{
-                            .if_branch = if_branch_idx,
-                            .invalid_cond_var = cond_var,
-                            .invalid_cond_snapshot = invalid_cond_snapshot,
-                        },
-                    });
-                },
-                else => {
-                    // For other problem types (e.g., number_does_not_fit), the original
-                    // problem is already more specific than our generic "incompatible list
-                    // elements" message, so we should keep it as-is and not replace it.
-                },
-            }
-        },
-    }
-}
-
-/// Check the types for the provided if branch body
-pub fn checkIfBranchBody(
-    self: *Self,
-    branch_var: Var,
-    branch_index: usize,
-    branches_len: usize,
-    if_expr: CIR.Expr.Idx,
-    if_branch_body: CIR.Expr.Idx,
-) Allocator.Error!unifier.Result {
-    // Check the branch's condition
-    try self.checkExpr(if_branch_body);
-
-    // Get the var of the body
-    const body_var: Var = @enumFromInt(@intFromEnum(if_branch_body));
-
-    // Unify
-    const result = self.unify(branch_var, body_var);
-    switch (result) {
-        .ok => {},
-        .problem => |problem_idx| {
-            // Unification failed, so we know it appended a type mismatch to self.problems.
-            // We'll translate that generic type mismatch between the two elements into
-            // a more helpful if-condition-specific error report.
-
-            // Extract snapshots from the type mismatch problem
-            switch (self.problems.problems.get(problem_idx)) {
-                .type_mismatch => |mismatch| {
-                    // Extract info from the type mismatch problem
-                    // The expected type is Bool, actual is the invalid cond_var
-                    const branch_var_snapshot: snapshot.SnapshotContentIdx = mismatch.expected;
-                    const incompat_var_snapshot: snapshot.SnapshotContentIdx = mismatch.actual;
-
-                    // Replace the generic Problem in the MultiArrayList with a list-specific one
-                    self.problems.problems.set(problem_idx, .{
-                        .incompatible_if_branches = .{
-                            .if_expr = if_expr,
-                            .expected_snapshot = branch_var_snapshot,
-                            .invalid_var = @enumFromInt(@intFromEnum(self.can_ir.store.getExprSpecific(if_branch_body))),
-                            .invalid_snapshot = incompat_var_snapshot,
-                            .invalid_index = branch_index,
-                            .branches_len = branches_len,
-                        },
-                    });
-                },
-                else => {
-                    // For other problem types (e.g., number_does_not_fit), the
-                    // original problem is already more specific than our custom
-                    // problem, so we should keep it as-is and not replace it.
-                },
-            }
-        },
-    }
-
-    return result;
+    try self.checkExpr(if_.final_else);
+    const final_else_var: Var = @enumFromInt(@intFromEnum(if_.final_else));
+    const final_else_result = self.unify(branch_var, final_else_var);
+    self.setDetailIfTypeMismatch(final_else_result, problem.TypeMismatchDetail{ .incompatible_if_branches = .{
+        .parent_if_expr = if_expr_idx,
+        .last_if_branch = last_if_branch,
+        .num_branches = num_branches,
+        .problem_branch_index = num_branches - 1,
+    } });
 }
 
 // match //
@@ -739,10 +617,10 @@ pub fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, match: CIR.Match) All
         const ptrn_result = self.unify(cond_var, branch_ptrn_var);
         self.setDetailIfTypeMismatch(ptrn_result, problem.TypeMismatchDetail{ .incompatible_match_patterns = .{
             .match_expr = expr_idx,
-            .num_branches = match.branches.span.len,
+            .num_branches = @intCast(match.branches.span.len),
             .problem_branch_index = 0,
-            .num_patterns = first_branch_ptrn_idxs.len,
-            .problem_pattern_index = cur_ptrn_index,
+            .num_patterns = @intCast(first_branch_ptrn_idxs.len),
+            .problem_pattern_index = @intCast(cur_ptrn_index),
         } });
     }
 
@@ -766,10 +644,10 @@ pub fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, match: CIR.Match) All
             const ptrn_result = self.unify(cond_var, branch_ptrn_var);
             self.setDetailIfTypeMismatch(ptrn_result, problem.TypeMismatchDetail{ .incompatible_match_patterns = .{
                 .match_expr = expr_idx,
-                .num_branches = match.branches.span.len,
-                .problem_branch_index = branch_cur_index,
-                .num_patterns = branch_ptrn_idxs.len,
-                .problem_pattern_index = cur_ptrn_index,
+                .num_branches = @intCast(match.branches.span.len),
+                .problem_branch_index = @intCast(branch_cur_index),
+                .num_patterns = @intCast(branch_ptrn_idxs.len),
+                .problem_pattern_index = @intCast(cur_ptrn_index),
             } });
         }
 
@@ -778,8 +656,8 @@ pub fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, match: CIR.Match) All
         const branch_result = self.unify(branch_var, @enumFromInt(@intFromEnum(branch.value)));
         self.setDetailIfTypeMismatch(branch_result, problem.TypeMismatchDetail{ .incompatible_match_branches = .{
             .match_expr = expr_idx,
-            .num_branches = match.branches.span.len,
-            .problem_branch_index = branch_cur_index,
+            .num_branches = @intCast(match.branches.span.len),
+            .problem_branch_index = @intCast(branch_cur_index),
         } });
 
         if (!branch_result.isOk()) {
@@ -800,10 +678,10 @@ pub fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, match: CIR.Match) All
                     const ptrn_result = self.unify(cond_var, other_branch_ptrn_var);
                     self.setDetailIfTypeMismatch(ptrn_result, problem.TypeMismatchDetail{ .incompatible_match_patterns = .{
                         .match_expr = expr_idx,
-                        .num_branches = match.branches.span.len,
-                        .problem_branch_index = other_branch_cur_index,
-                        .num_patterns = other_branch_ptrn_idxs.len,
-                        .problem_pattern_index = other_cur_ptrn_index,
+                        .num_branches = @intCast(match.branches.span.len),
+                        .problem_branch_index = @intCast(other_branch_cur_index),
+                        .num_patterns = @intCast(other_branch_ptrn_idxs.len),
+                        .problem_pattern_index = @intCast(other_cur_ptrn_index),
                     } });
                 }
 
@@ -833,11 +711,7 @@ fn setDetailIfTypeMismatch(self: *Self, result: unifier.Result, mismatch_detail:
                 .type_mismatch => |mismatch| {
                     self.problems.problems.set(problem_idx, .{
                         .type_mismatch = .{
-                            .expected_var = mismatch.expected_var,
-                            .expected = mismatch.expected,
-                            .actual_var = mismatch.actual_var,
-                            .actual = mismatch.actual,
-                            // Add detail to type mismatch
+                            .types = mismatch.types,
                             .detail = mismatch_detail,
                         },
                     });

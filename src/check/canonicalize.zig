@@ -2832,6 +2832,7 @@ fn flattenIfThenElseChainRecursive(self: *Self, if_expr: anytype) std.mem.Alloca
     const if_branch = CIR.IfBranch{
         .cond = cond_idx,
         .body = then_idx,
+        .region = self.parse_ir.tokenizedRegionToRegion(if_expr.region),
     };
     self.can_ir.store.addScratchIfBranch(if_branch);
 

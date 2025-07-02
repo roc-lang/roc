@@ -50,7 +50,7 @@ match Answer {
 The fourth pattern has this type:
     _Num(*)_
 
-But all the the other patterns have this type: 
+But all the previous patterns have this type: 
     _[Answer, Zero, Greeting]*_
 
 All patterns in an `match` must have compatible types.

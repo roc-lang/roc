@@ -2016,6 +2016,7 @@ pub fn getIfBranch(store: *const NodeStore, if_branch_idx: CIR.IfBranch.Idx) CIR
     return CIR.IfBranch{
         .cond = @enumFromInt(node.data_1),
         .body = @enumFromInt(node.data_2),
+        .region = node.region,
     };
 }
 
@@ -2350,7 +2351,7 @@ pub fn addIfBranch(store: *NodeStore, if_branch: CIR.IfBranch) CIR.IfBranch.Idx 
         .data_1 = @intFromEnum(if_branch.cond),
         .data_2 = @intFromEnum(if_branch.body),
         .data_3 = 0,
-        .region = Region.zero(),
+        .region = if_branch.region,
         .tag = .if_branch,
     };
     const node_idx = store.nodes.append(store.gpa, node);
