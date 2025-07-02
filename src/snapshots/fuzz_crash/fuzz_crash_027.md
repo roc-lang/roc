@@ -629,7 +629,7 @@ This expression is used in an unexpected way:
  ^^^^^^^^^^
 
 It is of type:
-    _*, * -> Error_
+    _Error, * -> Error_
 
 But you are trying to use it as:
     _* -> *_

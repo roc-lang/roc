@@ -443,6 +443,43 @@ The unused variable is declared here:
 This feature is not yet implemented or doesn't have a proper error report yet: top-level expect
 Let us know if you want to help!
 
+**INCOMPATIBLE MATCH PATTERNS**
+The pattern in the fourth branch of this `match` differs from previous ones:
+**fuzz_crash_019.md:52:2:**
+```roc
+	match a {lue  {
+	x
+		}
+		Blue=> {x
+			}
+	er #ent
+			1	"for" => 20[1, ] # t
+		ment
+		[1, 2, 3,est]123
+		[
+		] 23
+		3.1 314
+		3.14 | 6.28 => 314
+		(1, ) => 123
+		(1, 2, 3)123
+		{ 	} => 12
+		Ok(123) => 12
+	}
+
+expect # Cord
+```
+     ^
+
+The fourth pattern has this type:
+    _Str_
+
+But all the previous patterns have this type: 
+    _[Blue]*_
+
+All patterns in an `match` must have compatible types.
+
+
+
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
 **fuzz_crash_019.md:84:2:84:4:**
@@ -452,7 +489,7 @@ This expression is used in an unexpected way:
  ^^
 
 It is of type:
-    _*, [Tb]* -> Error_
+    _Error, [Tb]* -> Error_
 
 But you are trying to use it as:
     _* -> *_
