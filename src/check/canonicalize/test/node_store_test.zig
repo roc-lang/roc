@@ -531,6 +531,12 @@ test "NodeStore round trip - Diagnostics" {
         },
     });
 
+    try diagnostics.append(CIR.Diagnostic{
+        .tuple_elem_not_canonicalized = .{
+            .region = from_raw_offsets(740, 750),
+        },
+    });
+
     // Test the round-trip for all diagnostics
     for (diagnostics.items) |diagnostic| {
         const idx = store.addDiagnostic(diagnostic);

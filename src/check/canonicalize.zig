@@ -1445,24 +1445,36 @@ pub fn canonicalize_expr(
             const scratch_top = self.can_ir.store.scratchExprTop();
 
             // Iterate over the tuple items, canonicalizing each one
-            // Then append the result to the scratch list
+            // Then append the resulting expr to the scratch list
             const items_slice = self.parse_ir.store.exprSlice(e.items);
-            const elems_var_top = self.can_ir.env.types.tuple_elems.len();
             for (items_slice) |item| {
-                if (try self.canonicalize_expr(item)) |canonicalized| {
-                    self.can_ir.store.addScratchExpr(canonicalized);
-                    _ = self.can_ir.env.types.appendTupleElem(@enumFromInt(@intFromEnum(canonicalized)));
-                }
+                const item_expr_idx = blk: {
+                    if (try self.canonicalize_expr(item)) |idx| {
+                        break :blk idx;
+                    } else {
+                        const ast_body = self.parse_ir.store.getExpr(item);
+                        const body_region = self.parse_ir.tokenizedRegionToRegion(ast_body.to_tokenized_region());
+                        break :blk self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{
+                            .tuple_elem_not_canonicalized = .{ .region = body_region },
+                        });
+                    }
+                };
+
+                self.can_ir.store.addScratchExpr(item_expr_idx);
             }
-            const elems_var_range = types.Var.SafeList.Range{
-                .start = @enumFromInt(elems_var_top),
-                .end = @enumFromInt(self.can_ir.env.types.tuple_elems.len()),
-            };
+
+            // Since expr idx map 1-to-1 to variables, we can get cast the slice
+            // of scratch expr idx and cast them to vars
+            const elems_var_range = self.can_ir.env.types.appendTupleElems(
+                @ptrCast(@alignCast(
+                    self.can_ir.store.scratch_exprs.items.items[scratch_top..self.can_ir.store.scratchExprTop()],
+                )),
+            );
 
             // Create span of the new scratch expressions
             const elems_span = self.can_ir.store.exprSpanFrom(scratch_top);
 
-            // then in the final slot the actual expr is inserted
+            // Then insert the tuple expr
             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
                 .e_tuple = .{
                     .elems = elems_span,

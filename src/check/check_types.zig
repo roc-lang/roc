@@ -876,33 +876,14 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             does_fx = try self.checkLambdaWithExpected(expr_idx, lambda, null);
         },
         .e_tuple => |tuple| {
-            for (self.can_ir.store.exprSlice(tuple.elems)) |single_elem_expr_idx| {
-                // Check tuple elements
+            // Check tuple elements
+            const elems_slice = self.can_ir.store.exprSlice(tuple.elems);
+            for (elems_slice) |single_elem_expr_idx| {
                 does_fx = try self.checkExpr(single_elem_expr_idx) or does_fx;
             }
 
-            const tuple_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
-            const elems_list = self.can_ir.store.exprSlice(tuple.elems);
-
-            // First create type vars for all tuple elements
-            var elem_vars = std.ArrayList(Var).init(self.gpa);
-            defer elem_vars.deinit();
-
-            for (elems_list) |elem_idx| {
-                const elem_var = @as(Var, @enumFromInt(@intFromEnum(elem_idx)));
-                elem_vars.append(elem_var) catch |err| exitOnOom(err);
-            }
-
-            // Create tuple type content
-            const elems_range = self.types.appendTupleElems(elem_vars.items);
-            const tuple_content = types_mod.Content{
-                .structure = .{
-                    .tuple_unbound = .{
-                        .elems = elems_range,
-                    },
-                },
-            };
-            _ = try self.types.setVarContent(tuple_var, tuple_content);
+            // The tuple type is created in the type store in canonicalize, so
+            // nothing more needs to be done here
         },
         .e_dot_access => |dot_access| {
             // Check the receiver expression

@@ -229,6 +229,7 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 filename,
             );
         },
+        .tuple_elem_not_canonicalized => Diagnostic.buildTupleElemNotCanonicalizedReport(allocator),
         .undeclared_type => |data| blk: {
             const type_name = self.env.idents.getText(data.name);
             const region_info = self.calcRegionInfo(data.region);

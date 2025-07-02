@@ -83,6 +83,9 @@ pub const Diagnostic = union(enum) {
         original_region: Region,
         redeclared_region: Region,
     },
+    tuple_elem_not_canonicalized: struct {
+        region: Region,
+    },
     undeclared_type: struct {
         name: Ident.Idx,
         region: Region,
@@ -154,6 +157,7 @@ pub const Diagnostic = union(enum) {
             .var_across_function_boundary => |d| d.region,
             .shadowing_warning => |d| d.region,
             .type_redeclared => |d| d.redeclared_region,
+            .tuple_elem_not_canonicalized => |d| d.region,
             .undeclared_type => |d| d.region,
             .undeclared_type_var => |d| d.region,
             .type_alias_redeclared => |d| d.redeclared_region,
@@ -483,6 +487,13 @@ pub const Diagnostic = union(enum) {
             filename,
         );
 
+        return report;
+    }
+
+    /// Build a report for "malformed type annotation" diagnostic
+    pub fn buildTupleElemNotCanonicalizedReport(allocator: Allocator) !Report {
+        var report = Report.init(allocator, "INVALID TUPLE ELEMENT", .runtime_error);
+        try report.document.addReflowingText("This tuple element is malformed or contains invalid syntax.");
         return report;
     }
 
