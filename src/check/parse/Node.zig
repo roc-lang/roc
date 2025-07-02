@@ -295,6 +295,13 @@ pub const Tag = enum {
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
     frac,
+    /// A character literal enclosed in single quotes
+    /// Example: 'a'
+    /// * main_token - Token index containing the character
+    /// * region - Source region containing the single quote literal
+    /// * lhs - Unused
+    /// * rhs - Unused
+    single_quote,
     /// DESCRIPTION
     /// Example: EXAMPLE
     /// * lhs - LHS DESCRIPTION

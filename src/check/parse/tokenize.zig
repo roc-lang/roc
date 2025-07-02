@@ -535,7 +535,7 @@ pub const Cursor = struct {
         return null;
     }
 
-    /// Chomps “trivia” (whitespace, comments, etc.) and returns an optional indent.
+    /// Chomps "trivia" (whitespace, comments, etc.) and returns an optional indent.
     /// If the chomped trivia includes a newline, returns the indent of the next (real) line.
     /// Otherwise, returns null.
     pub fn chompTrivia(self: *Cursor) ?u16 {
@@ -900,6 +900,7 @@ pub const Cursor = struct {
                     return;
                 } else if (c == '\'') {
                     self.pos += 1;
+                    return;
                 } else {
                     self.pos += 1;
                 }

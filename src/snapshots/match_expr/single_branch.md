@@ -10,9 +10,9 @@ match value {
 }
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize match expression
-Let us know if you want to help!
+**UNDEFINED VARIABLE**
+Nothing is named `value` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
@@ -39,9 +39,21 @@ match value {
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "not_implemented"))
+(e-match @1.1-3.2
+	(match @1.1-3.2
+		(cond
+			(e-runtime-error (tag "ident_not_in_scope")))
+		(branches
+			(branch
+				(patterns
+					(p-assign @2.5-2.6 (ident "x") (degenerate false)))
+				(value
+					(e-binop @2.10-3.2 (op "add")
+						(e-lookup-local @2.10-2.11
+							(pattern @2.5-2.6))
+						(e-int @2.14-2.15 (value "1"))))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.1 (type "Error"))
+(expr @1.1-3.2 (type "*"))
 ~~~

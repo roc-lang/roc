@@ -13,36 +13,21 @@ match coord {
 }
 ~~~
 # PROBLEMS
-**UNEXPECTED TOKEN IN PATTERN**
-The token **match coord {
-    (Zero, Zero) => "origin"
-    (** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
+**UNDEFINED VARIABLE**
+Nothing is named `coord` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-Here is the problematic code:
-**tuple_patterns.md:1:1:3:6:**
+**UNUSED VARIABLE**
+Variable ``y`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
+The unused variable is declared here:
+**tuple_patterns.md:5:9:5:10:**
 ```roc
-match coord {
-    (Zero, Zero) => "origin"
-    (x, Zero) => x
+    (x, y) => x
 ```
+        ^
 
-
-**UNEXPECTED TOKEN IN PATTERN**
-The token **=> x** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
-
-Here is the problematic code:
-**tuple_patterns.md:3:15:3:19:**
-```roc
-    (x, Zero) => x
-```
-              ^^^^
-
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize match expression
-Let us know if you want to help!
 
 # TOKENS
 ~~~zig
@@ -64,13 +49,10 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 				(p-tag @2.12-2.16 (raw "Zero")))
 			(e-string @2.21-2.29
 				(e-string-part @2.22-2.28 (raw "origin"))))
-		(branch @1.1-3.17
-			(p-malformed @1.1-3.6 (tag "pattern_unexpected_token"))
-			(e-tuple @3.5-3.14
-				(e-ident @3.6-3.7 (qaul "") (raw "x"))
-				(e-tag @3.9-3.13 (raw "Zero"))))
-		(branch @3.15-4.6
-			(p-malformed @3.15-3.19 (tag "pattern_unexpected_token"))
+		(branch @3.5-4.6
+			(p-tuple @3.5-3.14
+				(p-ident @3.6-3.7 (raw "x"))
+				(p-tag @3.9-3.13 (raw "Zero")))
 			(e-ident @3.18-3.19 (qaul "") (raw "x")))
 		(branch @4.5-5.6
 			(p-tuple @4.5-4.14
@@ -86,17 +68,57 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 # FORMATTED
 ~~~roc
 match coord {
-	(Zero, Zero) => "origin"	 =>
-		(x, Zero)	 => x
+	(Zero, Zero) => "origin"
+	(x, Zero) => x
 	(Zero, y) => y
 	(x, y) => x
 }
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "not_implemented"))
+(e-match @1.1-6.2
+	(match @1.1-6.2
+		(cond
+			(e-runtime-error (tag "ident_not_in_scope")))
+		(branches
+			(branch
+				(patterns
+					(p-tuple @2.5-2.17 (degenerate false)
+						(patterns
+							(p-applied-tag @2.6-2.10)
+							(p-applied-tag @2.12-2.16))))
+				(value
+					(e-string @2.21-2.29
+						(e-literal @2.22-2.28 (string "origin")))))
+			(branch
+				(patterns
+					(p-tuple @3.5-3.14 (degenerate false)
+						(patterns
+							(p-assign @3.6-3.7 (ident "x"))
+							(p-applied-tag @3.9-3.13))))
+				(value
+					(e-lookup-local @3.18-3.19
+						(pattern @3.6-3.7))))
+			(branch
+				(patterns
+					(p-tuple @4.5-4.14 (degenerate false)
+						(patterns
+							(p-applied-tag @4.6-4.10)
+							(p-assign @4.12-4.13 (ident "y")))))
+				(value
+					(e-lookup-local @4.18-4.19
+						(pattern @4.12-4.13))))
+			(branch
+				(patterns
+					(p-tuple @5.5-5.11 (degenerate false)
+						(patterns
+							(p-assign @5.6-5.7 (ident "x"))
+							(p-assign @5.9-5.10 (ident "y")))))
+				(value
+					(e-lookup-local @5.15-5.16
+						(pattern @5.6-5.7)))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.1 (type "Error"))
+(expr @1.1-6.2 (type "*"))
 ~~~

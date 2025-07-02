@@ -15,33 +15,6 @@ match events {
 }
 ~~~
 # PROBLEMS
-**UNEXPECTED TOKEN IN PATTERN**
-The token **match events {
-    [] => "no events"
-    [** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
-
-Here is the problematic code:
-**complex_list_tags.md:1:1:3:6:**
-```roc
-match events {
-    [] => "no events"
-    [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
-```
-
-
-**UNEXPECTED TOKEN IN PATTERN**
-The token **=> "** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
-
-Here is the problematic code:
-**complex_list_tags.md:3:19:3:23:**
-```roc
-    [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
-```
-                  ^^^^
-
-
 **PARSE ERROR**
 A parsing error occurred: `string_expected_close_interpolation`
 This is an unexpected parsing error. Please check your syntax.
@@ -124,60 +97,6 @@ Here is the problematic code:
     [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
 ```
                                                                       
-
-
-**UNEXPECTED TOKEN IN PATTERN**
-The token **match events {
-    [] => "no events"
-    [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
-    [** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
-
-Here is the problematic code:
-**complex_list_tags.md:1:1:4:6:**
-```roc
-match events {
-    [] => "no events"
-    [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
-    [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr (List.len rest)} more events"
-```
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **.. as** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**complex_list_tags.md:4:21:4:26:**
-```roc
-    [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr (List.len rest)} more events"
-```
-                    ^^^^^
-
-
-**LIST NOT CLOSED**
-This list is missing a closing bracket or has a syntax error.
-Lists must be closed with **]** and list items must be separated by commas.
-For example:     [1, 2, 3]
-
-Here is the problematic code:
-**complex_list_tags.md:4:31:4:35:**
-```roc
-    [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr (List.len rest)} more events"
-```
-                              ^^^^
-
-
-**UNEXPECTED TOKEN IN PATTERN**
-The token **=> "** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
-
-Here is the problematic code:
-**complex_list_tags.md:4:33:4:37:**
-```roc
-    [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr (List.len rest)} more events"
-```
-                                ^^^^
 
 
 **PARSE ERROR**
@@ -451,64 +370,6 @@ Here is the problematic code:
                                                                                                                                  
 
 
-**UNEXPECTED TOKEN IN PATTERN**
-The token **match events {
-    [] => "no events"
-    [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
-    [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr (List.len rest)} more events"
-    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
-    [** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
-
-Here is the problematic code:
-**complex_list_tags.md:1:1:6:6:**
-```roc
-match events {
-    [] => "no events"
-    [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
-    [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr (List.len rest)} more events"
-    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
-    [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
-```
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **.. as** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**complex_list_tags.md:6:35:6:40:**
-```roc
-    [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
-```
-                                  ^^^^^
-
-
-**LIST NOT CLOSED**
-This list is missing a closing bracket or has a syntax error.
-Lists must be closed with **]** and list items must be separated by commas.
-For example:     [1, 2, 3]
-
-Here is the problematic code:
-**complex_list_tags.md:6:50:6:54:**
-```roc
-    [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
-```
-                                                 ^^^^
-
-
-**UNEXPECTED TOKEN IN PATTERN**
-The token **=> "** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
-
-Here is the problematic code:
-**complex_list_tags.md:6:52:6:56:**
-```roc
-    [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
-```
-                                                   ^^^^
-
-
 **PARSE ERROR**
 A parsing error occurred: `string_expected_close_interpolation`
 This is an unexpected parsing error. Please check your syntax.
@@ -641,100 +502,248 @@ Here is the problematic code:
                                                                                                                              
 
 
-**UNEXPECTED TOKEN IN PATTERN**
-The token **match events {
-    [] => "no events"
+**UNDEFINED VARIABLE**
+Nothing is named `events` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNUSED VARIABLE**
+Variable ``y`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
+The unused variable is declared here:
+**complex_list_tags.md:3:15:3:16:**
+```roc
     [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
-    [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr (List.len rest)} more events"
-    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
-    [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
-    _** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
+```
+              ^
 
-Here is the problematic code:
-**complex_list_tags.md:1:1:7:6:**
+
+**UNUSED VARIABLE**
+Variable ``x`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+The unused variable is declared here:
+**complex_list_tags.md:3:12:3:13:**
 ```roc
-match events {
-    [] => "no events"
     [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
-    [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr (List.len rest)} more events"
-    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
-    [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
-    _ => "other event pattern"
 ```
+           ^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **_ =>** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**UNUSED VARIABLE**
+Variable ``y`` is not used anywhere in your code.
 
-Here is the problematic code:
-**complex_list_tags.md:7:5:7:9:**
+If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
+The unused variable is declared here:
+**complex_list_tags.md:3:68:3:69:**
 ```roc
-    _ => "other event pattern"
-```
-    ^^^^
-
-
-**UNEXPECTED TOKEN IN PATTERN**
-The token **=> "** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
-
-Here is the problematic code:
-**complex_list_tags.md:7:7:7:11:**
-```roc
-    _ => "other event pattern"
-```
-      ^^^^
-
-
-**UNEXPECTED TOKEN IN PATTERN**
-The token **match events {
-    [] => "no events"
     [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
+```
+                                                                   ^
+
+
+**UNUSED VARIABLE**
+Variable ``key`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_key` to suppress this warning.
+The unused variable is declared here:
+**complex_list_tags.md:4:15:4:18:**
+```roc
     [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr (List.len rest)} more events"
-    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
-    [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
-    _ => "other event pattern"
-}** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
+```
+              ^^^
 
-Here is the problematic code:
-**complex_list_tags.md:1:1:8:2:**
+
+**UNUSED VARIABLE**
+Variable ``rest`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+The unused variable is declared here:
+**complex_list_tags.md:4:27:4:31:**
 ```roc
-match events {
-    [] => "no events"
-    [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
     [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr (List.len rest)} more events"
+```
+                          ^^^^
+
+
+**UNUSED VARIABLE**
+Variable ``rest`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+The unused variable is declared here:
+**complex_list_tags.md:4:79:4:83:**
+```roc
+    [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr (List.len rest)} more events"
+```
+                                                                              ^^^^
+
+
+**UNUSED VARIABLE**
+Variable ``others`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_others` to suppress this warning.
+The unused variable is declared here:
+**complex_list_tags.md:5:42:5:48:**
+```roc
     [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
+```
+                                         ^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable ``dy2`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_dy2` to suppress this warning.
+The unused variable is declared here:
+**complex_list_tags.md:5:30:5:33:**
+```roc
+    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
+```
+                             ^^^
+
+
+**UNUSED VARIABLE**
+Variable ``dx2`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_dx2` to suppress this warning.
+The unused variable is declared here:
+**complex_list_tags.md:5:25:5:28:**
+```roc
+    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
+```
+                        ^^^
+
+
+**UNUSED VARIABLE**
+Variable ``dx`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_dx` to suppress this warning.
+The unused variable is declared here:
+**complex_list_tags.md:5:11:5:13:**
+```roc
+    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
+```
+          ^^
+
+
+**UNUSED VARIABLE**
+Variable ``dy`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_dy` to suppress this warning.
+The unused variable is declared here:
+**complex_list_tags.md:5:15:5:17:**
+```roc
+    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
+```
+              ^^
+
+
+**UNUSED VARIABLE**
+Variable ``dy`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_dy` to suppress this warning.
+The unused variable is declared here:
+**complex_list_tags.md:5:88:5:90:**
+```roc
+    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
+```
+                                                                                       ^^
+
+
+**UNUSED VARIABLE**
+Variable ``dx2`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_dx2` to suppress this warning.
+The unused variable is declared here:
+**complex_list_tags.md:5:109:5:112:**
+```roc
+    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
+```
+                                                                                                            ^^^
+
+
+**UNUSED VARIABLE**
+Variable ``dy2`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_dy2` to suppress this warning.
+The unused variable is declared here:
+**complex_list_tags.md:5:126:5:129:**
+```roc
+    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
+```
+                                                                                                                             ^^^
+
+
+**UNUSED VARIABLE**
+Variable ``remaining`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_remaining` to suppress this warning.
+The unused variable is declared here:
+**complex_list_tags.md:6:41:6:50:**
+```roc
     [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
-    _ => "other event pattern"
-}
 ```
+                                        ^^^^^^^^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **}** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**UNUSED VARIABLE**
+Variable ``amount`` is not used anywhere in your code.
 
-Here is the problematic code:
-**complex_list_tags.md:8:1:8:2:**
+If you don't need this variable, prefix it with an underscore like `_amount` to suppress this warning.
+The unused variable is declared here:
+**complex_list_tags.md:6:13:6:19:**
 ```roc
-}
+    [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
 ```
-^
+            ^^^^^^
 
 
-**PARSE ERROR**
-A parsing error occurred: `expected_close_curly_at_end_of_match`
-This is an unexpected parsing error. Please check your syntax.
+**UNUSED VARIABLE**
+Variable ``y`` is not used anywhere in your code.
 
-Here is the problematic code:
-**complex_list_tags.md:8:2:8:2:**
+If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
+The unused variable is declared here:
+**complex_list_tags.md:6:31:6:32:**
 ```roc
-}
+    [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
 ```
- 
+                              ^
+
+
+**UNUSED VARIABLE**
+Variable ``x`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+The unused variable is declared here:
+**complex_list_tags.md:6:28:6:29:**
+```roc
+    [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
+```
+                           ^
+
+
+**UNUSED VARIABLE**
+Variable ``x`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+The unused variable is declared here:
+**complex_list_tags.md:6:109:6:110:**
+```roc
+    [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
+```
+                                                                                                            ^
+
+
+**UNUSED VARIABLE**
+Variable ``y`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
+The unused variable is declared here:
+**complex_list_tags.md:6:124:6:125:**
+```roc
+    [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
+```
+                                                                                                                           ^
 
 
 # TOKENS
@@ -750,19 +759,157 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 ~~~
 # PARSE
 ~~~clojure
-(e-malformed @8.2-8.2 (reason "expected_close_curly_at_end_of_match"))
+(e-match
+	(e-ident @1.7-1.13 (qaul "") (raw "events"))
+	(branches
+		(branch @1.1-1.1
+			(p-list @2.5-2.7)
+			(e-string @2.11-2.22
+				(e-string-part @2.12-2.21 (raw "no events"))))
+		(branch @3.5-3.54
+			(p-list @3.5-3.18
+				(p-tag @3.6-3.17 (raw "Click")
+					(p-ident @3.12-3.13 (raw "x"))
+					(p-ident @3.15-3.16 (raw "y"))))
+			(e-malformed @3.22-3.54 (reason "string_expected_close_interpolation")))
+		(branch @3.53-3.58
+			(p-malformed @3.53-3.56 (tag "pattern_unexpected_token"))
+			(e-malformed @3.54-3.58 (reason "expr_unexpected_token")))
+		(branch @3.56-3.69
+			(p-malformed @3.56-3.61 (tag "pattern_unexpected_token"))
+			(e-ident @3.58-3.67 (qaul "Num") (raw ".toStr")))
+		(branch @3.68-3.71
+			(p-ident @3.68-3.69 (raw "y"))
+			(e-malformed @3.69-3.71 (reason "expr_unexpected_token")))
+		(branch @1.1-1.1
+			(p-malformed @3.70-3.72 (tag "pattern_unexpected_token"))
+			(e-malformed @1.1-1.1 (reason "expr_unexpected_token")))
+		(branch @4.5-4.74
+			(p-list @4.5-4.32
+				(p-tag @4.6-4.19 (raw "KeyPress")
+					(p-ident @4.15-4.18 (raw "key")))
+				(p-list-rest @4.21-4.32 (name "rest")))
+			(e-malformed @4.36-4.74 (reason "string_expected_close_interpolation")))
+		(branch @4.70-4.83
+			(p-tag @4.70-4.74 (raw "List"))
+			(e-malformed @4.74-4.83 (reason "expr_unexpected_token")))
+		(branch @4.79-4.85
+			(p-ident @4.79-4.83 (raw "rest"))
+			(e-malformed @4.83-4.85 (reason "expr_unexpected_token")))
+		(branch @4.84-4.98
+			(p-malformed @4.84-4.97 (tag "pattern_unexpected_token"))
+			(e-malformed @4.85-4.98 (reason "expr_unexpected_token")))
+		(branch @4.97-5.6
+			(p-malformed @1.1-1.1 (tag "pattern_unexpected_token"))
+			(e-malformed @1.1-5.6 (reason "expr_unexpected_token")))
+		(branch @5.5-5.75
+			(p-list @5.5-5.49
+				(p-tag @5.6-5.18 (raw "Move")
+					(p-ident @5.11-5.13 (raw "dx"))
+					(p-ident @5.15-5.17 (raw "dy")))
+				(p-tag @5.20-5.34 (raw "Move")
+					(p-ident @5.25-5.28 (raw "dx2"))
+					(p-ident @5.30-5.33 (raw "dy2")))
+				(p-list-rest @5.36-5.49 (name "others")))
+			(e-malformed @5.53-5.75 (reason "string_expected_close_interpolation")))
+		(branch @5.74-5.78
+			(p-malformed @5.74-5.76 (tag "pattern_unexpected_token"))
+			(e-malformed @5.75-5.78 (reason "expr_unexpected_token")))
+		(branch @5.76-5.90
+			(p-malformed @5.76-5.81 (tag "pattern_unexpected_token"))
+			(e-ident @5.78-5.87 (qaul "Num") (raw ".toStr")))
+		(branch @5.88-5.97
+			(p-ident @5.88-5.90 (raw "dy"))
+			(e-malformed @5.90-5.97 (reason "expr_unexpected_token")))
+		(branch @5.91-5.102
+			(p-malformed @5.91-5.99 (tag "pattern_unexpected_token"))
+			(e-malformed @5.97-5.102 (reason "expr_unexpected_token")))
+		(branch @5.99-5.112
+			(p-tag @5.99-5.102 (raw "Num"))
+			(e-malformed @5.102-5.112 (reason "expr_unexpected_token")))
+		(branch @5.109-5.114
+			(p-ident @5.109-5.112 (raw "dx2"))
+			(e-malformed @5.112-5.114 (reason "expr_unexpected_token")))
+		(branch @5.113-5.119
+			(p-malformed @5.113-5.116 (tag "pattern_unexpected_token"))
+			(e-malformed @5.114-5.119 (reason "expr_unexpected_token")))
+		(branch @5.116-5.129
+			(p-tag @5.116-5.119 (raw "Num"))
+			(e-malformed @5.119-5.129 (reason "expr_unexpected_token")))
+		(branch @5.126-5.130
+			(p-ident @5.126-5.129 (raw "dy2"))
+			(e-malformed @5.129-5.130 (reason "expr_unexpected_token")))
+		(branch @1.1-1.1
+			(p-malformed @5.130-5.131 (tag "pattern_unexpected_token"))
+			(e-malformed @1.1-1.1 (reason "expr_unexpected_token")))
+		(branch @6.5-6.82
+			(p-list @6.5-6.51
+				(p-tag @6.6-6.20 (raw "Scroll")
+					(p-ident @6.13-6.19 (raw "amount")))
+				(p-tag @6.22-6.33 (raw "Click")
+					(p-ident @6.28-6.29 (raw "x"))
+					(p-ident @6.31-6.32 (raw "y")))
+				(p-list-rest @6.35-6.51 (name "remaining")))
+			(e-malformed @6.55-6.82 (reason "string_expected_close_interpolation")))
+		(branch @6.81-6.99
+			(p-malformed @6.81-6.97 (tag "pattern_unexpected_token"))
+			(e-malformed @6.82-6.99 (reason "expr_unexpected_token")))
+		(branch @6.97-6.110
+			(p-malformed @6.97-6.102 (tag "pattern_unexpected_token"))
+			(e-ident @6.99-6.108 (qaul "Num") (raw ".toStr")))
+		(branch @6.109-6.112
+			(p-ident @6.109-6.110 (raw "x"))
+			(e-malformed @6.110-6.112 (reason "expr_unexpected_token")))
+		(branch @6.111-6.117
+			(p-malformed @6.111-6.114 (tag "pattern_unexpected_token"))
+			(e-malformed @6.112-6.117 (reason "expr_unexpected_token")))
+		(branch @6.114-6.125
+			(p-tag @6.114-6.117 (raw "Num"))
+			(e-malformed @6.117-6.125 (reason "expr_unexpected_token")))
+		(branch @6.124-6.126
+			(p-ident @6.124-6.125 (raw "y"))
+			(e-malformed @6.125-6.126 (reason "expr_unexpected_token")))
+		(branch @1.1-1.1
+			(p-malformed @6.126-6.127 (tag "pattern_unexpected_token"))
+			(e-malformed @1.1-1.1 (reason "expr_unexpected_token")))
+		(branch @1.1-1.1
+			(p-underscore)
+			(e-string @7.10-7.31
+				(e-string-part @7.11-7.30 (raw "other event pattern"))))))
 ~~~
 # FORMATTED
 ~~~roc
-
+match events {
+	[] => "no events"
+	[Click(x, y)] => 	 => 	 => Num.toStr	y => 	 => 
+	[KeyPress(key), .. as rest] => 	List => 	rest => 	 => 	 => 
+	[Move(dx, dy), Move(dx2, dy2), .. as others] => 	 => 	 => Num.toStr	dy => 	 => 	Num => 	dx2 => 	 => 	Num => 	dy2 => 	 => 
+	[Scroll(amount), Click(x, y), .. as remaining] => 	 => 	 => Num.toStr	x => 	 => 	Num => 	y => 	 => 
+	_ => "other event pattern"
+}
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(e-match @1.1-8.2
+	(match @1.1-8.2
+		(cond
+			(e-runtime-error (tag "ident_not_in_scope")))
+		(branches
+			(branch
+				(patterns
+					(p-list @2.5-2.7 (degenerate false)
+						(patterns)))
+				(value
+					(e-string @2.11-2.22
+						(e-literal @2.12-2.21 (string "no events")))))
+			(branch
+				(patterns
+					(p-underscore @7.5-7.6 (degenerate false)))
+				(value
+					(e-string @7.10-7.31
+						(e-literal @7.11-7.30 (string "other event pattern"))))))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+(expr @1.1-8.2 (type "*"))
 ~~~

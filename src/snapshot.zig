@@ -165,8 +165,187 @@ pub fn main() !void {
 }
 
 /// Check if a file has a valid snapshot extension
-fn isSnapshotFile(filename: []const u8) bool {
-    return std.mem.endsWith(u8, filename, ".md");
+fn isSnapshotFile(path: []const u8) bool {
+    return std.mem.endsWith(u8, path, ".md");
+}
+
+fn isMultiFileSnapshot(path: []const u8) bool {
+    return std.mem.endsWith(u8, path, "_package") or
+        std.mem.endsWith(u8, path, "_platform") or
+        std.mem.endsWith(u8, path, "_app");
+}
+
+fn getMultiFileSnapshotType(path: []const u8) NodeType {
+    if (std.mem.endsWith(u8, path, "_package")) return .package;
+    if (std.mem.endsWith(u8, path, "_platform")) return .platform;
+    if (std.mem.endsWith(u8, path, "_app")) return .app;
+    return .file; // fallback, shouldn't happen if isMultiFileSnapshot was checked first
+}
+
+fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8) !void {
+    log("Processing multi-file snapshot directory: {s}", .{dir_path});
+
+    // First, delete all existing .md files in the directory
+    var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| {
+        warn("Failed to open directory {s}: {}", .{ dir_path, err });
+        return;
+    };
+    defer dir.close();
+
+    // Delete existing .md files
+    var iterator = dir.iterate();
+    var files_to_delete = std.ArrayList([]u8).init(allocator);
+    defer {
+        for (files_to_delete.items) |file_path| {
+            allocator.free(file_path);
+        }
+        files_to_delete.deinit();
+    }
+
+    while (try iterator.next()) |entry| {
+        if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".md")) {
+            const file_path = try allocator.dupe(u8, entry.name);
+            try files_to_delete.append(file_path);
+        }
+    }
+
+    for (files_to_delete.items) |file_name| {
+        dir.deleteFile(file_name) catch |err| {
+            warn("Failed to delete {s}: {}", .{ file_name, err });
+        };
+    }
+
+    // Find all .roc files and generate snapshots for each
+    iterator = dir.iterate();
+    const snapshot_type = getMultiFileSnapshotType(dir_path);
+
+    while (try iterator.next()) |entry| {
+        if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".roc")) {
+            const roc_file_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir_path, entry.name });
+            defer allocator.free(roc_file_path);
+
+            // Generate snapshot file name (replace .roc with .md)
+            const base_name = entry.name[0 .. entry.name.len - 4]; // remove .roc
+            const snapshot_file_path = try std.fmt.allocPrint(allocator, "{s}/{s}.md", .{ dir_path, base_name });
+            defer allocator.free(snapshot_file_path);
+
+            // Read the .roc file content
+            const roc_content = std.fs.cwd().readFileAlloc(allocator, roc_file_path, 1024 * 1024) catch |err| {
+                warn("Failed to read {s}: {}", .{ roc_file_path, err });
+                continue;
+            };
+            defer allocator.free(roc_content);
+
+            // Create meta section
+            const type_name = switch (snapshot_type) {
+                .package => "package",
+                .platform => "platform",
+                .app => "app",
+                else => "file",
+            };
+            const meta = Meta{
+                .description = try std.fmt.allocPrint(allocator, "{s} module from {s}", .{ base_name, type_name }),
+                .node_type = snapshot_type,
+            };
+            defer allocator.free(meta.description);
+
+            // Process the .roc file as a snapshot
+            try processRocFileAsSnapshot(allocator, snapshot_file_path, roc_content, meta);
+        }
+    }
+}
+
+fn processRocFileAsSnapshot(allocator: Allocator, output_path: []const u8, roc_content: []const u8, meta: Meta) !void {
+    log("Generating snapshot for: {s}", .{output_path});
+
+    // Process the content through the compilation pipeline
+    var module_env = base.ModuleEnv.init(allocator);
+    defer module_env.deinit();
+
+    // Parse the content
+    var ast = parse.parse(&module_env, roc_content);
+    defer ast.deinit(allocator);
+
+    // Try canonicalization
+    ast.store.emptyScratch();
+
+    var can_ir = CIR.init(&module_env);
+    defer can_ir.deinit();
+
+    var can = canonicalize.init(&can_ir, &ast) catch |err| {
+        warn("Canonicalization init failed: {}", .{err});
+        return;
+    };
+    defer can.deinit();
+
+    const maybe_expr_idx: ?CIR.Expr.Idx = null;
+
+    can.canonicalize_file() catch |err| {
+        warn("Canonicalization failed: {}", .{err});
+        return;
+    };
+
+    // Types (ONCE)
+    var solver = Solver.init(allocator, &can_ir.env.types, &can_ir) catch |err| {
+        warn("Type solver init failed: {}", .{err});
+        return;
+    };
+    defer solver.deinit();
+
+    solver.checkDefs();
+
+    // Create content structure
+    const content = Content{
+        .meta = meta,
+        .source = roc_content,
+        .formatted = null,
+        .has_canonicalize = true,
+    };
+
+    // Buffer all output in memory before writing files
+    var md_buffer = std.ArrayList(u8).init(allocator);
+    defer md_buffer.deinit();
+
+    var html_buffer = std.ArrayList(u8).init(allocator);
+    defer html_buffer.deinit();
+
+    var output = DualOutput.init(allocator, &md_buffer, &html_buffer);
+
+    // Generate HTML wrapper
+    try generateHtmlWrapper(&output, &content);
+
+    // Generate all sections
+    try generateMetaSection(&output, &content);
+    try generateSourceSection(&output, &content, &ast);
+    try generateProblemsSection(&output, &ast, &can_ir, &solver, &content, output_path, &module_env);
+    try generateTokensSection(&output, &ast, &content, &module_env);
+    try generateParseSection(&output, &content, &ast, &module_env);
+    try generateFormattedSection(&output, &content, &ast);
+    try generateCanonicalizeSection(&output, &content, &can_ir, maybe_expr_idx);
+    try generateTypesSection(&output, &content, &can_ir, maybe_expr_idx);
+
+    try generateHtmlClosing(&output);
+
+    // Write the markdown file
+    const md_file = std.fs.cwd().createFile(output_path, .{}) catch |err| {
+        warn("Failed to create {s}: {}", .{ output_path, err });
+        return;
+    };
+    defer md_file.close();
+
+    try md_file.writeAll(md_buffer.items);
+
+    // Write HTML file
+    const html_path = try std.fmt.allocPrint(allocator, "{s}.html", .{output_path[0 .. output_path.len - 3]});
+    defer allocator.free(html_path);
+
+    const html_file = std.fs.cwd().createFile(html_path, .{}) catch |err| {
+        warn("Failed to create {s}: {}", .{ html_path, err });
+        return;
+    };
+    defer html_file.close();
+
+    try html_file.writeAll(html_buffer.items);
 }
 
 fn processPath(gpa: Allocator, path: []const u8, maybe_fuzz_corpus_path: ?[]const u8) !usize {
@@ -184,25 +363,31 @@ fn processPath(gpa: Allocator, path: []const u8, maybe_fuzz_corpus_path: ?[]cons
     };
 
     if (stat.kind == .directory) {
-        var dir = try std.fs.cwd().openDir(path, .{ .iterate = true });
-        defer dir.close();
+        // Check if this is a multi-file snapshot directory
+        if (isMultiFileSnapshot(canonical_path)) {
+            try processMultiFileSnapshot(gpa, canonical_path);
+            processed_count += 1;
+        } else {
+            var dir = try std.fs.cwd().openDir(path, .{ .iterate = true });
+            defer dir.close();
 
-        var dir_iterator = dir.iterate();
-        while (try dir_iterator.next()) |entry| {
+            var dir_iterator = dir.iterate();
+            while (try dir_iterator.next()) |entry| {
 
-            // Skip hidden files and special directories
-            if (entry.name[0] == '.') continue;
+                // Skip hidden files and special directories
+                if (entry.name[0] == '.') continue;
 
-            const full_path = try std.fs.path.join(gpa, &[_][]const u8{ canonical_path, entry.name });
-            defer gpa.free(full_path);
+                const full_path = try std.fs.path.join(gpa, &[_][]const u8{ canonical_path, entry.name });
+                defer gpa.free(full_path);
 
-            if (entry.kind == .directory) {
-                processed_count += try processPath(gpa, full_path, maybe_fuzz_corpus_path);
-            } else if (entry.kind == .file and isSnapshotFile(entry.name)) {
-                if (try processSnapshotFile(gpa, full_path, maybe_fuzz_corpus_path)) {
-                    processed_count += 1;
-                } else {
-                    log("skipped file (not a valid snapshot): {s}", .{full_path});
+                if (entry.kind == .directory) {
+                    processed_count += try processPath(gpa, full_path, maybe_fuzz_corpus_path);
+                } else if (entry.kind == .file and isSnapshotFile(entry.name)) {
+                    if (try processSnapshotFile(gpa, full_path, maybe_fuzz_corpus_path)) {
+                        processed_count += 1;
+                    } else {
+                        log("skipped file (not a valid snapshot): {s}", .{full_path});
+                    }
                 }
             }
         }
@@ -294,17 +479,26 @@ pub const NodeType = enum {
     header,
     expr,
     statement,
+    package,
+    platform,
+    app,
 
-    const HEADER = "header";
-    const EXPR = "expr";
-    const STMT = "statement";
-    const FILE = "file";
+    pub const HEADER = "header";
+    pub const EXPR = "expr";
+    pub const STMT = "statement";
+    pub const FILE = "file";
+    pub const PACKAGE = "package";
+    pub const PLATFORM = "platform";
+    pub const APP = "app";
 
-    fn fromString(ty: []const u8) Error!NodeType {
-        if (std.mem.eql(u8, ty, HEADER)) return .header;
-        if (std.mem.eql(u8, ty, EXPR)) return .expr;
-        if (std.mem.eql(u8, ty, STMT)) return .statement;
-        if (std.mem.eql(u8, ty, FILE)) return .file;
+    fn fromString(str: []const u8) !NodeType {
+        if (std.mem.eql(u8, str, HEADER)) return .header;
+        if (std.mem.eql(u8, str, EXPR)) return .expr;
+        if (std.mem.eql(u8, str, STMT)) return .statement;
+        if (std.mem.eql(u8, str, FILE)) return .file;
+        if (std.mem.eql(u8, str, PACKAGE)) return .package;
+        if (std.mem.eql(u8, str, PLATFORM)) return .platform;
+        if (std.mem.eql(u8, str, APP)) return .app;
         return Error.InvalidNodeType;
     }
 
@@ -314,6 +508,9 @@ pub const NodeType = enum {
             .header => "header",
             .expr => "expr",
             .statement => "statement",
+            .package => "package",
+            .platform => "platform",
+            .app => "app",
         };
     }
 };
@@ -853,6 +1050,18 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
             const stmt = parse_ast.store.getStatement(@enumFromInt(parse_ast.root_node_idx));
             node_opt = stmt.toSExpr(module_env, parse_ast);
         },
+        .package => {
+            const file = parse_ast.store.getFile();
+            node_opt = file.toSExpr(module_env, parse_ast);
+        },
+        .platform => {
+            const file = parse_ast.store.getFile();
+            node_opt = file.toSExpr(module_env, parse_ast);
+        },
+        .app => {
+            const file = parse_ast.store.getFile();
+            node_opt = file.toSExpr(module_env, parse_ast);
+        },
     }
 
     if (node_opt) |node| {
@@ -900,6 +1109,15 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
         .statement => {
             try fmt.formatStatement(parse_ast.*, formatted.writer().any());
         },
+        .package => {
+            try fmt.formatAst(parse_ast.*, formatted.writer().any());
+        },
+        .platform => {
+            try fmt.formatAst(parse_ast.*, formatted.writer().any());
+        },
+        .app => {
+            try fmt.formatAst(parse_ast.*, formatted.writer().any());
+        },
     }
 
     const is_changed = !std.mem.eql(u8, formatted.items, content.source);
@@ -930,11 +1148,11 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
 }
 
 /// Generate CANONICALIZE section for both markdown and HTML
-fn generateCanonicalizeSection(output: *DualOutput, content: *const Content, can_ir: *CIR, module_env: *base.ModuleEnv, maybe_expr_idx: ?CIR.Expr.Idx) !void {
+fn generateCanonicalizeSection(output: *DualOutput, content: *const Content, can_ir: *CIR, maybe_expr_idx: ?CIR.Expr.Idx) !void {
     var canonicalized = std.ArrayList(u8).init(output.gpa);
     defer canonicalized.deinit();
 
-    try can_ir.toSExprStr(module_env, canonicalized.writer().any(), maybe_expr_idx, content.source);
+    try can_ir.toSExprStr(canonicalized.writer().any(), maybe_expr_idx, content.source);
 
     try output.begin_section("CANONICALIZE");
     try output.begin_code_block("clojure");
@@ -1179,6 +1397,9 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, maybe_f
         .header => parse.parseHeader(&module_env, content.source),
         .expr => parse.parseExpr(&module_env, content.source),
         .statement => parse.parseStatement(&module_env, content.source),
+        .package => parse.parse(&module_env, content.source),
+        .platform => parse.parse(&module_env, content.source),
+        .app => parse.parse(&module_env, content.source),
     };
     defer parse_ast.deinit(gpa);
 
@@ -1188,7 +1409,7 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, maybe_f
     var can_ir = CIR.init(&module_env);
     defer can_ir.deinit();
 
-    var can = canonicalize.init(&can_ir, &parse_ast);
+    var can = try canonicalize.init(&can_ir, &parse_ast);
     defer can.deinit();
 
     var maybe_expr_idx: ?CIR.Expr.Idx = null;
@@ -1209,6 +1430,9 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, maybe_f
             _ = try can.canonicalize_statement(stmt_idx);
             can_ir.all_statements = can_ir.store.statementSpanFrom(scratch_statements_start);
         },
+        .package => try can.canonicalize_file(),
+        .platform => try can.canonicalize_file(),
+        .app => try can.canonicalize_file(),
     }
 
     // Types (ONCE)
@@ -1242,7 +1466,7 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, maybe_f
     // Generate remaining sections
     try generateParseSection(&output, &content, &parse_ast, &module_env);
     try generateFormattedSection(&output, &content, &parse_ast);
-    try generateCanonicalizeSection(&output, &content, &can_ir, &module_env, maybe_expr_idx);
+    try generateCanonicalizeSection(&output, &content, &can_ir, maybe_expr_idx);
     try generateTypesSection(&output, &content, &can_ir, maybe_expr_idx);
     // TODO: Include to emit entire types store. Can be helpful for debugging
     // try generateTypesStoreSection(gpa, &output, &can_ir);

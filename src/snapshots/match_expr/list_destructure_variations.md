@@ -15,9 +15,45 @@ match list {
 }
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize match expression
-Let us know if you want to help!
+**UNDEFINED VARIABLE**
+Nothing is named `list` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNUSED VARIABLE**
+Variable ``tail`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_tail` to suppress this warning.
+The unused variable is declared here:
+**list_destructure_variations.md:5:18:5:22:**
+```roc
+    [head, .. as tail] => head
+```
+                 ^^^^
+
+
+**UNUSED VARIABLE**
+Variable ``rest`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+The unused variable is declared here:
+**list_destructure_variations.md:6:22:6:26:**
+```roc
+    [One, Two, .. as rest] => 3
+```
+                     ^^^^
+
+
+**UNUSED VARIABLE**
+Variable ``more`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_more` to suppress this warning.
+The unused variable is declared here:
+**list_destructure_variations.md:7:21:7:25:**
+```roc
+    [x, y, z, .. as more] => x + y + z
+```
+                    ^^^^
+
 
 # TOKENS
 ~~~zig
@@ -52,20 +88,20 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 		(branch @5.5-6.6
 			(p-list @5.5-5.23
 				(p-ident @5.6-5.10 (raw "head"))
-				(p-list-rest @5.12-5.22 (name "tail")))
+				(p-list-rest @5.12-5.23 (name "tail")))
 			(e-ident @5.27-5.31 (qaul "") (raw "head")))
 		(branch @6.5-7.6
 			(p-list @6.5-6.27
 				(p-tag @6.6-6.9 (raw "One"))
 				(p-tag @6.11-6.14 (raw "Two"))
-				(p-list-rest @6.16-6.26 (name "rest")))
+				(p-list-rest @6.16-6.27 (name "rest")))
 			(e-int @6.31-6.32 (raw "3")))
 		(branch @7.5-8.2
 			(p-list @7.5-7.26
 				(p-ident @7.6-7.7 (raw "x"))
 				(p-ident @7.9-7.10 (raw "y"))
 				(p-ident @7.12-7.13 (raw "z"))
-				(p-list-rest @7.15-7.25 (name "more")))
+				(p-list-rest @7.15-7.26 (name "more")))
 			(e-binop @7.30-8.2 (op "+")
 				(e-ident @7.30-7.31 (qaul "") (raw "x"))
 				(e-binop @7.34-8.2 (op "+")
@@ -85,9 +121,77 @@ match list {
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "not_implemented"))
+(e-match @1.1-8.2
+	(match @1.1-8.2
+		(cond
+			(e-runtime-error (tag "ident_not_in_scope")))
+		(branches
+			(branch
+				(patterns
+					(p-list @2.5-2.7 (degenerate false)
+						(patterns)))
+				(value
+					(e-int @2.11-2.12 (value "0"))))
+			(branch
+				(patterns
+					(p-list @3.5-3.8 (degenerate false)
+						(patterns
+							(p-assign @3.6-3.7 (ident "x")))))
+				(value
+					(e-lookup-local @3.12-3.13
+						(pattern @3.6-3.7))))
+			(branch
+				(patterns
+					(p-list @4.5-4.20 (degenerate false)
+						(patterns
+							(p-assign @4.6-4.11 (ident "first"))
+							(p-assign @4.13-4.19 (ident "second")))))
+				(value
+					(e-binop @4.24-5.6 (op "add")
+						(e-lookup-local @4.24-4.29
+							(pattern @4.6-4.11))
+						(e-lookup-local @4.32-4.38
+							(pattern @4.13-4.19)))))
+			(branch
+				(patterns
+					(p-list @5.5-5.23 (degenerate false)
+						(patterns
+							(p-assign @5.6-5.10 (ident "head")))
+						(rest-at (index 1)
+							(p-assign @5.18-5.22 (ident "tail")))))
+				(value
+					(e-lookup-local @5.27-5.31
+						(pattern @5.6-5.10))))
+			(branch
+				(patterns
+					(p-list @6.5-6.27 (degenerate false)
+						(patterns
+							(p-applied-tag @6.6-6.9)
+							(p-applied-tag @6.11-6.14))
+						(rest-at (index 2)
+							(p-assign @6.22-6.26 (ident "rest")))))
+				(value
+					(e-int @6.31-6.32 (value "3"))))
+			(branch
+				(patterns
+					(p-list @7.5-7.26 (degenerate false)
+						(patterns
+							(p-assign @7.6-7.7 (ident "x"))
+							(p-assign @7.9-7.10 (ident "y"))
+							(p-assign @7.12-7.13 (ident "z")))
+						(rest-at (index 3)
+							(p-assign @7.21-7.25 (ident "more")))))
+				(value
+					(e-binop @7.30-8.2 (op "add")
+						(e-lookup-local @7.30-7.31
+							(pattern @7.6-7.7))
+						(e-binop @7.34-8.2 (op "add")
+							(e-lookup-local @7.34-7.35
+								(pattern @7.9-7.10))
+							(e-lookup-local @7.38-7.39
+								(pattern @7.12-7.13)))))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.1 (type "Error"))
+(expr @1.1-8.2 (type "*"))
 ~~~

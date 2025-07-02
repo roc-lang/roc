@@ -91,7 +91,7 @@ pub fn deinit(store: *NodeStore) void {
 /// when adding/removing variants from CIR unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the CIR
-pub const CIR_DIAGNOSTIC_NODE_COUNT = 27;
+pub const CIR_DIAGNOSTIC_NODE_COUNT = 30;
 /// Count of the expression nodes in the CIR
 pub const CIR_EXPR_NODE_COUNT = 24;
 /// Count of the statement nodes in the CIR
@@ -610,19 +610,24 @@ pub fn getMatchBranch(store: *const NodeStore, branch: CIR.Match.Branch.Idx) CIR
     const extra_start = node.data_1;
     const extra_data = store.extra_data.items[extra_start..];
 
-    const patterns_start = extra_data[0];
-    const patterns_len = extra_data[1];
-    const value_idx = @as(CIR.Expr.Idx, @enumFromInt(extra_data[2]));
-    const guard_idx_raw = extra_data[3];
-    const guard_idx = if (guard_idx_raw == 0) null else @as(CIR.Expr.Idx, @enumFromInt(guard_idx_raw));
-    const redundant = @as(CIR.RedundantMark, @enumFromInt(extra_data[4]));
+    const patterns: CIR.Match.BranchPattern.Span = .{ .span = .{ .start = extra_data[0], .len = extra_data[1] } };
+    const value_idx: CIR.Expr.Idx = @enumFromInt(extra_data[2]);
+    const guard_idx: ?CIR.Expr.Idx = if (extra_data[3] == 0) null else @enumFromInt(extra_data[3]);
+    const redundant: types.Var = @enumFromInt(extra_data[4]);
 
     return CIR.Match.Branch{
-        .patterns = .{ .span = .{ .start = patterns_start, .len = patterns_len } },
+        .patterns = patterns,
         .value = value_idx,
         .guard = guard_idx,
         .redundant = redundant,
     };
+}
+
+/// Returns a slice of match branches from the given span.
+pub fn matchBranchSlice(store: *const NodeStore, span: CIR.Match.Branch.Span) []CIR.Match.Branch.Idx {
+    const slice = store.extra_data.items[span.span.start..(span.span.start + span.span.len)];
+    const result: []CIR.Match.Branch.Idx = @ptrCast(@alignCast(slice));
+    return result;
 }
 
 /// Retrieves a 'where' clause from the store.
@@ -760,12 +765,28 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
             const elem_var = @as(types.Var, @enumFromInt(extra_data[2]));
             const list_var = @as(types.Var, @enumFromInt(extra_data[3]));
 
+            // Load rest_info
+            const has_rest_info = extra_data[4] != 0;
+            const rest_info = if (has_rest_info) blk: {
+                const rest_index = extra_data[5];
+                const has_pattern = extra_data[6] != 0;
+                const rest_pattern = if (has_pattern)
+                    @as(CIR.Pattern.Idx, @enumFromInt(extra_data[7]))
+                else
+                    null;
+                break :blk @as(@TypeOf(@as(CIR.Pattern, undefined).list.rest_info), .{
+                    .index = rest_index,
+                    .pattern = rest_pattern,
+                });
+            } else null;
+
             return CIR.Pattern{
                 .list = .{
                     .region = node.region,
                     .patterns = DataSpan.init(patterns_start, patterns_len).as(CIR.Pattern.Span),
                     .elem_var = elem_var,
                     .list_var = list_var,
+                    .rest_info = rest_info,
                 },
             };
         },
@@ -992,7 +1013,7 @@ pub fn getAnnotation(store: *const NodeStore, annotation: CIR.Annotation.Idx) CI
 }
 
 /// Retrieves an exposed item from the store.
-pub fn getExposedItem(store: *NodeStore, exposedItem: CIR.ExposedItem.Idx) CIR.ExposedItem {
+pub fn getExposedItem(store: *const NodeStore, exposedItem: CIR.ExposedItem.Idx) CIR.ExposedItem {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(exposedItem));
     const node = store.nodes.get(node_idx);
 
@@ -1486,7 +1507,7 @@ pub fn addMatchBranch(store: *NodeStore, whenBranch: CIR.Match.Branch) CIR.Match
         .data_1 = 0,
         .data_2 = 0,
         .data_3 = 0,
-        .region = base.Region.empty(), // TODO should WhenBranch have a region field?
+        .region = base.Region.zero(), // TODO should WhenBranch have a region field?
         .tag = .when_branch,
     };
 
@@ -1556,7 +1577,7 @@ pub fn addWhereClause(store: *NodeStore, whereClause: CIR.WhereClause) CIR.Where
 }
 
 /// Adds a pattern to the store.
-pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern) CIR.Pattern.Idx {
+pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern) std.mem.Allocator.Error!CIR.Pattern.Idx {
     var node = Node{
         .data_1 = 0,
         .data_2 = 0,
@@ -1583,10 +1604,10 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern) CIR.Pattern.Idx {
 
             // Store applied tag data in extra_data
             const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
-            store.extra_data.append(store.gpa, p.arguments.span.start) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, p.arguments.span.len) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @bitCast(p.tag_name)) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @intFromEnum(p.ext_var)) catch |err| exitOnOom(err);
+            try store.extra_data.append(store.gpa, p.arguments.span.start);
+            try store.extra_data.append(store.gpa, p.arguments.span.len);
+            try store.extra_data.append(store.gpa, @bitCast(p.tag_name));
+            try store.extra_data.append(store.gpa, @intFromEnum(p.ext_var));
             node.data_1 = extra_data_start;
         },
         .record_destructure => |p| {
@@ -1595,10 +1616,10 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern) CIR.Pattern.Idx {
 
             // Store record destructure data in extra_data
             const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
-            store.extra_data.append(store.gpa, p.destructs.span.start) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, p.destructs.span.len) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @intFromEnum(p.ext_var)) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @intFromEnum(p.whole_var)) catch |err| exitOnOom(err);
+            try store.extra_data.append(store.gpa, p.destructs.span.start);
+            try store.extra_data.append(store.gpa, p.destructs.span.len);
+            try store.extra_data.append(store.gpa, @intFromEnum(p.ext_var));
+            try store.extra_data.append(store.gpa, @intFromEnum(p.whole_var));
             node.data_1 = extra_data_start;
         },
         .list => |p| {
@@ -1607,10 +1628,25 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern) CIR.Pattern.Idx {
 
             // Store list pattern data in extra_data
             const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
-            store.extra_data.append(store.gpa, p.patterns.span.start) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, p.patterns.span.len) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @intFromEnum(p.elem_var)) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @intFromEnum(p.list_var)) catch |err| exitOnOom(err);
+            try store.extra_data.append(store.gpa, p.patterns.span.start);
+            try store.extra_data.append(store.gpa, p.patterns.span.len);
+            try store.extra_data.append(store.gpa, @intFromEnum(p.elem_var));
+            try store.extra_data.append(store.gpa, @intFromEnum(p.list_var));
+
+            // Store rest_info
+            if (p.rest_info) |rest| {
+                try store.extra_data.append(store.gpa, 1); // has rest_info
+                try store.extra_data.append(store.gpa, rest.index);
+                if (rest.pattern) |pattern_idx| {
+                    try store.extra_data.append(store.gpa, 1); // has pattern
+                    try store.extra_data.append(store.gpa, @intFromEnum(pattern_idx));
+                } else {
+                    try store.extra_data.append(store.gpa, 0); // no pattern
+                }
+            } else {
+                try store.extra_data.append(store.gpa, 0); // no rest_info
+            }
+
             node.data_1 = extra_data_start;
         },
         .tuple => |p| {
@@ -1626,7 +1662,7 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern) CIR.Pattern.Idx {
             const extra_data_start = store.extra_data.items.len;
             const value_as_u32s: [4]u32 = @bitCast(p.value.bytes);
             for (value_as_u32s) |word| {
-                store.extra_data.append(store.gpa, word) catch |err| exitOnOom(err);
+                try store.extra_data.append(store.gpa, word);
             }
             node.data_1 = @intCast(extra_data_start);
         },
@@ -1646,7 +1682,7 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern) CIR.Pattern.Idx {
             const extra_data_start = store.extra_data.items.len;
             const value_as_u32s: [4]u32 = @bitCast(p.value.num);
             for (value_as_u32s) |word| {
-                store.extra_data.append(store.gpa, word) catch |err| exitOnOom(err);
+                try store.extra_data.append(store.gpa, word);
             }
             node.data_1 = @intCast(extra_data_start);
         },
@@ -1658,7 +1694,7 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern) CIR.Pattern.Idx {
             const value_as_u64: u64 = @bitCast(p.value);
             const value_as_u32s: [2]u32 = @bitCast(value_as_u64);
             for (value_as_u32s) |word| {
-                store.extra_data.append(store.gpa, word) catch |err| exitOnOom(err);
+                try store.extra_data.append(store.gpa, word);
             }
             node.data_1 = @intCast(extra_data_start);
         },
@@ -1674,10 +1710,10 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern) CIR.Pattern.Idx {
 
             // Store char literal data in extra_data
             const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
-            store.extra_data.append(store.gpa, p.value) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @intFromEnum(p.num_var)) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, if (p.requirements.sign_needed) 1 else 0) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @intFromEnum(p.requirements.bits_needed)) catch |err| exitOnOom(err);
+            try store.extra_data.append(store.gpa, p.value);
+            try store.extra_data.append(store.gpa, @intFromEnum(p.num_var));
+            try store.extra_data.append(store.gpa, if (p.requirements.sign_needed) 1 else 0);
+            try store.extra_data.append(store.gpa, @intFromEnum(p.requirements.bits_needed));
             node.data_1 = extra_data_start;
         },
         .underscore => |p| {
@@ -2339,6 +2375,18 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) CIR.Diagnostic.I
             node.tag = .diag_invalid_num_literal;
             node.region = r.region;
         },
+        .invalid_single_quote => |r| {
+            node.tag = .diag_invalid_single_quote;
+            node.region = r.region;
+        },
+        .too_long_single_quote => |r| {
+            node.tag = .diag_too_long_single_quote;
+            node.region = r.region;
+        },
+        .empty_single_quote => |r| {
+            node.tag = .diag_empty_single_quote;
+            node.region = r.region;
+        },
         .ident_already_in_scope => |r| {
             node.tag = .diag_ident_already_in_scope;
             node.region = r.region;
@@ -2523,6 +2571,15 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_invalid_num_literal => return CIR.Diagnostic{ .invalid_num_literal = .{
             .region = node.region,
         } },
+        .diag_invalid_single_quote => return CIR.Diagnostic{ .invalid_single_quote = .{
+            .region = node.region,
+        } },
+        .diag_too_long_single_quote => return CIR.Diagnostic{ .too_long_single_quote = .{
+            .region = node.region,
+        } },
+        .diag_empty_single_quote => return CIR.Diagnostic{ .empty_single_quote = .{
+            .region = node.region,
+        } },
         .diag_ident_already_in_scope => return CIR.Diagnostic{ .ident_already_in_scope = .{
             .ident = @bitCast(node.data_1),
             .region = node.region,
@@ -2688,6 +2745,30 @@ pub fn addTypeVarSlot(store: *NodeStore, parent_node_idx: Node.Idx, region: base
         .region = region,
     });
     return @enumFromInt(@intFromEnum(nid));
+}
+
+/// Returns the top index for scratch match branches.
+pub fn scratchMatchBranchTop(store: *NodeStore) u32 {
+    return store.scratch_match_branches.top();
+}
+
+/// Adds a scratch match branch to temporary storage.
+pub fn addScratchMatchBranch(store: *NodeStore, idx: CIR.Match.Branch.Idx) void {
+    store.scratch_match_branches.append(store.gpa, idx);
+}
+
+/// Creates a span from the scratch match branches starting at the given index.
+pub fn matchBranchSpanFrom(store: *NodeStore, start: u32) CIR.Match.Branch.Span {
+    const end = store.scratch_match_branches.top();
+    defer store.scratch_match_branches.clearFrom(start);
+    var i = @as(usize, @intCast(start));
+    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
+    std.debug.assert(end >= i);
+    while (i < end) {
+        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_match_branches.items.items[i])) catch |err| exitOnOom(err);
+        i += 1;
+    }
+    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
 }
 
 /// Calculate the size needed to serialize this NodeStore

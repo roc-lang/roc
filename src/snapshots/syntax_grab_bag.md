@@ -312,7 +312,99 @@ This feature is not yet implemented or doesn't have a proper error report yet: c
 Let us know if you want to help!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize match expression
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
+Let us know if you want to help!
+
+**UNUSED VARIABLE**
+Variable ``lower`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_lower` to suppress this warning.
+The unused variable is declared here:
+**syntax_grab_bag.md:97:3:97:8:**
+```roc
+		lower # After pattern comment
+```
+  ^^^^^
+
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
+Let us know if you want to help!
+
+**UNUSED VARIABLE**
+Variable ``rest`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+The unused variable is declared here:
+**syntax_grab_bag.md:102:19:102:23:**
+```roc
+		[1, 2, 3, .. as rest] # After pattern comment
+```
+                  ^^^^
+
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
+Let us know if you want to help!
+
+**UNUSED VARIABLE**
+Variable ``rest`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+The unused variable is declared here:
+**syntax_grab_bag.md:108:23:108:27:**
+```roc
+		[1, 2 | 5, 3, .. as rest] => 123
+```
+                      ^^^^
+
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
+Let us know if you want to help!
+
+**UNUSED VARIABLE**
+Variable ``rest`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+The unused variable is declared here:
+**syntax_grab_bag.md:115:6:115:10:**
+```roc
+					rest, # After last pattern in list
+```
+     ^^^^
+
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize local_dispatch expression
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
 Let us know if you want to help!
 
 **UNUSED VARIABLE**
@@ -323,18 +415,6 @@ The unused variable is declared here:
 **syntax_grab_bag.md:82:2:82:3:**
 ```roc
 	b,
-```
- ^
-
-
-**UNUSED VARIABLE**
-Variable ``a`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_a` to suppress this warning.
-The unused variable is declared here:
-**syntax_grab_bag.md:81:2:81:3:**
-```roc
-	a, # After arg
 ```
  ^
 
@@ -939,7 +1019,7 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 								(p-int @102.4-102.5 (raw "1"))
 								(p-int @102.7-102.8 (raw "2"))
 								(p-int @102.10-102.11 (raw "3"))
-								(p-list-rest @102.13-102.23 (name "rest")))
+								(p-list-rest @102.13-102.24 (name "rest")))
 							(e-int @104.5-104.8 (raw "123")))
 						(branch @108.3-109.4
 							(p-list @108.3-108.28
@@ -948,7 +1028,7 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 									(p-int @108.7-108.8 (raw "2"))
 									(p-int @108.11-108.12 (raw "5")))
 								(p-int @108.14-108.15 (raw "3"))
-								(p-list-rest @108.17-108.27 (name "rest")))
+								(p-list-rest @108.17-108.28 (name "rest")))
 							(e-int @108.32-108.35 (raw "123")))
 						(branch @109.3-117.7
 							(p-list @109.3-116.4
@@ -957,7 +1037,7 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 									(p-int @111.4-111.5 (raw "2"))
 									(p-int @111.8-111.9 (raw "5")))
 								(p-int @112.4-112.5 (raw "3"))
-								(p-list-rest @113.4-115.10 (name "rest")))
+								(p-list-rest @113.4-115.11 (name "rest")))
 							(e-int @116.8-116.11 (raw "123")))
 						(branch @117.3-118.7
 							(p-frac @117.3-117.7 (raw "3.14"))
@@ -1305,7 +1385,144 @@ NO CHANGE
 			(args
 				(p-assign @81.2-81.3 (ident "a"))
 				(p-assign @82.2-82.3 (ident "b")))
-			(e-runtime-error (tag "not_implemented"))))
+			(e-match @84.2-140.7
+				(match @84.2-140.7
+					(cond
+						(e-lookup-local @84.8-84.9
+							(pattern @81.2-81.3)))
+					(branches
+						(branch
+							(patterns
+								(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+							(value
+								(e-block @85.25-88.4
+									(s-let @86.4-86.10
+										(p-assign @86.4-86.5 (ident "x"))
+										(e-int @86.8-86.10 (value "12")))
+									(e-lookup-local @87.4-87.5
+										(pattern @86.4-86.5)))))
+						(branch
+							(patterns
+								(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+							(value
+								(e-block @93.7-96.5
+									(s-let @94.5-94.11
+										(p-assign @94.5-94.6 (ident "x"))
+										(e-int @94.9-94.11 (value "12")))
+									(e-lookup-local @95.5-95.6
+										(pattern @94.5-94.6)))))
+						(branch
+							(patterns
+								(p-assign @97.3-97.8 (ident "lower") (degenerate false)))
+							(value
+								(e-int @98.7-98.8 (value "1"))))
+						(branch
+							(patterns
+								(p-str @99.3-99.4 (text """) (degenerate false)))
+							(value
+								(e-int @100.4-100.7 (value "100"))))
+						(branch
+							(patterns
+								(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+							(value
+								(e-int @101.20-101.23 (value "200"))))
+						(branch
+							(patterns
+								(p-list @102.3-102.24 (degenerate false)
+									(patterns
+										(p-int @102.4-102.5)
+										(p-int @102.7-102.8)
+										(p-int @102.10-102.11))
+									(rest-at (index 3)
+										(p-assign @102.19-102.23 (ident "rest")))))
+							(value
+								(e-int @104.5-104.8 (value "123"))))
+						(branch
+							(patterns
+								(p-list @108.3-108.28 (degenerate false)
+									(patterns
+										(p-int @108.4-108.5)
+										(p-runtime-error @1.1-1.1 (tag "not_implemented"))
+										(p-int @108.14-108.15))
+									(rest-at (index 3)
+										(p-assign @108.23-108.27 (ident "rest")))))
+							(value
+								(e-int @108.32-108.35 (value "123"))))
+						(branch
+							(patterns
+								(p-list @109.3-116.4 (degenerate false)
+									(patterns
+										(p-int @110.4-110.5)
+										(p-runtime-error @1.1-1.1 (tag "not_implemented"))
+										(p-int @112.4-112.5))
+									(rest-at (index 3)
+										(p-assign @115.6-115.10 (ident "rest")))))
+							(value
+								(e-int @116.8-116.11 (value "123"))))
+						(branch
+							(patterns
+								(p-small-dec @117.3-117.7 (degenerate false)))
+							(value
+								(e-int @117.11-117.14 (value "314"))))
+						(branch
+							(patterns
+								(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+							(value
+								(e-int @118.18-118.21 (value "314"))))
+						(branch
+							(patterns
+								(p-tuple @119.3-119.12 (degenerate false)
+									(patterns
+										(p-int @119.4-119.5)
+										(p-int @119.7-119.8)
+										(p-int @119.10-119.11))))
+							(value
+								(e-int @119.16-119.19 (value "123"))))
+						(branch
+							(patterns
+								(p-tuple @120.3-120.16 (degenerate false)
+									(patterns
+										(p-int @120.4-120.5)
+										(p-runtime-error @1.1-1.1 (tag "not_implemented"))
+										(p-int @120.14-120.15))))
+							(value
+								(e-int @120.20-120.23 (value "123"))))
+						(branch
+							(patterns
+								(p-runtime-error @121.5-121.12 (tag "not_implemented") (degenerate false)))
+							(value
+								(e-runtime-error (tag "not_implemented"))))
+						(branch
+							(patterns
+								(p-runtime-error @123.4-125.8 (tag "not_implemented") (degenerate false)))
+							(value
+								(e-int @129.8-129.10 (value "12"))))
+						(branch
+							(patterns
+								(p-runtime-error @130.5-130.12 (tag "not_implemented") (degenerate false)))
+							(value
+								(e-int @130.29-130.31 (value "12"))))
+						(branch
+							(patterns
+								(p-runtime-error @132.4-132.11 (tag "not_implemented") (degenerate false)))
+							(value
+								(e-int @134.8-134.10 (value "12"))))
+						(branch
+							(patterns
+								(p-applied-tag @135.3-135.10 (degenerate false)))
+							(value
+								(e-int @135.14-135.17 (value "123"))))
+						(branch
+							(patterns
+								(p-applied-tag @136.3-136.17 (degenerate false)))
+							(value
+								(e-lookup-local @136.21-136.25
+									(pattern @136.11-136.15))))
+						(branch
+							(patterns
+								(p-applied-tag @137.3-137.34 (degenerate false)))
+							(value
+								(e-int @137.38-137.42 (value "1000")))))))))
 	(d-let
 		(p-assign @144.1-144.6 (ident "main!"))
 		(e-lambda @144.9-196.2
@@ -1602,13 +1819,13 @@ NO CHANGE
 	(defs
 		(patt @65.1-65.16 (type "* ? Num(*)"))
 		(patt @68.1-68.8 (type "U64 -> U64"))
-		(patt @80.1-80.11 (type "*, * ? Error"))
+		(patt @80.1-80.11 (type "*, * ? *"))
 		(patt @144.1-144.6 (type "List -> Result"))
 		(patt @199.1-199.6 (type "{  }")))
 	(expressions
 		(expr @65.19-67.8 (type "* ? Num(*)"))
 		(expr @68.11-78.2 (type "U64 -> U64"))
-		(expr @80.14-140.7 (type "*, * ? Error"))
+		(expr @80.14-140.7 (type "*, * ? *"))
 		(expr @144.9-196.2 (type "List -> Result"))
 		(expr @199.9-199.11 (type "{}"))))
 ~~~

@@ -16,7 +16,7 @@ Is there an `import` or `exposing` missing up-top?
 
 **INCOMPATIBLE IF BRANCHES**
 This `if` has an `else` branch with a different type from it's `then` branch:
-**if_then_else_3.md:1:1:**
+**if_then_else_simple_block_formatting.md:1:1:**
 ```roc
 if bool {
 	A

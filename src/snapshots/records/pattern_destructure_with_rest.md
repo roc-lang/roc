@@ -10,9 +10,17 @@ match person {
 }
 ~~~
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize match expression
-Let us know if you want to help!
+**UNDEFINED VARIABLE**
+Nothing is named `person` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNDEFINED VARIABLE**
+Nothing is named `len` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNDEFINED VARIABLE**
+Nothing is named `len` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
@@ -47,9 +55,33 @@ match person {
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "not_implemented"))
+(e-match @1.1-3.2
+	(match @1.1-3.2
+		(cond
+			(e-runtime-error (tag "ident_not_in_scope")))
+		(branches
+			(branch
+				(patterns
+					(p-record-destructure @2.5-2.29 (degenerate false)
+						(destructs
+							(record-destruct @2.7-2.18 (label "first_name") (ident "first_name")
+								(required))
+							(record-destruct @2.19-2.29 (label "others") (ident "others")
+								(required)))))
+				(value
+					(e-binop @2.33-3.2 (op "gt")
+						(e-call @2.33-2.52
+							(e-runtime-error (tag "ident_not_in_scope"))
+							(e-lookup-local @2.41-2.51
+								(pattern @2.7-2.18)))
+						(e-call @2.55-2.80
+							(e-runtime-error (tag "ident_not_in_scope"))
+							(e-dot-access @2.63-2.80 (field "last_name")
+								(receiver
+									(e-lookup-local @2.63-2.69
+										(pattern @2.19-2.29)))))))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.1 (type "Error"))
+(expr @1.1-3.2 (type "*"))
 ~~~

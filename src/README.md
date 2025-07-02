@@ -57,4 +57,4 @@ Try it with `zig build test -fincremental --watch`
 
 ## Overview
 
-![Zig Dependency Graph](https://anton-4.github.io/roc-compiler-vis/zig_dependency_graph.png)
+![Zig Dependency Graph](https://anton-4.github.io/roc-compiler-vis/zig_dependency_graph.webp)
