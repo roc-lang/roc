@@ -104,12 +104,22 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
     const def = self.can_ir.store.getDef(def_idx);
     // TODO: Check patterns
 
-    _ = try self.checkExpr(def.expr);
-
-    // Unify the expression with its annotation (if it has one)
+    // Special handling for lambda expressions with annotations
     if (def.annotation) |anno_idx| {
         const annotation = self.can_ir.store.getAnnotation(anno_idx);
+        const expr = self.can_ir.store.getExpr(def.expr);
+
+        // If the expression is a lambda and we have an annotation, pass the expected type
+        if (expr == .e_lambda) {
+            _ = try self.checkLambdaWithExpected(def.expr, expr.e_lambda, annotation.signature);
+        } else {
+            _ = try self.checkExpr(def.expr);
+        }
+
+        // Unify the expression with its annotation
         _ = self.unify(@enumFromInt(@intFromEnum(def.expr)), annotation.signature);
+    } else {
+        _ = try self.checkExpr(def.expr);
     }
 
     // Unify the def with its expression
@@ -901,33 +911,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             );
         },
         .e_lambda => |lambda| {
-            // The function is effectful iff the body of the lambda is effectful
-            const is_effectful = try self.checkExpr(lambda.body);
-
-            // Get the actual lambda arguments
-            const arg_patterns = self.can_ir.store.slicePatterns(lambda.args);
-
-            // Create type variables for each argument pattern
-            var arg_vars = std.ArrayList(Var).init(self.gpa); // TODO reuse CIR indices instead of allocating new ones!
-            defer arg_vars.deinit();
-
-            for (arg_patterns) |pattern_idx| {
-                const pattern_var = @as(Var, @enumFromInt(@intFromEnum(pattern_idx)));
-                arg_vars.append(pattern_var) catch |err| exitOnOom(err);
-            }
-
-            // The return type var is just the body's var
-            const return_var = @as(Var, @enumFromInt(@intFromEnum(lambda.body)));
-            const fn_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
-
-            if (is_effectful) {
-                // If the function body does effects, create an effectful function.
-                _ = try self.types.setVarContent(fn_var, self.types.mkFuncEffectful(arg_vars.items, return_var));
-            } else {
-                // If the function body does *not* do effects, create an unbound function.
-                // (Pure would mean it's *annotated* as pure, but we aren't claiming that here!)
-                _ = try self.types.setVarContent(fn_var, self.types.mkFuncUnbound(arg_vars.items, return_var));
-            }
+            does_fx = try self.checkLambdaWithExpected(expr_idx, lambda, null);
         },
         .e_tuple => |tuple| {
             for (self.can_ir.store.exprSlice(tuple.elems)) |single_elem_expr_idx| {
@@ -1040,6 +1024,60 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
     }
 
     return does_fx;
+}
+
+/// Check a lambda expression with an optional expected type
+fn checkLambdaWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, lambda: anytype, expected_type: ?Var) std.mem.Allocator.Error!bool {
+    // Get the actual lambda arguments
+    const arg_patterns = self.can_ir.store.slicePatterns(lambda.args);
+
+    // Create type variables for each argument pattern
+    var arg_vars = std.ArrayList(Var).init(self.gpa); // TODO reuse CIR indices instead of allocating new ones!
+    defer arg_vars.deinit();
+
+    // Create variables for lambda parameters
+    for (arg_patterns) |pattern_idx| {
+        const pattern_var = @as(Var, @enumFromInt(@intFromEnum(pattern_idx)));
+        arg_vars.append(pattern_var) catch |err| exitOnOom(err);
+    }
+
+    // If we have an expected type and it's a function, unify parameter types before checking body
+    if (expected_type) |expected| {
+        const expected_resolved = self.types.resolveVar(expected);
+        if (expected_resolved.desc.content == .structure) {
+            switch (expected_resolved.desc.content.structure) {
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    const expected_args = self.types.getFuncArgsSlice(func.args);
+                    if (expected_args.len == arg_patterns.len) {
+                        // Unify each pattern with its expected type before checking body
+                        for (arg_patterns, expected_args) |pattern_idx, expected_arg| {
+                            const pattern_var = @as(Var, @enumFromInt(@intFromEnum(pattern_idx)));
+                            _ = self.unify(pattern_var, expected_arg);
+                        }
+                    }
+                },
+                else => {},
+            }
+        }
+    }
+
+    // The function is effectful iff the body of the lambda is effectful
+    const is_effectful = try self.checkExpr(lambda.body);
+
+    // The return type var is just the body's var
+    const return_var = @as(Var, @enumFromInt(@intFromEnum(lambda.body)));
+    const fn_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
+
+    if (is_effectful) {
+        // If the function body does effects, create an effectful function.
+        _ = try self.types.setVarContent(fn_var, self.types.mkFuncEffectful(arg_vars.items, return_var));
+    } else {
+        // If the function body does *not* do effects, create an unbound function.
+        // (Pure would mean it's *annotated* as pure, but we aren't claiming that here!)
+        _ = try self.types.setVarContent(fn_var, self.types.mkFuncUnbound(arg_vars.items, return_var));
+    }
+
+    return is_effectful;
 }
 
 /// Check the types for an if-else expr

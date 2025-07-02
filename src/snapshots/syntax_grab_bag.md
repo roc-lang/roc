@@ -590,19 +590,18 @@ The unused variable is declared here:
 This feature is not yet implemented or doesn't have a proper error report yet: top-level expect
 Let us know if you want to help!
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**syntax_grab_bag.md:68:1:68:8:**
+**INVALID IF CONDITION**
+This `if` condition needs to be a _Bool_:
+**syntax_grab_bag.md:70:5:**
 ```roc
-add_one = |num| {
+	if num {
 ```
-^^^^^^^
+    ^^^
 
-It is of type:
-    _U64 -> U64_
+Right now, it has the type:
+    _U64_
 
-But you are trying to use it as:
-    _[True, False] -> Num(*)_
+Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -617,6 +616,29 @@ It is of type:
 
 But you are trying to use it as:
     _* -> *_
+
+**INCOMPATIBLE LIST ELEMENTS**
+The first two elements in this list have incompatible types:
+**syntax_grab_bag.md:167:3:**
+```roc
+		add_one(
+			dbg # After dbg in list
+				number, # after dbg expr as arg
+		), # Comment one
+		456, # Comment two
+```
+  ^^^
+
+The first element has this type:
+    _U64_
+
+However, the second element has this type:
+    _Num(*)_
+
+All elements in a list must have compatible types.
+
+Note: You can wrap each element in a tag to make them compatible.
+To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig
@@ -1832,13 +1854,13 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt @65.1-65.16 (type "[True, False] -> Num(*)"))
-		(patt @68.1-68.8 (type "Error"))
+		(patt @68.1-68.8 (type "Error -> U64"))
 		(patt @80.1-80.11 (type "Error"))
 		(patt @144.1-144.6 (type "Error -> Error"))
 		(patt @199.1-199.6 (type "{  }")))
 	(expressions
 		(expr @65.19-67.8 (type "[True, False] -> Num(*)"))
-		(expr @68.11-78.2 (type "Error"))
+		(expr @68.11-78.2 (type "Error -> U64"))
 		(expr @80.14-140.7 (type "Error"))
 		(expr @144.9-196.2 (type "Error -> Error"))
 		(expr @199.9-199.11 (type "{}"))))

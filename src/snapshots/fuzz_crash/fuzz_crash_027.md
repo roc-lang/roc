@@ -606,19 +606,18 @@ The unused variable is declared here:
  ^^^^
 
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**fuzz_crash_027.md:48:1:48:8:**
+**INVALID IF CONDITION**
+This `if` condition needs to be a _Bool_:
+**fuzz_crash_027.md:50:5:**
 ```roc
-add_one = |num| {
+	if num {
 ```
-^^^^^^^
+    ^^^
 
-It is of type:
-    _U64 -> U64_
+Right now, it has the type:
+    _U64_
 
-But you are trying to use it as:
-    _[True, False] -> Num(*)_
+Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -1827,12 +1826,12 @@ main! = |_| { # Yeah Ie
 (inferred-types
 	(defs
 		(patt @45.1-45.4 (type "[True, False] -> Num(*)"))
-		(patt @48.1-48.8 (type "Error"))
+		(patt @48.1-48.8 (type "Error -> U64"))
 		(patt @60.1-60.11 (type "Error"))
 		(patt @100.1-100.6 (type "Error -> Error")))
 	(expressions
 		(expr @45.7-47.8 (type "[True, False] -> Num(*)"))
-		(expr @48.11-58.2 (type "Error"))
+		(expr @48.11-58.2 (type "Error -> U64"))
 		(expr @60.14-96.7 (type "Error"))
 		(expr @100.9-159.2 (type "Error -> Error"))))
 ~~~
