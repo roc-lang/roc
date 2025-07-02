@@ -78,7 +78,7 @@ test "NodeStore round trip - Statements" {
     try statements.append(CIR.Statement{
         .s_return = .{
             .expr = @enumFromInt(7567),
-            .region = from_raw_offsets(3453, 1232),
+            .region = from_raw_offsets(1232, 3453),
         },
     });
 
@@ -93,7 +93,7 @@ test "NodeStore round trip - Statements" {
             },
             .module_name_tok = module,
             .qualifier_tok = qualifier,
-            .region = from_raw_offsets(75646, 123),
+            .region = from_raw_offsets(123, 75646),
         },
     });
 
@@ -102,7 +102,7 @@ test "NodeStore round trip - Statements" {
             .anno = @enumFromInt(8676),
             .header = @enumFromInt(723),
             .where = CIR.WhereClause.Span{ .span = base.DataSpan.init(234, 45645) },
-            .region = from_raw_offsets(3453, 1232),
+            .region = from_raw_offsets(1232, 3453),
         },
     });
 
@@ -111,7 +111,7 @@ test "NodeStore round trip - Statements" {
         .anno = @enumFromInt(8676),
         .name = name,
         .where = CIR.WhereClause.Span{ .span = base.DataSpan.init(234, 34534) },
-        .region = from_raw_offsets(3453, 1232),
+        .region = from_raw_offsets(1232, 3453),
     } });
 
     for (statements.items) |stmt| {
