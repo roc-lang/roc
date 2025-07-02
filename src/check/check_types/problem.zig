@@ -29,7 +29,6 @@ const Content = types.Content;
 /// The kind of problem we're dealing with
 pub const Problem = union(enum) {
     type_mismatch: TypeMismatch,
-    incompatible_list_elements: IncompatibleListElements,
     number_does_not_fit: NumberDoesNotFit,
     negative_unsigned_int: NegativeUnsignedInt,
     infinite_recursion: struct { var_: Var },
@@ -65,6 +64,19 @@ pub const Problem = union(enum) {
             .type_mismatch => |mismatch| {
                 if (mismatch.detail) |detail| {
                     switch (detail) {
+                        .incompatible_list_elements => |data| {
+                            return buildIncompatibleListElementsReport(
+                                gpa,
+                                buf,
+                                module_env,
+                                can_ir,
+                                &snapshot_writer,
+                                mismatch,
+                                data,
+                                source,
+                                filename,
+                            );
+                        },
                         .incompatible_if_cond => {
                             return buildInvalidIfCondition(
                                 gpa,
@@ -129,18 +141,6 @@ pub const Problem = union(enum) {
                         filename,
                     );
                 }
-            },
-            .incompatible_list_elements => |data| {
-                return buildIncompatibleListElementsReport(
-                    gpa,
-                    buf,
-                    module_env,
-                    can_ir,
-                    &snapshot_writer,
-                    data,
-                    source,
-                    filename,
-                );
             },
             .number_does_not_fit => |data| {
                 return buildNumberDoesNotFitReport(
@@ -265,8 +265,9 @@ pub const Problem = union(enum) {
         gpa: Allocator,
         buf: *std.ArrayList(u8),
         module_env: *const base.ModuleEnv,
-        _: *const can.CIR,
+        can_ir: *const can.CIR,
         snapshot_writer: *snapshot.SnapshotWriter,
+        mismatch: TypeMismatch,
         data: IncompatibleListElements,
         source: []const u8,
         filename: []const u8,
@@ -275,35 +276,42 @@ pub const Problem = union(enum) {
 
         // Format the type strings
         buf.clearRetainingCapacity();
-        try snapshot_writer.write(data.first_elem_snapshot);
-        const owned_first_type = try report.addOwnedString(buf.items);
+        try snapshot_writer.write(mismatch.expected);
+        const expected_type = try report.addOwnedString(buf.items);
 
         buf.clearRetainingCapacity();
-        try snapshot_writer.write(data.incompatible_elem_snapshot);
-        const owned_incompatible_type = try report.addOwnedString(buf.items);
+        try snapshot_writer.write(mismatch.actual);
+        const actual_type = try report.addOwnedString(buf.items);
+
+        buf.clearRetainingCapacity();
+        try appendOrdinal(buf, data.incompatible_elem_index);
+        const expected_type_ordinal = try report.addOwnedString(buf.items);
+
+        buf.clearRetainingCapacity();
+        try appendOrdinal(buf, data.incompatible_elem_index + 1);
+        const actual_type_ordinal = try report.addOwnedString(buf.items);
 
         // Add description
-        buf.clearRetainingCapacity();
         if (data.list_length == 2) {
             // Special case for lists with exactly 2 elements
-            try buf.appendSlice("The two elements in this list have incompatible types:");
-        } else if (data.first_elem_index == 0 and data.incompatible_elem_index == 1) {
+            try report.document.addText("The two elements in this list have incompatible types:");
+        } else if (data.incompatible_elem_index == 1) {
             // Special case for first two elements in longer lists
-            try buf.appendSlice("The first two elements in this list have incompatible types:");
+            try report.document.addText("The first two elements in this list have incompatible types:");
         } else {
-            try buf.appendSlice("The ");
-            try appendOrdinal(buf, data.first_elem_index + 1);
-            try buf.appendSlice(" and ");
-            try appendOrdinal(buf, data.incompatible_elem_index + 1);
-            try buf.appendSlice(" elements in this list have incompatible types:");
+            try report.document.addText("The ");
+            try report.document.addText(expected_type_ordinal);
+            try report.document.addText(" and ");
+            try report.document.addText(actual_type_ordinal);
+            try report.document.addText(" elements in this list have incompatible types:");
         }
-        const owned_description = try report.addOwnedString(buf.items);
-        try report.document.addText(owned_description);
         try report.document.addLineBreak();
 
         // Determine the overall region that encompasses both elements
-        const overall_start_offset = @min(data.first_elem_region.start.offset, data.incompatible_elem_region.start.offset);
-        const overall_end_offset = @max(data.first_elem_region.end.offset, data.incompatible_elem_region.end.offset);
+        const actual_region = can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(mismatch.actual_var)));
+        const expected_reigon = can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(data.last_elem_expr)));
+        const overall_start_offset = @min(actual_region.start.offset, expected_reigon.start.offset);
+        const overall_end_offset = @max(actual_region.end.offset, expected_reigon.end.offset);
 
         const overall_region_info = base.RegionInfo.position(
             source,
@@ -313,18 +321,18 @@ pub const Problem = union(enum) {
         ) catch return report;
 
         // Get region info for both elements
-        const first_elem_region_info = base.RegionInfo.position(
+        const actual_region_info = base.RegionInfo.position(
             source,
             module_env.line_starts.items,
-            data.first_elem_region.start.offset,
-            data.first_elem_region.end.offset,
+            actual_region.start.offset,
+            actual_region.end.offset,
         ) catch return report;
 
-        const incompatible_elem_region_info = base.RegionInfo.position(
+        const expected_region_info = base.RegionInfo.position(
             source,
             module_env.line_starts.items,
-            data.incompatible_elem_region.start.offset,
-            data.incompatible_elem_region.end.offset,
+            expected_reigon.start.offset,
+            expected_reigon.end.offset,
         ) catch return report;
 
         // Create the display region
@@ -340,17 +348,17 @@ pub const Problem = union(enum) {
         // Create underline regions
         const underline_regions = [_]UnderlineRegion{
             .{
-                .start_line = first_elem_region_info.start_line_idx + 1,
-                .start_column = first_elem_region_info.start_col_idx + 1,
-                .end_line = first_elem_region_info.end_line_idx + 1,
-                .end_column = first_elem_region_info.end_col_idx + 1,
+                .start_line = expected_region_info.start_line_idx + 1,
+                .start_column = expected_region_info.start_col_idx + 1,
+                .end_line = expected_region_info.end_line_idx + 1,
+                .end_column = expected_region_info.end_col_idx + 1,
                 .annotation = .error_highlight,
             },
             .{
-                .start_line = incompatible_elem_region_info.start_line_idx + 1,
-                .start_column = incompatible_elem_region_info.start_col_idx + 1,
-                .end_line = incompatible_elem_region_info.end_line_idx + 1,
-                .end_column = incompatible_elem_region_info.end_col_idx + 1,
+                .start_line = actual_region_info.start_line_idx + 1,
+                .start_column = actual_region_info.start_col_idx + 1,
+                .end_line = actual_region_info.end_line_idx + 1,
+                .end_column = actual_region_info.end_col_idx + 1,
                 .annotation = .error_highlight,
             },
         };
@@ -359,28 +367,22 @@ pub const Problem = union(enum) {
         try report.document.addLineBreak();
 
         // Show the type of the first element
-        buf.clearRetainingCapacity();
-        try buf.appendSlice("The ");
-        try appendOrdinal(buf, data.first_elem_index + 1);
-        try buf.appendSlice(" element has this type:");
-        const owned_first_type_desc = try report.addOwnedString(buf.items);
-        try report.document.addText(owned_first_type_desc);
+        try report.document.addText("The ");
+        try report.document.addText(expected_type_ordinal);
+        try report.document.addText(" element has this type:");
         try report.document.addLineBreak();
         try report.document.addText("    ");
-        try report.document.addAnnotated(owned_first_type, .type_variable);
+        try report.document.addAnnotated(expected_type, .type_variable);
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
         // Show the type of the second element
-        buf.clearRetainingCapacity();
-        try buf.appendSlice("However, the ");
-        try appendOrdinal(buf, data.incompatible_elem_index + 1);
-        try buf.appendSlice(" element has this type:");
-        const owned_second_type_desc = try report.addOwnedString(buf.items);
-        try report.document.addText(owned_second_type_desc);
+        try report.document.addText("However, the ");
+        try report.document.addText(actual_type_ordinal);
+        try report.document.addText(" element has this type:");
         try report.document.addLineBreak();
         try report.document.addText("    ");
-        try report.document.addAnnotated(owned_incompatible_type, .type_variable);
+        try report.document.addAnnotated(actual_type, .type_variable);
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
@@ -1034,20 +1036,6 @@ pub const VarProblem1 = struct {
     snapshot: SnapshotContentIdx,
 };
 
-/// Problem data for when list elements have incompatible types
-pub const IncompatibleListElements = struct {
-    list_region: base.Region,
-    first_elem_region: base.Region,
-    first_elem_var: Var,
-    first_elem_snapshot: SnapshotContentIdx,
-    first_elem_index: usize, // 0-based index of the first element
-    incompatible_elem_region: base.Region,
-    incompatible_elem_var: Var,
-    incompatible_elem_snapshot: SnapshotContentIdx,
-    incompatible_elem_index: usize, // 0-based index of the incompatible element
-    list_length: usize, // Total number of elements in the list
-};
-
 // number problems //
 
 /// Number literal doesn't fit in the expected type
@@ -1076,10 +1064,18 @@ pub const TypeMismatch = struct {
 
 /// More specific details about a particular type mismatch. k
 pub const TypeMismatchDetail = union(enum) {
+    incompatible_list_elements: IncompatibleListElements,
     incompatible_if_cond,
     incompatible_if_branches: IncompatibleIfBranches,
     incompatible_match_patterns: IncompatibleMatchPatterns,
     incompatible_match_branches: IncompatibleMatchBranches,
+};
+
+/// Problem data for when list elements have incompatible types
+pub const IncompatibleListElements = struct {
+    last_elem_expr: CIR.Expr.Idx,
+    incompatible_elem_index: usize, // 0-based index of the incompatible element
+    list_length: usize, // Total number of elements in the list
 };
 
 /// Problem data for when if branches have have incompatible types

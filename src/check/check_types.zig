@@ -301,79 +301,32 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!void {
             // We need to type-check the first element, but we don't need to unify it with
             // anything because we already pre-unified the list's elem var with it.
             const first_elem_idx = elems[0];
-            var last_unified_idx: CIR.Expr.Idx = first_elem_idx;
-            var last_unified_index: usize = 0; // Track the index for error messages
             try self.checkExpr(first_elem_idx);
 
+            var last_elem_idx = first_elem_idx;
             for (elems[1..], 1..) |elem_expr_id, i| {
                 try self.checkExpr(elem_expr_id);
 
                 // Unify each element's var with the list's elem var
                 const result = self.unify(elem_var, @enumFromInt(@intFromEnum(elem_expr_id)));
+                self.setDetailIfTypeMismatch(result, problem.TypeMismatchDetail{ .incompatible_list_elements = .{
+                    .last_elem_expr = last_elem_idx,
+                    .incompatible_elem_index = i,
+                    .list_length = elems.len,
+                } });
 
-                switch (result) {
-                    .ok => {},
-                    .problem => |problem_idx| {
-                        // Unification failed, so we know it appended a type mismatch to self.problems.
-                        // We'll translate that generic type mismatch between the two elements into
-                        // a more helpful list-specific error report.
+                if (!result.isOk()) {
 
-                        // Extract info from the type mismatch problem
-                        var elem_var_snapshot: snapshot.SnapshotContentIdx = undefined;
-                        var incompatible_snapshot: snapshot.SnapshotContentIdx = undefined;
+                    // Check remaining elements to catch their individual errors
+                    for (elems[i + 1 ..]) |remaining_elem_id| {
+                        try self.checkExpr(remaining_elem_id);
+                    }
 
-                        // Extract snapshots from the type mismatch problem
-                        switch (self.problems.problems.get(problem_idx)) {
-                            .type_mismatch => |mismatch| {
-                                // The expected type is elem_var, actual is the incompatible element
-                                elem_var_snapshot = mismatch.expected;
-                                incompatible_snapshot = mismatch.actual;
-
-                                // Include the previous element in the error message, since it's the one
-                                // that the current element failed to unify with.
-                                const prev_elem_expr = self.can_ir.store.getExpr(last_unified_idx);
-                                const incompatible_elem_expr = self.can_ir.store.getExpr(elem_expr_id);
-                                const prev_region = prev_elem_expr.toRegion();
-                                const incomp_region = incompatible_elem_expr.toRegion();
-
-                                // Replace the generic Problem in the MultiArrayList with a list-specific one
-                                self.problems.problems.set(problem_idx, .{
-                                    .incompatible_list_elements = .{
-                                        .list_region = list.region,
-                                        .first_elem_region = prev_region orelse list.region,
-                                        .first_elem_var = @enumFromInt(@intFromEnum(last_unified_idx)),
-                                        .first_elem_snapshot = elem_var_snapshot,
-                                        .first_elem_index = last_unified_index,
-                                        .incompatible_elem_region = incomp_region orelse list.region,
-                                        .incompatible_elem_var = @enumFromInt(@intFromEnum(elem_expr_id)),
-                                        .incompatible_elem_snapshot = incompatible_snapshot,
-                                        .incompatible_elem_index = i,
-                                        .list_length = elems.len,
-                                    },
-                                });
-                            },
-                            else => {
-                                // For other problem types (e.g., number_does_not_fit), the original
-                                // problem is already more specific than our generic "incompatible list
-                                // elements" message, so we should keep it as-is and not replace it.
-                                // Note: if an element has an error type (e.g., from a nested heterogeneous
-                                // list), unification would succeed, not fail, so we wouldn't reach this branch.
-                            },
-                        }
-
-                        // Check remaining elements to catch their individual errors
-                        for (elems[i + 1 ..]) |remaining_elem_id| {
-                            try self.checkExpr(remaining_elem_id);
-                        }
-
-                        // Break to avoid cascading errors
-                        break;
-                    },
+                    // Break to avoid cascading errors
+                    break;
                 }
 
-                // Track the last successfully unified element
-                last_unified_idx = elem_expr_id;
-                last_unified_index = i;
+                last_elem_idx = elem_expr_id;
             }
         },
         .e_empty_list => |_| {},
