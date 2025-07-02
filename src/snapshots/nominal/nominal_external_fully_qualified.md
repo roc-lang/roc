@@ -125,6 +125,20 @@ Is there an `import` or `exposing` missing up-top?
 **INVALID PATTERN**
 This pattern contains invalid syntax or uses unsupported features.
 
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**nominal_external_fully_qualified.md:6:1:6:13:**
+```roc
+handleResult = |result| {
+```
+^^^^^^^^^^^^
+
+It is of type:
+    _Error -> Str_
+
+But you are trying to use it as:
+    _Error -> (Error)_
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:21),CloseSquare(1:21-1:22),Newline(1:1-1:1),
@@ -262,7 +276,7 @@ handleResult = |result| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.13 (type "Error -> Error")))
+		(patt @6.1-6.13 (type "Error")))
 	(expressions
-		(expr @6.16-11.2 (type "Error -> Error"))))
+		(expr @6.16-11.2 (type "Error"))))
 ~~~

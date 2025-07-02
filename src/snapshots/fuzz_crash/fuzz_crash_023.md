@@ -1039,7 +1039,7 @@ This expression is used in an unexpected way:
  ^^^^^^^^^^
 
 It is of type:
-    _*, * -> *_
+    _Error, * -> Error_
 
 But you are trying to use it as:
     _* -> *_

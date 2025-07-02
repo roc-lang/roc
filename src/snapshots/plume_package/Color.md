@@ -556,6 +556,20 @@ Is there an `import` or `exposing` missing up-top?
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
+**Color.md:21:1:21:5:**
+```roc
+rgba = |r, g, b, a| {
+```
+^^^^
+
+It is of type:
+    _U8_
+
+But you are trying to use it as:
+    _{ to_frac: * }_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
 **Color.md:27:1:27:4:**
 ```roc
 hex = |str| {
@@ -567,6 +581,31 @@ It is of type:
 
 But you are trying to use it as:
     _{ to_utf8: * }_
+
+**INCOMPATIBLE MATCH PATTERNS**
+The pattern in the second branch of this `match` differs from previous ones:
+**Color.md:49:18:**
+```roc
+to_str = |color| match color {
+    Color.RGB(r, g, b) => "rgb(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)})"
+    Color.RGBA(r, g, b, a) => "rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"
+    Color.Named(inner) => inner
+    Color.Hex(inner) => inner
+}
+
+expect rgb(124, 56, 245).to_str() == "rgb(124, 56, 245)"
+```
+             ^^^^^^^^^
+
+The second pattern has this type:
+    _(*, *, *)_
+
+But all the previous patterns have this type: 
+    _[Color]*_
+
+All patterns in an `match` must have compatible types.
+
+
 
 # TOKENS
 ~~~zig
@@ -1452,16 +1491,16 @@ is_named_color = |str| {
 (inferred-types
 	(defs
 		(patt @18.1-18.4 (type "U8, U8, U8 -> [Color]*"))
-		(patt @21.1-21.5 (type "U8, U8, U8, U8 -> (U8, U8, U8, *)"))
+		(patt @21.1-21.5 (type "U8, U8, U8, Error -> (U8, U8, U8, *)"))
 		(patt @27.1-27.4 (type "Error -> Error"))
-		(patt @49.1-49.7 (type "Color -> Error"))
+		(patt @49.1-49.7 (type "Error -> Error"))
 		(patt @61.1-61.6 (type "Error"))
 		(patt @67.1-67.15 (type "* -> *")))
 	(expressions
 		(expr @18.7-18.22 (type "U8, U8, U8 -> [Color]*"))
-		(expr @21.8-24.2 (type "U8, U8, U8, U8 -> (U8, U8, U8, *)"))
+		(expr @21.8-24.2 (type "U8, U8, U8, Error -> (U8, U8, U8, *)"))
 		(expr @27.7-46.2 (type "Error -> Error"))
-		(expr @49.10-56.7 (type "Color -> Error"))
+		(expr @49.10-56.7 (type "Error -> Error"))
 		(expr @61.9-63.24 (type "Error"))
 		(expr @67.18-71.2 (type "* -> *"))))
 ~~~
