@@ -5,247 +5,346 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-app [main!] { pf: platform "../basic-cli/platform.roc" }
+app [main] { pf: platform "platform.roc" }
 
-# Type variables nested in Result and List types
-mapResult : Result(a, e), (a -> b) -> Result(b, e)
-mapResult = |result, transform| {
-    when result is
-        Ok(value) -> Ok(transform(value))
-        Err(error) -> Err(error)
+# Map over Result type
+map_result : Result(a, e), (a -> b) -> Result(b, e)
+map_result = |result, transform| {
+    match result {
+        Ok(value) => Ok(transform(value))
+        Err(error) => Err(error)
+    }
 }
 
-# Type variables nested in Maybe and List
-filterMaybes : List(Maybe(t)) -> List(t)
-filterMaybes = |list| {
-    List.keepOks(list)
-}
+# Simple identity function with type variable
+identity : a -> a
+identity = |x| x
 
-main! = |_| {}
+# Nested type variables in records
+make_pair : a, b -> { first: a, second: b }
+make_pair = |x, y| { first: x, second: y }
+
+# Function that works with lists of any type
+list_length : List(a) -> U64
+list_length = |_lst| 42
+
+# Nested Result types
+wrap_in_result : a -> Result(Result(a, Str), Str)
+wrap_in_result = |value| Ok(Ok(value))
+
+main = |_| "done"
 ~~~
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `when` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `is` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize local_dispatch expression
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize local_dispatch expression
-Let us know if you want to help!
-
-**UNUSED VARIABLE**
-Variable ``transform`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_transform` to suppress this warning.
-The unused variable is declared here:
-**type_var_nested.md:5:22:5:31:**
-```roc
-mapResult = |result, transform| {
-```
-                     ^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `keepOks` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
-KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),Newline(1:1-1:1),
+KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:10),CloseSquare(1:10-1:11),OpenCurly(1:12-1:13),LowerIdent(1:14-1:16),OpColon(1:16-1:17),KwPlatform(1:18-1:26),StringStart(1:27-1:28),StringPart(1:28-1:40),StringEnd(1:40-1:41),CloseCurly(1:42-1:43),Newline(1:1-1:1),
 Newline(1:1-1:1),
-Newline(3:2-3:49),
-LowerIdent(4:1-4:10),OpColon(4:11-4:12),UpperIdent(4:13-4:19),NoSpaceOpenRound(4:19-4:20),LowerIdent(4:20-4:21),Comma(4:21-4:22),LowerIdent(4:23-4:24),CloseRound(4:24-4:25),Comma(4:25-4:26),OpenRound(4:27-4:28),LowerIdent(4:28-4:29),OpArrow(4:30-4:32),LowerIdent(4:33-4:34),CloseRound(4:34-4:35),OpArrow(4:36-4:38),UpperIdent(4:39-4:45),NoSpaceOpenRound(4:45-4:46),LowerIdent(4:46-4:47),Comma(4:47-4:48),LowerIdent(4:49-4:50),CloseRound(4:50-4:51),Newline(1:1-1:1),
-LowerIdent(5:1-5:10),OpAssign(5:11-5:12),OpBar(5:13-5:14),LowerIdent(5:14-5:20),Comma(5:20-5:21),LowerIdent(5:22-5:31),OpBar(5:31-5:32),OpenCurly(5:33-5:34),Newline(1:1-1:1),
-LowerIdent(6:5-6:9),LowerIdent(6:10-6:16),LowerIdent(6:17-6:19),Newline(1:1-1:1),
-UpperIdent(7:9-7:11),NoSpaceOpenRound(7:11-7:12),LowerIdent(7:12-7:17),CloseRound(7:17-7:18),OpArrow(7:19-7:21),UpperIdent(7:22-7:24),NoSpaceOpenRound(7:24-7:25),LowerIdent(7:25-7:34),NoSpaceOpenRound(7:34-7:35),LowerIdent(7:35-7:40),CloseRound(7:40-7:41),CloseRound(7:41-7:42),Newline(1:1-1:1),
-UpperIdent(8:9-8:12),NoSpaceOpenRound(8:12-8:13),LowerIdent(8:13-8:18),CloseRound(8:18-8:19),OpArrow(8:20-8:22),UpperIdent(8:23-8:26),NoSpaceOpenRound(8:26-8:27),LowerIdent(8:27-8:32),CloseRound(8:32-8:33),Newline(1:1-1:1),
-CloseCurly(9:1-9:2),Newline(1:1-1:1),
+Newline(3:2-3:23),
+LowerIdent(4:1-4:11),OpColon(4:12-4:13),UpperIdent(4:14-4:20),NoSpaceOpenRound(4:20-4:21),LowerIdent(4:21-4:22),Comma(4:22-4:23),LowerIdent(4:24-4:25),CloseRound(4:25-4:26),Comma(4:26-4:27),OpenRound(4:28-4:29),LowerIdent(4:29-4:30),OpArrow(4:31-4:33),LowerIdent(4:34-4:35),CloseRound(4:35-4:36),OpArrow(4:37-4:39),UpperIdent(4:40-4:46),NoSpaceOpenRound(4:46-4:47),LowerIdent(4:47-4:48),Comma(4:48-4:49),LowerIdent(4:50-4:51),CloseRound(4:51-4:52),Newline(1:1-1:1),
+LowerIdent(5:1-5:11),OpAssign(5:12-5:13),OpBar(5:14-5:15),LowerIdent(5:15-5:21),Comma(5:21-5:22),LowerIdent(5:23-5:32),OpBar(5:32-5:33),OpenCurly(5:34-5:35),Newline(1:1-1:1),
+KwMatch(6:5-6:10),LowerIdent(6:11-6:17),OpenCurly(6:18-6:19),Newline(1:1-1:1),
+UpperIdent(7:9-7:11),NoSpaceOpenRound(7:11-7:12),LowerIdent(7:12-7:17),CloseRound(7:17-7:18),OpFatArrow(7:19-7:21),UpperIdent(7:22-7:24),NoSpaceOpenRound(7:24-7:25),LowerIdent(7:25-7:34),NoSpaceOpenRound(7:34-7:35),LowerIdent(7:35-7:40),CloseRound(7:40-7:41),CloseRound(7:41-7:42),Newline(1:1-1:1),
+UpperIdent(8:9-8:12),NoSpaceOpenRound(8:12-8:13),LowerIdent(8:13-8:18),CloseRound(8:18-8:19),OpFatArrow(8:20-8:22),UpperIdent(8:23-8:26),NoSpaceOpenRound(8:26-8:27),LowerIdent(8:27-8:32),CloseRound(8:32-8:33),Newline(1:1-1:1),
+CloseCurly(9:5-9:6),Newline(1:1-1:1),
+CloseCurly(10:1-10:2),Newline(1:1-1:1),
 Newline(1:1-1:1),
-Newline(11:2-11:42),
-LowerIdent(12:1-12:13),OpColon(12:14-12:15),UpperIdent(12:16-12:20),NoSpaceOpenRound(12:20-12:21),UpperIdent(12:21-12:26),NoSpaceOpenRound(12:26-12:27),LowerIdent(12:27-12:28),CloseRound(12:28-12:29),CloseRound(12:29-12:30),OpArrow(12:31-12:33),UpperIdent(12:34-12:38),NoSpaceOpenRound(12:38-12:39),LowerIdent(12:39-12:40),CloseRound(12:40-12:41),Newline(1:1-1:1),
-LowerIdent(13:1-13:13),OpAssign(13:14-13:15),OpBar(13:16-13:17),LowerIdent(13:17-13:21),OpBar(13:21-13:22),OpenCurly(13:23-13:24),Newline(1:1-1:1),
-UpperIdent(14:5-14:9),NoSpaceDotLowerIdent(14:9-14:17),NoSpaceOpenRound(14:17-14:18),LowerIdent(14:18-14:22),CloseRound(14:22-14:23),Newline(1:1-1:1),
-CloseCurly(15:1-15:2),Newline(1:1-1:1),
+Newline(12:2-12:46),
+LowerIdent(13:1-13:9),OpColon(13:10-13:11),LowerIdent(13:12-13:13),OpArrow(13:14-13:16),LowerIdent(13:17-13:18),Newline(1:1-1:1),
+LowerIdent(14:1-14:9),OpAssign(14:10-14:11),OpBar(14:12-14:13),LowerIdent(14:13-14:14),OpBar(14:14-14:15),LowerIdent(14:16-14:17),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(17:1-17:6),OpAssign(17:7-17:8),OpBar(17:9-17:10),Underscore(17:10-17:11),OpBar(17:11-17:12),OpenCurly(17:13-17:14),CloseCurly(17:14-17:15),EndOfFile(17:15-17:15),
+Newline(16:2-16:35),
+LowerIdent(17:1-17:10),OpColon(17:11-17:12),LowerIdent(17:13-17:14),Comma(17:14-17:15),LowerIdent(17:16-17:17),OpArrow(17:18-17:20),OpenCurly(17:21-17:22),LowerIdent(17:23-17:28),OpColon(17:28-17:29),LowerIdent(17:30-17:31),Comma(17:31-17:32),LowerIdent(17:33-17:39),OpColon(17:39-17:40),LowerIdent(17:41-17:42),CloseCurly(17:43-17:44),Newline(1:1-1:1),
+LowerIdent(18:1-18:10),OpAssign(18:11-18:12),OpBar(18:13-18:14),LowerIdent(18:14-18:15),Comma(18:15-18:16),LowerIdent(18:17-18:18),OpBar(18:18-18:19),OpenCurly(18:20-18:21),LowerIdent(18:22-18:27),OpColon(18:27-18:28),LowerIdent(18:29-18:30),Comma(18:30-18:31),LowerIdent(18:32-18:38),OpColon(18:38-18:39),LowerIdent(18:40-18:41),CloseCurly(18:42-18:43),Newline(1:1-1:1),
+Newline(1:1-1:1),
+Newline(20:2-20:45),
+LowerIdent(21:1-21:12),OpColon(21:13-21:14),UpperIdent(21:15-21:19),NoSpaceOpenRound(21:19-21:20),LowerIdent(21:20-21:21),CloseRound(21:21-21:22),OpArrow(21:23-21:25),UpperIdent(21:26-21:29),Newline(1:1-1:1),
+LowerIdent(22:1-22:12),OpAssign(22:13-22:14),OpBar(22:15-22:16),NamedUnderscore(22:16-22:20),OpBar(22:20-22:21),Int(22:22-22:24),Newline(1:1-1:1),
+Newline(1:1-1:1),
+Newline(24:2-24:22),
+LowerIdent(25:1-25:15),OpColon(25:16-25:17),LowerIdent(25:18-25:19),OpArrow(25:20-25:22),UpperIdent(25:23-25:29),NoSpaceOpenRound(25:29-25:30),UpperIdent(25:30-25:36),NoSpaceOpenRound(25:36-25:37),LowerIdent(25:37-25:38),Comma(25:38-25:39),UpperIdent(25:40-25:43),CloseRound(25:43-25:44),Comma(25:44-25:45),UpperIdent(25:46-25:49),CloseRound(25:49-25:50),Newline(1:1-1:1),
+LowerIdent(26:1-26:15),OpAssign(26:16-26:17),OpBar(26:18-26:19),LowerIdent(26:19-26:24),OpBar(26:24-26:25),UpperIdent(26:26-26:28),NoSpaceOpenRound(26:28-26:29),UpperIdent(26:29-26:31),NoSpaceOpenRound(26:31-26:32),LowerIdent(26:32-26:37),CloseRound(26:37-26:38),CloseRound(26:38-26:39),Newline(1:1-1:1),
+Newline(1:1-1:1),
+LowerIdent(28:1-28:5),OpAssign(28:6-28:7),OpBar(28:8-28:9),Underscore(28:9-28:10),OpBar(28:10-28:11),StringStart(28:12-28:13),StringPart(28:13-28:17),StringEnd(28:17-28:18),EndOfFile(28:18-28:18),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-17.15
-	(app @1.1-1.57
-		(provides @1.6-1.12
-			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.57 (name "pf")
-			(e-string @1.28-1.55
-				(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))
-		(packages @1.13-1.57
-			(record-field @1.15-1.57 (name "pf")
-				(e-string @1.28-1.55
-					(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))))
+(file @1.1-28.18
+	(app @1.1-1.43
+		(provides @1.6-1.11
+			(exposed-lower-ident (text "main")))
+		(record-field @1.14-1.43 (name "pf")
+			(e-string @1.27-1.41
+				(e-string-part @1.28-1.40 (raw "platform.roc"))))
+		(packages @1.12-1.43
+			(record-field @1.14-1.43 (name "pf")
+				(e-string @1.27-1.41
+					(e-string-part @1.28-1.40 (raw "platform.roc"))))))
 	(statements
-		(s-type-anno @4.1-5.10 (name "mapResult")
-			(ty-fn @4.13-4.51
-				(ty-apply @4.13-4.25
+		(s-type-anno @4.1-5.11 (name "map_result")
+			(ty-fn @4.14-4.52
+				(ty-apply @4.14-4.26
 					(ty (name "Result"))
-					(ty-var @4.20-4.21 (raw "a"))
-					(ty-var @4.23-4.24 (raw "e")))
-				(ty-fn @4.28-4.34
-					(ty-var @4.28-4.29 (raw "a"))
-					(ty-var @4.33-4.34 (raw "b")))
-				(ty-apply @4.39-4.51
+					(ty-var @4.21-4.22 (raw "a"))
+					(ty-var @4.24-4.25 (raw "e")))
+				(ty-fn @4.29-4.35
+					(ty-var @4.29-4.30 (raw "a"))
+					(ty-var @4.34-4.35 (raw "b")))
+				(ty-apply @4.40-4.52
 					(ty (name "Result"))
-					(ty-var @4.46-4.47 (raw "b"))
-					(ty-var @4.49-4.50 (raw "e")))))
-		(s-decl @5.1-9.2
-			(p-ident @5.1-5.10 (raw "mapResult"))
-			(e-lambda @5.13-9.2
+					(ty-var @4.47-4.48 (raw "b"))
+					(ty-var @4.50-4.51 (raw "e")))))
+		(s-decl @5.1-10.2
+			(p-ident @5.1-5.11 (raw "map_result"))
+			(e-lambda @5.14-10.2
 				(args
-					(p-ident @5.14-5.20 (raw "result"))
-					(p-ident @5.22-5.31 (raw "transform")))
-				(e-block @5.33-9.2
+					(p-ident @5.15-5.21 (raw "result"))
+					(p-ident @5.23-5.32 (raw "transform")))
+				(e-block @5.34-10.2
 					(statements
-						(e-ident @6.5-6.9 (qaul "") (raw "when"))
-						(e-ident @6.10-6.16 (qaul "") (raw "result"))
-						(e-ident @6.17-6.19 (qaul "") (raw "is"))
-						(e-local-dispatch @7.9-8.12
-							(e-apply @7.9-7.18
-								(e-tag @7.9-7.11 (raw "Ok"))
-								(e-ident @7.12-7.17 (qaul "") (raw "value")))
-							(e-apply @7.19-7.42
-								(e-tag @7.22-7.24 (raw "Ok"))
-								(e-apply @7.25-7.41
-									(e-ident @7.25-7.34 (qaul "") (raw "transform"))
-									(e-ident @7.35-7.40 (qaul "") (raw "value")))))
-						(e-local-dispatch @8.9-9.2
-							(e-apply @8.9-8.19
-								(e-tag @8.9-8.12 (raw "Err"))
-								(e-ident @8.13-8.18 (qaul "") (raw "error")))
-							(e-apply @8.20-8.33
-								(e-tag @8.23-8.26 (raw "Err"))
-								(e-ident @8.27-8.32 (qaul "") (raw "error"))))))))
-		(s-type-anno @12.1-13.13 (name "filterMaybes")
-			(ty-fn @12.16-12.41
-				(ty-apply @12.16-12.30
-					(ty (name "List"))
-					(ty-apply @12.21-12.29
-						(ty (name "Maybe"))
-						(ty-var @12.27-12.28 (raw "t"))))
-				(ty-apply @12.34-12.41
-					(ty (name "List"))
-					(ty-var @12.39-12.40 (raw "t")))))
-		(s-decl @13.1-15.2
-			(p-ident @13.1-13.13 (raw "filterMaybes"))
-			(e-lambda @13.16-15.2
+						(e-match
+							(e-ident @6.11-6.17 (qaul "") (raw "result"))
+							(branches
+								(branch @7.9-8.12
+									(p-tag @7.9-7.18 (raw "Ok")
+										(p-ident @7.12-7.17 (raw "value")))
+									(e-apply @7.22-7.42
+										(e-tag @7.22-7.24 (raw "Ok"))
+										(e-apply @7.25-7.41
+											(e-ident @7.25-7.34 (qaul "") (raw "transform"))
+											(e-ident @7.35-7.40 (qaul "") (raw "value")))))
+								(branch @8.9-9.6
+									(p-tag @8.9-8.19 (raw "Err")
+										(p-ident @8.13-8.18 (raw "error")))
+									(e-apply @8.23-8.33
+										(e-tag @8.23-8.26 (raw "Err"))
+										(e-ident @8.27-8.32 (qaul "") (raw "error"))))))))))
+		(s-type-anno @13.1-14.9 (name "identity")
+			(ty-fn @13.12-13.18
+				(ty-var @13.12-13.13 (raw "a"))
+				(ty-var @13.17-13.18 (raw "a"))))
+		(s-decl @14.1-14.17
+			(p-ident @14.1-14.9 (raw "identity"))
+			(e-lambda @14.12-14.17
 				(args
-					(p-ident @13.17-13.21 (raw "list")))
-				(e-block @13.23-15.2
-					(statements
-						(e-apply @14.5-14.23
-							(e-ident @14.5-14.17 (qaul "List") (raw ".keepOks"))
-							(e-ident @14.18-14.22 (qaul "") (raw "list")))))))
-		(s-decl @17.1-17.15
-			(p-ident @17.1-17.6 (raw "main!"))
-			(e-lambda @17.9-17.15
+					(p-ident @14.13-14.14 (raw "x")))
+				(e-ident @14.16-14.17 (qaul "") (raw "x"))))
+		(s-type-anno @17.1-18.10 (name "make_pair")
+			(ty-fn @17.13-17.44
+				(ty-var @17.13-17.14 (raw "a"))
+				(ty-var @17.16-17.17 (raw "b"))
+				(ty-record @17.21-17.44
+					(anno-record-field @17.23-17.32 (name "first")
+						(ty-var @17.30-17.31 (raw "a")))
+					(anno-record-field @17.33-17.44 (name "second")
+						(ty-var @17.41-17.42 (raw "b"))))))
+		(s-decl @18.1-18.43
+			(p-ident @18.1-18.10 (raw "make_pair"))
+			(e-lambda @18.13-18.43
+				(args
+					(p-ident @18.14-18.15 (raw "x"))
+					(p-ident @18.17-18.18 (raw "y")))
+				(e-record @18.20-18.43
+					(field (field "first") (optional false)
+						(e-ident @18.29-18.30 (qaul "") (raw "x")))
+					(field (field "second") (optional false)
+						(e-ident @18.40-18.41 (qaul "") (raw "y"))))))
+		(s-type-anno @21.1-22.12 (name "list_length")
+			(ty-fn @21.15-21.29
+				(ty-apply @21.15-21.22
+					(ty (name "List"))
+					(ty-var @21.20-21.21 (raw "a")))
+				(ty (name "U64"))))
+		(s-decl @22.1-22.24
+			(p-ident @22.1-22.12 (raw "list_length"))
+			(e-lambda @22.15-22.24
+				(args
+					(p-ident @22.16-22.20 (raw "_lst")))
+				(e-int @22.22-22.24 (raw "42"))))
+		(s-type-anno @25.1-26.15 (name "wrap_in_result")
+			(ty-fn @25.18-25.50
+				(ty-var @25.18-25.19 (raw "a"))
+				(ty-apply @25.23-25.50
+					(ty (name "Result"))
+					(ty-apply @25.30-25.44
+						(ty (name "Result"))
+						(ty-var @25.37-25.38 (raw "a"))
+						(ty (name "Str")))
+					(ty (name "Str")))))
+		(s-decl @26.1-26.39
+			(p-ident @26.1-26.15 (raw "wrap_in_result"))
+			(e-lambda @26.18-26.39
+				(args
+					(p-ident @26.19-26.24 (raw "value")))
+				(e-apply @26.26-26.39
+					(e-tag @26.26-26.28 (raw "Ok"))
+					(e-apply @26.29-26.38
+						(e-tag @26.29-26.31 (raw "Ok"))
+						(e-ident @26.32-26.37 (qaul "") (raw "value"))))))
+		(s-decl @28.1-28.18
+			(p-ident @28.1-28.5 (raw "main"))
+			(e-lambda @28.8-28.18
 				(args
 					(p-underscore))
-				(e-record @17.13-17.15)))))
+				(e-string @28.12-28.18
+					(e-string-part @28.13-28.17 (raw "done")))))))
 ~~~
 # FORMATTED
 ~~~roc
-app [main!] { pf: platform "../basic-cli/platform.roc" }
+app [main] { pf: platform "platform.roc" }
 
-# Type variables nested in Result and List types
-mapResult : Result(a, e), (a -> b) -> Result(b, e)
-mapResult = |result, transform| {
-	when
-	result
-	is
-	Ok(value)->Ok(transform(value))
-	Err(error)->Err(error)
+# Map over Result type
+map_result : Result(a, e), (a -> b) -> Result(b, e)
+map_result = |result, transform| {
+	match result {
+		Ok(value) => Ok(transform(value))
+		Err(error) => Err(error)
+	}
 }
 
-# Type variables nested in Maybe and List
-filterMaybes : List(Maybe(t)) -> List(t)
-filterMaybes = |list| {
-	List.keepOks(list)
-}
+# Simple identity function with type variable
+identity : a -> a
+identity = |x| x
 
-main! = |_| {}
+# Nested type variables in records
+make_pair : a, b -> { first : a, second : b }
+make_pair = |x, y| { first: x, second: y }
+
+# Function that works with lists of any type
+list_length : List(a) -> U64
+list_length = |_lst| 42
+
+# Nested Result types
+wrap_in_result : a -> Result(Result(a, Str), Str)
+wrap_in_result = |value| Ok(Ok(value))
+
+main = |_| "done"
 ~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @5.1-5.10 (ident "mapResult"))
-		(e-lambda @5.13-9.2
+		(p-assign @5.1-5.11 (ident "map_result"))
+		(e-lambda @5.14-10.2
 			(args
-				(p-assign @5.14-5.20 (ident "result"))
-				(p-assign @5.22-5.31 (ident "transform")))
-			(e-block @5.33-9.2
-				(s-expr @6.5-6.16
-					(e-runtime-error (tag "ident_not_in_scope")))
-				(s-expr @6.10-6.19
-					(e-lookup-local @6.10-6.16
-						(pattern @5.14-5.20)))
-				(s-expr @6.17-7.11
-					(e-runtime-error (tag "ident_not_in_scope")))
-				(s-expr @7.9-8.12
-					(e-runtime-error (tag "not_implemented")))
-				(e-runtime-error (tag "not_implemented"))))
-		(annotation @5.1-5.10
+				(p-assign @5.15-5.21 (ident "result"))
+				(p-assign @5.23-5.32 (ident "transform")))
+			(e-block @5.34-10.2
+				(e-match @6.5-10.2
+					(match @6.5-10.2
+						(cond
+							(e-lookup-local @6.11-6.17
+								(pattern @5.15-5.21)))
+						(branches
+							(branch
+								(patterns
+									(p-applied-tag @7.9-7.18 (degenerate false)))
+								(value
+									(e-tag @7.22-7.42 (name "Ok") (args "TODO"))))
+							(branch
+								(patterns
+									(p-applied-tag @8.9-8.19 (degenerate false)))
+								(value
+									(e-tag @8.23-8.33 (name "Err") (args "TODO")))))))))
+		(annotation @5.1-5.11
 			(declared-type
-				(ty-fn @4.13-4.51 (effectful false)
-					(ty-apply @4.13-4.25 (symbol "Result")
-						(ty-var @4.20-4.21 (name "a"))
-						(ty-var @4.23-4.24 (name "e")))
-					(ty-parens @4.27-4.35
-						(ty-fn @4.28-4.34 (effectful false)
-							(ty-var @4.28-4.29 (name "a"))
-							(ty-var @4.33-4.34 (name "b"))))
-					(ty-apply @4.39-4.51 (symbol "Result")
-						(ty-var @4.46-4.47 (name "b"))
-						(ty-var @4.49-4.50 (name "e")))))))
+				(ty-fn @4.14-4.52 (effectful false)
+					(ty-apply @4.14-4.26 (symbol "Result")
+						(ty-var @4.21-4.22 (name "a"))
+						(ty-var @4.24-4.25 (name "e")))
+					(ty-parens @4.28-4.36
+						(ty-fn @4.29-4.35 (effectful false)
+							(ty-var @4.29-4.30 (name "a"))
+							(ty-var @4.34-4.35 (name "b"))))
+					(ty-apply @4.40-4.52 (symbol "Result")
+						(ty-var @4.47-4.48 (name "b"))
+						(ty-var @4.50-4.51 (name "e")))))))
 	(d-let
-		(p-assign @13.1-13.13 (ident "filterMaybes"))
-		(e-lambda @13.16-15.2
+		(p-assign @14.1-14.9 (ident "identity"))
+		(e-lambda @14.12-14.17
 			(args
-				(p-assign @13.17-13.21 (ident "list")))
-			(e-block @13.23-15.2
-				(e-call @14.5-14.23
-					(e-runtime-error (tag "ident_not_in_scope"))
-					(e-lookup-local @14.18-14.22
-						(pattern @13.17-13.21)))))
-		(annotation @13.1-13.13
+				(p-assign @14.13-14.14 (ident "x")))
+			(e-lookup-local @14.16-14.17
+				(pattern @14.13-14.14)))
+		(annotation @14.1-14.9
 			(declared-type
-				(ty-fn @12.16-12.41 (effectful false)
-					(ty-apply @12.16-12.30 (symbol "List")
-						(ty-apply @12.21-12.29 (symbol "Maybe")
-							(ty-var @12.27-12.28 (name "t"))))
-					(ty-apply @12.34-12.41 (symbol "List")
-						(ty-var @12.39-12.40 (name "t")))))))
+				(ty-fn @13.12-13.18 (effectful false)
+					(ty-var @13.12-13.13 (name "a"))
+					(ty-var @13.17-13.18 (name "a"))))))
 	(d-let
-		(p-assign @17.1-17.6 (ident "main!"))
-		(e-lambda @17.9-17.15
+		(p-assign @18.1-18.10 (ident "make_pair"))
+		(e-lambda @18.13-18.43
 			(args
-				(p-underscore @17.10-17.11))
-			(e-empty_record @17.13-17.15))))
+				(p-assign @18.14-18.15 (ident "x"))
+				(p-assign @18.17-18.18 (ident "y")))
+			(e-record @18.20-18.43
+				(fields
+					(field (name "first")
+						(e-lookup-local @18.29-18.30
+							(pattern @18.14-18.15)))
+					(field (name "second")
+						(e-lookup-local @18.40-18.41
+							(pattern @18.17-18.18))))))
+		(annotation @18.1-18.10
+			(declared-type
+				(ty-fn @17.13-17.44 (effectful false)
+					(ty-var @17.13-17.14 (name "a"))
+					(ty-var @17.16-17.17 (name "b"))
+					(ty-record @17.21-17.44
+						(field (field "first")
+							(ty-var @17.30-17.31 (name "a")))
+						(field (field "second")
+							(ty-var @17.41-17.42 (name "b"))))))))
+	(d-let
+		(p-assign @22.1-22.12 (ident "list_length"))
+		(e-lambda @22.15-22.24
+			(args
+				(p-assign @22.16-22.20 (ident "_lst")))
+			(e-int @22.22-22.24 (value "42")))
+		(annotation @22.1-22.12
+			(declared-type
+				(ty-fn @21.15-21.29 (effectful false)
+					(ty-apply @21.15-21.22 (symbol "List")
+						(ty-var @21.20-21.21 (name "a")))
+					(ty @21.26-21.29 (name "U64"))))))
+	(d-let
+		(p-assign @26.1-26.15 (ident "wrap_in_result"))
+		(e-lambda @26.18-26.39
+			(args
+				(p-assign @26.19-26.24 (ident "value")))
+			(e-tag @26.26-26.39 (name "Ok") (args "TODO")))
+		(annotation @26.1-26.15
+			(declared-type
+				(ty-fn @25.18-25.50 (effectful false)
+					(ty-var @25.18-25.19 (name "a"))
+					(ty-apply @25.23-25.50 (symbol "Result")
+						(ty-apply @25.30-25.44 (symbol "Result")
+							(ty-var @25.37-25.38 (name "a"))
+							(ty @25.40-25.43 (name "Str")))
+						(ty @25.46-25.49 (name "Str")))))))
+	(d-let
+		(p-assign @28.1-28.5 (ident "main"))
+		(e-lambda @28.8-28.18
+			(args
+				(p-underscore @28.9-28.10))
+			(e-string @28.12-28.18
+				(e-literal @28.13-28.17 (string "done"))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @5.1-5.10 (type "Error, a -> b -> Error"))
-		(patt @13.1-13.13 (type "Error -> Error"))
-		(patt @17.1-17.6 (type "* -> {}")))
+		(patt @5.1-5.11 (type "Error, a -> b -> Error"))
+		(patt @14.1-14.9 (type "a -> a"))
+		(patt @18.1-18.10 (type "a, b -> { first: a, second: b }"))
+		(patt @22.1-22.12 (type "Error -> U64"))
+		(patt @26.1-26.15 (type "a -> Error"))
+		(patt @28.1-28.5 (type "* -> Str")))
 	(expressions
-		(expr @5.13-9.2 (type "Error, a -> b -> Error"))
-		(expr @13.16-15.2 (type "Error -> Error"))
-		(expr @17.9-17.15 (type "* -> {}"))))
+		(expr @5.14-10.2 (type "Error, a -> b -> Error"))
+		(expr @14.12-14.17 (type "a -> a"))
+		(expr @18.13-18.43 (type "a, b -> { first: a, second: b }"))
+		(expr @22.15-22.24 (type "Error -> U64"))
+		(expr @26.18-26.39 (type "a -> Error"))
+		(expr @28.8-28.18 (type "* -> Str"))))
 ~~~
