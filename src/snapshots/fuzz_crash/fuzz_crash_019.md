@@ -443,6 +443,43 @@ The unused variable is declared here:
 This feature is not yet implemented or doesn't have a proper error report yet: top-level expect
 Let us know if you want to help!
 
+**INCOMPATIBLE MATCH PATTERNS**
+The pattern in the fourth branch of this `match` differs from previous ones:
+**fuzz_crash_019.md:52:2:**
+```roc
+	match a {lue  {
+	x
+		}
+		Blue=> {x
+			}
+	er #ent
+			1	"for" => 20[1, ] # t
+		ment
+		[1, 2, 3,est]123
+		[
+		] 23
+		3.1 314
+		3.14 | 6.28 => 314
+		(1, ) => 123
+		(1, 2, 3)123
+		{ 	} => 12
+		Ok(123) => 12
+	}
+
+expect # Cord
+```
+     ^
+
+The fourth pattern has this type:
+    _Str_
+
+But all the the other patterns have this type: 
+    _[Blue]*_
+
+All patterns in an `match` must have compatible types.
+
+
+
 # TOKENS
 ~~~zig
 Newline(1:2-1:8),
@@ -1380,13 +1417,13 @@ expect {
 	(defs
 		(patt @35.1-35.4 (type "* ? Num(*)"))
 		(patt @38.1-38.4 (type "* ? Error"))
-		(patt @49.1-49.3 (type "*, [Tb]* ? *"))
+		(patt @49.1-49.3 (type "*, [Tb]* ? Error"))
 		(patt @75.1-75.3 (type "* ? *"))
 		(patt @114.1-114.2 (type "{}")))
 	(expressions
 		(expr @35.7-37.4 (type "* ? Num(*)"))
 		(expr @38.7-47.2 (type "* ? Error"))
-		(expr @49.6-71.7 (type "*, [Tb]* ? *"))
+		(expr @49.6-71.7 (type "*, [Tb]* ? Error"))
 		(expr @75.5-111.2 (type "* ? *"))
 		(expr @114.5-114.7 (type "{}"))))
 ~~~

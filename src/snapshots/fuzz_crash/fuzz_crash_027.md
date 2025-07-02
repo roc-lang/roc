@@ -1822,11 +1822,11 @@ main! = |_| { # Yeah Ie
 	(defs
 		(patt @45.1-45.4 (type "* ? Num(*)"))
 		(patt @48.1-48.8 (type "U64 -> U64"))
-		(patt @60.1-60.11 (type "*, * ? *"))
+		(patt @60.1-60.11 (type "*, * ? Error"))
 		(patt @100.1-100.6 (type "List -> Error")))
 	(expressions
 		(expr @45.7-47.8 (type "* ? Num(*)"))
 		(expr @48.11-58.2 (type "U64 -> U64"))
-		(expr @60.14-96.7 (type "*, * ? *"))
+		(expr @60.14-96.7 (type "*, * ? Error"))
 		(expr @100.9-159.2 (type "List -> Error"))))
 ~~~

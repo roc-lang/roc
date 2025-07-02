@@ -28,7 +28,7 @@ const Content = types.Content;
 
 /// The kind of problem we're dealing with
 pub const Problem = union(enum) {
-    type_mismatch: VarProblem2,
+    type_mismatch: TypeMismatch,
     incompatible_list_elements: IncompatibleListElements,
     invalid_if_condition: InvalidIfCondition,
     incompatible_if_branches: IncompatibleIfBranches,
@@ -39,9 +39,10 @@ pub const Problem = union(enum) {
     invalid_number_type: VarProblem1,
     invalid_record_ext: VarProblem1,
     invalid_tag_union_ext: VarProblem1,
-    bug: VarProblem2,
+    bug: Bug,
 
     pub const SafeMultiList = MkSafeMultiList(@This());
+    pub const Idx = SafeMultiList.Idx;
     pub const Tag = std.meta.Tag(@This());
 
     /// Build a report for a problem
@@ -63,17 +64,48 @@ pub const Problem = union(enum) {
         );
 
         switch (problem) {
-            .type_mismatch => |vars| {
-                return buildTypeMismatchReport(
-                    gpa,
-                    buf,
-                    module_env,
-                    can_ir,
-                    &snapshot_writer,
-                    vars,
-                    source,
-                    filename,
-                );
+            .type_mismatch => |mismatch| {
+                if (mismatch.detail) |detail| {
+                    switch (detail) {
+                        .incompatible_match_patterns => |data| {
+                            return buildIncompatibleMatchPatterns(
+                                gpa,
+                                buf,
+                                module_env,
+                                can_ir,
+                                &snapshot_writer,
+                                mismatch,
+                                data,
+                                source,
+                                filename,
+                            );
+                        },
+                        .incompatible_match_branches => |data| {
+                            return buildIncompatibleMatchBranches(
+                                gpa,
+                                buf,
+                                module_env,
+                                can_ir,
+                                &snapshot_writer,
+                                mismatch,
+                                data,
+                                source,
+                                filename,
+                            );
+                        },
+                    }
+                } else {
+                    return buildTypeMismatchReport(
+                        gpa,
+                        buf,
+                        module_env,
+                        can_ir,
+                        &snapshot_writer,
+                        mismatch,
+                        source,
+                        filename,
+                    );
+                }
             },
             .incompatible_list_elements => |data| {
                 return buildIncompatibleListElementsReport(
@@ -151,7 +183,7 @@ pub const Problem = union(enum) {
         module_env: *const base.ModuleEnv,
         can_ir: *const can.CIR,
         writer: *snapshot.SnapshotWriter,
-        vars: VarProblem2,
+        vars: TypeMismatch,
         source: []const u8,
         filename: []const u8,
     ) !Report {
@@ -588,6 +620,261 @@ pub const Problem = union(enum) {
         return report;
     }
 
+    /// Build a report for incompatible match branches
+    pub fn buildIncompatibleMatchPatterns(
+        gpa: Allocator,
+        buf: *std.ArrayList(u8),
+        module_env: *const base.ModuleEnv,
+        can_ir: *const can.CIR,
+        snapshot_writer: *snapshot.SnapshotWriter,
+        mismatch: TypeMismatch,
+        data: IncompatibleMatchPatterns,
+        source: []const u8,
+        filename: []const u8,
+    ) !Report {
+        var report = Report.init(gpa, "INCOMPATIBLE MATCH PATTERNS", .runtime_error);
+
+        // Format the type strings
+        buf.clearRetainingCapacity();
+        try snapshot_writer.write(mismatch.actual);
+        const actual_type = try report.addOwnedString(buf.items);
+
+        buf.clearRetainingCapacity();
+        try snapshot_writer.write(mismatch.expected);
+        const expected_type = try report.addOwnedString(buf.items);
+
+        buf.clearRetainingCapacity();
+        try appendOrdinal(buf, data.problem_branch_index + 1);
+        const branch_ord = try report.addOwnedString(buf.items);
+
+        buf.clearRetainingCapacity();
+        try appendOrdinal(buf, data.problem_pattern_index + 1);
+        const pattern_ord = try report.addOwnedString(buf.items);
+
+        // title
+        if (data.num_patterns > 1) {
+            buf.clearRetainingCapacity();
+            try report.document.addText("The pattern ");
+            try report.document.addText(pattern_ord);
+            try report.document.addText(" pattern in this ");
+            try report.document.addText(branch_ord);
+            try report.document.addAnnotated("match", .keyword);
+            try report.document.addText(" differs from previous ones:");
+            try report.document.addLineBreak();
+        } else {
+            buf.clearRetainingCapacity();
+            try report.document.addText("The pattern in the ");
+            try report.document.addText(branch_ord);
+            try report.document.addText(" branch of this ");
+            try report.document.addAnnotated("match", .keyword);
+            try report.document.addText(" differs from previous ones:");
+            try report.document.addLineBreak();
+        }
+
+        // Determine the overall region that encompasses both elements
+        const match_expr_region = can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(data.match_expr)));
+        const overall_region_info = base.RegionInfo.position(
+            source,
+            module_env.line_starts.items,
+            match_expr_region.start.offset,
+            match_expr_region.end.offset,
+        ) catch return report;
+
+        // Get region info for invalid branch
+        const invalid_var_region = can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(mismatch.actual_var)));
+        const invalid_var_region_info = base.RegionInfo.position(
+            source,
+            module_env.line_starts.items,
+            invalid_var_region.start.offset,
+            invalid_var_region.end.offset,
+        ) catch return report;
+
+        // Create the display region
+        const display_region = SourceCodeDisplayRegion{
+            .start_line = overall_region_info.start_line_idx + 1,
+            .start_column = overall_region_info.start_col_idx + 1,
+            .end_line = overall_region_info.end_line_idx + 1,
+            .end_column = overall_region_info.end_col_idx + 1,
+            .region_annotation = .dimmed,
+            .filename = filename,
+        };
+
+        // Create underline regions
+        const underline_regions = [_]UnderlineRegion{
+            .{
+                .start_line = invalid_var_region_info.start_line_idx + 1,
+                .start_column = invalid_var_region_info.start_col_idx + 1,
+                .end_line = invalid_var_region_info.end_line_idx + 1,
+                .end_column = invalid_var_region_info.end_col_idx + 1,
+                .annotation = .error_highlight,
+            },
+        };
+
+        try report.document.addSourceCodeWithUnderlines(source, display_region, &underline_regions);
+        try report.document.addLineBreak();
+
+        // Show the type of the invalid branch
+        buf.clearRetainingCapacity();
+        try report.document.addText("The ");
+        try report.document.addText(branch_ord);
+        try report.document.addText(" pattern has this type:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(actual_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        // Show the type of the other branches
+        if (data.num_branches > 2) {
+            try report.document.addText("But all the the other patterns have this type: ");
+        } else {
+            try report.document.addText("But the other pattern has this type:");
+        }
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(expected_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        // TODO we should categorize this as a tip/hint (maybe relevant to how editors display it)
+        try report.document.addText("All patterns in an ");
+        try report.document.addAnnotated("match", .keyword);
+        try report.document.addText(" must have compatible types.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        return report;
+    }
+
+    /// Build a report for incompatible match branches
+    pub fn buildIncompatibleMatchBranches(
+        gpa: Allocator,
+        buf: *std.ArrayList(u8),
+        module_env: *const base.ModuleEnv,
+        can_ir: *const can.CIR,
+        snapshot_writer: *snapshot.SnapshotWriter,
+        mismatch: TypeMismatch,
+        data: IncompatibleMatchBranches,
+        source: []const u8,
+        filename: []const u8,
+    ) !Report {
+        // The 1st branch can never be incompatible
+        std.debug.assert(data.problem_branch_index > 0);
+
+        var report = Report.init(gpa, "INCOMPATIBLE MATCH BRANCHES", .runtime_error);
+
+        // Format the type strings
+        buf.clearRetainingCapacity();
+        try snapshot_writer.write(mismatch.actual);
+        const actual_type = try report.addOwnedString(buf.items);
+
+        buf.clearRetainingCapacity();
+        try snapshot_writer.write(mismatch.expected);
+        const expected_type = try report.addOwnedString(buf.items);
+
+        buf.clearRetainingCapacity();
+        try appendOrdinal(buf, data.problem_branch_index + 1);
+        const branch_ord = try report.addOwnedString(buf.items);
+
+        // Title
+        if (data.num_branches == 2) {
+            buf.clearRetainingCapacity();
+            try report.document.addText("The second branch's type in this ");
+            try report.document.addAnnotated("match", .keyword);
+            try report.document.addText(" is different from the first branch:");
+        } else {
+            buf.clearRetainingCapacity();
+            try report.document.addText("The ");
+            try report.document.addText(branch_ord);
+            try report.document.addText(" branch's type in this ");
+            try report.document.addAnnotated("match", .keyword);
+            try report.document.addText(" is different from the previous ones:");
+        }
+        try report.document.addLineBreak();
+
+        // Determine the overall region that encompasses both elements
+        const expr_region = can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(data.match_expr)));
+        const this_branch_region = can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(mismatch.actual_var)));
+
+        const overall_start_offset = expr_region.start.offset;
+        const overall_end_offset = this_branch_region.end.offset;
+
+        const overall_region_info = base.RegionInfo.position(
+            source,
+            module_env.line_starts.items,
+            overall_start_offset,
+            overall_end_offset,
+        ) catch return report;
+
+        // Create the display region
+        const display_region = SourceCodeDisplayRegion{
+            .start_line = overall_region_info.start_line_idx + 1,
+            .start_column = overall_region_info.start_col_idx + 1,
+            .end_line = overall_region_info.end_line_idx + 1,
+            .end_column = overall_region_info.end_col_idx + 1,
+            .region_annotation = .dimmed,
+            .filename = filename,
+        };
+
+        // Create underline regions
+        const this_branch_region_info = base.RegionInfo.position(
+            source,
+            module_env.line_starts.items,
+            this_branch_region.start.offset,
+            this_branch_region.end.offset,
+        ) catch return report;
+        const underline_regions = [_]UnderlineRegion{
+            .{
+                .start_line = this_branch_region_info.start_line_idx + 1,
+                .start_column = this_branch_region_info.start_col_idx + 1,
+                .end_line = this_branch_region_info.end_line_idx + 1,
+                .end_column = this_branch_region_info.end_col_idx + 1,
+                .annotation = .error_highlight,
+            },
+        };
+
+        try report.document.addSourceCodeWithUnderlines(source, display_region, &underline_regions);
+        try report.document.addLineBreak();
+
+        // Show the type of the invalid branch
+        try report.document.addText("The ");
+        try report.document.addText(branch_ord);
+        try report.document.addText(" branch has this type;");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(actual_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        // Show the type of the other branches
+        if (data.num_branches == 2) {
+            try report.document.addText("But the first branch has this type: ");
+        } else if (data.problem_branch_index == data.num_branches - 1) {
+            try report.document.addText("But all the previous branches have this type:");
+        } else {
+            try report.document.addText("But the previous branch has this type:");
+        }
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(expected_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        // TODO we should categorize this as a tip/hint (maybe relevant to how editors display it)
+        try report.document.addText("All branches in an ");
+        try report.document.addAnnotated("match", .keyword);
+        try report.document.addText(" must have compatible types.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        // TODO link to a speceific explanation of how to mix element types using tag unions
+        try report.document.addText("Note: You can wrap branches values in a tag to make them compatible.");
+        try report.document.addLineBreak();
+        try report.document.addText("To learn about tags, see ");
+        try report.document.addLink("https://www.roc-lang.org/tutorial#tags");
+
+        return report;
+    }
+
     /// Build a report for "number does not fit in type" diagnostic
     pub fn buildNumberDoesNotFitReport(
         gpa: Allocator,
@@ -774,8 +1061,8 @@ pub const IncompatibleIfBranches = struct {
     branches_len: usize,
 };
 
-/// A two var problem
-pub const VarProblem2 = struct {
+/// A bug that occurred during unification
+pub const Bug = struct {
     expected_var: Var,
     expected: SnapshotContentIdx,
     actual_var: Var,
@@ -792,6 +1079,38 @@ pub const NumberDoesNotFit = struct {
 pub const NegativeUnsignedInt = struct {
     literal_var: Var,
     expected_type: SnapshotContentIdx,
+};
+
+/// These two variables mismatch. This should usually be cast into a more
+/// specific error depending on context.
+pub const TypeMismatch = struct {
+    expected_var: Var,
+    expected: SnapshotContentIdx,
+    actual_var: Var,
+    actual: SnapshotContentIdx,
+    detail: ?TypeMismatchDetail,
+};
+
+/// More specific details about a particular type mismatch. k
+pub const TypeMismatchDetail = union(enum) {
+    incompatible_match_patterns: IncompatibleMatchPatterns,
+    incompatible_match_branches: IncompatibleMatchBranches,
+};
+
+/// Problem data for when match patterns have have incompatible types
+pub const IncompatibleMatchPatterns = struct {
+    match_expr: CIR.Expr.Idx,
+    num_branches: usize,
+    problem_branch_index: usize,
+    num_patterns: usize,
+    problem_pattern_index: usize,
+};
+
+/// Problem data for when match branches have have incompatible types
+pub const IncompatibleMatchBranches = struct {
+    match_expr: CIR.Expr.Idx,
+    num_branches: usize,
+    problem_branch_index: usize,
 };
 
 /// Self-contained problems store with resolved snapshots of type content

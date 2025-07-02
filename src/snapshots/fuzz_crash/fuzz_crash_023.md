@@ -2436,13 +2436,13 @@ expect {
 	(defs
 		(patt @65.1-65.16 (type "* ? Num(*)"))
 		(patt @68.1-68.8 (type "U64 -> U64"))
-		(patt @80.1-80.11 (type "*, * ? *"))
+		(patt @80.1-80.11 (type "*, * ? Error"))
 		(patt @144.1-144.6 (type "List -> Result"))
 		(patt @199.1-199.6 (type "{  }")))
 	(expressions
 		(expr @65.19-67.8 (type "* ? Num(*)"))
 		(expr @68.11-78.2 (type "U64 -> U64"))
-		(expr @80.14-140.7 (type "*, * ? *"))
+		(expr @80.14-140.7 (type "*, * ? Error"))
 		(expr @144.9-196.2 (type "List -> Result"))
 		(expr @199.9-199.11 (type "{}"))))
 ~~~

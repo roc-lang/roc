@@ -81,5 +81,5 @@ match numbers {
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-4.2 (type "*"))
+(expr @1.1-4.2 (type "List(*)"))
 ~~~
