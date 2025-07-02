@@ -211,5 +211,5 @@ match data {
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-6.2 (type "*"))
+(expr @1.1-6.2 (type "Num(*)"))
 ~~~

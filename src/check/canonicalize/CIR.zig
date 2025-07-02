@@ -2010,6 +2010,7 @@ pub const IntValue = struct {
 pub const IfBranch = struct {
     cond: Expr.Idx,
     body: Expr.Idx,
+    region: Region,
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
@@ -2028,7 +2029,7 @@ pub const IfBranch = struct {
 /// ```
 pub const Match = struct {
     /// The condition of the match expression.
-    loc_cond: Expr.Idx,
+    cond: Expr.Idx,
     /// The branches of the `match`
     branches: Branch.Span,
     /// Marks whether a match expression is exhaustive using a variable.
@@ -2045,6 +2046,7 @@ pub const Match = struct {
         guard: ?Expr.Idx,
         /// Marks whether a match branch is redundant using a variable.
         redundant: TypeVar,
+        region: Region,
 
         pub fn toSExpr(self: *const Match.Branch, ir: *const CIR) SExpr {
             const gpa = ir.env.gpa;
@@ -2052,14 +2054,12 @@ pub const Match = struct {
 
             var patterns_node = SExpr.init(gpa, "patterns");
             // Process each pattern in the span
-            const patterns_data = ir.store.extra_data.items[self.patterns.span.start..(self.patterns.span.start + self.patterns.span.len * 2)];
-            var i: usize = 0;
-            while (i < patterns_data.len) : (i += 2) {
-                const pattern_idx = @as(CIR.Pattern.Idx, @enumFromInt(patterns_data[i]));
-                const degenerate = patterns_data[i + 1] != 0;
-                const pattern = ir.store.getPattern(pattern_idx);
+            const patterns_slice = ir.store.sliceMatchBranchPatterns(self.patterns);
+            for (patterns_slice) |branch_pat_idx| {
+                const branch_pat = ir.store.getMatchBranchPattern(branch_pat_idx);
+                const pattern = ir.store.getPattern(branch_pat.pattern);
                 var pattern_sexpr = pattern.toSExpr(ir);
-                pattern_sexpr.appendBoolAttr(gpa, "degenerate", degenerate);
+                pattern_sexpr.appendBoolAttr(gpa, "degenerate", branch_pat.degenerate);
                 patterns_node.appendNode(gpa, &pattern_sexpr);
             }
             node.appendNode(gpa, &patterns_node);
@@ -2092,6 +2092,7 @@ pub const Match = struct {
         /// needs. For example, in `A x | B y -> x`, the `B y` pattern is degenerate.
         /// Degenerate patterns emit a runtime error if reached in a program.
         degenerate: bool,
+        region: Region,
 
         pub const Idx = enum(u32) { _ };
         pub const Span = struct { span: base.DataSpan };
@@ -2111,7 +2112,7 @@ pub const Match = struct {
         node.appendRegion(gpa, ir.calcRegionInfo(self.region));
 
         var cond_node = SExpr.init(gpa, "cond");
-        const cond_expr = ir.store.getExpr(self.loc_cond);
+        const cond_expr = ir.store.getExpr(self.cond);
         var cond_sexpr = cond_expr.toSExpr(ir);
         cond_node.appendNode(gpa, &cond_sexpr);
 

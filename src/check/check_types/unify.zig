@@ -178,10 +178,13 @@ pub fn unifyMode(
                     const expected_snapshot = snapshots.deepCopyVar(types, a);
                     const actual_snapshot = snapshots.deepCopyVar(types, b);
                     break :blk .{ .type_mismatch = .{
-                        .expected_var = a,
-                        .expected = expected_snapshot,
-                        .actual_var = b,
-                        .actual = actual_snapshot,
+                        .types = .{
+                            .expected_var = a,
+                            .expected_snapshot = expected_snapshot,
+                            .actual_var = b,
+                            .actual_snapshot = actual_snapshot,
+                        },
+                        .detail = null,
                     } };
                 },
                 error.NumberDoesNotFit => {

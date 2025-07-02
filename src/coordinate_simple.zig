@@ -5,6 +5,7 @@ const base = @import("base.zig");
 const parse = @import("check/parse.zig");
 const canonicalize = @import("check/canonicalize.zig");
 const Solver = @import("check/check_types.zig");
+const types_problem_mod = @import("check/check_types/problem.zig");
 const reporting = @import("reporting.zig");
 const Filesystem = @import("coordinate/Filesystem.zig");
 
@@ -137,7 +138,7 @@ fn processSourceInternal(
     defer solver.deinit();
 
     // Check for type errors
-    solver.checkDefs();
+    try solver.checkDefs();
 
     // Ensure ProcessResult owns the source
     // We have two cases:
@@ -150,22 +151,20 @@ fn processSourceInternal(
         try gpa.dupe(u8, source); // Clone to get our own copy
 
     // Get type checking diagnostic Reports
-    var problem_buf = std.ArrayList(u8).init(gpa);
-    defer problem_buf.deinit();
+    var report_builder = types_problem_mod.ReportBuilder.init(
+        gpa,
+        &module_env,
+        cir,
+        &solver.snapshots,
+        owned_source,
+        filename,
+    );
+    defer report_builder.deinit();
 
     var problems_itr = solver.problems.problems.iterIndices();
     while (problems_itr.next()) |problem_idx| {
-        problem_buf.clearRetainingCapacity();
         const problem = solver.problems.problems.get(problem_idx);
-        const report = problem.buildReport(
-            gpa,
-            &problem_buf,
-            &module_env,
-            cir,
-            &solver.snapshots,
-            owned_source,
-            filename,
-        ) catch continue;
+        const report = report_builder.build(problem) catch continue;
         reports.append(report) catch continue;
     }
 
