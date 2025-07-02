@@ -22,7 +22,7 @@ getField = |record| record.field
 ^^^^^^^^
 
 It is of type:
-    _{ field: *field: aother: b } -> a_
+    _{ field: a, other: b } -> a_
 
 But you are trying to use it as:
     _{ field: * } -> *_

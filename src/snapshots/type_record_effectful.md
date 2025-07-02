@@ -26,7 +26,7 @@ printName = |person| {
 ^^^^^^^^^
 
 It is of type:
-    _{ name: *name: Strage: U64 } => Str_
+    _{ name: Str, age: U64 } => Str_
 
 But you are trying to use it as:
     _{ name: * } -> *_

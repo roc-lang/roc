@@ -394,7 +394,7 @@ pub const Store = struct {
         return self.func_args.rangeToSlice(range);
     }
 
-    pub fn getRecordFieldsSlice(self: *const Self, range: SnapshotRecordFieldSafeList.Range) []const SnapshotRecordField {
+    pub fn getRecordFieldsSlice(self: *const Self, range: SnapshotRecordFieldSafeList.Range) SnapshotRecordFieldSafeList.Slice {
         return self.record_fields.rangeToSlice(range);
     }
 
@@ -671,17 +671,21 @@ pub const SnapshotWriter = struct {
     pub fn writeRecord(self: *Self, record: SnapshotRecord) Allocator.Error!void {
         _ = try self.writer.write("{ ");
 
-        var field_iter = self.snapshots.record_fields.iterIndices();
-        var is_first = true;
-        while (field_iter.next()) |field_idx| {
-            if (!is_first) {
-                _ = try self.writer.write(", ");
-                is_first = false;
-            }
-            const field = self.snapshots.record_fields.get(field_idx);
-            _ = try self.writer.write(self.idents.getText(field.name));
+        const fields_slice = self.snapshots.record_fields.rangeToSlice(record.fields);
+
+        if (fields_slice.len > 0) {
+            // Write first field
+            _ = try self.writer.write(self.idents.getText(fields_slice.items(.name)[0]));
             _ = try self.writer.write(": ");
-            try self.write(field.content);
+            try self.write(fields_slice.items(.content)[0]);
+
+            // Write remaining fields
+            for (fields_slice.items(.name)[1..], fields_slice.items(.content)[1..]) |name, content| {
+                _ = try self.writer.write(", ");
+                _ = try self.writer.write(self.idents.getText(name));
+                _ = try self.writer.write(": ");
+                try self.write(content);
+            }
         }
 
         // Show extension variable if it's not empty
@@ -689,13 +693,13 @@ pub const SnapshotWriter = struct {
             .structure => |flat_type| switch (flat_type) {
                 .empty_record => {}, // Don't show empty extension
                 else => {
-                    if (record.fields.len() > 0) _ = try self.writer.write(", ");
+                    if (fields_slice.len > 0) _ = try self.writer.write(", ");
                     _ = try self.writer.write("* ");
                     try self.write(record.ext);
                 },
             },
             else => {
-                if (record.fields.len() > 0) _ = try self.writer.write(", ");
+                if (fields_slice.len > 0) _ = try self.writer.write(", ");
                 _ = try self.writer.write("* ");
                 try self.write(record.ext);
             },
