@@ -29,6 +29,9 @@ pub const Diagnostic = union(enum) {
     empty_single_quote: struct {
         region: Region,
     },
+    empty_tuple: struct {
+        region: Region,
+    },
     ident_already_in_scope: struct {
         ident: Ident.Idx,
         region: Region,
@@ -171,6 +174,7 @@ pub const Diagnostic = union(enum) {
             .invalid_single_quote => |d| d.region,
             .too_long_single_quote => |d| d.region,
             .empty_single_quote => |d| d.region,
+            .empty_tuple => |d| d.region,
         };
     }
 
@@ -391,6 +395,32 @@ pub const Diagnostic = union(enum) {
         try report.document.addReflowingText("I am part way through parsing this scalar literal (character literal), but it is empty.");
         try report.document.addLineBreak();
         try report.document.addReflowingText("A single-quoted literal must contain exactly one character, e.g. 'a'.");
+        return report;
+    }
+
+    /// Build a report for "empty single quote" diagnostic
+    pub fn buildEmptyTupleReport(
+        allocator: Allocator,
+        region_info: base.RegionInfo,
+        source: []const u8,
+        filename: []const u8,
+    ) !Report {
+        var report = Report.init(allocator, "EMPTY TUPLE NOT ALLOWED", .runtime_error);
+        try report.document.addReflowingText("I am part way through parsing this tuple, but it is empty:");
+        try report.document.addLineBreak();
+        try report.document.addSourceRegion(
+            source,
+            region_info.start_line_idx,
+            region_info.start_col_idx,
+            region_info.end_line_idx,
+            region_info.end_col_idx,
+            .error_highlight,
+            filename,
+        );
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("If you want to represent nothing, try using an empty record: ");
+        try report.document.addAnnotated("{}", .inline_code);
+        try report.document.addReflowingText(".");
         return report;
     }
 

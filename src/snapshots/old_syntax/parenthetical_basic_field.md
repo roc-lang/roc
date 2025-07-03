@@ -31,9 +31,7 @@ NO CHANGE
 ~~~clojure
 (e-dot-access @1.1-1.12 (field "field")
 	(receiver
-		(e-tuple @1.1-1.6
-			(elems
-				(e-runtime-error (tag "ident_not_in_scope"))))))
+		(e-runtime-error (tag "ident_not_in_scope"))))
 ~~~
 # TYPES
 ~~~clojure

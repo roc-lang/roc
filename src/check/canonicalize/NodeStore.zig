@@ -94,7 +94,7 @@ pub fn deinit(store: *NodeStore) void {
 /// when adding/removing variants from CIR unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the CIR
-pub const CIR_DIAGNOSTIC_NODE_COUNT = 32;
+pub const CIR_DIAGNOSTIC_NODE_COUNT = 33;
 /// Count of the expression nodes in the CIR
 pub const CIR_EXPR_NODE_COUNT = 23;
 /// Count of the statement nodes in the CIR
@@ -2267,6 +2267,10 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) CIR.Diagnostic.I
             node.tag = .diag_empty_single_quote;
             node.region = r.region;
         },
+        .empty_tuple => |r| {
+            node.tag = .diag_empty_tuple;
+            node.region = r.region;
+        },
         .ident_already_in_scope => |r| {
             node.tag = .diag_ident_already_in_scope;
             node.region = r.region;
@@ -2466,6 +2470,9 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = node.region,
         } },
         .diag_empty_single_quote => return CIR.Diagnostic{ .empty_single_quote = .{
+            .region = node.region,
+        } },
+        .diag_empty_tuple => return CIR.Diagnostic{ .empty_tuple = .{
             .region = node.region,
         } },
         .diag_ident_already_in_scope => return CIR.Diagnostic{ .ident_already_in_scope = .{

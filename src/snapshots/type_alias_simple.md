@@ -15,19 +15,7 @@ getUser = |id| if (id > 10) "big" else "small"
 main! = |_| getUser(100)
 ~~~
 # PROBLEMS
-**INVALID IF CONDITION**
-This `if` condition needs to be a _Bool_:
-**type_alias_simple.md:6:19:**
-```roc
-getUser = |id| if (id > 10) "big" else "small"
-```
-                  ^^^^^^^^^
-
-Right now, it has the type:
-    _(*)_
-
-Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
-
+NIL
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),Newline(1:1-1:1),
@@ -99,12 +87,10 @@ NO CHANGE
 			(e-if @1.1-1.1
 				(if-branches
 					(if-branch
-						(e-tuple @6.19-6.28
-							(elems
-								(e-binop @6.20-6.28 (op "gt")
-									(e-lookup-local @6.20-6.22
-										(pattern @6.12-6.14))
-									(e-int @6.25-6.27 (value "10")))))
+						(e-binop @6.20-6.28 (op "gt")
+							(e-lookup-local @6.20-6.22
+								(pattern @6.12-6.14))
+							(e-int @6.25-6.27 (value "10")))
 						(e-string @6.29-6.34
 							(e-literal @6.30-6.33 (string "big")))))
 				(if-else

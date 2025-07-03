@@ -121,7 +121,7 @@ pub const IncompatibleMatchBranches = struct {
     problem_branch_index: u32,
 };
 
-/// Problem data for when a bool binop (&& or ||) is invalid
+/// Problem data for when a bool binop (`and` or `or`) is invalid
 pub const InvalidBoolBinop = struct {
     binop_expr: CIR.Expr.Idx,
     problem_side: enum { lhs, rhs },
@@ -978,8 +978,8 @@ pub const ReportBuilder = struct {
         // Show the type of the invalid branch
         try report.document.addText("Both sides of ");
         switch (data.binop) {
-            .@"and" => try report.document.addAnnotated("&&", .inline_code),
-            .@"or" => try report.document.addAnnotated("||", .inline_code),
+            .@"and" => try report.document.addAnnotated("and", .inline_code),
+            .@"or" => try report.document.addAnnotated("or", .inline_code),
         }
         try report.document.addText(" must be ");
         try report.document.addAnnotated("Bool", .type_variable);
@@ -997,7 +997,7 @@ pub const ReportBuilder = struct {
 
         // TODO we should categorize this as a tip/hint (maybe relevant to how editors display it)
         try report.document.addReflowingText("Note: Roc does not have \"truthiness\" where other values ");
-        try report.document.addReflowingText("like strings, numebrs or lists are automatically converted to bools. ");
+        try report.document.addReflowingText("like strings, numbers or lists are automatically converted to bools. ");
         try report.document.addReflowingText("You must do that conversion yourself!");
 
         return report;
