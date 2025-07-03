@@ -182,6 +182,13 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 stmt_name,
             );
         },
+        .f64_pattern_literal => |data| blk: {
+            break :blk Diagnostic.buildF64PatternLiteralReport(
+                allocator,
+                data.region,
+                source,
+            );
+        },
         .invalid_single_quote => Diagnostic.buildInvalidSingleQuoteReport(allocator),
         .too_long_single_quote => Diagnostic.buildTooLongSingleQuoteReport(allocator),
         .empty_single_quote => Diagnostic.buildEmptySingleQuoteReport(allocator),

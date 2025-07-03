@@ -2178,6 +2178,14 @@ fn canonicalize_pattern(
                 .fits_in_dec = requirements.fits_in_dec,
             };
 
+            // Check for f64 literals which are not allowed in patterns
+            if (parsed == .f64) {
+                const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .f64_pattern_literal = .{
+                    .region = region,
+                } });
+                return malformed_idx;
+            }
+
             const cir_pattern = switch (parsed) {
                 .small => |small_info| CIR.Pattern{
                     .small_dec_literal = .{
@@ -2192,6 +2200,7 @@ fn canonicalize_pattern(
                         .region = region,
                     },
                 },
+                .f64 => unreachable, // Already handled above
             };
 
             const pattern_idx = try self.can_ir.store.addPattern(cir_pattern);

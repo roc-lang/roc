@@ -94,7 +94,7 @@ pub fn deinit(store: *NodeStore) void {
 /// when adding/removing variants from CIR unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the CIR
-pub const CIR_DIAGNOSTIC_NODE_COUNT = 30;
+pub const CIR_DIAGNOSTIC_NODE_COUNT = 31;
 /// Count of the expression nodes in the CIR
 pub const CIR_EXPR_NODE_COUNT = 25;
 /// Count of the statement nodes in the CIR
@@ -2457,6 +2457,10 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) CIR.Diagnostic.I
             node.data_2 = r.original_region.start.offset;
             node.data_3 = r.original_region.end.offset;
         },
+        .f64_pattern_literal => |r| {
+            node.tag = .diag_f64_pattern_literal;
+            node.region = r.region;
+        },
     }
 
     const nid = @intFromEnum(store.nodes.append(store.gpa, node));
@@ -2640,6 +2644,9 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
                 .start = .{ .offset = @intCast(node.data_2) },
                 .end = .{ .offset = @intCast(node.data_3) },
             },
+        } },
+        .diag_f64_pattern_literal => return CIR.Diagnostic{ .f64_pattern_literal = .{
+            .region = node.region,
         } },
         else => {
             std.debug.print("Error: getDiagnostic called with non-diagnostic node!\n", .{});

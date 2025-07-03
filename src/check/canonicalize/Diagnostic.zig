@@ -126,6 +126,9 @@ pub const Diagnostic = union(enum) {
         duplicate_region: Region,
         original_region: Region,
     },
+    f64_pattern_literal: struct {
+        region: Region,
+    },
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
@@ -160,6 +163,7 @@ pub const Diagnostic = union(enum) {
             .unused_variable => |d| d.region,
             .used_underscore_variable => |d| d.region,
             .duplicate_record_field => |d| d.duplicate_region,
+            .f64_pattern_literal => |d| d.region,
             .invalid_single_quote => |d| d.region,
             .too_long_single_quote => |d| d.region,
             .empty_single_quote => |d| d.region,
@@ -897,6 +901,43 @@ pub const Diagnostic = union(enum) {
 
         try report.document.addLineBreak();
         try report.document.addText("Record fields must have unique names. Consider renaming one of these fields or removing the duplicate.");
+
+        return report;
+    }
+
+    /// Build a report for "f64 pattern literal" diagnostic
+    pub fn buildF64PatternLiteralReport(allocator: Allocator, region: Region, source: []const u8) !Report {
+        var report = Report.init(allocator, "F64 NOT ALLOWED IN PATTERN", .runtime_error);
+
+        // Extract the literal's text from the source using its region
+        const literal_text = source[region.start.offset..region.end.offset];
+
+        try report.document.addText("This floating-point literal cannot be used in a pattern match: ");
+        try report.document.addInlineCode(literal_text);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("This number exceeds the precision range of Roc's ");
+        try report.document.addInlineCode("Dec");
+        try report.document.addReflowingText(" type and would require F64 representation. ");
+        try report.document.addReflowingText("Floating-point numbers (F64) cannot be used in patterns because they don't have reliable equality comparison.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addText("Consider one of these alternatives:");
+        try report.document.addLineBreak();
+        try report.document.addText("• Use a guard condition with a range check");
+        try report.document.addLineBreak();
+        try report.document.addText("• Use a smaller number that fits in Dec's precision");
+        try report.document.addLineBreak();
+        try report.document.addText("• Restructure your code to avoid pattern matching on this value");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addText("For example, instead of:");
+        try report.document.addLineBreak();
+        try report.document.addInlineCode("1e100 => ...");
+        try report.document.addLineBreak();
+        try report.document.addText("Use a guard:");
+        try report.document.addLineBreak();
+        try report.document.addInlineCode("n if n > 1e99 => ...");
 
         return report;
     }
