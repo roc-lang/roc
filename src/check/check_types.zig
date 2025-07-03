@@ -444,14 +444,8 @@ fn checkLambdaWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, lambda: anytype,
     const arg_patterns = self.can_ir.store.slicePatterns(lambda.args);
 
     // Create type variables for each argument pattern
-    var arg_vars = std.ArrayList(Var).init(self.gpa); // TODO reuse CIR indices instead of allocating new ones!
-    defer arg_vars.deinit();
-
-    // Create variables for lambda parameters
-    for (arg_patterns) |pattern_idx| {
-        const pattern_var = @as(Var, @enumFromInt(@intFromEnum(pattern_idx)));
-        arg_vars.append(pattern_var) catch |err| exitOnOom(err);
-    }
+    // Since pattern idx map 1-to-1 to variables, we can get cast the slice to vars
+    const arg_vars: []Var = @ptrCast(@alignCast(arg_patterns));
 
     // If we have an expected type and it's a function, unify parameter types before checking body
     if (expected_type) |expected| {
@@ -482,11 +476,11 @@ fn checkLambdaWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, lambda: anytype,
 
     if (is_effectful) {
         // If the function body does effects, create an effectful function.
-        _ = try self.types.setVarContent(fn_var, self.types.mkFuncEffectful(arg_vars.items, return_var));
+        _ = try self.types.setVarContent(fn_var, self.types.mkFuncEffectful(arg_vars, return_var));
     } else {
         // If the function body does *not* do effects, create an unbound function.
         // (Pure would mean it's *annotated* as pure, but we aren't claiming that here!)
-        _ = try self.types.setVarContent(fn_var, self.types.mkFuncUnbound(arg_vars.items, return_var));
+        _ = try self.types.setVarContent(fn_var, self.types.mkFuncUnbound(arg_vars, return_var));
     }
 
     return is_effectful;
