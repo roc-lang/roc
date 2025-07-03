@@ -245,17 +245,11 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                 const func_var = @as(Var, @enumFromInt(@intFromEnum(func_expr_idx)));
 
                 // Create argument type variables
-                var arg_vars = std.ArrayList(Var).init(self.gpa);
-                defer arg_vars.deinit();
-
-                for (call_args) |arg_expr_idx| {
-                    const arg_var = @as(Var, @enumFromInt(@intFromEnum(arg_expr_idx)));
-                    arg_vars.append(arg_var) catch |err| exitOnOom(err);
-                }
+                const arg_vars: []Var = @ptrCast(@alignCast(call_args));
 
                 // Create an unbound function type with the call result as return type
                 // The unification will propagate the actual return type to the call
-                const func_content = self.types.mkFuncUnbound(arg_vars.items, call_var);
+                const func_content = self.types.mkFuncUnbound(arg_vars, call_var);
                 const expected_func_var = self.types.freshFromContent(func_content);
 
                 // Unify the expected function type with the actual function
@@ -412,17 +406,17 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                     _ = self.unify(dot_access_var, field_var);
 
                     // Create a record type with this field
-                    var fields = std.ArrayList(types_mod.RecordField).init(self.gpa);
-                    defer fields.deinit();
-
-                    fields.append(.{
+                    const field_idx = self.types.appendRecordField(.{
                         .name = dot_access.field_name,
                         .var_ = field_var,
-                    }) catch |err| exitOnOom(err);
+                    });
+                    const fields_range = types_mod.RecordField.SafeMultiList.Range{
+                        .start = field_idx,
+                        .end = @enumFromInt(@intFromEnum(field_idx) + 1),
+                    };
 
                     // Create an extension variable for other possible fields
                     // Create the record content
-                    const fields_range = self.types.appendRecordFields(fields.items);
                     const record_content = types_mod.Content{
                         .structure = .{
                             .record_unbound = fields_range,
