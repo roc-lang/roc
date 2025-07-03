@@ -80,5 +80,5 @@ Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.51 (type "*"))
+(expr @1.1-1.51 (type "a"))
 ~~~

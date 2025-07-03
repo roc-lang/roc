@@ -29,5 +29,5 @@ L
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.2 (type "[L]*"))
+(expr @1.1-1.2 (type "[L]a"))
 ~~~

@@ -27,5 +27,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.313 (type "Frac(*)"))
+(expr @1.1-1.313 (type "Frac(a)"))
 ~~~

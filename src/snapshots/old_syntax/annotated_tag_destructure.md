@@ -33,5 +33,5 @@ UserId
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.7 (type "[UserId]*"))
+(expr @1.1-1.7 (type "[UserId]a"))
 ~~~

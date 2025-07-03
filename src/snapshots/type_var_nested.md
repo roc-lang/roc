@@ -339,12 +339,12 @@ main = |_| "done"
 		(patt @18.1-18.10 (type "a, b -> { first: a, second: b }"))
 		(patt @22.1-22.12 (type "Error -> U64"))
 		(patt @26.1-26.15 (type "a -> Error"))
-		(patt @28.1-28.5 (type "* -> Str")))
+		(patt @28.1-28.5 (type "a -> Str")))
 	(expressions
 		(expr @5.14-10.2 (type "Error, a -> b -> Error"))
 		(expr @14.12-14.17 (type "a -> a"))
 		(expr @18.13-18.43 (type "a, b -> { first: a, second: b }"))
 		(expr @22.15-22.24 (type "Error -> U64"))
 		(expr @26.18-26.39 (type "a -> Error"))
-		(expr @28.8-28.18 (type "* -> Str"))))
+		(expr @28.8-28.18 (type "a -> Str"))))
 ~~~

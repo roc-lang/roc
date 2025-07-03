@@ -34,5 +34,5 @@ Int(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-2.4 (type "*"))
+(expr @1.1-2.4 (type "a"))
 ~~~

@@ -34,5 +34,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.10 (type "(Num(*), Num(*), Num(*))"))
+(expr @1.1-1.10 (type "(Num(a), Num(b), Num(c))"))
 ~~~

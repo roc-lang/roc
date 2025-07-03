@@ -21,10 +21,10 @@ This expression is used in an unexpected way:
 ^^^^^^^^^^^^^^^^^^
 
 It is of type:
-    _(*)_
+    _(b)_
 
 But you are trying to use it as:
-    _Num(*) -> *_
+    _Num(a) -> a_
 
 # TOKENS
 ~~~zig
@@ -55,5 +55,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.23 (type "*"))
+(expr @1.1-1.23 (type "a"))
 ~~~

@@ -95,7 +95,7 @@ red = Color
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.4 (type "[Color]*")))
+		(patt @6.1-6.4 (type "[Color]a")))
 	(expressions
-		(expr @6.7-6.12 (type "[Color]*"))))
+		(expr @6.7-6.12 (type "[Color]a"))))
 ~~~

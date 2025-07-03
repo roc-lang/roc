@@ -102,8 +102,8 @@ main! = |_| {}
 (inferred-types
 	(defs
 		(patt @4.1-4.9 (type "{ field: a, other: b } -> a"))
-		(patt @6.1-6.6 (type "* -> {}")))
+		(patt @6.1-6.6 (type "a -> {}")))
 	(expressions
 		(expr @4.12-6.6 (type "{ field: a, other: b } -> a"))
-		(expr @6.9-6.15 (type "* -> {}"))))
+		(expr @6.9-6.15 (type "a -> {}"))))
 ~~~

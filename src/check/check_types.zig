@@ -42,7 +42,7 @@ pub fn init(
         .gpa = gpa,
         .types = types,
         .can_ir = can_ir,
-        .snapshots = snapshot.Store.initCapacity(gpa, 512),
+        .snapshots = try snapshot.Store.initCapacity(gpa, &can_ir.env.idents, 512),
         .problems = problem.Store.initCapacity(gpa, 64),
         .unify_scratch = unifier.Scratch.init(gpa),
         .occurs_scratch = occurs.Scratch.init(gpa),
@@ -156,7 +156,7 @@ test "minimum signed values fit in their respective types" {
     var problems = problem.Store.initCapacity(gpa, 16);
     defer problems.deinit(gpa);
 
-    var snapshots = snapshot.Store.initCapacity(gpa, 16);
+    var snapshots = try snapshot.Store.initCapacity(gpa, &module_env.idents, 16);
     defer snapshots.deinit();
 
     var unify_scratch = unifier.Scratch.init(gpa);

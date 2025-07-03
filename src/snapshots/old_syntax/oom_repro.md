@@ -53,5 +53,5 @@ K
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.2 (type "[K]*"))
+(expr @1.1-1.2 (type "[K]a"))
 ~~~

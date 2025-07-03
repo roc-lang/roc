@@ -90,5 +90,5 @@ CloseCurly(7:1-7:2),EndOfFile(7:2-7:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-7.2 (type "*"))
+(expr @1.1-7.2 (type "a"))
 ~~~

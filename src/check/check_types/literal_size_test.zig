@@ -18,7 +18,7 @@ test "integer literal 255 fits in U8" {
     var problems = @import("../../problem.zig").Store.initCapacity(gpa, 16);
     defer problems.deinit(gpa);
 
-    var snapshots = @import("../snapshot.zig").Store.initCapacity(gpa, 16);
+    var snapshots = try @import("../snapshot.zig").Store.initCapacity(gpa, &module_env.idents, 16);
     defer snapshots.deinit();
 
     var scratch = unify.Scratch.init(gpa);
@@ -62,7 +62,7 @@ test "integer literal 256 does not fit in U8" {
     var problems = @import("../../problem.zig").Store.initCapacity(gpa, 16);
     defer problems.deinit(gpa);
 
-    var snapshots = @import("../snapshot.zig").Store.initCapacity(gpa, 16);
+    var snapshots = try @import("../snapshot.zig").Store.initCapacity(gpa, &module_env.idents, 16);
     defer snapshots.deinit();
 
     var scratch = unify.Scratch.init(gpa);
@@ -106,7 +106,7 @@ test "integer literal -128 fits in I8" {
     var problems = @import("../../problem.zig").Store.initCapacity(gpa, 16);
     defer problems.deinit(gpa);
 
-    var snapshots = @import("../snapshot.zig").Store.initCapacity(gpa, 16);
+    var snapshots = try @import("../snapshot.zig").Store.initCapacity(gpa, &module_env.idents, 16);
     defer snapshots.deinit();
 
     var scratch = unify.Scratch.init(gpa);
@@ -150,7 +150,7 @@ test "integer literal -129 does not fit in I8" {
     var problems = @import("../../problem.zig").Store.initCapacity(gpa, 16);
     defer problems.deinit(gpa);
 
-    var snapshots = @import("../snapshot.zig").Store.initCapacity(gpa, 16);
+    var snapshots = try @import("../snapshot.zig").Store.initCapacity(gpa, &module_env.idents, 16);
     defer snapshots.deinit();
 
     var scratch = unify.Scratch.init(gpa);
@@ -194,7 +194,7 @@ test "negative literal cannot unify with unsigned type" {
     var problems = @import("../../problem.zig").Store.initCapacity(gpa, 16);
     defer problems.deinit(gpa);
 
-    var snapshots = @import("../snapshot.zig").Store.initCapacity(gpa, 16);
+    var snapshots = try @import("../snapshot.zig").Store.initCapacity(gpa, &module_env.idents, 16);
     defer snapshots.deinit();
 
     var scratch = unify.Scratch.init(gpa);
@@ -238,7 +238,7 @@ test "float literal that fits in F32" {
     var problems = @import("../../problem.zig").Store.initCapacity(gpa, 16);
     defer problems.deinit(gpa);
 
-    var snapshots = @import("../snapshot.zig").Store.initCapacity(gpa, 16);
+    var snapshots = try @import("../snapshot.zig").Store.initCapacity(gpa, &module_env.idents, 16);
     defer snapshots.deinit();
 
     var scratch = unify.Scratch.init(gpa);
@@ -282,7 +282,7 @@ test "float literal that doesn't fit in F32" {
     var problems = @import("../../problem.zig").Store.initCapacity(gpa, 16);
     defer problems.deinit(gpa);
 
-    var snapshots = @import("../snapshot.zig").Store.initCapacity(gpa, 16);
+    var snapshots = try @import("../snapshot.zig").Store.initCapacity(gpa, &module_env.idents, 16);
     defer snapshots.deinit();
 
     var scratch = unify.Scratch.init(gpa);
@@ -326,7 +326,7 @@ test "float literal NaN doesn't fit in Dec" {
     var problems = @import("../../problem.zig").Store.initCapacity(gpa, 16);
     defer problems.deinit(gpa);
 
-    var snapshots = @import("../snapshot.zig").Store.initCapacity(gpa, 16);
+    var snapshots = try @import("../snapshot.zig").Store.initCapacity(gpa, &module_env.idents, 16);
     defer snapshots.deinit();
 
     var scratch = unify.Scratch.init(gpa);
@@ -370,7 +370,7 @@ test "two integer literals with different requirements unify to most restrictive
     var problems = @import("../../problem.zig").Store.initCapacity(gpa, 16);
     defer problems.deinit(gpa);
 
-    var snapshots = @import("../snapshot.zig").Store.initCapacity(gpa, 16);
+    var snapshots = try @import("../snapshot.zig").Store.initCapacity(gpa, &module_env.idents, 16);
     defer snapshots.deinit();
 
     var scratch = unify.Scratch.init(gpa);
@@ -440,7 +440,7 @@ test "positive and negative literals unify with sign requirement" {
     var problems = @import("../../problem.zig").Store.initCapacity(gpa, 16);
     defer problems.deinit(gpa);
 
-    var snapshots = @import("../snapshot.zig").Store.initCapacity(gpa, 16);
+    var snapshots = try @import("../snapshot.zig").Store.initCapacity(gpa, &module_env.idents, 16);
     defer snapshots.deinit();
 
     var scratch = unify.Scratch.init(gpa);

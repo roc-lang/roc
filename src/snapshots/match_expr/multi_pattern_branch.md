@@ -79,5 +79,5 @@ match color {
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-5.2 (type "Num(*)"))
+(expr @1.1-5.2 (type "Num(a)"))
 ~~~

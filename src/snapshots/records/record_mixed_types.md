@@ -60,5 +60,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.86 (type "{ name: Str, age: Num(*), active: Error, scores: List(Num(*)), balance: Frac(*) }"))
+(expr @1.1-1.86 (type "{ name: Str, age: Num(a), active: Error, scores: List(Num(b)), balance: Frac(c) }"))
 ~~~

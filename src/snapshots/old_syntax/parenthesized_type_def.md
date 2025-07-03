@@ -32,5 +32,5 @@ LowerIdent(2:1-2:2),EndOfFile(2:2-2:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.4 (type "([D]*)"))
+(expr @1.1-1.4 (type "([D]a)"))
 ~~~

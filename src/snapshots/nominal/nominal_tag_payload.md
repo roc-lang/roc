@@ -167,8 +167,8 @@ none = Maybe
 (inferred-types
 	(defs
 		(patt @6.1-6.5 (type "a -> Maybe(a)"))
-		(patt @9.1-9.5 (type "[Maybe]*")))
+		(patt @9.1-9.5 (type "[Maybe]a")))
 	(expressions
 		(expr @6.8-6.17 (type "a -> Maybe(a)"))
-		(expr @9.8-9.13 (type "[Maybe]*"))))
+		(expr @9.8-9.13 (type "[Maybe]a"))))
 ~~~

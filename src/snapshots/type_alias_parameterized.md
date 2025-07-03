@@ -24,10 +24,10 @@ main! = |_| swapPair(1, 2)
             ^^^^^^^^
 
 It is of type:
-    _Pair(a, *) -> Pair(b, a)_
+    _Pair(a, c) -> Pair(b, a)_
 
 But you are trying to use it as:
-    _Num(*), Num(*) -> *_
+    _Num(a), Num(b) -> a_
 
 # TOKENS
 ~~~zig
@@ -146,8 +146,8 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt @6.1-6.9 (type "Error"))
-		(patt @8.1-8.6 (type "* -> *")))
+		(patt @8.1-8.6 (type "a -> b")))
 	(expressions
 		(expr @6.12-6.27 (type "Error"))
-		(expr @8.9-8.27 (type "* -> *"))))
+		(expr @8.9-8.27 (type "a -> b"))))
 ~~~

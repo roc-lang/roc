@@ -49,5 +49,5 @@ OpEquals(2:1-2:3),NoSpaceOpenRound(2:3-2:4),UpperIdent(2:4-2:5),OpColon(2:5-2:6)
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-2.11 (type "*"))
+(expr @1.1-2.11 (type "a"))
 ~~~

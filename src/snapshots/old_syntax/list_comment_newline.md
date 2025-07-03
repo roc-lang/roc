@@ -39,5 +39,5 @@ CloseSquare(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-4.2 (type "List([L]*)"))
+(expr @1.1-4.2 (type "List([L]a)"))
 ~~~

@@ -20,10 +20,10 @@ This expression is used in an unexpected way:
 ^
 
 It is of type:
-    _Num(*)_
+    _Num(b)_
 
 But you are trying to use it as:
-    _(Num(*)) -> *_
+    _(Num(a)) -> a_
 
 # TOKENS
 ~~~zig
@@ -57,5 +57,5 @@ UpperIdent(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-3.2 (type "*"))
+(expr @1.1-3.2 (type "a"))
 ~~~

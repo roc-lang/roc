@@ -27,5 +27,5 @@ I
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.2 (type "[I]*"))
+(expr @1.1-1.2 (type "[I]a"))
 ~~~

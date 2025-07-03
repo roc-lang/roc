@@ -566,7 +566,7 @@ It is of type:
     _Str_
 
 But you are trying to use it as:
-    _{ to_utf8: * }_
+    _{ to_utf8: a }_
 
 # TOKENS
 ~~~zig
@@ -1451,17 +1451,17 @@ is_named_color = |str| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @18.1-18.4 (type "U8, U8, U8 -> [Color]*"))
-		(patt @21.1-21.5 (type "U8, U8, U8, U8 -> (U8, U8, U8, *)"))
+		(patt @18.1-18.4 (type "U8, U8, U8 -> [Color]a"))
+		(patt @21.1-21.5 (type "U8, U8, U8, U8 -> (U8, U8, U8, a)"))
 		(patt @27.1-27.4 (type "Error -> Error"))
 		(patt @49.1-49.7 (type "Color -> Error"))
 		(patt @61.1-61.6 (type "Error"))
-		(patt @67.1-67.15 (type "* -> *")))
+		(patt @67.1-67.15 (type "a -> b")))
 	(expressions
-		(expr @18.7-18.22 (type "U8, U8, U8 -> [Color]*"))
-		(expr @21.8-24.2 (type "U8, U8, U8, U8 -> (U8, U8, U8, *)"))
+		(expr @18.7-18.22 (type "U8, U8, U8 -> [Color]a"))
+		(expr @21.8-24.2 (type "U8, U8, U8, U8 -> (U8, U8, U8, a)"))
 		(expr @27.7-46.2 (type "Error -> Error"))
 		(expr @49.10-56.7 (type "Color -> Error"))
 		(expr @61.9-63.24 (type "Error"))
-		(expr @67.18-71.2 (type "* -> *"))))
+		(expr @67.18-71.2 (type "a -> b"))))
 ~~~

@@ -27,5 +27,5 @@ Int(1:1-1:2),OpPizza(1:3-1:5),KwDbg(1:6-1:9),EndOfFile(1:9-1:9),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.2 (type "Num(*)"))
+(expr @1.1-1.2 (type "Num(a)"))
 ~~~

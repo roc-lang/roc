@@ -1039,10 +1039,10 @@ This expression is used in an unexpected way:
  ^^^^^^^^^^
 
 It is of type:
-    _*, * -> *_
+    _c, d -> e_
 
 But you are trying to use it as:
-    _* -> *_
+    _a -> b_
 
 **INCOMPATIBLE LIST ELEMENTS**
 The first two elements in this list have incompatible types:
@@ -1060,7 +1060,7 @@ The first element has this type:
     _U64_
 
 However, the second element has this type:
-    _Num(*)_
+    _Num(a)_
 
 All elements in a list must have compatible types.
 
@@ -2474,13 +2474,13 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @65.1-65.16 (type "[False, True] -> Num(*)"))
+		(patt @65.1-65.16 (type "[False, True] -> Num(a)"))
 		(patt @68.1-68.8 (type "Error -> Error"))
 		(patt @80.1-80.11 (type "Error"))
 		(patt @144.1-144.6 (type "Error -> Error"))
 		(patt @199.1-199.6 (type "{}")))
 	(expressions
-		(expr @65.19-67.8 (type "[False, True] -> Num(*)"))
+		(expr @65.19-67.8 (type "[False, True] -> Num(a)"))
 		(expr @68.11-78.2 (type "Error -> Error"))
 		(expr @80.14-140.7 (type "Error"))
 		(expr @144.9-196.2 (type "Error -> Error"))

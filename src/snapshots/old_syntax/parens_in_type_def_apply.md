@@ -29,5 +29,5 @@ U
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.2 (type "[U]*"))
+(expr @1.1-1.2 (type "[U]a"))
 ~~~

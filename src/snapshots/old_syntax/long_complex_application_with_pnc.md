@@ -89,5 +89,5 @@ combine(
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-5.4 (type "*"))
+(expr @1.1-5.4 (type "a"))
 ~~~

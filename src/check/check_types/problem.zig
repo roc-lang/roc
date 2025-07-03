@@ -8,6 +8,7 @@ const types_mod = @import("../../types/types.zig");
 const reporting = @import("../../reporting.zig");
 const store_mod = @import("../../types/store.zig");
 const snapshot = @import("./snapshot.zig");
+const var_name_gen = @import("../../types/var_name_gen.zig");
 
 const Report = reporting.Report;
 const Document = reporting.Document;
@@ -176,10 +177,15 @@ pub const ReportBuilder = struct {
         self: *Self,
         problem: Problem,
     ) !Report {
+        // Create a name generator for type variables
+        var name_gen = try var_name_gen.TypeVarNameGenerator.init(self.gpa);
+        defer name_gen.deinit();
+
         var snapshot_writer = snapshot.SnapshotWriter.init(
             self.buf.writer(),
             self.snapshots,
             &self.module_env.idents,
+            &name_gen,
         );
 
         switch (problem) {

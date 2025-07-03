@@ -4,6 +4,8 @@ const std = @import("std");
 const base = @import("../base.zig");
 const store = @import("../types/store.zig");
 const types = @import("../types/types.zig");
+const var_name_gen = @import("../types/var_name_gen.zig");
+const collections = @import("../collections.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -34,7 +36,17 @@ pub const SExprWriter = struct {
         var buffer = std.ArrayList(u8).init(gpa);
         defer buffer.deinit();
 
-        var type_writer = TypeWriter.init(buffer.writer(), env);
+        // Create a name generator for all variables
+        var name_gen = try var_name_gen.TypeVarNameGenerator.init(gpa);
+        defer name_gen.deinit();
+
+        // First collect all named variables
+        for (0..env.types.slots.backing.items.len) |slot_idx| {
+            const var_: Var = @enumFromInt(slot_idx);
+            try collectNamedVarsFromType(&name_gen, env, var_);
+        }
+
+        var type_writer = TypeWriter.init(buffer.writer(), env, &name_gen);
 
         for (0..env.types.slots.backing.items.len) |slot_idx| {
             const var_: Var = @enumFromInt(slot_idx);
@@ -69,9 +81,14 @@ pub const TypeWriter = struct {
 
     writer: std.ArrayList(u8).Writer,
     env: *const ModuleEnv,
+    name_generator: *var_name_gen.TypeVarNameGenerator,
 
-    pub fn init(writer: std.ArrayList(u8).Writer, env: *const ModuleEnv) Self {
-        return .{ .writer = writer, .env = env };
+    pub fn init(writer: std.ArrayList(u8).Writer, env: *const ModuleEnv, name_generator: *var_name_gen.TypeVarNameGenerator) Self {
+        return .{
+            .writer = writer,
+            .env = env,
+            .name_generator = name_generator,
+        };
     }
 
     /// Convert a var to a type string
@@ -86,7 +103,9 @@ pub const TypeWriter = struct {
                 if (mb_ident_idx) |ident_idx| {
                     _ = try self.writer.write(self.env.idents.getText(ident_idx));
                 } else {
-                    _ = try self.writer.write("*");
+                    // Always generate a name for unnamed type variables
+                    const name = try self.name_generator.generateName();
+                    _ = try self.writer.write(name);
                 }
             },
             .rigid_var => |ident_idx| {
@@ -390,7 +409,18 @@ pub const TypeWriter = struct {
         // Show extension variable if it's not empty
         const ext_resolved = self.env.types.resolveVar(tag_union.ext);
         switch (ext_resolved.desc.content) {
-            .flex_var => _ = try self.writer.write("*"),
+            .flex_var => |mb_ident_idx| {
+                if (mb_ident_idx) |ident_idx| {
+                    _ = try self.writer.write(self.env.idents.getText(ident_idx));
+                } else {
+                    // Generate a name for the extension variable
+                    const name = self.name_generator.generateName() catch |err| switch (err) {
+                        error.OutOfMemory => return error.OutOfMemory,
+                        else => unreachable,
+                    };
+                    _ = try self.writer.write(name);
+                }
+            },
             .structure => |flat_type| switch (flat_type) {
                 .empty_tag_union => {}, // Don't show empty extension
                 else => {}, // TODO: Error?
@@ -432,13 +462,22 @@ pub const TypeWriter = struct {
                 _ = try self.writer.write(")");
             },
             .num_unbound => |_| {
-                _ = try self.writer.write("Num(*)");
+                _ = try self.writer.write("Num(");
+                const name = try self.name_generator.generateName();
+                _ = try self.writer.write(name);
+                _ = try self.writer.write(")");
             },
             .int_unbound => |_| {
-                _ = try self.writer.write("Int(*)");
+                _ = try self.writer.write("Int(");
+                const name = try self.name_generator.generateName();
+                _ = try self.writer.write(name);
+                _ = try self.writer.write(")");
             },
             .frac_unbound => |_| {
-                _ = try self.writer.write("Frac(*)");
+                _ = try self.writer.write("Frac(");
+                const name = try self.name_generator.generateName();
+                _ = try self.writer.write(name);
+                _ = try self.writer.write(")");
             },
             .int_precision => |prec| {
                 try self.writeIntType(prec);
@@ -482,3 +521,109 @@ pub const TypeWriter = struct {
         };
     }
 };
+
+/// Helper to write a type with generated names for unnamed variables
+pub fn writeType(allocator: Allocator, var_: types.Var, env: *const ModuleEnv) ![]const u8 {
+    var buffer = std.ArrayList(u8).init(allocator);
+    defer buffer.deinit();
+
+    // Create name generator and collect existing names
+    var name_gen = try var_name_gen.TypeVarNameGenerator.init(allocator);
+    defer name_gen.deinit();
+
+    // Collect all named type variables first
+    try collectNamedVarsFromType(&name_gen, env, var_);
+
+    // Create writer with the name generator
+    var writer = TypeWriter.init(buffer.writer(), env, &name_gen);
+
+    // Write the type
+    try writer.writeVar(var_);
+
+    return buffer.toOwnedSlice();
+}
+
+fn collectNamedVarsFromType(gen: *var_name_gen.TypeVarNameGenerator, env: *const ModuleEnv, var_: types.Var) !void {
+    const resolved = env.types.resolveVar(var_);
+
+    switch (resolved.desc.content) {
+        .flex_var => |mb_ident_idx| {
+            if (mb_ident_idx) |ident_idx| {
+                const name = env.idents.getText(ident_idx);
+                try gen.markNameTaken(name);
+            }
+        },
+        .rigid_var => |ident_idx| {
+            const name = env.idents.getText(ident_idx);
+            try gen.markNameTaken(name);
+        },
+        .structure => |flat_type| {
+            try collectNamedVarsFromFlatType(gen, env, flat_type);
+        },
+        .alias => |alias| {
+            var arg_iter = alias.argIterator(var_);
+            while (arg_iter.next()) |arg| {
+                try collectNamedVarsFromType(gen, env, arg);
+            }
+            const backing_var = alias.getBackingVar(var_);
+            try collectNamedVarsFromType(gen, env, backing_var);
+        },
+        .err => {},
+    }
+}
+
+fn collectNamedVarsFromFlatType(gen: *var_name_gen.TypeVarNameGenerator, env: *const ModuleEnv, flat_type: types.FlatType) Allocator.Error!void {
+    switch (flat_type) {
+        .fn_pure, .fn_effectful, .fn_unbound => |func| {
+            const args_slice = env.types.func_args.rangeToSlice(func.args);
+            for (args_slice) |arg| {
+                try collectNamedVarsFromType(gen, env, arg);
+            }
+            try collectNamedVarsFromType(gen, env, func.ret);
+        },
+        .tuple => |tuple| {
+            const elems_slice = env.types.tuple_elems.rangeToSlice(tuple.elems);
+            for (elems_slice) |elem| {
+                try collectNamedVarsFromType(gen, env, elem);
+            }
+        },
+        .list => |elem_var| {
+            try collectNamedVarsFromType(gen, env, elem_var);
+        },
+        .box => |elem_var| {
+            try collectNamedVarsFromType(gen, env, elem_var);
+        },
+        .record => |record| {
+            const fields_slice = env.types.record_fields.rangeToSlice(record.fields);
+            const var_slice = fields_slice.items(.var_);
+            for (var_slice) |field_var| {
+                try collectNamedVarsFromType(gen, env, field_var);
+            }
+            try collectNamedVarsFromType(gen, env, record.ext);
+        },
+        .tag_union => |tag_union| {
+            const tags_slice = env.types.tags.rangeToSlice(tag_union.tags);
+            const args_slice = tags_slice.items(.args);
+            for (args_slice) |tag_args| {
+                const tag_args_slice = env.types.tag_args.rangeToSlice(tag_args);
+                for (tag_args_slice) |arg| {
+                    try collectNamedVarsFromType(gen, env, arg);
+                }
+            }
+            try collectNamedVarsFromType(gen, env, tag_union.ext);
+        },
+        .num => |num| {
+            switch (num) {
+                .num_poly => |poly| try collectNamedVarsFromType(gen, env, poly.var_),
+                .int_poly => |poly| try collectNamedVarsFromType(gen, env, poly.var_),
+                .frac_poly => |poly| try collectNamedVarsFromType(gen, env, poly.var_),
+                else => {},
+            }
+        },
+        .record_poly => |poly| {
+            try collectNamedVarsFromFlatType(gen, env, .{ .record = poly.record });
+            try collectNamedVarsFromType(gen, env, poly.var_);
+        },
+        else => {},
+    }
+}

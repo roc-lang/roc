@@ -29,5 +29,5 @@ CloseRound(2:1-2:2),CloseCurly(2:2-2:3),EndOfFile(2:3-2:3),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.2 (type "Num(*)"))
+(expr @1.1-1.2 (type "Num(a)"))
 ~~~

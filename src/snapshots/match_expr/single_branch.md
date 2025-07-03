@@ -55,5 +55,5 @@ match value {
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-3.2 (type "*"))
+(expr @1.1-3.2 (type "a"))
 ~~~

@@ -144,5 +144,5 @@ match items {
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-8.2 (type "Num(*)"))
+(expr @1.1-8.2 (type "Num(a)"))
 ~~~

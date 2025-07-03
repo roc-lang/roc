@@ -53,5 +53,5 @@ g(, x)
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.16 (type "*"))
+(expr @1.1-1.16 (type "a"))
 ~~~

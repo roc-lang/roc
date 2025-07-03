@@ -292,10 +292,10 @@ main! = |_| {
 		(patt @5.1-5.13 (type "U64 -> U64"))
 		(patt @9.1-9.10 (type "U64 -> Error"))
 		(patt @13.1-13.16 (type "U64 -> Error"))
-		(patt @15.1-15.6 (type "* -> List(*)")))
+		(patt @15.1-15.6 (type "a -> List(*)")))
 	(expressions
 		(expr @5.16-5.23 (type "U64 -> U64"))
 		(expr @9.13-9.24 (type "U64 -> Error"))
 		(expr @13.19-13.30 (type "U64 -> Error"))
-		(expr @15.9-20.2 (type "* -> List(*)"))))
+		(expr @15.9-20.2 (type "a -> List(*)"))))
 ~~~

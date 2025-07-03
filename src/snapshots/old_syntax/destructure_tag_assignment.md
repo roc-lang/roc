@@ -29,5 +29,5 @@ Email
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.6 (type "[Email]*"))
+(expr @1.1-1.6 (type "[Email]a"))
 ~~~

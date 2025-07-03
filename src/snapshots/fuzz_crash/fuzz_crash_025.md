@@ -150,7 +150,7 @@ It is of type:
     _U128_
 
 But you are trying to use it as:
-    _Frac(*)_
+    _Frac(a)_
 
 # TOKENS
 ~~~zig

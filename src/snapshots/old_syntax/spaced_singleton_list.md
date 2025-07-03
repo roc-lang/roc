@@ -30,5 +30,5 @@ OpenSquare(1:1-1:2),Int(1:3-1:4),CloseSquare(1:5-1:6),EndOfFile(1:6-1:6),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.6 (type "List(Num(*))"))
+(expr @1.1-1.6 (type "List(Num(a))"))
 ~~~

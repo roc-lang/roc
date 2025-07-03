@@ -353,9 +353,9 @@ main! = |_| processComplex(Ok([Some(42), None]))
 	(defs
 		(patt @5.1-5.15 (type "Error -> Error"))
 		(patt @12.1-12.11 (type "Error -> Error"))
-		(patt @17.1-17.6 (type "* -> Error")))
+		(patt @17.1-17.6 (type "a -> Error")))
 	(expressions
 		(expr @5.18-6.9 (type "Error -> Error"))
 		(expr @12.14-12.25 (type "Error -> Error"))
-		(expr @17.9-17.49 (type "* -> Error"))))
+		(expr @17.9-17.49 (type "a -> Error"))))
 ~~~

@@ -175,8 +175,8 @@ pub fn unifyMode(
         const problem: Problem = blk: {
             switch (err) {
                 error.TypeMismatch => {
-                    const expected_snapshot = snapshots.deepCopyVar(types, a);
-                    const actual_snapshot = snapshots.deepCopyVar(types, b);
+                    const expected_snapshot = snapshots.deepCopyVar(types, a) catch |oom_err| exitOnOutOfMemory(oom_err);
+                    const actual_snapshot = snapshots.deepCopyVar(types, b) catch |oom_err| exitOnOutOfMemory(oom_err);
                     break :blk .{ .type_mismatch = .{
                         .types = .{
                             .expected_var = a,
@@ -208,7 +208,7 @@ pub fn unifyMode(
 
                     const literal_var = if (literal_is_a) a else b;
                     const expected_var = if (literal_is_a) b else a;
-                    const expected_snapshot = snapshots.deepCopyVar(types, expected_var);
+                    const expected_snapshot = snapshots.deepCopyVar(types, expected_var) catch |oom_err| exitOnOutOfMemory(oom_err);
 
                     break :blk .{ .number_does_not_fit = .{
                         .literal_var = literal_var,
@@ -236,7 +236,7 @@ pub fn unifyMode(
 
                     const literal_var = if (literal_is_a) a else b;
                     const expected_var = if (literal_is_a) b else a;
-                    const expected_snapshot = snapshots.deepCopyVar(types, expected_var);
+                    const expected_snapshot = snapshots.deepCopyVar(types, expected_var) catch |oom_err| exitOnOutOfMemory(oom_err);
 
                     break :blk .{ .negative_unsigned_int = .{
                         .literal_var = literal_var,
@@ -273,21 +273,21 @@ pub fn unifyMode(
                                 } };
                             },
                             .invalid_number_type => |var_| {
-                                const snapshot = snapshots.deepCopyVar(types, var_);
+                                const snapshot = snapshots.deepCopyVar(types, var_) catch |oom_err| exitOnOutOfMemory(oom_err);
                                 break :blk .{ .invalid_number_type = .{
                                     .var_ = var_,
                                     .snapshot = snapshot,
                                 } };
                             },
                             .invalid_record_ext => |var_| {
-                                const snapshot = snapshots.deepCopyVar(types, var_);
+                                const snapshot = snapshots.deepCopyVar(types, var_) catch |oom_err| exitOnOutOfMemory(oom_err);
                                 break :blk .{ .invalid_record_ext = .{
                                     .var_ = var_,
                                     .snapshot = snapshot,
                                 } };
                             },
                             .invalid_tag_union_ext => |var_| {
-                                const snapshot = snapshots.deepCopyVar(types, var_);
+                                const snapshot = snapshots.deepCopyVar(types, var_) catch |oom_err| exitOnOutOfMemory(oom_err);
                                 break :blk .{ .invalid_tag_union_ext = .{
                                     .var_ = var_,
                                     .snapshot = snapshot,
@@ -297,9 +297,9 @@ pub fn unifyMode(
                     } else {
                         break :blk .{ .bug = .{
                             .expected_var = a,
-                            .expected = snapshots.deepCopyVar(types, a),
+                            .expected = snapshots.deepCopyVar(types, a) catch |oom_err| exitOnOutOfMemory(oom_err),
                             .actual_var = b,
-                            .actual = snapshots.deepCopyVar(types, b),
+                            .actual = snapshots.deepCopyVar(types, b) catch |oom_err| exitOnOutOfMemory(oom_err),
                         } };
                     }
                 },
@@ -2776,12 +2776,12 @@ const TestEnv = struct {
     /// TODO: Is heap allocation unideal here? If we want to optimize tests, we
     /// could pull module_env's initialization out of here, but this results in
     /// slight more verbose setup for each test
-    fn init(gpa: std.mem.Allocator) Self {
-        const module_env = gpa.create(base.ModuleEnv) catch |e| exitOnOutOfMemory(e);
+    fn init(gpa: std.mem.Allocator) !Self {
+        const module_env = try gpa.create(base.ModuleEnv);
         module_env.* = base.ModuleEnv.init(gpa);
         return .{
             .module_env = module_env,
-            .snapshots = snapshot_mod.Store.initCapacity(gpa, 16),
+            .snapshots = try snapshot_mod.Store.initCapacity(gpa, &module_env.idents, 16),
             .problems = problem_mod.Store.initCapacity(gpa, 16),
             .scratch = Scratch.init(module_env.gpa),
             .occurs_scratch = occurs.Scratch.init(module_env.gpa),
@@ -3090,7 +3090,7 @@ const TestEnv = struct {
 test "unify - identical" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const a = env.module_env.types.fresh();
@@ -3105,7 +3105,7 @@ test "unify - identical" {
 test "unify - both flex vars" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const a = env.module_env.types.fresh();
@@ -3120,7 +3120,7 @@ test "unify - both flex vars" {
 test "unify - a is flex_var and b is not" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const a = env.module_env.types.fresh();
@@ -3136,7 +3136,7 @@ test "unify - a is flex_var and b is not" {
 
 test "rigid_var - unifies with flex_var" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const rigid = env.mkRigidVar("a");
@@ -3151,7 +3151,7 @@ test "rigid_var - unifies with flex_var" {
 
 test "rigid_var - unifies with flex_var (other way)" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const rigid = env.mkRigidVar("a");
@@ -3166,7 +3166,7 @@ test "rigid_var - unifies with flex_var (other way)" {
 
 test "rigid_var - cannot unify with alias (fail)" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const alias = env.module_env.types.freshFromContent(Content{ .structure = .str });
@@ -3178,7 +3178,7 @@ test "rigid_var - cannot unify with alias (fail)" {
 
 test "rigid_var - cannot unify with identical ident str (fail)" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const rigid1 = env.module_env.types.freshFromContent(env.mkRigidVar("a"));
@@ -3192,7 +3192,7 @@ test "rigid_var - cannot unify with identical ident str (fail)" {
 
 test "unify - alias with same args" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
@@ -3221,7 +3221,7 @@ test "unify - alias with same args" {
 
 test "unify - aliases with different names but same backing" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
@@ -3248,7 +3248,7 @@ test "unify - aliases with different names but same backing" {
 
 test "unify - alias with different args (fail)" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
@@ -3276,7 +3276,7 @@ test "unify - alias with different args (fail)" {
 
 test "unify - alias with flex" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
@@ -3303,7 +3303,7 @@ test "unify - alias with flex" {
 test "unify - a is builtin and b is flex_var" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const str = Content{ .structure = .str };
@@ -3321,7 +3321,7 @@ test "unify - a is builtin and b is flex_var" {
 test "unify - a is flex_var and b is builtin" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const str = Content{ .structure = .str };
@@ -3341,7 +3341,7 @@ test "unify - a is flex_var and b is builtin" {
 test "unify - a & b are both str" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const str = Content{ .structure = .str };
@@ -3359,7 +3359,7 @@ test "unify - a & b are both str" {
 test "unify - a & b are diff (fail)" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const str = Content{ .structure = .str };
@@ -3378,7 +3378,7 @@ test "unify - a & b are diff (fail)" {
 test "unify - a & b box with same arg unify" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const str = Content{ .structure = .str };
@@ -3399,7 +3399,7 @@ test "unify - a & b box with same arg unify" {
 test "unify - a & b box with diff args (fail)" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const str = Content{ .structure = .str };
@@ -3424,7 +3424,7 @@ test "unify - a & b box with diff args (fail)" {
 test "unify - a & b list with same arg unify" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const str = Content{ .structure = .str };
@@ -3445,7 +3445,7 @@ test "unify - a & b list with same arg unify" {
 test "unify - a & b list with diff args (fail)" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const str = Content{ .structure = .str };
@@ -3472,7 +3472,7 @@ test "unify - a & b list with diff args (fail)" {
 test "unify - a & b are same tuple" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const str = Content{ .structure = .str };
@@ -3496,7 +3496,7 @@ test "unify - a & b are same tuple" {
 test "unify - a & b are tuples with args flipped (fail)" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const str = Content{ .structure = .str };
@@ -3521,7 +3521,7 @@ test "unify - a & b are tuples with args flipped (fail)" {
 test "unify - tuple_unbound unifies with tuple" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     // Create element type variables
@@ -3558,7 +3558,7 @@ test "unify - tuple_unbound unifies with tuple" {
 test "unify - multiple tuple_unbounds stay unbound" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     // Create element type variables for first tuple
@@ -3608,7 +3608,7 @@ test "unify - multiple tuple_unbounds stay unbound" {
 test "unify - two compact ints" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const int_i32 = Content{ .structure = .{ .num = Num.int_i32 } };
@@ -3625,7 +3625,7 @@ test "unify - two compact ints" {
 test "unify - two compact ints (fail)" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const a = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
@@ -3641,7 +3641,7 @@ test "unify - two compact ints (fail)" {
 test "unify - two compact fracs" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const frac_f32 = Content{ .structure = .{ .num = Num.frac_f32 } };
@@ -3658,7 +3658,7 @@ test "unify - two compact fracs" {
 test "unify - two compact fracs (fail)" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const a = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.frac_f32 } });
@@ -3676,7 +3676,7 @@ test "unify - two compact fracs (fail)" {
 test "unify - two poly ints" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const a = env.mkIntPoly(Num.Int.Precision.u8);
@@ -3691,7 +3691,7 @@ test "unify - two poly ints" {
 test "unify - two poly ints (fail)" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const a = env.mkIntPoly(Num.Int.Precision.u8);
@@ -3707,7 +3707,7 @@ test "unify - two poly ints (fail)" {
 test "unify - two poly fracs" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const a = env.mkFracPoly(Num.Frac.Precision.f64);
@@ -3722,7 +3722,7 @@ test "unify - two poly fracs" {
 test "unify - two poly fracs (fail)" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const a = env.mkFracPoly(Num.Frac.Precision.f32);
@@ -3740,7 +3740,7 @@ test "unify - two poly fracs (fail)" {
 test "unify - Num(flex) and compact int" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const int_i32 = Content{ .structure = .{ .num = Num.int_i32 } };
@@ -3757,7 +3757,7 @@ test "unify - Num(flex) and compact int" {
 test "unify - Num(Int(flex)) and compact int" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const int_i32 = Content{ .structure = .{ .num = Num.int_i32 } };
@@ -3774,7 +3774,7 @@ test "unify - Num(Int(flex)) and compact int" {
 test "unify - Num(Int(U8)) and compact int U8" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const int_u8 = Content{ .structure = .{ .num = Num.int_u8 } };
@@ -3791,7 +3791,7 @@ test "unify - Num(Int(U8)) and compact int U8" {
 test "unify - Num(Int(U8)) and compact int I32 (fails)" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const int_i32 = Content{ .structure = .{ .num = Num.int_i32 } };
@@ -3810,7 +3810,7 @@ test "unify - Num(Int(U8)) and compact int I32 (fails)" {
 test "unify - Num(flex) and compact frac" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const frac_f32 = Content{ .structure = .{ .num = Num.frac_f32 } };
@@ -3827,7 +3827,7 @@ test "unify - Num(flex) and compact frac" {
 test "unify - Num(Frac(flex)) and compact frac" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const frac_f32 = Content{ .structure = .{ .num = Num.frac_f32 } };
@@ -3844,7 +3844,7 @@ test "unify - Num(Frac(flex)) and compact frac" {
 test "unify - Num(Frac(Dec)) and compact frac Dec" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const frac_dec = Content{ .structure = .{ .num = Num.frac_dec } };
@@ -3861,7 +3861,7 @@ test "unify - Num(Frac(Dec)) and compact frac Dec" {
 test "unify - Num(Frac(F32)) and compact frac Dec (fails)" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const frac_f32 = Content{ .structure = .{ .num = Num.frac_f32 } };
@@ -3880,7 +3880,7 @@ test "unify - Num(Frac(F32)) and compact frac Dec (fails)" {
 test "unify - compact int and Num(flex)" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const int_i32 = Content{ .structure = .{ .num = Num.int_i32 } };
@@ -3897,7 +3897,7 @@ test "unify - compact int and Num(flex)" {
 test "unify - compact int and Num(Int(flex))" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const int_i32 = Content{ .structure = .{ .num = Num.int_i32 } };
@@ -3914,7 +3914,7 @@ test "unify - compact int and Num(Int(flex))" {
 test "unify - compact int and U8 Num(Int(U8))" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const int_u8 = Content{ .structure = .{ .num = Num.int_u8 } };
@@ -3931,7 +3931,7 @@ test "unify - compact int and U8 Num(Int(U8))" {
 test "unify - compact int U8 and  Num(Int(I32)) (fails)" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const int_i32 = Content{ .structure = .{ .num = Num.int_i32 } };
@@ -3950,7 +3950,7 @@ test "unify - compact int U8 and  Num(Int(I32)) (fails)" {
 test "unify - compact frac and Num(flex)" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const frac_f32 = Content{ .structure = .{ .num = Num.frac_f32 } };
@@ -3967,7 +3967,7 @@ test "unify - compact frac and Num(flex)" {
 test "unify - compact frac and Num(Frac(flex))" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const frac_f32 = Content{ .structure = .{ .num = Num.frac_f32 } };
@@ -3984,7 +3984,7 @@ test "unify - compact frac and Num(Frac(flex))" {
 test "unify - compact frac and Dec Num(Frac(Dec))" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const frac_dec = Content{ .structure = .{ .num = Num.frac_dec } };
@@ -4001,7 +4001,7 @@ test "unify - compact frac and Dec Num(Frac(Dec))" {
 test "unify - compact frac Dec and Num(Frac(F32)) (fails)" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const frac_f32 = Content{ .structure = .{ .num = Num.frac_f32 } };
@@ -4020,7 +4020,7 @@ test "unify - compact frac Dec and Num(Frac(F32)) (fails)" {
 test "unify - Num(rigid) and Num(rigid)" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const rigid = env.module_env.types.freshFromContent(env.mkRigidVar("b"));
@@ -4042,7 +4042,7 @@ test "unify - Num(rigid) and Num(rigid)" {
 test "unify - Num(rigid_a) and Num(rigid_b)" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const rigid_a = env.module_env.types.freshFromContent(env.mkRigidVar("a"));
@@ -4065,7 +4065,7 @@ test "unify - Num(rigid_a) and Num(rigid_b)" {
 test "unify - Num(Int(rigid)) and Num(Int(rigid))" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const rigid = env.module_env.types.freshFromContent(env.mkRigidVar("b"));
@@ -4088,7 +4088,7 @@ test "unify - Num(Int(rigid)) and Num(Int(rigid))" {
 test "unify - Num(Frac(rigid)) and Num(Frac(rigid))" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const rigid = env.module_env.types.freshFromContent(env.mkRigidVar("b"));
@@ -4117,7 +4117,7 @@ test "unify - Num(Frac(rigid)) and Num(Frac(rigid))" {
 test "unify - compact int U8 and Num(Int(rigid)) (fails)" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const int_u8 = Content{ .structure = .{ .num = Num.int_u8 } };
@@ -4134,7 +4134,7 @@ test "unify - compact int U8 and Num(Int(rigid)) (fails)" {
 test "unify - compact frac Dec and Num(Frac(rigid)) (fails)" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const frac_f32 = Content{ .structure = .{ .num = Num.frac_f32 } };
@@ -4153,7 +4153,7 @@ test "unify - compact frac Dec and Num(Frac(rigid)) (fails)" {
 test "unify - Num(Int(rigid)) and compact int U8 (fails)" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const int_u8 = Content{ .structure = .{ .num = Num.int_u8 } };
@@ -4170,7 +4170,7 @@ test "unify - Num(Int(rigid)) and compact int U8 (fails)" {
 test "unify - Num(Frac(rigid)) and compact frac Dec (fails)" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const frac_f32 = Content{ .structure = .{ .num = Num.frac_f32 } };
@@ -4189,7 +4189,7 @@ test "unify - Num(Frac(rigid)) and compact frac Dec (fails)" {
 test "unify - func are same" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const int_i32 = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
@@ -4215,7 +4215,7 @@ test "unify - func are same" {
 test "unify - funcs have diff return args (fail)" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const int_i32 = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
@@ -4234,7 +4234,7 @@ test "unify - funcs have diff return args (fail)" {
 test "unify - funcs have diff return types (fail)" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const int_i32 = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
@@ -4253,7 +4253,7 @@ test "unify - funcs have diff return types (fail)" {
 test "unify - same funcs pure" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const int_i32 = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
@@ -4279,7 +4279,7 @@ test "unify - same funcs pure" {
 test "unify - same funcs effectful" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const int_i32 = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
@@ -4305,7 +4305,7 @@ test "unify - same funcs effectful" {
 test "unify - same funcs first eff, second pure (fail)" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const int_i32 = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
@@ -4332,7 +4332,7 @@ test "unify - same funcs first eff, second pure (fail)" {
 test "unify - same funcs first pure, second eff" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const int_i32 = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_i32 } });
@@ -4359,7 +4359,7 @@ test "unify - same funcs first pure, second eff" {
 test "unify - a & b are both the same nominal type" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const arg_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_u8 } });
@@ -4382,7 +4382,7 @@ test "unify - a & b are both the same nominal type" {
 test "unify - a & b are diff nominal types (fail)" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const arg_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_u8 } });
@@ -4407,7 +4407,7 @@ test "unify - a & b are diff nominal types (fail)" {
 test "unify - a & b are both the same nominal type with diff args (fail)" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const arg_var = env.module_env.types.freshFromContent(Content{ .structure = .{ .num = Num.int_u8 } });
@@ -4434,7 +4434,7 @@ test "unify - a & b are both the same nominal type with diff args (fail)" {
 
 test "partitionFields - same record" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const field_x = env.mkRecordField("field_x", @enumFromInt(0));
@@ -4457,7 +4457,7 @@ test "partitionFields - same record" {
 
 test "partitionFields - disjoint fields" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const a1 = env.mkRecordField("a1", @enumFromInt(0));
@@ -4483,7 +4483,7 @@ test "partitionFields - disjoint fields" {
 
 test "partitionFields - overlapping fields" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const a1 = env.mkRecordField("a1", @enumFromInt(0));
@@ -4512,7 +4512,7 @@ test "partitionFields - overlapping fields" {
 
 test "partitionFields - reordering is normalized" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const f1 = env.mkRecordField("f1", @enumFromInt(0));
@@ -4541,7 +4541,7 @@ test "partitionFields - reordering is normalized" {
 
 test "unify - identical closed records" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
@@ -4566,7 +4566,7 @@ test "unify - identical closed records" {
 
 test "unify - closed record mismatch on diff fields (fail)" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
@@ -4593,7 +4593,7 @@ test "unify - closed record mismatch on diff fields (fail)" {
 
 test "unify - identical open records" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
@@ -4628,7 +4628,7 @@ test "unify - identical open records" {
 
 test "unify - open record a extends b" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
@@ -4675,7 +4675,7 @@ test "unify - open record a extends b" {
 
 test "unify - open record b extends a" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
@@ -4719,7 +4719,7 @@ test "unify - open record b extends a" {
 
 test "unify - both extend open record" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
@@ -4775,7 +4775,7 @@ test "unify - both extend open record" {
 
 test "unify - record mismatch on shared field (fail)" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
@@ -4803,7 +4803,7 @@ test "unify - record mismatch on shared field (fail)" {
 
 test "unify - open record extends closed (fail)" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
@@ -4823,7 +4823,7 @@ test "unify - open record extends closed (fail)" {
 
 test "unify - closed record extends open" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
@@ -4842,7 +4842,7 @@ test "unify - closed record extends open" {
 
 test "unify - open vs closed records with type mismatch (fail)" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
@@ -4865,7 +4865,7 @@ test "unify - open vs closed records with type mismatch (fail)" {
 
 test "unify - closed vs open records with type mismatch (fail)" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
@@ -4890,7 +4890,7 @@ test "unify - closed vs open records with type mismatch (fail)" {
 
 test "partitionTags - same tags" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const tag_x = env.mkTag("X", &[_]Var{@enumFromInt(0)});
@@ -4913,7 +4913,7 @@ test "partitionTags - same tags" {
 
 test "partitionTags - disjoint fields" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const a1 = env.mkTag("A1", &[_]Var{@enumFromInt(0)});
@@ -4939,7 +4939,7 @@ test "partitionTags - disjoint fields" {
 
 test "partitionTags - overlapping tags" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const a1 = env.mkTag("A", &[_]Var{@enumFromInt(0)});
@@ -4968,7 +4968,7 @@ test "partitionTags - overlapping tags" {
 
 test "partitionTags - reordering is normalized" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const f1 = env.mkTag("F1", &[_]Var{@enumFromInt(0)});
@@ -4997,7 +4997,7 @@ test "partitionTags - reordering is normalized" {
 
 test "unify - identical closed tag_unions" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
@@ -5031,7 +5031,7 @@ test "unify - identical closed tag_unions" {
 
 test "unify - closed tag_unions with diff args (fail)" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
@@ -5060,7 +5060,7 @@ test "unify - closed tag_unions with diff args (fail)" {
 
 test "unify - identical open tag unions" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
@@ -5100,7 +5100,7 @@ test "unify - identical open tag unions" {
 
 test "unify - open tag union a extends b" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
@@ -5153,7 +5153,7 @@ test "unify - open tag union a extends b" {
 
 test "unify - open tag union b extends a" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
@@ -5206,7 +5206,7 @@ test "unify - open tag union b extends a" {
 
 test "unify - both extend open tag union" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
@@ -5265,7 +5265,7 @@ test "unify - both extend open tag union" {
 
 test "unify - open tag unions a & b have same tag name with diff args (fail)" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
@@ -5293,7 +5293,7 @@ test "unify - open tag unions a & b have same tag name with diff args (fail)" {
 
 test "unify - open tag extends closed (fail)" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
@@ -5313,7 +5313,7 @@ test "unify - open tag extends closed (fail)" {
 
 test "unify - closed tag union extends open" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
@@ -5362,7 +5362,7 @@ test "unify - closed tag union extends open" {
 
 test "unify - open vs closed tag union with type mismatch (fail)" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
@@ -5385,7 +5385,7 @@ test "unify - open vs closed tag union with type mismatch (fail)" {
 
 test "unify - closed vs open tag union with type mismatch (fail)" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const str = env.module_env.types.freshFromContent(Content{ .structure = .str });
@@ -5410,7 +5410,7 @@ test "unify - closed vs open tag union with type mismatch (fail)" {
 
 test "unify - fails on infinite type" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const str_var = env.module_env.types.freshFromContent(Content{ .structure = .str });
@@ -5438,7 +5438,7 @@ test "unify - fails on infinite type" {
 
 test "unify - fails on anonymous recursion" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const list_var_a = env.module_env.types.fresh();
@@ -5466,7 +5466,7 @@ test "unify - fails on anonymous recursion" {
 
 test "unify - succeeds on nominal, tag union recursion" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     const a_nominal_type_var = env.module_env.types.fresh();
@@ -5495,7 +5495,7 @@ test "unify - succeeds on nominal, tag union recursion" {
 test "integer literal 255 fits in U8" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     // Create a literal with value 255 (8 bits unsigned)
@@ -5516,7 +5516,7 @@ test "integer literal 255 fits in U8" {
 test "integer literal 256 does not fit in U8" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     // Create a literal with value 256 (9 bits, no sign)
@@ -5537,7 +5537,7 @@ test "integer literal 256 does not fit in U8" {
 test "integer literal -128 fits in I8" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     // Create a literal with value -128 (needs sign, 7 bits after adjustment)
@@ -5558,7 +5558,7 @@ test "integer literal -128 fits in I8" {
 test "integer literal -129 does not fit in I8" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     // Create a literal with value -129 (needs sign, 8 bits)
@@ -5579,7 +5579,7 @@ test "integer literal -129 does not fit in I8" {
 test "negative literal cannot unify with unsigned type" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     // Create a literal with negative value (sign needed)
@@ -5600,7 +5600,7 @@ test "negative literal cannot unify with unsigned type" {
 test "float literal that fits in F32" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     // Create a literal that fits in F32
@@ -5621,7 +5621,7 @@ test "float literal that fits in F32" {
 test "float literal that doesn't fit in F32" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     // Create a literal that doesn't fit in F32
@@ -5642,7 +5642,7 @@ test "float literal that doesn't fit in F32" {
 test "float literal NaN doesn't fit in Dec" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     // Create a literal like NaN that doesn't fit in Dec
@@ -5663,7 +5663,7 @@ test "float literal NaN doesn't fit in Dec" {
 test "two integer literals with different requirements unify to most restrictive" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     // Create a literal with value 100 (7 bits, no sign)
@@ -5688,7 +5688,7 @@ test "two integer literals with different requirements unify to most restrictive
 test "positive and negative literals unify with sign requirement" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     // Create an unsigned literal
@@ -5713,7 +5713,7 @@ test "positive and negative literals unify with sign requirement" {
 test "unify - num_unbound with frac_unbound" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     // Create a num_unbound (like literal 1)
@@ -5755,7 +5755,7 @@ test "unify - num_unbound with frac_unbound" {
 test "unify - frac_unbound with num_unbound (reverse order)" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     // Create a frac_unbound (like literal 2.5)
@@ -5797,7 +5797,7 @@ test "unify - frac_unbound with num_unbound (reverse order)" {
 test "unify - int_unbound with num_unbound" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     // Create an int_unbound (like literal -5)
@@ -5842,7 +5842,7 @@ test "unify - int_unbound with num_unbound" {
 test "unify - num_unbound with int_unbound (reverse order)" {
     const gpa = std.testing.allocator;
 
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     // Create a num_unbound (like literal 1)
@@ -5886,7 +5886,7 @@ test "unify - num_unbound with int_unbound (reverse order)" {
 
 test "heterogeneous list reports only first incompatibility" {
     const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
+    var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     // Create a list type with three different elements

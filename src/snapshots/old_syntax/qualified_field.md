@@ -27,5 +27,5 @@ One
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.4 (type "[One]*"))
+(expr @1.1-1.4 (type "[One]a"))
 ~~~

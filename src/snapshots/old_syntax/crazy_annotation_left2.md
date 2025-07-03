@@ -26,10 +26,10 @@ This expression is used in an unexpected way:
 ^
 
 It is of type:
-    _Num(*)_
+    _Num(a)_
 
 But you are trying to use it as:
-    _* -> *_
+    _a -> b_
 
 # TOKENS
 ~~~zig
@@ -72,5 +72,5 @@ LowerIdent(6:1-6:2),EndOfFile(6:2-6:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-5.2 (type "*"))
+(expr @1.1-5.2 (type "a"))
 ~~~

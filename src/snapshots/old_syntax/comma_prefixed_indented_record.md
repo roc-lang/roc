@@ -41,5 +41,5 @@ Model
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.6 (type "[Model]*"))
+(expr @1.1-1.6 (type "[Model]a"))
 ~~~

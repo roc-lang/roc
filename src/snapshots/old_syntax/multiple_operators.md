@@ -35,5 +35,5 @@ Int(1:1-1:3),OpStar(1:3-1:4),Int(1:4-1:6),OpPlus(1:6-1:7),Int(1:7-1:10),EndOfFil
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.10 (type "*"))
+(expr @1.1-1.10 (type "a"))
 ~~~

@@ -31,5 +31,5 @@ Blah
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.5 (type "[Blah]*"))
+(expr @1.1-1.5 (type "[Blah]a"))
 ~~~

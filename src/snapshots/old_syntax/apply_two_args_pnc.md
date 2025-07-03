@@ -36,5 +36,5 @@ whee(12, 34)
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.14 (type "*"))
+(expr @1.1-1.14 (type "a"))
 ~~~

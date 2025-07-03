@@ -204,8 +204,8 @@ t = 0
 (inferred-types
 	(defs
 		(patt @4.5-4.6 (type "Error"))
-		(patt @7.5-7.6 (type "Num(*)")))
+		(patt @7.5-7.6 (type "Num(a)")))
 	(expressions
 		(expr @1.1-1.1 (type "Error"))
-		(expr @7.8-7.9 (type "Num(*)"))))
+		(expr @7.8-7.9 (type "Num(a)"))))
 ~~~

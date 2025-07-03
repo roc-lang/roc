@@ -64,5 +64,5 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-5.2 (type "*"))
+(expr @1.1-5.2 (type "a"))
 ~~~

@@ -31,5 +31,5 @@ J
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.2 (type "[J]*"))
+(expr @1.1-1.2 (type "[J]a"))
 ~~~

@@ -1026,8 +1026,6 @@ pub fn toSexprTypesStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr
     var type_string_buf = std.ArrayList(u8).init(gpa);
     defer type_string_buf.deinit();
 
-    var type_writer = types.writers.TypeWriter.init(type_string_buf.writer(), ir.env);
-
     if (maybe_expr_idx) |expr_idx| {
         const expr_var = @as(types.Var, @enumFromInt(@intFromEnum(expr_idx)));
 
@@ -1040,11 +1038,9 @@ pub fn toSexprTypesStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr
             const unknown_node = SExpr.init(gpa, "unknown");
             expr_node.appendNode(gpa, &unknown_node);
         } else {
-            if (type_writer.writeVar(expr_var)) {
-                expr_node.appendStringAttr(gpa, "type", type_string_buf.items);
-            } else |err| {
-                exitOnOom(err);
-            }
+            const type_str = try types.writers.writeType(gpa, expr_var, ir.env);
+            defer gpa.free(type_str);
+            expr_node.appendStringAttr(gpa, "type", type_str);
         }
 
         expr_node.toStringPretty(writer);
@@ -1071,10 +1067,10 @@ pub fn toSexprTypesStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr
                     // Each definition has a type_var at its node index which represents the type of the definition
                     const def_var = try ir.idxToTypeVar(&ir.env.types, def_idx);
 
-                    // Clear the buffer and write the type
-                    type_string_buf.clearRetainingCapacity();
-                    try type_writer.writeVar(def_var);
-                    def_node.appendStringAttr(gpa, "type", type_string_buf.items);
+                    // Write the type with generated names
+                    const type_str = try types.writers.writeType(gpa, def_var, ir.env);
+                    defer gpa.free(type_str);
+                    def_node.appendStringAttr(gpa, "type", type_str);
 
                     defs_node.appendNode(gpa, &def_node);
                 },
@@ -1106,10 +1102,10 @@ pub fn toSexprTypesStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr
                 const unknown_node = SExpr.init(gpa, "unknown");
                 expr_node.appendNode(gpa, &unknown_node);
             } else {
-                // Clear the buffer and write the type
-                type_string_buf.clearRetainingCapacity();
-                try type_writer.writeVar(expr_var);
-                expr_node.appendStringAttr(gpa, "type", type_string_buf.items);
+                // Write the type with generated names
+                const type_str = try types.writers.writeType(gpa, expr_var, ir.env);
+                defer gpa.free(type_str);
+                expr_node.appendStringAttr(gpa, "type", type_str);
             }
 
             expressions_node.appendNode(gpa, &expr_node);

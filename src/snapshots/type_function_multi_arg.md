@@ -45,7 +45,7 @@ It is of type:
     _a, b -> c_
 
 But you are trying to use it as:
-    _*, *, *, * -> * -> * -> * -> *_
+    _a, b, a, b -> c -> d -> e -> f_
 
 # TOKENS
 ~~~zig
@@ -153,8 +153,8 @@ main! = |_| {}
 (inferred-types
 	(defs
 		(patt @4.1-4.6 (type "Error"))
-		(patt @6.1-6.6 (type "* -> {}")))
+		(patt @6.1-6.6 (type "a -> {}")))
 	(expressions
 		(expr @4.9-4.30 (type "Error"))
-		(expr @6.9-6.15 (type "* -> {}"))))
+		(expr @6.9-6.15 (type "a -> {}"))))
 ~~~

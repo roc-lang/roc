@@ -50,5 +50,5 @@ Int(3:1-3:2),CloseRound(3:2-3:3),CloseRound(3:3-3:4),EndOfFile(3:4-3:4),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-3.2 (type "*"))
+(expr @1.1-3.2 (type "a"))
 ~~~

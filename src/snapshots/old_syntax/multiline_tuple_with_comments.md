@@ -66,5 +66,5 @@ CloseRound(13:1-13:2),EndOfFile(13:2-13:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-13.2 (type "(Num(*), Num(*), Num(*))"))
+(expr @1.1-13.2 (type "(Num(a), Num(b), Num(c))"))
 ~~~

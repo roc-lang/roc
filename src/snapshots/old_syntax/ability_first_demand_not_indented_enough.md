@@ -33,5 +33,5 @@ MEq
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.4 (type "[MEq]*"))
+(expr @1.1-1.4 (type "[MEq]a"))
 ~~~

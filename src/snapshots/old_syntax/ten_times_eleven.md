@@ -31,5 +31,5 @@ Int(1:1-1:3),OpStar(1:3-1:4),Int(1:4-1:6),EndOfFile(1:6-1:6),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.6 (type "*"))
+(expr @1.1-1.6 (type "a"))
 ~~~

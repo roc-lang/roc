@@ -326,5 +326,5 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-19.2 (type "*"))
+(expr @1.1-19.2 (type "a"))
 ~~~

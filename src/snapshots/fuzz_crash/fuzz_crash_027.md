@@ -629,10 +629,10 @@ This expression is used in an unexpected way:
  ^^^^^^^^^^
 
 It is of type:
-    _*, * -> Error_
+    _c, d -> Error_
 
 But you are trying to use it as:
-    _* -> *_
+    _a -> b_
 
 # TOKENS
 ~~~zig
@@ -1826,12 +1826,12 @@ main! = |_| { # Yeah Ie
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @45.1-45.4 (type "[False, True] -> Num(*)"))
+		(patt @45.1-45.4 (type "[False, True] -> Num(a)"))
 		(patt @48.1-48.8 (type "Error -> U64"))
 		(patt @60.1-60.11 (type "Error"))
 		(patt @100.1-100.6 (type "Error -> Error")))
 	(expressions
-		(expr @45.7-47.8 (type "[False, True] -> Num(*)"))
+		(expr @45.7-47.8 (type "[False, True] -> Num(a)"))
 		(expr @48.11-58.2 (type "Error -> U64"))
 		(expr @60.14-96.7 (type "Error"))
 		(expr @100.9-159.2 (type "Error -> Error"))))

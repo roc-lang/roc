@@ -31,5 +31,5 @@ Zx
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.3 (type "[Zx]*"))
+(expr @1.1-1.3 (type "[Zx]a"))
 ~~~

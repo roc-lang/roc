@@ -20,10 +20,10 @@ This expression is used in an unexpected way:
    ^
 
 It is of type:
-    _Num(*)_
+    _Num(b)_
 
 But you are trying to use it as:
-    _Num(*) -> *_
+    _Num(a) -> a_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -34,10 +34,10 @@ This expression is used in an unexpected way:
 ^
 
 It is of type:
-    _Num(*)_
+    _Num(a)_
 
 But you are trying to use it as:
-    _(*) -> *_
+    _(b) -> c_
 
 # TOKENS
 ~~~zig
@@ -77,5 +77,5 @@ LowerIdent(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-3.3 (type "*"))
+(expr @1.1-3.3 (type "a"))
 ~~~

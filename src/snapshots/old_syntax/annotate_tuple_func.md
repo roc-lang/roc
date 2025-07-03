@@ -31,5 +31,5 @@ UpperIdent(3:1-3:3),EndOfFile(3:3-3:3),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.2 (type "Num(*)"))
+(expr @1.1-1.2 (type "Num(a)"))
 ~~~

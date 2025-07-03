@@ -252,15 +252,15 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.15 (type "Num(*) -> Num(*)"))
-		(patt @7.1-7.16 (type "Num(*) -> Num(*)"))
-		(patt @10.1-10.18 (type "Num(*) -> Num(*)"))
-		(patt @13.1-13.13 (type "Num(*) -> *"))
-		(patt @15.1-15.6 (type "* -> *")))
+		(patt @4.1-4.15 (type "Num(a) -> Num(b)"))
+		(patt @7.1-7.16 (type "Num(a) -> Num(b)"))
+		(patt @10.1-10.18 (type "Num(a) -> Num(b)"))
+		(patt @13.1-13.13 (type "Num(a) -> b"))
+		(patt @15.1-15.6 (type "a -> b")))
 	(expressions
-		(expr @4.18-4.24 (type "Num(*) -> Num(*)"))
-		(expr @7.19-7.34 (type "Num(*) -> Num(*)"))
-		(expr @10.21-10.35 (type "Num(*) -> Num(*)"))
-		(expr @13.16-15.6 (type "Num(*) -> *"))
-		(expr @15.9-21.2 (type "* -> *"))))
+		(expr @4.18-4.24 (type "Num(a) -> Num(b)"))
+		(expr @7.19-7.34 (type "Num(a) -> Num(b)"))
+		(expr @10.21-10.35 (type "Num(a) -> Num(b)"))
+		(expr @13.16-15.6 (type "Num(a) -> b"))
+		(expr @15.9-21.2 (type "a -> b"))))
 ~~~

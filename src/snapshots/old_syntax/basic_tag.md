@@ -27,5 +27,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.5 (type "[Whee]*"))
+(expr @1.1-1.5 (type "[Whee]a"))
 ~~~

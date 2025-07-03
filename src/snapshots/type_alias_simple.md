@@ -24,7 +24,7 @@ getUser = |id| if (id > 10) "big" else "small"
                   ^^^^^^^^^
 
 Right now, it has the type:
-    _(*)_
+    _(a)_
 
 Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
 
@@ -37,7 +37,7 @@ getUser = |id| if (id > 10) "big" else "small"
                   ^^^^^^^^^
 
 Right now, it has the type:
-    _(*)_
+    _(b)_
 
 Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
 
@@ -145,9 +145,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.8 (type "Num(*) -> Str"))
-		(patt @8.1-8.6 (type "* -> Str")))
+		(patt @6.1-6.8 (type "Num(a) -> Str"))
+		(patt @8.1-8.6 (type "a -> Str")))
 	(expressions
-		(expr @1.1-1.1 (type "Num(*) -> Str"))
-		(expr @8.9-8.25 (type "* -> Str"))))
+		(expr @1.1-1.1 (type "Num(a) -> Str"))
+		(expr @8.9-8.25 (type "a -> Str"))))
 ~~~

@@ -234,11 +234,11 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @9.1-9.11 (type "Num(*), Str, Num(*) -> { id: Num(*), name: Str, age: Num(*) }"))
+		(patt @9.1-9.11 (type "Num(a), Str, Num(b) -> { id: Num(c), name: Str, age: Num(d) }"))
 		(patt @12.1-12.12 (type "{ name: UserName } -> UserName"))
-		(patt @14.1-14.6 (type "* -> UserName")))
+		(patt @14.1-14.6 (type "a -> UserName")))
 	(expressions
-		(expr @9.14-9.47 (type "Num(*), Str, Num(*) -> { id: Num(*), name: Str, age: Num(*) }"))
+		(expr @9.14-9.47 (type "Num(a), Str, Num(b) -> { id: Num(c), name: Str, age: Num(d) }"))
 		(expr @12.15-14.6 (type "{ name: UserName } -> UserName"))
-		(expr @14.9-17.2 (type "* -> UserName"))))
+		(expr @14.9-17.2 (type "a -> UserName"))))
 ~~~

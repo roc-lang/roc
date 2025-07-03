@@ -16,4 +16,7 @@ test {
     testing.refAllDeclsRecursive(@import("layout/layout.zig"));
     testing.refAllDeclsRecursive(@import("layout/store.zig"));
     testing.refAllDeclsRecursive(@import("layout/store_test.zig"));
+    testing.refAllDeclsRecursive(@import("types/var_name_gen.zig"));
+    testing.refAllDeclsRecursive(@import("check/check_types/snapshot_test.zig"));
+    testing.refAllDeclsRecursive(@import("types/test_writer_output.zig"));
 }

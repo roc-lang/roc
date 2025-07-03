@@ -46,5 +46,5 @@ Int(1:1-1:2),OpStar(1:3-1:4),KwIf(1:5-1:7),UpperIdent(1:8-1:12),NoSpaceDotLowerI
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.29 (type "*"))
+(expr @1.1-1.29 (type "a"))
 ~~~

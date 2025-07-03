@@ -107,5 +107,5 @@ CloseSquare(12:1-12:2),EndOfFile(12:2-12:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-12.2 (type "List([None, Nothing]*)"))
+(expr @1.1-12.2 (type "List([None, Nothing]a)"))
 ~~~

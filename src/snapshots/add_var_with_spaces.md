@@ -52,7 +52,7 @@ add2 = x + 2
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.5 (type "*")))
+		(patt @3.1-3.5 (type "a")))
 	(expressions
-		(expr @3.8-3.18 (type "*"))))
+		(expr @3.8-3.18 (type "a"))))
 ~~~

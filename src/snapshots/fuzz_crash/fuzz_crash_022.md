@@ -202,9 +202,9 @@ ain! = |_| getUser(900)
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.8 (type "Num(*) -> Str"))
-		(patt @8.2-8.6 (type "* -> Str")))
+		(patt @6.1-6.8 (type "Num(a) -> Str"))
+		(patt @8.2-8.6 (type "a -> Str")))
 	(expressions
-		(expr @1.1-1.1 (type "Num(*) -> Str"))
-		(expr @8.9-8.25 (type "* -> Str"))))
+		(expr @1.1-1.1 (type "Num(a) -> Str"))
+		(expr @8.9-8.25 (type "a -> Str"))))
 ~~~

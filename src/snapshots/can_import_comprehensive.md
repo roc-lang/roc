@@ -238,7 +238,7 @@ main = {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @7.1-7.5 (type "(*, *, *, *, *, *, *, *)")))
+		(patt @7.1-7.5 (type "(a, b, c, d, e, f, g, h)")))
 	(expressions
-		(expr @7.8-35.2 (type "(*, *, *, *, *, *, *, *)"))))
+		(expr @7.8-35.2 (type "(a, b, c, d, e, f, g, h)"))))
 ~~~

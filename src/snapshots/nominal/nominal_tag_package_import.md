@@ -92,7 +92,7 @@ blue = CC(0, 0, 255)
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @8.1-8.5 (type "[CC]*")))
+		(patt @8.1-8.5 (type "[CC]a")))
 	(expressions
-		(expr @8.8-8.10 (type "[CC]*"))))
+		(expr @8.8-8.10 (type "[CC]a"))))
 ~~~

@@ -34,5 +34,5 @@ x - 2
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.4 (type "*"))
+(expr @1.1-1.4 (type "a"))
 ~~~

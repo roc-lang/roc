@@ -41,5 +41,5 @@ UpperIdent(4:9-4:12),OpArrow(4:13-4:15),Int(4:16-4:17),EndOfFile(4:17-4:17),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-2.13 (type "*"))
+(expr @1.1-2.13 (type "a"))
 ~~~

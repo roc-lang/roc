@@ -100,7 +100,7 @@ empty = ConsList
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.6 (type "[ConsList]*")))
+		(patt @6.1-6.6 (type "[ConsList]a")))
 	(expressions
-		(expr @6.9-6.17 (type "[ConsList]*"))))
+		(expr @6.9-6.17 (type "[ConsList]a"))))
 ~~~

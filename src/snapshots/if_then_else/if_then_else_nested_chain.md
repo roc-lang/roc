@@ -128,7 +128,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @3.1-3.12 (type "* -> Str")))
+		(patt @3.1-3.12 (type "a -> Str")))
 	(expressions
-		(expr @3.15-13.2 (type "* -> Str"))))
+		(expr @3.15-13.2 (type "a -> Str"))))
 ~~~
