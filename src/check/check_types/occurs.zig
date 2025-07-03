@@ -177,10 +177,6 @@ const CheckOccurs = struct {
                             const elems = self.types_store.getTupleElemsSlice(tuple.elems);
                             try self.occursSubVars(root, elems, ctx);
                         },
-                        .tuple_unbound => |tuple| {
-                            const elems = self.types_store.getTupleElemsSlice(tuple.elems);
-                            try self.occursSubVars(root, elems, ctx);
-                        },
                         .num => {},
                         .nominal_type => |nominal_type| {
                             // Check all argument vars using iterator

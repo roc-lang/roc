@@ -631,30 +631,6 @@ pub const Store = struct {
                         current = self.types_store.resolveVar(last_pending_field.var_);
                         continue :outer;
                     },
-                    .tuple_unbound => |tuple_type| {
-                        const num_fields = try self.gatherTupleFields(tuple_type);
-
-                        if (num_fields == 0) {
-                            continue :flat_type .empty_record; // Empty tuple is like empty record
-                        }
-
-                        try self.work.pending_containers.append(self.env.gpa, .{
-                            .var_ = current.var_,
-                            .container = .{
-                                .tuple = .{
-                                    .num_fields = @intCast(num_fields),
-                                    .pending_fields = @intCast(num_fields),
-                                    .resolved_fields_start = @intCast(self.work.resolved_tuple_fields.len),
-                                },
-                            },
-                        });
-
-                        // Start working on the last pending field (we want to pop them).
-                        const last_field_idx = self.work.pending_tuple_fields.len - 1;
-                        const last_pending_field = self.work.pending_tuple_fields.get(last_field_idx);
-                        current = self.types_store.resolveVar(last_pending_field.var_);
-                        continue :outer;
-                    },
                     .fn_pure => |func| {
                         // TODO
                         _ = func;

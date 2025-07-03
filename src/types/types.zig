@@ -216,7 +216,6 @@ pub const FlatType = union(enum) {
     record_unbound: RecordField.SafeMultiList.Range,
     record_poly: struct { record: Record, var_: Var },
     tuple: Tuple,
-    tuple_unbound: Tuple,
     num: Num,
     nominal_type: NominalType,
     fn_pure: Func,
