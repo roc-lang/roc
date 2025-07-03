@@ -799,8 +799,10 @@ const Unifier = struct {
                             b_gathered_range,
                         );
 
-                        // Check that they have the same fields
-                        if (partitioned.only_in_a.len() > 0 or partitioned.only_in_b.len() > 0) {
+                        // record_unbound requires at least its fields to be present in the record
+                        // The record can have additional fields (that's what makes it extensible)
+                        if (partitioned.only_in_b.len() > 0) {
+                            // The record_unbound has fields that the record doesn't have
                             return error.TypeMismatch;
                         }
 
@@ -813,7 +815,7 @@ const Unifier = struct {
                             a_gathered_fields.ext,
                         );
 
-                        // Record wins (keeps its extension)
+                        // Record wins (keeps its extension and any extra fields)
                         self.merge(vars, vars.a.desc.content);
                     },
                     .record_poly => |b_poly| {
@@ -852,8 +854,10 @@ const Unifier = struct {
                             b_gathered_fields.range,
                         );
 
-                        // Check that they have the same fields
-                        if (partitioned.only_in_a.len() > 0 or partitioned.only_in_b.len() > 0) {
+                        // record_unbound requires at least its fields to be present in the record
+                        // The record can have additional fields (that's what makes it extensible)
+                        if (partitioned.only_in_a.len() > 0) {
+                            // The record_unbound has fields that the record doesn't have
                             return error.TypeMismatch;
                         }
 
