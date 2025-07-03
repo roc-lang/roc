@@ -142,12 +142,6 @@ test "NodeStore round trip - Expressions" {
     defer expressions.deinit();
 
     try expressions.append(CIR.Expr{
-        .e_num = .{
-            .region = from_raw_offsets(123, 345),
-            .value = CIR.IntValue.placeholder(),
-        },
-    });
-    try expressions.append(CIR.Expr{
         .e_int = .{
             .region = from_raw_offsets(234, 345),
             .value = CIR.IntValue.placeholder(),
@@ -247,17 +241,6 @@ test "NodeStore round trip - Expressions" {
         },
     });
     try expressions.append(CIR.Expr{
-        .e_record_access = .{
-            .record_var = @enumFromInt(1678),
-            .ext_var = @enumFromInt(1789),
-            .field_var = @enumFromInt(1890),
-            .loc_expr = @enumFromInt(1901),
-            .field = @bitCast(@as(u32, 2012)),
-            .region = from_raw_offsets(1890, 2123),
-        },
-    });
-
-    try expressions.append(CIR.Expr{
         .e_tag = .{
             .ext_var = @enumFromInt(2012),
             .name = @bitCast(@as(u32, 2123)),
@@ -265,7 +248,6 @@ test "NodeStore round trip - Expressions" {
             .region = from_raw_offsets(1901, 2234),
         },
     });
-
     try expressions.append(CIR.Expr{
         .e_zero_argument_tag = .{
             .closure_name = @bitCast(@as(u32, 2234)),
@@ -275,7 +257,6 @@ test "NodeStore round trip - Expressions" {
             .region = from_raw_offsets(2012, 2345),
         },
     });
-
     try expressions.append(CIR.Expr{
         .e_lambda = .{
             .args = CIR.Pattern.Span{ .span = base.DataSpan.init(1012, 1345) },
@@ -283,7 +264,6 @@ test "NodeStore round trip - Expressions" {
             .region = from_raw_offsets(2123, 2456),
         },
     });
-
     try expressions.append(CIR.Expr{
         .e_binop = CIR.Expr.Binop.init(
             .add,
@@ -314,7 +294,6 @@ test "NodeStore round trip - Expressions" {
             .region = from_raw_offsets(2567, 2890),
         },
     });
-
     for (expressions.items) |expr| {
         const idx = store.addExpr(expr);
         const retrieved = store.getExpr(idx);

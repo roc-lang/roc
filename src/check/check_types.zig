@@ -693,7 +693,6 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
     const expr = self.can_ir.store.getExpr(expr_idx);
     var does_fx = false; // Does this expression potentially perform any side effects?
     switch (expr) {
-        .e_num => |_| {},
         .e_int => |_| {},
         .e_frac_f64 => |_| {},
         .e_frac_dec => |_| {},
@@ -863,7 +862,6 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             }
         },
         .e_empty_record => |_| {},
-        .e_record_access => |_| {},
         .e_tag => |_| {},
         .e_zero_argument_tag => |_| {},
         .e_binop => |_| {},

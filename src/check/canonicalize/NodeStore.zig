@@ -96,7 +96,7 @@ pub fn deinit(store: *NodeStore) void {
 /// Count of the diagnostic nodes in the CIR
 pub const CIR_DIAGNOSTIC_NODE_COUNT = 31;
 /// Count of the expression nodes in the CIR
-pub const CIR_EXPR_NODE_COUNT = 25;
+pub const CIR_EXPR_NODE_COUNT = 23;
 /// Count of the statement nodes in the CIR
 pub const CIR_STATEMENT_NODE_COUNT = 11;
 /// Count of the type annotation nodes in the CIR
@@ -288,17 +288,6 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 },
             };
         },
-        .expr_num => {
-            // Read i128 from extra_data (stored as 4 u32s in data_1)
-            const value_as_u32s = store.extra_data.items[node.data_1..][0..4];
-
-            return CIR.Expr{
-                .e_num = .{
-                    .value = .{ .bytes = @bitCast(value_as_u32s.*), .kind = .i128 },
-                    .region = node.region,
-                },
-            };
-        },
         .expr_list => {
             return CIR.Expr{
                 .e_list = .{
@@ -473,27 +462,6 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                     .region = node.region,
                     .branches = .{ .span = .{ .start = branches_start, .len = branches_len } },
                     .exhaustive = exhaustive,
-                },
-            };
-        },
-        .expr_field_access => {
-            const extra_start = node.data_1;
-            const extra_data = store.extra_data.items[extra_start..];
-
-            const record_var = @as(types.Var, @enumFromInt(extra_data[0]));
-            const ext_var = @as(types.Var, @enumFromInt(extra_data[1]));
-            const field_var = @as(types.Var, @enumFromInt(extra_data[2]));
-            const loc_expr = @as(CIR.Expr.Idx, @enumFromInt(extra_data[3]));
-            const field = @as(Ident.Idx, @bitCast(extra_data[4]));
-
-            return CIR.Expr{
-                .e_record_access = .{
-                    .record_var = record_var,
-                    .ext_var = ext_var,
-                    .field_var = field_var,
-                    .loc_expr = loc_expr,
-                    .field = field,
-                    .region = node.region,
                 },
             };
         },
@@ -1315,24 +1283,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             node.data_1 = @intFromEnum(e.diagnostic);
             node.tag = .malformed;
         },
-        .e_num => |e| {
-            node.region = e.region;
-            node.tag = .expr_num;
-
-            // Store i128 value in extra_data
-            const extra_data_start = store.extra_data.items.len;
-
-            // Store the IntLiteralValue as i128 (16 bytes = 4 u32s)
-            // We always store as i128 internally
-            const value_as_i128: i128 = @bitCast(e.value.bytes);
-            const value_as_u32s: [4]u32 = @bitCast(value_as_i128);
-            for (value_as_u32s) |word| {
-                store.extra_data.append(store.gpa, word) catch |err| exitOnOom(err);
-            }
-
-            // Store the extra_data index in data_1
-            node.data_1 = @intCast(extra_data_start);
-        },
         .e_match => |e| {
             node.region = e.region;
             node.tag = .expr_match;
@@ -1387,19 +1337,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
         .e_empty_record => |e| {
             node.region = e.region;
             node.tag = .expr_empty_record;
-        },
-        .e_record_access => |e| {
-            node.region = e.region;
-            node.tag = .expr_field_access;
-
-            // Store record access data in extra_data
-            const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
-            store.extra_data.append(store.gpa, @intFromEnum(e.record_var)) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @intFromEnum(e.ext_var)) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @intFromEnum(e.field_var)) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @intFromEnum(e.loc_expr)) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @bitCast(e.field)) catch |err| exitOnOom(err);
-            node.data_1 = extra_data_start;
         },
         .e_zero_argument_tag => |e| {
             node.region = e.region;

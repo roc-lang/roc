@@ -5511,15 +5511,15 @@ test "numeric literal patterns use pattern idx as type var" {
         var cir = CIR.init(&env);
         defer cir.deinit();
 
-        // Create an f64 literal pattern directly
-        const f64_pattern = CIR.Pattern{
-            .f64_literal = .{
-                .value = 3.14,
+        // Create a dec literal pattern directly
+        const dec_pattern = CIR.Pattern{
+            .dec_literal = .{
+                .value = RocDec.fromF64(3.14) orelse unreachable,
                 .region = Region.zero(),
             },
         };
 
-        const pattern_idx = try cir.store.addPattern(f64_pattern);
+        const pattern_idx = try cir.store.addPattern(dec_pattern);
 
         // Set the type variable for the pattern
         _ = cir.setTypeVarAtPat(pattern_idx, Content{
@@ -5531,8 +5531,9 @@ test "numeric literal patterns use pattern idx as type var" {
 
         // Verify the stored pattern
         const stored_pattern = cir.store.getPattern(pattern_idx);
-        try std.testing.expect(stored_pattern == .f64_literal);
-        try std.testing.expectApproxEqAbs(@as(f64, 3.14), stored_pattern.f64_literal.value, 0.001);
+        try std.testing.expect(stored_pattern == .dec_literal);
+        const expected_dec = RocDec.fromF64(3.14) orelse unreachable;
+        try std.testing.expectEqual(expected_dec.num, stored_pattern.dec_literal.value.num);
 
         // Verify the pattern index can be used as a type variable
         const pattern_as_type_var: types.Var = @enumFromInt(@intFromEnum(pattern_idx));
@@ -5753,8 +5754,8 @@ test "numeric pattern types: unbound vs polymorphic" {
         defer cir.deinit();
 
         const pattern = CIR.Pattern{
-            .f64_literal = .{
-                .value = 2.5,
+            .dec_literal = .{
+                .value = RocDec.fromF64(2.5) orelse unreachable,
                 .region = Region.zero(),
             },
         };
@@ -6074,8 +6075,8 @@ test "numeric pattern types: unbound vs polymorphic - frac" {
         defer cir.deinit();
 
         const pattern = CIR.Pattern{
-            .f64_literal = .{
-                .value = std.math.inf(f64),
+            .dec_literal = .{
+                .value = RocDec.fromF64(1000000.0) orelse unreachable,
                 .region = Region.zero(),
             },
         };
@@ -6209,28 +6210,17 @@ test "pattern numeric literal value edge cases" {
         var cir = CIR.init(&env);
         defer cir.deinit();
 
-        // Test NaN
-        const nan_pattern = CIR.Pattern{
-            .f64_literal = .{
-                .value = std.math.nan(f64),
-                .region = Region.zero(),
-            },
-        };
-        const nan_idx = try cir.store.addPattern(nan_pattern);
-        const stored_nan = cir.store.getPattern(nan_idx);
-        try std.testing.expect(std.math.isNan(stored_nan.f64_literal.value));
-
-        // Test negative zero
+        // Test negative zero (RocDec doesn't distinguish between +0 and -0)
         const neg_zero_pattern = CIR.Pattern{
-            .f64_literal = .{
-                .value = -0.0,
+            .dec_literal = .{
+                .value = RocDec.fromF64(-0.0) orelse unreachable,
                 .region = Region.zero(),
             },
         };
         const neg_zero_idx = try cir.store.addPattern(neg_zero_pattern);
         const stored_neg_zero = cir.store.getPattern(neg_zero_idx);
-        try std.testing.expect(std.math.signbit(stored_neg_zero.f64_literal.value));
-        try std.testing.expectEqual(@as(f64, -0.0), stored_neg_zero.f64_literal.value);
+        try std.testing.expect(stored_neg_zero == .dec_literal);
+        try std.testing.expectEqual(@as(i128, 0), stored_neg_zero.dec_literal.value.num);
     }
 }
 

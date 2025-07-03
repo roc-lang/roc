@@ -1,4 +1,24 @@
-//! TODO Module Documentation
+//! Expression constructs used in Roc's canonicalization phase.
+//!
+//! This module defines the `Expr` union which represents all possible expressions
+//! in Roc's canonical intermediate representation (CIR). These expressions are
+//! created during the canonicalization phase and represent the semantic meaning
+//! of parsed code after semantic analysis.
+//!
+//! Expression types include:
+//! - Literals: numbers, strings, lists, records, tuples
+//! - Operations: function calls, binary operations, field access
+//! - Control flow: if expressions, match expressions, blocks
+//! - Variables: local lookups, external lookups (defined in another motdule)
+//! - Advanced: lambdas, tags, error handling
+//!
+//! Examples of expressions:
+//! - `42` - integer literal
+//! - `"hello"` - string literal
+//! - `[1, 2, 3]` - list literal
+//! - `{ name: "Alice", age: 30 }` - record literal
+//! - `add(5, 3)` - function call
+//! - `if x > 0 "positive" else "non-positive"` - conditional
 
 const std = @import("std");
 const base = @import("../../base.zig");
@@ -23,24 +43,53 @@ const If = CIR.If;
 const RecordField = CIR.RecordField;
 const Statement = CIR.Statement;
 
-/// An expression that has been canonicalized.
+/// An expression in the Roc language.
 pub const Expr = union(enum) {
-    e_num: struct {
-        value: IntValue,
-        region: Region,
-    },
+    /// An integer literal with a specific value.
+    /// Represents whole numbers in various bases (decimal, hex, octal, binary).
+    ///
+    /// ```roc
+    /// 42          # Decimal integer
+    /// 0xFF        # Hexadecimal integer
+    /// 0o755       # Octal integer
+    /// 0b1010      # Binary integer
+    /// ```
     e_int: struct {
         value: IntValue,
         region: Region,
     },
+    /// A 64-bit floating-point literal.
+    /// Used for approximate decimal representations when F64 type is explicitly required for increased performance.
+    ///
+    /// ```roc
+    /// 3.14f64     # Explicit F64 literal
+    /// 2.5e10f64   # Scientific notation F64
+    /// ```
     e_frac_f64: struct {
         value: f64,
         region: Region,
     },
+    /// A high-precision decimal literal.
+    /// Used for exact decimal arithmetic without floating-point precision issues.
+    /// Roc's preferred numeric type for most decimal calculations.
+    ///
+    /// ```roc
+    /// 3.14159265358979323846    # High precision decimal
+    /// 0.1 + 0.2                 # Equals exactly 0.3 (not 0.30000000000000004)
+    /// ```
     e_frac_dec: struct {
         value: RocDec,
         region: Region,
     },
+    /// A small decimal literal stored as a rational number (numerator/10^denominator).
+    /// Memory-efficient representation for common decimal values.
+    /// Avoids floating-point precision issues by using exact rational arithmetic.
+    ///
+    /// ```roc
+    /// 3.14    # Stored as numerator=314, denominator_power_of_ten=2 (314/100)
+    /// 0.5     # Stored as numerator=5, denominator_power_of_ten=1 (5/10)
+    /// 42.0    # Stored as numerator=420, denominator_power_of_ten=1 (420/10)
+    /// ```
     e_dec_small: struct {
         numerator: i16,
         denominator_power_of_ten: u8,
@@ -104,7 +153,13 @@ pub const Expr = union(enum) {
     /// }
     /// ```
     e_match: Match,
+    /// If expression with one or more conditional branches and a final else clause.
+    /// Roc's if expressions are expressions, not statements, so they always return a value.
+    /// All branches must return the same type.
     ///
+    /// ```roc
+    /// if x >= 0 "positive" else "negative"
+    /// ```
     e_if: struct {
         branches: IfBranch.Span,
         final_else: Expr.Idx,
@@ -117,6 +172,15 @@ pub const Expr = union(enum) {
         called_via: CalledVia,
         region: Region,
     },
+    /// Record literal with zero or more fields.
+    /// Records are Roc's primary data structure for grouping related values.
+    /// Field order doesn't matter for type compatibility.
+    ///
+    /// ```roc
+    /// { name: "Alice", age: 30 }
+    /// { x: 1.0, y: 2.0, z: 3.0 }
+    /// { ..config, debug: True }  # Record update syntax
+    /// ```
     e_record: struct {
         fields: RecordField.Span,
         region: Region,
@@ -125,6 +189,17 @@ pub const Expr = union(enum) {
     e_empty_record: struct {
         region: Region,
     },
+    /// Block expression containing statements followed by a final expression.
+    /// Blocks create a new scope and execute statements sequentially.
+    /// The final expression determines the block's value and type.
+    ///
+    /// ```roc
+    /// {
+    ///     x = 42
+    ///     y = x + 1
+    ///     y * 2      # This expression is the block's value
+    /// }
+    /// ```
     e_block: struct {
         /// Statements executed in sequence
         stmts: Statement.Span,
@@ -132,20 +207,32 @@ pub const Expr = union(enum) {
         final_expr: Expr.Idx,
         region: Region,
     },
-    e_record_access: struct {
-        record_var: TypeVar,
-        ext_var: TypeVar,
-        field_var: TypeVar,
-        loc_expr: Expr.Idx,
-        field: Ident.Idx,
-        region: Region,
-    },
+    /// Tag constructor with arguments (payload).
+    /// Tags are used to create values of tag union types.
+    /// Can have zero or more arguments of any type.
+    ///
+    /// ```roc
+    /// Ok("success")           # Tag with string argument
+    /// Circle(3.14)           # Tag with numeric argument
+    /// Point(1.0, 2.0)        # Tag with multiple arguments
+    /// Some([1, 2, 3])        # Tag with list argument
+    /// ```
     e_tag: struct {
         ext_var: TypeVar,
         name: Ident.Idx,
         args: Expr.Span,
         region: Region,
     },
+    /// Tag constructor with no arguments.
+    /// Represents constant values in tag union types.
+    /// Optimized representation for tags that carry no data.
+    ///
+    /// ```roc
+    /// None
+    /// Loading
+    /// Red
+    /// Empty
+    /// ```
     e_zero_argument_tag: struct {
         closure_name: Ident.Idx,
         variant_var: TypeVar,
@@ -153,21 +240,58 @@ pub const Expr = union(enum) {
         name: Ident.Idx,
         region: Region,
     },
+    /// Lambda (anonymous function) expression.
+    /// Creates a closure that captures definitions from the parent scope.
+    /// Arguments are patterns that can destructure the input.
+    ///
+    /// ```roc
+    /// |x| x + 1                           # Simple lambda
+    /// |(x, y)| x * y                      # Lambda with tuple parameter
+    /// |{ name }| "Hello, " ++ name        # Lambda with record destructuring
+    /// |list| list.map(|x| x * 2)          # Nested lambdas
+    /// ```
     e_lambda: struct {
         args: Pattern.Span,
         body: Expr.Idx,
         region: Region,
     },
+    /// Binary operation between two expressions.
+    /// Includes arithmetic, comparison, logical, and pipe operators.
+    ///
+    /// ```roc
+    /// 1 + 2              # Arithmetic: add
+    /// x > y              # Comparison: greater than
+    /// a and (b or c)     # Logical: and
+    /// ```
     e_binop: Binop,
-    /// Dot access that could be either record field access or static dispatch
-    /// The decision is deferred until after type inference based on the receiver's type
+    /// Dot access expression that represents field access or method calls.
+    /// The exact meaning is determined after type inference based on the receiver's type:
+    /// - Record field access: `person.name`
+    /// - Static Dispatch (method-style) call: `list.map(fn)` (semantically this is equal to `List.map(list, fn)`)
+    ///
+    /// ```roc
+    /// person.name         # Record field access
+    /// list.len()          # Static Dispatch
+    /// list.map(|x| x)     # Static Dispatch version of above
+    /// ```
     e_dot_access: struct {
         receiver: Expr.Idx, // Expression before the dot (e.g., `list` in `list.map`)
         field_name: Ident.Idx, // Identifier after the dot (e.g., `map` in `list.map`)
         args: ?Expr.Span, // Optional arguments for method calls (e.g., `fn` in `list.map(fn)`)
         region: Region,
     },
-    /// Compiles, but will crash if reached
+    /// Runtime error expression that crashes when executed.
+    /// These are inserted during canonicalization when the compiler encounters
+    /// semantic errors but continues compilation following the "inform don't block" philosophy.
+    /// Common causes include undefined variables, type mismatches, and invalid operations.
+    ///
+    /// ```roc
+    /// # This generates e_runtime_error for undefined variable 'x'
+    /// y = x + 1
+    ///
+    /// # This generates e_runtime_error for type mismatch
+    /// nums = [1, 2, "hello"]  # mixing numbers and strings
+    /// ```
     e_runtime_error: struct {
         diagnostic: Diagnostic.Idx,
         region: Region,
@@ -176,7 +300,16 @@ pub const Expr = union(enum) {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
 
-    /// todo - evaluate if we need this?
+    /// A single branch of an if expression.
+    /// Contains a condition expression and the body to execute if the condition is true.
+    ///
+    /// ```roc
+    /// if x >= 0 {         # condition: x >= 0
+    ///     "positive"      # body: "positive"
+    /// } else if x < 0 {   # condition: x < 0
+    ///     "negative"      # body: "negative"
+    /// }
+    /// ```
     pub const IfBranch = struct {
         cond: Expr.Idx,
         body: Expr.Idx,
@@ -184,8 +317,6 @@ pub const Expr = union(enum) {
 
         pub const Idx = enum(u32) { _ };
         pub const Span = struct { span: base.DataSpan };
-
-        // Note: toSExpr is handled within Expr.if because the slice reference is there
     };
 
     pub fn initStr(expr_span: Expr.Span, region: Region) Expr {
@@ -206,40 +337,49 @@ pub const Expr = union(enum) {
         };
     }
 
+    /// A binary operation between two expressions.
+    /// Represents infix operators that take two operands.
+    ///
+    /// ```roc
+    /// 1 + 2       # add
+    /// x > y       # gt (greater than)
+    /// a and b     # and (logical AND)
+    /// xs |> f     # pipe operator (not valid syntax, used to provide nice error messages)
+    /// ```
     pub const Binop = struct {
         op: Op,
         lhs: Expr.Idx,
         rhs: Expr.Idx,
         region: Region,
 
+        /// Binary operators available in Roc.
         pub const Op = enum {
-            add,
-            sub,
-            mul,
-            div,
-            rem,
-            lt,
-            gt,
-            le,
-            ge,
-            eq,
-            ne,
-            pow,
-            div_trunc,
-            @"and",
-            @"or",
-            pipe_forward,
-            null_coalesce,
+            add, // +
+            sub, // -
+            mul, // *
+            div, // /
+            rem, // %
+            lt, // <
+            gt, // >
+            le, // <=
+            ge, // >=
+            eq, // ==
+            ne, // !=
+            pow, // ^
+            div_trunc, // //
+            @"and", // and
+            @"or", // or
+            pipe_forward, // |>
+            null_coalesce, // ?
         };
 
         pub fn init(op: Op, lhs: Expr.Idx, rhs: Expr.Idx, region: Region) Binop {
-            return .{ .lhs = lhs, .op = op, .rhs = rhs, .region = region };
+            return Binop{ .op = op, .lhs = lhs, .rhs = rhs, .region = region };
         }
     };
 
     pub fn toRegion(self: *const @This()) ?Region {
         switch (self.*) {
-            .e_num => |e| return e.region,
             .e_int => |e| return e.region,
             .e_frac_f64 => |e| return e.region,
             .e_frac_dec => |e| return e.region,
@@ -274,17 +414,6 @@ pub const Expr = union(enum) {
     pub fn toSExpr(self: *const @This(), ir: *const CIR) SExpr {
         const gpa = ir.env.gpa;
         switch (self.*) {
-            .e_num => |num_expr| {
-                var node = SExpr.init(gpa, "e-num");
-                node.appendRegion(gpa, ir.calcRegionInfo(num_expr.region));
-
-                // Add value info
-                const value_str = std.fmt.allocPrint(gpa, "{}", .{num_expr.value}) catch |err| exitOnOom(err);
-                defer gpa.free(value_str);
-                node.appendStringAttr(gpa, "value", value_str);
-
-                return node;
-            },
             .e_int => |int_expr| {
                 var node = SExpr.init(gpa, "e-int");
                 node.appendRegion(gpa, ir.calcRegionInfo(int_expr.region));
@@ -539,19 +668,6 @@ pub const Expr = union(enum) {
 
                 return block_node;
             },
-            .e_record_access => |access_expr| {
-                var node = SExpr.init(gpa, "e-record_access");
-                node.appendRegion(gpa, ir.calcRegionInfo(access_expr.region));
-
-                // Add loc_expr
-                var loc_expr_node = ir.store.getExpr(access_expr.loc_expr).toSExpr(ir);
-                node.appendNode(gpa, &loc_expr_node);
-
-                // Add field
-                node.appendStringAttr(gpa, "field", ir.env.idents.getText(access_expr.field));
-
-                return node;
-            },
             .e_tag => |tag_expr| {
                 var node = SExpr.init(gpa, "e-tag");
                 node.appendRegion(gpa, ir.calcRegionInfo(tag_expr.region));
@@ -647,13 +763,21 @@ pub const Expr = union(enum) {
         }
     }
 
-    /// TODO describe match expression
+    /// Pattern matching expression that destructures values and executes different branches.
+    /// Match expressions are exhaustive - they must handle all possible cases of the matched value.
+    /// Each branch consists of one or more patterns, an optional guard condition, and a result expression.
     ///
     /// ```roc
-    /// match fruit_rank {
-    ///     Apple => 1,
-    ///     Banana => 2,
-    ///     Orange => 3,
+    /// match result {
+    ///     Ok(value) => value,
+    ///     Err(msg) => crash("Error: ${msg}"),
+    /// }
+    ///
+    /// match shape {
+    ///     Circle(radius) if radius > 0 => 3.14 * radius * radius,
+    ///     Circle(_) => 0,
+    ///     Rectangle(w, h) => w * h,
+    ///     Square(side) => side * side,
     /// }
     /// ```
     pub const Match = struct {
@@ -668,7 +792,17 @@ pub const Expr = union(enum) {
         pub const Idx = enum(u32) { _ };
         pub const Span = struct { span: base.DataSpan };
 
-        /// TODO
+        /// A single branch within a match expression.
+        /// Contains patterns to match against, an optional guard condition,
+        /// and the expression to evaluate when the patterns match.
+        ///
+        /// ```roc
+        /// # This branch has a single pattern `Ok(value)` and expression `value`
+        /// Ok(value) => value
+        ///
+        /// # This branch has pattern `x` with guard `x > 0` and expression `"positive"`
+        /// x if x > 0 => "positive"
+        /// ```
         pub const Branch = struct {
             patterns: Match.BranchPattern.Span,
             value: Expr.Idx,
@@ -714,7 +848,18 @@ pub const Expr = union(enum) {
             pub const Span = struct { span: DataSpan };
         };
 
-        /// TODO
+        /// A pattern within a match branch, which may be part of an OR pattern.
+        /// Multiple patterns in a single branch are separated by `|`.
+        /// Each pattern can independently match the scrutinee value.
+        ///
+        /// ```roc
+        /// match value {
+        ///     # Single pattern in branch
+        ///     Some(x) => x,
+        ///     # Multiple patterns in branch using bar separator `|`
+        ///     None | Empty => 0,
+        /// }
+        /// ```
         pub const BranchPattern = struct {
             pattern: Pattern.Idx,
             /// Degenerate branch patterns are those that don't fully bind symbols that the branch body
