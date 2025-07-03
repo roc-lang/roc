@@ -752,12 +752,6 @@ test "NodeStore round trip - Pattern" {
         },
     });
     try patterns.append(CIR.Pattern{
-        .f64_literal = .{
-            .value = 3.14,
-            .region = from_raw_offsets(190, 200),
-        },
-    });
-    try patterns.append(CIR.Pattern{
         .str_literal = .{
             .literal = @enumFromInt(1901),
             .region = from_raw_offsets(210, 220),

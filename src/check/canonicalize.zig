@@ -2192,12 +2192,6 @@ fn canonicalize_pattern(
                         .region = region,
                     },
                 },
-                .f64 => |f64_info| CIR.Pattern{
-                    .f64_literal = .{
-                        .value = f64_info.value,
-                        .region = region,
-                    },
-                },
             };
 
             const pattern_idx = try self.can_ir.store.addPattern(cir_pattern);

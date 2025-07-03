@@ -1,4 +1,18 @@
-//! TODO Module Documentation
+//! Pattern matching constructs used in Roc's canonicalization phase.
+//!
+//! This module defines the `Pattern` union which represents all possible patterns
+//! that can appear in match expressions, function parameters, and variable bindings.
+//! Patterns are used to destructure values and bind identifiers to parts of those values.
+//!
+//! Examples of patterns:
+//! - `x` - assigns the entire value to identifier `x`
+//! - `[first, .. as rest]` - destructures a list, binding first element and remaining elements
+//! - `{ name, age }` - destructures a record, binding the `name` and `age` fields
+//! - `Circle(radius)` - matches a tag with payload, binding the payload to `radius`
+//! - `(x, y)` - destructures a tuple into its components
+//! - `42` - matches a specific integer literal
+//! - `"hello"` - matches a specific string literal
+//! - `_` - matches anything without binding (wildcard)
 
 const std = @import("std");
 const base = @import("../../base.zig");
@@ -26,23 +40,59 @@ pub const Pattern = union(enum) {
         ident: Ident.Idx,
         region: Region,
     },
+    /// A `as` pattern used to rename an identifier
+    ///
+    /// ```roc
+    /// import json.Utf8 as Json
+    /// [first, second, .. as rest] => ...
+    /// ```
     as: struct {
         pattern: Pattern.Idx,
         ident: Ident.Idx,
         region: Region,
     },
+    /// Pattern that matches a tag with arguments (constructor pattern).
+    /// Used for pattern matching tag unions with payloads.
+    ///
+    /// ```roc
+    /// match shape {
+    ///     Circle(radius) => 3.14 * radius * radius
+    ///     Rectangle(width, height) => width * height
+    /// }
+    /// ```
     applied_tag: struct {
         ext_var: TypeVar,
         tag_name: Ident.Idx,
         arguments: Pattern.Span,
         region: Region,
     },
+    /// Pattern that destructures a record, extracting specific fields including nested records.
+    ///
+    /// ```roc
+    /// match person {
+    ///     { name, age } => name
+    ///     { address: { city } } => city
+    ///     {} => "empty record"
+    /// }
+    /// ```
     record_destructure: struct {
         whole_var: TypeVar,
         ext_var: TypeVar,
         destructs: RecordDestruct.Span,
         region: Region,
     },
+    /// Pattern that destructures a list, with optional rest pattern.
+    /// Can match specific elements and capture remaining elements.
+    ///
+    /// ```roc
+    /// match numbers {
+    ///     [] => "empty"
+    ///     [single] => "one element"
+    ///     [first, second] => "two elements"
+    ///     [first, .. as rest] => "first plus more"
+    ///     [.., last] => "ends with last"
+    /// }
+    /// ```
     list: struct {
         list_var: TypeVar,
         elem_var: TypeVar,
@@ -53,37 +103,101 @@ pub const Pattern = union(enum) {
         },
         region: Region,
     },
+    /// Pattern that destructures a tuple into its component patterns.
+    /// Tuples have a fixed number of elements with potentially different types.
+    ///
+    /// ```roc
+    /// match coord {
+    ///     (x, y) => x + y
+    ///     (Zero, Zero) => "origin"
+    /// }
+    /// ```
     tuple: struct {
         patterns: Pattern.Span,
         region: Region,
     },
+    /// Pattern that matches a specific integer literal value exactly.
+    /// Used for exact matching in pattern expressions.
+    ///
+    /// ```roc
+    /// match count {
+    ///     0 => "none"
+    ///     1 => "one"
+    ///     n => "many"
+    /// }
+    /// ```
     int_literal: struct {
         value: IntValue,
         region: Region,
     },
+    /// Pattern that matches a small decimal literal (represented as rational number).
+    /// This is Roc's preferred approach for exact decimal matching, avoiding
+    /// floating-point precision issues by using numerator/denominator representation.
+    ///
+    /// ```roc
+    /// match price {
+    ///     0.0 => "free"        # Exact match: 0/1
+    ///     3.14 => "pi price"   # Exact match: 314/100
+    ///     n => "other price"
+    /// }
+    /// ```
     small_dec_literal: struct {
         numerator: i16,
         denominator_power_of_ten: u8,
         region: Region,
     },
+    /// Pattern that matches a high-precision decimal literal.
+    /// Used for exact decimal matching with arbitrary precision.
+    ///
+    /// ```roc
+    /// match value {
+    ///     123.456789012345 => "precise match"
+    ///     n => "other value"
+    /// }
+    /// ```
     dec_literal: struct {
         value: RocDec,
         region: Region,
     },
-    f64_literal: struct {
-        value: f64,
-        region: Region,
-    },
+
+    /// Pattern that matches a specific string literal exactly.
+    /// Used for exact string matching in pattern expressions.
+    ///
+    /// ```roc
+    /// match command {
+    ///     "start" => startProcess()
+    ///     "stop" => stopProcess()
+    ///     cmd => unknownCommand(cmd)
+    /// }
+    /// ```
     str_literal: struct {
         literal: StringLiteral.Idx,
         region: Region,
     },
+    /// Pattern that matches a specific unicode character literal exactly.
+    ///
+    /// ```roc
+    /// match firstChar {
+    ///     'A' => "starts with A"
+    ///     'a' => "starts with lowercase a"
+    ///     c => "starts with other character"
+    /// }
+    /// ```
     char_literal: struct {
         num_var: TypeVar,
         requirements: types.Num.Int.Requirements,
         value: u32,
         region: Region,
     },
+    /// Wildcard pattern that matches anything without binding to a variable.
+    /// Used when you need to match a value but don't care about its contents.
+    ///
+    /// ```roc
+    /// match result {
+    ///     Ok(value) => value
+    ///     Err(_) => "some error occurred"
+    /// }
+    /// ```
     underscore: struct {
         region: Region,
     },
@@ -107,7 +221,6 @@ pub const Pattern = union(enum) {
             .int_literal => |p| return p.region,
             .small_dec_literal => |p| return p.region,
             .dec_literal => |p| return p.region,
-            .f64_literal => |p| return p.region,
             .str_literal => |p| return p.region,
             .char_literal => |p| return p.region,
             .underscore => |p| return p.region,
@@ -115,7 +228,14 @@ pub const Pattern = union(enum) {
         }
     }
 
-    /// todo
+    /// Represents the destructuring of a single field within a record pattern.
+    /// Each record destructure specifies how to extract a field from a record.
+    ///
+    /// ```roc
+    /// match person {
+    ///     { name, age } => ... # Two RecordDestruct: name (Required), age (Required)
+    /// }
+    /// ```
     pub const RecordDestruct = struct {
         region: Region,
         label: Ident.Idx,
@@ -125,9 +245,14 @@ pub const Pattern = union(enum) {
         pub const Idx = enum(u32) { _ };
         pub const Span = struct { span: base.DataSpan };
 
-        /// todo
+        /// The kind of record field destructuring pattern.
         pub const Kind = union(enum) {
+            /// Required field that must be present in the record.
+            /// ```roc
+            /// { name, age } => ... # Both name and age are Required
+            /// ```
             Required,
+            /// TODO Remove this, the syntax `{ name, age ? 0 }` is no longer valid in 0.1
             Guard: Pattern.Idx,
 
             pub fn toSExpr(self: *const @This(), ir: *const CIR, line_starts: std.ArrayList(u32)) SExpr {
@@ -277,12 +402,6 @@ pub const Pattern = union(enum) {
             },
             .dec_literal => |p| {
                 var node = SExpr.init(gpa, "p-dec");
-                node.appendRegion(gpa, ir.calcRegionInfo(p.region));
-                // TODO: add fields
-                return node;
-            },
-            .f64_literal => |p| {
-                var node = SExpr.init(gpa, "p-f64");
                 node.appendRegion(gpa, ir.calcRegionInfo(p.region));
                 // TODO: add fields
                 return node;

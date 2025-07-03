@@ -25,63 +25,63 @@ const RocDec = CIR.RocDec;
 /// the `List(a) -> List(b)` part is represented by these TypeAnno variants.
 pub const TypeAnno = union(enum) {
     /// Type application: applying a type constructor to arguments.
+    ///
     /// Examples: `List(Str)`, `Dict(String, Int)`, `Result(a, b)`
     apply: struct {
         symbol: Ident.Idx, // The type constructor being applied (e.g., "List", "Dict")
         args: TypeAnno.Span, // The type arguments (e.g., [Str], [String, Int])
         region: Region,
     },
-
     /// Type variable: a placeholder type that can be unified with other types.
+    ///
     /// Examples: `a`, `b`, `elem` in generic type signatures
     ty_var: struct {
         name: Ident.Idx, // The variable name (e.g., "a", "b")
         region: Region,
     },
-
     /// Inferred type `_`
     underscore: struct {
         region: Region,
     },
-
     /// Basic type identifier: a concrete type name without arguments.
+    ///
     /// Examples: `Str`, `U64`, `Bool`
     ty: struct {
         symbol: Ident.Idx, // The type name
         region: Region,
     },
-
     /// Module-qualified type: a type name prefixed with its module.
+    ///
     /// Examples: `Shape.Rect`, `Json.Decoder`
     mod_ty: struct {
         mod_symbol: Ident.Idx, // The module name (e.g., "Json")
         ty_symbol: Ident.Idx, // The type name (e.g., "Decoder")
         region: Region,
     },
-
     /// Tag union type: a union of tags, possibly with payloads.
+    ///
     /// Examples: `[Some(a), None]`, `[Red, Green, Blue]`, `[Cons(a, (List a)), Nil]`
     tag_union: struct {
         tags: TypeAnno.Span, // The individual tags in the union
         open_anno: ?TypeAnno.Idx, // Optional extension variable for open unions
         region: Region,
     },
-
     /// Tuple type: a fixed-size collection of heterogeneous types.
+    ///
     /// Examples: `(Str, U64)`, `(a, b, c)`
     tuple: struct {
         annos: TypeAnno.Span, // The types of each tuple element
         region: Region,
     },
-
     /// Record type: a collection of named fields with their types.
+    ///
     /// Examples: `{ name: Str, age: U64 }`, `{ x: F64, y: F64 }`
     record: struct {
         fields: RecordField.Span, // The field definitions
         region: Region,
     },
-
     /// Function type: represents function signatures.
+    ///
     /// Examples: `a -> b`, `Str, U64 -> Str`, `{} => Str`
     @"fn": struct {
         args: TypeAnno.Span, // Argument types
@@ -89,14 +89,13 @@ pub const TypeAnno = union(enum) {
         effectful: bool, // Whether the function can perform effects, i.e. uses fat arrow `=>`
         region: Region,
     },
-
     /// Parenthesized type: used for grouping and precedence.
+    ///
     /// Examples: `(a -> b)` in `a, (a -> b) -> b`
     parens: struct {
         anno: TypeAnno.Idx, // The type inside the parentheses
         region: Region,
     },
-
     /// Malformed type annotation: represents a type that couldn't be parsed correctly.
     /// This follows the "Inform Don't Block" principle - compilation continues with
     /// an error marker that will be reported to the user.

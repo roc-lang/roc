@@ -102,7 +102,7 @@ pub const CIR_STATEMENT_NODE_COUNT = 11;
 /// Count of the type annotation nodes in the CIR
 pub const CIR_TYPE_ANNO_NODE_COUNT = 11;
 /// Count of the pattern nodes in the CIR
-pub const CIR_PATTERN_NODE_COUNT = 14;
+pub const CIR_PATTERN_NODE_COUNT = 13;
 
 comptime {
     // Check the number of CIR.Diagnostic nodes
@@ -858,19 +858,6 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
                     .region = node.region,
                     .numerator = numerator,
                     .denominator_power_of_ten = denominator_power_of_ten,
-                },
-            };
-        },
-        .pattern_f64_literal => {
-            const extra_data_idx = node.data_1;
-            const value_as_u32s = store.extra_data.items[extra_data_idx..][0..2];
-            const value_as_u64: u64 = @bitCast(value_as_u32s.*);
-            const value: f64 = @bitCast(value_as_u64);
-
-            return CIR.Pattern{
-                .f64_literal = .{
-                    .region = node.region,
-                    .value = value,
                 },
             };
         },
@@ -1702,19 +1689,6 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern) std.mem.Allocator.Err
             }
             node.data_1 = @intCast(extra_data_start);
         },
-        .f64_literal => |p| {
-            node.tag = .pattern_f64_literal;
-            node.region = p.region;
-            // Store the f64 value in extra_data
-            const extra_data_start = store.extra_data.items.len;
-            const value_as_u64: u64 = @bitCast(p.value);
-            const value_as_u32s: [2]u32 = @bitCast(value_as_u64);
-            for (value_as_u32s) |word| {
-                try store.extra_data.append(store.gpa, word);
-            }
-            node.data_1 = @intCast(extra_data_start);
-        },
-
         .str_literal => |p| {
             node.tag = .pattern_str_literal;
             node.region = p.region;
