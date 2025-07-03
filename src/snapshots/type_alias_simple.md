@@ -20,8 +20,8 @@ This `if` condition needs to be a _Bool_:
 **type_alias_simple.md:6:19:**
 ```roc
 getUser = |id| if (id > 10) "big" else "small"
-```
                   ^^^^^^^^^
+```
 
 Right now, it has the type:
     _(*)_

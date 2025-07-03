@@ -294,12 +294,12 @@ main! = |_| {
 (inferred-types
 	(defs
 		(patt @5.1-5.9 (type "Error"))
-		(patt @9.1-9.8 (type "a, b -> (a, b)"))
+		(patt @9.1-9.8 (type "Num(*), b -> (Num(*), b)"))
 		(patt @13.1-13.7 (type "U64 -> U64"))
-		(patt @15.1-15.6 (type "* -> *")))
+		(patt @15.1-15.6 (type "* -> U64")))
 	(expressions
 		(expr @5.12-5.17 (type "Error"))
-		(expr @9.11-9.42 (type "a, b -> (a, b)"))
+		(expr @9.11-9.42 (type "Num(*), b -> (Num(*), b)"))
 		(expr @13.10-15.6 (type "U64 -> U64"))
-		(expr @15.9-27.2 (type "* -> *"))))
+		(expr @15.9-27.2 (type "* -> U64"))))
 ~~~

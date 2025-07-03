@@ -1053,8 +1053,8 @@ The first two elements in this list have incompatible types:
 				number, # after dbg expr as arg
 		), # Comment one
 		456, # Comment two
-```
   ^^^
+```
 
 The first element has this type:
     _U64_
@@ -1449,9 +1449,9 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 									(e-dbg
 										(e-int @75.7-75.10 (raw "123")))
 									(e-ident @76.3-76.8 (qaul "") (raw "other")))))))))
-		(s-decl @80.1-140.7
+		(s-decl @80.1-138.3
 			(p-ident @80.1-80.11 (raw "match_time"))
-			(e-lambda @80.14-140.7
+			(e-lambda @80.14-138.3
 				(args
 					(p-ident @81.2-81.3 (raw "a"))
 					(p-ident @82.2-82.3 (raw "b")))
@@ -2063,12 +2063,12 @@ expect {
 					(ty @67.18-67.21 (name "U64"))))))
 	(d-let
 		(p-assign @80.1-80.11 (ident "match_time"))
-		(e-lambda @80.14-140.7
+		(e-lambda @80.14-138.3
 			(args
 				(p-assign @81.2-81.3 (ident "a"))
 				(p-assign @82.2-82.3 (ident "b")))
-			(e-match @84.2-140.7
-				(match @84.2-140.7
+			(e-match @84.2-138.3
+				(match @84.2-138.3
 					(cond
 						(e-lookup-local @84.8-84.9
 							(pattern @81.2-81.3)))
@@ -2482,7 +2482,7 @@ expect {
 	(expressions
 		(expr @65.19-67.8 (type "[False, True] -> Num(*)"))
 		(expr @68.11-78.2 (type "Error -> Error"))
-		(expr @80.14-140.7 (type "Error"))
+		(expr @80.14-138.3 (type "Error"))
 		(expr @144.9-196.2 (type "Error -> Error"))
 		(expr @199.9-199.11 (type "{}"))))
 ~~~

@@ -2179,17 +2179,6 @@ fn canonicalize_pattern(
             };
 
             // Parse the literal first to get requirements
-            const requirements = switch (parsed) {
-                .small => |small_info| small_info.requirements,
-                .dec => |dec_info| dec_info.requirements,
-                .f64 => |f64_info| f64_info.requirements,
-            };
-
-            const frac_requirements = types.Num.FracRequirements{
-                .fits_in_f32 = requirements.fits_in_f32,
-                .fits_in_dec = requirements.fits_in_dec,
-            };
-
             // Check for f64 literals which are not allowed in patterns
             if (parsed == .f64) {
                 const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .f64_pattern_literal = .{
@@ -2217,8 +2206,9 @@ fn canonicalize_pattern(
 
             const pattern_idx = try self.can_ir.store.addPattern(cir_pattern);
 
+            // Always use Dec type for fractional patterns (not Frac(*))
             _ = self.can_ir.setTypeVarAtPat(pattern_idx, Content{
-                .structure = .{ .num = .{ .frac_unbound = frac_requirements } },
+                .structure = .{ .num = .{ .frac_precision = .dec } },
             });
 
             return pattern_idx;
@@ -3409,9 +3399,50 @@ pub fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.
 
             // Regular declaration - canonicalize as usual
             const pattern_idx = try self.canonicalize_pattern(d.pattern) orelse return null;
+
+            // Check if this declaration has a pending type annotation and create annotation if needed
+            var annotation_idx: ?CIR.Annotation.Idx = null;
+            if (self.parse_ir.store.getPattern(d.pattern) == .ident) {
+                const ident_tok = self.parse_ir.store.getPattern(d.pattern).ident.ident_tok;
+                if (self.parse_ir.tokens.resolveIdentifier(ident_tok)) |ident_idx| {
+                    // Look for pending type annotation
+                    var found_index: ?usize = null;
+                    var found_anno_idx: ?CIR.TypeAnno.Idx = null;
+                    for (self.pending_type_annos.items, 0..) |pending, i| {
+                        if (self.can_ir.env.idents.identsHaveSameText(ident_idx, pending.ident)) {
+                            found_anno_idx = pending.anno;
+                            found_index = i;
+                            break;
+                        }
+                    }
+
+                    // If found, create annotation and remove from pending
+                    if (found_anno_idx) |type_anno_idx| {
+                        const region = self.parse_ir.tokenizedRegionToRegion(d.region);
+                        annotation_idx = try self.createAnnotationFromTypeAnno(type_anno_idx, self.can_ir.pushFreshTypeVar(@enumFromInt(0), region) catch |err| exitOnOom(err), region, @enumFromInt(@intFromEnum(pattern_idx)));
+                        _ = self.pending_type_annos.swapRemove(found_index.?);
+                    }
+                }
+            }
+
             const expr_idx = try self.canonicalize_expr(d.body) orelse return null;
 
-            // Create a declaration statement
+            // Create a def with annotation (like top-level defs) for proper type checking
+            if (annotation_idx) |anno_idx| {
+                const def = CIR.Def{
+                    .pattern = pattern_idx,
+                    .pattern_region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getPattern(d.pattern).to_tokenized_region()),
+                    .expr = expr_idx,
+                    .expr_region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getExpr(d.body).to_tokenized_region()),
+                    .annotation = anno_idx,
+                    .kind = .{ .let = {} },
+                };
+                const def_idx = self.can_ir.store.addDef(def);
+                // Store this def in the current block's scratch area so type checker can find it
+                self.can_ir.store.addScratchDef(def_idx);
+            }
+
+            // Always create the declaration statement for execution
             const decl_stmt = CIR.Statement{ .s_decl = .{
                 .pattern = pattern_idx,
                 .expr = expr_idx,
@@ -6128,6 +6159,53 @@ test "numeric pattern types: unbound vs polymorphic - frac" {
                 else => {},
             },
             else => {},
+        }
+    }
+}
+
+test "fractional pattern always uses Dec type" {
+    const gpa = std.testing.allocator;
+
+    // Test that fractional literal patterns get Dec type, not Frac(*)
+    {
+        var env = base.ModuleEnv.init(gpa);
+        defer env.deinit();
+
+        var cir = CIR.init(&env);
+        defer cir.deinit();
+
+        // Create a fractional pattern directly
+        const pattern = CIR.Pattern{
+            .small_dec_literal = .{
+                .numerator = 314,
+                .denominator_power_of_ten = 2,
+                .region = Region.zero(),
+            },
+        };
+
+        const pattern_idx = try cir.store.addPattern(pattern);
+
+        // Set the type as we do in canonicalize_pattern for .frac
+        _ = cir.setTypeVarAtPat(pattern_idx, Content{
+            .structure = .{ .num = .{ .frac_precision = .dec } },
+        });
+
+        // Verify the pattern has Dec type
+        const pattern_var: types.Var = @enumFromInt(@intFromEnum(pattern_idx));
+        const resolved = env.types.resolveVar(pattern_var);
+
+        switch (resolved.desc.content) {
+            .structure => |s| switch (s) {
+                .num => |n| switch (n) {
+                    .frac_precision => |prec| {
+                        try std.testing.expectEqual(types.Num.Frac.Precision.dec, prec);
+                    },
+                    .frac_unbound => return error.UnexpectedFracUnbound,
+                    else => return error.UnexpectedNumType,
+                },
+                else => return error.UnexpectedStructure,
+            },
+            else => return error.UnexpectedContent,
         }
     }
 }

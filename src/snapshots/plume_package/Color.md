@@ -580,7 +580,7 @@ It is of type:
     _Str_
 
 But you are trying to use it as:
-    _{ to_utf8: * }_
+    _{ to_utf8: List(*) }_
 
 **INCOMPATIBLE MATCH PATTERNS**
 The pattern in the second branch of this `match` differs from previous ones:
@@ -588,14 +588,12 @@ The pattern in the second branch of this `match` differs from previous ones:
 ```roc
 to_str = |color| match color {
     Color.RGB(r, g, b) => "rgb(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)})"
+             ^^^^^^^^^
     Color.RGBA(r, g, b, a) => "rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"
     Color.Named(inner) => inner
     Color.Hex(inner) => inner
 }
-
-expect rgb(124, 56, 245).to_str() == "rgb(124, 56, 245)"
 ```
-             ^^^^^^^^^
 
 The second pattern has this type:
     _(*, *, *)_
@@ -894,9 +892,9 @@ EndOfFile(72:1-72:1),
 			(ty-fn @48.10-48.22
 				(ty (name "Color"))
 				(ty (name "Str"))))
-		(s-decl @49.1-56.7
+		(s-decl @49.1-54.2
 			(p-ident @49.1-49.7 (raw "to_str"))
-			(e-lambda @49.10-56.7
+			(e-lambda @49.10-54.2
 				(args
 					(p-ident @49.11-49.16 (raw "color")))
 				(e-match
@@ -1243,8 +1241,8 @@ is_named_color = |str| {
 											(e-lookup-local @30.100-30.101
 												(pattern @30.29-30.30))
 											(e-int @30.105-30.108 (value "70")))))))))
-				(e-match @32.5-46.2
-					(match @32.5-46.2
+				(e-match @32.5-45.6
+					(match @32.5-45.6
 						(cond
 							(e-lookup-local @32.11-32.16
 								(pattern @29.5-29.10)))
@@ -1319,11 +1317,11 @@ is_named_color = |str| {
 								(ty @26.40-26.43 (name "Str")))))))))
 	(d-let
 		(p-assign @49.1-49.7 (ident "to_str"))
-		(e-lambda @49.10-56.7
+		(e-lambda @49.10-54.2
 			(args
 				(p-assign @49.11-49.16 (ident "color")))
-			(e-match @49.18-56.7
-				(match @49.18-56.7
+			(e-match @49.18-54.2
+				(match @49.18-54.2
 					(cond
 						(e-lookup-local @49.24-49.29
 							(pattern @49.11-49.16)))
@@ -1500,7 +1498,7 @@ is_named_color = |str| {
 		(expr @18.7-18.22 (type "U8, U8, U8 -> [Color]*"))
 		(expr @21.8-24.2 (type "U8, U8, U8, Error -> (U8, U8, U8, *)"))
 		(expr @27.7-46.2 (type "Error -> Error"))
-		(expr @49.10-56.7 (type "Error -> Error"))
+		(expr @49.10-54.2 (type "Error -> Error"))
 		(expr @61.9-63.24 (type "Error"))
 		(expr @67.18-71.2 (type "* -> *"))))
 ~~~

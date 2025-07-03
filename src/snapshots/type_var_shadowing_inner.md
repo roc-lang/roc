@@ -96,6 +96,18 @@ main! = |_| {}
 ~~~clojure
 (can-ir
 	(d-let
+		(p-assign @6.5-6.10 (ident "inner"))
+		(e-lambda @6.13-6.18
+			(args
+				(p-assign @6.14-6.15 (ident "y")))
+			(e-lookup-local @6.17-6.18
+				(pattern @6.14-6.15)))
+		(annotation @6.5-6.18
+			(declared-type
+				(ty-fn @5.13-5.19 (effectful false)
+					(ty-var @5.13-5.14 (name "a"))
+					(ty-var @5.18-5.19 (name "a"))))))
+	(d-let
 		(p-assign @4.1-4.6 (ident "outer"))
 		(e-lambda @4.9-9.2
 			(args
@@ -133,9 +145,11 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
+		(patt @6.5-6.10 (type "a -> a"))
 		(patt @4.1-4.6 (type "a -> a"))
 		(patt @11.1-11.6 (type "* -> {}")))
 	(expressions
+		(expr @6.13-6.18 (type "a -> a"))
 		(expr @4.9-9.2 (type "a -> a"))
 		(expr @11.9-11.15 (type "* -> {}"))))
 ~~~

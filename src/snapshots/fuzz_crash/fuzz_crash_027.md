@@ -937,9 +937,9 @@ CloseCurly(159:1-159:2),EndOfFile(159:2-159:2),
 									(e-dbg
 										(e-int @55.7-55.10 (raw "123")))
 									(e-ident @56.3-56.8 (qaul "") (raw "other")))))))))
-		(s-decl @60.1-96.7
+		(s-decl @60.1-94.3
 			(p-ident @60.1-60.11 (raw "match_time"))
-			(e-lambda @60.14-96.7
+			(e-lambda @60.14-94.3
 				(args
 					(p-ident @61.2-61.3 (raw "a"))
 					(p-ident @62.2-62.3 (raw "b")))
@@ -1468,12 +1468,12 @@ main! = |_| { # Yeah Ie
 					(ty @47.18-47.21 (name "U64"))))))
 	(d-let
 		(p-assign @60.1-60.11 (ident "match_time"))
-		(e-lambda @60.14-96.7
+		(e-lambda @60.14-94.3
 			(args
 				(p-assign @61.2-61.3 (ident "a"))
 				(p-assign @62.2-62.3 (ident "b")))
-			(e-match @64.2-96.7
-				(match @64.2-96.7
+			(e-match @64.2-94.3
+				(match @64.2-94.3
 					(cond
 						(e-lookup-local @64.8-64.9
 							(pattern @61.2-61.3)))
@@ -1583,6 +1583,12 @@ main! = |_| { # Yeah Ie
 								(p-applied-tag @93.3-93.10 (degenerate false)))
 							(value
 								(e-int @93.14-93.20 (value "121000")))))))))
+	(d-let
+		(p-assign @151.1-151.6 (ident "empty"))
+		(e-empty_record @151.9-151.11)
+		(annotation @151.1-151.11
+			(declared-type
+				(ty-record @150.9-150.11))))
 	(d-let
 		(p-assign @100.1-100.6 (ident "main!"))
 		(e-lambda @100.9-159.2
@@ -1829,10 +1835,12 @@ main! = |_| { # Yeah Ie
 		(patt @45.1-45.4 (type "[False, True] -> Num(*)"))
 		(patt @48.1-48.8 (type "Error -> U64"))
 		(patt @60.1-60.11 (type "Error"))
+		(patt @151.1-151.6 (type "{}"))
 		(patt @100.1-100.6 (type "Error -> Error")))
 	(expressions
 		(expr @45.7-47.8 (type "[False, True] -> Num(*)"))
 		(expr @48.11-58.2 (type "Error -> U64"))
-		(expr @60.14-96.7 (type "Error"))
+		(expr @60.14-94.3 (type "Error"))
+		(expr @151.9-151.11 (type "{}"))
 		(expr @100.9-159.2 (type "Error -> Error"))))
 ~~~

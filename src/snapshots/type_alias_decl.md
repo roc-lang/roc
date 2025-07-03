@@ -290,6 +290,30 @@ main! = |_| {
 ~~~clojure
 (can-ir
 	(d-let
+		(p-assign @30.5-30.11 (ident "userId"))
+		(e-int @30.14-30.17 (value "123"))
+		(annotation @30.5-30.17
+			(declared-type
+				(ty @29.14-29.20 (name "UserId")))))
+	(d-let
+		(p-assign @33.5-33.11 (ident "person"))
+		(e-record @33.14-33.40
+			(fields
+				(field (name "name")
+					(e-string @33.22-33.29
+						(e-literal @33.23-33.28 (string "Alice"))))
+				(field (name "age")
+					(e-int @33.36-33.38 (value "30")))))
+		(annotation @33.5-33.40
+			(declared-type
+				(ty @32.14-32.20 (name "Person")))))
+	(d-let
+		(p-assign @36.5-36.10 (ident "color"))
+		(e-tag @36.13-36.16 (name "Red") (args "TODO"))
+		(annotation @36.5-36.16
+			(declared-type
+				(ty @35.13-35.18 (name "Color")))))
+	(d-let
 		(p-assign @27.1-27.6 (ident "main!"))
 		(e-lambda @27.9-39.2
 			(args
@@ -382,7 +406,13 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @27.1-27.6 (type "* -> *")))
+		(patt @30.5-30.11 (type "Error"))
+		(patt @33.5-33.11 (type "Error"))
+		(patt @36.5-36.10 (type "Error"))
+		(patt @27.1-27.6 (type "* -> Error")))
 	(expressions
-		(expr @27.9-39.2 (type "* -> *"))))
+		(expr @30.14-30.17 (type "Error"))
+		(expr @33.14-33.40 (type "Error"))
+		(expr @36.13-36.16 (type "Error"))
+		(expr @27.9-39.2 (type "* -> Error"))))
 ~~~

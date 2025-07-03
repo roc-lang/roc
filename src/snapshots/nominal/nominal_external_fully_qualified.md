@@ -209,8 +209,8 @@ handleResult = |result| {
 			(args
 				(p-assign @6.17-6.23 (ident "result")))
 			(e-block @6.25-11.2
-				(e-match @7.5-11.2
-					(match @7.5-11.2
+				(e-match @7.5-10.6
+					(match @7.5-10.6
 						(cond
 							(e-lookup-local @7.11-7.17
 								(pattern @6.17-6.23)))

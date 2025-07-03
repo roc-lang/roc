@@ -136,6 +136,15 @@ main! = |_| {}
 ~~~clojure
 (can-ir
 	(d-let
+		(p-assign @11.5-11.11 (ident "result"))
+		(e-call @11.14-11.30
+			(e-runtime-error (tag "ident_not_in_scope"))
+			(e-lookup-local @11.25-11.29
+				(pattern @5.12-5.16)))
+		(annotation @11.5-11.30
+			(declared-type
+				(ty-var @10.14-10.18 (name "elem")))))
+	(d-let
 		(p-assign @5.1-5.8 (ident "process"))
 		(e-lambda @5.11-14.2
 			(args
@@ -176,9 +185,11 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
+		(patt @11.5-11.11 (type "elem"))
 		(patt @5.1-5.8 (type "Error -> elem"))
 		(patt @16.1-16.6 (type "* -> {}")))
 	(expressions
+		(expr @11.14-11.30 (type "elem"))
 		(expr @5.11-14.2 (type "Error -> elem"))
 		(expr @16.9-16.15 (type "* -> {}"))))
 ~~~

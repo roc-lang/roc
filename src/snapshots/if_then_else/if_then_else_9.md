@@ -23,8 +23,8 @@ This `if` condition needs to be a _Bool_:
 **if_then_else_9.md:3:11:**
 ```roc
 } else if 10 { # Comment after else open
-```
           ^^
+```
 
 Right now, it has the type:
     _Num(*)_
@@ -39,11 +39,11 @@ if bool {
 	1
 } else if 10 { # Comment after else open
 	A
+ ^
 } else { # Comment after else open
 	3
 }
 ```
- ^
 
 The second branch has this type:
     _[A]*_

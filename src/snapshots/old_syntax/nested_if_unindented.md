@@ -49,8 +49,8 @@ This `if` condition needs to be a _Bool_:
 **nested_if_unindented.md:1:3:**
 ```roc
 if""then-p else
-```
   ^^
+```
 
 Right now, it has the type:
     _Str_
@@ -62,8 +62,8 @@ This `if` condition needs to be a _Bool_:
 **nested_if_unindented.md:2:3:**
 ```roc
 if""then-p else.e
-```
   ^^
+```
 
 Right now, it has the type:
     _Str_

@@ -13,8 +13,8 @@ The two elements in this list have incompatible types:
 **can_list_two_elements.md:1:2:**
 ```roc
 [1, "hello"]
-```
  ^  ^^^^^^^
+```
 
 The first element has this type:
     _Num(*)_

@@ -311,14 +311,20 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             does_fx = try self.checkBinopExpr(expr_idx, binop);
         },
         .e_block => |block| {
-            // Check all statements in the block (safely)
+            // Check all statements in the block
             const statements = self.can_ir.store.sliceStatements(block.stmts);
             for (statements) |stmt_idx| {
                 const stmt = self.can_ir.store.getStatement(stmt_idx);
                 switch (stmt) {
                     .s_decl => |decl_stmt| {
-                        // Just check the expression, don't try to unify with pattern
+                        // Check pattern and expression, then unify
+                        try self.checkPattern(decl_stmt.pattern);
                         does_fx = try self.checkExpr(decl_stmt.expr) or does_fx;
+
+                        // Unify the pattern with the expression
+                        const pattern_var: Var = @enumFromInt(@intFromEnum(decl_stmt.pattern));
+                        const expr_var: Var = @enumFromInt(@intFromEnum(decl_stmt.expr));
+                        _ = self.unify(pattern_var, expr_var);
                     },
                     .s_reassign => |reassign| {
                         does_fx = try self.checkExpr(reassign.expr) or does_fx;

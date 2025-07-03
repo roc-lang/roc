@@ -134,10 +134,10 @@ The pattern in the second branch of this `match` differs from previous ones:
 ```roc
 is_ok = |result| match result {
     Result.Ok(_) => True
+             ^^^
     Result.Err(_) => False
 }
 ```
-             ^^^
 
 The second pattern has this type:
     _(*)_
