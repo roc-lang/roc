@@ -22,7 +22,6 @@ pub const Color = enum {
     node_name,
     string,
     number,
-    region,
     punctuation,
 };
 
@@ -52,10 +51,10 @@ const PlainTextSExprWriter = struct {
         // No-op for plain text
     }
 
-    pub fn beginSourceRange(self: *@This(), start_token: u32, end_token: u32) !void {
+    pub fn beginSourceRange(self: *@This(), start_byte: u32, end_byte: u32) !void {
         _ = self;
-        _ = start_token;
-        _ = end_token;
+        _ = start_byte;
+        _ = end_byte;
         // No-op for plain text
     }
 
@@ -92,7 +91,6 @@ const HtmlSExprWriter = struct {
                 .node_name => "token-keyword", // Node names are like keywords in S-expressions
                 .string => "token-string",
                 .number => "token-number",
-                .region => "token-comment", // Regions are metadata, similar to comments
                 .punctuation => "token-punctuation",
             };
             try self.writer.print("<span class=\"{s}\">", .{css_class});
@@ -102,8 +100,8 @@ const HtmlSExprWriter = struct {
         self.current_color = color;
     }
 
-    pub fn beginSourceRange(self: *@This(), start_token: u32, end_token: u32) !void {
-        try self.writer.print("<span class=\"source-range\" data-start-token=\"{d}\" data-end-token=\"{d}\" >", .{ start_token, end_token });
+    pub fn beginSourceRange(self: *@This(), start_byte: u32, end_byte: u32) !void {
+        try self.writer.print("<span class=\"source-range\" data-start-byte=\"{d}\" data-end-byte=\"{d}\" >", .{ start_byte, end_byte });
     }
 
     pub fn endSourceRange(self: *@This()) !void {
@@ -125,10 +123,10 @@ pub const AttributeValue = union(enum) {
     node_idx: u32,
     region: RegionInfo,
     raw_string: []const u8, // for unquoted strings
-    tokens_range: struct {
+    bytes_range: struct {
         region: RegionInfo,
-        start_token: u32,
-        end_token: u32,
+        start_byte: u32,
+        end_byte: u32,
     },
 };
 
@@ -168,7 +166,7 @@ pub fn deinit(self: *SExpr, gpa: Allocator) void {
                     gpa.free(r.line_text);
                 }
             },
-            .tokens_range => |tr| {
+            .bytes_range => |tr| {
                 // Free the region line text if it's not empty
                 if (tr.region.line_text.len > 0) {
                     gpa.free(tr.region.line_text);
@@ -242,9 +240,9 @@ pub fn appendBoolAttr(self: *SExpr, gpa: Allocator, key: []const u8, value: bool
 }
 
 /// Append a token range attribute with region information
-pub fn appendTokenRange(self: *SExpr, gpa: Allocator, region: RegionInfo, start_token: u32, end_token: u32) void {
+pub fn appendByteRange(self: *SExpr, gpa: Allocator, region: RegionInfo, start_byte: u32, end_byte: u32) void {
     const owned_value = gpa.dupe(u8, region.line_text) catch |err| exitOnOom(err);
-    self.addAttribute(gpa, "tokens", .{ .tokens_range = .{
+    self.addAttribute(gpa, "tokens", .{ .bytes_range = .{
         .region = RegionInfo{
             .start_line_idx = region.start_line_idx,
             .start_col_idx = region.start_col_idx,
@@ -252,8 +250,8 @@ pub fn appendTokenRange(self: *SExpr, gpa: Allocator, region: RegionInfo, start_
             .end_col_idx = region.end_col_idx,
             .line_text = owned_value,
         },
-        .start_token = start_token,
-        .end_token = end_token,
+        .start_byte = start_byte,
+        .end_byte = end_byte,
     } });
 }
 
@@ -325,7 +323,6 @@ fn toStringImpl(node: SExpr, writer_impl: anytype, indent: usize) !void {
             },
             .region => |r| {
                 try writer_impl.print(" ", .{});
-                try writer_impl.setColor(.region);
                 try writer_impl.print("@{d}.{d}-{d}.{d}", .{
                     // add one to display numbers instead of index
                     r.start_line_idx + 1,
@@ -333,12 +330,10 @@ fn toStringImpl(node: SExpr, writer_impl: anytype, indent: usize) !void {
                     r.end_line_idx + 1,
                     r.end_col_idx + 1,
                 });
-                try writer_impl.setColor(.default);
             },
-            .tokens_range => |tr| {
+            .bytes_range => |tr| {
                 try writer_impl.print(" ", .{});
-                try writer_impl.beginSourceRange(tr.start_token, tr.end_token);
-                try writer_impl.setColor(.region);
+                try writer_impl.beginSourceRange(tr.start_byte, tr.end_byte);
                 try writer_impl.print("@{d}.{d}-{d}.{d}", .{
                     // add one to display numbers instead of index
                     tr.region.start_line_idx + 1,
@@ -346,7 +341,6 @@ fn toStringImpl(node: SExpr, writer_impl: anytype, indent: usize) !void {
                     tr.region.end_line_idx + 1,
                     tr.region.end_col_idx + 1,
                 });
-                try writer_impl.setColor(.default);
                 try writer_impl.endSourceRange();
             },
         }

@@ -317,7 +317,7 @@ fn processRocFileAsSnapshot(allocator: Allocator, output_path: []const u8, roc_c
 
     // Generate all sections
     try generateMetaSection(&output, &content);
-    try generateSourceSection(&output, &content, &ast);
+    try generateSourceSection(&output, &content);
     try generateProblemsSection(&output, &ast, &can_ir, &solver, &content, output_path, &module_env);
     try generateTokensSection(&output, &ast, &content, &module_env);
     try generateParseSection(&output, &content, &ast, &module_env);
@@ -728,109 +728,39 @@ fn generateMetaSection(output: *DualOutput, content: *const Content) !void {
 }
 
 /// Generate SOURCE section for both markdown and HTML
-fn generateSourceSection(output: *DualOutput, content: *const Content, parse_ast: *AST) !void {
+fn generateSourceSection(output: *DualOutput, content: *const Content) !void {
     try output.begin_section("SOURCE");
     try output.begin_code_block("roc");
     try output.md_writer.writeAll(content.source);
     try output.md_writer.writeAll("\n");
 
-    // HTML SOURCE section with syntax highlighting
+    // HTML SOURCE section - encode source as JavaScript string
     try output.html_writer.writeAll(
-        \\                <div class="source-code">
-    );
-    // Apply syntax highlighting by processing tokens in order
-    var tokenizedBuffer = parse_ast.tokens;
-    const tokens = tokenizedBuffer.tokens.items(.tag);
-    var source_offset: u32 = 0;
-    var line_num: u32 = 1;
-    var col_num: u32 = 1;
-
-    try output.html_writer.print("<span class=\"source-line\" data-line=\"{d}\">", .{line_num});
-
-    for (tokens, 0..) |tok, i| {
-        const region = tokenizedBuffer.resolve(@intCast(i));
-
-        // Output any characters between last token and this token (whitespace, etc.)
-        while (source_offset < region.start.offset) {
-            const char = content.source[source_offset];
-            if (char == '\n') {
-                try output.html_writer.writeAll("\n</span>");
-                line_num += 1;
-                col_num = 1;
-                try output.html_writer.print("<span class=\"source-line\" data-line=\"{d}\">", .{line_num});
-            } else if (char == ' ') {
-                // Render space as regular space for wrapping
-                try output.html_writer.writeAll(" ");
-                col_num += 1;
-            } else if (char == '\t') {
-                // Render tab as 4 spaces
-                try output.html_writer.writeAll("    ");
-                col_num += 4;
-            } else {
-                try escapeHtmlChar(output.html_writer, char);
-                col_num += 1;
-            }
-            source_offset += 1;
-        }
-
-        // Skip newline tokens since we handle newlines in whitespace above
-        if (tok == .Newline) {
-            continue;
-        }
-
-        // Output the token with syntax highlighting
-        const category = tokenToCategory(tok);
-        const token_text = content.source[region.start.offset..region.end.offset];
-
-        try output.html_writer.print("<span class=\"{s}\" data-token-id=\"{d}\">", .{ category.toCssClass(), i });
-
-        for (token_text) |char| {
-            if (char == ' ') {
-                try output.html_writer.writeAll(" ");
-                col_num += 1;
-            } else if (char == '\t') {
-                try output.html_writer.writeAll("    ");
-                col_num += 4;
-            } else {
-                try escapeHtmlChar(output.html_writer, char);
-                col_num += 1;
-            }
-        }
-
-        try output.html_writer.writeAll("</span>");
-        source_offset = region.end.offset;
-    }
-
-    // Output any remaining characters
-    while (source_offset < content.source.len) {
-        const char = content.source[source_offset];
-        if (char == '\n') {
-            try output.html_writer.writeAll("\n</span>");
-            line_num += 1;
-            col_num = 1;
-            if (source_offset + 1 < content.source.len) {
-                try output.html_writer.print("<span class=\"source-line\" data-line=\"{d}\">", .{line_num});
-            }
-        } else if (char == ' ') {
-            try output.html_writer.writeAll(" ");
-            col_num += 1;
-        } else if (char == '\t') {
-            try output.html_writer.writeAll("    ");
-            col_num += 4;
-        } else {
-            try escapeHtmlChar(output.html_writer, char);
-            col_num += 1;
-        }
-        source_offset += 1;
-    }
-
-    try output.html_writer.writeAll("</span>");
-
-    try output.html_writer.writeAll(
-        \\
+        \\                <div class="source-code" id="source-display">
         \\                </div>
+        \\                <script>
+        \\                window.rocSourceCode =
+    );
+
+    // Escape the source code for JavaScript string literal
+    try output.html_writer.writeAll("`");
+    for (content.source) |char| {
+        switch (char) {
+            '`' => try output.html_writer.writeAll("\\`"),
+            '\\' => try output.html_writer.writeAll("\\\\"),
+            '$' => try output.html_writer.writeAll("\\$"),
+            '\n' => try output.html_writer.writeAll("\\n"),
+            '\r' => try output.html_writer.writeAll("\\r"),
+            '\t' => try output.html_writer.writeAll("\\t"),
+            else => try output.html_writer.writeByte(char),
+        }
+    }
+    try output.html_writer.writeAll(
+        \\`;
+        \\      </script>
         \\
     );
+
     try output.end_code_block();
     try output.end_section();
 }
@@ -976,8 +906,12 @@ fn generateTokensSection(output: *DualOutput, parse_ast: *AST, content: *const C
     try output.begin_section("TOKENS");
     try output.begin_code_block("zig");
 
+    // HTML TOKENS section - encode tokens as JavaScript array
     try output.html_writer.writeAll(
-        \\                <div class="token-list">
+        \\                <div class="token-list" id="tokens-display">
+        \\                </div>
+        \\                <script>
+        \\                window.rocTokens = [
     );
 
     var tokenizedBuffer = parse_ast.tokens;
@@ -985,7 +919,7 @@ fn generateTokensSection(output: *DualOutput, parse_ast: *AST, content: *const C
     for (tokens, 0..) |tok, i| {
         const region = tokenizedBuffer.resolve(@intCast(i));
         const info = try module_env.calcRegionInfo(content.source, region.start.offset, region.end.offset);
-        const category = tokenToCategory(tok);
+        // const category = tokenToCategory(tok);
 
         // Markdown token output
         const region_str = try std.fmt.allocPrint(output.gpa, "{s}({d}:{d}-{d}:{d}),", .{
@@ -1000,17 +934,21 @@ fn generateTokensSection(output: *DualOutput, parse_ast: *AST, content: *const C
 
         try output.md_writer.writeAll(region_str);
 
-        // HTML token output (without line:col ranges)
-        try output.html_writer.print("                    <span class=\"token-item {s}\" data-token-id=\"{d}\">{s}</span>", .{
-            category.toCssClass(),
-            i,
+        // HTML token output as JavaScript array element: [token_kind_str, start_byte, end_byte]
+        try output.html_writer.print("                    [\"{s}\", {d}, {d}]", .{
             @tagName(tok),
+            region.start.offset,
+            region.end.offset,
         });
+
+        // Add comma except for last token
+        if (i < tokens.len - 1) {
+            try output.html_writer.writeAll(",");
+        }
 
         if (tok == .Newline) {
             try output.md_writer.writeAll("\n");
             try output.html_writer.writeAll("\n");
-            try output.html_writer.writeAll("<br>");
         } else {
             try output.html_writer.writeAll(" ");
         }
@@ -1019,7 +957,8 @@ fn generateTokensSection(output: *DualOutput, parse_ast: *AST, content: *const C
     try output.md_writer.writeAll("\n");
 
     try output.html_writer.writeAll(
-        \\                </div>
+        \\                ];
+        \\                </script>
         \\
     );
     try output.end_code_block();
@@ -1152,25 +1091,20 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
 
 /// Generate CANONICALIZE section for both markdown and HTML
 fn generateCanonicalizeSection(output: *DualOutput, content: *const Content, can_ir: *CIR, maybe_expr_idx: ?CIR.Expr.Idx) !void {
-    var canonicalized = std.ArrayList(u8).init(output.gpa);
-    defer canonicalized.deinit();
-
-    try can_ir.toSExprStr(canonicalized.writer().any(), maybe_expr_idx, content.source);
+    var node = can_ir.toSExpr(maybe_expr_idx, content.source);
+    defer node.deinit(can_ir.env.gpa);
 
     try output.begin_section("CANONICALIZE");
-    try output.begin_code_block("clojure");
-    try output.md_writer.writeAll(canonicalized.items);
-    try output.md_writer.writeAll("\n");
 
-    // HTML CANONICALIZE section
     try output.html_writer.writeAll(
         \\                <pre>
     );
+    try output.begin_code_block("clojure");
 
-    // Escape HTML in canonicalized content
-    for (canonicalized.items) |char| {
-        try escapeHtmlChar(output.html_writer, char);
-    }
+    node.toStringPretty(output.md_writer.any());
+    node.toHtml(output.html_writer.any());
+
+    try output.md_writer.writeAll("\n");
 
     try output.html_writer.writeAll(
         \\</pre>
@@ -1309,9 +1243,8 @@ fn generateHtmlClosing(output: *DualOutput) !void {
         \\    </div>
         \\
         \\    <script>
-        \\
     );
-    // Embed snapshot.js directly into the HTML
+    // Embed remaining snapshot.js directly into the HTML
     try output.html_writer.writeAll(@embedFile("snapshot.js"));
     try output.html_writer.writeAll(
         \\    </script>
@@ -1462,7 +1395,7 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, maybe_f
 
     // Generate all sections simultaneously
     try generateMetaSection(&output, &content);
-    try generateSourceSection(&output, &content, &parse_ast);
+    try generateSourceSection(&output, &content);
     try generateProblemsSection(&output, &parse_ast, &can_ir, &solver, &content, snapshot_path, &module_env);
     try generateTokensSection(&output, &parse_ast, &content, &module_env);
 
