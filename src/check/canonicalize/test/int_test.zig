@@ -75,10 +75,6 @@ fn getIntValue(cir: *CIR, expr_idx: CIR.Expr.Idx) !i128 {
         .e_int => |int_expr| {
             return @bitCast(int_expr.value.bytes);
         },
-        .e_num => |num_expr| {
-            // For num expressions, we calculate requirements based on the value
-            return @bitCast(num_expr.value.bytes);
-        },
         else => return error.NotAnInteger,
     }
 }

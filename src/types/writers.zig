@@ -280,13 +280,41 @@ pub const TypeWriter = struct {
         switch (ext_resolved.desc.content) {
             .structure => |flat_type| switch (flat_type) {
                 .empty_record => {}, // Don't show empty extension
+                .record => |ext_record| {
+                    // Flatten nested record extensions
+                    const ext_fields = self.env.types.getRecordFieldsSlice(ext_record.fields);
+                    for (ext_fields.items(.name), ext_fields.items(.var_)) |field_name, field_var| {
+                        if (fields.len > 0 or ext_fields.len > 0) _ = try self.writer.write(", ");
+                        _ = try self.writer.write(self.env.idents.getText(field_name));
+                        _ = try self.writer.write(": ");
+                        try self.writeVar(field_var);
+                    }
+                    // Recursively handle the extension's extension
+                    try self.writeRecordExtension(ext_record.ext, fields.len + ext_fields.len);
+                },
                 else => {
                     if (fields.len > 0) _ = try self.writer.write(", ");
                     _ = try self.writer.write("* ");
                     try self.writeVar(record.ext);
                 },
             },
+            .flex_var => |mb_ident| {
+                // Only show flex vars if they have a name
+                if (mb_ident) |_| {
+                    if (fields.len > 0) _ = try self.writer.write(", ");
+                    _ = try self.writer.write("* ");
+                    try self.writeVar(record.ext);
+                }
+                // Otherwise hide unnamed flex vars, so they render as no extension.
+            },
+            .rigid_var => |ident_idx| {
+                // Show rigid vars with .. syntax
+                if (fields.len > 0) _ = try self.writer.write(", ");
+                _ = try self.writer.write("..");
+                _ = try self.writer.write(self.env.idents.getText(ident_idx));
+            },
             else => {
+                // Show other types (aliases, errors, etc)
                 if (fields.len > 0) _ = try self.writer.write(", ");
                 _ = try self.writer.write("* ");
                 try self.writeVar(record.ext);
@@ -294,6 +322,54 @@ pub const TypeWriter = struct {
         }
 
         _ = try self.writer.write(" }");
+    }
+
+    /// Helper to write record extension, handling nested records
+    fn writeRecordExtension(self: *Self, ext_var: types.Var, num_fields: usize) Allocator.Error!void {
+        const ext_resolved = self.env.types.resolveVar(ext_var);
+        switch (ext_resolved.desc.content) {
+            .structure => |flat_type| switch (flat_type) {
+                .empty_record => {}, // Don't show empty extension
+                .record => |ext_record| {
+                    // Flatten nested record extensions
+                    const ext_fields = self.env.types.getRecordFieldsSlice(ext_record.fields);
+                    for (ext_fields.items(.name), ext_fields.items(.var_)) |field_name, field_var| {
+                        _ = try self.writer.write(", ");
+                        _ = try self.writer.write(self.env.idents.getText(field_name));
+                        _ = try self.writer.write(": ");
+                        try self.writeVar(field_var);
+                    }
+                    // Recursively handle the extension's extension
+                    try self.writeRecordExtension(ext_record.ext, num_fields + ext_fields.len);
+                },
+                else => {
+                    if (num_fields > 0) _ = try self.writer.write(", ");
+                    _ = try self.writer.write("* ");
+                    try self.writeVar(ext_var);
+                },
+            },
+            .flex_var => |mb_ident| {
+                // Only show flex vars if they have a name
+                if (mb_ident) |_| {
+                    if (num_fields > 0) _ = try self.writer.write(", ");
+                    _ = try self.writer.write("* ");
+                    try self.writeVar(ext_var);
+                }
+                // Otherwise hide unnamed flex vars, so they render as no extension.
+            },
+            .rigid_var => |ident_idx| {
+                // Show rigid vars with .. syntax
+                if (num_fields > 0) _ = try self.writer.write(", ");
+                _ = try self.writer.write("..");
+                _ = try self.writer.write(self.env.idents.getText(ident_idx));
+            },
+            else => {
+                // Show other types (aliases, errors, etc)
+                if (num_fields > 0) _ = try self.writer.write(", ");
+                _ = try self.writer.write("* ");
+                try self.writeVar(ext_var);
+            },
+        }
     }
 
     /// Write a tag union type

@@ -142,12 +142,6 @@ test "NodeStore round trip - Expressions" {
     defer expressions.deinit();
 
     try expressions.append(CIR.Expr{
-        .e_num = .{
-            .region = from_raw_offsets(123, 345),
-            .value = CIR.IntValue.placeholder(),
-        },
-    });
-    try expressions.append(CIR.Expr{
         .e_int = .{
             .region = from_raw_offsets(234, 345),
             .value = CIR.IntValue.placeholder(),
@@ -185,17 +179,13 @@ test "NodeStore round trip - Expressions" {
         },
     });
     try expressions.append(CIR.Expr{
-        .e_lookup = .{
-            .local = .{
-                .pattern_idx = @enumFromInt(234),
-                .region = from_raw_offsets(901, 1234),
-            },
+        .e_lookup_local = .{
+            .pattern_idx = @enumFromInt(234),
+            .region = from_raw_offsets(901, 1234),
         },
     });
     try expressions.append(CIR.Expr{
-        .e_lookup = .{
-            .external = @enumFromInt(345),
-        },
+        .e_lookup_external = @enumFromInt(345),
     });
     try expressions.append(CIR.Expr{
         .e_list = .{
@@ -211,16 +201,16 @@ test "NodeStore round trip - Expressions" {
         },
     });
     try expressions.append(CIR.Expr{
-        .e_match = CIR.Match{
+        .e_match = CIR.Expr.Match{
             .cond = @enumFromInt(567),
             .region = from_raw_offsets(1234, 1567),
-            .branches = CIR.Match.Branch.Span{ .span = base.DataSpan.init(456, 789) },
+            .branches = CIR.Expr.Match.Branch.Span{ .span = base.DataSpan.init(456, 789) },
             .exhaustive = @enumFromInt(901),
         },
     });
     try expressions.append(CIR.Expr{
         .e_if = .{
-            .branches = CIR.IfBranch.Span{ .span = base.DataSpan.init(567, 890) },
+            .branches = CIR.Expr.IfBranch.Span{ .span = base.DataSpan.init(567, 890) },
             .final_else = @enumFromInt(1234),
             .region = from_raw_offsets(1345, 1678),
         },
@@ -251,17 +241,6 @@ test "NodeStore round trip - Expressions" {
         },
     });
     try expressions.append(CIR.Expr{
-        .e_record_access = .{
-            .record_var = @enumFromInt(1678),
-            .ext_var = @enumFromInt(1789),
-            .field_var = @enumFromInt(1890),
-            .loc_expr = @enumFromInt(1901),
-            .field = @bitCast(@as(u32, 2012)),
-            .region = from_raw_offsets(1890, 2123),
-        },
-    });
-
-    try expressions.append(CIR.Expr{
         .e_tag = .{
             .ext_var = @enumFromInt(2012),
             .name = @bitCast(@as(u32, 2123)),
@@ -269,7 +248,6 @@ test "NodeStore round trip - Expressions" {
             .region = from_raw_offsets(1901, 2234),
         },
     });
-
     try expressions.append(CIR.Expr{
         .e_zero_argument_tag = .{
             .closure_name = @bitCast(@as(u32, 2234)),
@@ -279,7 +257,6 @@ test "NodeStore round trip - Expressions" {
             .region = from_raw_offsets(2012, 2345),
         },
     });
-
     try expressions.append(CIR.Expr{
         .e_lambda = .{
             .args = CIR.Pattern.Span{ .span = base.DataSpan.init(1012, 1345) },
@@ -287,7 +264,6 @@ test "NodeStore round trip - Expressions" {
             .region = from_raw_offsets(2123, 2456),
         },
     });
-
     try expressions.append(CIR.Expr{
         .e_binop = CIR.Expr.Binop.init(
             .add,
@@ -318,7 +294,6 @@ test "NodeStore round trip - Expressions" {
             .region = from_raw_offsets(2567, 2890),
         },
     });
-
     for (expressions.items) |expr| {
         const idx = store.addExpr(expr);
         const retrieved = store.getExpr(idx);
@@ -550,6 +525,12 @@ test "NodeStore round trip - Diagnostics" {
         },
     });
 
+    try diagnostics.append(CIR.Diagnostic{
+        .f64_pattern_literal = .{
+            .region = from_raw_offsets(730, 740),
+        },
+    });
+
     // Test the round-trip for all diagnostics
     for (diagnostics.items) |diagnostic| {
         const idx = store.addDiagnostic(diagnostic);
@@ -632,7 +613,7 @@ test "NodeStore round trip - TypeAnno" {
 
     try type_annos.append(CIR.TypeAnno{
         .record = .{
-            .fields = CIR.AnnoRecordField.Span{ .span = base.DataSpan.init(1345, 1567) },
+            .fields = CIR.TypeAnno.RecordField.Span{ .span = base.DataSpan.init(1345, 1567) },
             .region = from_raw_offsets(150, 160),
         },
     });
@@ -714,7 +695,7 @@ test "NodeStore round trip - Pattern" {
         .record_destructure = .{
             .whole_var = @enumFromInt(890),
             .ext_var = @enumFromInt(901),
-            .destructs = CIR.RecordDestruct.Span{ .span = base.DataSpan.init(1012, 1123) },
+            .destructs = CIR.Pattern.RecordDestruct.Span{ .span = base.DataSpan.init(1012, 1123) },
             .region = from_raw_offsets(70, 80),
         },
     });
@@ -753,12 +734,6 @@ test "NodeStore round trip - Pattern" {
         .dec_literal = .{
             .value = RocDec.fromU64(1890),
             .region = from_raw_offsets(170, 180),
-        },
-    });
-    try patterns.append(CIR.Pattern{
-        .f64_literal = .{
-            .value = 3.14,
-            .region = from_raw_offsets(190, 200),
         },
     });
     try patterns.append(CIR.Pattern{

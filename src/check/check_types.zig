@@ -665,29 +665,25 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
     const expr = self.can_ir.store.getExpr(expr_idx);
     var does_fx = false; // Does this expression potentially perform any side effects?
     switch (expr) {
-        .e_num => |_| {},
         .e_int => |_| {},
         .e_frac_f64 => |_| {},
         .e_frac_dec => |_| {},
         .e_dec_small => |_| {},
         .e_str_segment => |_| {},
         .e_str => |_| {},
-        .e_lookup => |lookup| {
+        .e_lookup_local => |local| {
             // For lookups, we need to connect the lookup expression to the actual variable
-            switch (lookup) {
-                .local => |local| {
-                    // The lookup expression should have the same type as the pattern it refers to
-                    const lookup_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
-                    const pattern_var = @as(Var, @enumFromInt(@intFromEnum(local.pattern_idx)));
-                    _ = self.unify(lookup_var, pattern_var);
-                },
-                .external => |external_idx| {
-                    // For external lookups, connect to the external declaration's type
-                    const lookup_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
-                    const external_decl = self.can_ir.external_decls.items[@intFromEnum(external_idx)];
-                    _ = self.unify(lookup_var, external_decl.type_var);
-                },
-            }
+            // The lookup expression should have the same type as the pattern it refers to
+            const lookup_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
+            const pattern_var = @as(Var, @enumFromInt(@intFromEnum(local.pattern_idx)));
+            _ = self.unify(lookup_var, pattern_var);
+        },
+        .e_lookup_external => |external_idx| {
+            // For lookups, we need to connect the lookup expression to the actual variable
+            // For external lookups, connect to the external declaration's type
+            const lookup_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
+            const external_decl = self.can_ir.external_decls.items[@intFromEnum(external_idx)];
+            _ = self.unify(lookup_var, external_decl.type_var);
         },
         .e_list => |list| {
             const elem_var = @as(Var, @enumFromInt(@intFromEnum(list.elem_var)));
@@ -840,7 +836,6 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             }
         },
         .e_empty_record => |_| {},
-        .e_record_access => |_| {},
         .e_tag => |_| {},
         .e_zero_argument_tag => |_| {},
         .e_binop => |binop| {
@@ -1060,7 +1055,7 @@ fn checkBinopExpr(self: *Self, _: CIR.Expr.Idx, binop: CIR.Expr.Binop) Allocator
 // if-else //
 
 /// Check the types for an if-else expr
-fn checkIfElseExpr(self: *Self, if_expr_idx: CIR.Expr.Idx, if_: CIR.If) std.mem.Allocator.Error!bool {
+fn checkIfElseExpr(self: *Self, if_expr_idx: CIR.Expr.Idx, if_: std.meta.FieldType(CIR.Expr, .e_if)) std.mem.Allocator.Error!bool {
     const branches = self.can_ir.store.sliceIfBranches(if_.branches);
 
     // Should never be 0
@@ -1144,7 +1139,7 @@ fn checkIfElseExpr(self: *Self, if_expr_idx: CIR.Expr.Idx, if_: CIR.If) std.mem.
 // match //
 
 /// Check the types for an if-else expr
-fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, match: CIR.Match) Allocator.Error!bool {
+fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, match: CIR.Expr.Match) Allocator.Error!bool {
     // Check the match's condition
     var does_fx = try self.checkExpr(match.cond);
     const cond_var: Var = @enumFromInt(@intFromEnum(match.cond));

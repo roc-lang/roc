@@ -1008,7 +1008,7 @@ pub fn canonicalize_expr(
                             const external_idx = self.can_ir.pushExternalDecl(external_decl);
 
                             // Create lookup expression for external declaration
-                            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_lookup = .{ .external = external_idx } });
+                            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_lookup_external = external_idx });
                             _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
                             return expr_idx;
                         }
@@ -1026,10 +1026,10 @@ pub fn canonicalize_expr(
 
                         // We found the ident in scope, lookup to reference the pattern
                         const expr_idx =
-                            self.can_ir.store.addExpr(CIR.Expr{ .e_lookup = .{ .local = .{
+                            self.can_ir.store.addExpr(CIR.Expr{ .e_lookup_local = .{
                                 .pattern_idx = pattern_idx,
                                 .region = region,
-                            } } });
+                            } });
                         _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
                         return expr_idx;
                     },
@@ -1052,7 +1052,7 @@ pub fn canonicalize_expr(
                             const external_idx = self.can_ir.pushExternalDecl(external_decl);
 
                             // Create lookup expression for external declaration
-                            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_lookup = .{ .external = external_idx } });
+                            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_lookup_external = external_idx });
                             _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
                             return expr_idx;
                         }
@@ -1821,11 +1821,12 @@ pub fn canonicalize_expr(
                             break :blk malformed_idx;
                         }
                     };
-                    self.can_ir.store.addScratchMatchBranchPattern(CIR.Match.BranchPattern{
+                    const branch_pattern_idx = self.can_ir.store.addMatchBranchPattern(CIR.Expr.Match.BranchPattern{
                         .pattern = pattern_idx,
                         .degenerate = false,
                         .region = pattern_region,
                     });
+                    self.can_ir.store.addScratchMatchBranchPattern(branch_pattern_idx);
                 }
 
                 // Get the pattern span
@@ -1845,7 +1846,7 @@ pub fn canonicalize_expr(
                     }
                 };
 
-                self.can_ir.store.addScratchMatchBranch(.{
+                const branch_idx = self.can_ir.store.addMatchBranch(CIR.Expr.Match.Branch{
                     .patterns = branch_pat_span,
                     .value = value_idx,
                     .guard = null,
@@ -1857,13 +1858,15 @@ pub fn canonicalize_expr(
                 if (index == 0) {
                     mb_branch_var = @enumFromInt(@intFromEnum(value_idx));
                 }
+
+                self.can_ir.store.addScratchMatchBranch(branch_idx);
             }
 
             // Create span from scratch branches
             const branches_span = self.can_ir.store.matchBranchSpanFrom(scratch_top);
 
             // Create the match expression
-            const match_expr = CIR.Match{
+            const match_expr = CIR.Expr.Match{
                 .cond = cond_expr,
                 .branches = branches_span,
                 .exhaustive = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region) catch |err| exitOnOom(err),
@@ -2175,6 +2178,14 @@ fn canonicalize_pattern(
                 .fits_in_dec = requirements.fits_in_dec,
             };
 
+            // Check for f64 literals which are not allowed in patterns
+            if (parsed == .f64) {
+                const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .f64_pattern_literal = .{
+                    .region = region,
+                } });
+                return malformed_idx;
+            }
+
             const cir_pattern = switch (parsed) {
                 .small => |small_info| CIR.Pattern{
                     .small_dec_literal = .{
@@ -2189,12 +2200,7 @@ fn canonicalize_pattern(
                         .region = region,
                     },
                 },
-                .f64 => |f64_info| CIR.Pattern{
-                    .f64_literal = .{
-                        .value = f64_info.value,
-                        .region = region,
-                    },
-                },
+                .f64 => unreachable, // Already handled above
             };
 
             const pattern_idx = try self.can_ir.store.addPattern(cir_pattern);
@@ -2299,7 +2305,7 @@ fn canonicalize_pattern(
                     }
 
                     // Create the RecordDestruct for this field
-                    const record_destruct = CIR.RecordDestruct{
+                    const record_destruct = CIR.Pattern.RecordDestruct{
                         .region = field_region,
                         .label = field_name_ident,
                         .ident = field_name_ident,
@@ -2866,7 +2872,7 @@ fn flattenIfThenElseChainRecursive(self: *Self, if_expr: anytype) std.mem.Alloca
     };
 
     // Add this condition/then pair as an if-branch
-    const if_branch = CIR.IfBranch{
+    const if_branch = CIR.Expr.IfBranch{
         .cond = cond_idx,
         .body = then_idx,
         .region = self.parse_ir.tokenizedRegionToRegion(if_expr.region),
@@ -3166,7 +3172,7 @@ fn canonicalize_type_anno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.
                     const canonicalized_ty = self.canonicalize_type_anno(ast_field.ty);
                     const field_region = self.parse_ir.tokenizedRegionToRegion(ast_field.region);
 
-                    const cir_field = CIR.AnnoRecordField{
+                    const cir_field = CIR.TypeAnno.RecordField{
                         .name = malformed_ident,
                         .ty = canonicalized_ty,
                         .region = field_region,
@@ -3180,7 +3186,7 @@ fn canonicalize_type_anno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.
                 const canonicalized_ty = self.canonicalize_type_anno(ast_field.ty);
                 const field_region = self.parse_ir.tokenizedRegionToRegion(ast_field.region);
 
-                const cir_field = CIR.AnnoRecordField{
+                const cir_field = CIR.TypeAnno.RecordField{
                     .name = field_name,
                     .ty = canonicalized_ty,
                     .region = field_region,
@@ -4677,7 +4683,7 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) ?CIR.Expr.Idx 
     const external_idx = self.can_ir.pushExternalDecl(external_decl);
 
     // Create lookup expression for external declaration
-    const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_lookup = .{ .external = external_idx } });
+    const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_lookup_external = external_idx });
     _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
     return expr_idx;
 }
@@ -5505,15 +5511,15 @@ test "numeric literal patterns use pattern idx as type var" {
         var cir = CIR.init(&env);
         defer cir.deinit();
 
-        // Create an f64 literal pattern directly
-        const f64_pattern = CIR.Pattern{
-            .f64_literal = .{
-                .value = 3.14,
+        // Create a dec literal pattern directly
+        const dec_pattern = CIR.Pattern{
+            .dec_literal = .{
+                .value = RocDec.fromF64(3.14) orelse unreachable,
                 .region = Region.zero(),
             },
         };
 
-        const pattern_idx = try cir.store.addPattern(f64_pattern);
+        const pattern_idx = try cir.store.addPattern(dec_pattern);
 
         // Set the type variable for the pattern
         _ = cir.setTypeVarAtPat(pattern_idx, Content{
@@ -5525,8 +5531,9 @@ test "numeric literal patterns use pattern idx as type var" {
 
         // Verify the stored pattern
         const stored_pattern = cir.store.getPattern(pattern_idx);
-        try std.testing.expect(stored_pattern == .f64_literal);
-        try std.testing.expectApproxEqAbs(@as(f64, 3.14), stored_pattern.f64_literal.value, 0.001);
+        try std.testing.expect(stored_pattern == .dec_literal);
+        const expected_dec = RocDec.fromF64(3.14) orelse unreachable;
+        try std.testing.expectEqual(expected_dec.num, stored_pattern.dec_literal.value.num);
 
         // Verify the pattern index can be used as a type variable
         const pattern_as_type_var: types.Var = @enumFromInt(@intFromEnum(pattern_idx));
@@ -5747,8 +5754,8 @@ test "numeric pattern types: unbound vs polymorphic" {
         defer cir.deinit();
 
         const pattern = CIR.Pattern{
-            .f64_literal = .{
-                .value = 2.5,
+            .dec_literal = .{
+                .value = RocDec.fromF64(2.5) orelse unreachable,
                 .region = Region.zero(),
             },
         };
@@ -6068,8 +6075,8 @@ test "numeric pattern types: unbound vs polymorphic - frac" {
         defer cir.deinit();
 
         const pattern = CIR.Pattern{
-            .f64_literal = .{
-                .value = std.math.inf(f64),
+            .dec_literal = .{
+                .value = RocDec.fromF64(1000000.0) orelse unreachable,
                 .region = Region.zero(),
             },
         };
@@ -6203,28 +6210,17 @@ test "pattern numeric literal value edge cases" {
         var cir = CIR.init(&env);
         defer cir.deinit();
 
-        // Test NaN
-        const nan_pattern = CIR.Pattern{
-            .f64_literal = .{
-                .value = std.math.nan(f64),
-                .region = Region.zero(),
-            },
-        };
-        const nan_idx = try cir.store.addPattern(nan_pattern);
-        const stored_nan = cir.store.getPattern(nan_idx);
-        try std.testing.expect(std.math.isNan(stored_nan.f64_literal.value));
-
-        // Test negative zero
+        // Test negative zero (RocDec doesn't distinguish between +0 and -0)
         const neg_zero_pattern = CIR.Pattern{
-            .f64_literal = .{
-                .value = -0.0,
+            .dec_literal = .{
+                .value = RocDec.fromF64(-0.0) orelse unreachable,
                 .region = Region.zero(),
             },
         };
         const neg_zero_idx = try cir.store.addPattern(neg_zero_pattern);
         const stored_neg_zero = cir.store.getPattern(neg_zero_idx);
-        try std.testing.expect(std.math.signbit(stored_neg_zero.f64_literal.value));
-        try std.testing.expectEqual(@as(f64, -0.0), stored_neg_zero.f64_literal.value);
+        try std.testing.expect(stored_neg_zero == .dec_literal);
+        try std.testing.expectEqual(@as(i128, 0), stored_neg_zero.dec_literal.value.num);
     }
 }
 

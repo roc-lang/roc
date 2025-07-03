@@ -99,7 +99,7 @@ pub const IncompatibleListElements = struct {
 /// Problem data for when if branches have have incompatible types
 pub const IncompatibleIfBranches = struct {
     parent_if_expr: CIR.Expr.Idx,
-    last_if_branch: CIR.IfBranch.Idx,
+    last_if_branch: CIR.Expr.IfBranch.Idx,
     num_branches: u32,
     problem_branch_index: u32,
 };
