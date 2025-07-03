@@ -299,34 +299,6 @@ pub fn checkPattern(self: *Self, pattern_idx: CIR.Pattern.Idx) std.mem.Allocator
     _ = pattern_idx;
 }
 
-fn setDetailIfTypeMismatch(self: *Self, result: unifier.Result, mismatch_detail: problem.TypeMismatchDetail) void {
-    switch (result) {
-        .ok => {},
-        .problem => |problem_idx| {
-            // Unification failed, so we know it appended a type mismatch to self.problems.
-            // We'll translate that generic type mismatch between the two elements into
-            // a more helpful error report.
-
-            // Extract snapshots from the type mismatch problem
-            switch (self.problems.problems.get(problem_idx)) {
-                .type_mismatch => |mismatch| {
-                    self.problems.problems.set(problem_idx, .{
-                        .type_mismatch = .{
-                            .types = mismatch.types,
-                            .detail = mismatch_detail,
-                        },
-                    });
-                },
-                else => {
-                    // For other problem types (e.g., number_does_not_fit), the
-                    // original problem is already more specific than our custom
-                    // problem, so we should keep it as-is and not replace it.
-                },
-            }
-        },
-    }
-}
-
 test "lambda with record field access infers correct type" {
     // The lambda |x, y| { x: x, y: y }.x should have type a, b -> a
     // And when annotated as I32, I32 -> I32, it should unify correctly.
@@ -750,9 +722,11 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             }
         },
         .e_empty_list => |_| {},
-        .e_match => |_| {},
+        .e_match => |match| {
+            does_fx = try self.checkMatchExpr(expr_idx, match);
+        },
         .e_if => |if_expr| {
-            return try self.checkIfElseExpr(expr_idx, if_expr);
+            does_fx = try self.checkIfElseExpr(expr_idx, if_expr);
         },
         .e_call => |call| {
             // Get all expressions - first is function, rest are arguments
@@ -864,7 +838,9 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
         .e_empty_record => |_| {},
         .e_tag => |_| {},
         .e_zero_argument_tag => |_| {},
-        .e_binop => |_| {},
+        .e_binop => |binop| {
+            does_fx = try self.checkBinopExpr(expr_idx, binop);
+        },
         .e_block => |block| {
             // Check all statements in the block (safely)
             const statements = self.can_ir.store.sliceStatements(block.stmts);
@@ -1066,12 +1042,20 @@ fn checkLambdaWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, lambda: anytype,
     return is_effectful;
 }
 
+// binop //
+
 /// Check the types for an if-else expr
-pub fn checkIfElseExpr(
-    self: *Self,
-    if_expr_idx: CIR.Expr.Idx,
-    if_: anytype, // TODO this should restrict to CIR.Expr.if variant, look this up
-) std.mem.Allocator.Error!bool {
+fn checkBinopExpr(self: *Self, _: CIR.Expr.Idx, binop: CIR.Expr.Binop) Allocator.Error!bool {
+    var does_fx = try self.checkExpr(binop.lhs);
+    does_fx = try self.checkExpr(binop.rhs) or does_fx;
+
+    return does_fx;
+}
+
+// if-else //
+
+/// Check the types for an if-else expr
+fn checkIfElseExpr(self: *Self, if_expr_idx: CIR.Expr.Idx, if_: std.meta.FieldType(CIR.Expr, .e_if)) std.mem.Allocator.Error!bool {
     const branches = self.can_ir.store.sliceIfBranches(if_.branches);
 
     // Should never be 0
@@ -1150,4 +1134,149 @@ pub fn checkIfElseExpr(
     } });
 
     return does_fx;
+}
+
+// match //
+
+/// Check the types for an if-else expr
+fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, match: CIR.Expr.Match) Allocator.Error!bool {
+    // Check the match's condition
+    var does_fx = try self.checkExpr(match.cond);
+    const cond_var: Var = @enumFromInt(@intFromEnum(match.cond));
+
+    // Bail if we somehow have 0 branches
+    // TODO: Should this be an error? Here or in Can?
+    if (match.branches.span.len == 0) return does_fx;
+
+    // Get slice of branches
+    const branch_idxs = self.can_ir.store.sliceMatchBranches(match.branches);
+
+    // Manually check the 1st branch
+    // The type of the branch's body becomes the var other branch bodies must unify
+    // against.
+    const first_branch_idx = branch_idxs[0];
+    const first_branch = self.can_ir.store.getMatchBranch(first_branch_idx);
+
+    const first_branch_ptrn_idxs = self.can_ir.store.sliceMatchBranchPatterns(first_branch.patterns);
+
+    for (first_branch_ptrn_idxs, 0..) |branch_ptrn_idx, cur_ptrn_index| {
+        const branch_ptrn = self.can_ir.store.getMatchBranchPattern(branch_ptrn_idx);
+        try self.checkPattern(branch_ptrn.pattern);
+        const branch_ptrn_var: Var = @enumFromInt(@intFromEnum(branch_ptrn.pattern));
+
+        const ptrn_result = self.unify(cond_var, branch_ptrn_var);
+        self.setDetailIfTypeMismatch(ptrn_result, problem.TypeMismatchDetail{ .incompatible_match_patterns = .{
+            .match_expr = expr_idx,
+            .num_branches = @intCast(match.branches.span.len),
+            .problem_branch_index = 0,
+            .num_patterns = @intCast(first_branch_ptrn_idxs.len),
+            .problem_pattern_index = @intCast(cur_ptrn_index),
+        } });
+    }
+
+    // Check the first branch's value, then use that at the branch_var
+    does_fx = try self.checkExpr(first_branch.value) or does_fx;
+    const branch_var: Var = @enumFromInt(@intFromEnum(first_branch.value));
+
+    // Then iterate over the rest of the branches
+    for (branch_idxs[1..], 1..) |branch_idx, branch_cur_index| {
+        const branch = self.can_ir.store.getMatchBranch(branch_idx);
+
+        // First, check the patterns of this branch
+        const branch_ptrn_idxs = self.can_ir.store.sliceMatchBranchPatterns(branch.patterns);
+        for (branch_ptrn_idxs, 0..) |branch_ptrn_idx, cur_ptrn_index| {
+            // Check the pattern's sub types
+            const branch_ptrn = self.can_ir.store.getMatchBranchPattern(branch_ptrn_idx);
+            try self.checkPattern(branch_ptrn.pattern);
+
+            // Check the pattern against the cond
+            const branch_ptrn_var: Var = @enumFromInt(@intFromEnum(branch_ptrn.pattern));
+            const ptrn_result = self.unify(cond_var, branch_ptrn_var);
+            self.setDetailIfTypeMismatch(ptrn_result, problem.TypeMismatchDetail{ .incompatible_match_patterns = .{
+                .match_expr = expr_idx,
+                .num_branches = @intCast(match.branches.span.len),
+                .problem_branch_index = @intCast(branch_cur_index),
+                .num_patterns = @intCast(branch_ptrn_idxs.len),
+                .problem_pattern_index = @intCast(cur_ptrn_index),
+            } });
+        }
+
+        // Then, check the body
+        does_fx = try self.checkExpr(branch.value) or does_fx;
+        const branch_result = self.unify(branch_var, @enumFromInt(@intFromEnum(branch.value)));
+        self.setDetailIfTypeMismatch(branch_result, problem.TypeMismatchDetail{ .incompatible_match_branches = .{
+            .match_expr = expr_idx,
+            .num_branches = @intCast(match.branches.span.len),
+            .problem_branch_index = @intCast(branch_cur_index),
+        } });
+
+        if (!branch_result.isOk()) {
+            // If there was a body mismatch, do not check other branches to stop
+            // cascading errors. But still check each other branch's sub types
+            for (branch_idxs[branch_cur_index + 1 ..], branch_cur_index + 1..) |other_branch_idx, other_branch_cur_index| {
+                const other_branch = self.can_ir.store.getMatchBranch(other_branch_idx);
+
+                // Still check the other patterns
+                const other_branch_ptrn_idxs = self.can_ir.store.sliceMatchBranchPatterns(other_branch.patterns);
+                for (other_branch_ptrn_idxs, 0..) |other_branch_ptrn_idx, other_cur_ptrn_index| {
+                    // Check the pattern's sub types
+                    const other_branch_ptrn = self.can_ir.store.getMatchBranchPattern(other_branch_ptrn_idx);
+                    try self.checkPattern(other_branch_ptrn.pattern);
+
+                    // Check the pattern against the cond
+                    const other_branch_ptrn_var: Var = @enumFromInt(@intFromEnum(other_branch_ptrn.pattern));
+                    const ptrn_result = self.unify(cond_var, other_branch_ptrn_var);
+                    self.setDetailIfTypeMismatch(ptrn_result, problem.TypeMismatchDetail{ .incompatible_match_patterns = .{
+                        .match_expr = expr_idx,
+                        .num_branches = @intCast(match.branches.span.len),
+                        .problem_branch_index = @intCast(other_branch_cur_index),
+                        .num_patterns = @intCast(other_branch_ptrn_idxs.len),
+                        .problem_pattern_index = @intCast(other_cur_ptrn_index),
+                    } });
+                }
+
+                // Then check the other branch's exprs
+                does_fx = try self.checkExpr(other_branch.value) or does_fx;
+                try self.types.setVarContent(@enumFromInt(@intFromEnum(other_branch.value)), .err);
+            }
+
+            // Then stop type checking for this branch
+            break;
+        }
+    }
+
+    return does_fx;
+}
+
+// problems //
+
+/// If the provided result is a type mismatch problem, append the detail to the
+/// problem in the store. This allows us to show the user nice, more specific
+/// errors than a generic type mismatch
+fn setDetailIfTypeMismatch(self: *Self, result: unifier.Result, mismatch_detail: problem.TypeMismatchDetail) void {
+    switch (result) {
+        .ok => {},
+        .problem => |problem_idx| {
+            // Unification failed, so we know it appended a type mismatch to self.problems.
+            // We'll translate that generic type mismatch between the two elements into
+            // a more helpful if-condition-specific error report.
+
+            // Extract snapshots from the type mismatch problem
+            switch (self.problems.problems.get(problem_idx)) {
+                .type_mismatch => |mismatch| {
+                    self.problems.problems.set(problem_idx, .{
+                        .type_mismatch = .{
+                            .types = mismatch.types,
+                            .detail = mismatch_detail,
+                        },
+                    });
+                },
+                else => {
+                    // For other problem types (e.g., number_does_not_fit), the
+                    // original problem is already more specific than our custom
+                    // problem, so we should keep it as-is and not replace it.
+                },
+            }
+        },
+    }
 }
