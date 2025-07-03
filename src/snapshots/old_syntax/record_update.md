@@ -130,5 +130,5 @@ OpenCurly(1:1-1:2),UpperIdent(1:3-1:6),NoSpaceDotUpperIdent(1:6-1:10),NoSpaceDot
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.29 (type "()"))
+(expr @1.1-1.29 (type "*"))
 ~~~

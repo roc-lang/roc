@@ -22,6 +22,9 @@ r))
  ^^
 
 
+**INVALID TUPLE ELEMENT**
+This tuple element is malformed or contains invalid syntax.
+
 # TOKENS
 ~~~zig
 Int(1:1-1:2),OpBinaryMinus(1:2-1:3),NoSpaceOpenRound(1:3-1:4),NoSpaceOpenRound(1:4-1:5),LowerIdent(1:5-1:6),OpAssign(1:6-1:7),NoSpaceOpenRound(1:7-1:8),NoSpaceOpenRound(1:8-1:9),Newline(1:1-1:1),
@@ -46,7 +49,8 @@ Int(3:1-3:2),CloseRound(3:2-3:3),CloseRound(3:3-3:4),EndOfFile(3:4-3:4),
 (e-binop @1.1-3.2 (op "sub")
 	(e-int @1.1-1.2 (value "5"))
 	(e-tuple @1.3-2.4
-		(elems)))
+		(elems
+			(e-runtime-error (tag "tuple_elem_not_canonicalized")))))
 ~~~
 # TYPES
 ~~~clojure

@@ -275,6 +275,11 @@ pub const Store = struct {
         return self.func_args.appendSlice(self.gpa, slice);
     }
 
+    /// Append a record field to the backing list, returning the idx
+    pub fn appendRecordField(self: *Self, field: RecordField) RecordFieldSafeMultiList.Idx {
+        return self.record_fields.append(self.gpa, field);
+    }
+
     /// Append a slice of record fields to the backing list, returning the range
     pub fn appendRecordFields(self: *Self, slice: []const RecordField) RecordFieldSafeMultiList.Range {
         return self.record_fields.appendSlice(self.gpa, slice);

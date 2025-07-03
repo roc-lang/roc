@@ -94,7 +94,7 @@ pub fn deinit(store: *NodeStore) void {
 /// when adding/removing variants from CIR unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the CIR
-pub const CIR_DIAGNOSTIC_NODE_COUNT = 31;
+pub const CIR_DIAGNOSTIC_NODE_COUNT = 32;
 /// Count of the expression nodes in the CIR
 pub const CIR_EXPR_NODE_COUNT = 23;
 /// Count of the statement nodes in the CIR
@@ -2356,6 +2356,10 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) CIR.Diagnostic.I
             node.data_2 = r.original_region.start.offset;
             node.data_3 = r.original_region.end.offset;
         },
+        .tuple_elem_not_canonicalized => |r| {
+            node.tag = .diag_tuple_elem_not_canonicalized;
+            node.region = r.region;
+        },
         .nominal_type_redeclared => |r| {
             node.tag = .diag_nominal_type_redeclared;
             node.region = r.redeclared_region;
@@ -2523,6 +2527,9 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         } },
         .diag_undeclared_type => return CIR.Diagnostic{ .undeclared_type = .{
             .name = @bitCast(node.data_1),
+            .region = node.region,
+        } },
+        .diag_tuple_elem_not_canonicalized => return CIR.Diagnostic{ .tuple_elem_not_canonicalized = .{
             .region = node.region,
         } },
         .diag_undeclared_type_var => return CIR.Diagnostic{ .undeclared_type_var = .{

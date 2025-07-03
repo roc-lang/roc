@@ -673,26 +673,6 @@ const Unifier = struct {
                     .tuple => |b_tuple| {
                         try self.unifyTuple(vars, a_tuple, b_tuple);
                     },
-                    .tuple_unbound => |b_tuple| {
-                        // When unifying tuple with tuple_unbound, tuple wins
-                        try self.unifyTuple(vars, a_tuple, b_tuple);
-                    },
-                    else => return error.TypeMismatch,
-                }
-            },
-            .tuple_unbound => |a_tuple| {
-                switch (b_flat_type) {
-                    .tuple => |b_tuple| {
-                        // When unifying tuple_unbound with tuple, tuple wins
-                        try self.unifyTuple(vars, a_tuple, b_tuple);
-                        self.merge(vars, vars.b.desc.content);
-                    },
-                    .tuple_unbound => |b_tuple| {
-                        // Both are tuple_unbound - unify elements and stay unbound
-                        try self.unifyTuple(vars, a_tuple, b_tuple);
-                        // Explicitly merge to keep as tuple_unbound
-                        self.merge(vars, vars.a.desc.content);
-                    },
                     else => return error.TypeMismatch,
                 }
             },
@@ -3516,91 +3496,6 @@ test "unify - a & b are tuples with args flipped (fail)" {
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.module_env.types.getSlot(a));
     try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
-}
-
-test "unify - tuple_unbound unifies with tuple" {
-    const gpa = std.testing.allocator;
-
-    var env = TestEnv.init(gpa);
-    defer env.deinit();
-
-    // Create element type variables
-    const num_var = env.module_env.types.freshFromContent(
-        Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = false, .bits_needed = 0 } } } },
-    );
-
-    const str_var = env.module_env.types.freshFromContent(
-        Content{ .structure = .str },
-    );
-
-    // Create tuple elements
-    const elems = [_]types_mod.Var{ num_var, str_var };
-    const elems_range = env.module_env.types.appendTupleElems(&elems);
-
-    // Create a tuple_unbound
-    const tuple_unbound = Content{ .structure = .{ .tuple_unbound = .{ .elems = elems_range } } };
-    const tuple_unbound_var = env.module_env.types.freshFromContent(tuple_unbound);
-
-    // Create a regular tuple with same structure
-    const tuple = Content{ .structure = .{ .tuple = .{ .elems = elems_range } } };
-    const tuple_var = env.module_env.types.freshFromContent(tuple);
-
-    // Unify tuple_unbound with tuple
-    const result = env.unify(tuple_unbound_var, tuple_var);
-    try std.testing.expect(result.isOk());
-
-    // Check that tuple_unbound_var now points to tuple_var
-    const resolved = env.module_env.types.resolveVar(tuple_unbound_var);
-    const resolved_tuple = env.module_env.types.resolveVar(tuple_var);
-    try std.testing.expectEqual(resolved.var_, resolved_tuple.var_);
-}
-
-test "unify - multiple tuple_unbounds stay unbound" {
-    const gpa = std.testing.allocator;
-
-    var env = TestEnv.init(gpa);
-    defer env.deinit();
-
-    // Create element type variables for first tuple
-    const num_var1 = env.module_env.types.freshFromContent(
-        Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = false, .bits_needed = 0 } } } },
-    );
-
-    // Create tuple elements for first tuple
-    const elems1 = [_]types_mod.Var{num_var1};
-    const elems_range1 = env.module_env.types.appendTupleElems(&elems1);
-
-    // Create element type variables for second tuple
-    const num_var2 = env.module_env.types.freshFromContent(
-        Content{ .structure = .{ .num = .{ .num_unbound = .{ .sign_needed = false, .bits_needed = 0 } } } },
-    );
-
-    // Create tuple elements for second tuple
-    const elems2 = [_]types_mod.Var{num_var2};
-    const elems_range2 = env.module_env.types.appendTupleElems(&elems2);
-
-    // Create two tuple_unbounds
-    const tuple_unbound1 = Content{ .structure = .{ .tuple_unbound = .{ .elems = elems_range1 } } };
-    const tuple_unbound1_var = env.module_env.types.freshFromContent(tuple_unbound1);
-
-    const tuple_unbound2 = Content{ .structure = .{ .tuple_unbound = .{ .elems = elems_range2 } } };
-    const tuple_unbound2_var = env.module_env.types.freshFromContent(tuple_unbound2);
-
-    // Unify the two tuple_unbounds
-    const result = env.unify(tuple_unbound1_var, tuple_unbound2_var);
-    try std.testing.expect(result.isOk());
-
-    // Check that the result is still tuple_unbound
-    const resolved = env.module_env.types.resolveVar(tuple_unbound1_var);
-    switch (resolved.desc.content) {
-        .structure => |structure| {
-            switch (structure) {
-                .tuple_unbound => {}, // Expected
-                else => return error.ExpectedTupleUnbound,
-            }
-        },
-        else => return error.ExpectedStructure,
-    }
 }
 
 // unification - structure/structure - compact/compact
