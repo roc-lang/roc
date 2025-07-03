@@ -568,6 +568,19 @@ It is of type:
 But you are trying to use it as:
     _{ to_frac: * }_
 
+**INVALID BOOL OPERATION**
+I'm having trouble with this bool operation:
+**Color.md:30:32:**
+```roc
+    is_char_in_hex_range = |b| (b >= '0' and b <= '9') or (b >= 'a' and b <= 'f') or (b >= 'A' and b <= 'F')
+```
+                               ^^^^^^^^^^^^^^^^^^^^^^^
+
+Both sides of `||` must be _Bool_ values, but the left side is:
+    _(*)_
+
+Note: Roc does not have "truthiness" where other values like strings, numebrs or lists are automatically converted to bools. You must do that conversion yourself!
+
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
 **Color.md:27:1:27:4:**

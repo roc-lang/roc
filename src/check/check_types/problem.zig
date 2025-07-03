@@ -87,6 +87,7 @@ pub const TypeMismatchDetail = union(enum) {
     incompatible_if_branches: IncompatibleIfBranches,
     incompatible_match_patterns: IncompatibleMatchPatterns,
     incompatible_match_branches: IncompatibleMatchBranches,
+    invalid_bool_binop: InvalidBoolBinop,
 };
 
 /// Problem data for when list elements have incompatible types
@@ -118,6 +119,13 @@ pub const IncompatibleMatchBranches = struct {
     match_expr: CIR.Expr.Idx,
     num_branches: u32,
     problem_branch_index: u32,
+};
+
+/// Problem data for when a bool binop (&& or ||) is invalid
+pub const InvalidBoolBinop = struct {
+    binop_expr: CIR.Expr.Idx,
+    problem_side: enum { lhs, rhs },
+    binop: enum { @"and", @"or" },
 };
 
 // bug //
@@ -201,6 +209,9 @@ pub const ReportBuilder = struct {
                         .incompatible_match_branches => |data| {
                             return self.buildIncompatibleMatchBranches(&snapshot_writer, mismatch.types, data);
                         },
+                        .invalid_bool_binop => |data| {
+                            return self.buildInvalidBoolBinop(&snapshot_writer, mismatch.types, data);
+                        },
                     }
                 } else {
                     return self.buildGenericTypeMismatchReport(&snapshot_writer, mismatch.types);
@@ -220,6 +231,8 @@ pub const ReportBuilder = struct {
             .bug => |_| return self.buildUnimplementedReport(),
         }
     }
+
+    // type mismatch //
 
     /// Build a report for type mismatch diagnostic
     fn buildGenericTypeMismatchReport(
@@ -900,6 +913,98 @@ pub const ReportBuilder = struct {
         return report;
     }
 
+    /// Build a report for incompatible match branches
+    fn buildInvalidBoolBinop(
+        self: *Self,
+        snapshot_writer: *snapshot.SnapshotWriter,
+        types: TypePair,
+        data: InvalidBoolBinop,
+    ) !Report {
+        var report = Report.init(self.gpa, "INVALID BOOL OPERATION", .runtime_error);
+
+        // Create owned strings
+        self.buf.clearRetainingCapacity();
+        try snapshot_writer.write(types.actual_snapshot);
+        const actual_type = try report.addOwnedString(self.buf.items);
+
+        // Add description
+        try report.document.addText("I'm having trouble with this bool operation:");
+        try report.document.addLineBreak();
+
+        // Determine the overall region that encompasses both elements
+        const expr_region = self.can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(data.binop_expr)));
+        const problem_side_region = self.can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(types.actual_var)));
+
+        const overall_start_offset = expr_region.start.offset;
+        const overall_end_offset = problem_side_region.end.offset;
+
+        const overall_region_info = base.RegionInfo.position(
+            self.source,
+            self.module_env.line_starts.items,
+            overall_start_offset,
+            overall_end_offset,
+        ) catch return report;
+
+        // Create the display region
+        const display_region = SourceCodeDisplayRegion{
+            .start_line = overall_region_info.start_line_idx + 1,
+            .start_column = overall_region_info.start_col_idx + 1,
+            .end_line = overall_region_info.end_line_idx + 1,
+            .end_column = overall_region_info.end_col_idx + 1,
+            .region_annotation = .dimmed,
+            .filename = self.filename,
+        };
+
+        // Create underline regions
+        const this_branch_region_info = base.RegionInfo.position(
+            self.source,
+            self.module_env.line_starts.items,
+            problem_side_region.start.offset,
+            problem_side_region.end.offset,
+        ) catch return report;
+        const underline_regions = [_]UnderlineRegion{
+            .{
+                .start_line = this_branch_region_info.start_line_idx + 1,
+                .start_column = this_branch_region_info.start_col_idx + 1,
+                .end_line = this_branch_region_info.end_line_idx + 1,
+                .end_column = this_branch_region_info.end_col_idx + 1,
+                .annotation = .error_highlight,
+            },
+        };
+
+        try report.document.addSourceCodeWithUnderlines(self.source, display_region, &underline_regions);
+        try report.document.addLineBreak();
+
+        // Show the type of the invalid branch
+        try report.document.addText("Both sides of ");
+        switch (data.binop) {
+            .@"and" => try report.document.addAnnotated("&&", .inline_code),
+            .@"or" => try report.document.addAnnotated("||", .inline_code),
+        }
+        try report.document.addText(" must be ");
+        try report.document.addAnnotated("Bool", .type_variable);
+        try report.document.addText(" values, but the ");
+        switch (data.problem_side) {
+            .lhs => try report.document.addText("left"),
+            .rhs => try report.document.addText("right"),
+        }
+        try report.document.addText(" side is:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(actual_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        // TODO we should categorize this as a tip/hint (maybe relevant to how editors display it)
+        try report.document.addReflowingText("Note: Roc does not have \"truthiness\" where other values ");
+        try report.document.addReflowingText("like strings, numebrs or lists are automatically converted to bools. ");
+        try report.document.addReflowingText("You must do that conversion yourself!");
+
+        return report;
+    }
+
+    // number problems //
+
     /// Build a report for "number does not fit in type" diagnostic
     fn buildNumberDoesNotFitReport(
         self: *Self,
@@ -1004,11 +1109,15 @@ pub const ReportBuilder = struct {
         return report;
     }
 
+    // unimplemented //
+
     /// Build a report for "invalid number literal" diagnostic
     fn buildUnimplementedReport(self: *Self) !Report {
         const report = Report.init(self.gpa, "UNIMPLEMENTED", .runtime_error);
         return report;
     }
+
+    // helpers //
 
     // Given a buffer and a number, write a the human-readably ordinal number
     // Note that the caller likely needs to clear the buffer before calling this function
