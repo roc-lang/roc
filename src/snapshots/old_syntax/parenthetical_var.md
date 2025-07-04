@@ -27,11 +27,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tuple @1.1-1.7
-	(elems
-		(e-runtime-error (tag "ident_not_in_scope"))))
+(e-runtime-error (tag "ident_not_in_scope"))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.7 (type "(Error)"))
+(expr @1.2-1.6 (type "Error"))
 ~~~

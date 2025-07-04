@@ -249,6 +249,10 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
 
                 // Create an unbound function type with the call result as return type
                 // The unification will propagate the actual return type to the call
+                //
+                // TODO: Do we need to insert a CIR placeholder node here as well?
+                // What happens if later this type variable has a problem, and we
+                // try to look up it's region in CIR?
                 const func_content = self.types.mkFuncUnbound(arg_vars, call_var);
                 const expected_func_var = self.types.freshFromContent(func_content);
 
@@ -424,6 +428,10 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                     };
 
                     // Unify the receiver with this record type
+                    //
+                    // TODO: Do we need to insert a CIR placeholder node here as well?
+                    // What happens if later this type variable has a problem, and we
+                    // try to look up it's region in CIR?
                     const record_var = self.types.freshFromContent(record_content);
                     _ = self.unify(receiver_var, record_var);
                 },
@@ -489,9 +497,51 @@ fn checkLambdaWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, lambda: anytype,
 // binop //
 
 /// Check the types for an if-else expr
-fn checkBinopExpr(self: *Self, _: CIR.Expr.Idx, binop: CIR.Expr.Binop) Allocator.Error!bool {
+fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, binop: CIR.Expr.Binop) Allocator.Error!bool {
     var does_fx = try self.checkExpr(binop.lhs);
     does_fx = try self.checkExpr(binop.rhs) or does_fx;
+
+    switch (binop.op) {
+        .add, .sub, .mul, .div, .rem, .lt, .gt, .le, .ge, .eq, .ne, .pow, .div_trunc => {
+            // TODO: These will use static dispact of the lhs, passing in rhs
+        },
+        .@"and" => {
+            const lhs_result = self.unifyPreserveA(@enumFromInt(@intFromEnum(can.BUILTIN_BOOL)), @enumFromInt(@intFromEnum(binop.lhs)));
+            self.setDetailIfTypeMismatch(lhs_result, .{ .invalid_bool_binop = .{
+                .binop_expr = expr_idx,
+                .problem_side = .lhs,
+                .binop = .@"and",
+            } });
+
+            if (lhs_result.isOk()) {
+                const rhs_result = self.unifyPreserveA(@enumFromInt(@intFromEnum(can.BUILTIN_BOOL)), @enumFromInt(@intFromEnum(binop.rhs)));
+                self.setDetailIfTypeMismatch(rhs_result, .{ .invalid_bool_binop = .{
+                    .binop_expr = expr_idx,
+                    .problem_side = .rhs,
+                    .binop = .@"and",
+                } });
+            }
+        },
+        .@"or" => {
+            const lhs_result = self.unifyPreserveA(@enumFromInt(@intFromEnum(can.BUILTIN_BOOL)), @enumFromInt(@intFromEnum(binop.lhs)));
+            self.setDetailIfTypeMismatch(lhs_result, .{ .invalid_bool_binop = .{
+                .binop_expr = expr_idx,
+                .problem_side = .lhs,
+                .binop = .@"or",
+            } });
+
+            if (lhs_result.isOk()) {
+                const rhs_result = self.unifyPreserveA(@enumFromInt(@intFromEnum(can.BUILTIN_BOOL)), @enumFromInt(@intFromEnum(binop.lhs)));
+                self.setDetailIfTypeMismatch(rhs_result, .{ .invalid_bool_binop = .{
+                    .binop_expr = expr_idx,
+                    .problem_side = .rhs,
+                    .binop = .@"or",
+                } });
+            }
+        },
+        .pipe_forward => {},
+        .null_coalesce => {},
+    }
 
     return does_fx;
 }

@@ -1441,56 +1441,84 @@ pub fn canonicalize_expr(
         .tuple => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
-            // Mark the start of scratch expressions for the tuple
-            const scratch_top = self.can_ir.store.scratchExprTop();
-
-            // Iterate over the tuple items, canonicalizing each one
-            // Then append the resulting expr to the scratch list
+            // Get the list of tuple elems
             const items_slice = self.parse_ir.store.exprSlice(e.items);
-            for (items_slice) |item| {
-                const item_expr_idx = blk: {
-                    if (try self.canonicalize_expr(item)) |idx| {
+
+            if (items_slice.len == 0) {
+                const ast_body = self.parse_ir.store.getExpr(ast_expr_idx);
+                const body_region = self.parse_ir.tokenizedRegionToRegion(ast_body.to_tokenized_region());
+                return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{
+                    .empty_tuple = .{ .region = body_region },
+                });
+            } else if (items_slice.len == 1) {
+                // 1-elem tuple == parenthesized expr
+
+                // NOTE: Returning the sub-expr like this breaks 1-to-1 AST to
+                // CIR node mapping. However, this is already broken due to how
+                // we insert placeholder type var nodes in other places. So for
+                // now, this is fine
+                return blk: {
+                    if (try self.canonicalize_expr(items_slice[0])) |idx| {
                         break :blk idx;
                     } else {
-                        const ast_body = self.parse_ir.store.getExpr(item);
+                        const ast_body = self.parse_ir.store.getExpr(items_slice[0]);
                         const body_region = self.parse_ir.tokenizedRegionToRegion(ast_body.to_tokenized_region());
                         break :blk self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{
                             .tuple_elem_not_canonicalized = .{ .region = body_region },
                         });
                     }
                 };
+            } else {
+                // Mark the start of scratch expressions for the tuple
+                const scratch_top = self.can_ir.store.scratchExprTop();
 
-                self.can_ir.store.addScratchExpr(item_expr_idx);
+                // Iterate over the tuple items, canonicalizing each one
+                // Then append the resulting expr to the scratch list
+                for (items_slice) |item| {
+                    const item_expr_idx = blk: {
+                        if (try self.canonicalize_expr(item)) |idx| {
+                            break :blk idx;
+                        } else {
+                            const ast_body = self.parse_ir.store.getExpr(item);
+                            const body_region = self.parse_ir.tokenizedRegionToRegion(ast_body.to_tokenized_region());
+                            break :blk self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{
+                                .tuple_elem_not_canonicalized = .{ .region = body_region },
+                            });
+                        }
+                    };
+
+                    self.can_ir.store.addScratchExpr(item_expr_idx);
+                }
+
+                // Since expr idx map 1-to-1 to variables, we can get cast the slice
+                // of scratch expr idx and cast them to vars
+                const elems_var_range = self.can_ir.env.types.appendTupleElems(
+                    @ptrCast(@alignCast(
+                        self.can_ir.store.scratch_exprs.items.items[scratch_top..self.can_ir.store.scratchExprTop()],
+                    )),
+                );
+
+                // Create span of the new scratch expressions
+                const elems_span = self.can_ir.store.exprSpanFrom(scratch_top);
+
+                // Then insert the tuple expr
+                const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
+                    .e_tuple = .{
+                        .elems = elems_span,
+                        .region = region,
+                    },
+                });
+
+                // Insert tuple type for tuple literals
+                _ = self.can_ir.setTypeVarAtExpr(
+                    expr_idx,
+                    Content{ .structure = FlatType{
+                        .tuple = types.Tuple{ .elems = elems_var_range },
+                    } },
+                );
+
+                return expr_idx;
             }
-
-            // Since expr idx map 1-to-1 to variables, we can get cast the slice
-            // of scratch expr idx and cast them to vars
-            const elems_var_range = self.can_ir.env.types.appendTupleElems(
-                @ptrCast(@alignCast(
-                    self.can_ir.store.scratch_exprs.items.items[scratch_top..self.can_ir.store.scratchExprTop()],
-                )),
-            );
-
-            // Create span of the new scratch expressions
-            const elems_span = self.can_ir.store.exprSpanFrom(scratch_top);
-
-            // Then insert the tuple expr
-            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
-                .e_tuple = .{
-                    .elems = elems_span,
-                    .region = region,
-                },
-            });
-
-            // Insert tuple type for tuple literals
-            _ = self.can_ir.setTypeVarAtExpr(
-                expr_idx,
-                Content{ .structure = FlatType{
-                    .tuple = types.Tuple{ .elems = elems_var_range },
-                } },
-            );
-
-            return expr_idx;
         },
         .record => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);

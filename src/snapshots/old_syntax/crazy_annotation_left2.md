@@ -66,9 +66,7 @@ LowerIdent(6:1-6:2),EndOfFile(6:2-6:2),
 	(e-int @1.1-1.2 (value "1"))
 	(e-call @1.3-4.2
 		(e-runtime-error (tag "ident_not_in_scope"))
-		(e-tuple @1.6-2.2
-			(elems
-				(e-int @1.7-1.8 (value "0"))))))
+		(e-int @1.7-1.8 (value "0"))))
 ~~~
 # TYPES
 ~~~clojure

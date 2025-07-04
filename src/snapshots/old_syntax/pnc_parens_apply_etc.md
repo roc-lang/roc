@@ -12,14 +12,14 @@ type=expr
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**pnc_parens_apply_etc.md:1:1:2:3:**
+**pnc_parens_apply_etc.md:2:1:2:2:**
 ```roc
-(
 3)():B
 ```
+^
 
 It is of type:
-    _(Num(*))_
+    _Num(*)_
 
 But you are trying to use it as:
     _({}) -> *_
@@ -45,9 +45,7 @@ OpenRound(3:1-3:2),LowerIdent(3:2-3:3),CloseRound(3:3-3:4),EndOfFile(3:4-3:4),
 # CANONICALIZE
 ~~~clojure
 (e-call @1.1-2.5
-	(e-tuple @1.1-2.3
-		(elems
-			(e-int @2.1-2.2 (value "3")))))
+	(e-int @2.1-2.2 (value "3")))
 ~~~
 # TYPES
 ~~~clojure

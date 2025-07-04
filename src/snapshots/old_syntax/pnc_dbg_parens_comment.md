@@ -37,11 +37,9 @@ LowerIdent(3:1-3:2),EndOfFile(3:2-3:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tuple @1.1-2.3
-	(elems
-		(e-runtime-error (tag "not_implemented"))))
+(e-runtime-error (tag "not_implemented"))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-2.3 (type "(Error)"))
+(expr @1.1-1.1 (type "Error"))
 ~~~

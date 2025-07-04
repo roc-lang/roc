@@ -1210,39 +1210,33 @@ is_named_color = |str| {
 							(p-assign @30.29-30.30 (ident "b")))
 						(e-binop @30.32-32.10 (op "or")
 							(e-binop @30.32-30.85 (op "or")
-								(e-tuple @30.32-30.55
-									(elems
-										(e-binop @30.33-30.55 (op "and")
-											(e-binop @30.33-30.45 (op "ge")
-												(e-lookup-local @30.33-30.34
-													(pattern @30.29-30.30))
-												(e-int @30.38-30.41 (value "48")))
-											(e-binop @30.46-30.55 (op "le")
-												(e-lookup-local @30.46-30.47
-													(pattern @30.29-30.30))
-												(e-int @30.51-30.54 (value "57"))))))
-								(e-tuple @30.59-30.82
-									(elems
-										(e-binop @30.60-30.82 (op "and")
-											(e-binop @30.60-30.72 (op "ge")
-												(e-lookup-local @30.60-30.61
-													(pattern @30.29-30.30))
-												(e-int @30.65-30.68 (value "97")))
-											(e-binop @30.73-30.82 (op "le")
-												(e-lookup-local @30.73-30.74
-													(pattern @30.29-30.30))
-												(e-int @30.78-30.81 (value "102")))))))
-							(e-tuple @30.86-30.109
-								(elems
-									(e-binop @30.87-30.109 (op "and")
-										(e-binop @30.87-30.99 (op "ge")
-											(e-lookup-local @30.87-30.88
-												(pattern @30.29-30.30))
-											(e-int @30.92-30.95 (value "65")))
-										(e-binop @30.100-30.109 (op "le")
-											(e-lookup-local @30.100-30.101
-												(pattern @30.29-30.30))
-											(e-int @30.105-30.108 (value "70")))))))))
+								(e-binop @30.33-30.55 (op "and")
+									(e-binop @30.33-30.45 (op "ge")
+										(e-lookup-local @30.33-30.34
+											(pattern @30.29-30.30))
+										(e-int @30.38-30.41 (value "48")))
+									(e-binop @30.46-30.55 (op "le")
+										(e-lookup-local @30.46-30.47
+											(pattern @30.29-30.30))
+										(e-int @30.51-30.54 (value "57"))))
+								(e-binop @30.60-30.82 (op "and")
+									(e-binop @30.60-30.72 (op "ge")
+										(e-lookup-local @30.60-30.61
+											(pattern @30.29-30.30))
+										(e-int @30.65-30.68 (value "97")))
+									(e-binop @30.73-30.82 (op "le")
+										(e-lookup-local @30.73-30.74
+											(pattern @30.29-30.30))
+										(e-int @30.78-30.81 (value "102")))))
+							(e-binop @30.87-30.109 (op "and")
+								(e-binop @30.87-30.99 (op "ge")
+									(e-lookup-local @30.87-30.88
+										(pattern @30.29-30.30))
+									(e-int @30.92-30.95 (value "65")))
+								(e-binop @30.100-30.109 (op "le")
+									(e-lookup-local @30.100-30.101
+										(pattern @30.29-30.30))
+									(e-int @30.105-30.108 (value "70")))))))
 				(e-match @32.5-46.2
 					(match @32.5-46.2
 						(cond
