@@ -33,7 +33,7 @@ pub fn needsInstantiation(store: *const TypesStore, var_: Var) bool {
 fn needsInstantiationContent(store: *const TypesStore, content: Content) bool {
     return switch (content) {
         .flex_var => true, // Flexible variables need instantiation
-        .rigid_var => false, // Rigid variables don't need instantiation
+        .rigid_var => true, // Rigid variables need instantiation when used outside their defining scope
         .alias => true, // Aliases may contain type variables, so assume they need instantiation
         .structure => |flat_type| needsInstantiationFlatType(store, flat_type),
         .err => false,
