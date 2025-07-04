@@ -80,11 +80,20 @@ pub fn calcRegionInfo(self: *AST, region: TokenizedRegion, line_starts: []const 
 
 /// Append region information to an S-expression node for diagnostics
 pub fn appendRegionInfoToSexprNode(self: *AST, env: *base.ModuleEnv, node: *SExpr, region: TokenizedRegion) void {
-    node.appendTokenRange(
+    const start = self.tokens.resolve(region.start);
+    const end = self.tokens.resolve(region.end);
+    const info: base.RegionInfo = base.RegionInfo.position(self.source, env.line_starts.items, start.start.offset, end.end.offset) catch .{
+        .start_line_idx = 0,
+        .start_col_idx = 0,
+        .end_line_idx = 0,
+        .end_col_idx = 0,
+        .line_text = "",
+    };
+    node.appendByteRange(
         env.gpa,
-        self.calcRegionInfo(region, env.line_starts.items),
-        region.start,
-        region.end,
+        info,
+        start.start.offset,
+        end.end.offset,
     );
 }
 
@@ -756,13 +765,13 @@ pub const Statement = union(enum) {
                     const header_node = ast.store.nodes.get(@enumFromInt(@intFromEnum(a.header)));
                     if (header_node.tag == .malformed) {
                         // Handle malformed type header by creating a placeholder
-                        header.appendRegion(env.gpa, ast.calcRegionInfo(header_node.region, env.line_starts.items));
+                        ast.appendRegionInfoToSexprNode(env, &header, header_node.region);
                         header.appendStringAttr(env.gpa, "name", "<malformed>");
                         var args_node = SExpr.init(env.gpa, "args");
                         header.appendNode(env.gpa, &args_node);
                     } else {
                         const ty_header = ast.store.getTypeHeader(a.header);
-                        header.appendRegion(env.gpa, ast.calcRegionInfo(ty_header.region, env.line_starts.items));
+                        ast.appendRegionInfoToSexprNode(env, &header, ty_header.region);
                         header.appendStringAttr(env.gpa, "name", ast.resolve(ty_header.name));
 
                         var args_node = SExpr.init(env.gpa, "args");
@@ -830,7 +839,7 @@ pub const Statement = union(enum) {
             .@"return" => |a| {
                 var node = SExpr.init(env.gpa, "s-return");
 
-                node.appendRegion(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
+                ast.appendRegionInfoToSexprNode(env, &node, a.region);
 
                 var child = ast.store.getExpr(a.expr).toSExpr(env, ast);
                 node.appendNode(env.gpa, &child);
@@ -1074,7 +1083,7 @@ pub const Pattern = union(enum) {
             },
             .as => |a| {
                 var node = SExpr.init(env.gpa, "p-as");
-                node.appendRegion(env.gpa, ast.calcRegionInfo(a.region, env.line_starts.items));
+                ast.appendRegionInfoToSexprNode(env, &node, a.region);
 
                 var pattern_node = ast.store.getPattern(a.pattern).toSExpr(env, ast);
                 node.appendStringAttr(env.gpa, "name", ast.resolve(a.name));
@@ -1419,7 +1428,7 @@ pub const ExposedItem = union(enum) {
             .malformed => |m| {
                 var node = SExpr.init(env.gpa, "exposed-malformed");
                 node.appendStringAttr(env.gpa, "reason", @tagName(m.reason));
-                node.appendRegion(env.gpa, ast.calcRegionInfo(m.region, env.line_starts.items));
+                ast.appendRegionInfoToSexprNode(env, &node, m.region);
                 return node;
             },
         }
