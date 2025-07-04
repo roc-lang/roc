@@ -21,8 +21,8 @@ This `if` has an `else` branch with a different type from it's `then` branch:
 if bool {
 	A
 } else 2
-       ^
 ```
+       ^
 
 The `else` branch has the type:
     _Num(*)_

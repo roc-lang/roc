@@ -13,8 +13,8 @@ The first two elements in this list have incompatible types:
 **can_list_first_concrete.md:1:2:**
 ```roc
 [42, "world", 3.14]
- ^^  ^^^^^^^
 ```
+ ^^  ^^^^^^^
 
 The first element has this type:
     _Num(*)_

@@ -2179,6 +2179,17 @@ fn canonicalize_pattern(
             };
 
             // Parse the literal first to get requirements
+            const requirements = switch (parsed) {
+                .small => |small_info| small_info.requirements,
+                .dec => |dec_info| dec_info.requirements,
+                .f64 => |f64_info| f64_info.requirements,
+            };
+
+            const frac_requirements = types.Num.FracRequirements{
+                .fits_in_f32 = requirements.fits_in_f32,
+                .fits_in_dec = requirements.fits_in_dec,
+            };
+
             // Check for f64 literals which are not allowed in patterns
             if (parsed == .f64) {
                 const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .f64_pattern_literal = .{
@@ -2206,9 +2217,8 @@ fn canonicalize_pattern(
 
             const pattern_idx = try self.can_ir.store.addPattern(cir_pattern);
 
-            // Always use Dec type for fractional patterns (not Frac(*))
             _ = self.can_ir.setTypeVarAtPat(pattern_idx, Content{
-                .structure = .{ .num = .{ .frac_precision = .dec } },
+                .structure = .{ .num = .{ .frac_unbound = frac_requirements } },
             });
 
             return pattern_idx;
@@ -6159,53 +6169,6 @@ test "numeric pattern types: unbound vs polymorphic - frac" {
                 else => {},
             },
             else => {},
-        }
-    }
-}
-
-test "fractional pattern always uses Dec type" {
-    const gpa = std.testing.allocator;
-
-    // Test that fractional literal patterns get Dec type, not Frac(*)
-    {
-        var env = base.ModuleEnv.init(gpa);
-        defer env.deinit();
-
-        var cir = CIR.init(&env);
-        defer cir.deinit();
-
-        // Create a fractional pattern directly
-        const pattern = CIR.Pattern{
-            .small_dec_literal = .{
-                .numerator = 314,
-                .denominator_power_of_ten = 2,
-                .region = Region.zero(),
-            },
-        };
-
-        const pattern_idx = try cir.store.addPattern(pattern);
-
-        // Set the type as we do in canonicalize_pattern for .frac
-        _ = cir.setTypeVarAtPat(pattern_idx, Content{
-            .structure = .{ .num = .{ .frac_precision = .dec } },
-        });
-
-        // Verify the pattern has Dec type
-        const pattern_var: types.Var = @enumFromInt(@intFromEnum(pattern_idx));
-        const resolved = env.types.resolveVar(pattern_var);
-
-        switch (resolved.desc.content) {
-            .structure => |s| switch (s) {
-                .num => |n| switch (n) {
-                    .frac_precision => |prec| {
-                        try std.testing.expectEqual(types.Num.Frac.Precision.dec, prec);
-                    },
-                    .frac_unbound => return error.UnexpectedFracUnbound,
-                    else => return error.UnexpectedNumType,
-                },
-                else => return error.UnexpectedStructure,
-            },
-            else => return error.UnexpectedContent,
         }
     }
 }

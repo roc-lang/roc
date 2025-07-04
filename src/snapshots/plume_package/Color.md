@@ -588,12 +588,12 @@ The pattern in the second branch of this `match` differs from previous ones:
 ```roc
 to_str = |color| match color {
     Color.RGB(r, g, b) => "rgb(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)})"
-             ^^^^^^^^^
     Color.RGBA(r, g, b, a) => "rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"
     Color.Named(inner) => inner
     Color.Hex(inner) => inner
 }
 ```
+             ^^^^^^^^^
 
 The second pattern has this type:
     _(*, *, *)_

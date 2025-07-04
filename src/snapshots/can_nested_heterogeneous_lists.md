@@ -13,8 +13,8 @@ The two elements in this list have incompatible types:
 **can_nested_heterogeneous_lists.md:1:3:**
 ```roc
 [[1, "hello"], [2, 3]]
-  ^  ^^^^^^^
 ```
+  ^  ^^^^^^^
 
 The first element has this type:
     _Num(*)_

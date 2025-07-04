@@ -458,7 +458,6 @@ The pattern in the fourth branch of this `match` differs from previous ones:
 			}
 	er #ent
 			1	"for" => 20[1, ] # t
-     ^
 		ment
 		[1, 2, 3,est]123
 		[
@@ -471,6 +470,7 @@ The pattern in the fourth branch of this `match` differs from previous ones:
 		Ok(123) => 12
 	}
 ```
+     ^
 
 The fourth pattern has this type:
     _Str_

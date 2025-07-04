@@ -20,8 +20,8 @@ The second branch's type in this `match` is different from the previous ones:
 match Answer {
     Answer => 1
     Zero => "hello"
-            ^^^^^^^
 ```
+            ^^^^^^^
 
 The second branch has this type;
     _Str_
@@ -43,9 +43,9 @@ match Answer {
     Zero => "hello"
     Greeting => 3
     10 => 4
-    ^^
 }
 ```
+    ^^
 
 The fourth pattern has this type:
     _Num(*)_

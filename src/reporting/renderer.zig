@@ -581,16 +581,13 @@ fn renderElementToMarkdown(element: DocumentElement, writer: anytype, config: Re
             }
             try writer.writeAll("```roc\n");
             const lines = source_region.extractLines(data.source, data.display_region.start_line, data.display_region.end_line);
+            try writer.writeAll(lines);
+            try writer.writeAll("\n```\n");
 
-            // Write lines with interleaved underlines
+            // Show underlines as text
             var line_num = data.display_region.start_line;
             var iter = std.mem.tokenizeScalar(u8, lines, '\n');
-            while (iter.next()) |line| {
-                // Write the source line
-                try writer.writeAll(line);
-                try writer.writeAll("\n");
-
-                // Check if this line needs underlines
+            while (iter.next()) |_| {
                 var has_underlines = false;
                 for (data.underline_regions) |underline| {
                     if (underline.start_line == line_num and underline.start_line == underline.end_line) {
@@ -599,7 +596,6 @@ fn renderElementToMarkdown(element: DocumentElement, writer: anytype, config: Re
                     }
                 }
 
-                // If it does, write the underline immediately after
                 if (has_underlines) {
                     var col_position: u32 = 1;
                     for (data.underline_regions) |underline| {
@@ -627,7 +623,6 @@ fn renderElementToMarkdown(element: DocumentElement, writer: anytype, config: Re
                 }
                 line_num += 1;
             }
-            try writer.writeAll("```\n");
         },
         .source_code_multi_region => |multi| {
             if (multi.filename) |filename| {

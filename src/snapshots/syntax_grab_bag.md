@@ -627,8 +627,8 @@ The first two elements in this list have incompatible types:
 				number, # after dbg expr as arg
 		), # Comment one
 		456, # Comment two
-  ^^^
 ```
+  ^^^
 
 The first element has this type:
     _U64_

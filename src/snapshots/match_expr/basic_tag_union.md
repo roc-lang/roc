@@ -24,8 +24,8 @@ match color {
 	Red => 1
 	Blue => 2
 	Green => "3"
-          ^^^
 ```
+          ^^^
 
 The third branch has this type;
     _Str_

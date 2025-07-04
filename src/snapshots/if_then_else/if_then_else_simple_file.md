@@ -19,8 +19,8 @@ This `if` condition needs to be a _Bool_:
 **if_then_else_simple_file.md:3:10:**
 ```roc
 foo = if 1 A
-         ^
 ```
+         ^
 
 Right now, it has the type:
     _Num(*)_
@@ -32,11 +32,12 @@ This `if` has an `else` branch with a different type from it's `then` branch:
 **if_then_else_simple_file.md:3:7:**
 ```roc
 foo = if 1 A
+
     else {
 	"hello"
     }
- ^^^^^^^
 ```
+ ^^^^^^^
 
 The `else` branch has the type:
     _Str_

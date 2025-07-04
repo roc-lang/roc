@@ -13,8 +13,8 @@ The first two elements in this list have incompatible types:
 **can_list_mismatch_then_nested_error.md:1:2:**
 ```roc
 [1, "hello", [3, "world"]]
- ^  ^^^^^^^
 ```
+ ^  ^^^^^^^
 
 The first element has this type:
     _Num(*)_
@@ -32,8 +32,8 @@ The two elements in this list have incompatible types:
 **can_list_mismatch_then_nested_error.md:1:15:**
 ```roc
 [1, "hello", [3, "world"]]
-              ^  ^^^^^^^
 ```
+              ^  ^^^^^^^
 
 The first element has this type:
     _Num(*)_
