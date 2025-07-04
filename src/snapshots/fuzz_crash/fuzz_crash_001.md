@@ -49,7 +49,7 @@ mo|%
 
 
 **INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
+The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS

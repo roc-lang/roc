@@ -440,11 +440,11 @@ rgb = |r, g, b| Color.RGB(r, g, b)
 
 
 **INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
+The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
+The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **INVALID PATTERN**
@@ -507,47 +507,47 @@ This looks like an operator, but it's not one I recognize!
 Check the spelling and make sure you're using a valid Roc operator.
 
 **INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
+The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
+The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
+The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
+The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
+The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
+The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
+The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
+The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
+The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
+The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
+The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **UNDEFINED VARIABLE**

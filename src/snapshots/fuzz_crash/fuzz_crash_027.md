@@ -1584,12 +1584,6 @@ main! = |_| { # Yeah Ie
 							(value
 								(e-int @93.14-93.20 (value "121000")))))))))
 	(d-let
-		(p-assign @151.1-151.6 (ident "empty"))
-		(e-empty_record @151.9-151.11)
-		(annotation @151.1-151.11
-			(declared-type
-				(ty-record @150.9-150.11))))
-	(d-let
 		(p-assign @100.1-100.6 (ident "main!"))
 		(e-lambda @100.9-159.2
 			(args
@@ -1835,12 +1829,10 @@ main! = |_| { # Yeah Ie
 		(patt @45.1-45.4 (type "[False, True] -> Num(*)"))
 		(patt @48.1-48.8 (type "Error -> U64"))
 		(patt @60.1-60.11 (type "Error"))
-		(patt @151.1-151.6 (type "{}"))
 		(patt @100.1-100.6 (type "Error -> Error")))
 	(expressions
 		(expr @45.7-47.8 (type "[False, True] -> Num(*)"))
 		(expr @48.11-58.2 (type "Error -> U64"))
 		(expr @60.14-94.3 (type "Error"))
-		(expr @151.9-151.11 (type "{}"))
 		(expr @100.9-159.2 (type "Error -> Error"))))
 ~~~

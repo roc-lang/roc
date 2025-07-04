@@ -60,9 +60,9 @@ fn needsInstantiationFlatType(store: *const TypesStore, flat_type: FlatType) boo
             else => false, // Concrete numeric types don't need instantiation
         },
         .nominal_type => false, // Nominal types are concrete
-        .fn_pure => |func| needsInstantiationFunc(store, func),
-        .fn_effectful => |func| needsInstantiationFunc(store, func),
-        .fn_unbound => |func| needsInstantiationFunc(store, func),
+        .fn_pure => |func| func.needs_instantiation,
+        .fn_effectful => |func| func.needs_instantiation,
+        .fn_unbound => |func| func.needs_instantiation,
         .record => |record| needsInstantiationRecord(store, record),
         .record_unbound => |fields| needsInstantiationRecordFields(store, fields),
         .record_poly => |poly| needsInstantiation(store, poly.var_) or needsInstantiationRecord(store, poly.record),
@@ -70,14 +70,6 @@ fn needsInstantiationFlatType(store: *const TypesStore, flat_type: FlatType) boo
         .tag_union => |tag_union| needsInstantiationTagUnion(store, tag_union),
         .empty_tag_union => false,
     };
-}
-
-fn needsInstantiationFunc(store: *const TypesStore, func: Func) bool {
-    const args_slice = store.getFuncArgsSlice(func.args);
-    for (args_slice) |arg_var| {
-        if (needsInstantiation(store, arg_var)) return true;
-    }
-    return needsInstantiation(store, func.ret);
 }
 
 fn needsInstantiationRecord(store: *const TypesStore, record: Record) bool {
@@ -289,6 +281,11 @@ fn instantiateFunc(
     return Func{
         .args = fresh_args_range,
         .ret = fresh_ret,
+        // Assume it still needs instantiation even after replacing with
+        // fresh type variables, becase recalculating it just in case it
+        // might not does not seem likely to be worth it - especially since
+        // any given instantiation will likely never get instantiated again.
+        .needs_instantiation = true,
     };
 }
 

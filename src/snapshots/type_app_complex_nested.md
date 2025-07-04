@@ -113,23 +113,20 @@ processComplex = |result|
 
 
 **INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
+The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
+The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
+The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
+The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID LAMBDA**
-The body of this lambda expression is not valid.
 
 **UNDECLARED TYPE**
 The type ``Maybe`` is not declared in this scope.
@@ -142,8 +139,11 @@ deepNested = |_| crash "not implemented"
 ^^^^^^^^^^
 
 
+**INVALID LAMBDA**
+The body of this lambda expression is not valid.
+
 **INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
+The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
