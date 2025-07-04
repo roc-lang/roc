@@ -194,18 +194,8 @@ pub const DocumentElement = union(enum) {
     source_code_region: struct {
         /// The source code to display
         source: []const u8,
-        /// Line number where the region starts (1-based)
-        start_line: u32,
-        /// Column where the region starts (1-based)
-        start_column: u32,
-        /// Line number where the region ends (1-based)
-        end_line: u32,
-        /// Column where the region ends (1-based)
-        end_column: u32,
-        /// Annotation for the highlighted region
-        region_annotation: Annotation,
-        /// Optional filename for context
-        filename: ?[]const u8,
+        /// Overall region to display (determines which lines to show)
+        display_region: SourceCodeDisplayRegion,
     },
 
     /// Multiple highlighted regions within the same source code
@@ -490,12 +480,14 @@ pub const Document = struct {
         try self.elements.append(.{
             .source_code_region = .{
                 .source = source,
-                .start_line = start_line + 1,
-                .start_column = start_column + 1,
-                .end_line = end_line + 1,
-                .end_column = end_column + 1,
-                .region_annotation = annotation,
-                .filename = filename,
+                .display_region = .{
+                    .start_line = start_line + 1,
+                    .start_column = start_column + 1,
+                    .end_line = end_line + 1,
+                    .end_column = end_column + 1,
+                    .region_annotation = annotation,
+                    .filename = filename,
+                },
             },
         });
     }
