@@ -35,12 +35,10 @@ CloseRound(2:1-2:2),Comma(2:2-2:3),UpperIdent(2:3-2:4),CloseRound(2:4-2:5),EndOf
 ~~~clojure
 (e-tuple @1.1-2.5
 	(elems
-		(e-tuple @1.2-2.2
-			(elems
-				(e-int @1.3-1.4 (value "0"))))
+		(e-int @1.3-1.4 (value "0"))
 		(e-tag @2.3-2.4 (name "L") (args "TODO"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-2.5 (type "((Num(*)), [L]*)"))
+(expr @1.1-2.5 (type "(Num(*), [L]*)"))
 ~~~

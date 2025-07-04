@@ -1661,7 +1661,7 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             },
             .SingleQuote => {
                 try buf2.append(alloc, '\'');
-                for (1..length) |_| {
+                for (1..length - 1) |_| {
                     try buf2.append(alloc, '~');
                 }
                 try buf2.append(alloc, '\'');

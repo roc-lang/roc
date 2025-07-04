@@ -35,9 +35,7 @@ CloseRound(2:1-2:2),CloseStringInterpolation(2:2-2:3),StringPart(2:3-2:3),String
 ~~~clojure
 (e-string @1.1-2.4
 	(e-literal @1.2-1.2 (string ""))
-	(e-tuple @1.4-2.2
-		(elems
-			(e-tag @1.5-1.6 (name "S") (args "TODO"))))
+	(e-tag @1.5-1.6 (name "S") (args "TODO"))
 	(e-literal @2.3-2.3 (string "")))
 ~~~
 # TYPES

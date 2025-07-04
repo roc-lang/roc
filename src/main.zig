@@ -101,6 +101,9 @@ fn rocRepl(gpa: Allocator) !void {
 /// Reads, parses, formats, and overwrites all Roc files at the given paths.
 /// Recurses into directories to search for Roc files.
 fn rocFormat(gpa: Allocator, arena: Allocator, args: cli_args.FormatArgs) !void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     var timer = try std.time.Timer.start();
     var count = fmt.SuccessFailCount{ .success = 0, .failure = 0 };
     for (args.paths) |path| {
@@ -130,6 +133,9 @@ fn formatElapsedTime(writer: anytype, elapsed_ns: u64) !void {
 }
 
 fn rocCheck(gpa: Allocator, args: cli_args.CheckArgs) !void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const stdout = std.io.getStdOut().writer();
     const stderr = std.io.getStdErr().writer();
     const stderr_writer = stderr.any();

@@ -26,6 +26,16 @@ type=expr
 }
 ~~~
 # PROBLEMS
+**EMPTY TUPLE NOT ALLOWED**
+I am part way through parsing this tuple, but it is empty:
+**tuple_comprehensive.md:9:10:9:12:**
+```roc
+	empty = ()
+```
+         ^^
+
+If you want to represent nothing, try using an empty record: `{}`.
+
 **UNUSED VARIABLE**
 Variable ``with_lambda`` is not used anywhere in your code.
 
@@ -251,13 +261,10 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 		(e-int @6.9-6.11 (value "30")))
 	(s-let @9.2-9.12
 		(p-assign @9.2-9.7 (ident "empty"))
-		(e-tuple @9.10-9.12
-			(elems)))
+		(e-runtime-error (tag "empty_tuple")))
 	(s-let @10.2-10.15
 		(p-assign @10.2-10.8 (ident "single"))
-		(e-tuple @10.11-10.15
-			(elems
-				(e-int @10.12-10.14 (value "42")))))
+		(e-int @10.12-10.14 (value "42")))
 	(s-let @11.2-11.15
 		(p-assign @11.2-11.6 (ident "pair"))
 		(e-tuple @11.9-11.15
@@ -326,5 +333,5 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-19.2 (type "()"))
+(expr @1.1-19.2 (type "Error"))
 ~~~

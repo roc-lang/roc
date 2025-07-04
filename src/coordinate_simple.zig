@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const base = @import("base.zig");
+const tracy = @import("tracy.zig");
 const parse = @import("check/parse.zig");
 const canonicalize = @import("check/canonicalize.zig");
 const Solver = @import("check/check_types.zig");
@@ -48,6 +49,9 @@ pub fn processFile(
     fs: Filesystem,
     filepath: []const u8,
 ) !ProcessResult {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     // Read the file content
     const source = fs.readFile(filepath, gpa) catch |err| switch (err) {
         error.FileNotFound => return error.FileNotFound,
@@ -88,6 +92,9 @@ fn processSourceInternal(
     filename: []const u8,
     take_ownership: bool,
 ) !ProcessResult {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     // Initialize the ModuleEnv
     var module_env = ModuleEnv.init(gpa);
     defer module_env.deinit();

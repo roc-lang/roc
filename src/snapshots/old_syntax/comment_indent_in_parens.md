@@ -23,7 +23,7 @@ It is of type:
     _Num(*)_
 
 But you are trying to use it as:
-    _(Num(*)) -> *_
+    _Num(*) -> *_
 
 # TOKENS
 ~~~zig
@@ -51,9 +51,7 @@ UpperIdent(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~clojure
 (e-call @1.1-3.2
 	(e-int @1.1-1.2 (value "1"))
-	(e-tuple @1.3-2.2
-		(elems
-			(e-int @1.4-1.5 (value "0")))))
+	(e-int @1.4-1.5 (value "0")))
 ~~~
 # TYPES
 ~~~clojure

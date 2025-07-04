@@ -192,6 +192,10 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
         .invalid_single_quote => Diagnostic.buildInvalidSingleQuoteReport(allocator),
         .too_long_single_quote => Diagnostic.buildTooLongSingleQuoteReport(allocator),
         .empty_single_quote => Diagnostic.buildEmptySingleQuoteReport(allocator),
+        .empty_tuple => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            break :blk Diagnostic.buildEmptyTupleReport(allocator, region_info, source, filename);
+        },
         .expr_not_canonicalized => Diagnostic.buildExprNotCanonicalizedReport(allocator),
         .invalid_string_interpolation => Diagnostic.buildInvalidStringInterpolationReport(allocator),
         .pattern_arg_invalid => Diagnostic.buildPatternArgInvalidReport(allocator),
@@ -930,11 +934,9 @@ pub const IntValue = struct {
     }
 };
 
-/// Helper function to convert the entire Canonical IR to a string in S-expression format
-/// and write it to the given writer.
-///
-/// If a single expression is provided we only print that expression
-pub fn toSExprStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr.Idx, source: []const u8) !void {
+/// Helper function to generate the S-expression node for the entire Canonical IR.
+/// If a single expression is provided, only that expression is returned.
+pub fn toSExpr(ir: *CIR, maybe_expr_idx: ?Expr.Idx, source: []const u8) SExpr {
     // Set temporary source for region info calculation during SExpr generation
     ir.temp_source_for_sexpr = source;
     defer ir.temp_source_for_sexpr = null;
@@ -942,13 +944,9 @@ pub fn toSExprStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr.Idx,
 
     if (maybe_expr_idx) |expr_idx| {
         // Get the expression from the store
-        var expr_node = ir.store.getExpr(expr_idx).toSExpr(ir);
-        defer expr_node.deinit(gpa);
-
-        expr_node.toStringPretty(writer);
+        return ir.store.getExpr(expr_idx).toSExpr(ir);
     } else {
         var root_node = SExpr.init(gpa, "can-ir");
-        defer root_node.deinit(gpa);
 
         // Iterate over all the definitions in the file and convert each to an S-expression
         const defs_slice = ir.store.sliceDefs(ir.all_defs);
@@ -968,8 +966,19 @@ pub fn toSExprStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr.Idx,
             root_node.appendNode(gpa, &stmt_node);
         }
 
-        root_node.toStringPretty(writer);
+        return root_node;
     }
+}
+
+/// Helper function to convert the entire Canonical IR to a string in S-expression format
+/// and write it to the given writer.
+///
+/// If a single expression is provided we only print that expression
+pub fn toSExprStr(ir: *CIR, env: *ModuleEnv, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr.Idx, source: []const u8) !void {
+    const gpa = ir.env.gpa;
+    var node = toSExpr(ir, env, maybe_expr_idx, source);
+    defer node.deinit(gpa);
+    node.toStringPretty(writer);
 }
 
 test "NodeStore - init and deinit" {

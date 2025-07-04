@@ -30,11 +30,9 @@ CloseCurly(3:1-3:2),EndOfFile(3:2-3:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tuple @1.1-2.3
-	(elems
-		(e-empty_record @1.2-2.2)))
+(e-empty_record @1.2-2.2)
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-2.3 (type "({})"))
+(expr @1.2-2.2 (type "{}"))
 ~~~

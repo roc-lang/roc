@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const base = @import("../base.zig");
+const tracy = @import("../tracy.zig");
 const parse = @import("parse.zig");
 const tokenize = @import("parse/tokenize.zig");
 const collections = @import("../collections.zig");
@@ -227,6 +228,9 @@ pub const CIR = @import("canonicalize/CIR.zig");
 pub fn canonicalize_file(
     self: *Self,
 ) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const file = self.parse_ir.store.getFile();
 
     // canonicalize_header_packages();
@@ -567,6 +571,9 @@ fn canonicalizeImportStatement(
     self: *Self,
     import_stmt: @TypeOf(@as(AST.Statement, undefined).import),
 ) ?CIR.Statement.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     // 1. Reconstruct the full module name (e.g., "json.Json")
     const module_name = blk: {
         if (self.parse_ir.tokens.resolveIdentifier(import_stmt.module_name_tok) == null) {
@@ -788,6 +795,9 @@ fn canonicalize_decl_with_annotation(
     decl: AST.Statement.Decl,
     annotation: ?CIR.Annotation.Idx,
 ) std.mem.Allocator.Error!CIR.Def.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const pattern_region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getPattern(decl.pattern).to_tokenized_region());
     const expr_region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getExpr(decl.body).to_tokenized_region());
 
@@ -845,6 +855,9 @@ fn canonicalize_record_field(
     self: *Self,
     ast_field_idx: AST.RecordField.Idx,
 ) std.mem.Allocator.Error!?CIR.RecordField.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const field = self.parse_ir.store.getRecordField(ast_field_idx);
 
     // Canonicalize the field name
@@ -883,6 +896,9 @@ pub fn canonicalize_expr(
     self: *Self,
     ast_expr_idx: AST.Expr.Idx,
 ) std.mem.Allocator.Error!?CIR.Expr.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const expr = self.parse_ir.store.getExpr(ast_expr_idx);
 
     switch (expr) {
@@ -1437,56 +1453,84 @@ pub fn canonicalize_expr(
         .tuple => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
-            // Mark the start of scratch expressions for the tuple
-            const scratch_top = self.can_ir.store.scratchExprTop();
-
-            // Iterate over the tuple items, canonicalizing each one
-            // Then append the resulting expr to the scratch list
+            // Get the list of tuple elems
             const items_slice = self.parse_ir.store.exprSlice(e.items);
-            for (items_slice) |item| {
-                const item_expr_idx = blk: {
-                    if (try self.canonicalize_expr(item)) |idx| {
+
+            if (items_slice.len == 0) {
+                const ast_body = self.parse_ir.store.getExpr(ast_expr_idx);
+                const body_region = self.parse_ir.tokenizedRegionToRegion(ast_body.to_tokenized_region());
+                return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{
+                    .empty_tuple = .{ .region = body_region },
+                });
+            } else if (items_slice.len == 1) {
+                // 1-elem tuple == parenthesized expr
+
+                // NOTE: Returning the sub-expr like this breaks 1-to-1 AST to
+                // CIR node mapping. However, this is already broken due to how
+                // we insert placeholder type var nodes in other places. So for
+                // now, this is fine
+                return blk: {
+                    if (try self.canonicalize_expr(items_slice[0])) |idx| {
                         break :blk idx;
                     } else {
-                        const ast_body = self.parse_ir.store.getExpr(item);
+                        const ast_body = self.parse_ir.store.getExpr(items_slice[0]);
                         const body_region = self.parse_ir.tokenizedRegionToRegion(ast_body.to_tokenized_region());
                         break :blk self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{
                             .tuple_elem_not_canonicalized = .{ .region = body_region },
                         });
                     }
                 };
+            } else {
+                // Mark the start of scratch expressions for the tuple
+                const scratch_top = self.can_ir.store.scratchExprTop();
 
-                self.can_ir.store.addScratchExpr(item_expr_idx);
+                // Iterate over the tuple items, canonicalizing each one
+                // Then append the resulting expr to the scratch list
+                for (items_slice) |item| {
+                    const item_expr_idx = blk: {
+                        if (try self.canonicalize_expr(item)) |idx| {
+                            break :blk idx;
+                        } else {
+                            const ast_body = self.parse_ir.store.getExpr(item);
+                            const body_region = self.parse_ir.tokenizedRegionToRegion(ast_body.to_tokenized_region());
+                            break :blk self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{
+                                .tuple_elem_not_canonicalized = .{ .region = body_region },
+                            });
+                        }
+                    };
+
+                    self.can_ir.store.addScratchExpr(item_expr_idx);
+                }
+
+                // Since expr idx map 1-to-1 to variables, we can get cast the slice
+                // of scratch expr idx and cast them to vars
+                const elems_var_range = self.can_ir.env.types.appendTupleElems(
+                    @ptrCast(@alignCast(
+                        self.can_ir.store.scratch_exprs.items.items[scratch_top..self.can_ir.store.scratchExprTop()],
+                    )),
+                );
+
+                // Create span of the new scratch expressions
+                const elems_span = self.can_ir.store.exprSpanFrom(scratch_top);
+
+                // Then insert the tuple expr
+                const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
+                    .e_tuple = .{
+                        .elems = elems_span,
+                        .region = region,
+                    },
+                });
+
+                // Insert tuple type for tuple literals
+                _ = self.can_ir.setTypeVarAtExpr(
+                    expr_idx,
+                    Content{ .structure = FlatType{
+                        .tuple = types.Tuple{ .elems = elems_var_range },
+                    } },
+                );
+
+                return expr_idx;
             }
-
-            // Since expr idx map 1-to-1 to variables, we can get cast the slice
-            // of scratch expr idx and cast them to vars
-            const elems_var_range = self.can_ir.env.types.appendTupleElems(
-                @ptrCast(@alignCast(
-                    self.can_ir.store.scratch_exprs.items.items[scratch_top..self.can_ir.store.scratchExprTop()],
-                )),
-            );
-
-            // Create span of the new scratch expressions
-            const elems_span = self.can_ir.store.exprSpanFrom(scratch_top);
-
-            // Then insert the tuple expr
-            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
-                .e_tuple = .{
-                    .elems = elems_span,
-                    .region = region,
-                },
-            });
-
-            // Insert tuple type for tuple literals
-            _ = self.can_ir.setTypeVarAtExpr(
-                expr_idx,
-                Content{ .structure = FlatType{
-                    .tuple = types.Tuple{ .elems = elems_var_range },
-                } },
-            );
-
-            return expr_idx;
         },
         .record => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
@@ -2044,6 +2088,9 @@ fn canonicalize_pattern(
     self: *Self,
     ast_pattern_idx: AST.Pattern.Idx,
 ) std.mem.Allocator.Error!?CIR.Pattern.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const gpa = self.can_ir.env.gpa;
     switch (self.parse_ir.store.getPattern(ast_pattern_idx)) {
         .ident => |e| {
@@ -2997,6 +3044,9 @@ fn scopeIntroduceVar(
 /// Unlike general type canonicalization, this doesn't validate tag names against scope
 /// since tags in tag unions are anonymous and defined by the union itself
 fn canonicalize_tag_variant(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const ast_anno = self.parse_ir.store.getTypeAnno(anno_idx);
     switch (ast_anno) {
         .ty => |ty| {
@@ -3049,6 +3099,9 @@ fn canonicalize_tag_variant(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnn
 
 /// Canonicalize a statement within a block
 fn canonicalize_type_anno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const ast_anno = self.parse_ir.store.getTypeAnno(anno_idx);
     switch (ast_anno) {
         .apply => |apply| {
@@ -3277,6 +3330,9 @@ fn canonicalize_type_anno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.
 }
 
 fn canonicalize_type_header(self: *Self, header_idx: AST.TypeHeader.Idx) CIR.TypeHeader.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     // Check if the node is malformed before calling getTypeHeader
     const node = self.parse_ir.store.nodes.get(@enumFromInt(@intFromEnum(header_idx)));
     if (node.tag == .malformed) {
@@ -3346,6 +3402,9 @@ fn canonicalize_type_header(self: *Self, header_idx: AST.TypeHeader.Idx) CIR.Typ
 
 /// Canonicalize a statement in the canonical IR.
 pub fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.Allocator.Error!?CIR.Expr.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const stmt = self.parse_ir.store.getStatement(stmt_idx);
 
     switch (stmt) {
@@ -4406,6 +4465,9 @@ fn canonicalizeTypeAnnoToTypeVar(self: *Self, type_anno_idx: CIR.TypeAnno.Idx, p
 
 /// Handle basic type lookup (Bool, Str, Num, etc.)
 fn canonicalizeBasicType(self: *Self, symbol: Ident.Idx, parent_node_idx: Node.Idx, region: Region) TypeVar {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const name = self.can_ir.env.idents.getText(symbol);
 
     // Built-in types mapping
@@ -4466,6 +4528,9 @@ fn canonicalizeBasicType(self: *Self, symbol: Ident.Idx, parent_node_idx: Node.I
 
 /// Handle type applications like List(Str), Dict(k, v)
 fn canonicalizeTypeApplication(self: *Self, apply: anytype, parent_node_idx: Node.Idx, region: Region) std.mem.Allocator.Error!TypeVar {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     // Look up the type name in scope
     if (self.scopeLookupTypeDecl(apply.symbol)) |type_decl_idx| {
         const type_decl = self.can_ir.store.getStatement(type_decl_idx);
@@ -4526,6 +4591,9 @@ fn canonicalizeTypeApplication(self: *Self, apply: anytype, parent_node_idx: Nod
 
 /// Handle function types like a -> b
 fn canonicalizeFunctionType(self: *Self, func: anytype, parent_node_idx: Node.Idx, region: Region) std.mem.Allocator.Error!TypeVar {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const gpa = self.can_ir.env.gpa;
 
     // Canonicalize argument types and return type
@@ -4560,6 +4628,9 @@ fn canonicalizeFunctionType(self: *Self, func: anytype, parent_node_idx: Node.Id
 
 /// Handle tuple types like (a, b, c)
 fn canonicalizeTupleType(self: *Self, tuple: anytype, parent_node_idx: Node.Idx, region: Region) TypeVar {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     _ = tuple;
     // Simplified implementation - create flex var for tuples
     return self.can_ir.pushFreshTypeVar(parent_node_idx, region) catch |err| exitOnOom(err);
@@ -4567,6 +4638,9 @@ fn canonicalizeTupleType(self: *Self, tuple: anytype, parent_node_idx: Node.Idx,
 
 /// Handle record types like { name: Str, age: Num }
 fn canonicalizeRecordType(self: *Self, record: anytype, parent_node_idx: Node.Idx, region: Region) std.mem.Allocator.Error!TypeVar {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     // Create fresh type variables for each field
     var type_record_fields = std.ArrayList(types.RecordField).init(self.can_ir.env.gpa);
     defer type_record_fields.deinit();
@@ -4597,6 +4671,9 @@ fn canonicalizeRecordType(self: *Self, record: anytype, parent_node_idx: Node.Id
 
 /// Handle tag union types like [Some(a), None]
 fn canonicalizeTagUnionType(self: *Self, tag_union: anytype, parent_node_idx: Node.Idx, region: Region) TypeVar {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     _ = tag_union;
     // Simplified implementation - create flex var for tag unions
     return self.can_ir.pushFreshTypeVar(parent_node_idx, region) catch |err| exitOnOom(err);
@@ -4604,12 +4681,18 @@ fn canonicalizeTagUnionType(self: *Self, tag_union: anytype, parent_node_idx: No
 
 /// Handle module-qualified types like Json.Decoder
 fn canonicalizeModuleType(self: *Self, mod_ty: anytype, parent_node_idx: Node.Idx, region: Region) TypeVar {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     // Simplified implementation - create flex var for module types
     return self.can_ir.pushTypeVar(.{ .flex_var = mod_ty.ty_symbol }, parent_node_idx, region) catch |err| exitOnOom(err);
 }
 
 /// Create an annotation from a type annotation
 fn createAnnotationFromTypeAnno(self: *Self, type_anno_idx: CIR.TypeAnno.Idx, _: TypeVar, region: Region, parent_node_idx: Node.Idx) std.mem.Allocator.Error!?CIR.Annotation.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     // Convert the type annotation to a type variable
     const signature = try self.canonicalizeTypeAnnoToTypeVar(type_anno_idx, parent_node_idx, region);
 
@@ -4700,6 +4783,9 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) ?CIR.Expr.Idx 
 /// - `list.map(transform)` - calling a method with arguments
 /// - `result.isOk` - accessing a field that might be a function
 fn canonicalizeRegularFieldAccess(self: *Self, field_access: AST.BinOp) std.mem.Allocator.Error!?CIR.Expr.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     // Canonicalize the receiver (left side of the dot)
     const receiver_idx = try self.canonicalizeFieldAccessReceiver(field_access) orelse return null;
 
@@ -4727,6 +4813,9 @@ fn canonicalizeRegularFieldAccess(self: *Self, field_access: AST.BinOp) std.mem.
 /// - In `getUser().email`, canonicalizes `getUser()`
 /// - In `[1,2,3].map(fn)`, canonicalizes `[1,2,3]`
 fn canonicalizeFieldAccessReceiver(self: *Self, field_access: AST.BinOp) std.mem.Allocator.Error!?CIR.Expr.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     if (try self.canonicalize_expr(field_access.left)) |idx| {
         return idx;
     } else {

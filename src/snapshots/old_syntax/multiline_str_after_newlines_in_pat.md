@@ -33,11 +33,9 @@ UpperIdent(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tuple @1.1-3.2
-	(elems
-		(e-int @1.2-1.3 (value "4"))))
+(e-int @1.2-1.3 (value "4"))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-3.2 (type "(Num(*))"))
+(expr @1.2-1.3 (type "Num(*)"))
 ~~~

@@ -28,11 +28,9 @@ UpperIdent(2:1-2:2),CloseRound(2:2-2:3),EndOfFile(2:3-2:3),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tuple @1.1-2.3
-	(elems
-		(e-tag @2.1-2.2 (name "A") (args "TODO"))))
+(e-tag @2.1-2.2 (name "A") (args "TODO"))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-2.3 (type "([A]*)"))
+(expr @2.1-2.2 (type "[A]*"))
 ~~~

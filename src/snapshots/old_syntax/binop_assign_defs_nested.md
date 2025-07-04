@@ -48,9 +48,7 @@ Int(3:1-3:2),CloseRound(3:2-3:3),CloseRound(3:3-3:4),EndOfFile(3:4-3:4),
 ~~~clojure
 (e-binop @1.1-3.2 (op "sub")
 	(e-int @1.1-1.2 (value "5"))
-	(e-tuple @1.3-2.4
-		(elems
-			(e-runtime-error (tag "tuple_elem_not_canonicalized")))))
+	(e-runtime-error (tag "tuple_elem_not_canonicalized")))
 ~~~
 # TYPES
 ~~~clojure

@@ -36,11 +36,9 @@ KwReturn(4:1-4:7),LowerIdent(4:8-4:9),EndOfFile(4:9-4:9),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tuple @1.1-3.2
-	(elems
-		(e-runtime-error (tag "ident_not_in_scope"))))
+(e-runtime-error (tag "ident_not_in_scope"))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-3.2 (type "(Error)"))
+(expr @1.2-1.3 (type "Error"))
 ~~~

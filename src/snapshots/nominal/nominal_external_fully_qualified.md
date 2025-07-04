@@ -224,9 +224,7 @@ handleResult = |result| {
 								(patterns
 									(p-runtime-error @8.36-8.40 (tag "pattern_not_canonicalized") (degenerate false)))
 								(value
-									(e-tuple @8.39-8.46
-										(elems
-											(e-runtime-error (tag "ident_not_in_scope"))))))
+									(e-runtime-error (tag "ident_not_in_scope"))))
 							(branch
 								(patterns
 									(p-runtime-error @8.47-8.55 (tag "pattern_not_canonicalized") (degenerate false)))
@@ -241,9 +239,7 @@ handleResult = |result| {
 								(patterns
 									(p-runtime-error @9.36-9.41 (tag "pattern_not_canonicalized") (degenerate false)))
 								(value
-									(e-tuple @9.40-9.46
-										(elems
-											(e-runtime-error (tag "ident_not_in_scope"))))))
+									(e-runtime-error (tag "ident_not_in_scope"))))
 							(branch
 								(patterns
 									(p-runtime-error @9.47-9.51 (tag "pattern_not_canonicalized") (degenerate false)))

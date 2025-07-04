@@ -100,26 +100,40 @@ body {
     background-color: #f0f0f0;
 }
 .highlighted {
-    background-color: #ffffcc !important;
-    outline: 2px solid #ffd700 !important;
+    background-color: #ffffcc;
+    outline: 2px solid #ffd700;
+}
+
+/* Source range highlighting for PARSE tree */
+.source-range {
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+.source-range:hover {
+    background-color: #f0f0f0;
+    text-decoration: underline;
+}
+
+/* Byte range highlighting */
+.highlight {
+    background-color: #ffffcc;
+    border-bottom: 2px solid #ffd700;
 }
 
 /* Flash animation for click highlighting */
-@keyframes flash {
+@keyframes flash-underline {
     0%,
-    50%,
     100% {
         background-color: #ffffcc;
-        outline: 2px solid #ffd700;
+        border-bottom-color: #ffd700;
     }
-    25%,
-    75% {
+    50% {
         background-color: #ffeb3b;
-        outline: 2px solid #ff9800;
+        border-bottom-color: #ff9800;
     }
 }
 .flash-highlight {
-    animation: flash 0.3s ease-in-out 2;
+    animation: flash-underline 0.3s ease-in-out 2;
 }
 
 /* Syntax highlighting */
@@ -152,6 +166,10 @@ body {
 }
 .token-default {
     color: #000000;
+}
+.source-range {
+    color: #008000;
+    font-style: italic;
 }
 
 /* Hidden data storage */

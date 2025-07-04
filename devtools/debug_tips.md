@@ -39,7 +39,7 @@ Note that the addresses shown in objdump may use a different offset compared to 
 5. You probably want to go to the function you saw in valgrind like `List_walkTryHelp_...` [here](https://github.com/roc-lang/examples/pull/192#issuecomment-2269571439). You can use Ctrl+F in the Function s window in IDA free.
 6. Right click and choose `Add Breakpoint` at the first instruction of the function you clicked on the previous step.
 7. Run the debugger by pressing F9
-8. Use step into (F7) and step over (F8) to see what's going on. Keep an eye on the `General Registers` and `Stack view` windows while you're stepping.
+8. Use step into (F7), step over (F8) and run until next breakpoint (F9) to see what's going on. Keep an eye on the `General Registers` and `Stack view` windows while you're stepping.
 
 
 #### gdb

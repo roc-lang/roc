@@ -42,6 +42,7 @@
 const std = @import("std");
 
 const base = @import("../../base.zig");
+const tracy = @import("../../tracy.zig");
 const collections = @import("../../collections.zig");
 const types_root_mod = @import("../../types.zig");
 const types_mod = @import("../../types/types.zig");
@@ -128,6 +129,9 @@ pub fn unify(
     a: Var,
     b: Var,
 ) Result {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     return unifyMode(
         .bidirectional,
         module_env,
@@ -166,6 +170,9 @@ pub fn unifyMode(
     a: Var,
     b: Var,
 ) Result {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     // First reset the scratch store
     unify_scratch.reset();
 
@@ -418,6 +425,9 @@ const Unifier = struct {
 
     /// Unify checking for equivalence
     fn unifyGuarded(self: *Self, a_var: Var, b_var: Var) Error!void {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         switch (self.types_store.checkVarsEquiv(a_var, b_var)) {
             .equiv => {
                 // this means that the vars point to the same exact type
@@ -445,6 +455,9 @@ const Unifier = struct {
     /// Internal entry point for unification logic. Use `unifyGuarded` to ensure
     /// proper depth tracking and occurs checking.
     fn unifyVars(self: *Self, vars: *const ResolvedVarDescs) Error!void {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         switch (vars.a.desc.content) {
             .flex_var => |mb_a_ident| {
                 self.unifyFlex(vars, mb_a_ident, vars.b.desc.content);
@@ -497,6 +510,9 @@ const Unifier = struct {
 
     /// Unify when `a` was a flex
     fn unifyFlex(self: *Self, vars: *const ResolvedVarDescs, mb_a_ident: ?Ident.Idx, b_content: Content) void {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         switch (b_content) {
             .flex_var => |mb_b_ident| {
                 if (mb_a_ident) |a_ident| {
@@ -519,6 +535,9 @@ const Unifier = struct {
 
     /// Unify when `a` was a rigid
     fn unifyRigid(self: *Self, vars: *const ResolvedVarDescs, b_content: Content) Error!void {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         switch (b_content) {
             .flex_var => self.merge(vars, vars.a.desc.content),
             .rigid_var => return error.TypeMismatch,
@@ -532,6 +551,9 @@ const Unifier = struct {
 
     /// Unify when `a` was a alias
     fn unifyAlias(self: *Self, vars: *const ResolvedVarDescs, a_alias: Alias, b_content: Content) Error!void {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         switch (b_content) {
             .flex_var => |_| {
                 // Ensure the target variable has slots for the alias arguments
@@ -570,6 +592,9 @@ const Unifier = struct {
     /// NOTE: the rust version of this function `unify_two_aliases` is *significantly* more
     /// complicated than the version here
     fn unifyTwoAliases(self: *Self, vars: *const ResolvedVarDescs, a_alias: Alias, b_alias: Alias) Error!void {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         if (a_alias.num_args != b_alias.num_args) {
             return error.TypeMismatch;
         }
@@ -602,6 +627,9 @@ const Unifier = struct {
         a_flat_type: FlatType,
         b_content: Content,
     ) Error!void {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         switch (b_content) {
             .flex_var => |_| {
                 self.merge(vars, Content{ .structure = a_flat_type });
@@ -626,6 +654,9 @@ const Unifier = struct {
         a_flat_type: FlatType,
         b_flat_type: FlatType,
     ) Error!void {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         switch (a_flat_type) {
             .str => {
                 switch (b_flat_type) {
@@ -1061,6 +1092,9 @@ const Unifier = struct {
         a_tuple: Tuple,
         b_tuple: Tuple,
     ) Error!void {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         if (a_tuple.elems.len() != b_tuple.elems.len()) {
             return error.TypeMismatch;
         }
@@ -1080,6 +1114,9 @@ const Unifier = struct {
         a_num: Num,
         b_num: Num,
     ) Error!void {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         switch (a_num) {
             .num_poly => |a_poly| {
                 switch (b_num) {
@@ -1589,6 +1626,9 @@ const Unifier = struct {
         a_num: NumCompact,
         b_num: NumCompact,
     ) Error!void {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         switch (a_num) {
             .int => |a_int| {
                 switch (b_num) {
@@ -1682,6 +1722,9 @@ const Unifier = struct {
 
     /// Unify when `a` was a nominal type
     fn unifyNominalType(self: *Self, vars: *const ResolvedVarDescs, a_type: NominalType, b_type: NominalType) Error!void {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         if (!TypeIdent.eql(&self.module_env.idents, a_type.ident, b_type.ident)) {
             return error.TypeMismatch;
         }
@@ -1715,6 +1758,9 @@ const Unifier = struct {
         a_func: Func,
         b_func: Func,
     ) Error!void {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         if (a_func.args.len() != b_func.args.len()) {
             return error.TypeMismatch;
         }
@@ -1811,6 +1857,8 @@ const Unifier = struct {
         a_record: Record,
         b_record: Record,
     ) Error!void {
+        const trace = tracy.trace(@src());
+        defer trace.end();
 
         // First, unwrap all fields for record, erroring if we encounter an
         // invalid record ext var
@@ -2119,6 +2167,9 @@ const Unifier = struct {
         mb_b_extended_fields: ?RecordFieldSafeList.Slice,
         ext: Var,
     ) Error!void {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         const range_start: RecordFieldSafeMultiList.Idx = @enumFromInt(self.types_store.record_fields.len());
 
         // Here, iterate over shared fields, sub unifying the field variables.
@@ -2231,6 +2282,8 @@ const Unifier = struct {
         a_tag_union: TagUnion,
         b_tag_union: TagUnion,
     ) Error!void {
+        const trace = tracy.trace(@src());
+        defer trace.end();
 
         // First, unwrap all fields for tag unions, erroring if we encounter an
         // invalid record ext var
@@ -2519,6 +2572,9 @@ const Unifier = struct {
         mb_b_extended_tags: ?[]Tag,
         ext: Var,
     ) Error!void {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         const range_start: TagSafeMultiList.Idx = @enumFromInt(self.types_store.tags.len());
 
         for (shared_tags) |tags| {
