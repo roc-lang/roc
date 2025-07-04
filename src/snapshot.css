@@ -100,8 +100,8 @@ body {
     background-color: #f0f0f0;
 }
 .highlighted {
-    background-color: #ffffcc !important;
-    outline: 2px solid #ffd700 !important;
+    background-color: #ffffcc;
+    outline: 2px solid #ffd700;
 }
 
 /* Source range highlighting for PARSE tree */
@@ -122,11 +122,12 @@ body {
 
 /* Flash animation for click highlighting */
 @keyframes flash-underline {
-    0%, 100% { 
+    0%,
+    100% {
         background-color: #ffffcc;
         border-bottom-color: #ffd700;
     }
-    50% { 
+    50% {
         background-color: #ffeb3b;
         border-bottom-color: #ff9800;
     }

@@ -314,7 +314,7 @@ function getTokenByIndex(index) {
   return { kind, start, end, index };
 }
 
-// Add event listeners for source elements to highlight corresponding tokens
+// Add event listeners for source elements to highlight corresponding tokens or PARSE elements
 function addSourceEventListeners(container) {
   const spans = container.querySelectorAll(
     "span[data-byte-start][data-byte-end]",
@@ -323,20 +323,47 @@ function addSourceEventListeners(container) {
     span.addEventListener("mouseenter", () => {
       const byteStart = parseInt(span.dataset.byteStart);
       const byteEnd = parseInt(span.dataset.byteEnd);
-      const tokenIndex = findTokenIndexByByteRange(byteStart, byteEnd);
-      if (tokenIndex >= 0) {
-        highlightTokenInList(tokenIndex);
+      
+      // Check what's currently displayed in the right pane
+      const rightSelector = document.getElementById("right-selector");
+      const currentSection = rightSelector ? rightSelector.value : "TOKENS";
+      
+      if (currentSection === "TOKENS") {
+        const tokenIndex = findTokenIndexByByteRange(byteStart, byteEnd);
+        if (tokenIndex >= 0) {
+          highlightTokenInList(tokenIndex);
+        }
+      } else if (currentSection === "PARSE") {
+        highlightParseElementAtByte(byteStart);
       }
     });
     span.addEventListener("mouseleave", () => {
-      clearTokenHighlights();
+      const rightSelector = document.getElementById("right-selector");
+      const currentSection = rightSelector ? rightSelector.value : "TOKENS";
+      
+      if (currentSection === "TOKENS") {
+        clearTokenHighlights();
+      } else if (currentSection === "PARSE") {
+        clearParseHighlights();
+      }
     });
-    span.addEventListener("click", () => {
+    span.addEventListener("click", (event) => {
       const byteStart = parseInt(span.dataset.byteStart);
       const byteEnd = parseInt(span.dataset.byteEnd);
-      const tokenIndex = findTokenIndexByByteRange(byteStart, byteEnd);
-      if (tokenIndex >= 0) {
-        scrollToTokenInList(tokenIndex);
+      
+      // Get the click position within the span to determine the exact byte
+      const clickByte = getClickBytePosition(event, span, byteStart, byteEnd);
+      
+      const rightSelector = document.getElementById("right-selector");
+      const currentSection = rightSelector ? rightSelector.value : "TOKENS";
+      
+      if (currentSection === "TOKENS") {
+        const tokenIndex = findTokenIndexByByteRange(byteStart, byteEnd);
+        if (tokenIndex >= 0) {
+          scrollToTokenInList(tokenIndex);
+        }
+      } else if (currentSection === "PARSE") {
+        scrollToParseElementAtByte(clickByte);
       }
     });
   });
@@ -614,4 +641,96 @@ function flashHighlightedElements() {
       span.classList.remove("flash-highlight");
     });
   }, 600);
+}
+
+// Get the exact byte position within a span based on click coordinates
+function getClickBytePosition(event, span, byteStart, byteEnd) {
+  const spanRect = span.getBoundingClientRect();
+  const clickX = event.clientX - spanRect.left;
+  const spanWidth = spanRect.width;
+  
+  if (spanWidth === 0) return byteStart;
+  
+  // Calculate the relative position within the span (0 to 1)
+  const relativePosition = Math.max(0, Math.min(1, clickX / spanWidth));
+  
+  // Map to byte position
+  const byteRange = byteEnd - byteStart;
+  const clickByte = Math.floor(byteStart + (relativePosition * byteRange));
+  
+  return Math.max(byteStart, Math.min(byteEnd - 1, clickByte));
+}
+
+// Find the narrowest PARSE element containing a specific byte position
+function highlightParseElementAtByte(bytePosition) {
+  const parseContainer = document.getElementById("right-pane-content");
+  if (!parseContainer) return;
+  
+  const targetElement = findNarrowestParseElement(parseContainer, bytePosition);
+  if (targetElement) {
+    // Clear existing highlights
+    clearParseHighlights();
+    
+    // Highlight the target element
+    targetElement.classList.add("highlighted");
+  }
+}
+
+// Scroll to and flash the narrowest PARSE element containing a specific byte position
+function scrollToParseElementAtByte(bytePosition) {
+  const parseContainer = document.getElementById("right-pane-content");
+  if (!parseContainer) return;
+  
+  const targetElement = findNarrowestParseElement(parseContainer, bytePosition);
+  if (targetElement) {
+    // Clear existing highlights
+    clearParseHighlights();
+    
+    // Highlight the target element
+    targetElement.classList.add("highlighted");
+    
+    // Scroll to the element and flash it
+    const paneContent = parseContainer.closest(".pane-content");
+    if (paneContent) {
+      scrollToAndFlash(targetElement, paneContent);
+    }
+  }
+}
+
+// Find the narrowest (most specific) element containing the byte position
+function findNarrowestParseElement(container, bytePosition) {
+  const sourceRangeElements = container.querySelectorAll(".source-range[data-start-byte][data-end-byte]");
+  
+  let narrowestElement = null;
+  let narrowestRange = Infinity;
+  
+  for (const element of sourceRangeElements) {
+    const startByte = parseInt(element.dataset.startByte);
+    const endByte = parseInt(element.dataset.endByte);
+    
+    // Check if the byte position is within this element's range
+    if (bytePosition >= startByte && bytePosition < endByte) {
+      const range = endByte - startByte;
+      
+      // Choose this element if it's narrower than the current best
+      // In case of ties, the first one encountered wins (DOM order)
+      if (range < narrowestRange) {
+        narrowestElement = element;
+        narrowestRange = range;
+      }
+    }
+  }
+  
+  return narrowestElement;
+}
+
+// Clear all highlights in the PARSE tree
+function clearParseHighlights() {
+  const parseContainer = document.getElementById("right-pane-content");
+  if (parseContainer) {
+    const highlightedElements = parseContainer.querySelectorAll(".highlighted");
+    highlightedElements.forEach(element => {
+      element.classList.remove("highlighted");
+    });
+  }
 }
