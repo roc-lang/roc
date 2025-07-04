@@ -233,10 +233,10 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                 // We only instantiate if the function actually contains type variables
                 const needs_instantiation = switch (resolved_func.desc.content) {
                     .structure => |flat_type| switch (flat_type) {
-                        .fn_effectful, .fn_pure, .fn_unbound => instantiate.needsInstantiation(self.types, func_var),
+                        .fn_effectful, .fn_pure, .fn_unbound => self.types.needsInstantiation(func_var),
                         else => false,
                     },
-                    .alias => instantiate.needsInstantiation(self.types, func_var),
+                    .alias => self.types.needsInstantiation(func_var),
                     else => false,
                 };
 

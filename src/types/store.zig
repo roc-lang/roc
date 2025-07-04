@@ -308,12 +308,12 @@ pub const Store = struct {
     }
 
     // Helper to check if a type variable needs instantiation
-    fn needsInstantiation(self: *const Self, var_: Var) bool {
+    pub fn needsInstantiation(self: *const Self, var_: Var) bool {
         const resolved = self.resolveVar(var_);
         return self.needsInstantiationContent(resolved.desc.content);
     }
 
-    fn needsInstantiationContent(self: *const Self, content: Content) bool {
+    pub fn needsInstantiationContent(self: *const Self, content: Content) bool {
         return switch (content) {
             .flex_var => true, // Flexible variables need instantiation
             .rigid_var => true, // Rigid variables need instantiation when used outside their defining scope
@@ -323,7 +323,7 @@ pub const Store = struct {
         };
     }
 
-    fn needsInstantiationFlatType(self: *const Self, flat_type: types.FlatType) bool {
+    pub fn needsInstantiationFlatType(self: *const Self, flat_type: types.FlatType) bool {
         return switch (flat_type) {
             .str => false,
             .box => |box_var| self.needsInstantiation(box_var),
@@ -355,7 +355,7 @@ pub const Store = struct {
         };
     }
 
-    fn needsInstantiationRecord(self: *const Self, record: types.Record) bool {
+    pub fn needsInstantiationRecord(self: *const Self, record: types.Record) bool {
         const fields_slice = self.getRecordFieldsSlice(record.fields);
         for (fields_slice.items(.var_)) |type_var| {
             if (self.needsInstantiation(type_var)) return true;
@@ -363,7 +363,7 @@ pub const Store = struct {
         return self.needsInstantiation(record.ext);
     }
 
-    fn needsInstantiationRecordFields(self: *const Self, fields: types.RecordField.SafeMultiList.Range) bool {
+    pub fn needsInstantiationRecordFields(self: *const Self, fields: types.RecordField.SafeMultiList.Range) bool {
         const fields_slice = self.getRecordFieldsSlice(fields);
         for (fields_slice.items(.var_)) |type_var| {
             if (self.needsInstantiation(type_var)) return true;
@@ -371,7 +371,7 @@ pub const Store = struct {
         return false;
     }
 
-    fn needsInstantiationTagUnion(self: *const Self, tag_union: types.TagUnion) bool {
+    pub fn needsInstantiationTagUnion(self: *const Self, tag_union: types.TagUnion) bool {
         const tags_slice = self.getTagsSlice(tag_union.tags);
         for (tags_slice.items(.args)) |tag_args| {
             const args_slice = self.getTagArgsSlice(tag_args);

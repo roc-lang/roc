@@ -18,14 +18,14 @@ test "rigid variables need instantiation - polymorphic identity function" {
     const func_var = store.freshFromContent(func_content);
 
     // Verify the function needs instantiation (because it contains rigid vars)
-    try std.testing.expect(instantiate.needsInstantiation(&store, func_var));
+    try std.testing.expect(store.needsInstantiation(func_var));
 
     // First call site: instantiate for use with integers
     const inst1_var = try instantiate.instantiateVar(&store, func_var, std.testing.allocator);
 
     // The instantiated function should still need instantiation
     // (because it has fresh type variables that could be instantiated again)
-    try std.testing.expect(instantiate.needsInstantiation(&store, inst1_var));
+    try std.testing.expect(store.needsInstantiation(inst1_var));
 
     // Verify we got a different variable (not the same as original)
     try std.testing.expect(inst1_var != func_var);
@@ -34,7 +34,7 @@ test "rigid variables need instantiation - polymorphic identity function" {
     const inst2_var = try instantiate.instantiateVar(&store, func_var, std.testing.allocator);
 
     // Should also need instantiation
-    try std.testing.expect(instantiate.needsInstantiation(&store, inst2_var));
+    try std.testing.expect(store.needsInstantiation(inst2_var));
 
     // Verify we got different variables for each instantiation
     try std.testing.expect(inst2_var != func_var);
@@ -74,7 +74,7 @@ test "rigid variables need instantiation - multiple type parameters" {
     const func_var = store.freshFromContent(func_content);
 
     // Verify the function needs instantiation
-    try std.testing.expect(instantiate.needsInstantiation(&store, func_var));
+    try std.testing.expect(store.needsInstantiation(func_var));
 
     // Instantiate for first use
     const inst1_var = try instantiate.instantiateVar(&store, func_var, std.testing.allocator);
@@ -93,18 +93,18 @@ test "rigid vs flex variable instantiation behavior" {
     // Test that both rigid and flex variables need instantiation
     const rigid_var = store.fresh();
     try store.setVarContent(rigid_var, types.Content{ .rigid_var = @bitCast(@as(u32, 1)) });
-    try std.testing.expect(instantiate.needsInstantiation(&store, rigid_var));
+    try std.testing.expect(store.needsInstantiation(rigid_var));
 
     const flex_var = store.fresh();
     try store.setVarContent(flex_var, types.Content{ .flex_var = null });
-    try std.testing.expect(instantiate.needsInstantiation(&store, flex_var));
+    try std.testing.expect(store.needsInstantiation(flex_var));
 
     // Test that concrete types don't need instantiation
     const str_var = store.fresh();
     try store.setVarContent(str_var, types.Content{ .structure = .str });
-    try std.testing.expect(!instantiate.needsInstantiation(&store, str_var));
+    try std.testing.expect(!store.needsInstantiation(str_var));
 
     const int_var = store.fresh();
     try store.setVarContent(int_var, types.Content{ .structure = .{ .num = .{ .int_precision = .u32 } } });
-    try std.testing.expect(!instantiate.needsInstantiation(&store, int_var));
+    try std.testing.expect(!store.needsInstantiation(int_var));
 }
