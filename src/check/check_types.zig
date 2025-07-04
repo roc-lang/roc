@@ -7,6 +7,7 @@ const unifier = @import("check_types/unify.zig");
 const occurs = @import("check_types/occurs.zig");
 const problem = @import("check_types/problem.zig");
 const snapshot = @import("check_types/snapshot.zig");
+const instantiate = @import("check_types/instantiate.zig");
 const CIR = @import("./canonicalize/CIR.zig");
 const ModuleEnv = @import("../base/ModuleEnv.zig");
 
@@ -217,44 +218,87 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             const func_type_var = @as(Var, @enumFromInt(@intFromEnum(func_expr_idx)));
             const resolved_func = self.types.resolveVar(func_type_var);
 
-            switch (resolved_func.desc.content) {
-                .structure => |flat_type| switch (flat_type) {
-                    .fn_effectful => {
-                        does_fx = true;
-                    },
-                    else => {
-                        // Either it's not a function type, or it's not an effectful fn.
-                    },
-                },
-                else => {
-                    // Either it's not a function type, or it's not an effectful fn.
-                },
-            }
-
             // Rest are arguments
             const call_args = all_exprs[1..];
             for (call_args) |arg_expr_idx| {
                 does_fx = try self.checkExpr(arg_expr_idx) or does_fx;
             }
 
-            // For function calls, we need to unify the function with the expected type
-            // But we need to be careful about runtime errors in the function position
+            // Handle function calls, being careful about runtime errors in the function position
             if (self.can_ir.store.getExpr(func_expr_idx) != .e_runtime_error) {
-                // Create type variables for proper function type checking
                 const call_var = @as(Var, @enumFromInt(@intFromEnum(expr_idx)));
                 const func_var = @as(Var, @enumFromInt(@intFromEnum(func_expr_idx)));
 
-                // Create argument type variables
-                const arg_vars: []Var = @ptrCast(@alignCast(call_args));
+                // Check if this is an annotated function that needs instantiation
+                // We only instantiate if the function actually contains type variables
+                const needs_instantiation = switch (resolved_func.desc.content) {
+                    .structure => |flat_type| switch (flat_type) {
+                        .fn_effectful, .fn_pure, .fn_unbound => instantiate.needsInstantiation(self.types, func_var),
+                        else => false,
+                    },
+                    .alias => instantiate.needsInstantiation(self.types, func_var),
+                    else => false,
+                };
 
-                // Create an unbound function type with the call result as return type
-                // The unification will propagate the actual return type to the call
-                const func_content = self.types.mkFuncUnbound(arg_vars, call_var);
-                const expected_func_var = self.types.freshFromContent(func_content);
+                if (needs_instantiation) {
+                    // Instantiate the function type to get fresh variables while preserving structure
+                    const instantiated_func = try instantiate.instantiateVar(self.types, func_var, self.gpa);
+                    const resolved_inst = self.types.resolveVar(instantiated_func);
 
-                // Unify the expected function type with the actual function
-                // This order matters when the function has a concrete type from annotation
-                _ = self.unify(expected_func_var, func_var);
+                    // Extract the instantiated function structure
+                    const func_struct = switch (resolved_inst.desc.content) {
+                        .structure => |flat_type| switch (flat_type) {
+                            .fn_effectful => |func| blk: {
+                                does_fx = true;
+                                break :blk func;
+                            },
+                            .fn_pure, .fn_unbound => |func| func,
+                            else => unreachable,
+                        },
+                        .alias => |alias| blk: {
+                            // Resolve through the alias to get the function
+                            const backing_var = alias.getBackingVar(instantiated_func);
+                            const alias_resolved = self.types.resolveVar(backing_var);
+                            break :blk switch (alias_resolved.desc.content) {
+                                .structure => |flat_type| switch (flat_type) {
+                                    .fn_effectful => |func| inner: {
+                                        does_fx = true;
+                                        break :inner func;
+                                    },
+                                    .fn_pure, .fn_unbound => |func| func,
+                                    else => unreachable,
+                                },
+                                else => unreachable,
+                            };
+                        },
+                        else => unreachable,
+                    };
+
+                    // Unify instantiated argument types with actual arguments
+                    const inst_args = self.types.getFuncArgsSlice(func_struct.args);
+                    const arg_vars: []Var = @ptrCast(@alignCast(call_args));
+
+                    // Only unify arguments if counts match - otherwise let the normal
+                    // unification process handle the arity mismatch error
+                    if (inst_args.len == arg_vars.len) {
+                        for (inst_args, arg_vars) |inst_arg, actual_arg| {
+                            _ = self.unify(inst_arg, actual_arg);
+                        }
+                        // The call's type is the instantiated return type
+                        _ = self.unify(call_var, func_struct.ret);
+                    } else {
+                        // Fall back to normal unification to get proper error message
+                        const func_content = self.types.mkFuncUnbound(arg_vars, call_var);
+                        const expected_func_var = self.types.freshFromContent(func_content);
+                        _ = self.unify(expected_func_var, func_var);
+                    }
+                } else {
+                    // Fall back to the old behavior for non-annotated functions
+                    const arg_vars: []Var = @ptrCast(@alignCast(call_args));
+                    const func_content = self.types.mkFuncUnbound(arg_vars, call_var);
+                    const expected_func_var = self.types.freshFromContent(func_content);
+                    _ = self.unify(expected_func_var, func_var);
+                }
             }
         },
         .e_record => |e| {

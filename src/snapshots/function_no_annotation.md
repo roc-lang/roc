@@ -143,13 +143,13 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.9 (type "Num(*), Num(*) -> *"))
+		(patt @6.1-6.9 (type "*, * -> *"))
 		(patt @9.1-9.14 (type "* -> *"))
-		(patt @12.1-12.9 (type "Num(*) -> *"))
+		(patt @12.1-12.9 (type "* -> *"))
 		(patt @14.1-14.6 (type "*")))
 	(expressions
-		(expr @6.12-9.14 (type "Num(*), Num(*) -> *"))
+		(expr @6.12-9.14 (type "*, * -> *"))
 		(expr @9.17-9.36 (type "* -> *"))
-		(expr @12.12-12.45 (type "Num(*) -> *"))
+		(expr @12.12-12.45 (type "* -> *"))
 		(expr @14.9-14.21 (type "*"))))
 ~~~
