@@ -201,33 +201,45 @@ pub const TupleData = struct {
     }
 };
 
-/// Size and alignment information
-pub const SizeAlign = packed struct(u36) {
-    size: u30, // u30 can represent sizes up to 1 GiB
-    alignment: std.mem.Alignment, // u6 bits needed on this platform
+/// Roc's version of alignment that is limited to a max alignment of 16B to save bits.
+pub const RocAlignment = enum(u3) {
+    @"1" = 0,
+    @"2" = 1,
+    @"4" = 2,
+    @"8" = 3,
+    @"16" = 4,
+    _,
 
-    // Note: on 32-bit targets, there's an extra bit of uninitialized memory here,
-    // because the size of std.mem.Alignment is based on usize. If we want this data
-    // structure to be bit-for-bit identical on 32-bit and 64-bit builds of the Roc
-    // compiler, e.g. for serialization purposes, then we should make our own version
-    // of std.mem.Alignment which is hardcoded to be a u2 (which is enough, as Roc's
-    // compiler never generates values that are more than 16B aligned.)
+    pub fn toByteUnits(a: RocAlignment) usize {
+        return @as(usize, 1) << @intFromEnum(a);
+    }
+
+    pub fn fromByteUnits(n: u16) RocAlignment {
+        std.debug.assert(std.math.isPowerOfTwo(n));
+        return @enumFromInt(@ctz(n));
+    }
+};
+
+/// Size and alignment information
+pub const SizeAlign = packed struct(u32) {
+    size: u29, // u29 can represent sizes up to ~1GiB (is 1 byte shy of it).
+    alignment: RocAlignment, // u3 bits
 
     /// Box size and alignment (pointer-sized)
     pub const box = SizeAlign{
         .size = @sizeOf(usize),
-        .alignment = std.mem.Alignment.fromByteUnits(@alignOf(usize)),
+        .alignment = RocAlignment.fromByteUnits(@alignOf(usize)),
     };
 
     /// List size and alignment (3 pointer-sized fields)
     pub const list = SizeAlign{
         .size = 3 * @sizeOf(usize),
-        .alignment = std.mem.Alignment.fromByteUnits(@alignOf(usize)),
+        .alignment = RocAlignment.fromByteUnits(@alignOf(usize)),
     };
 };
 
 test "Size of SizeAlign type" {
-    try std.testing.expectEqual(36, @bitSizeOf(SizeAlign));
+    try std.testing.expectEqual(32, @bitSizeOf(SizeAlign));
 }
 
 /// The memory layout of a value in a running Roc program.
