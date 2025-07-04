@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const base = @import("../../base.zig");
+const tracy = @import("../../tracy.zig");
 const collections = @import("../../collections.zig");
 const can = @import("../canonicalize.zig");
 const types_mod = @import("../../types/types.zig");
@@ -184,6 +185,9 @@ pub const ReportBuilder = struct {
         self: *Self,
         problem: Problem,
     ) !Report {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         var snapshot_writer = snapshot.SnapshotWriter.init(
             self.buf.writer(),
             self.snapshots,
@@ -266,11 +270,7 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         try report.document.addSourceRegion(
-            self.source,
-            region_info.start_line_idx,
-            region_info.start_col_idx,
-            region_info.end_line_idx,
-            region_info.end_col_idx,
+            region_info,
             .error_highlight,
             self.filename,
         );
@@ -386,6 +386,7 @@ pub const ReportBuilder = struct {
 
         // Create the display region
         const display_region = SourceCodeDisplayRegion{
+            .line_text = overall_region_info.line_text,
             .start_line = overall_region_info.start_line_idx + 1,
             .start_column = overall_region_info.start_col_idx + 1,
             .end_line = overall_region_info.end_line_idx + 1,
@@ -412,7 +413,7 @@ pub const ReportBuilder = struct {
             },
         };
 
-        try report.document.addSourceCodeWithUnderlines(self.source, display_region, &underline_regions);
+        try report.document.addSourceCodeWithUnderlines(display_region, &underline_regions);
         try report.document.addLineBreak();
 
         // Show the type of the first element
@@ -480,6 +481,7 @@ pub const ReportBuilder = struct {
 
         // Create the display region
         const display_region = SourceCodeDisplayRegion{
+            .line_text = actual_region_info.line_text,
             .start_line = actual_region_info.start_line_idx + 1,
             .start_column = actual_region_info.start_col_idx + 1,
             .end_line = actual_region_info.end_line_idx + 1,
@@ -499,7 +501,7 @@ pub const ReportBuilder = struct {
             },
         };
 
-        try report.document.addSourceCodeWithUnderlines(self.source, display_region, &underline_regions);
+        try report.document.addSourceCodeWithUnderlines(display_region, &underline_regions);
         try report.document.addLineBreak();
 
         // Add description
@@ -599,6 +601,7 @@ pub const ReportBuilder = struct {
 
         // Create the display region
         const display_region = SourceCodeDisplayRegion{
+            .line_text = overall_region_info.line_text,
             .start_line = overall_region_info.start_line_idx + 1,
             .start_column = overall_region_info.start_col_idx + 1,
             .end_line = overall_region_info.end_line_idx + 1,
@@ -618,7 +621,7 @@ pub const ReportBuilder = struct {
             },
         };
 
-        try report.document.addSourceCodeWithUnderlines(self.source, display_region, &underline_regions);
+        try report.document.addSourceCodeWithUnderlines(display_region, &underline_regions);
         try report.document.addLineBreak();
 
         // Show the type of the invalid branch
@@ -734,6 +737,7 @@ pub const ReportBuilder = struct {
 
         // Create the display region
         const display_region = SourceCodeDisplayRegion{
+            .line_text = overall_region_info.line_text,
             .start_line = overall_region_info.start_line_idx + 1,
             .start_column = overall_region_info.start_col_idx + 1,
             .end_line = overall_region_info.end_line_idx + 1,
@@ -753,7 +757,7 @@ pub const ReportBuilder = struct {
             },
         };
 
-        try report.document.addSourceCodeWithUnderlines(self.source, display_region, &underline_regions);
+        try report.document.addSourceCodeWithUnderlines(display_region, &underline_regions);
         try report.document.addLineBreak();
 
         // Show the type of the invalid branch
@@ -846,6 +850,7 @@ pub const ReportBuilder = struct {
 
         // Create the display region
         const display_region = SourceCodeDisplayRegion{
+            .line_text = overall_region_info.line_text,
             .start_line = overall_region_info.start_line_idx + 1,
             .start_column = overall_region_info.start_col_idx + 1,
             .end_line = overall_region_info.end_line_idx + 1,
@@ -871,7 +876,7 @@ pub const ReportBuilder = struct {
             },
         };
 
-        try report.document.addSourceCodeWithUnderlines(self.source, display_region, &underline_regions);
+        try report.document.addSourceCodeWithUnderlines(display_region, &underline_regions);
         try report.document.addLineBreak();
 
         // Show the type of the invalid branch
@@ -947,6 +952,7 @@ pub const ReportBuilder = struct {
 
         // Create the display region
         const display_region = SourceCodeDisplayRegion{
+            .line_text = overall_region_info.line_text,
             .start_line = overall_region_info.start_line_idx + 1,
             .start_column = overall_region_info.start_col_idx + 1,
             .end_line = overall_region_info.end_line_idx + 1,
@@ -972,7 +978,7 @@ pub const ReportBuilder = struct {
             },
         };
 
-        try report.document.addSourceCodeWithUnderlines(self.source, display_region, &underline_regions);
+        try report.document.addSourceCodeWithUnderlines(display_region, &underline_regions);
         try report.document.addLineBreak();
 
         // Show the type of the invalid branch
@@ -1037,11 +1043,7 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         try report.document.addSourceRegion(
-            self.source,
-            region_info.start_line_idx,
-            region_info.start_col_idx,
-            region_info.end_line_idx,
-            region_info.end_col_idx,
+            region_info,
             .error_highlight,
             self.filename,
         );
@@ -1089,11 +1091,7 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         try report.document.addSourceRegion(
-            self.source,
-            region_info.start_line_idx,
-            region_info.start_col_idx,
-            region_info.end_line_idx,
-            region_info.end_col_idx,
+            region_info,
             .error_highlight,
             self.filename,
         );

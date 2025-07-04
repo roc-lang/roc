@@ -91,7 +91,7 @@ pub const Report = struct {
     }
 
     /// Add source context using RegionInfo for better accuracy and simplicity.
-    pub fn addSourceContext(self: *Report, region: RegionInfo, source: []const u8, filename: ?[]const u8) !void {
+    pub fn addSourceContext(self: *Report, region: RegionInfo, filename: ?[]const u8) !void {
         @import("config.zig").validateUtf8(region.line_text) catch |err| switch (err) {
             error.InvalidUtf8 => {
                 try self.document.addError("[Invalid UTF-8 in source context]");
@@ -103,11 +103,7 @@ pub const Report = struct {
         // Use proper source region API for consistent formatting
         // addSourceRegion now expects 0-based coordinates and handles conversion internally
         try self.document.addSourceRegion(
-            source,
-            region.start_line_idx,
-            region.start_col_idx,
-            region.end_line_idx,
-            region.end_col_idx,
+            region,
             .error_highlight,
             filename,
         );

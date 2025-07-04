@@ -449,7 +449,7 @@ pub fn parseDiagnosticToReport(self: *AST, diagnostic: Diagnostic, allocator: st
         try report.document.addLineBreak();
 
         // Use the proper addSourceContext method
-        try report.addSourceContext(region_info, self.source, filename);
+        try report.addSourceContext(region_info, filename);
     }
 
     return report;

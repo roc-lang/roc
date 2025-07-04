@@ -271,7 +271,7 @@ fn renderElementToTerminal(element: DocumentElement, writer: anytype, palette: C
             try writer.writeAll(palette.reset);
 
             // Extract and print the source lines with line numbers
-            const lines = source_region.extractLines(region.source, region.start_line, region.end_line);
+            const lines = region.line_text;
             var line_num = region.start_line;
             var iter = std.mem.tokenizeScalar(u8, lines, '\n');
             while (iter.next()) |line| {
@@ -334,7 +334,7 @@ fn renderElementToTerminal(element: DocumentElement, writer: anytype, palette: C
             try writer.writeAll(palette.reset);
 
             // Extract and print the source lines with line numbers
-            const lines = source_region.extractLines(data.source, data.display_region.start_line, data.display_region.end_line);
+            const lines = data.display_region.line_text;
             var line_num = data.display_region.start_line;
             var iter = std.mem.tokenizeScalar(u8, lines, '\n');
             while (iter.next()) |line| {
@@ -554,7 +554,7 @@ fn renderElementToMarkdown(element: DocumentElement, writer: anytype, config: Re
                 try writer.print("**{s}:{d}:{d}:{d}:{d}:**\n", .{ sanitisePathForSnapshots(filename), region.start_line, region.start_column, region.end_line, region.end_column });
             }
             try writer.writeAll("```roc\n");
-            const lines = source_region.extractLines(region.source, region.start_line, region.end_line);
+            const lines = region.line_text;
             try writer.writeAll(lines);
             try writer.writeAll("\n```\n");
 
@@ -580,7 +580,7 @@ fn renderElementToMarkdown(element: DocumentElement, writer: anytype, config: Re
                 try writer.print("**{s}:{}:{}:**\n", .{ sanitisePathForSnapshots(filename), data.display_region.start_line, data.display_region.start_column });
             }
             try writer.writeAll("```roc\n");
-            const lines = source_region.extractLines(data.source, data.display_region.start_line, data.display_region.end_line);
+            const lines = data.display_region.line_text;
             try writer.writeAll(lines);
             try writer.writeAll("\n```\n");
 
@@ -712,7 +712,7 @@ fn renderElementToHtml(element: DocumentElement, writer: anytype, annotation_sta
             }
             const class = getAnnotationHtmlClass(region.region_annotation);
             try writer.print("<pre class=\"{s}\">", .{class});
-            const lines = source_region.extractLines(region.source, region.start_line, region.end_line);
+            const lines = region.line_text;
             try writeEscapedHtml(writer, lines);
             try writer.writeAll("</pre></div>");
         },
@@ -722,7 +722,7 @@ fn renderElementToHtml(element: DocumentElement, writer: anytype, annotation_sta
                 try writer.print("<div class=\"source-location\">{s}:{}:{}</div>", .{ filename, data.display_region.start_line, data.display_region.start_column });
             }
             try writer.writeAll("<pre class=\"source-code\">");
-            const lines = source_region.extractLines(data.source, data.display_region.start_line, data.display_region.end_line);
+            const lines = data.display_region.line_text;
             try writeEscapedHtml(writer, lines);
             try writer.writeAll("</pre></div>");
         },
@@ -818,7 +818,7 @@ fn renderElementToLsp(element: DocumentElement, writer: anytype, config: Reporti
             if (region.filename) |filename| {
                 try writer.print("{s}:{}:{}:{}:{}: ", .{ sanitisePathForSnapshots(filename), region.start_line, region.start_column, region.end_line, region.end_column });
             }
-            const lines = source_region.extractLines(region.source, region.start_line, region.end_line);
+            const lines = region.line_text;
             try writer.writeAll(lines);
             try writer.writeAll("\n");
         },
@@ -826,7 +826,7 @@ fn renderElementToLsp(element: DocumentElement, writer: anytype, config: Reporti
             if (data.display_region.filename) |filename| {
                 try writer.print("{s}:{}:{}: ", .{ filename, data.display_region.start_line, data.display_region.start_column });
             }
-            const lines = source_region.extractLines(data.source, data.display_region.start_line, data.display_region.end_line);
+            const lines = data.display_region.line_text;
             try writer.writeAll(lines);
             try writer.writeAll("\n");
         },

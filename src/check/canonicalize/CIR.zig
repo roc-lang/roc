@@ -4,6 +4,7 @@
 const std = @import("std");
 const testing = std.testing;
 const base = @import("../../base.zig");
+const tracy = @import("../../tracy.zig");
 const types = @import("../../types.zig");
 const collections = @import("../../collections.zig");
 const reporting = @import("../../reporting.zig");
@@ -145,6 +146,9 @@ pub fn getDiagnostics(self: *CIR) []CIR.Diagnostic {
 /// remains valid for the duration of this call. The returned Report will contain
 /// references to the source text but does not own it.
 pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem.Allocator, source: []const u8, filename: []const u8) !reporting.Report {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     // Set temporary source for calcRegionInfo
     self.temp_source_for_sexpr = source;
     defer self.temp_source_for_sexpr = null;
@@ -194,7 +198,7 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
         .empty_single_quote => Diagnostic.buildEmptySingleQuoteReport(allocator),
         .empty_tuple => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
-            break :blk Diagnostic.buildEmptyTupleReport(allocator, region_info, source, filename);
+            break :blk Diagnostic.buildEmptyTupleReport(allocator, region_info, filename);
         },
         .expr_not_canonicalized => Diagnostic.buildExprNotCanonicalizedReport(allocator),
         .invalid_string_interpolation => Diagnostic.buildInvalidStringInterpolationReport(allocator),
@@ -216,7 +220,6 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 ident_name,
                 new_region_info,
                 original_region_info,
-                source,
                 filename,
             );
         },
@@ -229,7 +232,6 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 type_name,
                 original_region_info,
                 redeclared_region_info,
-                source,
                 filename,
             );
         },
@@ -241,7 +243,6 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 allocator,
                 type_name,
                 region_info,
-                source,
                 filename,
             );
         },
@@ -252,7 +253,6 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 allocator,
                 type_var_name,
                 region_info,
-                source,
                 filename,
             );
         },
@@ -265,7 +265,6 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 type_name,
                 original_region_info,
                 redeclared_region_info,
-                source,
                 filename,
             );
         },
@@ -278,7 +277,6 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 type_name,
                 original_region_info,
                 redeclared_region_info,
-                source,
                 filename,
             );
         },
@@ -292,7 +290,6 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 new_region_info,
                 original_region_info,
                 data.cross_scope,
-                source,
                 filename,
             );
         },
@@ -307,7 +304,6 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 parameter_name,
                 region_info,
                 original_region_info,
-                source,
                 filename,
             );
         },
@@ -318,7 +314,6 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 &self.env.idents,
                 region_info,
                 data,
-                source,
                 filename,
             );
         },
@@ -329,7 +324,6 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 &self.env.idents,
                 region_info,
                 data,
-                source,
                 filename,
             );
         },
@@ -342,7 +336,6 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 field_name,
                 duplicate_region_info,
                 original_region_info,
-                source,
                 filename,
             );
         },

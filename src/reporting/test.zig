@@ -113,7 +113,13 @@ fn buildSyntaxProblemReport(allocator: Allocator) !Document {
     try doc.addBinaryOperator("+");
     try doc.addReflowingText(" like this requires parentheses, to clarify how things should be grouped.");
     try doc.addLineBreak();
-    try doc.addSourceRegion("example.roc", 0, 9, 0, 19, .error_highlight, "example.roc");
+    try doc.addSourceRegion(.{
+        .line_text = "example.roc",
+        .start_line_idx = 0,
+        .start_col_idx = 9,
+        .end_line_idx = 0,
+        .end_col_idx = 19,
+    }, .error_highlight, "example.roc");
     return doc;
 }
 // Test Helpers
