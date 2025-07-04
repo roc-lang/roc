@@ -276,7 +276,7 @@ pub const Pattern = union(enum) {
 
             var node = SExpr.init(gpa, "record-destruct");
 
-            node.appendRegion(gpa, ir.calcRegionInfo(self.region));
+            ir.appendRegionInfoToSexprNodeFromRegion(&node, self.region);
 
             const label_text = ir.env.idents.getText(self.label);
             const ident_text = ir.env.idents.getText(self.ident);
@@ -295,7 +295,7 @@ pub const Pattern = union(enum) {
         switch (self.*) {
             .assign => |p| {
                 var node = SExpr.init(gpa, "p-assign");
-                node.appendRegion(gpa, ir.calcRegionInfo(p.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, p.region);
 
                 const ident = ir.getIdentText(p.ident);
                 node.appendStringAttr(gpa, "ident", ident);
@@ -304,7 +304,7 @@ pub const Pattern = union(enum) {
             },
             .as => |a| {
                 var node = SExpr.init(gpa, "p-as");
-                node.appendRegion(gpa, ir.calcRegionInfo(a.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, a.region);
 
                 const ident = ir.getIdentText(a.ident);
                 node.appendStringAttr(gpa, "as", ident);
@@ -316,12 +316,12 @@ pub const Pattern = union(enum) {
             },
             .applied_tag => |p| {
                 var node = SExpr.init(gpa, "p-applied-tag");
-                node.appendRegion(gpa, ir.calcRegionInfo(p.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, p.region);
                 return node;
             },
             .record_destructure => |p| {
                 var node = SExpr.init(gpa, "p-record-destructure");
-                node.appendRegion(gpa, ir.calcRegionInfo(p.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, p.region);
 
                 // var pattern_idx_node = formatPatternIdxNode(gpa, pattern_idx);
                 // node.appendNode(gpa, &pattern_idx_node);
@@ -340,7 +340,7 @@ pub const Pattern = union(enum) {
             },
             .list => |p| {
                 var node = SExpr.init(gpa, "p-list");
-                node.appendRegion(gpa, ir.calcRegionInfo(p.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, p.region);
 
                 var patterns_node = SExpr.init(gpa, "patterns");
 
@@ -373,7 +373,7 @@ pub const Pattern = union(enum) {
             },
             .tuple => |p| {
                 var node = SExpr.init(gpa, "p-tuple");
-                node.appendRegion(gpa, ir.calcRegionInfo(p.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, p.region);
 
                 // var pattern_idx_node = formatPatternIdxNode(gpa, pattern_idx);
                 // node.appendNode(gpa, &pattern_idx_node);
@@ -391,24 +391,24 @@ pub const Pattern = union(enum) {
             },
             .int_literal => |p| {
                 var node = SExpr.init(gpa, "p-int");
-                node.appendRegion(gpa, ir.calcRegionInfo(p.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, p.region);
                 return node;
             },
             .small_dec_literal => |p| {
                 var node = SExpr.init(gpa, "p-small-dec");
-                node.appendRegion(gpa, ir.calcRegionInfo(p.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, p.region);
                 // TODO: add fields
                 return node;
             },
             .dec_literal => |p| {
                 var node = SExpr.init(gpa, "p-dec");
-                node.appendRegion(gpa, ir.calcRegionInfo(p.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, p.region);
                 // TODO: add fields
                 return node;
             },
             .str_literal => |p| {
                 var node = SExpr.init(gpa, "p-str");
-                node.appendRegion(gpa, ir.calcRegionInfo(p.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, p.region);
 
                 const text = ir.env.strings.get(p.literal);
                 node.appendStringAttr(gpa, "text", text);
@@ -417,7 +417,7 @@ pub const Pattern = union(enum) {
             },
             .char_literal => |l| {
                 var node = SExpr.init(gpa, "p-char");
-                node.appendRegion(gpa, ir.calcRegionInfo(l.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, l.region);
 
                 const char_str = std.fmt.allocPrint(gpa, "'\\u({d})'", .{l.value}) catch "<oom>";
                 defer gpa.free(char_str);
@@ -427,7 +427,7 @@ pub const Pattern = union(enum) {
             },
             .underscore => |p| {
                 var node = SExpr.init(gpa, "p-underscore");
-                node.appendRegion(gpa, ir.calcRegionInfo(p.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, p.region);
 
                 // var pattern_idx_node = formatPatternIdxNode(gpa, pattern_idx);
                 // node.appendNode(gpa, &pattern_idx_node);
@@ -436,7 +436,7 @@ pub const Pattern = union(enum) {
             },
             .runtime_error => |e| {
                 var node = SExpr.init(gpa, "p-runtime-error");
-                node.appendRegion(gpa, ir.calcRegionInfo(e.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, e.region);
 
                 const diagnostic = ir.store.getDiagnostic(e.diagnostic);
 

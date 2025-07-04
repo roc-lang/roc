@@ -553,7 +553,7 @@ pub const TypeHeader = struct {
     pub fn toSExpr(self: *const @This(), ir: *const CIR) SExpr {
         const gpa = ir.env.gpa;
         var node = SExpr.init(gpa, "ty-header");
-        node.appendRegion(gpa, ir.calcRegionInfo(self.region));
+        ir.appendRegionInfoToSexprNodeFromRegion(&node, self.region);
 
         // Add the type name
         node.appendStringAttr(gpa, "name", ir.getIdentText(self.name));
@@ -746,7 +746,7 @@ pub const Annotation = struct {
         _ = line_starts;
         const gpa = ir.env.gpa;
         var node = SExpr.init(gpa, "annotation");
-        node.appendRegion(gpa, ir.calcRegionInfo(self.region));
+        ir.appendRegionInfoToSexprNodeFromRegion(&node, self.region);
 
         // Add the declared type annotation structure
         var type_anno_node = SExpr.init(gpa, "declared-type");
@@ -791,7 +791,7 @@ pub const ExternalDecl = struct {
         const gpa = ir.env.gpa;
 
         var node = SExpr.init(gpa, "ext-decl");
-        node.appendRegion(gpa, ir.calcRegionInfo(self.region));
+        ir.appendRegionInfoToSexprNodeFromRegion(&node, self.region);
 
         // Add qualified name
         const qualified_name_str = ir.getIdentText(self.qualified_name);
@@ -1016,16 +1016,33 @@ pub fn calcRegionInfo(self: *const CIR, region: Region) base.RegionInfo {
     return info;
 }
 
+/// Append region information to an S-expression node for a given index in the Canonical IR.
+pub fn appendRegionInfoToSexprNode(ir: *const CIR, node: *SExpr, idx: anytype) void {
+    const region = ir.store.getNodeRegion(@enumFromInt(@intFromEnum(idx)));
+    ir.appendRegionInfoToSexprNodeFromRegion(node, region);
+}
+
+/// Append region information to an S-expression node from a specific region.
+pub fn appendRegionInfoToSexprNodeFromRegion(ir: *const CIR, node: *SExpr, region: Region) void {
+    const info = ir.calcRegionInfo(region);
+    node.appendByteRange(
+        ir.env.gpa,
+        info,
+        region.start.offset,
+        region.end.offset,
+    );
+}
+
 /// Get region information for a node in the Canonical IR.
 pub fn getNodeRegionInfo(ir: *const CIR, idx: anytype) base.RegionInfo {
     const region = ir.store.getNodeRegion(@enumFromInt(@intFromEnum(idx)));
     return ir.calcRegionInfo(region);
 }
 
-/// Helper function to convert type information from the Canonical IR to a string
+/// Helper function to convert type information from the Canonical IR to an SExpr node
 /// in S-expression format for snapshot testing. Implements the definition-focused
 /// format showing final types for defs, expressions, and builtins.
-pub fn toSexprTypesStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr.Idx, source: []const u8) !void {
+pub fn toSexprTypes(ir: *CIR, maybe_expr_idx: ?Expr.Idx, source: []const u8) SExpr {
     // Set temporary source for region info calculation during SExpr generation
     ir.temp_source_for_sexpr = source;
     defer ir.temp_source_for_sexpr = null;
@@ -1042,12 +1059,11 @@ pub fn toSexprTypesStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr
         const expr_var = @as(types.Var, @enumFromInt(@intFromEnum(expr_idx)));
 
         var expr_node = SExpr.init(gpa, "expr");
-        defer expr_node.deinit(gpa);
 
-        expr_node.appendRegion(gpa, ir.getNodeRegionInfo(expr_idx));
+        ir.appendRegionInfoToSexprNode(&expr_node, expr_idx);
 
         if (@intFromEnum(expr_var) > ir.env.types.slots.backing.items.len) {
-            const unknown_node = SExpr.init(gpa, "unknown");
+            var unknown_node = SExpr.init(gpa, "unknown");
             expr_node.appendNode(gpa, &unknown_node);
         } else {
             if (type_writer.writeVar(expr_var)) {
@@ -1057,10 +1073,9 @@ pub fn toSexprTypesStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr
             }
         }
 
-        expr_node.toStringPretty(writer);
+        return expr_node;
     } else {
         var root_node = SExpr.init(gpa, "inferred-types");
-        defer root_node.deinit(gpa);
 
         // Collect definitions
         var defs_node = SExpr.init(gpa, "defs");
@@ -1075,15 +1090,15 @@ pub fn toSexprTypesStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr
                 .assign => |assign_pat| {
                     var def_node = SExpr.init(gpa, "patt");
 
-                    def_node.appendRegion(gpa, ir.calcRegionInfo(assign_pat.region));
+                    ir.appendRegionInfoToSexprNodeFromRegion(&def_node, assign_pat.region);
 
                     // Get the type variable for this definition
                     // Each definition has a type_var at its node index which represents the type of the definition
-                    const def_var = try ir.idxToTypeVar(&ir.env.types, def_idx);
+                    const def_var = ir.idxToTypeVar(&ir.env.types, def_idx) catch |err| exitOnOom(err);
 
                     // Clear the buffer and write the type
                     type_string_buf.clearRetainingCapacity();
-                    try type_writer.writeVar(def_var);
+                    type_writer.writeVar(def_var) catch |err| exitOnOom(err);
                     def_node.appendStringAttr(gpa, "type", type_string_buf.items);
 
                     defs_node.appendNode(gpa, &def_node);
@@ -1109,16 +1124,15 @@ pub fn toSexprTypesStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr
             const expr_var = @as(types.Var, @enumFromInt(@intFromEnum(def.expr)));
 
             var expr_node = SExpr.init(gpa, "expr");
-            expr_node.appendRegion(gpa, ir.calcRegionInfo(def.expr_region));
-            // expr_node.appendUnsignedInt(gpa, @intFromEnum(expr_var));
+            ir.appendRegionInfoToSexprNodeFromRegion(&expr_node, def.expr_region);
 
             if (@intFromEnum(expr_var) > ir.env.types.slots.backing.items.len) {
-                const unknown_node = SExpr.init(gpa, "unknown");
+                var unknown_node = SExpr.init(gpa, "unknown");
                 expr_node.appendNode(gpa, &unknown_node);
             } else {
                 // Clear the buffer and write the type
                 type_string_buf.clearRetainingCapacity();
-                try type_writer.writeVar(expr_var);
+                type_writer.writeVar(expr_var) catch |err| exitOnOom(err);
                 expr_node.appendStringAttr(gpa, "type", type_string_buf.items);
             }
 
@@ -1127,6 +1141,15 @@ pub fn toSexprTypesStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr
 
         root_node.appendNode(gpa, &expressions_node);
 
-        root_node.toStringPretty(writer);
+        return root_node;
     }
+}
+
+/// Helper function to convert type information from the Canonical IR to a string
+/// in S-expression format for snapshot testing. Calls `toSexprTypes` and writes the result.
+pub fn toSexprTypesStr(ir: *CIR, writer: std.io.AnyWriter, maybe_expr_idx: ?Expr.Idx, source: []const u8) !void {
+    const gpa = ir.env.gpa;
+    var node = toSexprTypes(ir, maybe_expr_idx, source);
+    defer node.deinit(gpa);
+    node.toStringPretty(writer);
 }

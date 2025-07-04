@@ -112,7 +112,7 @@ pub const TypeAnno = union(enum) {
         switch (self.*) {
             .apply => |a| {
                 var node = SExpr.init(gpa, "ty-apply");
-                node.appendRegion(gpa, ir.calcRegionInfo(a.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, a.region);
 
                 node.appendStringAttr(gpa, "symbol", ir.getIdentText(a.symbol));
 
@@ -127,31 +127,31 @@ pub const TypeAnno = union(enum) {
             },
             .ty_var => |tv| {
                 var node = SExpr.init(gpa, "ty-var");
-                node.appendRegion(gpa, ir.calcRegionInfo(tv.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, tv.region);
                 node.appendStringAttr(gpa, "name", ir.getIdentText(tv.name));
                 return node;
             },
             .underscore => |u| {
                 var node = SExpr.init(gpa, "ty-underscore");
-                node.appendRegion(gpa, ir.calcRegionInfo(u.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, u.region);
                 return node;
             },
             .ty => |t| {
                 var node = SExpr.init(gpa, "ty");
-                node.appendRegion(gpa, ir.calcRegionInfo(t.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, t.region);
                 node.appendStringAttr(gpa, "name", ir.getIdentText(t.symbol));
                 return node;
             },
             .mod_ty => |mt| {
                 var node = SExpr.init(gpa, "ty-mod");
-                node.appendRegion(gpa, ir.calcRegionInfo(mt.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, mt.region);
                 node.appendStringAttr(gpa, "module", ir.getIdentText(mt.mod_symbol));
                 node.appendStringAttr(gpa, "type", ir.getIdentText(mt.ty_symbol));
                 return node;
             },
             .tag_union => |tu| {
                 var node = SExpr.init(gpa, "ty-tag-union");
-                node.appendRegion(gpa, ir.calcRegionInfo(tu.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, tu.region);
 
                 const tags_slice = ir.store.sliceTypeAnnos(tu.tags);
                 for (tags_slice) |tag_idx| {
@@ -170,7 +170,7 @@ pub const TypeAnno = union(enum) {
             },
             .tuple => |tup| {
                 var node = SExpr.init(gpa, "ty-tuple");
-                node.appendRegion(gpa, ir.calcRegionInfo(tup.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, tup.region);
 
                 const annos_slice = ir.store.sliceTypeAnnos(tup.annos);
                 for (annos_slice) |anno_idx| {
@@ -183,7 +183,7 @@ pub const TypeAnno = union(enum) {
             },
             .record => |r| {
                 var node = SExpr.init(gpa, "ty-record");
-                node.appendRegion(gpa, ir.calcRegionInfo(r.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, r.region);
 
                 const fields_slice = ir.store.sliceAnnoRecordFields(r.fields);
                 for (fields_slice) |field_idx| {
@@ -201,7 +201,7 @@ pub const TypeAnno = union(enum) {
             },
             .@"fn" => |f| {
                 var node = SExpr.init(gpa, "ty-fn");
-                node.appendRegion(gpa, ir.calcRegionInfo(f.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, f.region);
 
                 const args_slice = ir.store.sliceTypeAnnos(f.args);
                 for (args_slice) |arg_idx| {
@@ -219,7 +219,7 @@ pub const TypeAnno = union(enum) {
             },
             .parens => |p| {
                 var node = SExpr.init(gpa, "ty-parens");
-                node.appendRegion(gpa, ir.calcRegionInfo(p.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, p.region);
 
                 const inner_anno = ir.store.getTypeAnno(p.anno);
                 var inner_node = inner_anno.toSExpr(ir);
@@ -229,7 +229,7 @@ pub const TypeAnno = union(enum) {
             },
             .malformed => |m| {
                 var node = SExpr.init(gpa, "ty-malformed");
-                node.appendRegion(gpa, ir.calcRegionInfo(m.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, m.region);
                 return node;
             },
         }

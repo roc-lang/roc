@@ -152,7 +152,7 @@ pub const Statement = union(enum) {
         switch (self.*) {
             .s_decl => |d| {
                 var node = SExpr.init(gpa, "s-let");
-                node.appendRegion(gpa, ir.calcRegionInfo(d.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, d.region);
 
                 var pattern_node = ir.store.getPattern(d.pattern).toSExpr(ir);
                 node.appendNode(gpa, &pattern_node);
@@ -164,7 +164,7 @@ pub const Statement = union(enum) {
             },
             .s_var => |v| {
                 var node = SExpr.init(gpa, "s-var");
-                node.appendRegion(gpa, ir.calcRegionInfo(v.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, v.region);
 
                 var pattern_node = ir.store.getPattern(v.pattern_idx).toSExpr(ir);
                 node.appendNode(gpa, &pattern_node);
@@ -176,7 +176,7 @@ pub const Statement = union(enum) {
             },
             .s_reassign => |r| {
                 var node = SExpr.init(gpa, "s-reassign");
-                node.appendRegion(gpa, ir.calcRegionInfo(r.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, r.region);
 
                 var pattern_node = ir.store.getPattern(r.pattern_idx).toSExpr(ir);
                 node.appendNode(gpa, &pattern_node);
@@ -188,13 +188,13 @@ pub const Statement = union(enum) {
             },
             .s_crash => |c| {
                 var node = SExpr.init(gpa, "s-crash");
-                node.appendRegion(gpa, ir.calcRegionInfo(c.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, c.region);
                 node.appendStringAttr(gpa, "msg", ir.env.strings.get(c.msg));
                 return node;
             },
             .s_expr => |s| {
                 var node = SExpr.init(gpa, "s-expr");
-                node.appendRegion(gpa, ir.calcRegionInfo(s.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, s.region);
 
                 var expr_node = ir.store.getExpr(s.expr).toSExpr(ir);
                 node.appendNode(gpa, &expr_node);
@@ -203,7 +203,7 @@ pub const Statement = union(enum) {
             },
             .s_expect => |s| {
                 var node = SExpr.init(gpa, "s-expect");
-                node.appendRegion(gpa, ir.calcRegionInfo(s.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, s.region);
 
                 var body_node = ir.store.getExpr(s.body).toSExpr(ir);
                 node.appendNode(gpa, &body_node);
@@ -212,7 +212,7 @@ pub const Statement = union(enum) {
             },
             .s_for => |s| {
                 var node = SExpr.init(gpa, "s-for");
-                node.appendRegion(gpa, ir.calcRegionInfo(s.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, s.region);
 
                 var pattern_node = ir.store.getPattern(s.patt).toSExpr(ir);
                 node.appendNode(gpa, &pattern_node);
@@ -227,7 +227,7 @@ pub const Statement = union(enum) {
             },
             .s_return => |s| {
                 var node = SExpr.init(gpa, "s-return");
-                node.appendRegion(gpa, ir.calcRegionInfo(s.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, s.region);
 
                 var expr_node = ir.store.getExpr(s.expr).toSExpr(ir);
                 node.appendNode(gpa, &expr_node);
@@ -236,7 +236,7 @@ pub const Statement = union(enum) {
             },
             .s_import => |s| {
                 var node = SExpr.init(gpa, "s-import");
-                node.appendRegion(gpa, ir.calcRegionInfo(s.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, s.region);
 
                 node.appendStringAttr(gpa, "module", ir.env.idents.getText(s.module_name_tok));
 
@@ -260,7 +260,7 @@ pub const Statement = union(enum) {
             },
             .s_type_decl => |s| {
                 var node = SExpr.init(gpa, "s-type-decl");
-                node.appendRegion(gpa, ir.calcRegionInfo(s.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, s.region);
 
                 // Add the type header
                 var header_node = ir.store.getTypeHeader(s.header).toSExpr(ir);
@@ -279,7 +279,7 @@ pub const Statement = union(enum) {
             },
             .s_type_anno => |s| {
                 var node = SExpr.init(gpa, "s-type-anno");
-                node.appendRegion(gpa, ir.calcRegionInfo(s.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, s.region);
 
                 node.appendStringAttr(gpa, "name", ir.getIdentText(s.name));
 

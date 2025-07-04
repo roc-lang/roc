@@ -1117,26 +1117,19 @@ fn generateCanonicalizeSection(output: *DualOutput, content: *const Content, can
 
 /// Generate TYPES section for both markdown and HTML
 fn generateTypesSection(output: *DualOutput, content: *const Content, can_ir: *CIR, maybe_expr_idx: ?CIR.Expr.Idx) !void {
-    var solved = std.ArrayList(u8).init(output.gpa);
-    defer solved.deinit();
-
-    try can_ir.toSexprTypesStr(solved.writer().any(), maybe_expr_idx, content.source);
+    var node = can_ir.toSexprTypes(maybe_expr_idx, content.source);
+    defer node.deinit(can_ir.env.gpa);
 
     try output.begin_section("TYPES");
     try output.begin_code_block("clojure");
-    try output.md_writer.writeAll(solved.items);
+    node.toStringPretty(output.md_writer.any());
     try output.md_writer.writeAll("\n");
 
     // HTML TYPES section
     try output.html_writer.writeAll(
         \\                <pre>
     );
-
-    // Escape HTML in types content
-    for (solved.items) |char| {
-        try escapeHtmlChar(output.html_writer, char);
-    }
-
+    node.toHtml(output.html_writer.any());
     try output.html_writer.writeAll(
         \\</pre>
         \\

@@ -416,7 +416,7 @@ pub const Expr = union(enum) {
         switch (self.*) {
             .e_int => |int_expr| {
                 var node = SExpr.init(gpa, "e-int");
-                node.appendRegion(gpa, ir.calcRegionInfo(int_expr.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, int_expr.region);
 
                 // Add value
                 const value_i128: i128 = @bitCast(int_expr.value.bytes);
@@ -428,7 +428,7 @@ pub const Expr = union(enum) {
             },
             .e_frac_f64 => |e| {
                 var node = SExpr.init(gpa, "e-frac-f64");
-                node.appendRegion(gpa, ir.calcRegionInfo(e.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, e.region);
 
                 // Add value
                 var value_buf: [512]u8 = undefined;
@@ -445,7 +445,7 @@ pub const Expr = union(enum) {
             },
             .e_frac_dec => |e| {
                 var node = SExpr.init(gpa, "e-frac-dec");
-                node.appendRegion(gpa, ir.calcRegionInfo(e.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, e.region);
 
                 // Add value (convert RocDec to string)
                 // RocDec has 18 decimal places, so divide by 10^18
@@ -464,7 +464,7 @@ pub const Expr = union(enum) {
             },
             .e_dec_small => |e| {
                 var node = SExpr.init(gpa, "e-dec-small");
-                node.appendRegion(gpa, ir.calcRegionInfo(e.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, e.region);
 
                 // Add numerator and denominator_power_of_ten
                 var num_buf: [32]u8 = undefined;
@@ -495,7 +495,7 @@ pub const Expr = union(enum) {
             },
             .e_str_segment => |e| {
                 var str_node = SExpr.init(gpa, "e-literal");
-                str_node.appendRegion(gpa, ir.calcRegionInfo(e.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&str_node, e.region);
 
                 const value = ir.env.strings.get(e.literal);
                 str_node.appendStringAttr(gpa, "string", value);
@@ -504,7 +504,7 @@ pub const Expr = union(enum) {
             },
             .e_str => |e| {
                 var str_node = SExpr.init(gpa, "e-string");
-                str_node.appendRegion(gpa, ir.calcRegionInfo(e.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&str_node, e.region);
 
                 for (ir.store.sliceExpr(e.span)) |segment| {
                     var segment_node = ir.store.getExpr(segment).toSExpr(ir);
@@ -515,7 +515,7 @@ pub const Expr = union(enum) {
             },
             .e_list => |l| {
                 var list_node = SExpr.init(gpa, "e-list");
-                list_node.appendRegion(gpa, ir.calcRegionInfo(l.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&list_node, l.region);
 
                 // Add list elements
                 var elems_node = SExpr.init(gpa, "elems");
@@ -529,12 +529,12 @@ pub const Expr = union(enum) {
             },
             .e_empty_list => |e| {
                 var empty_list_node = SExpr.init(gpa, "e-empty_list");
-                empty_list_node.appendRegion(gpa, ir.calcRegionInfo(e.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&empty_list_node, e.region);
                 return empty_list_node;
             },
             .e_tuple => |t| {
                 var node = SExpr.init(gpa, "e-tuple");
-                node.appendRegion(gpa, ir.calcRegionInfo(t.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, t.region);
 
                 // Add tuple elements
                 var elems_node = SExpr.init(gpa, "elems");
@@ -548,10 +548,10 @@ pub const Expr = union(enum) {
             },
             .e_lookup_local => |local| {
                 var lookup_node = SExpr.init(gpa, "e-lookup-local");
-                lookup_node.appendRegion(gpa, ir.calcRegionInfo(local.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&lookup_node, local.region);
 
                 var pattern_node = SExpr.init(gpa, "pattern");
-                pattern_node.appendRegion(gpa, ir.getNodeRegionInfo(local.pattern_idx));
+                ir.appendRegionInfoToSexprNode(&pattern_node, local.pattern_idx);
                 lookup_node.appendNode(gpa, &pattern_node);
 
                 return lookup_node;
@@ -566,7 +566,7 @@ pub const Expr = union(enum) {
             },
             .e_match => |e| {
                 var node = SExpr.init(gpa, "e-match");
-                node.appendRegion(gpa, ir.calcRegionInfo(e.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, e.region);
 
                 var match_sexpr = e.toSExpr(ir);
                 node.appendNode(gpa, &match_sexpr);
@@ -575,7 +575,7 @@ pub const Expr = union(enum) {
             },
             .e_if => |if_expr| {
                 var node = SExpr.init(gpa, "e-if");
-                node.appendRegion(gpa, ir.calcRegionInfo(if_expr.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, if_expr.region);
 
                 // Add branches
                 var branches_node = SExpr.init(gpa, "if-branches");
@@ -610,7 +610,7 @@ pub const Expr = union(enum) {
             },
             .e_call => |c| {
                 var call_node = SExpr.init(gpa, "e-call");
-                call_node.appendRegion(gpa, ir.calcRegionInfo(c.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&call_node, c.region);
 
                 // Get all expressions from the args span
                 const all_exprs = ir.store.exprSlice(c.args);
@@ -635,7 +635,7 @@ pub const Expr = union(enum) {
             },
             .e_record => |record_expr| {
                 var record_node = SExpr.init(gpa, "e-record");
-                record_node.appendRegion(gpa, ir.calcRegionInfo(record_expr.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&record_node, record_expr.region);
 
                 // Add fields
                 var fields_node = SExpr.init(gpa, "fields");
@@ -649,12 +649,12 @@ pub const Expr = union(enum) {
             },
             .e_empty_record => |e| {
                 var empty_record_node = SExpr.init(gpa, "e-empty_record");
-                empty_record_node.appendRegion(gpa, ir.calcRegionInfo(e.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&empty_record_node, e.region);
                 return empty_record_node;
             },
             .e_block => |block_expr| {
                 var block_node = SExpr.init(gpa, "e-block");
-                block_node.appendRegion(gpa, ir.calcRegionInfo(block_expr.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&block_node, block_expr.region);
 
                 // Add statements
                 for (ir.store.sliceStatements(block_expr.stmts)) |stmt_idx| {
@@ -670,7 +670,7 @@ pub const Expr = union(enum) {
             },
             .e_tag => |tag_expr| {
                 var node = SExpr.init(gpa, "e-tag");
-                node.appendRegion(gpa, ir.calcRegionInfo(tag_expr.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, tag_expr.region);
 
                 // Add name
                 node.appendStringAttr(gpa, "name", ir.env.idents.getText(tag_expr.name));
@@ -682,7 +682,7 @@ pub const Expr = union(enum) {
             },
             .e_zero_argument_tag => |tag_expr| {
                 var node = SExpr.init(gpa, "e-zero-argument-tag");
-                node.appendRegion(gpa, ir.calcRegionInfo(tag_expr.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, tag_expr.region);
 
                 // Add closure_name
                 node.appendStringAttr(gpa, "closure", ir.getIdentText(tag_expr.closure_name));
@@ -694,7 +694,7 @@ pub const Expr = union(enum) {
             },
             .e_lambda => |lambda_expr| {
                 var node = SExpr.init(gpa, "e-lambda");
-                node.appendRegion(gpa, ir.calcRegionInfo(lambda_expr.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, lambda_expr.region);
 
                 // Handle args span
                 var args_node = SExpr.init(gpa, "args");
@@ -712,7 +712,7 @@ pub const Expr = union(enum) {
             },
             .e_binop => |e| {
                 var node = SExpr.init(gpa, "e-binop");
-                node.appendRegion(gpa, ir.calcRegionInfo(e.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, e.region);
 
                 node.appendStringAttr(gpa, "op", @tagName(e.op));
 
@@ -726,7 +726,7 @@ pub const Expr = union(enum) {
             },
             .e_dot_access => |e| {
                 var node = SExpr.init(gpa, "e-dot-access");
-                node.appendRegion(gpa, ir.calcRegionInfo(e.region));
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, e.region);
 
                 var receiver_node = SExpr.init(gpa, "receiver");
                 var expr_node = ir.store.getExpr(e.receiver).toSExpr(ir);
@@ -883,7 +883,7 @@ pub const Expr = union(enum) {
             const gpa = ir.env.gpa;
             var node = SExpr.init(gpa, "match");
 
-            node.appendRegion(gpa, ir.calcRegionInfo(self.region));
+            ir.appendRegionInfoToSexprNodeFromRegion(&node, self.region);
 
             var cond_node = SExpr.init(gpa, "cond");
             const cond_expr = ir.store.getExpr(self.cond);
