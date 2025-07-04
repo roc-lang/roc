@@ -46,7 +46,7 @@ pub const CliProblem = union(enum) {
 /// The optimization strategy for the compilation of a Roc program
 pub const OptLevel = enum {
     size, // binary size
-    speed, // binary speed
+    speed, // execution speed
     dev, // speed of compilation
 
     fn from_str(str: []const u8) ?OptLevel {
@@ -138,7 +138,7 @@ const main_help =
     \\  [ARGS_FOR_APP]...  Arguments to pass into the app being run
     \\                     e.g. `roc run -- arg1 arg2`
     \\Options:
-    \\      --opt=<size|speed|dev> Optimize the build process for binary size, binary speed, or compilation speed. Defaults to compilation speed (dev)
+    \\      --opt=<size|speed|dev> Optimize the build process for binary size, execution speed, or compilation speed. Defaults to compilation speed (dev)
     \\
 ;
 
@@ -192,7 +192,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
             \\
             \\Options:
             \\      --output=<output>       The full path to the output binary, including filename. To specify directory only, specify a path that ends in a directory separator (e.g. a slash)
-            \\      --opt=<size|speed|dev>  Optimize the build process for binary size, binary speed, or compilation speed. Defaults to compilation speed (dev)
+            \\      --opt=<size|speed|dev>  Optimize the build process for binary size, execution speed, or compilation speed. Defaults to compilation speed (dev)
             \\      -h, --help              Print help
             \\
         };
@@ -276,7 +276,7 @@ fn parseTest(args: []const []const u8) CliArgs {
             \\  [ROC_FILE] The .roc file to test [default: main.roc]
             \\
             \\Options:
-            \\      --opt=<size|speed|dev>  Optimize the build process for binary size, binary speed, or compilation speed. Defaults to compilation speed dev
+            \\      --opt=<size|speed|dev>  Optimize the build process for binary size, execution speed, or compilation speed. Defaults to compilation speed dev
             \\      --main <main>           The .roc file of the main app/package module to resolve dependencies from
             \\  -h, --help                  Print help
             \\
