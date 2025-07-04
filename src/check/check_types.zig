@@ -1,5 +1,6 @@
 const std = @import("std");
 const base = @import("../base.zig");
+const tracy = @import("../tracy.zig");
 const collections = @import("../collections.zig");
 const types_mod = @import("../types.zig");
 const can = @import("canonicalize.zig");
@@ -59,6 +60,9 @@ pub fn deinit(self: *Self) void {
 
 /// Unify two types
 pub fn unify(self: *Self, a: Var, b: Var) unifier.Result {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     return unifier.unify(
         self.can_ir.env,
         self.types,
@@ -78,6 +82,9 @@ pub fn unify(self: *Self, a: Var, b: Var) unifier.Result {
 /// that  fails we do want to overwrite the builtin `Bool` type variable with
 /// an `.err`
 pub fn unifyPreserveA(self: *Self, a: Var, b: Var) unifier.Result {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     return unifier.unifyMode(
         .preserve_a,
         self.can_ir.env,
@@ -93,6 +100,9 @@ pub fn unifyPreserveA(self: *Self, a: Var, b: Var) unifier.Result {
 
 /// Check the types for all defs
 pub fn checkDefs(self: *Self) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const defs_slice = self.can_ir.store.sliceDefs(self.can_ir.all_defs);
     for (defs_slice) |def_idx| {
         try self.checkDef(def_idx);
@@ -101,6 +111,9 @@ pub fn checkDefs(self: *Self) std.mem.Allocator.Error!void {
 
 /// Check the types for a single definition
 fn checkDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const def = self.can_ir.store.getDef(def_idx);
 
     try self.checkPattern(def.pattern);
@@ -137,6 +150,9 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
 
 /// Check the types for an exprexpression. Returns whether evaluating the expr might perform side effects.
 pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bool {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const expr = self.can_ir.store.getExpr(expr_idx);
     var does_fx = false; // Does this expression potentially perform any side effects?
     switch (expr) {
@@ -448,6 +464,9 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
 
 /// Check a lambda expression with an optional expected type
 fn checkLambdaWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, lambda: anytype, expected_type: ?Var) std.mem.Allocator.Error!bool {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     // Get the actual lambda arguments
     const arg_patterns = self.can_ir.store.slicePatterns(lambda.args);
 
@@ -498,6 +517,9 @@ fn checkLambdaWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, lambda: anytype,
 
 /// Check the types for an if-else expr
 fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, binop: CIR.Expr.Binop) Allocator.Error!bool {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     var does_fx = try self.checkExpr(binop.lhs);
     does_fx = try self.checkExpr(binop.rhs) or does_fx;
 
@@ -550,6 +572,9 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, binop: CIR.Expr.Binop) Al
 
 /// Check the types for an if-else expr
 fn checkIfElseExpr(self: *Self, if_expr_idx: CIR.Expr.Idx, if_: std.meta.FieldType(CIR.Expr, .e_if)) std.mem.Allocator.Error!bool {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const branches = self.can_ir.store.sliceIfBranches(if_.branches);
 
     // Should never be 0
@@ -634,6 +659,9 @@ fn checkIfElseExpr(self: *Self, if_expr_idx: CIR.Expr.Idx, if_: std.meta.FieldTy
 
 /// Check the types for an if-else expr
 fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, match: CIR.Expr.Match) Allocator.Error!bool {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     // Check the match's condition
     var does_fx = try self.checkExpr(match.cond);
     const cond_var: Var = @enumFromInt(@intFromEnum(match.cond));
@@ -937,6 +965,9 @@ test "verify -128 produces 7 bits needed" {
 
 /// Check the types for the provided pattern
 pub fn checkPattern(self: *Self, pattern_idx: CIR.Pattern.Idx) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     _ = self;
     _ = pattern_idx;
 }

@@ -219,6 +219,9 @@ pub fn parseFile(self: *Parser) void {
 ///
 /// Returns the ending position of the collection
 fn parseCollectionSpan(self: *Parser, comptime T: type, end_token: Token.Tag, scratch_fn: fn (*NodeStore, T) void, parser: fn (*Parser) T) ExpectError!u32 {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     while (self.peek() != end_token and self.peek() != .EndOfFile) {
         scratch_fn(&self.store, parser(self));
         self.expect(.Comma) catch {
@@ -256,6 +259,9 @@ fn debugToken(self: *Parser, window: usize) void {
 /// package_entry :: LowerIdent Comma "platform"? String Comma
 /// app_header :: KwApp Newline* OpenSquare provides_entry* CloseSquare OpenCurly package_entry CloseCurly
 pub fn parseHeader(self: *Parser) AST.Header.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     switch (self.peek()) {
         .KwApp => {
             return self.parseAppHeader();
@@ -290,6 +296,9 @@ pub fn parseHeader(self: *Parser) AST.Header.Idx {
 ///     imports []
 ///     provides [main_for_host]
 pub fn parsePlatformHeader(self: *Parser) AST.Header.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const start = self.pos;
     std.debug.assert(self.peek() == .KwPlatform);
     self.advance(); // Advance past KwPlatform
@@ -523,6 +532,9 @@ pub fn parsePlatformHeader(self: *Parser) AST.Header.Idx {
 ///
 /// e.g. `package [ foo ] { something: "package/path/main.roc" }`
 pub fn parsePackageHeader(self: *Parser) AST.Header.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const start = self.pos;
 
     std.debug.assert(self.peek() == .KwPackage);
@@ -587,6 +599,9 @@ pub fn parsePackageHeader(self: *Parser) AST.Header.Idx {
 ///
 /// e.g. `hosted [foo]`
 fn parseHostedHeader(self: *Parser) AST.Header.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     std.debug.assert(self.peek() == .KwHosted);
 
     const start = self.pos;
@@ -628,6 +643,9 @@ fn parseHostedHeader(self: *Parser) AST.Header.Idx {
 ///
 /// e.g. `module [foo]`
 fn parseModuleHeader(self: *Parser) AST.Header.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     std.debug.assert(self.peek() == .KwModule);
 
     const start = self.pos;
@@ -669,6 +687,9 @@ fn parseModuleHeader(self: *Parser) AST.Header.Idx {
 ///
 /// e.g. `app [main!] { pf: "../some-platform.roc" }`
 pub fn parseAppHeader(self: *Parser) AST.Header.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     var platform: ?AST.RecordField.Idx = null;
     const start = self.pos;
 
@@ -792,6 +813,9 @@ pub fn parseAppHeader(self: *Parser) AST.Header.Idx {
 
 /// Parses an ExposedItem, adding it to the NodeStore and returning the Idx
 pub fn parseExposedItem(self: *Parser) AST.ExposedItem.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const start = self.pos;
     var end = start;
     switch (self.peek()) {
@@ -856,6 +880,9 @@ const StatementType = enum { top_level, in_body };
 ///
 /// e.g. `import Foo`
 pub fn parseTopLevelStatement(self: *Parser) ?AST.Statement.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     return self.parseStmtByType(.top_level);
 }
 
@@ -863,6 +890,9 @@ pub fn parseTopLevelStatement(self: *Parser) ?AST.Statement.Idx {
 ///
 /// e.g. `foo = 2 + x`
 pub fn parseStmt(self: *Parser) ?AST.Statement.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     return self.parseStmtByType(.in_body);
 }
 
@@ -870,6 +900,9 @@ pub fn parseStmt(self: *Parser) ?AST.Statement.Idx {
 ///
 /// e.g. `import Foo`, or `foo = 2 + x`
 fn parseStmtByType(self: *Parser, statementType: StatementType) ?AST.Statement.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     switch (self.peek()) {
         .KwImport => {
             if (statementType != .top_level) {
@@ -1130,6 +1163,9 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) ?AST.Statement.I
 }
 
 fn parseWhereConstraint(self: *Parser) ?AST.Collection.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     self.expect(.KwWhere) catch {
         return null;
     };
@@ -1165,6 +1201,9 @@ const Alternatives = enum {
 
 /// todo -- what does this do?
 pub fn parsePattern(self: *Parser, alternatives: Alternatives) AST.Pattern.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const outer_start = self.pos;
     const patterns_scratch_top = self.store.scratchPatternTop();
     errdefer self.store.clearScratchPatternsFrom(patterns_scratch_top);
@@ -1406,6 +1445,9 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) AST.Pattern.Idx {
 }
 
 fn parseAsPattern(self: *Parser, pattern: AST.Pattern.Idx) AST.Pattern.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     if (self.peek() != .KwAs) {
         return pattern;
     }
@@ -1425,14 +1467,23 @@ fn parseAsPattern(self: *Parser, pattern: AST.Pattern.Idx) AST.Pattern.Idx {
 }
 
 fn parsePatternNoAlts(self: *Parser) AST.Pattern.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     return self.parsePattern(.alternatives_forbidden);
 }
 fn parsePatternWithAlts(self: *Parser) AST.Pattern.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     return self.parsePattern(.alternatives_allowed);
 }
 
 /// todo
 pub fn parsePatternRecordField(self: *Parser, alternatives: Alternatives) AST.PatternRecordField.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const field_start = self.pos;
     if (self.peek() == .DoubleDot) {
         self.advance();
@@ -1485,11 +1536,17 @@ pub fn parsePatternRecordField(self: *Parser, alternatives: Alternatives) AST.Pa
 
 /// todo
 pub fn parseExpr(self: *Parser) AST.Expr.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     return self.parseExprWithBp(0);
 }
 
 /// todo
 pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const start = self.pos;
     var expr: ?AST.Expr.Idx = null;
     const token = self.peek();
@@ -1909,6 +1966,9 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
 
 /// todo
 fn parseExprSuffix(self: *Parser, start: u32, e: AST.Expr.Idx) AST.Expr.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     var expression = e;
     // Check for an apply...
     if (self.peek() == .NoSpaceOpenRound) {
@@ -1939,6 +1999,9 @@ fn parseExprSuffix(self: *Parser, start: u32, e: AST.Expr.Idx) AST.Expr.Idx {
 
 /// todo
 pub fn parseRecordField(self: *Parser) AST.RecordField.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const start = self.pos;
     self.expect(.LowerIdent) catch {
         return self.pushMalformed(AST.RecordField.Idx, .expected_expr_record_field_name, start);
@@ -1960,6 +2023,9 @@ pub fn parseRecordField(self: *Parser) AST.RecordField.Idx {
 
 /// todo
 pub fn parseBranch(self: *Parser) AST.MatchBranch.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const start = self.pos;
     const p = self.parsePattern(.alternatives_allowed);
     if (self.peek() == .OpFatArrow) {
@@ -1975,6 +2041,9 @@ pub fn parseBranch(self: *Parser) AST.MatchBranch.Idx {
 
 /// todo
 pub fn parseStringExpr(self: *Parser) AST.Expr.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     std.debug.assert(self.peek() == .StringStart);
     const start = self.pos;
     // Start parsing string with possible interpolations
@@ -2032,6 +2101,9 @@ pub fn parseStringExpr(self: *Parser) AST.Expr.Idx {
 
 /// todo
 pub fn parseStringPattern(self: *Parser) AST.Pattern.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const start = self.pos;
     const inner = parseStringExpr(self);
     const patt_idx = self.store.addPattern(.{ .string = .{
@@ -2044,6 +2116,9 @@ pub fn parseStringPattern(self: *Parser) AST.Pattern.Idx {
 
 /// todo
 pub fn parseTypeHeader(self: *Parser) AST.TypeHeader.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const start = self.pos;
     std.debug.assert(self.peek() == .UpperIdent);
     self.advance(); // Advance past UpperIdent
@@ -2072,6 +2147,9 @@ pub fn parseTypeHeader(self: *Parser) AST.TypeHeader.Idx {
 }
 
 fn parseTypeIdent(self: *Parser) AST.TypeAnno.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     if (self.peek() == .LowerIdent) {
         const tok = self.pos;
         self.advance();
@@ -2090,6 +2168,9 @@ const TyFnArgs = enum {
 
 /// Parse a type annotation, e.g. `Foo(a) : (a,Str,I64)`
 pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) AST.TypeAnno.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const start = self.pos;
     var anno: ?AST.TypeAnno.Idx = null;
 
@@ -2264,11 +2345,17 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) AST.TypeAnno.Idx
 
 /// todo
 pub fn parseTypeAnnoInCollection(self: *Parser) AST.TypeAnno.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     return self.parseTypeAnno(.looking_for_args);
 }
 
 /// todo
 pub fn parseAnnoRecordField(self: *Parser) AST.AnnoRecordField.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const field_start = self.pos;
     if (self.peek() != .LowerIdent) {
         while (self.peek() != .CloseCurly and self.peek() != .Comma and self.peek() != .EndOfFile) {
@@ -2300,6 +2387,9 @@ pub fn parseAnnoRecordField(self: *Parser) AST.AnnoRecordField.Idx {
 /// e.g. `hasher.Hasher`
 /// e.g. `module(a).decode(List(U8)) -> a`
 pub fn parseWhereClause(self: *Parser) AST.WhereClause.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const start = self.pos;
     if (self.peek() == .KwModule) {
         // Parsing a mod_method clause
