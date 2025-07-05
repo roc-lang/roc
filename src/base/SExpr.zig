@@ -62,6 +62,12 @@ const PlainTextSExprWriter = struct {
         _ = self;
         // No-op for plain text
     }
+
+    pub fn writeIndent(self: *@This(), tabs: usize) !void {
+        for (0..tabs) |_| {
+            try self.writer.writeByte('\t');
+        }
+    }
 };
 
 /// HTML writer implementation with syntax highlighting
@@ -106,6 +112,12 @@ const HtmlSExprWriter = struct {
 
     pub fn endSourceRange(self: *@This()) !void {
         try self.writer.writeAll("</span>");
+    }
+
+    pub fn writeIndent(self: *@This(), tabs: usize) !void {
+        for (0..tabs) |_| {
+            try self.writer.writeAll("  ");
+        }
     }
 
     pub fn deinit(self: *@This()) !void {
@@ -351,7 +363,7 @@ fn toStringImpl(node: SExpr, writer_impl: anytype, indent: usize) !void {
             try writer_impl.print("\n", .{});
 
             // Print indentation
-            try writeIndentImpl(writer_impl, indent + 1);
+            try writer_impl.writeIndent(indent + 1);
 
             try child.toStringImpl(writer_impl, indent + 1);
         }
@@ -384,12 +396,6 @@ pub fn toHtml(node: SExpr, writer: std.io.AnyWriter) void {
     html_writer.deinit() catch {
         @panic("Error finalizing HTML writer");
     };
-}
-
-fn writeIndentImpl(writer_impl: anytype, tabs: usize) !void {
-    for (0..tabs) |_| {
-        try writer_impl.print("\t", .{});
-    }
 }
 
 fn writeIndent(writer: std.io.AnyWriter, tabs: usize) !void {
