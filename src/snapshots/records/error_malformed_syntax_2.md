@@ -8,7 +8,7 @@ type=expr
 { age: 42, name = "Alice" }
 ~~~
 # EXPECTED
-expected_expr_close_curly_or_comma - error_malformed_syntax_2.md:1:17:1:20
+PARSE ERROR - error_malformed_syntax_2.md:1:17:1:20
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_close_curly_or_comma`

@@ -8,9 +8,12 @@ type=expr
 inf
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - pos_inf_float.md:1:1:1:4
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `inf` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:4),EndOfFile(1:4-1:4),

@@ -13,7 +13,7 @@ type=expr
 ui)
 ~~~
 # EXPECTED
-expected_expr_close_round_or_comma - tuples_parens_comments.md:6:3:6:4
+PARSE ERROR - tuples_parens_comments.md:6:3:6:4
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_close_round_or_comma`

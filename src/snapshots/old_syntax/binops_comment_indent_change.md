@@ -11,9 +11,12 @@ r^
  -P
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - binops_comment_indent_change.md:1:1:1:2
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `r` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpCaret(1:2-1:3),Newline(1:1-1:1),

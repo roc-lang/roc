@@ -10,8 +10,7 @@ i/
  g
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - i_over_not_g.md:1:1:1:2
-expr_not_canonicalized - i_over_not_g.md:1:1:1:1
+UNEXPECTED TOKEN IN EXPRESSION - i_over_not_g.md:2:2:2:2
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token  is not expected in an expression.
@@ -24,6 +23,14 @@ Here is the problematic code:
 ```
  
 
+
+**UNDEFINED VARIABLE**
+Nothing is named `i` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
 
 # TOKENS
 ~~~zig

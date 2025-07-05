@@ -14,7 +14,8 @@ main! = |_| {}
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - type_higher_order_multiple_vars.md:3:19:3:22
-expr_arrow_expects_ident - type_higher_order_multiple_vars.md:3:33:3:35
+PARSE ERROR - type_higher_order_multiple_vars.md:3:33:3:35
+UNEXPECTED TOKEN IN EXPRESSION - type_higher_order_multiple_vars.md:3:40:3:40
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **, (** is not expected in an expression.
@@ -51,6 +52,22 @@ compose : (b -> c), (a -> b) -> (a -> c)
 ```
                                        
 
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
 ~~~zig

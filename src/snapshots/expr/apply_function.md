@@ -8,9 +8,12 @@ type=expr
 foo(42, "hello")
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - apply_function.md:1:1:1:4
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `foo` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:4),NoSpaceOpenRound(1:4-1:5),Int(1:5-1:7),Comma(1:7-1:8),StringStart(1:9-1:10),StringPart(1:10-1:15),StringEnd(1:15-1:16),CloseRound(1:16-1:17),EndOfFile(1:17-1:17),

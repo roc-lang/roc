@@ -10,9 +10,12 @@ when n
 is O->1
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - when_newline_after_condition.md:1:1:1:5
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `when` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:5),LowerIdent(1:6-1:7),Newline(1:1-1:1),

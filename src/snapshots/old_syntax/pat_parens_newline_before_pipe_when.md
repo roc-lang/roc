@@ -11,9 +11,12 @@ is S#
 )|B->e
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - pat_parens_newline_before_pipe_when.md:1:1:1:5
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `when` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:5),Int(1:6-1:7),Newline(1:1-1:1),

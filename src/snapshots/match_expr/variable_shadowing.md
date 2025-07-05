@@ -11,10 +11,16 @@ match (value, other) {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - variable_shadowing.md:1:8:1:13
-UNDEFINED VARIABLE - variable_shadowing.md:1:15:1:20
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `value` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNDEFINED VARIABLE**
+Nothing is named `other` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 KwMatch(1:1-1:6),OpenRound(1:7-1:8),LowerIdent(1:8-1:13),Comma(1:13-1:14),LowerIdent(1:15-1:20),CloseRound(1:20-1:21),OpenCurly(1:22-1:23),Newline(1:1-1:1),

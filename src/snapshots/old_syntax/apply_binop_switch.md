@@ -9,9 +9,12 @@ i<2
 (-6)
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - apply_binop_switch.md:1:1:1:2
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `i` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpLessThan(1:2-1:3),Int(1:3-1:4),Newline(1:1-1:1),

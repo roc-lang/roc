@@ -11,10 +11,16 @@ Y}=p
 Q
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - opt_field_newline_in_pat.md:1:2:1:3
-not_implemented - opt_field_newline_in_pat.md:1:2:3:3
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `i` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: binop
+Let us know if you want to help!
+
 # TOKENS
 ~~~zig
 OpenCurly(1:1-1:2),LowerIdent(1:2-1:3),Newline(1:1-1:1),

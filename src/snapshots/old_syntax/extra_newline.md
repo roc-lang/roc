@@ -12,7 +12,7 @@ else # 3
     c # 4
 ~~~
 # EXPECTED
-no_else - extra_newline.md:2:5:2:8
+PARSE ERROR - extra_newline.md:2:5:2:8
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `no_else`

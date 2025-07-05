@@ -13,12 +13,11 @@ match data {
 }
 ~~~
 # EXPECTED
-pattern_list_rest_old_syntax - list_rest_scoping_variables.md:2:6:2:13
-pattern_list_rest_old_syntax - list_rest_scoping_variables.md:3:13:3:20
-pattern_list_rest_old_syntax - list_rest_scoping_variables.md:4:6:4:13
-pattern_list_rest_old_syntax - list_rest_scoping_variables.md:5:13:5:20
-UNDEFINED VARIABLE - list_rest_scoping_variables.md:1:7:1:11
-UNUSED VARIABLE - list_rest_scoping_variables.md:2:8:2:13
+BAD LIST REST PATTERN SYNTAX - list_rest_scoping_variables.md:2:6:2:13
+BAD LIST REST PATTERN SYNTAX - list_rest_scoping_variables.md:3:13:3:20
+BAD LIST REST PATTERN SYNTAX - list_rest_scoping_variables.md:4:6:4:13
+BAD LIST REST PATTERN SYNTAX - list_rest_scoping_variables.md:5:13:5:20
+UNDEFINED VARIABLE - list_rest_scoping_variables.md:2:8:2:13
 UNUSED VARIABLE - list_rest_scoping_variables.md:3:15:3:20
 UNUSED VARIABLE - list_rest_scoping_variables.md:4:8:4:13
 UNUSED VARIABLE - list_rest_scoping_variables.md:5:15:5:20
@@ -69,6 +68,58 @@ Here is the problematic code:
     [first, ..items, last] => first + last
 ```
             ^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `data` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNUSED VARIABLE**
+Variable ``items`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_items` to suppress this warning.
+The unused variable is declared here:
+**list_rest_scoping_variables.md:2:8:2:13:**
+```roc
+    [..items] => 1
+```
+       ^^^^^
+
+
+**UNUSED VARIABLE**
+Variable ``items`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_items` to suppress this warning.
+The unused variable is declared here:
+**list_rest_scoping_variables.md:3:15:3:20:**
+```roc
+    [first, ..items] => first
+```
+              ^^^^^
+
+
+**UNUSED VARIABLE**
+Variable ``items`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_items` to suppress this warning.
+The unused variable is declared here:
+**list_rest_scoping_variables.md:4:8:4:13:**
+```roc
+    [..items, last] => last
+```
+       ^^^^^
+
+
+**UNUSED VARIABLE**
+Variable ``items`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_items` to suppress this warning.
+The unused variable is declared here:
+**list_rest_scoping_variables.md:5:15:5:20:**
+```roc
+    [first, ..items, last] => first + last
+```
+              ^^^^^
 
 
 # TOKENS

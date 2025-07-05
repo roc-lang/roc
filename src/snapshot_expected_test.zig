@@ -247,8 +247,10 @@ fn validateSnapshotProblems(allocator: std.mem.Allocator, path: []const u8) !voi
     defer allocator.free(content);
 
     const expected_section = extractSection(content, "EXPECTED") orelse {
-        // No EXPECTED section is OK - some snapshots might not have it yet
-        return;
+        // EXPECTED section is required for all snapshots
+        std.debug.print("\n❌ {s}:\n", .{std.fs.path.basename(path)});
+        std.debug.print("  Missing EXPECTED section\n", .{});
+        return error.MissingExpectedSection;
     };
 
     const problems_section = extractSection(content, "PROBLEMS") orelse {
@@ -373,7 +375,7 @@ test "snapshot validation" {
     // Validate each snapshot
     for (snapshot_files.items) |snapshot_path| {
         validateSnapshotProblems(allocator, snapshot_path) catch |err| {
-            if (err == error.SnapshotValidationFailed) {
+            if (err == error.SnapshotValidationFailed or err == error.MissingExpectedSection) {
                 total_failures += 1;
                 try failed_files.append(snapshot_path);
             } else {

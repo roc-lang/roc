@@ -11,9 +11,12 @@ f : a -> U64
 f
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - where_clause_on_newline.md:1:1:1:2
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `f` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpColon(1:3-1:4),LowerIdent(1:5-1:6),OpArrow(1:7-1:9),UpperIdent(1:10-1:13),Newline(1:1-1:1),

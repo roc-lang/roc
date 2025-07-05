@@ -8,9 +8,12 @@ type=expr
 (One.Two.rec).field
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - parenthetical_field_qualified_var.md:1:2:1:13
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `rec` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 OpenRound(1:1-1:2),UpperIdent(1:2-1:5),NoSpaceDotUpperIdent(1:5-1:9),NoSpaceDotLowerIdent(1:9-1:13),CloseRound(1:13-1:14),NoSpaceDotLowerIdent(1:14-1:20),EndOfFile(1:20-1:20),

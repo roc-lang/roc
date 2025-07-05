@@ -8,9 +8,12 @@ type=expr
 foo&bar  5
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - record_updater_var_apply.md:1:1:1:4
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `foo` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:4),OpAmpersand(1:4-1:5),LowerIdent(1:5-1:8),Int(1:10-1:11),EndOfFile(1:11-1:11),

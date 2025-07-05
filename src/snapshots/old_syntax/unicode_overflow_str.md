@@ -8,9 +8,12 @@ type=expr
 m"\u(FFFFFF)"s
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - unicode_overflow_str.md:1:1:1:2
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `m` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),StringStart(1:2-1:3),StringPart(1:3-1:13),StringEnd(1:13-1:14),LowerIdent(1:14-1:15),EndOfFile(1:15-1:15),

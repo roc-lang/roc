@@ -10,9 +10,12 @@ a:N{h,
 g
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - apply_record_ann.md:1:1:1:2
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `a` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpColon(1:2-1:3),UpperIdent(1:3-1:4),OpenCurly(1:4-1:5),LowerIdent(1:5-1:6),Comma(1:6-1:7),Newline(1:1-1:1),

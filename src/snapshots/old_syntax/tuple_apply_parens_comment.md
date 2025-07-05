@@ -9,8 +9,8 @@ type=expr
 L)L,L)#\
 ~~~
 # EXPECTED
-expected_expr_close_round_or_comma - tuple_apply_parens_comment.md:2:2:2:4
-expected_expr_close_round_or_comma - tuple_apply_parens_comment.md:2:6:2:9
+PARSE ERROR - tuple_apply_parens_comment.md:2:2:2:4
+PARSE ERROR - tuple_apply_parens_comment.md:2:6:2:9
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_close_round_or_comma`

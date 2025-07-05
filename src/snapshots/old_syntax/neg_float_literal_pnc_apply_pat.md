@@ -10,7 +10,7 @@ p
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - neg_float_literal_pnc_apply_pat.md:1:2:1:4
-expected_expr_close_round_or_comma - neg_float_literal_pnc_apply_pat.md:1:5:1:7
+PARSE ERROR - neg_float_literal_pnc_apply_pat.md:1:5:1:7
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **-8** is not expected in an expression.

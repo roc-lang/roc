@@ -9,9 +9,12 @@ doStuff : UserId -> Dict Str _
 42
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - type_decl_with_underscore.md:1:1:1:8
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `doStuff` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:8),OpColon(1:9-1:10),UpperIdent(1:11-1:17),OpArrow(1:18-1:20),UpperIdent(1:21-1:25),UpperIdent(1:26-1:29),Underscore(1:30-1:31),Newline(1:1-1:1),

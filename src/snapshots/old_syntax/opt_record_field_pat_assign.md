@@ -11,10 +11,16 @@ type=expr
 r
 ~~~
 # EXPECTED
-not_implemented - opt_record_field_pat_assign.md:1:1:1:1
-UNDEFINED VARIABLE - opt_record_field_pat_assign.md:1:4:1:5
-# PROBLEMS
 NIL
+# PROBLEMS
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize suffix_single_question expression
+Let us know if you want to help!
+
+**UNDEFINED VARIABLE**
+Nothing is named `f` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 OpenCurly(1:1-1:2),LowerIdent(1:2-1:3),NoSpaceOpQuestion(1:3-1:4),LowerIdent(1:4-1:5),Newline(1:1-1:1),

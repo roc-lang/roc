@@ -9,9 +9,12 @@ a=""""f"""
 f
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - multilin_str_body.md:1:1:1:2
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `a` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpAssign(1:2-1:3),MultilineStringStart(1:3-1:6),StringPart(1:6-1:8),MultilineStringEnd(1:8-1:11),Newline(1:1-1:1),

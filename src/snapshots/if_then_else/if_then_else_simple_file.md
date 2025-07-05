@@ -14,9 +14,8 @@ foo = if 1 A
     }
 ~~~
 # EXPECTED
-no_else - if_then_else_simple_file.md:1:1:1:1
+PARSE ERROR - if_then_else_simple_file.md:1:1:1:1
 UNEXPECTED TOKEN IN EXPRESSION - if_then_else_simple_file.md:5:5:5:11
-expr_not_canonicalized - if_then_else_simple_file.md:1:1:1:1
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `no_else`
@@ -41,6 +40,18 @@ Here is the problematic code:
 ```
     ^^^^^^
 
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
 ~~~zig

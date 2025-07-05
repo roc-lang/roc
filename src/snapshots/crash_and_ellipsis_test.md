@@ -29,8 +29,7 @@ main! = |_| {
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - crash_and_ellipsis_test.md:9:17:9:24
 UNEXPECTED TOKEN IN EXPRESSION - crash_and_ellipsis_test.md:13:23:13:30
-not_implemented - crash_and_ellipsis_test.md:5:20:5:23
-UNUSED VARIABLE - crash_and_ellipsis_test.md:16:5:16:12
+NOT IMPLEMENTED - crash_and_ellipsis_test.md:16:5:16:12
 UNUSED VARIABLE - crash_and_ellipsis_test.md:17:5:17:12
 UNUSED VARIABLE - crash_and_ellipsis_test.md:18:5:18:12
 # PROBLEMS
@@ -56,6 +55,60 @@ Here is the problematic code:
 testCrashSimple = |_| crash "oops"
 ```
                       ^^^^^^^
+
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: ...
+Let us know if you want to help!
+
+**INVALID LAMBDA**
+The body of this lambda expression is not valid.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID LAMBDA**
+The body of this lambda expression is not valid.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**UNUSED VARIABLE**
+Variable ``result1`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_result1` to suppress this warning.
+The unused variable is declared here:
+**crash_and_ellipsis_test.md:16:5:16:12:**
+```roc
+    result1 = testEllipsis(42)
+```
+    ^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable ``result2`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_result2` to suppress this warning.
+The unused variable is declared here:
+**crash_and_ellipsis_test.md:17:5:17:12:**
+```roc
+    result2 = testCrash(42)
+```
+    ^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable ``result3`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_result3` to suppress this warning.
+The unused variable is declared here:
+**crash_and_ellipsis_test.md:18:5:18:12:**
+```roc
+    result3 = testCrashSimple(42)
+```
+    ^^^^^^^
 
 
 # TOKENS

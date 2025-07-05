@@ -10,9 +10,12 @@ O#
  ->r
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - when_comment_after_pattern.md:1:1:1:5
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `when` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:5),LowerIdent(1:6-1:9),LowerIdent(1:10-1:12),Newline(1:1-1:1),

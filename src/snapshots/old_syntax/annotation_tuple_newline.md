@@ -10,9 +10,12 @@ d:(J,
 2
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - annotation_tuple_newline.md:1:1:1:2
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `d` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpColon(1:2-1:3),NoSpaceOpenRound(1:3-1:4),UpperIdent(1:4-1:5),Comma(1:5-1:6),Newline(1:1-1:1),

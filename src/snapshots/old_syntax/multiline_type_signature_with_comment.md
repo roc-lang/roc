@@ -11,9 +11,12 @@ f :# comment
 42
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - multiline_type_signature_with_comment.md:1:1:1:2
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `f` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpColon(1:3-1:4),Newline(1:5-1:13),

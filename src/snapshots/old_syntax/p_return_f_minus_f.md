@@ -11,9 +11,12 @@ return#
  -f
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - p_return_f_minus_f.md:1:1:1:2
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `p` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),Newline(1:1-1:1),

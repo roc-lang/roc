@@ -11,7 +11,6 @@ h&}\#
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - record_update_apply_closure_comments.md:2:2:2:4
-UNDEFINED VARIABLE - record_update_apply_closure_comments.md:2:1:2:2
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **&}** is not expected in an expression.
@@ -24,6 +23,10 @@ h&}\#
 ```
  ^^
 
+
+**UNDEFINED VARIABLE**
+Nothing is named `h` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig

@@ -10,8 +10,7 @@ module []
 foo = asd.0
 ~~~
 # EXPECTED
-expr_no_space_dot_int - expr_no_space_dot_int.md:3:10:3:12
-expr_not_canonicalized - expr_no_space_dot_int.md:3:10:3:12
+PARSE ERROR - expr_no_space_dot_int.md:3:10:3:12
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expr_no_space_dot_int`
@@ -24,6 +23,10 @@ foo = asd.0
 ```
          ^^
 
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
 
 # TOKENS
 ~~~zig

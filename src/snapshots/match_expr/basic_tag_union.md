@@ -12,8 +12,12 @@ match color {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - basic_tag_union.md:1:7:1:12
+NIL
 # PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `color` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 **INCOMPATIBLE MATCH BRANCHES**
 The third branch's type in this `match` is different from the previous ones:
 **basic_tag_union.md:1:1:**

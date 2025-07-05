@@ -21,7 +21,40 @@ UNDECLARED TYPE - type_undeclared_usage.md:3:10:3:21
 UNDECLARED TYPE - type_undeclared_usage.md:5:16:5:32
 UNUSED VARIABLE - type_undeclared_usage.md:6:17:6:22
 # PROBLEMS
-NIL
+**UNDECLARED TYPE**
+The type ``UnknownType`` is not declared in this scope.
+
+This type is referenced here:
+**type_undeclared_usage.md:3:10:3:21:**
+```roc
+MyType : UnknownType
+```
+         ^^^^^^^^^^^
+
+
+**UNDECLARED TYPE**
+The type ``UndeclaredResult`` is not declared in this scope.
+
+This type is referenced here:
+**type_undeclared_usage.md:5:16:5:32:**
+```roc
+processValue : UndeclaredResult -> Str
+```
+               ^^^^^^^^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable ``value`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_value` to suppress this warning.
+The unused variable is declared here:
+**type_undeclared_usage.md:6:17:6:22:**
+```roc
+processValue = |value| {
+```
+                ^^^^^
+
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:15),Comma(1:15-1:16),LowerIdent(1:17-1:29),CloseSquare(1:29-1:30),Newline(1:1-1:1),

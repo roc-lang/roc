@@ -10,6 +10,7 @@ N)
 N#
 ~~~
 # EXPECTED
+PARSE ERROR - parens_apply_newline.md:2:2:2:2
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_close_round_or_comma`

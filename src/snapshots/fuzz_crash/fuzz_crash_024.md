@@ -14,14 +14,15 @@ var t= ]
 var t= 0
 ~~~
 # EXPECTED
-UnclosedString - fuzz_crash_024.md:1:34:1:53
-MismatchedBrace - fuzz_crash_024.md:4:8:4:8
-exposed_item_unexpected_token - fuzz_crash_024.md:1:9:1:17
+UNCLOSED STRING - fuzz_crash_024.md:1:9:1:17
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_024.md:1:24:1:34
-expected_expr_close_curly_or_comma - fuzz_crash_024.md:1:33:1:53
+PARSE ERROR - fuzz_crash_024.md:1:33:1:53
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_024.md:1:34:1:53
-var_only_allowed_in_a_body - fuzz_crash_024.md:4:1:4:6
-var_only_allowed_in_a_body - fuzz_crash_024.md:7:1:7:6
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_024.md:1:53:1:53
+PARSE ERROR - fuzz_crash_024.md:4:1:4:6
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_024.md:4:8:4:8
+PARSE ERROR - fuzz_crash_024.md:7:1:7:6
+INVALID STATEMENT - fuzz_crash_024.md:7:5:7:6
 # PROBLEMS
 **UNCLOSED STRING**
 This string is missing a closing quote.
@@ -123,6 +124,40 @@ Here is the problematic code:
 var t= 0
 ```
 ^^^^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
+**DUPLICATE DEFINITION**
+The name `t` is being redeclared in this scope.
+
+The redeclaration is here:
+**fuzz_crash_024.md:7:5:7:6:**
+```roc
+var t= 0
+```
+    ^
+
+But `t` was already defined here:
+**fuzz_crash_024.md:4:5:4:6:**
+```roc
+var t= ]
+```
+    ^
 
 
 # TOKENS

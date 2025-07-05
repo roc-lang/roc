@@ -10,9 +10,12 @@ iffy=5
 42
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - if_def.md:1:1:1:5
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `iffy` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:5),OpAssign(1:5-1:6),Int(1:6-1:7),Newline(1:1-1:1),

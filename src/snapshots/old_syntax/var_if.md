@@ -8,9 +8,12 @@ type=expr
 iffy
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - var_if.md:1:1:1:5
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `iffy` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:5),EndOfFile(1:5-1:5),

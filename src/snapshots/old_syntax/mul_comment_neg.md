@@ -10,10 +10,16 @@ n*f
 -f
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - mul_comment_neg.md:1:1:1:2
-UNDEFINED VARIABLE - mul_comment_neg.md:1:3:1:4
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `n` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNDEFINED VARIABLE**
+Nothing is named `f` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpStar(1:2-1:3),LowerIdent(1:3-1:4),Newline(1:1-1:1),

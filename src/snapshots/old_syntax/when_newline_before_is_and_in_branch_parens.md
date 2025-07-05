@@ -10,9 +10,12 @@ is B->(
 t)
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - when_newline_before_is_and_in_branch_parens.md:1:1:1:5
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `when` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:5),Int(1:6-1:7),Newline(1:1-1:1),

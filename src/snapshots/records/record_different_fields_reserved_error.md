@@ -16,21 +16,22 @@ type=expr
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:2:7:2:10
+PARSE ERROR - record_different_fields_reserved_error.md:2:22:2:22
 UNEXPECTED TOKEN IN TYPE ANNOTATION - record_different_fields_reserved_error.md:3:11:3:25
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:3:12:3:26
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:3:25:3:27
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:3:26:3:26
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:4:11:4:14
-import_must_be_top_level - record_different_fields_reserved_error.md:5:5:5:12
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:4:29:4:29
+IMPORT MUST BE TOP LEVEL - record_different_fields_reserved_error.md:5:5:5:12
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:5:11:5:14
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:5:26:5:26
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:6:5:6:9
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:6:8:6:14
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:6:19:6:19
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:5:7:8
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:7:7:13
-MALFORMED TYPE - record_different_fields_reserved_error.md:3:11:3:25
-not_implemented - record_different_fields_reserved_error.md:1:1:1:1
-not_implemented - record_different_fields_reserved_error.md:1:1:1:1
-UNDEFINED VARIABLE - record_different_fields_reserved_error.md:6:10:6:19
-UNDEFINED VARIABLE - record_different_fields_reserved_error.md:7:9:7:19
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:19:7:19
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **: "** is not expected in an expression.
@@ -235,6 +236,25 @@ Here is the problematic code:
 ```
                   
 
+
+**MALFORMED TYPE**
+This type annotation is malformed or contains invalid syntax.
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
+Let us know if you want to help!
+
+**UNDEFINED VARIABLE**
+Nothing is named `true` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNDEFINED VARIABLE**
+Nothing is named `false` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig

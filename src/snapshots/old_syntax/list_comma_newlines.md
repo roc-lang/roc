@@ -10,9 +10,12 @@ type=expr
 ]
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - list_comma_newlines.md:1:2:1:3
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `s` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 OpenSquare(1:1-1:2),LowerIdent(1:2-1:3),Newline(1:1-1:1),

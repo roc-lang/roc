@@ -11,9 +11,12 @@ f = \x -> x
 f (1, 2)
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - tuple_type.md:1:1:1:2
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `f` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpColon(1:2-1:3),OpenRound(1:4-1:5),UpperIdent(1:5-1:8),Comma(1:8-1:9),UpperIdent(1:10-1:13),CloseRound(1:13-1:14),OpArrow(1:15-1:17),OpenRound(1:18-1:19),UpperIdent(1:19-1:22),Comma(1:22-1:23),UpperIdent(1:24-1:27),CloseRound(1:27-1:28),Newline(1:1-1:1),

@@ -10,8 +10,7 @@ module []
 foo = if tru then 0
 ~~~
 # EXPECTED
-no_else - expr_if_missing_else.md:3:19:3:20
-expr_not_canonicalized - expr_if_missing_else.md:3:19:3:20
+PARSE ERROR - expr_if_missing_else.md:3:19:3:20
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `no_else`
@@ -24,6 +23,10 @@ foo = if tru then 0
 ```
                   ^
 
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
 
 # TOKENS
 ~~~zig

@@ -8,10 +8,10 @@ type=file
 ||(|(l888888888|
 ~~~
 # EXPECTED
-missing_header - fuzz_crash_012.md:1:1:1:3
+MISSING HEADER - fuzz_crash_012.md:1:1:1:3
 UNEXPECTED TOKEN IN PATTERN - fuzz_crash_012.md:1:4:1:6
 UNEXPECTED TOKEN IN PATTERN - fuzz_crash_012.md:1:3:1:5
-expected_expr_bar - fuzz_crash_012.md:1:17:1:17
+PARSE ERROR - fuzz_crash_012.md:1:17:1:17
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.
@@ -64,6 +64,10 @@ Here is the problematic code:
 ```
                 
 
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
 ~~~zig

@@ -8,9 +8,12 @@ type=expr
 List.map
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - simple_external_lookup.md:1:1:1:9
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `map` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 UpperIdent(1:1-1:5),NoSpaceDotLowerIdent(1:5-1:9),EndOfFile(1:9-1:9),

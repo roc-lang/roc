@@ -9,9 +9,12 @@ type=expr
 ]-i
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - list_minus_newlines.md:2:3:2:4
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `i` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 OpenSquare(1:1-1:2),UpperIdent(1:2-1:3),Comma(1:3-1:4),Newline(1:1-1:1),

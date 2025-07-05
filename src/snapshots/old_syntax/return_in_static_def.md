@@ -19,9 +19,12 @@ staticValueDef =
 staticValueDef
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - return_in_static_def.md:1:1:1:15
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `staticValueDef` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:15),OpAssign(1:16-1:17),Newline(1:1-1:1),

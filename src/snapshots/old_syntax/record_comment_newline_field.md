@@ -9,9 +9,12 @@ type=expr
 a}
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - record_comment_newline_field.md:2:1:2:2
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `a` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 OpenCurly(1:1-1:2),Newline(1:3-1:3),

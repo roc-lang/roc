@@ -21,7 +21,29 @@ handleResult = |result| {
 UNDECLARED TYPE - nominal_external_fully_qualified.md:6:1:6:13
 UNUSED VARIABLE - nominal_external_fully_qualified.md:9:41:9:45
 # PROBLEMS
-NIL
+**UNDECLARED TYPE**
+The type ``MyResultModule.MyResultType`` is not declared in this scope.
+
+This type is referenced here:
+**nominal_external_fully_qualified.md:6:1:6:13:**
+```roc
+handleResult = |result| {
+```
+^^^^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable ``code`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_code` to suppress this warning.
+The unused variable is declared here:
+**nominal_external_fully_qualified.md:9:41:9:45:**
+```roc
+        MyResultModule.MyResultType.Err(code) => "Error: $(code.toStr())"
+```
+                                        ^^^^
+
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:21),CloseSquare(1:21-1:22),Newline(1:1-1:1),

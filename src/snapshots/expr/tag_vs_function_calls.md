@@ -18,7 +18,7 @@ type=expr
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - tag_vs_function_calls.md:6:13:6:15
-expected_expr_close_curly_or_comma - tag_vs_function_calls.md:6:14:6:18
+PARSE ERROR - tag_vs_function_calls.md:6:14:6:18
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **\x** is not expected in an expression.

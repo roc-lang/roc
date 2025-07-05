@@ -8,8 +8,7 @@ type=expr
 1 * if Bool.true then 1 else 1
 ~~~
 # EXPECTED
-no_else - plus_if.md:1:23:1:29
-expr_not_canonicalized - plus_if.md:1:1:1:29
+PARSE ERROR - plus_if.md:1:23:1:29
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `no_else`
@@ -22,6 +21,10 @@ Here is the problematic code:
 ```
                       ^^^^^^
 
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
 
 # TOKENS
 ~~~zig

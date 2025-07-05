@@ -10,7 +10,7 @@ return-3e)g
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - return_in_apply_func.md:2:1:2:8
-expected_expr_close_round_or_comma - return_in_apply_func.md:2:10:2:12
+PARSE ERROR - return_in_apply_func.md:2:10:2:12
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **return-** is not expected in an expression.

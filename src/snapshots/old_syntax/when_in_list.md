@@ -9,7 +9,7 @@ type=expr
 ]]
 ~~~
 # EXPECTED
-expected_expr_close_square_or_comma - when_in_list.md:2:1:2:3
+LIST NOT CLOSED - when_in_list.md:2:1:2:3
 # PROBLEMS
 **LIST NOT CLOSED**
 This list is missing a closing bracket or has a syntax error.

@@ -12,9 +12,12 @@ match nestedList {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - nested_list_scoping.md:1:7:1:17
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `nestedList` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 KwMatch(1:1-1:6),LowerIdent(1:7-1:17),OpenCurly(1:18-1:19),Newline(1:1-1:1),

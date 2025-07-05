@@ -11,10 +11,8 @@ match numbers {
 }
 ~~~
 # EXPECTED
-pattern_list_rest_old_syntax - list_patterns.md:3:13:3:19
-UNDEFINED VARIABLE - list_patterns.md:1:7:1:14
-UNDEFINED VARIABLE - list_patterns.md:2:11:2:14
-UNUSED VARIABLE - list_patterns.md:3:15:3:19
+BAD LIST REST PATTERN SYNTAX - list_patterns.md:3:13:3:19
+UNDEFINED VARIABLE - list_patterns.md:3:15:3:19
 UNUSED VARIABLE - list_patterns.md:3:6:3:11
 # PROBLEMS
 **BAD LIST REST PATTERN SYNTAX**
@@ -27,6 +25,38 @@ Here is the problematic code:
     [first, ..rest] => 0 # invalid rest pattern should error
 ```
             ^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `numbers` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNDEFINED VARIABLE**
+Nothing is named `acc` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNUSED VARIABLE**
+Variable ``rest`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+The unused variable is declared here:
+**list_patterns.md:3:15:3:19:**
+```roc
+    [first, ..rest] => 0 # invalid rest pattern should error
+```
+              ^^^^
+
+
+**UNUSED VARIABLE**
+Variable ``first`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_first` to suppress this warning.
+The unused variable is declared here:
+**list_patterns.md:3:6:3:11:**
+```roc
+    [first, ..rest] => 0 # invalid rest pattern should error
+```
+     ^^^^^
 
 
 # TOKENS

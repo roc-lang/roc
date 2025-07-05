@@ -34,9 +34,12 @@ j : I128
 j = -17011687303715884105728
 ~~~
 # EXPECTED
+PARSE ERROR - fuzz_crash_025.md:10:15:10:15
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_025.md:11:3:11:25
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_025.md:14:48:14:52
+PARSE ERROR - fuzz_crash_025.md:14:50:14:50
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_025.md:15:3:15:5
+INVALID STATEMENT - fuzz_crash_025.md:14:1:14:2
 # PROBLEMS
 **PARSE ERROR**
 Type applications require parentheses around their type arguments.
@@ -121,6 +124,26 @@ f =8
 ```
   ^^
 
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

@@ -11,9 +11,12 @@ launchTheNukes! = \{} ->
 launchTheNukes! {}
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - def_bang.md:1:1:1:16
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `launchTheNukes!` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:16),OpAssign(1:17-1:18),OpBackslash(1:19-1:20),OpenCurly(1:20-1:21),CloseCurly(1:21-1:22),OpArrow(1:23-1:25),Newline(1:1-1:1),

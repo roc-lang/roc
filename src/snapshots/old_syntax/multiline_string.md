@@ -16,9 +16,12 @@ c =
 42
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - multiline_string.md:1:1:1:2
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `a` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpAssign(1:3-1:4),StringStart(1:5-1:6),StringPart(1:6-1:22),StringEnd(1:22-1:23),Newline(1:1-1:1),

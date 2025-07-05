@@ -8,9 +8,12 @@ type=expr
 f x y = x
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - elm_function_syntax.md:1:1:1:2
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `f` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),LowerIdent(1:3-1:4),LowerIdent(1:5-1:6),OpAssign(1:7-1:8),LowerIdent(1:9-1:10),EndOfFile(1:10-1:10),

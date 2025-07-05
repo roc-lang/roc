@@ -12,9 +12,12 @@ if bool {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - if_then_else_7.md:1:4:1:8
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `bool` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 KwIf(1:1-1:3),LowerIdent(1:4-1:8),OpenCurly(1:9-1:10),Newline(1:1-1:1),

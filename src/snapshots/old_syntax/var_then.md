@@ -8,9 +8,12 @@ type=expr
 thenever
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - var_then.md:1:1:1:9
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `thenever` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:9),EndOfFile(1:9-1:9),

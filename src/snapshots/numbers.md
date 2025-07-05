@@ -20,9 +20,7 @@ type=expr
 )
 ~~~
 # EXPECTED
-UppercaseBase - numbers.md:2:6:2:6
-UppercaseBase - numbers.md:4:6:4:6
-UppercaseBase - numbers.md:6:6:6:6
+NIL
 # PROBLEMS
 **UPPERCASE BASE**
 Number base prefixes must be lowercase (0x, 0o, 0b).

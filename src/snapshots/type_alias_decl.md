@@ -46,12 +46,7 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - type_alias_decl.md:1:1:30:11
-UNEXPECTED TOKEN IN EXPRESSION - type_alias_decl.md:1:1:33:11
-UNEXPECTED TOKEN IN EXPRESSION - type_alias_decl.md:1:1:36:10
-TYPE REDECLARED - type_alias_decl.md:7:1:7:37
-UNUSED VARIABLE - type_alias_decl.md:36:5:36:10
-UNUSED VARIABLE - type_alias_decl.md:33:5:33:11
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **app [main!] { pf: platform "../basic-cli/main.roc" }
@@ -276,6 +271,48 @@ main! = |_| {
     color : Color
     color = Red
 ```
+
+
+**TYPE REDECLARED**
+The type ``Result`` is being redeclared.
+
+The redeclaration is here:
+**type_alias_decl.md:7:1:7:37:**
+```roc
+Result(ok, err) : [Ok(ok), Err(err)]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+But ``Result`` was already declared here:
+**type_alias_decl.md:1:1:1:1:**
+```roc
+app [main!] { pf: platform "../basic-cli/main.roc" }
+```
+
+
+
+**UNUSED VARIABLE**
+Variable ``color`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_color` to suppress this warning.
+The unused variable is declared here:
+**type_alias_decl.md:36:5:36:10:**
+```roc
+    color = Red
+```
+    ^^^^^
+
+
+**UNUSED VARIABLE**
+Variable ``person`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_person` to suppress this warning.
+The unused variable is declared here:
+**type_alias_decl.md:33:5:33:11:**
+```roc
+    person = { name: "Alice", age: 30 }
+```
+    ^^^^^^
 
 
 # TOKENS

@@ -8,9 +8,12 @@ type=expr
 (rec).field
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - parenthetical_basic_field.md:1:2:1:5
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `rec` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 OpenRound(1:1-1:2),LowerIdent(1:2-1:5),CloseRound(1:5-1:6),NoSpaceDotLowerIdent(1:6-1:12),EndOfFile(1:12-1:12),

@@ -10,7 +10,7 @@ r))
 1))
 ~~~
 # EXPECTED
-expected_expr_close_round_or_comma - binop_assign_defs_nested.md:2:2:2:4
+PARSE ERROR - binop_assign_defs_nested.md:2:2:2:4
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_close_round_or_comma`
@@ -23,6 +23,9 @@ r))
 ```
  ^^
 
+
+**INVALID TUPLE ELEMENT**
+This tuple element is malformed or contains invalid syntax.
 
 # TOKENS
 ~~~zig

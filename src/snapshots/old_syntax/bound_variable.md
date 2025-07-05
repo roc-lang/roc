@@ -9,9 +9,12 @@ a:
 c 0
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - bound_variable.md:1:1:1:2
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `a` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpColon(1:2-1:3),Newline(1:1-1:1),

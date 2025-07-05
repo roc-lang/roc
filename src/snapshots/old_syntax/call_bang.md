@@ -8,9 +8,12 @@ type=expr
 launchTheNukes! 123
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - call_bang.md:1:1:1:16
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `launchTheNukes!` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:16),Int(1:17-1:20),EndOfFile(1:20-1:20),

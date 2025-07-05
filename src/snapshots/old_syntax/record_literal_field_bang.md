@@ -12,7 +12,7 @@ type=expr
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - record_literal_field_bang.md:3:22:3:24
-expected_expr_close_curly_or_comma - record_literal_field_bang.md:3:23:3:25
+PARSE ERROR - record_literal_field_bang.md:3:23:3:25
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **\{** is not expected in an expression.

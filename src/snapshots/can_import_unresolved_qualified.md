@@ -36,7 +36,18 @@ parser = Json.Parser.Advanced.NonExistent.create
 # EXPECTED
 UNUSED VARIABLE - can_import_unresolved_qualified.md:15:19:15:22
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable ``req`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_req` to suppress this warning.
+The unused variable is declared here:
+**can_import_unresolved_qualified.md:15:19:15:22:**
+```roc
+processRequest = |req| Http.Server.defaultResponse
+```
+                  ^^^
+
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),

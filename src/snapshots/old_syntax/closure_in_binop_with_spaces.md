@@ -10,8 +10,6 @@ i>\s->s
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - closure_in_binop_with_spaces.md:1:3:1:5
-UNDEFINED VARIABLE - closure_in_binop_with_spaces.md:1:1:1:2
-expr_not_canonicalized - closure_in_binop_with_spaces.md:1:1:1:5
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **\s** is not expected in an expression.
@@ -24,6 +22,14 @@ i>\s->s
 ```
   ^^
 
+
+**UNDEFINED VARIABLE**
+Nothing is named `i` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
 
 # TOKENS
 ~~~zig

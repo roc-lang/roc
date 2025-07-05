@@ -9,7 +9,7 @@ type=file
 .R
 ~~~
 # EXPECTED
-missing_header - fuzz_crash_018.md:1:1:1:4
+MISSING HEADER - fuzz_crash_018.md:1:1:1:4
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_018.md:2:1:2:3
 UNDECLARED TYPE - fuzz_crash_018.md:1:5:1:6
 # PROBLEMS
@@ -40,6 +40,21 @@ Here is the problematic code:
 ```
 ^^
 
+
+**UNDECLARED TYPE**
+The type ``S`` is not declared in this scope.
+
+This type is referenced here:
+**fuzz_crash_018.md:1:5:1:6:**
+```roc
+0 b:S
+```
+    ^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
 ~~~zig

@@ -12,10 +12,16 @@ match color {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - multi_pattern_branch.md:1:7:1:12
-not_implemented - multi_pattern_branch.md:1:1:1:1
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `color` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
+Let us know if you want to help!
+
 # TOKENS
 ~~~zig
 KwMatch(1:1-1:6),LowerIdent(1:7-1:12),OpenCurly(1:13-1:14),Newline(1:1-1:1),

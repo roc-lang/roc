@@ -15,7 +15,18 @@ type=expr
 # EXPECTED
 UNUSED VARIABLE - block_pattern_unify.md:3:5:3:8
 # PROBLEMS
-NIL
+**UNUSED VARIABLE**
+Variable ``str`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_str` to suppress this warning.
+The unused variable is declared here:
+**block_pattern_unify.md:3:5:3:8:**
+```roc
+    str = "hello"
+```
+    ^^^
+
+
 # TOKENS
 ~~~zig
 OpenCurly(1:1-1:2),Newline(1:1-1:1),

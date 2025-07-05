@@ -28,9 +28,28 @@ processItems = |items| {
 }
 ~~~
 # EXPECTED
-UNUSED VARIABLE - can_var_scoping_regular_var.md:4:17:4:22
+VAR REASSIGNMENT ERROR - can_var_scoping_regular_var.md:4:17:4:22
 # PROBLEMS
-NIL
+**VAR REASSIGNMENT ERROR**
+Cannot reassign a `var` from outside the function where it was declared.
+Variables declared with `var` can only be reassigned within the same function scope.
+
+**VAR REASSIGNMENT ERROR**
+Cannot reassign a `var` from outside the function where it was declared.
+Variables declared with `var` can only be reassigned within the same function scope.
+
+**UNUSED VARIABLE**
+Variable ``items`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_items` to suppress this warning.
+The unused variable is declared here:
+**can_var_scoping_regular_var.md:4:17:4:22:**
+```roc
+processItems = |items| {
+```
+                ^^^^^
+
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),

@@ -13,9 +13,7 @@ foo =
     "onmo %
 ~~~
 # EXPECTED
-MismatchedBrace - fuzz_crash_009.md:2:6:2:6
-UnclosedString - fuzz_crash_009.md:6:6:6:12
-missing_header - fuzz_crash_009.md:1:2:1:4
+MISMATCHED BRACE - fuzz_crash_009.md:1:2:1:4
 # PROBLEMS
 **MISMATCHED BRACE**
 This brace does not match the corresponding opening brace.
@@ -38,6 +36,10 @@ Here is the problematic code:
 ```
  ^^
 
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
 ~~~zig

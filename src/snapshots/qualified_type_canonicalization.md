@@ -50,25 +50,25 @@ transform = \result ->
         Result.Err err -> TypeC.default
 ~~~
 # EXPECTED
-import_exposing_no_close - qualified_type_canonicalization.md:8:1:8:14
+PARSE ERROR - qualified_type_canonicalization.md:8:1:8:14
+PARSE ERROR - qualified_type_canonicalization.md:8:14:8:14
 UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:10:15:10:32
 UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:10:24:10:34
+PARSE ERROR - qualified_type_canonicalization.md:26:32:26:32
 UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:31:12:31:14
 UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:31:24:31:30
 UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:35:16:35:22
-expr_arrow_expects_ident - qualified_type_canonicalization.md:36:5:36:21
+PARSE ERROR - qualified_type_canonicalization.md:36:5:36:21
 UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:36:6:36:22
-expected_colon_after_type_annotation - qualified_type_canonicalization.md:39:32:39:43
-expected_colon_after_type_annotation - qualified_type_canonicalization.md:39:43:39:52
+UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:36:21:36:21
+PARSE ERROR - qualified_type_canonicalization.md:39:32:39:43
+PARSE ERROR - qualified_type_canonicalization.md:39:43:39:52
 UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:39:50:39:60
-expected_colon_after_type_annotation - qualified_type_canonicalization.md:39:60:39:74
+PARSE ERROR - qualified_type_canonicalization.md:39:60:39:74
+UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:39:68:39:68
 UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:40:13:40:20
-expected_colon_after_type_annotation - qualified_type_canonicalization.md:42:15:42:22
-expected_colon_after_type_annotation - qualified_type_canonicalization.md:43:15:43:23
-UNDEFINED VARIABLE - qualified_type_canonicalization.md:23:23:23:32
-expr_not_canonicalized - qualified_type_canonicalization.md:31:12:31:14
-expr_not_canonicalized - qualified_type_canonicalization.md:35:16:35:22
-expr_not_canonicalized - qualified_type_canonicalization.md:40:13:40:20
+PARSE ERROR - qualified_type_canonicalization.md:42:15:42:22
+PARSE ERROR - qualified_type_canonicalization.md:43:15:43:23
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `import_exposing_no_close`
@@ -381,6 +381,98 @@ Here is the problematic code:
 ```
               ^^^^^^^^
 
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**UNDEFINED VARIABLE**
+Nothing is named `new` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
 ~~~zig

@@ -32,9 +32,12 @@ is
         42
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - multiline_binop_when_with_comments.md:1:1:1:5
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `when` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:5),Newline(1:1-1:1),

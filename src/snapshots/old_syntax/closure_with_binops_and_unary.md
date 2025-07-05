@@ -10,9 +10,12 @@ m
  w
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - closure_with_binops_and_unary.md:1:1:1:2
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `m` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),Newline(1:1-1:1),

@@ -8,7 +8,7 @@ type=expr
 "\(e)"
 ~~~
 # EXPECTED
-InvalidEscapeSequence - deprecated_interpolated_string.md:1:3:1:3
+NIL
 # PROBLEMS
 **INVALID ESCAPE SEQUENCE**
 This escape sequence is not recognized.

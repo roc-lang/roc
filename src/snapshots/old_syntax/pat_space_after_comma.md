@@ -10,10 +10,16 @@ type=expr
 Q
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - pat_space_after_comma.md:1:2:2:2
-UNDEFINED VARIABLE - pat_space_after_comma.md:2:2:2:4
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `i` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNDEFINED VARIABLE**
+Nothing is named `p` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 OpenCurly(1:1-1:2),LowerIdent(1:2-1:3),Newline(1:1-1:1),

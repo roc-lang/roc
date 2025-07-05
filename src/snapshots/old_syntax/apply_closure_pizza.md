@@ -9,9 +9,12 @@ foo
 |> Dict.keepIf \(k, _v) -> List.contains keysToDelete k |> Bool.not
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - apply_closure_pizza.md:1:1:1:4
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `foo` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:4),Newline(1:1-1:1),

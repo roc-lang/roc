@@ -15,8 +15,8 @@ red = ... # not implemented
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - nominal_import_long_package.md:3:21:3:36
 UNEXPECTED TOKEN IN EXPRESSION - nominal_import_long_package.md:3:28:3:38
-UNDECLARED TYPE - nominal_import_long_package.md:5:7:5:9
-not_implemented - nominal_import_long_package.md:6:7:6:10
+LIST NOT CLOSED - nominal_import_long_package.md:3:51:3:51
+INVALID STATEMENT - nominal_import_long_package.md:5:7:5:9
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **.Color exposing** is not expected in an expression.
@@ -54,6 +54,33 @@ import design.Styles.Color exposing [Encoder as CE]
 ```
                                                   
 
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**UNDECLARED TYPE**
+The type ``CE`` is not declared in this scope.
+
+This type is referenced here:
+**nominal_import_long_package.md:5:7:5:9:**
+```roc
+red : CE
+```
+      ^^
+
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: ...
+Let us know if you want to help!
 
 # TOKENS
 ~~~zig

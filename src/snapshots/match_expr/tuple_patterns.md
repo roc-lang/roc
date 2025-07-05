@@ -13,10 +13,24 @@ match coord {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - tuple_patterns.md:1:7:1:12
-UNUSED VARIABLE - tuple_patterns.md:5:9:5:10
+UNDEFINED VARIABLE - tuple_patterns.md:5:9:5:10
 # PROBLEMS
-NIL
+**UNDEFINED VARIABLE**
+Nothing is named `coord` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNUSED VARIABLE**
+Variable ``y`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
+The unused variable is declared here:
+**tuple_patterns.md:5:9:5:10:**
+```roc
+    (x, y) => x
+```
+        ^
+
+
 # TOKENS
 ~~~zig
 KwMatch(1:1-1:6),LowerIdent(1:7-1:12),OpenCurly(1:13-1:14),Newline(1:1-1:1),

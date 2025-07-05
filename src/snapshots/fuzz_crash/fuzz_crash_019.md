@@ -129,54 +129,361 @@ h == foo
 ~~~
 # EXPECTED
 UNDECLARED TYPE - fuzz_crash_019.md:13:13:13:16
-undeclared_type_var - fuzz_crash_019.md:13:19:13:21
-undeclared_type_var - fuzz_crash_019.md:19:4:19:6
-undeclared_type_var - fuzz_crash_019.md:20:12:20:13
+UNDECLARED TYPE VARIABLE - fuzz_crash_019.md:13:19:13:21
+UNDECLARED TYPE VARIABLE - fuzz_crash_019.md:19:4:19:6
+UNDECLARED TYPE VARIABLE - fuzz_crash_019.md:20:12:20:13
 UNDECLARED TYPE - fuzz_crash_019.md:24:15:24:16
-undeclared_type_var - fuzz_crash_019.md:24:24:24:25
+UNDECLARED TYPE VARIABLE - fuzz_crash_019.md:24:24:24:25
 UNDECLARED TYPE - fuzz_crash_019.md:37:7:37:9
-not_implemented - fuzz_crash_019.md:1:1:1:1
-UNDEFINED VARIABLE - fuzz_crash_019.md:42:6:42:10
-not_implemented - fuzz_crash_019.md:1:1:1:1
-UNDEFINED VARIABLE - fuzz_crash_019.md:45:3:45:4
-UNDEFINED VARIABLE - fuzz_crash_019.md:53:2:53:3
-UNUSED VARIABLE - fuzz_crash_019.md:52:11:52:14
-UNDEFINED VARIABLE - fuzz_crash_019.md:55:11:55:12
-UNUSED VARIABLE - fuzz_crash_019.md:57:2:57:4
-UNDEFINED VARIABLE - fuzz_crash_019.md:59:3:59:7
-UNUSED VARIABLE - fuzz_crash_019.md:60:12:60:15
-not_implemented - fuzz_crash_019.md:1:1:1:1
-not_implemented - fuzz_crash_019.md:1:1:1:1
-UNDECLARED TYPE - fuzz_crash_019.md:74:9:74:15
-UNDEFINED VARIABLE - fuzz_crash_019.md:75:11:75:12
-not_implemented - fuzz_crash_019.md:1:1:1:1
-not_implemented - fuzz_crash_019.md:1:1:1:1
-not_implemented - fuzz_crash_019.md:83:2:83:5
-not_implemented - fuzz_crash_019.md:85:3:85:6
-not_implemented - fuzz_crash_019.md:86:3:86:12
-UNDEFINED VARIABLE - fuzz_crash_019.md:87:11:87:12
-UNDEFINED VARIABLE - fuzz_crash_019.md:89:3:89:6
-not_implemented - fuzz_crash_019.md:1:1:1:1
-UNDEFINED VARIABLE - fuzz_crash_019.md:96:34:96:37
-UNDEFINED VARIABLE - fuzz_crash_019.md:96:47:96:52
-UNDEFINED VARIABLE - fuzz_crash_019.md:96:54:96:59
-UNDEFINED VARIABLE - fuzz_crash_019.md:97:21:97:24
-UNDEFINED VARIABLE - fuzz_crash_019.md:97:30:97:32
-UNDEFINED VARIABLE - fuzz_crash_019.md:98:2:98:3
-UNDEFINED VARIABLE - fuzz_crash_019.md:100:11:100:14
-UNDEFINED VARIABLE - fuzz_crash_019.md:102:4:102:6
-UNDEFINED VARIABLE - fuzz_crash_019.md:102:8:102:13
-UNDEFINED VARIABLE - fuzz_crash_019.md:105:2:105:3
-not_implemented - fuzz_crash_019.md:1:1:1:1
-UNDEFINED VARIABLE - fuzz_crash_019.md:108:4:108:5
-UNDEFINED VARIABLE - fuzz_crash_019.md:108:6:108:8
-UNUSED VARIABLE - fuzz_crash_019.md:87:2:87:3
+NOT IMPLEMENTED - fuzz_crash_019.md:52:11:52:14
+UNDEFINED VARIABLE - fuzz_crash_019.md:57:2:57:4
+UNDEFINED VARIABLE - fuzz_crash_019.md:60:12:60:15
+NOT IMPLEMENTED - fuzz_crash_019.md:74:9:74:15
+UNDEFINED VARIABLE - fuzz_crash_019.md:97:2:97:3
+fuzz_crash_019.md:88:1:88:2: - fuzz_crash_019.md:87:2:87:3
 UNUSED VARIABLE - fuzz_crash_019.md:76:2:76:3
 UNUSED VARIABLE - fuzz_crash_019.md:88:1:88:2
 UNUSED VARIABLE - fuzz_crash_019.md:96:2:96:4
 UNDECLARED TYPE - fuzz_crash_019.md:116:5:116:6
-not_implemented - fuzz_crash_019.md:1:1:1:1
+NOT IMPLEMENTED - fuzz_crash_019.md:84:2:84:4
 # PROBLEMS
+**UNDECLARED TYPE**
+The type ``Lis`` is not declared in this scope.
+
+This type is referenced here:
+**fuzz_crash_019.md:13:13:13:16:**
+```roc
+Map(a, b) : Lis, (ab) -> List(b)
+```
+            ^^^
+
+
+**UNDECLARED TYPE VARIABLE**
+The type variable ``ab`` is not declared in this scope.
+
+Type variables must be introduced in a type annotation before they can be used.
+
+This type variable is referenced here:
+**fuzz_crash_019.md:13:19:13:21:**
+```roc
+Map(a, b) : Lis, (ab) -> List(b)
+```
+                  ^^
+
+
+**UNDECLARED TYPE VARIABLE**
+The type variable ``ab`` is not declared in this scope.
+
+Type variables must be introduced in a type annotation before they can be used.
+
+This type variable is referenced here:
+**fuzz_crash_019.md:19:4:19:6:**
+```roc
+		(ab) -> # row
+```
+   ^^
+
+
+**UNDECLARED TYPE VARIABLE**
+The type variable ``b`` is not declared in this scope.
+
+Type variables must be introduced in a type annotation before they can be used.
+
+This type variable is referenced here:
+**fuzz_crash_019.md:20:12:20:13:**
+```roc
+			List(			b	) #z)
+```
+           ^
+
+
+**UNDECLARED TYPE**
+The type ``O`` is not declared in this scope.
+
+This type is referenced here:
+**fuzz_crash_019.md:24:15:24:16:**
+```roc
+Som : { foo : O, bar : g }
+```
+              ^
+
+
+**UNDECLARED TYPE VARIABLE**
+The type variable ``g`` is not declared in this scope.
+
+Type variables must be introduced in a type annotation before they can be used.
+
+This type variable is referenced here:
+**fuzz_crash_019.md:24:24:24:25:**
+```roc
+Som : { foo : O, bar : g }
+```
+                       ^
+
+
+**UNDECLARED TYPE**
+The type ``U6`` is not declared in this scope.
+
+This type is referenced here:
+**fuzz_crash_019.md:37:7:37:9:**
+```roc
+one : U6
+```
+      ^^
+
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
+Let us know if you want to help!
+
+**UNDEFINED VARIABLE**
+Nothing is named `exp0` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
+Let us know if you want to help!
+
+**UNDEFINED VARIABLE**
+Nothing is named `r` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNDEFINED VARIABLE**
+Nothing is named `x` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNUSED VARIABLE**
+Variable ``lue`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_lue` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_019.md:52:11:52:14:**
+```roc
+	match a {lue  {
+```
+          ^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `x` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNUSED VARIABLE**
+Variable ``er`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_er` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_019.md:57:2:57:4:**
+```roc
+	er #ent
+```
+ ^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `ment` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNUSED VARIABLE**
+Variable ``est`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_est` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_019.md:60:12:60:15:**
+```roc
+		[1, 2, 3,est]123
+```
+           ^^^
+
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: top-level expect
+Let us know if you want to help!
+
+**UNDECLARED TYPE**
+The type ``Listlt`` is not declared in this scope.
+
+This type is referenced here:
+**fuzz_crash_019.md:74:9:74:15:**
+```roc
+main! : Listlt({}, _)
+```
+        ^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `e` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: ...
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: ...
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: crash statement
+Let us know if you want to help!
+
+**UNDEFINED VARIABLE**
+Nothing is named `d` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNDEFINED VARIABLE**
+Nothing is named `one` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
+Let us know if you want to help!
+
+**UNDEFINED VARIABLE**
+Nothing is named `tag` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNDEFINED VARIABLE**
+Nothing is named `world` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNDEFINED VARIABLE**
+Nothing is named `ned` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**DUPLICATE DEFINITION**
+The name `t` is being redeclared in this scope.
+
+The redeclaration is here:
+**fuzz_crash_019.md:97:2:97:3:**
+```roc
+	t = (123, "World", tag, O, (nd, t), [1, 2, 3])
+```
+ ^
+
+But `t` was already defined here:
+**fuzz_crash_019.md:88:1:88:2:**
+```roc
+t = [
+```
+^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `tag` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNDEFINED VARIABLE**
+Nothing is named `nd` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNDEFINED VARIABLE**
+Nothing is named `m` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNDEFINED VARIABLE**
+Nothing is named `ag1` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNDEFINED VARIABLE**
+Nothing is named `ne` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNDEFINED VARIABLE**
+Nothing is named `tuple` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNDEFINED VARIABLE**
+Nothing is named `b` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize suffix_single_question expression
+Let us know if you want to help!
+
+**UNDEFINED VARIABLE**
+Nothing is named `r` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNDEFINED VARIABLE**
+Nothing is named `nu` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNUSED VARIABLE**
+Variable ``i`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_i` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_019.md:87:2:87:3:**
+```roc
+	i= "H, ${d}"
+```
+ ^
+
+
+**UNUSED VARIABLE**
+Variable ``w`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_w` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_019.md:76:2:76:3:**
+```roc
+	w = "d"
+```
+ ^
+
+
+**UNUSED VARIABLE**
+Variable ``t`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_t` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_019.md:88:1:88:2:**
+```roc
+t = [
+```
+^
+
+
+**UNUSED VARIABLE**
+Variable ``rd`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_rd` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_019.md:96:2:96:4:**
+```roc
+	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
+```
+ ^^
+
+
+**UNDECLARED TYPE**
+The type ``V`` is not declared in this scope.
+
+This type is referenced here:
+**fuzz_crash_019.md:116:5:116:6:**
+```roc
+t : V((a,c))
+```
+    ^
+
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: top-level expect
+Let us know if you want to help!
+
 **INCOMPATIBLE MATCH PATTERNS**
 The pattern in the fourth branch of this `match` differs from previous ones:
 **fuzz_crash_019.md:52:2:**

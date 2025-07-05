@@ -11,7 +11,8 @@ type=expr
 t
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - crazy_annotation_left.md:1:4:1:5
+TYPE MISMATCH - crazy_annotation_left.md:1:1:1:2
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

@@ -218,70 +218,6 @@ UNEXPECTED TOKEN IN EXPRESSION - syntax_grab_bag.md:89:9:90:4
 UNEXPECTED TOKEN IN PATTERN - syntax_grab_bag.md:90:3:90:28
 UNEXPECTED TOKEN IN EXPRESSION - syntax_grab_bag.md:90:6:91:9
 UNEXPECTED TOKEN IN EXPRESSION - syntax_grab_bag.md:1:1:92:4
-UNEXPECTED TOKEN IN PATTERN - syntax_grab_bag.md:92:3:92:8
-UNEXPECTED TOKEN IN PATTERN - syntax_grab_bag.md:93:4:93:8
-UNDECLARED TYPE - syntax_grab_bag.md:36:8:36:11
-UNDECLARED TYPE - syntax_grab_bag.md:36:13:36:16
-UNDECLARED TYPE - syntax_grab_bag.md:39:2:39:5
-UNDECLARED TYPE - syntax_grab_bag.md:40:2:40:5
-UNDECLARED TYPE - syntax_grab_bag.md:43:19:43:21
-UNDECLARED TYPE - syntax_grab_bag.md:43:32:43:41
-UNDECLARED TYPE - syntax_grab_bag.md:45:8:45:10
-UNDECLARED TYPE - syntax_grab_bag.md:46:8:46:17
-UNDECLARED TYPE - syntax_grab_bag.md:52:4:52:6
-UNDECLARED TYPE - syntax_grab_bag.md:53:8:53:17
-not_implemented - syntax_grab_bag.md:6:1:12:4
-not_implemented - syntax_grab_bag.md:1:1:1:1
-not_implemented - syntax_grab_bag.md:1:1:1:1
-not_implemented - syntax_grab_bag.md:1:1:1:1
-not_implemented - syntax_grab_bag.md:1:1:1:1
-not_implemented - syntax_grab_bag.md:1:1:1:1
-expr_not_canonicalized - syntax_grab_bag.md:89:9:90:4
-expr_not_canonicalized - syntax_grab_bag.md:90:6:91:9
-expr_not_canonicalized - syntax_grab_bag.md:1:1:92:4
-UNUSED VARIABLE - syntax_grab_bag.md:97:3:97:8
-not_implemented - syntax_grab_bag.md:1:1:1:1
-UNUSED VARIABLE - syntax_grab_bag.md:102:19:102:23
-not_implemented - syntax_grab_bag.md:1:1:1:1
-UNUSED VARIABLE - syntax_grab_bag.md:108:23:108:27
-not_implemented - syntax_grab_bag.md:1:1:1:1
-UNUSED VARIABLE - syntax_grab_bag.md:115:6:115:10
-not_implemented - syntax_grab_bag.md:1:1:1:1
-not_implemented - syntax_grab_bag.md:1:1:1:1
-not_implemented - syntax_grab_bag.md:121:5:121:12
-not_implemented - syntax_grab_bag.md:1:1:1:1
-not_implemented - syntax_grab_bag.md:123:4:125:8
-not_implemented - syntax_grab_bag.md:130:5:130:12
-not_implemented - syntax_grab_bag.md:132:4:132:11
-UNUSED VARIABLE - syntax_grab_bag.md:82:2:82:3
-not_implemented - syntax_grab_bag.md:1:1:1:1
-UNDECLARED TYPE - syntax_grab_bag.md:143:14:143:20
-not_implemented - syntax_grab_bag.md:1:1:1:1
-not_implemented - syntax_grab_bag.md:1:1:1:1
-not_implemented - syntax_grab_bag.md:154:2:154:5
-not_implemented - syntax_grab_bag.md:156:3:156:6
-UNDEFINED VARIABLE - syntax_grab_bag.md:158:2:158:11
-not_implemented - syntax_grab_bag.md:1:1:1:1
-not_implemented - syntax_grab_bag.md:162:2:163:49
-not_implemented - syntax_grab_bag.md:1:1:1:1
-not_implemented - syntax_grab_bag.md:1:1:1:1
-UNDEFINED VARIABLE - syntax_grab_bag.md:178:63:178:71
-UNDEFINED VARIABLE - syntax_grab_bag.md:179:42:179:48
-UNDEFINED VARIABLE - syntax_grab_bag.md:183:3:183:7
-UNDEFINED VARIABLE - syntax_grab_bag.md:185:4:185:10
-UNDEFINED VARIABLE - syntax_grab_bag.md:188:22:188:25
-not_implemented - syntax_grab_bag.md:1:1:1:1
-not_implemented - syntax_grab_bag.md:1:1:1:1
-UNDEFINED VARIABLE - syntax_grab_bag.md:193:4:193:13
-UNUSED VARIABLE - syntax_grab_bag.md:180:2:180:17
-UNUSED VARIABLE - syntax_grab_bag.md:178:2:178:8
-UNUSED VARIABLE - syntax_grab_bag.md:164:2:164:18
-UNUSED VARIABLE - syntax_grab_bag.md:166:2:166:6
-UNUSED VARIABLE - syntax_grab_bag.md:188:2:188:15
-UNUSED VARIABLE - syntax_grab_bag.md:189:2:189:23
-UNUSED VARIABLE - syntax_grab_bag.md:165:2:165:14
-UNDECLARED TYPE - syntax_grab_bag.md:201:9:201:14
-not_implemented - syntax_grab_bag.md:1:1:1:1
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token ** After pattern in alt
@@ -537,6 +473,443 @@ Here is the problematic code:
 ```
    ^^^^
 
+
+**UNDECLARED TYPE**
+The type ``Bar`` is not declared in this scope.
+
+This type is referenced here:
+**syntax_grab_bag.md:36:8:36:11:**
+```roc
+Foo : (Bar, Baz)
+```
+       ^^^
+
+
+**UNDECLARED TYPE**
+The type ``Baz`` is not declared in this scope.
+
+This type is referenced here:
+**syntax_grab_bag.md:36:13:36:16:**
+```roc
+Foo : (Bar, Baz)
+```
+            ^^^
+
+
+**UNDECLARED TYPE**
+The type ``Bar`` is not declared in this scope.
+
+This type is referenced here:
+**syntax_grab_bag.md:39:2:39:5:**
+```roc
+	Bar, # Comment after pattern tuple item
+```
+ ^^^
+
+
+**UNDECLARED TYPE**
+The type ``Baz`` is not declared in this scope.
+
+This type is referenced here:
+**syntax_grab_bag.md:40:2:40:5:**
+```roc
+	Baz, # Another after pattern tuple item
+```
+ ^^^
+
+
+**UNDECLARED TYPE**
+The type ``Ok`` is not declared in this scope.
+
+This type is referenced here:
+**syntax_grab_bag.md:43:19:43:21:**
+```roc
+Some(a) : { foo : Ok(a), bar : Something }
+```
+                  ^^
+
+
+**UNDECLARED TYPE**
+The type ``Something`` is not declared in this scope.
+
+This type is referenced here:
+**syntax_grab_bag.md:43:32:43:41:**
+```roc
+Some(a) : { foo : Ok(a), bar : Something }
+```
+                               ^^^^^^^^^
+
+
+**UNDECLARED TYPE**
+The type ``Ok`` is not declared in this scope.
+
+This type is referenced here:
+**syntax_grab_bag.md:45:8:45:10:**
+```roc
+	foo : Ok(a), # After field
+```
+       ^^
+
+
+**UNDECLARED TYPE**
+The type ``Something`` is not declared in this scope.
+
+This type is referenced here:
+**syntax_grab_bag.md:46:8:46:17:**
+```roc
+	bar : Something, # After last field
+```
+       ^^^^^^^^^
+
+
+**UNDECLARED TYPE**
+The type ``Ok`` is not declared in this scope.
+
+This type is referenced here:
+**syntax_grab_bag.md:52:4:52:6:**
+```roc
+			Ok(a), # Comment after pattern record field
+```
+   ^^
+
+
+**UNDECLARED TYPE**
+The type ``Something`` is not declared in this scope.
+
+This type is referenced here:
+**syntax_grab_bag.md:53:8:53:17:**
+```roc
+	bar : Something, # Another after pattern record field
+```
+       ^^^^^^^^^
+
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: malformed import module name contains invalid control characters
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: Exposed item 'line!' already imported from module 'pf.Stdout', cannot import again from module 'MALFORMED_IMPORT'
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: Exposed item 'write!' already imported from module 'pf.Stdout', cannot import again from module 'MALFORMED_IMPORT'
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
+Let us know if you want to help!
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
+
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
+
+**UNUSED VARIABLE**
+Variable ``lower`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_lower` to suppress this warning.
+The unused variable is declared here:
+**syntax_grab_bag.md:97:3:97:8:**
+```roc
+		lower # After pattern comment
+```
+  ^^^^^
+
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
+Let us know if you want to help!
+
+**UNUSED VARIABLE**
+Variable ``rest`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+The unused variable is declared here:
+**syntax_grab_bag.md:102:19:102:23:**
+```roc
+		[1, 2, 3, .. as rest] # After pattern comment
+```
+                  ^^^^
+
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
+Let us know if you want to help!
+
+**UNUSED VARIABLE**
+Variable ``rest`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+The unused variable is declared here:
+**syntax_grab_bag.md:108:23:108:27:**
+```roc
+		[1, 2 | 5, 3, .. as rest] => 123
+```
+                      ^^^^
+
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
+Let us know if you want to help!
+
+**UNUSED VARIABLE**
+Variable ``rest`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+The unused variable is declared here:
+**syntax_grab_bag.md:115:6:115:10:**
+```roc
+					rest, # After last pattern in list
+```
+     ^^^^
+
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize local_dispatch expression
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
+Let us know if you want to help!
+
+**UNUSED VARIABLE**
+Variable ``b`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
+The unused variable is declared here:
+**syntax_grab_bag.md:82:2:82:3:**
+```roc
+	b,
+```
+ ^
+
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: top-level expect
+Let us know if you want to help!
+
+**UNDECLARED TYPE**
+The type ``String`` is not declared in this scope.
+
+This type is referenced here:
+**syntax_grab_bag.md:143:14:143:20:**
+```roc
+main! : List(String) -> Result({}, _)
+```
+             ^^^^^^
+
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: ...
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: ...
+Let us know if you want to help!
+
+**UNDEFINED VARIABLE**
+Nothing is named `some_func` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: crash statement
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
+Let us know if you want to help!
+
+**UNDEFINED VARIABLE**
+Nothing is named `punned` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNDEFINED VARIABLE**
+Nothing is named `nested` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNDEFINED VARIABLE**
+Nothing is named `tag1` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNDEFINED VARIABLE**
+Nothing is named `nested` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNDEFINED VARIABLE**
+Nothing is named `foo` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize suffix_single_question expression
+Let us know if you want to help!
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize suffix_single_question expression
+Let us know if you want to help!
+
+**UNDEFINED VARIABLE**
+Nothing is named `toStr` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNUSED VARIABLE**
+Variable ``multiline_tuple`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_multiline_tuple` to suppress this warning.
+The unused variable is declared here:
+**syntax_grab_bag.md:180:2:180:17:**
+```roc
+	multiline_tuple = (
+```
+ ^^^^^^^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable ``record`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_record` to suppress this warning.
+The unused variable is declared here:
+**syntax_grab_bag.md:178:2:178:8:**
+```roc
+	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
+```
+ ^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable ``tag_with_payload`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_tag_with_payload` to suppress this warning.
+The unused variable is declared here:
+**syntax_grab_bag.md:164:2:164:18:**
+```roc
+	tag_with_payload = Ok(number)
+```
+ ^^^^^^^^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable ``list`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
+The unused variable is declared here:
+**syntax_grab_bag.md:166:2:166:6:**
+```roc
+	list = [
+```
+ ^^^^
+
+
+**UNUSED VARIABLE**
+Variable ``bin_op_result`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_bin_op_result` to suppress this warning.
+The unused variable is declared here:
+**syntax_grab_bag.md:188:2:188:15:**
+```roc
+	bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
+```
+ ^^^^^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable ``static_dispatch_style`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_static_dispatch_style` to suppress this warning.
+The unused variable is declared here:
+**syntax_grab_bag.md:189:2:189:23:**
+```roc
+	static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+```
+ ^^^^^^^^^^^^^^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable ``interpolated`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_interpolated` to suppress this warning.
+The unused variable is declared here:
+**syntax_grab_bag.md:165:2:165:14:**
+```roc
+	interpolated = "Hello, ${world}"
+```
+ ^^^^^^^^^^^^
+
+
+**UNDECLARED TYPE**
+The type ``Value`` is not declared in this scope.
+
+This type is referenced here:
+**syntax_grab_bag.md:201:9:201:14:**
+```roc
+tuple : Value((a, b, c))
+```
+        ^^^^^
+
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: top-level expect
+Let us know if you want to help!
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

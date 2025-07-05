@@ -23,8 +23,7 @@ processColor = |color| {
 }
 ~~~
 # EXPECTED
-import_must_be_top_level - nominal_mixed_scope.md:9:5:9:17
-not_implemented - nominal_mixed_scope.md:1:1:1:1
+IMPORT MUST BE TOP LEVEL - nominal_mixed_scope.md:9:5:9:17
 # PROBLEMS
 **IMPORT MUST BE TOP LEVEL**
 Import statements must appear at the top level of a module.
@@ -37,6 +36,10 @@ Here is the problematic code:
 ```
     ^^^^^^^^^^^^
 
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
+Let us know if you want to help!
 
 # TOKENS
 ~~~zig

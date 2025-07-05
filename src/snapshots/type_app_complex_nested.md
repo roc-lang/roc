@@ -46,6 +46,91 @@ deepNested = |_| crash "not implemented"
                  ^^^^^^^
 
 
+**UNDECLARED TYPE**
+The type ``Maybe`` is not declared in this scope.
+
+This type is referenced here:
+**type_app_complex_nested.md:16:33:16:38:**
+```roc
+ComplexType(a, b) : Result(List(Maybe(a)), Dict(Str, Error(b)))
+```
+                                ^^^^^
+
+
+**UNDECLARED TYPE**
+The type ``Error`` is not declared in this scope.
+
+This type is referenced here:
+**type_app_complex_nested.md:16:54:16:59:**
+```roc
+ComplexType(a, b) : Result(List(Maybe(a)), Dict(Str, Error(b)))
+```
+                                                     ^^^^^
+
+
+**UNDECLARED TYPE**
+The type ``Maybe`` is not declared in this scope.
+
+This type is referenced here:
+**type_app_complex_nested.md:4:30:4:35:**
+```roc
+processComplex : Result(List(Maybe(a)), Dict(Str, Error(b))) -> List(a)
+```
+                             ^^^^^
+
+
+**UNDECLARED TYPE**
+The type ``Error`` is not declared in this scope.
+
+This type is referenced here:
+**type_app_complex_nested.md:4:51:4:56:**
+```roc
+processComplex : Result(List(Maybe(a)), Dict(Str, Error(b))) -> List(a)
+```
+                                                  ^^^^^
+
+
+**UNUSED VARIABLE**
+Variable ``maybeList`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_maybeList` to suppress this warning.
+The unused variable is declared here:
+**type_app_complex_nested.md:7:12:7:21:**
+```roc
+        Ok(maybeList) => []
+```
+           ^^^^^^^^^
+
+
+**UNDECLARED TYPE**
+The type ``Maybe`` is not declared in this scope.
+
+This type is referenced here:
+**type_app_complex_nested.md:12:14:12:19:**
+```roc
+deepNested : Maybe(Result(List(Dict(Str, a)), b)) -> a
+```
+             ^^^^^
+
+
+**UNDECLARED TYPE**
+The type ``Maybe`` is not declared in this scope.
+
+This type is referenced here:
+**type_app_complex_nested.md:13:1:13:11:**
+```roc
+deepNested = |_| crash "not implemented"
+```
+^^^^^^^^^^
+
+
+**INVALID LAMBDA**
+The body of this lambda expression is not valid.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),Newline(1:1-1:1),

@@ -11,9 +11,12 @@ role = Admin
 role
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - where_type_variable.md:1:1:1:5
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `role` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:5),OpColon(1:6-1:7),UpperIdent(1:8-1:12),KwWhere(1:13-1:18),Newline(1:1-1:1),

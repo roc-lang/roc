@@ -10,7 +10,9 @@ type=file
 0u22
 ~~~
 # EXPECTED
-missing_header - fuzz_crash_014.md:1:1:1:5
+MISSING HEADER - fuzz_crash_014.md:1:1:1:5
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_014.md:1:3:1:3
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_014.md:2:1:2:1
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_014.md:3:1:3:5
 # PROBLEMS
 **MISSING HEADER**
@@ -64,6 +66,18 @@ Here is the problematic code:
 ```
 ^^^^
 
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
 ~~~zig

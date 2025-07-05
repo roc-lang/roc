@@ -8,7 +8,7 @@ type=expr
 3.14.15
 ~~~
 # EXPECTED
-expr_no_space_dot_int - float_invalid.md:1:5:1:8
+PARSE ERROR - float_invalid.md:1:5:1:8
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expr_no_space_dot_int`

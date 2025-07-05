@@ -41,40 +41,104 @@ type=expr
 }
 ~~~
 # EXPECTED
-invalid_num_literal - number_literal_suffixes.md:2:9:2:14
-invalid_num_literal - number_literal_suffixes.md:3:9:3:15
-invalid_num_literal - number_literal_suffixes.md:4:9:4:15
-invalid_num_literal - number_literal_suffixes.md:5:9:5:15
-invalid_num_literal - number_literal_suffixes.md:6:9:6:16
-invalid_num_literal - number_literal_suffixes.md:7:9:7:14
-invalid_num_literal - number_literal_suffixes.md:8:9:8:15
-invalid_num_literal - number_literal_suffixes.md:9:9:9:15
-invalid_num_literal - number_literal_suffixes.md:10:9:10:15
-invalid_num_literal - number_literal_suffixes.md:11:9:11:16
-invalid_num_literal - number_literal_suffixes.md:12:9:12:15
-invalid_num_literal - number_literal_suffixes.md:13:12:13:18
-invalid_num_literal - number_literal_suffixes.md:14:12:14:19
-invalid_num_literal - number_literal_suffixes.md:15:12:15:19
-invalid_num_literal - number_literal_suffixes.md:16:12:16:19
-invalid_num_literal - number_literal_suffixes.md:17:12:17:20
-invalid_num_literal - number_literal_suffixes.md:18:12:18:18
-invalid_num_literal - number_literal_suffixes.md:19:12:19:19
-invalid_num_literal - number_literal_suffixes.md:20:12:20:19
-invalid_num_literal - number_literal_suffixes.md:21:12:21:19
-invalid_num_literal - number_literal_suffixes.md:22:12:22:20
-invalid_num_literal - number_literal_suffixes.md:23:12:23:19
-invalid_num_literal - number_literal_suffixes.md:24:12:24:19
-invalid_num_literal - number_literal_suffixes.md:25:12:25:20
-invalid_num_literal - number_literal_suffixes.md:26:12:26:20
-invalid_num_literal - number_literal_suffixes.md:27:12:27:20
-invalid_num_literal - number_literal_suffixes.md:28:12:28:21
-invalid_num_literal - number_literal_suffixes.md:29:12:29:19
-invalid_num_literal - number_literal_suffixes.md:30:12:30:20
-invalid_num_literal - number_literal_suffixes.md:31:12:31:20
-invalid_num_literal - number_literal_suffixes.md:32:12:32:20
-invalid_num_literal - number_literal_suffixes.md:33:12:33:21
-# PROBLEMS
 NIL
+# PROBLEMS
+**INVALID NUMBER**
+This number literal is not valid: 123u8
+
+**INVALID NUMBER**
+This number literal is not valid: 123u16
+
+**INVALID NUMBER**
+This number literal is not valid: 123u32
+
+**INVALID NUMBER**
+This number literal is not valid: 123u64
+
+**INVALID NUMBER**
+This number literal is not valid: 123u128
+
+**INVALID NUMBER**
+This number literal is not valid: 123i8
+
+**INVALID NUMBER**
+This number literal is not valid: 123i16
+
+**INVALID NUMBER**
+This number literal is not valid: 123i32
+
+**INVALID NUMBER**
+This number literal is not valid: 123i64
+
+**INVALID NUMBER**
+This number literal is not valid: 123i128
+
+**INVALID NUMBER**
+This number literal is not valid: 123dec
+
+**INVALID NUMBER**
+This number literal is not valid: -123u8
+
+**INVALID NUMBER**
+This number literal is not valid: -123u16
+
+**INVALID NUMBER**
+This number literal is not valid: -123u32
+
+**INVALID NUMBER**
+This number literal is not valid: -123u64
+
+**INVALID NUMBER**
+This number literal is not valid: -123u128
+
+**INVALID NUMBER**
+This number literal is not valid: -123i8
+
+**INVALID NUMBER**
+This number literal is not valid: -123i16
+
+**INVALID NUMBER**
+This number literal is not valid: -123i32
+
+**INVALID NUMBER**
+This number literal is not valid: -123i64
+
+**INVALID NUMBER**
+This number literal is not valid: -123i128
+
+**INVALID NUMBER**
+This number literal is not valid: -123dec
+
+**INVALID NUMBER**
+This number literal is not valid: 0b101u8
+
+**INVALID NUMBER**
+This number literal is not valid: 0b101u16
+
+**INVALID NUMBER**
+This number literal is not valid: 0b101u32
+
+**INVALID NUMBER**
+This number literal is not valid: 0b101u64
+
+**INVALID NUMBER**
+This number literal is not valid: 0b101u128
+
+**INVALID NUMBER**
+This number literal is not valid: 0b101i8
+
+**INVALID NUMBER**
+This number literal is not valid: 0b101i16
+
+**INVALID NUMBER**
+This number literal is not valid: 0b101i32
+
+**INVALID NUMBER**
+This number literal is not valid: 0b101i64
+
+**INVALID NUMBER**
+This number literal is not valid: 0b101i128
+
 # TOKENS
 ~~~zig
 OpenCurly(1:1-1:2),Newline(1:1-1:1),

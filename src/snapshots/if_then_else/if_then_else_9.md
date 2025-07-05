@@ -14,8 +14,12 @@ if bool {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - if_then_else_9.md:1:4:1:8
+NIL
 # PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `bool` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 **INVALID IF CONDITION**
 This `if` condition needs to be a _Bool_:
 **if_then_else_9.md:3:11:**

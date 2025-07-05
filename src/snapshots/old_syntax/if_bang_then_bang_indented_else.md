@@ -12,9 +12,12 @@ t
 5
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - if_bang_then_bang_indented_else.md:1:2:1:11
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `if!a!then` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:2-1:11),Newline(1:1-1:1),

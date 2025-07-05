@@ -10,9 +10,12 @@ i:{t:(J#
 A
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - comment_parens_in_typ_annotation_record_field.md:1:1:1:2
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `i` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpColon(1:2-1:3),OpenCurly(1:3-1:4),LowerIdent(1:4-1:5),OpColon(1:5-1:6),NoSpaceOpenRound(1:6-1:7),UpperIdent(1:7-1:8),Newline(1:9-1:9),

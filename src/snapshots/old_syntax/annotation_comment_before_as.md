@@ -10,9 +10,12 @@ e:A#
 n
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - annotation_comment_before_as.md:1:1:1:2
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `e` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpColon(1:2-1:3),UpperIdent(1:3-1:4),Newline(1:5-1:5),

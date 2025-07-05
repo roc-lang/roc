@@ -9,10 +9,9 @@ me = "luc"
 foo = "hello ${namF
 ~~~
 # EXPECTED
-missing_header - fuzz_crash_017.md:1:1:1:5
+MISSING HEADER - fuzz_crash_017.md:1:1:1:5
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_017.md:1:4:1:7
-string_expected_close_interpolation - fuzz_crash_017.md:2:7:2:14
-expr_not_canonicalized - fuzz_crash_017.md:2:7:2:20
+PARSE ERROR - fuzz_crash_017.md:2:7:2:14
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.
@@ -53,6 +52,18 @@ foo = "hello ${namF
 ```
       ^^^^^^^
 
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
 
 # TOKENS
 ~~~zig

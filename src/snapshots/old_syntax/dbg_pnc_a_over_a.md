@@ -9,9 +9,12 @@ dbg(a/a)
 d
 ~~~
 # EXPECTED
-not_implemented - dbg_pnc_a_over_a.md:1:1:1:1
-# PROBLEMS
 NIL
+# PROBLEMS
+**NOT IMPLEMENTED**
+This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
+Let us know if you want to help!
+
 # TOKENS
 ~~~zig
 KwDbg(1:1-1:4),NoSpaceOpenRound(1:4-1:5),LowerIdent(1:5-1:6),OpSlash(1:6-1:7),LowerIdent(1:7-1:8),CloseRound(1:8-1:9),Newline(1:1-1:1),

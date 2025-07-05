@@ -10,8 +10,6 @@ h>#
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - h_greater_comment_minus_div.md:2:2:2:4
-UNDEFINED VARIABLE - h_greater_comment_minus_div.md:1:1:1:2
-expr_not_canonicalized - h_greater_comment_minus_div.md:1:1:2:4
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **-h** is not expected in an expression.
@@ -24,6 +22,14 @@ Here is the problematic code:
 ```
  ^^
 
+
+**UNDEFINED VARIABLE**
+Nothing is named `h` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
 
 # TOKENS
 ~~~zig

@@ -8,7 +8,7 @@ type=expr
 I.5
 ~~~
 # EXPECTED
-expr_no_space_dot_int - module_dot_tuple.md:1:2:1:4
+PARSE ERROR - module_dot_tuple.md:1:2:1:4
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expr_no_space_dot_int`

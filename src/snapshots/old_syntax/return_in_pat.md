@@ -11,7 +11,7 @@ t)=t
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - return_in_pat.md:2:1:2:9
-expected_expr_close_round_or_comma - return_in_pat.md:3:2:3:4
+PARSE ERROR - return_in_pat.md:3:2:3:4
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **return e** is not expected in an expression.

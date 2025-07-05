@@ -10,8 +10,6 @@ c
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - implements_in_pnc_pattern.md:1:3:1:14
-UNDEFINED VARIABLE - implements_in_pnc_pattern.md:1:1:1:2
-UNDEFINED VARIABLE - implements_in_pnc_pattern.md:1:14:1:15
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **implements,** is not expected in an expression.
@@ -24,6 +22,14 @@ g(implements,x)=c
 ```
   ^^^^^^^^^^^
 
+
+**UNDEFINED VARIABLE**
+Nothing is named `g` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNDEFINED VARIABLE**
+Nothing is named `x` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig

@@ -11,9 +11,12 @@ k:
 D
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - ann_tag_union_newline_comment.md:1:1:1:2
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `k` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpColon(1:2-1:3),Newline(1:1-1:1),

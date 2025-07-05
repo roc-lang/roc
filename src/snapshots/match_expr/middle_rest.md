@@ -13,10 +13,24 @@ match items {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - middle_rest.md:1:7:1:12
-UNUSED VARIABLE - middle_rest.md:3:18:3:24
+UNDEFINED VARIABLE - middle_rest.md:3:18:3:24
 # PROBLEMS
-NIL
+**UNDEFINED VARIABLE**
+Nothing is named `items` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNUSED VARIABLE**
+Variable ``middle`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_middle` to suppress this warning.
+The unused variable is declared here:
+**middle_rest.md:3:18:3:24:**
+```roc
+    [a, b, .. as middle, x, y] => a + b + x + y  
+```
+                 ^^^^^^
+
+
 # TOKENS
 ~~~zig
 KwMatch(1:1-1:6),LowerIdent(1:7-1:12),OpenCurly(1:13-1:14),Newline(1:1-1:1),

@@ -10,9 +10,12 @@ g:[T(T#
 D
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - annotation_tag_parens_comment.md:1:1:1:2
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `g` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpColon(1:2-1:3),OpenSquare(1:3-1:4),UpperIdent(1:4-1:5),NoSpaceOpenRound(1:5-1:6),UpperIdent(1:6-1:7),Newline(1:8-1:8),

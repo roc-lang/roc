@@ -11,9 +11,12 @@ type=expr
         Bar -> 3
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - plus_when.md:2:5:2:9
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `when` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 Int(1:1-1:2),OpPlus(1:3-1:4),Newline(1:1-1:1),

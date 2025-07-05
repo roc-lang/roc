@@ -8,10 +8,16 @@ type=expr
 x == y
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - equals_with_spaces.md:1:1:1:2
-UNDEFINED VARIABLE - equals_with_spaces.md:1:6:1:7
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `x` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNDEFINED VARIABLE**
+Nothing is named `y` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpEquals(1:3-1:5),LowerIdent(1:6-1:7),EndOfFile(1:7-1:7),

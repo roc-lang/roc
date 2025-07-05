@@ -8,9 +8,12 @@ type=expr
 f : [
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - tag_union_open.md:1:1:1:2
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `f` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpColon(1:3-1:4),OpenSquare(1:5-1:6),EndOfFile(1:6-1:6),

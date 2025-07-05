@@ -23,10 +23,11 @@ ar,
 		]
 ~~~
 # EXPECTED
-expected_exposes_close_square - fuzz_crash_030.md:8:3:8:6
+PARSE ERROR - fuzz_crash_030.md:8:5:8:5
+EXPECTED CLOSING BRACKET - fuzz_crash_030.md:8:3:8:6
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:9:3:9:10
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:10:2:10:15
-expected_expr_close_curly_or_comma - fuzz_crash_030.md:12:8:12:12
+PARSE ERROR - fuzz_crash_030.md:12:8:12:12
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:12:9:12:13
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:12:12:12:14
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:12:13:12:17
@@ -152,6 +153,46 @@ Here is the problematic code:
 ```
  ^^^^^^^^^^^^^
 
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
 ~~~zig

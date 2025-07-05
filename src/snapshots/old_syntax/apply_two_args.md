@@ -8,9 +8,12 @@ type=expr
 whee  12  34
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - apply_two_args.md:1:1:1:5
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `whee` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:5),Int(1:7-1:9),Int(1:11-1:13),EndOfFile(1:13-1:13),

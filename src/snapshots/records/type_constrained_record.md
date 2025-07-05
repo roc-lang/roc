@@ -9,8 +9,7 @@ process_user! : { name : Str, age : U32, ..a } => Str
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN TYPE ANNOTATION - type_constrained_record.md:1:42:1:45
-expected_arrow - type_constrained_record.md:1:37:1:41
-MALFORMED TYPE - type_constrained_record.md:1:37:1:47
+PARSE ERROR - type_constrained_record.md:1:37:1:41
 # PROBLEMS
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
 The token **..a** is not expected in a type annotation.
@@ -35,6 +34,9 @@ process_user! : { name : Str, age : U32, ..a } => Str
 ```
                                     ^^^^
 
+
+**MALFORMED TYPE**
+This type annotation is malformed or contains invalid syntax.
 
 # TOKENS
 ~~~zig

@@ -11,9 +11,12 @@ x = foo {
 x
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - outdented_record.md:1:1:1:2
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `x` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpAssign(1:3-1:4),LowerIdent(1:5-1:8),OpenCurly(1:9-1:10),Newline(1:1-1:1),

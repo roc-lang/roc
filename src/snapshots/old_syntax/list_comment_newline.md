@@ -11,7 +11,7 @@ type=expr
 ]
 ~~~
 # EXPECTED
-expected_expr_close_square_or_comma - list_comment_newline.md:4:1:4:2
+LIST NOT CLOSED - list_comment_newline.md:4:1:4:2
 # PROBLEMS
 **LIST NOT CLOSED**
 This list is missing a closing bracket or has a syntax error.

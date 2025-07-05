@@ -8,9 +8,12 @@ type=expr
 a b c d
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - apply_three_args.md:1:1:1:2
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `a` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),LowerIdent(1:3-1:4),LowerIdent(1:5-1:6),LowerIdent(1:7-1:8),EndOfFile(1:8-1:8),

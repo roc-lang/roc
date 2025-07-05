@@ -10,7 +10,7 @@ type=expr
      )
 ~~~
 # EXPECTED
-expected_expr_close_round_or_comma - when_in_parens_indented.md:3:6:3:7
+PARSE ERROR - when_in_parens_indented.md:3:6:3:7
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_close_round_or_comma`

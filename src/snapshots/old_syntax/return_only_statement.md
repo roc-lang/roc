@@ -12,9 +12,12 @@ identityFn = \x ->
 identityFn 45
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - return_only_statement.md:1:1:1:11
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `identityFn` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:11),OpAssign(1:12-1:13),OpBackslash(1:14-1:15),LowerIdent(1:15-1:16),OpArrow(1:17-1:19),Newline(1:1-1:1),

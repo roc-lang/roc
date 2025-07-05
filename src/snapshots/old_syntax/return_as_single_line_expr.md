@@ -8,9 +8,12 @@ type=expr
 x = return 5
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - return_as_single_line_expr.md:1:1:1:2
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `x` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpAssign(1:3-1:4),KwReturn(1:5-1:11),Int(1:12-1:13),EndOfFile(1:13-1:13),

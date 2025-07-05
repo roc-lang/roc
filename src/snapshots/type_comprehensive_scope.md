@@ -46,11 +46,68 @@ Complex : {
 ~~~
 # EXPECTED
 TYPE REDECLARED - type_comprehensive_scope.md:12:1:12:37
-UNDECLARED TYPE - type_comprehensive_scope.md:15:19:15:23
+type_comprehensive_scope.md:1:1:1:1: - type_comprehensive_scope.md:15:19:15:23
 TYPE REDECLARED - type_comprehensive_scope.md:24:1:24:13
-UNDECLARED TYPE - type_comprehensive_scope.md:27:11:27:29
+type_comprehensive_scope.md:9:1:9:33: - type_comprehensive_scope.md:27:11:27:29
 # PROBLEMS
-NIL
+**TYPE REDECLARED**
+The type ``Result`` is being redeclared.
+
+The redeclaration is here:
+**type_comprehensive_scope.md:12:1:12:37:**
+```roc
+Result(ok, err) : [Ok(ok), Err(err)]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+But ``Result`` was already declared here:
+**type_comprehensive_scope.md:1:1:1:1:**
+```roc
+module [MyU64, Person, Result, Tree, Node]
+```
+
+
+
+**UNDECLARED TYPE**
+The type ``Node`` is not declared in this scope.
+
+This type is referenced here:
+**type_comprehensive_scope.md:15:19:15:23:**
+```roc
+Tree(a) : [Branch(Node(a)), Leaf(a)]
+```
+                  ^^^^
+
+
+**TYPE REDECLARED**
+The type ``Person`` is being redeclared.
+
+The redeclaration is here:
+**type_comprehensive_scope.md:24:1:24:13:**
+```roc
+Person : U64
+```
+^^^^^^^^^^^^
+
+But ``Person`` was already declared here:
+**type_comprehensive_scope.md:9:1:9:33:**
+```roc
+Person : { name: Str, age: U64 }
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**UNDECLARED TYPE**
+The type ``SomeUndeclaredType`` is not declared in this scope.
+
+This type is referenced here:
+**type_comprehensive_scope.md:27:11:27:29:**
+```roc
+BadType : SomeUndeclaredType
+```
+          ^^^^^^^^^^^^^^^^^^
+
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:14),Comma(1:14-1:15),UpperIdent(1:16-1:22),Comma(1:22-1:23),UpperIdent(1:24-1:30),Comma(1:30-1:31),UpperIdent(1:32-1:36),Comma(1:36-1:37),UpperIdent(1:38-1:42),CloseSquare(1:42-1:43),Newline(1:1-1:1),

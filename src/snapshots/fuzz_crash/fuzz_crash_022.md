@@ -15,12 +15,12 @@ getUser = |id| if (id > 1!) "big" else "l"
 -ain! = |_| getUser(900)
 ~~~
 # EXPECTED
-expected_package_or_platform_name - fuzz_crash_022.md:1:1:1:6
+PARSE ERROR - fuzz_crash_022.md:1:1:1:6
 UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_022.md:1:19:1:29
-expected_expr_close_round_or_comma - fuzz_crash_022.md:6:27:6:30
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_022.md:1:32:1:32
+PARSE ERROR - fuzz_crash_022.md:6:27:6:30
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_022.md:8:1:8:6
-MALFORMED TYPE - fuzz_crash_022.md:1:19:1:29
-UNUSED VARIABLE - fuzz_crash_022.md:6:12:6:14
+MALFORMED TYPE - fuzz_crash_022.md:6:12:6:14
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_package_or_platform_name`
@@ -81,6 +81,38 @@ Here is the problematic code:
 ```
 ^^^^^
 
+
+**MALFORMED TYPE**
+This type annotation is malformed or contains invalid syntax.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID IF CONDITION**
+The condition in this `if` expression could not be processed.
+
+The condition must be a valid expression that evaluates to a `Bool` value (`Bool.true` or `Bool.false`).
+
+**UNUSED VARIABLE**
+Variable ``id`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_id` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_022.md:6:12:6:14:**
+```roc
+getUser = |id| if (id > 1!) "big" else "l"
+```
+           ^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
 ~~~zig

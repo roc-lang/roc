@@ -8,9 +8,12 @@ type=expr
 e""""\""""
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - multiline_string_in_apply.md:1:1:1:2
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `e` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),MultilineStringStart(1:2-1:5),StringPart(1:5-1:8),MultilineStringEnd(1:8-1:11),EndOfFile(1:11-1:11),

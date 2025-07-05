@@ -14,9 +14,12 @@ f : a -> b
 f
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - where_clause_multiple_bound_abilities.md:1:1:1:2
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `f` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpColon(1:3-1:4),LowerIdent(1:5-1:6),OpArrow(1:7-1:9),LowerIdent(1:10-1:11),KwWhere(1:12-1:17),LowerIdent(1:18-1:19),KwImplements(1:20-1:30),UpperIdent(1:31-1:35),OpAmpersand(1:36-1:37),UpperIdent(1:38-1:40),Comma(1:40-1:41),LowerIdent(1:42-1:43),KwImplements(1:44-1:54),UpperIdent(1:55-1:57),OpAmpersand(1:58-1:59),UpperIdent(1:60-1:64),OpAmpersand(1:65-1:66),UpperIdent(1:67-1:74),Newline(1:1-1:1),

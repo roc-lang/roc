@@ -10,7 +10,7 @@ module [nums]
 nums : List U8
 ~~~
 # EXPECTED
-expected_colon_after_type_annotation - type_annotation_missing_parens.md:3:15:3:15
+PARSE ERROR - type_annotation_missing_parens.md:3:15:3:15
 # PROBLEMS
 **PARSE ERROR**
 Type applications require parentheses around their type arguments.

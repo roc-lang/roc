@@ -8,7 +8,7 @@ type=expr
 "there is no end
 ~~~
 # EXPECTED
-UnclosedString - single_no_end.md:1:2:1:17
+NIL
 # PROBLEMS
 **UNCLOSED STRING**
 This string is missing a closing quote.

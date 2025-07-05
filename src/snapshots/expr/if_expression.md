@@ -8,9 +8,12 @@ type=expr
 if x > 5 "big" else "small"
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - if_expression.md:1:4:1:5
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `x` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 KwIf(1:1-1:3),LowerIdent(1:4-1:5),OpGreaterThan(1:6-1:7),Int(1:8-1:9),StringStart(1:10-1:11),StringPart(1:11-1:14),StringEnd(1:14-1:15),KwElse(1:16-1:20),StringStart(1:21-1:22),StringPart(1:22-1:27),StringEnd(1:27-1:28),EndOfFile(1:28-1:28),

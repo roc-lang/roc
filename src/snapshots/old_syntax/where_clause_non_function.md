@@ -10,9 +10,12 @@ f : a where a implements A
 f
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - where_clause_non_function.md:1:1:1:2
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `f` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpColon(1:3-1:4),LowerIdent(1:5-1:6),KwWhere(1:7-1:12),LowerIdent(1:13-1:14),KwImplements(1:15-1:25),UpperIdent(1:26-1:27),Newline(1:1-1:1),

@@ -13,9 +13,12 @@ match data {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - mixed_pattern_scoping.md:1:7:1:11
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `data` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 KwMatch(1:1-1:6),LowerIdent(1:7-1:11),OpenCurly(1:12-1:13),Newline(1:1-1:1),

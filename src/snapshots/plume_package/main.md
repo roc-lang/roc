@@ -5,6 +5,8 @@ type=package
 ~~~
 # SOURCE
 ~~~roc
+# EXPECTED
+NIL
 package [
     Color,
 ] {}

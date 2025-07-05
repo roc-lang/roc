@@ -15,8 +15,6 @@ extract_age = |person| {
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - module_record_destructure.md:5:13:5:21
-UNDEFINED VARIABLE - module_record_destructure.md:5:7:5:10
-UNDEFINED VARIABLE - module_record_destructure.md:6:5:6:8
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **= person** is not expected in an expression.
@@ -29,6 +27,14 @@ Here is the problematic code:
 ```
             ^^^^^^^^
 
+
+**UNDEFINED VARIABLE**
+Nothing is named `age` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**UNDEFINED VARIABLE**
+Nothing is named `age` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig

@@ -12,9 +12,12 @@ table = \{height} -> crash "not implemented"
 table
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - fn_with_record_arg.md:1:1:1:6
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `table` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:6),OpColon(1:7-1:8),OpenCurly(1:9-1:10),Newline(1:1-1:1),

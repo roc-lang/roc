@@ -9,9 +9,12 @@ when t is
     Ok ({} as d)->S
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - pattern_with_as_parens.md:1:1:1:5
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `when` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:5),LowerIdent(1:6-1:7),LowerIdent(1:8-1:10),Newline(1:1-1:1),

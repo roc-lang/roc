@@ -11,9 +11,12 @@ type=expr
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - record_with_lots_of_newlines.md:1:2:2:2
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `t` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 OpenCurly(1:1-1:2),LowerIdent(1:2-1:3),Newline(1:4-1:4),

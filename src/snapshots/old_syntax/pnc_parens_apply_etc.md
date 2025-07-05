@@ -10,7 +10,7 @@ type=expr
 (z)
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - pnc_parens_apply_etc.md:2:1:2:2
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

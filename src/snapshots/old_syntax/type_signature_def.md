@@ -11,9 +11,12 @@ foo = 4
 42
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - type_signature_def.md:1:1:1:4
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `foo` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:4),OpColon(1:5-1:6),UpperIdent(1:7-1:10),Newline(1:1-1:1),

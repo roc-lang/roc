@@ -9,9 +9,8 @@ process_user! : { name : Str, age : U32, .. } => Str
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN TYPE ANNOTATION - type_open_record.md:1:42:1:46
-expected_arrow - type_open_record.md:1:37:1:41
-expected_ty_close_curly_or_comma - type_open_record.md:1:47:1:53
-MALFORMED TYPE - type_open_record.md:1:47:1:53
+PARSE ERROR - type_open_record.md:1:37:1:41
+PARSE ERROR - type_open_record.md:1:47:1:53
 # PROBLEMS
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
 The token **.. }** is not expected in a type annotation.
@@ -48,6 +47,9 @@ process_user! : { name : Str, age : U32, .. } => Str
 ```
                                               ^^^^^^
 
+
+**MALFORMED TYPE**
+This type annotation is malformed or contains invalid syntax.
 
 # TOKENS
 ~~~zig

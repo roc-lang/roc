@@ -11,7 +11,7 @@ type=expr
 t#
 ~~~
 # EXPECTED
-expected_expr_close_round_or_comma - double_parens_comment_tuple_pat.md:3:1:3:3
+PARSE ERROR - double_parens_comment_tuple_pat.md:3:1:3:3
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_close_round_or_comma`

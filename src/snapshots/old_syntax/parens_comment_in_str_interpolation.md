@@ -9,8 +9,7 @@ type=expr
 )}"
 ~~~
 # EXPECTED
-expected_expr_close_round_or_comma - parens_comment_in_str_interpolation.md:2:1:2:3
-invalid_string_interpolation - parens_comment_in_str_interpolation.md:2:1:2:3
+PARSE ERROR - parens_comment_in_str_interpolation.md:2:1:2:3
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_close_round_or_comma`
@@ -23,6 +22,10 @@ Here is the problematic code:
 ```
 ^^
 
+
+**INVALID INTERPOLATION**
+This string interpolation is not valid.
+String interpolation should use the format: "text $(expression) more text"
 
 # TOKENS
 ~~~zig

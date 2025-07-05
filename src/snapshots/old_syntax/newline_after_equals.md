@@ -11,9 +11,12 @@ x =
 42
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - newline_after_equals.md:1:1:1:2
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `x` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpAssign(1:3-1:4),Newline(1:1-1:1),

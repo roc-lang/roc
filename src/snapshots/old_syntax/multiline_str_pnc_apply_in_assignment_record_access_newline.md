@@ -9,9 +9,12 @@ i=""""""().1
 p
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - multiline_str_pnc_apply_in_assignment_record_access_newline.md:1:1:1:2
-# PROBLEMS
 NIL
+# PROBLEMS
+**UNDEFINED VARIABLE**
+Nothing is named `i` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpAssign(1:2-1:3),MultilineStringStart(1:3-1:6),StringPart(1:6-1:6),MultilineStringEnd(1:6-1:9),NoSpaceOpenRound(1:9-1:10),CloseRound(1:10-1:11),NoSpaceDotInt(1:11-1:13),Newline(1:1-1:1),
