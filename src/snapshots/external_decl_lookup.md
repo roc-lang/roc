@@ -16,10 +16,60 @@ main! = |_| {
     Stdout.line!(result)
 }
 ~~~
+~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - external_decl_lookup.md:11:1:11:3
+UNEXPECTED TOKEN IN EXPRESSION - external_decl_lookup.md:11:2:11:4
+UNEXPECTED TOKEN IN EXPRESSION - external_decl_lookup.md:11:3:11:4
 # PROBLEMS
-NIL
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**external_decl_lookup.md:11:1:11:3:**
+```roc
+~~~
+```
+^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**external_decl_lookup.md:11:2:11:4:**
+```roc
+~~~
+```
+ ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**external_decl_lookup.md:11:3:11:4:**
+```roc
+~~~
+```
+  ^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),Newline(1:1-1:1),
@@ -31,11 +81,12 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 Newline(7:6-7:68),
 LowerIdent(8:5-8:11),OpAssign(8:12-8:13),UpperIdent(8:14-8:18),NoSpaceDotLowerIdent(8:18-8:23),NoSpaceOpenRound(8:23-8:24),StringStart(8:24-8:25),StringPart(8:25-8:52),StringEnd(8:52-8:53),CloseRound(8:53-8:54),Newline(1:1-1:1),
 UpperIdent(9:5-9:11),NoSpaceDotLowerIdent(9:11-9:17),NoSpaceOpenRound(9:17-9:18),LowerIdent(9:18-9:24),CloseRound(9:24-9:25),Newline(1:1-1:1),
-CloseCurly(10:1-10:2),EndOfFile(10:2-10:2),
+CloseCurly(10:1-10:2),Newline(1:1-1:1),
+MalformedUnknownToken(11:1-11:2),MalformedUnknownToken(11:2-11:3),MalformedUnknownToken(11:3-11:4),EndOfFile(11:4-11:4),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-10.2
+(file @1.1-11.4
 	(app @1.1-1.57
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
@@ -64,7 +115,10 @@ CloseCurly(10:1-10:2),EndOfFile(10:2-10:2),
 									(e-string-part @8.25-8.52 (raw "Hello from external module!")))))
 						(e-apply @9.5-9.25
 							(e-ident @9.5-9.17 (raw "Stdout.line!"))
-							(e-ident @9.18-9.24 (raw "result")))))))))
+							(e-ident @9.18-9.24 (raw "result")))))))
+		(e-malformed @11.1-11.3 (reason "expr_unexpected_token"))
+		(e-malformed @11.2-11.4 (reason "expr_unexpected_token"))
+		(e-malformed @11.3-11.4 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -78,6 +132,7 @@ main! = |_| {
 	result = Json.utf8("Hello from external module!")
 	Stdout.line!(result)
 }
+
 ~~~
 # CANONICALIZE
 ~~~clojure

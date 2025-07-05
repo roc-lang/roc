@@ -22,6 +22,7 @@ pkg: 77"..c", mm} #
 ar,
 		]
 ~~~
+~~~
 # EXPECTED
 PARSE ERROR - fuzz_crash_030.md:8:5:8:5
 EXPECTED CLOSING BRACKET - fuzz_crash_030.md:8:3:8:6
@@ -33,6 +34,9 @@ UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:12:12:12:14
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:12:13:12:17
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:12:17:12:20
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:13:2:13:15
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:17:1:17:3
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:17:2:17:4
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:17:3:17:4
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `exposed_item_unexpected_token`
@@ -154,6 +158,54 @@ Here is the problematic code:
  ^^^^^^^^^^^^^
 
 
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**fuzz_crash_030.md:17:1:17:3:**
+```roc
+~~~
+```
+^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**fuzz_crash_030.md:17:2:17:4:**
+```roc
+~~~
+```
+ ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**fuzz_crash_030.md:17:3:17:4:**
+```roc
+~~~
+```
+  ^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
@@ -211,11 +263,12 @@ LowerIdent(12:1-12:4),OpColon(12:4-12:5),Int(12:6-12:8),StringStart(12:8-12:9),S
 KwProvides(13:2-13:10),Newline(13:12-13:15),
 OpenSquare(14:3-14:4),Newline(14:6-14:10),
 LowerIdent(15:1-15:3),Comma(15:3-15:4),Newline(1:1-1:1),
-CloseSquare(16:3-16:4),EndOfFile(16:4-16:4),
+CloseSquare(16:3-16:4),Newline(1:1-1:1),
+MalformedUnknownToken(17:1-17:2),MalformedUnknownToken(17:2-17:3),MalformedUnknownToken(17:3-17:4),EndOfFile(17:4-17:4),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-16.4
+(file @1.1-17.4
 	(malformed-header @8.3-9.4 (tag "expected_exposes_close_square"))
 	(statements
 		(e-malformed @9.3-9.10 (reason "expr_unexpected_token"))
@@ -228,7 +281,10 @@ CloseSquare(16:3-16:4),EndOfFile(16:4-16:4),
 		(e-malformed @12.17-12.20 (reason "expr_unexpected_token"))
 		(e-malformed @13.2-13.15 (reason "expr_unexpected_token"))
 		(e-list @14.3-16.4
-			(e-ident @15.1-15.3 (raw "ar")))))
+			(e-ident @15.1-15.3 (raw "ar")))
+		(e-malformed @17.1-17.3 (reason "expr_unexpected_token"))
+		(e-malformed @17.2-17.4 (reason "expr_unexpected_token"))
+		(e-malformed @17.3-17.4 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -241,6 +297,7 @@ mm
 [ # pen
 	ar,
 ]
+
 ~~~
 # CANONICALIZE
 ~~~clojure

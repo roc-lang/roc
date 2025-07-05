@@ -7,6 +7,7 @@ type=expr
 ~~~roc
 1 ++ 2
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - unknown_operator.md:1:4:1:7
 # PROBLEMS
@@ -28,7 +29,8 @@ Check the spelling and make sure you're using a valid Roc operator.
 
 # TOKENS
 ~~~zig
-Int(1:1-1:2),OpPlus(1:3-1:4),OpPlus(1:4-1:5),Int(1:6-1:7),EndOfFile(1:7-1:7),
+Int(1:1-1:2),OpPlus(1:3-1:4),OpPlus(1:4-1:5),Int(1:6-1:7),Newline(1:1-1:1),
+MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # PARSE
 ~~~clojure

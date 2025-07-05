@@ -27,9 +27,49 @@ processItems = |items| {
 	total_ + result
 }
 ~~~
+~~~
 # EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - can_var_scoping_regular_var.md:22:1:22:3
+UNEXPECTED TOKEN IN EXPRESSION - can_var_scoping_regular_var.md:22:2:22:4
+UNEXPECTED TOKEN IN EXPRESSION - can_var_scoping_regular_var.md:22:3:22:4
 VAR REASSIGNMENT ERROR - can_var_scoping_regular_var.md:4:17:4:22
 # PROBLEMS
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**can_var_scoping_regular_var.md:22:1:22:3:**
+```roc
+~~~
+```
+^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**can_var_scoping_regular_var.md:22:2:22:4:**
+```roc
+~~~
+```
+ ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**can_var_scoping_regular_var.md:22:3:22:4:**
+```roc
+~~~
+```
+  ^
+
+
 **VAR REASSIGNMENT ERROR**
 Cannot reassign a `var` from outside the function where it was declared.
 Variables declared with `var` can only be reassigned within the same function scope.
@@ -49,6 +89,18 @@ processItems = |items| {
 ```
                 ^^^^^
 
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
 ~~~zig
@@ -72,11 +124,12 @@ CloseCurly(17:2-17:3),Newline(1:1-1:1),
 Newline(1:1-1:1),
 LowerIdent(19:2-19:8),OpAssign(19:9-19:10),LowerIdent(19:11-19:21),NoSpaceOpenRound(19:21-19:22),OpenCurly(19:22-19:23),CloseCurly(19:23-19:24),CloseRound(19:24-19:25),Newline(1:1-1:1),
 LowerIdent(20:2-20:8),OpPlus(20:9-20:10),LowerIdent(20:11-20:17),Newline(1:1-1:1),
-CloseCurly(21:1-21:2),EndOfFile(21:2-21:2),
+CloseCurly(21:1-21:2),Newline(1:1-1:1),
+MalformedUnknownToken(22:1-22:2),MalformedUnknownToken(22:2-22:3),MalformedUnknownToken(22:3-22:4),EndOfFile(22:4-22:4),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-21.2
+(file @1.1-22.4
 	(module @1.1-1.10
 		(exposes @1.8-1.10))
 	(statements
@@ -126,11 +179,35 @@ CloseCurly(21:1-21:2),EndOfFile(21:2-21:2),
 								(e-record @19.22-19.24)))
 						(e-binop @20.2-21.2 (op "+")
 							(e-ident @20.2-20.8 (raw "total_"))
-							(e-ident @20.11-20.17 (raw "result")))))))))
+							(e-ident @20.11-20.17 (raw "result")))))))
+		(e-malformed @22.1-22.3 (reason "expr_unexpected_token"))
+		(e-malformed @22.2-22.4 (reason "expr_unexpected_token"))
+		(e-malformed @22.3-22.4 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+# Regular function with var usage
+processItems = |items| {
+	var count_ = 0
+	var total_ = 0
+
+	# Reassign vars within same function - should work
+	count_ = count_ + 1
+	total_ = total_ + 10
+
+	# Nested function - var reassignment should fail across function boundary
+	nestedFunc = |_| {
+		count_ = count_ + 5 # Should cause error - different function
+		total_ = total_ * 2 # Should cause error - different function
+		count_
+	}
+
+	result = nestedFunc({})
+	total_ + result
+}
+
 ~~~
 # CANONICALIZE
 ~~~clojure

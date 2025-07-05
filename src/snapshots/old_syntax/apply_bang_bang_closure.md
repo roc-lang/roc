@@ -9,6 +9,7 @@ type=expr
  \w->2
  n
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - apply_bang_bang_closure.md:1:1:1:3
 # PROBLEMS
@@ -28,7 +29,8 @@ Here is the problematic code:
 ~~~zig
 OpBang(1:1-1:2),OpBang(1:2-1:3),Newline(1:1-1:1),
 OpBackslash(2:2-2:3),LowerIdent(2:3-2:4),OpArrow(2:4-2:6),Int(2:6-2:7),Newline(1:1-1:1),
-LowerIdent(3:2-3:3),EndOfFile(3:3-3:3),
+LowerIdent(3:2-3:3),Newline(1:1-1:1),
+MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
 ~~~
 # PARSE
 ~~~clojure

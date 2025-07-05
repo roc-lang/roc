@@ -7,6 +7,7 @@ type=expr
 ~~~roc
 !blah
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - unary_not.md:1:1:1:6
 # PROBLEMS
@@ -24,7 +25,8 @@ Here is the problematic code:
 
 # TOKENS
 ~~~zig
-OpBang(1:1-1:2),LowerIdent(1:2-1:6),EndOfFile(1:6-1:6),
+OpBang(1:1-1:2),LowerIdent(1:2-1:6),Newline(1:1-1:1),
+MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # PARSE
 ~~~clojure

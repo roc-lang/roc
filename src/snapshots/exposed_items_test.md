@@ -11,21 +11,72 @@ import pf.Stdout exposing [line!, write!]
 
 main = 42
 ~~~
+~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - exposed_items_test.md:6:1:6:3
+UNEXPECTED TOKEN IN EXPRESSION - exposed_items_test.md:6:2:6:4
+UNEXPECTED TOKEN IN EXPRESSION - exposed_items_test.md:6:3:6:4
 # PROBLEMS
-NIL
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**exposed_items_test.md:6:1:6:3:**
+```roc
+~~~
+```
+^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**exposed_items_test.md:6:2:6:4:**
+```roc
+~~~
+```
+ ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**exposed_items_test.md:6:3:6:4:**
+```roc
+~~~
+```
+  ^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:13),CloseSquare(1:13-1:14),Newline(1:1-1:1),
 Newline(1:1-1:1),
 KwImport(3:1-3:7),LowerIdent(3:8-3:10),NoSpaceDotUpperIdent(3:10-3:17),KwExposing(3:18-3:26),OpenSquare(3:27-3:28),LowerIdent(3:28-3:33),Comma(3:33-3:34),LowerIdent(3:35-3:41),CloseSquare(3:41-3:42),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(5:1-5:5),OpAssign(5:6-5:7),Int(5:8-5:10),EndOfFile(5:10-5:10),
+LowerIdent(5:1-5:5),OpAssign(5:6-5:7),Int(5:8-5:10),Newline(1:1-1:1),
+MalformedUnknownToken(6:1-6:2),MalformedUnknownToken(6:2-6:3),MalformedUnknownToken(6:3-6:4),EndOfFile(6:4-6:4),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-5.10
+(file @1.1-6.4
 	(module @1.1-1.14
 		(exposes @1.8-1.14
 			(exposed-lower-ident (text "main"))))
@@ -36,11 +87,19 @@ LowerIdent(5:1-5:5),OpAssign(5:6-5:7),Int(5:8-5:10),EndOfFile(5:10-5:10),
 				(exposed-lower-ident (text "write!"))))
 		(s-decl @5.1-5.10
 			(p-ident @5.1-5.5 (raw "main"))
-			(e-int @5.8-5.10 (raw "42")))))
+			(e-int @5.8-5.10 (raw "42")))
+		(e-malformed @6.1-6.3 (reason "expr_unexpected_token"))
+		(e-malformed @6.2-6.4 (reason "expr_unexpected_token"))
+		(e-malformed @6.3-6.4 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [main]
+
+import pf.Stdout exposing [line!, write!]
+
+main = 42
+
 ~~~
 # CANONICALIZE
 ~~~clojure

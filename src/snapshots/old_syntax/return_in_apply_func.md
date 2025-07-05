@@ -8,6 +8,7 @@ type=expr
 (
 return-3e)g
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - return_in_apply_func.md:2:1:2:8
 PARSE ERROR - return_in_apply_func.md:2:10:2:12
@@ -39,7 +40,8 @@ return-3e)g
 # TOKENS
 ~~~zig
 OpenRound(1:1-1:2),Newline(1:1-1:1),
-KwReturn(2:1-2:7),OpBinaryMinus(2:7-2:8),MalformedNumberNoExponentDigits(2:8-2:10),CloseRound(2:10-2:11),LowerIdent(2:11-2:12),EndOfFile(2:12-2:12),
+KwReturn(2:1-2:7),OpBinaryMinus(2:7-2:8),MalformedNumberNoExponentDigits(2:8-2:10),CloseRound(2:10-2:11),LowerIdent(2:11-2:12),Newline(1:1-1:1),
+MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
 ~~~
 # PARSE
 ~~~clojure

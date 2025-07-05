@@ -23,6 +23,7 @@ pkg: "..l", mmen		} # Cose
 ar,
 		]
 ~~~
+~~~
 # EXPECTED
 MISMATCHED BRACE - fuzz_crash_029.md:4:4:4:9
 PARSE ERROR - fuzz_crash_029.md:5:14:5:18
@@ -32,8 +33,8 @@ UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_029.md:6:4:6:10
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_029.md:7:2:7:13
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_029.md:10:2:10:15
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_029.md:14:2:14:15
-PARSE ERROR - fuzz_crash_029.md:17:3:17:4
-LIST NOT CLOSED - fuzz_crash_029.md:17:4:17:4
+PARSE ERROR - fuzz_crash_029.md:17:3:17:3
+LIST NOT CLOSED - fuzz_crash_029.md:18:4:18:4
 # PROBLEMS
 **MISMATCHED BRACE**
 This brace does not match the corresponding opening brace.
@@ -151,11 +152,11 @@ A parsing error occurred: `expected_expr_close_round_or_comma`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**fuzz_crash_029.md:17:3:17:4:**
+**fuzz_crash_029.md:17:3:17:3:**
 ```roc
 		]
 ```
-  ^
+  
 
 
 **LIST NOT CLOSED**
@@ -164,9 +165,9 @@ Lists must be closed with **]** and list items must be separated by commas.
 For example:     [1, 2, 3]
 
 Here is the problematic code:
-**fuzz_crash_029.md:17:4:17:4:**
+**fuzz_crash_029.md:18:4:18:4:**
 ```roc
-		]
+~~~
 ```
    
 
@@ -229,11 +230,12 @@ LowerIdent(13:1-13:4),OpColon(13:4-13:5),StringStart(13:6-13:7),StringPart(13:7-
 KwProvides(14:2-14:10),Newline(14:12-14:15),
 OpenSquare(15:3-15:4),UpperIdent(15:5-15:7),NoSpaceOpenRound(15:7-15:8),LowerIdent(15:8-15:13),CloseRound(15:13-15:14),Comma(15:14-15:15),OpenRound(15:16-15:17),LowerIdent(15:17-15:18),Newline(15:20-15:24),
 LowerIdent(16:1-16:3),Comma(16:3-16:4),Newline(1:1-1:1),
-CloseRound(17:3-17:4),EndOfFile(17:4-17:4),
+CloseRound(17:3-17:4),Newline(1:1-1:1),
+MalformedUnknownToken(18:1-18:2),MalformedUnknownToken(18:2-18:3),MalformedUnknownToken(18:3-18:4),EndOfFile(18:4-18:4),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-17.4
+(file @1.1-18.4
 	(malformed-header @4.4-5.13 (tag "expected_requires_rigids_close_curly"))
 	(statements
 		(s-malformed @5.9-5.23 (tag "expected_colon_after_type_annotation"))
@@ -250,7 +252,7 @@ CloseRound(17:3-17:4),EndOfFile(17:4-17:4),
 					(e-string-part @13.7-13.10 (raw "..l"))))
 			(field (field "mmen") (optional false)))
 		(e-malformed @14.2-14.15 (reason "expr_unexpected_token"))
-		(e-malformed @17.4-17.4 (reason "expected_expr_close_square_or_comma"))))
+		(e-malformed @18.4-18.4 (reason "expected_expr_close_square_or_comma"))))
 ~~~
 # FORMATTED
 ~~~roc

@@ -11,6 +11,7 @@ type=expr
     P
 u
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -21,7 +22,8 @@ Int(1:1-1:2),OpColon(1:3-1:4),Newline(1:1-1:1),
 LowerIdent(2:5-2:6),KwWhere(2:7-2:12),LowerIdent(2:13-2:14),Newline(1:1-1:1),
 KwImplements(3:5-3:15),Newline(1:1-1:1),
 UpperIdent(4:5-4:6),Newline(1:1-1:1),
-LowerIdent(5:1-5:2),EndOfFile(5:2-5:2),
+LowerIdent(5:1-5:2),Newline(1:1-1:1),
+MalformedUnknownToken(6:1-6:2),MalformedUnknownToken(6:2-6:3),MalformedUnknownToken(6:3-6:4),EndOfFile(6:4-6:4),
 ~~~
 # PARSE
 ~~~clojure

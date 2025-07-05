@@ -8,6 +8,7 @@ type=expr
 h>#
  -h/d
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - h_greater_comment_minus_div.md:2:2:2:4
 # PROBLEMS
@@ -34,7 +35,8 @@ Check the spelling and make sure you're using a valid Roc operator.
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpGreaterThan(1:2-1:3),Newline(1:4-1:4),
-OpUnaryMinus(2:2-2:3),LowerIdent(2:3-2:4),OpSlash(2:4-2:5),LowerIdent(2:5-2:6),EndOfFile(2:6-2:6),
+OpUnaryMinus(2:2-2:3),LowerIdent(2:3-2:4),OpSlash(2:4-2:5),LowerIdent(2:5-2:6),Newline(1:1-1:1),
+MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
 ~~~
 # PARSE
 ~~~clojure

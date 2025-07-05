@@ -7,13 +7,15 @@ type=expr
 ~~~roc
 |{ first_name, ..rest }| "Hello ${first_name} ${rest.last_name}"
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
 NIL
 # TOKENS
 ~~~zig
-OpBar(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:4-1:14),Comma(1:14-1:15),DoubleDot(1:16-1:18),LowerIdent(1:18-1:22),CloseCurly(1:23-1:24),OpBar(1:24-1:25),StringStart(1:26-1:27),StringPart(1:27-1:33),OpenStringInterpolation(1:33-1:35),LowerIdent(1:35-1:45),CloseStringInterpolation(1:45-1:46),StringPart(1:46-1:47),OpenStringInterpolation(1:47-1:49),LowerIdent(1:49-1:53),NoSpaceDotLowerIdent(1:53-1:63),CloseStringInterpolation(1:63-1:64),StringPart(1:64-1:64),StringEnd(1:64-1:65),EndOfFile(1:65-1:65),
+OpBar(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:4-1:14),Comma(1:14-1:15),DoubleDot(1:16-1:18),LowerIdent(1:18-1:22),CloseCurly(1:23-1:24),OpBar(1:24-1:25),StringStart(1:26-1:27),StringPart(1:27-1:33),OpenStringInterpolation(1:33-1:35),LowerIdent(1:35-1:45),CloseStringInterpolation(1:45-1:46),StringPart(1:46-1:47),OpenStringInterpolation(1:47-1:49),LowerIdent(1:49-1:53),NoSpaceDotLowerIdent(1:53-1:63),CloseStringInterpolation(1:63-1:64),StringPart(1:64-1:64),StringEnd(1:64-1:65),Newline(1:1-1:1),
+MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # PARSE
 ~~~clojure
@@ -33,7 +35,7 @@ OpBar(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:4-1:14),Comma(1:14-1:15),DoubleDo
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+|{ first_name, ..rest }| "Hello ${first_name} ${rest.last_name}"
 ~~~
 # CANONICALIZE
 ~~~clojure

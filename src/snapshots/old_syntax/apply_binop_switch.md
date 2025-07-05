@@ -8,6 +8,7 @@ type=expr
 i<2
 (-6)
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -18,7 +19,8 @@ Is there an `import` or `exposing` missing up-top?
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpLessThan(1:2-1:3),Int(1:3-1:4),Newline(1:1-1:1),
-OpenRound(2:1-2:2),OpBinaryMinus(2:2-2:3),Int(2:3-2:4),CloseRound(2:4-2:5),EndOfFile(2:5-2:5),
+OpenRound(2:1-2:2),OpBinaryMinus(2:2-2:3),Int(2:3-2:4),CloseRound(2:4-2:5),Newline(1:1-1:1),
+MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
 ~~~
 # PARSE
 ~~~clojure

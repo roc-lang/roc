@@ -7,6 +7,7 @@ type=expr
 ~~~roc
 get_name! {} ?? "Bob"
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -16,7 +17,8 @@ Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:10),OpenCurly(1:11-1:12),CloseCurly(1:12-1:13),OpDoubleQuestion(1:14-1:16),StringStart(1:17-1:18),StringPart(1:18-1:21),StringEnd(1:21-1:22),EndOfFile(1:22-1:22),
+LowerIdent(1:1-1:10),OpenCurly(1:11-1:12),CloseCurly(1:12-1:13),OpDoubleQuestion(1:14-1:16),StringStart(1:17-1:18),StringPart(1:18-1:21),StringEnd(1:21-1:22),Newline(1:1-1:1),
+MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # PARSE
 ~~~clojure

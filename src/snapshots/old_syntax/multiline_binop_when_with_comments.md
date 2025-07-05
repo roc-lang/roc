@@ -31,6 +31,7 @@ is
     _ ->
         42
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -64,7 +65,8 @@ LowerIdent(21:13-21:16),LowerIdent(21:17-21:20),Newline(1:1-1:1),
 OpPizza(22:17-22:19),UpperIdent(22:20-22:26),NoSpaceDotLowerIdent(22:26-22:38),StringStart(22:39-22:40),StringPart(22:40-22:40),StringEnd(22:40-22:41),Newline(22:43-22:60),
 Newline(1:1-1:1),
 Underscore(24:5-24:6),OpArrow(24:7-24:9),Newline(1:1-1:1),
-Int(25:9-25:11),EndOfFile(25:11-25:11),
+Int(25:9-25:11),Newline(1:1-1:1),
+MalformedUnknownToken(26:1-26:2),MalformedUnknownToken(26:2-26:3),MalformedUnknownToken(26:3-26:4),EndOfFile(26:4-26:4),
 ~~~
 # PARSE
 ~~~clojure

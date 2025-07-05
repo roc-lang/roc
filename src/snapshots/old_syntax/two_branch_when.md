@@ -9,6 +9,7 @@ when x is
  "" -> 1
  "mise" -> 2
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -20,7 +21,8 @@ Is there an `import` or `exposing` missing up-top?
 ~~~zig
 LowerIdent(1:1-1:5),LowerIdent(1:6-1:7),LowerIdent(1:8-1:10),Newline(1:1-1:1),
 StringStart(2:2-2:3),StringPart(2:3-2:3),StringEnd(2:3-2:4),OpArrow(2:5-2:7),Int(2:8-2:9),Newline(1:1-1:1),
-StringStart(3:2-3:3),StringPart(3:3-3:7),StringEnd(3:7-3:8),OpArrow(3:9-3:11),Int(3:12-3:13),EndOfFile(3:13-3:13),
+StringStart(3:2-3:3),StringPart(3:3-3:7),StringEnd(3:7-3:8),OpArrow(3:9-3:11),Int(3:12-3:13),Newline(1:1-1:1),
+MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
 ~~~
 # PARSE
 ~~~clojure

@@ -18,9 +18,49 @@ main! = |_| {
 	Stdout.line!("Hello, world!")
 }
 ~~~
+~~~
 # EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - hello_world_with_block.md:13:1:13:3
+UNEXPECTED TOKEN IN EXPRESSION - hello_world_with_block.md:13:2:13:4
+UNEXPECTED TOKEN IN EXPRESSION - hello_world_with_block.md:13:3:13:4
 UNUSED VARIABLE - hello_world_with_block.md:9:2:9:7
 # PROBLEMS
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**hello_world_with_block.md:13:1:13:3:**
+```roc
+~~~
+```
+^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**hello_world_with_block.md:13:2:13:4:**
+```roc
+~~~
+```
+ ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**hello_world_with_block.md:13:3:13:4:**
+```roc
+~~~
+```
+  ^
+
+
 **UNUSED VARIABLE**
 Variable ``world`` is not used anywhere in your code.
 
@@ -32,6 +72,18 @@ The unused variable is declared here:
 ```
  ^^^^^
 
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
 ~~~zig
@@ -46,11 +98,12 @@ LowerIdent(8:1-8:6),OpAssign(8:7-8:8),OpBar(8:9-8:10),Underscore(8:10-8:11),OpBa
 LowerIdent(9:2-9:7),OpAssign(9:8-9:9),StringStart(9:10-9:11),StringPart(9:11-9:16),StringEnd(9:16-9:17),Newline(1:1-1:1),
 Newline(10:3-10:9),
 UpperIdent(11:2-11:8),NoSpaceDotLowerIdent(11:8-11:14),NoSpaceOpenRound(11:14-11:15),StringStart(11:15-11:16),StringPart(11:16-11:29),StringEnd(11:29-11:30),CloseRound(11:30-11:31),Newline(1:1-1:1),
-CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
+CloseCurly(12:1-12:2),Newline(1:1-1:1),
+MalformedUnknownToken(13:1-13:2),MalformedUnknownToken(13:2-13:3),MalformedUnknownToken(13:3-13:4),EndOfFile(13:4-13:4),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.2-12.2
+(file @1.2-13.4
 	(app @4.1-4.57
 		(provides @4.6-4.12
 			(exposed-lower-ident (text "main!")))
@@ -77,11 +130,26 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 						(e-apply @11.2-11.31
 							(e-ident @11.2-11.14 (raw "Stdout.line!"))
 							(e-string @11.15-11.30
-								(e-string-part @11.16-11.29 (raw "Hello, world!"))))))))))
+								(e-string-part @11.16-11.29 (raw "Hello, world!"))))))))
+		(e-malformed @13.1-13.3 (reason "expr_unexpected_token"))
+		(e-malformed @13.2-13.4 (reason "expr_unexpected_token"))
+		(e-malformed @13.3-13.4 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+# Hello world!
+
+# Multiline comments?
+app [main!] { pf: platform "../basic-cli/platform.roc" }
+
+import pf.Stdout
+
+main! = |_| {
+	world = "World"
+	# Hello
+	Stdout.line!("Hello, world!")
+}
+
 ~~~
 # CANONICALIZE
 ~~~clojure

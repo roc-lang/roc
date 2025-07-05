@@ -15,6 +15,7 @@ x = 5
 
 42
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - basic_docs.md:1:2:2:19
 # PROBLEMS
@@ -41,7 +42,8 @@ Newline(5:2-5:3),
 Newline(6:2-6:33),
 LowerIdent(7:1-7:2),OpAssign(7:3-7:4),Int(7:5-7:6),Newline(1:1-1:1),
 Newline(1:1-1:1),
-Int(9:1-9:3),EndOfFile(9:3-9:3),
+Int(9:1-9:3),Newline(1:1-1:1),
+MalformedUnknownToken(10:1-10:2),MalformedUnknownToken(10:2-10:3),MalformedUnknownToken(10:3-10:4),EndOfFile(10:4-10:4),
 ~~~
 # PARSE
 ~~~clojure

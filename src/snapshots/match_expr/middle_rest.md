@@ -12,6 +12,7 @@ match items {
     [] => 0
 }
 ~~~
+~~~
 # EXPECTED
 UNDEFINED VARIABLE - middle_rest.md:3:18:3:24
 # PROBLEMS
@@ -38,7 +39,8 @@ OpenSquare(2:5-2:6),LowerIdent(2:6-2:11),Comma(2:11-2:12),DoubleDot(2:13-2:15),C
 OpenSquare(3:5-3:6),LowerIdent(3:6-3:7),Comma(3:7-3:8),LowerIdent(3:9-3:10),Comma(3:10-3:11),DoubleDot(3:12-3:14),KwAs(3:15-3:17),LowerIdent(3:18-3:24),Comma(3:24-3:25),LowerIdent(3:26-3:27),Comma(3:27-3:28),LowerIdent(3:29-3:30),CloseSquare(3:30-3:31),OpFatArrow(3:32-3:34),LowerIdent(3:35-3:36),OpPlus(3:37-3:38),LowerIdent(3:39-3:40),OpPlus(3:41-3:42),LowerIdent(3:43-3:44),OpPlus(3:45-3:46),LowerIdent(3:47-3:48),Newline(1:1-1:1),
 OpenSquare(4:5-4:6),LowerIdent(4:6-4:12),CloseSquare(4:12-4:13),OpFatArrow(4:14-4:16),LowerIdent(4:17-4:23),Newline(1:1-1:1),
 OpenSquare(5:5-5:6),CloseSquare(5:6-5:7),OpFatArrow(5:8-5:10),Int(5:11-5:12),Newline(1:1-1:1),
-CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
+CloseCurly(6:1-6:2),Newline(1:1-1:1),
+MalformedUnknownToken(7:1-7:2),MalformedUnknownToken(7:2-7:3),MalformedUnknownToken(7:3-7:4),EndOfFile(7:4-7:4),
 ~~~
 # PARSE
 ~~~clojure

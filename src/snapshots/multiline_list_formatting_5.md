@@ -8,6 +8,7 @@ type=expr
 [1, 2, # Foo
   3]
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -15,7 +16,8 @@ NIL
 # TOKENS
 ~~~zig
 OpenSquare(1:1-1:2),Int(1:2-1:3),Comma(1:3-1:4),Int(1:5-1:6),Comma(1:6-1:7),Newline(1:9-1:13),
-Int(2:3-2:4),CloseSquare(2:4-2:5),EndOfFile(2:5-2:5),
+Int(2:3-2:4),CloseSquare(2:4-2:5),Newline(1:1-1:1),
+MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
 ~~~
 # PARSE
 ~~~clojure

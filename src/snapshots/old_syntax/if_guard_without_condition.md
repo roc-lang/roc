@@ -12,6 +12,7 @@ when Just 4 is
     _ ->
         2
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -26,7 +27,8 @@ UpperIdent(2:5-2:9),KwIf(2:10-2:12),OpArrow(2:13-2:15),Newline(1:1-1:1),
 Int(3:9-3:10),Newline(1:1-1:1),
 Newline(1:1-1:1),
 Underscore(5:5-5:6),OpArrow(5:7-5:9),Newline(1:1-1:1),
-Int(6:9-6:10),EndOfFile(6:10-6:10),
+Int(6:9-6:10),Newline(1:1-1:1),
+MalformedUnknownToken(7:1-7:2),MalformedUnknownToken(7:2-7:3),MalformedUnknownToken(7:3-7:4),EndOfFile(7:4-7:4),
 ~~~
 # PARSE
 ~~~clojure

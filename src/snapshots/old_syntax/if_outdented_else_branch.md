@@ -10,6 +10,7 @@ if thing then
 else
 something better
 ~~~
+~~~
 # EXPECTED
 PARSE ERROR - if_outdented_else_branch.md:2:5:2:5
 # PROBLEMS
@@ -30,7 +31,8 @@ Here is the problematic code:
 KwIf(1:1-1:3),LowerIdent(1:4-1:9),LowerIdent(1:10-1:14),Newline(1:1-1:1),
 LowerIdent(2:5-2:13),Newline(1:1-1:1),
 KwElse(3:1-3:5),Newline(1:1-1:1),
-LowerIdent(4:1-4:10),LowerIdent(4:11-4:17),EndOfFile(4:17-4:17),
+LowerIdent(4:1-4:10),LowerIdent(4:11-4:17),Newline(1:1-1:1),
+MalformedUnknownToken(5:1-5:2),MalformedUnknownToken(5:2-5:3),MalformedUnknownToken(5:3-5:4),EndOfFile(5:4-5:4),
 ~~~
 # PARSE
 ~~~clojure

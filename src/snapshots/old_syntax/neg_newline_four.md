@@ -8,6 +8,7 @@ type=expr
 -(
 4)
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - neg_newline_four.md:1:1:1:3
 # PROBLEMS
@@ -26,7 +27,8 @@ Here is the problematic code:
 # TOKENS
 ~~~zig
 OpUnaryMinus(1:1-1:2),NoSpaceOpenRound(1:2-1:3),Newline(1:1-1:1),
-Int(2:1-2:2),CloseRound(2:2-2:3),EndOfFile(2:3-2:3),
+Int(2:1-2:2),CloseRound(2:2-2:3),Newline(1:1-1:1),
+MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
 ~~~
 # PARSE
 ~~~clojure

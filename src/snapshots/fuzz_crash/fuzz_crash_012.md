@@ -7,11 +7,12 @@ type=file
 ~~~roc
 ||(|(l888888888|
 ~~~
+~~~
 # EXPECTED
 MISSING HEADER - fuzz_crash_012.md:1:1:1:3
 UNEXPECTED TOKEN IN PATTERN - fuzz_crash_012.md:1:4:1:6
 UNEXPECTED TOKEN IN PATTERN - fuzz_crash_012.md:1:3:1:5
-PARSE ERROR - fuzz_crash_012.md:1:17:1:17
+PARSE ERROR - fuzz_crash_012.md:2:4:2:4
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.
@@ -58,11 +59,11 @@ A parsing error occurred: `expected_expr_bar`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**fuzz_crash_012.md:1:17:1:17:**
+**fuzz_crash_012.md:2:4:2:4:**
 ```roc
-||(|(l888888888|
+~~~
 ```
-                
+   
 
 
 **INVALID STATEMENT**
@@ -71,14 +72,15 @@ Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
 ~~~zig
-OpBar(1:1-1:2),OpBar(1:2-1:3),NoSpaceOpenRound(1:3-1:4),OpBar(1:4-1:5),NoSpaceOpenRound(1:5-1:6),LowerIdent(1:6-1:16),OpBar(1:16-1:17),EndOfFile(1:17-1:17),
+OpBar(1:1-1:2),OpBar(1:2-1:3),NoSpaceOpenRound(1:3-1:4),OpBar(1:4-1:5),NoSpaceOpenRound(1:5-1:6),LowerIdent(1:6-1:16),OpBar(1:16-1:17),Newline(1:1-1:1),
+MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.17
+(file @1.1-2.4
 	(malformed-header @1.1-1.3 (tag "missing_header"))
 	(statements
-		(e-malformed @1.17-1.17 (reason "expected_expr_bar"))))
+		(e-malformed @2.4-2.4 (reason "expected_expr_bar"))))
 ~~~
 # FORMATTED
 ~~~roc

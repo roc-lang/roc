@@ -9,6 +9,7 @@ when 4 is
     5 -> 2
      _ -> 2
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -20,7 +21,8 @@ Is there an `import` or `exposing` missing up-top?
 ~~~zig
 LowerIdent(1:1-1:5),Int(1:6-1:7),LowerIdent(1:8-1:10),Newline(1:1-1:1),
 Int(2:5-2:6),OpArrow(2:7-2:9),Int(2:10-2:11),Newline(1:1-1:1),
-Underscore(3:6-3:7),OpArrow(3:8-3:10),Int(3:11-3:12),EndOfFile(3:12-3:12),
+Underscore(3:6-3:7),OpArrow(3:8-3:10),Int(3:11-3:12),Newline(1:1-1:1),
+MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
 ~~~
 # PARSE
 ~~~clojure

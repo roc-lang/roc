@@ -11,6 +11,7 @@ if bool {
 	2
 }
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -24,11 +25,12 @@ KwIf(1:1-1:3),LowerIdent(1:4-1:8),OpenCurly(1:9-1:10),Newline(1:1-1:1),
 Int(2:2-2:3),Newline(1:1-1:1),
 CloseCurly(3:1-3:2),KwElse(3:3-3:7),OpenCurly(3:8-3:9),Newline(1:1-1:1),
 Int(4:2-4:3),Newline(1:1-1:1),
-CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
+CloseCurly(5:1-5:2),Newline(1:1-1:1),
+MalformedUnknownToken(6:1-6:2),MalformedUnknownToken(6:2-6:3),MalformedUnknownToken(6:3-6:4),EndOfFile(6:4-6:4),
 ~~~
 # PARSE
 ~~~clojure
-(e-if-then-else @1.1-5.2
+(e-if-then-else @1.1-6.2
 	(e-ident @1.4-1.8 (raw "bool"))
 	(e-block @1.9-3.2
 		(statements
@@ -39,11 +41,15 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+if bool {
+	1
+} else {
+	2
+}
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-if @1.1-5.2
+(e-if @1.1-6.2
 	(if-branches
 		(if-branch
 			(e-runtime-error (tag "ident_not_in_scope"))
@@ -55,5 +61,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-5.2 (type "Num(*)"))
+(expr @1.1-6.2 (type "Num(*)"))
 ~~~

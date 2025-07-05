@@ -10,6 +10,7 @@ type=expr
 ))f:f
 t
 ~~~
+~~~
 # EXPECTED
 TYPE MISMATCH - crazy_annotation_left.md:1:4:1:5
 TYPE MISMATCH - crazy_annotation_left.md:1:1:1:2
@@ -47,7 +48,8 @@ But you are trying to use it as:
 Int(1:1-1:2),NoSpaceOpenRound(1:2-1:3),NoSpaceOpenRound(1:3-1:4),Int(1:4-1:5),NoSpaceOpenRound(1:5-1:6),Newline(1:7-1:7),
 Int(2:1-2:2),CloseRound(2:2-2:3),Newline(1:1-1:1),
 CloseRound(3:1-3:2),CloseRound(3:2-3:3),LowerIdent(3:3-3:4),OpColon(3:4-3:5),LowerIdent(3:5-3:6),Newline(1:1-1:1),
-LowerIdent(4:1-4:2),EndOfFile(4:2-4:2),
+LowerIdent(4:1-4:2),Newline(1:1-1:1),
+MalformedUnknownToken(5:1-5:2),MalformedUnknownToken(5:2-5:3),MalformedUnknownToken(5:3-5:4),EndOfFile(5:4-5:4),
 ~~~
 # PARSE
 ~~~clojure

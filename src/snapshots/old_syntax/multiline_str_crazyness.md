@@ -7,6 +7,7 @@ type=expr
 ~~~roc
 """""""${i""""""}"
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - multiline_str_crazyness.md:1:1:1:4
 # PROBLEMS
@@ -24,7 +25,8 @@ Here is the problematic code:
 
 # TOKENS
 ~~~zig
-MultilineStringStart(1:1-1:4),StringPart(1:4-1:4),MultilineStringEnd(1:4-1:7),StringStart(1:7-1:8),StringPart(1:8-1:8),OpenStringInterpolation(1:8-1:10),LowerIdent(1:10-1:11),MultilineStringStart(1:11-1:14),StringPart(1:14-1:14),MultilineStringEnd(1:14-1:17),CloseStringInterpolation(1:17-1:18),StringPart(1:18-1:18),StringEnd(1:18-1:19),EndOfFile(1:19-1:19),
+MultilineStringStart(1:1-1:4),StringPart(1:4-1:4),MultilineStringEnd(1:4-1:7),StringStart(1:7-1:8),StringPart(1:8-1:8),OpenStringInterpolation(1:8-1:10),LowerIdent(1:10-1:11),MultilineStringStart(1:11-1:14),StringPart(1:14-1:14),MultilineStringEnd(1:14-1:17),CloseStringInterpolation(1:17-1:18),StringPart(1:18-1:18),StringEnd(1:18-1:19),Newline(1:1-1:1),
+MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # PARSE
 ~~~clojure

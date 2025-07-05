@@ -9,6 +9,7 @@ iffy=5
 
 42
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -20,7 +21,8 @@ Is there an `import` or `exposing` missing up-top?
 ~~~zig
 LowerIdent(1:1-1:5),OpAssign(1:5-1:6),Int(1:6-1:7),Newline(1:1-1:1),
 Newline(1:1-1:1),
-Int(3:1-3:3),EndOfFile(3:3-3:3),
+Int(3:1-3:3),Newline(1:1-1:1),
+MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
 ~~~
 # PARSE
 ~~~clojure

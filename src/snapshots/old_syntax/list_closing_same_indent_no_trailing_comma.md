@@ -11,6 +11,7 @@ myList = [
 ]
 42
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -24,7 +25,8 @@ LowerIdent(1:1-1:7),OpAssign(1:8-1:9),OpenSquare(1:10-1:11),Newline(1:1-1:1),
 Int(2:5-2:6),Comma(2:6-2:7),Newline(1:1-1:1),
 Int(3:5-3:6),Newline(1:1-1:1),
 CloseSquare(4:1-4:2),Newline(1:1-1:1),
-Int(5:1-5:3),EndOfFile(5:3-5:3),
+Int(5:1-5:3),Newline(1:1-1:1),
+MalformedUnknownToken(6:1-6:2),MalformedUnknownToken(6:2-6:3),MalformedUnknownToken(6:3-6:4),EndOfFile(6:4-6:4),
 ~~~
 # PARSE
 ~~~clojure

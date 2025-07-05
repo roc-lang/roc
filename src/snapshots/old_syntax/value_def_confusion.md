@@ -10,6 +10,7 @@ F
 :h
 abc
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -22,7 +23,8 @@ Is there an `import` or `exposing` missing up-top?
 LowerIdent(1:1-1:2),OpColon(1:2-1:3),UpperIdent(1:3-1:4),Newline(1:1-1:1),
 UpperIdent(2:1-2:2),Newline(1:1-1:1),
 OpColon(3:1-3:2),LowerIdent(3:2-3:3),Newline(1:1-1:1),
-LowerIdent(4:1-4:4),EndOfFile(4:4-4:4),
+LowerIdent(4:1-4:4),Newline(1:1-1:1),
+MalformedUnknownToken(5:1-5:2),MalformedUnknownToken(5:2-5:3),MalformedUnknownToken(5:3-5:4),EndOfFile(5:4-5:4),
 ~~~
 # PARSE
 ~~~clojure

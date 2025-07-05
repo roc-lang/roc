@@ -18,6 +18,7 @@ staticValueDef =
 
 staticValueDef
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -38,7 +39,8 @@ Newline(1:1-1:1),
 LowerIdent(9:5-9:12),OpPlus(9:13-9:14),Int(9:15-9:16),Newline(1:1-1:1),
 Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(12:1-12:15),EndOfFile(12:15-12:15),
+LowerIdent(12:1-12:15),Newline(1:1-1:1),
+MalformedUnknownToken(13:1-13:2),MalformedUnknownToken(13:2-13:3),MalformedUnknownToken(13:3-13:4),EndOfFile(13:4-13:4),
 ~~~
 # PARSE
 ~~~clojure

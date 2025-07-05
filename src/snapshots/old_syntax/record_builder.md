@@ -8,6 +8,7 @@ type=expr
 { Foo.Bar.baz <- x: 5, y: 0
 }
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:1:15:1:19
 UNEXPECTED TOKEN IN TYPE ANNOTATION - record_builder.md:1:21:1:23
@@ -89,7 +90,8 @@ This type annotation is malformed or contains invalid syntax.
 # TOKENS
 ~~~zig
 OpenCurly(1:1-1:2),UpperIdent(1:3-1:6),NoSpaceDotUpperIdent(1:6-1:10),NoSpaceDotLowerIdent(1:10-1:14),OpBackArrow(1:15-1:17),LowerIdent(1:18-1:19),OpColon(1:19-1:20),Int(1:21-1:22),Comma(1:22-1:23),LowerIdent(1:24-1:25),OpColon(1:25-1:26),Int(1:27-1:28),Newline(1:1-1:1),
-CloseCurly(2:1-2:2),EndOfFile(2:2-2:2),
+CloseCurly(2:1-2:2),Newline(1:1-1:1),
+MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
 ~~~
 # PARSE
 ~~~clojure

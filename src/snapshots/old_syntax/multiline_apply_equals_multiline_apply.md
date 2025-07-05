@@ -12,6 +12,7 @@ MT
  q
 dbgT
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - multiline_apply_equals_multiline_apply.md:1:1:2:3
 # PROBLEMS
@@ -35,7 +36,8 @@ UpperIdent(2:1-2:3),Newline(1:1-1:1),
 LowerIdent(3:2-3:3),Newline(1:1-1:1),
 OpAssign(4:1-4:2),LowerIdent(4:2-4:3),Newline(1:1-1:1),
 LowerIdent(5:2-5:3),Newline(1:1-1:1),
-LowerIdent(6:1-6:5),EndOfFile(6:5-6:5),
+LowerIdent(6:1-6:5),Newline(1:1-1:1),
+MalformedUnknownToken(7:1-7:2),MalformedUnknownToken(7:2-7:3),MalformedUnknownToken(7:3-7:4),EndOfFile(7:4-7:4),
 ~~~
 # PARSE
 ~~~clojure

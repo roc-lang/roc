@@ -13,6 +13,7 @@ type=expr
     launchTheNukes({})
 }
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -28,7 +29,8 @@ LowerIdent(3:5-3:19),OpAssign(3:20-3:21),OpBar(3:22-3:23),OpenCurly(3:23-3:24),C
 KwCrash(4:9-4:14),StringStart(4:15-4:16),StringPart(4:16-4:20),StringEnd(4:20-4:21),Newline(1:1-1:1),
 CloseCurly(5:5-5:6),Newline(1:1-1:1),
 LowerIdent(6:5-6:19),NoSpaceOpenRound(6:19-6:20),OpenCurly(6:20-6:21),CloseCurly(6:21-6:22),CloseRound(6:22-6:23),Newline(1:1-1:1),
-CloseCurly(7:1-7:2),EndOfFile(7:2-7:2),
+CloseCurly(7:1-7:2),Newline(1:1-1:1),
+MalformedUnknownToken(8:1-8:2),MalformedUnknownToken(8:2-8:3),MalformedUnknownToken(8:3-8:4),EndOfFile(8:4-8:4),
 ~~~
 # PARSE
 ~~~clojure

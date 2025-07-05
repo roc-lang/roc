@@ -9,6 +9,7 @@ type=expr
 return e
 t)=t
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - return_in_pat.md:2:1:2:9
 PARSE ERROR - return_in_pat.md:3:2:3:4
@@ -41,7 +42,8 @@ t)=t
 ~~~zig
 OpenRound(1:1-1:2),Newline(1:1-1:1),
 KwReturn(2:1-2:7),LowerIdent(2:8-2:9),Newline(1:1-1:1),
-LowerIdent(3:1-3:2),CloseRound(3:2-3:3),OpAssign(3:3-3:4),LowerIdent(3:4-3:5),EndOfFile(3:5-3:5),
+LowerIdent(3:1-3:2),CloseRound(3:2-3:3),OpAssign(3:3-3:4),LowerIdent(3:4-3:5),Newline(1:1-1:1),
+MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
 ~~~
 # PARSE
 ~~~clojure

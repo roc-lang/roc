@@ -9,6 +9,7 @@ type=expr
 r))
 1))
 ~~~
+~~~
 # EXPECTED
 PARSE ERROR - binop_assign_defs_nested.md:2:2:2:4
 # PROBLEMS
@@ -31,7 +32,8 @@ This tuple element is malformed or contains invalid syntax.
 ~~~zig
 Int(1:1-1:2),OpBinaryMinus(1:2-1:3),NoSpaceOpenRound(1:3-1:4),NoSpaceOpenRound(1:4-1:5),LowerIdent(1:5-1:6),OpAssign(1:6-1:7),NoSpaceOpenRound(1:7-1:8),NoSpaceOpenRound(1:8-1:9),Newline(1:1-1:1),
 LowerIdent(2:1-2:2),CloseRound(2:2-2:3),CloseRound(2:3-2:4),Newline(1:1-1:1),
-Int(3:1-3:2),CloseRound(3:2-3:3),CloseRound(3:3-3:4),EndOfFile(3:4-3:4),
+Int(3:1-3:2),CloseRound(3:2-3:3),CloseRound(3:3-3:4),Newline(1:1-1:1),
+MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
 ~~~
 # PARSE
 ~~~clojure

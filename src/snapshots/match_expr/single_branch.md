@@ -9,6 +9,7 @@ match value {
     x => x + 1
 }
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -20,7 +21,8 @@ Is there an `import` or `exposing` missing up-top?
 ~~~zig
 KwMatch(1:1-1:6),LowerIdent(1:7-1:12),OpenCurly(1:13-1:14),Newline(1:1-1:1),
 LowerIdent(2:5-2:6),OpFatArrow(2:7-2:9),LowerIdent(2:10-2:11),OpPlus(2:12-2:13),Int(2:14-2:15),Newline(1:1-1:1),
-CloseCurly(3:1-3:2),EndOfFile(3:2-3:2),
+CloseCurly(3:1-3:2),Newline(1:1-1:1),
+MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
 ~~~
 # PARSE
 ~~~clojure

@@ -9,6 +9,7 @@ import P{_:h
 }
 t!
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - can_ignored_field_in_import.md:1:1:1:9
 # PROBLEMS
@@ -28,7 +29,8 @@ import P{_:h
 ~~~zig
 KwImport(1:1-1:7),UpperIdent(1:8-1:9),OpenCurly(1:9-1:10),Underscore(1:10-1:11),OpColon(1:11-1:12),LowerIdent(1:12-1:13),Newline(1:1-1:1),
 CloseCurly(2:1-2:2),Newline(1:1-1:1),
-LowerIdent(3:1-3:3),EndOfFile(3:3-3:3),
+LowerIdent(3:1-3:3),Newline(1:1-1:1),
+MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
 ~~~
 # PARSE
 ~~~clojure

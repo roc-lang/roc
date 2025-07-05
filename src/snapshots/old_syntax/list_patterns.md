@@ -15,6 +15,7 @@ when [] is
   [[A], [..], [a]] -> {}
   [[[], []], [[], x]] -> {}
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -32,7 +33,8 @@ OpenSquare(5:3-5:4),LowerIdent(5:4-5:5),Comma(5:5-5:6),LowerIdent(5:7-5:8),Comma
 OpenSquare(6:3-6:4),LowerIdent(6:4-6:5),Comma(6:5-6:6),LowerIdent(6:7-6:8),Comma(6:8-6:9),DoubleDot(6:10-6:12),CloseSquare(6:12-6:13),OpArrow(6:14-6:16),OpenCurly(6:17-6:18),CloseCurly(6:18-6:19),Newline(1:1-1:1),
 OpenSquare(7:3-7:4),DoubleDot(7:4-7:6),Comma(7:6-7:7),LowerIdent(7:8-7:9),Comma(7:9-7:10),LowerIdent(7:11-7:12),CloseSquare(7:12-7:13),OpArrow(7:14-7:16),OpenCurly(7:17-7:18),CloseCurly(7:18-7:19),Newline(1:1-1:1),
 OpenSquare(8:3-8:4),OpenSquare(8:4-8:5),UpperIdent(8:5-8:6),CloseSquare(8:6-8:7),Comma(8:7-8:8),OpenSquare(8:9-8:10),DoubleDot(8:10-8:12),CloseSquare(8:12-8:13),Comma(8:13-8:14),OpenSquare(8:15-8:16),LowerIdent(8:16-8:17),CloseSquare(8:17-8:18),CloseSquare(8:18-8:19),OpArrow(8:20-8:22),OpenCurly(8:23-8:24),CloseCurly(8:24-8:25),Newline(1:1-1:1),
-OpenSquare(9:3-9:4),OpenSquare(9:4-9:5),OpenSquare(9:5-9:6),CloseSquare(9:6-9:7),Comma(9:7-9:8),OpenSquare(9:9-9:10),CloseSquare(9:10-9:11),CloseSquare(9:11-9:12),Comma(9:12-9:13),OpenSquare(9:14-9:15),OpenSquare(9:15-9:16),CloseSquare(9:16-9:17),Comma(9:17-9:18),LowerIdent(9:19-9:20),CloseSquare(9:20-9:21),CloseSquare(9:21-9:22),OpArrow(9:23-9:25),OpenCurly(9:26-9:27),CloseCurly(9:27-9:28),EndOfFile(9:28-9:28),
+OpenSquare(9:3-9:4),OpenSquare(9:4-9:5),OpenSquare(9:5-9:6),CloseSquare(9:6-9:7),Comma(9:7-9:8),OpenSquare(9:9-9:10),CloseSquare(9:10-9:11),CloseSquare(9:11-9:12),Comma(9:12-9:13),OpenSquare(9:14-9:15),OpenSquare(9:15-9:16),CloseSquare(9:16-9:17),Comma(9:17-9:18),LowerIdent(9:19-9:20),CloseSquare(9:20-9:21),CloseSquare(9:21-9:22),OpArrow(9:23-9:25),OpenCurly(9:26-9:27),CloseCurly(9:27-9:28),Newline(1:1-1:1),
+MalformedUnknownToken(10:1-10:2),MalformedUnknownToken(10:2-10:3),MalformedUnknownToken(10:3-10:4),EndOfFile(10:4-10:4),
 ~~~
 # PARSE
 ~~~clojure

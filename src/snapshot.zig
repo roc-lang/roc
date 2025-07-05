@@ -186,15 +186,60 @@ fn getMultiFileSnapshotType(path: []const u8) NodeType {
 fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8) !void {
     log("Processing multi-file snapshot directory: {s}", .{dir_path});
 
-    // First, delete all existing .md files in the directory
     var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| {
         warn("Failed to open directory {s}: {}", .{ dir_path, err });
         return;
     };
     defer dir.close();
 
-    // Delete existing .md files
+    // First, collect EXPECTED sections from existing .md files
+    var expected_sections = std.StringHashMap([]const u8).init(allocator);
+    defer {
+        var iter = expected_sections.iterator();
+        while (iter.next()) |entry| {
+            allocator.free(entry.key_ptr.*);
+            allocator.free(entry.value_ptr.*);
+        }
+        expected_sections.deinit();
+    }
+
     var iterator = dir.iterate();
+    while (try iterator.next()) |entry| {
+        if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".md")) {
+            const full_path = try std.fs.path.join(allocator, &.{ dir_path, entry.name });
+            defer allocator.free(full_path);
+
+            if (std.fs.cwd().readFileAlloc(allocator, full_path, 1024 * 1024)) |content| {
+                defer allocator.free(content);
+
+                // Extract EXPECTED section
+                const expected_header = "# EXPECTED\n";
+                if (std.mem.indexOf(u8, content, expected_header)) |start_idx| {
+                    const content_start = start_idx + expected_header.len;
+
+                    // Find the next section header
+                    var end_idx = content.len;
+                    var search_idx = content_start;
+                    while (search_idx < content.len - 2) {
+                        if (content[search_idx] == '\n' and
+                            content[search_idx + 1] == '#' and
+                            content[search_idx + 2] == ' ')
+                        {
+                            end_idx = search_idx + 1;
+                            break;
+                        }
+                        search_idx += 1;
+                    }
+
+                    const expected_section = std.mem.trim(u8, content[content_start..end_idx], " \t\r\n");
+                    try expected_sections.put(try allocator.dupe(u8, entry.name), try allocator.dupe(u8, expected_section));
+                }
+            } else |_| {}
+        }
+    }
+
+    // Delete existing .md files
+    iterator = dir.iterate();
     var files_to_delete = std.ArrayList([]u8).init(allocator);
     defer {
         for (files_to_delete.items) |file_path| {
@@ -227,7 +272,9 @@ fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8) !void {
 
             // Generate snapshot file name (replace .roc with .md)
             const base_name = entry.name[0 .. entry.name.len - 4]; // remove .roc
-            const snapshot_file_path = try std.fmt.allocPrint(allocator, "{s}/{s}.md", .{ dir_path, base_name });
+            const snapshot_file_name = try std.fmt.allocPrint(allocator, "{s}.md", .{base_name});
+            defer allocator.free(snapshot_file_name);
+            const snapshot_file_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir_path, snapshot_file_name });
             defer allocator.free(snapshot_file_path);
 
             // Read the .roc file content
@@ -250,13 +297,53 @@ fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8) !void {
             };
             defer allocator.free(meta.description);
 
+            // Get preserved EXPECTED section if it exists
+            const expected_content = expected_sections.get(snapshot_file_name);
+
             // Process the .roc file as a snapshot
-            try processRocFileAsSnapshot(allocator, snapshot_file_path, roc_content, meta);
+            try processRocFileAsSnapshotWithExpected(allocator, snapshot_file_path, roc_content, meta, expected_content);
         }
     }
 }
 
 fn processRocFileAsSnapshot(allocator: Allocator, output_path: []const u8, roc_content: []const u8, meta: Meta) !void {
+    // Try to read existing EXPECTED section if the file exists
+    var expected_content: ?[]const u8 = null;
+    defer if (expected_content) |content| allocator.free(content);
+
+    if (std.fs.cwd().readFileAlloc(allocator, output_path, 1024 * 1024)) |existing_content| {
+        defer allocator.free(existing_content);
+
+        // Extract EXPECTED section manually since extractSections is defined later
+        const expected_header = "# EXPECTED\n";
+        if (std.mem.indexOf(u8, existing_content, expected_header)) |start_idx| {
+            const content_start = start_idx + expected_header.len;
+
+            // Find the next section header
+            var end_idx = existing_content.len;
+            var search_idx = content_start;
+            while (search_idx < existing_content.len - 2) {
+                if (existing_content[search_idx] == '\n' and
+                    existing_content[search_idx + 1] == '#' and
+                    existing_content[search_idx + 2] == ' ')
+                {
+                    end_idx = search_idx + 1;
+                    break;
+                }
+                search_idx += 1;
+            }
+
+            const expected_section = std.mem.trim(u8, existing_content[content_start..end_idx], " \t\r\n");
+            expected_content = try allocator.dupe(u8, expected_section);
+        }
+    } else |_| {
+        // File doesn't exist yet, that's fine
+    }
+
+    try processRocFileAsSnapshotWithExpected(allocator, output_path, roc_content, meta, expected_content);
+}
+
+fn processRocFileAsSnapshotWithExpected(allocator: Allocator, output_path: []const u8, roc_content: []const u8, meta: Meta, expected_content: ?[]const u8) !void {
     log("Generating snapshot for: {s}", .{output_path});
 
     // Process the content through the compilation pipeline
@@ -299,7 +386,7 @@ fn processRocFileAsSnapshot(allocator: Allocator, output_path: []const u8, roc_c
     const content = Content{
         .meta = meta,
         .source = roc_content,
-        .expected = null,
+        .expected = expected_content,
         .formatted = null,
         .has_canonicalize = true,
     };
@@ -319,6 +406,7 @@ fn processRocFileAsSnapshot(allocator: Allocator, output_path: []const u8, roc_c
     // Generate all sections
     try generateMetaSection(&output, &content);
     try generateSourceSection(&output, &content);
+    try generateExpectedSection(&output, &content);
     try generateProblemsSection(&output, &ast, &can_ir, &solver, &content, output_path, &module_env);
     try generateTokensSection(&output, &ast, &content, &module_env);
     try generateParseSection(&output, &content, &ast, &module_env);
@@ -747,7 +835,9 @@ fn generateSourceSection(output: *DualOutput, content: *const Content) !void {
     try output.begin_section("SOURCE");
     try output.begin_code_block("roc");
     try output.md_writer.writeAll(content.source);
-    try output.md_writer.writeAll("\n");
+    if (content.source.len == 0 or content.source[content.source.len - 1] != '\n') {
+        try output.md_writer.writeAll("\n");
+    }
 
     // HTML SOURCE section - encode source as JavaScript string
     try output.html_writer.writeAll(
@@ -1511,41 +1601,65 @@ fn extractSections(gpa: Allocator, content: []const u8) !Content {
     var ranges = std.AutoHashMap(Section, Section.Range).init(gpa);
     defer ranges.deinit();
 
-    // Ensure content ends with newline for consistent parsing
-    const normalized_content = if (content.len > 0 and content[content.len - 1] != '\n') blk: {
-        const normalized = try gpa.alloc(u8, content.len + 1);
-        @memcpy(normalized[0..content.len], content);
-        normalized[content.len] = '\n';
-        break :blk normalized;
-    } else content;
+    // Find all section headers and their positions
+    var idx: usize = 0;
+    while (idx < content.len) {
+        // Look for section headers
+        if (idx == 0 or (idx > 0 and content[idx - 1] == '\n')) {
+            if (Section.fromString(content[idx..])) |section| {
+                // Only process META, SOURCE, and EXPECTED sections
+                if (section == .meta or section == .source or section == .expected) {
+                    const header_len = section.asString().len;
+                    const start = idx + header_len;
 
-    defer if (normalized_content.ptr != content.ptr) gpa.free(normalized_content);
+                    // Find the end of this section
+                    var end = content.len;
 
-    var processed_chars: usize = 0;
+                    // For sections with ~~~ delimiters (META and SOURCE)
+                    if (section == .meta or section == .source) {
+                        // Find the closing ~~~
+                        var search_idx = start;
+                        while (search_idx < content.len - 3) {
+                            if (content[search_idx] == '~' and
+                                content[search_idx + 1] == '~' and
+                                content[search_idx + 2] == '~')
+                            {
+                                // Find end of line after ~~~
+                                end = search_idx + 3;
+                                while (end < content.len and content[end] != '\n') {
+                                    end += 1;
+                                }
+                                break;
+                            }
+                            search_idx += 1;
+                        }
+                    } else {
+                        // For sections without ~~~ delimiters (EXPECTED)
+                        // Find the next section header
+                        var search_idx = start;
+                        while (search_idx < content.len) {
+                            if (search_idx == 0 or (search_idx > 0 and content[search_idx - 1] == '\n')) {
+                                if (content[search_idx] == '#' and
+                                    search_idx + 1 < content.len and
+                                    content[search_idx + 1] == ' ')
+                                {
+                                    end = search_idx;
+                                    break;
+                                }
+                            }
+                            search_idx += 1;
+                        }
+                    }
 
-    var sections_with_header = std.mem.splitSequence(u8, normalized_content, Section.SECTION_END);
+                    try ranges.put(section, .{ .start = start, .end = end });
 
-    while (sections_with_header.next()) |section_with_header| {
-        const trimmed_section = std.mem.trimLeft(u8, section_with_header, "\n\r \t");
-        if (Section.fromString(trimmed_section)) |section| {
-            // Only process META and SOURCE sections - ignore everything else
-            if (section == .meta or section == .source) {
-                const start = processed_chars + section.asString().len;
-                // Ensure we don't exceed original content length
-                const end = @min(processed_chars + section_with_header.len, content.len);
-                try ranges.put(section, .{ .start = start, .end = end });
+                    // Skip to the end of this section
+                    idx = end;
+                    continue;
+                }
             }
-
-            processed_chars += section_with_header.len + Section.SECTION_END.len;
-
-            // If we have both META and SOURCE, we can stop parsing to avoid merge conflicts
-            if (ranges.contains(.meta) and ranges.contains(.source)) {
-                break;
-            }
-        } else {
-            // Ignore invalid sections (like merge conflicts) instead of returning error
-            processed_chars += section_with_header.len + Section.SECTION_END.len;
         }
+        idx += 1;
     }
 
     return try Content.from_ranges(ranges, content);

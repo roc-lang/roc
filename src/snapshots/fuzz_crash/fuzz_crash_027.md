@@ -165,6 +165,7 @@ expect {
 	blah == foo
 }
 ~~~
+~~~
 # EXPECTED
 OVER CLOSED BRACE - fuzz_crash_027.md:34:12:35:2
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:35:1:35:1
@@ -331,6 +332,42 @@ Here is the problematic code:
 } # Commenl decl
 ```
 ^^^^^^^^^^^^^^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**fuzz_crash_027.md:160:1:160:3:**
+```roc
+~~~
+```
+^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**fuzz_crash_027.md:160:2:160:4:**
+```roc
+~~~
+```
+ ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**fuzz_crash_027.md:160:3:160:4:**
+```roc
+~~~
+```
+  ^
 
 
 **UNDECLARED TYPE**
@@ -919,11 +956,12 @@ KwExpect(155:1-155:7),OpenCurly(155:8-155:9),Newline(1:1-1:1),
 LowerIdent(156:2-156:5),OpAssign(156:6-156:7),Int(156:8-156:9),Newline(156:11-156:16),
 LowerIdent(157:2-157:6),OpAssign(157:7-157:8),Int(157:9-157:10),Newline(1:1-1:1),
 LowerIdent(158:2-158:6),OpEquals(158:7-158:9),LowerIdent(158:10-158:13),Newline(1:1-1:1),
-CloseCurly(159:1-159:2),EndOfFile(159:2-159:2),
+CloseCurly(159:1-159:2),Newline(1:1-1:1),
+MalformedUnknownToken(160:1-160:2),MalformedUnknownToken(160:2-160:3),MalformedUnknownToken(160:3-160:4),EndOfFile(160:4-160:4),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.2-159.2
+(file @1.2-160.4
 	(app @2.1-2.33
 		(provides @2.6-2.12
 			(exposed-lower-ident (text "main!")))
@@ -1181,12 +1219,12 @@ CloseCurly(159:1-159:2),EndOfFile(159:2-159:2),
 					(ty @99.25-99.31 (name "Result"))
 					(ty-record @99.32-99.34)
 					(_))))
-		(s-decl @100.1-159.2
+		(s-decl @100.1-160.4
 			(p-ident @100.1-100.6 (raw "main!"))
-			(e-lambda @100.9-159.2
+			(e-lambda @100.9-160.4
 				(args
 					(p-underscore))
-				(e-block @100.13-159.2
+				(e-block @100.13-160.4
 					(statements
 						(s-decl @101.2-101.17
 							(p-ident @101.2-101.7 (raw "world"))
@@ -1367,7 +1405,7 @@ CloseCurly(159:1-159:2),EndOfFile(159:2-159:2),
 									(ty-var @153.16-153.17 (raw "a"))
 									(ty-var @153.19-153.20 (raw "b"))
 									(ty-var @153.22-153.23 (raw "c")))))
-						(s-expect @155.1-159.2
+						(s-expect @155.1-160.2
 							(e-block @155.8-159.2
 								(statements
 									(s-decl @156.2-156.9
@@ -1378,7 +1416,10 @@ CloseCurly(159:1-159:2),EndOfFile(159:2-159:2),
 										(e-int @157.9-157.10 (raw "1")))
 									(e-binop @158.2-159.2 (op "==")
 										(e-ident @158.2-158.6 (raw "blah"))
-										(e-ident @158.10-158.13 (raw "foo"))))))))))))
+										(e-ident @158.10-158.13 (raw "foo"))))))
+						(e-malformed @160.1-160.3 (reason "expr_unexpected_token"))
+						(e-malformed @160.2-160.4 (reason "expr_unexpected_token"))
+						(e-malformed @160.3-160.4 (reason "expr_unexpected_token"))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -1540,6 +1581,9 @@ main! = |_| { # Yeah Ie
 		blah = 1
 		blah == foo
 	}
+	
+	
+	
 }
 ~~~
 # CANONICALIZE
@@ -1706,10 +1750,10 @@ main! = |_| { # Yeah Ie
 								(e-int @93.14-93.20 (value "121000")))))))))
 	(d-let
 		(p-assign @100.1-100.6 (ident "main!"))
-		(e-lambda @100.9-159.2
+		(e-lambda @100.9-160.4
 			(args
 				(p-underscore @100.10-100.11))
-			(e-block @100.13-159.2
+			(e-block @100.13-160.4
 				(s-let @101.2-101.17
 					(p-assign @101.2-101.7 (ident "world"))
 					(e-string @101.10-101.17
@@ -1872,7 +1916,7 @@ main! = |_| { # Yeah Ie
 							(ty-var @153.16-153.17 (name "a"))
 							(ty-var @153.19-153.20 (name "b"))
 							(ty-var @153.22-153.23 (name "c")))))
-				(e-runtime-error (tag "not_implemented"))))
+				(e-empty_record @100.13-160.4)))
 		(annotation @100.1-100.6
 			(declared-type
 				(ty-fn @99.9-99.38 (effectful false)
@@ -1973,5 +2017,5 @@ main! = |_| { # Yeah Ie
 		(expr @45.7-47.8 (type "[False, True] -> Num(*)"))
 		(expr @48.11-58.2 (type "Error -> U64"))
 		(expr @60.14-94.3 (type "Error"))
-		(expr @100.9-159.2 (type "Error -> Error"))))
+		(expr @100.9-160.4 (type "Error -> Error"))))
 ~~~

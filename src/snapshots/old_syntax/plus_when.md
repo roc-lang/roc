@@ -10,6 +10,7 @@ type=expr
         Foo -> 2
         Bar -> 3
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -22,7 +23,8 @@ Is there an `import` or `exposing` missing up-top?
 Int(1:1-1:2),OpPlus(1:3-1:4),Newline(1:1-1:1),
 LowerIdent(2:5-2:9),UpperIdent(2:10-2:13),LowerIdent(2:14-2:16),Newline(1:1-1:1),
 UpperIdent(3:9-3:12),OpArrow(3:13-3:15),Int(3:16-3:17),Newline(1:1-1:1),
-UpperIdent(4:9-4:12),OpArrow(4:13-4:15),Int(4:16-4:17),EndOfFile(4:17-4:17),
+UpperIdent(4:9-4:12),OpArrow(4:13-4:15),Int(4:16-4:17),Newline(1:1-1:1),
+MalformedUnknownToken(5:1-5:2),MalformedUnknownToken(5:2-5:3),MalformedUnknownToken(5:3-5:4),EndOfFile(5:4-5:4),
 ~~~
 # PARSE
 ~~~clojure

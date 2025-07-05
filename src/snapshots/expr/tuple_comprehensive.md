@@ -25,6 +25,7 @@ type=expr
 	empty
 }
 ~~~
+~~~
 # EXPECTED
 EMPTY TUPLE NOT ALLOWED - tuple_comprehensive.md:9:10:9:12
 UNUSED VARIABLE - tuple_comprehensive.md:16:2:16:13
@@ -149,7 +150,8 @@ LowerIdent(15:2-15:11),OpAssign(15:12-15:13),OpenRound(15:14-15:15),LowerIdent(1
 LowerIdent(16:2-16:13),OpAssign(16:14-16:15),OpenRound(16:16-16:17),OpBar(16:17-16:18),LowerIdent(16:18-16:19),OpBar(16:19-16:20),LowerIdent(16:21-16:22),OpPlus(16:23-16:24),Int(16:25-16:26),Comma(16:26-16:27),Int(16:28-16:30),CloseRound(16:30-16:31),Newline(1:1-1:1),
 Newline(1:1-1:1),
 LowerIdent(18:2-18:7),Newline(1:1-1:1),
-CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
+CloseCurly(19:1-19:2),Newline(1:1-1:1),
+MalformedUnknownToken(20:1-20:2),MalformedUnknownToken(20:2-20:3),MalformedUnknownToken(20:3-20:4),EndOfFile(20:4-20:4),
 ~~~
 # PARSE
 ~~~clojure

@@ -8,6 +8,7 @@ type=expr
 1"""""""^"2:A
 ""
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -15,7 +16,8 @@ NIL
 # TOKENS
 ~~~zig
 Int(1:1-1:2),MultilineStringStart(1:2-1:5),StringPart(1:5-1:5),MultilineStringEnd(1:5-1:8),StringStart(1:8-1:9),StringPart(1:9-1:10),StringEnd(1:10-1:11),Int(1:11-1:12),OpColon(1:12-1:13),UpperIdent(1:13-1:14),Newline(1:1-1:1),
-StringStart(2:1-2:2),StringPart(2:2-2:2),StringEnd(2:2-2:3),EndOfFile(2:3-2:3),
+StringStart(2:1-2:2),StringPart(2:2-2:2),StringEnd(2:2-2:3),Newline(1:1-1:1),
+MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
 ~~~
 # PARSE
 ~~~clojure

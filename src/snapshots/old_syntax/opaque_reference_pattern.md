@@ -8,6 +8,7 @@ type=expr
 when n is
   @Age -> 1
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -18,7 +19,8 @@ Is there an `import` or `exposing` missing up-top?
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:5),LowerIdent(1:6-1:7),LowerIdent(1:8-1:10),Newline(1:1-1:1),
-OpaqueName(2:3-2:7),OpArrow(2:8-2:10),Int(2:11-2:12),EndOfFile(2:12-2:12),
+OpaqueName(2:3-2:7),OpArrow(2:8-2:10),Int(2:11-2:12),Newline(1:1-1:1),
+MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
 ~~~
 # PARSE
 ~~~clojure

@@ -10,6 +10,7 @@ return n
 )#
 )
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - return_then_nested_parens.md:1:1:1:9
 # PROBLEMS
@@ -30,7 +31,8 @@ return n
 KwReturn(1:1-1:7),LowerIdent(1:8-1:9),Newline(1:1-1:1),
 OpenRound(2:1-2:2),NoSpaceOpenRound(2:2-2:3),Int(2:3-2:4),Newline(1:1-1:1),
 CloseRound(3:1-3:2),Newline(3:3-3:3),
-CloseRound(4:1-4:2),EndOfFile(4:2-4:2),
+CloseRound(4:1-4:2),Newline(1:1-1:1),
+MalformedUnknownToken(5:1-5:2),MalformedUnknownToken(5:2-5:3),MalformedUnknownToken(5:3-5:4),EndOfFile(5:4-5:4),
 ~~~
 # PARSE
 ~~~clojure

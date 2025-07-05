@@ -11,8 +11,9 @@ type=expr
     100
 ]
 ~~~
+~~~
 # EXPECTED
-NIL
+INCOMPATIBLE LIST ELEMENTS - can_list_multiline_mismatch.md:2:5:2:5
 # PROBLEMS
 **INCOMPATIBLE LIST ELEMENTS**
 The first two elements in this list have incompatible types:
@@ -41,7 +42,8 @@ OpenSquare(1:1-1:2),Newline(1:1-1:1),
 Int(2:5-2:7),Comma(2:7-2:8),Newline(1:1-1:1),
 StringStart(3:5-3:6),StringPart(3:6-3:17),StringEnd(3:17-3:18),Comma(3:18-3:19),Newline(1:1-1:1),
 Int(4:5-4:8),Newline(1:1-1:1),
-CloseSquare(5:1-5:2),EndOfFile(5:2-5:2),
+CloseSquare(5:1-5:2),Newline(1:1-1:1),
+MalformedUnknownToken(6:1-6:2),MalformedUnknownToken(6:2-6:3),MalformedUnknownToken(6:3-6:4),EndOfFile(6:4-6:4),
 ~~~
 # PARSE
 ~~~clojure

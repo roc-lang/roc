@@ -11,6 +11,7 @@ combine(mix(vodka, gin), Juices({
     amount: 1 + 2
 }))
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -44,7 +45,8 @@ LowerIdent(1:1-1:8),NoSpaceOpenRound(1:8-1:9),LowerIdent(1:9-1:12),NoSpaceOpenRo
 LowerIdent(2:5-2:10),OpColon(2:10-2:11),UpperIdent(2:12-2:18),NoSpaceDotLowerIdent(2:18-2:25),Comma(2:25-2:26),Newline(1:1-1:1),
 LowerIdent(3:5-3:11),OpColon(3:11-3:12),UpperIdent(3:13-3:20),NoSpaceDotLowerIdent(3:20-3:27),Comma(3:27-3:28),Newline(1:1-1:1),
 LowerIdent(4:5-4:11),OpColon(4:11-4:12),Int(4:13-4:14),OpPlus(4:15-4:16),Int(4:17-4:18),Newline(1:1-1:1),
-CloseCurly(5:1-5:2),CloseRound(5:2-5:3),CloseRound(5:3-5:4),EndOfFile(5:4-5:4),
+CloseCurly(5:1-5:2),CloseRound(5:2-5:3),CloseRound(5:3-5:4),Newline(1:1-1:1),
+MalformedUnknownToken(6:1-6:2),MalformedUnknownToken(6:2-6:3),MalformedUnknownToken(6:3-6:4),EndOfFile(6:4-6:4),
 ~~~
 # PARSE
 ~~~clojure

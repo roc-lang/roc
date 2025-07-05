@@ -11,6 +11,7 @@ y = 6
 
 42
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - two_spaced_def.md:1:2:2:2
 # PROBLEMS
@@ -33,7 +34,8 @@ Newline(1:2-1:18),
 LowerIdent(2:1-2:2),OpAssign(2:3-2:4),Int(2:5-2:6),Newline(1:1-1:1),
 LowerIdent(3:1-3:2),OpAssign(3:3-3:4),Int(3:5-3:6),Newline(1:1-1:1),
 Newline(1:1-1:1),
-Int(5:1-5:3),EndOfFile(5:3-5:3),
+Int(5:1-5:3),Newline(1:1-1:1),
+MalformedUnknownToken(6:1-6:2),MalformedUnknownToken(6:2-6:3),MalformedUnknownToken(6:3-6:4),EndOfFile(6:4-6:4),
 ~~~
 # PARSE
 ~~~clojure

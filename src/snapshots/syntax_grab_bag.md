@@ -213,6 +213,7 @@ expect {
 	blah == foo
 }
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - syntax_grab_bag.md:89:9:90:4
 UNEXPECTED TOKEN IN PATTERN - syntax_grab_bag.md:90:3:90:28
@@ -472,6 +473,42 @@ Here is the problematic code:
 			=> {
 ```
    ^^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**syntax_grab_bag.md:208:1:208:3:**
+```roc
+~~~
+```
+^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**syntax_grab_bag.md:208:2:208:4:**
+```roc
+~~~
+```
+ ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**syntax_grab_bag.md:208:3:208:4:**
+```roc
+~~~
+```
+  ^
 
 
 **UNDECLARED TYPE**
@@ -911,6 +948,18 @@ tuple : Value((a, b, c))
 This feature is not yet implemented or doesn't have a proper error report yet: top-level expect
 Let us know if you want to help!
 
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
 **syntax_grab_bag.md:68:1:68:8:**
@@ -1170,11 +1219,12 @@ KwExpect(203:1-203:7),OpenCurly(203:8-203:9),Newline(1:1-1:1),
 LowerIdent(204:2-204:5),OpAssign(204:6-204:7),Int(204:8-204:9),Newline(204:11-204:32),
 LowerIdent(205:2-205:6),OpAssign(205:7-205:8),Int(205:9-205:10),Newline(1:1-1:1),
 LowerIdent(206:2-206:6),OpEquals(206:7-206:9),LowerIdent(206:10-206:13),Newline(1:1-1:1),
-CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
+CloseCurly(207:1-207:2),Newline(1:1-1:1),
+MalformedUnknownToken(208:1-208:2),MalformedUnknownToken(208:2-208:3),MalformedUnknownToken(208:3-208:4),EndOfFile(208:4-208:4),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.2-207.2
+(file @1.2-208.4
 	(app @2.1-2.57
 		(provides @2.6-2.12
 			(exposed-lower-ident (text "main!")))
@@ -1698,7 +1748,7 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 					(ty-var @201.16-201.17 (raw "a"))
 					(ty-var @201.19-201.20 (raw "b"))
 					(ty-var @201.22-201.23 (raw "c")))))
-		(s-expect @203.1-207.2
+		(s-expect @203.1-208.2
 			(e-block @203.8-207.2
 				(statements
 					(s-decl @204.2-204.9
@@ -1709,7 +1759,10 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 						(e-int @205.9-205.10 (raw "1")))
 					(e-binop @206.2-207.2 (op "==")
 						(e-ident @206.2-206.6 (raw "blah"))
-						(e-ident @206.10-206.13 (raw "foo"))))))))
+						(e-ident @206.10-206.13 (raw "foo"))))))
+		(e-malformed @208.1-208.3 (reason "expr_unexpected_token"))
+		(e-malformed @208.2-208.4 (reason "expr_unexpected_token"))
+		(e-malformed @208.3-208.4 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -1922,6 +1975,7 @@ expect {
 	blah = 1
 	blah == foo
 }
+
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -8,6 +8,7 @@ type=expr
 return-r
 1
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - return_minus_one.md:1:1:1:8
 # PROBLEMS
@@ -26,7 +27,8 @@ return-r
 # TOKENS
 ~~~zig
 KwReturn(1:1-1:7),OpBinaryMinus(1:7-1:8),LowerIdent(1:8-1:9),Newline(1:1-1:1),
-Int(2:1-2:2),EndOfFile(2:2-2:2),
+Int(2:1-2:2),Newline(1:1-1:1),
+MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
 ~~~
 # PARSE
 ~~~clojure

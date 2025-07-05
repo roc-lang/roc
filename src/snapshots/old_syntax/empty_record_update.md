@@ -7,6 +7,7 @@ type=expr
 ~~~roc
 {e&}
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - empty_record_update.md:1:3:1:5
 # PROBLEMS
@@ -28,7 +29,8 @@ Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
-OpenCurly(1:1-1:2),LowerIdent(1:2-1:3),OpAmpersand(1:3-1:4),CloseCurly(1:4-1:5),EndOfFile(1:5-1:5),
+OpenCurly(1:1-1:2),LowerIdent(1:2-1:3),OpAmpersand(1:3-1:4),CloseCurly(1:4-1:5),Newline(1:1-1:1),
+MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # PARSE
 ~~~clojure

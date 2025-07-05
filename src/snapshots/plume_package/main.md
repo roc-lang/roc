@@ -5,13 +5,12 @@ type=package
 ~~~
 # SOURCE
 ~~~roc
-# EXPECTED
-NIL
 package [
     Color,
 ] {}
-
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

@@ -11,6 +11,7 @@ dbg
 g
  qt
 ~~~
+~~~
 # EXPECTED
 PARSE ERROR - dbg_stmt_two_exprs.md:3:7:3:7
 # PROBLEMS
@@ -36,7 +37,8 @@ KwDbg(1:1-1:4),Newline(1:1-1:1),
 OpenRound(2:2-2:3),LowerIdent(2:3-2:4),Newline(1:1-1:1),
 LowerIdent(3:5-3:7),CloseRound(3:7-3:8),Newline(1:1-1:1),
 LowerIdent(4:1-4:2),Newline(1:1-1:1),
-LowerIdent(5:2-5:4),EndOfFile(5:4-5:4),
+LowerIdent(5:2-5:4),Newline(1:1-1:1),
+MalformedUnknownToken(6:1-6:2),MalformedUnknownToken(6:2-6:3),MalformedUnknownToken(6:3-6:4),EndOfFile(6:4-6:4),
 ~~~
 # PARSE
 ~~~clojure

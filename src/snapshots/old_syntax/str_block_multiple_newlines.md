@@ -10,6 +10,7 @@ type=expr
 
 #"""#
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - str_block_multiple_newlines.md:1:1:1:4
 # PROBLEMS
@@ -30,7 +31,8 @@ Here is the problematic code:
 MultilineStringStart(1:1-1:4),StringPart(1:4-1:4),Newline(1:1-1:1),
 Newline(1:1-1:1),
 Newline(1:1-1:1),
-EndOfFile(4:6-4:6),
+Newline(4:2-4:6),
+MalformedUnknownToken(5:1-5:2),MalformedUnknownToken(5:2-5:3),MalformedUnknownToken(5:3-5:4),EndOfFile(5:4-5:4),
 ~~~
 # PARSE
 ~~~clojure

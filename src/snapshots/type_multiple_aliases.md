@@ -23,9 +23,61 @@ main! = |_| {
 	get_user_name(user)
 }
 ~~~
+~~~
 # EXPECTED
-TYPE MISMATCH - type_multiple_aliases.md:16:16:16:20
+UNEXPECTED TOKEN IN EXPRESSION - type_multiple_aliases.md:18:1:18:3
+UNEXPECTED TOKEN IN EXPRESSION - type_multiple_aliases.md:18:2:18:4
+UNEXPECTED TOKEN IN EXPRESSION - type_multiple_aliases.md:18:3:18:4
+INVALID STATEMENT - type_multiple_aliases.md:16:16:16:20
 # PROBLEMS
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**type_multiple_aliases.md:18:1:18:3:**
+```roc
+~~~
+```
+^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**type_multiple_aliases.md:18:2:18:4:**
+```roc
+~~~
+```
+ ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**type_multiple_aliases.md:18:3:18:4:**
+```roc
+~~~
+```
+  ^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
 **type_multiple_aliases.md:16:16:16:20:**
@@ -58,11 +110,12 @@ Newline(1:1-1:1),
 LowerIdent(14:1-14:6),OpAssign(14:7-14:8),OpBar(14:9-14:10),Underscore(14:10-14:11),OpBar(14:11-14:12),OpenCurly(14:13-14:14),Newline(1:1-1:1),
 LowerIdent(15:2-15:6),OpAssign(15:7-15:8),LowerIdent(15:9-15:20),NoSpaceOpenRound(15:20-15:21),Int(15:21-15:24),Comma(15:24-15:25),StringStart(15:26-15:27),StringPart(15:27-15:32),StringEnd(15:32-15:33),Comma(15:33-15:34),Int(15:35-15:37),CloseRound(15:37-15:38),Newline(1:1-1:1),
 LowerIdent(16:2-16:15),NoSpaceOpenRound(16:15-16:16),LowerIdent(16:16-16:20),CloseRound(16:20-16:21),Newline(1:1-1:1),
-CloseCurly(17:1-17:2),EndOfFile(17:2-17:2),
+CloseCurly(17:1-17:2),Newline(1:1-1:1),
+MalformedUnknownToken(18:1-18:2),MalformedUnknownToken(18:2-18:3),MalformedUnknownToken(18:3-18:4),EndOfFile(18:4-18:4),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-17.2
+(file @1.1-18.4
 	(app @1.1-1.57
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
@@ -142,11 +195,31 @@ CloseCurly(17:1-17:2),EndOfFile(17:2-17:2),
 								(e-int @15.35-15.37 (raw "25"))))
 						(e-apply @16.2-16.21
 							(e-ident @16.2-16.15 (raw "get_user_name"))
-							(e-ident @16.16-16.20 (raw "user")))))))))
+							(e-ident @16.16-16.20 (raw "user")))))))
+		(e-malformed @18.1-18.3 (reason "expr_unexpected_token"))
+		(e-malformed @18.2-18.4 (reason "expr_unexpected_token"))
+		(e-malformed @18.3-18.4 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+app [main!] { pf: platform "../basic-cli/platform.roc" }
+
+UserId : U64
+UserName : Str
+UserAge : U8
+User : { id : UserId, name : UserName, age : UserAge }
+
+create_user : UserId, UserName, UserAge -> User
+create_user = |id, name, age| {id, name, age}
+
+get_user_name : User -> UserName
+get_user_name = |user| user.name
+
+main! = |_| {
+	user = create_user(123, "Alice", 25)
+	get_user_name(user)
+}
+
 ~~~
 # CANONICALIZE
 ~~~clojure

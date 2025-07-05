@@ -16,10 +16,60 @@ testFunc = |input| {
 	sum + sum_ # Both should be accessible
 }
 ~~~
+~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - can_var_scoping_var_idents.md:11:1:11:3
+UNEXPECTED TOKEN IN EXPRESSION - can_var_scoping_var_idents.md:11:2:11:4
+UNEXPECTED TOKEN IN EXPRESSION - can_var_scoping_var_idents.md:11:3:11:4
 # PROBLEMS
-NIL
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**can_var_scoping_var_idents.md:11:1:11:3:**
+```roc
+~~~
+```
+^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**can_var_scoping_var_idents.md:11:2:11:4:**
+```roc
+~~~
+```
+ ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**can_var_scoping_var_idents.md:11:3:11:4:**
+```roc
+~~~
+```
+  ^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),
@@ -31,11 +81,12 @@ KwVar(6:2-6:5),LowerIdent(6:6-6:10),OpAssign(6:11-6:12),LowerIdent(6:13-6:18),Op
 Newline(1:1-1:1),
 LowerIdent(8:2-8:6),OpAssign(8:7-8:8),LowerIdent(8:9-8:13),OpPlus(8:14-8:15),LowerIdent(8:16-8:19),Newline(8:21-8:48),
 LowerIdent(9:2-9:5),OpPlus(9:6-9:7),LowerIdent(9:8-9:12),Newline(9:14-9:40),
-CloseCurly(10:1-10:2),EndOfFile(10:2-10:2),
+CloseCurly(10:1-10:2),Newline(1:1-1:1),
+MalformedUnknownToken(11:1-11:2),MalformedUnknownToken(11:2-11:3),MalformedUnknownToken(11:3-11:4),EndOfFile(11:4-11:4),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-10.2
+(file @1.1-11.4
 	(module @1.1-1.10
 		(exposes @1.8-1.10))
 	(statements
@@ -60,11 +111,24 @@ CloseCurly(10:1-10:2),EndOfFile(10:2-10:2),
 								(e-ident @8.16-8.19 (raw "sum"))))
 						(e-binop @9.2-10.2 (op "+")
 							(e-ident @9.2-9.5 (raw "sum"))
-							(e-ident @9.8-9.12 (raw "sum_")))))))))
+							(e-ident @9.8-9.12 (raw "sum_")))))))
+		(e-malformed @11.1-11.3 (reason "expr_unexpected_token"))
+		(e-malformed @11.2-11.4 (reason "expr_unexpected_token"))
+		(e-malformed @11.3-11.4 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+# Function showing var vs regular identifier independence
+testFunc = |input| {
+	sum = input # Regular identifier
+	var sum_ = input * 2 # Var with underscore - should not conflict
+
+	sum_ = sum_ + sum # Reassign var - should work
+	sum + sum_ # Both should be accessible
+}
+
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -9,6 +9,7 @@ type=expr
 3)():B
 (z)
 ~~~
+~~~
 # EXPECTED
 TYPE MISMATCH - pnc_parens_apply_etc.md:2:1:2:2
 # PROBLEMS
@@ -30,7 +31,8 @@ But you are trying to use it as:
 ~~~zig
 OpenRound(1:1-1:2),Newline(1:1-1:1),
 Int(2:1-2:2),CloseRound(2:2-2:3),NoSpaceOpenRound(2:3-2:4),CloseRound(2:4-2:5),OpColon(2:5-2:6),UpperIdent(2:6-2:7),Newline(1:1-1:1),
-OpenRound(3:1-3:2),LowerIdent(3:2-3:3),CloseRound(3:3-3:4),EndOfFile(3:4-3:4),
+OpenRound(3:1-3:2),LowerIdent(3:2-3:3),CloseRound(3:3-3:4),Newline(1:1-1:1),
+MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
 ~~~
 # PARSE
 ~~~clojure

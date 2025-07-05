@@ -9,6 +9,7 @@ match numbers {
     [.., middle, ..] => ... # error, multiple rest patterns not allowed
 }
 ~~~
+~~~
 # EXPECTED
 UNDEFINED VARIABLE - list_patterns_err_multiple_rest.md:2:10:2:16
 # PROBLEMS
@@ -39,7 +40,8 @@ The unused variable is declared here:
 ~~~zig
 KwMatch(1:1-1:6),LowerIdent(1:7-1:14),OpenCurly(1:15-1:16),Newline(1:1-1:1),
 OpenSquare(2:5-2:6),DoubleDot(2:6-2:8),Comma(2:8-2:9),LowerIdent(2:10-2:16),Comma(2:16-2:17),DoubleDot(2:18-2:20),CloseSquare(2:20-2:21),OpFatArrow(2:22-2:24),TripleDot(2:25-2:28),Newline(2:30-2:72),
-CloseCurly(3:1-3:2),EndOfFile(3:2-3:2),
+CloseCurly(3:1-3:2),Newline(1:1-1:1),
+MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
 ~~~
 # PARSE
 ~~~clojure

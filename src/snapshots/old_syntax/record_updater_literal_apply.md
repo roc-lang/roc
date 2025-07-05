@@ -11,6 +11,7 @@ data =
 
 data
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -24,7 +25,8 @@ LowerIdent(1:1-1:5),OpAssign(1:6-1:7),Newline(1:1-1:1),
 OpenCurly(2:5-2:6),LowerIdent(2:7-2:8),OpColon(2:8-2:9),Int(2:10-2:11),Comma(2:11-2:12),LowerIdent(2:13-2:14),OpColon(2:14-2:15),Int(2:16-2:17),CloseCurly(2:18-2:19),Newline(1:1-1:1),
 OpPizza(3:9-3:11),OpAmpersand(3:12-3:13),LowerIdent(3:13-3:14),Int(3:16-3:17),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(5:1-5:5),EndOfFile(5:5-5:5),
+LowerIdent(5:1-5:5),Newline(1:1-1:1),
+MalformedUnknownToken(6:1-6:2),MalformedUnknownToken(6:2-6:3),MalformedUnknownToken(6:3-6:4),EndOfFile(6:4-6:4),
 ~~~
 # PARSE
 ~~~clojure

@@ -9,6 +9,7 @@ when f
 is
 s if\t->""""""->e
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -20,7 +21,8 @@ Is there an `import` or `exposing` missing up-top?
 ~~~zig
 LowerIdent(1:1-1:5),LowerIdent(1:6-1:7),Newline(1:1-1:1),
 LowerIdent(2:1-2:3),Newline(1:1-1:1),
-LowerIdent(3:1-3:2),KwIf(3:3-3:5),OpBackslash(3:5-3:6),LowerIdent(3:6-3:7),OpArrow(3:7-3:9),MultilineStringStart(3:9-3:12),StringPart(3:12-3:12),MultilineStringEnd(3:12-3:15),OpArrow(3:15-3:17),LowerIdent(3:17-3:18),EndOfFile(3:18-3:18),
+LowerIdent(3:1-3:2),KwIf(3:3-3:5),OpBackslash(3:5-3:6),LowerIdent(3:6-3:7),OpArrow(3:7-3:9),MultilineStringStart(3:9-3:12),StringPart(3:12-3:12),MultilineStringEnd(3:12-3:15),OpArrow(3:15-3:17),LowerIdent(3:17-3:18),Newline(1:1-1:1),
+MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
 ~~~
 # PARSE
 ~~~clojure

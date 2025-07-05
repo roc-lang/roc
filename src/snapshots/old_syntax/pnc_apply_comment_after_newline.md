@@ -8,6 +8,7 @@ type=expr
 i(i,
 )t
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -22,7 +23,8 @@ Is there an `import` or `exposing` missing up-top?
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),NoSpaceOpenRound(1:2-1:3),LowerIdent(1:3-1:4),Comma(1:4-1:5),Newline(1:1-1:1),
-CloseRound(2:1-2:2),LowerIdent(2:2-2:3),EndOfFile(2:3-2:3),
+CloseRound(2:1-2:2),LowerIdent(2:2-2:3),Newline(1:1-1:1),
+MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
 ~~~
 # PARSE
 ~~~clojure

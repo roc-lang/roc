@@ -8,6 +8,7 @@ type=expr
 s-
  -{}
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - minus_newline_minus.md:2:2:2:4
 # PROBLEMS
@@ -34,7 +35,8 @@ Check the spelling and make sure you're using a valid Roc operator.
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpBinaryMinus(1:2-1:3),Newline(1:1-1:1),
-OpUnaryMinus(2:2-2:3),OpenCurly(2:3-2:4),CloseCurly(2:4-2:5),EndOfFile(2:5-2:5),
+OpUnaryMinus(2:2-2:3),OpenCurly(2:3-2:4),CloseCurly(2:4-2:5),Newline(1:1-1:1),
+MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
 ~~~
 # PARSE
 ~~~clojure

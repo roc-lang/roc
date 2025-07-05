@@ -8,6 +8,7 @@ type=expr
 [when 2 is 8->[
 ]]
 ~~~
+~~~
 # EXPECTED
 LIST NOT CLOSED - when_in_list.md:2:1:2:3
 # PROBLEMS
@@ -27,7 +28,8 @@ Here is the problematic code:
 # TOKENS
 ~~~zig
 OpenSquare(1:1-1:2),LowerIdent(1:2-1:6),Int(1:7-1:8),LowerIdent(1:9-1:11),Int(1:12-1:13),OpArrow(1:13-1:15),OpenSquare(1:15-1:16),Newline(1:1-1:1),
-CloseSquare(2:1-2:2),CloseSquare(2:2-2:3),EndOfFile(2:3-2:3),
+CloseSquare(2:1-2:2),CloseSquare(2:2-2:3),Newline(1:1-1:1),
+MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
 ~~~
 # PARSE
 ~~~clojure

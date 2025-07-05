@@ -12,6 +12,7 @@ else if t2 then
 else
   3
 ~~~
+~~~
 # EXPECTED
 PARSE ERROR - nested_if.md:2:3:2:3
 # PROBLEMS
@@ -34,7 +35,8 @@ Int(2:3-2:4),Newline(1:1-1:1),
 KwElse(3:1-3:5),KwIf(3:6-3:8),LowerIdent(3:9-3:11),LowerIdent(3:12-3:16),Newline(1:1-1:1),
 Int(4:3-4:4),Newline(1:1-1:1),
 KwElse(5:1-5:5),Newline(1:1-1:1),
-Int(6:3-6:4),EndOfFile(6:4-6:4),
+Int(6:3-6:4),Newline(1:1-1:1),
+MalformedUnknownToken(7:1-7:2),MalformedUnknownToken(7:2-7:3),MalformedUnknownToken(7:3-7:4),EndOfFile(7:4-7:4),
 ~~~
 # PARSE
 ~~~clojure

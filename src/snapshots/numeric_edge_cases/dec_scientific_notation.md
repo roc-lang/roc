@@ -7,13 +7,15 @@ type=expr
 ~~~roc
 1.23456789012345678e10
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
 NIL
 # TOKENS
 ~~~zig
-Float(1:1-1:23),EndOfFile(1:23-1:23),
+Float(1:1-1:23),Newline(1:1-1:1),
+MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # PARSE
 ~~~clojure
@@ -21,7 +23,7 @@ Float(1:1-1:23),EndOfFile(1:23-1:23),
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+1.23456789012345678e10
 ~~~
 # CANONICALIZE
 ~~~clojure

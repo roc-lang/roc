@@ -10,6 +10,7 @@ f = \x -> x
 
 f ("Str", 42)
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -22,7 +23,8 @@ Is there an `import` or `exposing` missing up-top?
 LowerIdent(1:1-1:2),OpColon(1:3-1:4),OpenRound(1:5-1:6),UpperIdent(1:6-1:9),CloseRound(1:9-1:10),LowerIdent(1:10-1:11),OpArrow(1:12-1:14),OpenRound(1:15-1:16),UpperIdent(1:16-1:19),CloseRound(1:19-1:20),LowerIdent(1:20-1:21),Newline(1:1-1:1),
 LowerIdent(2:1-2:2),OpAssign(2:3-2:4),OpBackslash(2:5-2:6),LowerIdent(2:6-2:7),OpArrow(2:8-2:10),LowerIdent(2:11-2:12),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(4:1-4:2),OpenRound(4:3-4:4),StringStart(4:4-4:5),StringPart(4:5-4:8),StringEnd(4:8-4:9),Comma(4:9-4:10),Int(4:11-4:13),CloseRound(4:13-4:14),EndOfFile(4:14-4:14),
+LowerIdent(4:1-4:2),OpenRound(4:3-4:4),StringStart(4:4-4:5),StringPart(4:5-4:8),StringEnd(4:8-4:9),Comma(4:9-4:10),Int(4:11-4:13),CloseRound(4:13-4:14),Newline(1:1-1:1),
+MalformedUnknownToken(5:1-5:2),MalformedUnknownToken(5:2-5:3),MalformedUnknownToken(5:3-5:4),EndOfFile(5:4-5:4),
 ~~~
 # PARSE
 ~~~clojure

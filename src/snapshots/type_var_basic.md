@@ -13,10 +13,60 @@ identity = |a| a
 
 main! = |_| {}
 ~~~
+~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - type_var_basic.md:8:1:8:3
+UNEXPECTED TOKEN IN EXPRESSION - type_var_basic.md:8:2:8:4
+UNEXPECTED TOKEN IN EXPRESSION - type_var_basic.md:8:3:8:4
 # PROBLEMS
-NIL
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**type_var_basic.md:8:1:8:3:**
+```roc
+~~~
+```
+^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**type_var_basic.md:8:2:8:4:**
+```roc
+~~~
+```
+ ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**type_var_basic.md:8:3:8:4:**
+```roc
+~~~
+```
+  ^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),Newline(1:1-1:1),
@@ -25,11 +75,12 @@ Newline(3:2-3:62),
 LowerIdent(4:1-4:9),OpColon(4:10-4:11),LowerIdent(4:12-4:13),OpArrow(4:14-4:16),LowerIdent(4:17-4:18),Newline(1:1-1:1),
 LowerIdent(5:1-5:9),OpAssign(5:10-5:11),OpBar(5:12-5:13),LowerIdent(5:13-5:14),OpBar(5:14-5:15),LowerIdent(5:16-5:17),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(7:1-7:6),OpAssign(7:7-7:8),OpBar(7:9-7:10),Underscore(7:10-7:11),OpBar(7:11-7:12),OpenCurly(7:13-7:14),CloseCurly(7:14-7:15),EndOfFile(7:15-7:15),
+LowerIdent(7:1-7:6),OpAssign(7:7-7:8),OpBar(7:9-7:10),Underscore(7:10-7:11),OpBar(7:11-7:12),OpenCurly(7:13-7:14),CloseCurly(7:14-7:15),Newline(1:1-1:1),
+MalformedUnknownToken(8:1-8:2),MalformedUnknownToken(8:2-8:3),MalformedUnknownToken(8:3-8:4),EndOfFile(8:4-8:4),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-7.15
+(file @1.1-8.4
 	(app @1.1-1.57
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
@@ -56,11 +107,21 @@ LowerIdent(7:1-7:6),OpAssign(7:7-7:8),OpBar(7:9-7:10),Underscore(7:10-7:11),OpBa
 			(e-lambda @7.9-7.15
 				(args
 					(p-underscore))
-				(e-record @7.13-7.15)))))
+				(e-record @7.13-7.15)))
+		(e-malformed @8.1-8.3 (reason "expr_unexpected_token"))
+		(e-malformed @8.2-8.4 (reason "expr_unexpected_token"))
+		(e-malformed @8.3-8.4 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+app [main!] { pf: platform "../basic-cli/platform.roc" }
+
+# Type variable 'a' introduced in annotation and used in body
+identity : a -> a
+identity = |a| a
+
+main! = |_| {}
+
 ~~~
 # CANONICALIZE
 ~~~clojure

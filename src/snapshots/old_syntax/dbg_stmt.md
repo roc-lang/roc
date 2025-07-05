@@ -10,6 +10,7 @@ dbg (1 == 1)
 
 4
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - dbg_stmt.md:1:1:2:4
 # PROBLEMS
@@ -31,7 +32,8 @@ dbg (1 == 1)
 Newline(1:1-1:1),
 KwDbg(2:1-2:4),OpenRound(2:5-2:6),Int(2:6-2:7),OpEquals(2:8-2:10),Int(2:11-2:12),CloseRound(2:12-2:13),Newline(1:1-1:1),
 Newline(1:1-1:1),
-Int(4:1-4:2),EndOfFile(4:2-4:2),
+Int(4:1-4:2),Newline(1:1-1:1),
+MalformedUnknownToken(5:1-5:2),MalformedUnknownToken(5:2-5:3),MalformedUnknownToken(5:3-5:4),EndOfFile(5:4-5:4),
 ~~~
 # PARSE
 ~~~clojure

@@ -13,6 +13,7 @@ Pair (Pair x _) (Pair _ y) = Pair (Pair 0 1) (Pair 2 3)
 
 0
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -25,7 +26,8 @@ UpperIdent(3:1-3:5),Underscore(3:6-3:7),Underscore(3:8-3:9),OpAssign(3:10-3:11),
 Underscore(4:1-4:2),OpAssign(4:3-4:4),UpperIdent(4:5-4:9),Int(4:10-4:11),Int(4:12-4:13),Newline(1:1-1:1),
 UpperIdent(5:1-5:5),OpenRound(5:6-5:7),UpperIdent(5:7-5:11),LowerIdent(5:12-5:13),Underscore(5:14-5:15),CloseRound(5:15-5:16),OpenRound(5:17-5:18),UpperIdent(5:18-5:22),Underscore(5:23-5:24),LowerIdent(5:25-5:26),CloseRound(5:26-5:27),OpAssign(5:28-5:29),UpperIdent(5:30-5:34),OpenRound(5:35-5:36),UpperIdent(5:36-5:40),Int(5:41-5:42),Int(5:43-5:44),CloseRound(5:44-5:45),OpenRound(5:46-5:47),UpperIdent(5:47-5:51),Int(5:52-5:53),Int(5:54-5:55),CloseRound(5:55-5:56),Newline(1:1-1:1),
 Newline(1:1-1:1),
-Int(7:1-7:2),EndOfFile(7:2-7:2),
+Int(7:1-7:2),Newline(1:1-1:1),
+MalformedUnknownToken(8:1-8:2),MalformedUnknownToken(8:2-8:3),MalformedUnknownToken(8:3-8:4),EndOfFile(8:4-8:4),
 ~~~
 # PARSE
 ~~~clojure

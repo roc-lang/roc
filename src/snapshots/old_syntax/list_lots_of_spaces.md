@@ -12,8 +12,9 @@ type=expr
 #
 u]
 ~~~
+~~~
 # EXPECTED
-LIST NOT CLOSED - list_lots_of_spaces.md:6:2:6:3
+LIST NOT CLOSED - list_lots_of_spaces.md:6:2:6:2
 # PROBLEMS
 **LIST NOT CLOSED**
 This list is missing a closing bracket or has a syntax error.
@@ -21,11 +22,11 @@ Lists must be closed with **]** and list items must be separated by commas.
 For example:     [1, 2, 3]
 
 Here is the problematic code:
-**list_lots_of_spaces.md:6:2:6:3:**
+**list_lots_of_spaces.md:6:2:6:2:**
 ```roc
 u]
 ```
- ^
+ 
 
 
 # TOKENS
@@ -35,11 +36,12 @@ Newline(2:2-2:2),
 Comma(3:1-3:2),Newline(1:1-1:1),
 Newline(1:1-1:1),
 Newline(5:2-5:2),
-LowerIdent(6:1-6:2),CloseSquare(6:2-6:3),EndOfFile(6:3-6:3),
+LowerIdent(6:1-6:2),CloseSquare(6:2-6:3),Newline(1:1-1:1),
+MalformedUnknownToken(7:1-7:2),MalformedUnknownToken(7:2-7:3),MalformedUnknownToken(7:3-7:4),EndOfFile(7:4-7:4),
 ~~~
 # PARSE
 ~~~clojure
-(e-malformed @6.2-6.3 (reason "expected_expr_close_square_or_comma"))
+(e-malformed @1.1-1.1 (reason "expected_expr_close_square_or_comma"))
 ~~~
 # FORMATTED
 ~~~roc

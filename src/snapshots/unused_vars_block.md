@@ -25,10 +25,50 @@ main! = |_| {
     result
 }
 ~~~
+~~~
 # EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - unused_vars_block.md:20:1:20:3
+UNEXPECTED TOKEN IN EXPRESSION - unused_vars_block.md:20:2:20:4
+UNEXPECTED TOKEN IN EXPRESSION - unused_vars_block.md:20:3:20:4
 UNUSED VARIABLE - unused_vars_block.md:5:5:5:15
 UNUSED VARIABLE - unused_vars_block.md:11:5:11:19
 # PROBLEMS
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**unused_vars_block.md:20:1:20:3:**
+```roc
+~~~
+```
+^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**unused_vars_block.md:20:2:20:4:**
+```roc
+~~~
+```
+ ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**unused_vars_block.md:20:3:20:4:**
+```roc
+~~~
+```
+  ^
+
+
 **UNUSED VARIABLE**
 Variable ``unused_var`` is not used anywhere in your code.
 
@@ -53,6 +93,18 @@ The unused variable is declared here:
     ^^^^^^^^^^^^^^
 
 
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),Newline(1:1-1:1),
@@ -73,11 +125,12 @@ Newline(1:1-1:1),
 Newline(16:6-16:28),
 LowerIdent(17:5-17:11),OpAssign(17:12-17:13),LowerIdent(17:14-17:22),OpPlus(17:23-17:24),Int(17:25-17:27),Newline(1:1-1:1),
 LowerIdent(18:5-18:11),Newline(1:1-1:1),
-CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
+CloseCurly(19:1-19:2),Newline(1:1-1:1),
+MalformedUnknownToken(20:1-20:2),MalformedUnknownToken(20:2-20:3),MalformedUnknownToken(20:3-20:4),EndOfFile(20:4-20:4),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-19.2
+(file @1.1-20.4
 	(app @1.1-1.53
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
@@ -114,7 +167,10 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 							(e-binop @17.14-18.11 (op "+")
 								(e-ident @17.14-17.22 (raw "used_var"))
 								(e-int @17.25-17.27 (raw "10"))))
-						(e-ident @18.5-18.11 (raw "result"))))))))
+						(e-ident @18.5-18.11 (raw "result"))))))
+		(e-malformed @20.1-20.3 (reason "expr_unexpected_token"))
+		(e-malformed @20.2-20.4 (reason "expr_unexpected_token"))
+		(e-malformed @20.3-20.4 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -137,6 +193,7 @@ main! = |_| {
 	result = used_var + 10
 	result
 }
+
 ~~~
 # CANONICALIZE
 ~~~clojure

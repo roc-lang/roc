@@ -7,6 +7,7 @@ type=expr
 ~~~roc
 Json.utf8
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -16,7 +17,8 @@ Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:5),NoSpaceDotLowerIdent(1:5-1:10),EndOfFile(1:10-1:10),
+UpperIdent(1:1-1:5),NoSpaceDotLowerIdent(1:5-1:10),Newline(1:1-1:1),
+MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # PARSE
 ~~~clojure
@@ -24,7 +26,7 @@ UpperIdent(1:1-1:5),NoSpaceDotLowerIdent(1:5-1:10),EndOfFile(1:10-1:10),
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+Json.utf8
 ~~~
 # CANONICALIZE
 ~~~clojure

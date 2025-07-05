@@ -7,6 +7,7 @@ type=expr
 ~~~roc
 -whee  12 foo
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - apply_unary_negation.md:1:1:1:6
 # PROBLEMS
@@ -24,7 +25,8 @@ Here is the problematic code:
 
 # TOKENS
 ~~~zig
-OpUnaryMinus(1:1-1:2),LowerIdent(1:2-1:6),Int(1:8-1:10),LowerIdent(1:11-1:14),EndOfFile(1:14-1:14),
+OpUnaryMinus(1:1-1:2),LowerIdent(1:2-1:6),Int(1:8-1:10),LowerIdent(1:11-1:14),Newline(1:1-1:1),
+MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # PARSE
 ~~~clojure

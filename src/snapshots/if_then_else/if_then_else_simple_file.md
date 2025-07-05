@@ -13,9 +13,13 @@ foo = if 1 A
 	"hello"
     }
 ~~~
+~~~
 # EXPECTED
 PARSE ERROR - if_then_else_simple_file.md:1:1:1:1
 UNEXPECTED TOKEN IN EXPRESSION - if_then_else_simple_file.md:5:5:5:11
+UNEXPECTED TOKEN IN EXPRESSION - if_then_else_simple_file.md:8:1:8:3
+UNEXPECTED TOKEN IN EXPRESSION - if_then_else_simple_file.md:8:2:8:4
+UNEXPECTED TOKEN IN EXPRESSION - if_then_else_simple_file.md:8:3:8:4
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `no_else`
@@ -41,9 +45,57 @@ Here is the problematic code:
     ^^^^^^
 
 
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**if_then_else_simple_file.md:8:1:8:3:**
+```roc
+~~~
+```
+^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**if_then_else_simple_file.md:8:2:8:4:**
+```roc
+~~~
+```
+ ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**if_then_else_simple_file.md:8:3:8:4:**
+```roc
+~~~
+```
+  ^
+
+
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
 Check the spelling and make sure you're using a valid Roc operator.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
@@ -61,11 +113,12 @@ LowerIdent(3:1-3:4),OpAssign(3:5-3:6),KwIf(3:7-3:9),Int(3:10-3:11),UpperIdent(3:
 Newline(1:1-1:1),
 KwElse(5:5-5:9),OpenCurly(5:10-5:11),Newline(1:1-1:1),
 StringStart(6:2-6:3),StringPart(6:3-6:8),StringEnd(6:8-6:9),Newline(1:1-1:1),
-CloseCurly(7:5-7:6),EndOfFile(7:6-7:6),
+CloseCurly(7:5-7:6),Newline(1:1-1:1),
+MalformedUnknownToken(8:1-8:2),MalformedUnknownToken(8:2-8:3),MalformedUnknownToken(8:3-8:4),EndOfFile(8:4-8:4),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-7.6
+(file @1.1-8.4
 	(module @1.1-1.13
 		(exposes @1.8-1.13
 			(exposed-lower-ident (text "foo"))))
@@ -77,7 +130,10 @@ CloseCurly(7:5-7:6),EndOfFile(7:6-7:6),
 		(e-block @5.10-7.6
 			(statements
 				(e-string @6.2-6.9
-					(e-string-part @6.3-6.8 (raw "hello")))))))
+					(e-string-part @6.3-6.8 (raw "hello")))))
+		(e-malformed @8.1-8.3 (reason "expr_unexpected_token"))
+		(e-malformed @8.2-8.4 (reason "expr_unexpected_token"))
+		(e-malformed @8.3-8.4 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -88,6 +144,7 @@ foo =
 {
 	"hello"
 }
+
 ~~~
 # CANONICALIZE
 ~~~clojure

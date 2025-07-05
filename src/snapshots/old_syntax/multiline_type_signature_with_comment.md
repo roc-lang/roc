@@ -10,6 +10,7 @@ f :# comment
 
 42
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -22,7 +23,8 @@ Is there an `import` or `exposing` missing up-top?
 LowerIdent(1:1-1:2),OpColon(1:3-1:4),Newline(1:5-1:13),
 OpenCurly(2:5-2:6),CloseCurly(2:6-2:7),Newline(1:1-1:1),
 Newline(1:1-1:1),
-Int(4:1-4:3),EndOfFile(4:3-4:3),
+Int(4:1-4:3),Newline(1:1-1:1),
+MalformedUnknownToken(5:1-5:2),MalformedUnknownToken(5:2-5:3),MalformedUnknownToken(5:3-5:4),EndOfFile(5:4-5:4),
 ~~~
 # PARSE
 ~~~clojure

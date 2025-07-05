@@ -7,6 +7,7 @@ type=expr
 ~~~roc
 x == y
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -20,25 +21,26 @@ Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:2),OpEquals(1:3-1:5),LowerIdent(1:6-1:7),EndOfFile(1:7-1:7),
+LowerIdent(1:1-1:2),OpEquals(1:3-1:5),LowerIdent(1:6-1:7),Newline(1:1-1:1),
+MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # PARSE
 ~~~clojure
-(e-binop @1.1-1.7 (op "==")
+(e-binop @1.1-2.2 (op "==")
 	(e-ident @1.1-1.2 (raw "x"))
 	(e-ident @1.6-1.7 (raw "y")))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+x == y
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop @1.1-1.7 (op "eq")
+(e-binop @1.1-2.2 (op "eq")
 	(e-runtime-error (tag "ident_not_in_scope"))
 	(e-runtime-error (tag "ident_not_in_scope")))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.7 (type "*"))
+(expr @1.1-2.2 (type "*"))
 ~~~

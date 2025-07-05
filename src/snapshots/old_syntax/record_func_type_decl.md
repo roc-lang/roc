@@ -15,6 +15,7 @@ f :
 
 42
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -32,7 +33,8 @@ LowerIdent(5:9-5:13),OpColon(5:13-5:14),UpperIdent(5:15-5:18),Comma(5:18-5:19),N
 LowerIdent(6:9-6:14),OpColon(6:14-6:15),UpperIdent(6:16-6:19),OpStar(6:20-6:21),Newline(1:1-1:1),
 CloseCurly(7:5-7:6),Newline(1:1-1:1),
 Newline(1:1-1:1),
-Int(9:1-9:3),EndOfFile(9:3-9:3),
+Int(9:1-9:3),Newline(1:1-1:1),
+MalformedUnknownToken(10:1-10:2),MalformedUnknownToken(10:2-10:3),MalformedUnknownToken(10:3-10:4),EndOfFile(10:4-10:4),
 ~~~
 # PARSE
 ~~~clojure

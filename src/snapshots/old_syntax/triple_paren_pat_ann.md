@@ -9,6 +9,7 @@ type=expr
 )))f:f
 i
 ~~~
+~~~
 # EXPECTED
 TYPE MISMATCH - triple_paren_pat_ann.md:1:4:1:5
 TYPE MISMATCH - triple_paren_pat_ann.md:1:1:1:2
@@ -45,7 +46,8 @@ But you are trying to use it as:
 ~~~zig
 Int(1:1-1:2),NoSpaceOpenRound(1:2-1:3),NoSpaceOpenRound(1:3-1:4),Int(1:4-1:5),NoSpaceOpenRound(1:5-1:6),Int(1:6-1:7),Newline(1:1-1:1),
 CloseRound(2:1-2:2),CloseRound(2:2-2:3),CloseRound(2:3-2:4),LowerIdent(2:4-2:5),OpColon(2:5-2:6),LowerIdent(2:6-2:7),Newline(1:1-1:1),
-LowerIdent(3:1-3:2),EndOfFile(3:2-3:2),
+LowerIdent(3:1-3:2),Newline(1:1-1:1),
+MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
 ~~~
 # PARSE
 ~~~clojure

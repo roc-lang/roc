@@ -7,6 +7,7 @@ type=expr
 ~~~roc
 -!h
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - minus_not_h.md:1:1:1:3
 # PROBLEMS
@@ -24,7 +25,8 @@ Here is the problematic code:
 
 # TOKENS
 ~~~zig
-OpUnaryMinus(1:1-1:2),OpBang(1:2-1:3),LowerIdent(1:3-1:4),EndOfFile(1:4-1:4),
+OpUnaryMinus(1:1-1:2),OpBang(1:2-1:3),LowerIdent(1:3-1:4),Newline(1:1-1:1),
+MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # PARSE
 ~~~clojure

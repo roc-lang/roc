@@ -16,6 +16,7 @@ maybeEarlyReturn = \x ->
 
 maybeEarlyReturn 10
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -34,7 +35,8 @@ LowerIdent(6:13-6:14),OpPlus(6:15-6:16),Int(6:17-6:18),Newline(1:1-1:1),
 Newline(1:1-1:1),
 UpperIdent(8:5-8:8),NoSpaceDotLowerIdent(8:8-8:15),LowerIdent(8:16-8:17),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(10:1-10:17),Int(10:18-10:20),EndOfFile(10:20-10:20),
+LowerIdent(10:1-10:17),Int(10:18-10:20),Newline(1:1-1:1),
+MalformedUnknownToken(11:1-11:2),MalformedUnknownToken(11:2-11:3),MalformedUnknownToken(11:3-11:4),EndOfFile(11:4-11:4),
 ~~~
 # PARSE
 ~~~clojure

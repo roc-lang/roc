@@ -9,6 +9,7 @@ J
 !
 .1!.0
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -17,7 +18,8 @@ NIL
 ~~~zig
 UpperIdent(1:1-1:2),Newline(1:1-1:1),
 OpBang(2:1-2:2),Newline(1:1-1:1),
-DotInt(3:1-3:3),OpBang(3:3-3:4),NoSpaceDotInt(3:4-3:6),EndOfFile(3:6-3:6),
+DotInt(3:1-3:3),OpBang(3:3-3:4),NoSpaceDotInt(3:4-3:6),Newline(1:1-1:1),
+MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
 ~~~
 # PARSE
 ~~~clojure

@@ -8,6 +8,7 @@ type=expr
 @Thunk it = id (@A {})
 it {}
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - opaque_destructure_first_item_in_body.md:1:1:1:10
 # PROBLEMS
@@ -26,7 +27,8 @@ Here is the problematic code:
 # TOKENS
 ~~~zig
 OpaqueName(1:1-1:7),LowerIdent(1:8-1:10),OpAssign(1:11-1:12),LowerIdent(1:13-1:15),OpenRound(1:16-1:17),OpaqueName(1:17-1:19),OpenCurly(1:20-1:21),CloseCurly(1:21-1:22),CloseRound(1:22-1:23),Newline(1:1-1:1),
-LowerIdent(2:1-2:3),OpenCurly(2:4-2:5),CloseCurly(2:5-2:6),EndOfFile(2:6-2:6),
+LowerIdent(2:1-2:3),OpenCurly(2:4-2:5),CloseCurly(2:5-2:6),Newline(1:1-1:1),
+MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
 ~~~
 # PARSE
 ~~~clojure

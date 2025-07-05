@@ -8,6 +8,7 @@ type=expr
 !(C
 2)
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - not_tag.md:1:1:1:3
 # PROBLEMS
@@ -26,7 +27,8 @@ Here is the problematic code:
 # TOKENS
 ~~~zig
 OpBang(1:1-1:2),NoSpaceOpenRound(1:2-1:3),UpperIdent(1:3-1:4),Newline(1:1-1:1),
-Int(2:1-2:2),CloseRound(2:2-2:3),EndOfFile(2:3-2:3),
+Int(2:1-2:2),CloseRound(2:2-2:3),Newline(1:1-1:1),
+MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
 ~~~
 # PARSE
 ~~~clojure

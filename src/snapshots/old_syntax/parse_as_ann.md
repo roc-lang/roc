@@ -9,6 +9,7 @@ foo : Foo.Bar.Baz x y as Blah a b
 
 42
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -20,7 +21,8 @@ Is there an `import` or `exposing` missing up-top?
 ~~~zig
 LowerIdent(1:1-1:4),OpColon(1:5-1:6),UpperIdent(1:7-1:10),NoSpaceDotUpperIdent(1:10-1:14),NoSpaceDotUpperIdent(1:14-1:18),LowerIdent(1:19-1:20),LowerIdent(1:21-1:22),KwAs(1:23-1:25),UpperIdent(1:26-1:30),LowerIdent(1:31-1:32),LowerIdent(1:33-1:34),Newline(1:1-1:1),
 Newline(1:1-1:1),
-Int(3:1-3:3),EndOfFile(3:3-3:3),
+Int(3:1-3:3),Newline(1:1-1:1),
+MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
 ~~~
 # PARSE
 ~~~clojure

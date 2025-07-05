@@ -11,8 +11,9 @@ match color {
 	Green => "3"
 }
 ~~~
+~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - basic_tag_union.md:1:1:1:1
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `color` in this scope.
@@ -46,7 +47,8 @@ KwMatch(1:1-1:6),LowerIdent(1:7-1:12),OpenCurly(1:13-1:14),Newline(1:1-1:1),
 UpperIdent(2:2-2:5),OpFatArrow(2:6-2:8),Int(2:9-2:10),Newline(1:1-1:1),
 UpperIdent(3:2-3:6),OpFatArrow(3:7-3:9),Int(3:10-3:11),Newline(1:1-1:1),
 UpperIdent(4:2-4:7),OpFatArrow(4:8-4:10),StringStart(4:11-4:12),StringPart(4:12-4:13),StringEnd(4:13-4:14),Newline(1:1-1:1),
-CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
+CloseCurly(5:1-5:2),Newline(1:1-1:1),
+MalformedUnknownToken(6:1-6:2),MalformedUnknownToken(6:2-6:3),MalformedUnknownToken(6:3-6:4),EndOfFile(6:4-6:4),
 ~~~
 # PARSE
 ~~~clojure
@@ -66,7 +68,11 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+match color {
+	Red => 1
+	Blue => 2
+	Green => "3"
+}
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -10,6 +10,7 @@ when x is
      2
     _ -> 4
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -22,7 +23,8 @@ Is there an `import` or `exposing` missing up-top?
 LowerIdent(1:1-1:5),LowerIdent(1:6-1:7),LowerIdent(1:8-1:10),Newline(1:1-1:1),
 Int(2:5-2:6),OpArrow(2:7-2:9),UpperIdent(2:10-2:13),NoSpaceDotLowerIdent(2:13-2:17),Newline(1:1-1:1),
 Int(3:6-3:7),Newline(1:1-1:1),
-Underscore(4:5-4:6),OpArrow(4:7-4:9),Int(4:10-4:11),EndOfFile(4:11-4:11),
+Underscore(4:5-4:6),OpArrow(4:7-4:9),Int(4:10-4:11),Newline(1:1-1:1),
+MalformedUnknownToken(5:1-5:2),MalformedUnknownToken(5:2-5:3),MalformedUnknownToken(5:3-5:4),EndOfFile(5:4-5:4),
 ~~~
 # PARSE
 ~~~clojure

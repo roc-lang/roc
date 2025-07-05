@@ -13,6 +13,7 @@ match x {
     value => "other"
 }
 ~~~
+~~~
 # EXPECTED
 UNDEFINED VARIABLE - pattern_f64_overflow.md:6:5:6:10
 # PROBLEMS
@@ -85,7 +86,8 @@ Float(3:5-3:10),OpFatArrow(3:11-3:13),StringStart(3:14-3:15),StringPart(3:15-3:3
 Float(4:5-4:27),OpFatArrow(4:28-4:30),StringStart(4:31-4:32),StringPart(4:32-4:44),StringEnd(4:44-4:45),Newline(1:1-1:1),
 Float(5:5-5:8),OpFatArrow(5:9-5:11),StringStart(5:12-5:13),StringPart(5:13-5:17),StringEnd(5:17-5:18),Newline(1:1-1:1),
 LowerIdent(6:5-6:10),OpFatArrow(6:11-6:13),StringStart(6:14-6:15),StringPart(6:15-6:20),StringEnd(6:20-6:21),Newline(1:1-1:1),
-CloseCurly(7:1-7:2),EndOfFile(7:2-7:2),
+CloseCurly(7:1-7:2),Newline(1:1-1:1),
+MalformedUnknownToken(8:1-8:2),MalformedUnknownToken(8:2-8:3),MalformedUnknownToken(8:3-8:4),EndOfFile(8:4-8:4),
 ~~~
 # PARSE
 ~~~clojure

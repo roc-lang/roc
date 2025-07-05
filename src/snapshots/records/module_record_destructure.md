@@ -13,8 +13,12 @@ extract_age = |person| {
     age
 }
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - module_record_destructure.md:5:13:5:21
+UNEXPECTED TOKEN IN EXPRESSION - module_record_destructure.md:8:1:8:3
+UNEXPECTED TOKEN IN EXPRESSION - module_record_destructure.md:8:2:8:4
+UNEXPECTED TOKEN IN EXPRESSION - module_record_destructure.md:8:3:8:4
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **= person** is not expected in an expression.
@@ -28,6 +32,42 @@ Here is the problematic code:
             ^^^^^^^^
 
 
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**module_record_destructure.md:8:1:8:3:**
+```roc
+~~~
+```
+^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**module_record_destructure.md:8:2:8:4:**
+```roc
+~~~
+```
+ ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**module_record_destructure.md:8:3:8:4:**
+```roc
+~~~
+```
+  ^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `age` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -35,6 +75,18 @@ Is there an `import` or `exposing` missing up-top?
 **UNDEFINED VARIABLE**
 Nothing is named `age` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
 ~~~zig
@@ -44,11 +96,12 @@ LowerIdent(3:1-3:12),OpColon(3:13-3:14),OpenCurly(3:15-3:16),LowerIdent(3:17-3:2
 LowerIdent(4:1-4:12),OpAssign(4:13-4:14),OpBar(4:15-4:16),LowerIdent(4:16-4:22),OpBar(4:22-4:23),OpenCurly(4:24-4:25),Newline(1:1-1:1),
 OpenCurly(5:5-5:6),LowerIdent(5:7-5:10),CloseCurly(5:11-5:12),OpAssign(5:13-5:14),LowerIdent(5:15-5:21),Newline(1:1-1:1),
 LowerIdent(6:5-6:8),Newline(1:1-1:1),
-CloseCurly(7:1-7:2),EndOfFile(7:2-7:2),
+CloseCurly(7:1-7:2),Newline(1:1-1:1),
+MalformedUnknownToken(8:1-8:2),MalformedUnknownToken(8:2-8:3),MalformedUnknownToken(8:3-8:4),EndOfFile(8:4-8:4),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-7.2
+(file @1.1-8.4
 	(module @1.1-1.21
 		(exposes @1.8-1.21
 			(exposed-lower-ident (text "extract_age"))))
@@ -71,7 +124,10 @@ CloseCurly(7:1-7:2),EndOfFile(7:2-7:2),
 								(e-ident @5.7-5.10 (raw "age"))))
 						(e-malformed @5.13-5.21 (reason "expr_unexpected_token"))
 						(e-ident @5.15-5.21 (raw "person"))
-						(e-ident @6.5-6.8 (raw "age"))))))))
+						(e-ident @6.5-6.8 (raw "age"))))))
+		(e-malformed @8.1-8.3 (reason "expr_unexpected_token"))
+		(e-malformed @8.2-8.4 (reason "expr_unexpected_token"))
+		(e-malformed @8.3-8.4 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -84,6 +140,7 @@ extract_age = |person| {
 	person
 	age
 }
+
 ~~~
 # CANONICALIZE
 ~~~clojure

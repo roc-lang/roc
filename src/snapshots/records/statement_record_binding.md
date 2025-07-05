@@ -7,13 +7,15 @@ type=statement
 ~~~roc
 person = { name: "Alice", age: 30, email: "alice@example.com" }
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
 NIL
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:7),OpAssign(1:8-1:9),OpenCurly(1:10-1:11),LowerIdent(1:12-1:16),OpColon(1:16-1:17),StringStart(1:18-1:19),StringPart(1:19-1:24),StringEnd(1:24-1:25),Comma(1:25-1:26),LowerIdent(1:27-1:30),OpColon(1:30-1:31),Int(1:32-1:34),Comma(1:34-1:35),LowerIdent(1:36-1:41),OpColon(1:41-1:42),StringStart(1:43-1:44),StringPart(1:44-1:61),StringEnd(1:61-1:62),CloseCurly(1:63-1:64),EndOfFile(1:64-1:64),
+LowerIdent(1:1-1:7),OpAssign(1:8-1:9),OpenCurly(1:10-1:11),LowerIdent(1:12-1:16),OpColon(1:16-1:17),StringStart(1:18-1:19),StringPart(1:19-1:24),StringEnd(1:24-1:25),Comma(1:25-1:26),LowerIdent(1:27-1:30),OpColon(1:30-1:31),Int(1:32-1:34),Comma(1:34-1:35),LowerIdent(1:36-1:41),OpColon(1:41-1:42),StringStart(1:43-1:44),StringPart(1:44-1:61),StringEnd(1:61-1:62),CloseCurly(1:63-1:64),Newline(1:1-1:1),
+MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # PARSE
 ~~~clojure

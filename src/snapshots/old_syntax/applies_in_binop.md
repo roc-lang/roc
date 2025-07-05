@@ -9,6 +9,7 @@ Str.getUnsafe haystack haystackIndex
 ==
 Str.getUnsafe needle needleIndex
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -20,7 +21,8 @@ Is there an `import` or `exposing` missing up-top?
 ~~~zig
 UpperIdent(1:1-1:4),NoSpaceDotLowerIdent(1:4-1:14),LowerIdent(1:15-1:23),LowerIdent(1:24-1:37),Newline(1:1-1:1),
 OpEquals(2:1-2:3),Newline(1:1-1:1),
-UpperIdent(3:1-3:4),NoSpaceDotLowerIdent(3:4-3:14),LowerIdent(3:15-3:21),LowerIdent(3:22-3:33),EndOfFile(3:33-3:33),
+UpperIdent(3:1-3:4),NoSpaceDotLowerIdent(3:4-3:14),LowerIdent(3:15-3:21),LowerIdent(3:22-3:33),Newline(1:1-1:1),
+MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
 ~~~
 # PARSE
 ~~~clojure

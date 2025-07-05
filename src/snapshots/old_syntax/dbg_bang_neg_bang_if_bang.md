@@ -7,6 +7,7 @@ type=expr
 ~~~roc
 dbg!-!if!
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - dbg_bang_neg_bang_if_bang.md:1:6:1:10
 # PROBLEMS
@@ -32,7 +33,8 @@ Check the spelling and make sure you're using a valid Roc operator.
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:5),OpBinaryMinus(1:5-1:6),OpBang(1:6-1:7),LowerIdent(1:7-1:10),EndOfFile(1:10-1:10),
+LowerIdent(1:1-1:5),OpBinaryMinus(1:5-1:6),OpBang(1:6-1:7),LowerIdent(1:7-1:10),Newline(1:1-1:1),
+MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # PARSE
 ~~~clojure

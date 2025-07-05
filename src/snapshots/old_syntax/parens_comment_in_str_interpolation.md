@@ -8,6 +8,7 @@ type=expr
 "${(S#
 )}"
 ~~~
+~~~
 # EXPECTED
 PARSE ERROR - parens_comment_in_str_interpolation.md:2:1:2:3
 # PROBLEMS
@@ -30,7 +31,8 @@ String interpolation should use the format: "text $(expression) more text"
 # TOKENS
 ~~~zig
 StringStart(1:1-1:2),StringPart(1:2-1:2),OpenStringInterpolation(1:2-1:4),NoSpaceOpenRound(1:4-1:5),UpperIdent(1:5-1:6),Newline(1:7-1:7),
-CloseRound(2:1-2:2),CloseStringInterpolation(2:2-2:3),StringPart(2:3-2:3),StringEnd(2:3-2:4),EndOfFile(2:4-2:4),
+CloseRound(2:1-2:2),CloseStringInterpolation(2:2-2:3),StringPart(2:3-2:3),StringEnd(2:3-2:4),Newline(1:1-1:1),
+MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
 ~~~
 # PARSE
 ~~~clojure

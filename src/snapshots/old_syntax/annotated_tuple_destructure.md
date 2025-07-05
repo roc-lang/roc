@@ -10,6 +10,7 @@ type=expr
 
 x
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -26,7 +27,8 @@ Is there an `import` or `exposing` missing up-top?
 OpenRound(1:1-1:2),LowerIdent(1:3-1:4),Comma(1:4-1:5),LowerIdent(1:6-1:7),CloseRound(1:8-1:9),OpColon(1:10-1:11),UpperIdent(1:12-1:15),Newline(1:1-1:1),
 OpenRound(2:1-2:2),LowerIdent(2:3-2:4),Comma(2:4-2:5),LowerIdent(2:6-2:7),CloseRound(2:8-2:9),OpAssign(2:10-2:11),OpenRound(2:12-2:13),StringStart(2:14-2:15),StringPart(2:15-2:18),StringEnd(2:18-2:19),Comma(2:19-2:20),Float(2:21-2:25),CloseRound(2:26-2:27),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(4:1-4:2),EndOfFile(4:2-4:2),
+LowerIdent(4:1-4:2),Newline(1:1-1:1),
+MalformedUnknownToken(5:1-5:2),MalformedUnknownToken(5:2-5:3),MalformedUnknownToken(5:3-5:4),EndOfFile(5:4-5:4),
 ~~~
 # PARSE
 ~~~clojure

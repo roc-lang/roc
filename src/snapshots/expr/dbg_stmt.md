@@ -7,6 +7,7 @@ type=expr
 ~~~roc
 dbg x
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -16,7 +17,8 @@ Let us know if you want to help!
 
 # TOKENS
 ~~~zig
-KwDbg(1:1-1:4),LowerIdent(1:5-1:6),EndOfFile(1:6-1:6),
+KwDbg(1:1-1:4),LowerIdent(1:5-1:6),Newline(1:1-1:1),
+MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # PARSE
 ~~~clojure
@@ -25,7 +27,7 @@ KwDbg(1:1-1:4),LowerIdent(1:5-1:6),EndOfFile(1:6-1:6),
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+dbg x
 ~~~
 # CANONICALIZE
 ~~~clojure

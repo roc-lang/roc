@@ -8,6 +8,7 @@ type=expr
 dbg dbg
  a g
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -18,7 +19,8 @@ Let us know if you want to help!
 # TOKENS
 ~~~zig
 KwDbg(1:1-1:4),KwDbg(1:5-1:8),Newline(1:1-1:1),
-LowerIdent(2:2-2:3),LowerIdent(2:4-2:5),EndOfFile(2:5-2:5),
+LowerIdent(2:2-2:3),LowerIdent(2:4-2:5),Newline(1:1-1:1),
+MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
 ~~~
 # PARSE
 ~~~clojure

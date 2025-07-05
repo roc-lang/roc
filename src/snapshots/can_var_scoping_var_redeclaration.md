@@ -17,10 +17,50 @@ redeclareTest = |_| {
 
 result = redeclareTest({})
 ~~~
+~~~
 # EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - can_var_scoping_var_redeclaration.md:12:1:12:3
+UNEXPECTED TOKEN IN EXPRESSION - can_var_scoping_var_redeclaration.md:12:2:12:4
+UNEXPECTED TOKEN IN EXPRESSION - can_var_scoping_var_redeclaration.md:12:3:12:4
 DUPLICATE DEFINITION - can_var_scoping_var_redeclaration.md:6:2:7:4
 can_var_scoping_var_redeclaration.md:5:2:6:5: - can_var_scoping_var_redeclaration.md:6:2:7:4
 # PROBLEMS
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**can_var_scoping_var_redeclaration.md:12:1:12:3:**
+```roc
+~~~
+```
+^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**can_var_scoping_var_redeclaration.md:12:2:12:4:**
+```roc
+~~~
+```
+ ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**can_var_scoping_var_redeclaration.md:12:3:12:4:**
+```roc
+~~~
+```
+  ^
+
+
 **DUPLICATE DEFINITION**
 The name `x_` is being redeclared in this scope.
 
@@ -51,6 +91,18 @@ The unused variable is declared here:
 ```
 
 
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),
@@ -63,11 +115,12 @@ LowerIdent(7:2-7:4),OpAssign(7:5-7:6),Int(7:7-7:9),Newline(7:11-7:50),
 LowerIdent(8:2-8:4),Newline(1:1-1:1),
 CloseCurly(9:1-9:2),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(11:1-11:7),OpAssign(11:8-11:9),LowerIdent(11:10-11:23),NoSpaceOpenRound(11:23-11:24),OpenCurly(11:24-11:25),CloseCurly(11:25-11:26),CloseRound(11:26-11:27),EndOfFile(11:27-11:27),
+LowerIdent(11:1-11:7),OpAssign(11:8-11:9),LowerIdent(11:10-11:23),NoSpaceOpenRound(11:23-11:24),OpenCurly(11:24-11:25),CloseCurly(11:25-11:26),CloseRound(11:26-11:27),Newline(1:1-1:1),
+MalformedUnknownToken(12:1-12:2),MalformedUnknownToken(12:2-12:3),MalformedUnknownToken(12:3-12:4),EndOfFile(12:4-12:4),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-11.27
+(file @1.1-12.4
 	(module @1.1-1.10
 		(exposes @1.8-1.10))
 	(statements
@@ -90,11 +143,25 @@ LowerIdent(11:1-11:7),OpAssign(11:8-11:9),LowerIdent(11:10-11:23),NoSpaceOpenRou
 			(p-ident @11.1-11.7 (raw "result"))
 			(e-apply @11.10-11.27
 				(e-ident @11.10-11.23 (raw "redeclareTest"))
-				(e-record @11.24-11.26)))))
+				(e-record @11.24-11.26)))
+		(e-malformed @12.1-12.3 (reason "expr_unexpected_token"))
+		(e-malformed @12.2-12.4 (reason "expr_unexpected_token"))
+		(e-malformed @12.3-12.4 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module []
+
+# Test var redeclaration (should produce shadowing warning)
+redeclareTest = |_| {
+	var x_ = 5
+	var x_ = 10 # Redeclare var - should warn but proceed
+	x_ = 15 # Reassign - should work without warning
+	x_
+}
+
+result = redeclareTest({})
+
 ~~~
 # CANONICALIZE
 ~~~clojure

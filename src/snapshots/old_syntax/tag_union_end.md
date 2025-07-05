@@ -7,6 +7,7 @@ type=expr
 ~~~roc
 f : [Yes,
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -16,7 +17,8 @@ Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:2),OpColon(1:3-1:4),OpenSquare(1:5-1:6),UpperIdent(1:6-1:9),Comma(1:9-1:10),EndOfFile(1:10-1:10),
+LowerIdent(1:1-1:2),OpColon(1:3-1:4),OpenSquare(1:5-1:6),UpperIdent(1:6-1:9),Comma(1:9-1:10),Newline(1:1-1:1),
+MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # PARSE
 ~~~clojure

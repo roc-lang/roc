@@ -10,6 +10,7 @@ type=expr
 )
 return u
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -22,7 +23,8 @@ Is there an `import` or `exposing` missing up-top?
 OpenRound(1:1-1:2),LowerIdent(1:2-1:3),Newline(1:1-1:1),
 Newline(1:1-1:1),
 CloseRound(3:1-3:2),Newline(1:1-1:1),
-KwReturn(4:1-4:7),LowerIdent(4:8-4:9),EndOfFile(4:9-4:9),
+KwReturn(4:1-4:7),LowerIdent(4:8-4:9),Newline(1:1-1:1),
+MalformedUnknownToken(5:1-5:2),MalformedUnknownToken(5:2-5:3),MalformedUnknownToken(5:3-5:4),EndOfFile(5:4-5:4),
 ~~~
 # PARSE
 ~~~clojure

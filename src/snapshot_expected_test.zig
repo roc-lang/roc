@@ -95,18 +95,66 @@ fn parseProblemEntry(allocator: std.mem.Allocator, content: []const u8, start_id
     while (search_idx < content.len) {
         if (search_idx + 2 <= content.len and std.mem.eql(u8, content[search_idx .. search_idx + 2], "**")) {
             const loc_start = search_idx + 2;
-            const loc_end_search = std.mem.indexOfPos(u8, content, loc_start, ":**");
+            // Look for either :** or just ** (for trailing colon case)
+            var loc_end_search = std.mem.indexOfPos(u8, content, loc_start, ":**");
+            if (loc_end_search == null) {
+                // Try looking for just ** in case there's a trailing colon
+                loc_end_search = std.mem.indexOfPos(u8, content, loc_start, "**");
+            }
             if (loc_end_search) |loc_end| {
-                const location = content[loc_start..loc_end];
+                var location = content[loc_start..loc_end];
+
+                // Strip trailing colon if present
+                if (location.len > 0 and location[location.len - 1] == ':') {
+                    location = location[0 .. location.len - 1];
+                }
 
                 // Check if this looks like a location (has 4 colons)
+                // Count colons to determine format
                 var colon_count: usize = 0;
                 for (location) |c| {
                     if (c == ':') colon_count += 1;
                 }
 
-                if (colon_count == 4) {
-                    // This is a location, parse it
+                if (colon_count == 2) {
+                    // Format: file:line:col
+                    var parts = std.mem.tokenizeScalar(u8, location, ':');
+
+                    const file = parts.next() orelse {
+                        search_idx = loc_end + 3;
+                        continue;
+                    };
+                    const line_str = parts.next() orelse {
+                        search_idx = loc_end + 3;
+                        continue;
+                    };
+                    const col_str = parts.next() orelse {
+                        search_idx = loc_end + 3;
+                        continue;
+                    };
+
+                    // Try to parse numbers
+                    const line = std.fmt.parseInt(u32, line_str, 10) catch {
+                        search_idx = loc_end + 3;
+                        continue;
+                    };
+                    const col = std.fmt.parseInt(u32, col_str, 10) catch {
+                        search_idx = loc_end + 3;
+                        continue;
+                    };
+
+                    const entry = ProblemEntry{
+                        .problem_type = try allocator.dupe(u8, problem_type),
+                        .file = try allocator.dupe(u8, file),
+                        .start_line = line,
+                        .start_col = col,
+                        .end_line = line, // Use same line as end
+                        .end_col = col, // Use same col as end
+                    };
+
+                    return .{ .entry = entry, .next_idx = loc_end + 3 };
+                } else if (colon_count == 4) {
+                    // Format: file:start_line:start_col:end_line:end_col
                     var parts = std.mem.tokenizeScalar(u8, location, ':');
 
                     const file = parts.next() orelse {
@@ -258,8 +306,10 @@ fn validateSnapshotProblems(allocator: std.mem.Allocator, path: []const u8) !voi
     };
 
     const problems_section = extractSection(content, "PROBLEMS") orelse {
-        // No PROBLEMS section is also OK
-        return;
+        // PROBLEMS section is required for all snapshots
+        std.debug.print("\n❌ {s}:\n", .{std.fs.path.basename(path)});
+        std.debug.print("  Missing PROBLEMS section\n", .{});
+        return error.MissingProblemsSection;
     };
 
     var expected = try parseExpectedSection(allocator, expected_section);

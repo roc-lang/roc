@@ -27,10 +27,60 @@ platform # Comment after platform keyword
 			bar, # Comment after exposed item
 		]
 ~~~
+~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - platform_header_nonempty_1.md:22:1:22:3
+UNEXPECTED TOKEN IN EXPRESSION - platform_header_nonempty_1.md:22:2:22:4
+UNEXPECTED TOKEN IN EXPRESSION - platform_header_nonempty_1.md:22:3:22:4
 # PROBLEMS
-NIL
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**platform_header_nonempty_1.md:22:1:22:3:**
+```roc
+~~~
+```
+^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**platform_header_nonempty_1.md:22:2:22:4:**
+```roc
+~~~
+```
+ ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**platform_header_nonempty_1.md:22:3:22:4:**
+```roc
+~~~
+```
+  ^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
 # TOKENS
 ~~~zig
 KwPlatform(1:1-1:9),Newline(1:11-1:42),
@@ -53,11 +103,12 @@ CloseCurly(17:3-17:4),Newline(17:6-17:35),
 KwProvides(18:2-18:10),Newline(18:12-18:43),
 OpenSquare(19:3-19:4),Newline(19:6-19:34),
 LowerIdent(20:4-20:7),Comma(20:7-20:8),Newline(20:10-20:37),
-CloseSquare(21:3-21:4),EndOfFile(21:4-21:4),
+CloseSquare(21:3-21:4),Newline(1:1-1:1),
+MalformedUnknownToken(22:1-22:2),MalformedUnknownToken(22:2-22:3),MalformedUnknownToken(22:3-22:4),EndOfFile(22:4-22:4),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-21.4
+(file @1.1-22.4
 	(platform @1.1-21.4 (name "foo")
 		(rigids @4.3-6.4
 			(exposed-upper-ident (text "Main")))
@@ -76,11 +127,35 @@ CloseSquare(21:3-21:4),EndOfFile(21:4-21:4),
 					(e-string-part @16.15-16.30 (raw "../some_pkg.roc")))))
 		(provides @19.3-21.4
 			(exposed-lower-ident (text "bar"))))
-	(statements))
+	(statements
+		(e-malformed @22.1-22.3 (reason "expr_unexpected_token"))
+		(e-malformed @22.2-22.4 (reason "expr_unexpected_token"))
+		(e-malformed @22.3-22.4 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+platform # Comment after platform keyword
+	"foo" # Comment after name
+	requires # Comment after requires keyword
+		{ # Comment after rigids open
+			Main, # Comment after rigid member
+		} # Comment after rigids close
+			{ # Comment after signatures open
+				main! : List(Str) => {}, # Comment after signature
+			} # Comment after signatures close
+	exposes # Comment after exposes keyword
+		[ # Comment after exposes open
+			foo, # Comment after exposed item
+		] # Comment after exposes close
+	packages # Comment after packages keyword
+		{ # Comment after packages open
+			some_pkg: "../some_pkg.roc", # Comment after package
+		} # Comment after packages close
+	provides # Comment after provides keyword
+		[ # Comment after provides open
+			bar, # Comment after exposed item
+		]
+
 ~~~
 # CANONICALIZE
 ~~~clojure

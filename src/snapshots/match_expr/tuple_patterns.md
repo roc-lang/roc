@@ -12,6 +12,7 @@ match coord {
     (x, y) => x
 }
 ~~~
+~~~
 # EXPECTED
 UNDEFINED VARIABLE - tuple_patterns.md:5:9:5:10
 # PROBLEMS
@@ -38,7 +39,8 @@ OpenRound(2:5-2:6),UpperIdent(2:6-2:10),Comma(2:10-2:11),UpperIdent(2:12-2:16),C
 OpenRound(3:5-3:6),LowerIdent(3:6-3:7),Comma(3:7-3:8),UpperIdent(3:9-3:13),CloseRound(3:13-3:14),OpFatArrow(3:15-3:17),LowerIdent(3:18-3:19),Newline(1:1-1:1),
 OpenRound(4:5-4:6),UpperIdent(4:6-4:10),Comma(4:10-4:11),LowerIdent(4:12-4:13),CloseRound(4:13-4:14),OpFatArrow(4:15-4:17),LowerIdent(4:18-4:19),Newline(1:1-1:1),
 OpenRound(5:5-5:6),LowerIdent(5:6-5:7),Comma(5:7-5:8),LowerIdent(5:9-5:10),CloseRound(5:10-5:11),OpFatArrow(5:12-5:14),LowerIdent(5:15-5:16),Newline(1:1-1:1),
-CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
+CloseCurly(6:1-6:2),Newline(1:1-1:1),
+MalformedUnknownToken(7:1-7:2),MalformedUnknownToken(7:2-7:3),MalformedUnknownToken(7:3-7:4),EndOfFile(7:4-7:4),
 ~~~
 # PARSE
 ~~~clojure

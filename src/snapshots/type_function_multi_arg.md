@@ -12,8 +12,12 @@ curry = |fn| |x| |y| fn(x, y)
 
 main! = |_| {}
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - type_function_multi_arg.md:3:21:3:25
+UNEXPECTED TOKEN IN EXPRESSION - type_function_multi_arg.md:7:1:7:3
+UNEXPECTED TOKEN IN EXPRESSION - type_function_multi_arg.md:7:2:7:4
+UNEXPECTED TOKEN IN EXPRESSION - type_function_multi_arg.md:7:3:7:4
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **-> (** is not expected in an expression.
@@ -26,6 +30,54 @@ curry : (a, b -> c) -> (a -> b -> c)
 ```
                     ^^^^
 
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**type_function_multi_arg.md:7:1:7:3:**
+```roc
+~~~
+```
+^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**type_function_multi_arg.md:7:2:7:4:**
+```roc
+~~~
+```
+ ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**type_function_multi_arg.md:7:3:7:4:**
+```roc
+~~~
+```
+  ^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
@@ -42,11 +94,12 @@ Newline(1:1-1:1),
 LowerIdent(3:1-3:6),OpColon(3:7-3:8),OpenRound(3:9-3:10),LowerIdent(3:10-3:11),Comma(3:11-3:12),LowerIdent(3:13-3:14),OpArrow(3:15-3:17),LowerIdent(3:18-3:19),CloseRound(3:19-3:20),OpArrow(3:21-3:23),OpenRound(3:24-3:25),LowerIdent(3:25-3:26),OpArrow(3:27-3:29),LowerIdent(3:30-3:31),OpArrow(3:32-3:34),LowerIdent(3:35-3:36),CloseRound(3:36-3:37),Newline(1:1-1:1),
 LowerIdent(4:1-4:6),OpAssign(4:7-4:8),OpBar(4:9-4:10),LowerIdent(4:10-4:12),OpBar(4:12-4:13),OpBar(4:14-4:15),LowerIdent(4:15-4:16),OpBar(4:16-4:17),OpBar(4:18-4:19),LowerIdent(4:19-4:20),OpBar(4:20-4:21),LowerIdent(4:22-4:24),NoSpaceOpenRound(4:24-4:25),LowerIdent(4:25-4:26),Comma(4:26-4:27),LowerIdent(4:28-4:29),CloseRound(4:29-4:30),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBar(6:11-6:12),OpenCurly(6:13-6:14),CloseCurly(6:14-6:15),EndOfFile(6:15-6:15),
+LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBar(6:11-6:12),OpenCurly(6:13-6:14),CloseCurly(6:14-6:15),Newline(1:1-1:1),
+MalformedUnknownToken(7:1-7:2),MalformedUnknownToken(7:2-7:3),MalformedUnknownToken(7:3-7:4),EndOfFile(7:4-7:4),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-6.15
+(file @1.1-7.4
 	(app @1.1-1.53
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
@@ -90,7 +143,10 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 			(e-lambda @6.9-6.15
 				(args
 					(p-underscore))
-				(e-record @6.13-6.15)))))
+				(e-record @6.13-6.15)))
+		(e-malformed @7.1-7.3 (reason "expr_unexpected_token"))
+		(e-malformed @7.2-7.4 (reason "expr_unexpected_token"))
+		(e-malformed @7.3-7.4 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -100,6 +156,7 @@ curry : (a, b -> c)(a->b->c)
 curry = |fn| |x| |y| fn(x, y)
 
 main! = |_| {}
+
 ~~~
 # CANONICALIZE
 ~~~clojure

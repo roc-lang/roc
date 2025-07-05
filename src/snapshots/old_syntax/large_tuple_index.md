@@ -7,6 +7,7 @@ type=expr
 ~~~roc
 .18888888888888888888 + h.22222222222222222222
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - large_tuple_index.md:1:1:1:24
 # PROBLEMS
@@ -24,7 +25,8 @@ Here is the problematic code:
 
 # TOKENS
 ~~~zig
-DotInt(1:1-1:22),OpPlus(1:23-1:24),LowerIdent(1:25-1:26),NoSpaceDotInt(1:26-1:47),EndOfFile(1:47-1:47),
+DotInt(1:1-1:22),OpPlus(1:23-1:24),LowerIdent(1:25-1:26),NoSpaceDotInt(1:26-1:47),Newline(1:1-1:1),
+MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # PARSE
 ~~~clojure

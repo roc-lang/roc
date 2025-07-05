@@ -45,10 +45,14 @@ combineResults = |result1, result2|
         Err(err) => Err(err)
     }
 ~~~
+~~~
 # EXPECTED
 PARSE ERROR - can_import_type_annotations.md:17:21:17:24
 UNEXPECTED TOKEN IN PATTERN - can_import_type_annotations.md:17:41:17:41
 UNEXPECTED TOKEN IN EXPRESSION - can_import_type_annotations.md:1:1:18:12
+UNEXPECTED TOKEN IN EXPRESSION - can_import_type_annotations.md:40:1:40:3
+UNEXPECTED TOKEN IN EXPRESSION - can_import_type_annotations.md:40:2:40:4
+UNEXPECTED TOKEN IN EXPRESSION - can_import_type_annotations.md:40:3:40:4
 UNDECLARED TYPE - can_import_type_annotations.md:7:18:7:25
 UNDECLARED TYPE - can_import_type_annotations.md:7:29:7:37
 UNUSED VARIABLE - can_import_type_annotations.md:8:19:8:22
@@ -123,6 +127,42 @@ handleApi = |request| {
 ```
 
 
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**can_import_type_annotations.md:40:1:40:3:**
+```roc
+~~~
+```
+^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**can_import_type_annotations.md:40:2:40:4:**
+```roc
+~~~
+```
+ ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**can_import_type_annotations.md:40:3:40:4:**
+```roc
+~~~
+```
+  ^
+
+
 **UNDECLARED TYPE**
 The type ``Request`` is not declared in this scope.
 
@@ -180,6 +220,18 @@ This pattern contains invalid syntax or uses unsupported features.
 This looks like an operator, but it's not one I recognize!
 Check the spelling and make sure you're using a valid Roc operator.
 
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),
@@ -220,11 +272,12 @@ UpperIdent(35:17-35:19),NoSpaceOpenRound(35:19-35:20),LowerIdent(35:20-35:26),Cl
 UpperIdent(36:17-36:20),NoSpaceOpenRound(36:20-36:21),LowerIdent(36:21-36:24),CloseRound(36:24-36:25),OpFatArrow(36:26-36:28),UpperIdent(36:29-36:32),NoSpaceOpenRound(36:32-36:33),LowerIdent(36:33-36:36),CloseRound(36:36-36:37),Newline(1:1-1:1),
 CloseCurly(37:13-37:14),Newline(1:1-1:1),
 UpperIdent(38:9-38:12),NoSpaceOpenRound(38:12-38:13),LowerIdent(38:13-38:16),CloseRound(38:16-38:17),OpFatArrow(38:18-38:20),UpperIdent(38:21-38:24),NoSpaceOpenRound(38:24-38:25),LowerIdent(38:25-38:28),CloseRound(38:28-38:29),Newline(1:1-1:1),
-CloseCurly(39:5-39:6),EndOfFile(39:6-39:6),
+CloseCurly(39:5-39:6),Newline(1:1-1:1),
+MalformedUnknownToken(40:1-40:2),MalformedUnknownToken(40:2-40:3),MalformedUnknownToken(40:3-40:4),EndOfFile(40:4-40:4),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-39.6
+(file @1.1-40.4
 	(module @1.1-1.10
 		(exposes @1.8-1.10))
 	(statements
@@ -369,7 +422,10 @@ CloseCurly(39:5-39:6),EndOfFile(39:6-39:6),
 								(p-ident @38.13-38.16 (raw "err")))
 							(e-apply @38.21-38.29
 								(e-tag @38.21-38.24 (raw "Err"))
-								(e-ident @38.25-38.28 (raw "err"))))))))))
+								(e-ident @38.25-38.28 (raw "err"))))))))
+		(e-malformed @40.1-40.3 (reason "expr_unexpected_token"))
+		(e-malformed @40.2-40.4 (reason "expr_unexpected_token"))
+		(e-malformed @40.3-40.4 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -412,6 +468,7 @@ combineResults = |result1, result2|
 			}
 		Err(err) => Err(err)
 	}
+
 ~~~
 # CANONICALIZE
 ~~~clojure

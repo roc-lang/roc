@@ -7,6 +7,7 @@ type=expr
 ~~~roc
 \a,,b -> 1
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - lambda_double_comma.md:1:1:1:3
 # PROBLEMS
@@ -24,7 +25,8 @@ Here is the problematic code:
 
 # TOKENS
 ~~~zig
-OpBackslash(1:1-1:2),LowerIdent(1:2-1:3),Comma(1:3-1:4),Comma(1:4-1:5),LowerIdent(1:5-1:6),OpArrow(1:7-1:9),Int(1:10-1:11),EndOfFile(1:11-1:11),
+OpBackslash(1:1-1:2),LowerIdent(1:2-1:3),Comma(1:3-1:4),Comma(1:4-1:5),LowerIdent(1:5-1:6),OpArrow(1:7-1:9),Int(1:10-1:11),Newline(1:1-1:1),
+MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # PARSE
 ~~~clojure

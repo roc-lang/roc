@@ -15,10 +15,60 @@ decodeThings # After member name
 			where # after where
 				a.Decode,
 ~~~
+~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - where_clauses_10.md:10:1:10:3
+UNEXPECTED TOKEN IN EXPRESSION - where_clauses_10.md:10:2:10:4
+UNEXPECTED TOKEN IN EXPRESSION - where_clauses_10.md:10:3:10:4
 # PROBLEMS
-NIL
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**where_clauses_10.md:10:1:10:3:**
+```roc
+~~~
+```
+^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**where_clauses_10.md:10:2:10:4:**
+```roc
+~~~
+```
+ ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**where_clauses_10.md:10:3:10:4:**
+```roc
+~~~
+```
+  ^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:15),CloseSquare(1:15-1:16),Newline(1:1-1:1),
@@ -29,11 +79,12 @@ LowerIdent(5:1-5:13),Newline(5:15-5:33),
 OpColon(6:2-6:3),Newline(6:5-6:17),
 UpperIdent(7:3-7:7),NoSpaceOpenRound(7:7-7:8),UpperIdent(7:8-7:12),NoSpaceOpenRound(7:12-7:13),UpperIdent(7:13-7:15),CloseRound(7:15-7:16),CloseRound(7:16-7:17),OpArrow(7:18-7:20),UpperIdent(7:21-7:25),NoSpaceOpenRound(7:25-7:26),LowerIdent(7:26-7:27),CloseRound(7:27-7:28),Newline(7:30-7:41),
 KwWhere(8:4-8:9),Newline(8:11-8:23),
-LowerIdent(9:5-9:6),NoSpaceDotUpperIdent(9:6-9:13),Comma(9:13-9:14),EndOfFile(9:14-9:14),
+LowerIdent(9:5-9:6),NoSpaceDotUpperIdent(9:6-9:13),Comma(9:13-9:14),Newline(1:1-1:1),
+MalformedUnknownToken(10:1-10:2),MalformedUnknownToken(10:2-10:3),MalformedUnknownToken(10:3-10:4),EndOfFile(10:4-10:4),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-9.14
+(file @1.1-10.4
 	(module @1.1-1.16
 		(exposes @1.8-1.16
 			(exposed-lower-ident (text "decode"))))
@@ -41,7 +92,7 @@ LowerIdent(9:5-9:6),NoSpaceDotUpperIdent(9:6-9:13),Comma(9:13-9:14),EndOfFile(9:
 		(s-import @3.1-3.32 (raw "Decode")
 			(exposing
 				(exposed-upper-ident (text "Decode"))))
-		(s-type-anno @5.1-9.14 (name "decodeThings")
+		(s-type-anno @5.1-10.2 (name "decodeThings")
 			(ty-fn @7.3-7.28
 				(ty-apply @7.3-7.17
 					(ty @7.3-7.7 (name "List"))
@@ -50,11 +101,23 @@ LowerIdent(9:5-9:6),NoSpaceDotUpperIdent(9:6-9:13),Comma(9:13-9:14),EndOfFile(9:
 						(ty @7.13-7.15 (name "U8"))))
 				(ty-apply @7.21-7.28
 					(ty @7.21-7.25 (name "List"))
-					(ty-var @7.26-7.27 (raw "a")))))))
+					(ty-var @7.26-7.27 (raw "a")))))
+		(e-malformed @10.1-10.3 (reason "expr_unexpected_token"))
+		(e-malformed @10.2-10.4 (reason "expr_unexpected_token"))
+		(e-malformed @10.3-10.4 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [decode]
+
+import Decode exposing [Decode]
+
+decodeThings # After member name
+	: # After colon
+		List(List(U8)) -> List(a) # After anno
+			where # after where
+				a.Decode,
+
 ~~~
 # CANONICALIZE
 ~~~clojure

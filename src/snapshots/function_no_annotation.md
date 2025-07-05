@@ -20,10 +20,60 @@ process! = |x| print_number!(multiply(x, 2))
 
 main! = process!(42)
 ~~~
+~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - function_no_annotation.md:15:1:15:3
+UNEXPECTED TOKEN IN EXPRESSION - function_no_annotation.md:15:2:15:4
+UNEXPECTED TOKEN IN EXPRESSION - function_no_annotation.md:15:3:15:4
 # PROBLEMS
-NIL
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**function_no_annotation.md:15:1:15:3:**
+```roc
+~~~
+```
+^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**function_no_annotation.md:15:2:15:4:**
+```roc
+~~~
+```
+ ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**function_no_annotation.md:15:3:15:4:**
+```roc
+~~~
+```
+  ^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),Newline(1:1-1:1),
@@ -39,11 +89,12 @@ Newline(1:1-1:1),
 Newline(11:2-11:48),
 LowerIdent(12:1-12:9),OpAssign(12:10-12:11),OpBar(12:12-12:13),LowerIdent(12:13-12:14),OpBar(12:14-12:15),LowerIdent(12:16-12:29),NoSpaceOpenRound(12:29-12:30),LowerIdent(12:30-12:38),NoSpaceOpenRound(12:38-12:39),LowerIdent(12:39-12:40),Comma(12:40-12:41),Int(12:42-12:43),CloseRound(12:43-12:44),CloseRound(12:44-12:45),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(14:1-14:6),OpAssign(14:7-14:8),LowerIdent(14:9-14:17),NoSpaceOpenRound(14:17-14:18),Int(14:18-14:20),CloseRound(14:20-14:21),EndOfFile(14:21-14:21),
+LowerIdent(14:1-14:6),OpAssign(14:7-14:8),LowerIdent(14:9-14:17),NoSpaceOpenRound(14:17-14:18),Int(14:18-14:20),CloseRound(14:20-14:21),Newline(1:1-1:1),
+MalformedUnknownToken(15:1-15:2),MalformedUnknownToken(15:2-15:3),MalformedUnknownToken(15:3-15:4),EndOfFile(15:4-15:4),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-14.21
+(file @1.1-15.4
 	(app @1.1-1.57
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
@@ -88,11 +139,28 @@ LowerIdent(14:1-14:6),OpAssign(14:7-14:8),LowerIdent(14:9-14:17),NoSpaceOpenRoun
 			(p-ident @14.1-14.6 (raw "main!"))
 			(e-apply @14.9-14.21
 				(e-ident @14.9-14.17 (raw "process!"))
-				(e-int @14.18-14.20 (raw "42"))))))
+				(e-int @14.18-14.20 (raw "42"))))
+		(e-malformed @15.1-15.3 (reason "expr_unexpected_token"))
+		(e-malformed @15.2-15.4 (reason "expr_unexpected_token"))
+		(e-malformed @15.3-15.4 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+app [main!] { pf: platform "../basic-cli/platform.roc" }
+
+import pf.Stdout
+
+# Pure function with no annotation
+multiply = |x, y| x * y
+
+# Function with no type annotation - should infer effectfulness from body
+print_number! = |n| Stdout.line!(n)
+
+# Another effectful function with no annotation
+process! = |x| print_number!(multiply(x, 2))
+
+main! = process!(42)
+
 ~~~
 # CANONICALIZE
 ~~~clojure

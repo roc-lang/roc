@@ -25,6 +25,7 @@ type=expr
     {}
 }
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - tuple_patterns.md:4:12:4:15
 UNEXPECTED TOKEN IN EXPRESSION - tuple_patterns.md:7:22:7:25
@@ -168,7 +169,8 @@ Newline(15:6-15:30),
 OpenRound(16:5-16:6),LowerIdent(16:6-16:10),Comma(16:10-16:11),LowerIdent(16:12-16:17),CloseRound(16:17-16:18),OpAssign(16:19-16:20),OpenRound(16:21-16:22),OpenSquare(16:22-16:23),Int(16:23-16:24),Comma(16:24-16:25),Int(16:26-16:27),Comma(16:27-16:28),Int(16:29-16:30),CloseSquare(16:30-16:31),Comma(16:31-16:32),StringStart(16:33-16:34),StringPart(16:34-16:39),StringEnd(16:39-16:40),CloseRound(16:40-16:41),Newline(1:1-1:1),
 Newline(1:1-1:1),
 OpenCurly(18:5-18:6),CloseCurly(18:6-18:7),Newline(1:1-1:1),
-CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
+CloseCurly(19:1-19:2),Newline(1:1-1:1),
+MalformedUnknownToken(20:1-20:2),MalformedUnknownToken(20:2-20:3),MalformedUnknownToken(20:3-20:4),EndOfFile(20:4-20:4),
 ~~~
 # PARSE
 ~~~clojure

@@ -23,6 +23,7 @@ type=expr
     None ?? 0,
 )
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -45,7 +46,8 @@ Int(13:5-13:6),OpDoubleSlash(13:7-13:9),Int(13:10-13:11),Comma(13:11-13:12),Newl
 UpperIdent(14:5-14:9),OpAnd(14:10-14:13),UpperIdent(14:14-14:18),Comma(14:18-14:19),Newline(1:1-1:1),
 UpperIdent(15:5-15:9),OpOr(15:10-15:12),UpperIdent(15:13-15:17),Comma(15:17-15:18),Newline(1:1-1:1),
 UpperIdent(16:5-16:9),OpDoubleQuestion(16:10-16:12),Int(16:13-16:14),Comma(16:14-16:15),Newline(1:1-1:1),
-CloseRound(17:1-17:2),EndOfFile(17:2-17:2),
+CloseRound(17:1-17:2),Newline(1:1-1:1),
+MalformedUnknownToken(18:1-18:2),MalformedUnknownToken(18:2-18:3),MalformedUnknownToken(18:3-18:4),EndOfFile(18:4-18:4),
 ~~~
 # PARSE
 ~~~clojure

@@ -14,6 +14,7 @@ match events {
     _ => "other event pattern"
 }
 ~~~
+~~~
 # EXPECTED
 PARSE ERROR - complex_list_tags.md:3:22:3:40
 UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:3:53:3:56
@@ -924,7 +925,8 @@ OpenSquare(4:5-4:6),UpperIdent(4:6-4:14),NoSpaceOpenRound(4:14-4:15),LowerIdent(
 OpenSquare(5:5-5:6),UpperIdent(5:6-5:10),NoSpaceOpenRound(5:10-5:11),LowerIdent(5:11-5:13),Comma(5:13-5:14),LowerIdent(5:15-5:17),CloseRound(5:17-5:18),Comma(5:18-5:19),UpperIdent(5:20-5:24),NoSpaceOpenRound(5:24-5:25),LowerIdent(5:25-5:28),Comma(5:28-5:29),LowerIdent(5:30-5:33),CloseRound(5:33-5:34),Comma(5:34-5:35),DoubleDot(5:36-5:38),KwAs(5:39-5:41),LowerIdent(5:42-5:48),CloseSquare(5:48-5:49),OpFatArrow(5:50-5:52),StringStart(5:53-5:54),StringPart(5:54-5:60),OpenStringInterpolation(5:60-5:62),UpperIdent(5:62-5:65),NoSpaceDotLowerIdent(5:65-5:71),LowerIdent(5:72-5:74),CloseStringInterpolation(5:74-5:75),StringPart(5:75-5:76),OpenStringInterpolation(5:76-5:78),UpperIdent(5:78-5:81),NoSpaceDotLowerIdent(5:81-5:87),LowerIdent(5:88-5:90),CloseStringInterpolation(5:90-5:91),StringPart(5:91-5:97),OpenStringInterpolation(5:97-5:99),UpperIdent(5:99-5:102),NoSpaceDotLowerIdent(5:102-5:108),LowerIdent(5:109-5:112),CloseStringInterpolation(5:112-5:113),StringPart(5:113-5:114),OpenStringInterpolation(5:114-5:116),UpperIdent(5:116-5:119),NoSpaceDotLowerIdent(5:119-5:125),LowerIdent(5:126-5:129),CloseStringInterpolation(5:129-5:130),StringPart(5:130-5:130),StringEnd(5:130-5:131),Newline(1:1-1:1),
 OpenSquare(6:5-6:6),UpperIdent(6:6-6:12),NoSpaceOpenRound(6:12-6:13),LowerIdent(6:13-6:19),CloseRound(6:19-6:20),Comma(6:20-6:21),UpperIdent(6:22-6:27),NoSpaceOpenRound(6:27-6:28),LowerIdent(6:28-6:29),Comma(6:29-6:30),LowerIdent(6:31-6:32),CloseRound(6:32-6:33),Comma(6:33-6:34),DoubleDot(6:35-6:37),KwAs(6:38-6:40),LowerIdent(6:41-6:50),CloseSquare(6:50-6:51),OpFatArrow(6:52-6:54),StringStart(6:55-6:56),StringPart(6:56-6:63),OpenStringInterpolation(6:63-6:65),UpperIdent(6:65-6:68),NoSpaceDotLowerIdent(6:68-6:74),LowerIdent(6:75-6:81),CloseStringInterpolation(6:81-6:82),StringPart(6:82-6:97),OpenStringInterpolation(6:97-6:99),UpperIdent(6:99-6:102),NoSpaceDotLowerIdent(6:102-6:108),LowerIdent(6:109-6:110),CloseStringInterpolation(6:110-6:111),StringPart(6:111-6:112),OpenStringInterpolation(6:112-6:114),UpperIdent(6:114-6:117),NoSpaceDotLowerIdent(6:117-6:123),LowerIdent(6:124-6:125),CloseStringInterpolation(6:125-6:126),StringPart(6:126-6:126),StringEnd(6:126-6:127),Newline(1:1-1:1),
 Underscore(7:5-7:6),OpFatArrow(7:7-7:9),StringStart(7:10-7:11),StringPart(7:11-7:30),StringEnd(7:30-7:31),Newline(1:1-1:1),
-CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
+CloseCurly(8:1-8:2),Newline(1:1-1:1),
+MalformedUnknownToken(9:1-9:2),MalformedUnknownToken(9:2-9:3),MalformedUnknownToken(9:3-9:4),EndOfFile(9:4-9:4),
 ~~~
 # PARSE
 ~~~clojure

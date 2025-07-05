@@ -19,6 +19,7 @@ type=expr
     # after 3
 )
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -37,7 +38,8 @@ Comma(9:5-9:6),Newline(1:1-1:1),
 Newline(10:6-10:14),
 Int(11:5-11:6),Newline(1:1-1:1),
 Newline(12:6-12:14),
-CloseRound(13:1-13:2),EndOfFile(13:2-13:2),
+CloseRound(13:1-13:2),Newline(1:1-1:1),
+MalformedUnknownToken(14:1-14:2),MalformedUnknownToken(14:2-14:3),MalformedUnknownToken(14:3-14:4),EndOfFile(14:4-14:4),
 ~~~
 # PARSE
 ~~~clojure

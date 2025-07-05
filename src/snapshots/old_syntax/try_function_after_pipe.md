@@ -8,6 +8,7 @@ type=expr
 "123"    
        |> try Str.toU64
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -15,7 +16,8 @@ NIL
 # TOKENS
 ~~~zig
 StringStart(1:1-1:2),StringPart(1:2-1:5),StringEnd(1:5-1:6),Newline(1:1-1:1),
-OpPizza(2:8-2:10),LowerIdent(2:11-2:14),UpperIdent(2:15-2:18),NoSpaceDotLowerIdent(2:18-2:24),EndOfFile(2:24-2:24),
+OpPizza(2:8-2:10),LowerIdent(2:11-2:14),UpperIdent(2:15-2:18),NoSpaceDotLowerIdent(2:18-2:24),Newline(1:1-1:1),
+MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
 ~~~
 # PARSE
 ~~~clojure

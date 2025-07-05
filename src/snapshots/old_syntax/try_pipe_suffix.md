@@ -7,6 +7,7 @@ type=expr
 ~~~roc
 Str.toU64 "123"|> try
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -16,7 +17,8 @@ Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:4),NoSpaceDotLowerIdent(1:4-1:10),StringStart(1:11-1:12),StringPart(1:12-1:15),StringEnd(1:15-1:16),OpPizza(1:16-1:18),LowerIdent(1:19-1:22),EndOfFile(1:22-1:22),
+UpperIdent(1:1-1:4),NoSpaceDotLowerIdent(1:4-1:10),StringStart(1:11-1:12),StringPart(1:12-1:15),StringEnd(1:15-1:16),OpPizza(1:16-1:18),LowerIdent(1:19-1:22),Newline(1:1-1:1),
+MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # PARSE
 ~~~clojure

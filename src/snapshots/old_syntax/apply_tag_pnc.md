@@ -7,13 +7,15 @@ type=expr
 ~~~roc
 Whee(12, 34)
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
 NIL
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:5),NoSpaceOpenRound(1:5-1:6),Int(1:6-1:8),Comma(1:8-1:9),Int(1:10-1:12),CloseRound(1:12-1:13),EndOfFile(1:13-1:13),
+UpperIdent(1:1-1:5),NoSpaceOpenRound(1:5-1:6),Int(1:6-1:8),Comma(1:8-1:9),Int(1:10-1:12),CloseRound(1:12-1:13),Newline(1:1-1:1),
+MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # PARSE
 ~~~clojure
@@ -24,7 +26,7 @@ UpperIdent(1:1-1:5),NoSpaceOpenRound(1:5-1:6),Int(1:6-1:8),Comma(1:8-1:9),Int(1:
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+Whee(12, 34)
 ~~~
 # CANONICALIZE
 ~~~clojure

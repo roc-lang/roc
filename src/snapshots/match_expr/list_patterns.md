@@ -10,6 +10,7 @@ match numbers {
     [first, ..rest] => 0 # invalid rest pattern should error
 }
 ~~~
+~~~
 # EXPECTED
 BAD LIST REST PATTERN SYNTAX - list_patterns.md:3:13:3:19
 UNDEFINED VARIABLE - list_patterns.md:3:15:3:19
@@ -64,7 +65,8 @@ The unused variable is declared here:
 KwMatch(1:1-1:6),LowerIdent(1:7-1:14),OpenCurly(1:15-1:16),Newline(1:1-1:1),
 OpenSquare(2:5-2:6),CloseSquare(2:6-2:7),OpFatArrow(2:8-2:10),LowerIdent(2:11-2:14),Newline(1:1-1:1),
 OpenSquare(3:5-3:6),LowerIdent(3:6-3:11),Comma(3:11-3:12),DoubleDot(3:13-3:15),LowerIdent(3:15-3:19),CloseSquare(3:19-3:20),OpFatArrow(3:21-3:23),Int(3:24-3:25),Newline(3:27-3:61),
-CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
+CloseCurly(4:1-4:2),Newline(1:1-1:1),
+MalformedUnknownToken(5:1-5:2),MalformedUnknownToken(5:2-5:3),MalformedUnknownToken(5:3-5:4),EndOfFile(5:4-5:4),
 ~~~
 # PARSE
 ~~~clojure

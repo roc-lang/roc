@@ -14,10 +14,60 @@ getUser = |id| if (id > 10) "big" else "small"
 
 main! = |_| getUser(100)
 ~~~
+~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - type_alias_simple.md:9:1:9:3
+UNEXPECTED TOKEN IN EXPRESSION - type_alias_simple.md:9:2:9:4
+UNEXPECTED TOKEN IN EXPRESSION - type_alias_simple.md:9:3:9:4
 # PROBLEMS
-NIL
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**type_alias_simple.md:9:1:9:3:**
+```roc
+~~~
+```
+^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**type_alias_simple.md:9:2:9:4:**
+```roc
+~~~
+```
+ ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**type_alias_simple.md:9:3:9:4:**
+```roc
+~~~
+```
+  ^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),Newline(1:1-1:1),
@@ -27,11 +77,12 @@ Newline(1:1-1:1),
 LowerIdent(5:1-5:8),OpColon(5:9-5:10),UpperIdent(5:11-5:17),OpArrow(5:18-5:20),UpperIdent(5:21-5:24),Newline(1:1-1:1),
 LowerIdent(6:1-6:8),OpAssign(6:9-6:10),OpBar(6:11-6:12),LowerIdent(6:12-6:14),OpBar(6:14-6:15),KwIf(6:16-6:18),OpenRound(6:19-6:20),LowerIdent(6:20-6:22),OpGreaterThan(6:23-6:24),Int(6:25-6:27),CloseRound(6:27-6:28),StringStart(6:29-6:30),StringPart(6:30-6:33),StringEnd(6:33-6:34),KwElse(6:35-6:39),StringStart(6:40-6:41),StringPart(6:41-6:46),StringEnd(6:46-6:47),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(8:1-8:6),OpAssign(8:7-8:8),OpBar(8:9-8:10),Underscore(8:10-8:11),OpBar(8:11-8:12),LowerIdent(8:13-8:20),NoSpaceOpenRound(8:20-8:21),Int(8:21-8:24),CloseRound(8:24-8:25),EndOfFile(8:25-8:25),
+LowerIdent(8:1-8:6),OpAssign(8:7-8:8),OpBar(8:9-8:10),Underscore(8:10-8:11),OpBar(8:11-8:12),LowerIdent(8:13-8:20),NoSpaceOpenRound(8:20-8:21),Int(8:21-8:24),CloseRound(8:24-8:25),Newline(1:1-1:1),
+MalformedUnknownToken(9:1-9:2),MalformedUnknownToken(9:2-9:3),MalformedUnknownToken(9:3-9:4),EndOfFile(9:4-9:4),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-8.25
+(file @1.1-9.4
 	(app @1.1-1.53
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
@@ -72,11 +123,22 @@ LowerIdent(8:1-8:6),OpAssign(8:7-8:8),OpBar(8:9-8:10),Underscore(8:10-8:11),OpBa
 					(p-underscore))
 				(e-apply @8.13-8.25
 					(e-ident @8.13-8.20 (raw "getUser"))
-					(e-int @8.21-8.24 (raw "100")))))))
+					(e-int @8.21-8.24 (raw "100")))))
+		(e-malformed @9.1-9.3 (reason "expr_unexpected_token"))
+		(e-malformed @9.2-9.4 (reason "expr_unexpected_token"))
+		(e-malformed @9.3-9.4 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+app [main!] { pf: platform "../basic-cli/main.roc" }
+
+UserId : U64
+
+getUser : UserId -> Str
+getUser = |id| if (id > 10) "big" else "small"
+
+main! = |_| getUser(100)
+
 ~~~
 # CANONICALIZE
 ~~~clojure

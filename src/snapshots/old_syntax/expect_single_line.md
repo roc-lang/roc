@@ -13,6 +13,7 @@ expect y == z
 
 42
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -28,7 +29,8 @@ KwExpect(3:1-3:7),LowerIdent(3:8-3:9),OpEquals(3:10-3:12),LowerIdent(3:13-3:14),
 Newline(1:1-1:1),
 KwExpect(5:1-5:7),LowerIdent(5:8-5:9),OpEquals(5:10-5:12),LowerIdent(5:13-5:14),Newline(1:1-1:1),
 Newline(1:1-1:1),
-Int(7:1-7:3),EndOfFile(7:3-7:3),
+Int(7:1-7:3),Newline(1:1-1:1),
+MalformedUnknownToken(8:1-8:2),MalformedUnknownToken(8:2-8:3),MalformedUnknownToken(8:3-8:4),EndOfFile(8:4-8:4),
 ~~~
 # PARSE
 ~~~clojure

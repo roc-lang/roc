@@ -7,6 +7,7 @@ type=expr
 ~~~roc
 if!==9
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -16,11 +17,12 @@ Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:4),OpEquals(1:4-1:6),Int(1:6-1:7),EndOfFile(1:7-1:7),
+LowerIdent(1:1-1:4),OpEquals(1:4-1:6),Int(1:6-1:7),Newline(1:1-1:1),
+MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # PARSE
 ~~~clojure
-(e-binop @1.1-1.7 (op "==")
+(e-binop @1.1-2.2 (op "==")
 	(e-ident @1.1-1.4 (raw "if!"))
 	(e-int @1.6-1.7 (raw "9")))
 ~~~
@@ -30,11 +32,11 @@ if! == 9
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop @1.1-1.7 (op "eq")
+(e-binop @1.1-2.2 (op "eq")
 	(e-runtime-error (tag "ident_not_in_scope"))
 	(e-int @1.6-1.7 (value "9")))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.7 (type "*"))
+(expr @1.1-2.2 (type "*"))
 ~~~

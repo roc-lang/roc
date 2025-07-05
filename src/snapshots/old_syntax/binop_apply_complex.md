@@ -7,6 +7,7 @@ type=expr
 ~~~roc
 N<l (r*N)
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -16,7 +17,8 @@ Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:2),OpLessThan(1:2-1:3),LowerIdent(1:3-1:4),OpenRound(1:5-1:6),LowerIdent(1:6-1:7),OpStar(1:7-1:8),UpperIdent(1:8-1:9),CloseRound(1:9-1:10),EndOfFile(1:10-1:10),
+UpperIdent(1:1-1:2),OpLessThan(1:2-1:3),LowerIdent(1:3-1:4),OpenRound(1:5-1:6),LowerIdent(1:6-1:7),OpStar(1:7-1:8),UpperIdent(1:8-1:9),CloseRound(1:9-1:10),Newline(1:1-1:1),
+MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # PARSE
 ~~~clojure

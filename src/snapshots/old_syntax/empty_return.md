@@ -7,28 +7,30 @@ type=expr
 ~~~roc
 return
 ~~~
+~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - empty_return.md:1:1:1:7
+UNEXPECTED TOKEN IN EXPRESSION - empty_return.md:1:1:1:1
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **return** is not expected in an expression.
+The token  is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**empty_return.md:1:1:1:7:**
+**empty_return.md:1:1:1:1:**
 ```roc
 return
 ```
-^^^^^^
+
 
 
 # TOKENS
 ~~~zig
-KwReturn(1:1-1:7),EndOfFile(1:7-1:7),
+KwReturn(1:1-1:7),Newline(1:1-1:1),
+MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # PARSE
 ~~~clojure
-(e-malformed @1.1-1.7 (reason "expr_unexpected_token"))
+(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
 ~~~
 # FORMATTED
 ~~~roc

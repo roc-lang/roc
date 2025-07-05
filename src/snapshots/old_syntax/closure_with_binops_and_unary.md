@@ -9,6 +9,7 @@ m
  ^ -\w->m
  w
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -20,7 +21,8 @@ Is there an `import` or `exposing` missing up-top?
 ~~~zig
 LowerIdent(1:1-1:2),Newline(1:1-1:1),
 OpCaret(2:2-2:3),OpUnaryMinus(2:4-2:5),OpBackslash(2:5-2:6),LowerIdent(2:6-2:7),OpArrow(2:7-2:9),LowerIdent(2:9-2:10),Newline(1:1-1:1),
-LowerIdent(3:2-3:3),EndOfFile(3:3-3:3),
+LowerIdent(3:2-3:3),Newline(1:1-1:1),
+MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
 ~~~
 # PARSE
 ~~~clojure

@@ -10,6 +10,7 @@ dbg (5,
 
 4
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -22,7 +23,8 @@ Let us know if you want to help!
 KwDbg(1:1-1:4),OpenRound(1:5-1:6),Int(1:6-1:7),Comma(1:7-1:8),Newline(1:1-1:1),
 Int(2:5-2:8),CloseRound(2:8-2:9),Newline(1:1-1:1),
 Newline(1:1-1:1),
-Int(4:1-4:2),EndOfFile(4:2-4:2),
+Int(4:1-4:2),Newline(1:1-1:1),
+MalformedUnknownToken(5:1-5:2),MalformedUnknownToken(5:2-5:3),MalformedUnknownToken(5:3-5:4),EndOfFile(5:4-5:4),
 ~~~
 # PARSE
 ~~~clojure

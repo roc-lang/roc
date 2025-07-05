@@ -13,6 +13,7 @@ x = 5
 
 42
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - mixed_docs.md:1:2:2:28
 # PROBLEMS
@@ -37,7 +38,8 @@ Newline(3:2-3:60),
 Newline(4:2-4:11),
 LowerIdent(5:1-5:2),OpAssign(5:3-5:4),Int(5:5-5:6),Newline(1:1-1:1),
 Newline(1:1-1:1),
-Int(7:1-7:3),EndOfFile(7:3-7:3),
+Int(7:1-7:3),Newline(1:1-1:1),
+MalformedUnknownToken(8:1-8:2),MalformedUnknownToken(8:2-8:3),MalformedUnknownToken(8:3-8:4),EndOfFile(8:4-8:4),
 ~~~
 # PARSE
 ~~~clojure

@@ -7,6 +7,7 @@ type=expr
 ~~~roc
 99999999999999999999999999999999999999999
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -15,7 +16,8 @@ This number literal is not valid: 99999999999999999999999999999999999999999
 
 # TOKENS
 ~~~zig
-Int(1:1-1:42),EndOfFile(1:42-1:42),
+Int(1:1-1:42),Newline(1:1-1:1),
+MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # PARSE
 ~~~clojure
@@ -23,7 +25,7 @@ Int(1:1-1:42),EndOfFile(1:42-1:42),
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+99999999999999999999999999999999999999999
 ~~~
 # CANONICALIZE
 ~~~clojure

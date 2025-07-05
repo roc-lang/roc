@@ -33,9 +33,49 @@ client = Http.invalidMethod
 # Test deeply nested invalid qualification
 parser = Json.Parser.Advanced.NonExistent.create
 ~~~
+~~~
 # EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - can_import_unresolved_qualified.md:28:1:28:3
+UNEXPECTED TOKEN IN EXPRESSION - can_import_unresolved_qualified.md:28:2:28:4
+UNEXPECTED TOKEN IN EXPRESSION - can_import_unresolved_qualified.md:28:3:28:4
 UNUSED VARIABLE - can_import_unresolved_qualified.md:15:19:15:22
 # PROBLEMS
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**can_import_unresolved_qualified.md:28:1:28:3:**
+```roc
+~~~
+```
+^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**can_import_unresolved_qualified.md:28:2:28:4:**
+```roc
+~~~
+```
+ ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**can_import_unresolved_qualified.md:28:3:28:4:**
+```roc
+~~~
+```
+  ^
+
+
 **UNUSED VARIABLE**
 Variable ``req`` is not used anywhere in your code.
 
@@ -47,6 +87,18 @@ processRequest = |req| Http.Server.defaultResponse
 ```
                   ^^^
 
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
 ~~~zig
@@ -76,11 +128,12 @@ Newline(23:2-23:39),
 LowerIdent(24:1-24:7),OpAssign(24:8-24:9),UpperIdent(24:10-24:14),NoSpaceDotLowerIdent(24:14-24:28),Newline(1:1-1:1),
 Newline(1:1-1:1),
 Newline(26:2-26:43),
-LowerIdent(27:1-27:7),OpAssign(27:8-27:9),UpperIdent(27:10-27:14),NoSpaceDotUpperIdent(27:14-27:21),NoSpaceDotUpperIdent(27:21-27:30),NoSpaceDotUpperIdent(27:30-27:42),NoSpaceDotLowerIdent(27:42-27:49),EndOfFile(27:49-27:49),
+LowerIdent(27:1-27:7),OpAssign(27:8-27:9),UpperIdent(27:10-27:14),NoSpaceDotUpperIdent(27:14-27:21),NoSpaceDotUpperIdent(27:21-27:30),NoSpaceDotUpperIdent(27:30-27:42),NoSpaceDotLowerIdent(27:42-27:49),Newline(1:1-1:1),
+MalformedUnknownToken(28:1-28:2),MalformedUnknownToken(28:2-28:3),MalformedUnknownToken(28:3-28:4),EndOfFile(28:4-28:4),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-27.49
+(file @1.1-28.4
 	(module @1.1-1.10
 		(exposes @1.8-1.10))
 	(statements
@@ -125,7 +178,10 @@ LowerIdent(27:1-27:7),OpAssign(27:8-27:9),UpperIdent(27:10-27:14),NoSpaceDotUppe
 			(e-ident @24.10-24.28 (raw "Http.invalidMethod")))
 		(s-decl @27.1-27.49
 			(p-ident @27.1-27.7 (raw "parser"))
-			(e-ident @27.10-27.49 (raw "Json.Parser.Advanced.NonExistent.create")))))
+			(e-ident @27.10-27.49 (raw "Json.Parser.Advanced.NonExistent.create")))
+		(e-malformed @28.1-28.3 (reason "expr_unexpected_token"))
+		(e-malformed @28.2-28.4 (reason "expr_unexpected_token"))
+		(e-malformed @28.3-28.4 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -156,6 +212,7 @@ client = Http.invalidMethod
 
 # Test deeply nested invalid qualification
 parser = Json.create
+
 ~~~
 # CANONICALIZE
 ~~~clojure

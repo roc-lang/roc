@@ -16,10 +16,60 @@ printName = |person| {
 }
 main! = |_| {}
 ~~~
+~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - type_record_effectful.md:11:1:11:3
+UNEXPECTED TOKEN IN EXPRESSION - type_record_effectful.md:11:2:11:4
+UNEXPECTED TOKEN IN EXPRESSION - type_record_effectful.md:11:3:11:4
 # PROBLEMS
-NIL
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**type_record_effectful.md:11:1:11:3:**
+```roc
+~~~
+```
+^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**type_record_effectful.md:11:2:11:4:**
+```roc
+~~~
+```
+ ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**type_record_effectful.md:11:3:11:4:**
+```roc
+~~~
+```
+  ^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),Newline(1:1-1:1),
@@ -31,11 +81,12 @@ LowerIdent(6:1-6:10),OpAssign(6:11-6:12),OpBar(6:13-6:14),LowerIdent(6:14-6:20),
 UpperIdent(7:5-7:11),NoSpaceDotLowerIdent(7:11-7:17),NoSpaceOpenRound(7:17-7:18),LowerIdent(7:18-7:24),NoSpaceDotLowerIdent(7:24-7:29),CloseRound(7:29-7:30),Newline(1:1-1:1),
 LowerIdent(8:5-8:11),NoSpaceDotLowerIdent(8:11-8:16),Newline(1:1-1:1),
 CloseCurly(9:1-9:2),Newline(1:1-1:1),
-LowerIdent(10:1-10:6),OpAssign(10:7-10:8),OpBar(10:9-10:10),Underscore(10:10-10:11),OpBar(10:11-10:12),OpenCurly(10:13-10:14),CloseCurly(10:14-10:15),EndOfFile(10:15-10:15),
+LowerIdent(10:1-10:6),OpAssign(10:7-10:8),OpBar(10:9-10:10),Underscore(10:10-10:11),OpBar(10:11-10:12),OpenCurly(10:13-10:14),CloseCurly(10:14-10:15),Newline(1:1-1:1),
+MalformedUnknownToken(11:1-11:2),MalformedUnknownToken(11:2-11:3),MalformedUnknownToken(11:3-11:4),EndOfFile(11:4-11:4),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-10.15
+(file @1.1-11.4
 	(app @1.1-1.53
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
@@ -76,7 +127,10 @@ LowerIdent(10:1-10:6),OpAssign(10:7-10:8),OpBar(10:9-10:10),Underscore(10:10-10:
 			(e-lambda @10.9-10.15
 				(args
 					(p-underscore))
-				(e-record @10.13-10.15)))))
+				(e-record @10.13-10.15)))
+		(e-malformed @11.1-11.3 (reason "expr_unexpected_token"))
+		(e-malformed @11.2-11.4 (reason "expr_unexpected_token"))
+		(e-malformed @11.3-11.4 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -90,6 +144,7 @@ printName = |person| {
 	person.name
 }
 main! = |_| {}
+
 ~~~
 # CANONICALIZE
 ~~~clojure

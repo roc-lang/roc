@@ -9,6 +9,7 @@ f=if!b!then""else
  e
 ""
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -20,7 +21,8 @@ Is there an `import` or `exposing` missing up-top?
 ~~~zig
 LowerIdent(1:1-1:2),OpAssign(1:2-1:3),LowerIdent(1:3-1:12),StringStart(1:12-1:13),StringPart(1:13-1:13),StringEnd(1:13-1:14),KwElse(1:14-1:18),Newline(1:1-1:1),
 LowerIdent(2:2-2:3),Newline(1:1-1:1),
-StringStart(3:1-3:2),StringPart(3:2-3:2),StringEnd(3:2-3:3),EndOfFile(3:3-3:3),
+StringStart(3:1-3:2),StringPart(3:2-3:2),StringEnd(3:2-3:3),Newline(1:1-1:1),
+MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
 ~~~
 # PARSE
 ~~~clojure

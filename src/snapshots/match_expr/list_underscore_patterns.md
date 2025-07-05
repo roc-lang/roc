@@ -14,6 +14,7 @@ match items {
     [] => 0 # match an empty list
 }
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -30,7 +31,8 @@ OpenSquare(4:5-4:6),LowerIdent(4:6-4:11),Comma(4:11-4:12),DoubleDot(4:13-4:15),C
 OpenSquare(5:5-5:6),Underscore(5:6-5:7),Comma(5:7-5:8),Underscore(5:9-5:10),Comma(5:10-5:11),LowerIdent(5:12-5:17),CloseSquare(5:17-5:18),OpFatArrow(5:19-5:21),LowerIdent(5:22-5:27),Newline(5:29-5:73),
 OpenSquare(6:5-6:6),LowerIdent(6:6-6:7),Comma(6:7-6:8),Underscore(6:9-6:10),Comma(6:10-6:11),Underscore(6:12-6:13),Comma(6:13-6:14),LowerIdent(6:15-6:16),CloseSquare(6:16-6:17),OpFatArrow(6:18-6:20),LowerIdent(6:21-6:22),OpPlus(6:23-6:24),LowerIdent(6:25-6:26),Newline(6:28-6:60),
 OpenSquare(7:5-7:6),CloseSquare(7:6-7:7),OpFatArrow(7:8-7:10),Int(7:11-7:12),Newline(7:14-7:34),
-CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
+CloseCurly(8:1-8:2),Newline(1:1-1:1),
+MalformedUnknownToken(9:1-9:2),MalformedUnknownToken(9:2-9:3),MalformedUnknownToken(9:3-9:4),EndOfFile(9:4-9:4),
 ~~~
 # PARSE
 ~~~clojure

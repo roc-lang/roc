@@ -7,6 +7,7 @@ type=expr
 ~~~roc
 --""""""
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - minus_minus_block_string.md:1:1:1:3
 # PROBLEMS
@@ -24,7 +25,8 @@ Here is the problematic code:
 
 # TOKENS
 ~~~zig
-OpUnaryMinus(1:1-1:2),OpBinaryMinus(1:2-1:3),MultilineStringStart(1:3-1:6),StringPart(1:6-1:6),MultilineStringEnd(1:6-1:9),EndOfFile(1:9-1:9),
+OpUnaryMinus(1:1-1:2),OpBinaryMinus(1:2-1:3),MultilineStringStart(1:3-1:6),StringPart(1:6-1:6),MultilineStringEnd(1:6-1:9),Newline(1:1-1:1),
+MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # PARSE
 ~~~clojure

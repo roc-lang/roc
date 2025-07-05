@@ -15,10 +15,60 @@ bad_function = |msg| Stdout.line!(msg)
 
 main! = bad_function("This should fail")
 ~~~
+~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - pure_annotation_effectful_body_error.md:10:1:10:3
+UNEXPECTED TOKEN IN EXPRESSION - pure_annotation_effectful_body_error.md:10:2:10:4
+UNEXPECTED TOKEN IN EXPRESSION - pure_annotation_effectful_body_error.md:10:3:10:4
 # PROBLEMS
-NIL
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**pure_annotation_effectful_body_error.md:10:1:10:3:**
+```roc
+~~~
+```
+^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**pure_annotation_effectful_body_error.md:10:2:10:4:**
+```roc
+~~~
+```
+ ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**pure_annotation_effectful_body_error.md:10:3:10:4:**
+```roc
+~~~
+```
+  ^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),Newline(1:1-1:1),
@@ -29,11 +79,12 @@ Newline(5:2-5:66),
 LowerIdent(6:1-6:13),OpColon(6:14-6:15),UpperIdent(6:16-6:19),OpArrow(6:20-6:22),OpenCurly(6:23-6:24),CloseCurly(6:24-6:25),Newline(1:1-1:1),
 LowerIdent(7:1-7:13),OpAssign(7:14-7:15),OpBar(7:16-7:17),LowerIdent(7:17-7:20),OpBar(7:20-7:21),UpperIdent(7:22-7:28),NoSpaceDotLowerIdent(7:28-7:34),NoSpaceOpenRound(7:34-7:35),LowerIdent(7:35-7:38),CloseRound(7:38-7:39),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(9:1-9:6),OpAssign(9:7-9:8),LowerIdent(9:9-9:21),NoSpaceOpenRound(9:21-9:22),StringStart(9:22-9:23),StringPart(9:23-9:39),StringEnd(9:39-9:40),CloseRound(9:40-9:41),EndOfFile(9:41-9:41),
+LowerIdent(9:1-9:6),OpAssign(9:7-9:8),LowerIdent(9:9-9:21),NoSpaceOpenRound(9:21-9:22),StringStart(9:22-9:23),StringPart(9:23-9:39),StringEnd(9:39-9:40),CloseRound(9:40-9:41),Newline(1:1-1:1),
+MalformedUnknownToken(10:1-10:2),MalformedUnknownToken(10:2-10:3),MalformedUnknownToken(10:3-10:4),EndOfFile(10:4-10:4),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-9.41
+(file @1.1-10.4
 	(app @1.1-1.57
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
@@ -63,11 +114,23 @@ LowerIdent(9:1-9:6),OpAssign(9:7-9:8),LowerIdent(9:9-9:21),NoSpaceOpenRound(9:21
 			(e-apply @9.9-9.41
 				(e-ident @9.9-9.21 (raw "bad_function"))
 				(e-string @9.22-9.40
-					(e-string-part @9.23-9.39 (raw "This should fail")))))))
+					(e-string-part @9.23-9.39 (raw "This should fail")))))
+		(e-malformed @10.1-10.3 (reason "expr_unexpected_token"))
+		(e-malformed @10.2-10.4 (reason "expr_unexpected_token"))
+		(e-malformed @10.3-10.4 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+app [main!] { pf: platform "../basic-cli/platform.roc" }
+
+import pf.Stdout
+
+# This should be a type error: pure annotation but effectful body
+bad_function : Str -> {}
+bad_function = |msg| Stdout.line!(msg)
+
+main! = bad_function("This should fail")
+
 ~~~
 # CANONICALIZE
 ~~~clojure

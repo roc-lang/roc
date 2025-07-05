@@ -9,6 +9,7 @@ e:J
   as H->A
 r
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -20,7 +21,8 @@ Is there an `import` or `exposing` missing up-top?
 ~~~zig
 LowerIdent(1:1-1:2),OpColon(1:2-1:3),UpperIdent(1:3-1:4),Newline(1:1-1:1),
 KwAs(2:3-2:5),UpperIdent(2:6-2:7),OpArrow(2:7-2:9),UpperIdent(2:9-2:10),Newline(1:1-1:1),
-LowerIdent(3:1-3:2),EndOfFile(3:2-3:2),
+LowerIdent(3:1-3:2),Newline(1:1-1:1),
+MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
 ~~~
 # PARSE
 ~~~clojure

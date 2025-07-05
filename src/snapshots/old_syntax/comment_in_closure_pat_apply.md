@@ -8,6 +8,7 @@ type=expr
 \L,M#
  Q->f8
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - comment_in_closure_pat_apply.md:1:1:1:3
 # PROBLEMS
@@ -26,7 +27,8 @@ Here is the problematic code:
 # TOKENS
 ~~~zig
 OpBackslash(1:1-1:2),UpperIdent(1:2-1:3),Comma(1:3-1:4),UpperIdent(1:4-1:5),Newline(1:6-1:6),
-UpperIdent(2:2-2:3),OpArrow(2:3-2:5),LowerIdent(2:5-2:7),EndOfFile(2:7-2:7),
+UpperIdent(2:2-2:3),OpArrow(2:3-2:5),LowerIdent(2:5-2:7),Newline(1:1-1:1),
+MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
 ~~~
 # PARSE
 ~~~clojure

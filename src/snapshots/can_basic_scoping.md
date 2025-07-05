@@ -22,9 +22,49 @@ outerFunc = |_| {
     innerResult
 }
 ~~~
+~~~
 # EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - can_basic_scoping.md:17:1:17:3
+UNEXPECTED TOKEN IN EXPRESSION - can_basic_scoping.md:17:2:17:4
+UNEXPECTED TOKEN IN EXPRESSION - can_basic_scoping.md:17:3:17:4
 DUPLICATE DEFINITION - can_basic_scoping.md:9:5:9:6
 # PROBLEMS
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**can_basic_scoping.md:17:1:17:3:**
+```roc
+~~~
+```
+^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**can_basic_scoping.md:17:2:17:4:**
+```roc
+~~~
+```
+ ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**can_basic_scoping.md:17:3:17:4:**
+```roc
+~~~
+```
+  ^
+
+
 **DUPLICATE DEFINITION**
 The name `x` is being redeclared in this scope.
 
@@ -43,6 +83,18 @@ x = 5
 ^
 
 
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),
@@ -60,11 +112,12 @@ LowerIdent(12:9-12:10),OpAssign(12:11-12:12),LowerIdent(12:13-12:14),OpPlus(12:1
 LowerIdent(13:9-13:10),OpPlus(13:11-13:12),Int(13:13-13:14),Newline(1:1-1:1),
 CloseCurly(14:5-14:6),Newline(1:1-1:1),
 LowerIdent(15:5-15:16),Newline(1:1-1:1),
-CloseCurly(16:1-16:2),EndOfFile(16:2-16:2),
+CloseCurly(16:1-16:2),Newline(1:1-1:1),
+MalformedUnknownToken(17:1-17:2),MalformedUnknownToken(17:2-17:3),MalformedUnknownToken(17:3-17:4),EndOfFile(17:4-17:4),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-16.2
+(file @1.1-17.4
 	(module @1.1-1.10
 		(exposes @1.8-1.10))
 	(statements
@@ -96,7 +149,10 @@ CloseCurly(16:1-16:2),EndOfFile(16:2-16:2),
 									(e-binop @13.9-14.6 (op "+")
 										(e-ident @13.9-13.10 (raw "z"))
 										(e-int @13.13-13.14 (raw "1"))))))
-						(e-ident @15.5-15.16 (raw "innerResult"))))))))
+						(e-ident @15.5-15.16 (raw "innerResult"))))))
+		(e-malformed @17.1-17.3 (reason "expr_unexpected_token"))
+		(e-malformed @17.2-17.4 (reason "expr_unexpected_token"))
+		(e-malformed @17.3-17.4 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -116,6 +172,7 @@ outerFunc = |_| {
 	}
 	innerResult
 }
+
 ~~~
 # CANONICALIZE
 ~~~clojure

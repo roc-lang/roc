@@ -25,11 +25,51 @@ main! = |_| {
     {}
 }
 ~~~
+~~~
 # EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - rigid_var_instantiation.md:20:1:20:3
+UNEXPECTED TOKEN IN EXPRESSION - rigid_var_instantiation.md:20:2:20:4
+UNEXPECTED TOKEN IN EXPRESSION - rigid_var_instantiation.md:20:3:20:4
 UNUSED VARIABLE - rigid_var_instantiation.md:13:5:13:8
 UNUSED VARIABLE - rigid_var_instantiation.md:10:5:10:8
 UNUSED VARIABLE - rigid_var_instantiation.md:16:5:16:8
 # PROBLEMS
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**rigid_var_instantiation.md:20:1:20:3:**
+```roc
+~~~
+```
+^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**rigid_var_instantiation.md:20:2:20:4:**
+```roc
+~~~
+```
+ ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**rigid_var_instantiation.md:20:3:20:4:**
+```roc
+~~~
+```
+  ^
+
+
 **UNUSED VARIABLE**
 Variable ``str`` is not used anywhere in your code.
 
@@ -66,6 +106,18 @@ The unused variable is declared here:
     ^^^
 
 
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),Newline(1:1-1:1),
@@ -86,11 +138,12 @@ Newline(15:6-15:27),
 LowerIdent(16:5-16:8),OpAssign(16:9-16:10),LowerIdent(16:11-16:19),NoSpaceOpenRound(16:19-16:20),OpenSquare(16:20-16:21),Int(16:21-16:22),Comma(16:22-16:23),Int(16:24-16:25),Comma(16:25-16:26),Int(16:27-16:28),CloseSquare(16:28-16:29),CloseRound(16:29-16:30),Newline(1:1-1:1),
 Newline(1:1-1:1),
 OpenCurly(18:5-18:6),CloseCurly(18:6-18:7),Newline(1:1-1:1),
-CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
+CloseCurly(19:1-19:2),Newline(1:1-1:1),
+MalformedUnknownToken(20:1-20:2),MalformedUnknownToken(20:2-20:3),MalformedUnknownToken(20:3-20:4),EndOfFile(20:4-20:4),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-19.2
+(file @1.1-20.4
 	(app @1.1-1.57
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
@@ -138,7 +191,10 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 									(e-int @16.21-16.22 (raw "1"))
 									(e-int @16.24-16.25 (raw "2"))
 									(e-int @16.27-16.28 (raw "3")))))
-						(e-record @18.5-18.7)))))))
+						(e-record @18.5-18.7)))))
+		(e-malformed @20.1-20.3 (reason "expr_unexpected_token"))
+		(e-malformed @20.2-20.4 (reason "expr_unexpected_token"))
+		(e-malformed @20.3-20.4 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -161,6 +217,7 @@ main! = |_| {
 
 	{}
 }
+
 ~~~
 # CANONICALIZE
 ~~~clojure

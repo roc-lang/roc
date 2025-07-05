@@ -10,6 +10,7 @@ x = 5
 
 42
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - one_spaced_def.md:1:2:2:2
 # PROBLEMS
@@ -31,7 +32,8 @@ x = 5
 Newline(1:2-1:18),
 LowerIdent(2:1-2:2),OpAssign(2:3-2:4),Int(2:5-2:6),Newline(1:1-1:1),
 Newline(1:1-1:1),
-Int(4:1-4:3),EndOfFile(4:3-4:3),
+Int(4:1-4:3),Newline(1:1-1:1),
+MalformedUnknownToken(5:1-5:2),MalformedUnknownToken(5:2-5:3),MalformedUnknownToken(5:3-5:4),EndOfFile(5:4-5:4),
 ~~~
 # PARSE
 ~~~clojure

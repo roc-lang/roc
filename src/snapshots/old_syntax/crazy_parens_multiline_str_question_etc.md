@@ -8,6 +8,7 @@ type=expr
 ((d
 -""""""()?))Y
 ~~~
+~~~
 # EXPECTED
 PARSE ERROR - crazy_parens_multiline_str_question_etc.md:2:9:2:11
 PARSE ERROR - crazy_parens_multiline_str_question_etc.md:2:11:2:13
@@ -39,7 +40,8 @@ Here is the problematic code:
 # TOKENS
 ~~~zig
 OpenRound(1:1-1:2),NoSpaceOpenRound(1:2-1:3),LowerIdent(1:3-1:4),Newline(1:1-1:1),
-OpUnaryMinus(2:1-2:2),MultilineStringStart(2:2-2:5),StringPart(2:5-2:5),MultilineStringEnd(2:5-2:8),NoSpaceOpenRound(2:8-2:9),CloseRound(2:9-2:10),NoSpaceOpQuestion(2:10-2:11),CloseRound(2:11-2:12),CloseRound(2:12-2:13),UpperIdent(2:13-2:14),EndOfFile(2:14-2:14),
+OpUnaryMinus(2:1-2:2),MultilineStringStart(2:2-2:5),StringPart(2:5-2:5),MultilineStringEnd(2:5-2:8),NoSpaceOpenRound(2:8-2:9),CloseRound(2:9-2:10),NoSpaceOpQuestion(2:10-2:11),CloseRound(2:11-2:12),CloseRound(2:12-2:13),UpperIdent(2:13-2:14),Newline(1:1-1:1),
+MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
 ~~~
 # PARSE
 ~~~clojure

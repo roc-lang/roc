@@ -10,6 +10,7 @@ type=expr
 ,Mw->r)l
 asl
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -19,7 +20,8 @@ NIL
 Int(1:1-1:3),Newline(1:1-1:1),
 OpColon(2:1-2:2),NoSpaceOpenRound(2:2-2:3),UpperIdent(2:3-2:4),Comma(2:4-2:5),LowerIdent(2:5-2:6),Newline(1:1-1:1),
 Comma(3:1-3:2),UpperIdent(3:2-3:4),OpArrow(3:4-3:6),LowerIdent(3:6-3:7),CloseRound(3:7-3:8),LowerIdent(3:8-3:9),Newline(1:1-1:1),
-LowerIdent(4:1-4:4),EndOfFile(4:4-4:4),
+LowerIdent(4:1-4:4),Newline(1:1-1:1),
+MalformedUnknownToken(5:1-5:2),MalformedUnknownToken(5:2-5:3),MalformedUnknownToken(5:3-5:4),EndOfFile(5:4-5:4),
 ~~~
 # PARSE
 ~~~clojure

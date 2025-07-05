@@ -9,6 +9,7 @@ type=expr
 where e implements J)*
 l
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -17,7 +18,8 @@ NIL
 ~~~zig
 Int(1:1-1:2),OpColon(1:2-1:3),NoSpaceOpenRound(1:3-1:4),OpStar(1:4-1:5),Newline(1:6-1:6),
 KwWhere(2:1-2:6),LowerIdent(2:7-2:8),KwImplements(2:9-2:19),UpperIdent(2:20-2:21),CloseRound(2:21-2:22),OpStar(2:22-2:23),Newline(1:1-1:1),
-LowerIdent(3:1-3:2),EndOfFile(3:2-3:2),
+LowerIdent(3:1-3:2),Newline(1:1-1:1),
+MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
 ~~~
 # PARSE
 ~~~clojure

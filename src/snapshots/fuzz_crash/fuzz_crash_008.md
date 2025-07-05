@@ -7,9 +7,12 @@ type=file
 ~~~roc
 ||1
 ~~~
+~~~
 # EXPECTED
 ASCII CONTROL CHARACTER - fuzz_crash_008.md:1:1:1:4
-PARSE ERROR - fuzz_crash_008.md:1:5:1:5
+PARSE ERROR - fuzz_crash_008.md:2:1:2:3
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_008.md:2:2:2:4
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_008.md:2:3:2:4
 # PROBLEMS
 **ASCII CONTROL CHARACTER**
 ASCII control characters are not allowed in Roc source code.
@@ -35,12 +38,44 @@ A parsing error occurred: `expected_expr_bar`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**fuzz_crash_008.md:1:5:1:5:**
+**fuzz_crash_008.md:2:1:2:3:**
 ```roc
-||1
+~~~
 ```
-    
+^^
 
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**fuzz_crash_008.md:2:2:2:4:**
+```roc
+~~~
+```
+ ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**fuzz_crash_008.md:2:3:2:4:**
+```roc
+~~~
+```
+  ^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
@@ -48,14 +83,17 @@ Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
 ~~~zig
-OpBar(1:1-1:2),OpBar(1:3-1:4),Int(1:4-1:5),EndOfFile(1:5-1:5),
+OpBar(1:1-1:2),OpBar(1:3-1:4),Int(1:4-1:5),Newline(1:1-1:1),
+MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.5
+(file @1.1-2.4
 	(malformed-header @1.1-1.4 (tag "missing_header"))
 	(statements
-		(e-malformed @1.5-1.5 (reason "expected_expr_bar"))))
+		(e-malformed @2.1-2.3 (reason "expected_expr_bar"))
+		(e-malformed @2.2-2.4 (reason "expr_unexpected_token"))
+		(e-malformed @2.3-2.4 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc

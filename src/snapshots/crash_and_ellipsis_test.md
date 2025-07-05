@@ -26,9 +26,13 @@ main! = |_| {
     []
 }
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - crash_and_ellipsis_test.md:9:17:9:24
 UNEXPECTED TOKEN IN EXPRESSION - crash_and_ellipsis_test.md:13:23:13:30
+UNEXPECTED TOKEN IN EXPRESSION - crash_and_ellipsis_test.md:21:1:21:3
+UNEXPECTED TOKEN IN EXPRESSION - crash_and_ellipsis_test.md:21:2:21:4
+UNEXPECTED TOKEN IN EXPRESSION - crash_and_ellipsis_test.md:21:3:21:4
 NOT IMPLEMENTED - crash_and_ellipsis_test.md:16:5:16:12
 UNUSED VARIABLE - crash_and_ellipsis_test.md:17:5:17:12
 UNUSED VARIABLE - crash_and_ellipsis_test.md:18:5:18:12
@@ -55,6 +59,42 @@ Here is the problematic code:
 testCrashSimple = |_| crash "oops"
 ```
                       ^^^^^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**crash_and_ellipsis_test.md:21:1:21:3:**
+```roc
+~~~
+```
+^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**crash_and_ellipsis_test.md:21:2:21:4:**
+```roc
+~~~
+```
+ ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**crash_and_ellipsis_test.md:21:3:21:4:**
+```roc
+~~~
+```
+  ^
 
 
 **NOT IMPLEMENTED**
@@ -111,6 +151,18 @@ The unused variable is declared here:
     ^^^^^^^
 
 
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),Newline(1:1-1:1),
@@ -132,11 +184,12 @@ LowerIdent(16:5-16:12),OpAssign(16:13-16:14),LowerIdent(16:15-16:27),NoSpaceOpen
 LowerIdent(17:5-17:12),OpAssign(17:13-17:14),LowerIdent(17:15-17:24),NoSpaceOpenRound(17:24-17:25),Int(17:25-17:27),CloseRound(17:27-17:28),Newline(1:1-1:1),
 LowerIdent(18:5-18:12),OpAssign(18:13-18:14),LowerIdent(18:15-18:30),NoSpaceOpenRound(18:30-18:31),Int(18:31-18:33),CloseRound(18:33-18:34),Newline(1:1-1:1),
 OpenSquare(19:5-19:6),CloseSquare(19:6-19:7),Newline(1:1-1:1),
-CloseCurly(20:1-20:2),EndOfFile(20:2-20:2),
+CloseCurly(20:1-20:2),Newline(1:1-1:1),
+MalformedUnknownToken(21:1-21:2),MalformedUnknownToken(21:2-21:3),MalformedUnknownToken(21:3-21:4),EndOfFile(21:4-21:4),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-20.2
+(file @1.1-21.4
 	(app @1.1-1.57
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
@@ -204,7 +257,10 @@ CloseCurly(20:1-20:2),EndOfFile(20:2-20:2),
 							(e-apply @18.15-18.34
 								(e-ident @18.15-18.30 (raw "testCrashSimple"))
 								(e-int @18.31-18.33 (raw "42"))))
-						(e-list @19.5-19.7)))))))
+						(e-list @19.5-19.7)))))
+		(e-malformed @21.1-21.3 (reason "expr_unexpected_token"))
+		(e-malformed @21.2-21.4 (reason "expr_unexpected_token"))
+		(e-malformed @21.3-21.4 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -228,6 +284,7 @@ main! = |_| {
 	result3 = testCrashSimple(42)
 	[]
 }
+
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -7,6 +7,7 @@ type=expr
 ~~~roc
 [1u8, 2u8, 300]
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -18,7 +19,8 @@ This number literal is not valid: 2u8
 
 # TOKENS
 ~~~zig
-OpenSquare(1:1-1:2),Int(1:2-1:5),Comma(1:5-1:6),Int(1:7-1:10),Comma(1:10-1:11),Int(1:12-1:15),CloseSquare(1:15-1:16),EndOfFile(1:16-1:16),
+OpenSquare(1:1-1:2),Int(1:2-1:5),Comma(1:5-1:6),Int(1:7-1:10),Comma(1:10-1:11),Int(1:12-1:15),CloseSquare(1:15-1:16),Newline(1:1-1:1),
+MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # PARSE
 ~~~clojure
@@ -29,7 +31,7 @@ OpenSquare(1:1-1:2),Int(1:2-1:5),Comma(1:5-1:6),Int(1:7-1:10),Comma(1:10-1:11),I
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+[1u8, 2u8, 300]
 ~~~
 # CANONICALIZE
 ~~~clojure

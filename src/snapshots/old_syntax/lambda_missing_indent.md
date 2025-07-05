@@ -8,6 +8,7 @@ type=expr
 \x ->
 1
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - lambda_missing_indent.md:1:1:1:3
 # PROBLEMS
@@ -26,7 +27,8 @@ Here is the problematic code:
 # TOKENS
 ~~~zig
 OpBackslash(1:1-1:2),LowerIdent(1:2-1:3),OpArrow(1:4-1:6),Newline(1:1-1:1),
-Int(2:1-2:2),EndOfFile(2:2-2:2),
+Int(2:1-2:2),Newline(1:1-1:1),
+MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
 ~~~
 # PARSE
 ~~~clojure

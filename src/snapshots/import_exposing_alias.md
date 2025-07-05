@@ -16,10 +16,60 @@ main = {
 	decoded
 }
 ~~~
+~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - import_exposing_alias.md:11:1:11:3
+UNEXPECTED TOKEN IN EXPRESSION - import_exposing_alias.md:11:2:11:4
+UNEXPECTED TOKEN IN EXPRESSION - import_exposing_alias.md:11:3:11:4
 # PROBLEMS
-NIL
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**import_exposing_alias.md:11:1:11:3:**
+```roc
+~~~
+```
+^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**import_exposing_alias.md:11:2:11:4:**
+```roc
+~~~
+```
+ ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**import_exposing_alias.md:11:3:11:4:**
+```roc
+~~~
+```
+  ^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:13),CloseSquare(1:13-1:14),Newline(1:1-1:1),
@@ -31,11 +81,12 @@ LowerIdent(6:2-6:6),OpAssign(6:7-6:8),OpenCurly(6:9-6:10),LowerIdent(6:11-6:15),
 LowerIdent(7:2-7:9),OpAssign(7:10-7:11),LowerIdent(7:12-7:18),NoSpaceOpenRound(7:18-7:19),LowerIdent(7:19-7:23),CloseRound(7:23-7:24),Newline(1:1-1:1),
 LowerIdent(8:2-8:9),OpAssign(8:10-8:11),LowerIdent(8:12-8:20),NoSpaceOpenRound(8:20-8:21),LowerIdent(8:21-8:28),CloseRound(8:28-8:29),Newline(1:1-1:1),
 LowerIdent(9:2-9:9),Newline(1:1-1:1),
-CloseCurly(10:1-10:2),EndOfFile(10:2-10:2),
+CloseCurly(10:1-10:2),Newline(1:1-1:1),
+MalformedUnknownToken(11:1-11:2),MalformedUnknownToken(11:2-11:3),MalformedUnknownToken(11:3-11:4),EndOfFile(11:4-11:4),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-10.2
+(file @1.1-11.4
 	(module @1.1-1.14
 		(exposes @1.8-1.14
 			(exposed-lower-ident (text "main"))))
@@ -66,7 +117,10 @@ CloseCurly(10:1-10:2),EndOfFile(10:2-10:2),
 						(e-apply @8.12-8.29
 							(e-ident @8.12-8.20 (raw "fromJson"))
 							(e-ident @8.21-8.28 (raw "encoded"))))
-					(e-ident @9.2-9.9 (raw "decoded")))))))
+					(e-ident @9.2-9.9 (raw "decoded")))))
+		(e-malformed @11.1-11.3 (reason "expr_unexpected_token"))
+		(e-malformed @11.2-11.4 (reason "expr_unexpected_token"))
+		(e-malformed @11.3-11.4 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -80,6 +134,7 @@ main = {
 	decoded = fromJson(encoded)
 	decoded
 }
+
 ~~~
 # CANONICALIZE
 ~~~clojure

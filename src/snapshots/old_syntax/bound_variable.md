@@ -8,6 +8,7 @@ type=expr
 a:
 c 0
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -18,7 +19,8 @@ Is there an `import` or `exposing` missing up-top?
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpColon(1:2-1:3),Newline(1:1-1:1),
-LowerIdent(2:1-2:2),Int(2:3-2:4),EndOfFile(2:4-2:4),
+LowerIdent(2:1-2:2),Int(2:3-2:4),Newline(1:1-1:1),
+MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
 ~~~
 # PARSE
 ~~~clojure

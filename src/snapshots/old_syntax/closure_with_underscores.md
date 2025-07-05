@@ -7,6 +7,7 @@ type=expr
 ~~~roc
 \_, _name -> 42
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - closure_with_underscores.md:1:1:1:3
 # PROBLEMS
@@ -24,7 +25,8 @@ Here is the problematic code:
 
 # TOKENS
 ~~~zig
-OpBackslash(1:1-1:2),Underscore(1:2-1:3),Comma(1:3-1:4),NamedUnderscore(1:5-1:10),OpArrow(1:11-1:13),Int(1:14-1:16),EndOfFile(1:16-1:16),
+OpBackslash(1:1-1:2),Underscore(1:2-1:3),Comma(1:3-1:4),NamedUnderscore(1:5-1:10),OpArrow(1:11-1:13),Int(1:14-1:16),Newline(1:1-1:1),
+MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # PARSE
 ~~~clojure

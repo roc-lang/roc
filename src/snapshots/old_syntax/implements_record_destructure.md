@@ -8,6 +8,7 @@ type=expr
 {implements}=d
 I
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - implements_record_destructure.md:1:2:1:13
 # PROBLEMS
@@ -26,7 +27,8 @@ Here is the problematic code:
 # TOKENS
 ~~~zig
 OpenCurly(1:1-1:2),KwImplements(1:2-1:12),CloseCurly(1:12-1:13),OpAssign(1:13-1:14),LowerIdent(1:14-1:15),Newline(1:1-1:1),
-UpperIdent(2:1-2:2),EndOfFile(2:2-2:2),
+UpperIdent(2:1-2:2),Newline(1:1-1:1),
+MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
 ~~~
 # PARSE
 ~~~clojure

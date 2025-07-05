@@ -8,6 +8,7 @@ type=expr
 \{i#
 ,e}->a
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - closure_pat_reccord_comment.md:1:1:1:3
 # PROBLEMS
@@ -26,7 +27,8 @@ Here is the problematic code:
 # TOKENS
 ~~~zig
 OpBackslash(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:3-1:4),Newline(1:5-1:5),
-Comma(2:1-2:2),LowerIdent(2:2-2:3),CloseCurly(2:3-2:4),OpArrow(2:4-2:6),LowerIdent(2:6-2:7),EndOfFile(2:7-2:7),
+Comma(2:1-2:2),LowerIdent(2:2-2:3),CloseCurly(2:3-2:4),OpArrow(2:4-2:6),LowerIdent(2:6-2:7),Newline(1:1-1:1),
+MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
 ~~~
 # PARSE
 ~~~clojure

@@ -9,6 +9,7 @@ when {foo: (1, 2)} is
  {foo: (1, x)} -> x
  {foo: (_, b)} -> 3 + b
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -20,7 +21,8 @@ Is there an `import` or `exposing` missing up-top?
 ~~~zig
 LowerIdent(1:1-1:5),OpenCurly(1:6-1:7),LowerIdent(1:7-1:10),OpColon(1:10-1:11),OpenRound(1:12-1:13),Int(1:13-1:14),Comma(1:14-1:15),Int(1:16-1:17),CloseRound(1:17-1:18),CloseCurly(1:18-1:19),LowerIdent(1:20-1:22),Newline(1:1-1:1),
 OpenCurly(2:2-2:3),LowerIdent(2:3-2:6),OpColon(2:6-2:7),OpenRound(2:8-2:9),Int(2:9-2:10),Comma(2:10-2:11),LowerIdent(2:12-2:13),CloseRound(2:13-2:14),CloseCurly(2:14-2:15),OpArrow(2:16-2:18),LowerIdent(2:19-2:20),Newline(1:1-1:1),
-OpenCurly(3:2-3:3),LowerIdent(3:3-3:6),OpColon(3:6-3:7),OpenRound(3:8-3:9),Underscore(3:9-3:10),Comma(3:10-3:11),LowerIdent(3:12-3:13),CloseRound(3:13-3:14),CloseCurly(3:14-3:15),OpArrow(3:16-3:18),Int(3:19-3:20),OpPlus(3:21-3:22),LowerIdent(3:23-3:24),EndOfFile(3:24-3:24),
+OpenCurly(3:2-3:3),LowerIdent(3:3-3:6),OpColon(3:6-3:7),OpenRound(3:8-3:9),Underscore(3:9-3:10),Comma(3:10-3:11),LowerIdent(3:12-3:13),CloseRound(3:13-3:14),CloseCurly(3:14-3:15),OpArrow(3:16-3:18),Int(3:19-3:20),OpPlus(3:21-3:22),LowerIdent(3:23-3:24),Newline(1:1-1:1),
+MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
 ~~~
 # PARSE
 ~~~clojure

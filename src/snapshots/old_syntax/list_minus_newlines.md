@@ -8,6 +8,7 @@ type=expr
 [K,
 ]-i
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -18,11 +19,12 @@ Is there an `import` or `exposing` missing up-top?
 # TOKENS
 ~~~zig
 OpenSquare(1:1-1:2),UpperIdent(1:2-1:3),Comma(1:3-1:4),Newline(1:1-1:1),
-CloseSquare(2:1-2:2),OpBinaryMinus(2:2-2:3),LowerIdent(2:3-2:4),EndOfFile(2:4-2:4),
+CloseSquare(2:1-2:2),OpBinaryMinus(2:2-2:3),LowerIdent(2:3-2:4),Newline(1:1-1:1),
+MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
 ~~~
 # PARSE
 ~~~clojure
-(e-binop @1.1-2.4 (op "-")
+(e-binop @1.1-3.2 (op "-")
 	(e-list @1.1-2.2
 		(e-tag @1.2-1.3 (raw "K")))
 	(e-ident @2.3-2.4 (raw "i")))
@@ -35,7 +37,7 @@ CloseSquare(2:1-2:2),OpBinaryMinus(2:2-2:3),LowerIdent(2:3-2:4),EndOfFile(2:4-2:
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop @1.1-2.4 (op "sub")
+(e-binop @1.1-3.2 (op "sub")
 	(e-list @1.1-2.2
 		(elems
 			(e-tag @1.2-1.3 (name "K"))))
@@ -43,5 +45,5 @@ CloseSquare(2:1-2:2),OpBinaryMinus(2:2-2:3),LowerIdent(2:3-2:4),EndOfFile(2:4-2:
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-2.4 (type "*"))
+(expr @1.1-3.2 (type "*"))
 ~~~

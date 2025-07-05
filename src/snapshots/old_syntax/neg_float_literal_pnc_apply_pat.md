@@ -8,6 +8,7 @@ type=expr
 (-8.)():C
 p
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - neg_float_literal_pnc_apply_pat.md:1:2:1:4
 PARSE ERROR - neg_float_literal_pnc_apply_pat.md:1:5:1:7
@@ -39,7 +40,8 @@ Here is the problematic code:
 # TOKENS
 ~~~zig
 OpenRound(1:1-1:2),OpBinaryMinus(1:2-1:3),Int(1:3-1:4),Dot(1:4-1:5),CloseRound(1:5-1:6),NoSpaceOpenRound(1:6-1:7),CloseRound(1:7-1:8),OpColon(1:8-1:9),UpperIdent(1:9-1:10),Newline(1:1-1:1),
-LowerIdent(2:1-2:2),EndOfFile(2:2-2:2),
+LowerIdent(2:1-2:2),Newline(1:1-1:1),
+MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
 ~~~
 # PARSE
 ~~~clojure

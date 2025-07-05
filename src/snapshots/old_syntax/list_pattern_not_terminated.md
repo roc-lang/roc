@@ -8,6 +8,7 @@ type=expr
 when [] is
     [1, 2, -> ""
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -18,7 +19,8 @@ Is there an `import` or `exposing` missing up-top?
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:5),OpenSquare(1:6-1:7),CloseSquare(1:7-1:8),LowerIdent(1:9-1:11),Newline(1:1-1:1),
-OpenSquare(2:5-2:6),Int(2:6-2:7),Comma(2:7-2:8),Int(2:9-2:10),Comma(2:10-2:11),OpArrow(2:12-2:14),StringStart(2:15-2:16),StringPart(2:16-2:16),StringEnd(2:16-2:17),EndOfFile(2:17-2:17),
+OpenSquare(2:5-2:6),Int(2:6-2:7),Comma(2:7-2:8),Int(2:9-2:10),Comma(2:10-2:11),OpArrow(2:12-2:14),StringStart(2:15-2:16),StringPart(2:16-2:16),StringEnd(2:16-2:17),Newline(1:1-1:1),
+MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
 ~~~
 # PARSE
 ~~~clojure

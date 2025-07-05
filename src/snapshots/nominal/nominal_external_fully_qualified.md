@@ -17,10 +17,50 @@ handleResult = |result| {
     }
 }
 ~~~
+~~~
 # EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - nominal_external_fully_qualified.md:12:1:12:3
+UNEXPECTED TOKEN IN EXPRESSION - nominal_external_fully_qualified.md:12:2:12:4
+UNEXPECTED TOKEN IN EXPRESSION - nominal_external_fully_qualified.md:12:3:12:4
 UNDECLARED TYPE - nominal_external_fully_qualified.md:6:1:6:13
 UNUSED VARIABLE - nominal_external_fully_qualified.md:9:41:9:45
 # PROBLEMS
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**nominal_external_fully_qualified.md:12:1:12:3:**
+```roc
+~~~
+```
+^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**nominal_external_fully_qualified.md:12:2:12:4:**
+```roc
+~~~
+```
+ ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**nominal_external_fully_qualified.md:12:3:12:4:**
+```roc
+~~~
+```
+  ^
+
+
 **UNDECLARED TYPE**
 The type ``MyResultModule.MyResultType`` is not declared in this scope.
 
@@ -44,6 +84,18 @@ The unused variable is declared here:
                                         ^^^^
 
 
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:21),CloseSquare(1:21-1:22),Newline(1:1-1:1),
@@ -56,11 +108,12 @@ KwMatch(7:5-7:10),LowerIdent(7:11-7:17),OpenCurly(7:18-7:19),Newline(1:1-1:1),
 UpperIdent(8:9-8:23),NoSpaceDotUpperIdent(8:23-8:36),NoSpaceDotUpperIdent(8:36-8:39),NoSpaceOpenRound(8:39-8:40),LowerIdent(8:40-8:45),CloseRound(8:45-8:46),OpFatArrow(8:47-8:49),LowerIdent(8:50-8:55),Newline(1:1-1:1),
 UpperIdent(9:9-9:23),NoSpaceDotUpperIdent(9:23-9:36),NoSpaceDotUpperIdent(9:36-9:40),NoSpaceOpenRound(9:40-9:41),LowerIdent(9:41-9:45),CloseRound(9:45-9:46),OpFatArrow(9:47-9:49),StringStart(9:50-9:51),StringPart(9:51-9:73),StringEnd(9:73-9:74),Newline(1:1-1:1),
 CloseCurly(10:5-10:6),Newline(1:1-1:1),
-CloseCurly(11:1-11:2),EndOfFile(11:2-11:2),
+CloseCurly(11:1-11:2),Newline(1:1-1:1),
+MalformedUnknownToken(12:1-12:2),MalformedUnknownToken(12:2-12:3),MalformedUnknownToken(12:3-12:4),EndOfFile(12:4-12:4),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-11.2
+(file @1.1-12.4
 	(module @1.1-1.22
 		(exposes @1.8-1.22
 			(exposed-lower-ident (text "handleResult"))))
@@ -91,7 +144,10 @@ CloseCurly(11:1-11:2),EndOfFile(11:2-11:2),
 									(p-tag @9.9-9.46 (raw ".Err")
 										(p-ident @9.41-9.45 (raw "code")))
 									(e-string @9.50-9.74
-										(e-string-part @9.51-9.73 (raw "Error: $(code.toStr())"))))))))))))
+										(e-string-part @9.51-9.73 (raw "Error: $(code.toStr())"))))))))))
+		(e-malformed @12.1-12.3 (reason "expr_unexpected_token"))
+		(e-malformed @12.2-12.4 (reason "expr_unexpected_token"))
+		(e-malformed @12.3-12.4 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -106,6 +162,7 @@ handleResult = |result| {
 		Err(code) => "Error: $(code.toStr())"
 	}
 }
+
 ~~~
 # CANONICALIZE
 ~~~clojure

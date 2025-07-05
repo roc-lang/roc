@@ -7,13 +7,15 @@ type=expr
 ~~~roc
 |{ name, age }| "Hello ${name}, you are ${age.to_str()} years old"
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
 NIL
 # TOKENS
 ~~~zig
-OpBar(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:4-1:8),Comma(1:8-1:9),LowerIdent(1:10-1:13),CloseCurly(1:14-1:15),OpBar(1:15-1:16),StringStart(1:17-1:18),StringPart(1:18-1:24),OpenStringInterpolation(1:24-1:26),LowerIdent(1:26-1:30),CloseStringInterpolation(1:30-1:31),StringPart(1:31-1:41),OpenStringInterpolation(1:41-1:43),LowerIdent(1:43-1:46),NoSpaceDotLowerIdent(1:46-1:53),NoSpaceOpenRound(1:53-1:54),CloseRound(1:54-1:55),CloseStringInterpolation(1:55-1:56),StringPart(1:56-1:66),StringEnd(1:66-1:67),EndOfFile(1:67-1:67),
+OpBar(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:4-1:8),Comma(1:8-1:9),LowerIdent(1:10-1:13),CloseCurly(1:14-1:15),OpBar(1:15-1:16),StringStart(1:17-1:18),StringPart(1:18-1:24),OpenStringInterpolation(1:24-1:26),LowerIdent(1:26-1:30),CloseStringInterpolation(1:30-1:31),StringPart(1:31-1:41),OpenStringInterpolation(1:41-1:43),LowerIdent(1:43-1:46),NoSpaceDotLowerIdent(1:46-1:53),NoSpaceOpenRound(1:53-1:54),CloseRound(1:54-1:55),CloseStringInterpolation(1:55-1:56),StringPart(1:56-1:66),StringEnd(1:66-1:67),Newline(1:1-1:1),
+MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # PARSE
 ~~~clojure
@@ -34,7 +36,7 @@ OpBar(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:4-1:8),Comma(1:8-1:9),LowerIdent(
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+|{ name, age }| "Hello ${name}, you are ${age.to_str()} years old"
 ~~~
 # CANONICALIZE
 ~~~clojure

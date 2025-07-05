@@ -7,6 +7,7 @@ type=expr
 ~~~roc
 \( a,
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - pattern_in_parens_end_comma.md:1:1:1:3
 # PROBLEMS
@@ -24,7 +25,8 @@ Here is the problematic code:
 
 # TOKENS
 ~~~zig
-OpBackslash(1:1-1:2),NoSpaceOpenRound(1:2-1:3),LowerIdent(1:4-1:5),Comma(1:5-1:6),EndOfFile(1:6-1:6),
+OpBackslash(1:1-1:2),NoSpaceOpenRound(1:2-1:3),LowerIdent(1:4-1:5),Comma(1:5-1:6),Newline(1:1-1:1),
+MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # PARSE
 ~~~clojure

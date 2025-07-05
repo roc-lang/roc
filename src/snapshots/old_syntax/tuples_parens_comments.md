@@ -12,19 +12,20 @@ type=expr
 (EsE))
 ui)
 ~~~
+~~~
 # EXPECTED
-PARSE ERROR - tuples_parens_comments.md:6:3:6:4
+PARSE ERROR - tuples_parens_comments.md:6:3:6:3
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_close_round_or_comma`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**tuples_parens_comments.md:6:3:6:4:**
+**tuples_parens_comments.md:6:3:6:3:**
 ```roc
 ui)
 ```
-  ^
+  
 
 
 # TOKENS
@@ -34,11 +35,12 @@ Newline(1:1-1:1),
 OpenRound(3:1-3:2),Newline(1:1-1:1),
 Newline(4:2-4:2),
 OpenRound(5:1-5:2),UpperIdent(5:2-5:5),CloseRound(5:5-5:6),CloseRound(5:6-5:7),Newline(1:1-1:1),
-LowerIdent(6:1-6:3),CloseRound(6:3-6:4),EndOfFile(6:4-6:4),
+LowerIdent(6:1-6:3),CloseRound(6:3-6:4),Newline(1:1-1:1),
+MalformedUnknownToken(7:1-7:2),MalformedUnknownToken(7:2-7:3),MalformedUnknownToken(7:3-7:4),EndOfFile(7:4-7:4),
 ~~~
 # PARSE
 ~~~clojure
-(e-malformed @6.3-6.4 (reason "expected_expr_close_round_or_comma"))
+(e-malformed @1.1-1.1 (reason "expected_expr_close_round_or_comma"))
 ~~~
 # FORMATTED
 ~~~roc

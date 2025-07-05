@@ -7,13 +7,15 @@ type=header
 ~~~roc
 package [] {}
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
 NIL
 # TOKENS
 ~~~zig
-KwPackage(1:1-1:8),OpenSquare(1:9-1:10),CloseSquare(1:10-1:11),OpenCurly(1:12-1:13),CloseCurly(1:13-1:14),EndOfFile(1:14-1:14),
+KwPackage(1:1-1:8),OpenSquare(1:9-1:10),CloseSquare(1:10-1:11),OpenCurly(1:12-1:13),CloseCurly(1:13-1:14),Newline(1:1-1:1),
+MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # PARSE
 ~~~clojure
@@ -23,7 +25,7 @@ KwPackage(1:1-1:8),OpenSquare(1:9-1:10),CloseSquare(1:10-1:11),OpenCurly(1:12-1:
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+package [] {}
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -60,6 +60,7 @@ combineResults = |jsonResult, httpStatus|
         Err(error) => Err(error)
     }
 ~~~
+~~~
 # EXPECTED
 PARSE ERROR - can_import_exposing_types.md:52:45:52:51
 PARSE ERROR - can_import_exposing_types.md:52:22:52:25
@@ -227,6 +228,42 @@ combineResults = |jsonResult, httpStatus|
         Ok(value) => Ok({ body: Json.encode value, status: httpStatus })
         Err(error) => Err(error)
 ```
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**can_import_exposing_types.md:55:1:55:3:**
+```roc
+~~~
+```
+^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**can_import_exposing_types.md:55:2:55:4:**
+```roc
+~~~
+```
+ ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**can_import_exposing_types.md:55:3:55:4:**
+```roc
+~~~
+```
+  ^
 
 
 **UNDECLARED TYPE**
@@ -504,6 +541,18 @@ combineResults = |jsonResult, httpStatus|
                               ^^^^^^^^^^
 
 
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),
@@ -559,11 +608,12 @@ LowerIdent(50:1-50:15),OpAssign(50:16-50:17),OpBar(50:18-50:19),LowerIdent(50:19
 KwMatch(51:5-51:10),LowerIdent(51:11-51:21),OpenCurly(51:22-51:23),Newline(1:1-1:1),
 UpperIdent(52:9-52:11),NoSpaceOpenRound(52:11-52:12),LowerIdent(52:12-52:17),CloseRound(52:17-52:18),OpFatArrow(52:19-52:21),UpperIdent(52:22-52:24),NoSpaceOpenRound(52:24-52:25),OpenCurly(52:25-52:26),LowerIdent(52:27-52:31),OpColon(52:31-52:32),UpperIdent(52:33-52:37),NoSpaceDotLowerIdent(52:37-52:44),LowerIdent(52:45-52:50),Comma(52:50-52:51),LowerIdent(52:52-52:58),OpColon(52:58-52:59),LowerIdent(52:60-52:70),CloseCurly(52:71-52:72),CloseRound(52:72-52:73),Newline(1:1-1:1),
 UpperIdent(53:9-53:12),NoSpaceOpenRound(53:12-53:13),LowerIdent(53:13-53:18),CloseRound(53:18-53:19),OpFatArrow(53:20-53:22),UpperIdent(53:23-53:26),NoSpaceOpenRound(53:26-53:27),LowerIdent(53:27-53:32),CloseRound(53:32-53:33),Newline(1:1-1:1),
-CloseCurly(54:5-54:6),EndOfFile(54:6-54:6),
+CloseCurly(54:5-54:6),Newline(1:1-1:1),
+MalformedUnknownToken(55:1-55:2),MalformedUnknownToken(55:2-55:3),MalformedUnknownToken(55:3-55:4),EndOfFile(55:4-55:4),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-54.6
+(file @1.1-55.4
 	(module @1.1-1.10
 		(exposes @1.8-1.10))
 	(statements
@@ -739,7 +789,10 @@ CloseCurly(54:5-54:6),EndOfFile(54:6-54:6),
 								(p-ident @53.13-53.18 (raw "error")))
 							(e-apply @53.23-53.33
 								(e-tag @53.23-53.26 (raw "Err"))
-								(e-ident @53.27-53.32 (raw "error"))))))))))
+								(e-ident @53.27-53.32 (raw "error"))))))))
+		(e-malformed @55.1-55.3 (reason "expr_unexpected_token"))
+		(e-malformed @55.2-55.4 (reason "expr_unexpected_token"))
+		(e-malformed @55.3-55.4 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -797,6 +850,7 @@ combineResults = |jsonResult, httpStatus|
 		Ok(value) => 		httpStatus => 		 => 
 		Err(error) => Err(error)
 	}
+
 ~~~
 # CANONICALIZE
 ~~~clojure

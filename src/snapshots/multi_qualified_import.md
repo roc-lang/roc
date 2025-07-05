@@ -20,6 +20,7 @@ process = \encoder -> "processing"
 data : json.Core.Utf8.EncodedData
 data = json.Core.Utf8.encode "hello"
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:3:17:3:31
 UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:3:23:3:33
@@ -39,6 +40,9 @@ UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:13:22:13:22
 UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:14:12:14:22
 UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:14:17:14:29
 UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:14:22:14:31
+UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:15:1:15:3
+UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:15:2:15:4
+UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:15:3:15:4
 INVALID STATEMENT - multi_qualified_import.md:5:16:5:23
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -269,6 +273,42 @@ data = json.Core.Utf8.encode "hello"
                      ^^^^^^^^^
 
 
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**multi_qualified_import.md:15:1:15:3:**
+```roc
+~~~
+```
+^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**multi_qualified_import.md:15:2:15:4:**
+```roc
+~~~
+```
+ ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**multi_qualified_import.md:15:3:15:4:**
+```roc
+~~~
+```
+  ^
+
+
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
@@ -364,6 +404,18 @@ Only definitions, type annotations, and imports are allowed at the top level.
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:21),CloseSquare(1:21-1:22),Newline(1:1-1:1),
@@ -379,11 +431,12 @@ LowerIdent(10:1-10:8),OpAssign(10:9-10:10),OpBackslash(10:11-10:12),LowerIdent(1
 Newline(1:1-1:1),
 Newline(12:2-12:32),
 LowerIdent(13:1-13:5),OpColon(13:6-13:7),LowerIdent(13:8-13:12),NoSpaceDotUpperIdent(13:12-13:17),NoSpaceDotUpperIdent(13:17-13:22),NoSpaceDotUpperIdent(13:22-13:34),Newline(1:1-1:1),
-LowerIdent(14:1-14:5),OpAssign(14:6-14:7),LowerIdent(14:8-14:12),NoSpaceDotUpperIdent(14:12-14:17),NoSpaceDotUpperIdent(14:17-14:22),NoSpaceDotLowerIdent(14:22-14:29),StringStart(14:30-14:31),StringPart(14:31-14:36),StringEnd(14:36-14:37),EndOfFile(14:37-14:37),
+LowerIdent(14:1-14:5),OpAssign(14:6-14:7),LowerIdent(14:8-14:12),NoSpaceDotUpperIdent(14:12-14:17),NoSpaceDotUpperIdent(14:17-14:22),NoSpaceDotLowerIdent(14:22-14:29),StringStart(14:30-14:31),StringPart(14:31-14:36),StringEnd(14:36-14:37),Newline(1:1-1:1),
+MalformedUnknownToken(15:1-15:2),MalformedUnknownToken(15:2-15:3),MalformedUnknownToken(15:3-15:4),EndOfFile(15:4-15:4),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-14.37
+(file @1.1-15.4
 	(module @1.1-1.22
 		(exposes @1.8-1.22
 			(exposed-lower-ident (text "json_encoder"))))
@@ -422,7 +475,10 @@ LowerIdent(14:1-14:5),OpAssign(14:6-14:7),LowerIdent(14:8-14:12),NoSpaceDotUpper
 		(e-malformed @14.17-14.29 (reason "expr_unexpected_token"))
 		(e-malformed @14.22-14.31 (reason "expr_unexpected_token"))
 		(e-string @14.30-14.37
-			(e-string-part @14.31-14.36 (raw "hello")))))
+			(e-string-part @14.31-14.36 (raw "hello")))
+		(e-malformed @15.1-15.3 (reason "expr_unexpected_token"))
+		(e-malformed @15.2-15.4 (reason "expr_unexpected_token"))
+		(e-malformed @15.3-15.4 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -439,6 +495,7 @@ process : json
 # Test with multiple qualifiers
 data : json
 data = json"hello"
+
 ~~~
 # CANONICALIZE
 ~~~clojure

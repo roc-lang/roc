@@ -15,6 +15,7 @@ type=expr
 	[5],
 ]
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -29,7 +30,8 @@ Int(5:3-5:4),Comma(5:4-5:5),Newline(1:1-1:1),
 Int(6:3-6:4),Comma(6:4-6:5),Newline(1:1-1:1),
 CloseSquare(7:2-7:3),Comma(7:3-7:4),Newline(1:1-1:1),
 OpenSquare(8:2-8:3),Int(8:3-8:4),CloseSquare(8:4-8:5),Comma(8:5-8:6),Newline(1:1-1:1),
-CloseSquare(9:1-9:2),EndOfFile(9:2-9:2),
+CloseSquare(9:1-9:2),Newline(1:1-1:1),
+MalformedUnknownToken(10:1-10:2),MalformedUnknownToken(10:2-10:3),MalformedUnknownToken(10:3-10:4),EndOfFile(10:4-10:4),
 ~~~
 # PARSE
 ~~~clojure
@@ -46,7 +48,15 @@ CloseSquare(9:1-9:2),EndOfFile(9:2-9:2),
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+[
+	[1],
+	[2],
+	[
+		3,
+		4,
+	],
+	[5],
+]
 ~~~
 # CANONICALIZE
 ~~~clojure

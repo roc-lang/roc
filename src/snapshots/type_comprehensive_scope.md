@@ -44,12 +44,52 @@ Complex : {
     tree: Tree(U64)
 }
 ~~~
+~~~
 # EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - type_comprehensive_scope.md:39:1:39:3
+UNEXPECTED TOKEN IN EXPRESSION - type_comprehensive_scope.md:39:2:39:4
+UNEXPECTED TOKEN IN EXPRESSION - type_comprehensive_scope.md:39:3:39:4
 TYPE REDECLARED - type_comprehensive_scope.md:12:1:12:37
 type_comprehensive_scope.md:1:1:1:1: - type_comprehensive_scope.md:15:19:15:23
 TYPE REDECLARED - type_comprehensive_scope.md:24:1:24:13
 type_comprehensive_scope.md:9:1:9:33: - type_comprehensive_scope.md:27:11:27:29
 # PROBLEMS
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**type_comprehensive_scope.md:39:1:39:3:**
+```roc
+~~~
+```
+^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**type_comprehensive_scope.md:39:2:39:4:**
+```roc
+~~~
+```
+ ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**type_comprehensive_scope.md:39:3:39:4:**
+```roc
+~~~
+```
+  ^
+
+
 **TYPE REDECLARED**
 The type ``Result`` is being redeclared.
 
@@ -108,6 +148,18 @@ BadType : SomeUndeclaredType
           ^^^^^^^^^^^^^^^^^^
 
 
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:14),Comma(1:14-1:15),UpperIdent(1:16-1:22),Comma(1:22-1:23),UpperIdent(1:24-1:30),Comma(1:30-1:31),UpperIdent(1:32-1:36),Comma(1:36-1:37),UpperIdent(1:38-1:42),CloseSquare(1:42-1:43),Newline(1:1-1:1),
@@ -147,11 +199,12 @@ UpperIdent(34:1-34:8),OpColon(34:9-34:10),OpenCurly(34:11-34:12),Newline(1:1-1:1
 LowerIdent(35:5-35:11),OpColon(35:11-35:12),UpperIdent(35:13-35:19),Comma(35:19-35:20),Newline(1:1-1:1),
 LowerIdent(36:5-36:11),OpColon(36:11-36:12),UpperIdent(36:13-36:19),NoSpaceOpenRound(36:19-36:20),UpperIdent(36:20-36:24),Comma(36:24-36:25),UpperIdent(36:26-36:29),CloseRound(36:29-36:30),Comma(36:30-36:31),Newline(1:1-1:1),
 LowerIdent(37:5-37:9),OpColon(37:9-37:10),UpperIdent(37:11-37:15),NoSpaceOpenRound(37:15-37:16),UpperIdent(37:16-37:19),CloseRound(37:19-37:20),Newline(1:1-1:1),
-CloseCurly(38:1-38:2),EndOfFile(38:2-38:2),
+CloseCurly(38:1-38:2),Newline(1:1-1:1),
+MalformedUnknownToken(39:1-39:2),MalformedUnknownToken(39:2-39:3),MalformedUnknownToken(39:3-39:4),EndOfFile(39:4-39:4),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-38.2
+(file @1.1-39.4
 	(module @1.1-1.43
 		(exposes @1.8-1.43
 			(exposed-upper-ident (text "MyU64"))
@@ -262,7 +315,10 @@ CloseCurly(38:1-38:2),EndOfFile(38:2-38:2),
 				(anno-record-field @37.5-38.2 (name "tree")
 					(ty-apply @37.11-37.20
 						(ty @37.11-37.15 (name "Tree"))
-						(ty @37.16-37.19 (name "U64"))))))))
+						(ty @37.16-37.19 (name "U64"))))))
+		(e-malformed @39.1-39.3 (reason "expr_unexpected_token"))
+		(e-malformed @39.2-39.4 (reason "expr_unexpected_token"))
+		(e-malformed @39.3-39.4 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -304,6 +360,7 @@ Complex : {
 	result : Result(Bool, Str),
 	tree : Tree(U64),
 }
+
 ~~~
 # CANONICALIZE
 ~~~clojure

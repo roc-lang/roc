@@ -12,6 +12,7 @@ f : a -> (b -> c)
 
 f
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -26,7 +27,8 @@ KwWhere(2:5-2:10),LowerIdent(2:11-2:12),KwImplements(2:13-2:23),UpperIdent(2:24-
 LowerIdent(3:7-3:8),KwImplements(3:9-3:19),UpperIdent(3:20-3:22),Comma(3:22-3:23),Newline(1:1-1:1),
 LowerIdent(4:7-4:8),KwImplements(4:9-4:19),UpperIdent(4:20-4:23),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(6:1-6:2),EndOfFile(6:2-6:2),
+LowerIdent(6:1-6:2),Newline(1:1-1:1),
+MalformedUnknownToken(7:1-7:2),MalformedUnknownToken(7:2-7:3),MalformedUnknownToken(7:3-7:4),EndOfFile(7:4-7:4),
 ~~~
 # PARSE
 ~~~clojure

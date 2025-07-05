@@ -9,6 +9,7 @@ type=expr
 m}:J
 O
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -24,7 +25,8 @@ Is there an `import` or `exposing` missing up-top?
 ~~~zig
 OpenCurly(1:1-1:2),LowerIdent(1:2-1:3),NoSpaceOpQuestion(1:3-1:4),Newline(1:1-1:1),
 LowerIdent(2:1-2:2),CloseCurly(2:2-2:3),OpColon(2:3-2:4),UpperIdent(2:4-2:5),Newline(1:1-1:1),
-UpperIdent(3:1-3:2),EndOfFile(3:2-3:2),
+UpperIdent(3:1-3:2),Newline(1:1-1:1),
+MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
 ~~~
 # PARSE
 ~~~clojure

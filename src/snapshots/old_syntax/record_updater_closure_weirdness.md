@@ -8,6 +8,7 @@ type=expr
 &rm?\L2->t
 +c
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - record_updater_closure_weirdness.md:1:1:1:4
 # PROBLEMS
@@ -26,7 +27,8 @@ Here is the problematic code:
 # TOKENS
 ~~~zig
 OpAmpersand(1:1-1:2),LowerIdent(1:2-1:4),NoSpaceOpQuestion(1:4-1:5),OpBackslash(1:5-1:6),UpperIdent(1:6-1:8),OpArrow(1:8-1:10),LowerIdent(1:10-1:11),Newline(1:1-1:1),
-OpPlus(2:1-2:2),LowerIdent(2:2-2:3),EndOfFile(2:3-2:3),
+OpPlus(2:1-2:2),LowerIdent(2:2-2:3),Newline(1:1-1:1),
+MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
 ~~~
 # PARSE
 ~~~clojure

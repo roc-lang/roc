@@ -41,10 +41,60 @@ main = {
     )
 }
 ~~~
+~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - can_import_comprehensive.md:36:1:36:3
+UNEXPECTED TOKEN IN EXPRESSION - can_import_comprehensive.md:36:2:36:4
+UNEXPECTED TOKEN IN EXPRESSION - can_import_comprehensive.md:36:3:36:4
 # PROBLEMS
-NIL
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**can_import_comprehensive.md:36:1:36:3:**
+```roc
+~~~
+```
+^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**can_import_comprehensive.md:36:2:36:4:**
+```roc
+~~~
+```
+ ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**can_import_comprehensive.md:36:3:36:4:**
+```roc
+~~~
+```
+  ^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),
@@ -81,11 +131,12 @@ LowerIdent(31:9-31:16),Comma(31:16-31:17),Newline(1:1-1:1),
 LowerIdent(32:9-32:16),Comma(32:16-32:17),Newline(1:1-1:1),
 LowerIdent(33:9-33:17),Comma(33:17-33:18),Newline(1:1-1:1),
 CloseRound(34:5-34:6),Newline(1:1-1:1),
-CloseCurly(35:1-35:2),EndOfFile(35:2-35:2),
+CloseCurly(35:1-35:2),Newline(1:1-1:1),
+MalformedUnknownToken(36:1-36:2),MalformedUnknownToken(36:2-36:3),MalformedUnknownToken(36:3-36:4),EndOfFile(36:4-36:4),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-35.2
+(file @1.1-36.4
 	(module @1.1-1.10
 		(exposes @1.8-1.10))
 	(statements
@@ -131,7 +182,10 @@ CloseCurly(35:1-35:2),EndOfFile(35:2-35:2),
 						(e-ident @30.9-30.16 (raw "result2"))
 						(e-ident @31.9-31.16 (raw "result3"))
 						(e-ident @32.9-32.16 (raw "result4"))
-						(e-ident @33.9-33.17 (raw "combined"))))))))
+						(e-ident @33.9-33.17 (raw "combined"))))))
+		(e-malformed @36.1-36.3 (reason "expr_unexpected_token"))
+		(e-malformed @36.2-36.4 (reason "expr_unexpected_token"))
+		(e-malformed @36.3-36.4 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -170,6 +224,7 @@ main = {
 		combined,
 	)
 }
+
 ~~~
 # CANONICALIZE
 ~~~clojure

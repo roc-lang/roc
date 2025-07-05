@@ -9,6 +9,7 @@ type=expr
 1
 ]
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -17,7 +18,8 @@ NIL
 ~~~zig
 OpenSquare(1:1-1:2),Newline(1:1-1:1),
 Int(2:1-2:2),Newline(1:1-1:1),
-CloseSquare(3:1-3:2),EndOfFile(3:2-3:2),
+CloseSquare(3:1-3:2),Newline(1:1-1:1),
+MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
 ~~~
 # PARSE
 ~~~clojure

@@ -26,10 +26,60 @@ getNumber = |_opt| 0
 
 main! = |_| {}
 ~~~
+~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - type_alias_tag_union.md:21:1:21:3
+UNEXPECTED TOKEN IN EXPRESSION - type_alias_tag_union.md:21:2:21:4
+UNEXPECTED TOKEN IN EXPRESSION - type_alias_tag_union.md:21:3:21:4
 # PROBLEMS
-NIL
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**type_alias_tag_union.md:21:1:21:3:**
+```roc
+~~~
+```
+^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**type_alias_tag_union.md:21:2:21:4:**
+```roc
+~~~
+```
+ ^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **~** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**type_alias_tag_union.md:21:3:21:4:**
+```roc
+~~~
+```
+  ^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),Newline(1:1-1:1),
@@ -51,11 +101,12 @@ Newline(1:1-1:1),
 LowerIdent(17:1-17:10),OpColon(17:11-17:12),UpperIdent(17:13-17:19),NoSpaceOpenRound(17:19-17:20),UpperIdent(17:20-17:23),CloseRound(17:23-17:24),OpArrow(17:25-17:27),UpperIdent(17:28-17:31),Newline(1:1-1:1),
 LowerIdent(18:1-18:10),OpAssign(18:11-18:12),OpBar(18:13-18:14),NamedUnderscore(18:14-18:18),OpBar(18:18-18:19),Int(18:20-18:21),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(20:1-20:6),OpAssign(20:7-20:8),OpBar(20:9-20:10),Underscore(20:10-20:11),OpBar(20:11-20:12),OpenCurly(20:13-20:14),CloseCurly(20:14-20:15),EndOfFile(20:15-20:15),
+LowerIdent(20:1-20:6),OpAssign(20:7-20:8),OpBar(20:9-20:10),Underscore(20:10-20:11),OpBar(20:11-20:12),OpenCurly(20:13-20:14),CloseCurly(20:14-20:15),Newline(1:1-1:1),
+MalformedUnknownToken(21:1-21:2),MalformedUnknownToken(21:2-21:3),MalformedUnknownToken(21:3-21:4),EndOfFile(21:4-21:4),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-20.15
+(file @1.1-21.4
 	(app @1.1-1.53
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
@@ -134,11 +185,34 @@ LowerIdent(20:1-20:6),OpAssign(20:7-20:8),OpBar(20:9-20:10),Underscore(20:10-20:
 			(e-lambda @20.9-20.15
 				(args
 					(p-underscore))
-				(e-record @20.13-20.15)))))
+				(e-record @20.13-20.15)))
+		(e-malformed @21.1-21.3 (reason "expr_unexpected_token"))
+		(e-malformed @21.2-21.4 (reason "expr_unexpected_token"))
+		(e-malformed @21.3-21.4 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+app [main!] { pf: platform "../basic-cli/main.roc" }
+
+# Type alias with type parameters that expands to a tag union
+MyResult(ok, err) : [Good(ok), Bad(err)]
+
+# Using the type alias
+process : MyResult(Str, I32) -> Str
+process = |_result| "processed"
+
+# Another type alias with a single parameter
+Option(a) : [Some(a), None]
+
+# Using it with different types
+getString : Option(Str) -> Str
+getString = |_opt| "default"
+
+getNumber : Option(I32) -> I32
+getNumber = |_opt| 0
+
+main! = |_| {}
+
 ~~~
 # CANONICALIZE
 ~~~clojure

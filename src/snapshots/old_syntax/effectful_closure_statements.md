@@ -17,6 +17,7 @@ type=expr
 
     echo "Let's get started on your driver's license application."
 ~~~
+~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - effectful_closure_statements.md:1:1:1:3
 # PROBLEMS
@@ -44,7 +45,8 @@ LowerIdent(7:9-7:13),Int(7:14-7:15),Newline(1:1-1:1),
 KwElse(8:5-8:9),Newline(1:1-1:1),
 OpenCurly(9:9-9:10),CloseCurly(9:10-9:11),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(11:5-11:9),StringStart(11:10-11:11),StringPart(11:11-11:66),StringEnd(11:66-11:67),EndOfFile(11:67-11:67),
+LowerIdent(11:5-11:9),StringStart(11:10-11:11),StringPart(11:11-11:66),StringEnd(11:66-11:67),Newline(1:1-1:1),
+MalformedUnknownToken(12:1-12:2),MalformedUnknownToken(12:2-12:3),MalformedUnknownToken(12:3-12:4),EndOfFile(12:4-12:4),
 ~~~
 # PARSE
 ~~~clojure

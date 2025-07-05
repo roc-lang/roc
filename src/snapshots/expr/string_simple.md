@@ -7,13 +7,15 @@ type=expr
 ~~~roc
 "hello world"
 ~~~
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
 NIL
 # TOKENS
 ~~~zig
-StringStart(1:1-1:2),StringPart(1:2-1:13),StringEnd(1:13-1:14),EndOfFile(1:14-1:14),
+StringStart(1:1-1:2),StringPart(1:2-1:13),StringEnd(1:13-1:14),Newline(1:1-1:1),
+MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # PARSE
 ~~~clojure
@@ -22,7 +24,7 @@ StringStart(1:1-1:2),StringPart(1:2-1:13),StringEnd(1:13-1:14),EndOfFile(1:14-1:
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+"hello world"
 ~~~
 # CANONICALIZE
 ~~~clojure
