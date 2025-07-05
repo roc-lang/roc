@@ -110,10 +110,18 @@ pub fn eval(
 
         // Zero-argument tags
         .zero_argument_tag => |tag| {
-            // For now, write the tag index as a u16
-            _ = tag;
+            // Write the tag discriminant as a u16
+            // For boolean tags: True = 0, False = 1
             const tag_ptr = @as(*u16, @ptrCast(@alignCast(ptr)));
-            tag_ptr.* = 0; // TODO: get actual tag discriminant
+            const tag_name = cir.env.idents.getText(tag.name);
+            if (std.mem.eql(u8, tag_name, "True")) {
+                tag_ptr.* = 0;
+            } else if (std.mem.eql(u8, tag_name, "False")) {
+                tag_ptr.* = 1;
+            } else {
+                // TODO: get actual tag discriminant for other tags
+                tag_ptr.* = 0;
+            }
         },
 
         // Tags with arguments
@@ -201,9 +209,10 @@ fn writeIntToMemory(ptr: *anyopaque, value: i128, precision: types.Num.Int.Preci
 /// 3. If no branch condition is true, evaluate and return final_else
 ///
 /// Type Requirements:
-/// - Only boolean types are allowed as conditions
+/// - Only boolean tag union types are allowed as conditions
+/// - A boolean is the tag union [True, False]
 /// - Type mismatch error if condition evaluates to any non-boolean type
-/// - Boolean evaluation: non-zero means true, zero means false
+/// - Tag evaluation: True (discriminant 0) is true, False (discriminant 1) is false
 ///
 /// Branch Storage:
 /// - Branches are stored as nodes with data in extra_data
@@ -213,7 +222,7 @@ fn writeIntToMemory(ptr: *anyopaque, value: i128, precision: types.Num.Int.Preci
 ///
 /// Current Limitations:
 /// - Complex boolean expressions (like `1 == 1`) not fully canonicalized yet
-/// - Boolean literals (`Bool.true`, `Bool.false`) not yet fully supported
+/// - Boolean tags (`True`, `False`) as part of the `[True, False]` tag union
 /// - The `getIfBranch` helper function is not yet implemented in NodeStore
 ///
 /// Future Work:
@@ -301,60 +310,73 @@ fn extractBranchData(cir: *CIR, branch_idx: CIR.IfBranch.Idx) !BranchData {
 
 /// Evaluates a boolean condition result and returns whether it's true.
 ///
-/// This function enforces strict type checking - only boolean types are allowed.
+/// This function enforces strict type checking - only boolean tag union types are allowed.
+/// A boolean in Roc is represented as the tag union `[True, False]`.
 ///
 /// Returns:
-/// - true if the boolean value is non-zero
-/// - false if the boolean value is zero
-/// - error.TypeMismatch if the condition is not a boolean type
+/// - true if the tag is `True` (discriminant 0)
+/// - false if the tag is `False` (discriminant 1)
+/// - error.TypeMismatch if the condition is not a boolean tag union
 fn evaluateBooleanCondition(cond_result: EvalResult) !bool {
-    // Verify that the condition is a boolean type
-    if (cond_result.layout.tag != .scalar or cond_result.layout.data.scalar.tag != .bool) {
-        // Type mismatch: condition must be a boolean
+    // Boolean values in Roc are represented as tags (zero-argument tag union)
+    // The tag union [True, False] is represented as a u16 discriminant
+    if (cond_result.layout.tag != .scalar or cond_result.layout.data.scalar.tag != .int) {
+        // Type mismatch: condition must be a tag (represented as int)
         return error.TypeMismatch;
     }
 
-    // Read the boolean value (non-zero means true)
-    const bool_ptr = @as(*u8, @ptrCast(@alignCast(cond_result.ptr)));
-    return bool_ptr.* != 0;
+    // For zero-argument tags, we expect a u16 layout
+    const int_precision = cond_result.layout.data.scalar.data.int;
+    if (int_precision != .u16) {
+        return error.TypeMismatch;
+    }
+
+    // Read the tag discriminant
+    const tag_ptr = @as(*u16, @ptrCast(@alignCast(cond_result.ptr)));
+    const discriminant = tag_ptr.*;
+
+    // In the tag union [True, False]:
+    // - True has discriminant 0
+    // - False has discriminant 1
+    return discriminant == 0;
 }
 
 test {
     _ = @import("eval_test.zig");
 }
 
-test "evaluateBooleanCondition - valid boolean true" {
+test "evaluateBooleanCondition - valid True tag" {
     const testing = std.testing;
 
-    // Create a boolean true value
-    var bool_value: u8 = 1;
+    // Create a True tag (discriminant 0)
+    var tag_value: u16 = 0;
     const result = EvalResult{
-        .layout = layout.Layout.boolType(),
-        .ptr = &bool_value,
+        .layout = layout.Layout.int(.u16),
+        .ptr = &tag_value,
     };
 
     const is_true = try evaluateBooleanCondition(result);
     try testing.expect(is_true);
 }
 
-test "evaluateBooleanCondition - valid boolean false" {
+test "evaluateBooleanCondition - valid False tag" {
     const testing = std.testing;
 
-    // Create a boolean false value
-    var bool_value: u8 = 0;
+    // Create a False tag (discriminant 1)
+    var tag_value: u16 = 1;
     const result = EvalResult{
-        .layout = layout.Layout.boolType(),
-        .ptr = &bool_value,
+        .layout = layout.Layout.int(.u16),
+        .ptr = &tag_value,
     };
 
     const is_false = try evaluateBooleanCondition(result);
     try testing.expect(!is_false);
 }
 
-test "evaluateBooleanCondition - integer type error" {
+test "evaluateBooleanCondition - wrong integer precision error" {
     const testing = std.testing;
 
-    // Create an integer value
+    // Create an integer value with wrong precision (not u16)
     var int_value: i128 = 42;
     const result = EvalResult{
         .layout = layout.Layout.int(.i128),

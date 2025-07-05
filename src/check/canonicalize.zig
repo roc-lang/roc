@@ -757,58 +757,11 @@ pub fn canonicalize_expr(
             } });
             return expr_idx;
         },
-        .field_access => |e| {
-            const region = self.tokenizedRegionToRegion(e.region);
-
-            // Check if this is Bool.true or Bool.false
-            const left_expr = self.parse_ir.store.getExpr(e.left);
-            const right_expr = self.parse_ir.store.getExpr(e.right);
-
-            if (left_expr == .ident and right_expr == .ident) {
-                if (self.parse_ir.tokens.resolveIdentifier(left_expr.ident.token)) |left_ident| {
-                    if (self.parse_ir.tokens.resolveIdentifier(right_expr.ident.token)) |right_ident| {
-                        const left_text = self.can_ir.env.idents.getText(left_ident);
-                        const right_text = self.can_ir.env.idents.getText(right_ident);
-
-                        // Check if this is Bool.true or Bool.false
-                        if (std.mem.eql(u8, left_text, "Bool")) {
-                            if (std.mem.eql(u8, right_text, "true") or std.mem.eql(u8, right_text, "false")) {
-                                // This is a boolean literal - canonicalize as a zero-argument tag
-                                const final_expr_idx = self.can_ir.store.predictNodeIndex(2);
-                                const ext_type_var = self.can_ir.pushFreshTypeVar(final_expr_idx, region);
-                                const variant_type_var = self.can_ir.pushFreshTypeVar(final_expr_idx, region);
-
-                                const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
-                                    .zero_argument_tag = .{
-                                        .closure_name = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
-                                        .variant_var = variant_type_var,
-                                        .ext_var = ext_type_var,
-                                        .name = right_ident,
-                                        .region = region,
-                                    },
-                                });
-
-                                // Set the type to be Bool
-                                const bool_pattern_idx = self.scopeLookup(&self.can_ir.env.idents, .ident, left_ident);
-                                if (bool_pattern_idx == .found and bool_pattern_idx.found == BUILTIN_BOOL) {
-                                    // Create a tag union type for Bool
-                                    const tag = Tag{ .name = right_ident, .args = types.Var.SafeList.Range.empty };
-                                    const tag_union = self.can_ir.env.types_store.mkTagUnion(&[_]Tag{tag}, ext_type_var);
-                                    _ = self.can_ir.setTypeVarAt(@enumFromInt(@intFromEnum(expr_idx)), tag_union);
-                                }
-
-                                return expr_idx;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Otherwise, this is a regular field access (not implemented yet)
+        .field_access => |_| {
             const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize record field_access expression");
             const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
                 .feature = feature,
-                .region = region,
+                .region = Region.zero(),
             } });
             return expr_idx;
         },

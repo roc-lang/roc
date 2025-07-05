@@ -195,11 +195,11 @@ test "eval call - not yet implemented" {
 //     ...
 // }
 
-test "eval if expression with boolean literals" {
-    // Test that Bool.true and Bool.false are properly canonicalized and evaluated
+test "eval if expression with boolean tags" {
+    // Test that True and False tags are properly canonicalized and evaluated
     const sources = [_]struct { src: []const u8, expected: i128 }{
-        .{ .src = "if Bool.true then 1 else 0", .expected = 1 },
-        .{ .src = "if Bool.false then 1 else 0", .expected = 0 },
+        .{ .src = "if True then 1 else 0", .expected = 1 },
+        .{ .src = "if False then 1 else 0", .expected = 0 },
     };
 
     for (sources) |test_case| {
@@ -235,7 +235,7 @@ test "eval if expression - demonstrate evaluation logic" {
 
     // Currently, if expressions with comparisons result in runtime errors during
     // canonicalization. Once that's fixed, these tests will validate that:
-    // 1. Conditions are properly evaluated
+    // 1. Conditions are properly evaluated as boolean tags [True, False]
     // 2. The correct branch is taken based on the condition
     // 3. The branch body is evaluated and returned
 
@@ -273,7 +273,7 @@ test "eval if expression - demonstrate evaluation logic" {
 }
 
 test "eval if expression with non-boolean condition" {
-    // This test verifies that if expressions require boolean conditions
+    // This test verifies that if expressions require boolean tag union conditions
     // and will return a type error for non-boolean conditions like integers
 
     // Create a simple if expression with an integer condition
@@ -450,7 +450,7 @@ test "eval if expression - implementation ready" {
     //
     // 1. Empty branches: Falls through to final_else
     // 2. Branch evaluation: Evaluates conditions in order until one is true
-    // 3. Type checking: Only boolean conditions are allowed (no truthiness)
+    // 3. Type checking: Only boolean tag union [True, False] conditions are allowed
     // 4. Error handling: Proper error propagation for type mismatches
     //
     // The implementation includes:
