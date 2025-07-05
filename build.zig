@@ -8,14 +8,21 @@ const OptimizeMode = std.builtin.OptimizeMode;
 const ResolvedTarget = std.Build.ResolvedTarget;
 const Step = std.Build.Step;
 
+// General note for potential future improvement:
+// Currently we do everything via singular root modules.
+// This actually leads to a bunch of redundant compilation and error reporting.
+// It would be better to have finer grain modules and have the root modules import those.
+// This would avoid duplication or errors in roc check for every exe entrypoint.
+
 pub fn build(b: *std.Build) void {
     // build steps
     const run_step = b.step("run", "Build and run the roc cli");
     const roc_step = b.step("roc", "Build the roc compiler without running it");
     const test_step = b.step("test", "Run all tests included in src/tests.zig");
     const builtins_test_step = b.step("test-builtins", "Run tests for builtins code");
+    const check_step = b.step("check", "Check all zig code for compilation errors");
     const fmt_step = b.step("fmt", "Format all zig code");
-    const check_fmt_step = b.step("check-fmt", "Check formatting of all zig code");
+    const check_fmt_step = b.step("test-fmt", "Check formatting of all zig code");
     const snapshot_step = b.step("snapshot", "Run the snapshot tool to update snapshot files");
 
     // general configuration
@@ -24,7 +31,6 @@ pub fn build(b: *std.Build) void {
     } });
     const optimize = b.standardOptimizeOption(.{});
     const strip = b.option(bool, "strip", "Omit debug information");
-    const no_bin = b.option(bool, "no-bin", "Skip emitting binaries (important for fast incremental compilation)") orelse false;
 
     // llvm configuration
     const use_system_llvm = b.option(bool, "system-llvm", "Attempt to automatically detect and use system installed llvm") orelse false;
@@ -61,45 +67,45 @@ pub fn build(b: *std.Build) void {
     build_options.addOption(u32, "tracy_callstack_depth", tracy_callstack_depth);
 
     // add main roc exe
-    const roc_exe = addMainExe(b, build_options, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path, tracy) orelse return;
-    install_and_run(b, no_bin, roc_exe, roc_step, run_step);
+    const roc_exe = addMainExe(b, check_step, build_options, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path, tracy) orelse return;
+    install_and_run(b, roc_exe, roc_step, run_step);
 
     // Add snapshot tool
-    const snapshot_exe = b.addExecutable(.{
-        .name = "snapshot",
+    const snapshot_module = b.addModule("snapshot", .{
         .root_source_file = b.path("src/snapshot.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
     });
-    add_tracy(b, build_options, snapshot_exe, target, false, tracy);
-    install_and_run(b, no_bin, snapshot_exe, snapshot_step, snapshot_step);
+    add_tracy(b, build_options, snapshot_module, target, false, tracy);
+    const snapshot_exe = add_checked_executable(b, check_step, "snapshot", snapshot_module);
+    install_and_run(b, snapshot_exe, snapshot_step, snapshot_step);
 
-    const all_tests = b.addTest(.{
+    const all_tests_module = b.addModule("tests", .{
         .root_source_file = b.path("src/test.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
     });
-    all_tests.root_module.addOptions("build_options", build_options);
-    all_tests.root_module.addAnonymousImport("legal_details", .{ .root_source_file = b.path("legal_details") });
+    all_tests_module.addOptions("build_options", build_options);
+    all_tests_module.addAnonymousImport("legal_details", .{ .root_source_file = b.path("legal_details") });
+    const all_tests = add_checked_test(b, check_step, "test", all_tests_module);
 
-    const builtins_tests = b.addTest(.{
+    const builtins_tests_module = b.addModule("builtins-test", .{
         .root_source_file = b.path("src/builtins/main.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
     });
-    builtins_tests.root_module.stack_check = false;
+    builtins_tests_module.stack_check = false;
+    const builtins_tests = add_checked_test(b, check_step, "builtins-test", builtins_tests_module);
 
-    if (!no_bin) {
-        const run_tests = b.addRunArtifact(all_tests);
-        test_step.dependOn(&run_tests.step);
+    const run_tests = b.addRunArtifact(all_tests);
+    test_step.dependOn(&run_tests.step);
 
-        const run_builtins_tests = b.addRunArtifact(builtins_tests);
-        builtins_test_step.dependOn(&run_builtins_tests.step);
-        test_step.dependOn(&run_builtins_tests.step);
-    }
+    const run_builtins_tests = b.addRunArtifact(builtins_tests);
+    builtins_test_step.dependOn(&run_builtins_tests.step);
+    test_step.dependOn(&run_builtins_tests.step);
 
     // Fmt zig code.
     const fmt_paths = .{ "src", "build.zig" };
@@ -140,10 +146,10 @@ pub fn build(b: *std.Build) void {
     for (names) |name| {
         add_fuzz_target(
             b,
+            check_step,
             fuzz,
             build_afl,
             use_system_afl,
-            no_bin,
             target,
             optimize,
             build_options,
@@ -155,10 +161,10 @@ pub fn build(b: *std.Build) void {
 
 fn add_fuzz_target(
     b: *std.Build,
+    check_step: *std.Build.Step,
     fuzz: bool,
     build_afl: bool,
     use_system_afl: bool,
-    no_bin: bool,
     target: ResolvedTarget,
     optimize: OptimizeMode,
     build_options: *Step.Options,
@@ -168,30 +174,33 @@ fn add_fuzz_target(
     // We always include the repro scripts (no dependencies).
     // We only include the fuzzing scripts if `-Dfuzz` is set.
     const root_source_file = b.path(b.fmt("src/fuzz-{s}.zig", .{name}));
-    const fuzz_obj = b.addObject(.{
-        .name = b.fmt("{s}_obj", .{name}),
+    const fuzz_module = b.addModule(name, .{
         .root_source_file = root_source_file,
         .target = target,
         // Work around instrumentation bugs on mac without giving up perf on linux.
         .optimize = if (target.result.os.tag == .macos) .Debug else .ReleaseSafe,
     });
-    add_tracy(b, build_options, fuzz_obj, target, false, tracy);
+    add_tracy(b, build_options, fuzz_module, target, false, tracy);
+    const fuzz_obj = b.addObject(.{
+        .name = b.fmt("{s}_obj", .{name}),
+        .root_module = fuzz_module,
+    });
 
     const name_exe = b.fmt("fuzz-{s}", .{name});
     const name_repro = b.fmt("repro-{s}", .{name});
     const repro_step = b.step(name_repro, b.fmt("run fuzz reproduction for {s}", .{name}));
-    const repro_exe = b.addExecutable(.{
-        .name = name_repro,
+    const repro_module = b.addModule(name_repro, .{
         .root_source_file = b.path("src/fuzz-repro.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
     });
-    repro_exe.root_module.addImport("fuzz_test", fuzz_obj.root_module);
+    repro_module.addImport("fuzz_test", fuzz_obj.root_module);
 
-    install_and_run(b, no_bin, repro_exe, repro_step, repro_step);
+    const repro_exe = add_checked_executable(b, check_step, name_repro, repro_module);
+    install_and_run(b, repro_exe, repro_step, repro_step);
 
-    if (fuzz and build_afl and !no_bin) {
+    if (fuzz and build_afl) {
         const fuzz_step = b.step(name_exe, b.fmt("Generate fuzz executable for {s}", .{name}));
         b.default_step.dependOn(fuzz_step);
 
@@ -205,6 +214,7 @@ fn add_fuzz_target(
 
 fn addMainExe(
     b: *std.Build,
+    check_step: *Step,
     build_options: *Step.Options,
     target: ResolvedTarget,
     optimize: OptimizeMode,
@@ -214,35 +224,65 @@ fn addMainExe(
     user_llvm_path: ?[]const u8,
     tracy: ?[]const u8,
 ) ?*Step.Compile {
-    const exe = b.addExecutable(.{
-        .name = "roc",
+    const roc_module = b.addModule("roc", .{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
         .strip = strip,
         .link_libc = true,
     });
-
     const config = b.addOptions();
     config.addOption(bool, "llvm", enable_llvm);
-    exe.root_module.addOptions("config", config);
-    exe.root_module.addAnonymousImport("legal_details", .{ .root_source_file = b.path("legal_details") });
+    roc_module.addOptions("config", config);
+    roc_module.addAnonymousImport("legal_details", .{ .root_source_file = b.path("legal_details") });
 
     if (enable_llvm) {
         const llvm_paths = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return null;
 
-        exe.addLibraryPath(.{ .cwd_relative = llvm_paths.lib });
-        exe.addIncludePath(.{ .cwd_relative = llvm_paths.include });
-        try addStaticLlvmOptionsToModule(exe.root_module);
+        roc_module.addLibraryPath(.{ .cwd_relative = llvm_paths.lib });
+        roc_module.addIncludePath(.{ .cwd_relative = llvm_paths.include });
+        try addStaticLlvmOptionsToModule(roc_module);
     }
 
-    add_tracy(b, build_options, exe, target, enable_llvm, tracy);
-    return exe;
+    add_tracy(b, build_options, roc_module, target, enable_llvm, tracy);
+
+    return add_checked_executable(b, check_step, "roc", roc_module);
+}
+
+fn add_checked_executable(
+    b: *std.Build,
+    check_step: *Step,
+    name: []const u8,
+    root_module: *std.Build.Module,
+) *Step.Compile {
+    const exe_step = b.addExecutable(.{ .name = name, .root_module = root_module });
+
+    const sub_check_step = b.step(b.fmt("check-{s}", .{name}), b.fmt("Check {s} executable zig code for compilation errors", .{name}));
+    const check_exe_step = b.addExecutable(.{ .name = name, .root_module = root_module });
+    sub_check_step.dependOn(&check_exe_step.step);
+    check_step.dependOn(sub_check_step);
+
+    return exe_step;
+}
+
+fn add_checked_test(
+    b: *std.Build,
+    check_step: *Step,
+    name: []const u8,
+    root_module: *std.Build.Module,
+) *Step.Compile {
+    const test_step = b.addTest(.{ .name = name, .root_module = root_module });
+
+    const sub_check_step = b.step(b.fmt("check-{s}", .{name}), b.fmt("Check {s} executable zig code for compilation errors", .{name}));
+    const check_test_step = b.addTest(.{ .name = name, .root_module = root_module });
+    sub_check_step.dependOn(&check_test_step.step);
+    check_step.dependOn(sub_check_step);
+
+    return test_step;
 }
 
 fn install_and_run(
     b: *std.Build,
-    no_bin: bool,
     exe: *Step.Compile,
     build_step: *Step,
     run_step: *Step,
@@ -250,33 +290,28 @@ fn install_and_run(
     if (run_step != build_step) {
         run_step.dependOn(build_step);
     }
-    if (no_bin) {
-        // No build, just build, don't actually install or run.
-        build_step.dependOn(&exe.step);
-        b.getInstallStep().dependOn(&exe.step);
-    } else {
-        const install = b.addInstallArtifact(exe, .{});
-        build_step.dependOn(&install.step);
-        b.getInstallStep().dependOn(&install.step);
 
-        const run = b.addRunArtifact(exe);
-        run.step.dependOn(&install.step);
-        if (b.args) |args| {
-            run.addArgs(args);
-        }
-        run_step.dependOn(&run.step);
+    const install = b.addInstallArtifact(exe, .{});
+    build_step.dependOn(&install.step);
+    b.getInstallStep().dependOn(&install.step);
+
+    const run = b.addRunArtifact(exe);
+    run.step.dependOn(&install.step);
+    if (b.args) |args| {
+        run.addArgs(args);
     }
+    run_step.dependOn(&run.step);
 }
 
 fn add_tracy(
     b: *std.Build,
     build_options: *Step.Options,
-    base: *Step.Compile,
+    root_module: *std.Build.Module,
     target: ResolvedTarget,
     links_llvm: bool,
     tracy: ?[]const u8,
 ) void {
-    base.root_module.addOptions("build_options", build_options);
+    root_module.addOptions("build_options", build_options);
     if (tracy) |tracy_path| {
         const client_cpp = b.pathJoin(
             &[_][]const u8{ tracy_path, "public", "TracyClient.cpp" },
@@ -288,17 +323,17 @@ fn add_tracy(
         else
             &[_][]const u8{ "-DTRACY_ENABLE=1", "-fno-sanitize=undefined" };
 
-        base.root_module.addIncludePath(.{ .cwd_relative = tracy_path });
-        base.root_module.addCSourceFile(.{ .file = .{ .cwd_relative = client_cpp }, .flags = tracy_c_flags });
-        base.root_module.addCSourceFile(.{ .file = .{ .cwd_relative = "src/tracy-shutdown.cpp" }, .flags = tracy_c_flags });
+        root_module.addIncludePath(.{ .cwd_relative = tracy_path });
+        root_module.addCSourceFile(.{ .file = .{ .cwd_relative = client_cpp }, .flags = tracy_c_flags });
+        root_module.addCSourceFile(.{ .file = .{ .cwd_relative = "src/tracy-shutdown.cpp" }, .flags = tracy_c_flags });
         if (!links_llvm) {
-            base.root_module.linkSystemLibrary("c++", .{ .use_pkg_config = .no });
+            root_module.linkSystemLibrary("c++", .{ .use_pkg_config = .no });
         }
-        base.root_module.link_libc = true;
+        root_module.link_libc = true;
 
         if (target.result.os.tag == .windows) {
-            base.root_module.linkSystemLibrary("dbghelp", .{});
-            base.root_module.linkSystemLibrary("ws2_32", .{});
+            root_module.linkSystemLibrary("dbghelp", .{});
+            root_module.linkSystemLibrary("ws2_32", .{});
         }
     }
 }
