@@ -12,9 +12,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
-      - uses: mlugg/setup-zig@aa9ad5c14eb3452e235a441c4f9a8e89f20d97bd # ratchet:mlugg/setup-zig@v2
+      - uses: mlugg/setup-zig@475c97be87a204e6c57fe851f970bd02005a70f0 # ratchet:mlugg/setup-zig@v2
         with:
-          version: 0.14.0
+          version: 0.14.1
           # Do not cache the zig cache.
           # Just cache the zig executable.
           # Zig cache corrupts sometimes and uses tons of space.
@@ -51,9 +51,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
-      - uses: mlugg/setup-zig@aa9ad5c14eb3452e235a441c4f9a8e89f20d97bd # ratchet:mlugg/setup-zig@v2
+      - uses: mlugg/setup-zig@475c97be87a204e6c57fe851f970bd02005a70f0 # ratchet:mlugg/setup-zig@v2
         with:
-          version: 0.14.0
+          version: 0.14.1
           # Do not cache the zig cache.
           # Just cache the zig executable.
           # Zig cache corrupts sometimes and uses tons of space.
@@ -94,12 +94,16 @@ jobs:
           }
 
       - name: check snapshots with valgrind (ubuntu)
-        if: startsWith(matrix.os, 'ubuntu')
+        # Sadly, with zig 0.14.1, this had to be disabled on arm.
+        # Valgrind as of 3.25.1 does not support some arm instructions zig generates.
+        # So valgrind only works happily on x86_64 linux.
+        # We can re-evaluate as new version of zig/valgrind come out.
+        if: ${{ matrix.os == 'ubuntu-22.04' }}
         run: |
           sudo apt install -y valgrind
           valgrind --version
           valgrind --leak-check=full --error-exitcode=1 --errors-for-leak-kinds=definite,possible ./zig-out/bin/snapshot
-         
+
       - name: check if statically linked (ubuntu)
         if: startsWith(matrix.os, 'ubuntu')
         run: |
@@ -146,9 +150,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
-      - uses: mlugg/setup-zig@aa9ad5c14eb3452e235a441c4f9a8e89f20d97bd # ratchet:mlugg/setup-zig@v2
+      - uses: mlugg/setup-zig@475c97be87a204e6c57fe851f970bd02005a70f0 # ratchet:mlugg/setup-zig@v2
         with:
-          version: 0.14.0
+          version: 0.14.1
           # Do not cache the zig cache.
           # Just cache the zig executable.
           # Zig cache corrupts sometimes and uses tons of space.
