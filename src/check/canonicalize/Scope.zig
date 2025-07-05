@@ -231,6 +231,29 @@ pub fn lookupTypeDecl(scope: *const Scope, ident_store: *const base.Ident.Store,
     return TypeLookupResult{ .not_found = {} };
 }
 
+/// Update an existing type declaration in the scope
+/// This is used for recursive type declarations where we need to update
+/// the statement index after canonicalizing the type annotation
+pub fn updateTypeDecl(
+    scope: *Scope,
+    gpa: std.mem.Allocator,
+    ident_store: *const base.Ident.Store,
+    name: Ident.Idx,
+    new_type_decl: CIR.Statement.Idx,
+) void {
+    // Find the existing entry by comparing text content
+    var iter = scope.type_decls.iterator();
+    while (iter.next()) |entry| {
+        if (ident_store.identsHaveSameText(name, entry.key_ptr.*)) {
+            // Update the existing entry with the new statement index
+            entry.value_ptr.* = new_type_decl;
+            return;
+        }
+    }
+    // If not found, add it as a new entry
+    scope.put(gpa, .type_decl, name, new_type_decl);
+}
+
 /// Introduce a type variable into the scope
 pub fn introduceTypeVar(
     scope: *Scope,

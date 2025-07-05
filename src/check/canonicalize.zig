@@ -246,6 +246,36 @@ pub fn canonicalize_file(
             .type_decl => |type_decl| {
                 // Canonicalize the type declaration header first
                 const header_idx = self.canonicalize_type_header(type_decl.header);
+                const region = self.parse_ir.tokenizedRegionToRegion(type_decl.region);
+
+                // Extract the type name from the header to introduce it into scope early
+                const header = self.can_ir.store.getTypeHeader(header_idx);
+
+                // Create a placeholder type declaration statement to introduce the type name into scope
+                // This allows recursive type references to work during annotation canonicalization
+                const placeholder_cir_type_decl = switch (type_decl.kind) {
+                    .alias => CIR.Statement{
+                        .s_alias_decl = .{
+                            .header = header_idx,
+                            .anno = @enumFromInt(0), // placeholder - will be replaced
+                            .where = null,
+                            .region = region,
+                        },
+                    },
+                    .nominal => CIR.Statement{
+                        .s_nominal_decl = .{
+                            .header = header_idx,
+                            .anno = @enumFromInt(0), // placeholder - will be replaced
+                            .where = null,
+                            .region = region,
+                        },
+                    },
+                };
+
+                const placeholder_type_decl_idx = self.can_ir.store.addStatement(placeholder_cir_type_decl);
+
+                // Introduce the type name into scope early to support recursive references
+                self.scopeIntroduceTypeDecl(header.name, placeholder_type_decl_idx, region);
 
                 // Process type parameters and annotation in a separate scope
                 const anno_idx = blk: {
@@ -256,13 +286,12 @@ pub fn canonicalize_file(
                     // Introduce type parameters from the header into the scope
                     self.introduceTypeParametersFromHeader(header_idx);
 
-                    // Now canonicalize the type annotation with type parameters in scope
+                    // Now canonicalize the type annotation with type parameters and type name in scope
                     break :blk self.canonicalize_type_anno(type_decl.anno);
                 };
 
-                // Create the CIR type declaration statement
-                const region = self.parse_ir.tokenizedRegionToRegion(type_decl.region);
-                const cir_type_decl = switch (type_decl.kind) {
+                // Create the real CIR type declaration statement with the canonicalized annotation
+                const real_cir_type_decl = switch (type_decl.kind) {
                     .alias => CIR.Statement{
                         .s_alias_decl = .{
                             .header = header_idx,
@@ -281,12 +310,12 @@ pub fn canonicalize_file(
                     },
                 };
 
-                const type_decl_idx = self.can_ir.store.addStatement(cir_type_decl);
-                self.can_ir.store.addScratchStatement(type_decl_idx);
+                // Create the real statement and add it to scratch statements
+                const real_type_decl_idx = self.can_ir.store.addStatement(real_cir_type_decl);
+                self.can_ir.store.addScratchStatement(real_type_decl_idx);
 
-                // Introduce the type name into scope (now truly outside the parameter scope)
-                const header = self.can_ir.store.getTypeHeader(header_idx);
-                self.scopeIntroduceTypeDecl(header.name, type_decl_idx, region);
+                // Update the scope to point to the real statement instead of the placeholder
+                self.scopeUpdateTypeDecl(header.name, real_type_decl_idx);
             },
             else => {
                 // Skip non-type-declaration statements in first pass
@@ -4289,15 +4318,24 @@ fn scopeIntroduceTypeDecl(
     }
 }
 
-/// Lookup a type declaration in the scope hierarchy
-fn scopeLookupTypeDecl(self: *const Self, name_ident: Ident.Idx) ?CIR.Statement.Idx {
+fn scopeUpdateTypeDecl(
+    self: *Self,
+    name_ident: Ident.Idx,
+    new_type_decl_stmt: CIR.Statement.Idx,
+) void {
+    const gpa = self.can_ir.env.gpa;
+    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+    current_scope.updateTypeDecl(gpa, &self.can_ir.env.idents, name_ident, new_type_decl_stmt);
+}
+
+fn scopeLookupTypeDecl(self: *Self, ident_idx: Ident.Idx) ?CIR.Statement.Idx {
     // Search from innermost to outermost scope
     var i = self.scopes.items.len;
     while (i > 0) {
         i -= 1;
         const scope = &self.scopes.items[i];
 
-        switch (scope.lookupTypeDecl(&self.can_ir.env.idents, name_ident)) {
+        switch (scope.lookupTypeDecl(&self.can_ir.env.idents, ident_idx)) {
             .found => |type_decl_idx| return type_decl_idx,
             .not_found => continue,
         }
