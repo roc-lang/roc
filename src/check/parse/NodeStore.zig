@@ -20,6 +20,7 @@ const NodeStore = @This();
 
 gpa: std.mem.Allocator,
 nodes: Node.List,
+// What is extra data? Just a linear memory?
 extra_data: std.ArrayListUnmanaged(u32),
 scratch_statements: base.Scratch(AST.Statement.Idx),
 scratch_tokens: base.Scratch(Token.Idx),
@@ -145,6 +146,7 @@ pub fn addMalformed(store: *NodeStore, comptime t: type, reason: Diagnostic.Tag,
 /// Adds a file node to the store.
 pub fn addFile(store: *NodeStore, file: AST.File) void {
     store.extra_data.append(store.gpa, @intFromEnum(file.header)) catch |err| exitOnOom(err);
+    // Why addFile doesn't add but sets?
     store.nodes.set(@enumFromInt(0), .{
         .tag = .root,
         .main_token = 0,

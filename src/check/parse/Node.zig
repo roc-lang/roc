@@ -443,6 +443,8 @@ pub const Tag = enum {
 /// The conventions should be documented for each Node
 /// Tag.
 pub const Data = struct {
+    // Why not an array/tuple instead of the two named fields? it seems to be easier to document an array/tuple, lhs/rhs looks misleading
+    // Or, why it is not something meaningful but generic? if it's needed because of the same size, size of the `Node` might be restricted. or maybe the reason is serialization?
     lhs: u32,
     rhs: u32,
 };
