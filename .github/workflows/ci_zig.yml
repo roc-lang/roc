@@ -47,7 +47,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-13, macos-14, ubuntu-22.04, ubuntu-24.04-arm, windows-2022, windows-2025, windows-11-arm] # macos-13 uses x64, macos-14 uses arm64
+        os: [macos-13, macos-15, ubuntu-22.04, ubuntu-24.04-arm, windows-2022, windows-2025, windows-11-arm] # macos-13 uses x64, macos-15 uses arm64
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
@@ -58,6 +58,9 @@ jobs:
           # Just cache the zig executable.
           # Zig cache corrupts sometimes and uses tons of space.
           use-cache: false
+      - uses: cachix/install-nix-action@02a151ada4993995686f9ed4f1be7cfbb229e56f # ratchet:cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-25.05
 
       - name: build roc
         run: |
@@ -130,6 +133,11 @@ jobs:
               $imports | ForEach-Object { echo "  $_" }
               exit 1
           }
+
+      - name: Test inside nix too
+        if: startsWith(matrix.os, 'ubuntu') || startsWith(matrix.os, 'macos')
+        run: |
+          nix develop ./src/flake.nix -c zig build test
 
   zig-cross-compile:
     needs: check-zig

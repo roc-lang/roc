@@ -12,7 +12,7 @@ bug reports...
 For ideas, proposals and feature request, [click here](https://www.roc-lang.org/community#ideas), for all other contributions, read on.
 
 For a good place to start, check out [good first issues](https://github.com/roc-lang/roc/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22) or reach out on the `#contributing` channel on [our zulip group chat][roc-zulip].
-Before making your first pull request, talk to an existing contributor on [zulip][roc-zulip] about what you plan to do! This can avoid duplicated effort or a rejection because the change doesn't fit with the goals of the language.
+Before making your first pull request, create a new topic in the contributing channel on [zulip][roc-zulip] to discuss what you plan to do! This can avoid duplicated effort or a rejection because the change doesn't fit with the goals of the language.
 
 If you are interested in larger, implementation- or research-heavy projects
 related to Roc, check out [Roc Project Ideas][project-ideas] and reach out to us
@@ -28,20 +28,17 @@ Check [Building from source](BUILDING_FROM_SOURCE.md) for instructions.
 Most contributors execute the following commands before pushing their code:
 
 ```sh
-cargo test --release
-cargo fmt --all -- --check
-cargo clippy --workspace --tests -- --deny warnings
+# This actualy runs the tests, it doesn't just build them.
+zig build test
+zig build fmt
 ```
-
-Execute `cargo fmt --all` to fix the formatting.
 
 ## Contribution Tips
 
 - If you've never made a pull request on github before, [this](https://www.freecodecamp.org/news/how-to-make-your-first-pull-request-on-github-3/) will be a good place to start.
 - You can find good first issues [here][good-first-issues]. Once you have gained some experience you can take a look at the [intermediate issues](https://github.com/roc-lang/roc/issues?q=is%3Aopen+is%3Aissue+label%3A%22intermediate+issue%22).
 - It's a good idea to open a draft pull request as you begin working on something. This way, others can see that you're working on it, which avoids duplicate effort, and others can give important feedback sooner rather than later. Click the button "ready for review" when it's ready.
-- The [compiler's README](https://github.com/roc-lang/roc/tree/main/crates/compiler) contains important info.
-- The AI chat in the [cursor editor](https://www.cursor.com/) can also help you find your way in the codebase.
+- The [Glossary](Glossary.md) file explains terms commonly used in the compiler.
 
 ### Debugging tips
 
