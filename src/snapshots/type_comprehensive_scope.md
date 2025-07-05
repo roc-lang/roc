@@ -308,23 +308,23 @@ Complex : {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-alias-decl @4.1-4.12 (where "TODO")
+	(s-alias-decl @4.1-4.12
 		(ty-header @4.1-4.6 (name "MyU64"))
 		(ty @4.9-4.12 (name "U64")))
-	(s-alias-decl @5.1-5.15 (where "TODO")
+	(s-alias-decl @5.1-5.15
 		(ty-header @5.1-5.9 (name "MyString"))
 		(ty @5.12-5.15 (name "Str")))
-	(s-alias-decl @6.1-6.14 (where "TODO")
+	(s-alias-decl @6.1-6.14
 		(ty-header @6.1-6.7 (name "MyBool"))
 		(ty @6.10-6.14 (name "Bool")))
-	(s-alias-decl @9.1-9.33 (where "TODO")
+	(s-alias-decl @9.1-9.33
 		(ty-header @9.1-9.7 (name "Person"))
 		(ty-record @9.10-9.33
 			(field (field "name")
 				(ty @9.18-9.21 (name "Str")))
 			(field (field "age")
 				(ty @9.28-9.31 (name "U64")))))
-	(s-alias-decl @12.1-12.37 (where "TODO")
+	(s-alias-decl @12.1-12.37
 		(ty-header @12.1-12.16 (name "Result")
 			(ty-args
 				(ty-var @12.8-12.10 (name "ok"))
@@ -334,7 +334,7 @@ Complex : {
 				(ty-var @12.23-12.25 (name "ok")))
 			(ty-apply @12.28-12.36 (symbol "Err")
 				(ty-var @12.32-12.35 (name "err")))))
-	(s-alias-decl @15.1-15.37 (where "TODO")
+	(s-alias-decl @15.1-15.37
 		(ty-header @15.1-15.8 (name "Tree")
 			(ty-args
 				(ty-var @15.6-15.7 (name "a"))))
@@ -344,7 +344,7 @@ Complex : {
 					(ty-var @15.24-15.25 (name "a"))))
 			(ty-apply @15.29-15.36 (symbol "Leaf")
 				(ty-var @15.34-15.35 (name "a")))))
-	(s-alias-decl @18.1-18.48 (where "TODO")
+	(s-alias-decl @18.1-18.48
 		(ty-header @18.1-18.8 (name "Node")
 			(ty-args
 				(ty-var @18.6-18.7 (name "a"))))
@@ -355,27 +355,27 @@ Complex : {
 				(ty-apply @18.33-18.46 (symbol "List")
 					(ty-apply @18.38-18.45 (symbol "Tree")
 						(ty-var @18.43-18.44 (name "a")))))))
-	(s-alias-decl @21.1-21.28 (where "TODO")
+	(s-alias-decl @21.1-21.28
 		(ty-header @21.1-21.9 (name "MyResult"))
 		(ty-apply @21.12-21.28 (symbol "Result")
 			(ty @21.19-21.22 (name "Str"))
 			(ty @21.24-21.27 (name "U64"))))
-	(s-alias-decl @24.1-24.13 (where "TODO")
+	(s-alias-decl @24.1-24.13
 		(ty-header @24.1-24.7 (name "Person"))
 		(ty @24.10-24.13 (name "U64")))
-	(s-alias-decl @27.1-27.29 (where "TODO")
+	(s-alias-decl @27.1-27.29
 		(ty-header @27.1-27.8 (name "BadType"))
 		(ty @27.11-27.29 (name "SomeUndeclaredType")))
-	(s-alias-decl @30.1-30.19 (where "TODO")
+	(s-alias-decl @30.1-30.19
 		(ty-header @30.1-30.7 (name "MyList"))
 		(ty-apply @30.10-30.19 (symbol "List")
 			(ty @30.15-30.18 (name "Str"))))
-	(s-alias-decl @31.1-31.24 (where "TODO")
+	(s-alias-decl @31.1-31.24
 		(ty-header @31.1-31.7 (name "MyDict"))
 		(ty-apply @31.10-31.24 (symbol "Dict")
 			(ty @31.15-31.18 (name "Str"))
 			(ty @31.20-31.23 (name "U64"))))
-	(s-alias-decl @34.1-38.2 (where "TODO")
+	(s-alias-decl @34.1-38.2
 		(ty-header @34.1-34.8 (name "Complex"))
 		(ty-record @34.11-38.2
 			(field (field "person")
@@ -392,5 +392,39 @@ Complex : {
 ~~~clojure
 (inferred-types
 	(defs)
+	(type_decls
+		(alias @4.1-4.12 (type "MyU64")
+			(ty-header @4.1-4.6 (name "MyU64")))
+		(alias @5.1-5.15 (type "MyString")
+			(ty-header @5.1-5.9 (name "MyString")))
+		(alias @6.1-6.14 (type "MyBool")
+			(ty-header @6.1-6.7 (name "MyBool")))
+		(alias @9.1-9.33 (type "Person")
+			(ty-header @9.1-9.7 (name "Person")))
+		(alias @12.1-12.37 (type "Result(ok, err)")
+			(ty-header @12.1-12.16 (name "Result")
+				(ty-args
+					(ty-var @12.8-12.10 (name "ok"))
+					(ty-var @12.12-12.15 (name "err")))))
+		(alias @15.1-15.37 (type "Tree(a)")
+			(ty-header @15.1-15.8 (name "Tree")
+				(ty-args
+					(ty-var @15.6-15.7 (name "a")))))
+		(alias @18.1-18.48 (type "Node(a)")
+			(ty-header @18.1-18.8 (name "Node")
+				(ty-args
+					(ty-var @18.6-18.7 (name "a")))))
+		(alias @21.1-21.28 (type "MyResult")
+			(ty-header @21.1-21.9 (name "MyResult")))
+		(alias @24.1-24.13 (type "Person")
+			(ty-header @24.1-24.7 (name "Person")))
+		(alias @27.1-27.29 (type "BadType")
+			(ty-header @27.1-27.8 (name "BadType")))
+		(alias @30.1-30.19 (type "MyList")
+			(ty-header @30.1-30.7 (name "MyList")))
+		(alias @31.1-31.24 (type "MyDict")
+			(ty-header @31.1-31.7 (name "MyDict")))
+		(alias @34.1-38.2 (type "Complex")
+			(ty-header @34.1-34.8 (name "Complex"))))
 	(expressions))
 ~~~

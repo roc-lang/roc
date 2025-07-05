@@ -407,7 +407,7 @@ pub const Store = struct {
     }
 
     pub fn getContent(self: *const Self, idx: SnapshotContentIdx) SnapshotContent {
-        return self.contents.get(idx);
+        return self.contents.get(idx).*;
     }
 };
 

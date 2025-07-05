@@ -8,9 +8,19 @@ type=expr
 One.Two.Whee
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - qualified_tag.md:1:4:1:8
 # PROBLEMS
-NIL
+**UNDEFINED VARIABLE**
+Nothing is named `Two` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**qualified_tag.md:1:4:1:8:**
+```roc
+One.Two.Whee
+```
+   ^^^^
+
+
 # TOKENS
 ~~~zig
 UpperIdent(1:1-1:4),NoSpaceDotUpperIdent(1:4-1:8),NoSpaceDotUpperIdent(1:8-1:13),EndOfFile(1:13-1:13),
@@ -25,9 +35,9 @@ Whee
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tag @1.1-1.13 (name "Whee"))
+(e-runtime-error (tag "ident_not_in_scope"))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.13 (type "[Whee]*"))
+(expr @1.4-1.8 (type "Error"))
 ~~~

@@ -213,15 +213,28 @@ pub const Expr = union(enum) {
     /// Can have zero or more arguments of any type.
     ///
     /// ```roc
-    /// Ok("success")           # Tag with string argument
+    /// Ok("success")          # Tag with string argument
     /// Circle(3.14)           # Tag with numeric argument
     /// Point(1.0, 2.0)        # Tag with multiple arguments
     /// Some([1, 2, 3])        # Tag with list argument
     /// ```
     e_tag: struct {
-        ext_var: TypeVar,
         name: Ident.Idx,
         args: Expr.Span,
+        region: Region,
+    },
+    /// A qualified, nominal type
+    ///
+    /// ```roc
+    /// Result.Ok("success")       # Tags
+    /// Config.{ optimize : Bool}  # Records
+    /// Point.(1.0, 2.0)           # Tuples
+    /// Point.(1.0)                # Values
+    /// ```
+    e_nominal: struct {
+        nominal_type_decl: Statement.Idx,
+        backing_expr: Expr.Idx,
+        backing_type: NominalBackingType,
         region: Region,
     },
     /// Tag constructor with no arguments.
@@ -404,6 +417,7 @@ pub const Expr = union(enum) {
             .e_record_access => |e| return e.region,
             .e_dot_access => |e| return e.region,
             .e_tag => |e| return e.region,
+            .e_tag_qualified => |e| return e.region,
             .e_zero_argument_tag => |e| return e.region,
             .e_binop => |e| return e.region,
             .e_block => |e| return e.region,
@@ -411,6 +425,9 @@ pub const Expr = union(enum) {
             .e_runtime_error => |e| return e.region,
         }
     }
+
+    /// The type inside a nominal var
+    pub const NominalBackingType = enum { tag, record, tuple, value };
 
     pub fn toSExpr(self: *const @This(), ir: *const CIR) SExpr {
         const gpa = ir.env.gpa;
@@ -693,6 +710,23 @@ pub const Expr = union(enum) {
                     }
                     node.appendNode(gpa, &args_node);
                 }
+
+                return node;
+            },
+            .e_nominal => |nominal_expr| {
+                var node = SExpr.init(gpa, "e-nominal");
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, nominal_expr.region);
+
+                // Add qualifer
+                const stmt = ir.store.getStatement(nominal_expr.nominal_type_decl);
+                std.debug.assert(stmt == .s_nominal_decl);
+                const decl = stmt.s_nominal_decl;
+                const header = ir.store.getTypeHeader(decl.header);
+                node.appendStringAttr(gpa, "nominal", ir.env.idents.getText(header.name));
+
+                // Add backing type
+                var backing_node = ir.store.getExpr(nominal_expr.backing_expr).toSExpr(ir);
+                node.appendNode(gpa, &backing_node);
 
                 return node;
             },

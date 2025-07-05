@@ -379,6 +379,17 @@ Some(a) : { foo : Ok(a), bar : g }
                                ^
 
 
+**UNDECLARED TYPE**
+The type ``Ok`` is not declared in this scope.
+
+This type is referenced here:
+**fuzz_crash_027.md:32:19:32:24:**
+```roc
+Some(a) : { foo : Ok(a), bar : g }
+```
+                  ^^^^^
+
+
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
 
@@ -405,6 +416,28 @@ This type is referenced here:
 Func(a) : Maybe(a), a -> Maybe(a)
 ```
                          ^^^^^
+
+
+**UNDECLARED TYPE**
+The type ``Maybe`` is not declared in this scope.
+
+This type is referenced here:
+**fuzz_crash_027.md:43:11:43:19:**
+```roc
+Func(a) : Maybe(a), a -> Maybe(a)
+```
+          ^^^^^^^^
+
+
+**UNDECLARED TYPE**
+The type ``Maybe`` is not declared in this scope.
+
+This type is referenced here:
+**fuzz_crash_027.md:43:26:43:34:**
+```roc
+Func(a) : Maybe(a), a -> Maybe(a)
+```
+                         ^^^^^^^^
 
 
 **UNDECLARED TYPE**
@@ -803,17 +836,17 @@ The unused variable is declared here:
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**fuzz_crash_027.md:48:1:48:8:**
+**fuzz_crash_027.md:47:11:47:14:**
 ```roc
-add_one = |num| {
+add_one : U64 -> U64
 ```
-^^^^^^^
+          ^^^
 
 It is of type:
     _U64_
 
 But you are trying to use it as:
-    _[True, False]_
+    _Bool_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -1951,7 +1984,7 @@ main! = |_| { # Yeah Ie
 					(ty-apply @99.25-99.38 (symbol "Result")
 						(ty-record @99.32-99.34)
 						(ty-underscore @99.36-99.37))))))
-	(s-alias-decl @15.1-15.41 (where "TODO")
+	(s-alias-decl @15.1-15.41
 		(ty-header @15.1-15.10 (name "Map")
 			(ty-args
 				(ty-var @15.5-15.6 (name "a"))
@@ -1965,7 +1998,7 @@ main! = |_| { # Yeah Ie
 					(ty-var @15.28-15.29 (name "b"))))
 			(ty-apply @15.34-15.41 (symbol "List")
 				(ty-var @15.39-15.40 (name "b")))))
-	(s-alias-decl @16.1-24.15 (where "TODO")
+	(s-alias-decl @16.1-24.15
 		(ty-header @16.1-19.2 (name "MapML")
 			(ty-args
 				(ty-var @17.2-17.3 (name "a"))
@@ -1978,12 +2011,12 @@ main! = |_| { # Yeah Ie
 					(ty-var @23.9-23.10 (name "b"))))
 			(ty-apply @24.4-24.15 (symbol "List")
 				(ty-var @24.12-24.13 (name "b")))))
-	(s-alias-decl @26.1-26.17 (where "TODO")
+	(s-alias-decl @26.1-26.17
 		(ty-header @26.1-26.4 (name "Foo"))
 		(ty-tuple @26.7-26.17
 			(ty @26.8-26.11 (name "Bar"))
 			(ty @26.13-26.16 (name "Baz"))))
-	(s-alias-decl @32.1-32.35 (where "TODO")
+	(s-alias-decl @32.1-32.35
 		(ty-header @32.1-32.8 (name "Some")
 			(ty-args
 				(ty-var @32.6-32.7 (name "a"))))
@@ -1993,20 +2026,20 @@ main! = |_| { # Yeah Ie
 					(ty-var @32.22-32.23 (name "a"))))
 			(field (field "bar")
 				(ty-var @32.32-32.33 (name "g")))))
-	(s-alias-decl @33.1-35.2 (where "TODO")
+	(s-alias-decl @33.1-35.2
 		(ty-header @33.1-33.6 (name "Ml")
 			(ty-args
 				(ty-var @33.4-33.5 (name "a"))))
 		(ty-malformed @34.12-35.2))
-	(s-alias-decl @37.1-39.2 (where "TODO")
+	(s-alias-decl @37.1-39.2
 		(ty-header @37.1-37.9 (name "Soine")
 			(ty-args
 				(ty-var @37.7-37.8 (name "a"))))
 		(ty-malformed @1.1-39.2))
-	(s-alias-decl @40.1-41.2 (where "TODO")
+	(s-alias-decl @40.1-41.2
 		(ty-header @40.1-40.5 (name "Maya"))
 		(ty-tag-union @40.9-41.2))
-	(s-alias-decl @43.1-43.34 (where "TODO")
+	(s-alias-decl @43.1-43.34
 		(ty-header @43.1-43.8 (name "Func")
 			(ty-args
 				(ty-var @43.6-43.7 (name "a"))))
@@ -2035,12 +2068,43 @@ main! = |_| { # Yeah Ie
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @45.1-45.4 (type "[False, True] -> Num(*)"))
+		(patt @45.1-45.4 (type "Bool -> Num(*)"))
 		(patt @48.1-48.8 (type "Error -> U64"))
 		(patt @60.1-60.11 (type "Error"))
 		(patt @100.1-100.6 (type "Error -> Error")))
+	(type_decls
+		(alias @15.1-15.41 (type "Map(a, b)")
+			(ty-header @15.1-15.10 (name "Map")
+				(ty-args
+					(ty-var @15.5-15.6 (name "a"))
+					(ty-var @15.8-15.9 (name "b")))))
+		(alias @16.1-24.15 (type "MapML(a, b)")
+			(ty-header @16.1-19.2 (name "MapML")
+				(ty-args
+					(ty-var @17.2-17.3 (name "a"))
+					(ty-var @18.2-18.3 (name "b")))))
+		(alias @26.1-26.17 (type "Foo")
+			(ty-header @26.1-26.4 (name "Foo")))
+		(alias @32.1-32.35 (type "Some(a)")
+			(ty-header @32.1-32.8 (name "Some")
+				(ty-args
+					(ty-var @32.6-32.7 (name "a")))))
+		(alias @33.1-35.2 (type "Ml(a)")
+			(ty-header @33.1-33.6 (name "Ml")
+				(ty-args
+					(ty-var @33.4-33.5 (name "a")))))
+		(alias @37.1-39.2 (type "Soine(a)")
+			(ty-header @37.1-37.9 (name "Soine")
+				(ty-args
+					(ty-var @37.7-37.8 (name "a")))))
+		(alias @40.1-41.2 (type "Maya")
+			(ty-header @40.1-40.5 (name "Maya")))
+		(alias @43.1-43.34 (type "Func(a)")
+			(ty-header @43.1-43.8 (name "Func")
+				(ty-args
+					(ty-var @43.6-43.7 (name "a"))))))
 	(expressions
-		(expr @45.7-47.8 (type "[False, True] -> Num(*)"))
+		(expr @45.7-47.8 (type "Bool -> Num(*)"))
 		(expr @48.11-58.2 (type "Error -> U64"))
 		(expr @60.14-94.3 (type "Error"))
 		(expr @100.9-159.2 (type "Error -> Error"))))

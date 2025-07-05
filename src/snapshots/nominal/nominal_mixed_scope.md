@@ -24,6 +24,7 @@ processColor = |color| {
 ~~~
 # EXPECTED
 IMPORT MUST BE TOP LEVEL - nominal_mixed_scope.md:9:5:9:17
+UNDEFINED VARIABLE - nominal_mixed_scope.md:9:12:9:17
 # PROBLEMS
 **IMPORT MUST BE TOP LEVEL**
 Import statements must appear at the top level of a module.
@@ -40,6 +41,17 @@ Here is the problematic code:
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
 Let us know if you want to help!
+
+**UNDEFINED VARIABLE**
+Nothing is named `Color` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**nominal_mixed_scope.md:9:12:9:17:**
+```roc
+    import Color.RGB
+```
+           ^^^^^
+
 
 # TOKENS
 ~~~zig
@@ -131,7 +143,7 @@ processColor = |color| {
 				(p-assign @6.17-6.22 (ident "color")))
 			(e-block @6.24-16.2
 				(s-expr @1.1-1.1
-					(e-tag @9.12-9.21 (name "RGB")))
+					(e-runtime-error (tag "ident_not_in_scope")))
 				(e-match @11.5-15.6
 					(match @11.5-15.6
 						(cond
@@ -142,23 +154,26 @@ processColor = |color| {
 								(patterns
 									(p-applied-tag @12.9-12.16 (degenerate false)))
 								(value
-									(e-tag @12.20-12.39 (name "Pending"))))
+									(e-nominal @12.20-12.31 (nominal "LocalStatus")
+										(e-tag @12.20-12.39 (name "Pending")))))
 							(branch
 								(patterns
 									(p-applied-tag @13.9-13.18 (degenerate false)))
 								(value
-									(e-tag @13.22-13.42 (name "Complete"))))
+									(e-nominal @13.22-13.33 (nominal "LocalStatus")
+										(e-tag @13.22-13.42 (name "Complete")))))
 							(branch
 								(patterns
 									(p-applied-tag @14.9-14.17 (degenerate false)))
 								(value
-									(e-tag @14.21-14.40 (name "Pending")))))))))
+									(e-nominal @14.21-14.32 (nominal "LocalStatus")
+										(e-tag @14.21-14.40 (name "Pending"))))))))))
 		(annotation @6.1-6.13
 			(declared-type
 				(ty-fn @5.16-5.32 (effectful false)
 					(ty-underscore @5.16-5.17)
 					(ty @5.21-5.32 (name "LocalStatus"))))))
-	(s-nominal-decl @3.1-3.35 (match "TODO")
+	(s-nominal-decl @3.1-3.35
 		(ty-header @3.1-3.12 (name "LocalStatus"))
 		(ty-tag-union @3.16-3.35
 			(ty @3.17-3.24 (name "Pending"))
@@ -168,7 +183,10 @@ processColor = |color| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.13 (type "[Green, Red, Blue]* -> [Pending]")))
+		(patt @6.1-6.13 (type "[Green, Red, Blue]* -> LocalStatus")))
+	(type_decls
+		(nominal @3.1-3.35 (type "LocalStatus")
+			(ty-header @3.1-3.12 (name "LocalStatus"))))
 	(expressions
-		(expr @6.16-16.2 (type "[Green, Red, Blue]* -> [Pending]"))))
+		(expr @6.16-16.2 (type "[Green, Red, Blue]* -> LocalStatus"))))
 ~~~

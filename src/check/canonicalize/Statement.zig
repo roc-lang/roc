@@ -13,6 +13,7 @@
 
 const std = @import("std");
 const base = @import("../../base.zig");
+const types = @import("../../types.zig");
 const CIR = @import("CIR.zig");
 
 const Region = base.Region;
@@ -129,6 +130,7 @@ pub const Statement = union(enum) {
     s_alias_decl: struct {
         header: CIR.TypeHeader.Idx,
         anno: CIR.TypeAnno.Idx,
+        anno_var: types.Var,
         where: ?CIR.WhereClause.Span,
         region: Region,
     },
@@ -138,6 +140,7 @@ pub const Statement = union(enum) {
     s_nominal_decl: struct {
         header: CIR.TypeHeader.Idx,
         anno: CIR.TypeAnno.Idx,
+        anno_var: types.Var,
         where: ?CIR.WhereClause.Span,
         region: Region,
     },

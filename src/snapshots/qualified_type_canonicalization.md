@@ -70,6 +70,8 @@ UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:40:13:40:20
 PARSE ERROR - qualified_type_canonicalization.md:42:15:42:22
 PARSE ERROR - qualified_type_canonicalization.md:43:15:43:23
 UNDEFINED VARIABLE - qualified_type_canonicalization.md:23:23:23:32
+UNDEFINED VARIABLE - qualified_type_canonicalization.md:15:19:15:24
+UNDEFINED VARIABLE - qualified_type_canonicalization.md:19:26:19:35
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `import_exposing_no_close`
@@ -395,9 +397,31 @@ Only definitions, type annotations, and imports are allowed at the top level.
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
+**UNDEFINED VARIABLE**
+Nothing is named `Color` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**qualified_type_canonicalization.md:15:19:15:24:**
+```roc
+simpleQualified = Color.RGB { r: 255, g: 0, b: 0 }
+```
+                  ^^^^^
+
+
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**UNDEFINED VARIABLE**
+Nothing is named `DataType` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**qualified_type_canonicalization.md:19:26:19:35:**
+```roc
+aliasedQualified = ExtMod.DataType.Default
+```
+                         ^^^^^^^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `new` in this scope.
@@ -672,14 +696,14 @@ err->TypeC.default
 (can-ir
 	(d-let
 		(p-assign @15.1-15.16 (ident "simpleQualified"))
-		(e-tag @15.19-15.28 (name "RGB"))
+		(e-runtime-error (tag "ident_not_in_scope"))
 		(annotation @15.1-15.16
 			(declared-type
 				(ty-lookup-external @14.19-14.28
 					(ext-decl @14.19-14.28 (ident "Color.RGB") (kind "type"))))))
 	(d-let
 		(p-assign @19.1-19.17 (ident "aliasedQualified"))
-		(e-tag @19.20-19.43 (name "Default"))
+		(e-runtime-error (tag "ident_not_in_scope"))
 		(annotation @19.1-19.17
 			(declared-type
 				(ty-lookup-external @18.20-18.35
@@ -693,7 +717,8 @@ err->TypeC.default
 					(ext-decl @22.23-22.44 (ident "ModuleA.ModuleB.TypeC") (kind "type"))))))
 	(d-let
 		(p-assign @27.1-27.11 (ident "resultType"))
-		(e-tag @27.14-27.23 (name "Ok")))
+		(e-nominal @27.14-27.20 (nominal "Result")
+			(e-tag @27.14-27.23 (name "Ok"))))
 	(d-let
 		(p-assign @31.1-31.9 (ident "getColor"))
 		(e-runtime-error (tag "expr_not_canonicalized"))
@@ -726,18 +751,18 @@ err->TypeC.default
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @15.1-15.16 (type "[RGB]*"))
-		(patt @19.1-19.17 (type "[Default]*"))
+		(patt @15.1-15.16 (type "Error"))
+		(patt @19.1-19.17 (type "Error"))
 		(patt @23.1-23.20 (type "Error"))
-		(patt @27.1-27.11 (type "[Ok]*"))
+		(patt @27.1-27.11 (type "Result"))
 		(patt @31.1-31.9 (type "Error"))
 		(patt @35.1-35.13 (type "Error"))
 		(patt @40.1-40.10 (type "Error")))
 	(expressions
-		(expr @15.19-15.28 (type "[RGB]*"))
-		(expr @19.20-19.43 (type "[Default]*"))
+		(expr @15.19-15.28 (type "Error"))
+		(expr @19.20-19.43 (type "Error"))
 		(expr @23.23-23.32 (type "Error"))
-		(expr @27.14-27.23 (type "[Ok]*"))
+		(expr @27.14-27.23 (type "Result"))
 		(expr @31.12-31.14 (type "Error"))
 		(expr @35.16-35.22 (type "Error"))
 		(expr @40.13-40.20 (type "Error"))))

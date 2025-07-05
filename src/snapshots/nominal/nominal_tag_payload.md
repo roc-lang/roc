@@ -104,12 +104,13 @@ none = None
 						(ty-var @5.19-5.20 (name "a")))))))
 	(d-let
 		(p-assign @9.1-9.5 (ident "none"))
-		(e-tag @9.8-9.18 (name "None"))
+		(e-nominal @9.8-9.13 (nominal "Maybe")
+			(e-tag @9.8-9.18 (name "None")))
 		(annotation @9.1-9.5
 			(declared-type
 				(ty-apply @8.8-8.16 (symbol "Maybe")
 					(ty-var @8.14-8.15 (name "a"))))))
-	(s-nominal-decl @3.1-3.28 (match "TODO")
+	(s-nominal-decl @3.1-3.28
 		(ty-header @3.1-3.9 (name "Maybe")
 			(ty-args
 				(ty-var @3.7-3.8 (name "a"))))
@@ -123,8 +124,13 @@ none = None
 (inferred-types
 	(defs
 		(patt @6.1-6.5 (type "a -> Maybe(a)"))
-		(patt @9.1-9.5 (type "[None]*")))
+		(patt @9.1-9.5 (type "Maybe([None, Some])")))
+	(type_decls
+		(nominal @3.1-3.28 (type "Maybe(a)")
+			(ty-header @3.1-3.9 (name "Maybe")
+				(ty-args
+					(ty-var @3.7-3.8 (name "a"))))))
 	(expressions
 		(expr @6.8-6.25 (type "a -> Maybe(a)"))
-		(expr @9.8-9.18 (type "[None]*"))))
+		(expr @9.8-9.18 (type "Maybe([])"))))
 ~~~

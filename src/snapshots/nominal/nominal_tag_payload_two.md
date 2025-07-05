@@ -160,7 +160,7 @@ is_ok = |result| match result {
 						(ty-var @8.18-8.20 (name "ok"))
 						(ty-var @8.22-8.25 (name "err")))
 					(ty @8.30-8.34 (name "Bool"))))))
-	(s-nominal-decl @3.1-3.40 (match "TODO")
+	(s-nominal-decl @3.1-3.40
 		(ty-header @3.1-3.18 (name "MyResult")
 			(ty-args
 				(ty-var @3.10-3.12 (name "ok"))
@@ -177,6 +177,12 @@ is_ok = |result| match result {
 	(defs
 		(patt @6.1-6.3 (type "ok -> MyResult(ok, b)"))
 		(patt @9.1-9.6 (type "MyResult(ok, err) -> [True, False]*")))
+	(type_decls
+		(nominal @3.1-3.40 (type "MyResult(ok, err)")
+			(ty-header @3.1-3.18 (name "MyResult")
+				(ty-args
+					(ty-var @3.10-3.12 (name "ok"))
+					(ty-var @3.14-3.17 (name "err"))))))
 	(expressions
 		(expr @6.6-6.24 (type "ok -> MyResult(ok, b)"))
 		(expr @9.9-12.2 (type "MyResult(ok, err) -> [True, False]*"))))

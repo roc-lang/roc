@@ -5,6 +5,7 @@
 //! component for proper handling of annotated functions in the type system.
 
 const std = @import("std");
+const base = @import("../../base.zig");
 const types_mod = @import("../../types.zig");
 const collections = @import("../../collections.zig");
 const TypesStore = types_mod.Store;
@@ -21,7 +22,7 @@ const Num = types_mod.Num;
 const NominalType = types_mod.NominalType;
 
 /// A mapping from old type variables to their fresh instantiations
-const VarSubstitution = std.AutoHashMap(Var, Var);
+pub const VarSubstitution = std.AutoHashMap(Var, Var);
 
 /// Instantiate a polymorphic type with fresh type variables.
 /// This creates a copy of the type structure with all flexible variables
@@ -38,7 +39,7 @@ pub fn instantiateVar(
 }
 
 /// Internal implementation that tracks variable substitutions
-fn instantiateVarWithSubst(
+pub fn instantiateVarWithSubst(
     store: *TypesStore,
     var_: Var,
     substitution: *VarSubstitution,

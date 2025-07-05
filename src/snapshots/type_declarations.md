@@ -25,6 +25,7 @@ MyType2 : Module.Thingy
 UNDECLARED TYPE - type_declarations.md:5:8:5:11
 UNDECLARED TYPE - type_declarations.md:5:13:5:16
 UNDECLARED TYPE - type_declarations.md:7:19:7:21
+UNDECLARED TYPE - type_declarations.md:7:19:7:24
 UNDECLARED TYPE - type_declarations.md:7:32:7:41
 # PROBLEMS
 **UNDECLARED TYPE**
@@ -69,6 +70,17 @@ This type is referenced here:
 Some(a) : { foo : Ok(a), bar : Something }
 ```
                                ^^^^^^^^^
+
+
+**UNDECLARED TYPE**
+The type ``Ok`` is not declared in this scope.
+
+This type is referenced here:
+**type_declarations.md:7:19:7:24:**
+```roc
+Some(a) : { foo : Ok(a), bar : Something }
+```
+                  ^^^^^
 
 
 # TOKENS
@@ -172,7 +184,7 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-alias-decl @3.1-3.41 (where "TODO")
+	(s-alias-decl @3.1-3.41
 		(ty-header @3.1-3.10 (name "Map")
 			(ty-args
 				(ty-var @3.5-3.6 (name "a"))
@@ -186,12 +198,12 @@ NO CHANGE
 					(ty-var @3.28-3.29 (name "b"))))
 			(ty-apply @3.34-3.41 (symbol "List")
 				(ty-var @3.39-3.40 (name "b")))))
-	(s-alias-decl @5.1-5.17 (where "TODO")
+	(s-alias-decl @5.1-5.17
 		(ty-header @5.1-5.4 (name "Foo"))
 		(ty-tuple @5.7-5.17
 			(ty @5.8-5.11 (name "Bar"))
 			(ty @5.13-5.16 (name "Baz"))))
-	(s-alias-decl @7.1-7.43 (where "TODO")
+	(s-alias-decl @7.1-7.43
 		(ty-header @7.1-7.8 (name "Some")
 			(ty-args
 				(ty-var @7.6-7.7 (name "a"))))
@@ -201,7 +213,7 @@ NO CHANGE
 					(ty-var @7.22-7.23 (name "a"))))
 			(field (field "bar")
 				(ty @7.32-7.41 (name "Something")))))
-	(s-alias-decl @9.1-9.27 (where "TODO")
+	(s-alias-decl @9.1-9.27
 		(ty-header @9.1-9.9 (name "Maybe")
 			(ty-args
 				(ty-var @9.7-9.8 (name "a"))))
@@ -209,7 +221,7 @@ NO CHANGE
 			(ty-apply @9.13-9.20 (symbol "Some")
 				(ty-var @9.18-9.19 (name "a")))
 			(ty @9.22-9.26 (name "None"))))
-	(s-alias-decl @11.1-11.38 (where "TODO")
+	(s-alias-decl @11.1-11.38
 		(ty-header @11.1-11.12 (name "SomeFunc")
 			(ty-args
 				(ty-var @11.10-11.11 (name "a"))))
@@ -219,10 +231,10 @@ NO CHANGE
 			(ty-var @11.25-11.26 (name "a"))
 			(ty-apply @11.30-11.38 (symbol "Maybe")
 				(ty-var @11.36-11.37 (name "a")))))
-	(s-alias-decl @13.1-13.13 (where "TODO")
+	(s-alias-decl @13.1-13.13
 		(ty-header @13.1-13.7 (name "MyType"))
 		(ty @13.10-13.13 (name "U64")))
-	(s-alias-decl @15.1-15.24 (where "TODO")
+	(s-alias-decl @15.1-15.24
 		(ty-header @15.1-15.8 (name "MyType2"))
 		(ty-lookup-external @15.11-15.24
 			(ext-decl @15.11-15.24 (ident "Module.Thingy") (kind "type")))))
@@ -231,5 +243,29 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs)
+	(type_decls
+		(alias @3.1-3.41 (type "Map(a, b)")
+			(ty-header @3.1-3.10 (name "Map")
+				(ty-args
+					(ty-var @3.5-3.6 (name "a"))
+					(ty-var @3.8-3.9 (name "b")))))
+		(alias @5.1-5.17 (type "Foo")
+			(ty-header @5.1-5.4 (name "Foo")))
+		(alias @7.1-7.43 (type "Some(a)")
+			(ty-header @7.1-7.8 (name "Some")
+				(ty-args
+					(ty-var @7.6-7.7 (name "a")))))
+		(alias @9.1-9.27 (type "Maybe(a)")
+			(ty-header @9.1-9.9 (name "Maybe")
+				(ty-args
+					(ty-var @9.7-9.8 (name "a")))))
+		(alias @11.1-11.38 (type "SomeFunc(a)")
+			(ty-header @11.1-11.12 (name "SomeFunc")
+				(ty-args
+					(ty-var @11.10-11.11 (name "a")))))
+		(alias @13.1-13.13 (type "MyType")
+			(ty-header @13.1-13.7 (name "MyType")))
+		(alias @15.1-15.24 (type "MyType2")
+			(ty-header @15.1-15.8 (name "MyType2"))))
 	(expressions))
 ~~~

@@ -112,7 +112,7 @@ NO CHANGE
 				(e-lookup-local @8.13-8.20
 					(pattern @6.1-6.8))
 				(e-int @8.21-8.24 (value "100")))))
-	(s-alias-decl @3.1-3.13 (where "TODO")
+	(s-alias-decl @3.1-3.13
 		(ty-header @3.1-3.7 (name "UserId"))
 		(ty @3.10-3.13 (name "U64"))))
 ~~~
@@ -122,6 +122,9 @@ NO CHANGE
 	(defs
 		(patt @6.1-6.8 (type "UserId -> Str"))
 		(patt @8.1-8.6 (type "* -> Str")))
+	(type_decls
+		(alias @3.1-3.13 (type "UserId")
+			(ty-header @3.1-3.7 (name "UserId"))))
 	(expressions
 		(expr @1.1-1.1 (type "UserId -> Str"))
 		(expr @8.9-8.25 (type "* -> Str"))))
