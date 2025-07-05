@@ -35,7 +35,7 @@ UpperIdent(1:1-1:7),NoSpaceDotLowerIdent(1:7-1:12),OpDoubleQuestion(1:12-1:14),N
 # PARSE
 ~~~clojure
 (e-binop @1.1-1.15 (op "??")
-	(e-ident @1.1-1.12 (qaul "Stdout") (raw ".line"))
+	(e-ident @1.1-1.12 (raw "Stdout.line"))
 	(e-malformed @1.14-1.15 (reason "expr_unexpected_token")))
 ~~~
 # FORMATTED

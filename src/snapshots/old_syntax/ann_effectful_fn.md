@@ -35,7 +35,7 @@ CloseCurly(7:1-7:2),EndOfFile(7:2-7:2),
 		(s-type-anno @2.5-2.39 (name "launchTheNukes")
 			(ty-fn @2.22-2.34
 				(ty-record @2.22-2.24)
-				(ty (name "Result"))))
+				(ty @2.28-2.34 (name "Result"))))
 		(e-tag @2.35-2.39 (raw "Bool"))
 		(e-tag @2.40-2.53 (raw "LaunchNukeErr"))
 		(s-decl @3.5-5.6
@@ -49,7 +49,7 @@ CloseCurly(7:1-7:2),EndOfFile(7:2-7:2),
 							(e-string @4.15-4.21
 								(e-string-part @4.16-4.20 (raw "todo"))))))))
 		(e-apply @6.5-6.23
-			(e-ident @6.5-6.19 (qaul "") (raw "launchTheNukes"))
+			(e-ident @6.5-6.19 (raw "launchTheNukes"))
 			(e-record @6.20-6.22))))
 ~~~
 # FORMATTED
@@ -72,9 +72,9 @@ CloseCurly(7:1-7:2),EndOfFile(7:2-7:2),
 			(ty-record @2.22-2.24)
 			(ty @2.28-2.34 (name "Result"))))
 	(s-expr @2.35-2.53
-		(e-tag @2.35-2.39 (name "Bool") (args "TODO")))
-	(s-expr @2.40-3.19
-		(e-tag @2.40-2.53 (name "LaunchNukeErr") (args "TODO")))
+		(e-tag @2.35-2.39 (name "Bool")))
+	(s-expr @1.1-1.1
+		(e-tag @2.40-2.53 (name "LaunchNukeErr")))
 	(s-let @3.5-5.6
 		(p-assign @3.5-3.19 (ident "launchTheNukes"))
 		(e-lambda @3.22-5.6

@@ -13,22 +13,7 @@ empty : ConsList(a)
 empty = ConsList.Nil
 ~~~
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **.Nil** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**nominal_tag_recursive_payload.md:6:17:6:21:**
-```roc
-empty = ConsList.Nil
-```
-                ^^^^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
+NIL
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:17),Comma(1:17-1:18),LowerIdent(1:19-1:24),CloseSquare(1:24-1:25),Newline(1:1-1:1),
@@ -46,26 +31,25 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),UpperIdent(6:9-6:17),NoSpaceDotUpperIdent(
 			(exposed-upper-ident (text "ConsList"))
 			(exposed-lower-ident (text "empty"))))
 	(statements
-		(s-type-decl @3.1-5.6
+		(s-type-decl @3.1-3.40
 			(header @3.1-3.12 (name "ConsList")
 				(args
 					(ty-var @3.10-3.11 (raw "a"))))
 			(ty-tag-union @3.16-3.40
 				(tags
-					(ty (name "Nil"))
+					(ty @3.17-3.20 (name "Nil"))
 					(ty-apply @3.22-3.39
-						(ty (name "Node"))
+						(ty @3.22-3.26 (name "Node"))
 						(ty-apply @3.27-3.38
-							(ty (name "ConsList"))
+							(ty @3.27-3.35 (name "ConsList"))
 							(ty-var @3.36-3.37 (raw "a")))))))
 		(s-type-anno @5.1-6.6 (name "empty")
 			(ty-apply @5.9-5.20
-				(ty (name "ConsList"))
+				(ty @5.9-5.17 (name "ConsList"))
 				(ty-var @5.18-5.19 (raw "a"))))
-		(s-decl @6.1-6.17
+		(s-decl @6.1-6.21
 			(p-ident @6.1-6.6 (raw "empty"))
-			(e-tag @6.9-6.17 (raw "ConsList")))
-		(e-malformed @6.17-6.21 (reason "expr_unexpected_token"))))
+			(e-tag @6.9-6.21 (raw "ConsList.Nil")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -74,19 +58,19 @@ module [ConsList, empty]
 ConsList(a) : [Nil, Node(ConsList(a))]
 
 empty : ConsList(a)
-empty = ConsList
+empty = Nil
 ~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
 	(d-let
 		(p-assign @6.1-6.6 (ident "empty"))
-		(e-tag @6.9-6.17 (name "ConsList") (args "TODO"))
+		(e-tag @6.9-6.21 (name "Nil"))
 		(annotation @6.1-6.6
 			(declared-type
 				(ty-apply @5.9-5.20 (symbol "ConsList")
 					(ty-var @5.18-5.19 (name "a"))))))
-	(s-type-decl @3.1-5.6
+	(s-nominal-decl @3.1-3.40 (match "TODO")
 		(ty-header @3.1-3.12 (name "ConsList")
 			(ty-args
 				(ty-var @3.10-3.11 (name "a"))))
@@ -100,7 +84,7 @@ empty = ConsList
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.6 (type "[ConsList]*")))
+		(patt @6.1-6.6 (type "[Nil]*")))
 	(expressions
-		(expr @6.9-6.17 (type "[ConsList]*"))))
+		(expr @6.9-6.21 (type "[Nil]*"))))
 ~~~

@@ -26,7 +26,7 @@ LowerIdent(5:1-5:5),EndOfFile(5:5-5:5),
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.5 (qaul "") (raw "data"))
+(e-ident @1.1-1.5 (raw "data"))
 ~~~
 # FORMATTED
 ~~~roc

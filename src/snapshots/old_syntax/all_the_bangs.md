@@ -22,7 +22,7 @@ DotLowerIdent(3:1-3:5),EndOfFile(3:5-3:5),
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.2 (qaul "") (raw "p"))
+(e-ident @1.1-1.2 (raw "p"))
 ~~~
 # FORMATTED
 ~~~roc

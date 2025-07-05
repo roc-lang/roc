@@ -16,54 +16,7 @@ none : Maybe(a)
 none = Maybe.None
 ~~~
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **.Some(** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**nominal_tag_payload.md:6:17:6:23:**
-```roc
-some = |a| Maybe.Some(a)
-```
-                ^^^^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **.None** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**nominal_tag_payload.md:9:13:9:18:**
-```roc
-none = Maybe.None
-```
-            ^^^^^
-
-
-**UNUSED VARIABLE**
-Variable ``a`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_a` to suppress this warning.
-The unused variable is declared here:
-**nominal_tag_payload.md:6:9:6:10:**
-```roc
-some = |a| Maybe.Some(a)
-```
-        ^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
+NIL
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:14),Comma(1:14-1:15),LowerIdent(1:16-1:20),Comma(1:20-1:21),LowerIdent(1:22-1:26),CloseSquare(1:26-1:27),Newline(1:1-1:1),
@@ -85,39 +38,37 @@ LowerIdent(9:1-9:5),OpAssign(9:6-9:7),UpperIdent(9:8-9:13),NoSpaceDotUpperIdent(
 			(exposed-lower-ident (text "some"))
 			(exposed-lower-ident (text "none"))))
 	(statements
-		(s-type-decl @3.1-5.5
+		(s-type-decl @3.1-3.28
 			(header @3.1-3.9 (name "Maybe")
 				(args
 					(ty-var @3.7-3.8 (raw "a"))))
 			(ty-tag-union @3.13-3.28
 				(tags
 					(ty-apply @3.14-3.21
-						(ty (name "Some"))
+						(ty @3.14-3.18 (name "Some"))
 						(ty-var @3.19-3.20 (raw "a")))
-					(ty (name "None")))))
+					(ty @3.23-3.27 (name "None")))))
 		(s-type-anno @5.1-6.5 (name "some")
 			(ty-fn @5.8-5.21
 				(ty-var @5.8-5.9 (raw "a"))
 				(ty-apply @5.13-5.21
-					(ty (name "Maybe"))
+					(ty @5.13-5.18 (name "Maybe"))
 					(ty-var @5.19-5.20 (raw "a")))))
-		(s-decl @6.1-6.17
+		(s-decl @6.1-6.25
 			(p-ident @6.1-6.5 (raw "some"))
-			(e-lambda @6.8-6.17
+			(e-lambda @6.8-6.25
 				(args
 					(p-ident @6.9-6.10 (raw "a")))
-				(e-tag @6.12-6.17 (raw "Maybe"))))
-		(e-malformed @6.17-6.23 (reason "expr_unexpected_token"))
-		(e-tuple @6.22-6.25
-			(e-ident @6.23-6.24 (qaul "") (raw "a")))
+				(e-apply @6.12-6.25
+					(e-tag @6.12-6.22 (raw "Maybe.Some"))
+					(e-ident @6.23-6.24 (raw "a")))))
 		(s-type-anno @8.1-9.5 (name "none")
 			(ty-apply @8.8-8.16
-				(ty (name "Maybe"))
+				(ty @8.8-8.13 (name "Maybe"))
 				(ty-var @8.14-8.15 (raw "a"))))
-		(s-decl @9.1-9.13
+		(s-decl @9.1-9.18
 			(p-ident @9.1-9.5 (raw "none"))
-			(e-tag @9.8-9.13 (raw "Maybe")))
-		(e-malformed @9.13-9.18 (reason "expr_unexpected_token"))))
+			(e-tag @9.8-9.18 (raw "Maybe.None")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -126,20 +77,23 @@ module [Maybe, some, none]
 Maybe(a) : [Some(a), None]
 
 some : a -> Maybe(a)
-some = |a| Maybe(a)
+some = |a| Some(a)
 
 none : Maybe(a)
-none = Maybe
+none = None
 ~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
 	(d-let
 		(p-assign @6.1-6.5 (ident "some"))
-		(e-lambda @6.8-6.17
+		(e-lambda @6.8-6.25
 			(args
 				(p-assign @6.9-6.10 (ident "a")))
-			(e-tag @6.12-6.17 (name "Maybe") (args "TODO")))
+			(e-tag @6.12-6.25 (name "Some")
+				(args
+					(e-lookup-local @6.23-6.24
+						(pattern @6.9-6.10)))))
 		(annotation @6.1-6.5
 			(declared-type
 				(ty-fn @5.8-5.21 (effectful false)
@@ -148,12 +102,12 @@ none = Maybe
 						(ty-var @5.19-5.20 (name "a")))))))
 	(d-let
 		(p-assign @9.1-9.5 (ident "none"))
-		(e-tag @9.8-9.13 (name "Maybe") (args "TODO"))
+		(e-tag @9.8-9.18 (name "None"))
 		(annotation @9.1-9.5
 			(declared-type
 				(ty-apply @8.8-8.16 (symbol "Maybe")
 					(ty-var @8.14-8.15 (name "a"))))))
-	(s-type-decl @3.1-5.5
+	(s-nominal-decl @3.1-3.28 (match "TODO")
 		(ty-header @3.1-3.9 (name "Maybe")
 			(ty-args
 				(ty-var @3.7-3.8 (name "a"))))
@@ -167,8 +121,8 @@ none = Maybe
 (inferred-types
 	(defs
 		(patt @6.1-6.5 (type "a -> Maybe(a)"))
-		(patt @9.1-9.5 (type "[Maybe]*")))
+		(patt @9.1-9.5 (type "[None]*")))
 	(expressions
-		(expr @6.8-6.17 (type "a -> Maybe(a)"))
-		(expr @9.8-9.13 (type "[Maybe]*"))))
+		(expr @6.8-6.25 (type "a -> Maybe(a)"))
+		(expr @9.8-9.18 (type "[None]*"))))
 ~~~

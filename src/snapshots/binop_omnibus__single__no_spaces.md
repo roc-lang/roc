@@ -24,7 +24,7 @@ UpperIdent(1:1-1:4),NoSpaceOpenRound(1:4-1:5),LowerIdent(1:5-1:8),CloseRound(1:8
 			(e-binop @1.1-1.14 (op "??")
 				(e-apply @1.1-1.9
 					(e-tag @1.1-1.4 (raw "Err"))
-					(e-ident @1.5-1.8 (qaul "") (raw "foo")))
+					(e-ident @1.5-1.8 (raw "foo")))
 				(e-int @1.11-1.13 (raw "12")))
 			(e-binop @1.14-1.20 (op "*")
 				(e-int @1.14-1.15 (raw "5"))
@@ -56,7 +56,9 @@ Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
 	(e-binop @1.1-1.43 (op "or")
 		(e-binop @1.1-1.20 (op "gt")
 			(e-binop @1.1-1.14 (op "null_coalesce")
-				(e-tag @1.1-1.9 (name "Err") (args "TODO"))
+				(e-tag @1.1-1.9 (name "Err")
+					(args
+						(e-runtime-error (tag "ident_not_in_scope"))))
 				(e-int @1.11-1.13 (value "12")))
 			(e-binop @1.14-1.20 (op "mul")
 				(e-int @1.14-1.15 (value "5"))

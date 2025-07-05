@@ -111,21 +111,9 @@ Here is the problematic code:
                                    ^^^^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **.len rest** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**complex_list_tags.md:4:74:4:83:**
-```roc
-    [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr (List.len rest)} more events"
-```
-                                                                         ^^^^^^^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **)}** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**UNEXPECTED TOKEN IN PATTERN**
+The token **)}** is not expected in a pattern.
+Patterns can contain identifiers, literals, lists, records, or tags.
 
 Here is the problematic code:
 **complex_list_tags.md:4:83:4:85:**
@@ -135,9 +123,9 @@ Here is the problematic code:
                                                                                   ^^
 
 
-**UNEXPECTED TOKEN IN PATTERN**
-The token **} more events** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **} more events** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
 **complex_list_tags.md:4:84:4:97:**
@@ -147,9 +135,9 @@ Here is the problematic code:
                                                                                    ^^^^^^^^^^^^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token ** more events"** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**UNEXPECTED TOKEN IN PATTERN**
+The token ** more events"** is not expected in a pattern.
+Patterns can contain identifiers, literals, lists, records, or tags.
 
 Here is the problematic code:
 **complex_list_tags.md:4:85:4:98:**
@@ -159,9 +147,9 @@ Here is the problematic code:
                                                                                     ^^^^^^^^^^^^^
 
 
-**UNEXPECTED TOKEN IN PATTERN**
-The token  is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token  is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
 **complex_list_tags.md:4:97:4:97:**
@@ -169,25 +157,6 @@ Here is the problematic code:
     [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr (List.len rest)} more events"
 ```
                                                                                                 
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **match events {
-    [] => "no events"
-    [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
-    [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr (List.len rest)} more events"
-    [** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**complex_list_tags.md:1:1:5:6:**
-```roc
-match events {
-    [] => "no events"
-    [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
-    [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr (List.len rest)} more events"
-    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
-```
 
 
 **PARSE ERROR**
@@ -274,21 +243,9 @@ Here is the problematic code:
                                                                                                 ^^^^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **.toStr dx2** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**complex_list_tags.md:5:102:5:112:**
-```roc
-    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
-```
-                                                                                                     ^^^^^^^^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **},** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**UNEXPECTED TOKEN IN PATTERN**
+The token **},** is not expected in a pattern.
+Patterns can contain identifiers, literals, lists, records, or tags.
 
 Here is the problematic code:
 **complex_list_tags.md:5:112:5:114:**
@@ -298,9 +255,9 @@ Here is the problematic code:
                                                                                                                ^^
 
 
-**UNEXPECTED TOKEN IN PATTERN**
-The token **,${** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **,${** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
 **complex_list_tags.md:5:113:5:116:**
@@ -310,9 +267,9 @@ Here is the problematic code:
                                                                                                                 ^^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **${Num** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**UNEXPECTED TOKEN IN PATTERN**
+The token **${Num** is not expected in a pattern.
+Patterns can contain identifiers, literals, lists, records, or tags.
 
 Here is the problematic code:
 **complex_list_tags.md:5:114:5:119:**
@@ -320,18 +277,6 @@ Here is the problematic code:
     [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
 ```
                                                                                                                  ^^^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **.toStr dy2** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**complex_list_tags.md:5:119:5:129:**
-```roc
-    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
-```
-                                                                                                                      ^^^^^^^^^^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -454,21 +399,9 @@ Here is the problematic code:
                                                                                                                ^^^^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **.toStr y** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**complex_list_tags.md:6:117:6:125:**
-```roc
-    [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
-```
-                                                                                                                    ^^^^^^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **}** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**UNEXPECTED TOKEN IN PATTERN**
+The token **}** is not expected in a pattern.
+Patterns can contain identifiers, literals, lists, records, or tags.
 
 Here is the problematic code:
 **complex_list_tags.md:6:125:6:126:**
@@ -478,9 +411,9 @@ Here is the problematic code:
                                                                                                                             ^
 
 
-**UNEXPECTED TOKEN IN PATTERN**
-The token **"** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **"** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
 **complex_list_tags.md:6:126:6:127:**
@@ -490,9 +423,9 @@ Here is the problematic code:
                                                                                                                              ^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**UNEXPECTED TOKEN IN PATTERN**
+The token  is not expected in a pattern.
+Patterns can contain identifiers, literals, lists, records, or tags.
 
 Here is the problematic code:
 **complex_list_tags.md:6:126:6:126:**
@@ -500,6 +433,29 @@ Here is the problematic code:
     [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
 ```
                                                                                                                              
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **match events {
+    [] => "no events"
+    [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
+    [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr (List.len rest)} more events"
+    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
+    [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
+    _** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**complex_list_tags.md:1:1:7:6:**
+```roc
+match events {
+    [] => "no events"
+    [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
+    [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr (List.len rest)} more events"
+    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
+    [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
+    _ => "other event pattern"
+```
 
 
 **UNDEFINED VARIABLE**
@@ -599,24 +555,20 @@ The unused variable is declared here:
                           ^^^^
 
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
-
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
+**UNDEFINED VARIABLE**
+Nothing is named `rest` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 **UNUSED VARIABLE**
-Variable ``rest`` is not used anywhere in your code.
+Variable ``len`` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_len` to suppress this warning.
 The unused variable is declared here:
-**complex_list_tags.md:4:79:4:83:**
+**complex_list_tags.md:4:70:4:78:**
 ```roc
     [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr (List.len rest)} more events"
 ```
-                                                                              ^^^^
+                                                                     ^^^^^^^^
 
 
 **INVALID PATTERN**
@@ -734,24 +686,20 @@ This pattern contains invalid syntax or uses unsupported features.
 This looks like an operator, but it's not one I recognize!
 Check the spelling and make sure you're using a valid Roc operator.
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
-
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
+**UNDEFINED VARIABLE**
+Nothing is named `dx2` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 **UNUSED VARIABLE**
-Variable ``dx2`` is not used anywhere in your code.
+Variable ``toStr`` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_dx2` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_toStr` to suppress this warning.
 The unused variable is declared here:
-**complex_list_tags.md:5:109:5:112:**
+**complex_list_tags.md:5:99:5:108:**
 ```roc
     [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
 ```
-                                                                                                            ^^^
+                                                                                                  ^^^^^^^^^
 
 
 **INVALID PATTERN**
@@ -761,9 +709,12 @@ This pattern contains invalid syntax or uses unsupported features.
 This looks like an operator, but it's not one I recognize!
 Check the spelling and make sure you're using a valid Roc operator.
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
+
+**UNDEFINED VARIABLE**
+Nothing is named `toStr` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
@@ -877,25 +828,28 @@ This pattern contains invalid syntax or uses unsupported features.
 This looks like an operator, but it's not one I recognize!
 Check the spelling and make sure you're using a valid Roc operator.
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
-
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
+**UNDEFINED VARIABLE**
+Nothing is named `y` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 **UNUSED VARIABLE**
-Variable ``y`` is not used anywhere in your code.
+Variable ``toStr`` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_y` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_toStr` to suppress this warning.
 The unused variable is declared here:
-**complex_list_tags.md:6:124:6:125:**
+**complex_list_tags.md:6:114:6:123:**
 ```roc
     [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
 ```
-                                                                                                                           ^
+                                                                                                                 ^^^^^^^^^
 
+
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
 
 **INVALID PATTERN**
 This pattern contains invalid syntax or uses unsupported features.
@@ -918,7 +872,7 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 # PARSE
 ~~~clojure
 (e-match
-	(e-ident @1.7-1.13 (qaul "") (raw "events"))
+	(e-ident @1.7-1.13 (raw "events"))
 	(branches
 		(branch @1.1-1.1
 			(p-list @2.5-2.7)
@@ -935,7 +889,7 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 			(e-malformed @3.54-3.58 (reason "expr_unexpected_token")))
 		(branch @3.56-3.69
 			(p-malformed @3.56-3.61 (tag "pattern_unexpected_token"))
-			(e-ident @3.58-3.67 (qaul "Num") (raw ".toStr")))
+			(e-ident @3.58-3.67 (raw "Num.toStr")))
 		(branch @3.68-3.71
 			(p-ident @3.68-3.69 (raw "y"))
 			(e-malformed @3.69-3.71 (reason "expr_unexpected_token")))
@@ -948,18 +902,15 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 					(p-ident @4.15-4.18 (raw "key")))
 				(p-list-rest @4.21-4.32 (name "rest")))
 			(e-malformed @4.36-4.74 (reason "string_expected_close_interpolation")))
-		(branch @4.70-4.83
-			(p-tag @4.70-4.74 (raw "List"))
-			(e-malformed @4.74-4.83 (reason "expr_unexpected_token")))
-		(branch @4.79-4.85
-			(p-ident @4.79-4.83 (raw "rest"))
-			(e-malformed @4.83-4.85 (reason "expr_unexpected_token")))
-		(branch @4.84-4.98
-			(p-malformed @4.84-4.97 (tag "pattern_unexpected_token"))
-			(e-malformed @4.85-4.98 (reason "expr_unexpected_token")))
-		(branch @4.97-5.6
-			(p-malformed @1.1-1.1 (tag "pattern_unexpected_token"))
-			(e-malformed @1.1-5.6 (reason "expr_unexpected_token")))
+		(branch @4.70-4.84
+			(p-ident @4.70-4.78 (raw ".len"))
+			(e-ident @4.79-4.83 (raw "rest")))
+		(branch @4.83-4.97
+			(p-malformed @4.83-4.85 (tag "pattern_unexpected_token"))
+			(e-malformed @4.84-4.97 (reason "expr_unexpected_token")))
+		(branch @1.1-1.1
+			(p-malformed @4.85-4.98 (tag "pattern_unexpected_token"))
+			(e-malformed @1.1-1.1 (reason "expr_unexpected_token")))
 		(branch @5.5-5.75
 			(p-list @5.5-5.49
 				(p-tag @5.6-5.18 (raw "Move")
@@ -975,25 +926,22 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 			(e-malformed @5.75-5.78 (reason "expr_unexpected_token")))
 		(branch @5.76-5.90
 			(p-malformed @5.76-5.81 (tag "pattern_unexpected_token"))
-			(e-ident @5.78-5.87 (qaul "Num") (raw ".toStr")))
+			(e-ident @5.78-5.87 (raw "Num.toStr")))
 		(branch @5.88-5.97
 			(p-ident @5.88-5.90 (raw "dy"))
 			(e-malformed @5.90-5.97 (reason "expr_unexpected_token")))
 		(branch @5.91-5.102
 			(p-malformed @5.91-5.99 (tag "pattern_unexpected_token"))
 			(e-malformed @5.97-5.102 (reason "expr_unexpected_token")))
-		(branch @5.99-5.112
-			(p-tag @5.99-5.102 (raw "Num"))
-			(e-malformed @5.102-5.112 (reason "expr_unexpected_token")))
-		(branch @5.109-5.114
-			(p-ident @5.109-5.112 (raw "dx2"))
-			(e-malformed @5.112-5.114 (reason "expr_unexpected_token")))
-		(branch @5.113-5.119
-			(p-malformed @5.113-5.116 (tag "pattern_unexpected_token"))
-			(e-malformed @5.114-5.119 (reason "expr_unexpected_token")))
-		(branch @5.116-5.129
-			(p-tag @5.116-5.119 (raw "Num"))
-			(e-malformed @5.119-5.129 (reason "expr_unexpected_token")))
+		(branch @5.99-5.113
+			(p-ident @5.99-5.108 (raw ".toStr"))
+			(e-ident @5.109-5.112 (raw "dx2")))
+		(branch @5.112-5.116
+			(p-malformed @5.112-5.114 (tag "pattern_unexpected_token"))
+			(e-malformed @5.113-5.116 (reason "expr_unexpected_token")))
+		(branch @5.114-5.129
+			(p-malformed @5.114-5.119 (tag "pattern_unexpected_token"))
+			(e-ident @5.116-5.125 (raw "Num.toStr")))
 		(branch @5.126-5.130
 			(p-ident @5.126-5.129 (raw "dy2"))
 			(e-malformed @5.129-5.130 (reason "expr_unexpected_token")))
@@ -1014,22 +962,22 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 			(e-malformed @6.82-6.99 (reason "expr_unexpected_token")))
 		(branch @6.97-6.110
 			(p-malformed @6.97-6.102 (tag "pattern_unexpected_token"))
-			(e-ident @6.99-6.108 (qaul "Num") (raw ".toStr")))
+			(e-ident @6.99-6.108 (raw "Num.toStr")))
 		(branch @6.109-6.112
 			(p-ident @6.109-6.110 (raw "x"))
 			(e-malformed @6.110-6.112 (reason "expr_unexpected_token")))
 		(branch @6.111-6.117
 			(p-malformed @6.111-6.114 (tag "pattern_unexpected_token"))
 			(e-malformed @6.112-6.117 (reason "expr_unexpected_token")))
-		(branch @6.114-6.125
-			(p-tag @6.114-6.117 (raw "Num"))
-			(e-malformed @6.117-6.125 (reason "expr_unexpected_token")))
-		(branch @6.124-6.126
-			(p-ident @6.124-6.125 (raw "y"))
-			(e-malformed @6.125-6.126 (reason "expr_unexpected_token")))
-		(branch @1.1-1.1
-			(p-malformed @6.126-6.127 (tag "pattern_unexpected_token"))
-			(e-malformed @1.1-1.1 (reason "expr_unexpected_token")))
+		(branch @6.114-6.126
+			(p-ident @6.114-6.123 (raw ".toStr"))
+			(e-ident @6.124-6.125 (raw "y")))
+		(branch @6.125-6.127
+			(p-malformed @6.125-6.126 (tag "pattern_unexpected_token"))
+			(e-malformed @6.126-6.127 (reason "expr_unexpected_token")))
+		(branch @6.126-7.6
+			(p-malformed @1.1-1.1 (tag "pattern_unexpected_token"))
+			(e-malformed @1.1-7.6 (reason "expr_unexpected_token")))
 		(branch @1.1-1.1
 			(p-underscore)
 			(e-string @7.10-7.31
@@ -1040,9 +988,9 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 match events {
 	[] => "no events"
 	[Click(x, y)] => 	 => 	 => Num.toStr	y => 	 => 
-	[KeyPress(key), .. as rest] => 	List => 	rest => 	 => 	 => 
-	[Move(dx, dy), Move(dx2, dy2), .. as others] => 	 => 	 => Num.toStr	dy => 	 => 	Num => 	dx2 => 	 => 	Num => 	dy2 => 	 => 
-	[Scroll(amount), Click(x, y), .. as remaining] => 	 => 	 => Num.toStr	x => 	 => 	Num => 	y => 	 => 
+	[KeyPress(key), .. as rest] => 	len => rest	 => 	 => 
+	[Move(dx, dy), Move(dx2, dy2), .. as others] => 	 => 	 => Num.toStr	dy => 	 => 	toStr => dx2	 => 	 => Num.toStr	dy2 => 	 => 
+	[Scroll(amount), Click(x, y), .. as remaining] => 	 => 	 => Num.toStr	x => 	 => 	toStr => y	 => 	 => 
 	_ => "other event pattern"
 }
 ~~~
@@ -1098,22 +1046,17 @@ match events {
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
-					(p-applied-tag @4.70-4.74 (degenerate false)))
+					(p-assign @4.70-4.78 (ident "len") (degenerate false)))
+				(value
+					(e-runtime-error (tag "ident_not_in_scope"))))
+			(branch
+				(patterns
+					(p-runtime-error @4.83-4.85 (tag "pattern_not_canonicalized") (degenerate false)))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
-					(p-assign @4.79-4.83 (ident "rest") (degenerate false)))
-				(value
-					(e-runtime-error (tag "expr_not_canonicalized"))))
-			(branch
-				(patterns
-					(p-runtime-error @4.84-4.97 (tag "pattern_not_canonicalized") (degenerate false)))
-				(value
-					(e-runtime-error (tag "expr_not_canonicalized"))))
-			(branch
-				(patterns
-					(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized") (degenerate false)))
+					(p-runtime-error @4.85-4.98 (tag "pattern_not_canonicalized") (degenerate false)))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
@@ -1148,24 +1091,19 @@ match events {
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
-					(p-applied-tag @5.99-5.102 (degenerate false)))
+					(p-assign @5.99-5.108 (ident "toStr") (degenerate false)))
+				(value
+					(e-runtime-error (tag "ident_not_in_scope"))))
+			(branch
+				(patterns
+					(p-runtime-error @5.112-5.114 (tag "pattern_not_canonicalized") (degenerate false)))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
-					(p-assign @5.109-5.112 (ident "dx2") (degenerate false)))
+					(p-runtime-error @5.114-5.119 (tag "pattern_not_canonicalized") (degenerate false)))
 				(value
-					(e-runtime-error (tag "expr_not_canonicalized"))))
-			(branch
-				(patterns
-					(p-runtime-error @5.113-5.116 (tag "pattern_not_canonicalized") (degenerate false)))
-				(value
-					(e-runtime-error (tag "expr_not_canonicalized"))))
-			(branch
-				(patterns
-					(p-applied-tag @5.116-5.119 (degenerate false)))
-				(value
-					(e-runtime-error (tag "expr_not_canonicalized"))))
+					(e-runtime-error (tag "ident_not_in_scope"))))
 			(branch
 				(patterns
 					(p-assign @5.126-5.129 (ident "dy2") (degenerate false)))
@@ -1208,17 +1146,17 @@ match events {
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
-					(p-applied-tag @6.114-6.117 (degenerate false)))
+					(p-assign @6.114-6.123 (ident "toStr") (degenerate false)))
+				(value
+					(e-runtime-error (tag "ident_not_in_scope"))))
+			(branch
+				(patterns
+					(p-runtime-error @6.125-6.126 (tag "pattern_not_canonicalized") (degenerate false)))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
-					(p-assign @6.124-6.125 (ident "y") (degenerate false)))
-				(value
-					(e-runtime-error (tag "expr_not_canonicalized"))))
-			(branch
-				(patterns
-					(p-runtime-error @6.126-6.127 (tag "pattern_not_canonicalized") (degenerate false)))
+					(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized") (degenerate false)))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch

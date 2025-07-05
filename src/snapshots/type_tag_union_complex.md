@@ -35,13 +35,11 @@ main! = |_| {}
 The type ``Result`` is being redeclared.
 
 The redeclaration is here:
-**type_tag_union_complex.md:7:1:10:9:**
+**type_tag_union_complex.md:7:1:7:55:**
 ```roc
 Result : [Success(Str), Error(Str), Warning(Str, I32)]
-
-# Nested tag unions
-Response : [Ok(Result), NetworkError, ParseError]
 ```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 But ``Result`` was already declared here:
 **type_tag_union_complex.md:1:1:1:1:**
@@ -92,65 +90,65 @@ LowerIdent(24:1-24:6),OpAssign(24:7-24:8),OpBar(24:9-24:10),Underscore(24:10-24:
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-decl @4.1-7.7
+		(s-type-decl @4.1-4.37
 			(header @4.1-4.7 (name "Status")
 				(args))
 			(ty-tag-union @4.10-4.37
 				(tags
-					(ty (name "Loading"))
-					(ty (name "Complete"))
-					(ty (name "Failed")))))
-		(s-type-decl @7.1-10.9
+					(ty @4.11-4.18 (name "Loading"))
+					(ty @4.20-4.28 (name "Complete"))
+					(ty @4.30-4.36 (name "Failed")))))
+		(s-type-decl @7.1-7.55
 			(header @7.1-7.7 (name "Result")
 				(args))
 			(ty-tag-union @7.10-7.55
 				(tags
 					(ty-apply @7.11-7.23
-						(ty (name "Success"))
-						(ty (name "Str")))
+						(ty @7.11-7.18 (name "Success"))
+						(ty @7.19-7.22 (name "Str")))
 					(ty-apply @7.25-7.35
-						(ty (name "Error"))
-						(ty (name "Str")))
+						(ty @7.25-7.30 (name "Error"))
+						(ty @7.31-7.34 (name "Str")))
 					(ty-apply @7.37-7.54
-						(ty (name "Warning"))
-						(ty (name "Str"))
-						(ty (name "I32"))))))
-		(s-type-decl @10.1-13.10
+						(ty @7.37-7.44 (name "Warning"))
+						(ty @7.45-7.48 (name "Str"))
+						(ty @7.50-7.53 (name "I32"))))))
+		(s-type-decl @10.1-10.50
 			(header @10.1-10.9 (name "Response")
 				(args))
 			(ty-tag-union @10.12-10.50
 				(tags
 					(ty-apply @10.13-10.23
-						(ty (name "Ok"))
-						(ty (name "Result")))
-					(ty (name "NetworkError"))
-					(ty (name "ParseError")))))
-		(s-type-decl @13.1-14.16
+						(ty @10.13-10.15 (name "Ok"))
+						(ty @10.16-10.22 (name "Result")))
+					(ty @10.25-10.37 (name "NetworkError"))
+					(ty @10.39-10.49 (name "ParseError")))))
+		(s-type-decl @13.1-13.52
 			(header @13.1-13.10 (name "UserState")
 				(args))
 			(ty-tag-union @13.13-13.52
 				(tags
 					(ty-apply @13.14-13.25
-						(ty (name "Active"))
-						(ty (name "Str")))
-					(ty (name "Inactive"))
+						(ty @13.14-13.20 (name "Active"))
+						(ty @13.21-13.24 (name "Str")))
+					(ty @13.27-13.35 (name "Inactive"))
 					(ty-apply @13.37-13.51
-						(ty (name "Suspended"))
-						(ty (name "Str"))))))
-		(s-type-decl @14.1-17.14
+						(ty @13.37-13.46 (name "Suspended"))
+						(ty @13.47-13.50 (name "Str"))))))
+		(s-type-decl @14.1-14.58
 			(header @14.1-14.16 (name "ConnectionState")
 				(args))
 			(ty-tag-union @14.19-14.58
 				(tags
-					(ty (name "Active"))
-					(ty (name "Disconnected"))
+					(ty @14.20-14.26 (name "Active"))
+					(ty @14.28-14.40 (name "Disconnected"))
 					(ty-apply @14.42-14.57
-						(ty (name "Connecting"))
-						(ty (name "Str"))))))
-		(s-type-anno @17.1-18.14 (name "processResult")
+						(ty @14.42-14.52 (name "Connecting"))
+						(ty @14.53-14.56 (name "Str"))))))
+		(s-type-anno @1.1-1.1 (name "processResult")
 			(ty-fn @17.17-17.30
-				(ty (name "Result"))
-				(ty (name "Str"))))
+				(ty @17.17-17.23 (name "Result"))
+				(ty @17.27-17.30 (name "Str"))))
 		(s-decl @18.1-18.38
 			(p-ident @18.1-18.14 (raw "processResult"))
 			(e-lambda @18.17-18.38
@@ -158,10 +156,10 @@ LowerIdent(24:1-24:6),OpAssign(24:7-24:8),OpBar(24:9-24:10),Underscore(24:10-24:
 					(p-ident @18.18-18.25 (raw "_result")))
 				(e-string @18.27-18.38
 					(e-string-part @18.28-18.37 (raw "processed")))))
-		(s-type-anno @21.1-22.15 (name "handleResponse")
+		(s-type-anno @1.1-1.1 (name "handleResponse")
 			(ty-fn @21.18-21.33
-				(ty (name "Response"))
-				(ty (name "Str"))))
+				(ty @21.18-21.26 (name "Response"))
+				(ty @21.30-21.33 (name "Str"))))
 		(s-decl @22.1-22.39
 			(p-ident @22.1-22.15 (raw "handleResponse"))
 			(e-lambda @22.18-22.39
@@ -213,13 +211,13 @@ NO CHANGE
 			(args
 				(p-underscore @24.10-24.11))
 			(e-empty_record @24.13-24.15)))
-	(s-type-decl @4.1-7.7
+	(s-alias-decl @4.1-4.37 (where "TODO")
 		(ty-header @4.1-4.7 (name "Status"))
 		(ty-tag-union @4.10-4.37
 			(ty @4.11-4.18 (name "Loading"))
 			(ty @4.20-4.28 (name "Complete"))
 			(ty @4.30-4.36 (name "Failed"))))
-	(s-type-decl @7.1-10.9
+	(s-alias-decl @7.1-7.55 (where "TODO")
 		(ty-header @7.1-7.7 (name "Result"))
 		(ty-tag-union @7.10-7.55
 			(ty-apply @7.11-7.23 (symbol "Success")
@@ -229,14 +227,14 @@ NO CHANGE
 			(ty-apply @7.37-7.54 (symbol "Warning")
 				(ty @7.45-7.48 (name "Str"))
 				(ty @7.50-7.53 (name "I32")))))
-	(s-type-decl @10.1-13.10
+	(s-alias-decl @10.1-10.50 (where "TODO")
 		(ty-header @10.1-10.9 (name "Response"))
 		(ty-tag-union @10.12-10.50
 			(ty-apply @10.13-10.23 (symbol "Ok")
 				(ty @10.16-10.22 (name "Result")))
 			(ty @10.25-10.37 (name "NetworkError"))
 			(ty @10.39-10.49 (name "ParseError"))))
-	(s-type-decl @13.1-14.16
+	(s-alias-decl @13.1-13.52 (where "TODO")
 		(ty-header @13.1-13.10 (name "UserState"))
 		(ty-tag-union @13.13-13.52
 			(ty-apply @13.14-13.25 (symbol "Active")
@@ -244,7 +242,7 @@ NO CHANGE
 			(ty @13.27-13.35 (name "Inactive"))
 			(ty-apply @13.37-13.51 (symbol "Suspended")
 				(ty @13.47-13.50 (name "Str")))))
-	(s-type-decl @14.1-17.14
+	(s-alias-decl @14.1-14.58 (where "TODO")
 		(ty-header @14.1-14.16 (name "ConnectionState"))
 		(ty-tag-union @14.19-14.58
 			(ty @14.20-14.26 (name "Active"))

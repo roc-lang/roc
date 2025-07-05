@@ -19,7 +19,7 @@ OpenRound(1:1-1:2),LowerIdent(1:2-1:6),CloseRound(1:6-1:7),EndOfFile(1:7-1:7),
 # PARSE
 ~~~clojure
 (e-tuple @1.1-1.7
-	(e-ident @1.2-1.6 (qaul "") (raw "whee")))
+	(e-ident @1.2-1.6 (raw "whee")))
 ~~~
 # FORMATTED
 ~~~roc

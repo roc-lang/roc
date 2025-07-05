@@ -25,7 +25,7 @@ Email
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tag @1.1-1.6 (name "Email") (args "TODO"))
+(e-tag @1.1-1.6 (name "Email"))
 ~~~
 # TYPES
 ~~~clojure

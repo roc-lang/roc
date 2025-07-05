@@ -19,7 +19,7 @@ LowerIdent(1:1-1:2),OpBinaryMinus(1:2-1:3),Int(1:3-1:4),EndOfFile(1:4-1:4),
 # PARSE
 ~~~clojure
 (e-binop @1.1-1.4 (op "-")
-	(e-ident @1.1-1.2 (qaul "") (raw "x"))
+	(e-ident @1.1-1.2 (raw "x"))
 	(e-int @1.3-1.4 (raw "2")))
 ~~~
 # FORMATTED

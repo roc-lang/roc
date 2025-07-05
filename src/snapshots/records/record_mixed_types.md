@@ -25,7 +25,7 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:7),OpColon(1:7-1:8),StringStart(1:9-1:10),St
 	(field (field "age") (optional false)
 		(e-int @1.23-1.25 (raw "30")))
 	(field (field "active") (optional false)
-		(e-ident @1.35-1.44 (qaul "Bool") (raw ".true")))
+		(e-ident @1.35-1.44 (raw "Bool.true")))
 	(field (field "scores") (optional false)
 		(e-list @1.54-1.66
 			(e-int @1.55-1.57 (raw "95"))
@@ -36,7 +36,7 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:7),OpColon(1:7-1:8),StringStart(1:9-1:10),St
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+{name: "Alice", age: 30, active: Bool.true, scores: [95, 87, 92], balance: 1250.75}
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -19,7 +19,7 @@ LowerIdent(1:1-1:4),NoSpaceOpenRound(1:4-1:5),CloseRound(1:5-1:6),LowerIdent(1:6
 # PARSE
 ~~~clojure
 (e-apply @1.1-1.6
-	(e-ident @1.1-1.4 (qaul "") (raw "try")))
+	(e-ident @1.1-1.4 (raw "try")))
 ~~~
 # FORMATTED
 ~~~roc

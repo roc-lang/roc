@@ -18,7 +18,7 @@ LowerIdent(1:1-1:5),OpAssign(1:6-1:7),Int(1:8-1:9),OpArrow(1:10-1:12),Int(1:13-1
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.5 (qaul "") (raw "main"))
+(e-ident @1.1-1.5 (raw "main"))
 ~~~
 # FORMATTED
 ~~~roc

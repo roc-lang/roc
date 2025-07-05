@@ -26,9 +26,9 @@ KwImport(3:1-3:7),LowerIdent(3:8-3:12),NoSpaceDotUpperIdent(3:12-3:17),OpenSquar
 	(module @1.1-1.10
 		(exposes @1.8-1.10))
 	(statements
-		(s-import @3.1-3.17 (module ".Json") (qualifier "json"))
+		(s-import @3.1-3.17 (raw "json.Json"))
 		(e-list @3.18-3.28
-			(e-ident @3.19-3.22 (qaul "") (raw "foo"))
+			(e-ident @3.19-3.22 (raw "foo"))
 			(e-tag @3.24-3.27 (raw "BAR")))))
 ~~~
 # FORMATTED

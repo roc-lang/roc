@@ -29,8 +29,8 @@ UpperIdent(3:1-3:2),EndOfFile(3:2-3:2),
 (e-block @1.1-2.3
 	(statements
 		(e-question-suffix @1.2-1.4
-			(e-ident @1.2-1.3 (qaul "") (raw "p")))
-		(e-ident @2.1-2.2 (qaul "") (raw "m"))))
+			(e-ident @1.2-1.3 (raw "p")))
+		(e-ident @2.1-2.2 (raw "m"))))
 ~~~
 # FORMATTED
 ~~~roc

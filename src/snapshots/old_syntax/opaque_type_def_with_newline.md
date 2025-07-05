@@ -22,7 +22,7 @@ LowerIdent(3:2-3:3),LowerIdent(3:4-3:6),EndOfFile(3:6-3:6),
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.2 (qaul "") (raw "a"))
+(e-ident @1.1-1.2 (raw "a"))
 ~~~
 # FORMATTED
 ~~~roc

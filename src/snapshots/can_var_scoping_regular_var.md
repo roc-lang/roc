@@ -92,12 +92,12 @@ CloseCurly(21:1-21:2),EndOfFile(21:2-21:2),
 						(s-decl @9.2-10.8
 							(p-ident @9.2-9.8 (raw "count_"))
 							(e-binop @9.11-10.8 (op "+")
-								(e-ident @9.11-9.17 (qaul "") (raw "count_"))
+								(e-ident @9.11-9.17 (raw "count_"))
 								(e-int @9.20-9.21 (raw "1"))))
 						(s-decl @10.2-13.12
 							(p-ident @10.2-10.8 (raw "total_"))
 							(e-binop @10.11-13.12 (op "+")
-								(e-ident @10.11-10.17 (qaul "") (raw "total_"))
+								(e-ident @10.11-10.17 (raw "total_"))
 								(e-int @10.20-10.22 (raw "10"))))
 						(s-decl @13.2-17.3
 							(p-ident @13.2-13.12 (raw "nestedFunc"))
@@ -109,22 +109,22 @@ CloseCurly(21:1-21:2),EndOfFile(21:2-21:2),
 										(s-decl @14.3-15.9
 											(p-ident @14.3-14.9 (raw "count_"))
 											(e-binop @14.12-15.9 (op "+")
-												(e-ident @14.12-14.18 (qaul "") (raw "count_"))
+												(e-ident @14.12-14.18 (raw "count_"))
 												(e-int @14.21-14.22 (raw "5"))))
 										(s-decl @15.3-16.9
 											(p-ident @15.3-15.9 (raw "total_"))
 											(e-binop @15.12-16.9 (op "*")
-												(e-ident @15.12-15.18 (qaul "") (raw "total_"))
+												(e-ident @15.12-15.18 (raw "total_"))
 												(e-int @15.21-15.22 (raw "2"))))
-										(e-ident @16.3-16.9 (qaul "") (raw "count_"))))))
+										(e-ident @16.3-16.9 (raw "count_"))))))
 						(s-decl @19.2-19.25
 							(p-ident @19.2-19.8 (raw "result"))
 							(e-apply @19.11-19.25
-								(e-ident @19.11-19.21 (qaul "") (raw "nestedFunc"))
+								(e-ident @19.11-19.21 (raw "nestedFunc"))
 								(e-record @19.22-19.24)))
 						(e-binop @20.2-21.2 (op "+")
-							(e-ident @20.2-20.8 (qaul "") (raw "total_"))
-							(e-ident @20.11-20.17 (qaul "") (raw "result")))))))))
+							(e-ident @20.2-20.8 (raw "total_"))
+							(e-ident @20.11-20.17 (raw "result")))))))))
 ~~~
 # FORMATTED
 ~~~roc

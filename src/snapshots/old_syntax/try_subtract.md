@@ -23,8 +23,8 @@ LowerIdent(1:1-1:4),OpBinaryMinus(1:4-1:5),LowerIdent(1:5-1:6),EndOfFile(1:6-1:6
 # PARSE
 ~~~clojure
 (e-binop @1.1-1.6 (op "-")
-	(e-ident @1.1-1.4 (qaul "") (raw "try"))
-	(e-ident @1.5-1.6 (qaul "") (raw "w")))
+	(e-ident @1.1-1.4 (raw "try"))
+	(e-ident @1.5-1.6 (raw "w")))
 ~~~
 # FORMATTED
 ~~~roc

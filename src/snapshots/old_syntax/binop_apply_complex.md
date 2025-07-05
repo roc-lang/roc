@@ -20,7 +20,7 @@ UpperIdent(1:1-1:2),OpLessThan(1:2-1:3),LowerIdent(1:3-1:4),OpenRound(1:5-1:6),L
 ~~~clojure
 (e-binop @1.1-1.6 (op "<")
 	(e-tag @1.1-1.2 (raw "N"))
-	(e-ident @1.3-1.4 (qaul "") (raw "l")))
+	(e-ident @1.3-1.4 (raw "l")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -29,7 +29,7 @@ N < l
 # CANONICALIZE
 ~~~clojure
 (e-binop @1.1-1.6 (op "lt")
-	(e-tag @1.1-1.2 (name "N") (args "TODO"))
+	(e-tag @1.1-1.2 (name "N"))
 	(e-runtime-error (tag "ident_not_in_scope")))
 ~~~
 # TYPES

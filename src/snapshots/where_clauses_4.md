@@ -30,18 +30,18 @@ KwWhere(6:2-6:7),LowerIdent(6:8-6:9),NoSpaceDotUpperIdent(6:9-6:16),EndOfFile(6:
 		(exposes @1.8-1.16
 			(exposed-lower-ident (text "decode"))))
 	(statements
-		(s-import @3.1-3.32 (module "Decode")
+		(s-import @3.1-3.32 (raw "Decode")
 			(exposing
 				(exposed-upper-ident (text "Decode"))))
 		(s-type-anno @5.1-6.16 (name "decodeThings")
 			(ty-fn @5.16-5.41
 				(ty-apply @5.16-5.30
-					(ty (name "List"))
+					(ty @5.16-5.20 (name "List"))
 					(ty-apply @5.21-5.29
-						(ty (name "List"))
-						(ty (name "U8"))))
+						(ty @5.21-5.25 (name "List"))
+						(ty @5.26-5.28 (name "U8"))))
 				(ty-apply @5.34-5.41
-					(ty (name "List"))
+					(ty @5.34-5.38 (name "List"))
 					(ty-var @5.39-5.40 (raw "a")))))))
 ~~~
 # FORMATTED

@@ -45,8 +45,8 @@ CloseCurly(10:1-10:2),EndOfFile(10:2-10:2),
 				(e-string @1.28-1.55
 					(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))))
 	(statements
-		(s-import @3.1-3.17 (module ".Stdout") (qualifier "pf"))
-		(s-import @4.1-4.17 (module ".Json") (qualifier "json"))
+		(s-import @3.1-3.17 (raw "pf.Stdout"))
+		(s-import @4.1-4.17 (raw "json.Json"))
 		(s-decl @6.1-10.2
 			(p-ident @6.1-6.6 (raw "main!"))
 			(e-lambda @6.9-10.2
@@ -57,12 +57,12 @@ CloseCurly(10:1-10:2),EndOfFile(10:2-10:2),
 						(s-decl @8.5-8.54
 							(p-ident @8.5-8.11 (raw "result"))
 							(e-apply @8.14-8.54
-								(e-ident @8.14-8.23 (qaul "Json") (raw ".utf8"))
+								(e-ident @8.14-8.23 (raw "Json.utf8"))
 								(e-string @8.24-8.53
 									(e-string-part @8.25-8.52 (raw "Hello from external module!")))))
 						(e-apply @9.5-9.25
-							(e-ident @9.5-9.17 (qaul "Stdout") (raw ".line!"))
-							(e-ident @9.18-9.24 (qaul "") (raw "result")))))))))
+							(e-ident @9.5-9.17 (raw "Stdout.line!"))
+							(e-ident @9.18-9.24 (raw "result")))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -90,12 +90,12 @@ main! = |_| {
 					(p-assign @8.5-8.11 (ident "result"))
 					(e-call @8.14-8.54
 						(e-lookup-external
-							(ext-decl @8.14-8.23 (qualified "json.Json.utf8") (module "json.Json") (local "utf8") (kind "value")))
+							(ext-decl @8.14-8.23 (ident "json.Json.utf8") (kind "value")))
 						(e-string @8.24-8.53
 							(e-literal @8.25-8.52 (string "Hello from external module!")))))
 				(e-call @9.5-9.25
 					(e-lookup-external
-						(ext-decl @9.5-9.17 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value")))
+						(ext-decl @9.5-9.17 (ident "pf.Stdout.line!") (kind "value")))
 					(e-lookup-local @9.18-9.24
 						(pattern @8.5-8.11))))))
 	(s-import @3.1-3.17 (module "pf.Stdout") (qualifier "pf")

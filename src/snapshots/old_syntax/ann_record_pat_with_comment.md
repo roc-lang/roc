@@ -24,12 +24,12 @@ LowerIdent(3:1-3:2),EndOfFile(3:2-3:2),
 ~~~clojure
 (e-record @1.1-2.4
 	(field (field "l") (optional false)
-		(e-ident @2.2-2.3 (qaul "") (raw "s"))))
+		(e-ident @2.2-2.3 (raw "s"))))
 ~~~
 # FORMATTED
 ~~~roc
 {
-	l: s,
+	l: s
 }
 ~~~
 # CANONICALIZE

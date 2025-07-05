@@ -38,7 +38,7 @@ CloseCurly(10:1-10:2),EndOfFile(10:2-10:2),
 		(exposes @1.8-1.14
 			(exposed-lower-ident (text "main"))))
 	(statements
-		(s-import @3.1-3.43 (module ".Json") (qualifier "json")
+		(s-import @3.1-3.43 (raw "json.Json")
 			(exposing
 				(exposed-lower-ident (text "decode"))
 				(exposed-lower-ident (text "encode"))))
@@ -57,14 +57,14 @@ CloseCurly(10:1-10:2),EndOfFile(10:2-10:2),
 					(s-decl @7.5-7.27
 						(p-ident @7.5-7.12 (raw "encoded"))
 						(e-apply @7.15-7.27
-							(e-ident @7.15-7.21 (qaul "") (raw "encode"))
-							(e-ident @7.22-7.26 (qaul "") (raw "data"))))
+							(e-ident @7.15-7.21 (raw "encode"))
+							(e-ident @7.22-7.26 (raw "data"))))
 					(s-decl @8.5-8.30
 						(p-ident @8.5-8.12 (raw "decoded"))
 						(e-apply @8.15-8.30
-							(e-ident @8.15-8.21 (qaul "") (raw "decode"))
-							(e-ident @8.22-8.29 (qaul "") (raw "encoded"))))
-					(e-ident @9.5-9.12 (qaul "") (raw "decoded")))))))
+							(e-ident @8.15-8.21 (raw "decode"))
+							(e-ident @8.22-8.29 (raw "encoded"))))
+					(e-ident @9.5-9.12 (raw "decoded")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -73,7 +73,7 @@ module [main]
 import json.Json exposing [decode, encode]
 
 main = {
-	data = { name: "Alice", age: 30 }
+	data = {name: "Alice", age: 30}
 	encoded = encode(data)
 	decoded = decode(encoded)
 	decoded
@@ -98,14 +98,14 @@ main = {
 				(p-assign @7.5-7.12 (ident "encoded"))
 				(e-call @7.15-7.27
 					(e-lookup-external
-						(ext-decl @7.15-7.21 (qualified "json.Json.encode") (module "json.Json") (local "encode") (kind "value")))
+						(ext-decl @7.15-7.21 (ident "json.Json.encode") (kind "value")))
 					(e-lookup-local @7.22-7.26
 						(pattern @6.5-6.9))))
 			(s-let @8.5-8.30
 				(p-assign @8.5-8.12 (ident "decoded"))
 				(e-call @8.15-8.30
 					(e-lookup-external
-						(ext-decl @8.15-8.21 (qualified "json.Json.decode") (module "json.Json") (local "decode") (kind "value")))
+						(ext-decl @8.15-8.21 (ident "json.Json.decode") (kind "value")))
 					(e-lookup-local @8.22-8.29
 						(pattern @7.5-7.12))))
 			(e-lookup-local @9.5-9.12

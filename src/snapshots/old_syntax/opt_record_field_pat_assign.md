@@ -31,8 +31,8 @@ LowerIdent(4:1-4:2),EndOfFile(4:2-4:2),
 (e-block @1.1-2.3
 	(statements
 		(e-question-suffix @1.2-1.4
-			(e-ident @1.2-1.3 (qaul "") (raw "e")))
-		(e-ident @1.4-1.5 (qaul "") (raw "f"))
+			(e-ident @1.2-1.3 (raw "e")))
+		(e-ident @1.4-1.5 (raw "f"))
 		(e-int @2.1-2.2 (raw "4"))))
 ~~~
 # FORMATTED

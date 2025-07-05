@@ -27,7 +27,7 @@ Blah
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tag @1.1-1.5 (name "Blah") (args "TODO"))
+(e-tag @1.1-1.5 (name "Blah"))
 ~~~
 # TYPES
 ~~~clojure

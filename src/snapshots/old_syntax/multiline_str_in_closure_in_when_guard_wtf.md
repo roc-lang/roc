@@ -22,7 +22,7 @@ LowerIdent(3:1-3:2),KwIf(3:3-3:5),OpBackslash(3:5-3:6),LowerIdent(3:6-3:7),OpArr
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.5 (qaul "") (raw "when"))
+(e-ident @1.1-1.5 (raw "when"))
 ~~~
 # FORMATTED
 ~~~roc

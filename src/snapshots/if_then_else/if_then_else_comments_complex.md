@@ -35,7 +35,7 @@ CloseCurly(9:5-9:6),EndOfFile(9:6-9:6),
 # PARSE
 ~~~clojure
 (e-if-then-else @1.1-9.6
-	(e-ident @2.2-2.6 (qaul "") (raw "bool"))
+	(e-ident @2.2-2.6 (raw "bool"))
 	(e-block @3.3-5.4
 		(statements
 			(e-int @4.4-4.5 (raw "1"))))

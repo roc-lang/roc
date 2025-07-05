@@ -41,7 +41,7 @@ J -
 # CANONICALIZE
 ~~~clojure
 (e-binop @1.1-1.3 (op "sub")
-	(e-tag @1.1-1.2 (name "J") (args "TODO"))
+	(e-tag @1.1-1.2 (name "J"))
 	(e-runtime-error (tag "expr_not_canonicalized")))
 ~~~
 # TYPES

@@ -22,7 +22,7 @@ LowerIdent(3:1-3:14),EndOfFile(3:14-3:14),
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.14 (qaul "") (raw "nextWhileLess"))
+(e-ident @1.1-1.14 (raw "nextWhileLess"))
 ~~~
 # FORMATTED
 ~~~roc

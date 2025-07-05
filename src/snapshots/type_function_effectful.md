@@ -81,9 +81,9 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 				(ty-var @3.15-3.16 (raw "a"))
 				(ty-var @3.20-3.21 (raw "b"))))
 		(e-malformed @3.22-3.25 (reason "expr_unexpected_token"))
-		(e-ident @3.24-3.25 (qaul "") (raw "a"))
+		(e-ident @3.24-3.25 (raw "a"))
 		(e-malformed @3.26-3.30 (reason "expr_unexpected_token"))
-		(e-ident @3.29-3.30 (qaul "") (raw "b"))
+		(e-ident @3.29-3.30 (raw "b"))
 		(s-decl @4.1-4.29
 			(p-ident @4.1-4.11 (raw "runEffect!"))
 			(e-lambda @4.14-4.29
@@ -91,8 +91,8 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 					(p-ident @4.15-4.18 (raw "fn!"))
 					(p-ident @4.20-4.21 (raw "x")))
 				(e-apply @4.23-4.29
-					(e-ident @4.23-4.26 (qaul "") (raw "fn!"))
-					(e-ident @4.27-4.28 (qaul "") (raw "x")))))
+					(e-ident @4.23-4.26 (raw "fn!"))
+					(e-ident @4.27-4.28 (raw "x")))))
 		(s-decl @6.1-6.15
 			(p-ident @6.1-6.6 (raw "main!"))
 			(e-lambda @6.9-6.15

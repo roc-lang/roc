@@ -37,7 +37,7 @@ OpUnaryMinus(2:2-2:3),LowerIdent(2:3-2:4),OpSlash(2:4-2:5),LowerIdent(2:5-2:6),E
 # PARSE
 ~~~clojure
 (e-binop @1.1-2.4 (op ">")
-	(e-ident @1.1-1.2 (qaul "") (raw "h"))
+	(e-ident @1.1-1.2 (raw "h"))
 	(e-malformed @2.2-2.4 (reason "expr_unexpected_token")))
 ~~~
 # FORMATTED

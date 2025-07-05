@@ -213,11 +213,11 @@ CloseSquare(16:3-16:4),EndOfFile(16:4-16:4),
 		(e-malformed @12.9-12.13 (reason "expr_unexpected_token"))
 		(e-malformed @12.12-12.14 (reason "expr_unexpected_token"))
 		(e-malformed @12.13-12.17 (reason "expr_unexpected_token"))
-		(e-ident @12.15-12.17 (qaul "") (raw "mm"))
+		(e-ident @12.15-12.17 (raw "mm"))
 		(e-malformed @12.17-12.20 (reason "expr_unexpected_token"))
 		(e-malformed @13.2-13.15 (reason "expr_unexpected_token"))
 		(e-list @14.3-16.4
-			(e-ident @15.1-15.3 (qaul "") (raw "ar")))))
+			(e-ident @15.1-15.3 (raw "ar")))))
 ~~~
 # FORMATTED
 ~~~roc

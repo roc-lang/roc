@@ -193,7 +193,7 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 			(p-ident @14.2-14.7 (raw "mixed"))
 			(e-tuple @14.10-14.42
 				(e-apply @14.11-14.21
-					(e-ident @14.11-14.18 (qaul "") (raw "add_one"))
+					(e-ident @14.11-14.18 (raw "add_one"))
 					(e-int @14.19-14.20 (raw "5")))
 				(e-string @14.23-14.30
 					(e-string-part @14.24-14.29 (raw "world")))
@@ -204,9 +204,9 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 		(s-decl @15.2-15.23
 			(p-ident @15.2-15.11 (raw "with_vars"))
 			(e-tuple @15.14-15.23
-				(e-ident @15.15-15.16 (qaul "") (raw "x"))
-				(e-ident @15.18-15.19 (qaul "") (raw "y"))
-				(e-ident @15.21-15.22 (qaul "") (raw "z"))))
+				(e-ident @15.15-15.16 (raw "x"))
+				(e-ident @15.18-15.19 (raw "y"))
+				(e-ident @15.21-15.22 (raw "z"))))
 		(s-decl @16.2-16.31
 			(p-ident @16.2-16.13 (raw "with_lambda"))
 			(e-tuple @16.16-16.31
@@ -214,10 +214,10 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 					(args
 						(p-ident @16.18-16.19 (raw "n")))
 					(e-binop @16.21-16.27 (op "+")
-						(e-ident @16.21-16.22 (qaul "") (raw "n"))
+						(e-ident @16.21-16.22 (raw "n"))
 						(e-int @16.25-16.26 (raw "1"))))
 				(e-int @16.28-16.30 (raw "42"))))
-		(e-ident @18.2-18.7 (qaul "") (raw "empty"))))
+		(e-ident @18.2-18.7 (raw "empty"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -278,7 +278,7 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 				(e-int @12.12-12.13 (value "1"))
 				(e-string @12.15-12.22
 					(e-literal @12.16-12.21 (string "hello")))
-				(e-tag @12.24-12.28 (name "True") (args "TODO")))))
+				(e-tag @12.24-12.28 (name "True")))))
 	(s-let @13.2-13.27
 		(p-assign @13.2-13.8 (ident "nested"))
 		(e-tuple @13.11-13.27

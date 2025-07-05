@@ -23,7 +23,7 @@ CloseSquare(3:1-3:2),EndOfFile(3:2-3:2),
 # PARSE
 ~~~clojure
 (e-list @1.1-3.2
-	(e-ident @1.2-1.3 (qaul "") (raw "s")))
+	(e-ident @1.2-1.3 (raw "s")))
 ~~~
 # FORMATTED
 ~~~roc

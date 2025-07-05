@@ -156,13 +156,13 @@ CloseCurly(24:1-24:2),EndOfFile(24:2-24:2),
 				(e-block @5.15-8.2
 					(statements
 						(e-tuple @6.5-6.11
-							(e-ident @6.6-6.7 (qaul "") (raw "x"))
-							(e-ident @6.9-6.10 (qaul "") (raw "y")))
+							(e-ident @6.6-6.7 (raw "x"))
+							(e-ident @6.9-6.10 (raw "y")))
 						(e-malformed @6.12-6.18 (reason "expr_unexpected_token"))
-						(e-ident @6.14-6.18 (qaul "") (raw "pair"))
+						(e-ident @6.14-6.18 (raw "pair"))
 						(e-tuple @7.5-7.11
-							(e-ident @7.6-7.7 (qaul "") (raw "y"))
-							(e-ident @7.9-7.10 (qaul "") (raw "x")))))))
+							(e-ident @7.6-7.7 (raw "y"))
+							(e-ident @7.9-7.10 (raw "x")))))))
 		(s-decl @11.1-24.2
 			(p-ident @11.1-11.6 (raw "main!"))
 			(e-lambda @11.9-24.2
@@ -173,7 +173,7 @@ CloseCurly(24:1-24:2),EndOfFile(24:2-24:2),
 						(s-decl @13.5-13.34
 							(p-ident @13.5-13.12 (raw "result1"))
 							(e-apply @13.15-13.34
-								(e-ident @13.15-13.19 (qaul "") (raw "swap"))
+								(e-ident @13.15-13.19 (raw "swap"))
 								(e-tuple @13.20-13.33
 									(e-int @13.21-13.23 (raw "42"))
 									(e-string @13.25-13.32
@@ -181,9 +181,9 @@ CloseCurly(24:1-24:2),EndOfFile(24:2-24:2),
 						(s-decl @17.5-17.43
 							(p-ident @17.5-17.12 (raw "result2"))
 							(e-apply @17.15-17.43
-								(e-ident @17.15-17.19 (qaul "") (raw "swap"))
+								(e-ident @17.15-17.19 (raw "swap"))
 								(e-tuple @17.20-17.42
-									(e-ident @17.21-17.30 (qaul "Bool") (raw ".true"))
+									(e-ident @17.21-17.30 (raw "Bool.true"))
 									(e-list @17.32-17.41
 										(e-int @17.33-17.34 (raw "1"))
 										(e-int @17.36-17.37 (raw "2"))
@@ -191,7 +191,7 @@ CloseCurly(24:1-24:2),EndOfFile(24:2-24:2),
 						(s-decl @21.5-21.35
 							(p-ident @21.5-21.12 (raw "result3"))
 							(e-apply @21.15-21.35
-								(e-ident @21.15-21.19 (qaul "") (raw "swap"))
+								(e-ident @21.15-21.19 (raw "swap"))
 								(e-tuple @21.20-21.34
 									(e-string @21.21-21.26
 										(e-string-part @21.22-21.25 (raw "foo")))

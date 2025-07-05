@@ -37,14 +37,14 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @3.1-4.8 (name "getName")
+		(s-type-anno @1.1-1.1 (name "getName")
 			(ty-fn @3.11-3.41
 				(ty-record @3.11-3.34
 					(anno-record-field @3.13-3.23 (name "name")
-						(ty (name "Str")))
+						(ty @3.19-3.22 (name "Str")))
 					(anno-record-field @3.24-3.34 (name "age")
-						(ty (name "U64"))))
-				(ty (name "Str"))))
+						(ty @3.29-3.32 (name "U64"))))
+				(ty @3.38-3.41 (name "Str"))))
 		(s-decl @4.1-4.28
 			(p-ident @4.1-4.8 (raw "getName"))
 			(e-lambda @4.11-4.28
@@ -58,7 +58,7 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 				(args
 					(p-underscore))
 				(e-apply @6.13-6.44
-					(e-ident @6.13-6.20 (qaul "") (raw "getName"))
+					(e-ident @6.13-6.20 (raw "getName"))
 					(e-record @6.21-6.43
 						(field (field "name") (optional false)
 							(e-string @6.28-6.34
@@ -73,7 +73,7 @@ app [main!] { pf: platform "../basic-cli/main.roc" }
 getName : { name : Str, age : U64 } -> Str
 getName = |_person| "hello"
 
-main! = |_| getName({ name: "luke", age: 21 })
+main! = |_| getName({name: "luke", age: 21})
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -25,19 +25,19 @@ CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 # PARSE
 ~~~clojure
 (e-match
-	(e-ident @1.7-1.11 (qaul "") (raw "list"))
+	(e-ident @1.7-1.11 (raw "list"))
 	(branches
 		(branch @2.5-3.6
 			(p-list @2.5-2.12
 				(p-ident @2.6-2.11 (raw "first")))
-			(e-ident @2.16-2.21 (qaul "") (raw "first")))
+			(e-ident @2.16-2.21 (raw "first")))
 		(branch @3.5-4.2
 			(p-list @3.5-3.20
 				(p-ident @3.6-3.11 (raw "first"))
 				(p-ident @3.13-3.19 (raw "second")))
 			(e-binop @3.24-4.2 (op "+")
-				(e-ident @3.24-3.29 (qaul "") (raw "first"))
-				(e-ident @3.32-3.38 (qaul "") (raw "second"))))))
+				(e-ident @3.24-3.29 (raw "first"))
+				(e-ident @3.32-3.38 (raw "second"))))))
 ~~~
 # FORMATTED
 ~~~roc

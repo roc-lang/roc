@@ -34,7 +34,7 @@ Int(9:1-9:3),EndOfFile(9:3-9:3),
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.7 (qaul "") (raw "myList"))
+(e-ident @1.1-1.7 (raw "myList"))
 ~~~
 # FORMATTED
 ~~~roc

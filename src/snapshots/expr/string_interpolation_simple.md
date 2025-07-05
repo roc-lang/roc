@@ -20,7 +20,7 @@ StringStart(1:1-1:2),StringPart(1:2-1:8),OpenStringInterpolation(1:8-1:10),Lower
 ~~~clojure
 (e-string @1.1-1.17
 	(e-string-part @1.2-1.8 (raw "Hello "))
-	(e-ident @1.10-1.14 (qaul "") (raw "name"))
+	(e-ident @1.10-1.14 (raw "name"))
 	(e-string-part @1.15-1.16 (raw "!")))
 ~~~
 # FORMATTED

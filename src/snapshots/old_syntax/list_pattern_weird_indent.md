@@ -22,7 +22,7 @@ Int(3:1-3:2),CloseSquare(3:2-3:3),OpArrow(3:4-3:6),StringStart(3:7-3:8),StringPa
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.5 (qaul "") (raw "when"))
+(e-ident @1.1-1.5 (raw "when"))
 ~~~
 # FORMATTED
 ~~~roc

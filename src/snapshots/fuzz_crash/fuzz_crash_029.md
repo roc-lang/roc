@@ -232,7 +232,7 @@ CloseRound(17:3-17:4),EndOfFile(17:4-17:4),
 		(e-malformed @7.2-7.13 (reason "expr_unexpected_token"))
 		(e-list @8.3-9.4)
 		(e-malformed @10.2-10.15 (reason "expr_unexpected_token"))
-		(e-ident @11.3-11.8 (qaul "") (raw "vides"))
+		(e-ident @11.3-11.8 (raw "vides"))
 		(e-record @12.3-13.20
 			(field (field "pkg") (optional false)
 				(e-string @13.6-13.11
@@ -251,8 +251,9 @@ CloseRound(17:3-17:4),EndOfFile(17:4-17:4),
  # Cd
 vides # Cd
 { # pen
+
 	pkg: "..l",
-	mmen,
+	mmen
 } # Cose
  # Cd
 

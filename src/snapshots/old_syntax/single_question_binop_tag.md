@@ -28,8 +28,8 @@ LowerIdent(1:1-1:10),NoSpaceOpenRound(1:10-1:11),LowerIdent(1:11-1:15),CloseRoun
 ~~~clojure
 (e-binop @1.1-1.32 (op "?")
 	(e-apply @1.1-1.16
-		(e-ident @1.1-1.10 (qaul "") (raw "fallible!"))
-		(e-ident @1.11-1.15 (qaul "") (raw "args")))
+		(e-ident @1.1-1.10 (raw "fallible!"))
+		(e-ident @1.11-1.15 (raw "args")))
 	(e-tag @1.21-1.32 (raw "WrapOverErr")))
 ~~~
 # FORMATTED

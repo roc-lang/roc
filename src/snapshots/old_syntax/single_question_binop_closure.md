@@ -30,13 +30,13 @@ LowerIdent(2:5-2:11),OpStar(2:12-2:13),Int(2:14-2:15),EndOfFile(2:15-2:15),
 ~~~clojure
 (e-binop @1.1-2.15 (op "?")
 	(e-apply @1.1-1.16
-		(e-ident @1.1-1.10 (qaul "") (raw "fallible!"))
-		(e-ident @1.11-1.15 (qaul "") (raw "args")))
+		(e-ident @1.1-1.10 (raw "fallible!"))
+		(e-ident @1.11-1.15 (raw "args")))
 	(e-lambda @1.21-2.15
 		(args
 			(p-ident @1.22-1.28 (raw "my_err")))
 		(e-binop @2.5-2.15 (op "*")
-			(e-ident @2.5-2.11 (qaul "") (raw "my_err"))
+			(e-ident @2.5-2.11 (raw "my_err"))
 			(e-int @2.14-2.15 (raw "2")))))
 ~~~
 # FORMATTED

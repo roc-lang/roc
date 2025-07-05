@@ -20,8 +20,8 @@ OpenRound(1:1-1:2),LowerIdent(1:2-1:5),CloseRound(1:5-1:6),NoSpaceDotLowerIdent(
 ~~~clojure
 (e-field-access @1.1-1.12
 	(e-tuple @1.1-1.6
-		(e-ident @1.2-1.5 (qaul "") (raw "rec")))
-	(e-ident @1.6-1.12 (qaul "") (raw ".field")))
+		(e-ident @1.2-1.5 (raw "rec")))
+	(e-ident @1.6-1.12 (raw "field")))
 ~~~
 # FORMATTED
 ~~~roc

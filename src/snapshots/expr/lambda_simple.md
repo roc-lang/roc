@@ -19,7 +19,7 @@ OpBar(1:1-1:2),LowerIdent(1:2-1:3),OpBar(1:3-1:4),LowerIdent(1:5-1:6),OpPlus(1:7
 	(args
 		(p-ident @1.2-1.3 (raw "x")))
 	(e-binop @1.5-1.10 (op "+")
-		(e-ident @1.5-1.6 (qaul "") (raw "x"))
+		(e-ident @1.5-1.6 (raw "x"))
 		(e-int @1.9-1.10 (raw "1"))))
 ~~~
 # FORMATTED

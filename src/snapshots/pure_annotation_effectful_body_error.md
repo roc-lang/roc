@@ -43,10 +43,10 @@ LowerIdent(9:1-9:6),OpAssign(9:7-9:8),LowerIdent(9:9-9:21),NoSpaceOpenRound(9:21
 				(e-string @1.28-1.55
 					(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))))
 	(statements
-		(s-import @3.1-3.17 (module ".Stdout") (qualifier "pf"))
+		(s-import @3.1-3.17 (raw "pf.Stdout"))
 		(s-type-anno @6.1-7.13 (name "bad_function")
 			(ty-fn @6.16-6.25
-				(ty (name "Str"))
+				(ty @6.16-6.19 (name "Str"))
 				(ty-record @6.23-6.25)))
 		(s-decl @7.1-7.39
 			(p-ident @7.1-7.13 (raw "bad_function"))
@@ -54,12 +54,12 @@ LowerIdent(9:1-9:6),OpAssign(9:7-9:8),LowerIdent(9:9-9:21),NoSpaceOpenRound(9:21
 				(args
 					(p-ident @7.17-7.20 (raw "msg")))
 				(e-apply @7.22-7.39
-					(e-ident @7.22-7.34 (qaul "Stdout") (raw ".line!"))
-					(e-ident @7.35-7.38 (qaul "") (raw "msg")))))
+					(e-ident @7.22-7.34 (raw "Stdout.line!"))
+					(e-ident @7.35-7.38 (raw "msg")))))
 		(s-decl @9.1-9.41
 			(p-ident @9.1-9.6 (raw "main!"))
 			(e-apply @9.9-9.41
-				(e-ident @9.9-9.21 (qaul "") (raw "bad_function"))
+				(e-ident @9.9-9.21 (raw "bad_function"))
 				(e-string @9.22-9.40
 					(e-string-part @9.23-9.39 (raw "This should fail")))))))
 ~~~
@@ -77,7 +77,7 @@ NO CHANGE
 				(p-assign @7.17-7.20 (ident "msg")))
 			(e-call @7.22-7.39
 				(e-lookup-external
-					(ext-decl @7.22-7.34 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value")))
+					(ext-decl @7.22-7.34 (ident "pf.Stdout.line!") (kind "value")))
 				(e-lookup-local @7.35-7.38
 					(pattern @7.17-7.20))))
 		(annotation @7.1-7.13

@@ -87,49 +87,49 @@ CloseCurly(35:1-35:2),EndOfFile(35:2-35:2),
 	(module @1.1-1.10
 		(exposes @1.8-1.10))
 	(statements
-		(s-import @3.1-3.17 (module ".Json") (qualifier "json"))
-		(s-import @4.1-4.48 (module ".Client") (qualifier "http") (alias "Http")
+		(s-import @3.1-3.17 (raw "json.Json"))
+		(s-import @4.1-4.48 (raw "http.Client") (alias "Http")
 			(exposing
 				(exposed-lower-ident (text "get"))
 				(exposed-lower-ident (text "post"))))
-		(s-import @5.1-5.27 (module ".String") (qualifier "utils") (alias "Str"))
+		(s-import @5.1-5.27 (raw "utils.String") (alias "Str"))
 		(s-decl @7.1-35.2
 			(p-ident @7.1-7.5 (raw "main"))
 			(e-block @7.8-35.2
 				(statements
 					(s-decl @8.5-8.22
 						(p-ident @8.5-8.11 (raw "client"))
-						(e-ident @8.14-8.22 (qaul "Http") (raw ".get")))
+						(e-ident @8.14-8.22 (raw "Http.get")))
 					(s-decl @9.5-9.23
 						(p-ident @9.5-9.11 (raw "parser"))
-						(e-ident @9.14-9.23 (qaul "Json") (raw ".utf8")))
+						(e-ident @9.14-9.23 (raw "Json.utf8")))
 					(s-decl @10.5-10.22
 						(p-ident @10.5-10.11 (raw "helper"))
-						(e-ident @10.14-10.22 (qaul "Str") (raw ".trim")))
+						(e-ident @10.14-10.22 (raw "Str.trim")))
 					(s-decl @13.5-13.25
 						(p-ident @13.5-13.12 (raw "result1"))
-						(e-ident @13.15-13.25 (qaul "Json") (raw ".parse")))
+						(e-ident @13.15-13.25 (raw "Json.parse")))
 					(s-decl @16.5-16.24
 						(p-ident @16.5-16.12 (raw "result2"))
-						(e-ident @16.15-16.24 (qaul "Http") (raw ".post")))
+						(e-ident @16.15-16.24 (raw "Http.post")))
 					(s-decl @19.5-19.18
 						(p-ident @19.5-19.12 (raw "result3"))
-						(e-ident @19.15-19.18 (qaul "") (raw "get")))
+						(e-ident @19.15-19.18 (raw "get")))
 					(s-decl @20.5-20.19
 						(p-ident @20.5-20.12 (raw "result4"))
-						(e-ident @20.15-20.19 (qaul "") (raw "post")))
+						(e-ident @20.15-20.19 (raw "post")))
 					(s-decl @23.5-23.26
 						(p-ident @23.5-23.13 (raw "combined"))
-						(e-ident @23.16-23.26 (qaul "Str") (raw ".concat")))
+						(e-ident @23.16-23.26 (raw "Str.concat")))
 					(e-tuple @25.5-34.6
-						(e-ident @26.9-26.15 (qaul "") (raw "client"))
-						(e-ident @27.9-27.15 (qaul "") (raw "parser"))
-						(e-ident @28.9-28.15 (qaul "") (raw "helper"))
-						(e-ident @29.9-29.16 (qaul "") (raw "result1"))
-						(e-ident @30.9-30.16 (qaul "") (raw "result2"))
-						(e-ident @31.9-31.16 (qaul "") (raw "result3"))
-						(e-ident @32.9-32.16 (qaul "") (raw "result4"))
-						(e-ident @33.9-33.17 (qaul "") (raw "combined"))))))))
+						(e-ident @26.9-26.15 (raw "client"))
+						(e-ident @27.9-27.15 (raw "parser"))
+						(e-ident @28.9-28.15 (raw "helper"))
+						(e-ident @29.9-29.16 (raw "result1"))
+						(e-ident @30.9-30.16 (raw "result2"))
+						(e-ident @31.9-31.16 (raw "result3"))
+						(e-ident @32.9-32.16 (raw "result4"))
+						(e-ident @33.9-33.17 (raw "combined"))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -178,35 +178,35 @@ main = {
 			(s-let @8.5-8.22
 				(p-assign @8.5-8.11 (ident "client"))
 				(e-lookup-external
-					(ext-decl @8.14-8.22 (qualified "http.Client.get") (module "http.Client") (local "get") (kind "value"))))
+					(ext-decl @8.14-8.22 (ident "http.Client.get") (kind "value"))))
 			(s-let @9.5-9.23
 				(p-assign @9.5-9.11 (ident "parser"))
 				(e-lookup-external
-					(ext-decl @9.14-9.23 (qualified "json.Json.utf8") (module "json.Json") (local "utf8") (kind "value"))))
+					(ext-decl @9.14-9.23 (ident "json.Json.utf8") (kind "value"))))
 			(s-let @10.5-10.22
 				(p-assign @10.5-10.11 (ident "helper"))
 				(e-lookup-external
-					(ext-decl @10.14-10.22 (qualified "utils.String.trim") (module "utils.String") (local "trim") (kind "value"))))
+					(ext-decl @10.14-10.22 (ident "utils.String.trim") (kind "value"))))
 			(s-let @13.5-13.25
 				(p-assign @13.5-13.12 (ident "result1"))
 				(e-lookup-external
-					(ext-decl @13.15-13.25 (qualified "json.Json.parse") (module "json.Json") (local "parse") (kind "value"))))
+					(ext-decl @13.15-13.25 (ident "json.Json.parse") (kind "value"))))
 			(s-let @16.5-16.24
 				(p-assign @16.5-16.12 (ident "result2"))
 				(e-lookup-external
-					(ext-decl @16.15-16.24 (qualified "http.Client.post") (module "http.Client") (local "post") (kind "value"))))
+					(ext-decl @16.15-16.24 (ident "http.Client.post") (kind "value"))))
 			(s-let @19.5-19.18
 				(p-assign @19.5-19.12 (ident "result3"))
 				(e-lookup-external
-					(ext-decl @19.15-19.18 (qualified "http.Client.get") (module "http.Client") (local "get") (kind "value"))))
+					(ext-decl @19.15-19.18 (ident "http.Client.get") (kind "value"))))
 			(s-let @20.5-20.19
 				(p-assign @20.5-20.12 (ident "result4"))
 				(e-lookup-external
-					(ext-decl @20.15-20.19 (qualified "http.Client.post") (module "http.Client") (local "post") (kind "value"))))
+					(ext-decl @20.15-20.19 (ident "http.Client.post") (kind "value"))))
 			(s-let @23.5-23.26
 				(p-assign @23.5-23.13 (ident "combined"))
 				(e-lookup-external
-					(ext-decl @23.16-23.26 (qualified "utils.String.concat") (module "utils.String") (local "concat") (kind "value"))))
+					(ext-decl @23.16-23.26 (ident "utils.String.concat") (kind "value"))))
 			(e-tuple @25.5-34.6
 				(elems
 					(e-lookup-local @26.9-26.15

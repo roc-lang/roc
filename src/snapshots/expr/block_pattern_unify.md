@@ -48,9 +48,9 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 		(s-decl @4.5-5.11
 			(p-ident @4.5-4.11 (raw "result"))
 			(e-binop @4.14-5.11 (op "+")
-				(e-ident @4.14-4.15 (qaul "") (raw "x"))
+				(e-ident @4.14-4.15 (raw "x"))
 				(e-int @4.18-4.19 (raw "5"))))
-		(e-ident @5.5-5.11 (qaul "") (raw "result"))))
+		(e-ident @5.5-5.11 (raw "result"))))
 ~~~
 # FORMATTED
 ~~~roc

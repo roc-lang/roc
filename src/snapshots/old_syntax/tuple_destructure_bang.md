@@ -27,8 +27,8 @@ LowerIdent(3:1-3:16),LowerIdent(3:17-3:21),EndOfFile(3:21-3:21),
 # PARSE
 ~~~clojure
 (e-tuple @1.1-1.24
-	(e-ident @1.2-1.17 (qaul "") (raw "launchTheNukes!"))
-	(e-ident @1.19-1.23 (qaul "") (raw "code")))
+	(e-ident @1.2-1.17 (raw "launchTheNukes!"))
+	(e-ident @1.19-1.23 (raw "code")))
 ~~~
 # FORMATTED
 ~~~roc

@@ -338,7 +338,7 @@ LowerIdent(1:1-1:5),OpColon(1:5-1:6),MalformedUnknownToken(1:6-1:7),OpColon(1:7-
 		(e-malformed @1.18-1.20 (reason "expr_unexpected_token"))
 		(e-malformed @1.19-1.21 (reason "expr_unexpected_token"))
 		(e-malformed @1.20-1.23 (reason "expr_unexpected_token"))
-		(e-ident @1.21-1.23 (qaul "") (raw "le"))
+		(e-ident @1.21-1.23 (raw "le"))
 		(e-malformed @1.25-1.25 (reason "expected_expr_close_square_or_comma"))))
 ~~~
 # FORMATTED

@@ -31,7 +31,7 @@ UpperIdent(4:1-4:2),EndOfFile(4:2-4:2),
 (e-block @1.1-3.3
 	(statements
 		(e-binop @1.2-3.3 (op "?")
-			(e-ident @1.2-1.3 (qaul "") (raw "i"))
+			(e-ident @1.2-1.3 (raw "i"))
 			(e-tag @3.1-3.2 (raw "Y")))))
 ~~~
 # FORMATTED

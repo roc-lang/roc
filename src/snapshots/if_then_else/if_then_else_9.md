@@ -69,7 +69,7 @@ CloseCurly(7:1-7:2),EndOfFile(7:2-7:2),
 # PARSE
 ~~~clojure
 (e-if-then-else @1.1-7.2
-	(e-ident @1.4-1.8 (qaul "") (raw "bool"))
+	(e-ident @1.4-1.8 (raw "bool"))
 	(e-block @1.9-3.2
 		(statements
 			(e-int @2.2-2.3 (raw "1"))))
@@ -97,7 +97,7 @@ NO CHANGE
 		(if-branch
 			(e-int @3.11-3.13 (value "10"))
 			(e-block @3.14-5.2
-				(e-tag @4.2-4.3 (name "A") (args "TODO")))))
+				(e-tag @4.2-4.3 (name "A")))))
 	(if-else
 		(e-block @5.8-7.2
 			(e-int @6.2-6.3 (value "3")))))

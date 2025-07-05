@@ -62,8 +62,8 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 				(ty-var @3.15-3.16 (raw "b"))))
 		(e-malformed @3.17-3.20 (reason "expr_unexpected_token"))
 		(e-local-dispatch @3.19-4.6
-			(e-ident @3.19-3.20 (qaul "") (raw "a"))
-			(e-ident @3.24-3.25 (qaul "") (raw "b")))
+			(e-ident @3.19-3.20 (raw "a"))
+			(e-ident @3.24-3.25 (raw "b")))
 		(s-decl @4.1-4.22
 			(p-ident @4.1-4.6 (raw "apply"))
 			(e-lambda @4.9-4.22
@@ -71,8 +71,8 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 					(p-ident @4.10-4.12 (raw "fn"))
 					(p-ident @4.14-4.15 (raw "x")))
 				(e-apply @4.17-4.22
-					(e-ident @4.17-4.19 (qaul "") (raw "fn"))
-					(e-ident @4.20-4.21 (qaul "") (raw "x")))))
+					(e-ident @4.17-4.19 (raw "fn"))
+					(e-ident @4.20-4.21 (raw "x")))))
 		(s-decl @6.1-6.15
 			(p-ident @6.1-6.6 (raw "main!"))
 			(e-lambda @6.9-6.15

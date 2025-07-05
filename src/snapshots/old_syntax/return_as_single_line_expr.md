@@ -18,7 +18,7 @@ LowerIdent(1:1-1:2),OpAssign(1:3-1:4),KwReturn(1:5-1:11),Int(1:12-1:13),EndOfFil
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.2 (qaul "") (raw "x"))
+(e-ident @1.1-1.2 (raw "x"))
 ~~~
 # FORMATTED
 ~~~roc

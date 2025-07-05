@@ -35,14 +35,14 @@ LowerIdent(5:1-5:6),OpAssign(5:7-5:8),OpBar(5:9-5:10),Underscore(5:10-5:11),OpBa
 				(e-string @1.28-1.55
 					(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))))
 	(statements
-		(s-import @3.1-3.17 (module ".Stdout") (qualifier "pf"))
+		(s-import @3.1-3.17 (raw "pf.Stdout"))
 		(s-decl @5.1-5.42
 			(p-ident @5.1-5.6 (raw "main!"))
 			(e-lambda @5.9-5.42
 				(args
 					(p-underscore))
 				(e-apply @5.13-5.42
-					(e-ident @5.13-5.25 (qaul "Stdout") (raw ".line!"))
+					(e-ident @5.13-5.25 (raw "Stdout.line!"))
 					(e-string @5.26-5.41
 						(e-string-part @5.27-5.40 (raw "Hello, world!"))))))))
 ~~~
@@ -60,7 +60,7 @@ NO CHANGE
 				(p-underscore @5.10-5.11))
 			(e-call @5.13-5.42
 				(e-lookup-external
-					(ext-decl @5.13-5.25 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value")))
+					(ext-decl @5.13-5.25 (ident "pf.Stdout.line!") (kind "value")))
 				(e-string @5.26-5.41
 					(e-literal @5.27-5.40 (string "Hello, world!"))))))
 	(s-import @3.1-3.17 (module "pf.Stdout") (qualifier "pf")

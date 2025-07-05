@@ -53,7 +53,7 @@ LowerIdent(14:1-14:6),OpAssign(14:7-14:8),LowerIdent(14:9-14:17),NoSpaceOpenRoun
 				(e-string @1.28-1.55
 					(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))))
 	(statements
-		(s-import @3.1-3.17 (module ".Stdout") (qualifier "pf"))
+		(s-import @3.1-3.17 (raw "pf.Stdout"))
 		(s-decl @6.1-9.14
 			(p-ident @6.1-6.9 (raw "multiply"))
 			(e-lambda @6.12-9.14
@@ -61,31 +61,31 @@ LowerIdent(14:1-14:6),OpAssign(14:7-14:8),LowerIdent(14:9-14:17),NoSpaceOpenRoun
 					(p-ident @6.13-6.14 (raw "x"))
 					(p-ident @6.16-6.17 (raw "y")))
 				(e-binop @6.19-9.14 (op "*")
-					(e-ident @6.19-6.20 (qaul "") (raw "x"))
-					(e-ident @6.23-6.24 (qaul "") (raw "y")))))
+					(e-ident @6.19-6.20 (raw "x"))
+					(e-ident @6.23-6.24 (raw "y")))))
 		(s-decl @9.1-9.36
 			(p-ident @9.1-9.14 (raw "print_number!"))
 			(e-lambda @9.17-9.36
 				(args
 					(p-ident @9.18-9.19 (raw "n")))
 				(e-apply @9.21-9.36
-					(e-ident @9.21-9.33 (qaul "Stdout") (raw ".line!"))
-					(e-ident @9.34-9.35 (qaul "") (raw "n")))))
+					(e-ident @9.21-9.33 (raw "Stdout.line!"))
+					(e-ident @9.34-9.35 (raw "n")))))
 		(s-decl @12.1-12.45
 			(p-ident @12.1-12.9 (raw "process!"))
 			(e-lambda @12.12-12.45
 				(args
 					(p-ident @12.13-12.14 (raw "x")))
 				(e-apply @12.16-12.45
-					(e-ident @12.16-12.29 (qaul "") (raw "print_number!"))
+					(e-ident @12.16-12.29 (raw "print_number!"))
 					(e-apply @12.30-12.44
-						(e-ident @12.30-12.38 (qaul "") (raw "multiply"))
-						(e-ident @12.39-12.40 (qaul "") (raw "x"))
+						(e-ident @12.30-12.38 (raw "multiply"))
+						(e-ident @12.39-12.40 (raw "x"))
 						(e-int @12.42-12.43 (raw "2"))))))
 		(s-decl @14.1-14.21
 			(p-ident @14.1-14.6 (raw "main!"))
 			(e-apply @14.9-14.21
-				(e-ident @14.9-14.17 (qaul "") (raw "process!"))
+				(e-ident @14.9-14.17 (raw "process!"))
 				(e-int @14.18-14.20 (raw "42"))))))
 ~~~
 # FORMATTED
@@ -113,7 +113,7 @@ NO CHANGE
 				(p-assign @9.18-9.19 (ident "n")))
 			(e-call @9.21-9.36
 				(e-lookup-external
-					(ext-decl @9.21-9.33 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value")))
+					(ext-decl @9.21-9.33 (ident "pf.Stdout.line!") (kind "value")))
 				(e-lookup-local @9.34-9.35
 					(pattern @9.18-9.19)))))
 	(d-let

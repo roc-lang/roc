@@ -24,7 +24,7 @@ LowerIdent(4:1-4:2),OpenRound(4:3-4:4),StringStart(4:4-4:5),StringPart(4:5-4:8),
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.2 (qaul "") (raw "f"))
+(e-ident @1.1-1.2 (raw "f"))
 ~~~
 # FORMATTED
 ~~~roc

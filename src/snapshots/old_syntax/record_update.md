@@ -9,30 +9,6 @@ type=expr
 ~~~
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **.Bar.baz** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**record_update.md:1:6:1:14:**
-```roc
-{ Foo.Bar.baz & x: 5, y: 0 }
-```
-     ^^^^^^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **.baz &** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**record_update.md:1:10:1:16:**
-```roc
-{ Foo.Bar.baz & x: 5, y: 0 }
-```
-         ^^^^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
 The token **& x** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
@@ -80,6 +56,10 @@ Here is the problematic code:
                          ^^^
 
 
+**UNDEFINED VARIABLE**
+Nothing is named `baz` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
 
@@ -94,9 +74,7 @@ OpenCurly(1:1-1:2),UpperIdent(1:3-1:6),NoSpaceDotUpperIdent(1:6-1:10),NoSpaceDot
 ~~~clojure
 (e-block @1.1-1.29
 	(statements
-		(e-tag @1.3-1.6 (raw "Foo"))
-		(e-malformed @1.6-1.14 (reason "expr_unexpected_token"))
-		(e-malformed @1.10-1.16 (reason "expr_unexpected_token"))
+		(e-ident @1.3-1.14 (raw "Foo.Bar.baz"))
 		(e-malformed @1.15-1.18 (reason "expr_unexpected_token"))
 		(s-type-anno @1.17-1.22 (name "x")
 			(ty-malformed @1.20-1.22 (tag "ty_anno_unexpected_token")))
@@ -107,9 +85,7 @@ OpenCurly(1:1-1:2),UpperIdent(1:3-1:6),NoSpaceDotUpperIdent(1:6-1:10),NoSpaceDot
 # FORMATTED
 ~~~roc
 {
-	Foo
-	
-	
+	Foo.baz
 	
 	x : 
 	
@@ -119,8 +95,8 @@ OpenCurly(1:1-1:2),UpperIdent(1:3-1:6),NoSpaceDotUpperIdent(1:6-1:10),NoSpaceDot
 # CANONICALIZE
 ~~~clojure
 (e-block @1.1-1.29
-	(s-expr @1.3-1.10
-		(e-tag @1.3-1.6 (name "Foo") (args "TODO")))
+	(s-expr @1.3-1.16
+		(e-runtime-error (tag "ident_not_in_scope")))
 	(s-type-anno @1.17-1.22 (name "x")
 		(ty-malformed @1.20-1.22))
 	(s-type-anno @1.23-1.29 (name "y")

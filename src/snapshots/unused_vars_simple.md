@@ -101,7 +101,7 @@ CloseCurly(21:1-21:2),EndOfFile(21:2-21:2),
 			(e-lambda @7.19-7.34
 				(args
 					(p-ident @7.20-7.26 (raw "_value")))
-				(e-ident @7.28-7.34 (qaul "") (raw "_value"))))
+				(e-ident @7.28-7.34 (raw "_value"))))
 		(s-decl @10.1-10.35
 			(p-ident @10.1-10.18 (raw "unused_underscore"))
 			(e-lambda @10.21-10.35
@@ -114,7 +114,7 @@ CloseCurly(21:1-21:2),EndOfFile(21:2-21:2),
 				(args
 					(p-ident @13.17-13.23 (raw "number")))
 				(e-binop @13.25-15.6 (op "+")
-					(e-ident @13.25-13.31 (qaul "") (raw "number"))
+					(e-ident @13.25-13.31 (raw "number"))
 					(e-int @13.34-13.35 (raw "1")))))
 		(s-decl @15.1-21.2
 			(p-ident @15.1-15.6 (raw "main!"))
@@ -126,30 +126,30 @@ CloseCurly(21:1-21:2),EndOfFile(21:2-21:2),
 						(s-decl @16.5-16.26
 							(p-ident @16.5-16.6 (raw "a"))
 							(e-apply @16.9-16.26
-								(e-ident @16.9-16.23 (qaul "") (raw "unused_regular"))
+								(e-ident @16.9-16.23 (raw "unused_regular"))
 								(e-int @16.24-16.25 (raw "5"))))
 						(s-decl @17.5-17.28
 							(p-ident @17.5-17.6 (raw "b"))
 							(e-apply @17.9-17.28
-								(e-ident @17.9-17.24 (qaul "") (raw "used_underscore"))
+								(e-ident @17.9-17.24 (raw "used_underscore"))
 								(e-int @17.25-17.27 (raw "10"))))
 						(s-decl @18.5-18.30
 							(p-ident @18.5-18.6 (raw "c"))
 							(e-apply @18.9-18.30
-								(e-ident @18.9-18.26 (qaul "") (raw "unused_underscore"))
+								(e-ident @18.9-18.26 (raw "unused_underscore"))
 								(e-int @18.27-18.29 (raw "15"))))
 						(s-decl @19.5-19.25
 							(p-ident @19.5-19.6 (raw "d"))
 							(e-apply @19.9-19.25
-								(e-ident @19.9-19.21 (qaul "") (raw "used_regular"))
+								(e-ident @19.9-19.21 (raw "used_regular"))
 								(e-int @19.22-19.24 (raw "20"))))
 						(e-binop @20.5-21.2 (op "+")
-							(e-ident @20.5-20.6 (qaul "") (raw "a"))
+							(e-ident @20.5-20.6 (raw "a"))
 							(e-binop @20.9-21.2 (op "+")
-								(e-ident @20.9-20.10 (qaul "") (raw "b"))
+								(e-ident @20.9-20.10 (raw "b"))
 								(e-binop @20.13-21.2 (op "+")
-									(e-ident @20.13-20.14 (qaul "") (raw "c"))
-									(e-ident @20.17-20.18 (qaul "") (raw "d")))))))))))
+									(e-ident @20.13-20.14 (raw "c"))
+									(e-ident @20.17-20.18 (raw "d")))))))))))
 ~~~
 # FORMATTED
 ~~~roc

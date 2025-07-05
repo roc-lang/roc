@@ -22,7 +22,7 @@ Underscore(3:5-3:6),OpArrow(3:7-3:9),Int(3:10-3:11),EndOfFile(3:11-3:11),
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.5 (qaul "") (raw "when"))
+(e-ident @1.1-1.5 (raw "when"))
 ~~~
 # FORMATTED
 ~~~roc

@@ -60,8 +60,8 @@ LowerIdent(10:1-10:6),OpAssign(10:7-10:8),OpBar(10:9-10:10),Underscore(10:10-10:
 							(ty-var @5.13-5.14 (raw "a")))
 						(s-decl @6.5-6.14
 							(p-ident @6.5-6.10 (raw "thing"))
-							(e-ident @6.13-6.14 (qaul "") (raw "x")))
-						(e-ident @7.5-7.10 (qaul "") (raw "thing"))))))
+							(e-ident @6.13-6.14 (raw "x")))
+						(e-ident @7.5-7.10 (raw "thing"))))))
 		(s-decl @10.1-10.15
 			(p-ident @10.1-10.6 (raw "main!"))
 			(e-lambda @10.9-10.15

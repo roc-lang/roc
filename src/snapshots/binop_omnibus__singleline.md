@@ -24,7 +24,7 @@ UpperIdent(1:1-1:4),NoSpaceOpenRound(1:4-1:5),LowerIdent(1:5-1:8),CloseRound(1:8
 			(e-binop @1.1-1.17 (op "??")
 				(e-apply @1.1-1.9
 					(e-tag @1.1-1.4 (raw "Err"))
-					(e-ident @1.5-1.8 (qaul "") (raw "foo")))
+					(e-ident @1.5-1.8 (raw "foo")))
 				(e-int @1.13-1.15 (raw "12")))
 			(e-binop @1.18-1.26 (op "*")
 				(e-int @1.18-1.19 (raw "5"))
@@ -56,7 +56,9 @@ NO CHANGE
 	(e-binop @1.1-1.57 (op "or")
 		(e-binop @1.1-1.26 (op "gt")
 			(e-binop @1.1-1.17 (op "null_coalesce")
-				(e-tag @1.1-1.9 (name "Err") (args "TODO"))
+				(e-tag @1.1-1.9 (name "Err")
+					(args
+						(e-runtime-error (tag "ident_not_in_scope"))))
 				(e-int @1.13-1.15 (value "12")))
 			(e-binop @1.18-1.26 (op "mul")
 				(e-int @1.18-1.19 (value "5"))

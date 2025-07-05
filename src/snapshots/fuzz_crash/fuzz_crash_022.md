@@ -128,14 +128,14 @@ OpUnaryMinus(8:1-8:2),LowerIdent(8:2-8:6),OpAssign(8:7-8:8),OpBar(8:9-8:10),Unde
 		(e-string @1.28-1.31
 			(e-string-part @1.29-1.30 (raw "c")))
 		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
-		(s-type-decl @3.1-5.4
+		(s-type-decl @3.1-3.13
 			(header @3.1-3.7 (name "UserId")
 				(args))
-			(ty (name "U64")))
-		(s-type-anno @5.1-6.8 (name "ser")
+			(ty @3.10-3.13 (name "U64")))
+		(s-type-anno @1.1-1.1 (name "ser")
 			(ty-fn @5.7-5.20
-				(ty (name "UserId"))
-				(ty (name "Str"))))
+				(ty @5.7-5.13 (name "UserId"))
+				(ty @5.17-5.20 (name "Str"))))
 		(s-decl @1.1-1.1
 			(p-ident @6.1-6.8 (raw "getUser"))
 			(e-lambda @1.1-1.1
@@ -154,7 +154,7 @@ OpUnaryMinus(8:1-8:2),LowerIdent(8:2-8:6),OpAssign(8:7-8:8),OpBar(8:9-8:10),Unde
 				(args
 					(p-underscore))
 				(e-apply @8.13-8.25
-					(e-ident @8.13-8.20 (qaul "") (raw "getUser"))
+					(e-ident @8.13-8.20 (raw "getUser"))
 					(e-int @8.21-8.24 (raw "900")))))))
 ~~~
 # FORMATTED
@@ -194,7 +194,7 @@ ain! = |_| getUser(900)
 				(e-lookup-local @8.13-8.20
 					(pattern @6.1-6.8))
 				(e-int @8.21-8.24 (value "900")))))
-	(s-type-decl @3.1-5.4
+	(s-alias-decl @3.1-3.13 (where "TODO")
 		(ty-header @3.1-3.7 (name "UserId"))
 		(ty @3.10-3.13 (name "U64"))))
 ~~~

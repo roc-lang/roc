@@ -37,16 +37,16 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @3.1-4.9 (name "identity")
+		(s-type-anno @1.1-1.1 (name "identity")
 			(ty-fn @3.12-3.22
-				(ty (name "Str"))
-				(ty (name "Str"))))
+				(ty @3.12-3.15 (name "Str"))
+				(ty @3.19-3.22 (name "Str"))))
 		(s-decl @4.1-4.17
 			(p-ident @4.1-4.9 (raw "identity"))
 			(e-lambda @4.12-4.17
 				(args
 					(p-ident @4.13-4.14 (raw "x")))
-				(e-ident @4.16-4.17 (qaul "") (raw "x"))))
+				(e-ident @4.16-4.17 (raw "x"))))
 		(s-decl @6.1-6.15
 			(p-ident @6.1-6.6 (raw "main!"))
 			(e-lambda @6.9-6.15

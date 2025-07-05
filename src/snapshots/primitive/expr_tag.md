@@ -35,7 +35,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign @2.1-2.4 (ident "foo"))
-		(e-tag @2.7-2.15 (name "FortyTwo") (args "TODO"))))
+		(e-tag @2.7-2.15 (name "FortyTwo"))))
 ~~~
 # TYPES
 ~~~clojure

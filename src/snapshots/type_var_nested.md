@@ -84,14 +84,14 @@ LowerIdent(28:1-28:5),OpAssign(28:6-28:7),OpBar(28:8-28:9),Underscore(28:9-28:10
 		(s-type-anno @4.1-5.11 (name "map_result")
 			(ty-fn @4.14-4.52
 				(ty-apply @4.14-4.26
-					(ty (name "Result"))
+					(ty @4.14-4.20 (name "Result"))
 					(ty-var @4.21-4.22 (raw "a"))
 					(ty-var @4.24-4.25 (raw "e")))
 				(ty-fn @4.29-4.35
 					(ty-var @4.29-4.30 (raw "a"))
 					(ty-var @4.34-4.35 (raw "b")))
 				(ty-apply @4.40-4.52
-					(ty (name "Result"))
+					(ty @4.40-4.46 (name "Result"))
 					(ty-var @4.47-4.48 (raw "b"))
 					(ty-var @4.50-4.51 (raw "e")))))
 		(s-decl @5.1-10.2
@@ -103,7 +103,7 @@ LowerIdent(28:1-28:5),OpAssign(28:6-28:7),OpBar(28:8-28:9),Underscore(28:9-28:10
 				(e-block @5.34-10.2
 					(statements
 						(e-match
-							(e-ident @6.11-6.17 (qaul "") (raw "result"))
+							(e-ident @6.11-6.17 (raw "result"))
 							(branches
 								(branch @7.9-8.12
 									(p-tag @7.9-7.18 (raw "Ok")
@@ -111,14 +111,14 @@ LowerIdent(28:1-28:5),OpAssign(28:6-28:7),OpBar(28:8-28:9),Underscore(28:9-28:10
 									(e-apply @7.22-7.42
 										(e-tag @7.22-7.24 (raw "Ok"))
 										(e-apply @7.25-7.41
-											(e-ident @7.25-7.34 (qaul "") (raw "transform"))
-											(e-ident @7.35-7.40 (qaul "") (raw "value")))))
+											(e-ident @7.25-7.34 (raw "transform"))
+											(e-ident @7.35-7.40 (raw "value")))))
 								(branch @8.9-9.6
 									(p-tag @8.9-8.19 (raw "Err")
 										(p-ident @8.13-8.18 (raw "error")))
 									(e-apply @8.23-8.33
 										(e-tag @8.23-8.26 (raw "Err"))
-										(e-ident @8.27-8.32 (qaul "") (raw "error"))))))))))
+										(e-ident @8.27-8.32 (raw "error"))))))))))
 		(s-type-anno @13.1-14.9 (name "identity")
 			(ty-fn @13.12-13.18
 				(ty-var @13.12-13.13 (raw "a"))
@@ -128,7 +128,7 @@ LowerIdent(28:1-28:5),OpAssign(28:6-28:7),OpBar(28:8-28:9),Underscore(28:9-28:10
 			(e-lambda @14.12-14.17
 				(args
 					(p-ident @14.13-14.14 (raw "x")))
-				(e-ident @14.16-14.17 (qaul "") (raw "x"))))
+				(e-ident @14.16-14.17 (raw "x"))))
 		(s-type-anno @17.1-18.10 (name "make_pair")
 			(ty-fn @17.13-17.44
 				(ty-var @17.13-17.14 (raw "a"))
@@ -146,15 +146,15 @@ LowerIdent(28:1-28:5),OpAssign(28:6-28:7),OpBar(28:8-28:9),Underscore(28:9-28:10
 					(p-ident @18.17-18.18 (raw "y")))
 				(e-record @18.20-18.43
 					(field (field "first") (optional false)
-						(e-ident @18.29-18.30 (qaul "") (raw "x")))
+						(e-ident @18.29-18.30 (raw "x")))
 					(field (field "second") (optional false)
-						(e-ident @18.40-18.41 (qaul "") (raw "y"))))))
-		(s-type-anno @21.1-22.12 (name "list_length")
+						(e-ident @18.40-18.41 (raw "y"))))))
+		(s-type-anno @1.1-1.1 (name "list_length")
 			(ty-fn @21.15-21.29
 				(ty-apply @21.15-21.22
-					(ty (name "List"))
+					(ty @21.15-21.19 (name "List"))
 					(ty-var @21.20-21.21 (raw "a")))
-				(ty (name "U64"))))
+				(ty @21.26-21.29 (name "U64"))))
 		(s-decl @22.1-22.24
 			(p-ident @22.1-22.12 (raw "list_length"))
 			(e-lambda @22.15-22.24
@@ -165,12 +165,12 @@ LowerIdent(28:1-28:5),OpAssign(28:6-28:7),OpBar(28:8-28:9),Underscore(28:9-28:10
 			(ty-fn @25.18-25.50
 				(ty-var @25.18-25.19 (raw "a"))
 				(ty-apply @25.23-25.50
-					(ty (name "Result"))
+					(ty @25.23-25.29 (name "Result"))
 					(ty-apply @25.30-25.44
-						(ty (name "Result"))
+						(ty @25.30-25.36 (name "Result"))
 						(ty-var @25.37-25.38 (raw "a"))
-						(ty (name "Str")))
-					(ty (name "Str")))))
+						(ty @25.40-25.43 (name "Str")))
+					(ty @25.46-25.49 (name "Str")))))
 		(s-decl @26.1-26.39
 			(p-ident @26.1-26.15 (raw "wrap_in_result"))
 			(e-lambda @26.18-26.39
@@ -180,7 +180,7 @@ LowerIdent(28:1-28:5),OpAssign(28:6-28:7),OpBar(28:8-28:9),Underscore(28:9-28:10
 					(e-tag @26.26-26.28 (raw "Ok"))
 					(e-apply @26.29-26.38
 						(e-tag @26.29-26.31 (raw "Ok"))
-						(e-ident @26.32-26.37 (qaul "") (raw "value"))))))
+						(e-ident @26.32-26.37 (raw "value"))))))
 		(s-decl @28.1-28.18
 			(p-ident @28.1-28.5 (raw "main"))
 			(e-lambda @28.8-28.18
@@ -208,7 +208,7 @@ identity = |x| x
 
 # Nested type variables in records
 make_pair : a, b -> { first : a, second : b }
-make_pair = |x, y| { first: x, second: y }
+make_pair = |x, y| {first: x, second: y}
 
 # Function that works with lists of any type
 list_length : List(a) -> U64
@@ -240,12 +240,21 @@ main = |_| "done"
 								(patterns
 									(p-applied-tag @7.9-7.18 (degenerate false)))
 								(value
-									(e-tag @7.22-7.42 (name "Ok") (args "TODO"))))
+									(e-tag @7.22-7.42 (name "Ok")
+										(args
+											(e-call @7.25-7.41
+												(e-lookup-local @7.25-7.34
+													(pattern @5.23-5.32))
+												(e-lookup-local @7.35-7.40
+													(pattern @7.12-7.17)))))))
 							(branch
 								(patterns
 									(p-applied-tag @8.9-8.19 (degenerate false)))
 								(value
-									(e-tag @8.23-8.33 (name "Err") (args "TODO")))))))))
+									(e-tag @8.23-8.33 (name "Err")
+										(args
+											(e-lookup-local @8.27-8.32
+												(pattern @8.13-8.18)))))))))))
 		(annotation @5.1-5.11
 			(declared-type
 				(ty-fn @4.14-4.52 (effectful false)
@@ -312,7 +321,12 @@ main = |_| "done"
 		(e-lambda @26.18-26.39
 			(args
 				(p-assign @26.19-26.24 (ident "value")))
-			(e-tag @26.26-26.39 (name "Ok") (args "TODO")))
+			(e-tag @26.26-26.39 (name "Ok")
+				(args
+					(e-tag @26.29-26.38 (name "Ok")
+						(args
+							(e-lookup-local @26.32-26.37
+								(pattern @26.19-26.24)))))))
 		(annotation @26.1-26.15
 			(declared-type
 				(ty-fn @25.18-25.50 (effectful false)

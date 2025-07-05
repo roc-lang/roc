@@ -35,7 +35,7 @@ CloseCurly(3:1-3:2),EndOfFile(3:2-3:2),
 # PARSE
 ~~~clojure
 (e-match
-	(e-ident @1.7-1.13 (qaul "") (raw "person"))
+	(e-ident @1.7-1.13 (raw "person"))
 	(branches
 		(branch @1.1-1.1
 			(p-record @2.5-2.37
@@ -45,12 +45,12 @@ CloseCurly(3:1-3:2),EndOfFile(3:2-3:2),
 					(p-ident @2.28-2.35 (raw "userAge"))))
 			(e-string @2.41-2.92
 				(e-string-part @2.42-2.47 (raw "User "))
-				(e-ident @2.49-2.57 (qaul "") (raw "userName"))
+				(e-ident @2.49-2.57 (raw "userName"))
 				(e-string-part @2.58-2.62 (raw " is "))
 				(e-field-access @2.64-2.81
-					(e-ident @2.64-2.71 (qaul "") (raw "userAge"))
+					(e-ident @2.64-2.71 (raw "userAge"))
 					(e-apply @2.71-2.80
-						(e-ident @2.71-2.78 (qaul "") (raw ".to_str"))))
+						(e-ident @2.71-2.78 (raw "to_str"))))
 				(e-string-part @2.81-2.91 (raw " years old"))))))
 ~~~
 # FORMATTED

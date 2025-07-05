@@ -42,8 +42,8 @@ LowerIdent(3:1-3:2),EndOfFile(3:2-3:2),
 ~~~clojure
 (e-apply @1.1-2.2
 	(e-int @1.1-1.2 (raw "1"))
-	(e-ident @1.3-1.4 (qaul "") (raw "i"))
-	(e-ident @1.5-1.6 (qaul "") (raw "p")))
+	(e-ident @1.3-1.4 (raw "i"))
+	(e-ident @1.5-1.6 (raw "p")))
 ~~~
 # FORMATTED
 ~~~roc

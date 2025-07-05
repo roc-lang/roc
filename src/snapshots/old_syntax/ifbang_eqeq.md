@@ -19,7 +19,7 @@ LowerIdent(1:1-1:4),OpEquals(1:4-1:6),Int(1:6-1:7),EndOfFile(1:7-1:7),
 # PARSE
 ~~~clojure
 (e-binop @1.1-1.7 (op "==")
-	(e-ident @1.1-1.4 (qaul "") (raw "if!"))
+	(e-ident @1.1-1.4 (raw "if!"))
 	(e-int @1.6-1.7 (raw "9")))
 ~~~
 # FORMATTED

@@ -38,7 +38,7 @@ CloseCurly(10:1-10:2),EndOfFile(10:2-10:2),
 		(exposes @1.8-1.14
 			(exposed-lower-ident (text "main"))))
 	(statements
-		(s-import @3.1-3.65 (module ".Json") (qualifier "json")
+		(s-import @3.1-3.65 (raw "json.Json")
 			(exposing
 				(exposed-lower-ident (text "decode") (as "fromJson"))
 				(exposed-lower-ident (text "encode") (as "toJson"))))
@@ -57,18 +57,27 @@ CloseCurly(10:1-10:2),EndOfFile(10:2-10:2),
 					(s-decl @7.2-7.24
 						(p-ident @7.2-7.9 (raw "encoded"))
 						(e-apply @7.12-7.24
-							(e-ident @7.12-7.18 (qaul "") (raw "toJson"))
-							(e-ident @7.19-7.23 (qaul "") (raw "data"))))
+							(e-ident @7.12-7.18 (raw "toJson"))
+							(e-ident @7.19-7.23 (raw "data"))))
 					(s-decl @8.2-8.29
 						(p-ident @8.2-8.9 (raw "decoded"))
 						(e-apply @8.12-8.29
-							(e-ident @8.12-8.20 (qaul "") (raw "fromJson"))
-							(e-ident @8.21-8.28 (qaul "") (raw "encoded"))))
-					(e-ident @9.2-9.9 (qaul "") (raw "decoded")))))))
+							(e-ident @8.12-8.20 (raw "fromJson"))
+							(e-ident @8.21-8.28 (raw "encoded"))))
+					(e-ident @9.2-9.9 (raw "decoded")))))))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [main]
+
+import json.Json exposing [decode as fromJson, encode as toJson]
+
+main = {
+	data = {name: "Bob", age: 25}
+	encoded = toJson(data)
+	decoded = fromJson(encoded)
+	decoded
+}
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -89,14 +98,14 @@ NO CHANGE
 				(p-assign @7.2-7.9 (ident "encoded"))
 				(e-call @7.12-7.24
 					(e-lookup-external
-						(ext-decl @7.12-7.18 (qualified "json.Json.encode") (module "json.Json") (local "toJson") (kind "value")))
+						(ext-decl @7.12-7.18 (ident "json.Json.encode") (kind "value")))
 					(e-lookup-local @7.19-7.23
 						(pattern @6.2-6.6))))
 			(s-let @8.2-8.29
 				(p-assign @8.2-8.9 (ident "decoded"))
 				(e-call @8.12-8.29
 					(e-lookup-external
-						(ext-decl @8.12-8.20 (qualified "json.Json.decode") (module "json.Json") (local "fromJson") (kind "value")))
+						(ext-decl @8.12-8.20 (ident "json.Json.decode") (kind "value")))
 					(e-lookup-local @8.21-8.28
 						(pattern @7.2-7.9))))
 			(e-lookup-local @9.2-9.9

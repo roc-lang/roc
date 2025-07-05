@@ -20,7 +20,7 @@ OpenSquare(2:5-2:6),Int(2:6-2:7),Comma(2:7-2:8),Int(2:9-2:10),Comma(2:10-2:11),O
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.5 (qaul "") (raw "when"))
+(e-ident @1.1-1.5 (raw "when"))
 ~~~
 # FORMATTED
 ~~~roc

@@ -26,7 +26,7 @@ Int(5:1-5:3),EndOfFile(5:3-5:3),
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.7 (qaul "") (raw "myList"))
+(e-ident @1.1-1.7 (raw "myList"))
 ~~~
 # FORMATTED
 ~~~roc

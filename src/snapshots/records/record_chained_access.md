@@ -20,9 +20,9 @@ LowerIdent(1:1-1:7),NoSpaceDotLowerIdent(1:7-1:15),NoSpaceDotLowerIdent(1:15-1:2
 ~~~clojure
 (e-field-access @1.1-1.22
 	(e-field-access @1.1-1.22
-		(e-ident @1.1-1.7 (qaul "") (raw "person"))
-		(e-ident @1.7-1.15 (qaul "") (raw ".address")))
-	(e-ident @1.15-1.22 (qaul "") (raw ".street")))
+		(e-ident @1.1-1.7 (raw "person"))
+		(e-ident @1.7-1.15 (raw "address")))
+	(e-ident @1.15-1.22 (raw "street")))
 ~~~
 # FORMATTED
 ~~~roc

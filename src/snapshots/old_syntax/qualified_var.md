@@ -8,24 +8,27 @@ type=expr
 One.Two.whee
 ~~~
 # PROBLEMS
-NIL
+**UNDEFINED VARIABLE**
+Nothing is named `whee` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 # TOKENS
 ~~~zig
 UpperIdent(1:1-1:4),NoSpaceDotUpperIdent(1:4-1:8),NoSpaceDotLowerIdent(1:8-1:13),EndOfFile(1:13-1:13),
 ~~~
 # PARSE
 ~~~clojure
-(e-tag @1.1-1.4 (raw "One"))
+(e-ident @1.1-1.13 (raw "One.Two.whee"))
 ~~~
 # FORMATTED
 ~~~roc
-One
+One.whee
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tag @1.1-1.4 (name "One") (args "TODO"))
+(e-runtime-error (tag "ident_not_in_scope"))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.4 (type "[One]*"))
+(expr @1.1-1.13 (type "Error"))
 ~~~

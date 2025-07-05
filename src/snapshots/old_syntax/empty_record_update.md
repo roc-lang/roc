@@ -32,7 +32,7 @@ OpenCurly(1:1-1:2),LowerIdent(1:2-1:3),OpAmpersand(1:3-1:4),CloseCurly(1:4-1:5),
 ~~~clojure
 (e-block @1.1-1.5
 	(statements
-		(e-ident @1.2-1.3 (qaul "") (raw "e"))
+		(e-ident @1.2-1.3 (raw "e"))
 		(e-malformed @1.3-1.5 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED

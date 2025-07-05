@@ -19,7 +19,7 @@ LowerIdent(1:1-1:4),NoSpaceOpQuestion(1:4-1:5),OpenRound(1:7-1:8),LowerIdent(1:1
 # PARSE
 ~~~clojure
 (e-question-suffix @1.1-1.5
-	(e-ident @1.1-1.4 (qaul "") (raw "foo")))
+	(e-ident @1.1-1.4 (raw "foo")))
 ~~~
 # FORMATTED
 ~~~roc

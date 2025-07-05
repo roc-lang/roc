@@ -18,7 +18,7 @@ LowerIdent(1:1-1:2),StringStart(1:2-1:3),StringPart(1:3-1:13),StringEnd(1:13-1:1
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.2 (qaul "") (raw "m"))
+(e-ident @1.1-1.2 (raw "m"))
 ~~~
 # FORMATTED
 ~~~roc

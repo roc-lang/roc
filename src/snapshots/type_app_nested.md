@@ -50,14 +50,14 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 		(s-type-anno @3.1-4.14 (name "processNested")
 			(ty-fn @3.17-3.52
 				(ty-apply @3.17-3.39
-					(ty (name "List"))
+					(ty @3.17-3.21 (name "List"))
 					(ty-apply @3.22-3.38
-						(ty (name "Result"))
-						(ty (name "Str"))
-						(ty (name "Err"))))
+						(ty @3.22-3.28 (name "Result"))
+						(ty @3.29-3.32 (name "Str"))
+						(ty @3.34-3.37 (name "Err"))))
 				(ty-apply @3.43-3.52
-					(ty (name "List"))
-					(ty (name "Str")))))
+					(ty @3.43-3.47 (name "List"))
+					(ty @3.48-3.51 (name "Str")))))
 		(s-decl @4.1-4.38
 			(p-ident @4.1-4.14 (raw "processNested"))
 			(e-lambda @4.17-4.38
@@ -74,7 +74,7 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 				(args
 					(p-underscore))
 				(e-apply @6.13-6.30
-					(e-ident @6.13-6.26 (qaul "") (raw "processNested"))
+					(e-ident @6.13-6.26 (raw "processNested"))
 					(e-list @6.27-6.29))))))
 ~~~
 # FORMATTED

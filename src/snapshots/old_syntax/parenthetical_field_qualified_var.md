@@ -8,17 +8,9 @@ type=expr
 (One.Two.rec).field
 ~~~
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `expected_expr_close_round_or_comma`
-This is an unexpected parsing error. Please check your syntax.
-
-Here is the problematic code:
-**parenthetical_field_qualified_var.md:1:13:1:20:**
-```roc
-(One.Two.rec).field
-```
-            ^^^^^^^
-
+**UNDEFINED VARIABLE**
+Nothing is named `rec` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
@@ -26,19 +18,22 @@ OpenRound(1:1-1:2),UpperIdent(1:2-1:5),NoSpaceDotUpperIdent(1:5-1:9),NoSpaceDotL
 ~~~
 # PARSE
 ~~~clojure
-(e-malformed @1.13-1.20 (reason "expected_expr_close_round_or_comma"))
+(e-field-access @1.1-1.20
+	(e-tuple @1.1-1.14
+		(e-ident @1.2-1.13 (raw "One.Two.rec")))
+	(e-ident @1.14-1.20 (raw "field")))
 ~~~
 # FORMATTED
 ~~~roc
-
+(One.rec).field
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(e-dot-access @1.1-1.20 (field "field")
+	(receiver
+		(e-runtime-error (tag "ident_not_in_scope"))))
 ~~~
 # TYPES
 ~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+(expr @1.1-1.20 (type "*"))
 ~~~

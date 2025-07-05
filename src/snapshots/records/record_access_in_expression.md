@@ -20,8 +20,8 @@ LowerIdent(1:1-1:7),NoSpaceDotLowerIdent(1:7-1:11),OpPlus(1:12-1:13),Int(1:14-1:
 ~~~clojure
 (e-binop @1.1-1.15 (op "+")
 	(e-field-access @1.1-1.13
-		(e-ident @1.1-1.7 (qaul "") (raw "person"))
-		(e-ident @1.7-1.11 (qaul "") (raw ".age")))
+		(e-ident @1.1-1.7 (raw "person"))
+		(e-ident @1.7-1.11 (raw "age")))
 	(e-int @1.14-1.15 (raw "5")))
 ~~~
 # FORMATTED

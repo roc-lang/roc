@@ -22,7 +22,7 @@ UpperIdent(3:1-3:4),NoSpaceDotLowerIdent(3:4-3:14),LowerIdent(3:15-3:21),LowerId
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.14 (qaul "Str") (raw ".getUnsafe"))
+(e-ident @1.1-1.14 (raw "Str.getUnsafe"))
 ~~~
 # FORMATTED
 ~~~roc

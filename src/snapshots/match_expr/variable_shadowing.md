@@ -30,8 +30,8 @@ CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~clojure
 (e-match
 	(e-tuple @1.7-1.21
-		(e-ident @1.8-1.13 (qaul "") (raw "value"))
-		(e-ident @1.15-1.20 (qaul "") (raw "other")))
+		(e-ident @1.8-1.13 (raw "value"))
+		(e-ident @1.15-1.20 (raw "other")))
 	(branches
 		(branch @2.5-3.6
 			(p-tuple @2.5-2.17
@@ -39,14 +39,14 @@ CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 					(p-ident @2.11-2.12 (raw "x")))
 				(p-ident @2.15-2.16 (raw "y")))
 			(e-binop @2.21-3.6 (op "+")
-				(e-ident @2.21-2.22 (qaul "") (raw "x"))
-				(e-ident @2.25-2.26 (qaul "") (raw "y"))))
+				(e-ident @2.21-2.22 (raw "x"))
+				(e-ident @2.25-2.26 (raw "y"))))
 		(branch @3.5-4.2
 			(p-tuple @3.5-3.14
 				(p-tag @3.6-3.10 (raw "None"))
 				(p-ident @3.12-3.13 (raw "x")))
 			(e-binop @3.18-4.2 (op "*")
-				(e-ident @3.18-3.19 (qaul "") (raw "x"))
+				(e-ident @3.18-3.19 (raw "x"))
 				(e-int @3.22-3.23 (raw "2"))))))
 ~~~
 # FORMATTED

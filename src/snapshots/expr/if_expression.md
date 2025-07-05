@@ -20,7 +20,7 @@ KwIf(1:1-1:3),LowerIdent(1:4-1:5),OpGreaterThan(1:6-1:7),Int(1:8-1:9),StringStar
 ~~~clojure
 (e-if-then-else @1.1-1.28
 	(e-binop @1.4-1.11 (op ">")
-		(e-ident @1.4-1.5 (qaul "") (raw "x"))
+		(e-ident @1.4-1.5 (raw "x"))
 		(e-int @1.8-1.9 (raw "5")))
 	(e-string @1.10-1.15
 		(e-string-part @1.11-1.14 (raw "big")))

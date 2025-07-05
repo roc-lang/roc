@@ -31,9 +31,9 @@ LowerIdent(2:1-2:2),CloseRound(2:2-2:3),CloseStringInterpolation(2:3-2:4),String
 (e-string @1.1-2.45
 	(e-string-part @1.2-1.24 (raw "This is a string with "))
 	(e-apply @1.26-2.3
-		(e-ident @1.26-1.35 (qaul "") (raw "some_func"))
-		(e-ident @1.36-1.37 (qaul "") (raw "a"))
-		(e-ident @2.1-2.2 (qaul "") (raw "b")))
+		(e-ident @1.26-1.35 (raw "some_func"))
+		(e-ident @1.36-1.37 (raw "a"))
+		(e-ident @2.1-2.2 (raw "b")))
 	(e-string-part @2.4-2.44 (raw " lines of text due to the template parts")))
 ~~~
 # FORMATTED

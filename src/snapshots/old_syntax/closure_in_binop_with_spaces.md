@@ -37,7 +37,7 @@ OpUnaryMinus(2:1-2:2),LowerIdent(2:2-2:3),EndOfFile(2:3-2:3),
 # PARSE
 ~~~clojure
 (e-binop @1.1-1.5 (op ">")
-	(e-ident @1.1-1.2 (qaul "") (raw "i"))
+	(e-ident @1.1-1.2 (raw "i"))
 	(e-malformed @1.3-1.5 (reason "expr_unexpected_token")))
 ~~~
 # FORMATTED

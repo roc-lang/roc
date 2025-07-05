@@ -32,7 +32,7 @@ LowerIdent(3:1-3:16),LowerIdent(3:17-3:21),EndOfFile(3:21-3:21),
 ~~~
 # FORMATTED
 ~~~roc
-{ launchTheNukes!, code }
+{launchTheNukes!, code}
 ~~~
 # CANONICALIZE
 ~~~clojure

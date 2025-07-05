@@ -29,7 +29,7 @@ B
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tag @1.1-1.2 (name "B") (args "TODO"))
+(e-tag @1.1-1.2 (name "B"))
 ~~~
 # TYPES
 ~~~clojure

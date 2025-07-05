@@ -29,7 +29,7 @@ UserId
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tag @1.1-1.7 (name "UserId") (args "TODO"))
+(e-tag @1.1-1.7 (name "UserId"))
 ~~~
 # TYPES
 ~~~clojure

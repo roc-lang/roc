@@ -47,18 +47,18 @@ CloseCurly(5:1-5:2),CloseRound(5:2-5:3),CloseRound(5:3-5:4),EndOfFile(5:4-5:4),
 # PARSE
 ~~~clojure
 (e-apply @1.1-5.4
-	(e-ident @1.1-1.8 (qaul "") (raw "combine"))
+	(e-ident @1.1-1.8 (raw "combine"))
 	(e-apply @1.9-1.24
-		(e-ident @1.9-1.12 (qaul "") (raw "mix"))
-		(e-ident @1.13-1.18 (qaul "") (raw "vodka"))
-		(e-ident @1.20-1.23 (qaul "") (raw "gin")))
+		(e-ident @1.9-1.12 (raw "mix"))
+		(e-ident @1.13-1.18 (raw "vodka"))
+		(e-ident @1.20-1.23 (raw "gin")))
 	(e-apply @1.26-5.3
 		(e-tag @1.26-1.32 (raw "Juices"))
 		(e-record @1.33-5.2
 			(field (field "color") (optional false)
-				(e-ident @2.12-2.25 (qaul "Colors") (raw ".orange")))
+				(e-ident @2.12-2.25 (raw "Colors.orange")))
 			(field (field "flavor") (optional false)
-				(e-ident @3.13-3.27 (qaul "Flavors") (raw ".orange")))
+				(e-ident @3.13-3.27 (raw "Flavors.orange")))
 			(field (field "amount") (optional false)
 				(e-binop @4.13-5.2 (op "+")
 					(e-int @4.13-4.14 (raw "1"))
@@ -70,9 +70,11 @@ combine(
 	mix(vodka, gin),
 	Juices(
 		{
+
 			color: Colors.orange,
 			flavor: Flavors.orange,
-			amount: 1 + 2,
+			amount: 1 + 2
+
 		},
 	),
 )
@@ -85,7 +87,18 @@ combine(
 		(e-runtime-error (tag "ident_not_in_scope"))
 		(e-runtime-error (tag "ident_not_in_scope"))
 		(e-runtime-error (tag "ident_not_in_scope")))
-	(e-tag @1.26-5.3 (name "Juices") (args "TODO")))
+	(e-tag @1.26-5.3 (name "Juices")
+		(args
+			(e-record @1.33-5.2
+				(fields
+					(field (name "color")
+						(e-runtime-error (tag "ident_not_in_scope")))
+					(field (name "flavor")
+						(e-runtime-error (tag "ident_not_in_scope")))
+					(field (name "amount")
+						(e-binop @4.13-5.2 (op "add")
+							(e-int @4.13-4.14 (value "1"))
+							(e-int @4.17-4.18 (value "2")))))))))
 ~~~
 # TYPES
 ~~~clojure

@@ -20,7 +20,7 @@ OpaqueName(2:3-2:7),LowerIdent(2:8-2:9),LowerIdent(2:10-2:11),OpArrow(2:12-2:14)
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.5 (qaul "") (raw "when"))
+(e-ident @1.1-1.5 (raw "when"))
 ~~~
 # FORMATTED
 ~~~roc

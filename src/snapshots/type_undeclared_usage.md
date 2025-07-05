@@ -72,14 +72,14 @@ UpperIdent(10:1-10:12),OpColon(10:13-10:14),UpperIdent(10:15-10:25),NoSpaceDotUp
 			(exposed-upper-ident (text "MyType"))
 			(exposed-lower-ident (text "processValue"))))
 	(statements
-		(s-type-decl @3.1-5.13
+		(s-type-decl @3.1-3.21
 			(header @3.1-3.7 (name "MyType")
 				(args))
-			(ty (name "UnknownType")))
-		(s-type-anno @5.1-6.13 (name "processValue")
+			(ty @3.10-3.21 (name "UnknownType")))
+		(s-type-anno @1.1-1.1 (name "processValue")
 			(ty-fn @5.16-5.39
-				(ty (name "UndeclaredResult"))
-				(ty (name "Str"))))
+				(ty @5.16-5.32 (name "UndeclaredResult"))
+				(ty @5.36-5.39 (name "Str"))))
 		(s-decl @6.1-8.2
 			(p-ident @6.1-6.13 (raw "processValue"))
 			(e-lambda @6.16-8.2
@@ -92,7 +92,7 @@ UpperIdent(10:1-10:12),OpColon(10:13-10:14),UpperIdent(10:15-10:25),NoSpaceDotUp
 		(s-type-decl @10.1-10.37
 			(header @10.1-10.12 (name "AnotherType")
 				(args))
-			(ty-mod (module "MissingType") (name "SomeModule")))))
+			(ty @10.15-10.37 (name "SomeModule.MissingType")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -123,12 +123,13 @@ AnotherType : SomeModule.MissingType
 				(ty-fn @5.16-5.39 (effectful false)
 					(ty @5.16-5.32 (name "UndeclaredResult"))
 					(ty @5.36-5.39 (name "Str"))))))
-	(s-type-decl @3.1-5.13
+	(s-alias-decl @3.1-3.21 (where "TODO")
 		(ty-header @3.1-3.7 (name "MyType"))
 		(ty @3.10-3.21 (name "UnknownType")))
-	(s-type-decl @10.1-10.37
+	(s-alias-decl @10.1-10.37 (where "TODO")
 		(ty-header @10.1-10.12 (name "AnotherType"))
-		(ty-mod @10.15-10.37 (module "MissingType") (type "SomeModule"))))
+		(ty-lookup-external @10.15-10.37
+			(ext-decl @10.15-10.37 (ident "SomeModule.MissingType") (kind "type")))))
 ~~~
 # TYPES
 ~~~clojure

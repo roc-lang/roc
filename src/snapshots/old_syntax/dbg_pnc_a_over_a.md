@@ -23,8 +23,8 @@ LowerIdent(2:1-2:2),EndOfFile(2:2-2:2),
 (e-dbg
 	(e-tuple @1.4-1.9
 		(e-binop @1.5-1.9 (op "/")
-			(e-ident @1.5-1.6 (qaul "") (raw "a"))
-			(e-ident @1.7-1.8 (qaul "") (raw "a")))))
+			(e-ident @1.5-1.6 (raw "a"))
+			(e-ident @1.7-1.8 (raw "a")))))
 ~~~
 # FORMATTED
 ~~~roc

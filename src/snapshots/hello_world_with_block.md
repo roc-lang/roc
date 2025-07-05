@@ -60,7 +60,7 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 				(e-string @4.28-4.55
 					(e-string-part @4.29-4.54 (raw "../basic-cli/platform.roc"))))))
 	(statements
-		(s-import @6.1-6.17 (module ".Stdout") (qualifier "pf"))
+		(s-import @6.1-6.17 (raw "pf.Stdout"))
 		(s-decl @8.1-12.2
 			(p-ident @8.1-8.6 (raw "main!"))
 			(e-lambda @8.9-12.2
@@ -73,7 +73,7 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 							(e-string @9.10-9.17
 								(e-string-part @9.11-9.16 (raw "World"))))
 						(e-apply @11.2-11.31
-							(e-ident @11.2-11.14 (qaul "Stdout") (raw ".line!"))
+							(e-ident @11.2-11.14 (raw "Stdout.line!"))
 							(e-string @11.15-11.30
 								(e-string-part @11.16-11.29 (raw "Hello, world!"))))))))))
 ~~~
@@ -96,7 +96,7 @@ NO CHANGE
 						(e-literal @9.11-9.16 (string "World"))))
 				(e-call @11.2-11.31
 					(e-lookup-external
-						(ext-decl @11.2-11.14 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value")))
+						(ext-decl @11.2-11.14 (ident "pf.Stdout.line!") (kind "value")))
 					(e-string @11.15-11.30
 						(e-literal @11.16-11.29 (string "Hello, world!")))))))
 	(s-import @6.1-6.17 (module "pf.Stdout") (qualifier "pf")

@@ -48,15 +48,15 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @3.1-4.8 (name "process")
+		(s-type-anno @1.1-1.1 (name "process")
 			(ty-fn @3.11-3.35
 				(ty-tag-union @3.11-3.28
 					(tags
 						(ty-apply @3.12-3.21
-							(ty (name "Some"))
-							(ty (name "Str")))
-						(ty (name "None"))))
-				(ty (name "Str"))))
+							(ty @3.12-3.16 (name "Some"))
+							(ty @3.17-3.20 (name "Str")))
+						(ty @3.23-3.27 (name "None"))))
+				(ty @3.32-3.35 (name "Str"))))
 		(s-decl @4.1-4.27
 			(p-ident @4.1-4.8 (raw "process"))
 			(e-lambda @4.11-4.27

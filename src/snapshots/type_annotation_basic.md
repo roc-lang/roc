@@ -99,7 +99,7 @@ CloseCurly(27:1-27:2),EndOfFile(27:2-27:2),
 			(e-lambda @5.12-5.17
 				(args
 					(p-ident @5.13-5.14 (raw "x")))
-				(e-ident @5.16-5.17 (qaul "") (raw "x"))))
+				(e-ident @5.16-5.17 (raw "x"))))
 		(s-type-anno @8.1-9.8 (name "combine")
 			(ty-fn @8.11-8.25
 				(ty-var @8.11-8.12 (raw "a"))
@@ -114,19 +114,19 @@ CloseCurly(27:1-27:2),EndOfFile(27:2-27:2),
 					(p-ident @9.12-9.17 (raw "first"))
 					(p-ident @9.19-9.25 (raw "second")))
 				(e-tuple @9.27-9.42
-					(e-ident @9.28-9.33 (qaul "") (raw "first"))
-					(e-ident @9.35-9.41 (qaul "") (raw "second")))))
-		(s-type-anno @12.1-13.7 (name "addOne")
+					(e-ident @9.28-9.33 (raw "first"))
+					(e-ident @9.35-9.41 (raw "second")))))
+		(s-type-anno @1.1-1.1 (name "addOne")
 			(ty-fn @12.10-12.20
-				(ty (name "U64"))
-				(ty (name "U64"))))
+				(ty @12.10-12.13 (name "U64"))
+				(ty @12.17-12.20 (name "U64"))))
 		(s-decl @13.1-15.6
 			(p-ident @13.1-13.7 (raw "addOne"))
 			(e-lambda @13.10-15.6
 				(args
 					(p-ident @13.11-13.12 (raw "n")))
 				(e-binop @13.14-15.6 (op "+")
-					(e-ident @13.14-13.15 (qaul "") (raw "n"))
+					(e-ident @13.14-13.15 (raw "n"))
 					(e-int @13.18-13.19 (raw "1")))))
 		(s-decl @15.1-27.2
 			(p-ident @15.1-15.6 (raw "main!"))
@@ -138,26 +138,26 @@ CloseCurly(27:1-27:2),EndOfFile(27:2-27:2),
 						(s-decl @17.5-17.23
 							(p-ident @17.5-17.8 (raw "num"))
 							(e-apply @17.11-17.23
-								(e-ident @17.11-17.19 (qaul "") (raw "identity"))
+								(e-ident @17.11-17.19 (raw "identity"))
 								(e-int @17.20-17.22 (raw "42"))))
 						(s-decl @18.5-18.29
 							(p-ident @18.5-18.9 (raw "text"))
 							(e-apply @18.12-18.29
-								(e-ident @18.12-18.20 (qaul "") (raw "identity"))
+								(e-ident @18.12-18.20 (raw "identity"))
 								(e-string @18.21-18.28
 									(e-string-part @18.22-18.27 (raw "hello")))))
 						(s-decl @21.5-21.30
 							(p-ident @21.5-21.9 (raw "pair"))
 							(e-apply @21.12-21.30
-								(e-ident @21.12-21.19 (qaul "") (raw "combine"))
-								(e-ident @21.20-21.23 (qaul "") (raw "num"))
-								(e-ident @21.25-21.29 (qaul "") (raw "text"))))
+								(e-ident @21.12-21.19 (raw "combine"))
+								(e-ident @21.20-21.23 (raw "num"))
+								(e-ident @21.25-21.29 (raw "text"))))
 						(s-decl @24.5-24.23
 							(p-ident @24.5-24.11 (raw "result"))
 							(e-apply @24.14-24.23
-								(e-ident @24.14-24.20 (qaul "") (raw "addOne"))
+								(e-ident @24.14-24.20 (raw "addOne"))
 								(e-int @24.21-24.22 (raw "5"))))
-						(e-ident @26.5-26.11 (qaul "") (raw "result"))))))))
+						(e-ident @26.5-26.11 (raw "result"))))))))
 ~~~
 # FORMATTED
 ~~~roc

@@ -13,9 +13,18 @@ type=expr
 u]
 ~~~
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `u` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**LIST NOT CLOSED**
+This list is missing a closing bracket or has a syntax error.
+Lists must be closed with **]** and list items must be separated by commas.
+For example:     [1, 2, 3]
+
+Here is the problematic code:
+**list_lots_of_spaces.md:6:2:6:3:**
+```roc
+u]
+```
+ ^
+
 
 # TOKENS
 ~~~zig
@@ -28,27 +37,19 @@ LowerIdent(6:1-6:2),CloseSquare(6:2-6:3),EndOfFile(6:3-6:3),
 ~~~
 # PARSE
 ~~~clojure
-(e-list @1.1-6.3
-	(e-tag @1.2-1.3 (raw "J"))
-	(e-ident @6.1-6.2 (qaul "") (raw "u")))
+(e-malformed @6.2-6.3 (reason "expected_expr_close_square_or_comma"))
 ~~~
 # FORMATTED
 ~~~roc
-[
-	J,
 
-
-	u,
-]
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-list @1.1-6.3
-	(elems
-		(e-tag @1.2-1.3 (name "J") (args "TODO"))
-		(e-runtime-error (tag "ident_not_in_scope"))))
+(can-ir (empty true))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-6.3 (type "List(Error)"))
+(inferred-types
+	(defs)
+	(expressions))
 ~~~

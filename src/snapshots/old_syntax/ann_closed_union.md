@@ -90,7 +90,7 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 		(ty-malformed @2.26-2.32))
 	(s-let @3.5-3.15
 		(p-assign @3.5-3.8 (ident "foo"))
-		(e-tag @3.11-3.15 (name "True") (args "TODO")))
+		(e-tag @3.11-3.15 (name "True")))
 	(e-int @5.5-5.7 (value "42")))
 ~~~
 # TYPES

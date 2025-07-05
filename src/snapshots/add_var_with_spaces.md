@@ -30,7 +30,7 @@ LowerIdent(3:1-3:5),OpAssign(3:6-3:7),LowerIdent(3:8-3:9),OpPlus(3:10-3:11),Int(
 		(s-decl @3.1-3.18
 			(p-ident @3.1-3.5 (raw "add2"))
 			(e-binop @3.8-3.18 (op "+")
-				(e-ident @3.8-3.9 (qaul "") (raw "x"))
+				(e-ident @3.8-3.9 (raw "x"))
 				(e-int @3.17-3.18 (raw "2"))))))
 ~~~
 # FORMATTED

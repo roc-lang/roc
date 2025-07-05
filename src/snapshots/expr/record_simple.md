@@ -24,7 +24,7 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:7),OpColon(1:7-1:8),StringStart(1:9-1:10),St
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+{name: "Alice", age: 30}
 ~~~
 # CANONICALIZE
 ~~~clojure

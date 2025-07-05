@@ -20,7 +20,7 @@ LowerIdent(2:1-2:4),NoSpaceDotInt(2:4-2:6),EndOfFile(2:6-2:6),
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.4 (qaul "") (raw "abc"))
+(e-ident @1.1-1.4 (raw "abc"))
 ~~~
 # FORMATTED
 ~~~roc

@@ -25,17 +25,17 @@ LowerIdent(1:1-1:11),OpAssign(1:12-1:13),OpBar(1:14-1:15),OpenCurly(1:15-1:16),L
 				(field @1.28-1.35 (name "email") (rest false))))
 		(e-string @1.37-1.109
 			(e-string-part @1.38-1.44 (raw "User: "))
-			(e-ident @1.46-1.50 (qaul "") (raw "name"))
+			(e-ident @1.46-1.50 (raw "name"))
 			(e-string-part @1.51-1.53 (raw " ("))
 			(e-field-access @1.55-1.67
-				(e-ident @1.55-1.58 (qaul "") (raw "age"))
+				(e-ident @1.55-1.58 (raw "age"))
 				(e-apply @1.58-1.66
-					(e-ident @1.58-1.64 (qaul "") (raw ".toStr"))))
+					(e-ident @1.58-1.64 (raw "toStr"))))
 			(e-string-part @1.67-1.90 (raw " years old) - Contact: "))
 			(e-field-access @1.92-1.108
-				(e-ident @1.92-1.97 (qaul "") (raw "email"))
+				(e-ident @1.92-1.97 (raw "email"))
 				(e-apply @1.97-1.107
-					(e-ident @1.97-1.105 (qaul "") (raw ".display"))))
+					(e-ident @1.97-1.105 (raw "display"))))
 			(e-string-part @1.108-1.108 (raw "")))))
 ~~~
 # FORMATTED

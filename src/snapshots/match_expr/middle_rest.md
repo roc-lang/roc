@@ -41,7 +41,7 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 # PARSE
 ~~~clojure
 (e-match
-	(e-ident @1.7-1.12 (qaul "") (raw "items"))
+	(e-ident @1.7-1.12 (raw "items"))
 	(branches
 		(branch @2.5-3.6
 			(p-list @2.5-2.22
@@ -49,8 +49,8 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 				(p-list-rest @2.13-2.16)
 				(p-ident @2.17-2.21 (raw "last")))
 			(e-binop @2.26-3.6 (op "+")
-				(e-ident @2.26-2.31 (qaul "") (raw "first"))
-				(e-ident @2.34-2.38 (qaul "") (raw "last"))))
+				(e-ident @2.26-2.31 (raw "first"))
+				(e-ident @2.34-2.38 (raw "last"))))
 		(branch @3.5-4.6
 			(p-list @3.5-3.31
 				(p-ident @3.6-3.7 (raw "a"))
@@ -59,16 +59,16 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 				(p-ident @3.26-3.27 (raw "x"))
 				(p-ident @3.29-3.30 (raw "y")))
 			(e-binop @3.35-4.6 (op "+")
-				(e-ident @3.35-3.36 (qaul "") (raw "a"))
+				(e-ident @3.35-3.36 (raw "a"))
 				(e-binop @3.39-4.6 (op "+")
-					(e-ident @3.39-3.40 (qaul "") (raw "b"))
+					(e-ident @3.39-3.40 (raw "b"))
 					(e-binop @3.43-4.6 (op "+")
-						(e-ident @3.43-3.44 (qaul "") (raw "x"))
-						(e-ident @3.47-3.48 (qaul "") (raw "y"))))))
+						(e-ident @3.43-3.44 (raw "x"))
+						(e-ident @3.47-3.48 (raw "y"))))))
 		(branch @4.5-5.6
 			(p-list @4.5-4.13
 				(p-ident @4.6-4.12 (raw "single")))
-			(e-ident @4.17-4.23 (qaul "") (raw "single")))
+			(e-ident @4.17-4.23 (raw "single")))
 		(branch @5.5-6.2
 			(p-list @5.5-5.7)
 			(e-int @5.11-5.12 (raw "0")))))

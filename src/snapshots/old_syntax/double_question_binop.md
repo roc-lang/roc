@@ -18,7 +18,7 @@ LowerIdent(1:1-1:10),OpenCurly(1:11-1:12),CloseCurly(1:12-1:13),OpDoubleQuestion
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.10 (qaul "") (raw "get_name!"))
+(e-ident @1.1-1.10 (raw "get_name!"))
 ~~~
 # FORMATTED
 ~~~roc

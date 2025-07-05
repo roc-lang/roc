@@ -51,12 +51,12 @@ CloseCurly(7:1-7:2),EndOfFile(7:2-7:2),
 		(exposes @1.8-1.21
 			(exposed-lower-ident (text "extract_age"))))
 	(statements
-		(s-type-anno @3.1-4.12 (name "extract_age")
+		(s-type-anno @1.1-1.1 (name "extract_age")
 			(ty-fn @3.15-3.35
 				(ty-record @3.15-3.28
 					(anno-record-field @3.17-3.28 (name "age")
-						(ty (name "U64"))))
-				(ty (name "U64"))))
+						(ty @3.23-3.26 (name "U64"))))
+				(ty @3.32-3.35 (name "U64"))))
 		(s-decl @4.1-7.2
 			(p-ident @4.1-4.12 (raw "extract_age"))
 			(e-lambda @4.15-7.2
@@ -66,10 +66,10 @@ CloseCurly(7:1-7:2),EndOfFile(7:2-7:2),
 					(statements
 						(e-block @5.5-5.12
 							(statements
-								(e-ident @5.7-5.10 (qaul "") (raw "age"))))
+								(e-ident @5.7-5.10 (raw "age"))))
 						(e-malformed @5.13-5.21 (reason "expr_unexpected_token"))
-						(e-ident @5.15-5.21 (qaul "") (raw "person"))
-						(e-ident @6.5-6.8 (qaul "") (raw "age"))))))))
+						(e-ident @5.15-5.21 (raw "person"))
+						(e-ident @6.5-6.8 (raw "age"))))))))
 ~~~
 # FORMATTED
 ~~~roc

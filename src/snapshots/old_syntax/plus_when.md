@@ -26,7 +26,7 @@ UpperIdent(4:9-4:12),OpArrow(4:13-4:15),Int(4:16-4:17),EndOfFile(4:17-4:17),
 ~~~clojure
 (e-binop @1.1-2.13 (op "+")
 	(e-int @1.1-1.2 (raw "1"))
-	(e-ident @2.5-2.9 (qaul "") (raw "when")))
+	(e-ident @2.5-2.9 (raw "when")))
 ~~~
 # FORMATTED
 ~~~roc

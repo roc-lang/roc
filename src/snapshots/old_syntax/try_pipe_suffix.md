@@ -18,7 +18,7 @@ UpperIdent(1:1-1:4),NoSpaceDotLowerIdent(1:4-1:10),StringStart(1:11-1:12),String
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.10 (qaul "Str") (raw ".toU64"))
+(e-ident @1.1-1.10 (raw "Str.toU64"))
 ~~~
 # FORMATTED
 ~~~roc

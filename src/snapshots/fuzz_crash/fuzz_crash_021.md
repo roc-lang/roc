@@ -93,8 +93,8 @@ UpperIdent(3:1-3:5),NoSpaceOpenRound(3:5-3:6),LowerIdent(3:6-3:7),Comma(3:7-3:8)
 	(statements
 		(e-malformed @1.4-1.9 (reason "expr_unexpected_token"))
 		(e-field-access @1.5-1.14
-			(e-ident @1.5-1.9 (qaul "") (raw "main"))
-			(e-ident @1.9-1.13 (qaul "") (raw ".roc")))
+			(e-ident @1.5-1.9 (raw "main"))
+			(e-ident @1.9-1.13 (raw "roc")))
 		(e-string @1.13-1.16
 			(e-string-part @1.14-1.16 (raw " }")))
 		(s-type-decl @3.1-3.15
@@ -111,7 +111,7 @@ main.roc" }"
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-type-decl @3.1-3.15
+	(s-alias-decl @3.1-3.15 (where "TODO")
 		(ty-header @3.1-3.13 (name "Fli"))
 		(ty-malformed @3.14-3.15)))
 ~~~

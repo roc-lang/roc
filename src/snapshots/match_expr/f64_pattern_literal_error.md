@@ -69,7 +69,7 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 # PARSE
 ~~~clojure
 (e-match
-	(e-ident @1.7-1.8 (qaul "") (raw "x"))
+	(e-ident @1.7-1.8 (raw "x"))
 	(branches
 		(branch @1.1-1.1
 			(p-malformed @2.5-2.15 (tag "pattern_unexpected_token"))

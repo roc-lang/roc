@@ -30,7 +30,7 @@ LowerIdent(7:1-7:2),EndOfFile(7:2-7:2),
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.2 (qaul "") (raw "f"))
+(e-ident @1.1-1.2 (raw "f"))
 ~~~
 # FORMATTED
 ~~~roc

@@ -311,20 +311,20 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 			(e-string-part @4.18-4.24 (raw "pascal")))
 		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
 		(e-binop @5.5-5.16 (op "-")
-			(e-ident @5.5-5.10 (qaul "") (raw "kebab"))
-			(e-ident @5.11-5.15 (qaul "") (raw "case")))
+			(e-ident @5.5-5.10 (raw "kebab"))
+			(e-ident @5.11-5.15 (raw "case")))
 		(e-malformed @5.15-5.18 (reason "expr_unexpected_token"))
 		(e-string @5.17-5.24
 			(e-string-part @5.18-5.23 (raw "kebab")))
 		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
-		(e-ident @6.5-6.10 (qaul "") (raw "field"))
+		(e-ident @6.5-6.10 (raw "field"))
 		(e-malformed @6.10-6.18 (reason "expr_unexpected_token"))
 		(s-type-anno @6.11-6.27 (name "special")
 			(ty-malformed @6.20-6.27 (tag "ty_anno_unexpected_token")))
 		(e-malformed @6.21-6.28 (reason "expr_unexpected_token"))
 		(e-malformed @6.27-6.29 (reason "expr_unexpected_token"))
 		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
-		(e-ident @7.5-7.10 (qaul "") (raw "field"))
+		(e-ident @7.5-7.10 (raw "field"))
 		(e-malformed @7.10-7.18 (reason "expr_unexpected_token"))
 		(e-malformed @7.17-7.20 (reason "expr_unexpected_token"))
 		(e-string @7.19-7.30
@@ -371,7 +371,7 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 	(s-type-anno @3.5-3.33 (name "field_")
 		(ty-malformed @3.13-3.33))
 	(s-expr @4.5-4.16
-		(e-tag @4.5-4.15 (name "PascalCase") (args "TODO")))
+		(e-tag @4.5-4.15 (name "PascalCase")))
 	(s-expr @4.17-4.26
 		(e-string @4.17-4.25
 			(e-literal @4.18-4.24 (string "pascal"))))
