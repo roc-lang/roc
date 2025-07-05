@@ -190,7 +190,7 @@ fn addBuiltinType(self: *Self, ir: *CIR, type_name: []const u8) void {
 
     // Create the type declaration statement
     const type_decl_stmt = CIR.Statement{
-        .s_type_decl = .{
+        .s_alias_decl = .{
             .header = header_idx,
             .anno = anno_idx,
             .where = null,
@@ -262,12 +262,22 @@ pub fn canonicalize_file(
 
                 // Create the CIR type declaration statement
                 const region = self.parse_ir.tokenizedRegionToRegion(type_decl.region);
-                const cir_type_decl = CIR.Statement{
-                    .s_type_decl = .{
-                        .header = header_idx,
-                        .anno = anno_idx,
-                        .where = null, // TODO: implement where clauses
-                        .region = region,
+                const cir_type_decl = switch (type_decl.kind) {
+                    .alias => CIR.Statement{
+                        .s_alias_decl = .{
+                            .header = header_idx,
+                            .anno = anno_idx,
+                            .where = null, // TODO: implement where clauses
+                            .region = region,
+                        },
+                    },
+                    .nominal => CIR.Statement{
+                        .s_nominal_decl = .{
+                            .header = header_idx,
+                            .anno = anno_idx,
+                            .where = null, // TODO: implement where clauses
+                            .region = region,
+                        },
                     },
                 };
 
@@ -635,6 +645,9 @@ fn canonicalizeImportStatement(
     // 3. Add to scope: alias -> module_name mapping
     self.scopeIntroduceModuleAlias(alias, module_name);
 
+    // Process type imports from this module
+    self.processTypeImports(module_name, alias);
+
     // 4. Convert exposed items and introduce them into scope
     const cir_exposes = self.convertASTExposesToCIR(import_stmt.exposes);
     self.introduceExposedItemsIntoScope(cir_exposes, module_name);
@@ -874,7 +887,7 @@ fn canonicalize_record_field(
         const ident_expr = AST.Expr{
             .ident = .{
                 .token = field.name,
-                .qualifier = null,
+                .qualifiers = .{ .span = .{ .start = 0, .len = 0 } },
                 .region = field.region,
             },
         };
@@ -992,7 +1005,9 @@ pub fn canonicalize_expr(
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
             if (self.parse_ir.tokens.resolveIdentifier(e.token)) |ident| {
                 // Check if this is a module-qualified identifier
-                if (e.qualifier) |qualifier_tok| {
+                const qualifier_tokens = self.parse_ir.store.tokenSlice(e.qualifiers);
+                if (qualifier_tokens.len > 0) {
+                    const qualifier_tok = @as(Token.Idx, @intCast(qualifier_tokens[0]));
                     if (self.parse_ir.tokens.resolveIdentifier(qualifier_tok)) |module_alias| {
                         // Check if this is a module alias
                         if (self.scopeLookupModule(module_alias)) |module_name| {
@@ -3052,8 +3067,14 @@ fn canonicalize_tag_variant(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnn
         .ty => |ty| {
             // For simple tags like `None`, just create the type annotation without scope validation
             const region = self.parse_ir.tokenizedRegionToRegion(ty.region);
+            const ident_idx = if (self.parse_ir.tokens.resolveIdentifier(ty.token)) |ident|
+                ident
+            else
+                // Create identifier from text if resolution fails
+                self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(self.parse_ir.resolve(ty.token)), region);
+
             return self.can_ir.store.addTypeAnno(.{ .ty = .{
-                .symbol = ty.ident,
+                .symbol = ident_idx,
                 .region = region,
             } });
         },
@@ -3069,7 +3090,10 @@ fn canonicalize_tag_variant(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnn
             // First argument is the tag name - don't validate it against scope
             const base_type = self.parse_ir.store.getTypeAnno(args_slice[0]);
             const type_name = switch (base_type) {
-                .ty => |ty| ty.ident,
+                .ty => |ty| if (self.parse_ir.tokens.resolveIdentifier(ty.token)) |ident|
+                    ident
+                else
+                    self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(self.parse_ir.resolve(ty.token)), region),
                 else => return self.can_ir.pushMalformed(CIR.TypeAnno.Idx, CIR.Diagnostic{ .malformed_type_annotation = .{ .region = region } }),
             };
 
@@ -3113,10 +3137,32 @@ fn canonicalize_type_anno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.
                 return self.can_ir.pushMalformed(CIR.TypeAnno.Idx, CIR.Diagnostic{ .malformed_type_annotation = .{ .region = region } });
             }
 
-            // First argument is the type constructor
-            const base_type = self.parse_ir.store.getTypeAnno(args_slice[0]);
-            const type_name = switch (base_type) {
-                .ty => |ty| ty.ident,
+            // Canonicalize the base type first
+            const canonicalized_base = self.canonicalize_type_anno(args_slice[0]);
+            const base_cir_type = self.can_ir.store.getTypeAnno(canonicalized_base);
+
+            // Extract the symbol for the type application
+            const type_symbol = switch (base_cir_type) {
+                .ty => |ty| ty.symbol,
+                .ty_lookup_external => |tle| {
+                    // For external types, get the qualified name from the external declaration
+                    const external_decl = self.can_ir.getExternalDecl(tle.external_decl);
+
+                    const scratch_top = self.can_ir.store.scratchTypeAnnoTop();
+                    defer self.can_ir.store.clearScratchTypeAnnosFrom(scratch_top);
+
+                    for (args_slice[1..]) |arg_idx| {
+                        const canonicalized = self.canonicalize_type_anno(arg_idx);
+                        self.can_ir.store.addScratchTypeAnno(canonicalized);
+                    }
+
+                    const args = self.can_ir.store.typeAnnoSpanFrom(scratch_top);
+                    return self.can_ir.store.addTypeAnno(.{ .apply = .{
+                        .symbol = external_decl.qualified_name,
+                        .args = args,
+                        .region = region,
+                    } });
+                },
                 else => return self.can_ir.pushMalformed(CIR.TypeAnno.Idx, CIR.Diagnostic{ .malformed_type_annotation = .{ .region = region } }),
             };
 
@@ -3131,7 +3177,7 @@ fn canonicalize_type_anno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.
 
             const args = self.can_ir.store.typeAnnoSpanFrom(scratch_top);
             return self.can_ir.store.addTypeAnno(.{ .apply = .{
-                .symbol = type_name,
+                .symbol = type_symbol,
                 .args = args,
                 .region = region,
             } });
@@ -3161,29 +3207,68 @@ fn canonicalize_type_anno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.
         },
         .ty => |ty| {
             const region = self.parse_ir.tokenizedRegionToRegion(ty.region);
+            // Resolve the fully qualified type name
+            const strip_tokens = [_]tokenize.Token.Tag{.NoSpaceDotUpperIdent};
+            const type_name_text = self.parse_ir.resolveQualifiedName(ty.qualifiers, ty.token, &strip_tokens);
 
-            // Check if this type is declared in scope
-            if (self.scopeLookupTypeDecl(ty.ident)) |_| {
-                // Type found in scope - good!
-                // TODO: We could store a reference to the type declaration for better error messages
+            // Check if this is a qualified type name (contains dots)
+            if (std.mem.indexOf(u8, type_name_text, ".")) |_| {
+                // This is a qualified type - create external declaration
+                // Split the qualified name to get module and type parts
+                const last_dot = std.mem.lastIndexOf(u8, type_name_text, ".") orelse unreachable;
+                const module_text = type_name_text[0..last_dot];
+                const local_type_text = type_name_text[last_dot + 1 ..];
+
+                const module_name = self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(module_text), Region.zero());
+                const local_name = self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(local_type_text), Region.zero());
+
+                // Create qualified name identifier from the full type name
+                const qualified_name_ident = self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(type_name_text), region);
+
+                // Create external declaration for the qualified type
+                const external_decl = CIR.ExternalDecl{
+                    .qualified_name = qualified_name_ident,
+                    .module_name = module_name,
+                    .local_name = local_name,
+                    .type_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), region) catch |err| exitOnOom(err),
+                    .kind = .type,
+                    .region = region,
+                };
+
+                const external_idx = self.can_ir.pushExternalDecl(external_decl);
+
+                return self.can_ir.store.addTypeAnno(.{ .ty_lookup_external = .{
+                    .external_decl = external_idx,
+                    .region = region,
+                } });
             } else {
-                // Type not found in scope - issue diagnostic
-                self.can_ir.pushDiagnostic(CIR.Diagnostic{ .undeclared_type = .{
-                    .name = ty.ident,
+                // Unqualified type - check if this type is declared in scope
+                const ident_idx = if (self.parse_ir.tokens.resolveIdentifier(ty.token)) |ident|
+                    ident
+                else
+                    // Create identifier from text if resolution fails
+                    self.can_ir.env.idents.insert(self.can_ir.env.gpa, base.Ident.for_text(type_name_text), region);
+
+                if (self.scopeLookupTypeDecl(ident_idx)) |_| {
+                    // Type found in scope
+                } else {
+                    // Type not found in scope - issue diagnostic
+                    self.can_ir.pushDiagnostic(CIR.Diagnostic{ .undeclared_type = .{
+                        .name = ident_idx,
+                        .region = region,
+                    } });
+                }
+
+                return self.can_ir.store.addTypeAnno(.{ .ty = .{
+                    .symbol = ident_idx,
                     .region = region,
                 } });
             }
-
-            return self.can_ir.store.addTypeAnno(.{ .ty = .{
-                .symbol = ty.ident,
-                .region = region,
-            } });
         },
         .mod_ty => |mod_ty| {
             const region = self.parse_ir.tokenizedRegionToRegion(mod_ty.region);
-            return self.can_ir.store.addTypeAnno(.{ .mod_ty = .{
-                .mod_symbol = mod_ty.mod_ident,
-                .ty_symbol = mod_ty.ty_ident,
+            return self.can_ir.store.addTypeAnno(.{ .ty = .{
+                .symbol = mod_ty.ty_ident,
                 .region = region,
             } });
         },
@@ -3799,7 +3884,7 @@ fn extractTypeVarsFromAnno(self: *Self, type_anno_idx: CIR.TypeAnno.Idx) void {
                 self.extractTypeVarsFromAnno(field.ty);
             }
         },
-        .ty, .underscore, .mod_ty, .tag_union, .malformed => {
+        .ty, .underscore, .mod_ty, .tag_union, .ty_lookup_external, .malformed => {
             // These don't contain type variables to extract
         },
     }
@@ -4452,9 +4537,12 @@ fn canonicalizeTypeAnnoToTypeVar(self: *Self, type_anno_idx: CIR.TypeAnno.Idx, p
             // Recursively canonicalize the inner type
             return try self.canonicalizeTypeAnnoToTypeVar(parens.anno, parent_node_idx, region);
         },
-        .mod_ty => |mod_ty| {
-            // Handle module-qualified types
-            return self.canonicalizeModuleType(mod_ty, parent_node_idx, region);
+
+        .ty_lookup_external => |tle| {
+            // For external type lookups, create a flexible type variable
+            // This will be resolved later when dependencies are available
+            const external_decl = self.can_ir.getExternalDecl(tle.external_decl);
+            return self.can_ir.pushTypeVar(.{ .flex_var = external_decl.qualified_name }, parent_node_idx, region) catch |err| exitOnOom(err);
         },
         .malformed => {
             // Return error type for malformed annotations
@@ -4534,7 +4622,11 @@ fn canonicalizeTypeApplication(self: *Self, apply: anytype, parent_node_idx: Nod
     // Look up the type name in scope
     if (self.scopeLookupTypeDecl(apply.symbol)) |type_decl_idx| {
         const type_decl = self.can_ir.store.getStatement(type_decl_idx);
-        const header = self.can_ir.store.getTypeHeader(type_decl.s_type_decl.header);
+        const header = self.can_ir.store.getTypeHeader(switch (type_decl) {
+            .s_alias_decl => |d| d.header,
+            .s_nominal_decl => |d| d.header,
+            else => @panic("scopeLookupTypeDecl only returns type declarations"),
+        });
         const expected_args = self.can_ir.store.sliceTypeAnnos(header.args).len;
         const actual_args = self.can_ir.store.sliceTypeAnnos(apply.args);
 
@@ -4680,14 +4772,6 @@ fn canonicalizeTagUnionType(self: *Self, tag_union: anytype, parent_node_idx: No
 }
 
 /// Handle module-qualified types like Json.Decoder
-fn canonicalizeModuleType(self: *Self, mod_ty: anytype, parent_node_idx: Node.Idx, region: Region) TypeVar {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    // Simplified implementation - create flex var for module types
-    return self.can_ir.pushTypeVar(.{ .flex_var = mod_ty.ty_symbol }, parent_node_idx, region) catch |err| exitOnOom(err);
-}
-
 /// Create an annotation from a type annotation
 fn createAnnotationFromTypeAnno(self: *Self, type_anno_idx: CIR.TypeAnno.Idx, _: TypeVar, region: Region, parent_node_idx: Node.Idx) std.mem.Allocator.Error!?CIR.Annotation.Idx {
     const trace = tracy.trace(@src());
@@ -4707,6 +4791,23 @@ fn createAnnotationFromTypeAnno(self: *Self, type_anno_idx: CIR.TypeAnno.Idx, _:
     const annotation_idx = self.can_ir.store.addAnnotation(annotation);
 
     return annotation_idx;
+}
+
+/// Process type imports from a module
+///
+/// NOTE: When qualified types are encountered (e.g. `SomeModule.TypeName`)
+/// we create external declarations that will be resolved later when
+/// we have access to the other module's IR after it has been type checked.
+fn processTypeImports(self: *Self, module_name: Ident.Idx, alias_name: Ident.Idx) void {
+    // Set up the module alias for qualified lookups
+    const scope = self.currentScope();
+    _ = scope.introduceModuleAlias(
+        self.can_ir.env.gpa,
+        &self.can_ir.env.idents,
+        alias_name,
+        module_name,
+        null, // No parent lookup function for now
+    );
 }
 
 /// Try to handle field access as a module-qualified lookup.

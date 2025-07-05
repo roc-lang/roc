@@ -50,14 +50,6 @@ pub const TypeAnno = union(enum) {
         symbol: Ident.Idx, // The type name
         region: Region,
     },
-    /// Module-qualified type: a type name prefixed with its module.
-    ///
-    /// Examples: `Shape.Rect`, `Json.Decoder`
-    mod_ty: struct {
-        mod_symbol: Ident.Idx, // The module name (e.g., "Json")
-        ty_symbol: Ident.Idx, // The type name (e.g., "Decoder")
-        region: Region,
-    },
     /// Tag union type: a union of tags, possibly with payloads.
     ///
     /// Examples: `[Some(a), None]`, `[Red, Green, Blue]`, `[Cons(a, (List a)), Nil]`
@@ -94,6 +86,13 @@ pub const TypeAnno = union(enum) {
     /// Examples: `(a -> b)` in `a, (a -> b) -> b`
     parens: struct {
         anno: TypeAnno.Idx, // The type inside the parentheses
+        region: Region,
+    },
+    /// External type lookup: references a type from another module via external declaration.
+    ///
+    /// Examples: `Json.Value`, `Http.Request` - types that will be resolved when dependencies are available
+    ty_lookup_external: struct {
+        external_decl: CIR.ExternalDecl.Idx,
         region: Region,
     },
     /// Malformed type annotation: represents a type that couldn't be parsed correctly.
@@ -140,13 +139,6 @@ pub const TypeAnno = union(enum) {
                 var node = SExpr.init(gpa, "ty");
                 ir.appendRegionInfoToSexprNodeFromRegion(&node, t.region);
                 node.appendStringAttr(gpa, "name", ir.getIdentText(t.symbol));
-                return node;
-            },
-            .mod_ty => |mt| {
-                var node = SExpr.init(gpa, "ty-mod");
-                ir.appendRegionInfoToSexprNodeFromRegion(&node, mt.region);
-                node.appendStringAttr(gpa, "module", ir.getIdentText(mt.mod_symbol));
-                node.appendStringAttr(gpa, "type", ir.getIdentText(mt.ty_symbol));
                 return node;
             },
             .tag_union => |tu| {
@@ -227,6 +219,16 @@ pub const TypeAnno = union(enum) {
 
                 return node;
             },
+            .ty_lookup_external => |tle| {
+                var node = SExpr.init(gpa, "ty-lookup-external");
+                node.appendRegion(gpa, ir.calcRegionInfo(tle.region));
+
+                const external_decl = ir.getExternalDecl(tle.external_decl);
+                var decl_node = external_decl.toSExpr(ir);
+                node.appendNode(gpa, &decl_node);
+
+                return node;
+            },
             .malformed => |m| {
                 var node = SExpr.init(gpa, "ty-malformed");
                 ir.appendRegionInfoToSexprNodeFromRegion(&node, m.region);
@@ -242,12 +244,12 @@ pub const TypeAnno = union(enum) {
             .ty_var => |tv| return tv.region,
             .underscore => |u| return u.region,
             .ty => |t| return t.region,
-            .mod_ty => |mt| return mt.region,
             .tuple => |t| return t.region,
             .tag_union => |tu| return tu.region,
             .record => |r| return r.region,
             .@"fn" => |f| return f.region,
             .parens => |p| return p.region,
+            .ty_lookup_external => |tle| return tle.region,
             .malformed => |m| return m.region,
         }
     }

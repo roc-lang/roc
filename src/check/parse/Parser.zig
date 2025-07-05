@@ -1136,13 +1136,21 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) ?AST.Statement.I
                 const kind: AST.TypeDeclKind = if (self.peek() == .OpColonEqual) .nominal else .alias;
                 self.advance();
                 const anno = self.parseTypeAnno(.not_looking_for_args);
+                const anno_region = self.store.nodes.items.items(.region)[@intFromEnum(anno)];
+                const where_clause = self.parseWhereConstraint();
+                // Use the type annotation's end position if there's no where clause,
+                // otherwise use the current position (after parsing where clause)
+                const end_pos = if (where_clause == null) anno_region.end else self.pos;
                 const statement_idx = self.store.addStatement(.{ .type_decl = .{
                     .header = header,
                     .anno = anno,
-                    .where = self.parseWhereConstraint(),
+                    .where = where_clause,
                     .kind = kind,
-                    .region = .{ .start = start, .end = self.pos },
+                    .region = .{ .start = start, .end = end_pos },
                 } });
+                if (self.peek() == .Newline) {
+                    self.advance();
+                }
                 return statement_idx;
             }
         },
@@ -1226,33 +1234,46 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) AST.Pattern.Idx {
                 self.advance();
             },
             .UpperIdent => {
-                if (self.peekNext() != .NoSpaceOpenRound) {
-                    pattern = self.store.addPattern(.{ .tag = .{
-                        .region = .{ .start = start, .end = self.pos },
-                        .args = .{ .span = .{
-                            .start = 0,
-                            .len = 0,
-                        } },
-                        .tag_tok = start,
-                    } });
-                    self.advance();
+                const qual_result = self.parseQualificationChain();
+                // Use final token as end position to avoid newline tokens
+                const end_pos = qual_result.final_token;
+                self.pos = qual_result.final_token + 1;
+
+                if (qual_result.is_upper) {
+                    // This is a qualified or unqualified tag
+                    if (self.peek() != .NoSpaceOpenRound) {
+                        // Tag without args
+                        pattern = self.store.addPattern(.{ .tag = .{
+                            .region = .{ .start = start, .end = end_pos },
+                            .args = .{ .span = .{
+                                .start = 0,
+                                .len = 0,
+                            } },
+                            .tag_tok = qual_result.final_token,
+                        } });
+                    } else {
+                        // Tag with args
+                        self.advance(); // Advance past NoSpaceOpenRound
+                        const scratch_top = self.store.scratchPatternTop();
+                        const args_end = self.parseCollectionSpan(AST.Pattern.Idx, .CloseRound, NodeStore.addScratchPattern, parsePatternWithAlts) catch {
+                            while (self.peek() != .CloseRound and self.peek() != .EndOfFile) {
+                                self.advance();
+                            }
+                            self.store.clearScratchPatternsFrom(scratch_top);
+                            return self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, start);
+                        };
+                        const args = self.store.patternSpanFrom(scratch_top);
+                        pattern = self.store.addPattern(.{ .tag = .{
+                            .region = .{ .start = start, .end = args_end },
+                            .args = args,
+                            .tag_tok = qual_result.final_token,
+                        } });
+                    }
                 } else {
-                    self.advance(); // Advance past Upperident
-                    self.advance(); // Advance past NoSpaceOpenRound
-                    // Parse args
-                    const scratch_top = self.store.scratchPatternTop();
-                    const args_end = self.parseCollectionSpan(AST.Pattern.Idx, .CloseRound, NodeStore.addScratchPattern, parsePatternWithAlts) catch {
-                        while (self.peek() != .CloseRound and self.peek() != .EndOfFile) {
-                            self.advance();
-                        }
-                        self.store.clearScratchPatternsFrom(scratch_top);
-                        return self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, start);
-                    };
-                    const args = self.store.patternSpanFrom(scratch_top);
-                    pattern = self.store.addPattern(.{ .tag = .{
-                        .region = .{ .start = start, .end = args_end },
-                        .args = args,
-                        .tag_tok = start,
+                    // This is a qualified lowercase ident (shouldn't happen in patterns, but handle it)
+                    pattern = self.store.addPattern(.{ .ident = .{
+                        .ident_tok = qual_result.final_token,
+                        .region = .{ .start = start, .end = end_pos },
                     } });
                 }
             },
@@ -1534,6 +1555,56 @@ pub fn parsePatternRecordField(self: *Parser, alternatives: Alternatives) AST.Pa
     });
 }
 
+const QualificationResult = struct {
+    qualifiers: Token.Span,
+    final_token: Token.Idx,
+    is_upper: bool,
+};
+
+/// Parses a qualification chain (e.g., "json.Core.Utf8" -> ["json", "Core"])
+/// Returns the qualifiers and the final token
+fn parseQualificationChain(self: *Parser) QualificationResult {
+    const scratch_top = self.store.scratchTokenTop();
+    var final_token = self.pos;
+    var is_upper = false;
+
+    // First token should be UpperIdent
+    if (self.peek() == .UpperIdent) {
+        final_token = self.pos; // Capture position of the identifier
+        is_upper = true;
+
+        // Check if there's a qualification chain by looking ahead
+        const saved_pos = self.pos;
+        self.advance();
+
+        if (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .NoSpaceDotLowerIdent) {
+            // There is a qualification chain, continue parsing
+            while (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .NoSpaceDotLowerIdent) {
+                // Add the current token as a qualifier before moving to the next
+                self.store.addScratchToken(final_token);
+
+                // Capture position of the dot-prefixed token
+                final_token = self.pos;
+                is_upper = (self.tok_buf.tokens.items(.tag)[final_token] == .NoSpaceDotUpperIdent);
+
+                // Move past this token
+                self.advance();
+            }
+        } else {
+            // No qualification chain, restore position
+            self.pos = saved_pos;
+        }
+    }
+
+    const qualifiers = self.store.tokenSpanFrom(scratch_top);
+
+    return QualificationResult{
+        .qualifiers = qualifiers,
+        .final_token = final_token,
+        .is_upper = is_upper,
+    };
+}
+
 /// todo
 pub fn parseExpr(self: *Parser) AST.Expr.Idx {
     const trace = tracy.trace(@src());
@@ -1552,34 +1623,35 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
     const token = self.peek();
     switch (token) {
         .UpperIdent => {
-            self.advance();
+            const qual_result = self.parseQualificationChain();
+            // Use final token as end position to avoid newline tokens
+            const end_pos = qual_result.final_token;
+            self.pos = qual_result.final_token + 1;
 
-            if (self.peek() == .NoSpaceDotLowerIdent) {
-                // This is a qualified lowercase ident
-                const id = self.pos;
-                self.advance();
-                const ident = self.store.addExpr(.{ .ident = .{
-                    .token = id,
-                    .qualifier = start,
-                    .region = .{ .start = start, .end = id },
-                } });
-
-                expr = ident;
-            } else {
-                // This is a Tag
+            if (qual_result.is_upper) {
+                // This is a qualified or unqualified tag
                 const tag = self.store.addExpr(.{ .tag = .{
-                    .token = start,
-                    .region = .{ .start = start, .end = start },
+                    .token = qual_result.final_token,
+                    .qualifiers = qual_result.qualifiers,
+                    .region = .{ .start = start, .end = end_pos },
                 } });
-
                 expr = tag;
+            } else {
+                // This is a qualified lowercase ident
+                const ident = self.store.addExpr(.{ .ident = .{
+                    .token = qual_result.final_token,
+                    .qualifiers = qual_result.qualifiers,
+                    .region = .{ .start = start, .end = end_pos },
+                } });
+                expr = ident;
             }
         },
         .LowerIdent => {
             self.advance();
+            const empty_qualifiers = self.store.tokenSpanFrom(self.store.scratchTokenTop());
             const ident = self.store.addExpr(.{ .ident = .{
                 .token = start,
-                .qualifier = null,
+                .qualifiers = empty_qualifiers,
                 .region = .{ .start = start, .end = start },
             } });
 
@@ -1587,9 +1659,10 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
         },
         .NamedUnderscore => {
             self.advance();
+            const empty_qualifiers = self.store.tokenSpanFrom(self.store.scratchTokenTop());
             const ident = self.store.addExpr(.{ .ident = .{
                 .token = start,
-                .qualifier = null,
+                .qualifiers = empty_qualifiers,
                 .region = .{ .start = start, .end = start },
             } });
 
@@ -1897,10 +1970,11 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
                 const s = self.pos;
                 self.advance();
                 if (self.peek() == .LowerIdent) {
+                    const empty_qualifiers = self.store.tokenSpanFrom(self.store.scratchTokenTop());
                     const ident = self.store.addExpr(.{ .ident = .{
                         .region = .{ .start = self.pos, .end = self.pos },
                         .token = self.pos,
-                        .qualifier = null,
+                        .qualifiers = empty_qualifiers,
                     } });
                     self.advance();
                     const ident_suffixed = self.parseExprSuffix(s, ident);
@@ -1911,9 +1985,11 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
                         .right = ident_suffixed,
                     } });
                 } else if (self.peek() == .UpperIdent) { // UpperIdent - should be a tag
+                    const empty_qualifiers = self.store.tokenSpanFrom(self.store.scratchTokenTop());
                     const tag = self.store.addExpr(.{ .tag = .{
                         .region = .{ .start = self.pos, .end = self.pos },
                         .token = self.pos,
+                        .qualifiers = empty_qualifiers,
                     } });
                     self.advance();
                     const ident_suffixed = self.parseExprSuffix(s, tag);
@@ -1928,10 +2004,11 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
                 }
             } else { // NoSpaceDotLowerIdent
                 const s = self.pos;
+                const empty_qualifiers = self.store.tokenSpanFrom(self.store.scratchTokenTop());
                 const ident = self.store.addExpr(.{ .ident = .{
                     .region = .{ .start = self.pos, .end = self.pos },
                     .token = self.pos,
-                    .qualifier = null,
+                    .qualifiers = empty_qualifiers,
                 } });
                 self.advance();
                 const ident_suffixed = self.parseExprSuffix(s, ident);
@@ -2177,21 +2254,16 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) AST.TypeAnno.Idx
 
     switch (self.peek()) {
         .UpperIdent => {
-            self.advance(); // Advance past UpperIdent
-            if (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .DotUpperIdent) {
-                const second_ident = self.pos;
-                self.advance(); // Advance past NoSpaceDotUpperIdent
-                anno = self.store.addTypeAnno(.{ .mod_ty = .{
-                    .region = .{ .start = start, .end = second_ident },
-                    .ty_ident = self.tok_buf.resolveIdentifier(start).?,
-                    .mod_ident = self.tok_buf.resolveIdentifier(second_ident).?,
-                } });
-            } else {
-                anno = self.store.addTypeAnno(.{ .ty = .{
-                    .region = .{ .start = start, .end = start },
-                    .ident = self.tok_buf.resolveIdentifier(start).?,
-                } });
-            }
+            const qual_result = self.parseQualificationChain();
+            // Use final token as end position to avoid newline tokens
+            const end_pos = qual_result.final_token;
+            self.pos = qual_result.final_token + 1;
+
+            anno = self.store.addTypeAnno(.{ .ty = .{
+                .region = .{ .start = start, .end = end_pos },
+                .token = qual_result.final_token,
+                .qualifiers = qual_result.qualifiers,
+            } });
 
             if (self.peek() == .NoSpaceOpenRound) {
                 self.advance(); // Advance past NoSpaceOpenRound

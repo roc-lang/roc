@@ -98,11 +98,20 @@ test "NodeStore round trip - Statements" {
     });
 
     try statements.append(CIR.Statement{
-        .s_type_decl = .{
+        .s_alias_decl = .{
             .anno = @enumFromInt(8676),
             .header = @enumFromInt(723),
             .where = CIR.WhereClause.Span{ .span = base.DataSpan.init(234, 45645) },
             .region = from_raw_offsets(1232, 3453),
+        },
+    });
+
+    try statements.append(CIR.Statement{
+        .s_nominal_decl = .{
+            .anno = @enumFromInt(9876),
+            .header = @enumFromInt(824),
+            .where = CIR.WhereClause.Span{ .span = base.DataSpan.init(345, 56789) },
+            .region = from_raw_offsets(2345, 4567),
         },
     });
 
@@ -601,9 +610,8 @@ test "NodeStore round trip - TypeAnno" {
     });
 
     try type_annos.append(CIR.TypeAnno{
-        .mod_ty = .{
-            .mod_symbol = @bitCast(@as(u32, 456)),
-            .ty_symbol = @bitCast(@as(u32, 567)),
+        .ty = .{
+            .symbol = @bitCast(@as(u32, 567)),
             .region = from_raw_offsets(90, 100),
         },
     });
@@ -643,6 +651,20 @@ test "NodeStore round trip - TypeAnno" {
         .parens = .{
             .anno = @enumFromInt(2012),
             .region = from_raw_offsets(190, 200),
+        },
+    });
+
+    try type_annos.append(CIR.TypeAnno{
+        .ty = .{
+            .symbol = @bitCast(@as(u32, 2034)),
+            .region = from_raw_offsets(190, 200),
+        },
+    });
+
+    try type_annos.append(CIR.TypeAnno{
+        .ty_lookup_external = .{
+            .external_decl = @enumFromInt(3001),
+            .region = from_raw_offsets(200, 210),
         },
     });
 

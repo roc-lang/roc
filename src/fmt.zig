@@ -735,7 +735,10 @@ const Formatter = struct {
                 try fmt.pushTokenText(s.token);
             },
             .ident => |i| {
-                try fmt.formatIdent(i.token, i.qualifier);
+                // Extract first qualifier from span if any
+                const qualifier_tokens = fmt.ast.store.tokenSlice(i.qualifiers);
+                const qualifier = if (qualifier_tokens.len > 0) qualifier_tokens[0] else null;
+                try fmt.formatIdent(i.token, qualifier);
             },
             .field_access => |fa| {
                 _ = try fmt.formatExpr(fa.left);
@@ -1654,7 +1657,21 @@ const Formatter = struct {
                 try fmt.pushTokenText(v.tok);
             },
             .ty => |t| {
-                try fmt.pushTokenText(t.region.start);
+                // Resolve the fully qualified type name
+                const strip_tokens = [_]tokenize.Token.Tag{.NoSpaceDotUpperIdent};
+                const final_text = fmt.ast.resolveQualifiedName(t.qualifiers, t.token, &strip_tokens);
+                const qualifier_tokens = fmt.ast.store.tokenSlice(t.qualifiers);
+
+                if (qualifier_tokens.len > 0) {
+                    for (qualifier_tokens) |tok_idx| {
+                        const tok = @as(Token.Idx, @intCast(tok_idx));
+                        try fmt.pushAll(fmt.ast.resolve(tok));
+                        try fmt.pushAll(".");
+                    }
+                    try fmt.pushAll(final_text);
+                } else {
+                    try fmt.pushAll(final_text);
+                }
             },
             .mod_ty => |t| {
                 try fmt.pushTokenText(t.region.start);
