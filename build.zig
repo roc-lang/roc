@@ -92,7 +92,12 @@ pub fn build(b: *std.Build) void {
     });
     builtins_tests.root_module.stack_check = false;
 
-    if (!no_bin) {
+    b.default_step.dependOn(&all_tests.step);
+    b.default_step.dependOn(&builtins_tests.step);
+    if (no_bin) {
+        test_step.dependOn(&all_tests.step);
+        test_step.dependOn(&builtins_tests.step);
+    } else {
         const run_tests = b.addRunArtifact(all_tests);
         test_step.dependOn(&run_tests.step);
 
