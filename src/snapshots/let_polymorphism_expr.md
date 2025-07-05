@@ -39,12 +39,12 @@ CloseCurly(3:1-3:2),EndOfFile(3:2-3:2),
 						(e-string @2.50-2.53
 							(e-string-part @2.51-2.52 (raw "c")))))
 				(field (field "empty") (optional false)
-					(e-ident @2.63-2.68 (qaul "") (raw "empty")))))))
+					(e-ident @2.63-2.68 (raw "empty")))))))
 ~~~
 # FORMATTED
 ~~~roc
 match [] {
-	empty => { ints: [1, 2, 3], strs: ["a", "b", "c"], empty: empty }
+	empty => {ints: [1, 2, 3], strs: ["a", "b", "c"], empty: empty}
 }
 ~~~
 # CANONICALIZE

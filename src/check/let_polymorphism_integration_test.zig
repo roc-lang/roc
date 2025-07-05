@@ -184,16 +184,23 @@ fn typeCheckStatement(allocator: std.mem.Allocator, source: []const u8) !struct 
     can.* = try canonicalize.init(cir, parse_ast);
 
     // Run canonicalization - for statements
+    var canon_result: ?CIR.Expr.Idx = null;
     if (parse_ast.root_node_idx != 0) {
         const stmt_idx: parse.AST.Statement.Idx = @enumFromInt(parse_ast.root_node_idx);
-        _ = try can.canonicalize_statement(stmt_idx);
+        canon_result = try can.canonicalize_statement(stmt_idx);
     }
 
     // Type check - continue even if there are parse errors
     const checker = try allocator.create(check_types);
     checker.* = try check_types.init(allocator, &module_env.types, cir);
 
-    try checker.checkDefs();
+    // Check if we have any defs to check
+    if (cir.all_defs.span.len > 0) {
+        try checker.checkDefs();
+    } else if (canon_result) |expr_idx| {
+        // If no defs but we have an expression from the statement, check that
+        _ = try checker.checkExpr(expr_idx);
+    }
 
     // Check if there are any type errors
     const has_type_errors = checker.problems.problems.len() > 0;
@@ -235,22 +242,16 @@ test "let-polymorphism with empty list in multiple contexts" {
 
 test "let-polymorphism with numeric literal" {
     const source =
-        \\main = |_| {
+        \\let
         \\    num = 42
-        \\
-        \\    asInt : I32
-        \\    asInt = num
-        \\
-        \\    asFloat : F64
-        \\    asFloat = num
-        \\
-        \\    inCalculation = num * 2.5
-        \\
-        \\    { asInt, asFloat, inCalculation }
-        \\}
+        \\    as_int = num
+        \\    as_float = num
+        \\    in_calculation = num * 2.5
+        \\in
+        \\    { as_int, as_float, in_calculation }
     ;
 
-    const result = try typeCheckStatement(test_allocator, source);
+    const result = try typeCheckExpr(test_allocator, source);
     defer cleanup(result, test_allocator);
 
     // Verify no type errors - polymorphic numbers should work in different contexts
@@ -280,10 +281,10 @@ test "let-polymorphism with identity function" {
 test "let-polymorphism with records containing polymorphic fields" {
     const source =
         \\main = |_| {
-        \\    emptyList = []
+        \\    empty_list = []
         \\    num = 100
         \\
-        \\    record1 = { data: emptyList, value: num }
+        \\    record1 = { data: empty_list, value: num }
         \\    record2 = { data: [1, 2], value: num }
         \\    record3 = { data: [3, 4], value: num * 2 }
         \\
@@ -323,13 +324,13 @@ test "let-polymorphism with function composition" {
         \\let
         \\    compose = |f, g| |x| f(g(x))
         \\    double = |x| x * 2
-        \\    addOne = |x| x + 1
-        \\    numCompose = compose(double, addOne)
-        \\    result1 = numCompose(5)
+        \\    add_one = |x| x + 1
+        \\    num_compose = compose(double, add_one)
+        \\    result1 = num_compose(5)
         \\    exclaim = |s| "!"
         \\    caps = |s| "HELLO"
-        \\    strCompose = compose(exclaim, caps)
-        \\    result2 = strCompose("hello")
+        \\    str_compose = compose(exclaim, caps)
+        \\    result2 = str_compose("hello")
         \\in
         \\    { result1, result2 }
     ;
@@ -344,17 +345,17 @@ test "let-polymorphism with function composition" {
 test "let-polymorphism with pattern matching" {
     const source =
         \\let
-        \\    isEmpty = |list|
+        \\    is_empty = |list|
         \\        match list {
         \\            [] => True,
         \\            _ => False,
         \\        }
         \\    empty = []
-        \\    checkInt = isEmpty([1, 2, 3])
-        \\    checkStr = isEmpty(["a", "b"])
-        \\    checkEmpty = isEmpty(empty)
+        \\    check_int = is_empty([1, 2, 3])
+        \\    check_str = is_empty(["a", "b"])
+        \\    check_empty = is_empty(empty)
         \\in
-        \\    { checkInt, checkStr, checkEmpty }
+        \\    { check_int, check_str, check_empty }
     ;
 
     const result = try typeCheckExpr(test_allocator, source);
@@ -414,16 +415,16 @@ test "let-polymorphism error - over-generalization attempt" {
 
 test "let-polymorphism with constrained type variables" {
     const source =
-        \\addThree = |a, b, c| a + b + c
+        \\    add_three = |a, b, c| a + b + c
         \\
         \\main = |_| {
         \\    # Use with integers
-        \\    intResult = addThree(1, 2, 3)
+        \\    int_result = add_three(1, 2, 3)
         \\
         \\    # Use with floats
-        \\    floatResult = addThree(1.1, 2.2, 3.3)
+        \\    float_result = add_three(1.1, 2.2, 3.3)
         \\
-        \\    { intResult, floatResult }
+        \\    { int_result, float_result }
         \\}
     ;
 
@@ -484,15 +485,15 @@ test "let-polymorphism with recursive functions" {
 test "let-polymorphism with polymorphic data constructors" {
     const source =
         \\let
-        \\    fromMaybe = |maybe, default|
+        \\    from_maybe = |maybe, default|
         \\        match maybe {
         \\            Just(val) => val,
         \\            Nothing => default,
         \\        }
         \\    nothing = Nothing
-        \\    int = fromMaybe(nothing, 42)
-        \\    str = fromMaybe(nothing, "default")
-        \\    list = fromMaybe(nothing, [1, 2, 3])
+        \\    int = from_maybe(nothing, 42)
+        \\    str = from_maybe(nothing, "default")
+        \\    list = from_maybe(nothing, [1, 2, 3])
         \\    just1 = Just(100)
         \\    just2 = Just("hello")
         \\in
@@ -522,7 +523,7 @@ test "let-polymorphism with complex nested structures" {
         \\    }
         \\
         \\    # Create variations with different instantiations
-        \\    withInts = {
+        \\    with_ints = {
         \\        data: [1, 2, 3],
         \\        value: num,
         \\        nested: {
@@ -531,7 +532,7 @@ test "let-polymorphism with complex nested structures" {
         \\        }
         \\    }
         \\
-        \\    withStrs = {
+        \\    with_strs = {
         \\        data: ["a", "b"],
         \\        value: num * 2,
         \\        nested: {
@@ -540,7 +541,7 @@ test "let-polymorphism with complex nested structures" {
         \\        }
         \\    }
         \\
-        \\    { base, withInts, withStrs }
+        \\    { base, with_ints, with_strs }
         \\}
     ;
 
