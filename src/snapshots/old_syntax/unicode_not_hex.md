@@ -7,7 +7,6 @@ type=expr
 ~~~roc
 "abc\u(zzzz)def"
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -16,8 +15,7 @@ This Unicode escape sequence is not valid.
 
 # TOKENS
 ~~~zig
-StringStart(1:1-1:2),StringPart(1:2-1:16),StringEnd(1:16-1:17),Newline(1:1-1:1),
-MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
+StringStart(1:1-1:2),StringPart(1:2-1:16),StringEnd(1:16-1:17),EndOfFile(1:17-1:17),
 ~~~
 # PARSE
 ~~~clojure
@@ -26,7 +24,7 @@ MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownTo
 ~~~
 # FORMATTED
 ~~~roc
-"abc\u(zzzz)def"
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

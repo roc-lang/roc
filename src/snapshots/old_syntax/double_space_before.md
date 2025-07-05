@@ -10,7 +10,6 @@ type=expr
 M))w
 ah
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -20,8 +19,7 @@ NIL
 Int(1:1-1:2),OpColon(1:2-1:3),NoSpaceOpenRound(1:3-1:4),Newline(1:1-1:1),
 OpenRound(2:1-2:2),Newline(1:1-1:1),
 UpperIdent(3:1-3:2),CloseRound(3:2-3:3),CloseRound(3:3-3:4),LowerIdent(3:4-3:5),Newline(1:1-1:1),
-LowerIdent(4:1-4:3),Newline(1:1-1:1),
-MalformedUnknownToken(5:1-5:2),MalformedUnknownToken(5:2-5:3),MalformedUnknownToken(5:3-5:4),EndOfFile(5:4-5:4),
+LowerIdent(4:1-4:3),EndOfFile(4:3-4:3),
 ~~~
 # PARSE
 ~~~clojure

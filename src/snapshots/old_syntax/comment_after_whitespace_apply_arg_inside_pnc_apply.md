@@ -15,7 +15,6 @@ PP(mport#<|"P
 )
 )
 ~~~
-~~~
 # EXPECTED
 PARSE ERROR - comment_after_whitespace_apply_arg_inside_pnc_apply.md:1:1:1:4
 # PROBLEMS
@@ -41,8 +40,7 @@ CloseRound(5:1-5:2),Newline(1:1-1:1),
 UpperIdent(6:1-6:3),NoSpaceOpenRound(6:3-6:4),LowerIdent(6:4-6:9),Newline(6:10-6:14),
 CloseRound(7:1-7:2),Newline(1:1-1:1),
 CloseRound(8:1-8:2),Newline(1:1-1:1),
-CloseRound(9:1-9:2),Newline(1:1-1:1),
-MalformedUnknownToken(10:1-10:2),MalformedUnknownToken(10:2-10:3),MalformedUnknownToken(10:3-10:4),EndOfFile(10:4-10:4),
+CloseRound(9:1-9:2),EndOfFile(9:2-9:2),
 ~~~
 # PARSE
 ~~~clojure

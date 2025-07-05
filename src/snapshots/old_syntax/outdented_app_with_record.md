@@ -10,7 +10,6 @@ x = foo (baz {
 })
 x
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -23,8 +22,7 @@ Is there an `import` or `exposing` missing up-top?
 LowerIdent(1:1-1:2),OpAssign(1:3-1:4),LowerIdent(1:5-1:8),OpenRound(1:9-1:10),LowerIdent(1:10-1:13),OpenCurly(1:14-1:15),Newline(1:1-1:1),
 LowerIdent(2:3-2:6),OpColon(2:6-2:7),LowerIdent(2:8-2:12),Newline(1:1-1:1),
 CloseCurly(3:1-3:2),CloseRound(3:2-3:3),Newline(1:1-1:1),
-LowerIdent(4:1-4:2),Newline(1:1-1:1),
-MalformedUnknownToken(5:1-5:2),MalformedUnknownToken(5:2-5:3),MalformedUnknownToken(5:3-5:4),EndOfFile(5:4-5:4),
+LowerIdent(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~
 # PARSE
 ~~~clojure

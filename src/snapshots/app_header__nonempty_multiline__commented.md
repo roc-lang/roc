@@ -14,7 +14,6 @@ app # Comment after keyword
 		other: "../../other/main.roc", # Comment after last package
 	}
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -28,8 +27,7 @@ CloseSquare(4:2-4:3),Newline(1:1-1:1),
 OpenCurly(5:2-5:3),Newline(5:5-5:33),
 LowerIdent(6:3-6:5),OpColon(6:5-6:6),KwPlatform(6:7-6:15),StringStart(6:16-6:17),StringPart(6:17-6:28),StringEnd(6:28-6:29),Comma(6:29-6:30),Newline(6:32-6:55),
 LowerIdent(7:3-7:8),OpColon(7:8-7:9),StringStart(7:10-7:11),StringPart(7:11-7:31),StringEnd(7:31-7:32),Comma(7:32-7:33),Newline(7:35-7:62),
-CloseCurly(8:2-8:3),Newline(1:1-1:1),
-MalformedUnknownToken(9:1-9:2),MalformedUnknownToken(9:2-9:3),MalformedUnknownToken(9:3-9:4),EndOfFile(9:4-9:4),
+CloseCurly(8:2-8:3),EndOfFile(8:3-8:3),
 ~~~
 # PARSE
 ~~~clojure
@@ -49,14 +47,7 @@ MalformedUnknownToken(9:1-9:2),MalformedUnknownToken(9:2-9:3),MalformedUnknownTo
 ~~~
 # FORMATTED
 ~~~roc
-app # Comment after keyword
-	[ # Comment after provides open
-		main!, # Comment after exposed item
-	]
-	{ # Comment after packages open
-		pf: platform "../main.roc", # Comment after platform
-		other: "../../other/main.roc", # Comment after last package
-	}
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

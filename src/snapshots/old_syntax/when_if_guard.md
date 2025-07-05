@@ -15,7 +15,6 @@ when x is
     Ok ->
         3
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -33,8 +32,7 @@ Underscore(5:5-5:6),OpArrow(5:7-5:9),Newline(1:1-1:1),
 Int(6:9-6:10),Newline(1:1-1:1),
 Newline(1:1-1:1),
 UpperIdent(8:5-8:7),OpArrow(8:8-8:10),Newline(1:1-1:1),
-Int(9:9-9:10),Newline(1:1-1:1),
-MalformedUnknownToken(10:1-10:2),MalformedUnknownToken(10:2-10:3),MalformedUnknownToken(10:3-10:4),EndOfFile(10:4-10:4),
+Int(9:9-9:10),EndOfFile(9:10-9:10),
 ~~~
 # PARSE
 ~~~clojure

@@ -7,7 +7,6 @@ type=expr
 ~~~roc
 {l?""""""}""
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - multiline_str_opt_field.md:1:4:1:7
 UNEXPECTED TOKEN IN EXPRESSION - multiline_str_opt_field.md:1:7:1:10
@@ -55,8 +54,7 @@ Let us know if you want to help!
 
 # TOKENS
 ~~~zig
-OpenCurly(1:1-1:2),LowerIdent(1:2-1:3),NoSpaceOpQuestion(1:3-1:4),MultilineStringStart(1:4-1:7),StringPart(1:7-1:7),MultilineStringEnd(1:7-1:10),CloseCurly(1:10-1:11),StringStart(1:11-1:12),StringPart(1:12-1:12),StringEnd(1:12-1:13),Newline(1:1-1:1),
-MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
+OpenCurly(1:1-1:2),LowerIdent(1:2-1:3),NoSpaceOpQuestion(1:3-1:4),MultilineStringStart(1:4-1:7),StringPart(1:7-1:7),MultilineStringEnd(1:7-1:10),CloseCurly(1:10-1:11),StringStart(1:11-1:12),StringPart(1:12-1:12),StringEnd(1:12-1:13),EndOfFile(1:13-1:13),
 ~~~
 # PARSE
 ~~~clojure

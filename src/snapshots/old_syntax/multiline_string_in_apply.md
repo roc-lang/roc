@@ -7,7 +7,6 @@ type=expr
 ~~~roc
 e""""\""""
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -17,8 +16,7 @@ Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:2),MultilineStringStart(1:2-1:5),StringPart(1:5-1:8),MultilineStringEnd(1:8-1:11),Newline(1:1-1:1),
-MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
+LowerIdent(1:1-1:2),MultilineStringStart(1:2-1:5),StringPart(1:5-1:8),MultilineStringEnd(1:8-1:11),EndOfFile(1:11-1:11),
 ~~~
 # PARSE
 ~~~clojure

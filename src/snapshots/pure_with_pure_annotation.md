@@ -17,60 +17,10 @@ double = |x| add(x, x)
 
 main! = add(1, 2)
 ~~~
-~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - pure_with_pure_annotation.md:12:1:12:3
-UNEXPECTED TOKEN IN EXPRESSION - pure_with_pure_annotation.md:12:2:12:4
-UNEXPECTED TOKEN IN EXPRESSION - pure_with_pure_annotation.md:12:3:12:4
+NIL
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**pure_with_pure_annotation.md:12:1:12:3:**
-```roc
-~~~
-```
-^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**pure_with_pure_annotation.md:12:2:12:4:**
-```roc
-~~~
-```
- ^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**pure_with_pure_annotation.md:12:3:12:4:**
-```roc
-~~~
-```
-  ^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
+NIL
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),Newline(1:1-1:1),
@@ -83,12 +33,11 @@ Newline(7:2-7:51),
 LowerIdent(8:1-8:7),OpColon(8:8-8:9),UpperIdent(8:10-8:13),OpArrow(8:14-8:16),UpperIdent(8:17-8:20),Newline(1:1-1:1),
 LowerIdent(9:1-9:7),OpAssign(9:8-9:9),OpBar(9:10-9:11),LowerIdent(9:11-9:12),OpBar(9:12-9:13),LowerIdent(9:14-9:17),NoSpaceOpenRound(9:17-9:18),LowerIdent(9:18-9:19),Comma(9:19-9:20),LowerIdent(9:21-9:22),CloseRound(9:22-9:23),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(11:1-11:6),OpAssign(11:7-11:8),LowerIdent(11:9-11:12),NoSpaceOpenRound(11:12-11:13),Int(11:13-11:14),Comma(11:14-11:15),Int(11:16-11:17),CloseRound(11:17-11:18),Newline(1:1-1:1),
-MalformedUnknownToken(12:1-12:2),MalformedUnknownToken(12:2-12:3),MalformedUnknownToken(12:3-12:4),EndOfFile(12:4-12:4),
+LowerIdent(11:1-11:6),OpAssign(11:7-11:8),LowerIdent(11:9-11:12),NoSpaceOpenRound(11:12-11:13),Int(11:13-11:14),Comma(11:14-11:15),Int(11:16-11:17),CloseRound(11:17-11:18),EndOfFile(11:18-11:18),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-12.4
+(file @1.1-11.18
 	(app @1.1-1.57
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
@@ -136,10 +85,7 @@ MalformedUnknownToken(12:1-12:2),MalformedUnknownToken(12:2-12:3),MalformedUnkno
 			(e-apply @11.9-11.18
 				(e-ident @11.9-11.12 (raw "add"))
 				(e-int @11.13-11.14 (raw "1"))
-				(e-int @11.16-11.17 (raw "2"))))
-		(e-malformed @12.1-12.3 (reason "expr_unexpected_token"))
-		(e-malformed @12.2-12.4 (reason "expr_unexpected_token"))
-		(e-malformed @12.3-12.4 (reason "expr_unexpected_token"))))
+				(e-int @11.16-11.17 (raw "2"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -154,7 +100,6 @@ double : I32 -> I32
 double = |x| add(x, x)
 
 main! = add(1, 2)
-
 ~~~
 # CANONICALIZE
 ~~~clojure

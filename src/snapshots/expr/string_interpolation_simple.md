@@ -7,7 +7,6 @@ type=expr
 ~~~roc
 "Hello ${name}!"
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -17,8 +16,7 @@ Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
-StringStart(1:1-1:2),StringPart(1:2-1:8),OpenStringInterpolation(1:8-1:10),LowerIdent(1:10-1:14),CloseStringInterpolation(1:14-1:15),StringPart(1:15-1:16),StringEnd(1:16-1:17),Newline(1:1-1:1),
-MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
+StringStart(1:1-1:2),StringPart(1:2-1:8),OpenStringInterpolation(1:8-1:10),LowerIdent(1:10-1:14),CloseStringInterpolation(1:14-1:15),StringPart(1:15-1:16),StringEnd(1:16-1:17),EndOfFile(1:17-1:17),
 ~~~
 # PARSE
 ~~~clojure
@@ -29,7 +27,7 @@ MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownTo
 ~~~
 # FORMATTED
 ~~~roc
-"Hello ${name}!"
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

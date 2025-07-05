@@ -9,7 +9,6 @@ type=expr
  ->B
  >s
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - double_closure_newlines_binop.md:1:1:1:3
 # PROBLEMS
@@ -29,8 +28,7 @@ Here is the problematic code:
 ~~~zig
 OpBackslash(1:1-1:2),LowerIdent(1:2-1:3),OpArrow(1:3-1:5),LowerIdent(1:5-1:6),OpBackslash(1:6-1:7),UpperIdent(1:7-1:8),Newline(1:1-1:1),
 OpArrow(2:2-2:4),UpperIdent(2:4-2:5),Newline(1:1-1:1),
-OpGreaterThan(3:2-3:3),LowerIdent(3:3-3:4),Newline(1:1-1:1),
-MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
+OpGreaterThan(3:2-3:3),LowerIdent(3:3-3:4),EndOfFile(3:4-3:4),
 ~~~
 # PARSE
 ~~~clojure

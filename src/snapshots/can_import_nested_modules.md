@@ -32,7 +32,6 @@ formatOutput = |text| padLeft(text, Config.defaultPadding)
 validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
 validateAuth = |creds| HttpAuth.validate(creds)
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:3:19:3:19
 UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:4:19:4:27
@@ -41,9 +40,6 @@ PARSE ERROR - can_import_nested_modules.md:4:28:4:28
 UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:5:13:5:27
 UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:5:20:5:36
 UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:5:28:5:38
-UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:27:1:27:3
-UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:27:2:27:4
-UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:27:3:27:4
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token  is not expected in an expression.
@@ -141,42 +137,6 @@ import utils.String.Format exposing [padLeft]
                            ^^^^^^^^^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**can_import_nested_modules.md:27:1:27:3:**
-```roc
-~~~
-```
-^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**can_import_nested_modules.md:27:2:27:4:**
-```roc
-~~~
-```
- ^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**can_import_nested_modules.md:27:3:27:4:**
-```roc
-~~~
-```
-  ^
-
-
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
@@ -233,18 +193,6 @@ Is there an `import` or `exposing` missing up-top?
 Nothing is named `validate` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),
@@ -272,12 +220,11 @@ LowerIdent(22:1-22:13),OpAssign(22:14-22:15),OpBar(22:16-22:17),LowerIdent(22:17
 Newline(1:1-1:1),
 Newline(24:2-24:44),
 LowerIdent(25:1-25:13),OpColon(25:14-25:15),UpperIdent(25:16-25:24),NoSpaceDotUpperIdent(25:24-25:36),OpArrow(25:37-25:39),UpperIdent(25:40-25:46),NoSpaceOpenRound(25:46-25:47),UpperIdent(25:47-25:55),NoSpaceDotUpperIdent(25:55-25:61),Comma(25:61-25:62),UpperIdent(25:63-25:71),NoSpaceDotUpperIdent(25:71-25:77),CloseRound(25:77-25:78),Newline(1:1-1:1),
-LowerIdent(26:1-26:13),OpAssign(26:14-26:15),OpBar(26:16-26:17),LowerIdent(26:17-26:22),OpBar(26:22-26:23),UpperIdent(26:24-26:32),NoSpaceDotLowerIdent(26:32-26:41),NoSpaceOpenRound(26:41-26:42),LowerIdent(26:42-26:47),CloseRound(26:47-26:48),Newline(1:1-1:1),
-MalformedUnknownToken(27:1-27:2),MalformedUnknownToken(27:2-27:3),MalformedUnknownToken(27:3-27:4),EndOfFile(27:4-27:4),
+LowerIdent(26:1-26:13),OpAssign(26:14-26:15),OpBar(26:16-26:17),LowerIdent(26:17-26:22),OpBar(26:22-26:23),UpperIdent(26:24-26:32),NoSpaceDotLowerIdent(26:32-26:41),NoSpaceOpenRound(26:41-26:42),LowerIdent(26:42-26:47),CloseRound(26:47-26:48),EndOfFile(26:48-26:48),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-27.4
+(file @1.1-26.48
 	(module @1.1-1.10
 		(exposes @1.8-1.10))
 	(statements
@@ -365,10 +312,7 @@ MalformedUnknownToken(27:1-27:2),MalformedUnknownToken(27:2-27:3),MalformedUnkno
 					(p-ident @26.17-26.22 (raw "creds")))
 				(e-apply @26.24-26.48
 					(e-ident @26.24-26.41 (raw "HttpAuth.validate"))
-					(e-ident @26.42-26.47 (raw "creds")))))
-		(e-malformed @27.1-27.3 (reason "expr_unexpected_token"))
-		(e-malformed @27.2-27.4 (reason "expr_unexpected_token"))
-		(e-malformed @27.3-27.4 (reason "expr_unexpected_token"))))
+					(e-ident @26.42-26.47 (raw "creds")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -397,7 +341,6 @@ formatOutput = |text| padLeft(text, Config.defaultPadding)
 # Test qualified type in function signature
 validateAuth : HttpAuth.Credentials -> Result(HttpAuth.Token, HttpAuth.Error)
 validateAuth = |creds| HttpAuth.validate(creds)
-
 ~~~
 # CANONICALIZE
 ~~~clojure

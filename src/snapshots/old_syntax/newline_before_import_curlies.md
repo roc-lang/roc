@@ -9,7 +9,6 @@ import P
  {}
 y
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - newline_before_import_curlies.md:1:1:1:9
 # PROBLEMS
@@ -29,8 +28,7 @@ import P
 ~~~zig
 KwImport(1:1-1:7),UpperIdent(1:8-1:9),Newline(1:1-1:1),
 OpenCurly(2:2-2:3),CloseCurly(2:3-2:4),Newline(1:1-1:1),
-LowerIdent(3:1-3:2),Newline(1:1-1:1),
-MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
+LowerIdent(3:1-3:2),EndOfFile(3:2-3:2),
 ~~~
 # PARSE
 ~~~clojure

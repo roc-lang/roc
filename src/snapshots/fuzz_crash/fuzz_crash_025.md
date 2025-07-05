@@ -33,16 +33,12 @@ i = -92233725808
 j : I128
 j = -17011687303715884105728
 ~~~
-~~~
 # EXPECTED
 PARSE ERROR - fuzz_crash_025.md:10:15:10:15
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_025.md:11:3:11:25
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_025.md:14:48:14:52
 PARSE ERROR - fuzz_crash_025.md:14:50:14:50
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_025.md:15:3:15:5
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_025.md:28:1:28:3
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_025.md:28:2:28:4
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_025.md:28:3:28:4
 INVALID STATEMENT - fuzz_crash_025.md:14:1:14:2
 # PROBLEMS
 **PARSE ERROR**
@@ -129,54 +125,6 @@ f =8
   ^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**fuzz_crash_025.md:28:1:28:3:**
-```roc
-~~~
-```
-^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**fuzz_crash_025.md:28:2:28:4:**
-```roc
-~~~
-```
- ^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**fuzz_crash_025.md:28:3:28:4:**
-```roc
-~~~
-```
-  ^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
@@ -239,12 +187,11 @@ LowerIdent(23:1-23:2),OpColon(23:3-23:4),UpperIdent(23:5-23:8),Newline(1:1-1:1),
 LowerIdent(24:1-24:2),OpAssign(24:3-24:4),Int(24:5-24:17),Newline(1:1-1:1),
 Newline(1:1-1:1),
 LowerIdent(26:1-26:2),OpColon(26:3-26:4),UpperIdent(26:5-26:9),Newline(1:1-1:1),
-LowerIdent(27:1-27:2),OpAssign(27:3-27:4),Int(27:5-27:29),Newline(1:1-1:1),
-MalformedUnknownToken(28:1-28:2),MalformedUnknownToken(28:2-28:3),MalformedUnknownToken(28:3-28:4),EndOfFile(28:4-28:4),
+LowerIdent(27:1-27:2),OpAssign(27:3-27:4),Int(27:5-27:29),EndOfFile(27:29-27:29),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-28.4
+(file @1.1-27.29
 	(module @1.1-1.10
 		(exposes @1.8-1.10))
 	(statements
@@ -294,10 +241,7 @@ MalformedUnknownToken(28:1-28:2),MalformedUnknownToken(28:2-28:3),MalformedUnkno
 			(ty @26.5-26.9 (name "I128")))
 		(s-decl @27.1-27.29
 			(p-ident @27.1-27.2 (raw "j"))
-			(e-int @27.5-27.29 (raw "-17011687303715884105728")))
-		(e-malformed @28.1-28.3 (reason "expr_unexpected_token"))
-		(e-malformed @28.2-28.4 (reason "expr_unexpected_token"))
-		(e-malformed @28.3-28.4 (reason "expr_unexpected_token"))))
+			(e-int @27.5-27.29 (raw "-17011687303715884105728")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -326,7 +270,6 @@ i = -92233725808
 
 j : I128
 j = -17011687303715884105728
-
 ~~~
 # CANONICALIZE
 ~~~clojure

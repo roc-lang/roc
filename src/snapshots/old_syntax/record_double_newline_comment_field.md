@@ -10,7 +10,6 @@ type=expr
 #
 }
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -20,8 +19,7 @@ NIL
 OpenCurly(1:1-1:2),Newline(1:1-1:1),
 Newline(1:1-1:1),
 Newline(3:2-3:2),
-CloseCurly(4:1-4:2),Newline(1:1-1:1),
-MalformedUnknownToken(5:1-5:2),MalformedUnknownToken(5:2-5:3),MalformedUnknownToken(5:3-5:4),EndOfFile(5:4-5:4),
+CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~
 # PARSE
 ~~~clojure

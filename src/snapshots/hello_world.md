@@ -11,72 +11,21 @@ import pf.Stdout
 
 main! = |_| Stdout.line!("Hello, world!")
 ~~~
-~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - hello_world.md:6:1:6:3
-UNEXPECTED TOKEN IN EXPRESSION - hello_world.md:6:2:6:4
-UNEXPECTED TOKEN IN EXPRESSION - hello_world.md:6:3:6:4
+NIL
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**hello_world.md:6:1:6:3:**
-```roc
-~~~
-```
-^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**hello_world.md:6:2:6:4:**
-```roc
-~~~
-```
- ^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**hello_world.md:6:3:6:4:**
-```roc
-~~~
-```
-  ^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
+NIL
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),Newline(1:1-1:1),
 Newline(1:1-1:1),
 KwImport(3:1-3:7),LowerIdent(3:8-3:10),NoSpaceDotUpperIdent(3:10-3:17),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(5:1-5:6),OpAssign(5:7-5:8),OpBar(5:9-5:10),Underscore(5:10-5:11),OpBar(5:11-5:12),UpperIdent(5:13-5:19),NoSpaceDotLowerIdent(5:19-5:25),NoSpaceOpenRound(5:25-5:26),StringStart(5:26-5:27),StringPart(5:27-5:40),StringEnd(5:40-5:41),CloseRound(5:41-5:42),Newline(1:1-1:1),
-MalformedUnknownToken(6:1-6:2),MalformedUnknownToken(6:2-6:3),MalformedUnknownToken(6:3-6:4),EndOfFile(6:4-6:4),
+LowerIdent(5:1-5:6),OpAssign(5:7-5:8),OpBar(5:9-5:10),Underscore(5:10-5:11),OpBar(5:11-5:12),UpperIdent(5:13-5:19),NoSpaceDotLowerIdent(5:19-5:25),NoSpaceOpenRound(5:25-5:26),StringStart(5:26-5:27),StringPart(5:27-5:40),StringEnd(5:40-5:41),CloseRound(5:41-5:42),EndOfFile(5:42-5:42),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-6.4
+(file @1.1-5.42
 	(app @1.1-1.57
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
@@ -97,19 +46,11 @@ MalformedUnknownToken(6:1-6:2),MalformedUnknownToken(6:2-6:3),MalformedUnknownTo
 				(e-apply @5.13-5.42
 					(e-ident @5.13-5.25 (raw "Stdout.line!"))
 					(e-string @5.26-5.41
-						(e-string-part @5.27-5.40 (raw "Hello, world!"))))))
-		(e-malformed @6.1-6.3 (reason "expr_unexpected_token"))
-		(e-malformed @6.2-6.4 (reason "expr_unexpected_token"))
-		(e-malformed @6.3-6.4 (reason "expr_unexpected_token"))))
+						(e-string-part @5.27-5.40 (raw "Hello, world!"))))))))
 ~~~
 # FORMATTED
 ~~~roc
-app [main!] { pf: platform "../basic-cli/platform.roc" }
-
-import pf.Stdout
-
-main! = |_| Stdout.line!("Hello, world!")
-
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

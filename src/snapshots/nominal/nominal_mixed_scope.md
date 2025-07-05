@@ -22,12 +22,8 @@ processColor = |color| {
     }
 }
 ~~~
-~~~
 # EXPECTED
 IMPORT MUST BE TOP LEVEL - nominal_mixed_scope.md:9:5:9:17
-UNEXPECTED TOKEN IN EXPRESSION - nominal_mixed_scope.md:17:1:17:3
-UNEXPECTED TOKEN IN EXPRESSION - nominal_mixed_scope.md:17:2:17:4
-UNEXPECTED TOKEN IN EXPRESSION - nominal_mixed_scope.md:17:3:17:4
 # PROBLEMS
 **IMPORT MUST BE TOP LEVEL**
 Import statements must appear at the top level of a module.
@@ -41,57 +37,9 @@ Here is the problematic code:
     ^^^^^^^^^^^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**nominal_mixed_scope.md:17:1:17:3:**
-```roc
-~~~
-```
-^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**nominal_mixed_scope.md:17:2:17:4:**
-```roc
-~~~
-```
- ^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**nominal_mixed_scope.md:17:3:17:4:**
-```roc
-~~~
-```
-  ^
-
-
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
 Let us know if you want to help!
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
 ~~~zig
@@ -110,12 +58,11 @@ UpperIdent(12:9-12:12),NoSpaceDotUpperIdent(12:12-12:16),OpFatArrow(12:17-12:19)
 UpperIdent(13:9-13:12),NoSpaceDotUpperIdent(13:12-13:18),OpFatArrow(13:19-13:21),UpperIdent(13:22-13:33),NoSpaceDotUpperIdent(13:33-13:42),Newline(1:1-1:1),
 UpperIdent(14:9-14:12),NoSpaceDotUpperIdent(14:12-14:17),OpFatArrow(14:18-14:20),UpperIdent(14:21-14:32),NoSpaceDotUpperIdent(14:32-14:40),Newline(1:1-1:1),
 CloseCurly(15:5-15:6),Newline(1:1-1:1),
-CloseCurly(16:1-16:2),Newline(1:1-1:1),
-MalformedUnknownToken(17:1-17:2),MalformedUnknownToken(17:2-17:3),MalformedUnknownToken(17:3-17:4),EndOfFile(17:4-17:4),
+CloseCurly(16:1-16:2),EndOfFile(16:2-16:2),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-17.4
+(file @1.1-16.2
 	(module @1.1-1.35
 		(exposes @1.8-1.35
 			(exposed-upper-ident (text "LocalStatus"))
@@ -152,10 +99,7 @@ MalformedUnknownToken(17:1-17:2),MalformedUnknownToken(17:2-17:3),MalformedUnkno
 									(e-tag @13.22-13.42 (raw "LocalStatus.Complete")))
 								(branch @1.1-1.1
 									(p-tag @14.9-14.17 (raw ".Blue"))
-									(e-tag @14.21-14.40 (raw "LocalStatus.Pending")))))))))
-		(e-malformed @17.1-17.3 (reason "expr_unexpected_token"))
-		(e-malformed @17.2-17.4 (reason "expr_unexpected_token"))
-		(e-malformed @17.3-17.4 (reason "expr_unexpected_token"))))
+									(e-tag @14.21-14.40 (raw "LocalStatus.Pending")))))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -176,7 +120,6 @@ processColor = |color| {
 		Blue => Pending
 	}
 }
-
 ~~~
 # CANONICALIZE
 ~~~clojure

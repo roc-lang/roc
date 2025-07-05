@@ -7,7 +7,6 @@ type=expr
 ~~~roc
 "abc\qdef"
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -16,8 +15,7 @@ This escape sequence is not recognized.
 
 # TOKENS
 ~~~zig
-StringStart(1:1-1:2),StringPart(1:2-1:10),StringEnd(1:10-1:11),Newline(1:1-1:1),
-MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
+StringStart(1:1-1:2),StringPart(1:2-1:10),StringEnd(1:10-1:11),EndOfFile(1:11-1:11),
 ~~~
 # PARSE
 ~~~clojure
@@ -26,7 +24,7 @@ MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownTo
 ~~~
 # FORMATTED
 ~~~roc
-"abc\qdef"
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

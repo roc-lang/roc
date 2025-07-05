@@ -10,7 +10,6 @@ type=expr
 }
 Θ
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - closure_newline_empty_record_newline.md:1:1:1:3
 # PROBLEMS
@@ -31,8 +30,7 @@ Here is the problematic code:
 OpBackslash(1:1-1:2),UpperIdent(1:2-1:3),OpArrow(1:3-1:5),Newline(1:1-1:1),
 OpenCurly(2:2-2:3),Newline(1:1-1:1),
 CloseCurly(3:1-3:2),Newline(1:1-1:1),
-MalformedUnicodeIdent(4:1-4:3),Newline(1:1-1:1),
-MalformedUnknownToken(5:1-5:2),MalformedUnknownToken(5:2-5:3),MalformedUnknownToken(5:3-5:4),EndOfFile(5:4-5:4),
+MalformedUnicodeIdent(4:1-4:3),EndOfFile(4:3-4:3),
 ~~~
 # PARSE
 ~~~clojure

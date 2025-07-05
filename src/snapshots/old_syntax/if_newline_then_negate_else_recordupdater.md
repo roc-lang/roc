@@ -10,7 +10,6 @@ h
 then!f#
 else&m
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - if_newline_then_negate_else_recordupdater.md:4:5:4:7
 # PROBLEMS
@@ -46,8 +45,7 @@ Note: Every `if` expression in Roc must have an `else` branch, and both branches
 KwIf(1:1-1:3),Newline(1:1-1:1),
 LowerIdent(2:1-2:2),Newline(1:1-1:1),
 LowerIdent(3:1-3:7),Newline(3:8-3:8),
-KwElse(4:1-4:5),OpAmpersand(4:5-4:6),LowerIdent(4:6-4:7),Newline(1:1-1:1),
-MalformedUnknownToken(5:1-5:2),MalformedUnknownToken(5:2-5:3),MalformedUnknownToken(5:3-5:4),EndOfFile(5:4-5:4),
+KwElse(4:1-4:5),OpAmpersand(4:5-4:6),LowerIdent(4:6-4:7),EndOfFile(4:7-4:7),
 ~~~
 # PARSE
 ~~~clojure

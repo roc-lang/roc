@@ -7,7 +7,6 @@ type=expr
 ~~~roc
 [1, 2, "hello"]
 ~~~
-~~~
 # EXPECTED
 INCOMPATIBLE LIST ELEMENTS - list_type_err.md:1:5:1:5
 # PROBLEMS
@@ -32,8 +31,7 @@ To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig
-OpenSquare(1:1-1:2),Int(1:2-1:3),Comma(1:3-1:4),Int(1:5-1:6),Comma(1:6-1:7),StringStart(1:8-1:9),StringPart(1:9-1:14),StringEnd(1:14-1:15),CloseSquare(1:15-1:16),Newline(1:1-1:1),
-MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
+OpenSquare(1:1-1:2),Int(1:2-1:3),Comma(1:3-1:4),Int(1:5-1:6),Comma(1:6-1:7),StringStart(1:8-1:9),StringPart(1:9-1:14),StringEnd(1:14-1:15),CloseSquare(1:15-1:16),EndOfFile(1:16-1:16),
 ~~~
 # PARSE
 ~~~clojure
@@ -45,7 +43,7 @@ MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownTo
 ~~~
 # FORMATTED
 ~~~roc
-[1, 2, "hello"]
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -7,7 +7,6 @@ type=expr
 ~~~roc
 [42, "world", 3.14]
 ~~~
-~~~
 # EXPECTED
 INCOMPATIBLE LIST ELEMENTS - can_list_first_concrete.md:1:2:1:2
 # PROBLEMS
@@ -32,8 +31,7 @@ To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig
-OpenSquare(1:1-1:2),Int(1:2-1:4),Comma(1:4-1:5),StringStart(1:6-1:7),StringPart(1:7-1:12),StringEnd(1:12-1:13),Comma(1:13-1:14),Float(1:15-1:19),CloseSquare(1:19-1:20),Newline(1:1-1:1),
-MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
+OpenSquare(1:1-1:2),Int(1:2-1:4),Comma(1:4-1:5),StringStart(1:6-1:7),StringPart(1:7-1:12),StringEnd(1:12-1:13),Comma(1:13-1:14),Float(1:15-1:19),CloseSquare(1:19-1:20),EndOfFile(1:20-1:20),
 ~~~
 # PARSE
 ~~~clojure
@@ -45,7 +43,7 @@ MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownTo
 ~~~
 # FORMATTED
 ~~~roc
-[42, "world", 3.14]
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

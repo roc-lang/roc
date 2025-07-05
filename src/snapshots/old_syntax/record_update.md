@@ -7,7 +7,6 @@ type=expr
 ~~~roc
 { Foo.Bar.baz & x: 5, y: 0 }
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - record_update.md:1:15:1:18
 UNEXPECTED TOKEN IN TYPE ANNOTATION - record_update.md:1:20:1:22
@@ -74,8 +73,7 @@ This type annotation is malformed or contains invalid syntax.
 
 # TOKENS
 ~~~zig
-OpenCurly(1:1-1:2),UpperIdent(1:3-1:6),NoSpaceDotUpperIdent(1:6-1:10),NoSpaceDotLowerIdent(1:10-1:14),OpAmpersand(1:15-1:16),LowerIdent(1:17-1:18),OpColon(1:18-1:19),Int(1:20-1:21),Comma(1:21-1:22),LowerIdent(1:23-1:24),OpColon(1:24-1:25),Int(1:26-1:27),CloseCurly(1:28-1:29),Newline(1:1-1:1),
-MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
+OpenCurly(1:1-1:2),UpperIdent(1:3-1:6),NoSpaceDotUpperIdent(1:6-1:10),NoSpaceDotLowerIdent(1:10-1:14),OpAmpersand(1:15-1:16),LowerIdent(1:17-1:18),OpColon(1:18-1:19),Int(1:20-1:21),Comma(1:21-1:22),LowerIdent(1:23-1:24),OpColon(1:24-1:25),Int(1:26-1:27),CloseCurly(1:28-1:29),EndOfFile(1:29-1:29),
 ~~~
 # PARSE
 ~~~clojure

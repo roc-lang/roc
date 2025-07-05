@@ -10,7 +10,6 @@ MEq implements
 
 1
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -20,8 +19,7 @@ NIL
 UpperIdent(1:1-1:4),KwImplements(1:5-1:15),Newline(1:1-1:1),
 Int(2:5-2:8),Newline(1:1-1:1),
 Newline(1:1-1:1),
-Int(4:1-4:2),Newline(1:1-1:1),
-MalformedUnknownToken(5:1-5:2),MalformedUnknownToken(5:2-5:3),MalformedUnknownToken(5:3-5:4),EndOfFile(5:4-5:4),
+Int(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~
 # PARSE
 ~~~clojure

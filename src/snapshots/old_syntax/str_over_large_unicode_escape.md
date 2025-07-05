@@ -7,7 +7,6 @@ type=expr
 ~~~roc
 '\u(FFFFFFFFF)'
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -17,8 +16,7 @@ A single-quoted literal must contain exactly one character, e.g. 'a'.
 
 # TOKENS
 ~~~zig
-SingleQuote(1:1-1:16),Newline(1:1-1:1),
-MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
+SingleQuote(1:1-1:16),EndOfFile(1:16-1:16),
 ~~~
 # PARSE
 ~~~clojure
@@ -26,7 +24,7 @@ MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownTo
 ~~~
 # FORMATTED
 ~~~roc
-'\u(FFFFFFFFF)'
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

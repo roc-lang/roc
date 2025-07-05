@@ -31,50 +31,10 @@ main! = |_| {
     result1 + result2 + result3 + result4
 }
 ~~~
-~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - lambda_parameter_unused.md:26:1:26:3
-UNEXPECTED TOKEN IN EXPRESSION - lambda_parameter_unused.md:26:2:26:4
-UNEXPECTED TOKEN IN EXPRESSION - lambda_parameter_unused.md:26:3:26:4
 UNUSED VARIABLE - lambda_parameter_unused.md:5:8:5:14
 UNDERSCORE VARIABLE USED - lambda_parameter_unused.md:9:22:9:29
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**lambda_parameter_unused.md:26:1:26:3:**
-```roc
-~~~
-```
-^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**lambda_parameter_unused.md:26:2:26:4:**
-```roc
-~~~
-```
- ^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**lambda_parameter_unused.md:26:3:26:4:**
-```roc
-~~~
-```
-  ^
-
-
 **UNUSED VARIABLE**
 Variable ``unused`` is not used anywhere in your code.
 
@@ -98,18 +58,6 @@ multiply = |_factor| _factor * 2
 ```
                      ^^^^^^^
 
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
 ~~~zig
@@ -137,12 +85,11 @@ LowerIdent(21:5-21:12),OpAssign(21:13-21:14),LowerIdent(21:15-21:23),NoSpaceOpen
 LowerIdent(22:5-22:12),OpAssign(22:13-22:14),LowerIdent(22:15-22:22),NoSpaceOpenRound(22:22-22:23),Int(22:23-22:24),CloseRound(22:24-22:25),Newline(1:1-1:1),
 LowerIdent(23:5-23:12),OpAssign(23:13-23:14),LowerIdent(23:15-23:21),NoSpaceOpenRound(23:21-23:22),Int(23:22-23:23),CloseRound(23:23-23:24),Newline(1:1-1:1),
 LowerIdent(24:5-24:12),OpPlus(24:13-24:14),LowerIdent(24:15-24:22),OpPlus(24:23-24:24),LowerIdent(24:25-24:32),OpPlus(24:33-24:34),LowerIdent(24:35-24:42),Newline(1:1-1:1),
-CloseCurly(25:1-25:2),Newline(1:1-1:1),
-MalformedUnknownToken(26:1-26:2),MalformedUnknownToken(26:2-26:3),MalformedUnknownToken(26:3-26:4),EndOfFile(26:4-26:4),
+CloseCurly(25:1-25:2),EndOfFile(25:2-25:2),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-26.4
+(file @1.1-25.2
 	(app @1.1-1.53
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
@@ -231,10 +178,7 @@ MalformedUnknownToken(26:1-26:2),MalformedUnknownToken(26:2-26:3),MalformedUnkno
 								(e-ident @24.15-24.22 (raw "result2"))
 								(e-binop @24.25-25.2 (op "+")
 									(e-ident @24.25-24.32 (raw "result3"))
-									(e-ident @24.35-24.42 (raw "result4")))))))))
-		(e-malformed @26.1-26.3 (reason "expr_unexpected_token"))
-		(e-malformed @26.2-26.4 (reason "expr_unexpected_token"))
-		(e-malformed @26.3-26.4 (reason "expr_unexpected_token"))))
+									(e-ident @24.35-24.42 (raw "result4")))))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -263,7 +207,6 @@ main! = |_| {
 	result4 = double(4)
 	result1 + result2 + result3 + result4
 }
-
 ~~~
 # CANONICALIZE
 ~~~clojure

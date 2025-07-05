@@ -7,7 +7,6 @@ type=expr
 ~~~roc
 -rec1.field
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - unary_negation_access.md:1:1:1:6
 # PROBLEMS
@@ -25,8 +24,7 @@ Here is the problematic code:
 
 # TOKENS
 ~~~zig
-OpUnaryMinus(1:1-1:2),LowerIdent(1:2-1:6),NoSpaceDotLowerIdent(1:6-1:12),Newline(1:1-1:1),
-MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
+OpUnaryMinus(1:1-1:2),LowerIdent(1:2-1:6),NoSpaceDotLowerIdent(1:6-1:12),EndOfFile(1:12-1:12),
 ~~~
 # PARSE
 ~~~clojure

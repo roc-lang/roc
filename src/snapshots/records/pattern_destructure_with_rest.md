@@ -9,7 +9,6 @@ match person {
     { first_name, ..others } => Str.len(first_name) > Str.len(others.last_name)
 }
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -29,8 +28,7 @@ Is there an `import` or `exposing` missing up-top?
 ~~~zig
 KwMatch(1:1-1:6),LowerIdent(1:7-1:13),OpenCurly(1:14-1:15),Newline(1:1-1:1),
 OpenCurly(2:5-2:6),LowerIdent(2:7-2:17),Comma(2:17-2:18),DoubleDot(2:19-2:21),LowerIdent(2:21-2:27),CloseCurly(2:28-2:29),OpFatArrow(2:30-2:32),UpperIdent(2:33-2:36),NoSpaceDotLowerIdent(2:36-2:40),NoSpaceOpenRound(2:40-2:41),LowerIdent(2:41-2:51),CloseRound(2:51-2:52),OpGreaterThan(2:53-2:54),UpperIdent(2:55-2:58),NoSpaceDotLowerIdent(2:58-2:62),NoSpaceOpenRound(2:62-2:63),LowerIdent(2:63-2:69),NoSpaceDotLowerIdent(2:69-2:79),CloseRound(2:79-2:80),Newline(1:1-1:1),
-CloseCurly(3:1-3:2),Newline(1:1-1:1),
-MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
+CloseCurly(3:1-3:2),EndOfFile(3:2-3:2),
 ~~~
 # PARSE
 ~~~clojure

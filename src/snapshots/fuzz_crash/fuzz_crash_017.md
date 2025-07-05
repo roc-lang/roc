@@ -8,13 +8,10 @@ type=file
 me = "luc"
 foo = "hello ${namF
 ~~~
-~~~
 # EXPECTED
 MISSING HEADER - fuzz_crash_017.md:1:1:1:5
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_017.md:1:4:1:7
 PARSE ERROR - fuzz_crash_017.md:2:7:2:14
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_017.md:3:2:3:4
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_017.md:3:3:3:4
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.
@@ -56,30 +53,6 @@ foo = "hello ${namF
       ^^^^^^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**fuzz_crash_017.md:3:2:3:4:**
-```roc
-~~~
-```
- ^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**fuzz_crash_017.md:3:3:3:4:**
-```roc
-~~~
-```
-  ^
-
-
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
@@ -92,33 +65,22 @@ Only definitions, type annotations, and imports are allowed at the top level.
 This looks like an operator, but it's not one I recognize!
 Check the spelling and make sure you're using a valid Roc operator.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:3),OpAssign(1:4-1:5),StringStart(1:6-1:7),StringPart(1:7-1:10),StringEnd(1:10-1:11),Newline(1:1-1:1),
-LowerIdent(2:1-2:4),OpAssign(2:5-2:6),StringStart(2:7-2:8),StringPart(2:8-2:14),OpenStringInterpolation(2:14-2:16),LowerIdent(2:16-2:20),Newline(1:1-1:1),
-MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
+LowerIdent(2:1-2:4),OpAssign(2:5-2:6),StringStart(2:7-2:8),StringPart(2:8-2:14),OpenStringInterpolation(2:14-2:16),LowerIdent(2:16-2:20),EndOfFile(2:20-2:20),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-3.4
+(file @1.1-2.20
 	(malformed-header @1.1-1.5 (tag "missing_header"))
 	(statements
 		(e-malformed @1.4-1.7 (reason "expr_unexpected_token"))
 		(e-string @1.6-1.11
 			(e-string-part @1.7-1.10 (raw "luc")))
-		(s-decl @2.1-3.3
+		(s-decl @2.1-2.20
 			(p-ident @2.1-2.4 (raw "foo"))
-			(e-malformed @2.7-3.3 (reason "string_expected_close_interpolation")))
-		(e-malformed @3.2-3.4 (reason "expr_unexpected_token"))
-		(e-malformed @3.3-3.4 (reason "expr_unexpected_token"))))
+			(e-malformed @2.7-2.20 (reason "string_expected_close_interpolation")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -138,5 +100,5 @@ foo =
 	(defs
 		(patt @2.1-2.4 (type "Error")))
 	(expressions
-		(expr @2.7-3.3 (type "Error"))))
+		(expr @2.7-2.20 (type "Error"))))
 ~~~

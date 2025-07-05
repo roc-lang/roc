@@ -7,7 +7,6 @@ type=expr
 ~~~roc
 rec.field
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -17,26 +16,25 @@ Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:4),NoSpaceDotLowerIdent(1:4-1:10),Newline(1:1-1:1),
-MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
+LowerIdent(1:1-1:4),NoSpaceDotLowerIdent(1:4-1:10),EndOfFile(1:10-1:10),
 ~~~
 # PARSE
 ~~~clojure
-(e-field-access @1.1-2.2
+(e-field-access @1.1-1.10
 	(e-ident @1.1-1.4 (raw "rec"))
 	(e-ident @1.4-1.10 (raw "field")))
 ~~~
 # FORMATTED
 ~~~roc
-rec.field
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dot-access @1.1-2.2 (field "field")
+(e-dot-access @1.1-1.10 (field "field")
 	(receiver
 		(e-runtime-error (tag "ident_not_in_scope"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-2.2 (type "*"))
+(expr @1.1-1.10 (type "*"))
 ~~~

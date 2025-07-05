@@ -7,10 +7,9 @@ type=expr
 ~~~roc
 [1, 2, , 3]
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - list_double_comma.md:1:8:1:11
-LIST NOT CLOSED - list_double_comma.md:1:11:1:11
+LIST NOT CLOSED - list_double_comma.md:1:11:1:12
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **, 3** is not expected in an expression.
@@ -30,21 +29,20 @@ Lists must be closed with **]** and list items must be separated by commas.
 For example:     [1, 2, 3]
 
 Here is the problematic code:
-**list_double_comma.md:1:11:1:11:**
+**list_double_comma.md:1:11:1:12:**
 ```roc
 [1, 2, , 3]
 ```
-          
+          ^
 
 
 # TOKENS
 ~~~zig
-OpenSquare(1:1-1:2),Int(1:2-1:3),Comma(1:3-1:4),Int(1:5-1:6),Comma(1:6-1:7),Comma(1:8-1:9),Int(1:10-1:11),CloseSquare(1:11-1:12),Newline(1:1-1:1),
-MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
+OpenSquare(1:1-1:2),Int(1:2-1:3),Comma(1:3-1:4),Int(1:5-1:6),Comma(1:6-1:7),Comma(1:8-1:9),Int(1:10-1:11),CloseSquare(1:11-1:12),EndOfFile(1:12-1:12),
 ~~~
 # PARSE
 ~~~clojure
-(e-malformed @1.1-1.1 (reason "expected_expr_close_square_or_comma"))
+(e-malformed @1.11-1.12 (reason "expected_expr_close_square_or_comma"))
 ~~~
 # FORMATTED
 ~~~roc

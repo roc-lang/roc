@@ -34,60 +34,10 @@ wrap_in_result = |value| Ok(Ok(value))
 
 main = |_| "done"
 ~~~
-~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - type_var_nested.md:29:1:29:3
-UNEXPECTED TOKEN IN EXPRESSION - type_var_nested.md:29:2:29:4
-UNEXPECTED TOKEN IN EXPRESSION - type_var_nested.md:29:3:29:4
+NIL
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_var_nested.md:29:1:29:3:**
-```roc
-~~~
-```
-^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_var_nested.md:29:2:29:4:**
-```roc
-~~~
-```
- ^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_var_nested.md:29:3:29:4:**
-```roc
-~~~
-```
-  ^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
+NIL
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:10),CloseSquare(1:10-1:11),OpenCurly(1:12-1:13),LowerIdent(1:14-1:16),OpColon(1:16-1:17),KwPlatform(1:18-1:26),StringStart(1:27-1:28),StringPart(1:28-1:40),StringEnd(1:40-1:41),CloseCurly(1:42-1:43),Newline(1:1-1:1),
@@ -117,12 +67,11 @@ Newline(24:2-24:22),
 LowerIdent(25:1-25:15),OpColon(25:16-25:17),LowerIdent(25:18-25:19),OpArrow(25:20-25:22),UpperIdent(25:23-25:29),NoSpaceOpenRound(25:29-25:30),UpperIdent(25:30-25:36),NoSpaceOpenRound(25:36-25:37),LowerIdent(25:37-25:38),Comma(25:38-25:39),UpperIdent(25:40-25:43),CloseRound(25:43-25:44),Comma(25:44-25:45),UpperIdent(25:46-25:49),CloseRound(25:49-25:50),Newline(1:1-1:1),
 LowerIdent(26:1-26:15),OpAssign(26:16-26:17),OpBar(26:18-26:19),LowerIdent(26:19-26:24),OpBar(26:24-26:25),UpperIdent(26:26-26:28),NoSpaceOpenRound(26:28-26:29),UpperIdent(26:29-26:31),NoSpaceOpenRound(26:31-26:32),LowerIdent(26:32-26:37),CloseRound(26:37-26:38),CloseRound(26:38-26:39),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(28:1-28:5),OpAssign(28:6-28:7),OpBar(28:8-28:9),Underscore(28:9-28:10),OpBar(28:10-28:11),StringStart(28:12-28:13),StringPart(28:13-28:17),StringEnd(28:17-28:18),Newline(1:1-1:1),
-MalformedUnknownToken(29:1-29:2),MalformedUnknownToken(29:2-29:3),MalformedUnknownToken(29:3-29:4),EndOfFile(29:4-29:4),
+LowerIdent(28:1-28:5),OpAssign(28:6-28:7),OpBar(28:8-28:9),Underscore(28:9-28:10),OpBar(28:10-28:11),StringStart(28:12-28:13),StringPart(28:13-28:17),StringEnd(28:17-28:18),EndOfFile(28:18-28:18),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-29.4
+(file @1.1-28.18
 	(app @1.1-1.43
 		(provides @1.6-1.11
 			(exposed-lower-ident (text "main")))
@@ -240,10 +189,7 @@ MalformedUnknownToken(29:1-29:2),MalformedUnknownToken(29:2-29:3),MalformedUnkno
 				(args
 					(p-underscore))
 				(e-string @28.12-28.18
-					(e-string-part @28.13-28.17 (raw "done")))))
-		(e-malformed @29.1-29.3 (reason "expr_unexpected_token"))
-		(e-malformed @29.2-29.4 (reason "expr_unexpected_token"))
-		(e-malformed @29.3-29.4 (reason "expr_unexpected_token"))))
+					(e-string-part @28.13-28.17 (raw "done")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -275,7 +221,6 @@ wrap_in_result : a -> Result(Result(a, Str), Str)
 wrap_in_result = |value| Ok(Ok(value))
 
 main = |_| "done"
-
 ~~~
 # CANONICALIZE
 ~~~clojure

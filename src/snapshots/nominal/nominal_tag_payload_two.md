@@ -18,60 +18,10 @@ is_ok = |result| match result {
     MyResult.Err(_) => False
 }
 ~~~
-~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - nominal_tag_payload_two.md:13:1:13:3
-UNEXPECTED TOKEN IN EXPRESSION - nominal_tag_payload_two.md:13:2:13:4
-UNEXPECTED TOKEN IN EXPRESSION - nominal_tag_payload_two.md:13:3:13:4
+NIL
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**nominal_tag_payload_two.md:13:1:13:3:**
-```roc
-~~~
-```
-^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**nominal_tag_payload_two.md:13:2:13:4:**
-```roc
-~~~
-```
- ^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**nominal_tag_payload_two.md:13:3:13:4:**
-```roc
-~~~
-```
-  ^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
+NIL
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:17),Comma(1:17-1:18),LowerIdent(1:19-1:21),Comma(1:21-1:22),LowerIdent(1:23-1:28),CloseSquare(1:28-1:29),Newline(1:1-1:1),
@@ -85,12 +35,11 @@ LowerIdent(8:1-8:6),OpColon(8:7-8:8),UpperIdent(8:9-8:17),NoSpaceOpenRound(8:17-
 LowerIdent(9:1-9:6),OpAssign(9:7-9:8),OpBar(9:9-9:10),LowerIdent(9:10-9:16),OpBar(9:16-9:17),KwMatch(9:18-9:23),LowerIdent(9:24-9:30),OpenCurly(9:31-9:32),Newline(1:1-1:1),
 UpperIdent(10:5-10:13),NoSpaceDotUpperIdent(10:13-10:16),NoSpaceOpenRound(10:16-10:17),Underscore(10:17-10:18),CloseRound(10:18-10:19),OpFatArrow(10:20-10:22),UpperIdent(10:23-10:27),Newline(1:1-1:1),
 UpperIdent(11:5-11:13),NoSpaceDotUpperIdent(11:13-11:17),NoSpaceOpenRound(11:17-11:18),Underscore(11:18-11:19),CloseRound(11:19-11:20),OpFatArrow(11:21-11:23),UpperIdent(11:24-11:29),Newline(1:1-1:1),
-CloseCurly(12:1-12:2),Newline(1:1-1:1),
-MalformedUnknownToken(13:1-13:2),MalformedUnknownToken(13:2-13:3),MalformedUnknownToken(13:3-13:4),EndOfFile(13:4-13:4),
+CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-13.4
+(file @1.1-12.2
 	(module @1.1-1.29
 		(exposes @1.8-1.29
 			(exposed-upper-ident (text "MyResult"))
@@ -147,10 +96,7 @@ MalformedUnknownToken(13:1-13:2),MalformedUnknownToken(13:2-13:3),MalformedUnkno
 						(branch @1.1-1.1
 							(p-tag @11.5-11.20 (raw ".Err")
 								(p-underscore))
-							(e-tag @11.24-11.29 (raw "False")))))))
-		(e-malformed @13.1-13.3 (reason "expr_unexpected_token"))
-		(e-malformed @13.2-13.4 (reason "expr_unexpected_token"))
-		(e-malformed @13.3-13.4 (reason "expr_unexpected_token"))))
+							(e-tag @11.24-11.29 (raw "False")))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -166,7 +112,6 @@ is_ok = |result| match result {
 	Ok(_) => True
 	Err(_) => False
 }
-
 ~~~
 # CANONICALIZE
 ~~~clojure

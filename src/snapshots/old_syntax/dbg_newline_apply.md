@@ -10,7 +10,6 @@ dbg
  izzb
   interfacesb
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -23,8 +22,7 @@ Let us know if you want to help!
 KwDbg(1:1-1:4),Newline(1:1-1:1),
 Newline(1:1-1:1),
 LowerIdent(3:2-3:6),Newline(1:1-1:1),
-LowerIdent(4:3-4:14),Newline(1:1-1:1),
-MalformedUnknownToken(5:1-5:2),MalformedUnknownToken(5:2-5:3),MalformedUnknownToken(5:3-5:4),EndOfFile(5:4-5:4),
+LowerIdent(4:3-4:14),EndOfFile(4:14-4:14),
 ~~~
 # PARSE
 ~~~clojure

@@ -11,7 +11,6 @@ identityFn = \x ->
 
 identityFn 45
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -25,8 +24,7 @@ LowerIdent(1:1-1:11),OpAssign(1:12-1:13),OpBackslash(1:14-1:15),LowerIdent(1:15-
 KwReturn(2:3-2:9),LowerIdent(2:14-2:15),Newline(1:1-1:1),
 Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(5:1-5:11),Int(5:12-5:14),Newline(1:1-1:1),
-MalformedUnknownToken(6:1-6:2),MalformedUnknownToken(6:2-6:3),MalformedUnknownToken(6:3-6:4),EndOfFile(6:4-6:4),
+LowerIdent(5:1-5:11),Int(5:12-5:14),EndOfFile(5:14-5:14),
 ~~~
 # PARSE
 ~~~clojure

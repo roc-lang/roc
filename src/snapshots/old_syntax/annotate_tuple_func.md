@@ -9,7 +9,6 @@ type=expr
 ,ww->p)e
 Mh
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -18,8 +17,7 @@ NIL
 ~~~zig
 Int(1:1-1:2),OpColon(1:2-1:3),NoSpaceOpenRound(1:3-1:4),LowerIdent(1:4-1:5),Newline(1:1-1:1),
 Comma(2:1-2:2),LowerIdent(2:2-2:4),OpArrow(2:4-2:6),LowerIdent(2:6-2:7),CloseRound(2:7-2:8),LowerIdent(2:8-2:9),Newline(1:1-1:1),
-UpperIdent(3:1-3:3),Newline(1:1-1:1),
-MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
+UpperIdent(3:1-3:3),EndOfFile(3:3-3:3),
 ~~~
 # PARSE
 ~~~clojure

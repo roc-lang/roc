@@ -13,7 +13,6 @@ then#f#,w
 t__T+_____^_zese
 else
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -29,8 +28,7 @@ OpenCurly(3:1-3:2),Newline(1:1-1:1),
 CloseCurly(4:1-4:2),OpAmpersand(4:2-4:3),OpAmpersand(4:3-4:4),LowerIdent(4:4-4:9),OpBinaryMinus(4:9-4:10),Newline(1:1-1:1),
 Newline(1:1-1:1),
 LowerIdent(6:1-6:5),OpPlus(6:5-6:6),Underscore(6:6-6:7),Underscore(6:7-6:8),Underscore(6:8-6:9),Underscore(6:9-6:10),Underscore(6:10-6:11),OpCaret(6:11-6:12),NamedUnderscore(6:12-6:17),Newline(1:1-1:1),
-KwElse(7:1-7:5),Newline(1:1-1:1),
-MalformedUnknownToken(8:1-8:2),MalformedUnknownToken(8:2-8:3),MalformedUnknownToken(8:3-8:4),EndOfFile(8:4-8:4),
+KwElse(7:1-7:5),EndOfFile(7:5-7:5),
 ~~~
 # PARSE
 ~~~clojure

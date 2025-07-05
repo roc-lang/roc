@@ -7,7 +7,6 @@ type=expr
 ~~~roc
 \the_answer -> 42
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - single_arg_with_underscore_closure.md:1:1:1:12
 # PROBLEMS
@@ -25,8 +24,7 @@ Here is the problematic code:
 
 # TOKENS
 ~~~zig
-OpBackslash(1:1-1:2),LowerIdent(1:2-1:12),OpArrow(1:13-1:15),Int(1:16-1:18),Newline(1:1-1:1),
-MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
+OpBackslash(1:1-1:2),LowerIdent(1:2-1:12),OpArrow(1:13-1:15),Int(1:16-1:18),EndOfFile(1:18-1:18),
 ~~~
 # PARSE
 ~~~clojure

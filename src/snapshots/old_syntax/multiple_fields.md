@@ -7,7 +7,6 @@ type=expr
 ~~~roc
 rec.abc.def.ghi
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -17,12 +16,11 @@ Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:4),NoSpaceDotLowerIdent(1:4-1:8),NoSpaceDotLowerIdent(1:8-1:12),NoSpaceDotLowerIdent(1:12-1:16),Newline(1:1-1:1),
-MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
+LowerIdent(1:1-1:4),NoSpaceDotLowerIdent(1:4-1:8),NoSpaceDotLowerIdent(1:8-1:12),NoSpaceDotLowerIdent(1:12-1:16),EndOfFile(1:16-1:16),
 ~~~
 # PARSE
 ~~~clojure
-(e-field-access @1.1-2.2
+(e-field-access @1.1-1.16
 	(e-field-access @1.1-1.16
 		(e-field-access @1.1-1.12
 			(e-ident @1.1-1.4 (raw "rec"))
@@ -32,11 +30,11 @@ MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownTo
 ~~~
 # FORMATTED
 ~~~roc
-rec.abc.def.ghi
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dot-access @1.1-2.2 (field "ghi")
+(e-dot-access @1.1-1.16 (field "ghi")
 	(receiver
 		(e-dot-access @1.1-1.16 (field "def")
 			(receiver
@@ -46,5 +44,5 @@ rec.abc.def.ghi
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-2.2 (type "*"))
+(expr @1.1-1.16 (type "*"))
 ~~~

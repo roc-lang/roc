@@ -8,7 +8,6 @@ type=expr
 h-
 -o -crash!
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - sub_minus_o_apply_minus_crash_bang.md:2:1:2:3
 # PROBLEMS
@@ -35,8 +34,7 @@ Check the spelling and make sure you're using a valid Roc operator.
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpBinaryMinus(1:2-1:3),Newline(1:1-1:1),
-OpUnaryMinus(2:1-2:2),LowerIdent(2:2-2:3),OpUnaryMinus(2:4-2:5),LowerIdent(2:5-2:11),Newline(1:1-1:1),
-MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
+OpUnaryMinus(2:1-2:2),LowerIdent(2:2-2:3),OpUnaryMinus(2:4-2:5),LowerIdent(2:5-2:11),EndOfFile(2:11-2:11),
 ~~~
 # PARSE
 ~~~clojure

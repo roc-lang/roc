@@ -7,7 +7,6 @@ type=expr
 ~~~roc
 """there is no end
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - multi_no_end.md:1:1:1:19
 # PROBLEMS
@@ -25,8 +24,7 @@ Here is the problematic code:
 
 # TOKENS
 ~~~zig
-MultilineStringStart(1:1-1:4),StringPart(1:4-1:19),Newline(1:1-1:1),
-MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
+MultilineStringStart(1:1-1:4),StringPart(1:4-1:19),EndOfFile(1:19-1:19),
 ~~~
 # PARSE
 ~~~clojure

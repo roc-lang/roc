@@ -7,20 +7,19 @@ type=expr
 ~~~roc
 Stdout.line???
 ~~~
-~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - suffixed_question.md:1:14:1:14
+UNEXPECTED TOKEN IN EXPRESSION - suffixed_question.md:1:14:1:15
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **?** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**suffixed_question.md:1:14:1:14:**
+**suffixed_question.md:1:14:1:15:**
 ```roc
 Stdout.line???
 ```
-             
+             ^
 
 
 **UNDEFINED VARIABLE**
@@ -33,14 +32,13 @@ Check the spelling and make sure you're using a valid Roc operator.
 
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:7),NoSpaceDotLowerIdent(1:7-1:12),OpDoubleQuestion(1:12-1:14),NoSpaceOpQuestion(1:14-1:15),Newline(1:1-1:1),
-MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
+UpperIdent(1:1-1:7),NoSpaceDotLowerIdent(1:7-1:12),OpDoubleQuestion(1:12-1:14),NoSpaceOpQuestion(1:14-1:15),EndOfFile(1:15-1:15),
 ~~~
 # PARSE
 ~~~clojure
-(e-binop @1.1-1.1 (op "??")
+(e-binop @1.1-1.15 (op "??")
 	(e-ident @1.1-1.12 (raw "Stdout.line"))
-	(e-malformed @1.1-1.1 (reason "expr_unexpected_token")))
+	(e-malformed @1.14-1.15 (reason "expr_unexpected_token")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -48,11 +46,11 @@ Stdout.line ??
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop @1.1-1.1 (op "null_coalesce")
+(e-binop @1.1-1.15 (op "null_coalesce")
 	(e-runtime-error (tag "ident_not_in_scope"))
 	(e-runtime-error (tag "expr_not_canonicalized")))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.1 (type "*"))
+(expr @1.1-1.15 (type "*"))
 ~~~

@@ -13,7 +13,6 @@ implements
 T
 e
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -26,8 +25,7 @@ KwWhere(3:3-3:8),Newline(1:1-1:1),
 LowerIdent(4:1-4:2),Newline(1:1-1:1),
 KwImplements(5:1-5:11),Newline(1:1-1:1),
 UpperIdent(6:1-6:2),Newline(1:1-1:1),
-LowerIdent(7:1-7:2),Newline(1:1-1:1),
-MalformedUnknownToken(8:1-8:2),MalformedUnknownToken(8:2-8:3),MalformedUnknownToken(8:3-8:4),EndOfFile(8:4-8:4),
+LowerIdent(7:1-7:2),EndOfFile(7:2-7:2),
 ~~~
 # PARSE
 ~~~clojure

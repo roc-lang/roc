@@ -8,7 +8,6 @@ type=expr
 ((L
 L)L,L)#\
 ~~~
-~~~
 # EXPECTED
 PARSE ERROR - tuple_apply_parens_comment.md:2:2:2:4
 PARSE ERROR - tuple_apply_parens_comment.md:2:6:2:9
@@ -40,8 +39,7 @@ L)L,L)#\
 # TOKENS
 ~~~zig
 OpenRound(1:1-1:2),NoSpaceOpenRound(1:2-1:3),UpperIdent(1:3-1:4),Newline(1:1-1:1),
-UpperIdent(2:1-2:2),CloseRound(2:2-2:3),UpperIdent(2:3-2:4),Comma(2:4-2:5),UpperIdent(2:5-2:6),CloseRound(2:6-2:7),Newline(2:8-2:9),
-MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
+UpperIdent(2:1-2:2),CloseRound(2:2-2:3),UpperIdent(2:3-2:4),Comma(2:4-2:5),UpperIdent(2:5-2:6),CloseRound(2:6-2:7),EndOfFile(2:9-2:9),
 ~~~
 # PARSE
 ~~~clojure

@@ -8,7 +8,6 @@ type=expr
 i=""""""().1
 p
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -19,8 +18,7 @@ Is there an `import` or `exposing` missing up-top?
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpAssign(1:2-1:3),MultilineStringStart(1:3-1:6),StringPart(1:6-1:6),MultilineStringEnd(1:6-1:9),NoSpaceOpenRound(1:9-1:10),CloseRound(1:10-1:11),NoSpaceDotInt(1:11-1:13),Newline(1:1-1:1),
-LowerIdent(2:1-2:2),Newline(1:1-1:1),
-MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
+LowerIdent(2:1-2:2),EndOfFile(2:2-2:2),
 ~~~
 # PARSE
 ~~~clojure

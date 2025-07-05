@@ -12,13 +12,9 @@ runEffect! = |fn!, x| fn!(x)
 
 main! = |_| {}
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - type_function_effectful.md:3:22:3:25
 UNEXPECTED TOKEN IN EXPRESSION - type_function_effectful.md:3:26:3:30
-UNEXPECTED TOKEN IN EXPRESSION - type_function_effectful.md:7:1:7:3
-UNEXPECTED TOKEN IN EXPRESSION - type_function_effectful.md:7:2:7:4
-UNEXPECTED TOKEN IN EXPRESSION - type_function_effectful.md:7:3:7:4
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **, a** is not expected in an expression.
@@ -44,54 +40,6 @@ runEffect! : (a => b), a => b
                          ^^^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_function_effectful.md:7:1:7:3:**
-```roc
-~~~
-```
-^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_function_effectful.md:7:2:7:4:**
-```roc
-~~~
-```
- ^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_function_effectful.md:7:3:7:4:**
-```roc
-~~~
-```
-  ^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
@@ -115,12 +63,11 @@ Newline(1:1-1:1),
 LowerIdent(3:1-3:11),OpColon(3:12-3:13),OpenRound(3:14-3:15),LowerIdent(3:15-3:16),OpFatArrow(3:17-3:19),LowerIdent(3:20-3:21),CloseRound(3:21-3:22),Comma(3:22-3:23),LowerIdent(3:24-3:25),OpFatArrow(3:26-3:28),LowerIdent(3:29-3:30),Newline(1:1-1:1),
 LowerIdent(4:1-4:11),OpAssign(4:12-4:13),OpBar(4:14-4:15),LowerIdent(4:15-4:18),Comma(4:18-4:19),LowerIdent(4:20-4:21),OpBar(4:21-4:22),LowerIdent(4:23-4:26),NoSpaceOpenRound(4:26-4:27),LowerIdent(4:27-4:28),CloseRound(4:28-4:29),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBar(6:11-6:12),OpenCurly(6:13-6:14),CloseCurly(6:14-6:15),Newline(1:1-1:1),
-MalformedUnknownToken(7:1-7:2),MalformedUnknownToken(7:2-7:3),MalformedUnknownToken(7:3-7:4),EndOfFile(7:4-7:4),
+LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBar(6:11-6:12),OpenCurly(6:13-6:14),CloseCurly(6:14-6:15),EndOfFile(6:15-6:15),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-7.4
+(file @1.1-6.15
 	(app @1.1-1.53
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
@@ -154,10 +101,7 @@ MalformedUnknownToken(7:1-7:2),MalformedUnknownToken(7:2-7:3),MalformedUnknownTo
 			(e-lambda @6.9-6.15
 				(args
 					(p-underscore))
-				(e-record @6.13-6.15)))
-		(e-malformed @7.1-7.3 (reason "expr_unexpected_token"))
-		(e-malformed @7.2-7.4 (reason "expr_unexpected_token"))
-		(e-malformed @7.3-7.4 (reason "expr_unexpected_token"))))
+				(e-record @6.13-6.15)))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -167,7 +111,6 @@ runEffect! : (a => b)ab
 runEffect! = |fn!, x| fn!(x)
 
 main! = |_| {}
-
 ~~~
 # CANONICALIZE
 ~~~clojure

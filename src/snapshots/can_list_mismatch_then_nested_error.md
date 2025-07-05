@@ -7,7 +7,6 @@ type=expr
 ~~~roc
 [1, "hello", [3, "world"]]
 ~~~
-~~~
 # EXPECTED
 INCOMPATIBLE LIST ELEMENTS - can_list_mismatch_then_nested_error.md:1:2:1:2
 INCOMPATIBLE LIST ELEMENTS - can_list_mismatch_then_nested_error.md:1:15:1:15
@@ -52,8 +51,7 @@ To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig
-OpenSquare(1:1-1:2),Int(1:2-1:3),Comma(1:3-1:4),StringStart(1:5-1:6),StringPart(1:6-1:11),StringEnd(1:11-1:12),Comma(1:12-1:13),OpenSquare(1:14-1:15),Int(1:15-1:16),Comma(1:16-1:17),StringStart(1:18-1:19),StringPart(1:19-1:24),StringEnd(1:24-1:25),CloseSquare(1:25-1:26),CloseSquare(1:26-1:27),Newline(1:1-1:1),
-MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
+OpenSquare(1:1-1:2),Int(1:2-1:3),Comma(1:3-1:4),StringStart(1:5-1:6),StringPart(1:6-1:11),StringEnd(1:11-1:12),Comma(1:12-1:13),OpenSquare(1:14-1:15),Int(1:15-1:16),Comma(1:16-1:17),StringStart(1:18-1:19),StringPart(1:19-1:24),StringEnd(1:24-1:25),CloseSquare(1:25-1:26),CloseSquare(1:26-1:27),EndOfFile(1:27-1:27),
 ~~~
 # PARSE
 ~~~clojure
@@ -68,7 +66,7 @@ MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownTo
 ~~~
 # FORMATTED
 ~~~roc
-[1, "hello", [3, "world"]]
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

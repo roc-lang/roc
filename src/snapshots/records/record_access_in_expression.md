@@ -7,7 +7,6 @@ type=expr
 ~~~roc
 person.age + 5
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -17,12 +16,11 @@ Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:7),NoSpaceDotLowerIdent(1:7-1:11),OpPlus(1:12-1:13),Int(1:14-1:15),Newline(1:1-1:1),
-MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
+LowerIdent(1:1-1:7),NoSpaceDotLowerIdent(1:7-1:11),OpPlus(1:12-1:13),Int(1:14-1:15),EndOfFile(1:15-1:15),
 ~~~
 # PARSE
 ~~~clojure
-(e-binop @1.1-2.2 (op "+")
+(e-binop @1.1-1.15 (op "+")
 	(e-field-access @1.1-1.13
 		(e-ident @1.1-1.7 (raw "person"))
 		(e-ident @1.7-1.11 (raw "age")))
@@ -30,11 +28,11 @@ MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownTo
 ~~~
 # FORMATTED
 ~~~roc
-person.age + 5
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop @1.1-2.2 (op "add")
+(e-binop @1.1-1.15 (op "add")
 	(e-dot-access @1.1-1.13 (field "age")
 		(receiver
 			(e-runtime-error (tag "ident_not_in_scope"))))
@@ -42,5 +40,5 @@ person.age + 5
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-2.2 (type "*"))
+(expr @1.1-1.15 (type "*"))
 ~~~

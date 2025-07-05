@@ -8,7 +8,6 @@ type=expr
 -(0(1
 d))
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - neg_nested_parens.md:1:1:1:3
 # PROBLEMS
@@ -27,8 +26,7 @@ Here is the problematic code:
 # TOKENS
 ~~~zig
 OpUnaryMinus(1:1-1:2),NoSpaceOpenRound(1:2-1:3),Int(1:3-1:4),NoSpaceOpenRound(1:4-1:5),Int(1:5-1:6),Newline(1:1-1:1),
-LowerIdent(2:1-2:2),CloseRound(2:2-2:3),CloseRound(2:3-2:4),Newline(1:1-1:1),
-MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
+LowerIdent(2:1-2:2),CloseRound(2:2-2:3),CloseRound(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # PARSE
 ~~~clojure

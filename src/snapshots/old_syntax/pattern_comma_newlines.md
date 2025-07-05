@@ -9,7 +9,6 @@ type=expr
 ):f
 n
 ~~~
-~~~
 # EXPECTED
 UNDEFINED VARIABLE - pattern_comma_newlines.md:1:1:1:2
 # PROBLEMS
@@ -39,8 +38,7 @@ But you are trying to use it as:
 ~~~zig
 Int(1:1-1:2),NoSpaceOpenRound(1:2-1:3),LowerIdent(1:3-1:4),Comma(1:4-1:5),LowerIdent(1:5-1:6),Newline(1:7-1:7),
 CloseRound(2:1-2:2),OpColon(2:2-2:3),LowerIdent(2:3-2:4),Newline(1:1-1:1),
-LowerIdent(3:1-3:2),Newline(1:1-1:1),
-MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
+LowerIdent(3:1-3:2),EndOfFile(3:2-3:2),
 ~~~
 # PARSE
 ~~~clojure

@@ -14,7 +14,6 @@ match list {
     [x, y, z, .. as more] => x + y + z
 }
 ~~~
-~~~
 # EXPECTED
 UNDEFINED VARIABLE - list_destructure_variations.md:5:18:5:22
 UNUSED VARIABLE - list_destructure_variations.md:6:22:6:26
@@ -69,8 +68,7 @@ OpenSquare(4:5-4:6),LowerIdent(4:6-4:11),Comma(4:11-4:12),LowerIdent(4:13-4:19),
 OpenSquare(5:5-5:6),LowerIdent(5:6-5:10),Comma(5:10-5:11),DoubleDot(5:12-5:14),KwAs(5:15-5:17),LowerIdent(5:18-5:22),CloseSquare(5:22-5:23),OpFatArrow(5:24-5:26),LowerIdent(5:27-5:31),Newline(1:1-1:1),
 OpenSquare(6:5-6:6),UpperIdent(6:6-6:9),Comma(6:9-6:10),UpperIdent(6:11-6:14),Comma(6:14-6:15),DoubleDot(6:16-6:18),KwAs(6:19-6:21),LowerIdent(6:22-6:26),CloseSquare(6:26-6:27),OpFatArrow(6:28-6:30),Int(6:31-6:32),Newline(1:1-1:1),
 OpenSquare(7:5-7:6),LowerIdent(7:6-7:7),Comma(7:7-7:8),LowerIdent(7:9-7:10),Comma(7:10-7:11),LowerIdent(7:12-7:13),Comma(7:13-7:14),DoubleDot(7:15-7:17),KwAs(7:18-7:20),LowerIdent(7:21-7:25),CloseSquare(7:25-7:26),OpFatArrow(7:27-7:29),LowerIdent(7:30-7:31),OpPlus(7:32-7:33),LowerIdent(7:34-7:35),OpPlus(7:36-7:37),LowerIdent(7:38-7:39),Newline(1:1-1:1),
-CloseCurly(8:1-8:2),Newline(1:1-1:1),
-MalformedUnknownToken(9:1-9:2),MalformedUnknownToken(9:2-9:3),MalformedUnknownToken(9:3-9:4),EndOfFile(9:4-9:4),
+CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 ~~~
 # PARSE
 ~~~clojure

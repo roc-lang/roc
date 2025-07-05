@@ -11,12 +11,8 @@ foo =
 
     "on        (string 'onmo %')))
 ~~~
-~~~
 # EXPECTED
 ASCII CONTROL CHARACTER - fuzz_crash_010.md:1:1:1:3
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_010.md:6:1:6:3
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_010.md:6:2:6:4
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_010.md:6:3:6:4
 # PROBLEMS
 **ASCII CONTROL CHARACTER**
 ASCII control characters are not allowed in Roc source code.
@@ -43,54 +39,6 @@ H{o,
 ^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**fuzz_crash_010.md:6:1:6:3:**
-```roc
-~~~
-```
-^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**fuzz_crash_010.md:6:2:6:4:**
-```roc
-~~~
-```
- ^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**fuzz_crash_010.md:6:3:6:4:**
-```roc
-~~~
-```
-  ^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
@@ -101,12 +49,11 @@ UpperIdent(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:3-1:4),Comma(1:4-1:5),Newlin
 CloseCurly(2:6-2:7),Newline(1:1-1:1),
 LowerIdent(3:1-3:4),OpAssign(3:5-3:6),Newline(1:1-1:1),
 Newline(1:1-1:1),
-StringStart(5:5-5:6),StringPart(5:6-5:35),StringEnd(5:35-5:35),Newline(1:1-1:1),
-MalformedUnknownToken(6:1-6:2),MalformedUnknownToken(6:2-6:3),MalformedUnknownToken(6:3-6:4),EndOfFile(6:4-6:4),
+StringStart(5:5-5:6),StringPart(5:6-5:35),EndOfFile(5:35-5:35),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-6.4
+(file @1.1-5.35
 	(malformed-header @1.1-1.3 (tag "missing_header"))
 	(statements
 		(e-record @1.2-2.7
@@ -114,10 +61,7 @@ MalformedUnknownToken(6:1-6:2),MalformedUnknownToken(6:2-6:3),MalformedUnknownTo
 		(s-decl @3.1-5.35
 			(p-ident @3.1-3.4 (raw "foo"))
 			(e-string @5.5-5.35
-				(e-string-part @5.6-5.35 (raw "on        (string 'onmo %')))"))))
-		(e-malformed @6.1-6.3 (reason "expr_unexpected_token"))
-		(e-malformed @6.2-6.4 (reason "expr_unexpected_token"))
-		(e-malformed @6.3-6.4 (reason "expr_unexpected_token"))))
+				(e-string-part @5.6-5.35 (raw "on        (string 'onmo %')))"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -128,7 +72,6 @@ MalformedUnknownToken(6:1-6:2),MalformedUnknownToken(6:2-6:3),MalformedUnknownTo
 foo = 
 
 	"on        (string 'onmo %')))"
-
 ~~~
 # CANONICALIZE
 ~~~clojure

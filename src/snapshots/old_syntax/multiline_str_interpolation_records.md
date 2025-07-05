@@ -10,7 +10,6 @@ type=expr
 ${{
 }i}"""
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - multiline_str_interpolation_records.md:1:1:1:4
 # PROBLEMS
@@ -31,8 +30,7 @@ Here is the problematic code:
 MultilineStringStart(1:1-1:4),StringPart(1:4-1:4),OpenStringInterpolation(1:4-1:6),OpenCurly(1:6-1:7),Newline(1:1-1:1),
 CloseCurly(2:1-2:2),LowerIdent(2:2-2:3),CloseStringInterpolation(2:3-2:4),StringPart(2:4-2:4),Newline(1:1-1:1),
 MalformedUnknownToken(3:1-3:2),OpenCurly(3:2-3:3),OpenCurly(3:3-3:4),Newline(1:1-1:1),
-CloseCurly(4:1-4:2),LowerIdent(4:2-4:3),CloseCurly(4:3-4:4),MultilineStringStart(4:4-4:7),StringPart(4:7-4:7),Newline(1:1-1:1),
-MalformedUnknownToken(5:1-5:2),MalformedUnknownToken(5:2-5:3),MalformedUnknownToken(5:3-5:4),EndOfFile(5:4-5:4),
+CloseCurly(4:1-4:2),LowerIdent(4:2-4:3),CloseCurly(4:3-4:4),MultilineStringStart(4:4-4:7),StringPart(4:7-4:7),EndOfFile(4:7-4:7),
 ~~~
 # PARSE
 ~~~clojure

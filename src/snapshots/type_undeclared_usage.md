@@ -16,51 +16,11 @@ processValue = |value| {
 
 AnotherType : SomeModule.MissingType
 ~~~
-~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - type_undeclared_usage.md:11:1:11:3
-UNEXPECTED TOKEN IN EXPRESSION - type_undeclared_usage.md:11:2:11:4
-UNEXPECTED TOKEN IN EXPRESSION - type_undeclared_usage.md:11:3:11:4
 UNDECLARED TYPE - type_undeclared_usage.md:3:10:3:21
 UNDECLARED TYPE - type_undeclared_usage.md:5:16:5:32
 UNUSED VARIABLE - type_undeclared_usage.md:6:17:6:22
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_undeclared_usage.md:11:1:11:3:**
-```roc
-~~~
-```
-^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_undeclared_usage.md:11:2:11:4:**
-```roc
-~~~
-```
- ^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_undeclared_usage.md:11:3:11:4:**
-```roc
-~~~
-```
-  ^
-
-
 **UNDECLARED TYPE**
 The type ``UnknownType`` is not declared in this scope.
 
@@ -95,18 +55,6 @@ processValue = |value| {
                 ^^^^^
 
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:15),Comma(1:15-1:16),LowerIdent(1:17-1:29),CloseSquare(1:29-1:30),Newline(1:1-1:1),
@@ -118,12 +66,11 @@ LowerIdent(6:1-6:13),OpAssign(6:14-6:15),OpBar(6:16-6:17),LowerIdent(6:17-6:22),
 StringStart(7:5-7:6),StringPart(7:6-7:15),StringEnd(7:15-7:16),Newline(1:1-1:1),
 CloseCurly(8:1-8:2),Newline(1:1-1:1),
 Newline(1:1-1:1),
-UpperIdent(10:1-10:12),OpColon(10:13-10:14),UpperIdent(10:15-10:25),NoSpaceDotUpperIdent(10:25-10:37),Newline(1:1-1:1),
-MalformedUnknownToken(11:1-11:2),MalformedUnknownToken(11:2-11:3),MalformedUnknownToken(11:3-11:4),EndOfFile(11:4-11:4),
+UpperIdent(10:1-10:12),OpColon(10:13-10:14),UpperIdent(10:15-10:25),NoSpaceDotUpperIdent(10:25-10:37),EndOfFile(10:37-10:37),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-11.4
+(file @1.1-10.37
 	(module @1.1-1.30
 		(exposes @1.8-1.30
 			(exposed-upper-ident (text "MyType"))
@@ -149,10 +96,7 @@ MalformedUnknownToken(11:1-11:2),MalformedUnknownToken(11:2-11:3),MalformedUnkno
 		(s-type-decl @10.1-10.37
 			(header @10.1-10.12 (name "AnotherType")
 				(args))
-			(ty @10.15-10.37 (name "SomeModule.MissingType")))
-		(e-malformed @11.1-11.3 (reason "expr_unexpected_token"))
-		(e-malformed @11.2-11.4 (reason "expr_unexpected_token"))
-		(e-malformed @11.3-11.4 (reason "expr_unexpected_token"))))
+			(ty @10.15-10.37 (name "SomeModule.MissingType")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -166,7 +110,6 @@ processValue = |value| {
 }
 
 AnotherType : SomeModule.MissingType
-
 ~~~
 # CANONICALIZE
 ~~~clojure

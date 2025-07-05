@@ -10,7 +10,6 @@ match person {
     { age } => age
 }
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -23,8 +22,7 @@ Is there an `import` or `exposing` missing up-top?
 KwMatch(1:1-1:6),LowerIdent(1:7-1:13),OpenCurly(1:14-1:15),Newline(1:1-1:1),
 OpenCurly(2:5-2:6),LowerIdent(2:7-2:11),CloseCurly(2:12-2:13),OpFatArrow(2:14-2:16),LowerIdent(2:17-2:21),Newline(1:1-1:1),
 OpenCurly(3:5-3:6),LowerIdent(3:7-3:10),CloseCurly(3:11-3:12),OpFatArrow(3:13-3:15),LowerIdent(3:16-3:19),Newline(1:1-1:1),
-CloseCurly(4:1-4:2),Newline(1:1-1:1),
-MalformedUnknownToken(5:1-5:2),MalformedUnknownToken(5:2-5:3),MalformedUnknownToken(5:3-5:4),EndOfFile(5:4-5:4),
+CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~
 # PARSE
 ~~~clojure

@@ -8,7 +8,6 @@ type=expr
 b
 \e->s
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -19,8 +18,7 @@ Is there an `import` or `exposing` missing up-top?
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),Newline(1:1-1:1),
-OpBackslash(2:1-2:2),LowerIdent(2:2-2:3),OpArrow(2:3-2:5),LowerIdent(2:5-2:6),Newline(1:1-1:1),
-MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
+OpBackslash(2:1-2:2),LowerIdent(2:2-2:3),OpArrow(2:3-2:5),LowerIdent(2:5-2:6),EndOfFile(2:6-2:6),
 ~~~
 # PARSE
 ~~~clojure

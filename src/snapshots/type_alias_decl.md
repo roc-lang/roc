@@ -45,7 +45,6 @@ main! = |_| {
     userId
 }
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -274,42 +273,6 @@ main! = |_| {
 ```
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_alias_decl.md:40:1:40:3:**
-```roc
-~~~
-```
-^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_alias_decl.md:40:2:40:4:**
-```roc
-~~~
-```
- ^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_alias_decl.md:40:3:40:4:**
-```roc
-~~~
-```
-  ^
-
-
 **TYPE REDECLARED**
 The type ``Result`` is being redeclared.
 
@@ -352,18 +315,6 @@ The unused variable is declared here:
     ^^^^^^
 
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),Newline(1:1-1:1),
@@ -404,12 +355,11 @@ LowerIdent(35:5-35:10),OpColon(35:11-35:12),UpperIdent(35:13-35:18),Newline(1:1-
 LowerIdent(36:5-36:10),OpAssign(36:11-36:12),UpperIdent(36:13-36:16),Newline(1:1-1:1),
 Newline(1:1-1:1),
 LowerIdent(38:5-38:11),Newline(1:1-1:1),
-CloseCurly(39:1-39:2),Newline(1:1-1:1),
-MalformedUnknownToken(40:1-40:2),MalformedUnknownToken(40:2-40:3),MalformedUnknownToken(40:3-40:4),EndOfFile(40:4-40:4),
+CloseCurly(39:1-39:2),EndOfFile(39:2-39:2),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-40.4
+(file @1.1-39.2
 	(app @1.1-1.53
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
@@ -520,10 +470,7 @@ MalformedUnknownToken(40:1-40:2),MalformedUnknownToken(40:2-40:3),MalformedUnkno
 						(s-decl @36.5-36.16
 							(p-ident @36.5-36.10 (raw "color"))
 							(e-tag @36.13-36.16 (raw "Red")))
-						(e-ident @38.5-38.11 (raw "userId"))))))
-		(e-malformed @40.1-40.3 (reason "expr_unexpected_token"))
-		(e-malformed @40.2-40.4 (reason "expr_unexpected_token"))
-		(e-malformed @40.3-40.4 (reason "expr_unexpected_token"))))
+						(e-ident @38.5-38.11 (raw "userId"))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -569,7 +516,6 @@ main! = |_| {
 
 	userId
 }
-
 ~~~
 # CANONICALIZE
 ~~~clojure

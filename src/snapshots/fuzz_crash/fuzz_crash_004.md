@@ -7,12 +7,8 @@ type=file
 ~~~roc
 F
 ~~~
-~~~
 # EXPECTED
-MISSING HEADER - fuzz_crash_004.md:1:1:1:1
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_004.md:2:1:2:3
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_004.md:2:2:2:4
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_004.md:2:3:2:4
+MISSING HEADER - fuzz_crash_004.md:1:1:1:2
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.
@@ -23,78 +19,25 @@ or for an app:
         app [main!] { pf: platform "../basic-cli/platform.roc" }
 
 Here is the problematic code:
-**fuzz_crash_004.md:1:1:1:1:**
+**fuzz_crash_004.md:1:1:1:2:**
 ```roc
 F
 ```
+^
 
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**fuzz_crash_004.md:2:1:2:3:**
-```roc
-~~~
-```
-^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**fuzz_crash_004.md:2:2:2:4:**
-```roc
-~~~
-```
- ^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**fuzz_crash_004.md:2:3:2:4:**
-```roc
-~~~
-```
-  ^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:2),Newline(1:1-1:1),
-MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
+UpperIdent(1:1-1:2),EndOfFile(1:2-1:2),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-2.4
-	(malformed-header @1.1-1.1 (tag "missing_header"))
-	(statements
-		(e-malformed @2.1-2.3 (reason "expr_unexpected_token"))
-		(e-malformed @2.2-2.4 (reason "expr_unexpected_token"))
-		(e-malformed @2.3-2.4 (reason "expr_unexpected_token"))))
+(file @1.1-1.2
+	(malformed-header @1.1-1.2 (tag "missing_header"))
+	(statements))
 ~~~
 # FORMATTED
 ~~~roc
-
 
 ~~~
 # CANONICALIZE

@@ -17,7 +17,6 @@ type=expr
     'hello'
 )
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -53,8 +52,7 @@ SingleQuote(7:5-7:15),Comma(7:15-7:16),Newline(1:1-1:1),
 SingleQuote(8:5-8:7),Comma(8:7-8:8),Newline(1:1-1:1),
 SingleQuote(9:5-9:14),Comma(9:14-9:15),Newline(1:1-1:1),
 SingleQuote(10:5-10:12),Newline(1:1-1:1),
-CloseRound(11:1-11:2),Newline(1:1-1:1),
-MalformedUnknownToken(12:1-12:2),MalformedUnknownToken(12:2-12:3),MalformedUnknownToken(12:3-12:4),EndOfFile(12:4-12:4),
+CloseRound(11:1-11:2),EndOfFile(11:2-11:2),
 ~~~
 # PARSE
 ~~~clojure

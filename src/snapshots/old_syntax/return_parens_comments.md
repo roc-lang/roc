@@ -10,7 +10,6 @@ return(3#
 )
 Z
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - return_parens_comments.md:1:1:1:8
 # PROBLEMS
@@ -31,8 +30,7 @@ return(3#
 KwReturn(1:1-1:7),NoSpaceOpenRound(1:7-1:8),Int(1:8-1:9),Newline(1:10-1:10),
 Newline(2:2-2:2),
 CloseRound(3:1-3:2),Newline(1:1-1:1),
-UpperIdent(4:1-4:2),Newline(1:1-1:1),
-MalformedUnknownToken(5:1-5:2),MalformedUnknownToken(5:2-5:3),MalformedUnknownToken(5:3-5:4),EndOfFile(5:4-5:4),
+UpperIdent(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~
 # PARSE
 ~~~clojure

@@ -7,7 +7,6 @@ type=expr
 ~~~roc
 -(8)
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - min_parens_number.md:1:1:1:3
 # PROBLEMS
@@ -25,8 +24,7 @@ Here is the problematic code:
 
 # TOKENS
 ~~~zig
-OpUnaryMinus(1:1-1:2),NoSpaceOpenRound(1:2-1:3),Int(1:3-1:4),CloseRound(1:4-1:5),Newline(1:1-1:1),
-MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
+OpUnaryMinus(1:1-1:2),NoSpaceOpenRound(1:2-1:3),Int(1:3-1:4),CloseRound(1:4-1:5),EndOfFile(1:5-1:5),
 ~~~
 # PARSE
 ~~~clojure

@@ -12,63 +12,12 @@ processDict = |_dict| []
 
 main! = |_| processDict(Dict.empty().insert("one", 1))
 ~~~
-~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - type_app_multiple_args.md:7:1:7:3
-UNEXPECTED TOKEN IN EXPRESSION - type_app_multiple_args.md:7:2:7:4
-UNEXPECTED TOKEN IN EXPRESSION - type_app_multiple_args.md:7:3:7:4
+NIL
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_app_multiple_args.md:7:1:7:3:**
-```roc
-~~~
-```
-^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_app_multiple_args.md:7:2:7:4:**
-```roc
-~~~
-```
- ^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_app_multiple_args.md:7:3:7:4:**
-```roc
-~~~
-```
-  ^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `empty` in this scope.
 Is there an `import` or `exposing` missing up-top?
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
 ~~~zig
@@ -77,12 +26,11 @@ Newline(1:1-1:1),
 LowerIdent(3:1-3:12),OpColon(3:13-3:14),UpperIdent(3:15-3:19),NoSpaceOpenRound(3:19-3:20),UpperIdent(3:20-3:23),Comma(3:23-3:24),UpperIdent(3:25-3:28),CloseRound(3:28-3:29),OpArrow(3:30-3:32),UpperIdent(3:33-3:37),NoSpaceOpenRound(3:37-3:38),UpperIdent(3:38-3:41),CloseRound(3:41-3:42),Newline(1:1-1:1),
 LowerIdent(4:1-4:12),OpAssign(4:13-4:14),OpBar(4:15-4:16),NamedUnderscore(4:16-4:21),OpBar(4:21-4:22),OpenSquare(4:23-4:24),CloseSquare(4:24-4:25),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBar(6:11-6:12),LowerIdent(6:13-6:24),NoSpaceOpenRound(6:24-6:25),UpperIdent(6:25-6:29),NoSpaceDotLowerIdent(6:29-6:35),NoSpaceOpenRound(6:35-6:36),CloseRound(6:36-6:37),NoSpaceDotLowerIdent(6:37-6:44),NoSpaceOpenRound(6:44-6:45),StringStart(6:45-6:46),StringPart(6:46-6:49),StringEnd(6:49-6:50),Comma(6:50-6:51),Int(6:52-6:53),CloseRound(6:53-6:54),CloseRound(6:54-6:55),Newline(1:1-1:1),
-MalformedUnknownToken(7:1-7:2),MalformedUnknownToken(7:2-7:3),MalformedUnknownToken(7:3-7:4),EndOfFile(7:4-7:4),
+LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBar(6:11-6:12),LowerIdent(6:13-6:24),NoSpaceOpenRound(6:24-6:25),UpperIdent(6:25-6:29),NoSpaceDotLowerIdent(6:29-6:35),NoSpaceOpenRound(6:35-6:36),CloseRound(6:36-6:37),NoSpaceDotLowerIdent(6:37-6:44),NoSpaceOpenRound(6:44-6:45),StringStart(6:45-6:46),StringPart(6:46-6:49),StringEnd(6:49-6:50),Comma(6:50-6:51),Int(6:52-6:53),CloseRound(6:53-6:54),CloseRound(6:54-6:55),EndOfFile(6:55-6:55),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-7.4
+(file @1.1-6.55
 	(app @1.1-1.53
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
@@ -123,20 +71,11 @@ MalformedUnknownToken(7:1-7:2),MalformedUnknownToken(7:2-7:3),MalformedUnknownTo
 							(e-ident @6.37-6.44 (raw "insert"))
 							(e-string @6.45-6.50
 								(e-string-part @6.46-6.49 (raw "one")))
-							(e-int @6.52-6.53 (raw "1")))))))
-		(e-malformed @7.1-7.3 (reason "expr_unexpected_token"))
-		(e-malformed @7.2-7.4 (reason "expr_unexpected_token"))
-		(e-malformed @7.3-7.4 (reason "expr_unexpected_token"))))
+							(e-int @6.52-6.53 (raw "1")))))))))
 ~~~
 # FORMATTED
 ~~~roc
-app [main!] { pf: platform "../basic-cli/main.roc" }
-
-processDict : Dict(Str, U64) -> List(Str)
-processDict = |_dict| []
-
-main! = |_| processDict(Dict.empty().insert("one", 1))
-
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

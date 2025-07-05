@@ -14,7 +14,6 @@ Model position :
 
 a
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -28,8 +27,7 @@ Comma(4:5-4:6),LowerIdent(4:7-4:12),OpColon(4:13-4:14),UpperIdent(4:15-4:19),NoS
 Comma(5:5-5:6),LowerIdent(5:7-5:15),OpColon(5:16-5:17),UpperIdent(5:18-5:22),NoSpaceDotUpperIdent(5:22-5:27),LowerIdent(5:28-5:36),LowerIdent(5:37-5:45),Newline(1:1-1:1),
 CloseCurly(6:5-6:6),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(8:1-8:2),Newline(1:1-1:1),
-MalformedUnknownToken(9:1-9:2),MalformedUnknownToken(9:2-9:3),MalformedUnknownToken(9:3-9:4),EndOfFile(9:4-9:4),
+LowerIdent(8:1-8:2),EndOfFile(8:2-8:2),
 ~~~
 # PARSE
 ~~~clojure

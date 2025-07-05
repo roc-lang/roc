@@ -21,7 +21,6 @@ type=expr
     },
 }
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -42,8 +41,7 @@ LowerIdent(11:5-11:11),OpColon(11:11-11:12),OpenCurly(11:13-11:14),Newline(1:1-1
 LowerIdent(12:9-12:14),OpColon(12:14-12:15),OpenSquare(12:16-12:17),UpperIdent(12:17-12:21),NoSpaceOpenRound(12:21-12:22),StringStart(12:22-12:23),StringPart(12:23-12:28),StringEnd(12:28-12:29),CloseRound(12:29-12:30),Comma(12:30-12:31),UpperIdent(12:32-12:36),Comma(12:36-12:37),UpperIdent(12:38-12:42),NoSpaceOpenRound(12:42-12:43),StringStart(12:43-12:44),StringPart(12:44-12:49),StringEnd(12:49-12:50),CloseRound(12:50-12:51),CloseSquare(12:51-12:52),Comma(12:52-12:53),Newline(1:1-1:1),
 LowerIdent(13:9-13:15),OpColon(13:15-13:16),UpperIdent(13:17-13:24),NoSpaceOpenRound(13:24-13:25),OpenCurly(13:25-13:26),LowerIdent(13:27-13:31),OpColon(13:31-13:32),OpenSquare(13:33-13:34),Int(13:34-13:35),Comma(13:35-13:36),Int(13:37-13:38),Comma(13:38-13:39),Int(13:40-13:41),CloseSquare(13:41-13:42),Comma(13:42-13:43),LowerIdent(13:44-13:53),OpColon(13:53-13:54),StringStart(13:55-13:56),StringPart(13:56-13:66),StringEnd(13:66-13:67),CloseCurly(13:68-13:69),CloseRound(13:69-13:70),Comma(13:70-13:71),Newline(1:1-1:1),
 CloseCurly(14:5-14:6),Comma(14:6-14:7),Newline(1:1-1:1),
-CloseCurly(15:1-15:2),Newline(1:1-1:1),
-MalformedUnknownToken(16:1-16:2),MalformedUnknownToken(16:2-16:3),MalformedUnknownToken(16:3-16:4),EndOfFile(16:4-16:4),
+CloseCurly(15:1-15:2),EndOfFile(15:2-15:2),
 ~~~
 # PARSE
 ~~~clojure

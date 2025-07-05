@@ -30,49 +30,9 @@ handleResponse = |_response| "handled"
 
 main! = |_| {}
 ~~~
-~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - type_tag_union_complex.md:25:1:25:3
-UNEXPECTED TOKEN IN EXPRESSION - type_tag_union_complex.md:25:2:25:4
-UNEXPECTED TOKEN IN EXPRESSION - type_tag_union_complex.md:25:3:25:4
 TYPE REDECLARED - type_tag_union_complex.md:7:1:7:55
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_tag_union_complex.md:25:1:25:3:**
-```roc
-~~~
-```
-^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_tag_union_complex.md:25:2:25:4:**
-```roc
-~~~
-```
- ^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_tag_union_complex.md:25:3:25:4:**
-```roc
-~~~
-```
-  ^
-
-
 **TYPE REDECLARED**
 The type ``Result`` is being redeclared.
 
@@ -90,18 +50,6 @@ app [main!] { pf: platform "../basic-cli/main.roc" }
 ```
 
 
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
 ~~~zig
@@ -128,12 +76,11 @@ Newline(20:2-20:33),
 LowerIdent(21:1-21:15),OpColon(21:16-21:17),UpperIdent(21:18-21:26),OpArrow(21:27-21:29),UpperIdent(21:30-21:33),Newline(1:1-1:1),
 LowerIdent(22:1-22:15),OpAssign(22:16-22:17),OpBar(22:18-22:19),NamedUnderscore(22:19-22:28),OpBar(22:28-22:29),StringStart(22:30-22:31),StringPart(22:31-22:38),StringEnd(22:38-22:39),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(24:1-24:6),OpAssign(24:7-24:8),OpBar(24:9-24:10),Underscore(24:10-24:11),OpBar(24:11-24:12),OpenCurly(24:13-24:14),CloseCurly(24:14-24:15),Newline(1:1-1:1),
-MalformedUnknownToken(25:1-25:2),MalformedUnknownToken(25:2-25:3),MalformedUnknownToken(25:3-25:4),EndOfFile(25:4-25:4),
+LowerIdent(24:1-24:6),OpAssign(24:7-24:8),OpBar(24:9-24:10),Underscore(24:10-24:11),OpBar(24:11-24:12),OpenCurly(24:13-24:14),CloseCurly(24:14-24:15),EndOfFile(24:15-24:15),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-25.4
+(file @1.1-24.15
 	(app @1.1-1.53
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
@@ -227,38 +174,11 @@ MalformedUnknownToken(25:1-25:2),MalformedUnknownToken(25:2-25:3),MalformedUnkno
 			(e-lambda @24.9-24.15
 				(args
 					(p-underscore))
-				(e-record @24.13-24.15)))
-		(e-malformed @25.1-25.3 (reason "expr_unexpected_token"))
-		(e-malformed @25.2-25.4 (reason "expr_unexpected_token"))
-		(e-malformed @25.3-25.4 (reason "expr_unexpected_token"))))
+				(e-record @24.13-24.15)))))
 ~~~
 # FORMATTED
 ~~~roc
-app [main!] { pf: platform "../basic-cli/main.roc" }
-
-# Simple tag union with no-argument tags
-Status : [Loading, Complete, Failed]
-
-# Tag union with mixed argument types
-Result : [Success(Str), Error(Str), Warning(Str, I32)]
-
-# Nested tag unions
-Response : [Ok(Result), NetworkError, ParseError]
-
-# Multiple tag unions using similar tag names
-UserState : [Active(Str), Inactive, Suspended(Str)]
-ConnectionState : [Active, Disconnected, Connecting(Str)]
-
-# Function using tag unions
-processResult : Result -> Str
-processResult = |_result| "processed"
-
-# Function with nested tag union
-handleResponse : Response -> Str
-handleResponse = |_response| "handled"
-
-main! = |_| {}
-
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

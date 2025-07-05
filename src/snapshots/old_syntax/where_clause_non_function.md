@@ -9,7 +9,6 @@ f : a where a implements A
 
 f
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -21,8 +20,7 @@ Is there an `import` or `exposing` missing up-top?
 ~~~zig
 LowerIdent(1:1-1:2),OpColon(1:3-1:4),LowerIdent(1:5-1:6),KwWhere(1:7-1:12),LowerIdent(1:13-1:14),KwImplements(1:15-1:25),UpperIdent(1:26-1:27),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(3:1-3:2),Newline(1:1-1:1),
-MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
+LowerIdent(3:1-3:2),EndOfFile(3:2-3:2),
 ~~~
 # PARSE
 ~~~clojure

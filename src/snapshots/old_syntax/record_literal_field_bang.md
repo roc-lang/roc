@@ -10,7 +10,6 @@ type=expr
     launchTheNukes!: \{} -> boom
 }
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - record_literal_field_bang.md:3:22:3:24
 PARSE ERROR - record_literal_field_bang.md:3:23:3:25
@@ -44,8 +43,7 @@ Here is the problematic code:
 OpenCurly(1:1-1:2),Newline(1:1-1:1),
 LowerIdent(2:5-2:11),OpColon(2:11-2:12),Int(2:13-2:15),Comma(2:15-2:16),Newline(1:1-1:1),
 LowerIdent(3:5-3:20),OpColon(3:20-3:21),OpBackslash(3:22-3:23),OpenCurly(3:23-3:24),CloseCurly(3:24-3:25),OpArrow(3:26-3:28),LowerIdent(3:29-3:33),Newline(1:1-1:1),
-CloseCurly(4:1-4:2),Newline(1:1-1:1),
-MalformedUnknownToken(5:1-5:2),MalformedUnknownToken(5:2-5:3),MalformedUnknownToken(5:3-5:4),EndOfFile(5:4-5:4),
+CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~
 # PARSE
 ~~~clojure

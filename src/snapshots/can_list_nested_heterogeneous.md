@@ -7,7 +7,6 @@ type=expr
 ~~~roc
 [[], [1], ["hello"]]
 ~~~
-~~~
 # EXPECTED
 INCOMPATIBLE LIST ELEMENTS - can_list_nested_heterogeneous.md:1:6:1:6
 # PROBLEMS
@@ -32,8 +31,7 @@ To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig
-OpenSquare(1:1-1:2),OpenSquare(1:2-1:3),CloseSquare(1:3-1:4),Comma(1:4-1:5),OpenSquare(1:6-1:7),Int(1:7-1:8),CloseSquare(1:8-1:9),Comma(1:9-1:10),OpenSquare(1:11-1:12),StringStart(1:12-1:13),StringPart(1:13-1:18),StringEnd(1:18-1:19),CloseSquare(1:19-1:20),CloseSquare(1:20-1:21),Newline(1:1-1:1),
-MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
+OpenSquare(1:1-1:2),OpenSquare(1:2-1:3),CloseSquare(1:3-1:4),Comma(1:4-1:5),OpenSquare(1:6-1:7),Int(1:7-1:8),CloseSquare(1:8-1:9),Comma(1:9-1:10),OpenSquare(1:11-1:12),StringStart(1:12-1:13),StringPart(1:13-1:18),StringEnd(1:18-1:19),CloseSquare(1:19-1:20),CloseSquare(1:20-1:21),EndOfFile(1:21-1:21),
 ~~~
 # PARSE
 ~~~clojure
@@ -47,7 +45,7 @@ MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownTo
 ~~~
 # FORMATTED
 ~~~roc
-[[], [1], ["hello"]]
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

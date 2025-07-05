@@ -7,7 +7,6 @@ type=expr
 ~~~roc
 "\(e)"
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -16,8 +15,7 @@ This escape sequence is not recognized.
 
 # TOKENS
 ~~~zig
-StringStart(1:1-1:2),StringPart(1:2-1:6),StringEnd(1:6-1:7),Newline(1:1-1:1),
-MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
+StringStart(1:1-1:2),StringPart(1:2-1:6),StringEnd(1:6-1:7),EndOfFile(1:7-1:7),
 ~~~
 # PARSE
 ~~~clojure
@@ -26,7 +24,7 @@ MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownTo
 ~~~
 # FORMATTED
 ~~~roc
-"\(e)"
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

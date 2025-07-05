@@ -10,7 +10,6 @@ some_fn(arg1)?
 	.next_static_dispatch_method()?
 	.record_field?
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -23,12 +22,11 @@ Let us know if you want to help!
 LowerIdent(1:1-1:8),NoSpaceOpenRound(1:8-1:9),LowerIdent(1:9-1:13),CloseRound(1:13-1:14),NoSpaceOpQuestion(1:14-1:15),Newline(1:1-1:1),
 DotLowerIdent(2:2-2:25),NoSpaceOpenRound(2:25-2:26),CloseRound(2:26-2:27),NoSpaceOpQuestion(2:27-2:28),Newline(1:1-1:1),
 DotLowerIdent(3:2-3:30),NoSpaceOpenRound(3:30-3:31),CloseRound(3:31-3:32),NoSpaceOpQuestion(3:32-3:33),Newline(1:1-1:1),
-DotLowerIdent(4:2-4:15),NoSpaceOpQuestion(4:15-4:16),Newline(1:1-1:1),
-MalformedUnknownToken(5:1-5:2),MalformedUnknownToken(5:2-5:3),MalformedUnknownToken(5:3-5:4),EndOfFile(5:4-5:4),
+DotLowerIdent(4:2-4:15),NoSpaceOpQuestion(4:15-4:16),EndOfFile(4:16-4:16),
 ~~~
 # PARSE
 ~~~clojure
-(e-field-access @1.1-5.2
+(e-field-access @1.1-4.16
 	(e-field-access @1.1-4.15
 		(e-field-access @1.1-3.30
 			(e-question-suffix @1.1-1.15
@@ -46,14 +44,11 @@ MalformedUnknownToken(5:1-5:2),MalformedUnknownToken(5:2-5:3),MalformedUnknownTo
 ~~~
 # FORMATTED
 ~~~roc
-some_fn(arg1)?
-	.static_dispatch_method()?
-	.next_static_dispatch_method()?
-	.record_field?
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dot-access @1.1-5.2 (field "unknown")
+(e-dot-access @1.1-4.16 (field "unknown")
 	(receiver
 		(e-dot-access @1.1-4.15 (field "unknown")
 			(receiver
@@ -63,5 +58,5 @@ some_fn(arg1)?
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-5.2 (type "*"))
+(expr @1.1-4.16 (type "*"))
 ~~~

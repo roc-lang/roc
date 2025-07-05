@@ -12,61 +12,9 @@ mapList = |list, fn| list.map(fn)
 
 main! = |_| mapList([1,2,3,4,5])
 ~~~
-~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - type_app_with_vars.md:7:1:7:3
-UNEXPECTED TOKEN IN EXPRESSION - type_app_with_vars.md:7:2:7:4
-UNEXPECTED TOKEN IN EXPRESSION - type_app_with_vars.md:7:3:7:4
-INVALID STATEMENT - type_app_with_vars.md:6:13:6:20
+TYPE MISMATCH - type_app_with_vars.md:6:13:6:20
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_app_with_vars.md:7:1:7:3:**
-```roc
-~~~
-```
-^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_app_with_vars.md:7:2:7:4:**
-```roc
-~~~
-```
- ^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_app_with_vars.md:7:3:7:4:**
-```roc
-~~~
-```
-  ^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
 **type_app_with_vars.md:6:13:6:20:**
@@ -88,12 +36,11 @@ Newline(1:1-1:1),
 LowerIdent(3:1-3:8),OpColon(3:9-3:10),UpperIdent(3:11-3:15),NoSpaceOpenRound(3:15-3:16),LowerIdent(3:16-3:17),CloseRound(3:17-3:18),Comma(3:18-3:19),OpenRound(3:20-3:21),LowerIdent(3:21-3:22),OpArrow(3:23-3:25),LowerIdent(3:26-3:27),CloseRound(3:27-3:28),OpArrow(3:29-3:31),UpperIdent(3:32-3:36),NoSpaceOpenRound(3:36-3:37),LowerIdent(3:37-3:38),CloseRound(3:38-3:39),Newline(1:1-1:1),
 LowerIdent(4:1-4:8),OpAssign(4:9-4:10),OpBar(4:11-4:12),LowerIdent(4:12-4:16),Comma(4:16-4:17),LowerIdent(4:18-4:20),OpBar(4:20-4:21),LowerIdent(4:22-4:26),NoSpaceDotLowerIdent(4:26-4:30),NoSpaceOpenRound(4:30-4:31),LowerIdent(4:31-4:33),CloseRound(4:33-4:34),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBar(6:11-6:12),LowerIdent(6:13-6:20),NoSpaceOpenRound(6:20-6:21),OpenSquare(6:21-6:22),Int(6:22-6:23),Comma(6:23-6:24),Int(6:24-6:25),Comma(6:25-6:26),Int(6:26-6:27),Comma(6:27-6:28),Int(6:28-6:29),Comma(6:29-6:30),Int(6:30-6:31),CloseSquare(6:31-6:32),CloseRound(6:32-6:33),Newline(1:1-1:1),
-MalformedUnknownToken(7:1-7:2),MalformedUnknownToken(7:2-7:3),MalformedUnknownToken(7:3-7:4),EndOfFile(7:4-7:4),
+LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBar(6:11-6:12),LowerIdent(6:13-6:20),NoSpaceOpenRound(6:20-6:21),OpenSquare(6:21-6:22),Int(6:22-6:23),Comma(6:23-6:24),Int(6:24-6:25),Comma(6:25-6:26),Int(6:26-6:27),Comma(6:27-6:28),Int(6:28-6:29),Comma(6:29-6:30),Int(6:30-6:31),CloseSquare(6:31-6:32),CloseRound(6:32-6:33),EndOfFile(6:33-6:33),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-7.4
+(file @1.1-6.33
 	(app @1.1-1.53
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
@@ -139,10 +86,7 @@ MalformedUnknownToken(7:1-7:2),MalformedUnknownToken(7:2-7:3),MalformedUnknownTo
 						(e-int @6.24-6.25 (raw "2"))
 						(e-int @6.26-6.27 (raw "3"))
 						(e-int @6.28-6.29 (raw "4"))
-						(e-int @6.30-6.31 (raw "5"))))))
-		(e-malformed @7.1-7.3 (reason "expr_unexpected_token"))
-		(e-malformed @7.2-7.4 (reason "expr_unexpected_token"))
-		(e-malformed @7.3-7.4 (reason "expr_unexpected_token"))))
+						(e-int @6.30-6.31 (raw "5"))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -152,7 +96,6 @@ mapList : List(a), (a -> b) -> List(b)
 mapList = |list, fn| list.map(fn)
 
 main! = |_| mapList([1, 2, 3, 4, 5])
-
 ~~~
 # CANONICALIZE
 ~~~clojure

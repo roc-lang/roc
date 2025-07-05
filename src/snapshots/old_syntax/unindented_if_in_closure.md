@@ -9,7 +9,6 @@ type=expr
 f
 else-9
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - unindented_if_in_closure.md:1:1:1:3
 # PROBLEMS
@@ -29,8 +28,7 @@ Here is the problematic code:
 ~~~zig
 OpBackslash(1:1-1:2),UpperIdent(1:2-1:3),OpArrow(1:3-1:5),LowerIdent(1:5-1:14),Newline(1:1-1:1),
 LowerIdent(2:1-2:2),Newline(1:1-1:1),
-KwElse(3:1-3:5),OpBinaryMinus(3:5-3:6),Int(3:6-3:7),Newline(1:1-1:1),
-MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
+KwElse(3:1-3:5),OpBinaryMinus(3:5-3:6),Int(3:6-3:7),EndOfFile(3:7-3:7),
 ~~~
 # PARSE
 ~~~clojure

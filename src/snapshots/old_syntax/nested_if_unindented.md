@@ -8,21 +8,20 @@ type=expr
 if""then-p else
 if""then-p else.e
 ~~~
-~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - nested_if_unindented.md:2:16:2:16
+UNEXPECTED TOKEN IN EXPRESSION - nested_if_unindented.md:2:16:2:18
 UNDEFINED VARIABLE - nested_if_unindented.md:2:3:2:3
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
+The token **.e** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**nested_if_unindented.md:2:16:2:16:**
+**nested_if_unindented.md:2:16:2:18:**
 ```roc
 if""then-p else.e
 ```
-               
+               ^^
 
 
 **UNDEFINED VARIABLE**
@@ -77,24 +76,23 @@ Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
 # TOKENS
 ~~~zig
 KwIf(1:1-1:3),StringStart(1:3-1:4),StringPart(1:4-1:4),StringEnd(1:4-1:5),LowerIdent(1:5-1:9),OpBinaryMinus(1:9-1:10),LowerIdent(1:10-1:11),KwElse(1:12-1:16),Newline(1:1-1:1),
-KwIf(2:1-2:3),StringStart(2:3-2:4),StringPart(2:4-2:4),StringEnd(2:4-2:5),LowerIdent(2:5-2:9),OpBinaryMinus(2:9-2:10),LowerIdent(2:10-2:11),KwElse(2:12-2:16),NoSpaceDotLowerIdent(2:16-2:18),Newline(1:1-1:1),
-MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
+KwIf(2:1-2:3),StringStart(2:3-2:4),StringPart(2:4-2:4),StringEnd(2:4-2:5),LowerIdent(2:5-2:9),OpBinaryMinus(2:9-2:10),LowerIdent(2:10-2:11),KwElse(2:12-2:16),NoSpaceDotLowerIdent(2:16-2:18),EndOfFile(2:18-2:18),
 ~~~
 # PARSE
 ~~~clojure
-(e-if-then-else @1.1-1.1
+(e-if-then-else @1.1-2.18
 	(e-string @1.3-1.5
 		(e-string-part @1.4-1.4 (raw "")))
 	(e-binop @1.5-1.16 (op "-")
 		(e-ident @1.5-1.9 (raw "then"))
 		(e-ident @1.10-1.11 (raw "p")))
-	(e-if-then-else @1.1-1.1
+	(e-if-then-else @2.1-2.18
 		(e-string @2.3-2.5
 			(e-string-part @2.4-2.4 (raw "")))
 		(e-binop @2.5-2.16 (op "-")
 			(e-ident @2.5-2.9 (raw "then"))
 			(e-ident @2.10-2.11 (raw "p")))
-		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))))
+		(e-malformed @2.16-2.18 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -104,7 +102,7 @@ if "" then - p
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-if @1.1-1.1
+(e-if @1.1-2.18
 	(if-branches
 		(if-branch
 			(e-string @1.3-1.5
@@ -123,5 +121,5 @@ if "" then - p
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.1 (type "Error"))
+(expr @1.1-2.18 (type "Error"))
 ~~~

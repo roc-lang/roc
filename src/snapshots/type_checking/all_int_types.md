@@ -37,60 +37,10 @@ i = -9223372036854775808
 j : I128
 j = -170141183460469231731687303715884105728
 ~~~
-~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - all_int_types.md:32:1:32:3
-UNEXPECTED TOKEN IN EXPRESSION - all_int_types.md:32:2:32:4
-UNEXPECTED TOKEN IN EXPRESSION - all_int_types.md:32:3:32:4
+NIL
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**all_int_types.md:32:1:32:3:**
-```roc
-~~~
-```
-^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**all_int_types.md:32:2:32:4:**
-```roc
-~~~
-```
- ^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**all_int_types.md:32:3:32:4:**
-```roc
-~~~
-```
-  ^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
+NIL
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),
@@ -123,12 +73,11 @@ LowerIdent(27:1-27:2),OpColon(27:3-27:4),UpperIdent(27:5-27:8),Newline(1:1-1:1),
 LowerIdent(28:1-28:2),OpAssign(28:3-28:4),Int(28:5-28:25),Newline(1:1-1:1),
 Newline(1:1-1:1),
 LowerIdent(30:1-30:2),OpColon(30:3-30:4),UpperIdent(30:5-30:9),Newline(1:1-1:1),
-LowerIdent(31:1-31:2),OpAssign(31:3-31:4),Int(31:5-31:45),Newline(1:1-1:1),
-MalformedUnknownToken(32:1-32:2),MalformedUnknownToken(32:2-32:3),MalformedUnknownToken(32:3-32:4),EndOfFile(32:4-32:4),
+LowerIdent(31:1-31:2),OpAssign(31:3-31:4),Int(31:5-31:45),EndOfFile(31:45-31:45),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-32.4
+(file @1.1-31.45
 	(module @1.1-1.10
 		(exposes @1.8-1.10))
 	(statements
@@ -181,45 +130,11 @@ MalformedUnknownToken(32:1-32:2),MalformedUnknownToken(32:2-32:3),MalformedUnkno
 			(ty @30.5-30.9 (name "I128")))
 		(s-decl @31.1-31.45
 			(p-ident @31.1-31.2 (raw "j"))
-			(e-int @31.5-31.45 (raw "-170141183460469231731687303715884105728")))
-		(e-malformed @32.1-32.3 (reason "expr_unexpected_token"))
-		(e-malformed @32.2-32.4 (reason "expr_unexpected_token"))
-		(e-malformed @32.3-32.4 (reason "expr_unexpected_token"))))
+			(e-int @31.5-31.45 (raw "-170141183460469231731687303715884105728")))))
 ~~~
 # FORMATTED
 ~~~roc
-module []
-
-a : U8
-a = 255
-
-b : U16
-b = 65535
-
-c : U32
-c = 4294967295
-
-d : U64
-d = 18446744073709551615
-
-e : U128
-e = 340282366920938463463374607431768211455
-
-f : I8
-f = -128
-
-g : I16
-g = -32768
-
-h : I32
-h = -2147483648
-
-i : I64
-i = -9223372036854775808
-
-j : I128
-j = -170141183460469231731687303715884105728
-
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

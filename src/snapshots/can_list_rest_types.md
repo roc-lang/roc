@@ -10,7 +10,6 @@ match numbers {
     [] => []
 }
 ~~~
-~~~
 # EXPECTED
 UNDEFINED VARIABLE - can_list_rest_types.md:2:6:2:11
 # PROBLEMS
@@ -35,8 +34,7 @@ The unused variable is declared here:
 KwMatch(1:1-1:6),LowerIdent(1:7-1:14),OpenCurly(1:15-1:16),Newline(1:1-1:1),
 OpenSquare(2:5-2:6),LowerIdent(2:6-2:11),Comma(2:11-2:12),DoubleDot(2:13-2:15),KwAs(2:16-2:18),LowerIdent(2:19-2:27),CloseSquare(2:27-2:28),OpFatArrow(2:29-2:31),LowerIdent(2:32-2:40),Newline(1:1-1:1),
 OpenSquare(3:5-3:6),CloseSquare(3:6-3:7),OpFatArrow(3:8-3:10),OpenSquare(3:11-3:12),CloseSquare(3:12-3:13),Newline(1:1-1:1),
-CloseCurly(4:1-4:2),Newline(1:1-1:1),
-MalformedUnknownToken(5:1-5:2),MalformedUnknownToken(5:2-5:3),MalformedUnknownToken(5:3-5:4),EndOfFile(5:4-5:4),
+CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~
 # PARSE
 ~~~clojure

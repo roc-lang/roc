@@ -11,7 +11,6 @@ i
 )
 r
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -25,8 +24,7 @@ LowerIdent(1:1-1:2),OpAssign(1:2-1:3),NoSpaceOpenRound(1:3-1:4),Newline(1:1-1:1)
 LowerIdent(2:1-2:2),Newline(1:1-1:1),
 Newline(3:2-3:2),
 CloseRound(4:1-4:2),Newline(1:1-1:1),
-LowerIdent(5:1-5:2),Newline(1:1-1:1),
-MalformedUnknownToken(6:1-6:2),MalformedUnknownToken(6:2-6:3),MalformedUnknownToken(6:3-6:4),EndOfFile(6:4-6:4),
+LowerIdent(5:1-5:2),EndOfFile(5:2-5:2),
 ~~~
 # PARSE
 ~~~clojure

@@ -9,7 +9,6 @@ type=expr
  import U
  {}e
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - import_in_closure_with_curlies_after.md:1:1:1:3
 # PROBLEMS
@@ -29,8 +28,7 @@ Here is the problematic code:
 ~~~zig
 OpBackslash(1:1-1:2),UpperIdent(1:2-1:3),OpArrow(1:3-1:5),Newline(1:1-1:1),
 KwImport(2:2-2:8),UpperIdent(2:9-2:10),Newline(1:1-1:1),
-OpenCurly(3:2-3:3),CloseCurly(3:3-3:4),LowerIdent(3:4-3:5),Newline(1:1-1:1),
-MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
+OpenCurly(3:2-3:3),CloseCurly(3:3-3:4),LowerIdent(3:4-3:5),EndOfFile(3:5-3:5),
 ~~~
 # PARSE
 ~~~clojure

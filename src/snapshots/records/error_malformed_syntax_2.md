@@ -7,7 +7,6 @@ type=expr
 ~~~roc
 { age: 42, name = "Alice" }
 ~~~
-~~~
 # EXPECTED
 PARSE ERROR - error_malformed_syntax_2.md:1:17:1:20
 # PROBLEMS
@@ -25,8 +24,7 @@ Here is the problematic code:
 
 # TOKENS
 ~~~zig
-OpenCurly(1:1-1:2),LowerIdent(1:3-1:6),OpColon(1:6-1:7),Int(1:8-1:10),Comma(1:10-1:11),LowerIdent(1:12-1:16),OpAssign(1:17-1:18),StringStart(1:19-1:20),StringPart(1:20-1:25),StringEnd(1:25-1:26),CloseCurly(1:27-1:28),Newline(1:1-1:1),
-MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
+OpenCurly(1:1-1:2),LowerIdent(1:3-1:6),OpColon(1:6-1:7),Int(1:8-1:10),Comma(1:10-1:11),LowerIdent(1:12-1:16),OpAssign(1:17-1:18),StringStart(1:19-1:20),StringPart(1:20-1:25),StringEnd(1:25-1:26),CloseCurly(1:27-1:28),EndOfFile(1:28-1:28),
 ~~~
 # PARSE
 ~~~clojure

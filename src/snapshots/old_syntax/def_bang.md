@@ -10,7 +10,6 @@ launchTheNukes! = \{} ->
 
 launchTheNukes! {}
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -23,8 +22,7 @@ Is there an `import` or `exposing` missing up-top?
 LowerIdent(1:1-1:16),OpAssign(1:17-1:18),OpBackslash(1:19-1:20),OpenCurly(1:20-1:21),CloseCurly(1:21-1:22),OpArrow(1:23-1:25),Newline(1:1-1:1),
 LowerIdent(2:5-2:9),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(4:1-4:16),OpenCurly(4:17-4:18),CloseCurly(4:18-4:19),Newline(1:1-1:1),
-MalformedUnknownToken(5:1-5:2),MalformedUnknownToken(5:2-5:3),MalformedUnknownToken(5:3-5:4),EndOfFile(5:4-5:4),
+LowerIdent(4:1-4:16),OpenCurly(4:17-4:18),CloseCurly(4:18-4:19),EndOfFile(4:19-4:19),
 ~~~
 # PARSE
 ~~~clojure

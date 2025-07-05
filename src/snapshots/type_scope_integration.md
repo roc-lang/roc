@@ -19,50 +19,10 @@ Bar : SomeUndeclaredType
 # Declare a type that properly uses a declared type
 Baz : Foo
 ~~~
-~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - type_scope_integration.md:14:1:14:3
-UNEXPECTED TOKEN IN EXPRESSION - type_scope_integration.md:14:2:14:4
-UNEXPECTED TOKEN IN EXPRESSION - type_scope_integration.md:14:3:14:4
 TYPE REDECLARED - type_scope_integration.md:7:1:7:10
 type_scope_integration.md:4:1:4:10: - type_scope_integration.md:10:7:10:25
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_scope_integration.md:14:1:14:3:**
-```roc
-~~~
-```
-^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_scope_integration.md:14:2:14:4:**
-```roc
-~~~
-```
- ^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_scope_integration.md:14:3:14:4:**
-```roc
-~~~
-```
-  ^
-
-
 **TYPE REDECLARED**
 The type ``Foo`` is being redeclared.
 
@@ -92,18 +52,6 @@ Bar : SomeUndeclaredType
       ^^^^^^^^^^^^^^^^^^
 
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:12),Comma(1:12-1:13),UpperIdent(1:14-1:17),CloseSquare(1:17-1:18),Newline(1:1-1:1),
@@ -118,12 +66,11 @@ Newline(9:2-9:52),
 UpperIdent(10:1-10:4),OpColon(10:5-10:6),UpperIdent(10:7-10:25),Newline(1:1-1:1),
 Newline(1:1-1:1),
 Newline(12:2-12:52),
-UpperIdent(13:1-13:4),OpColon(13:5-13:6),UpperIdent(13:7-13:10),Newline(1:1-1:1),
-MalformedUnknownToken(14:1-14:2),MalformedUnknownToken(14:2-14:3),MalformedUnknownToken(14:3-14:4),EndOfFile(14:4-14:4),
+UpperIdent(13:1-13:4),OpColon(13:5-13:6),UpperIdent(13:7-13:10),EndOfFile(13:10-13:10),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-14.4
+(file @1.1-13.10
 	(module @1.1-1.18
 		(exposes @1.8-1.18
 			(exposed-upper-ident (text "Foo"))
@@ -144,27 +91,11 @@ MalformedUnknownToken(14:1-14:2),MalformedUnknownToken(14:2-14:3),MalformedUnkno
 		(s-type-decl @13.1-13.10
 			(header @13.1-13.4 (name "Baz")
 				(args))
-			(ty @13.7-13.10 (name "Foo")))
-		(e-malformed @14.1-14.3 (reason "expr_unexpected_token"))
-		(e-malformed @14.2-14.4 (reason "expr_unexpected_token"))
-		(e-malformed @14.3-14.4 (reason "expr_unexpected_token"))))
+			(ty @13.7-13.10 (name "Foo")))))
 ~~~
 # FORMATTED
 ~~~roc
-module [Foo, Bar]
-
-# First declare a type
-Foo : U64
-
-# Try to redeclare the same type (should error)
-Foo : Str
-
-# Declare another type that uses an undeclared type
-Bar : SomeUndeclaredType
-
-# Declare a type that properly uses a declared type
-Baz : Foo
-
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

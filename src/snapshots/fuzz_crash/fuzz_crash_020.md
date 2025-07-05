@@ -127,11 +127,7 @@ expect {
 h == foo
 }
 ~~~
-~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_020.md:122:1:122:3
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_020.md:122:2:122:4
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_020.md:122:3:122:4
 UNDECLARED TYPE - fuzz_crash_020.md:13:13:13:16
 UNDECLARED TYPE VARIABLE - fuzz_crash_020.md:13:19:13:21
 UNDECLARED TYPE VARIABLE - fuzz_crash_020.md:19:4:19:6
@@ -151,42 +147,6 @@ UNUSED VARIABLE - fuzz_crash_020.md:87:2:87:3
 UNDECLARED TYPE - fuzz_crash_020.md:116:5:116:6
 NOT IMPLEMENTED - fuzz_crash_020.md:52:2:52:2
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**fuzz_crash_020.md:122:1:122:3:**
-```roc
-~~~
-```
-^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**fuzz_crash_020.md:122:2:122:4:**
-```roc
-~~~
-```
- ^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**fuzz_crash_020.md:122:3:122:4:**
-```roc
-~~~
-```
-  ^
-
-
 **UNDECLARED TYPE**
 The type ``Lis`` is not declared in this scope.
 
@@ -528,18 +488,6 @@ t : V((a,c))
 This feature is not yet implemented or doesn't have a proper error report yet: top-level expect
 Let us know if you want to help!
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
 **INCOMPATIBLE MATCH PATTERNS**
 The pattern in the fourth branch of this `match` differs from previous ones:
 **fuzz_crash_020.md:52:2:**
@@ -697,12 +645,11 @@ Newline(1:1-1:1),
 KwExpect(118:1-118:7),OpenCurly(118:8-118:9),Newline(1:1-1:1),
 LowerIdent(119:2-119:5),OpEquals(119:6-119:8),Int(119:9-119:10),Newline(1:1-1:1),
 LowerIdent(120:1-120:2),OpEquals(120:3-120:5),LowerIdent(120:6-120:9),Newline(1:1-1:1),
-CloseCurly(121:1-121:2),Newline(1:1-1:1),
-MalformedUnknownToken(122:1-122:2),MalformedUnknownToken(122:2-122:3),MalformedUnknownToken(122:3-122:4),EndOfFile(122:4-122:4),
+CloseCurly(121:1-121:2),EndOfFile(121:2-121:2),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.2-122.4
+(file @1.2-121.2
 	(app @2.1-2.33
 		(provides @2.6-2.12
 			(exposed-lower-ident (text "main!")))
@@ -1034,7 +981,7 @@ MalformedUnknownToken(122:1-122:2),MalformedUnknownToken(122:2-122:3),MalformedU
 				(ty-tuple @116.7-116.12
 					(ty-var @116.8-116.9 (raw "a"))
 					(ty-var @116.10-116.11 (raw "c")))))
-		(s-expect @118.1-122.2
+		(s-expect @118.1-121.2
 			(e-block @118.8-121.2
 				(statements
 					(e-binop @119.2-120.2 (op "==")
@@ -1042,10 +989,7 @@ MalformedUnknownToken(122:1-122:2),MalformedUnknownToken(122:2-122:3),MalformedU
 						(e-int @119.9-119.10 (raw "1")))
 					(e-binop @120.1-121.2 (op "==")
 						(e-ident @120.1-120.2 (raw "h"))
-						(e-ident @120.6-120.9 (raw "foo"))))))
-		(e-malformed @122.1-122.3 (reason "expr_unexpected_token"))
-		(e-malformed @122.2-122.4 (reason "expr_unexpected_token"))
-		(e-malformed @122.3-122.4 (reason "expr_unexpected_token"))))
+						(e-ident @120.6-120.9 (raw "foo"))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -1180,7 +1124,6 @@ expect {
 	foo == 1
 	h == foo
 }
-
 ~~~
 # CANONICALIZE
 ~~~clojure

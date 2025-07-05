@@ -7,19 +7,17 @@ type=expr
 ~~~roc
 31*42+534
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
 NIL
 # TOKENS
 ~~~zig
-Int(1:1-1:3),OpStar(1:3-1:4),Int(1:4-1:6),OpPlus(1:6-1:7),Int(1:7-1:10),Newline(1:1-1:1),
-MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
+Int(1:1-1:3),OpStar(1:3-1:4),Int(1:4-1:6),OpPlus(1:6-1:7),Int(1:7-1:10),EndOfFile(1:10-1:10),
 ~~~
 # PARSE
 ~~~clojure
-(e-binop @1.1-2.2 (op "+")
+(e-binop @1.1-1.10 (op "+")
 	(e-binop @1.1-1.7 (op "*")
 		(e-int @1.1-1.3 (raw "31"))
 		(e-int @1.4-1.6 (raw "42")))
@@ -31,7 +29,7 @@ MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownTo
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop @1.1-2.2 (op "add")
+(e-binop @1.1-1.10 (op "add")
 	(e-binop @1.1-1.7 (op "mul")
 		(e-int @1.1-1.3 (value "31"))
 		(e-int @1.4-1.6 (value "42")))
@@ -39,5 +37,5 @@ MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownTo
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-2.2 (type "*"))
+(expr @1.1-1.10 (type "*"))
 ~~~

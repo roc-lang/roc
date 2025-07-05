@@ -11,7 +11,6 @@ match items {
     [x, ..rest, y] => 2 # invalid rest pattern should error
 }
 ~~~
-~~~
 # EXPECTED
 BAD LIST REST PATTERN SYNTAX - list_rest_invalid.md:2:13:2:19
 BAD LIST REST PATTERN SYNTAX - list_rest_invalid.md:3:6:3:12
@@ -154,8 +153,7 @@ KwMatch(1:1-1:6),LowerIdent(1:7-1:12),OpenCurly(1:13-1:14),Newline(1:1-1:1),
 OpenSquare(2:5-2:6),LowerIdent(2:6-2:11),Comma(2:11-2:12),DoubleDot(2:13-2:15),LowerIdent(2:15-2:19),CloseSquare(2:19-2:20),OpFatArrow(2:21-2:23),Int(2:24-2:25),Newline(2:27-2:61),
 OpenSquare(3:5-3:6),DoubleDot(3:6-3:8),LowerIdent(3:8-3:12),Comma(3:12-3:13),LowerIdent(3:14-3:18),CloseSquare(3:18-3:19),OpFatArrow(3:20-3:22),Int(3:23-3:24),Newline(3:26-3:60),
 OpenSquare(4:5-4:6),LowerIdent(4:6-4:7),Comma(4:7-4:8),DoubleDot(4:9-4:11),LowerIdent(4:11-4:15),Comma(4:15-4:16),LowerIdent(4:17-4:18),CloseSquare(4:18-4:19),OpFatArrow(4:20-4:22),Int(4:23-4:24),Newline(4:26-4:60),
-CloseCurly(5:1-5:2),Newline(1:1-1:1),
-MalformedUnknownToken(6:1-6:2),MalformedUnknownToken(6:2-6:3),MalformedUnknownToken(6:3-6:4),EndOfFile(6:4-6:4),
+CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 ~~~
 # PARSE
 ~~~clojure

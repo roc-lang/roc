@@ -9,7 +9,6 @@ type=expr
 #
 )
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - capture_body_parens_comment.md:1:1:1:3
 # PROBLEMS
@@ -29,8 +28,7 @@ Here is the problematic code:
 ~~~zig
 OpBackslash(1:1-1:2),UpperIdent(1:2-1:3),OpArrow(1:3-1:5),NoSpaceOpenRound(1:5-1:6),UpperIdent(1:6-1:7),Newline(1:1-1:1),
 Newline(2:2-2:2),
-CloseRound(3:1-3:2),Newline(1:1-1:1),
-MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
+CloseRound(3:1-3:2),EndOfFile(3:2-3:2),
 ~~~
 # PARSE
 ~~~clojure

@@ -14,16 +14,12 @@ getUser = |id| if (id > 1!) "big" else "l"
 
 -ain! = |_| getUser(900)
 ~~~
-~~~
 # EXPECTED
 PARSE ERROR - fuzz_crash_022.md:1:1:1:6
 UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_022.md:1:19:1:29
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_022.md:1:32:1:32
 PARSE ERROR - fuzz_crash_022.md:6:27:6:30
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_022.md:8:1:8:6
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_022.md:9:1:9:3
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_022.md:9:2:9:4
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_022.md:9:3:9:4
 MALFORMED TYPE - fuzz_crash_022.md:6:12:6:14
 # PROBLEMS
 **PARSE ERROR**
@@ -86,42 +82,6 @@ Here is the problematic code:
 ^^^^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**fuzz_crash_022.md:9:1:9:3:**
-```roc
-~~~
-```
-^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**fuzz_crash_022.md:9:2:9:4:**
-```roc
-~~~
-```
- ^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**fuzz_crash_022.md:9:3:9:4:**
-```roc
-~~~
-```
-  ^
-
-
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
 
@@ -154,18 +114,6 @@ getUser = |id| if (id > 1!) "big" else "l"
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),OpBar(1:15-1:16),LowerIdent(1:16-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:30),StringEnd(1:30-1:31),CloseCurly(1:32-1:33),Newline(1:1-1:1),
@@ -175,12 +123,11 @@ Newline(1:1-1:1),
 LowerIdent(5:1-5:4),OpColon(5:5-5:6),UpperIdent(5:7-5:13),OpArrow(5:14-5:16),UpperIdent(5:17-5:20),Newline(1:1-1:1),
 LowerIdent(6:1-6:8),OpAssign(6:9-6:10),OpBar(6:11-6:12),LowerIdent(6:12-6:14),OpBar(6:14-6:15),KwIf(6:16-6:18),OpenRound(6:19-6:20),LowerIdent(6:20-6:22),OpGreaterThan(6:23-6:24),Int(6:25-6:26),OpBang(6:26-6:27),CloseRound(6:27-6:28),StringStart(6:29-6:30),StringPart(6:30-6:33),StringEnd(6:33-6:34),KwElse(6:35-6:39),StringStart(6:40-6:41),StringPart(6:41-6:42),StringEnd(6:42-6:43),Newline(1:1-1:1),
 Newline(1:1-1:1),
-OpUnaryMinus(8:1-8:2),LowerIdent(8:2-8:6),OpAssign(8:7-8:8),OpBar(8:9-8:10),Underscore(8:10-8:11),OpBar(8:11-8:12),LowerIdent(8:13-8:20),NoSpaceOpenRound(8:20-8:21),Int(8:21-8:24),CloseRound(8:24-8:25),Newline(1:1-1:1),
-MalformedUnknownToken(9:1-9:2),MalformedUnknownToken(9:2-9:3),MalformedUnknownToken(9:3-9:4),EndOfFile(9:4-9:4),
+OpUnaryMinus(8:1-8:2),LowerIdent(8:2-8:6),OpAssign(8:7-8:8),OpBar(8:9-8:10),Underscore(8:10-8:11),OpBar(8:11-8:12),LowerIdent(8:13-8:20),NoSpaceOpenRound(8:20-8:21),Int(8:21-8:24),CloseRound(8:24-8:25),EndOfFile(8:25-8:25),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-9.4
+(file @1.1-8.25
 	(malformed-header @1.1-1.17 (tag "expected_package_or_platform_name"))
 	(statements
 		(s-type-anno @1.16-1.29 (name "f")
@@ -215,10 +162,7 @@ MalformedUnknownToken(9:1-9:2),MalformedUnknownToken(9:2-9:3),MalformedUnknownTo
 					(p-underscore))
 				(e-apply @8.13-8.25
 					(e-ident @8.13-8.20 (raw "getUser"))
-					(e-int @8.21-8.24 (raw "900")))))
-		(e-malformed @9.1-9.3 (reason "expr_unexpected_token"))
-		(e-malformed @9.2-9.4 (reason "expr_unexpected_token"))
-		(e-malformed @9.3-9.4 (reason "expr_unexpected_token"))))
+					(e-int @8.21-8.24 (raw "900")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -230,7 +174,6 @@ ser : UserId -> Str
 getUser = |id| if  "big" else "l"
 
 ain! = |_| getUser(900)
-
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -7,7 +7,6 @@ type=expr
 ~~~roc
 if bool 1 else 2
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -17,23 +16,22 @@ Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
-KwIf(1:1-1:3),LowerIdent(1:4-1:8),Int(1:9-1:10),KwElse(1:11-1:15),Int(1:16-1:17),Newline(1:1-1:1),
-MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
+KwIf(1:1-1:3),LowerIdent(1:4-1:8),Int(1:9-1:10),KwElse(1:11-1:15),Int(1:16-1:17),EndOfFile(1:17-1:17),
 ~~~
 # PARSE
 ~~~clojure
-(e-if-then-else @1.1-2.2
+(e-if-then-else @1.1-1.17
 	(e-ident @1.4-1.8 (raw "bool"))
 	(e-int @1.9-1.10 (raw "1"))
 	(e-int @1.16-1.17 (raw "2")))
 ~~~
 # FORMATTED
 ~~~roc
-if bool 1 else 2
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-if @1.1-2.2
+(e-if @1.1-1.17
 	(if-branches
 		(if-branch
 			(e-runtime-error (tag "ident_not_in_scope"))
@@ -43,5 +41,5 @@ if bool 1 else 2
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-2.2 (type "Num(*)"))
+(expr @1.1-1.17 (type "Num(*)"))
 ~~~

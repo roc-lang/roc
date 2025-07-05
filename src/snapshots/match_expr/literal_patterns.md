@@ -12,7 +12,6 @@ match Answer {
     10 => 4
 }
 ~~~
-~~~
 # EXPECTED
 INCOMPATIBLE MATCH BRANCHES - literal_patterns.md:1:1:1:1
 INCOMPATIBLE MATCH PATTERNS - literal_patterns.md:1:1:1:1
@@ -68,8 +67,7 @@ UpperIdent(2:5-2:11),OpFatArrow(2:12-2:14),Int(2:15-2:16),Newline(1:1-1:1),
 UpperIdent(3:5-3:9),OpFatArrow(3:10-3:12),StringStart(3:13-3:14),StringPart(3:14-3:19),StringEnd(3:19-3:20),Newline(1:1-1:1),
 UpperIdent(4:5-4:13),OpFatArrow(4:14-4:16),Int(4:17-4:18),Newline(1:1-1:1),
 Int(5:5-5:7),OpFatArrow(5:8-5:10),Int(5:11-5:12),Newline(1:1-1:1),
-CloseCurly(6:1-6:2),Newline(1:1-1:1),
-MalformedUnknownToken(7:1-7:2),MalformedUnknownToken(7:2-7:3),MalformedUnknownToken(7:3-7:4),EndOfFile(7:4-7:4),
+CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 ~~~
 # PARSE
 ~~~clojure

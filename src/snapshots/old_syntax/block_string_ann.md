@@ -8,7 +8,6 @@ type=expr
 """${g}""":q
 f
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - block_string_ann.md:1:1:1:4
 # PROBLEMS
@@ -27,8 +26,7 @@ Here is the problematic code:
 # TOKENS
 ~~~zig
 MultilineStringStart(1:1-1:4),StringPart(1:4-1:4),OpenStringInterpolation(1:4-1:6),LowerIdent(1:6-1:7),CloseStringInterpolation(1:7-1:8),StringPart(1:8-1:8),MultilineStringEnd(1:8-1:11),OpColon(1:11-1:12),LowerIdent(1:12-1:13),Newline(1:1-1:1),
-LowerIdent(2:1-2:2),Newline(1:1-1:1),
-MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
+LowerIdent(2:1-2:2),EndOfFile(2:2-2:2),
 ~~~
 # PARSE
 ~~~clojure

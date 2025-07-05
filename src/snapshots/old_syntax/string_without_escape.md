@@ -7,15 +7,13 @@ type=expr
 ~~~roc
 "123 abc 456 def"
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
 NIL
 # TOKENS
 ~~~zig
-StringStart(1:1-1:2),StringPart(1:2-1:17),StringEnd(1:17-1:18),Newline(1:1-1:1),
-MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
+StringStart(1:1-1:2),StringPart(1:2-1:17),StringEnd(1:17-1:18),EndOfFile(1:18-1:18),
 ~~~
 # PARSE
 ~~~clojure
@@ -24,7 +22,7 @@ MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownTo
 ~~~
 # FORMATTED
 ~~~roc
-"123 abc 456 def"
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

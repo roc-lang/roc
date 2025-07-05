@@ -8,7 +8,6 @@ type=expr
 N -0 T:A
 zT
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -16,8 +15,7 @@ NIL
 # TOKENS
 ~~~zig
 UpperIdent(1:1-1:2),Int(1:3-1:5),UpperIdent(1:6-1:7),OpColon(1:7-1:8),UpperIdent(1:8-1:9),Newline(1:1-1:1),
-LowerIdent(2:1-2:3),Newline(1:1-1:1),
-MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
+LowerIdent(2:1-2:3),EndOfFile(2:3-2:3),
 ~~~
 # PARSE
 ~~~clojure

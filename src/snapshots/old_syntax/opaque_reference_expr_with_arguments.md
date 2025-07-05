@@ -7,7 +7,6 @@ type=expr
 ~~~roc
 @Age m n
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - opaque_reference_expr_with_arguments.md:1:1:1:7
 # PROBLEMS
@@ -25,8 +24,7 @@ Here is the problematic code:
 
 # TOKENS
 ~~~zig
-OpaqueName(1:1-1:5),LowerIdent(1:6-1:7),LowerIdent(1:8-1:9),Newline(1:1-1:1),
-MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
+OpaqueName(1:1-1:5),LowerIdent(1:6-1:7),LowerIdent(1:8-1:9),EndOfFile(1:9-1:9),
 ~~~
 # PARSE
 ~~~clojure

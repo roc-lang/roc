@@ -10,7 +10,6 @@ type=expr
 ={}
 I
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - empty_record_newline_assign.md:1:1:2:2
 # PROBLEMS
@@ -32,8 +31,7 @@ Here is the problematic code:
 Newline(1:1-1:1),
 OpenCurly(2:1-2:2),CloseCurly(2:2-2:3),Newline(1:1-1:1),
 OpAssign(3:1-3:2),OpenCurly(3:2-3:3),CloseCurly(3:3-3:4),Newline(1:1-1:1),
-UpperIdent(4:1-4:2),Newline(1:1-1:1),
-MalformedUnknownToken(5:1-5:2),MalformedUnknownToken(5:2-5:3),MalformedUnknownToken(5:3-5:4),EndOfFile(5:4-5:4),
+UpperIdent(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~
 # PARSE
 ~~~clojure

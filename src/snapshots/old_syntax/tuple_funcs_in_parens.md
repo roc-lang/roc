@@ -8,7 +8,6 @@ type=expr
 f: (a, b -> c, d -> e, g)
 f
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -19,8 +18,7 @@ Is there an `import` or `exposing` missing up-top?
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpColon(1:2-1:3),OpenRound(1:4-1:5),LowerIdent(1:5-1:6),Comma(1:6-1:7),LowerIdent(1:8-1:9),OpArrow(1:10-1:12),LowerIdent(1:13-1:14),Comma(1:14-1:15),LowerIdent(1:16-1:17),OpArrow(1:18-1:20),LowerIdent(1:21-1:22),Comma(1:22-1:23),LowerIdent(1:24-1:25),CloseRound(1:25-1:26),Newline(1:1-1:1),
-LowerIdent(2:1-2:2),Newline(1:1-1:1),
-MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
+LowerIdent(2:1-2:2),EndOfFile(2:2-2:2),
 ~~~
 # PARSE
 ~~~clojure

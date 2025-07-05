@@ -9,7 +9,6 @@ Config launchTheNukes! code = cfg
 
 launchTheNukes! code
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -18,8 +17,7 @@ NIL
 ~~~zig
 UpperIdent(1:1-1:7),LowerIdent(1:8-1:23),LowerIdent(1:24-1:28),OpAssign(1:29-1:30),LowerIdent(1:31-1:34),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(3:1-3:16),LowerIdent(3:17-3:21),Newline(1:1-1:1),
-MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
+LowerIdent(3:1-3:16),LowerIdent(3:17-3:21),EndOfFile(3:21-3:21),
 ~~~
 # PARSE
 ~~~clojure

@@ -9,7 +9,6 @@ expect 1 == 1
 
 4
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - expect.md:1:1:1:9
 # PROBLEMS
@@ -29,8 +28,7 @@ expect 1 == 1
 ~~~zig
 KwExpect(1:1-1:7),Int(1:8-1:9),OpEquals(1:10-1:12),Int(1:13-1:14),Newline(1:1-1:1),
 Newline(1:1-1:1),
-Int(3:1-3:2),Newline(1:1-1:1),
-MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
+Int(3:1-3:2),EndOfFile(3:2-3:2),
 ~~~
 # PARSE
 ~~~clojure

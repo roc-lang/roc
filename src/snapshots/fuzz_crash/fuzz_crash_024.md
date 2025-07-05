@@ -13,7 +13,6 @@ var t= ]
 #el
 var t= 0
 ~~~
-~~~
 # EXPECTED
 UNCLOSED STRING - fuzz_crash_024.md:1:9:1:17
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_024.md:1:24:1:34
@@ -23,9 +22,6 @@ UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_024.md:1:53:1:53
 PARSE ERROR - fuzz_crash_024.md:4:1:4:6
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_024.md:4:8:4:8
 PARSE ERROR - fuzz_crash_024.md:7:1:7:6
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_024.md:8:1:8:3
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_024.md:8:2:8:4
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_024.md:8:3:8:4
 INVALID STATEMENT - fuzz_crash_024.md:7:5:7:6
 # PROBLEMS
 **UNCLOSED STRING**
@@ -130,42 +126,6 @@ var t= 0
 ^^^^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**fuzz_crash_024.md:8:1:8:3:**
-```roc
-~~~
-```
-^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**fuzz_crash_024.md:8:2:8:4:**
-```roc
-~~~
-```
- ^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**fuzz_crash_024.md:8:3:8:4:**
-```roc
-~~~
-```
-  ^
-
-
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
@@ -200,18 +160,6 @@ var t= ]
     ^
 
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),KwModule(1:9-1:15),CloseSquare(1:16-1:17),OpenCurly(1:18-1:19),LowerIdent(1:20-1:22),OpColon(1:22-1:23),KwPlatform(1:24-1:32),StringStart(1:33-1:34),StringPart(1:34-1:53),StringEnd(1:53-1:53),Newline(1:1-1:1),
@@ -220,12 +168,11 @@ Newline(3:2-3:4),
 KwVar(4:1-4:4),LowerIdent(4:5-4:6),OpAssign(4:6-4:7),CloseCurly(4:8-4:9),Newline(1:1-1:1),
 Newline(1:1-1:1),
 Newline(6:2-6:4),
-KwVar(7:1-7:4),LowerIdent(7:5-7:6),OpAssign(7:6-7:7),Int(7:8-7:9),Newline(1:1-1:1),
-MalformedUnknownToken(8:1-8:2),MalformedUnknownToken(8:2-8:3),MalformedUnknownToken(8:3-8:4),EndOfFile(8:4-8:4),
+KwVar(7:1-7:4),LowerIdent(7:5-7:6),OpAssign(7:6-7:7),Int(7:8-7:9),EndOfFile(7:9-7:9),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-8.4
+(file @1.1-7.9
 	(module @1.1-1.17
 		(exposes @1.8-1.17
 			(exposed-malformed (reason "exposed_item_unexpected_token") @1.9-1.17)))
@@ -240,10 +187,7 @@ MalformedUnknownToken(8:1-8:2),MalformedUnknownToken(8:2-8:3),MalformedUnknownTo
 		(s-malformed @7.1-7.6 (tag "var_only_allowed_in_a_body"))
 		(s-decl @7.5-7.9
 			(p-ident @7.5-7.6 (raw "t"))
-			(e-int @7.8-7.9 (raw "0")))
-		(e-malformed @8.1-8.3 (reason "expr_unexpected_token"))
-		(e-malformed @8.2-8.4 (reason "expr_unexpected_token"))
-		(e-malformed @8.3-8.4 (reason "expr_unexpected_token"))))
+			(e-int @7.8-7.9 (raw "0")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -254,7 +198,6 @@ t =
 
 # el
 t = 0
-
 ~~~
 # CANONICALIZE
 ~~~clojure

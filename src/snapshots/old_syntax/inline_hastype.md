@@ -10,7 +10,6 @@ main =
 
     3
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -23,8 +22,7 @@ Is there an `import` or `exposing` missing up-top?
 LowerIdent(1:1-1:5),OpAssign(1:6-1:7),Newline(1:1-1:1),
 OpenRound(2:5-2:6),OpBackslash(2:6-2:7),LowerIdent(2:7-2:8),OpArrow(2:9-2:11),LowerIdent(2:12-2:13),CloseRound(2:13-2:14),OpColon(2:15-2:16),UpperIdent(2:17-2:20),Newline(1:1-1:1),
 Newline(1:1-1:1),
-Int(4:5-4:6),Newline(1:1-1:1),
-MalformedUnknownToken(5:1-5:2),MalformedUnknownToken(5:2-5:3),MalformedUnknownToken(5:3-5:4),EndOfFile(5:4-5:4),
+Int(4:5-4:6),EndOfFile(4:6-4:6),
 ~~~
 # PARSE
 ~~~clojure

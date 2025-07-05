@@ -7,7 +7,6 @@ type=expr
 ~~~roc
 { name, age, email, active }
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -29,8 +28,7 @@ Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
-OpenCurly(1:1-1:2),LowerIdent(1:3-1:7),Comma(1:7-1:8),LowerIdent(1:9-1:12),Comma(1:12-1:13),LowerIdent(1:14-1:19),Comma(1:19-1:20),LowerIdent(1:21-1:27),CloseCurly(1:28-1:29),Newline(1:1-1:1),
-MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
+OpenCurly(1:1-1:2),LowerIdent(1:3-1:7),Comma(1:7-1:8),LowerIdent(1:9-1:12),Comma(1:12-1:13),LowerIdent(1:14-1:19),Comma(1:19-1:20),LowerIdent(1:21-1:27),CloseCurly(1:28-1:29),EndOfFile(1:29-1:29),
 ~~~
 # PARSE
 ~~~clojure

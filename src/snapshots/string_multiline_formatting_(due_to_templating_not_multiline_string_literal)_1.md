@@ -8,7 +8,6 @@ type=expr
 "This is a string with ${some_func(a, #This is a comment
 b)} lines of text due to the template parts"
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -27,8 +26,7 @@ Is there an `import` or `exposing` missing up-top?
 # TOKENS
 ~~~zig
 StringStart(1:1-1:2),StringPart(1:2-1:24),OpenStringInterpolation(1:24-1:26),LowerIdent(1:26-1:35),NoSpaceOpenRound(1:35-1:36),LowerIdent(1:36-1:37),Comma(1:37-1:38),Newline(1:40-1:57),
-LowerIdent(2:1-2:2),CloseRound(2:2-2:3),CloseStringInterpolation(2:3-2:4),StringPart(2:4-2:44),StringEnd(2:44-2:45),Newline(1:1-1:1),
-MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
+LowerIdent(2:1-2:2),CloseRound(2:2-2:3),CloseStringInterpolation(2:3-2:4),StringPart(2:4-2:44),StringEnd(2:44-2:45),EndOfFile(2:45-2:45),
 ~~~
 # PARSE
 ~~~clojure

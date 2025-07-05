@@ -9,7 +9,6 @@ x = when n is
      0 -> 0
 42
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -21,8 +20,7 @@ Is there an `import` or `exposing` missing up-top?
 ~~~zig
 LowerIdent(1:1-1:2),OpAssign(1:3-1:4),LowerIdent(1:5-1:9),LowerIdent(1:10-1:11),LowerIdent(1:12-1:14),Newline(1:1-1:1),
 Int(2:6-2:7),OpArrow(2:8-2:10),Int(2:11-2:12),Newline(1:1-1:1),
-Int(3:1-3:3),Newline(1:1-1:1),
-MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
+Int(3:1-3:3),EndOfFile(3:3-3:3),
 ~~~
 # PARSE
 ~~~clojure

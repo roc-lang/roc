@@ -16,12 +16,8 @@ swap = |pair| {
 
 main! = |_| {}
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - type_var_multiple.md:6:21:6:27
-UNEXPECTED TOKEN IN EXPRESSION - type_var_multiple.md:11:1:11:3
-UNEXPECTED TOKEN IN EXPRESSION - type_var_multiple.md:11:2:11:4
-UNEXPECTED TOKEN IN EXPRESSION - type_var_multiple.md:11:3:11:4
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **= pair** is not expected in an expression.
@@ -35,42 +31,6 @@ Here is the problematic code:
                     ^^^^^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_var_multiple.md:11:1:11:3:**
-```roc
-~~~
-```
-^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_var_multiple.md:11:2:11:4:**
-```roc
-~~~
-```
- ^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_var_multiple.md:11:3:11:4:**
-```roc
-~~~
-```
-  ^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `first` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -86,18 +46,6 @@ Is there an `import` or `exposing` missing up-top?
 **UNDEFINED VARIABLE**
 Nothing is named `first` in this scope.
 Is there an `import` or `exposing` missing up-top?
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
 ~~~zig
@@ -110,12 +58,11 @@ OpenRound(6:5-6:6),LowerIdent(6:6-6:11),Comma(6:11-6:12),LowerIdent(6:13-6:19),C
 OpenRound(7:5-7:6),LowerIdent(7:6-7:12),Comma(7:12-7:13),LowerIdent(7:14-7:19),CloseRound(7:19-7:20),Newline(1:1-1:1),
 CloseCurly(8:1-8:2),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(10:1-10:6),OpAssign(10:7-10:8),OpBar(10:9-10:10),Underscore(10:10-10:11),OpBar(10:11-10:12),OpenCurly(10:13-10:14),CloseCurly(10:14-10:15),Newline(1:1-1:1),
-MalformedUnknownToken(11:1-11:2),MalformedUnknownToken(11:2-11:3),MalformedUnknownToken(11:3-11:4),EndOfFile(11:4-11:4),
+LowerIdent(10:1-10:6),OpAssign(10:7-10:8),OpBar(10:9-10:10),Underscore(10:10-10:11),OpBar(10:11-10:12),OpenCurly(10:13-10:14),CloseCurly(10:14-10:15),EndOfFile(10:15-10:15),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-11.4
+(file @1.1-10.15
 	(app @1.1-1.57
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
@@ -155,10 +102,7 @@ MalformedUnknownToken(11:1-11:2),MalformedUnknownToken(11:2-11:3),MalformedUnkno
 			(e-lambda @10.9-10.15
 				(args
 					(p-underscore))
-				(e-record @10.13-10.15)))
-		(e-malformed @11.1-11.3 (reason "expr_unexpected_token"))
-		(e-malformed @11.2-11.4 (reason "expr_unexpected_token"))
-		(e-malformed @11.3-11.4 (reason "expr_unexpected_token"))))
+				(e-record @10.13-10.15)))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -174,7 +118,6 @@ swap = |pair| {
 }
 
 main! = |_| {}
-
 ~~~
 # CANONICALIZE
 ~~~clojure

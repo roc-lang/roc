@@ -7,7 +7,6 @@ type=expr
 ~~~roc
 .1 (1, 2, 3)
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - tuple_accessor_function.md:1:1:1:5
 # PROBLEMS
@@ -25,8 +24,7 @@ Here is the problematic code:
 
 # TOKENS
 ~~~zig
-DotInt(1:1-1:3),OpenRound(1:4-1:5),Int(1:5-1:6),Comma(1:6-1:7),Int(1:8-1:9),Comma(1:9-1:10),Int(1:11-1:12),CloseRound(1:12-1:13),Newline(1:1-1:1),
-MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
+DotInt(1:1-1:3),OpenRound(1:4-1:5),Int(1:5-1:6),Comma(1:6-1:7),Int(1:8-1:9),Comma(1:9-1:10),Int(1:11-1:12),CloseRound(1:12-1:13),EndOfFile(1:13-1:13),
 ~~~
 # PARSE
 ~~~clojure

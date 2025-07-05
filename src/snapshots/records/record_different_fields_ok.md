@@ -11,7 +11,6 @@ type=expr
     camelCase: "camel",
 }
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -22,8 +21,7 @@ OpenCurly(1:1-1:2),Newline(1:1-1:1),
 LowerIdent(2:5-2:27),OpColon(2:27-2:28),StringStart(2:29-2:30),StringPart(2:30-2:40),StringEnd(2:40-2:41),Comma(2:41-2:42),Newline(1:1-1:1),
 LowerIdent(3:5-3:13),OpColon(3:13-3:14),StringStart(3:15-3:16),StringPart(3:16-3:23),StringEnd(3:23-3:24),Comma(3:24-3:25),Newline(1:1-1:1),
 LowerIdent(4:5-4:14),OpColon(4:14-4:15),StringStart(4:16-4:17),StringPart(4:17-4:22),StringEnd(4:22-4:23),Comma(4:23-4:24),Newline(1:1-1:1),
-CloseCurly(5:1-5:2),Newline(1:1-1:1),
-MalformedUnknownToken(6:1-6:2),MalformedUnknownToken(6:2-6:3),MalformedUnknownToken(6:3-6:4),EndOfFile(6:4-6:4),
+CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 ~~~
 # PARSE
 ~~~clojure

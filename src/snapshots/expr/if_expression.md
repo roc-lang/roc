@@ -7,7 +7,6 @@ type=expr
 ~~~roc
 if x > 5 "big" else "small"
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -17,12 +16,11 @@ Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
-KwIf(1:1-1:3),LowerIdent(1:4-1:5),OpGreaterThan(1:6-1:7),Int(1:8-1:9),StringStart(1:10-1:11),StringPart(1:11-1:14),StringEnd(1:14-1:15),KwElse(1:16-1:20),StringStart(1:21-1:22),StringPart(1:22-1:27),StringEnd(1:27-1:28),Newline(1:1-1:1),
-MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
+KwIf(1:1-1:3),LowerIdent(1:4-1:5),OpGreaterThan(1:6-1:7),Int(1:8-1:9),StringStart(1:10-1:11),StringPart(1:11-1:14),StringEnd(1:14-1:15),KwElse(1:16-1:20),StringStart(1:21-1:22),StringPart(1:22-1:27),StringEnd(1:27-1:28),EndOfFile(1:28-1:28),
 ~~~
 # PARSE
 ~~~clojure
-(e-if-then-else @1.1-1.1
+(e-if-then-else @1.1-1.28
 	(e-binop @1.4-1.11 (op ">")
 		(e-ident @1.4-1.5 (raw "x"))
 		(e-int @1.8-1.9 (raw "5")))
@@ -33,11 +31,11 @@ MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownTo
 ~~~
 # FORMATTED
 ~~~roc
-if x > 5 "big" else "small"
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-if @1.1-1.1
+(e-if @1.1-1.28
 	(if-branches
 		(if-branch
 			(e-binop @1.4-1.11 (op "gt")
@@ -51,5 +49,5 @@ if x > 5 "big" else "small"
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.1 (type "Str"))
+(expr @1.1-1.28 (type "Str"))
 ~~~

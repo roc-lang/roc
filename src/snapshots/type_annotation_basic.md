@@ -33,49 +33,9 @@ main! = |_| {
     result
 }
 ~~~
-~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - type_annotation_basic.md:28:1:28:3
-UNEXPECTED TOKEN IN EXPRESSION - type_annotation_basic.md:28:2:28:4
-UNEXPECTED TOKEN IN EXPRESSION - type_annotation_basic.md:28:3:28:4
 UNUSED VARIABLE - type_annotation_basic.md:21:5:21:9
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_annotation_basic.md:28:1:28:3:**
-```roc
-~~~
-```
-^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_annotation_basic.md:28:2:28:4:**
-```roc
-~~~
-```
- ^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_annotation_basic.md:28:3:28:4:**
-```roc
-~~~
-```
-  ^
-
-
 **UNUSED VARIABLE**
 Variable ``pair`` is not used anywhere in your code.
 
@@ -87,18 +47,6 @@ The unused variable is declared here:
 ```
     ^^^^
 
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
 ~~~zig
@@ -128,12 +76,11 @@ Newline(23:6-23:29),
 LowerIdent(24:5-24:11),OpAssign(24:12-24:13),LowerIdent(24:14-24:20),NoSpaceOpenRound(24:20-24:21),Int(24:21-24:22),CloseRound(24:22-24:23),Newline(1:1-1:1),
 Newline(1:1-1:1),
 LowerIdent(26:5-26:11),Newline(1:1-1:1),
-CloseCurly(27:1-27:2),Newline(1:1-1:1),
-MalformedUnknownToken(28:1-28:2),MalformedUnknownToken(28:2-28:3),MalformedUnknownToken(28:3-28:4),EndOfFile(28:4-28:4),
+CloseCurly(27:1-27:2),EndOfFile(27:2-27:2),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-28.4
+(file @1.1-27.2
 	(app @1.1-1.53
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
@@ -212,10 +159,7 @@ MalformedUnknownToken(28:1-28:2),MalformedUnknownToken(28:2-28:3),MalformedUnkno
 							(e-apply @24.14-24.23
 								(e-ident @24.14-24.20 (raw "addOne"))
 								(e-int @24.21-24.22 (raw "5"))))
-						(e-ident @26.5-26.11 (raw "result"))))))
-		(e-malformed @28.1-28.3 (reason "expr_unexpected_token"))
-		(e-malformed @28.2-28.4 (reason "expr_unexpected_token"))
-		(e-malformed @28.3-28.4 (reason "expr_unexpected_token"))))
+						(e-ident @26.5-26.11 (raw "result"))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -246,7 +190,6 @@ main! = |_| {
 
 	result
 }
-
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -8,7 +8,6 @@ type=expr
 main =
     [] ++ []
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -19,8 +18,7 @@ Is there an `import` or `exposing` missing up-top?
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:5),OpAssign(1:6-1:7),Newline(1:1-1:1),
-OpenSquare(2:5-2:6),CloseSquare(2:6-2:7),OpPlus(2:8-2:9),OpPlus(2:9-2:10),OpenSquare(2:11-2:12),CloseSquare(2:12-2:13),Newline(1:1-1:1),
-MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
+OpenSquare(2:5-2:6),CloseSquare(2:6-2:7),OpPlus(2:8-2:9),OpPlus(2:9-2:10),OpenSquare(2:11-2:12),CloseSquare(2:12-2:13),EndOfFile(2:13-2:13),
 ~~~
 # PARSE
 ~~~clojure

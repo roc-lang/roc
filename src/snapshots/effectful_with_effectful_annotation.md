@@ -15,60 +15,10 @@ print_msg! = |msg| Stdout.line!(msg)
 
 main! = print_msg!("Hello, world!")
 ~~~
-~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - effectful_with_effectful_annotation.md:10:1:10:3
-UNEXPECTED TOKEN IN EXPRESSION - effectful_with_effectful_annotation.md:10:2:10:4
-UNEXPECTED TOKEN IN EXPRESSION - effectful_with_effectful_annotation.md:10:3:10:4
+NIL
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**effectful_with_effectful_annotation.md:10:1:10:3:**
-```roc
-~~~
-```
-^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**effectful_with_effectful_annotation.md:10:2:10:4:**
-```roc
-~~~
-```
- ^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**effectful_with_effectful_annotation.md:10:3:10:4:**
-```roc
-~~~
-```
-  ^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
+NIL
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),Newline(1:1-1:1),
@@ -79,12 +29,11 @@ Newline(5:2-5:53),
 LowerIdent(6:1-6:11),OpColon(6:12-6:13),UpperIdent(6:14-6:17),OpFatArrow(6:18-6:20),OpenCurly(6:21-6:22),CloseCurly(6:22-6:23),Newline(1:1-1:1),
 LowerIdent(7:1-7:11),OpAssign(7:12-7:13),OpBar(7:14-7:15),LowerIdent(7:15-7:18),OpBar(7:18-7:19),UpperIdent(7:20-7:26),NoSpaceDotLowerIdent(7:26-7:32),NoSpaceOpenRound(7:32-7:33),LowerIdent(7:33-7:36),CloseRound(7:36-7:37),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(9:1-9:6),OpAssign(9:7-9:8),LowerIdent(9:9-9:19),NoSpaceOpenRound(9:19-9:20),StringStart(9:20-9:21),StringPart(9:21-9:34),StringEnd(9:34-9:35),CloseRound(9:35-9:36),Newline(1:1-1:1),
-MalformedUnknownToken(10:1-10:2),MalformedUnknownToken(10:2-10:3),MalformedUnknownToken(10:3-10:4),EndOfFile(10:4-10:4),
+LowerIdent(9:1-9:6),OpAssign(9:7-9:8),LowerIdent(9:9-9:19),NoSpaceOpenRound(9:19-9:20),StringStart(9:20-9:21),StringPart(9:21-9:34),StringEnd(9:34-9:35),CloseRound(9:35-9:36),EndOfFile(9:36-9:36),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-10.4
+(file @1.1-9.36
 	(app @1.1-1.57
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
@@ -114,23 +63,11 @@ MalformedUnknownToken(10:1-10:2),MalformedUnknownToken(10:2-10:3),MalformedUnkno
 			(e-apply @9.9-9.36
 				(e-ident @9.9-9.19 (raw "print_msg!"))
 				(e-string @9.20-9.35
-					(e-string-part @9.21-9.34 (raw "Hello, world!")))))
-		(e-malformed @10.1-10.3 (reason "expr_unexpected_token"))
-		(e-malformed @10.2-10.4 (reason "expr_unexpected_token"))
-		(e-malformed @10.3-10.4 (reason "expr_unexpected_token"))))
+					(e-string-part @9.21-9.34 (raw "Hello, world!")))))))
 ~~~
 # FORMATTED
 ~~~roc
-app [main!] { pf: platform "../basic-cli/platform.roc" }
-
-import pf.Stdout
-
-# Function with effectful annotation using fat arrow
-print_msg! : Str => {}
-print_msg! = |msg| Stdout.line!(msg)
-
-main! = print_msg!("Hello, world!")
-
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

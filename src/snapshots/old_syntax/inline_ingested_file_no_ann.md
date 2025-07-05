@@ -9,7 +9,6 @@ import "users.json" as data
 
 parseJson data
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - inline_ingested_file_no_ann.md:1:1:1:9
 # PROBLEMS
@@ -29,8 +28,7 @@ import "users.json" as data
 ~~~zig
 KwImport(1:1-1:7),StringStart(1:8-1:9),StringPart(1:9-1:19),StringEnd(1:19-1:20),KwAs(1:21-1:23),LowerIdent(1:24-1:28),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(3:1-3:10),LowerIdent(3:11-3:15),Newline(1:1-1:1),
-MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
+LowerIdent(3:1-3:10),LowerIdent(3:11-3:15),EndOfFile(3:15-3:15),
 ~~~
 # PARSE
 ~~~clojure

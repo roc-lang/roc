@@ -9,7 +9,6 @@ when 0
 is B->(
 t)
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -21,8 +20,7 @@ Is there an `import` or `exposing` missing up-top?
 ~~~zig
 LowerIdent(1:1-1:5),Int(1:6-1:7),Newline(1:1-1:1),
 LowerIdent(2:1-2:3),UpperIdent(2:4-2:5),OpArrow(2:5-2:7),NoSpaceOpenRound(2:7-2:8),Newline(1:1-1:1),
-LowerIdent(3:1-3:2),CloseRound(3:2-3:3),Newline(1:1-1:1),
-MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
+LowerIdent(3:1-3:2),CloseRound(3:2-3:3),EndOfFile(3:3-3:3),
 ~~~
 # PARSE
 ~~~clojure

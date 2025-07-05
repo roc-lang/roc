@@ -15,7 +15,6 @@ _ =
 
 { f: crash "" }
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - crash.md:1:1:1:4
 # PROBLEMS
@@ -41,8 +40,7 @@ Underscore(5:1-5:2),OpAssign(5:3-5:4),Newline(1:1-1:1),
 Underscore(6:3-6:4),OpAssign(6:5-6:6),KwCrash(6:7-6:12),StringStart(6:13-6:14),StringPart(6:14-6:14),StringEnd(6:14-6:15),Newline(1:1-1:1),
 KwCrash(7:3-7:8),Newline(1:1-1:1),
 Newline(1:1-1:1),
-OpenCurly(9:1-9:2),LowerIdent(9:3-9:4),OpColon(9:4-9:5),KwCrash(9:6-9:11),StringStart(9:12-9:13),StringPart(9:13-9:13),StringEnd(9:13-9:14),CloseCurly(9:15-9:16),Newline(1:1-1:1),
-MalformedUnknownToken(10:1-10:2),MalformedUnknownToken(10:2-10:3),MalformedUnknownToken(10:3-10:4),EndOfFile(10:4-10:4),
+OpenCurly(9:1-9:2),LowerIdent(9:3-9:4),OpColon(9:4-9:5),KwCrash(9:6-9:11),StringStart(9:12-9:13),StringPart(9:13-9:13),StringEnd(9:13-9:14),CloseCurly(9:15-9:16),EndOfFile(9:16-9:16),
 ~~~
 # PARSE
 ~~~clojure

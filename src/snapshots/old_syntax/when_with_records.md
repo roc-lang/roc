@@ -9,7 +9,6 @@ when x is
  { y } -> 2
  { z, w } -> 4
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -21,8 +20,7 @@ Is there an `import` or `exposing` missing up-top?
 ~~~zig
 LowerIdent(1:1-1:5),LowerIdent(1:6-1:7),LowerIdent(1:8-1:10),Newline(1:1-1:1),
 OpenCurly(2:2-2:3),LowerIdent(2:4-2:5),CloseCurly(2:6-2:7),OpArrow(2:8-2:10),Int(2:11-2:12),Newline(1:1-1:1),
-OpenCurly(3:2-3:3),LowerIdent(3:4-3:5),Comma(3:5-3:6),LowerIdent(3:7-3:8),CloseCurly(3:9-3:10),OpArrow(3:11-3:13),Int(3:14-3:15),Newline(1:1-1:1),
-MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
+OpenCurly(3:2-3:3),LowerIdent(3:4-3:5),Comma(3:5-3:6),LowerIdent(3:7-3:8),CloseCurly(3:9-3:10),OpArrow(3:11-3:13),Int(3:14-3:15),EndOfFile(3:15-3:15),
 ~~~
 # PARSE
 ~~~clojure

@@ -15,7 +15,6 @@ c =
     """
 42
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -33,8 +32,7 @@ UpperIdent(5:5-5:10),Comma(5:10-5:11),Newline(1:1-1:1),
 Newline(1:1-1:1),
 UpperIdent(7:5-7:11),Newline(1:1-1:1),
 MultilineStringStart(8:5-8:8),StringPart(8:8-8:8),Newline(1:1-1:1),
-Int(9:1-9:3),Newline(1:1-1:1),
-MalformedUnknownToken(10:1-10:2),MalformedUnknownToken(10:2-10:3),MalformedUnknownToken(10:3-10:4),EndOfFile(10:4-10:4),
+Int(9:1-9:3),EndOfFile(9:3-9:3),
 ~~~
 # PARSE
 ~~~clojure

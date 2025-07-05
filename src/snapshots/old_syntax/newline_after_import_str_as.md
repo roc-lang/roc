@@ -9,7 +9,6 @@ import""as
  das
 A
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - newline_after_import_str_as.md:1:1:1:8
 # PROBLEMS
@@ -29,8 +28,7 @@ import""as
 ~~~zig
 KwImport(1:1-1:7),StringStart(1:7-1:8),StringPart(1:8-1:8),StringEnd(1:8-1:9),KwAs(1:9-1:11),Newline(1:1-1:1),
 LowerIdent(2:2-2:5),Newline(1:1-1:1),
-UpperIdent(3:1-3:2),Newline(1:1-1:1),
-MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
+UpperIdent(3:1-3:2),EndOfFile(3:2-3:2),
 ~~~
 # PARSE
 ~~~clojure

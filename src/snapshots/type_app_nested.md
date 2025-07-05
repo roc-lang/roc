@@ -12,49 +12,9 @@ processNested = |_list| ["one","two"]
 
 main! = |_| processNested([])
 ~~~
-~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - type_app_nested.md:7:1:7:3
-UNEXPECTED TOKEN IN EXPRESSION - type_app_nested.md:7:2:7:4
-UNEXPECTED TOKEN IN EXPRESSION - type_app_nested.md:7:3:7:4
 UNDECLARED TYPE - type_app_nested.md:3:34:3:37
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_app_nested.md:7:1:7:3:**
-```roc
-~~~
-```
-^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_app_nested.md:7:2:7:4:**
-```roc
-~~~
-```
- ^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_app_nested.md:7:3:7:4:**
-```roc
-~~~
-```
-  ^
-
-
 **UNDECLARED TYPE**
 The type ``Err`` is not declared in this scope.
 
@@ -66,18 +26,6 @@ processNested : List(Result(Str, Err)) -> List(Str)
                                  ^^^
 
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),Newline(1:1-1:1),
@@ -85,12 +33,11 @@ Newline(1:1-1:1),
 LowerIdent(3:1-3:14),OpColon(3:15-3:16),UpperIdent(3:17-3:21),NoSpaceOpenRound(3:21-3:22),UpperIdent(3:22-3:28),NoSpaceOpenRound(3:28-3:29),UpperIdent(3:29-3:32),Comma(3:32-3:33),UpperIdent(3:34-3:37),CloseRound(3:37-3:38),CloseRound(3:38-3:39),OpArrow(3:40-3:42),UpperIdent(3:43-3:47),NoSpaceOpenRound(3:47-3:48),UpperIdent(3:48-3:51),CloseRound(3:51-3:52),Newline(1:1-1:1),
 LowerIdent(4:1-4:14),OpAssign(4:15-4:16),OpBar(4:17-4:18),NamedUnderscore(4:18-4:23),OpBar(4:23-4:24),OpenSquare(4:25-4:26),StringStart(4:26-4:27),StringPart(4:27-4:30),StringEnd(4:30-4:31),Comma(4:31-4:32),StringStart(4:32-4:33),StringPart(4:33-4:36),StringEnd(4:36-4:37),CloseSquare(4:37-4:38),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBar(6:11-6:12),LowerIdent(6:13-6:26),NoSpaceOpenRound(6:26-6:27),OpenSquare(6:27-6:28),CloseSquare(6:28-6:29),CloseRound(6:29-6:30),Newline(1:1-1:1),
-MalformedUnknownToken(7:1-7:2),MalformedUnknownToken(7:2-7:3),MalformedUnknownToken(7:3-7:4),EndOfFile(7:4-7:4),
+LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBar(6:11-6:12),LowerIdent(6:13-6:26),NoSpaceOpenRound(6:26-6:27),OpenSquare(6:27-6:28),CloseSquare(6:28-6:29),CloseRound(6:29-6:30),EndOfFile(6:30-6:30),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-7.4
+(file @1.1-6.30
 	(app @1.1-1.53
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
@@ -130,10 +77,7 @@ MalformedUnknownToken(7:1-7:2),MalformedUnknownToken(7:2-7:3),MalformedUnknownTo
 					(p-underscore))
 				(e-apply @6.13-6.30
 					(e-ident @6.13-6.26 (raw "processNested"))
-					(e-list @6.27-6.29))))
-		(e-malformed @7.1-7.3 (reason "expr_unexpected_token"))
-		(e-malformed @7.2-7.4 (reason "expr_unexpected_token"))
-		(e-malformed @7.3-7.4 (reason "expr_unexpected_token"))))
+					(e-list @6.27-6.29))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -143,7 +87,6 @@ processNested : List(Result(Str, Err)) -> List(Str)
 processNested = |_list| ["one", "two"]
 
 main! = |_| processNested([])
-
 ~~~
 # CANONICALIZE
 ~~~clojure

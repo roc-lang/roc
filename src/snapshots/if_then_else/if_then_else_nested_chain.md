@@ -19,60 +19,10 @@ checkNumber = |num| {
 	}
 }
 ~~~
-~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - if_then_else_nested_chain.md:14:1:14:3
-UNEXPECTED TOKEN IN EXPRESSION - if_then_else_nested_chain.md:14:2:14:4
-UNEXPECTED TOKEN IN EXPRESSION - if_then_else_nested_chain.md:14:3:14:4
+NIL
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**if_then_else_nested_chain.md:14:1:14:3:**
-```roc
-~~~
-```
-^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**if_then_else_nested_chain.md:14:2:14:4:**
-```roc
-~~~
-```
- ^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**if_then_else_nested_chain.md:14:3:14:4:**
-```roc
-~~~
-```
-  ^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
+NIL
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:20),CloseSquare(1:20-1:21),Newline(1:1-1:1),
@@ -87,12 +37,11 @@ StringStart(9:3-9:4),StringPart(9:4-9:9),StringEnd(9:9-9:10),Newline(1:1-1:1),
 CloseCurly(10:2-10:3),KwElse(10:4-10:8),OpenCurly(10:9-10:10),Newline(1:1-1:1),
 StringStart(11:3-11:4),StringPart(11:4-11:12),StringEnd(11:12-11:13),Newline(1:1-1:1),
 CloseCurly(12:2-12:3),Newline(1:1-1:1),
-CloseCurly(13:1-13:2),Newline(1:1-1:1),
-MalformedUnknownToken(14:1-14:2),MalformedUnknownToken(14:2-14:3),MalformedUnknownToken(14:3-14:4),EndOfFile(14:4-14:4),
+CloseCurly(13:1-13:2),EndOfFile(13:2-13:2),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-14.4
+(file @1.1-13.2
 	(module @1.1-1.21
 		(exposes @1.8-1.21
 			(exposed-lower-ident (text "checkNumber"))))
@@ -131,27 +80,11 @@ MalformedUnknownToken(14:1-14:2),MalformedUnknownToken(14:2-14:3),MalformedUnkno
 									(e-block @10.9-12.3
 										(statements
 											(e-string @11.3-11.13
-												(e-string-part @11.4-11.12 (raw "positive"))))))))))))
-		(e-malformed @14.1-14.3 (reason "expr_unexpected_token"))
-		(e-malformed @14.2-14.4 (reason "expr_unexpected_token"))
-		(e-malformed @14.3-14.4 (reason "expr_unexpected_token"))))
+												(e-string-part @11.4-11.12 (raw "positive"))))))))))))))
 ~~~
 # FORMATTED
 ~~~roc
-module [checkNumber]
-
-checkNumber = |num| {
-	if num < 0 {
-		"negative"
-	} else if num == 0 {
-		"zero"
-	} else if num > 100 {
-		"large"
-	} else {
-		"positive"
-	}
-}
-
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

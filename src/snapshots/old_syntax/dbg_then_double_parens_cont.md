@@ -9,7 +9,6 @@ dbg g
 ((L
 ))#
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -21,8 +20,7 @@ Let us know if you want to help!
 ~~~zig
 KwDbg(1:1-1:4),LowerIdent(1:5-1:6),Newline(1:1-1:1),
 OpenRound(2:1-2:2),NoSpaceOpenRound(2:2-2:3),UpperIdent(2:3-2:4),Newline(1:1-1:1),
-CloseRound(3:1-3:2),CloseRound(3:2-3:3),Newline(3:4-3:4),
-MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
+CloseRound(3:1-3:2),CloseRound(3:2-3:3),EndOfFile(3:4-3:4),
 ~~~
 # PARSE
 ~~~clojure

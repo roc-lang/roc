@@ -49,7 +49,6 @@ transform = \result ->
         Result.Ok rgb -> TypeC.fromColor rgb
         Result.Err err -> TypeC.default
 ~~~
-~~~
 # EXPECTED
 PARSE ERROR - qualified_type_canonicalization.md:8:1:8:14
 PARSE ERROR - qualified_type_canonicalization.md:8:14:8:14
@@ -70,9 +69,6 @@ UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:39:68:39:68
 UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:40:13:40:20
 PARSE ERROR - qualified_type_canonicalization.md:42:15:42:22
 PARSE ERROR - qualified_type_canonicalization.md:43:15:43:23
-UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:44:1:44:3
-UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:44:2:44:4
-UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:44:3:44:4
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `import_exposing_no_close`
@@ -386,42 +382,6 @@ Here is the problematic code:
               ^^^^^^^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**qualified_type_canonicalization.md:44:1:44:3:**
-```roc
-~~~
-```
-^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**qualified_type_canonicalization.md:44:2:44:4:**
-```roc
-~~~
-```
- ^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**qualified_type_canonicalization.md:44:3:44:4:**
-```roc
-~~~
-```
-  ^
-
-
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
@@ -514,18 +474,6 @@ Only definitions, type annotations, and imports are allowed at the top level.
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),Newline(1:1-1:1),
@@ -570,12 +518,11 @@ LowerIdent(39:1-39:10),OpColon(39:11-39:12),UpperIdent(39:13-39:19),NoSpaceDotUp
 LowerIdent(40:1-40:10),OpAssign(40:11-40:12),OpBackslash(40:13-40:14),LowerIdent(40:14-40:20),OpArrow(40:21-40:23),Newline(1:1-1:1),
 LowerIdent(41:5-41:9),LowerIdent(41:10-41:16),LowerIdent(41:17-41:19),Newline(1:1-1:1),
 UpperIdent(42:9-42:15),NoSpaceDotUpperIdent(42:15-42:18),LowerIdent(42:19-42:22),OpArrow(42:23-42:25),UpperIdent(42:26-42:31),NoSpaceDotLowerIdent(42:31-42:41),LowerIdent(42:42-42:45),Newline(1:1-1:1),
-UpperIdent(43:9-43:15),NoSpaceDotUpperIdent(43:15-43:19),LowerIdent(43:20-43:23),OpArrow(43:24-43:26),UpperIdent(43:27-43:32),NoSpaceDotLowerIdent(43:32-43:40),Newline(1:1-1:1),
-MalformedUnknownToken(44:1-44:2),MalformedUnknownToken(44:2-44:3),MalformedUnknownToken(44:3-44:4),EndOfFile(44:4-44:4),
+UpperIdent(43:9-43:15),NoSpaceDotUpperIdent(43:15-43:19),LowerIdent(43:20-43:23),OpArrow(43:24-43:26),UpperIdent(43:27-43:32),NoSpaceDotLowerIdent(43:32-43:40),EndOfFile(43:40-43:40),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-44.4
+(file @1.1-43.40
 	(malformed-header @8.1-8.14 (tag "import_exposing_no_close"))
 	(statements
 		(s-malformed @1.1-1.1 (tag "expected_colon_after_type_annotation"))
@@ -666,14 +613,11 @@ MalformedUnknownToken(44:1-44:2),MalformedUnknownToken(44:2-44:3),MalformedUnkno
 			(e-ident @42.31-42.41 (raw "fromColor")))
 		(e-ident @42.42-42.45 (raw "rgb"))
 		(s-malformed @43.9-43.23 (tag "expected_colon_after_type_annotation"))
-		(e-field-access @43.20-44.2
+		(e-field-access @43.20-43.40
 			(e-local-dispatch @43.20-43.40
 				(e-ident @43.20-43.23 (raw "err"))
 				(e-tag @43.27-43.32 (raw "TypeC")))
-			(e-ident @43.32-43.40 (raw "default")))
-		(e-malformed @44.1-44.3 (reason "expr_unexpected_token"))
-		(e-malformed @44.2-44.4 (reason "expr_unexpected_token"))
-		(e-malformed @44.3-44.4 (reason "expr_unexpected_token"))))
+			(e-ident @43.32-43.40 (raw "default")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -714,7 +658,6 @@ transform = result->
 whenresultis
 rgb->TypeC.fromColorrgb
 err->TypeC.default
-
 ~~~
 # CANONICALIZE
 ~~~clojure

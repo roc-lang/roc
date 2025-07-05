@@ -22,12 +22,8 @@ process = |list| {
 
 main! = |_| {}
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - type_var_namespace.md:11:31:11:40
-UNEXPECTED TOKEN IN EXPRESSION - type_var_namespace.md:17:1:17:3
-UNEXPECTED TOKEN IN EXPRESSION - type_var_namespace.md:17:2:17:4
-UNEXPECTED TOKEN IN EXPRESSION - type_var_namespace.md:17:3:17:4
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **|> Result** is not expected in an expression.
@@ -41,42 +37,6 @@ Here is the problematic code:
                               ^^^^^^^^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_var_namespace.md:17:1:17:3:**
-```roc
-~~~
-```
-^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_var_namespace.md:17:2:17:4:**
-```roc
-~~~
-```
- ^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_var_namespace.md:17:3:17:4:**
-```roc
-~~~
-```
-  ^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `first` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -84,18 +44,6 @@ Is there an `import` or `exposing` missing up-top?
 **UNDEFINED VARIABLE**
 Nothing is named `withDefault` in this scope.
 Is there an `import` or `exposing` missing up-top?
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
 ~~~zig
@@ -114,12 +62,11 @@ Newline(1:1-1:1),
 LowerIdent(13:5-13:11),Newline(1:1-1:1),
 CloseCurly(14:1-14:2),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(16:1-16:6),OpAssign(16:7-16:8),OpBar(16:9-16:10),Underscore(16:10-16:11),OpBar(16:11-16:12),OpenCurly(16:13-16:14),CloseCurly(16:14-16:15),Newline(1:1-1:1),
-MalformedUnknownToken(17:1-17:2),MalformedUnknownToken(17:2-17:3),MalformedUnknownToken(17:3-17:4),EndOfFile(17:4-17:4),
+LowerIdent(16:1-16:6),OpAssign(16:7-16:8),OpBar(16:9-16:10),Underscore(16:10-16:11),OpBar(16:11-16:12),OpenCurly(16:13-16:14),CloseCurly(16:14-16:15),EndOfFile(16:15-16:15),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-17.4
+(file @1.1-16.15
 	(app @1.1-1.57
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
@@ -164,10 +111,7 @@ MalformedUnknownToken(17:1-17:2),MalformedUnknownToken(17:2-17:3),MalformedUnkno
 			(e-lambda @16.9-16.15
 				(args
 					(p-underscore))
-				(e-record @16.13-16.15)))
-		(e-malformed @17.1-17.3 (reason "expr_unexpected_token"))
-		(e-malformed @17.2-17.4 (reason "expr_unexpected_token"))
-		(e-malformed @17.3-17.4 (reason "expr_unexpected_token"))))
+				(e-record @16.13-16.15)))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -189,7 +133,6 @@ process = |list| {
 }
 
 main! = |_| {}
-
 ~~~
 # CANONICALIZE
 ~~~clojure

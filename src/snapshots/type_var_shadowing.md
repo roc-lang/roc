@@ -19,60 +19,10 @@ outer = |x| {
 
 main! = |_| {}
 ~~~
-~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - type_var_shadowing.md:14:1:14:3
-UNEXPECTED TOKEN IN EXPRESSION - type_var_shadowing.md:14:2:14:4
-UNEXPECTED TOKEN IN EXPRESSION - type_var_shadowing.md:14:3:14:4
+NIL
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_var_shadowing.md:14:1:14:3:**
-```roc
-~~~
-```
-^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_var_shadowing.md:14:2:14:4:**
-```roc
-~~~
-```
- ^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_var_shadowing.md:14:3:14:4:**
-```roc
-~~~
-```
-  ^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
+NIL
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),Newline(1:1-1:1),
@@ -87,12 +37,11 @@ Newline(1:1-1:1),
 LowerIdent(10:5-10:10),NoSpaceOpenRound(10:10-10:11),LowerIdent(10:11-10:12),CloseRound(10:12-10:13),Newline(1:1-1:1),
 CloseCurly(11:1-11:2),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(13:1-13:6),OpAssign(13:7-13:8),OpBar(13:9-13:10),Underscore(13:10-13:11),OpBar(13:11-13:12),OpenCurly(13:13-13:14),CloseCurly(13:14-13:15),Newline(1:1-1:1),
-MalformedUnknownToken(14:1-14:2),MalformedUnknownToken(14:2-14:3),MalformedUnknownToken(14:3-14:4),EndOfFile(14:4-14:4),
+LowerIdent(13:1-13:6),OpAssign(13:7-13:8),OpBar(13:9-13:10),Underscore(13:10-13:11),OpBar(13:11-13:12),OpenCurly(13:13-13:14),CloseCurly(13:14-13:15),EndOfFile(13:15-13:15),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-14.4
+(file @1.1-13.15
 	(app @1.1-1.57
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
@@ -133,10 +82,7 @@ MalformedUnknownToken(14:1-14:2),MalformedUnknownToken(14:2-14:3),MalformedUnkno
 			(e-lambda @13.9-13.15
 				(args
 					(p-underscore))
-				(e-record @13.13-13.15)))
-		(e-malformed @14.1-14.3 (reason "expr_unexpected_token"))
-		(e-malformed @14.2-14.4 (reason "expr_unexpected_token"))
-		(e-malformed @14.3-14.4 (reason "expr_unexpected_token"))))
+				(e-record @13.13-13.15)))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -153,7 +99,6 @@ outer = |x| {
 }
 
 main! = |_| {}
-
 ~~~
 # CANONICALIZE
 ~~~clojure

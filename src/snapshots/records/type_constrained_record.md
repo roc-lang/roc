@@ -7,7 +7,6 @@ type=statement
 ~~~roc
 process_user! : { name : Str, age : U32, ..a } => Str
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN TYPE ANNOTATION - type_constrained_record.md:1:42:1:45
 PARSE ERROR - type_constrained_record.md:1:37:1:41
@@ -41,12 +40,11 @@ This type annotation is malformed or contains invalid syntax.
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:14),OpColon(1:15-1:16),OpenCurly(1:17-1:18),LowerIdent(1:19-1:23),OpColon(1:24-1:25),UpperIdent(1:26-1:29),Comma(1:29-1:30),LowerIdent(1:31-1:34),OpColon(1:35-1:36),UpperIdent(1:37-1:40),Comma(1:40-1:41),DoubleDot(1:42-1:44),LowerIdent(1:44-1:45),CloseCurly(1:46-1:47),OpFatArrow(1:48-1:50),UpperIdent(1:51-1:54),Newline(1:1-1:1),
-MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
+LowerIdent(1:1-1:14),OpColon(1:15-1:16),OpenCurly(1:17-1:18),LowerIdent(1:19-1:23),OpColon(1:24-1:25),UpperIdent(1:26-1:29),Comma(1:29-1:30),LowerIdent(1:31-1:34),OpColon(1:35-1:36),UpperIdent(1:37-1:40),Comma(1:40-1:41),DoubleDot(1:42-1:44),LowerIdent(1:44-1:45),CloseCurly(1:46-1:47),OpFatArrow(1:48-1:50),UpperIdent(1:51-1:54),EndOfFile(1:54-1:54),
 ~~~
 # PARSE
 ~~~clojure
-(s-type-anno @1.1-1.1 (name "process_user!")
+(s-type-anno @1.1-1.54 (name "process_user!")
 	(ty-fn @1.17-1.54
 		(ty-record @1.17-1.47
 			(anno-record-field @1.19-1.30 (name "name")
@@ -62,7 +60,7 @@ process_user! : { name : Str, age :  } => Str
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-type-anno @1.1-1.1 (name "process_user!")
+	(s-type-anno @1.1-1.54 (name "process_user!")
 		(ty-fn @1.17-1.54 (effectful true)
 			(ty-record @1.17-1.47
 				(field (field "name")

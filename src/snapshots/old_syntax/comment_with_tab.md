@@ -8,7 +8,6 @@ type=expr
 # comment with a 	
 4
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - comment_with_tab.md:1:2:2:2
 # PROBLEMS
@@ -28,8 +27,7 @@ Here is the problematic code:
 # TOKENS
 ~~~zig
 Newline(1:2-1:19),
-Int(2:1-2:2),Newline(1:1-1:1),
-MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
+Int(2:1-2:2),EndOfFile(2:2-2:2),
 ~~~
 # PARSE
 ~~~clojure

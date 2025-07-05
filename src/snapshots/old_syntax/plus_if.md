@@ -7,7 +7,6 @@ type=expr
 ~~~roc
 1 * if Bool.true then 1 else 1
 ~~~
-~~~
 # EXPECTED
 PARSE ERROR - plus_if.md:1:23:1:29
 # PROBLEMS
@@ -29,8 +28,7 @@ Check the spelling and make sure you're using a valid Roc operator.
 
 # TOKENS
 ~~~zig
-Int(1:1-1:2),OpStar(1:3-1:4),KwIf(1:5-1:7),UpperIdent(1:8-1:12),NoSpaceDotLowerIdent(1:12-1:17),LowerIdent(1:18-1:22),Int(1:23-1:24),KwElse(1:25-1:29),Int(1:30-1:31),Newline(1:1-1:1),
-MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
+Int(1:1-1:2),OpStar(1:3-1:4),KwIf(1:5-1:7),UpperIdent(1:8-1:12),NoSpaceDotLowerIdent(1:12-1:17),LowerIdent(1:18-1:22),Int(1:23-1:24),KwElse(1:25-1:29),Int(1:30-1:31),EndOfFile(1:31-1:31),
 ~~~
 # PARSE
 ~~~clojure

@@ -10,7 +10,6 @@ return
  s
  r
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - return_empty_assign.md:1:1:1:1
 # PROBLEMS
@@ -31,8 +30,7 @@ return
 KwReturn(1:1-1:7),Newline(1:1-1:1),
 OpenCurly(2:2-2:3),CloseCurly(2:3-2:4),OpAssign(2:4-2:5),Newline(2:6-2:6),
 LowerIdent(3:2-3:3),Newline(1:1-1:1),
-LowerIdent(4:2-4:3),Newline(1:1-1:1),
-MalformedUnknownToken(5:1-5:2),MalformedUnknownToken(5:2-5:3),MalformedUnknownToken(5:3-5:4),EndOfFile(5:4-5:4),
+LowerIdent(4:2-4:3),EndOfFile(4:3-4:3),
 ~~~
 # PARSE
 ~~~clojure

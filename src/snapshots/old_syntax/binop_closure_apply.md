@@ -9,7 +9,6 @@ d+
  \w->x
  x
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - binop_closure_apply.md:2:2:2:4
 # PROBLEMS
@@ -37,8 +36,7 @@ Check the spelling and make sure you're using a valid Roc operator.
 ~~~zig
 LowerIdent(1:1-1:2),OpPlus(1:2-1:3),Newline(1:1-1:1),
 OpBackslash(2:2-2:3),LowerIdent(2:3-2:4),OpArrow(2:4-2:6),LowerIdent(2:6-2:7),Newline(1:1-1:1),
-LowerIdent(3:2-3:3),Newline(1:1-1:1),
-MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
+LowerIdent(3:2-3:3),EndOfFile(3:3-3:3),
 ~~~
 # PARSE
 ~~~clojure

@@ -10,7 +10,6 @@ type=expr
 ):gi
 M
 ~~~
-~~~
 # EXPECTED
 TYPE MISMATCH - comment_indent_in_parens.md:1:1:1:2
 # PROBLEMS
@@ -33,8 +32,7 @@ But you are trying to use it as:
 Int(1:1-1:2),NoSpaceOpenRound(1:2-1:3),NoSpaceOpenRound(1:3-1:4),Int(1:4-1:5),Newline(1:6-1:6),
 CloseRound(2:1-2:2),Newline(2:3-2:3),
 CloseRound(3:1-3:2),OpColon(3:2-3:3),LowerIdent(3:3-3:5),Newline(1:1-1:1),
-UpperIdent(4:1-4:2),Newline(1:1-1:1),
-MalformedUnknownToken(5:1-5:2),MalformedUnknownToken(5:2-5:3),MalformedUnknownToken(5:3-5:4),EndOfFile(5:4-5:4),
+UpperIdent(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~
 # PARSE
 ~~~clojure

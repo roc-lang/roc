@@ -21,52 +21,12 @@ MyType : U64
 
 MyType2 : Module.Thingy
 ~~~
-~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - type_declarations.md:16:1:16:3
-UNEXPECTED TOKEN IN EXPRESSION - type_declarations.md:16:2:16:4
-UNEXPECTED TOKEN IN EXPRESSION - type_declarations.md:16:3:16:4
 UNDECLARED TYPE - type_declarations.md:5:8:5:11
 UNDECLARED TYPE - type_declarations.md:5:13:5:16
 UNDECLARED TYPE - type_declarations.md:7:19:7:21
 UNDECLARED TYPE - type_declarations.md:7:32:7:41
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_declarations.md:16:1:16:3:**
-```roc
-~~~
-```
-^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_declarations.md:16:2:16:4:**
-```roc
-~~~
-```
- ^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_declarations.md:16:3:16:4:**
-```roc
-~~~
-```
-  ^
-
-
 **UNDECLARED TYPE**
 The type ``Bar`` is not declared in this scope.
 
@@ -111,18 +71,6 @@ Some(a) : { foo : Ok(a), bar : Something }
                                ^^^^^^^^^
 
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:12),Comma(1:12-1:13),UpperIdent(1:14-1:17),Comma(1:17-1:18),UpperIdent(1:19-1:23),Comma(1:23-1:24),UpperIdent(1:25-1:30),Comma(1:30-1:31),UpperIdent(1:32-1:40),Comma(1:40-1:41),LowerIdent(1:42-1:49),Comma(1:49-1:50),LowerIdent(1:51-1:56),CloseSquare(1:56-1:57),Newline(1:1-1:1),
@@ -139,12 +87,11 @@ UpperIdent(11:1-11:9),NoSpaceOpenRound(11:9-11:10),LowerIdent(11:10-11:11),Close
 Newline(1:1-1:1),
 UpperIdent(13:1-13:7),OpColon(13:8-13:9),UpperIdent(13:10-13:13),Newline(1:1-1:1),
 Newline(1:1-1:1),
-UpperIdent(15:1-15:8),OpColon(15:9-15:10),UpperIdent(15:11-15:17),NoSpaceDotUpperIdent(15:17-15:24),Newline(1:1-1:1),
-MalformedUnknownToken(16:1-16:2),MalformedUnknownToken(16:2-16:3),MalformedUnknownToken(16:3-16:4),EndOfFile(16:4-16:4),
+UpperIdent(15:1-15:8),OpColon(15:9-15:10),UpperIdent(15:11-15:17),NoSpaceDotUpperIdent(15:17-15:24),EndOfFile(15:24-15:24),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-16.4
+(file @1.1-15.24
 	(module @1.1-1.57
 		(exposes @1.8-1.57
 			(exposed-upper-ident (text "Map"))
@@ -216,29 +163,11 @@ MalformedUnknownToken(16:1-16:2),MalformedUnknownToken(16:2-16:3),MalformedUnkno
 		(s-type-decl @15.1-15.24
 			(header @15.1-15.8 (name "MyType2")
 				(args))
-			(ty @15.11-15.24 (name "Module.Thingy")))
-		(e-malformed @16.1-16.3 (reason "expr_unexpected_token"))
-		(e-malformed @16.2-16.4 (reason "expr_unexpected_token"))
-		(e-malformed @16.3-16.4 (reason "expr_unexpected_token"))))
+			(ty @15.11-15.24 (name "Module.Thingy")))))
 ~~~
 # FORMATTED
 ~~~roc
-module [Map, Foo, Some, Maybe, SomeFunc, add_one, main!]
-
-Map(a, b) : List(a), (a -> b) -> List(b)
-
-Foo : (Bar, Baz)
-
-Some(a) : { foo : Ok(a), bar : Something }
-
-Maybe(a) : [Some(a), None]
-
-SomeFunc(a) : Maybe(a), a -> Maybe(a)
-
-MyType : U64
-
-MyType2 : Module.Thingy
-
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -10,7 +10,6 @@ O#
  B->when 6 is
 1->O
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -23,8 +22,7 @@ Is there an `import` or `exposing` missing up-top?
 LowerIdent(1:1-1:5),Int(1:6-1:7),LowerIdent(1:8-1:10),Newline(1:1-1:1),
 UpperIdent(2:1-2:2),Newline(2:3-2:3),
 UpperIdent(3:2-3:3),OpArrow(3:3-3:5),LowerIdent(3:5-3:9),Int(3:10-3:11),LowerIdent(3:12-3:14),Newline(1:1-1:1),
-Int(4:1-4:2),OpArrow(4:2-4:4),UpperIdent(4:4-4:5),Newline(1:1-1:1),
-MalformedUnknownToken(5:1-5:2),MalformedUnknownToken(5:2-5:3),MalformedUnknownToken(5:3-5:4),EndOfFile(5:4-5:4),
+Int(4:1-4:2),OpArrow(4:2-4:4),UpperIdent(4:4-4:5),EndOfFile(4:5-4:5),
 ~~~
 # PARSE
 ~~~clojure

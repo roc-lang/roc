@@ -8,7 +8,6 @@ type=expr
 (!(4
 )4)
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - parens_apply_not_parens.md:1:2:1:4
 PARSE ERROR - parens_apply_not_parens.md:2:1:2:3
@@ -40,8 +39,7 @@ Here is the problematic code:
 # TOKENS
 ~~~zig
 OpenRound(1:1-1:2),OpBang(1:2-1:3),NoSpaceOpenRound(1:3-1:4),Int(1:4-1:5),Newline(1:1-1:1),
-CloseRound(2:1-2:2),Int(2:2-2:3),CloseRound(2:3-2:4),Newline(1:1-1:1),
-MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
+CloseRound(2:1-2:2),Int(2:2-2:3),CloseRound(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # PARSE
 ~~~clojure

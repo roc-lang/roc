@@ -10,7 +10,6 @@ return
             |> pipeToFunction
                 |> andAnother
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - return_multiline.md:1:1:1:1
 # PROBLEMS
@@ -31,8 +30,7 @@ return
 KwReturn(1:1-1:7),Newline(1:1-1:1),
 LowerIdent(2:9-2:18),Newline(1:1-1:1),
 OpPizza(3:13-3:15),LowerIdent(3:16-3:30),Newline(1:1-1:1),
-OpPizza(4:17-4:19),LowerIdent(4:20-4:30),Newline(1:1-1:1),
-MalformedUnknownToken(5:1-5:2),MalformedUnknownToken(5:2-5:3),MalformedUnknownToken(5:3-5:4),EndOfFile(5:4-5:4),
+OpPizza(4:17-4:19),LowerIdent(4:20-4:30),EndOfFile(4:30-4:30),
 ~~~
 # PARSE
 ~~~clojure

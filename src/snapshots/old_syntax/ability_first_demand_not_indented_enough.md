@@ -10,7 +10,6 @@ eq : a, a -> U64 where a implements MEq
 
 1
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -20,8 +19,7 @@ NIL
 UpperIdent(1:1-1:4),KwImplements(1:5-1:15),Newline(1:1-1:1),
 LowerIdent(2:1-2:3),OpColon(2:4-2:5),LowerIdent(2:6-2:7),Comma(2:7-2:8),LowerIdent(2:9-2:10),OpArrow(2:11-2:13),UpperIdent(2:14-2:17),KwWhere(2:18-2:23),LowerIdent(2:24-2:25),KwImplements(2:26-2:36),UpperIdent(2:37-2:40),Newline(1:1-1:1),
 Newline(1:1-1:1),
-Int(4:1-4:2),Newline(1:1-1:1),
-MalformedUnknownToken(5:1-5:2),MalformedUnknownToken(5:2-5:3),MalformedUnknownToken(5:3-5:4),EndOfFile(5:4-5:4),
+Int(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~
 # PARSE
 ~~~clojure

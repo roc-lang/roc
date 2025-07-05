@@ -9,7 +9,6 @@ return
  n
  r#
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - return_apply_newline.md:1:1:1:1
 # PROBLEMS
@@ -29,8 +28,7 @@ return
 ~~~zig
 KwReturn(1:1-1:7),Newline(1:1-1:1),
 LowerIdent(2:2-2:3),Newline(1:1-1:1),
-LowerIdent(3:2-3:3),Newline(3:4-3:4),
-MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
+LowerIdent(3:2-3:3),EndOfFile(3:4-3:4),
 ~~~
 # PARSE
 ~~~clojure

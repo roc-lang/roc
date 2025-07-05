@@ -15,60 +15,10 @@ some = |a| Maybe.Some(a)
 none : Maybe(a)
 none = Maybe.None
 ~~~
-~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - nominal_tag_payload.md:10:1:10:3
-UNEXPECTED TOKEN IN EXPRESSION - nominal_tag_payload.md:10:2:10:4
-UNEXPECTED TOKEN IN EXPRESSION - nominal_tag_payload.md:10:3:10:4
+NIL
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**nominal_tag_payload.md:10:1:10:3:**
-```roc
-~~~
-```
-^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**nominal_tag_payload.md:10:2:10:4:**
-```roc
-~~~
-```
- ^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**nominal_tag_payload.md:10:3:10:4:**
-```roc
-~~~
-```
-  ^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
+NIL
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:14),Comma(1:14-1:15),LowerIdent(1:16-1:20),Comma(1:20-1:21),LowerIdent(1:22-1:26),CloseSquare(1:26-1:27),Newline(1:1-1:1),
@@ -79,12 +29,11 @@ LowerIdent(5:1-5:5),OpColon(5:6-5:7),LowerIdent(5:8-5:9),OpArrow(5:10-5:12),Uppe
 LowerIdent(6:1-6:5),OpAssign(6:6-6:7),OpBar(6:8-6:9),LowerIdent(6:9-6:10),OpBar(6:10-6:11),UpperIdent(6:12-6:17),NoSpaceDotUpperIdent(6:17-6:22),NoSpaceOpenRound(6:22-6:23),LowerIdent(6:23-6:24),CloseRound(6:24-6:25),Newline(1:1-1:1),
 Newline(1:1-1:1),
 LowerIdent(8:1-8:5),OpColon(8:6-8:7),UpperIdent(8:8-8:13),NoSpaceOpenRound(8:13-8:14),LowerIdent(8:14-8:15),CloseRound(8:15-8:16),Newline(1:1-1:1),
-LowerIdent(9:1-9:5),OpAssign(9:6-9:7),UpperIdent(9:8-9:13),NoSpaceDotUpperIdent(9:13-9:18),Newline(1:1-1:1),
-MalformedUnknownToken(10:1-10:2),MalformedUnknownToken(10:2-10:3),MalformedUnknownToken(10:3-10:4),EndOfFile(10:4-10:4),
+LowerIdent(9:1-9:5),OpAssign(9:6-9:7),UpperIdent(9:8-9:13),NoSpaceDotUpperIdent(9:13-9:18),EndOfFile(9:18-9:18),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-10.4
+(file @1.1-9.18
 	(module @1.1-1.27
 		(exposes @1.8-1.27
 			(exposed-upper-ident (text "Maybe"))
@@ -121,10 +70,7 @@ MalformedUnknownToken(10:1-10:2),MalformedUnknownToken(10:2-10:3),MalformedUnkno
 				(ty-var @8.14-8.15 (raw "a"))))
 		(s-decl @9.1-9.18
 			(p-ident @9.1-9.5 (raw "none"))
-			(e-tag @9.8-9.18 (raw "Maybe.None")))
-		(e-malformed @10.1-10.3 (reason "expr_unexpected_token"))
-		(e-malformed @10.2-10.4 (reason "expr_unexpected_token"))
-		(e-malformed @10.3-10.4 (reason "expr_unexpected_token"))))
+			(e-tag @9.8-9.18 (raw "Maybe.None")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -137,7 +83,6 @@ some = |a| Some(a)
 
 none : Maybe(a)
 none = None
-
 ~~~
 # CANONICALIZE
 ~~~clojure

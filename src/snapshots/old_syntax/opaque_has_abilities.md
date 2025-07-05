@@ -29,7 +29,6 @@ A := U8 implements [Eq {}]
 
 0
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -58,8 +57,7 @@ KwImplements(19:6-19:16),OpenSquare(19:17-19:18),UpperIdent(19:18-19:20),OpenCur
 Newline(1:1-1:1),
 UpperIdent(21:1-21:2),OpColonEqual(21:3-21:5),UpperIdent(21:6-21:8),KwImplements(21:9-21:19),OpenSquare(21:20-21:21),UpperIdent(21:21-21:23),OpenCurly(21:24-21:25),CloseCurly(21:25-21:26),CloseSquare(21:26-21:27),Newline(1:1-1:1),
 Newline(1:1-1:1),
-Int(23:1-23:2),Newline(1:1-1:1),
-MalformedUnknownToken(24:1-24:2),MalformedUnknownToken(24:2-24:3),MalformedUnknownToken(24:3-24:4),EndOfFile(24:4-24:4),
+Int(23:1-23:2),EndOfFile(23:2-23:2),
 ~~~
 # PARSE
 ~~~clojure

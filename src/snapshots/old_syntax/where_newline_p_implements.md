@@ -10,7 +10,6 @@ type=expr
 p implements T
 e
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -20,8 +19,7 @@ NIL
 Int(1:1-1:2),OpColon(1:2-1:3),NoSpaceOpenRound(1:3-1:4),Newline(1:1-1:1),
 CloseRound(2:1-2:2),LowerIdent(2:2-2:3),KwWhere(2:4-2:9),Newline(1:1-1:1),
 LowerIdent(3:1-3:2),KwImplements(3:3-3:13),UpperIdent(3:14-3:15),Newline(1:1-1:1),
-LowerIdent(4:1-4:2),Newline(1:1-1:1),
-MalformedUnknownToken(5:1-5:2),MalformedUnknownToken(5:2-5:3),MalformedUnknownToken(5:3-5:4),EndOfFile(5:4-5:4),
+LowerIdent(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~
 # PARSE
 ~~~clojure

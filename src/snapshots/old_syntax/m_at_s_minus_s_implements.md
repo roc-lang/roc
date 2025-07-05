@@ -7,15 +7,13 @@ type=expr
 ~~~roc
 M@S -S implements
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
 NIL
 # TOKENS
 ~~~zig
-UpperIdent(1:1-1:2),OpaqueName(1:2-1:4),OpUnaryMinus(1:5-1:6),UpperIdent(1:6-1:7),KwImplements(1:8-1:18),Newline(1:1-1:1),
-MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
+UpperIdent(1:1-1:2),OpaqueName(1:2-1:4),OpUnaryMinus(1:5-1:6),UpperIdent(1:6-1:7),KwImplements(1:8-1:18),EndOfFile(1:18-1:18),
 ~~~
 # PARSE
 ~~~clojure

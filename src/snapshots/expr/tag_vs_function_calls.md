@@ -16,7 +16,6 @@ type=expr
     tagList: [Some(1), Some(2), None, Some(3)],
 }
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - tag_vs_function_calls.md:6:13:6:15
 PARSE ERROR - tag_vs_function_calls.md:6:14:6:18
@@ -56,8 +55,7 @@ LowerIdent(6:5-6:11),OpColon(6:11-6:12),OpBackslash(6:13-6:14),LowerIdent(6:14-6
 LowerIdent(7:5-7:11),OpColon(7:11-7:12),LowerIdent(7:13-7:19),NoSpaceOpenRound(7:19-7:20),Int(7:20-7:21),CloseRound(7:21-7:22),Comma(7:22-7:23),Newline(1:1-1:1),
 LowerIdent(8:5-8:11),OpColon(8:11-8:12),UpperIdent(8:13-8:17),NoSpaceOpenRound(8:17-8:18),UpperIdent(8:18-8:20),NoSpaceOpenRound(8:20-8:21),UpperIdent(8:21-8:25),NoSpaceOpenRound(8:25-8:26),Int(8:26-8:28),CloseRound(8:28-8:29),CloseRound(8:29-8:30),CloseRound(8:30-8:31),Comma(8:31-8:32),Newline(1:1-1:1),
 LowerIdent(9:5-9:12),OpColon(9:12-9:13),OpenSquare(9:14-9:15),UpperIdent(9:15-9:19),NoSpaceOpenRound(9:19-9:20),Int(9:20-9:21),CloseRound(9:21-9:22),Comma(9:22-9:23),UpperIdent(9:24-9:28),NoSpaceOpenRound(9:28-9:29),Int(9:29-9:30),CloseRound(9:30-9:31),Comma(9:31-9:32),UpperIdent(9:33-9:37),Comma(9:37-9:38),UpperIdent(9:39-9:43),NoSpaceOpenRound(9:43-9:44),Int(9:44-9:45),CloseRound(9:45-9:46),CloseSquare(9:46-9:47),Comma(9:47-9:48),Newline(1:1-1:1),
-CloseCurly(10:1-10:2),Newline(1:1-1:1),
-MalformedUnknownToken(11:1-11:2),MalformedUnknownToken(11:2-11:3),MalformedUnknownToken(11:3-11:4),EndOfFile(11:4-11:4),
+CloseCurly(10:1-10:2),EndOfFile(10:2-10:2),
 ~~~
 # PARSE
 ~~~clojure

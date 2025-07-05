@@ -11,7 +11,6 @@ type=expr
     y * 2
 }
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -22,8 +21,7 @@ OpenCurly(1:1-1:2),Newline(1:1-1:1),
 LowerIdent(2:5-2:6),OpAssign(2:7-2:8),Int(2:9-2:11),Newline(1:1-1:1),
 LowerIdent(3:5-3:6),OpAssign(3:7-3:8),LowerIdent(3:9-3:10),OpPlus(3:11-3:12),Int(3:13-3:14),Newline(1:1-1:1),
 LowerIdent(4:5-4:6),OpStar(4:7-4:8),Int(4:9-4:10),Newline(1:1-1:1),
-CloseCurly(5:1-5:2),Newline(1:1-1:1),
-MalformedUnknownToken(6:1-6:2),MalformedUnknownToken(6:2-6:3),MalformedUnknownToken(6:3-6:4),EndOfFile(6:4-6:4),
+CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 ~~~
 # PARSE
 ~~~clojure

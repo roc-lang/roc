@@ -8,7 +8,6 @@ type=expr
 when t is
     Ok ({} as d)->S
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -19,8 +18,7 @@ Is there an `import` or `exposing` missing up-top?
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:5),LowerIdent(1:6-1:7),LowerIdent(1:8-1:10),Newline(1:1-1:1),
-UpperIdent(2:5-2:7),OpenRound(2:8-2:9),OpenCurly(2:9-2:10),CloseCurly(2:10-2:11),KwAs(2:12-2:14),LowerIdent(2:15-2:16),CloseRound(2:16-2:17),OpArrow(2:17-2:19),UpperIdent(2:19-2:20),Newline(1:1-1:1),
-MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
+UpperIdent(2:5-2:7),OpenRound(2:8-2:9),OpenCurly(2:9-2:10),CloseCurly(2:10-2:11),KwAs(2:12-2:14),LowerIdent(2:15-2:16),CloseRound(2:16-2:17),OpArrow(2:17-2:19),UpperIdent(2:19-2:20),EndOfFile(2:20-2:20),
 ~~~
 # PARSE
 ~~~clojure

@@ -11,7 +11,6 @@ match person {
     {} => "empty"
 }
 ~~~
-~~~
 # EXPECTED
 UNDEFINED VARIABLE - record_destructure.md:2:13:2:18
 NOT IMPLEMENTED - record_destructure.md:3:7:3:12
@@ -58,8 +57,7 @@ KwMatch(1:1-1:6),LowerIdent(1:7-1:13),OpenCurly(1:14-1:15),Newline(1:1-1:1),
 OpenCurly(2:5-2:6),LowerIdent(2:7-2:11),Comma(2:11-2:12),LowerIdent(2:13-2:16),CloseCurly(2:17-2:18),OpFatArrow(2:19-2:21),LowerIdent(2:22-2:26),Newline(1:1-1:1),
 OpenCurly(3:5-3:6),LowerIdent(3:7-3:11),Comma(3:11-3:12),LowerIdent(3:13-3:20),OpColon(3:20-3:21),OpenCurly(3:22-3:23),LowerIdent(3:24-3:28),CloseCurly(3:29-3:30),CloseCurly(3:31-3:32),OpFatArrow(3:33-3:35),LowerIdent(3:36-3:40),Newline(1:1-1:1),
 OpenCurly(4:5-4:6),CloseCurly(4:6-4:7),OpFatArrow(4:8-4:10),StringStart(4:11-4:12),StringPart(4:12-4:17),StringEnd(4:17-4:18),Newline(1:1-1:1),
-CloseCurly(5:1-5:2),Newline(1:1-1:1),
-MalformedUnknownToken(6:1-6:2),MalformedUnknownToken(6:2-6:3),MalformedUnknownToken(6:3-6:4),EndOfFile(6:4-6:4),
+CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 ~~~
 # PARSE
 ~~~clojure

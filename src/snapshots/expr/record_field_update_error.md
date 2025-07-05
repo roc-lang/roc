@@ -7,7 +7,6 @@ type=expr
 ~~~roc
 { person & age: 31 }
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - record_field_update_error.md:1:10:1:15
 UNEXPECTED TOKEN IN TYPE ANNOTATION - record_field_update_error.md:1:17:1:21
@@ -45,8 +44,7 @@ This type annotation is malformed or contains invalid syntax.
 
 # TOKENS
 ~~~zig
-OpenCurly(1:1-1:2),LowerIdent(1:3-1:9),OpAmpersand(1:10-1:11),LowerIdent(1:12-1:15),OpColon(1:15-1:16),Int(1:17-1:19),CloseCurly(1:20-1:21),Newline(1:1-1:1),
-MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
+OpenCurly(1:1-1:2),LowerIdent(1:3-1:9),OpAmpersand(1:10-1:11),LowerIdent(1:12-1:15),OpColon(1:15-1:16),Int(1:17-1:19),CloseCurly(1:20-1:21),EndOfFile(1:21-1:21),
 ~~~
 # PARSE
 ~~~clojure

@@ -15,7 +15,6 @@ if # Comment after if
 					2
 				}
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -33,12 +32,11 @@ CloseCurly(5:3-5:4),Newline(5:6-5:31),
 KwElse(6:4-6:8),Newline(6:10-6:29),
 OpenCurly(7:5-7:6),Newline(7:8-7:26),
 Int(8:6-8:7),Newline(1:1-1:1),
-CloseCurly(9:5-9:6),Newline(1:1-1:1),
-MalformedUnknownToken(10:1-10:2),MalformedUnknownToken(10:2-10:3),MalformedUnknownToken(10:3-10:4),EndOfFile(10:4-10:4),
+CloseCurly(9:5-9:6),EndOfFile(9:6-9:6),
 ~~~
 # PARSE
 ~~~clojure
-(e-if-then-else @1.1-10.2
+(e-if-then-else @1.1-9.6
 	(e-ident @2.2-2.6 (raw "bool"))
 	(e-block @3.3-5.4
 		(statements
@@ -49,19 +47,11 @@ MalformedUnknownToken(10:1-10:2),MalformedUnknownToken(10:2-10:3),MalformedUnkno
 ~~~
 # FORMATTED
 ~~~roc
-if # Comment after if
-	bool # Comment after cond
-		{ # Comment after then open
-			1
-		} # Comment after then close
-			else # Comment after else
-				{ # Comment else open
-					2
-				}
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-if @1.1-10.2
+(e-if @1.1-9.6
 	(if-branches
 		(if-branch
 			(e-runtime-error (tag "ident_not_in_scope"))
@@ -73,5 +63,5 @@ if # Comment after if
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-10.2 (type "Num(*)"))
+(expr @1.1-9.6 (type "Num(*)"))
 ~~~

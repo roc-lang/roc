@@ -10,7 +10,6 @@ import Json.Encode as JE
 
 JE.encode (int 42)
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - inline_import.md:1:1:1:12
 # PROBLEMS
@@ -31,8 +30,7 @@ import Json exposing [int]
 KwImport(1:1-1:7),UpperIdent(1:8-1:12),KwExposing(1:13-1:21),OpenSquare(1:22-1:23),LowerIdent(1:23-1:26),CloseSquare(1:26-1:27),Newline(1:1-1:1),
 KwImport(2:1-2:7),UpperIdent(2:8-2:12),NoSpaceDotUpperIdent(2:12-2:19),KwAs(2:20-2:22),UpperIdent(2:23-2:25),Newline(1:1-1:1),
 Newline(1:1-1:1),
-UpperIdent(4:1-4:3),NoSpaceDotLowerIdent(4:3-4:10),OpenRound(4:11-4:12),LowerIdent(4:12-4:15),Int(4:16-4:18),CloseRound(4:18-4:19),Newline(1:1-1:1),
-MalformedUnknownToken(5:1-5:2),MalformedUnknownToken(5:2-5:3),MalformedUnknownToken(5:3-5:4),EndOfFile(5:4-5:4),
+UpperIdent(4:1-4:3),NoSpaceDotLowerIdent(4:3-4:10),OpenRound(4:11-4:12),LowerIdent(4:12-4:15),Int(4:16-4:18),CloseRound(4:18-4:19),EndOfFile(4:19-4:19),
 ~~~
 # PARSE
 ~~~clojure

@@ -7,7 +7,6 @@ type=expr
 ~~~roc
 \(8)->T#
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - closure_arg_parens_then_comment.md:1:1:1:3
 # PROBLEMS
@@ -25,8 +24,7 @@ Here is the problematic code:
 
 # TOKENS
 ~~~zig
-OpBackslash(1:1-1:2),NoSpaceOpenRound(1:2-1:3),Int(1:3-1:4),CloseRound(1:4-1:5),OpArrow(1:5-1:7),UpperIdent(1:7-1:8),Newline(1:9-1:9),
-MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
+OpBackslash(1:1-1:2),NoSpaceOpenRound(1:2-1:3),Int(1:3-1:4),CloseRound(1:4-1:5),OpArrow(1:5-1:7),UpperIdent(1:7-1:8),EndOfFile(1:9-1:9),
 ~~~
 # PARSE
 ~~~clojure

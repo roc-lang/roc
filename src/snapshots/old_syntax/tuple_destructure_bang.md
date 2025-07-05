@@ -9,7 +9,6 @@ type=expr
 
 launchTheNukes! code
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -25,8 +24,7 @@ Is there an `import` or `exposing` missing up-top?
 ~~~zig
 OpenRound(1:1-1:2),LowerIdent(1:2-1:17),Comma(1:17-1:18),LowerIdent(1:19-1:23),CloseRound(1:23-1:24),OpAssign(1:25-1:26),LowerIdent(1:27-1:33),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(3:1-3:16),LowerIdent(3:17-3:21),Newline(1:1-1:1),
-MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
+LowerIdent(3:1-3:16),LowerIdent(3:17-3:21),EndOfFile(3:21-3:21),
 ~~~
 # PARSE
 ~~~clojure

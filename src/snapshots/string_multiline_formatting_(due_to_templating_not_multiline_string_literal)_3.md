@@ -12,7 +12,6 @@ type=expr
 	)
 } lines of text due to the template parts"
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -35,8 +34,7 @@ LowerIdent(2:2-2:11),NoSpaceOpenRound(2:11-2:12),Newline(1:1-1:1),
 LowerIdent(3:3-3:4),Comma(3:4-3:5),Newline(3:7-3:25),
 LowerIdent(4:3-4:4),Comma(4:4-4:5),Newline(1:1-1:1),
 CloseRound(5:2-5:3),Newline(1:1-1:1),
-CloseStringInterpolation(6:1-6:2),StringPart(6:2-6:42),StringEnd(6:42-6:43),Newline(1:1-1:1),
-MalformedUnknownToken(7:1-7:2),MalformedUnknownToken(7:2-7:3),MalformedUnknownToken(7:3-7:4),EndOfFile(7:4-7:4),
+CloseStringInterpolation(6:1-6:2),StringPart(6:2-6:42),StringEnd(6:42-6:43),EndOfFile(6:43-6:43),
 ~~~
 # PARSE
 ~~~clojure
@@ -50,12 +48,7 @@ MalformedUnknownToken(7:1-7:2),MalformedUnknownToken(7:2-7:3),MalformedUnknownTo
 ~~~
 # FORMATTED
 ~~~roc
-"This is a string with ${
-	some_func(
-		a, # This is a comment
-		b,
-	)
-} lines of text due to the template parts"
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

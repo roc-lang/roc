@@ -24,12 +24,8 @@ ComplexType(a, b) : Result(List(Maybe(a)), Dict(Str, Error(b)))
 
 main! = |_| processComplex(Ok([Some(42), None]))
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - type_app_complex_nested.md:13:18:13:25
-UNEXPECTED TOKEN IN EXPRESSION - type_app_complex_nested.md:19:1:19:3
-UNEXPECTED TOKEN IN EXPRESSION - type_app_complex_nested.md:19:2:19:4
-UNEXPECTED TOKEN IN EXPRESSION - type_app_complex_nested.md:19:3:19:4
 UNDECLARED TYPE - type_app_complex_nested.md:16:33:16:38
 UNDECLARED TYPE - type_app_complex_nested.md:16:54:16:59
 UNDECLARED TYPE - type_app_complex_nested.md:4:30:4:35
@@ -48,42 +44,6 @@ Here is the problematic code:
 deepNested = |_| crash "not implemented"
 ```
                  ^^^^^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_app_complex_nested.md:19:1:19:3:**
-```roc
-~~~
-```
-^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_app_complex_nested.md:19:2:19:4:**
-```roc
-~~~
-```
- ^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_app_complex_nested.md:19:3:19:4:**
-```roc
-~~~
-```
-  ^
 
 
 **UNDECLARED TYPE**
@@ -171,18 +131,6 @@ The body of this lambda expression is not valid.
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),Newline(1:1-1:1),
@@ -202,12 +150,11 @@ Newline(1:1-1:1),
 Newline(15:2-15:39),
 UpperIdent(16:1-16:12),NoSpaceOpenRound(16:12-16:13),LowerIdent(16:13-16:14),Comma(16:14-16:15),LowerIdent(16:16-16:17),CloseRound(16:17-16:18),OpColon(16:19-16:20),UpperIdent(16:21-16:27),NoSpaceOpenRound(16:27-16:28),UpperIdent(16:28-16:32),NoSpaceOpenRound(16:32-16:33),UpperIdent(16:33-16:38),NoSpaceOpenRound(16:38-16:39),LowerIdent(16:39-16:40),CloseRound(16:40-16:41),CloseRound(16:41-16:42),Comma(16:42-16:43),UpperIdent(16:44-16:48),NoSpaceOpenRound(16:48-16:49),UpperIdent(16:49-16:52),Comma(16:52-16:53),UpperIdent(16:54-16:59),NoSpaceOpenRound(16:59-16:60),LowerIdent(16:60-16:61),CloseRound(16:61-16:62),CloseRound(16:62-16:63),CloseRound(16:63-16:64),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(18:1-18:6),OpAssign(18:7-18:8),OpBar(18:9-18:10),Underscore(18:10-18:11),OpBar(18:11-18:12),LowerIdent(18:13-18:27),NoSpaceOpenRound(18:27-18:28),UpperIdent(18:28-18:30),NoSpaceOpenRound(18:30-18:31),OpenSquare(18:31-18:32),UpperIdent(18:32-18:36),NoSpaceOpenRound(18:36-18:37),Int(18:37-18:39),CloseRound(18:39-18:40),Comma(18:40-18:41),UpperIdent(18:42-18:46),CloseSquare(18:46-18:47),CloseRound(18:47-18:48),CloseRound(18:48-18:49),Newline(1:1-1:1),
-MalformedUnknownToken(19:1-19:2),MalformedUnknownToken(19:2-19:3),MalformedUnknownToken(19:3-19:4),EndOfFile(19:4-19:4),
+LowerIdent(18:1-18:6),OpAssign(18:7-18:8),OpBar(18:9-18:10),Underscore(18:10-18:11),OpBar(18:11-18:12),LowerIdent(18:13-18:27),NoSpaceOpenRound(18:27-18:28),UpperIdent(18:28-18:30),NoSpaceOpenRound(18:30-18:31),OpenSquare(18:31-18:32),UpperIdent(18:32-18:36),NoSpaceOpenRound(18:36-18:37),Int(18:37-18:39),CloseRound(18:39-18:40),Comma(18:40-18:41),UpperIdent(18:42-18:46),CloseSquare(18:46-18:47),CloseRound(18:47-18:48),CloseRound(18:48-18:49),EndOfFile(18:49-18:49),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-19.4
+(file @1.1-18.49
 	(app @1.1-1.53
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
@@ -306,10 +253,7 @@ MalformedUnknownToken(19:1-19:2),MalformedUnknownToken(19:2-19:3),MalformedUnkno
 							(e-apply @18.32-18.40
 								(e-tag @18.32-18.36 (raw "Some"))
 								(e-int @18.37-18.39 (raw "42")))
-							(e-tag @18.42-18.46 (raw "None")))))))
-		(e-malformed @19.1-19.3 (reason "expr_unexpected_token"))
-		(e-malformed @19.2-19.4 (reason "expr_unexpected_token"))
-		(e-malformed @19.3-19.4 (reason "expr_unexpected_token"))))
+							(e-tag @18.42-18.46 (raw "None")))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -331,7 +275,6 @@ deepNested = |_| "not implemented"
 ComplexType(a, b) : Result(List(Maybe(a)), Dict(Str, Error(b)))
 
 main! = |_| processComplex(Ok([Some(42), None]))
-
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -9,7 +9,6 @@ type=expr
  P
 O
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -18,8 +17,7 @@ NIL
 ~~~zig
 OpenCurly(1:1-1:2),CloseCurly(1:2-1:3),OpAssign(1:3-1:4),Newline(1:1-1:1),
 UpperIdent(2:2-2:3),Newline(1:1-1:1),
-UpperIdent(3:1-3:2),Newline(1:1-1:1),
-MalformedUnknownToken(4:1-4:2),MalformedUnknownToken(4:2-4:3),MalformedUnknownToken(4:3-4:4),EndOfFile(4:4-4:4),
+UpperIdent(3:1-3:2),EndOfFile(3:2-3:2),
 ~~~
 # PARSE
 ~~~clojure

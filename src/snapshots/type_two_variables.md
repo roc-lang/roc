@@ -12,60 +12,10 @@ swap = |(x, y)| (y, x)
 
 main! = |_| {}
 ~~~
-~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - type_two_variables.md:7:1:7:3
-UNEXPECTED TOKEN IN EXPRESSION - type_two_variables.md:7:2:7:4
-UNEXPECTED TOKEN IN EXPRESSION - type_two_variables.md:7:3:7:4
+NIL
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_two_variables.md:7:1:7:3:**
-```roc
-~~~
-```
-^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_two_variables.md:7:2:7:4:**
-```roc
-~~~
-```
- ^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_two_variables.md:7:3:7:4:**
-```roc
-~~~
-```
-  ^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
+NIL
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),Newline(1:1-1:1),
@@ -73,12 +23,11 @@ Newline(1:1-1:1),
 LowerIdent(3:1-3:5),OpColon(3:6-3:7),OpenRound(3:8-3:9),LowerIdent(3:9-3:10),Comma(3:10-3:11),LowerIdent(3:12-3:13),CloseRound(3:13-3:14),OpArrow(3:15-3:17),OpenRound(3:18-3:19),LowerIdent(3:19-3:20),Comma(3:20-3:21),LowerIdent(3:22-3:23),CloseRound(3:23-3:24),Newline(1:1-1:1),
 LowerIdent(4:1-4:5),OpAssign(4:6-4:7),OpBar(4:8-4:9),NoSpaceOpenRound(4:9-4:10),LowerIdent(4:10-4:11),Comma(4:11-4:12),LowerIdent(4:13-4:14),CloseRound(4:14-4:15),OpBar(4:15-4:16),OpenRound(4:17-4:18),LowerIdent(4:18-4:19),Comma(4:19-4:20),LowerIdent(4:21-4:22),CloseRound(4:22-4:23),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBar(6:11-6:12),OpenCurly(6:13-6:14),CloseCurly(6:14-6:15),Newline(1:1-1:1),
-MalformedUnknownToken(7:1-7:2),MalformedUnknownToken(7:2-7:3),MalformedUnknownToken(7:3-7:4),EndOfFile(7:4-7:4),
+LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBar(6:11-6:12),OpenCurly(6:13-6:14),CloseCurly(6:14-6:15),EndOfFile(6:15-6:15),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-7.4
+(file @1.1-6.15
 	(app @1.1-1.53
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
@@ -113,20 +62,11 @@ MalformedUnknownToken(7:1-7:2),MalformedUnknownToken(7:2-7:3),MalformedUnknownTo
 			(e-lambda @6.9-6.15
 				(args
 					(p-underscore))
-				(e-record @6.13-6.15)))
-		(e-malformed @7.1-7.3 (reason "expr_unexpected_token"))
-		(e-malformed @7.2-7.4 (reason "expr_unexpected_token"))
-		(e-malformed @7.3-7.4 (reason "expr_unexpected_token"))))
+				(e-record @6.13-6.15)))))
 ~~~
 # FORMATTED
 ~~~roc
-app [main!] { pf: platform "../basic-cli/main.roc" }
-
-swap : (a, b) -> (b, a)
-swap = |(x, y)| (y, x)
-
-main! = |_| {}
-
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

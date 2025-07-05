@@ -10,7 +10,6 @@ is
 z->expect!%when s
 is z->q
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -23,8 +22,7 @@ Is there an `import` or `exposing` missing up-top?
 LowerIdent(1:1-1:5),LowerIdent(1:6-1:7),Newline(1:1-1:1),
 LowerIdent(2:1-2:3),Newline(1:1-1:1),
 LowerIdent(3:1-3:2),OpArrow(3:2-3:4),LowerIdent(3:4-3:11),OpPercent(3:11-3:12),LowerIdent(3:12-3:16),LowerIdent(3:17-3:18),Newline(1:1-1:1),
-LowerIdent(4:1-4:3),LowerIdent(4:4-4:5),OpArrow(4:5-4:7),LowerIdent(4:7-4:8),Newline(1:1-1:1),
-MalformedUnknownToken(5:1-5:2),MalformedUnknownToken(5:2-5:3),MalformedUnknownToken(5:3-5:4),EndOfFile(5:4-5:4),
+LowerIdent(4:1-4:3),LowerIdent(4:4-4:5),OpArrow(4:5-4:7),LowerIdent(4:7-4:8),EndOfFile(4:8-4:8),
 ~~~
 # PARSE
 ~~~clojure

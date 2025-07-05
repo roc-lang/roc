@@ -12,14 +12,10 @@ compose = |f, g| |x| f(g(x))
 
 main! = |_| {}
 ~~~
-~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - type_higher_order_multiple_vars.md:3:19:3:22
 PARSE ERROR - type_higher_order_multiple_vars.md:3:33:3:35
 UNEXPECTED TOKEN IN EXPRESSION - type_higher_order_multiple_vars.md:3:40:3:40
-UNEXPECTED TOKEN IN EXPRESSION - type_higher_order_multiple_vars.md:7:1:7:3
-UNEXPECTED TOKEN IN EXPRESSION - type_higher_order_multiple_vars.md:7:2:7:4
-UNEXPECTED TOKEN IN EXPRESSION - type_higher_order_multiple_vars.md:7:3:7:4
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **, (** is not expected in an expression.
@@ -57,54 +53,6 @@ compose : (b -> c), (a -> b) -> (a -> c)
                                        
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_higher_order_multiple_vars.md:7:1:7:3:**
-```roc
-~~~
-```
-^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_higher_order_multiple_vars.md:7:2:7:4:**
-```roc
-~~~
-```
- ^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **~** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**type_higher_order_multiple_vars.md:7:3:7:4:**
-```roc
-~~~
-```
-  ^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
@@ -128,12 +76,11 @@ Newline(1:1-1:1),
 LowerIdent(3:1-3:8),OpColon(3:9-3:10),OpenRound(3:11-3:12),LowerIdent(3:12-3:13),OpArrow(3:14-3:16),LowerIdent(3:17-3:18),CloseRound(3:18-3:19),Comma(3:19-3:20),OpenRound(3:21-3:22),LowerIdent(3:22-3:23),OpArrow(3:24-3:26),LowerIdent(3:27-3:28),CloseRound(3:28-3:29),OpArrow(3:30-3:32),OpenRound(3:33-3:34),LowerIdent(3:34-3:35),OpArrow(3:36-3:38),LowerIdent(3:39-3:40),CloseRound(3:40-3:41),Newline(1:1-1:1),
 LowerIdent(4:1-4:8),OpAssign(4:9-4:10),OpBar(4:11-4:12),LowerIdent(4:12-4:13),Comma(4:13-4:14),LowerIdent(4:15-4:16),OpBar(4:16-4:17),OpBar(4:18-4:19),LowerIdent(4:19-4:20),OpBar(4:20-4:21),LowerIdent(4:22-4:23),NoSpaceOpenRound(4:23-4:24),LowerIdent(4:24-4:25),NoSpaceOpenRound(4:25-4:26),LowerIdent(4:26-4:27),CloseRound(4:27-4:28),CloseRound(4:28-4:29),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBar(6:11-6:12),OpenCurly(6:13-6:14),CloseCurly(6:14-6:15),Newline(1:1-1:1),
-MalformedUnknownToken(7:1-7:2),MalformedUnknownToken(7:2-7:3),MalformedUnknownToken(7:3-7:4),EndOfFile(7:4-7:4),
+LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBar(6:11-6:12),OpenCurly(6:13-6:14),CloseCurly(6:14-6:15),EndOfFile(6:15-6:15),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-7.4
+(file @1.1-6.15
 	(app @1.1-1.53
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
@@ -174,10 +121,7 @@ MalformedUnknownToken(7:1-7:2),MalformedUnknownToken(7:2-7:3),MalformedUnknownTo
 			(e-lambda @6.9-6.15
 				(args
 					(p-underscore))
-				(e-record @6.13-6.15)))
-		(e-malformed @7.1-7.3 (reason "expr_unexpected_token"))
-		(e-malformed @7.2-7.4 (reason "expr_unexpected_token"))
-		(e-malformed @7.3-7.4 (reason "expr_unexpected_token"))))
+				(e-record @6.13-6.15)))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -187,7 +131,6 @@ compose : (b -> c)a->c
 compose = |f, g| |x| f(g(x))
 
 main! = |_| {}
-
 ~~~
 # CANONICALIZE
 ~~~clojure

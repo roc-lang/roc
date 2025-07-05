@@ -11,7 +11,6 @@ match nestedList {
     [x, [y]] => x * y
 }
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -25,8 +24,7 @@ KwMatch(1:1-1:6),LowerIdent(1:7-1:17),OpenCurly(1:18-1:19),Newline(1:1-1:1),
 OpenSquare(2:5-2:6),OpenSquare(2:6-2:7),LowerIdent(2:7-2:8),CloseSquare(2:8-2:9),Comma(2:9-2:10),OpenSquare(2:11-2:12),LowerIdent(2:12-2:13),CloseSquare(2:13-2:14),CloseSquare(2:14-2:15),OpFatArrow(2:16-2:18),LowerIdent(2:19-2:20),OpPlus(2:21-2:22),LowerIdent(2:23-2:24),Newline(1:1-1:1),
 OpenSquare(3:5-3:6),OpenSquare(3:6-3:7),LowerIdent(3:7-3:8),Comma(3:8-3:9),LowerIdent(3:10-3:11),CloseSquare(3:11-3:12),CloseSquare(3:12-3:13),OpFatArrow(3:14-3:16),LowerIdent(3:17-3:18),OpBinaryMinus(3:19-3:20),LowerIdent(3:21-3:22),Newline(1:1-1:1),
 OpenSquare(4:5-4:6),LowerIdent(4:6-4:7),Comma(4:7-4:8),OpenSquare(4:9-4:10),LowerIdent(4:10-4:11),CloseSquare(4:11-4:12),CloseSquare(4:12-4:13),OpFatArrow(4:14-4:16),LowerIdent(4:17-4:18),OpStar(4:19-4:20),LowerIdent(4:21-4:22),Newline(1:1-1:1),
-CloseCurly(5:1-5:2),Newline(1:1-1:1),
-MalformedUnknownToken(6:1-6:2),MalformedUnknownToken(6:2-6:3),MalformedUnknownToken(6:3-6:4),EndOfFile(6:4-6:4),
+CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 ~~~
 # PARSE
 ~~~clojure

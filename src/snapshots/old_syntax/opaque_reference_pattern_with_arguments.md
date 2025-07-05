@@ -8,7 +8,6 @@ type=expr
 when n is
   @Add n m -> n + m
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -19,8 +18,7 @@ Is there an `import` or `exposing` missing up-top?
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:5),LowerIdent(1:6-1:7),LowerIdent(1:8-1:10),Newline(1:1-1:1),
-OpaqueName(2:3-2:7),LowerIdent(2:8-2:9),LowerIdent(2:10-2:11),OpArrow(2:12-2:14),LowerIdent(2:15-2:16),OpPlus(2:17-2:18),LowerIdent(2:19-2:20),Newline(1:1-1:1),
-MalformedUnknownToken(3:1-3:2),MalformedUnknownToken(3:2-3:3),MalformedUnknownToken(3:3-3:4),EndOfFile(3:4-3:4),
+OpaqueName(2:3-2:7),LowerIdent(2:8-2:9),LowerIdent(2:10-2:11),OpArrow(2:12-2:14),LowerIdent(2:15-2:16),OpPlus(2:17-2:18),LowerIdent(2:19-2:20),EndOfFile(2:20-2:20),
 ~~~
 # PARSE
 ~~~clojure
