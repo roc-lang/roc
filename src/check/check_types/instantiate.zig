@@ -206,7 +206,7 @@ fn instantiateFunc(
         .args = fresh_args_range,
         .ret = fresh_ret,
         // Assume it still needs instantiation even after replacing with
-        // fresh type variables, becase recalculating it just in case it
+        // fresh type variables, because recalculating it just in case it
         // might not does not seem likely to be worth it - especially since
         // any given instantiation will likely never get instantiated again.
         .needs_instantiation = true,
