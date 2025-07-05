@@ -198,6 +198,16 @@ pub fn parseFile(self: *Parser) void {
     const scratch_top = self.store.scratchStatementTop();
 
     while (self.peek() != .EndOfFile) {
+        // Skip newlines before parsing each statement
+        while (self.peek() == .Newline) {
+            self.advanceOne();
+        }
+
+        // Check if we've reached the end after skipping newlines
+        if (self.peek() == .EndOfFile) {
+            break;
+        }
+
         const current_scratch_top = self.store.scratchStatementTop();
         if (self.parseTopLevelStatement()) |idx| {
             std.debug.assert(self.store.scratchStatementTop() == current_scratch_top);
