@@ -7,7 +7,6 @@ type=expr
 ~~~roc
 list.map(fn)
 ~~~
-~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -21,12 +20,11 @@ Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:5),NoSpaceDotLowerIdent(1:5-1:9),NoSpaceOpenRound(1:9-1:10),LowerIdent(1:10-1:12),CloseRound(1:12-1:13),Newline(1:1-1:1),
-MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
+LowerIdent(1:1-1:5),NoSpaceDotLowerIdent(1:5-1:9),NoSpaceOpenRound(1:9-1:10),LowerIdent(1:10-1:12),CloseRound(1:12-1:13),EndOfFile(1:13-1:13),
 ~~~
 # PARSE
 ~~~clojure
-(e-field-access @1.1-2.2
+(e-field-access @1.1-1.13
 	(e-ident @1.1-1.5 (raw "list"))
 	(e-apply @1.5-1.13
 		(e-ident @1.5-1.9 (raw "map"))
@@ -34,11 +32,11 @@ MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownTo
 ~~~
 # FORMATTED
 ~~~roc
-list.map(fn)
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dot-access @1.1-2.2 (field "map")
+(e-dot-access @1.1-1.13 (field "map")
 	(receiver
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(args
@@ -46,5 +44,5 @@ list.map(fn)
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-2.2 (type "*"))
+(expr @1.1-1.13 (type "*"))
 ~~~

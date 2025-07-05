@@ -1624,11 +1624,8 @@ fn extractSections(gpa: Allocator, content: []const u8) !Content {
                                 content[search_idx + 1] == '~' and
                                 content[search_idx + 2] == '~')
                             {
-                                // Find end of line after ~~~
-                                end = search_idx + 3;
-                                while (end < content.len and content[end] != '\n') {
-                                    end += 1;
-                                }
+                                // Set end to the position of ~~~, not after it
+                                end = search_idx;
                                 break;
                             }
                             search_idx += 1;
