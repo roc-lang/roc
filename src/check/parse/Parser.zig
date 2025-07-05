@@ -1861,9 +1861,10 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
             if (self.peek() != .CloseCurly) {
                 return self.pushMalformed(AST.Expr.Idx, .expected_close_curly_at_end_of_match, self.pos);
             }
+            const close_curly_pos = self.pos;
             self.advance();
             expr = self.store.addExpr(.{ .match = .{
-                .region = .{ .start = start, .end = self.pos },
+                .region = .{ .start = start, .end = close_curly_pos },
                 .expr = e,
                 .branches = branches,
             } });

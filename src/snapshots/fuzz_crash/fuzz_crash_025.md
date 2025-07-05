@@ -119,23 +119,23 @@ f =8
 
 
 **INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
+The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
+The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
+The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
+The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
+The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **TYPE MISMATCH**

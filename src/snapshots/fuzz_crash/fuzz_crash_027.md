@@ -937,9 +937,9 @@ CloseCurly(159:1-159:2),EndOfFile(159:2-159:2),
 									(e-dbg
 										(e-int @55.7-55.10 (raw "123")))
 									(e-ident @56.3-56.8 (qaul "") (raw "other")))))))))
-		(s-decl @60.1-96.7
+		(s-decl @60.1-94.3
 			(p-ident @60.1-60.11 (raw "match_time"))
-			(e-lambda @60.14-96.7
+			(e-lambda @60.14-94.3
 				(args
 					(p-ident @61.2-61.3 (raw "a"))
 					(p-ident @62.2-62.3 (raw "b")))
@@ -1468,12 +1468,12 @@ main! = |_| { # Yeah Ie
 					(ty @47.18-47.21 (name "U64"))))))
 	(d-let
 		(p-assign @60.1-60.11 (ident "match_time"))
-		(e-lambda @60.14-96.7
+		(e-lambda @60.14-94.3
 			(args
 				(p-assign @61.2-61.3 (ident "a"))
 				(p-assign @62.2-62.3 (ident "b")))
-			(e-match @64.2-96.7
-				(match @64.2-96.7
+			(e-match @64.2-94.3
+				(match @64.2-94.3
 					(cond
 						(e-lookup-local @64.8-64.9
 							(pattern @61.2-61.3)))
@@ -1833,6 +1833,6 @@ main! = |_| { # Yeah Ie
 	(expressions
 		(expr @45.7-47.8 (type "[False, True] -> Num(*)"))
 		(expr @48.11-58.2 (type "Error -> U64"))
-		(expr @60.14-96.7 (type "Error"))
+		(expr @60.14-94.3 (type "Error"))
 		(expr @100.9-159.2 (type "Error -> Error"))))
 ~~~

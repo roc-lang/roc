@@ -79,11 +79,11 @@ Here is the problematic code:
 This type annotation is malformed or contains invalid syntax.
 
 **INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
+The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
+The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **INVALID IF CONDITION**
@@ -104,7 +104,7 @@ getUser = |id| if (id > 1!) "big" else "l"
 
 
 **INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
+The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
@@ -202,9 +202,9 @@ ain! = |_| getUser(900)
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.8 (type "Num(*) -> Str"))
+		(patt @6.1-6.8 (type "* -> Str"))
 		(patt @8.2-8.6 (type "* -> Str")))
 	(expressions
-		(expr @1.1-1.1 (type "Num(*) -> Str"))
+		(expr @1.1-1.1 (type "* -> Str"))
 		(expr @8.9-8.25 (type "* -> Str"))))
 ~~~

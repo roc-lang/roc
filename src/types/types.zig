@@ -605,6 +605,7 @@ pub const NominalType = struct {
 pub const Func = struct {
     args: Var.SafeList.Range,
     ret: Var,
+    needs_instantiation: bool,
 };
 
 // records //

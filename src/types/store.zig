@@ -241,21 +241,145 @@ pub const Store = struct {
     // Does not insert content into the types store.
     pub fn mkFuncUnbound(self: *Self, args: []const Var, ret: Var) Content {
         const args_range = self.appendFuncArgs(args);
-        return Content{ .structure = .{ .fn_unbound = .{ .args = args_range, .ret = ret } } };
+
+        // Check if any arguments need instantiation
+        var needs_inst = false;
+        for (args) |arg| {
+            if (self.needsInstantiation(arg)) {
+                needs_inst = true;
+                break;
+            }
+        }
+
+        // Also check the return type
+        if (!needs_inst) {
+            needs_inst = self.needsInstantiation(ret);
+        }
+
+        return Content{ .structure = .{ .fn_unbound = .{
+            .args = args_range,
+            .ret = ret,
+            .needs_instantiation = needs_inst,
+        } } };
     }
 
     // Make a pure function data type (as opposed to an effectful or unbound function)
     // Does not insert content into the types store.
     pub fn mkFuncPure(self: *Self, args: []const Var, ret: Var) Content {
         const args_range = self.appendFuncArgs(args);
-        return Content{ .structure = .{ .fn_pure = .{ .args = args_range, .ret = ret } } };
+
+        // Check if any arguments need instantiation
+        var needs_inst = false;
+        for (args) |arg| {
+            if (self.needsInstantiation(arg)) {
+                needs_inst = true;
+                break;
+            }
+        }
+
+        // Also check the return type
+        if (!needs_inst) {
+            needs_inst = self.needsInstantiation(ret);
+        }
+
+        return Content{ .structure = .{ .fn_pure = .{ .args = args_range, .ret = ret, .needs_instantiation = needs_inst } } };
     }
 
     // Make an effectful function data type (as opposed to a pure or unbound function)
     // Does not insert content into the types store.
     pub fn mkFuncEffectful(self: *Self, args: []const Var, ret: Var) Content {
         const args_range = self.appendFuncArgs(args);
-        return Content{ .structure = .{ .fn_effectful = .{ .args = args_range, .ret = ret } } };
+
+        // Check if any arguments need instantiation
+        var needs_inst = false;
+        for (args) |arg| {
+            if (self.needsInstantiation(arg)) {
+                needs_inst = true;
+                break;
+            }
+        }
+
+        // Also check the return type
+        if (!needs_inst) {
+            needs_inst = self.needsInstantiation(ret);
+        }
+
+        return Content{ .structure = .{ .fn_effectful = .{ .args = args_range, .ret = ret, .needs_instantiation = needs_inst } } };
+    }
+
+    // Helper to check if a type variable needs instantiation
+    pub fn needsInstantiation(self: *const Self, var_: Var) bool {
+        const resolved = self.resolveVar(var_);
+        return self.needsInstantiationContent(resolved.desc.content);
+    }
+
+    pub fn needsInstantiationContent(self: *const Self, content: Content) bool {
+        return switch (content) {
+            .flex_var => true, // Flexible variables need instantiation
+            .rigid_var => true, // Rigid variables need instantiation when used outside their defining scope
+            .alias => true, // Aliases may contain type variables, so assume they need instantiation
+            .structure => |flat_type| self.needsInstantiationFlatType(flat_type),
+            .err => false,
+        };
+    }
+
+    pub fn needsInstantiationFlatType(self: *const Self, flat_type: types.FlatType) bool {
+        return switch (flat_type) {
+            .str => false,
+            .box => |box_var| self.needsInstantiation(box_var),
+            .list => |list_var| self.needsInstantiation(list_var),
+            .list_unbound => false,
+            .tuple => |tuple| blk: {
+                const elems_slice = self.getTupleElemsSlice(tuple.elems);
+                for (elems_slice) |elem_var| {
+                    if (self.needsInstantiation(elem_var)) break :blk true;
+                }
+                break :blk false;
+            },
+            .num => |num| switch (num) {
+                .num_poly => |poly| self.needsInstantiation(poly.var_),
+                .int_poly => |poly| self.needsInstantiation(poly.var_),
+                .frac_poly => |poly| self.needsInstantiation(poly.var_),
+                else => false, // Concrete numeric types don't need instantiation
+            },
+            .nominal_type => false, // Nominal types are concrete
+            .fn_pure => |func| func.needs_instantiation,
+            .fn_effectful => |func| func.needs_instantiation,
+            .fn_unbound => |func| func.needs_instantiation,
+            .record => |record| self.needsInstantiationRecord(record),
+            .record_unbound => |fields| self.needsInstantiationRecordFields(fields),
+            .record_poly => |poly| self.needsInstantiation(poly.var_) or self.needsInstantiationRecord(poly.record),
+            .empty_record => false,
+            .tag_union => |tag_union| self.needsInstantiationTagUnion(tag_union),
+            .empty_tag_union => false,
+        };
+    }
+
+    pub fn needsInstantiationRecord(self: *const Self, record: types.Record) bool {
+        const fields_slice = self.getRecordFieldsSlice(record.fields);
+        for (fields_slice.items(.var_)) |type_var| {
+            if (self.needsInstantiation(type_var)) return true;
+        }
+        return self.needsInstantiation(record.ext);
+    }
+
+    pub fn needsInstantiationRecordFields(self: *const Self, fields: types.RecordField.SafeMultiList.Range) bool {
+        const fields_slice = self.getRecordFieldsSlice(fields);
+        for (fields_slice.items(.var_)) |type_var| {
+            if (self.needsInstantiation(type_var)) return true;
+        }
+        return false;
+    }
+
+    pub fn needsInstantiationTagUnion(self: *const Self, tag_union: types.TagUnion) bool {
+        const tags_slice = self.getTagsSlice(tag_union.tags);
+        for (tags_slice.items(.args)) |tag_args| {
+            const args_slice = self.getTagArgsSlice(tag_args);
+            for (args_slice) |arg_var| {
+                if (self.needsInstantiation(arg_var)) return true;
+            }
+        }
+        return self.needsInstantiation(tag_union.ext);
     }
 
     // sub list setters //

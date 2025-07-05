@@ -26,13 +26,6 @@ var_function_regions: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, Region),
 var_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
 /// Tracks which pattern indices have been used/referenced
 used_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
-/// Maps identifier names to pending type annotations awaiting connection to declarations
-pending_type_annos: std.ArrayListUnmanaged(PendingTypeAnno),
-
-const PendingTypeAnno = struct {
-    ident: base.Ident.Idx,
-    anno: CIR.TypeAnno.Idx,
-};
 
 const Ident = base.Ident;
 const Region = base.Region;
@@ -91,7 +84,6 @@ pub fn deinit(
     self.var_function_regions.deinit(gpa);
     self.var_patterns.deinit(gpa);
     self.used_patterns.deinit(gpa);
-    self.pending_type_annos.deinit(gpa);
 }
 
 pub fn init(self: *CIR, parse_ir: *AST) std.mem.Allocator.Error!Self {
@@ -106,7 +98,6 @@ pub fn init(self: *CIR, parse_ir: *AST) std.mem.Allocator.Error!Self {
         .var_function_regions = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, Region){},
         .var_patterns = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void){},
         .used_patterns = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void){},
-        .pending_type_annos = std.ArrayListUnmanaged(PendingTypeAnno){},
     };
 
     // Top-level scope is not a function boundary
@@ -294,15 +285,42 @@ pub fn canonicalize_file(
     }
 
     // Second pass: Process all other statements
+    var last_type_anno: ?struct {
+        name: base.Ident.Idx,
+        anno_idx: CIR.TypeAnno.Idx,
+        type_vars: base.DataSpan,
+    } = null;
+
     for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
         const stmt = self.parse_ir.store.getStatement(stmt_id);
         switch (stmt) {
             .import => |import_stmt| {
                 _ = self.canonicalizeImportStatement(import_stmt);
+                last_type_anno = null; // Clear on non-annotation statement
             },
             .decl => |decl| {
-                const def_idx = try self.canonicalize_decl(decl);
+                // Check if this declaration matches the last type annotation
+                var annotation_idx: ?CIR.Annotation.Idx = null;
+                if (last_type_anno) |anno_info| {
+                    if (self.parse_ir.store.getPattern(decl.pattern) == .ident) {
+                        const pattern_ident = self.parse_ir.store.getPattern(decl.pattern).ident;
+                        if (self.parse_ir.tokens.resolveIdentifier(pattern_ident.ident_tok)) |decl_ident| {
+                            if (self.can_ir.env.idents.identsHaveSameText(anno_info.name, decl_ident)) {
+                                // This declaration matches the type annotation
+                                const pattern_region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getPattern(decl.pattern).to_tokenized_region());
+                                const type_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), pattern_region) catch |err| exitOnOom(err);
+                                annotation_idx = try self.createAnnotationFromTypeAnno(anno_info.anno_idx, type_var, pattern_region, @enumFromInt(@intFromEnum(decl.pattern)));
+
+                                // Clear the annotation since we've used it
+                                last_type_anno = null;
+                            }
+                        }
+                    }
+                }
+
+                const def_idx = try self.canonicalize_decl_with_annotation(decl, annotation_idx);
                 self.can_ir.store.addScratchDef(def_idx);
+                last_type_anno = null; // Clear after successful use
             },
             .@"var" => {
                 // Not valid at top-level
@@ -310,13 +328,15 @@ pub fn canonicalize_file(
                 self.can_ir.pushDiagnostic(CIR.Diagnostic{ .invalid_top_level_statement = .{
                     .stmt = string_idx,
                 } });
+                last_type_anno = null; // Clear on non-annotation statement
             },
             .expr => {
                 // Not valid at top-level
-                const string_idx = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "expr");
+                const string_idx = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "expression");
                 self.can_ir.pushDiagnostic(CIR.Diagnostic{ .invalid_top_level_statement = .{
                     .stmt = string_idx,
                 } });
+                last_type_anno = null; // Clear on non-annotation statement
             },
             .crash => {
                 // Not valid at top-level
@@ -324,6 +344,7 @@ pub fn canonicalize_file(
                 self.can_ir.pushDiagnostic(CIR.Diagnostic{ .invalid_top_level_statement = .{
                     .stmt = string_idx,
                 } });
+                last_type_anno = null; // Clear on non-annotation statement
             },
             .expect => {
                 const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "top-level expect");
@@ -348,13 +369,14 @@ pub fn canonicalize_file(
             },
             .type_decl => {
                 // Already processed in first pass, skip
+                last_type_anno = null; // Clear on non-annotation statement
             },
             .type_anno => |ta| {
                 const gpa = self.can_ir.env.gpa;
                 const region = self.parse_ir.tokenizedRegionToRegion(ta.region);
 
                 // Top-level type annotation - store for connection to next declaration
-                const name = self.parse_ir.tokens.resolveIdentifier(ta.name) orelse {
+                const name_ident = self.parse_ir.tokens.resolveIdentifier(ta.name) orelse {
                     // Malformed identifier - skip this annotation
                     const feature = self.can_ir.env.strings.insert(gpa, "handle malformed identifier for a type annotation");
                     self.can_ir.pushDiagnostic(CIR.Diagnostic{
@@ -390,14 +412,19 @@ pub fn canonicalize_file(
                 }
 
                 // Now canonicalize the annotation with type variables in scope
-                const anno_idx = self.canonicalize_type_anno(ta.anno);
+                const type_anno_idx = self.canonicalize_type_anno(ta.anno);
 
-                // Store annotation for connection to next declaration
-                self.pending_type_annos.append(self.can_ir.env.gpa, .{ .ident = name, .anno = anno_idx }) catch |err| exitOnOom(err);
+                // Store this annotation for the next declaration
+                last_type_anno = .{
+                    .name = name_ident,
+                    .anno_idx = type_anno_idx,
+                    .type_vars = base.DataSpan.empty(), // TODO: store type vars if needed
+                };
             },
             .malformed => |malformed| {
                 // We won't touch this since it's already a parse error.
                 _ = malformed;
+                last_type_anno = null; // Clear on non-annotation statement
             },
         }
     }
@@ -763,9 +790,10 @@ fn introduceExposedItemsIntoScope(
     }
 }
 
-fn canonicalize_decl(
+fn canonicalize_decl_with_annotation(
     self: *Self,
     decl: AST.Statement.Decl,
+    annotation: ?CIR.Annotation.Idx,
 ) std.mem.Allocator.Error!CIR.Def.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -794,38 +822,6 @@ fn canonicalize_decl(
             break :blk malformed_idx;
         }
     };
-
-    // Check for pending type annotation to connect to this declaration
-    var annotation: ?CIR.Annotation.Idx = null;
-
-    // Extract identifier from pattern if it's an identifier pattern
-    const pattern = self.can_ir.store.getPattern(pattern_idx);
-    if (pattern == .assign) {
-        const ident = pattern.assign.ident;
-
-        // Check if there's a pending type annotation for this identifier
-        var found_anno_idx: ?CIR.TypeAnno.Idx = null;
-        var found_index: ?usize = null;
-        for (self.pending_type_annos.items, 0..) |pending, i| {
-            if (self.can_ir.env.idents.identsHaveSameText(ident, pending.ident)) {
-                found_anno_idx = pending.anno;
-                found_index = i;
-                break;
-            }
-        }
-
-        if (found_anno_idx) |type_anno_idx| {
-            // Create a basic annotation from the type annotation
-            const type_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), pattern_region) catch |err| exitOnOom(err);
-
-            // For now, create a simple annotation with just the signature and region
-            // TODO: Convert TypeAnno to proper type constraints and populate signature
-            annotation = try self.createAnnotationFromTypeAnno(type_anno_idx, type_var, pattern_region, @enumFromInt(@intFromEnum(pattern_idx)));
-
-            // Remove the used annotation
-            _ = self.pending_type_annos.swapRemove(found_index.?);
-        }
-    }
 
     // Create the def entry
     const def_idx = self.can_ir.store.addDef(.{
@@ -3581,9 +3577,6 @@ pub fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.
 
             // Now canonicalize the annotation with type variables in scope
             const type_anno_idx = self.canonicalize_type_anno(ta.anno);
-
-            // Store the type annotation for connection with the next declaration
-            self.pending_type_annos.append(self.can_ir.env.gpa, .{ .ident = name_ident, .anno = type_anno_idx }) catch |err| exitOnOom(err);
 
             // Create a type annotation statement
             const type_anno_stmt = CIR.Statement{

@@ -50,34 +50,20 @@ compose : (b -> c), (a -> b) -> (a -> c)
 
 
 **INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
+The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
+The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
+The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
+The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**type_higher_order_multiple_vars.md:4:1:4:8:**
-```roc
-compose = |f, g| |x| f(g(x))
-```
-^^^^^^^
-
-It is of type:
-    _b -> c_
-
-But you are trying to use it as:
-    _*, * -> *, *, * -> * -> * -> *_
 
 # TOKENS
 ~~~zig
@@ -161,13 +147,7 @@ main! = |_| {}
 						(e-lookup-local @4.24-4.25
 							(pattern @4.15-4.16))
 						(e-lookup-local @4.26-4.27
-							(pattern @4.19-4.20))))))
-		(annotation @4.1-4.8
-			(declared-type
-				(ty-parens @3.11-3.19
-					(ty-fn @3.12-3.18 (effectful false)
-						(ty-var @3.12-3.13 (name "b"))
-						(ty-var @3.17-3.18 (name "c")))))))
+							(pattern @4.19-4.20)))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-lambda @6.9-6.15
@@ -179,9 +159,9 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.8 (type "Error"))
+		(patt @4.1-4.8 (type "* -> *, * -> * -> * -> *"))
 		(patt @6.1-6.6 (type "* -> {}")))
 	(expressions
-		(expr @4.11-4.29 (type "Error"))
+		(expr @4.11-4.29 (type "* -> *, * -> * -> * -> *"))
 		(expr @6.9-6.15 (type "* -> {}"))))
 ~~~

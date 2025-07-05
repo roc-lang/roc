@@ -465,8 +465,6 @@ The pattern in the fourth branch of this `match` differs from previous ones:
 		{ 	} => 12
 		Ok(123) => 12
 	}
-
-expect # Cord
 ```
      ^
 
@@ -727,9 +725,9 @@ CloseCurly(121:1-121:2),EndOfFile(121:2-121:2),
 									(e-dbg
 										(e-int @44.7-44.10 (raw "123")))
 									(e-ident @45.3-45.4 (qaul "") (raw "r")))))))))
-		(s-decl @49.1-71.7
+		(s-decl @49.1-69.3
 			(p-ident @49.1-49.3 (raw "me"))
-			(e-lambda @49.6-71.7
+			(e-lambda @49.6-69.3
 				(args
 					(p-ident @50.2-50.3 (raw "a"))
 					(p-tag @50.5-50.7 (raw "Tb")))
@@ -1138,12 +1136,12 @@ expect {
 							(e-runtime-error (tag "ident_not_in_scope"))))))))
 	(d-let
 		(p-assign @49.1-49.3 (ident "me"))
-		(e-lambda @49.6-71.7
+		(e-lambda @49.6-69.3
 			(args
 				(p-assign @50.2-50.3 (ident "a"))
 				(p-applied-tag @50.5-50.7))
-			(e-match @52.2-71.7
-				(match @52.2-71.7
+			(e-match @52.2-69.3
+				(match @52.2-69.3
 					(cond
 						(e-lookup-local @52.8-52.9
 							(pattern @50.2-50.3)))
@@ -1428,7 +1426,7 @@ expect {
 	(expressions
 		(expr @35.7-37.4 (type "[False, True] -> Num(*)"))
 		(expr @38.7-47.2 (type "[False, True] -> Error"))
-		(expr @49.6-71.7 (type "Error"))
+		(expr @49.6-69.3 (type "Error"))
 		(expr @75.5-111.2 (type "* -> *"))
 		(expr @114.5-114.7 (type "{}"))))
 ~~~

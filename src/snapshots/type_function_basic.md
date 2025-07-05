@@ -26,26 +26,12 @@ apply : (a -> b), a -> b
 
 
 **INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
+The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
+The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**type_function_basic.md:4:1:4:6:**
-```roc
-apply = |fn, x| fn(x)
-```
-^^^^^
-
-It is of type:
-    _a -> b_
-
-But you are trying to use it as:
-    _*, * -> *, * -> *_
 
 # TOKENS
 ~~~zig
@@ -116,13 +102,7 @@ main! = |_| {}
 				(e-lookup-local @4.17-4.19
 					(pattern @4.10-4.12))
 				(e-lookup-local @4.20-4.21
-					(pattern @4.14-4.15))))
-		(annotation @4.1-4.6
-			(declared-type
-				(ty-parens @3.9-3.17
-					(ty-fn @3.10-3.16 (effectful false)
-						(ty-var @3.10-3.11 (name "a"))
-						(ty-var @3.15-3.16 (name "b")))))))
+					(pattern @4.14-4.15)))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-lambda @6.9-6.15
@@ -134,9 +114,9 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.6 (type "Error"))
+		(patt @4.1-4.6 (type "* -> *, * -> *"))
 		(patt @6.1-6.6 (type "* -> {}")))
 	(expressions
-		(expr @4.9-4.22 (type "Error"))
+		(expr @4.9-4.22 (type "* -> *, * -> *"))
 		(expr @6.9-6.15 (type "* -> {}"))))
 ~~~

@@ -266,6 +266,7 @@ pub const Store = struct {
         return SnapshotFunc{
             .args = args_range,
             .ret = deep_ret,
+            .needs_instantiation = func.needs_instantiation,
         };
     }
 
@@ -473,6 +474,7 @@ pub const SnapshotNominalType = struct {
 pub const SnapshotFunc = struct {
     args: SnapshotContentIdxSafeList.Range, // Range into SnapshotStore.func_args
     ret: SnapshotContentIdx, // Index into SnapshotStore.contents
+    needs_instantiation: bool,
 };
 
 /// TODO

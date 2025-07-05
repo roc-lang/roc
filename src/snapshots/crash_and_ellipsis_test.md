@@ -59,14 +59,14 @@ Let us know if you want to help!
 The body of this lambda expression is not valid.
 
 **INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
+The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **INVALID LAMBDA**
 The body of this lambda expression is not valid.
 
 **INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
+The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **UNUSED VARIABLE**

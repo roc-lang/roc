@@ -26,26 +26,12 @@ curry : (a, b -> c) -> (a -> b -> c)
 
 
 **INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
+The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
 **INVALID STATEMENT**
-The statement **expr** is not allowed at the top level.
+The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**type_function_multi_arg.md:4:1:4:6:**
-```roc
-curry = |fn| |x| |y| fn(x, y)
-```
-^^^^^
-
-It is of type:
-    _a, b -> c_
-
-But you are trying to use it as:
-    _*, *, *, * -> * -> * -> * -> *_
 
 # TOKENS
 ~~~zig
@@ -133,14 +119,7 @@ main! = |_| {}
 						(e-lookup-local @4.25-4.26
 							(pattern @4.15-4.16))
 						(e-lookup-local @4.28-4.29
-							(pattern @4.19-4.20))))))
-		(annotation @4.1-4.6
-			(declared-type
-				(ty-parens @3.9-3.20
-					(ty-fn @3.10-3.19 (effectful false)
-						(ty-var @3.10-3.11 (name "a"))
-						(ty-var @3.13-3.14 (name "b"))
-						(ty-var @3.18-3.19 (name "c")))))))
+							(pattern @4.19-4.20)))))))
 	(d-let
 		(p-assign @6.1-6.6 (ident "main!"))
 		(e-lambda @6.9-6.15
@@ -152,9 +131,9 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.6 (type "Error"))
+		(patt @4.1-4.6 (type "*, * -> * -> * -> * -> *"))
 		(patt @6.1-6.6 (type "* -> {}")))
 	(expressions
-		(expr @4.9-4.30 (type "Error"))
+		(expr @4.9-4.30 (type "*, * -> * -> * -> * -> *"))
 		(expr @6.9-6.15 (type "* -> {}"))))
 ~~~

@@ -230,8 +230,8 @@ main = |_| "done"
 				(p-assign @5.15-5.21 (ident "result"))
 				(p-assign @5.23-5.32 (ident "transform")))
 			(e-block @5.34-10.2
-				(e-match @6.5-10.2
-					(match @6.5-10.2
+				(e-match @6.5-9.6
+					(match @6.5-9.6
 						(cond
 							(e-lookup-local @6.11-6.17
 								(pattern @5.15-5.21)))
