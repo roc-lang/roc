@@ -94,13 +94,13 @@ pub fn expect(self: *Parser, expected: Token.Tag) ExpectError!void {
 /// Peek at the token at the current position
 ///
 /// **note** caller is responsible to ensure this isn't the last token
-pub fn peek(self: *Parser) Token.Tag {
+pub fn peek(self: *const Parser) Token.Tag {
     std.debug.assert(self.pos < self.tok_buf.tokens.len);
     return self.tok_buf.tokens.items(.tag)[self.pos];
 }
 
 /// Peek at the next significant token
-pub fn peekNext(self: *Parser) Token.Tag {
+pub fn peekNext(self: *const Parser) Token.Tag {
     var next = self.pos + 1;
     const tags = self.tok_buf.tokens.items(.tag);
     while (next < self.tok_buf.tokens.len and tags[next] == .Newline) {
@@ -113,7 +113,7 @@ pub fn peekNext(self: *Parser) Token.Tag {
 }
 
 /// Peek at `n` significant tokens forward
-pub fn peekN(self: *Parser, n: u32) Token.Tag {
+pub fn peekN(self: *const Parser, n: u32) Token.Tag {
     if (n == 0) {
         return self.peek();
     }
@@ -134,7 +134,7 @@ pub fn peekN(self: *Parser, n: u32) Token.Tag {
 }
 
 /// Peek at the current token, skipping any leading newlines
-pub fn peekSkippingNewlines(self: *Parser) Token.Tag {
+pub fn peekSkippingNewlines(self: *const Parser) Token.Tag {
     var pos = self.pos;
     const tags = self.tok_buf.tokens.items(.tag);
     while (pos < self.tok_buf.tokens.len and tags[pos] == .Newline) {
@@ -183,7 +183,9 @@ pub fn parseFile(self: *Parser) void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    // Reset scratch state
     self.store.emptyScratch();
+    // Reset file state
     self.store.addFile(.{
         .header = @as(AST.Header.Idx, @enumFromInt(0)),
         .statements = AST.Statement.Span{ .span = base.DataSpan.empty() },
@@ -279,7 +281,6 @@ pub fn parseHeader(self: *Parser) AST.Header.Idx {
         .KwModule => {
             return self.parseModuleHeader();
         },
-        // .KwPackage => {},
         .KwHosted => {
             return self.parseHostedHeader();
         },

@@ -25,7 +25,7 @@ pub fn Scratch(comptime T: type) type {
         }
 
         /// Returns the start position for a new Span of indexes in scratch
-        pub fn top(self: *Self) u32 {
+        pub fn top(self: *const Self) u32 {
             return @as(u32, @intCast(self.items.items.len));
         }
 

@@ -1697,7 +1697,7 @@ pub fn exprSlice(store: *NodeStore, span: AST.Expr.Span) []AST.Expr.Idx {
 }
 
 /// Returns the start position for a new Span of AST.Statement.Idxs in scratch
-pub fn scratchStatementTop(store: *NodeStore) u32 {
+pub fn scratchStatementTop(store: *const NodeStore) u32 {
     return store.scratch_statements.top();
 }
 
