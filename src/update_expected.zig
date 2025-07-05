@@ -1,3 +1,6 @@
+//! Tool for updating EXPECTED sections in snapshot files based on their PROBLEMS sections.
+//! This ensures that snapshot test expectations stay in sync with actual compiler output.
+
 const std = @import("std");
 const base = @import("base.zig");
 
@@ -313,6 +316,7 @@ fn processPath(allocator: std.mem.Allocator, path: []const u8) !u32 {
     return count;
 }
 
+/// Main entry point for the update-expected tool
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
