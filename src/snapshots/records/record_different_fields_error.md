@@ -14,6 +14,28 @@ type=expr
     field@symbol: "at symbol",
 }
 ~~~
+~~~
+# EXPECTED
+UNEXPECTED TOKEN IN TYPE ANNOTATION - record_different_fields_error.md:2:20:2:39
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:2:21:2:40
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:2:39:2:41
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:2:40:2:40
+UNEXPECTED TOKEN IN TYPE ANNOTATION - record_different_fields_error.md:3:13:3:33
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:3:14:3:34
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:3:33:3:35
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:3:34:3:34
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:4:15:4:18
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:4:25:4:25
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:5:15:5:18
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:5:24:5:24
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:6:10:6:18
+UNEXPECTED TOKEN IN TYPE ANNOTATION - record_different_fields_error.md:6:20:6:27
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:6:21:6:28
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:6:27:6:29
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:6:28:6:28
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:7:10:7:18
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:7:17:7:20
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:7:30:7:30
 # PROBLEMS
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
 The token **"leading underscore** is not expected in a type annotation.
@@ -289,7 +311,8 @@ UpperIdent(4:5-4:15),OpColon(4:15-4:16),StringStart(4:17-4:18),StringPart(4:18-4
 LowerIdent(5:5-5:10),OpBinaryMinus(5:10-5:11),LowerIdent(5:11-5:15),OpColon(5:15-5:16),StringStart(5:17-5:18),StringPart(5:18-5:23),StringEnd(5:23-5:24),Comma(5:24-5:25),Newline(1:1-1:1),
 LowerIdent(6:5-6:10),MalformedUnknownToken(6:10-6:11),LowerIdent(6:11-6:18),OpColon(6:18-6:19),StringStart(6:20-6:21),StringPart(6:21-6:27),StringEnd(6:27-6:28),Comma(6:28-6:29),Newline(1:1-1:1),
 LowerIdent(7:5-7:10),OpaqueName(7:10-7:17),OpColon(7:17-7:18),StringStart(7:19-7:20),StringPart(7:20-7:29),StringEnd(7:29-7:30),Comma(7:30-7:31),Newline(1:1-1:1),
-CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
+CloseCurly(8:1-8:2),Newline(1:1-1:1),
+MalformedUnknownToken(9:1-9:2),MalformedUnknownToken(9:2-9:3),MalformedUnknownToken(9:3-9:4),EndOfFile(9:4-9:4),
 ~~~
 # PARSE
 ~~~clojure

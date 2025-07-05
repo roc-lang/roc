@@ -7,6 +7,27 @@ type=file
 ~~~roc
 modu:;::::::::::::::le[%
 ~~~
+~~~
+# EXPECTED
+MISSING HEADER - fuzz_crash_002.md:1:1:1:6
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:5:1:7
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:6:1:8
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:7:1:9
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:8:1:10
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:9:1:11
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:10:1:12
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:11:1:13
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:12:1:14
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:13:1:15
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:14:1:16
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:15:1:17
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:16:1:18
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:17:1:19
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:18:1:20
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:19:1:21
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:20:1:23
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:24:1:24
+LIST NOT CLOSED - fuzz_crash_002.md:2:4:2:4
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.
@@ -217,15 +238,15 @@ modu:;::::::::::::::le[%
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **%** is not expected in an expression.
+The token  is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**fuzz_crash_002.md:1:24:1:25:**
+**fuzz_crash_002.md:1:24:1:24:**
 ```roc
 modu:;::::::::::::::le[%
 ```
-                       ^
+                       
 
 
 **LIST NOT CLOSED**
@@ -234,11 +255,11 @@ Lists must be closed with **]** and list items must be separated by commas.
 For example:     [1, 2, 3]
 
 Here is the problematic code:
-**fuzz_crash_002.md:1:25:1:25:**
+**fuzz_crash_002.md:2:4:2:4:**
 ```roc
-modu:;::::::::::::::le[%
+~~~
 ```
-                        
+   
 
 
 **INVALID STATEMENT**
@@ -315,11 +336,12 @@ Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:5),OpColon(1:5-1:6),MalformedUnknownToken(1:6-1:7),OpColon(1:7-1:8),OpColon(1:8-1:9),OpColon(1:9-1:10),OpColon(1:10-1:11),OpColon(1:11-1:12),OpColon(1:12-1:13),OpColon(1:13-1:14),OpColon(1:14-1:15),OpColon(1:15-1:16),OpColon(1:16-1:17),OpColon(1:17-1:18),OpColon(1:18-1:19),OpColon(1:19-1:20),OpColon(1:20-1:21),LowerIdent(1:21-1:23),OpenSquare(1:23-1:24),OpPercent(1:24-1:25),EndOfFile(1:25-1:25),
+LowerIdent(1:1-1:5),OpColon(1:5-1:6),MalformedUnknownToken(1:6-1:7),OpColon(1:7-1:8),OpColon(1:8-1:9),OpColon(1:9-1:10),OpColon(1:10-1:11),OpColon(1:11-1:12),OpColon(1:12-1:13),OpColon(1:13-1:14),OpColon(1:14-1:15),OpColon(1:15-1:16),OpColon(1:16-1:17),OpColon(1:17-1:18),OpColon(1:18-1:19),OpColon(1:19-1:20),OpColon(1:20-1:21),LowerIdent(1:21-1:23),OpenSquare(1:23-1:24),OpPercent(1:24-1:25),Newline(1:1-1:1),
+MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-1.25
+(file @1.1-2.4
 	(malformed-header @1.1-1.6 (tag "missing_header"))
 	(statements
 		(e-malformed @1.5-1.7 (reason "expr_unexpected_token"))
@@ -339,7 +361,7 @@ LowerIdent(1:1-1:5),OpColon(1:5-1:6),MalformedUnknownToken(1:6-1:7),OpColon(1:7-
 		(e-malformed @1.19-1.21 (reason "expr_unexpected_token"))
 		(e-malformed @1.20-1.23 (reason "expr_unexpected_token"))
 		(e-ident @1.21-1.23 (raw "le"))
-		(e-malformed @1.25-1.25 (reason "expected_expr_close_square_or_comma"))))
+		(e-malformed @2.4-2.4 (reason "expected_expr_close_square_or_comma"))))
 ~~~
 # FORMATTED
 ~~~roc

@@ -17,6 +17,7 @@ pub fn build(b: *std.Build) void {
     const fmt_step = b.step("fmt", "Format all zig code");
     const check_fmt_step = b.step("check-fmt", "Check formatting of all zig code");
     const snapshot_step = b.step("snapshot", "Run the snapshot tool to update snapshot files");
+    const update_expected_step = b.step("update-expected", "Update EXPECTED sections based on PROBLEMS in snapshots");
 
     // general configuration
     const target = b.standardTargetOptions(.{ .default_target = .{
@@ -74,6 +75,17 @@ pub fn build(b: *std.Build) void {
     });
     add_tracy(b, build_options, snapshot_exe, target, false, tracy);
     install_and_run(b, no_bin, snapshot_exe, snapshot_step, snapshot_step);
+
+    // Add update-expected tool
+    const update_expected_exe = b.addExecutable(.{
+        .name = "update-expected",
+        .root_source_file = b.path("src/update_expected.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    add_tracy(b, build_options, update_expected_exe, target, false, tracy);
+    install_and_run(b, no_bin, update_expected_exe, update_expected_step, update_expected_step);
 
     const all_tests = b.addTest(.{
         .root_source_file = b.path("src/test.zig"),

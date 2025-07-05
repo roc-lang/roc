@@ -7,6 +7,9 @@ type=expr
 ~~~roc
 f : .
 ~~~
+~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `f` in this scope.
@@ -14,7 +17,8 @@ Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:2),OpColon(1:3-1:4),Dot(1:5-1:6),EndOfFile(1:6-1:6),
+LowerIdent(1:1-1:2),OpColon(1:3-1:4),Dot(1:5-1:6),Newline(1:1-1:1),
+MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # PARSE
 ~~~clojure

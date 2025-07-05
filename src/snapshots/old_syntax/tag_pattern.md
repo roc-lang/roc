@@ -7,6 +7,9 @@ type=expr
 ~~~roc
 \Thing -> 42
 ~~~
+~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - tag_pattern.md:1:1:1:7
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **\Thing** is not expected in an expression.
@@ -22,7 +25,8 @@ Here is the problematic code:
 
 # TOKENS
 ~~~zig
-OpBackslash(1:1-1:2),UpperIdent(1:2-1:7),OpArrow(1:8-1:10),Int(1:11-1:13),EndOfFile(1:13-1:13),
+OpBackslash(1:1-1:2),UpperIdent(1:2-1:7),OpArrow(1:8-1:10),Int(1:11-1:13),Newline(1:1-1:1),
+MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # PARSE
 ~~~clojure

@@ -7,6 +7,9 @@ type=expr
 ~~~roc
 \(
 ~~~
+~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - pattern_in_parens_indent_open.md:1:1:1:3
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **\(** is not expected in an expression.
@@ -22,7 +25,8 @@ Here is the problematic code:
 
 # TOKENS
 ~~~zig
-OpBackslash(1:1-1:2),NoSpaceOpenRound(1:2-1:3),EndOfFile(1:3-1:3),
+OpBackslash(1:1-1:2),NoSpaceOpenRound(1:2-1:3),Newline(1:1-1:1),
+MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # PARSE
 ~~~clojure

@@ -7,6 +7,9 @@ type=expr
 ~~~roc
 fxFn!arg
 ~~~
+~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `fxFn!arg` in this scope.
@@ -14,7 +17,8 @@ Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:9),EndOfFile(1:9-1:9),
+LowerIdent(1:1-1:9),Newline(1:1-1:1),
+MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # PARSE
 ~~~clojure
@@ -22,7 +26,7 @@ LowerIdent(1:1-1:9),EndOfFile(1:9-1:9),
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+fxFn!arg
 ~~~
 # CANONICALIZE
 ~~~clojure

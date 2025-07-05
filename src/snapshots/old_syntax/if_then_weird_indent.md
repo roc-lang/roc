@@ -13,6 +13,9 @@ A
  e
 r
 ~~~
+~~~
+# EXPECTED
+PARSE ERROR - if_then_weird_indent.md:4:1:4:1
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `no_else`
@@ -34,7 +37,8 @@ LowerIdent(3:1-3:5),Newline(1:1-1:1),
 UpperIdent(4:1-4:2),Newline(1:1-1:1),
 KwElse(5:2-5:6),Newline(1:1-1:1),
 LowerIdent(6:2-6:3),Newline(1:1-1:1),
-LowerIdent(7:1-7:2),EndOfFile(7:2-7:2),
+LowerIdent(7:1-7:2),Newline(1:1-1:1),
+MalformedUnknownToken(8:1-8:2),MalformedUnknownToken(8:2-8:3),MalformedUnknownToken(8:3-8:4),EndOfFile(8:4-8:4),
 ~~~
 # PARSE
 ~~~clojure

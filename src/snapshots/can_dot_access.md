@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 list.map(fn)
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `list` in this scope.

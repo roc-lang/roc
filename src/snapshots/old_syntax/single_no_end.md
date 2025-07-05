@@ -7,13 +7,17 @@ type=expr
 ~~~roc
 "there is no end
 ~~~
+~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNCLOSED STRING**
 This string is missing a closing quote.
 
 # TOKENS
 ~~~zig
-StringStart(1:1-1:2),StringPart(1:2-1:17),EndOfFile(1:17-1:17),
+StringStart(1:1-1:2),StringPart(1:2-1:17),StringEnd(1:17-1:17),Newline(1:1-1:1),
+MalformedUnknownToken(2:1-2:2),MalformedUnknownToken(2:2-2:3),MalformedUnknownToken(2:3-2:4),EndOfFile(2:4-2:4),
 ~~~
 # PARSE
 ~~~clojure

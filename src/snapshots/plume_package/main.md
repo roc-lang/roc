@@ -8,8 +8,9 @@ type=package
 package [
     Color,
 ] {}
-
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS
