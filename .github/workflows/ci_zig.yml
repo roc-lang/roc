@@ -58,7 +58,8 @@ jobs:
           # Just cache the zig executable.
           # Zig cache corrupts sometimes and uses tons of space.
           use-cache: false
-      - uses: cachix/install-nix-action@02a151ada4993995686f9ed4f1be7cfbb229e56f # ratchet:cachix/install-nix-action@v31
+      - if: startsWith(matrix.os, 'ubuntu') || startsWith(matrix.os, 'macos')
+        uses: cachix/install-nix-action@02a151ada4993995686f9ed4f1be7cfbb229e56f # ratchet:cachix/install-nix-action@v31
         with:
           nix_path: nixpkgs=channel:nixos-25.05
 

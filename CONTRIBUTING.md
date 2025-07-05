@@ -28,7 +28,7 @@ Check [Building from source](BUILDING_FROM_SOURCE.md) for instructions.
 Most contributors execute the following commands before pushing their code:
 
 ```sh
-# This actualy runs the tests, it doesn't just build them.
+# This actually runs the tests, it doesn't just build them.
 zig build test
 zig build fmt
 ```
