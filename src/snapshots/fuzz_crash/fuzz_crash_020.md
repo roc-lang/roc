@@ -135,17 +135,37 @@ UNDECLARED TYPE VARIABLE - fuzz_crash_020.md:20:12:20:13
 UNDECLARED TYPE - fuzz_crash_020.md:24:15:24:16
 UNDECLARED TYPE VARIABLE - fuzz_crash_020.md:24:24:24:25
 UNDECLARED TYPE - fuzz_crash_020.md:37:7:37:9
-UNDEFINED VARIABLE - fuzz_crash_020.md:52:11:52:14
-UNDEFINED VARIABLE - fuzz_crash_020.md:57:2:57:4
-UNDEFINED VARIABLE - fuzz_crash_020.md:60:12:60:15
-NOT IMPLEMENTED - fuzz_crash_020.md:74:9:74:15
-UNDEFINED VARIABLE - fuzz_crash_020.md:97:2:97:3
-fuzz_crash_020.md:88:1:88:2: - fuzz_crash_020.md:88:1:88:2
+UNDEFINED VARIABLE - fuzz_crash_020.md:40:5:40:8
+UNDEFINED VARIABLE - fuzz_crash_020.md:42:6:42:10
+UNDEFINED VARIABLE - fuzz_crash_020.md:45:3:45:4
+UNDEFINED VARIABLE - fuzz_crash_020.md:53:2:53:3
+UNUSED VARIABLE - fuzz_crash_020.md:52:11:52:14
+UNDEFINED VARIABLE - fuzz_crash_020.md:55:11:55:12
+UNUSED VARIABLE - fuzz_crash_020.md:57:2:57:4
+UNDEFINED VARIABLE - fuzz_crash_020.md:59:3:59:7
+UNUSED VARIABLE - fuzz_crash_020.md:60:12:60:15
+UNDECLARED TYPE - fuzz_crash_020.md:74:9:74:15
+UNDEFINED VARIABLE - fuzz_crash_020.md:75:11:75:12
+UNDEFINED VARIABLE - fuzz_crash_020.md:87:11:87:12
+UNDEFINED VARIABLE - fuzz_crash_020.md:89:3:89:6
+UNDEFINED VARIABLE - fuzz_crash_020.md:96:34:96:37
+UNDEFINED VARIABLE - fuzz_crash_020.md:96:47:96:52
+UNDEFINED VARIABLE - fuzz_crash_020.md:96:54:96:59
+UNDEFINED VARIABLE - fuzz_crash_020.md:97:21:97:24
+UNDEFINED VARIABLE - fuzz_crash_020.md:97:30:97:32
+UNDEFINED VARIABLE - fuzz_crash_020.md:98:2:98:3
+UNDEFINED VARIABLE - fuzz_crash_020.md:100:11:100:14
+UNDEFINED VARIABLE - fuzz_crash_020.md:102:4:102:6
+UNDEFINED VARIABLE - fuzz_crash_020.md:102:8:102:13
+UNDEFINED VARIABLE - fuzz_crash_020.md:105:2:105:3
+UNDEFINED VARIABLE - fuzz_crash_020.md:108:4:108:5
+UNDEFINED VARIABLE - fuzz_crash_020.md:108:6:108:8
+UNUSED VARIABLE - fuzz_crash_020.md:88:1:88:2
 UNUSED VARIABLE - fuzz_crash_020.md:96:2:96:4
 UNUSED VARIABLE - fuzz_crash_020.md:76:2:76:3
 UNUSED VARIABLE - fuzz_crash_020.md:87:2:87:3
 UNDECLARED TYPE - fuzz_crash_020.md:116:5:116:6
-NOT IMPLEMENTED - fuzz_crash_020.md:52:2:52:2
+INCOMPATIBLE MATCH PATTERNS - fuzz_crash_020.md:52:2:52:2
 # PROBLEMS
 **UNDECLARED TYPE**
 The type ``Lis`` is not declared in this scope.
@@ -236,6 +256,13 @@ one : U6
 Nothing is named `num` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**fuzz_crash_020.md:40:5:40:8:**
+```roc
+	if num {
+```
+    ^^^
+
+
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
 Let us know if you want to help!
@@ -243,6 +270,13 @@ Let us know if you want to help!
 **UNDEFINED VARIABLE**
 Nothing is named `exp0` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_020.md:42:6:42:10:**
+```roc
+			s exp0
+```
+     ^^^^
+
 
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
@@ -252,9 +286,23 @@ Let us know if you want to help!
 Nothing is named `r` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**fuzz_crash_020.md:45:3:45:4:**
+```roc
+		r
+```
+  ^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_020.md:53:2:53:3:**
+```roc
+	x
+```
+ ^
+
 
 **UNUSED VARIABLE**
 Variable ``lue`` is not used anywhere in your code.
@@ -272,6 +320,13 @@ The unused variable is declared here:
 Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**fuzz_crash_020.md:55:11:55:12:**
+```roc
+		Blue=> {x
+```
+          ^
+
+
 **UNUSED VARIABLE**
 Variable ``er`` is not used anywhere in your code.
 
@@ -287,6 +342,13 @@ The unused variable is declared here:
 **UNDEFINED VARIABLE**
 Nothing is named `ment` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_020.md:59:3:59:7:**
+```roc
+		ment
+```
+  ^^^^
+
 
 **UNUSED VARIABLE**
 Variable ``est`` is not used anywhere in your code.
@@ -323,6 +385,13 @@ main! : Listlt({}, _)
 Nothing is named `e` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**fuzz_crash_020.md:75:11:75:12:**
+```roc
+ma= |_| { e
+```
+          ^
+
+
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
 Let us know if you want to help!
@@ -347,9 +416,23 @@ Let us know if you want to help!
 Nothing is named `d` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**fuzz_crash_020.md:87:11:87:12:**
+```roc
+	i= "H, ${d}"
+```
+          ^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `one` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_020.md:89:3:89:6:**
+```roc
+		one(er, 		),	456, # two
+```
+  ^^^
+
 
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
@@ -359,13 +442,34 @@ Let us know if you want to help!
 Nothing is named `tag` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**fuzz_crash_020.md:96:34:96:37:**
+```roc
+	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
+```
+                                 ^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `world` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**fuzz_crash_020.md:96:47:96:52:**
+```roc
+	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
+```
+                                              ^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `ned` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_020.md:96:54:96:59:**
+```roc
+	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
+```
+                                                     ^^^^^
+
 
 **DUPLICATE DEFINITION**
 The name `t` is being redeclared in this scope.
@@ -389,29 +493,78 @@ t = [
 Nothing is named `tag` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**fuzz_crash_020.md:97:21:97:24:**
+```roc
+	t = (123, "World", tag, O, (nd, t), [1, 2, 3])
+```
+                    ^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `nd` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_020.md:97:30:97:32:**
+```roc
+	t = (123, "World", tag, O, (nd, t), [1, 2, 3])
+```
+                             ^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `m` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**fuzz_crash_020.md:98:2:98:3:**
+```roc
+	m (
+```
+ ^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `ag1` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_020.md:100:11:100:14:**
+```roc
+		"World",ag1,
+```
+          ^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `ne` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**fuzz_crash_020.md:102:4:102:6:**
+```roc
+		(ne, tuple),
+```
+   ^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `tuple` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**fuzz_crash_020.md:102:8:102:13:**
+```roc
+		(ne, tuple),
+```
+       ^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `b` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_020.md:105:2:105:3:**
+```roc
+	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
+```
+ ^
+
 
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: canonicalize suffix_single_question expression
@@ -421,9 +574,23 @@ Let us know if you want to help!
 Nothing is named `r` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**fuzz_crash_020.md:108:4:108:5:**
+```roc
+			r(nu) # xpr
+```
+   ^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `nu` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_020.md:108:6:108:8:**
+```roc
+			r(nu) # xpr
+```
+     ^^
+
 
 **UNUSED VARIABLE**
 Variable ``t`` is not used anywhere in your code.

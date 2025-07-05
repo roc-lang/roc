@@ -13,11 +13,18 @@ r
 h
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - ann_parens_comments.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `r` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**ann_parens_comments.md:1:1:1:2:**
+```roc
+r:(
+```
+^
+
 
 # TOKENS
 ~~~zig

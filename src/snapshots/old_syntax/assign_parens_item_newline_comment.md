@@ -12,11 +12,18 @@ i
 r
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - assign_parens_item_newline_comment.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `a` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**assign_parens_item_newline_comment.md:1:1:1:2:**
+```roc
+a=(
+```
+^
+
 
 # TOKENS
 ~~~zig

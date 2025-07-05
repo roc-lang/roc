@@ -10,11 +10,18 @@ iffy=5
 42
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - if_def.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `iffy` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**if_def.md:1:1:1:5:**
+```roc
+iffy=5
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

@@ -10,11 +10,18 @@ f=if!b!then""else
 ""
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - if_bang_then_else_one_line.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `f` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**if_bang_then_else_one_line.md:1:1:1:2:**
+```roc
+f=if!b!then""else
+```
+^
+
 
 # TOKENS
 ~~~zig

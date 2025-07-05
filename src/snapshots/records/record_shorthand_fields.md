@@ -8,23 +8,54 @@ type=expr
 { name, age, email, active }
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - record_shorthand_fields.md:1:3:1:8
+UNDEFINED VARIABLE - record_shorthand_fields.md:1:9:1:13
+UNDEFINED VARIABLE - record_shorthand_fields.md:1:14:1:20
+UNDEFINED VARIABLE - record_shorthand_fields.md:1:21:1:29
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `name` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**record_shorthand_fields.md:1:3:1:8:**
+```roc
+{ name, age, email, active }
+```
+  ^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `age` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**record_shorthand_fields.md:1:9:1:13:**
+```roc
+{ name, age, email, active }
+```
+        ^^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `email` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**record_shorthand_fields.md:1:14:1:20:**
+```roc
+{ name, age, email, active }
+```
+             ^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `active` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**record_shorthand_fields.md:1:21:1:29:**
+```roc
+{ name, age, email, active }
+```
+                    ^^^^^^^^
+
 
 # TOKENS
 ~~~zig

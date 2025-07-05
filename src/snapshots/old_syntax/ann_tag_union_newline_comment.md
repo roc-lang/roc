@@ -11,11 +11,18 @@ k:
 D
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - ann_tag_union_newline_comment.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `k` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**ann_tag_union_newline_comment.md:1:1:1:2:**
+```roc
+k:
+```
+^
+
 
 # TOKENS
 ~~~zig

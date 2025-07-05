@@ -8,11 +8,18 @@ type=expr
 (person.transform)(42)
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - record_access_function_call.md:1:2:1:8
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `person` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**record_access_function_call.md:1:2:1:8:**
+```roc
+(person.transform)(42)
+```
+ ^^^^^^
+
 
 # TOKENS
 ~~~zig

@@ -10,11 +10,18 @@ module [add2]
 add2 = x +      2
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - add_var_with_spaces.md:3:8:3:9
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**add_var_with_spaces.md:3:8:3:9:**
+```roc
+add2 = x +      2
+```
+       ^
+
 
 # TOKENS
 ~~~zig

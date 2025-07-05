@@ -35,6 +35,10 @@ UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:6:28:6:28
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:7:10:7:18
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:7:17:7:20
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:7:30:7:30
+UNDEFINED VARIABLE - record_different_fields_error.md:5:5:5:10
+UNDEFINED VARIABLE - record_different_fields_error.md:5:11:5:15
+UNDEFINED VARIABLE - record_different_fields_error.md:6:5:6:10
+UNDEFINED VARIABLE - record_different_fields_error.md:7:5:7:10
 # PROBLEMS
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
 The token **"leading underscore** is not expected in a type annotation.
@@ -286,13 +290,34 @@ This type annotation is malformed or contains invalid syntax.
 Nothing is named `kebab` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**record_different_fields_error.md:5:5:5:10:**
+```roc
+    kebab-case: "kebab",
+```
+    ^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `case` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**record_different_fields_error.md:5:11:5:15:**
+```roc
+    kebab-case: "kebab",
+```
+          ^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `field` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**record_different_fields_error.md:6:5:6:10:**
+```roc
+    field$special: "dollar",
+```
+    ^^^^^
+
 
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
@@ -300,6 +325,13 @@ This type annotation is malformed or contains invalid syntax.
 **UNDEFINED VARIABLE**
 Nothing is named `field` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**record_different_fields_error.md:7:5:7:10:**
+```roc
+    field@symbol: "at symbol",
+```
+    ^^^^^
+
 
 # TOKENS
 ~~~zig

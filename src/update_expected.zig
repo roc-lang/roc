@@ -65,12 +65,22 @@ fn extractSection(content: []const u8, section_name: []const u8) ?struct { conte
 fn parseProblemEntry(allocator: std.mem.Allocator, content: []const u8, start_idx: usize) !?struct { entry: ?ProblemEntry, next_idx: usize } {
     var idx = start_idx;
 
-    // Skip to next problem header
-    while (idx < content.len) {
-        if (idx + 2 <= content.len and std.mem.eql(u8, content[idx .. idx + 2], "**")) {
-            break;
-        }
+    // Skip whitespace and empty lines
+    while (idx < content.len and (content[idx] == ' ' or content[idx] == '\t' or content[idx] == '\n' or content[idx] == '\r')) {
         idx += 1;
+    }
+
+    // Check if we're at the start of a problem header
+    if (idx + 2 > content.len or !std.mem.eql(u8, content[idx .. idx + 2], "**")) {
+        // Not a problem header, skip to next one
+        while (idx < content.len) {
+            if (idx + 2 <= content.len and std.mem.eql(u8, content[idx .. idx + 2], "**") and
+                (idx == 0 or content[idx - 1] == '\n'))
+            {
+                break;
+            }
+            idx += 1;
+        }
     }
 
     if (idx >= content.len) return null;
@@ -80,31 +90,68 @@ fn parseProblemEntry(allocator: std.mem.Allocator, content: []const u8, start_id
     const type_end_search = std.mem.indexOfPos(u8, content, type_start, "**");
     if (type_end_search == null) return null;
     const type_end = type_end_search.?;
-    const problem_type = std.mem.trim(u8, content[type_start..type_end], " \t\r\n");
+    var problem_type = std.mem.trim(u8, content[type_start..type_end], " \t\r\n");
 
-    // Look for the location pattern **file:line:col:** or **file:line:col:line:col:**
-    var search_idx = type_end + 2;
-    while (search_idx < content.len) {
-        if (search_idx + 2 <= content.len and std.mem.eql(u8, content[search_idx .. search_idx + 2], "**")) {
-            const loc_start = search_idx + 2;
-            // Look for either :** or just ** (for trailing colon case)
-            var loc_end_search = std.mem.indexOfPos(u8, content, loc_start, ":**");
+    // Handle compound error types like "NOT IMPLEMENTED - UNDEFINED VARIABLE"
+    // We only want the last part after the last " - "
+    if (std.mem.lastIndexOf(u8, problem_type, " - ")) |dash_idx| {
+        problem_type = std.mem.trim(u8, problem_type[dash_idx + 3 ..], " \t\r\n");
+    }
+
+    // Skip past the closing ** of the problem type
+    var current_idx = type_end + 2;
+
+    // Skip the rest of the line after the problem type
+    while (current_idx < content.len and content[current_idx] != '\n') {
+        current_idx += 1;
+    }
+    if (current_idx < content.len) current_idx += 1; // Skip the newline
+
+    // Now look for a location pattern on its own line
+    // Pattern: **file:line:col:line:col:** or **file:line:col:**
+    while (current_idx < content.len) {
+        // Skip whitespace at start of line
+        while (current_idx < content.len and (content[current_idx] == ' ' or content[current_idx] == '\t')) {
+            current_idx += 1;
+        }
+
+        // Check if this line starts with **
+        if (current_idx + 2 <= content.len and std.mem.eql(u8, content[current_idx .. current_idx + 2], "**")) {
+            const loc_start = current_idx + 2;
+
+            // Find the ending **
+            const loc_end_search = std.mem.indexOfPos(u8, content, loc_start, "**");
             if (loc_end_search == null) {
-                // Try looking for just ** in case there's a trailing colon
-                loc_end_search = std.mem.indexOfPos(u8, content, loc_start, "**");
-            }
-            if (loc_end_search) |loc_end| {
-                var location = content[loc_start..loc_end];
-
-                // Strip trailing colon if present
-                if (location.len > 0 and location[location.len - 1] == ':') {
-                    location = location[0 .. location.len - 1];
+                // No closing **, skip this line
+                while (current_idx < content.len and content[current_idx] != '\n') {
+                    current_idx += 1;
                 }
+                if (current_idx < content.len) current_idx += 1;
+                continue;
+            }
 
+            const loc_end = loc_end_search.?;
+            var location = content[loc_start..loc_end];
+
+            // Strip trailing colon and whitespace
+            location = std.mem.trimRight(u8, location, ": \t");
+
+            // Check if this looks like a file location
+            if (std.mem.indexOf(u8, location, ".md:")) |_| {
                 // Count colons to determine format
                 var colon_count: usize = 0;
                 for (location) |c| {
                     if (c == ':') colon_count += 1;
+                }
+
+                // Handle formats with extra text after location (e.g., "file:1:2:3:4: - SOME TEXT")
+                if (std.mem.indexOf(u8, location, ": - ")) |extra_idx| {
+                    location = location[0..extra_idx];
+                    // Recount colons
+                    colon_count = 0;
+                    for (location) |c| {
+                        if (c == ':') colon_count += 1;
+                    }
                 }
 
                 if (colon_count == 2) {
@@ -112,25 +159,25 @@ fn parseProblemEntry(allocator: std.mem.Allocator, content: []const u8, start_id
                     var parts = std.mem.tokenizeScalar(u8, location, ':');
 
                     const file = parts.next() orelse {
-                        search_idx = loc_end + 3;
+                        current_idx = loc_end + 2;
                         continue;
                     };
                     const line_str = parts.next() orelse {
-                        search_idx = loc_end + 3;
+                        current_idx = loc_end + 2;
                         continue;
                     };
                     const col_str = parts.next() orelse {
-                        search_idx = loc_end + 3;
+                        current_idx = loc_end + 2;
                         continue;
                     };
 
                     // Try to parse numbers
                     const line = std.fmt.parseInt(u32, line_str, 10) catch {
-                        search_idx = loc_end + 3;
+                        current_idx = loc_end + 2;
                         continue;
                     };
                     const col = std.fmt.parseInt(u32, col_str, 10) catch {
-                        search_idx = loc_end + 3;
+                        current_idx = loc_end + 2;
                         continue;
                     };
 
@@ -139,51 +186,79 @@ fn parseProblemEntry(allocator: std.mem.Allocator, content: []const u8, start_id
                         .file = try allocator.dupe(u8, file),
                         .start_line = line,
                         .start_col = col,
-                        .end_line = line, // Use same line as end
-                        .end_col = col, // Use same col as end
+                        .end_line = line,
+                        .end_col = col,
                     };
 
-                    return .{ .entry = entry, .next_idx = loc_end + 3 };
+                    // Find the end of this problem entry (next problem or end of content)
+                    var next_idx = loc_end + 2;
+                    while (next_idx < content.len) {
+                        if (next_idx + 2 <= content.len and
+                            std.mem.eql(u8, content[next_idx .. next_idx + 2], "**") and
+                            (next_idx == 0 or content[next_idx - 1] == '\n'))
+                        {
+                            // Check if this is the start of a new problem (not part of message)
+                            const peek_end = std.mem.indexOfPos(u8, content, next_idx + 2, "**");
+                            if (peek_end) |pe| {
+                                const peek_content = content[next_idx + 2 .. pe];
+                                // If it contains "VARIABLE" or "ERROR" or other problem keywords, it's likely a new problem
+                                if (std.mem.indexOf(u8, peek_content, "VARIABLE") != null or
+                                    std.mem.indexOf(u8, peek_content, "ERROR") != null or
+                                    std.mem.indexOf(u8, peek_content, "INVALID") != null or
+                                    std.mem.indexOf(u8, peek_content, "UNEXPECTED") != null or
+                                    std.mem.indexOf(u8, peek_content, "IMPLEMENTED") != null or
+                                    std.mem.indexOf(u8, peek_content, "TYPE") != null or
+                                    std.mem.indexOf(u8, peek_content, "PATTERN") != null or
+                                    std.mem.indexOf(u8, peek_content, "STATEMENT") != null)
+                                {
+                                    break;
+                                }
+                            }
+                        }
+                        next_idx += 1;
+                    }
+
+                    return .{ .entry = entry, .next_idx = next_idx };
                 } else if (colon_count == 4) {
                     // Format: file:start_line:start_col:end_line:end_col
                     var parts = std.mem.tokenizeScalar(u8, location, ':');
 
                     const file = parts.next() orelse {
-                        search_idx = loc_end + 3;
+                        current_idx = loc_end + 2;
                         continue;
                     };
                     const start_line_str = parts.next() orelse {
-                        search_idx = loc_end + 3;
+                        current_idx = loc_end + 2;
                         continue;
                     };
                     const start_col_str = parts.next() orelse {
-                        search_idx = loc_end + 3;
+                        current_idx = loc_end + 2;
                         continue;
                     };
                     const end_line_str = parts.next() orelse {
-                        search_idx = loc_end + 3;
+                        current_idx = loc_end + 2;
                         continue;
                     };
                     const end_col_str = parts.next() orelse {
-                        search_idx = loc_end + 3;
+                        current_idx = loc_end + 2;
                         continue;
                     };
 
                     // Try to parse numbers
                     const start_line = std.fmt.parseInt(u32, start_line_str, 10) catch {
-                        search_idx = loc_end + 3;
+                        current_idx = loc_end + 2;
                         continue;
                     };
                     const start_col = std.fmt.parseInt(u32, start_col_str, 10) catch {
-                        search_idx = loc_end + 3;
+                        current_idx = loc_end + 2;
                         continue;
                     };
                     const end_line = std.fmt.parseInt(u32, end_line_str, 10) catch {
-                        search_idx = loc_end + 3;
+                        current_idx = loc_end + 2;
                         continue;
                     };
                     const end_col = std.fmt.parseInt(u32, end_col_str, 10) catch {
-                        search_idx = loc_end + 3;
+                        current_idx = loc_end + 2;
                         continue;
                     };
 
@@ -196,15 +271,74 @@ fn parseProblemEntry(allocator: std.mem.Allocator, content: []const u8, start_id
                         .end_col = end_col,
                     };
 
-                    return .{ .entry = entry, .next_idx = loc_end + 3 };
+                    // Find the end of this problem entry
+                    var next_idx = loc_end + 2;
+                    while (next_idx < content.len) {
+                        if (next_idx + 2 <= content.len and
+                            std.mem.eql(u8, content[next_idx .. next_idx + 2], "**") and
+                            (next_idx == 0 or content[next_idx - 1] == '\n'))
+                        {
+                            // Check if this is the start of a new problem
+                            const peek_end = std.mem.indexOfPos(u8, content, next_idx + 2, "**");
+                            if (peek_end) |pe| {
+                                const peek_content = content[next_idx + 2 .. pe];
+                                if (std.mem.indexOf(u8, peek_content, "VARIABLE") != null or
+                                    std.mem.indexOf(u8, peek_content, "ERROR") != null or
+                                    std.mem.indexOf(u8, peek_content, "INVALID") != null or
+                                    std.mem.indexOf(u8, peek_content, "UNEXPECTED") != null or
+                                    std.mem.indexOf(u8, peek_content, "IMPLEMENTED") != null or
+                                    std.mem.indexOf(u8, peek_content, "TYPE") != null or
+                                    std.mem.indexOf(u8, peek_content, "PATTERN") != null or
+                                    std.mem.indexOf(u8, peek_content, "STATEMENT") != null)
+                                {
+                                    break;
+                                }
+                            }
+                        }
+                        next_idx += 1;
+                    }
+
+                    return .{ .entry = entry, .next_idx = next_idx };
                 }
             }
         }
-        search_idx += 1;
+
+        // Skip to next line
+        while (current_idx < content.len and content[current_idx] != '\n') {
+            current_idx += 1;
+        }
+        if (current_idx < content.len) current_idx += 1;
+
+        // Check if we've hit another problem header or gone too far
+        if (current_idx < content.len - 2) {
+            // Peek ahead to see if we're at a new problem
+            var peek_idx = current_idx;
+            while (peek_idx < content.len and (content[peek_idx] == ' ' or content[peek_idx] == '\t')) {
+                peek_idx += 1;
+            }
+            if (peek_idx + 2 <= content.len and std.mem.eql(u8, content[peek_idx .. peek_idx + 2], "**")) {
+                const peek_end = std.mem.indexOfPos(u8, content, peek_idx + 2, "**");
+                if (peek_end) |pe| {
+                    const peek_content = content[peek_idx + 2 .. pe];
+                    if (std.mem.indexOf(u8, peek_content, "VARIABLE") != null or
+                        std.mem.indexOf(u8, peek_content, "ERROR") != null or
+                        std.mem.indexOf(u8, peek_content, "INVALID") != null or
+                        std.mem.indexOf(u8, peek_content, "UNEXPECTED") != null or
+                        std.mem.indexOf(u8, peek_content, "IMPLEMENTED") != null or
+                        std.mem.indexOf(u8, peek_content, "TYPE") != null or
+                        std.mem.indexOf(u8, peek_content, "PATTERN") != null or
+                        std.mem.indexOf(u8, peek_content, "STATEMENT") != null)
+                    {
+                        // This is a new problem, stop looking for location
+                        return .{ .entry = null, .next_idx = current_idx };
+                    }
+                }
+            }
+        }
     }
 
-    // No location found for this problem type, move to end of content
-    return .{ .entry = null, .next_idx = content.len };
+    // No location found, return null entry but advance past this problem
+    return .{ .entry = null, .next_idx = current_idx };
 }
 
 /// Parse all problems from PROBLEMS section
@@ -218,7 +352,10 @@ fn parseProblemsSection(allocator: std.mem.Allocator, content: []const u8) !std.
         problems.deinit();
     }
 
-    if (std.mem.eql(u8, std.mem.trim(u8, content, " \t\r\n"), "NIL")) {
+    // Check if the entire content is just NIL
+    const trimmed_content = std.mem.trim(u8, content, " \t\r\n");
+    if (std.mem.eql(u8, trimmed_content, "NIL")) {
+        // NIL means there are no problems
         return problems;
     }
 

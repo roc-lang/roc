@@ -11,11 +11,19 @@ match numbers {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - can_list_rest_types.md:2:6:2:11
+UNDEFINED VARIABLE - can_list_rest_types.md:1:7:1:14
+UNUSED VARIABLE - can_list_rest_types.md:2:6:2:11
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `numbers` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**can_list_rest_types.md:1:7:1:14:**
+```roc
+match numbers {
+```
+      ^^^^^^^
+
 
 **UNUSED VARIABLE**
 Variable ``first`` is not used anywhere in your code.

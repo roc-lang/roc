@@ -8,11 +8,18 @@ type=expr
 whee
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - basic_var.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `whee` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**basic_var.md:1:1:1:5:**
+```roc
+whee
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

@@ -8,11 +8,18 @@ type=expr
 get_name! {} ?? "Bob"
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - double_question_binop.md:1:1:1:10
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `get_name!` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**double_question_binop.md:1:1:1:10:**
+```roc
+get_name! {} ?? "Bob"
+```
+^^^^^^^^^
+
 
 # TOKENS
 ~~~zig

@@ -9,11 +9,18 @@ when 0 is
     _ as n -> n
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - pattern_as.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**pattern_as.md:1:1:1:5:**
+```roc
+when 0 is
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

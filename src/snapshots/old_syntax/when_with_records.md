@@ -10,11 +10,18 @@ when x is
  { z, w } -> 4
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - when_with_records.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**when_with_records.md:1:1:1:5:**
+```roc
+when x is
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

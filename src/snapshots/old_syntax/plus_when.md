@@ -11,11 +11,18 @@ type=expr
         Bar -> 3
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - plus_when.md:2:5:2:9
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**plus_when.md:2:5:2:9:**
+```roc
+    when Foo is
+```
+    ^^^^
+
 
 # TOKENS
 ~~~zig

@@ -26,7 +26,6 @@ UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:18:1:20
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:19:1:21
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:20:1:23
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:24:1:25
-LIST NOT CLOSED - fuzz_crash_002.md:1:25:1:25
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.

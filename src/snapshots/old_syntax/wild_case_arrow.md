@@ -8,11 +8,18 @@ type=expr
 main = 5 -> 3
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - wild_case_arrow.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `main` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**wild_case_arrow.md:1:1:1:5:**
+```roc
+main = 5 -> 3
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

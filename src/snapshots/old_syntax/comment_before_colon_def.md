@@ -10,11 +10,18 @@ w#
 Q
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - comment_before_colon_def.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `w` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**comment_before_colon_def.md:1:1:1:2:**
+```roc
+w#
+```
+^
+
 
 # TOKENS
 ~~~zig

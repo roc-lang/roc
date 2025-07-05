@@ -10,11 +10,18 @@ i
 )#(
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - space_before_parens_space_after.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `i` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**space_before_parens_space_after.md:1:1:1:2:**
+```roc
+i
+```
+^
+
 
 # TOKENS
 ~~~zig

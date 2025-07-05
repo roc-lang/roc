@@ -20,7 +20,7 @@ UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_022.md:1:19:1:29
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_022.md:1:32:1:32
 PARSE ERROR - fuzz_crash_022.md:6:27:6:30
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_022.md:8:1:8:6
-MALFORMED TYPE - fuzz_crash_022.md:6:12:6:14
+UNUSED VARIABLE - fuzz_crash_022.md:6:12:6:14
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_package_or_platform_name`

@@ -8,11 +8,18 @@ type=expr
 x = return 5
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - return_as_single_line_expr.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**return_as_single_line_expr.md:1:1:1:2:**
+```roc
+x = return 5
+```
+^
+
 
 # TOKENS
 ~~~zig

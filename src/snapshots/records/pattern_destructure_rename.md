@@ -10,11 +10,20 @@ match person {
 }
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - pattern_destructure_rename.md:1:7:1:13
+UNDEFINED VARIABLE - pattern_destructure_rename.md:2:49:2:57
+UNDEFINED VARIABLE - pattern_destructure_rename.md:2:64:2:71
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `person` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**pattern_destructure_rename.md:1:7:1:13:**
+```roc
+match person {
+```
+      ^^^^^^
+
 
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
@@ -24,9 +33,23 @@ Let us know if you want to help!
 Nothing is named `userName` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**pattern_destructure_rename.md:2:49:2:57:**
+```roc
+    { name: userName, age: userAge } => "User ${userName} is ${userAge.to_str()} years old"
+```
+                                                ^^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `userAge` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**pattern_destructure_rename.md:2:64:2:71:**
+```roc
+    { name: userName, age: userAge } => "User ${userName} is ${userAge.to_str()} years old"
+```
+                                                               ^^^^^^^
+
 
 # TOKENS
 ~~~zig

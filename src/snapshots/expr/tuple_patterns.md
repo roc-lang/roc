@@ -31,6 +31,20 @@ UNEXPECTED TOKEN IN EXPRESSION - tuple_patterns.md:7:22:7:25
 UNEXPECTED TOKEN IN EXPRESSION - tuple_patterns.md:10:28:10:31
 UNEXPECTED TOKEN IN EXPRESSION - tuple_patterns.md:13:29:13:32
 UNEXPECTED TOKEN IN EXPRESSION - tuple_patterns.md:16:19:16:22
+UNDEFINED VARIABLE - tuple_patterns.md:4:6:4:7
+UNDEFINED VARIABLE - tuple_patterns.md:4:9:4:10
+UNDEFINED VARIABLE - tuple_patterns.md:7:7:7:8
+UNDEFINED VARIABLE - tuple_patterns.md:7:10:7:11
+UNDEFINED VARIABLE - tuple_patterns.md:7:15:7:16
+UNDEFINED VARIABLE - tuple_patterns.md:7:18:7:19
+UNDEFINED VARIABLE - tuple_patterns.md:10:6:10:11
+UNDEFINED VARIABLE - tuple_patterns.md:10:13:10:19
+UNDEFINED VARIABLE - tuple_patterns.md:10:21:10:26
+UNDEFINED VARIABLE - tuple_patterns.md:13:6:13:10
+UNDEFINED VARIABLE - tuple_patterns.md:13:12:13:18
+UNDEFINED VARIABLE - tuple_patterns.md:13:20:13:27
+UNDEFINED VARIABLE - tuple_patterns.md:16:6:16:10
+UNDEFINED VARIABLE - tuple_patterns.md:16:12:16:17
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **= (** is not expected in an expression.
@@ -96,57 +110,155 @@ Here is the problematic code:
 Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**tuple_patterns.md:4:6:4:7:**
+```roc
+    (x, y) = (1, 2)
+```
+     ^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `y` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**tuple_patterns.md:4:9:4:10:**
+```roc
+    (x, y) = (1, 2)
+```
+        ^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `a` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**tuple_patterns.md:7:7:7:8:**
+```roc
+    ((a, b), (c, d)) = ((10, 20), (30, 40))
+```
+      ^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `b` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**tuple_patterns.md:7:10:7:11:**
+```roc
+    ((a, b), (c, d)) = ((10, 20), (30, 40))
+```
+         ^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `c` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**tuple_patterns.md:7:15:7:16:**
+```roc
+    ((a, b), (c, d)) = ((10, 20), (30, 40))
+```
+              ^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `d` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**tuple_patterns.md:7:18:7:19:**
+```roc
+    ((a, b), (c, d)) = ((10, 20), (30, 40))
+```
+                 ^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `first` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**tuple_patterns.md:10:6:10:11:**
+```roc
+    (first, second, third) = (100, 42, 200)
+```
+     ^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `second` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**tuple_patterns.md:10:13:10:19:**
+```roc
+    (first, second, third) = (100, 42, 200)
+```
+            ^^^^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `third` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**tuple_patterns.md:10:21:10:26:**
+```roc
+    (first, second, third) = (100, 42, 200)
+```
+                    ^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `name` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**tuple_patterns.md:13:6:13:10:**
+```roc
+    (name, string, boolean) = ("Alice", "fixed", True)
+```
+     ^^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `string` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**tuple_patterns.md:13:12:13:18:**
+```roc
+    (name, string, boolean) = ("Alice", "fixed", True)
+```
+           ^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `boolean` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**tuple_patterns.md:13:20:13:27:**
+```roc
+    (name, string, boolean) = ("Alice", "fixed", True)
+```
+                   ^^^^^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `list` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**tuple_patterns.md:16:6:16:10:**
+```roc
+    (list, hello) = ([1, 2, 3], "hello")
+```
+     ^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `hello` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**tuple_patterns.md:16:12:16:17:**
+```roc
+    (list, hello) = ([1, 2, 3], "hello")
+```
+           ^^^^^
+
 
 # TOKENS
 ~~~zig

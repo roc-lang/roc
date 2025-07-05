@@ -11,15 +11,30 @@ match (value, other) {
 }
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - variable_shadowing.md:1:8:1:13
+UNDEFINED VARIABLE - variable_shadowing.md:1:15:1:20
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `value` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**variable_shadowing.md:1:8:1:13:**
+```roc
+match (value, other) {
+```
+       ^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `other` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**variable_shadowing.md:1:15:1:20:**
+```roc
+match (value, other) {
+```
+              ^^^^^
+
 
 # TOKENS
 ~~~zig

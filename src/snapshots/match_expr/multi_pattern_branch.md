@@ -12,11 +12,18 @@ match color {
 }
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - multi_pattern_branch.md:1:7:1:12
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `color` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**multi_pattern_branch.md:1:7:1:12:**
+```roc
+match color {
+```
+      ^^^^^
+
 
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern

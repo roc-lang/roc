@@ -10,11 +10,18 @@ e:A#
 n
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - annotation_comment_before_as.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `e` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**annotation_comment_before_as.md:1:1:1:2:**
+```roc
+e:A#
+```
+^
+
 
 # TOKENS
 ~~~zig

@@ -10,11 +10,18 @@ main_for_host = main
 42
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - tag_union_functions_as.md:1:1:1:14
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `main_for_host` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**tag_union_functions_as.md:1:1:1:14:**
+```roc
+main_for_host : [StdoutWrite Str ({} -> Op), StderrWrite Str ({} -> Op), Done] as Op
+```
+^^^^^^^^^^^^^
+
 
 # TOKENS
 ~~~zig

@@ -8,11 +8,18 @@ type=expr
 N<l (r*N)
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - binop_apply_complex.md:1:3:1:4
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `l` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**binop_apply_complex.md:1:3:1:4:**
+```roc
+N<l (r*N)
+```
+  ^
+
 
 # TOKENS
 ~~~zig

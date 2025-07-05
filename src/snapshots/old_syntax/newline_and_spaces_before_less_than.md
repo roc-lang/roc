@@ -11,11 +11,18 @@ x = 1
 42
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - newline_and_spaces_before_less_than.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**newline_and_spaces_before_less_than.md:1:1:1:2:**
+```roc
+x = 1
+```
+^
+
 
 # TOKENS
 ~~~zig

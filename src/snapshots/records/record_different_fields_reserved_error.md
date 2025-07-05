@@ -23,7 +23,6 @@ UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:3:25:
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:3:26:3:26
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:4:11:4:14
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:4:29:4:29
-IMPORT MUST BE TOP LEVEL - record_different_fields_reserved_error.md:5:5:5:12
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:5:11:5:14
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:5:26:5:26
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:6:5:6:9
@@ -32,6 +31,8 @@ UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:6:19:
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:5:7:8
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:7:7:13
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:19:7:19
+UNDEFINED VARIABLE - record_different_fields_reserved_error.md:6:10:6:19
+UNDEFINED VARIABLE - record_different_fields_reserved_error.md:7:9:7:19
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **: "** is not expected in an expression.
@@ -252,9 +253,23 @@ Let us know if you want to help!
 Nothing is named `true` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**record_different_fields_reserved_error.md:6:10:6:19:**
+```roc
+    and: Bool.true,
+```
+         ^^^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `false` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**record_different_fields_reserved_error.md:7:9:7:19:**
+```roc
+    or: Bool.false,
+```
+        ^^^^^^^^^^
+
 
 # TOKENS
 ~~~zig

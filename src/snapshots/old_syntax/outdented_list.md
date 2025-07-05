@@ -11,11 +11,18 @@ a = [
 a
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - outdented_list.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `a` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**outdented_list.md:1:1:1:2:**
+```roc
+a = [
+```
+^
+
 
 # TOKENS
 ~~~zig

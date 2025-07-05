@@ -11,11 +11,18 @@ foo = 4
 42
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - type_signature_def.md:1:1:1:4
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `foo` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**type_signature_def.md:1:1:1:4:**
+```roc
+foo : Int
+```
+^^^
+
 
 # TOKENS
 ~~~zig

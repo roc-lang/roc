@@ -10,11 +10,18 @@ x = when n is
 42
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - when_in_assignment.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**when_in_assignment.md:1:1:1:2:**
+```roc
+x = when n is
+```
+^
+
 
 # TOKENS
 ~~~zig

@@ -10,15 +10,30 @@ type=expr
 launchTheNukes! code
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - tuple_destructure_bang.md:1:2:1:17
+UNDEFINED VARIABLE - tuple_destructure_bang.md:1:19:1:23
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `launchTheNukes!` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**tuple_destructure_bang.md:1:2:1:17:**
+```roc
+(launchTheNukes!, code) = config
+```
+ ^^^^^^^^^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `code` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**tuple_destructure_bang.md:1:19:1:23:**
+```roc
+(launchTheNukes!, code) = config
+```
+                  ^^^^
+
 
 # TOKENS
 ~~~zig

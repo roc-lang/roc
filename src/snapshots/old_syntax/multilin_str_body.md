@@ -9,11 +9,18 @@ a=""""f"""
 f
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - multilin_str_body.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `a` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**multilin_str_body.md:1:1:1:2:**
+```roc
+a=""""f"""
+```
+^
+
 
 # TOKENS
 ~~~zig

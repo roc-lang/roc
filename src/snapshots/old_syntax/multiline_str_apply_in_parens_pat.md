@@ -9,11 +9,18 @@ u ("""""" (0)):f
 s
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - multiline_str_apply_in_parens_pat.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `u` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**multiline_str_apply_in_parens_pat.md:1:1:1:2:**
+```roc
+u ("""""" (0)):f
+```
+^
+
 
 # TOKENS
 ~~~zig

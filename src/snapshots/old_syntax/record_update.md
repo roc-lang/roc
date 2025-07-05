@@ -12,6 +12,7 @@ UNEXPECTED TOKEN IN EXPRESSION - record_update.md:1:15:1:18
 UNEXPECTED TOKEN IN TYPE ANNOTATION - record_update.md:1:20:1:22
 UNEXPECTED TOKEN IN EXPRESSION - record_update.md:1:21:1:24
 UNEXPECTED TOKEN IN TYPE ANNOTATION - record_update.md:1:26:1:29
+UNDEFINED VARIABLE - record_update.md:1:3:1:14
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **& x** is not expected in an expression.
@@ -64,6 +65,13 @@ Here is the problematic code:
 **UNDEFINED VARIABLE**
 Nothing is named `baz` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**record_update.md:1:3:1:14:**
+```roc
+{ Foo.Bar.baz & x: 5, y: 0 }
+```
+  ^^^^^^^^^^^
+
 
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.

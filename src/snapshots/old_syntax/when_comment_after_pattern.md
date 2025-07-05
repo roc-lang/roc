@@ -10,11 +10,18 @@ O#
  ->r
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - when_comment_after_pattern.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**when_comment_after_pattern.md:1:1:1:5:**
+```roc
+when nns is
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

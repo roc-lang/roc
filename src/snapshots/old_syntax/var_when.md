@@ -8,11 +8,18 @@ type=expr
 whenever
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - var_when.md:1:1:1:9
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `whenever` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**var_when.md:1:1:1:9:**
+```roc
+whenever
+```
+^^^^^^^^
+
 
 # TOKENS
 ~~~zig

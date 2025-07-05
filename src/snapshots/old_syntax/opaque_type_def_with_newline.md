@@ -10,11 +10,18 @@ Na:=
  e e0
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - opaque_type_def_with_newline.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `a` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**opaque_type_def_with_newline.md:1:1:1:2:**
+```roc
+a:e
+```
+^
+
 
 # TOKENS
 ~~~zig

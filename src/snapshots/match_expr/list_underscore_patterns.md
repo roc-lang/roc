@@ -15,11 +15,18 @@ match items {
 }
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - list_underscore_patterns.md:1:7:1:12
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `items` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**list_underscore_patterns.md:1:7:1:12:**
+```roc
+match items {
+```
+      ^^^^^
+
 
 # TOKENS
 ~~~zig

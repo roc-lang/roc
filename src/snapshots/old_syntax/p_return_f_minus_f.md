@@ -11,11 +11,18 @@ return#
  -f
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - p_return_f_minus_f.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `p` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**p_return_f_minus_f.md:1:1:1:2:**
+```roc
+p
+```
+^
+
 
 # TOKENS
 ~~~zig

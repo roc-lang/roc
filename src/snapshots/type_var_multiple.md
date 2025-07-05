@@ -18,6 +18,10 @@ main! = |_| {}
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - type_var_multiple.md:6:21:6:27
+UNDEFINED VARIABLE - type_var_multiple.md:6:6:6:11
+UNDEFINED VARIABLE - type_var_multiple.md:6:13:6:19
+UNDEFINED VARIABLE - type_var_multiple.md:7:6:7:12
+UNDEFINED VARIABLE - type_var_multiple.md:7:14:7:19
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **= pair** is not expected in an expression.
@@ -35,17 +39,45 @@ Here is the problematic code:
 Nothing is named `first` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**UNDEFINED VARIABLE**
-Nothing is named `second` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**type_var_multiple.md:6:6:6:11:**
+```roc
+    (first, second) = pair
+```
+     ^^^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `second` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**type_var_multiple.md:6:13:6:19:**
+```roc
+    (first, second) = pair
+```
+            ^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `second` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**type_var_multiple.md:7:6:7:12:**
+```roc
+    (second, first)
+```
+     ^^^^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `first` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**type_var_multiple.md:7:14:7:19:**
+```roc
+    (second, first)
+```
+             ^^^^^
+
 
 # TOKENS
 ~~~zig

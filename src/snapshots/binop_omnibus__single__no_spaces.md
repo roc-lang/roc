@@ -8,11 +8,18 @@ type=expr
 Err(foo)??12>5*5 or 13+2<5 and 10-1>=16 or 12<=3/5
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - binop_omnibus__single__no_spaces.md:1:5:1:8
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `foo` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**binop_omnibus__single__no_spaces.md:1:5:1:8:**
+```roc
+Err(foo)??12>5*5 or 13+2<5 and 10-1>=16 or 12<=3/5
+```
+    ^^^
+
 
 # TOKENS
 ~~~zig

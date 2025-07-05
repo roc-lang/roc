@@ -10,11 +10,18 @@ when 4 is
      _ -> 2
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - when_over_indented_underscore.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**when_over_indented_underscore.md:1:1:1:5:**
+```roc
+when 4 is
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

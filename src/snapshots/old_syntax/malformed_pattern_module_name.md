@@ -10,11 +10,18 @@ when x is
     _ -> 4
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - malformed_pattern_module_name.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**malformed_pattern_module_name.md:1:1:1:5:**
+```roc
+when x is
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

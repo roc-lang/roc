@@ -10,11 +10,18 @@ t#
 e
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - comment_before_equals_def.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `t` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**comment_before_equals_def.md:1:1:1:2:**
+```roc
+t#
+```
+^
+
 
 # TOKENS
 ~~~zig

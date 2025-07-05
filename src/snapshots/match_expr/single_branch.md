@@ -10,11 +10,18 @@ match value {
 }
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - single_branch.md:1:7:1:12
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `value` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**single_branch.md:1:7:1:12:**
+```roc
+match value {
+```
+      ^^^^^
+
 
 # TOKENS
 ~~~zig

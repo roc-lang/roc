@@ -8,11 +8,18 @@ type=expr
 isnt
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - var_is.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `isnt` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**var_is.md:1:1:1:5:**
+```roc
+isnt
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

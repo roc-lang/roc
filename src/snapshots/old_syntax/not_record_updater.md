@@ -10,11 +10,18 @@ e
 &s
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - not_record_updater.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `e` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**not_record_updater.md:1:1:1:2:**
+```roc
+e
+```
+^
+
 
 # TOKENS
 ~~~zig

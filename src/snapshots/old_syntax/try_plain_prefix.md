@@ -8,11 +8,18 @@ type=expr
 try  Str.toU64  "123"
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - try_plain_prefix.md:1:1:1:4
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `try` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**try_plain_prefix.md:1:1:1:4:**
+```roc
+try  Str.toU64  "123"
+```
+^^^
+
 
 # TOKENS
 ~~~zig

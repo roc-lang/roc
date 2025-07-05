@@ -8,15 +8,30 @@ type=expr
 x==y
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - equals.md:1:1:1:2
+UNDEFINED VARIABLE - equals.md:1:4:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**equals.md:1:1:1:2:**
+```roc
+x==y
+```
+^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `y` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**equals.md:1:4:1:5:**
+```roc
+x==y
+```
+   ^
+
 
 # TOKENS
 ~~~zig

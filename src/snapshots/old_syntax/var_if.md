@@ -8,11 +8,18 @@ type=expr
 iffy
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - var_if.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `iffy` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**var_if.md:1:1:1:5:**
+```roc
+iffy
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

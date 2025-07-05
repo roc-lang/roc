@@ -51,26 +51,34 @@ UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:6:125:6:126
 UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:6:126:6:127
 UNEXPECTED TOKEN IN PATTERN - complex_list_tags.md:6:126:6:126
 UNEXPECTED TOKEN IN EXPRESSION - complex_list_tags.md:1:1:7:6
-UNDEFINED VARIABLE - complex_list_tags.md:3:15:3:16
+UNDEFINED VARIABLE - complex_list_tags.md:1:7:1:13
+UNUSED VARIABLE - complex_list_tags.md:3:15:3:16
 UNUSED VARIABLE - complex_list_tags.md:3:12:3:13
-INVALID PATTERN - complex_list_tags.md:3:68:3:69
-INVALID PATTERN - complex_list_tags.md:4:15:4:18
+UNDEFINED VARIABLE - complex_list_tags.md:3:58:3:67
+UNUSED VARIABLE - complex_list_tags.md:3:68:3:69
+UNUSED VARIABLE - complex_list_tags.md:4:15:4:18
 UNUSED VARIABLE - complex_list_tags.md:4:27:4:31
-UNDEFINED VARIABLE - complex_list_tags.md:4:70:4:78
-INVALID PATTERN - complex_list_tags.md:5:42:5:48
+UNDEFINED VARIABLE - complex_list_tags.md:4:79:4:83
+UNUSED VARIABLE - complex_list_tags.md:4:70:4:78
+UNUSED VARIABLE - complex_list_tags.md:5:42:5:48
 UNUSED VARIABLE - complex_list_tags.md:5:30:5:33
 UNUSED VARIABLE - complex_list_tags.md:5:25:5:28
 UNUSED VARIABLE - complex_list_tags.md:5:11:5:13
 UNUSED VARIABLE - complex_list_tags.md:5:15:5:17
-INVALID PATTERN - complex_list_tags.md:5:88:5:90
-INVALID PATTERN - complex_list_tags.md:5:99:5:108
-INVALID PATTERN - complex_list_tags.md:5:126:5:129
-INVALID PATTERN - complex_list_tags.md:6:41:6:50
+UNDEFINED VARIABLE - complex_list_tags.md:5:78:5:87
+UNUSED VARIABLE - complex_list_tags.md:5:88:5:90
+UNDEFINED VARIABLE - complex_list_tags.md:5:109:5:112
+UNUSED VARIABLE - complex_list_tags.md:5:99:5:108
+UNDEFINED VARIABLE - complex_list_tags.md:5:116:5:125
+UNUSED VARIABLE - complex_list_tags.md:5:126:5:129
+UNUSED VARIABLE - complex_list_tags.md:6:41:6:50
 UNUSED VARIABLE - complex_list_tags.md:6:13:6:19
 UNUSED VARIABLE - complex_list_tags.md:6:31:6:32
 UNUSED VARIABLE - complex_list_tags.md:6:28:6:29
-INVALID PATTERN - complex_list_tags.md:6:109:6:110
-INVALID PATTERN - complex_list_tags.md:6:114:6:123
+UNDEFINED VARIABLE - complex_list_tags.md:6:99:6:108
+UNUSED VARIABLE - complex_list_tags.md:6:109:6:110
+UNDEFINED VARIABLE - complex_list_tags.md:6:124:6:125
+UNUSED VARIABLE - complex_list_tags.md:6:114:6:123
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `string_expected_close_interpolation`
@@ -519,6 +527,13 @@ match events {
 Nothing is named `events` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**complex_list_tags.md:1:7:1:13:**
+```roc
+match events {
+```
+      ^^^^^^
+
+
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
 Check the spelling and make sure you're using a valid Roc operator.
@@ -560,6 +575,13 @@ This pattern contains invalid syntax or uses unsupported features.
 **UNDEFINED VARIABLE**
 Nothing is named `toStr` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**complex_list_tags.md:3:58:3:67:**
+```roc
+    [Click(x, y)] => "single click at (${Num.toStr x}, ${Num.toStr y})"
+```
+                                                         ^^^^^^^^^
+
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
@@ -615,6 +637,13 @@ The unused variable is declared here:
 **UNDEFINED VARIABLE**
 Nothing is named `rest` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**complex_list_tags.md:4:79:4:83:**
+```roc
+    [KeyPress(key), .. as rest] => "key ${key} pressed, ${Num.toStr (List.len rest)} more events"
+```
+                                                                              ^^^^
+
 
 **UNUSED VARIABLE**
 Variable ``len`` is not used anywhere in your code.
@@ -720,6 +749,13 @@ This pattern contains invalid syntax or uses unsupported features.
 Nothing is named `toStr` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**complex_list_tags.md:5:78:5:87:**
+```roc
+    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
+```
+                                                                             ^^^^^^^^^
+
+
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
 Check the spelling and make sure you're using a valid Roc operator.
@@ -747,6 +783,13 @@ Check the spelling and make sure you're using a valid Roc operator.
 Nothing is named `dx2` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**complex_list_tags.md:5:109:5:112:**
+```roc
+    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
+```
+                                                                                                            ^^^
+
+
 **UNUSED VARIABLE**
 Variable ``toStr`` is not used anywhere in your code.
 
@@ -772,6 +815,13 @@ This pattern contains invalid syntax or uses unsupported features.
 **UNDEFINED VARIABLE**
 Nothing is named `toStr` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**complex_list_tags.md:5:116:5:125:**
+```roc
+    [Move(dx, dy), Move(dx2, dy2), .. as others] => "moved ${Num.toStr dx},${Num.toStr dy} then ${Num.toStr dx2},${Num.toStr dy2}"
+```
+                                                                                                                   ^^^^^^^^^
+
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
@@ -862,6 +912,13 @@ This pattern contains invalid syntax or uses unsupported features.
 Nothing is named `toStr` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**complex_list_tags.md:6:99:6:108:**
+```roc
+    [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
+```
+                                                                                                  ^^^^^^^^^
+
+
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
 Check the spelling and make sure you're using a valid Roc operator.
@@ -888,6 +945,13 @@ Check the spelling and make sure you're using a valid Roc operator.
 **UNDEFINED VARIABLE**
 Nothing is named `y` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**complex_list_tags.md:6:124:6:125:**
+```roc
+    [Scroll(amount), Click(x, y), .. as remaining] => "scroll ${Num.toStr amount} then click at ${Num.toStr x},${Num.toStr y}"
+```
+                                                                                                                           ^
+
 
 **UNUSED VARIABLE**
 Variable ``toStr`` is not used anywhere in your code.

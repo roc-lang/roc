@@ -12,11 +12,18 @@ identityFn = \x ->
 identityFn 45
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - return_only_statement.md:1:1:1:11
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `identityFn` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**return_only_statement.md:1:1:1:11:**
+```roc
+identityFn = \x ->
+```
+^^^^^^^^^^
+
 
 # TOKENS
 ~~~zig

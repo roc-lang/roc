@@ -12,11 +12,18 @@ then 2 else 3
 x
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - if_outdented_then.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**if_outdented_then.md:1:1:1:2:**
+```roc
+x =
+```
+^
+
 
 # TOKENS
 ~~~zig

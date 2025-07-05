@@ -10,11 +10,18 @@ a=(
 a
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - body_with_unneeded_parens.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `a` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**body_with_unneeded_parens.md:1:1:1:2:**
+```roc
+a=(
+```
+^
+
 
 # TOKENS
 ~~~zig

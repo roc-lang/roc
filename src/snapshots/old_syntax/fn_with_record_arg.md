@@ -12,11 +12,18 @@ table = \{height} -> crash "not implemented"
 table
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - fn_with_record_arg.md:1:1:1:6
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `table` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**fn_with_record_arg.md:1:1:1:6:**
+```roc
+table : {
+```
+^^^^^
+
 
 # TOKENS
 ~~~zig

@@ -10,11 +10,18 @@ i:{t:(J#
 A
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - comment_parens_in_typ_annotation_record_field.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `i` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**comment_parens_in_typ_annotation_record_field.md:1:1:1:2:**
+```roc
+i:{t:(J#
+```
+^
+
 
 # TOKENS
 ~~~zig

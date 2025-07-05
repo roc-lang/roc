@@ -10,11 +10,18 @@ type=expr
 ]
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - list_comma_newlines.md:1:2:1:3
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `s` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**list_comma_newlines.md:1:2:1:3:**
+```roc
+[s
+```
+ ^
+
 
 # TOKENS
 ~~~zig

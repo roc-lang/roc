@@ -9,11 +9,18 @@ s:(e as A)as A
 s
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - annotation_double_as.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `s` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**annotation_double_as.md:1:1:1:2:**
+```roc
+s:(e as A)as A
+```
+^
+
 
 # TOKENS
 ~~~zig

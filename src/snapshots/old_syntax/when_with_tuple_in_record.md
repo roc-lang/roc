@@ -10,11 +10,18 @@ when {foo: (1, 2)} is
  {foo: (_, b)} -> 3 + b
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - when_with_tuple_in_record.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**when_with_tuple_in_record.md:1:1:1:5:**
+```roc
+when {foo: (1, 2)} is
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

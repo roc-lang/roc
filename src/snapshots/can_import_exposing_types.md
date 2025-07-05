@@ -354,6 +354,13 @@ processData : Config, List(Value) -> Result(List(Value), Error)
 Nothing is named `mapTry` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**can_import_exposing_types.md:24:5:24:16:**
+```roc
+    List.mapTry(
+```
+    ^^^^^^^^^^^
+
+
 **UNDECLARED TYPE**
 The type ``Config`` is not declared in this scope.
 
@@ -379,6 +386,13 @@ handleResponse : Response -> Str
 **UNDEFINED VARIABLE**
 Nothing is named `toString` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**can_import_exposing_types.md:45:23:45:37:**
+```roc
+        Err(error) => Error.toString(error)
+```
+                      ^^^^^^^^^^^^^^
+
 
 **UNDECLARED TYPE**
 The type ``Value`` is not declared in this scope.

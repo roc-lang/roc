@@ -10,11 +10,18 @@ is B->(
 t)
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - when_newline_before_is_and_in_branch_parens.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**when_newline_before_is_and_in_branch_parens.md:1:1:1:5:**
+```roc
+when 0
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

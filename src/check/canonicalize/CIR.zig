@@ -174,9 +174,12 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
         },
         .ident_not_in_scope => |data| blk: {
             const ident_name = self.env.idents.getText(data.ident);
+            const region_info = self.calcRegionInfo(data.region);
             break :blk Diagnostic.buildIdentNotInScopeReport(
                 allocator,
                 ident_name,
+                region_info,
+                filename,
             );
         },
         .invalid_top_level_statement => |data| blk: {

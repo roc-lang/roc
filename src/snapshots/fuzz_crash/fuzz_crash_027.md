@@ -166,7 +166,7 @@ expect {
 }
 ~~~
 # EXPECTED
-OVER CLOSED BRACE - fuzz_crash_027.md:34:12:35:2
+PARSE ERROR - fuzz_crash_027.md:34:12:35:2
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:35:1:35:1
 PARSE ERROR - fuzz_crash_027.md:1:1:39:2
 # PROBLEMS
@@ -453,9 +453,23 @@ Let us know if you want to help!
 Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**fuzz_crash_027.md:65:4:65:5:**
+```roc
+			x x
+```
+   ^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_027.md:65:6:65:7:**
+```roc
+			x x
+```
+     ^
+
 
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
@@ -464,6 +478,13 @@ Let us know if you want to help!
 **UNDEFINED VARIABLE**
 Nothing is named `ment` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_027.md:71:7:71:11:**
+```roc
+			=> ment
+```
+      ^^^^
+
 
 **UNUSED VARIABLE**
 Variable ``rest`` is not used anywhere in your code.
@@ -580,6 +601,13 @@ Let us know if you want to help!
 Nothing is named `some_func` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**fuzz_crash_027.md:114:2:114:11:**
+```roc
+	some_func(
+```
+ ^^^^^^^^^
+
+
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
 Let us know if you want to help!
@@ -596,21 +624,56 @@ Let us know if you want to help!
 Nothing is named `punned` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**fuzz_crash_027.md:131:63:131:71:**
+```roc
+	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
+```
+                                                              ^^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `nested` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_027.md:132:42:132:48:**
+```roc
+	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
+```
+                                         ^^^^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `tag1` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**fuzz_crash_027.md:136:3:136:7:**
+```roc
+		tag1,
+```
+  ^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `nested` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**fuzz_crash_027.md:138:4:138:10:**
+```roc
+		(nested, tuple),
+```
+   ^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `foo` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_027.md:141:14:141:17:**
+```roc
+	bsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
+```
+             ^^^
+
 
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: canonicalize suffix_single_question expression
@@ -619,6 +682,13 @@ Let us know if you want to help!
 **UNDEFINED VARIABLE**
 Nothing is named `toStr` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_027.md:145:4:145:13:**
+```roc
+			Num.toStr(number) # on expr
+```
+   ^^^^^^^^^
+
 
 **UNDECLARED TYPE**
 The type ``Value`` is not declared in this scope.

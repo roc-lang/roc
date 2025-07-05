@@ -11,7 +11,7 @@ type=expr
 r
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - opt_record_field_pat_assign.md:1:4:1:5
 # PROBLEMS
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: canonicalize suffix_single_question expression
@@ -20,6 +20,13 @@ Let us know if you want to help!
 **UNDEFINED VARIABLE**
 Nothing is named `f` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**opt_record_field_pat_assign.md:1:4:1:5:**
+```roc
+{e?f
+```
+   ^
+
 
 # TOKENS
 ~~~zig

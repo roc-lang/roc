@@ -11,11 +11,18 @@ f = \x -> x
 f (1, 2)
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - tuple_type.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `f` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**tuple_type.md:1:1:1:2:**
+```roc
+f: (Str, Str) -> (Str, Str)
+```
+^
+
 
 # TOKENS
 ~~~zig

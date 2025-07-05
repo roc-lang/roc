@@ -8,11 +8,18 @@ type=expr
 m"\u(FFFFFF)"s
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - unicode_overflow_str.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `m` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**unicode_overflow_str.md:1:1:1:2:**
+```roc
+m"\u(FFFFFF)"s
+```
+^
+
 
 # TOKENS
 ~~~zig

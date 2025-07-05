@@ -14,12 +14,19 @@ if bool {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - if_then_else_9.md:3:11:3:11
-INCOMPATIBLE IF BRANCHES - if_then_else_9.md:1:1:1:1
+UNDEFINED VARIABLE - if_then_else_9.md:1:4:1:8
+INVALID IF CONDITION - if_then_else_9.md:3:11:3:11
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `bool` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**if_then_else_9.md:1:4:1:8:**
+```roc
+if bool {
+```
+   ^^^^
+
 
 **INVALID IF CONDITION**
 This `if` condition needs to be a _Bool_:

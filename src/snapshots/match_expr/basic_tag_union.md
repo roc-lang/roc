@@ -12,11 +12,18 @@ match color {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - basic_tag_union.md:1:1:1:1
+UNDEFINED VARIABLE - basic_tag_union.md:1:7:1:12
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `color` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**basic_tag_union.md:1:7:1:12:**
+```roc
+match color {
+```
+      ^^^^^
+
 
 **INCOMPATIBLE MATCH BRANCHES**
 The third branch's type in this `match` is different from the previous ones:

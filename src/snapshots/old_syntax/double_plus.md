@@ -9,11 +9,18 @@ main =
     [] ++ []
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - double_plus.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `main` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**double_plus.md:1:1:1:5:**
+```roc
+main =
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

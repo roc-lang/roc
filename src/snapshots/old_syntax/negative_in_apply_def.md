@@ -10,11 +10,18 @@ a=A
 a
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - negative_in_apply_def.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `a` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**negative_in_apply_def.md:1:1:1:2:**
+```roc
+a=A
+```
+^
+
 
 # TOKENS
 ~~~zig

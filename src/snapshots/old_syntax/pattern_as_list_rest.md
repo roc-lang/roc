@@ -9,11 +9,18 @@ when myList is
     [first, .. as rest] -> 0
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - pattern_as_list_rest.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**pattern_as_list_rest.md:1:1:1:5:**
+```roc
+when myList is
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

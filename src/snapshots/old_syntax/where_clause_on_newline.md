@@ -11,11 +11,18 @@ f : a -> U64
 f
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - where_clause_on_newline.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `f` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**where_clause_on_newline.md:1:1:1:2:**
+```roc
+f : a -> U64
+```
+^
+
 
 # TOKENS
 ~~~zig

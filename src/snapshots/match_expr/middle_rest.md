@@ -13,11 +13,19 @@ match items {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - middle_rest.md:3:18:3:24
+UNDEFINED VARIABLE - middle_rest.md:1:7:1:12
+UNUSED VARIABLE - middle_rest.md:3:18:3:24
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `items` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**middle_rest.md:1:7:1:12:**
+```roc
+match items {
+```
+      ^^^^^
+
 
 **UNUSED VARIABLE**
 Variable ``middle`` is not used anywhere in your code.

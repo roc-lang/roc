@@ -11,11 +11,18 @@ z->expect!%when s
 is z->q
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - nested_when_expect_binop_when.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**nested_when_expect_binop_when.md:1:1:1:5:**
+```roc
+when s
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

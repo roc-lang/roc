@@ -8,11 +8,18 @@ type=expr
 f : List elem -> [Nil, Cons elem a] as a
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - error_inline_alias_not_an_alias.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `f` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**error_inline_alias_not_an_alias.md:1:1:1:2:**
+```roc
+f : List elem -> [Nil, Cons elem a] as a
+```
+^
+
 
 # TOKENS
 ~~~zig

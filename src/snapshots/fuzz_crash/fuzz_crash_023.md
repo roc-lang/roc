@@ -1191,6 +1191,13 @@ Let us know if you want to help!
 Nothing is named `some_func` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**fuzz_crash_023.md:158:2:158:11:**
+```roc
+	some_func(
+```
+ ^^^^^^^^^
+
+
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
 Let us know if you want to help!
@@ -1214,17 +1221,45 @@ This type annotation is malformed or contains invalid syntax.
 Nothing is named `nested` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**fuzz_crash_023.md:179:42:179:48:**
+```roc
+	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
+```
+                                         ^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `tag1` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_023.md:183:3:183:7:**
+```roc
+		tag1,
+```
+  ^^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `nested` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**fuzz_crash_023.md:185:4:185:10:**
+```roc
+		(nested, tuple),
+```
+   ^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `foo` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_023.md:188:22:188:25:**
+```roc
+	bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
+```
+                     ^^^
+
 
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: canonicalize suffix_single_question expression
@@ -1237,6 +1272,13 @@ Let us know if you want to help!
 **UNDEFINED VARIABLE**
 Nothing is named `toStr` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_023.md:193:4:193:13:**
+```roc
+			Num.toStr(number) # Comment after string interpolation expr
+```
+   ^^^^^^^^^
+
 
 **UNUSED VARIABLE**
 Variable ``multiline_tuple`` is not used anywhere in your code.

@@ -9,6 +9,7 @@ dbg!-!if!
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - dbg_bang_neg_bang_if_bang.md:1:6:1:10
+UNDEFINED VARIABLE - dbg_bang_neg_bang_if_bang.md:1:1:1:5
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **!if!** is not expected in an expression.
@@ -25,6 +26,13 @@ dbg!-!if!
 **UNDEFINED VARIABLE**
 Nothing is named `dbg!` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**dbg_bang_neg_bang_if_bang.md:1:1:1:5:**
+```roc
+dbg!-!if!
+```
+^^^^
+
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!

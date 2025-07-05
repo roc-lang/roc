@@ -39,7 +39,9 @@ UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:13:22:13:22
 UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:14:12:14:22
 UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:14:17:14:29
 UNEXPECTED TOKEN IN EXPRESSION - multi_qualified_import.md:14:22:14:31
-INVALID STATEMENT - multi_qualified_import.md:5:16:5:23
+UNDECLARED TYPE - multi_qualified_import.md:5:16:5:23
+UNDEFINED VARIABLE - multi_qualified_import.md:6:16:6:45
+UNDEFINED VARIABLE - multi_qualified_import.md:14:8:14:12
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **.Utf8 exposing** is not expected in an expression.
@@ -296,6 +298,13 @@ json_encoder : Encoder
 Nothing is named `defaultEncoder` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**multi_qualified_import.md:6:16:6:45:**
+```roc
+json_encoder = Json.Core.Utf8.defaultEncoder
+```
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
@@ -347,6 +356,13 @@ Only definitions, type annotations, and imports are allowed at the top level.
 **UNDEFINED VARIABLE**
 Nothing is named `json` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**multi_qualified_import.md:14:8:14:12:**
+```roc
+data = json.Core.Utf8.encode "hello"
+```
+       ^^^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.

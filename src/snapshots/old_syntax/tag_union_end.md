@@ -8,11 +8,18 @@ type=expr
 f : [Yes,
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - tag_union_end.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `f` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**tag_union_end.md:1:1:1:2:**
+```roc
+f : [Yes,
+```
+^
+
 
 # TOKENS
 ~~~zig

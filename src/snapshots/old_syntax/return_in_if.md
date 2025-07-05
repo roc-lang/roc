@@ -17,11 +17,18 @@ maybeEarlyReturn = \x ->
 maybeEarlyReturn 10
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - return_in_if.md:1:1:1:17
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `maybeEarlyReturn` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**return_in_if.md:1:1:1:17:**
+```roc
+maybeEarlyReturn = \x ->
+```
+^^^^^^^^^^^^^^^^
+
 
 # TOKENS
 ~~~zig

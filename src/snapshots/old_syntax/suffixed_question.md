@@ -9,6 +9,7 @@ Stdout.line???
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - suffixed_question.md:1:14:1:15
+UNDEFINED VARIABLE - suffixed_question.md:1:1:1:12
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **?** is not expected in an expression.
@@ -25,6 +26,13 @@ Stdout.line???
 **UNDEFINED VARIABLE**
 Nothing is named `line` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**suffixed_question.md:1:1:1:12:**
+```roc
+Stdout.line???
+```
+^^^^^^^^^^^
+
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!

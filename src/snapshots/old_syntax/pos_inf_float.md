@@ -8,11 +8,18 @@ type=expr
 inf
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - pos_inf_float.md:1:1:1:4
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `inf` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**pos_inf_float.md:1:1:1:4:**
+```roc
+inf
+```
+^^^
+
 
 # TOKENS
 ~~~zig

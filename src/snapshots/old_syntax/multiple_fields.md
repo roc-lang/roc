@@ -8,11 +8,18 @@ type=expr
 rec.abc.def.ghi
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - multiple_fields.md:1:1:1:4
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `rec` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**multiple_fields.md:1:1:1:4:**
+```roc
+rec.abc.def.ghi
+```
+^^^
+
 
 # TOKENS
 ~~~zig

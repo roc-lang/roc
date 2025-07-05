@@ -8,11 +8,18 @@ type=expr
 f : [Good, bad]
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - tag_union_second_lowercase_tag_name.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `f` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**tag_union_second_lowercase_tag_name.md:1:1:1:2:**
+```roc
+f : [Good, bad]
+```
+^
+
 
 # TOKENS
 ~~~zig

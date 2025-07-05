@@ -8,7 +8,9 @@ type=expr
 |{ name, age, ..a } as person| { greeting: "Hello ${name}", full_record: person, is_adult: age >= 18 }
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - function_record_parameter_capture.md:1:53:1:57
+UNDEFINED VARIABLE - function_record_parameter_capture.md:1:74:1:80
+UNDEFINED VARIABLE - function_record_parameter_capture.md:1:92:1:95
 # PROBLEMS
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
@@ -18,13 +20,34 @@ Let us know if you want to help!
 Nothing is named `name` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**function_record_parameter_capture.md:1:53:1:57:**
+```roc
+|{ name, age, ..a } as person| { greeting: "Hello ${name}", full_record: person, is_adult: age >= 18 }
+```
+                                                    ^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `person` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**function_record_parameter_capture.md:1:74:1:80:**
+```roc
+|{ name, age, ..a } as person| { greeting: "Hello ${name}", full_record: person, is_adult: age >= 18 }
+```
+                                                                         ^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `age` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**function_record_parameter_capture.md:1:92:1:95:**
+```roc
+|{ name, age, ..a } as person| { greeting: "Hello ${name}", full_record: person, is_adult: age >= 18 }
+```
+                                                                                           ^^^
+
 
 # TOKENS
 ~~~zig

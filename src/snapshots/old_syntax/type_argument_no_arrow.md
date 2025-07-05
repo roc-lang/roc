@@ -11,11 +11,18 @@ f = 0
 f
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - type_argument_no_arrow.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `f` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**type_argument_no_arrow.md:1:1:1:2:**
+```roc
+f : I64, I64
+```
+^
+
 
 # TOKENS
 ~~~zig

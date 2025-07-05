@@ -8,11 +8,18 @@ type=expr
 a:b i
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - def_without_newline.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `a` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**def_without_newline.md:1:1:1:2:**
+```roc
+a:b i
+```
+^
+
 
 # TOKENS
 ~~~zig

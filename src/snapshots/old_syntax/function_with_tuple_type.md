@@ -11,11 +11,18 @@ f = \x -> (x, x + 1)
 f 42
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - function_with_tuple_type.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `f` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**function_with_tuple_type.md:1:1:1:2:**
+```roc
+f : I64 -> (I64, I64)
+```
+^
+
 
 # TOKENS
 ~~~zig

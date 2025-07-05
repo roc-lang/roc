@@ -8,11 +8,18 @@ type=expr
 f : { foo 	 }
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - record_type_tab.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `f` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**record_type_tab.md:1:1:1:2:**
+```roc
+f : { foo 	 }
+```
+^
+
 
 # TOKENS
 ~~~zig

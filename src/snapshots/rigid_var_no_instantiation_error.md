@@ -32,7 +32,12 @@ main! = |_| {
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - rigid_var_no_instantiation_error.md:6:12:6:18
-UNDEFINED VARIABLE - rigid_var_no_instantiation_error.md:13:5:13:12
+UNDEFINED VARIABLE - rigid_var_no_instantiation_error.md:6:6:6:7
+UNDEFINED VARIABLE - rigid_var_no_instantiation_error.md:6:9:6:10
+UNDEFINED VARIABLE - rigid_var_no_instantiation_error.md:7:6:7:7
+UNDEFINED VARIABLE - rigid_var_no_instantiation_error.md:7:9:7:10
+UNDEFINED VARIABLE - rigid_var_no_instantiation_error.md:17:21:17:30
+UNUSED VARIABLE - rigid_var_no_instantiation_error.md:13:5:13:12
 UNUSED VARIABLE - rigid_var_no_instantiation_error.md:17:5:17:12
 UNUSED VARIABLE - rigid_var_no_instantiation_error.md:21:5:21:12
 # PROBLEMS
@@ -52,21 +57,56 @@ Here is the problematic code:
 Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**UNDEFINED VARIABLE**
-Nothing is named `y` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**rigid_var_no_instantiation_error.md:6:6:6:7:**
+```roc
+    (x, y) = pair
+```
+     ^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `y` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**rigid_var_no_instantiation_error.md:6:9:6:10:**
+```roc
+    (x, y) = pair
+```
+        ^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `y` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**rigid_var_no_instantiation_error.md:7:6:7:7:**
+```roc
+    (y, x)
+```
+     ^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**rigid_var_no_instantiation_error.md:7:9:7:10:**
+```roc
+    (y, x)
+```
+        ^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `true` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**rigid_var_no_instantiation_error.md:17:21:17:30:**
+```roc
+    result2 = swap((Bool.true, [1, 2, 3]))
+```
+                    ^^^^^^^^^
+
 
 **UNUSED VARIABLE**
 Variable ``result1`` is not used anywhere in your code.

@@ -13,11 +13,19 @@ type=expr
 e
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - crazy_annotation_left2.md:1:1:1:2
+UNDEFINED VARIABLE - crazy_annotation_left2.md:1:3:1:5
+TYPE MISMATCH - crazy_annotation_left2.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `ts` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**crazy_annotation_left2.md:1:3:1:5:**
+```roc
+1(ts((0
+```
+  ^^
+
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

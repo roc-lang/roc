@@ -12,31 +12,78 @@ combine(mix(vodka, gin), Juices({
 }))
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - long_complex_application_with_pnc.md:1:1:1:8
+UNDEFINED VARIABLE - long_complex_application_with_pnc.md:1:9:1:12
+UNDEFINED VARIABLE - long_complex_application_with_pnc.md:1:13:1:18
+UNDEFINED VARIABLE - long_complex_application_with_pnc.md:1:20:1:23
+UNDEFINED VARIABLE - long_complex_application_with_pnc.md:2:12:2:25
+UNDEFINED VARIABLE - long_complex_application_with_pnc.md:3:13:3:27
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `combine` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**long_complex_application_with_pnc.md:1:1:1:8:**
+```roc
+combine(mix(vodka, gin), Juices({
+```
+^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `mix` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**long_complex_application_with_pnc.md:1:9:1:12:**
+```roc
+combine(mix(vodka, gin), Juices({
+```
+        ^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `vodka` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**long_complex_application_with_pnc.md:1:13:1:18:**
+```roc
+combine(mix(vodka, gin), Juices({
+```
+            ^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `gin` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**UNDEFINED VARIABLE**
-Nothing is named `orange` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**long_complex_application_with_pnc.md:1:20:1:23:**
+```roc
+combine(mix(vodka, gin), Juices({
+```
+                   ^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `orange` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**long_complex_application_with_pnc.md:2:12:2:25:**
+```roc
+    color: Colors.orange,
+```
+           ^^^^^^^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `orange` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**long_complex_application_with_pnc.md:3:13:3:27:**
+```roc
+    flavor: Flavors.orange,
+```
+            ^^^^^^^^^^^^^^
+
 
 # TOKENS
 ~~~zig

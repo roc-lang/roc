@@ -10,11 +10,18 @@ foo : Foo.Bar.Baz x y as Blah a b
 42
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - parse_as_ann.md:1:1:1:4
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `foo` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**parse_as_ann.md:1:1:1:4:**
+```roc
+foo : Foo.Bar.Baz x y as Blah a b
+```
+^^^
+
 
 # TOKENS
 ~~~zig

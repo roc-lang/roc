@@ -10,7 +10,12 @@ if""then-p else.e
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - nested_if_unindented.md:2:16:2:18
-UNDEFINED VARIABLE - nested_if_unindented.md:2:3:2:3
+UNDEFINED VARIABLE - nested_if_unindented.md:1:5:1:9
+UNDEFINED VARIABLE - nested_if_unindented.md:1:10:1:11
+UNDEFINED VARIABLE - nested_if_unindented.md:2:5:2:9
+UNDEFINED VARIABLE - nested_if_unindented.md:2:10:2:11
+INVALID IF CONDITION - nested_if_unindented.md:1:3:1:3
+INVALID IF CONDITION - nested_if_unindented.md:2:3:2:3
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **.e** is not expected in an expression.
@@ -28,17 +33,45 @@ if""then-p else.e
 Nothing is named `then` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**nested_if_unindented.md:1:5:1:9:**
+```roc
+if""then-p else
+```
+    ^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `p` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**nested_if_unindented.md:1:10:1:11:**
+```roc
+if""then-p else
+```
+         ^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `then` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**nested_if_unindented.md:2:5:2:9:**
+```roc
+if""then-p else.e
+```
+    ^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `p` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**nested_if_unindented.md:2:10:2:11:**
+```roc
+if""then-p else.e
+```
+         ^
+
 
 **INVALID IF BRANCH**
 The `else` branch of this `if` expression could not be processed.

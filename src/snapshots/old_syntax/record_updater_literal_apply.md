@@ -12,11 +12,18 @@ data =
 data
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - record_updater_literal_apply.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `data` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**record_updater_literal_apply.md:1:1:1:5:**
+```roc
+data =
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

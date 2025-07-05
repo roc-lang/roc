@@ -12,11 +12,18 @@ match nestedList {
 }
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - nested_list_scoping.md:1:7:1:17
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `nestedList` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**nested_list_scoping.md:1:7:1:17:**
+```roc
+match nestedList {
+```
+      ^^^^^^^^^^
+
 
 # TOKENS
 ~~~zig

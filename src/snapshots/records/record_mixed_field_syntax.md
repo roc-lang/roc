@@ -8,19 +8,42 @@ type=expr
 { name, age: 30, email, status: "active", balance }
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - record_mixed_field_syntax.md:1:3:1:8
+UNDEFINED VARIABLE - record_mixed_field_syntax.md:1:18:1:24
+UNDEFINED VARIABLE - record_mixed_field_syntax.md:1:43:1:52
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `name` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**record_mixed_field_syntax.md:1:3:1:8:**
+```roc
+{ name, age: 30, email, status: "active", balance }
+```
+  ^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `email` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**record_mixed_field_syntax.md:1:18:1:24:**
+```roc
+{ name, age: 30, email, status: "active", balance }
+```
+                 ^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `balance` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**record_mixed_field_syntax.md:1:43:1:52:**
+```roc
+{ name, age: 30, email, status: "active", balance }
+```
+                                          ^^^^^^^^^
+
 
 # TOKENS
 ~~~zig

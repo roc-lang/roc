@@ -9,11 +9,18 @@ i<2
 (-6)
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - apply_binop_switch.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `i` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**apply_binop_switch.md:1:1:1:2:**
+```roc
+i<2
+```
+^
+
 
 # TOKENS
 ~~~zig

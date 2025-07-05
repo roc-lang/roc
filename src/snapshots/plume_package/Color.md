@@ -91,9 +91,11 @@ UNEXPECTED TOKEN IN EXPRESSION - Color.md:65:47:65:48
 UNEXPECTED TOKEN IN EXPRESSION - Color.md:65:47:65:49
 UNEXPECTED TOKEN IN EXPRESSION - Color.md:65:48:65:50
 UNEXPECTED TOKEN IN EXPRESSION - Color.md:65:49:65:49
-INVALID PATTERN - Color.md:30:5:30:25
-NOT IMPLEMENTED - Color.md:61:10:61:13
-UNDEFINED VARIABLE - Color.md:21:1:21:5
+UNUSED VARIABLE - Color.md:30:5:30:25
+UNUSED VARIABLE - Color.md:61:10:61:13
+UNDEFINED VARIABLE - Color.md:63:24:63:27
+UNDEFINED VARIABLE - Color.md:68:14:68:27
+TYPE MISMATCH - Color.md:21:1:21:5
 TYPE MISMATCH - Color.md:27:1:27:4
 # PROBLEMS
 **UNEXPECTED TOKEN IN PATTERN**
@@ -310,6 +312,13 @@ named = |str|
 Nothing is named `str` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**Color.md:63:24:63:27:**
+```roc
+        Ok(Color.Named(str))
+```
+                       ^^^
+
+
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
@@ -349,6 +358,13 @@ Only definitions, type annotations, and imports are allowed at the top level.
 **UNDEFINED VARIABLE**
 Nothing is named `from_list` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**Color.md:68:14:68:27:**
+```roc
+    colors = Set.from_list(["AliceBlue", "AntiqueWhite", "Aqua"])
+```
+             ^^^^^^^^^^^^^
+
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

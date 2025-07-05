@@ -9,11 +9,18 @@ m0\w->w?e
 /s
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - closure_in_apply_in_binop.md:1:1:1:3
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `m0` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**closure_in_apply_in_binop.md:1:1:1:3:**
+```roc
+m0\w->w?e
+```
+^^
+
 
 # TOKENS
 ~~~zig

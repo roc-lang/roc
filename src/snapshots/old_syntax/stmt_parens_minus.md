@@ -9,11 +9,18 @@ i
 (-2)
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - stmt_parens_minus.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `i` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**stmt_parens_minus.md:1:1:1:2:**
+```roc
+i
+```
+^
+
 
 # TOKENS
 ~~~zig

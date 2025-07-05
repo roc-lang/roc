@@ -9,11 +9,18 @@ i:M()(Y) c
 t
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - apply_tuple_ext_parens_ty.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `i` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**apply_tuple_ext_parens_ty.md:1:1:1:2:**
+```roc
+i:M()(Y) c
+```
+^
+
 
 # TOKENS
 ~~~zig

@@ -28,10 +28,13 @@ UNEXPECTED TOKEN IN PATTERN - guards_1.md:3:43:3:44
 UNEXPECTED TOKEN IN EXPRESSION - guards_1.md:3:44:3:45
 UNEXPECTED TOKEN IN PATTERN - guards_1.md:3:44:3:44
 UNEXPECTED TOKEN IN EXPRESSION - guards_1.md:1:1:4:6
-UNDEFINED VARIABLE - guards_1.md:2:5:2:6
-INVALID PATTERN - guards_1.md:2:32:2:41
-INVALID PATTERN - guards_1.md:3:5:3:6
-INVALID PATTERN - guards_1.md:3:32:3:41
+UNDEFINED VARIABLE - guards_1.md:1:7:1:12
+UNUSED VARIABLE - guards_1.md:2:5:2:6
+UNDEFINED VARIABLE - guards_1.md:2:42:2:43
+UNUSED VARIABLE - guards_1.md:2:32:2:41
+UNUSED VARIABLE - guards_1.md:3:5:3:6
+UNDEFINED VARIABLE - guards_1.md:3:42:3:43
+UNUSED VARIABLE - guards_1.md:3:32:3:41
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **=> "** is not expected in an expression.
@@ -237,6 +240,13 @@ match value {
 Nothing is named `value` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**guards_1.md:1:7:1:12:**
+```roc
+match value {
+```
+      ^^^^^
+
+
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
 Check the spelling and make sure you're using a valid Roc operator.
@@ -263,6 +273,13 @@ Check the spelling and make sure you're using a valid Roc operator.
 **UNDEFINED VARIABLE**
 Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**guards_1.md:2:42:2:43:**
+```roc
+    x if x > 0 => "positive: ${Num.toStr x}"
+```
+                                         ^
+
 
 **UNUSED VARIABLE**
 Variable ``toStr`` is not used anywhere in your code.
@@ -316,6 +333,13 @@ Check the spelling and make sure you're using a valid Roc operator.
 **UNDEFINED VARIABLE**
 Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**guards_1.md:3:42:3:43:**
+```roc
+    x if x < 0 => "negative: ${Num.toStr x}"
+```
+                                         ^
+
 
 **UNUSED VARIABLE**
 Variable ``toStr`` is not used anywhere in your code.

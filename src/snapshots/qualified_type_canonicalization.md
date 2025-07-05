@@ -69,6 +69,7 @@ UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:39:68:39:68
 UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:40:13:40:20
 PARSE ERROR - qualified_type_canonicalization.md:42:15:42:22
 PARSE ERROR - qualified_type_canonicalization.md:43:15:43:23
+UNDEFINED VARIABLE - qualified_type_canonicalization.md:23:23:23:32
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `import_exposing_no_close`
@@ -401,6 +402,13 @@ Only definitions, type annotations, and imports are allowed at the top level.
 **UNDEFINED VARIABLE**
 Nothing is named `new` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**qualified_type_canonicalization.md:23:23:23:32:**
+```roc
+multiLevelQualified = TypeC.new
+```
+                      ^^^^^^^^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.

@@ -13,11 +13,18 @@ processDict = |_dict| []
 main! = |_| processDict(Dict.empty().insert("one", 1))
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - type_app_multiple_args.md:6:25:6:35
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `empty` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**type_app_multiple_args.md:6:25:6:35:**
+```roc
+main! = |_| processDict(Dict.empty().insert("one", 1))
+```
+                        ^^^^^^^^^^
+
 
 # TOKENS
 ~~~zig

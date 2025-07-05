@@ -10,6 +10,7 @@ s-
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - minus_newline_minus.md:2:2:2:4
+UNDEFINED VARIABLE - minus_newline_minus.md:1:1:1:2
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **-{** is not expected in an expression.
@@ -26,6 +27,13 @@ Here is the problematic code:
 **UNDEFINED VARIABLE**
 Nothing is named `s` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**minus_newline_minus.md:1:1:1:2:**
+```roc
+s-
+```
+^
+
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!

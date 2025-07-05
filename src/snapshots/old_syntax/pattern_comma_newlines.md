@@ -10,15 +10,31 @@ type=expr
 n
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - pattern_comma_newlines.md:1:1:1:2
+UNDEFINED VARIABLE - pattern_comma_newlines.md:1:3:1:4
+UNDEFINED VARIABLE - pattern_comma_newlines.md:1:5:1:6
+TYPE MISMATCH - pattern_comma_newlines.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `i` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**pattern_comma_newlines.md:1:3:1:4:**
+```roc
+1(i,p#
+```
+  ^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `p` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**pattern_comma_newlines.md:1:5:1:6:**
+```roc
+1(i,p#
+```
+    ^
+
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

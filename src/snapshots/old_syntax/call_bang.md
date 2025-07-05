@@ -8,11 +8,18 @@ type=expr
 launchTheNukes! 123
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - call_bang.md:1:1:1:16
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `launchTheNukes!` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**call_bang.md:1:1:1:16:**
+```roc
+launchTheNukes! 123
+```
+^^^^^^^^^^^^^^^
+
 
 # TOKENS
 ~~~zig

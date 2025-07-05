@@ -28,12 +28,15 @@ UNEXPECTED TOKEN IN PATTERN - guards_2.md:3:61:3:62
 UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:3:62:3:63
 UNEXPECTED TOKEN IN PATTERN - guards_2.md:3:62:3:62
 UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:1:1:4:6
-UNDEFINED VARIABLE - guards_2.md:2:6:2:11
+UNDEFINED VARIABLE - guards_2.md:1:7:1:12
+UNUSED VARIABLE - guards_2.md:2:6:2:11
 UNUSED VARIABLE - guards_2.md:2:19:2:23
-INVALID PATTERN - guards_2.md:2:77:2:86
-INVALID PATTERN - guards_2.md:3:6:3:7
+UNDEFINED VARIABLE - guards_2.md:2:87:2:92
+UNUSED VARIABLE - guards_2.md:2:77:2:86
+UNUSED VARIABLE - guards_2.md:3:6:3:7
 UNUSED VARIABLE - guards_2.md:3:9:3:10
-INVALID PATTERN - guards_2.md:3:50:3:59
+UNDEFINED VARIABLE - guards_2.md:3:60:3:61
+UNUSED VARIABLE - guards_2.md:3:50:3:59
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **=> "** is not expected in an expression.
@@ -239,6 +242,13 @@ match value {
 Nothing is named `value` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**guards_2.md:1:7:1:12:**
+```roc
+match value {
+```
+      ^^^^^
+
+
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
 Check the spelling and make sure you're using a valid Roc operator.
@@ -277,6 +287,13 @@ Check the spelling and make sure you're using a valid Roc operator.
 **UNDEFINED VARIABLE**
 Nothing is named `first` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**guards_2.md:2:87:2:92:**
+```roc
+    [first, .. as rest] if List.len(rest) > 5 => "long list starting with ${Num.toStr first}"
+```
+                                                                                      ^^^^^
+
 
 **UNUSED VARIABLE**
 Variable ``toStr`` is not used anywhere in your code.
@@ -342,6 +359,13 @@ Check the spelling and make sure you're using a valid Roc operator.
 **UNDEFINED VARIABLE**
 Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**guards_2.md:3:60:3:61:**
+```roc
+    [x, y] if x == y => "pair of equal values: ${Num.toStr x}"
+```
+                                                           ^
+
 
 **UNUSED VARIABLE**
 Variable ``toStr`` is not used anywhere in your code.

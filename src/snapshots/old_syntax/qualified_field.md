@@ -8,11 +8,18 @@ type=expr
 One.Two.rec.abc.def.ghi
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - qualified_field.md:1:1:1:24
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `ghi` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**qualified_field.md:1:1:1:24:**
+```roc
+One.Two.rec.abc.def.ghi
+```
+^^^^^^^^^^^^^^^^^^^^^^^
+
 
 # TOKENS
 ~~~zig

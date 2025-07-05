@@ -8,15 +8,30 @@ type=expr
 list.map(fn)
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - can_dot_access.md:1:1:1:5
+UNDEFINED VARIABLE - can_dot_access.md:1:10:1:12
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `list` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**can_dot_access.md:1:1:1:5:**
+```roc
+list.map(fn)
+```
+^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `fn` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**can_dot_access.md:1:10:1:12:**
+```roc
+list.map(fn)
+```
+         ^^
+
 
 # TOKENS
 ~~~zig

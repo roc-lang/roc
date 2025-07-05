@@ -8,15 +8,30 @@ type=expr
 fallible!(args)   ? WrapOverErr
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - single_question_binop_tag.md:1:1:1:10
+UNDEFINED VARIABLE - single_question_binop_tag.md:1:11:1:15
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `fallible!` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**single_question_binop_tag.md:1:1:1:10:**
+```roc
+fallible!(args)   ? WrapOverErr
+```
+^^^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `args` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**single_question_binop_tag.md:1:11:1:15:**
+```roc
+fallible!(args)   ? WrapOverErr
+```
+          ^^^^
+
 
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: binop

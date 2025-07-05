@@ -9,11 +9,18 @@ doStuff : UserId -> Dict Str _
 42
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - type_decl_with_underscore.md:1:1:1:8
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `doStuff` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**type_decl_with_underscore.md:1:1:1:8:**
+```roc
+doStuff : UserId -> Dict Str _
+```
+^^^^^^^
+
 
 # TOKENS
 ~~~zig

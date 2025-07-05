@@ -8,11 +8,18 @@ type=expr
 foo&bar  5
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - record_updater_var_apply.md:1:1:1:4
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `foo` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**record_updater_var_apply.md:1:1:1:4:**
+```roc
+foo&bar  5
+```
+^^^
+
 
 # TOKENS
 ~~~zig

@@ -52,7 +52,7 @@ UNEXPECTED TOKEN IN EXPRESSION - can_import_type_annotations.md:1:1:18:12
 UNDECLARED TYPE - can_import_type_annotations.md:7:18:7:25
 UNDECLARED TYPE - can_import_type_annotations.md:7:29:7:37
 UNUSED VARIABLE - can_import_type_annotations.md:8:19:8:22
-UNKNOWN OPERATOR - can_import_type_annotations.md:17:12:17:16
+UNUSED VARIABLE - can_import_type_annotations.md:17:12:17:16
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_apply_close_round`

@@ -8,11 +8,18 @@ type=expr
 elsewhere
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - var_else.md:1:1:1:10
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `elsewhere` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**var_else.md:1:1:1:10:**
+```roc
+elsewhere
+```
+^^^^^^^^^
+
 
 # TOKENS
 ~~~zig

@@ -11,6 +11,7 @@ i/
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - i_over_not_g.md:2:2:2:2
+UNDEFINED VARIABLE - i_over_not_g.md:1:1:1:2
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token  is not expected in an expression.
@@ -27,6 +28,13 @@ Here is the problematic code:
 **UNDEFINED VARIABLE**
 Nothing is named `i` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**i_over_not_g.md:1:1:1:2:**
+```roc
+i/
+```
+^
+
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!

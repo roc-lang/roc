@@ -10,11 +10,18 @@ when 5 is
     _
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - when_missing_arrow.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**when_missing_arrow.md:1:1:1:5:**
+```roc
+when 5 is
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

@@ -11,11 +11,18 @@ is e->(i
 h
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - when_in_binop_in_assign_with_sneaky_newline.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `j` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**when_in_binop_in_assign_with_sneaky_newline.md:1:1:1:2:**
+```roc
+j=m%when f
+```
+^
+
 
 # TOKENS
 ~~~zig

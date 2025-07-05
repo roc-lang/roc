@@ -8,11 +8,18 @@ type=expr
 (One.Two.rec).field
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - parenthetical_field_qualified_var.md:1:2:1:13
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `rec` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**parenthetical_field_qualified_var.md:1:2:1:13:**
+```roc
+(One.Two.rec).field
+```
+ ^^^^^^^^^^^
+
 
 # TOKENS
 ~~~zig

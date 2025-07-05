@@ -9,11 +9,18 @@ when Delmin (Del rx) 0 is
     Delmin (Del ry ) _ -> Node Black 0 Bool.false ry
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - pattern_with_space_in_parens.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**pattern_with_space_in_parens.md:1:1:1:5:**
+```roc
+when Delmin (Del rx) 0 is
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

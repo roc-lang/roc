@@ -9,11 +9,18 @@ abc = (1, 2, 3)
 abc.0
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - tuple_access_after_ident.md:1:1:1:4
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `abc` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**tuple_access_after_ident.md:1:1:1:4:**
+```roc
+abc = (1, 2, 3)
+```
+^^^
+
 
 # TOKENS
 ~~~zig

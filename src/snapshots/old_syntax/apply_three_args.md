@@ -8,11 +8,18 @@ type=expr
 a b c d
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - apply_three_args.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `a` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**apply_three_args.md:1:1:1:2:**
+```roc
+a b c d
+```
+^
+
 
 # TOKENS
 ~~~zig

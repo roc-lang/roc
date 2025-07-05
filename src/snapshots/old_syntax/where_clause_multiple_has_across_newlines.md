@@ -13,11 +13,18 @@ f : a -> (b -> c)
 f
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - where_clause_multiple_has_across_newlines.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `f` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**where_clause_multiple_has_across_newlines.md:1:1:1:2:**
+```roc
+f : a -> (b -> c)
+```
+^
+
 
 # TOKENS
 ~~~zig

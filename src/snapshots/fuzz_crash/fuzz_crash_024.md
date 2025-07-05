@@ -14,7 +14,7 @@ var t= ]
 var t= 0
 ~~~
 # EXPECTED
-UNCLOSED STRING - fuzz_crash_024.md:1:9:1:17
+PARSE ERROR - fuzz_crash_024.md:1:9:1:17
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_024.md:1:24:1:34
 PARSE ERROR - fuzz_crash_024.md:1:33:1:53
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_024.md:1:34:1:53
