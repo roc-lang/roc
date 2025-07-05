@@ -36,13 +36,20 @@ fn columnIdx(line_starts: []const u32, line: u32, pos: u32) !u32 {
 }
 
 /// Returns the source text for a given line index
-fn getLineText(source: []const u8, line_starts: []const u32, line_idx: u32) []const u8 {
-    const line_start_offset = line_starts[line_idx];
-    const line_end_offset = if (line_idx + 1 < line_starts.len)
-        line_starts[line_idx + 1]
-    else
-        source.len;
+fn getLineText(source: []const u8, line_starts: []const u32, start_line_idx: u32, end_line_idx: u32) []const u8 {
+    if (source.len == 0 or start_line_idx >= line_starts.len or start_line_idx > end_line_idx) {
+        return "";
+    }
 
+    var line_start_offset: usize = 0;
+    if (start_line_idx != 0) {
+        line_start_offset = line_starts[start_line_idx];
+    }
+
+    var line_end_offset: usize = source.len;
+    if (end_line_idx + 1 < line_starts.len) {
+        line_end_offset = line_starts[end_line_idx + 1] - 1;
+    }
     return source[line_start_offset..line_end_offset];
 }
 
@@ -87,7 +94,7 @@ pub fn position(source: []const u8, line_starts: []const u32, begin: u32, end: u
     const start_col_idx = try columnIdx(line_starts, start_line_idx, begin);
     const end_line_idx = lineIdx(line_starts, end);
     const end_col_idx = try columnIdx(line_starts, end_line_idx, end);
-    const line_text = getLineText(source, line_starts, start_line_idx);
+    const line_text = getLineText(source, line_starts, start_line_idx, end_line_idx);
 
     return .{
         .start_line_idx = start_line_idx,
@@ -150,9 +157,10 @@ test "getLineText" {
     try line_starts.append(6);
     try line_starts.append(12);
 
-    try std.testing.expectEqualStrings("line0\n", getLineText(source, line_starts.items, 0));
-    try std.testing.expectEqualStrings("line1\n", getLineText(source, line_starts.items, 1));
-    try std.testing.expectEqualStrings("line2", getLineText(source, line_starts.items, 2));
+    try std.testing.expectEqualStrings("line0", getLineText(source, line_starts.items, 0, 0));
+    try std.testing.expectEqualStrings("line1", getLineText(source, line_starts.items, 1, 1));
+    try std.testing.expectEqualStrings("line0\nline1", getLineText(source, line_starts.items, 0, 1));
+    try std.testing.expectEqualStrings("line2", getLineText(source, line_starts.items, 2, 2));
 }
 
 test "get" {
@@ -171,12 +179,12 @@ test "get" {
     try std.testing.expectEqual(2, info1.start_col_idx);
     try std.testing.expectEqual(0, info1.end_line_idx);
     try std.testing.expectEqual(4, info1.end_col_idx);
-    try std.testing.expectEqualStrings("line0\n", info1.line_text);
+    try std.testing.expectEqualStrings("line0", info1.line_text);
 
     const info2 = try position(source, line_starts.items, 8, 10);
     try std.testing.expectEqual(1, info2.start_line_idx);
     try std.testing.expectEqual(2, info2.start_col_idx);
     try std.testing.expectEqual(1, info2.end_line_idx);
     try std.testing.expectEqual(4, info2.end_col_idx);
-    try std.testing.expectEqualStrings("line1\n", info2.line_text);
+    try std.testing.expectEqualStrings("line1", info2.line_text);
 }

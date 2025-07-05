@@ -10,6 +10,7 @@ const Allocator = std.mem.Allocator;
 const renderer = @import("renderer.zig");
 const RenderTarget = renderer.RenderTarget;
 const ReportingConfig = @import("config.zig").ReportingConfig;
+const RegionInfo = @import("../base.zig").RegionInfo;
 const collections = @import("../collections.zig");
 const exitOnOom = collections.utils.exitOnOom;
 
@@ -33,6 +34,7 @@ pub const UnderlineRegion = struct {
 
 /// Display region for source code with underlines
 pub const SourceCodeDisplayRegion = struct {
+    line_text: []const u8,
     start_line: u32,
     start_column: u32,
     end_line: u32,
@@ -191,22 +193,7 @@ pub const DocumentElement = union(enum) {
     horizontal_concat: []DocumentElement,
 
     /// Source code region display with highlighting
-    source_code_region: struct {
-        /// The source code to display
-        source: []const u8,
-        /// Line number where the region starts (1-based)
-        start_line: u32,
-        /// Column where the region starts (1-based)
-        start_column: u32,
-        /// Line number where the region ends (1-based)
-        end_line: u32,
-        /// Column where the region ends (1-based)
-        end_column: u32,
-        /// Annotation for the highlighted region
-        region_annotation: Annotation,
-        /// Optional filename for context
-        filename: ?[]const u8,
-    },
+    source_code_region: SourceCodeDisplayRegion,
 
     /// Multiple highlighted regions within the same source code
     source_code_multi_region: struct {
@@ -218,8 +205,6 @@ pub const DocumentElement = union(enum) {
         filename: ?[]const u8,
     },
     source_code_with_underlines: struct {
-        /// The source code to display
-        source: []const u8,
         /// Overall region to display (determines which lines to show)
         display_region: SourceCodeDisplayRegion,
         /// Regions to underline within the displayed code
@@ -331,14 +316,12 @@ pub const Document = struct {
     /// Add a source code display with multiple underlines.
     pub fn addSourceCodeWithUnderlines(
         self: *Document,
-        source: []const u8,
         display_region: SourceCodeDisplayRegion,
         underline_regions: []const UnderlineRegion,
     ) !void {
         const owned_regions = try self.allocator.dupe(UnderlineRegion, underline_regions);
         try self.elements.append(.{
             .source_code_with_underlines = .{
-                .source = source,
                 .display_region = display_region,
                 .underline_regions = owned_regions,
             },
@@ -473,27 +456,23 @@ pub const Document = struct {
     /// Accepts 0-based line and column coordinates, converts to 1-based for display.
     pub fn addSourceRegion(
         self: *Document,
-        source: []const u8,
-        start_line: u32,
-        start_column: u32,
-        end_line: u32,
-        end_column: u32,
+        region_info: RegionInfo,
         annotation: Annotation,
         filename: ?[]const u8,
     ) !void {
         // Validate coordinates to catch programming errors early
-        std.debug.assert(end_line >= start_line);
-        if (start_line == end_line) {
-            std.debug.assert(end_column >= start_column);
+        std.debug.assert(region_info.end_line_idx >= region_info.start_line_idx);
+        if (region_info.start_line_idx == region_info.end_line_idx) {
+            std.debug.assert(region_info.end_col_idx >= region_info.start_col_idx);
         }
 
         try self.elements.append(.{
             .source_code_region = .{
-                .source = source,
-                .start_line = start_line + 1,
-                .start_column = start_column + 1,
-                .end_line = end_line + 1,
-                .end_column = end_column + 1,
+                .line_text = region_info.line_text,
+                .start_line = region_info.start_line_idx + 1,
+                .start_column = region_info.start_col_idx + 1,
+                .end_line = region_info.end_line_idx + 1,
+                .end_column = region_info.end_col_idx + 1,
                 .region_annotation = annotation,
                 .filename = filename,
             },
@@ -666,15 +645,11 @@ pub const DocumentBuilder = struct {
 
     pub fn sourceRegion(
         self: *DocumentBuilder,
-        source: []const u8,
-        start_line: u32,
-        start_column: u32,
-        end_line: u32,
-        end_column: u32,
+        region_info: RegionInfo,
         annotation: Annotation,
         filename: ?[]const u8,
     ) *DocumentBuilder {
-        self.document.addSourceRegion(source, start_line, start_column, end_line, end_column, annotation, filename) catch |err| exitOnOom(err);
+        self.document.addSourceRegion(region_info, annotation, filename) catch |err| exitOnOom(err);
         return self;
     }
 
