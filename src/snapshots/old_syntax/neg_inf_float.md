@@ -8,7 +8,7 @@ type=expr
 -inf
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - neg_inf_float.md:1:1:1:5
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **-inf** is not expected in an expression.

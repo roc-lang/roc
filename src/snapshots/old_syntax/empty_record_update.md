@@ -8,7 +8,8 @@ type=expr
 {e&}
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - empty_record_update.md:1:3:1:5
+UNDEFINED VARIABLE - empty_record_update.md:1:2:1:3
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **&}** is not expected in an expression.
@@ -21,10 +22,6 @@ Here is the problematic code:
 ```
   ^^
 
-
-**UNDEFINED VARIABLE**
-Nothing is named `e` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig

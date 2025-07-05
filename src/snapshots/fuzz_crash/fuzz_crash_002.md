@@ -8,7 +8,25 @@ type=file
 modu:;::::::::::::::le[%
 ~~~
 # EXPECTED
-NIL
+missing_header - fuzz_crash_002.md:1:1:1:6
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:5:1:7
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:6:1:8
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:7:1:9
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:8:1:10
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:9:1:11
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:10:1:12
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:11:1:13
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:12:1:14
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:13:1:15
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:14:1:16
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:15:1:17
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:16:1:18
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:17:1:19
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:18:1:20
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:19:1:21
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:20:1:23
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_002.md:1:24:1:25
+expected_expr_close_square_or_comma - fuzz_crash_002.md:1:25:1:25
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.
@@ -242,78 +260,6 @@ modu:;::::::::::::::le[%
 ```
                         
 
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
 ~~~zig

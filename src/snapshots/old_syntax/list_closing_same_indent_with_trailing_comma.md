@@ -12,12 +12,9 @@ myList = [
 42
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - list_closing_same_indent_with_trailing_comma.md:1:1:1:7
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `myList` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:7),OpAssign(1:8-1:9),OpenSquare(1:10-1:11),Newline(1:1-1:1),

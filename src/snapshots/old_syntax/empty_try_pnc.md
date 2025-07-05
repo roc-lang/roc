@@ -8,12 +8,9 @@ type=expr
 try()t
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - empty_try_pnc.md:1:1:1:4
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `try` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:4),NoSpaceOpenRound(1:4-1:5),CloseRound(1:5-1:6),LowerIdent(1:6-1:7),EndOfFile(1:7-1:7),

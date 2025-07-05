@@ -18,7 +18,7 @@ type=expr
     echo "Let's get started on your driver's license application."
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - effectful_closure_statements.md:1:1:1:3
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **\{** is not expected in an expression.

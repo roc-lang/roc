@@ -11,12 +11,9 @@ F
 abc
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - value_def_confusion.md:1:1:1:2
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `a` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpColon(1:2-1:3),UpperIdent(1:3-1:4),Newline(1:1-1:1),

@@ -8,7 +8,8 @@ type=expr
 [1, 2, , 3]
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - list_double_comma.md:1:8:1:11
+expected_expr_close_square_or_comma - list_double_comma.md:1:11:1:12
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **, 3** is not expected in an expression.

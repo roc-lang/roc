@@ -8,16 +8,10 @@ type=expr
 try-w
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - try_subtract.md:1:1:1:4
+UNDEFINED VARIABLE - try_subtract.md:1:5:1:6
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `try` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `w` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:4),OpBinaryMinus(1:4-1:5),LowerIdent(1:5-1:6),EndOfFile(1:6-1:6),

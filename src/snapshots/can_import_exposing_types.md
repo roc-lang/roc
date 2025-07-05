@@ -61,7 +61,36 @@ combineResults = |jsonResult, httpStatus|
     }
 ~~~
 # EXPECTED
-NIL
+expected_expr_close_curly_or_comma - can_import_exposing_types.md:52:45:52:51
+expected_expr_apply_close_round - can_import_exposing_types.md:52:22:52:25
+UNEXPECTED TOKEN IN EXPRESSION - can_import_exposing_types.md:52:71:52:73
+UNEXPECTED TOKEN IN EXPRESSION - can_import_exposing_types.md:1:1:53:12
+UNDECLARED TYPE - can_import_exposing_types.md:31:18:31:24
+UNDECLARED TYPE - can_import_exposing_types.md:32:18:32:24
+UNDECLARED TYPE - can_import_exposing_types.md:33:23:33:31
+UNDECLARED TYPE - can_import_exposing_types.md:8:27:8:32
+UNDECLARED TYPE - can_import_exposing_types.md:8:34:8:39
+UNDECLARED TYPE - can_import_exposing_types.md:12:17:12:24
+UNDECLARED TYPE - can_import_exposing_types.md:12:28:12:36
+UNDECLARED TYPE - can_import_exposing_types.md:22:15:22:21
+UNDECLARED TYPE - can_import_exposing_types.md:22:28:22:33
+UNDECLARED TYPE - can_import_exposing_types.md:22:50:22:55
+UNDECLARED TYPE - can_import_exposing_types.md:22:58:22:63
+UNDEFINED VARIABLE - can_import_exposing_types.md:24:5:24:16
+UNDECLARED TYPE - can_import_exposing_types.md:37:16:37:22
+UNDECLARED TYPE - can_import_exposing_types.md:41:18:41:26
+UNDEFINED VARIABLE - can_import_exposing_types.md:45:23:45:37
+UNDECLARED TYPE - can_import_exposing_types.md:49:25:49:30
+UNDECLARED TYPE - can_import_exposing_types.md:49:32:49:37
+UNDECLARED TYPE - can_import_exposing_types.md:49:40:49:46
+UNDECLARED TYPE - can_import_exposing_types.md:49:57:49:65
+UNDECLARED TYPE - can_import_exposing_types.md:49:67:49:72
+expr_not_canonicalized - can_import_exposing_types.md:52:22:52:70
+UNUSED VARIABLE - can_import_exposing_types.md:52:12:52:17
+expr_not_canonicalized - can_import_exposing_types.md:52:71:52:73
+UNUSED VARIABLE - can_import_exposing_types.md:52:60:52:70
+expr_not_canonicalized - can_import_exposing_types.md:1:1:53:12
+UNUSED VARIABLE - can_import_exposing_types.md:50:31:50:41
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_close_curly_or_comma`
@@ -224,281 +253,6 @@ combineResults = |jsonResult, httpStatus|
         Ok(value) => Ok({ body: Json.encode value, status: httpStatus })
         Err(error) => Err(error)
 ```
-
-
-**UNDECLARED TYPE**
-The type ``Config`` is not declared in this scope.
-
-This type is referenced here:
-**can_import_exposing_types.md:31:18:31:24:**
-```roc
-    jsonConfig : Config,
-```
-                 ^^^^^^
-
-
-**UNDECLARED TYPE**
-The type ``Status`` is not declared in this scope.
-
-This type is referenced here:
-**can_import_exposing_types.md:32:18:32:24:**
-```roc
-    httpStatus : Status,
-```
-                 ^^^^^^
-
-
-**UNDECLARED TYPE**
-The type ``Response`` is not declared in this scope.
-
-This type is referenced here:
-**can_import_exposing_types.md:33:23:33:31:**
-```roc
-    defaultResponse : Response,
-```
-                      ^^^^^^^^
-
-
-**UNDECLARED TYPE**
-The type ``Value`` is not declared in this scope.
-
-This type is referenced here:
-**can_import_exposing_types.md:8:27:8:32:**
-```roc
-parseJson : Str -> Result(Value, Error)
-```
-                          ^^^^^
-
-
-**UNDECLARED TYPE**
-The type ``Error`` is not declared in this scope.
-
-This type is referenced here:
-**can_import_exposing_types.md:8:34:8:39:**
-```roc
-parseJson : Str -> Result(Value, Error)
-```
-                                 ^^^^^
-
-
-**UNDECLARED TYPE**
-The type ``Request`` is not declared in this scope.
-
-This type is referenced here:
-**can_import_exposing_types.md:12:17:12:24:**
-```roc
-handleRequest : Request -> Response
-```
-                ^^^^^^^
-
-
-**UNDECLARED TYPE**
-The type ``Response`` is not declared in this scope.
-
-This type is referenced here:
-**can_import_exposing_types.md:12:28:12:36:**
-```roc
-handleRequest : Request -> Response
-```
-                           ^^^^^^^^
-
-
-**UNDECLARED TYPE**
-The type ``Config`` is not declared in this scope.
-
-This type is referenced here:
-**can_import_exposing_types.md:22:15:22:21:**
-```roc
-processData : Config, List(Value) -> Result(List(Value), Error)
-```
-              ^^^^^^
-
-
-**UNDECLARED TYPE**
-The type ``Value`` is not declared in this scope.
-
-This type is referenced here:
-**can_import_exposing_types.md:22:28:22:33:**
-```roc
-processData : Config, List(Value) -> Result(List(Value), Error)
-```
-                           ^^^^^
-
-
-**UNDECLARED TYPE**
-The type ``Value`` is not declared in this scope.
-
-This type is referenced here:
-**can_import_exposing_types.md:22:50:22:55:**
-```roc
-processData : Config, List(Value) -> Result(List(Value), Error)
-```
-                                                 ^^^^^
-
-
-**UNDECLARED TYPE**
-The type ``Error`` is not declared in this scope.
-
-This type is referenced here:
-**can_import_exposing_types.md:22:58:22:63:**
-```roc
-processData : Config, List(Value) -> Result(List(Value), Error)
-```
-                                                         ^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `mapTry` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDECLARED TYPE**
-The type ``Config`` is not declared in this scope.
-
-This type is referenced here:
-**can_import_exposing_types.md:37:16:37:22:**
-```roc
-createClient : Config -> Http.Client
-```
-               ^^^^^^
-
-
-**UNDECLARED TYPE**
-The type ``Response`` is not declared in this scope.
-
-This type is referenced here:
-**can_import_exposing_types.md:41:18:41:26:**
-```roc
-handleResponse : Response -> Str
-```
-                 ^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `toString` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDECLARED TYPE**
-The type ``Value`` is not declared in this scope.
-
-This type is referenced here:
-**can_import_exposing_types.md:49:25:49:30:**
-```roc
-combineResults : Result(Value, Error), Status -> Result(Response, Error)
-```
-                        ^^^^^
-
-
-**UNDECLARED TYPE**
-The type ``Error`` is not declared in this scope.
-
-This type is referenced here:
-**can_import_exposing_types.md:49:32:49:37:**
-```roc
-combineResults : Result(Value, Error), Status -> Result(Response, Error)
-```
-                               ^^^^^
-
-
-**UNDECLARED TYPE**
-The type ``Status`` is not declared in this scope.
-
-This type is referenced here:
-**can_import_exposing_types.md:49:40:49:46:**
-```roc
-combineResults : Result(Value, Error), Status -> Result(Response, Error)
-```
-                                       ^^^^^^
-
-
-**UNDECLARED TYPE**
-The type ``Response`` is not declared in this scope.
-
-This type is referenced here:
-**can_import_exposing_types.md:49:57:49:65:**
-```roc
-combineResults : Result(Value, Error), Status -> Result(Response, Error)
-```
-                                                        ^^^^^^^^
-
-
-**UNDECLARED TYPE**
-The type ``Error`` is not declared in this scope.
-
-This type is referenced here:
-**can_import_exposing_types.md:49:67:49:72:**
-```roc
-combineResults : Result(Value, Error), Status -> Result(Response, Error)
-```
-                                                                  ^^^^^
-
-
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
-
-**UNUSED VARIABLE**
-Variable ``value`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_value` to suppress this warning.
-The unused variable is declared here:
-**can_import_exposing_types.md:52:12:52:17:**
-```roc
-        Ok(value) => Ok({ body: Json.encode value, status: httpStatus })
-```
-           ^^^^^
-
-
-**DUPLICATE DEFINITION**
-The name `httpStatus` is being redeclared in this scope.
-
-The redeclaration is here:
-**can_import_exposing_types.md:52:60:52:70:**
-```roc
-        Ok(value) => Ok({ body: Json.encode value, status: httpStatus })
-```
-                                                           ^^^^^^^^^^
-
-But `httpStatus` was already defined here:
-**can_import_exposing_types.md:50:31:50:41:**
-```roc
-combineResults = |jsonResult, httpStatus|
-```
-                              ^^^^^^^^^^
-
-
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
-
-**UNUSED VARIABLE**
-Variable ``httpStatus`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_httpStatus` to suppress this warning.
-The unused variable is declared here:
-**can_import_exposing_types.md:52:60:52:70:**
-```roc
-        Ok(value) => Ok({ body: Json.encode value, status: httpStatus })
-```
-                                                           ^^^^^^^^^^
-
-
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
-
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
-
-**UNUSED VARIABLE**
-Variable ``httpStatus`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_httpStatus` to suppress this warning.
-The unused variable is declared here:
-**can_import_exposing_types.md:50:31:50:41:**
-```roc
-combineResults = |jsonResult, httpStatus|
-```
-                              ^^^^^^^^^^
 
 
 # TOKENS

@@ -8,12 +8,9 @@ type=expr
 (person.transform)(42)
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - record_access_function_call.md:1:2:1:8
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `person` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 OpenRound(1:1-1:2),LowerIdent(1:2-1:8),NoSpaceDotLowerIdent(1:8-1:18),CloseRound(1:18-1:19),NoSpaceOpenRound(1:19-1:20),Int(1:20-1:22),CloseRound(1:22-1:23),EndOfFile(1:23-1:23),

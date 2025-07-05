@@ -8,7 +8,8 @@ type=expr
 {x : if Bool.true then 1 else 2, y: 3 }
 ~~~
 # EXPECTED
-NIL
+no_else - record_with_if.md:1:24:1:30
+expected_expr_close_curly_or_comma - record_with_if.md:1:26:1:32
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `no_else`

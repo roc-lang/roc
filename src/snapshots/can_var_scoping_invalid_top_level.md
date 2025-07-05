@@ -11,7 +11,7 @@ module []
 var topLevelVar_ = 0
 ~~~
 # EXPECTED
-NIL
+var_only_allowed_in_a_body - can_var_scoping_invalid_top_level.md:4:1:4:17
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `var_only_allowed_in_a_body`

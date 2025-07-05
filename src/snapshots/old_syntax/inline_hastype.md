@@ -11,12 +11,9 @@ main =
     3
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - inline_hastype.md:1:1:1:5
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `main` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:5),OpAssign(1:6-1:7),Newline(1:1-1:1),

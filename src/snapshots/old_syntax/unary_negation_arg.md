@@ -8,12 +8,9 @@ type=expr
 whee  12 -foo
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - unary_negation_arg.md:1:1:1:5
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `whee` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:5),Int(1:7-1:9),OpUnaryMinus(1:10-1:11),LowerIdent(1:11-1:14),EndOfFile(1:14-1:14),

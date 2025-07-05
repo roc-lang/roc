@@ -8,7 +8,8 @@ type=file
 = "te
 ~~~
 # EXPECTED
-NIL
+UnclosedString - fuzz_crash_003.md:1:4:1:6
+missing_header - fuzz_crash_003.md:1:1:1:4
 # PROBLEMS
 **UNCLOSED STRING**
 This string is missing a closing quote.
@@ -28,10 +29,6 @@ Here is the problematic code:
 ```
 ^^^
 
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
 ~~~zig

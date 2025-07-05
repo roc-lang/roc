@@ -8,7 +8,8 @@ type=expr
 1 ++ 2
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - unknown_operator.md:1:4:1:7
+expr_not_canonicalized - unknown_operator.md:1:1:1:7
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **+ 2** is not expected in an expression.
@@ -21,10 +22,6 @@ Here is the problematic code:
 ```
    ^^^
 
-
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
 
 # TOKENS
 ~~~zig

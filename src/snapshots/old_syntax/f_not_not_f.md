@@ -10,12 +10,9 @@ f
 !f
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - f_not_not_f.md:1:1:1:2
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `f` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),Newline(1:1-1:1),

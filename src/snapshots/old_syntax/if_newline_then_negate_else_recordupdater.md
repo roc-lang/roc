@@ -11,7 +11,9 @@ then!f#
 else&m
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - if_newline_then_negate_else_recordupdater.md:4:5:4:7
+UNDEFINED VARIABLE - if_newline_then_negate_else_recordupdater.md:2:1:2:2
+UNDEFINED VARIABLE - if_newline_then_negate_else_recordupdater.md:3:1:3:7
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **&m** is not expected in an expression.
@@ -24,21 +26,6 @@ else&m
 ```
     ^^
 
-
-**UNDEFINED VARIABLE**
-Nothing is named `h` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `then!f` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**INVALID IF BRANCH**
-The `else` branch of this `if` expression could not be processed.
-
-The `else` branch must contain a valid expression. Check for syntax errors or missing values.
-
-Note: Every `if` expression in Roc must have an `else` branch, and both branches must have the same type.
 
 # TOKENS
 ~~~zig

@@ -8,12 +8,9 @@ type=expr
 whenever
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - var_when.md:1:1:1:9
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `whenever` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:9),EndOfFile(1:9-1:9),

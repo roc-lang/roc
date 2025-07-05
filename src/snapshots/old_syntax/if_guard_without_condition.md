@@ -13,12 +13,9 @@ when Just 4 is
         2
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - if_guard_without_condition.md:1:1:1:5
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `when` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:5),UpperIdent(1:6-1:10),Int(1:11-1:12),LowerIdent(1:13-1:15),Newline(1:1-1:1),

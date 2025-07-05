@@ -8,7 +8,9 @@ type=file
 ||1
 ~~~
 # EXPECTED
-NIL
+AsciiControl - fuzz_crash_008.md:1:2:1:2
+missing_header - fuzz_crash_008.md:1:1:1:4
+expected_expr_bar - fuzz_crash_008.md:1:5:1:5
 # PROBLEMS
 **ASCII CONTROL CHARACTER**
 ASCII control characters are not allowed in Roc source code.
@@ -40,10 +42,6 @@ Here is the problematic code:
 ```
     
 
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
 ~~~zig

@@ -11,7 +11,7 @@ ${{
 }i}"""
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - multiline_str_interpolation_records.md:1:1:1:4
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **"""** is not expected in an expression.

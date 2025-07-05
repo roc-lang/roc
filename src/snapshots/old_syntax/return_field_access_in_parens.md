@@ -9,7 +9,7 @@ type=expr
 ss
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - return_field_access_in_parens.md:1:2:1:10
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **return.o** is not expected in an expression.

@@ -12,12 +12,9 @@ implements K->Z)
 s
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - ann_parens_where_implements_func.md:1:1:1:2
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpColon(1:2-1:3),NoSpaceOpenRound(1:3-1:4),LowerIdent(1:4-1:5),Newline(1:1-1:1),

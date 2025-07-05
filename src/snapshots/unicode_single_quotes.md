@@ -18,28 +18,13 @@ type=expr
 )
 ~~~
 # EXPECTED
-NIL
+too_long_single_quote - unicode_single_quotes.md:6:5:6:16
+too_long_single_quote - unicode_single_quotes.md:7:5:7:15
+empty_single_quote - unicode_single_quotes.md:8:5:8:7
+too_long_single_quote - unicode_single_quotes.md:9:5:9:14
+too_long_single_quote - unicode_single_quotes.md:10:5:10:12
 # PROBLEMS
-**INVALID SCALAR**
-I am part way through parsing this scalar literal (character literal), but it contains more than one character.
-A single-quoted literal must contain exactly one character, e.g. 'a'.
-
-**INVALID SCALAR**
-I am part way through parsing this scalar literal (character literal), but it contains more than one character.
-A single-quoted literal must contain exactly one character, e.g. 'a'.
-
-**INVALID SCALAR**
-I am part way through parsing this scalar literal (character literal), but it is empty.
-A single-quoted literal must contain exactly one character, e.g. 'a'.
-
-**INVALID SCALAR**
-I am part way through parsing this scalar literal (character literal), but it contains more than one character.
-A single-quoted literal must contain exactly one character, e.g. 'a'.
-
-**INVALID SCALAR**
-I am part way through parsing this scalar literal (character literal), but it contains more than one character.
-A single-quoted literal must contain exactly one character, e.g. 'a'.
-
+NIL
 # TOKENS
 ~~~zig
 OpenRound(1:1-1:2),Newline(1:1-1:1),

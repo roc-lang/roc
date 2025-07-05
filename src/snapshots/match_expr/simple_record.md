@@ -11,12 +11,9 @@ match person {
 }
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - simple_record.md:1:7:1:13
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `person` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 KwMatch(1:1-1:6),LowerIdent(1:7-1:13),OpenCurly(1:14-1:15),Newline(1:1-1:1),

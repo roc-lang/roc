@@ -8,7 +8,7 @@ type=expr
 \( a
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - pattern_in_parens_end.md:1:1:1:3
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **\(** is not expected in an expression.

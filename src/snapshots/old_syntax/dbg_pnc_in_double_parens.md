@@ -9,7 +9,7 @@ type=expr
 r)
 ~~~
 # EXPECTED
-NIL
+expected_expr_close_round_or_comma - dbg_pnc_in_double_parens.md:2:2:2:3
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_close_round_or_comma`

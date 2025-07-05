@@ -8,7 +8,7 @@ type=expr
 \the_answer -> 42
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - single_arg_with_underscore_closure.md:1:1:1:12
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **\the_answer** is not expected in an expression.

@@ -19,20 +19,9 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-NIL
+UNUSED VARIABLE - hello_world_with_block.md:9:2:9:7
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable ``world`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_world` to suppress this warning.
-The unused variable is declared here:
-**hello_world_with_block.md:9:2:9:7:**
-```roc
-	world = "World"
-```
- ^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 Newline(1:2-1:15),

@@ -10,12 +10,9 @@ a
 d
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - sneaky_and_expr.md:1:1:1:2
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `a` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),Newline(1:1-1:1),

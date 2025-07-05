@@ -13,7 +13,9 @@ type=expr
 }
 ~~~
 # EXPECTED
-NIL
+expected_ty_close_square_or_comma - ann_closed_union.md:2:26:2:32
+MALFORMED TYPE - ann_closed_union.md:2:26:2:32
+UNUSED VARIABLE - ann_closed_union.md:3:5:3:8
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_ty_close_square_or_comma`
@@ -37,21 +39,6 @@ Here is the problematic code:
     foo : [True, Perhaps Thing]
 ```
                               
-
-
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
-
-**UNUSED VARIABLE**
-Variable ``foo`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_foo` to suppress this warning.
-The unused variable is declared here:
-**ann_closed_union.md:3:5:3:8:**
-```roc
-    foo = True
-```
-    ^^^
 
 
 # TOKENS

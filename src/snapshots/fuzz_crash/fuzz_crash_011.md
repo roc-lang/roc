@@ -8,7 +8,9 @@ type=file
 module P]F
 ~~~
 # EXPECTED
-NIL
+OverClosedBrace - fuzz_crash_011.md:1:9:1:9
+header_expected_open_square - fuzz_crash_011.md:1:8:1:11
+expected_colon_after_type_annotation - fuzz_crash_011.md:1:11:1:11
 # PROBLEMS
 **OVER CLOSED BRACE**
 There are too many closing braces here.

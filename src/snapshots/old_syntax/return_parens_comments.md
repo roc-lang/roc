@@ -11,7 +11,7 @@ return(3#
 Z
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - return_parens_comments.md:1:1:1:8
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **return(** is not expected in an expression.

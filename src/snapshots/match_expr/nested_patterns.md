@@ -13,32 +13,14 @@ match data {
 }
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - nested_patterns.md:1:7:1:11
+not_implemented - nested_patterns.md:2:17:2:48
+UNDEFINED VARIABLE - nested_patterns.md:2:53:2:54
+UNDEFINED VARIABLE - nested_patterns.md:2:57:2:65
+UNDEFINED VARIABLE - nested_patterns.md:2:66:2:70
+not_implemented - nested_patterns.md:3:17:3:28
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `data` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
-Let us know if you want to help!
-
-**UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `len` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `rest` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
-Let us know if you want to help!
-
+NIL
 # TOKENS
 ~~~zig
 KwMatch(1:1-1:6),LowerIdent(1:7-1:11),OpenCurly(1:12-1:13),Newline(1:1-1:1),

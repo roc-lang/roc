@@ -8,12 +8,9 @@ type=expr
 whee(12,  34)
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - apply_two_args_pnc.md:1:1:1:5
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `whee` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:5),NoSpaceOpenRound(1:5-1:6),Int(1:6-1:8),Comma(1:8-1:9),Int(1:11-1:13),CloseRound(1:13-1:14),EndOfFile(1:14-1:14),

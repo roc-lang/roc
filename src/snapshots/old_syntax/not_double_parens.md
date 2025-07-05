@@ -11,7 +11,7 @@ E)
 )
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - not_double_parens.md:1:1:1:1
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token  is not expected in an expression.

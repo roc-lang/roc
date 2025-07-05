@@ -9,7 +9,8 @@ type=expr
 ==(Q:c 42)
 ~~~
 # EXPECTED
-NIL
+expected_expr_close_round_or_comma - newline_before_operator_with_defs.md:2:10:2:11
+expr_not_canonicalized - newline_before_operator_with_defs.md:1:1:2:11
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_close_round_or_comma`
@@ -22,10 +23,6 @@ Here is the problematic code:
 ```
          ^
 
-
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
 
 # TOKENS
 ~~~zig

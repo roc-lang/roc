@@ -10,12 +10,9 @@ p
 .p!!
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - all_the_bangs.md:1:1:1:2
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `p` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),Newline(1:1-1:1),

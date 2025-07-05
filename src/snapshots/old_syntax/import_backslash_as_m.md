@@ -9,7 +9,7 @@ import"\\"as m
 e
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - import_backslash_as_m.md:1:1:1:8
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **import"** is not expected in an expression.

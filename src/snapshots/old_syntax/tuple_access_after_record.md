@@ -8,7 +8,7 @@ type=expr
 { a: (1, 2) }.a.0
 ~~~
 # EXPECTED
-NIL
+expr_no_space_dot_int - tuple_access_after_record.md:1:16:1:18
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expr_no_space_dot_int`

@@ -8,7 +8,7 @@ type=expr
 -whee  12 foo
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - apply_unary_negation.md:1:1:1:6
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **-whee** is not expected in an expression.

@@ -46,7 +46,14 @@ combineResults = |result1, result2|
     }
 ~~~
 # EXPECTED
-NIL
+expected_expr_apply_close_round - can_import_type_annotations.md:17:21:17:24
+UNEXPECTED TOKEN IN EXPRESSION - can_import_type_annotations.md:1:1:18:12
+UNDECLARED TYPE - can_import_type_annotations.md:7:18:7:25
+UNDECLARED TYPE - can_import_type_annotations.md:7:29:7:37
+UNUSED VARIABLE - can_import_type_annotations.md:8:19:8:22
+expr_not_canonicalized - can_import_type_annotations.md:17:21:17:42
+UNUSED VARIABLE - can_import_type_annotations.md:17:12:17:16
+expr_not_canonicalized - can_import_type_annotations.md:1:1:18:12
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_apply_close_round`
@@ -116,63 +123,6 @@ handleApi = |request| {
         Err(err) => Err(err)
 ```
 
-
-**UNDECLARED TYPE**
-The type ``Request`` is not declared in this scope.
-
-This type is referenced here:
-**can_import_type_annotations.md:7:18:7:25:**
-```roc
-processRequest : Request -> Response
-```
-                 ^^^^^^^
-
-
-**UNDECLARED TYPE**
-The type ``Response`` is not declared in this scope.
-
-This type is referenced here:
-**can_import_type_annotations.md:7:29:7:37:**
-```roc
-processRequest : Request -> Response
-```
-                            ^^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable ``req`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_req` to suppress this warning.
-The unused variable is declared here:
-**can_import_type_annotations.md:8:19:8:22:**
-```roc
-processRequest = |req| Http.defaultResponse
-```
-                  ^^^
-
-
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
-
-**UNUSED VARIABLE**
-Variable ``data`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_data` to suppress this warning.
-The unused variable is declared here:
-**can_import_type_annotations.md:17:12:17:16:**
-```roc
-        Ok(data) => Ok(Http.success data)
-```
-           ^^^^
-
-
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
-
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
 
 # TOKENS
 ~~~zig

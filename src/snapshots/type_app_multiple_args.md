@@ -13,12 +13,9 @@ processDict = |_dict| []
 main! = |_| processDict(Dict.empty().insert("one", 1))
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - type_app_multiple_args.md:6:25:6:35
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `empty` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),Newline(1:1-1:1),

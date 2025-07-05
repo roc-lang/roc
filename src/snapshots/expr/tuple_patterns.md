@@ -26,7 +26,25 @@ type=expr
 }
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - tuple_patterns.md:4:12:4:15
+UNEXPECTED TOKEN IN EXPRESSION - tuple_patterns.md:7:22:7:25
+UNEXPECTED TOKEN IN EXPRESSION - tuple_patterns.md:10:28:10:31
+UNEXPECTED TOKEN IN EXPRESSION - tuple_patterns.md:13:29:13:32
+UNEXPECTED TOKEN IN EXPRESSION - tuple_patterns.md:16:19:16:22
+UNDEFINED VARIABLE - tuple_patterns.md:4:6:4:7
+UNDEFINED VARIABLE - tuple_patterns.md:4:9:4:10
+UNDEFINED VARIABLE - tuple_patterns.md:7:7:7:8
+UNDEFINED VARIABLE - tuple_patterns.md:7:10:7:11
+UNDEFINED VARIABLE - tuple_patterns.md:7:15:7:16
+UNDEFINED VARIABLE - tuple_patterns.md:7:18:7:19
+UNDEFINED VARIABLE - tuple_patterns.md:10:6:10:11
+UNDEFINED VARIABLE - tuple_patterns.md:10:13:10:19
+UNDEFINED VARIABLE - tuple_patterns.md:10:21:10:26
+UNDEFINED VARIABLE - tuple_patterns.md:13:6:13:10
+UNDEFINED VARIABLE - tuple_patterns.md:13:12:13:18
+UNDEFINED VARIABLE - tuple_patterns.md:13:20:13:27
+UNDEFINED VARIABLE - tuple_patterns.md:16:6:16:10
+UNDEFINED VARIABLE - tuple_patterns.md:16:12:16:17
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **= (** is not expected in an expression.
@@ -87,62 +105,6 @@ Here is the problematic code:
 ```
                   ^^^
 
-
-**UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `y` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `a` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `b` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `c` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `d` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `first` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `second` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `third` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `name` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `string` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `boolean` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `list` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `hello` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig

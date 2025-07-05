@@ -8,7 +8,7 @@ type=file
 module
 ~~~
 # EXPECTED
-NIL
+header_expected_open_square - header_expected_open_bracket.md:1:7:1:7
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `header_expected_open_square`

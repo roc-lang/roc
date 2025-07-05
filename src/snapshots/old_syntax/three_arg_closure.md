@@ -8,7 +8,7 @@ type=expr
 \a, b, c -> 42
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - three_arg_closure.md:1:1:1:3
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **\a** is not expected in an expression.

@@ -12,44 +12,13 @@ match person {
 }
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - record_destructure.md:1:7:1:13
+UNUSED VARIABLE - record_destructure.md:2:13:2:18
+not_implemented - record_destructure.md:3:13:3:32
+UNDEFINED VARIABLE - record_destructure.md:3:36:3:40
+UNUSED VARIABLE - record_destructure.md:3:7:3:12
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `person` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNUSED VARIABLE**
-Variable ``age`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_age` to suppress this warning.
-The unused variable is declared here:
-**record_destructure.md:2:13:2:18:**
-```roc
-    { name, age } => name
-```
-            ^^^^^
-
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
-Let us know if you want to help!
-
-**UNDEFINED VARIABLE**
-Nothing is named `city` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNUSED VARIABLE**
-Variable ``name`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_name` to suppress this warning.
-The unused variable is declared here:
-**record_destructure.md:3:7:3:12:**
-```roc
-    { name, address: { city } } => city
-```
-      ^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwMatch(1:1-1:6),LowerIdent(1:7-1:13),OpenCurly(1:14-1:15),Newline(1:1-1:1),

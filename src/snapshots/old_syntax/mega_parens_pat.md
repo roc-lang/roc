@@ -11,7 +11,7 @@ type=expr
 e
 ~~~
 # EXPECTED
-NIL
+expected_expr_apply_close_round - mega_parens_pat.md:1:1:1:3
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_apply_close_round`

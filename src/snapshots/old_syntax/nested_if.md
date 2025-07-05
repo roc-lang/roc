@@ -13,7 +13,6 @@ else
   3
 ~~~
 # EXPECTED
-NIL
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `no_else`

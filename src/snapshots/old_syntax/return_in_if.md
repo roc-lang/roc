@@ -17,12 +17,9 @@ maybeEarlyReturn = \x ->
 maybeEarlyReturn 10
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - return_in_if.md:1:1:1:17
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `maybeEarlyReturn` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:17),OpAssign(1:18-1:19),OpBackslash(1:20-1:21),LowerIdent(1:21-1:22),OpArrow(1:23-1:25),Newline(1:1-1:1),

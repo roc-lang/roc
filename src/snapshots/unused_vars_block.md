@@ -26,32 +26,10 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-NIL
+UNUSED VARIABLE - unused_vars_block.md:5:5:5:15
+UNUSED VARIABLE - unused_vars_block.md:11:5:11:19
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable ``unused_var`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_unused_var` to suppress this warning.
-The unused variable is declared here:
-**unused_vars_block.md:5:5:5:15:**
-```roc
-    unused_var = 42
-```
-    ^^^^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable ``another_unused`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_another_unused` to suppress this warning.
-The unused variable is declared here:
-**unused_vars_block.md:11:5:11:19:**
-```roc
-    another_unused = "hello"
-```
-    ^^^^^^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),Newline(1:1-1:1),

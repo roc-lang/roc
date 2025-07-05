@@ -14,12 +14,9 @@ match sequence {
 }
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - list_mixed_literals.md:1:7:1:15
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `sequence` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 KwMatch(1:1-1:6),LowerIdent(1:7-1:15),OpenCurly(1:16-1:17),Newline(1:1-1:1),

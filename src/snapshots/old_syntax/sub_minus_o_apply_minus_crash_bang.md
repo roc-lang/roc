@@ -9,7 +9,9 @@ h-
 -o -crash!
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - sub_minus_o_apply_minus_crash_bang.md:2:1:2:3
+UNDEFINED VARIABLE - sub_minus_o_apply_minus_crash_bang.md:1:1:1:2
+expr_not_canonicalized - sub_minus_o_apply_minus_crash_bang.md:1:1:2:3
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **-o** is not expected in an expression.
@@ -22,14 +24,6 @@ Here is the problematic code:
 ```
 ^^
 
-
-**UNDEFINED VARIABLE**
-Nothing is named `h` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
 
 # TOKENS
 ~~~zig

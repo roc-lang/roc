@@ -26,44 +26,11 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-NIL
+UNUSED VARIABLE - rigid_var_instantiation.md:13:5:13:8
+UNUSED VARIABLE - rigid_var_instantiation.md:10:5:10:8
+UNUSED VARIABLE - rigid_var_instantiation.md:16:5:16:8
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable ``str`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_str` to suppress this warning.
-The unused variable is declared here:
-**rigid_var_instantiation.md:13:5:13:8:**
-```roc
-    str = identity("hello")
-```
-    ^^^
-
-
-**UNUSED VARIABLE**
-Variable ``num`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_num` to suppress this warning.
-The unused variable is declared here:
-**rigid_var_instantiation.md:10:5:10:8:**
-```roc
-    num = identity(42)
-```
-    ^^^
-
-
-**UNUSED VARIABLE**
-Variable ``lst`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_lst` to suppress this warning.
-The unused variable is declared here:
-**rigid_var_instantiation.md:16:5:16:8:**
-```roc
-    lst = identity([1, 2, 3])
-```
-    ^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:54),StringEnd(1:54-1:55),CloseCurly(1:56-1:57),Newline(1:1-1:1),

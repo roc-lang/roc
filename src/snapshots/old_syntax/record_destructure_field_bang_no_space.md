@@ -10,16 +10,10 @@ type=expr
 launchTheNukes! code
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - record_destructure_field_bang_no_space.md:1:2:1:23
+UNDEFINED VARIABLE - record_destructure_field_bang_no_space.md:1:24:1:29
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `launchTheNukes!wrong` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `code` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 OpenCurly(1:1-1:2),LowerIdent(1:2-1:22),Comma(1:22-1:23),LowerIdent(1:24-1:28),CloseCurly(1:28-1:29),OpAssign(1:30-1:31),LowerIdent(1:32-1:38),Newline(1:1-1:1),

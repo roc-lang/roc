@@ -9,7 +9,7 @@ type=expr
 it {}
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - opaque_destructure_first_item_in_body.md:1:1:1:10
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **@Thunk it** is not expected in an expression.

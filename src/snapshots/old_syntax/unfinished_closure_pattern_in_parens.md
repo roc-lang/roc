@@ -9,12 +9,9 @@ x = \( a
 )
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - unfinished_closure_pattern_in_parens.md:1:1:1:2
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpAssign(1:3-1:4),OpBackslash(1:5-1:6),NoSpaceOpenRound(1:6-1:7),LowerIdent(1:8-1:9),Newline(1:1-1:1),

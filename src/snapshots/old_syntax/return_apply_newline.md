@@ -10,7 +10,7 @@ return
  r#
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - return_apply_newline.md:1:1:1:1
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token  is not expected in an expression.

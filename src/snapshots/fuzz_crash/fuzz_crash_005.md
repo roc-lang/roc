@@ -8,7 +8,7 @@ type=file
 modu
 ~~~
 # EXPECTED
-NIL
+missing_header - fuzz_crash_005.md:1:1:1:5
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.

@@ -11,7 +11,8 @@ type=file
 0_
 ~~~
 # EXPECTED
-NIL
+LeadingZero - fuzz_crash_015.md:2:3:2:3
+missing_header - fuzz_crash_015.md:1:1:1:6
 # PROBLEMS
 **LEADING ZERO**
 Numbers cannot have leading zeros.
@@ -55,22 +56,6 @@ Here is the problematic code:
 ```
    
 
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
 ~~~zig

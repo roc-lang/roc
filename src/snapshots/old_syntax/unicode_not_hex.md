@@ -8,7 +8,7 @@ type=expr
 "abc\u(zzzz)def"
 ~~~
 # EXPECTED
-NIL
+InvalidUnicodeEscapeSequence - unicode_not_hex.md:1:8:1:8
 # PROBLEMS
 **INVALID UNICODE ESCAPE SEQUENCE**
 This Unicode escape sequence is not valid.

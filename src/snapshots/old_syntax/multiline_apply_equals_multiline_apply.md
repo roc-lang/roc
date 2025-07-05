@@ -13,7 +13,7 @@ MT
 dbgT
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - multiline_apply_equals_multiline_apply.md:1:1:2:3
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **

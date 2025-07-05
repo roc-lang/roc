@@ -11,7 +11,7 @@ return
  r
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - return_empty_assign.md:1:1:1:1
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token  is not expected in an expression.

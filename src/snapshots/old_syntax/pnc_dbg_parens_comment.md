@@ -10,12 +10,9 @@ type=expr
 e
 ~~~
 # EXPECTED
-NIL
+not_implemented - pnc_dbg_parens_comment.md:1:1:1:1
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
-Let us know if you want to help!
-
+NIL
 # TOKENS
 ~~~zig
 OpenRound(1:1-1:2),KwDbg(1:2-1:5),NoSpaceOpenRound(1:5-1:6),Int(1:6-1:7),Newline(1:8-1:8),

@@ -8,7 +8,9 @@ type=file
 ff8.8.d
 ~~~
 # EXPECTED
-NIL
+missing_header - fuzz_crash_007.md:1:1:1:6
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_007.md:1:4:1:8
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_007.md:1:6:1:8
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.
@@ -49,14 +51,6 @@ ff8.8.d
 ```
      ^^
 
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
 ~~~zig

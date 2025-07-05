@@ -10,7 +10,12 @@ Fli/main.roc" }
 Pair(a, b+ : (
 ~~~
 # EXPECTED
-NIL
+UnclosedString - fuzz_crash_021.md:1:14:1:16
+missing_header - fuzz_crash_021.md:1:1:1:5
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_021.md:1:4:1:9
+expected_ty_anno_end - fuzz_crash_021.md:3:1:3:6
+expected_ty_anno_end - fuzz_crash_021.md:3:15:3:15
+MALFORMED TYPE - fuzz_crash_021.md:3:14:3:15
 # PROBLEMS
 **UNCLOSED STRING**
 This string is missing a closing quote.
@@ -66,21 +71,6 @@ Pair(a, b+ : (
 ```
               
 
-
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
 ~~~zig

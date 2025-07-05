@@ -11,12 +11,9 @@ f = 0
 f
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - type_argument_no_arrow.md:1:1:1:2
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `f` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpColon(1:3-1:4),UpperIdent(1:5-1:8),Comma(1:8-1:9),UpperIdent(1:10-1:13),Newline(1:1-1:1),

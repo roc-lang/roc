@@ -11,7 +11,7 @@ type=expr
  K#(
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - closure_complex_pattern_indent_issue.md:1:1:1:3
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **\I** is not expected in an expression.

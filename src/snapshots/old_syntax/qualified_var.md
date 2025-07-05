@@ -8,12 +8,9 @@ type=expr
 One.Two.whee
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - qualified_var.md:1:1:1:13
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `whee` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent(1:1-1:4),NoSpaceDotUpperIdent(1:4-1:8),NoSpaceDotLowerIdent(1:8-1:13),EndOfFile(1:13-1:13),

@@ -11,12 +11,9 @@ x = 1
 42
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - newline_and_spaces_before_less_than.md:1:1:1:2
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpAssign(1:3-1:4),Int(1:5-1:6),Newline(1:1-1:1),

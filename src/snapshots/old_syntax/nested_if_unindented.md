@@ -9,7 +9,11 @@ if""then-p else
 if""then-p else.e
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - nested_if_unindented.md:2:16:2:18
+UNDEFINED VARIABLE - nested_if_unindented.md:1:5:1:9
+UNDEFINED VARIABLE - nested_if_unindented.md:1:10:1:11
+UNDEFINED VARIABLE - nested_if_unindented.md:2:5:2:9
+UNDEFINED VARIABLE - nested_if_unindented.md:2:10:2:11
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **.e** is not expected in an expression.
@@ -22,29 +26,6 @@ if""then-p else.e
 ```
                ^^
 
-
-**UNDEFINED VARIABLE**
-Nothing is named `then` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `p` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `then` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `p` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**INVALID IF BRANCH**
-The `else` branch of this `if` expression could not be processed.
-
-The `else` branch must contain a valid expression. Check for syntax errors or missing values.
-
-Note: Every `if` expression in Roc must have an `else` branch, and both branches must have the same type.
 
 **INVALID IF CONDITION**
 This `if` condition needs to be a _Bool_:

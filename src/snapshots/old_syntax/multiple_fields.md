@@ -8,12 +8,9 @@ type=expr
 rec.abc.def.ghi
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - multiple_fields.md:1:1:1:4
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `rec` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:4),NoSpaceDotLowerIdent(1:4-1:8),NoSpaceDotLowerIdent(1:8-1:12),NoSpaceDotLowerIdent(1:12-1:16),EndOfFile(1:16-1:16),

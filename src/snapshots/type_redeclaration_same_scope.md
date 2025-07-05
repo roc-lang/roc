@@ -11,26 +11,9 @@ Maybe(a) : [Some(a), None]
 Maybe(a) : [Ok(a), Err]
 ~~~
 # EXPECTED
-NIL
+TYPE REDECLARED - type_redeclaration_same_scope.md:4:1:4:24
 # PROBLEMS
-**TYPE REDECLARED**
-The type ``Maybe`` is being redeclared.
-
-The redeclaration is here:
-**type_redeclaration_same_scope.md:4:1:4:24:**
-```roc
-Maybe(a) : [Ok(a), Err]
-```
-^^^^^^^^^^^^^^^^^^^^^^^
-
-But ``Maybe`` was already declared here:
-**type_redeclaration_same_scope.md:3:1:3:27:**
-```roc
-Maybe(a) : [Some(a), None]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:14),CloseSquare(1:14-1:15),Newline(1:1-1:1),

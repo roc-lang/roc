@@ -8,12 +8,9 @@ type=expr
 Str.toU64 "123"|> try
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - try_pipe_suffix.md:1:1:1:10
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `toU64` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent(1:1-1:4),NoSpaceDotLowerIdent(1:4-1:10),StringStart(1:11-1:12),StringPart(1:12-1:15),StringEnd(1:15-1:16),OpPizza(1:16-1:18),LowerIdent(1:19-1:22),EndOfFile(1:22-1:22),

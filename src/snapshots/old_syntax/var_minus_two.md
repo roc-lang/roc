@@ -8,12 +8,9 @@ type=expr
 x-2
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - var_minus_two.md:1:1:1:2
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpBinaryMinus(1:2-1:3),Int(1:3-1:4),EndOfFile(1:4-1:4),

@@ -32,32 +32,10 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-NIL
+UNUSED VARIABLE - lambda_parameter_unused.md:5:8:5:14
+used_underscore_variable - lambda_parameter_unused.md:9:22:9:29
 # PROBLEMS
-**UNUSED VARIABLE**
-Variable ``unused`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_unused` to suppress this warning.
-The unused variable is declared here:
-**lambda_parameter_unused.md:5:8:5:14:**
-```roc
-add = |unused| 42
-```
-       ^^^^^^
-
-
-**UNDERSCORE VARIABLE USED**
-Variable ``_factor`` is prefixed with an underscore but is actually used.
-
-Variables prefixed with `_` are intended to be unused. Remove the underscore prefix: `factor`.
-The underscore variable is declared here:
-**lambda_parameter_unused.md:9:22:9:29:**
-```roc
-multiply = |_factor| _factor * 2
-```
-                     ^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),Newline(1:1-1:1),

@@ -8,12 +8,9 @@ type=expr
 f : [lowercase]
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - tag_union_lowercase_tag_name.md:1:1:1:2
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `f` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpColon(1:3-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:15),CloseSquare(1:15-1:16),EndOfFile(1:16-1:16),

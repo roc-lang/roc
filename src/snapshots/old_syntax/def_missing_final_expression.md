@@ -8,12 +8,9 @@ type=expr
 f : Foo.foo
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - def_missing_final_expression.md:1:1:1:2
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `f` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpColon(1:3-1:4),UpperIdent(1:5-1:8),NoSpaceDotLowerIdent(1:8-1:12),EndOfFile(1:12-1:12),

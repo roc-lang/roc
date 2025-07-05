@@ -8,12 +8,9 @@ type=expr
 rec.field
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - basic_field.md:1:1:1:4
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `rec` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:4),NoSpaceDotLowerIdent(1:4-1:10),EndOfFile(1:10-1:10),

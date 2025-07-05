@@ -9,7 +9,7 @@ type=expr
 i
 ~~~
 # EXPECTED
-NIL
+expected_expr_close_round_or_comma - nested_parens_in_pattern.md:1:6:1:8
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_close_round_or_comma`

@@ -13,7 +13,7 @@ apply = |fn, x| fn(x)
 main! = |_| {}
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - type_function_basic.md:3:17:3:20
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **, a** is not expected in an expression.
@@ -26,14 +26,6 @@ apply : (a -> b), a -> b
 ```
                 ^^^
 
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
 ~~~zig

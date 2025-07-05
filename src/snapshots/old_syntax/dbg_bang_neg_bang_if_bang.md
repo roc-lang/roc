@@ -8,7 +8,9 @@ type=expr
 dbg!-!if!
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - dbg_bang_neg_bang_if_bang.md:1:6:1:10
+UNDEFINED VARIABLE - dbg_bang_neg_bang_if_bang.md:1:1:1:5
+expr_not_canonicalized - dbg_bang_neg_bang_if_bang.md:1:1:1:10
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **!if!** is not expected in an expression.
@@ -21,14 +23,6 @@ dbg!-!if!
 ```
      ^^^^
 
-
-**UNDEFINED VARIABLE**
-Nothing is named `dbg!` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
 
 # TOKENS
 ~~~zig

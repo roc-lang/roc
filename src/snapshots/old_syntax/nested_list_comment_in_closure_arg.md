@@ -10,7 +10,7 @@ O#
 ,i]]->i
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - nested_list_comment_in_closure_arg.md:1:1:1:3
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **\I** is not expected in an expression.

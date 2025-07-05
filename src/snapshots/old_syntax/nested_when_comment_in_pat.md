@@ -11,12 +11,9 @@ O#
 1->O
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - nested_when_comment_in_pat.md:1:1:1:5
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `when` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:5),Int(1:6-1:7),LowerIdent(1:8-1:10),Newline(1:1-1:1),

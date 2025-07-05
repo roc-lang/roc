@@ -8,12 +8,9 @@ type=expr
 x - 2
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - sub_var_with_spaces.md:1:1:1:2
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpBinaryMinus(1:3-1:4),Int(1:5-1:6),EndOfFile(1:6-1:6),

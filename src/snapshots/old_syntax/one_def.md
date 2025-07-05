@@ -11,7 +11,7 @@ x=5
 42
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - one_def.md:1:2:2:2
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token ** leading comment

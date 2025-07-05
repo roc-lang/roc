@@ -8,7 +8,11 @@ type=file
 { name, age, email } = person
 ~~~
 # EXPECTED
-NIL
+missing_header - statement_record_destructure.md:1:1:1:7
+UNEXPECTED TOKEN IN EXPRESSION - statement_record_destructure.md:1:7:1:12
+UNEXPECTED TOKEN IN EXPRESSION - statement_record_destructure.md:1:12:1:19
+UNEXPECTED TOKEN IN EXPRESSION - statement_record_destructure.md:1:20:1:23
+UNEXPECTED TOKEN IN EXPRESSION - statement_record_destructure.md:1:22:1:30
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.
@@ -73,38 +77,6 @@ Here is the problematic code:
 ```
                      ^^^^^^^^
 
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
 ~~~zig

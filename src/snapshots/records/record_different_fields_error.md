@@ -15,7 +15,27 @@ type=expr
 }
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN TYPE ANNOTATION - record_different_fields_error.md:2:20:2:39
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:2:21:2:40
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:2:39:2:41
+UNEXPECTED TOKEN IN TYPE ANNOTATION - record_different_fields_error.md:3:13:3:33
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:3:14:3:34
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:3:33:3:35
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:4:15:4:18
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:5:15:5:18
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:6:10:6:18
+UNEXPECTED TOKEN IN TYPE ANNOTATION - record_different_fields_error.md:6:20:6:27
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:6:21:6:28
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:6:27:6:29
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:7:10:7:18
+UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:7:17:7:20
+MALFORMED TYPE - record_different_fields_error.md:2:20:2:39
+MALFORMED TYPE - record_different_fields_error.md:3:13:3:33
+UNDEFINED VARIABLE - record_different_fields_error.md:5:5:5:10
+UNDEFINED VARIABLE - record_different_fields_error.md:5:11:5:15
+UNDEFINED VARIABLE - record_different_fields_error.md:6:5:6:10
+MALFORMED TYPE - record_different_fields_error.md:6:20:6:27
+UNDEFINED VARIABLE - record_different_fields_error.md:7:5:7:10
 # PROBLEMS
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
 The token **"leading underscore** is not expected in a type annotation.
@@ -256,31 +276,6 @@ Here is the problematic code:
 ```
                              
 
-
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
-
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
-
-**UNDEFINED VARIABLE**
-Nothing is named `kebab` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `case` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `field` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
-
-**UNDEFINED VARIABLE**
-Nothing is named `field` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig

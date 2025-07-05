@@ -10,7 +10,7 @@ import P{_:h
 t!
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - can_ignored_field_in_import.md:1:1:1:9
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **import P** is not expected in an expression.

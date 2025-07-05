@@ -10,20 +10,11 @@ di<s<when b
  zl
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - when_in_binops.md:1:1:1:3
+UNDEFINED VARIABLE - when_in_binops.md:1:4:1:5
+UNDEFINED VARIABLE - when_in_binops.md:1:6:1:10
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `di` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `s` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `when` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:3),OpLessThan(1:3-1:4),LowerIdent(1:4-1:5),OpLessThan(1:5-1:6),LowerIdent(1:6-1:10),LowerIdent(1:11-1:12),Newline(1:1-1:1),

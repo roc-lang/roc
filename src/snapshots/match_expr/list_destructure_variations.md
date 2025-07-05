@@ -15,48 +15,12 @@ match list {
 }
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - list_destructure_variations.md:1:7:1:11
+UNUSED VARIABLE - list_destructure_variations.md:5:18:5:22
+UNUSED VARIABLE - list_destructure_variations.md:6:22:6:26
+UNUSED VARIABLE - list_destructure_variations.md:7:21:7:25
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `list` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNUSED VARIABLE**
-Variable ``tail`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_tail` to suppress this warning.
-The unused variable is declared here:
-**list_destructure_variations.md:5:18:5:22:**
-```roc
-    [head, .. as tail] => head
-```
-                 ^^^^
-
-
-**UNUSED VARIABLE**
-Variable ``rest`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-The unused variable is declared here:
-**list_destructure_variations.md:6:22:6:26:**
-```roc
-    [One, Two, .. as rest] => 3
-```
-                     ^^^^
-
-
-**UNUSED VARIABLE**
-Variable ``more`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_more` to suppress this warning.
-The unused variable is declared here:
-**list_destructure_variations.md:7:21:7:25:**
-```roc
-    [x, y, z, .. as more] => x + y + z
-```
-                    ^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwMatch(1:1-1:6),LowerIdent(1:7-1:11),OpenCurly(1:12-1:13),Newline(1:1-1:1),

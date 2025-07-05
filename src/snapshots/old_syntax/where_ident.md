@@ -11,7 +11,7 @@ where = {where: 1}
 where.where
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - where_ident.md:1:1:1:8
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **where :** is not expected in an expression.

@@ -9,7 +9,7 @@ type=expr
 I
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - implements_record_destructure.md:1:2:1:13
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **implements}** is not expected in an expression.

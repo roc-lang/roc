@@ -12,7 +12,10 @@ match x {
 }
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN PATTERN - f64_pattern_literal_error.md:2:5:2:15
+UNEXPECTED TOKEN IN PATTERN - f64_pattern_literal_error.md:3:5:3:14
+UNDEFINED VARIABLE - f64_pattern_literal_error.md:1:7:1:8
+UNUSED VARIABLE - f64_pattern_literal_error.md:4:5:4:10
 # PROBLEMS
 **UNEXPECTED TOKEN IN PATTERN**
 The token **3.14f64 =>** is not expected in a pattern.
@@ -36,28 +39,6 @@ Here is the problematic code:
     0.0f64 => "zero"
 ```
     ^^^^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
-
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
-
-**UNUSED VARIABLE**
-Variable ``value`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_value` to suppress this warning.
-The unused variable is declared here:
-**f64_pattern_literal_error.md:4:5:4:10:**
-```roc
-    value => "other"
-```
-    ^^^^^
 
 
 # TOKENS

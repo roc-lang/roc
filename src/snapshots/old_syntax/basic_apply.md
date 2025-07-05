@@ -8,12 +8,9 @@ type=expr
 whee 1
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - basic_apply.md:1:1:1:5
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `whee` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:5),Int(1:6-1:7),EndOfFile(1:7-1:7),

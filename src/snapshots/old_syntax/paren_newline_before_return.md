@@ -11,12 +11,9 @@ type=expr
 return u
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - paren_newline_before_return.md:1:2:1:3
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `i` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 OpenRound(1:1-1:2),LowerIdent(1:2-1:3),Newline(1:1-1:1),

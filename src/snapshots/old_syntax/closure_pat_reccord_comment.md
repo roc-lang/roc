@@ -9,7 +9,7 @@ type=expr
 ,e}->a
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - closure_pat_reccord_comment.md:1:1:1:3
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **\{** is not expected in an expression.

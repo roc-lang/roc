@@ -9,12 +9,9 @@ type=expr
 )
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - comment_after_expr_in_parens.md:1:2:1:3
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `i` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 OpenRound(1:1-1:2),LowerIdent(1:2-1:3),Newline(1:4-1:7),

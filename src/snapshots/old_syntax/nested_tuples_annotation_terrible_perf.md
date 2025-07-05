@@ -8,7 +8,7 @@ type=expr
 .:(i,i,(i,(i,ii,(i,(i,(i,i,(i,(i,i,(i,(J(i,(i,(i,(i,(i,i,(i,(i,i,(i,(i,(i,(J[]
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - nested_tuples_annotation_terrible_perf.md:1:1:1:3
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **.:** is not expected in an expression.

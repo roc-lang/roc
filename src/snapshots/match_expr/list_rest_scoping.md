@@ -12,7 +12,13 @@ match items {
 }
 ~~~
 # EXPECTED
-NIL
+pattern_list_rest_old_syntax - list_rest_scoping.md:2:13:2:19
+pattern_list_rest_old_syntax - list_rest_scoping.md:3:6:3:12
+pattern_list_rest_old_syntax - list_rest_scoping.md:4:9:4:15
+UNDEFINED VARIABLE - list_rest_scoping.md:1:7:1:12
+UNUSED VARIABLE - list_rest_scoping.md:2:15:2:19
+UNUSED VARIABLE - list_rest_scoping.md:3:8:3:12
+UNUSED VARIABLE - list_rest_scoping.md:4:11:4:15
 # PROBLEMS
 **BAD LIST REST PATTERN SYNTAX**
 List rest patterns should use the `.. as name` syntax, not `..name`.
@@ -48,46 +54,6 @@ Here is the problematic code:
     [x, ..rest, y] => x + y
 ```
         ^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `items` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNUSED VARIABLE**
-Variable ``rest`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-The unused variable is declared here:
-**list_rest_scoping.md:2:15:2:19:**
-```roc
-    [first, ..rest] => first + 1
-```
-              ^^^^
-
-
-**UNUSED VARIABLE**
-Variable ``rest`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-The unused variable is declared here:
-**list_rest_scoping.md:3:8:3:12:**
-```roc
-    [..rest, last] => last + 2
-```
-       ^^^^
-
-
-**UNUSED VARIABLE**
-Variable ``rest`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-The unused variable is declared here:
-**list_rest_scoping.md:4:11:4:15:**
-```roc
-    [x, ..rest, y] => x + y
-```
-          ^^^^
 
 
 # TOKENS

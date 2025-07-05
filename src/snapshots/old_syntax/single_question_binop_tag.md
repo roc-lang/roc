@@ -8,20 +8,11 @@ type=expr
 fallible!(args)   ? WrapOverErr
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - single_question_binop_tag.md:1:1:1:10
+UNDEFINED VARIABLE - single_question_binop_tag.md:1:11:1:15
+not_implemented - single_question_binop_tag.md:1:1:1:32
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `fallible!` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `args` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: binop
-Let us know if you want to help!
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:10),NoSpaceOpenRound(1:10-1:11),LowerIdent(1:11-1:15),CloseRound(1:15-1:16),OpQuestion(1:19-1:20),UpperIdent(1:21-1:32),EndOfFile(1:32-1:32),

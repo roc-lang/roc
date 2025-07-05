@@ -10,16 +10,9 @@ type=expr
 n
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - pattern_comma_newlines.md:1:3:1:4
+UNDEFINED VARIABLE - pattern_comma_newlines.md:1:5:1:6
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `i` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `p` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
 **pattern_comma_newlines.md:1:1:1:2:**

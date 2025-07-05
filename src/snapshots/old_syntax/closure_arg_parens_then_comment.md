@@ -8,7 +8,7 @@ type=expr
 \(8)->T#
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - closure_arg_parens_then_comment.md:1:1:1:3
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **\(** is not expected in an expression.

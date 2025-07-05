@@ -11,12 +11,9 @@ f = 0
 f
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - type_double_comma.md:1:1:1:2
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `f` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpColon(1:3-1:4),UpperIdent(1:5-1:8),Comma(1:8-1:9),Comma(1:9-1:10),UpperIdent(1:10-1:13),OpArrow(1:14-1:16),UpperIdent(1:17-1:20),Newline(1:1-1:1),

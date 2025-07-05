@@ -8,12 +8,9 @@ type=expr
 '\u(FFFFFFFFF)'
 ~~~
 # EXPECTED
-NIL
+too_long_single_quote - str_over_large_unicode_escape.md:1:1:1:16
 # PROBLEMS
-**INVALID SCALAR**
-I am part way through parsing this scalar literal (character literal), but it contains more than one character.
-A single-quoted literal must contain exactly one character, e.g. 'a'.
-
+NIL
 # TOKENS
 ~~~zig
 SingleQuote(1:1-1:16),EndOfFile(1:16-1:16),

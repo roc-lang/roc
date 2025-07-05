@@ -9,7 +9,12 @@ type=expr
 }
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:1:15:1:19
+UNEXPECTED TOKEN IN TYPE ANNOTATION - record_builder.md:1:21:1:23
+UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:1:22:1:25
+UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:1:1:2:2
+UNDEFINED VARIABLE - record_builder.md:1:3:1:14
+MALFORMED TYPE - record_builder.md:1:21:1:23
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **<- x** is not expected in an expression.
@@ -71,16 +76,6 @@ Here is the problematic code:
 }
 ```
 
-
-**UNDEFINED VARIABLE**
-Nothing is named `baz` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
-
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
 
 # TOKENS
 ~~~zig

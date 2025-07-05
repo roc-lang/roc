@@ -22,52 +22,12 @@ MyType : U64
 MyType2 : Module.Thingy
 ~~~
 # EXPECTED
-NIL
+UNDECLARED TYPE - type_declarations.md:5:8:5:11
+UNDECLARED TYPE - type_declarations.md:5:13:5:16
+UNDECLARED TYPE - type_declarations.md:7:19:7:21
+UNDECLARED TYPE - type_declarations.md:7:32:7:41
 # PROBLEMS
-**UNDECLARED TYPE**
-The type ``Bar`` is not declared in this scope.
-
-This type is referenced here:
-**type_declarations.md:5:8:5:11:**
-```roc
-Foo : (Bar, Baz)
-```
-       ^^^
-
-
-**UNDECLARED TYPE**
-The type ``Baz`` is not declared in this scope.
-
-This type is referenced here:
-**type_declarations.md:5:13:5:16:**
-```roc
-Foo : (Bar, Baz)
-```
-            ^^^
-
-
-**UNDECLARED TYPE**
-The type ``Ok`` is not declared in this scope.
-
-This type is referenced here:
-**type_declarations.md:7:19:7:21:**
-```roc
-Some(a) : { foo : Ok(a), bar : Something }
-```
-                  ^^
-
-
-**UNDECLARED TYPE**
-The type ``Something`` is not declared in this scope.
-
-This type is referenced here:
-**type_declarations.md:7:32:7:41:**
-```roc
-Some(a) : { foo : Ok(a), bar : Something }
-```
-                               ^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:12),Comma(1:12-1:13),UpperIdent(1:14-1:17),Comma(1:17-1:18),UpperIdent(1:19-1:23),Comma(1:23-1:24),UpperIdent(1:25-1:30),Comma(1:30-1:31),UpperIdent(1:32-1:40),Comma(1:40-1:41),LowerIdent(1:42-1:49),Comma(1:49-1:50),LowerIdent(1:51-1:56),CloseSquare(1:56-1:57),Newline(1:1-1:1),

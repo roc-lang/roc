@@ -19,7 +19,9 @@ green : Color
 green = Green
 ~~~
 # EXPECTED
-NIL
+UNDECLARED TYPE - nominal_import_wildcard.md:5:7:5:12
+UNDECLARED TYPE - nominal_import_wildcard.md:8:8:8:13
+UNDECLARED TYPE - nominal_import_wildcard.md:11:9:11:14
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token  is not expected in an expression.
@@ -31,43 +33,6 @@ Here is the problematic code:
 import Color.*
 ```
             
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**UNDECLARED TYPE**
-The type ``Color`` is not declared in this scope.
-
-This type is referenced here:
-**nominal_import_wildcard.md:5:7:5:12:**
-```roc
-red : Color
-```
-      ^^^^^
-
-
-**UNDECLARED TYPE**
-The type ``Color`` is not declared in this scope.
-
-This type is referenced here:
-**nominal_import_wildcard.md:8:8:8:13:**
-```roc
-blue : Color
-```
-       ^^^^^
-
-
-**UNDECLARED TYPE**
-The type ``Color`` is not declared in this scope.
-
-This type is referenced here:
-**nominal_import_wildcard.md:11:9:11:14:**
-```roc
-green : Color
-```
-        ^^^^^
 
 
 # TOKENS

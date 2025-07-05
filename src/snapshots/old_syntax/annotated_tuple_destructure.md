@@ -11,16 +11,10 @@ type=expr
 x
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - annotated_tuple_destructure.md:1:3:1:4
+UNDEFINED VARIABLE - annotated_tuple_destructure.md:1:6:1:7
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `y` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 OpenRound(1:1-1:2),LowerIdent(1:3-1:4),Comma(1:4-1:5),LowerIdent(1:6-1:7),CloseRound(1:8-1:9),OpColon(1:10-1:11),UpperIdent(1:12-1:15),Newline(1:1-1:1),

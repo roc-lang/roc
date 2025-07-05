@@ -781,7 +781,7 @@ fn generateSourceSection(output: *DualOutput, content: *const Content) !void {
 }
 
 /// Generate EXPECTED section for both markdown and HTML
-fn generateExpectedSection(output: *DualOutput, content: *const Content) !void {
+fn generateExpectedSection(output: *DualOutput, parse_ast: *AST, can_ir: *CIR, _: *Solver, snapshot_path: []const u8, source: []const u8, module_env: *base.ModuleEnv) !void {
     try output.begin_section("EXPECTED");
 
     // HTML EXPECTED section
@@ -789,24 +789,205 @@ fn generateExpectedSection(output: *DualOutput, content: *const Content) !void {
         \\                <div class="expected">
     );
 
-    if (content.expected) |expected| {
-        try output.md_writer.writeAll(expected);
-        try output.md_writer.writeByte('\n');
+    var has_problems = false;
 
-        // For HTML, escape the expected content
-        for (expected) |char| {
-            switch (char) {
-                '<' => try output.html_writer.writeAll("&lt;"),
-                '>' => try output.html_writer.writeAll("&gt;"),
-                '&' => try output.html_writer.writeAll("&amp;"),
-                '"' => try output.html_writer.writeAll("&quot;"),
-                '\'' => try output.html_writer.writeAll("&#39;"),
-                else => try output.html_writer.writeByte(char),
-            }
-        }
-    } else {
+    // Extract basename from snapshot_path for location reporting
+    const basename = std.fs.path.basename(snapshot_path);
+
+    // Check for tokenize diagnostics
+    for (parse_ast.tokenize_diagnostics.items) |diagnostic| {
+        has_problems = true;
+        const region = diagnostic.region;
+        const info = module_env.calcRegionInfo(source, region.start.offset, region.end.offset) catch |err| {
+            std.log.warn("Failed to calculate region info for tokenize diagnostic: {}", .{err});
+            continue;
+        };
+        try output.md_writer.print("{s} - {s}:{d}:{d}:{d}:{d}\n", .{
+            @tagName(diagnostic.tag),
+            basename,
+            info.start_line_idx + 1,
+            info.start_col_idx + 1,
+            info.end_line_idx + 1,
+            info.end_col_idx + 1,
+        });
+    }
+
+    // Check for parser diagnostics
+    for (parse_ast.parse_diagnostics.items) |diagnostic| {
+        has_problems = true;
+        const region = parse_ast.tokenizedRegionToRegion(diagnostic.region);
+        const info = module_env.calcRegionInfo(source, region.start.offset, region.end.offset) catch |err| {
+            std.log.warn("Failed to calculate region info for parse diagnostic: {}", .{err});
+            continue;
+        };
+        const problem_name = switch (diagnostic.tag) {
+            .expr_unexpected_token => "UNEXPECTED TOKEN IN EXPRESSION",
+            .pattern_unexpected_token => "UNEXPECTED TOKEN IN PATTERN",
+            .ty_anno_unexpected_token => "UNEXPECTED TOKEN IN TYPE ANNOTATION",
+            else => @tagName(diagnostic.tag),
+        };
+        try output.md_writer.print("{s} - {s}:{d}:{d}:{d}:{d}\n", .{
+            problem_name,
+            basename,
+            info.start_line_idx + 1,
+            info.start_col_idx + 1,
+            info.end_line_idx + 1,
+            info.end_col_idx + 1,
+        });
+    }
+
+    // Check for canonicalization diagnostics
+    const diagnostics = can_ir.getDiagnostics();
+    defer output.gpa.free(diagnostics);
+    for (diagnostics) |diagnostic| {
+        // Extract region from the union
+        const region = switch (diagnostic) {
+            .not_implemented => |d| d.region,
+            .invalid_num_literal => |d| d.region,
+            .invalid_single_quote => |d| d.region,
+            .too_long_single_quote => |d| d.region,
+            .empty_single_quote => |d| d.region,
+            .empty_tuple => |d| d.region,
+            .ident_already_in_scope => |d| d.region,
+            .ident_not_in_scope => |d| d.region,
+            .expr_not_canonicalized => |d| d.region,
+            .invalid_string_interpolation => |d| d.region,
+            .type_redeclared => |d| d.redeclared_region,
+            .undeclared_type => |d| d.region,
+            .undeclared_type_var => |d| d.region,
+            .unused_variable => |d| d.region,
+            .used_underscore_variable => |d| d.region,
+            .malformed_type_annotation => |d| d.region,
+            .invalid_top_level_statement => continue, // no region
+            else => continue, // skip unknown diagnostics
+        };
+
+        has_problems = true;
+        const info = module_env.calcRegionInfo(source, region.start.offset, region.end.offset) catch |err| {
+            std.log.warn("Failed to calculate region info for canonicalize diagnostic: {}", .{err});
+            continue;
+        };
+        const problem_name = switch (diagnostic) {
+            .ident_already_in_scope => "DUPLICATE DEFINITION",
+            .ident_not_in_scope => "UNDEFINED VARIABLE",
+            .undeclared_type => "UNDECLARED TYPE",
+            .type_redeclared => "TYPE REDECLARED",
+            .malformed_type_annotation => "MALFORMED TYPE",
+            .unused_variable => "UNUSED VARIABLE",
+            else => @tagName(diagnostic),
+        };
+        try output.md_writer.print("{s} - {s}:{d}:{d}:{d}:{d}\n", .{
+            problem_name,
+            basename,
+            info.start_line_idx + 1,
+            info.start_col_idx + 1,
+            info.end_line_idx + 1,
+            info.end_col_idx + 1,
+        });
+    }
+
+    // Note: Type checking problems don't have regions directly associated with them
+    // They are found during type checking, not parsing
+
+    if (!has_problems) {
         try output.md_writer.writeAll("NIL\n");
         try output.html_writer.writeAll("                    <p>NIL</p>");
+    } else {
+        // For HTML, show the expected problems
+        try output.html_writer.writeAll("                    <pre>");
+
+        // Re-generate all diagnostics for HTML
+
+        // Tokenize diagnostics
+        for (parse_ast.tokenize_diagnostics.items) |diagnostic| {
+            const region = diagnostic.region;
+            const info = module_env.calcRegionInfo(source, region.start.offset, region.end.offset) catch |err| {
+                std.log.warn("Failed to calculate region info for parse diagnostic (HTML): {}", .{err});
+                continue;
+            };
+            try output.html_writer.print("{s} - {s}:{d}:{d}:{d}:{d}\n", .{
+                @tagName(diagnostic.tag),
+                basename,
+                info.start_line_idx + 1,
+                info.start_col_idx + 1,
+                info.end_line_idx + 1,
+                info.end_col_idx + 1,
+            });
+        }
+
+        // Parser diagnostics
+        for (parse_ast.parse_diagnostics.items) |diagnostic| {
+            const region = parse_ast.tokenizedRegionToRegion(diagnostic.region);
+            const info = module_env.calcRegionInfo(source, region.start.offset, region.end.offset) catch |err| {
+                std.log.warn("Failed to calculate region info for tokenize diagnostic (HTML): {}", .{err});
+                continue;
+            };
+            const problem_name = switch (diagnostic.tag) {
+                .expr_unexpected_token => "UNEXPECTED TOKEN IN EXPRESSION",
+                .pattern_unexpected_token => "UNEXPECTED TOKEN IN PATTERN",
+                .ty_anno_unexpected_token => "UNEXPECTED TOKEN IN TYPE ANNOTATION",
+                else => @tagName(diagnostic.tag),
+            };
+            try output.html_writer.print("{s} - {s}:{d}:{d}:{d}:{d}\n", .{
+                problem_name,
+                basename,
+                info.start_line_idx + 1,
+                info.start_col_idx + 1,
+                info.end_line_idx + 1,
+                info.end_col_idx + 1,
+            });
+        }
+
+        // Canonicalization diagnostics
+        for (diagnostics) |diagnostic| {
+            // Extract region from the union
+            const region = switch (diagnostic) {
+                .not_implemented => |d| d.region,
+                .invalid_num_literal => |d| d.region,
+                .invalid_single_quote => |d| d.region,
+                .too_long_single_quote => |d| d.region,
+                .empty_single_quote => |d| d.region,
+                .empty_tuple => |d| d.region,
+                .ident_already_in_scope => |d| d.region,
+                .ident_not_in_scope => |d| d.region,
+                .expr_not_canonicalized => |d| d.region,
+                .invalid_string_interpolation => |d| d.region,
+                .type_redeclared => |d| d.redeclared_region,
+                .undeclared_type => |d| d.region,
+                .undeclared_type_var => |d| d.region,
+                .unused_variable => |d| d.region,
+                .used_underscore_variable => |d| d.region,
+                .malformed_type_annotation => |d| d.region,
+                .invalid_top_level_statement => continue, // no region
+                else => continue, // skip unknown diagnostics
+            };
+
+            const problem_name = switch (diagnostic) {
+                .ident_already_in_scope => "DUPLICATE DEFINITION",
+                .ident_not_in_scope => "UNDEFINED VARIABLE",
+                .undeclared_type => "UNDECLARED TYPE",
+                .type_redeclared => "TYPE REDECLARED",
+                .malformed_type_annotation => "MALFORMED TYPE",
+                .unused_variable => "UNUSED VARIABLE",
+                else => @tagName(diagnostic),
+            };
+            const info = module_env.calcRegionInfo(source, region.start.offset, region.end.offset) catch |err| {
+                std.log.warn("Failed to calculate region info for canonicalize diagnostic (HTML): {}", .{err});
+                continue;
+            };
+            try output.html_writer.print("{s} - {s}:{d}:{d}:{d}:{d}\n", .{
+                problem_name,
+                basename,
+                info.start_line_idx + 1,
+                info.start_col_idx + 1,
+                info.end_line_idx + 1,
+                info.end_col_idx + 1,
+            });
+        }
+
+        // Note: Type checking problems don't have regions directly associated with them
+
+        try output.html_writer.writeAll("</pre>");
     }
 
     try output.html_writer.writeAll(
@@ -1442,7 +1623,7 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, maybe_f
     // Generate all sections simultaneously
     try generateMetaSection(&output, &content);
     try generateSourceSection(&output, &content);
-    try generateExpectedSection(&output, &content);
+    try generateExpectedSection(&output, &parse_ast, &can_ir, &solver, snapshot_path, content.source, &module_env);
     try generateProblemsSection(&output, &parse_ast, &can_ir, &solver, &content, snapshot_path, &module_env);
     try generateTokensSection(&output, &parse_ast, &content, &module_env);
 

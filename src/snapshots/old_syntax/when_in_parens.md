@@ -10,7 +10,7 @@ type=expr
         3)
 ~~~
 # EXPECTED
-NIL
+expected_expr_close_round_or_comma - when_in_parens.md:3:10:3:11
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_close_round_or_comma`

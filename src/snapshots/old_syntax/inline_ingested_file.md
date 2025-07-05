@@ -10,7 +10,7 @@ import "users.json" as data : Str
 parseJson data
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - inline_ingested_file.md:1:1:1:9
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **import "** is not expected in an expression.

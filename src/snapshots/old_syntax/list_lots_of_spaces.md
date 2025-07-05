@@ -13,7 +13,7 @@ type=expr
 u]
 ~~~
 # EXPECTED
-NIL
+expected_expr_close_square_or_comma - list_lots_of_spaces.md:6:2:6:3
 # PROBLEMS
 **LIST NOT CLOSED**
 This list is missing a closing bracket or has a syntax error.

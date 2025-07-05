@@ -8,12 +8,9 @@ type=expr
 add(5, 3)
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - function_call.md:1:1:1:4
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `add` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:4),NoSpaceOpenRound(1:4-1:5),Int(1:5-1:6),Comma(1:6-1:7),Int(1:8-1:9),CloseRound(1:9-1:10),EndOfFile(1:10-1:10),

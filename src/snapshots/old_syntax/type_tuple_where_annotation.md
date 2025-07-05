@@ -10,12 +10,9 @@ nextWhileLess = \buckets, key, shifts -> foo
 nextWhileLess
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - type_tuple_where_annotation.md:1:1:1:14
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `nextWhileLess` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:14),OpColon(1:15-1:16),UpperIdent(1:17-1:21),UpperIdent(1:22-1:28),Comma(1:28-1:29),LowerIdent(1:30-1:31),Comma(1:31-1:32),UpperIdent(1:33-1:35),OpArrow(1:36-1:38),OpenRound(1:39-1:40),UpperIdent(1:40-1:43),Comma(1:43-1:44),UpperIdent(1:45-1:48),CloseRound(1:48-1:49),KwWhere(1:50-1:55),LowerIdent(1:56-1:57),KwImplements(1:58-1:68),UpperIdent(1:69-1:73),OpAmpersand(1:74-1:75),UpperIdent(1:76-1:78),Newline(1:1-1:1),

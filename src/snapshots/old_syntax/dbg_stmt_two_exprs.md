@@ -12,7 +12,7 @@ g
  qt
 ~~~
 # EXPECTED
-NIL
+not_implemented - dbg_stmt_two_exprs.md:1:1:1:1
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_close_round_or_comma`
@@ -25,10 +25,6 @@ Here is the problematic code:
 ```
       
 
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
-Let us know if you want to help!
 
 # TOKENS
 ~~~zig

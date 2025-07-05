@@ -9,7 +9,7 @@ type=expr
 e)m
 ~~~
 # EXPECTED
-NIL
+expected_expr_close_round_or_comma - multiline_str_pnc_apply_in_assignment_newline.md:1:11:1:14
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_close_round_or_comma`

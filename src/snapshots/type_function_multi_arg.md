@@ -13,7 +13,7 @@ curry = |fn| |x| |y| fn(x, y)
 main! = |_| {}
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - type_function_multi_arg.md:3:21:3:25
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **-> (** is not expected in an expression.
@@ -26,14 +26,6 @@ curry : (a, b -> c) -> (a -> b -> c)
 ```
                     ^^^^
 
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
 ~~~zig

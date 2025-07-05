@@ -9,12 +9,9 @@ s:(e as A)as A
 s
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - annotation_double_as.md:1:1:1:2
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `s` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpColon(1:2-1:3),NoSpaceOpenRound(1:3-1:4),LowerIdent(1:4-1:5),KwAs(1:6-1:8),UpperIdent(1:9-1:10),CloseRound(1:10-1:11),KwAs(1:11-1:13),UpperIdent(1:14-1:15),Newline(1:1-1:1),

@@ -10,7 +10,7 @@ import P
 y
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - newline_before_import_curlies.md:1:1:1:9
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **import P** is not expected in an expression.

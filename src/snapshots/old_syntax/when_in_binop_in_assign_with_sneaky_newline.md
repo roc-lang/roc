@@ -11,12 +11,9 @@ is e->(i
 h
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - when_in_binop_in_assign_with_sneaky_newline.md:1:1:1:2
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `j` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpAssign(1:2-1:3),LowerIdent(1:3-1:4),OpPercent(1:4-1:5),LowerIdent(1:5-1:9),LowerIdent(1:10-1:11),Newline(1:1-1:1),

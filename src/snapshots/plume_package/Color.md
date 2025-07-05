@@ -76,9 +76,8 @@ is_named_color = |str|{
 
     colors.contains(str)
 }
+
 ~~~
-# EXPECTED
-NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN PATTERN**
 The token **'#',** is not expected in a pattern.
@@ -434,11 +433,12 @@ LowerIdent(67:1-67:15),OpAssign(67:16-67:17),OpBar(67:18-67:19),LowerIdent(67:19
 LowerIdent(68:5-68:11),OpAssign(68:12-68:13),UpperIdent(68:14-68:17),NoSpaceDotLowerIdent(68:17-68:27),NoSpaceOpenRound(68:27-68:28),OpenSquare(68:28-68:29),StringStart(68:29-68:30),StringPart(68:30-68:39),StringEnd(68:39-68:40),Comma(68:40-68:41),StringStart(68:42-68:43),StringPart(68:43-68:55),StringEnd(68:55-68:56),Comma(68:56-68:57),StringStart(68:58-68:59),StringPart(68:59-68:63),StringEnd(68:63-68:64),CloseSquare(68:64-68:65),CloseRound(68:65-68:66),Newline(1:1-1:1),
 Newline(1:1-1:1),
 LowerIdent(70:5-70:11),NoSpaceDotLowerIdent(70:11-70:20),NoSpaceOpenRound(70:20-70:21),LowerIdent(70:21-70:24),CloseRound(70:24-70:25),Newline(1:1-1:1),
-CloseCurly(71:1-71:2),EndOfFile(71:2-71:2),
+CloseCurly(71:1-71:2),Newline(1:1-1:1),
+EndOfFile(72:1-72:1),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-71.2
+(file @1.1-72.1
 	(module @1.1-8.2
 		(exposes @1.8-8.2
 			(exposed-upper-ident (text "Color"))

@@ -8,7 +8,7 @@ type=expr
 !""""""
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - not_multiline_string.md:1:1:1:5
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **!"""** is not expected in an expression.

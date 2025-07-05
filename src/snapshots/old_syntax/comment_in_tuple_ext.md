@@ -11,12 +11,9 @@ t:()(n#
 p#
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - comment_in_tuple_ext.md:1:1:1:2
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `t` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpColon(1:2-1:3),NoSpaceOpenRound(1:3-1:4),CloseRound(1:4-1:5),NoSpaceOpenRound(1:5-1:6),LowerIdent(1:6-1:7),Newline(1:8-1:8),

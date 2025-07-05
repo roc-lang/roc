@@ -8,12 +8,9 @@ type=expr
 f : { foo  bar }
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - record_type_missing_comma.md:1:1:1:2
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `f` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpColon(1:3-1:4),OpenCurly(1:5-1:6),LowerIdent(1:7-1:10),LowerIdent(1:12-1:15),CloseCurly(1:16-1:17),EndOfFile(1:17-1:17),

@@ -8,7 +8,7 @@ type=expr
 \_ -> 42
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - single_underscore_closure.md:1:1:1:3
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **\_** is not expected in an expression.

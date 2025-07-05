@@ -13,12 +13,8 @@ type=expr
 e
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - crazy_annotation_left2.md:1:3:1:5
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `ts` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
 **crazy_annotation_left2.md:1:1:1:2:**

@@ -9,16 +9,10 @@ i(i,
 )t
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - pnc_apply_comment_after_newline.md:1:1:1:2
+UNDEFINED VARIABLE - pnc_apply_comment_after_newline.md:1:3:1:4
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `i` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `i` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),NoSpaceOpenRound(1:2-1:3),LowerIdent(1:3-1:4),Comma(1:4-1:5),Newline(1:1-1:1),

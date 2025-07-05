@@ -9,16 +9,10 @@ type=expr
 p}
 ~~~
 # EXPECTED
-NIL
+not_implemented - newline_after_opt_field.md:1:1:1:1
+UNDEFINED VARIABLE - newline_after_opt_field.md:2:1:2:2
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize suffix_single_question expression
-Let us know if you want to help!
-
-**UNDEFINED VARIABLE**
-Nothing is named `p` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 OpenCurly(1:1-1:2),LowerIdent(1:2-1:3),NoSpaceOpQuestion(1:3-1:4),Newline(1:1-1:1),

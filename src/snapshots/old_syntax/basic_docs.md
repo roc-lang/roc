@@ -16,7 +16,7 @@ x = 5
 42
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - basic_docs.md:1:2:2:19
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **# first line of docs

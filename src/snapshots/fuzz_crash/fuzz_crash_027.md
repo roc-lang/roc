@@ -166,7 +166,74 @@ expect {
 }
 ~~~
 # EXPECTED
-NIL
+OverClosedBrace - fuzz_crash_027.md:40:5:40:5
+LeadingZero - fuzz_crash_027.md:69:2:69:2
+UnclosedString - fuzz_crash_027.md:118:9:118:22
+MismatchedBrace - fuzz_crash_027.md:125:3:125:3
+MismatchedBrace - fuzz_crash_027.md:126:2:126:2
+MismatchedBrace - fuzz_crash_027.md:148:1:148:1
+expected_ty_close_curly_or_comma - fuzz_crash_027.md:34:12:35:2
+expected_ty_close_curly_or_comma - fuzz_crash_027.md:1:1:39:2
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:39:1:39:4
+expected_expr_apply_close_round - fuzz_crash_027.md:122:3:122:11
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:125:4:125:9
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:125:9:125:15
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:148:1:148:17
+UNDECLARED TYPE - fuzz_crash_027.md:26:8:26:11
+UNDECLARED TYPE - fuzz_crash_027.md:26:13:26:16
+UNDECLARED TYPE - fuzz_crash_027.md:32:19:32:21
+undeclared_type_var - fuzz_crash_027.md:32:32:32:33
+MALFORMED TYPE - fuzz_crash_027.md:34:12:35:2
+MALFORMED TYPE - fuzz_crash_027.md:1:1:39:2
+UNDECLARED TYPE - fuzz_crash_027.md:43:11:43:16
+UNDECLARED TYPE - fuzz_crash_027.md:43:26:43:31
+UNDECLARED TYPE - fuzz_crash_027.md:29:2:29:5
+UNDECLARED TYPE - fuzz_crash_027.md:30:2:30:5
+not_implemented - fuzz_crash_027.md:1:1:1:1
+not_implemented - fuzz_crash_027.md:1:1:1:1
+not_implemented - fuzz_crash_027.md:1:1:1:1
+UNDEFINED VARIABLE - fuzz_crash_027.md:65:4:65:5
+UNDEFINED VARIABLE - fuzz_crash_027.md:65:6:65:7
+not_implemented - fuzz_crash_027.md:1:1:1:1
+UNDEFINED VARIABLE - fuzz_crash_027.md:71:7:71:11
+UNUSED VARIABLE - fuzz_crash_027.md:70:38:70:42
+not_implemented - fuzz_crash_027.md:1:1:1:1
+UNUSED VARIABLE - fuzz_crash_027.md:74:23:74:27
+UNUSED VARIABLE - fuzz_crash_027.md:76:1:76:4
+not_implemented - fuzz_crash_027.md:1:1:1:1
+not_implemented - fuzz_crash_027.md:1:1:1:1
+not_implemented - fuzz_crash_027.md:82:5:82:12
+not_implemented - fuzz_crash_027.md:1:1:1:1
+not_implemented - fuzz_crash_027.md:84:4:86:8
+not_implemented - fuzz_crash_027.md:89:5:89:12
+not_implemented - fuzz_crash_027.md:91:4:91:11
+UNUSED VARIABLE - fuzz_crash_027.md:62:2:62:3
+not_implemented - fuzz_crash_027.md:1:1:1:1
+UNDECLARED TYPE - fuzz_crash_027.md:99:14:99:20
+not_implemented - fuzz_crash_027.md:1:1:1:1
+not_implemented - fuzz_crash_027.md:1:1:1:1
+not_implemented - fuzz_crash_027.md:110:2:110:5
+not_implemented - fuzz_crash_027.md:112:3:112:6
+UNDEFINED VARIABLE - fuzz_crash_027.md:114:2:114:11
+not_implemented - fuzz_crash_027.md:1:1:1:1
+not_implemented - fuzz_crash_027.md:1:1:1:1
+UNDEFINED VARIABLE - fuzz_crash_027.md:131:63:131:71
+UNDEFINED VARIABLE - fuzz_crash_027.md:132:42:132:48
+UNDEFINED VARIABLE - fuzz_crash_027.md:136:3:136:7
+UNDEFINED VARIABLE - fuzz_crash_027.md:138:4:138:10
+UNDEFINED VARIABLE - fuzz_crash_027.md:141:14:141:17
+not_implemented - fuzz_crash_027.md:1:1:1:1
+UNDEFINED VARIABLE - fuzz_crash_027.md:145:4:145:13
+UNDECLARED TYPE - fuzz_crash_027.md:153:9:153:14
+not_implemented - fuzz_crash_027.md:1:1:1:1
+UNUSED VARIABLE - fuzz_crash_027.md:131:2:131:8
+UNUSED VARIABLE - fuzz_crash_027.md:121:2:121:6
+UNUSED VARIABLE - fuzz_crash_027.md:133:2:133:9
+UNUSED VARIABLE - fuzz_crash_027.md:142:2:142:7
+UNUSED VARIABLE - fuzz_crash_027.md:151:1:151:6
+UNUSED VARIABLE - fuzz_crash_027.md:119:2:119:10
+UNUSED VARIABLE - fuzz_crash_027.md:141:2:141:7
+UNUSED VARIABLE - fuzz_crash_027.md:120:2:120:6
 # PROBLEMS
 **OVER CLOSED BRACE**
 There are too many closing braces here.
@@ -329,404 +396,6 @@ Here is the problematic code:
 } # Commenl decl
 ```
 ^^^^^^^^^^^^^^^^
-
-
-**UNDECLARED TYPE**
-The type ``Bar`` is not declared in this scope.
-
-This type is referenced here:
-**fuzz_crash_027.md:26:8:26:11:**
-```roc
-Foo : (Bar, Baz)
-```
-       ^^^
-
-
-**UNDECLARED TYPE**
-The type ``Baz`` is not declared in this scope.
-
-This type is referenced here:
-**fuzz_crash_027.md:26:13:26:16:**
-```roc
-Foo : (Bar, Baz)
-```
-            ^^^
-
-
-**UNDECLARED TYPE**
-The type ``Ok`` is not declared in this scope.
-
-This type is referenced here:
-**fuzz_crash_027.md:32:19:32:21:**
-```roc
-Some(a) : { foo : Ok(a), bar : g }
-```
-                  ^^
-
-
-**UNDECLARED TYPE VARIABLE**
-The type variable ``g`` is not declared in this scope.
-
-Type variables must be introduced in a type annotation before they can be used.
-
-This type variable is referenced here:
-**fuzz_crash_027.md:32:32:32:33:**
-```roc
-Some(a) : { foo : Ok(a), bar : g }
-```
-                               ^
-
-
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
-
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
-
-**UNDECLARED TYPE**
-The type ``Maybe`` is not declared in this scope.
-
-This type is referenced here:
-**fuzz_crash_027.md:43:11:43:16:**
-```roc
-Func(a) : Maybe(a), a -> Maybe(a)
-```
-          ^^^^^
-
-
-**UNDECLARED TYPE**
-The type ``Maybe`` is not declared in this scope.
-
-This type is referenced here:
-**fuzz_crash_027.md:43:26:43:31:**
-```roc
-Func(a) : Maybe(a), a -> Maybe(a)
-```
-                         ^^^^^
-
-
-**UNDECLARED TYPE**
-The type ``Bar`` is not declared in this scope.
-
-This type is referenced here:
-**fuzz_crash_027.md:29:2:29:5:**
-```roc
-	Bar, #
-```
- ^^^
-
-
-**UNDECLARED TYPE**
-The type ``Baz`` is not declared in this scope.
-
-This type is referenced here:
-**fuzz_crash_027.md:30:2:30:5:**
-```roc
-	Baz, #m
-```
- ^^^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
-Let us know if you want to help!
-
-**UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
-Let us know if you want to help!
-
-**UNDEFINED VARIABLE**
-Nothing is named `ment` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNUSED VARIABLE**
-Variable ``rest`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:70:38:70:42:**
-```roc
-		"foo" | "bar" => 20[1, 2, 3, .. as rest] # Aftet
-```
-                                     ^^^^
-
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
-Let us know if you want to help!
-
-**UNUSED VARIABLE**
-Variable ``rest`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:74:23:74:27:**
-```roc
-		[1, 2 | 5, 3, .. as rest] => 123
-```
-                      ^^^^
-
-
-**UNUSED VARIABLE**
-Variable ``ist`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_ist` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:76:1:76:4:**
-```roc
-ist
-```
-^^^
-
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize local_dispatch expression
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
-Let us know if you want to help!
-
-**UNUSED VARIABLE**
-Variable ``b`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:62:2:62:3:**
-```roc
-	b,
-```
- ^
-
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: top-level expect
-Let us know if you want to help!
-
-**UNDECLARED TYPE**
-The type ``String`` is not declared in this scope.
-
-This type is referenced here:
-**fuzz_crash_027.md:99:14:99:20:**
-```roc
-main! : List(String) -> Result({}, _)
-```
-             ^^^^^^
-
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: ...
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: ...
-Let us know if you want to help!
-
-**UNDEFINED VARIABLE**
-Nothing is named `some_func` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: crash statement
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
-Let us know if you want to help!
-
-**UNDEFINED VARIABLE**
-Nothing is named `punned` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `nested` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `tag1` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `nested` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `foo` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize suffix_single_question expression
-Let us know if you want to help!
-
-**UNDEFINED VARIABLE**
-Nothing is named `toStr` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDECLARED TYPE**
-The type ``Value`` is not declared in this scope.
-
-This type is referenced here:
-**fuzz_crash_027.md:153:9:153:14:**
-```roc
-tuple : Value((a, b, c))
-```
-        ^^^^^
-
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
-Let us know if you want to help!
-
-**UNUSED VARIABLE**
-Variable ``record`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_record` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:131:2:131:8:**
-```roc
-	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
-```
- ^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable ``list`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_list` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:121:2:121:6:**
-```roc
-	list = [
-```
- ^^^^
-
-
-**UNUSED VARIABLE**
-Variable ``m_tuple`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_m_tuple` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:133:2:133:9:**
-```roc
-	m_tuple = (
-```
- ^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable ``stale`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_stale` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:142:2:142:7:**
-```roc
-	stale = some_fn(arg1)?.statod()?.ned()?.recd?
-```
- ^^^^^
-
-
-**UNUSED VARIABLE**
-Variable ``empty`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_empty` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:151:1:151:6:**
-```roc
-empty = {}
-```
-^^^^^
-
-
-**UNUSED VARIABLE**
-Variable ``tag_with`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_tag_with` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:119:2:119:10:**
-```roc
-	tag_with = Ok(number)
-```
- ^^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable ``bsult`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_bsult` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:141:2:141:7:**
-```roc
-	bsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
-```
- ^^^^^
-
-
-**UNUSED VARIABLE**
-Variable ``ited`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_ited` to suppress this warning.
-The unused variable is declared here:
-**fuzz_crash_027.md:120:2:120:6:**
-```roc
-	ited = "Hello, ${world}"
-```
- ^^^^
 
 
 **TYPE MISMATCH**

@@ -9,7 +9,8 @@ type=expr
 .e:
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - alias_or_opaque_fail.md:1:2:1:4
+expected_expr_close_round_or_comma - alias_or_opaque_fail.md:2:4:2:4
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **@,** is not expected in an expression.

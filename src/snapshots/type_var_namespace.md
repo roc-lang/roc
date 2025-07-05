@@ -23,7 +23,9 @@ process = |list| {
 main! = |_| {}
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - type_var_namespace.md:11:31:11:40
+UNDEFINED VARIABLE - type_var_namespace.md:11:14:11:24
+UNDEFINED VARIABLE - type_var_namespace.md:11:34:11:52
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **|> Result** is not expected in an expression.
@@ -36,14 +38,6 @@ Here is the problematic code:
 ```
                               ^^^^^^^^^
 
-
-**UNDEFINED VARIABLE**
-Nothing is named `first` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `withDefault` in this scope.
-Is there an `import` or `exposing` missing up-top?
 
 # TOKENS
 ~~~zig

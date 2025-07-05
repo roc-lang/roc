@@ -9,7 +9,8 @@ type=expr
 -""""""()?))Y
 ~~~
 # EXPECTED
-NIL
+expected_expr_close_round_or_comma - crazy_parens_multiline_str_question_etc.md:2:9:2:11
+expected_expr_close_round_or_comma - crazy_parens_multiline_str_question_etc.md:2:11:2:13
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_close_round_or_comma`

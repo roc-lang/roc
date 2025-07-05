@@ -12,7 +12,10 @@ foo =
     "on        (string 'onmo %')))
 ~~~
 # EXPECTED
-NIL
+AsciiControl - fuzz_crash_010.md:2:3:2:3
+MismatchedBrace - fuzz_crash_010.md:2:6:2:6
+UnclosedString - fuzz_crash_010.md:5:6:5:35
+missing_header - fuzz_crash_010.md:1:1:1:3
 # PROBLEMS
 **ASCII CONTROL CHARACTER**
 ASCII control characters are not allowed in Roc source code.
@@ -38,10 +41,6 @@ H{o,
 ```
 ^^
 
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
 ~~~zig

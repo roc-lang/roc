@@ -13,12 +13,9 @@ f : a -> (b -> c)
 f
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - where_clause_multiple_has_across_newlines.md:1:1:1:2
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `f` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpColon(1:3-1:4),LowerIdent(1:5-1:6),OpArrow(1:7-1:9),OpenRound(1:10-1:11),LowerIdent(1:11-1:12),OpArrow(1:13-1:15),LowerIdent(1:16-1:17),CloseRound(1:17-1:18),Newline(1:1-1:1),

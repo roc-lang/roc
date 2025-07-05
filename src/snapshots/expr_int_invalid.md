@@ -8,11 +8,9 @@ type=expr
 99999999999999999999999999999999999999999
 ~~~
 # EXPECTED
-NIL
+invalid_num_literal - expr_int_invalid.md:1:1:1:42
 # PROBLEMS
-**INVALID NUMBER**
-This number literal is not valid: 99999999999999999999999999999999999999999
-
+NIL
 # TOKENS
 ~~~zig
 Int(1:1-1:42),EndOfFile(1:42-1:42),

@@ -8,14 +8,10 @@ type=expr
 [1u8, 2u8, 300]
 ~~~
 # EXPECTED
-NIL
+invalid_num_literal - can_list_number_doesnt_fit.md:1:2:1:5
+invalid_num_literal - can_list_number_doesnt_fit.md:1:7:1:10
 # PROBLEMS
-**INVALID NUMBER**
-This number literal is not valid: 1u8
-
-**INVALID NUMBER**
-This number literal is not valid: 2u8
-
+NIL
 # TOKENS
 ~~~zig
 OpenSquare(1:1-1:2),Int(1:2-1:5),Comma(1:5-1:6),Int(1:7-1:10),Comma(1:10-1:11),Int(1:12-1:15),CloseSquare(1:15-1:16),EndOfFile(1:16-1:16),

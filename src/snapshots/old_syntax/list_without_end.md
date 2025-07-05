@@ -8,7 +8,7 @@ type=expr
 [1, 2,
 ~~~
 # EXPECTED
-NIL
+expected_expr_close_square_or_comma - list_without_end.md:1:7:1:7
 # PROBLEMS
 **LIST NOT CLOSED**
 This list is missing a closing bracket or has a syntax error.

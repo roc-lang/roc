@@ -8,7 +8,7 @@ type=expr
 @Age
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - opaque_reference_expr.md:1:1:1:5
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **@Age** is not expected in an expression.

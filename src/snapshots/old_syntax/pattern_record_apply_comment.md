@@ -10,12 +10,9 @@ s{t#
 p#
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - pattern_record_apply_comment.md:1:1:1:2
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `s` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:3-1:4),Newline(1:5-1:5),

@@ -10,12 +10,9 @@ dbg g
 ))#
 ~~~
 # EXPECTED
-NIL
+not_implemented - dbg_then_double_parens_cont.md:1:1:1:1
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
-Let us know if you want to help!
-
+NIL
 # TOKENS
 ~~~zig
 KwDbg(1:1-1:4),LowerIdent(1:5-1:6),Newline(1:1-1:1),

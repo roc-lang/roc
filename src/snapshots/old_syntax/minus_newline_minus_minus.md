@@ -9,7 +9,9 @@ p-
  -t-1
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - minus_newline_minus_minus.md:2:2:2:4
+UNDEFINED VARIABLE - minus_newline_minus_minus.md:1:1:1:2
+expr_not_canonicalized - minus_newline_minus_minus.md:1:1:2:4
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **-t** is not expected in an expression.
@@ -22,14 +24,6 @@ Here is the problematic code:
 ```
  ^^
 
-
-**UNDEFINED VARIABLE**
-Nothing is named `p` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
 
 # TOKENS
 ~~~zig

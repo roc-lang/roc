@@ -31,7 +31,15 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - rigid_var_no_instantiation_error.md:6:12:6:18
+UNDEFINED VARIABLE - rigid_var_no_instantiation_error.md:6:6:6:7
+UNDEFINED VARIABLE - rigid_var_no_instantiation_error.md:6:9:6:10
+UNDEFINED VARIABLE - rigid_var_no_instantiation_error.md:7:6:7:7
+UNDEFINED VARIABLE - rigid_var_no_instantiation_error.md:7:9:7:10
+UNDEFINED VARIABLE - rigid_var_no_instantiation_error.md:17:21:17:30
+UNUSED VARIABLE - rigid_var_no_instantiation_error.md:13:5:13:12
+UNUSED VARIABLE - rigid_var_no_instantiation_error.md:17:5:17:12
+UNUSED VARIABLE - rigid_var_no_instantiation_error.md:21:5:21:12
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **= pair** is not expected in an expression.
@@ -43,62 +51,6 @@ Here is the problematic code:
     (x, y) = pair
 ```
            ^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `y` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `y` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `true` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNUSED VARIABLE**
-Variable ``result1`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_result1` to suppress this warning.
-The unused variable is declared here:
-**rigid_var_no_instantiation_error.md:13:5:13:12:**
-```roc
-    result1 = swap((42, "hello"))
-```
-    ^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable ``result2`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_result2` to suppress this warning.
-The unused variable is declared here:
-**rigid_var_no_instantiation_error.md:17:5:17:12:**
-```roc
-    result2 = swap((Bool.true, [1, 2, 3]))
-```
-    ^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable ``result3`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_result3` to suppress this warning.
-The unused variable is declared here:
-**rigid_var_no_instantiation_error.md:21:5:21:12:**
-```roc
-    result3 = swap(("foo", "bar"))
-```
-    ^^^^^^^
 
 
 # TOKENS

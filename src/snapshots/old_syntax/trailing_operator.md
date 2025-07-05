@@ -8,7 +8,8 @@ type=expr
 J-
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - trailing_operator.md:1:3:1:3
+expr_not_canonicalized - trailing_operator.md:1:1:1:3
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token  is not expected in an expression.
@@ -21,10 +22,6 @@ J-
 ```
   
 
-
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
 
 # TOKENS
 ~~~zig

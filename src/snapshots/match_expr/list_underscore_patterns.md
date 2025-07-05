@@ -15,12 +15,9 @@ match items {
 }
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - list_underscore_patterns.md:1:7:1:12
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `items` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 KwMatch(1:1-1:6),LowerIdent(1:7-1:12),OpenCurly(1:13-1:14),Newline(1:1-1:1),

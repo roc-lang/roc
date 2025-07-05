@@ -9,7 +9,7 @@ type=expr
 d))
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - neg_nested_parens.md:1:1:1:3
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **-(** is not expected in an expression.

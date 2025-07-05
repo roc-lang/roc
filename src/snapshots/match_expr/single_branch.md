@@ -10,12 +10,9 @@ match value {
 }
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - single_branch.md:1:7:1:12
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `value` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 KwMatch(1:1-1:6),LowerIdent(1:7-1:12),OpenCurly(1:13-1:14),Newline(1:1-1:1),

@@ -11,12 +11,9 @@ f :
 42
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - multiline_type_signature.md:1:1:1:2
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `f` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpColon(1:3-1:4),Newline(1:1-1:1),

@@ -10,12 +10,9 @@ is
 s if\t->""""""->e
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - multiline_str_in_closure_in_when_guard_wtf.md:1:1:1:5
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `when` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:5),LowerIdent(1:6-1:7),Newline(1:1-1:1),

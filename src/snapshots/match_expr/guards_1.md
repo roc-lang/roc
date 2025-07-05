@@ -12,7 +12,35 @@ match value {
 }
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - guards_1.md:2:16:2:20
+no_else - guards_1.md:2:19:2:30
+UNEXPECTED TOKEN IN PATTERN - guards_1.md:2:20:2:32
+UNEXPECTED TOKEN IN EXPRESSION - guards_1.md:2:30:2:35
+UNEXPECTED TOKEN IN PATTERN - guards_1.md:2:43:2:44
+UNEXPECTED TOKEN IN EXPRESSION - guards_1.md:2:44:2:45
+UNEXPECTED TOKEN IN EXPRESSION - guards_1.md:1:1:3:6
+UNEXPECTED TOKEN IN EXPRESSION - guards_1.md:3:16:3:20
+no_else - guards_1.md:3:19:3:30
+UNEXPECTED TOKEN IN PATTERN - guards_1.md:3:20:3:32
+UNEXPECTED TOKEN IN EXPRESSION - guards_1.md:3:30:3:35
+UNEXPECTED TOKEN IN PATTERN - guards_1.md:3:43:3:44
+UNEXPECTED TOKEN IN EXPRESSION - guards_1.md:3:44:3:45
+UNEXPECTED TOKEN IN EXPRESSION - guards_1.md:1:1:4:6
+UNDEFINED VARIABLE - guards_1.md:1:7:1:12
+expr_not_canonicalized - guards_1.md:2:19:2:30
+UNUSED VARIABLE - guards_1.md:2:5:2:6
+expr_not_canonicalized - guards_1.md:2:30:2:35
+UNDEFINED VARIABLE - guards_1.md:2:42:2:43
+UNUSED VARIABLE - guards_1.md:2:32:2:41
+expr_not_canonicalized - guards_1.md:2:44:2:45
+expr_not_canonicalized - guards_1.md:1:1:3:6
+expr_not_canonicalized - guards_1.md:3:19:3:30
+UNUSED VARIABLE - guards_1.md:3:5:3:6
+expr_not_canonicalized - guards_1.md:3:30:3:35
+UNDEFINED VARIABLE - guards_1.md:3:42:3:43
+UNUSED VARIABLE - guards_1.md:3:32:3:41
+expr_not_canonicalized - guards_1.md:3:44:3:45
+expr_not_canonicalized - guards_1.md:1:1:4:6
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **=> "** is not expected in an expression.
@@ -213,116 +241,6 @@ match value {
     _ => "other"
 ```
 
-
-**UNDEFINED VARIABLE**
-Nothing is named `value` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
-
-**UNUSED VARIABLE**
-Variable ``x`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
-The unused variable is declared here:
-**guards_1.md:2:5:2:6:**
-```roc
-    x if x > 0 => "positive: ${Num.toStr x}"
-```
-    ^
-
-
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
-
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
-
-**UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNUSED VARIABLE**
-Variable ``toStr`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_toStr` to suppress this warning.
-The unused variable is declared here:
-**guards_1.md:2:32:2:41:**
-```roc
-    x if x > 0 => "positive: ${Num.toStr x}"
-```
-                               ^^^^^^^^^
-
-
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
-
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
-
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
-
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
-
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
-
-**UNUSED VARIABLE**
-Variable ``x`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
-The unused variable is declared here:
-**guards_1.md:3:5:3:6:**
-```roc
-    x if x < 0 => "negative: ${Num.toStr x}"
-```
-    ^
-
-
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
-
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
-
-**UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNUSED VARIABLE**
-Variable ``toStr`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_toStr` to suppress this warning.
-The unused variable is declared here:
-**guards_1.md:3:32:3:41:**
-```roc
-    x if x < 0 => "negative: ${Num.toStr x}"
-```
-                               ^^^^^^^^^
-
-
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
-
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
-
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
-
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
 
 # TOKENS
 ~~~zig

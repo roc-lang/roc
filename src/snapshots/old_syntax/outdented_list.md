@@ -11,12 +11,9 @@ a = [
 a
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - outdented_list.md:1:1:1:2
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `a` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpAssign(1:3-1:4),OpenSquare(1:5-1:6),Newline(1:1-1:1),

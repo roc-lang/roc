@@ -9,12 +9,9 @@ si:(e)(e->A)
 A
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - parens_func_apply_type.md:1:1:1:3
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `si` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:3),OpColon(1:3-1:4),NoSpaceOpenRound(1:4-1:5),LowerIdent(1:5-1:6),CloseRound(1:6-1:7),NoSpaceOpenRound(1:7-1:8),LowerIdent(1:8-1:9),OpArrow(1:9-1:11),UpperIdent(1:11-1:12),CloseRound(1:12-1:13),Newline(1:1-1:1),

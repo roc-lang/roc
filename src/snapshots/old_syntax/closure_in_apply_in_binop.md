@@ -9,12 +9,9 @@ m0\w->w?e
 /s
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - closure_in_apply_in_binop.md:1:1:1:3
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `m0` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:3),OpBackslash(1:3-1:4),LowerIdent(1:4-1:5),OpArrow(1:5-1:7),LowerIdent(1:7-1:8),NoSpaceOpQuestion(1:8-1:9),LowerIdent(1:9-1:10),Newline(1:1-1:1),

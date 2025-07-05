@@ -31,26 +31,9 @@ handleResponse = |_response| "handled"
 main! = |_| {}
 ~~~
 # EXPECTED
-NIL
+TYPE REDECLARED - type_tag_union_complex.md:7:1:7:55
 # PROBLEMS
-**TYPE REDECLARED**
-The type ``Result`` is being redeclared.
-
-The redeclaration is here:
-**type_tag_union_complex.md:7:1:7:55:**
-```roc
-Result : [Success(Str), Error(Str), Warning(Str, I32)]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-But ``Result`` was already declared here:
-**type_tag_union_complex.md:1:1:1:1:**
-```roc
-app [main!] { pf: platform "../basic-cli/main.roc" }
-```
-
-
-
+NIL
 # TOKENS
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),LowerIdent(1:15-1:17),OpColon(1:17-1:18),KwPlatform(1:19-1:27),StringStart(1:28-1:29),StringPart(1:29-1:50),StringEnd(1:50-1:51),CloseCurly(1:52-1:53),Newline(1:1-1:1),

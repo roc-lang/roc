@@ -10,12 +10,9 @@ Str.getUnsafe haystack haystackIndex
 Str.getUnsafe needle needleIndex
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - applies_in_binop.md:1:1:1:14
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `getUnsafe` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent(1:1-1:4),NoSpaceDotLowerIdent(1:4-1:14),LowerIdent(1:15-1:23),LowerIdent(1:24-1:37),Newline(1:1-1:1),

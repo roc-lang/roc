@@ -8,12 +8,9 @@ type=expr
 foo?  (  bar? baz)  ( blah stuff)
 ~~~
 # EXPECTED
-NIL
+not_implemented - suffixed_question_nested.md:1:1:1:1
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize suffix_single_question expression
-Let us know if you want to help!
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:4),NoSpaceOpQuestion(1:4-1:5),OpenRound(1:7-1:8),LowerIdent(1:10-1:13),NoSpaceOpQuestion(1:13-1:14),LowerIdent(1:15-1:18),CloseRound(1:18-1:19),OpenRound(1:21-1:22),LowerIdent(1:23-1:27),LowerIdent(1:28-1:33),CloseRound(1:33-1:34),EndOfFile(1:34-1:34),

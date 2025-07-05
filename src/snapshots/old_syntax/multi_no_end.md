@@ -8,7 +8,7 @@ type=expr
 """there is no end
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - multi_no_end.md:1:1:1:19
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **"""there is no end** is not expected in an expression.

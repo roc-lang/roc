@@ -10,12 +10,9 @@ when Ok [] is
     _ -> {}
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - when_result_list.md:1:1:1:5
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `when` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:5),UpperIdent(1:6-1:8),OpenSquare(1:9-1:10),CloseSquare(1:10-1:11),LowerIdent(1:12-1:14),Newline(1:1-1:1),

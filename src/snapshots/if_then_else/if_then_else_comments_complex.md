@@ -16,12 +16,9 @@ if # Comment after if
 				}
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - if_then_else_comments_complex.md:2:2:2:6
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `bool` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 KwIf(1:1-1:3),Newline(1:5-1:22),

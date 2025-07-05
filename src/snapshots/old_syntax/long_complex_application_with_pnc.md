@@ -12,32 +12,14 @@ combine(mix(vodka, gin), Juices({
 }))
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - long_complex_application_with_pnc.md:1:1:1:8
+UNDEFINED VARIABLE - long_complex_application_with_pnc.md:1:9:1:12
+UNDEFINED VARIABLE - long_complex_application_with_pnc.md:1:13:1:18
+UNDEFINED VARIABLE - long_complex_application_with_pnc.md:1:20:1:23
+UNDEFINED VARIABLE - long_complex_application_with_pnc.md:2:12:2:25
+UNDEFINED VARIABLE - long_complex_application_with_pnc.md:3:13:3:27
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `combine` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `mix` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `vodka` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `gin` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `orange` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNDEFINED VARIABLE**
-Nothing is named `orange` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:8),NoSpaceOpenRound(1:8-1:9),LowerIdent(1:9-1:12),NoSpaceOpenRound(1:12-1:13),LowerIdent(1:13-1:18),Comma(1:18-1:19),LowerIdent(1:20-1:23),CloseRound(1:23-1:24),Comma(1:24-1:25),UpperIdent(1:26-1:32),NoSpaceOpenRound(1:32-1:33),OpenCurly(1:33-1:34),Newline(1:1-1:1),

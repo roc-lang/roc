@@ -19,7 +19,12 @@ InnerModule : {
 }
 ~~~
 # EXPECTED
-NIL
+expected_type_field_name - type_shadowing_across_scopes.md:11:5:11:13
+expected_ty_close_curly_or_comma - type_shadowing_across_scopes.md:11:24:11:32
+UNEXPECTED TOKEN IN EXPRESSION - type_shadowing_across_scopes.md:12:1:12:2
+TYPE REDECLARED - type_shadowing_across_scopes.md:3:1:3:31
+MALFORMED TYPE - type_shadowing_across_scopes.md:11:24:11:32
+UNUSED VARIABLE - type_shadowing_across_scopes.md:6:16:6:20
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_type_field_name`
@@ -68,47 +73,6 @@ Here is the problematic code:
 ```
 ^
 
-
-**TYPE REDECLARED**
-The type ``Result`` is being redeclared.
-
-The redeclaration is here:
-**type_shadowing_across_scopes.md:3:1:3:31:**
-```roc
-Result(a, b) : [Ok(a), Err(b)]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-But ``Result`` was already declared here:
-**type_shadowing_across_scopes.md:1:1:1:1:**
-```roc
-module [Result, processData]
-```
-
-
-
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
-
-**UNUSED VARIABLE**
-Variable ``data`` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_data` to suppress this warning.
-The unused variable is declared here:
-**type_shadowing_across_scopes.md:6:16:6:20:**
-```roc
-processData = |data|
-```
-               ^^^^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
 
 # TOKENS
 ~~~zig

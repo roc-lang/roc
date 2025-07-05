@@ -11,12 +11,9 @@ f = 42
 f
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - type_annotation_double_colon.md:1:1:1:2
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `f` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:2),OpColon(1:3-1:4),OpColon(1:4-1:5),UpperIdent(1:6-1:9),Newline(1:1-1:1),

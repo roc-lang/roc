@@ -10,7 +10,7 @@ type=expr
  n
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - apply_bang_bang_closure.md:1:1:1:3
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **!!** is not expected in an expression.

@@ -8,12 +8,9 @@ type=expr
 if!==9
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - ifbang_eqeq.md:1:1:1:4
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `if!` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:4),OpEquals(1:4-1:6),Int(1:6-1:7),EndOfFile(1:7-1:7),

@@ -9,7 +9,7 @@ type=expr
 4
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - comment_with_tab.md:1:2:2:2
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token ** comment with a 	

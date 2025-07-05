@@ -8,12 +8,9 @@ type=expr
 (whee)
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - parenthetical_var.md:1:2:1:6
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `whee` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 OpenRound(1:1-1:2),LowerIdent(1:2-1:6),CloseRound(1:6-1:7),EndOfFile(1:7-1:7),

@@ -10,12 +10,9 @@ when (1, 2) is
  (_, b) -> 3 + b
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - when_with_tuples.md:1:1:1:5
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `when` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent(1:1-1:5),OpenRound(1:6-1:7),Int(1:7-1:8),Comma(1:8-1:9),Int(1:10-1:11),CloseRound(1:11-1:12),LowerIdent(1:13-1:15),Newline(1:1-1:1),
