@@ -3,6 +3,10 @@
 description=Let-polymorphism error case - incompatible list elements
 type=expr
 ~~~
+# SOURCE
+~~~roc
+[42, 4.2, "hello"]
+~~~
 # EXPECTED
 INCOMPATIBLE LIST ELEMENTS - let_polymorphism_error.md:1:6:1:6
 # PROBLEMS

@@ -148,21 +148,31 @@ pub fn main() !void {
     }
 
     const snapshots_dir = "src/snapshots";
-    var file_count: usize = 0;
+    var total_success: usize = 0;
+    var total_failed: usize = 0;
     var timer = std.time.Timer.start() catch unreachable;
 
     if (snapshot_paths.items.len > 0) {
         for (snapshot_paths.items) |path| {
-            file_count += try processPath(gpa, path, maybe_fuzz_corpus_path);
+            const result = try processPath(gpa, path, maybe_fuzz_corpus_path);
+            total_success += result.success;
+            total_failed += result.failed;
         }
     } else {
         // process all files in snapshots_dir
-        file_count = try processPath(gpa, snapshots_dir, maybe_fuzz_corpus_path);
+        const result = try processPath(gpa, snapshots_dir, maybe_fuzz_corpus_path);
+        total_success = result.success;
+        total_failed = result.failed;
     }
 
     const duration_ms = timer.read() / std.time.ns_per_ms;
 
-    std.log.info("processed {d} snapshots in {d} ms.", .{ file_count, duration_ms });
+    std.log.info("processed {d} snapshots in {d} ms.", .{ total_success, duration_ms });
+
+    if (total_failed > 0) {
+        std.log.err("failed to process {d} snapshots", .{total_failed});
+        std.process.exit(1);
+    }
 }
 
 /// Check if a file has a valid snapshot extension
@@ -438,18 +448,24 @@ fn processRocFileAsSnapshotWithExpected(allocator: Allocator, output_path: []con
     try html_file.writeAll(html_buffer.items);
 }
 
-fn processPath(gpa: Allocator, path: []const u8, maybe_fuzz_corpus_path: ?[]const u8) !usize {
+const ProcessResult = struct {
+    success: usize,
+    failed: usize,
+};
+
+fn processPath(gpa: Allocator, path: []const u8, maybe_fuzz_corpus_path: ?[]const u8) !ProcessResult {
     var processed_count: usize = 0;
+    var failed_count: usize = 0;
 
     const canonical_path = std.fs.cwd().realpathAlloc(gpa, path) catch |err| {
         std.log.err("failed to resolve path '{s}': {s}", .{ path, @errorName(err) });
-        return 0;
+        return .{ .success = 0, .failed = 1 };
     };
     defer gpa.free(canonical_path);
 
     const stat = std.fs.cwd().statFile(canonical_path) catch |err| {
         std.log.err("failed to stat path '{s}': {s}", .{ canonical_path, @errorName(err) });
-        return 0;
+        return .{ .success = 0, .failed = 1 };
     };
 
     if (stat.kind == .directory) {
@@ -457,6 +473,7 @@ fn processPath(gpa: Allocator, path: []const u8, maybe_fuzz_corpus_path: ?[]cons
         if (isMultiFileSnapshot(canonical_path)) {
             try processMultiFileSnapshot(gpa, canonical_path);
             processed_count += 1;
+            return .{ .success = processed_count, .failed = failed_count };
         } else {
             var dir = try std.fs.cwd().openDir(path, .{ .iterate = true });
             defer dir.close();
@@ -471,12 +488,15 @@ fn processPath(gpa: Allocator, path: []const u8, maybe_fuzz_corpus_path: ?[]cons
                 defer gpa.free(full_path);
 
                 if (entry.kind == .directory) {
-                    processed_count += try processPath(gpa, full_path, maybe_fuzz_corpus_path);
+                    const result = try processPath(gpa, full_path, maybe_fuzz_corpus_path);
+                    processed_count += result.success;
+                    failed_count += result.failed;
                 } else if (entry.kind == .file and isSnapshotFile(entry.name)) {
                     if (try processSnapshotFile(gpa, full_path, maybe_fuzz_corpus_path)) {
                         processed_count += 1;
                     } else {
                         log("skipped file (not a valid snapshot): {s}", .{full_path});
+                        failed_count += 1;
                     }
                 }
             }
@@ -488,13 +508,14 @@ fn processPath(gpa: Allocator, path: []const u8, maybe_fuzz_corpus_path: ?[]cons
             } else {
                 std.log.err("failed to process snapshot file: {s}", .{canonical_path});
                 std.log.err("make sure the file starts with '~~~META' and has valid snapshot format", .{});
+                failed_count += 1;
             }
         } else {
             std.log.err("file '{s}' is not a snapshot file (must end with .md)", .{canonical_path});
         }
     }
 
-    return processed_count;
+    return .{ .success = processed_count, .failed = failed_count };
 }
 
 /// Represents the different sections of a snapshot file.
