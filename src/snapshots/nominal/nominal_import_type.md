@@ -12,6 +12,8 @@ import Color
 red : Color.RGB
 red = Color.RGB.Red
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

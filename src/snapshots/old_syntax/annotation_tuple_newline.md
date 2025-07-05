@@ -9,6 +9,8 @@ d:(J,
 )g
 2
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `d` in this scope.

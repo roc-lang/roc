@@ -165,6 +165,8 @@ expect {
 	blah == foo
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **OVER CLOSED BRACE**
 There are too many closing braces here.

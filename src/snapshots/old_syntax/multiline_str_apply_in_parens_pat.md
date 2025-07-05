@@ -8,6 +8,8 @@ type=expr
 u ("""""" (0)):f
 s
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `u` in this scope.

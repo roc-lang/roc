@@ -9,6 +9,8 @@ di<s<when b
  is 7->7e
  zl
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `di` in this scope.

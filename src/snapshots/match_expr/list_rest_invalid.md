@@ -11,6 +11,8 @@ match items {
     [x, ..rest, y] => 2 # invalid rest pattern should error
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **BAD LIST REST PATTERN SYNTAX**
 List rest patterns should use the `.. as name` syntax, not `..name`.

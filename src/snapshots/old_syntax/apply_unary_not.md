@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 !whee  12 foo
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **!whee** is not expected in an expression.

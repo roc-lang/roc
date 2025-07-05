@@ -8,6 +8,8 @@ type=expr
 { Foo.Bar.baz <- x: 5, y: 0, _z: 3, _: 2
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **<- x** is not expected in an expression.

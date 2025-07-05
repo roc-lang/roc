@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 get_name! {} ?? "Bob"
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `get_name!` in this scope.

@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 { name: "Alice", age: 30 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

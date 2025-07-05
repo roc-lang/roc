@@ -8,6 +8,8 @@ type=file
 0 b:S
 .R
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.

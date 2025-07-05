@@ -10,6 +10,8 @@ O#
  B->when 6 is
 1->O
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.

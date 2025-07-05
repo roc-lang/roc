@@ -9,6 +9,8 @@ w#
 :n
 Q
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `w` in this scope.

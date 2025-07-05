@@ -8,6 +8,8 @@ type=expr
 s:(e as A)as A
 s
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `s` in this scope.

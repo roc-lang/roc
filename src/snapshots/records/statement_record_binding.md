@@ -7,6 +7,8 @@ type=statement
 ~~~roc
 person = { name: "Alice", age: 30, email: "alice@example.com" }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

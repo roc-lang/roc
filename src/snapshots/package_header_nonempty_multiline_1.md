@@ -9,6 +9,8 @@ package # This comment is here
 	[something, SomeType]
 	{ somePkg: "../main.roc" }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

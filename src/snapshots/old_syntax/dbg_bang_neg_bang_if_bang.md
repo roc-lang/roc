@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 dbg!-!if!
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **!if!** is not expected in an expression.

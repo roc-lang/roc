@@ -9,6 +9,8 @@ Str.getUnsafe haystack haystackIndex
 ==
 Str.getUnsafe needle needleIndex
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `getUnsafe` in this scope.

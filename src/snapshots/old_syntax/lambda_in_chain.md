@@ -10,6 +10,8 @@ type=expr
 |> List.map \byte -> byte + 1
 |> List.reverse
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

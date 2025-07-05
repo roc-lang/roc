@@ -18,6 +18,8 @@ staticValueDef =
 
 staticValueDef
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `staticValueDef` in this scope.

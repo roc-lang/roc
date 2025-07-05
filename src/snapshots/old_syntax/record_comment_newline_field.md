@@ -8,6 +8,8 @@ type=expr
 {#
 a}
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `a` in this scope.

@@ -10,6 +10,8 @@ module []
 x : U8
 x = 500
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **NUMBER DOES NOT FIT IN TYPE**
 The number **500** does not fit in its inferred type:

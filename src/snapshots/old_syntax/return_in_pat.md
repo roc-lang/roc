@@ -9,6 +9,8 @@ type=expr
 return e
 t)=t
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **return e** is not expected in an expression.

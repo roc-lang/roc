@@ -8,6 +8,8 @@ type=expr
 i:M()(Y) c
 t
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `i` in this scope.

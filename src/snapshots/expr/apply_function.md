@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 foo(42, "hello")
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `foo` in this scope.

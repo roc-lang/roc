@@ -9,6 +9,8 @@ module [nums]
 
 nums : List U8
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **PARSE ERROR**
 Type applications require parentheses around their type arguments.

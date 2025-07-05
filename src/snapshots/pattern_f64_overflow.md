@@ -13,6 +13,8 @@ match x {
     value => "other"
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `x` in this scope.

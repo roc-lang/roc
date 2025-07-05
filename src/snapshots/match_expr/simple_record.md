@@ -10,6 +10,8 @@ match person {
     { age } => age
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `person` in this scope.

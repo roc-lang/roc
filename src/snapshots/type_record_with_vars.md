@@ -12,6 +12,8 @@ getField = |record| record.field
 
 main! = |_| {}
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

@@ -9,6 +9,8 @@ package
 	[something, SomeType,]
 	{ somePkg: "../main.roc", }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

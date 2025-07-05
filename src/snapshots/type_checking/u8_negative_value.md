@@ -10,6 +10,8 @@ module []
 x : U8
 x = -1
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **NEGATIVE UNSIGNED INTEGER**
 The number **-1** is **signed** because it is negative:

@@ -14,6 +14,8 @@ match list {
     [x, y, z, .. as more] => x + y + z
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `list` in this scope.

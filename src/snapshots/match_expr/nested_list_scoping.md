@@ -11,6 +11,8 @@ match nestedList {
     [x, [y]] => x * y
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `nestedList` in this scope.

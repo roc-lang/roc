@@ -9,6 +9,8 @@ when x is
     bar.and -> 1
     _ -> 4
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.

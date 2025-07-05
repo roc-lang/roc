@@ -11,6 +11,8 @@ MEq implements
 
 1
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

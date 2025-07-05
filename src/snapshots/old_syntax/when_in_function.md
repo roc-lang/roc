@@ -9,6 +9,8 @@ func = \x -> when n is
               0 -> 0
 42
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `func` in this scope.

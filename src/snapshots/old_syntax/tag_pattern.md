@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 \Thing -> 42
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **\Thing** is not expected in an expression.

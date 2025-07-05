@@ -9,6 +9,8 @@ when Ok [] is
     Ok [] -> {}
     _ -> {}
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.

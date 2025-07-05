@@ -18,6 +18,8 @@ InnerModule : {
     Result : [Success, Failure]
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_type_field_name`

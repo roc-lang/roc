@@ -8,6 +8,8 @@ type=expr
 N:=e->(implements)
 I
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

@@ -44,6 +44,8 @@ Complex : {
     tree: Tree(U64)
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **TYPE REDECLARED**
 The type ``Result`` is being redeclared.

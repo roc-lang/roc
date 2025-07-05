@@ -9,6 +9,8 @@ expect 1 == 1
 
 4
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **expect 1** is not expected in an expression.

@@ -10,6 +10,8 @@ role = Admin
 
 role
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `role` in this scope.

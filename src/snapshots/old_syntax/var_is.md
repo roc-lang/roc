@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 isnt
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `isnt` in this scope.

@@ -12,6 +12,8 @@ import design.Styles.Color exposing [Encoder as CE]
 red : CE
 red = ... # not implemented
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **.Color exposing** is not expected in an expression.

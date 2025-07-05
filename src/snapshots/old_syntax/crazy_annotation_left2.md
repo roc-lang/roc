@@ -12,6 +12,8 @@ type=expr
 )f:i7f
 e
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `ts` in this scope.

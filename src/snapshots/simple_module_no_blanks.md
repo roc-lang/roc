@@ -10,6 +10,8 @@ import pf.Stdout
 hello! = Stdout.line!("Hello")
 world = "World"
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

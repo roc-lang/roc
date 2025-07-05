@@ -9,6 +9,8 @@ t#
 =3
 e
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `t` in this scope.

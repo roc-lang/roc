@@ -10,6 +10,8 @@ match isReady {
 	False => "not ready yet"
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `isReady` in this scope.

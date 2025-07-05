@@ -9,6 +9,8 @@ iffy=5
 
 42
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `iffy` in this scope.

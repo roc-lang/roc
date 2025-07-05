@@ -7,6 +7,8 @@ type=file
 ~~~roc
 ff8.8.d
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.

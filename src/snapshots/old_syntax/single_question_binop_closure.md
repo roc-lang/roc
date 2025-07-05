@@ -8,6 +8,8 @@ type=expr
 fallible!(args)   ? |my_err|
     my_err * 2
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `fallible!` in this scope.

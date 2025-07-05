@@ -9,6 +9,8 @@ f : a -> (b -> c) where a implements A
 
 f
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `f` in this scope.

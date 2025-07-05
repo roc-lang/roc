@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 "\(e)"
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **INVALID ESCAPE SEQUENCE**
 This escape sequence is not recognized.

@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 { name, age: 30, email, status: "active", balance }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `name` in this scope.

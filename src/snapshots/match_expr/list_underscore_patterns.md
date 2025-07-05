@@ -14,6 +14,8 @@ match items {
     [] => 0 # match an empty list
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `items` in this scope.

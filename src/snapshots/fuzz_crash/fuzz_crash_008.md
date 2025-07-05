@@ -7,6 +7,8 @@ type=file
 ~~~roc
 ||1
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **ASCII CONTROL CHARACTER**
 ASCII control characters are not allowed in Roc source code.

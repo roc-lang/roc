@@ -10,6 +10,8 @@ f = \x -> x
 
 f (1, 2)
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `f` in this scope.

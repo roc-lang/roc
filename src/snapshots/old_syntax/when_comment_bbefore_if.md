@@ -9,6 +9,8 @@ when 0
 is S#
  if S->e
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.

@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 Json.utf8
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `utf8` in this scope.

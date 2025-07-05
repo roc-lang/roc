@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 N<l (r*N)
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `l` in this scope.

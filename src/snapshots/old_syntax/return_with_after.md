@@ -9,6 +9,8 @@ return-1#
 X
 s
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **return-** is not expected in an expression.

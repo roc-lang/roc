@@ -13,6 +13,8 @@ var t= ]
 #el
 var t= 0
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNCLOSED STRING**
 This string is missing a closing quote.

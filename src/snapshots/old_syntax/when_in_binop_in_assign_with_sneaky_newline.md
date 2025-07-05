@@ -10,6 +10,8 @@ is e->(i
 )
 h
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `j` in this scope.

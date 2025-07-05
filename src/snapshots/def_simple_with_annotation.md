@@ -10,6 +10,8 @@ module [foo]
 foo : Str
 foo = "one"
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

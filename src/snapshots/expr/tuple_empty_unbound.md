@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 ()
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **EMPTY TUPLE NOT ALLOWED**
 I am part way through parsing this tuple, but it is empty:

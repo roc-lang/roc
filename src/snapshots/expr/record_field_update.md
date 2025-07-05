@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 { ..person, age: 31 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `person` in this scope.

@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 [42, "world", 3.14]
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **INCOMPATIBLE LIST ELEMENTS**
 The first two elements in this list have incompatible types:

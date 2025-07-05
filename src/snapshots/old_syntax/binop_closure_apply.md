@@ -9,6 +9,8 @@ d+
  \w->x
  x
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **\w** is not expected in an expression.

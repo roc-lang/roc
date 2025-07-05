@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 fallible!(args)   ? WrapOverErr
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `fallible!` in this scope.

@@ -8,6 +8,8 @@ type=expr
 m0\w->w?e
 /s
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `m0` in this scope.

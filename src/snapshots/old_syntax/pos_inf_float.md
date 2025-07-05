@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 inf
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `inf` in this scope.

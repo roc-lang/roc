@@ -8,6 +8,8 @@ type=expr
 import"\\"as m
 e
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **import"** is not expected in an expression.

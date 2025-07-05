@@ -16,6 +16,8 @@ main! = |_| {
     Stdout.line!(result)
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

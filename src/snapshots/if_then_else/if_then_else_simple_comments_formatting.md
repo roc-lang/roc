@@ -9,6 +9,8 @@ if bool { # Comment after then open
 	A # Comment after expr
 } else B
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `bool` in this scope.

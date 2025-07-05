@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 Str.toU64 "123"|> try
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `toU64` in this scope.

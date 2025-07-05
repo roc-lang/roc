@@ -12,6 +12,8 @@ Color := [Red, Green, Blue]
 blue : Color
 blue = Color.Blue
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

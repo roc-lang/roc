@@ -11,6 +11,8 @@ match shape {
     Triangle(base, height) => 0.5 * base * height
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `shape` in this scope.

@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 !isValid
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **!isValid** is not expected in an expression.

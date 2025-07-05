@@ -8,6 +8,8 @@ type=expr
 main =
     5 ** 3
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `main` in this scope.

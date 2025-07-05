@@ -9,6 +9,8 @@ module [add2]
 
 add2 = x +      2
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `x` in this scope.

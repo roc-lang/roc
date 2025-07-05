@@ -9,6 +9,8 @@ e:A#
   as H
 n
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `e` in this scope.

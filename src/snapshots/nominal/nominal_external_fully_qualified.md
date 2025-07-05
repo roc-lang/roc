@@ -17,6 +17,8 @@ handleResult = |result| {
     }
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDECLARED TYPE**
 The type ``MyResultModule.MyResultType`` is not declared in this scope.

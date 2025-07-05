@@ -49,6 +49,8 @@ transform = \result ->
         Result.Ok rgb -> TypeC.fromColor rgb
         Result.Err err -> TypeC.default
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `import_exposing_no_close`

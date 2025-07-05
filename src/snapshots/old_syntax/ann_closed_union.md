@@ -12,6 +12,8 @@ type=expr
     42
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_ty_close_square_or_comma`

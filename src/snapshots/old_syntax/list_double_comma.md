@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 [1, 2, , 3]
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **, 3** is not expected in an expression.

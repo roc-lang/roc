@@ -8,6 +8,8 @@ type=expr
 # comment with a 	
 4
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token ** comment with a 	

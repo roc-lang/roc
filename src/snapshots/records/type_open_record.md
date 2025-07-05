@@ -7,6 +7,8 @@ type=statement
 ~~~roc
 process_user! : { name : Str, age : U32, .. } => Str
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
 The token **.. }** is not expected in a type annotation.

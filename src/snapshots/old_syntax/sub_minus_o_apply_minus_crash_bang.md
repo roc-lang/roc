@@ -8,6 +8,8 @@ type=expr
 h-
 -o -crash!
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **-o** is not expected in an expression.

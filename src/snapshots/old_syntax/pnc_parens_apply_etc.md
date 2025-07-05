@@ -9,6 +9,8 @@ type=expr
 3)():B
 (z)
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

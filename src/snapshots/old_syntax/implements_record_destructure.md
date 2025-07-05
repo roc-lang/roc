@@ -8,6 +8,8 @@ type=expr
 {implements}=d
 I
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **implements}** is not expected in an expression.

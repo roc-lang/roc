@@ -10,6 +10,8 @@ module [MyNumber, MyString]
 MyNumber : U64
 MyString : Str
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

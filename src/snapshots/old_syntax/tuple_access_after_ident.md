@@ -8,6 +8,8 @@ type=expr
 abc = (1, 2, 3)
 abc.0
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `abc` in this scope.

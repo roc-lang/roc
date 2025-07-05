@@ -9,6 +9,8 @@ m
  ^ -\w->m
  w
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `m` in this scope.

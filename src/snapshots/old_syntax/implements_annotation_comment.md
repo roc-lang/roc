@@ -10,6 +10,8 @@ S implements i:(a#
 )
 0
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

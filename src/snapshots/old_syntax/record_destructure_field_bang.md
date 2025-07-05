@@ -9,6 +9,8 @@ type=expr
 
 launchTheNukes! code
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `launchTheNukes!` in this scope.

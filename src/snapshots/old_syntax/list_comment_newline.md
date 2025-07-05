@@ -10,6 +10,8 @@ type=expr
 
 ]
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **LIST NOT CLOSED**
 This list is missing a closing bracket or has a syntax error.

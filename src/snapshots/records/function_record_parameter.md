@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 |{ name, age }| "Hello ${name}, you are ${age.to_str()} years old"
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

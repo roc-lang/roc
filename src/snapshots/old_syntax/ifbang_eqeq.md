@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 if!==9
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `if!` in this scope.

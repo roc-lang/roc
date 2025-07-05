@@ -22,6 +22,8 @@ process = |list| {
 
 main! = |_| {}
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **|> Result** is not expected in an expression.

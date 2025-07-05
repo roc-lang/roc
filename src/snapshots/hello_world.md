@@ -11,6 +11,8 @@ import pf.Stdout
 
 main! = |_| Stdout.line!("Hello, world!")
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

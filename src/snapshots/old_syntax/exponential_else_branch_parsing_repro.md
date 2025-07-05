@@ -13,6 +13,8 @@ then#f#,w
 t__T+_____^_zese
 else
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `ee` in this scope.

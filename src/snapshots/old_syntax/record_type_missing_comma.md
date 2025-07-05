@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 f : { foo  bar }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `f` in this scope.

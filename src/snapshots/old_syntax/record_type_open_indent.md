@@ -8,6 +8,8 @@ type=expr
 f : {
 foo : I64,
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `f` in this scope.

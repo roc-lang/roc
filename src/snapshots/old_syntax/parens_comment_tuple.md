@@ -8,6 +8,8 @@ type=expr
 ((0#
 ),L)
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

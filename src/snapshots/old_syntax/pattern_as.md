@@ -8,6 +8,8 @@ type=expr
 when 0 is
     _ as n -> n
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.

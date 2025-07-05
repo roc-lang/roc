@@ -12,6 +12,8 @@ match data {
     Simple(x) => x
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `data` in this scope.

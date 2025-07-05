@@ -13,6 +13,8 @@ Pair (Pair x _) (Pair _ y) = Pair (Pair 0 1) (Pair 2 3)
 
 0
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

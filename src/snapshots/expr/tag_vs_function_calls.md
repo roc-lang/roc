@@ -16,6 +16,8 @@ type=expr
     tagList: [Some(1), Some(2), None, Some(3)],
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **\x** is not expected in an expression.

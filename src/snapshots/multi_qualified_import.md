@@ -20,6 +20,8 @@ process = \encoder -> "processing"
 data : json.Core.Utf8.EncodedData
 data = json.Core.Utf8.encode "hello"
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **.Utf8 exposing** is not expected in an expression.

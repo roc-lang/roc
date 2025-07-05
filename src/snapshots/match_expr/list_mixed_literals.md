@@ -13,6 +13,8 @@ match sequence {
     [] => 0
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `sequence` in this scope.

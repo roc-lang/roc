@@ -8,6 +8,8 @@ type=expr
 when n is
   @Age -> 1
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.

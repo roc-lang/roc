@@ -8,6 +8,8 @@ type=expr
 7
 ==(Q:c 42)
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_close_round_or_comma`

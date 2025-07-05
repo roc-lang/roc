@@ -9,6 +9,8 @@ module []
 
 import json.Json [foo, BAR]
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.

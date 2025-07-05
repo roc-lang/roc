@@ -9,6 +9,8 @@ type=expr
 O#
 ,i]]->i
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **\I** is not expected in an expression.

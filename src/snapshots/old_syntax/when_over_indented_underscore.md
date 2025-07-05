@@ -9,6 +9,8 @@ when 4 is
     5 -> 2
      _ -> 2
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.

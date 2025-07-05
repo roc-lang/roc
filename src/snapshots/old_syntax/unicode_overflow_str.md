@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 m"\u(FFFFFF)"s
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `m` in this scope.

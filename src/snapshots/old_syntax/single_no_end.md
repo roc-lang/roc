@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 "there is no end
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNCLOSED STRING**
 This string is missing a closing quote.

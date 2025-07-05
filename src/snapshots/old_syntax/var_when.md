@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 whenever
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `whenever` in this scope.

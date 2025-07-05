@@ -14,6 +14,8 @@ app # Comment after keyword
 		other: "../../other/main.roc", # Comment after last package
 	}
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

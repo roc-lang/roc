@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 elsewhere
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `elsewhere` in this scope.

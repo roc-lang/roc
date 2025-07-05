@@ -23,6 +23,8 @@ type=expr
     None ?? 0,
 )
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

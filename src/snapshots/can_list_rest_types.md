@@ -10,6 +10,8 @@ match numbers {
     [] => []
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `numbers` in this scope.

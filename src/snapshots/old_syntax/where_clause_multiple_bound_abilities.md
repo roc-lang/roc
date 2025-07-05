@@ -13,6 +13,8 @@ f : a -> b
 
 f
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `f` in this scope.

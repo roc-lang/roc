@@ -10,6 +10,8 @@ x =
 
 42
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `x` in this scope.

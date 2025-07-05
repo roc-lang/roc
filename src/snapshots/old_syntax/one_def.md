@@ -10,6 +10,8 @@ x=5
 
 42
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token ** leading comment

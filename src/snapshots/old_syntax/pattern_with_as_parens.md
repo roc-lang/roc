@@ -8,6 +8,8 @@ type=expr
 when t is
     Ok ({} as d)->S
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.

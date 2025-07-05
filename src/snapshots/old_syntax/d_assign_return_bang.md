@@ -9,6 +9,8 @@ D=return!-
  e
 z#
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

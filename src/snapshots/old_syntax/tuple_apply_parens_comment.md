@@ -8,6 +8,8 @@ type=expr
 ((L
 L)L,L)#\
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_close_round_or_comma`

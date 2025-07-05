@@ -25,6 +25,8 @@ main! = |_| {
     {}
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable ``str`` is not used anywhere in your code.

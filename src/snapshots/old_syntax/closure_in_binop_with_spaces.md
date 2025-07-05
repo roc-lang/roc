@@ -8,6 +8,8 @@ type=expr
 i>\s->s
 -a
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **\s** is not expected in an expression.

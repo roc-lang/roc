@@ -8,6 +8,8 @@ type=expr
 {}=O{}implements
 a
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

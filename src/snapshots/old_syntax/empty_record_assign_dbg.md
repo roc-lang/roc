@@ -10,6 +10,8 @@ type=expr
  c
 e
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

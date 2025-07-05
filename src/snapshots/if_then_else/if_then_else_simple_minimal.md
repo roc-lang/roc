@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 if bool 1 else 2
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `bool` in this scope.

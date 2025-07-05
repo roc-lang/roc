@@ -7,6 +7,8 @@ type=file
 ~~~roc
 module
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `header_expected_open_square`

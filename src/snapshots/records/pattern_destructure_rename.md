@@ -9,6 +9,8 @@ match person {
     { name: userName, age: userAge } => "User ${userName} is ${userAge.to_str()} years old"
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `person` in this scope.

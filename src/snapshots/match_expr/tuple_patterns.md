@@ -12,6 +12,8 @@ match coord {
     (x, y) => x
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `coord` in this scope.

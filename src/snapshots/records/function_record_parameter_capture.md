@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 |{ name, age, ..a } as person| { greeting: "Hello ${name}", full_record: person, is_adult: age >= 18 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern

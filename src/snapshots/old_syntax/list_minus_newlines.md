@@ -8,6 +8,8 @@ type=expr
 [K,
 ]-i
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `i` in this scope.

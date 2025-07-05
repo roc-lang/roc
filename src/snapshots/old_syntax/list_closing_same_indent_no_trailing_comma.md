@@ -11,6 +11,8 @@ myList = [
 ]
 42
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `myList` in this scope.

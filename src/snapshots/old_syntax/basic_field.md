@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 rec.field
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `rec` in this scope.

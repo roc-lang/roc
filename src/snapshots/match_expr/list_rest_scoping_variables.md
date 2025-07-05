@@ -12,6 +12,8 @@ match data {
     [first, ..items, last] => first + last
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **BAD LIST REST PATTERN SYNTAX**
 List rest patterns should use the `.. as name` syntax, not `..name`.

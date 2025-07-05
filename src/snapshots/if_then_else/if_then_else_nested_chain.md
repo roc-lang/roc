@@ -19,6 +19,8 @@ checkNumber = |num| {
 	}
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

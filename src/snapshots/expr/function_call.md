@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 add(5, 3)
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `add` in this scope.

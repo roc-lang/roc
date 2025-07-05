@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 "abc\u(zzzz)def"
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **INVALID UNICODE ESCAPE SEQUENCE**
 This Unicode escape sequence is not valid.

@@ -8,6 +8,8 @@ type=expr
 Q (""""""""):a
 q
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

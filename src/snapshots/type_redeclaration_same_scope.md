@@ -10,6 +10,8 @@ module [Maybe]
 Maybe(a) : [Some(a), None]
 Maybe(a) : [Ok(a), Err]
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **TYPE REDECLARED**
 The type ``Maybe`` is being redeclared.

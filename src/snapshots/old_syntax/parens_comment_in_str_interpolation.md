@@ -8,6 +8,8 @@ type=expr
 "${(S#
 )}"
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_close_round_or_comma`

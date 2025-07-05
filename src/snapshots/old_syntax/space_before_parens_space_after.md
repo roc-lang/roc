@@ -9,6 +9,8 @@ i
 (4
 )#(
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `i` in this scope.

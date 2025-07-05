@@ -22,6 +22,8 @@ outerFunc = |_| {
     innerResult
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **DUPLICATE DEFINITION**
 The name `x` is being redeclared in this scope.

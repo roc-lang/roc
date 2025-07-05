@@ -8,6 +8,8 @@ type=expr
 p-
  -t-1
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **-t** is not expected in an expression.

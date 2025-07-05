@@ -22,6 +22,8 @@ pkg: 77"..c", mm} #
 ar,
 		]
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `exposed_item_unexpected_token`

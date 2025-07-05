@@ -8,6 +8,8 @@ type=expr
 doStuff : UserId -> Dict Str _
 42
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `doStuff` in this scope.

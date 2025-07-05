@@ -30,6 +30,8 @@ handleResponse = |_response| "handled"
 
 main! = |_| {}
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **TYPE REDECLARED**
 The type ``Result`` is being redeclared.

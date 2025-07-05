@@ -8,6 +8,8 @@ type=expr
 si:(e)(e->A)
 A
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `si` in this scope.

@@ -17,6 +17,8 @@ redeclareTest = |_| {
 
 result = redeclareTest({})
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **DUPLICATE DEFINITION**
 The name `x_` is being redeclared in this scope.

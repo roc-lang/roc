@@ -45,6 +45,8 @@ combineResults = |result1, result2|
         Err(err) => Err(err)
     }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_apply_close_round`

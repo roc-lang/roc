@@ -9,6 +9,8 @@ Blah a b : Foo.Bar.Baz x y
 
 42
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

@@ -9,6 +9,8 @@ x : { init : {} -> Model, update : Model, Str -> Model, view : Model -> Str }
 
 42
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `x` in this scope.

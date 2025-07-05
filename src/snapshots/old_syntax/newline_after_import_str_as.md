@@ -9,6 +9,8 @@ import""as
  das
 A
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **import"** is not expected in an expression.

@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 """there is no end
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **"""there is no end** is not expected in an expression.

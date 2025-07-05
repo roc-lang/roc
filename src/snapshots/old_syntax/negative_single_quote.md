@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 -'i'
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **-'i'** is not expected in an expression.

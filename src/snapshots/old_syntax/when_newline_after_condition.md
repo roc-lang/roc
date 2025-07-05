@@ -9,6 +9,8 @@ when n
 #s
 is O->1
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.

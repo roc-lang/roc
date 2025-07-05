@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 person.address.street
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `person` in this scope.

@@ -8,6 +8,8 @@ type=expr
 f: (a, b -> c, d -> e, g)
 f
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `f` in this scope.

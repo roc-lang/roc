@@ -33,6 +33,8 @@ client = Http.invalidMethod
 # Test deeply nested invalid qualification
 parser = Json.Parser.Advanced.NonExistent.create
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable ``req`` is not used anywhere in your code.

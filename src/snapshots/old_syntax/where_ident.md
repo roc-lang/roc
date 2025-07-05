@@ -10,6 +10,8 @@ where = {where: 1}
 
 where.where
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **where :** is not expected in an expression.

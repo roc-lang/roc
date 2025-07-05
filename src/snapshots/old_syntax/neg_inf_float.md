@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 -inf
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **-inf** is not expected in an expression.

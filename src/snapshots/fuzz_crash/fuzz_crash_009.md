@@ -12,6 +12,8 @@ foo =
 
     "onmo %
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **MISMATCHED BRACE**
 This brace does not match the corresponding opening brace.

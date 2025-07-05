@@ -8,6 +8,8 @@ type=expr
 (return.o)
 ss
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **return.o** is not expected in an expression.

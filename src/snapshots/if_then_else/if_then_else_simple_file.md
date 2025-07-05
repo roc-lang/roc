@@ -13,6 +13,8 @@ foo = if 1 A
 	"hello"
     }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `no_else`

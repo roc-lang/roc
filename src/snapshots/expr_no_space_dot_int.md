@@ -9,6 +9,8 @@ module []
 
 foo = asd.0
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expr_no_space_dot_int`

@@ -22,6 +22,8 @@ Decode(a) : a
 			List(U8), # After method arg
 		) -> a,
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

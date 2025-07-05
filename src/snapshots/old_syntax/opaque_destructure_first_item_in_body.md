@@ -8,6 +8,8 @@ type=expr
 @Thunk it = id (@A {})
 it {}
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **@Thunk it** is not expected in an expression.

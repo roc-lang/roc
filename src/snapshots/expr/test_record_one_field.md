@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 { name: "test" }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

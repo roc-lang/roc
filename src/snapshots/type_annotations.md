@@ -14,6 +14,8 @@ add_one : (U8, U16 -> U32)
 main! : List(String) -> Result({}, _)
 tag_tuple : Value((a, b, c))
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDECLARED TYPE**
 The type ``Thing`` is not declared in this scope.

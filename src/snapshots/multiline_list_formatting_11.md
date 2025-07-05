@@ -15,6 +15,8 @@ type=expr
 	[5],
 ]
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

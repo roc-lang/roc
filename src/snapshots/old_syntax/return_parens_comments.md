@@ -10,6 +10,8 @@ return(3#
 )
 Z
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **return(** is not expected in an expression.

@@ -8,6 +8,8 @@ type=expr
 Email str = Email "blah@example.com"
 str
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

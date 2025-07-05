@@ -7,6 +7,8 @@ type=statement
 ~~~roc
 create_user! : Str, U32 => { name : Str, age : U32, id : U64, active : Bool }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

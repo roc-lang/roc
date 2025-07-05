@@ -9,6 +9,8 @@ when 4 is
     5 -> Num.neg
      2 -> 2
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.

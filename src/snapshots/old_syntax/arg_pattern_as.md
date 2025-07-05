@@ -8,6 +8,8 @@ type=expr
 \({ x, y } as point), (@Location inner as outer) ->
     crash ""
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **\(** is not expected in an expression.

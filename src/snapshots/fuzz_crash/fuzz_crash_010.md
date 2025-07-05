@@ -11,6 +11,8 @@ foo =
 
     "on        (string 'onmo %')))
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **ASCII CONTROL CHARACTER**
 ASCII control characters are not allowed in Roc source code.

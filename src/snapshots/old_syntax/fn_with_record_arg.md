@@ -11,6 +11,8 @@ table : {
 table = \{height} -> crash "not implemented"
 table
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `table` in this scope.

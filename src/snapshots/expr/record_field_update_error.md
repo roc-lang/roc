@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 { person & age: 31 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **& age** is not expected in an expression.

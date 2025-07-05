@@ -15,6 +15,8 @@ PP(mport#<|"P
 )
 )
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_apply_close_round`

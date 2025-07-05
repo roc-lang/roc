@@ -9,6 +9,8 @@ g:[T(T#
 )]
 D
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `g` in this scope.

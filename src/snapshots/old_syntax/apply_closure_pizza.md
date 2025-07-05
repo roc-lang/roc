@@ -8,6 +8,8 @@ type=expr
 foo
 |> Dict.keepIf \(k, _v) -> List.contains keysToDelete k |> Bool.not
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `foo` in this scope.

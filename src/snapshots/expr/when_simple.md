@@ -9,6 +9,8 @@ when x is
     Ok(value) -> value
     Err(msg) -> msg
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.

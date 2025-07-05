@@ -11,6 +11,8 @@ module # Comment after module keyword
 		SomeType, # Comment after final exposed item
 	]
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 1 ++ 2
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **+ 2** is not expected in an expression.

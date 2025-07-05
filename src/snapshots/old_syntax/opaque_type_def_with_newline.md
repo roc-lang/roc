@@ -9,6 +9,8 @@ a:e
 Na:=
  e e0
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `a` in this scope.

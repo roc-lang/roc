@@ -10,6 +10,8 @@ r^
 #
  -P
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `r` in this scope.

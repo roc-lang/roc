@@ -8,6 +8,8 @@ type=expr
 when Delmin (Del rx) 0 is
     Delmin (Del ry ) _ -> Node Black 0 Bool.false ry
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.

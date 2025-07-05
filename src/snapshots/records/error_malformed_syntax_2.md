@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 { age: 42, name = "Alice" }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_close_curly_or_comma`

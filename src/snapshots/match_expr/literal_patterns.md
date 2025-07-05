@@ -12,6 +12,8 @@ match Answer {
     10 => 4
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **INCOMPATIBLE MATCH BRANCHES**
 The second branch's type in this `match` is different from the previous ones:

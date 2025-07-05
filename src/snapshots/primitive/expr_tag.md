@@ -8,6 +8,8 @@ type=file
 module [foo]
 foo = FortyTwo
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

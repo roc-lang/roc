@@ -11,6 +11,8 @@ type=expr
     100
 ]
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **INCOMPATIBLE LIST ELEMENTS**
 The first two elements in this list have incompatible types:

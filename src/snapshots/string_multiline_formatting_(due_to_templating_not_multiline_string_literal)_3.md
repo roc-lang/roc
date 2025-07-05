@@ -12,6 +12,8 @@ type=expr
 	)
 } lines of text due to the template parts"
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `some_func` in this scope.

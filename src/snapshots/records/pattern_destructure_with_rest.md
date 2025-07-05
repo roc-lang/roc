@@ -9,6 +9,8 @@ match person {
     { first_name, ..others } => Str.len(first_name) > Str.len(others.last_name)
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `person` in this scope.

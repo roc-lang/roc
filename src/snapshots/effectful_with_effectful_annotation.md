@@ -15,6 +15,8 @@ print_msg! = |msg| Stdout.line!(msg)
 
 main! = print_msg!("Hello, world!")
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

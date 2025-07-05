@@ -11,6 +11,8 @@ type=expr
     y * 2
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

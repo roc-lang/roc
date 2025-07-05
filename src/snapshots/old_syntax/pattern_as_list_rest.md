@@ -8,6 +8,8 @@ type=expr
 when myList is
     [first, .. as rest] -> 0
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.

@@ -12,6 +12,8 @@ match result {
     Err(different) => different / 2
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `result` in this scope.

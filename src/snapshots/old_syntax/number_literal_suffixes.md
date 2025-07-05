@@ -40,6 +40,8 @@ type=expr
   i128Bin: 0b101i128,
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **INVALID NUMBER**
 This number literal is not valid: 123u8

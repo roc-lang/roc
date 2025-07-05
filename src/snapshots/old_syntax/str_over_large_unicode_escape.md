@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 '\u(FFFFFFFFF)'
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **INVALID SCALAR**
 I am part way through parsing this scalar literal (character literal), but it contains more than one character.

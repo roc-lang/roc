@@ -9,6 +9,8 @@ module [foo]
 name = "luc"
 foo = "hello ${name}"
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

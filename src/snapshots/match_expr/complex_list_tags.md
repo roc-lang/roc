@@ -14,6 +14,8 @@ match events {
     _ => "other event pattern"
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `string_expected_close_interpolation`

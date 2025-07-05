@@ -11,6 +11,8 @@ if foo then
 else # 3
     c # 4
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `no_else`

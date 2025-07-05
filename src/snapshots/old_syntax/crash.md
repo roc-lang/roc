@@ -15,6 +15,8 @@ _ =
 
 { f: crash "" }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **_ =** is not expected in an expression.

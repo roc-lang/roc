@@ -9,6 +9,8 @@ match value {
     x => x + 1
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `value` in this scope.

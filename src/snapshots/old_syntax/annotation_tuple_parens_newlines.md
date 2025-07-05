@@ -10,6 +10,8 @@ p:(
 i)
 {}
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `p` in this scope.

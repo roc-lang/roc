@@ -31,6 +31,8 @@ main! = |_| {
     result1 + result2 + result3 + result4
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable ``unused`` is not used anywhere in your code.

@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 1 |> dbg
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

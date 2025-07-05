@@ -12,6 +12,8 @@ when x is
  |"baz" -> 2
  "stuff" -> 4
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.

@@ -9,6 +9,8 @@ C:(
 h)->a
 C
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

@@ -8,6 +8,8 @@ type=expr
 "This is a string with ${some_func(a, #This is a comment
 b)} lines of text due to the template parts"
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `some_func` in this scope.

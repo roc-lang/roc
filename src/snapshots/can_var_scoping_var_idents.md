@@ -16,6 +16,8 @@ testFunc = |input| {
 	sum + sum_ # Both should be accessible
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

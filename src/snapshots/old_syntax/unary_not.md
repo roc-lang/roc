@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 !blah
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **!blah** is not expected in an expression.

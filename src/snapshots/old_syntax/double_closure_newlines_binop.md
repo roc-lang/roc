@@ -9,6 +9,8 @@ type=expr
  ->B
  >s
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **\j** is not expected in an expression.

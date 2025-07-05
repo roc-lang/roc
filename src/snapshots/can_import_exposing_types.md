@@ -60,6 +60,8 @@ combineResults = |jsonResult, httpStatus|
         Err(error) => Err(error)
     }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_close_curly_or_comma`

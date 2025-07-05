@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 -foo
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **-foo** is not expected in an expression.

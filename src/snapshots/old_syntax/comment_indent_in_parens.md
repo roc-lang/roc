@@ -10,6 +10,8 @@ type=expr
 ):gi
 M
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

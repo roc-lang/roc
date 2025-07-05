@@ -22,6 +22,8 @@ processColor = |color| {
     }
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **IMPORT MUST BE TOP LEVEL**
 Import statements must appear at the top level of a module.

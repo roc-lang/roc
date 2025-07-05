@@ -11,6 +11,8 @@ e
 implements K->Z)
 s
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `x` in this scope.

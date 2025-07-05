@@ -8,6 +8,8 @@ type=expr
 {}=dbg l#
 n
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

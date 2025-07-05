@@ -9,6 +9,8 @@ A implements q:U
  e->p
 d
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

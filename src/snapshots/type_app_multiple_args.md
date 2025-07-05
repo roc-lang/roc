@@ -12,6 +12,8 @@ processDict = |_dict| []
 
 main! = |_| processDict(Dict.empty().insert("one", 1))
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `empty` in this scope.

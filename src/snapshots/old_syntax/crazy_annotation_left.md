@@ -10,6 +10,8 @@ type=expr
 ))f:f
 t
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

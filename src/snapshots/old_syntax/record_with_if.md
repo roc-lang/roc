@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 {x : if Bool.true then 1 else 2, y: 3 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `no_else`

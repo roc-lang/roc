@@ -13,6 +13,8 @@ extract_age = |person| {
     age
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **= person** is not expected in an expression.

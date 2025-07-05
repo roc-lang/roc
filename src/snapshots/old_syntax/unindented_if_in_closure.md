@@ -9,6 +9,8 @@ type=expr
 f
 else-9
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **\A** is not expected in an expression.

@@ -9,6 +9,8 @@ when x is
  { y } -> 2
  { z, w } -> 4
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.

@@ -11,6 +11,8 @@ combine(mix(vodka, gin), Juices({
     amount: 1 + 2
 }))
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `combine` in this scope.

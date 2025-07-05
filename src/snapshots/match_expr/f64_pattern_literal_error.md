@@ -11,6 +11,8 @@ match x {
     value => "other"
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN PATTERN**
 The token **3.14f64 =>** is not expected in a pattern.

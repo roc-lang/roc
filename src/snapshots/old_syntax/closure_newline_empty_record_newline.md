@@ -10,6 +10,8 @@ type=expr
 }
 Θ
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **\L** is not expected in an expression.

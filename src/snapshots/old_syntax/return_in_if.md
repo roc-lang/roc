@@ -16,6 +16,8 @@ maybeEarlyReturn = \x ->
 
 maybeEarlyReturn 10
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `maybeEarlyReturn` in this scope.

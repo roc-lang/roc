@@ -33,6 +33,8 @@ i = -92233725808
 j : I128
 j = -17011687303715884105728
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **PARSE ERROR**
 Type applications require parentheses around their type arguments.

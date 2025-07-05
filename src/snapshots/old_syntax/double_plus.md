@@ -8,6 +8,8 @@ type=expr
 main =
     [] ++ []
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `main` in this scope.

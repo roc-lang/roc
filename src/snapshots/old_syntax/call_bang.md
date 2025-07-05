@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 launchTheNukes! 123
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `launchTheNukes!` in this scope.

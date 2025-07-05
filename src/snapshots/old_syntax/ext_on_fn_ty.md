@@ -8,6 +8,8 @@ type=expr
 t:(w=>p)a
 t
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `t` in this scope.

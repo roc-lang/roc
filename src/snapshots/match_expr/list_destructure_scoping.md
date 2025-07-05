@@ -10,6 +10,8 @@ match list {
     [first, second] => first + second
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `list` in this scope.

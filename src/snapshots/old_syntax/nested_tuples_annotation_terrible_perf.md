@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 .:(i,i,(i,(i,ii,(i,(i,(i,i,(i,(i,i,(i,(J(i,(i,(i,(i,(i,i,(i,(i,i,(i,(i,(i,(J[]
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **.:** is not expected in an expression.

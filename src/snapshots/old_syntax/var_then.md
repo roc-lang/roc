@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 thenever
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `thenever` in this scope.

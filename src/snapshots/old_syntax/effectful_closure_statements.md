@@ -17,6 +17,8 @@ type=expr
 
     echo "Let's get started on your driver's license application."
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **\{** is not expected in an expression.

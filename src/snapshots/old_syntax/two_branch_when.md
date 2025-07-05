@@ -9,6 +9,8 @@ when x is
  "" -> 1
  "mise" -> 2
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.

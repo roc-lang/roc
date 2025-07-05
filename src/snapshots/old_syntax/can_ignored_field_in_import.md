@@ -9,6 +9,8 @@ import P{_:h
 }
 t!
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **import P** is not expected in an expression.

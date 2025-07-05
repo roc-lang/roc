@@ -8,6 +8,8 @@ type=expr
 dbg(a/a)
 d
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression

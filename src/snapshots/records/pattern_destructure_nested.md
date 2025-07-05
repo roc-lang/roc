@@ -9,6 +9,8 @@ match person {
     { name, address: { street, city, zipCode } } => "${name} lives on ${street} in ${city}"
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `person` in this scope.

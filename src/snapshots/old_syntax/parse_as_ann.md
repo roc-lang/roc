@@ -9,6 +9,8 @@ foo : Foo.Bar.Baz x y as Blah a b
 
 42
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `foo` in this scope.

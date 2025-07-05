@@ -7,6 +7,8 @@ type=file
 ~~~roc
 module P]F
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **OVER CLOSED BRACE**
 There are too many closing braces here.

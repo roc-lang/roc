@@ -11,6 +11,8 @@ identityFn = \x ->
 
 identityFn 45
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `identityFn` in this scope.

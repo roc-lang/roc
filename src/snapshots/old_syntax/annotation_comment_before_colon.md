@@ -10,6 +10,8 @@ A
 :A
 AA
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

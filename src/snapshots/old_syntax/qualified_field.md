@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 One.Two.rec.abc.def.ghi
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `ghi` in this scope.

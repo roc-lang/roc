@@ -11,6 +11,8 @@ platform "foo"
 	packages {}
 	provides []
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

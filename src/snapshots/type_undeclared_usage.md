@@ -16,6 +16,8 @@ processValue = |value| {
 
 AnotherType : SomeModule.MissingType
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDECLARED TYPE**
 The type ``UnknownType`` is not declared in this scope.

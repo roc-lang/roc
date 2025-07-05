@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 fxFn!arg
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `fxFn!arg` in this scope.

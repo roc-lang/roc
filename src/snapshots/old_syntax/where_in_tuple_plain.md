@@ -8,6 +8,8 @@ type=expr
 1:A(*where e implements J) *
 l
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

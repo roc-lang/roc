@@ -18,6 +18,8 @@ type=expr
     Result(Ok(Some(True))),
 ]
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

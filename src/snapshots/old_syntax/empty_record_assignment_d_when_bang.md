@@ -9,6 +9,8 @@ type=expr
 }=d when! 
 s
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

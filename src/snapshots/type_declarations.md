@@ -21,6 +21,8 @@ MyType : U64
 
 MyType2 : Module.Thingy
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDECLARED TYPE**
 The type ``Bar`` is not declared in this scope.

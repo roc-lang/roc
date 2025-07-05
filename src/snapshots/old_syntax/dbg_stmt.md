@@ -10,6 +10,8 @@ dbg (1 == 1)
 
 4
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **

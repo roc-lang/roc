@@ -8,6 +8,8 @@ type=expr
 i(i,
 )t
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `i` in this scope.

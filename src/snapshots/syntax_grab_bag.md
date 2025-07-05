@@ -213,6 +213,8 @@ expect {
 	blah == foo
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token ** After pattern in alt

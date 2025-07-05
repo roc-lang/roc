@@ -27,6 +27,8 @@ processItems = |items| {
 	total_ + result
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **VAR REASSIGNMENT ERROR**
 Cannot reassign a `var` from outside the function where it was declared.

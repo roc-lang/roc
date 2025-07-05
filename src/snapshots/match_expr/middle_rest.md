@@ -12,6 +12,8 @@ match items {
     [] => 0
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `items` in this scope.

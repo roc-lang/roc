@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 f : List elem -> [Nil, Cons elem a] as a
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `f` in this scope.

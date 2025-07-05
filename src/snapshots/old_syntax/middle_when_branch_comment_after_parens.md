@@ -10,6 +10,8 @@ O->(s
 )#
 O->t
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.

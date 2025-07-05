@@ -10,6 +10,8 @@ type=expr
 =dbg n
 d
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

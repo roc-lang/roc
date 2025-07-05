@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 a:b i
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `a` in this scope.

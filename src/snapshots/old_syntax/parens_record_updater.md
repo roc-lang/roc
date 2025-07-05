@@ -8,6 +8,8 @@ type=expr
 T
 &n
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

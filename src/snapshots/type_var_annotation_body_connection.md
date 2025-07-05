@@ -16,6 +16,8 @@ identity = |x| {
 
 main! = |_| {}
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

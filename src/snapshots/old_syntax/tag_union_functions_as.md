@@ -9,6 +9,8 @@ main_for_host : [StdoutWrite Str ({} -> Op), StderrWrite Str ({} -> Op), Done] a
 main_for_host = main
 42
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `main_for_host` in this scope.

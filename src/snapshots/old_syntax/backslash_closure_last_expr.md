@@ -8,6 +8,8 @@ type=expr
 b
 \e->s
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `b` in this scope.

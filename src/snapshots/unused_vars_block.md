@@ -25,6 +25,8 @@ main! = |_| {
     result
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable ``unused_var`` is not used anywhere in your code.

@@ -27,6 +27,8 @@ platform # Comment after platform keyword
 			bar, # Comment after exposed item
 		]
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

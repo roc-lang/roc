@@ -14,6 +14,8 @@ swapPair = |(x, y)| (y, x)
 
 main! = |_| swapPair(1, 2)
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

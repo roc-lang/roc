@@ -11,6 +11,8 @@ match items {
     [x, ..rest, y] => x + y
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **BAD LIST REST PATTERN SYNTAX**
 List rest patterns should use the `.. as name` syntax, not `..name`.

@@ -10,6 +10,8 @@ wherem
 implementsF)A
 _
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `s` in this scope.

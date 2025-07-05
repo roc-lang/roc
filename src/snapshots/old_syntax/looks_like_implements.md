@@ -8,6 +8,8 @@ type=expr
 N (implements) h (0):B
 T
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

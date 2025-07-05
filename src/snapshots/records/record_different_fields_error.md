@@ -14,6 +14,8 @@ type=expr
     field@symbol: "at symbol",
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
 The token **"leading underscore** is not expected in a type annotation.

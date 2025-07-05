@@ -10,6 +10,8 @@ main =
 
     3
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `main` in this scope.

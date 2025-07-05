@@ -10,6 +10,8 @@ type=expr
 ,Mw->r)l
 asl
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

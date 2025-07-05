@@ -33,6 +33,8 @@ main! = |_| {
     result
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable ``pair`` is not used anywhere in your code.

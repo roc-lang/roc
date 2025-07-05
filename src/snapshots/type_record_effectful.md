@@ -16,6 +16,8 @@ printName = |person| {
 }
 main! = |_| {}
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

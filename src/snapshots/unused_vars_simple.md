@@ -27,6 +27,8 @@ main! = |_| {
     a + b + c + d
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable ``x`` is not used anywhere in your code.

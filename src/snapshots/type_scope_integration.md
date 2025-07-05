@@ -19,6 +19,8 @@ Bar : SomeUndeclaredType
 # Declare a type that properly uses a declared type
 Baz : Foo
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **TYPE REDECLARED**
 The type ``Foo`` is being redeclared.

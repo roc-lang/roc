@@ -16,6 +16,8 @@ Decode(a) : a
 	where
 		module(a).decode(List(U8)) -> a,
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

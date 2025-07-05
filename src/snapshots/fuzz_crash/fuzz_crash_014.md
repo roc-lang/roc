@@ -9,6 +9,8 @@ type=file
 0bu22
 0u22
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.

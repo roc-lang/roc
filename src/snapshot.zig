@@ -299,6 +299,7 @@ fn processRocFileAsSnapshot(allocator: Allocator, output_path: []const u8, roc_c
     const content = Content{
         .meta = meta,
         .source = roc_content,
+        .expected = null,
         .formatted = null,
         .has_canonicalize = true,
     };
@@ -412,6 +413,7 @@ fn processPath(gpa: Allocator, path: []const u8, maybe_fuzz_corpus_path: ?[]cons
 const Section = union(enum) {
     meta,
     source,
+    expected,
     formatted,
     parse,
     canonicalize,
@@ -421,6 +423,7 @@ const Section = union(enum) {
 
     pub const META = "# META\n~~~ini\n";
     pub const SOURCE = "# SOURCE\n~~~roc\n";
+    pub const EXPECTED = "# EXPECTED\n";
     pub const FORMATTED = "# FORMATTED\n~~~roc\n";
     pub const PARSE = "# PARSE\n~~~clojure\n";
     pub const CANONICALIZE = "# CANONICALIZE\n~~~clojure\n";
@@ -433,6 +436,7 @@ const Section = union(enum) {
     fn fromString(str: []const u8) ?Section {
         if (std.mem.startsWith(u8, str, META)) return .meta;
         if (std.mem.startsWith(u8, str, SOURCE)) return .source;
+        if (std.mem.startsWith(u8, str, EXPECTED)) return .expected;
         if (std.mem.startsWith(u8, str, FORMATTED)) return .formatted;
         if (std.mem.startsWith(u8, str, PARSE)) return .parse;
         if (std.mem.startsWith(u8, str, CANONICALIZE)) return .canonicalize;
@@ -446,6 +450,7 @@ const Section = union(enum) {
         return switch (self) {
             .meta => META,
             .source => SOURCE,
+            .expected => EXPECTED,
             .formatted => FORMATTED,
             .parse => PARSE,
             .canonicalize => CANONICALIZE,
@@ -602,13 +607,15 @@ const Meta = struct {
 const Content = struct {
     meta: Meta,
     source: []const u8,
+    expected: ?[]const u8,
     formatted: ?[]const u8,
     has_canonicalize: bool,
 
-    fn init(meta: Meta, source: []const u8, formatted: ?[]const u8, has_canonicalize: bool) Content {
+    fn init(meta: Meta, source: []const u8, expected: ?[]const u8, formatted: ?[]const u8, has_canonicalize: bool) Content {
         return .{
             .meta = meta,
             .source = source,
+            .expected = expected,
             .formatted = formatted,
             .has_canonicalize = has_canonicalize,
         };
@@ -616,6 +623,7 @@ const Content = struct {
 
     fn from_ranges(ranges: std.AutoHashMap(Section, Section.Range), content: []const u8) Error!Content {
         var source: []const u8 = undefined;
+        var expected: ?[]const u8 = undefined;
         var formatted: ?[]const u8 = undefined;
         var has_canonicalize: bool = false;
 
@@ -623,6 +631,12 @@ const Content = struct {
             source = value.extract(content);
         } else {
             return Error.MissingSnapshotSource;
+        }
+
+        if (ranges.get(.expected)) |value| {
+            expected = value.extract(content);
+        } else {
+            expected = null;
         }
 
         if (ranges.get(.formatted)) |value| {
@@ -641,6 +655,7 @@ const Content = struct {
             return Content.init(
                 meta,
                 source,
+                expected,
                 formatted,
                 has_canonicalize,
             );
@@ -762,6 +777,44 @@ fn generateSourceSection(output: *DualOutput, content: *const Content) !void {
     );
 
     try output.end_code_block();
+    try output.end_section();
+}
+
+/// Generate EXPECTED section for both markdown and HTML
+fn generateExpectedSection(output: *DualOutput, content: *const Content) !void {
+    try output.begin_section("EXPECTED");
+
+    // HTML EXPECTED section
+    try output.html_writer.writeAll(
+        \\                <div class="expected">
+    );
+
+    if (content.expected) |expected| {
+        try output.md_writer.writeAll(expected);
+        try output.md_writer.writeByte('\n');
+
+        // For HTML, escape the expected content
+        for (expected) |char| {
+            switch (char) {
+                '<' => try output.html_writer.writeAll("&lt;"),
+                '>' => try output.html_writer.writeAll("&gt;"),
+                '&' => try output.html_writer.writeAll("&amp;"),
+                '"' => try output.html_writer.writeAll("&quot;"),
+                '\'' => try output.html_writer.writeAll("&#39;"),
+                else => try output.html_writer.writeByte(char),
+            }
+        }
+    } else {
+        try output.md_writer.writeAll("NIL\n");
+        try output.html_writer.writeAll("                    <p>NIL</p>");
+    }
+
+    try output.html_writer.writeAll(
+        \\
+        \\                </div>
+        \\
+    );
+
     try output.end_section();
 }
 
@@ -1389,6 +1442,7 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, maybe_f
     // Generate all sections simultaneously
     try generateMetaSection(&output, &content);
     try generateSourceSection(&output, &content);
+    try generateExpectedSection(&output, &content);
     try generateProblemsSection(&output, &parse_ast, &can_ir, &solver, &content, snapshot_path, &module_env);
     try generateTokensSection(&output, &parse_ast, &content, &module_env);
 

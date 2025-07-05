@@ -10,6 +10,8 @@ k:
 ]m#
 D
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `k` in this scope.

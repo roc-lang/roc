@@ -11,6 +11,8 @@ FirstType : U64
 SecondType : Str
 ThirdType : List(U8)
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

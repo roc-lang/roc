@@ -10,6 +10,8 @@ h
 then!f#
 else&m
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **&m** is not expected in an expression.

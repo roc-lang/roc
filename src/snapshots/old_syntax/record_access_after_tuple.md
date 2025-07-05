@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 ({a: 0}, {b: 1}).0.a
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expr_no_space_dot_int`

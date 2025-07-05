@@ -11,6 +11,8 @@ type=expr
     P
 u
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

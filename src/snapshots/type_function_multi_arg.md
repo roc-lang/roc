@@ -12,6 +12,8 @@ curry = |fn| |x| |y| fn(x, y)
 
 main! = |_| {}
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **-> (** is not expected in an expression.

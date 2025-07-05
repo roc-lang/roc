@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 if True Ok(0) else Err(1)
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

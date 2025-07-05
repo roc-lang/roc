@@ -9,6 +9,8 @@ f : a -> (b -> c) where a implements A, b implements Eq, c implements Ord
 
 f
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `f` in this scope.

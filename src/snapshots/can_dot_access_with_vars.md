@@ -11,6 +11,8 @@ type=expr
     list.map(fn)
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

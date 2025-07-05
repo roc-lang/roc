@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 f : [Yes,
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `f` in this scope.

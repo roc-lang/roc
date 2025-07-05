@@ -9,6 +9,8 @@ i:{t:(J#
 )}
 A
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `i` in this scope.

@@ -23,6 +23,8 @@ pkg: "..l", mmen		} # Cose
 ar,
 		]
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **MISMATCHED BRACE**
 This brace does not match the corresponding opening brace.

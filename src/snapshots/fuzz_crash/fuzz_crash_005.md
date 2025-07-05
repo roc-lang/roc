@@ -7,6 +7,8 @@ type=file
 ~~~roc
 modu
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.

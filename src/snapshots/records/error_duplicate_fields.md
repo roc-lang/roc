@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 { name: "Alice", age: 30, name: "Bob", email: "alice@example.com", age: 25 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **DUPLICATE RECORD FIELD**
 The record field ``name`` appears more than once in this record.

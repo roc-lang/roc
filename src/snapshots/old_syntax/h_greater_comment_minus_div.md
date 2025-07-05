@@ -8,6 +8,8 @@ type=expr
 h>#
  -h/d
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **-h** is not expected in an expression.

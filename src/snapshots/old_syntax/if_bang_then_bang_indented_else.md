@@ -11,6 +11,8 @@ t
  l
 5
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `if!a!then` in this scope.

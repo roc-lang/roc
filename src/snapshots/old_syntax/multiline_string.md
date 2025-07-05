@@ -15,6 +15,8 @@ c =
     """
 42
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `a` in this scope.

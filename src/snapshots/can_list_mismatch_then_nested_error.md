@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 [1, "hello", [3, "world"]]
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **INCOMPATIBLE LIST ELEMENTS**
 The first two elements in this list have incompatible types:

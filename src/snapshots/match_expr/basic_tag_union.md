@@ -11,6 +11,8 @@ match color {
 	Green => "3"
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `color` in this scope.

@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 List.map
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `map` in this scope.

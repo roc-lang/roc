@@ -7,6 +7,8 @@ type=file
 ~~~roc
 module [something, SomeType]
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

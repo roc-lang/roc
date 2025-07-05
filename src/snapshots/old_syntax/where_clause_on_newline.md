@@ -10,6 +10,8 @@ f : a -> U64
 
 f
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `f` in this scope.

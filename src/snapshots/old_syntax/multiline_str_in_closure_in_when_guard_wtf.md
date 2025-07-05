@@ -9,6 +9,8 @@ when f
 is
 s if\t->""""""->e
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.

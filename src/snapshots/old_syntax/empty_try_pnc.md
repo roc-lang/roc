@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 try()t
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `try` in this scope.

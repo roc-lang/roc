@@ -10,6 +10,8 @@ type=file
 0u8.0
 0_
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **LEADING ZERO**
 Numbers cannot have leading zeros.

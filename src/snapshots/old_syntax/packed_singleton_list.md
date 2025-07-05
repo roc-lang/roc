@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 [1]
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

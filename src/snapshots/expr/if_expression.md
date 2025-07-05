@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 if x > 5 "big" else "small"
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `x` in this scope.

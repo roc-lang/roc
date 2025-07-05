@@ -10,6 +10,8 @@ type=expr
 ={}
 I
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **

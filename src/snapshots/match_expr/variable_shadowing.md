@@ -10,6 +10,8 @@ match (value, other) {
     (None, x) => x * 2
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `value` in this scope.

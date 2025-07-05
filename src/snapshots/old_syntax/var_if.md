@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 iffy
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `iffy` in this scope.

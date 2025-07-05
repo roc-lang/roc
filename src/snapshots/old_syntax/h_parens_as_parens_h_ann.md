@@ -8,6 +8,8 @@ type=expr
 N:A((H)as H) H
 I
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

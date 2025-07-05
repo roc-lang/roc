@@ -11,6 +11,8 @@ then 2 else 3
 
 x
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `x` in this scope.

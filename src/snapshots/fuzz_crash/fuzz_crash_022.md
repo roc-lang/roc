@@ -14,6 +14,8 @@ getUser = |id| if (id > 1!) "big" else "l"
 
 -ain! = |_| getUser(900)
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_package_or_platform_name`

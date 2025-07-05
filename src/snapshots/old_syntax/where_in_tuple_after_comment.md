@@ -9,6 +9,8 @@ type=expr
 where e implements J)*
 l
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

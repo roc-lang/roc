@@ -9,6 +9,8 @@ n*f
 #
 -f
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `n` in this scope.

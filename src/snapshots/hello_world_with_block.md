@@ -18,6 +18,8 @@ main! = |_| {
 	Stdout.line!("Hello, world!")
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable ``world`` is not used anywhere in your code.

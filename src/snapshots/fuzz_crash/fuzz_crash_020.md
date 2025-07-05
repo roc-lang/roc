@@ -127,6 +127,8 @@ expect {
 h == foo
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDECLARED TYPE**
 The type ``Lis`` is not declared in this scope.

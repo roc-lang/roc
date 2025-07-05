@@ -9,6 +9,8 @@ when (1, 2) is
  (1, x) -> x
  (_, b) -> 3 + b
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.

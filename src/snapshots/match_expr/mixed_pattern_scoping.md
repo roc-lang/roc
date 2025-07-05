@@ -12,6 +12,8 @@ match data {
     Err(y) => y / 2
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `data` in this scope.

@@ -12,6 +12,8 @@ process = |maybe| "result"
 
 main! = |_| {}
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable ``maybe`` is not used anywhere in your code.

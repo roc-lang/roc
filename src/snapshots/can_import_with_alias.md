@@ -11,6 +11,8 @@ import json.Json as MyJson
 
 main = MyJson.decode
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

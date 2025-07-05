@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 (person.transform)(42)
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `person` in this scope.

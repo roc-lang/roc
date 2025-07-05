@@ -8,6 +8,8 @@ type=expr
 i=""""""().1
 p
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `i` in this scope.

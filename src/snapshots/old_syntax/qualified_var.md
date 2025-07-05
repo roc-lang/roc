@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 One.Two.whee
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `whee` in this scope.
