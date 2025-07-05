@@ -52,7 +52,7 @@ fn typeCheckExpr(allocator: std.mem.Allocator, source: []const u8) !struct {
     var canon_expr_idx: ?CIR.Expr.Idx = null;
     if (parse_ast.root_node_idx != 0) {
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-        canon_expr_idx = try can.canonicalize_expr(expr_idx);
+        canon_expr_idx = try can.canonicalizeExpr(expr_idx);
     }
 
     // Type check - continue even if there are parse errors
@@ -126,7 +126,7 @@ fn typeCheckFile(allocator: std.mem.Allocator, source: []const u8) !struct {
         };
     }
 
-    try can.canonicalize_file();
+    try can.canonicalizeFile();
 
     // Type check - continue even if there are parse errors
     const checker = try allocator.create(check_types);
@@ -187,7 +187,7 @@ fn typeCheckStatement(allocator: std.mem.Allocator, source: []const u8) !struct 
     var canon_result: ?CIR.Expr.Idx = null;
     if (parse_ast.root_node_idx != 0) {
         const stmt_idx: parse.AST.Statement.Idx = @enumFromInt(parse_ast.root_node_idx);
-        canon_result = try can.canonicalize_statement(stmt_idx);
+        canon_result = try can.canonicalizeStatement(stmt_idx);
     }
 
     // Type check - continue even if there are parse errors
