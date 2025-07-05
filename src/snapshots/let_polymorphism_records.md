@@ -173,22 +173,22 @@ CloseCurly(66:1-66:2),EndOfFile(66:2-66:2),
 		(s-decl @8.1-8.31
 			(p-ident @8.1-8.17 (raw "my_nonempty_list"))
 			(e-list @8.20-8.31
-				(e-ident @8.21-8.24 (qaul "") (raw "num"))
-				(e-ident @8.26-8.30 (qaul "") (raw "frac"))))
+				(e-ident @8.21-8.24 (raw "num"))
+				(e-ident @8.26-8.30 (raw "frac"))))
 		(s-decl @11.1-11.44
 			(p-ident @11.1-11.14 (raw "simple_record"))
 			(e-record @11.17-11.44
 				(field (field "x") (optional false)
-					(e-ident @11.22-11.25 (qaul "") (raw "num")))
+					(e-ident @11.22-11.25 (raw "num")))
 				(field (field "y") (optional false)
-					(e-ident @11.30-11.34 (qaul "") (raw "frac")))
+					(e-ident @11.30-11.34 (raw "frac")))
 				(field (field "z") (optional false)
-					(e-ident @11.39-11.42 (qaul "") (raw "str")))))
+					(e-ident @11.39-11.42 (raw "str")))))
 		(s-decl @14.1-14.54
 			(p-ident @14.1-14.18 (raw "record_with_empty"))
 			(e-record @14.21-14.54
 				(field (field "data") (optional false)
-					(e-ident @14.29-14.42 (qaul "") (raw "my_empty_list")))
+					(e-ident @14.29-14.42 (raw "my_empty_list")))
 				(field (field "count") (optional false)
 					(e-int @14.51-14.52 (raw "0")))))
 		(s-decl @17.1-17.17
@@ -214,13 +214,13 @@ CloseCurly(66:1-66:2),EndOfFile(66:2-66:2),
 						(field (field "level2") (optional false)
 							(e-record @23.17-26.10
 								(field (field "value") (optional false)
-									(e-ident @24.20-24.23 (qaul "") (raw "num")))
+									(e-ident @24.20-24.23 (raw "num")))
 								(field (field "list") (optional false)
-									(e-ident @25.19-25.32 (qaul "") (raw "my_empty_list")))))
+									(e-ident @25.19-25.32 (raw "my_empty_list")))))
 						(field (field "other") (optional false)
-							(e-ident @27.16-27.20 (qaul "") (raw "frac")))))
+							(e-ident @27.16-27.20 (raw "frac")))))
 				(field (field "top") (optional false)
-					(e-ident @29.10-29.13 (qaul "") (raw "str")))))
+					(e-ident @29.10-29.13 (raw "str")))))
 		(s-decl @33.1-37.2
 			(p-ident @33.1-33.13 (raw "mixed_record"))
 			(e-record @33.16-37.2
@@ -228,84 +228,84 @@ CloseCurly(66:1-66:2),EndOfFile(66:2-66:2),
 				(field (field "my_nonempty_list") (optional false))
 				(field (field "derived") (optional false)
 					(e-list @36.14-36.24
-						(e-ident @36.15-36.18 (qaul "") (raw "num"))
-						(e-ident @36.20-36.23 (qaul "") (raw "num"))))))
+						(e-ident @36.15-36.18 (raw "num"))
+						(e-ident @36.20-36.23 (raw "num"))))))
 		(s-decl @40.1-40.43
 			(p-ident @40.1-40.8 (raw "record1"))
 			(e-record @40.11-40.43
 				(field (field "value") (optional false)
-					(e-ident @40.20-40.23 (qaul "") (raw "num")))
+					(e-ident @40.20-40.23 (raw "num")))
 				(field (field "doubled") (optional false)
 					(e-binop @40.34-40.43 (op "*")
-						(e-ident @40.34-40.37 (qaul "") (raw "num"))
+						(e-ident @40.34-40.37 (raw "num"))
 						(e-int @40.40-40.41 (raw "2"))))))
 		(s-decl @41.1-41.43
 			(p-ident @41.1-41.8 (raw "record2"))
 			(e-record @41.11-41.43
 				(field (field "value") (optional false)
-					(e-ident @41.20-41.23 (qaul "") (raw "num")))
+					(e-ident @41.20-41.23 (raw "num")))
 				(field (field "tripled") (optional false)
 					(e-binop @41.34-41.43 (op "*")
-						(e-ident @41.34-41.37 (qaul "") (raw "num"))
+						(e-ident @41.34-41.37 (raw "num"))
 						(e-int @41.40-41.41 (raw "3"))))))
 		(s-decl @42.1-42.48
 			(p-ident @42.1-42.8 (raw "record3"))
 			(e-record @42.11-42.48
 				(field (field "original") (optional false)
-					(e-ident @42.23-42.26 (qaul "") (raw "num")))
+					(e-ident @42.23-42.26 (raw "num")))
 				(field (field "modified") (optional false)
 					(e-binop @42.38-42.48 (op "+")
-						(e-ident @42.38-42.41 (qaul "") (raw "num"))
+						(e-ident @42.38-42.41 (raw "num"))
 						(e-int @42.44-42.46 (raw "10"))))))
 		(s-decl @45.1-48.2
 			(p-ident @45.1-45.15 (raw "record_with_fn"))
 			(e-record @45.18-48.2
 				(field (field "value") (optional false)
-					(e-ident @46.12-46.15 (qaul "") (raw "num")))
+					(e-ident @46.12-46.15 (raw "num")))
 				(field (field "transform") (optional false)
 					(e-lambda @47.16-47.28
 						(args
 							(p-ident @47.17-47.18 (raw "x")))
 						(e-binop @47.20-47.28 (op "+")
-							(e-ident @47.20-47.21 (qaul "") (raw "x"))
-							(e-ident @47.24-47.27 (qaul "") (raw "num")))))))
+							(e-ident @47.20-47.21 (raw "x"))
+							(e-ident @47.24-47.27 (raw "num")))))))
 		(s-decl @51.1-61.2
 			(p-ident @51.1-51.8 (raw "complex"))
 			(e-record @51.11-61.2
 				(field (field "numbers") (optional false)
 					(e-record @52.14-52.39
 						(field (field "int") (optional false)
-							(e-ident @52.21-52.24 (qaul "") (raw "num")))
+							(e-ident @52.21-52.24 (raw "num")))
 						(field (field "float") (optional false)
-							(e-ident @52.33-52.37 (qaul "") (raw "frac")))))
+							(e-ident @52.33-52.37 (raw "frac")))))
 				(field (field "lists") (optional false)
 					(e-record @53.12-53.64
 						(field (field "empty") (optional false)
-							(e-ident @53.21-53.34 (qaul "") (raw "my_empty_list")))
+							(e-ident @53.21-53.34 (raw "my_empty_list")))
 						(field (field "nonempty") (optional false)
-							(e-ident @53.46-53.62 (qaul "") (raw "my_nonempty_list")))))
+							(e-ident @53.46-53.62 (raw "my_nonempty_list")))))
 				(field (field "strings") (optional false)
 					(e-record @54.14-54.55
 						(field (field "value") (optional false)
-							(e-ident @54.23-54.26 (qaul "") (raw "str")))
+							(e-ident @54.23-54.26 (raw "str")))
 						(field (field "repeated") (optional false)
 							(e-list @54.38-54.53
-								(e-ident @54.39-54.42 (qaul "") (raw "str"))
-								(e-ident @54.44-54.47 (qaul "") (raw "str"))
-								(e-ident @54.49-54.52 (qaul "") (raw "str"))))))
+								(e-ident @54.39-54.42 (raw "str"))
+								(e-ident @54.44-54.47 (raw "str"))
+								(e-ident @54.49-54.52 (raw "str"))))))
 				(field (field "nested") (optional false)
 					(e-record @55.13-60.6
 						(field (field "data") (optional false)
 							(e-list @56.15-59.10
 								(e-record @57.13-57.46
 									(field (field "id") (optional false)
-										(e-ident @57.19-57.22 (qaul "") (raw "num")))
+										(e-ident @57.19-57.22 (raw "num")))
 									(field (field "items") (optional false)
-										(e-ident @57.31-57.44 (qaul "") (raw "my_empty_list"))))
+										(e-ident @57.31-57.44 (raw "my_empty_list"))))
 								(e-record @58.13-58.43
 									(field (field "id") (optional false)
 										(e-binop @58.19-58.27 (op "+")
-											(e-ident @58.19-58.22 (qaul "") (raw "num"))
+											(e-ident @58.19-58.22 (raw "num"))
 											(e-int @58.25-58.26 (raw "1"))))
 									(field (field "items") (optional false)
 										(e-list @58.35-58.41
@@ -320,11 +320,11 @@ CloseCurly(66:1-66:2),EndOfFile(66:2-66:2),
 					(statements
 						(e-binop @65.5-66.2 (op "+")
 							(e-field-access @65.5-65.20
-								(e-ident @65.5-65.12 (qaul "") (raw "record1"))
-								(e-ident @65.12-65.18 (qaul "") (raw ".value")))
+								(e-ident @65.5-65.12 (raw "record1"))
+								(e-ident @65.12-65.18 (raw "value")))
 							(e-field-access @65.21-66.2
-								(e-ident @65.21-65.28 (qaul "") (raw "record2"))
-								(e-ident @65.28-65.34 (qaul "") (raw ".value"))))))))))
+								(e-ident @65.21-65.28 (raw "record2"))
+								(e-ident @65.28-65.34 (raw "value"))))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -338,10 +338,10 @@ my_empty_list = []
 my_nonempty_list = [num, frac]
 
 # Simple record with polymorphic values
-simple_record = { x: num, y: frac, z: str }
+simple_record = {x: num, y: frac, z: str}
 
 # Record with empty list that gets used polymorphically
-record_with_empty = { data: my_empty_list, count: 0 }
+record_with_empty = {data: my_empty_list, count: 0}
 
 # Using the empty list from record in different contexts
 use1 = [1, 2, 3]
@@ -349,45 +349,59 @@ use2 = ["a", "b", "c"]
 
 # Nested records with polymorphic values
 nested = {
+
 	level1: {
+
 		level2: {
+
 			value: num,
-			list: my_empty_list,
+			list: my_empty_list
+
 		},
-		other: frac,
+		other: frac
+
 	},
-	top: str,
+	top: str
+
 }
 
 # Record with mixed list
 mixed_record = {
+
 	my_empty_list,
 	my_nonempty_list,
-	derived: [num, num],
+	derived: [num, num]
+
 }
 
 # Multiple records sharing polymorphic values
-record1 = { value: num, doubled: num * 2 }
-record2 = { value: num, tripled: num * 3 }
-record3 = { original: num, modified: num + 10 }
+record1 = {value: num, doubled: num * 2}
+record2 = {value: num, tripled: num * 3}
+record3 = {original: num, modified: num + 10}
 
 # Record with function using polymorphic value
 record_with_fn = {
+
 	value: num,
-	transform: |x| x + num,
+	transform: |x| x + num
+
 }
 
 # Complex nested structure mixing all types
 complex = {
-	numbers: { int: num, float: frac },
-	lists: { empty: my_empty_list, nonempty: my_nonempty_list },
-	strings: { value: str, repeated: [str, str, str] },
+
+	numbers: {int: num, float: frac},
+	lists: {empty: my_empty_list, nonempty: my_nonempty_list},
+	strings: {value: str, repeated: [str, str, str]},
 	nested: {
+
 		data: [
-			{ id: num, items: my_empty_list },
-			{ id: num + 1, items: [1, 2] },
-		],
-	},
+			{id: num, items: my_empty_list},
+			{id: num + 1, items: [1, 2]},
+		]
+
+	}
+
 }
 
 main = |_| {

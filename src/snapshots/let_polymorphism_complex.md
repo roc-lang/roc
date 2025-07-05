@@ -7,111 +7,81 @@ type=file
 ~~~roc
 app [main] { pf: platform "../basic-cli/platform.roc" }
 
-# Basic polymorphic values
+# let-polymorphism: polymorphic identity function
+id = |x| x
+
+# id used at different types
+id_int = id(42)
+id_str = id("hello")
+id_bool = id(True)
+id_list = id([1, 2, 3])
+id_record = id({ x: 10, y: 20 })
+
+# Polymorphic const function
+const = |x| |_| x
+
+# const instantiated at different types
+const_int = const(100)
+const_str = const("world")
+const_list = const([True, False])
+
+# Using the const functions
+result_int = const_int(999)
+result_str = const_str(999)
+result_list = const_list(999)
+
+# Polymorphic pair constructor
+make_pair = |a, b| { fst: a, snd: b }
+
+# make_pair used with different types
+int_pair = make_pair(1, 2)
+str_pair = make_pair("hello", "world")
+mixed_pair = make_pair(42, "answer")
+
+# Polymorphic function to create single-element lists
+make_list = |x| [x]
+
+# make_list used with different types
+list_of_int = make_list(42)
+list_of_str = make_list("hello")
+list_of_bool = make_list(True)
+
+# Polymorphic compose function
+compose = |f, g| |x| f(g(x))
+
+# compose used with different function types
+add_one = |x| x + 1
+double = |x| x * 2
+add_then_double = compose(double, add_one)
+double_then_add = compose(add_one, double)
+
+result1 = add_then_double(5)  # (5 + 1) * 2 = 12
+result2 = double_then_add(5)  # (5 * 2) + 1 = 11
+
+# Polymorphic numeric literal
 num = 42
-frac = 4.2
-str = "hello"
-bool = True
 
-# Polymorphic empty collections
-empty_list = []
-empty_record = {}
+# num used as Int
+int_use = num + 10
 
-# Using empty list in multiple contexts
-int_list = [1, 2, 3]
-str_list = ["a", "b", "c"]
-bool_list = [True, False]
+# num used as Float
+float_use = num * 3.14
 
-# Nested empty lists
-nested_empty = [empty_list, empty_list, empty_list]
-mixed_nested = [empty_list, [1, 2], empty_list, [3, 4]]
+# Polymorphic empty function
+empty = |_| []
 
-# Polymorphic record with empty list
-poly_record = { items: empty_list, count: 0 }
-use_poly_record1 = { items: [1, 2, 3], count: 0 }
-use_poly_record2 = { items: ["x", "y", "z"], count: 0 }
+# empty used at different types
+empty_ints = empty(0)
+empty_strs = empty(0)
 
-# Complex nested structure with multiple polymorphic uses
-base_config = {
-    data: empty_list,
-    metadata: {
-        version: num,
-        ratio: frac,
-        description: str,
-    },
-}
-
-# Different instantiations of base_config
-config1 = {
-    data: [1, 2, 3, 4, 5],
-    metadata: {
-        version: num,
-        ratio: frac,
-        description: str,
-    },
-    name: "integers",
-}
-
-config2 = {
-    data: ["apple", "banana", "cherry"],
-    metadata: {
-        version: num,
-        ratio: frac,
-        description: str,
-    },
-    name: "fruits",
-}
-
-# Polymorphic function-like structures
-make_container = |val| { value: val, wrapper: [val] }
-container1 = make_container(num)
-container2 = make_container(str)
-container3 = make_container(frac)
-
-# Deeply nested polymorphism
-deep = {
-    level1: {
-        level2: {
-            level3: {
-                data: empty_list,
-                value: num,
-            },
-            items: [num, num * 2, num * 3],
-        },
-        collection: empty_list,
-    },
-    results: [
-        { data: [1], tag: "single" },
-        { data: [1, 2], tag: "ints" },
-        { data: [1, 2, 3], tag: "more" },
-    ],
-}
-
-# Polymorphic values used in computations
-compute1 = num + 10
-compute2 = num * 2
-compute3 = [num, num]
-compute4 = { base: num, derived: [num, num + 1, num + 2] }
-
-# Mixed polymorphic structures
-mixed = {
-    numbers: { value: num, list: [num, num], float: frac },
-    strings: { value: str, list: [str, str] },
-    empty_lists: {
-        raw: empty_list,
-        in_list: [empty_list],
-        in_record: { data: empty_list },
-    },
-    computations: {
-        from_num: num * 100,
-        from_frac: frac * 10.0,
-        list_from_num: [num, num, num],
-    },
-}
+# Demonstrating polymorphism by using empty function results
+# in contexts that require specific types
+list_with_ints = [1, 2, 3]
+list_with_strs = ["a", "b", "c"]
 
 main = |_| {
-    # Just type-check everything
-    container1.value + 10
+    # Return values demonstrating polymorphic instantiation
+    { id_int, id_str, result_int, result_str, int_use, float_use, int_pair, str_pair }
 }
 ~~~
 # PROBLEMS
@@ -120,116 +90,86 @@ NIL
 ~~~zig
 KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:10),CloseSquare(1:10-1:11),OpenCurly(1:12-1:13),LowerIdent(1:14-1:16),OpColon(1:16-1:17),KwPlatform(1:18-1:26),StringStart(1:27-1:28),StringPart(1:28-1:53),StringEnd(1:53-1:54),CloseCurly(1:55-1:56),Newline(1:1-1:1),
 Newline(1:1-1:1),
-Newline(3:2-3:27),
-LowerIdent(4:1-4:4),OpAssign(4:5-4:6),Int(4:7-4:9),Newline(1:1-1:1),
-LowerIdent(5:1-5:5),OpAssign(5:6-5:7),Float(5:8-5:11),Newline(1:1-1:1),
-LowerIdent(6:1-6:4),OpAssign(6:5-6:6),StringStart(6:7-6:8),StringPart(6:8-6:13),StringEnd(6:13-6:14),Newline(1:1-1:1),
-LowerIdent(7:1-7:5),OpAssign(7:6-7:7),UpperIdent(7:8-7:12),Newline(1:1-1:1),
+Newline(3:2-3:50),
+LowerIdent(4:1-4:3),OpAssign(4:4-4:5),OpBar(4:6-4:7),LowerIdent(4:7-4:8),OpBar(4:8-4:9),LowerIdent(4:10-4:11),Newline(1:1-1:1),
 Newline(1:1-1:1),
-Newline(9:2-9:32),
-LowerIdent(10:1-10:11),OpAssign(10:12-10:13),OpenSquare(10:14-10:15),CloseSquare(10:15-10:16),Newline(1:1-1:1),
-LowerIdent(11:1-11:13),OpAssign(11:14-11:15),OpenCurly(11:16-11:17),CloseCurly(11:17-11:18),Newline(1:1-1:1),
+Newline(6:2-6:29),
+LowerIdent(7:1-7:7),OpAssign(7:8-7:9),LowerIdent(7:10-7:12),NoSpaceOpenRound(7:12-7:13),Int(7:13-7:15),CloseRound(7:15-7:16),Newline(1:1-1:1),
+LowerIdent(8:1-8:7),OpAssign(8:8-8:9),LowerIdent(8:10-8:12),NoSpaceOpenRound(8:12-8:13),StringStart(8:13-8:14),StringPart(8:14-8:19),StringEnd(8:19-8:20),CloseRound(8:20-8:21),Newline(1:1-1:1),
+LowerIdent(9:1-9:8),OpAssign(9:9-9:10),LowerIdent(9:11-9:13),NoSpaceOpenRound(9:13-9:14),UpperIdent(9:14-9:18),CloseRound(9:18-9:19),Newline(1:1-1:1),
+LowerIdent(10:1-10:8),OpAssign(10:9-10:10),LowerIdent(10:11-10:13),NoSpaceOpenRound(10:13-10:14),OpenSquare(10:14-10:15),Int(10:15-10:16),Comma(10:16-10:17),Int(10:18-10:19),Comma(10:19-10:20),Int(10:21-10:22),CloseSquare(10:22-10:23),CloseRound(10:23-10:24),Newline(1:1-1:1),
+LowerIdent(11:1-11:10),OpAssign(11:11-11:12),LowerIdent(11:13-11:15),NoSpaceOpenRound(11:15-11:16),OpenCurly(11:16-11:17),LowerIdent(11:18-11:19),OpColon(11:19-11:20),Int(11:21-11:23),Comma(11:23-11:24),LowerIdent(11:25-11:26),OpColon(11:26-11:27),Int(11:28-11:30),CloseCurly(11:31-11:32),CloseRound(11:32-11:33),Newline(1:1-1:1),
 Newline(1:1-1:1),
-Newline(13:2-13:40),
-LowerIdent(14:1-14:9),OpAssign(14:10-14:11),OpenSquare(14:12-14:13),Int(14:13-14:14),Comma(14:14-14:15),Int(14:16-14:17),Comma(14:17-14:18),Int(14:19-14:20),CloseSquare(14:20-14:21),Newline(1:1-1:1),
-LowerIdent(15:1-15:9),OpAssign(15:10-15:11),OpenSquare(15:12-15:13),StringStart(15:13-15:14),StringPart(15:14-15:15),StringEnd(15:15-15:16),Comma(15:16-15:17),StringStart(15:18-15:19),StringPart(15:19-15:20),StringEnd(15:20-15:21),Comma(15:21-15:22),StringStart(15:23-15:24),StringPart(15:24-15:25),StringEnd(15:25-15:26),CloseSquare(15:26-15:27),Newline(1:1-1:1),
-LowerIdent(16:1-16:10),OpAssign(16:11-16:12),OpenSquare(16:13-16:14),UpperIdent(16:14-16:18),Comma(16:18-16:19),UpperIdent(16:20-16:25),CloseSquare(16:25-16:26),Newline(1:1-1:1),
+Newline(13:2-13:29),
+LowerIdent(14:1-14:6),OpAssign(14:7-14:8),OpBar(14:9-14:10),LowerIdent(14:10-14:11),OpBar(14:11-14:12),OpBar(14:13-14:14),Underscore(14:14-14:15),OpBar(14:15-14:16),LowerIdent(14:17-14:18),Newline(1:1-1:1),
 Newline(1:1-1:1),
-Newline(18:2-18:21),
-LowerIdent(19:1-19:13),OpAssign(19:14-19:15),OpenSquare(19:16-19:17),LowerIdent(19:17-19:27),Comma(19:27-19:28),LowerIdent(19:29-19:39),Comma(19:39-19:40),LowerIdent(19:41-19:51),CloseSquare(19:51-19:52),Newline(1:1-1:1),
-LowerIdent(20:1-20:13),OpAssign(20:14-20:15),OpenSquare(20:16-20:17),LowerIdent(20:17-20:27),Comma(20:27-20:28),OpenSquare(20:29-20:30),Int(20:30-20:31),Comma(20:31-20:32),Int(20:33-20:34),CloseSquare(20:34-20:35),Comma(20:35-20:36),LowerIdent(20:37-20:47),Comma(20:47-20:48),OpenSquare(20:49-20:50),Int(20:50-20:51),Comma(20:51-20:52),Int(20:53-20:54),CloseSquare(20:54-20:55),CloseSquare(20:55-20:56),Newline(1:1-1:1),
+Newline(16:2-16:40),
+LowerIdent(17:1-17:10),OpAssign(17:11-17:12),LowerIdent(17:13-17:18),NoSpaceOpenRound(17:18-17:19),Int(17:19-17:22),CloseRound(17:22-17:23),Newline(1:1-1:1),
+LowerIdent(18:1-18:10),OpAssign(18:11-18:12),LowerIdent(18:13-18:18),NoSpaceOpenRound(18:18-18:19),StringStart(18:19-18:20),StringPart(18:20-18:25),StringEnd(18:25-18:26),CloseRound(18:26-18:27),Newline(1:1-1:1),
+LowerIdent(19:1-19:11),OpAssign(19:12-19:13),LowerIdent(19:14-19:19),NoSpaceOpenRound(19:19-19:20),OpenSquare(19:20-19:21),UpperIdent(19:21-19:25),Comma(19:25-19:26),UpperIdent(19:27-19:32),CloseSquare(19:32-19:33),CloseRound(19:33-19:34),Newline(1:1-1:1),
 Newline(1:1-1:1),
-Newline(22:2-22:37),
-LowerIdent(23:1-23:12),OpAssign(23:13-23:14),OpenCurly(23:15-23:16),LowerIdent(23:17-23:22),OpColon(23:22-23:23),LowerIdent(23:24-23:34),Comma(23:34-23:35),LowerIdent(23:36-23:41),OpColon(23:41-23:42),Int(23:43-23:44),CloseCurly(23:45-23:46),Newline(1:1-1:1),
-LowerIdent(24:1-24:17),OpAssign(24:18-24:19),OpenCurly(24:20-24:21),LowerIdent(24:22-24:27),OpColon(24:27-24:28),OpenSquare(24:29-24:30),Int(24:30-24:31),Comma(24:31-24:32),Int(24:33-24:34),Comma(24:34-24:35),Int(24:36-24:37),CloseSquare(24:37-24:38),Comma(24:38-24:39),LowerIdent(24:40-24:45),OpColon(24:45-24:46),Int(24:47-24:48),CloseCurly(24:49-24:50),Newline(1:1-1:1),
-LowerIdent(25:1-25:17),OpAssign(25:18-25:19),OpenCurly(25:20-25:21),LowerIdent(25:22-25:27),OpColon(25:27-25:28),OpenSquare(25:29-25:30),StringStart(25:30-25:31),StringPart(25:31-25:32),StringEnd(25:32-25:33),Comma(25:33-25:34),StringStart(25:35-25:36),StringPart(25:36-25:37),StringEnd(25:37-25:38),Comma(25:38-25:39),StringStart(25:40-25:41),StringPart(25:41-25:42),StringEnd(25:42-25:43),CloseSquare(25:43-25:44),Comma(25:44-25:45),LowerIdent(25:46-25:51),OpColon(25:51-25:52),Int(25:53-25:54),CloseCurly(25:55-25:56),Newline(1:1-1:1),
+Newline(21:2-21:28),
+LowerIdent(22:1-22:11),OpAssign(22:12-22:13),LowerIdent(22:14-22:23),NoSpaceOpenRound(22:23-22:24),Int(22:24-22:27),CloseRound(22:27-22:28),Newline(1:1-1:1),
+LowerIdent(23:1-23:11),OpAssign(23:12-23:13),LowerIdent(23:14-23:23),NoSpaceOpenRound(23:23-23:24),Int(23:24-23:27),CloseRound(23:27-23:28),Newline(1:1-1:1),
+LowerIdent(24:1-24:12),OpAssign(24:13-24:14),LowerIdent(24:15-24:25),NoSpaceOpenRound(24:25-24:26),Int(24:26-24:29),CloseRound(24:29-24:30),Newline(1:1-1:1),
 Newline(1:1-1:1),
-Newline(27:2-27:58),
-LowerIdent(28:1-28:12),OpAssign(28:13-28:14),OpenCurly(28:15-28:16),Newline(1:1-1:1),
-LowerIdent(29:5-29:9),OpColon(29:9-29:10),LowerIdent(29:11-29:21),Comma(29:21-29:22),Newline(1:1-1:1),
-LowerIdent(30:5-30:13),OpColon(30:13-30:14),OpenCurly(30:15-30:16),Newline(1:1-1:1),
-LowerIdent(31:9-31:16),OpColon(31:16-31:17),LowerIdent(31:18-31:21),Comma(31:21-31:22),Newline(1:1-1:1),
-LowerIdent(32:9-32:14),OpColon(32:14-32:15),LowerIdent(32:16-32:20),Comma(32:20-32:21),Newline(1:1-1:1),
-LowerIdent(33:9-33:20),OpColon(33:20-33:21),LowerIdent(33:22-33:25),Comma(33:25-33:26),Newline(1:1-1:1),
-CloseCurly(34:5-34:6),Comma(34:6-34:7),Newline(1:1-1:1),
-CloseCurly(35:1-35:2),Newline(1:1-1:1),
+Newline(26:2-26:31),
+LowerIdent(27:1-27:10),OpAssign(27:11-27:12),OpBar(27:13-27:14),LowerIdent(27:14-27:15),Comma(27:15-27:16),LowerIdent(27:17-27:18),OpBar(27:18-27:19),OpenCurly(27:20-27:21),LowerIdent(27:22-27:25),OpColon(27:25-27:26),LowerIdent(27:27-27:28),Comma(27:28-27:29),LowerIdent(27:30-27:33),OpColon(27:33-27:34),LowerIdent(27:35-27:36),CloseCurly(27:37-27:38),Newline(1:1-1:1),
 Newline(1:1-1:1),
-Newline(37:2-37:42),
-LowerIdent(38:1-38:8),OpAssign(38:9-38:10),OpenCurly(38:11-38:12),Newline(1:1-1:1),
-LowerIdent(39:5-39:9),OpColon(39:9-39:10),OpenSquare(39:11-39:12),Int(39:12-39:13),Comma(39:13-39:14),Int(39:15-39:16),Comma(39:16-39:17),Int(39:18-39:19),Comma(39:19-39:20),Int(39:21-39:22),Comma(39:22-39:23),Int(39:24-39:25),CloseSquare(39:25-39:26),Comma(39:26-39:27),Newline(1:1-1:1),
-LowerIdent(40:5-40:13),OpColon(40:13-40:14),OpenCurly(40:15-40:16),Newline(1:1-1:1),
-LowerIdent(41:9-41:16),OpColon(41:16-41:17),LowerIdent(41:18-41:21),Comma(41:21-41:22),Newline(1:1-1:1),
-LowerIdent(42:9-42:14),OpColon(42:14-42:15),LowerIdent(42:16-42:20),Comma(42:20-42:21),Newline(1:1-1:1),
-LowerIdent(43:9-43:20),OpColon(43:20-43:21),LowerIdent(43:22-43:25),Comma(43:25-43:26),Newline(1:1-1:1),
-CloseCurly(44:5-44:6),Comma(44:6-44:7),Newline(1:1-1:1),
-LowerIdent(45:5-45:9),OpColon(45:9-45:10),StringStart(45:11-45:12),StringPart(45:12-45:20),StringEnd(45:20-45:21),Comma(45:21-45:22),Newline(1:1-1:1),
-CloseCurly(46:1-46:2),Newline(1:1-1:1),
+Newline(29:2-29:38),
+LowerIdent(30:1-30:9),OpAssign(30:10-30:11),LowerIdent(30:12-30:21),NoSpaceOpenRound(30:21-30:22),Int(30:22-30:23),Comma(30:23-30:24),Int(30:25-30:26),CloseRound(30:26-30:27),Newline(1:1-1:1),
+LowerIdent(31:1-31:9),OpAssign(31:10-31:11),LowerIdent(31:12-31:21),NoSpaceOpenRound(31:21-31:22),StringStart(31:22-31:23),StringPart(31:23-31:28),StringEnd(31:28-31:29),Comma(31:29-31:30),StringStart(31:31-31:32),StringPart(31:32-31:37),StringEnd(31:37-31:38),CloseRound(31:38-31:39),Newline(1:1-1:1),
+LowerIdent(32:1-32:11),OpAssign(32:12-32:13),LowerIdent(32:14-32:23),NoSpaceOpenRound(32:23-32:24),Int(32:24-32:26),Comma(32:26-32:27),StringStart(32:28-32:29),StringPart(32:29-32:35),StringEnd(32:35-32:36),CloseRound(32:36-32:37),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(48:1-48:8),OpAssign(48:9-48:10),OpenCurly(48:11-48:12),Newline(1:1-1:1),
-LowerIdent(49:5-49:9),OpColon(49:9-49:10),OpenSquare(49:11-49:12),StringStart(49:12-49:13),StringPart(49:13-49:18),StringEnd(49:18-49:19),Comma(49:19-49:20),StringStart(49:21-49:22),StringPart(49:22-49:28),StringEnd(49:28-49:29),Comma(49:29-49:30),StringStart(49:31-49:32),StringPart(49:32-49:38),StringEnd(49:38-49:39),CloseSquare(49:39-49:40),Comma(49:40-49:41),Newline(1:1-1:1),
-LowerIdent(50:5-50:13),OpColon(50:13-50:14),OpenCurly(50:15-50:16),Newline(1:1-1:1),
-LowerIdent(51:9-51:16),OpColon(51:16-51:17),LowerIdent(51:18-51:21),Comma(51:21-51:22),Newline(1:1-1:1),
-LowerIdent(52:9-52:14),OpColon(52:14-52:15),LowerIdent(52:16-52:20),Comma(52:20-52:21),Newline(1:1-1:1),
-LowerIdent(53:9-53:20),OpColon(53:20-53:21),LowerIdent(53:22-53:25),Comma(53:25-53:26),Newline(1:1-1:1),
-CloseCurly(54:5-54:6),Comma(54:6-54:7),Newline(1:1-1:1),
-LowerIdent(55:5-55:9),OpColon(55:9-55:10),StringStart(55:11-55:12),StringPart(55:12-55:18),StringEnd(55:18-55:19),Comma(55:19-55:20),Newline(1:1-1:1),
-CloseCurly(56:1-56:2),Newline(1:1-1:1),
+Newline(34:2-34:54),
+LowerIdent(35:1-35:10),OpAssign(35:11-35:12),OpBar(35:13-35:14),LowerIdent(35:14-35:15),OpBar(35:15-35:16),OpenSquare(35:17-35:18),LowerIdent(35:18-35:19),CloseSquare(35:19-35:20),Newline(1:1-1:1),
 Newline(1:1-1:1),
-Newline(58:2-58:39),
-LowerIdent(59:1-59:15),OpAssign(59:16-59:17),OpBar(59:18-59:19),LowerIdent(59:19-59:22),OpBar(59:22-59:23),OpenCurly(59:24-59:25),LowerIdent(59:26-59:31),OpColon(59:31-59:32),LowerIdent(59:33-59:36),Comma(59:36-59:37),LowerIdent(59:38-59:45),OpColon(59:45-59:46),OpenSquare(59:47-59:48),LowerIdent(59:48-59:51),CloseSquare(59:51-59:52),CloseCurly(59:53-59:54),Newline(1:1-1:1),
-LowerIdent(60:1-60:11),OpAssign(60:12-60:13),LowerIdent(60:14-60:28),NoSpaceOpenRound(60:28-60:29),LowerIdent(60:29-60:32),CloseRound(60:32-60:33),Newline(1:1-1:1),
-LowerIdent(61:1-61:11),OpAssign(61:12-61:13),LowerIdent(61:14-61:28),NoSpaceOpenRound(61:28-61:29),LowerIdent(61:29-61:32),CloseRound(61:32-61:33),Newline(1:1-1:1),
-LowerIdent(62:1-62:11),OpAssign(62:12-62:13),LowerIdent(62:14-62:28),NoSpaceOpenRound(62:28-62:29),LowerIdent(62:29-62:33),CloseRound(62:33-62:34),Newline(1:1-1:1),
+Newline(37:2-37:38),
+LowerIdent(38:1-38:12),OpAssign(38:13-38:14),LowerIdent(38:15-38:24),NoSpaceOpenRound(38:24-38:25),Int(38:25-38:27),CloseRound(38:27-38:28),Newline(1:1-1:1),
+LowerIdent(39:1-39:12),OpAssign(39:13-39:14),LowerIdent(39:15-39:24),NoSpaceOpenRound(39:24-39:25),StringStart(39:25-39:26),StringPart(39:26-39:31),StringEnd(39:31-39:32),CloseRound(39:32-39:33),Newline(1:1-1:1),
+LowerIdent(40:1-40:13),OpAssign(40:14-40:15),LowerIdent(40:16-40:25),NoSpaceOpenRound(40:25-40:26),UpperIdent(40:26-40:30),CloseRound(40:30-40:31),Newline(1:1-1:1),
 Newline(1:1-1:1),
-Newline(64:2-64:29),
-LowerIdent(65:1-65:5),OpAssign(65:6-65:7),OpenCurly(65:8-65:9),Newline(1:1-1:1),
-LowerIdent(66:5-66:11),OpColon(66:11-66:12),OpenCurly(66:13-66:14),Newline(1:1-1:1),
-LowerIdent(67:9-67:15),OpColon(67:15-67:16),OpenCurly(67:17-67:18),Newline(1:1-1:1),
-LowerIdent(68:13-68:19),OpColon(68:19-68:20),OpenCurly(68:21-68:22),Newline(1:1-1:1),
-LowerIdent(69:17-69:21),OpColon(69:21-69:22),LowerIdent(69:23-69:33),Comma(69:33-69:34),Newline(1:1-1:1),
-LowerIdent(70:17-70:22),OpColon(70:22-70:23),LowerIdent(70:24-70:27),Comma(70:27-70:28),Newline(1:1-1:1),
-CloseCurly(71:13-71:14),Comma(71:14-71:15),Newline(1:1-1:1),
-LowerIdent(72:13-72:18),OpColon(72:18-72:19),OpenSquare(72:20-72:21),LowerIdent(72:21-72:24),Comma(72:24-72:25),LowerIdent(72:26-72:29),OpStar(72:30-72:31),Int(72:32-72:33),Comma(72:33-72:34),LowerIdent(72:35-72:38),OpStar(72:39-72:40),Int(72:41-72:42),CloseSquare(72:42-72:43),Comma(72:43-72:44),Newline(1:1-1:1),
-CloseCurly(73:9-73:10),Comma(73:10-73:11),Newline(1:1-1:1),
-LowerIdent(74:9-74:19),OpColon(74:19-74:20),LowerIdent(74:21-74:31),Comma(74:31-74:32),Newline(1:1-1:1),
-CloseCurly(75:5-75:6),Comma(75:6-75:7),Newline(1:1-1:1),
-LowerIdent(76:5-76:12),OpColon(76:12-76:13),OpenSquare(76:14-76:15),Newline(1:1-1:1),
-OpenCurly(77:9-77:10),LowerIdent(77:11-77:15),OpColon(77:15-77:16),OpenSquare(77:17-77:18),Int(77:18-77:19),CloseSquare(77:19-77:20),Comma(77:20-77:21),LowerIdent(77:22-77:25),OpColon(77:25-77:26),StringStart(77:27-77:28),StringPart(77:28-77:34),StringEnd(77:34-77:35),CloseCurly(77:36-77:37),Comma(77:37-77:38),Newline(1:1-1:1),
-OpenCurly(78:9-78:10),LowerIdent(78:11-78:15),OpColon(78:15-78:16),OpenSquare(78:17-78:18),Int(78:18-78:19),Comma(78:19-78:20),Int(78:21-78:22),CloseSquare(78:22-78:23),Comma(78:23-78:24),LowerIdent(78:25-78:28),OpColon(78:28-78:29),StringStart(78:30-78:31),StringPart(78:31-78:35),StringEnd(78:35-78:36),CloseCurly(78:37-78:38),Comma(78:38-78:39),Newline(1:1-1:1),
-OpenCurly(79:9-79:10),LowerIdent(79:11-79:15),OpColon(79:15-79:16),OpenSquare(79:17-79:18),Int(79:18-79:19),Comma(79:19-79:20),Int(79:21-79:22),Comma(79:22-79:23),Int(79:24-79:25),CloseSquare(79:25-79:26),Comma(79:26-79:27),LowerIdent(79:28-79:31),OpColon(79:31-79:32),StringStart(79:33-79:34),StringPart(79:34-79:38),StringEnd(79:38-79:39),CloseCurly(79:40-79:41),Comma(79:41-79:42),Newline(1:1-1:1),
-CloseSquare(80:5-80:6),Comma(80:6-80:7),Newline(1:1-1:1),
-CloseCurly(81:1-81:2),Newline(1:1-1:1),
+Newline(42:2-42:31),
+LowerIdent(43:1-43:8),OpAssign(43:9-43:10),OpBar(43:11-43:12),LowerIdent(43:12-43:13),Comma(43:13-43:14),LowerIdent(43:15-43:16),OpBar(43:16-43:17),OpBar(43:18-43:19),LowerIdent(43:19-43:20),OpBar(43:20-43:21),LowerIdent(43:22-43:23),NoSpaceOpenRound(43:23-43:24),LowerIdent(43:24-43:25),NoSpaceOpenRound(43:25-43:26),LowerIdent(43:26-43:27),CloseRound(43:27-43:28),CloseRound(43:28-43:29),Newline(1:1-1:1),
 Newline(1:1-1:1),
-Newline(83:2-83:42),
-LowerIdent(84:1-84:9),OpAssign(84:10-84:11),LowerIdent(84:12-84:15),OpPlus(84:16-84:17),Int(84:18-84:20),Newline(1:1-1:1),
-LowerIdent(85:1-85:9),OpAssign(85:10-85:11),LowerIdent(85:12-85:15),OpStar(85:16-85:17),Int(85:18-85:19),Newline(1:1-1:1),
-LowerIdent(86:1-86:9),OpAssign(86:10-86:11),OpenSquare(86:12-86:13),LowerIdent(86:13-86:16),Comma(86:16-86:17),LowerIdent(86:18-86:21),CloseSquare(86:21-86:22),Newline(1:1-1:1),
-LowerIdent(87:1-87:9),OpAssign(87:10-87:11),OpenCurly(87:12-87:13),LowerIdent(87:14-87:18),OpColon(87:18-87:19),LowerIdent(87:20-87:23),Comma(87:23-87:24),LowerIdent(87:25-87:32),OpColon(87:32-87:33),OpenSquare(87:34-87:35),LowerIdent(87:35-87:38),Comma(87:38-87:39),LowerIdent(87:40-87:43),OpPlus(87:44-87:45),Int(87:46-87:47),Comma(87:47-87:48),LowerIdent(87:49-87:52),OpPlus(87:53-87:54),Int(87:55-87:56),CloseSquare(87:56-87:57),CloseCurly(87:58-87:59),Newline(1:1-1:1),
+Newline(45:2-45:45),
+LowerIdent(46:1-46:8),OpAssign(46:9-46:10),OpBar(46:11-46:12),LowerIdent(46:12-46:13),OpBar(46:13-46:14),LowerIdent(46:15-46:16),OpPlus(46:17-46:18),Int(46:19-46:20),Newline(1:1-1:1),
+LowerIdent(47:1-47:7),OpAssign(47:8-47:9),OpBar(47:10-47:11),LowerIdent(47:11-47:12),OpBar(47:12-47:13),LowerIdent(47:14-47:15),OpStar(47:16-47:17),Int(47:18-47:19),Newline(1:1-1:1),
+LowerIdent(48:1-48:16),OpAssign(48:17-48:18),LowerIdent(48:19-48:26),NoSpaceOpenRound(48:26-48:27),LowerIdent(48:27-48:33),Comma(48:33-48:34),LowerIdent(48:35-48:42),CloseRound(48:42-48:43),Newline(1:1-1:1),
+LowerIdent(49:1-49:16),OpAssign(49:17-49:18),LowerIdent(49:19-49:26),NoSpaceOpenRound(49:26-49:27),LowerIdent(49:27-49:34),Comma(49:34-49:35),LowerIdent(49:36-49:42),CloseRound(49:42-49:43),Newline(1:1-1:1),
 Newline(1:1-1:1),
-Newline(89:2-89:31),
-LowerIdent(90:1-90:6),OpAssign(90:7-90:8),OpenCurly(90:9-90:10),Newline(1:1-1:1),
-LowerIdent(91:5-91:12),OpColon(91:12-91:13),OpenCurly(91:14-91:15),LowerIdent(91:16-91:21),OpColon(91:21-91:22),LowerIdent(91:23-91:26),Comma(91:26-91:27),LowerIdent(91:28-91:32),OpColon(91:32-91:33),OpenSquare(91:34-91:35),LowerIdent(91:35-91:38),Comma(91:38-91:39),LowerIdent(91:40-91:43),CloseSquare(91:43-91:44),Comma(91:44-91:45),LowerIdent(91:46-91:51),OpColon(91:51-91:52),LowerIdent(91:53-91:57),CloseCurly(91:58-91:59),Comma(91:59-91:60),Newline(1:1-1:1),
-LowerIdent(92:5-92:12),OpColon(92:12-92:13),OpenCurly(92:14-92:15),LowerIdent(92:16-92:21),OpColon(92:21-92:22),LowerIdent(92:23-92:26),Comma(92:26-92:27),LowerIdent(92:28-92:32),OpColon(92:32-92:33),OpenSquare(92:34-92:35),LowerIdent(92:35-92:38),Comma(92:38-92:39),LowerIdent(92:40-92:43),CloseSquare(92:43-92:44),CloseCurly(92:45-92:46),Comma(92:46-92:47),Newline(1:1-1:1),
-LowerIdent(93:5-93:16),OpColon(93:16-93:17),OpenCurly(93:18-93:19),Newline(1:1-1:1),
-LowerIdent(94:9-94:12),OpColon(94:12-94:13),LowerIdent(94:14-94:24),Comma(94:24-94:25),Newline(1:1-1:1),
-LowerIdent(95:9-95:16),OpColon(95:16-95:17),OpenSquare(95:18-95:19),LowerIdent(95:19-95:29),CloseSquare(95:29-95:30),Comma(95:30-95:31),Newline(1:1-1:1),
-LowerIdent(96:9-96:18),OpColon(96:18-96:19),OpenCurly(96:20-96:21),LowerIdent(96:22-96:26),OpColon(96:26-96:27),LowerIdent(96:28-96:38),CloseCurly(96:39-96:40),Comma(96:40-96:41),Newline(1:1-1:1),
-CloseCurly(97:5-97:6),Comma(97:6-97:7),Newline(1:1-1:1),
-LowerIdent(98:5-98:17),OpColon(98:17-98:18),OpenCurly(98:19-98:20),Newline(1:1-1:1),
-LowerIdent(99:9-99:17),OpColon(99:17-99:18),LowerIdent(99:19-99:22),OpStar(99:23-99:24),Int(99:25-99:28),Comma(99:28-99:29),Newline(1:1-1:1),
-LowerIdent(100:9-100:18),OpColon(100:18-100:19),LowerIdent(100:20-100:24),OpStar(100:25-100:26),Float(100:27-100:31),Comma(100:31-100:32),Newline(1:1-1:1),
-LowerIdent(101:9-101:22),OpColon(101:22-101:23),OpenSquare(101:24-101:25),LowerIdent(101:25-101:28),Comma(101:28-101:29),LowerIdent(101:30-101:33),Comma(101:33-101:34),LowerIdent(101:35-101:38),CloseSquare(101:38-101:39),Comma(101:39-101:40),Newline(1:1-1:1),
-CloseCurly(102:5-102:6),Comma(102:6-102:7),Newline(1:1-1:1),
-CloseCurly(103:1-103:2),Newline(1:1-1:1),
+LowerIdent(51:1-51:8),OpAssign(51:9-51:10),LowerIdent(51:11-51:26),NoSpaceOpenRound(51:26-51:27),Int(51:27-51:28),CloseRound(51:28-51:29),Newline(51:32-51:49),
+LowerIdent(52:1-52:8),OpAssign(52:9-52:10),LowerIdent(52:11-52:26),NoSpaceOpenRound(52:26-52:27),Int(52:27-52:28),CloseRound(52:28-52:29),Newline(52:32-52:49),
 Newline(1:1-1:1),
-LowerIdent(105:1-105:5),OpAssign(105:6-105:7),OpBar(105:8-105:9),Underscore(105:9-105:10),OpBar(105:10-105:11),OpenCurly(105:12-105:13),Newline(1:1-1:1),
-Newline(106:6-106:33),
-LowerIdent(107:5-107:15),NoSpaceDotLowerIdent(107:15-107:21),OpPlus(107:22-107:23),Int(107:24-107:26),Newline(1:1-1:1),
-CloseCurly(108:1-108:2),EndOfFile(108:2-108:2),
+Newline(54:2-54:30),
+LowerIdent(55:1-55:4),OpAssign(55:5-55:6),Int(55:7-55:9),Newline(1:1-1:1),
+Newline(1:1-1:1),
+Newline(57:2-57:18),
+LowerIdent(58:1-58:8),OpAssign(58:9-58:10),LowerIdent(58:11-58:14),OpPlus(58:15-58:16),Int(58:17-58:19),Newline(1:1-1:1),
+Newline(1:1-1:1),
+Newline(60:2-60:20),
+LowerIdent(61:1-61:10),OpAssign(61:11-61:12),LowerIdent(61:13-61:16),OpStar(61:17-61:18),Float(61:19-61:23),Newline(1:1-1:1),
+Newline(1:1-1:1),
+Newline(63:2-63:29),
+LowerIdent(64:1-64:6),OpAssign(64:7-64:8),OpBar(64:9-64:10),Underscore(64:10-64:11),OpBar(64:11-64:12),OpenSquare(64:13-64:14),CloseSquare(64:14-64:15),Newline(1:1-1:1),
+Newline(1:1-1:1),
+Newline(66:2-66:32),
+LowerIdent(67:1-67:11),OpAssign(67:12-67:13),LowerIdent(67:14-67:19),NoSpaceOpenRound(67:19-67:20),Int(67:20-67:21),CloseRound(67:21-67:22),Newline(1:1-1:1),
+LowerIdent(68:1-68:11),OpAssign(68:12-68:13),LowerIdent(68:14-68:19),NoSpaceOpenRound(68:19-68:20),Int(68:20-68:21),CloseRound(68:21-68:22),Newline(1:1-1:1),
+Newline(1:1-1:1),
+Newline(70:2-70:61),
+Newline(71:2-71:42),
+LowerIdent(72:1-72:15),OpAssign(72:16-72:17),OpenSquare(72:18-72:19),Int(72:19-72:20),Comma(72:20-72:21),Int(72:22-72:23),Comma(72:23-72:24),Int(72:25-72:26),CloseSquare(72:26-72:27),Newline(1:1-1:1),
+LowerIdent(73:1-73:15),OpAssign(73:16-73:17),OpenSquare(73:18-73:19),StringStart(73:19-73:20),StringPart(73:20-73:21),StringEnd(73:21-73:22),Comma(73:22-73:23),StringStart(73:24-73:25),StringPart(73:25-73:26),StringEnd(73:26-73:27),Comma(73:27-73:28),StringStart(73:29-73:30),StringPart(73:30-73:31),StringEnd(73:31-73:32),CloseSquare(73:32-73:33),Newline(1:1-1:1),
+Newline(1:1-1:1),
+LowerIdent(75:1-75:5),OpAssign(75:6-75:7),OpBar(75:8-75:9),Underscore(75:9-75:10),OpBar(75:10-75:11),OpenCurly(75:12-75:13),Newline(1:1-1:1),
+Newline(76:6-76:60),
+OpenCurly(77:5-77:6),LowerIdent(77:7-77:13),Comma(77:13-77:14),LowerIdent(77:15-77:21),Comma(77:21-77:22),LowerIdent(77:23-77:33),Comma(77:33-77:34),LowerIdent(77:35-77:45),Comma(77:45-77:46),LowerIdent(77:47-77:54),Comma(77:54-77:55),LowerIdent(77:56-77:65),Comma(77:65-77:66),LowerIdent(77:67-77:75),Comma(77:75-77:76),LowerIdent(77:77-77:85),CloseCurly(77:86-77:87),Newline(1:1-1:1),
+CloseCurly(78:1-78:2),EndOfFile(78:2-78:2),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-108.2
+(file @1.1-78.2
 	(app @1.1-1.56
 		(provides @1.6-1.11
 			(exposed-lower-ident (text "main")))
@@ -241,893 +181,727 @@ CloseCurly(108:1-108:2),EndOfFile(108:2-108:2),
 				(e-string @1.27-1.54
 					(e-string-part @1.28-1.53 (raw "../basic-cli/platform.roc"))))))
 	(statements
-		(s-decl @4.1-4.9
-			(p-ident @4.1-4.4 (raw "num"))
-			(e-int @4.7-4.9 (raw "42")))
-		(s-decl @5.1-5.11
-			(p-ident @5.1-5.5 (raw "frac"))
-			(e-frac @5.8-5.11 (raw "4.2")))
-		(s-decl @6.1-6.14
-			(p-ident @6.1-6.4 (raw "str"))
-			(e-string @6.7-6.14
-				(e-string-part @6.8-6.13 (raw "hello"))))
-		(s-decl @7.1-7.12
-			(p-ident @7.1-7.5 (raw "bool"))
-			(e-tag @7.8-7.12 (raw "True")))
-		(s-decl @10.1-10.16
-			(p-ident @10.1-10.11 (raw "empty_list"))
-			(e-list @10.14-10.16))
-		(s-decl @11.1-11.18
-			(p-ident @11.1-11.13 (raw "empty_record"))
-			(e-record @11.16-11.18))
-		(s-decl @14.1-14.21
-			(p-ident @14.1-14.9 (raw "int_list"))
-			(e-list @14.12-14.21
-				(e-int @14.13-14.14 (raw "1"))
-				(e-int @14.16-14.17 (raw "2"))
-				(e-int @14.19-14.20 (raw "3"))))
-		(s-decl @15.1-15.27
-			(p-ident @15.1-15.9 (raw "str_list"))
-			(e-list @15.12-15.27
-				(e-string @15.13-15.16
-					(e-string-part @15.14-15.15 (raw "a")))
-				(e-string @15.18-15.21
-					(e-string-part @15.19-15.20 (raw "b")))
-				(e-string @15.23-15.26
-					(e-string-part @15.24-15.25 (raw "c")))))
-		(s-decl @16.1-16.26
-			(p-ident @16.1-16.10 (raw "bool_list"))
-			(e-list @16.13-16.26
-				(e-tag @16.14-16.18 (raw "True"))
-				(e-tag @16.20-16.25 (raw "False"))))
-		(s-decl @19.1-19.52
-			(p-ident @19.1-19.13 (raw "nested_empty"))
-			(e-list @19.16-19.52
-				(e-ident @19.17-19.27 (qaul "") (raw "empty_list"))
-				(e-ident @19.29-19.39 (qaul "") (raw "empty_list"))
-				(e-ident @19.41-19.51 (qaul "") (raw "empty_list"))))
-		(s-decl @20.1-20.56
-			(p-ident @20.1-20.13 (raw "mixed_nested"))
-			(e-list @20.16-20.56
-				(e-ident @20.17-20.27 (qaul "") (raw "empty_list"))
-				(e-list @20.29-20.35
-					(e-int @20.30-20.31 (raw "1"))
-					(e-int @20.33-20.34 (raw "2")))
-				(e-ident @20.37-20.47 (qaul "") (raw "empty_list"))
-				(e-list @20.49-20.55
-					(e-int @20.50-20.51 (raw "3"))
-					(e-int @20.53-20.54 (raw "4")))))
-		(s-decl @23.1-23.46
-			(p-ident @23.1-23.12 (raw "poly_record"))
-			(e-record @23.15-23.46
-				(field (field "items") (optional false)
-					(e-ident @23.24-23.34 (qaul "") (raw "empty_list")))
-				(field (field "count") (optional false)
-					(e-int @23.43-23.44 (raw "0")))))
-		(s-decl @24.1-24.50
-			(p-ident @24.1-24.17 (raw "use_poly_record1"))
-			(e-record @24.20-24.50
-				(field (field "items") (optional false)
-					(e-list @24.29-24.38
-						(e-int @24.30-24.31 (raw "1"))
-						(e-int @24.33-24.34 (raw "2"))
-						(e-int @24.36-24.37 (raw "3"))))
-				(field (field "count") (optional false)
-					(e-int @24.47-24.48 (raw "0")))))
-		(s-decl @25.1-25.56
-			(p-ident @25.1-25.17 (raw "use_poly_record2"))
-			(e-record @25.20-25.56
-				(field (field "items") (optional false)
-					(e-list @25.29-25.44
-						(e-string @25.30-25.33
-							(e-string-part @25.31-25.32 (raw "x")))
-						(e-string @25.35-25.38
-							(e-string-part @25.36-25.37 (raw "y")))
-						(e-string @25.40-25.43
-							(e-string-part @25.41-25.42 (raw "z")))))
-				(field (field "count") (optional false)
-					(e-int @25.53-25.54 (raw "0")))))
-		(s-decl @28.1-35.2
-			(p-ident @28.1-28.12 (raw "base_config"))
-			(e-record @28.15-35.2
-				(field (field "data") (optional false)
-					(e-ident @29.11-29.21 (qaul "") (raw "empty_list")))
-				(field (field "metadata") (optional false)
-					(e-record @30.15-34.6
-						(field (field "version") (optional false)
-							(e-ident @31.18-31.21 (qaul "") (raw "num")))
-						(field (field "ratio") (optional false)
-							(e-ident @32.16-32.20 (qaul "") (raw "frac")))
-						(field (field "description") (optional false)
-							(e-ident @33.22-33.25 (qaul "") (raw "str")))))))
-		(s-decl @38.1-46.2
-			(p-ident @38.1-38.8 (raw "config1"))
-			(e-record @38.11-46.2
-				(field (field "data") (optional false)
-					(e-list @39.11-39.26
-						(e-int @39.12-39.13 (raw "1"))
-						(e-int @39.15-39.16 (raw "2"))
-						(e-int @39.18-39.19 (raw "3"))
-						(e-int @39.21-39.22 (raw "4"))
-						(e-int @39.24-39.25 (raw "5"))))
-				(field (field "metadata") (optional false)
-					(e-record @40.15-44.6
-						(field (field "version") (optional false)
-							(e-ident @41.18-41.21 (qaul "") (raw "num")))
-						(field (field "ratio") (optional false)
-							(e-ident @42.16-42.20 (qaul "") (raw "frac")))
-						(field (field "description") (optional false)
-							(e-ident @43.22-43.25 (qaul "") (raw "str")))))
-				(field (field "name") (optional false)
-					(e-string @45.11-45.21
-						(e-string-part @45.12-45.20 (raw "integers"))))))
-		(s-decl @48.1-56.2
-			(p-ident @48.1-48.8 (raw "config2"))
-			(e-record @48.11-56.2
-				(field (field "data") (optional false)
-					(e-list @49.11-49.40
-						(e-string @49.12-49.19
-							(e-string-part @49.13-49.18 (raw "apple")))
-						(e-string @49.21-49.29
-							(e-string-part @49.22-49.28 (raw "banana")))
-						(e-string @49.31-49.39
-							(e-string-part @49.32-49.38 (raw "cherry")))))
-				(field (field "metadata") (optional false)
-					(e-record @50.15-54.6
-						(field (field "version") (optional false)
-							(e-ident @51.18-51.21 (qaul "") (raw "num")))
-						(field (field "ratio") (optional false)
-							(e-ident @52.16-52.20 (qaul "") (raw "frac")))
-						(field (field "description") (optional false)
-							(e-ident @53.22-53.25 (qaul "") (raw "str")))))
-				(field (field "name") (optional false)
-					(e-string @55.11-55.19
-						(e-string-part @55.12-55.18 (raw "fruits"))))))
-		(s-decl @59.1-59.54
-			(p-ident @59.1-59.15 (raw "make_container"))
-			(e-lambda @59.18-59.54
+		(s-decl @4.1-4.11
+			(p-ident @4.1-4.3 (raw "id"))
+			(e-lambda @4.6-4.11
 				(args
-					(p-ident @59.19-59.22 (raw "val")))
-				(e-record @59.24-59.54
-					(field (field "value") (optional false)
-						(e-ident @59.33-59.36 (qaul "") (raw "val")))
-					(field (field "wrapper") (optional false)
-						(e-list @59.47-59.52
-							(e-ident @59.48-59.51 (qaul "") (raw "val")))))))
-		(s-decl @60.1-60.33
-			(p-ident @60.1-60.11 (raw "container1"))
-			(e-apply @60.14-60.33
-				(e-ident @60.14-60.28 (qaul "") (raw "make_container"))
-				(e-ident @60.29-60.32 (qaul "") (raw "num"))))
-		(s-decl @61.1-61.33
-			(p-ident @61.1-61.11 (raw "container2"))
-			(e-apply @61.14-61.33
-				(e-ident @61.14-61.28 (qaul "") (raw "make_container"))
-				(e-ident @61.29-61.32 (qaul "") (raw "str"))))
-		(s-decl @62.1-62.34
-			(p-ident @62.1-62.11 (raw "container3"))
-			(e-apply @62.14-62.34
-				(e-ident @62.14-62.28 (qaul "") (raw "make_container"))
-				(e-ident @62.29-62.33 (qaul "") (raw "frac"))))
-		(s-decl @65.1-81.2
-			(p-ident @65.1-65.5 (raw "deep"))
-			(e-record @65.8-81.2
-				(field (field "level1") (optional false)
-					(e-record @66.13-75.6
-						(field (field "level2") (optional false)
-							(e-record @67.17-73.10
-								(field (field "level3") (optional false)
-									(e-record @68.21-71.14
-										(field (field "data") (optional false)
-											(e-ident @69.23-69.33 (qaul "") (raw "empty_list")))
-										(field (field "value") (optional false)
-											(e-ident @70.24-70.27 (qaul "") (raw "num")))))
-								(field (field "items") (optional false)
-									(e-list @72.20-72.43
-										(e-ident @72.21-72.24 (qaul "") (raw "num"))
-										(e-binop @72.26-72.34 (op "*")
-											(e-ident @72.26-72.29 (qaul "") (raw "num"))
-											(e-int @72.32-72.33 (raw "2")))
-										(e-binop @72.35-72.43 (op "*")
-											(e-ident @72.35-72.38 (qaul "") (raw "num"))
-											(e-int @72.41-72.42 (raw "3")))))))
-						(field (field "collection") (optional false)
-							(e-ident @74.21-74.31 (qaul "") (raw "empty_list")))))
-				(field (field "results") (optional false)
-					(e-list @76.14-80.6
-						(e-record @77.9-77.37
-							(field (field "data") (optional false)
-								(e-list @77.17-77.20
-									(e-int @77.18-77.19 (raw "1"))))
-							(field (field "tag") (optional false)
-								(e-string @77.27-77.35
-									(e-string-part @77.28-77.34 (raw "single")))))
-						(e-record @78.9-78.38
-							(field (field "data") (optional false)
-								(e-list @78.17-78.23
-									(e-int @78.18-78.19 (raw "1"))
-									(e-int @78.21-78.22 (raw "2"))))
-							(field (field "tag") (optional false)
-								(e-string @78.30-78.36
-									(e-string-part @78.31-78.35 (raw "ints")))))
-						(e-record @79.9-79.41
-							(field (field "data") (optional false)
-								(e-list @79.17-79.26
-									(e-int @79.18-79.19 (raw "1"))
-									(e-int @79.21-79.22 (raw "2"))
-									(e-int @79.24-79.25 (raw "3"))))
-							(field (field "tag") (optional false)
-								(e-string @79.33-79.39
-									(e-string-part @79.34-79.38 (raw "more")))))))))
-		(s-decl @84.1-85.9
-			(p-ident @84.1-84.9 (raw "compute1"))
-			(e-binop @84.12-85.9 (op "+")
-				(e-ident @84.12-84.15 (qaul "") (raw "num"))
-				(e-int @84.18-84.20 (raw "10"))))
-		(s-decl @85.1-86.9
-			(p-ident @85.1-85.9 (raw "compute2"))
-			(e-binop @85.12-86.9 (op "*")
-				(e-ident @85.12-85.15 (qaul "") (raw "num"))
-				(e-int @85.18-85.19 (raw "2"))))
-		(s-decl @86.1-86.22
-			(p-ident @86.1-86.9 (raw "compute3"))
-			(e-list @86.12-86.22
-				(e-ident @86.13-86.16 (qaul "") (raw "num"))
-				(e-ident @86.18-86.21 (qaul "") (raw "num"))))
-		(s-decl @87.1-87.59
-			(p-ident @87.1-87.9 (raw "compute4"))
-			(e-record @87.12-87.59
-				(field (field "base") (optional false)
-					(e-ident @87.20-87.23 (qaul "") (raw "num")))
-				(field (field "derived") (optional false)
-					(e-list @87.34-87.57
-						(e-ident @87.35-87.38 (qaul "") (raw "num"))
-						(e-binop @87.40-87.48 (op "+")
-							(e-ident @87.40-87.43 (qaul "") (raw "num"))
-							(e-int @87.46-87.47 (raw "1")))
-						(e-binop @87.49-87.57 (op "+")
-							(e-ident @87.49-87.52 (qaul "") (raw "num"))
-							(e-int @87.55-87.56 (raw "2")))))))
-		(s-decl @90.1-103.2
-			(p-ident @90.1-90.6 (raw "mixed"))
-			(e-record @90.9-103.2
-				(field (field "numbers") (optional false)
-					(e-record @91.14-91.59
-						(field (field "value") (optional false)
-							(e-ident @91.23-91.26 (qaul "") (raw "num")))
-						(field (field "list") (optional false)
-							(e-list @91.34-91.44
-								(e-ident @91.35-91.38 (qaul "") (raw "num"))
-								(e-ident @91.40-91.43 (qaul "") (raw "num"))))
-						(field (field "float") (optional false)
-							(e-ident @91.53-91.57 (qaul "") (raw "frac")))))
-				(field (field "strings") (optional false)
-					(e-record @92.14-92.46
-						(field (field "value") (optional false)
-							(e-ident @92.23-92.26 (qaul "") (raw "str")))
-						(field (field "list") (optional false)
-							(e-list @92.34-92.44
-								(e-ident @92.35-92.38 (qaul "") (raw "str"))
-								(e-ident @92.40-92.43 (qaul "") (raw "str"))))))
-				(field (field "empty_lists") (optional false)
-					(e-record @93.18-97.6
-						(field (field "raw") (optional false)
-							(e-ident @94.14-94.24 (qaul "") (raw "empty_list")))
-						(field (field "in_list") (optional false)
-							(e-list @95.18-95.30
-								(e-ident @95.19-95.29 (qaul "") (raw "empty_list"))))
-						(field (field "in_record") (optional false)
-							(e-record @96.20-96.40
-								(field (field "data") (optional false)
-									(e-ident @96.28-96.38 (qaul "") (raw "empty_list")))))))
-				(field (field "computations") (optional false)
-					(e-record @98.19-102.6
-						(field (field "from_num") (optional false)
-							(e-binop @99.19-99.29 (op "*")
-								(e-ident @99.19-99.22 (qaul "") (raw "num"))
-								(e-int @99.25-99.28 (raw "100"))))
-						(field (field "from_frac") (optional false)
-							(e-binop @100.20-100.32 (op "*")
-								(e-ident @100.20-100.24 (qaul "") (raw "frac"))
-								(e-frac @100.27-100.31 (raw "10.0"))))
-						(field (field "list_from_num") (optional false)
-							(e-list @101.24-101.39
-								(e-ident @101.25-101.28 (qaul "") (raw "num"))
-								(e-ident @101.30-101.33 (qaul "") (raw "num"))
-								(e-ident @101.35-101.38 (qaul "") (raw "num"))))))))
-		(s-decl @105.1-108.2
-			(p-ident @105.1-105.5 (raw "main"))
-			(e-lambda @105.8-108.2
+					(p-ident @4.7-4.8 (raw "x")))
+				(e-ident @4.10-4.11 (raw "x"))))
+		(s-decl @7.1-7.16
+			(p-ident @7.1-7.7 (raw "id_int"))
+			(e-apply @7.10-7.16
+				(e-ident @7.10-7.12 (raw "id"))
+				(e-int @7.13-7.15 (raw "42"))))
+		(s-decl @8.1-8.21
+			(p-ident @8.1-8.7 (raw "id_str"))
+			(e-apply @8.10-8.21
+				(e-ident @8.10-8.12 (raw "id"))
+				(e-string @8.13-8.20
+					(e-string-part @8.14-8.19 (raw "hello")))))
+		(s-decl @9.1-9.19
+			(p-ident @9.1-9.8 (raw "id_bool"))
+			(e-apply @9.11-9.19
+				(e-ident @9.11-9.13 (raw "id"))
+				(e-tag @9.14-9.18 (raw "True"))))
+		(s-decl @10.1-10.24
+			(p-ident @10.1-10.8 (raw "id_list"))
+			(e-apply @10.11-10.24
+				(e-ident @10.11-10.13 (raw "id"))
+				(e-list @10.14-10.23
+					(e-int @10.15-10.16 (raw "1"))
+					(e-int @10.18-10.19 (raw "2"))
+					(e-int @10.21-10.22 (raw "3")))))
+		(s-decl @11.1-11.33
+			(p-ident @11.1-11.10 (raw "id_record"))
+			(e-apply @11.13-11.33
+				(e-ident @11.13-11.15 (raw "id"))
+				(e-record @11.16-11.32
+					(field (field "x") (optional false)
+						(e-int @11.21-11.23 (raw "10")))
+					(field (field "y") (optional false)
+						(e-int @11.28-11.30 (raw "20"))))))
+		(s-decl @14.1-14.18
+			(p-ident @14.1-14.6 (raw "const"))
+			(e-lambda @14.9-14.18
+				(args
+					(p-ident @14.10-14.11 (raw "x")))
+				(e-lambda @14.13-14.18
+					(args
+						(p-underscore))
+					(e-ident @14.17-14.18 (raw "x")))))
+		(s-decl @17.1-17.23
+			(p-ident @17.1-17.10 (raw "const_int"))
+			(e-apply @17.13-17.23
+				(e-ident @17.13-17.18 (raw "const"))
+				(e-int @17.19-17.22 (raw "100"))))
+		(s-decl @18.1-18.27
+			(p-ident @18.1-18.10 (raw "const_str"))
+			(e-apply @18.13-18.27
+				(e-ident @18.13-18.18 (raw "const"))
+				(e-string @18.19-18.26
+					(e-string-part @18.20-18.25 (raw "world")))))
+		(s-decl @19.1-19.34
+			(p-ident @19.1-19.11 (raw "const_list"))
+			(e-apply @19.14-19.34
+				(e-ident @19.14-19.19 (raw "const"))
+				(e-list @19.20-19.33
+					(e-tag @19.21-19.25 (raw "True"))
+					(e-tag @19.27-19.32 (raw "False")))))
+		(s-decl @22.1-22.28
+			(p-ident @22.1-22.11 (raw "result_int"))
+			(e-apply @22.14-22.28
+				(e-ident @22.14-22.23 (raw "const_int"))
+				(e-int @22.24-22.27 (raw "999"))))
+		(s-decl @23.1-23.28
+			(p-ident @23.1-23.11 (raw "result_str"))
+			(e-apply @23.14-23.28
+				(e-ident @23.14-23.23 (raw "const_str"))
+				(e-int @23.24-23.27 (raw "999"))))
+		(s-decl @24.1-24.30
+			(p-ident @24.1-24.12 (raw "result_list"))
+			(e-apply @24.15-24.30
+				(e-ident @24.15-24.25 (raw "const_list"))
+				(e-int @24.26-24.29 (raw "999"))))
+		(s-decl @27.1-27.38
+			(p-ident @27.1-27.10 (raw "make_pair"))
+			(e-lambda @27.13-27.38
+				(args
+					(p-ident @27.14-27.15 (raw "a"))
+					(p-ident @27.17-27.18 (raw "b")))
+				(e-record @27.20-27.38
+					(field (field "fst") (optional false)
+						(e-ident @27.27-27.28 (raw "a")))
+					(field (field "snd") (optional false)
+						(e-ident @27.35-27.36 (raw "b"))))))
+		(s-decl @30.1-30.27
+			(p-ident @30.1-30.9 (raw "int_pair"))
+			(e-apply @30.12-30.27
+				(e-ident @30.12-30.21 (raw "make_pair"))
+				(e-int @30.22-30.23 (raw "1"))
+				(e-int @30.25-30.26 (raw "2"))))
+		(s-decl @31.1-31.39
+			(p-ident @31.1-31.9 (raw "str_pair"))
+			(e-apply @31.12-31.39
+				(e-ident @31.12-31.21 (raw "make_pair"))
+				(e-string @31.22-31.29
+					(e-string-part @31.23-31.28 (raw "hello")))
+				(e-string @31.31-31.38
+					(e-string-part @31.32-31.37 (raw "world")))))
+		(s-decl @32.1-32.37
+			(p-ident @32.1-32.11 (raw "mixed_pair"))
+			(e-apply @32.14-32.37
+				(e-ident @32.14-32.23 (raw "make_pair"))
+				(e-int @32.24-32.26 (raw "42"))
+				(e-string @32.28-32.36
+					(e-string-part @32.29-32.35 (raw "answer")))))
+		(s-decl @35.1-35.20
+			(p-ident @35.1-35.10 (raw "make_list"))
+			(e-lambda @35.13-35.20
+				(args
+					(p-ident @35.14-35.15 (raw "x")))
+				(e-list @35.17-35.20
+					(e-ident @35.18-35.19 (raw "x")))))
+		(s-decl @38.1-38.28
+			(p-ident @38.1-38.12 (raw "list_of_int"))
+			(e-apply @38.15-38.28
+				(e-ident @38.15-38.24 (raw "make_list"))
+				(e-int @38.25-38.27 (raw "42"))))
+		(s-decl @39.1-39.33
+			(p-ident @39.1-39.12 (raw "list_of_str"))
+			(e-apply @39.15-39.33
+				(e-ident @39.15-39.24 (raw "make_list"))
+				(e-string @39.25-39.32
+					(e-string-part @39.26-39.31 (raw "hello")))))
+		(s-decl @40.1-40.31
+			(p-ident @40.1-40.13 (raw "list_of_bool"))
+			(e-apply @40.16-40.31
+				(e-ident @40.16-40.25 (raw "make_list"))
+				(e-tag @40.26-40.30 (raw "True"))))
+		(s-decl @43.1-43.29
+			(p-ident @43.1-43.8 (raw "compose"))
+			(e-lambda @43.11-43.29
+				(args
+					(p-ident @43.12-43.13 (raw "f"))
+					(p-ident @43.15-43.16 (raw "g")))
+				(e-lambda @43.18-43.29
+					(args
+						(p-ident @43.19-43.20 (raw "x")))
+					(e-apply @43.22-43.29
+						(e-ident @43.22-43.23 (raw "f"))
+						(e-apply @43.24-43.28
+							(e-ident @43.24-43.25 (raw "g"))
+							(e-ident @43.26-43.27 (raw "x")))))))
+		(s-decl @46.1-47.7
+			(p-ident @46.1-46.8 (raw "add_one"))
+			(e-lambda @46.11-47.7
+				(args
+					(p-ident @46.12-46.13 (raw "x")))
+				(e-binop @46.15-47.7 (op "+")
+					(e-ident @46.15-46.16 (raw "x"))
+					(e-int @46.19-46.20 (raw "1")))))
+		(s-decl @47.1-48.16
+			(p-ident @47.1-47.7 (raw "double"))
+			(e-lambda @47.10-48.16
+				(args
+					(p-ident @47.11-47.12 (raw "x")))
+				(e-binop @47.14-48.16 (op "*")
+					(e-ident @47.14-47.15 (raw "x"))
+					(e-int @47.18-47.19 (raw "2")))))
+		(s-decl @48.1-48.43
+			(p-ident @48.1-48.16 (raw "add_then_double"))
+			(e-apply @48.19-48.43
+				(e-ident @48.19-48.26 (raw "compose"))
+				(e-ident @48.27-48.33 (raw "double"))
+				(e-ident @48.35-48.42 (raw "add_one"))))
+		(s-decl @49.1-49.43
+			(p-ident @49.1-49.16 (raw "double_then_add"))
+			(e-apply @49.19-49.43
+				(e-ident @49.19-49.26 (raw "compose"))
+				(e-ident @49.27-49.34 (raw "add_one"))
+				(e-ident @49.36-49.42 (raw "double"))))
+		(s-decl @51.1-51.29
+			(p-ident @51.1-51.8 (raw "result1"))
+			(e-apply @51.11-51.29
+				(e-ident @51.11-51.26 (raw "add_then_double"))
+				(e-int @51.27-51.28 (raw "5"))))
+		(s-decl @52.1-52.29
+			(p-ident @52.1-52.8 (raw "result2"))
+			(e-apply @52.11-52.29
+				(e-ident @52.11-52.26 (raw "double_then_add"))
+				(e-int @52.27-52.28 (raw "5"))))
+		(s-decl @55.1-55.9
+			(p-ident @55.1-55.4 (raw "num"))
+			(e-int @55.7-55.9 (raw "42")))
+		(s-decl @58.1-61.10
+			(p-ident @58.1-58.8 (raw "int_use"))
+			(e-binop @58.11-61.10 (op "+")
+				(e-ident @58.11-58.14 (raw "num"))
+				(e-int @58.17-58.19 (raw "10"))))
+		(s-decl @61.1-64.6
+			(p-ident @61.1-61.10 (raw "float_use"))
+			(e-binop @61.13-64.6 (op "*")
+				(e-ident @61.13-61.16 (raw "num"))
+				(e-frac @61.19-61.23 (raw "3.14"))))
+		(s-decl @64.1-64.15
+			(p-ident @64.1-64.6 (raw "empty"))
+			(e-lambda @64.9-64.15
 				(args
 					(p-underscore))
-				(e-block @105.12-108.2
+				(e-list @64.13-64.15)))
+		(s-decl @67.1-67.22
+			(p-ident @67.1-67.11 (raw "empty_ints"))
+			(e-apply @67.14-67.22
+				(e-ident @67.14-67.19 (raw "empty"))
+				(e-int @67.20-67.21 (raw "0"))))
+		(s-decl @68.1-68.22
+			(p-ident @68.1-68.11 (raw "empty_strs"))
+			(e-apply @68.14-68.22
+				(e-ident @68.14-68.19 (raw "empty"))
+				(e-int @68.20-68.21 (raw "0"))))
+		(s-decl @72.1-72.27
+			(p-ident @72.1-72.15 (raw "list_with_ints"))
+			(e-list @72.18-72.27
+				(e-int @72.19-72.20 (raw "1"))
+				(e-int @72.22-72.23 (raw "2"))
+				(e-int @72.25-72.26 (raw "3"))))
+		(s-decl @73.1-73.33
+			(p-ident @73.1-73.15 (raw "list_with_strs"))
+			(e-list @73.18-73.33
+				(e-string @73.19-73.22
+					(e-string-part @73.20-73.21 (raw "a")))
+				(e-string @73.24-73.27
+					(e-string-part @73.25-73.26 (raw "b")))
+				(e-string @73.29-73.32
+					(e-string-part @73.30-73.31 (raw "c")))))
+		(s-decl @75.1-78.2
+			(p-ident @75.1-75.5 (raw "main"))
+			(e-lambda @75.8-78.2
+				(args
+					(p-underscore))
+				(e-block @75.12-78.2
 					(statements
-						(e-binop @107.5-108.2 (op "+")
-							(e-field-access @107.5-107.23
-								(e-ident @107.5-107.15 (qaul "") (raw "container1"))
-								(e-ident @107.15-107.21 (qaul "") (raw ".value")))
-							(e-int @107.24-107.26 (raw "10")))))))))
+						(e-record @77.5-77.87
+							(field (field "id_int") (optional false))
+							(field (field "id_str") (optional false))
+							(field (field "result_int") (optional false))
+							(field (field "result_str") (optional false))
+							(field (field "int_use") (optional false))
+							(field (field "float_use") (optional false))
+							(field (field "int_pair") (optional false))
+							(field (field "str_pair") (optional false)))))))))
 ~~~
 # FORMATTED
 ~~~roc
 app [main] { pf: platform "../basic-cli/platform.roc" }
 
-# Basic polymorphic values
+# let-polymorphism: polymorphic identity function
+id = |x| x
+
+# id used at different types
+id_int = id(42)
+id_str = id("hello")
+id_bool = id(True)
+id_list = id([1, 2, 3])
+id_record = id({x: 10, y: 20})
+
+# Polymorphic const function
+const = |x| |_| x
+
+# const instantiated at different types
+const_int = const(100)
+const_str = const("world")
+const_list = const([True, False])
+
+# Using the const functions
+result_int = const_int(999)
+result_str = const_str(999)
+result_list = const_list(999)
+
+# Polymorphic pair constructor
+make_pair = |a, b| {fst: a, snd: b}
+
+# make_pair used with different types
+int_pair = make_pair(1, 2)
+str_pair = make_pair("hello", "world")
+mixed_pair = make_pair(42, "answer")
+
+# Polymorphic function to create single-element lists
+make_list = |x| [x]
+
+# make_list used with different types
+list_of_int = make_list(42)
+list_of_str = make_list("hello")
+list_of_bool = make_list(True)
+
+# Polymorphic compose function
+compose = |f, g| |x| f(g(x))
+
+# compose used with different function types
+add_one = |x| x + 1
+double = |x| x * 2
+add_then_double = compose(double, add_one)
+double_then_add = compose(add_one, double)
+
+result1 = add_then_double(5) # (5 + 1) * 2 = 12
+result2 = double_then_add(5) # (5 * 2) + 1 = 11
+
+# Polymorphic numeric literal
 num = 42
-frac = 4.2
-str = "hello"
-bool = True
 
-# Polymorphic empty collections
-empty_list = []
-empty_record = {}
+# num used as Int
+int_use = num + 10
 
-# Using empty list in multiple contexts
-int_list = [1, 2, 3]
-str_list = ["a", "b", "c"]
-bool_list = [True, False]
+# num used as Float
+float_use = num * 3.14
 
-# Nested empty lists
-nested_empty = [empty_list, empty_list, empty_list]
-mixed_nested = [empty_list, [1, 2], empty_list, [3, 4]]
+# Polymorphic empty function
+empty = |_| []
 
-# Polymorphic record with empty list
-poly_record = { items: empty_list, count: 0 }
-use_poly_record1 = { items: [1, 2, 3], count: 0 }
-use_poly_record2 = { items: ["x", "y", "z"], count: 0 }
+# empty used at different types
+empty_ints = empty(0)
+empty_strs = empty(0)
 
-# Complex nested structure with multiple polymorphic uses
-base_config = {
-	data: empty_list,
-	metadata: {
-		version: num,
-		ratio: frac,
-		description: str,
-	},
-}
-
-# Different instantiations of base_config
-config1 = {
-	data: [1, 2, 3, 4, 5],
-	metadata: {
-		version: num,
-		ratio: frac,
-		description: str,
-	},
-	name: "integers",
-}
-
-config2 = {
-	data: ["apple", "banana", "cherry"],
-	metadata: {
-		version: num,
-		ratio: frac,
-		description: str,
-	},
-	name: "fruits",
-}
-
-# Polymorphic function-like structures
-make_container = |val| { value: val, wrapper: [val] }
-container1 = make_container(num)
-container2 = make_container(str)
-container3 = make_container(frac)
-
-# Deeply nested polymorphism
-deep = {
-	level1: {
-		level2: {
-			level3: {
-				data: empty_list,
-				value: num,
-			},
-			items: [num, num * 2, num * 3],
-		},
-		collection: empty_list,
-	},
-	results: [
-		{ data: [1], tag: "single" },
-		{ data: [1, 2], tag: "ints" },
-		{ data: [1, 2, 3], tag: "more" },
-	],
-}
-
-# Polymorphic values used in computations
-compute1 = num + 10
-compute2 = num * 2
-compute3 = [num, num]
-compute4 = { base: num, derived: [num, num + 1, num + 2] }
-
-# Mixed polymorphic structures
-mixed = {
-	numbers: { value: num, list: [num, num], float: frac },
-	strings: { value: str, list: [str, str] },
-	empty_lists: {
-		raw: empty_list,
-		in_list: [empty_list],
-		in_record: { data: empty_list },
-	},
-	computations: {
-		from_num: num * 100,
-		from_frac: frac * 10.0,
-		list_from_num: [num, num, num],
-	},
-}
+# Demonstrating polymorphism by using empty function results
+# in contexts that require specific types
+list_with_ints = [1, 2, 3]
+list_with_strs = ["a", "b", "c"]
 
 main = |_| {
-	# Just type-check everything
-	container1.value + 10
+	# Return values demonstrating polymorphic instantiation
+	{id_int, id_str, result_int, result_str, int_use, float_use, int_pair, str_pair}
 }
 ~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @4.1-4.4 (ident "num"))
-		(e-int @4.7-4.9 (value "42")))
-	(d-let
-		(p-assign @5.1-5.5 (ident "frac"))
-		(e-dec-small @5.8-5.11 (numerator "42") (denominator-power-of-ten "1") (value "4.2")))
-	(d-let
-		(p-assign @6.1-6.4 (ident "str"))
-		(e-string @6.7-6.14
-			(e-literal @6.8-6.13 (string "hello"))))
-	(d-let
-		(p-assign @7.1-7.5 (ident "bool"))
-		(e-tag @7.8-7.12 (name "True") (args "TODO")))
-	(d-let
-		(p-assign @10.1-10.11 (ident "empty_list"))
-		(e-empty_list @10.14-10.16))
-	(d-let
-		(p-assign @11.1-11.13 (ident "empty_record"))
-		(e-empty_record @11.16-11.18))
-	(d-let
-		(p-assign @14.1-14.9 (ident "int_list"))
-		(e-list @14.12-14.21
-			(elems
-				(e-int @14.13-14.14 (value "1"))
-				(e-int @14.16-14.17 (value "2"))
-				(e-int @14.19-14.20 (value "3")))))
-	(d-let
-		(p-assign @15.1-15.9 (ident "str_list"))
-		(e-list @15.12-15.27
-			(elems
-				(e-string @15.13-15.16
-					(e-literal @15.14-15.15 (string "a")))
-				(e-string @15.18-15.21
-					(e-literal @15.19-15.20 (string "b")))
-				(e-string @15.23-15.26
-					(e-literal @15.24-15.25 (string "c"))))))
-	(d-let
-		(p-assign @16.1-16.10 (ident "bool_list"))
-		(e-list @16.13-16.26
-			(elems
-				(e-tag @16.14-16.18 (name "True") (args "TODO"))
-				(e-tag @16.20-16.25 (name "False") (args "TODO")))))
-	(d-let
-		(p-assign @19.1-19.13 (ident "nested_empty"))
-		(e-list @19.16-19.52
-			(elems
-				(e-lookup-local @19.17-19.27
-					(pattern @10.1-10.11))
-				(e-lookup-local @19.29-19.39
-					(pattern @10.1-10.11))
-				(e-lookup-local @19.41-19.51
-					(pattern @10.1-10.11)))))
-	(d-let
-		(p-assign @20.1-20.13 (ident "mixed_nested"))
-		(e-list @20.16-20.56
-			(elems
-				(e-lookup-local @20.17-20.27
-					(pattern @10.1-10.11))
-				(e-list @20.29-20.35
-					(elems
-						(e-int @20.30-20.31 (value "1"))
-						(e-int @20.33-20.34 (value "2"))))
-				(e-lookup-local @20.37-20.47
-					(pattern @10.1-10.11))
-				(e-list @20.49-20.55
-					(elems
-						(e-int @20.50-20.51 (value "3"))
-						(e-int @20.53-20.54 (value "4")))))))
-	(d-let
-		(p-assign @23.1-23.12 (ident "poly_record"))
-		(e-record @23.15-23.46
-			(fields
-				(field (name "items")
-					(e-lookup-local @23.24-23.34
-						(pattern @10.1-10.11)))
-				(field (name "count")
-					(e-int @23.43-23.44 (value "0"))))))
-	(d-let
-		(p-assign @24.1-24.17 (ident "use_poly_record1"))
-		(e-record @24.20-24.50
-			(fields
-				(field (name "items")
-					(e-list @24.29-24.38
-						(elems
-							(e-int @24.30-24.31 (value "1"))
-							(e-int @24.33-24.34 (value "2"))
-							(e-int @24.36-24.37 (value "3")))))
-				(field (name "count")
-					(e-int @24.47-24.48 (value "0"))))))
-	(d-let
-		(p-assign @25.1-25.17 (ident "use_poly_record2"))
-		(e-record @25.20-25.56
-			(fields
-				(field (name "items")
-					(e-list @25.29-25.44
-						(elems
-							(e-string @25.30-25.33
-								(e-literal @25.31-25.32 (string "x")))
-							(e-string @25.35-25.38
-								(e-literal @25.36-25.37 (string "y")))
-							(e-string @25.40-25.43
-								(e-literal @25.41-25.42 (string "z"))))))
-				(field (name "count")
-					(e-int @25.53-25.54 (value "0"))))))
-	(d-let
-		(p-assign @28.1-28.12 (ident "base_config"))
-		(e-record @28.15-35.2
-			(fields
-				(field (name "data")
-					(e-lookup-local @29.11-29.21
-						(pattern @10.1-10.11)))
-				(field (name "metadata")
-					(e-record @30.15-34.6
-						(fields
-							(field (name "version")
-								(e-lookup-local @31.18-31.21
-									(pattern @4.1-4.4)))
-							(field (name "ratio")
-								(e-lookup-local @32.16-32.20
-									(pattern @5.1-5.5)))
-							(field (name "description")
-								(e-lookup-local @33.22-33.25
-									(pattern @6.1-6.4)))))))))
-	(d-let
-		(p-assign @38.1-38.8 (ident "config1"))
-		(e-record @38.11-46.2
-			(fields
-				(field (name "data")
-					(e-list @39.11-39.26
-						(elems
-							(e-int @39.12-39.13 (value "1"))
-							(e-int @39.15-39.16 (value "2"))
-							(e-int @39.18-39.19 (value "3"))
-							(e-int @39.21-39.22 (value "4"))
-							(e-int @39.24-39.25 (value "5")))))
-				(field (name "metadata")
-					(e-record @40.15-44.6
-						(fields
-							(field (name "version")
-								(e-lookup-local @41.18-41.21
-									(pattern @4.1-4.4)))
-							(field (name "ratio")
-								(e-lookup-local @42.16-42.20
-									(pattern @5.1-5.5)))
-							(field (name "description")
-								(e-lookup-local @43.22-43.25
-									(pattern @6.1-6.4))))))
-				(field (name "name")
-					(e-string @45.11-45.21
-						(e-literal @45.12-45.20 (string "integers")))))))
-	(d-let
-		(p-assign @48.1-48.8 (ident "config2"))
-		(e-record @48.11-56.2
-			(fields
-				(field (name "data")
-					(e-list @49.11-49.40
-						(elems
-							(e-string @49.12-49.19
-								(e-literal @49.13-49.18 (string "apple")))
-							(e-string @49.21-49.29
-								(e-literal @49.22-49.28 (string "banana")))
-							(e-string @49.31-49.39
-								(e-literal @49.32-49.38 (string "cherry"))))))
-				(field (name "metadata")
-					(e-record @50.15-54.6
-						(fields
-							(field (name "version")
-								(e-lookup-local @51.18-51.21
-									(pattern @4.1-4.4)))
-							(field (name "ratio")
-								(e-lookup-local @52.16-52.20
-									(pattern @5.1-5.5)))
-							(field (name "description")
-								(e-lookup-local @53.22-53.25
-									(pattern @6.1-6.4))))))
-				(field (name "name")
-					(e-string @55.11-55.19
-						(e-literal @55.12-55.18 (string "fruits")))))))
-	(d-let
-		(p-assign @59.1-59.15 (ident "make_container"))
-		(e-lambda @59.18-59.54
+		(p-assign @4.1-4.3 (ident "id"))
+		(e-lambda @4.6-4.11
 			(args
-				(p-assign @59.19-59.22 (ident "val")))
-			(e-record @59.24-59.54
+				(p-assign @4.7-4.8 (ident "x")))
+			(e-lookup-local @4.10-4.11
+				(pattern @4.7-4.8))))
+	(d-let
+		(p-assign @7.1-7.7 (ident "id_int"))
+		(e-call @7.10-7.16
+			(e-lookup-local @7.10-7.12
+				(pattern @4.1-4.3))
+			(e-int @7.13-7.15 (value "42"))))
+	(d-let
+		(p-assign @8.1-8.7 (ident "id_str"))
+		(e-call @8.10-8.21
+			(e-lookup-local @8.10-8.12
+				(pattern @4.1-4.3))
+			(e-string @8.13-8.20
+				(e-literal @8.14-8.19 (string "hello")))))
+	(d-let
+		(p-assign @9.1-9.8 (ident "id_bool"))
+		(e-call @9.11-9.19
+			(e-lookup-local @9.11-9.13
+				(pattern @4.1-4.3))
+			(e-tag @9.14-9.18 (name "True"))))
+	(d-let
+		(p-assign @10.1-10.8 (ident "id_list"))
+		(e-call @10.11-10.24
+			(e-lookup-local @10.11-10.13
+				(pattern @4.1-4.3))
+			(e-list @10.14-10.23
+				(elems
+					(e-int @10.15-10.16 (value "1"))
+					(e-int @10.18-10.19 (value "2"))
+					(e-int @10.21-10.22 (value "3"))))))
+	(d-let
+		(p-assign @11.1-11.10 (ident "id_record"))
+		(e-call @11.13-11.33
+			(e-lookup-local @11.13-11.15
+				(pattern @4.1-4.3))
+			(e-record @11.16-11.32
 				(fields
-					(field (name "value")
-						(e-lookup-local @59.33-59.36
-							(pattern @59.19-59.22)))
-					(field (name "wrapper")
-						(e-list @59.47-59.52
-							(elems
-								(e-lookup-local @59.48-59.51
-									(pattern @59.19-59.22)))))))))
+					(field (name "x")
+						(e-int @11.21-11.23 (value "10")))
+					(field (name "y")
+						(e-int @11.28-11.30 (value "20")))))))
 	(d-let
-		(p-assign @60.1-60.11 (ident "container1"))
-		(e-call @60.14-60.33
-			(e-lookup-local @60.14-60.28
-				(pattern @59.1-59.15))
-			(e-lookup-local @60.29-60.32
-				(pattern @4.1-4.4))))
-	(d-let
-		(p-assign @61.1-61.11 (ident "container2"))
-		(e-call @61.14-61.33
-			(e-lookup-local @61.14-61.28
-				(pattern @59.1-59.15))
-			(e-lookup-local @61.29-61.32
-				(pattern @6.1-6.4))))
-	(d-let
-		(p-assign @62.1-62.11 (ident "container3"))
-		(e-call @62.14-62.34
-			(e-lookup-local @62.14-62.28
-				(pattern @59.1-59.15))
-			(e-lookup-local @62.29-62.33
-				(pattern @5.1-5.5))))
-	(d-let
-		(p-assign @65.1-65.5 (ident "deep"))
-		(e-record @65.8-81.2
-			(fields
-				(field (name "level1")
-					(e-record @66.13-75.6
-						(fields
-							(field (name "level2")
-								(e-record @67.17-73.10
-									(fields
-										(field (name "level3")
-											(e-record @68.21-71.14
-												(fields
-													(field (name "data")
-														(e-lookup-local @69.23-69.33
-															(pattern @10.1-10.11)))
-													(field (name "value")
-														(e-lookup-local @70.24-70.27
-															(pattern @4.1-4.4))))))
-										(field (name "items")
-											(e-list @72.20-72.43
-												(elems
-													(e-lookup-local @72.21-72.24
-														(pattern @4.1-4.4))
-													(e-binop @72.26-72.34 (op "mul")
-														(e-lookup-local @72.26-72.29
-															(pattern @4.1-4.4))
-														(e-int @72.32-72.33 (value "2")))
-													(e-binop @72.35-72.43 (op "mul")
-														(e-lookup-local @72.35-72.38
-															(pattern @4.1-4.4))
-														(e-int @72.41-72.42 (value "3")))))))))
-							(field (name "collection")
-								(e-lookup-local @74.21-74.31
-									(pattern @10.1-10.11))))))
-				(field (name "results")
-					(e-list @76.14-80.6
-						(elems
-							(e-record @77.9-77.37
-								(fields
-									(field (name "data")
-										(e-list @77.17-77.20
-											(elems
-												(e-int @77.18-77.19 (value "1")))))
-									(field (name "tag")
-										(e-string @77.27-77.35
-											(e-literal @77.28-77.34 (string "single"))))))
-							(e-record @78.9-78.38
-								(fields
-									(field (name "data")
-										(e-list @78.17-78.23
-											(elems
-												(e-int @78.18-78.19 (value "1"))
-												(e-int @78.21-78.22 (value "2")))))
-									(field (name "tag")
-										(e-string @78.30-78.36
-											(e-literal @78.31-78.35 (string "ints"))))))
-							(e-record @79.9-79.41
-								(fields
-									(field (name "data")
-										(e-list @79.17-79.26
-											(elems
-												(e-int @79.18-79.19 (value "1"))
-												(e-int @79.21-79.22 (value "2"))
-												(e-int @79.24-79.25 (value "3")))))
-									(field (name "tag")
-										(e-string @79.33-79.39
-											(e-literal @79.34-79.38 (string "more"))))))))))))
-	(d-let
-		(p-assign @84.1-84.9 (ident "compute1"))
-		(e-binop @84.12-85.9 (op "add")
-			(e-lookup-local @84.12-84.15
-				(pattern @4.1-4.4))
-			(e-int @84.18-84.20 (value "10"))))
-	(d-let
-		(p-assign @85.1-85.9 (ident "compute2"))
-		(e-binop @85.12-86.9 (op "mul")
-			(e-lookup-local @85.12-85.15
-				(pattern @4.1-4.4))
-			(e-int @85.18-85.19 (value "2"))))
-	(d-let
-		(p-assign @86.1-86.9 (ident "compute3"))
-		(e-list @86.12-86.22
-			(elems
-				(e-lookup-local @86.13-86.16
-					(pattern @4.1-4.4))
-				(e-lookup-local @86.18-86.21
-					(pattern @4.1-4.4)))))
-	(d-let
-		(p-assign @87.1-87.9 (ident "compute4"))
-		(e-record @87.12-87.59
-			(fields
-				(field (name "base")
-					(e-lookup-local @87.20-87.23
-						(pattern @4.1-4.4)))
-				(field (name "derived")
-					(e-list @87.34-87.57
-						(elems
-							(e-lookup-local @87.35-87.38
-								(pattern @4.1-4.4))
-							(e-binop @87.40-87.48 (op "add")
-								(e-lookup-local @87.40-87.43
-									(pattern @4.1-4.4))
-								(e-int @87.46-87.47 (value "1")))
-							(e-binop @87.49-87.57 (op "add")
-								(e-lookup-local @87.49-87.52
-									(pattern @4.1-4.4))
-								(e-int @87.55-87.56 (value "2")))))))))
-	(d-let
-		(p-assign @90.1-90.6 (ident "mixed"))
-		(e-record @90.9-103.2
-			(fields
-				(field (name "numbers")
-					(e-record @91.14-91.59
-						(fields
-							(field (name "value")
-								(e-lookup-local @91.23-91.26
-									(pattern @4.1-4.4)))
-							(field (name "list")
-								(e-list @91.34-91.44
-									(elems
-										(e-lookup-local @91.35-91.38
-											(pattern @4.1-4.4))
-										(e-lookup-local @91.40-91.43
-											(pattern @4.1-4.4)))))
-							(field (name "float")
-								(e-lookup-local @91.53-91.57
-									(pattern @5.1-5.5))))))
-				(field (name "strings")
-					(e-record @92.14-92.46
-						(fields
-							(field (name "value")
-								(e-lookup-local @92.23-92.26
-									(pattern @6.1-6.4)))
-							(field (name "list")
-								(e-list @92.34-92.44
-									(elems
-										(e-lookup-local @92.35-92.38
-											(pattern @6.1-6.4))
-										(e-lookup-local @92.40-92.43
-											(pattern @6.1-6.4))))))))
-				(field (name "empty_lists")
-					(e-record @93.18-97.6
-						(fields
-							(field (name "raw")
-								(e-lookup-local @94.14-94.24
-									(pattern @10.1-10.11)))
-							(field (name "in_list")
-								(e-list @95.18-95.30
-									(elems
-										(e-lookup-local @95.19-95.29
-											(pattern @10.1-10.11)))))
-							(field (name "in_record")
-								(e-record @96.20-96.40
-									(fields
-										(field (name "data")
-											(e-lookup-local @96.28-96.38
-												(pattern @10.1-10.11)))))))))
-				(field (name "computations")
-					(e-record @98.19-102.6
-						(fields
-							(field (name "from_num")
-								(e-binop @99.19-99.29 (op "mul")
-									(e-lookup-local @99.19-99.22
-										(pattern @4.1-4.4))
-									(e-int @99.25-99.28 (value "100"))))
-							(field (name "from_frac")
-								(e-binop @100.20-100.32 (op "mul")
-									(e-lookup-local @100.20-100.24
-										(pattern @5.1-5.5))
-									(e-dec-small @100.27-100.31 (numerator "100") (denominator-power-of-ten "1") (value "10"))))
-							(field (name "list_from_num")
-								(e-list @101.24-101.39
-									(elems
-										(e-lookup-local @101.25-101.28
-											(pattern @4.1-4.4))
-										(e-lookup-local @101.30-101.33
-											(pattern @4.1-4.4))
-										(e-lookup-local @101.35-101.38
-											(pattern @4.1-4.4)))))))))))
-	(d-let
-		(p-assign @105.1-105.5 (ident "main"))
-		(e-lambda @105.8-108.2
+		(p-assign @14.1-14.6 (ident "const"))
+		(e-lambda @14.9-14.18
 			(args
-				(p-underscore @105.9-105.10))
-			(e-block @105.12-108.2
-				(e-binop @107.5-108.2 (op "add")
-					(e-dot-access @107.5-107.23 (field "value")
-						(receiver
-							(e-lookup-local @107.5-107.15
-								(pattern @60.1-60.11))))
-					(e-int @107.24-107.26 (value "10")))))))
+				(p-assign @14.10-14.11 (ident "x")))
+			(e-lambda @14.13-14.18
+				(args
+					(p-underscore @14.14-14.15))
+				(e-lookup-local @14.17-14.18
+					(pattern @14.10-14.11)))))
+	(d-let
+		(p-assign @17.1-17.10 (ident "const_int"))
+		(e-call @17.13-17.23
+			(e-lookup-local @17.13-17.18
+				(pattern @14.1-14.6))
+			(e-int @17.19-17.22 (value "100"))))
+	(d-let
+		(p-assign @18.1-18.10 (ident "const_str"))
+		(e-call @18.13-18.27
+			(e-lookup-local @18.13-18.18
+				(pattern @14.1-14.6))
+			(e-string @18.19-18.26
+				(e-literal @18.20-18.25 (string "world")))))
+	(d-let
+		(p-assign @19.1-19.11 (ident "const_list"))
+		(e-call @19.14-19.34
+			(e-lookup-local @19.14-19.19
+				(pattern @14.1-14.6))
+			(e-list @19.20-19.33
+				(elems
+					(e-tag @19.21-19.25 (name "True"))
+					(e-tag @19.27-19.32 (name "False"))))))
+	(d-let
+		(p-assign @22.1-22.11 (ident "result_int"))
+		(e-call @22.14-22.28
+			(e-lookup-local @22.14-22.23
+				(pattern @17.1-17.10))
+			(e-int @22.24-22.27 (value "999"))))
+	(d-let
+		(p-assign @23.1-23.11 (ident "result_str"))
+		(e-call @23.14-23.28
+			(e-lookup-local @23.14-23.23
+				(pattern @18.1-18.10))
+			(e-int @23.24-23.27 (value "999"))))
+	(d-let
+		(p-assign @24.1-24.12 (ident "result_list"))
+		(e-call @24.15-24.30
+			(e-lookup-local @24.15-24.25
+				(pattern @19.1-19.11))
+			(e-int @24.26-24.29 (value "999"))))
+	(d-let
+		(p-assign @27.1-27.10 (ident "make_pair"))
+		(e-lambda @27.13-27.38
+			(args
+				(p-assign @27.14-27.15 (ident "a"))
+				(p-assign @27.17-27.18 (ident "b")))
+			(e-record @27.20-27.38
+				(fields
+					(field (name "fst")
+						(e-lookup-local @27.27-27.28
+							(pattern @27.14-27.15)))
+					(field (name "snd")
+						(e-lookup-local @27.35-27.36
+							(pattern @27.17-27.18)))))))
+	(d-let
+		(p-assign @30.1-30.9 (ident "int_pair"))
+		(e-call @30.12-30.27
+			(e-lookup-local @30.12-30.21
+				(pattern @27.1-27.10))
+			(e-int @30.22-30.23 (value "1"))
+			(e-int @30.25-30.26 (value "2"))))
+	(d-let
+		(p-assign @31.1-31.9 (ident "str_pair"))
+		(e-call @31.12-31.39
+			(e-lookup-local @31.12-31.21
+				(pattern @27.1-27.10))
+			(e-string @31.22-31.29
+				(e-literal @31.23-31.28 (string "hello")))
+			(e-string @31.31-31.38
+				(e-literal @31.32-31.37 (string "world")))))
+	(d-let
+		(p-assign @32.1-32.11 (ident "mixed_pair"))
+		(e-call @32.14-32.37
+			(e-lookup-local @32.14-32.23
+				(pattern @27.1-27.10))
+			(e-int @32.24-32.26 (value "42"))
+			(e-string @32.28-32.36
+				(e-literal @32.29-32.35 (string "answer")))))
+	(d-let
+		(p-assign @35.1-35.10 (ident "make_list"))
+		(e-lambda @35.13-35.20
+			(args
+				(p-assign @35.14-35.15 (ident "x")))
+			(e-list @35.17-35.20
+				(elems
+					(e-lookup-local @35.18-35.19
+						(pattern @35.14-35.15))))))
+	(d-let
+		(p-assign @38.1-38.12 (ident "list_of_int"))
+		(e-call @38.15-38.28
+			(e-lookup-local @38.15-38.24
+				(pattern @35.1-35.10))
+			(e-int @38.25-38.27 (value "42"))))
+	(d-let
+		(p-assign @39.1-39.12 (ident "list_of_str"))
+		(e-call @39.15-39.33
+			(e-lookup-local @39.15-39.24
+				(pattern @35.1-35.10))
+			(e-string @39.25-39.32
+				(e-literal @39.26-39.31 (string "hello")))))
+	(d-let
+		(p-assign @40.1-40.13 (ident "list_of_bool"))
+		(e-call @40.16-40.31
+			(e-lookup-local @40.16-40.25
+				(pattern @35.1-35.10))
+			(e-tag @40.26-40.30 (name "True"))))
+	(d-let
+		(p-assign @43.1-43.8 (ident "compose"))
+		(e-lambda @43.11-43.29
+			(args
+				(p-assign @43.12-43.13 (ident "f"))
+				(p-assign @43.15-43.16 (ident "g")))
+			(e-lambda @43.18-43.29
+				(args
+					(p-assign @43.19-43.20 (ident "x")))
+				(e-call @43.22-43.29
+					(e-lookup-local @43.22-43.23
+						(pattern @43.12-43.13))
+					(e-call @43.24-43.28
+						(e-lookup-local @43.24-43.25
+							(pattern @43.15-43.16))
+						(e-lookup-local @43.26-43.27
+							(pattern @43.19-43.20)))))))
+	(d-let
+		(p-assign @46.1-46.8 (ident "add_one"))
+		(e-lambda @46.11-47.7
+			(args
+				(p-assign @46.12-46.13 (ident "x")))
+			(e-binop @46.15-47.7 (op "add")
+				(e-lookup-local @46.15-46.16
+					(pattern @46.12-46.13))
+				(e-int @46.19-46.20 (value "1")))))
+	(d-let
+		(p-assign @47.1-47.7 (ident "double"))
+		(e-lambda @47.10-48.16
+			(args
+				(p-assign @47.11-47.12 (ident "x")))
+			(e-binop @47.14-48.16 (op "mul")
+				(e-lookup-local @47.14-47.15
+					(pattern @47.11-47.12))
+				(e-int @47.18-47.19 (value "2")))))
+	(d-let
+		(p-assign @48.1-48.16 (ident "add_then_double"))
+		(e-call @48.19-48.43
+			(e-lookup-local @48.19-48.26
+				(pattern @43.1-43.8))
+			(e-lookup-local @48.27-48.33
+				(pattern @47.1-47.7))
+			(e-lookup-local @48.35-48.42
+				(pattern @46.1-46.8))))
+	(d-let
+		(p-assign @49.1-49.16 (ident "double_then_add"))
+		(e-call @49.19-49.43
+			(e-lookup-local @49.19-49.26
+				(pattern @43.1-43.8))
+			(e-lookup-local @49.27-49.34
+				(pattern @46.1-46.8))
+			(e-lookup-local @49.36-49.42
+				(pattern @47.1-47.7))))
+	(d-let
+		(p-assign @51.1-51.8 (ident "result1"))
+		(e-call @51.11-51.29
+			(e-lookup-local @51.11-51.26
+				(pattern @48.1-48.16))
+			(e-int @51.27-51.28 (value "5"))))
+	(d-let
+		(p-assign @52.1-52.8 (ident "result2"))
+		(e-call @52.11-52.29
+			(e-lookup-local @52.11-52.26
+				(pattern @49.1-49.16))
+			(e-int @52.27-52.28 (value "5"))))
+	(d-let
+		(p-assign @55.1-55.4 (ident "num"))
+		(e-int @55.7-55.9 (value "42")))
+	(d-let
+		(p-assign @58.1-58.8 (ident "int_use"))
+		(e-binop @58.11-61.10 (op "add")
+			(e-lookup-local @58.11-58.14
+				(pattern @55.1-55.4))
+			(e-int @58.17-58.19 (value "10"))))
+	(d-let
+		(p-assign @61.1-61.10 (ident "float_use"))
+		(e-binop @61.13-64.6 (op "mul")
+			(e-lookup-local @61.13-61.16
+				(pattern @55.1-55.4))
+			(e-dec-small @61.19-61.23 (numerator "314") (denominator-power-of-ten "2") (value "3.14"))))
+	(d-let
+		(p-assign @64.1-64.6 (ident "empty"))
+		(e-lambda @64.9-64.15
+			(args
+				(p-underscore @64.10-64.11))
+			(e-empty_list @64.13-64.15)))
+	(d-let
+		(p-assign @67.1-67.11 (ident "empty_ints"))
+		(e-call @67.14-67.22
+			(e-lookup-local @67.14-67.19
+				(pattern @64.1-64.6))
+			(e-int @67.20-67.21 (value "0"))))
+	(d-let
+		(p-assign @68.1-68.11 (ident "empty_strs"))
+		(e-call @68.14-68.22
+			(e-lookup-local @68.14-68.19
+				(pattern @64.1-64.6))
+			(e-int @68.20-68.21 (value "0"))))
+	(d-let
+		(p-assign @72.1-72.15 (ident "list_with_ints"))
+		(e-list @72.18-72.27
+			(elems
+				(e-int @72.19-72.20 (value "1"))
+				(e-int @72.22-72.23 (value "2"))
+				(e-int @72.25-72.26 (value "3")))))
+	(d-let
+		(p-assign @73.1-73.15 (ident "list_with_strs"))
+		(e-list @73.18-73.33
+			(elems
+				(e-string @73.19-73.22
+					(e-literal @73.20-73.21 (string "a")))
+				(e-string @73.24-73.27
+					(e-literal @73.25-73.26 (string "b")))
+				(e-string @73.29-73.32
+					(e-literal @73.30-73.31 (string "c"))))))
+	(d-let
+		(p-assign @75.1-75.5 (ident "main"))
+		(e-lambda @75.8-78.2
+			(args
+				(p-underscore @75.9-75.10))
+			(e-block @75.12-78.2
+				(e-record @77.5-77.87
+					(fields
+						(field (name "id_int")
+							(e-lookup-local @77.7-77.14
+								(pattern @7.1-7.7)))
+						(field (name "id_str")
+							(e-lookup-local @77.15-77.22
+								(pattern @8.1-8.7)))
+						(field (name "result_int")
+							(e-lookup-local @77.23-77.34
+								(pattern @22.1-22.11)))
+						(field (name "result_str")
+							(e-lookup-local @77.35-77.46
+								(pattern @23.1-23.11)))
+						(field (name "int_use")
+							(e-lookup-local @77.47-77.55
+								(pattern @58.1-58.8)))
+						(field (name "float_use")
+							(e-lookup-local @77.56-77.66
+								(pattern @61.1-61.10)))
+						(field (name "int_pair")
+							(e-lookup-local @77.67-77.76
+								(pattern @30.1-30.9)))
+						(field (name "str_pair")
+							(e-lookup-local @77.77-77.87
+								(pattern @31.1-31.9)))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @4.1-4.4 (type "Num(*)"))
-		(patt @5.1-5.5 (type "Frac(*)"))
-		(patt @6.1-6.4 (type "Str"))
-		(patt @7.1-7.5 (type "[True]*"))
-		(patt @10.1-10.11 (type "List(Num(*))"))
-		(patt @11.1-11.13 (type "{}"))
-		(patt @14.1-14.9 (type "List(Num(*))"))
-		(patt @15.1-15.9 (type "List(Str)"))
-		(patt @16.1-16.10 (type "List([True, False]*)"))
-		(patt @19.1-19.13 (type "List(List(Num(*)))"))
-		(patt @20.1-20.13 (type "List(List(Num(*)))"))
-		(patt @23.1-23.12 (type "{ items: List(Num(*)), count: Num(*) }"))
-		(patt @24.1-24.17 (type "{ items: List(Num(*)), count: Num(*) }"))
-		(patt @25.1-25.17 (type "{ items: List(Str), count: Num(*) }"))
-		(patt @28.1-28.12 (type "{ data: List(Num(*)), metadata: { version: Num(*), ratio: Frac(*), description: Str } }"))
-		(patt @38.1-38.8 (type "{ data: List(Num(*)), metadata: { version: Num(*), ratio: Frac(*), description: Str }, name: Str }"))
-		(patt @48.1-48.8 (type "{ data: List(Str), metadata: { version: Num(*), ratio: Frac(*), description: Str }, name: Str }"))
-		(patt @59.1-59.15 (type "* -> { value: *, wrapper: List(*) }"))
-		(patt @60.1-60.11 (type "{ value: *, wrapper: List(*) }"))
-		(patt @61.1-61.11 (type "{ value: *, wrapper: List(*) }"))
-		(patt @62.1-62.11 (type "{ value: *, wrapper: List(*) }"))
-		(patt @65.1-65.5 (type "{ level1: { level2: { level3: { data: List(Num(*)), value: Num(*) }, items: List(Num(*)) }, collection: List(Num(*)) }, results: List({ data: List(Num(*)), tag: Str }) }"))
-		(patt @84.1-84.9 (type "*"))
-		(patt @85.1-85.9 (type "*"))
-		(patt @86.1-86.9 (type "List(Num(*))"))
-		(patt @87.1-87.9 (type "{ base: Num(*), derived: List(Num(*)) }"))
-		(patt @90.1-90.6 (type "{ numbers: { value: Num(*), list: List(Num(*)), float: Frac(*) }, strings: { value: Str, list: List(Str) }, empty_lists: { raw: List(Num(*)), in_list: List(List(Num(*))), in_record: { data: List(Num(*)) } }, computations: { from_num: *, from_frac: *, list_from_num: List(Num(*)) } }"))
-		(patt @105.1-105.5 (type "* -> *")))
+		(patt @4.1-4.3 (type "* -> *"))
+		(patt @7.1-7.7 (type "*"))
+		(patt @8.1-8.7 (type "*"))
+		(patt @9.1-9.8 (type "*"))
+		(patt @10.1-10.8 (type "*"))
+		(patt @11.1-11.10 (type "*"))
+		(patt @14.1-14.6 (type "* -> * -> *"))
+		(patt @17.1-17.10 (type "* -> *"))
+		(patt @18.1-18.10 (type "* -> *"))
+		(patt @19.1-19.11 (type "* -> *"))
+		(patt @22.1-22.11 (type "*"))
+		(patt @23.1-23.11 (type "*"))
+		(patt @24.1-24.12 (type "*"))
+		(patt @27.1-27.10 (type "*, * -> { fst: *, snd: * }"))
+		(patt @30.1-30.9 (type "{ fst: *, snd: * }"))
+		(patt @31.1-31.9 (type "{ fst: *, snd: * }"))
+		(patt @32.1-32.11 (type "{ fst: *, snd: * }"))
+		(patt @35.1-35.10 (type "* -> List(*)"))
+		(patt @38.1-38.12 (type "List(*)"))
+		(patt @39.1-39.12 (type "List(*)"))
+		(patt @40.1-40.13 (type "List(*)"))
+		(patt @43.1-43.8 (type "* -> *, * -> * -> * -> *"))
+		(patt @46.1-46.8 (type "* -> *"))
+		(patt @47.1-47.7 (type "* -> *"))
+		(patt @48.1-48.16 (type "* -> *"))
+		(patt @49.1-49.16 (type "* -> *"))
+		(patt @51.1-51.8 (type "*"))
+		(patt @52.1-52.8 (type "*"))
+		(patt @55.1-55.4 (type "Num(*)"))
+		(patt @58.1-58.8 (type "*"))
+		(patt @61.1-61.10 (type "*"))
+		(patt @64.1-64.6 (type "* -> List(*)"))
+		(patt @67.1-67.11 (type "List(*)"))
+		(patt @68.1-68.11 (type "List(*)"))
+		(patt @72.1-72.15 (type "List(Num(*))"))
+		(patt @73.1-73.15 (type "List(Str)"))
+		(patt @75.1-75.5 (type "* -> { id_int: *, id_str: *, result_int: *, result_str: *, int_use: *, float_use: *, int_pair: { fst: *, snd: * }, str_pair: { fst: *, snd: * } }")))
 	(expressions
-		(expr @4.7-4.9 (type "Num(*)"))
-		(expr @5.8-5.11 (type "Frac(*)"))
-		(expr @6.7-6.14 (type "Str"))
-		(expr @7.8-7.12 (type "[True]*"))
-		(expr @10.14-10.16 (type "List(Num(*))"))
-		(expr @11.16-11.18 (type "{}"))
-		(expr @14.12-14.21 (type "List(Num(*))"))
-		(expr @15.12-15.27 (type "List(Str)"))
-		(expr @16.13-16.26 (type "List([True, False]*)"))
-		(expr @19.16-19.52 (type "List(List(Num(*)))"))
-		(expr @20.16-20.56 (type "List(List(Num(*)))"))
-		(expr @23.15-23.46 (type "{ items: List(Num(*)), count: Num(*) }"))
-		(expr @24.20-24.50 (type "{ items: List(Num(*)), count: Num(*) }"))
-		(expr @25.20-25.56 (type "{ items: List(Str), count: Num(*) }"))
-		(expr @28.15-35.2 (type "{ data: List(Num(*)), metadata: { version: Num(*), ratio: Frac(*), description: Str } }"))
-		(expr @38.11-46.2 (type "{ data: List(Num(*)), metadata: { version: Num(*), ratio: Frac(*), description: Str }, name: Str }"))
-		(expr @48.11-56.2 (type "{ data: List(Str), metadata: { version: Num(*), ratio: Frac(*), description: Str }, name: Str }"))
-		(expr @59.18-59.54 (type "* -> { value: *, wrapper: List(*) }"))
-		(expr @60.14-60.33 (type "{ value: *, wrapper: List(*) }"))
-		(expr @61.14-61.33 (type "{ value: *, wrapper: List(*) }"))
-		(expr @62.14-62.34 (type "{ value: *, wrapper: List(*) }"))
-		(expr @65.8-81.2 (type "{ level1: { level2: { level3: { data: List(Num(*)), value: Num(*) }, items: List(Num(*)) }, collection: List(Num(*)) }, results: List({ data: List(Num(*)), tag: Str }) }"))
-		(expr @84.12-85.9 (type "*"))
-		(expr @85.12-86.9 (type "*"))
-		(expr @86.12-86.22 (type "List(Num(*))"))
-		(expr @87.12-87.59 (type "{ base: Num(*), derived: List(Num(*)) }"))
-		(expr @90.9-103.2 (type "{ numbers: { value: Num(*), list: List(Num(*)), float: Frac(*) }, strings: { value: Str, list: List(Str) }, empty_lists: { raw: List(Num(*)), in_list: List(List(Num(*))), in_record: { data: List(Num(*)) } }, computations: { from_num: *, from_frac: *, list_from_num: List(Num(*)) } }"))
-		(expr @105.8-108.2 (type "* -> *"))))
+		(expr @4.6-4.11 (type "* -> *"))
+		(expr @7.10-7.16 (type "*"))
+		(expr @8.10-8.21 (type "*"))
+		(expr @9.11-9.19 (type "*"))
+		(expr @10.11-10.24 (type "*"))
+		(expr @11.13-11.33 (type "*"))
+		(expr @14.9-14.18 (type "* -> * -> *"))
+		(expr @17.13-17.23 (type "* -> *"))
+		(expr @18.13-18.27 (type "* -> *"))
+		(expr @19.14-19.34 (type "* -> *"))
+		(expr @22.14-22.28 (type "*"))
+		(expr @23.14-23.28 (type "*"))
+		(expr @24.15-24.30 (type "*"))
+		(expr @27.13-27.38 (type "*, * -> { fst: *, snd: * }"))
+		(expr @30.12-30.27 (type "{ fst: *, snd: * }"))
+		(expr @31.12-31.39 (type "{ fst: *, snd: * }"))
+		(expr @32.14-32.37 (type "{ fst: *, snd: * }"))
+		(expr @35.13-35.20 (type "* -> List(*)"))
+		(expr @38.15-38.28 (type "List(*)"))
+		(expr @39.15-39.33 (type "List(*)"))
+		(expr @40.16-40.31 (type "List(*)"))
+		(expr @43.11-43.29 (type "* -> *, * -> * -> * -> *"))
+		(expr @46.11-47.7 (type "* -> *"))
+		(expr @47.10-48.16 (type "* -> *"))
+		(expr @48.19-48.43 (type "* -> *"))
+		(expr @49.19-49.43 (type "* -> *"))
+		(expr @51.11-51.29 (type "*"))
+		(expr @52.11-52.29 (type "*"))
+		(expr @55.7-55.9 (type "Num(*)"))
+		(expr @58.11-61.10 (type "*"))
+		(expr @61.13-64.6 (type "*"))
+		(expr @64.9-64.15 (type "* -> List(*)"))
+		(expr @67.14-67.22 (type "List(*)"))
+		(expr @68.14-68.22 (type "List(*)"))
+		(expr @72.18-72.27 (type "List(Num(*))"))
+		(expr @73.18-73.33 (type "List(Str)"))
+		(expr @75.8-78.2 (type "* -> { id_int: *, id_str: *, result_int: *, result_str: *, int_use: *, float_use: *, int_pair: { fst: *, snd: * }, str_pair: { fst: *, snd: * } }"))))
 ~~~
