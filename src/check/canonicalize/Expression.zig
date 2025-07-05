@@ -183,6 +183,7 @@ pub const Expr = union(enum) {
     /// ```
     e_record: struct {
         fields: RecordField.Span,
+        ext: ?Expr.Idx,
         region: Region,
     },
     /// Empty record constant
@@ -637,6 +638,14 @@ pub const Expr = union(enum) {
                 var record_node = SExpr.init(gpa, "e-record");
                 ir.appendRegionInfoToSexprNodeFromRegion(&record_node, record_expr.region);
 
+                // Add extension if present
+                if (record_expr.ext) |ext_idx| {
+                    var ext_wrapper = SExpr.init(gpa, "ext");
+                    var ext_node = ir.store.getExpr(ext_idx).toSExpr(ir);
+                    ext_wrapper.appendNode(gpa, &ext_node);
+                    record_node.appendNode(gpa, &ext_wrapper);
+                }
+
                 // Add fields
                 var fields_node = SExpr.init(gpa, "fields");
                 for (ir.store.sliceRecordFields(record_expr.fields)) |field_idx| {
@@ -676,7 +685,14 @@ pub const Expr = union(enum) {
                 node.appendStringAttr(gpa, "name", ir.env.idents.getText(tag_expr.name));
 
                 // Add args
-                node.appendStringAttr(gpa, "args", "TODO");
+                if (tag_expr.args.span.len > 0) {
+                    var args_node = SExpr.init(gpa, "args");
+                    for (ir.store.sliceExpr(tag_expr.args)) |arg_idx| {
+                        var arg_node = ir.store.getExpr(arg_idx).toSExpr(ir);
+                        args_node.appendNode(gpa, &arg_node);
+                    }
+                    node.appendNode(gpa, &args_node);
+                }
 
                 return node;
             },

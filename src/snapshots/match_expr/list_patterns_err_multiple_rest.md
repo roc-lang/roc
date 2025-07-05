@@ -42,7 +42,7 @@ CloseCurly(3:1-3:2),EndOfFile(3:2-3:2),
 # PARSE
 ~~~clojure
 (e-match
-	(e-ident @1.7-1.14 (qaul "") (raw "numbers"))
+	(e-ident @1.7-1.14 (raw "numbers"))
 	(branches
 		(branch @2.5-3.2
 			(p-list @2.5-2.21

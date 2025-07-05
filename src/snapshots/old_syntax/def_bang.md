@@ -24,7 +24,7 @@ LowerIdent(4:1-4:16),OpenCurly(4:17-4:18),CloseCurly(4:18-4:19),EndOfFile(4:19-4
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.16 (qaul "") (raw "launchTheNukes!"))
+(e-ident @1.1-1.16 (raw "launchTheNukes!"))
 ~~~
 # FORMATTED
 ~~~roc

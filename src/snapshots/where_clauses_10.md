@@ -36,18 +36,18 @@ LowerIdent(9:5-9:6),NoSpaceDotUpperIdent(9:6-9:13),Comma(9:13-9:14),EndOfFile(9:
 		(exposes @1.8-1.16
 			(exposed-lower-ident (text "decode"))))
 	(statements
-		(s-import @3.1-3.32 (module "Decode")
+		(s-import @3.1-3.32 (raw "Decode")
 			(exposing
 				(exposed-upper-ident (text "Decode"))))
 		(s-type-anno @5.1-9.14 (name "decodeThings")
 			(ty-fn @7.3-7.28
 				(ty-apply @7.3-7.17
-					(ty (name "List"))
+					(ty @7.3-7.7 (name "List"))
 					(ty-apply @7.8-7.16
-						(ty (name "List"))
-						(ty (name "U8"))))
+						(ty @7.8-7.12 (name "List"))
+						(ty @7.13-7.15 (name "U8"))))
 				(ty-apply @7.21-7.28
-					(ty (name "List"))
+					(ty @7.21-7.25 (name "List"))
 					(ty-var @7.26-7.27 (raw "a")))))))
 ~~~
 # FORMATTED

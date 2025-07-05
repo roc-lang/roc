@@ -20,7 +20,7 @@ OpenRound(2:1-2:2),OpBinaryMinus(2:2-2:3),Int(2:3-2:4),CloseRound(2:4-2:5),EndOf
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.2 (qaul "") (raw "i"))
+(e-ident @1.1-1.2 (raw "i"))
 ~~~
 # FORMATTED
 ~~~roc

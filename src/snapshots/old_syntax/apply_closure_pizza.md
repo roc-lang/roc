@@ -20,7 +20,7 @@ OpPizza(2:1-2:3),UpperIdent(2:4-2:8),NoSpaceDotLowerIdent(2:8-2:15),OpBackslash(
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.4 (qaul "") (raw "foo"))
+(e-ident @1.1-1.4 (raw "foo"))
 ~~~
 # FORMATTED
 ~~~roc

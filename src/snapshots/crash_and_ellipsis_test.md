@@ -142,20 +142,20 @@ CloseCurly(20:1-20:2),EndOfFile(20:2-20:2),
 				(e-string @1.28-1.55
 					(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))))
 	(statements
-		(s-type-anno @4.1-5.13 (name "testEllipsis")
+		(s-type-anno @1.1-1.1 (name "testEllipsis")
 			(ty-fn @4.16-4.26
-				(ty (name "U64"))
-				(ty (name "U64"))))
+				(ty @4.16-4.19 (name "U64"))
+				(ty @4.23-4.26 (name "U64"))))
 		(s-decl @5.1-5.23
 			(p-ident @5.1-5.13 (raw "testEllipsis"))
 			(e-lambda @5.16-5.23
 				(args
 					(p-underscore))
 				(e-ellipsis)))
-		(s-type-anno @8.1-9.10 (name "testCrash")
+		(s-type-anno @1.1-1.1 (name "testCrash")
 			(ty-fn @8.13-8.23
-				(ty (name "U64"))
-				(ty (name "U64"))))
+				(ty @8.13-8.16 (name "U64"))
+				(ty @8.20-8.23 (name "U64"))))
 		(s-decl @9.1-9.24
 			(p-ident @9.1-9.10 (raw "testCrash"))
 			(e-lambda @9.13-9.24
@@ -164,10 +164,10 @@ CloseCurly(20:1-20:2),EndOfFile(20:2-20:2),
 				(e-malformed @9.17-9.24 (reason "expr_unexpected_token"))))
 		(e-string @9.23-9.48
 			(e-string-part @9.24-9.47 (raw "This is a crash message")))
-		(s-type-anno @12.1-13.16 (name "testCrashSimple")
+		(s-type-anno @1.1-1.1 (name "testCrashSimple")
 			(ty-fn @12.19-12.29
-				(ty (name "U64"))
-				(ty (name "U64"))))
+				(ty @12.19-12.22 (name "U64"))
+				(ty @12.26-12.29 (name "U64"))))
 		(s-decl @13.1-13.30
 			(p-ident @13.1-13.16 (raw "testCrashSimple"))
 			(e-lambda @13.19-13.30
@@ -186,17 +186,17 @@ CloseCurly(20:1-20:2),EndOfFile(20:2-20:2),
 						(s-decl @16.5-16.31
 							(p-ident @16.5-16.12 (raw "result1"))
 							(e-apply @16.15-16.31
-								(e-ident @16.15-16.27 (qaul "") (raw "testEllipsis"))
+								(e-ident @16.15-16.27 (raw "testEllipsis"))
 								(e-int @16.28-16.30 (raw "42"))))
 						(s-decl @17.5-17.28
 							(p-ident @17.5-17.12 (raw "result2"))
 							(e-apply @17.15-17.28
-								(e-ident @17.15-17.24 (qaul "") (raw "testCrash"))
+								(e-ident @17.15-17.24 (raw "testCrash"))
 								(e-int @17.25-17.27 (raw "42"))))
 						(s-decl @18.5-18.34
 							(p-ident @18.5-18.12 (raw "result3"))
 							(e-apply @18.15-18.34
-								(e-ident @18.15-18.30 (qaul "") (raw "testCrashSimple"))
+								(e-ident @18.15-18.30 (raw "testCrashSimple"))
 								(e-int @18.31-18.33 (raw "42"))))
 						(e-list @19.5-19.7)))))))
 ~~~

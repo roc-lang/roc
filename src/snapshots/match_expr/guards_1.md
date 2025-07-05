@@ -60,21 +60,9 @@ Here is the problematic code:
                              ^^^^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **.toStr x** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**guards_1.md:2:35:2:43:**
-```roc
-    x if x > 0 => "positive: ${Num.toStr x}"
-```
-                                  ^^^^^^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **}** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**UNEXPECTED TOKEN IN PATTERN**
+The token **}** is not expected in a pattern.
+Patterns can contain identifiers, literals, lists, records, or tags.
 
 Here is the problematic code:
 **guards_1.md:2:43:2:44:**
@@ -84,9 +72,9 @@ Here is the problematic code:
                                           ^
 
 
-**UNEXPECTED TOKEN IN PATTERN**
-The token **"** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **"** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
 **guards_1.md:2:44:2:45:**
@@ -96,9 +84,9 @@ Here is the problematic code:
                                            ^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**UNEXPECTED TOKEN IN PATTERN**
+The token  is not expected in a pattern.
+Patterns can contain identifiers, literals, lists, records, or tags.
 
 Here is the problematic code:
 **guards_1.md:2:44:2:44:**
@@ -106,6 +94,21 @@ Here is the problematic code:
     x if x > 0 => "positive: ${Num.toStr x}"
 ```
                                            
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **match value {
+    x if x > 0 => "positive: ${Num.toStr x}"
+    x** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**guards_1.md:1:1:3:6:**
+```roc
+match value {
+    x if x > 0 => "positive: ${Num.toStr x}"
+    x if x < 0 => "negative: ${Num.toStr x}"
+```
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -156,21 +159,9 @@ Here is the problematic code:
                              ^^^^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **.toStr x** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**guards_1.md:3:35:3:43:**
-```roc
-    x if x < 0 => "negative: ${Num.toStr x}"
-```
-                                  ^^^^^^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **}** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**UNEXPECTED TOKEN IN PATTERN**
+The token **}** is not expected in a pattern.
+Patterns can contain identifiers, literals, lists, records, or tags.
 
 Here is the problematic code:
 **guards_1.md:3:43:3:44:**
@@ -180,9 +171,9 @@ Here is the problematic code:
                                           ^
 
 
-**UNEXPECTED TOKEN IN PATTERN**
-The token **"** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **"** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
 **guards_1.md:3:44:3:45:**
@@ -192,9 +183,9 @@ Here is the problematic code:
                                            ^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token  is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**UNEXPECTED TOKEN IN PATTERN**
+The token  is not expected in a pattern.
+Patterns can contain identifiers, literals, lists, records, or tags.
 
 Here is the problematic code:
 **guards_1.md:3:44:3:44:**
@@ -202,6 +193,23 @@ Here is the problematic code:
     x if x < 0 => "negative: ${Num.toStr x}"
 ```
                                            
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **match value {
+    x if x > 0 => "positive: ${Num.toStr x}"
+    x if x < 0 => "negative: ${Num.toStr x}"
+    _** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+Here is the problematic code:
+**guards_1.md:1:1:4:6:**
+```roc
+match value {
+    x if x > 0 => "positive: ${Num.toStr x}"
+    x if x < 0 => "negative: ${Num.toStr x}"
+    _ => "other"
+```
 
 
 **UNDEFINED VARIABLE**
@@ -231,25 +239,28 @@ This pattern contains invalid syntax or uses unsupported features.
 This looks like an operator, but it's not one I recognize!
 Check the spelling and make sure you're using a valid Roc operator.
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
-
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
+**UNDEFINED VARIABLE**
+Nothing is named `x` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 **UNUSED VARIABLE**
-Variable ``x`` is not used anywhere in your code.
+Variable ``toStr`` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_toStr` to suppress this warning.
 The unused variable is declared here:
-**guards_1.md:2:42:2:43:**
+**guards_1.md:2:32:2:41:**
 ```roc
     x if x > 0 => "positive: ${Num.toStr x}"
 ```
-                                         ^
+                               ^^^^^^^^^
 
+
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
 
 **INVALID PATTERN**
 This pattern contains invalid syntax or uses unsupported features.
@@ -281,25 +292,28 @@ This pattern contains invalid syntax or uses unsupported features.
 This looks like an operator, but it's not one I recognize!
 Check the spelling and make sure you're using a valid Roc operator.
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
-
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
+**UNDEFINED VARIABLE**
+Nothing is named `x` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
 **UNUSED VARIABLE**
-Variable ``x`` is not used anywhere in your code.
+Variable ``toStr`` is not used anywhere in your code.
 
-If you don't need this variable, prefix it with an underscore like `_x` to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_toStr` to suppress this warning.
 The unused variable is declared here:
-**guards_1.md:3:42:3:43:**
+**guards_1.md:3:32:3:41:**
 ```roc
     x if x < 0 => "negative: ${Num.toStr x}"
 ```
-                                         ^
+                               ^^^^^^^^^
 
+
+**INVALID PATTERN**
+This pattern contains invalid syntax or uses unsupported features.
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
 
 **INVALID PATTERN**
 This pattern contains invalid syntax or uses unsupported features.
@@ -319,7 +333,7 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 # PARSE
 ~~~clojure
 (e-match
-	(e-ident @1.7-1.12 (qaul "") (raw "value"))
+	(e-ident @1.7-1.12 (raw "value"))
 	(branches
 		(branch @2.5-2.30
 			(p-ident @2.5-2.6 (raw "x"))
@@ -327,30 +341,30 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 		(branch @2.20-2.35
 			(p-malformed @2.20-2.32 (tag "pattern_unexpected_token"))
 			(e-malformed @2.30-2.35 (reason "expr_unexpected_token")))
-		(branch @2.32-2.43
-			(p-tag @2.32-2.35 (raw "Num"))
-			(e-malformed @2.35-2.43 (reason "expr_unexpected_token")))
-		(branch @2.42-2.44
-			(p-ident @2.42-2.43 (raw "x"))
-			(e-malformed @2.43-2.44 (reason "expr_unexpected_token")))
-		(branch @1.1-1.1
-			(p-malformed @2.44-2.45 (tag "pattern_unexpected_token"))
-			(e-malformed @1.1-1.1 (reason "expr_unexpected_token")))
+		(branch @2.32-2.44
+			(p-ident @2.32-2.41 (raw ".toStr"))
+			(e-ident @2.42-2.43 (raw "x")))
+		(branch @2.43-2.45
+			(p-malformed @2.43-2.44 (tag "pattern_unexpected_token"))
+			(e-malformed @2.44-2.45 (reason "expr_unexpected_token")))
+		(branch @2.44-3.6
+			(p-malformed @1.1-1.1 (tag "pattern_unexpected_token"))
+			(e-malformed @1.1-3.6 (reason "expr_unexpected_token")))
 		(branch @3.5-3.30
 			(p-ident @3.5-3.6 (raw "x"))
 			(e-malformed @3.19-3.30 (reason "no_else")))
 		(branch @3.20-3.35
 			(p-malformed @3.20-3.32 (tag "pattern_unexpected_token"))
 			(e-malformed @3.30-3.35 (reason "expr_unexpected_token")))
-		(branch @3.32-3.43
-			(p-tag @3.32-3.35 (raw "Num"))
-			(e-malformed @3.35-3.43 (reason "expr_unexpected_token")))
-		(branch @3.42-3.44
-			(p-ident @3.42-3.43 (raw "x"))
-			(e-malformed @3.43-3.44 (reason "expr_unexpected_token")))
-		(branch @1.1-1.1
-			(p-malformed @3.44-3.45 (tag "pattern_unexpected_token"))
-			(e-malformed @1.1-1.1 (reason "expr_unexpected_token")))
+		(branch @3.32-3.44
+			(p-ident @3.32-3.41 (raw ".toStr"))
+			(e-ident @3.42-3.43 (raw "x")))
+		(branch @3.43-3.45
+			(p-malformed @3.43-3.44 (tag "pattern_unexpected_token"))
+			(e-malformed @3.44-3.45 (reason "expr_unexpected_token")))
+		(branch @3.44-4.6
+			(p-malformed @1.1-1.1 (tag "pattern_unexpected_token"))
+			(e-malformed @1.1-4.6 (reason "expr_unexpected_token")))
 		(branch @1.1-1.1
 			(p-underscore)
 			(e-string @4.10-4.17
@@ -359,8 +373,8 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 # FORMATTED
 ~~~roc
 match value {
-	x => 	 => 	Num => 	x => 	 => 
-	x => 	 => 	Num => 	x => 	 => 
+	x => 	 => 	toStr => x	 => 	 => 
+	x => 	 => 	toStr => x	 => 	 => 
 	_ => "other"
 }
 ~~~
@@ -383,17 +397,17 @@ match value {
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
-					(p-applied-tag @2.32-2.35 (degenerate false)))
+					(p-assign @2.32-2.41 (ident "toStr") (degenerate false)))
+				(value
+					(e-runtime-error (tag "ident_not_in_scope"))))
+			(branch
+				(patterns
+					(p-runtime-error @2.43-2.44 (tag "pattern_not_canonicalized") (degenerate false)))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
-					(p-assign @2.42-2.43 (ident "x") (degenerate false)))
-				(value
-					(e-runtime-error (tag "expr_not_canonicalized"))))
-			(branch
-				(patterns
-					(p-runtime-error @2.44-2.45 (tag "pattern_not_canonicalized") (degenerate false)))
+					(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized") (degenerate false)))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
@@ -408,17 +422,17 @@ match value {
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
-					(p-applied-tag @3.32-3.35 (degenerate false)))
+					(p-assign @3.32-3.41 (ident "toStr") (degenerate false)))
+				(value
+					(e-runtime-error (tag "ident_not_in_scope"))))
+			(branch
+				(patterns
+					(p-runtime-error @3.43-3.44 (tag "pattern_not_canonicalized") (degenerate false)))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch
 				(patterns
-					(p-assign @3.42-3.43 (ident "x") (degenerate false)))
-				(value
-					(e-runtime-error (tag "expr_not_canonicalized"))))
-			(branch
-				(patterns
-					(p-runtime-error @3.44-3.45 (tag "pattern_not_canonicalized") (degenerate false)))
+					(p-runtime-error @1.1-1.1 (tag "pattern_not_canonicalized") (degenerate false)))
 				(value
 					(e-runtime-error (tag "expr_not_canonicalized"))))
 			(branch

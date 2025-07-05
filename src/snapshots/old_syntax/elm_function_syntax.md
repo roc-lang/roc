@@ -18,7 +18,7 @@ LowerIdent(1:1-1:2),LowerIdent(1:3-1:4),LowerIdent(1:5-1:6),OpAssign(1:7-1:8),Lo
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.2 (qaul "") (raw "f"))
+(e-ident @1.1-1.2 (raw "f"))
 ~~~
 # FORMATTED
 ~~~roc

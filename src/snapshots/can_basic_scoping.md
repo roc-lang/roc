@@ -89,12 +89,12 @@ CloseCurly(16:1-16:2),EndOfFile(16:2-16:2),
 									(s-decl @12.9-13.10
 										(p-ident @12.9-12.10 (raw "z"))
 										(e-binop @12.13-13.10 (op "+")
-											(e-ident @12.13-12.14 (qaul "") (raw "x"))
-											(e-ident @12.17-12.18 (qaul "") (raw "y"))))
+											(e-ident @12.13-12.14 (raw "x"))
+											(e-ident @12.17-12.18 (raw "y"))))
 									(e-binop @13.9-14.6 (op "+")
-										(e-ident @13.9-13.10 (qaul "") (raw "z"))
+										(e-ident @13.9-13.10 (raw "z"))
 										(e-int @13.13-13.14 (raw "1"))))))
-						(e-ident @15.5-15.16 (qaul "") (raw "innerResult"))))))))
+						(e-ident @15.5-15.16 (raw "innerResult"))))))))
 ~~~
 # FORMATTED
 ~~~roc

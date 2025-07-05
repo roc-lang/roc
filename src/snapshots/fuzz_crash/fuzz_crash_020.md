@@ -289,6 +289,17 @@ Let us know if you want to help!
 This feature is not yet implemented or doesn't have a proper error report yet: top-level expect
 Let us know if you want to help!
 
+**UNDECLARED TYPE**
+The type ``Listlt`` is not declared in this scope.
+
+This type is referenced here:
+**fuzz_crash_020.md:74:9:74:15:**
+```roc
+main! : Listlt({}, _)
+```
+        ^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `e` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -441,6 +452,17 @@ The unused variable is declared here:
 	i= "H, ${d}"
 ```
  ^
+
+
+**UNDECLARED TYPE**
+The type ``V`` is not declared in this scope.
+
+This type is referenced here:
+**fuzz_crash_020.md:116:5:116:6:**
+```roc
+t : V((a,c))
+```
+    ^
 
 
 **NOT IMPLEMENTED**
@@ -620,65 +642,65 @@ CloseCurly(121:1-121:2),EndOfFile(121:2-121:2),
 				(e-string @2.28-2.31
 					(e-string-part @2.29-2.30 (raw "c"))))))
 	(statements
-		(s-import @4.1-4.34 (module ".Stdout") (qualifier "pf")
+		(s-import @4.1-4.34 (raw "pf.Stdout")
 			(exposing
 				(exposed-lower-ident (text "line!"))))
-		(s-import @6.1-8.6 (module "Stdot")
+		(s-import @6.1-8.6 (raw "Stdot")
 			(exposing
 				(exposed-upper-ident (text "Cust"))))
-		(s-import @10.1-10.19 (module "Bae") (alias "Gooe"))
-		(s-import @11.1-12.4 (module "Ba"))
-		(s-type-decl @13.1-14.6
+		(s-import @10.1-10.19 (raw "Bae") (alias "Gooe"))
+		(s-import @11.1-12.4 (raw "Ba"))
+		(s-type-decl @13.1-13.33
 			(header @13.1-13.10 (name "Map")
 				(args
 					(ty-var @13.5-13.6 (raw "a"))
 					(ty-var @13.8-13.9 (raw "b"))))
 			(ty-fn @13.13-13.33
-				(ty (name "Lis"))
+				(ty @13.13-13.16 (name "Lis"))
 				(ty-tuple @13.18-13.22
 					(ty-var @13.19-13.21 (raw "ab")))
 				(ty-apply @13.26-13.33
-					(ty (name "List"))
+					(ty @13.26-13.30 (name "List"))
 					(ty-var @13.31-13.32 (raw "b")))))
-		(s-type-decl @14.1-22.5
+		(s-type-decl @14.1-20.15
 			(header @14.1-15.2 (name "MapML")
 				(args))
 			(ty-fn @17.3-20.15
 				(ty-apply @17.3-18.4
-					(ty (name "List")))
+					(ty @17.3-17.7 (name "List")))
 				(ty-tuple @19.3-19.7
 					(ty-var @19.4-19.6 (raw "ab")))
 				(ty-apply @20.4-20.15
-					(ty (name "List"))
+					(ty @20.4-20.8 (name "List"))
 					(ty-var @20.12-20.13 (raw "b")))))
 		(s-type-anno @22.1-24.4 (name "line")
 			(ty-tuple @22.8-23.2))
-		(s-type-decl @24.1-25.3
+		(s-type-decl @24.1-24.27
 			(header @24.1-24.4 (name "Som")
 				(args))
 			(ty-record @24.7-24.27
 				(anno-record-field @24.9-24.17 (name "foo")
-					(ty (name "O")))
+					(ty @24.15-24.16 (name "O")))
 				(anno-record-field @24.18-24.27 (name "bar")
 					(ty-var @24.24-24.25 (raw "g")))))
-		(s-type-decl @25.1-28.6
+		(s-type-decl @25.1-26.2
 			(header @25.1-25.6 (name "Ml")
 				(args
 					(ty-var @25.4-25.5 (raw "a"))))
 			(ty-record @25.9-26.2))
-		(s-type-decl @28.1-30.6
+		(s-type-decl @28.1-29.2
 			(header @28.1-28.9 (name "Soine")
 				(args
 					(ty-var @28.7-28.8 (raw "a"))))
 			(ty-record @28.12-29.2))
-		(s-type-decl @30.1-32.7
+		(s-type-decl @30.1-30.19
 			(header @30.1-30.9 (name "Maybe")
 				(args
 					(ty-var @30.7-30.8 (raw "a"))))
 			(ty-tag-union @30.12-30.19
 				(tags
-					(ty (name "Somne")))))
-		(s-type-decl @32.1-35.4
+					(ty @30.13-30.18 (name "Somne")))))
+		(s-type-decl @32.1-33.2
 			(header @32.1-32.10 (name "Mayine")
 				(args
 					(ty-var @32.8-32.9 (raw "a"))))
@@ -690,11 +712,11 @@ CloseCurly(121:1-121:2),EndOfFile(121:2-121:2),
 				(args
 					(p-ident @35.8-35.11 (raw "num")))
 				(e-if-then-else @35.13-37.4
-					(e-ident @35.16-35.19 (qaul "") (raw "num"))
+					(e-ident @35.16-35.19 (raw "num"))
 					(e-int @35.20-35.21 (raw "2"))
 					(e-int @35.27-35.28 (raw "5")))))
-		(s-type-anno @37.1-38.4 (name "one")
-			(ty (name "U6")))
+		(s-type-anno @1.1-1.1 (name "one")
+			(ty @37.7-37.9 (name "U6")))
 		(s-decl @38.1-47.2
 			(p-ident @38.1-38.4 (raw "add"))
 			(e-lambda @38.7-47.2
@@ -704,35 +726,35 @@ CloseCurly(121:1-121:2),EndOfFile(121:2-121:2),
 					(statements
 						(e-int @39.2-39.3 (raw "1"))
 						(e-if-then-else @40.2-47.2
-							(e-ident @40.5-40.8 (qaul "") (raw "num"))
+							(e-ident @40.5-40.8 (raw "num"))
 							(e-block @40.9-43.3
 								(statements
 									(e-dbg
-										(e-ident @42.4-42.5 (qaul "") (raw "s")))
-									(e-ident @42.6-42.10 (qaul "") (raw "exp0"))))
+										(e-ident @42.4-42.5 (raw "s")))
+									(e-ident @42.6-42.10 (raw "exp0"))))
 							(e-block @43.9-46.3
 								(statements
 									(e-dbg
 										(e-int @44.7-44.10 (raw "123")))
-									(e-ident @45.3-45.4 (qaul "") (raw "r")))))))))
+									(e-ident @45.3-45.4 (raw "r")))))))))
 		(s-decl @49.1-69.3
 			(p-ident @49.1-49.3 (raw "me"))
 			(e-lambda @49.6-69.3
 				(args
 					(p-ident @50.2-50.3 (raw "a")))
 				(e-match
-					(e-ident @52.8-52.9 (qaul "") (raw "a"))
+					(e-ident @52.8-52.9 (raw "a"))
 					(branches
 						(branch @52.11-55.7
 							(p-ident @52.11-52.14 (raw "lue"))
 							(e-block @52.16-54.4
 								(statements
-									(e-ident @53.2-53.3 (qaul "") (raw "x")))))
+									(e-ident @53.2-53.3 (raw "x")))))
 						(branch @55.3-57.4
 							(p-tag @55.3-55.7 (raw "Blue"))
 							(e-block @55.10-56.5
 								(statements
-									(e-ident @55.11-55.12 (qaul "") (raw "x")))))
+									(e-ident @55.11-55.12 (raw "x")))))
 						(branch @57.2-58.7
 							(p-ident @57.2-57.4 (raw "er"))
 							(e-int @58.4-58.5 (raw "1")))
@@ -742,7 +764,7 @@ CloseCurly(121:1-121:2),EndOfFile(121:2-121:2),
 						(branch @58.17-60.4
 							(p-list @58.17-58.22
 								(p-int @58.18-58.19 (raw "1")))
-							(e-ident @59.3-59.7 (qaul "") (raw "ment")))
+							(e-ident @59.3-59.7 (raw "ment")))
 						(branch @60.3-61.4
 							(p-list @60.3-60.16
 								(p-int @60.4-60.5 (raw "1"))
@@ -779,10 +801,10 @@ CloseCurly(121:1-121:2),EndOfFile(121:2-121:2),
 								(p-int @68.6-68.9 (raw "123")))
 							(e-int @68.14-68.16 (raw "12")))))))
 		(s-expect @71.1-74.6
-			(e-ident @72.2-72.4 (qaul "") (raw "nt")))
+			(e-ident @72.2-72.4 (raw "nt")))
 		(s-type-anno @74.1-75.3 (name "main!")
 			(ty-apply @74.9-74.22
-				(ty (name "Listlt"))
+				(ty @74.9-74.15 (name "Listlt"))
 				(ty-record @74.16-74.18)
 				(_)))
 		(s-decl @75.1-111.2
@@ -792,7 +814,7 @@ CloseCurly(121:1-121:2),EndOfFile(121:2-121:2),
 					(p-underscore))
 				(e-block @75.9-111.2
 					(statements
-						(e-ident @75.11-75.12 (qaul "") (raw "e"))
+						(e-ident @75.11-75.12 (raw "e"))
 						(s-decl @76.2-76.9
 							(p-ident @76.2-76.3 (raw "w"))
 							(e-string @76.6-76.9
@@ -800,47 +822,47 @@ CloseCurly(121:1-121:2),EndOfFile(121:2-121:2),
 						(s-var @77.2-78.8 (name "er")
 							(e-int @77.11-77.14 (raw "123")))
 						(s-expect @78.2-79.8
-							(e-ident @78.9-78.14 (qaul "") (raw "blaue")))
+							(e-ident @78.9-78.14 (raw "blaue")))
 						(s-return @79.2-83.5
-							(e-ident @80.3-80.6 (qaul "") (raw "tag")))
+							(e-ident @80.3-80.6 (raw "tag")))
 						(e-ellipsis)
 						(e-apply @84.2-86.3
-							(e-ident @84.2-84.4 (qaul "") (raw "me"))
+							(e-ident @84.2-84.4 (raw "me"))
 							(e-ellipsis))
 						(s-crash @86.3-86.12
-							(e-ident @86.9-86.11 (qaul "") (raw "ke")))
+							(e-ident @86.9-86.11 (raw "ke")))
 						(e-string @86.11-86.17
 							(e-string-part @86.12-86.16 (raw "Unr!")))
 						(s-decl @87.2-87.14
 							(p-ident @87.2-87.3 (raw "i"))
 							(e-string @87.5-87.14
 								(e-string-part @87.6-87.9 (raw "H, "))
-								(e-ident @87.11-87.12 (qaul "") (raw "d"))
+								(e-ident @87.11-87.12 (raw "d"))
 								(e-string-part @87.13-87.13 (raw ""))))
 						(s-decl @88.1-91.3
 							(p-ident @88.1-88.2 (raw "t"))
 							(e-list @88.5-91.3
 								(e-apply @89.3-89.14
-									(e-ident @89.3-89.6 (qaul "") (raw "one"))
-									(e-ident @89.7-89.9 (qaul "") (raw "er")))
+									(e-ident @89.3-89.6 (raw "one"))
+									(e-ident @89.7-89.9 (raw "er")))
 								(e-int @89.16-89.19 (raw "456"))
 								(e-int @90.1-90.2 (raw "9"))))
 						(s-for
 							(p-ident @92.6-92.7 (raw "n"))
-							(e-ident @92.11-92.15 (qaul "") (raw "list"))
+							(e-ident @92.11-92.15 (raw "list"))
 							(e-block @92.16-95.3
 								(statements
 									(e-apply @93.2-93.27
-										(e-ident @93.2-93.7 (qaul "") (raw "line!"))
+										(e-ident @93.2-93.7 (raw "line!"))
 										(e-string @93.8-93.26
 											(e-string-part @93.9-93.12 (raw "Ag "))
-											(e-ident @93.14-93.15 (qaul "") (raw "n"))
+											(e-ident @93.14-93.15 (raw "n"))
 											(e-string-part @93.16-93.20 (raw " to "))
-											(e-ident @93.22-93.24 (qaul "") (raw "er"))
+											(e-ident @93.22-93.24 (raw "er"))
 											(e-string-part @93.25-93.25 (raw ""))))
 									(e-binop @94.3-95.3 (op "+")
-										(e-ident @94.3-94.6 (qaul "") (raw "ber"))
-										(e-ident @94.9-94.10 (qaul "") (raw "n"))))))
+										(e-ident @94.3-94.6 (raw "ber"))
+										(e-ident @94.9-94.10 (raw "n"))))))
 						(s-decl @96.2-96.59
 							(p-ident @96.2-96.4 (raw "rd"))
 							(e-record @96.7-96.59
@@ -850,11 +872,11 @@ CloseCurly(121:1-121:2),EndOfFile(121:2-121:2),
 									(e-string @96.24-96.27
 										(e-string-part @96.25-96.26 (raw "H"))))
 								(field (field "baz") (optional false)
-									(e-ident @96.34-96.37 (qaul "") (raw "tag")))
+									(e-ident @96.34-96.37 (raw "tag")))
 								(field (field "qux") (optional false)
 									(e-apply @96.44-96.53
 										(e-tag @96.44-96.46 (raw "Ok"))
-										(e-ident @96.47-96.52 (qaul "") (raw "world"))))
+										(e-ident @96.47-96.52 (raw "world"))))
 								(field (field "ned") (optional false))))
 						(s-decl @97.2-97.48
 							(p-ident @97.2-97.3 (raw "t"))
@@ -862,25 +884,25 @@ CloseCurly(121:1-121:2),EndOfFile(121:2-121:2),
 								(e-int @97.7-97.10 (raw "123"))
 								(e-string @97.12-97.19
 									(e-string-part @97.13-97.18 (raw "World")))
-								(e-ident @97.21-97.24 (qaul "") (raw "tag"))
+								(e-ident @97.21-97.24 (raw "tag"))
 								(e-tag @97.26-97.27 (raw "O"))
 								(e-tuple @97.29-97.36
-									(e-ident @97.30-97.32 (qaul "") (raw "nd"))
-									(e-ident @97.34-97.35 (qaul "") (raw "t")))
+									(e-ident @97.30-97.32 (raw "nd"))
+									(e-ident @97.34-97.35 (raw "t")))
 								(e-list @97.38-97.47
 									(e-int @97.39-97.40 (raw "1"))
 									(e-int @97.42-97.43 (raw "2"))
 									(e-int @97.45-97.46 (raw "3")))))
-						(e-ident @98.2-98.3 (qaul "") (raw "m"))
+						(e-ident @98.2-98.3 (raw "m"))
 						(e-tuple @98.4-104.3
 							(e-int @99.3-99.6 (raw "123"))
 							(e-string @100.3-100.10
 								(e-string-part @100.4-100.9 (raw "World")))
-							(e-ident @100.11-100.14 (qaul "") (raw "ag1"))
+							(e-ident @100.11-100.14 (raw "ag1"))
 							(e-tag @101.3-101.4 (raw "O"))
 							(e-tuple @102.3-102.14
-								(e-ident @102.4-102.6 (qaul "") (raw "ne"))
-								(e-ident @102.8-102.13 (qaul "") (raw "tuple")))
+								(e-ident @102.4-102.6 (raw "ne"))
+								(e-ident @102.8-102.13 (raw "tuple")))
 							(e-list @103.3-103.12
 								(e-int @103.4-103.5 (raw "1"))
 								(e-int @103.7-103.8 (raw "2"))
@@ -889,7 +911,7 @@ CloseCurly(121:1-121:2),EndOfFile(121:2-121:2),
 							(e-binop @105.2-105.46 (op "or")
 								(e-binop @105.2-105.15 (op ">")
 									(e-binop @105.2-105.10 (op "??")
-										(e-ident @105.2-105.3 (qaul "") (raw "b"))
+										(e-ident @105.2-105.3 (raw "b"))
 										(e-int @105.6-105.8 (raw "12")))
 									(e-int @105.11-105.12 (raw "5")))
 								(e-binop @105.16-105.46 (op "and")
@@ -911,23 +933,23 @@ CloseCurly(121:1-121:2),EndOfFile(121:2-121:2),
 								(e-field-access @105.55-105.76
 									(e-question-suffix @105.55-105.66
 										(e-apply @105.55-105.65
-											(e-ident @105.55-105.59 (qaul "") (raw "e_fn"))
-											(e-ident @105.60-105.64 (qaul "") (raw "arg1"))))
+											(e-ident @105.55-105.59 (raw "e_fn"))
+											(e-ident @105.60-105.64 (raw "arg1"))))
 									(e-question-suffix @105.66-105.72
 										(e-apply @105.66-105.71
-											(e-ident @105.66-105.69 (qaul "") (raw ".od")))))
+											(e-ident @105.66-105.69 (raw "od")))))
 								(e-question-suffix @105.72-105.79
 									(e-apply @105.72-105.78
-										(e-ident @105.72-105.76 (qaul "") (raw ".ned")))))
+										(e-ident @105.72-105.76 (raw "ned")))))
 							(e-question-suffix @105.79-105.85
-								(e-ident @105.79-105.84 (qaul "") (raw ".recd"))))
+								(e-ident @105.79-105.84 (raw "recd"))))
 						(e-apply @106.2-110.3
 							(e-tag @106.2-106.7 (raw "Stdo!"))
 							(e-string @107.3-109.6
 								(e-string-part @107.4-107.6 (raw "Ho"))
 								(e-apply @108.4-108.9
-									(e-ident @108.4-108.5 (qaul "") (raw "r"))
-									(e-ident @108.6-108.8 (qaul "") (raw "nu")))
+									(e-ident @108.4-108.5 (raw "r"))
+									(e-ident @108.6-108.8 (raw "nu")))
 								(e-string-part @109.4-109.5 (raw " "))))))))
 		(s-type-anno @113.1-114.2 (name "y")
 			(ty-record @113.5-113.7))
@@ -936,7 +958,7 @@ CloseCurly(121:1-121:2),EndOfFile(121:2-121:2),
 			(e-record @114.5-114.7))
 		(s-type-anno @116.1-118.7 (name "t")
 			(ty-apply @116.5-116.13
-				(ty (name "V"))
+				(ty @116.5-116.6 (name "V"))
 				(ty-tuple @116.7-116.12
 					(ty-var @116.8-116.9 (raw "a"))
 					(ty-var @116.10-116.11 (raw "c")))))
@@ -944,11 +966,11 @@ CloseCurly(121:1-121:2),EndOfFile(121:2-121:2),
 			(e-block @118.8-121.2
 				(statements
 					(e-binop @119.2-120.2 (op "==")
-						(e-ident @119.2-119.5 (qaul "") (raw "foo"))
+						(e-ident @119.2-119.5 (raw "foo"))
 						(e-int @119.9-119.10 (raw "1")))
 					(e-binop @120.1-121.2 (op "==")
-						(e-ident @120.1-120.2 (qaul "") (raw "h"))
-						(e-ident @120.6-120.9 (qaul "") (raw "foo"))))))))
+						(e-ident @120.1-120.2 (raw "h"))
+						(e-ident @120.6-120.9 (raw "foo"))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -1054,7 +1076,7 @@ ma = |_| {
 		line!("Ag ${n} to ${er}")
 		ber + n
 	}
-	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world), ned }
+	rd = {foo: 123, bar: "H", baz: tag, qux: Ok(world), ned}
 	t = (123, "World", tag, O, (nd, t), [1, 2, 3])
 	m
 	(
@@ -1267,7 +1289,9 @@ expect {
 							(field (name "baz")
 								(e-runtime-error (tag "ident_not_in_scope")))
 							(field (name "qux")
-								(e-tag @96.44-96.53 (name "Ok") (args "TODO")))
+								(e-tag @96.44-96.53 (name "Ok")
+									(args
+										(e-runtime-error (tag "ident_not_in_scope")))))
 							(field (name "ned")
 								(e-runtime-error (tag "ident_not_in_scope"))))))
 				(s-let @97.2-97.48
@@ -1278,7 +1302,7 @@ expect {
 							(e-string @97.12-97.19
 								(e-literal @97.13-97.18 (string "World")))
 							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-tag @97.26-97.27 (name "O") (args "TODO"))
+							(e-tag @97.26-97.27 (name "O"))
 							(e-tuple @97.29-97.36
 								(elems
 									(e-runtime-error (tag "ident_not_in_scope"))
@@ -1298,7 +1322,7 @@ expect {
 							(e-string @100.3-100.10
 								(e-literal @100.4-100.9 (string "World")))
 							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-tag @101.3-101.4 (name "O") (args "TODO"))
+							(e-tag @101.3-101.4 (name "O"))
 							(e-tuple @102.3-102.14
 								(elems
 									(e-runtime-error (tag "ident_not_in_scope"))
@@ -1338,11 +1362,18 @@ expect {
 									(e-dot-access @105.55-105.76 (field "unknown")
 										(receiver
 											(e-runtime-error (tag "not_implemented")))))))))
-				(e-tag @106.2-110.3 (name "Stdo!") (args "TODO")))))
+				(e-tag @106.2-110.3 (name "Stdo!")
+					(args
+						(e-string @107.3-109.6
+							(e-literal @107.4-107.6 (string "Ho"))
+							(e-call @108.4-108.9
+								(e-runtime-error (tag "ident_not_in_scope"))
+								(e-runtime-error (tag "ident_not_in_scope")))
+							(e-literal @109.4-109.5 (string " "))))))))
 	(d-let
 		(p-assign @114.1-114.2 (ident "e"))
 		(e-empty_record @114.5-114.7))
-	(s-type-decl @13.1-14.6
+	(s-alias-decl @13.1-13.33 (where "TODO")
 		(ty-header @13.1-13.10 (name "Map")
 			(ty-args
 				(ty-var @13.5-13.6 (name "a"))
@@ -1353,7 +1384,7 @@ expect {
 				(ty-var @13.19-13.21 (name "ab")))
 			(ty-apply @13.26-13.33 (symbol "List")
 				(ty-var @13.31-13.32 (name "b")))))
-	(s-type-decl @14.1-22.5
+	(s-alias-decl @14.1-20.15 (where "TODO")
 		(ty-header @14.1-15.2 (name "MapML"))
 		(ty-fn @17.3-20.15 (effectful false)
 			(ty-apply @17.3-18.4 (symbol "List"))
@@ -1361,30 +1392,30 @@ expect {
 				(ty-var @19.4-19.6 (name "ab")))
 			(ty-apply @20.4-20.15 (symbol "List")
 				(ty-var @20.12-20.13 (name "b")))))
-	(s-type-decl @24.1-25.3
+	(s-alias-decl @24.1-24.27 (where "TODO")
 		(ty-header @24.1-24.4 (name "Som"))
 		(ty-record @24.7-24.27
 			(field (field "foo")
 				(ty @24.15-24.16 (name "O")))
 			(field (field "bar")
 				(ty-var @24.24-24.25 (name "g")))))
-	(s-type-decl @25.1-28.6
+	(s-alias-decl @25.1-26.2 (where "TODO")
 		(ty-header @25.1-25.6 (name "Ml")
 			(ty-args
 				(ty-var @25.4-25.5 (name "a"))))
 		(ty-record @25.9-26.2))
-	(s-type-decl @28.1-30.6
+	(s-alias-decl @28.1-29.2 (where "TODO")
 		(ty-header @28.1-28.9 (name "Soine")
 			(ty-args
 				(ty-var @28.7-28.8 (name "a"))))
 		(ty-record @28.12-29.2))
-	(s-type-decl @30.1-32.7
+	(s-alias-decl @30.1-30.19 (where "TODO")
 		(ty-header @30.1-30.9 (name "Maybe")
 			(ty-args
 				(ty-var @30.7-30.8 (name "a"))))
 		(ty-tag-union @30.12-30.19
 			(ty @30.13-30.18 (name "Somne"))))
-	(s-type-decl @32.1-35.4
+	(s-alias-decl @32.1-33.2 (where "TODO")
 		(ty-header @32.1-32.10 (name "Mayine")
 			(ty-args
 				(ty-var @32.8-32.9 (name "a"))))

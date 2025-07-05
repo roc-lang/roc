@@ -22,11 +22,11 @@ OpBar(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:4-1:14),Comma(1:14-1:15),DoubleDo
 			(field @1.16-1.24 (name "rest") (rest true))))
 	(e-string @1.26-1.65
 		(e-string-part @1.27-1.33 (raw "Hello "))
-		(e-ident @1.35-1.45 (qaul "") (raw "first_name"))
+		(e-ident @1.35-1.45 (raw "first_name"))
 		(e-string-part @1.46-1.47 (raw " "))
 		(e-field-access @1.49-1.64
-			(e-ident @1.49-1.53 (qaul "") (raw "rest"))
-			(e-ident @1.53-1.63 (qaul "") (raw ".last_name")))
+			(e-ident @1.49-1.53 (raw "rest"))
+			(e-ident @1.53-1.63 (raw "last_name")))
 		(e-string-part @1.64-1.64 (raw ""))))
 ~~~
 # FORMATTED

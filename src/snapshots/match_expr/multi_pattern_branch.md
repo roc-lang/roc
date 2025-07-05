@@ -31,7 +31,7 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 # PARSE
 ~~~clojure
 (e-match
-	(e-ident @1.7-1.12 (qaul "") (raw "color"))
+	(e-ident @1.7-1.12 (raw "color"))
 	(branches
 		(branch @2.5-3.10
 			(p-alternatives

@@ -18,7 +18,7 @@ UpperIdent(1:1-1:5),NoSpaceDotLowerIdent(1:5-1:9),EndOfFile(1:9-1:9),
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.9 (qaul "List") (raw ".map"))
+(e-ident @1.1-1.9 (raw "List.map"))
 ~~~
 # FORMATTED
 ~~~roc

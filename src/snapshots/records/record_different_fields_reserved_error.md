@@ -271,11 +271,11 @@ CloseCurly(8:1-8:2),EndOfFile(8:2-8:2),
 		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
 		(e-malformed @6.5-6.9 (reason "expr_unexpected_token"))
 		(e-malformed @6.8-6.14 (reason "expr_unexpected_token"))
-		(e-ident @6.10-6.19 (qaul "Bool") (raw ".true"))
+		(e-ident @6.10-6.19 (raw "Bool.true"))
 		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
 		(e-malformed @7.5-7.8 (reason "expr_unexpected_token"))
 		(e-malformed @7.7-7.13 (reason "expr_unexpected_token"))
-		(e-ident @7.9-7.19 (qaul "Bool") (raw ".false"))
+		(e-ident @7.9-7.19 (raw "Bool.false"))
 		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED

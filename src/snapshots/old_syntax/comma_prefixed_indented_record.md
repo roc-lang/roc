@@ -37,7 +37,7 @@ Model
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tag @1.1-1.6 (name "Model") (args "TODO"))
+(e-tag @1.1-1.6 (name "Model"))
 ~~~
 # TYPES
 ~~~clojure

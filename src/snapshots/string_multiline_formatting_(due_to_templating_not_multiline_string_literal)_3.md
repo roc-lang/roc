@@ -39,9 +39,9 @@ CloseStringInterpolation(6:1-6:2),StringPart(6:2-6:42),StringEnd(6:42-6:43),EndO
 (e-string @1.1-6.43
 	(e-string-part @1.2-1.24 (raw "This is a string with "))
 	(e-apply @2.2-5.3
-		(e-ident @2.2-2.11 (qaul "") (raw "some_func"))
-		(e-ident @3.3-3.4 (qaul "") (raw "a"))
-		(e-ident @4.3-4.4 (qaul "") (raw "b")))
+		(e-ident @2.2-2.11 (raw "some_func"))
+		(e-ident @3.3-3.4 (raw "a"))
+		(e-ident @4.3-4.4 (raw "b")))
 	(e-string-part @6.2-6.42 (raw " lines of text due to the template parts")))
 ~~~
 # FORMATTED

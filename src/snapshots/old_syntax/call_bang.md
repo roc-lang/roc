@@ -18,7 +18,7 @@ LowerIdent(1:1-1:16),Int(1:17-1:20),EndOfFile(1:20-1:20),
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.16 (qaul "") (raw "launchTheNukes!"))
+(e-ident @1.1-1.16 (raw "launchTheNukes!"))
 ~~~
 # FORMATTED
 ~~~roc

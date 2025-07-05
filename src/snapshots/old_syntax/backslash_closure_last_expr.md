@@ -20,7 +20,7 @@ OpBackslash(2:1-2:2),LowerIdent(2:2-2:3),OpArrow(2:3-2:5),LowerIdent(2:5-2:6),En
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.2 (qaul "") (raw "b"))
+(e-ident @1.1-1.2 (raw "b"))
 ~~~
 # FORMATTED
 ~~~roc

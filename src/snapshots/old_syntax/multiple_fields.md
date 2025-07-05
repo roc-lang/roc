@@ -21,10 +21,10 @@ LowerIdent(1:1-1:4),NoSpaceDotLowerIdent(1:4-1:8),NoSpaceDotLowerIdent(1:8-1:12)
 (e-field-access @1.1-1.16
 	(e-field-access @1.1-1.16
 		(e-field-access @1.1-1.12
-			(e-ident @1.1-1.4 (qaul "") (raw "rec"))
-			(e-ident @1.4-1.8 (qaul "") (raw ".abc")))
-		(e-ident @1.8-1.12 (qaul "") (raw ".def")))
-	(e-ident @1.12-1.16 (qaul "") (raw ".ghi")))
+			(e-ident @1.1-1.4 (raw "rec"))
+			(e-ident @1.4-1.8 (raw "abc")))
+		(e-ident @1.8-1.12 (raw "def")))
+	(e-ident @1.12-1.16 (raw "ghi")))
 ~~~
 # FORMATTED
 ~~~roc

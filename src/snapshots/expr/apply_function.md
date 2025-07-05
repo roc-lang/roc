@@ -19,7 +19,7 @@ LowerIdent(1:1-1:4),NoSpaceOpenRound(1:4-1:5),Int(1:5-1:7),Comma(1:7-1:8),String
 # PARSE
 ~~~clojure
 (e-apply @1.1-1.17
-	(e-ident @1.1-1.4 (qaul "") (raw "foo"))
+	(e-ident @1.1-1.4 (raw "foo"))
 	(e-int @1.5-1.7 (raw "42"))
 	(e-string @1.9-1.16
 		(e-string-part @1.10-1.15 (raw "hello"))))

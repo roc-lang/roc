@@ -28,7 +28,7 @@ UpperIdent(2:1-2:2),CloseRound(2:2-2:3),EndOfFile(2:3-2:3),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tag @2.1-2.2 (name "A") (args "TODO"))
+(e-tag @2.1-2.2 (name "A"))
 ~~~
 # TYPES
 ~~~clojure

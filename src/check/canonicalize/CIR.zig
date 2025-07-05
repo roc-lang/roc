@@ -786,17 +786,9 @@ pub const ExternalDecl = struct {
         var node = SExpr.init(gpa, "ext-decl");
         ir.appendRegionInfoToSexprNodeFromRegion(&node, self.region);
 
-        // Add qualified name
+        // Add fully qualified name
         const qualified_name_str = ir.getIdentText(self.qualified_name);
-        node.appendStringAttr(gpa, "qualified", qualified_name_str);
-
-        // Add module name
-        const module_name_str = ir.getIdentText(self.module_name);
-        node.appendStringAttr(gpa, "module", module_name_str);
-
-        // Add local name
-        const local_name_str = ir.getIdentText(self.local_name);
-        node.appendStringAttr(gpa, "local", local_name_str);
+        node.appendStringAttr(gpa, "ident", qualified_name_str);
 
         // Add kind
         switch (self.kind) {

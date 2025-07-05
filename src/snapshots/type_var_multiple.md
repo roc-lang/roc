@@ -88,13 +88,13 @@ LowerIdent(10:1-10:6),OpAssign(10:7-10:8),OpBar(10:9-10:10),Underscore(10:10-10:
 				(e-block @5.15-8.2
 					(statements
 						(e-tuple @6.5-6.20
-							(e-ident @6.6-6.11 (qaul "") (raw "first"))
-							(e-ident @6.13-6.19 (qaul "") (raw "second")))
+							(e-ident @6.6-6.11 (raw "first"))
+							(e-ident @6.13-6.19 (raw "second")))
 						(e-malformed @6.21-6.27 (reason "expr_unexpected_token"))
-						(e-ident @6.23-6.27 (qaul "") (raw "pair"))
+						(e-ident @6.23-6.27 (raw "pair"))
 						(e-tuple @7.5-7.20
-							(e-ident @7.6-7.12 (qaul "") (raw "second"))
-							(e-ident @7.14-7.19 (qaul "") (raw "first")))))))
+							(e-ident @7.6-7.12 (raw "second"))
+							(e-ident @7.14-7.19 (raw "first")))))))
 		(s-decl @10.1-10.15
 			(p-ident @10.1-10.6 (raw "main!"))
 			(e-lambda @10.9-10.15

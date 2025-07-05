@@ -39,7 +39,7 @@ LowerIdent(4:1-4:2),OpAssign(4:3-4:4),LowerIdent(4:5-4:6),OpPlus(4:7-4:8),Int(4:
 		(s-decl @4.1-4.10
 			(p-ident @4.1-4.2 (raw "b"))
 			(e-binop @4.5-4.10 (op "+")
-				(e-ident @4.5-4.6 (qaul "") (raw "a"))
+				(e-ident @4.5-4.6 (raw "a"))
 				(e-int @4.9-4.10 (raw "1"))))))
 ~~~
 # FORMATTED

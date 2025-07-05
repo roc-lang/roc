@@ -35,7 +35,7 @@ T
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tag @1.1-1.2 (name "T") (args "TODO"))
+(e-tag @1.1-1.2 (name "T"))
 ~~~
 # TYPES
 ~~~clojure

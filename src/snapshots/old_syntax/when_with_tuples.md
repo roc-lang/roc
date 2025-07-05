@@ -22,7 +22,7 @@ OpenRound(3:2-3:3),Underscore(3:3-3:4),Comma(3:4-3:5),LowerIdent(3:6-3:7),CloseR
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.5 (qaul "") (raw "when"))
+(e-ident @1.1-1.5 (raw "when"))
 ~~~
 # FORMATTED
 ~~~roc

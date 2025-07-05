@@ -22,7 +22,7 @@ LowerIdent(2:1-2:2),CloseCurly(2:2-2:3),EndOfFile(2:3-2:3),
 ~~~clojure
 (e-block @1.1-2.3
 	(statements
-		(e-ident @2.1-2.2 (qaul "") (raw "a"))))
+		(e-ident @2.1-2.2 (raw "a"))))
 ~~~
 # FORMATTED
 ~~~roc

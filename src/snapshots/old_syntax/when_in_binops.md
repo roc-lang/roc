@@ -31,10 +31,10 @@ LowerIdent(3:2-3:4),EndOfFile(3:4-3:4),
 # PARSE
 ~~~clojure
 (e-binop @1.1-1.12 (op "<")
-	(e-ident @1.1-1.3 (qaul "") (raw "di"))
+	(e-ident @1.1-1.3 (raw "di"))
 	(e-binop @1.4-1.12 (op "<")
-		(e-ident @1.4-1.5 (qaul "") (raw "s"))
-		(e-ident @1.6-1.10 (qaul "") (raw "when"))))
+		(e-ident @1.4-1.5 (raw "s"))
+		(e-ident @1.6-1.10 (raw "when"))))
 ~~~
 # FORMATTED
 ~~~roc

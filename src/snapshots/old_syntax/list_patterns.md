@@ -34,7 +34,7 @@ OpenSquare(9:3-9:4),OpenSquare(9:4-9:5),OpenSquare(9:5-9:6),CloseSquare(9:6-9:7)
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.5 (qaul "") (raw "when"))
+(e-ident @1.1-1.5 (raw "when"))
 ~~~
 # FORMATTED
 ~~~roc

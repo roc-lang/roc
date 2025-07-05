@@ -20,7 +20,7 @@ CloseRound(2:1-2:2),EndOfFile(2:2-2:2),
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.2 (qaul "") (raw "x"))
+(e-ident @1.1-1.2 (raw "x"))
 ~~~
 # FORMATTED
 ~~~roc

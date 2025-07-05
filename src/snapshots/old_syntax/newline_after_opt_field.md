@@ -27,8 +27,8 @@ LowerIdent(2:1-2:2),CloseCurly(2:2-2:3),EndOfFile(2:3-2:3),
 (e-block @1.1-2.3
 	(statements
 		(e-question-suffix @1.2-1.4
-			(e-ident @1.2-1.3 (qaul "") (raw "i")))
-		(e-ident @2.1-2.2 (qaul "") (raw "p"))))
+			(e-ident @1.2-1.3 (raw "i")))
+		(e-ident @2.1-2.2 (raw "p"))))
 ~~~
 # FORMATTED
 ~~~roc

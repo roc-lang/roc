@@ -43,10 +43,10 @@ LowerIdent(9:1-9:6),OpAssign(9:7-9:8),LowerIdent(9:9-9:19),NoSpaceOpenRound(9:19
 				(e-string @1.28-1.55
 					(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))))
 	(statements
-		(s-import @3.1-3.17 (module ".Stdout") (qualifier "pf"))
+		(s-import @3.1-3.17 (raw "pf.Stdout"))
 		(s-type-anno @6.1-7.11 (name "print_msg!")
 			(ty-fn @6.14-6.23
-				(ty (name "Str"))
+				(ty @6.14-6.17 (name "Str"))
 				(ty-record @6.21-6.23)))
 		(s-decl @7.1-7.37
 			(p-ident @7.1-7.11 (raw "print_msg!"))
@@ -54,12 +54,12 @@ LowerIdent(9:1-9:6),OpAssign(9:7-9:8),LowerIdent(9:9-9:19),NoSpaceOpenRound(9:19
 				(args
 					(p-ident @7.15-7.18 (raw "msg")))
 				(e-apply @7.20-7.37
-					(e-ident @7.20-7.32 (qaul "Stdout") (raw ".line!"))
-					(e-ident @7.33-7.36 (qaul "") (raw "msg")))))
+					(e-ident @7.20-7.32 (raw "Stdout.line!"))
+					(e-ident @7.33-7.36 (raw "msg")))))
 		(s-decl @9.1-9.36
 			(p-ident @9.1-9.6 (raw "main!"))
 			(e-apply @9.9-9.36
-				(e-ident @9.9-9.19 (qaul "") (raw "print_msg!"))
+				(e-ident @9.9-9.19 (raw "print_msg!"))
 				(e-string @9.20-9.35
 					(e-string-part @9.21-9.34 (raw "Hello, world!")))))))
 ~~~
@@ -77,7 +77,7 @@ NO CHANGE
 				(p-assign @7.15-7.18 (ident "msg")))
 			(e-call @7.20-7.37
 				(e-lookup-external
-					(ext-decl @7.20-7.32 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value")))
+					(ext-decl @7.20-7.32 (ident "pf.Stdout.line!") (kind "value")))
 				(e-lookup-local @7.33-7.36
 					(pattern @7.15-7.18))))
 		(annotation @7.1-7.11

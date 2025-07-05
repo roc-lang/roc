@@ -45,6 +45,17 @@ Foo : (Bar, Baz)
 
 
 **UNDECLARED TYPE**
+The type ``Ok`` is not declared in this scope.
+
+This type is referenced here:
+**type_declarations.md:7:19:7:21:**
+```roc
+Some(a) : { foo : Ok(a), bar : Something }
+```
+                  ^^
+
+
+**UNDECLARED TYPE**
 The type ``Something`` is not declared in this scope.
 
 This type is referenced here:
@@ -86,68 +97,68 @@ UpperIdent(15:1-15:8),OpColon(15:9-15:10),UpperIdent(15:11-15:17),NoSpaceDotUppe
 			(exposed-lower-ident (text "add_one"))
 			(exposed-lower-ident (text "main!"))))
 	(statements
-		(s-type-decl @3.1-5.4
+		(s-type-decl @3.1-3.41
 			(header @3.1-3.10 (name "Map")
 				(args
 					(ty-var @3.5-3.6 (raw "a"))
 					(ty-var @3.8-3.9 (raw "b"))))
 			(ty-fn @3.13-3.41
 				(ty-apply @3.13-3.20
-					(ty (name "List"))
+					(ty @3.13-3.17 (name "List"))
 					(ty-var @3.18-3.19 (raw "a")))
 				(ty-fn @3.23-3.29
 					(ty-var @3.23-3.24 (raw "a"))
 					(ty-var @3.28-3.29 (raw "b")))
 				(ty-apply @3.34-3.41
-					(ty (name "List"))
+					(ty @3.34-3.38 (name "List"))
 					(ty-var @3.39-3.40 (raw "b")))))
-		(s-type-decl @5.1-7.5
+		(s-type-decl @5.1-5.17
 			(header @5.1-5.4 (name "Foo")
 				(args))
 			(ty-tuple @5.7-5.17
-				(ty (name "Bar"))
-				(ty (name "Baz"))))
-		(s-type-decl @7.1-9.6
+				(ty @5.8-5.11 (name "Bar"))
+				(ty @5.13-5.16 (name "Baz"))))
+		(s-type-decl @7.1-7.43
 			(header @7.1-7.8 (name "Some")
 				(args
 					(ty-var @7.6-7.7 (raw "a"))))
 			(ty-record @7.11-7.43
 				(anno-record-field @7.13-7.25 (name "foo")
 					(ty-apply @7.19-7.24
-						(ty (name "Ok"))
+						(ty @7.19-7.21 (name "Ok"))
 						(ty-var @7.22-7.23 (raw "a"))))
 				(anno-record-field @7.26-7.43 (name "bar")
-					(ty (name "Something")))))
-		(s-type-decl @9.1-11.9
+					(ty @7.32-7.41 (name "Something")))))
+		(s-type-decl @9.1-9.27
 			(header @9.1-9.9 (name "Maybe")
 				(args
 					(ty-var @9.7-9.8 (raw "a"))))
 			(ty-tag-union @9.12-9.27
 				(tags
 					(ty-apply @9.13-9.20
-						(ty (name "Some"))
+						(ty @9.13-9.17 (name "Some"))
 						(ty-var @9.18-9.19 (raw "a")))
-					(ty (name "None")))))
-		(s-type-decl @11.1-13.7
+					(ty @9.22-9.26 (name "None")))))
+		(s-type-decl @11.1-11.38
 			(header @11.1-11.12 (name "SomeFunc")
 				(args
 					(ty-var @11.10-11.11 (raw "a"))))
 			(ty-fn @11.15-11.38
 				(ty-apply @11.15-11.23
-					(ty (name "Maybe"))
+					(ty @11.15-11.20 (name "Maybe"))
 					(ty-var @11.21-11.22 (raw "a")))
 				(ty-var @11.25-11.26 (raw "a"))
 				(ty-apply @11.30-11.38
-					(ty (name "Maybe"))
+					(ty @11.30-11.35 (name "Maybe"))
 					(ty-var @11.36-11.37 (raw "a")))))
-		(s-type-decl @13.1-15.8
+		(s-type-decl @13.1-13.13
 			(header @13.1-13.7 (name "MyType")
 				(args))
-			(ty (name "U64")))
+			(ty @13.10-13.13 (name "U64")))
 		(s-type-decl @15.1-15.24
 			(header @15.1-15.8 (name "MyType2")
 				(args))
-			(ty-mod (module "Thingy") (name "Module")))))
+			(ty @15.11-15.24 (name "Module.Thingy")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -156,7 +167,7 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-type-decl @3.1-5.4
+	(s-alias-decl @3.1-3.41 (where "TODO")
 		(ty-header @3.1-3.10 (name "Map")
 			(ty-args
 				(ty-var @3.5-3.6 (name "a"))
@@ -170,12 +181,12 @@ NO CHANGE
 					(ty-var @3.28-3.29 (name "b"))))
 			(ty-apply @3.34-3.41 (symbol "List")
 				(ty-var @3.39-3.40 (name "b")))))
-	(s-type-decl @5.1-7.5
+	(s-alias-decl @5.1-5.17 (where "TODO")
 		(ty-header @5.1-5.4 (name "Foo"))
 		(ty-tuple @5.7-5.17
 			(ty @5.8-5.11 (name "Bar"))
 			(ty @5.13-5.16 (name "Baz"))))
-	(s-type-decl @7.1-9.6
+	(s-alias-decl @7.1-7.43 (where "TODO")
 		(ty-header @7.1-7.8 (name "Some")
 			(ty-args
 				(ty-var @7.6-7.7 (name "a"))))
@@ -185,7 +196,7 @@ NO CHANGE
 					(ty-var @7.22-7.23 (name "a"))))
 			(field (field "bar")
 				(ty @7.32-7.41 (name "Something")))))
-	(s-type-decl @9.1-11.9
+	(s-alias-decl @9.1-9.27 (where "TODO")
 		(ty-header @9.1-9.9 (name "Maybe")
 			(ty-args
 				(ty-var @9.7-9.8 (name "a"))))
@@ -193,7 +204,7 @@ NO CHANGE
 			(ty-apply @9.13-9.20 (symbol "Some")
 				(ty-var @9.18-9.19 (name "a")))
 			(ty @9.22-9.26 (name "None"))))
-	(s-type-decl @11.1-13.7
+	(s-alias-decl @11.1-11.38 (where "TODO")
 		(ty-header @11.1-11.12 (name "SomeFunc")
 			(ty-args
 				(ty-var @11.10-11.11 (name "a"))))
@@ -203,12 +214,13 @@ NO CHANGE
 			(ty-var @11.25-11.26 (name "a"))
 			(ty-apply @11.30-11.38 (symbol "Maybe")
 				(ty-var @11.36-11.37 (name "a")))))
-	(s-type-decl @13.1-15.8
+	(s-alias-decl @13.1-13.13 (where "TODO")
 		(ty-header @13.1-13.7 (name "MyType"))
 		(ty @13.10-13.13 (name "U64")))
-	(s-type-decl @15.1-15.24
+	(s-alias-decl @15.1-15.24 (where "TODO")
 		(ty-header @15.1-15.8 (name "MyType2"))
-		(ty-mod @15.11-15.24 (module "Thingy") (type "Module"))))
+		(ty-lookup-external @15.11-15.24
+			(ext-decl @15.11-15.24 (ident "Module.Thingy") (kind "type")))))
 ~~~
 # TYPES
 ~~~clojure

@@ -26,7 +26,7 @@ LowerIdent(2:1-2:2),EndOfFile(2:2-2:2),
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tag @1.2-1.3 (name "D") (args "TODO"))
+(e-tag @1.2-1.3 (name "D"))
 ~~~
 # TYPES
 ~~~clojure

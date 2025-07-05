@@ -27,10 +27,10 @@ LowerIdent(5:1-5:5),OpAssign(5:6-5:7),UpperIdent(5:8-5:14),NoSpaceDotLowerIdent(
 	(module @1.1-1.10
 		(exposes @1.8-1.10))
 	(statements
-		(s-import @3.1-3.27 (module ".Json") (qualifier "json") (alias "MyJson"))
+		(s-import @3.1-3.27 (raw "json.Json") (alias "MyJson"))
 		(s-decl @5.1-5.21
 			(p-ident @5.1-5.5 (raw "main"))
-			(e-ident @5.8-5.21 (qaul "MyJson") (raw ".decode")))))
+			(e-ident @5.8-5.21 (raw "MyJson.decode")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -42,7 +42,7 @@ NO CHANGE
 	(d-let
 		(p-assign @5.1-5.5 (ident "main"))
 		(e-lookup-external
-			(ext-decl @5.8-5.21 (qualified "json.Json.decode") (module "json.Json") (local "decode") (kind "value"))))
+			(ext-decl @5.8-5.21 (ident "json.Json.decode") (kind "value"))))
 	(s-import @3.1-3.27 (module "json.Json") (qualifier "json") (alias "MyJson")
 		(exposes)))
 ~~~

@@ -24,7 +24,7 @@ LowerIdent(4:9-4:10),OpArrow(4:11-4:13),OpenCurly(4:14-4:15),CloseCurly(4:15-4:1
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.5 (qaul "") (raw "when"))
+(e-ident @1.1-1.5 (raw "when"))
 ~~~
 # FORMATTED
 ~~~roc

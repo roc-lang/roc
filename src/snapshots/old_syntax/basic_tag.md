@@ -23,7 +23,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tag @1.1-1.5 (name "Whee") (args "TODO"))
+(e-tag @1.1-1.5 (name "Whee"))
 ~~~
 # TYPES
 ~~~clojure

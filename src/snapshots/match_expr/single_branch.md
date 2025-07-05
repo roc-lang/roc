@@ -23,12 +23,12 @@ CloseCurly(3:1-3:2),EndOfFile(3:2-3:2),
 # PARSE
 ~~~clojure
 (e-match
-	(e-ident @1.7-1.12 (qaul "") (raw "value"))
+	(e-ident @1.7-1.12 (raw "value"))
 	(branches
 		(branch @2.5-3.2
 			(p-ident @2.5-2.6 (raw "x"))
 			(e-binop @2.10-3.2 (op "+")
-				(e-ident @2.10-2.11 (qaul "") (raw "x"))
+				(e-ident @2.10-2.11 (raw "x"))
 				(e-int @2.14-2.15 (raw "1"))))))
 ~~~
 # FORMATTED

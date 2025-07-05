@@ -53,8 +53,8 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 						(p-ident @4.10-4.11 (raw "x"))
 						(p-ident @4.13-4.14 (raw "y"))))
 				(e-tuple @4.17-4.23
-					(e-ident @4.18-4.19 (qaul "") (raw "y"))
-					(e-ident @4.21-4.22 (qaul "") (raw "x")))))
+					(e-ident @4.18-4.19 (raw "y"))
+					(e-ident @4.21-4.22 (raw "x")))))
 		(s-decl @6.1-6.15
 			(p-ident @6.1-6.6 (raw "main!"))
 			(e-lambda @6.9-6.15

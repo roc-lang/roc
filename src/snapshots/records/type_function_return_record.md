@@ -17,17 +17,17 @@ LowerIdent(1:1-1:13),OpColon(1:14-1:15),UpperIdent(1:16-1:19),Comma(1:19-1:20),U
 ~~~clojure
 (s-type-anno @1.1-1.78 (name "create_user!")
 	(ty-fn @1.16-1.78
-		(ty (name "Str"))
-		(ty (name "U32"))
+		(ty @1.16-1.19 (name "Str"))
+		(ty @1.21-1.24 (name "U32"))
 		(ty-record @1.28-1.78
 			(anno-record-field @1.30-1.41 (name "name")
-				(ty (name "Str")))
+				(ty @1.37-1.40 (name "Str")))
 			(anno-record-field @1.42-1.52 (name "age")
-				(ty (name "U32")))
+				(ty @1.48-1.51 (name "U32")))
 			(anno-record-field @1.53-1.62 (name "id")
-				(ty (name "U64")))
+				(ty @1.58-1.61 (name "U64")))
 			(anno-record-field @1.63-1.78 (name "active")
-				(ty (name "Bool"))))))
+				(ty @1.72-1.76 (name "Bool"))))))
 ~~~
 # FORMATTED
 ~~~roc

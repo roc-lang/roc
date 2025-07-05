@@ -37,28 +37,28 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @3.1-4.12 (name "processList")
+		(s-type-anno @1.1-1.1 (name "processList")
 			(ty-fn @3.15-3.31
 				(ty-apply @3.15-3.24
-					(ty (name "List"))
-					(ty (name "Str")))
-				(ty (name "U64"))))
+					(ty @3.15-3.19 (name "List"))
+					(ty @3.20-3.23 (name "Str")))
+				(ty @3.28-3.31 (name "U64"))))
 		(s-decl @4.1-6.6
 			(p-ident @4.1-4.12 (raw "processList"))
 			(e-lambda @4.15-6.6
 				(args
 					(p-ident @4.16-4.20 (raw "list")))
 				(e-field-access @4.22-6.6
-					(e-ident @4.22-4.26 (qaul "") (raw "list"))
+					(e-ident @4.22-4.26 (raw "list"))
 					(e-apply @4.26-4.32
-						(e-ident @4.26-4.30 (qaul "") (raw ".len"))))))
+						(e-ident @4.26-4.30 (raw "len"))))))
 		(s-decl @6.1-6.39
 			(p-ident @6.1-6.6 (raw "main!"))
 			(e-lambda @6.9-6.39
 				(args
 					(p-underscore))
 				(e-apply @6.13-6.39
-					(e-ident @6.13-6.24 (qaul "") (raw "processList"))
+					(e-ident @6.13-6.24 (raw "processList"))
 					(e-list @6.25-6.38
 						(e-string @6.26-6.31
 							(e-string-part @6.27-6.30 (raw "one")))

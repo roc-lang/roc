@@ -11,7 +11,19 @@ type=expr
 ]
 ~~~
 # PROBLEMS
-NIL
+**LIST NOT CLOSED**
+This list is missing a closing bracket or has a syntax error.
+Lists must be closed with **]** and list items must be separated by commas.
+For example:     [1, 2, 3]
+
+Here is the problematic code:
+**list_comment_newline.md:4:1:4:2:**
+```roc
+]
+```
+^
+
+
 # TOKENS
 ~~~zig
 OpenSquare(1:1-1:2),UpperIdent(1:2-1:3),Newline(1:4-1:4),
@@ -21,23 +33,19 @@ CloseSquare(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~
 # PARSE
 ~~~clojure
-(e-list @1.1-4.2
-	(e-tag @1.2-1.3 (raw "L")))
+(e-malformed @4.1-4.2 (reason "expected_expr_close_square_or_comma"))
 ~~~
 # FORMATTED
 ~~~roc
-[
-	L,
 
-]
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-list @1.1-4.2
-	(elems
-		(e-tag @1.2-1.3 (name "L") (args "TODO"))))
+(can-ir (empty true))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-4.2 (type "List([L]*)"))
+(inferred-types
+	(defs)
+	(expressions))
 ~~~

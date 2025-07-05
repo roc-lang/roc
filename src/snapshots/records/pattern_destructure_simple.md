@@ -35,13 +35,13 @@ CloseCurly(3:1-3:2),EndOfFile(3:2-3:2),
 # PARSE
 ~~~clojure
 (e-match
-	(e-ident @1.7-1.13 (qaul "") (raw "person"))
+	(e-ident @1.7-1.13 (raw "person"))
 	(branches
 		(branch @2.5-3.2
 			(p-record @2.5-2.18
 				(field @2.7-2.12 (name "name") (rest false))
 				(field @2.13-2.18 (name "age") (rest false)))
-			(e-ident @2.22-2.26 (qaul "") (raw "name")))))
+			(e-ident @2.22-2.26 (raw "name")))))
 ~~~
 # FORMATTED
 ~~~roc

@@ -46,7 +46,7 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 			(e-lambda @4.12-4.17
 				(args
 					(p-ident @4.13-4.14 (raw "x")))
-				(e-ident @4.16-4.17 (qaul "") (raw "x"))))
+				(e-ident @4.16-4.17 (raw "x"))))
 		(s-decl @6.1-6.15
 			(p-ident @6.1-6.6 (raw "main!"))
 			(e-lambda @6.9-6.15

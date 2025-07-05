@@ -20,7 +20,7 @@ OpenSquare(2:5-2:6),CloseSquare(2:6-2:7),OpPlus(2:8-2:9),OpPlus(2:9-2:10),OpenSq
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.5 (qaul "") (raw "main"))
+(e-ident @1.1-1.5 (raw "main"))
 ~~~
 # FORMATTED
 ~~~roc

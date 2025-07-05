@@ -57,7 +57,7 @@ OpenCurly(1:1-1:2),LowerIdent(1:2-1:3),NoSpaceOpQuestion(1:3-1:4),MultilineStrin
 (e-block @1.1-1.11
 	(statements
 		(e-question-suffix @1.2-1.4
-			(e-ident @1.2-1.3 (qaul "") (raw "l")))
+			(e-ident @1.2-1.3 (raw "l")))
 		(e-malformed @1.4-1.7 (reason "expr_unexpected_token"))
 		(e-malformed @1.7-1.10 (reason "expr_unexpected_token"))
 		(e-malformed @1.7-1.11 (reason "expr_unexpected_token"))))

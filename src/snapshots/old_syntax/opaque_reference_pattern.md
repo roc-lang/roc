@@ -20,7 +20,7 @@ OpaqueName(2:3-2:7),OpArrow(2:8-2:10),Int(2:11-2:12),EndOfFile(2:12-2:12),
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.5 (qaul "") (raw "when"))
+(e-ident @1.1-1.5 (raw "when"))
 ~~~
 # FORMATTED
 ~~~roc

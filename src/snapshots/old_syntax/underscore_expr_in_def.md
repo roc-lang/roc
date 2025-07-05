@@ -25,7 +25,7 @@ J
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tag @1.1-1.2 (name "J") (args "TODO"))
+(e-tag @1.1-1.2 (name "J"))
 ~~~
 # TYPES
 ~~~clojure

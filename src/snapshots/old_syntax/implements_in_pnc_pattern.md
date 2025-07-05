@@ -37,9 +37,9 @@ LowerIdent(2:1-2:2),EndOfFile(2:2-2:2),
 # PARSE
 ~~~clojure
 (e-apply @1.1-1.16
-	(e-ident @1.1-1.2 (qaul "") (raw "g"))
+	(e-ident @1.1-1.2 (raw "g"))
 	(e-malformed @1.3-1.14 (reason "expr_unexpected_token"))
-	(e-ident @1.14-1.15 (qaul "") (raw "x")))
+	(e-ident @1.14-1.15 (raw "x")))
 ~~~
 # FORMATTED
 ~~~roc

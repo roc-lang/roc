@@ -23,7 +23,7 @@ I
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tag @1.1-1.2 (name "I") (args "TODO"))
+(e-tag @1.1-1.2 (name "I"))
 ~~~
 # TYPES
 ~~~clojure

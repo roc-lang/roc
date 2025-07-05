@@ -585,6 +585,45 @@ pub fn resolve(self: *AST, token: Token.Idx) []const u8 {
     return self.source[@intCast(range.start.offset)..@intCast(range.end.offset)];
 }
 
+/// Resolves a fully qualified name from a chain of qualifier tokens and a final token.
+/// If there are qualifiers, returns a slice from the first qualifier to the final token.
+/// Otherwise, returns the final token text with any leading dot stripped based on the token type.
+pub fn resolveQualifiedName(
+    self: *AST,
+    qualifiers: Token.Span,
+    final_token: Token.Idx,
+    strip_dot_from_tokens: []const Token.Tag,
+) []const u8 {
+    const qualifier_tokens = self.store.tokenSlice(qualifiers);
+
+    if (qualifier_tokens.len > 0) {
+        // Get the region of the first qualifier token
+        const first_qualifier_tok = @as(Token.Idx, @intCast(qualifier_tokens[0]));
+        const first_region = self.tokens.resolve(first_qualifier_tok);
+
+        // Get the region of the final token
+        const final_region = self.tokens.resolve(final_token);
+
+        // Slice from the start of the first qualifier to the end of the final token
+        const start_offset = first_region.start.offset;
+        const end_offset = final_region.end.offset;
+
+        return self.source[@intCast(start_offset)..@intCast(end_offset)];
+    } else {
+        // Get the raw token text and strip leading dot if it's one of the specified tokens
+        const raw_text = self.resolve(final_token);
+        const token_tag = self.tokens.tokens.items(.tag)[@intCast(final_token)];
+
+        for (strip_dot_from_tokens) |dot_token_tag| {
+            if (token_tag == dot_token_tag and raw_text.len > 0 and raw_text[0] == '.') {
+                return raw_text[1..];
+            }
+        }
+
+        return raw_text;
+    }
+}
+
 /// Contains properties of the thing to the right of the `import` keyword.
 pub const ImportRhs = packed struct {
     /// e.g. 1 in case we use import `as`: `import Module as Mod`
@@ -726,13 +765,23 @@ pub const Statement = union(enum) {
             .import => |import| {
                 var node = SExpr.init(env.gpa, "s-import");
                 ast.appendRegionInfoToSexprNode(env, &node, import.region);
-                // name e.g. `Stdout` in `import pf.Stdout`
-                node.appendStringAttr(env.gpa, "module", ast.resolve(import.module_name_tok));
 
-                // qualifier e.g. `pf` in `import pf.Stdout`
+                // Reconstruct full qualified module name
+                const module_name_raw = ast.resolve(import.module_name_tok);
                 if (import.qualifier_tok) |tok| {
                     const qualifier_str = ast.resolve(tok);
-                    node.appendStringAttr(env.gpa, "qualifier", qualifier_str);
+                    // Strip leading dot from module name if present
+                    const module_name_clean = if (module_name_raw.len > 0 and module_name_raw[0] == '.')
+                        module_name_raw[1..]
+                    else
+                        module_name_raw;
+
+                    // Combine qualifier and module name
+                    const full_module_name = std.fmt.allocPrint(env.gpa, "{s}.{s}", .{ qualifier_str, module_name_clean }) catch |err| exitOnOom(err);
+                    defer env.gpa.free(full_module_name);
+                    node.appendStringAttr(env.gpa, "raw", full_module_name);
+                } else {
+                    node.appendStringAttr(env.gpa, "raw", module_name_raw);
                 }
 
                 // alias e.g. `OUT` in `import pf.Stdout as OUT`
@@ -1458,8 +1507,8 @@ pub const TypeAnno = union(enum) {
         region: TokenizedRegion,
     },
     ty: struct {
-        ident: base.Ident.Idx,
-        // Region starts with the type token.
+        token: Token.Idx,
+        qualifiers: Token.Span,
         region: TokenizedRegion,
     },
     mod_ty: struct {
@@ -1532,7 +1581,12 @@ pub const TypeAnno = union(enum) {
             },
             .ty => |a| {
                 var node = SExpr.init(env.gpa, "ty");
-                node.appendStringAttr(env.gpa, "name", ast.resolve(a.region.start));
+                ast.appendRegionInfoToSexprNode(env, &node, a.region);
+
+                // Resolve the fully qualified name
+                const strip_tokens = [_]Token.Tag{.NoSpaceDotUpperIdent};
+                const fully_qualified_name = ast.resolveQualifiedName(a.qualifiers, a.token, &strip_tokens);
+                node.appendStringAttr(env.gpa, "name", fully_qualified_name);
                 return node;
             },
             .mod_ty => |a| {
@@ -1716,10 +1770,13 @@ pub const Expr = union(enum) {
     },
     record: struct {
         fields: RecordField.Span,
+        /// Record extension: { ..person, field: value }
+        ext: ?Expr.Idx,
         region: TokenizedRegion,
     },
     tag: struct {
         token: Token.Idx,
+        qualifiers: Token.Span,
         region: TokenizedRegion,
     },
     lambda: struct {
@@ -1754,7 +1811,7 @@ pub const Expr = union(enum) {
     },
     ident: struct {
         token: Token.Idx,
-        qualifier: ?Token.Idx,
+        qualifiers: Token.Span,
         region: TokenizedRegion,
     },
     dbg: struct {
@@ -1845,7 +1902,10 @@ pub const Expr = union(enum) {
 
                 ast.appendRegionInfoToSexprNode(env, &node, tag.region);
 
-                node.appendStringAttr(env.gpa, "raw", ast.resolve(tag.token));
+                // Resolve the fully qualified name
+                const strip_tokens = [_]Token.Tag{.NoSpaceDotUpperIdent};
+                const fully_qualified_name = ast.resolveQualifiedName(tag.qualifiers, tag.token, &strip_tokens);
+                node.appendStringAttr(env.gpa, "raw", fully_qualified_name);
                 return node;
             },
             .block => |block| {
@@ -1873,9 +1933,10 @@ pub const Expr = union(enum) {
 
                 ast.appendRegionInfoToSexprNode(env, &node, ident.region);
 
-                node.appendStringAttr(env.gpa, "qaul", if (ident.qualifier != null) ast.resolve(ident.qualifier.?) else "");
-
-                node.appendStringAttr(env.gpa, "raw", ast.resolve(ident.token));
+                // Resolve the fully qualified name
+                const strip_tokens = [_]Token.Tag{ .NoSpaceDotLowerIdent, .NoSpaceDotUpperIdent };
+                const fully_qualified_name = ast.resolveQualifiedName(ident.qualifiers, ident.token, &strip_tokens);
+                node.appendStringAttr(env.gpa, "raw", fully_qualified_name);
                 return node;
             },
             .list => |a| {
@@ -1925,6 +1986,14 @@ pub const Expr = union(enum) {
                 var node = SExpr.init(env.gpa, "e-record");
 
                 ast.appendRegionInfoToSexprNode(env, &node, a.region);
+
+                // Add extension if present
+                if (a.ext) |ext_idx| {
+                    var ext_wrapper = SExpr.init(env.gpa, "ext");
+                    var ext_node = ast.store.getExpr(ext_idx).toSExpr(env, ast);
+                    ext_wrapper.appendNode(env.gpa, &ext_node);
+                    node.appendNode(env.gpa, &ext_wrapper);
+                }
 
                 for (ast.store.recordFieldSlice(a.fields)) |field_idx| {
                     const record_field = ast.store.getRecordField(field_idx);

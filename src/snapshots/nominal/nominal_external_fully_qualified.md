@@ -18,112 +18,28 @@ handleResult = |result| {
 }
 ~~~
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **.MyResultType.Ok** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**UNDECLARED TYPE**
+The type ``MyResultModule.MyResultType`` is not declared in this scope.
 
-Here is the problematic code:
-**nominal_external_fully_qualified.md:8:23:8:39:**
+This type is referenced here:
+**nominal_external_fully_qualified.md:6:1:6:13:**
 ```roc
-        MyResultModule.MyResultType.Ok(value) => value
+handleResult = |result| {
 ```
-                      ^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^
 
 
-**UNEXPECTED TOKEN IN PATTERN**
-The token **.Ok(** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
+**UNUSED VARIABLE**
+Variable ``code`` is not used anywhere in your code.
 
-Here is the problematic code:
-**nominal_external_fully_qualified.md:8:36:8:40:**
-```roc
-        MyResultModule.MyResultType.Ok(value) => value
-```
-                                   ^^^^
-
-
-**UNEXPECTED TOKEN IN PATTERN**
-The token **=> value** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
-
-Here is the problematic code:
-**nominal_external_fully_qualified.md:8:47:8:55:**
-```roc
-        MyResultModule.MyResultType.Ok(value) => value
-```
-                                              ^^^^^^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **.MyResultType.Err** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**nominal_external_fully_qualified.md:9:23:9:40:**
+If you don't need this variable, prefix it with an underscore like `_code` to suppress this warning.
+The unused variable is declared here:
+**nominal_external_fully_qualified.md:9:41:9:45:**
 ```roc
         MyResultModule.MyResultType.Err(code) => "Error: $(code.toStr())"
 ```
-                      ^^^^^^^^^^^^^^^^^
+                                        ^^^^
 
-
-**UNEXPECTED TOKEN IN PATTERN**
-The token **.Err(** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
-
-Here is the problematic code:
-**nominal_external_fully_qualified.md:9:36:9:41:**
-```roc
-        MyResultModule.MyResultType.Err(code) => "Error: $(code.toStr())"
-```
-                                   ^^^^^
-
-
-**UNEXPECTED TOKEN IN PATTERN**
-The token **=> "** is not expected in a pattern.
-Patterns can contain identifiers, literals, lists, records, or tags.
-
-Here is the problematic code:
-**nominal_external_fully_qualified.md:9:47:9:51:**
-```roc
-        MyResultModule.MyResultType.Err(code) => "Error: $(code.toStr())"
-```
-                                              ^^^^
-
-
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
-
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
-
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
-
-**UNDEFINED VARIABLE**
-Nothing is named `value` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
-
-**UNDEFINED VARIABLE**
-Nothing is named `value` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
-
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
-
-**UNDEFINED VARIABLE**
-Nothing is named `code` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**INVALID PATTERN**
-This pattern contains invalid syntax or uses unsupported features.
 
 # TOKENS
 ~~~zig
@@ -146,14 +62,14 @@ CloseCurly(11:1-11:2),EndOfFile(11:2-11:2),
 		(exposes @1.8-1.22
 			(exposed-lower-ident (text "handleResult"))))
 	(statements
-		(s-import @3.1-3.22 (module "MyResultModule"))
-		(s-type-anno @5.1-6.13 (name "handleResult")
+		(s-import @3.1-3.22 (raw "MyResultModule"))
+		(s-type-anno @1.1-1.1 (name "handleResult")
 			(ty-fn @5.16-5.60
 				(ty-apply @5.16-5.53
-					(ty-mod (module "MyResultType") (name "MyResultModule"))
-					(ty (name "Str"))
-					(ty (name "I32")))
-				(ty (name "Str"))))
+					(ty @5.16-5.43 (name "MyResultModule.MyResultType"))
+					(ty @5.44-5.47 (name "Str"))
+					(ty @5.49-5.52 (name "I32")))
+				(ty @5.57-5.60 (name "Str"))))
 		(s-decl @6.1-11.2
 			(p-ident @6.1-6.13 (raw "handleResult"))
 			(e-lambda @6.16-11.2
@@ -162,27 +78,15 @@ CloseCurly(11:1-11:2),EndOfFile(11:2-11:2),
 				(e-block @6.25-11.2
 					(statements
 						(e-match
-							(e-ident @7.11-7.17 (qaul "") (raw "result"))
+							(e-ident @7.11-7.17 (raw "result"))
 							(branches
-								(branch @8.9-8.39
-									(p-tag @8.9-8.23 (raw "MyResultModule"))
-									(e-malformed @8.23-8.39 (reason "expr_unexpected_token")))
-								(branch @8.36-8.49
-									(p-malformed @8.36-8.40 (tag "pattern_unexpected_token"))
-									(e-tuple @8.39-8.46
-										(e-ident @8.40-8.45 (qaul "") (raw "value"))))
-								(branch @8.47-9.23
-									(p-malformed @8.47-8.55 (tag "pattern_unexpected_token"))
-									(e-ident @8.50-8.55 (qaul "") (raw "value")))
-								(branch @9.9-9.40
-									(p-tag @9.9-9.23 (raw "MyResultModule"))
-									(e-malformed @9.23-9.40 (reason "expr_unexpected_token")))
-								(branch @9.36-9.49
-									(p-malformed @9.36-9.41 (tag "pattern_unexpected_token"))
-									(e-tuple @9.40-9.46
-										(e-ident @9.41-9.45 (qaul "") (raw "code"))))
+								(branch @8.9-9.23
+									(p-tag @8.9-8.46 (raw ".Ok")
+										(p-ident @8.40-8.45 (raw "value")))
+									(e-ident @8.50-8.55 (raw "value")))
 								(branch @1.1-1.1
-									(p-malformed @9.47-9.51 (tag "pattern_unexpected_token"))
+									(p-tag @9.9-9.46 (raw ".Err")
+										(p-ident @9.41-9.45 (raw "code")))
 									(e-string @9.50-9.74
 										(e-string-part @9.51-9.73 (raw "Error: $(code.toStr())"))))))))))))
 ~~~
@@ -195,8 +99,8 @@ import MyResultModule
 handleResult : MyResultModule.MyResultType(Str, I32) -> Str
 handleResult = |result| {
 	match result {
-		MyResultModule => 		 => (value)		 => value
-		MyResultModule => 		 => (code)		 => "Error: $(code.toStr())"
+		Ok(value) => value
+		Err(code) => "Error: $(code.toStr())"
 	}
 }
 ~~~
@@ -217,39 +121,22 @@ handleResult = |result| {
 						(branches
 							(branch
 								(patterns
-									(p-applied-tag @8.9-8.23 (degenerate false)))
+									(p-applied-tag @8.9-8.46 (degenerate false)))
 								(value
-									(e-runtime-error (tag "expr_not_canonicalized"))))
+									(e-lookup-local @8.50-8.55
+										(pattern @8.40-8.45))))
 							(branch
 								(patterns
-									(p-runtime-error @8.36-8.40 (tag "pattern_not_canonicalized") (degenerate false)))
-								(value
-									(e-runtime-error (tag "ident_not_in_scope"))))
-							(branch
-								(patterns
-									(p-runtime-error @8.47-8.55 (tag "pattern_not_canonicalized") (degenerate false)))
-								(value
-									(e-runtime-error (tag "ident_not_in_scope"))))
-							(branch
-								(patterns
-									(p-applied-tag @9.9-9.23 (degenerate false)))
-								(value
-									(e-runtime-error (tag "expr_not_canonicalized"))))
-							(branch
-								(patterns
-									(p-runtime-error @9.36-9.41 (tag "pattern_not_canonicalized") (degenerate false)))
-								(value
-									(e-runtime-error (tag "ident_not_in_scope"))))
-							(branch
-								(patterns
-									(p-runtime-error @9.47-9.51 (tag "pattern_not_canonicalized") (degenerate false)))
+									(p-applied-tag @9.9-9.46 (degenerate false)))
 								(value
 									(e-string @9.50-9.74
 										(e-literal @9.51-9.73 (string "Error: $(code.toStr())"))))))))))
 		(annotation @6.1-6.13
 			(declared-type
 				(ty-fn @5.16-5.60 (effectful false)
-					(ty-malformed @5.16-5.53)
+					(ty-apply @5.16-5.53 (symbol "MyResultModule.MyResultType")
+						(ty @5.44-5.47 (name "Str"))
+						(ty @5.49-5.52 (name "I32")))
 					(ty @5.57-5.60 (name "Str"))))))
 	(s-import @3.1-3.22 (module "MyResultModule")
 		(exposes)))
@@ -258,7 +145,7 @@ handleResult = |result| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.13 (type "Error -> Error")))
+		(patt @6.1-6.13 (type "Error -> Str")))
 	(expressions
-		(expr @6.16-11.2 (type "Error -> Error"))))
+		(expr @6.16-11.2 (type "Error -> Str"))))
 ~~~

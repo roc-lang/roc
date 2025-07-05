@@ -32,7 +32,7 @@ LowerIdent(3:1-3:4),OpAssign(3:5-3:6),StringStart(3:7-3:8),StringPart(3:8-3:14),
 			(p-ident @3.1-3.4 (raw "foo"))
 			(e-string @3.7-3.22
 				(e-string-part @3.8-3.14 (raw "hello "))
-				(e-ident @3.16-3.20 (qaul "") (raw "name"))
+				(e-ident @3.16-3.20 (raw "name"))
 				(e-string-part @3.21-3.21 (raw ""))))))
 ~~~
 # FORMATTED

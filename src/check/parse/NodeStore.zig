@@ -501,6 +501,15 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) AST.Expr.Idx {
             node.region = e.region;
             node.main_token = e.token;
         },
+        .tag => |e| {
+            node.tag = .tag;
+            node.region = e.region;
+            node.main_token = e.token;
+            if (e.qualifiers.span.len > 0) {
+                node.data.lhs = e.qualifiers.span.start;
+                node.data.rhs = e.qualifiers.span.len;
+            }
+        },
         .single_quote => |e| {
             node.tag = .single_quote;
             node.region = e.region;
@@ -536,11 +545,11 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) AST.Expr.Idx {
             node.region = r.region;
             node.data.lhs = r.fields.span.start;
             node.data.rhs = r.fields.span.len;
-        },
-        .tag => |e| {
-            node.tag = .tag;
-            node.region = e.region;
-            node.main_token = e.token;
+            if (r.ext) |ext| {
+                const ext_ed_idx = store.extra_data.items.len;
+                store.extra_data.append(store.gpa, @intFromEnum(ext)) catch |err| exitOnOom(err);
+                node.main_token = @as(u32, @intCast(ext_ed_idx));
+            }
         },
         .lambda => |l| {
             node.tag = .lambda;
@@ -611,9 +620,9 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) AST.Expr.Idx {
             node.tag = .ident;
             node.region = id.region;
             node.main_token = id.token;
-            if (id.qualifier) |qualifier| {
-                node.data.lhs = qualifier;
-                node.data.rhs = 1;
+            if (id.qualifiers.span.len > 0) {
+                node.data.lhs = id.qualifiers.span.start;
+                node.data.rhs = id.qualifiers.span.len;
             }
         },
         .dbg => |d| {
@@ -824,8 +833,9 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) AST.TypeAnno.Idx {
         .ty => |t| {
             node.tag = .ty_ty;
             node.region = t.region;
-            node.main_token = t.region.start;
-            node.data.rhs = @bitCast(t.ident);
+            node.main_token = t.token;
+            node.data.lhs = t.qualifiers.span.start;
+            node.data.rhs = t.qualifiers.span.len;
         },
         .mod_ty => |t| {
             node.tag = .ty_mod_ty;
@@ -1260,20 +1270,29 @@ pub fn getExpr(store: *NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
             } };
         },
         .ident => {
-            var qualifier: ?Token.Idx = null;
-            if (node.data.rhs == 1) {
-                qualifier = node.data.lhs;
+            // Retrieve qualifier span from stored data
+            var qualifiers_span = Token.Span{ .span = .{ .start = 0, .len = 0 } };
+            if (node.data.rhs > 0) {
+                qualifiers_span = .{ .span = .{ .start = node.data.lhs, .len = node.data.rhs } };
             }
+
             return .{ .ident = .{
                 .token = node.main_token,
-                .qualifier = qualifier,
+                .qualifiers = qualifiers_span,
                 .region = node.region,
             } };
         },
         .tag => {
+            // Retrieve qualifier span from stored data
+            var qualifiers_span = Token.Span{ .span = .{ .start = 0, .len = 0 } };
+            if (node.data.rhs > 0) {
+                qualifiers_span = .{ .span = .{ .start = node.data.lhs, .len = node.data.rhs } };
+            }
+
             return .{ .tag = .{
-                .region = node.region,
                 .token = node.main_token,
+                .qualifiers = qualifiers_span,
+                .region = node.region,
             } };
         },
         .string_part => {
@@ -1316,6 +1335,7 @@ pub fn getExpr(store: *NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
                     .start = node.data.lhs,
                     .len = node.data.rhs,
                 } },
+                .ext = if (node.main_token > 0) @enumFromInt(store.extra_data.items[node.main_token]) else null,
                 .region = node.region,
             } };
         },
@@ -1553,7 +1573,8 @@ pub fn getTypeAnno(store: *NodeStore, ty_anno_idx: AST.TypeAnno.Idx) AST.TypeAnn
         },
         .ty_ty => {
             return .{ .ty = .{
-                .ident = @bitCast(node.data.rhs),
+                .token = node.main_token,
+                .qualifiers = .{ .span = .{ .start = node.data.lhs, .len = node.data.rhs } },
                 .region = node.region,
             } };
         },
@@ -1957,7 +1978,7 @@ pub fn tokenSpanFrom(store: *NodeStore, start: u32) Token.Span {
     var i = @as(usize, @intCast(start));
     const ed_start = @as(u32, @intCast(store.extra_data.items.len));
     while (i < end) {
-        store.extra_data.append(store.gpa, @intFromEnum(store.scratch_tokens.items.items[i])) catch |err| exitOnOom(err);
+        store.extra_data.append(store.gpa, store.scratch_tokens.items.items[i]) catch |err| exitOnOom(err);
         i += 1;
     }
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };

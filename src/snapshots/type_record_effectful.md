@@ -45,15 +45,15 @@ LowerIdent(10:1-10:6),OpAssign(10:7-10:8),OpBar(10:9-10:10),Underscore(10:10-10:
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-import @3.1-3.17 (module ".Stdout") (qualifier "pf"))
-		(s-type-anno @5.1-6.10 (name "printName")
+		(s-import @3.1-3.17 (raw "pf.Stdout"))
+		(s-type-anno @1.1-1.1 (name "printName")
 			(ty-fn @5.13-5.43
 				(ty-record @5.13-5.36
 					(anno-record-field @5.15-5.25 (name "name")
-						(ty (name "Str")))
+						(ty @5.21-5.24 (name "Str")))
 					(anno-record-field @5.26-5.36 (name "age")
-						(ty (name "U64"))))
-				(ty (name "Str"))))
+						(ty @5.31-5.34 (name "U64"))))
+				(ty @5.40-5.43 (name "Str"))))
 		(s-decl @6.1-9.2
 			(p-ident @6.1-6.10 (raw "printName"))
 			(e-lambda @6.13-9.2
@@ -62,13 +62,13 @@ LowerIdent(10:1-10:6),OpAssign(10:7-10:8),OpBar(10:9-10:10),Underscore(10:10-10:
 				(e-block @6.22-9.2
 					(statements
 						(e-apply @7.5-7.30
-							(e-ident @7.5-7.17 (qaul "Stdout") (raw ".line!"))
+							(e-ident @7.5-7.17 (raw "Stdout.line!"))
 							(e-field-access @7.18-7.30
-								(e-ident @7.18-7.24 (qaul "") (raw "person"))
-								(e-ident @7.24-7.29 (qaul "") (raw ".name"))))
+								(e-ident @7.18-7.24 (raw "person"))
+								(e-ident @7.24-7.29 (raw "name"))))
 						(e-field-access @8.5-9.2
-							(e-ident @8.5-8.11 (qaul "") (raw "person"))
-							(e-ident @8.11-8.16 (qaul "") (raw ".name")))))))
+							(e-ident @8.5-8.11 (raw "person"))
+							(e-ident @8.11-8.16 (raw "name")))))))
 		(s-decl @10.1-10.15
 			(p-ident @10.1-10.6 (raw "main!"))
 			(e-lambda @10.9-10.15
@@ -101,7 +101,7 @@ main! = |_| {}
 				(s-expr @7.5-8.11
 					(e-call @7.5-7.30
 						(e-lookup-external
-							(ext-decl @7.5-7.17 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value")))
+							(ext-decl @7.5-7.17 (ident "pf.Stdout.line!") (kind "value")))
 						(e-dot-access @7.18-7.30 (field "name")
 							(receiver
 								(e-lookup-local @7.18-7.24

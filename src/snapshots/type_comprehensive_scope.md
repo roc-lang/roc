@@ -49,13 +49,11 @@ Complex : {
 The type ``Result`` is being redeclared.
 
 The redeclaration is here:
-**type_comprehensive_scope.md:12:1:15:5:**
+**type_comprehensive_scope.md:12:1:12:37:**
 ```roc
 Result(ok, err) : [Ok(ok), Err(err)]
-
-# Forward reference - Tree references Node before Node is defined
-Tree(a) : [Branch(Node(a)), Leaf(a)]
 ```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 But ``Result`` was already declared here:
 **type_comprehensive_scope.md:1:1:1:1:**
@@ -65,26 +63,33 @@ module [MyU64, Person, Result, Tree, Node]
 
 
 
+**UNDECLARED TYPE**
+The type ``Node`` is not declared in this scope.
+
+This type is referenced here:
+**type_comprehensive_scope.md:15:19:15:23:**
+```roc
+Tree(a) : [Branch(Node(a)), Leaf(a)]
+```
+                  ^^^^
+
+
 **TYPE REDECLARED**
 The type ``Person`` is being redeclared.
 
 The redeclaration is here:
-**type_comprehensive_scope.md:24:1:27:8:**
+**type_comprehensive_scope.md:24:1:24:13:**
 ```roc
 Person : U64
-
-# Using an undeclared type (should error)
-BadType : SomeUndeclaredType
 ```
+^^^^^^^^^^^^
 
 But ``Person`` was already declared here:
-**type_comprehensive_scope.md:9:1:12:7:**
+**type_comprehensive_scope.md:9:1:9:33:**
 ```roc
 Person : { name: Str, age: U64 }
-
-# Type with parameters
-Result(ok, err) : [Ok(ok), Err(err)]
 ```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **UNDECLARED TYPE**
@@ -150,27 +155,27 @@ CloseCurly(38:1-38:2),EndOfFile(38:2-38:2),
 			(exposed-upper-ident (text "Tree"))
 			(exposed-upper-ident (text "Node"))))
 	(statements
-		(s-type-decl @4.1-5.9
+		(s-type-decl @4.1-4.12
 			(header @4.1-4.6 (name "MyU64")
 				(args))
-			(ty (name "U64")))
-		(s-type-decl @5.1-6.7
+			(ty @4.9-4.12 (name "U64")))
+		(s-type-decl @5.1-5.15
 			(header @5.1-5.9 (name "MyString")
 				(args))
-			(ty (name "Str")))
-		(s-type-decl @6.1-9.7
+			(ty @5.12-5.15 (name "Str")))
+		(s-type-decl @6.1-6.14
 			(header @6.1-6.7 (name "MyBool")
 				(args))
-			(ty (name "Bool")))
-		(s-type-decl @9.1-12.7
+			(ty @6.10-6.14 (name "Bool")))
+		(s-type-decl @9.1-9.33
 			(header @9.1-9.7 (name "Person")
 				(args))
 			(ty-record @9.10-9.33
 				(anno-record-field @9.12-9.22 (name "name")
-					(ty (name "Str")))
+					(ty @9.18-9.21 (name "Str")))
 				(anno-record-field @9.23-9.33 (name "age")
-					(ty (name "U64")))))
-		(s-type-decl @12.1-15.5
+					(ty @9.28-9.31 (name "U64")))))
+		(s-type-decl @12.1-12.37
 			(header @12.1-12.16 (name "Result")
 				(args
 					(ty-var @12.8-12.10 (raw "ok"))
@@ -178,26 +183,26 @@ CloseCurly(38:1-38:2),EndOfFile(38:2-38:2),
 			(ty-tag-union @12.19-12.37
 				(tags
 					(ty-apply @12.20-12.26
-						(ty (name "Ok"))
+						(ty @12.20-12.22 (name "Ok"))
 						(ty-var @12.23-12.25 (raw "ok")))
 					(ty-apply @12.28-12.36
-						(ty (name "Err"))
+						(ty @12.28-12.31 (name "Err"))
 						(ty-var @12.32-12.35 (raw "err"))))))
-		(s-type-decl @15.1-18.5
+		(s-type-decl @15.1-15.37
 			(header @15.1-15.8 (name "Tree")
 				(args
 					(ty-var @15.6-15.7 (raw "a"))))
 			(ty-tag-union @15.11-15.37
 				(tags
 					(ty-apply @15.12-15.27
-						(ty (name "Branch"))
+						(ty @15.12-15.18 (name "Branch"))
 						(ty-apply @15.19-15.26
-							(ty (name "Node"))
+							(ty @15.19-15.23 (name "Node"))
 							(ty-var @15.24-15.25 (raw "a"))))
 					(ty-apply @15.29-15.36
-						(ty (name "Leaf"))
+						(ty @15.29-15.33 (name "Leaf"))
 						(ty-var @15.34-15.35 (raw "a"))))))
-		(s-type-decl @18.1-21.9
+		(s-type-decl @18.1-18.48
 			(header @18.1-18.8 (name "Node")
 				(args
 					(ty-var @18.6-18.7 (raw "a"))))
@@ -206,53 +211,53 @@ CloseCurly(38:1-38:2),EndOfFile(38:2-38:2),
 					(ty-var @18.20-18.21 (raw "a")))
 				(anno-record-field @18.23-18.48 (name "children")
 					(ty-apply @18.33-18.46
-						(ty (name "List"))
+						(ty @18.33-18.37 (name "List"))
 						(ty-apply @18.38-18.45
-							(ty (name "Tree"))
+							(ty @18.38-18.42 (name "Tree"))
 							(ty-var @18.43-18.44 (raw "a")))))))
-		(s-type-decl @21.1-24.7
+		(s-type-decl @21.1-21.28
 			(header @21.1-21.9 (name "MyResult")
 				(args))
 			(ty-apply @21.12-21.28
-				(ty (name "Result"))
-				(ty (name "Str"))
-				(ty (name "U64"))))
-		(s-type-decl @24.1-27.8
+				(ty @21.12-21.18 (name "Result"))
+				(ty @21.19-21.22 (name "Str"))
+				(ty @21.24-21.27 (name "U64"))))
+		(s-type-decl @24.1-24.13
 			(header @24.1-24.7 (name "Person")
 				(args))
-			(ty (name "U64")))
-		(s-type-decl @27.1-30.7
+			(ty @24.10-24.13 (name "U64")))
+		(s-type-decl @27.1-27.29
 			(header @27.1-27.8 (name "BadType")
 				(args))
-			(ty (name "SomeUndeclaredType")))
-		(s-type-decl @30.1-31.7
+			(ty @27.11-27.29 (name "SomeUndeclaredType")))
+		(s-type-decl @30.1-30.19
 			(header @30.1-30.7 (name "MyList")
 				(args))
 			(ty-apply @30.10-30.19
-				(ty (name "List"))
-				(ty (name "Str"))))
-		(s-type-decl @31.1-34.8
+				(ty @30.10-30.14 (name "List"))
+				(ty @30.15-30.18 (name "Str"))))
+		(s-type-decl @31.1-31.24
 			(header @31.1-31.7 (name "MyDict")
 				(args))
 			(ty-apply @31.10-31.24
-				(ty (name "Dict"))
-				(ty (name "Str"))
-				(ty (name "U64"))))
+				(ty @31.10-31.14 (name "Dict"))
+				(ty @31.15-31.18 (name "Str"))
+				(ty @31.20-31.23 (name "U64"))))
 		(s-type-decl @34.1-38.2
 			(header @34.1-34.8 (name "Complex")
 				(args))
 			(ty-record @34.11-38.2
 				(anno-record-field @35.5-35.20 (name "person")
-					(ty (name "Person")))
+					(ty @35.13-35.19 (name "Person")))
 				(anno-record-field @36.5-36.31 (name "result")
 					(ty-apply @36.13-36.30
-						(ty (name "Result"))
-						(ty (name "Bool"))
-						(ty (name "Str"))))
+						(ty @36.13-36.19 (name "Result"))
+						(ty @36.20-36.24 (name "Bool"))
+						(ty @36.26-36.29 (name "Str"))))
 				(anno-record-field @37.5-38.2 (name "tree")
 					(ty-apply @37.11-37.20
-						(ty (name "Tree"))
-						(ty (name "U64"))))))))
+						(ty @37.11-37.15 (name "Tree"))
+						(ty @37.16-37.19 (name "U64"))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -298,23 +303,23 @@ Complex : {
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-type-decl @4.1-5.9
+	(s-alias-decl @4.1-4.12 (where "TODO")
 		(ty-header @4.1-4.6 (name "MyU64"))
 		(ty @4.9-4.12 (name "U64")))
-	(s-type-decl @5.1-6.7
+	(s-alias-decl @5.1-5.15 (where "TODO")
 		(ty-header @5.1-5.9 (name "MyString"))
 		(ty @5.12-5.15 (name "Str")))
-	(s-type-decl @6.1-9.7
+	(s-alias-decl @6.1-6.14 (where "TODO")
 		(ty-header @6.1-6.7 (name "MyBool"))
 		(ty @6.10-6.14 (name "Bool")))
-	(s-type-decl @9.1-12.7
+	(s-alias-decl @9.1-9.33 (where "TODO")
 		(ty-header @9.1-9.7 (name "Person"))
 		(ty-record @9.10-9.33
 			(field (field "name")
 				(ty @9.18-9.21 (name "Str")))
 			(field (field "age")
 				(ty @9.28-9.31 (name "U64")))))
-	(s-type-decl @12.1-15.5
+	(s-alias-decl @12.1-12.37 (where "TODO")
 		(ty-header @12.1-12.16 (name "Result")
 			(ty-args
 				(ty-var @12.8-12.10 (name "ok"))
@@ -324,7 +329,7 @@ Complex : {
 				(ty-var @12.23-12.25 (name "ok")))
 			(ty-apply @12.28-12.36 (symbol "Err")
 				(ty-var @12.32-12.35 (name "err")))))
-	(s-type-decl @15.1-18.5
+	(s-alias-decl @15.1-15.37 (where "TODO")
 		(ty-header @15.1-15.8 (name "Tree")
 			(ty-args
 				(ty-var @15.6-15.7 (name "a"))))
@@ -334,7 +339,7 @@ Complex : {
 					(ty-var @15.24-15.25 (name "a"))))
 			(ty-apply @15.29-15.36 (symbol "Leaf")
 				(ty-var @15.34-15.35 (name "a")))))
-	(s-type-decl @18.1-21.9
+	(s-alias-decl @18.1-18.48 (where "TODO")
 		(ty-header @18.1-18.8 (name "Node")
 			(ty-args
 				(ty-var @18.6-18.7 (name "a"))))
@@ -345,27 +350,27 @@ Complex : {
 				(ty-apply @18.33-18.46 (symbol "List")
 					(ty-apply @18.38-18.45 (symbol "Tree")
 						(ty-var @18.43-18.44 (name "a")))))))
-	(s-type-decl @21.1-24.7
+	(s-alias-decl @21.1-21.28 (where "TODO")
 		(ty-header @21.1-21.9 (name "MyResult"))
 		(ty-apply @21.12-21.28 (symbol "Result")
 			(ty @21.19-21.22 (name "Str"))
 			(ty @21.24-21.27 (name "U64"))))
-	(s-type-decl @24.1-27.8
+	(s-alias-decl @24.1-24.13 (where "TODO")
 		(ty-header @24.1-24.7 (name "Person"))
 		(ty @24.10-24.13 (name "U64")))
-	(s-type-decl @27.1-30.7
+	(s-alias-decl @27.1-27.29 (where "TODO")
 		(ty-header @27.1-27.8 (name "BadType"))
 		(ty @27.11-27.29 (name "SomeUndeclaredType")))
-	(s-type-decl @30.1-31.7
+	(s-alias-decl @30.1-30.19 (where "TODO")
 		(ty-header @30.1-30.7 (name "MyList"))
 		(ty-apply @30.10-30.19 (symbol "List")
 			(ty @30.15-30.18 (name "Str"))))
-	(s-type-decl @31.1-34.8
+	(s-alias-decl @31.1-31.24 (where "TODO")
 		(ty-header @31.1-31.7 (name "MyDict"))
 		(ty-apply @31.10-31.24 (symbol "Dict")
 			(ty @31.15-31.18 (name "Str"))
 			(ty @31.20-31.23 (name "U64"))))
-	(s-type-decl @34.1-38.2
+	(s-alias-decl @34.1-38.2 (where "TODO")
 		(ty-header @34.1-34.8 (name "Complex"))
 		(ty-record @34.11-38.2
 			(field (field "person")

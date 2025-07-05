@@ -94,16 +94,42 @@ CloseSquare(12:1-12:2),EndOfFile(12:2-12:2),
 ~~~clojure
 (e-list @1.1-12.2
 	(elems
-		(e-tag @2.5-2.13 (name "Some") (args "TODO"))
-		(e-tag @3.5-3.9 (name "None") (args "TODO"))
-		(e-tag @4.5-4.16 (name "Ok") (args "TODO"))
-		(e-tag @5.5-5.16 (name "Err") (args "TODO"))
-		(e-tag @6.5-6.14 (name "Just") (args "TODO"))
-		(e-tag @7.5-7.12 (name "Nothing") (args "TODO"))
-		(e-tag @8.5-8.12 (name "Left") (args "TODO"))
-		(e-tag @9.5-9.13 (name "Right") (args "TODO"))
-		(e-tag @10.5-10.23 (name "Some") (args "TODO"))
-		(e-tag @11.5-11.27 (name "Result") (args "TODO"))))
+		(e-tag @2.5-2.13 (name "Some")
+			(args
+				(e-int @2.10-2.12 (value "42"))))
+		(e-tag @3.5-3.9 (name "None"))
+		(e-tag @4.5-4.16 (name "Ok")
+			(args
+				(e-string @4.8-4.15
+					(e-literal @4.9-4.14 (string "hello")))))
+		(e-tag @5.5-5.16 (name "Err")
+			(args
+				(e-string @5.9-5.15
+					(e-literal @5.10-5.14 (string "oops")))))
+		(e-tag @6.5-6.14 (name "Just")
+			(args
+				(e-int @6.10-6.13 (value "100"))))
+		(e-tag @7.5-7.12 (name "Nothing"))
+		(e-tag @8.5-8.12 (name "Left")
+			(args
+				(e-int @8.10-8.11 (value "1"))))
+		(e-tag @9.5-9.13 (name "Right")
+			(args
+				(e-int @9.11-9.12 (value "2"))))
+		(e-tag @10.5-10.23 (name "Some")
+			(args
+				(e-tag @10.10-10.22 (name "Ok")
+					(args
+						(e-tag @10.13-10.21 (name "Just")
+							(args
+								(e-int @10.18-10.20 (value "42"))))))))
+		(e-tag @11.5-11.27 (name "Result")
+			(args
+				(e-tag @11.12-11.26 (name "Ok")
+					(args
+						(e-tag @11.15-11.25 (name "Some")
+							(args
+								(e-tag @11.20-11.24 (name "True"))))))))))
 ~~~
 # TYPES
 ~~~clojure

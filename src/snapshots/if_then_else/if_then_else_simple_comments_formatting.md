@@ -23,7 +23,7 @@ CloseCurly(3:1-3:2),KwElse(3:3-3:7),UpperIdent(3:8-3:9),EndOfFile(3:9-3:9),
 # PARSE
 ~~~clojure
 (e-if-then-else @1.1-3.9
-	(e-ident @1.4-1.8 (qaul "") (raw "bool"))
+	(e-ident @1.4-1.8 (raw "bool"))
 	(e-block @1.9-3.2
 		(statements
 			(e-tag @2.2-2.3 (raw "A"))))
@@ -40,9 +40,9 @@ NO CHANGE
 		(if-branch
 			(e-runtime-error (tag "ident_not_in_scope"))
 			(e-block @1.9-3.2
-				(e-tag @2.2-2.3 (name "A") (args "TODO")))))
+				(e-tag @2.2-2.3 (name "A")))))
 	(if-else
-		(e-tag @3.8-3.9 (name "B") (args "TODO"))))
+		(e-tag @3.8-3.9 (name "B"))))
 ~~~
 # TYPES
 ~~~clojure

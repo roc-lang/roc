@@ -34,7 +34,7 @@ LowerIdent(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~
 # FORMATTED
 ~~~roc
-{ x, y }
+{x, y}
 ~~~
 # CANONICALIZE
 ~~~clojure

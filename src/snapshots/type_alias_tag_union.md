@@ -65,7 +65,7 @@ LowerIdent(20:1-20:6),OpAssign(20:7-20:8),OpBar(20:9-20:10),Underscore(20:10-20:
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-decl @4.1-7.8
+		(s-type-decl @4.1-4.41
 			(header @4.1-4.18 (name "MyResult")
 				(args
 					(ty-var @4.10-4.12 (raw "ok"))
@@ -73,18 +73,18 @@ LowerIdent(20:1-20:6),OpAssign(20:7-20:8),OpBar(20:9-20:10),Underscore(20:10-20:
 			(ty-tag-union @4.21-4.41
 				(tags
 					(ty-apply @4.22-4.30
-						(ty (name "Good"))
+						(ty @4.22-4.26 (name "Good"))
 						(ty-var @4.27-4.29 (raw "ok")))
 					(ty-apply @4.32-4.40
-						(ty (name "Bad"))
+						(ty @4.32-4.35 (name "Bad"))
 						(ty-var @4.36-4.39 (raw "err"))))))
-		(s-type-anno @7.1-8.8 (name "process")
+		(s-type-anno @1.1-1.1 (name "process")
 			(ty-fn @7.11-7.36
 				(ty-apply @7.11-7.29
-					(ty (name "MyResult"))
-					(ty (name "Str"))
-					(ty (name "I32")))
-				(ty (name "Str"))))
+					(ty @7.11-7.19 (name "MyResult"))
+					(ty @7.20-7.23 (name "Str"))
+					(ty @7.25-7.28 (name "I32")))
+				(ty @7.33-7.36 (name "Str"))))
 		(s-decl @8.1-8.32
 			(p-ident @8.1-8.8 (raw "process"))
 			(e-lambda @8.11-8.32
@@ -92,22 +92,22 @@ LowerIdent(20:1-20:6),OpAssign(20:7-20:8),OpBar(20:9-20:10),Underscore(20:10-20:
 					(p-ident @8.12-8.19 (raw "_result")))
 				(e-string @8.21-8.32
 					(e-string-part @8.22-8.31 (raw "processed")))))
-		(s-type-decl @11.1-14.10
+		(s-type-decl @11.1-11.28
 			(header @11.1-11.10 (name "Option")
 				(args
 					(ty-var @11.8-11.9 (raw "a"))))
 			(ty-tag-union @11.13-11.28
 				(tags
 					(ty-apply @11.14-11.21
-						(ty (name "Some"))
+						(ty @11.14-11.18 (name "Some"))
 						(ty-var @11.19-11.20 (raw "a")))
-					(ty (name "None")))))
-		(s-type-anno @14.1-15.10 (name "getString")
+					(ty @11.23-11.27 (name "None")))))
+		(s-type-anno @1.1-1.1 (name "getString")
 			(ty-fn @14.13-14.31
 				(ty-apply @14.13-14.24
-					(ty (name "Option"))
-					(ty (name "Str")))
-				(ty (name "Str"))))
+					(ty @14.13-14.19 (name "Option"))
+					(ty @14.20-14.23 (name "Str")))
+				(ty @14.28-14.31 (name "Str"))))
 		(s-decl @15.1-15.29
 			(p-ident @15.1-15.10 (raw "getString"))
 			(e-lambda @15.13-15.29
@@ -115,12 +115,12 @@ LowerIdent(20:1-20:6),OpAssign(20:7-20:8),OpBar(20:9-20:10),Underscore(20:10-20:
 					(p-ident @15.14-15.18 (raw "_opt")))
 				(e-string @15.20-15.29
 					(e-string-part @15.21-15.28 (raw "default")))))
-		(s-type-anno @17.1-18.10 (name "getNumber")
+		(s-type-anno @1.1-1.1 (name "getNumber")
 			(ty-fn @17.13-17.31
 				(ty-apply @17.13-17.24
-					(ty (name "Option"))
-					(ty (name "I32")))
-				(ty (name "I32"))))
+					(ty @17.13-17.19 (name "Option"))
+					(ty @17.20-17.23 (name "I32")))
+				(ty @17.28-17.31 (name "I32"))))
 		(s-decl @18.1-18.21
 			(p-ident @18.1-18.10 (raw "getNumber"))
 			(e-lambda @18.13-18.21
@@ -186,7 +186,7 @@ NO CHANGE
 			(args
 				(p-underscore @20.10-20.11))
 			(e-empty_record @20.13-20.15)))
-	(s-type-decl @4.1-7.8
+	(s-alias-decl @4.1-4.41 (where "TODO")
 		(ty-header @4.1-4.18 (name "MyResult")
 			(ty-args
 				(ty-var @4.10-4.12 (name "ok"))
@@ -196,7 +196,7 @@ NO CHANGE
 				(ty-var @4.27-4.29 (name "ok")))
 			(ty-apply @4.32-4.40 (symbol "Bad")
 				(ty-var @4.36-4.39 (name "err")))))
-	(s-type-decl @11.1-14.10
+	(s-alias-decl @11.1-11.28 (where "TODO")
 		(ty-header @11.1-11.10 (name "Option")
 			(ty-args
 				(ty-var @11.8-11.9 (name "a"))))

@@ -27,11 +27,11 @@ LowerIdent(4:1-4:6),OpAssign(4:7-4:8),StringStart(4:9-4:10),StringPart(4:10-4:15
 			(exposed-lower-ident (text "hello!"))
 			(exposed-lower-ident (text "world"))))
 	(statements
-		(s-import @2.1-2.17 (module ".Stdout") (qualifier "pf"))
+		(s-import @2.1-2.17 (raw "pf.Stdout"))
 		(s-decl @3.1-3.31
 			(p-ident @3.1-3.7 (raw "hello!"))
 			(e-apply @3.10-3.31
-				(e-ident @3.10-3.22 (qaul "Stdout") (raw ".line!"))
+				(e-ident @3.10-3.22 (raw "Stdout.line!"))
 				(e-string @3.23-3.30
 					(e-string-part @3.24-3.29 (raw "Hello")))))
 		(s-decl @4.1-4.16
@@ -50,7 +50,7 @@ NO CHANGE
 		(p-assign @3.1-3.7 (ident "hello!"))
 		(e-call @3.10-3.31
 			(e-lookup-external
-				(ext-decl @3.10-3.22 (qualified "pf.Stdout.line!") (module "pf.Stdout") (local "line!") (kind "value")))
+				(ext-decl @3.10-3.22 (ident "pf.Stdout.line!") (kind "value")))
 			(e-string @3.23-3.30
 				(e-literal @3.24-3.29 (string "Hello")))))
 	(d-let

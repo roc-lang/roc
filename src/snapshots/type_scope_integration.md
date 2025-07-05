@@ -24,22 +24,18 @@ Baz : Foo
 The type ``Foo`` is being redeclared.
 
 The redeclaration is here:
-**type_scope_integration.md:7:1:10:4:**
+**type_scope_integration.md:7:1:7:10:**
 ```roc
 Foo : Str
-
-# Declare another type that uses an undeclared type
-Bar : SomeUndeclaredType
 ```
+^^^^^^^^^
 
 But ``Foo`` was already declared here:
-**type_scope_integration.md:4:1:7:4:**
+**type_scope_integration.md:4:1:4:10:**
 ```roc
 Foo : U64
-
-# Try to redeclare the same type (should error)
-Foo : Str
 ```
+^^^^^^^^^
 
 
 **UNDECLARED TYPE**
@@ -77,22 +73,22 @@ UpperIdent(13:1-13:4),OpColon(13:5-13:6),UpperIdent(13:7-13:10),EndOfFile(13:10-
 			(exposed-upper-ident (text "Foo"))
 			(exposed-upper-ident (text "Bar"))))
 	(statements
-		(s-type-decl @4.1-7.4
+		(s-type-decl @4.1-4.10
 			(header @4.1-4.4 (name "Foo")
 				(args))
-			(ty (name "U64")))
-		(s-type-decl @7.1-10.4
+			(ty @4.7-4.10 (name "U64")))
+		(s-type-decl @7.1-7.10
 			(header @7.1-7.4 (name "Foo")
 				(args))
-			(ty (name "Str")))
-		(s-type-decl @10.1-13.4
+			(ty @7.7-7.10 (name "Str")))
+		(s-type-decl @10.1-10.25
 			(header @10.1-10.4 (name "Bar")
 				(args))
-			(ty (name "SomeUndeclaredType")))
+			(ty @10.7-10.25 (name "SomeUndeclaredType")))
 		(s-type-decl @13.1-13.10
 			(header @13.1-13.4 (name "Baz")
 				(args))
-			(ty (name "Foo")))))
+			(ty @13.7-13.10 (name "Foo")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -101,16 +97,16 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-type-decl @4.1-7.4
+	(s-alias-decl @4.1-4.10 (where "TODO")
 		(ty-header @4.1-4.4 (name "Foo"))
 		(ty @4.7-4.10 (name "U64")))
-	(s-type-decl @7.1-10.4
+	(s-alias-decl @7.1-7.10 (where "TODO")
 		(ty-header @7.1-7.4 (name "Foo"))
 		(ty @7.7-7.10 (name "Str")))
-	(s-type-decl @10.1-13.4
+	(s-alias-decl @10.1-10.25 (where "TODO")
 		(ty-header @10.1-10.4 (name "Bar"))
 		(ty @10.7-10.25 (name "SomeUndeclaredType")))
-	(s-type-decl @13.1-13.10
+	(s-alias-decl @13.1-13.10 (where "TODO")
 		(ty-header @13.1-13.4 (name "Baz"))
 		(ty @13.7-13.10 (name "Foo"))))
 ~~~

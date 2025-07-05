@@ -47,11 +47,11 @@ LowerIdent(11:1-11:6),OpAssign(11:7-11:8),LowerIdent(11:9-11:12),NoSpaceOpenRoun
 				(e-string @1.28-1.55
 					(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))))
 	(statements
-		(s-type-anno @4.1-5.4 (name "add")
+		(s-type-anno @1.1-1.1 (name "add")
 			(ty-fn @4.7-4.22
-				(ty (name "I32"))
-				(ty (name "I32"))
-				(ty (name "I32"))))
+				(ty @4.7-4.10 (name "I32"))
+				(ty @4.12-4.15 (name "I32"))
+				(ty @4.19-4.22 (name "I32"))))
 		(s-decl @5.1-8.7
 			(p-ident @5.1-5.4 (raw "add"))
 			(e-lambda @5.7-8.7
@@ -61,33 +61,43 @@ LowerIdent(11:1-11:6),OpAssign(11:7-11:8),LowerIdent(11:9-11:12),NoSpaceOpenRoun
 				(e-field-access @5.14-8.7
 					(e-record @5.14-5.28
 						(field (field "x") (optional false)
-							(e-ident @5.19-5.20 (qaul "") (raw "x")))
+							(e-ident @5.19-5.20 (raw "x")))
 						(field (field "y") (optional false)
-							(e-ident @5.25-5.26 (qaul "") (raw "y"))))
-					(e-ident @5.28-5.30 (qaul "") (raw ".x")))))
-		(s-type-anno @8.1-9.7 (name "double")
+							(e-ident @5.25-5.26 (raw "y"))))
+					(e-ident @5.28-5.30 (raw "x")))))
+		(s-type-anno @1.1-1.1 (name "double")
 			(ty-fn @8.10-8.20
-				(ty (name "I32"))
-				(ty (name "I32"))))
+				(ty @8.10-8.13 (name "I32"))
+				(ty @8.17-8.20 (name "I32"))))
 		(s-decl @9.1-9.23
 			(p-ident @9.1-9.7 (raw "double"))
 			(e-lambda @9.10-9.23
 				(args
 					(p-ident @9.11-9.12 (raw "x")))
 				(e-apply @9.14-9.23
-					(e-ident @9.14-9.17 (qaul "") (raw "add"))
-					(e-ident @9.18-9.19 (qaul "") (raw "x"))
-					(e-ident @9.21-9.22 (qaul "") (raw "x")))))
+					(e-ident @9.14-9.17 (raw "add"))
+					(e-ident @9.18-9.19 (raw "x"))
+					(e-ident @9.21-9.22 (raw "x")))))
 		(s-decl @11.1-11.18
 			(p-ident @11.1-11.6 (raw "main!"))
 			(e-apply @11.9-11.18
-				(e-ident @11.9-11.12 (qaul "") (raw "add"))
+				(e-ident @11.9-11.12 (raw "add"))
 				(e-int @11.13-11.14 (raw "1"))
 				(e-int @11.16-11.17 (raw "2"))))))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+app [main!] { pf: platform "../basic-cli/platform.roc" }
+
+# Function with pure annotation using thin arrow
+add : I32, I32 -> I32
+add = |x, y| {x: x, y: y}.x
+
+# Another pure function that calls a pure function
+double : I32 -> I32
+double = |x| add(x, x)
+
+main! = add(1, 2)
 ~~~
 # CANONICALIZE
 ~~~clojure

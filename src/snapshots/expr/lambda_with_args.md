@@ -20,8 +20,8 @@ OpBar(1:1-1:2),LowerIdent(1:2-1:3),Comma(1:3-1:4),LowerIdent(1:5-1:6),OpBar(1:6-
 		(p-ident @1.2-1.3 (raw "x"))
 		(p-ident @1.5-1.6 (raw "y")))
 	(e-binop @1.8-1.13 (op "+")
-		(e-ident @1.8-1.9 (qaul "") (raw "x"))
-		(e-ident @1.12-1.13 (qaul "") (raw "y"))))
+		(e-ident @1.8-1.9 (raw "x"))
+		(e-ident @1.12-1.13 (raw "y"))))
 ~~~
 # FORMATTED
 ~~~roc

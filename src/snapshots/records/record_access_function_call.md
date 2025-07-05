@@ -21,8 +21,8 @@ OpenRound(1:1-1:2),LowerIdent(1:2-1:8),NoSpaceDotLowerIdent(1:8-1:18),CloseRound
 (e-apply @1.1-1.23
 	(e-tuple @1.1-1.19
 		(e-field-access @1.2-1.19
-			(e-ident @1.2-1.8 (qaul "") (raw "person"))
-			(e-ident @1.8-1.18 (qaul "") (raw ".transform"))))
+			(e-ident @1.2-1.8 (raw "person"))
+			(e-ident @1.8-1.18 (raw "transform"))))
 	(e-int @1.20-1.22 (raw "42")))
 ~~~
 # FORMATTED

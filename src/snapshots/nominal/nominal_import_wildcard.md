@@ -92,20 +92,20 @@ LowerIdent(12:1-12:6),OpAssign(12:7-12:8),UpperIdent(12:9-12:14),EndOfFile(12:14
 			(exposed-lower-ident (text "green"))
 			(exposed-lower-ident (text "blue"))))
 	(statements
-		(s-import @3.1-3.13 (module "Color"))
+		(s-import @3.1-3.13 (raw "Color"))
 		(e-malformed @1.1-1.1 (reason "expr_unexpected_token"))
-		(s-type-anno @5.1-6.4 (name "red")
-			(ty (name "Color")))
+		(s-type-anno @1.1-1.1 (name "red")
+			(ty @5.7-5.12 (name "Color")))
 		(s-decl @6.1-6.10
 			(p-ident @6.1-6.4 (raw "red"))
 			(e-tag @6.7-6.10 (raw "Red")))
-		(s-type-anno @8.1-9.5 (name "blue")
-			(ty (name "Color")))
+		(s-type-anno @1.1-1.1 (name "blue")
+			(ty @8.8-8.13 (name "Color")))
 		(s-decl @9.1-9.12
 			(p-ident @9.1-9.5 (raw "blue"))
 			(e-tag @9.8-9.12 (raw "Blue")))
-		(s-type-anno @11.1-12.6 (name "green")
-			(ty (name "Color")))
+		(s-type-anno @1.1-1.1 (name "green")
+			(ty @11.9-11.14 (name "Color")))
 		(s-decl @12.1-12.14
 			(p-ident @12.1-12.6 (raw "green"))
 			(e-tag @12.9-12.14 (raw "Green")))))
@@ -130,19 +130,19 @@ green = Green
 (can-ir
 	(d-let
 		(p-assign @6.1-6.4 (ident "red"))
-		(e-tag @6.7-6.10 (name "Red") (args "TODO"))
+		(e-tag @6.7-6.10 (name "Red"))
 		(annotation @6.1-6.4
 			(declared-type
 				(ty @5.7-5.12 (name "Color")))))
 	(d-let
 		(p-assign @9.1-9.5 (ident "blue"))
-		(e-tag @9.8-9.12 (name "Blue") (args "TODO"))
+		(e-tag @9.8-9.12 (name "Blue"))
 		(annotation @9.1-9.5
 			(declared-type
 				(ty @8.8-8.13 (name "Color")))))
 	(d-let
 		(p-assign @12.1-12.6 (ident "green"))
-		(e-tag @12.9-12.14 (name "Green") (args "TODO"))
+		(e-tag @12.9-12.14 (name "Green"))
 		(annotation @12.1-12.6
 			(declared-type
 				(ty @11.9-11.14 (name "Color")))))

@@ -45,7 +45,7 @@ LowerIdent(6:1-6:2),EndOfFile(6:2-6:2),
 (e-apply @1.1-5.2
 	(e-int @1.1-1.2 (raw "1"))
 	(e-apply @1.3-4.2
-		(e-ident @1.3-1.5 (qaul "") (raw "ts"))
+		(e-ident @1.3-1.5 (raw "ts"))
 		(e-tuple @1.6-2.2
 			(e-int @1.7-1.8 (raw "0")))))
 ~~~

@@ -59,20 +59,20 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 # PARSE
 ~~~clojure
 (e-match
-	(e-ident @1.7-1.13 (qaul "") (raw "person"))
+	(e-ident @1.7-1.13 (raw "person"))
 	(branches
 		(branch @2.5-3.6
 			(p-record @2.5-2.18
 				(field @2.7-2.12 (name "name") (rest false))
 				(field @2.13-2.18 (name "age") (rest false)))
-			(e-ident @2.22-2.26 (qaul "") (raw "name")))
+			(e-ident @2.22-2.26 (raw "name")))
 		(branch @3.5-4.6
 			(p-record @3.5-3.32
 				(field @3.7-3.12 (name "name") (rest false))
 				(field @3.13-3.32 (name "address") (rest false)
 					(p-record @3.22-3.30
 						(field @3.24-3.30 (name "city") (rest false)))))
-			(e-ident @3.36-3.40 (qaul "") (raw "city")))
+			(e-ident @3.36-3.40 (raw "city")))
 		(branch @1.1-1.1
 			(p-record @4.5-4.7)
 			(e-string @4.11-4.18

@@ -16,6 +16,17 @@ tag_tuple : Value((a, b, c))
 ~~~
 # PROBLEMS
 **UNDECLARED TYPE**
+The type ``Thing`` is not declared in this scope.
+
+This type is referenced here:
+**type_annotations.md:4:7:4:12:**
+```roc
+bar : Thing(a, b, _)
+```
+      ^^^^^
+
+
+**UNDECLARED TYPE**
 The type ``String`` is not declared in this scope.
 
 This type is referenced here:
@@ -24,6 +35,17 @@ This type is referenced here:
 main! : List(String) -> Result({}, _)
 ```
              ^^^^^^
+
+
+**UNDECLARED TYPE**
+The type ``Value`` is not declared in this scope.
+
+This type is referenced here:
+**type_annotations.md:8:13:8:18:**
+```roc
+tag_tuple : Value((a, b, c))
+```
+            ^^^^^
 
 
 # TOKENS
@@ -43,11 +65,11 @@ LowerIdent(8:1-8:10),OpColon(8:11-8:12),UpperIdent(8:13-8:18),NoSpaceOpenRound(8
 	(module @1.1-1.10
 		(exposes @1.8-1.10))
 	(statements
-		(s-type-anno @3.1-4.4 (name "foo")
-			(ty (name "U64")))
+		(s-type-anno @1.1-1.1 (name "foo")
+			(ty @3.7-3.10 (name "U64")))
 		(s-type-anno @4.1-5.4 (name "bar")
 			(ty-apply @4.7-4.21
-				(ty (name "Thing"))
+				(ty @4.7-4.12 (name "Thing"))
 				(ty-var @4.13-4.14 (raw "a"))
 				(ty-var @4.16-4.17 (raw "b"))
 				(_)))
@@ -58,21 +80,21 @@ LowerIdent(8:1-8:10),OpColon(8:11-8:12),UpperIdent(8:13-8:18),NoSpaceOpenRound(8
 				(ty-var @5.14-5.15 (raw "c"))))
 		(s-type-anno @6.1-7.6 (name "add_one")
 			(ty-fn @6.12-6.26
-				(ty (name "U8"))
-				(ty (name "U16"))
-				(ty (name "U32"))))
+				(ty @6.12-6.14 (name "U8"))
+				(ty @6.16-6.19 (name "U16"))
+				(ty @6.23-6.26 (name "U32"))))
 		(s-type-anno @7.1-8.10 (name "main!")
 			(ty-fn @7.9-7.38
 				(ty-apply @7.9-7.21
-					(ty (name "List"))
-					(ty (name "String")))
+					(ty @7.9-7.13 (name "List"))
+					(ty @7.14-7.20 (name "String")))
 				(ty-apply @7.25-7.38
-					(ty (name "Result"))
+					(ty @7.25-7.31 (name "Result"))
 					(ty-record @7.32-7.34)
 					(_))))
 		(s-type-anno @8.1-8.29 (name "tag_tuple")
 			(ty-apply @8.13-8.29
-				(ty (name "Value"))
+				(ty @8.13-8.18 (name "Value"))
 				(ty-tuple @8.19-8.28
 					(ty-var @8.20-8.21 (raw "a"))
 					(ty-var @8.23-8.24 (raw "b"))

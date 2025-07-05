@@ -51,8 +51,8 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 				(args
 					(p-ident @4.13-4.19 (raw "record")))
 				(e-field-access @4.21-6.6
-					(e-ident @4.21-4.27 (qaul "") (raw "record"))
-					(e-ident @4.27-4.33 (qaul "") (raw ".field")))))
+					(e-ident @4.21-4.27 (raw "record"))
+					(e-ident @4.27-4.33 (raw "field")))))
 		(s-decl @6.1-6.15
 			(p-ident @6.1-6.6 (raw "main!"))
 			(e-lambda @6.9-6.15

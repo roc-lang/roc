@@ -18,7 +18,7 @@ UpperIdent(1:1-1:5),NoSpaceDotLowerIdent(1:5-1:10),EndOfFile(1:10-1:10),
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.10 (qaul "Json") (raw ".utf8"))
+(e-ident @1.1-1.10 (raw "Json.utf8"))
 ~~~
 # FORMATTED
 ~~~roc

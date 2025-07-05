@@ -20,7 +20,7 @@ Int(2:5-2:6),OpStar(2:7-2:8),OpStar(2:8-2:9),Int(2:10-2:11),EndOfFile(2:11-2:11)
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.5 (qaul "") (raw "main"))
+(e-ident @1.1-1.5 (raw "main"))
 ~~~
 # FORMATTED
 ~~~roc

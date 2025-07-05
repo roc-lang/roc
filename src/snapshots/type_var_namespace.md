@@ -79,7 +79,7 @@ LowerIdent(16:1-16:6),OpAssign(16:7-16:8),OpBar(16:9-16:10),Underscore(16:10-16:
 		(s-type-anno @4.1-5.8 (name "process")
 			(ty-fn @4.11-4.29
 				(ty-apply @4.11-4.21
-					(ty (name "List"))
+					(ty @4.11-4.15 (name "List"))
 					(ty-var @4.16-4.20 (raw "elem")))
 				(ty-var @4.25-4.29 (raw "elem"))))
 		(s-decl @5.1-14.2
@@ -97,13 +97,13 @@ LowerIdent(16:1-16:6),OpAssign(16:7-16:8),OpBar(16:9-16:10),Underscore(16:10-16:
 						(s-decl @11.5-11.30
 							(p-ident @11.5-11.11 (raw "result"))
 							(e-apply @11.14-11.30
-								(e-ident @11.14-11.24 (qaul "List") (raw ".first"))
-								(e-ident @11.25-11.29 (qaul "") (raw "list"))))
+								(e-ident @11.14-11.24 (raw "List.first"))
+								(e-ident @11.25-11.29 (raw "list"))))
 						(e-malformed @11.31-11.40 (reason "expr_unexpected_token"))
 						(e-apply @11.34-11.58
-							(e-ident @11.34-11.52 (qaul "Result") (raw ".withDefault"))
-							(e-ident @11.53-11.57 (qaul "") (raw "elem")))
-						(e-ident @13.5-13.11 (qaul "") (raw "result"))))))
+							(e-ident @11.34-11.52 (raw "Result.withDefault"))
+							(e-ident @11.53-11.57 (raw "elem")))
+						(e-ident @13.5-13.11 (raw "result"))))))
 		(s-decl @16.1-16.15
 			(p-ident @16.1-16.6 (raw "main!"))
 			(e-lambda @16.9-16.15

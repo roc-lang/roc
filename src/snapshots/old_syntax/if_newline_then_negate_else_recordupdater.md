@@ -48,8 +48,8 @@ KwElse(4:1-4:5),OpAmpersand(4:5-4:6),LowerIdent(4:6-4:7),EndOfFile(4:7-4:7),
 # PARSE
 ~~~clojure
 (e-if-then-else @1.1-4.7
-	(e-ident @2.1-2.2 (qaul "") (raw "h"))
-	(e-ident @3.1-3.7 (qaul "") (raw "then!f"))
+	(e-ident @2.1-2.2 (raw "h"))
+	(e-ident @3.1-3.7 (raw "then!f"))
 	(e-malformed @4.5-4.7 (reason "expr_unexpected_token")))
 ~~~
 # FORMATTED

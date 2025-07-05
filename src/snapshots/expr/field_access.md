@@ -19,8 +19,8 @@ LowerIdent(1:1-1:7),NoSpaceDotLowerIdent(1:7-1:12),EndOfFile(1:12-1:12),
 # PARSE
 ~~~clojure
 (e-field-access @1.1-1.12
-	(e-ident @1.1-1.7 (qaul "") (raw "person"))
-	(e-ident @1.7-1.12 (qaul "") (raw ".name")))
+	(e-ident @1.1-1.7 (raw "person"))
+	(e-ident @1.7-1.12 (raw "name")))
 ~~~
 # FORMATTED
 ~~~roc

@@ -35,7 +35,7 @@ LowerIdent(1:1-1:5),OpBinaryMinus(1:5-1:6),OpBang(1:6-1:7),LowerIdent(1:7-1:10),
 # PARSE
 ~~~clojure
 (e-binop @1.1-1.10 (op "-")
-	(e-ident @1.1-1.5 (qaul "") (raw "dbg!"))
+	(e-ident @1.1-1.5 (raw "dbg!"))
 	(e-malformed @1.6-1.10 (reason "expr_unexpected_token")))
 ~~~
 # FORMATTED

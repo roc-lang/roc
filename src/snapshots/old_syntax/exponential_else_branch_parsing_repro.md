@@ -30,7 +30,7 @@ KwElse(7:1-7:5),EndOfFile(7:5-7:5),
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.3 (qaul "") (raw "ee"))
+(e-ident @1.1-1.3 (raw "ee"))
 ~~~
 # FORMATTED
 ~~~roc

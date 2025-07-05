@@ -22,12 +22,12 @@ OpBar(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:4-1:8),Comma(1:8-1:9),LowerIdent(
 			(field @1.10-1.15 (name "age") (rest false))))
 	(e-string @1.17-1.67
 		(e-string-part @1.18-1.24 (raw "Hello "))
-		(e-ident @1.26-1.30 (qaul "") (raw "name"))
+		(e-ident @1.26-1.30 (raw "name"))
 		(e-string-part @1.31-1.41 (raw ", you are "))
 		(e-field-access @1.43-1.56
-			(e-ident @1.43-1.46 (qaul "") (raw "age"))
+			(e-ident @1.43-1.46 (raw "age"))
 			(e-apply @1.46-1.55
-				(e-ident @1.46-1.53 (qaul "") (raw ".to_str"))))
+				(e-ident @1.46-1.53 (raw "to_str"))))
 		(e-string-part @1.56-1.66 (raw " years old"))))
 ~~~
 # FORMATTED

@@ -20,7 +20,7 @@ UpperIdent(2:5-2:11),OpenRound(2:12-2:13),UpperIdent(2:13-2:16),LowerIdent(2:17-
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.5 (qaul "") (raw "when"))
+(e-ident @1.1-1.5 (raw "when"))
 ~~~
 # FORMATTED
 ~~~roc

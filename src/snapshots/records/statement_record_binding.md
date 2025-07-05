@@ -29,7 +29,7 @@ LowerIdent(1:1-1:7),OpAssign(1:8-1:9),OpenCurly(1:10-1:11),LowerIdent(1:12-1:16)
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+person = {name: "Alice", age: 30, email: "alice@example.com"}
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -18,7 +18,7 @@ LowerIdent(1:1-1:2),MultilineStringStart(1:2-1:5),StringPart(1:5-1:8),MultilineS
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.2 (qaul "") (raw "e"))
+(e-ident @1.1-1.2 (raw "e"))
 ~~~
 # FORMATTED
 ~~~roc

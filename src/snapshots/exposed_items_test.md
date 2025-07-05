@@ -28,7 +28,7 @@ LowerIdent(5:1-5:5),OpAssign(5:6-5:7),Int(5:8-5:10),EndOfFile(5:10-5:10),
 		(exposes @1.8-1.14
 			(exposed-lower-ident (text "main"))))
 	(statements
-		(s-import @3.1-3.42 (module ".Stdout") (qualifier "pf")
+		(s-import @3.1-3.42 (raw "pf.Stdout")
 			(exposing
 				(exposed-lower-ident (text "line!"))
 				(exposed-lower-ident (text "write!"))))

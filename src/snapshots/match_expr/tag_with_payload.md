@@ -27,7 +27,7 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 # PARSE
 ~~~clojure
 (e-match
-	(e-ident @1.7-1.12 (qaul "") (raw "shape"))
+	(e-ident @1.7-1.12 (raw "shape"))
 	(branches
 		(branch @2.5-3.14
 			(p-tag @2.5-2.19 (raw "Circle")
@@ -35,15 +35,15 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 			(e-binop @2.23-3.14 (op "*")
 				(e-frac @2.23-2.27 (raw "3.14"))
 				(e-binop @2.30-3.14 (op "*")
-					(e-ident @2.30-2.36 (qaul "") (raw "radius"))
-					(e-ident @2.39-2.45 (qaul "") (raw "radius")))))
+					(e-ident @2.30-2.36 (raw "radius"))
+					(e-ident @2.39-2.45 (raw "radius")))))
 		(branch @3.5-4.13
 			(p-tag @3.5-3.29 (raw "Rectangle")
 				(p-ident @3.15-3.20 (raw "width"))
 				(p-ident @3.22-3.28 (raw "height")))
 			(e-binop @3.33-4.13 (op "*")
-				(e-ident @3.33-3.38 (qaul "") (raw "width"))
-				(e-ident @3.41-3.47 (qaul "") (raw "height"))))
+				(e-ident @3.33-3.38 (raw "width"))
+				(e-ident @3.41-3.47 (raw "height"))))
 		(branch @4.5-5.2
 			(p-tag @4.5-4.27 (raw "Triangle")
 				(p-ident @4.14-4.18 (raw "base"))
@@ -51,8 +51,8 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 			(e-binop @4.31-5.2 (op "*")
 				(e-frac @4.31-4.34 (raw "0.5"))
 				(e-binop @4.37-5.2 (op "*")
-					(e-ident @4.37-4.41 (qaul "") (raw "base"))
-					(e-ident @4.44-4.50 (qaul "") (raw "height")))))))
+					(e-ident @4.37-4.41 (raw "base"))
+					(e-ident @4.44-4.50 (raw "height")))))))
 ~~~
 # FORMATTED
 ~~~roc

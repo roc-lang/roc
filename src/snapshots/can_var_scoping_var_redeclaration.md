@@ -82,11 +82,11 @@ LowerIdent(11:1-11:7),OpAssign(11:8-11:9),LowerIdent(11:10-11:23),NoSpaceOpenRou
 						(s-decl @7.2-7.9
 							(p-ident @7.2-7.4 (raw "x_"))
 							(e-int @7.7-7.9 (raw "15")))
-						(e-ident @8.2-8.4 (qaul "") (raw "x_"))))))
+						(e-ident @8.2-8.4 (raw "x_"))))))
 		(s-decl @11.1-11.27
 			(p-ident @11.1-11.7 (raw "result"))
 			(e-apply @11.10-11.27
-				(e-ident @11.10-11.23 (qaul "") (raw "redeclareTest"))
+				(e-ident @11.10-11.23 (raw "redeclareTest"))
 				(e-record @11.24-11.26)))))
 ~~~
 # FORMATTED

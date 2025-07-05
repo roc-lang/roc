@@ -81,14 +81,14 @@ KwIf(2:1-2:3),StringStart(2:3-2:4),StringPart(2:4-2:4),StringEnd(2:4-2:5),LowerI
 	(e-string @1.3-1.5
 		(e-string-part @1.4-1.4 (raw "")))
 	(e-binop @1.5-1.16 (op "-")
-		(e-ident @1.5-1.9 (qaul "") (raw "then"))
-		(e-ident @1.10-1.11 (qaul "") (raw "p")))
+		(e-ident @1.5-1.9 (raw "then"))
+		(e-ident @1.10-1.11 (raw "p")))
 	(e-if-then-else @2.1-2.18
 		(e-string @2.3-2.5
 			(e-string-part @2.4-2.4 (raw "")))
 		(e-binop @2.5-2.16 (op "-")
-			(e-ident @2.5-2.9 (qaul "") (raw "then"))
-			(e-ident @2.10-2.11 (qaul "") (raw "p")))
+			(e-ident @2.5-2.9 (raw "then"))
+			(e-ident @2.10-2.11 (raw "p")))
 		(e-malformed @2.16-2.18 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED

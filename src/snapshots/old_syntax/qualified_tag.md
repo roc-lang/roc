@@ -15,17 +15,17 @@ UpperIdent(1:1-1:4),NoSpaceDotUpperIdent(1:4-1:8),NoSpaceDotUpperIdent(1:8-1:13)
 ~~~
 # PARSE
 ~~~clojure
-(e-tag @1.1-1.4 (raw "One"))
+(e-tag @1.1-1.13 (raw "One.Two.Whee"))
 ~~~
 # FORMATTED
 ~~~roc
-One
+Whee
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tag @1.1-1.4 (name "One") (args "TODO"))
+(e-tag @1.1-1.13 (name "Whee"))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.4 (type "[One]*"))
+(expr @1.1-1.13 (type "[Whee]*"))
 ~~~

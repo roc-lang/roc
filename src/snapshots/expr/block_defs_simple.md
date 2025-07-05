@@ -31,10 +31,10 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 		(s-decl @3.5-4.6
 			(p-ident @3.5-3.6 (raw "y"))
 			(e-binop @3.9-4.6 (op "+")
-				(e-ident @3.9-3.10 (qaul "") (raw "x"))
+				(e-ident @3.9-3.10 (raw "x"))
 				(e-int @3.13-3.14 (raw "1"))))
 		(e-binop @4.5-5.2 (op "*")
-			(e-ident @4.5-4.6 (qaul "") (raw "y"))
+			(e-ident @4.5-4.6 (raw "y"))
 			(e-int @4.9-4.10 (raw "2")))))
 ~~~
 # FORMATTED

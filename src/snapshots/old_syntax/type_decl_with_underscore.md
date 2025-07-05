@@ -20,7 +20,7 @@ Int(2:1-2:3),EndOfFile(2:3-2:3),
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.8 (qaul "") (raw "doStuff"))
+(e-ident @1.1-1.8 (raw "doStuff"))
 ~~~
 # FORMATTED
 ~~~roc

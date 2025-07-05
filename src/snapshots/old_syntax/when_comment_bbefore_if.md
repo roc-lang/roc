@@ -22,7 +22,7 @@ KwIf(3:2-3:4),UpperIdent(3:5-3:6),OpArrow(3:6-3:8),LowerIdent(3:8-3:9),EndOfFile
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.5 (qaul "") (raw "when"))
+(e-ident @1.1-1.5 (raw "when"))
 ~~~
 # FORMATTED
 ~~~roc

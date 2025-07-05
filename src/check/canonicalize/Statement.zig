@@ -123,10 +123,19 @@ pub const Statement = union(enum) {
         exposes: CIR.ExposedItem.Span,
         region: Region,
     },
-    /// A declaration of a new type - whether an alias or a new nominal nominal type
+    /// An alias type declaration, e.g., `Foo : Str`
     ///
     /// Only valid at the top level of a module
-    s_type_decl: struct {
+    s_alias_decl: struct {
+        header: CIR.TypeHeader.Idx,
+        anno: CIR.TypeAnno.Idx,
+        where: ?CIR.WhereClause.Span,
+        region: Region,
+    },
+    /// A nominal type declaration, e.g., `Foo := (U64, Str)`
+    ///
+    /// Only valid at the top level of a module
+    s_nominal_decl: struct {
         header: CIR.TypeHeader.Idx,
         anno: CIR.TypeAnno.Idx,
         where: ?CIR.WhereClause.Span,
@@ -258,9 +267,28 @@ pub const Statement = union(enum) {
 
                 return node;
             },
-            .s_type_decl => |s| {
-                var node = SExpr.init(gpa, "s-type-decl");
-                ir.appendRegionInfoToSexprNodeFromRegion(&node, s.region);
+            .s_alias_decl => |s| {
+                var node = SExpr.init(gpa, "s-alias-decl");
+                node.appendRegion(gpa, ir.calcRegionInfo(s.region));
+
+                // Add the type header
+                var header_node = ir.store.getTypeHeader(s.header).toSExpr(ir);
+                node.appendNode(gpa, &header_node);
+
+                // Add the type annotation
+                var anno_node = ir.store.getTypeAnno(s.anno).toSExpr(ir);
+                node.appendNode(gpa, &anno_node);
+
+                // TODO: Add where clause when implemented
+                if (s.where) |_| {
+                    node.appendStringAttr(gpa, "where", "TODO");
+                }
+
+                return node;
+            },
+            .s_nominal_decl => |s| {
+                var node = SExpr.init(gpa, "s-nominal-decl");
+                node.appendRegion(gpa, ir.calcRegionInfo(s.region));
 
                 // Add the type header
                 var header_node = ir.store.getTypeHeader(s.header).toSExpr(ir);
@@ -308,7 +336,8 @@ pub const Statement = union(enum) {
             .s_for => |s| return s.region,
             .s_return => |s| return s.region,
             .s_import => |s| return s.region,
-            .s_type_decl => |s| return s.region,
+            .s_alias_decl => |s| return s.region,
+            .s_nominal_decl => |s| return s.region,
             .s_type_anno => |s| return s.region,
         }
     }

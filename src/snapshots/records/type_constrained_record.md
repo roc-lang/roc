@@ -45,10 +45,10 @@ LowerIdent(1:1-1:14),OpColon(1:15-1:16),OpenCurly(1:17-1:18),LowerIdent(1:19-1:2
 	(ty-fn @1.17-1.54
 		(ty-record @1.17-1.47
 			(anno-record-field @1.19-1.30 (name "name")
-				(ty (name "Str")))
+				(ty @1.26-1.29 (name "Str")))
 			(anno-record-field @1.31-1.47 (name "age")
 				(ty-malformed @1.37-1.47 (tag "expected_arrow"))))
-		(ty (name "Str"))))
+		(ty @1.51-1.54 (name "Str"))))
 ~~~
 # FORMATTED
 ~~~roc

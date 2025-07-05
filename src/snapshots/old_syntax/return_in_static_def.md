@@ -40,7 +40,7 @@ LowerIdent(12:1-12:15),EndOfFile(12:15-12:15),
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.15 (qaul "") (raw "staticValueDef"))
+(e-ident @1.1-1.15 (raw "staticValueDef"))
 ~~~
 # FORMATTED
 ~~~roc

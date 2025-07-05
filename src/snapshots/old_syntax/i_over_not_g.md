@@ -39,7 +39,7 @@ LowerIdent(3:2-3:3),EndOfFile(3:3-3:3),
 # PARSE
 ~~~clojure
 (e-binop @1.1-1.1 (op "/")
-	(e-ident @1.1-1.2 (qaul "") (raw "i"))
+	(e-ident @1.1-1.2 (raw "i"))
 	(e-malformed @1.1-1.1 (reason "expr_unexpected_token")))
 ~~~
 # FORMATTED

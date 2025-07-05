@@ -22,7 +22,7 @@ OpenCurly(3:2-3:3),LowerIdent(3:4-3:5),Comma(3:5-3:6),LowerIdent(3:7-3:8),CloseC
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.5 (qaul "") (raw "when"))
+(e-ident @1.1-1.5 (raw "when"))
 ~~~
 # FORMATTED
 ~~~roc

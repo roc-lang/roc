@@ -27,7 +27,7 @@ Zx
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tag @1.1-1.3 (name "Zx") (args "TODO"))
+(e-tag @1.1-1.3 (name "Zx"))
 ~~~
 # TYPES
 ~~~clojure

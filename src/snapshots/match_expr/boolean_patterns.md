@@ -25,7 +25,7 @@ CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 # PARSE
 ~~~clojure
 (e-match
-	(e-ident @1.7-1.14 (qaul "") (raw "isReady"))
+	(e-ident @1.7-1.14 (raw "isReady"))
 	(branches
 		(branch @1.1-1.1
 			(p-tag @2.2-2.6 (raw "True"))

@@ -65,9 +65,9 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 		(e-tuple @3.24-3.37
 			(e-local-dispatch @3.25-3.37
 				(e-local-dispatch @3.25-3.34
-					(e-ident @3.25-3.26 (qaul "") (raw "a"))
-					(e-ident @3.30-3.31 (qaul "") (raw "b")))
-				(e-ident @3.35-3.36 (qaul "") (raw "c"))))
+					(e-ident @3.25-3.26 (raw "a"))
+					(e-ident @3.30-3.31 (raw "b")))
+				(e-ident @3.35-3.36 (raw "c"))))
 		(s-decl @4.1-4.30
 			(p-ident @4.1-4.6 (raw "curry"))
 			(e-lambda @4.9-4.30
@@ -80,9 +80,9 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 						(args
 							(p-ident @4.19-4.20 (raw "y")))
 						(e-apply @4.22-4.30
-							(e-ident @4.22-4.24 (qaul "") (raw "fn"))
-							(e-ident @4.25-4.26 (qaul "") (raw "x"))
-							(e-ident @4.28-4.29 (qaul "") (raw "y")))))))
+							(e-ident @4.22-4.24 (raw "fn"))
+							(e-ident @4.25-4.26 (raw "x"))
+							(e-ident @4.28-4.29 (raw "y")))))))
 		(s-decl @6.1-6.15
 			(p-ident @6.1-6.6 (raw "main!"))
 			(e-lambda @6.9-6.15

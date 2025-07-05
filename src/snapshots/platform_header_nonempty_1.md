@@ -63,8 +63,8 @@ CloseSquare(21:3-21:4),EndOfFile(21:4-21:4),
 			(anno-record-field @8.5-8.29 (name "main!")
 				(ty-fn @8.13-8.28
 					(ty-apply @8.13-8.22
-						(ty (name "List"))
-						(ty (name "Str")))
+						(ty @8.13-8.17 (name "List"))
+						(ty @8.18-8.21 (name "Str")))
 					(ty-record @8.26-8.28))))
 		(exposes @11.3-13.4
 			(exposed-lower-ident (text "foo")))

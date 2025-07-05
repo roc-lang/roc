@@ -18,7 +18,7 @@ LowerIdent(1:1-1:2),OpColon(1:3-1:4),OpenCurly(1:5-1:6),KwIf(1:7-1:9),OpColon(1:
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.2 (qaul "") (raw "f"))
+(e-ident @1.1-1.2 (raw "f"))
 ~~~
 # FORMATTED
 ~~~roc

@@ -54,7 +54,7 @@ LowerIdent(8:1-8:6),OpAssign(8:7-8:8),OpBar(8:9-8:10),Underscore(8:10-8:11),OpBa
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-decl @3.1-5.9
+		(s-type-decl @3.1-3.20
 			(header @3.1-3.11 (name "Pair")
 				(args
 					(ty-var @3.6-3.7 (raw "a"))
@@ -65,11 +65,11 @@ LowerIdent(8:1-8:6),OpAssign(8:7-8:8),OpBar(8:9-8:10),Underscore(8:10-8:11),OpBa
 		(s-type-anno @5.1-6.9 (name "swapPair")
 			(ty-fn @5.12-5.36
 				(ty-apply @5.12-5.22
-					(ty (name "Pair"))
+					(ty @5.12-5.16 (name "Pair"))
 					(ty-var @5.17-5.18 (raw "a"))
 					(ty-var @5.20-5.21 (raw "b")))
 				(ty-apply @5.26-5.36
-					(ty (name "Pair"))
+					(ty @5.26-5.30 (name "Pair"))
 					(ty-var @5.31-5.32 (raw "b"))
 					(ty-var @5.34-5.35 (raw "a")))))
 		(s-decl @6.1-6.27
@@ -80,15 +80,15 @@ LowerIdent(8:1-8:6),OpAssign(8:7-8:8),OpBar(8:9-8:10),Underscore(8:10-8:11),OpBa
 						(p-ident @6.14-6.15 (raw "x"))
 						(p-ident @6.17-6.18 (raw "y"))))
 				(e-tuple @6.21-6.27
-					(e-ident @6.22-6.23 (qaul "") (raw "y"))
-					(e-ident @6.25-6.26 (qaul "") (raw "x")))))
+					(e-ident @6.22-6.23 (raw "y"))
+					(e-ident @6.25-6.26 (raw "x")))))
 		(s-decl @8.1-8.27
 			(p-ident @8.1-8.6 (raw "main!"))
 			(e-lambda @8.9-8.27
 				(args
 					(p-underscore))
 				(e-apply @8.13-8.27
-					(e-ident @8.13-8.21 (qaul "") (raw "swapPair"))
+					(e-ident @8.13-8.21 (raw "swapPair"))
 					(e-int @8.22-8.23 (raw "1"))
 					(e-int @8.25-8.26 (raw "2")))))))
 ~~~
@@ -132,7 +132,7 @@ NO CHANGE
 					(pattern @6.1-6.9))
 				(e-int @8.22-8.23 (value "1"))
 				(e-int @8.25-8.26 (value "2")))))
-	(s-type-decl @3.1-5.9
+	(s-alias-decl @3.1-3.20 (where "TODO")
 		(ty-header @3.1-3.11 (name "Pair")
 			(ty-args
 				(ty-var @3.6-3.7 (name "a"))

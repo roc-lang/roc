@@ -18,7 +18,7 @@ LowerIdent(1:1-1:4),UpperIdent(1:6-1:9),NoSpaceDotLowerIdent(1:9-1:15),StringSta
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.4 (qaul "") (raw "try"))
+(e-ident @1.1-1.4 (raw "try"))
 ~~~
 # FORMATTED
 ~~~roc

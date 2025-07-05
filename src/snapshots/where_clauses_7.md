@@ -68,12 +68,12 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-type-decl @3.1-12.7
+	(s-alias-decl @3.1-12.7 (where "TODO")
 		(ty-header @3.1-3.8 (name "Hash")
 			(ty-args
 				(ty-var @3.6-3.7 (name "a"))))
 		(ty-var @5.3-5.4 (name "a")))
-	(s-type-decl @12.1-16.10
+	(s-alias-decl @12.1-16.10 (where "TODO")
 		(ty-header @12.1-12.10 (name "Decode")
 			(ty-args
 				(ty-var @12.8-12.9 (name "a"))))

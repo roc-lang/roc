@@ -10,30 +10,6 @@ type=expr
 ~~~
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **.Bar.baz** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**record_builder_ignored_fields.md:1:6:1:14:**
-```roc
-{ Foo.Bar.baz <- x: 5, y: 0, _z: 3, _: 2
-```
-     ^^^^^^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **.baz <-** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**record_builder_ignored_fields.md:1:10:1:17:**
-```roc
-{ Foo.Bar.baz <- x: 5, y: 0, _z: 3, _: 2
-```
-         ^^^^^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
 The token **<- x** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
@@ -141,6 +117,10 @@ Here is the problematic code:
                                      ^^^
 
 
+**UNDEFINED VARIABLE**
+Nothing is named `baz` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
 
@@ -159,9 +139,7 @@ CloseCurly(2:1-2:2),EndOfFile(2:2-2:2),
 ~~~clojure
 (e-block @1.1-2.2
 	(statements
-		(e-tag @1.3-1.6 (raw "Foo"))
-		(e-malformed @1.6-1.14 (reason "expr_unexpected_token"))
-		(e-malformed @1.10-1.17 (reason "expr_unexpected_token"))
+		(e-ident @1.3-1.14 (raw "Foo.Bar.baz"))
 		(e-malformed @1.15-1.19 (reason "expr_unexpected_token"))
 		(s-type-anno @1.18-1.23 (name "x")
 			(ty-malformed @1.21-1.23 (tag "ty_anno_unexpected_token")))
@@ -179,9 +157,7 @@ CloseCurly(2:1-2:2),EndOfFile(2:2-2:2),
 # FORMATTED
 ~~~roc
 {
-	Foo
-	
-	
+	Foo.baz
 	
 	x : 
 	
@@ -197,8 +173,8 @@ CloseCurly(2:1-2:2),EndOfFile(2:2-2:2),
 # CANONICALIZE
 ~~~clojure
 (e-block @1.1-2.2
-	(s-expr @1.3-1.10
-		(e-tag @1.3-1.6 (name "Foo") (args "TODO")))
+	(s-expr @1.3-1.17
+		(e-runtime-error (tag "ident_not_in_scope")))
 	(s-type-anno @1.18-1.23 (name "x")
 		(ty-malformed @1.21-1.23))
 	(s-type-anno @1.24-1.29 (name "y")

@@ -25,7 +25,7 @@ LowerIdent(4:3-4:14),EndOfFile(4:14-4:14),
 # PARSE
 ~~~clojure
 (e-dbg
-	(e-ident @3.2-3.6 (qaul "") (raw "izzb")))
+	(e-ident @3.2-3.6 (raw "izzb")))
 ~~~
 # FORMATTED
 ~~~roc

@@ -29,31 +29,31 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 # PARSE
 ~~~clojure
 (e-match
-	(e-ident @1.7-1.13 (qaul "") (raw "result"))
+	(e-ident @1.7-1.13 (raw "result"))
 	(branches
 		(branch @2.5-3.8
 			(p-tag @2.5-2.14 (raw "Ok")
 				(p-ident @2.8-2.13 (raw "value")))
 			(e-binop @2.18-3.8 (op "+")
-				(e-ident @2.18-2.23 (qaul "") (raw "value"))
+				(e-ident @2.18-2.23 (raw "value"))
 				(e-int @2.26-2.27 (raw "1"))))
 		(branch @3.5-4.7
 			(p-tag @3.5-3.15 (raw "Err")
 				(p-ident @3.9-3.14 (raw "value")))
 			(e-binop @3.19-4.7 (op "-")
-				(e-ident @3.19-3.24 (qaul "") (raw "value"))
+				(e-ident @3.19-3.24 (raw "value"))
 				(e-int @3.27-3.28 (raw "1"))))
 		(branch @4.5-5.8
 			(p-tag @4.5-4.18 (raw "Ok")
 				(p-ident @4.8-4.17 (raw "different")))
 			(e-binop @4.22-5.8 (op "*")
-				(e-ident @4.22-4.31 (qaul "") (raw "different"))
+				(e-ident @4.22-4.31 (raw "different"))
 				(e-int @4.34-4.35 (raw "2"))))
 		(branch @5.5-6.2
 			(p-tag @5.5-5.19 (raw "Err")
 				(p-ident @5.9-5.18 (raw "different")))
 			(e-binop @5.23-6.2 (op "/")
-				(e-ident @5.23-5.32 (qaul "") (raw "different"))
+				(e-ident @5.23-5.32 (raw "different"))
 				(e-int @5.35-5.36 (raw "2"))))))
 ~~~
 # FORMATTED

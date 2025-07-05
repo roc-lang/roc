@@ -20,7 +20,7 @@ Underscore(2:5-2:6),KwAs(2:7-2:9),LowerIdent(2:10-2:11),OpArrow(2:12-2:14),Lower
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.5 (qaul "") (raw "when"))
+(e-ident @1.1-1.5 (raw "when"))
 ~~~
 # FORMATTED
 ~~~roc

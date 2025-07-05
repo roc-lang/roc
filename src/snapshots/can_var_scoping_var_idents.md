@@ -46,19 +46,19 @@ CloseCurly(10:1-10:2),EndOfFile(10:2-10:2),
 					(statements
 						(s-decl @5.2-5.13
 							(p-ident @5.2-5.5 (raw "sum"))
-							(e-ident @5.8-5.13 (qaul "") (raw "input")))
+							(e-ident @5.8-5.13 (raw "input")))
 						(s-var @6.2-8.6 (name "sum_")
 							(e-binop @6.13-8.6 (op "*")
-								(e-ident @6.13-6.18 (qaul "") (raw "input"))
+								(e-ident @6.13-6.18 (raw "input"))
 								(e-int @6.21-6.22 (raw "2"))))
 						(s-decl @8.2-9.5
 							(p-ident @8.2-8.6 (raw "sum_"))
 							(e-binop @8.9-9.5 (op "+")
-								(e-ident @8.9-8.13 (qaul "") (raw "sum_"))
-								(e-ident @8.16-8.19 (qaul "") (raw "sum"))))
+								(e-ident @8.9-8.13 (raw "sum_"))
+								(e-ident @8.16-8.19 (raw "sum"))))
 						(e-binop @9.2-10.2 (op "+")
-							(e-ident @9.2-9.5 (qaul "") (raw "sum"))
-							(e-ident @9.8-9.12 (qaul "") (raw "sum_")))))))))
+							(e-ident @9.2-9.5 (raw "sum"))
+							(e-ident @9.8-9.12 (raw "sum_")))))))))
 ~~~
 # FORMATTED
 ~~~roc

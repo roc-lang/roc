@@ -109,9 +109,9 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 						(s-decl @17.5-18.11
 							(p-ident @17.5-17.11 (raw "result"))
 							(e-binop @17.14-18.11 (op "+")
-								(e-ident @17.14-17.22 (qaul "") (raw "used_var"))
+								(e-ident @17.14-17.22 (raw "used_var"))
 								(e-int @17.25-17.27 (raw "10"))))
-						(e-ident @18.5-18.11 (qaul "") (raw "result"))))))))
+						(e-ident @18.5-18.11 (raw "result"))))))))
 ~~~
 # FORMATTED
 ~~~roc

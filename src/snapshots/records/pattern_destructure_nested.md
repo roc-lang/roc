@@ -35,7 +35,7 @@ CloseCurly(3:1-3:2),EndOfFile(3:2-3:2),
 # PARSE
 ~~~clojure
 (e-match
-	(e-ident @1.7-1.13 (qaul "") (raw "person"))
+	(e-ident @1.7-1.13 (raw "person"))
 	(branches
 		(branch @1.1-1.1
 			(p-record @2.5-2.49
@@ -47,11 +47,11 @@ CloseCurly(3:1-3:2),EndOfFile(3:2-3:2),
 						(field @2.38-2.47 (name "zipCode") (rest false)))))
 			(e-string @2.53-2.92
 				(e-string-part @2.54-2.54 (raw ""))
-				(e-ident @2.56-2.60 (qaul "") (raw "name"))
+				(e-ident @2.56-2.60 (raw "name"))
 				(e-string-part @2.61-2.71 (raw " lives on "))
-				(e-ident @2.73-2.79 (qaul "") (raw "street"))
+				(e-ident @2.73-2.79 (raw "street"))
 				(e-string-part @2.80-2.84 (raw " in "))
-				(e-ident @2.86-2.90 (qaul "") (raw "city"))
+				(e-ident @2.86-2.90 (raw "city"))
 				(e-string-part @2.91-2.91 (raw ""))))))
 ~~~
 # FORMATTED

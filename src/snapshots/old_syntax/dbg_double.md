@@ -20,7 +20,7 @@ KwDbg(1:1-1:4),KwDbg(1:5-1:8),LowerIdent(1:9-1:10),LowerIdent(1:11-1:12),EndOfFi
 ~~~clojure
 (e-dbg
 	(e-dbg
-		(e-ident @1.9-1.10 (qaul "") (raw "g"))))
+		(e-ident @1.9-1.10 (raw "g"))))
 ~~~
 # FORMATTED
 ~~~roc

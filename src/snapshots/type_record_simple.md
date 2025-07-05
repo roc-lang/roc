@@ -37,22 +37,22 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno @3.1-4.9 (name "get_name")
+		(s-type-anno @1.1-1.1 (name "get_name")
 			(ty-fn @3.12-3.42
 				(ty-record @3.12-3.35
 					(anno-record-field @3.14-3.24 (name "name")
-						(ty (name "Str")))
+						(ty @3.20-3.23 (name "Str")))
 					(anno-record-field @3.25-3.35 (name "age")
-						(ty (name "U64"))))
-				(ty (name "Str"))))
+						(ty @3.30-3.33 (name "U64"))))
+				(ty @3.39-3.42 (name "Str"))))
 		(s-decl @4.1-6.6
 			(p-ident @4.1-4.9 (raw "get_name"))
 			(e-lambda @4.12-6.6
 				(args
 					(p-ident @4.13-4.19 (raw "person")))
 				(e-field-access @4.21-6.6
-					(e-ident @4.21-4.27 (qaul "") (raw "person"))
-					(e-ident @4.27-4.32 (qaul "") (raw ".name")))))
+					(e-ident @4.21-4.27 (raw "person"))
+					(e-ident @4.27-4.32 (raw "name")))))
 		(s-decl @6.1-6.15
 			(p-ident @6.1-6.6 (raw "main!"))
 			(e-lambda @6.9-6.15

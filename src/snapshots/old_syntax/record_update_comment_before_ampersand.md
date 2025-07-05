@@ -34,7 +34,7 @@ OpAmpersand(2:1-2:2),CloseCurly(2:2-2:3),EndOfFile(2:3-2:3),
 ~~~clojure
 (e-block @1.1-2.3
 	(statements
-		(e-ident @1.2-1.3 (qaul "") (raw "i"))
+		(e-ident @1.2-1.3 (raw "i"))
 		(e-malformed @2.1-2.3 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED

@@ -13,38 +13,7 @@ red : Color.RGB
 red = Color.RGB.Red
 ~~~
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **.RGB.Red** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**nominal_import_type.md:6:12:6:20:**
-```roc
-red = Color.RGB.Red
-```
-           ^^^^^^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **.Red** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**nominal_import_type.md:6:16:6:20:**
-```roc
-red = Color.RGB.Red
-```
-               ^^^^
-
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
+NIL
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),Newline(1:1-1:1),
@@ -61,14 +30,12 @@ LowerIdent(6:1-6:4),OpAssign(6:5-6:6),UpperIdent(6:7-6:12),NoSpaceDotUpperIdent(
 		(exposes @1.8-1.13
 			(exposed-lower-ident (text "red"))))
 	(statements
-		(s-import @3.1-3.13 (module "Color"))
-		(s-type-anno @5.1-6.4 (name "red")
-			(ty-mod (module "RGB") (name "Color")))
-		(s-decl @6.1-6.12
+		(s-import @3.1-3.13 (raw "Color"))
+		(s-type-anno @1.1-1.1 (name "red")
+			(ty @5.7-5.16 (name "Color.RGB")))
+		(s-decl @6.1-6.20
 			(p-ident @6.1-6.4 (raw "red"))
-			(e-tag @6.7-6.12 (raw "Color")))
-		(e-malformed @6.12-6.20 (reason "expr_unexpected_token"))
-		(e-malformed @6.16-6.20 (reason "expr_unexpected_token"))))
+			(e-tag @6.7-6.20 (raw "Color.RGB.Red")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -77,17 +44,18 @@ module [red]
 import Color
 
 red : Color.RGB
-red = Color
+red = Red
 ~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
 	(d-let
 		(p-assign @6.1-6.4 (ident "red"))
-		(e-tag @6.7-6.12 (name "Color") (args "TODO"))
+		(e-tag @6.7-6.20 (name "Red"))
 		(annotation @6.1-6.4
 			(declared-type
-				(ty-mod @5.7-5.16 (module "RGB") (type "Color")))))
+				(ty-lookup-external @5.7-5.16
+					(ext-decl @5.7-5.16 (ident "Color.RGB") (kind "type"))))))
 	(s-import @3.1-3.13 (module "Color")
 		(exposes)))
 ~~~
@@ -95,7 +63,7 @@ red = Color
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.4 (type "[Color]*")))
+		(patt @6.1-6.4 (type "[Red]*")))
 	(expressions
-		(expr @6.7-6.12 (type "[Color]*"))))
+		(expr @6.7-6.20 (type "[Red]*"))))
 ~~~

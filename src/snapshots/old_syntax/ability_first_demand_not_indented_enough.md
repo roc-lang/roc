@@ -29,7 +29,7 @@ MEq
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tag @1.1-1.4 (name "MEq") (args "TODO"))
+(e-tag @1.1-1.4 (name "MEq"))
 ~~~
 # TYPES
 ~~~clojure

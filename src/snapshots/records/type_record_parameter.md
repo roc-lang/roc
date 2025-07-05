@@ -19,15 +19,15 @@ LowerIdent(1:1-1:15),OpColon(1:16-1:17),OpenCurly(1:18-1:19),LowerIdent(1:20-1:2
 	(ty-fn @1.18-1.72
 		(ty-record @1.18-1.53
 			(anno-record-field @1.20-1.31 (name "name")
-				(ty (name "Str")))
+				(ty @1.27-1.30 (name "Str")))
 			(anno-record-field @1.32-1.42 (name "age")
-				(ty (name "U32")))
+				(ty @1.38-1.41 (name "U32")))
 			(anno-record-field @1.43-1.53 (name "thing")
 				(ty-var @1.50-1.51 (raw "a"))))
 		(ty-fn @1.56-1.64
 			(ty-var @1.56-1.57 (raw "a"))
-			(ty (name "Str")))
-		(ty (name "Str"))))
+			(ty @1.61-1.64 (name "Str")))
+		(ty @1.69-1.72 (name "Str"))))
 ~~~
 # FORMATTED
 ~~~roc

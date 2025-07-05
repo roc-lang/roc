@@ -29,8 +29,8 @@ CloseCurly(4:1-4:2),OpLessThan(4:2-4:3),LowerIdent(4:3-4:4),EndOfFile(4:4-4:4),
 # PARSE
 ~~~clojure
 (e-binop @1.1-2.3 (op ">")
-	(e-ident @1.1-1.2 (qaul "") (raw "x"))
-	(e-ident @2.1-2.2 (qaul "") (raw "x")))
+	(e-ident @1.1-1.2 (raw "x"))
+	(e-ident @2.1-2.2 (raw "x")))
 ~~~
 # FORMATTED
 ~~~roc

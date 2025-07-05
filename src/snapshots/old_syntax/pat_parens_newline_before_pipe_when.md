@@ -24,7 +24,7 @@ CloseRound(4:1-4:2),OpBar(4:2-4:3),UpperIdent(4:3-4:4),OpArrow(4:4-4:6),LowerIde
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.5 (qaul "") (raw "when"))
+(e-ident @1.1-1.5 (raw "when"))
 ~~~
 # FORMATTED
 ~~~roc

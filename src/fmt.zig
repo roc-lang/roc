@@ -735,7 +735,10 @@ const Formatter = struct {
                 try fmt.pushTokenText(s.token);
             },
             .ident => |i| {
-                try fmt.formatIdent(i.token, i.qualifier);
+                // Extract first qualifier from span if any
+                const qualifier_tokens = fmt.ast.store.tokenSlice(i.qualifiers);
+                const qualifier = if (qualifier_tokens.len > 0) qualifier_tokens[0] else null;
+                try fmt.formatIdent(i.token, qualifier);
             },
             .field_access => |fa| {
                 _ = try fmt.formatExpr(fa.left);
@@ -774,7 +777,64 @@ const Formatter = struct {
                 try fmt.formatCollection(region, .round, AST.Expr.Idx, fmt.ast.store.exprSlice(t.items), Formatter.formatExpr);
             },
             .record => |r| {
-                try fmt.formatCollection(region, .curly, AST.RecordField.Idx, fmt.ast.store.recordFieldSlice(r.fields), Formatter.formatRecordField);
+                const is_multiline = fmt.ast.regionIsMultiline(r.region);
+                try fmt.push('{');
+
+                const fields = fmt.ast.store.recordFieldSlice(r.fields);
+                var has_items = false;
+
+                // Handle extension if present
+                if (r.ext) |ext| {
+                    if (is_multiline) {
+                        _ = try fmt.flushCommentsAfter(r.region.start);
+                        fmt.curr_indent += 1;
+                        try fmt.newline();
+                        try fmt.pushIndent();
+                    }
+                    try fmt.pushAll("..");
+                    _ = try fmt.formatExpr(ext);
+                    has_items = true;
+
+                    if (fields.len > 0) {
+                        try fmt.push(',');
+                        if (is_multiline) {
+                            try fmt.newline();
+                            try fmt.pushIndent();
+                        } else {
+                            try fmt.push(' ');
+                        }
+                    }
+                }
+
+                // Format fields
+                for (fields, 0..) |field_idx, i| {
+                    if (i == 0 and !has_items) {
+                        if (is_multiline) {
+                            _ = try fmt.flushCommentsAfter(r.region.start);
+                            fmt.curr_indent += 1;
+                            try fmt.newline();
+                            try fmt.pushIndent();
+                        }
+                    }
+                    _ = try fmt.formatRecordField(field_idx);
+                    if (i < fields.len - 1) {
+                        try fmt.push(',');
+                        if (is_multiline) {
+                            try fmt.newline();
+                            try fmt.pushIndent();
+                        } else {
+                            try fmt.push(' ');
+                        }
+                    }
+                }
+
+                if (is_multiline and (has_items or fields.len > 0)) {
+                    fmt.curr_indent -= 1;
+                    _ = try fmt.flushCommentsBefore(r.region.end);
+                    try fmt.newline();
+                    try fmt.pushIndent();
+                }
+                try fmt.push('}');
             },
             .lambda => |l| {
                 const args = fmt.ast.store.patternSlice(l.args);
@@ -1654,7 +1714,37 @@ const Formatter = struct {
                 try fmt.pushTokenText(v.tok);
             },
             .ty => |t| {
-                try fmt.pushTokenText(t.region.start);
+                const qualifier_tokens = fmt.ast.store.tokenSlice(t.qualifiers);
+
+                if (qualifier_tokens.len > 0) {
+                    // Handle qualifiers manually
+                    for (qualifier_tokens) |tok_idx| {
+                        const tok = @as(Token.Idx, @intCast(tok_idx));
+                        try fmt.pushAll(fmt.ast.resolve(tok));
+                        try fmt.pushAll(".");
+                    }
+                    // Add just the final token text with dot stripping
+                    const strip_tokens = [_]tokenize.Token.Tag{ .NoSpaceDotUpperIdent, .NoSpaceDotLowerIdent };
+                    const final_text = fmt.ast.resolve(t.token);
+                    const token_tag = fmt.ast.tokens.tokens.items(.tag)[@intCast(t.token)];
+
+                    var stripped = false;
+                    for (strip_tokens) |dot_token_tag| {
+                        if (token_tag == dot_token_tag and final_text.len > 0 and final_text[0] == '.') {
+                            try fmt.pushAll(final_text[1..]);
+                            stripped = true;
+                            break;
+                        }
+                    }
+                    if (!stripped) {
+                        try fmt.pushAll(final_text);
+                    }
+                } else {
+                    // Use resolveQualifiedName for the no-qualifiers case
+                    const strip_tokens = [_]tokenize.Token.Tag{ .NoSpaceDotUpperIdent, .NoSpaceDotLowerIdent };
+                    const final_text = fmt.ast.resolveQualifiedName(t.qualifiers, t.token, &strip_tokens);
+                    try fmt.pushAll(final_text);
+                }
             },
             .mod_ty => |t| {
                 try fmt.pushTokenText(t.region.start);

@@ -38,7 +38,7 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:7),Comma(1:7-1:8),LowerIdent(1:9-1:12),Comma
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+{name, age, email, active}
 ~~~
 # CANONICALIZE
 ~~~clojure

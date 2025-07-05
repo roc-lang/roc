@@ -35,8 +35,8 @@ LowerIdent(4:1-4:2),OpAssign(4:3-4:4),Int(4:5-4:7),EndOfFile(4:7-4:7),
 	(module @1.1-1.10
 		(exposes @1.8-1.10))
 	(statements
-		(s-type-anno @3.1-4.2 (name "x")
-			(ty (name "U8")))
+		(s-type-anno @1.1-1.1 (name "x")
+			(ty @3.5-3.7 (name "U8")))
 		(s-decl @4.1-4.7
 			(p-ident @4.1-4.2 (raw "x"))
 			(e-int @4.5-4.7 (raw "-1")))))

@@ -41,14 +41,14 @@ LowerIdent(8:1-8:6),OpAssign(8:7-8:8),OpBar(8:9-8:10),Underscore(8:10-8:11),OpBa
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-decl @3.1-5.8
+		(s-type-decl @3.1-3.13
 			(header @3.1-3.7 (name "UserId")
 				(args))
-			(ty (name "U64")))
-		(s-type-anno @5.1-6.8 (name "getUser")
+			(ty @3.10-3.13 (name "U64")))
+		(s-type-anno @1.1-1.1 (name "getUser")
 			(ty-fn @5.11-5.24
-				(ty (name "UserId"))
-				(ty (name "Str"))))
+				(ty @5.11-5.17 (name "UserId"))
+				(ty @5.21-5.24 (name "Str"))))
 		(s-decl @1.1-1.1
 			(p-ident @6.1-6.8 (raw "getUser"))
 			(e-lambda @1.1-1.1
@@ -57,7 +57,7 @@ LowerIdent(8:1-8:6),OpAssign(8:7-8:8),OpBar(8:9-8:10),Underscore(8:10-8:11),OpBa
 				(e-if-then-else @1.1-1.1
 					(e-tuple @6.19-6.28
 						(e-binop @6.20-6.28 (op ">")
-							(e-ident @6.20-6.22 (qaul "") (raw "id"))
+							(e-ident @6.20-6.22 (raw "id"))
 							(e-int @6.25-6.27 (raw "10"))))
 					(e-string @6.29-6.34
 						(e-string-part @6.30-6.33 (raw "big")))
@@ -69,7 +69,7 @@ LowerIdent(8:1-8:6),OpAssign(8:7-8:8),OpBar(8:9-8:10),Underscore(8:10-8:11),OpBa
 				(args
 					(p-underscore))
 				(e-apply @8.13-8.25
-					(e-ident @8.13-8.20 (qaul "") (raw "getUser"))
+					(e-ident @8.13-8.20 (raw "getUser"))
 					(e-int @8.21-8.24 (raw "100")))))))
 ~~~
 # FORMATTED
@@ -110,7 +110,7 @@ NO CHANGE
 				(e-lookup-local @8.13-8.20
 					(pattern @6.1-6.8))
 				(e-int @8.21-8.24 (value "100")))))
-	(s-type-decl @3.1-5.8
+	(s-alias-decl @3.1-3.13 (where "TODO")
 		(ty-header @3.1-3.7 (name "UserId"))
 		(ty @3.10-3.13 (name "U64"))))
 ~~~

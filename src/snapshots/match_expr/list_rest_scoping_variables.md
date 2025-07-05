@@ -125,7 +125,7 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 # PARSE
 ~~~clojure
 (e-match
-	(e-ident @1.7-1.11 (qaul "") (raw "data"))
+	(e-ident @1.7-1.11 (raw "data"))
 	(branches
 		(branch @2.5-3.6
 			(p-list @2.5-2.14
@@ -135,20 +135,20 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 			(p-list @3.5-3.21
 				(p-ident @3.6-3.11 (raw "first"))
 				(p-list-rest @3.13-3.21 (name "items")))
-			(e-ident @3.25-3.30 (qaul "") (raw "first")))
+			(e-ident @3.25-3.30 (raw "first")))
 		(branch @4.5-5.6
 			(p-list @4.5-4.20
 				(p-list-rest @4.6-4.14 (name "items"))
 				(p-ident @4.15-4.19 (raw "last")))
-			(e-ident @4.24-4.28 (qaul "") (raw "last")))
+			(e-ident @4.24-4.28 (raw "last")))
 		(branch @5.5-6.2
 			(p-list @5.5-5.27
 				(p-ident @5.6-5.11 (raw "first"))
 				(p-list-rest @5.13-5.21 (name "items"))
 				(p-ident @5.22-5.26 (raw "last")))
 			(e-binop @5.31-6.2 (op "+")
-				(e-ident @5.31-5.36 (qaul "") (raw "first"))
-				(e-ident @5.39-5.43 (qaul "") (raw "last"))))))
+				(e-ident @5.31-5.36 (raw "first"))
+				(e-ident @5.39-5.43 (raw "last"))))))
 ~~~
 # FORMATTED
 ~~~roc

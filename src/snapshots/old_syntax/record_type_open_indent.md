@@ -20,7 +20,7 @@ LowerIdent(2:1-2:4),OpColon(2:5-2:6),UpperIdent(2:7-2:10),Comma(2:10-2:11),EndOf
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.2 (qaul "") (raw "f"))
+(e-ident @1.1-1.2 (raw "f"))
 ~~~
 # FORMATTED
 ~~~roc

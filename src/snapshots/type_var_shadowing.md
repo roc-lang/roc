@@ -71,10 +71,10 @@ LowerIdent(13:1-13:6),OpAssign(13:7-13:8),OpBar(13:9-13:10),Underscore(13:10-13:
 							(e-lambda @8.13-8.18
 								(args
 									(p-ident @8.14-8.15 (raw "y")))
-								(e-ident @8.17-8.18 (qaul "") (raw "y"))))
+								(e-ident @8.17-8.18 (raw "y"))))
 						(e-apply @10.5-10.13
-							(e-ident @10.5-10.10 (qaul "") (raw "inner"))
-							(e-ident @10.11-10.12 (qaul "") (raw "x")))))))
+							(e-ident @10.5-10.10 (raw "inner"))
+							(e-ident @10.11-10.12 (raw "x")))))))
 		(s-decl @13.1-13.15
 			(p-ident @13.1-13.6 (raw "main!"))
 			(e-lambda @13.9-13.15

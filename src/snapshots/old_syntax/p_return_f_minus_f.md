@@ -24,7 +24,7 @@ OpUnaryMinus(4:2-4:3),LowerIdent(4:3-4:4),EndOfFile(4:4-4:4),
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.2 (qaul "") (raw "p"))
+(e-ident @1.1-1.2 (raw "p"))
 ~~~
 # FORMATTED
 ~~~roc

@@ -88,7 +88,7 @@ CloseCurly(7:1-7:2),EndOfFile(7:2-7:2),
 # PARSE
 ~~~clojure
 (e-match
-	(e-ident @1.7-1.8 (qaul "") (raw "x"))
+	(e-ident @1.7-1.8 (raw "x"))
 	(branches
 		(branch @1.1-1.1
 			(p-frac @2.5-2.10 (raw "1e100"))

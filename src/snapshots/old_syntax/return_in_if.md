@@ -36,7 +36,7 @@ LowerIdent(10:1-10:17),Int(10:18-10:20),EndOfFile(10:20-10:20),
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.17 (qaul "") (raw "maybeEarlyReturn"))
+(e-ident @1.1-1.17 (raw "maybeEarlyReturn"))
 ~~~
 # FORMATTED
 ~~~roc

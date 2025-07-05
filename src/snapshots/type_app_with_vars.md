@@ -53,13 +53,13 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 		(s-type-anno @3.1-4.8 (name "mapList")
 			(ty-fn @3.11-3.39
 				(ty-apply @3.11-3.18
-					(ty (name "List"))
+					(ty @3.11-3.15 (name "List"))
 					(ty-var @3.16-3.17 (raw "a")))
 				(ty-fn @3.21-3.27
 					(ty-var @3.21-3.22 (raw "a"))
 					(ty-var @3.26-3.27 (raw "b")))
 				(ty-apply @3.32-3.39
-					(ty (name "List"))
+					(ty @3.32-3.36 (name "List"))
 					(ty-var @3.37-3.38 (raw "b")))))
 		(s-decl @4.1-6.6
 			(p-ident @4.1-4.8 (raw "mapList"))
@@ -68,17 +68,17 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 					(p-ident @4.12-4.16 (raw "list"))
 					(p-ident @4.18-4.20 (raw "fn")))
 				(e-field-access @4.22-6.6
-					(e-ident @4.22-4.26 (qaul "") (raw "list"))
+					(e-ident @4.22-4.26 (raw "list"))
 					(e-apply @4.26-4.34
-						(e-ident @4.26-4.30 (qaul "") (raw ".map"))
-						(e-ident @4.31-4.33 (qaul "") (raw "fn"))))))
+						(e-ident @4.26-4.30 (raw "map"))
+						(e-ident @4.31-4.33 (raw "fn"))))))
 		(s-decl @6.1-6.33
 			(p-ident @6.1-6.6 (raw "main!"))
 			(e-lambda @6.9-6.33
 				(args
 					(p-underscore))
 				(e-apply @6.13-6.33
-					(e-ident @6.13-6.20 (qaul "") (raw "mapList"))
+					(e-ident @6.13-6.20 (raw "mapList"))
 					(e-list @6.21-6.32
 						(e-int @6.22-6.23 (raw "1"))
 						(e-int @6.24-6.25 (raw "2"))

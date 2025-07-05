@@ -53,7 +53,7 @@ CloseCurly(13:1-13:2),EndOfFile(13:2-13:2),
 					(statements
 						(e-if-then-else @4.2-13.2
 							(e-binop @4.5-4.14 (op "<")
-								(e-ident @4.5-4.8 (qaul "") (raw "num"))
+								(e-ident @4.5-4.8 (raw "num"))
 								(e-int @4.11-4.12 (raw "0")))
 							(e-block @4.13-6.3
 								(statements
@@ -61,7 +61,7 @@ CloseCurly(13:1-13:2),EndOfFile(13:2-13:2),
 										(e-string-part @5.4-5.12 (raw "negative")))))
 							(e-if-then-else @6.9-13.2
 								(e-binop @6.12-6.22 (op "==")
-									(e-ident @6.12-6.15 (qaul "") (raw "num"))
+									(e-ident @6.12-6.15 (raw "num"))
 									(e-int @6.19-6.20 (raw "0")))
 								(e-block @6.21-8.3
 									(statements
@@ -69,7 +69,7 @@ CloseCurly(13:1-13:2),EndOfFile(13:2-13:2),
 											(e-string-part @7.4-7.8 (raw "zero")))))
 								(e-if-then-else @8.9-13.2
 									(e-binop @8.12-8.23 (op ">")
-										(e-ident @8.12-8.15 (qaul "") (raw "num"))
+										(e-ident @8.12-8.15 (raw "num"))
 										(e-int @8.18-8.21 (raw "100")))
 									(e-block @8.22-10.3
 										(statements

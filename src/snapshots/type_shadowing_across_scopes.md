@@ -71,12 +71,11 @@ Here is the problematic code:
 The type ``Result`` is being redeclared.
 
 The redeclaration is here:
-**type_shadowing_across_scopes.md:3:1:5:12:**
+**type_shadowing_across_scopes.md:3:1:3:31:**
 ```roc
 Result(a, b) : [Ok(a), Err(b)]
-
-processData : Str -> Str
 ```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 But ``Result`` was already declared here:
 **type_shadowing_across_scopes.md:1:1:1:1:**
@@ -132,7 +131,7 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 			(exposed-upper-ident (text "Result"))
 			(exposed-lower-ident (text "processData"))))
 	(statements
-		(s-type-decl @3.1-5.12
+		(s-type-decl @3.1-3.31
 			(header @3.1-3.13 (name "Result")
 				(args
 					(ty-var @3.8-3.9 (raw "a"))
@@ -140,15 +139,15 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 			(ty-tag-union @3.16-3.31
 				(tags
 					(ty-apply @3.17-3.22
-						(ty (name "Ok"))
+						(ty @3.17-3.19 (name "Ok"))
 						(ty-var @3.20-3.21 (raw "a")))
 					(ty-apply @3.24-3.30
-						(ty (name "Err"))
+						(ty @3.24-3.27 (name "Err"))
 						(ty-var @3.28-3.29 (raw "b"))))))
-		(s-type-anno @5.1-6.12 (name "processData")
+		(s-type-anno @1.1-1.1 (name "processData")
 			(ty-fn @5.15-5.25
-				(ty (name "Str"))
-				(ty (name "Str"))))
+				(ty @5.15-5.18 (name "Str"))
+				(ty @5.22-5.25 (name "Str"))))
 		(s-decl @6.1-7.16
 			(p-ident @6.1-6.12 (raw "processData"))
 			(e-lambda @6.15-7.16
@@ -192,7 +191,7 @@ InnerModule :
 				(ty-fn @5.15-5.25 (effectful false)
 					(ty @5.15-5.18 (name "Str"))
 					(ty @5.22-5.25 (name "Str"))))))
-	(s-type-decl @3.1-5.12
+	(s-alias-decl @3.1-3.31 (where "TODO")
 		(ty-header @3.1-3.13 (name "Result")
 			(ty-args
 				(ty-var @3.8-3.9 (name "a"))
@@ -202,7 +201,7 @@ InnerModule :
 				(ty-var @3.20-3.21 (name "a")))
 			(ty-apply @3.24-3.30 (symbol "Err")
 				(ty-var @3.28-3.29 (name "b")))))
-	(s-type-decl @10.1-11.32
+	(s-alias-decl @10.1-11.32 (where "TODO")
 		(ty-header @10.1-10.12 (name "InnerModule"))
 		(ty-malformed @11.24-11.32)))
 ~~~

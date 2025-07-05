@@ -22,7 +22,7 @@ LowerIdent(2:2-2:3),LowerIdent(2:4-2:5),EndOfFile(2:5-2:5),
 ~~~clojure
 (e-dbg
 	(e-dbg
-		(e-ident @2.2-2.3 (qaul "") (raw "a"))))
+		(e-ident @2.2-2.3 (raw "a"))))
 ~~~
 # FORMATTED
 ~~~roc

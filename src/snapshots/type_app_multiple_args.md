@@ -43,12 +43,12 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 		(s-type-anno @3.1-4.12 (name "processDict")
 			(ty-fn @3.15-3.42
 				(ty-apply @3.15-3.29
-					(ty (name "Dict"))
-					(ty (name "Str"))
-					(ty (name "U64")))
+					(ty @3.15-3.19 (name "Dict"))
+					(ty @3.20-3.23 (name "Str"))
+					(ty @3.25-3.28 (name "U64")))
 				(ty-apply @3.33-3.42
-					(ty (name "List"))
-					(ty (name "Str")))))
+					(ty @3.33-3.37 (name "List"))
+					(ty @3.38-3.41 (name "Str")))))
 		(s-decl @4.1-4.25
 			(p-ident @4.1-4.12 (raw "processDict"))
 			(e-lambda @4.15-4.25
@@ -61,12 +61,12 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 				(args
 					(p-underscore))
 				(e-apply @6.13-6.55
-					(e-ident @6.13-6.24 (qaul "") (raw "processDict"))
+					(e-ident @6.13-6.24 (raw "processDict"))
 					(e-field-access @6.25-6.55
 						(e-apply @6.25-6.37
-							(e-ident @6.25-6.35 (qaul "Dict") (raw ".empty")))
+							(e-ident @6.25-6.35 (raw "Dict.empty")))
 						(e-apply @6.37-6.54
-							(e-ident @6.37-6.44 (qaul "") (raw ".insert"))
+							(e-ident @6.37-6.44 (raw "insert"))
 							(e-string @6.45-6.50
 								(e-string-part @6.46-6.49 (raw "one")))
 							(e-int @6.52-6.53 (raw "1")))))))))

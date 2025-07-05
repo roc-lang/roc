@@ -23,16 +23,16 @@ LowerIdent(1:1-1:8),NoSpaceOpenRound(1:8-1:9),LowerIdent(1:9-1:13),CloseRound(1:
 		(e-field-access @1.1-1.69
 			(e-question-suffix @1.1-1.15
 				(e-apply @1.1-1.14
-					(e-ident @1.1-1.8 (qaul "") (raw "some_fn"))
-					(e-ident @1.9-1.13 (qaul "") (raw "arg1"))))
+					(e-ident @1.1-1.8 (raw "some_fn"))
+					(e-ident @1.9-1.13 (raw "arg1"))))
 			(e-question-suffix @1.15-1.41
 				(e-apply @1.15-1.40
-					(e-ident @1.15-1.38 (qaul "") (raw ".static_dispatch_method")))))
+					(e-ident @1.15-1.38 (raw "static_dispatch_method")))))
 		(e-question-suffix @1.41-1.72
 			(e-apply @1.41-1.71
-				(e-ident @1.41-1.69 (qaul "") (raw ".next_static_dispatch_method")))))
+				(e-ident @1.41-1.69 (raw "next_static_dispatch_method")))))
 	(e-question-suffix @1.72-1.86
-		(e-ident @1.72-1.85 (qaul "") (raw ".record_field"))))
+		(e-ident @1.72-1.85 (raw "record_field"))))
 ~~~
 # FORMATTED
 ~~~roc

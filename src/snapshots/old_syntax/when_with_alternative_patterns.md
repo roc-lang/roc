@@ -28,7 +28,7 @@ StringStart(6:2-6:3),StringPart(6:3-6:8),StringEnd(6:8-6:9),OpArrow(6:10-6:12),I
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.5 (qaul "") (raw "when"))
+(e-ident @1.1-1.5 (raw "when"))
 ~~~
 # FORMATTED
 ~~~roc

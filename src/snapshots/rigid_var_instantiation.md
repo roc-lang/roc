@@ -107,7 +107,7 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 			(e-lambda @5.12-5.17
 				(args
 					(p-ident @5.13-5.14 (raw "x")))
-				(e-ident @5.16-5.17 (qaul "") (raw "x"))))
+				(e-ident @5.16-5.17 (raw "x"))))
 		(s-decl @8.1-19.2
 			(p-ident @8.1-8.6 (raw "main!"))
 			(e-lambda @8.9-19.2
@@ -118,18 +118,18 @@ CloseCurly(19:1-19:2),EndOfFile(19:2-19:2),
 						(s-decl @10.5-10.23
 							(p-ident @10.5-10.8 (raw "num"))
 							(e-apply @10.11-10.23
-								(e-ident @10.11-10.19 (qaul "") (raw "identity"))
+								(e-ident @10.11-10.19 (raw "identity"))
 								(e-int @10.20-10.22 (raw "42"))))
 						(s-decl @13.5-13.28
 							(p-ident @13.5-13.8 (raw "str"))
 							(e-apply @13.11-13.28
-								(e-ident @13.11-13.19 (qaul "") (raw "identity"))
+								(e-ident @13.11-13.19 (raw "identity"))
 								(e-string @13.20-13.27
 									(e-string-part @13.21-13.26 (raw "hello")))))
 						(s-decl @16.5-16.30
 							(p-ident @16.5-16.8 (raw "lst"))
 							(e-apply @16.11-16.30
-								(e-ident @16.11-16.19 (qaul "") (raw "identity"))
+								(e-ident @16.11-16.19 (raw "identity"))
 								(e-list @16.20-16.29
 									(e-int @16.21-16.22 (raw "1"))
 									(e-int @16.24-16.25 (raw "2"))

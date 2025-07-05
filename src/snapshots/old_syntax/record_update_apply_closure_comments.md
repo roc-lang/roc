@@ -36,7 +36,7 @@ LowerIdent(3:2-3:3),OpArrow(3:3-3:5),Int(3:5-3:6),EndOfFile(3:6-3:6),
 ~~~clojure
 (e-block @1.1-2.4
 	(statements
-		(e-ident @2.1-2.2 (qaul "") (raw "h"))
+		(e-ident @2.1-2.2 (raw "h"))
 		(e-malformed @2.2-2.4 (reason "expr_unexpected_token"))))
 ~~~
 # FORMATTED
