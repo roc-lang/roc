@@ -1579,6 +1579,12 @@ pub fn canonicalize_expr(
         .record => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
+            // Canonicalize extension if present
+            var ext_expr: ?CIR.Expr.Idx = null;
+            if (e.ext) |ext_ast_idx| {
+                ext_expr = try self.canonicalize_expr(ext_ast_idx);
+            }
+
             const fields_slice = self.parse_ir.store.recordFieldSlice(e.fields);
             if (fields_slice.len == 0) {
                 const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
@@ -1652,6 +1658,7 @@ pub fn canonicalize_expr(
             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
                 .e_record = .{
                     .fields = fields_span,
+                    .ext = ext_expr,
                     .region = region,
                 },
             });

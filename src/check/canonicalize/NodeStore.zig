@@ -461,9 +461,19 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             };
         },
         .expr_record => {
+            const extra_start = node.data_1;
+            const extra_data = store.extra_data.items[extra_start..];
+
+            const fields_start = extra_data[0];
+            const fields_len = extra_data[1];
+            const ext_value = extra_data[2];
+
+            const ext = if (ext_value == 0) null else @as(CIR.Expr.Idx, @enumFromInt(ext_value));
+
             return CIR.Expr{
                 .e_record = .{
-                    .fields = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
+                    .fields = .{ .span = .{ .start = fields_start, .len = fields_len } },
+                    .ext = ext,
                     .region = node.region,
                 },
             };
@@ -1369,8 +1379,19 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
         .e_record => |e| {
             node.region = e.region;
             node.tag = .expr_record;
-            node.data_1 = e.fields.span.start;
-            node.data_2 = e.fields.span.len;
+
+            const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
+
+            // Store fields span start
+            store.extra_data.append(store.gpa, e.fields.span.start) catch |err| exitOnOom(err);
+            // Store fields span length
+            store.extra_data.append(store.gpa, e.fields.span.len) catch |err| exitOnOom(err);
+            // Store extension (0 if null)
+            const ext_value = if (e.ext) |ext| @intFromEnum(ext) else 0;
+            store.extra_data.append(store.gpa, ext_value) catch |err| exitOnOom(err);
+
+            node.data_1 = extra_data_start;
+            node.data_2 = 0; // Unused
         },
         .e_empty_record => |e| {
             node.region = e.region;

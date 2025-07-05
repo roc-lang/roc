@@ -234,6 +234,7 @@ test "NodeStore round trip - Expressions" {
     try expressions.append(CIR.Expr{
         .e_record = .{
             .fields = CIR.RecordField.Span{ .span = base.DataSpan.init(789, 1012) },
+            .ext = null,
             .region = from_raw_offsets(1567, 1890),
         },
     });

@@ -1748,6 +1748,33 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
                 const fields = self.store.recordFieldSpanFrom(scratch_top);
                 expr = self.store.addExpr(.{ .record = .{
                     .fields = fields,
+                    .ext = null,
+                    .region = .{ .start = start, .end = record_end },
+                } });
+            } else if (self.peekSkippingNewlines() == .DoubleDot) {
+                // Record is being extended
+
+                self.advance(); // consume DoubleDot
+
+                // Parse the extension
+                const ext_expr = self.parseExprWithBp(0);
+
+                // Expect comma after extension
+                if (self.peek() != .Comma) {
+                    return self.pushMalformed(AST.Expr.Idx, .expected_expr_close_curly_or_comma, self.pos);
+                }
+                self.advance(); // consume comma
+
+                // Parse the remaining fields
+                const scratch_top = self.store.scratchRecordFieldTop();
+                const record_end = self.parseCollectionSpan(AST.RecordField.Idx, .CloseCurly, NodeStore.addScratchRecordField, parseRecordField) catch {
+                    self.store.clearScratchRecordFieldsFrom(scratch_top);
+                    return self.pushMalformed(AST.Expr.Idx, .expected_expr_close_curly_or_comma, self.pos);
+                };
+                const fields = self.store.recordFieldSpanFrom(scratch_top);
+                expr = self.store.addExpr(.{ .record = .{
+                    .fields = fields,
+                    .ext = ext_expr,
                     .region = .{ .start = start, .end = record_end },
                 } });
             } else if (self.peekSkippingNewlines() == .LowerIdent and self.peekNext() == .Comma) {
@@ -1760,6 +1787,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
                 const fields = self.store.recordFieldSpanFrom(scratch_top);
                 expr = self.store.addExpr(.{ .record = .{
                     .fields = fields,
+                    .ext = null,
                     .region = .{ .start = start, .end = record_end },
                 } });
             } else if (self.peekSkippingNewlines() == .LowerIdent and self.peekNext() == .OpColon) {
@@ -1866,6 +1894,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
                     const fields = self.store.recordFieldSpanFrom(scratch_top);
                     expr = self.store.addExpr(.{ .record = .{
                         .fields = fields,
+                        .ext = null,
                         .region = .{ .start = start, .end = record_end },
                     } });
                 }

@@ -545,6 +545,11 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) AST.Expr.Idx {
             node.region = r.region;
             node.data.lhs = r.fields.span.start;
             node.data.rhs = r.fields.span.len;
+            if (r.ext) |ext| {
+                const ext_ed_idx = store.extra_data.items.len;
+                store.extra_data.append(store.gpa, @intFromEnum(ext)) catch |err| exitOnOom(err);
+                node.main_token = @as(u32, @intCast(ext_ed_idx));
+            }
         },
         .lambda => |l| {
             node.tag = .lambda;
@@ -1330,6 +1335,7 @@ pub fn getExpr(store: *NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
                     .start = node.data.lhs,
                     .len = node.data.rhs,
                 } },
+                .ext = if (node.main_token > 0) @enumFromInt(store.extra_data.items[node.main_token]) else null,
                 .region = node.region,
             } };
         },

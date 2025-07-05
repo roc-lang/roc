@@ -1770,6 +1770,8 @@ pub const Expr = union(enum) {
     },
     record: struct {
         fields: RecordField.Span,
+        /// Record extension: { ..person, field: value }
+        ext: ?Expr.Idx,
         region: TokenizedRegion,
     },
     tag: struct {
@@ -1984,6 +1986,14 @@ pub const Expr = union(enum) {
                 var node = SExpr.init(env.gpa, "e-record");
 
                 ast.appendRegionInfoToSexprNode(env, &node, a.region);
+
+                // Add extension if present
+                if (a.ext) |ext_idx| {
+                    var ext_wrapper = SExpr.init(env.gpa, "ext");
+                    var ext_node = ast.store.getExpr(ext_idx).toSExpr(env, ast);
+                    ext_wrapper.appendNode(env.gpa, &ext_node);
+                    node.appendNode(env.gpa, &ext_wrapper);
+                }
 
                 for (ast.store.recordFieldSlice(a.fields)) |field_idx| {
                     const record_field = ast.store.getRecordField(field_idx);
