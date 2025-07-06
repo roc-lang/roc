@@ -91,7 +91,7 @@ pub fn instantiateVar(
     const instantiated_var = try instantiate.instantiateVarWithSubst(self.types, var_to_instantiate, &self.instantiate_subs);
 
     // If we had to insert any new type variables, ensure that we
-    // have corrosponding CIR nodes for them. This is essential for
+    // have corresponding CIR nodes for them. This is essential for
     // error reporting
     if (self.instantiate_subs.count() > 0) {
         var cur_max: Var = @enumFromInt(0);
@@ -407,7 +407,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             // 4. If successful, instantiate the root nominal var, then unify it
             //    against the root expr var. (the root expr var should be flex)
             //
-            // We have to do these instantaites to avoid propogating `.err`
+            // We have to do all this instantiating to avoid propagating `.err`
             // types across the module in the event of failure
 
             const expr_var = CIR.varFrom(expr_idx);

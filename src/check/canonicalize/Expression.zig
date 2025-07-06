@@ -717,7 +717,7 @@ pub const Expr = union(enum) {
                 var node = SExpr.init(gpa, "e-nominal");
                 ir.appendRegionInfoToSexprNodeFromRegion(&node, nominal_expr.region);
 
-                // Add qualifer
+                // Add nominal type name
                 const stmt = ir.store.getStatement(nominal_expr.nominal_type_decl);
                 std.debug.assert(stmt == .s_nominal_decl);
                 const decl = stmt.s_nominal_decl;

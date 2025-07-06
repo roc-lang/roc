@@ -417,7 +417,7 @@ pub fn canonicalizeFile(
                 // Set the root type variable
                 _ = self.can_ir.setTypeVarAtStmt(type_decl_stmt_idx, type_decl_content);
 
-                // Next, insert vars immediatly after the alias/nominal type
+                // Next, insert vars immediately after the alias/nominal type
                 // The sequence here is *important*!
                 // Alias/nominal types, where N=root_type_var, expect:
                 // N+1 = backing type var (ie rhs of expr)
@@ -1094,9 +1094,13 @@ pub fn canonicalizeExpr(
                         },
                     });
 
-                    // Insert flex type variable
-                    // TODO: Set type to be tag union
-                    _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
+                    // Create a single tag, open tag union for this variable
+                    const ext_var = self.can_ir.pushFreshTypeVar(CIR.nodeIdxFrom(expr_idx), region) catch |err| exitOnOom(err);
+                    const tag_union = self.can_ir.env.types.mkTagUnion(
+                        &[_]Tag{Tag{ .name = tag_name, .args = types.Var.SafeList.Range.empty }},
+                        ext_var,
+                    );
+                    _ = self.can_ir.setTypeVarAtExpr(expr_idx, tag_union);
 
                     return expr_idx;
                 } else {
@@ -1597,7 +1601,7 @@ pub fn canonicalizeExpr(
                     const last_tok_ident, const last_tok_region = self.parse_ir.tokens.resolveIdentifierAndRegion(last_tok_idx) orelse {
                         const feature = self.can_ir.env.strings.insert(
                             self.can_ir.env.gpa,
-                            "tag qualifer token is not an ident",
+                            "tag qualifier token is not an ident",
                         );
                         return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
                             .feature = feature,

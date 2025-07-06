@@ -1617,7 +1617,7 @@ expect {
 		(patt @35.1-35.4 (type "Bool -> Num(*)"))
 		(patt @38.1-38.4 (type "Bool -> Error"))
 		(patt @49.1-49.3 (type "Error"))
-		(patt @75.1-75.3 (type "* -> *"))
+		(patt @75.1-75.3 (type "* -> [Stdo!]*"))
 		(patt @114.1-114.2 (type "{}")))
 	(type_decls
 		(alias @13.1-13.33 (type "Map(a, b)")
@@ -1649,6 +1649,6 @@ expect {
 		(expr @35.7-37.4 (type "Bool -> Num(*)"))
 		(expr @38.7-47.2 (type "Bool -> Error"))
 		(expr @49.6-69.3 (type "Error"))
-		(expr @75.5-111.2 (type "* -> *"))
+		(expr @75.5-111.2 (type "* -> [Stdo!]*"))
 		(expr @114.5-114.7 (type "{}"))))
 ~~~
