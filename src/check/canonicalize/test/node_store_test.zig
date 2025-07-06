@@ -787,10 +787,24 @@ test "NodeStore round trip - Pattern" {
         },
     });
 
-    // Test the round-trip for all patterns
-    for (patterns.items, 0..) |pattern, i| {
-        // Create a unique region for each pattern
-        const region = from_raw_offsets(@intCast(10 + i * 20), @intCast(20 + i * 20));
+    // Test the round-trip for all patterns with their original regions
+    const regions = [_]base.Region{
+        from_raw_offsets(10, 20), // assign
+        from_raw_offsets(30, 40), // as
+        from_raw_offsets(50, 60), // applied_tag
+        from_raw_offsets(70, 80), // record_destructure
+        from_raw_offsets(90, 100), // list
+        from_raw_offsets(110, 120), // tuple
+        from_raw_offsets(130, 140), // int_literal
+        from_raw_offsets(150, 160), // small_dec_literal
+        from_raw_offsets(170, 180), // dec_literal
+        from_raw_offsets(210, 220), // str_literal
+        from_raw_offsets(230, 240), // char_literal
+        from_raw_offsets(250, 260), // underscore
+        from_raw_offsets(270, 280), // runtime_error
+    };
+
+    for (patterns.items, regions) |pattern, region| {
         const idx = try store.addPattern(pattern, region);
         const retrieved = store.getPattern(idx);
 
