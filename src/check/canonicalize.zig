@@ -2157,7 +2157,7 @@ fn canonicalizePattern(
                 switch (self.scopeIntroduceInternal(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, ident_idx, assign_idx, false, true)) {
                     .success => {},
                     .shadowing_warning => |shadowed_pattern_idx| {
-                        const original_region = self.can_ir.store.getRegionAt(@enumFromInt(@intFromEnum(shadowed_pattern_idx)));
+                        const original_region = self.can_ir.store.getPatternRegion(shadowed_pattern_idx);
                         self.can_ir.pushDiagnostic(CIR.Diagnostic{ .shadowing_warning = .{
                             .ident = ident_idx,
                             .region = region,
@@ -2422,7 +2422,7 @@ fn canonicalizePattern(
                     switch (self.scopeIntroduceInternal(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, field_name_ident, assign_pattern_idx, false, true)) {
                         .success => {},
                         .shadowing_warning => |shadowed_pattern_idx| {
-                            const original_region = self.can_ir.store.getRegionAt(@enumFromInt(@intFromEnum(shadowed_pattern_idx)));
+                            const original_region = self.can_ir.store.getPatternRegion(shadowed_pattern_idx);
                             self.can_ir.pushDiagnostic(CIR.Diagnostic{ .shadowing_warning = .{
                                 .ident = field_name_ident,
                                 .region = field_region,
@@ -2563,7 +2563,7 @@ fn canonicalizePattern(
                             switch (self.scopeIntroduceInternal(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, ident_idx, assign_idx, false, true)) {
                                 .success => {},
                                 .shadowing_warning => |shadowed_pattern_idx| {
-                                    const original_region = self.can_ir.store.getRegionAt(@enumFromInt(@intFromEnum(shadowed_pattern_idx)));
+                                    const original_region = self.can_ir.store.getPatternRegion(shadowed_pattern_idx);
                                     self.can_ir.pushDiagnostic(CIR.Diagnostic{ .shadowing_warning = .{
                                         .ident = ident_idx,
                                         .region = name_region,
@@ -3006,7 +3006,7 @@ fn scopeIntroduceIdent(
             return pattern_idx;
         },
         .shadowing_warning => |shadowed_pattern_idx| {
-            const original_region = self.can_ir.store.getRegionAt(@enumFromInt(@intFromEnum(shadowed_pattern_idx)));
+            const original_region = self.can_ir.store.getPatternRegion(shadowed_pattern_idx);
             self.can_ir.pushDiagnostic(CIR.Diagnostic{ .shadowing_warning = .{
                 .ident = ident_idx,
                 .region = region,
@@ -3049,7 +3049,7 @@ fn scopeIntroduceVar(
             return pattern_idx;
         },
         .shadowing_warning => |shadowed_pattern_idx| {
-            const original_region = self.can_ir.store.getRegionAt(@enumFromInt(@intFromEnum(shadowed_pattern_idx)));
+            const original_region = self.can_ir.store.getPatternRegion(shadowed_pattern_idx);
             self.can_ir.pushDiagnostic(CIR.Diagnostic{ .shadowing_warning = .{
                 .ident = ident_idx,
                 .region = region,
@@ -4179,7 +4179,7 @@ fn checkScopeForUnusedVariables(self: *Self, scope: *const Scope) void {
         }
 
         // Get the region for this pattern to provide good error location
-        const region = self.can_ir.store.getRegionAt(@enumFromInt(@intFromEnum(pattern_idx)));
+        const region = self.can_ir.store.getPatternRegion(pattern_idx);
 
         // Report unused variable
         self.can_ir.pushDiagnostic(CIR.Diagnostic{ .unused_variable = .{

@@ -143,6 +143,12 @@ pub fn getRegionAt(store: *const NodeStore, node_idx: Node.Idx) Region {
     return store.regions.get(idx).*;
 }
 
+/// Helper function to get a region by pattern index
+pub fn getPatternRegion(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) Region {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(pattern_idx));
+    return store.getRegionAt(node_idx);
+}
+
 /// Retrieves a region from node from the store.
 pub fn getNodeRegion(store: *const NodeStore, node_idx: Node.Idx) Region {
     return store.getRegionAt(node_idx);
