@@ -57,10 +57,7 @@ pub const TypeAnno = union(enum) {
     /// Tuple type: a fixed-size collection of heterogeneous types.
     ///
     /// Examples: `(Str, U64)`, `(a, b, c)`
-    tuple: struct {
-        annos: TypeAnno.Span, // The types of each tuple element
-        region: Region,
-    },
+    tuple: Tuple,
     /// Record type: a collection of named fields with their types.
     ///
     /// Examples: `{ name: Str, age: U64 }`, `{ x: F64, y: F64 }`
@@ -148,7 +145,7 @@ pub const TypeAnno = union(enum) {
                     node.appendNode(gpa, &tag_node);
                 }
 
-                if (tu.open_anno) |open_idx| {
+                if (tu.ext) |open_idx| {
                     const open_anno = ir.store.getTypeAnno(open_idx);
                     var open_node = open_anno.toSExpr(ir);
                     node.appendNode(gpa, &open_node);
@@ -160,7 +157,7 @@ pub const TypeAnno = union(enum) {
                 var node = SExpr.init(gpa, "ty-tuple");
                 ir.appendRegionInfoToSexprNodeFromRegion(&node, tup.region);
 
-                const annos_slice = ir.store.sliceTypeAnnos(tup.annos);
+                const annos_slice = ir.store.sliceTypeAnnos(tup.elems);
                 for (annos_slice) |anno_idx| {
                     const anno = ir.store.getTypeAnno(anno_idx);
                     var anno_node = anno.toSExpr(ir);
@@ -260,10 +257,16 @@ pub const TypeAnno = union(enum) {
         pub const Span = struct { span: DataSpan };
     };
 
-    /// A tag union in a type annotatino
+    /// A tag union in a type annotation
     pub const TagUnion = struct {
         tags: TypeAnno.Span, // The individual tags in the union
-        open_anno: ?TypeAnno.Idx, // Optional extension variable for open unions
+        ext: ?TypeAnno.Idx, // Optional extension variable for open unions
+        region: Region,
+    };
+
+    /// A tuple in a type annotation
+    pub const Tuple = struct {
+        elems: TypeAnno.Span, // The types of each tuple element
         region: Region,
     };
 };

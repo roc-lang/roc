@@ -354,12 +354,18 @@ pub fn canonicalizeFile(
                 };
 
                 // Creat type variables to the backing type (rhs)
-                const anno_var = try self.canonicalizeTypeAnnoToTypeVar(anno_idx, CIR.nodeIdxFrom(header_idx));
+                const anno_var = blk: {
+                    // Enter a new scope for backing annotation type
+                    self.scopeEnter(self.can_ir.env.gpa, false);
+                    defer self.scopeExit(self.can_ir.env.gpa) catch {};
+
+                    break :blk try self.canonicalizeTypeAnnoToTypeVar(anno_idx);
+                };
 
                 // Create types for each arg annotation
                 const scratch_anno_start = self.scratch_vars.items.len;
                 for (self.can_ir.store.sliceTypeAnnos(header.args)) |arg_anno_idx| {
-                    const arg_anno_var = try self.canonicalizeTypeAnnoToTypeVar(arg_anno_idx, CIR.nodeIdxFrom(header_idx));
+                    const arg_anno_var = try self.canonicalizeTypeAnnoToTypeVar(arg_anno_idx);
                     try self.scratch_vars.append(self.can_ir.env.gpa, arg_anno_var);
                 }
                 const arg_anno_slice = self.scratch_vars.items[scratch_anno_start..self.scratch_vars.items.len];
@@ -465,7 +471,7 @@ pub fn canonicalizeFile(
                                 // This declaration matches the type annotation
                                 const pattern_region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getPattern(decl.pattern).to_tokenized_region());
                                 const type_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), pattern_region) catch |err| exitOnOom(err);
-                                annotation_idx = try self.createAnnotationFromTypeAnno(anno_info.anno_idx, type_var, pattern_region, @enumFromInt(@intFromEnum(decl.pattern)));
+                                annotation_idx = try self.createAnnotationFromTypeAnno(anno_info.anno_idx, type_var, pattern_region);
 
                                 // Clear the annotation since we've used it
                                 last_type_anno = null;
@@ -3462,7 +3468,7 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.Id
 
             const annos = self.can_ir.store.typeAnnoSpanFrom(scratch_top);
             return self.can_ir.store.addTypeAnno(.{ .tuple = .{
-                .annos = annos,
+                .elems = annos,
                 .region = region,
             } });
         },
@@ -3533,14 +3539,14 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.Id
             const tags = self.can_ir.store.typeAnnoSpanFrom(scratch_top);
 
             // Handle optional open annotation (for extensible tag unions)
-            const open_anno = if (tag_union.open_anno) |open_idx|
+            const ext = if (tag_union.open_anno) |open_idx|
                 self.canonicalizeTypeAnno(open_idx)
             else
                 null;
 
             return self.can_ir.store.addTypeAnno(.{ .tag_union = .{
                 .tags = tags,
-                .open_anno = open_anno,
+                .ext = ext,
                 .region = region,
             } });
         },
@@ -4656,7 +4662,8 @@ fn extractModuleName(self: *Self, module_name_ident: Ident.Idx) Ident.Idx {
 }
 
 /// Convert a parsed TypeAnno into a canonical TypeVar with appropriate Content
-fn canonicalizeTypeAnnoToTypeVar(self: *Self, type_anno_idx: CIR.TypeAnno.Idx, parent_node_idx: Node.Idx) std.mem.Allocator.Error!TypeVar {
+fn canonicalizeTypeAnnoToTypeVar(self: *Self, type_anno_idx: CIR.TypeAnno.Idx) std.mem.Allocator.Error!TypeVar {
+    const type_anno_node_idx = CIR.nodeIdxFrom(type_anno_idx);
     const type_anno = self.can_ir.store.getTypeAnno(type_anno_idx);
     const region = type_anno.toRegion();
 
@@ -4669,16 +4676,17 @@ fn canonicalizeTypeAnnoToTypeVar(self: *Self, type_anno_idx: CIR.TypeAnno.Idx, p
             switch (scope.lookupTypeVar(ident_store, tv.name)) {
                 .found => |_| {
                     // Type variable already exists, create fresh var with same name
-                    return self.can_ir.pushTypeVar(.{ .flex_var = tv.name }, parent_node_idx, region) catch |err| exitOnOom(err);
+                    return try self.can_ir.pushTypeVar(.{ .flex_var = tv.name }, type_anno_node_idx, region);
                 },
                 .not_found => {
                     // Create fresh flex var and add to scope
-                    const fresh_var = self.can_ir.pushTypeVar(.{ .flex_var = tv.name }, parent_node_idx, region) catch |err| exitOnOom(err);
+                    const fresh_var = try self.can_ir.pushTypeVar(.{ .flex_var = tv.name }, type_anno_node_idx, region);
 
                     // Create a basic type annotation for the scope
                     const ty_var_anno = self.can_ir.store.addTypeAnno(.{ .ty_var = .{ .name = tv.name, .region = region } });
 
                     // Add to scope (simplified - ignoring result for now)
+                    // TODO: Handle scope result and possible error
                     _ = scope.introduceTypeVar(self.can_ir.env.gpa, ident_store, tv.name, ty_var_anno, null);
 
                     return fresh_var;
@@ -4687,46 +4695,52 @@ fn canonicalizeTypeAnnoToTypeVar(self: *Self, type_anno_idx: CIR.TypeAnno.Idx, p
         },
         .underscore => {
             // Create anonymous flex var
-            return self.can_ir.pushFreshTypeVar(parent_node_idx, region) catch |err| exitOnOom(err);
+            return try self.can_ir.pushFreshTypeVar(type_anno_node_idx, region);
         },
         .ty => |t| {
             // Look up built-in or user-defined type
-            return self.canonicalizeBasicType(t.symbol, parent_node_idx, region);
+            return self.canonicalizeBasicType(t.symbol, type_anno_node_idx, region);
         },
         .apply => |apply| {
             // Handle type application like List(String), Dict(a, b)
-            return try self.canonicalizeTypeApplication(apply, parent_node_idx, region);
+            return try self.canonicalizeTypeApplication(apply, type_anno_node_idx, region);
         },
         .@"fn" => |func| {
             // Create function type
-            return try self.canonicalizeFunctionType(func, parent_node_idx, region);
+            return try self.canonicalizeFunctionType(func, type_anno_node_idx, region);
         },
         .tuple => |tuple| {
-            // Create tuple type
-            return self.canonicalizeTupleType(tuple, parent_node_idx, region);
+            if (tuple.elems.span.len == 1) {
+                // Single element tuples are just parenthized exprs
+                const type_annos = self.can_ir.store.sliceTypeAnnos(tuple.elems);
+                return try self.canonicalizeTypeAnnoToTypeVar(type_annos[0]);
+            } else {
+                // Create tuple type
+                return self.canonicalizeTupleType(tuple, type_anno_node_idx, region);
+            }
         },
         .record => |record| {
             // Create record type
-            return try self.canonicalizeRecordType(record, parent_node_idx, region);
+            return try self.canonicalizeRecordType(record, type_anno_node_idx, region);
         },
         .tag_union => |tag_union| {
             // Create tag union type
-            return self.canonicalizeTagUnionType(tag_union, parent_node_idx, region);
+            return self.canonicalizeTagUnionType(tag_union, type_anno_node_idx, region);
         },
         .parens => |parens| {
             // Recursively canonicalize the inner type
-            return try self.canonicalizeTypeAnnoToTypeVar(parens.anno, parent_node_idx);
+            return try self.canonicalizeTypeAnnoToTypeVar(parens.anno);
         },
 
         .ty_lookup_external => |tle| {
             // For external type lookups, create a flexible type variable
             // This will be resolved later when dependencies are available
             const external_decl = self.can_ir.getExternalDecl(tle.external_decl);
-            return self.can_ir.pushTypeVar(.{ .flex_var = external_decl.qualified_name }, parent_node_idx, region) catch |err| exitOnOom(err);
+            return self.can_ir.pushTypeVar(.{ .flex_var = external_decl.qualified_name }, type_anno_node_idx, region) catch |err| exitOnOom(err);
         },
         .malformed => {
             // Return error type for malformed annotations
-            return self.can_ir.pushTypeVar(.err, parent_node_idx, region) catch |err| exitOnOom(err);
+            return self.can_ir.pushTypeVar(.err, type_anno_node_idx, region) catch |err| exitOnOom(err);
         },
     }
 }
@@ -4834,7 +4848,7 @@ fn canonicalizeTypeApplication(self: *Self, apply: anytype, parent_node_idx: Nod
 
         // Create type argument variables sequentially after backing var
         for (actual_args) |arg_idx| {
-            _ = try self.canonicalizeTypeAnnoToTypeVar(arg_idx, parent_node_idx);
+            _ = try self.canonicalizeTypeAnnoToTypeVar(arg_idx);
         }
 
         // Now set the alias content on the main variable
@@ -4877,12 +4891,12 @@ fn canonicalizeFunctionType(self: *Self, func: anytype, parent_node_idx: Node.Id
 
     // For each argument, canonicalize its type and collect the type var
     for (args_slice) |arg_anno_idx| {
-        const arg_type_var = try self.canonicalizeTypeAnnoToTypeVar(arg_anno_idx, parent_node_idx);
-        arg_vars.append(arg_type_var) catch |err| exitOnOom(err);
+        const arg_type_var = try self.canonicalizeTypeAnnoToTypeVar(arg_anno_idx);
+        try arg_vars.append(arg_type_var);
     }
 
     // Canonicalize return type
-    const ret_type_var = try self.canonicalizeTypeAnnoToTypeVar(func.ret, parent_node_idx);
+    const ret_type_var = try self.canonicalizeTypeAnnoToTypeVar(func.ret);
 
     // Create the appropriate function type based on effectfulness
     const func_content = if (func.effectful)
@@ -4899,13 +4913,27 @@ fn canonicalizeFunctionType(self: *Self, func: anytype, parent_node_idx: Node.Id
 }
 
 /// Handle tuple types like (a, b, c)
-fn canonicalizeTupleType(self: *Self, tuple: anytype, parent_node_idx: Node.Idx, region: Region) TypeVar {
+fn canonicalizeTupleType(self: *Self, tuple: CIR.TypeAnno.Tuple, parent_node_idx: Node.Idx, region: Region) std.mem.Allocator.Error!TypeVar {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    _ = tuple;
-    // Simplified implementation - create flex var for tuples
-    return self.can_ir.pushFreshTypeVar(parent_node_idx, region) catch |err| exitOnOom(err);
+    const scratch_elems_start = self.scratch_vars.items.len;
+    for (self.can_ir.store.sliceTypeAnnos(tuple.elems)) |tuple_elem_anno_idx| {
+        const elem_var = try self.canonicalizeTypeAnnoToTypeVar(tuple_elem_anno_idx);
+        _ = try self.scratch_vars.append(self.can_ir.env.gpa, elem_var);
+    }
+    const elem_vars_range = self.can_ir.env.types.appendTupleElems(
+        self.scratch_vars.items[scratch_elems_start..],
+    );
+
+    // Shink the scratch array to it's original size
+    self.scratch_vars.shrinkRetainingCapacity(scratch_elems_start);
+
+    return try self.can_ir.pushTypeVar(
+        .{ .structure = .{ .tuple = .{ .elems = elem_vars_range } } },
+        parent_node_idx,
+        region,
+    );
 }
 
 /// Handle record types like { name: Str, age: Num }
@@ -4922,7 +4950,7 @@ fn canonicalizeRecordType(self: *Self, record: anytype, parent_node_idx: Node.Id
         const field = self.can_ir.store.getAnnoRecordField(field_idx);
 
         // Canonicalize the field's type annotation
-        const field_type_var = try self.canonicalizeTypeAnnoToTypeVar(field.ty, parent_node_idx);
+        const field_type_var = try self.canonicalizeTypeAnnoToTypeVar(field.ty);
 
         type_record_fields.append(types.RecordField{
             .name = field.name,
@@ -4983,8 +5011,8 @@ fn canonicalizeTagUnionType(self: *Self, tag_union: CIR.TypeAnno.TagUnion, paren
 
     // Get the tag union ext
     const tag_union_ext = blk: {
-        if (tag_union.open_anno) |open_anno_idx| {
-            break :blk self.canonicalizeTypeAnnoToTypeVar(open_anno_idx, CIR.nodeIdxFrom(open_anno_idx));
+        if (tag_union.ext) |ext_anno_idx| {
+            break :blk self.canonicalizeTypeAnnoToTypeVar(ext_anno_idx);
         } else {
             break :blk self.can_ir.pushTypeVar(Content{ .structure = .empty_tag_union }, parent_node_idx, region);
         }
@@ -5001,12 +5029,12 @@ fn canonicalizeTagUnionType(self: *Self, tag_union: CIR.TypeAnno.TagUnion, paren
 
 /// Handle module-qualified types like Json.Decoder
 /// Create an annotation from a type annotation
-fn createAnnotationFromTypeAnno(self: *Self, type_anno_idx: CIR.TypeAnno.Idx, _: TypeVar, region: Region, parent_node_idx: Node.Idx) std.mem.Allocator.Error!?CIR.Annotation.Idx {
+fn createAnnotationFromTypeAnno(self: *Self, type_anno_idx: CIR.TypeAnno.Idx, _: TypeVar, region: Region) std.mem.Allocator.Error!?CIR.Annotation.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     // Convert the type annotation to a type variable
-    const signature = try self.canonicalizeTypeAnnoToTypeVar(type_anno_idx, parent_node_idx);
+    const signature = try self.canonicalizeTypeAnnoToTypeVar(type_anno_idx);
 
     // Create the annotation structure
     const annotation = CIR.Annotation{

@@ -943,11 +943,11 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
         } },
         .ty_tag_union => return CIR.TypeAnno{ .tag_union = .{
             .tags = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
-            .open_anno = if (node.data_3 != 0) @enumFromInt(node.data_3) else null,
+            .ext = if (node.data_3 != 0) @enumFromInt(node.data_3) else null,
             .region = store.getRegionAt(node_idx),
         } },
         .ty_tuple => return CIR.TypeAnno{ .tuple = .{
-            .annos = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
+            .elems = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
             .region = store.getRegionAt(node_idx),
         } },
         .ty_record => return CIR.TypeAnno{ .record = .{
@@ -1783,13 +1783,13 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno) CIR.TypeAnno.Idx {
             region = tu.region;
             node.data_1 = tu.tags.span.start;
             node.data_2 = tu.tags.span.len;
-            node.data_3 = if (tu.open_anno) |open| @intFromEnum(open) else 0;
+            node.data_3 = if (tu.ext) |open| @intFromEnum(open) else 0;
             node.tag = .ty_tag_union;
         },
         .tuple => |t| {
             region = t.region;
-            node.data_1 = t.annos.span.start;
-            node.data_2 = t.annos.span.len;
+            node.data_1 = t.elems.span.start;
+            node.data_2 = t.elems.span.len;
             node.tag = .ty_tuple;
         },
         .record => |r| {

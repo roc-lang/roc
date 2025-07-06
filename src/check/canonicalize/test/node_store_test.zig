@@ -629,14 +629,14 @@ test "NodeStore round trip - TypeAnno" {
     try type_annos.append(CIR.TypeAnno{
         .tag_union = .{
             .tags = CIR.TypeAnno.Span{ .span = base.DataSpan.init(678, 890) },
-            .open_anno = @enumFromInt(901),
+            .ext = @enumFromInt(901),
             .region = from_raw_offsets(110, 120),
         },
     });
 
     try type_annos.append(CIR.TypeAnno{
         .tuple = .{
-            .annos = CIR.TypeAnno.Span{ .span = base.DataSpan.init(1012, 1234) },
+            .elems = CIR.TypeAnno.Span{ .span = base.DataSpan.init(1012, 1234) },
             .region = from_raw_offsets(130, 140),
         },
     });
