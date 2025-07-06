@@ -131,7 +131,7 @@ pub fn pushMalformed(self: *CIR, comptime t: type, reason: CIR.Diagnostic) t {
 pub fn getDiagnostics(self: *CIR) []CIR.Diagnostic {
     const all = self.store.diagnosticSpanFrom(0);
 
-    var list = std.ArrayList(CIR.Diagnostic).init(self.env.gpa);
+    var list = std.ArrayList(CIR.Diagnostic).init(self.store.gpa);
 
     for (self.store.sliceDiagnostics(all)) |idx| {
         list.append(self.store.getDiagnostic(idx)) catch |err| exitOnOom(err);

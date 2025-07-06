@@ -32,6 +32,8 @@ scratch_vars: std.ArrayListUnmanaged(TypeVar),
 scratch_idents: std.ArrayListUnmanaged(Ident.Idx),
 /// Scratch ident
 scratch_record_fields: std.ArrayListUnmanaged(types.RecordField),
+/// Scratch ident
+scratch_seen_record_fields: std.ArrayListUnmanaged(SeenRecordField),
 
 const Ident = base.Ident;
 const Region = base.Region;
@@ -46,6 +48,9 @@ const FlatType = types.FlatType;
 const Num = types.Num;
 const TagUnion = types.TagUnion;
 const Tag = types.Tag;
+
+/// Struct to track fields that have been seen before during canonicalization
+const SeenRecordField = struct { ident: base.Ident.Idx, region: base.Region };
 
 /// The idx of the builtin Bool
 pub const BUILTIN_BOOL: CIR.Pattern.Idx = @enumFromInt(0);
@@ -93,6 +98,7 @@ pub fn deinit(
     self.scratch_vars.deinit(gpa);
     self.scratch_idents.deinit(gpa);
     self.scratch_record_fields.deinit(gpa);
+    self.scratch_seen_record_fields.deinit(gpa);
 }
 
 pub fn init(self: *CIR, parse_ir: *AST) std.mem.Allocator.Error!Self {
@@ -110,6 +116,7 @@ pub fn init(self: *CIR, parse_ir: *AST) std.mem.Allocator.Error!Self {
         .scratch_vars = std.ArrayListUnmanaged(TypeVar){},
         .scratch_idents = std.ArrayListUnmanaged(Ident.Idx){},
         .scratch_record_fields = std.ArrayListUnmanaged(types.RecordField){},
+        .scratch_seen_record_fields = std.ArrayListUnmanaged(SeenRecordField){},
     };
 
     // Top-level scope is not a function boundary
@@ -580,7 +587,7 @@ pub fn canonicalizeFile(
                         });
                         self.scopeIntroduceTypeVar(type_var, dummy_anno);
                     }
-                    // Reset the scratch vars list to the original size
+                    // Shrink the scratch vars list to the original size
                     self.scratch_idents.shrinkRetainingCapacity(type_vars_top);
                 }
 
@@ -1770,9 +1777,7 @@ pub fn canonicalizeExpr(
             const scratch_top = self.can_ir.store.scratch_record_fields.top();
 
             // Track field names to detect duplicates
-            const FieldInfo = struct { ident: base.Ident.Idx, region: base.Region };
-            var seen_fields = std.ArrayListUnmanaged(FieldInfo){};
-            defer seen_fields.deinit(self.can_ir.env.gpa);
+            const seen_fields_top = self.scratch_seen_record_fields.items.len;
 
             // Iterate over the record fields, canonicalizing each one
             // Then append the result to the scratch list
@@ -1785,7 +1790,7 @@ pub fn canonicalizeExpr(
 
                     // Check for duplicate field names
                     var found_duplicate = false;
-                    for (seen_fields.items) |seen_field| {
+                    for (self.scratch_seen_record_fields.items[seen_fields_top..]) |seen_field| {
                         if (self.can_ir.env.idents.identsHaveSameText(field_name_ident, seen_field.ident)) {
                             // Found a duplicate - add diagnostic
                             const diagnostic = CIR.Diagnostic{
@@ -1803,15 +1808,17 @@ pub fn canonicalizeExpr(
 
                     if (!found_duplicate) {
                         // First occurrence of this field name
-                        seen_fields.append(self.can_ir.env.gpa, FieldInfo{
+                        try self.scratch_seen_record_fields.append(self.can_ir.env.gpa, SeenRecordField{
                             .ident = field_name_ident,
                             .region = field_name_region,
-                        }) catch |err| exitOnOom(err);
+                        });
 
                         // Only canonicalize and include non-duplicate fields
                         if (try self.canonicalizeRecordField(field)) |canonicalized| {
                             self.can_ir.store.scratch_record_fields.append(self.can_ir.env.gpa, canonicalized);
                         }
+                    } else {
+                        // TODO: Add diagnostic on duplicate record field
                     }
                 } else {
                     // Field name couldn't be resolved, still try to canonicalize
@@ -1820,6 +1827,9 @@ pub fn canonicalizeExpr(
                     }
                 }
             }
+
+            // Shink the scratch array to it's original size
+            self.scratch_seen_record_fields.shrinkRetainingCapacity(seen_fields_top);
 
             // Create span of the new scratch record fields
             const fields_span = self.can_ir.store.recordFieldSpanFrom(scratch_top);
@@ -1836,20 +1846,23 @@ pub fn canonicalizeExpr(
             const cir_fields = self.can_ir.store.sliceRecordFields(fields_span);
 
             // Create fresh type variables for each field
-            var type_record_fields = std.ArrayList(types.RecordField).init(self.can_ir.env.gpa);
-            defer type_record_fields.deinit();
+            const record_fields_top = self.scratch_record_fields.items.len;
 
             for (cir_fields) |cir_field_idx| {
                 const cir_field = self.can_ir.store.getRecordField(cir_field_idx);
-
-                type_record_fields.append(types.RecordField{
+                try self.scratch_record_fields.append(self.can_ir.env.gpa, types.RecordField{
                     .name = cir_field.name,
                     .var_ = @enumFromInt(@intFromEnum(cir_field.value)),
-                }) catch |err| exitOnOom(err);
+                });
             }
 
             // Create the record type structure
-            const type_fields_range = self.can_ir.env.types.appendRecordFields(type_record_fields.items);
+            const type_fields_range = self.can_ir.env.types.appendRecordFields(
+                self.scratch_record_fields.items[record_fields_top..],
+            );
+
+            // Shink the scratch array to it's original size
+            self.scratch_record_fields.shrinkRetainingCapacity(record_fields_top);
 
             _ = self.can_ir.setTypeVarAtExpr(
                 expr_idx,
@@ -3847,7 +3860,7 @@ pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.A
                     } });
                     self.scopeIntroduceTypeVar(type_var, type_var_anno);
                 }
-                // Reset the scratch vars list to the original size
+                // Shrink the scratch vars list to the original size
                 self.scratch_idents.shrinkRetainingCapacity(type_vars_top);
             }
 
@@ -4298,6 +4311,7 @@ fn scopeIntroduceInternal(
 }
 
 /// Get all identifiers in scope
+/// TODO: Is this used? If so, we should update to use `self.scratch_idents`
 fn scopeAllIdents(self: *const Self, gpa: std.mem.Allocator, comptime item_kind: Scope.ItemKind) []base.Ident.Idx {
     var result = std.ArrayList(base.Ident.Idx).init(gpa);
 
@@ -4896,29 +4910,31 @@ fn canonicalizeFunctionType(self: *Self, func: CIR.TypeAnno.Func, parent_node_id
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const gpa = self.can_ir.env.gpa;
-
     // Canonicalize argument types and return type
     const args_slice = self.can_ir.store.sliceTypeAnnos(func.args);
 
     // Collect canonicalized argument type variables
-    var arg_vars = std.ArrayList(types.Var).init(gpa);
-    defer arg_vars.deinit();
 
     // For each argument, canonicalize its type and collect the type var
+    const arg_vars_top = self.scratch_vars.items.len;
     for (args_slice) |arg_anno_idx| {
         const arg_type_var = try self.canonicalizeTypeAnnoToTypeVar(arg_anno_idx);
-        try arg_vars.append(arg_type_var);
+        try self.scratch_vars.append(self.can_ir.env.gpa, arg_type_var);
     }
+    const arg_vars_end = self.scratch_vars.items.len;
 
     // Canonicalize return type
     const ret_type_var = try self.canonicalizeTypeAnnoToTypeVar(func.ret);
 
     // Create the appropriate function type based on effectfulness
+    const arg_vars = self.scratch_vars.items[arg_vars_top..arg_vars_end];
     const func_content = if (func.effectful)
-        self.can_ir.env.types.mkFuncEffectful(arg_vars.items, ret_type_var)
+        self.can_ir.env.types.mkFuncEffectful(arg_vars, ret_type_var)
     else
-        self.can_ir.env.types.mkFuncPure(arg_vars.items, ret_type_var);
+        self.can_ir.env.types.mkFuncPure(arg_vars, ret_type_var);
+
+    // Shink the scratch array to it's original size
+    self.scratch_vars.shrinkRetainingCapacity(arg_vars_top);
 
     // Create and return the function type variable
     return self.can_ir.pushTypeVar(
@@ -4959,8 +4975,7 @@ fn canonicalizeRecordType(self: *Self, record: CIR.TypeAnno.Record, parent_node_
     defer trace.end();
 
     // Create fresh type variables for each field
-    var type_record_fields = std.ArrayList(types.RecordField).init(self.can_ir.env.gpa);
-    defer type_record_fields.deinit();
+    const record_fields_top = self.scratch_record_fields.items.len;
 
     // Process each field in the record type annotation
     for (self.can_ir.store.sliceAnnoRecordFields(record.fields)) |field_idx| {
@@ -4969,15 +4984,18 @@ fn canonicalizeRecordType(self: *Self, record: CIR.TypeAnno.Record, parent_node_
         // Canonicalize the field's type annotation
         const field_type_var = try self.canonicalizeTypeAnnoToTypeVar(field.ty);
 
-        type_record_fields.append(types.RecordField{
+        try self.scratch_record_fields.append(self.can_ir.env.gpa, types.RecordField{
             .name = field.name,
             .var_ = field_type_var,
-        }) catch |err| exitOnOom(err);
+        });
     }
 
     // Create the record type structure
-    const type_fields_range = self.can_ir.env.types.appendRecordFields(type_record_fields.items);
+    const type_fields_range = self.can_ir.env.types.appendRecordFields(self.scratch_record_fields.items[record_fields_top..]);
     const ext_var = self.can_ir.pushTypeVar(.{ .structure = .empty_record }, parent_node_idx, region) catch |err| exitOnOom(err);
+
+    // Shink the scratch array to it's original size
+    self.scratch_record_fields.shrinkRetainingCapacity(record_fields_top);
 
     return self.can_ir.pushTypeVar(
         .{ .structure = .{ .record = .{ .fields = type_fields_range, .ext = ext_var } } },
