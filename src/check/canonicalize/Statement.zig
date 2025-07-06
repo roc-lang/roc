@@ -163,7 +163,7 @@ pub const Statement = union(enum) {
                 var node = SExpr.init(gpa, "s-let");
                 ir.appendRegionInfoToSexprNodeFromRegion(&node, d.region);
 
-                var pattern_node = ir.store.getPattern(d.pattern).toSExpr(ir);
+                var pattern_node = ir.store.getPattern(d.pattern).toSExpr(ir, d.pattern);
                 node.appendNode(gpa, &pattern_node);
 
                 var expr_node = ir.store.getExpr(d.expr).toSExpr(ir);
@@ -175,7 +175,7 @@ pub const Statement = union(enum) {
                 var node = SExpr.init(gpa, "s-var");
                 ir.appendRegionInfoToSexprNodeFromRegion(&node, v.region);
 
-                var pattern_node = ir.store.getPattern(v.pattern_idx).toSExpr(ir);
+                var pattern_node = ir.store.getPattern(v.pattern_idx).toSExpr(ir, v.pattern_idx);
                 node.appendNode(gpa, &pattern_node);
 
                 var expr_node = ir.store.getExpr(v.expr).toSExpr(ir);
@@ -187,7 +187,7 @@ pub const Statement = union(enum) {
                 var node = SExpr.init(gpa, "s-reassign");
                 ir.appendRegionInfoToSexprNodeFromRegion(&node, r.region);
 
-                var pattern_node = ir.store.getPattern(r.pattern_idx).toSExpr(ir);
+                var pattern_node = ir.store.getPattern(r.pattern_idx).toSExpr(ir, r.pattern_idx);
                 node.appendNode(gpa, &pattern_node);
 
                 var expr_node = ir.store.getExpr(r.expr).toSExpr(ir);
@@ -223,7 +223,7 @@ pub const Statement = union(enum) {
                 var node = SExpr.init(gpa, "s-for");
                 ir.appendRegionInfoToSexprNodeFromRegion(&node, s.region);
 
-                var pattern_node = ir.store.getPattern(s.patt).toSExpr(ir);
+                var pattern_node = ir.store.getPattern(s.patt).toSExpr(ir, s.patt);
                 node.appendNode(gpa, &pattern_node);
 
                 var expr_node = ir.store.getExpr(s.expr).toSExpr(ir);

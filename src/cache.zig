@@ -284,10 +284,11 @@ test "NodeStore cache round-trip" {
         .data_1 = 42,
         .data_2 = 100,
         .data_3 = 200,
-        .region = .{ .start = .{ .offset = 0 }, .end = .{ .offset = 10 } },
         .tag = .expr_string,
     };
     const expr_idx = store.nodes.append(store.gpa, expr_node);
+    const region = base.Region{ .start = .{ .offset = 0 }, .end = .{ .offset = 10 } };
+    _ = store.regions.append(store.gpa, region);
 
     try store.extra_data.append(store.gpa, 1234);
     try store.extra_data.append(store.gpa, 5678);

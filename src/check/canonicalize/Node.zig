@@ -12,7 +12,6 @@ const collections = @import("../../collections.zig");
 data_1: u32,
 data_2: u32,
 data_3: u32,
-region: base.Region,
 tag: Tag,
 
 /// A list of nodes.

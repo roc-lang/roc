@@ -466,8 +466,8 @@ fn formatPatternIdxNode(gpa: std.mem.Allocator, pattern_idx: Pattern.Idx) SExpr 
     return node;
 }
 
-test "Node is 24 bytes" {
-    try testing.expectEqual(24, @sizeOf(Node));
+test "Node is 16 bytes" {
+    try testing.expectEqual(16, @sizeOf(Node));
 }
 
 /// A working representation of a record field
@@ -710,7 +710,7 @@ pub const Def = struct {
 
         var node = SExpr.init(gpa, kind);
 
-        var pattern_node = ir.store.getPattern(self.pattern).toSExpr(ir);
+        var pattern_node = ir.store.getPattern(self.pattern).toSExpr(ir, self.pattern);
         node.appendNode(gpa, &pattern_node);
 
         var expr_node = ir.store.getExpr(self.expr).toSExpr(ir);
@@ -1075,10 +1075,10 @@ pub fn toSexprTypes(ir: *CIR, maybe_expr_idx: ?Expr.Idx, source: []const u8) SEx
             // Extract identifier name from the pattern (assuming it's an assign pattern)
             const pattern = ir.store.getPattern(def.pattern);
             switch (pattern) {
-                .assign => |assign_pat| {
+                .assign => |_| {
                     var def_node = SExpr.init(gpa, "patt");
 
-                    ir.appendRegionInfoToSexprNodeFromRegion(&def_node, assign_pat.region);
+                    ir.appendRegionInfoToSexprNode(&def_node, def_idx);
 
                     // Get the type variable for this definition
                     // Each definition has a type_var at its node index which represents the type of the definition
