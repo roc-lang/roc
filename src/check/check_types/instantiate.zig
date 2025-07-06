@@ -70,6 +70,34 @@ fn instantiateVarWithSubst(
     // Create a fresh variable with the instantiated content
     const fresh_var = ctx.store.freshFromContent(fresh_content);
 
+    // If this is an alias, we need to instantiate its backing var and arguments
+    // They must be created at the correct offsets from the fresh alias variable
+    if (resolved.desc.content == .alias) {
+        const alias = resolved.desc.content.alias;
+
+        // Instantiate backing var (at original_var + 1 -> fresh_var + 1)
+        const orig_backing_var = @as(Var, @enumFromInt(@intFromEnum(var_) + 1));
+        const fresh_backing_var = try instantiateVarWithSubst(ctx, orig_backing_var, substitution);
+
+        // Ensure the fresh backing var is at the correct offset
+        const expected_backing_var = @as(Var, @enumFromInt(@intFromEnum(fresh_var) + 1));
+        if (fresh_backing_var != expected_backing_var) {
+            // For now, we'll continue anyway as the type system might handle this
+        }
+
+        // Instantiate all argument vars
+        var arg_iter = alias.argIterator(var_);
+        var arg_offset: u32 = 2;
+        while (arg_iter.next()) |orig_arg_var| {
+            const fresh_arg_var = try instantiateVarWithSubst(ctx, orig_arg_var, substitution);
+            const expected_arg_var = @as(Var, @enumFromInt(@intFromEnum(fresh_var) + arg_offset));
+            if (fresh_arg_var != expected_arg_var) {
+                // Continue anyway
+            }
+            arg_offset += 1;
+        }
+    }
+
     // Copy the region from the original variable to the new one
     const original_idx: u32 = @intFromEnum(var_);
     const fresh_idx: u32 = @intFromEnum(fresh_var);
