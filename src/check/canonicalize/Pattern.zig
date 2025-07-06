@@ -187,7 +187,7 @@ pub const Pattern = union(enum) {
     ///     Err(_) => "some error occurred"
     /// }
     /// ```
-    underscore: struct {},
+    underscore: void,
     /// Compiles, but will crash if reached
     runtime_error: struct {
         diagnostic: Diagnostic.Idx,
@@ -195,11 +195,6 @@ pub const Pattern = union(enum) {
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
-
-    pub fn toRegion(self: *const @This()) Region {
-        _ = self;
-        @panic("Pattern.toRegion() is no longer supported - use NodeStore to get regions");
-    }
 
     /// Represents the destructuring of a single field within a record pattern.
     /// Each record destructure specifies how to extract a field from a record.
@@ -263,9 +258,6 @@ pub const Pattern = union(enum) {
 
     pub fn toSExpr(self: *const @This(), ir: *const CIR, pattern_idx: Pattern.Idx) SExpr {
         const gpa = ir.env.gpa;
-
-        // var pattern_idx_node = formatPatternIdxNode(gpa, pattern_idx);
-
         switch (self.*) {
             .assign => |p| {
                 var node = SExpr.init(gpa, "p-assign");
@@ -400,7 +392,7 @@ pub const Pattern = union(enum) {
 
                 return node;
             },
-            .underscore => |_| {
+            .underscore => {
                 var node = SExpr.init(gpa, "p-underscore");
                 ir.appendRegionInfoToSexprNode(&node, pattern_idx);
 

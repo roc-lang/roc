@@ -778,9 +778,7 @@ test "NodeStore round trip - Pattern" {
 
         },
     });
-    try patterns.append(CIR.Pattern{
-        .underscore = .{},
-    });
+    try patterns.append(CIR.Pattern{ .underscore = {} });
     try patterns.append(CIR.Pattern{
         .runtime_error = .{
             .diagnostic = @enumFromInt(2123),

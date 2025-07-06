@@ -878,7 +878,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
                 },
             };
         },
-        .pattern_underscore => return CIR.Pattern{ .underscore = .{} },
+        .pattern_underscore => return CIR.Pattern{ .underscore = {} },
         .malformed => {
             return CIR.Pattern{ .runtime_error = .{
                 .diagnostic = @enumFromInt(node.data_1),
@@ -1692,7 +1692,7 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
             try store.extra_data.append(store.gpa, @intFromEnum(p.requirements.bits_needed));
             node.data_1 = extra_data_start;
         },
-        .underscore => |_| {
+        .underscore => {
             node.tag = .pattern_underscore;
         },
         .runtime_error => |e| {

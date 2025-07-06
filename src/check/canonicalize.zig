@@ -2190,7 +2190,7 @@ fn canonicalizePattern(
         .underscore => |p| {
             const region = self.parse_ir.tokenizedRegionToRegion(p.region);
             const underscore_pattern = CIR.Pattern{
-                .underscore = .{},
+                .underscore = {},
             };
 
             const pattern_idx = try self.can_ir.store.addPattern(underscore_pattern, region);
