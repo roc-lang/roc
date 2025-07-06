@@ -622,14 +622,6 @@ Let us know if you want to help!
 This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
 Let us know if you want to help!
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: ...
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: ...
-Let us know if you want to help!
-
 **UNDEFINED VARIABLE**
 Nothing is named `some_func` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -1824,12 +1816,12 @@ main! = |_| { # Yeah Ie
 					(p-assign @104.2-104.5 (ident "tag"))
 					(e-tag @104.8-104.12 (name "Blue")))
 				(s-expr @110.2-111.12
-					(e-runtime-error (tag "not_implemented")))
+					(e-not-implemented))
 				(s-expr @111.2-114.11
 					(e-call @111.2-113.3
 						(e-lookup-local @111.2-111.12
 							(pattern @60.1-60.11))
-						(e-runtime-error (tag "not_implemented"))))
+						(e-not-implemented)))
 				(s-expr @114.2-118.7
 					(e-call @114.2-117.3
 						(e-runtime-error (tag "ident_not_in_scope"))

@@ -15,10 +15,7 @@ type=expr
 # EXPECTED
 NIL
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: ...
-Let us know if you want to help!
-
+NIL
 # TOKENS
 ~~~zig
 OpenCurly(1:1-1:2),Newline(1:1-1:1),
@@ -76,7 +73,7 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 			(args
 				(p-record-destructure @3.23-3.25
 					(destructs)))
-			(e-runtime-error (tag "not_implemented"))))
+			(e-not-implemented)))
 	(e-call @5.5-5.23
 		(e-lookup-local @5.5-5.19
 			(pattern @3.5-3.19))

@@ -77,10 +77,6 @@ red : CE
       ^^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: ...
-Let us know if you want to help!
-
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),Newline(1:1-1:1),
@@ -121,7 +117,7 @@ red = ...
 (can-ir
 	(d-let
 		(p-assign @6.1-6.4 (ident "red"))
-		(e-runtime-error (tag "not_implemented"))
+		(e-not-implemented)
 		(annotation @6.1-6.4
 			(declared-type
 				(ty @5.7-5.9 (name "CE")))))

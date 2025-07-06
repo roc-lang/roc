@@ -313,6 +313,11 @@ test "NodeStore round trip - Expressions" {
             .region = from_raw_offsets(2567, 2890),
         },
     });
+    try expressions.append(CIR.Expr{
+        .e_ellipsis = .{
+            .region = from_raw_offsets(2890, 2900),
+        },
+    });
     for (expressions.items) |expr| {
         const idx = store.addExpr(expr);
         const retrieved = store.getExpr(idx);

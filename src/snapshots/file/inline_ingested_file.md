@@ -13,7 +13,7 @@ import Json
 foo = Json.parse(data)
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - inline_ingested_file.md:1:1:1:9
+NIL
 # PROBLEMS
 NIL
 # TOKENS

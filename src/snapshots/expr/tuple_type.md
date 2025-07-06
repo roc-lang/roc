@@ -13,7 +13,7 @@ type=expr
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - tuple_type.md:1:1:1:2
+NIL
 # PROBLEMS
 NIL
 # TOKENS

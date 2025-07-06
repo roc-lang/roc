@@ -6,65 +6,58 @@ type=expr
 # SOURCE
 ~~~roc
 {
-    apple : [Apple, IsFruit(Bool)]
-    apple = Apple
-
-    apple
-}
-~~~
-# EXPECTED
-PARSE ERROR - ann_closed_union.md:2:26:2:32
-UNEXPECTED TOKEN IN EXPRESSION - ann_closed_union.md:2:31:2:31
-UNUSED VARIABLE - ann_closed_union.md:3:5:3:8
-# PROBLEMS
-NIL
-# TOKENS
-~~~zig
-OpenCurly(1:1-1:2),Newline(1:1-1:1),
-LowerIdent(2:5-2:10),OpColon(2:11-2:12),OpenSquare(2:13-2:14),UpperIdent(2:14-2:19),Comma(2:19-2:20),UpperIdent(2:21-2:28),NoSpaceOpenRound(2:28-2:29),UpperIdent(2:29-2:33),CloseRound(2:33-2:34),CloseSquare(2:34-2:35),Newline(1:1-1:1),
-LowerIdent(3:5-3:10),OpAssign(3:11-3:12),UpperIdent(3:13-3:18),Newline(1:1-1:1),
-Newline(1:1-1:1),
-LowerIdent(5:5-5:10),Newline(1:1-1:1),
-CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
-~~~
-# PARSE
-~~~clojure
-(e-block @1.1-6.2
-	(statements
-		(s-type-anno @2.5-3.10 (name "apple")
-			(ty-tag-union @2.13-2.35
-				(tags
-					(ty @2.14-2.19 (name "Apple"))
-					(ty-apply @2.21-2.34
-						(ty @2.21-2.28 (name "IsFruit"))
-						(ty @2.29-2.33 (name "Bool"))))))
-		(s-decl @3.5-3.18
-			(p-ident @3.5-3.10 (raw "apple"))
-			(e-tag @3.13-3.18 (raw "Apple")))
-		(e-ident @5.5-5.10 (raw "apple"))))
-~~~
-# FORMATTED
-~~~roc
-{
 	apple : [Apple, IsFruit(Bool)]
 	apple = Apple
 
 	apple
 }
 ~~~
+# EXPECTED
+NIL
+# PROBLEMS
+NIL
+# TOKENS
+~~~zig
+OpenCurly(1:1-1:2),Newline(1:1-1:1),
+LowerIdent(2:2-2:7),OpColon(2:8-2:9),OpenSquare(2:10-2:11),UpperIdent(2:11-2:16),Comma(2:16-2:17),UpperIdent(2:18-2:25),NoSpaceOpenRound(2:25-2:26),UpperIdent(2:26-2:30),CloseRound(2:30-2:31),CloseSquare(2:31-2:32),Newline(1:1-1:1),
+LowerIdent(3:2-3:7),OpAssign(3:8-3:9),UpperIdent(3:10-3:15),Newline(1:1-1:1),
+Newline(1:1-1:1),
+LowerIdent(5:2-5:7),Newline(1:1-1:1),
+CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
+~~~
+# PARSE
+~~~clojure
+(e-block @1.1-6.2
+	(statements
+		(s-type-anno @2.2-3.7 (name "apple")
+			(ty-tag-union @2.10-2.32
+				(tags
+					(ty @2.11-2.16 (name "Apple"))
+					(ty-apply @2.18-2.31
+						(ty @2.18-2.25 (name "IsFruit"))
+						(ty @2.26-2.30 (name "Bool"))))))
+		(s-decl @3.2-3.15
+			(p-ident @3.2-3.7 (raw "apple"))
+			(e-tag @3.10-3.15 (raw "Apple")))
+		(e-ident @5.2-5.7 (raw "apple"))))
+~~~
+# FORMATTED
+~~~roc
+NO CHANGE
+~~~
 # CANONICALIZE
 ~~~clojure
 (e-block @1.1-6.2
-	(s-type-anno @2.5-3.10 (name "apple")
-		(ty-tag-union @2.13-2.35
-			(ty @2.14-2.19 (name "Apple"))
-			(ty-apply @2.21-2.34 (symbol "IsFruit")
-				(ty @2.29-2.33 (name "Bool")))))
-	(s-let @3.5-3.18
-		(p-assign @3.5-3.10 (ident "apple"))
-		(e-tag @3.13-3.18 (name "Apple")))
-	(e-lookup-local @5.5-5.10
-		(pattern @3.5-3.10)))
+	(s-type-anno @2.2-3.7 (name "apple")
+		(ty-tag-union @2.10-2.32
+			(ty @2.11-2.16 (name "Apple"))
+			(ty-apply @2.18-2.31 (symbol "IsFruit")
+				(ty @2.26-2.30 (name "Bool")))))
+	(s-let @3.2-3.15
+		(p-assign @3.2-3.7 (ident "apple"))
+		(e-tag @3.10-3.15 (name "Apple")))
+	(e-lookup-local @5.2-5.7
+		(pattern @3.2-3.7)))
 ~~~
 # TYPES
 ~~~clojure

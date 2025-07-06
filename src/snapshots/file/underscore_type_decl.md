@@ -14,7 +14,22 @@ Pair2(_, y) = Pair(0, 1)
 Pair3(_, _) = Pair(0, 1)
 ~~~
 # EXPECTED
-NIL
+PARSE ERROR - underscore_type_decl.md:5:10:5:12
+PARSE ERROR - underscore_type_decl.md:5:1:5:7
+PARSE ERROR - underscore_type_decl.md:5:20:5:22
+PARSE ERROR - underscore_type_decl.md:5:23:5:25
+PARSE ERROR - underscore_type_decl.md:5:15:5:20
+UNEXPECTED TOKEN IN EXPRESSION - underscore_type_decl.md:6:7:6:9
+UNEXPECTED TOKEN IN EXPRESSION - underscore_type_decl.md:6:13:6:19
+PARSE ERROR - underscore_type_decl.md:6:20:6:22
+PARSE ERROR - underscore_type_decl.md:6:23:6:25
+PARSE ERROR - underscore_type_decl.md:6:15:6:20
+UNEXPECTED TOKEN IN EXPRESSION - underscore_type_decl.md:7:7:7:9
+UNEXPECTED TOKEN IN EXPRESSION - underscore_type_decl.md:7:10:7:12
+UNEXPECTED TOKEN IN EXPRESSION - underscore_type_decl.md:7:13:7:19
+PARSE ERROR - underscore_type_decl.md:7:20:7:22
+PARSE ERROR - underscore_type_decl.md:7:23:7:25
+PARSE ERROR - underscore_type_decl.md:7:15:7:20
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `invalid_type_arg`

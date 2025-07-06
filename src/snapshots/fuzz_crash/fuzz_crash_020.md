@@ -387,14 +387,6 @@ This feature is not yet implemented or doesn't have a proper error report yet: s
 Let us know if you want to help!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: ...
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: ...
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: crash statement
 Let us know if you want to help!
 
@@ -1424,12 +1416,12 @@ expect {
 					(p-assign @77.2-78.8 (ident "er"))
 					(e-int @77.11-77.14 (value "123")))
 				(s-expr @83.2-84.4
-					(e-runtime-error (tag "not_implemented")))
+					(e-not-implemented))
 				(s-expr @84.2-86.8
 					(e-call @84.2-86.3
 						(e-lookup-local @84.2-84.4
 							(pattern @49.1-49.3))
-						(e-runtime-error (tag "not_implemented"))))
+						(e-not-implemented)))
 				(s-expr @86.11-86.20
 					(e-string @86.11-86.17
 						(e-literal @86.12-86.16 (string "Unr!"))))

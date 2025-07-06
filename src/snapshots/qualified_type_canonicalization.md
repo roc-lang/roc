@@ -69,9 +69,9 @@ UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:39:68:39:68
 UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:40:13:40:20
 PARSE ERROR - qualified_type_canonicalization.md:42:15:42:22
 PARSE ERROR - qualified_type_canonicalization.md:43:15:43:23
-UNDEFINED VARIABLE - qualified_type_canonicalization.md:23:23:23:32
 UNDEFINED VARIABLE - qualified_type_canonicalization.md:15:19:15:24
 UNDEFINED VARIABLE - qualified_type_canonicalization.md:19:26:19:35
+UNDEFINED VARIABLE - qualified_type_canonicalization.md:23:23:23:32
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `import_exposing_no_close`

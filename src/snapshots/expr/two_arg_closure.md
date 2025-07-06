@@ -8,7 +8,7 @@ type=expr
 |_, _| 42
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - two_arg_closure.md:1:1:1:3
+NIL
 # PROBLEMS
 NIL
 # TOKENS
