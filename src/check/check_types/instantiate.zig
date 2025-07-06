@@ -8,7 +8,6 @@ const std = @import("std");
 const types_mod = @import("../../types.zig");
 const collections = @import("../../collections.zig");
 const base = @import("../../base.zig");
-const CIR = @import("../canonicalize/CIR.zig");
 const TypesStore = types_mod.Store;
 const Var = types_mod.Var;
 const Content = types_mod.Content;
@@ -29,10 +28,10 @@ const VarSubstitution = std.AutoHashMap(Var, Var);
 /// Maps from old variables to their regions for copying during instantiation
 const RegionMap = std.AutoHashMap(Var, Region);
 
-/// Context for instantiation that includes the CIR for region tracking
+/// Context for instantiation that includes regions list for tracking
 pub const InstantiateContext = struct {
     store: *TypesStore,
-    can_ir: *CIR,
+    regions: *base.Region.List,
     allocator: std.mem.Allocator,
 };
 
@@ -111,21 +110,21 @@ fn instantiateVarWithSubst(
 
     // Get the original region if it exists
     var original_region = Region.zero();
-    if (original_idx < ctx.can_ir.store.regions.len()) {
-        original_region = ctx.can_ir.store.regions.get(@enumFromInt(original_idx)).*;
+    if (original_idx < ctx.regions.len()) {
+        original_region = ctx.regions.get(@enumFromInt(original_idx)).*;
     }
 
     // Ensure regions array is large enough for the fresh variable
     const needed_len = fresh_idx + 1;
-    if (ctx.can_ir.store.regions.len() < needed_len) {
+    if (ctx.regions.len() < needed_len) {
         // Fill gaps with zero regions
-        for (ctx.can_ir.store.regions.len()..needed_len) |_| {
-            _ = ctx.can_ir.store.regions.append(ctx.store.gpa, Region.zero());
+        for (ctx.regions.len()..needed_len) |_| {
+            _ = ctx.regions.append(ctx.store.gpa, Region.zero());
         }
     }
 
     // Set the region for the fresh variable
-    ctx.can_ir.store.regions.set(@enumFromInt(fresh_idx), original_region);
+    ctx.regions.set(@enumFromInt(fresh_idx), original_region);
 
     // Remember this substitution for recursive references
     try substitution.put(var_, fresh_var);

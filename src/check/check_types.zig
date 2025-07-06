@@ -27,7 +27,8 @@ const Self = @This();
 gpa: std.mem.Allocator,
 // not owned
 types: *types_mod.Store,
-can_ir: *CIR,
+can_ir: *const CIR,
+regions: *base.Region.List,
 // owned
 snapshots: snapshot.Store,
 problems: problem.Store,
@@ -39,12 +40,14 @@ occurs_scratch: occurs.Scratch,
 pub fn init(
     gpa: std.mem.Allocator,
     types: *types_mod.Store,
-    can_ir: *CIR,
+    can_ir: *const CIR,
+    regions: *base.Region.List,
 ) std.mem.Allocator.Error!Self {
     return .{
         .gpa = gpa,
         .types = types,
         .can_ir = can_ir,
+        .regions = regions,
         .snapshots = snapshot.Store.initCapacity(gpa, 512),
         .problems = problem.Store.initCapacity(gpa, 64),
         .unify_scratch = unifier.Scratch.init(gpa),
@@ -254,7 +257,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                             if (self.types.needsInstantiation(current_func_var)) {
                                 const ctx = instantiate.InstantiateContext{
                                     .store = self.types,
-                                    .can_ir = self.can_ir,
+                                    .regions = self.regions,
                                     .allocator = self.gpa,
                                 };
                                 const instantiated_var = try instantiate.instantiateVar(ctx, current_func_var);
@@ -270,7 +273,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                             if (self.types.needsInstantiation(current_func_var)) {
                                 const ctx = instantiate.InstantiateContext{
                                     .store = self.types,
-                                    .can_ir = self.can_ir,
+                                    .regions = self.regions,
                                     .allocator = self.gpa,
                                 };
                                 const instantiated_var = try instantiate.instantiateVar(ctx, current_func_var);
@@ -286,7 +289,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                             if (self.types.needsInstantiation(current_func_var)) {
                                 const ctx = instantiate.InstantiateContext{
                                     .store = self.types,
-                                    .can_ir = self.can_ir,
+                                    .regions = self.regions,
                                     .allocator = self.gpa,
                                 };
                                 const instantiated_var = try instantiate.instantiateVar(ctx, current_func_var);
@@ -1067,7 +1070,7 @@ test "lambda with record field access infers correct type" {
     var can_ir = CIR.init(&module_env);
     defer can_ir.deinit();
 
-    var solver = try Self.init(gpa, &module_env.types, &can_ir);
+    var solver = try Self.init(gpa, &module_env.types, &can_ir, &can_ir.store.regions);
     defer solver.deinit();
 
     // Create type variables for the lambda parameters
@@ -1171,7 +1174,7 @@ test "dot access properly unifies field types with parameters" {
     var can_ir = CIR.init(&module_env);
     defer can_ir.deinit();
 
-    var solver = try Self.init(gpa, &module_env.types, &can_ir);
+    var solver = try Self.init(gpa, &module_env.types, &can_ir, &can_ir.store.regions);
     defer solver.deinit();
 
     // Create a parameter type variable
@@ -1278,7 +1281,7 @@ test "call site unification order matters for concrete vs flexible types" {
     var can_ir = CIR.init(&module_env);
     defer can_ir.deinit();
 
-    var solver = try Self.init(gpa, &module_env.types, &can_ir);
+    var solver = try Self.init(gpa, &module_env.types, &can_ir, &can_ir.store.regions);
     defer solver.deinit();
 
     // First, verify basic number unification works as expected
