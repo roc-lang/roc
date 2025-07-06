@@ -239,17 +239,12 @@ fn instantiateRecord(
         });
     }
 
-    const fields_range = RecordField.SafeMultiList.Range{
-        .start = @enumFromInt(fields_start),
-        .end = @enumFromInt(store.record_fields.len()),
-    };
-
-    // Handle the extension variable
-    const fresh_ext = try instantiateVar(store, record.ext, substitution);
-
     return Record{
-        .fields = fields_range,
-        .ext = fresh_ext,
+        .fields = RecordField.SafeMultiList.Range{
+            .start = @enumFromInt(fields_start),
+            .end = @enumFromInt(store.record_fields.len()),
+        },
+        .ext = try instantiateVar(store, record.ext, substitution),
     };
 }
 
@@ -284,11 +279,8 @@ fn instantiateTagUnion(
         .end = @enumFromInt(store.tags.len()),
     };
 
-    // Handle the extension variable
-    const fresh_ext = try instantiateVar(store, tag_union.ext, substitution);
-
     return TagUnion{
         .tags = tags_range,
-        .ext = fresh_ext,
+        .ext = try instantiateVar(store, tag_union.ext, substitution),
     };
 }
