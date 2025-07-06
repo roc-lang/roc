@@ -255,12 +255,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                         .fn_effectful => |_| {
                             does_fx = true;
                             if (self.types.needsInstantiation(current_func_var)) {
-                                const ctx = instantiate.InstantiateContext{
-                                    .store = self.types,
-                                    .regions = self.regions,
-                                    .allocator = self.gpa,
-                                };
-                                const instantiated_var = try instantiate.instantiateVar(ctx, current_func_var);
+                                const instantiated_var = try instantiate.instantiateVar(self.types, self.regions, self.gpa, current_func_var);
                                 const resolved_inst = self.types.resolveVar(instantiated_var);
                                 std.debug.assert(resolved_inst.desc.content == .structure);
                                 std.debug.assert(resolved_inst.desc.content.structure == .fn_effectful);
@@ -271,12 +266,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                         },
                         .fn_pure => |_| {
                             if (self.types.needsInstantiation(current_func_var)) {
-                                const ctx = instantiate.InstantiateContext{
-                                    .store = self.types,
-                                    .regions = self.regions,
-                                    .allocator = self.gpa,
-                                };
-                                const instantiated_var = try instantiate.instantiateVar(ctx, current_func_var);
+                                const instantiated_var = try instantiate.instantiateVar(self.types, self.regions, self.gpa, current_func_var);
                                 const resolved_inst = self.types.resolveVar(instantiated_var);
                                 std.debug.assert(resolved_inst.desc.content == .structure);
                                 std.debug.assert(resolved_inst.desc.content.structure == .fn_pure);
@@ -287,12 +277,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                         },
                         .fn_unbound => |_| {
                             if (self.types.needsInstantiation(current_func_var)) {
-                                const ctx = instantiate.InstantiateContext{
-                                    .store = self.types,
-                                    .regions = self.regions,
-                                    .allocator = self.gpa,
-                                };
-                                const instantiated_var = try instantiate.instantiateVar(ctx, current_func_var);
+                                const instantiated_var = try instantiate.instantiateVar(self.types, self.regions, self.gpa, current_func_var);
                                 const resolved_inst = self.types.resolveVar(instantiated_var);
                                 std.debug.assert(resolved_inst.desc.content == .structure);
                                 std.debug.assert(resolved_inst.desc.content.structure == .fn_unbound);

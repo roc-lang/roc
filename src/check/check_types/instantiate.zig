@@ -29,7 +29,7 @@ const VarSubstitution = std.AutoHashMap(Var, Var);
 const RegionMap = std.AutoHashMap(Var, Region);
 
 /// Context for instantiation that includes regions list for tracking
-pub const InstantiateContext = struct {
+const InstantiateContext = struct {
     store: *TypesStore,
     regions: *base.Region.List,
     allocator: std.mem.Allocator,
@@ -39,13 +39,21 @@ pub const InstantiateContext = struct {
 /// This creates a copy of the type structure with all flexible variables
 /// replaced by fresh ones, while preserving type aliases and rigid variables.
 pub fn instantiateVar(
-    ctx: InstantiateContext,
+    store: *TypesStore,
+    regions: *base.Region.List,
+    allocator: std.mem.Allocator,
     var_to_instantiate: Var,
 ) std.mem.Allocator.Error!Var {
-    var substitution = VarSubstitution.init(ctx.allocator);
+    const ctx = InstantiateContext{
+        .store = store,
+        .regions = regions,
+        .allocator = allocator,
+    };
+
+    var substitution = VarSubstitution.init(allocator);
     defer substitution.deinit();
 
-    var region_map = RegionMap.init(ctx.allocator);
+    var region_map = RegionMap.init(allocator);
     defer region_map.deinit();
 
     return instantiateVarWithSubst(ctx, var_to_instantiate, &substitution, &region_map);
