@@ -463,24 +463,19 @@ fn processPath(gpa: Allocator, path: []const u8, maybe_fuzz_corpus_path: ?[]cons
     };
     defer gpa.free(canonical_path);
 
-    const stat = std.fs.cwd().statFile(canonical_path) catch |err| {
-        std.log.err("failed to stat path '{s}': {s}", .{ canonical_path, @errorName(err) });
-        return .{ .success = 0, .failed = 1 };
-    };
+    // Try to open as directory first
+    if (std.fs.cwd().openDir(canonical_path, .{ .iterate = true })) |dir_handle| {
+        var dir = dir_handle;
+        defer dir.close();
 
-    if (stat.kind == .directory) {
-        // Check if this is a multi-file snapshot directory
+        // It's a directory
         if (isMultiFileSnapshot(canonical_path)) {
             try processMultiFileSnapshot(gpa, canonical_path);
             processed_count += 1;
             return .{ .success = processed_count, .failed = failed_count };
         } else {
-            var dir = try std.fs.cwd().openDir(path, .{ .iterate = true });
-            defer dir.close();
-
             var dir_iterator = dir.iterate();
             while (try dir_iterator.next()) |entry| {
-
                 // Skip hidden files and special directories
                 if (entry.name[0] == '.') continue;
 
@@ -501,17 +496,23 @@ fn processPath(gpa: Allocator, path: []const u8, maybe_fuzz_corpus_path: ?[]cons
                 }
             }
         }
-    } else if (stat.kind == .file) {
-        if (isSnapshotFile(canonical_path)) {
-            if (try processSnapshotFile(gpa, canonical_path, maybe_fuzz_corpus_path)) {
-                processed_count += 1;
+    } else |dir_err| {
+        // Not a directory, try as file
+        if (dir_err == error.NotDir) {
+            if (isSnapshotFile(canonical_path)) {
+                if (try processSnapshotFile(gpa, canonical_path, maybe_fuzz_corpus_path)) {
+                    processed_count += 1;
+                } else {
+                    std.log.err("failed to process snapshot file: {s}", .{canonical_path});
+                    std.log.err("make sure the file starts with '~~~META' and has valid snapshot format", .{});
+                    failed_count += 1;
+                }
             } else {
-                std.log.err("failed to process snapshot file: {s}", .{canonical_path});
-                std.log.err("make sure the file starts with '~~~META' and has valid snapshot format", .{});
-                failed_count += 1;
+                std.log.err("file '{s}' is not a snapshot file (must end with .md)", .{canonical_path});
             }
         } else {
-            std.log.err("file '{s}' is not a snapshot file (must end with .md)", .{canonical_path});
+            std.log.err("failed to access path '{s}': {s}", .{ canonical_path, @errorName(dir_err) });
+            return .{ .success = 0, .failed = 1 };
         }
     }
 
