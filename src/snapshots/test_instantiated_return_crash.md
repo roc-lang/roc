@@ -10,7 +10,7 @@ type=expr
     identity = |x| x
 
     needs_string : ((Str -> Str) -> Str)
-    needs_string = |f| f("hello")
+    needs_string = |f| f(["hello"])
 
     needs_string(identity)
 }

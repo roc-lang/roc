@@ -15,32 +15,41 @@ const CIR = canonicalize.CIR;
 
 const test_allocator = testing.allocator;
 
-fn setupTestEnvironment(allocator: std.mem.Allocator) !struct {
+const TestEnv = struct {
     module_env: *base.ModuleEnv,
     store: *TypesStore,
-} {
+    regions: *base.Region.List,
+};
+
+fn setupTestEnvironment(allocator: std.mem.Allocator) !TestEnv {
     const module_env = try allocator.create(base.ModuleEnv);
     module_env.* = base.ModuleEnv.init(allocator);
 
     const store = try allocator.create(TypesStore);
     store.* = TypesStore.init(allocator);
 
+    const regions = try allocator.create(base.Region.List);
+    regions.* = base.Region.List.initCapacity(allocator, 256);
+
     return .{
         .module_env = module_env,
         .store = store,
+        .regions = regions,
     };
 }
 
-fn cleanup(module_env: *base.ModuleEnv, store: *TypesStore, allocator: std.mem.Allocator) void {
-    store.deinit();
-    allocator.destroy(store);
-    module_env.deinit();
-    allocator.destroy(module_env);
+fn cleanup(env: TestEnv, allocator: std.mem.Allocator) void {
+    env.regions.deinit(allocator);
+    allocator.destroy(env.regions);
+    env.store.deinit();
+    allocator.destroy(env.store);
+    env.module_env.deinit();
+    allocator.destroy(env.module_env);
 }
 
 test "let-polymorphism with empty list" {
     const env = try setupTestEnvironment(test_allocator);
-    defer cleanup(env.module_env, env.store, test_allocator);
+    defer cleanup(env, test_allocator);
 
     // Create a polymorphic empty list type: forall a. List a
     const list_elem_var = env.store.fresh();
@@ -53,10 +62,10 @@ test "let-polymorphism with empty list" {
     try testing.expect(env.store.needsInstantiation(empty_list_var));
 
     // First usage: instantiate for integers
-    const int_list_var = try instantiate.instantiateVarForTest(env.store, empty_list_var, test_allocator);
+    const int_list_var = try instantiate.instantiateVar(env.store, env.regions, test_allocator, empty_list_var);
 
     // Second usage: instantiate for strings
-    const str_list_var = try instantiate.instantiateVarForTest(env.store, empty_list_var, test_allocator);
+    const str_list_var = try instantiate.instantiateVar(env.store, env.regions, test_allocator, empty_list_var);
 
     // Verify the two instantiations are different
     try testing.expect(int_list_var != str_list_var);
@@ -66,7 +75,7 @@ test "let-polymorphism with empty list" {
 
 test "let-polymorphism with numeric literal" {
     const env = try setupTestEnvironment(test_allocator);
-    defer cleanup(env.module_env, env.store, test_allocator);
+    defer cleanup(env, test_allocator);
 
     // Create a polymorphic number: forall a. Num a => a
     // First create a flex var for the type parameter
@@ -81,10 +90,10 @@ test "let-polymorphism with numeric literal" {
     try testing.expect(env.store.needsInstantiation(num_var));
 
     // First usage: instantiate as I32
-    const i32_instance = try instantiate.instantiateVarForTest(env.store, num_var, test_allocator);
+    const i32_instance = try instantiate.instantiateVar(env.store, env.regions, test_allocator, num_var);
 
     // Second usage: instantiate as F64
-    const f64_instance = try instantiate.instantiateVarForTest(env.store, num_var, test_allocator);
+    const f64_instance = try instantiate.instantiateVar(env.store, env.regions, test_allocator, num_var);
 
     // Verify the two instantiations are different
     try testing.expect(i32_instance != f64_instance);
@@ -94,7 +103,7 @@ test "let-polymorphism with numeric literal" {
 
 test "let-polymorphism with polymorphic function" {
     const env = try setupTestEnvironment(test_allocator);
-    defer cleanup(env.module_env, env.store, test_allocator);
+    defer cleanup(env, test_allocator);
 
     // Create polymorphic identity function: forall a. a -> a
     const type_param = env.store.fresh();
@@ -107,10 +116,10 @@ test "let-polymorphism with polymorphic function" {
     try testing.expect(env.store.needsInstantiation(func_var));
 
     // First usage: instantiate for use with strings
-    const str_func = try instantiate.instantiateVarForTest(env.store, func_var, test_allocator);
+    const str_func = try instantiate.instantiateVar(env.store, env.regions, test_allocator, func_var);
 
     // Second usage: instantiate for use with numbers
-    const num_func = try instantiate.instantiateVarForTest(env.store, func_var, test_allocator);
+    const num_func = try instantiate.instantiateVar(env.store, env.regions, test_allocator, func_var);
 
     // Verify we got different instantiations
     try testing.expect(str_func != num_func);
@@ -120,7 +129,7 @@ test "let-polymorphism with polymorphic function" {
 
 test "let-polymorphism with nested structures" {
     const env = try setupTestEnvironment(test_allocator);
-    defer cleanup(env.module_env, env.store, test_allocator);
+    defer cleanup(env, test_allocator);
 
     // Create a polymorphic record type: forall a. { data: List a, count: U64 }
     const elem_var = env.store.fresh();
@@ -150,10 +159,10 @@ test "let-polymorphism with nested structures" {
     try testing.expect(env.store.needsInstantiation(record_var));
 
     // First usage: instantiate for integers
-    const int_record = try instantiate.instantiateVarForTest(env.store, record_var, test_allocator);
+    const int_record = try instantiate.instantiateVar(env.store, env.regions, test_allocator, record_var);
 
     // Second usage: instantiate for booleans
-    const bool_record = try instantiate.instantiateVarForTest(env.store, record_var, test_allocator);
+    const bool_record = try instantiate.instantiateVar(env.store, env.regions, test_allocator, record_var);
 
     // Verify different instantiations
     try testing.expect(int_record != bool_record);
@@ -163,7 +172,7 @@ test "let-polymorphism with nested structures" {
 
 test "let-polymorphism prevents over-generalization" {
     const env = try setupTestEnvironment(test_allocator);
-    defer cleanup(env.module_env, env.store, test_allocator);
+    defer cleanup(env, test_allocator);
 
     // Create a list with a concrete element (not polymorphic)
     const i32_content = types.Content{ .structure = .{ .num = .{ .int_precision = .i32 } } };
@@ -178,7 +187,7 @@ test "let-polymorphism prevents over-generalization" {
 
 test "let-polymorphism with multiple type parameters" {
     const env = try setupTestEnvironment(test_allocator);
-    defer cleanup(env.module_env, env.store, test_allocator);
+    defer cleanup(env, test_allocator);
 
     // Create a polymorphic function: forall a b. (a, b) -> (b, a)
     const type_a = env.store.fresh();
@@ -204,9 +213,9 @@ test "let-polymorphism with multiple type parameters" {
     try testing.expect(env.store.needsInstantiation(func_var));
 
     // Multiple instantiations should produce different variables
-    const inst1 = try instantiate.instantiateVarForTest(env.store, func_var, test_allocator);
-    const inst2 = try instantiate.instantiateVarForTest(env.store, func_var, test_allocator);
-    const inst3 = try instantiate.instantiateVarForTest(env.store, func_var, test_allocator);
+    const inst1 = try instantiate.instantiateVar(env.store, env.regions, test_allocator, func_var);
+    const inst2 = try instantiate.instantiateVar(env.store, env.regions, test_allocator, func_var);
+    const inst3 = try instantiate.instantiateVar(env.store, env.regions, test_allocator, func_var);
 
     try testing.expect(inst1 != inst2);
     try testing.expect(inst2 != inst3);
@@ -216,7 +225,7 @@ test "let-polymorphism with multiple type parameters" {
 
 test "let-polymorphism with constrained type variables" {
     const env = try setupTestEnvironment(test_allocator);
-    defer cleanup(env.module_env, env.store, test_allocator);
+    defer cleanup(env, test_allocator);
 
     // Create a constrained type variable: Num a => a
     // First create a flex var for the type parameter
@@ -235,8 +244,8 @@ test "let-polymorphism with constrained type variables" {
     try testing.expect(env.store.needsInstantiation(add_func_var));
 
     // Instantiate for different numeric types
-    const int_add = try instantiate.instantiateVarForTest(env.store, add_func_var, test_allocator);
-    const float_add = try instantiate.instantiateVarForTest(env.store, add_func_var, test_allocator);
+    const int_add = try instantiate.instantiateVar(env.store, env.regions, test_allocator, add_func_var);
+    const float_add = try instantiate.instantiateVar(env.store, env.regions, test_allocator, add_func_var);
 
     try testing.expect(int_add != float_add);
     try testing.expect(int_add != add_func_var);
@@ -245,7 +254,7 @@ test "let-polymorphism with constrained type variables" {
 
 test "let-polymorphism with simple tag union" {
     const env = try setupTestEnvironment(test_allocator);
-    defer cleanup(env.module_env, env.store, test_allocator);
+    defer cleanup(env, test_allocator);
 
     // Create a simple polymorphic Option type: forall a. Option a = Some a | None
 
@@ -277,8 +286,8 @@ test "let-polymorphism with simple tag union" {
     try testing.expect(env.store.needsInstantiation(option_var));
 
     // Instantiate for different element types
-    const string_option = try instantiate.instantiateVarForTest(env.store, option_var, test_allocator);
-    const number_option = try instantiate.instantiateVarForTest(env.store, option_var, test_allocator);
+    const string_option = try instantiate.instantiateVar(env.store, env.regions, test_allocator, option_var);
+    const number_option = try instantiate.instantiateVar(env.store, env.regions, test_allocator, option_var);
 
     try testing.expect(string_option != number_option);
     try testing.expect(string_option != option_var);
@@ -287,7 +296,7 @@ test "let-polymorphism with simple tag union" {
 
 test "let-polymorphism interaction with pattern matching" {
     const env = try setupTestEnvironment(test_allocator);
-    defer cleanup(env.module_env, env.store, test_allocator);
+    defer cleanup(env, test_allocator);
 
     // Create a polymorphic Maybe type: forall a. Maybe a = Just a | Nothing
     const type_param = env.store.fresh();
@@ -323,8 +332,8 @@ test "let-polymorphism interaction with pattern matching" {
     try testing.expect(env.store.needsInstantiation(is_just_func_var));
 
     // Instantiate for different types
-    const str_is_just = try instantiate.instantiateVarForTest(env.store, is_just_func_var, test_allocator);
-    const int_is_just = try instantiate.instantiateVarForTest(env.store, is_just_func_var, test_allocator);
+    const str_is_just = try instantiate.instantiateVar(env.store, env.regions, test_allocator, is_just_func_var);
+    const int_is_just = try instantiate.instantiateVar(env.store, env.regions, test_allocator, is_just_func_var);
 
     try testing.expect(str_is_just != int_is_just);
     try testing.expect(str_is_just != is_just_func_var);
@@ -332,7 +341,7 @@ test "let-polymorphism interaction with pattern matching" {
 
 test "let-polymorphism preserves sharing within single instantiation" {
     const env = try setupTestEnvironment(test_allocator);
-    defer cleanup(env.module_env, env.store, test_allocator);
+    defer cleanup(env, test_allocator);
 
     // Create a polymorphic type that appears multiple times in a structure
     // forall a. { first: a, second: a, pair: (a, a) }
@@ -363,13 +372,13 @@ test "let-polymorphism preserves sharing within single instantiation" {
     try testing.expect(env.store.needsInstantiation(record_var));
 
     // Instantiate once
-    const inst = try instantiate.instantiateVarForTest(env.store, record_var, test_allocator);
+    const inst = try instantiate.instantiateVar(env.store, env.regions, test_allocator, record_var);
 
     // Within this single instantiation, all occurrences of 'a' should be replaced
     // with the same fresh variable (preserving the constraint that first, second,
     // and both elements of pair must have the same type)
 
     // Get another instantiation to verify they're different
-    const inst2 = try instantiate.instantiateVarForTest(env.store, record_var, test_allocator);
+    const inst2 = try instantiate.instantiateVar(env.store, env.regions, test_allocator, record_var);
     try testing.expect(inst != inst2);
 }

@@ -13,7 +13,7 @@ type=expr
 }
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - test_instantiation_arity_mismatch.md:5:5:5:13
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
