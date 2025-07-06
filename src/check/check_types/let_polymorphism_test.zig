@@ -15,32 +15,41 @@ const CIR = canonicalize.CIR;
 
 const test_allocator = testing.allocator;
 
-fn setupTestEnvironment(allocator: std.mem.Allocator) !struct {
+const TestEnv = struct {
     module_env: *base.ModuleEnv,
     store: *TypesStore,
-} {
+    regions: *base.Region.List,
+};
+
+fn setupTestEnvironment(allocator: std.mem.Allocator) !TestEnv {
     const module_env = try allocator.create(base.ModuleEnv);
     module_env.* = base.ModuleEnv.init(allocator);
 
     const store = try allocator.create(TypesStore);
     store.* = TypesStore.init(allocator);
 
+    const regions = try allocator.create(base.Region.List);
+    regions.* = base.Region.List.initCapacity(allocator, 256);
+
     return .{
         .module_env = module_env,
         .store = store,
+        .regions = regions,
     };
 }
 
-fn cleanup(module_env: *base.ModuleEnv, store: *TypesStore, allocator: std.mem.Allocator) void {
-    store.deinit();
-    allocator.destroy(store);
-    module_env.deinit();
-    allocator.destroy(module_env);
+fn cleanup(env: TestEnv, allocator: std.mem.Allocator) void {
+    env.regions.deinit(allocator);
+    allocator.destroy(env.regions);
+    env.store.deinit();
+    allocator.destroy(env.store);
+    env.module_env.deinit();
+    allocator.destroy(env.module_env);
 }
 
 test "let-polymorphism with empty list" {
     const env = try setupTestEnvironment(test_allocator);
-    defer cleanup(env.module_env, env.store, test_allocator);
+    defer cleanup(env, test_allocator);
 
     // Create a polymorphic empty list type: forall a. List a
     const list_elem_var = env.store.fresh();
@@ -66,7 +75,7 @@ test "let-polymorphism with empty list" {
 
 test "let-polymorphism with numeric literal" {
     const env = try setupTestEnvironment(test_allocator);
-    defer cleanup(env.module_env, env.store, test_allocator);
+    defer cleanup(env, test_allocator);
 
     // Create a polymorphic number: forall a. Num a => a
     // First create a flex var for the type parameter
@@ -94,7 +103,7 @@ test "let-polymorphism with numeric literal" {
 
 test "let-polymorphism with polymorphic function" {
     const env = try setupTestEnvironment(test_allocator);
-    defer cleanup(env.module_env, env.store, test_allocator);
+    defer cleanup(env, test_allocator);
 
     // Create polymorphic identity function: forall a. a -> a
     const type_param = env.store.fresh();
@@ -120,7 +129,7 @@ test "let-polymorphism with polymorphic function" {
 
 test "let-polymorphism with nested structures" {
     const env = try setupTestEnvironment(test_allocator);
-    defer cleanup(env.module_env, env.store, test_allocator);
+    defer cleanup(env, test_allocator);
 
     // Create a polymorphic record type: forall a. { data: List a, count: U64 }
     const elem_var = env.store.fresh();
@@ -163,7 +172,7 @@ test "let-polymorphism with nested structures" {
 
 test "let-polymorphism prevents over-generalization" {
     const env = try setupTestEnvironment(test_allocator);
-    defer cleanup(env.module_env, env.store, test_allocator);
+    defer cleanup(env, test_allocator);
 
     // Create a list with a concrete element (not polymorphic)
     const i32_content = types.Content{ .structure = .{ .num = .{ .int_precision = .i32 } } };
@@ -178,7 +187,7 @@ test "let-polymorphism prevents over-generalization" {
 
 test "let-polymorphism with multiple type parameters" {
     const env = try setupTestEnvironment(test_allocator);
-    defer cleanup(env.module_env, env.store, test_allocator);
+    defer cleanup(env, test_allocator);
 
     // Create a polymorphic function: forall a b. (a, b) -> (b, a)
     const type_a = env.store.fresh();
@@ -216,7 +225,7 @@ test "let-polymorphism with multiple type parameters" {
 
 test "let-polymorphism with constrained type variables" {
     const env = try setupTestEnvironment(test_allocator);
-    defer cleanup(env.module_env, env.store, test_allocator);
+    defer cleanup(env, test_allocator);
 
     // Create a constrained type variable: Num a => a
     // First create a flex var for the type parameter
@@ -245,7 +254,7 @@ test "let-polymorphism with constrained type variables" {
 
 test "let-polymorphism with simple tag union" {
     const env = try setupTestEnvironment(test_allocator);
-    defer cleanup(env.module_env, env.store, test_allocator);
+    defer cleanup(env, test_allocator);
 
     // Create a simple polymorphic Option type: forall a. Option a = Some a | None
 
@@ -287,7 +296,7 @@ test "let-polymorphism with simple tag union" {
 
 test "let-polymorphism interaction with pattern matching" {
     const env = try setupTestEnvironment(test_allocator);
-    defer cleanup(env.module_env, env.store, test_allocator);
+    defer cleanup(env, test_allocator);
 
     // Create a polymorphic Maybe type: forall a. Maybe a = Just a | Nothing
     const type_param = env.store.fresh();
@@ -332,7 +341,7 @@ test "let-polymorphism interaction with pattern matching" {
 
 test "let-polymorphism preserves sharing within single instantiation" {
     const env = try setupTestEnvironment(test_allocator);
-    defer cleanup(env.module_env, env.store, test_allocator);
+    defer cleanup(env, test_allocator);
 
     // Create a polymorphic type that appears multiple times in a structure
     // forall a. { first: a, second: a, pair: (a, a) }

@@ -130,7 +130,7 @@ fn typeCheckFile(allocator: std.mem.Allocator, source: []const u8) !struct {
 
     // Type check - continue even if there are parse errors
     const checker = try allocator.create(check_types);
-    checker.* = try check_types.init(allocator, &module_env.types, cir);
+    checker.* = try check_types.init(allocator, &module_env.types, cir, &cir.store.regions);
 
     try checker.checkDefs();
 

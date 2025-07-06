@@ -2,13 +2,16 @@
 
 const std = @import("std");
 const types = @import("types.zig");
-const TypesStore = @import("store.zig").Store;
-const check_types = @import("../check/check_types.zig");
+const Store = @import("store.zig").Store;
 const instantiate = @import("../check/check_types/instantiate.zig");
+const base = @import("../base.zig");
 
 test "rigid variables need instantiation - polymorphic identity function" {
-    var store = TypesStore.init(std.testing.allocator);
+    var store = Store.init(std.testing.allocator);
     defer store.deinit();
+
+    var regions = base.Region.List.initCapacity(std.testing.allocator, 256);
+    defer regions.deinit(std.testing.allocator);
 
     // Create a rigid type variable 'a' (like in `identity : a -> a`)
     const rigid_var = store.fresh();
@@ -48,8 +51,11 @@ test "rigid variables need instantiation - polymorphic identity function" {
 }
 
 test "rigid variables need instantiation - multiple type parameters" {
-    var store = TypesStore.init(std.testing.allocator);
+    var store = Store.init(std.testing.allocator);
     defer store.deinit();
+
+    var regions = base.Region.List.initCapacity(std.testing.allocator, 256);
+    defer regions.deinit(std.testing.allocator);
 
     // Create rigid type variables 'a' and 'b' (like in `swap : (a, b) -> (b, a)`)
     const rigid_a = store.fresh();
@@ -89,7 +95,7 @@ test "rigid variables need instantiation - multiple type parameters" {
 }
 
 test "rigid vs flex variable instantiation behavior" {
-    var store = TypesStore.init(std.testing.allocator);
+    var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
     // Test that both rigid and flex variables need instantiation
