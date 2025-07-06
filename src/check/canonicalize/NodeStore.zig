@@ -138,7 +138,7 @@ comptime {
 }
 
 /// Helper function to get a region by node index, handling the type conversion
-fn getRegionAt(store: *const NodeStore, node_idx: Node.Idx) Region {
+pub fn getRegionAt(store: *const NodeStore, node_idx: Node.Idx) Region {
     const idx: Region.Idx = @enumFromInt(@intFromEnum(node_idx));
     return store.regions.get(idx).*;
 }
@@ -731,14 +731,12 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
         .pattern_identifier => return CIR.Pattern{
             .assign = .{
                 .ident = @bitCast(node.data_1),
-                .region = store.getRegionAt(node_idx),
             },
         },
         .pattern_as => return CIR.Pattern{
             .as = .{
                 .ident = @bitCast(node.data_1),
                 .pattern = @enumFromInt(node.data_2),
-                .region = store.getRegionAt(node_idx),
             },
         },
         .pattern_applied_tag => {
@@ -752,7 +750,6 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
 
             return CIR.Pattern{
                 .applied_tag = .{
-                    .region = store.getRegionAt(node_idx),
                     .arguments = DataSpan.init(arguments_start, arguments_len).as(CIR.Pattern.Span),
                     .tag_name = tag_name,
                     .ext_var = ext_var,
@@ -770,7 +767,6 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
 
             return CIR.Pattern{
                 .record_destructure = .{
-                    .region = store.getRegionAt(node_idx),
                     .destructs = DataSpan.init(destructs_start, destructs_len).as(CIR.Pattern.RecordDestruct.Span),
                     .ext_var = ext_var,
                     .whole_var = whole_var,
@@ -803,7 +799,6 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
 
             return CIR.Pattern{
                 .list = .{
-                    .region = store.getRegionAt(node_idx),
                     .patterns = DataSpan.init(patterns_start, patterns_len).as(CIR.Pattern.Span),
                     .elem_var = elem_var,
                     .list_var = list_var,
@@ -813,7 +808,6 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
         },
         .pattern_tuple => return CIR.Pattern{
             .tuple = .{
-                .region = store.getRegionAt(node_idx),
                 .patterns = DataSpan.init(node.data_1, node.data_2).as(CIR.Pattern.Span),
             },
         },
@@ -824,7 +818,6 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
 
             return CIR.Pattern{
                 .int_literal = .{
-                    .region = store.getRegionAt(node_idx),
                     .value = .{ .bytes = @bitCast(value_as_i128), .kind = .i128 },
                 },
             };
@@ -836,7 +829,6 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
 
             return CIR.Pattern{
                 .int_literal = .{
-                    .region = store.getRegionAt(node_idx),
                     .value = .{ .bytes = @bitCast(value_as_i128), .kind = .i128 },
                 },
             };
@@ -848,7 +840,6 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
 
             return CIR.Pattern{
                 .dec_literal = .{
-                    .region = store.getRegionAt(node_idx),
                     .value = RocDec{ .num = value_as_i128 },
                 },
             };
@@ -862,14 +853,12 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
 
             return CIR.Pattern{
                 .small_dec_literal = .{
-                    .region = store.getRegionAt(node_idx),
                     .numerator = numerator,
                     .denominator_power_of_ten = denominator_power_of_ten,
                 },
             };
         },
         .pattern_str_literal => return CIR.Pattern{ .str_literal = .{
-            .region = store.getRegionAt(node_idx),
             .literal = @enumFromInt(node.data_1),
         } },
         .pattern_char_literal => {
@@ -883,20 +872,16 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
 
             return CIR.Pattern{
                 .char_literal = .{
-                    .region = store.getRegionAt(node_idx),
                     .num_var = num_var,
                     .requirements = .{ .sign_needed = sign_needed, .bits_needed = bits_needed },
                     .value = value,
                 },
             };
         },
-        .pattern_underscore => return CIR.Pattern{ .underscore = .{
-            .region = store.getRegionAt(node_idx),
-        } },
+        .pattern_underscore => return CIR.Pattern{ .underscore = .{} },
         .malformed => {
             return CIR.Pattern{ .runtime_error = .{
                 .diagnostic = @enumFromInt(node.data_1),
-                .region = store.getRegionAt(node_idx),
             } };
         },
         else => {
@@ -1472,7 +1457,7 @@ pub fn addRecordField(store: *NodeStore, recordField: CIR.RecordField) CIR.Recor
 }
 
 /// Adds a record destructuring to the store.
-pub fn addRecordDestruct(store: *NodeStore, record_destruct: CIR.Pattern.RecordDestruct) CIR.Pattern.RecordDestruct.Idx {
+pub fn addRecordDestruct(store: *NodeStore, record_destruct: CIR.Pattern.RecordDestruct, region: base.Region) CIR.Pattern.RecordDestruct.Idx {
     var node = Node{
         .data_1 = @bitCast(record_destruct.label),
         .data_2 = @bitCast(record_destruct.ident),
@@ -1498,7 +1483,7 @@ pub fn addRecordDestruct(store: *NodeStore, record_destruct: CIR.Pattern.RecordD
     }
 
     const nid = store.nodes.append(store.gpa, node);
-    _ = store.regions.append(store.gpa, record_destruct.region);
+    _ = store.regions.append(store.gpa, region);
     return @enumFromInt(@intFromEnum(nid));
 }
 
@@ -1593,30 +1578,26 @@ pub fn addWhereClause(store: *NodeStore, whereClause: CIR.WhereClause) CIR.Where
 }
 
 /// Adds a pattern to the store.
-pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern) std.mem.Allocator.Error!CIR.Pattern.Idx {
+pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) std.mem.Allocator.Error!CIR.Pattern.Idx {
     var node = Node{
         .data_1 = 0,
         .data_2 = 0,
         .data_3 = 0,
         .tag = @enumFromInt(0),
     };
-    var region = base.Region.zero();
 
     switch (pattern) {
         .assign => |p| {
             node.data_1 = @bitCast(p.ident);
             node.tag = .pattern_identifier;
-            region = p.region;
         },
         .as => |p| {
             node.tag = .pattern_as;
-            region = p.region;
             node.data_1 = @bitCast(p.ident);
             node.data_2 = @intFromEnum(p.pattern);
         },
         .applied_tag => |p| {
             node.tag = .pattern_applied_tag;
-            region = p.region;
 
             // Store applied tag data in extra_data
             const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
@@ -1628,7 +1609,6 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern) std.mem.Allocator.Err
         },
         .record_destructure => |p| {
             node.tag = .pattern_record_destructure;
-            region = p.region;
 
             // Store record destructure data in extra_data
             const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
@@ -1640,7 +1620,6 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern) std.mem.Allocator.Err
         },
         .list => |p| {
             node.tag = .pattern_list;
-            region = p.region;
 
             // Store list pattern data in extra_data
             const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
@@ -1667,13 +1646,11 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern) std.mem.Allocator.Err
         },
         .tuple => |p| {
             node.tag = .pattern_tuple;
-            region = p.region;
             node.data_1 = p.patterns.span.start;
             node.data_2 = p.patterns.span.len;
         },
         .int_literal => |p| {
             node.tag = .pattern_int_literal;
-            region = p.region;
             // Store the value in extra_data
             const extra_data_start = store.extra_data.items.len;
             const value_as_u32s: [4]u32 = @bitCast(p.value.bytes);
@@ -1684,7 +1661,6 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern) std.mem.Allocator.Err
         },
         .small_dec_literal => |p| {
             node.tag = .pattern_small_dec_literal;
-            region = p.region;
             // Pack small dec data into data_1 and data_3
             // data_1: numerator (i16) - fits in lower 16 bits
             // data_3: denominator_power_of_ten (u8) in lower 8 bits
@@ -1693,7 +1669,6 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern) std.mem.Allocator.Err
         },
         .dec_literal => |p| {
             node.tag = .pattern_dec_literal;
-            region = p.region;
             // Store the RocDec value in extra_data
             const extra_data_start = store.extra_data.items.len;
             const value_as_u32s: [4]u32 = @bitCast(p.value.num);
@@ -1704,12 +1679,10 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern) std.mem.Allocator.Err
         },
         .str_literal => |p| {
             node.tag = .pattern_str_literal;
-            region = p.region;
             node.data_1 = @intFromEnum(p.literal);
         },
         .char_literal => |p| {
             node.tag = .pattern_char_literal;
-            region = p.region;
 
             // Store char literal data in extra_data
             const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
@@ -1719,13 +1692,11 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern) std.mem.Allocator.Err
             try store.extra_data.append(store.gpa, @intFromEnum(p.requirements.bits_needed));
             node.data_1 = extra_data_start;
         },
-        .underscore => |p| {
+        .underscore => |_| {
             node.tag = .pattern_underscore;
-            region = p.region;
         },
         .runtime_error => |e| {
             node.tag = .malformed;
-            region = e.region;
             node.data_1 = @intFromEnum(e.diagnostic);
         },
     }
@@ -1978,7 +1949,6 @@ pub fn getRecordDestruct(store: *const NodeStore, idx: CIR.Pattern.RecordDestruc
     return CIR.Pattern.RecordDestruct{
         .label = @bitCast(node.data_1),
         .ident = @bitCast(node.data_2),
-        .region = store.getRegionAt(node_idx),
         .kind = kind,
     };
 }

@@ -708,14 +708,12 @@ test "NodeStore round trip - Pattern" {
     try patterns.append(CIR.Pattern{
         .assign = .{
             .ident = @bitCast(@as(u32, 123)),
-            .region = from_raw_offsets(10, 20),
         },
     });
     try patterns.append(CIR.Pattern{
         .as = .{
             .pattern = @enumFromInt(234),
             .ident = @bitCast(@as(u32, 345)),
-            .region = from_raw_offsets(30, 40),
         },
     });
     try patterns.append(CIR.Pattern{
@@ -723,7 +721,6 @@ test "NodeStore round trip - Pattern" {
             .ext_var = @enumFromInt(456),
             .tag_name = @bitCast(@as(u32, 567)),
             .arguments = CIR.Pattern.Span{ .span = base.DataSpan.init(678, 789) },
-            .region = from_raw_offsets(50, 60),
         },
     });
     try patterns.append(CIR.Pattern{
@@ -731,7 +728,6 @@ test "NodeStore round trip - Pattern" {
             .whole_var = @enumFromInt(890),
             .ext_var = @enumFromInt(901),
             .destructs = CIR.Pattern.RecordDestruct.Span{ .span = base.DataSpan.init(1012, 1123) },
-            .region = from_raw_offsets(70, 80),
         },
     });
     try patterns.append(CIR.Pattern{
@@ -740,13 +736,11 @@ test "NodeStore round trip - Pattern" {
             .elem_var = @enumFromInt(1345),
             .patterns = CIR.Pattern.Span{ .span = base.DataSpan.init(1456, 1567) },
             .rest_info = .{ .index = 3, .pattern = @enumFromInt(5676) },
-            .region = from_raw_offsets(90, 100),
         },
     });
     try patterns.append(CIR.Pattern{
         .tuple = .{
             .patterns = CIR.Pattern.Span{ .span = base.DataSpan.init(1678, 1789) },
-            .region = from_raw_offsets(110, 120),
         },
     });
     try patterns.append(CIR.Pattern{
@@ -755,26 +749,22 @@ test "NodeStore round trip - Pattern" {
                 .bytes = @bitCast(@as(i128, 42)),
                 .kind = .i128,
             },
-            .region = from_raw_offsets(130, 140),
         },
     });
     try patterns.append(CIR.Pattern{
         .small_dec_literal = .{
             .numerator = 123,
             .denominator_power_of_ten = 2,
-            .region = from_raw_offsets(150, 160),
         },
     });
     try patterns.append(CIR.Pattern{
         .dec_literal = .{
             .value = RocDec.fromU64(1890),
-            .region = from_raw_offsets(170, 180),
         },
     });
     try patterns.append(CIR.Pattern{
         .str_literal = .{
             .literal = @enumFromInt(1901),
-            .region = from_raw_offsets(210, 220),
         },
     });
     try patterns.append(CIR.Pattern{
@@ -785,29 +775,36 @@ test "NodeStore round trip - Pattern" {
                 .bits_needed = .@"7",
             },
             .value = 65, // 'A'
-            .region = from_raw_offsets(230, 240),
+
         },
     });
     try patterns.append(CIR.Pattern{
-        .underscore = .{
-            .region = from_raw_offsets(250, 260),
-        },
+        .underscore = .{},
     });
     try patterns.append(CIR.Pattern{
         .runtime_error = .{
             .diagnostic = @enumFromInt(2123),
-            .region = from_raw_offsets(270, 280),
         },
     });
 
     // Test the round-trip for all patterns
-    for (patterns.items) |pattern| {
-        const idx = try store.addPattern(pattern);
+    for (patterns.items, 0..) |pattern, i| {
+        // Create a unique region for each pattern
+        const region = from_raw_offsets(@intCast(10 + i * 20), @intCast(20 + i * 20));
+        const idx = try store.addPattern(pattern, region);
         const retrieved = store.getPattern(idx);
 
         testing.expectEqualDeep(pattern, retrieved) catch |err| {
             std.debug.print("\n\nOriginal:  {any}\n\n", .{pattern});
             std.debug.print("Retrieved: {any}\n\n", .{retrieved});
+            return err;
+        };
+
+        // Also verify the region was stored correctly
+        const stored_region = store.getRegionAt(@enumFromInt(@intFromEnum(idx)));
+        testing.expectEqualDeep(region, stored_region) catch |err| {
+            std.debug.print("\n\nExpected region: {any}\n\n", .{region});
+            std.debug.print("Stored region: {any}\n\n", .{stored_region});
             return err;
         };
     }

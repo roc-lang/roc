@@ -715,7 +715,7 @@ pub const Expr = union(enum) {
                 // Handle args span
                 var args_node = SExpr.init(gpa, "args");
                 for (ir.store.slicePatterns(lambda_expr.args)) |arg_idx| {
-                    var pattern_node = ir.store.getPattern(arg_idx).toSExpr(ir);
+                    var pattern_node = ir.store.getPattern(arg_idx).toSExpr(ir, arg_idx);
                     args_node.appendNode(gpa, &pattern_node);
                 }
                 node.appendNode(gpa, &args_node);
@@ -837,7 +837,7 @@ pub const Expr = union(enum) {
                 for (patterns_slice) |branch_pat_idx| {
                     const branch_pat = ir.store.getMatchBranchPattern(branch_pat_idx);
                     const pattern = ir.store.getPattern(branch_pat.pattern);
-                    var pattern_sexpr = pattern.toSExpr(ir);
+                    var pattern_sexpr = pattern.toSExpr(ir, branch_pat.pattern);
                     pattern_sexpr.appendBoolAttr(gpa, "degenerate", branch_pat.degenerate);
                     patterns_node.appendNode(gpa, &pattern_sexpr);
                 }
