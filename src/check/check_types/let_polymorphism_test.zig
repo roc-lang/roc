@@ -62,10 +62,12 @@ test "let-polymorphism with empty list" {
     try testing.expect(env.store.needsInstantiation(empty_list_var));
 
     // First usage: instantiate for integers
-    const int_list_var = try instantiate.instantiateVarAlloc(env.store, empty_list_var, test_allocator);
+    env.store.instantiate_subs.clearRetainingCapacity();
+    const int_list_var = try instantiate.instantiateVar(env.store, empty_list_var, &env.store.instantiate_subs);
 
     // Second usage: instantiate for strings
-    const str_list_var = try instantiate.instantiateVarAlloc(env.store, empty_list_var, test_allocator);
+    env.store.instantiate_subs.clearRetainingCapacity();
+    const str_list_var = try instantiate.instantiateVar(env.store, empty_list_var, &env.store.instantiate_subs);
 
     // Verify the two instantiations are different
     try testing.expect(int_list_var != str_list_var);
@@ -90,10 +92,12 @@ test "let-polymorphism with numeric literal" {
     try testing.expect(env.store.needsInstantiation(num_var));
 
     // First usage: instantiate as I32
-    const i32_instance = try instantiate.instantiateVarAlloc(env.store, num_var, test_allocator);
+    env.store.instantiate_subs.clearRetainingCapacity();
+    const i32_instance = try instantiate.instantiateVar(env.store, num_var, &env.store.instantiate_subs);
 
     // Second usage: instantiate as F64
-    const f64_instance = try instantiate.instantiateVarAlloc(env.store, num_var, test_allocator);
+    env.store.instantiate_subs.clearRetainingCapacity();
+    const f64_instance = try instantiate.instantiateVar(env.store, num_var, &env.store.instantiate_subs);
 
     // Verify the two instantiations are different
     try testing.expect(i32_instance != f64_instance);
@@ -116,10 +120,12 @@ test "let-polymorphism with polymorphic function" {
     try testing.expect(env.store.needsInstantiation(func_var));
 
     // First usage: instantiate for use with strings
-    const str_func = try instantiate.instantiateVarAlloc(env.store, func_var, test_allocator);
+    env.store.instantiate_subs.clearRetainingCapacity();
+    const str_func = try instantiate.instantiateVar(env.store, func_var, &env.store.instantiate_subs);
 
     // Second usage: instantiate for use with numbers
-    const num_func = try instantiate.instantiateVarAlloc(env.store, func_var, test_allocator);
+    env.store.instantiate_subs.clearRetainingCapacity();
+    const num_func = try instantiate.instantiateVar(env.store, func_var, &env.store.instantiate_subs);
 
     // Verify we got different instantiations
     try testing.expect(str_func != num_func);
@@ -159,10 +165,12 @@ test "let-polymorphism with nested structures" {
     try testing.expect(env.store.needsInstantiation(record_var));
 
     // First usage: instantiate for integers
-    const int_record = try instantiate.instantiateVarAlloc(env.store, record_var, test_allocator);
+    env.store.instantiate_subs.clearRetainingCapacity();
+    const int_record = try instantiate.instantiateVar(env.store, record_var, &env.store.instantiate_subs);
 
     // Second usage: instantiate for booleans
-    const bool_record = try instantiate.instantiateVarAlloc(env.store, record_var, test_allocator);
+    env.store.instantiate_subs.clearRetainingCapacity();
+    const bool_record = try instantiate.instantiateVar(env.store, record_var, &env.store.instantiate_subs);
 
     // Verify different instantiations
     try testing.expect(int_record != bool_record);
@@ -213,9 +221,12 @@ test "let-polymorphism with multiple type parameters" {
     try testing.expect(env.store.needsInstantiation(func_var));
 
     // Multiple instantiations should produce different variables
-    const inst1 = try instantiate.instantiateVarAlloc(env.store, func_var, test_allocator);
-    const inst2 = try instantiate.instantiateVarAlloc(env.store, func_var, test_allocator);
-    const inst3 = try instantiate.instantiateVarAlloc(env.store, func_var, test_allocator);
+    env.store.instantiate_subs.clearRetainingCapacity();
+    const inst1 = try instantiate.instantiateVar(env.store, func_var, &env.store.instantiate_subs);
+    env.store.instantiate_subs.clearRetainingCapacity();
+    const inst2 = try instantiate.instantiateVar(env.store, func_var, &env.store.instantiate_subs);
+    env.store.instantiate_subs.clearRetainingCapacity();
+    const inst3 = try instantiate.instantiateVar(env.store, func_var, &env.store.instantiate_subs);
 
     try testing.expect(inst1 != inst2);
     try testing.expect(inst2 != inst3);
@@ -244,8 +255,10 @@ test "let-polymorphism with constrained type variables" {
     try testing.expect(env.store.needsInstantiation(add_func_var));
 
     // Instantiate for different numeric types
-    const int_add = try instantiate.instantiateVarAlloc(env.store, add_func_var, test_allocator);
-    const float_add = try instantiate.instantiateVarAlloc(env.store, add_func_var, test_allocator);
+    env.store.instantiate_subs.clearRetainingCapacity();
+    const int_add = try instantiate.instantiateVar(env.store, add_func_var, &env.store.instantiate_subs);
+    env.store.instantiate_subs.clearRetainingCapacity();
+    const float_add = try instantiate.instantiateVar(env.store, add_func_var, &env.store.instantiate_subs);
 
     try testing.expect(int_add != float_add);
     try testing.expect(int_add != add_func_var);
@@ -286,8 +299,10 @@ test "let-polymorphism with simple tag union" {
     try testing.expect(env.store.needsInstantiation(option_var));
 
     // Instantiate for different element types
-    const string_option = try instantiate.instantiateVarAlloc(env.store, option_var, test_allocator);
-    const number_option = try instantiate.instantiateVarAlloc(env.store, option_var, test_allocator);
+    env.store.instantiate_subs.clearRetainingCapacity();
+    const string_option = try instantiate.instantiateVar(env.store, option_var, &env.store.instantiate_subs);
+    env.store.instantiate_subs.clearRetainingCapacity();
+    const number_option = try instantiate.instantiateVar(env.store, option_var, &env.store.instantiate_subs);
 
     try testing.expect(string_option != number_option);
     try testing.expect(string_option != option_var);
@@ -332,8 +347,10 @@ test "let-polymorphism interaction with pattern matching" {
     try testing.expect(env.store.needsInstantiation(is_just_func_var));
 
     // Instantiate for different types
-    const str_is_just = try instantiate.instantiateVarAlloc(env.store, is_just_func_var, test_allocator);
-    const int_is_just = try instantiate.instantiateVarAlloc(env.store, is_just_func_var, test_allocator);
+    env.store.instantiate_subs.clearRetainingCapacity();
+    const str_is_just = try instantiate.instantiateVar(env.store, is_just_func_var, &env.store.instantiate_subs);
+    env.store.instantiate_subs.clearRetainingCapacity();
+    const int_is_just = try instantiate.instantiateVar(env.store, is_just_func_var, &env.store.instantiate_subs);
 
     try testing.expect(str_is_just != int_is_just);
     try testing.expect(str_is_just != is_just_func_var);
@@ -372,13 +389,15 @@ test "let-polymorphism preserves sharing within single instantiation" {
     try testing.expect(env.store.needsInstantiation(record_var));
 
     // Instantiate once
-    const inst = try instantiate.instantiateVarAlloc(env.store, record_var, test_allocator);
+    env.store.instantiate_subs.clearRetainingCapacity();
+    const inst = try instantiate.instantiateVar(env.store, record_var, &env.store.instantiate_subs);
 
     // Within this single instantiation, all occurrences of 'a' should be replaced
     // with the same fresh variable (preserving the constraint that first, second,
     // and both elements of pair must have the same type)
 
     // Get another instantiation to verify they're different
-    const inst2 = try instantiate.instantiateVarAlloc(env.store, record_var, test_allocator);
+    env.store.instantiate_subs.clearRetainingCapacity();
+    const inst2 = try instantiate.instantiateVar(env.store, record_var, &env.store.instantiate_subs);
     try testing.expect(inst != inst2);
 }

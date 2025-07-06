@@ -77,20 +77,6 @@ pub fn instantiateVar(
     return fresh_var;
 }
 
-/// Instantiate a polymorphic type with fresh type variables.
-/// Prefer `instantiateVar` over this function, as this function inits/deinits
-/// the substitution map each call.
-pub fn instantiateVarAlloc(
-    store: *TypesStore,
-    var_to_instantiate: Var,
-    allocator: std.mem.Allocator,
-) std.mem.Allocator.Error!Var {
-    var substitution = VarSubstitution.init(allocator);
-    defer substitution.deinit();
-
-    return instantiateVar(store, var_to_instantiate, &substitution);
-}
-
 fn instantiateContent(
     store: *TypesStore,
     content: Content,

@@ -6,6 +6,7 @@ const std = @import("std");
 const base = @import("../base.zig");
 const collections = @import("../collections.zig");
 const types = @import("./types.zig");
+const instantiate = @import("../check/check_types/instantiate.zig");
 
 const exitOnOutOfMemory = collections.utils.exitOnOom;
 
@@ -59,6 +60,9 @@ pub const Store = struct {
     tags: TagSafeMultiList,
     tag_args: VarSafeList,
 
+    /// Reusable substitution map for type instantiation
+    instantiate_subs: instantiate.VarSubstitution,
+
     /// Init the unification table
     pub fn init(gpa: Allocator) Self {
         // TODO: eventually use herusitics here to determine sensible defaults
@@ -80,6 +84,7 @@ pub const Store = struct {
             .record_fields = RecordFieldSafeMultiList.initCapacity(gpa, child_capacity),
             .tags = TagSafeMultiList.initCapacity(gpa, child_capacity),
             .tag_args = VarSafeList.initCapacity(gpa, child_capacity),
+            .instantiate_subs = instantiate.VarSubstitution.init(gpa),
         };
     }
 
@@ -101,6 +106,7 @@ pub const Store = struct {
         self.record_fields.deinit(self.gpa);
         self.tags.deinit(self.gpa);
         self.tag_args.deinit(self.gpa);
+        self.instantiate_subs.deinit();
     }
 
     // fresh variables //
