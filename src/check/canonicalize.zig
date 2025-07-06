@@ -26,6 +26,8 @@ var_function_regions: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, Region),
 var_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
 /// Tracks which pattern indices have been used/referenced
 used_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
+/// Keep track of pending annotation
+scratch_vars: std.ArrayListUnmanaged(TypeVar),
 
 const Ident = base.Ident;
 const Region = base.Region;
@@ -84,6 +86,7 @@ pub fn deinit(
     self.var_function_regions.deinit(gpa);
     self.var_patterns.deinit(gpa);
     self.used_patterns.deinit(gpa);
+    self.scratch_vars.deinit(gpa);
 }
 
 pub fn init(self: *CIR, parse_ir: *AST) std.mem.Allocator.Error!Self {
@@ -98,6 +101,7 @@ pub fn init(self: *CIR, parse_ir: *AST) std.mem.Allocator.Error!Self {
         .var_function_regions = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, Region){},
         .var_patterns = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void){},
         .used_patterns = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void){},
+        .scratch_vars = std.ArrayListUnmanaged(TypeVar){},
     };
 
     // Top-level scope is not a function boundary
@@ -122,38 +126,29 @@ pub fn init(self: *CIR, parse_ir: *AST) std.mem.Allocator.Error!Self {
 
     // Add built-in types to the type scope
     // TODO: These should ultimately come from the platform/builtin files rather than being hardcoded
-    result.addBuiltinType(self, "Bool");
-    result.addBuiltinType(self, "Str");
-    result.addBuiltinType(self, "U8");
-    result.addBuiltinType(self, "U16");
-    result.addBuiltinType(self, "U32");
-    result.addBuiltinType(self, "U64");
-    result.addBuiltinType(self, "U128");
-    result.addBuiltinType(self, "I8");
-    result.addBuiltinType(self, "I16");
-    result.addBuiltinType(self, "I32");
-    result.addBuiltinType(self, "I64");
-    result.addBuiltinType(self, "I128");
-    result.addBuiltinType(self, "F32");
-    result.addBuiltinType(self, "F64");
-    result.addBuiltinType(self, "Dec");
-    result.addBuiltinType(self, "List");
-    result.addBuiltinType(self, "Dict");
-    result.addBuiltinType(self, "Set");
-    result.addBuiltinType(self, "Result");
-    result.addBuiltinType(self, "Box");
+    try result.addBuiltinTypeBool(self);
 
-    // Set type for builtin Bool. In the future this will come from the builtin
-    // module. Also, it will be a nominal type, not a simple tag union
-    const bool_ext = self.pushTypeVar(
-        Content{ .structure = .empty_tag_union },
-        @enumFromInt(@intFromEnum(BUILTIN_BOOL)),
-        Region.zero(),
-    ) catch |err| exitOnOom(err);
-    _ = self.setTypeVarAtPat(
-        BUILTIN_BOOL,
-        self.env.types.mkBool(self.env.gpa, &self.env.idents, bool_ext),
-    );
+    const result_type_decl = try result.addBuiltinType(self, "Result");
+    _ = self.setTypeRedirectAt(CIR.nodeIdxFrom(BUILTIN_RESULT), CIR.varFrom(result_type_decl));
+
+    _ = try result.addBuiltinType(self, "Str");
+    _ = try result.addBuiltinType(self, "U8");
+    _ = try result.addBuiltinType(self, "U16");
+    _ = try result.addBuiltinType(self, "U32");
+    _ = try result.addBuiltinType(self, "U64");
+    _ = try result.addBuiltinType(self, "U128");
+    _ = try result.addBuiltinType(self, "I8");
+    _ = try result.addBuiltinType(self, "I16");
+    _ = try result.addBuiltinType(self, "I32");
+    _ = try result.addBuiltinType(self, "I64");
+    _ = try result.addBuiltinType(self, "I128");
+    _ = try result.addBuiltinType(self, "F32");
+    _ = try result.addBuiltinType(self, "F64");
+    _ = try result.addBuiltinType(self, "Dec");
+    _ = try result.addBuiltinType(self, "List");
+    _ = try result.addBuiltinType(self, "Dict");
+    _ = try result.addBuiltinType(self, "Set");
+    _ = try result.addBuiltinType(self, "Box");
 
     return result;
 }
@@ -171,7 +166,9 @@ fn addBuiltin(self: *Self, ir: *CIR, ident_text: []const u8, idx: CIR.Pattern.Id
     _ = ir.setTypeVarAtPat(pattern_idx_add, Content{ .flex_var = null });
 }
 
-fn addBuiltinType(self: *Self, ir: *CIR, type_name: []const u8) void {
+/// Stub builtin types. Currently sets every type to be a nominal type
+/// This should be replaced by real builtins eventually
+fn addBuiltinType(self: *Self, ir: *CIR, type_name: []const u8) std.mem.Allocator.Error!CIR.Statement.Idx {
     const gpa = ir.env.gpa;
     const type_ident = ir.env.idents.insert(gpa, base.Ident.for_text(type_name), Region.zero());
 
@@ -187,22 +184,86 @@ fn addBuiltinType(self: *Self, ir: *CIR, type_name: []const u8) void {
         .symbol = type_ident,
         .region = Region.zero(),
     } });
+    const anno_var = try ir.pushFreshTypeVar(@enumFromInt(@intFromEnum(header_idx)), Region.zero());
 
     // Create the type declaration statement
     const type_decl_stmt = CIR.Statement{
-        .s_alias_decl = .{
+        .s_nominal_decl = .{
             .header = header_idx,
             .anno = anno_idx,
+            .anno_var = anno_var,
             .where = null,
             .region = Region.zero(),
         },
     };
 
     const type_decl_idx = ir.store.addStatement(type_decl_stmt);
+    const type_decl_node_idx = CIR.nodeIdxFrom(type_decl_idx);
+    _ = ir.setTypeVarAt(
+        type_decl_node_idx,
+        Content{ .structure = FlatType{ .nominal_type = types.NominalType{
+            .ident = types.TypeIdent{ .ident_idx = type_ident },
+            .num_args = 0,
+        } } },
+    );
+    _ = try ir.pushFreshTypeVar(type_decl_node_idx, Region.zero());
 
     // Add to scope without any error checking (built-ins are always valid)
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
     current_scope.put(gpa, .type_decl, type_ident, type_decl_idx);
+
+    return type_decl_idx;
+}
+
+/// Stub builtin types. Currently sets every type to be a nominal type
+/// This should be replaced by real builtins eventually
+fn addBuiltinTypeBool(self: *Self, ir: *CIR) std.mem.Allocator.Error!void {
+    const gpa = ir.env.gpa;
+    const type_ident = ir.env.idents.insert(gpa, base.Ident.for_text("Bool"), Region.zero());
+
+    // Create a type header for the built-in type
+    const header_idx = ir.store.addTypeHeader(.{
+        .name = type_ident,
+        .args = .{ .span = .{ .start = 0, .len = 0 } }, // No type parameters for built-ins
+        .region = Region.zero(),
+    });
+    const header_node_idx = CIR.nodeIdxFrom(header_idx);
+
+    // Create a type annotation that refers to itself (built-in types are primitive)
+    const anno_idx = ir.store.addTypeAnno(.{ .ty = .{
+        .symbol = type_ident,
+        .region = Region.zero(),
+    } });
+    const ext_var = try ir.pushTypeVar(Content{ .structure = .empty_tag_union }, header_node_idx, Region.zero());
+    const anno_var = try ir.pushTypeVar(ir.env.types.mkBool(gpa, &ir.env.idents, ext_var), header_node_idx, Region.zero());
+
+    // Create the type declaration statement
+    const type_decl_stmt = CIR.Statement{
+        .s_nominal_decl = .{
+            .header = header_idx,
+            .anno = anno_idx,
+            .anno_var = anno_var,
+            .where = null,
+            .region = Region.zero(),
+        },
+    };
+
+    const type_decl_idx = ir.store.addStatement(type_decl_stmt);
+    const type_decl_node_idx = CIR.nodeIdxFrom(type_decl_idx);
+    _ = ir.setTypeVarAt(
+        type_decl_node_idx,
+        Content{ .structure = FlatType{ .nominal_type = types.NominalType{
+            .ident = types.TypeIdent{ .ident_idx = type_ident },
+            .num_args = 0,
+        } } },
+    );
+    _ = try ir.pushRedirectTypeVar(anno_var, type_decl_node_idx, Region.zero());
+
+    // Add to scope without any error checking (built-ins are always valid)
+    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+    current_scope.put(gpa, .type_decl, type_ident, type_decl_idx);
+
+    _ = ir.setTypeRedirectAt(CIR.nodeIdxFrom(BUILTIN_BOOL), CIR.varFrom(type_decl_idx));
 }
 
 const Self = @This();
@@ -258,6 +319,7 @@ pub fn canonicalizeFile(
                         .s_alias_decl = .{
                             .header = header_idx,
                             .anno = @enumFromInt(0), // placeholder - will be replaced
+                            .anno_var = @enumFromInt(0), // placeholder - will be replaced
                             .where = null,
                             .region = region,
                         },
@@ -266,6 +328,7 @@ pub fn canonicalizeFile(
                         .s_nominal_decl = .{
                             .header = header_idx,
                             .anno = @enumFromInt(0), // placeholder - will be replaced
+                            .anno_var = @enumFromInt(0), // placeholder - will be replaced
                             .where = null,
                             .region = region,
                         },
@@ -290,32 +353,86 @@ pub fn canonicalizeFile(
                     break :blk self.canonicalizeTypeAnno(type_decl.anno);
                 };
 
+                // Creat type variables to the backing type (rhs)
+                const anno_var = try self.canonicalizeTypeAnnoToTypeVar(anno_idx, CIR.nodeIdxFrom(header_idx));
+
+                // Create types for each arg annotation
+                const scratch_anno_start = self.scratch_vars.items.len;
+                for (self.can_ir.store.sliceTypeAnnos(header.args)) |arg_anno_idx| {
+                    const arg_anno_var = try self.canonicalizeTypeAnnoToTypeVar(arg_anno_idx, CIR.nodeIdxFrom(header_idx));
+                    try self.scratch_vars.append(self.can_ir.env.gpa, arg_anno_var);
+                }
+                const arg_anno_slice = self.scratch_vars.items[scratch_anno_start..self.scratch_vars.items.len];
+
+                // The identified of the type
+                const type_ident = types.TypeIdent{ .ident_idx = header.name };
+
+                // The number of args for the alias/nominal type
+                const num_args = @as(u32, @intCast(arg_anno_slice.len));
+
                 // Create the real CIR type declaration statement with the canonicalized annotation
-                const real_cir_type_decl = switch (type_decl.kind) {
-                    .alias => CIR.Statement{
-                        .s_alias_decl = .{
-                            .header = header_idx,
-                            .anno = anno_idx,
-                            .where = null, // TODO: implement where clauses
-                            .region = region,
+                const real_cir_type_decl, const type_decl_content = blk: {
+                    switch (type_decl.kind) {
+                        .alias => {
+                            break :blk .{
+                                CIR.Statement{
+                                    .s_alias_decl = .{
+                                        .header = header_idx,
+                                        .anno = anno_idx,
+                                        .anno_var = anno_var,
+                                        .where = null, // TODO: implement where clauses
+                                        .region = region,
+                                    },
+                                },
+                                Content{ .alias = types.Alias{
+                                    .ident = type_ident,
+                                    .num_args = num_args,
+                                } },
+                            };
                         },
-                    },
-                    .nominal => CIR.Statement{
-                        .s_nominal_decl = .{
-                            .header = header_idx,
-                            .anno = anno_idx,
-                            .where = null, // TODO: implement where clauses
-                            .region = region,
+                        .nominal => {
+                            break :blk .{
+                                CIR.Statement{
+                                    .s_nominal_decl = .{
+                                        .header = header_idx,
+                                        .anno_var = anno_var,
+                                        .anno = anno_idx,
+                                        .where = null, // TODO: implement where clauses
+                                        .region = region,
+                                    },
+                                },
+                                Content{ .structure = FlatType{ .nominal_type = types.NominalType{
+                                    .ident = type_ident,
+                                    .num_args = num_args,
+                                } } },
+                            };
                         },
-                    },
+                    }
                 };
 
                 // Create the real statement and add it to scratch statements
-                const real_type_decl_idx = self.can_ir.store.addStatement(real_cir_type_decl);
-                self.can_ir.store.addScratchStatement(real_type_decl_idx);
+                const type_decl_stmt_idx = self.can_ir.store.addStatement(real_cir_type_decl);
+                self.can_ir.store.addScratchStatement(type_decl_stmt_idx);
+
+                // Set the root type variable
+                _ = self.can_ir.setTypeVarAtStmt(type_decl_stmt_idx, type_decl_content);
+
+                // Next, insert vars immediately after the alias/nominal type
+                // The sequence here is *important*!
+                // Alias/nominal types, where N=root_type_var, expect:
+                // N+1 = backing type var (ie rhs of expr)
+                // N+2..N+X = argument vars
+                const type_decl_node_idx = CIR.nodeIdxFrom(type_decl_stmt_idx);
+                _ = try self.can_ir.pushRedirectTypeVar(anno_var, type_decl_node_idx, region);
+                for (arg_anno_slice) |arg_anno_var| {
+                    _ = try self.can_ir.pushRedirectTypeVar(arg_anno_var, type_decl_node_idx, region);
+                }
+
+                // Shrink the scratch var buffer now that our work is done
+                self.scratch_vars.shrinkRetainingCapacity(scratch_anno_start);
 
                 // Update the scope to point to the real statement instead of the placeholder
-                self.scopeUpdateTypeDecl(header.name, real_type_decl_idx);
+                self.scopeUpdateTypeDecl(header.name, type_decl_stmt_idx);
             },
             else => {
                 // Skip non-type-declaration statements in first pass
@@ -874,6 +991,7 @@ fn canonicalizeDeclWithAnnotation(
         .annotation = annotation,
         .kind = .let,
     });
+
     // Set def type variable to a flex var
     //
     // We always use a flex variable for the definition, regardless of whether there's
@@ -967,26 +1085,22 @@ pub fn canonicalizeExpr(
                     const args_span = self.can_ir.store.exprSpanFrom(scratch_top);
                     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
-                    // Create type vars, first "reserve" node slots
-                    const final_expr_idx = self.can_ir.store.predictNodeIndex(2);
-
-                    // Then insert the type vars, setting the parent to be the final slot
-                    const poly_var = self.can_ir.pushFreshTypeVar(final_expr_idx, region) catch |err| exitOnOom(err);
-
                     // Then in the final slot the actual expr is inserted
                     const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
                         .e_tag = .{
-                            .ext_var = poly_var,
                             .name = tag_name,
                             .args = args_span,
                             .region = region,
                         },
                     });
 
-                    std.debug.assert(@intFromEnum(expr_idx) == @intFromEnum(final_expr_idx));
-
-                    // Insert flex type variable
-                    _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
+                    // Create a single tag, open tag union for this variable
+                    const ext_var = self.can_ir.pushFreshTypeVar(CIR.nodeIdxFrom(expr_idx), region) catch |err| exitOnOom(err);
+                    const tag_union = self.can_ir.env.types.mkTagUnion(
+                        &[_]Tag{Tag{ .name = tag_name, .args = types.Var.SafeList.Range.empty }},
+                        ext_var,
+                    );
+                    _ = self.can_ir.setTypeVarAtExpr(expr_idx, tag_union);
 
                     return expr_idx;
                 } else {
@@ -1452,36 +1566,73 @@ pub fn canonicalizeExpr(
             return expr_idx;
         },
         .tag => |e| {
+            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
+
             if (self.parse_ir.tokens.resolveIdentifier(e.token)) |tag_name| {
-                const region = self.parse_ir.tokenizedRegionToRegion(e.region);
-
-                // create type vars, first "reserve" node slots
-                const final_expr_idx = self.can_ir.store.predictNodeIndex(2);
-
-                // then insert the type vars, setting the parent to be the final slot
-                const poly_var = self.can_ir.pushFreshTypeVar(final_expr_idx, region) catch |err| exitOnOom(err);
-
-                // then in the final slot the actual expr is inserted
-                const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
+                const tag_expr_idx = self.can_ir.store.addExpr(CIR.Expr{
                     .e_tag = .{
-                        .ext_var = poly_var,
                         .name = tag_name,
                         .args = .{ .span = .{ .start = 0, .len = 0 } }, // empty arguments
                         .region = region,
                     },
                 });
 
-                std.debug.assert(@intFromEnum(expr_idx) == @intFromEnum(final_expr_idx));
-
-                // Insert concrete type variable
+                // Create a single tag, open tag union for this variable
+                const ext_var = self.can_ir.pushFreshTypeVar(CIR.nodeIdxFrom(tag_expr_idx), region) catch |err| exitOnOom(err);
                 const tag_union = self.can_ir.env.types.mkTagUnion(
                     &[_]Tag{Tag{ .name = tag_name, .args = types.Var.SafeList.Range.empty }},
-                    poly_var,
+                    ext_var,
                 );
+                _ = self.can_ir.setTypeVarAtExpr(tag_expr_idx, tag_union);
 
-                _ = self.can_ir.setTypeVarAtExpr(expr_idx, tag_union);
+                if (e.qualifiers.span.len == 0) {
+                    // If this is a tag without a prefix, then is it an
+                    // anonymous tag and we can just return it
+                    return tag_expr_idx;
+                } else {
+                    // If this is a tag with a prefix, then is it a nominal tag.
+                    //
+                    // TODO: Currently this just get the last qualified, then
+                    // looks up the associated type. Is this right?
 
-                return expr_idx;
+                    // Get the last token of the qualifiers
+                    const qualifier_toks = self.parse_ir.store.tokenSlice(e.qualifiers);
+                    const last_tok_idx = qualifier_toks[e.qualifiers.span.len - 1];
+                    const last_tok_ident, const last_tok_region = self.parse_ir.tokens.resolveIdentifierAndRegion(last_tok_idx) orelse {
+                        const feature = self.can_ir.env.strings.insert(
+                            self.can_ir.env.gpa,
+                            "tag qualifier token is not an ident",
+                        );
+                        return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
+                            .feature = feature,
+                            .region = region,
+                        } });
+                    };
+
+                    // Lookup last token (assumed to be a type decl) in scope
+                    const nominal_type_decl = self.scopeLookupTypeDecl(last_tok_ident) orelse
+                        return self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .ident_not_in_scope = .{
+                            .ident = last_tok_ident,
+                            .region = last_tok_region,
+                        } });
+
+                    // Create the expr
+                    const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
+                        .e_nominal = .{
+                            .nominal_type_decl = nominal_type_decl,
+                            .backing_expr = tag_expr_idx,
+                            .backing_type = .tag,
+                            .region = last_tok_region,
+                        },
+                    });
+
+                    // Initially set the root expr to be a flex var
+                    // In type checking, this will be unified with the nominal
+                    // type if the `tag` is valid
+                    _ = self.can_ir.setTypeVarAtExpr(expr_idx, Content{ .flex_var = null });
+
+                    return expr_idx;
+                }
             } else {
                 return null;
             }
@@ -3134,8 +3285,9 @@ fn canonicalizeTagVariant(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.
             } });
         },
         else => {
-            // For other cases, fall back to regular canonicalization
-            return self.canonicalizeTypeAnno(anno_idx);
+            return self.can_ir.pushMalformed(CIR.TypeAnno.Idx, CIR.Diagnostic{
+                .malformed_type_annotation = .{ .region = self.parse_ir.tokenizedRegionToRegion(ast_anno.toRegion()) },
+            });
         },
     }
 }
@@ -4504,8 +4656,9 @@ fn extractModuleName(self: *Self, module_name_ident: Ident.Idx) Ident.Idx {
 }
 
 /// Convert a parsed TypeAnno into a canonical TypeVar with appropriate Content
-fn canonicalizeTypeAnnoToTypeVar(self: *Self, type_anno_idx: CIR.TypeAnno.Idx, parent_node_idx: Node.Idx, region: Region) std.mem.Allocator.Error!TypeVar {
+fn canonicalizeTypeAnnoToTypeVar(self: *Self, type_anno_idx: CIR.TypeAnno.Idx, parent_node_idx: Node.Idx) std.mem.Allocator.Error!TypeVar {
     const type_anno = self.can_ir.store.getTypeAnno(type_anno_idx);
+    const region = type_anno.toRegion();
 
     switch (type_anno) {
         .ty_var => |tv| {
@@ -4562,7 +4715,7 @@ fn canonicalizeTypeAnnoToTypeVar(self: *Self, type_anno_idx: CIR.TypeAnno.Idx, p
         },
         .parens => |parens| {
             // Recursively canonicalize the inner type
-            return try self.canonicalizeTypeAnnoToTypeVar(parens.anno, parent_node_idx, region);
+            return try self.canonicalizeTypeAnnoToTypeVar(parens.anno, parent_node_idx);
         },
 
         .ty_lookup_external => |tle| {
@@ -4681,7 +4834,7 @@ fn canonicalizeTypeApplication(self: *Self, apply: anytype, parent_node_idx: Nod
 
         // Create type argument variables sequentially after backing var
         for (actual_args) |arg_idx| {
-            _ = try self.canonicalizeTypeAnnoToTypeVar(arg_idx, parent_node_idx, region);
+            _ = try self.canonicalizeTypeAnnoToTypeVar(arg_idx, parent_node_idx);
         }
 
         // Now set the alias content on the main variable
@@ -4724,12 +4877,12 @@ fn canonicalizeFunctionType(self: *Self, func: anytype, parent_node_idx: Node.Id
 
     // For each argument, canonicalize its type and collect the type var
     for (args_slice) |arg_anno_idx| {
-        const arg_type_var = try self.canonicalizeTypeAnnoToTypeVar(arg_anno_idx, parent_node_idx, region);
+        const arg_type_var = try self.canonicalizeTypeAnnoToTypeVar(arg_anno_idx, parent_node_idx);
         arg_vars.append(arg_type_var) catch |err| exitOnOom(err);
     }
 
     // Canonicalize return type
-    const ret_type_var = try self.canonicalizeTypeAnnoToTypeVar(func.ret, parent_node_idx, region);
+    const ret_type_var = try self.canonicalizeTypeAnnoToTypeVar(func.ret, parent_node_idx);
 
     // Create the appropriate function type based on effectfulness
     const func_content = if (func.effectful)
@@ -4769,7 +4922,7 @@ fn canonicalizeRecordType(self: *Self, record: anytype, parent_node_idx: Node.Id
         const field = self.can_ir.store.getAnnoRecordField(field_idx);
 
         // Canonicalize the field's type annotation
-        const field_type_var = try self.canonicalizeTypeAnnoToTypeVar(field.ty, parent_node_idx, region);
+        const field_type_var = try self.canonicalizeTypeAnnoToTypeVar(field.ty, parent_node_idx);
 
         type_record_fields.append(types.RecordField{
             .name = field.name,
@@ -4789,13 +4942,61 @@ fn canonicalizeRecordType(self: *Self, record: anytype, parent_node_idx: Node.Id
 }
 
 /// Handle tag union types like [Some(a), None]
-fn canonicalizeTagUnionType(self: *Self, tag_union: anytype, parent_node_idx: Node.Idx, region: Region) TypeVar {
+fn canonicalizeTagUnionType(self: *Self, tag_union: CIR.TypeAnno.TagUnion, parent_node_idx: Node.Idx, region: Region) TypeVar {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    _ = tag_union;
-    // Simplified implementation - create flex var for tag unions
-    return self.can_ir.pushFreshTypeVar(parent_node_idx, region) catch |err| exitOnOom(err);
+    // TODO: When
+    const tags_top = self.can_ir.env.types.tags.len();
+    const tags_slice = self.can_ir.store.sliceTypeAnnos(tag_union.tags);
+    for (tags_slice) |tag_anno_idx| {
+        const tag_anno = self.can_ir.store.getTypeAnno(tag_anno_idx);
+        switch (tag_anno) {
+            .ty => |ty| {
+                _ = self.can_ir.env.types.appendTag(types.Tag{
+                    .name = ty.symbol,
+                    .args = TypeVar.SafeList.Range.empty,
+                });
+            },
+            .apply => |apply| {
+                // TODO: Handle args
+                //
+                // When we do this, we will cannot use `tags_top`, since
+                // recuresive  calls can created invalid ranges. We may need a
+                // scratch buffer
+                _ = self.can_ir.env.types.appendTag(types.Tag{
+                    .name = apply.symbol,
+                    .args = TypeVar.SafeList.Range.empty,
+                });
+            },
+            else => {
+                // This case should be impossible. All type anno types
+                // other than ty and apply should be `malformed`. See
+                // `canonicalizeTagVariant` for details
+            },
+        }
+    }
+    const tags_range = types.Tag.SafeMultiList.Range{
+        .start = @enumFromInt(tags_top),
+        .end = @enumFromInt(self.can_ir.env.types.tags.len()),
+    };
+
+    // Get the tag union ext
+    const tag_union_ext = blk: {
+        if (tag_union.open_anno) |open_anno_idx| {
+            break :blk self.canonicalizeTypeAnnoToTypeVar(open_anno_idx, CIR.nodeIdxFrom(open_anno_idx));
+        } else {
+            break :blk self.can_ir.pushTypeVar(Content{ .structure = .empty_tag_union }, parent_node_idx, region);
+        }
+    } catch |e| exitOnOom(e);
+
+    // Create the type content
+    const tag_union_content = types.Content{ .structure = types.FlatType{
+        .tag_union = types.TagUnion{ .tags = tags_range, .ext = tag_union_ext },
+    } };
+
+    // Create the type var
+    return self.can_ir.pushTypeVar(tag_union_content, parent_node_idx, region) catch |err| exitOnOom(err);
 }
 
 /// Handle module-qualified types like Json.Decoder
@@ -4805,7 +5006,7 @@ fn createAnnotationFromTypeAnno(self: *Self, type_anno_idx: CIR.TypeAnno.Idx, _:
     defer trace.end();
 
     // Convert the type annotation to a type variable
-    const signature = try self.canonicalizeTypeAnnoToTypeVar(type_anno_idx, parent_node_idx, region);
+    const signature = try self.canonicalizeTypeAnnoToTypeVar(type_anno_idx, parent_node_idx);
 
     // Create the annotation structure
     const annotation = CIR.Annotation{

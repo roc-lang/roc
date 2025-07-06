@@ -141,7 +141,7 @@ fn processSourceInternal(
     }
 
     // Type checking
-    var solver = try Solver.init(gpa, &module_env.types, cir, &cir.store.regions);
+    var solver = try Solver.init(gpa, &module_env.types, cir);
     defer solver.deinit();
 
     // Check for type errors

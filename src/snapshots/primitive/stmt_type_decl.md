@@ -61,5 +61,11 @@ Foo(a, b) : (a, b, Str, U64)
 ~~~clojure
 (inferred-types
 	(defs)
+	(type_decls
+		(alias @3.1-3.25 (type "Foo(a, b)")
+			(ty-header @3.1-3.9 (name "Foo")
+				(ty-args
+					(ty-var @3.5-3.6 (name "a"))
+					(ty-var @3.7-3.8 (name "b"))))))
 	(expressions))
 ~~~

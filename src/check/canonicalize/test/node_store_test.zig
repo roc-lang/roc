@@ -100,6 +100,7 @@ test "NodeStore round trip - Statements" {
     try statements.append(CIR.Statement{
         .s_alias_decl = .{
             .anno = @enumFromInt(8676),
+            .anno_var = @enumFromInt(8691),
             .header = @enumFromInt(723),
             .where = CIR.WhereClause.Span{ .span = base.DataSpan.init(234, 45645) },
             .region = from_raw_offsets(1232, 3453),
@@ -109,6 +110,7 @@ test "NodeStore round trip - Statements" {
     try statements.append(CIR.Statement{
         .s_nominal_decl = .{
             .anno = @enumFromInt(9876),
+            .anno_var = @enumFromInt(8691),
             .header = @enumFromInt(824),
             .where = CIR.WhereClause.Span{ .span = base.DataSpan.init(345, 56789) },
             .region = from_raw_offsets(2345, 4567),
@@ -252,9 +254,16 @@ test "NodeStore round trip - Expressions" {
     });
     try expressions.append(CIR.Expr{
         .e_tag = .{
-            .ext_var = @enumFromInt(2012),
             .name = @bitCast(@as(u32, 2123)),
             .args = CIR.Expr.Span{ .span = base.DataSpan.init(901, 1234) },
+            .region = from_raw_offsets(1901, 2234),
+        },
+    });
+    try expressions.append(CIR.Expr{
+        .e_nominal = .{
+            .nominal_type_decl = @enumFromInt(2012),
+            .backing_expr = @enumFromInt(2012),
+            .backing_type = .tag,
             .region = from_raw_offsets(1901, 2234),
         },
     });

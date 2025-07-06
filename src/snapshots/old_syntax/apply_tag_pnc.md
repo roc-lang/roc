@@ -35,5 +35,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.13 (type "*"))
+(expr @1.1-1.13 (type "[Whee]*"))
 ~~~

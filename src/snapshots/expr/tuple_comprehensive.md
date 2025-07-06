@@ -27,9 +27,9 @@ type=expr
 ~~~
 # EXPECTED
 EMPTY TUPLE NOT ALLOWED - tuple_comprehensive.md:9:10:9:12
-UNUSED VARIABLE - tuple_comprehensive.md:3:16:3:17
-UNUSED VARIABLE - tuple_comprehensive.md:3:19:3:21
-UNUSED VARIABLE - tuple_comprehensive.md:14:11:14:18
+UNUSED VARIABLE - tuple_comprehensive.md:16:2:16:13
+UNUSED VARIABLE - tuple_comprehensive.md:10:2:10:8
+UNUSED VARIABLE - tuple_comprehensive.md:11:2:11:6
 UNUSED VARIABLE - tuple_comprehensive.md:13:2:13:8
 UNUSED VARIABLE - tuple_comprehensive.md:12:2:12:8
 UNUSED VARIABLE - tuple_comprehensive.md:14:2:14:7
@@ -50,11 +50,11 @@ Variable ``with_lambda`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_with_lambda` to suppress this warning.
 The unused variable is declared here:
-**tuple_comprehensive.md:3:16:3:17:**
+**tuple_comprehensive.md:16:2:16:13:**
 ```roc
-    add_one = |_| {}
+	with_lambda = (|n| n + 1, 42)
 ```
-               ^
+ ^^^^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -62,11 +62,11 @@ Variable ``single`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_single` to suppress this warning.
 The unused variable is declared here:
-**tuple_comprehensive.md:3:19:3:21:**
+**tuple_comprehensive.md:10:2:10:8:**
 ```roc
-    add_one = |_| {}
+	single = (42)
 ```
-                  ^^
+ ^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -74,11 +74,11 @@ Variable ``pair`` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_pair` to suppress this warning.
 The unused variable is declared here:
-**tuple_comprehensive.md:14:11:14:18:**
+**tuple_comprehensive.md:11:2:11:6:**
 ```roc
-	mixed = (add_one(5), "world", [1, 2, 3])
+	pair = (1, 2)
 ```
-          ^^^^^^^
+ ^^^^
 
 
 **UNUSED VARIABLE**

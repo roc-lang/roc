@@ -5,9 +5,9 @@
 //! component for proper handling of annotated functions in the type system.
 
 const std = @import("std");
+const base = @import("../../base.zig");
 const types_mod = @import("../../types.zig");
 const collections = @import("../../collections.zig");
-const base = @import("../../base.zig");
 const TypesStore = types_mod.Store;
 const Var = types_mod.Var;
 const Content = types_mod.Content;
@@ -20,42 +20,15 @@ const RecordField = types_mod.RecordField;
 const Tag = types_mod.Tag;
 const Num = types_mod.Num;
 const NominalType = types_mod.NominalType;
-const Region = base.Region;
 
 /// A mapping from old type variables to their fresh instantiations
-const VarSubstitution = std.AutoHashMap(Var, Var);
-
-/// Context for instantiation that includes regions list for tracking
-const InstantiateContext = struct {
-    store: *TypesStore,
-    regions: *base.Region.List,
-    allocator: std.mem.Allocator,
-};
+pub const VarSubstitution = std.AutoHashMap(Var, Var);
 
 /// Instantiate a polymorphic type with fresh type variables.
 /// This creates a copy of the type structure with all flexible variables
 /// replaced by fresh ones, while preserving type aliases and rigid variables.
 pub fn instantiateVar(
     store: *TypesStore,
-    regions: *base.Region.List,
-    allocator: std.mem.Allocator,
-    var_to_instantiate: Var,
-) std.mem.Allocator.Error!Var {
-    const ctx = InstantiateContext{
-        .store = store,
-        .regions = regions,
-        .allocator = allocator,
-    };
-
-    var substitution = VarSubstitution.init(allocator);
-    defer substitution.deinit();
-
-    return instantiateVarWithSubst(ctx, var_to_instantiate, &substitution);
-}
-
-/// Internal implementation that tracks variable substitutions
-fn instantiateVarWithSubst(
-    ctx: InstantiateContext,
     var_: Var,
     substitution: *VarSubstitution,
 ) std.mem.Allocator.Error!Var {
@@ -64,11 +37,11 @@ fn instantiateVarWithSubst(
         return fresh_var;
     }
 
-    const resolved = ctx.store.resolveVar(var_);
-    const fresh_content = try instantiateContent(ctx, resolved.desc.content, substitution);
+    const resolved = store.resolveVar(var_);
+    const fresh_content = try instantiateContent(store, resolved.desc.content, substitution);
 
     // Create a fresh variable with the instantiated content
-    const fresh_var = ctx.store.freshFromContent(fresh_content);
+    const fresh_var = store.freshFromContent(fresh_content);
 
     // If this is an alias, we need to instantiate its backing var and arguments
     // They must be created at the correct offsets from the fresh alias variable
@@ -77,7 +50,7 @@ fn instantiateVarWithSubst(
 
         // Instantiate backing var (at original_var + 1 -> fresh_var + 1)
         const orig_backing_var = @as(Var, @enumFromInt(@intFromEnum(var_) + 1));
-        const fresh_backing_var = try instantiateVarWithSubst(ctx, orig_backing_var, substitution);
+        const fresh_backing_var = try instantiateVar(store, orig_backing_var, substitution);
 
         // Ensure the fresh backing var is at the correct offset
         const expected_backing_var = @as(Var, @enumFromInt(@intFromEnum(fresh_var) + 1));
@@ -89,7 +62,7 @@ fn instantiateVarWithSubst(
         var arg_iter = alias.argIterator(var_);
         var arg_offset: u32 = 2;
         while (arg_iter.next()) |orig_arg_var| {
-            const fresh_arg_var = try instantiateVarWithSubst(ctx, orig_arg_var, substitution);
+            const fresh_arg_var = try instantiateVar(store, orig_arg_var, substitution);
             const expected_arg_var = @as(Var, @enumFromInt(@intFromEnum(fresh_var) + arg_offset));
             if (fresh_arg_var != expected_arg_var) {
                 // Continue anyway
@@ -98,36 +71,28 @@ fn instantiateVarWithSubst(
         }
     }
 
-    // Copy the region from the original variable to the new one
-    const original_idx: u32 = @intFromEnum(var_);
-    const fresh_idx: u32 = @intFromEnum(fresh_var);
-
-    // Get the original region if it exists
-    var original_region = Region.zero();
-    if (original_idx < ctx.regions.len()) {
-        original_region = ctx.regions.get(@enumFromInt(original_idx)).*;
-    }
-
-    // Ensure regions array is large enough for the fresh variable
-    const needed_len = fresh_idx + 1;
-    if (ctx.regions.len() < needed_len) {
-        // Fill gaps with zero regions
-        for (ctx.regions.len()..needed_len) |_| {
-            _ = ctx.regions.append(ctx.store.gpa, Region.zero());
-        }
-    }
-
-    // Set the region for the fresh variable
-    ctx.regions.set(@enumFromInt(fresh_idx), original_region);
-
     // Remember this substitution for recursive references
     try substitution.put(var_, fresh_var);
 
     return fresh_var;
 }
 
+/// Instantiate a polymorphic type with fresh type variables.
+/// Prefer `instantiateVar` over this function, as this function inits/deinits
+/// the substitution map each call.
+pub fn instantiateVarAlloc(
+    store: *TypesStore,
+    var_to_instantiate: Var,
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!Var {
+    var substitution = VarSubstitution.init(allocator);
+    defer substitution.deinit();
+
+    return instantiateVar(store, var_to_instantiate, &substitution);
+}
+
 fn instantiateContent(
-    ctx: InstantiateContext,
+    store: *TypesStore,
     content: Content,
     substitution: *VarSubstitution,
 ) std.mem.Allocator.Error!Content {
@@ -137,7 +102,7 @@ fn instantiateContent(
         .alias => |alias| Content{ .alias = alias },
         .structure => |flat_type| blk: {
             // Instantiate the structure recursively
-            const fresh_flat_type = try instantiateFlatType(ctx, flat_type, substitution);
+            const fresh_flat_type = try instantiateFlatType(store, flat_type, substitution);
             break :blk Content{ .structure = fresh_flat_type };
         },
         .err => Content.err,
@@ -145,112 +110,106 @@ fn instantiateContent(
 }
 
 fn instantiateFlatType(
-    ctx: InstantiateContext,
+    store: *TypesStore,
     flat_type: FlatType,
     substitution: *VarSubstitution,
 ) std.mem.Allocator.Error!FlatType {
     return switch (flat_type) {
         .str => FlatType.str,
-        .box => |box_var| FlatType{ .box = try instantiateVarWithSubst(ctx, box_var, substitution) },
-        .list => |list_var| FlatType{ .list = try instantiateVarWithSubst(ctx, list_var, substitution) },
+        .box => |box_var| FlatType{ .box = try instantiateVar(store, box_var, substitution) },
+        .list => |list_var| FlatType{ .list = try instantiateVar(store, list_var, substitution) },
         .list_unbound => FlatType.list_unbound,
-        .tuple => |tuple| FlatType{ .tuple = try instantiateTuple(ctx, tuple, substitution) },
-        .num => |num| FlatType{ .num = try instantiateNum(ctx, num, substitution) },
+        .tuple => |tuple| FlatType{ .tuple = try instantiateTuple(store, tuple, substitution) },
+        .num => |num| FlatType{ .num = try instantiateNum(store, num, substitution) },
         .nominal_type => |nominal| FlatType{ .nominal_type = nominal },
-        .fn_pure => |func| FlatType{ .fn_pure = try instantiateFunc(ctx, func, substitution) },
-        .fn_effectful => |func| FlatType{ .fn_effectful = try instantiateFunc(ctx, func, substitution) },
-        .fn_unbound => |func| FlatType{ .fn_unbound = try instantiateFunc(ctx, func, substitution) },
-        .record => |record| FlatType{ .record = try instantiateRecord(ctx, record, substitution) },
-        .record_unbound => |fields| FlatType{ .record_unbound = try instantiateRecordFields(ctx, fields, substitution) },
+        .fn_pure => |func| FlatType{ .fn_pure = try instantiateFunc(store, func, substitution) },
+        .fn_effectful => |func| FlatType{ .fn_effectful = try instantiateFunc(store, func, substitution) },
+        .fn_unbound => |func| FlatType{ .fn_unbound = try instantiateFunc(store, func, substitution) },
+        .record => |record| FlatType{ .record = try instantiateRecord(store, record, substitution) },
+        .record_unbound => |fields| FlatType{ .record_unbound = try instantiateRecordFields(store, fields, substitution) },
         .record_poly => |poly| blk: {
-            const fresh_record = try instantiateRecord(ctx, poly.record, substitution);
-            const fresh_var = try instantiateVarWithSubst(ctx, poly.var_, substitution);
+            const fresh_record = try instantiateRecord(store, poly.record, substitution);
+            const fresh_var = try instantiateVar(store, poly.var_, substitution);
             break :blk FlatType{ .record_poly = .{ .record = fresh_record, .var_ = fresh_var } };
         },
         .empty_record => FlatType.empty_record,
-        .tag_union => |tag_union| FlatType{ .tag_union = try instantiateTagUnion(ctx, tag_union, substitution) },
+        .tag_union => |tag_union| FlatType{ .tag_union = try instantiateTagUnion(store, tag_union, substitution) },
+
         .empty_tag_union => FlatType.empty_tag_union,
     };
 }
 
 fn instantiateTuple(
-    ctx: InstantiateContext,
+    store: *TypesStore,
     tuple: types_mod.Tuple,
     substitution: *VarSubstitution,
 ) std.mem.Allocator.Error!types_mod.Tuple {
-    const elems_slice = ctx.store.getTupleElemsSlice(tuple.elems);
-
-    var fresh_elems = std.ArrayList(Var).init(ctx.store.gpa);
+    const elems_slice = store.getTupleElemsSlice(tuple.elems);
+    var fresh_elems = std.ArrayList(Var).init(store.gpa);
     defer fresh_elems.deinit();
 
     for (elems_slice) |elem_var| {
-        const fresh_elem = try instantiateVarWithSubst(ctx, elem_var, substitution);
+        const fresh_elem = try instantiateVar(store, elem_var, substitution);
         try fresh_elems.append(fresh_elem);
     }
 
-    const fresh_range = ctx.store.appendTupleElems(fresh_elems.items);
-    return types_mod.Tuple{ .elems = fresh_range };
+    const fresh_elems_range = store.appendTupleElems(fresh_elems.items);
+    return types_mod.Tuple{ .elems = fresh_elems_range };
 }
 
 fn instantiateNum(
-    ctx: InstantiateContext,
+    store: *TypesStore,
     num: Num,
     substitution: *VarSubstitution,
 ) std.mem.Allocator.Error!Num {
     return switch (num) {
-        .num_poly => |poly| Num{ .num_poly = .{ .var_ = try instantiateVarWithSubst(ctx, poly.var_, substitution), .requirements = poly.requirements } },
-        .int_poly => |poly| Num{ .int_poly = .{ .var_ = try instantiateVarWithSubst(ctx, poly.var_, substitution), .requirements = poly.requirements } },
-        .frac_poly => |poly| Num{ .frac_poly = .{ .var_ = try instantiateVarWithSubst(ctx, poly.var_, substitution), .requirements = poly.requirements } },
+        .num_poly => |poly| Num{ .num_poly = .{ .var_ = try instantiateVar(store, poly.var_, substitution), .requirements = poly.requirements } },
+        .int_poly => |poly| Num{ .int_poly = .{ .var_ = try instantiateVar(store, poly.var_, substitution), .requirements = poly.requirements } },
+        .frac_poly => |poly| Num{ .frac_poly = .{ .var_ = try instantiateVar(store, poly.var_, substitution), .requirements = poly.requirements } },
         // Concrete types remain unchanged
         .int_precision => |precision| Num{ .int_precision = precision },
         .frac_precision => |precision| Num{ .frac_precision = precision },
+        .num_unbound => |unbound| Num{ .num_unbound = unbound },
+        .int_unbound => |unbound| Num{ .int_unbound = unbound },
+        .frac_unbound => |unbound| Num{ .frac_unbound = unbound },
         .num_compact => |compact| Num{ .num_compact = compact },
-        .num_unbound => |requirements| Num{ .num_unbound = requirements },
-        .int_unbound => |requirements| Num{ .int_unbound = requirements },
-        .frac_unbound => |requirements| Num{ .frac_unbound = requirements },
     };
 }
 
 fn instantiateFunc(
-    ctx: InstantiateContext,
+    store: *TypesStore,
     func: Func,
     substitution: *VarSubstitution,
 ) std.mem.Allocator.Error!Func {
-    const args_slice = ctx.store.getFuncArgsSlice(func.args);
-
-    var fresh_args = std.ArrayList(Var).init(ctx.store.gpa);
+    const args_slice = store.getFuncArgsSlice(func.args);
+    var fresh_args = std.ArrayList(Var).init(store.gpa);
     defer fresh_args.deinit();
 
     for (args_slice) |arg_var| {
-        const fresh_arg = try instantiateVarWithSubst(ctx, arg_var, substitution);
+        const fresh_arg = try instantiateVar(store, arg_var, substitution);
         try fresh_args.append(fresh_arg);
     }
 
-    const fresh_ret = try instantiateVarWithSubst(ctx, func.ret, substitution);
-    const fresh_args_range = ctx.store.appendFuncArgs(fresh_args.items);
-
+    const fresh_ret = try instantiateVar(store, func.ret, substitution);
+    const fresh_args_range = store.appendFuncArgs(fresh_args.items);
     return Func{
         .args = fresh_args_range,
         .ret = fresh_ret,
-        // Assume it still needs instantiation even after replacing with
-        // fresh type variables, because recalculating it just in case it
-        // might not does not seem likely to be worth it - especially since
-        // any given instantiation will likely never get instantiated again.
         .needs_instantiation = true,
     };
 }
 
-fn instantiateRecord(
-    ctx: InstantiateContext,
-    record: Record,
+fn instantiateRecordFields(
+    store: *TypesStore,
+    fields: RecordField.SafeMultiList.Range,
     substitution: *VarSubstitution,
-) std.mem.Allocator.Error!Record {
-    const fields_start = ctx.store.record_fields.len();
-    const fields_slice = ctx.store.getRecordFieldsSlice(record.fields);
+) std.mem.Allocator.Error!RecordField.SafeMultiList.Range {
+    const fields_start = store.record_fields.len();
+    const fields_slice = store.getRecordFieldsSlice(fields);
 
     for (fields_slice.items(.name), fields_slice.items(.var_)) |name, type_var| {
-        const fresh_type = try instantiateVarWithSubst(ctx, type_var, substitution);
-        _ = ctx.store.record_fields.append(ctx.store.gpa, RecordField{
+        const fresh_type = try instantiateVar(store, type_var, substitution);
+        _ = store.record_fields.append(store.gpa, RecordField{
             .name = name,
             .var_ = fresh_type,
         });
@@ -258,11 +217,35 @@ fn instantiateRecord(
 
     const fields_range = RecordField.SafeMultiList.Range{
         .start = @enumFromInt(fields_start),
-        .end = @enumFromInt(ctx.store.record_fields.len()),
+        .end = @enumFromInt(store.record_fields.len()),
+    };
+
+    return fields_range;
+}
+
+fn instantiateRecord(
+    store: *TypesStore,
+    record: Record,
+    substitution: *VarSubstitution,
+) std.mem.Allocator.Error!Record {
+    const fields_start = store.record_fields.len();
+    const fields_slice = store.getRecordFieldsSlice(record.fields);
+
+    for (fields_slice.items(.name), fields_slice.items(.var_)) |name, type_var| {
+        const fresh_type = try instantiateVar(store, type_var, substitution);
+        _ = store.record_fields.append(store.gpa, RecordField{
+            .name = name,
+            .var_ = fresh_type,
+        });
+    }
+
+    const fields_range = RecordField.SafeMultiList.Range{
+        .start = @enumFromInt(fields_start),
+        .end = @enumFromInt(store.record_fields.len()),
     };
 
     // Handle the extension variable
-    const fresh_ext = try instantiateVarWithSubst(ctx, record.ext, substitution);
+    const fresh_ext = try instantiateVar(store, record.ext, substitution);
 
     return Record{
         .fields = fields_range,
@@ -270,49 +253,27 @@ fn instantiateRecord(
     };
 }
 
-fn instantiateRecordFields(
-    ctx: InstantiateContext,
-    fields: RecordField.SafeMultiList.Range,
-    substitution: *VarSubstitution,
-) std.mem.Allocator.Error!RecordField.SafeMultiList.Range {
-    const fields_start = ctx.store.record_fields.len();
-    const fields_slice = ctx.store.getRecordFieldsSlice(fields);
-
-    for (fields_slice.items(.name), fields_slice.items(.var_)) |name, type_var| {
-        const fresh_type = try instantiateVarWithSubst(ctx, type_var, substitution);
-        _ = ctx.store.record_fields.append(ctx.store.gpa, RecordField{
-            .name = name,
-            .var_ = fresh_type,
-        });
-    }
-
-    return RecordField.SafeMultiList.Range{
-        .start = @enumFromInt(fields_start),
-        .end = @enumFromInt(ctx.store.record_fields.len()),
-    };
-}
-
 fn instantiateTagUnion(
-    ctx: InstantiateContext,
+    store: *TypesStore,
     tag_union: TagUnion,
     substitution: *VarSubstitution,
 ) std.mem.Allocator.Error!TagUnion {
-    const tags_start = ctx.store.tags.len();
-    const tags_slice = ctx.store.getTagsSlice(tag_union.tags);
+    const tags_start = store.tags.len();
+    const tags_slice = store.getTagsSlice(tag_union.tags);
 
     for (tags_slice.items(.name), tags_slice.items(.args)) |tag_name, tag_args| {
-        var fresh_args = std.ArrayList(Var).init(ctx.store.gpa);
+        var fresh_args = std.ArrayList(Var).init(store.gpa);
         defer fresh_args.deinit();
 
-        const args_slice = ctx.store.getTagArgsSlice(tag_args);
+        const args_slice = store.getTagArgsSlice(tag_args);
         for (args_slice) |arg_var| {
-            const fresh_arg = try instantiateVarWithSubst(ctx, arg_var, substitution);
+            const fresh_arg = try instantiateVar(store, arg_var, substitution);
             try fresh_args.append(fresh_arg);
         }
 
-        const fresh_args_range = ctx.store.appendTagArgs(fresh_args.items);
+        const fresh_args_range = store.appendTagArgs(fresh_args.items);
 
-        _ = ctx.store.tags.append(ctx.store.gpa, Tag{
+        _ = store.tags.append(store.gpa, Tag{
             .name = tag_name,
             .args = fresh_args_range,
         });
@@ -320,11 +281,11 @@ fn instantiateTagUnion(
 
     const tags_range = Tag.SafeMultiList.Range{
         .start = @enumFromInt(tags_start),
-        .end = @enumFromInt(ctx.store.tags.len()),
+        .end = @enumFromInt(store.tags.len()),
     };
 
     // Handle the extension variable
-    const fresh_ext = try instantiateVarWithSubst(ctx, tag_union.ext, substitution);
+    const fresh_ext = try instantiateVar(store, tag_union.ext, substitution);
 
     return TagUnion{
         .tags = tags_range,

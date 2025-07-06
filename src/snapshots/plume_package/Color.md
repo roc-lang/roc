@@ -95,8 +95,8 @@ UNUSED VARIABLE - Color.md:30:5:30:25
 UNUSED VARIABLE - Color.md:61:10:61:13
 UNDEFINED VARIABLE - Color.md:63:24:63:27
 UNDEFINED VARIABLE - Color.md:68:14:68:27
-TYPE MISMATCH - Color.md:21:1:21:5
-TYPE MISMATCH - Color.md:27:1:27:4
+TYPE MISMATCH - Color.md:20:20:20:22
+TYPE MISMATCH - Color.md:26:7:26:10
 # PROBLEMS
 **UNEXPECTED TOKEN IN PATTERN**
 The token **'#',** is not expected in a pattern.
@@ -368,11 +368,11 @@ Is there an `import` or `exposing` missing up-top?
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**Color.md:21:1:21:5:**
+**Color.md:20:20:20:22:**
 ```roc
-rgba = |r, g, b, a| {
+rgba : U8, U8, U8, U8 -> Color
 ```
-^^^^
+                   ^^
 
 It is of type:
     _U8_
@@ -382,11 +382,11 @@ But you are trying to use it as:
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**Color.md:27:1:27:4:**
+**Color.md:26:7:26:10:**
 ```roc
-hex = |str| {
+hex : Str -> Result(Color, [InvalidHex(Str)])
 ```
-^^^
+      ^^^
 
 It is of type:
     _Str_
@@ -1242,7 +1242,7 @@ is_named_color = |str| {
 					(args
 						(e-lookup-local @70.21-70.24
 							(pattern @67.19-67.22)))))))
-	(s-nominal-decl @10.1-15.2 (match "TODO")
+	(s-nominal-decl @10.1-15.2
 		(ty-header @10.1-10.6 (name "Color"))
 		(ty-tag-union @10.10-15.2
 			(ty-apply @11.5-11.20 (symbol "RGB")
@@ -1263,15 +1263,18 @@ is_named_color = |str| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @18.1-18.4 (type "U8, U8, U8 -> Color"))
-		(patt @21.1-21.5 (type "U8, U8, U8, Error -> Color"))
+		(patt @18.1-18.4 (type "U8, U8, U8 -> [RGB]*"))
+		(patt @21.1-21.5 (type "U8, U8, U8, Error -> [RGBA]*"))
 		(patt @27.1-27.4 (type "Error -> Error"))
 		(patt @49.1-49.7 (type "[Named, RGB, RGBA, Hex]* -> Str"))
 		(patt @61.1-61.6 (type "Error"))
 		(patt @67.1-67.15 (type "* -> *")))
+	(type_decls
+		(nominal @10.1-15.2 (type "Color")
+			(ty-header @10.1-10.6 (name "Color"))))
 	(expressions
-		(expr @18.7-18.35 (type "U8, U8, U8 -> Color"))
-		(expr @21.8-24.2 (type "U8, U8, U8, Error -> Color"))
+		(expr @18.7-18.35 (type "U8, U8, U8 -> [RGB]*"))
+		(expr @21.8-24.2 (type "U8, U8, U8, Error -> [RGBA]*"))
 		(expr @27.7-46.2 (type "Error -> Error"))
 		(expr @49.10-54.2 (type "[Named, RGB, RGBA, Hex]* -> Str"))
 		(expr @61.9-63.29 (type "Error"))

@@ -327,7 +327,7 @@ main = {
 							(e-int @23.47-23.48 (value "2"))))))
 			(e-lookup-local @25.5-25.7
 				(pattern @23.5-23.7))))
-	(s-alias-decl @4.1-4.20 (where "TODO")
+	(s-alias-decl @4.1-4.20
 		(ty-header @4.1-4.11 (name "Pair")
 			(ty-args
 				(ty-var @4.6-4.7 (name "a"))
@@ -340,11 +340,17 @@ main = {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @8.1-8.10 (type "Pair(a, *) -> Pair(b, a)"))
+		(patt @8.1-8.10 (type "Pair(a, b) -> Pair(b, a)"))
 		(patt @12.1-12.9 (type "Error"))
 		(patt @17.1-17.5 (type "*")))
+	(type_decls
+		(alias @4.1-4.20 (type "Pair(a, b)")
+			(ty-header @4.1-4.11 (name "Pair")
+				(ty-args
+					(ty-var @4.6-4.7 (name "a"))
+					(ty-var @4.9-4.10 (name "b"))))))
 	(expressions
-		(expr @8.13-8.28 (type "Pair(a, *) -> Pair(b, a)"))
+		(expr @8.13-8.28 (type "Pair(a, b) -> Pair(b, a)"))
 		(expr @12.12-12.39 (type "Error"))
 		(expr @17.8-26.2 (type "*"))))
 ~~~

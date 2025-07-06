@@ -27,31 +27,30 @@ const Self = @This();
 gpa: std.mem.Allocator,
 // not owned
 types: *types_mod.Store,
-can_ir: *const CIR,
-regions: *base.Region.List,
+can_ir: *CIR,
 // owned
 snapshots: snapshot.Store,
 problems: problem.Store,
 unify_scratch: unifier.Scratch,
 occurs_scratch: occurs.Scratch,
+instantiate_subs: instantiate.VarSubstitution,
 
 /// Init type solver
 /// Does *not* own types_store or can_ir, but *does* own other fields
 pub fn init(
     gpa: std.mem.Allocator,
     types: *types_mod.Store,
-    can_ir: *const CIR,
-    regions: *base.Region.List,
+    can_ir: *CIR,
 ) std.mem.Allocator.Error!Self {
     return .{
         .gpa = gpa,
         .types = types,
         .can_ir = can_ir,
-        .regions = regions,
         .snapshots = snapshot.Store.initCapacity(gpa, 512),
         .problems = problem.Store.initCapacity(gpa, 64),
         .unify_scratch = unifier.Scratch.init(gpa),
         .occurs_scratch = occurs.Scratch.init(gpa),
+        .instantiate_subs = instantiate.VarSubstitution.init(gpa),
     };
 }
 
@@ -61,6 +60,7 @@ pub fn deinit(self: *Self) void {
     self.snapshots.deinit();
     self.unify_scratch.deinit();
     self.occurs_scratch.deinit();
+    self.instantiate_subs.deinit();
 }
 
 /// Unify two types
@@ -78,6 +78,33 @@ pub fn unify(self: *Self, a: Var, b: Var) unifier.Result {
         a,
         b,
     );
+}
+
+/// Instantiate a variable, writing su
+pub fn instantiateVar(self: *Self, var_to_instantiate: Var, parent_node_idx: CIR.Node.Idx) std.mem.Allocator.Error!Var {
+    self.instantiate_subs.clearRetainingCapacity();
+    const instantiated_var = try instantiate.instantiateVar(self.types, var_to_instantiate, &self.instantiate_subs);
+
+    // If we had to insert any new type variables, ensure that we
+    // have corresponding CIR nodes for them. This is essential for
+    // error reporting
+    if (self.instantiate_subs.count() > 0) {
+        var cur_max: Var = @enumFromInt(0);
+        var iterator = self.instantiate_subs.iterator();
+        while (iterator.next()) |x| {
+            const new_var = x.value_ptr.*;
+            if (@intFromEnum(new_var) > @intFromEnum(cur_max)) {
+                cur_max = new_var;
+            }
+        }
+        try self.can_ir.store.fillInTypeVarSlotsThru(
+            CIR.nodeIdxFrom(cur_max),
+            parent_node_idx,
+            self.can_ir.store.getRegionAt(parent_node_idx),
+        );
+    }
+
+    return instantiated_var;
 }
 
 /// Unify two types, but do not modify the `a` type in the types store
@@ -255,7 +282,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                         .fn_effectful => |_| {
                             does_fx = true;
                             if (self.types.needsInstantiation(current_func_var)) {
-                                const instantiated_var = try instantiate.instantiateVar(self.types, self.regions, self.gpa, current_func_var);
+                                const instantiated_var = try self.instantiateVar(current_func_var, CIR.nodeIdxFrom(func_expr_idx));
                                 const resolved_inst = self.types.resolveVar(instantiated_var);
                                 std.debug.assert(resolved_inst.desc.content == .structure);
                                 std.debug.assert(resolved_inst.desc.content.structure == .fn_effectful);
@@ -266,7 +293,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                         },
                         .fn_pure => |_| {
                             if (self.types.needsInstantiation(current_func_var)) {
-                                const instantiated_var = try instantiate.instantiateVar(self.types, self.regions, self.gpa, current_func_var);
+                                const instantiated_var = try self.instantiateVar(current_func_var, CIR.nodeIdxFrom(func_expr_idx));
                                 const resolved_inst = self.types.resolveVar(instantiated_var);
                                 std.debug.assert(resolved_inst.desc.content == .structure);
                                 std.debug.assert(resolved_inst.desc.content.structure == .fn_pure);
@@ -277,7 +304,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                         },
                         .fn_unbound => |_| {
                             if (self.types.needsInstantiation(current_func_var)) {
-                                const instantiated_var = try instantiate.instantiateVar(self.types, self.regions, self.gpa, current_func_var);
+                                const instantiated_var = try self.instantiateVar(current_func_var, CIR.nodeIdxFrom(func_expr_idx));
                                 const resolved_inst = self.types.resolveVar(instantiated_var);
                                 std.debug.assert(resolved_inst.desc.content == .structure);
                                 std.debug.assert(resolved_inst.desc.content.structure == .fn_unbound);
@@ -367,6 +394,60 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
         },
         .e_empty_record => |_| {},
         .e_tag => |_| {},
+        .e_nominal => |nominal| {
+            // We are unifying against a nominal type. The way this works is:
+            // 1. First, get the `NominalType` out of the types store
+            // 2. Then, instantiate it's backing var
+            // 3. Next, unify that instantiated var against the CIR backing var
+            // 4. If successful, instantiate the root nominal var, then unify it
+            //    against the root expr var. (the root expr var should be flex)
+            //
+            // We have to do all this instantiating to avoid propagating `.err`
+            // types across the module in the event of failure
+
+            const expr_var = CIR.varFrom(expr_idx);
+            const expr_backing_var = CIR.varFrom(nominal.backing_expr);
+
+            // First, get the qualified variable and assert it's a nominal type
+            const nominal_var = CIR.varFrom(nominal.nominal_type_decl);
+            const nominal_content = self.types.resolveVar(nominal_var).desc.content;
+            std.debug.assert(nominal_content == .structure);
+            std.debug.assert(nominal_content.structure == .nominal_type);
+            const nominal_type = nominal_content.structure.nominal_type;
+
+            // Then, instantiate the nominal types backing var, for unification
+            const nominal_backing_var = nominal_type.getBackingVar(nominal_var);
+            const instantiated_backing_var = try self.instantiateVar(nominal_backing_var, CIR.nodeIdxFrom(expr_idx));
+
+            // Then, unify the nominal type's backing var against the CIR backing var
+            const result = self.unify(instantiated_backing_var, expr_backing_var);
+
+            // Handle the result
+            switch (result) {
+                .ok => {
+                    // Then, instantiate the nominal type
+                    const instantiated_qualified_var = try self.instantiateVar(nominal_var, CIR.nodeIdxFrom(expr_idx));
+
+                    // Unify - this should always succeed expr_var should be flex var
+                    _ = self.unify(expr_var, instantiated_qualified_var);
+                },
+                .problem => |problem_idx| {
+                    // Depending on the type of the backing variable, set the type
+                    // mismatch detail so the user gets a better error message
+                    switch (nominal.backing_type) {
+                        .tag => {
+                            self.setProblemTypeMismatchDetail(problem_idx, .invalid_nominal_tag);
+                        },
+                        else => {
+                            // TODO: Add special-case problems for other nominal types
+                        },
+                    }
+
+                    // Then, set the root expr to be an err
+                    try self.types.setVarContent(expr_var, .err);
+                },
+            }
+        },
         .e_zero_argument_tag => |_| {},
         .e_binop => |binop| {
             does_fx = try self.checkBinopExpr(expr_idx, binop);
@@ -657,7 +738,8 @@ fn checkIfElseExpr(self: *Self, if_expr_idx: CIR.Expr.Idx, if_: std.meta.FieldTy
     // Check the condition of the 1st branch
     var does_fx = try self.checkExpr(first_branch.cond);
     const first_cond_var: Var = @enumFromInt(@intFromEnum(first_branch.cond));
-    const first_cond_result = self.unifyPreserveA(@enumFromInt(@intFromEnum(can.BUILTIN_BOOL)), first_cond_var);
+    const bool_var = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), CIR.nodeIdxFrom(if_expr_idx));
+    const first_cond_result = self.unify(bool_var, first_cond_var);
     self.setDetailIfTypeMismatch(first_cond_result, .incompatible_if_cond);
 
     // Then we check the 1st branch's body
@@ -676,7 +758,8 @@ fn checkIfElseExpr(self: *Self, if_expr_idx: CIR.Expr.Idx, if_: std.meta.FieldTy
         // Check the branches condition
         does_fx = try self.checkExpr(branch.cond) or does_fx;
         const cond_var: Var = @enumFromInt(@intFromEnum(branch.cond));
-        const cond_result = self.unifyPreserveA(@enumFromInt(@intFromEnum(can.BUILTIN_BOOL)), cond_var);
+        const branch_bool_var = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), CIR.nodeIdxFrom(if_expr_idx));
+        const cond_result = self.unify(branch_bool_var, cond_var);
         self.setDetailIfTypeMismatch(cond_result, .incompatible_if_cond);
 
         // Check the branch body
@@ -843,32 +926,35 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, match: CIR.Expr.Match) Al
 // problems //
 
 /// If the provided result is a type mismatch problem, append the detail to the
-/// problem in the store. This allows us to show the user nice, more specific
-/// errors than a generic type mismatch
+/// problem in the store.
+/// This allows us to show the user nice, more specific errors than a generic
+/// type mismatch
 fn setDetailIfTypeMismatch(self: *Self, result: unifier.Result, mismatch_detail: problem.TypeMismatchDetail) void {
     switch (result) {
         .ok => {},
         .problem => |problem_idx| {
-            // Unification failed, so we know it appended a type mismatch to self.problems.
-            // We'll translate that generic type mismatch between the two elements into
-            // a more helpful if-condition-specific error report.
+            self.setProblemTypeMismatchDetail(problem_idx, mismatch_detail);
+        },
+    }
+}
 
-            // Extract snapshots from the type mismatch problem
-            switch (self.problems.problems.get(problem_idx)) {
-                .type_mismatch => |mismatch| {
-                    self.problems.problems.set(problem_idx, .{
-                        .type_mismatch = .{
-                            .types = mismatch.types,
-                            .detail = mismatch_detail,
-                        },
-                    });
+/// If the provided problem is a type mismatch, set the mismatch detail.
+/// This allows us to show the user nice, more specific errors than a generic
+/// type mismatch
+fn setProblemTypeMismatchDetail(self: *Self, problem_idx: problem.Problem.Idx, mismatch_detail: problem.TypeMismatchDetail) void {
+    switch (self.problems.problems.get(problem_idx)) {
+        .type_mismatch => |mismatch| {
+            self.problems.problems.set(problem_idx, .{
+                .type_mismatch = .{
+                    .types = mismatch.types,
+                    .detail = mismatch_detail,
                 },
-                else => {
-                    // For other problem types (e.g., number_does_not_fit), the
-                    // original problem is already more specific than our custom
-                    // problem, so we should keep it as-is and not replace it.
-                },
-            }
+            });
+        },
+        else => {
+            // For other problem types (e.g., number_does_not_fit), the
+            // original problem is already more specific than our custom
+            // problem, so we should keep it as-is and not replace it.
         },
     }
 }
@@ -1055,7 +1141,7 @@ test "lambda with record field access infers correct type" {
     var can_ir = CIR.init(&module_env);
     defer can_ir.deinit();
 
-    var solver = try Self.init(gpa, &module_env.types, &can_ir, &can_ir.store.regions);
+    var solver = try Self.init(gpa, &module_env.types, &can_ir);
     defer solver.deinit();
 
     // Create type variables for the lambda parameters
@@ -1159,7 +1245,7 @@ test "dot access properly unifies field types with parameters" {
     var can_ir = CIR.init(&module_env);
     defer can_ir.deinit();
 
-    var solver = try Self.init(gpa, &module_env.types, &can_ir, &can_ir.store.regions);
+    var solver = try Self.init(gpa, &module_env.types, &can_ir);
     defer solver.deinit();
 
     // Create a parameter type variable
@@ -1266,7 +1352,7 @@ test "call site unification order matters for concrete vs flexible types" {
     var can_ir = CIR.init(&module_env);
     defer can_ir.deinit();
 
-    var solver = try Self.init(gpa, &module_env.types, &can_ir, &can_ir.store.regions);
+    var solver = try Self.init(gpa, &module_env.types, &can_ir);
     defer solver.deinit();
 
     // First, verify basic number unification works as expected

@@ -57,7 +57,7 @@ fn typeCheckExpr(allocator: std.mem.Allocator, source: []const u8) !struct {
 
     // Type check - continue even if there are parse errors
     const checker = try allocator.create(check_types);
-    checker.* = try check_types.init(allocator, &module_env.types, cir, &cir.store.regions);
+    checker.* = try check_types.init(allocator, &module_env.types, cir);
 
     // For expressions, check the expression directly
     if (canon_expr_idx) |expr_idx| {
@@ -192,7 +192,7 @@ fn typeCheckStatement(allocator: std.mem.Allocator, source: []const u8) !struct 
 
     // Type check - continue even if there are parse errors
     const checker = try allocator.create(check_types);
-    checker.* = try check_types.init(allocator, &module_env.types, cir, &cir.store.regions);
+    checker.* = try check_types.init(allocator, &module_env.types, cir);
 
     // Check if we have any defs to check
     if (cir.all_defs.span.len > 0) {

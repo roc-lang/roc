@@ -116,7 +116,7 @@ main.roc" }"
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-alias-decl @3.1-3.15 (where "TODO")
+	(s-alias-decl @3.1-3.15
 		(ty-header @3.1-3.13 (name "Fli"))
 		(ty-malformed @3.14-3.15)))
 ~~~
@@ -124,5 +124,8 @@ main.roc" }"
 ~~~clojure
 (inferred-types
 	(defs)
+	(type_decls
+		(alias @3.1-3.15 (type "Fli")
+			(ty-header @3.1-3.13 (name "Fli"))))
 	(expressions))
 ~~~

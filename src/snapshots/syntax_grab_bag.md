@@ -544,6 +544,17 @@ Some(a) : { foo : Ok(a), bar : Something }
 The type ``Ok`` is not declared in this scope.
 
 This type is referenced here:
+**syntax_grab_bag.md:43:19:43:24:**
+```roc
+Some(a) : { foo : Ok(a), bar : Something }
+```
+                  ^^^^^
+
+
+**UNDECLARED TYPE**
+The type ``Ok`` is not declared in this scope.
+
+This type is referenced here:
 **syntax_grab_bag.md:45:8:45:10:**
 ```roc
 	foo : Ok(a), # After field
@@ -566,6 +577,17 @@ This type is referenced here:
 The type ``Ok`` is not declared in this scope.
 
 This type is referenced here:
+**syntax_grab_bag.md:45:8:45:13:**
+```roc
+	foo : Ok(a), # After field
+```
+       ^^^^^
+
+
+**UNDECLARED TYPE**
+The type ``Ok`` is not declared in this scope.
+
+This type is referenced here:
 **syntax_grab_bag.md:52:4:52:6:**
 ```roc
 			Ok(a), # Comment after pattern record field
@@ -582,6 +604,17 @@ This type is referenced here:
 	bar : Something, # Another after pattern record field
 ```
        ^^^^^^^^^
+
+
+**UNDECLARED TYPE**
+The type ``Ok`` is not declared in this scope.
+
+This type is referenced here:
+**syntax_grab_bag.md:52:4:52:9:**
+```roc
+			Ok(a), # Comment after pattern record field
+```
+   ^^^^^
 
 
 **NOT IMPLEMENTED**
@@ -949,11 +982,11 @@ The unused variable is declared here:
 The type ``Value`` is not declared in this scope.
 
 This type is referenced here:
-**syntax_grab_bag.md:155:2:155:12:**
+**syntax_grab_bag.md:201:9:201:14:**
 ```roc
-	match_time(
+tuple : Value((a, b, c))
 ```
- ^^^^^^^^^^
+        ^^^^^
 
 
 **NOT IMPLEMENTED**
@@ -962,17 +995,17 @@ Let us know if you want to help!
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**syntax_grab_bag.md:68:1:68:8:**
+**syntax_grab_bag.md:67:11:67:14:**
 ```roc
-add_one = |num| {
+add_one : U64 -> U64
 ```
-^^^^^^^
+          ^^^
 
 It is of type:
     _U64_
 
 But you are trying to use it as:
-    _[True, False]_
+    _Bool_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -2359,7 +2392,7 @@ expect {
 		(annotation @199.1-199.6
 			(declared-type
 				(ty-record @198.9-198.11))))
-	(s-alias-decl @22.1-22.41 (where "TODO")
+	(s-alias-decl @22.1-22.41
 		(ty-header @22.1-22.10 (name "Map")
 			(ty-args
 				(ty-var @22.5-22.6 (name "a"))
@@ -2373,7 +2406,7 @@ expect {
 					(ty-var @22.28-22.29 (name "b"))))
 			(ty-apply @22.34-22.41 (symbol "List")
 				(ty-var @22.39-22.40 (name "b")))))
-	(s-alias-decl @23.1-34.5 (where "TODO")
+	(s-alias-decl @23.1-34.5
 		(ty-header @23.1-26.2 (name "MapML")
 			(ty-args
 				(ty-var @24.2-24.3 (name "a"))
@@ -2387,17 +2420,17 @@ expect {
 					(ty-var @31.9-31.10 (name "b"))))
 			(ty-apply @32.4-34.5 (symbol "List")
 				(ty-var @33.5-33.6 (name "b")))))
-	(s-alias-decl @36.1-36.17 (where "TODO")
+	(s-alias-decl @36.1-36.17
 		(ty-header @36.1-36.4 (name "Foo"))
 		(ty-tuple @36.7-36.17
 			(ty @36.8-36.11 (name "Bar"))
 			(ty @36.13-36.16 (name "Baz"))))
-	(s-alias-decl @38.1-41.2 (where "TODO")
+	(s-alias-decl @38.1-41.2
 		(ty-header @38.1-38.13 (name "FooMultiline"))
 		(ty-tuple @38.16-41.2
 			(ty @39.2-39.5 (name "Bar"))
 			(ty @40.2-40.5 (name "Baz"))))
-	(s-alias-decl @43.1-43.43 (where "TODO")
+	(s-alias-decl @43.1-43.43
 		(ty-header @43.1-43.8 (name "Some")
 			(ty-args
 				(ty-var @43.6-43.7 (name "a"))))
@@ -2407,7 +2440,7 @@ expect {
 					(ty-var @43.22-43.23 (name "a"))))
 			(field (field "bar")
 				(ty @43.32-43.41 (name "Something")))))
-	(s-alias-decl @44.1-47.2 (where "TODO")
+	(s-alias-decl @44.1-47.2
 		(ty-header @44.1-44.10 (name "SomeMl")
 			(ty-args
 				(ty-var @44.8-44.9 (name "a"))))
@@ -2417,7 +2450,7 @@ expect {
 					(ty-var @45.11-45.12 (name "a"))))
 			(field (field "bar")
 				(ty @46.8-46.17 (name "Something")))))
-	(s-alias-decl @49.1-54.2 (where "TODO")
+	(s-alias-decl @49.1-54.2
 		(ty-header @49.1-49.17 (name "SomeMultiline")
 			(ty-args
 				(ty-var @49.15-49.16 (name "a"))))
@@ -2427,7 +2460,7 @@ expect {
 					(ty-var @52.7-52.8 (name "a"))))
 			(field (field "bar")
 				(ty @53.8-53.17 (name "Something")))))
-	(s-alias-decl @56.1-56.27 (where "TODO")
+	(s-alias-decl @56.1-56.27
 		(ty-header @56.1-56.9 (name "Maybe")
 			(ty-args
 				(ty-var @56.7-56.8 (name "a"))))
@@ -2435,7 +2468,7 @@ expect {
 			(ty-apply @56.13-56.20 (symbol "Some")
 				(ty-var @56.18-56.19 (name "a")))
 			(ty @56.22-56.26 (name "None"))))
-	(s-alias-decl @58.1-61.2 (where "TODO")
+	(s-alias-decl @58.1-61.2
 		(ty-header @58.1-58.18 (name "MaybeMultiline")
 			(ty-args
 				(ty-var @58.16-58.17 (name "a"))))
@@ -2443,7 +2476,7 @@ expect {
 			(ty-apply @59.2-59.9 (symbol "Some")
 				(ty-var @59.7-59.8 (name "a")))
 			(ty @60.2-60.6 (name "None"))))
-	(s-alias-decl @63.1-63.38 (where "TODO")
+	(s-alias-decl @63.1-63.38
 		(ty-header @63.1-63.12 (name "SomeFunc")
 			(ty-args
 				(ty-var @63.10-63.11 (name "a"))))
@@ -2475,13 +2508,52 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @65.1-65.16 (type "[False, True] -> Num(*)"))
+		(patt @65.1-65.16 (type "Bool -> Num(*)"))
 		(patt @68.1-68.8 (type "Error -> Error"))
 		(patt @80.1-80.11 (type "Error"))
 		(patt @144.1-144.6 (type "Error -> Error"))
 		(patt @199.1-199.6 (type "{}")))
+	(type_decls
+		(alias @22.1-22.41 (type "Map(a, b)")
+			(ty-header @22.1-22.10 (name "Map")
+				(ty-args
+					(ty-var @22.5-22.6 (name "a"))
+					(ty-var @22.8-22.9 (name "b")))))
+		(alias @23.1-34.5 (type "MapML(a, b)")
+			(ty-header @23.1-26.2 (name "MapML")
+				(ty-args
+					(ty-var @24.2-24.3 (name "a"))
+					(ty-var @25.2-25.3 (name "b")))))
+		(alias @36.1-36.17 (type "Foo")
+			(ty-header @36.1-36.4 (name "Foo")))
+		(alias @38.1-41.2 (type "FooMultiline")
+			(ty-header @38.1-38.13 (name "FooMultiline")))
+		(alias @43.1-43.43 (type "Some(a)")
+			(ty-header @43.1-43.8 (name "Some")
+				(ty-args
+					(ty-var @43.6-43.7 (name "a")))))
+		(alias @44.1-47.2 (type "SomeMl(a)")
+			(ty-header @44.1-44.10 (name "SomeMl")
+				(ty-args
+					(ty-var @44.8-44.9 (name "a")))))
+		(alias @49.1-54.2 (type "SomeMultiline(a)")
+			(ty-header @49.1-49.17 (name "SomeMultiline")
+				(ty-args
+					(ty-var @49.15-49.16 (name "a")))))
+		(alias @56.1-56.27 (type "Maybe(a)")
+			(ty-header @56.1-56.9 (name "Maybe")
+				(ty-args
+					(ty-var @56.7-56.8 (name "a")))))
+		(alias @58.1-61.2 (type "MaybeMultiline(a)")
+			(ty-header @58.1-58.18 (name "MaybeMultiline")
+				(ty-args
+					(ty-var @58.16-58.17 (name "a")))))
+		(alias @63.1-63.38 (type "SomeFunc(a)")
+			(ty-header @63.1-63.12 (name "SomeFunc")
+				(ty-args
+					(ty-var @63.10-63.11 (name "a"))))))
 	(expressions
-		(expr @65.19-67.8 (type "[False, True] -> Num(*)"))
+		(expr @65.19-67.8 (type "Bool -> Num(*)"))
 		(expr @68.11-78.2 (type "Error -> Error"))
 		(expr @80.14-138.3 (type "Error"))
 		(expr @144.9-196.2 (type "Error -> Error"))

@@ -1551,6 +1551,23 @@ pub const TypeAnno = union(enum) {
     pub const TagUnionRhs = packed struct { open: u1, tags_len: u31 };
     pub const TypeAnnoFnRhs = packed struct { effectful: u1, args_len: u31 };
 
+    /// Extract the region from any TypeAnno variant
+    pub fn toRegion(self: *const @This()) TokenizedRegion {
+        switch (self.*) {
+            .apply => |a| return a.region,
+            .ty_var => |tv| return tv.region,
+            .underscore => |u| return u.region,
+            .ty => |t| return t.region,
+            .mod_ty => |t| return t.region,
+            .tag_union => |tu| return tu.region,
+            .tuple => |t| return t.region,
+            .record => |r| return r.region,
+            .@"fn" => |f| return f.region,
+            .parens => |p| return p.region,
+            .malformed => |m| return m.region,
+        }
+    }
+
     pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ast: *AST) SExpr {
         switch (self) {
             // (apply <ty> [<args>])

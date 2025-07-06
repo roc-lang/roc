@@ -53,11 +53,7 @@ pub const TypeAnno = union(enum) {
     /// Tag union type: a union of tags, possibly with payloads.
     ///
     /// Examples: `[Some(a), None]`, `[Red, Green, Blue]`, `[Cons(a, (List a)), Nil]`
-    tag_union: struct {
-        tags: TypeAnno.Span, // The individual tags in the union
-        open_anno: ?TypeAnno.Idx, // Optional extension variable for open unions
-        region: Region,
-    },
+    tag_union: TagUnion,
     /// Tuple type: a fixed-size collection of heterogeneous types.
     ///
     /// Examples: `(Str, U64)`, `(a, b, c)`
@@ -262,5 +258,12 @@ pub const TypeAnno = union(enum) {
 
         pub const Idx = enum(u32) { _ };
         pub const Span = struct { span: DataSpan };
+    };
+
+    /// A tag union in a type annotatino
+    pub const TagUnion = struct {
+        tags: TypeAnno.Span, // The individual tags in the union
+        open_anno: ?TypeAnno.Idx, // Optional extension variable for open unions
+        region: Region,
     };
 };
