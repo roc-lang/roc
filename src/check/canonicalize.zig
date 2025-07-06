@@ -2947,6 +2947,7 @@ test {
     _ = @import("canonicalize/test/int_test.zig");
     _ = @import("canonicalize/test/frac_test.zig");
     _ = @import("canonicalize/test/node_store_test.zig");
+    _ = @import("let_polymorphism_integration_test.zig");
 }
 
 /// Flatten a chain of if-then-else expressions into multiple if-branches

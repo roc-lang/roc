@@ -13,7 +13,6 @@ test {
     testing.refAllDeclsRecursive(@import("check/check_types/unify.zig"));
     testing.refAllDeclsRecursive(@import("check/check_types.zig"));
     testing.refAllDeclsRecursive(@import("check/check_types/let_polymorphism_test.zig"));
-    testing.refAllDeclsRecursive(@import("check/let_polymorphism_integration_test.zig"));
     testing.refAllDeclsRecursive(@import("snapshot.zig"));
     testing.refAllDeclsRecursive(@import("layout/layout.zig"));
     testing.refAllDeclsRecursive(@import("layout/store.zig"));
