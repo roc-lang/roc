@@ -4753,6 +4753,7 @@ fn canonicalizeBasicType(self: *Self, symbol: Ident.Idx, parent_node_idx: Node.I
     const name = self.can_ir.env.idents.getText(symbol);
 
     // Built-in types mapping
+    // TODO: Once these are brought into scope from builtins, we can deleted most of this
     if (std.mem.eql(u8, name, "Bool")) {
         return self.can_ir.pushTypeVar(.{ .flex_var = symbol }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "Str")) {
@@ -4766,31 +4767,31 @@ fn canonicalizeBasicType(self: *Self, symbol: Ident.Idx, parent_node_idx: Node.I
         };
         return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_poly = .{ .var_ = num_var, .requirements = num_requirements } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "U8")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = types.Num.int_u8 } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "U16")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u16 } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = types.Num.int_u16 } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "U32")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u32 } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = types.Num.int_u32 } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "U64")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u64 } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = types.Num.int_u64 } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "U128")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u128 } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = types.Num.int_u128 } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "I8")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i8 } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = types.Num.int_i8 } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "I16")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i16 } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = types.Num.int_i16 } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "I32")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i32 } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = types.Num.int_i32 } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "I64")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = types.Num.int_i64 } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "I128")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i128 } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = types.Num.int_i128 } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "F32")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f32 } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = types.Num.frac_f32 } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "F64")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f64 } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = types.Num.frac_f64 } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "Dec")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = .dec } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = types.Num.frac_dec } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else {
         // Look up user-defined type in scope
         const scope = self.currentScope();
@@ -4809,7 +4810,7 @@ fn canonicalizeBasicType(self: *Self, symbol: Ident.Idx, parent_node_idx: Node.I
 }
 
 /// Handle type applications like List(Str), Dict(k, v)
-fn canonicalizeTypeApplication(self: *Self, apply: anytype, parent_node_idx: Node.Idx, region: Region) std.mem.Allocator.Error!TypeVar {
+fn canonicalizeTypeApplication(self: *Self, apply: CIR.TypeAnno.Apply, parent_node_idx: Node.Idx, region: Region) std.mem.Allocator.Error!TypeVar {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -4876,7 +4877,7 @@ fn canonicalizeTypeApplication(self: *Self, apply: anytype, parent_node_idx: Nod
 }
 
 /// Handle function types like a -> b
-fn canonicalizeFunctionType(self: *Self, func: anytype, parent_node_idx: Node.Idx, region: Region) std.mem.Allocator.Error!TypeVar {
+fn canonicalizeFunctionType(self: *Self, func: CIR.TypeAnno.Func, parent_node_idx: Node.Idx, region: Region) std.mem.Allocator.Error!TypeVar {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -4937,7 +4938,7 @@ fn canonicalizeTupleType(self: *Self, tuple: CIR.TypeAnno.Tuple, parent_node_idx
 }
 
 /// Handle record types like { name: Str, age: Num }
-fn canonicalizeRecordType(self: *Self, record: anytype, parent_node_idx: Node.Idx, region: Region) std.mem.Allocator.Error!TypeVar {
+fn canonicalizeRecordType(self: *Self, record: CIR.TypeAnno.Record, parent_node_idx: Node.Idx, region: Region) std.mem.Allocator.Error!TypeVar {
     const trace = tracy.trace(@src());
     defer trace.end();
 

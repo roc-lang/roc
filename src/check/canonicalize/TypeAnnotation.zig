@@ -27,11 +27,7 @@ pub const TypeAnno = union(enum) {
     /// Type application: applying a type constructor to arguments.
     ///
     /// Examples: `List(Str)`, `Dict(String, Int)`, `Result(a, b)`
-    apply: struct {
-        symbol: Ident.Idx, // The type constructor being applied (e.g., "List", "Dict")
-        args: TypeAnno.Span, // The type arguments (e.g., [Str], [String, Int])
-        region: Region,
-    },
+    apply: Apply,
     /// Type variable: a placeholder type that can be unified with other types.
     ///
     /// Examples: `a`, `b`, `elem` in generic type signatures
@@ -61,19 +57,11 @@ pub const TypeAnno = union(enum) {
     /// Record type: a collection of named fields with their types.
     ///
     /// Examples: `{ name: Str, age: U64 }`, `{ x: F64, y: F64 }`
-    record: struct {
-        fields: RecordField.Span, // The field definitions
-        region: Region,
-    },
+    record: Record,
     /// Function type: represents function signatures.
     ///
     /// Examples: `a -> b`, `Str, U64 -> Str`, `{} => Str`
-    @"fn": struct {
-        args: TypeAnno.Span, // Argument types
-        ret: TypeAnno.Idx, // Return type
-        effectful: bool, // Whether the function can perform effects, i.e. uses fat arrow `=>`
-        region: Region,
-    },
+    @"fn": Func,
     /// Parenthesized type: used for grouping and precedence.
     ///
     /// Examples: `(a -> b)` in `a, (a -> b) -> b`
@@ -255,6 +243,27 @@ pub const TypeAnno = union(enum) {
 
         pub const Idx = enum(u32) { _ };
         pub const Span = struct { span: DataSpan };
+    };
+
+    /// A type application in a type annotation
+    pub const Apply = struct {
+        symbol: Ident.Idx, // The type constructor being applied (e.g., "List", "Dict")
+        args: TypeAnno.Span, // The type arguments (e.g., [Str], [String, Int])
+        region: Region,
+    };
+
+    /// A func in a type annotation
+    pub const Func = struct {
+        args: TypeAnno.Span, // Argument types
+        ret: TypeAnno.Idx, // Return type
+        effectful: bool, // Whether the function can perform effects, i.e. uses fat arrow `=>`
+        region: Region,
+    };
+
+    /// A record in a type annotation
+    pub const Record = struct {
+        fields: RecordField.Span, // The field definitions
+        region: Region,
     };
 
     /// A tag union in a type annotation
