@@ -5,6 +5,7 @@ const parse = @import("check/parse.zig");
 const module_work = @import("base/module_work.zig");
 
 pub const SExpr = @import("base/SExpr.zig");
+pub const SExprTree = @import("base/SExprTree.zig");
 pub const Ident = @import("base/Ident.zig");
 pub const Region = @import("base/Region.zig");
 pub const Package = @import("base/Package.zig");
