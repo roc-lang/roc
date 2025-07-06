@@ -1,15 +1,15 @@
 # META
 ~~~ini
-description=ann_closed_union
+description=Closed Tag Union Type Annotation
 type=expr
 ~~~
 # SOURCE
 ~~~roc
 {
-    foo : [True, Perhaps Thing]
-    foo = True
+    apple : [Apple, IsFruit(Bool)]
+    apple = Apple
 
-    42
+    apple
 }
 ~~~
 # EXPECTED
@@ -38,7 +38,7 @@ Here is the problematic code:
 ```roc
     foo : [True, Perhaps Thing]
 ```
-                              
+
 
 
 **MALFORMED TYPE**
@@ -80,8 +80,8 @@ CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 # FORMATTED
 ~~~roc
 {
-	foo : 
-	
+	foo :
+
 	foo = True
 
 	42

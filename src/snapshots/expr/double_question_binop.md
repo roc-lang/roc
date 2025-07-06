@@ -1,11 +1,11 @@
 # META
 ~~~ini
-description=double_question_binop
+description=Double question default value
 type=expr
 ~~~
 # SOURCE
 ~~~roc
-get_name! {} ?? "Bob"
+get_name!({}) ?? "Bob"
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - double_question_binop.md:1:1:1:10

@@ -1,15 +1,14 @@
 # META
 ~~~ini
-description=ann_effectful_fn
+description=Annotated effectful function
 type=expr
 ~~~
 # SOURCE
 ~~~roc
 {
     launchTheNukes : {} => Result Bool LaunchNukeErr
-    launchTheNukes = |{}| {
-        crash "todo"
-    }
+    launchTheNukes = |{}| ...
+
     launchTheNukes({})
 }
 ~~~
