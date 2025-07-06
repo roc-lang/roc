@@ -409,6 +409,11 @@ pub const Store = struct {
         return self.record_fields.appendSlice(self.gpa, slice);
     }
 
+    /// Append a tag to the backing list, returning the idx
+    pub fn appendTag(self: *Self, tag: Tag) TagSafeMultiList.Idx {
+        return self.tags.append(self.gpa, tag);
+    }
+
     /// Append a slice of tags to the backing list, returning the range
     pub fn appendTags(self: *Self, slice: []const Tag) TagSafeMultiList.Range {
         return self.tags.appendSlice(self.gpa, slice);

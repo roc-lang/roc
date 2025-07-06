@@ -79,7 +79,7 @@ blue = RGB(0, 0, 255)
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @8.1-8.5 (type "CC.RGB")))
+		(patt @8.1-8.5 (type "[RGB]*")))
 	(expressions
-		(expr @8.8-8.23 (type "CC.RGB"))))
+		(expr @8.8-8.23 (type "[RGB]*"))))
 ~~~

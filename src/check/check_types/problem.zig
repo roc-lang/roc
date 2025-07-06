@@ -89,6 +89,7 @@ pub const TypeMismatchDetail = union(enum) {
     incompatible_match_patterns: IncompatibleMatchPatterns,
     incompatible_match_branches: IncompatibleMatchBranches,
     invalid_bool_binop: InvalidBoolBinop,
+    invalid_nominal_tag,
 };
 
 /// Problem data for when list elements have incompatible types
@@ -215,6 +216,9 @@ pub const ReportBuilder = struct {
                         },
                         .invalid_bool_binop => |data| {
                             return self.buildInvalidBoolBinop(&snapshot_writer, mismatch.types, data);
+                        },
+                        .invalid_nominal_tag => {
+                            return self.buildInvalidNominalTag(&snapshot_writer, mismatch.types);
                         },
                     }
                 } else {
@@ -1005,6 +1009,93 @@ pub const ReportBuilder = struct {
         try report.document.addReflowingText("Note: Roc does not have \"truthiness\" where other values ");
         try report.document.addReflowingText("like strings, numbers or lists are automatically converted to bools. ");
         try report.document.addReflowingText("You must do that conversion yourself!");
+
+        return report;
+    }
+
+    /// Build a report for incompatible match branches
+    fn buildInvalidNominalTag(
+        self: *Self,
+        snapshot_writer: *snapshot.SnapshotWriter,
+        types: TypePair,
+    ) !Report {
+        var report = Report.init(self.gpa, "INVALID NOMINAL TAG", .runtime_error);
+
+        // Create owned strings
+        self.buf.clearRetainingCapacity();
+        try snapshot_writer.write(types.expected_snapshot);
+        const expected_type = try report.addOwnedString(self.buf.items);
+
+        const actual_content = self.snapshots.getContent(types.actual_snapshot);
+        std.debug.assert(actual_content == .structure);
+        std.debug.assert(actual_content.structure == .tag_union);
+        std.debug.assert(actual_content.structure.tag_union.tags.len() == 1);
+        const actual_tag = self.snapshots.tags.get(actual_content.structure.tag_union.tags.start);
+        const tag_name_bytes = self.can_ir.env.idents.getText(actual_tag.name);
+        const tag_name = try report.addOwnedString(tag_name_bytes);
+
+        // Add description
+        try report.document.addText("I'm having trouble with this nominal tag:");
+        try report.document.addLineBreak();
+
+        // Determine the overall region that encompasses both elements
+        const expr_region = self.can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(types.expected_var)));
+        const problem_side_region = self.can_ir.store.getNodeRegion(@enumFromInt(@intFromEnum(types.actual_var)));
+
+        const overall_start_offset = expr_region.start.offset;
+        const overall_end_offset = problem_side_region.end.offset;
+
+        const overall_region_info = base.RegionInfo.position(
+            self.source,
+            self.module_env.line_starts.items,
+            overall_start_offset,
+            overall_end_offset,
+        ) catch return report;
+
+        // Create the display region
+        const display_region = SourceCodeDisplayRegion{
+            .line_text = overall_region_info.line_text,
+            .start_line = overall_region_info.start_line_idx + 1,
+            .start_column = overall_region_info.start_col_idx + 1,
+            .end_line = overall_region_info.end_line_idx + 1,
+            .end_column = overall_region_info.end_col_idx + 1,
+            .region_annotation = .dimmed,
+            .filename = self.filename,
+        };
+
+        // Create underline regions
+        const this_branch_region_info = base.RegionInfo.position(
+            self.source,
+            self.module_env.line_starts.items,
+            problem_side_region.start.offset,
+            problem_side_region.end.offset,
+        ) catch return report;
+        const underline_regions = [_]UnderlineRegion{
+            .{
+                .start_line = this_branch_region_info.start_line_idx + 1,
+                .start_column = this_branch_region_info.start_col_idx + 1,
+                .end_line = this_branch_region_info.end_line_idx + 1,
+                .end_column = this_branch_region_info.end_col_idx + 1,
+                .annotation = .error_highlight,
+            },
+        };
+
+        try report.document.addSourceCodeWithUnderlines(display_region, &underline_regions);
+        try report.document.addLineBreak();
+
+        // Show the invalid tag
+        try report.document.addText("The tag is:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(tag_name, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        // Show the expected tags
+        try report.document.addText("But it should be one of:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(expected_type, .type_variable);
 
         return report;
     }

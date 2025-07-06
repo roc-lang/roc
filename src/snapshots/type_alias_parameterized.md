@@ -26,7 +26,7 @@ main! = |_| swapPair(1, 2)
             ^^^^^^^^
 
 It is of type:
-    _Pair(a, *) -> Pair(b, a)_
+    _Pair(a, b) -> Pair(b, a)_
 
 But you are trying to use it as:
     _Num(*), Num(*) -> *_
@@ -134,7 +134,7 @@ NO CHANGE
 					(pattern @6.1-6.9))
 				(e-int @8.22-8.23 (value "1"))
 				(e-int @8.25-8.26 (value "2")))))
-	(s-alias-decl @3.1-3.20 (where "TODO")
+	(s-alias-decl @3.1-3.20
 		(ty-header @3.1-3.11 (name "Pair")
 			(ty-args
 				(ty-var @3.6-3.7 (name "a"))
@@ -149,6 +149,12 @@ NO CHANGE
 	(defs
 		(patt @6.1-6.9 (type "Error"))
 		(patt @8.1-8.6 (type "* -> *")))
+	(type_decls
+		(alias @3.1-3.20 (type "Pair(a, b)")
+			(ty-header @3.1-3.11 (name "Pair")
+				(ty-args
+					(ty-var @3.6-3.7 (name "a"))
+					(ty-var @3.9-3.10 (name "b"))))))
 	(expressions
 		(expr @6.12-6.27 (type "Error"))
 		(expr @8.9-8.27 (type "* -> *"))))

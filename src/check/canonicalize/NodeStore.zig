@@ -99,7 +99,7 @@ pub fn deinit(store: *NodeStore) void {
 /// Count of the diagnostic nodes in the CIR
 pub const CIR_DIAGNOSTIC_NODE_COUNT = 33;
 /// Count of the expression nodes in the CIR
-pub const CIR_EXPR_NODE_COUNT = 23;
+pub const CIR_EXPR_NODE_COUNT = 24;
 /// Count of the statement nodes in the CIR
 pub const CIR_STATEMENT_NODE_COUNT = 12;
 /// Count of the type annotation nodes in the CIR
@@ -225,11 +225,13 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
             const extra_data = store.extra_data.items[extra_start..];
 
             const anno = @as(CIR.TypeAnno.Idx, @enumFromInt(extra_data[0]));
-            const header = @as(CIR.TypeHeader.Idx, @enumFromInt(extra_data[1]));
+            const anno_var = @as(types.Var, @enumFromInt(extra_data[1]));
+            const header = @as(CIR.TypeHeader.Idx, @enumFromInt(extra_data[2]));
+            const has_where = extra_data[3] != 0;
 
-            const where_clause = if (extra_data.len > 3) blk: {
-                const where_start = extra_data[2];
-                const where_len = extra_data[3];
+            const where_clause = if (has_where) blk: {
+                const where_start = extra_data[4];
+                const where_len = extra_data[5];
                 break :blk CIR.WhereClause.Span{ .span = DataSpan.init(where_start, where_len) };
             } else null;
 
@@ -237,6 +239,7 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
                 .s_alias_decl = .{
                     .region = store.getRegionAt(node_idx),
                     .anno = anno,
+                    .anno_var = anno_var,
                     .header = header,
                     .where = where_clause,
                 },
@@ -247,11 +250,13 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
             const extra_data = store.extra_data.items[extra_start..];
 
             const anno = @as(CIR.TypeAnno.Idx, @enumFromInt(extra_data[0]));
-            const header = @as(CIR.TypeHeader.Idx, @enumFromInt(extra_data[1]));
+            const anno_var = @as(types.Var, @enumFromInt(extra_data[1]));
+            const header = @as(CIR.TypeHeader.Idx, @enumFromInt(extra_data[2]));
+            const has_where = extra_data[3] != 0;
 
-            const where_clause = if (extra_data.len > 3) blk: {
-                const where_start = extra_data[2];
-                const where_len = extra_data[3];
+            const where_clause = if (has_where) blk: {
+                const where_start = extra_data[4];
+                const where_len = extra_data[5];
                 break :blk CIR.WhereClause.Span{ .span = DataSpan.init(where_start, where_len) };
             } else null;
 
@@ -259,6 +264,7 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
                 .s_nominal_decl = .{
                     .region = store.getRegionAt(node_idx),
                     .anno = anno,
+                    .anno_var = anno_var,
                     .header = header,
                     .where = where_clause,
                 },
@@ -407,19 +413,28 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             store.getRegionAt(node_idx),
         ),
         .expr_tag => {
-            const extra_start = node.data_1;
-            const extra_data = store.extra_data.items[extra_start..];
-
-            const ext_var = @as(types.Var, @enumFromInt(extra_data[0]));
-            const name = @as(Ident.Idx, @bitCast(extra_data[1]));
-            const args_start = extra_data[2];
-            const args_len = extra_data[3];
+            const name = @as(Ident.Idx, @bitCast(node.data_1));
+            const args_start = node.data_2;
+            const args_len = node.data_3;
 
             return CIR.Expr{
                 .e_tag = .{
-                    .ext_var = ext_var,
                     .name = name,
                     .args = .{ .span = .{ .start = args_start, .len = args_len } },
+                    .region = store.getRegionAt(node_idx),
+                },
+            };
+        },
+        .expr_nominal => {
+            const nominal_type_decl: CIR.Statement.Idx = @enumFromInt(node.data_1);
+            const backing_expr: CIR.Expr.Idx = @enumFromInt(node.data_2);
+            const backing_type: CIR.Expr.NominalBackingType = @enumFromInt(node.data_3);
+
+            return CIR.Expr{
+                .e_nominal = .{
+                    .nominal_type_decl = nominal_type_decl,
+                    .backing_expr = backing_expr,
+                    .backing_type = backing_type,
                     .region = store.getRegionAt(node_idx),
                 },
             };
@@ -645,7 +660,7 @@ pub fn getMatchBranchPattern(store: *const NodeStore, branch_pat: CIR.Expr.Match
 
     return CIR.Expr.Match.BranchPattern{
         .pattern = @enumFromInt(node.data_1),
-        .degenerate = if (node.data_2 == 0) false else true,
+        .degenerate = node.data_2 != 0,
         .region = store.getRegionAt(node_idx),
     };
 }
@@ -1127,13 +1142,18 @@ pub fn addStatement(store: *NodeStore, statement: CIR.Statement) CIR.Statement.I
 
             // Store anno idx
             store.extra_data.append(store.gpa, @intFromEnum(s.anno)) catch |err| exitOnOom(err);
+            // Store anno var
+            store.extra_data.append(store.gpa, @intFromEnum(s.anno_var)) catch |err| exitOnOom(err);
             // Store header idx
             store.extra_data.append(store.gpa, @intFromEnum(s.header)) catch |err| exitOnOom(err);
             // Store where clause information
             if (s.where) |where_clause| {
                 // Store where clause span start and len
+                store.extra_data.append(store.gpa, @intFromBool(true)) catch |err| exitOnOom(err);
                 store.extra_data.append(store.gpa, where_clause.span.start) catch |err| exitOnOom(err);
                 store.extra_data.append(store.gpa, where_clause.span.len) catch |err| exitOnOom(err);
+            } else {
+                store.extra_data.append(store.gpa, @intFromBool(false)) catch |err| exitOnOom(err);
             }
 
             // Store the extra data start position in the node
@@ -1148,13 +1168,18 @@ pub fn addStatement(store: *NodeStore, statement: CIR.Statement) CIR.Statement.I
 
             // Store anno idx
             store.extra_data.append(store.gpa, @intFromEnum(s.anno)) catch |err| exitOnOom(err);
+            // Store anno var
+            store.extra_data.append(store.gpa, @intFromEnum(s.anno_var)) catch |err| exitOnOom(err);
             // Store header idx
             store.extra_data.append(store.gpa, @intFromEnum(s.header)) catch |err| exitOnOom(err);
             // Store where clause information
             if (s.where) |where_clause| {
                 // Store where clause span start and len
+                store.extra_data.append(store.gpa, @intFromBool(true)) catch |err| exitOnOom(err);
                 store.extra_data.append(store.gpa, where_clause.span.start) catch |err| exitOnOom(err);
                 store.extra_data.append(store.gpa, where_clause.span.len) catch |err| exitOnOom(err);
+            } else {
+                store.extra_data.append(store.gpa, @intFromBool(false)) catch |err| exitOnOom(err);
             }
 
             // Store the extra data start position in the node
@@ -1305,14 +1330,16 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
         .e_tag => |e| {
             region = e.region;
             node.tag = .expr_tag;
-
-            // Store tag data in extra_data
-            const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
-            store.extra_data.append(store.gpa, @intFromEnum(e.ext_var)) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @bitCast(e.name)) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, e.args.span.start) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, e.args.span.len) catch |err| exitOnOom(err);
-            node.data_1 = extra_data_start;
+            node.data_1 = @bitCast(e.name);
+            node.data_2 = e.args.span.start;
+            node.data_3 = e.args.span.len;
+        },
+        .e_nominal => |e| {
+            region = e.region;
+            node.tag = .expr_nominal;
+            node.data_1 = @intFromEnum(e.nominal_type_decl);
+            node.data_2 = @intFromEnum(e.backing_expr);
+            node.data_3 = @intFromEnum(e.backing_type);
         },
         .e_dot_access => |e| {
             region = e.region;
@@ -2694,6 +2721,24 @@ pub fn addTypeVarSlot(store: *NodeStore, parent_node_idx: Node.Idx, region: base
     });
     _ = store.regions.append(store.gpa, region);
     return @enumFromInt(@intFromEnum(nid));
+}
+
+/// Given a target node idx, check that the it is in bounds
+/// If it is, do nothing
+/// If it's not, then fill in the store with type_var_slots for all missing
+/// intervening nodes, *up to and including* the provided node
+pub fn fillInTypeVarSlotsThru(store: *NodeStore, target_idx: Node.Idx, parent_node_idx: Node.Idx, region: Region) std.mem.Allocator.Error!void {
+    const idx = @intFromEnum(target_idx);
+    try store.nodes.items.ensureTotalCapacity(store.gpa, idx);
+    while (store.nodes.items.len <= idx) {
+        store.nodes.items.appendAssumeCapacity(.{
+            .tag = .type_var_slot,
+            .data_1 = @intFromEnum(parent_node_idx),
+            .data_2 = 0,
+            .data_3 = 0,
+        });
+        _ = store.regions.append(store.gpa, region);
+    }
 }
 
 /// Return the current top index for scratch match branches.

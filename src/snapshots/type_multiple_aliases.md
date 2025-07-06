@@ -210,16 +210,16 @@ NO CHANGE
 						(pattern @12.1-12.14))
 					(e-lookup-local @16.16-16.20
 						(pattern @15.2-15.6))))))
-	(s-alias-decl @3.1-3.13 (where "TODO")
+	(s-alias-decl @3.1-3.13
 		(ty-header @3.1-3.7 (name "UserId"))
 		(ty @3.10-3.13 (name "U64")))
-	(s-alias-decl @4.1-4.15 (where "TODO")
+	(s-alias-decl @4.1-4.15
 		(ty-header @4.1-4.9 (name "UserName"))
 		(ty @4.12-4.15 (name "Str")))
-	(s-alias-decl @5.1-5.13 (where "TODO")
+	(s-alias-decl @5.1-5.13
 		(ty-header @5.1-5.8 (name "UserAge"))
 		(ty @5.11-5.13 (name "U8")))
-	(s-alias-decl @6.1-6.55 (where "TODO")
+	(s-alias-decl @6.1-6.55
 		(ty-header @6.1-6.5 (name "User"))
 		(ty-record @6.8-6.55
 			(field (field "id")
@@ -236,6 +236,15 @@ NO CHANGE
 		(patt @9.1-9.12 (type "UserId, UserName, UserAge -> { id: UserId, name: UserName, age: UserAge }"))
 		(patt @12.1-12.14 (type "{ name: UserName } -> UserName"))
 		(patt @14.1-14.6 (type "* -> UserName")))
+	(type_decls
+		(alias @3.1-3.13 (type "UserId")
+			(ty-header @3.1-3.7 (name "UserId")))
+		(alias @4.1-4.15 (type "UserName")
+			(ty-header @4.1-4.9 (name "UserName")))
+		(alias @5.1-5.13 (type "UserAge")
+			(ty-header @5.1-5.8 (name "UserAge")))
+		(alias @6.1-6.55 (type "User")
+			(ty-header @6.1-6.5 (name "User"))))
 	(expressions
 		(expr @9.15-9.46 (type "UserId, UserName, UserAge -> { id: UserId, name: UserName, age: UserAge }"))
 		(expr @12.17-14.6 (type "{ name: UserName } -> UserName"))

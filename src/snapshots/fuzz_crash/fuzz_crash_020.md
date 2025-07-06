@@ -131,7 +131,6 @@ h == foo
 UNDECLARED TYPE - fuzz_crash_020.md:13:13:13:16
 UNDECLARED TYPE VARIABLE - fuzz_crash_020.md:13:19:13:21
 UNDECLARED TYPE VARIABLE - fuzz_crash_020.md:19:4:19:6
-UNDECLARED TYPE VARIABLE - fuzz_crash_020.md:20:12:20:13
 UNDECLARED TYPE - fuzz_crash_020.md:24:15:24:16
 UNDECLARED TYPE VARIABLE - fuzz_crash_020.md:24:24:24:25
 UNDECLARED TYPE - fuzz_crash_020.md:37:7:37:9
@@ -202,19 +201,6 @@ This type variable is referenced here:
 		(ab) -> # row
 ```
    ^^
-
-
-**UNDECLARED TYPE VARIABLE**
-The type variable ``b`` is not declared in this scope.
-
-Type variables must be introduced in a type annotation before they can be used.
-
-This type variable is referenced here:
-**fuzz_crash_020.md:20:12:20:13:**
-```roc
-			List(			b	) #z)
-```
-           ^
 
 
 **UNDECLARED TYPE**
@@ -1559,7 +1545,7 @@ expect {
 	(d-let
 		(p-assign @114.1-114.2 (ident "e"))
 		(e-empty_record @114.5-114.7))
-	(s-alias-decl @13.1-13.33 (where "TODO")
+	(s-alias-decl @13.1-13.33
 		(ty-header @13.1-13.10 (name "Map")
 			(ty-args
 				(ty-var @13.5-13.6 (name "a"))
@@ -1570,7 +1556,7 @@ expect {
 				(ty-var @13.19-13.21 (name "ab")))
 			(ty-apply @13.26-13.33 (symbol "List")
 				(ty-var @13.31-13.32 (name "b")))))
-	(s-alias-decl @14.1-20.15 (where "TODO")
+	(s-alias-decl @14.1-20.15
 		(ty-header @14.1-15.2 (name "MapML"))
 		(ty-fn @17.3-20.15 (effectful false)
 			(ty-apply @17.3-18.4 (symbol "List"))
@@ -1578,30 +1564,30 @@ expect {
 				(ty-var @19.4-19.6 (name "ab")))
 			(ty-apply @20.4-20.15 (symbol "List")
 				(ty-var @20.12-20.13 (name "b")))))
-	(s-alias-decl @24.1-24.27 (where "TODO")
+	(s-alias-decl @24.1-24.27
 		(ty-header @24.1-24.4 (name "Som"))
 		(ty-record @24.7-24.27
 			(field (field "foo")
 				(ty @24.15-24.16 (name "O")))
 			(field (field "bar")
 				(ty-var @24.24-24.25 (name "g")))))
-	(s-alias-decl @25.1-26.2 (where "TODO")
+	(s-alias-decl @25.1-26.2
 		(ty-header @25.1-25.6 (name "Ml")
 			(ty-args
 				(ty-var @25.4-25.5 (name "a"))))
 		(ty-record @25.9-26.2))
-	(s-alias-decl @28.1-29.2 (where "TODO")
+	(s-alias-decl @28.1-29.2
 		(ty-header @28.1-28.9 (name "Soine")
 			(ty-args
 				(ty-var @28.7-28.8 (name "a"))))
 		(ty-record @28.12-29.2))
-	(s-alias-decl @30.1-30.19 (where "TODO")
+	(s-alias-decl @30.1-30.19
 		(ty-header @30.1-30.9 (name "Maybe")
 			(ty-args
 				(ty-var @30.7-30.8 (name "a"))))
 		(ty-tag-union @30.12-30.19
 			(ty @30.13-30.18 (name "Somne"))))
-	(s-alias-decl @32.1-33.2 (where "TODO")
+	(s-alias-decl @32.1-33.2
 		(ty-header @32.1-32.10 (name "Mayine")
 			(ty-args
 				(ty-var @32.8-32.9 (name "a"))))
@@ -1621,15 +1607,41 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @35.1-35.4 (type "[False, True] -> Num(*)"))
+		(patt @35.1-35.4 (type "Bool -> Num(*)"))
 		(patt @38.1-38.4 (type "[Rum]* -> Error"))
 		(patt @49.1-49.3 (type "Error -> Error"))
-		(patt @75.1-75.3 (type "* -> *"))
+		(patt @75.1-75.3 (type "* -> [Stdo!]*"))
 		(patt @114.1-114.2 (type "{}")))
+	(type_decls
+		(alias @13.1-13.33 (type "Map(a, b)")
+			(ty-header @13.1-13.10 (name "Map")
+				(ty-args
+					(ty-var @13.5-13.6 (name "a"))
+					(ty-var @13.8-13.9 (name "b")))))
+		(alias @14.1-20.15 (type "MapML")
+			(ty-header @14.1-15.2 (name "MapML")))
+		(alias @24.1-24.27 (type "Som")
+			(ty-header @24.1-24.4 (name "Som")))
+		(alias @25.1-26.2 (type "Ml(a)")
+			(ty-header @25.1-25.6 (name "Ml")
+				(ty-args
+					(ty-var @25.4-25.5 (name "a")))))
+		(alias @28.1-29.2 (type "Soine(a)")
+			(ty-header @28.1-28.9 (name "Soine")
+				(ty-args
+					(ty-var @28.7-28.8 (name "a")))))
+		(alias @30.1-30.19 (type "Maybe(a)")
+			(ty-header @30.1-30.9 (name "Maybe")
+				(ty-args
+					(ty-var @30.7-30.8 (name "a")))))
+		(alias @32.1-33.2 (type "Mayine(a)")
+			(ty-header @32.1-32.10 (name "Mayine")
+				(ty-args
+					(ty-var @32.8-32.9 (name "a"))))))
 	(expressions
-		(expr @35.7-37.4 (type "[False, True] -> Num(*)"))
+		(expr @35.7-37.4 (type "Bool -> Num(*)"))
 		(expr @38.7-47.2 (type "[Rum]* -> Error"))
 		(expr @49.6-69.3 (type "Error -> Error"))
-		(expr @75.5-111.2 (type "* -> *"))
+		(expr @75.5-111.2 (type "* -> [Stdo!]*"))
 		(expr @114.5-114.7 (type "{}"))))
 ~~~

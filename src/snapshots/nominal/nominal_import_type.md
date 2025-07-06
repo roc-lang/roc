@@ -13,9 +13,19 @@ red : Color.RGB
 red = Color.RGB.Red
 ~~~
 # EXPECTED
-NIL
+UNDEFINED VARIABLE - nominal_import_type.md:6:12:6:16
 # PROBLEMS
-NIL
+**UNDEFINED VARIABLE**
+Nothing is named `RGB` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**nominal_import_type.md:6:12:6:16:**
+```roc
+red = Color.RGB.Red
+```
+           ^^^^
+
+
 # TOKENS
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),Newline(1:1-1:1),
@@ -53,7 +63,7 @@ red = Red
 (can-ir
 	(d-let
 		(p-assign @6.1-6.4 (ident "red"))
-		(e-tag @6.7-6.20 (name "Red"))
+		(e-runtime-error (tag "ident_not_in_scope"))
 		(annotation @6.1-6.4
 			(declared-type
 				(ty-lookup-external @5.7-5.16
@@ -65,7 +75,7 @@ red = Red
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.4 (type "[Red]*")))
+		(patt @6.1-6.4 (type "Error")))
 	(expressions
-		(expr @6.7-6.20 (type "[Red]*"))))
+		(expr @6.7-6.20 (type "Error"))))
 ~~~

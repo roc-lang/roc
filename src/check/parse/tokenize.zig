@@ -421,6 +421,18 @@ pub const TokenizedBuffer = struct {
             return null;
         }
     }
+
+    /// Loads the current token & region if it is an identifier.
+    /// Otherwise returns null.
+    pub fn resolveIdentifierAndRegion(self: *TokenizedBuffer, token: Token.Idx) ?struct { base.Ident.Idx, base.Region } {
+        const tag = self.tokens.items(.tag)[@intCast(token)];
+        if (tag.isInterned()) {
+            const extra = self.tokens.items(.extra)[@intCast(token)];
+            return .{ extra.interned, self.env.idents.getRegion(extra.interned) };
+        } else {
+            return null;
+        }
+    }
 };
 
 /// Represents a comment in roc source e.g. `## some comment`

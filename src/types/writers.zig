@@ -38,15 +38,18 @@ pub const SExprWriter = struct {
 
         for (0..env.types.slots.backing.items.len) |slot_idx| {
             const var_: Var = @enumFromInt(slot_idx);
-            try type_writer.writeVar(var_);
 
             var var_node = SExpr.init(gpa, "var");
-            var_node.appendTypeVar(gpa, "var", @as(Var, @enumFromInt(slot_idx)));
+
+            buffer.clearRetainingCapacity();
+            try buffer.writer().print("{}", .{slot_idx});
+            var_node.appendStringAttr(gpa, "var", buffer.items);
+
+            buffer.clearRetainingCapacity();
+            try type_writer.writeVar(var_);
             var_node.appendStringAttr(gpa, "type", buffer.items);
 
             root_node.appendNode(gpa, &var_node);
-
-            buffer.clearRetainingCapacity();
         }
 
         root_node.toStringPretty(writer);

@@ -127,10 +127,10 @@ AnotherType : SomeModule.MissingType
 				(ty-fn @5.16-5.39 (effectful false)
 					(ty @5.16-5.32 (name "UndeclaredResult"))
 					(ty @5.36-5.39 (name "Str"))))))
-	(s-alias-decl @3.1-3.21 (where "TODO")
+	(s-alias-decl @3.1-3.21
 		(ty-header @3.1-3.7 (name "MyType"))
 		(ty @3.10-3.21 (name "UnknownType")))
-	(s-alias-decl @10.1-10.37 (where "TODO")
+	(s-alias-decl @10.1-10.37
 		(ty-header @10.1-10.12 (name "AnotherType"))
 		(ty-lookup-external @10.15-10.37
 			(ext-decl @10.15-10.37 (ident "SomeModule.MissingType") (kind "type")))))
@@ -140,6 +140,11 @@ AnotherType : SomeModule.MissingType
 (inferred-types
 	(defs
 		(patt @6.1-6.13 (type "Error -> Str")))
+	(type_decls
+		(alias @3.1-3.21 (type "MyType")
+			(ty-header @3.1-3.7 (name "MyType")))
+		(alias @10.1-10.37 (type "AnotherType")
+			(ty-header @10.1-10.12 (name "AnotherType"))))
 	(expressions
 		(expr @6.16-8.2 (type "Error -> Str"))))
 ~~~

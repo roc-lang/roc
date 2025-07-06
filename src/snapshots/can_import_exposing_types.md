@@ -1002,7 +1002,7 @@ combineResults = |jsonResult, httpStatus|
 					(ty-apply @49.50-49.73 (symbol "Result")
 						(ty @49.57-49.65 (name "Response"))
 						(ty @49.67-49.72 (name "Error")))))))
-	(s-alias-decl @30.1-34.2 (where "TODO")
+	(s-alias-decl @30.1-34.2
 		(ty-header @30.1-30.13 (name "ServerConfig"))
 		(ty-record @30.16-34.2
 			(field (field "jsonConfig")
@@ -1035,6 +1035,9 @@ combineResults = |jsonResult, httpStatus|
 		(patt @38.1-38.13 (type "Error -> Http.Client"))
 		(patt @42.1-42.15 (type "Error -> Str"))
 		(patt @50.1-50.15 (type "Error, Error -> Error")))
+	(type_decls
+		(alias @30.1-34.2 (type "ServerConfig")
+			(ty-header @30.1-30.13 (name "ServerConfig"))))
 	(expressions
 		(expr @9.13-9.38 (type "Str -> Error"))
 		(expr @13.17-19.2 (type "Error -> Error"))

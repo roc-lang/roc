@@ -1,4 +1,5 @@
 const types = @import("./types/types.zig");
+
 // TODO: refactor this to just be types.zig
 // Get rid of all of the reexporting. types.zig and types/types.zig should not exist separately.
 pub const Alias = types.Alias;
@@ -13,6 +14,7 @@ pub const Tag = types.Tag;
 pub const TagUnion = types.TagUnion;
 pub const Tuple = types.Tuple;
 pub const Var = types.Var;
+pub const TypeIdent = types.TypeIdent;
 
 pub const store = @import("./types/store.zig");
 pub const writers = @import("./types/writers.zig");

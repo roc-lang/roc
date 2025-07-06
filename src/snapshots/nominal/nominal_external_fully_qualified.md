@@ -18,18 +18,18 @@ handleResult = |result| {
 }
 ~~~
 # EXPECTED
-UNDECLARED TYPE - nominal_external_fully_qualified.md:6:1:6:13
+UNDECLARED TYPE - nominal_external_fully_qualified.md:5:16:5:53
 UNUSED VARIABLE - nominal_external_fully_qualified.md:9:41:9:45
 # PROBLEMS
 **UNDECLARED TYPE**
 The type ``MyResultModule.MyResultType`` is not declared in this scope.
 
 This type is referenced here:
-**nominal_external_fully_qualified.md:6:1:6:13:**
+**nominal_external_fully_qualified.md:5:16:5:53:**
 ```roc
-handleResult = |result| {
+handleResult : MyResultModule.MyResultType(Str, I32) -> Str
 ```
-^^^^^^^^^^^^
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **UNUSED VARIABLE**

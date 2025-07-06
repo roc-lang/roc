@@ -58,12 +58,12 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-alias-decl @3.1-8.7 (where "TODO")
+	(s-alias-decl @3.1-8.7
 		(ty-header @3.1-3.8 (name "Hash")
 			(ty-args
 				(ty-var @3.6-3.7 (name "a"))))
 		(ty-var @3.11-3.12 (name "a")))
-	(s-alias-decl @8.1-10.35 (where "TODO")
+	(s-alias-decl @8.1-10.35
 		(ty-header @8.1-8.10 (name "Decode")
 			(ty-args
 				(ty-var @8.8-8.9 (name "a"))))
@@ -73,5 +73,14 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs)
+	(type_decls
+		(alias @3.1-8.7 (type "Hash(a)")
+			(ty-header @3.1-3.8 (name "Hash")
+				(ty-args
+					(ty-var @3.6-3.7 (name "a")))))
+		(alias @8.1-10.35 (type "Decode(a)")
+			(ty-header @8.1-8.10 (name "Decode")
+				(ty-args
+					(ty-var @8.8-8.9 (name "a"))))))
 	(expressions))
 ~~~

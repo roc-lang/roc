@@ -19,10 +19,10 @@ const ModuleEnv = base.ModuleEnv;
 const StringLiteral = base.StringLiteral;
 const CalledVia = base.CalledVia;
 const TypeVar = types.Var;
-const Node = @import("Node.zig");
 const NodeStore = @import("NodeStore.zig");
 
 pub const RocDec = @import("../../builtins/dec.zig").RocDec;
+pub const Node = @import("Node.zig");
 pub const Expr = @import("Expression.zig").Expr;
 pub const Pattern = @import("Pattern.zig").Pattern;
 pub const Statement = @import("Statement.zig").Statement;
@@ -345,6 +345,16 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
     };
 }
 
+/// Convert a type into a node index
+pub fn nodeIdxFrom(idx: anytype) Node.Idx {
+    return @enumFromInt(@intFromEnum(idx));
+}
+
+/// Convert a type into a type var
+pub fn varFrom(idx: anytype) TypeVar {
+    return @enumFromInt(@intFromEnum(idx));
+}
+
 /// Creates a fresh flexible type variable for type inference.
 ///
 /// This is a convenience wrapper around `pushTypeVar(.{ .flex_var = null }, ...)`.
@@ -379,10 +389,24 @@ pub fn pushTypeVar(self: *CIR, content: types.Content, parent_node_idx: Node.Idx
     return var_;
 }
 
+/// Creates a fresh flexible type var that redirects to another tyype var
+pub fn pushRedirectTypeVar(self: *CIR, redirect_to: TypeVar, parent_node_idx: Node.Idx, region: base.Region) Allocator.Error!types.Var {
+    const var_ = try self.pushTypeVar(.{ .flex_var = null }, parent_node_idx, region);
+    try self.env.types.setVarRedirect(var_, redirect_to);
+    return var_;
+}
+
 /// Associates a type with an existing definition node.
 ///
 /// Use this to set the concrete type of a definition after type inference.
 pub fn setTypeVarAtDef(self: *CIR, at_idx: Def.Idx, content: types.Content) types.Var {
+    return self.setTypeVarAt(@enumFromInt(@intFromEnum(at_idx)), content);
+}
+
+/// Associates a type with an existing definition node.
+///
+/// Use this to set the concrete type of a definition after type inference.
+pub fn setTypeVarAtStmt(self: *CIR, at_idx: Statement.Idx, content: types.Content) types.Var {
     return self.setTypeVarAt(@enumFromInt(@intFromEnum(at_idx)), content);
 }
 
@@ -410,13 +434,23 @@ pub fn setTypeVarAtPat(self: *CIR, at_idx: Pattern.Idx, content: types.Content) 
     return self.setTypeVarAt(@enumFromInt(@intFromEnum(at_idx)), content);
 }
 
+/// Function that redirects an existing CIR node to the provided var.
+pub fn setTypeRedirectAt(self: *CIR, at_idx: Node.Idx, redirect_to: types.Var) types.Var {
+    // if the new can node idx is greater than the types store length, backfill
+    const var_: types.Var = @enumFromInt(@intFromEnum(at_idx));
+    self.env.types.fillInSlotsThru(var_) catch |err| exitOnOom(err);
+
+    // set the type store slot based on the placeholder node idx
+    self.env.types.setVarRedirect(var_, redirect_to) catch |err| exitOnOom(err);
+
+    return var_;
+}
+
 /// Core function that associates a type with any existing CIR node.
 ///
 /// This is used by all the `setTypeVarAt*` wrapper functions. Node indices
 /// correspond directly to type variable indices, allowing direct conversion.
 /// Usually called indirectly through the typed wrappers rather than directly.
-///
-/// **Note**: The node must already exist - this only sets types; it does not create nodes.
 pub fn setTypeVarAt(self: *CIR, at_idx: Node.Idx, content: types.Content) types.Var {
     // if the new can node idx is greater than the types store length, backfill
     const var_: types.Var = @enumFromInt(@intFromEnum(at_idx));
@@ -1099,6 +1133,67 @@ pub fn toSexprTypes(ir: *CIR, maybe_expr_idx: ?Expr.Idx, source: []const u8) SEx
         }
 
         root_node.appendNode(gpa, &defs_node);
+
+        // Collect statements
+        var stmts_node = SExpr.init(gpa, "type_decls");
+        const all_stmts = ir.store.sliceStatements(ir.all_statements);
+
+        var has_type_decl = false;
+        for (all_stmts) |stmt_idx| {
+            const stmt = ir.store.getStatement(stmt_idx);
+
+            // Get the type variable for this definition
+            // Each definition has a type_var at its node index which represents the type of the definition
+            const stmt_var = ir.idxToTypeVar(&ir.env.types, stmt_idx) catch |err| exitOnOom(err);
+
+            switch (stmt) {
+                .s_alias_decl => |alias| {
+                    has_type_decl = true;
+
+                    var stmt_node = SExpr.init(gpa, "alias");
+                    ir.appendRegionInfoToSexprNodeFromRegion(&stmt_node, alias.region);
+
+                    const header = ir.store.getTypeHeader(alias.header);
+                    const header_sexpr = header.toSExpr(ir);
+                    stmt_node.appendNode(gpa, &header_sexpr);
+
+                    // Clear the buffer and write the type
+                    type_string_buf.clearRetainingCapacity();
+                    type_writer.writeVar(stmt_var) catch |err| exitOnOom(err);
+                    stmt_node.appendStringAttr(gpa, "type", type_string_buf.items);
+
+                    stmts_node.appendNode(gpa, &stmt_node);
+                },
+                .s_nominal_decl => |nominal| {
+                    has_type_decl = true;
+
+                    var stmt_node = SExpr.init(gpa, "nominal");
+                    ir.appendRegionInfoToSexprNodeFromRegion(&stmt_node, nominal.region);
+
+                    const header = ir.store.getTypeHeader(nominal.header);
+                    const header_sexpr = header.toSExpr(ir);
+                    stmt_node.appendNode(gpa, &header_sexpr);
+
+                    // Clear the buffer and write the type
+                    type_string_buf.clearRetainingCapacity();
+                    type_writer.writeVar(stmt_var) catch |err| exitOnOom(err);
+                    stmt_node.appendStringAttr(gpa, "type", type_string_buf.items);
+
+                    stmts_node.appendNode(gpa, &stmt_node);
+                },
+
+                else => {
+                    // For non-assign patterns, we could handle destructuring, but for now skip
+                    continue;
+                },
+            }
+        }
+
+        if (has_type_decl) {
+            root_node.appendNode(gpa, &stmts_node);
+        } else {
+            stmts_node.deinit(gpa);
+        }
 
         // Collect expression types (for significant expressions with regions)
         var expressions_node = SExpr.init(gpa, "expressions");
