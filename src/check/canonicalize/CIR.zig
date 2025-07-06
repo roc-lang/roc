@@ -466,8 +466,8 @@ fn formatPatternIdxNode(gpa: std.mem.Allocator, pattern_idx: Pattern.Idx) SExpr 
     return node;
 }
 
-test "Node is 24 bytes" {
-    try testing.expectEqual(24, @sizeOf(Node));
+test "Node is 16 bytes" {
+    try testing.expectEqual(16, @sizeOf(Node));
 }
 
 /// A working representation of a record field
