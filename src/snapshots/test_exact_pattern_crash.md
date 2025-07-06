@@ -32,34 +32,20 @@ main = {
     p2
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **= swap_pair** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**UNUSED VARIABLE**
+Variable ``p1`` is not used anywhere in your code.
 
-Here is the problematic code:
-**test_exact_pattern_crash.md:19:8:19:19:**
+If you don't need this variable, prefix it with an underscore like `_p1` to suppress this warning.
+The unused variable is declared here:
+**test_exact_pattern_crash.md:19:5:19:7:**
 ```roc
     p1 = swap_pair((1, 2))
 ```
-       ^^^^^^^^^^^
+    ^^
 
-
-**UNDEFINED VARIABLE**
-Nothing is named `p1` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -93,7 +79,7 @@ Newline(1:1-1:1),
 Newline(14:2-14:46),
 Newline(15:2-15:51),
 Newline(16:2-16:60),
-LowerIdent(17:1-17:5),OpAssign(17:6-17:7),Newline(1:1-1:1),
+LowerIdent(17:1-17:5),OpAssign(17:6-17:7),OpenCurly(17:8-17:9),Newline(1:1-1:1),
 Newline(18:6-18:34),
 LowerIdent(19:5-19:7),OpAssign(19:8-19:9),LowerIdent(19:10-19:19),NoSpaceOpenRound(19:19-19:20),NoSpaceOpenRound(19:20-19:21),Int(19:21-19:22),Comma(19:22-19:23),Int(19:24-19:25),CloseRound(19:25-19:26),CloseRound(19:26-19:27),Newline(1:1-1:1),
 Newline(1:1-1:1),
@@ -101,11 +87,12 @@ Newline(21:6-21:83),
 Newline(22:6-22:67),
 LowerIdent(23:5-23:7),OpAssign(23:8-23:9),LowerIdent(23:10-23:18),NoSpaceOpenRound(23:18-23:19),Int(23:19-23:20),Comma(23:20-23:21),Int(23:22-23:23),Comma(23:23-23:24),OpenRound(23:25-23:26),OpBar(23:26-23:27),LowerIdent(23:27-23:28),OpBar(23:28-23:29),LowerIdent(23:30-23:31),OpPlus(23:32-23:33),Int(23:34-23:35),CloseRound(23:35-23:36),Comma(23:36-23:37),OpenRound(23:38-23:39),OpBar(23:39-23:40),LowerIdent(23:40-23:41),OpBar(23:41-23:42),LowerIdent(23:43-23:44),OpStar(23:45-23:46),Int(23:47-23:48),CloseRound(23:48-23:49),CloseRound(23:49-23:50),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(25:5-25:7),EndOfFile(25:7-25:7),
+LowerIdent(25:5-25:7),Newline(1:1-1:1),
+CloseCurly(26:1-26:2),EndOfFile(26:2-26:2),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-25.7
+(file @1.1-26.2
 	(app @1.1-1.56
 		(provides @1.6-1.11
 			(exposed-lower-ident (text "main")))
@@ -177,36 +164,38 @@ LowerIdent(25:5-25:7),EndOfFile(25:7-25:7),
 					(e-apply @12.34-12.38
 						(e-ident @12.34-12.35 (raw "g"))
 						(e-ident @12.36-12.37 (raw "y"))))))
-		(s-decl @17.1-19.7
+		(s-decl @17.1-26.2
 			(p-ident @17.1-17.5 (raw "main"))
-			(e-ident @19.5-19.7 (raw "p1")))
-		(e-malformed @19.8-19.19 (reason "expr_unexpected_token"))
-		(e-apply @19.10-19.27
-			(e-ident @19.10-19.19 (raw "swap_pair"))
-			(e-tuple @19.20-19.26
-				(e-int @19.21-19.22 (raw "1"))
-				(e-int @19.24-19.25 (raw "2"))))
-		(s-decl @23.5-23.50
-			(p-ident @23.5-23.7 (raw "p2"))
-			(e-apply @23.10-23.50
-				(e-ident @23.10-23.18 (raw "map_pair"))
-				(e-int @23.19-23.20 (raw "3"))
-				(e-int @23.22-23.23 (raw "4"))
-				(e-tuple @23.25-23.36
-					(e-lambda @23.26-23.36
-						(args
-							(p-ident @23.27-23.28 (raw "x")))
-						(e-binop @23.30-23.36 (op "+")
-							(e-ident @23.30-23.31 (raw "x"))
-							(e-int @23.34-23.35 (raw "1")))))
-				(e-tuple @23.38-23.49
-					(e-lambda @23.39-23.49
-						(args
-							(p-ident @23.40-23.41 (raw "y")))
-						(e-binop @23.43-23.49 (op "*")
-							(e-ident @23.43-23.44 (raw "y"))
-							(e-int @23.47-23.48 (raw "2")))))))
-		(e-ident @25.5-25.7 (raw "p2"))))
+			(e-block @17.8-26.2
+				(statements
+					(s-decl @19.5-19.27
+						(p-ident @19.5-19.7 (raw "p1"))
+						(e-apply @19.10-19.27
+							(e-ident @19.10-19.19 (raw "swap_pair"))
+							(e-tuple @19.20-19.26
+								(e-int @19.21-19.22 (raw "1"))
+								(e-int @19.24-19.25 (raw "2")))))
+					(s-decl @23.5-23.50
+						(p-ident @23.5-23.7 (raw "p2"))
+						(e-apply @23.10-23.50
+							(e-ident @23.10-23.18 (raw "map_pair"))
+							(e-int @23.19-23.20 (raw "3"))
+							(e-int @23.22-23.23 (raw "4"))
+							(e-tuple @23.25-23.36
+								(e-lambda @23.26-23.36
+									(args
+										(p-ident @23.27-23.28 (raw "x")))
+									(e-binop @23.30-23.36 (op "+")
+										(e-ident @23.30-23.31 (raw "x"))
+										(e-int @23.34-23.35 (raw "1")))))
+							(e-tuple @23.38-23.49
+								(e-lambda @23.39-23.49
+									(args
+										(p-ident @23.40-23.41 (raw "y")))
+									(e-binop @23.43-23.49 (op "*")
+										(e-ident @23.43-23.44 (raw "y"))
+										(e-int @23.47-23.48 (raw "2")))))))
+					(e-ident @25.5-25.7 (raw "p2")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -226,15 +215,16 @@ map_pair = |(x, y), f, g| (f(x), g(y))
 # This should trigger multiple instantiations
 # First swap_pair gets instantiated, then map_pair
 # The error should involve deeply nested instantiated types
-main =
-# This creates Pair(Num, Num)
-	p1swap_pair((1, 2))
+main = {
+	# This creates Pair(Num, Num)
+	p1 = swap_pair((1, 2))
 
-# This should fail - map_pair expects a tuple but gets four separate arguments
-# And the instantiated types from map_pair should cause issues
-p2 = map_pair(3, 4, (|x| x + 1), (|y| y * 2))
+	# This should fail - map_pair expects a tuple but gets four separate arguments
+	# And the instantiated types from map_pair should cause issues
+	p2 = map_pair(3, 4, (|x| x + 1), (|y| y * 2))
 
-p2
+	p2
+}
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -303,28 +293,39 @@ p2
 						(ty-var @11.54-11.55 (name "d")))))))
 	(d-let
 		(p-assign @17.1-17.5 (ident "main"))
-		(e-runtime-error (tag "ident_not_in_scope")))
-	(d-let
-		(p-assign @23.5-23.7 (ident "p2"))
-		(e-call @23.10-23.50
-			(e-lookup-local @23.10-23.18
-				(pattern @12.1-12.9))
-			(e-int @23.19-23.20 (value "3"))
-			(e-int @23.22-23.23 (value "4"))
-			(e-lambda @23.26-23.36
-				(args
-					(p-assign @23.27-23.28 (ident "x")))
-				(e-binop @23.30-23.36 (op "add")
-					(e-lookup-local @23.30-23.31
-						(pattern @23.27-23.28))
-					(e-int @23.34-23.35 (value "1"))))
-			(e-lambda @23.39-23.49
-				(args
-					(p-assign @23.40-23.41 (ident "y")))
-				(e-binop @23.43-23.49 (op "mul")
-					(e-lookup-local @23.43-23.44
-						(pattern @23.40-23.41))
-					(e-int @23.47-23.48 (value "2"))))))
+		(e-block @17.8-26.2
+			(s-let @19.5-19.27
+				(p-assign @19.5-19.7 (ident "p1"))
+				(e-call @19.10-19.27
+					(e-lookup-local @19.10-19.19
+						(pattern @8.1-8.10))
+					(e-tuple @19.20-19.26
+						(elems
+							(e-int @19.21-19.22 (value "1"))
+							(e-int @19.24-19.25 (value "2"))))))
+			(s-let @23.5-23.50
+				(p-assign @23.5-23.7 (ident "p2"))
+				(e-call @23.10-23.50
+					(e-lookup-local @23.10-23.18
+						(pattern @12.1-12.9))
+					(e-int @23.19-23.20 (value "3"))
+					(e-int @23.22-23.23 (value "4"))
+					(e-lambda @23.26-23.36
+						(args
+							(p-assign @23.27-23.28 (ident "x")))
+						(e-binop @23.30-23.36 (op "add")
+							(e-lookup-local @23.30-23.31
+								(pattern @23.27-23.28))
+							(e-int @23.34-23.35 (value "1"))))
+					(e-lambda @23.39-23.49
+						(args
+							(p-assign @23.40-23.41 (ident "y")))
+						(e-binop @23.43-23.49 (op "mul")
+							(e-lookup-local @23.43-23.44
+								(pattern @23.40-23.41))
+							(e-int @23.47-23.48 (value "2"))))))
+			(e-lookup-local @25.5-25.7
+				(pattern @23.5-23.7))))
 	(s-alias-decl @4.1-4.20 (where "TODO")
 		(ty-header @4.1-4.11 (name "Pair")
 			(ty-args
@@ -340,11 +341,9 @@ p2
 	(defs
 		(patt @8.1-8.10 (type "Pair(a, *) -> Pair(b, a)"))
 		(patt @12.1-12.9 (type "Error"))
-		(patt @17.1-17.5 (type "Error"))
-		(patt @23.5-23.7 (type "*")))
+		(patt @17.1-17.5 (type "*")))
 	(expressions
 		(expr @8.13-8.28 (type "Pair(a, *) -> Pair(b, a)"))
 		(expr @12.12-12.39 (type "Error"))
-		(expr @19.5-19.7 (type "Error"))
-		(expr @23.10-23.50 (type "*"))))
+		(expr @17.8-26.2 (type "*"))))
 ~~~

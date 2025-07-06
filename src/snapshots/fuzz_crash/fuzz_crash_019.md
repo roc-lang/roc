@@ -633,11 +633,11 @@ The unused variable is declared here:
 The type ``V`` is not declared in this scope.
 
 This type is referenced here:
-**fuzz_crash_019.md:116:5:116:6:**
+**fuzz_crash_019.md:50:5:50:7:**
 ```roc
-t : V((a,c))
+	a, Tb,
 ```
-    ^
+    ^^
 
 
 **NOT IMPLEMENTED**

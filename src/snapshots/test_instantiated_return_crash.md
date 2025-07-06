@@ -26,7 +26,7 @@ LowerIdent(2:5-2:13),OpColon(2:14-2:15),LowerIdent(2:16-2:17),OpArrow(2:18-2:20)
 LowerIdent(3:5-3:13),OpAssign(3:14-3:15),OpBar(3:16-3:17),LowerIdent(3:17-3:18),OpBar(3:18-3:19),LowerIdent(3:20-3:21),Newline(1:1-1:1),
 Newline(1:1-1:1),
 LowerIdent(5:5-5:17),OpColon(5:18-5:19),OpenRound(5:20-5:21),NoSpaceOpenRound(5:21-5:22),UpperIdent(5:22-5:25),OpArrow(5:26-5:28),UpperIdent(5:29-5:32),CloseRound(5:32-5:33),OpArrow(5:34-5:36),UpperIdent(5:37-5:40),CloseRound(5:40-5:41),Newline(1:1-1:1),
-LowerIdent(6:5-6:17),OpAssign(6:18-6:19),OpBar(6:20-6:21),LowerIdent(6:21-6:22),OpBar(6:22-6:23),LowerIdent(6:24-6:25),NoSpaceOpenRound(6:25-6:26),StringStart(6:26-6:27),StringPart(6:27-6:32),StringEnd(6:32-6:33),CloseRound(6:33-6:34),Newline(1:1-1:1),
+LowerIdent(6:5-6:17),OpAssign(6:18-6:19),OpBar(6:20-6:21),LowerIdent(6:21-6:22),OpBar(6:22-6:23),LowerIdent(6:24-6:25),NoSpaceOpenRound(6:25-6:26),OpenSquare(6:26-6:27),StringStart(6:27-6:28),StringPart(6:28-6:33),StringEnd(6:33-6:34),CloseSquare(6:34-6:35),CloseRound(6:35-6:36),Newline(1:1-1:1),
 Newline(1:1-1:1),
 LowerIdent(8:5-8:17),NoSpaceOpenRound(8:17-8:18),LowerIdent(8:18-8:26),CloseRound(8:26-8:27),Newline(1:1-1:1),
 CloseCurly(9:1-9:2),EndOfFile(9:2-9:2),
@@ -51,15 +51,16 @@ CloseCurly(9:1-9:2),EndOfFile(9:2-9:2),
 					(ty @5.22-5.25 (name "Str"))
 					(ty @5.29-5.32 (name "Str")))
 				(ty @5.37-5.40 (name "Str"))))
-		(s-decl @6.5-6.34
+		(s-decl @6.5-6.36
 			(p-ident @6.5-6.17 (raw "needs_string"))
-			(e-lambda @6.20-6.34
+			(e-lambda @6.20-6.36
 				(args
 					(p-ident @6.21-6.22 (raw "f")))
-				(e-apply @6.24-6.34
+				(e-apply @6.24-6.36
 					(e-ident @6.24-6.25 (raw "f"))
-					(e-string @6.26-6.33
-						(e-string-part @6.27-6.32 (raw "hello"))))))
+					(e-list @6.26-6.35
+						(e-string @6.27-6.34
+							(e-string-part @6.28-6.33 (raw "hello")))))))
 		(e-apply @8.5-8.27
 			(e-ident @8.5-8.17 (raw "needs_string"))
 			(e-ident @8.18-8.26 (raw "identity")))))
@@ -71,7 +72,7 @@ CloseCurly(9:1-9:2),EndOfFile(9:2-9:2),
 	identity = |x| x
 
 	needs_string : ((Str -> Str) -> Str)
-	needs_string = |f| f("hello")
+	needs_string = |f| f(["hello"])
 
 	needs_string(identity)
 }
@@ -98,16 +99,18 @@ CloseCurly(9:1-9:2),EndOfFile(9:2-9:2),
 						(ty @5.22-5.25 (name "Str"))
 						(ty @5.29-5.32 (name "Str"))))
 				(ty @5.37-5.40 (name "Str")))))
-	(s-let @6.5-6.34
+	(s-let @6.5-6.36
 		(p-assign @6.5-6.17 (ident "needs_string"))
-		(e-lambda @6.20-6.34
+		(e-lambda @6.20-6.36
 			(args
 				(p-assign @6.21-6.22 (ident "f")))
-			(e-call @6.24-6.34
+			(e-call @6.24-6.36
 				(e-lookup-local @6.24-6.25
 					(pattern @6.21-6.22))
-				(e-string @6.26-6.33
-					(e-literal @6.27-6.32 (string "hello"))))))
+				(e-list @6.26-6.35
+					(elems
+						(e-string @6.27-6.34
+							(e-literal @6.28-6.33 (string "hello"))))))))
 	(e-call @8.5-8.27
 		(e-lookup-local @8.5-8.17
 			(pattern @6.5-6.17))
@@ -116,5 +119,5 @@ CloseCurly(9:1-9:2),EndOfFile(9:2-9:2),
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-9.2 (type "Str"))
+(expr @1.1-9.2 (type "List(Str)"))
 ~~~
