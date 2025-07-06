@@ -8,6 +8,8 @@ type=expr
 [#comment
 ]
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

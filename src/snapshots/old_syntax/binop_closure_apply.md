@@ -9,6 +9,9 @@ d+
  \w->x
  x
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - binop_closure_apply.md:2:2:2:4
+UNDEFINED VARIABLE - binop_closure_apply.md:1:1:1:2
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **\w** is not expected in an expression.
@@ -25,6 +28,13 @@ Here is the problematic code:
 **UNDEFINED VARIABLE**
 Nothing is named `d` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**binop_closure_apply.md:1:1:1:2:**
+```roc
+d+
+```
+^
+
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!

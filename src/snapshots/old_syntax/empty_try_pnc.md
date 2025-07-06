@@ -7,10 +7,19 @@ type=expr
 ~~~roc
 try()t
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - empty_try_pnc.md:1:1:1:4
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `try` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**empty_try_pnc.md:1:1:1:4:**
+```roc
+try()t
+```
+^^^
+
 
 # TOKENS
 ~~~zig

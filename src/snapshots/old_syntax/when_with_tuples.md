@@ -9,10 +9,19 @@ when (1, 2) is
  (1, x) -> x
  (_, b) -> 3 + b
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - when_with_tuples.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**when_with_tuples.md:1:1:1:5:**
+```roc
+when (1, 2) is
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

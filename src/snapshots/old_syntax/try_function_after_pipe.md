@@ -8,6 +8,8 @@ type=expr
 "123"    
        |> try Str.toU64
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

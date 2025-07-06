@@ -13,6 +13,8 @@ add_one = |x| x + 1
 my_number : U64
 my_number = add_one(42)
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

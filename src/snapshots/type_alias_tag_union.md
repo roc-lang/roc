@@ -26,6 +26,8 @@ getNumber = |_opt| 0
 
 main! = |_| {}
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

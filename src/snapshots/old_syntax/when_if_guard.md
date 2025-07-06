@@ -15,10 +15,19 @@ when x is
     Ok ->
         3
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - when_if_guard.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**when_if_guard.md:1:1:1:5:**
+```roc
+when x is
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

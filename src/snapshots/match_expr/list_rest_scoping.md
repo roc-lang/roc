@@ -11,6 +11,14 @@ match items {
     [x, ..rest, y] => x + y
 }
 ~~~
+# EXPECTED
+BAD LIST REST PATTERN SYNTAX - list_rest_scoping.md:2:13:2:19
+BAD LIST REST PATTERN SYNTAX - list_rest_scoping.md:3:6:3:12
+BAD LIST REST PATTERN SYNTAX - list_rest_scoping.md:4:9:4:15
+UNDEFINED VARIABLE - list_rest_scoping.md:1:7:1:12
+UNUSED VARIABLE - list_rest_scoping.md:2:15:2:19
+UNUSED VARIABLE - list_rest_scoping.md:3:8:3:12
+UNUSED VARIABLE - list_rest_scoping.md:4:11:4:15
 # PROBLEMS
 **BAD LIST REST PATTERN SYNTAX**
 List rest patterns should use the `.. as name` syntax, not `..name`.
@@ -51,6 +59,13 @@ Here is the problematic code:
 **UNDEFINED VARIABLE**
 Nothing is named `items` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**list_rest_scoping.md:1:7:1:12:**
+```roc
+match items {
+```
+      ^^^^^
+
 
 **UNUSED VARIABLE**
 Variable ``rest`` is not used anywhere in your code.

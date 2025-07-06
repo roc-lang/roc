@@ -13,10 +13,19 @@ match sequence {
     [] => 0
 }
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - list_mixed_literals.md:1:7:1:15
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `sequence` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**list_mixed_literals.md:1:7:1:15:**
+```roc
+match sequence {
+```
+      ^^^^^^^^
+
 
 # TOKENS
 ~~~zig

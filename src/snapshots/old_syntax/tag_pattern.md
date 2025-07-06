@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 \Thing -> 42
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - tag_pattern.md:1:1:1:7
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **\Thing** is not expected in an expression.

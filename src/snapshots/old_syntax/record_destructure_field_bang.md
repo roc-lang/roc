@@ -9,14 +9,31 @@ type=expr
 
 launchTheNukes! code
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - record_destructure_field_bang.md:1:2:1:18
+UNDEFINED VARIABLE - record_destructure_field_bang.md:1:19:1:24
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `launchTheNukes!` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**record_destructure_field_bang.md:1:2:1:18:**
+```roc
+{launchTheNukes!, code} = config
+```
+ ^^^^^^^^^^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `code` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**record_destructure_field_bang.md:1:19:1:24:**
+```roc
+{launchTheNukes!, code} = config
+```
+                  ^^^^^
+
 
 # TOKENS
 ~~~zig

@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 """there is no end
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - multi_no_end.md:1:1:1:19
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **"""there is no end** is not expected in an expression.

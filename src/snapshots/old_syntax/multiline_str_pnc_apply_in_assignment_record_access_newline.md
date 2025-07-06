@@ -8,10 +8,19 @@ type=expr
 i=""""""().1
 p
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - multiline_str_pnc_apply_in_assignment_record_access_newline.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `i` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**multiline_str_pnc_apply_in_assignment_record_access_newline.md:1:1:1:2:**
+```roc
+i=""""""().1
+```
+^
+
 
 # TOKENS
 ~~~zig

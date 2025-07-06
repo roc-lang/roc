@@ -9,10 +9,19 @@ when n is
 O->(s
 )#
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - when_branch_comment_after_parens.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**when_branch_comment_after_parens.md:1:1:1:5:**
+```roc
+when n is
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

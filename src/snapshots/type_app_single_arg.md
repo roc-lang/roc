@@ -12,6 +12,8 @@ processList = |list| list.len()
 
 main! = |_| processList(["one","two"])
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

@@ -9,10 +9,19 @@ s#
  implements:s
 s
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - implements_in_pat_after_comment.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `s` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**implements_in_pat_after_comment.md:1:1:1:2:**
+```roc
+s#
+```
+^
+
 
 # TOKENS
 ~~~zig

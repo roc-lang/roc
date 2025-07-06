@@ -12,10 +12,19 @@ match data {
     Err(y) => y / 2
 }
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - mixed_pattern_scoping.md:1:7:1:11
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `data` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**mixed_pattern_scoping.md:1:7:1:11:**
+```roc
+match data {
+```
+      ^^^^
+
 
 # TOKENS
 ~~~zig

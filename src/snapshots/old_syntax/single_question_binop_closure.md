@@ -8,14 +8,31 @@ type=expr
 fallible!(args)   ? |my_err|
     my_err * 2
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - single_question_binop_closure.md:1:1:1:10
+UNDEFINED VARIABLE - single_question_binop_closure.md:1:11:1:15
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `fallible!` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**single_question_binop_closure.md:1:1:1:10:**
+```roc
+fallible!(args)   ? |my_err|
+```
+^^^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `args` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**single_question_binop_closure.md:1:11:1:15:**
+```roc
+fallible!(args)   ? |my_err|
+```
+          ^^^^
+
 
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: binop

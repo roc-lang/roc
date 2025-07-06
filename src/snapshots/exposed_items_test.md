@@ -11,6 +11,8 @@ import pf.Stdout exposing [line!, write!]
 
 main = 42
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

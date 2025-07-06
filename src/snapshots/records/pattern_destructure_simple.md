@@ -9,10 +9,20 @@ match person {
     { name, age } => name
 }
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - pattern_destructure_simple.md:1:7:1:13
+UNUSED VARIABLE - pattern_destructure_simple.md:2:13:2:18
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `person` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**pattern_destructure_simple.md:1:7:1:13:**
+```roc
+match person {
+```
+      ^^^^^^
+
 
 **UNUSED VARIABLE**
 Variable ``age`` is not used anywhere in your code.

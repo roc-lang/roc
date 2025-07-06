@@ -12,6 +12,8 @@ pair = |x| (x, x)
 
 main! = |_| {}
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

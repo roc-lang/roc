@@ -10,10 +10,19 @@ type=expr
 )
 return u
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - paren_newline_before_return.md:1:2:1:3
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `i` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**paren_newline_before_return.md:1:2:1:3:**
+```roc
+(i
+```
+ ^
+
 
 # TOKENS
 ~~~zig

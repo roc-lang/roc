@@ -7,10 +7,19 @@ type=expr
 ~~~roc
 person.address.street
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - record_chained_access.md:1:1:1:7
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `person` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**record_chained_access.md:1:1:1:7:**
+```roc
+person.address.street
+```
+^^^^^^
+
 
 # TOKENS
 ~~~zig

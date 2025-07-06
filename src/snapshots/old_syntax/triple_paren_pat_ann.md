@@ -9,6 +9,9 @@ type=expr
 )))f:f
 i
 ~~~
+# EXPECTED
+TYPE MISMATCH - triple_paren_pat_ann.md:1:4:1:5
+TYPE MISMATCH - triple_paren_pat_ann.md:1:1:1:2
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

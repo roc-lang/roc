@@ -12,6 +12,10 @@ compose = |f, g| |x| f(g(x))
 
 main! = |_| {}
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - type_higher_order_multiple_vars.md:3:19:3:22
+PARSE ERROR - type_higher_order_multiple_vars.md:3:33:3:35
+UNEXPECTED TOKEN IN EXPRESSION - type_higher_order_multiple_vars.md:3:40:3:40
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **, (** is not expected in an expression.

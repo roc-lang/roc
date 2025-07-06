@@ -23,6 +23,16 @@ pkg: "..l", mmen		} # Cose
 ar,
 		]
 ~~~
+# EXPECTED
+PARSE ERROR - fuzz_crash_029.md:4:4:4:9
+PARSE ERROR - fuzz_crash_029.md:5:14:5:18
+PARSE ERROR - fuzz_crash_029.md:5:9:5:14
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_029.md:5:24:5:31
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_029.md:6:4:6:10
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_029.md:7:2:7:13
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_029.md:10:2:10:15
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_029.md:14:2:14:15
+PARSE ERROR - fuzz_crash_029.md:17:3:17:4
 # PROBLEMS
 **MISMATCHED BRACE**
 This brace does not match the corresponding opening brace.

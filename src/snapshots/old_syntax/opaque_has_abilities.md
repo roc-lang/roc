@@ -29,6 +29,8 @@ A := U8 implements [Eq {}]
 
 0
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

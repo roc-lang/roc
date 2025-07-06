@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 \a,,b -> 1
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - lambda_double_comma.md:1:1:1:3
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **\a** is not expected in an expression.

@@ -214,7 +214,12 @@ pub const Diagnostic = union(enum) {
     }
 
     /// Build a report for "identifier not in scope" diagnostic
-    pub fn buildIdentNotInScopeReport(allocator: Allocator, ident_name: []const u8) !Report {
+    pub fn buildIdentNotInScopeReport(
+        allocator: Allocator,
+        ident_name: []const u8,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+    ) !Report {
         var report = Report.init(allocator, "UNDEFINED VARIABLE", .runtime_error);
         const owned_ident = try report.addOwnedString(ident_name);
         try report.document.addText("Nothing is named ");
@@ -226,6 +231,13 @@ pub const Diagnostic = union(enum) {
         try report.document.addText(" or ");
         try report.document.addKeyword("exposing");
         try report.document.addReflowingText(" missing up-top?");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            filename,
+        );
         return report;
     }
 

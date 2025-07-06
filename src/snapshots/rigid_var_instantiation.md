@@ -25,6 +25,10 @@ main! = |_| {
     {}
 }
 ~~~
+# EXPECTED
+UNUSED VARIABLE - rigid_var_instantiation.md:13:5:13:8
+UNUSED VARIABLE - rigid_var_instantiation.md:10:5:10:8
+UNUSED VARIABLE - rigid_var_instantiation.md:16:5:16:8
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable ``str`` is not used anywhere in your code.

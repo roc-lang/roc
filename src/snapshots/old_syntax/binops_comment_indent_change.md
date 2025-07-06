@@ -10,10 +10,19 @@ r^
 #
  -P
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - binops_comment_indent_change.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `r` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**binops_comment_indent_change.md:1:1:1:2:**
+```roc
+r^
+```
+^
+
 
 # TOKENS
 ~~~zig

@@ -10,10 +10,19 @@ main =
 
     3
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - inline_hastype.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `main` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**inline_hastype.md:1:1:1:5:**
+```roc
+main =
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

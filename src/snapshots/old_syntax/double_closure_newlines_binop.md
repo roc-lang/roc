@@ -9,6 +9,8 @@ type=expr
  ->B
  >s
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - double_closure_newlines_binop.md:1:1:1:3
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **\j** is not expected in an expression.

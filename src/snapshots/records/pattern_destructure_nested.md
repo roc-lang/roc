@@ -9,10 +9,21 @@ match person {
     { name, address: { street, city, zipCode } } => "${name} lives on ${street} in ${city}"
 }
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - pattern_destructure_nested.md:1:7:1:13
+UNDEFINED VARIABLE - pattern_destructure_nested.md:2:73:2:79
+UNDEFINED VARIABLE - pattern_destructure_nested.md:2:86:2:90
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `person` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**pattern_destructure_nested.md:1:7:1:13:**
+```roc
+match person {
+```
+      ^^^^^^
+
 
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
@@ -22,9 +33,23 @@ Let us know if you want to help!
 Nothing is named `street` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**pattern_destructure_nested.md:2:73:2:79:**
+```roc
+    { name, address: { street, city, zipCode } } => "${name} lives on ${street} in ${city}"
+```
+                                                                        ^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `city` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**pattern_destructure_nested.md:2:86:2:90:**
+```roc
+    { name, address: { street, city, zipCode } } => "${name} lives on ${street} in ${city}"
+```
+                                                                                     ^^^^
+
 
 # TOKENS
 ~~~zig

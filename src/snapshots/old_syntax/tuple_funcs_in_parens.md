@@ -8,10 +8,19 @@ type=expr
 f: (a, b -> c, d -> e, g)
 f
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - tuple_funcs_in_parens.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `f` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**tuple_funcs_in_parens.md:1:1:1:2:**
+```roc
+f: (a, b -> c, d -> e, g)
+```
+^
+
 
 # TOKENS
 ~~~zig

@@ -10,6 +10,8 @@ module []
 x : Dec
 x = 123.456
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

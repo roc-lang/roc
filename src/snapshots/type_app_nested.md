@@ -12,6 +12,8 @@ processNested = |_list| ["one","two"]
 
 main! = |_| processNested([])
 ~~~
+# EXPECTED
+UNDECLARED TYPE - type_app_nested.md:3:34:3:37
 # PROBLEMS
 **UNDECLARED TYPE**
 The type ``Err`` is not declared in this scope.

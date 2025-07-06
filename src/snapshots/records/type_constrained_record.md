@@ -7,6 +7,9 @@ type=statement
 ~~~roc
 process_user! : { name : Str, age : U32, ..a } => Str
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN TYPE ANNOTATION - type_constrained_record.md:1:42:1:45
+PARSE ERROR - type_constrained_record.md:1:37:1:41
 # PROBLEMS
 **UNEXPECTED TOKEN IN TYPE ANNOTATION**
 The token **..a** is not expected in a type annotation.

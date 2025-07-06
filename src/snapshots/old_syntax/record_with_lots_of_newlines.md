@@ -10,10 +10,19 @@ type=expr
 
 }
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - record_with_lots_of_newlines.md:1:2:2:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `t` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**record_with_lots_of_newlines.md:1:2:2:2:**
+```roc
+{t#
+,
+```
+
 
 # TOKENS
 ~~~zig

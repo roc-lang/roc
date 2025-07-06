@@ -9,10 +9,19 @@ when n
 #s
 is O->1
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - when_newline_after_condition.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**when_newline_after_condition.md:1:1:1:5:**
+```roc
+when n
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

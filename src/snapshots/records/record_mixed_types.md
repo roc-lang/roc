@@ -7,10 +7,19 @@ type=expr
 ~~~roc
 { name: "Alice", age: 30, active: Bool.true, scores: [95, 87, 92], balance: 1250.75 }
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - record_mixed_types.md:1:35:1:44
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `true` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**record_mixed_types.md:1:35:1:44:**
+```roc
+{ name: "Alice", age: 30, active: Bool.true, scores: [95, 87, 92], balance: 1250.75 }
+```
+                                  ^^^^^^^^^
+
 
 # TOKENS
 ~~~zig

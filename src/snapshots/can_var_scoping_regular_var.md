@@ -27,6 +27,8 @@ processItems = |items| {
 	total_ + result
 }
 ~~~
+# EXPECTED
+UNUSED VARIABLE - can_var_scoping_regular_var.md:4:17:4:22
 # PROBLEMS
 **VAR REASSIGNMENT ERROR**
 Cannot reassign a `var` from outside the function where it was declared.

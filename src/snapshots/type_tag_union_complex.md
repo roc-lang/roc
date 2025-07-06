@@ -30,6 +30,8 @@ handleResponse = |_response| "handled"
 
 main! = |_| {}
 ~~~
+# EXPECTED
+TYPE REDECLARED - type_tag_union_complex.md:7:1:7:55
 # PROBLEMS
 **TYPE REDECLARED**
 The type ``Result`` is being redeclared.

@@ -12,6 +12,8 @@ else if t2 then
 else
   3
 ~~~
+# EXPECTED
+PARSE ERROR - nested_if.md:2:3:2:3
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `no_else`

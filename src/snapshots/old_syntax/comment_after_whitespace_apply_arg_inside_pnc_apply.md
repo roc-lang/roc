@@ -15,6 +15,8 @@ PP(mport#<|"P
 )
 )
 ~~~
+# EXPECTED
+PARSE ERROR - comment_after_whitespace_apply_arg_inside_pnc_apply.md:1:1:1:4
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_apply_close_round`

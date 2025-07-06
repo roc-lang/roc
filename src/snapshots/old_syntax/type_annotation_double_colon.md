@@ -10,10 +10,19 @@ f = 42
 
 f
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - type_annotation_double_colon.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `f` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**type_annotation_double_colon.md:1:1:1:2:**
+```roc
+f :: I64
+```
+^
+
 
 # TOKENS
 ~~~zig

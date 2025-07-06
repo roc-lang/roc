@@ -7,6 +7,8 @@ type=statement
 ~~~roc
 formatUser = |{ name, age, email }| "User: ${name} (${age.toStr()} years old) - Contact: ${email.display()}"
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

@@ -17,6 +17,8 @@ double = |x| add(x, x)
 
 main! = add(1, 2)
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

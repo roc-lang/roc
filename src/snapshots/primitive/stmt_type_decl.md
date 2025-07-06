@@ -9,6 +9,8 @@ module [Foo]
 
 Foo(a,b) : (a,b,Str,U64)
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

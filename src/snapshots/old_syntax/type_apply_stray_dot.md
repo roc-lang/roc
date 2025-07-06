@@ -7,10 +7,19 @@ type=expr
 ~~~roc
 f : .
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - type_apply_stray_dot.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `f` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**type_apply_stray_dot.md:1:1:1:2:**
+```roc
+f : .
+```
+^
+
 
 # TOKENS
 ~~~zig

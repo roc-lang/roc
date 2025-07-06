@@ -9,6 +9,8 @@ type=expr
     Ok ->
         3)
 ~~~
+# EXPECTED
+PARSE ERROR - when_in_parens.md:3:10:3:11
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_close_round_or_comma`

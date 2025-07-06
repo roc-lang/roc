@@ -9,10 +9,19 @@ a:N{h,
 }
 g
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - apply_record_ann.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `a` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**apply_record_ann.md:1:1:1:2:**
+```roc
+a:N{h,
+```
+^
+
 
 # TOKENS
 ~~~zig

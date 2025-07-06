@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 "123 abc 456 def"
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

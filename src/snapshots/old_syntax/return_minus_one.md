@@ -8,6 +8,8 @@ type=expr
 return-r
 1
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - return_minus_one.md:1:1:1:8
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **return-** is not expected in an expression.

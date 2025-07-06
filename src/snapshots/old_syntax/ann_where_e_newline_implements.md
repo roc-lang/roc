@@ -10,6 +10,8 @@ J:[
   implements T
 i
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

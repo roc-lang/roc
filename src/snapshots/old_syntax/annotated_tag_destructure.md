@@ -10,6 +10,8 @@ UserId x = UserId 42
 
 x
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

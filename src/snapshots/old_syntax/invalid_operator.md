@@ -8,10 +8,19 @@ type=expr
 main =
     5 ** 3
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - invalid_operator.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `main` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**invalid_operator.md:1:1:1:5:**
+```roc
+main =
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

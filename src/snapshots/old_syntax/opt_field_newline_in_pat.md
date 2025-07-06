@@ -10,10 +10,19 @@ type=expr
 Y}=p
 Q
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - opt_field_newline_in_pat.md:1:2:1:3
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `i` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**opt_field_newline_in_pat.md:1:2:1:3:**
+```roc
+{i
+```
+ ^
+
 
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: binop

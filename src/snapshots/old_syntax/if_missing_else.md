@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 if 5 == 5 then 2
 ~~~
+# EXPECTED
+PARSE ERROR - if_missing_else.md:1:16:1:17
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `no_else`

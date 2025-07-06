@@ -18,6 +18,8 @@ is_ok = |result| match result {
     MyResult.Err(_) => False
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

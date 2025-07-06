@@ -9,6 +9,8 @@ type=expr
  q
 h)
 ~~~
+# EXPECTED
+PARSE ERROR - dbg_stmt_in_parens.md:3:2:3:3
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_close_round_or_comma`

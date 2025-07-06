@@ -11,10 +11,19 @@ s if\t->when 0
 is z->f
  z->m
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - when_in_closure_in_when_guard_wtf.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**when_in_closure_in_when_guard_wtf.md:1:1:1:5:**
+```roc
+when f
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

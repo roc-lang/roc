@@ -12,6 +12,8 @@ foo =
 
     "onmo %
 ~~~
+# EXPECTED
+MISMATCHED BRACE - fuzz_crash_009.md:1:2:1:4
 # PROBLEMS
 **MISMATCHED BRACE**
 This brace does not match the corresponding opening brace.

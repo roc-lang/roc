@@ -7,6 +7,11 @@ type=file
 ~~~roc
 ||(|(l888888888|
 ~~~
+# EXPECTED
+MISSING HEADER - fuzz_crash_012.md:1:1:1:3
+UNEXPECTED TOKEN IN PATTERN - fuzz_crash_012.md:1:4:1:6
+UNEXPECTED TOKEN IN PATTERN - fuzz_crash_012.md:1:3:1:5
+PARSE ERROR - fuzz_crash_012.md:1:17:1:17
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.

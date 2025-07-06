@@ -12,6 +12,8 @@ getName = |_person| "hello"
 
 main! = |_| getName({name: "luke", age:21})
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

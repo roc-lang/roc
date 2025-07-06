@@ -10,10 +10,19 @@ p:(
 i)
 {}
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - annotation_tuple_parens_newlines.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `p` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**annotation_tuple_parens_newlines.md:1:1:1:2:**
+```roc
+p:(
+```
+^
+
 
 # TOKENS
 ~~~zig

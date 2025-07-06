@@ -8,10 +8,19 @@ type=expr
 (i#abc
 )
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - comment_after_expr_in_parens.md:1:2:1:3
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `i` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**comment_after_expr_in_parens.md:1:2:1:3:**
+```roc
+(i#abc
+```
+ ^
+
 
 # TOKENS
 ~~~zig

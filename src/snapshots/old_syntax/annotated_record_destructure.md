@@ -10,14 +10,31 @@ type=expr
 
 x
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - annotated_record_destructure.md:1:3:1:5
+UNDEFINED VARIABLE - annotated_record_destructure.md:1:6:1:9
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**annotated_record_destructure.md:1:3:1:5:**
+```roc
+{ x, y } : Foo
+```
+  ^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `y` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**annotated_record_destructure.md:1:6:1:9:**
+```roc
+{ x, y } : Foo
+```
+     ^^^
+
 
 # TOKENS
 ~~~zig

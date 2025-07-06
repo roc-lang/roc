@@ -10,10 +10,19 @@ f :# comment
 
 42
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - multiline_type_signature_with_comment.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `f` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**multiline_type_signature_with_comment.md:1:1:1:2:**
+```roc
+f :# comment
+```
+^
+
 
 # TOKENS
 ~~~zig

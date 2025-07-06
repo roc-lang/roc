@@ -13,6 +13,8 @@ A
  e
 r
 ~~~
+# EXPECTED
+PARSE ERROR - if_then_weird_indent.md:4:1:4:1
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `no_else`

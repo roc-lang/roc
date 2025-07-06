@@ -12,6 +12,8 @@ swap = |(x, y)| (y, x)
 
 main! = |_| {}
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

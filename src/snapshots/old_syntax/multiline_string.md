@@ -15,10 +15,19 @@ c =
     """
 42
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - multiline_string.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `a` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**multiline_string.md:1:1:1:2:**
+```roc
+a = "Hello,\n\nWorld!"
+```
+^
+
 
 # TOKENS
 ~~~zig

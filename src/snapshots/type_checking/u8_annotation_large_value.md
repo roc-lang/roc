@@ -10,6 +10,8 @@ module []
 x : U8
 x = 500
 ~~~
+# EXPECTED
+NUMBER DOES NOT FIT IN TYPE - u8_annotation_large_value.md:4:5:4:8
 # PROBLEMS
 **NUMBER DOES NOT FIT IN TYPE**
 The number **500** does not fit in its inferred type:

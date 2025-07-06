@@ -12,10 +12,22 @@ match data {
     Simple(x) => x
 }
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - nested_patterns.md:1:7:1:11
+UNDEFINED VARIABLE - nested_patterns.md:2:53:2:54
+UNDEFINED VARIABLE - nested_patterns.md:2:57:2:65
+UNDEFINED VARIABLE - nested_patterns.md:2:66:2:70
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `data` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**nested_patterns.md:1:7:1:11:**
+```roc
+match data {
+```
+      ^^^^
+
 
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
@@ -25,13 +37,34 @@ Let us know if you want to help!
 Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**nested_patterns.md:2:53:2:54:**
+```roc
+    Container({ items: [First(x), .. as rest] }) => x + List.len(rest)
+```
+                                                    ^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `len` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**nested_patterns.md:2:57:2:65:**
+```roc
+    Container({ items: [First(x), .. as rest] }) => x + List.len(rest)
+```
+                                                        ^^^^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `rest` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**nested_patterns.md:2:66:2:70:**
+```roc
+    Container({ items: [First(x), .. as rest] }) => x + List.len(rest)
+```
+                                                                 ^^^^
+
 
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns

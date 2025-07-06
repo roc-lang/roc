@@ -9,6 +9,8 @@ E:B
 {}=B
 B
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

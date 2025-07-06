@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 .e,
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - expr_to_pattern_fail.md:1:1:1:4
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **.e,** is not expected in an expression.

@@ -10,6 +10,8 @@ O:O(z
 )
 b#
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

@@ -8,10 +8,19 @@ type=expr
 t:(w=>p)a
 t
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - ext_on_fn_ty.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `t` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**ext_on_fn_ty.md:1:1:1:2:**
+```roc
+t:(w=>p)a
+```
+^
+
 
 # TOKENS
 ~~~zig

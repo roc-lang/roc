@@ -10,6 +10,10 @@ h
 then!f#
 else&m
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - if_newline_then_negate_else_recordupdater.md:4:5:4:7
+UNDEFINED VARIABLE - if_newline_then_negate_else_recordupdater.md:2:1:2:2
+UNDEFINED VARIABLE - if_newline_then_negate_else_recordupdater.md:3:1:3:7
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **&m** is not expected in an expression.
@@ -27,9 +31,23 @@ else&m
 Nothing is named `h` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**if_newline_then_negate_else_recordupdater.md:2:1:2:2:**
+```roc
+h
+```
+^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `then!f` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**if_newline_then_negate_else_recordupdater.md:3:1:3:7:**
+```roc
+then!f#
+```
+^^^^^^
+
 
 **INVALID IF BRANCH**
 The `else` branch of this `if` expression could not be processed.

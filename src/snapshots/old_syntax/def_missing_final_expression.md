@@ -7,10 +7,19 @@ type=expr
 ~~~roc
 f : Foo.foo
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - def_missing_final_expression.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `f` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**def_missing_final_expression.md:1:1:1:2:**
+```roc
+f : Foo.foo
+```
+^
+
 
 # TOKENS
 ~~~zig

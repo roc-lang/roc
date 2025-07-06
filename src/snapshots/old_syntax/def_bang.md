@@ -10,10 +10,19 @@ launchTheNukes! = \{} ->
 
 launchTheNukes! {}
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - def_bang.md:1:1:1:16
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `launchTheNukes!` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**def_bang.md:1:1:1:16:**
+```roc
+launchTheNukes! = \{} ->
+```
+^^^^^^^^^^^^^^^
+
 
 # TOKENS
 ~~~zig

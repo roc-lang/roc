@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 -foo
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - unary_negation.md:1:1:1:5
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **-foo** is not expected in an expression.

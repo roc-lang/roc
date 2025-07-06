@@ -9,10 +9,19 @@ s{t#
 }:s
 p#
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - pattern_record_apply_comment.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `s` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**pattern_record_apply_comment.md:1:1:1:2:**
+```roc
+s{t#
+```
+^
+
 
 # TOKENS
 ~~~zig

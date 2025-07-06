@@ -8,6 +8,8 @@ type=expr
 12  * # test!
  92
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

@@ -7,10 +7,19 @@ type=expr
 ~~~roc
 whee  12  34
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - apply_two_args.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `whee` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**apply_two_args.md:1:1:1:5:**
+```roc
+whee  12  34
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

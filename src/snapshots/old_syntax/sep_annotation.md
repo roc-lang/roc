@@ -11,6 +11,8 @@ E
 =h
 0
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

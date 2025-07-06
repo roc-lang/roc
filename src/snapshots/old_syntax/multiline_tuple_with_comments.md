@@ -19,6 +19,8 @@ type=expr
     # after 3
 )
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

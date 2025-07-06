@@ -9,10 +9,19 @@ when Ok [] is
     Ok [] -> {}
     _ -> {}
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - when_result_list.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**when_result_list.md:1:1:1:5:**
+```roc
+when Ok [] is
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

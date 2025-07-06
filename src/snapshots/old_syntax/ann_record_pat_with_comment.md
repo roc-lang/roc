@@ -9,10 +9,19 @@ type=expr
 :s}:s
 o
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - ann_record_pat_with_comment.md:2:2:2:3
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `s` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**ann_record_pat_with_comment.md:2:2:2:3:**
+```roc
+:s}:s
+```
+ ^
+
 
 # TOKENS
 ~~~zig

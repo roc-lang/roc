@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 -rec1.field
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - unary_negation_access.md:1:1:1:6
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **-rec1** is not expected in an expression.

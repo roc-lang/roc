@@ -7,10 +7,19 @@ type=expr
 ~~~roc
 One.Two.whee
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - qualified_var.md:1:1:1:13
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `whee` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**qualified_var.md:1:1:1:13:**
+```roc
+One.Two.whee
+```
+^^^^^^^^^^^^
+
 
 # TOKENS
 ~~~zig

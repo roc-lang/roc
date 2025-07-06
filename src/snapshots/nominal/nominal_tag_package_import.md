@@ -14,6 +14,8 @@ import styles.Color as CC
 blue : CC.RGB
 blue = CC.RGB(0,0,255)
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

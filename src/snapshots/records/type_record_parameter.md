@@ -7,6 +7,8 @@ type=statement
 ~~~roc
 process_things : { name : Str, age : U32, thing: a }, (a -> Str) -> Str
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

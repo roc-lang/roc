@@ -8,6 +8,9 @@ type=expr
 (-8)():C
 8
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - pnc_apply_neg_pattern.md:1:2:1:4
+PARSE ERROR - pnc_apply_neg_pattern.md:1:4:1:6
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **-8** is not expected in an expression.

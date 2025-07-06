@@ -8,6 +8,8 @@ type=expr
 1:[N(*as(S))]
 _
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

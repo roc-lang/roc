@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 ({a: 0}, {b: 1}).0.a
 ~~~
+# EXPECTED
+PARSE ERROR - record_access_after_tuple.md:1:17:1:21
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expr_no_space_dot_int`

@@ -18,6 +18,8 @@ main! = |_| {
 	Stdout.line!("Hello, world!")
 }
 ~~~
+# EXPECTED
+UNUSED VARIABLE - hello_world_with_block.md:9:2:9:7
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable ``world`` is not used anywhere in your code.

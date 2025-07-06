@@ -7,10 +7,19 @@ type=expr
 ~~~roc
 thenever
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - var_then.md:1:1:1:9
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `thenever` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**var_then.md:1:1:1:9:**
+```roc
+thenever
+```
+^^^^^^^^
+
 
 # TOKENS
 ~~~zig

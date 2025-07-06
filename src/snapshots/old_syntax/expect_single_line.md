@@ -13,10 +13,19 @@ expect y == z
 
 42
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - expect_single_line.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**expect_single_line.md:1:1:1:2:**
+```roc
+x = 5
+```
+^
+
 
 # TOKENS
 ~~~zig

@@ -10,10 +10,19 @@ t:()(n#
 )
 p#
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - comment_in_tuple_ext.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `t` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**comment_in_tuple_ext.md:1:1:1:2:**
+```roc
+t:()(n#
+```
+^
+
 
 # TOKENS
 ~~~zig

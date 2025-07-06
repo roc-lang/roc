@@ -14,10 +14,22 @@ match list {
     [x, y, z, .. as more] => x + y + z
 }
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - list_destructure_variations.md:1:7:1:11
+UNUSED VARIABLE - list_destructure_variations.md:5:18:5:22
+UNUSED VARIABLE - list_destructure_variations.md:6:22:6:26
+UNUSED VARIABLE - list_destructure_variations.md:7:21:7:25
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `list` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**list_destructure_variations.md:1:7:1:11:**
+```roc
+match list {
+```
+      ^^^^
+
 
 **UNUSED VARIABLE**
 Variable ``tail`` is not used anywhere in your code.

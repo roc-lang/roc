@@ -9,10 +9,19 @@ f : a where a implements A
 
 f
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - where_clause_non_function.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `f` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**where_clause_non_function.md:1:1:1:2:**
+```roc
+f : a where a implements A
+```
+^
+
 
 # TOKENS
 ~~~zig

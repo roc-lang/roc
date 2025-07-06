@@ -9,6 +9,8 @@ type=expr
 m}:J
 O
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - space_after_opt_field_pat.md:2:1:2:2
 # PROBLEMS
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: canonicalize suffix_single_question expression
@@ -17,6 +19,13 @@ Let us know if you want to help!
 **UNDEFINED VARIABLE**
 Nothing is named `m` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**space_after_opt_field_pat.md:2:1:2:2:**
+```roc
+m}:J
+```
+^
+
 
 # TOKENS
 ~~~zig

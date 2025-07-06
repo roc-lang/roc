@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 -'i'
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - negative_single_quote.md:1:1:1:5
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **-'i'** is not expected in an expression.

@@ -11,6 +11,8 @@ y = 6
 
 42
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - two_spaced_def.md:1:2:2:2
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token ** leading comment

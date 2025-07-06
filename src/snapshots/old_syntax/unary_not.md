@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 !blah
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - unary_not.md:1:1:1:6
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **!blah** is not expected in an expression.

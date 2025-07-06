@@ -7,6 +7,9 @@ type=expr
 ~~~roc
 { name: "Alice", : 30, , email: , active Bool.true, "invalid": value, 42: "number key", : }
 ~~~
+# EXPECTED
+PARSE ERROR - error_malformed_syntax.md:1:18:1:22
+PARSE ERROR - error_malformed_syntax.md:1:20:1:23
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_record_field_name`

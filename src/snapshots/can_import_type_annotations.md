@@ -45,6 +45,14 @@ combineResults = |result1, result2|
         Err(err) => Err(err)
     }
 ~~~
+# EXPECTED
+PARSE ERROR - can_import_type_annotations.md:17:21:17:24
+UNEXPECTED TOKEN IN PATTERN - can_import_type_annotations.md:17:41:17:41
+UNEXPECTED TOKEN IN EXPRESSION - can_import_type_annotations.md:1:1:18:12
+UNDECLARED TYPE - can_import_type_annotations.md:7:18:7:25
+UNDECLARED TYPE - can_import_type_annotations.md:7:29:7:37
+UNUSED VARIABLE - can_import_type_annotations.md:8:19:8:22
+UNUSED VARIABLE - can_import_type_annotations.md:17:12:17:16
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_apply_close_round`

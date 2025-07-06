@@ -9,10 +9,19 @@ when x is
  1 -> 2
  -3 -> 4
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - when_with_negative_numbers.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**when_with_negative_numbers.md:1:1:1:5:**
+```roc
+when x is
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

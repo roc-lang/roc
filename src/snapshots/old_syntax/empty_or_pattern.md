@@ -12,10 +12,19 @@ when Just 4 is
     _ ->
         2
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - empty_or_pattern.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**empty_or_pattern.md:1:1:1:5:**
+```roc
+when Just 4 is
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

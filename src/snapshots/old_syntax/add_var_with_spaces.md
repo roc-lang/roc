@@ -7,10 +7,19 @@ type=expr
 ~~~roc
 x + 2
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - add_var_with_spaces.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**add_var_with_spaces.md:1:1:1:2:**
+```roc
+x + 2
+```
+^
+
 
 # TOKENS
 ~~~zig

@@ -9,10 +9,19 @@ when x is
     Ok(value) -> value
     Err(msg) -> msg
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - when_simple.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**when_simple.md:1:1:1:5:**
+```roc
+when x is
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

@@ -8,10 +8,19 @@ type=expr
 t="""" """""
 S
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - body_block_string_apply_string.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `t` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**body_block_string_apply_string.md:1:1:1:2:**
+```roc
+t="""" """""
+```
+^
+
 
 # TOKENS
 ~~~zig

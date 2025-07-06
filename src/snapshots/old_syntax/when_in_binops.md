@@ -9,18 +9,43 @@ di<s<when b
  is 7->7e
  zl
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - when_in_binops.md:1:1:1:3
+UNDEFINED VARIABLE - when_in_binops.md:1:4:1:5
+UNDEFINED VARIABLE - when_in_binops.md:1:6:1:10
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `di` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**when_in_binops.md:1:1:1:3:**
+```roc
+di<s<when b
+```
+^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `s` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**when_in_binops.md:1:4:1:5:**
+```roc
+di<s<when b
+```
+   ^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**when_in_binops.md:1:6:1:10:**
+```roc
+di<s<when b
+```
+     ^^^^
+
 
 # TOKENS
 ~~~zig

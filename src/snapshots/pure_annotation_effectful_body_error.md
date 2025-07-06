@@ -15,6 +15,8 @@ bad_function = |msg| Stdout.line!(msg)
 
 main! = bad_function("This should fail")
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

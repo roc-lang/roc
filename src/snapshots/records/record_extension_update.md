@@ -7,10 +7,19 @@ type=expr
 ~~~roc
 { ..person, age: 31, active: True }
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - record_extension_update.md:1:5:1:11
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `person` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**record_extension_update.md:1:5:1:11:**
+```roc
+{ ..person, age: 31, active: True }
+```
+    ^^^^^^
+
 
 # TOKENS
 ~~~zig

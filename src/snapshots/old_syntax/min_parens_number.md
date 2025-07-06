@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 -(8)
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - min_parens_number.md:1:1:1:3
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **-(** is not expected in an expression.

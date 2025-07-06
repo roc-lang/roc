@@ -26,6 +26,12 @@ main! = |_| {
     []
 }
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - crash_and_ellipsis_test.md:9:17:9:24
+UNEXPECTED TOKEN IN EXPRESSION - crash_and_ellipsis_test.md:13:23:13:30
+UNUSED VARIABLE - crash_and_ellipsis_test.md:16:5:16:12
+UNUSED VARIABLE - crash_and_ellipsis_test.md:17:5:17:12
+UNUSED VARIABLE - crash_and_ellipsis_test.md:18:5:18:12
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **crash "** is not expected in an expression.

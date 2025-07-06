@@ -7,10 +7,19 @@ type=expr
 ~~~roc
 whee  12 -foo
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - unary_negation_arg.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `whee` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**unary_negation_arg.md:1:1:1:5:**
+```roc
+whee  12 -foo
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

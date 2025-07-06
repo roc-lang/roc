@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 return
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - empty_return.md:1:1:1:7
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **return** is not expected in an expression.

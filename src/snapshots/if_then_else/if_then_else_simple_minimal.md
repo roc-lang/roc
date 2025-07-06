@@ -7,10 +7,19 @@ type=expr
 ~~~roc
 if bool 1 else 2
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - if_then_else_simple_minimal.md:1:4:1:8
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `bool` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**if_then_else_simple_minimal.md:1:4:1:8:**
+```roc
+if bool 1 else 2
+```
+   ^^^^
+
 
 # TOKENS
 ~~~zig

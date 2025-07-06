@@ -7,10 +7,19 @@ type=expr
 ~~~roc
 f : { if : I64 }
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - record_type_keyword_field_name.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `f` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**record_type_keyword_field_name.md:1:1:1:2:**
+```roc
+f : { if : I64 }
+```
+^
+
 
 # TOKENS
 ~~~zig

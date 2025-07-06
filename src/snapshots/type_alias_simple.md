@@ -14,6 +14,8 @@ getUser = |id| if (id > 10) "big" else "small"
 
 main! = |_| getUser(100)
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

@@ -10,6 +10,8 @@ type=expr
 ={}
 I
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - empty_record_newline_assign.md:1:1:2:2
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **

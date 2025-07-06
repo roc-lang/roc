@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 1 ++ 2
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - unknown_operator.md:1:4:1:7
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **+ 2** is not expected in an expression.

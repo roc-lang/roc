@@ -9,6 +9,8 @@ Zx (e#
 )f:i
 s
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

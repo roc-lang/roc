@@ -15,6 +15,8 @@ decodeThings # After member name
 			where # after where
 				a.Decode,
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

@@ -8,10 +8,19 @@ type=expr
 f : {
 foo : I64,
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - record_type_open_indent.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `f` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**record_type_open_indent.md:1:1:1:2:**
+```roc
+f : {
+```
+^
+
 
 # TOKENS
 ~~~zig

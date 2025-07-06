@@ -11,10 +11,22 @@ match person {
     {} => "empty"
 }
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - record_destructure.md:1:7:1:13
+UNUSED VARIABLE - record_destructure.md:2:13:2:18
+UNDEFINED VARIABLE - record_destructure.md:3:36:3:40
+UNUSED VARIABLE - record_destructure.md:3:7:3:12
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `person` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**record_destructure.md:1:7:1:13:**
+```roc
+match person {
+```
+      ^^^^^^
+
 
 **UNUSED VARIABLE**
 Variable ``age`` is not used anywhere in your code.
@@ -35,6 +47,13 @@ Let us know if you want to help!
 **UNDEFINED VARIABLE**
 Nothing is named `city` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**record_destructure.md:3:36:3:40:**
+```roc
+    { name, address: { city } } => city
+```
+                                   ^^^^
+
 
 **UNUSED VARIABLE**
 Variable ``name`` is not used anywhere in your code.

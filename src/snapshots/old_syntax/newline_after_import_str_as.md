@@ -9,6 +9,8 @@ import""as
  das
 A
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - newline_after_import_str_as.md:1:1:1:8
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **import"** is not expected in an expression.

@@ -12,6 +12,8 @@ get_name = |person| person.name
 
 main! = |_| {}
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

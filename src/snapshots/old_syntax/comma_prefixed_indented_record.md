@@ -14,6 +14,8 @@ Model position :
 
 a
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

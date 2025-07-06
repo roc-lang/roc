@@ -9,6 +9,8 @@ S implements d:J
  m#
 D
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

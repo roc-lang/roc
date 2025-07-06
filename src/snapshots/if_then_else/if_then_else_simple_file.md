@@ -13,6 +13,9 @@ foo = if 1 A
 	"hello"
     }
 ~~~
+# EXPECTED
+PARSE ERROR - if_then_else_simple_file.md:1:1:1:1
+UNEXPECTED TOKEN IN EXPRESSION - if_then_else_simple_file.md:5:5:5:11
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `no_else`

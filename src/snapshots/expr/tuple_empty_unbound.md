@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 ()
 ~~~
+# EXPECTED
+EMPTY TUPLE NOT ALLOWED - tuple_empty_unbound.md:1:1:1:3
 # PROBLEMS
 **EMPTY TUPLE NOT ALLOWED**
 I am part way through parsing this tuple, but it is empty:

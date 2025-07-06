@@ -9,10 +9,19 @@ g:[T(T#
 )]
 D
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - annotation_tag_parens_comment.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `g` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**annotation_tag_parens_comment.md:1:1:1:2:**
+```roc
+g:[T(T#
+```
+^
+
 
 # TOKENS
 ~~~zig

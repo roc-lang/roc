@@ -13,10 +13,19 @@ f : a -> b
 
 f
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - where_clause_multiple_bound_abilities.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `f` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**where_clause_multiple_bound_abilities.md:1:1:1:2:**
+```roc
+f : a -> b where a implements Hash & Eq, b implements Eq & Hash & Display
+```
+^
+
 
 # TOKENS
 ~~~zig

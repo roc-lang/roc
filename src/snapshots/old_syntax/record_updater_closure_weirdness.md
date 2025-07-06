@@ -8,6 +8,8 @@ type=expr
 &rm?\L2->t
 +c
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - record_updater_closure_weirdness.md:1:1:1:4
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **&rm** is not expected in an expression.

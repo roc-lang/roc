@@ -7,14 +7,31 @@ type=expr
 ~~~roc
 x == y
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - equals_with_spaces.md:1:1:1:2
+UNDEFINED VARIABLE - equals_with_spaces.md:1:6:1:7
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**equals_with_spaces.md:1:1:1:2:**
+```roc
+x == y
+```
+^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `y` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**equals_with_spaces.md:1:6:1:7:**
+```roc
+x == y
+```
+     ^
+
 
 # TOKENS
 ~~~zig

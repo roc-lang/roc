@@ -31,6 +31,9 @@ main! = |_| {
     result1 + result2 + result3 + result4
 }
 ~~~
+# EXPECTED
+UNUSED VARIABLE - lambda_parameter_unused.md:5:8:5:14
+UNDERSCORE VARIABLE USED - lambda_parameter_unused.md:9:22:9:29
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable ``unused`` is not used anywhere in your code.

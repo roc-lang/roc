@@ -25,6 +25,9 @@ main! = |_| {
     result
 }
 ~~~
+# EXPECTED
+UNUSED VARIABLE - unused_vars_block.md:5:5:5:15
+UNUSED VARIABLE - unused_vars_block.md:11:5:11:19
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable ``unused_var`` is not used anywhere in your code.

@@ -12,10 +12,19 @@ when x is
  |"baz" -> 2
  "stuff" -> 4
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - when_with_alternative_patterns.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**when_with_alternative_patterns.md:1:1:1:5:**
+```roc
+when x is
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

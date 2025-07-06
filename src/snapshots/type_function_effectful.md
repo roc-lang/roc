@@ -12,6 +12,9 @@ runEffect! = |fn!, x| fn!(x)
 
 main! = |_| {}
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - type_function_effectful.md:3:22:3:25
+UNEXPECTED TOKEN IN EXPRESSION - type_function_effectful.md:3:26:3:30
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **, a** is not expected in an expression.

@@ -10,10 +10,19 @@ wherem
 implementsF)A
 _
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - wherem_implementsf.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `s` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**wherem_implementsf.md:1:1:1:2:**
+```roc
+s:(s
+```
+^
+
 
 # TOKENS
 ~~~zig

@@ -12,6 +12,8 @@ process = |maybe| "result"
 
 main! = |_| {}
 ~~~
+# EXPECTED
+UNUSED VARIABLE - type_tag_union_basic.md:4:12:4:17
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable ``maybe`` is not used anywhere in your code.

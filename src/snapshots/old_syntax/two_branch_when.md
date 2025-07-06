@@ -9,10 +9,19 @@ when x is
  "" -> 1
  "mise" -> 2
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - two_branch_when.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**two_branch_when.md:1:1:1:5:**
+```roc
+when x is
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

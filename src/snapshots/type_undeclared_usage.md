@@ -16,6 +16,10 @@ processValue = |value| {
 
 AnotherType : SomeModule.MissingType
 ~~~
+# EXPECTED
+UNDECLARED TYPE - type_undeclared_usage.md:3:10:3:21
+UNDECLARED TYPE - type_undeclared_usage.md:5:16:5:32
+UNUSED VARIABLE - type_undeclared_usage.md:6:17:6:22
 # PROBLEMS
 **UNDECLARED TYPE**
 The type ``UnknownType`` is not declared in this scope.

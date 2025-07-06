@@ -8,6 +8,9 @@ type=expr
 {i#
 &}
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - record_update_comment_before_ampersand.md:2:1:2:3
+UNDEFINED VARIABLE - record_update_comment_before_ampersand.md:1:2:1:3
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **&}** is not expected in an expression.
@@ -24,6 +27,13 @@ Here is the problematic code:
 **UNDEFINED VARIABLE**
 Nothing is named `i` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**record_update_comment_before_ampersand.md:1:2:1:3:**
+```roc
+{i#
+```
+ ^
+
 
 # TOKENS
 ~~~zig

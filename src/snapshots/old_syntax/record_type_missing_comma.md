@@ -7,10 +7,19 @@ type=expr
 ~~~roc
 f : { foo  bar }
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - record_type_missing_comma.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `f` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**record_type_missing_comma.md:1:1:1:2:**
+```roc
+f : { foo  bar }
+```
+^
+
 
 # TOKENS
 ~~~zig

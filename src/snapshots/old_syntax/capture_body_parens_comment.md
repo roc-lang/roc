@@ -9,6 +9,8 @@ type=expr
 #
 )
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - capture_body_parens_comment.md:1:1:1:3
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **\L** is not expected in an expression.

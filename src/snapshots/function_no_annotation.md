@@ -20,6 +20,8 @@ process! = |x| print_number!(multiply(x, 2))
 
 main! = process!(42)
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

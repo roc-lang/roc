@@ -7,10 +7,19 @@ type=expr
 ~~~roc
 (rec).field
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - parenthetical_basic_field.md:1:2:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `rec` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**parenthetical_basic_field.md:1:2:1:5:**
+```roc
+(rec).field
+```
+ ^^^
+
 
 # TOKENS
 ~~~zig

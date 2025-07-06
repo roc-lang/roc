@@ -12,6 +12,9 @@ match Answer {
     10 => 4
 }
 ~~~
+# EXPECTED
+INCOMPATIBLE MATCH BRANCHES - literal_patterns.md:1:1:1:1
+INCOMPATIBLE MATCH PATTERNS - literal_patterns.md:1:1:1:1
 # PROBLEMS
 **INCOMPATIBLE MATCH BRANCHES**
 The second branch's type in this `match` is different from the previous ones:

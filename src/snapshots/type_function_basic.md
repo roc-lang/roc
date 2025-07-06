@@ -12,6 +12,8 @@ apply = |fn, x| fn(x)
 
 main! = |_| {}
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - type_function_basic.md:3:17:3:20
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **, a** is not expected in an expression.

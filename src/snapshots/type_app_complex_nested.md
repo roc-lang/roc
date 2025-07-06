@@ -24,6 +24,15 @@ ComplexType(a, b) : Result(List(Maybe(a)), Dict(Str, Error(b)))
 
 main! = |_| processComplex(Ok([Some(42), None]))
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - type_app_complex_nested.md:13:18:13:25
+UNDECLARED TYPE - type_app_complex_nested.md:16:33:16:38
+UNDECLARED TYPE - type_app_complex_nested.md:16:54:16:59
+UNDECLARED TYPE - type_app_complex_nested.md:4:30:4:35
+UNDECLARED TYPE - type_app_complex_nested.md:4:51:4:56
+UNUSED VARIABLE - type_app_complex_nested.md:7:12:7:21
+UNDECLARED TYPE - type_app_complex_nested.md:12:14:12:19
+UNDECLARED TYPE - type_app_complex_nested.md:13:1:13:11
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **crash "** is not expected in an expression.

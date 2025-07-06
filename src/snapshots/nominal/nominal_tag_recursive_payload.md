@@ -12,6 +12,8 @@ ConsList(a) := [Nil, Node(ConsList(a))]
 empty : ConsList(a)
 empty = ConsList.Nil
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

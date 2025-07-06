@@ -7,6 +7,9 @@ type=file
 ~~~roc
 ||1
 ~~~
+# EXPECTED
+ASCII CONTROL CHARACTER - fuzz_crash_008.md:1:1:1:4
+PARSE ERROR - fuzz_crash_008.md:1:5:1:5
 # PROBLEMS
 **ASCII CONTROL CHARACTER**
 ASCII control characters are not allowed in Roc source code.

@@ -22,6 +22,8 @@ outerFunc = |_| {
     innerResult
 }
 ~~~
+# EXPECTED
+DUPLICATE DEFINITION - can_basic_scoping.md:9:5:9:6
 # PROBLEMS
 **DUPLICATE DEFINITION**
 The name `x` is being redeclared in this scope.

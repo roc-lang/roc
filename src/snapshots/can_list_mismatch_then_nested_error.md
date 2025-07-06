@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 [1, "hello", [3, "world"]]
 ~~~
+# EXPECTED
+INCOMPATIBLE LIST ELEMENTS - can_list_mismatch_then_nested_error.md:1:2:1:2
 # PROBLEMS
 **INCOMPATIBLE LIST ELEMENTS**
 The first two elements in this list have incompatible types:

@@ -22,6 +22,16 @@ pkg: 77"..c", mm} #
 ar,
 		]
 ~~~
+# EXPECTED
+PARSE ERROR - fuzz_crash_030.md:8:5:8:5
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:9:3:9:10
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:10:2:10:15
+PARSE ERROR - fuzz_crash_030.md:12:8:12:12
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:12:9:12:13
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:12:12:12:14
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:12:13:12:17
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:12:17:12:20
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:13:2:13:15
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `exposed_item_unexpected_token`

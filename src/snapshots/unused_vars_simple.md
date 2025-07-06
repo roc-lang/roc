@@ -27,6 +27,9 @@ main! = |_| {
     a + b + c + d
 }
 ~~~
+# EXPECTED
+UNUSED VARIABLE - unused_vars_simple.md:4:19:4:20
+UNDERSCORE VARIABLE USED - unused_vars_simple.md:7:28:7:34
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable ``x`` is not used anywhere in your code.

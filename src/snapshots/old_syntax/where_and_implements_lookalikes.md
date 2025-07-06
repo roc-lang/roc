@@ -9,6 +9,8 @@ type=expr
   wherew implementsI
 e)
 ~~~
+# EXPECTED
+PARSE ERROR - where_and_implements_lookalikes.md:3:2:3:3
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_close_round_or_comma`

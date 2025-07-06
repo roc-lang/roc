@@ -9,10 +9,19 @@ nextWhileLess : List Bucket, k, U8 -> (U64, U32) where k implements Hash & Eq
 nextWhileLess = \buckets, key, shifts -> foo
 nextWhileLess
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - type_tuple_where_annotation.md:1:1:1:14
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `nextWhileLess` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**type_tuple_where_annotation.md:1:1:1:14:**
+```roc
+nextWhileLess : List Bucket, k, U8 -> (U64, U32) where k implements Hash & Eq
+```
+^^^^^^^^^^^^^
+
 
 # TOKENS
 ~~~zig

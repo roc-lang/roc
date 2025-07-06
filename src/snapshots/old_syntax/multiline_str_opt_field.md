@@ -7,6 +7,10 @@ type=expr
 ~~~roc
 {l?""""""}""
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - multiline_str_opt_field.md:1:4:1:7
+UNEXPECTED TOKEN IN EXPRESSION - multiline_str_opt_field.md:1:7:1:10
+UNEXPECTED TOKEN IN EXPRESSION - multiline_str_opt_field.md:1:7:1:11
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **"""** is not expected in an expression.

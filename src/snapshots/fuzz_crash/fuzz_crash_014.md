@@ -9,6 +9,11 @@ type=file
 0bu22
 0u22
 ~~~
+# EXPECTED
+MISSING HEADER - fuzz_crash_014.md:1:1:1:5
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_014.md:1:3:1:3
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_014.md:2:1:2:1
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_014.md:3:1:3:5
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.

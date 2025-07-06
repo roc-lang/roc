@@ -9,14 +9,31 @@ n*f
 #
 -f
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - mul_comment_neg.md:1:1:1:2
+UNDEFINED VARIABLE - mul_comment_neg.md:1:3:1:4
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `n` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**mul_comment_neg.md:1:1:1:2:**
+```roc
+n*f
+```
+^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `f` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**mul_comment_neg.md:1:3:1:4:**
+```roc
+n*f
+```
+  ^
+
 
 # TOKENS
 ~~~zig

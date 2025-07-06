@@ -10,6 +10,8 @@ x = 5
 
 42
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - one_spaced_def.md:1:2:2:2
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token ** leading comment

@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 .1 (1, 2, 3)
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - tuple_accessor_function.md:1:1:1:5
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **.1 (** is not expected in an expression.

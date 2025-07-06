@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 [1u8, 2u8, 300]
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **INVALID NUMBER**
 This number literal is not valid: 1u8

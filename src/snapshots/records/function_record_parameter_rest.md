@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 |{ first_name, ..rest }| "Hello ${first_name} ${rest.last_name}"
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

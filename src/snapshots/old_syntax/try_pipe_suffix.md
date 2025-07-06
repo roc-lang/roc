@@ -7,10 +7,19 @@ type=expr
 ~~~roc
 Str.toU64 "123"|> try
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - try_pipe_suffix.md:1:1:1:10
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `toU64` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**try_pipe_suffix.md:1:1:1:10:**
+```roc
+Str.toU64 "123"|> try
+```
+^^^^^^^^^
+
 
 # TOKENS
 ~~~zig

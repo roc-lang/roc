@@ -11,6 +11,8 @@ module []
 
 "two"
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.

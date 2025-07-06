@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 """""""${i""""""}"
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - multiline_str_crazyness.md:1:1:1:4
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **"""** is not expected in an expression.

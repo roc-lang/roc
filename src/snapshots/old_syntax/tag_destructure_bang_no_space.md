@@ -9,6 +9,8 @@ Config launchTheNukes!code = cfg
 
 launchTheNukes! code
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

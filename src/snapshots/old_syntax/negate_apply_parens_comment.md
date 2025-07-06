@@ -8,6 +8,8 @@ type=expr
 -((4
 4)4)
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - negate_apply_parens_comment.md:1:1:1:3
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **-(** is not expected in an expression.

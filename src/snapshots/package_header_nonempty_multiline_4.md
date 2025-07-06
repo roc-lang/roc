@@ -14,6 +14,8 @@ package
 		somePkg: "../main.roc",
 	}
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

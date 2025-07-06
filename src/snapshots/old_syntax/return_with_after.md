@@ -9,6 +9,8 @@ return-1#
 X
 s
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - return_with_after.md:1:1:1:8
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **return-** is not expected in an expression.

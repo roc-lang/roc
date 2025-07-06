@@ -45,6 +45,8 @@ main! = |_| {
     userId
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **app [main!] { pf: platform "../basic-cli/main.roc" }

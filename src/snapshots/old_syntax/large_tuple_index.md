@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 .18888888888888888888 + h.22222222222222222222
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - large_tuple_index.md:1:1:1:24
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **.18888888888888888888 +** is not expected in an expression.

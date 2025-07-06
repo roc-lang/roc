@@ -7,6 +7,8 @@ type=file
 ~~~roc
 = "te
 ~~~
+# EXPECTED
+UNCLOSED STRING - fuzz_crash_003.md:1:1:1:4
 # PROBLEMS
 **UNCLOSED STRING**
 This string is missing a closing quote.

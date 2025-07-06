@@ -8,10 +8,19 @@ type=expr
 e=""""""a
 p
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - def_multistring_apply.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `e` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**def_multistring_apply.md:1:1:1:2:**
+```roc
+e=""""""a
+```
+^
+
 
 # TOKENS
 ~~~zig

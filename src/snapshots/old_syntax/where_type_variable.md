@@ -10,10 +10,19 @@ role = Admin
 
 role
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - where_type_variable.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `role` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**where_type_variable.md:1:1:1:5:**
+```roc
+role : Role where
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

@@ -7,14 +7,31 @@ type=expr
 ~~~roc
 try-w
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - try_subtract.md:1:1:1:4
+UNDEFINED VARIABLE - try_subtract.md:1:5:1:6
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `try` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**try_subtract.md:1:1:1:4:**
+```roc
+try-w
+```
+^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `w` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**try_subtract.md:1:5:1:6:**
+```roc
+try-w
+```
+    ^
+
 
 # TOKENS
 ~~~zig

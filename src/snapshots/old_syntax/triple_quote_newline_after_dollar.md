@@ -8,6 +8,8 @@ type=expr
 """$
 (
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - triple_quote_newline_after_dollar.md:1:1:1:5
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **"""$** is not expected in an expression.

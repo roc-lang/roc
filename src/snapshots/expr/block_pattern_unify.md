@@ -12,6 +12,8 @@ type=expr
     result
 }
 ~~~
+# EXPECTED
+UNUSED VARIABLE - block_pattern_unify.md:3:5:3:8
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable ``str`` is not used anywhere in your code.

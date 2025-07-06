@@ -12,6 +12,8 @@ mapList = |list, fn| list.map(fn)
 
 main! = |_| mapList([1,2,3,4,5])
 ~~~
+# EXPECTED
+TYPE MISMATCH - type_app_with_vars.md:6:13:6:20
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

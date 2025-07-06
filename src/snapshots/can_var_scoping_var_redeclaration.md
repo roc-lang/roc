@@ -17,6 +17,9 @@ redeclareTest = |_| {
 
 result = redeclareTest({})
 ~~~
+# EXPECTED
+DUPLICATE DEFINITION - can_var_scoping_var_redeclaration.md:6:2:7:4
+UNUSED VARIABLE - can_var_scoping_var_redeclaration.md:6:2:7:4
 # PROBLEMS
 **DUPLICATE DEFINITION**
 The name `x_` is being redeclared in this scope.

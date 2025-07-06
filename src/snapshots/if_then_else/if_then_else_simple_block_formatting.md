@@ -9,10 +9,19 @@ if bool {
 	A
 } else 2
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - if_then_else_simple_block_formatting.md:1:4:1:8
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `bool` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**if_then_else_simple_block_formatting.md:1:4:1:8:**
+```roc
+if bool {
+```
+   ^^^^
+
 
 **INCOMPATIBLE IF BRANCHES**
 This `if` has an `else` branch with a different type from it's `then` branch:

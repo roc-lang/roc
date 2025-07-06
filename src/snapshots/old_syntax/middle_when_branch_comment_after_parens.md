@@ -10,10 +10,19 @@ O->(s
 )#
 O->t
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - middle_when_branch_comment_after_parens.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**middle_when_branch_comment_after_parens.md:1:1:1:5:**
+```roc
+when n is
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

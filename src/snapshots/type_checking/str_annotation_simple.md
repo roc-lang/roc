@@ -10,6 +10,8 @@ module []
 x : Str
 x = "hello"
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

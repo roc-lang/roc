@@ -33,6 +33,8 @@ main! = |_| {
     result
 }
 ~~~
+# EXPECTED
+UNUSED VARIABLE - type_annotation_basic.md:21:5:21:9
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable ``pair`` is not used anywhere in your code.

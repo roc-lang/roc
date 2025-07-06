@@ -10,6 +10,8 @@ P:=W
    []
 t
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

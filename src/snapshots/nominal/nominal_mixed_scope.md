@@ -22,6 +22,8 @@ processColor = |color| {
     }
 }
 ~~~
+# EXPECTED
+IMPORT MUST BE TOP LEVEL - nominal_mixed_scope.md:9:5:9:17
 # PROBLEMS
 **IMPORT MUST BE TOP LEVEL**
 Import statements must appear at the top level of a module.

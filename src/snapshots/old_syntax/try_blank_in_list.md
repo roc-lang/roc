@@ -8,6 +8,8 @@ type=expr
 L[try#[then2[#
 ]
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

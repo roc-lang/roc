@@ -9,10 +9,19 @@ m
  ^ -\w->m
  w
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - closure_with_binops_and_unary.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `m` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**closure_with_binops_and_unary.md:1:1:1:2:**
+```roc
+m
+```
+^
+
 
 # TOKENS
 ~~~zig

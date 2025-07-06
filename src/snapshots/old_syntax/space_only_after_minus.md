@@ -7,14 +7,31 @@ type=expr
 ~~~roc
 x- y
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - space_only_after_minus.md:1:1:1:2
+UNDEFINED VARIABLE - space_only_after_minus.md:1:4:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**space_only_after_minus.md:1:1:1:2:**
+```roc
+x- y
+```
+^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `y` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**space_only_after_minus.md:1:4:1:5:**
+```roc
+x- y
+```
+   ^
+
 
 # TOKENS
 ~~~zig

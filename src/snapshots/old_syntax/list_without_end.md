@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 [1, 2,
 ~~~
+# EXPECTED
+LIST NOT CLOSED - list_without_end.md:1:7:1:7
 # PROBLEMS
 **LIST NOT CLOSED**
 This list is missing a closing bracket or has a syntax error.

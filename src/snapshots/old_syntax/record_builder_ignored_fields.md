@@ -8,6 +8,17 @@ type=expr
 { Foo.Bar.baz <- x: 5, y: 0, _z: 3, _: 2
 }
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - record_builder_ignored_fields.md:1:15:1:19
+UNEXPECTED TOKEN IN TYPE ANNOTATION - record_builder_ignored_fields.md:1:21:1:23
+UNEXPECTED TOKEN IN EXPRESSION - record_builder_ignored_fields.md:1:22:1:25
+UNEXPECTED TOKEN IN TYPE ANNOTATION - record_builder_ignored_fields.md:1:27:1:29
+UNEXPECTED TOKEN IN EXPRESSION - record_builder_ignored_fields.md:1:28:1:32
+UNEXPECTED TOKEN IN TYPE ANNOTATION - record_builder_ignored_fields.md:1:34:1:36
+UNEXPECTED TOKEN IN EXPRESSION - record_builder_ignored_fields.md:1:35:1:38
+UNEXPECTED TOKEN IN EXPRESSION - record_builder_ignored_fields.md:1:37:1:39
+UNEXPECTED TOKEN IN EXPRESSION - record_builder_ignored_fields.md:1:38:1:41
+UNDEFINED VARIABLE - record_builder_ignored_fields.md:1:3:1:14
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **<- x** is not expected in an expression.
@@ -120,6 +131,13 @@ Here is the problematic code:
 **UNDEFINED VARIABLE**
 Nothing is named `baz` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**record_builder_ignored_fields.md:1:3:1:14:**
+```roc
+{ Foo.Bar.baz <- x: 5, y: 0, _z: 3, _: 2
+```
+  ^^^^^^^^^^^
+
 
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.

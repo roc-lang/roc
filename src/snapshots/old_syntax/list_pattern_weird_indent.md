@@ -9,10 +9,19 @@ when [] is
     [1, 2,
 3] -> ""
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - list_pattern_weird_indent.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**list_pattern_weird_indent.md:1:1:1:5:**
+```roc
+when [] is
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

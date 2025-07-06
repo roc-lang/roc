@@ -10,6 +10,8 @@ dbg (1 == 1)
 
 4
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - dbg_stmt.md:1:1:2:4
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **

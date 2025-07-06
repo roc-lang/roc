@@ -12,10 +12,19 @@ when Just 4 is
     _ ->
         2
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - pattern_binds_keyword.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**pattern_binds_keyword.md:1:1:1:5:**
+```roc
+when Just 4 is
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

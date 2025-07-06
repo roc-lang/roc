@@ -8,6 +8,9 @@ type=expr
 i>\s->s
 -a
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - closure_in_binop_with_spaces.md:1:3:1:5
+UNDEFINED VARIABLE - closure_in_binop_with_spaces.md:1:1:1:2
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **\s** is not expected in an expression.
@@ -24,6 +27,13 @@ i>\s->s
 **UNDEFINED VARIABLE**
 Nothing is named `i` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**closure_in_binop_with_spaces.md:1:1:1:2:**
+```roc
+i>\s->s
+```
+^
+
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!

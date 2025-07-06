@@ -9,6 +9,8 @@ type=expr
 r))
 1))
 ~~~
+# EXPECTED
+PARSE ERROR - binop_assign_defs_nested.md:2:2:2:4
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_close_round_or_comma`

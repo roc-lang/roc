@@ -9,6 +9,8 @@ type=expr
     Ok -> 3
      )
 ~~~
+# EXPECTED
+PARSE ERROR - when_in_parens_indented.md:3:6:3:7
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_close_round_or_comma`

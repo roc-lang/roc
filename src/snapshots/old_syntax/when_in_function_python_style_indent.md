@@ -9,10 +9,19 @@ func = \x -> when n is
     0 -> 0
 42
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - when_in_function_python_style_indent.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `func` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**when_in_function_python_style_indent.md:1:1:1:5:**
+```roc
+func = \x -> when n is
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

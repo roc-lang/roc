@@ -12,6 +12,8 @@ type=expr
 #
 u]
 ~~~
+# EXPECTED
+LIST NOT CLOSED - list_lots_of_spaces.md:6:2:6:3
 # PROBLEMS
 **LIST NOT CLOSED**
 This list is missing a closing bracket or has a syntax error.

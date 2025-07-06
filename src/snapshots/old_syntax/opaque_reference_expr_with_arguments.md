@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 @Age m n
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - opaque_reference_expr_with_arguments.md:1:1:1:7
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **@Age m** is not expected in an expression.

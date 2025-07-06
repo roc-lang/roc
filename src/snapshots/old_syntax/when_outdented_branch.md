@@ -9,10 +9,19 @@ when 4 is
     5 -> 2
  2 -> 2
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - when_outdented_branch.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**when_outdented_branch.md:1:1:1:5:**
+```roc
+when 4 is
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

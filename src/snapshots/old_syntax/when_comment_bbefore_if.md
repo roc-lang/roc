@@ -9,10 +9,19 @@ when 0
 is S#
  if S->e
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - when_comment_bbefore_if.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**when_comment_bbefore_if.md:1:1:1:5:**
+```roc
+when 0
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

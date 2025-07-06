@@ -9,10 +9,19 @@ f : a -> (b -> c) where a implements A, b implements Eq, c implements Ord
 
 f
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - where_clause_multiple_has.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `f` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**where_clause_multiple_has.md:1:1:1:2:**
+```roc
+f : a -> (b -> c) where a implements A, b implements Eq, c implements Ord
+```
+^
+
 
 # TOKENS
 ~~~zig

@@ -7,6 +7,9 @@ type=expr
 ~~~roc
 (-(-6))
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - minus_minus_six.md:1:2:1:4
+PARSE ERROR - minus_minus_six.md:1:6:1:8
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **-(** is not expected in an expression.

@@ -8,6 +8,8 @@ type=expr
 1:(w->w->p)
 h
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

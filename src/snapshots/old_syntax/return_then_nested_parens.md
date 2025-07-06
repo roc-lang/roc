@@ -10,6 +10,8 @@ return n
 )#
 )
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - return_then_nested_parens.md:1:1:1:9
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **return n** is not expected in an expression.

@@ -8,6 +8,8 @@ type=expr
 7
 ==(Q:c 42)
 ~~~
+# EXPECTED
+PARSE ERROR - newline_before_operator_with_defs.md:2:10:2:11
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_close_round_or_comma`

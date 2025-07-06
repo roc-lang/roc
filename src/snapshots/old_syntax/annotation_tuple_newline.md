@@ -9,10 +9,19 @@ d:(J,
 )g
 2
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - annotation_tuple_newline.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `d` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**annotation_tuple_newline.md:1:1:1:2:**
+```roc
+d:(J,
+```
+^
+
 
 # TOKENS
 ~~~zig

@@ -16,6 +16,8 @@ main = {
 	decoded
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

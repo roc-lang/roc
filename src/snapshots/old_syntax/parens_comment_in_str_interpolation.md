@@ -8,6 +8,8 @@ type=expr
 "${(S#
 )}"
 ~~~
+# EXPECTED
+PARSE ERROR - parens_comment_in_str_interpolation.md:2:1:2:3
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_close_round_or_comma`

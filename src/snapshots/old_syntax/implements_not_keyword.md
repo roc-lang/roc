@@ -9,6 +9,8 @@ A=B implements
  +s
 1
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

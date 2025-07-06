@@ -12,6 +12,10 @@ type=expr
     42
 }
 ~~~
+# EXPECTED
+PARSE ERROR - ann_closed_union.md:2:26:2:32
+UNEXPECTED TOKEN IN EXPRESSION - ann_closed_union.md:2:31:2:31
+UNUSED VARIABLE - ann_closed_union.md:3:5:3:8
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_ty_close_square_or_comma`

@@ -60,6 +60,11 @@ combineResults = |jsonResult, httpStatus|
         Err(error) => Err(error)
     }
 ~~~
+# EXPECTED
+PARSE ERROR - can_import_exposing_types.md:52:45:52:51
+PARSE ERROR - can_import_exposing_types.md:52:22:52:25
+UNEXPECTED TOKEN IN EXPRESSION - can_import_exposing_types.md:52:71:52:73
+UNEXPECTED TOKEN IN PATTERN - can_import_exposing_types.md:52:72:52:72
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_close_curly_or_comma`
@@ -349,6 +354,13 @@ processData : Config, List(Value) -> Result(List(Value), Error)
 Nothing is named `mapTry` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**can_import_exposing_types.md:24:5:24:16:**
+```roc
+    List.mapTry(
+```
+    ^^^^^^^^^^^
+
+
 **UNDECLARED TYPE**
 The type ``Config`` is not declared in this scope.
 
@@ -374,6 +386,13 @@ handleResponse : Response -> Str
 **UNDEFINED VARIABLE**
 Nothing is named `toString` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**can_import_exposing_types.md:45:23:45:37:**
+```roc
+        Err(error) => Error.toString(error)
+```
+                      ^^^^^^^^^^^^^^
+
 
 **UNDECLARED TYPE**
 The type ``Value`` is not declared in this scope.

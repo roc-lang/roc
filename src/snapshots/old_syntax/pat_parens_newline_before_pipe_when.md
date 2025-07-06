@@ -10,10 +10,19 @@ is S#
  (H
 )|B->e
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - pat_parens_newline_before_pipe_when.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**pat_parens_newline_before_pipe_when.md:1:1:1:5:**
+```roc
+when 0
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

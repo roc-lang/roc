@@ -11,6 +11,8 @@ y = 6
 
 42
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - record_destructure_def.md:1:2:2:2
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token ** leading comment

@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 Whee (12) (34)
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

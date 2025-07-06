@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 -!h
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - minus_not_h.md:1:1:1:3
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **-!** is not expected in an expression.

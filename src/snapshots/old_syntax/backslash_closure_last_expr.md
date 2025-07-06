@@ -8,10 +8,19 @@ type=expr
 b
 \e->s
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - backslash_closure_last_expr.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `b` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**backslash_closure_last_expr.md:1:1:1:2:**
+```roc
+b
+```
+^
+
 
 # TOKENS
 ~~~zig

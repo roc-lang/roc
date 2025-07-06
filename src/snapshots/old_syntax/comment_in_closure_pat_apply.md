@@ -8,6 +8,8 @@ type=expr
 \L,M#
  Q->f8
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - comment_in_closure_pat_apply.md:1:1:1:3
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **\L** is not expected in an expression.

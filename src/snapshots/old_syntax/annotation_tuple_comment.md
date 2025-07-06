@@ -9,6 +9,8 @@ type=expr
 )n->n 
 0
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

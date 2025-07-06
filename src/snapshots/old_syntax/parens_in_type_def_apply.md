@@ -8,6 +8,8 @@ type=expr
 U (b a):b
 a
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

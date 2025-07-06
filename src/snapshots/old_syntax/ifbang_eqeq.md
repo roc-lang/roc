@@ -7,10 +7,19 @@ type=expr
 ~~~roc
 if!==9
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - ifbang_eqeq.md:1:1:1:4
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `if!` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**ifbang_eqeq.md:1:1:1:4:**
+```roc
+if!==9
+```
+^^^
+
 
 # TOKENS
 ~~~zig

@@ -11,6 +11,8 @@ dbg
 g
  qt
 ~~~
+# EXPECTED
+PARSE ERROR - dbg_stmt_two_exprs.md:3:7:3:7
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_expr_close_round_or_comma`

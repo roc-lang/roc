@@ -10,6 +10,8 @@ import Json.Encode as JE
 
 JE.encode (int 42)
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - inline_import.md:1:1:1:12
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **import Json** is not expected in an expression.

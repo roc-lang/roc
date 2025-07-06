@@ -9,6 +9,8 @@ P:=p#
   implements[]
 n
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

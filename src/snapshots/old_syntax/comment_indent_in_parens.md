@@ -10,6 +10,8 @@ type=expr
 ):gi
 M
 ~~~
+# EXPECTED
+TYPE MISMATCH - comment_indent_in_parens.md:1:1:1:2
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

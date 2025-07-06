@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 J-
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - trailing_operator.md:1:3:1:3
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token  is not expected in an expression.

@@ -10,14 +10,31 @@ x{
 
 }<r
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - compare_apply_record.md:1:1:1:2
+UNDEFINED VARIABLE - compare_apply_record.md:2:1:2:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**compare_apply_record.md:1:1:1:2:**
+```roc
+x>
+```
+^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**compare_apply_record.md:2:1:2:2:**
+```roc
+x{
+```
+^
+
 
 # TOKENS
 ~~~zig

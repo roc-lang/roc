@@ -10,10 +10,19 @@ match list {
     [first, second] => first + second
 }
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - list_destructure_scoping.md:1:7:1:11
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `list` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**list_destructure_scoping.md:1:7:1:11:**
+```roc
+match list {
+```
+      ^^^^
+
 
 # TOKENS
 ~~~zig

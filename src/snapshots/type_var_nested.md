@@ -34,6 +34,8 @@ wrap_in_result = |value| Ok(Ok(value))
 
 main = |_| "done"
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

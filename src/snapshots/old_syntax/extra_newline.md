@@ -11,6 +11,8 @@ if foo then
 else # 3
     c # 4
 ~~~
+# EXPECTED
+PARSE ERROR - extra_newline.md:2:5:2:8
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `no_else`

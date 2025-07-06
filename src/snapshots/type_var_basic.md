@@ -13,6 +13,8 @@ identity = |a| a
 
 main! = |_| {}
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

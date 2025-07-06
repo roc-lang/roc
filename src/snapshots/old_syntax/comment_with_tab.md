@@ -8,6 +8,8 @@ type=expr
 # comment with a 	
 4
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - comment_with_tab.md:1:2:2:2
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token ** comment with a 	

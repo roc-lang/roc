@@ -7,6 +7,8 @@ type=header
 ~~~roc
 app [main!] { pf: platform "../main.roc", other: "../../other/main.roc" }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

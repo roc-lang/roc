@@ -9,6 +9,11 @@ Fli/main.roc" }
 
 Pair(a, b+ : (
 ~~~
+# EXPECTED
+UNCLOSED STRING - fuzz_crash_021.md:1:1:1:5
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_021.md:1:4:1:9
+PARSE ERROR - fuzz_crash_021.md:3:1:3:6
+PARSE ERROR - fuzz_crash_021.md:3:15:3:15
 # PROBLEMS
 **UNCLOSED STRING**
 This string is missing a closing quote.

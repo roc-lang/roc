@@ -12,6 +12,8 @@ MyType := [TagA, TagB]
 value : MyType
 value = MyType.TagA
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

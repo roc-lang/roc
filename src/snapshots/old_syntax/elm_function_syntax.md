@@ -7,10 +7,19 @@ type=expr
 ~~~roc
 f x y = x
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - elm_function_syntax.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `f` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**elm_function_syntax.md:1:1:1:2:**
+```roc
+f x y = x
+```
+^
+
 
 # TOKENS
 ~~~zig

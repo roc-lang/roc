@@ -12,6 +12,8 @@ M#
  
 s
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

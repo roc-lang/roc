@@ -11,6 +11,8 @@ Color := [Red, Blue]
 
 test = Color.Red
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

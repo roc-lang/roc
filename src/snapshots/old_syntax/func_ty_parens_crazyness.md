@@ -9,6 +9,8 @@ N:(((f->(((
 u)))I->*)))
 I
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

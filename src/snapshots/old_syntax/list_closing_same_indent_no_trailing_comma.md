@@ -11,10 +11,19 @@ myList = [
 ]
 42
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - list_closing_same_indent_no_trailing_comma.md:1:1:1:7
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `myList` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**list_closing_same_indent_no_trailing_comma.md:1:1:1:7:**
+```roc
+myList = [
+```
+^^^^^^
+
 
 # TOKENS
 ~~~zig

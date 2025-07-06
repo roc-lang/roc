@@ -10,10 +10,19 @@ O#
  B->when 6 is
 1->O
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - nested_when_comment_in_pat.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**nested_when_comment_in_pat.md:1:1:1:5:**
+```roc
+when 6 is
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

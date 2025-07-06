@@ -15,6 +15,8 @@ some = |a| Maybe.Some(a)
 none : Maybe(a)
 none = Maybe.None
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

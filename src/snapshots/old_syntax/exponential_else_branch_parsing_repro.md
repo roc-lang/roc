@@ -13,10 +13,19 @@ then#f#,w
 t__T+_____^_zese
 else
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - exponential_else_branch_parsing_repro.md:1:1:1:3
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `ee` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**exponential_else_branch_parsing_repro.md:1:1:1:3:**
+```roc
+ee&&i!efs@&exp5/osif.!see&e@&ex/if.!see&&ifss@osif.!see&e@&ex/if.!see&&ifss@5/if.!if.!&ex/if.!see&&ifss@5/if.!is5/if.osif.!see&e@&ex/if.!see&&ifss@5/if.!if.!xpAs5/if.!see&e@&e&&ifss@5/if.!is5/if.osif.!see&e@&ex/if.!see&&ifss@5/if.!if.!xpAs5/if.!see&e@&expos5/if.!if.!poxpos5/if.!if.!pos5/if.!xp#'
+```
+^^
+
 
 # TOKENS
 ~~~zig

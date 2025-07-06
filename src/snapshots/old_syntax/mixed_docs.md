@@ -13,6 +13,8 @@ x = 5
 
 42
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - mixed_docs.md:1:2:2:28
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **## not docs!

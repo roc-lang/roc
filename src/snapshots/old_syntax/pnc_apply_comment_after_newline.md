@@ -8,14 +8,31 @@ type=expr
 i(i,
 )t
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - pnc_apply_comment_after_newline.md:1:1:1:2
+UNDEFINED VARIABLE - pnc_apply_comment_after_newline.md:1:3:1:4
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `i` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**pnc_apply_comment_after_newline.md:1:1:1:2:**
+```roc
+i(i,
+```
+^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `i` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**pnc_apply_comment_after_newline.md:1:3:1:4:**
+```roc
+i(i,
+```
+  ^
+
 
 # TOKENS
 ~~~zig

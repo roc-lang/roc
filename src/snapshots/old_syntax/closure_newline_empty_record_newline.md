@@ -10,6 +10,8 @@ type=expr
 }
 Θ
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - closure_newline_empty_record_newline.md:1:1:1:3
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **\L** is not expected in an expression.

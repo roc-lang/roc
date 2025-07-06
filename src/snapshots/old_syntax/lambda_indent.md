@@ -8,6 +8,8 @@ type=expr
 \x ->
   1
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - lambda_indent.md:1:1:1:3
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **\x** is not expected in an expression.

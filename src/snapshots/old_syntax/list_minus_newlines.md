@@ -8,10 +8,19 @@ type=expr
 [K,
 ]-i
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - list_minus_newlines.md:2:3:2:4
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `i` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**list_minus_newlines.md:2:3:2:4:**
+```roc
+]-i
+```
+  ^
+
 
 # TOKENS
 ~~~zig

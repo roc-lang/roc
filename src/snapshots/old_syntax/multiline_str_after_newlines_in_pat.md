@@ -10,6 +10,8 @@ type=expr
 )"""""":C
 U
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

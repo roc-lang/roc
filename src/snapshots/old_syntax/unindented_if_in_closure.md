@@ -9,6 +9,8 @@ type=expr
 f
 else-9
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - unindented_if_in_closure.md:1:1:1:3
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **\A** is not expected in an expression.

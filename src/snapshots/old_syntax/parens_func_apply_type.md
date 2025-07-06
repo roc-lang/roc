@@ -8,10 +8,19 @@ type=expr
 si:(e)(e->A)
 A
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - parens_func_apply_type.md:1:1:1:3
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `si` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**parens_func_apply_type.md:1:1:1:3:**
+```roc
+si:(e)(e->A)
+```
+^^
+
 
 # TOKENS
 ~~~zig

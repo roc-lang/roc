@@ -10,6 +10,8 @@ if thing then
 else
 something better
 ~~~
+# EXPECTED
+PARSE ERROR - if_outdented_else_branch.md:2:5:2:5
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `no_else`

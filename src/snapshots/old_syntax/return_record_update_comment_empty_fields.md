@@ -9,6 +9,8 @@ return
  {#
 g&}e
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - return_record_update_comment_empty_fields.md:1:1:1:1
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token  is not expected in an expression.

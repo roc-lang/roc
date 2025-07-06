@@ -8,6 +8,9 @@ type=expr
 (!(4
 )4)
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - parens_apply_not_parens.md:1:2:1:4
+PARSE ERROR - parens_apply_not_parens.md:2:1:2:3
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **!(** is not expected in an expression.

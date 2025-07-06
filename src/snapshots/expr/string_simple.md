@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 "hello world"
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

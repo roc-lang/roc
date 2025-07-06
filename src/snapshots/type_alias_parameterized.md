@@ -14,6 +14,8 @@ swapPair = |(x, y)| (y, x)
 
 main! = |_| swapPair(1, 2)
 ~~~
+# EXPECTED
+TYPE MISMATCH - type_alias_parameterized.md:8:13:8:21
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

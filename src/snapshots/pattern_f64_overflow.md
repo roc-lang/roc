@@ -13,10 +13,20 @@ match x {
     value => "other"
 }
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - pattern_f64_overflow.md:1:7:1:8
+UNUSED VARIABLE - pattern_f64_overflow.md:6:5:6:10
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**pattern_f64_overflow.md:1:7:1:8:**
+```roc
+match x {
+```
+      ^
+
 
 **F64 NOT ALLOWED IN PATTERN**
 This floating-point literal cannot be used in a pattern match: `1e100`

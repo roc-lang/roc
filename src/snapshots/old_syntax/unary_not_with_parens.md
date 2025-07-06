@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 !(whee  12 foo)
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - unary_not_with_parens.md:1:1:1:3
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **!(** is not expected in an expression.

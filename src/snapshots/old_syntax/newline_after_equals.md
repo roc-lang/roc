@@ -10,10 +10,19 @@ x =
 
 42
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - newline_after_equals.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**newline_after_equals.md:1:1:1:2:**
+```roc
+x =
+```
+^
+
 
 # TOKENS
 ~~~zig

@@ -9,10 +9,19 @@ e:J
   as H->A
 r
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - as_in_func_type_args.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `e` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**as_in_func_type_args.md:1:1:1:2:**
+```roc
+e:J
+```
+^
+
 
 # TOKENS
 ~~~zig

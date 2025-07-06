@@ -8,6 +8,10 @@ type=file
 me = "luc"
 foo = "hello ${namF
 ~~~
+# EXPECTED
+MISSING HEADER - fuzz_crash_017.md:1:1:1:5
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_017.md:1:4:1:7
+PARSE ERROR - fuzz_crash_017.md:2:7:2:14
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.

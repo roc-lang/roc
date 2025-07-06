@@ -9,10 +9,19 @@ f
 !
 !f
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - f_not_not_f.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `f` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**f_not_not_f.md:1:1:1:2:**
+```roc
+f
+```
+^
+
 
 # TOKENS
 ~~~zig

@@ -7,6 +7,9 @@ type=file
 ~~~roc
 0 (
 ~~~
+# EXPECTED
+MISSING HEADER - fuzz_hang_001.md:1:1:1:4
+PARSE ERROR - fuzz_hang_001.md:1:4:1:4
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.

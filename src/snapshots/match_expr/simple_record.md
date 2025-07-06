@@ -10,10 +10,19 @@ match person {
     { age } => age
 }
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - simple_record.md:1:7:1:13
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `person` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**simple_record.md:1:7:1:13:**
+```roc
+match person {
+```
+      ^^^^^^
+
 
 # TOKENS
 ~~~zig

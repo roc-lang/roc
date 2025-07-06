@@ -9,10 +9,20 @@ match numbers {
     [.., middle, ..] => ... # error, multiple rest patterns not allowed
 }
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - list_patterns_err_multiple_rest.md:1:7:1:14
+UNUSED VARIABLE - list_patterns_err_multiple_rest.md:2:10:2:16
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `numbers` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**list_patterns_err_multiple_rest.md:1:7:1:14:**
+```roc
+match numbers {
+```
+      ^^^^^^^
+
 
 **INVALID PATTERN**
 This pattern contains invalid syntax or uses unsupported features.

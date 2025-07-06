@@ -7,10 +7,19 @@ type=expr
 ~~~roc
 "Hello ${name}!"
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - string_interpolation_simple.md:1:10:1:14
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `name` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**string_interpolation_simple.md:1:10:1:14:**
+```roc
+"Hello ${name}!"
+```
+         ^^^^
+
 
 # TOKENS
 ~~~zig

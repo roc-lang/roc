@@ -7,6 +7,8 @@ type=expr
 ~~~roc
 1 * if Bool.true then 1 else 1
 ~~~
+# EXPECTED
+PARSE ERROR - plus_if.md:1:23:1:29
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `no_else`

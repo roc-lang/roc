@@ -31,10 +31,19 @@ is
     _ ->
         42
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - multiline_binop_when_with_comments.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**multiline_binop_when_with_comments.md:1:1:1:5:**
+```roc
+when
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

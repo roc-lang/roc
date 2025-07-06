@@ -10,6 +10,8 @@ M{s?s{J&
 }}:p
 y
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

@@ -9,14 +9,31 @@ type=expr
 ,p}=5
 Q
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - pat_space_after_comma.md:1:2:2:2
+UNDEFINED VARIABLE - pat_space_after_comma.md:2:2:2:4
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `i` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
+**pat_space_after_comma.md:1:2:2:2:**
+```roc
+{i
+,p}=5
+```
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `p` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**pat_space_after_comma.md:2:2:2:4:**
+```roc
+,p}=5
+```
+ ^^
+
 
 # TOKENS
 ~~~zig

@@ -7,6 +7,8 @@ type=file
 ~~~roc
 package [something, SomeType] { somePkg: "../main.roc", other: "../../other/main.roc" }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

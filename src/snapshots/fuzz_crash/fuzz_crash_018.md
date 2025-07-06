@@ -8,6 +8,10 @@ type=file
 0 b:S
 .R
 ~~~
+# EXPECTED
+MISSING HEADER - fuzz_crash_018.md:1:1:1:4
+UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_018.md:2:1:2:3
+UNDECLARED TYPE - fuzz_crash_018.md:1:5:1:6
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.

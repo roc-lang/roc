@@ -15,10 +15,19 @@ when [] is
   [[A], [..], [a]] -> {}
   [[[], []], [[], x]] -> {}
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - list_patterns.md:1:1:1:5
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `when` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**list_patterns.md:1:1:1:5:**
+```roc
+when [] is
+```
+^^^^
+
 
 # TOKENS
 ~~~zig

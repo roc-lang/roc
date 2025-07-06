@@ -9,10 +9,19 @@ x : { init : {} -> Model, update : Model, Str -> Model, view : Model -> Str }
 
 42
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - record_type_with_function.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**record_type_with_function.md:1:1:1:2:**
+```roc
+x : { init : {} -> Model, update : Model, Str -> Model, view : Model -> Str }
+```
+^
+
 
 # TOKENS
 ~~~zig

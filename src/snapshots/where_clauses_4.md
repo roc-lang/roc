@@ -12,6 +12,8 @@ import Decode exposing [Decode]
 decodeThings : List(List(U8)) -> List(a)
 	where a.Decode
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS

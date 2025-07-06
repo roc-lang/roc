@@ -10,10 +10,19 @@ x = foo {
 }
 x
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - outdented_record.md:1:1:1:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `x` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**outdented_record.md:1:1:1:2:**
+```roc
+x = foo {
+```
+^
+
 
 # TOKENS
 ~~~zig

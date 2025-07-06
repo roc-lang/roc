@@ -7,10 +7,19 @@ type=expr
 ~~~roc
 (whee)
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - parenthetical_var.md:1:2:1:6
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `whee` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**parenthetical_var.md:1:2:1:6:**
+```roc
+(whee)
+```
+ ^^^^
+
 
 # TOKENS
 ~~~zig

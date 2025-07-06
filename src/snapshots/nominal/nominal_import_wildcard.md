@@ -18,6 +18,11 @@ blue = Blue
 green : Color
 green = Green
 ~~~
+# EXPECTED
+UNEXPECTED TOKEN IN EXPRESSION - nominal_import_wildcard.md:3:13:3:13
+UNDECLARED TYPE - nominal_import_wildcard.md:5:7:5:12
+UNDECLARED TYPE - nominal_import_wildcard.md:8:8:8:13
+UNDECLARED TYPE - nominal_import_wildcard.md:11:9:11:14
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token  is not expected in an expression.

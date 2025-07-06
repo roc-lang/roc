@@ -8,10 +8,19 @@ type=expr
 {#
 a}
 ~~~
+# EXPECTED
+UNDEFINED VARIABLE - record_comment_newline_field.md:2:1:2:2
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `a` in this scope.
 Is there an `import` or `exposing` missing up-top?
+
+**record_comment_newline_field.md:2:1:2:2:**
+```roc
+a}
+```
+^
+
 
 # TOKENS
 ~~~zig

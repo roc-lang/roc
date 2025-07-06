@@ -9,6 +9,8 @@ match [] {
     empty => { ints: [1, 2, 3], strs: ["a", "b", "c"], empty: empty }
 }
 ~~~
+# EXPECTED
+NIL
 # PROBLEMS
 NIL
 # TOKENS
