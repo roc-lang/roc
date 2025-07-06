@@ -15,31 +15,27 @@ foo = Json.parse(data)
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - inline_ingested_file.md:1:1:1:9
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **import "** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**inline_ingested_file.md:1:1:1:9:**
-```roc
-import "users.json" as data : Str
-```
-^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
-KwImport(1:1-1:7),StringStart(1:8-1:9),StringPart(1:9-1:19),StringEnd(1:19-1:20),KwAs(1:21-1:23),LowerIdent(1:24-1:28),OpColon(1:29-1:30),UpperIdent(1:31-1:34),Newline(1:1-1:1),
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(3:1-3:10),LowerIdent(3:11-3:15),EndOfFile(3:15-3:15),
+KwImport(3:1-3:7),StringStart(3:8-3:9),StringPart(3:9-3:19),StringEnd(3:19-3:20),KwAs(3:21-3:23),LowerIdent(3:24-3:28),OpColon(3:29-3:30),UpperIdent(3:31-3:34),Newline(1:1-1:1),
+KwImport(4:1-4:7),UpperIdent(4:8-4:12),Newline(1:1-1:1),
+Newline(1:1-1:1),
+LowerIdent(6:1-6:4),OpAssign(6:5-6:6),UpperIdent(6:7-6:11),NoSpaceDotLowerIdent(6:11-6:17),NoSpaceOpenRound(6:17-6:18),LowerIdent(6:18-6:22),CloseRound(6:22-6:23),EndOfFile(6:23-6:23),
 ~~~
 # PARSE
 ~~~clojure
-(e-malformed @1.1-1.9 (reason "expr_unexpected_token"))
+(file @1.1-6.23
+	(module @1.1-1.13
+		(exposes @1.8-1.13
+			(exposed-lower-ident (text "foo"))))
+	(statements))
 ~~~
 # FORMATTED
 ~~~roc
-
+module [foo]
 ~~~
 # CANONICALIZE
 ~~~clojure

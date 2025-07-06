@@ -21,7 +21,7 @@ A parsing error occurred: `invalid_type_arg`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**underscore_in_assignment_pattern.md:5:10:5:12:**
+**underscore_type_decl.md:5:10:5:12:**
 ```roc
 Pair1(x, _) = Pair(0, 1)
 ```
@@ -45,7 +45,7 @@ Other valid examples:
     `Maybe(List(U64))`
 
 Here is the problematic code:
-**underscore_in_assignment_pattern.md:5:1:5:7:**
+**underscore_type_decl.md:5:1:5:7:**
 ```roc
 Pair1(x, _) = Pair(0, 1)
 ```
@@ -57,7 +57,7 @@ A parsing error occurred: `invalid_type_arg`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**underscore_in_assignment_pattern.md:5:20:5:22:**
+**underscore_type_decl.md:5:20:5:22:**
 ```roc
 Pair1(x, _) = Pair(0, 1)
 ```
@@ -69,7 +69,7 @@ A parsing error occurred: `invalid_type_arg`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**underscore_in_assignment_pattern.md:5:23:5:25:**
+**underscore_type_decl.md:5:23:5:25:**
 ```roc
 Pair1(x, _) = Pair(0, 1)
 ```
@@ -93,7 +93,7 @@ Other valid examples:
     `Maybe(List(U64))`
 
 Here is the problematic code:
-**underscore_in_assignment_pattern.md:5:15:5:20:**
+**underscore_type_decl.md:5:15:5:20:**
 ```roc
 Pair1(x, _) = Pair(0, 1)
 ```
@@ -105,7 +105,7 @@ The token **_,** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**underscore_in_assignment_pattern.md:6:7:6:9:**
+**underscore_type_decl.md:6:7:6:9:**
 ```roc
 Pair2(_, y) = Pair(0, 1)
 ```
@@ -117,7 +117,7 @@ The token **= Pair** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**underscore_in_assignment_pattern.md:6:13:6:19:**
+**underscore_type_decl.md:6:13:6:19:**
 ```roc
 Pair2(_, y) = Pair(0, 1)
 ```
@@ -129,7 +129,7 @@ A parsing error occurred: `invalid_type_arg`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**underscore_in_assignment_pattern.md:6:20:6:22:**
+**underscore_type_decl.md:6:20:6:22:**
 ```roc
 Pair2(_, y) = Pair(0, 1)
 ```
@@ -141,7 +141,7 @@ A parsing error occurred: `invalid_type_arg`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**underscore_in_assignment_pattern.md:6:23:6:25:**
+**underscore_type_decl.md:6:23:6:25:**
 ```roc
 Pair2(_, y) = Pair(0, 1)
 ```
@@ -165,7 +165,7 @@ Other valid examples:
     `Maybe(List(U64))`
 
 Here is the problematic code:
-**underscore_in_assignment_pattern.md:6:15:6:20:**
+**underscore_type_decl.md:6:15:6:20:**
 ```roc
 Pair2(_, y) = Pair(0, 1)
 ```
@@ -177,7 +177,7 @@ The token **_,** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**underscore_in_assignment_pattern.md:7:7:7:9:**
+**underscore_type_decl.md:7:7:7:9:**
 ```roc
 Pair3(_, _) = Pair(0, 1)
 ```
@@ -189,7 +189,7 @@ The token **_)** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**underscore_in_assignment_pattern.md:7:10:7:12:**
+**underscore_type_decl.md:7:10:7:12:**
 ```roc
 Pair3(_, _) = Pair(0, 1)
 ```
@@ -201,7 +201,7 @@ The token **= Pair** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
 Here is the problematic code:
-**underscore_in_assignment_pattern.md:7:13:7:19:**
+**underscore_type_decl.md:7:13:7:19:**
 ```roc
 Pair3(_, _) = Pair(0, 1)
 ```
@@ -213,7 +213,7 @@ A parsing error occurred: `invalid_type_arg`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**underscore_in_assignment_pattern.md:7:20:7:22:**
+**underscore_type_decl.md:7:20:7:22:**
 ```roc
 Pair3(_, _) = Pair(0, 1)
 ```
@@ -225,7 +225,7 @@ A parsing error occurred: `invalid_type_arg`
 This is an unexpected parsing error. Please check your syntax.
 
 Here is the problematic code:
-**underscore_in_assignment_pattern.md:7:23:7:25:**
+**underscore_type_decl.md:7:23:7:25:**
 ```roc
 Pair3(_, _) = Pair(0, 1)
 ```
@@ -249,7 +249,7 @@ Other valid examples:
     `Maybe(List(U64))`
 
 Here is the problematic code:
-**underscore_in_assignment_pattern.md:7:15:7:20:**
+**underscore_type_decl.md:7:15:7:20:**
 ```roc
 Pair3(_, _) = Pair(0, 1)
 ```

@@ -17,15 +17,14 @@ Expressions can be identifiers, literals, function calls, or operators.
 Here is the problematic code:
 **not_tag.md:1:1:1:3:**
 ```roc
-!(C
+!(C(2))
 ```
 ^^
 
 
 # TOKENS
 ~~~zig
-OpBang(1:1-1:2),NoSpaceOpenRound(1:2-1:3),UpperIdent(1:3-1:4),Newline(1:1-1:1),
-Int(2:1-2:2),CloseRound(2:2-2:3),EndOfFile(2:3-2:3),
+OpBang(1:1-1:2),NoSpaceOpenRound(1:2-1:3),UpperIdent(1:3-1:4),NoSpaceOpenRound(1:4-1:5),Int(1:5-1:6),CloseRound(1:6-1:7),CloseRound(1:7-1:8),EndOfFile(1:8-1:8),
 ~~~
 # PARSE
 ~~~clojure
