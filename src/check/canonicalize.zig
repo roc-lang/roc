@@ -27,13 +27,13 @@ var_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
 /// Tracks which pattern indices have been used/referenced
 used_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
 /// Scratch type variables
-scratch_vars: std.ArrayListUnmanaged(TypeVar),
+scratch_vars: base.Scratch(TypeVar),
 /// Scratch ident
-scratch_idents: std.ArrayListUnmanaged(Ident.Idx),
+scratch_idents: base.Scratch(Ident.Idx),
 /// Scratch ident
-scratch_record_fields: std.ArrayListUnmanaged(types.RecordField),
+scratch_record_fields: base.Scratch(types.RecordField),
 /// Scratch ident
-scratch_seen_record_fields: std.ArrayListUnmanaged(SeenRecordField),
+scratch_seen_record_fields: base.Scratch(SeenRecordField),
 
 const Ident = base.Ident;
 const Region = base.Region;
@@ -113,10 +113,10 @@ pub fn init(self: *CIR, parse_ir: *AST) std.mem.Allocator.Error!Self {
         .var_function_regions = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, Region){},
         .var_patterns = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void){},
         .used_patterns = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void){},
-        .scratch_vars = std.ArrayListUnmanaged(TypeVar){},
-        .scratch_idents = std.ArrayListUnmanaged(Ident.Idx){},
-        .scratch_record_fields = std.ArrayListUnmanaged(types.RecordField){},
-        .scratch_seen_record_fields = std.ArrayListUnmanaged(SeenRecordField){},
+        .scratch_vars = base.Scratch(TypeVar).init(gpa),
+        .scratch_idents = base.Scratch(Ident.Idx).init(gpa),
+        .scratch_record_fields = base.Scratch(types.RecordField).init(gpa),
+        .scratch_seen_record_fields = base.Scratch(SeenRecordField).init(gpa),
     };
 
     // Top-level scope is not a function boundary
@@ -378,12 +378,12 @@ pub fn canonicalizeFile(
                 };
 
                 // Create types for each arg annotation
-                const scratch_anno_start = self.scratch_vars.items.len;
+                const scratch_anno_start = self.scratch_vars.top();
                 for (self.can_ir.store.sliceTypeAnnos(header.args)) |arg_anno_idx| {
                     const arg_anno_var = try self.canonicalizeTypeAnnoToTypeVar(arg_anno_idx);
-                    try self.scratch_vars.append(self.can_ir.env.gpa, arg_anno_var);
+                    self.scratch_vars.append(self.can_ir.env.gpa, arg_anno_var);
                 }
-                const arg_anno_slice = self.scratch_vars.items[scratch_anno_start..self.scratch_vars.items.len];
+                const arg_anno_slice = self.scratch_vars.items.items[scratch_anno_start..self.scratch_vars.top()];
 
                 // The identified of the type
                 const type_ident = types.TypeIdent{ .ident_idx = header.name };
@@ -450,7 +450,7 @@ pub fn canonicalizeFile(
                 }
 
                 // Shrink the scratch var buffer now that our work is done
-                self.scratch_vars.shrinkRetainingCapacity(scratch_anno_start);
+                self.scratch_vars.clearFrom(scratch_anno_start);
 
                 // Update the scope to point to the real statement instead of the placeholder
                 self.scopeUpdateTypeDecl(header.name, type_decl_stmt_idx);
@@ -566,7 +566,7 @@ pub fn canonicalizeFile(
                 };
 
                 // First, make the top of our scratch list
-                const type_vars_top: u32 = @intCast(self.scratch_idents.items.len);
+                const type_vars_top: u32 = @intCast(self.scratch_idents.top());
 
                 // Extract type variables from the AST annotation
                 self.extractTypeVarIdentsFromASTAnno(ta.anno, type_vars_top);
@@ -576,8 +576,8 @@ pub fn canonicalizeFile(
                 defer self.scopeExit(self.can_ir.env.gpa) catch {};
 
                 // Introduce type variables into scope (if we have any)
-                if (self.scratch_idents.items.len > type_vars_top) {
-                    for (self.scratch_idents.items[type_vars_top..]) |type_var| {
+                if (self.scratch_idents.top() > type_vars_top) {
+                    for (self.scratch_idents.items.items[type_vars_top..]) |type_var| {
                         // Create a dummy type annotation for the type variable
                         const dummy_anno = self.can_ir.store.addTypeAnno(.{
                             .ty_var = .{
@@ -588,7 +588,7 @@ pub fn canonicalizeFile(
                         self.scopeIntroduceTypeVar(type_var, dummy_anno);
                     }
                     // Shrink the scratch vars list to the original size
-                    self.scratch_idents.shrinkRetainingCapacity(type_vars_top);
+                    self.scratch_idents.clearFrom(type_vars_top);
                 }
 
                 // Now canonicalize the annotation with type variables in scope
@@ -1777,7 +1777,7 @@ pub fn canonicalizeExpr(
             const scratch_top = self.can_ir.store.scratch_record_fields.top();
 
             // Track field names to detect duplicates
-            const seen_fields_top = self.scratch_seen_record_fields.items.len;
+            const seen_fields_top = self.scratch_seen_record_fields.top();
 
             // Iterate over the record fields, canonicalizing each one
             // Then append the result to the scratch list
@@ -1790,7 +1790,7 @@ pub fn canonicalizeExpr(
 
                     // Check for duplicate field names
                     var found_duplicate = false;
-                    for (self.scratch_seen_record_fields.items[seen_fields_top..]) |seen_field| {
+                    for (self.scratch_seen_record_fields.items.items[seen_fields_top..]) |seen_field| {
                         if (self.can_ir.env.idents.identsHaveSameText(field_name_ident, seen_field.ident)) {
                             // Found a duplicate - add diagnostic
                             const diagnostic = CIR.Diagnostic{
@@ -1808,7 +1808,7 @@ pub fn canonicalizeExpr(
 
                     if (!found_duplicate) {
                         // First occurrence of this field name
-                        try self.scratch_seen_record_fields.append(self.can_ir.env.gpa, SeenRecordField{
+                        self.scratch_seen_record_fields.append(self.can_ir.env.gpa, SeenRecordField{
                             .ident = field_name_ident,
                             .region = field_name_region,
                         });
@@ -1829,7 +1829,7 @@ pub fn canonicalizeExpr(
             }
 
             // Shink the scratch array to it's original size
-            self.scratch_seen_record_fields.shrinkRetainingCapacity(seen_fields_top);
+            self.scratch_seen_record_fields.clearFrom(seen_fields_top);
 
             // Create span of the new scratch record fields
             const fields_span = self.can_ir.store.recordFieldSpanFrom(scratch_top);
@@ -1846,11 +1846,11 @@ pub fn canonicalizeExpr(
             const cir_fields = self.can_ir.store.sliceRecordFields(fields_span);
 
             // Create fresh type variables for each field
-            const record_fields_top = self.scratch_record_fields.items.len;
+            const record_fields_top = self.scratch_record_fields.top();
 
             for (cir_fields) |cir_field_idx| {
                 const cir_field = self.can_ir.store.getRecordField(cir_field_idx);
-                try self.scratch_record_fields.append(self.can_ir.env.gpa, types.RecordField{
+                self.scratch_record_fields.append(self.can_ir.env.gpa, types.RecordField{
                     .name = cir_field.name,
                     .var_ = @enumFromInt(@intFromEnum(cir_field.value)),
                 });
@@ -1858,11 +1858,11 @@ pub fn canonicalizeExpr(
 
             // Create the record type structure
             const type_fields_range = self.can_ir.env.types.appendRecordFields(
-                self.scratch_record_fields.items[record_fields_top..],
+                self.scratch_record_fields.items.items[record_fields_top..],
             );
 
             // Shink the scratch array to it's original size
-            self.scratch_record_fields.shrinkRetainingCapacity(record_fields_top);
+            self.scratch_record_fields.clearFrom(record_fields_top);
 
             _ = self.can_ir.setTypeVarAtExpr(
                 expr_idx,
@@ -3840,7 +3840,7 @@ pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.A
             };
 
             // Introduce type variables into scope
-            const type_vars_top: u32 = @intCast(self.scratch_idents.items.len);
+            const type_vars_top: u32 = @intCast(self.scratch_idents.top());
 
             // Extract type variables from the AST annotation
             self.extractTypeVarIdentsFromASTAnno(ta.anno, type_vars_top);
@@ -3850,8 +3850,8 @@ pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.A
             defer self.scopeExit(self.can_ir.env.gpa) catch {};
 
             // Introduce type variables into scope (if we have any)
-            if (self.scratch_idents.items.len > type_vars_top) {
-                for (self.scratch_idents.items[type_vars_top..]) |type_var| {
+            if (self.scratch_idents.top() > type_vars_top) {
+                for (self.scratch_idents.items.items[type_vars_top..]) |type_var| {
                     // Get the proper region for this type variable from the AST
                     const type_var_region = self.getTypeVarRegionFromAST(ta.anno, type_var) orelse region;
                     const type_var_anno = self.can_ir.store.addTypeAnno(.{ .ty_var = .{
@@ -3861,7 +3861,7 @@ pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.A
                     self.scopeIntroduceTypeVar(type_var, type_var_anno);
                 }
                 // Shrink the scratch vars list to the original size
-                self.scratch_idents.shrinkRetainingCapacity(type_vars_top);
+                self.scratch_idents.clearFrom(type_vars_top);
             }
 
             // Now canonicalize the annotation with type variables in scope
@@ -4112,10 +4112,10 @@ fn extractTypeVarIdentsFromASTAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, iden
         .ty_var => |ty_var| {
             if (self.parse_ir.tokens.resolveIdentifier(ty_var.tok)) |ident| {
                 // Check if we already have this type variable
-                for (self.scratch_idents.items[idents_start_idx..]) |existing| {
+                for (self.scratch_idents.items.items[idents_start_idx..]) |existing| {
                     if (existing.idx == ident.idx) return; // Already added
                 }
-                _ = self.scratch_idents.append(self.can_ir.env.gpa, ident) catch |err| exitOnOom(err);
+                _ = self.scratch_idents.append(self.can_ir.env.gpa, ident);
             }
         },
         .apply => |apply| {
@@ -4916,25 +4916,25 @@ fn canonicalizeFunctionType(self: *Self, func: CIR.TypeAnno.Func, parent_node_id
     // Collect canonicalized argument type variables
 
     // For each argument, canonicalize its type and collect the type var
-    const arg_vars_top = self.scratch_vars.items.len;
+    const arg_vars_top = self.scratch_vars.top();
     for (args_slice) |arg_anno_idx| {
         const arg_type_var = try self.canonicalizeTypeAnnoToTypeVar(arg_anno_idx);
-        try self.scratch_vars.append(self.can_ir.env.gpa, arg_type_var);
+        self.scratch_vars.append(self.can_ir.env.gpa, arg_type_var);
     }
-    const arg_vars_end = self.scratch_vars.items.len;
+    const arg_vars_end = self.scratch_vars.top();
 
     // Canonicalize return type
     const ret_type_var = try self.canonicalizeTypeAnnoToTypeVar(func.ret);
 
     // Create the appropriate function type based on effectfulness
-    const arg_vars = self.scratch_vars.items[arg_vars_top..arg_vars_end];
+    const arg_vars = self.scratch_vars.items.items[arg_vars_top..arg_vars_end];
     const func_content = if (func.effectful)
         self.can_ir.env.types.mkFuncEffectful(arg_vars, ret_type_var)
     else
         self.can_ir.env.types.mkFuncPure(arg_vars, ret_type_var);
 
     // Shink the scratch array to it's original size
-    self.scratch_vars.shrinkRetainingCapacity(arg_vars_top);
+    self.scratch_vars.clearFrom(arg_vars_top);
 
     // Create and return the function type variable
     return self.can_ir.pushTypeVar(
@@ -4950,17 +4950,17 @@ fn canonicalizeTupleType(self: *Self, tuple: CIR.TypeAnno.Tuple, parent_node_idx
     defer trace.end();
 
     // Canonicalized each tuple element
-    const scratch_elems_start = self.scratch_vars.items.len;
+    const scratch_elems_start = self.scratch_vars.top();
     for (self.can_ir.store.sliceTypeAnnos(tuple.elems)) |tuple_elem_anno_idx| {
         const elem_var = try self.canonicalizeTypeAnnoToTypeVar(tuple_elem_anno_idx);
-        _ = try self.scratch_vars.append(self.can_ir.env.gpa, elem_var);
+        _ = self.scratch_vars.append(self.can_ir.env.gpa, elem_var);
     }
     const elem_vars_range = self.can_ir.env.types.appendTupleElems(
-        self.scratch_vars.items[scratch_elems_start..],
+        self.scratch_vars.items.items[scratch_elems_start..],
     );
 
     // Shink the scratch array to it's original size
-    self.scratch_vars.shrinkRetainingCapacity(scratch_elems_start);
+    self.scratch_vars.clearFrom(scratch_elems_start);
 
     return try self.can_ir.pushTypeVar(
         .{ .structure = .{ .tuple = .{ .elems = elem_vars_range } } },
@@ -4975,7 +4975,7 @@ fn canonicalizeRecordType(self: *Self, record: CIR.TypeAnno.Record, parent_node_
     defer trace.end();
 
     // Create fresh type variables for each field
-    const record_fields_top = self.scratch_record_fields.items.len;
+    const record_fields_top = self.scratch_record_fields.top();
 
     // Process each field in the record type annotation
     for (self.can_ir.store.sliceAnnoRecordFields(record.fields)) |field_idx| {
@@ -4984,18 +4984,18 @@ fn canonicalizeRecordType(self: *Self, record: CIR.TypeAnno.Record, parent_node_
         // Canonicalize the field's type annotation
         const field_type_var = try self.canonicalizeTypeAnnoToTypeVar(field.ty);
 
-        try self.scratch_record_fields.append(self.can_ir.env.gpa, types.RecordField{
+        self.scratch_record_fields.append(self.can_ir.env.gpa, types.RecordField{
             .name = field.name,
             .var_ = field_type_var,
         });
     }
 
     // Create the record type structure
-    const type_fields_range = self.can_ir.env.types.appendRecordFields(self.scratch_record_fields.items[record_fields_top..]);
+    const type_fields_range = self.can_ir.env.types.appendRecordFields(self.scratch_record_fields.items.items[record_fields_top..]);
     const ext_var = self.can_ir.pushTypeVar(.{ .structure = .empty_record }, parent_node_idx, region) catch |err| exitOnOom(err);
 
     // Shink the scratch array to it's original size
-    self.scratch_record_fields.shrinkRetainingCapacity(record_fields_top);
+    self.scratch_record_fields.clearFrom(record_fields_top);
 
     return self.can_ir.pushTypeVar(
         .{ .structure = .{ .record = .{ .fields = type_fields_range, .ext = ext_var } } },
