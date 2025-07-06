@@ -26,8 +26,12 @@ var_function_regions: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, Region),
 var_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
 /// Tracks which pattern indices have been used/referenced
 used_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
-/// Keep track of pending annotation
+/// Scratch type variables
 scratch_vars: std.ArrayListUnmanaged(TypeVar),
+/// Scratch ident
+scratch_idents: std.ArrayListUnmanaged(Ident.Idx),
+/// Scratch ident
+scratch_record_fields: std.ArrayListUnmanaged(types.RecordField),
 
 const Ident = base.Ident;
 const Region = base.Region;
@@ -87,6 +91,8 @@ pub fn deinit(
     self.var_patterns.deinit(gpa);
     self.used_patterns.deinit(gpa);
     self.scratch_vars.deinit(gpa);
+    self.scratch_idents.deinit(gpa);
+    self.scratch_record_fields.deinit(gpa);
 }
 
 pub fn init(self: *CIR, parse_ir: *AST) std.mem.Allocator.Error!Self {
@@ -102,6 +108,8 @@ pub fn init(self: *CIR, parse_ir: *AST) std.mem.Allocator.Error!Self {
         .var_patterns = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void){},
         .used_patterns = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void){},
         .scratch_vars = std.ArrayListUnmanaged(TypeVar){},
+        .scratch_idents = std.ArrayListUnmanaged(Ident.Idx){},
+        .scratch_record_fields = std.ArrayListUnmanaged(types.RecordField){},
     };
 
     // Top-level scope is not a function boundary
@@ -550,27 +558,30 @@ pub fn canonicalizeFile(
                     continue;
                 };
 
-                // First, extract all type variables from the AST annotation
-                var type_vars = std.ArrayList(Ident.Idx).init(self.can_ir.env.gpa);
-                defer type_vars.deinit();
+                // First, make the top of our scratch list
+                const type_vars_top: u32 = @intCast(self.scratch_idents.items.len);
 
                 // Extract type variables from the AST annotation
-                self.extractTypeVarsFromASTAnno(ta.anno, &type_vars);
+                self.extractTypeVarIdentsFromASTAnno(ta.anno, type_vars_top);
 
                 // Enter a new scope for type variables
                 self.scopeEnter(self.can_ir.env.gpa, false);
                 defer self.scopeExit(self.can_ir.env.gpa) catch {};
 
-                // Introduce type variables into scope
-                for (type_vars.items) |type_var| {
-                    // Create a dummy type annotation for the type variable
-                    const dummy_anno = self.can_ir.store.addTypeAnno(.{
-                        .ty_var = .{
-                            .name = type_var,
-                            .region = region, // TODO we may want to use the region for the type_var instead of the whole annotation
-                        },
-                    });
-                    self.scopeIntroduceTypeVar(type_var, dummy_anno);
+                // Introduce type variables into scope (if we have any)
+                if (self.scratch_idents.items.len > type_vars_top) {
+                    for (self.scratch_idents.items[type_vars_top..]) |type_var| {
+                        // Create a dummy type annotation for the type variable
+                        const dummy_anno = self.can_ir.store.addTypeAnno(.{
+                            .ty_var = .{
+                                .name = type_var,
+                                .region = region, // TODO we may want to use the region for the type_var instead of the whole annotation
+                            },
+                        });
+                        self.scopeIntroduceTypeVar(type_var, dummy_anno);
+                    }
+                    // Reset the scratch vars list to the original size
+                    self.scratch_idents.shrinkRetainingCapacity(type_vars_top);
                 }
 
                 // Now canonicalize the annotation with type variables in scope
@@ -3815,26 +3826,29 @@ pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.A
                 } });
             };
 
-            // First, extract all type variables from the AST annotation
-            var type_vars = std.ArrayList(Ident.Idx).init(self.can_ir.env.gpa);
-            defer type_vars.deinit();
+            // Introduce type variables into scope
+            const type_vars_top: u32 = @intCast(self.scratch_idents.items.len);
 
             // Extract type variables from the AST annotation
-            self.extractTypeVarsFromASTAnno(ta.anno, &type_vars);
+            self.extractTypeVarIdentsFromASTAnno(ta.anno, type_vars_top);
 
             // Enter a new scope for type variables
             self.scopeEnter(self.can_ir.env.gpa, false);
             defer self.scopeExit(self.can_ir.env.gpa) catch {};
 
-            // Introduce type variables into scope
-            for (type_vars.items) |type_var| {
-                // Get the proper region for this type variable from the AST
-                const type_var_region = self.getTypeVarRegionFromAST(ta.anno, type_var) orelse region;
-                const type_var_anno = self.can_ir.store.addTypeAnno(.{ .ty_var = .{
-                    .name = type_var,
-                    .region = type_var_region,
-                } });
-                self.scopeIntroduceTypeVar(type_var, type_var_anno);
+            // Introduce type variables into scope (if we have any)
+            if (self.scratch_idents.items.len > type_vars_top) {
+                for (self.scratch_idents.items[type_vars_top..]) |type_var| {
+                    // Get the proper region for this type variable from the AST
+                    const type_var_region = self.getTypeVarRegionFromAST(ta.anno, type_var) orelse region;
+                    const type_var_anno = self.can_ir.store.addTypeAnno(.{ .ty_var = .{
+                        .name = type_var,
+                        .region = type_var_region,
+                    } });
+                    self.scopeIntroduceTypeVar(type_var, type_var_anno);
+                }
+                // Reset the scratch vars list to the original size
+                self.scratch_idents.shrinkRetainingCapacity(type_vars_top);
             }
 
             // Now canonicalize the annotation with type variables in scope
@@ -4079,35 +4093,36 @@ fn introduceTypeParametersFromHeader(self: *Self, header_idx: CIR.TypeHeader.Idx
     }
 }
 
-fn extractTypeVarsFromASTAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, vars: *std.ArrayList(Ident.Idx)) void {
+// Recursively unwrap an annotation, getting all type var idents
+fn extractTypeVarIdentsFromASTAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, idents_start_idx: u32) void {
     switch (self.parse_ir.store.getTypeAnno(anno_idx)) {
         .ty_var => |ty_var| {
             if (self.parse_ir.tokens.resolveIdentifier(ty_var.tok)) |ident| {
                 // Check if we already have this type variable
-                for (vars.items) |existing| {
+                for (self.scratch_idents.items[idents_start_idx..]) |existing| {
                     if (existing.idx == ident.idx) return; // Already added
                 }
-                vars.append(ident) catch |err| exitOnOom(err);
+                _ = self.scratch_idents.append(self.can_ir.env.gpa, ident) catch |err| exitOnOom(err);
             }
         },
         .apply => |apply| {
             for (self.parse_ir.store.typeAnnoSlice(apply.args)) |arg_idx| {
-                self.extractTypeVarsFromASTAnno(arg_idx, vars);
+                self.extractTypeVarIdentsFromASTAnno(arg_idx, idents_start_idx);
             }
         },
         .@"fn" => |fn_anno| {
             for (self.parse_ir.store.typeAnnoSlice(fn_anno.args)) |arg_idx| {
-                self.extractTypeVarsFromASTAnno(arg_idx, vars);
+                self.extractTypeVarIdentsFromASTAnno(arg_idx, idents_start_idx);
             }
-            self.extractTypeVarsFromASTAnno(fn_anno.ret, vars);
+            self.extractTypeVarIdentsFromASTAnno(fn_anno.ret, idents_start_idx);
         },
         .tuple => |tuple| {
             for (self.parse_ir.store.typeAnnoSlice(tuple.annos)) |elem_idx| {
-                self.extractTypeVarsFromASTAnno(elem_idx, vars);
+                self.extractTypeVarIdentsFromASTAnno(elem_idx, idents_start_idx);
             }
         },
         .parens => |parens| {
-            self.extractTypeVarsFromASTAnno(parens.anno, vars);
+            self.extractTypeVarIdentsFromASTAnno(parens.anno, idents_start_idx);
         },
         .record => |record| {
             // Extract type variables from record field types
@@ -4115,7 +4130,7 @@ fn extractTypeVarsFromASTAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, vars: *st
                 const field = self.parse_ir.store.getAnnoRecordField(field_idx) catch |err| switch (err) {
                     error.MalformedNode => continue,
                 };
-                self.extractTypeVarsFromASTAnno(field.ty, vars);
+                self.extractTypeVarIdentsFromASTAnno(field.ty, idents_start_idx);
             }
         },
         .ty, .underscore, .mod_ty, .tag_union, .malformed => {
@@ -4918,6 +4933,7 @@ fn canonicalizeTupleType(self: *Self, tuple: CIR.TypeAnno.Tuple, parent_node_idx
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    // Canonicalized each tuple element
     const scratch_elems_start = self.scratch_vars.items.len;
     for (self.can_ir.store.sliceTypeAnnos(tuple.elems)) |tuple_elem_anno_idx| {
         const elem_var = try self.canonicalizeTypeAnnoToTypeVar(tuple_elem_anno_idx);
