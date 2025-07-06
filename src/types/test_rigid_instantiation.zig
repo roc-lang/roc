@@ -23,7 +23,7 @@ test "rigid variables need instantiation - polymorphic identity function" {
     try std.testing.expect(store.needsInstantiation(func_var));
 
     // First call site: instantiate for use with integers
-    const inst1_var = try instantiate.instantiateVar(&store, func_var, std.testing.allocator);
+    const inst1_var = try instantiate.instantiateVarAlloc(&store, func_var, std.testing.allocator);
 
     // The instantiated function should still need instantiation
     // (because it has fresh type variables that could be instantiated again)
@@ -33,7 +33,7 @@ test "rigid variables need instantiation - polymorphic identity function" {
     try std.testing.expect(inst1_var != func_var);
 
     // Second call site: instantiate again for use with strings
-    const inst2_var = try instantiate.instantiateVar(&store, func_var, std.testing.allocator);
+    const inst2_var = try instantiate.instantiateVarAlloc(&store, func_var, std.testing.allocator);
 
     // Should also need instantiation
     try std.testing.expect(store.needsInstantiation(inst2_var));
@@ -79,11 +79,11 @@ test "rigid variables need instantiation - multiple type parameters" {
     try std.testing.expect(store.needsInstantiation(func_var));
 
     // Instantiate for first use
-    const inst1_var = try instantiate.instantiateVar(&store, func_var, std.testing.allocator);
+    const inst1_var = try instantiate.instantiateVarAlloc(&store, func_var, std.testing.allocator);
     try std.testing.expect(inst1_var != func_var);
 
     // Instantiate for second use
-    const inst2_var = try instantiate.instantiateVar(&store, func_var, std.testing.allocator);
+    const inst2_var = try instantiate.instantiateVarAlloc(&store, func_var, std.testing.allocator);
     try std.testing.expect(inst2_var != func_var);
     try std.testing.expect(inst2_var != inst1_var);
 }

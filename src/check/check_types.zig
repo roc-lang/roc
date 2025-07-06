@@ -81,14 +81,9 @@ pub fn unify(self: *Self, a: Var, b: Var) unifier.Result {
 }
 
 /// Instantiate a variable, writing su
-pub fn instantiateVar(
-    self: *Self,
-    var_to_instantiate: Var,
-    parent_node_idx: CIR.Node.Idx,
-    region: base.Region,
-) std.mem.Allocator.Error!Var {
+pub fn instantiateVar(self: *Self, var_to_instantiate: Var, parent_node_idx: CIR.Node.Idx) std.mem.Allocator.Error!Var {
     self.instantiate_subs.clearRetainingCapacity();
-    const instantiated_var = try instantiate.instantiateVarWithSubst(self.types, var_to_instantiate, &self.instantiate_subs);
+    const instantiated_var = try instantiate.instantiateVar(self.types, var_to_instantiate, &self.instantiate_subs);
 
     // If we had to insert any new type variables, ensure that we
     // have corresponding CIR nodes for them. This is essential for
@@ -104,8 +99,8 @@ pub fn instantiateVar(
         }
         try self.can_ir.store.fillInTypeVarSlotsThru(
             CIR.nodeIdxFrom(cur_max),
-            CIR.nodeIdxFrom(parent_node_idx),
-            region,
+            parent_node_idx,
+            self.can_ir.store.getRegionAt(parent_node_idx),
         );
     }
 
@@ -287,7 +282,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                         .fn_effectful => |_| {
                             does_fx = true;
                             if (self.types.needsInstantiation(current_func_var)) {
-                                const instantiated_var = try instantiate.instantiateVar(self.types, current_func_var, self.gpa);
+                                const instantiated_var = try self.instantiateVar(current_func_var, CIR.nodeIdxFrom(func_expr_idx));
                                 const resolved_inst = self.types.resolveVar(instantiated_var);
                                 std.debug.assert(resolved_inst.desc.content == .structure);
                                 std.debug.assert(resolved_inst.desc.content.structure == .fn_effectful);
@@ -298,7 +293,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                         },
                         .fn_pure => |_| {
                             if (self.types.needsInstantiation(current_func_var)) {
-                                const instantiated_var = try instantiate.instantiateVar(self.types, current_func_var, self.gpa);
+                                const instantiated_var = try self.instantiateVar(current_func_var, CIR.nodeIdxFrom(func_expr_idx));
                                 const resolved_inst = self.types.resolveVar(instantiated_var);
                                 std.debug.assert(resolved_inst.desc.content == .structure);
                                 std.debug.assert(resolved_inst.desc.content.structure == .fn_pure);
@@ -309,7 +304,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                         },
                         .fn_unbound => |_| {
                             if (self.types.needsInstantiation(current_func_var)) {
-                                const instantiated_var = try instantiate.instantiateVar(self.types, current_func_var, self.gpa);
+                                const instantiated_var = try self.instantiateVar(current_func_var, CIR.nodeIdxFrom(func_expr_idx));
                                 const resolved_inst = self.types.resolveVar(instantiated_var);
                                 std.debug.assert(resolved_inst.desc.content == .structure);
                                 std.debug.assert(resolved_inst.desc.content.structure == .fn_unbound);
@@ -412,7 +407,6 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
 
             const expr_var = CIR.varFrom(expr_idx);
             const expr_backing_var = CIR.varFrom(nominal.backing_expr);
-            const expr_region = self.can_ir.store.getNodeRegion(CIR.nodeIdxFrom(expr_idx));
 
             // First, get the qualified variable and assert it's a nominal type
             const nominal_var = CIR.varFrom(nominal.nominal_type_decl);
@@ -423,7 +417,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
 
             // Then, instantiate the nominal types backing var, for unification
             const nominal_backing_var = nominal_type.getBackingVar(nominal_var);
-            const instantiated_backing_var = try self.instantiateVar(nominal_backing_var, CIR.nodeIdxFrom(expr_idx), expr_region);
+            const instantiated_backing_var = try self.instantiateVar(nominal_backing_var, CIR.nodeIdxFrom(expr_idx));
 
             // Then, unify the nominal type's backing var against the CIR backing var
             const result = self.unify(instantiated_backing_var, expr_backing_var);
@@ -432,7 +426,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             switch (result) {
                 .ok => {
                     // Then, instantiate the nominal type
-                    const instantiated_qualified_var = try self.instantiateVar(nominal_var, CIR.nodeIdxFrom(expr_idx), expr_region);
+                    const instantiated_qualified_var = try self.instantiateVar(nominal_var, CIR.nodeIdxFrom(expr_idx));
 
                     // Unify - this should always succeed expr_var should be flex var
                     _ = self.unify(expr_var, instantiated_qualified_var);
@@ -744,7 +738,7 @@ fn checkIfElseExpr(self: *Self, if_expr_idx: CIR.Expr.Idx, if_: std.meta.FieldTy
     // Check the condition of the 1st branch
     var does_fx = try self.checkExpr(first_branch.cond);
     const first_cond_var: Var = @enumFromInt(@intFromEnum(first_branch.cond));
-    const bool_var = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), CIR.nodeIdxFrom(if_expr_idx), base.Region.zero());
+    const bool_var = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), CIR.nodeIdxFrom(if_expr_idx));
     const first_cond_result = self.unify(bool_var, first_cond_var);
     self.setDetailIfTypeMismatch(first_cond_result, .incompatible_if_cond);
 
@@ -764,7 +758,7 @@ fn checkIfElseExpr(self: *Self, if_expr_idx: CIR.Expr.Idx, if_: std.meta.FieldTy
         // Check the branches condition
         does_fx = try self.checkExpr(branch.cond) or does_fx;
         const cond_var: Var = @enumFromInt(@intFromEnum(branch.cond));
-        const branch_bool_var = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), CIR.nodeIdxFrom(if_expr_idx), base.Region.zero());
+        const branch_bool_var = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), CIR.nodeIdxFrom(if_expr_idx));
         const cond_result = self.unify(branch_bool_var, cond_var);
         self.setDetailIfTypeMismatch(cond_result, .incompatible_if_cond);
 

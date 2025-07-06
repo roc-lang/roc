@@ -29,18 +29,6 @@ pub const VarSubstitution = std.AutoHashMap(Var, Var);
 /// replaced by fresh ones, while preserving type aliases and rigid variables.
 pub fn instantiateVar(
     store: *TypesStore,
-    var_to_instantiate: Var,
-    allocator: std.mem.Allocator,
-) std.mem.Allocator.Error!Var {
-    var substitution = VarSubstitution.init(allocator);
-    defer substitution.deinit();
-
-    return instantiateVarWithSubst(store, var_to_instantiate, &substitution);
-}
-
-/// Internal implementation that tracks variable substitutions
-pub fn instantiateVarWithSubst(
-    store: *TypesStore,
     var_: Var,
     substitution: *VarSubstitution,
 ) std.mem.Allocator.Error!Var {
@@ -59,6 +47,20 @@ pub fn instantiateVarWithSubst(
     try substitution.put(var_, fresh_var);
 
     return fresh_var;
+}
+
+/// Instantiate a polymorphic type with fresh type variables.
+/// Prefer `instantiateVar` over this function, as this function inits/deinits
+/// the substitution map each call.
+pub fn instantiateVarAlloc(
+    store: *TypesStore,
+    var_to_instantiate: Var,
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!Var {
+    var substitution = VarSubstitution.init(allocator);
+    defer substitution.deinit();
+
+    return instantiateVar(store, var_to_instantiate, &substitution);
 }
 
 fn instantiateContent(
@@ -109,8 +111,8 @@ fn instantiateFlatType(
 ) std.mem.Allocator.Error!FlatType {
     return switch (flat_type) {
         .str => FlatType.str,
-        .box => |box_var| FlatType{ .box = try instantiateVarWithSubst(store, box_var, substitution) },
-        .list => |list_var| FlatType{ .list = try instantiateVarWithSubst(store, list_var, substitution) },
+        .box => |box_var| FlatType{ .box = try instantiateVar(store, box_var, substitution) },
+        .list => |list_var| FlatType{ .list = try instantiateVar(store, list_var, substitution) },
         .list_unbound => FlatType.list_unbound,
         .tuple => |tuple| FlatType{ .tuple = try instantiateTuple(store, tuple, substitution) },
         .num => |num| FlatType{ .num = try instantiateNum(store, num, substitution) },
@@ -122,7 +124,7 @@ fn instantiateFlatType(
         .record_unbound => |fields| FlatType{ .record_unbound = try instantiateRecordFields(store, fields, substitution) },
         .record_poly => |poly| blk: {
             const fresh_record = try instantiateRecord(store, poly.record, substitution);
-            const fresh_var = try instantiateVarWithSubst(store, poly.var_, substitution);
+            const fresh_var = try instantiateVar(store, poly.var_, substitution);
             break :blk FlatType{ .record_poly = .{ .record = fresh_record, .var_ = fresh_var } };
         },
         .empty_record => FlatType.empty_record,
@@ -142,7 +144,7 @@ fn instantiateTuple(
     defer fresh_elems.deinit();
 
     for (elems_slice) |elem_var| {
-        const fresh_elem = try instantiateVarWithSubst(store, elem_var, substitution);
+        const fresh_elem = try instantiateVar(store, elem_var, substitution);
         try fresh_elems.append(fresh_elem);
     }
 
@@ -156,9 +158,9 @@ fn instantiateNum(
     substitution: *VarSubstitution,
 ) std.mem.Allocator.Error!Num {
     return switch (num) {
-        .num_poly => |poly| Num{ .num_poly = .{ .var_ = try instantiateVarWithSubst(store, poly.var_, substitution), .requirements = poly.requirements } },
-        .int_poly => |poly| Num{ .int_poly = .{ .var_ = try instantiateVarWithSubst(store, poly.var_, substitution), .requirements = poly.requirements } },
-        .frac_poly => |poly| Num{ .frac_poly = .{ .var_ = try instantiateVarWithSubst(store, poly.var_, substitution), .requirements = poly.requirements } },
+        .num_poly => |poly| Num{ .num_poly = .{ .var_ = try instantiateVar(store, poly.var_, substitution), .requirements = poly.requirements } },
+        .int_poly => |poly| Num{ .int_poly = .{ .var_ = try instantiateVar(store, poly.var_, substitution), .requirements = poly.requirements } },
+        .frac_poly => |poly| Num{ .frac_poly = .{ .var_ = try instantiateVar(store, poly.var_, substitution), .requirements = poly.requirements } },
         // Concrete types remain unchanged
         .int_precision => |precision| Num{ .int_precision = precision },
         .frac_precision => |precision| Num{ .frac_precision = precision },
@@ -196,11 +198,11 @@ fn instantiateFunc(
     defer fresh_args.deinit();
 
     for (args_slice) |arg_var| {
-        const fresh_arg = try instantiateVarWithSubst(store, arg_var, substitution);
+        const fresh_arg = try instantiateVar(store, arg_var, substitution);
         try fresh_args.append(fresh_arg);
     }
 
-    const fresh_ret = try instantiateVarWithSubst(store, func.ret, substitution);
+    const fresh_ret = try instantiateVar(store, func.ret, substitution);
     const fresh_args_range = store.appendFuncArgs(fresh_args.items);
 
     return Func{
@@ -223,7 +225,7 @@ fn instantiateRecord(
     const fields_slice = store.getRecordFieldsSlice(record.fields);
 
     for (fields_slice.items(.name), fields_slice.items(.var_)) |name, type_var| {
-        const fresh_type = try instantiateVarWithSubst(store, type_var, substitution);
+        const fresh_type = try instantiateVar(store, type_var, substitution);
         _ = store.record_fields.append(store.gpa, RecordField{
             .name = name,
             .var_ = fresh_type,
@@ -236,7 +238,7 @@ fn instantiateRecord(
     };
 
     // Handle the extension variable
-    const fresh_ext = try instantiateVarWithSubst(store, record.ext, substitution);
+    const fresh_ext = try instantiateVar(store, record.ext, substitution);
 
     return Record{
         .fields = fields_range,
@@ -253,7 +255,7 @@ fn instantiateRecordFields(
     const fields_slice = store.getRecordFieldsSlice(fields);
 
     for (fields_slice.items(.name), fields_slice.items(.var_)) |name, type_var| {
-        const fresh_type = try instantiateVarWithSubst(store, type_var, substitution);
+        const fresh_type = try instantiateVar(store, type_var, substitution);
         _ = store.record_fields.append(store.gpa, RecordField{
             .name = name,
             .var_ = fresh_type,
@@ -280,7 +282,7 @@ fn instantiateTagUnion(
 
         const args_slice = store.getTagArgsSlice(tag_args);
         for (args_slice) |arg_var| {
-            const fresh_arg = try instantiateVarWithSubst(store, arg_var, substitution);
+            const fresh_arg = try instantiateVar(store, arg_var, substitution);
             try fresh_args.append(fresh_arg);
         }
 
@@ -298,7 +300,7 @@ fn instantiateTagUnion(
     };
 
     // Handle the extension variable
-    const fresh_ext = try instantiateVarWithSubst(store, tag_union.ext, substitution);
+    const fresh_ext = try instantiateVar(store, tag_union.ext, substitution);
 
     return TagUnion{
         .tags = tags_range,
