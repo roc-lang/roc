@@ -785,14 +785,6 @@ Let us know if you want to help!
 This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
 Let us know if you want to help!
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: ...
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: ...
-Let us know if you want to help!
-
 **UNDEFINED VARIABLE**
 Nothing is named `some_func` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -2231,12 +2223,12 @@ expect {
 					(p-assign @148.2-148.5 (ident "tag"))
 					(e-tag @148.8-148.12 (name "Blue")))
 				(s-expr @154.2-155.12
-					(e-runtime-error (tag "not_implemented")))
+					(e-not-implemented))
 				(s-expr @155.2-158.11
 					(e-call @155.2-157.3
 						(e-lookup-local @155.2-155.12
 							(pattern @80.1-80.11))
-						(e-runtime-error (tag "not_implemented"))))
+						(e-not-implemented)))
 				(s-expr @158.2-162.7
 					(e-call @158.2-161.3
 						(e-runtime-error (tag "ident_not_in_scope"))

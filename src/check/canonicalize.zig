@@ -2158,15 +2158,10 @@ pub fn canonicalizeExpr(
         },
         .ellipsis => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
-            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "...");
-            const diagnostic = self.can_ir.store.addDiagnostic(CIR.Diagnostic{ .not_implemented = .{
-                .feature = feature,
+            const ellipsis_expr = self.can_ir.store.addExpr(CIR.Expr{ .e_ellipsis = .{
                 .region = region,
             } });
-            const ellipsis_expr = self.can_ir.store.addExpr(CIR.Expr{ .e_runtime_error = .{
-                .diagnostic = diagnostic,
-                .region = region,
-            } });
+            _ = self.can_ir.setTypeVarAtExpr(ellipsis_expr, Content{ .flex_var = null });
             return ellipsis_expr;
         },
         .block => |e| {

@@ -310,6 +310,16 @@ pub const Expr = union(enum) {
         diagnostic: Diagnostic.Idx,
         region: Region,
     },
+    /// Ellipsis placeholder expression (...).
+    /// This is valid syntax that represents an unimplemented expression.
+    /// It will crash at runtime if execution reaches this point.
+    ///
+    /// ```roc
+    /// launchTheNukes: |{}| ...
+    /// ```
+    e_ellipsis: struct {
+        region: Region,
+    },
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
@@ -423,6 +433,7 @@ pub const Expr = union(enum) {
             .e_block => |e| return e.region,
             .e_lambda => |e| return e.region,
             .e_runtime_error => |e| return e.region,
+            .e_ellipsis => |e| return e.region,
         }
     }
 
@@ -808,6 +819,10 @@ pub const Expr = union(enum) {
 
                 node.appendStringAttr(gpa, "tag", msg);
 
+                return node;
+            },
+            .e_ellipsis => {
+                const node = SExpr.init(gpa, "e-not-implemented");
                 return node;
             },
         }

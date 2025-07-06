@@ -99,7 +99,7 @@ pub fn deinit(store: *NodeStore) void {
 /// Count of the diagnostic nodes in the CIR
 pub const CIR_DIAGNOSTIC_NODE_COUNT = 33;
 /// Count of the expression nodes in the CIR
-pub const CIR_EXPR_NODE_COUNT = 24;
+pub const CIR_EXPR_NODE_COUNT = 25;
 /// Count of the statement nodes in the CIR
 pub const CIR_STATEMENT_NODE_COUNT = 12;
 /// Count of the type annotation nodes in the CIR
@@ -550,12 +550,16 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         .expr_unary,
         .expr_suffix_single_question,
         .expr_dbg,
-        .expr_ellipsis,
         .expr_record_builder,
         => {
             std.log.debug("TODO: implement getExpr for node type {?}", .{node.tag});
             return CIR.Expr{ .e_runtime_error = .{
                 .diagnostic = @enumFromInt(0),
+                .region = store.getRegionAt(node_idx),
+            } };
+        },
+        .expr_ellipsis => {
+            return CIR.Expr{ .e_ellipsis = .{
                 .region = store.getRegionAt(node_idx),
             } };
         },
@@ -1359,6 +1363,10 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             region = e.region;
             node.data_1 = @intFromEnum(e.diagnostic);
             node.tag = .malformed;
+        },
+        .e_ellipsis => |e| {
+            region = e.region;
+            node.tag = .expr_ellipsis;
         },
         .e_match => |e| {
             region = e.region;

@@ -25,8 +25,8 @@ MyType2 : Module.Thingy
 UNDECLARED TYPE - type_declarations.md:5:8:5:11
 UNDECLARED TYPE - type_declarations.md:5:13:5:16
 UNDECLARED TYPE - type_declarations.md:7:19:7:21
-UNDECLARED TYPE - type_declarations.md:7:19:7:24
 UNDECLARED TYPE - type_declarations.md:7:32:7:41
+UNDECLARED TYPE - type_declarations.md:7:19:7:24
 # PROBLEMS
 **UNDECLARED TYPE**
 The type ``Bar`` is not declared in this scope.
