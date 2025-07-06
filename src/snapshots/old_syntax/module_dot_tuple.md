@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=module_dot_tuple malformed
+description=Module dot malformed (should error)
 type=expr
 ~~~
 # SOURCE

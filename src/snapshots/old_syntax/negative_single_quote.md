@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=negative_single_quote
+description=Negative single quote char literal
 type=expr
 ~~~
 # SOURCE

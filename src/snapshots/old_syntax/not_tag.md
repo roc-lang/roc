@@ -5,8 +5,7 @@ type=expr
 ~~~
 # SOURCE
 ~~~roc
-!(C
-2)
+!(C(2))
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - not_tag.md:1:1:1:3

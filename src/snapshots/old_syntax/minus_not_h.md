@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=minus_not_h
+description=Unary minus and boolean not (should error)
 type=expr
 ~~~
 # SOURCE

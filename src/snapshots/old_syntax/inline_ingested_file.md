@@ -1,13 +1,16 @@
 # META
 ~~~ini
 description=inline_ingested_file
-type=expr
+type=file
 ~~~
 # SOURCE
 ~~~roc
-import "users.json" as data : Str
+module [foo]
 
-parseJson data
+import "users.json" as data : Str
+import Json
+
+foo = Json.parse(data)
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - inline_ingested_file.md:1:1:1:9
