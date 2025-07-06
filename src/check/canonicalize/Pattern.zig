@@ -273,7 +273,7 @@ pub const Pattern = union(enum) {
                 ir.appendRegionInfoToSexprNode(&node, pattern_idx);
 
                 const ident = ir.getIdentText(p.ident);
-                node.appendStringAttr(gpa, "ident", ident);
+                node.appendStringAttr(gpa, "as", ident);
 
                 // Recurse on the inner pattern
                 var pattern_node = ir.store.getPattern(p.pattern).toSExpr(ir, p.pattern);
@@ -385,10 +385,9 @@ pub const Pattern = union(enum) {
                 var node = SExpr.init(gpa, "p-char");
                 ir.appendRegionInfoToSexprNode(&node, pattern_idx);
 
-                // Add the unicode value
-                const val_str = std.fmt.allocPrint(gpa, "{d}", .{p.value}) catch "<oom>";
-                defer gpa.free(val_str);
-                node.appendRawAttr(gpa, "val", val_str);
+                const char_str = std.fmt.allocPrint(gpa, "'\\u({d})'", .{p.value}) catch "<oom>";
+                defer gpa.free(char_str);
+                node.appendStringAttr(gpa, "byte", char_str);
 
                 return node;
             },
