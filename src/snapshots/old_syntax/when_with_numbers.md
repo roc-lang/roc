@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=when_with_numbers
+description=When is old syntax use match instead (should error)
 type=expr
 ~~~
 # SOURCE

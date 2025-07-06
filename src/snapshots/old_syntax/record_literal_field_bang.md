@@ -7,7 +7,7 @@ type=expr
 ~~~roc
 {
     answer: 42,
-    launchTheNukes!: \{} -> boom
+    launchTheNukes!: |{}| boom,
 }
 ~~~
 # EXPECTED

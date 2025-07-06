@@ -5,45 +5,86 @@ type=expr
 ~~~
 # SOURCE
 ~~~roc
-f: (Str, Str) -> (Str, Str)
-f = \x -> x
+{
+    f : (Str, Str) -> (Str, Str)
+    f = |x| x
 
-f (1, 2)
+    f((1, 2))
+}
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - tuple_type.md:1:1:1:2
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `f` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**tuple_type.md:1:1:1:2:**
-```roc
-f: (Str, Str) -> (Str, Str)
-```
-^
-
-
+NIL
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:2),OpColon(1:2-1:3),OpenRound(1:4-1:5),UpperIdent(1:5-1:8),Comma(1:8-1:9),UpperIdent(1:10-1:13),CloseRound(1:13-1:14),OpArrow(1:15-1:17),OpenRound(1:18-1:19),UpperIdent(1:19-1:22),Comma(1:22-1:23),UpperIdent(1:24-1:27),CloseRound(1:27-1:28),Newline(1:1-1:1),
-LowerIdent(2:1-2:2),OpAssign(2:3-2:4),OpBackslash(2:5-2:6),LowerIdent(2:6-2:7),OpArrow(2:8-2:10),LowerIdent(2:11-2:12),Newline(1:1-1:1),
+OpenCurly(1:1-1:2),Newline(1:1-1:1),
+LowerIdent(2:5-2:6),OpColon(2:7-2:8),OpenRound(2:9-2:10),UpperIdent(2:10-2:13),Comma(2:13-2:14),UpperIdent(2:15-2:18),CloseRound(2:18-2:19),OpArrow(2:20-2:22),OpenRound(2:23-2:24),UpperIdent(2:24-2:27),Comma(2:27-2:28),UpperIdent(2:29-2:32),CloseRound(2:32-2:33),Newline(1:1-1:1),
+LowerIdent(3:5-3:6),OpAssign(3:7-3:8),OpBar(3:9-3:10),LowerIdent(3:10-3:11),OpBar(3:11-3:12),LowerIdent(3:13-3:14),Newline(1:1-1:1),
 Newline(1:1-1:1),
-LowerIdent(4:1-4:2),OpenRound(4:3-4:4),Int(4:4-4:5),Comma(4:5-4:6),Int(4:7-4:8),CloseRound(4:8-4:9),EndOfFile(4:9-4:9),
+LowerIdent(5:5-5:6),NoSpaceOpenRound(5:6-5:7),NoSpaceOpenRound(5:7-5:8),Int(5:8-5:9),Comma(5:9-5:10),Int(5:11-5:12),CloseRound(5:12-5:13),CloseRound(5:13-5:14),Newline(1:1-1:1),
+CloseCurly(6:1-6:2),EndOfFile(6:2-6:2),
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.2 (raw "f"))
+(e-block @1.1-6.2
+	(statements
+		(s-type-anno @2.5-3.6 (name "f")
+			(ty-fn @2.9-2.33
+				(ty-tuple @2.9-2.19
+					(ty @2.10-2.13 (name "Str"))
+					(ty @2.15-2.18 (name "Str")))
+				(ty-tuple @2.23-2.33
+					(ty @2.24-2.27 (name "Str"))
+					(ty @2.29-2.32 (name "Str")))))
+		(s-decl @3.5-3.14
+			(p-ident @3.5-3.6 (raw "f"))
+			(e-lambda @3.9-3.14
+				(args
+					(p-ident @3.10-3.11 (raw "x")))
+				(e-ident @3.13-3.14 (raw "x"))))
+		(e-apply @5.5-5.14
+			(e-ident @5.5-5.6 (raw "f"))
+			(e-tuple @5.7-5.13
+				(e-int @5.8-5.9 (raw "1"))
+				(e-int @5.11-5.12 (raw "2"))))))
 ~~~
 # FORMATTED
 ~~~roc
-f
+{
+	f : (Str, Str) -> (Str, Str)
+	f = |x| x
+
+	f((1, 2))
+}
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "ident_not_in_scope"))
+(e-block @1.1-6.2
+	(s-type-anno @2.5-3.6 (name "f")
+		(ty-fn @2.9-2.33 (effectful false)
+			(ty-tuple @2.9-2.19
+				(ty @2.10-2.13 (name "Str"))
+				(ty @2.15-2.18 (name "Str")))
+			(ty-tuple @2.23-2.33
+				(ty @2.24-2.27 (name "Str"))
+				(ty @2.29-2.32 (name "Str")))))
+	(s-let @3.5-3.14
+		(p-assign @3.5-3.6 (ident "f"))
+		(e-lambda @3.9-3.14
+			(args
+				(p-assign @3.10-3.11 (ident "x")))
+			(e-lookup-local @3.13-3.14
+				(pattern @3.10-3.11))))
+	(e-call @5.5-5.14
+		(e-lookup-local @5.5-5.6
+			(pattern @3.5-3.6))
+		(e-tuple @5.7-5.13
+			(elems
+				(e-int @5.8-5.9 (value "1"))
+				(e-int @5.11-5.12 (value "2"))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.2 (type "Error"))
+(expr @1.1-6.2 (type "*"))
 ~~~

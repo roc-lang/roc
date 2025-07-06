@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=weird_escape fail
+description=Weird escape (should error)
 type=expr
 ~~~
 # SOURCE

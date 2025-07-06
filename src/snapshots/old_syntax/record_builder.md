@@ -5,7 +5,9 @@ type=expr
 ~~~
 # SOURCE
 ~~~roc
-{ Foo.Bar.baz <- x: 5, y: 0
+{ Foo.Bar.baz <-
+    x: 5,
+    y: 0,
 }
 ~~~
 # EXPECTED
@@ -61,7 +63,7 @@ Here is the problematic code:
 ```roc
 { Foo.Bar.baz <- x: 5, y: 0
 ```
-                          
+
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -116,11 +118,11 @@ CloseCurly(2:1-2:2),EndOfFile(2:2-2:2),
 ~~~roc
 {
 	Foo.baz
-	
-	x : 
-	
-	y : 
-	
+
+	x :
+
+	y :
+
 }
 ~~~
 # CANONICALIZE

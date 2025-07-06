@@ -1,43 +1,35 @@
 # META
 ~~~ini
-description=unicode_overflow_str
+description=Unicode overflow (should error)
 type=expr
 ~~~
 # SOURCE
 ~~~roc
-m"\u(FFFFFF)"s
+"\u(FFFFFF)"
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - unicode_overflow_str.md:1:1:1:2
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `m` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**unicode_overflow_str.md:1:1:1:2:**
-```roc
-m"\u(FFFFFF)"s
-```
-^
-
-
+NIL
 # TOKENS
 ~~~zig
-LowerIdent(1:1-1:2),StringStart(1:2-1:3),StringPart(1:3-1:13),StringEnd(1:13-1:14),LowerIdent(1:14-1:15),EndOfFile(1:15-1:15),
+StringStart(1:1-1:2),StringPart(1:2-1:12),StringEnd(1:12-1:13),EndOfFile(1:13-1:13),
 ~~~
 # PARSE
 ~~~clojure
-(e-ident @1.1-1.2 (raw "m"))
+(e-string @1.1-1.13
+	(e-string-part @1.2-1.12 (raw "\u(FFFFFF)")))
 ~~~
 # FORMATTED
 ~~~roc
-m
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "ident_not_in_scope"))
+(e-string @1.1-1.13
+	(e-literal @1.2-1.12 (string "\u(FFFFFF)")))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.2 (type "Error"))
+(expr @1.1-1.13 (type "Str"))
 ~~~

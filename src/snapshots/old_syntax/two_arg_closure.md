@@ -5,42 +5,37 @@ type=expr
 ~~~
 # SOURCE
 ~~~roc
-\a, b -> 42
+|_, _| 42
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - two_arg_closure.md:1:1:1:3
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **\a** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-Here is the problematic code:
-**two_arg_closure.md:1:1:1:3:**
-```roc
-\a, b -> 42
-```
-^^
-
-
+NIL
 # TOKENS
 ~~~zig
-OpBackslash(1:1-1:2),LowerIdent(1:2-1:3),Comma(1:3-1:4),LowerIdent(1:5-1:6),OpArrow(1:7-1:9),Int(1:10-1:12),EndOfFile(1:12-1:12),
+OpBar(1:1-1:2),Underscore(1:2-1:3),Comma(1:3-1:4),Underscore(1:5-1:6),OpBar(1:6-1:7),Int(1:8-1:10),EndOfFile(1:10-1:10),
 ~~~
 # PARSE
 ~~~clojure
-(e-malformed @1.1-1.3 (reason "expr_unexpected_token"))
+(e-lambda @1.1-1.10
+	(args
+		(p-underscore)
+		(p-underscore))
+	(e-int @1.8-1.10 (raw "42")))
 ~~~
 # FORMATTED
 ~~~roc
-
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(e-lambda @1.1-1.10
+	(args
+		(p-underscore @1.2-1.3)
+		(p-underscore @1.5-1.6))
+	(e-int @1.8-1.10 (value "42")))
 ~~~
 # TYPES
 ~~~clojure
-(inferred-types
-	(defs)
-	(expressions))
+(expr @1.1-1.10 (type "*, * -> Num(*)"))
 ~~~

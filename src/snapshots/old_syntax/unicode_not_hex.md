@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=unicode_not_hex fail
+description=Unicode not hex (should error))
 type=expr
 ~~~
 # SOURCE
