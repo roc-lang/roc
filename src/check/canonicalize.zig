@@ -225,7 +225,7 @@ pub const CIR = @import("canonicalize/CIR.zig");
 /// - Eliminates syntax sugar (for example, renaming `+` to the function call `add`).
 ///
 /// The canonicalization occurs on a single module (file) in isolation. This allows for this work to be easily parallelized and also cached. So where the source code for a module has not changed, the CanIR can simply be loaded from disk and used immediately.
-pub fn canonicalize_file(
+pub fn canonicalizeFile(
     self: *Self,
 ) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
@@ -245,7 +245,7 @@ pub fn canonicalize_file(
         switch (stmt) {
             .type_decl => |type_decl| {
                 // Canonicalize the type declaration header first
-                const header_idx = self.canonicalize_type_header(type_decl.header);
+                const header_idx = self.canonicalizeTypeHeader(type_decl.header);
                 const region = self.parse_ir.tokenizedRegionToRegion(type_decl.region);
 
                 // Extract the type name from the header to introduce it into scope early
@@ -287,7 +287,7 @@ pub fn canonicalize_file(
                     self.introduceTypeParametersFromHeader(header_idx);
 
                     // Now canonicalize the type annotation with type parameters and type name in scope
-                    break :blk self.canonicalize_type_anno(type_decl.anno);
+                    break :blk self.canonicalizeTypeAnno(type_decl.anno);
                 };
 
                 // Create the real CIR type declaration statement with the canonicalized annotation
@@ -357,7 +357,7 @@ pub fn canonicalize_file(
                     }
                 }
 
-                const def_idx = try self.canonicalize_decl_with_annotation(decl, annotation_idx);
+                const def_idx = try self.canonicalizeDeclWithAnnotation(decl, annotation_idx);
                 self.can_ir.store.addScratchDef(def_idx);
                 last_type_anno = null; // Clear after successful use
             },
@@ -451,7 +451,7 @@ pub fn canonicalize_file(
                 }
 
                 // Now canonicalize the annotation with type variables in scope
-                const type_anno_idx = self.canonicalize_type_anno(ta.anno);
+                const type_anno_idx = self.canonicalizeTypeAnno(ta.anno);
 
                 // Store this annotation for the next declaration
                 last_type_anno = .{
@@ -471,10 +471,10 @@ pub fn canonicalize_file(
     // Get the header and canonicalize exposes based on header type
     const header = self.parse_ir.store.getHeader(file.header);
     switch (header) {
-        .module => |h| self.canonicalize_header_exposes(h.exposes),
-        .package => |h| self.canonicalize_header_exposes(h.exposes),
-        .platform => |h| self.canonicalize_header_exposes(h.exposes),
-        .hosted => |h| self.canonicalize_header_exposes(h.exposes),
+        .module => |h| self.canonicalizeHeaderExposes(h.exposes),
+        .package => |h| self.canonicalizeHeaderExposes(h.exposes),
+        .platform => |h| self.canonicalizeHeaderExposes(h.exposes),
+        .hosted => |h| self.canonicalizeHeaderExposes(h.exposes),
         .app => {
             // App headers have 'provides' instead of 'exposes'
             // TODO: Handle app provides differently
@@ -489,7 +489,7 @@ pub fn canonicalize_file(
     self.can_ir.all_statements = self.can_ir.store.statementSpanFrom(scratch_statements_start);
 }
 
-fn canonicalize_header_exposes(
+fn canonicalizeHeaderExposes(
     self: *Self,
     exposes: AST.Collection.Idx,
 ) void {
@@ -832,7 +832,7 @@ fn introduceExposedItemsIntoScope(
     }
 }
 
-fn canonicalize_decl_with_annotation(
+fn canonicalizeDeclWithAnnotation(
     self: *Self,
     decl: AST.Statement.Decl,
     annotation: ?CIR.Annotation.Idx,
@@ -844,7 +844,7 @@ fn canonicalize_decl_with_annotation(
     const expr_region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getExpr(decl.body).to_tokenized_region());
 
     const pattern_idx = blk: {
-        if (try self.canonicalize_pattern(decl.pattern)) |idx| {
+        if (try self.canonicalizePattern(decl.pattern)) |idx| {
             break :blk idx;
         } else {
             const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .pattern_not_canonicalized = .{
@@ -855,7 +855,7 @@ fn canonicalize_decl_with_annotation(
     };
 
     const expr_idx = blk: {
-        if (try self.canonicalize_expr(decl.body)) |idx| {
+        if (try self.canonicalizeExpr(decl.body)) |idx| {
             break :blk idx;
         } else {
             const malformed_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .expr_not_canonicalized = .{
@@ -893,7 +893,7 @@ fn canonicalize_decl_with_annotation(
     return def_idx;
 }
 
-fn canonicalize_record_field(
+fn canonicalizeRecordField(
     self: *Self,
     ast_field_idx: AST.RecordField.Idx,
 ) std.mem.Allocator.Error!?CIR.RecordField.Idx {
@@ -909,7 +909,7 @@ fn canonicalize_record_field(
 
     // Canonicalize the field value
     const value = if (field.value) |v|
-        try self.canonicalize_expr(v) orelse return null
+        try self.canonicalizeExpr(v) orelse return null
     else blk: {
         // Shorthand syntax: create implicit identifier expression
         // For { name, age }, this creates an implicit identifier lookup for "name" etc.
@@ -921,7 +921,7 @@ fn canonicalize_record_field(
             },
         };
         const ident_expr_idx = self.parse_ir.store.addExpr(ident_expr);
-        break :blk try self.canonicalize_expr(ident_expr_idx) orelse return null;
+        break :blk try self.canonicalizeExpr(ident_expr_idx) orelse return null;
     };
 
     // Create the CIR record field
@@ -934,7 +934,7 @@ fn canonicalize_record_field(
 }
 
 /// Canonicalize an expression.
-pub fn canonicalize_expr(
+pub fn canonicalizeExpr(
     self: *Self,
     ast_expr_idx: AST.Expr.Idx,
 ) std.mem.Allocator.Error!?CIR.Expr.Idx {
@@ -958,7 +958,7 @@ pub fn canonicalize_expr(
                     // Canonicalize all arguments
                     const args_slice = self.parse_ir.store.exprSlice(e.args);
                     for (args_slice) |arg| {
-                        if (try self.canonicalize_expr(arg)) |canonicalized_arg_expr_idx| {
+                        if (try self.canonicalizeExpr(arg)) |canonicalized_arg_expr_idx| {
                             self.can_ir.store.addScratchExpr(canonicalized_arg_expr_idx);
                         }
                     }
@@ -999,7 +999,7 @@ pub fn canonicalize_expr(
             const scratch_top = self.can_ir.store.scratchExprTop();
 
             // Canonicalize the function being called and add as first element
-            const fn_expr = try self.canonicalize_expr(e.@"fn") orelse {
+            const fn_expr = try self.canonicalizeExpr(e.@"fn") orelse {
                 self.can_ir.store.clearScratchExprsFrom(scratch_top);
                 return null;
             };
@@ -1008,7 +1008,7 @@ pub fn canonicalize_expr(
             // Canonicalize and add all arguments
             const args_slice = self.parse_ir.store.exprSlice(e.args);
             for (args_slice) |arg| {
-                if (try self.canonicalize_expr(arg)) |canonicalized_arg_expr_idx| {
+                if (try self.canonicalizeExpr(arg)) |canonicalized_arg_expr_idx| {
                     self.can_ir.store.addScratchExpr(canonicalized_arg_expr_idx);
                 }
             }
@@ -1405,7 +1405,7 @@ pub fn canonicalize_expr(
             // Iterate over the list item, canonicalizing each one
             // Then append the result to the scratch list
             for (items_slice) |item| {
-                if (try self.canonicalize_expr(item)) |canonicalized| {
+                if (try self.canonicalizeExpr(item)) |canonicalized| {
                     self.can_ir.store.addScratchExpr(canonicalized);
                 }
             }
@@ -1514,7 +1514,7 @@ pub fn canonicalize_expr(
                 // we insert placeholder type var nodes in other places. So for
                 // now, this is fine
                 return blk: {
-                    if (try self.canonicalize_expr(items_slice[0])) |idx| {
+                    if (try self.canonicalizeExpr(items_slice[0])) |idx| {
                         break :blk idx;
                     } else {
                         const ast_body = self.parse_ir.store.getExpr(items_slice[0]);
@@ -1532,7 +1532,7 @@ pub fn canonicalize_expr(
                 // Then append the resulting expr to the scratch list
                 for (items_slice) |item| {
                     const item_expr_idx = blk: {
-                        if (try self.canonicalize_expr(item)) |idx| {
+                        if (try self.canonicalizeExpr(item)) |idx| {
                             break :blk idx;
                         } else {
                             const ast_body = self.parse_ir.store.getExpr(item);
@@ -1582,7 +1582,7 @@ pub fn canonicalize_expr(
             // Canonicalize extension if present
             var ext_expr: ?CIR.Expr.Idx = null;
             if (e.ext) |ext_ast_idx| {
-                ext_expr = try self.canonicalize_expr(ext_ast_idx);
+                ext_expr = try self.canonicalizeExpr(ext_ast_idx);
             }
 
             const fields_slice = self.parse_ir.store.recordFieldSlice(e.fields);
@@ -1641,13 +1641,13 @@ pub fn canonicalize_expr(
                         }) catch |err| exitOnOom(err);
 
                         // Only canonicalize and include non-duplicate fields
-                        if (try self.canonicalize_record_field(field)) |canonicalized| {
+                        if (try self.canonicalizeRecordField(field)) |canonicalized| {
                             self.can_ir.store.scratch_record_fields.append(self.can_ir.env.gpa, canonicalized);
                         }
                     }
                 } else {
                     // Field name couldn't be resolved, still try to canonicalize
-                    if (try self.canonicalize_record_field(field)) |canonicalized| {
+                    if (try self.canonicalizeRecordField(field)) |canonicalized| {
                         self.can_ir.store.scratch_record_fields.append(self.can_ir.env.gpa, canonicalized);
                     }
                 }
@@ -1705,7 +1705,7 @@ pub fn canonicalize_expr(
             const gpa = self.can_ir.env.gpa;
             const args_start = self.can_ir.store.scratch_patterns.top();
             for (self.parse_ir.store.patternSlice(e.args)) |arg_pattern_idx| {
-                if (try self.canonicalize_pattern(arg_pattern_idx)) |pattern_idx| {
+                if (try self.canonicalizePattern(arg_pattern_idx)) |pattern_idx| {
                     self.can_ir.store.scratch_patterns.append(gpa, pattern_idx);
                 } else {
                     const arg = self.parse_ir.store.getPattern(arg_pattern_idx);
@@ -1720,7 +1720,7 @@ pub fn canonicalize_expr(
 
             // body
             const body_idx = blk: {
-                if (try self.canonicalize_expr(e.body)) |idx| {
+                if (try self.canonicalizeExpr(e.body)) |idx| {
                     break :blk idx;
                 } else {
                     const ast_body = self.parse_ir.store.getExpr(e.body);
@@ -1772,7 +1772,7 @@ pub fn canonicalize_expr(
 
             // Canonicalize left and right operands
             const lhs = blk: {
-                if (try self.canonicalize_expr(e.left)) |left_expr_idx| {
+                if (try self.canonicalizeExpr(e.left)) |left_expr_idx| {
                     break :blk left_expr_idx;
                 } else {
                     // TODO should probably use LHS region here
@@ -1784,7 +1784,7 @@ pub fn canonicalize_expr(
             };
 
             const rhs = blk: {
-                if (try self.canonicalize_expr(e.right)) |right_expr_idx| {
+                if (try self.canonicalizeExpr(e.right)) |right_expr_idx| {
                     break :blk right_expr_idx;
                 } else {
                     // TODO should probably use RHS region here
@@ -1886,7 +1886,7 @@ pub fn canonicalize_expr(
             const region = self.parse_ir.tokenizedRegionToRegion(m.region);
 
             // Canonicalize the condition expression
-            const cond_expr = try self.canonicalize_expr(m.expr) orelse {
+            const cond_expr = try self.canonicalizeExpr(m.expr) orelse {
                 return null;
             };
 
@@ -1915,7 +1915,7 @@ pub fn canonicalize_expr(
                     const pattern = self.parse_ir.store.getPattern(ast_branch.pattern);
                     const pattern_region = self.parse_ir.tokenizedRegionToRegion(pattern.to_tokenized_region());
                     const pattern_idx = blk: {
-                        if (try self.canonicalize_pattern(ast_branch.pattern)) |pattern_idx| {
+                        if (try self.canonicalizePattern(ast_branch.pattern)) |pattern_idx| {
                             break :blk pattern_idx;
                         } else {
                             const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .pattern_not_canonicalized = .{
@@ -1937,7 +1937,7 @@ pub fn canonicalize_expr(
 
                 // Canonicalize the branch's body
                 const value_idx = blk: {
-                    if (try self.canonicalize_expr(ast_branch.body)) |body_idx| {
+                    if (try self.canonicalizeExpr(ast_branch.body)) |body_idx| {
                         break :blk body_idx;
                     } else {
                         const body = self.parse_ir.store.getExpr(ast_branch.body);
@@ -2040,10 +2040,10 @@ pub fn canonicalize_expr(
                 if (is_last and stmt == .expr) {
                     // For the last expression statement, canonicalize it directly as the final expression
                     // without adding it as a statement
-                    last_expr = try self.canonicalize_expr(stmt.expr.expr);
+                    last_expr = try self.canonicalizeExpr(stmt.expr.expr);
                 } else {
                     // Regular statement processing
-                    const result = try self.canonicalize_statement(stmt_idx);
+                    const result = try self.canonicalizeStatement(stmt_idx);
                     if (result) |expr_idx| {
                         last_expr = expr_idx;
                     }
@@ -2117,7 +2117,7 @@ fn extractStringSegments(self: *Self, parts: []const AST.Expr.Idx) std.mem.Alloc
             else => {
 
                 // Any non-string-part is an interpolation
-                if (try self.canonicalize_expr(part)) |expr_idx| {
+                if (try self.canonicalizeExpr(part)) |expr_idx| {
                     // append our interpolated expression
                     self.can_ir.store.addScratchExpr(expr_idx);
                 } else {
@@ -2135,7 +2135,7 @@ fn extractStringSegments(self: *Self, parts: []const AST.Expr.Idx) std.mem.Alloc
     return self.can_ir.store.exprSpanFrom(start);
 }
 
-fn canonicalize_pattern(
+fn canonicalizePattern(
     self: *Self,
     ast_pattern_idx: AST.Pattern.Idx,
 ) std.mem.Allocator.Error!?CIR.Pattern.Idx {
@@ -2344,7 +2344,7 @@ fn canonicalize_pattern(
                 const start = self.can_ir.store.scratch_patterns.top();
 
                 for (self.parse_ir.store.patternSlice(e.args)) |sub_ast_pattern_idx| {
-                    if (try self.canonicalize_pattern(sub_ast_pattern_idx)) |idx| {
+                    if (try self.canonicalizePattern(sub_ast_pattern_idx)) |idx| {
                         self.can_ir.store.scratch_patterns.append(gpa, idx);
                     } else {
                         const arg = self.parse_ir.store.getPattern(sub_ast_pattern_idx);
@@ -2497,7 +2497,7 @@ fn canonicalize_pattern(
             const patterns_slice = self.parse_ir.store.patternSlice(e.patterns);
             const elems_var_top = self.can_ir.env.types.tuple_elems.len();
             for (patterns_slice) |pattern| {
-                if (try self.canonicalize_pattern(pattern)) |canonicalized| {
+                if (try self.canonicalizePattern(pattern)) |canonicalized| {
                     self.can_ir.store.addScratchPattern(canonicalized);
                     _ = self.can_ir.env.types.appendTupleElem(@enumFromInt(@intFromEnum(canonicalized)));
                 }
@@ -2611,7 +2611,7 @@ fn canonicalize_pattern(
                     rest_pattern = current_rest_pattern;
                 } else {
                     // Regular pattern - canonicalize it and add to scratch patterns
-                    if (try self.canonicalize_pattern(pattern_idx)) |canonicalized| {
+                    if (try self.canonicalizePattern(pattern_idx)) |canonicalized| {
                         self.can_ir.store.scratch_patterns.append(gpa, canonicalized);
                     } else {
                         const pattern_region = self.parse_ir.tokenizedRegionToRegion(ast_pattern.to_tokenized_region());
@@ -2955,7 +2955,7 @@ test {
 fn flattenIfThenElseChainRecursive(self: *Self, if_expr: anytype) std.mem.Allocator.Error!CIR.Expr.Idx {
     // Canonicalize and add the current condition/then pair
     const cond_idx = blk: {
-        if (try self.canonicalize_expr(if_expr.condition)) |idx| {
+        if (try self.canonicalizeExpr(if_expr.condition)) |idx| {
             break :blk idx;
         } else {
             const ast_cond = self.parse_ir.store.getExpr(if_expr.condition);
@@ -2967,7 +2967,7 @@ fn flattenIfThenElseChainRecursive(self: *Self, if_expr: anytype) std.mem.Alloca
     };
 
     const then_idx = blk: {
-        if (try self.canonicalize_expr(if_expr.then)) |idx| {
+        if (try self.canonicalizeExpr(if_expr.then)) |idx| {
             break :blk idx;
         } else {
             const ast_then = self.parse_ir.store.getExpr(if_expr.then);
@@ -2995,7 +2995,7 @@ fn flattenIfThenElseChainRecursive(self: *Self, if_expr: anytype) std.mem.Alloca
         },
         else => {
             // This is the final else - canonicalize and return it
-            if (try self.canonicalize_expr(if_expr.@"else")) |else_idx| {
+            if (try self.canonicalizeExpr(if_expr.@"else")) |else_idx| {
                 return else_idx;
             } else {
                 const else_region = self.parse_ir.tokenizedRegionToRegion(else_expr.to_tokenized_region());
@@ -3095,7 +3095,7 @@ fn scopeIntroduceVar(
 /// Canonicalize a tag variant within a tag union type annotation
 /// Unlike general type canonicalization, this doesn't validate tag names against scope
 /// since tags in tag unions are anonymous and defined by the union itself
-fn canonicalize_tag_variant(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.Idx {
+fn canonicalizeTagVariant(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -3140,7 +3140,7 @@ fn canonicalize_tag_variant(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnn
             defer self.can_ir.store.clearScratchTypeAnnosFrom(scratch_top);
 
             for (args_slice[1..]) |arg_idx| {
-                const canonicalized = self.canonicalize_type_anno(arg_idx);
+                const canonicalized = self.canonicalizeTypeAnno(arg_idx);
                 self.can_ir.store.addScratchTypeAnno(canonicalized);
             }
 
@@ -3153,13 +3153,13 @@ fn canonicalize_tag_variant(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnn
         },
         else => {
             // For other cases, fall back to regular canonicalization
-            return self.canonicalize_type_anno(anno_idx);
+            return self.canonicalizeTypeAnno(anno_idx);
         },
     }
 }
 
 /// Canonicalize a statement within a block
-fn canonicalize_type_anno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.Idx {
+fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -3175,7 +3175,7 @@ fn canonicalize_type_anno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.
             }
 
             // Canonicalize the base type first
-            const canonicalized_base = self.canonicalize_type_anno(args_slice[0]);
+            const canonicalized_base = self.canonicalizeTypeAnno(args_slice[0]);
             const base_cir_type = self.can_ir.store.getTypeAnno(canonicalized_base);
 
             // Extract the symbol for the type application
@@ -3189,7 +3189,7 @@ fn canonicalize_type_anno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.
                     defer self.can_ir.store.clearScratchTypeAnnosFrom(scratch_top);
 
                     for (args_slice[1..]) |arg_idx| {
-                        const canonicalized = self.canonicalize_type_anno(arg_idx);
+                        const canonicalized = self.canonicalizeTypeAnno(arg_idx);
                         self.can_ir.store.addScratchTypeAnno(canonicalized);
                     }
 
@@ -3208,7 +3208,7 @@ fn canonicalize_type_anno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.
             defer self.can_ir.store.clearScratchTypeAnnosFrom(scratch_top);
 
             for (args_slice[1..]) |arg_idx| {
-                const canonicalized = self.canonicalize_type_anno(arg_idx);
+                const canonicalized = self.canonicalizeTypeAnno(arg_idx);
                 self.can_ir.store.addScratchTypeAnno(canonicalized);
             }
 
@@ -3322,7 +3322,7 @@ fn canonicalize_type_anno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.
             defer self.can_ir.store.clearScratchTypeAnnosFrom(scratch_top);
 
             for (self.parse_ir.store.typeAnnoSlice(tuple.annos)) |elem_idx| {
-                const canonicalized = self.canonicalize_type_anno(elem_idx);
+                const canonicalized = self.canonicalizeTypeAnno(elem_idx);
                 self.can_ir.store.addScratchTypeAnno(canonicalized);
             }
 
@@ -3352,7 +3352,7 @@ fn canonicalize_type_anno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.
                     // Malformed field name - continue with placeholder
                     const malformed_field_ident = Ident.for_text("malformed_field");
                     const malformed_ident = self.can_ir.env.idents.insert(self.can_ir.env.gpa, malformed_field_ident, Region.zero());
-                    const canonicalized_ty = self.canonicalize_type_anno(ast_field.ty);
+                    const canonicalized_ty = self.canonicalizeTypeAnno(ast_field.ty);
                     const field_region = self.parse_ir.tokenizedRegionToRegion(ast_field.region);
 
                     const cir_field = CIR.TypeAnno.RecordField{
@@ -3366,7 +3366,7 @@ fn canonicalize_type_anno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.
                 };
 
                 // Canonicalize field type
-                const canonicalized_ty = self.canonicalize_type_anno(ast_field.ty);
+                const canonicalized_ty = self.canonicalizeTypeAnno(ast_field.ty);
                 const field_region = self.parse_ir.tokenizedRegionToRegion(ast_field.region);
 
                 const cir_field = CIR.TypeAnno.RecordField{
@@ -3392,7 +3392,7 @@ fn canonicalize_type_anno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.
             defer self.can_ir.store.clearScratchTypeAnnosFrom(scratch_top);
 
             for (self.parse_ir.store.typeAnnoSlice(tag_union.tags)) |tag_idx| {
-                const canonicalized = self.canonicalize_tag_variant(tag_idx);
+                const canonicalized = self.canonicalizeTagVariant(tag_idx);
                 self.can_ir.store.addScratchTypeAnno(canonicalized);
             }
 
@@ -3400,7 +3400,7 @@ fn canonicalize_type_anno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.
 
             // Handle optional open annotation (for extensible tag unions)
             const open_anno = if (tag_union.open_anno) |open_idx|
-                self.canonicalize_type_anno(open_idx)
+                self.canonicalizeTypeAnno(open_idx)
             else
                 null;
 
@@ -3418,14 +3418,14 @@ fn canonicalize_type_anno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.
             defer self.can_ir.store.clearScratchTypeAnnosFrom(scratch_top);
 
             for (self.parse_ir.store.typeAnnoSlice(fn_anno.args)) |arg_idx| {
-                const canonicalized = self.canonicalize_type_anno(arg_idx);
+                const canonicalized = self.canonicalizeTypeAnno(arg_idx);
                 self.can_ir.store.addScratchTypeAnno(canonicalized);
             }
 
             const args = self.can_ir.store.typeAnnoSpanFrom(scratch_top);
 
             // Canonicalize return type
-            const ret = self.canonicalize_type_anno(fn_anno.ret);
+            const ret = self.canonicalizeTypeAnno(fn_anno.ret);
 
             return self.can_ir.store.addTypeAnno(.{ .@"fn" = .{
                 .args = args,
@@ -3436,7 +3436,7 @@ fn canonicalize_type_anno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.
         },
         .parens => |parens| {
             const region = self.parse_ir.tokenizedRegionToRegion(parens.region);
-            const inner_anno = self.canonicalize_type_anno(parens.anno);
+            const inner_anno = self.canonicalizeTypeAnno(parens.anno);
             return self.can_ir.store.addTypeAnno(.{ .parens = .{
                 .anno = inner_anno,
                 .region = region,
@@ -3451,7 +3451,7 @@ fn canonicalize_type_anno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.
     }
 }
 
-fn canonicalize_type_header(self: *Self, header_idx: AST.TypeHeader.Idx) CIR.TypeHeader.Idx {
+fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx) CIR.TypeHeader.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -3507,7 +3507,7 @@ fn canonicalize_type_header(self: *Self, header_idx: AST.TypeHeader.Idx) CIR.Typ
             },
             else => {
                 // Other types in parameter position - canonicalize normally but warn
-                const canonicalized = self.canonicalize_type_anno(arg_idx);
+                const canonicalized = self.canonicalizeTypeAnno(arg_idx);
                 self.can_ir.store.addScratchTypeAnno(canonicalized);
             },
         }
@@ -3523,7 +3523,7 @@ fn canonicalize_type_header(self: *Self, header_idx: AST.TypeHeader.Idx) CIR.Typ
 }
 
 /// Canonicalize a statement in the canonical IR.
-pub fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.Allocator.Error!?CIR.Expr.Idx {
+pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.Allocator.Error!?CIR.Expr.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -3563,7 +3563,7 @@ pub fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.
                             // Check if this was declared as a var
                             if (self.isVarPattern(existing_pattern_idx)) {
                                 // This is a var reassignment - canonicalize the expression and create reassign statement
-                                const expr_idx = try self.canonicalize_expr(d.body) orelse return null;
+                                const expr_idx = try self.canonicalizeExpr(d.body) orelse return null;
 
                                 // Create reassign statement
                                 const reassign_stmt = CIR.Statement{ .s_reassign = .{
@@ -3585,8 +3585,8 @@ pub fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.
             }
 
             // Regular declaration - canonicalize as usual
-            const pattern_idx = try self.canonicalize_pattern(d.pattern) orelse return null;
-            const expr_idx = try self.canonicalize_expr(d.body) orelse return null;
+            const pattern_idx = try self.canonicalizePattern(d.pattern) orelse return null;
+            const expr_idx = try self.canonicalizeExpr(d.body) orelse return null;
 
             // Create a declaration statement
             const decl_stmt = CIR.Statement{ .s_decl = .{
@@ -3605,7 +3605,7 @@ pub fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.
             const region = self.parse_ir.tokenizedRegionToRegion(v.region);
 
             // Canonicalize the initial value
-            const init_expr_idx = try self.canonicalize_expr(v.body) orelse return null;
+            const init_expr_idx = try self.canonicalizeExpr(v.body) orelse return null;
 
             // Create pattern for the var
             const pattern_idx = try self.can_ir.store.addPattern(CIR.Pattern{ .assign = .{ .ident = var_name, .region = region } });
@@ -3626,7 +3626,7 @@ pub fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.
         },
         .expr => |e| {
             // Expression statement
-            const expr_idx = try self.canonicalize_expr(e.expr) orelse return null;
+            const expr_idx = try self.canonicalizeExpr(e.expr) orelse return null;
 
             // Create expression statement
             const expr_stmt = CIR.Statement{ .s_expr = .{
@@ -3698,7 +3698,7 @@ pub fn canonicalize_statement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.
             }
 
             // Now canonicalize the annotation with type variables in scope
-            const type_anno_idx = self.canonicalize_type_anno(ta.anno);
+            const type_anno_idx = self.canonicalizeTypeAnno(ta.anno);
 
             // Create a type annotation statement
             const type_anno_stmt = CIR.Statement{
@@ -4963,7 +4963,7 @@ fn canonicalizeFieldAccessReceiver(self: *Self, field_access: AST.BinOp) std.mem
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    if (try self.canonicalize_expr(field_access.left)) |idx| {
+    if (try self.canonicalizeExpr(field_access.left)) |idx| {
         return idx;
     } else {
         // Failed to canonicalize receiver, return malformed
@@ -5006,7 +5006,7 @@ fn parseMethodCall(self: *Self, apply: @TypeOf(@as(AST.Expr, undefined).apply)) 
     // Canonicalize the arguments using scratch system
     const scratch_top = self.can_ir.store.scratchExprTop();
     for (self.parse_ir.store.exprSlice(apply.args)) |arg_idx| {
-        if (try self.canonicalize_expr(arg_idx)) |canonicalized| {
+        if (try self.canonicalizeExpr(arg_idx)) |canonicalized| {
             self.can_ir.store.addScratchExpr(canonicalized);
         } else {
             self.can_ir.store.clearScratchExprsFrom(scratch_top);
@@ -5378,7 +5378,7 @@ test "hexadecimal integer literals" {
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
-        const canonical_expr_idx = try can.canonicalize_expr(expr_idx) orelse {
+        const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse {
             std.debug.print("Failed to canonicalize: {s}\n", .{tc.literal});
             try std.testing.expect(false);
             continue;
@@ -5468,7 +5468,7 @@ test "binary integer literals" {
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
-        const canonical_expr_idx = try can.canonicalize_expr(expr_idx) orelse {
+        const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse {
             std.debug.print("Failed to canonicalize: {s}\n", .{tc.literal});
             try std.testing.expect(false);
             continue;
@@ -5558,7 +5558,7 @@ test "octal integer literals" {
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
-        const canonical_expr_idx = try can.canonicalize_expr(expr_idx) orelse {
+        const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse {
             std.debug.print("Failed to canonicalize: {s}\n", .{tc.literal});
             try std.testing.expect(false);
             continue;
@@ -5648,7 +5648,7 @@ test "integer literals with uppercase base prefixes" {
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
-        const canonical_expr_idx = try can.canonicalize_expr(expr_idx) orelse {
+        const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse {
             std.debug.print("Failed to canonicalize: {s}\n", .{tc.literal});
             try std.testing.expect(false);
             continue;
@@ -6047,7 +6047,7 @@ test "record literal uses record_unbound" {
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
-        const canonical_expr_idx = try can.canonicalize_expr(expr_idx) orelse {
+        const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse {
             return error.CanonicalizeError;
         };
 
@@ -6083,7 +6083,7 @@ test "record literal uses record_unbound" {
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
-        const canonical_expr_idx = try can.canonicalize_expr(expr_idx) orelse {
+        const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse {
             return error.CanonicalizeError;
         };
 
@@ -6118,7 +6118,7 @@ test "record literal uses record_unbound" {
         defer can.deinit();
 
         const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
-        const canonical_expr_idx = try can.canonicalize_expr(expr_idx) orelse {
+        const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse {
             return error.CanonicalizeError;
         };
 
@@ -6162,7 +6162,7 @@ test "record_unbound basic functionality" {
     defer can.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
-    const canonical_expr_idx = try can.canonicalize_expr(expr_idx) orelse {
+    const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse {
         return error.CanonicalizeError;
     };
 
@@ -6205,7 +6205,7 @@ test "record_unbound with multiple fields" {
     defer can.deinit();
 
     const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
-    const canonical_expr_idx = try can.canonicalize_expr(expr_idx) orelse {
+    const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse {
         return error.CanonicalizeError;
     };
 
