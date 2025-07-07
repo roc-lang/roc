@@ -462,7 +462,7 @@ pub fn parseDiagnosticToReport(self: *AST, diagnostic: Diagnostic, allocator: st
             try report.document.addReflowingText("Expected a closing parenthesis after the method arguments.");
             try report.document.addLineBreak();
             try report.document.addText("Method constraints should look like: ");
-            try report.document.addCodeBlock("moduel(a).method : args -> ret");
+            try report.document.addCodeBlock("module(a).method : args -> ret");
         },
         .where_expected_method_arrow => {
             try report.document.addReflowingText("Expected an arrow ");
@@ -1884,7 +1884,7 @@ pub const WhereClause = union(enum) {
     /// Example:
     /// ```roc
     /// Sort(a) : a where  module(a).order(elem, elem) -> [LT, EQ, GT]
-    /// 
+    ///
     /// sort : List(elem) -> List(elem) where module(elem).Sort
     /// ```
     mod_alias: struct {
