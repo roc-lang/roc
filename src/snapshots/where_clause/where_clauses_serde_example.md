@@ -95,7 +95,7 @@ deserialize = |_| ...
 				(ty-tag-union @3.37-3.48
 					(ty @3.38-3.47 (name "DecodeErr")))))
 		(where
-			(where-method @4.9-5.12 (module-of "a") (function "decode")
+			(method @4.9-5.12 (module-of "a") (ident "decode")
 				(args
 					(ty-apply @4.28-4.36 (symbol "List")
 						(ty @4.33-4.35 (name "U8"))))

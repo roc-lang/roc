@@ -65,7 +65,7 @@ NO CHANGE
 			(ty-var @3.14-3.15 (name "a"))
 			(ty-var @3.19-3.20 (name "b")))
 		(where
-			(where-method @5.2-5.29 (module-of "a") (function "convert")
+			(method @5.2-5.29 (module-of "a") (ident "convert")
 				(args
 					(ty-var @5.22-5.23 (name "a")))
 				(ty-var @5.27-5.28 (name "b"))))))

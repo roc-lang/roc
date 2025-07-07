@@ -572,11 +572,11 @@ pub const WhereClause = union(enum) {
         const gpa = ir.env.gpa;
         switch (self.*) {
             .mod_method => |mm| {
-                var node = SExpr.init(gpa, "where-method");
+                var node = SExpr.init(gpa, "method");
                 ir.appendRegionInfoToSexprNodeFromRegion(&node, mm.region);
 
                 node.appendStringAttr(gpa, "module-of", ir.getIdentText(mm.var_name));
-                node.appendStringAttr(gpa, "function", ir.getIdentText(mm.method_name));
+                node.appendStringAttr(gpa, "ident", ir.getIdentText(mm.method_name));
 
                 // Add argument types
                 const args_slice = ir.store.sliceTypeAnnos(mm.args);
@@ -595,16 +595,16 @@ pub const WhereClause = union(enum) {
                 return node;
             },
             .mod_alias => |ma| {
-                var node = SExpr.init(gpa, "where-alias");
+                var node = SExpr.init(gpa, "alias");
                 ir.appendRegionInfoToSexprNodeFromRegion(&node, ma.region);
 
                 node.appendStringAttr(gpa, "module-of", ir.getIdentText(ma.var_name));
-                node.appendStringAttr(gpa, "alias", ir.getIdentText(ma.alias_name));
+                node.appendStringAttr(gpa, "ident", ir.getIdentText(ma.alias_name));
 
                 return node;
             },
             .malformed => |m| {
-                var node = SExpr.init(gpa, "where-malformed");
+                var node = SExpr.init(gpa, "malformed");
                 ir.appendRegionInfoToSexprNodeFromRegion(&node, m.region);
                 return node;
             },

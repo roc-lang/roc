@@ -88,7 +88,7 @@ NO CHANGE
 				(ty-var @3.6-3.7 (name "a"))))
 		(ty-var @3.11-3.12 (name "a"))
 		(where
-			(where-method @4.8-6.5 (module-of "a") (function "order")
+			(method @4.8-6.5 (module-of "a") (ident "order")
 				(args
 					(ty-tuple @4.26-4.32
 						(ty-var @4.27-4.28 (name "a"))
@@ -104,7 +104,7 @@ NO CHANGE
 			(ty-apply @6.22-6.32 (symbol "List")
 				(ty-var @6.27-6.31 (name "elem"))))
 		(where
-			(where-alias @6.39-7.5 (module-of "elem") (alias "Sort")))))
+			(alias @6.39-7.5 (module-of "elem") (ident "Sort")))))
 ~~~
 # TYPES
 ~~~clojure

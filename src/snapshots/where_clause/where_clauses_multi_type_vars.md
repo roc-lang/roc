@@ -76,11 +76,11 @@ NO CHANGE
 			(ty-var @3.14-3.15 (name "b"))
 			(ty-var @3.19-3.20 (name "c")))
 		(where
-			(where-method @3.27-3.54 (module-of "a") (function "convert")
+			(method @3.27-3.54 (module-of "a") (ident "convert")
 				(args
 					(ty-var @3.47-3.48 (name "a")))
 				(ty-var @3.52-3.53 (name "c")))
-			(where-method @3.55-4.8 (module-of "b") (function "transform")
+			(method @3.55-4.8 (module-of "b") (ident "transform")
 				(args
 					(ty-var @3.77-3.78 (name "b")))
 				(ty-var @3.82-3.83 (name "c"))))))

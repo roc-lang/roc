@@ -102,18 +102,18 @@ Decode(a) : a
 				(ty-var @3.9-3.15 (name "hasher"))))
 		(ty-var @5.3-5.4 (name "a"))
 		(where
-			(where-method @7.5-9.14 (module-of "a") (function "hash")
+			(method @7.5-9.14 (module-of "a") (ident "hash")
 				(args
 					(ty-var @7.22-7.28 (name "hasher")))
 				(ty-var @9.7-9.13 (name "hasher")))
-			(where-alias @10.5-10.27 (module-of "hasher") (alias "Hasher"))))
+			(alias @10.5-10.27 (module-of "hasher") (ident "Hasher"))))
 	(s-alias-decl @12.1-16.10
 		(ty-header @12.1-12.10 (name "Decode")
 			(ty-args
 				(ty-var @12.8-12.9 (name "a"))))
 		(ty-var @12.13-12.14 (name "a"))
 		(where
-			(where-method @14.3-16.10 (module-of "a") (function "decode")
+			(method @14.3-16.10 (module-of "a") (ident "decode")
 				(args
 					(ty-apply @15.4-15.12 (symbol "List")
 						(ty @15.9-15.11 (name "U8"))))
