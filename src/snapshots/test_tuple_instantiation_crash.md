@@ -27,7 +27,7 @@ main = swap(1, 2)
        ^^^^
 
 It is of type:
-    _(*, *) -> (*, *)_
+    _(a, b) -> (b, a)_
 
 But you are trying to use it as:
     _Num(*), Num(*) -> *_

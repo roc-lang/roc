@@ -26,8 +26,14 @@ var_function_regions: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, Region),
 var_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
 /// Tracks which pattern indices have been used/referenced
 used_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
-/// Keep track of pending annotation
-scratch_vars: std.ArrayListUnmanaged(TypeVar),
+/// Scratch type variables
+scratch_vars: base.Scratch(TypeVar),
+/// Scratch ident
+scratch_idents: base.Scratch(Ident.Idx),
+/// Scratch ident
+scratch_record_fields: base.Scratch(types.RecordField),
+/// Scratch ident
+scratch_seen_record_fields: base.Scratch(SeenRecordField),
 
 const Ident = base.Ident;
 const Region = base.Region;
@@ -42,6 +48,9 @@ const FlatType = types.FlatType;
 const Num = types.Num;
 const TagUnion = types.TagUnion;
 const Tag = types.Tag;
+
+/// Struct to track fields that have been seen before during canonicalization
+const SeenRecordField = struct { ident: base.Ident.Idx, region: base.Region };
 
 /// The idx of the builtin Bool
 pub const BUILTIN_BOOL: CIR.Pattern.Idx = @enumFromInt(0);
@@ -87,6 +96,9 @@ pub fn deinit(
     self.var_patterns.deinit(gpa);
     self.used_patterns.deinit(gpa);
     self.scratch_vars.deinit(gpa);
+    self.scratch_idents.deinit(gpa);
+    self.scratch_record_fields.deinit(gpa);
+    self.scratch_seen_record_fields.deinit(gpa);
 }
 
 pub fn init(self: *CIR, parse_ir: *AST) std.mem.Allocator.Error!Self {
@@ -101,7 +113,10 @@ pub fn init(self: *CIR, parse_ir: *AST) std.mem.Allocator.Error!Self {
         .var_function_regions = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, Region){},
         .var_patterns = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void){},
         .used_patterns = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void){},
-        .scratch_vars = std.ArrayListUnmanaged(TypeVar){},
+        .scratch_vars = base.Scratch(TypeVar).init(gpa),
+        .scratch_idents = base.Scratch(Ident.Idx).init(gpa),
+        .scratch_record_fields = base.Scratch(types.RecordField).init(gpa),
+        .scratch_seen_record_fields = base.Scratch(SeenRecordField).init(gpa),
     };
 
     // Top-level scope is not a function boundary
@@ -354,15 +369,21 @@ pub fn canonicalizeFile(
                 };
 
                 // Creat type variables to the backing type (rhs)
-                const anno_var = try self.canonicalizeTypeAnnoToTypeVar(anno_idx, CIR.nodeIdxFrom(header_idx));
+                const anno_var = blk: {
+                    // Enter a new scope for backing annotation type
+                    self.scopeEnter(self.can_ir.env.gpa, false);
+                    defer self.scopeExit(self.can_ir.env.gpa) catch {};
+
+                    break :blk try self.canonicalizeTypeAnnoToTypeVar(anno_idx);
+                };
 
                 // Create types for each arg annotation
-                const scratch_anno_start = self.scratch_vars.items.len;
+                const scratch_anno_start = self.scratch_vars.top();
                 for (self.can_ir.store.sliceTypeAnnos(header.args)) |arg_anno_idx| {
-                    const arg_anno_var = try self.canonicalizeTypeAnnoToTypeVar(arg_anno_idx, CIR.nodeIdxFrom(header_idx));
-                    try self.scratch_vars.append(self.can_ir.env.gpa, arg_anno_var);
+                    const arg_anno_var = try self.canonicalizeTypeAnnoToTypeVar(arg_anno_idx);
+                    self.scratch_vars.append(self.can_ir.env.gpa, arg_anno_var);
                 }
-                const arg_anno_slice = self.scratch_vars.items[scratch_anno_start..self.scratch_vars.items.len];
+                const arg_anno_slice = self.scratch_vars.items.items[scratch_anno_start..self.scratch_vars.top()];
 
                 // The identified of the type
                 const type_ident = types.TypeIdent{ .ident_idx = header.name };
@@ -429,7 +450,7 @@ pub fn canonicalizeFile(
                 }
 
                 // Shrink the scratch var buffer now that our work is done
-                self.scratch_vars.shrinkRetainingCapacity(scratch_anno_start);
+                self.scratch_vars.clearFrom(scratch_anno_start);
 
                 // Update the scope to point to the real statement instead of the placeholder
                 self.scopeUpdateTypeDecl(header.name, type_decl_stmt_idx);
@@ -465,7 +486,7 @@ pub fn canonicalizeFile(
                                 // This declaration matches the type annotation
                                 const pattern_region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getPattern(decl.pattern).to_tokenized_region());
                                 const type_var = self.can_ir.pushFreshTypeVar(@enumFromInt(0), pattern_region) catch |err| exitOnOom(err);
-                                annotation_idx = try self.createAnnotationFromTypeAnno(anno_info.anno_idx, type_var, pattern_region, @enumFromInt(@intFromEnum(decl.pattern)));
+                                annotation_idx = try self.createAnnotationFromTypeAnno(anno_info.anno_idx, type_var, pattern_region);
 
                                 // Clear the annotation since we've used it
                                 last_type_anno = null;
@@ -544,27 +565,30 @@ pub fn canonicalizeFile(
                     continue;
                 };
 
-                // First, extract all type variables from the AST annotation
-                var type_vars = std.ArrayList(Ident.Idx).init(self.can_ir.env.gpa);
-                defer type_vars.deinit();
+                // First, make the top of our scratch list
+                const type_vars_top: u32 = @intCast(self.scratch_idents.top());
 
                 // Extract type variables from the AST annotation
-                self.extractTypeVarsFromASTAnno(ta.anno, &type_vars);
+                self.extractTypeVarIdentsFromASTAnno(ta.anno, type_vars_top);
 
                 // Enter a new scope for type variables
                 self.scopeEnter(self.can_ir.env.gpa, false);
                 defer self.scopeExit(self.can_ir.env.gpa) catch {};
 
-                // Introduce type variables into scope
-                for (type_vars.items) |type_var| {
-                    // Create a dummy type annotation for the type variable
-                    const dummy_anno = self.can_ir.store.addTypeAnno(.{
-                        .ty_var = .{
-                            .name = type_var,
-                            .region = region, // TODO we may want to use the region for the type_var instead of the whole annotation
-                        },
-                    });
-                    self.scopeIntroduceTypeVar(type_var, dummy_anno);
+                // Introduce type variables into scope (if we have any)
+                if (self.scratch_idents.top() > type_vars_top) {
+                    for (self.scratch_idents.items.items[type_vars_top..]) |type_var| {
+                        // Create a dummy type annotation for the type variable
+                        const dummy_anno = self.can_ir.store.addTypeAnno(.{
+                            .ty_var = .{
+                                .name = type_var,
+                                .region = region, // TODO we may want to use the region for the type_var instead of the whole annotation
+                            },
+                        });
+                        self.scopeIntroduceTypeVar(type_var, dummy_anno);
+                    }
+                    // Shrink the scratch vars list to the original size
+                    self.scratch_idents.clearFrom(type_vars_top);
                 }
 
                 // Now canonicalize the annotation with type variables in scope
@@ -1753,9 +1777,7 @@ pub fn canonicalizeExpr(
             const scratch_top = self.can_ir.store.scratch_record_fields.top();
 
             // Track field names to detect duplicates
-            const FieldInfo = struct { ident: base.Ident.Idx, region: base.Region };
-            var seen_fields = std.ArrayListUnmanaged(FieldInfo){};
-            defer seen_fields.deinit(self.can_ir.env.gpa);
+            const seen_fields_top = self.scratch_seen_record_fields.top();
 
             // Iterate over the record fields, canonicalizing each one
             // Then append the result to the scratch list
@@ -1768,7 +1790,7 @@ pub fn canonicalizeExpr(
 
                     // Check for duplicate field names
                     var found_duplicate = false;
-                    for (seen_fields.items) |seen_field| {
+                    for (self.scratch_seen_record_fields.items.items[seen_fields_top..]) |seen_field| {
                         if (self.can_ir.env.idents.identsHaveSameText(field_name_ident, seen_field.ident)) {
                             // Found a duplicate - add diagnostic
                             const diagnostic = CIR.Diagnostic{
@@ -1786,15 +1808,17 @@ pub fn canonicalizeExpr(
 
                     if (!found_duplicate) {
                         // First occurrence of this field name
-                        seen_fields.append(self.can_ir.env.gpa, FieldInfo{
+                        self.scratch_seen_record_fields.append(self.can_ir.env.gpa, SeenRecordField{
                             .ident = field_name_ident,
                             .region = field_name_region,
-                        }) catch |err| exitOnOom(err);
+                        });
 
                         // Only canonicalize and include non-duplicate fields
                         if (try self.canonicalizeRecordField(field)) |canonicalized| {
                             self.can_ir.store.scratch_record_fields.append(self.can_ir.env.gpa, canonicalized);
                         }
+                    } else {
+                        // TODO: Add diagnostic on duplicate record field
                     }
                 } else {
                     // Field name couldn't be resolved, still try to canonicalize
@@ -1803,6 +1827,9 @@ pub fn canonicalizeExpr(
                     }
                 }
             }
+
+            // Shink the scratch array to it's original size
+            self.scratch_seen_record_fields.clearFrom(seen_fields_top);
 
             // Create span of the new scratch record fields
             const fields_span = self.can_ir.store.recordFieldSpanFrom(scratch_top);
@@ -1819,20 +1846,23 @@ pub fn canonicalizeExpr(
             const cir_fields = self.can_ir.store.sliceRecordFields(fields_span);
 
             // Create fresh type variables for each field
-            var type_record_fields = std.ArrayList(types.RecordField).init(self.can_ir.env.gpa);
-            defer type_record_fields.deinit();
+            const record_fields_top = self.scratch_record_fields.top();
 
             for (cir_fields) |cir_field_idx| {
                 const cir_field = self.can_ir.store.getRecordField(cir_field_idx);
-
-                type_record_fields.append(types.RecordField{
+                self.scratch_record_fields.append(self.can_ir.env.gpa, types.RecordField{
                     .name = cir_field.name,
                     .var_ = @enumFromInt(@intFromEnum(cir_field.value)),
-                }) catch |err| exitOnOom(err);
+                });
             }
 
             // Create the record type structure
-            const type_fields_range = self.can_ir.env.types.appendRecordFields(type_record_fields.items);
+            const type_fields_range = self.can_ir.env.types.appendRecordFields(
+                self.scratch_record_fields.items.items[record_fields_top..],
+            );
+
+            // Shink the scratch array to it's original size
+            self.scratch_record_fields.clearFrom(record_fields_top);
 
             _ = self.can_ir.setTypeVarAtExpr(
                 expr_idx,
@@ -3457,7 +3487,7 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.Id
 
             const annos = self.can_ir.store.typeAnnoSpanFrom(scratch_top);
             return self.can_ir.store.addTypeAnno(.{ .tuple = .{
-                .annos = annos,
+                .elems = annos,
                 .region = region,
             } });
         },
@@ -3528,14 +3558,14 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx) CIR.TypeAnno.Id
             const tags = self.can_ir.store.typeAnnoSpanFrom(scratch_top);
 
             // Handle optional open annotation (for extensible tag unions)
-            const open_anno = if (tag_union.open_anno) |open_idx|
+            const ext = if (tag_union.open_anno) |open_idx|
                 self.canonicalizeTypeAnno(open_idx)
             else
                 null;
 
             return self.can_ir.store.addTypeAnno(.{ .tag_union = .{
                 .tags = tags,
-                .open_anno = open_anno,
+                .ext = ext,
                 .region = region,
             } });
         },
@@ -3804,26 +3834,29 @@ pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.A
                 } });
             };
 
-            // First, extract all type variables from the AST annotation
-            var type_vars = std.ArrayList(Ident.Idx).init(self.can_ir.env.gpa);
-            defer type_vars.deinit();
+            // Introduce type variables into scope
+            const type_vars_top: u32 = @intCast(self.scratch_idents.top());
 
             // Extract type variables from the AST annotation
-            self.extractTypeVarsFromASTAnno(ta.anno, &type_vars);
+            self.extractTypeVarIdentsFromASTAnno(ta.anno, type_vars_top);
 
             // Enter a new scope for type variables
             self.scopeEnter(self.can_ir.env.gpa, false);
             defer self.scopeExit(self.can_ir.env.gpa) catch {};
 
-            // Introduce type variables into scope
-            for (type_vars.items) |type_var| {
-                // Get the proper region for this type variable from the AST
-                const type_var_region = self.getTypeVarRegionFromAST(ta.anno, type_var) orelse region;
-                const type_var_anno = self.can_ir.store.addTypeAnno(.{ .ty_var = .{
-                    .name = type_var,
-                    .region = type_var_region,
-                } });
-                self.scopeIntroduceTypeVar(type_var, type_var_anno);
+            // Introduce type variables into scope (if we have any)
+            if (self.scratch_idents.top() > type_vars_top) {
+                for (self.scratch_idents.items.items[type_vars_top..]) |type_var| {
+                    // Get the proper region for this type variable from the AST
+                    const type_var_region = self.getTypeVarRegionFromAST(ta.anno, type_var) orelse region;
+                    const type_var_anno = self.can_ir.store.addTypeAnno(.{ .ty_var = .{
+                        .name = type_var,
+                        .region = type_var_region,
+                    } });
+                    self.scopeIntroduceTypeVar(type_var, type_var_anno);
+                }
+                // Shrink the scratch vars list to the original size
+                self.scratch_idents.clearFrom(type_vars_top);
             }
 
             // Now canonicalize the annotation with type variables in scope
@@ -4068,35 +4101,36 @@ fn introduceTypeParametersFromHeader(self: *Self, header_idx: CIR.TypeHeader.Idx
     }
 }
 
-fn extractTypeVarsFromASTAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, vars: *std.ArrayList(Ident.Idx)) void {
+// Recursively unwrap an annotation, getting all type var idents
+fn extractTypeVarIdentsFromASTAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, idents_start_idx: u32) void {
     switch (self.parse_ir.store.getTypeAnno(anno_idx)) {
         .ty_var => |ty_var| {
             if (self.parse_ir.tokens.resolveIdentifier(ty_var.tok)) |ident| {
                 // Check if we already have this type variable
-                for (vars.items) |existing| {
+                for (self.scratch_idents.items.items[idents_start_idx..]) |existing| {
                     if (existing.idx == ident.idx) return; // Already added
                 }
-                vars.append(ident) catch |err| exitOnOom(err);
+                _ = self.scratch_idents.append(self.can_ir.env.gpa, ident);
             }
         },
         .apply => |apply| {
             for (self.parse_ir.store.typeAnnoSlice(apply.args)) |arg_idx| {
-                self.extractTypeVarsFromASTAnno(arg_idx, vars);
+                self.extractTypeVarIdentsFromASTAnno(arg_idx, idents_start_idx);
             }
         },
         .@"fn" => |fn_anno| {
             for (self.parse_ir.store.typeAnnoSlice(fn_anno.args)) |arg_idx| {
-                self.extractTypeVarsFromASTAnno(arg_idx, vars);
+                self.extractTypeVarIdentsFromASTAnno(arg_idx, idents_start_idx);
             }
-            self.extractTypeVarsFromASTAnno(fn_anno.ret, vars);
+            self.extractTypeVarIdentsFromASTAnno(fn_anno.ret, idents_start_idx);
         },
         .tuple => |tuple| {
             for (self.parse_ir.store.typeAnnoSlice(tuple.annos)) |elem_idx| {
-                self.extractTypeVarsFromASTAnno(elem_idx, vars);
+                self.extractTypeVarIdentsFromASTAnno(elem_idx, idents_start_idx);
             }
         },
         .parens => |parens| {
-            self.extractTypeVarsFromASTAnno(parens.anno, vars);
+            self.extractTypeVarIdentsFromASTAnno(parens.anno, idents_start_idx);
         },
         .record => |record| {
             // Extract type variables from record field types
@@ -4104,7 +4138,7 @@ fn extractTypeVarsFromASTAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, vars: *st
                 const field = self.parse_ir.store.getAnnoRecordField(field_idx) catch |err| switch (err) {
                     error.MalformedNode => continue,
                 };
-                self.extractTypeVarsFromASTAnno(field.ty, vars);
+                self.extractTypeVarIdentsFromASTAnno(field.ty, idents_start_idx);
             }
         },
         .ty, .underscore, .mod_ty, .tag_union, .malformed => {
@@ -4272,6 +4306,7 @@ fn scopeIntroduceInternal(
 }
 
 /// Get all identifiers in scope
+/// TODO: Is this used? If so, we should update to use `self.scratch_idents`
 fn scopeAllIdents(self: *const Self, gpa: std.mem.Allocator, comptime item_kind: Scope.ItemKind) []base.Ident.Idx {
     var result = std.ArrayList(base.Ident.Idx).init(gpa);
 
@@ -4651,7 +4686,8 @@ fn extractModuleName(self: *Self, module_name_ident: Ident.Idx) Ident.Idx {
 }
 
 /// Convert a parsed TypeAnno into a canonical TypeVar with appropriate Content
-fn canonicalizeTypeAnnoToTypeVar(self: *Self, type_anno_idx: CIR.TypeAnno.Idx, parent_node_idx: Node.Idx) std.mem.Allocator.Error!TypeVar {
+fn canonicalizeTypeAnnoToTypeVar(self: *Self, type_anno_idx: CIR.TypeAnno.Idx) std.mem.Allocator.Error!TypeVar {
+    const type_anno_node_idx = CIR.nodeIdxFrom(type_anno_idx);
     const type_anno = self.can_ir.store.getTypeAnno(type_anno_idx);
     const region = type_anno.toRegion();
 
@@ -4664,16 +4700,17 @@ fn canonicalizeTypeAnnoToTypeVar(self: *Self, type_anno_idx: CIR.TypeAnno.Idx, p
             switch (scope.lookupTypeVar(ident_store, tv.name)) {
                 .found => |_| {
                     // Type variable already exists, create fresh var with same name
-                    return self.can_ir.pushTypeVar(.{ .flex_var = tv.name }, parent_node_idx, region) catch |err| exitOnOom(err);
+                    return try self.can_ir.pushTypeVar(.{ .flex_var = tv.name }, type_anno_node_idx, region);
                 },
                 .not_found => {
                     // Create fresh flex var and add to scope
-                    const fresh_var = self.can_ir.pushTypeVar(.{ .flex_var = tv.name }, parent_node_idx, region) catch |err| exitOnOom(err);
+                    const fresh_var = try self.can_ir.pushTypeVar(.{ .flex_var = tv.name }, type_anno_node_idx, region);
 
                     // Create a basic type annotation for the scope
                     const ty_var_anno = self.can_ir.store.addTypeAnno(.{ .ty_var = .{ .name = tv.name, .region = region } });
 
                     // Add to scope (simplified - ignoring result for now)
+                    // TODO: Handle scope result and possible error
                     _ = scope.introduceTypeVar(self.can_ir.env.gpa, ident_store, tv.name, ty_var_anno, null);
 
                     return fresh_var;
@@ -4682,46 +4719,52 @@ fn canonicalizeTypeAnnoToTypeVar(self: *Self, type_anno_idx: CIR.TypeAnno.Idx, p
         },
         .underscore => {
             // Create anonymous flex var
-            return self.can_ir.pushFreshTypeVar(parent_node_idx, region) catch |err| exitOnOom(err);
+            return try self.can_ir.pushFreshTypeVar(type_anno_node_idx, region);
         },
         .ty => |t| {
             // Look up built-in or user-defined type
-            return self.canonicalizeBasicType(t.symbol, parent_node_idx, region);
+            return self.canonicalizeBasicType(t.symbol, type_anno_node_idx, region);
         },
         .apply => |apply| {
             // Handle type application like List(String), Dict(a, b)
-            return try self.canonicalizeTypeApplication(apply, parent_node_idx, region);
+            return try self.canonicalizeTypeApplication(apply, type_anno_node_idx, region);
         },
         .@"fn" => |func| {
             // Create function type
-            return try self.canonicalizeFunctionType(func, parent_node_idx, region);
+            return try self.canonicalizeFunctionType(func, type_anno_node_idx, region);
         },
         .tuple => |tuple| {
-            // Create tuple type
-            return self.canonicalizeTupleType(tuple, parent_node_idx, region);
+            if (tuple.elems.span.len == 1) {
+                // Single element tuples are just parenthized exprs
+                const type_annos = self.can_ir.store.sliceTypeAnnos(tuple.elems);
+                return try self.canonicalizeTypeAnnoToTypeVar(type_annos[0]);
+            } else {
+                // Create tuple type
+                return self.canonicalizeTupleType(tuple, type_anno_node_idx, region);
+            }
         },
         .record => |record| {
             // Create record type
-            return try self.canonicalizeRecordType(record, parent_node_idx, region);
+            return try self.canonicalizeRecordType(record, type_anno_node_idx, region);
         },
         .tag_union => |tag_union| {
             // Create tag union type
-            return self.canonicalizeTagUnionType(tag_union, parent_node_idx, region);
+            return self.canonicalizeTagUnionType(tag_union, type_anno_node_idx, region);
         },
         .parens => |parens| {
             // Recursively canonicalize the inner type
-            return try self.canonicalizeTypeAnnoToTypeVar(parens.anno, parent_node_idx);
+            return try self.canonicalizeTypeAnnoToTypeVar(parens.anno);
         },
 
         .ty_lookup_external => |tle| {
             // For external type lookups, create a flexible type variable
             // This will be resolved later when dependencies are available
             const external_decl = self.can_ir.getExternalDecl(tle.external_decl);
-            return self.can_ir.pushTypeVar(.{ .flex_var = external_decl.qualified_name }, parent_node_idx, region) catch |err| exitOnOom(err);
+            return self.can_ir.pushTypeVar(.{ .flex_var = external_decl.qualified_name }, type_anno_node_idx, region) catch |err| exitOnOom(err);
         },
         .malformed => {
             // Return error type for malformed annotations
-            return self.can_ir.pushTypeVar(.err, parent_node_idx, region) catch |err| exitOnOom(err);
+            return self.can_ir.pushTypeVar(.err, type_anno_node_idx, region) catch |err| exitOnOom(err);
         },
     }
 }
@@ -4734,6 +4777,7 @@ fn canonicalizeBasicType(self: *Self, symbol: Ident.Idx, parent_node_idx: Node.I
     const name = self.can_ir.env.idents.getText(symbol);
 
     // Built-in types mapping
+    // TODO: Once these are brought into scope from builtins, we can deleted most of this
     if (std.mem.eql(u8, name, "Bool")) {
         return self.can_ir.pushTypeVar(.{ .flex_var = symbol }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "Str")) {
@@ -4747,31 +4791,31 @@ fn canonicalizeBasicType(self: *Self, symbol: Ident.Idx, parent_node_idx: Node.I
         };
         return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_poly = .{ .var_ = num_var, .requirements = num_requirements } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "U8")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = types.Num.int_u8 } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "U16")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u16 } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = types.Num.int_u16 } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "U32")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u32 } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = types.Num.int_u32 } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "U64")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u64 } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = types.Num.int_u64 } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "U128")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .u128 } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = types.Num.int_u128 } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "I8")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i8 } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = types.Num.int_i8 } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "I16")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i16 } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = types.Num.int_i16 } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "I32")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i32 } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = types.Num.int_i32 } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "I64")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i64 } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = types.Num.int_i64 } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "I128")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .int = .i128 } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = types.Num.int_i128 } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "F32")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f32 } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = types.Num.frac_f32 } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "F64")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = .f64 } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = types.Num.frac_f64 } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else if (std.mem.eql(u8, name, "Dec")) {
-        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = .{ .num_compact = .{ .frac = .dec } } } }, parent_node_idx, region) catch |err| exitOnOom(err);
+        return self.can_ir.pushTypeVar(.{ .structure = .{ .num = types.Num.frac_dec } }, parent_node_idx, region) catch |err| exitOnOom(err);
     } else {
         // Look up user-defined type in scope
         const scope = self.currentScope();
@@ -4790,7 +4834,7 @@ fn canonicalizeBasicType(self: *Self, symbol: Ident.Idx, parent_node_idx: Node.I
 }
 
 /// Handle type applications like List(Str), Dict(k, v)
-fn canonicalizeTypeApplication(self: *Self, apply: anytype, parent_node_idx: Node.Idx, region: Region) std.mem.Allocator.Error!TypeVar {
+fn canonicalizeTypeApplication(self: *Self, apply: CIR.TypeAnno.Apply, parent_node_idx: Node.Idx, region: Region) std.mem.Allocator.Error!TypeVar {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -4829,7 +4873,7 @@ fn canonicalizeTypeApplication(self: *Self, apply: anytype, parent_node_idx: Nod
 
         // Create type argument variables sequentially after backing var
         for (actual_args) |arg_idx| {
-            _ = try self.canonicalizeTypeAnnoToTypeVar(arg_idx, parent_node_idx);
+            _ = try self.canonicalizeTypeAnnoToTypeVar(arg_idx);
         }
 
         // Now set the alias content on the main variable
@@ -4857,33 +4901,35 @@ fn canonicalizeTypeApplication(self: *Self, apply: anytype, parent_node_idx: Nod
 }
 
 /// Handle function types like a -> b
-fn canonicalizeFunctionType(self: *Self, func: anytype, parent_node_idx: Node.Idx, region: Region) std.mem.Allocator.Error!TypeVar {
+fn canonicalizeFunctionType(self: *Self, func: CIR.TypeAnno.Func, parent_node_idx: Node.Idx, region: Region) std.mem.Allocator.Error!TypeVar {
     const trace = tracy.trace(@src());
     defer trace.end();
-
-    const gpa = self.can_ir.env.gpa;
 
     // Canonicalize argument types and return type
     const args_slice = self.can_ir.store.sliceTypeAnnos(func.args);
 
     // Collect canonicalized argument type variables
-    var arg_vars = std.ArrayList(types.Var).init(gpa);
-    defer arg_vars.deinit();
 
     // For each argument, canonicalize its type and collect the type var
+    const arg_vars_top = self.scratch_vars.top();
     for (args_slice) |arg_anno_idx| {
-        const arg_type_var = try self.canonicalizeTypeAnnoToTypeVar(arg_anno_idx, parent_node_idx);
-        arg_vars.append(arg_type_var) catch |err| exitOnOom(err);
+        const arg_type_var = try self.canonicalizeTypeAnnoToTypeVar(arg_anno_idx);
+        self.scratch_vars.append(self.can_ir.env.gpa, arg_type_var);
     }
+    const arg_vars_end = self.scratch_vars.top();
 
     // Canonicalize return type
-    const ret_type_var = try self.canonicalizeTypeAnnoToTypeVar(func.ret, parent_node_idx);
+    const ret_type_var = try self.canonicalizeTypeAnnoToTypeVar(func.ret);
 
     // Create the appropriate function type based on effectfulness
+    const arg_vars = self.scratch_vars.items.items[arg_vars_top..arg_vars_end];
     const func_content = if (func.effectful)
-        self.can_ir.env.types.mkFuncEffectful(arg_vars.items, ret_type_var)
+        self.can_ir.env.types.mkFuncEffectful(arg_vars, ret_type_var)
     else
-        self.can_ir.env.types.mkFuncPure(arg_vars.items, ret_type_var);
+        self.can_ir.env.types.mkFuncPure(arg_vars, ret_type_var);
+
+    // Shink the scratch array to it's original size
+    self.scratch_vars.clearFrom(arg_vars_top);
 
     // Create and return the function type variable
     return self.can_ir.pushTypeVar(
@@ -4894,40 +4940,57 @@ fn canonicalizeFunctionType(self: *Self, func: anytype, parent_node_idx: Node.Id
 }
 
 /// Handle tuple types like (a, b, c)
-fn canonicalizeTupleType(self: *Self, tuple: anytype, parent_node_idx: Node.Idx, region: Region) TypeVar {
+fn canonicalizeTupleType(self: *Self, tuple: CIR.TypeAnno.Tuple, parent_node_idx: Node.Idx, region: Region) std.mem.Allocator.Error!TypeVar {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    _ = tuple;
-    // Simplified implementation - create flex var for tuples
-    return self.can_ir.pushFreshTypeVar(parent_node_idx, region) catch |err| exitOnOom(err);
+    // Canonicalized each tuple element
+    const scratch_elems_start = self.scratch_vars.top();
+    for (self.can_ir.store.sliceTypeAnnos(tuple.elems)) |tuple_elem_anno_idx| {
+        const elem_var = try self.canonicalizeTypeAnnoToTypeVar(tuple_elem_anno_idx);
+        _ = self.scratch_vars.append(self.can_ir.env.gpa, elem_var);
+    }
+    const elem_vars_range = self.can_ir.env.types.appendTupleElems(
+        self.scratch_vars.items.items[scratch_elems_start..],
+    );
+
+    // Shink the scratch array to it's original size
+    self.scratch_vars.clearFrom(scratch_elems_start);
+
+    return try self.can_ir.pushTypeVar(
+        .{ .structure = .{ .tuple = .{ .elems = elem_vars_range } } },
+        parent_node_idx,
+        region,
+    );
 }
 
 /// Handle record types like { name: Str, age: Num }
-fn canonicalizeRecordType(self: *Self, record: anytype, parent_node_idx: Node.Idx, region: Region) std.mem.Allocator.Error!TypeVar {
+fn canonicalizeRecordType(self: *Self, record: CIR.TypeAnno.Record, parent_node_idx: Node.Idx, region: Region) std.mem.Allocator.Error!TypeVar {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     // Create fresh type variables for each field
-    var type_record_fields = std.ArrayList(types.RecordField).init(self.can_ir.env.gpa);
-    defer type_record_fields.deinit();
+    const record_fields_top = self.scratch_record_fields.top();
 
     // Process each field in the record type annotation
     for (self.can_ir.store.sliceAnnoRecordFields(record.fields)) |field_idx| {
         const field = self.can_ir.store.getAnnoRecordField(field_idx);
 
         // Canonicalize the field's type annotation
-        const field_type_var = try self.canonicalizeTypeAnnoToTypeVar(field.ty, parent_node_idx);
+        const field_type_var = try self.canonicalizeTypeAnnoToTypeVar(field.ty);
 
-        type_record_fields.append(types.RecordField{
+        self.scratch_record_fields.append(self.can_ir.env.gpa, types.RecordField{
             .name = field.name,
             .var_ = field_type_var,
-        }) catch |err| exitOnOom(err);
+        });
     }
 
     // Create the record type structure
-    const type_fields_range = self.can_ir.env.types.appendRecordFields(type_record_fields.items);
+    const type_fields_range = self.can_ir.env.types.appendRecordFields(self.scratch_record_fields.items.items[record_fields_top..]);
     const ext_var = self.can_ir.pushTypeVar(.{ .structure = .empty_record }, parent_node_idx, region) catch |err| exitOnOom(err);
+
+    // Shink the scratch array to it's original size
+    self.scratch_record_fields.clearFrom(record_fields_top);
 
     return self.can_ir.pushTypeVar(
         .{ .structure = .{ .record = .{ .fields = type_fields_range, .ext = ext_var } } },
@@ -4978,8 +5041,8 @@ fn canonicalizeTagUnionType(self: *Self, tag_union: CIR.TypeAnno.TagUnion, paren
 
     // Get the tag union ext
     const tag_union_ext = blk: {
-        if (tag_union.open_anno) |open_anno_idx| {
-            break :blk self.canonicalizeTypeAnnoToTypeVar(open_anno_idx, CIR.nodeIdxFrom(open_anno_idx));
+        if (tag_union.ext) |ext_anno_idx| {
+            break :blk self.canonicalizeTypeAnnoToTypeVar(ext_anno_idx);
         } else {
             break :blk self.can_ir.pushTypeVar(Content{ .structure = .empty_tag_union }, parent_node_idx, region);
         }
@@ -4996,12 +5059,12 @@ fn canonicalizeTagUnionType(self: *Self, tag_union: CIR.TypeAnno.TagUnion, paren
 
 /// Handle module-qualified types like Json.Decoder
 /// Create an annotation from a type annotation
-fn createAnnotationFromTypeAnno(self: *Self, type_anno_idx: CIR.TypeAnno.Idx, _: TypeVar, region: Region, parent_node_idx: Node.Idx) std.mem.Allocator.Error!?CIR.Annotation.Idx {
+fn createAnnotationFromTypeAnno(self: *Self, type_anno_idx: CIR.TypeAnno.Idx, _: TypeVar, region: Region) std.mem.Allocator.Error!?CIR.Annotation.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     // Convert the type annotation to a type variable
-    const signature = try self.canonicalizeTypeAnnoToTypeVar(type_anno_idx, parent_node_idx);
+    const signature = try self.canonicalizeTypeAnnoToTypeVar(type_anno_idx);
 
     // Create the annotation structure
     const annotation = CIR.Annotation{
