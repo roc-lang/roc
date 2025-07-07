@@ -383,7 +383,7 @@ pub fn canonicalizeFile(
                     const arg_anno_var = try self.canonicalizeTypeAnnoToTypeVar(arg_anno_idx);
                     self.scratch_vars.append(self.can_ir.env.gpa, arg_anno_var);
                 }
-                const arg_anno_slice = self.scratch_vars.items.items[scratch_anno_start..self.scratch_vars.top()];
+                const arg_anno_slice = self.scratch_vars.slice(scratch_anno_start, self.scratch_vars.top());
 
                 // The identified of the type
                 const type_ident = types.TypeIdent{ .ident_idx = header.name };
@@ -577,7 +577,7 @@ pub fn canonicalizeFile(
 
                 // Introduce type variables into scope (if we have any)
                 if (self.scratch_idents.top() > type_vars_top) {
-                    for (self.scratch_idents.items.items[type_vars_top..]) |type_var| {
+                    for (self.scratch_idents.sliceFromStart(type_vars_top)) |type_var| {
                         // Create a dummy type annotation for the type variable
                         const dummy_anno = self.can_ir.store.addTypeAnno(.{
                             .ty_var = .{
@@ -1725,7 +1725,7 @@ pub fn canonicalizeExpr(
                 // of scratch expr idx and cast them to vars
                 const elems_var_range = self.can_ir.env.types.appendTupleElems(
                     @ptrCast(@alignCast(
-                        self.can_ir.store.scratch_exprs.items.items[scratch_top..self.can_ir.store.scratchExprTop()],
+                        self.can_ir.store.scratch_exprs.slice(scratch_top, self.can_ir.store.scratchExprTop()),
                     )),
                 );
 
@@ -1790,7 +1790,7 @@ pub fn canonicalizeExpr(
 
                     // Check for duplicate field names
                     var found_duplicate = false;
-                    for (self.scratch_seen_record_fields.items.items[seen_fields_top..]) |seen_field| {
+                    for (self.scratch_seen_record_fields.sliceFromStart(seen_fields_top)) |seen_field| {
                         if (self.can_ir.env.idents.identsHaveSameText(field_name_ident, seen_field.ident)) {
                             // Found a duplicate - add diagnostic
                             const diagnostic = CIR.Diagnostic{
@@ -1858,7 +1858,7 @@ pub fn canonicalizeExpr(
 
             // Create the record type structure
             const type_fields_range = self.can_ir.env.types.appendRecordFields(
-                self.scratch_record_fields.items.items[record_fields_top..],
+                self.scratch_record_fields.sliceFromStart(record_fields_top),
             );
 
             // Shink the scratch array to it's original size
@@ -3846,7 +3846,7 @@ pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.A
 
             // Introduce type variables into scope (if we have any)
             if (self.scratch_idents.top() > type_vars_top) {
-                for (self.scratch_idents.items.items[type_vars_top..]) |type_var| {
+                for (self.scratch_idents.sliceFromStart(type_vars_top)) |type_var| {
                     // Get the proper region for this type variable from the AST
                     const type_var_region = self.getTypeVarRegionFromAST(ta.anno, type_var) orelse region;
                     const type_var_anno = self.can_ir.store.addTypeAnno(.{ .ty_var = .{
@@ -4107,7 +4107,7 @@ fn extractTypeVarIdentsFromASTAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, iden
         .ty_var => |ty_var| {
             if (self.parse_ir.tokens.resolveIdentifier(ty_var.tok)) |ident| {
                 // Check if we already have this type variable
-                for (self.scratch_idents.items.items[idents_start_idx..]) |existing| {
+                for (self.scratch_idents.sliceFromStart(idents_start_idx)) |existing| {
                     if (existing.idx == ident.idx) return; // Already added
                 }
                 _ = self.scratch_idents.append(self.can_ir.env.gpa, ident);
@@ -4922,7 +4922,7 @@ fn canonicalizeFunctionType(self: *Self, func: CIR.TypeAnno.Func, parent_node_id
     const ret_type_var = try self.canonicalizeTypeAnnoToTypeVar(func.ret);
 
     // Create the appropriate function type based on effectfulness
-    const arg_vars = self.scratch_vars.items.items[arg_vars_top..arg_vars_end];
+    const arg_vars = self.scratch_vars.slice(arg_vars_top, arg_vars_end);
     const func_content = if (func.effectful)
         self.can_ir.env.types.mkFuncEffectful(arg_vars, ret_type_var)
     else
