@@ -18,10 +18,11 @@
 
         dependencies = (with pkgs; [
           zig
+          zls
         ]);
 
         aliases = ''
-          alias testcmd='zig build test'
+          alias testcmd='zig build test && zig build snapshot'
           alias fmtcmd='zig build fmt'
           alias buildcmd='zig build roc'
         '';
@@ -35,7 +36,7 @@
             ${aliases}
             
             echo "Some convenient command aliases:"
-            echo "${aliases}" | grep -E "alias [^=]+" -o | sed 's/alias /  /' | sort
+            echo "${aliases}" | grep -E "alias .*" -o | sed 's/alias /  /' | sort
             echo ""
           '';
         };

@@ -138,7 +138,7 @@ jobs:
       - name: Test inside nix too
         if: startsWith(matrix.os, 'ubuntu') || startsWith(matrix.os, 'macos')
         run: |
-          nix develop ./src/flake.nix -c zig build test
+          nix develop ./src/flake.nix -c zig build test && zig build snapshot
 
   zig-cross-compile:
     needs: check-zig
