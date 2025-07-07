@@ -237,7 +237,8 @@ NO CHANGE
 	(s-alias-decl @15.1-15.24
 		(ty-header @15.1-15.8 (name "MyType2"))
 		(ty-lookup-external @15.11-15.24
-			(ext-decl @15.11-15.24 (ident "Module.Thingy") (kind "type")))))
+			(ext-decl @15.11-15.24 (ident "Module.Thingy") (kind "type"))))
+	(ext-decl @15.11-15.24 (ident "Module.Thingy") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure

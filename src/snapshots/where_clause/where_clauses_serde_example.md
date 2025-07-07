@@ -102,7 +102,8 @@ deserialize = |_| ...
 				(ty-apply @4.40-4.62 (symbol "Result")
 					(ty-var @4.47-4.48 (name "a"))
 					(ty-tag-union @4.50-4.61
-						(ty @4.51-4.60 (name "DecodeErr"))))))))
+						(ty @4.51-4.60 (name "DecodeErr")))))))
+	(ext-decl @4.9-5.12 (ident "module(a).decode") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure

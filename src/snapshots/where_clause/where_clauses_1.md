@@ -98,7 +98,10 @@ Decode(a) : a where module(a).decode : List(U8) -> a
 				(args
 					(ty-apply @8.40-8.48 (symbol "List")
 						(ty @8.45-8.47 (name "U8"))))
-				(ty-var @8.52-8.53 (name "a"))))))
+				(ty-var @8.52-8.53 (name "a")))))
+	(ext-decl @5.3-5.37 (ident "module(a).hash") (kind "value"))
+	(ext-decl @6.3-6.25 (ident "module(hasher).Hasher") (kind "type"))
+	(ext-decl @8.21-8.53 (ident "module(a).decode") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure

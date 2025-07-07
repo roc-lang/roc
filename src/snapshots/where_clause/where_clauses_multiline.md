@@ -81,7 +81,9 @@ NO CHANGE
 			(method @6.2-6.31 (module-of "b") (ident "transform")
 				(args
 					(ty-var @6.24-6.25 (name "b")))
-				(ty-var @6.29-6.30 (name "c"))))))
+				(ty-var @6.29-6.30 (name "c")))))
+	(ext-decl @5.2-5.29 (ident "module(a).convert") (kind "value"))
+	(ext-decl @6.2-6.31 (ident "module(b).transform") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure

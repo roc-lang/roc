@@ -917,7 +917,7 @@ fn createExternalDeclaration(
     qualified_name: Ident.Idx,
     module_name: Ident.Idx,
     local_name: Ident.Idx,
-    kind: CIR.ExternalDecl.kind,
+    kind: @TypeOf(@as(CIR.ExternalDecl, undefined).kind),
     region: Region,
 ) CIR.ExternalDecl.Idx {
     const external_decl = CIR.ExternalDecl{
@@ -4863,9 +4863,22 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx) CIR.
             // Canonicalize return type
             const ret_anno = self.canonicalizeTypeAnno(mm.ret_anno);
 
-            // TODO: Implement proper external declaration handling
-            // For now, create a placeholder external declaration
-            const external_decl: CIR.ExternalDecl.Idx = @enumFromInt(0);
+            // Create external declaration for where clause method constraint
+            // This represents the requirement that type variable must come from a module
+            // that provides the specified method
+            const var_name_text = self.can_ir.env.idents.getText(var_ident);
+
+            // Create qualified name: "module(a).method"
+            const qualified_text = std.fmt.allocPrint(self.can_ir.env.gpa, "module({s}).{s}", .{ var_name_text, method_name_clean }) catch |err| exitOnOom(err);
+            defer self.can_ir.env.gpa.free(qualified_text);
+            const qualified_name = self.can_ir.env.idents.insert(self.can_ir.env.gpa, Ident.for_text(qualified_text), region);
+
+            // Create module name: "module(a)"
+            const module_text = std.fmt.allocPrint(self.can_ir.env.gpa, "module({s})", .{var_name_text}) catch |err| exitOnOom(err);
+            defer self.can_ir.env.gpa.free(module_text);
+            const module_name = self.can_ir.env.idents.insert(self.can_ir.env.gpa, Ident.for_text(module_text), region);
+
+            const external_decl = self.createExternalDeclaration(qualified_name, module_name, method_ident, .value, region);
 
             return self.can_ir.store.addWhereClause(CIR.WhereClause{ .mod_method = .{
                 .var_name = var_ident,
@@ -4895,9 +4908,22 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx) CIR.
             const var_ident = self.can_ir.env.idents.insert(self.can_ir.env.gpa, Ident.for_text(var_name), region);
             const alias_ident = self.can_ir.env.idents.insert(self.can_ir.env.gpa, Ident.for_text(alias_name_clean), region);
 
-            // TODO: Implement proper external declaration handling
-            // For now, create a placeholder external declaration
-            const external_decl: CIR.ExternalDecl.Idx = @enumFromInt(0);
+            // Create external declaration for where clause alias constraint
+            // This represents the requirement that type variable must come from a module
+            // that provides the specified type alias
+            const var_name_text = self.can_ir.env.idents.getText(var_ident);
+
+            // Create qualified name: "module(a).Alias"
+            const qualified_text = std.fmt.allocPrint(self.can_ir.env.gpa, "module({s}).{s}", .{ var_name_text, alias_name_clean }) catch |err| exitOnOom(err);
+            defer self.can_ir.env.gpa.free(qualified_text);
+            const qualified_name = self.can_ir.env.idents.insert(self.can_ir.env.gpa, Ident.for_text(qualified_text), region);
+
+            // Create module name: "module(a)"
+            const module_text = std.fmt.allocPrint(self.can_ir.env.gpa, "module({s})", .{var_name_text}) catch |err| exitOnOom(err);
+            defer self.can_ir.env.gpa.free(module_text);
+            const module_name = self.can_ir.env.idents.insert(self.can_ir.env.gpa, Ident.for_text(module_text), region);
+
+            const external_decl = self.createExternalDeclaration(qualified_name, module_name, alias_ident, .type, region);
 
             return self.can_ir.store.addWhereClause(CIR.WhereClause{ .mod_alias = .{
                 .var_name = var_ident,

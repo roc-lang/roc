@@ -68,7 +68,8 @@ NO CHANGE
 			(method @5.2-5.29 (module-of "a") (ident "convert")
 				(args
 					(ty-var @5.22-5.23 (name "a")))
-				(ty-var @5.27-5.28 (name "b"))))))
+				(ty-var @5.27-5.28 (name "b")))))
+	(ext-decl @5.2-5.29 (ident "module(a).convert") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure

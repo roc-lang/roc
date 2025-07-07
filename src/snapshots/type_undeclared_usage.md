@@ -133,7 +133,8 @@ AnotherType : SomeModule.MissingType
 	(s-alias-decl @10.1-10.37
 		(ty-header @10.1-10.12 (name "AnotherType"))
 		(ty-lookup-external @10.15-10.37
-			(ext-decl @10.15-10.37 (ident "SomeModule.MissingType") (kind "type")))))
+			(ext-decl @10.15-10.37 (ident "SomeModule.MissingType") (kind "type"))))
+	(ext-decl @10.15-10.37 (ident "SomeModule.MissingType") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure

@@ -142,7 +142,8 @@ handleResult = |result| {
 						(ty @5.49-5.52 (name "I32")))
 					(ty @5.57-5.60 (name "Str"))))))
 	(s-import @3.1-3.22 (module "MyResultModule")
-		(exposes)))
+		(exposes))
+	(ext-decl @5.16-5.43 (ident "MyResultModule.MyResultType") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure

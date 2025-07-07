@@ -46,7 +46,8 @@ NO CHANGE
 		(e-lookup-external
 			(ext-decl @5.8-5.21 (ident "json.Json.decode") (kind "value"))))
 	(s-import @3.1-3.27 (module "json.Json") (qualifier "json") (alias "MyJson")
-		(exposes)))
+		(exposes))
+	(ext-decl @5.8-5.21 (ident "json.Json.decode") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure

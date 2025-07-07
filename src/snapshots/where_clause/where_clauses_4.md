@@ -71,7 +71,8 @@ decodeThings : List(List(U8)) -> List(a)
 			(ty-apply @5.34-5.41 (symbol "List")
 				(ty-var @5.39-5.40 (name "a"))))
 		(where
-			(alias @6.8-6.24 (module-of "a") (ident "Decode")))))
+			(alias @6.8-6.24 (module-of "a") (ident "Decode"))))
+	(ext-decl @6.8-6.24 (ident "module(a).Decode") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure

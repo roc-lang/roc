@@ -80,7 +80,8 @@ decodeThings # After member name
 			(ty-apply @7.21-7.28 (symbol "List")
 				(ty-var @7.26-7.27 (name "a"))))
 		(where
-			(alias @9.5-9.22 (module-of "a") (ident "Decode")))))
+			(alias @9.5-9.22 (module-of "a") (ident "Decode"))))
+	(ext-decl @9.5-9.22 (ident "module(a).Decode") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure

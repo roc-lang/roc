@@ -117,7 +117,10 @@ Decode(a) : a
 				(args
 					(ty-apply @15.4-15.12 (symbol "List")
 						(ty @15.9-15.11 (name "U8"))))
-				(ty-var @16.8-16.9 (name "a"))))))
+				(ty-var @16.8-16.9 (name "a")))))
+	(ext-decl @7.5-9.14 (ident "module(a).hash") (kind "value"))
+	(ext-decl @10.5-10.27 (ident "module(hasher).Hasher") (kind "type"))
+	(ext-decl @14.3-16.10 (ident "module(a).decode") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure

@@ -77,7 +77,8 @@ NO CHANGE
 			(method @3.24-4.8 (module-of "a") (ident "to_b")
 				(args
 					(ty-var @3.41-3.42 (name "a")))
-				(ty-var @3.46-3.47 (name "b"))))))
+				(ty-var @3.46-3.47 (name "b")))))
+	(ext-decl @3.24-4.8 (ident "module(a).to_b") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure

@@ -184,7 +184,8 @@ broken_fn3 : a -> b
 			(method @15.5-15.31 (module-of "c") (ident "method")
 				(args
 					(ty-var @15.24-15.25 (name "c")))
-				(ty-var @15.29-15.30 (name "d"))))))
+				(ty-var @15.29-15.30 (name "d")))))
+	(ext-decl @15.5-15.31 (ident "module(c).method") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure

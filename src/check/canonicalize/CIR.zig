@@ -1034,7 +1034,7 @@ pub fn toSExpr(ir: *CIR, maybe_expr_idx: ?Expr.Idx, source: []const u8) SExpr {
         const defs_slice = ir.store.sliceDefs(ir.all_defs);
         const statements_slice = ir.store.sliceStatements(ir.all_statements);
 
-        if (defs_slice.len == 0 and statements_slice.len == 0) {
+        if (defs_slice.len == 0 and statements_slice.len == 0 and ir.external_decls.items.len == 0) {
             root_node.appendBoolAttr(gpa, "empty", true);
         }
 
@@ -1046,6 +1046,11 @@ pub fn toSExpr(ir: *CIR, maybe_expr_idx: ?Expr.Idx, source: []const u8) SExpr {
         for (statements_slice) |stmt_idx| {
             var stmt_node = ir.store.getStatement(stmt_idx).toSExpr(ir);
             root_node.appendNode(gpa, &stmt_node);
+        }
+
+        for (ir.external_decls.items) |*external_decl| {
+            var external_node = external_decl.toSExpr(ir);
+            root_node.appendNode(gpa, &external_node);
         }
 
         return root_node;

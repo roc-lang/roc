@@ -104,7 +104,9 @@ NO CHANGE
 			(ty-apply @6.22-6.32 (symbol "List")
 				(ty-var @6.27-6.31 (name "elem"))))
 		(where
-			(alias @6.39-7.5 (module-of "elem") (ident "Sort")))))
+			(alias @6.39-7.5 (module-of "elem") (ident "Sort"))))
+	(ext-decl @4.8-6.5 (ident "module(a).order") (kind "value"))
+	(ext-decl @6.39-7.5 (ident "module(elem).Sort") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure

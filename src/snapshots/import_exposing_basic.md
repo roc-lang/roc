@@ -115,7 +115,9 @@ main = {
 	(s-import @3.1-3.43 (module "json.Json") (qualifier "json")
 		(exposes
 			(exposed (name "decode") (wildcard false))
-			(exposed (name "encode") (wildcard false)))))
+			(exposed (name "encode") (wildcard false))))
+	(ext-decl @7.15-7.21 (ident "json.Json.encode") (kind "value"))
+	(ext-decl @8.15-8.21 (ident "json.Json.decode") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure

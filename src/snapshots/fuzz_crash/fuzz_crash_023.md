@@ -2898,7 +2898,8 @@ expect {
 	(s-import @16.1-16.27 (module "BadName") (alias "GoodName")
 		(exposes))
 	(s-import @17.1-20.20 (module "BadNameMultiline") (alias "GoodNameMultiline")
-		(exposes)))
+		(exposes))
+	(ext-decl @191.2-191.14 (ident "pf.Stdout.line!") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure

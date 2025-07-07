@@ -68,7 +68,8 @@ Cache(k, v) := Dict(U64, v)
 			(method @5.5-5.31 (module-of "k") (ident "hash")
 				(args
 					(ty-var @5.22-5.23 (name "k")))
-				(ty @5.27-5.30 (name "U64"))))))
+				(ty @5.27-5.30 (name "U64")))))
+	(ext-decl @5.5-5.31 (ident "module(k).hash") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure
