@@ -77,12 +77,12 @@ jobs:
         run: |
           zig-out\bin\roc.exe -h | findstr "Usage:"
 
+      - name: zig snapshot tests
+        run: zig build snapshot
+
       - name: zig tests
         run: |
           zig build test -Dllvm -Dfuzz -Dsystem-afl=false
-
-      - name: zig snapshot tests
-        run: zig build snapshot
 
       - name: Check for snapshot changes
         run: |
@@ -138,7 +138,9 @@ jobs:
       - name: Test inside nix too
         if: startsWith(matrix.os, 'ubuntu') || startsWith(matrix.os, 'macos')
         run: |
-          nix develop ./src/flake.nix -c zig build test && zig build snapshot
+          git clean -fdx
+          git reset --hard HEAD
+          nix develop ./src/flake.nix -c zig build snapshot && zig build test
 
   zig-cross-compile:
     needs: check-zig
