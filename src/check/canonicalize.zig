@@ -3862,12 +3862,25 @@ pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.A
             // Now canonicalize the annotation with type variables in scope
             const type_anno_idx = self.canonicalizeTypeAnno(ta.anno);
 
+            // Canonicalize where clauses if present
+            const where_clauses = if (ta.where) |where_coll| blk: {
+                const where_slice = self.parse_ir.store.whereClauseSlice(.{ .span = self.parse_ir.store.getCollection(where_coll).span });
+                const where_start = self.can_ir.store.scratchWhereClauseTop();
+
+                for (where_slice) |where_idx| {
+                    const canonicalized_where = self.canonicalizeWhereClause(where_idx);
+                    self.can_ir.store.addScratchWhereClause(canonicalized_where);
+                }
+
+                break :blk self.can_ir.store.whereClauseSpanFrom(where_start);
+            } else null;
+
             // Create a type annotation statement
             const type_anno_stmt = CIR.Statement{
                 .s_type_anno = .{
                     .name = name_ident,
                     .anno = type_anno_idx,
-                    .where = null, // Where clauses are not yet implemented in the parser
+                    .where = where_clauses,
                     .region = region,
                 },
             };
@@ -4765,6 +4778,99 @@ fn canonicalizeTypeAnnoToTypeVar(self: *Self, type_anno_idx: CIR.TypeAnno.Idx) s
         .malformed => {
             // Return error type for malformed annotations
             return self.can_ir.pushTypeVar(.err, type_anno_node_idx, region) catch |err| exitOnOom(err);
+        },
+    }
+}
+
+/// Canonicalize a where clause from AST to CIR
+fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx) CIR.WhereClause.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const ast_where = self.parse_ir.store.getWhereClause(ast_where_idx);
+
+    switch (ast_where) {
+        .mod_method => |mm| {
+            const region = self.parse_ir.tokenizedRegionToRegion(mm.region);
+
+            // Resolve type variable name
+            const var_name = self.parse_ir.resolve(mm.var_tok);
+
+            // Resolve method name (remove leading dot)
+            const method_name_text = self.parse_ir.resolve(mm.name_tok);
+
+            // Remove leading dot from method name
+            const method_name_clean = if (method_name_text.len > 0 and method_name_text[0] == '.')
+                method_name_text[1..]
+            else
+                method_name_text;
+
+            // Intern the variable and method names
+            const var_ident = self.can_ir.env.idents.insert(self.can_ir.env.gpa, Ident.for_text(var_name), region);
+            const method_ident = self.can_ir.env.idents.insert(self.can_ir.env.gpa, Ident.for_text(method_name_clean), region);
+
+            // Canonicalize argument types
+            const args_slice = self.parse_ir.store.typeAnnoSlice(.{ .span = self.parse_ir.store.getCollection(mm.args).span });
+            const args_start = self.can_ir.store.scratchTypeAnnoTop();
+            for (args_slice) |arg_idx| {
+                const canonicalized_arg = self.canonicalizeTypeAnno(arg_idx);
+                self.can_ir.store.addScratchTypeAnno(canonicalized_arg);
+            }
+            const args_span = self.can_ir.store.typeAnnoSpanFrom(args_start);
+
+            // Canonicalize return type
+            const ret_anno = self.canonicalizeTypeAnno(mm.ret_anno);
+
+            // TODO: Implement proper external declaration handling
+            const external_decl: CIR.ExternalDecl.Idx = @enumFromInt(0);
+
+            return self.can_ir.store.addWhereClause(CIR.WhereClause{ .mod_method = .{
+                .var_name = var_ident,
+                .method_name = method_ident,
+                .args = args_span,
+                .ret_anno = ret_anno,
+                .external_decl = external_decl,
+                .region = region,
+            } });
+        },
+        .mod_alias => |ma| {
+            const region = self.parse_ir.tokenizedRegionToRegion(ma.region);
+
+            // Resolve type variable name
+            const var_name = self.parse_ir.resolve(ma.var_tok);
+
+            // Resolve alias name (remove leading dot)
+            const alias_name_text = self.parse_ir.resolve(ma.name_tok);
+
+            // Remove leading dot from alias name
+            const alias_name_clean = if (alias_name_text.len > 0 and alias_name_text[0] == '.')
+                alias_name_text[1..]
+            else
+                alias_name_text;
+
+            // Intern the variable and alias names
+            const var_ident = self.can_ir.env.idents.insert(self.can_ir.env.gpa, Ident.for_text(var_name), region);
+            const alias_ident = self.can_ir.env.idents.insert(self.can_ir.env.gpa, Ident.for_text(alias_name_clean), region);
+
+            // TODO: Implement proper external declaration handling
+            const external_decl: CIR.ExternalDecl.Idx = @enumFromInt(0);
+
+            return self.can_ir.store.addWhereClause(CIR.WhereClause{ .mod_alias = .{
+                .var_name = var_ident,
+                .alias_name = alias_ident,
+                .external_decl = external_decl,
+                .region = region,
+            } });
+        },
+        .malformed => |m| {
+            const region = self.parse_ir.tokenizedRegionToRegion(m.region);
+            const diagnostic = self.can_ir.store.addDiagnostic(CIR.Diagnostic{ .malformed_where_clause = .{
+                .region = region,
+            } });
+            return self.can_ir.store.addWhereClause(CIR.WhereClause{ .malformed = .{
+                .diagnostic = diagnostic,
+                .region = region,
+            } });
         },
     }
 }

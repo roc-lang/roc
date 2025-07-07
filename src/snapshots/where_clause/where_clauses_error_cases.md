@@ -28,7 +28,7 @@ WHERE CLAUSE ERROR - where_clauses_error_cases.md:10:3:10:3
 **WHERE CLAUSE ERROR**
 Expected a colon **:** after the method name in this where clause constraint.
 Method constraints require a colon to separate the method name from its type.
-For example:     a.method : a -> b
+For example:     module(a).method : a -> b
 
 Here is the problematic code:
 **where_clauses_error_cases.md:6:5:6:12:**
@@ -42,7 +42,7 @@ Here is the problematic code:
 A `where` clause cannot be empty.
 Where clauses must contain at least one constraint.
 For example:
-        a.method : a -> b
+        module(a).method : a -> b
 
 Here is the problematic code:
 **where_clauses_error_cases.md:10:3:10:3:**
@@ -88,14 +88,14 @@ KwModule(15:5-15:11),NoSpaceOpenRound(15:11-15:12),LowerIdent(15:12-15:13),Close
 				(ty-var @4.14-4.15 (raw "a"))
 				(ty-var @4.19-4.20 (raw "b")))
 			(where
-				(where-malformed @6.5-6.26 (reason "where_expected_colon"))))
+				(malformed @6.5-6.26 (reason "where_expected_colon"))))
 		(e-ident @6.25-6.26 (raw "b"))
 		(s-type-anno @9.1-13.11 (name "broken_fn2")
 			(ty-fn @9.14-9.20
 				(ty-var @9.14-9.15 (raw "a"))
 				(ty-var @9.19-9.20 (raw "b")))
 			(where
-				(where-malformed @10.3-13.11 (reason "where_expected_constraints"))))
+				(malformed @10.3-13.11 (reason "where_expected_constraints"))))
 		(s-type-anno @13.1-15.31 (name "broken_fn3")
 			(ty-fn @13.14-13.20
 				(ty-var @13.14-13.15 (raw "a"))
