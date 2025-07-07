@@ -209,6 +209,17 @@ pub fn parseDiagnosticToReport(self: *AST, diagnostic: Diagnostic, allocator: st
         .expr_unexpected_token => "UNEXPECTED TOKEN IN EXPRESSION",
         .import_must_be_top_level => "IMPORT MUST BE TOP LEVEL",
         .expected_expr_close_square_or_comma => "LIST NOT CLOSED",
+        .where_expected_where => "WHERE CLAUSE ERROR",
+        .where_expected_mod_open => "WHERE CLAUSE ERROR",
+        .where_expected_var => "WHERE CLAUSE ERROR",
+        .where_expected_mod_close => "WHERE CLAUSE ERROR",
+        .where_expected_arg_open => "WHERE CLAUSE ERROR",
+        .where_expected_arg_close => "WHERE CLAUSE ERROR",
+        .where_expected_method_arrow => "WHERE CLAUSE ERROR",
+        .where_expected_method_or_alias_name => "WHERE CLAUSE ERROR",
+        .where_expected_module => "WHERE CLAUSE ERROR",
+        .where_expected_colon => "WHERE CLAUSE ERROR",
+        .where_expected_constraints => "WHERE CLAUSE ERROR",
         else => "PARSE ERROR",
     };
 
@@ -415,6 +426,102 @@ pub fn parseDiagnosticToReport(self: *AST, diagnostic: Diagnostic, allocator: st
             try report.document.addIndent(1);
             try report.document.addAnnotated("Maybe(List(U64))", .dimmed);
         },
+        .where_expected_where => {
+            try report.document.addReflowingText("Expected a ");
+            try report.document.addKeyword("where");
+            try report.document.addText(" clause here.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Where clauses define constraints on type variables.");
+        },
+        .where_expected_mod_open => {
+            try report.document.addReflowingText("Expected an opening parenthesis after ");
+            try report.document.addKeyword("module");
+            try report.document.addText(" in this where clause.");
+            try report.document.addLineBreak();
+            try report.document.addText("Module constraints should look like: ");
+            try report.document.addCodeBlock("module(a).method : Type");
+        },
+        .where_expected_var => {
+            try report.document.addReflowingText("Expected a type variable name here.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Type variables are lowercase identifiers that represent types.");
+        },
+        .where_expected_mod_close => {
+            try report.document.addReflowingText("Expected a closing parenthesis after the type variable in this module constraint.");
+            try report.document.addLineBreak();
+            try report.document.addText("Module constraints should look like: ");
+            try report.document.addCodeBlock("module(a).method : Type");
+        },
+        .where_expected_arg_open => {
+            try report.document.addReflowingText("Expected an opening parenthesis for the method arguments.");
+            try report.document.addLineBreak();
+            try report.document.addText("Method constraints should look like: ");
+            try report.document.addCodeBlock("module(a).method : args -> ret");
+        },
+        .where_expected_arg_close => {
+            try report.document.addReflowingText("Expected a closing parenthesis after the method arguments.");
+            try report.document.addLineBreak();
+            try report.document.addText("Method constraints should look like: ");
+            try report.document.addCodeBlock("moduel(a).method : args -> ret");
+        },
+        .where_expected_method_arrow => {
+            try report.document.addReflowingText("Expected an arrow ");
+            try report.document.addAnnotated("->", .emphasized);
+            try report.document.addText(" after the method arguments.");
+            try report.document.addLineBreak();
+            try report.document.addText("Method constraints should look like: ");
+            try report.document.addCodeBlock("module(a).method : args -> ret");
+        },
+        .where_expected_method_or_alias_name => {
+            try report.document.addReflowingText("Expected a method name or type alias after the dot.");
+            try report.document.addLineBreak();
+            try report.document.addText("Where clauses can contain:");
+            try report.document.addLineBreak();
+            try report.document.addIndent(1);
+            try report.document.addText("• Method constraints: ");
+            try report.document.addCodeBlock("module(a).method : args -> ret");
+            try report.document.addLineBreak();
+            try report.document.addIndent(1);
+            try report.document.addText("• Type aliases: ");
+            try report.document.addCodeBlock("module(a).SomeTypeAlias");
+        },
+        .where_expected_module => {
+            try report.document.addReflowingText("Expected ");
+            try report.document.addKeyword("module");
+            try report.document.addText(" at the start of this where clause constraint.");
+            try report.document.addLineBreak();
+            try report.document.addText("Where clauses can contain:");
+            try report.document.addLineBreak();
+            try report.document.addIndent(1);
+            try report.document.addText("• Method constraints: ");
+            try report.document.addCodeBlock("module(a).method : Type");
+            try report.document.addLineBreak();
+            try report.document.addIndent(1);
+            try report.document.addText("• Type aliases: ");
+            try report.document.addCodeBlock("module(a).SomeType");
+        },
+        .where_expected_colon => {
+            try report.document.addReflowingText("Expected a colon ");
+            try report.document.addAnnotated(":", .emphasized);
+            try report.document.addText(" after the method name in this where clause constraint.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Method constraints require a colon to separate the method name from its type.");
+            try report.document.addLineBreak();
+            try report.document.addText("For example: ");
+            try report.document.addCodeBlock("module(a).method : a -> b");
+        },
+        .where_expected_constraints => {
+            try report.document.addReflowingText("A ");
+            try report.document.addKeyword("where");
+            try report.document.addText(" clause cannot be empty.");
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Where clauses must contain at least one constraint.");
+            try report.document.addLineBreak();
+            try report.document.addText("For example:");
+            try report.document.addLineBreak();
+            try report.document.addIndent(1);
+            try report.document.addCodeBlock("module(a).method : a -> b");
+        },
         else => {
             const tag_name = @tagName(diagnostic.tag);
             const owned_tag = try report.addOwnedString(tag_name);
@@ -544,7 +651,9 @@ pub const Diagnostic = struct {
         where_expected_arg_close,
         where_expected_method_arrow,
         where_expected_method_or_alias_name,
-        where_expected_var_or_module,
+        where_expected_module,
+        where_expected_colon,
+        where_expected_constraints,
         import_must_be_top_level,
         invalid_type_arg,
         expr_arrow_expects_ident,
@@ -841,6 +950,17 @@ pub const Statement = union(enum) {
                     var annotation = ast.store.getTypeAnno(a.anno).toSExpr(env, ast);
                     node.appendNode(env.gpa, &annotation);
                 }
+
+                // where clause
+                if (a.where) |where_coll| {
+                    var where_node = SExpr.init(env.gpa, "where");
+                    const where_clauses = ast.store.whereClauseSlice(.{ .span = ast.store.getCollection(where_coll).span });
+                    for (where_clauses) |clause_idx| {
+                        var clause_child = ast.store.getWhereClause(clause_idx).toSExpr(env, ast);
+                        where_node.appendNode(env.gpa, &clause_child);
+                    }
+                    node.appendNode(env.gpa, &where_node);
+                }
                 return node;
             },
             // (crash <expr>)
@@ -904,6 +1024,16 @@ pub const Statement = union(enum) {
 
                 var child = ast.store.getTypeAnno(a.anno).toSExpr(env, ast);
                 node.appendNode(env.gpa, &child);
+
+                if (a.where) |where_coll| {
+                    var where_node = SExpr.init(env.gpa, "where");
+                    const where_clauses = ast.store.whereClauseSlice(.{ .span = ast.store.getCollection(where_coll).span });
+                    for (where_clauses) |clause_idx| {
+                        var clause_child = ast.store.getWhereClause(clause_idx).toSExpr(env, ast);
+                        where_node.appendNode(env.gpa, &clause_child);
+                    }
+                    node.appendNode(env.gpa, &where_node);
+                }
 
                 return node;
             },
@@ -1723,21 +1853,21 @@ pub const AnnoRecordField = struct {
 
 /// The clause of a `where` constraint
 ///
-/// e.g. `a.hash(hasher) -> hasher`
-/// or   `a.Hash`
+/// Where clauses specify constraints on type variables that must be satisfied
+/// for a function or type to be valid. They enable generic programming with
+/// compile-time guarantees about available capabilities.
 pub const WhereClause = union(enum) {
-    alias: struct {
-        var_tok: Token.Idx,
-        alias_tok: Token.Idx,
-        region: TokenizedRegion,
-    },
-    method: struct {
-        var_tok: Token.Idx,
-        name_tok: Token.Idx,
-        args: Collection.Idx,
-        ret_anno: TypeAnno.Idx,
-        region: TokenizedRegion,
-    },
+    /// Module method constraint specifying a method must exist in the module containing a type.
+    ///
+    /// This is the most common form of where clause constraint. It specifies that
+    /// a type variable must come from a module that provides a specific method.
+    ///
+    /// Examples:
+    /// ```roc
+    /// convert : a -> b where module(a).to_b : a -> b
+    /// decode : List(U8) -> a where module(a).decode : List(U8) -> a
+    /// hash : a -> U64 where module(a).hash : a -> U64
+    /// ```
     mod_method: struct {
         var_tok: Token.Idx,
         name_tok: Token.Idx,
@@ -1745,10 +1875,74 @@ pub const WhereClause = union(enum) {
         ret_anno: TypeAnno.Idx,
         region: TokenizedRegion,
     },
+
+    /// Module type alias constraint.
+    ///
+    /// Specifies that a type variable must satisfy the constraints for an alias type.
+    /// This is useful to avoid writing out the constraints repeatedly which can be cumbersome and error prone
+    ///
+    /// Example:
+    /// ```roc
+    /// Sort(a) : a where  module(a).order(elem, elem) -> [LT, EQ, GT]
+    /// 
+    /// sort : List(elem) -> List(elem) where module(elem).Sort
+    /// ```
+    mod_alias: struct {
+        var_tok: Token.Idx,
+        name_tok: Token.Idx,
+        region: TokenizedRegion,
+    },
+
+    /// Malformed where clause that failed to parse correctly.
+    ///
+    /// Contains diagnostic information about what went wrong during parsing.
     malformed: struct {
         reason: Diagnostic.Tag,
         region: TokenizedRegion,
     },
+
+    pub fn toSExpr(self: WhereClause, env: *base.ModuleEnv, ast: *AST) SExpr {
+        switch (self) {
+            .mod_method => |m| {
+                var node = SExpr.init(env.gpa, "method");
+                ast.appendRegionInfoToSexprNode(env, &node, m.region);
+
+                node.appendStringAttr(env.gpa, "module-of", ast.resolve(m.var_tok));
+
+                // remove preceding dot
+                const method_name = ast.resolve(m.name_tok)[1..];
+                node.appendStringAttr(env.gpa, "name", method_name);
+
+                var args_node = SExpr.init(env.gpa, "args");
+                const args = ast.store.typeAnnoSlice(.{ .span = ast.store.getCollection(m.args).span });
+                for (args) |arg| {
+                    var arg_child = ast.store.getTypeAnno(arg).toSExpr(env, ast);
+                    args_node.appendNode(env.gpa, &arg_child);
+                }
+                node.appendNode(env.gpa, &args_node);
+
+                var ret_child = ast.store.getTypeAnno(m.ret_anno).toSExpr(env, ast);
+                node.appendNode(env.gpa, &ret_child);
+                return node;
+            },
+            .mod_alias => |a| {
+                var node = SExpr.init(env.gpa, "alias");
+                ast.appendRegionInfoToSexprNode(env, &node, a.region);
+                node.appendStringAttr(env.gpa, "module-of", ast.resolve(a.var_tok));
+
+                // remove preceding dot
+                const alias_name = ast.resolve(a.name_tok)[1..];
+                node.appendStringAttr(env.gpa, "name", alias_name);
+                return node;
+            },
+            .malformed => |m| {
+                var node = SExpr.init(env.gpa, "malformed");
+                ast.appendRegionInfoToSexprNode(env, &node, m.region);
+                node.appendStringAttr(env.gpa, "reason", @tagName(m.reason));
+                return node;
+            },
+        }
+    }
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };

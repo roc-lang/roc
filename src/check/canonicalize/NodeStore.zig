@@ -690,40 +690,7 @@ pub fn getWhereClause(store: *NodeStore, whereClause: CIR.WhereClause.Idx) CIR.W
     const discriminant = extra_data[0];
 
     switch (discriminant) {
-        0 => { // alias
-            const var_tok = @as(Ident.Idx, @bitCast(extra_data[1]));
-            const alias_tok = @as(Ident.Idx, @bitCast(extra_data[2]));
-            const region_start = extra_data[3];
-            const region_end = extra_data[4];
-
-            return CIR.WhereClause{
-                .alias = .{
-                    .var_tok = var_tok,
-                    .alias_tok = alias_tok,
-                    .region = Region{ .start = region_start, .end = region_end },
-                },
-            };
-        },
-        1 => { // method
-            const var_tok = @as(Ident.Idx, @bitCast(extra_data[1]));
-            const name_tok = @as(Ident.Idx, @bitCast(extra_data[2]));
-            const args_start = extra_data[3];
-            const args_len = extra_data[4];
-            const ret_anno = @as(CIR.TypeAnno.Idx, @enumFromInt(extra_data[5]));
-            const region_start = extra_data[6];
-            const region_end = extra_data[7];
-
-            return CIR.WhereClause{
-                .method = .{
-                    .var_tok = var_tok,
-                    .name_tok = name_tok,
-                    .args = .{ .span = .{ .start = args_start, .len = args_len } },
-                    .ret_anno = ret_anno,
-                    .region = Region{ .start = region_start, .end = region_end },
-                },
-            };
-        },
-        2 => { // mod_method
+        0 => { // mod_method
             const var_tok = @as(Ident.Idx, @bitCast(extra_data[1]));
             const name_tok = @as(Ident.Idx, @bitCast(extra_data[2]));
             const args_start = extra_data[3];
@@ -1578,28 +1545,9 @@ pub fn addWhereClause(store: *NodeStore, whereClause: CIR.WhereClause) CIR.Where
     const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
 
     switch (whereClause) {
-        .alias => |alias| {
-            // Store discriminant (0 for alias)
-            store.extra_data.append(store.gpa, 0) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @bitCast(alias.var_tok)) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @bitCast(alias.alias_tok)) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, alias.region.start) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, alias.region.end) catch |err| exitOnOom(err);
-        },
-        .method => |method| {
-            // Store discriminant (1 for method)
-            store.extra_data.append(store.gpa, 1) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @bitCast(method.var_tok)) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @bitCast(method.name_tok)) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, method.args.span.start) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, method.args.span.len) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @intFromEnum(method.ret_anno)) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, method.region.start) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, method.region.end) catch |err| exitOnOom(err);
-        },
         .mod_method => |mod_method| {
-            // Store discriminant (2 for mod_method)
-            store.extra_data.append(store.gpa, 2) catch |err| exitOnOom(err);
+            // Store discriminant (0 for mod_method)
+            store.extra_data.append(store.gpa, 0) catch |err| exitOnOom(err);
             store.extra_data.append(store.gpa, @bitCast(mod_method.var_tok)) catch |err| exitOnOom(err);
             store.extra_data.append(store.gpa, @bitCast(mod_method.name_tok)) catch |err| exitOnOom(err);
             store.extra_data.append(store.gpa, mod_method.args.span.start) catch |err| exitOnOom(err);

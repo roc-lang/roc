@@ -102,7 +102,7 @@ CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 ~~~roc
 module [MyResult, ok, is_ok]
 
-MyResult(ok, err) : [Ok(ok), Err(err)]
+MyResult(ok, err) := [Ok(ok), Err(err)]
 
 ok : ok -> MyResult(ok, b)
 ok = |a| Ok(a)

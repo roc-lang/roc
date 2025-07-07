@@ -845,7 +845,7 @@ module [
 	named,
 ]
 
-Color : [
+Color := [
 	RGB(U8, U8, U8),
 	RGBA(U8, U8, U8, Dec),
 	Named(Str),

@@ -76,7 +76,7 @@ LowerIdent(9:1-9:5),OpAssign(9:6-9:7),UpperIdent(9:8-9:13),NoSpaceDotUpperIdent(
 ~~~roc
 module [Maybe, some, none]
 
-Maybe(a) : [Some(a), None]
+Maybe(a) := [Some(a), None]
 
 some : a -> Maybe(a)
 some = |a| Some(a)

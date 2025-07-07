@@ -49,7 +49,7 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),UpperIdent(6:9-6:15),NoSpaceDotUpperIdent(
 ~~~roc
 module [value]
 
-MyType : [TagA, TagB]
+MyType := [TagA, TagB]
 
 value : MyType
 value = TagA

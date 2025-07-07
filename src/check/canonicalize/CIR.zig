@@ -527,22 +527,8 @@ pub const RecordField = struct {
 
 /// TODO: implement WhereClause
 pub const WhereClause = union(enum) {
-    alias: WhereClause.Alias,
-    method: Method,
     mod_method: ModuleMethod,
 
-    pub const Alias = struct {
-        var_tok: Ident.Idx,
-        alias_tok: Ident.Idx,
-        region: Region,
-    };
-    pub const Method = struct {
-        var_tok: Ident.Idx,
-        name_tok: Ident.Idx,
-        args: TypeAnno.Span,
-        ret_anno: TypeAnno.Idx,
-        region: Region,
-    };
     pub const ModuleMethod = struct {
         var_tok: Ident.Idx,
         name_tok: Ident.Idx,

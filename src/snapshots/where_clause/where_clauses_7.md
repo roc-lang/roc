@@ -11,10 +11,10 @@ Hash(a) # After header
 	: # After colon
 		a # After var
 			where # After where
-				a.hash(hasher) # After method
+				module(a).hash(hasher) # After method
 					-> # After arrow
 						hasher, # After first clause
-				hasher.Hasher,
+				module(hasher).Hasher,
 
 Decode(a) : a
 	where
@@ -34,10 +34,10 @@ UpperIdent(3:1-3:5),NoSpaceOpenRound(3:5-3:6),LowerIdent(3:6-3:7),CloseRound(3:7
 OpColon(4:2-4:3),Newline(4:5-4:17),
 LowerIdent(5:3-5:4),Newline(5:6-5:16),
 KwWhere(6:4-6:9),Newline(6:11-6:23),
-LowerIdent(7:5-7:6),NoSpaceDotLowerIdent(7:6-7:11),NoSpaceOpenRound(7:11-7:12),LowerIdent(7:12-7:18),CloseRound(7:18-7:19),Newline(7:21-7:34),
+KwModule(7:5-7:11),NoSpaceOpenRound(7:11-7:12),LowerIdent(7:12-7:13),CloseRound(7:13-7:14),NoSpaceDotLowerIdent(7:14-7:19),NoSpaceOpenRound(7:19-7:20),LowerIdent(7:20-7:26),CloseRound(7:26-7:27),Newline(7:29-7:42),
 OpArrow(8:6-8:8),Newline(8:10-8:22),
 LowerIdent(9:7-9:13),Comma(9:13-9:14),Newline(9:16-9:35),
-LowerIdent(10:5-10:11),NoSpaceDotUpperIdent(10:11-10:18),Comma(10:18-10:19),Newline(1:1-1:1),
+KwModule(10:5-10:11),NoSpaceOpenRound(10:11-10:12),LowerIdent(10:12-10:18),CloseRound(10:18-10:19),NoSpaceDotUpperIdent(10:19-10:26),Comma(10:26-10:27),Newline(1:1-1:1),
 Newline(1:1-1:1),
 UpperIdent(12:1-12:7),NoSpaceOpenRound(12:7-12:8),LowerIdent(12:8-12:9),CloseRound(12:9-12:10),OpColon(12:11-12:12),LowerIdent(12:13-12:14),Newline(1:1-1:1),
 KwWhere(13:2-13:7),Newline(1:1-1:1),
@@ -56,16 +56,42 @@ CloseRound(16:3-16:4),OpArrow(16:5-16:7),LowerIdent(16:8-16:9),Comma(16:9-16:10)
 			(header @3.1-3.8 (name "Hash")
 				(args
 					(ty-var @3.6-3.7 (raw "a"))))
-			(ty-var @5.3-5.4 (raw "a")))
+			(ty-var @5.3-5.4 (raw "a"))
+			(where
+				(method @7.5-9.14 (module-of "a") (name "hash")
+					(args
+						(ty-var @7.20-7.26 (raw "hasher")))
+					(ty-var @9.7-9.13 (raw "hasher")))
+				(alias @10.5-10.27 (module-of "hasher") (name "Hasher"))))
 		(s-type-decl @12.1-16.10
 			(header @12.1-12.10 (name "Decode")
 				(args
 					(ty-var @12.8-12.9 (raw "a"))))
-			(ty-var @12.13-12.14 (raw "a")))))
+			(ty-var @12.13-12.14 (raw "a"))
+			(where
+				(method @14.3-16.10 (module-of "a") (name "decode")
+					(args
+						(ty-apply @15.4-15.12
+							(ty @15.4-15.8 (name "List"))
+							(ty @15.9-15.11 (name "U8"))))
+					(ty-var @16.8-16.9 (raw "a")))))))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [Hash]
+
+Hash(a) # After header
+	: # After colon
+		a # After var
+ where # After where
+			module(a).hash : hasher # After method
+				-> # After arrow
+					hasher, # After first clause
+			module(hasher).Hasher,
+
+Decode(a) : a
+ where
+	module(a).decode : List(U8) -> a,
 ~~~
 # CANONICALIZE
 ~~~clojure
