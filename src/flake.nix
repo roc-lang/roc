@@ -22,7 +22,7 @@
         ]);
 
         aliases = ''
-          alias testcmd='zig build test && zig build snapshot'
+          alias testcmd='zig build snapshot && zig build test'
           alias fmtcmd='zig build fmt'
           alias buildcmd='zig build roc'
         '';
