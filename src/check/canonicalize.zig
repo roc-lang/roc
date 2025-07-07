@@ -391,6 +391,19 @@ pub fn canonicalizeFile(
                 // The number of args for the alias/nominal type
                 const num_args = @as(u32, @intCast(arg_anno_slice.len));
 
+                // Canonicalize where clauses if present
+                const where_clauses = if (type_decl.where) |where_coll| blk: {
+                    const where_slice = self.parse_ir.store.whereClauseSlice(.{ .span = self.parse_ir.store.getCollection(where_coll).span });
+                    const where_start = self.can_ir.store.scratchWhereClauseTop();
+
+                    for (where_slice) |where_idx| {
+                        const canonicalized_where = self.canonicalizeWhereClause(where_idx);
+                        self.can_ir.store.addScratchWhereClause(canonicalized_where);
+                    }
+
+                    break :blk self.can_ir.store.whereClauseSpanFrom(where_start);
+                } else null;
+
                 // Create the real CIR type declaration statement with the canonicalized annotation
                 const real_cir_type_decl, const type_decl_content = blk: {
                     switch (type_decl.kind) {
@@ -401,7 +414,7 @@ pub fn canonicalizeFile(
                                         .header = header_idx,
                                         .anno = anno_idx,
                                         .anno_var = anno_var,
-                                        .where = null, // TODO: implement where clauses
+                                        .where = where_clauses,
                                         .region = region,
                                     },
                                 },
@@ -418,7 +431,7 @@ pub fn canonicalizeFile(
                                         .header = header_idx,
                                         .anno_var = anno_var,
                                         .anno = anno_idx,
-                                        .where = null, // TODO: implement where clauses
+                                        .where = where_clauses,
                                         .region = region,
                                     },
                                 },
@@ -466,6 +479,7 @@ pub fn canonicalizeFile(
         name: base.Ident.Idx,
         anno_idx: CIR.TypeAnno.Idx,
         type_vars: base.DataSpan,
+        where_clauses: ?CIR.WhereClause.Span,
     } = null;
 
     for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
@@ -594,11 +608,39 @@ pub fn canonicalizeFile(
                 // Now canonicalize the annotation with type variables in scope
                 const type_anno_idx = self.canonicalizeTypeAnno(ta.anno);
 
+                // Canonicalize where clauses if present
+                const where_clauses = if (ta.where) |where_coll| blk: {
+                    const where_slice = self.parse_ir.store.whereClauseSlice(.{ .span = self.parse_ir.store.getCollection(where_coll).span });
+                    const where_start = self.can_ir.store.scratchWhereClauseTop();
+
+                    for (where_slice) |where_idx| {
+                        const canonicalized_where = self.canonicalizeWhereClause(where_idx);
+                        self.can_ir.store.addScratchWhereClause(canonicalized_where);
+                    }
+
+                    break :blk self.can_ir.store.whereClauseSpanFrom(where_start);
+                } else null;
+
+                // If we have where clauses, create a separate s_type_anno statement
+                if (where_clauses != null) {
+                    const type_anno_stmt = CIR.Statement{
+                        .s_type_anno = .{
+                            .name = name_ident,
+                            .anno = type_anno_idx,
+                            .where = where_clauses,
+                            .region = region,
+                        },
+                    };
+                    const type_anno_stmt_idx = self.can_ir.store.addStatement(type_anno_stmt);
+                    self.can_ir.store.addScratchStatement(type_anno_stmt_idx);
+                }
+
                 // Store this annotation for the next declaration
                 last_type_anno = .{
                     .name = name_ident,
                     .anno_idx = type_anno_idx,
                     .type_vars = base.DataSpan.empty(), // TODO: store type vars if needed
+                    .where_clauses = where_clauses,
                 };
             },
             .malformed => |malformed| {
@@ -4822,6 +4864,7 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx) CIR.
             const ret_anno = self.canonicalizeTypeAnno(mm.ret_anno);
 
             // TODO: Implement proper external declaration handling
+            // For now, create a placeholder external declaration
             const external_decl: CIR.ExternalDecl.Idx = @enumFromInt(0);
 
             return self.can_ir.store.addWhereClause(CIR.WhereClause{ .mod_method = .{
@@ -4853,6 +4896,7 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx) CIR.
             const alias_ident = self.can_ir.env.idents.insert(self.can_ir.env.gpa, Ident.for_text(alias_name_clean), region);
 
             // TODO: Implement proper external declaration handling
+            // For now, create a placeholder external declaration
             const external_decl: CIR.ExternalDecl.Idx = @enumFromInt(0);
 
             return self.can_ir.store.addWhereClause(CIR.WhereClause{ .mod_alias = .{

@@ -69,7 +69,21 @@ NO CHANGE
 				(ty-fn @3.11-3.20 (effectful false)
 					(ty-var @3.11-3.12 (name "a"))
 					(ty-var @3.14-3.15 (name "b"))
-					(ty-var @3.19-3.20 (name "c")))))))
+					(ty-var @3.19-3.20 (name "c"))))))
+	(s-type-anno @3.1-4.8 (name "process")
+		(ty-fn @3.11-3.20 (effectful false)
+			(ty-var @3.11-3.12 (name "a"))
+			(ty-var @3.14-3.15 (name "b"))
+			(ty-var @3.19-3.20 (name "c")))
+		(where
+			(where-method @3.27-3.54 (module-of "a") (function "convert")
+				(args
+					(ty-var @3.47-3.48 (name "a")))
+				(ty-var @3.52-3.53 (name "c")))
+			(where-method @3.55-4.8 (module-of "b") (function "transform")
+				(args
+					(ty-var @3.77-3.78 (name "b")))
+				(ty-var @3.82-3.83 (name "c"))))))
 ~~~
 # TYPES
 ~~~clojure

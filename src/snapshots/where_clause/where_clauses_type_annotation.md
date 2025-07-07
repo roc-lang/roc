@@ -68,7 +68,16 @@ NO CHANGE
 			(declared-type
 				(ty-fn @3.11-3.17 (effectful false)
 					(ty-var @3.11-3.12 (name "a"))
-					(ty-var @3.16-3.17 (name "b")))))))
+					(ty-var @3.16-3.17 (name "b"))))))
+	(s-type-anno @3.1-4.8 (name "convert")
+		(ty-fn @3.11-3.17 (effectful false)
+			(ty-var @3.11-3.12 (name "a"))
+			(ty-var @3.16-3.17 (name "b")))
+		(where
+			(where-method @3.24-4.8 (module-of "a") (function "to_b")
+				(args
+					(ty-var @3.41-3.42 (name "a")))
+				(ty-var @3.46-3.47 (name "b"))))))
 ~~~
 # TYPES
 ~~~clojure

@@ -63,7 +63,12 @@ Cache(k, v) := Dict(U64, v)
 				(ty-var @3.10-3.11 (name "v"))))
 		(ty-apply @3.16-3.28 (symbol "Dict")
 			(ty @3.21-3.24 (name "U64"))
-			(ty-var @3.26-3.27 (name "v")))))
+			(ty-var @3.26-3.27 (name "v")))
+		(where
+			(where-method @5.5-5.31 (module-of "k") (function "hash")
+				(args
+					(ty-var @5.22-5.23 (name "k")))
+				(ty @5.27-5.30 (name "U64"))))))
 ~~~
 # TYPES
 ~~~clojure

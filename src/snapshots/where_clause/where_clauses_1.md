@@ -7,9 +7,9 @@ type=file
 ~~~roc
 module [Hash, Decode]
 
-Hash(a) : a
+Hash(a, hasher) : a
 	where
-		module(a).hash(hasher) -> hasher,
+		module(a).hash : hasher -> hasher,
 		module(hasher).Hasher,
 
 Decode(a) : a where module(a).decode : List(U8) -> a
@@ -22,9 +22,9 @@ NIL
 ~~~zig
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:13),Comma(1:13-1:14),UpperIdent(1:15-1:21),CloseSquare(1:21-1:22),Newline(1:1-1:1),
 Newline(1:1-1:1),
-UpperIdent(3:1-3:5),NoSpaceOpenRound(3:5-3:6),LowerIdent(3:6-3:7),CloseRound(3:7-3:8),OpColon(3:9-3:10),LowerIdent(3:11-3:12),Newline(1:1-1:1),
+UpperIdent(3:1-3:5),NoSpaceOpenRound(3:5-3:6),LowerIdent(3:6-3:7),Comma(3:7-3:8),LowerIdent(3:9-3:15),CloseRound(3:15-3:16),OpColon(3:17-3:18),LowerIdent(3:19-3:20),Newline(1:1-1:1),
 KwWhere(4:2-4:7),Newline(1:1-1:1),
-KwModule(5:3-5:9),NoSpaceOpenRound(5:9-5:10),LowerIdent(5:10-5:11),CloseRound(5:11-5:12),NoSpaceDotLowerIdent(5:12-5:17),NoSpaceOpenRound(5:17-5:18),LowerIdent(5:18-5:24),CloseRound(5:24-5:25),OpArrow(5:26-5:28),LowerIdent(5:29-5:35),Comma(5:35-5:36),Newline(1:1-1:1),
+KwModule(5:3-5:9),NoSpaceOpenRound(5:9-5:10),LowerIdent(5:10-5:11),CloseRound(5:11-5:12),NoSpaceDotLowerIdent(5:12-5:17),OpColon(5:18-5:19),LowerIdent(5:20-5:26),OpArrow(5:27-5:29),LowerIdent(5:30-5:36),Comma(5:36-5:37),Newline(1:1-1:1),
 KwModule(6:3-6:9),NoSpaceOpenRound(6:9-6:10),LowerIdent(6:10-6:16),CloseRound(6:16-6:17),NoSpaceDotUpperIdent(6:17-6:24),Comma(6:24-6:25),Newline(1:1-1:1),
 Newline(1:1-1:1),
 UpperIdent(8:1-8:7),NoSpaceOpenRound(8:7-8:8),LowerIdent(8:8-8:9),CloseRound(8:9-8:10),OpColon(8:11-8:12),LowerIdent(8:13-8:14),KwWhere(8:15-8:20),KwModule(8:21-8:27),NoSpaceOpenRound(8:27-8:28),LowerIdent(8:28-8:29),CloseRound(8:29-8:30),NoSpaceDotLowerIdent(8:30-8:37),OpColon(8:38-8:39),UpperIdent(8:40-8:44),NoSpaceOpenRound(8:44-8:45),UpperIdent(8:45-8:47),CloseRound(8:47-8:48),OpArrow(8:49-8:51),LowerIdent(8:52-8:53),EndOfFile(8:53-8:53),
@@ -38,15 +38,16 @@ UpperIdent(8:1-8:7),NoSpaceOpenRound(8:7-8:8),LowerIdent(8:8-8:9),CloseRound(8:9
 			(exposed-upper-ident (text "Decode"))))
 	(statements
 		(s-type-decl @3.1-8.7
-			(header @3.1-3.8 (name "Hash")
+			(header @3.1-3.16 (name "Hash")
 				(args
-					(ty-var @3.6-3.7 (raw "a"))))
-			(ty-var @3.11-3.12 (raw "a"))
+					(ty-var @3.6-3.7 (raw "a"))
+					(ty-var @3.9-3.15 (raw "hasher"))))
+			(ty-var @3.19-3.20 (raw "a"))
 			(where
-				(method @5.3-5.36 (module-of "a") (name "hash")
+				(method @5.3-5.37 (module-of "a") (name "hash")
 					(args
-						(ty-var @5.18-5.24 (raw "hasher")))
-					(ty-var @5.29-5.35 (raw "hasher")))
+						(ty-var @5.20-5.26 (raw "hasher")))
+					(ty-var @5.30-5.36 (raw "hasher")))
 				(alias @6.3-6.25 (module-of "hasher") (name "Hasher"))))
 		(s-type-decl @8.1-8.53
 			(header @8.1-8.10 (name "Decode")
@@ -65,7 +66,7 @@ UpperIdent(8:1-8:7),NoSpaceOpenRound(8:7-8:8),LowerIdent(8:8-8:9),CloseRound(8:9
 ~~~roc
 module [Hash, Decode]
 
-Hash(a) : a
+Hash(a, hasher) : a
  where
 	module(a).hash : hasher -> hasher,
 	module(hasher).Hasher,
@@ -76,25 +77,39 @@ Decode(a) : a where module(a).decode : List(U8) -> a
 ~~~clojure
 (can-ir
 	(s-alias-decl @3.1-8.7
-		(ty-header @3.1-3.8 (name "Hash")
+		(ty-header @3.1-3.16 (name "Hash")
 			(ty-args
-				(ty-var @3.6-3.7 (name "a"))))
-		(ty-var @3.11-3.12 (name "a")))
+				(ty-var @3.6-3.7 (name "a"))
+				(ty-var @3.9-3.15 (name "hasher"))))
+		(ty-var @3.19-3.20 (name "a"))
+		(where
+			(where-method @5.3-5.37 (module-of "a") (function "hash")
+				(args
+					(ty-var @5.20-5.26 (name "hasher")))
+				(ty-var @5.30-5.36 (name "hasher")))
+			(where-alias @6.3-6.25 (module-of "hasher") (alias "Hasher"))))
 	(s-alias-decl @8.1-8.53
 		(ty-header @8.1-8.10 (name "Decode")
 			(ty-args
 				(ty-var @8.8-8.9 (name "a"))))
-		(ty-var @8.13-8.14 (name "a"))))
+		(ty-var @8.13-8.14 (name "a"))
+		(where
+			(where-method @8.21-8.53 (module-of "a") (function "decode")
+				(args
+					(ty-apply @8.40-8.48 (symbol "List")
+						(ty @8.45-8.47 (name "U8"))))
+				(ty-var @8.52-8.53 (name "a"))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
 	(type_decls
-		(alias @3.1-8.7 (type "Hash(a)")
-			(ty-header @3.1-3.8 (name "Hash")
+		(alias @3.1-8.7 (type "Hash(a, hasher)")
+			(ty-header @3.1-3.16 (name "Hash")
 				(ty-args
-					(ty-var @3.6-3.7 (name "a")))))
+					(ty-var @3.6-3.7 (name "a"))
+					(ty-var @3.9-3.15 (name "hasher")))))
 		(alias @8.1-8.53 (type "Decode(a)")
 			(ty-header @8.1-8.10 (name "Decode")
 				(ty-args

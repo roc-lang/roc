@@ -86,7 +86,25 @@ NO CHANGE
 		(ty-header @3.1-3.8 (name "Sort")
 			(ty-args
 				(ty-var @3.6-3.7 (name "a"))))
-		(ty-var @3.11-3.12 (name "a"))))
+		(ty-var @3.11-3.12 (name "a"))
+		(where
+			(where-method @4.8-6.5 (module-of "a") (function "order")
+				(args
+					(ty-tuple @4.26-4.32
+						(ty-var @4.27-4.28 (name "a"))
+						(ty-var @4.30-4.31 (name "a"))))
+				(ty-tag-union @4.36-4.48
+					(ty @4.37-4.39 (name "LT"))
+					(ty @4.41-4.43 (name "EQ"))
+					(ty @4.45-4.47 (name "GT"))))))
+	(s-type-anno @6.1-7.5 (name "sort")
+		(ty-fn @6.8-6.32 (effectful false)
+			(ty-apply @6.8-6.18 (symbol "List")
+				(ty-var @6.13-6.17 (name "elem")))
+			(ty-apply @6.22-6.32 (symbol "List")
+				(ty-var @6.27-6.31 (name "elem"))))
+		(where
+			(where-alias @6.39-7.5 (module-of "elem") (alias "Sort")))))
 ~~~
 # TYPES
 ~~~clojure

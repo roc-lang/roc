@@ -85,7 +85,24 @@ deserialize = |_| ...
 					(ty-apply @3.27-3.49 (symbol "Result")
 						(ty-var @3.34-3.35 (name "a"))
 						(ty-tag-union @3.37-3.48
-							(ty @3.38-3.47 (name "DecodeErr")))))))))
+							(ty @3.38-3.47 (name "DecodeErr"))))))))
+	(s-type-anno @3.1-5.12 (name "deserialize")
+		(ty-fn @3.15-3.49 (effectful false)
+			(ty-apply @3.15-3.23 (symbol "List")
+				(ty @3.20-3.22 (name "U8")))
+			(ty-apply @3.27-3.49 (symbol "Result")
+				(ty-var @3.34-3.35 (name "a"))
+				(ty-tag-union @3.37-3.48
+					(ty @3.38-3.47 (name "DecodeErr")))))
+		(where
+			(where-method @4.9-5.12 (module-of "a") (function "decode")
+				(args
+					(ty-apply @4.28-4.36 (symbol "List")
+						(ty @4.33-4.35 (name "U8"))))
+				(ty-apply @4.40-4.62 (symbol "Result")
+					(ty-var @4.47-4.48 (name "a"))
+					(ty-tag-union @4.50-4.61
+						(ty @4.51-4.60 (name "DecodeErr"))))))))
 ~~~
 # TYPES
 ~~~clojure

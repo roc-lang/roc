@@ -24,6 +24,8 @@ broken_fn3 : a -> b
 # EXPECTED
 WHERE CLAUSE ERROR - where_clauses_error_cases.md:6:5:6:12
 WHERE CLAUSE ERROR - where_clauses_error_cases.md:10:3:10:3
+UNDECLARED TYPE VARIABLE - where_clauses_error_cases.md:15:24:15:25
+UNDECLARED TYPE VARIABLE - where_clauses_error_cases.md:15:29:15:30
 # PROBLEMS
 **WHERE CLAUSE ERROR**
 Expected a colon **:** after the method name in this where clause constraint.
@@ -52,9 +54,43 @@ Here is the problematic code:
   
 
 
+**MALFORMED WHERE CLAUSE**
+This where clause could not be parsed correctly.
+Please check the syntax of your where clause constraint.
+
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**MALFORMED WHERE CLAUSE**
+This where clause could not be parsed correctly.
+Please check the syntax of your where clause constraint.
+
+**UNDECLARED TYPE VARIABLE**
+The type variable ``c`` is not declared in this scope.
+
+Type variables must be introduced in a type annotation before they can be used.
+
+This type variable is referenced here:
+**where_clauses_error_cases.md:15:24:15:25:**
+```roc
+    module(c).method : c -> d,
+```
+                       ^
+
+
+**UNDECLARED TYPE VARIABLE**
+The type variable ``d`` is not declared in this scope.
+
+Type variables must be introduced in a type annotation before they can be used.
+
+This type variable is referenced here:
+**where_clauses_error_cases.md:15:29:15:30:**
+```roc
+    module(c).method : c -> d,
+```
+                            ^
+
 
 # TOKENS
 ~~~zig
@@ -127,7 +163,28 @@ broken_fn3 : a -> b
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir (empty true))
+(can-ir
+	(s-type-anno @4.1-6.26 (name "broken_fn1")
+		(ty-fn @4.14-4.20 (effectful false)
+			(ty-var @4.14-4.15 (name "a"))
+			(ty-var @4.19-4.20 (name "b")))
+		(where
+			(where-malformed @6.5-6.26)))
+	(s-type-anno @9.1-13.11 (name "broken_fn2")
+		(ty-fn @9.14-9.20 (effectful false)
+			(ty-var @9.14-9.15 (name "a"))
+			(ty-var @9.19-9.20 (name "b")))
+		(where
+			(where-malformed @10.3-13.11)))
+	(s-type-anno @13.1-15.31 (name "broken_fn3")
+		(ty-fn @13.14-13.20 (effectful false)
+			(ty-var @13.14-13.15 (name "a"))
+			(ty-var @13.19-13.20 (name "b")))
+		(where
+			(where-method @15.5-15.31 (module-of "c") (function "method")
+				(args
+					(ty-var @15.24-15.25 (name "c")))
+				(ty-var @15.29-15.30 (name "d"))))))
 ~~~
 # TYPES
 ~~~clojure

@@ -68,7 +68,16 @@ NO CHANGE
 			(declared-type
 				(ty-fn @3.13-3.21 (effectful false)
 					(ty-var @3.13-3.14 (name "a"))
-					(ty @3.18-3.21 (name "Str")))))))
+					(ty @3.18-3.21 (name "Str"))))))
+	(s-type-anno @1.1-1.1 (name "stringify")
+		(ty-fn @3.13-3.21 (effectful false)
+			(ty-var @3.13-3.14 (name "a"))
+			(ty @3.18-3.21 (name "Str")))
+		(where
+			(where-method @1.1-1.1 (module-of "a") (function "to_str")
+				(args
+					(ty-var @3.47-3.48 (name "a")))
+				(ty @3.52-3.55 (name "Str"))))))
 ~~~
 # TYPES
 ~~~clojure

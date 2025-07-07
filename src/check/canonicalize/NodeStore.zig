@@ -2081,6 +2081,7 @@ pub fn addScratchTypeAnno(store: *NodeStore, idx: CIR.TypeAnno.Idx) void {
     store.addScratch("scratch_type_annos", idx);
 }
 
+/// Adds a where clause to the scratch buffer.
 pub fn addScratchWhereClause(store: *NodeStore, idx: CIR.WhereClause.Idx) void {
     store.addScratch("scratch_where_clauses", idx);
 }
@@ -2100,6 +2101,7 @@ pub fn clearScratchTypeAnnosFrom(store: *NodeStore, from: u32) void {
     store.clearScratchFrom("scratch_type_annos", from);
 }
 
+/// Clears scratch where clauses from the given index.
 pub fn clearScratchWhereClausesFrom(store: *NodeStore, from: u32) void {
     store.clearScratchFrom("scratch_where_clauses", from);
 }

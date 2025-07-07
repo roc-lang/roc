@@ -282,9 +282,16 @@ pub const Statement = union(enum) {
                 var anno_node = ir.store.getTypeAnno(s.anno).toSExpr(ir);
                 node.appendNode(gpa, &anno_node);
 
-                // TODO: Add where clause when implemented
-                if (s.where) |_| {
-                    node.appendStringAttr(gpa, "where", "TODO");
+                // Add where clause if present
+                if (s.where) |where_span| {
+                    var where_node = SExpr.init(gpa, "where");
+                    const where_clauses = ir.store.sliceWhereClauses(where_span);
+                    for (where_clauses) |clause_idx| {
+                        const clause = ir.store.getWhereClause(clause_idx);
+                        var clause_child = clause.toSExpr(ir);
+                        where_node.appendNode(gpa, &clause_child);
+                    }
+                    node.appendNode(gpa, &where_node);
                 }
 
                 return node;
@@ -301,9 +308,16 @@ pub const Statement = union(enum) {
                 var anno_node = ir.store.getTypeAnno(s.anno).toSExpr(ir);
                 node.appendNode(gpa, &anno_node);
 
-                // TODO: Add where clause when implemented
-                if (s.where) |_| {
-                    node.appendStringAttr(gpa, "match", "TODO");
+                // Add where clause if present
+                if (s.where) |where_span| {
+                    var where_node = SExpr.init(gpa, "where");
+                    const where_clauses = ir.store.sliceWhereClauses(where_span);
+                    for (where_clauses) |clause_idx| {
+                        const clause = ir.store.getWhereClause(clause_idx);
+                        var clause_child = clause.toSExpr(ir);
+                        where_node.appendNode(gpa, &clause_child);
+                    }
+                    node.appendNode(gpa, &where_node);
                 }
 
                 return node;
