@@ -366,9 +366,53 @@ register_person!(user)
 
 A type system where type equivalence is based on explicit names or declarations, not just structure. Two types are considered the same, only if they have the same name or originate from the same type declaration.
 
+## Let
+
+Roc is inspired by [Elm](https://elm-lang.org), in Elm, variables are defined using `let`:
+```elm
+double arg =
+    let
+        two = 2
+    in
+        arg * two
+```
+This makes the scope of two very clear.
+
+In Roc, you can just define variables and use them without `let ... in`, we add that behind the scenes.
+See `Stmt::Let` in [crates/compiler/mono/src/ir.rs](crates/compiler/mono/src/ir.rs) (old compiler).
+
+## Generalized
+
+Say we have the following code:
+```roc
+my_record =
+    id = |x| x
+
+    { a: id(1), b: id("foo")}
+```
+If we would infer the type of `id` to be `Int -> Int` that would lead to a type error at the next call site `id("foo")`.
+So, we **generalize** the type of `id` to `a -> a`. This allows `id` to be called with any type.
+
 ## Rank
 
-TODO
+In general, the rank tracks the number of [let-bindings](#let) a variable is "under". Top-level definitions
+have rank 1. A [let](#let) in a top-level definition gets rank 2, and so on.
+
+An example:
+```roc 
+foo = 3
+
+plus_five = |arg|
+    x = 5
+    arg + x
+```
+Here the rank of foo is 1 because it is at the top level and the rank of `x` is 2 because it is under `plus_five`.
+
+Imported variables get rank 2.
+
+Rank 0 is special, it is used for variables that are [generalized](#generalized). 
+
+Keeping track of ranks makes type inference faster. You can see how ranks are used [here](crates/compiler/solve/src/solve.rs) (old compiler).
 
 ## Rigid vs Flexible
 

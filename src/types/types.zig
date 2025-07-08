@@ -47,9 +47,29 @@ pub const Var = enum(u32) {
 /// A type descriptor
 pub const Descriptor = struct { content: Content, rank: Rank, mark: Mark };
 
-/// A type variable rank
+/// In general, the rank tracks the number of let-bindings a variable is "under".
+/// Top-level definitions have rank 1. A let in a top-level definition gets rank 2, and so on.
+///
+/// An example:
+/// ```
+/// foo = 3
+///
+/// plus_five = |arg|
+///    x = 5
+///    arg + x
+/// ```
+/// Here the rank of foo is 1 because it is at the top level and the rank of `x` is 2 because it is under `plus_five`.
+///
+/// Imported variables get rank 2.
+///
+/// Rank 0 is special, it is used for variables that are generalized (generic).
+///
+/// Keeping track of ranks makes type inference faster.
+///
 pub const Rank = enum(u4) {
+    /// When the corresponding type is generic, like in `List.len`.
     generalized = 0,
+
     top_level = 1,
     _,
 
