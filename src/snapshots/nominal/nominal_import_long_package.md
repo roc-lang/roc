@@ -15,6 +15,9 @@ red = ... # not implemented
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - nominal_import_long_package.md:3:21:3:36
 UNEXPECTED TOKEN IN EXPRESSION - nominal_import_long_package.md:3:28:3:38
+INVALID STATEMENT - nominal_import_long_package.md:3:21:3:36
+INVALID STATEMENT - nominal_import_long_package.md:3:28:3:38
+INVALID STATEMENT - nominal_import_long_package.md:1:1:1:1
 UNDECLARED TYPE - nominal_import_long_package.md:5:7:5:9
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -58,13 +61,34 @@ import design.Styles.Color exposing [Encoder as CE]
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**nominal_import_long_package.md:3:21:3:36:**
+```roc
+import design.Styles.Color exposing [Encoder as CE]
+```
+                    ^^^^^^^^^^^^^^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**nominal_import_long_package.md:3:28:3:38:**
+```roc
+import design.Styles.Color exposing [Encoder as CE]
+```
+                           ^^^^^^^^^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**nominal_import_long_package.md:1:1:1:1:**
+```roc
+
+```
+
+
 
 **UNDECLARED TYPE**
 The type ``CE`` is not declared in this scope.

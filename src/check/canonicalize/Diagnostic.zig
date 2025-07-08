@@ -51,6 +51,7 @@ pub const Diagnostic = union(enum) {
     },
     invalid_top_level_statement: struct {
         stmt: StringLiteral.Idx,
+        region: Region,
     },
     expr_not_canonicalized: struct {
         region: Region,
@@ -131,6 +132,9 @@ pub const Diagnostic = union(enum) {
         name: Ident.Idx,
         region: Region,
     },
+    crash_expects_string: struct {
+        region: Region,
+    },
     type_alias_redeclared: struct {
         name: Ident.Idx,
         original_region: Region,
@@ -182,7 +186,7 @@ pub const Diagnostic = union(enum) {
             .invalid_num_literal => |d| d.region,
             .ident_already_in_scope => |d| d.region,
             .ident_not_in_scope => |d| d.region,
-            .invalid_top_level_statement => base.Region.zero(),
+            .invalid_top_level_statement => |d| d.region,
             .expr_not_canonicalized => |d| d.region,
             .invalid_string_interpolation => |d| d.region,
             .pattern_arg_invalid => |d| d.region,
@@ -205,6 +209,7 @@ pub const Diagnostic = union(enum) {
             .too_many_exports => |d| d.region,
             .undeclared_type => |d| d.region,
             .undeclared_type_var => |d| d.region,
+            .crash_expects_string => |d| d.region,
             .type_alias_redeclared => |d| d.redeclared_region,
             .nominal_type_redeclared => |d| d.redeclared_region,
             .type_shadowed_warning => |d| d.region,
@@ -212,11 +217,11 @@ pub const Diagnostic = union(enum) {
             .unused_variable => |d| d.region,
             .used_underscore_variable => |d| d.region,
             .duplicate_record_field => |d| d.duplicate_region,
-            .f64_pattern_literal => |d| d.region,
             .invalid_single_quote => |d| d.region,
             .too_long_single_quote => |d| d.region,
             .empty_single_quote => |d| d.region,
             .empty_tuple => |d| d.region,
+            .f64_pattern_literal => |d| d.region,
         };
     }
 
@@ -356,7 +361,12 @@ pub const Diagnostic = union(enum) {
     }
 
     /// Build a report for "invalid top level statement" diagnostic
-    pub fn buildInvalidTopLevelStatementReport(allocator: Allocator, stmt_name: []const u8) !Report {
+    pub fn buildInvalidTopLevelStatementReport(
+        allocator: Allocator,
+        stmt_name: []const u8,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+    ) !Report {
         var report = Report.init(allocator, "INVALID STATEMENT", .runtime_error);
         const owned_stmt = try report.addOwnedString(stmt_name);
         try report.document.addText("The statement ");
@@ -364,6 +374,13 @@ pub const Diagnostic = union(enum) {
         try report.document.addText(" is not allowed at the top level.");
         try report.document.addLineBreak();
         try report.document.addReflowingText("Only definitions, type annotations, and imports are allowed at the top level.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            filename,
+        );
         return report;
     }
 
@@ -521,6 +538,28 @@ pub const Diagnostic = union(enum) {
         try report.document.addReflowingText("I am part way through parsing this scalar literal (character literal), but it is empty.");
         try report.document.addLineBreak();
         try report.document.addReflowingText("A single-quoted literal must contain exactly one character, e.g. 'a'.");
+        return report;
+    }
+
+    /// Build a report for "crash expects string" diagnostic
+    pub fn buildCrashExpectsStringReport(
+        allocator: Allocator,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+    ) !Report {
+        var report = Report.init(allocator, "CRASH EXPECTS STRING", .runtime_error);
+        try report.document.addReflowingText("The ");
+        try report.document.addAnnotated("crash", .inline_code);
+        try report.document.addReflowingText(" keyword expects a string literal as its argument.");
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("For example: ");
+        try report.document.addAnnotated("crash \"Something went wrong\"", .inline_code);
+        try report.document.addLineBreak();
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            filename,
+        );
         return report;
     }
 

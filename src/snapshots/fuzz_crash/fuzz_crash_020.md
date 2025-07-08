@@ -135,6 +135,7 @@ UNDECLARED TYPE - fuzz_crash_020.md:24:15:24:16
 UNDECLARED TYPE VARIABLE - fuzz_crash_020.md:24:24:24:25
 UNDECLARED TYPE - fuzz_crash_020.md:37:7:37:9
 UNDEFINED VARIABLE - fuzz_crash_020.md:40:5:40:8
+UNDEFINED VARIABLE - fuzz_crash_020.md:42:4:42:5
 UNDEFINED VARIABLE - fuzz_crash_020.md:42:6:42:10
 UNDEFINED VARIABLE - fuzz_crash_020.md:45:3:45:4
 UNDEFINED VARIABLE - fuzz_crash_020.md:53:2:53:3
@@ -143,8 +144,11 @@ UNDEFINED VARIABLE - fuzz_crash_020.md:55:11:55:12
 UNUSED VARIABLE - fuzz_crash_020.md:57:2:57:4
 UNDEFINED VARIABLE - fuzz_crash_020.md:59:3:59:7
 UNUSED VARIABLE - fuzz_crash_020.md:60:12:60:15
+UNDEFINED VARIABLE - fuzz_crash_020.md:72:2:72:4
 UNDECLARED TYPE - fuzz_crash_020.md:74:9:74:15
 UNDEFINED VARIABLE - fuzz_crash_020.md:75:11:75:12
+UNDEFINED VARIABLE - fuzz_crash_020.md:78:9:78:14
+UNDEFINED VARIABLE - fuzz_crash_020.md:80:3:80:6
 UNDEFINED VARIABLE - fuzz_crash_020.md:87:11:87:12
 UNDEFINED VARIABLE - fuzz_crash_020.md:89:3:89:6
 UNDEFINED VARIABLE - fuzz_crash_020.md:96:34:96:37
@@ -164,6 +168,9 @@ UNUSED VARIABLE - fuzz_crash_020.md:96:2:96:4
 UNUSED VARIABLE - fuzz_crash_020.md:76:2:76:3
 UNUSED VARIABLE - fuzz_crash_020.md:87:2:87:3
 UNDECLARED TYPE - fuzz_crash_020.md:116:5:116:6
+UNDEFINED VARIABLE - fuzz_crash_020.md:119:2:119:5
+UNDEFINED VARIABLE - fuzz_crash_020.md:120:1:120:2
+UNDEFINED VARIABLE - fuzz_crash_020.md:120:6:120:9
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_020.md:52:2:52:2
 # PROBLEMS
 **UNDECLARED TYPE**
@@ -249,9 +256,16 @@ Is there an `import` or `exposing` missing up-top?
     ^^^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
-Let us know if you want to help!
+**UNDEFINED VARIABLE**
+Nothing is named `s` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_020.md:42:4:42:5:**
+```roc
+			s exp0
+```
+   ^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `exp0` in this scope.
@@ -263,10 +277,6 @@ Is there an `import` or `exposing` missing up-top?
 ```
      ^^^^
 
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
-Let us know if you want to help!
 
 **UNDEFINED VARIABLE**
 Nothing is named `r` in this scope.
@@ -352,9 +362,16 @@ The unused variable is declared here:
 This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
 Let us know if you want to help!
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: top-level expect
-Let us know if you want to help!
+**UNDEFINED VARIABLE**
+Nothing is named `nt` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_020.md:72:2:72:4:**
+```roc
+	nt
+```
+ ^^
+
 
 **UNDECLARED TYPE**
 The type ``Listlt`` is not declared in this scope.
@@ -378,17 +395,37 @@ ma= |_| { e
           ^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
-Let us know if you want to help!
+**UNDEFINED VARIABLE**
+Nothing is named `blaue` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
-Let us know if you want to help!
+**fuzz_crash_020.md:78:9:78:14:**
+```roc
+	expect blaue
+```
+        ^^^^^
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: crash statement
-Let us know if you want to help!
+
+**UNDEFINED VARIABLE**
+Nothing is named `tag` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_020.md:80:3:80:6:**
+```roc
+		tag
+```
+  ^^^
+
+
+**CRASH EXPECTS STRING**
+The `crash` keyword expects a string literal as its argument.
+For example: `crash "Something went wrong"`
+**fuzz_crash_020.md:86:3:86:12:**
+```roc
+	)crash ke"Unr!" #)
+```
+  ^^^^^^^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `d` in this scope.
@@ -629,9 +666,38 @@ t : V((a,c))
     ^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: top-level expect
-Let us know if you want to help!
+**UNDEFINED VARIABLE**
+Nothing is named `foo` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_020.md:119:2:119:5:**
+```roc
+	foo == 1
+```
+ ^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `h` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_020.md:120:1:120:2:**
+```roc
+h == foo
+```
+^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `foo` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_020.md:120:6:120:9:**
+```roc
+h == foo
+```
+     ^^^
+
 
 **INCOMPATIBLE MATCH PATTERNS**
 The pattern in the fourth branch of this `match` differs from previous ones:
@@ -893,12 +959,12 @@ CloseCurly(121:1-121:2),EndOfFile(121:2-121:2),
 							(e-ident @40.5-40.8 (raw "num"))
 							(e-block @40.9-43.3
 								(statements
-									(e-dbg
+									(s-dbg @41.3-42.10
 										(e-ident @42.4-42.5 (raw "s")))
 									(e-ident @42.6-42.10 (raw "exp0"))))
 							(e-block @43.9-46.3
 								(statements
-									(e-dbg
+									(s-dbg @44.3-45.4
 										(e-int @44.7-44.10 (raw "123")))
 									(e-ident @45.3-45.4 (raw "r")))))))))
 		(s-decl @49.1-69.3
@@ -1299,13 +1365,13 @@ expect {
 						(if-branch
 							(e-runtime-error (tag "ident_not_in_scope"))
 							(e-block @40.9-43.3
-								(s-expr @41.3-42.10
-									(e-runtime-error (tag "not_implemented")))
+								(s-dbg @41.3-42.10
+									(e-runtime-error (tag "ident_not_in_scope")))
 								(e-runtime-error (tag "ident_not_in_scope")))))
 					(if-else
 						(e-block @43.9-46.3
-							(s-expr @44.3-45.4
-								(e-runtime-error (tag "not_implemented")))
+							(s-dbg @44.3-45.4
+								(e-int @44.7-44.10 (value "123")))
 							(e-runtime-error (tag "ident_not_in_scope"))))))))
 	(d-let
 		(p-assign @49.1-49.3 (ident "me"))
@@ -1415,6 +1481,10 @@ expect {
 				(s-var @77.2-78.8
 					(p-assign @77.2-78.8 (ident "er"))
 					(e-int @77.11-77.14 (value "123")))
+				(s-expect @78.2-79.8
+					(e-runtime-error (tag "ident_not_in_scope")))
+				(s-return @79.2-83.5
+					(e-runtime-error (tag "ident_not_in_scope")))
 				(s-expr @83.2-84.4
 					(e-not-implemented))
 				(s-expr @84.2-86.8
@@ -1593,7 +1663,18 @@ expect {
 	(s-import @10.1-10.19 (module "Bae") (alias "Gooe")
 		(exposes))
 	(s-import @11.1-12.4 (module "Ba")
-		(exposes)))
+		(exposes))
+	(s-expect @71.1-74.6
+		(e-runtime-error (tag "ident_not_in_scope")))
+	(s-expect @118.1-121.2
+		(e-block @118.8-121.2
+			(s-expr @119.2-120.2
+				(e-binop @119.2-120.2 (op "eq")
+					(e-runtime-error (tag "ident_not_in_scope"))
+					(e-int @119.9-119.10 (value "1"))))
+			(e-binop @120.1-121.2 (op "eq")
+				(e-runtime-error (tag "ident_not_in_scope"))
+				(e-runtime-error (tag "ident_not_in_scope"))))))
 ~~~
 # TYPES
 ~~~clojure

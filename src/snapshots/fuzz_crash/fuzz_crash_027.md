@@ -466,17 +466,33 @@ This type is referenced here:
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
+**fuzz_crash_027.md:1:1:1:1:**
+```roc
+
+```
+
+
+
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
-Let us know if you want to help!
+**fuzz_crash_027.md:39:1:39:4:**
+```roc
+} #
+```
+^^^
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
-Let us know if you want to help!
+
+**EMPTY TUPLE NOT ALLOWED**
+I am part way through parsing this tuple, but it is empty:
+**fuzz_crash_027.md:52:1:52:3:**
+```roc
+() #r
+```
+^^
+
+If you want to represent nothing, try using an empty record: `{}`.
 
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
@@ -599,9 +615,16 @@ The unused variable is declared here:
  ^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: top-level expect
-Let us know if you want to help!
+**UNDEFINED VARIABLE**
+Nothing is named `blah` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_027.md:97:2:97:6:**
+```roc
+	blah == 1 # Commnt
+```
+ ^^^^
+
 
 **UNDECLARED TYPE**
 The type ``String`` is not declared in this scope.
@@ -614,13 +637,16 @@ main! : List(String) -> Result({}, _)
              ^^^^^^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
-Let us know if you want to help!
+**UNDEFINED VARIABLE**
+Nothing is named `blah` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
-Let us know if you want to help!
+**fuzz_crash_027.md:103:9:103:13:**
+```roc
+	expect blah == 1
+```
+        ^^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `some_func` in this scope.
@@ -632,14 +658,6 @@ Is there an `import` or `exposing` missing up-top?
 ```
  ^^^^^^^^^
 
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: crash statement
-Let us know if you want to help!
 
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
@@ -725,10 +743,6 @@ tuple : Value((a, b, c))
 ```
         ^^^^^
 
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
-Let us know if you want to help!
 
 **UNUSED VARIABLE**
 Variable ``record`` is not used anywhere in your code.
@@ -1147,12 +1161,12 @@ CloseCurly(159:1-159:2),EndOfFile(159:2-159:2),
 							(e-ident @50.5-50.8 (raw "num"))
 							(e-block @50.9-54.3
 								(statements
-									(e-dbg
+									(s-dbg @51.3-53.4
 										(e-tuple @52.1-52.3))
 									(e-int @53.3-53.4 (raw "0"))))
 							(e-block @54.9-57.3
 								(statements
-									(e-dbg
+									(s-dbg @55.3-56.8
 										(e-int @55.7-55.10 (raw "123")))
 									(e-ident @56.3-56.8 (raw "other")))))))))
 		(s-decl @60.1-94.3
@@ -1668,13 +1682,13 @@ main! = |_| { # Yeah Ie
 							(e-lookup-local @50.5-50.8
 								(pattern @48.12-48.15))
 							(e-block @50.9-54.3
-								(s-expr @51.3-53.4
-									(e-runtime-error (tag "not_implemented")))
+								(s-dbg @51.3-53.4
+									(e-runtime-error (tag "empty_tuple")))
 								(e-int @53.3-53.4 (value "0")))))
 					(if-else
 						(e-block @54.9-57.3
-							(s-expr @55.3-56.8
-								(e-runtime-error (tag "not_implemented")))
+							(s-dbg @55.3-56.8
+								(e-int @55.7-55.10 (value "123")))
 							(e-lookup-local @56.3-56.8
 								(pattern @49.2-49.7)))))))
 		(annotation @48.1-48.8
@@ -1812,9 +1826,16 @@ main! = |_| { # Yeah Ie
 				(s-var @102.2-103.8
 					(p-assign @102.2-103.8 (ident "number"))
 					(e-int @102.15-102.18 (value "123")))
+				(s-expect @103.2-104.5
+					(e-binop @103.9-104.5 (op "eq")
+						(e-runtime-error (tag "ident_not_in_scope"))
+						(e-int @103.17-103.18 (value "1"))))
 				(s-let @104.2-104.12
 					(p-assign @104.2-104.5 (ident "tag"))
 					(e-tag @104.8-104.12 (name "Blue")))
+				(s-return @105.2-110.5
+					(e-lookup-local @106.3-106.6
+						(pattern @104.2-104.5)))
 				(s-expr @110.2-111.12
 					(e-not-implemented))
 				(s-expr @111.2-114.11
@@ -1825,7 +1846,9 @@ main! = |_| { # Yeah Ie
 				(s-expr @114.2-118.7
 					(e-call @114.2-117.3
 						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-runtime-error (tag "not_implemented"))))
+						(e-dbg @115.3-116.7
+							(e-int @116.4-116.6 (value "42")))))
+				(s-crash @1.1-1.1 (msg "Unreachtement"))
 				(s-let @119.2-119.23
 					(p-assign @119.2-119.10 (ident "tag_with"))
 					(e-tag @119.13-119.23 (name "Ok")
@@ -1967,7 +1990,32 @@ main! = |_| { # Yeah Ie
 							(ty-var @153.16-153.17 (name "a"))
 							(ty-var @153.19-153.20 (name "b"))
 							(ty-var @153.22-153.23 (name "c")))))
-				(e-runtime-error (tag "not_implemented"))))
+				(s-expect @155.1-159.2
+					(e-block @155.8-159.2
+						(s-let @156.2-156.9
+							(p-assign @156.2-156.5 (ident "foo"))
+							(e-int @156.8-156.9 (value "1")))
+						(s-let @157.2-157.10
+							(p-assign @157.2-157.6 (ident "blah"))
+							(e-int @157.9-157.10 (value "1")))
+						(e-binop @158.2-159.2 (op "eq")
+							(e-lookup-local @158.2-158.6
+								(pattern @157.2-157.6))
+							(e-lookup-local @158.10-158.13
+								(pattern @156.2-156.5)))))
+				(e-expect @155.1-159.2
+					(e-block @155.8-159.2
+						(s-let @156.2-156.9
+							(p-assign @156.2-156.5 (ident "foo"))
+							(e-int @156.8-156.9 (value "1")))
+						(s-let @157.2-157.10
+							(p-assign @157.2-157.6 (ident "blah"))
+							(e-int @157.9-157.10 (value "1")))
+						(e-binop @158.2-159.2 (op "eq")
+							(e-lookup-local @158.2-158.6
+								(pattern @157.2-157.6))
+							(e-lookup-local @158.10-158.13
+								(pattern @156.2-156.5)))))))
 		(annotation @100.1-100.6
 			(declared-type
 				(ty-fn @99.9-99.38 (effectful false)
@@ -2054,7 +2102,11 @@ main! = |_| { # Yeah Ie
 	(s-import @12.1-12.19 (module "Bae") (alias "Gooe")
 		(exposes))
 	(s-import @13.1-14.4 (module "Ba")
-		(exposes)))
+		(exposes))
+	(s-expect @96.1-99.6
+		(e-binop @97.2-99.6 (op "eq")
+			(e-runtime-error (tag "ident_not_in_scope"))
+			(e-int @97.10-97.11 (value "1")))))
 ~~~
 # TYPES
 ~~~clojure

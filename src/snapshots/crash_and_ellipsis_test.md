@@ -29,6 +29,8 @@ main! = |_| {
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - crash_and_ellipsis_test.md:9:17:9:24
 UNEXPECTED TOKEN IN EXPRESSION - crash_and_ellipsis_test.md:13:23:13:30
+INVALID STATEMENT - crash_and_ellipsis_test.md:1:1:1:1
+INVALID STATEMENT - crash_and_ellipsis_test.md:1:1:1:1
 UNUSED VARIABLE - crash_and_ellipsis_test.md:16:5:16:12
 UNUSED VARIABLE - crash_and_ellipsis_test.md:17:5:17:12
 UNUSED VARIABLE - crash_and_ellipsis_test.md:18:5:18:12
@@ -64,12 +66,26 @@ The body of this lambda expression is not valid.
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
+**crash_and_ellipsis_test.md:1:1:1:1:**
+```roc
+
+```
+
+
+
 **INVALID LAMBDA**
 The body of this lambda expression is not valid.
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**crash_and_ellipsis_test.md:1:1:1:1:**
+```roc
+
+```
+
+
 
 **UNUSED VARIABLE**
 Variable ``result1`` is not used anywhere in your code.

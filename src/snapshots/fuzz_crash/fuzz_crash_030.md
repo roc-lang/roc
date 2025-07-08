@@ -32,6 +32,16 @@ UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:12:12:12:14
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:12:13:12:17
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:12:17:12:20
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_030.md:13:2:13:15
+INVALID STATEMENT - fuzz_crash_030.md:9:3:9:10
+INVALID STATEMENT - fuzz_crash_030.md:10:2:10:15
+INVALID STATEMENT - fuzz_crash_030.md:11:3:12:12
+INVALID STATEMENT - fuzz_crash_030.md:12:9:12:13
+INVALID STATEMENT - fuzz_crash_030.md:12:12:12:14
+INVALID STATEMENT - fuzz_crash_030.md:12:13:12:17
+INVALID STATEMENT - fuzz_crash_030.md:12:15:12:18
+INVALID STATEMENT - fuzz_crash_030.md:12:17:12:20
+INVALID STATEMENT - fuzz_crash_030.md:13:2:13:15
+INVALID STATEMENT - fuzz_crash_030.md:14:3:16:4
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `exposed_item_unexpected_token`
@@ -157,41 +167,112 @@ Here is the problematic code:
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**fuzz_crash_030.md:9:3:9:10:**
+```roc
+		] # Cse
+```
+  ^^^^^^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**fuzz_crash_030.md:10:2:10:15:**
+```roc
+	packages # Cd
+```
+ ^^^^^^^^^^^^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**fuzz_crash_030.md:11:3:12:12:**
+```roc
+		{ # pen
+pkg: 77"..c", mm} #
+```
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**fuzz_crash_030.md:12:9:12:13:**
+```roc
+pkg: 77"..c", mm} #
+```
+        ^^^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
+**fuzz_crash_030.md:12:12:12:14:**
+```roc
+pkg: 77"..c", mm} #
+```
+           ^^
+
+
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_030.md:12:13:12:17:**
+```roc
+pkg: 77"..c", mm} #
+```
+            ^^^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_030.md:12:15:12:18:**
+```roc
+pkg: 77"..c", mm} #
+```
+              ^^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_030.md:12:17:12:20:**
+```roc
+pkg: 77"..c", mm} #
+```
+                ^^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_030.md:13:2:13:15:**
+```roc
+	provides # Cd
+```
+ ^^^^^^^^^^^^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_030.md:14:3:16:4:**
+```roc
+		[ # pen
+ar,
+		]
+```
+
 
 # TOKENS
 ~~~zig

@@ -39,6 +39,11 @@ UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_025.md:11:3:11:25
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_025.md:14:48:14:52
 PARSE ERROR - fuzz_crash_025.md:14:50:14:50
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_025.md:15:3:15:5
+INVALID STATEMENT - fuzz_crash_025.md:11:3:11:25
+INVALID STATEMENT - fuzz_crash_025.md:11:5:13:2
+INVALID STATEMENT - fuzz_crash_025.md:14:48:14:52
+INVALID STATEMENT - fuzz_crash_025.md:15:3:15:5
+INVALID STATEMENT - fuzz_crash_025.md:15:4:17:2
 TYPE MISMATCH - fuzz_crash_025.md:13:5:13:9
 # PROBLEMS
 **PARSE ERROR**
@@ -129,21 +134,58 @@ f =8
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**fuzz_crash_025.md:11:3:11:25:**
+```roc
+d = 18446744073709551615
+```
+  ^^^^^^^^^^^^^^^^^^^^^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**fuzz_crash_025.md:11:5:13:2:**
+```roc
+d = 18446744073709551615
+
+e : U128
+```
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_025.md:14:48:14:52:**
+```roc
+e = 3402823669209384634633746074317682114553.14: I8
+```
+                                               ^^^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_025.md:15:3:15:5:**
+```roc
+f =8
+```
+  ^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_025.md:15:4:17:2:**
+```roc
+f =8
+
+g : I16
+```
+
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

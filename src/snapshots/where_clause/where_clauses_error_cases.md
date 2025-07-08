@@ -24,8 +24,7 @@ broken_fn3 : a -> b
 # EXPECTED
 WHERE CLAUSE ERROR - where_clauses_error_cases.md:6:5:6:12
 WHERE CLAUSE ERROR - where_clauses_error_cases.md:10:3:10:3
-UNDECLARED TYPE VARIABLE - where_clauses_error_cases.md:15:24:15:25
-UNDECLARED TYPE VARIABLE - where_clauses_error_cases.md:15:29:15:30
+INVALID STATEMENT - where_clauses_error_cases.md:6:25:9:11
 # PROBLEMS
 **WHERE CLAUSE ERROR**
 Expected a colon **:** after the method name in this where clause constraint.
@@ -61,6 +60,15 @@ Please check the syntax of your where clause constraint.
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**where_clauses_error_cases.md:6:25:9:11:**
+```roc
+    module(a).method -> b
+
+# Empty where clause
+broken_fn2 : a -> b
+```
+
 
 **MALFORMED WHERE CLAUSE**
 This where clause could not be parsed correctly.

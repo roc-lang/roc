@@ -13,6 +13,7 @@ foo =
 ~~~
 # EXPECTED
 ASCII CONTROL CHARACTER - fuzz_crash_010.md:1:1:1:3
+INVALID STATEMENT - fuzz_crash_010.md:1:2:3:4
 # PROBLEMS
 **ASCII CONTROL CHARACTER**
 ASCII control characters are not allowed in Roc source code.
@@ -42,6 +43,14 @@ H{o,
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_010.md:1:2:3:4:**
+```roc
+H{o,
+    ]
+foo =
+```
+
 
 # TOKENS
 ~~~zig

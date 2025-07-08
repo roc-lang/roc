@@ -583,7 +583,10 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             }
         },
         .e_runtime_error => {},
+        .e_crash => {},
+        .e_dbg => {},
         .e_ellipsis => {},
+        .e_expect => {},
     }
 
     return does_fx;

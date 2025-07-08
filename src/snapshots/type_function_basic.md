@@ -14,6 +14,8 @@ main! = |_| {}
 ~~~
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - type_function_basic.md:3:17:3:20
+INVALID STATEMENT - type_function_basic.md:3:17:3:20
+INVALID STATEMENT - type_function_basic.md:3:19:4:6
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **, a** is not expected in an expression.
@@ -31,9 +33,23 @@ apply : (a -> b), a -> b
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
+**type_function_basic.md:3:17:3:20:**
+```roc
+apply : (a -> b), a -> b
+```
+                ^^^
+
+
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**type_function_basic.md:3:19:4:6:**
+```roc
+apply : (a -> b), a -> b
+apply = |fn, x| fn(x)
+```
+
 
 # TOKENS
 ~~~zig

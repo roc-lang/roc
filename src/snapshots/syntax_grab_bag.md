@@ -629,13 +629,16 @@ Let us know if you want to help!
 This feature is not yet implemented or doesn't have a proper error report yet: Exposed item 'write!' already imported from module 'pf.Stdout', cannot import again from module 'MALFORMED_IMPORT'
 Let us know if you want to help!
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
-Let us know if you want to help!
+**UNDEFINED VARIABLE**
+Nothing is named `some_func` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
-Let us know if you want to help!
+**syntax_grab_bag.md:72:4:72:13:**
+```roc
+			some_func() # After debug expr
+```
+   ^^^^^^^^^
+
 
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
@@ -762,9 +765,16 @@ The unused variable is declared here:
  ^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: top-level expect
-Let us know if you want to help!
+**UNDEFINED VARIABLE**
+Nothing is named `blah` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**syntax_grab_bag.md:141:2:141:6:**
+```roc
+	blah == 1 # Comment after expect statement
+```
+ ^^^^
+
 
 **UNDECLARED TYPE**
 The type ``String`` is not declared in this scope.
@@ -777,13 +787,16 @@ main! : List(String) -> Result({}, _)
              ^^^^^^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
-Let us know if you want to help!
+**UNDEFINED VARIABLE**
+Nothing is named `blah` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
-Let us know if you want to help!
+**syntax_grab_bag.md:147:9:147:13:**
+```roc
+	expect blah == 1
+```
+        ^^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `some_func` in this scope.
@@ -795,18 +808,6 @@ Is there an `import` or `exposing` missing up-top?
 ```
  ^^^^^^^^^
 
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: crash statement
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize dbg expression
-Let us know if you want to help!
 
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: statement type in block
@@ -980,10 +981,6 @@ tuple : Value((a, b, c))
 ```
         ^^^^^
 
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: top-level expect
-Let us know if you want to help!
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -1409,13 +1406,13 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 							(e-ident @70.5-70.8 (raw "num"))
 							(e-block @70.9-74.3
 								(statements
-									(e-dbg
+									(s-dbg @71.3-73.4
 										(e-apply @72.4-72.15
 											(e-ident @72.4-72.13 (raw "some_func"))))
 									(e-int @73.3-73.4 (raw "0"))))
 							(e-block @74.9-77.3
 								(statements
-									(e-dbg
+									(s-dbg @75.3-76.8
 										(e-int @75.7-75.10 (raw "123")))
 									(e-ident @76.3-76.8 (raw "other")))))))))
 		(s-decl @80.1-138.3
@@ -2028,13 +2025,14 @@ expect {
 							(e-lookup-local @70.5-70.8
 								(pattern @68.12-68.15))
 							(e-block @70.9-74.3
-								(s-expr @71.3-73.4
-									(e-runtime-error (tag "not_implemented")))
+								(s-dbg @71.3-73.4
+									(e-call @72.4-72.15
+										(e-runtime-error (tag "ident_not_in_scope"))))
 								(e-int @73.3-73.4 (value "0")))))
 					(if-else
 						(e-block @74.9-77.3
-							(s-expr @75.3-76.8
-								(e-runtime-error (tag "not_implemented")))
+							(s-dbg @75.3-76.8
+								(e-int @75.7-75.10 (value "123")))
 							(e-lookup-local @76.3-76.8
 								(pattern @69.2-69.7)))))))
 		(annotation @68.1-68.8
@@ -2219,9 +2217,16 @@ expect {
 				(s-var @146.2-147.8
 					(p-assign @146.2-147.8 (ident "number"))
 					(e-int @146.15-146.18 (value "123")))
+				(s-expect @147.2-148.5
+					(e-binop @147.9-148.5 (op "eq")
+						(e-runtime-error (tag "ident_not_in_scope"))
+						(e-int @147.17-147.18 (value "1"))))
 				(s-let @148.2-148.12
 					(p-assign @148.2-148.5 (ident "tag"))
 					(e-tag @148.8-148.12 (name "Blue")))
+				(s-return @149.2-154.5
+					(e-lookup-local @150.3-150.6
+						(pattern @148.2-148.5)))
 				(s-expr @154.2-155.12
 					(e-not-implemented))
 				(s-expr @155.2-158.11
@@ -2232,7 +2237,9 @@ expect {
 				(s-expr @158.2-162.7
 					(e-call @158.2-161.3
 						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-runtime-error (tag "not_implemented"))))
+						(e-dbg @159.3-160.7
+							(e-int @160.4-160.6 (value "42")))))
+				(s-crash @162.2-163.49 (msg "Unreachable!"))
 				(s-let @164.2-164.31
 					(p-assign @164.2-164.18 (ident "tag_with_payload"))
 					(e-tag @164.21-164.31 (name "Ok")
@@ -2253,7 +2260,9 @@ expect {
 							(e-call @167.3-170.4
 								(e-lookup-local @167.3-167.10
 									(pattern @68.1-68.8))
-								(e-runtime-error (tag "not_implemented")))
+								(e-dbg @168.4-169.12
+									(e-lookup-local @169.5-169.11
+										(pattern @146.2-147.8))))
 							(e-int @171.3-171.6 (value "456"))
 							(e-int @172.3-172.6 (value "789")))))
 				(s-let @178.2-178.71
@@ -2494,6 +2503,23 @@ expect {
 		(exposes))
 	(s-import @17.1-20.20 (module "BadNameMultiline") (alias "GoodNameMultiline")
 		(exposes))
+	(s-expect @140.1-143.6
+		(e-binop @141.2-143.6 (op "eq")
+			(e-runtime-error (tag "ident_not_in_scope"))
+			(e-int @141.10-141.11 (value "1"))))
+	(s-expect @203.1-207.2
+		(e-block @203.8-207.2
+			(s-let @204.2-204.9
+				(p-assign @204.2-204.5 (ident "foo"))
+				(e-int @204.8-204.9 (value "1")))
+			(s-let @205.2-205.10
+				(p-assign @205.2-205.6 (ident "blah"))
+				(e-int @205.9-205.10 (value "1")))
+			(e-binop @206.2-207.2 (op "eq")
+				(e-lookup-local @206.2-206.6
+					(pattern @205.2-205.6))
+				(e-lookup-local @206.10-206.13
+					(pattern @204.2-204.5)))))
 	(ext-decl @191.2-191.14 (ident "pf.Stdout.line!") (kind "value")))
 ~~~
 # TYPES

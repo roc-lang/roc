@@ -1027,6 +1027,19 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) ?AST.Statement.I
             }
             return statement_idx;
         },
+        .KwDbg => {
+            const start = self.pos;
+            self.advance();
+            const expr = self.parseExpr();
+            const statement_idx = self.store.addStatement(.{ .dbg = .{
+                .expr = expr,
+                .region = .{ .start = start, .end = self.pos },
+            } });
+            if (self.peek() == .Newline) {
+                self.advance();
+            }
+            return statement_idx;
+        },
         .KwReturn => {
             const start = self.pos;
             self.advance();

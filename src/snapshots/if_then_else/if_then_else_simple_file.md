@@ -16,6 +16,8 @@ foo = if 1 A
 # EXPECTED
 PARSE ERROR - if_then_else_simple_file.md:1:1:1:1
 UNEXPECTED TOKEN IN EXPRESSION - if_then_else_simple_file.md:5:5:5:11
+INVALID STATEMENT - if_then_else_simple_file.md:5:5:5:11
+INVALID STATEMENT - if_then_else_simple_file.md:5:10:7:6
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `no_else`
@@ -49,9 +51,24 @@ Check the spelling and make sure you're using a valid Roc operator.
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
+**if_then_else_simple_file.md:5:5:5:11:**
+```roc
+    else {
+```
+    ^^^^^^
+
+
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**if_then_else_simple_file.md:5:10:7:6:**
+```roc
+    else {
+	"hello"
+    }
+```
+
 
 # TOKENS
 ~~~zig

@@ -12,6 +12,7 @@ type=file
 MISSING HEADER - fuzz_crash_018.md:1:1:1:4
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_018.md:2:1:2:3
 UNDECLARED TYPE - fuzz_crash_018.md:1:5:1:6
+INVALID STATEMENT - fuzz_crash_018.md:2:1:2:3
 # PROBLEMS
 **MISSING HEADER**
 Roc files must start with a module header.
@@ -55,6 +56,13 @@ This type is referenced here:
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_018.md:2:1:2:3:**
+```roc
+.R
+```
+^^
+
 
 # TOKENS
 ~~~zig

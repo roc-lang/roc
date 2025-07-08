@@ -33,6 +33,7 @@ UNDECLARED TYPE - type_app_complex_nested.md:4:51:4:56
 UNUSED VARIABLE - type_app_complex_nested.md:7:12:7:21
 UNDECLARED TYPE - type_app_complex_nested.md:12:14:12:19
 UNDECLARED TYPE - type_app_complex_nested.md:12:14:12:50
+INVALID STATEMENT - type_app_complex_nested.md:1:1:1:1
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **crash "** is not expected in an expression.
@@ -130,6 +131,13 @@ The body of this lambda expression is not valid.
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**type_app_complex_nested.md:1:1:1:1:**
+```roc
+
+```
+
+
 
 # TOKENS
 ~~~zig

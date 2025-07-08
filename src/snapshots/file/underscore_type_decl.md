@@ -30,6 +30,10 @@ UNEXPECTED TOKEN IN EXPRESSION - underscore_type_decl.md:7:13:7:19
 PARSE ERROR - underscore_type_decl.md:7:20:7:22
 PARSE ERROR - underscore_type_decl.md:7:23:7:25
 PARSE ERROR - underscore_type_decl.md:7:15:7:20
+INVALID STATEMENT - underscore_type_decl.md:6:6:6:14
+INVALID STATEMENT - underscore_type_decl.md:6:13:6:19
+INVALID STATEMENT - underscore_type_decl.md:7:6:7:14
+INVALID STATEMENT - underscore_type_decl.md:7:13:7:19
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `invalid_type_arg`
@@ -275,17 +279,45 @@ Pair3(_, _) = Pair(0, 1)
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**underscore_type_decl.md:6:6:6:14:**
+```roc
+Pair2(_, y) = Pair(0, 1)
+```
+     ^^^^^^^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
+**underscore_type_decl.md:6:13:6:19:**
+```roc
+Pair2(_, y) = Pair(0, 1)
+```
+            ^^^^^^
+
+
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**underscore_type_decl.md:7:6:7:14:**
+```roc
+Pair3(_, _) = Pair(0, 1)
+```
+     ^^^^^^^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**underscore_type_decl.md:7:13:7:19:**
+```roc
+Pair3(_, _) = Pair(0, 1)
+```
+            ^^^^^^
+
 
 # TOKENS
 ~~~zig

@@ -20,7 +20,10 @@ UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_022.md:1:19:1:29
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_022.md:1:32:1:32
 PARSE ERROR - fuzz_crash_022.md:6:27:6:30
 UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_022.md:8:1:8:6
+INVALID STATEMENT - fuzz_crash_022.md:1:28:1:33
+INVALID STATEMENT - fuzz_crash_022.md:1:1:1:1
 UNUSED VARIABLE - fuzz_crash_022.md:6:12:6:14
+INVALID STATEMENT - fuzz_crash_022.md:8:1:8:6
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_package_or_platform_name`
@@ -89,9 +92,23 @@ This type annotation is malformed or contains invalid syntax.
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
+**fuzz_crash_022.md:1:28:1:33:**
+```roc
+app [main!] { |f: platform "c" }
+```
+                           ^^^^^
+
+
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_022.md:1:1:1:1:**
+```roc
+
+```
+
+
 
 **INVALID IF CONDITION**
 The condition in this `if` expression could not be processed.
@@ -113,6 +130,13 @@ getUser = |id| if (id > 1!) "big" else "l"
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**fuzz_crash_022.md:8:1:8:6:**
+```roc
+-ain! = |_| getUser(900)
+```
+^^^^^
+
 
 # TOKENS
 ~~~zig

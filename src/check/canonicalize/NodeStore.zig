@@ -97,11 +97,11 @@ pub fn deinit(store: *NodeStore) void {
 /// when adding/removing variants from CIR unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the CIR
-pub const CIR_DIAGNOSTIC_NODE_COUNT = 41;
+pub const CIR_DIAGNOSTIC_NODE_COUNT = 35;
 /// Count of the expression nodes in the CIR
-pub const CIR_EXPR_NODE_COUNT = 25;
+pub const CIR_EXPR_NODE_COUNT = 28;
 /// Count of the statement nodes in the CIR
-pub const CIR_STATEMENT_NODE_COUNT = 12;
+pub const CIR_STATEMENT_NODE_COUNT = 13;
 /// Count of the type annotation nodes in the CIR
 pub const CIR_TYPE_ANNO_NODE_COUNT = 11;
 /// Count of the pattern nodes in the CIR
@@ -177,6 +177,10 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
         } },
         .statement_crash => return CIR.Statement{ .s_crash = .{
             .msg = @enumFromInt(node.data_1),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .statement_dbg => return CIR.Statement{ .s_dbg = .{
+            .expr = @enumFromInt(node.data_1),
             .region = store.getRegionAt(node_idx),
         } },
         .statement_expr => return .{ .s_expr = .{
@@ -549,12 +553,23 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 },
             };
         },
+        .expr_crash => {
+            return CIR.Expr{ .e_crash = .{
+                .msg = @enumFromInt(node.data_1),
+                .region = store.getRegionAt(node_idx),
+            } };
+        },
+        .expr_dbg => {
+            return CIR.Expr{ .e_dbg = .{
+                .expr = @enumFromInt(node.data_1),
+                .region = store.getRegionAt(node_idx),
+            } };
+        },
         .expr_static_dispatch,
         .expr_apply,
         .expr_record_update,
         .expr_unary,
         .expr_suffix_single_question,
-        .expr_dbg,
         .expr_record_builder,
         => {
             std.log.debug("TODO: implement getExpr for node type {?}", .{node.tag});
@@ -565,6 +580,12 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_ellipsis => {
             return CIR.Expr{ .e_ellipsis = .{
+                .region = store.getRegionAt(node_idx),
+            } };
+        },
+        .expr_expect => {
+            return CIR.Expr{ .e_expect = .{
+                .body = @enumFromInt(node.data_1),
                 .region = store.getRegionAt(node_idx),
             } };
         },
@@ -1068,6 +1089,11 @@ pub fn addStatement(store: *NodeStore, statement: CIR.Statement) CIR.Statement.I
             region = s.region;
             node.data_1 = @intFromEnum(s.msg);
         },
+        .s_dbg => |s| {
+            node.tag = .statement_dbg;
+            region = s.region;
+            node.data_1 = @intFromEnum(s.expr);
+        },
         .s_expr => |s| {
             node.tag = .statement_expr;
             node.data_1 = @intFromEnum(s.expr);
@@ -1524,6 +1550,16 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             node.data_1 = @intFromEnum(e.diagnostic);
             node.tag = .malformed;
         },
+        .e_crash => |c| {
+            region = c.region;
+            node.tag = .expr_crash;
+            node.data_1 = @intFromEnum(c.msg);
+        },
+        .e_dbg => |d| {
+            region = d.region;
+            node.tag = .expr_dbg;
+            node.data_1 = @intFromEnum(d.expr);
+        },
         .e_ellipsis => |e| {
             region = e.region;
             node.tag = .expr_ellipsis;
@@ -1635,6 +1671,11 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr) CIR.Expr.Idx {
             node.data_1 = e.stmts.span.start;
             node.data_2 = e.stmts.span.len;
             node.data_3 = @intFromEnum(e.final_expr);
+        },
+        .e_expect => |e| {
+            region = e.region;
+            node.tag = .expr_expect;
+            node.data_1 = @intFromEnum(e.body);
         },
     }
 
@@ -2558,6 +2599,7 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) CIR.Diagnostic.I
         .invalid_top_level_statement => |r| {
             node.tag = .diag_invalid_top_level_statement;
             node.data_1 = @intFromEnum(r.stmt);
+            region = r.region;
         },
         .expr_not_canonicalized => |r| {
             node.tag = .diag_expr_not_canonicalized;
@@ -2707,6 +2749,10 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) CIR.Diagnostic.I
             node.data_2 = r.original_region.start.offset;
             node.data_3 = r.original_region.end.offset;
         },
+        .crash_expects_string => |r| {
+            node.tag = .diag_crash_expects_string;
+            region = r.region;
+        },
         .f64_pattern_literal => |r| {
             node.tag = .diag_f64_pattern_literal;
             region = r.region;
@@ -2807,6 +2853,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         } },
         .diag_invalid_top_level_statement => return CIR.Diagnostic{ .invalid_top_level_statement = .{
             .stmt = @enumFromInt(node.data_1),
+            .region = store.getRegionAt(node_idx),
         } },
         .diag_expr_not_canonicalized => return CIR.Diagnostic{ .expr_not_canonicalized = .{
             .region = store.getRegionAt(node_idx),
@@ -2942,6 +2989,9 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
                 .start = .{ .offset = @intCast(node.data_2) },
                 .end = .{ .offset = @intCast(node.data_3) },
             },
+        } },
+        .diag_crash_expects_string => return CIR.Diagnostic{ .crash_expects_string = .{
+            .region = store.getRegionAt(node_idx),
         } },
         .diag_f64_pattern_literal => return CIR.Diagnostic{ .f64_pattern_literal = .{
             .region = store.getRegionAt(node_idx),

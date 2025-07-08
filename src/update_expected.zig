@@ -479,20 +479,40 @@ fn updateSnapshotFile(allocator: std.mem.Allocator, path: []const u8) !bool {
 fn processPath(allocator: std.mem.Allocator, path: []const u8) !u32 {
     var count: u32 = 0;
 
-    var dir = try std.fs.cwd().openDir(path, .{ .iterate = true });
-    defer dir.close();
+    // Check if path is a file or directory
+    const stat = std.fs.cwd().statFile(path) catch |err| switch (err) {
+        error.FileNotFound => {
+            std.debug.print("Path not found: {s}\n", .{path});
+            return 0;
+        },
+        else => return err,
+    };
 
-    var walker = try dir.walk(allocator);
-    defer walker.deinit();
-
-    while (try walker.next()) |entry| {
-        if (entry.kind == .file and std.mem.endsWith(u8, entry.path, ".md")) {
-            const full_path = try std.fs.path.join(allocator, &.{ path, entry.path });
-            defer allocator.free(full_path);
-
-            if (try updateSnapshotFile(allocator, full_path)) {
+    if (stat.kind == .file) {
+        // Process single file
+        if (std.mem.endsWith(u8, path, ".md")) {
+            if (try updateSnapshotFile(allocator, path)) {
                 count += 1;
-                std.debug.print("Updated: {s}\n", .{full_path});
+                std.debug.print("Updated: {s}\n", .{path});
+            }
+        }
+    } else if (stat.kind == .directory) {
+        // Process directory
+        var dir = try std.fs.cwd().openDir(path, .{ .iterate = true });
+        defer dir.close();
+
+        var walker = try dir.walk(allocator);
+        defer walker.deinit();
+
+        while (try walker.next()) |entry| {
+            if (entry.kind == .file and std.mem.endsWith(u8, entry.path, ".md")) {
+                const full_path = try std.fs.path.join(allocator, &.{ path, entry.path });
+                defer allocator.free(full_path);
+
+                if (try updateSnapshotFile(allocator, full_path)) {
+                    count += 1;
+                    std.debug.print("Updated: {s}\n", .{full_path});
+                }
             }
         }
     }
