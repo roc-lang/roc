@@ -786,6 +786,11 @@ pub const Statement = union(enum) {
         expr: Expr.Idx,
         region: TokenizedRegion,
     },
+    dbg: struct {
+        expr: Expr.Idx,
+        region: TokenizedRegion,
+    },
+
     expect: struct {
         body: Expr.Idx,
         region: TokenizedRegion,
@@ -970,6 +975,16 @@ pub const Statement = union(enum) {
             .crash => |a| {
                 const begin = tree.beginNode();
                 tree.pushStaticAtom("s-crash");
+                ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const attrs = tree.beginNode();
+
+                ast.store.getExpr(a.expr).pushToSExprTree(env, ast, tree);
+
+                tree.endNode(begin, attrs);
+            },
+            .dbg => |a| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("s-dbg");
                 ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 const attrs = tree.beginNode();
 

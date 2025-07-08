@@ -75,6 +75,11 @@ pub const Tag = enum {
     /// * lhs - node index to message(Should be a str_lit)
     /// * rhs - ignored
     crash,
+    /// A debug statement
+    /// Example: `dbg someValue`
+    /// * lhs - node index to expression being debugged
+    /// * rhs - ignored
+    dbg,
     /// Any plain expression - see Exprs below
     /// * lhs - node index for block or expr
     /// * rhs - ignored
@@ -396,11 +401,6 @@ pub const Tag = enum {
     /// * rhs - end index of extra_data
     /// * extra_data format - expr node index,[pattern node index, block/expr node index]*
     ident,
-    /// DESCRIPTION
-    /// Example: EXAMPLE
-    /// * lhs - LHS DESCRIPTION
-    /// * rhs - RHS DESCRIPTION
-    dbg,
     /// DESCRIPTION
     /// Example: EXAMPLE
     /// * lhs - LHS DESCRIPTION

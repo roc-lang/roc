@@ -69,9 +69,11 @@ UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:39:68:39:68
 UNEXPECTED TOKEN IN EXPRESSION - qualified_type_canonicalization.md:40:13:40:20
 PARSE ERROR - qualified_type_canonicalization.md:42:15:42:22
 PARSE ERROR - qualified_type_canonicalization.md:43:15:43:23
+INVALID STATEMENT - qualified_type_canonicalization.md:10:15:10:32
+INVALID STATEMENT - qualified_type_canonicalization.md:10:24:10:34
+INVALID STATEMENT - qualified_type_canonicalization.md:10:33:11:7
 UNDEFINED VARIABLE - qualified_type_canonicalization.md:15:19:15:24
-UNDEFINED VARIABLE - qualified_type_canonicalization.md:19:26:19:35
-UNDEFINED VARIABLE - qualified_type_canonicalization.md:23:23:23:32
+INVALID STATEMENT - qualified_type_canonicalization.md:15:29:18:17
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `import_exposing_no_close`
@@ -389,13 +391,34 @@ Here is the problematic code:
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**qualified_type_canonicalization.md:10:15:10:32:**
+```roc
+import ModuleA.ModuleB exposing [TypeC]
+```
+              ^^^^^^^^^^^^^^^^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**qualified_type_canonicalization.md:10:24:10:34:**
+```roc
+import ModuleA.ModuleB exposing [TypeC]
+```
+                       ^^^^^^^^^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**qualified_type_canonicalization.md:10:33:11:7:**
+```roc
+import ModuleA.ModuleB exposing [TypeC]
+import ExternalModule as ExtMod
+```
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `Color` in this scope.
@@ -411,6 +434,15 @@ simpleQualified = Color.RGB { r: 255, g: 0, b: 0 }
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**qualified_type_canonicalization.md:15:29:18:17:**
+```roc
+simpleQualified = Color.RGB { r: 255, g: 0, b: 0 }
+
+# Aliased qualified type
+aliasedQualified : ExtMod.DataType
+```
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `DataType` in this scope.
@@ -438,21 +470,14 @@ multiLevelQualified = TypeC.new
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**UNKNOWN OPERATOR**
-This looks like an operator, but it's not one I recognize!
-Check the spelling and make sure you're using a valid Roc operator.
+**qualified_type_canonicalization.md:27:24:30:9:**
+```roc
+resultType = Result.Ok 42
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+# Function returning qualified type
+getColor : {} -> Color.RGB
+```
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
-
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
@@ -462,21 +487,36 @@ Check the spelling and make sure you're using a valid Roc operator.
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**qualified_type_canonicalization.md:31:13:31:28:**
+```roc
+getColor = \{} -> Color.RGB { r: 0, g: 255, b: 0 }
+```
+            ^^^^^^^^^^^^^^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**qualified_type_canonicalization.md:31:24:31:30:**
+```roc
+getColor = \{} -> Color.RGB { r: 0, g: 255, b: 0 }
+```
+                       ^^^^^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**qualified_type_canonicalization.md:31:29:34:13:**
+```roc
+getColor = \{} -> Color.RGB { r: 0, g: 255, b: 0 }
+
+# Function accepting qualified type
+processColor : Color.RGB -> Str
+```
+
 
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
@@ -486,25 +526,126 @@ Check the spelling and make sure you're using a valid Roc operator.
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**qualified_type_canonicalization.md:35:17:36:21:**
+```roc
+processColor = \color ->
+    "Color processed"
+```
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**qualified_type_canonicalization.md:36:6:36:22:**
+```roc
+    "Color processed"
+```
+     ^^^^^^^^^^^^^^^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
+**qualified_type_canonicalization.md:1:1:1:1:**
+```roc
+
+```
+
+
+
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**qualified_type_canonicalization.md:39:50:39:60:**
+```roc
+transform : Result.Result Color.RGB ExtMod.Error -> ModuleA.ModuleB.TypeC
+```
+                                                 ^^^^^^^^^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**qualified_type_canonicalization.md:1:1:1:1:**
+```roc
+
+```
+
+
+
+**UNKNOWN OPERATOR**
+This looks like an operator, but it's not one I recognize!
+Check the spelling and make sure you're using a valid Roc operator.
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**qualified_type_canonicalization.md:40:14:41:16:**
+```roc
+transform = \result ->
+    when result is
+```
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**qualified_type_canonicalization.md:41:10:41:19:**
+```roc
+    when result is
+```
+         ^^^^^^^^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**qualified_type_canonicalization.md:41:17:42:15:**
+```roc
+    when result is
+        Result.Ok rgb -> TypeC.fromColor rgb
+```
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**qualified_type_canonicalization.md:42:19:42:45:**
+```roc
+        Result.Ok rgb -> TypeC.fromColor rgb
+```
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**qualified_type_canonicalization.md:42:42:43:15:**
+```roc
+        Result.Ok rgb -> TypeC.fromColor rgb
+        Result.Err err -> TypeC.default
+```
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**qualified_type_canonicalization.md:43:20:43:40:**
+```roc
+        Result.Err err -> TypeC.default
+```
+                   ^^^^^^^^^^^^^^^^^^^^
+
 
 # TOKENS
 ~~~zig

@@ -72,6 +72,17 @@ pub const Statement = union(enum) {
         msg: StringLiteral.Idx,
         region: Region,
     },
+    /// A debug statement that prints a debug representation of an expression
+    ///
+    /// Not valid at the top level of a module
+    ///
+    /// ```roc
+    /// dbg "debugging this value"
+    /// ```
+    s_dbg: struct {
+        expr: Expr.Idx,
+        region: Region,
+    },
     /// Just an expression - usually the return value for a block
     ///
     /// Not valid at the top level of a module
@@ -201,6 +212,16 @@ pub const Statement = union(enum) {
                 ir.appendRegionInfoToSExprTreeFromRegion(tree, c.region);
                 tree.pushStringPair("msg", ir.env.strings.get(c.msg));
                 const attrs = tree.beginNode();
+                tree.endNode(begin, attrs);
+            },
+            .s_dbg => |s| {
+                const begin = tree.beginNode();
+                tree.pushStaticAtom("s-dbg");
+                ir.appendRegionInfoToSExprTreeFromRegion(tree, s.region);
+                const attrs = tree.beginNode();
+
+                ir.store.getExpr(s.expr).pushToSExprTree(ir, tree);
+
                 tree.endNode(begin, attrs);
             },
             .s_expr => |s| {
@@ -351,6 +372,7 @@ pub const Statement = union(enum) {
             .s_var => |s| return s.region,
             .s_reassign => |s| return s.region,
             .s_crash => |s| return s.region,
+            .s_dbg => |s| return s.region,
             .s_expr => |s| return s.region,
             .s_expect => |s| return s.region,
             .s_for => |s| return s.region,

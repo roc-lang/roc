@@ -316,6 +316,11 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) AST.Statement.I
             node.data.lhs = @intFromEnum(c.expr);
             node.region = c.region;
         },
+        .dbg => |d| {
+            node.tag = .dbg;
+            node.data.lhs = @intFromEnum(d.expr);
+            node.region = d.region;
+        },
         .expect => |e| {
             node.tag = .expect;
             node.data.lhs = @intFromEnum(e.body);
@@ -1089,6 +1094,12 @@ pub fn getStatement(store: *NodeStore, statement_idx: AST.Statement.Idx) AST.Sta
         },
         .crash => {
             return .{ .crash = .{
+                .expr = @enumFromInt(node.data.lhs),
+                .region = node.region,
+            } };
+        },
+        .dbg => {
+            return .{ .dbg = .{
                 .expr = @enumFromInt(node.data.lhs),
                 .region = node.region,
             } };

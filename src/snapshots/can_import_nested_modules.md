@@ -40,12 +40,14 @@ PARSE ERROR - can_import_nested_modules.md:4:28:4:28
 UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:5:13:5:27
 UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:5:20:5:36
 UNEXPECTED TOKEN IN EXPRESSION - can_import_nested_modules.md:5:28:5:38
-UNDEFINED VARIABLE - can_import_nested_modules.md:9:26:9:41
-UNDEFINED VARIABLE - can_import_nested_modules.md:13:29:13:43
-UNDEFINED VARIABLE - can_import_nested_modules.md:18:5:18:37
-UNDEFINED VARIABLE - can_import_nested_modules.md:22:23:22:30
-UNDEFINED VARIABLE - can_import_nested_modules.md:22:37:22:58
-UNDEFINED VARIABLE - can_import_nested_modules.md:26:24:26:41
+INVALID STATEMENT - can_import_nested_modules.md:1:1:1:1
+INVALID STATEMENT - can_import_nested_modules.md:4:19:4:27
+INVALID STATEMENT - can_import_nested_modules.md:4:25:4:36
+INVALID STATEMENT - can_import_nested_modules.md:5:8:5:20
+INVALID STATEMENT - can_import_nested_modules.md:5:13:5:27
+INVALID STATEMENT - can_import_nested_modules.md:5:20:5:36
+INVALID STATEMENT - can_import_nested_modules.md:5:28:5:38
+INVALID STATEMENT - can_import_nested_modules.md:5:37:8:12
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token  is not expected in an expression.
@@ -147,33 +149,91 @@ import utils.String.Format exposing [padLeft]
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**can_import_nested_modules.md:1:1:1:1:**
+```roc
+
+```
+
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**can_import_nested_modules.md:4:19:4:27:**
+```roc
+import http.Client.Auth as HttpAuth
+```
+                  ^^^^^^^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
-**INVALID STATEMENT**
-The statement **expression** is not allowed at the top level.
-Only definitions, type annotations, and imports are allowed at the top level.
+**can_import_nested_modules.md:4:25:4:36:**
+```roc
+import http.Client.Auth as HttpAuth
+```
+                        ^^^^^^^^^^^
+
 
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
 
+**can_import_nested_modules.md:5:8:5:20:**
+```roc
+import utils.String.Format exposing [padLeft]
+```
+       ^^^^^^^^^^^^
+
+
 **INVALID STATEMENT**
 The statement **expression** is not allowed at the top level.
 Only definitions, type annotations, and imports are allowed at the top level.
+
+**can_import_nested_modules.md:5:13:5:27:**
+```roc
+import utils.String.Format exposing [padLeft]
+```
+            ^^^^^^^^^^^^^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**can_import_nested_modules.md:5:20:5:36:**
+```roc
+import utils.String.Format exposing [padLeft]
+```
+                   ^^^^^^^^^^^^^^^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**can_import_nested_modules.md:5:28:5:38:**
+```roc
+import utils.String.Format exposing [padLeft]
+```
+                           ^^^^^^^^^^
+
+
+**INVALID STATEMENT**
+The statement **expression** is not allowed at the top level.
+Only definitions, type annotations, and imports are allowed at the top level.
+
+**can_import_nested_modules.md:5:37:8:12:**
+```roc
+import utils.String.Format exposing [padLeft]
+
+# Test multi-level type qualification
+parseConfig : Config.Settings -> Str
+```
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `toString` in this scope.

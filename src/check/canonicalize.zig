@@ -513,49 +513,92 @@ pub fn canonicalizeFile(
                 self.can_ir.store.addScratchDef(def_idx);
                 last_type_anno = null; // Clear after successful use
             },
-            .@"var" => {
+            .@"var" => |var_stmt| {
                 // Not valid at top-level
                 const string_idx = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "var");
+                const region = self.parse_ir.tokenizedRegionToRegion(var_stmt.region);
                 self.can_ir.pushDiagnostic(CIR.Diagnostic{ .invalid_top_level_statement = .{
                     .stmt = string_idx,
+                    .region = region,
                 } });
                 last_type_anno = null; // Clear on non-annotation statement
             },
-            .expr => {
+            .expr => |expr_stmt| {
                 // Not valid at top-level
                 const string_idx = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "expression");
+                const region = self.parse_ir.tokenizedRegionToRegion(expr_stmt.region);
                 self.can_ir.pushDiagnostic(CIR.Diagnostic{ .invalid_top_level_statement = .{
                     .stmt = string_idx,
+                    .region = region,
                 } });
                 last_type_anno = null; // Clear on non-annotation statement
             },
-            .crash => {
+            .crash => |crash_stmt| {
                 // Not valid at top-level
                 const string_idx = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "crash");
+                const region = self.parse_ir.tokenizedRegionToRegion(crash_stmt.region);
                 self.can_ir.pushDiagnostic(CIR.Diagnostic{ .invalid_top_level_statement = .{
                     .stmt = string_idx,
+                    .region = region,
                 } });
                 last_type_anno = null; // Clear on non-annotation statement
             },
-            .expect => {
-                const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "top-level expect");
-                self.can_ir.pushDiagnostic(CIR.Diagnostic{ .not_implemented = .{
-                    .feature = feature,
-                    .region = Region.zero(),
+            .dbg => |dbg_stmt| {
+                // Not valid at top-level
+                const string_idx = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "dbg");
+                const region = self.parse_ir.tokenizedRegionToRegion(dbg_stmt.region);
+                self.can_ir.pushDiagnostic(CIR.Diagnostic{ .invalid_top_level_statement = .{
+                    .stmt = string_idx,
+                    .region = region,
                 } });
+                last_type_anno = null; // Clear on non-annotation statement
             },
-            .@"for" => {
+            .expect => |e| {
+                // Top-level expect statement
+                const region = self.parse_ir.tokenizedRegionToRegion(e.region);
+
+                // Canonicalize the expect expression
+                const expect_expr = try self.canonicalizeExpr(e.body) orelse {
+                    // If canonicalization fails, create a malformed expression
+                    const malformed = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .expr_not_canonicalized = .{
+                        .region = region,
+                    } });
+                    const expect_stmt = CIR.Statement{ .s_expect = .{
+                        .body = malformed,
+                        .region = region,
+                    } };
+                    const expect_stmt_idx = self.can_ir.store.addStatement(expect_stmt);
+                    self.can_ir.store.addScratchStatement(expect_stmt_idx);
+                    last_type_anno = null; // Clear on non-annotation statement
+                    continue;
+                };
+
+                // Create expect statement
+                const expect_stmt = CIR.Statement{ .s_expect = .{
+                    .body = expect_expr,
+                    .region = region,
+                } };
+                const expect_stmt_idx = self.can_ir.store.addStatement(expect_stmt);
+                self.can_ir.store.addScratchStatement(expect_stmt_idx);
+
+                last_type_anno = null; // Clear on non-annotation statement
+            },
+            .@"for" => |for_stmt| {
                 // Not valid at top-level
                 const string_idx = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "for");
+                const region = self.parse_ir.tokenizedRegionToRegion(for_stmt.region);
                 self.can_ir.pushDiagnostic(CIR.Diagnostic{ .invalid_top_level_statement = .{
                     .stmt = string_idx,
+                    .region = region,
                 } });
             },
-            .@"return" => {
+            .@"return" => |return_stmt| {
                 // Not valid at top-level
                 const string_idx = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "return");
+                const region = self.parse_ir.tokenizedRegionToRegion(return_stmt.region);
                 self.can_ir.pushDiagnostic(CIR.Diagnostic{ .invalid_top_level_statement = .{
                     .stmt = string_idx,
+                    .region = region,
                 } });
             },
             .type_decl => {
@@ -2231,13 +2274,20 @@ pub fn canonicalizeExpr(
 
             return expr_idx;
         },
-        .dbg => |_| {
-            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize dbg expression");
-            const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .not_implemented = .{
-                .feature = feature,
-                .region = Region.zero(),
+        .dbg => |d| {
+            // Debug expression - canonicalize the inner expression
+            const region = self.parse_ir.tokenizedRegionToRegion(d.region);
+            const inner_expr = try self.canonicalizeExpr(d.expr) orelse return null;
+
+            // Create debug expression
+            const dbg_expr = self.can_ir.store.addExpr(CIR.Expr{ .e_dbg = .{
+                .expr = inner_expr,
+                .region = region,
             } });
-            return expr_idx;
+
+            _ = self.can_ir.setTypeVarAtExpr(dbg_expr, Content{ .flex_var = null });
+
+            return dbg_expr;
         },
         .record_builder => |_| {
             const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "canonicalize record_builder expression");
@@ -2274,10 +2324,26 @@ pub fn canonicalizeExpr(
                 const is_last = (i == statements.len - 1);
                 const stmt = self.parse_ir.store.getStatement(stmt_idx);
 
-                if (is_last and stmt == .expr) {
-                    // For the last expression statement, canonicalize it directly as the final expression
+                if (is_last and (stmt == .expr or stmt == .dbg)) {
+                    // For the last expression or debug statement, canonicalize it directly as the final expression
                     // without adding it as a statement
-                    last_expr = try self.canonicalizeExpr(stmt.expr.expr);
+                    switch (stmt) {
+                        .expr => |expr_stmt| last_expr = try self.canonicalizeExpr(expr_stmt.expr),
+                        .dbg => |d| {
+                            // For final debug statements, canonicalize as debug expression
+                            const debug_region = self.parse_ir.tokenizedRegionToRegion(d.region);
+                            const inner_expr = try self.canonicalizeExpr(d.expr) orelse return null;
+
+                            // Create debug expression
+                            const dbg_expr = self.can_ir.store.addExpr(CIR.Expr{ .e_dbg = .{
+                                .expr = inner_expr,
+                                .region = debug_region,
+                            } });
+                            _ = self.can_ir.setTypeVarAtExpr(dbg_expr, Content{ .flex_var = null });
+                            last_expr = dbg_expr;
+                        },
+                        else => unreachable,
+                    }
                 } else {
                     // Regular statement processing
                     const result = try self.canonicalizeStatement(stmt_idx);
@@ -2402,9 +2468,12 @@ fn canonicalizePattern(
                         } });
                     },
                     .top_level_var_error => {
-                        return self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .invalid_top_level_statement = .{
-                            .stmt = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "var"),
-                        } });
+                        return self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{
+                            .invalid_top_level_statement = .{
+                                .stmt = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "var"),
+                                .region = base.Region.zero(), // TODO can we get a better region here
+                            },
+                        });
                     },
                     .var_across_function_boundary => {
                         return self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .ident_already_in_scope = .{
@@ -2670,9 +2739,12 @@ fn canonicalizePattern(
                             } });
                         },
                         .top_level_var_error => {
-                            const pattern_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .invalid_top_level_statement = .{
-                                .stmt = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "var"),
-                            } });
+                            const pattern_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{
+                                .invalid_top_level_statement = .{
+                                    .stmt = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "var"),
+                                    .region = base.Region.zero(), // TODO can we get a better region here
+                                },
+                            });
                             return pattern_idx;
                         },
                         .var_across_function_boundary => {
@@ -3255,9 +3327,12 @@ fn scopeIntroduceIdent(
             return pattern_idx;
         },
         .top_level_var_error => {
-            return self.can_ir.pushMalformed(T, CIR.Diagnostic{ .invalid_top_level_statement = .{
-                .stmt = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "var"),
-            } });
+            return self.can_ir.pushMalformed(T, CIR.Diagnostic{
+                .invalid_top_level_statement = .{
+                    .stmt = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "var"),
+                    .region = base.Region.zero(), // TODO can we get a better region here
+                },
+            });
         },
         .var_across_function_boundary => |_| {
             // This shouldn't happen for regular identifiers
@@ -3301,9 +3376,12 @@ fn scopeIntroduceVar(
             return pattern_idx;
         },
         .top_level_var_error => {
-            return self.can_ir.pushMalformed(T, CIR.Diagnostic{ .invalid_top_level_statement = .{
-                .stmt = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "var"),
-            } });
+            return self.can_ir.pushMalformed(T, CIR.Diagnostic{
+                .invalid_top_level_statement = .{
+                    .stmt = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "var"),
+                    .region = base.Region.zero(), // TODO can we get a better region here
+                },
+            });
         },
         .var_across_function_boundary => |_| {
             // Generate crash expression for var reassignment across function boundary
@@ -3865,17 +3943,107 @@ pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.A
             // Crash statement
             const region = self.parse_ir.tokenizedRegionToRegion(c.region);
 
-            // Create a crash diagnostic and runtime error expression
-            const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "crash statement");
-            const diagnostic = self.can_ir.store.addDiagnostic(CIR.Diagnostic{ .not_implemented = .{
-                .feature = feature,
+            // Extract string content from the crash expression or create malformed if not string
+            const msg_literal = blk: {
+                const msg_expr = self.parse_ir.store.getExpr(c.expr);
+                switch (msg_expr) {
+                    .string => |s| {
+                        // For string literals, we need to extract the actual string parts
+                        const parts = self.parse_ir.store.exprSlice(s.parts);
+                        if (parts.len > 0) {
+                            const first_part = self.parse_ir.store.getExpr(parts[0]);
+                            if (first_part == .string_part) {
+                                const part_text = self.parse_ir.resolve(first_part.string_part.token);
+                                break :blk self.can_ir.env.strings.insert(self.can_ir.env.gpa, part_text);
+                            }
+                        }
+                        // Fall back to default if we can't extract
+                        break :blk self.can_ir.env.strings.insert(self.can_ir.env.gpa, "crash");
+                    },
+                    else => {
+                        // For non-string expressions, create a malformed expression
+                        const malformed_expr = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .crash_expects_string = .{
+                            .region = region,
+                        } });
+                        return malformed_expr;
+                    },
+                }
+            };
+
+            // Create crash statement
+            const crash_stmt = CIR.Statement{ .s_crash = .{
+                .msg = msg_literal,
+                .region = region,
+            } };
+            const crash_stmt_idx = self.can_ir.store.addStatement(crash_stmt);
+            self.can_ir.store.addScratchStatement(crash_stmt_idx);
+
+            // Create a crash expression that represents the runtime behavior
+            const crash_expr = self.can_ir.store.addExpr(CIR.Expr{ .e_crash = .{
+                .msg = msg_literal,
                 .region = region,
             } });
-            const crash_expr = self.can_ir.store.addExpr(CIR.Expr{ .e_runtime_error = .{
-                .diagnostic = diagnostic,
-                .region = region,
-            } });
+            _ = self.can_ir.setTypeVarAtExpr(crash_expr, Content{ .flex_var = null });
             return crash_expr;
+        },
+        .dbg => |d| {
+            // Debug statement
+            const region = self.parse_ir.tokenizedRegionToRegion(d.region);
+
+            // Canonicalize the debug expression
+            const dbg_expr = try self.canonicalizeExpr(d.expr) orelse return null;
+
+            // Create debug statement
+            const dbg_stmt = CIR.Statement{ .s_dbg = .{
+                .expr = dbg_expr,
+                .region = region,
+            } };
+            const dbg_stmt_idx = self.can_ir.store.addStatement(dbg_stmt);
+            self.can_ir.store.addScratchStatement(dbg_stmt_idx);
+
+            // Return the debug expression value (dbg returns the value of its expression)
+            return dbg_expr;
+        },
+
+        .expect => |e| {
+            // Expect statement
+            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
+
+            // Canonicalize the expect expression
+            const expect_expr = try self.canonicalizeExpr(e.body) orelse return null;
+
+            // Create expect statement
+            const expect_stmt = CIR.Statement{ .s_expect = .{
+                .body = expect_expr,
+                .region = region,
+            } };
+            const expect_stmt_idx = self.can_ir.store.addStatement(expect_stmt);
+            self.can_ir.store.addScratchStatement(expect_stmt_idx);
+
+            const expect_expr_node = self.can_ir.store.addExpr(CIR.Expr{ .e_expect = .{
+                .body = expect_expr,
+                .region = region,
+            } });
+            _ = self.can_ir.setTypeVarAtExpr(expect_expr_node, Content{ .flex_var = null });
+            return expect_expr_node;
+        },
+        .@"return" => |r| {
+            // Return statement
+            const region = self.parse_ir.tokenizedRegionToRegion(r.region);
+
+            // Canonicalize the return expression
+            const return_expr = try self.canonicalizeExpr(r.expr) orelse return null;
+
+            // Create return statement
+            const return_stmt = CIR.Statement{ .s_return = .{
+                .expr = return_expr,
+                .region = region,
+            } };
+            const return_stmt_idx = self.can_ir.store.addStatement(return_stmt);
+            self.can_ir.store.addScratchStatement(return_stmt_idx);
+
+            // Return the return expression value
+            return return_expr;
         },
         .type_decl => |s| {
             // TODO type declarations in statement context
