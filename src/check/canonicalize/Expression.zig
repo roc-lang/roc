@@ -774,10 +774,16 @@ pub const Expr = union(enum) {
                 ir.appendRegionInfoToSExprTreeFromRegion(tree, nominal_expr.region);
 
                 const stmt = ir.store.getStatement(nominal_expr.nominal_type_decl);
-                std.debug.assert(stmt == .s_nominal_decl);
-                const decl = stmt.s_nominal_decl;
-                const header = ir.store.getTypeHeader(decl.header);
-                tree.pushStringPair("nominal", ir.env.idents.getText(header.name));
+                switch (stmt) {
+                    .s_nominal_decl => |decl| {
+                        const header = ir.store.getTypeHeader(decl.header);
+                        tree.pushStringPair("nominal", ir.env.idents.getText(header.name));
+                    },
+                    else => {
+                        // Handle malformed nominal type declaration by pushing error info
+                        tree.pushStringPair("nominal", "<malformed>");
+                    },
+                }
 
                 const attrs = tree.beginNode();
 

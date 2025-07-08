@@ -11,7 +11,9 @@ mule []
 vavar t= '
 ~~~
 # EXPECTED
-NIL
+UNCLOSED SINGLE QUOTE - fuzz_crash_031.md:1:1:1:7
+INVALID STATEMENT - fuzz_crash_031.md:1:6:4:6
+INVALID STATEMENT - fuzz_crash_031.md:4:1:4:8
 # PROBLEMS
 **UNCLOSED SINGLE QUOTE**
 This character literal is missing a closing single quote.
