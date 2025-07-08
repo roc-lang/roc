@@ -5,11 +5,12 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-module [foo, bar, MyType, OtherType]
+module [foo, bar, MyType, OtherType, foo, MyType]
 
 # This module exposes foo, bar, MyType, and OtherType
 # but only implements foo and MyType
 # This should generate "exposed but not implemented" errors for bar and OtherType
+# Also tests redundant exposed entries for foo and MyType
 
 foo = 42
 
@@ -18,10 +19,36 @@ MyType : [A, B, C]
 # EXPECTED
 NIL
 # PROBLEMS
+**REDUNDANT EXPOSED**
+The identifier ``foo`` is exposed multiple times in the module header.**exposed_not_impl.md:1:38:1:41:**
+```roc
+module [foo, bar, MyType, OtherType, foo, MyType]
+```
+                                     ^^^
+It was already exposed here:**exposed_not_impl.md:1:9:1:12:**
+```roc
+module [foo, bar, MyType, OtherType, foo, MyType]
+```
+        ^^^
+You can remove the duplicate entry to fix this warning.
+
+**REDUNDANT EXPOSED**
+The identifier ``MyType`` is exposed multiple times in the module header.**exposed_not_impl.md:1:43:1:49:**
+```roc
+module [foo, bar, MyType, OtherType, foo, MyType]
+```
+                                          ^^^^^^
+It was already exposed here:**exposed_not_impl.md:1:19:1:25:**
+```roc
+module [foo, bar, MyType, OtherType, foo, MyType]
+```
+                  ^^^^^^
+You can remove the duplicate entry to fix this warning.
+
 **EXPOSED BUT NOT DEFINED**
 The module header says that ``bar`` is exposed, but it is not defined anywhere in this module.**exposed_not_impl.md:1:14:1:17:**
 ```roc
-module [foo, bar, MyType, OtherType]
+module [foo, bar, MyType, OtherType, foo, MyType]
 ```
              ^^^
 You can fix this by either defining ``bar`` in this module, or by removing it from the list of exposed values.
@@ -29,44 +56,47 @@ You can fix this by either defining ``bar`` in this module, or by removing it fr
 **EXPOSED BUT NOT DEFINED**
 The module header says that ``OtherType`` is exposed, but it is not defined anywhere in this module.**exposed_not_impl.md:1:27:1:36:**
 ```roc
-module [foo, bar, MyType, OtherType]
+module [foo, bar, MyType, OtherType, foo, MyType]
 ```
                           ^^^^^^^^^
 You can fix this by either defining ``OtherType`` in this module, or by removing it from the list of exposed values.
 
 # TOKENS
 ~~~zig
-KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),Comma(1:12-1:13),LowerIdent(1:14-1:17),Comma(1:17-1:18),UpperIdent(1:19-1:25),Comma(1:25-1:26),UpperIdent(1:27-1:36),CloseSquare(1:36-1:37),Newline(1:1-1:1),
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),Comma(1:12-1:13),LowerIdent(1:14-1:17),Comma(1:17-1:18),UpperIdent(1:19-1:25),Comma(1:25-1:26),UpperIdent(1:27-1:36),Comma(1:36-1:37),LowerIdent(1:38-1:41),Comma(1:41-1:42),UpperIdent(1:43-1:49),CloseSquare(1:49-1:50),Newline(1:1-1:1),
 Newline(1:1-1:1),
 Newline(3:2-3:54),
 Newline(4:2-4:37),
 Newline(5:2-5:82),
+Newline(6:2-6:58),
 Newline(1:1-1:1),
-LowerIdent(7:1-7:4),OpAssign(7:5-7:6),Int(7:7-7:9),Newline(1:1-1:1),
+LowerIdent(8:1-8:4),OpAssign(8:5-8:6),Int(8:7-8:9),Newline(1:1-1:1),
 Newline(1:1-1:1),
-UpperIdent(9:1-9:7),OpColon(9:8-9:9),OpenSquare(9:10-9:11),UpperIdent(9:11-9:12),Comma(9:12-9:13),UpperIdent(9:14-9:15),Comma(9:15-9:16),UpperIdent(9:17-9:18),CloseSquare(9:18-9:19),EndOfFile(9:19-9:19),
+UpperIdent(10:1-10:7),OpColon(10:8-10:9),OpenSquare(10:10-10:11),UpperIdent(10:11-10:12),Comma(10:12-10:13),UpperIdent(10:14-10:15),Comma(10:15-10:16),UpperIdent(10:17-10:18),CloseSquare(10:18-10:19),EndOfFile(10:19-10:19),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-9.19
-	(module @1.1-1.37
-		(exposes @1.8-1.37
+(file @1.1-10.19
+	(module @1.1-1.50
+		(exposes @1.8-1.50
 			(exposed-lower-ident (text "foo"))
 			(exposed-lower-ident (text "bar"))
 			(exposed-upper-ident (text "MyType"))
-			(exposed-upper-ident (text "OtherType"))))
+			(exposed-upper-ident (text "OtherType"))
+			(exposed-lower-ident (text "foo"))
+			(exposed-upper-ident (text "MyType"))))
 	(statements
-		(s-decl @7.1-7.9
-			(p-ident @7.1-7.4 (raw "foo"))
-			(e-int @7.7-7.9 (raw "42")))
-		(s-type-decl @9.1-9.19
-			(header @9.1-9.7 (name "MyType")
+		(s-decl @8.1-8.9
+			(p-ident @8.1-8.4 (raw "foo"))
+			(e-int @8.7-8.9 (raw "42")))
+		(s-type-decl @10.1-10.19
+			(header @10.1-10.7 (name "MyType")
 				(args))
-			(ty-tag-union @9.10-9.19
+			(ty-tag-union @10.10-10.19
 				(tags
-					(ty @9.11-9.12 (name "A"))
-					(ty @9.14-9.15 (name "B"))
-					(ty @9.17-9.18 (name "C")))))))
+					(ty @10.11-10.12 (name "A"))
+					(ty @10.14-10.15 (name "B"))
+					(ty @10.17-10.18 (name "C")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -76,23 +106,23 @@ NO CHANGE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign @7.1-7.4 (ident "foo"))
-		(e-int @7.7-7.9 (value "42")))
-	(s-alias-decl @9.1-9.19
-		(ty-header @9.1-9.7 (name "MyType"))
-		(ty-tag-union @9.10-9.19
-			(ty @9.11-9.12 (name "A"))
-			(ty @9.14-9.15 (name "B"))
-			(ty @9.17-9.18 (name "C")))))
+		(p-assign @8.1-8.4 (ident "foo"))
+		(e-int @8.7-8.9 (value "42")))
+	(s-alias-decl @10.1-10.19
+		(ty-header @10.1-10.7 (name "MyType"))
+		(ty-tag-union @10.10-10.19
+			(ty @10.11-10.12 (name "A"))
+			(ty @10.14-10.15 (name "B"))
+			(ty @10.17-10.18 (name "C")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @7.1-7.4 (type "Num(*)")))
+		(patt @8.1-8.4 (type "Num(*)")))
 	(type_decls
-		(alias @9.1-9.19 (type "MyType")
-			(ty-header @9.1-9.7 (name "MyType"))))
+		(alias @10.1-10.19 (type "MyType")
+			(ty-header @10.1-10.7 (name "MyType"))))
 	(expressions
-		(expr @7.7-7.9 (type "Num(*)"))))
+		(expr @8.7-8.9 (type "Num(*)"))))
 ~~~

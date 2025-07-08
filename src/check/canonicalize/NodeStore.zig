@@ -97,7 +97,7 @@ pub fn deinit(store: *NodeStore) void {
 /// when adding/removing variants from CIR unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the CIR
-pub const CIR_DIAGNOSTIC_NODE_COUNT = 34;
+pub const CIR_DIAGNOSTIC_NODE_COUNT = 35;
 /// Count of the expression nodes in the CIR
 pub const CIR_EXPR_NODE_COUNT = 25;
 /// Count of the statement nodes in the CIR
@@ -2546,6 +2546,17 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) CIR.Diagnostic.I
             region = r.region;
             node.data_1 = @bitCast(r.ident);
         },
+        .redundant_exposed => |r| {
+            node.tag = .diag_redundant_exposed;
+            region = r.region;
+            node.data_1 = @bitCast(r.ident);
+
+            // Store original region in extra_data
+            const extra_start = @as(u32, @intCast(store.extra_data.items.len));
+            store.extra_data.append(store.gpa, r.original_region.start.offset) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, r.original_region.end.offset) catch |err| exitOnOom(err);
+            node.data_2 = extra_start;
+        },
         .ident_not_in_scope => |r| {
             node.tag = .diag_ident_not_in_scope;
             region = r.region;
@@ -2753,6 +2764,19 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .ident = @bitCast(node.data_1),
             .region = store.getRegionAt(node_idx),
         } },
+        .diag_redundant_exposed => {
+            const extra_data = store.extra_data.items[node.data_2..];
+            const original_start = extra_data[0];
+            const original_end = extra_data[1];
+            return CIR.Diagnostic{ .redundant_exposed = .{
+                .ident = @bitCast(node.data_1),
+                .region = store.getRegionAt(node_idx),
+                .original_region = Region{
+                    .start = .{ .offset = original_start },
+                    .end = .{ .offset = original_end },
+                },
+            } };
+        },
         .diag_ident_not_in_scope => return CIR.Diagnostic{ .ident_not_in_scope = .{
             .ident = @bitCast(node.data_1),
             .region = store.getRegionAt(node_idx),

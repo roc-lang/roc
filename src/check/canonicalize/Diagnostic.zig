@@ -21,6 +21,11 @@ pub const Diagnostic = union(enum) {
         ident: Ident.Idx,
         region: Region,
     },
+    redundant_exposed: struct {
+        ident: Ident.Idx,
+        region: Region,
+        original_region: Region,
+    },
     invalid_num_literal: struct {
         region: Region,
     },
@@ -148,6 +153,7 @@ pub const Diagnostic = union(enum) {
         return switch (self) {
             .not_implemented => |d| d.region,
             .exposed_but_not_implemented => |d| d.region,
+            .redundant_exposed => |d| d.region,
             .invalid_num_literal => |d| d.region,
             .ident_already_in_scope => |d| d.region,
             .ident_not_in_scope => |d| d.region,
@@ -241,6 +247,40 @@ pub const Diagnostic = union(enum) {
         try report.document.addReflowingText("You can fix this by either defining `");
         try report.document.addInlineCode(owned_ident);
         try report.document.addReflowingText("` in this module, or by removing it from the list of exposed values.");
+
+        return report;
+    }
+
+    /// Build a report for "redundant exposed" diagnostic
+    pub fn buildRedundantExposedReport(
+        allocator: Allocator,
+        ident_name: []const u8,
+        region_info: base.RegionInfo,
+        original_region_info: base.RegionInfo,
+        filename: []const u8,
+    ) !Report {
+        var report = Report.init(allocator, "REDUNDANT EXPOSED", .warning);
+        const owned_ident = try report.addOwnedString(ident_name);
+
+        try report.document.addReflowingText("The identifier `");
+        try report.document.addInlineCode(owned_ident);
+        try report.document.addReflowingText("` is exposed multiple times in the module header.");
+
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            filename,
+        );
+
+        try report.document.addReflowingText("It was already exposed here:");
+
+        try report.document.addSourceRegion(
+            original_region_info,
+            .dimmed,
+            filename,
+        );
+
+        try report.document.addReflowingText("You can remove the duplicate entry to fix this warning.");
 
         return report;
     }

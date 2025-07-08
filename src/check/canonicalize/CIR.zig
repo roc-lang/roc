@@ -168,6 +168,18 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
                 filename,
             );
         },
+        .redundant_exposed => |data| blk: {
+            const ident_name = self.env.idents.getText(data.ident);
+            const region_info = self.calcRegionInfo(data.region);
+            const original_region_info = self.calcRegionInfo(data.original_region);
+            break :blk Diagnostic.buildRedundantExposedReport(
+                allocator,
+                ident_name,
+                region_info,
+                original_region_info,
+                filename,
+            );
+        },
         .invalid_num_literal => |data| blk: {
             break :blk Diagnostic.buildInvalidNumLiteralReport(
                 allocator,

@@ -163,4 +163,5 @@ pub const Tag = enum {
     diag_duplicate_record_field,
     diag_f64_pattern_literal,
     diagnostic_exposed_but_not_implemented,
+    diag_redundant_exposed,
 };

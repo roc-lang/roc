@@ -689,7 +689,21 @@ fn createExposedScope(
                     self.exposed_ident_texts = std.StringHashMapUnmanaged(Region){};
                 }
                 const region = self.parse_ir.tokenizedRegionToRegion(ident.region);
-                self.exposed_ident_texts.?.put(gpa, ident_text, region) catch |err| collections.utils.exitOnOom(err);
+
+                // Check if this identifier was already exposed
+                if (self.exposed_ident_texts.?.get(ident_text)) |original_region| {
+                    // Report redundant exposed entry error
+                    if (self.parse_ir.tokens.resolveIdentifier(ident.ident)) |ident_idx| {
+                        const diag = CIR.Diagnostic{ .redundant_exposed = .{
+                            .ident = ident_idx,
+                            .region = region,
+                            .original_region = original_region,
+                        } };
+                        self.can_ir.pushDiagnostic(diag);
+                    }
+                } else {
+                    self.exposed_ident_texts.?.put(gpa, ident_text, region) catch |err| collections.utils.exitOnOom(err);
+                }
             },
             .upper_ident => |type_name| {
                 // Get the text of the identifier token to use as key
@@ -700,7 +714,21 @@ fn createExposedScope(
                     self.exposed_type_texts = std.StringHashMapUnmanaged(Region){};
                 }
                 const region = self.parse_ir.tokenizedRegionToRegion(type_name.region);
-                self.exposed_type_texts.?.put(gpa, type_text, region) catch |err| collections.utils.exitOnOom(err);
+
+                // Check if this type was already exposed
+                if (self.exposed_type_texts.?.get(type_text)) |original_region| {
+                    // Report redundant exposed entry error
+                    if (self.parse_ir.tokens.resolveIdentifier(type_name.ident)) |ident_idx| {
+                        const diag = CIR.Diagnostic{ .redundant_exposed = .{
+                            .ident = ident_idx,
+                            .region = region,
+                            .original_region = original_region,
+                        } };
+                        self.can_ir.pushDiagnostic(diag);
+                    }
+                } else {
+                    self.exposed_type_texts.?.put(gpa, type_text, region) catch |err| collections.utils.exitOnOom(err);
+                }
             },
             .upper_ident_star => |type_with_constructors| {
                 // Get the text of the identifier token to use as key
@@ -711,7 +739,21 @@ fn createExposedScope(
                     self.exposed_type_texts = std.StringHashMapUnmanaged(Region){};
                 }
                 const region = self.parse_ir.tokenizedRegionToRegion(type_with_constructors.region);
-                self.exposed_type_texts.?.put(gpa, type_text, region) catch |err| collections.utils.exitOnOom(err);
+
+                // Check if this type was already exposed
+                if (self.exposed_type_texts.?.get(type_text)) |original_region| {
+                    // Report redundant exposed entry error
+                    if (self.parse_ir.tokens.resolveIdentifier(type_with_constructors.ident)) |ident_idx| {
+                        const diag = CIR.Diagnostic{ .redundant_exposed = .{
+                            .ident = ident_idx,
+                            .region = region,
+                            .original_region = original_region,
+                        } };
+                        self.can_ir.pushDiagnostic(diag);
+                    }
+                } else {
+                    self.exposed_type_texts.?.put(gpa, type_text, region) catch |err| collections.utils.exitOnOom(err);
+                }
             },
             .malformed => |malformed| {
                 // Malformed exposed items are already captured as diagnostics during parsing
@@ -3209,6 +3251,7 @@ test {
     _ = @import("canonicalize/test/int_test.zig");
     _ = @import("canonicalize/test/frac_test.zig");
     _ = @import("canonicalize/test/node_store_test.zig");
+    _ = @import("canonicalize/test/exposed_shadowing_test.zig");
     _ = @import("let_polymorphism_integration_test.zig");
 }
 
