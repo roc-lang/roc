@@ -20,7 +20,7 @@ Each snapshot is a markdown file with the following key sections:
 ### Best Practices for Creating Snapshots
 
 1.  **Focused Intent**: Each snapshot should test a single, specific compiler behavior. This is useful for new features, error cases, edge cases, and regression prevention.
-2.  **Minimal Complexity**: Use the simplest possible code to demonstrate the behavior you are testing. Consider using `...` elipsis which is valid syntax for "not implemented", and commonly used in examples.
+2.  **Minimal Complexity**: Use the simplest possible code to demonstrate the behavior you are testing. Consider using `...` ellipsis which is valid syntax for "not implemented", and commonly used in examples.
 3.  **Clear Naming**: The file name should clearly describe the test's purpose (e.g., `can_list_type_mismatch.md` is better than `test1.md`).
 
 ### Debugging with Snapshots
