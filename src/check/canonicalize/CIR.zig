@@ -158,6 +158,16 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
             const feature_text = self.env.strings.get(data.feature);
             break :blk Diagnostic.buildNotImplementedReport(allocator, feature_text);
         },
+        .exposed_but_not_implemented => |data| blk: {
+            const ident_name = self.env.idents.getText(data.ident);
+            const region_info = self.calcRegionInfo(data.region);
+            break :blk Diagnostic.buildExposedButNotImplementedReport(
+                allocator,
+                ident_name,
+                region_info,
+                filename,
+            );
+        },
         .invalid_num_literal => |data| blk: {
             break :blk Diagnostic.buildInvalidNumLiteralReport(
                 allocator,

@@ -567,6 +567,13 @@ test "NodeStore round trip - Diagnostics" {
         },
     });
 
+    try diagnostics.append(CIR.Diagnostic{
+        .exposed_but_not_implemented = .{
+            .ident = @bitCast(@as(u32, 321)),
+            .region = from_raw_offsets(760, 770),
+        },
+    });
+
     // Test the round-trip for all diagnostics
     for (diagnostics.items) |diagnostic| {
         const idx = store.addDiagnostic(diagnostic);

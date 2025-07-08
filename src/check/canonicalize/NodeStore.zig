@@ -97,7 +97,7 @@ pub fn deinit(store: *NodeStore) void {
 /// when adding/removing variants from CIR unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the CIR
-pub const CIR_DIAGNOSTIC_NODE_COUNT = 33;
+pub const CIR_DIAGNOSTIC_NODE_COUNT = 34;
 /// Count of the expression nodes in the CIR
 pub const CIR_EXPR_NODE_COUNT = 25;
 /// Count of the statement nodes in the CIR
@@ -1220,6 +1220,180 @@ pub fn addStatement(store: *NodeStore, statement: CIR.Statement) CIR.Statement.I
     const node_idx = store.nodes.append(store.gpa, node);
     _ = store.regions.append(store.gpa, region);
     return @enumFromInt(@intFromEnum(node_idx));
+}
+
+/// Replaces an existing statement node in the store.
+pub fn replaceStatement(store: *NodeStore, idx: CIR.Statement.Idx, statement: CIR.Statement) void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(idx));
+    var node = Node{
+        .data_1 = 0,
+        .data_2 = 0,
+        .data_3 = 0,
+        .tag = @enumFromInt(0),
+    };
+    var region = base.Region.zero();
+
+    switch (statement) {
+        .s_decl => |s| {
+            node.tag = .statement_decl;
+            region = s.region;
+            node.data_1 = @intFromEnum(s.expr);
+            node.data_2 = @intFromEnum(s.pattern);
+        },
+        .s_var => |s| {
+            node.tag = .statement_var;
+            region = s.region;
+            node.data_1 = @intFromEnum(s.expr);
+            node.data_2 = @intFromEnum(s.pattern_idx);
+        },
+        .s_reassign => |s| {
+            node.tag = .statement_reassign;
+            region = s.region;
+            node.data_1 = @intFromEnum(s.expr);
+            node.data_2 = @intFromEnum(s.pattern_idx);
+        },
+        .s_crash => |s| {
+            node.tag = .statement_crash;
+            region = s.region;
+            node.data_1 = @intFromEnum(s.msg);
+        },
+        .s_expr => |s| {
+            node.tag = .statement_expr;
+            node.data_1 = @intFromEnum(s.expr);
+            region = s.region;
+        },
+        .s_expect => |s| {
+            node.tag = .statement_expect;
+            region = s.region;
+            node.data_1 = @intFromEnum(s.body);
+        },
+        .s_for => |s| {
+            node.tag = .statement_for;
+            region = s.region;
+            node.data_1 = @intFromEnum(s.body);
+            node.data_2 = @intFromEnum(s.expr);
+            node.data_3 = @intFromEnum(s.patt);
+        },
+        .s_return => |s| {
+            node.tag = .statement_return;
+            region = s.region;
+            node.data_1 = @intFromEnum(s.expr);
+        },
+        .s_import => |s| {
+            node.tag = .statement_import;
+            region = s.region;
+            node.data_1 = @bitCast(s.module_name_tok);
+
+            // Store optional fields in extra_data
+            const extra_start = @as(u32, @intCast(store.extra_data.items.len));
+
+            // Store alias_tok (nullable)
+            const alias_data = if (s.alias_tok) |alias| @as(u32, @bitCast(alias)) else 0;
+            store.extra_data.append(store.gpa, alias_data) catch |err| exitOnOom(err);
+
+            // Store qualifier_tok (nullable)
+            const qualifier_data = if (s.qualifier_tok) |qualifier| @as(u32, @bitCast(qualifier)) else 0;
+            store.extra_data.append(store.gpa, qualifier_data) catch |err| exitOnOom(err);
+
+            // Store flags indicating which fields are present
+            var flags: u32 = 0;
+            if (s.alias_tok != null) flags |= 1;
+            if (s.qualifier_tok != null) flags |= 2;
+            store.extra_data.append(store.gpa, flags) catch |err| exitOnOom(err);
+
+            // Store extra_start in one of the remaining data fields
+            // We need to reorganize data storage since all 3 data fields are used
+            // Let's put extra_start where exposes span is, and move span to extra_data
+            store.extra_data.append(store.gpa, s.exposes.span.start) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, s.exposes.span.len) catch |err| exitOnOom(err);
+
+            node.data_2 = extra_start; // Point to extra_data
+            node.data_3 = 0; // SPARE
+        },
+        .s_alias_decl => |s| {
+            node.tag = .statement_alias_decl;
+            region = s.region;
+
+            // Store type_decl data in extra_data
+            const extra_start = @as(u32, @intCast(store.extra_data.items.len));
+
+            // Store anno idx
+            store.extra_data.append(store.gpa, @intFromEnum(s.anno)) catch |err| exitOnOom(err);
+            // Store anno var
+            store.extra_data.append(store.gpa, @intFromEnum(s.anno_var)) catch |err| exitOnOom(err);
+            // Store header idx
+            store.extra_data.append(store.gpa, @intFromEnum(s.header)) catch |err| exitOnOom(err);
+            // Store where clause information
+            if (s.where) |where_clause| {
+                // Store where clause span start and len
+                store.extra_data.append(store.gpa, @intFromBool(true)) catch |err| exitOnOom(err);
+                store.extra_data.append(store.gpa, where_clause.span.start) catch |err| exitOnOom(err);
+                store.extra_data.append(store.gpa, where_clause.span.len) catch |err| exitOnOom(err);
+            } else {
+                store.extra_data.append(store.gpa, @intFromBool(false)) catch |err| exitOnOom(err);
+            }
+
+            // Store the extra data start position in the node
+            node.data_1 = extra_start;
+        },
+        .s_nominal_decl => |s| {
+            node.tag = .statement_nominal_decl;
+            region = s.region;
+
+            // Store type_decl data in extra_data
+            const extra_start = @as(u32, @intCast(store.extra_data.items.len));
+
+            // Store anno idx
+            store.extra_data.append(store.gpa, @intFromEnum(s.anno)) catch |err| exitOnOom(err);
+            // Store anno var
+            store.extra_data.append(store.gpa, @intFromEnum(s.anno_var)) catch |err| exitOnOom(err);
+            // Store header idx
+            store.extra_data.append(store.gpa, @intFromEnum(s.header)) catch |err| exitOnOom(err);
+            // Store where clause information
+            if (s.where) |where_clause| {
+                // Store where clause span start and len
+                store.extra_data.append(store.gpa, @intFromBool(true)) catch |err| exitOnOom(err);
+                store.extra_data.append(store.gpa, where_clause.span.start) catch |err| exitOnOom(err);
+                store.extra_data.append(store.gpa, where_clause.span.len) catch |err| exitOnOom(err);
+            } else {
+                store.extra_data.append(store.gpa, @intFromBool(false)) catch |err| exitOnOom(err);
+            }
+
+            // Store the extra data start position in the node
+            node.data_1 = extra_start;
+        },
+        .s_type_anno => |s| {
+            node.tag = .statement_type_anno;
+            region = s.region;
+
+            // Store type_anno data in extra_data
+            const extra_start = @as(u32, @intCast(store.extra_data.items.len));
+
+            // Store anno idx
+            store.extra_data.append(store.gpa, @intFromEnum(s.anno)) catch |err| exitOnOom(err);
+            // Store name
+            store.extra_data.append(store.gpa, @bitCast(s.name)) catch |err| exitOnOom(err);
+            // Store where clause information
+            if (s.where) |where_clause| {
+                // Store flag indicating where clause is present
+                store.extra_data.append(store.gpa, 1) catch |err| exitOnOom(err);
+                // Store where clause span start and len
+                store.extra_data.append(store.gpa, where_clause.span.start) catch |err| exitOnOom(err);
+                store.extra_data.append(store.gpa, where_clause.span.len) catch |err| exitOnOom(err);
+            } else {
+                // Store flag indicating where clause is not present
+                store.extra_data.append(store.gpa, 0) catch |err| exitOnOom(err);
+            }
+
+            // Store the extra data start position in the node
+            node.data_1 = extra_start;
+        },
+    }
+
+    // Replace the existing node and region
+    store.nodes.set(node_idx, node);
+    const region_idx: Region.Idx = @enumFromInt(@intFromEnum(node_idx));
+    store.regions.set(region_idx, region);
 }
 
 /// Adds an expression node to the store.
@@ -2367,6 +2541,11 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) CIR.Diagnostic.I
             region = r.region;
             node.data_1 = @bitCast(r.ident);
         },
+        .exposed_but_not_implemented => |r| {
+            node.tag = .diagnostic_exposed_but_not_implemented;
+            region = r.region;
+            node.data_1 = @bitCast(r.ident);
+        },
         .ident_not_in_scope => |r| {
             node.tag = .diag_ident_not_in_scope;
             region = r.region;
@@ -2567,6 +2746,10 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = store.getRegionAt(node_idx),
         } },
         .diag_ident_already_in_scope => return CIR.Diagnostic{ .ident_already_in_scope = .{
+            .ident = @bitCast(node.data_1),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diagnostic_exposed_but_not_implemented => return CIR.Diagnostic{ .exposed_but_not_implemented = .{
             .ident = @bitCast(node.data_1),
             .region = store.getRegionAt(node_idx),
         } },

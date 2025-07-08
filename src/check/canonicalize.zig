@@ -18,6 +18,12 @@ const Token = tokenize.Token;
 can_ir: *CIR,
 parse_ir: *AST,
 scopes: std.ArrayListUnmanaged(Scope) = .{},
+/// Special scope for tracking exposed items from module header
+exposed_scope: ?Scope = null,
+/// Track exposed identifiers by text to handle changing indices
+exposed_ident_texts: ?std.StringHashMapUnmanaged(Region) = null,
+/// Track exposed types by text to handle changing indices
+exposed_type_texts: ?std.StringHashMapUnmanaged(Region) = null,
 /// Stack of function regions for tracking var reassignment across function boundaries
 function_regions: std.ArrayListUnmanaged(Region),
 /// Maps var patterns to the function region they were declared in
@@ -82,6 +88,19 @@ pub fn deinit(
     self: *Self,
 ) void {
     const gpa = self.can_ir.env.gpa;
+
+    // Deinit exposed_scope if it exists
+    if (self.exposed_scope) |*exposed| {
+        exposed.deinit(gpa);
+    }
+
+    // Deinit exposed text maps if they exist
+    if (self.exposed_ident_texts) |*texts| {
+        texts.deinit(gpa);
+    }
+    if (self.exposed_type_texts) |*texts| {
+        texts.deinit(gpa);
+    }
 
     // First deinit individual scopes
     for (0..self.scopes.items.len) |i| {
@@ -311,6 +330,22 @@ pub fn canonicalizeFile(
 
     // canonicalize_header_packages();
 
+    // First, process the header to create exposed_scope
+    const header = self.parse_ir.store.getHeader(file.header);
+    switch (header) {
+        .module => |h| try self.createExposedScope(h.exposes),
+        .package => |h| try self.createExposedScope(h.exposes),
+        .platform => |h| try self.createExposedScope(h.exposes),
+        .hosted => |h| try self.createExposedScope(h.exposes),
+        .app => {
+            // App headers have 'provides' instead of 'exposes'
+            // TODO: Handle app provides differently
+        },
+        .malformed => {
+            // Skip malformed headers
+        },
+    }
+
     // Track the start of scratch defs and statements
     const scratch_defs_start = self.can_ir.store.scratchDefTop();
     const scratch_statements_start = self.can_ir.store.scratch_statements.top();
@@ -325,7 +360,7 @@ pub fn canonicalizeFile(
                 const region = self.parse_ir.tokenizedRegionToRegion(type_decl.region);
 
                 // Extract the type name from the header to introduce it into scope early
-                const header = self.can_ir.store.getTypeHeader(header_idx);
+                const type_header = self.can_ir.store.getTypeHeader(header_idx);
 
                 // Create a placeholder type declaration statement to introduce the type name into scope
                 // This allows recursive type references to work during annotation canonicalization
@@ -353,7 +388,7 @@ pub fn canonicalizeFile(
                 const placeholder_type_decl_idx = self.can_ir.store.addStatement(placeholder_cir_type_decl);
 
                 // Introduce the type name into scope early to support recursive references
-                self.scopeIntroduceTypeDecl(header.name, placeholder_type_decl_idx, region);
+                self.scopeIntroduceTypeDecl(type_header.name, placeholder_type_decl_idx, region);
 
                 // Process type parameters and annotation in a separate scope
                 const anno_idx = blk: {
@@ -379,14 +414,14 @@ pub fn canonicalizeFile(
 
                 // Create types for each arg annotation
                 const scratch_anno_start = self.scratch_vars.top();
-                for (self.can_ir.store.sliceTypeAnnos(header.args)) |arg_anno_idx| {
+                for (self.can_ir.store.sliceTypeAnnos(type_header.args)) |arg_anno_idx| {
                     const arg_anno_var = try self.canonicalizeTypeAnnoToTypeVar(arg_anno_idx);
                     self.scratch_vars.append(self.can_ir.env.gpa, arg_anno_var);
                 }
                 const arg_anno_slice = self.scratch_vars.slice(scratch_anno_start, self.scratch_vars.top());
 
                 // The identified of the type
-                const type_ident = types.TypeIdent{ .ident_idx = header.name };
+                const type_ident = types.TypeIdent{ .ident_idx = type_header.name };
 
                 // The number of args for the alias/nominal type
                 const num_args = @as(u32, @intCast(arg_anno_slice.len));
@@ -453,7 +488,13 @@ pub fn canonicalizeFile(
                 self.scratch_vars.clearFrom(scratch_anno_start);
 
                 // Update the scope to point to the real statement instead of the placeholder
-                self.scopeUpdateTypeDecl(header.name, type_decl_stmt_idx);
+                self.scopeUpdateTypeDecl(type_header.name, type_decl_stmt_idx);
+
+                // Remove from exposed_type_texts since the type is now fully defined
+                if (self.exposed_type_texts) |*texts| {
+                    const type_text = self.can_ir.env.idents.getText(type_header.name);
+                    _ = texts.remove(type_text);
+                }
             },
             else => {
                 // Skip non-type-declaration statements in first pass
@@ -498,6 +539,16 @@ pub fn canonicalizeFile(
                 const def_idx = try self.canonicalizeDeclWithAnnotation(decl, annotation_idx);
                 self.can_ir.store.addScratchDef(def_idx);
                 last_type_anno = null; // Clear after successful use
+
+                // If this declaration successfully defined an exposed value, remove it from exposed_ident_texts
+                if (self.exposed_ident_texts) |*texts| {
+                    const pattern = self.parse_ir.store.getPattern(decl.pattern);
+                    if (pattern == .ident) {
+                        const token_region = self.parse_ir.tokens.resolve(@intCast(pattern.ident.ident_tok));
+                        const ident_text = self.parse_ir.source[token_region.start.offset..token_region.end.offset];
+                        _ = texts.remove(ident_text);
+                    }
+                }
             },
             .@"var" => {
                 // Not valid at top-level
@@ -609,31 +660,20 @@ pub fn canonicalizeFile(
         }
     }
 
-    // Get the header and canonicalize exposes based on header type
-    const header = self.parse_ir.store.getHeader(file.header);
-    switch (header) {
-        .module => |h| self.canonicalizeHeaderExposes(h.exposes),
-        .package => |h| self.canonicalizeHeaderExposes(h.exposes),
-        .platform => |h| self.canonicalizeHeaderExposes(h.exposes),
-        .hosted => |h| self.canonicalizeHeaderExposes(h.exposes),
-        .app => {
-            // App headers have 'provides' instead of 'exposes'
-            // TODO: Handle app provides differently
-        },
-        .malformed => {
-            // Skip malformed headers
-        },
-    }
+    // Check for exposed but not implemented items
+    self.checkExposedButNotImplemented();
 
     // Create the span of all top-level defs and statements
     self.can_ir.all_defs = self.can_ir.store.defSpanFrom(scratch_defs_start);
     self.can_ir.all_statements = self.can_ir.store.statementSpanFrom(scratch_statements_start);
 }
 
-fn canonicalizeHeaderExposes(
+fn createExposedScope(
     self: *Self,
     exposes: AST.Collection.Idx,
-) void {
+) std.mem.Allocator.Error!void {
+    const gpa = self.can_ir.env.gpa;
+
     const collection = self.parse_ir.store.getCollection(exposes);
     const exposed_items = self.parse_ir.store.exposedItemSlice(.{ .span = collection.span });
 
@@ -641,21 +681,82 @@ fn canonicalizeHeaderExposes(
         const exposed = self.parse_ir.store.getExposedItem(exposed_idx);
         switch (exposed) {
             .lower_ident => |ident| {
-                // TODO -- do we need a Pattern for "exposed_lower" identifiers?
-                _ = ident;
+                // Get the text of the identifier token to use as key
+                const token_region = self.parse_ir.tokens.resolve(@intCast(ident.ident));
+                const ident_text = self.parse_ir.source[token_region.start.offset..token_region.end.offset];
+                // Store by text in a temporary hash map, since indices may change
+                if (self.exposed_ident_texts == null) {
+                    self.exposed_ident_texts = std.StringHashMapUnmanaged(Region){};
+                }
+                const region = self.parse_ir.tokenizedRegionToRegion(ident.region);
+                self.exposed_ident_texts.?.put(gpa, ident_text, region) catch |err| collections.utils.exitOnOom(err);
             },
             .upper_ident => |type_name| {
-                // TODO -- do we need a Pattern for "exposed_upper" identifiers?
-                _ = type_name;
+                // Get the text of the identifier token to use as key
+                const token_region = self.parse_ir.tokens.resolve(@intCast(type_name.ident));
+                const type_text = self.parse_ir.source[token_region.start.offset..token_region.end.offset];
+                // Store by text in a temporary hash map, since indices may change
+                if (self.exposed_type_texts == null) {
+                    self.exposed_type_texts = std.StringHashMapUnmanaged(Region){};
+                }
+                const region = self.parse_ir.tokenizedRegionToRegion(type_name.region);
+                self.exposed_type_texts.?.put(gpa, type_text, region) catch |err| collections.utils.exitOnOom(err);
             },
             .upper_ident_star => |type_with_constructors| {
-                // TODO -- do we need a Pattern for "exposed_upper_star" identifiers?
-                _ = type_with_constructors;
+                // Get the text of the identifier token to use as key
+                const token_region = self.parse_ir.tokens.resolve(@intCast(type_with_constructors.ident));
+                const type_text = self.parse_ir.source[token_region.start.offset..token_region.end.offset];
+                // Store by text in a temporary hash map, since indices may change
+                if (self.exposed_type_texts == null) {
+                    self.exposed_type_texts = std.StringHashMapUnmanaged(Region){};
+                }
+                const region = self.parse_ir.tokenizedRegionToRegion(type_with_constructors.region);
+                self.exposed_type_texts.?.put(gpa, type_text, region) catch |err| collections.utils.exitOnOom(err);
             },
             .malformed => |malformed| {
                 // Malformed exposed items are already captured as diagnostics during parsing
                 _ = malformed;
             },
+        }
+    }
+}
+
+fn checkExposedButNotImplemented(self: *Self) void {
+    const gpa = self.can_ir.env.gpa;
+
+    // Check for remaining exposed identifiers
+    if (self.exposed_ident_texts) |*texts| {
+        var iter = texts.iterator();
+        while (iter.next()) |entry| {
+            const ident_text = entry.key_ptr.*;
+            const region = entry.value_ptr.*;
+            // Create an identifier for error reporting
+            const ident_idx = self.can_ir.env.idents.insert(gpa, base.Ident.for_text(ident_text), region);
+
+            // Report error: exposed but not implemented
+            const diag = CIR.Diagnostic{ .exposed_but_not_implemented = .{
+                .ident = ident_idx,
+                .region = region,
+            } };
+            self.can_ir.pushDiagnostic(diag);
+        }
+    }
+
+    // Check for remaining exposed types
+    if (self.exposed_type_texts) |*texts| {
+        var iter = texts.iterator();
+        while (iter.next()) |entry| {
+            const type_text = entry.key_ptr.*;
+            const region = entry.value_ptr.*;
+            // Create an identifier for error reporting
+            const ident_idx = self.can_ir.env.idents.insert(gpa, base.Ident.for_text(type_text), region);
+
+            // Report error: exposed type but not implemented
+            const diag = CIR.Diagnostic{ .exposed_but_not_implemented = .{
+                .ident = ident_idx,
+                .region = region,
+            } };
+            self.can_ir.pushDiagnostic(diag);
         }
     }
 }
@@ -2323,14 +2424,15 @@ fn canonicalizePattern(
         .ident => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
             if (self.parse_ir.tokens.resolveIdentifier(e.ident_tok)) |ident_idx| {
-                // Push a Pattern node for our identifier
-                const assign_idx = try self.can_ir.store.addPattern(CIR.Pattern{ .assign = .{
+                // Create a Pattern node for our identifier
+                const pattern_idx = try self.can_ir.store.addPattern(CIR.Pattern{ .assign = .{
                     .ident = ident_idx,
                 } }, region);
-                _ = self.can_ir.setTypeVarAtPat(assign_idx, .{ .flex_var = null });
+
+                _ = self.can_ir.setTypeVarAtPat(pattern_idx, .{ .flex_var = null });
 
                 // Introduce the identifier into scope mapping to this pattern node
-                switch (self.scopeIntroduceInternal(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, ident_idx, assign_idx, false, true)) {
+                switch (self.scopeIntroduceInternal(self.can_ir.env.gpa, &self.can_ir.env.idents, .ident, ident_idx, pattern_idx, false, true)) {
                     .success => {},
                     .shadowing_warning => |shadowed_pattern_idx| {
                         const original_region = self.can_ir.store.getPatternRegion(shadowed_pattern_idx);
@@ -2353,7 +2455,7 @@ fn canonicalizePattern(
                     },
                 }
 
-                return assign_idx;
+                return pattern_idx;
             } else {
                 const feature = self.can_ir.env.strings.insert(self.can_ir.env.gpa, "report an error when unable to resolve identifier");
                 const malformed_idx = self.can_ir.pushMalformed(CIR.Pattern.Idx, CIR.Diagnostic{ .not_implemented = .{
