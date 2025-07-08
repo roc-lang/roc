@@ -115,11 +115,11 @@ CloseCurly(36:1-36:2),EndOfFile(36:2-36:2),
 	(app @1.1-1.56
 		(provides @1.6-1.11
 			(exposed-lower-ident (text "main")))
-		(record-field @1.14-1.56 (name "pf") (optional false)
+		(record-field @1.14-1.56 (name "pf")
 			(e-string @1.27-1.54
 				(e-string-part @1.28-1.53 (raw "../basic-cli/platform.roc"))))
 		(packages @1.12-1.56
-			(record-field @1.14-1.56 (name "pf") (optional false)
+			(record-field @1.14-1.56 (name "pf")
 				(e-string @1.27-1.54
 					(e-string-part @1.28-1.53 (raw "../basic-cli/platform.roc"))))))
 	(statements
@@ -147,9 +147,9 @@ CloseCurly(36:1-36:2),EndOfFile(36:2-36:2),
 				(args
 					(p-ident @11.19-11.24 (raw "value")))
 				(e-record @11.26-11.51
-					(field (field "data") (optional false)
+					(field (field "data")
 						(e-ident @11.34-11.39 (raw "value")))
-					(field (field "count") (optional false)
+					(field (field "count")
 						(e-int @11.48-11.49 (raw "1"))))))
 		(s-decl @14.1-14.36
 			(p-ident @14.1-14.14 (raw "int_container"))
@@ -197,7 +197,7 @@ CloseCurly(36:1-36:2),EndOfFile(36:2-36:2),
 				(args
 					(p-ident @26.20-26.21 (raw "x")))
 				(e-record @26.23-26.35
-					(field (field "value") (optional false)
+					(field (field "value")
 						(e-ident @26.32-26.33 (raw "x"))))))
 		(s-decl @29.1-29.33
 			(p-ident @29.1-29.11 (raw "int_record"))

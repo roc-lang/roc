@@ -51,10 +51,10 @@ CloseCurly(10:1-10:2),EndOfFile(10:2-10:2),
 					(s-decl @6.5-6.38
 						(p-ident @6.5-6.9 (raw "data"))
 						(e-record @6.12-6.38
-							(field (field "name") (optional false)
+							(field (field "name")
 								(e-string @6.20-6.27
 									(e-string-part @6.21-6.26 (raw "Alice"))))
-							(field (field "age") (optional false)
+							(field (field "age")
 								(e-int @6.34-6.36 (raw "30")))))
 					(s-decl @7.5-7.27
 						(p-ident @7.5-7.12 (raw "encoded"))

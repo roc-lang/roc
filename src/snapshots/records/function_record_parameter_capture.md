@@ -36,14 +36,14 @@ OpBar(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:4-1:8),Comma(1:8-1:9),LowerIdent(
 				(field @1.10-1.14 (name "age") (rest false))
 				(field @1.15-1.20 (name "a") (rest true)))))
 	(e-record @1.32-1.103
-		(field (field "greeting") (optional false)
+		(field (field "greeting")
 			(e-string @1.44-1.59
 				(e-string-part @1.45-1.51 (raw "Hello "))
 				(e-ident @1.53-1.57 (raw "name"))
 				(e-string-part @1.58-1.58 (raw ""))))
-		(field (field "full_record") (optional false)
+		(field (field "full_record")
 			(e-ident @1.74-1.80 (raw "person")))
-		(field (field "is_adult") (optional false)
+		(field (field "is_adult")
 			(e-binop @1.92-1.103 (op ">=")
 				(e-ident @1.92-1.95 (raw "age"))
 				(e-int @1.99-1.101 (raw "18"))))))

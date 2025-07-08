@@ -20,14 +20,14 @@ KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),O
 (app @1.1-1.74
 	(provides @1.6-1.12
 		(exposed-lower-ident (text "main!")))
-	(record-field @1.15-1.42 (name "pf") (optional false)
+	(record-field @1.15-1.42 (name "pf")
 		(e-string @1.28-1.41
 			(e-string-part @1.29-1.40 (raw "../main.roc"))))
 	(packages @1.13-1.74
-		(record-field @1.15-1.42 (name "pf") (optional false)
+		(record-field @1.15-1.42 (name "pf")
 			(e-string @1.28-1.41
 				(e-string-part @1.29-1.40 (raw "../main.roc"))))
-		(record-field @1.43-1.74 (name "other") (optional false)
+		(record-field @1.43-1.74 (name "other")
 			(e-string @1.50-1.72
 				(e-string-part @1.51-1.71 (raw "../../other/main.roc"))))))
 ~~~

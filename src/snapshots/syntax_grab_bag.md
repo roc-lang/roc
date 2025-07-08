@@ -1253,11 +1253,11 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 	(app @2.1-2.57
 		(provides @2.6-2.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @2.15-2.57 (name "pf") (optional false)
+		(record-field @2.15-2.57 (name "pf")
 			(e-string @2.28-2.55
 				(e-string-part @2.29-2.54 (raw "../basic-cli/platform.roc"))))
 		(packages @2.13-2.57
-			(record-field @2.15-2.57 (name "pf") (optional false)
+			(record-field @2.15-2.57 (name "pf")
 				(e-string @2.28-2.55
 					(e-string-part @2.29-2.54 (raw "../basic-cli/platform.roc"))))))
 	(statements
@@ -1657,18 +1657,18 @@ CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 						(s-decl @178.2-178.71
 							(p-ident @178.2-178.8 (raw "record"))
 							(e-record @178.11-178.71
-								(field (field "foo") (optional false)
+								(field (field "foo")
 									(e-int @178.18-178.21 (raw "123")))
-								(field (field "bar") (optional false)
+								(field (field "bar")
 									(e-string @178.28-178.35
 										(e-string-part @178.29-178.34 (raw "Hello"))))
-								(field (field "baz") (optional false)
+								(field (field "baz")
 									(e-ident @178.42-178.45 (raw "tag")))
-								(field (field "qux") (optional false)
+								(field (field "qux")
 									(e-apply @178.52-178.61
 										(e-tag @178.52-178.54 (raw "Ok"))
 										(e-ident @178.55-178.60 (raw "world"))))
-								(field (field "punned") (optional false))))
+								(field (field "punned"))))
 						(s-decl @179.2-179.68
 							(p-ident @179.2-179.7 (raw "tuple"))
 							(e-tuple @179.10-179.68

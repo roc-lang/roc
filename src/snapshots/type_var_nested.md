@@ -75,11 +75,11 @@ LowerIdent(28:1-28:5),OpAssign(28:6-28:7),OpBar(28:8-28:9),Underscore(28:9-28:10
 	(app @1.1-1.43
 		(provides @1.6-1.11
 			(exposed-lower-ident (text "main")))
-		(record-field @1.14-1.43 (name "pf") (optional false)
+		(record-field @1.14-1.43 (name "pf")
 			(e-string @1.27-1.41
 				(e-string-part @1.28-1.40 (raw "platform.roc"))))
 		(packages @1.12-1.43
-			(record-field @1.14-1.43 (name "pf") (optional false)
+			(record-field @1.14-1.43 (name "pf")
 				(e-string @1.27-1.41
 					(e-string-part @1.28-1.40 (raw "platform.roc"))))))
 	(statements
@@ -147,9 +147,9 @@ LowerIdent(28:1-28:5),OpAssign(28:6-28:7),OpBar(28:8-28:9),Underscore(28:9-28:10
 					(p-ident @18.14-18.15 (raw "x"))
 					(p-ident @18.17-18.18 (raw "y")))
 				(e-record @18.20-18.43
-					(field (field "first") (optional false)
+					(field (field "first")
 						(e-ident @18.29-18.30 (raw "x")))
-					(field (field "second") (optional false)
+					(field (field "second")
 						(e-ident @18.40-18.41 (raw "y"))))))
 		(s-type-anno @1.1-1.1 (name "list_length")
 			(ty-fn @21.15-21.29

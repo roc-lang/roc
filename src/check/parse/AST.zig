@@ -2353,7 +2353,6 @@ pub const Expr = union(enum) {
                     const field_node = tree.beginNode();
                     tree.pushStaticAtom("field");
                     tree.pushStringPair("field", ast.resolve(record_field.name));
-                    tree.pushBoolPair("optional", record_field.optional);
                     const attrs2 = tree.beginNode();
                     if (record_field.value) |value_id| {
                         ast.store.getExpr(value_id).pushToSExprTree(env, ast, tree);
@@ -2574,7 +2573,6 @@ pub const PatternRecordField = struct {
 pub const RecordField = struct {
     name: Token.Idx,
     value: ?Expr.Idx,
-    optional: bool,
     region: TokenizedRegion,
 
     pub const Idx = enum(u32) { _ };
@@ -2589,7 +2587,6 @@ pub const RecordField = struct {
         tree.pushString(ast.resolve(self.name));
         const attrs2 = tree.beginNode();
         tree.endNode(name, attrs2);
-        tree.pushBoolPair("optional", self.optional);
         const attrs = tree.beginNode();
 
         if (self.value) |idx| {

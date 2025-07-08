@@ -97,11 +97,11 @@ CloseCurly(26:1-26:2),EndOfFile(26:2-26:2),
 	(app @1.1-1.56
 		(provides @1.6-1.11
 			(exposed-lower-ident (text "main")))
-		(record-field @1.14-1.56 (name "pf") (optional false)
+		(record-field @1.14-1.56 (name "pf")
 			(e-string @1.27-1.54
 				(e-string-part @1.28-1.53 (raw "../basic-cli/platform.roc"))))
 		(packages @1.12-1.56
-			(record-field @1.14-1.56 (name "pf") (optional false)
+			(record-field @1.14-1.56 (name "pf")
 				(e-string @1.27-1.54
 					(e-string-part @1.28-1.53 (raw "../basic-cli/platform.roc"))))))
 	(statements

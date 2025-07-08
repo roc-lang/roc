@@ -41,11 +41,11 @@ LowerIdent(11:1-11:6),OpAssign(11:7-11:8),LowerIdent(11:9-11:12),NoSpaceOpenRoun
 	(app @1.1-1.57
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.57 (name "pf") (optional false)
+		(record-field @1.15-1.57 (name "pf")
 			(e-string @1.28-1.55
 				(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))
 		(packages @1.13-1.57
-			(record-field @1.15-1.57 (name "pf") (optional false)
+			(record-field @1.15-1.57 (name "pf")
 				(e-string @1.28-1.55
 					(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))))
 	(statements
@@ -62,9 +62,9 @@ LowerIdent(11:1-11:6),OpAssign(11:7-11:8),LowerIdent(11:9-11:12),NoSpaceOpenRoun
 					(p-ident @5.11-5.12 (raw "y")))
 				(e-field-access @5.14-8.7
 					(e-record @5.14-5.28
-						(field (field "x") (optional false)
+						(field (field "x")
 							(e-ident @5.19-5.20 (raw "x")))
-						(field (field "y") (optional false)
+						(field (field "y")
 							(e-ident @5.25-5.26 (raw "y"))))
 					(e-ident @5.28-5.30 (raw "x")))))
 		(s-type-anno @1.1-1.1 (name "double")

@@ -23,10 +23,10 @@ KwPackage(1:1-1:8),OpenSquare(1:9-1:10),LowerIdent(1:10-1:19),Comma(1:19-1:20),U
 			(exposed-lower-ident (text "something"))
 			(exposed-upper-ident (text "SomeType")))
 		(packages @1.31-1.88
-			(record-field @1.33-1.56 (name "somePkg") (optional false)
+			(record-field @1.33-1.56 (name "somePkg")
 				(e-string @1.42-1.55
 					(e-string-part @1.43-1.54 (raw "../main.roc"))))
-			(record-field @1.57-1.88 (name "other") (optional false)
+			(record-field @1.57-1.88 (name "other")
 				(e-string @1.64-1.86
 					(e-string-part @1.65-1.85 (raw "../../other/main.roc"))))))
 	(statements))

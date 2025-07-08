@@ -50,11 +50,11 @@ LowerIdent(9:1-9:5),OpAssign(9:6-9:7),LowerIdent(9:8-9:12),NoSpaceOpenRound(9:12
 	(app @1.1-1.56
 		(provides @1.6-1.11
 			(exposed-lower-ident (text "main")))
-		(record-field @1.14-1.56 (name "pf") (optional false)
+		(record-field @1.14-1.56 (name "pf")
 			(e-string @1.27-1.54
 				(e-string-part @1.28-1.53 (raw "../basic-cli/platform.roc"))))
 		(packages @1.12-1.56
-			(record-field @1.14-1.56 (name "pf") (optional false)
+			(record-field @1.14-1.56 (name "pf")
 				(e-string @1.27-1.54
 					(e-string-part @1.28-1.53 (raw "../basic-cli/platform.roc"))))))
 	(statements

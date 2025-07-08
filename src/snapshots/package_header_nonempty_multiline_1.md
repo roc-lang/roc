@@ -27,7 +27,7 @@ OpenCurly(3:2-3:3),LowerIdent(3:4-3:11),OpColon(3:11-3:12),StringStart(3:13-3:14
 			(exposed-lower-ident (text "something"))
 			(exposed-upper-ident (text "SomeType")))
 		(packages @3.2-3.28
-			(record-field @3.4-3.28 (name "somePkg") (optional false)
+			(record-field @3.4-3.28 (name "somePkg")
 				(e-string @3.13-3.26
 					(e-string-part @3.14-3.25 (raw "../main.roc"))))))
 	(statements))

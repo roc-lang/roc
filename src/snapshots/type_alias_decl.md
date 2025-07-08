@@ -363,11 +363,11 @@ CloseCurly(39:1-39:2),EndOfFile(39:2-39:2),
 	(app @1.1-1.53
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.53 (name "pf") (optional false)
+		(record-field @1.15-1.53 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
 		(packages @1.13-1.53
-			(record-field @1.15-1.53 (name "pf") (optional false)
+			(record-field @1.15-1.53 (name "pf")
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
@@ -459,10 +459,10 @@ CloseCurly(39:1-39:2),EndOfFile(39:2-39:2),
 						(s-decl @33.5-33.40
 							(p-ident @33.5-33.11 (raw "person"))
 							(e-record @33.14-33.40
-								(field (field "name") (optional false)
+								(field (field "name")
 									(e-string @33.22-33.29
 										(e-string-part @33.23-33.28 (raw "Alice"))))
-								(field (field "age") (optional false)
+								(field (field "age")
 									(e-int @33.36-33.38 (raw "30")))))
 						(s-type-anno @1.1-1.1 (name "color")
 							(ty @35.13-35.18 (name "Color")))

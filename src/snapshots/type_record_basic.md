@@ -31,11 +31,11 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 	(app @1.1-1.53
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.53 (name "pf") (optional false)
+		(record-field @1.15-1.53 (name "pf")
 			(e-string @1.28-1.51
 				(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))
 		(packages @1.13-1.53
-			(record-field @1.15-1.53 (name "pf") (optional false)
+			(record-field @1.15-1.53 (name "pf")
 				(e-string @1.28-1.51
 					(e-string-part @1.29-1.50 (raw "../basic-cli/main.roc"))))))
 	(statements
@@ -62,10 +62,10 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpBar(6:9-6:10),Underscore(6:10-6:11),OpBa
 				(e-apply @6.13-6.44
 					(e-ident @6.13-6.20 (raw "getName"))
 					(e-record @6.21-6.43
-						(field (field "name") (optional false)
+						(field (field "name")
 							(e-string @6.28-6.34
 								(e-string-part @6.29-6.33 (raw "luke"))))
-						(field (field "age") (optional false)
+						(field (field "age")
 							(e-int @6.40-6.42 (raw "21")))))))))
 ~~~
 # FORMATTED

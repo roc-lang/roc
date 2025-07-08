@@ -34,14 +34,14 @@ CloseCurly(8:2-8:3),EndOfFile(8:3-8:3),
 (app @1.1-8.3
 	(provides @3.3-4.3
 		(exposed-lower-ident (text "main!")))
-	(record-field @6.3-6.30 (name "pf") (optional false)
+	(record-field @6.3-6.30 (name "pf")
 		(e-string @6.16-6.29
 			(e-string-part @6.17-6.28 (raw "../main.roc"))))
 	(packages @5.2-8.3
-		(record-field @6.3-6.30 (name "pf") (optional false)
+		(record-field @6.3-6.30 (name "pf")
 			(e-string @6.16-6.29
 				(e-string-part @6.17-6.28 (raw "../main.roc"))))
-		(record-field @7.3-7.33 (name "other") (optional false)
+		(record-field @7.3-7.33 (name "other")
 			(e-string @7.10-7.32
 				(e-string-part @7.11-7.31 (raw "../../other/main.roc"))))))
 ~~~

@@ -27,12 +27,12 @@ CloseCurly(3:1-3:2),EndOfFile(3:2-3:2),
 		(branch @2.5-3.2
 			(p-ident @2.5-2.10 (raw "empty"))
 			(e-record @2.14-2.70
-				(field (field "ints") (optional false)
+				(field (field "ints")
 					(e-list @2.22-2.31
 						(e-int @2.23-2.24 (raw "1"))
 						(e-int @2.26-2.27 (raw "2"))
 						(e-int @2.29-2.30 (raw "3"))))
-				(field (field "strs") (optional false)
+				(field (field "strs")
 					(e-list @2.39-2.54
 						(e-string @2.40-2.43
 							(e-string-part @2.41-2.42 (raw "a")))
@@ -40,7 +40,7 @@ CloseCurly(3:1-3:2),EndOfFile(3:2-3:2),
 							(e-string-part @2.46-2.47 (raw "b")))
 						(e-string @2.50-2.53
 							(e-string-part @2.51-2.52 (raw "c")))))
-				(field (field "empty") (optional false)
+				(field (field "empty")
 					(e-ident @2.63-2.68 (raw "empty")))))))
 ~~~
 # FORMATTED

@@ -18,7 +18,7 @@ OpenCurly(1:1-1:2),LowerIdent(1:3-1:7),OpColon(1:7-1:8),StringStart(1:9-1:10),St
 # PARSE
 ~~~clojure
 (e-record @1.1-1.18
-	(field (field "name") (optional false)
+	(field (field "name")
 		(e-string @1.9-1.16
 			(e-string-part @1.10-1.15 (raw "Alice")))))
 ~~~

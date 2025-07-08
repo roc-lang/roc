@@ -66,11 +66,11 @@ CloseCurly(17:1-17:2),EndOfFile(17:2-17:2),
 	(app @1.1-1.57
 		(provides @1.6-1.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @1.15-1.57 (name "pf") (optional false)
+		(record-field @1.15-1.57 (name "pf")
 			(e-string @1.28-1.55
 				(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))
 		(packages @1.13-1.57
-			(record-field @1.15-1.57 (name "pf") (optional false)
+			(record-field @1.15-1.57 (name "pf")
 				(e-string @1.28-1.55
 					(e-string-part @1.29-1.54 (raw "../basic-cli/platform.roc"))))))
 	(statements
@@ -110,9 +110,9 @@ CloseCurly(17:1-17:2),EndOfFile(17:2-17:2),
 					(p-ident @9.20-9.24 (raw "name"))
 					(p-ident @9.26-9.29 (raw "age")))
 				(e-record @9.31-9.46
-					(field (field "id") (optional false))
-					(field (field "name") (optional false))
-					(field (field "age") (optional false)))))
+					(field (field "id"))
+					(field (field "name"))
+					(field (field "age")))))
 		(s-type-anno @1.1-1.1 (name "get_user_name")
 			(ty-fn @11.17-11.33
 				(ty @11.17-11.21 (name "User"))

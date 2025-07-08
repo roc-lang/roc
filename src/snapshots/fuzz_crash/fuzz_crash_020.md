@@ -860,11 +860,11 @@ CloseCurly(121:1-121:2),EndOfFile(121:2-121:2),
 	(app @2.1-2.33
 		(provides @2.6-2.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @2.15-2.33 (name "pf") (optional false)
+		(record-field @2.15-2.33 (name "pf")
 			(e-string @2.28-2.31
 				(e-string-part @2.29-2.30 (raw "c"))))
 		(packages @2.13-2.33
-			(record-field @2.15-2.33 (name "pf") (optional false)
+			(record-field @2.15-2.33 (name "pf")
 				(e-string @2.28-2.31
 					(e-string-part @2.29-2.30 (raw "c"))))))
 	(statements
@@ -1092,18 +1092,18 @@ CloseCurly(121:1-121:2),EndOfFile(121:2-121:2),
 						(s-decl @96.2-96.59
 							(p-ident @96.2-96.4 (raw "rd"))
 							(e-record @96.7-96.59
-								(field (field "foo") (optional false)
+								(field (field "foo")
 									(e-int @96.14-96.17 (raw "123")))
-								(field (field "bar") (optional false)
+								(field (field "bar")
 									(e-string @96.24-96.27
 										(e-string-part @96.25-96.26 (raw "H"))))
-								(field (field "baz") (optional false)
+								(field (field "baz")
 									(e-ident @96.34-96.37 (raw "tag")))
-								(field (field "qux") (optional false)
+								(field (field "qux")
 									(e-apply @96.44-96.53
 										(e-tag @96.44-96.46 (raw "Ok"))
 										(e-ident @96.47-96.52 (raw "world"))))
-								(field (field "ned") (optional false))))
+								(field (field "ned"))))
 						(s-decl @97.2-97.48
 							(p-ident @97.2-97.3 (raw "t"))
 							(e-tuple @97.6-97.48

@@ -1088,11 +1088,11 @@ CloseCurly(159:1-159:2),EndOfFile(159:2-159:2),
 	(app @2.1-2.33
 		(provides @2.6-2.12
 			(exposed-lower-ident (text "main!")))
-		(record-field @2.15-2.33 (name "pf") (optional false)
+		(record-field @2.15-2.33 (name "pf")
 			(e-string @2.28-2.31
 				(e-string-part @2.29-2.30 (raw "c"))))
 		(packages @2.13-2.33
-			(record-field @2.15-2.33 (name "pf") (optional false)
+			(record-field @2.15-2.33 (name "pf")
 				(e-string @2.28-2.31
 					(e-string-part @2.29-2.30 (raw "c"))))))
 	(statements
@@ -1415,18 +1415,18 @@ CloseCurly(159:1-159:2),EndOfFile(159:2-159:2),
 						(s-decl @131.2-131.71
 							(p-ident @131.2-131.8 (raw "record"))
 							(e-record @131.11-131.71
-								(field (field "foo") (optional false)
+								(field (field "foo")
 									(e-int @131.18-131.21 (raw "123")))
-								(field (field "bar") (optional false)
+								(field (field "bar")
 									(e-string @131.28-131.35
 										(e-string-part @131.29-131.34 (raw "Hello"))))
-								(field (field "baz") (optional false)
+								(field (field "baz")
 									(e-ident @131.42-131.45 (raw "tag")))
-								(field (field "qux") (optional false)
+								(field (field "qux")
 									(e-apply @131.52-131.61
 										(e-tag @131.52-131.54 (raw "Ok"))
 										(e-ident @131.55-131.60 (raw "world"))))
-								(field (field "punned") (optional false))))
+								(field (field "punned"))))
 						(s-decl @132.2-132.68
 							(p-ident @132.2-132.7 (raw "tuple"))
 							(e-tuple @132.10-132.68

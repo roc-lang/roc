@@ -36,12 +36,12 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpenCurly(6:9-6:10),DoubleDot(6:11-6:13),L
 		(s-decl @3.1-3.52
 			(p-ident @3.1-3.7 (raw "person"))
 			(e-record @3.10-3.52
-				(field (field "name") (optional false)
+				(field (field "name")
 					(e-string @3.18-3.25
 						(e-string-part @3.19-3.24 (raw "Alice"))))
-				(field (field "age") (optional false)
+				(field (field "age")
 					(e-int @3.32-3.34 (raw "30")))
-				(field (field "city") (optional false)
+				(field (field "city")
 					(e-string @3.42-3.50
 						(e-string-part @3.43-3.49 (raw "Boston"))))))
 		(s-decl @4.1-4.36
@@ -49,14 +49,14 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpenCurly(6:9-6:10),DoubleDot(6:11-6:13),L
 			(e-record @4.15-4.36
 				(ext
 					(e-ident @4.19-4.25 (raw "person")))
-				(field (field "age") (optional false)
+				(field (field "age")
 					(e-int @4.32-4.34 (raw "31")))))
 		(s-decl @5.1-5.47
 			(p-ident @5.1-5.9 (raw "updated2"))
 			(e-record @5.12-5.47
 				(ext
 					(e-ident @5.16-5.27 (raw "updated_one")))
-				(field (field "city") (optional false)
+				(field (field "city")
 					(e-string @5.35-5.45
 						(e-string-part @5.36-5.44 (raw "New York"))))))
 		(s-decl @6.1-6.53
@@ -64,10 +64,10 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),OpenCurly(6:9-6:10),DoubleDot(6:11-6:13),L
 			(e-record @6.9-6.53
 				(ext
 					(e-ident @6.13-6.21 (raw "updated2")))
-				(field (field "name") (optional false)
+				(field (field "name")
 					(e-string @6.29-6.42
 						(e-string-part @6.30-6.41 (raw "Alice Smith"))))
-				(field (field "age") (optional false)
+				(field (field "age")
 					(e-int @6.49-6.51 (raw "32")))))))
 ~~~
 # FORMATTED

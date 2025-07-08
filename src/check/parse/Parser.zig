@@ -765,7 +765,6 @@ pub fn parseAppHeader(self: *Parser) AST.Header.Idx {
             const pidx = self.store.addRecordField(.{
                 .name = name_tok,
                 .value = value,
-                .optional = false,
                 .region = .{ .start = entry_start, .end = self.pos },
             });
             self.store.addScratchRecordField(pidx);
@@ -779,7 +778,6 @@ pub fn parseAppHeader(self: *Parser) AST.Header.Idx {
             self.store.addScratchRecordField(self.store.addRecordField(.{
                 .name = name_tok,
                 .value = value,
-                .optional = false,
                 .region = .{ .start = entry_start, .end = self.pos },
             }));
         }
@@ -2205,7 +2203,6 @@ pub fn parseRecordField(self: *Parser) AST.RecordField.Idx {
     return self.store.addRecordField(.{
         .name = name,
         .value = value,
-        .optional = false,
         .region = .{ .start = start, .end = self.pos },
     });
 }

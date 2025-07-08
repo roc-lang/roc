@@ -235,11 +235,11 @@ CloseCurly(108:1-108:2),EndOfFile(108:2-108:2),
 	(app @1.1-1.56
 		(provides @1.6-1.11
 			(exposed-lower-ident (text "main")))
-		(record-field @1.14-1.56 (name "pf") (optional false)
+		(record-field @1.14-1.56 (name "pf")
 			(e-string @1.27-1.54
 				(e-string-part @1.28-1.53 (raw "../basic-cli/platform.roc"))))
 		(packages @1.12-1.56
-			(record-field @1.14-1.56 (name "pf") (optional false)
+			(record-field @1.14-1.56 (name "pf")
 				(e-string @1.27-1.54
 					(e-string-part @1.28-1.53 (raw "../basic-cli/platform.roc"))))))
 	(statements
@@ -302,24 +302,24 @@ CloseCurly(108:1-108:2),EndOfFile(108:2-108:2),
 		(s-decl @23.1-23.46
 			(p-ident @23.1-23.12 (raw "poly_record"))
 			(e-record @23.15-23.46
-				(field (field "items") (optional false)
+				(field (field "items")
 					(e-ident @23.24-23.34 (raw "empty_list")))
-				(field (field "count") (optional false)
+				(field (field "count")
 					(e-int @23.43-23.44 (raw "0")))))
 		(s-decl @24.1-24.50
 			(p-ident @24.1-24.17 (raw "use_poly_record1"))
 			(e-record @24.20-24.50
-				(field (field "items") (optional false)
+				(field (field "items")
 					(e-list @24.29-24.38
 						(e-int @24.30-24.31 (raw "1"))
 						(e-int @24.33-24.34 (raw "2"))
 						(e-int @24.36-24.37 (raw "3"))))
-				(field (field "count") (optional false)
+				(field (field "count")
 					(e-int @24.47-24.48 (raw "0")))))
 		(s-decl @25.1-25.56
 			(p-ident @25.1-25.17 (raw "use_poly_record2"))
 			(e-record @25.20-25.56
-				(field (field "items") (optional false)
+				(field (field "items")
 					(e-list @25.29-25.44
 						(e-string @25.30-25.33
 							(e-string-part @25.31-25.32 (raw "x")))
@@ -327,46 +327,46 @@ CloseCurly(108:1-108:2),EndOfFile(108:2-108:2),
 							(e-string-part @25.36-25.37 (raw "y")))
 						(e-string @25.40-25.43
 							(e-string-part @25.41-25.42 (raw "z")))))
-				(field (field "count") (optional false)
+				(field (field "count")
 					(e-int @25.53-25.54 (raw "0")))))
 		(s-decl @28.1-35.2
 			(p-ident @28.1-28.12 (raw "base_config"))
 			(e-record @28.15-35.2
-				(field (field "data") (optional false)
+				(field (field "data")
 					(e-ident @29.11-29.21 (raw "empty_list")))
-				(field (field "metadata") (optional false)
+				(field (field "metadata")
 					(e-record @30.15-34.6
-						(field (field "version") (optional false)
+						(field (field "version")
 							(e-ident @31.18-31.21 (raw "num")))
-						(field (field "ratio") (optional false)
+						(field (field "ratio")
 							(e-ident @32.16-32.20 (raw "frac")))
-						(field (field "description") (optional false)
+						(field (field "description")
 							(e-ident @33.22-33.25 (raw "str")))))))
 		(s-decl @38.1-46.2
 			(p-ident @38.1-38.8 (raw "config1"))
 			(e-record @38.11-46.2
-				(field (field "data") (optional false)
+				(field (field "data")
 					(e-list @39.11-39.26
 						(e-int @39.12-39.13 (raw "1"))
 						(e-int @39.15-39.16 (raw "2"))
 						(e-int @39.18-39.19 (raw "3"))
 						(e-int @39.21-39.22 (raw "4"))
 						(e-int @39.24-39.25 (raw "5"))))
-				(field (field "metadata") (optional false)
+				(field (field "metadata")
 					(e-record @40.15-44.6
-						(field (field "version") (optional false)
+						(field (field "version")
 							(e-ident @41.18-41.21 (raw "num")))
-						(field (field "ratio") (optional false)
+						(field (field "ratio")
 							(e-ident @42.16-42.20 (raw "frac")))
-						(field (field "description") (optional false)
+						(field (field "description")
 							(e-ident @43.22-43.25 (raw "str")))))
-				(field (field "name") (optional false)
+				(field (field "name")
 					(e-string @45.11-45.21
 						(e-string-part @45.12-45.20 (raw "integers"))))))
 		(s-decl @48.1-56.2
 			(p-ident @48.1-48.8 (raw "config2"))
 			(e-record @48.11-56.2
-				(field (field "data") (optional false)
+				(field (field "data")
 					(e-list @49.11-49.40
 						(e-string @49.12-49.19
 							(e-string-part @49.13-49.18 (raw "apple")))
@@ -374,15 +374,15 @@ CloseCurly(108:1-108:2),EndOfFile(108:2-108:2),
 							(e-string-part @49.22-49.28 (raw "banana")))
 						(e-string @49.31-49.39
 							(e-string-part @49.32-49.38 (raw "cherry")))))
-				(field (field "metadata") (optional false)
+				(field (field "metadata")
 					(e-record @50.15-54.6
-						(field (field "version") (optional false)
+						(field (field "version")
 							(e-ident @51.18-51.21 (raw "num")))
-						(field (field "ratio") (optional false)
+						(field (field "ratio")
 							(e-ident @52.16-52.20 (raw "frac")))
-						(field (field "description") (optional false)
+						(field (field "description")
 							(e-ident @53.22-53.25 (raw "str")))))
-				(field (field "name") (optional false)
+				(field (field "name")
 					(e-string @55.11-55.19
 						(e-string-part @55.12-55.18 (raw "fruits"))))))
 		(s-decl @59.1-59.54
@@ -391,9 +391,9 @@ CloseCurly(108:1-108:2),EndOfFile(108:2-108:2),
 				(args
 					(p-ident @59.19-59.22 (raw "val")))
 				(e-record @59.24-59.54
-					(field (field "value") (optional false)
+					(field (field "value")
 						(e-ident @59.33-59.36 (raw "val")))
-					(field (field "wrapper") (optional false)
+					(field (field "wrapper")
 						(e-list @59.47-59.52
 							(e-ident @59.48-59.51 (raw "val")))))))
 		(s-decl @60.1-60.33
@@ -414,17 +414,17 @@ CloseCurly(108:1-108:2),EndOfFile(108:2-108:2),
 		(s-decl @65.1-81.2
 			(p-ident @65.1-65.5 (raw "deep"))
 			(e-record @65.8-81.2
-				(field (field "level1") (optional false)
+				(field (field "level1")
 					(e-record @66.13-75.6
-						(field (field "level2") (optional false)
+						(field (field "level2")
 							(e-record @67.17-73.10
-								(field (field "level3") (optional false)
+								(field (field "level3")
 									(e-record @68.21-71.14
-										(field (field "data") (optional false)
+										(field (field "data")
 											(e-ident @69.23-69.33 (raw "empty_list")))
-										(field (field "value") (optional false)
+										(field (field "value")
 											(e-ident @70.24-70.27 (raw "num")))))
-								(field (field "items") (optional false)
+								(field (field "items")
 									(e-list @72.20-72.43
 										(e-ident @72.21-72.24 (raw "num"))
 										(e-binop @72.26-72.34 (op "*")
@@ -433,32 +433,32 @@ CloseCurly(108:1-108:2),EndOfFile(108:2-108:2),
 										(e-binop @72.35-72.43 (op "*")
 											(e-ident @72.35-72.38 (raw "num"))
 											(e-int @72.41-72.42 (raw "3")))))))
-						(field (field "collection") (optional false)
+						(field (field "collection")
 							(e-ident @74.21-74.31 (raw "empty_list")))))
-				(field (field "results") (optional false)
+				(field (field "results")
 					(e-list @76.14-80.6
 						(e-record @77.9-77.37
-							(field (field "data") (optional false)
+							(field (field "data")
 								(e-list @77.17-77.20
 									(e-int @77.18-77.19 (raw "1"))))
-							(field (field "tag") (optional false)
+							(field (field "tag")
 								(e-string @77.27-77.35
 									(e-string-part @77.28-77.34 (raw "single")))))
 						(e-record @78.9-78.38
-							(field (field "data") (optional false)
+							(field (field "data")
 								(e-list @78.17-78.23
 									(e-int @78.18-78.19 (raw "1"))
 									(e-int @78.21-78.22 (raw "2"))))
-							(field (field "tag") (optional false)
+							(field (field "tag")
 								(e-string @78.30-78.36
 									(e-string-part @78.31-78.35 (raw "ints")))))
 						(e-record @79.9-79.41
-							(field (field "data") (optional false)
+							(field (field "data")
 								(e-list @79.17-79.26
 									(e-int @79.18-79.19 (raw "1"))
 									(e-int @79.21-79.22 (raw "2"))
 									(e-int @79.24-79.25 (raw "3"))))
-							(field (field "tag") (optional false)
+							(field (field "tag")
 								(e-string @79.33-79.39
 									(e-string-part @79.34-79.38 (raw "more")))))))))
 		(s-decl @84.1-85.9
@@ -479,9 +479,9 @@ CloseCurly(108:1-108:2),EndOfFile(108:2-108:2),
 		(s-decl @87.1-87.59
 			(p-ident @87.1-87.9 (raw "compute4"))
 			(e-record @87.12-87.59
-				(field (field "base") (optional false)
+				(field (field "base")
 					(e-ident @87.20-87.23 (raw "num")))
-				(field (field "derived") (optional false)
+				(field (field "derived")
 					(e-list @87.34-87.57
 						(e-ident @87.35-87.38 (raw "num"))
 						(e-binop @87.40-87.48 (op "+")
@@ -493,46 +493,46 @@ CloseCurly(108:1-108:2),EndOfFile(108:2-108:2),
 		(s-decl @90.1-103.2
 			(p-ident @90.1-90.6 (raw "mixed"))
 			(e-record @90.9-103.2
-				(field (field "numbers") (optional false)
+				(field (field "numbers")
 					(e-record @91.14-91.59
-						(field (field "value") (optional false)
+						(field (field "value")
 							(e-ident @91.23-91.26 (raw "num")))
-						(field (field "list") (optional false)
+						(field (field "list")
 							(e-list @91.34-91.44
 								(e-ident @91.35-91.38 (raw "num"))
 								(e-ident @91.40-91.43 (raw "num"))))
-						(field (field "float") (optional false)
+						(field (field "float")
 							(e-ident @91.53-91.57 (raw "frac")))))
-				(field (field "strings") (optional false)
+				(field (field "strings")
 					(e-record @92.14-92.46
-						(field (field "value") (optional false)
+						(field (field "value")
 							(e-ident @92.23-92.26 (raw "str")))
-						(field (field "list") (optional false)
+						(field (field "list")
 							(e-list @92.34-92.44
 								(e-ident @92.35-92.38 (raw "str"))
 								(e-ident @92.40-92.43 (raw "str"))))))
-				(field (field "empty_lists") (optional false)
+				(field (field "empty_lists")
 					(e-record @93.18-97.6
-						(field (field "raw") (optional false)
+						(field (field "raw")
 							(e-ident @94.14-94.24 (raw "empty_list")))
-						(field (field "in_list") (optional false)
+						(field (field "in_list")
 							(e-list @95.18-95.30
 								(e-ident @95.19-95.29 (raw "empty_list"))))
-						(field (field "in_record") (optional false)
+						(field (field "in_record")
 							(e-record @96.20-96.40
-								(field (field "data") (optional false)
+								(field (field "data")
 									(e-ident @96.28-96.38 (raw "empty_list")))))))
-				(field (field "computations") (optional false)
+				(field (field "computations")
 					(e-record @98.19-102.6
-						(field (field "from_num") (optional false)
+						(field (field "from_num")
 							(e-binop @99.19-99.29 (op "*")
 								(e-ident @99.19-99.22 (raw "num"))
 								(e-int @99.25-99.28 (raw "100"))))
-						(field (field "from_frac") (optional false)
+						(field (field "from_frac")
 							(e-binop @100.20-100.32 (op "*")
 								(e-ident @100.20-100.24 (raw "frac"))
 								(e-frac @100.27-100.31 (raw "10.0"))))
-						(field (field "list_from_num") (optional false)
+						(field (field "list_from_num")
 							(e-list @101.24-101.39
 								(e-ident @101.25-101.28 (raw "num"))
 								(e-ident @101.30-101.33 (raw "num"))
