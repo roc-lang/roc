@@ -156,6 +156,7 @@ pub fn pushDiagnostic(self: *Parser, tag: AST.Diagnostic.Tag, region: AST.Tokeni
 /// add a malformed token
 pub fn pushMalformed(self: *Parser, comptime t: type, tag: AST.Diagnostic.Tag, start: TokenIdx) t {
     const pos = self.pos;
+
     if (self.peek() != .EndOfFile) {
         self.advanceOne(); // TODO: find a better point to advance to
     }
@@ -1698,6 +1699,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) AST.Expr.Idx {
     defer trace.end();
 
     const start = self.pos;
+
     var expr: ?AST.Expr.Idx = null;
     const token = self.peek();
     switch (token) {
@@ -2189,6 +2191,7 @@ pub fn parseRecordField(self: *Parser) AST.RecordField.Idx {
     defer trace.end();
 
     const start = self.pos;
+
     self.expect(.LowerIdent) catch {
         return self.pushMalformed(AST.RecordField.Idx, .expected_expr_record_field_name, start);
     };
