@@ -1067,10 +1067,6 @@ Is there an `import` or `exposing` missing up-top?
    ^^^^^^^^^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
-Let us know if you want to help!
-
 **UNKNOWN OPERATOR**
 This looks like an operator, but it's not one I recognize!
 Check the spelling and make sure you're using a valid Roc operator.
@@ -1104,10 +1100,6 @@ The unused variable is declared here:
   ^^^^^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
-Let us know if you want to help!
-
 **UNUSED VARIABLE**
 Variable ``rest`` is not used anywhere in your code.
 
@@ -1121,7 +1113,7 @@ The unused variable is declared here:
 
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
+This feature is not yet implemented or doesn't have a proper error report yet: alternatives pattern outside match expression
 Let us know if you want to help!
 
 **UNUSED VARIABLE**
@@ -1137,7 +1129,7 @@ The unused variable is declared here:
 
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
+This feature is not yet implemented or doesn't have a proper error report yet: alternatives pattern outside match expression
 Let us know if you want to help!
 
 **UNUSED VARIABLE**
@@ -1153,31 +1145,43 @@ The unused variable is declared here:
 
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
+This feature is not yet implemented or doesn't have a proper error report yet: alternatives pattern outside match expression
 Let us know if you want to help!
 
 **NOT IMPLEMENTED**
 This feature is not yet implemented or doesn't have a proper error report yet: canonicalize local_dispatch expression
 Let us know if you want to help!
 
+**UNUSED VARIABLE**
+Variable ``rest`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_023.md:121:21:121:29:**
+```roc
+		{ foo: 1, bar: 2, ..rest } => 12->add(34)
+```
+                    ^^^^^^^^
+
+
+**UNUSED VARIABLE**
+Variable ``rest`` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_rest` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_023.md:127:4:128:10:**
+```roc
+			.. # After spread operator
+				rest, # After last field
+```
+
+
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
+This feature is not yet implemented or doesn't have a proper error report yet: alternatives pattern outside match expression
 Let us know if you want to help!
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
-Let us know if you want to help!
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
+This feature is not yet implemented or doesn't have a proper error report yet: alternatives pattern outside match expression
 Let us know if you want to help!
 
 **UNUSED VARIABLE**
@@ -2472,7 +2476,9 @@ expect {
 					(branches
 						(branch
 							(patterns
-								(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+								(p-applied-tag @85.3-85.7 (degenerate false))
+								(p-applied-tag @85.10-85.15 (degenerate false))
+								(p-applied-tag @85.18-85.21 (degenerate false)))
 							(value
 								(e-block @85.25-88.4
 									(s-let @86.4-86.10
@@ -2522,7 +2528,8 @@ expect {
 								(e-int @100.4-100.7 (value "100"))))
 						(branch
 							(patterns
-								(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+								(p-str @101.3-101.4 (text """) (degenerate false))
+								(p-str @101.11-101.12 (text """) (degenerate false)))
 							(value
 								(e-int @101.20-101.23 (value "200"))))
 						(branch
@@ -2565,7 +2572,8 @@ expect {
 								(e-int @117.11-117.14 (value "314"))))
 						(branch
 							(patterns
-								(p-runtime-error @1.1-1.1 (tag "not_implemented") (degenerate false)))
+								(p-small-dec @118.3-118.7 (degenerate false))
+								(p-small-dec @118.10-118.14 (degenerate false)))
 							(value
 								(e-int @118.18-118.21 (value "314"))))
 						(branch
@@ -2588,22 +2596,54 @@ expect {
 								(e-int @120.20-120.23 (value "123"))))
 						(branch
 							(patterns
-								(p-runtime-error @121.5-121.12 (tag "not_implemented") (degenerate false)))
+								(p-record-destructure @121.3-121.29 (degenerate false)
+									(destructs
+										(record-destruct @121.5-121.12 (label "foo") (ident "foo")
+											(sub-pattern
+												(p-int @121.10-121.11 (value "1"))))
+										(record-destruct @121.13-121.20 (label "bar") (ident "bar")
+											(sub-pattern
+												(p-int @121.18-121.19 (value "2"))))
+										(record-destruct @121.21-121.29 (label "rest") (ident "rest")
+											(required)))))
 							(value
 								(e-runtime-error (tag "not_implemented"))))
 						(branch
 							(patterns
-								(p-runtime-error @123.4-125.8 (tag "not_implemented") (degenerate false)))
+								(p-record-destructure @122.3-129.4 (degenerate false)
+									(destructs
+										(record-destruct @123.4-125.8 (label "foo") (ident "foo")
+											(sub-pattern
+												(p-int @125.6-125.7 (value "1"))))
+										(record-destruct @126.4-126.11 (label "bar") (ident "bar")
+											(sub-pattern
+												(p-int @126.9-126.10 (value "2"))))
+										(record-destruct @127.4-128.10 (label "rest") (ident "rest")
+											(required)))))
 							(value
 								(e-int @129.8-129.10 (value "12"))))
 						(branch
 							(patterns
-								(p-runtime-error @130.5-130.12 (tag "not_implemented") (degenerate false)))
+								(p-record-destructure @130.3-130.25 (degenerate false)
+									(destructs
+										(record-destruct @130.5-130.12 (label "foo") (ident "foo")
+											(sub-pattern
+												(p-int @130.10-130.11 (value "1"))))
+										(record-destruct @130.13-130.25 (label "bar") (ident "bar")
+											(sub-pattern
+												(p-runtime-error @1.1-1.1 (tag "not_implemented")))))))
 							(value
 								(e-int @130.29-130.31 (value "12"))))
 						(branch
 							(patterns
-								(p-runtime-error @132.4-132.11 (tag "not_implemented") (degenerate false)))
+								(p-record-destructure @131.3-134.4 (degenerate false)
+									(destructs
+										(record-destruct @132.4-132.11 (label "foo") (ident "foo")
+											(sub-pattern
+												(p-int @132.9-132.10 (value "1"))))
+										(record-destruct @133.4-133.15 (label "bar") (ident "bar")
+											(sub-pattern
+												(p-runtime-error @1.1-1.1 (tag "not_implemented")))))))
 							(value
 								(e-int @134.8-134.10 (value "12"))))
 						(branch

@@ -14,9 +14,7 @@ match data {
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - nested_patterns.md:1:7:1:11
-UNDEFINED VARIABLE - nested_patterns.md:2:53:2:54
 UNDEFINED VARIABLE - nested_patterns.md:2:57:2:65
-UNDEFINED VARIABLE - nested_patterns.md:2:66:2:70
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `data` in this scope.
@@ -29,21 +27,6 @@ match data {
       ^^^^
 
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
-Let us know if you want to help!
-
-**UNDEFINED VARIABLE**
-Nothing is named `x` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**nested_patterns.md:2:53:2:54:**
-```roc
-    Container({ items: [First(x), .. as rest] }) => x + List.len(rest)
-```
-                                                    ^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `len` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -54,21 +37,6 @@ Is there an `import` or `exposing` missing up-top?
 ```
                                                         ^^^^^^^^
 
-
-**UNDEFINED VARIABLE**
-Nothing is named `rest` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**nested_patterns.md:2:66:2:70:**
-```roc
-    Container({ items: [First(x), .. as rest] }) => x + List.len(rest)
-```
-                                                                 ^^^^
-
-
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: record pattern with sub-patterns
-Let us know if you want to help!
 
 # TOKENS
 ~~~zig
@@ -139,10 +107,12 @@ match data {
 					(p-applied-tag @2.5-2.49 (degenerate false)))
 				(value
 					(e-binop @2.53-3.14 (op "add")
-						(e-runtime-error (tag "ident_not_in_scope"))
+						(e-lookup-local @2.53-2.54
+							(pattern @2.31-2.32))
 						(e-call @2.57-2.71
 							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-runtime-error (tag "ident_not_in_scope"))))))
+							(e-lookup-local @2.66-2.70
+								(pattern @2.41-2.45))))))
 			(branch
 				(patterns
 					(p-applied-tag @3.5-3.29 (degenerate false)))

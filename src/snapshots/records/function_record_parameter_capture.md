@@ -8,45 +8,18 @@ type=expr
 |{ name, age, ..a } as person| { greeting: "Hello ${name}", full_record: person, is_adult: age >= 18 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - function_record_parameter_capture.md:1:53:1:57
-UNDEFINED VARIABLE - function_record_parameter_capture.md:1:74:1:80
-UNDEFINED VARIABLE - function_record_parameter_capture.md:1:92:1:95
+UNUSED VARIABLE - function_record_parameter_capture.md:1:15:1:20
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented or doesn't have a proper error report yet: canonicalize alternatives pattern
-Let us know if you want to help!
+**UNUSED VARIABLE**
+Variable ``a`` is not used anywhere in your code.
 
-**UNDEFINED VARIABLE**
-Nothing is named `name` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**function_record_parameter_capture.md:1:53:1:57:**
+If you don't need this variable, prefix it with an underscore like `_a` to suppress this warning.
+The unused variable is declared here:
+**function_record_parameter_capture.md:1:15:1:20:**
 ```roc
 |{ name, age, ..a } as person| { greeting: "Hello ${name}", full_record: person, is_adult: age >= 18 }
 ```
-                                                    ^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `person` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**function_record_parameter_capture.md:1:74:1:80:**
-```roc
-|{ name, age, ..a } as person| { greeting: "Hello ${name}", full_record: person, is_adult: age >= 18 }
-```
-                                                                         ^^^^^^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `age` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**function_record_parameter_capture.md:1:92:1:95:**
-```roc
-|{ name, age, ..a } as person| { greeting: "Hello ${name}", full_record: person, is_adult: age >= 18 }
-```
-                                                                                           ^^^
+              ^^^^^
 
 
 # TOKENS
@@ -83,22 +56,33 @@ OpBar(1:1-1:2),OpenCurly(1:2-1:3),LowerIdent(1:4-1:8),Comma(1:8-1:9),LowerIdent(
 ~~~clojure
 (e-lambda @1.1-1.103
 	(args
-		(p-runtime-error @1.1-1.1 (tag "not_implemented")))
+		(p-as @1.2-1.30 (as "person")
+			(p-record-destructure @1.2-1.20
+				(destructs
+					(record-destruct @1.4-1.9 (label "name") (ident "name")
+						(required))
+					(record-destruct @1.10-1.14 (label "age") (ident "age")
+						(required))
+					(record-destruct @1.15-1.20 (label "a") (ident "a")
+						(required))))))
 	(e-record @1.32-1.103
 		(fields
 			(field (name "greeting")
 				(e-string @1.44-1.59
 					(e-literal @1.45-1.51 (string "Hello "))
-					(e-runtime-error (tag "ident_not_in_scope"))
+					(e-lookup-local @1.53-1.57
+						(pattern @1.4-1.9))
 					(e-literal @1.58-1.58 (string ""))))
 			(field (name "full_record")
-				(e-runtime-error (tag "ident_not_in_scope")))
+				(e-lookup-local @1.74-1.80
+					(pattern @1.2-1.30)))
 			(field (name "is_adult")
 				(e-binop @1.92-1.103 (op "ge")
-					(e-runtime-error (tag "ident_not_in_scope"))
+					(e-lookup-local @1.92-1.95
+						(pattern @1.10-1.14))
 					(e-int @1.99-1.101 (value "18")))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr @1.1-1.103 (type "Error -> { greeting: Str, full_record: Error, is_adult: * }"))
+(expr @1.1-1.103 (type "* -> { greeting: Str, full_record: *, is_adult: * }"))
 ~~~
