@@ -597,7 +597,20 @@ combineResults = |result1, result2|
 		(exposes))
 	(s-import @5.1-5.38 (module "utils.Result") (qualifier "utils")
 		(exposes
-			(exposed (name "Result") (wildcard false)))))
+			(exposed (name "Result") (wildcard false))))
+	(ext-decl @8.24-8.44 (ident "http.Client.defaultResponse") (kind "value"))
+	(ext-decl @10.20-10.30 (ident "Json.Value") (kind "type"))
+	(ext-decl @11.21-11.31 (ident "json.Json.parse") (kind "value"))
+	(ext-decl @13.13-13.25 (ident "Http.Request") (kind "type"))
+	(ext-decl @13.36-13.49 (ident "Http.Response") (kind "type"))
+	(ext-decl @13.51-13.61 (ident "Json.Error") (kind "type"))
+	(ext-decl @15.14-15.25 (ident "json.Json.decode") (kind "value"))
+	(ext-decl @22.10-22.21 (ident "Json.Config") (kind "type"))
+	(ext-decl @23.10-23.28 (ident "json.Json.defaultConfig") (kind "value"))
+	(ext-decl @26.18-26.36 (ident "Json.Parser.Config") (kind "type"))
+	(ext-decl @26.52-26.62 (ident "Json.Value") (kind "type"))
+	(ext-decl @26.64-26.81 (ident "Json.Parser.Error") (kind "type"))
+	(ext-decl @27.40-27.61 (ident "json.Json.parseWith") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure

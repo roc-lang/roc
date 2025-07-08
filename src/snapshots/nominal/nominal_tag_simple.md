@@ -75,7 +75,7 @@ LowerIdent(9:1-9:7),OpAssign(9:8-9:9),UpperIdent(9:10-9:15),NoSpaceDotUpperIdent
 ~~~roc
 module [Color, blue]
 
-Color : [Red, Green, Blue]
+Color := [Red, Green, Blue]
 
 blue : Color
 blue = Blue

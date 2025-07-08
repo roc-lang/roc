@@ -57,7 +57,7 @@ LowerIdent(6:1-6:6),OpAssign(6:7-6:8),UpperIdent(6:9-6:17),NoSpaceDotUpperIdent(
 ~~~roc
 module [ConsList, empty]
 
-ConsList(a) : [Nil, Node(ConsList(a))]
+ConsList(a) := [Nil, Node(ConsList(a))]
 
 empty : ConsList(a)
 empty = Nil

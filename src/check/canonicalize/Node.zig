@@ -147,6 +147,7 @@ pub const Tag = enum {
     diag_if_then_not_canonicalized,
     diag_if_else_not_canonicalized,
     diag_malformed_type_annotation,
+    diag_malformed_where_clause,
     diag_var_across_function_boundary,
     diag_shadowing_warning,
     diag_type_redeclared,

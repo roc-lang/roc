@@ -216,7 +216,16 @@ parser = Json.create
 	(s-import @3.1-3.17 (module "json.Json") (qualifier "json")
 		(exposes))
 	(s-import @4.1-4.27 (module "http.Client") (qualifier "http") (alias "Http")
-		(exposes)))
+		(exposes))
+	(ext-decl @7.8-7.31 (ident "json.Json.method") (kind "value"))
+	(ext-decl @10.13-10.29 (ident "Json.InvalidType") (kind "type"))
+	(ext-decl @11.20-11.34 (ident "json.Json.stringify") (kind "value"))
+	(ext-decl @14.18-14.37 (ident "Http.Server.Request") (kind "type"))
+	(ext-decl @14.41-14.61 (ident "Http.Server.Response") (kind "type"))
+	(ext-decl @15.24-15.51 (ident "http.Client.defaultResponse") (kind "value"))
+	(ext-decl @18.10-18.20 (ident "json.Json.prase") (kind "value"))
+	(ext-decl @24.10-24.28 (ident "http.Client.invalidMethod") (kind "value"))
+	(ext-decl @27.10-27.49 (ident "json.Json.create") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure

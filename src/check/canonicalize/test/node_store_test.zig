@@ -476,6 +476,12 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(CIR.Diagnostic{
+        .malformed_where_clause = .{
+            .region = from_raw_offsets(430, 440),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
         .unused_variable = .{
             .ident = @bitCast(@as(u32, 1819)),
             .region = from_raw_offsets(430, 440),

@@ -97,7 +97,7 @@ pub fn deinit(store: *NodeStore) void {
 /// when adding/removing variants from CIR unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the CIR
-pub const CIR_DIAGNOSTIC_NODE_COUNT = 33;
+pub const CIR_DIAGNOSTIC_NODE_COUNT = 34;
 /// Count of the expression nodes in the CIR
 pub const CIR_EXPR_NODE_COUNT = 25;
 /// Count of the statement nodes in the CIR
@@ -677,7 +677,7 @@ pub fn matchBranchSlice(store: *const NodeStore, span: CIR.Expr.Match.Branch.Spa
 }
 
 /// Retrieves a 'where' clause from the store.
-pub fn getWhereClause(store: *NodeStore, whereClause: CIR.WhereClause.Idx) CIR.WhereClause {
+pub fn getWhereClause(store: *const NodeStore, whereClause: CIR.WhereClause.Idx) CIR.WhereClause {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(whereClause));
     const node = store.nodes.get(node_idx);
 
@@ -690,56 +690,52 @@ pub fn getWhereClause(store: *NodeStore, whereClause: CIR.WhereClause.Idx) CIR.W
     const discriminant = extra_data[0];
 
     switch (discriminant) {
-        0 => { // alias
-            const var_tok = @as(Ident.Idx, @bitCast(extra_data[1]));
-            const alias_tok = @as(Ident.Idx, @bitCast(extra_data[2]));
-            const region_start = extra_data[3];
-            const region_end = extra_data[4];
-
-            return CIR.WhereClause{
-                .alias = .{
-                    .var_tok = var_tok,
-                    .alias_tok = alias_tok,
-                    .region = Region{ .start = region_start, .end = region_end },
-                },
-            };
-        },
-        1 => { // method
-            const var_tok = @as(Ident.Idx, @bitCast(extra_data[1]));
-            const name_tok = @as(Ident.Idx, @bitCast(extra_data[2]));
+        0 => { // mod_method
+            const var_name = @as(Ident.Idx, @bitCast(extra_data[1]));
+            const method_name = @as(Ident.Idx, @bitCast(extra_data[2]));
             const args_start = extra_data[3];
             const args_len = extra_data[4];
             const ret_anno = @as(CIR.TypeAnno.Idx, @enumFromInt(extra_data[5]));
-            const region_start = extra_data[6];
-            const region_end = extra_data[7];
-
-            return CIR.WhereClause{
-                .method = .{
-                    .var_tok = var_tok,
-                    .name_tok = name_tok,
-                    .args = .{ .span = .{ .start = args_start, .len = args_len } },
-                    .ret_anno = ret_anno,
-                    .region = Region{ .start = region_start, .end = region_end },
-                },
-            };
-        },
-        2 => { // mod_method
-            const var_tok = @as(Ident.Idx, @bitCast(extra_data[1]));
-            const name_tok = @as(Ident.Idx, @bitCast(extra_data[2]));
-            const args_start = extra_data[3];
-            const args_len = extra_data[4];
-            const ret_anno_start = extra_data[5];
-            const ret_anno_len = extra_data[6];
+            const external_decl = @as(CIR.ExternalDecl.Idx, @enumFromInt(extra_data[6]));
             const region_start = extra_data[7];
             const region_end = extra_data[8];
 
             return CIR.WhereClause{
                 .mod_method = .{
-                    .var_tok = var_tok,
-                    .name_tok = name_tok,
+                    .var_name = var_name,
+                    .method_name = method_name,
                     .args = .{ .span = .{ .start = args_start, .len = args_len } },
-                    .ret_anno = .{ .span = .{ .start = ret_anno_start, .len = ret_anno_len } },
-                    .region = Region{ .start = region_start, .end = region_end },
+                    .ret_anno = ret_anno,
+                    .external_decl = external_decl,
+                    .region = Region{ .start = Region.Position{ .offset = region_start }, .end = Region.Position{ .offset = region_end } },
+                },
+            };
+        },
+        1 => { // mod_alias
+            const var_name = @as(Ident.Idx, @bitCast(extra_data[1]));
+            const alias_name = @as(Ident.Idx, @bitCast(extra_data[2]));
+            const external_decl = @as(CIR.ExternalDecl.Idx, @enumFromInt(extra_data[3]));
+            const region_start = extra_data[4];
+            const region_end = extra_data[5];
+
+            return CIR.WhereClause{
+                .mod_alias = .{
+                    .var_name = var_name,
+                    .alias_name = alias_name,
+                    .external_decl = external_decl,
+                    .region = Region{ .start = Region.Position{ .offset = region_start }, .end = Region.Position{ .offset = region_end } },
+                },
+            };
+        },
+        2 => { // malformed
+            const diagnostic = @as(CIR.Diagnostic.Idx, @enumFromInt(extra_data[1]));
+            const region_start = extra_data[2];
+            const region_end = extra_data[3];
+
+            return CIR.WhereClause{
+                .malformed = .{
+                    .diagnostic = diagnostic,
+                    .region = Region{ .start = Region.Position{ .offset = region_start }, .end = Region.Position{ .offset = region_end } },
                 },
             };
         },
@@ -1562,43 +1558,40 @@ pub fn addWhereClause(store: *NodeStore, whereClause: CIR.WhereClause) CIR.Where
     const extra_data_start = @as(u32, @intCast(store.extra_data.items.len));
 
     switch (whereClause) {
-        .alias => |alias| {
-            // Store discriminant (0 for alias)
-            store.extra_data.append(store.gpa, 0) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @bitCast(alias.var_tok)) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @bitCast(alias.alias_tok)) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, alias.region.start) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, alias.region.end) catch |err| exitOnOom(err);
-        },
-        .method => |method| {
-            // Store discriminant (1 for method)
-            store.extra_data.append(store.gpa, 1) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @bitCast(method.var_tok)) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @bitCast(method.name_tok)) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, method.args.span.start) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, method.args.span.len) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @intFromEnum(method.ret_anno)) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, method.region.start) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, method.region.end) catch |err| exitOnOom(err);
-        },
         .mod_method => |mod_method| {
-            // Store discriminant (2 for mod_method)
-            store.extra_data.append(store.gpa, 2) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @bitCast(mod_method.var_tok)) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, @bitCast(mod_method.name_tok)) catch |err| exitOnOom(err);
+            // Store discriminant (0 for mod_method)
+            store.extra_data.append(store.gpa, 0) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @bitCast(mod_method.var_name)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @bitCast(mod_method.method_name)) catch |err| exitOnOom(err);
             store.extra_data.append(store.gpa, mod_method.args.span.start) catch |err| exitOnOom(err);
             store.extra_data.append(store.gpa, mod_method.args.span.len) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, mod_method.ret_anno.span.start) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, mod_method.ret_anno.span.len) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, mod_method.region.start) catch |err| exitOnOom(err);
-            store.extra_data.append(store.gpa, mod_method.region.end) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @intFromEnum(mod_method.ret_anno)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @intFromEnum(mod_method.external_decl)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, mod_method.region.start.offset) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, mod_method.region.end.offset) catch |err| exitOnOom(err);
+        },
+        .mod_alias => |mod_alias| {
+            // Store discriminant (1 for mod_alias)
+            store.extra_data.append(store.gpa, 1) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @bitCast(mod_alias.var_name)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @bitCast(mod_alias.alias_name)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @intFromEnum(mod_alias.external_decl)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, mod_alias.region.start.offset) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, mod_alias.region.end.offset) catch |err| exitOnOom(err);
+        },
+        .malformed => |malformed| {
+            // Store discriminant (2 for malformed)
+            store.extra_data.append(store.gpa, 2) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, @intFromEnum(malformed.diagnostic)) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, malformed.region.start.offset) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, malformed.region.end.offset) catch |err| exitOnOom(err);
         },
     }
 
     node.data_1 = extra_data_start;
 
     const nid = store.nodes.append(store.gpa, node);
-    _ = store.regions.append(store.gpa, base.Region.empty());
+    _ = store.regions.append(store.gpa, base.Region.zero());
     return @enumFromInt(@intFromEnum(nid));
 }
 
@@ -2062,14 +2055,29 @@ pub fn addScratchTypeAnno(store: *NodeStore, idx: CIR.TypeAnno.Idx) void {
     store.addScratch("scratch_type_annos", idx);
 }
 
+/// Adds a where clause to the scratch buffer.
+pub fn addScratchWhereClause(store: *NodeStore, idx: CIR.WhereClause.Idx) void {
+    store.addScratch("scratch_where_clauses", idx);
+}
+
 /// Returns the current top of the scratch type annotations buffer.
 pub fn scratchTypeAnnoTop(store: *NodeStore) u32 {
     return store.scratchTop("scratch_type_annos");
 }
 
+/// Returns the current top of the scratch where clauses buffer.
+pub fn scratchWhereClauseTop(store: *NodeStore) u32 {
+    return store.scratchTop("scratch_where_clauses");
+}
+
 /// Clears scratch type annotations from the given index.
 pub fn clearScratchTypeAnnosFrom(store: *NodeStore, from: u32) void {
     store.clearScratchFrom("scratch_type_annos", from);
+}
+
+/// Clears scratch where clauses from the given index.
+pub fn clearScratchWhereClausesFrom(store: *NodeStore, from: u32) void {
+    store.clearScratchFrom("scratch_where_clauses", from);
 }
 
 /// Creates a span from the scratch type annotations starting at the given index.
@@ -2085,6 +2093,11 @@ pub fn annoRecordFieldSpanFrom(store: *NodeStore, start: u32) CIR.TypeAnno.Recor
 /// Returns a span from the scratch record fields starting at the given index.
 pub fn recordFieldSpanFrom(store: *NodeStore, start: u32) CIR.RecordField.Span {
     return store.spanFrom("scratch_record_fields", CIR.RecordField.Span, start);
+}
+
+/// Returns a span from the scratch where clauses starting at the given index.
+pub fn whereClauseSpanFrom(store: *NodeStore, start: u32) CIR.WhereClause.Span {
+    return store.spanFrom("scratch_where_clauses", CIR.WhereClause.Span, start);
 }
 
 /// Returns the current top of the scratch exposed items buffer.
@@ -2390,6 +2403,10 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) CIR.Diagnostic.I
             node.tag = .diag_malformed_type_annotation;
             region = r.region;
         },
+        .malformed_where_clause => |r| {
+            node.tag = .diag_malformed_where_clause;
+            region = r.region;
+        },
         .var_across_function_boundary => |r| {
             node.tag = .diag_var_across_function_boundary;
             region = r.region;
@@ -2609,6 +2626,9 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = store.getRegionAt(node_idx),
         } },
         .diag_malformed_type_annotation => return CIR.Diagnostic{ .malformed_type_annotation = .{
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_malformed_where_clause => return CIR.Diagnostic{ .malformed_where_clause = .{
             .region = store.getRegionAt(node_idx),
         } },
         .diag_type_alias_redeclared => return CIR.Diagnostic{ .type_alias_redeclared = .{

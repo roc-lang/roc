@@ -45,7 +45,7 @@ LowerIdent(5:1-5:5),OpAssign(5:6-5:7),UpperIdent(5:8-5:13),NoSpaceDotUpperIdent(
 ~~~roc
 module [Color]
 
-Color : [Red, Blue]
+Color := [Red, Blue]
 
 test = Red
 ~~~

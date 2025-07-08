@@ -13,7 +13,7 @@ decodeThings # After member name
 	: # After colon
 		List(List(U8)) -> List(a) # After anno
 			where # after where
-				a.Decode,
+				module(a).Decode,
 ~~~
 # EXPECTED
 NIL
@@ -29,11 +29,11 @@ LowerIdent(5:1-5:13),Newline(5:15-5:33),
 OpColon(6:2-6:3),Newline(6:5-6:17),
 UpperIdent(7:3-7:7),NoSpaceOpenRound(7:7-7:8),UpperIdent(7:8-7:12),NoSpaceOpenRound(7:12-7:13),UpperIdent(7:13-7:15),CloseRound(7:15-7:16),CloseRound(7:16-7:17),OpArrow(7:18-7:20),UpperIdent(7:21-7:25),NoSpaceOpenRound(7:25-7:26),LowerIdent(7:26-7:27),CloseRound(7:27-7:28),Newline(7:30-7:41),
 KwWhere(8:4-8:9),Newline(8:11-8:23),
-LowerIdent(9:5-9:6),NoSpaceDotUpperIdent(9:6-9:13),Comma(9:13-9:14),EndOfFile(9:14-9:14),
+KwModule(9:5-9:11),NoSpaceOpenRound(9:11-9:12),LowerIdent(9:12-9:13),CloseRound(9:13-9:14),NoSpaceDotUpperIdent(9:14-9:21),Comma(9:21-9:22),EndOfFile(9:22-9:22),
 ~~~
 # PARSE
 ~~~clojure
-(file @1.1-9.14
+(file @1.1-9.22
 	(module @1.1-1.16
 		(exposes @1.8-1.16
 			(exposed-lower-ident (text "decode"))))
@@ -41,7 +41,7 @@ LowerIdent(9:5-9:6),NoSpaceDotUpperIdent(9:6-9:13),Comma(9:13-9:14),EndOfFile(9:
 		(s-import @3.1-3.32 (raw "Decode")
 			(exposing
 				(exposed-upper-ident (text "Decode"))))
-		(s-type-anno @5.1-9.14 (name "decodeThings")
+		(s-type-anno @5.1-9.22 (name "decodeThings")
 			(ty-fn @7.3-7.28
 				(ty-apply @7.3-7.17
 					(ty @7.3-7.7 (name "List"))
@@ -50,18 +50,38 @@ LowerIdent(9:5-9:6),NoSpaceDotUpperIdent(9:6-9:13),Comma(9:13-9:14),EndOfFile(9:
 						(ty @7.13-7.15 (name "U8"))))
 				(ty-apply @7.21-7.28
 					(ty @7.21-7.25 (name "List"))
-					(ty-var @7.26-7.27 (raw "a")))))))
+					(ty-var @7.26-7.27 (raw "a"))))
+			(where
+				(alias @9.5-9.22 (module-of "a") (name "Decode"))))))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+module [decode]
+
+import Decode exposing [Decode]
+
+decodeThings # After member name
+	: # After colon
+		List(List(U8)) -> List(a) # After anno
+ where # after where
+			module(a).Decode,
 ~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
 	(s-import @3.1-3.32 (module "Decode")
 		(exposes
-			(exposed (name "Decode") (wildcard false)))))
+			(exposed (name "Decode") (wildcard false))))
+	(s-type-anno @5.1-9.22 (name "decodeThings")
+		(ty-fn @7.3-7.28 (effectful false)
+			(ty-apply @7.3-7.17 (symbol "List")
+				(ty-apply @7.8-7.16 (symbol "List")
+					(ty @7.13-7.15 (name "U8"))))
+			(ty-apply @7.21-7.28 (symbol "List")
+				(ty-var @7.26-7.27 (name "a"))))
+		(where
+			(alias @9.5-9.22 (module-of "a") (ident "Decode"))))
+	(ext-decl @9.5-9.22 (ident "module(a).Decode") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure
