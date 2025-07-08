@@ -1016,7 +1016,15 @@ combineResults = |jsonResult, httpStatus|
 			(exposed (name "Status") (wildcard false))))
 	(s-import @5.1-5.38 (module "utils.Result") (qualifier "utils")
 		(exposes
-			(exposed (name "Result") (wildcard false)))))
+			(exposed (name "Result") (wildcard false))))
+	(ext-decl @9.21-9.31 (ident "json.Json.parse") (kind "value"))
+	(ext-decl @14.14-14.25 (ident "json.Json.decode") (kind "value"))
+	(ext-decl @16.22-16.29 (ident "http.Client.ok") (kind "value"))
+	(ext-decl @17.23-17.38 (ident "http.Client.badRequest") (kind "value"))
+	(ext-decl @26.13-26.30 (ident "json.Json.validateWith") (kind "value"))
+	(ext-decl @37.26-37.37 (ident "Http.Client") (kind "type"))
+	(ext-decl @38.25-38.40 (ident "http.Client.clientWith") (kind "value"))
+	(ext-decl @44.23-44.42 (ident "http.Client.statusToString") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure

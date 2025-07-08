@@ -117,7 +117,7 @@ CloseCurly(16:1-16:2),EndOfFile(16:2-16:2),
 ~~~roc
 module [LocalStatus, processColor]
 
-LocalStatus : [Pending, Complete]
+LocalStatus := [Pending, Complete]
 
 processColor : _ -> LocalStatus
 processColor = |color| {

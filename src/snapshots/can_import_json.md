@@ -45,7 +45,8 @@ NO CHANGE
 		(p-assign @5.1-5.5 (ident "main"))
 		(e-lookup-external @5.8-5.17 (module-idx 0) (field "utf8") (target-node-idx 0)))
 	(s-import @3.1-3.17 (module "json.Json") (qualifier "json")
-		(exposes)))
+		(exposes))
+	(ext-decl @5.8-5.17 (ident "json.Json.utf8") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure

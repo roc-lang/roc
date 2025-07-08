@@ -192,14 +192,11 @@ pub const Tag = enum {
 
     /// DESCRIPTION
     /// Example: EXAMPLE
-    /// * lhs - LHS DESCRIPTION
-    /// * rhs - RHS DESCRIPTION
-    where_alias,
     /// DESCRIPTION
     /// Example: EXAMPLE
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
-    where_method,
+    where_mod_alias,
     /// DESCRIPTION
     /// Example: EXAMPLE
     /// * lhs - LHS DESCRIPTION
@@ -241,6 +238,11 @@ pub const Tag = enum {
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
     string_patt,
+    /// DESCRIPTION
+    /// Example: EXAMPLE
+    /// * lhs - LHS DESCRIPTION
+    /// * rhs - RHS DESCRIPTION
+    single_quote_patt,
     /// DESCRIPTION
     /// Example: EXAMPLE
     /// * lhs - LHS DESCRIPTION

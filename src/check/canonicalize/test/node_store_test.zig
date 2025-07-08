@@ -481,6 +481,12 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(CIR.Diagnostic{
+        .malformed_where_clause = .{
+            .region = from_raw_offsets(430, 440),
+        },
+    });
+
+    try diagnostics.append(CIR.Diagnostic{
         .unused_variable = .{
             .ident = @bitCast(@as(u32, 1819)),
             .region = from_raw_offsets(430, 440),
@@ -838,17 +844,7 @@ test "NodeStore round trip - Pattern" {
             .literal = @enumFromInt(1901),
         },
     });
-    try patterns.append(CIR.Pattern{
-        .char_literal = .{
-            .num_var = @enumFromInt(2012),
-            .requirements = types.Num.Int.Requirements{
-                .sign_needed = false,
-                .bits_needed = .@"7",
-            },
-            .value = 65, // 'A'
 
-        },
-    });
     try patterns.append(CIR.Pattern{ .underscore = {} });
     try patterns.append(CIR.Pattern{
         .runtime_error = .{
@@ -868,9 +864,8 @@ test "NodeStore round trip - Pattern" {
         from_raw_offsets(150, 160), // small_dec_literal
         from_raw_offsets(170, 180), // dec_literal
         from_raw_offsets(210, 220), // str_literal
-        from_raw_offsets(230, 240), // char_literal
-        from_raw_offsets(250, 260), // underscore
-        from_raw_offsets(270, 280), // runtime_error
+        from_raw_offsets(230, 240), // underscore
+        from_raw_offsets(250, 260), // runtime_error
     };
 
     for (patterns.items, regions) |pattern, region| {

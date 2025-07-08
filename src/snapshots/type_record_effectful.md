@@ -127,7 +127,8 @@ main! = |_| {}
 				(p-underscore @10.10-10.11))
 			(e-empty_record @10.13-10.15)))
 	(s-import @3.1-3.17 (module "pf.Stdout") (qualifier "pf")
-		(exposes)))
+		(exposes))
+	(ext-decl @7.5-7.17 (ident "pf.Stdout.line!") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure

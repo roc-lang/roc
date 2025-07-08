@@ -240,6 +240,7 @@ pub fn diagnosticToReport(self: *CIR, diagnostic: Diagnostic, allocator: std.mem
         .if_else_not_canonicalized => Diagnostic.buildIfElseNotCanonicalizedReport(allocator),
         .var_across_function_boundary => Diagnostic.buildVarAcrossFunctionBoundaryReport(allocator),
         .malformed_type_annotation => Diagnostic.buildMalformedTypeAnnotationReport(allocator),
+        .malformed_where_clause => Diagnostic.buildMalformedWhereClauseReport(allocator),
         .shadowing_warning => |data| blk: {
             const ident_name = self.env.idents.getText(data.ident);
             const new_region_info = self.calcRegionInfo(data.region);
@@ -604,31 +605,90 @@ pub const RecordField = struct {
     }
 };
 
-/// TODO: implement WhereClause
+/// Canonical representation of where clauses in Roc.
+///
+/// Where clauses specify constraints on type variables, typically requiring that
+/// a type comes from a module that provides specific methods or satisfies certain
+/// type aliases.
 pub const WhereClause = union(enum) {
-    alias: WhereClause.Alias,
-    method: Method,
+    /// Module method constraint: `module(a).method : Args -> RetType`
+    ///
+    /// Specifies that type variable `a` must come from a module that provides
+    /// a method with the given signature.
     mod_method: ModuleMethod,
 
-    pub const Alias = struct {
-        var_tok: Ident.Idx,
-        alias_tok: Ident.Idx,
+    /// Module alias constraint: `module(a).AliasName`
+    ///
+    /// Specifies that type variable `a` must satisfy the constraints defined
+    /// by the given type alias.
+    mod_alias: ModuleAlias,
+
+    /// Malformed where clause that couldn't be canonicalized correctly.
+    ///
+    /// Contains diagnostic information about what went wrong.
+    malformed: struct {
+        diagnostic: Diagnostic.Idx,
         region: Region,
-    };
-    pub const Method = struct {
-        var_tok: Ident.Idx,
-        name_tok: Ident.Idx,
-        args: TypeAnno.Span,
-        ret_anno: TypeAnno.Idx,
-        region: Region,
-    };
+    },
+
     pub const ModuleMethod = struct {
-        var_tok: Ident.Idx,
-        name_tok: Ident.Idx,
-        args: TypeAnno.Span,
-        ret_anno: TypeAnno.Span,
+        var_name: Ident.Idx, // Type variable identifier (e.g., "a")
+        method_name: Ident.Idx, // Method name without leading dot (e.g., "decode")
+        args: TypeAnno.Span, // Method argument types
+        ret_anno: TypeAnno.Idx, // Method return type
+        external_decl: ExternalDecl.Idx, // External declaration for module lookup
         region: Region,
     };
+
+    pub const ModuleAlias = struct {
+        var_name: Ident.Idx, // Type variable identifier (e.g., "elem")
+        alias_name: Ident.Idx, // Alias name without leading dot (e.g., "Sort")
+        external_decl: ExternalDecl.Idx, // External declaration for module lookup
+        region: Region,
+    };
+
+    pub fn toSExpr(self: *const @This(), ir: *const CIR) SExpr {
+        const gpa = ir.env.gpa;
+        switch (self.*) {
+            .mod_method => |mm| {
+                var node = SExpr.init(gpa, "method");
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, mm.region);
+
+                node.appendStringAttr(gpa, "module-of", ir.getIdentText(mm.var_name));
+                node.appendStringAttr(gpa, "ident", ir.getIdentText(mm.method_name));
+
+                // Add argument types
+                const args_slice = ir.store.sliceTypeAnnos(mm.args);
+                var args_node = SExpr.init(gpa, "args");
+                for (args_slice) |arg_idx| {
+                    const arg = ir.store.getTypeAnno(arg_idx);
+                    var arg_child = arg.toSExpr(ir);
+                    args_node.appendNode(gpa, &arg_child);
+                }
+                node.appendNode(gpa, &args_node);
+
+                // Add return type
+                var ret_node = ir.store.getTypeAnno(mm.ret_anno).toSExpr(ir);
+                node.appendNode(gpa, &ret_node);
+
+                return node;
+            },
+            .mod_alias => |ma| {
+                var node = SExpr.init(gpa, "alias");
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, ma.region);
+
+                node.appendStringAttr(gpa, "module-of", ir.getIdentText(ma.var_name));
+                node.appendStringAttr(gpa, "ident", ir.getIdentText(ma.alias_name));
+
+                return node;
+            },
+            .malformed => |m| {
+                var node = SExpr.init(gpa, "malformed");
+                ir.appendRegionInfoToSexprNodeFromRegion(&node, m.region);
+                return node;
+            },
+        }
+    }
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: DataSpan };
@@ -1107,7 +1167,7 @@ pub fn toSExpr(ir: *CIR, maybe_expr_idx: ?Expr.Idx, source: []const u8) SExpr {
         const defs_slice = ir.store.sliceDefs(ir.all_defs);
         const statements_slice = ir.store.sliceStatements(ir.all_statements);
 
-        if (defs_slice.len == 0 and statements_slice.len == 0) {
+        if (defs_slice.len == 0 and statements_slice.len == 0 and ir.external_decls.items.len == 0) {
             root_node.appendBoolAttr(gpa, "empty", true);
         }
 
@@ -1119,6 +1179,11 @@ pub fn toSExpr(ir: *CIR, maybe_expr_idx: ?Expr.Idx, source: []const u8) SExpr {
         for (statements_slice) |stmt_idx| {
             var stmt_node = ir.store.getStatement(stmt_idx).toSExpr(ir);
             root_node.appendNode(gpa, &stmt_node);
+        }
+
+        for (ir.external_decls.items) |*external_decl| {
+            var external_node = external_decl.toSExpr(ir);
+            root_node.appendNode(gpa, &external_node);
         }
 
         return root_node;

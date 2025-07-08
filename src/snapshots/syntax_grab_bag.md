@@ -2113,9 +2113,9 @@ expect {
 							(patterns
 								(p-list @102.3-102.24 (degenerate false)
 									(patterns
-										(p-int @102.4-102.5)
-										(p-int @102.7-102.8)
-										(p-int @102.10-102.11))
+										(p-int @102.4-102.5 (value "1"))
+										(p-int @102.7-102.8 (value "2"))
+										(p-int @102.10-102.11 (value "3")))
 									(rest-at (index 3)
 										(p-assign @102.19-102.23 (ident "rest")))))
 							(value
@@ -2124,9 +2124,9 @@ expect {
 							(patterns
 								(p-list @108.3-108.28 (degenerate false)
 									(patterns
-										(p-int @108.4-108.5)
+										(p-int @108.4-108.5 (value "1"))
 										(p-runtime-error @1.1-1.1 (tag "not_implemented"))
-										(p-int @108.14-108.15))
+										(p-int @108.14-108.15 (value "3")))
 									(rest-at (index 3)
 										(p-assign @108.23-108.27 (ident "rest")))))
 							(value
@@ -2135,9 +2135,9 @@ expect {
 							(patterns
 								(p-list @109.3-116.4 (degenerate false)
 									(patterns
-										(p-int @110.4-110.5)
+										(p-int @110.4-110.5 (value "1"))
 										(p-runtime-error @1.1-1.1 (tag "not_implemented"))
-										(p-int @112.4-112.5))
+										(p-int @112.4-112.5 (value "3")))
 									(rest-at (index 3)
 										(p-assign @115.6-115.10 (ident "rest")))))
 							(value
@@ -2156,18 +2156,18 @@ expect {
 							(patterns
 								(p-tuple @119.3-119.12 (degenerate false)
 									(patterns
-										(p-int @119.4-119.5)
-										(p-int @119.7-119.8)
-										(p-int @119.10-119.11))))
+										(p-int @119.4-119.5 (value "1"))
+										(p-int @119.7-119.8 (value "2"))
+										(p-int @119.10-119.11 (value "3")))))
 							(value
 								(e-int @119.16-119.19 (value "123"))))
 						(branch
 							(patterns
 								(p-tuple @120.3-120.16 (degenerate false)
 									(patterns
-										(p-int @120.4-120.5)
+										(p-int @120.4-120.5 (value "1"))
 										(p-runtime-error @1.1-1.1 (tag "not_implemented"))
-										(p-int @120.14-120.15))))
+										(p-int @120.14-120.15 (value "3")))))
 							(value
 								(e-int @120.20-120.23 (value "123"))))
 						(branch
@@ -2493,7 +2493,8 @@ expect {
 	(s-import @16.1-16.27 (module "BadName") (alias "GoodName")
 		(exposes))
 	(s-import @17.1-20.20 (module "BadNameMultiline") (alias "GoodNameMultiline")
-		(exposes)))
+		(exposes))
+	(ext-decl @191.2-191.14 (ident "pf.Stdout.line!") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure

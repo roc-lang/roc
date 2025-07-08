@@ -94,7 +94,8 @@ NO CHANGE
 			(e-string @9.20-9.35
 				(e-literal @9.21-9.34 (string "Hello, world!")))))
 	(s-import @3.1-3.17 (module "pf.Stdout") (qualifier "pf")
-		(exposes)))
+		(exposes))
+	(ext-decl @7.20-7.32 (ident "pf.Stdout.line!") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure

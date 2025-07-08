@@ -745,7 +745,14 @@ err->TypeC.default
 	(s-import @10.1-10.15 (module "ModuleA")
 		(exposes))
 	(s-import @11.1-11.32 (module "ExternalModule") (alias "ExtMod")
-		(exposes)))
+		(exposes))
+	(ext-decl @14.19-14.28 (ident "Color.RGB") (kind "type"))
+	(ext-decl @18.20-18.35 (ident "ExtMod.DataType") (kind "type"))
+	(ext-decl @22.23-22.44 (ident "ModuleA.ModuleB.TypeC") (kind "type"))
+	(ext-decl @26.14-26.27 (ident "Result.Result") (kind "type"))
+	(ext-decl @30.18-30.27 (ident "Color.RGB") (kind "type"))
+	(ext-decl @34.16-34.25 (ident "Color.RGB") (kind "type"))
+	(ext-decl @39.13-39.26 (ident "Result.Result") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure

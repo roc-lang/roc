@@ -226,7 +226,15 @@ main = {
 			(exposed (name "get") (wildcard false))
 			(exposed (name "post") (wildcard false))))
 	(s-import @5.1-5.27 (module "utils.String") (qualifier "utils") (alias "Str")
-		(exposes)))
+		(exposes))
+	(ext-decl @8.14-8.22 (ident "http.Client.get") (kind "value"))
+	(ext-decl @9.14-9.23 (ident "json.Json.utf8") (kind "value"))
+	(ext-decl @10.14-10.22 (ident "utils.String.trim") (kind "value"))
+	(ext-decl @13.15-13.25 (ident "json.Json.parse") (kind "value"))
+	(ext-decl @16.15-16.24 (ident "http.Client.post") (kind "value"))
+	(ext-decl @19.15-19.18 (ident "http.Client.get") (kind "value"))
+	(ext-decl @20.15-20.19 (ident "http.Client.post") (kind "value"))
+	(ext-decl @23.16-23.26 (ident "utils.String.concat") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure

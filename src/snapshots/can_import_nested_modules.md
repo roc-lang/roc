@@ -486,7 +486,14 @@ validateAuth = |creds| HttpAuth.validate(creds)
 	(s-import @3.1-3.19 (module "json.Parser") (qualifier "json")
 		(exposes))
 	(s-import @4.1-4.19 (module "http.Client") (qualifier "http")
-		(exposes)))
+		(exposes))
+	(ext-decl @8.15-8.30 (ident "Config.Settings") (kind "type"))
+	(ext-decl @12.28-12.42 (ident "HttpAuth.Token") (kind "type"))
+	(ext-decl @16.15-16.37 (ident "Config.Parser.Advanced") (kind "type"))
+	(ext-decl @16.58-16.77 (ident "Config.Parser.Error") (kind "type"))
+	(ext-decl @25.16-25.36 (ident "HttpAuth.Credentials") (kind "type"))
+	(ext-decl @25.47-25.61 (ident "HttpAuth.Token") (kind "type"))
+	(ext-decl @25.63-25.77 (ident "HttpAuth.Error") (kind "type")))
 ~~~
 # TYPES
 ~~~clojure

@@ -138,7 +138,8 @@ NO CHANGE
 				(pattern @12.1-12.9))
 			(e-int @14.18-14.20 (value "42"))))
 	(s-import @3.1-3.17 (module "pf.Stdout") (qualifier "pf")
-		(exposes)))
+		(exposes))
+	(ext-decl @9.21-9.33 (ident "pf.Stdout.line!") (kind "value")))
 ~~~
 # TYPES
 ~~~clojure

@@ -438,6 +438,19 @@ pub fn canonicalizeFile(
                 // The number of args for the alias/nominal type
                 const num_args = @as(u32, @intCast(arg_anno_slice.len));
 
+                // Canonicalize where clauses if present
+                const where_clauses = if (type_decl.where) |where_coll| blk: {
+                    const where_slice = self.parse_ir.store.whereClauseSlice(.{ .span = self.parse_ir.store.getCollection(where_coll).span });
+                    const where_start = self.can_ir.store.scratchWhereClauseTop();
+
+                    for (where_slice) |where_idx| {
+                        const canonicalized_where = self.canonicalizeWhereClause(where_idx);
+                        self.can_ir.store.addScratchWhereClause(canonicalized_where);
+                    }
+
+                    break :blk self.can_ir.store.whereClauseSpanFrom(where_start);
+                } else null;
+
                 // Create the real CIR type declaration statement with the canonicalized annotation
                 const real_cir_type_decl, const type_decl_content = blk: {
                     switch (type_decl.kind) {
@@ -448,7 +461,7 @@ pub fn canonicalizeFile(
                                         .header = header_idx,
                                         .anno = anno_idx,
                                         .anno_var = anno_var,
-                                        .where = null, // TODO: implement where clauses
+                                        .where = where_clauses,
                                         .region = region,
                                     },
                                 },
@@ -465,7 +478,7 @@ pub fn canonicalizeFile(
                                         .header = header_idx,
                                         .anno_var = anno_var,
                                         .anno = anno_idx,
-                                        .where = null, // TODO: implement where clauses
+                                        .where = where_clauses,
                                         .region = region,
                                     },
                                 },
@@ -519,6 +532,7 @@ pub fn canonicalizeFile(
         name: base.Ident.Idx,
         anno_idx: CIR.TypeAnno.Idx,
         type_vars: base.DataSpan,
+        where_clauses: ?CIR.WhereClause.Span,
     } = null;
 
     for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
@@ -666,11 +680,39 @@ pub fn canonicalizeFile(
                 // Now canonicalize the annotation with type variables in scope
                 const type_anno_idx = self.canonicalizeTypeAnno(ta.anno);
 
+                // Canonicalize where clauses if present
+                const where_clauses = if (ta.where) |where_coll| blk: {
+                    const where_slice = self.parse_ir.store.whereClauseSlice(.{ .span = self.parse_ir.store.getCollection(where_coll).span });
+                    const where_start = self.can_ir.store.scratchWhereClauseTop();
+
+                    for (where_slice) |where_idx| {
+                        const canonicalized_where = self.canonicalizeWhereClause(where_idx);
+                        self.can_ir.store.addScratchWhereClause(canonicalized_where);
+                    }
+
+                    break :blk self.can_ir.store.whereClauseSpanFrom(where_start);
+                } else null;
+
+                // If we have where clauses, create a separate s_type_anno statement
+                if (where_clauses != null) {
+                    const type_anno_stmt = CIR.Statement{
+                        .s_type_anno = .{
+                            .name = name_ident,
+                            .anno = type_anno_idx,
+                            .where = where_clauses,
+                            .region = region,
+                        },
+                    };
+                    const type_anno_stmt_idx = self.can_ir.store.addStatement(type_anno_stmt);
+                    self.can_ir.store.addScratchStatement(type_anno_stmt_idx);
+                }
+
                 // Store this annotation for the next declaration
                 last_type_anno = .{
                     .name = name_ident,
                     .anno_idx = type_anno_idx,
                     .type_vars = base.DataSpan.empty(), // TODO: store type vars if needed
+                    .where_clauses = where_clauses,
                 };
             },
             .malformed => |malformed| {
@@ -1098,7 +1140,7 @@ fn createExternalDeclaration(
     qualified_name: Ident.Idx,
     module_name: Ident.Idx,
     local_name: Ident.Idx,
-    kind: CIR.ExternalDecl.kind,
+    kind: @TypeOf(@as(CIR.ExternalDecl, undefined).kind),
     region: Region,
 ) CIR.ExternalDecl.Idx {
     const external_decl = CIR.ExternalDecl{
@@ -1306,6 +1348,77 @@ fn canonicalizeDeclWithAnnotation(
     _ = self.can_ir.setTypeVarAtDef(def_idx, Content{ .flex_var = null });
 
     return def_idx;
+}
+
+fn canonicalizeSingleQuote(
+    self: *Self,
+    token_region: AST.TokenizedRegion,
+    token: Token.Idx,
+    comptime Idx: type,
+) if (Idx == CIR.Pattern.Idx) std.mem.Allocator.Error!?Idx else Idx {
+    const region = self.parse_ir.tokenizedRegionToRegion(token_region);
+
+    // Resolve to a string slice from the source
+    const token_text = self.parse_ir.resolve(token);
+    const inner_text = token_text[1 .. token_text.len - 1];
+
+    const view = std.unicode.Utf8View.init(inner_text) catch |err| switch (err) {
+        error.InvalidUtf8 => {
+            return self.can_ir.pushMalformed(Idx, CIR.Diagnostic{ .invalid_single_quote = .{
+                .region = region,
+            } });
+        },
+    };
+
+    var iterator = view.iterator();
+    const firstEndpoint = iterator.nextCodepoint();
+    const secondEndpoint = iterator.nextCodepoint();
+
+    if (secondEndpoint != null) {
+        // TODO: Handle escape sequences
+        return self.can_ir.pushMalformed(Idx, CIR.Diagnostic{ .too_long_single_quote = .{
+            .region = region,
+        } });
+    }
+
+    if (firstEndpoint) |u21_val| {
+        const int_val = CIR.IntValue{
+            .bytes = @bitCast(@as(u128, @intCast(u21_val))),
+            .kind = .u128,
+        };
+
+        const int_requirements = types.Num.IntRequirements{
+            .sign_needed = false,
+            .bits_needed = @intCast(@sizeOf(@TypeOf(u21_val))),
+        };
+
+        const type_content = Content{ .structure = .{ .num = .{ .num_unbound = int_requirements } } };
+
+        if (Idx == CIR.Expr.Idx) {
+            const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
+                .e_int = .{
+                    .value = int_val,
+                    .region = region,
+                },
+            });
+            _ = self.can_ir.setTypeVarAtExpr(expr_idx, type_content);
+            return expr_idx;
+        } else if (Idx == CIR.Pattern.Idx) {
+            const pat_idx = try self.can_ir.store.addPattern(CIR.Pattern{
+                .int_literal = .{
+                    .value = int_val,
+                },
+            }, region);
+            _ = self.can_ir.setTypeVarAtPat(pat_idx, type_content);
+            return pat_idx;
+        } else {
+            @compileError("Unsupported Idx type");
+        }
+    } else {
+        return self.can_ir.pushMalformed(Idx, CIR.Diagnostic{ .empty_single_quote = .{
+            .region = region,
+        } });
+    }
 }
 
 fn canonicalizeRecordField(
@@ -1727,59 +1840,7 @@ pub fn canonicalizeExpr(
             return expr_idx;
         },
         .single_quote => |e| {
-            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
-
-            // Resolve to a string slice from the source
-            const token_text = self.parse_ir.resolve(e.token);
-            const inner_text = token_text[1 .. token_text.len - 1];
-
-            const view = std.unicode.Utf8View.init(inner_text) catch |err| switch (err) {
-                error.InvalidUtf8 => {
-                    const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .invalid_single_quote = .{
-                        .region = region,
-                    } });
-                    return expr_idx;
-                },
-            };
-
-            var iterator = view.iterator();
-            const firstEndpoint = iterator.nextCodepoint();
-            const secondEndpoint = iterator.nextCodepoint();
-
-            if (secondEndpoint != null) {
-                // TODO: Handle escape sequences
-                const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .too_long_single_quote = .{
-                    .region = region,
-                } });
-                return expr_idx;
-            }
-
-            if (firstEndpoint) |u21_val| {
-                // Add the expression
-                const expr_idx = self.can_ir.store.addExpr(CIR.Expr{
-                    .e_int = .{
-                        .value = .{ .bytes = @bitCast(@as(u128, @intCast(u21_val))), .kind = .u128 },
-                        .region = region,
-                    },
-                });
-
-                const int_requirements = types.Num.IntRequirements{
-                    .sign_needed = false,
-                    .bits_needed = @intCast(@sizeOf(@TypeOf(u21_val))),
-                };
-
-                // Insert concrete type variable
-                const type_content = Content{ .structure = .{ .num = .{ .num_unbound = int_requirements } } };
-                _ = self.can_ir.setTypeVarAtExpr(expr_idx, type_content);
-
-                return expr_idx;
-            } else {
-                const expr_idx = self.can_ir.pushMalformed(CIR.Expr.Idx, CIR.Diagnostic{ .empty_single_quote = .{
-                    .region = region,
-                } });
-
-                return expr_idx;
-            }
+            return self.canonicalizeSingleQuote(e.region, e.token, CIR.Expr.Idx);
         },
         .string => |e| {
             // Get all the string parts
@@ -2795,6 +2856,9 @@ fn canonicalizePattern(
             _ = self.can_ir.setTypeVarAtPat(pattern_idx, Content{ .structure = .str });
 
             return pattern_idx;
+        },
+        .single_quote => |e| {
+            return try self.canonicalizeSingleQuote(e.region, e.token, CIR.Pattern.Idx);
         },
         .tag => |e| {
             if (self.parse_ir.tokens.resolveIdentifier(e.tag_tok)) |tag_name| {
@@ -4151,12 +4215,25 @@ pub fn canonicalizeStatement(self: *Self, stmt_idx: AST.Statement.Idx) std.mem.A
             // Now canonicalize the annotation with type variables in scope
             const type_anno_idx = self.canonicalizeTypeAnno(ta.anno);
 
+            // Canonicalize where clauses if present
+            const where_clauses = if (ta.where) |where_coll| blk: {
+                const where_slice = self.parse_ir.store.whereClauseSlice(.{ .span = self.parse_ir.store.getCollection(where_coll).span });
+                const where_start = self.can_ir.store.scratchWhereClauseTop();
+
+                for (where_slice) |where_idx| {
+                    const canonicalized_where = self.canonicalizeWhereClause(where_idx);
+                    self.can_ir.store.addScratchWhereClause(canonicalized_where);
+                }
+
+                break :blk self.can_ir.store.whereClauseSpanFrom(where_start);
+            } else null;
+
             // Create a type annotation statement
             const type_anno_stmt = CIR.Statement{
                 .s_type_anno = .{
                     .name = name_ident,
                     .anno = type_anno_idx,
-                    .where = null, // Where clauses are not yet implemented in the parser
+                    .where = where_clauses,
                     .region = region,
                 },
             };
@@ -5071,6 +5148,127 @@ fn canonicalizeTypeAnnoToTypeVar(self: *Self, type_anno_idx: CIR.TypeAnno.Idx) s
         .malformed => {
             // Return error type for malformed annotations
             return self.can_ir.pushTypeVar(.err, type_anno_node_idx, region) catch |err| exitOnOom(err);
+        },
+    }
+}
+
+/// Canonicalize a where clause from AST to CIR
+fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx) CIR.WhereClause.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const ast_where = self.parse_ir.store.getWhereClause(ast_where_idx);
+
+    switch (ast_where) {
+        .mod_method => |mm| {
+            const region = self.parse_ir.tokenizedRegionToRegion(mm.region);
+
+            // Resolve type variable name
+            const var_name = self.parse_ir.resolve(mm.var_tok);
+
+            // Resolve method name (remove leading dot)
+            const method_name_text = self.parse_ir.resolve(mm.name_tok);
+
+            // Remove leading dot from method name
+            const method_name_clean = if (method_name_text.len > 0 and method_name_text[0] == '.')
+                method_name_text[1..]
+            else
+                method_name_text;
+
+            // Intern the variable and method names
+            const var_ident = self.can_ir.env.idents.insert(self.can_ir.env.gpa, Ident.for_text(var_name), region);
+            const method_ident = self.can_ir.env.idents.insert(self.can_ir.env.gpa, Ident.for_text(method_name_clean), region);
+
+            // Canonicalize argument types
+            const args_slice = self.parse_ir.store.typeAnnoSlice(.{ .span = self.parse_ir.store.getCollection(mm.args).span });
+            const args_start = self.can_ir.store.scratchTypeAnnoTop();
+            for (args_slice) |arg_idx| {
+                const canonicalized_arg = self.canonicalizeTypeAnno(arg_idx);
+                self.can_ir.store.addScratchTypeAnno(canonicalized_arg);
+            }
+            const args_span = self.can_ir.store.typeAnnoSpanFrom(args_start);
+
+            // Canonicalize return type
+            const ret_anno = self.canonicalizeTypeAnno(mm.ret_anno);
+
+            // Create external declaration for where clause method constraint
+            // This represents the requirement that type variable must come from a module
+            // that provides the specified method
+            const var_name_text = self.can_ir.env.idents.getText(var_ident);
+
+            // Create qualified name: "module(a).method"
+            const qualified_text = std.fmt.allocPrint(self.can_ir.env.gpa, "module({s}).{s}", .{ var_name_text, method_name_clean }) catch |err| exitOnOom(err);
+            defer self.can_ir.env.gpa.free(qualified_text);
+            const qualified_name = self.can_ir.env.idents.insert(self.can_ir.env.gpa, Ident.for_text(qualified_text), region);
+
+            // Create module name: "module(a)"
+            const module_text = std.fmt.allocPrint(self.can_ir.env.gpa, "module({s})", .{var_name_text}) catch |err| exitOnOom(err);
+            defer self.can_ir.env.gpa.free(module_text);
+            const module_name = self.can_ir.env.idents.insert(self.can_ir.env.gpa, Ident.for_text(module_text), region);
+
+            const external_decl = self.createExternalDeclaration(qualified_name, module_name, method_ident, .value, region);
+
+            return self.can_ir.store.addWhereClause(CIR.WhereClause{ .mod_method = .{
+                .var_name = var_ident,
+                .method_name = method_ident,
+                .args = args_span,
+                .ret_anno = ret_anno,
+                .external_decl = external_decl,
+                .region = region,
+            } });
+        },
+        .mod_alias => |ma| {
+            const region = self.parse_ir.tokenizedRegionToRegion(ma.region);
+
+            // Resolve type variable name
+            const var_name = self.parse_ir.resolve(ma.var_tok);
+
+            // Resolve alias name (remove leading dot)
+            const alias_name_text = self.parse_ir.resolve(ma.name_tok);
+
+            // Remove leading dot from alias name
+            const alias_name_clean = if (alias_name_text.len > 0 and alias_name_text[0] == '.')
+                alias_name_text[1..]
+            else
+                alias_name_text;
+
+            // Intern the variable and alias names
+            const var_ident = self.can_ir.env.idents.insert(self.can_ir.env.gpa, Ident.for_text(var_name), region);
+            const alias_ident = self.can_ir.env.idents.insert(self.can_ir.env.gpa, Ident.for_text(alias_name_clean), region);
+
+            // Create external declaration for where clause alias constraint
+            // This represents the requirement that type variable must come from a module
+            // that provides the specified type alias
+            const var_name_text = self.can_ir.env.idents.getText(var_ident);
+
+            // Create qualified name: "module(a).Alias"
+            const qualified_text = std.fmt.allocPrint(self.can_ir.env.gpa, "module({s}).{s}", .{ var_name_text, alias_name_clean }) catch |err| exitOnOom(err);
+            defer self.can_ir.env.gpa.free(qualified_text);
+            const qualified_name = self.can_ir.env.idents.insert(self.can_ir.env.gpa, Ident.for_text(qualified_text), region);
+
+            // Create module name: "module(a)"
+            const module_text = std.fmt.allocPrint(self.can_ir.env.gpa, "module({s})", .{var_name_text}) catch |err| exitOnOom(err);
+            defer self.can_ir.env.gpa.free(module_text);
+            const module_name = self.can_ir.env.idents.insert(self.can_ir.env.gpa, Ident.for_text(module_text), region);
+
+            const external_decl = self.createExternalDeclaration(qualified_name, module_name, alias_ident, .type, region);
+
+            return self.can_ir.store.addWhereClause(CIR.WhereClause{ .mod_alias = .{
+                .var_name = var_ident,
+                .alias_name = alias_ident,
+                .external_decl = external_decl,
+                .region = region,
+            } });
+        },
+        .malformed => |m| {
+            const region = self.parse_ir.tokenizedRegionToRegion(m.region);
+            const diagnostic = self.can_ir.store.addDiagnostic(CIR.Diagnostic{ .malformed_where_clause = .{
+                .region = region,
+            } });
+            return self.can_ir.store.addWhereClause(CIR.WhereClause{ .malformed = .{
+                .diagnostic = diagnostic,
+                .region = region,
+            } });
         },
     }
 }
