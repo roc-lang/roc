@@ -184,11 +184,6 @@ pub fn init(self: *CIR, parse_ir: *AST, module_envs: ?*const std.StringHashMap(*
     return result;
 }
 
-/// Get the Import.Idx for a module name, if it has been imported
-pub fn getImportIdx(self: *const Self, module_name: []const u8) ?CIR.Import.Idx {
-    return self.import_indices.get(module_name);
-}
-
 fn addBuiltin(self: *Self, ir: *CIR, ident_text: []const u8, idx: CIR.Pattern.Idx) std.mem.Allocator.Error!void {
     const gpa = ir.env.gpa;
     const ident_store = &ir.env.idents;

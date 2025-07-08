@@ -313,10 +313,10 @@ test "import interner - comprehensive usage example" {
     try canonicalizer.canonicalizeFile();
 
     // Verify Import.Idx assignments
-    // Get Import.Idx values
-    const list_import = canonicalizer.getImportIdx("List");
-    const dict_import = canonicalizer.getImportIdx("Dict");
-    const result_import = canonicalizer.getImportIdx("Result");
+    // Get Import.Idx values from the imports store
+    const list_import = cir.imports.map.get("List");
+    const dict_import = cir.imports.map.get("Dict");
+    const result_import = cir.imports.map.get("Result");
 
     // All should have Import.Idx values
     try testing.expect(list_import != null);
