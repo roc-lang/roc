@@ -57,10 +57,10 @@ This expression is used in an unexpected way:
          ^^^^^^^^
 
 It is of type:
-    _Pair(a, b), a, a -> c, b, b -> d -> Pair(c, d)_
+    _Pair(a, b), Num(*) -> Num(*), Num(*) -> Num(*) -> Pair(c, d)_
 
 But you are trying to use it as:
-    _Num(*), Num(*), *, * -> *, *, * -> * -> *_
+    _Num(*), Num(*), * -> *, * -> * -> *_
 
 # TOKENS
 ~~~zig

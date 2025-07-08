@@ -150,29 +150,6 @@ pub fn instantiateVar(self: *Self, var_to_instantiate: Var, parent_node_idx: CIR
     return instantiated_var;
 }
 
-/// Unify two types, but do not modify the `a` type in the types store
-///
-/// This is used specific places in type checking to avoid variable corruption.
-/// For example, when unifying an if condition with the builtin `Bool`, if
-/// that  fails we do want to overwrite the builtin `Bool` type variable with
-/// an `.err`
-pub fn unifyPreserveA(self: *Self, a: Var, b: Var) unifier.Result {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    return unifier.unifyPreserve(
-        self.can_ir.env,
-        self.types,
-        self.types,
-        &self.problems,
-        &self.snapshots,
-        &self.unify_scratch,
-        &self.occurs_scratch,
-        a,
-        b,
-    );
-}
-
 /// Check the types for all defs
 pub fn checkDefs(self: *Self) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
@@ -190,6 +167,7 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
     defer trace.end();
 
     const def = self.can_ir.store.getDef(def_idx);
+    const expr_var: Var = CIR.varFrom(def.expr);
 
     try self.checkPattern(def.pattern);
     _ = try self.checkExpr(def.expr);
@@ -205,18 +183,14 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
         // If the expression is a lambda and we have an annotation, pass the expected type
         if (expr == .e_lambda) {
             _ = try self.checkLambdaWithExpected(def.expr, expr.e_lambda, annotation.signature);
-        } else {
-            _ = try self.checkExpr(def.expr);
         }
 
         // Unify the expression with its annotation
-        _ = self.unify(try self.can_ir.idxToTypeVar(self.types, def.expr), annotation.signature);
-    } else {
-        _ = try self.checkExpr(def.expr);
+        _ = self.unify(expr_var, annotation.signature);
     }
 
     // Unify the def with its expression
-    _ = self.unify(def_var, try self.can_ir.idxToTypeVar(self.types, def.expr));
+    _ = self.unify(def_var, CIR.varFrom(def.expr));
 
     // Also unify the pattern with the def - needed so lookups work correctly
     // TODO could we unify directly with the pattern elsewhere, to save a type var and unify() here?
@@ -412,7 +386,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
                     .alias => |alias| {
                         // Resolve the alias, then continue on to the appropriate branch.
                         // (It might be another alias, or we might be done and ready to proceed.)
-                        const backing_var = alias.getBackingVar(current_func_var);
+                        const backing_var = self.types.getAliasBackingVar(alias);
                         current_func_var = backing_var;
                         current_content = self.types.resolveVar(backing_var).desc.content;
                         continue :content_switch current_content;
@@ -522,7 +496,7 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             };
 
             // Then, instantiate the nominal types backing var, for unification
-            const nominal_backing_var = nominal_type.getBackingVar(nominal_var);
+            const nominal_backing_var = self.types.getNominalBackingVar(nominal_type);
             const instantiated_backing_var = try self.instantiateVar(nominal_backing_var, CIR.nodeIdxFrom(expr_idx));
 
             // Then, unify the nominal type's backing var against the CIR backing var
@@ -819,7 +793,7 @@ fn unifyCallWithFunc(self: *Self, call_var: Var, func: types_mod.Func, call_args
     // unification process handle the arity mismatch error
     if (inst_args.len == arg_vars.len) {
         for (inst_args, arg_vars) |inst_arg, actual_arg| {
-            _ = self.unify(inst_arg, actual_arg);
+            _ = self.unify(actual_arg, inst_arg);
         }
         // The call's type is the instantiated return type
         _ = self.unify(call_var, func.ret);
@@ -844,7 +818,20 @@ fn checkLambdaWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, lambda: anytype,
     // Since pattern idx map 1-to-1 to variables, we can get cast the slice to vars
     const arg_vars: []Var = @ptrCast(@alignCast(arg_patterns));
 
+    // The return type var is just the body's var
+    const return_var = @as(Var, @enumFromInt(@intFromEnum(lambda.body)));
+
+    // The function is effectful iff the body of the lambda is effectful
+    const is_effectful = try self.checkExpr(lambda.body);
+
+    // Create TypeWriter for converting types to strings
+    var type_writer = try types_mod.writers.TypeWriter.init(self.can_ir.env.gpa, self.can_ir.env);
+    defer type_writer.deinit();
+
     // If we have an expected type and it's a function, unify parameter types before checking body
+    //
+    // TODO: Why does this basically re-implement unify logic? Can we create the
+    // function type then unify it with the anno directly?
     if (expected_type) |expected| {
         const expected_resolved = self.types.resolveVar(expected);
         if (expected_resolved.desc.content == .structure) {
@@ -854,22 +841,21 @@ fn checkLambdaWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, lambda: anytype,
                     if (expected_args.len == arg_patterns.len) {
                         // Unify each pattern with its expected type before checking body
                         for (arg_patterns, expected_args) |pattern_idx, expected_arg| {
-                            const pattern_var = try self.can_ir.idxToTypeVar(self.types, pattern_idx);
+                            const pattern_var = CIR.varFrom(pattern_idx);
                             _ = self.unify(pattern_var, expected_arg);
+
+                            try type_writer.write(pattern_var);
                         }
                     }
+                    _ = self.unify(return_var, func.ret);
                 },
                 else => {},
             }
         }
     }
 
-    // The function is effectful iff the body of the lambda is effectful
-    const is_effectful = try self.checkExpr(lambda.body);
-
-    // The return type var is just the body's var
-    const return_var = try self.can_ir.idxToTypeVar(self.types, lambda.body);
-    const fn_var = try self.can_ir.idxToTypeVar(self.types, expr_idx);
+    // The root expr will be the entire functions var
+    const fn_var = CIR.varFrom(expr_idx);
 
     if (is_effectful) {
         // If the function body does effects, create an effectful function.
@@ -898,7 +884,8 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, binop: CIR.Expr.Binop) Al
             // TODO: These will use static dispact of the lhs, passing in rhs
         },
         .@"and" => {
-            const lhs_result = self.unifyPreserveA(@enumFromInt(@intFromEnum(can.BUILTIN_BOOL)), @enumFromInt(@intFromEnum(binop.lhs)));
+            const lhs_fresh_bool = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), CIR.nodeIdxFrom(expr_idx));
+            const lhs_result = self.unify(lhs_fresh_bool, @enumFromInt(@intFromEnum(binop.lhs)));
             self.setDetailIfTypeMismatch(lhs_result, .{ .invalid_bool_binop = .{
                 .binop_expr = expr_idx,
                 .problem_side = .lhs,
@@ -906,7 +893,8 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, binop: CIR.Expr.Binop) Al
             } });
 
             if (lhs_result.isOk()) {
-                const rhs_result = self.unifyPreserveA(@enumFromInt(@intFromEnum(can.BUILTIN_BOOL)), @enumFromInt(@intFromEnum(binop.rhs)));
+                const rhs_fresh_bool = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), CIR.nodeIdxFrom(expr_idx));
+                const rhs_result = self.unify(rhs_fresh_bool, @enumFromInt(@intFromEnum(binop.rhs)));
                 self.setDetailIfTypeMismatch(rhs_result, .{ .invalid_bool_binop = .{
                     .binop_expr = expr_idx,
                     .problem_side = .rhs,
@@ -915,7 +903,8 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, binop: CIR.Expr.Binop) Al
             }
         },
         .@"or" => {
-            const lhs_result = self.unifyPreserveA(@enumFromInt(@intFromEnum(can.BUILTIN_BOOL)), @enumFromInt(@intFromEnum(binop.lhs)));
+            const lhs_fresh_bool = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), CIR.nodeIdxFrom(expr_idx));
+            const lhs_result = self.unify(lhs_fresh_bool, @enumFromInt(@intFromEnum(binop.lhs)));
             self.setDetailIfTypeMismatch(lhs_result, .{ .invalid_bool_binop = .{
                 .binop_expr = expr_idx,
                 .problem_side = .lhs,
@@ -923,7 +912,8 @@ fn checkBinopExpr(self: *Self, expr_idx: CIR.Expr.Idx, binop: CIR.Expr.Binop) Al
             } });
 
             if (lhs_result.isOk()) {
-                const rhs_result = self.unifyPreserveA(@enumFromInt(@intFromEnum(can.BUILTIN_BOOL)), @enumFromInt(@intFromEnum(binop.lhs)));
+                const rhs_fresh_bool = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), CIR.nodeIdxFrom(expr_idx));
+                const rhs_result = self.unify(rhs_fresh_bool, @enumFromInt(@intFromEnum(binop.rhs)));
                 self.setDetailIfTypeMismatch(rhs_result, .{ .invalid_bool_binop = .{
                     .binop_expr = expr_idx,
                     .problem_side = .rhs,
@@ -999,7 +989,9 @@ fn checkIfElseExpr(self: *Self, if_expr_idx: CIR.Expr.Idx, if_: std.meta.FieldTy
 
                 does_fx = try self.checkExpr(remaining_branch.cond) or does_fx;
                 const remaining_cond_var: Var = @enumFromInt(@intFromEnum(remaining_branch.cond));
-                const remaining_cond_result = self.unifyPreserveA(@enumFromInt(@intFromEnum(can.BUILTIN_BOOL)), remaining_cond_var);
+
+                const fresh_bool = try self.instantiateVar(CIR.varFrom(can.BUILTIN_BOOL), CIR.nodeIdxFrom(if_expr_idx));
+                const remaining_cond_result = self.unify(fresh_bool, remaining_cond_var);
                 self.setDetailIfTypeMismatch(remaining_cond_result, .incompatible_if_cond);
 
                 does_fx = try self.checkExpr(remaining_branch.body) or does_fx;

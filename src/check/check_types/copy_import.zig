@@ -70,38 +70,6 @@ fn copyVar(
     // Update the placeholder with the actual content
     try dest_store.setVarContent(placeholder_var, dest_content);
 
-    // If this is an alias type, we need to ensure the argument variables follow immediately after
-    if (resolved.desc.content == .alias) {
-        const alias = resolved.desc.content.alias;
-        const dest_var = placeholder_var;
-
-        // Debug assertion: make sure the backing variable immediately follows the alias var
-        if (std.debug.runtime_safety) {
-            const backing_var = alias.getBackingVar(source_var);
-            const dest_backing_var = try copyVar(source_store, dest_store, backing_var, var_mapping, source_idents, dest_idents, allocator);
-            const expected_backing_var = @as(Var, @enumFromInt(@intFromEnum(dest_var) + 1));
-            std.debug.assert(dest_backing_var == expected_backing_var);
-        }
-
-        // Copy argument variables
-        var i: u32 = 0;
-        var dest_args: [16]Var = undefined;
-        std.debug.assert(alias.num_args <= 16);
-
-        var arg_iter = alias.argIterator(source_var);
-        var arg_offset: u32 = 2;
-        while (arg_iter.next()) |source_arg_var| {
-            const dest_arg_var = try copyVar(source_store, dest_store, source_arg_var, var_mapping, source_idents, dest_idents, allocator);
-            const expected_arg_var = @as(Var, @enumFromInt(@intFromEnum(dest_var) + arg_offset));
-            if (dest_arg_var != expected_arg_var) {
-                // Continue anyway
-            }
-            dest_args[i] = dest_arg_var;
-            i += 1;
-            arg_offset += 1;
-        }
-    }
-
     return placeholder_var;
 }
 
@@ -117,9 +85,44 @@ fn copyContent(
     return switch (content) {
         .flex_var => |maybe_ident| Content{ .flex_var = maybe_ident },
         .rigid_var => |ident| Content{ .rigid_var = ident },
-        .alias => |alias| Content{ .alias = alias }, // The alias itself is just metadata
+        .alias => |alias| Content{ .alias = try copyAlias(source_store, dest_store, alias, var_mapping, source_idents, dest_idents, allocator) },
         .structure => |flat_type| Content{ .structure = try copyFlatType(source_store, dest_store, flat_type, var_mapping, source_idents, dest_idents, allocator) },
         .err => Content.err,
+    };
+}
+
+fn copyAlias(
+    source_store: *const TypesStore,
+    dest_store: *TypesStore,
+    source_alias: Alias,
+    var_mapping: *VarMapping,
+    source_idents: *const base.Ident.Store,
+    dest_idents: *base.Ident.Store,
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!Alias {
+
+    // Translate the type name ident
+    const type_name_str = source_idents.getText(source_alias.ident.ident_idx);
+    const translated_ident = dest_idents.insert(allocator, base.Ident.for_text(type_name_str), base.Region.zero());
+
+    var dest_args = std.ArrayList(Var).init(dest_store.gpa);
+    defer dest_args.deinit();
+
+    const origin_backing = source_store.getAliasBackingVar(source_alias);
+    const dest_backing = try copyVar(source_store, dest_store, origin_backing, var_mapping, source_idents, dest_idents, allocator);
+    try dest_args.append(dest_backing);
+
+    const origin_args = source_store.sliceAliasArgs(source_alias);
+    for (origin_args) |arg_var| {
+        const dest_arg = try copyVar(source_store, dest_store, arg_var, var_mapping, source_idents, dest_idents, allocator);
+        try dest_args.append(dest_arg);
+    }
+
+    const dest_vars_span = dest_store.appendVars(dest_args.items);
+
+    return Alias{
+        .ident = types_mod.TypeIdent{ .ident_idx = translated_ident },
+        .vars = .{ .nonempty = dest_vars_span },
     };
 }
 
@@ -339,9 +342,6 @@ fn copyNominalType(
     dest_idents: *base.Ident.Store,
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!NominalType {
-    _ = var_mapping; // Nominal types don't contain vars that need mapping
-    _ = source_store;
-    _ = dest_store;
 
     // Translate the type name ident
     const type_name_str = source_idents.getText(source_nominal.ident.ident_idx);
@@ -351,9 +351,24 @@ fn copyNominalType(
     const origin_str = source_idents.getText(source_nominal.origin_module);
     const translated_origin = dest_idents.insert(allocator, base.Ident.for_text(origin_str), base.Region.zero());
 
+    var dest_args = std.ArrayList(Var).init(dest_store.gpa);
+    defer dest_args.deinit();
+
+    const origin_backing = source_store.getNominalBackingVar(source_nominal);
+    const dest_backing = try copyVar(source_store, dest_store, origin_backing, var_mapping, source_idents, dest_idents, allocator);
+    try dest_args.append(dest_backing);
+
+    const origin_args = source_store.sliceNominalArgs(source_nominal);
+    for (origin_args) |arg_var| {
+        const dest_arg = try copyVar(source_store, dest_store, arg_var, var_mapping, source_idents, dest_idents, allocator);
+        try dest_args.append(dest_arg);
+    }
+
+    const dest_vars_span = dest_store.appendVars(dest_args.items);
+
     return NominalType{
         .ident = types_mod.TypeIdent{ .ident_idx = translated_ident },
-        .num_args = source_nominal.num_args,
+        .vars = .{ .nonempty = dest_vars_span },
         .origin_module = translated_origin,
     };
 }

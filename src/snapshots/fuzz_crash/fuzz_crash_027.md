@@ -379,17 +379,6 @@ Some(a) : { foo : Ok(a), bar : g }
                                ^
 
 
-**UNDECLARED TYPE**
-The type ``Ok`` is not declared in this scope.
-
-This type is referenced here:
-**fuzz_crash_027.md:32:19:32:24:**
-```roc
-Some(a) : { foo : Ok(a), bar : g }
-```
-                  ^^^^^
-
-
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
 
@@ -416,28 +405,6 @@ This type is referenced here:
 Func(a) : Maybe(a), a -> Maybe(a)
 ```
                          ^^^^^
-
-
-**UNDECLARED TYPE**
-The type ``Maybe`` is not declared in this scope.
-
-This type is referenced here:
-**fuzz_crash_027.md:43:11:43:19:**
-```roc
-Func(a) : Maybe(a), a -> Maybe(a)
-```
-          ^^^^^^^^
-
-
-**UNDECLARED TYPE**
-The type ``Maybe`` is not declared in this scope.
-
-This type is referenced here:
-**fuzz_crash_027.md:43:26:43:34:**
-```roc
-Func(a) : Maybe(a), a -> Maybe(a)
-```
-                         ^^^^^^^^
 
 
 **UNDECLARED TYPE**
@@ -915,7 +882,7 @@ This expression is used in an unexpected way:
  ^^^^^^^^^^
 
 It is of type:
-    _Error, * -> Error_
+    _[Red, Blue]*, * -> Error_
 
 But you are trying to use it as:
     _* -> *_
@@ -1945,7 +1912,7 @@ main! = |_| { # Yeah Ie
 				(s-crash @1.1-1.1 (msg "Unreachtement"))
 				(s-let @119.2-119.23
 					(p-assign @119.2-119.10 (ident "tag_with"))
-					(e-tag @119.13-119.23 (name "Ok")
+					(e-tag @119.13-119.15 (name "Ok")
 						(args
 							(e-lookup-local @119.16-119.22
 								(p-assign @102.2-103.8 (ident "number"))))))
@@ -1974,7 +1941,7 @@ main! = |_| { # Yeah Ie
 								(e-lookup-local @131.42-131.45
 									(p-assign @104.2-104.5 (ident "tag"))))
 							(field (name "qux")
-								(e-tag @131.52-131.61 (name "Ok")
+								(e-tag @131.52-131.54 (name "Ok")
 									(args
 										(e-lookup-local @131.55-131.60
 											(p-assign @101.2-101.7 (ident "world"))))))
@@ -1989,7 +1956,7 @@ main! = |_| { # Yeah Ie
 								(e-literal @132.17-132.22 (string "World")))
 							(e-lookup-local @132.25-132.28
 								(p-assign @104.2-104.5 (ident "tag")))
-							(e-tag @132.30-132.39 (name "Ok")
+							(e-tag @132.30-132.32 (name "Ok")
 								(args
 									(e-lookup-local @132.33-132.38
 										(p-assign @101.2-101.7 (ident "world")))))
@@ -2011,7 +1978,7 @@ main! = |_| { # Yeah Ie
 							(e-string @135.3-135.10
 								(e-literal @135.4-135.9 (string "World")))
 							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-tag @137.3-137.12 (name "Ok")
+							(e-tag @137.3-137.5 (name "Ok")
 								(args
 									(e-lookup-local @137.6-137.11
 										(p-assign @101.2-101.7 (ident "world")))))
@@ -2031,7 +1998,7 @@ main! = |_| { # Yeah Ie
 						(e-binop @141.10-141.66 (op "or")
 							(e-binop @141.10-141.35 (op "gt")
 								(e-binop @141.10-141.26 (op "null_coalesce")
-									(e-tag @141.10-141.18 (name "Err")
+									(e-tag @141.10-141.13 (name "Err")
 										(args
 											(e-runtime-error (tag "ident_not_in_scope"))))
 									(e-int @141.22-141.24 (value "12")))
@@ -2064,7 +2031,7 @@ main! = |_| { # Yeah Ie
 										(receiver
 											(e-runtime-error (tag "not_implemented")))))))))
 				(s-expr @143.2-148.2
-					(e-tag @143.2-147.3 (name "Stdoline!")
+					(e-tag @143.2-143.11 (name "Stdoline!")
 						(args
 							(e-string @144.3-146.10
 								(e-literal @144.4-144.14 (string "How about "))
@@ -2207,7 +2174,7 @@ main! = |_| { # Yeah Ie
 (inferred-types
 	(defs
 		(patt @45.1-45.4 (type "Bool -> Num(*)"))
-		(patt @48.1-48.8 (type "Error -> U64"))
+		(patt @48.1-48.8 (type "Error -> Error"))
 		(patt @60.1-60.11 (type "Error"))
 		(patt @100.1-100.6 (type "Error -> Error")))
 	(type_decls
@@ -2243,7 +2210,7 @@ main! = |_| { # Yeah Ie
 					(ty-var @43.6-43.7 (name "a"))))))
 	(expressions
 		(expr @45.7-47.8 (type "Bool -> Num(*)"))
-		(expr @48.11-58.2 (type "Error -> U64"))
+		(expr @48.11-58.2 (type "Error -> Error"))
 		(expr @60.14-94.3 (type "Error"))
 		(expr @100.9-159.2 (type "Error -> Error"))))
 ~~~

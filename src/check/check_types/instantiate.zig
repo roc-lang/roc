@@ -43,33 +43,37 @@ pub fn instantiateVar(
     // Create a fresh variable with the instantiated content
     const fresh_var = store.freshFromContent(fresh_content);
 
-    // If this is an alias, we need to instantiate its backing var and arguments
-    // They must be created at the correct offsets from the fresh alias variable
-    if (resolved.desc.content == .alias) {
-        const alias = resolved.desc.content.alias;
+    // TODO
+    // switch (resolved.desc.content) {
+    //     // If this is an alias, we need to instantiate its backing var and arguments
+    //     // They must be created at the correct offsets from the fresh alias variable
+    //     .alias => |alias| {
+    //         // TODO: Copy nominal below to properly set variables
 
-        // Instantiate backing var (at original_var + 1 -> fresh_var + 1)
-        const orig_backing_var = @as(Var, @enumFromInt(@intFromEnum(var_) + 1));
-        const fresh_backing_var = try instantiateVar(store, orig_backing_var, substitution);
+    //         // Instantiate backing var (at original_var + 1 -> fresh_var + 1)
+    //         const orig_backing_var = @as(Var, @enumFromInt(@intFromEnum(var_) + 1));
+    //         const fresh_backing_var = try instantiateVar(store, orig_backing_var, substitution);
 
-        // Ensure the fresh backing var is at the correct offset
-        const expected_backing_var = @as(Var, @enumFromInt(@intFromEnum(fresh_var) + 1));
-        if (fresh_backing_var != expected_backing_var) {
-            // For now, we'll continue anyway as the type system might handle this
-        }
+    //         // Ensure the fresh backing var is at the correct offset
+    //         const expected_backing_var = @as(Var, @enumFromInt(@intFromEnum(fresh_var) + 1));
+    //         if (fresh_backing_var != expected_backing_var) {
+    //             // For now, we'll continue anyway as the type system might handle this
+    //         }
 
-        // Instantiate all argument vars
-        var arg_iter = alias.argIterator(var_);
-        var arg_offset: u32 = 2;
-        while (arg_iter.next()) |orig_arg_var| {
-            const fresh_arg_var = try instantiateVar(store, orig_arg_var, substitution);
-            const expected_arg_var = @as(Var, @enumFromInt(@intFromEnum(fresh_var) + arg_offset));
-            if (fresh_arg_var != expected_arg_var) {
-                // Continue anyway
-            }
-            arg_offset += 1;
-        }
-    }
+    //         // Instantiate all argument vars
+    //         var arg_iter = alias.argIterator(var_);
+    //         var arg_offset: u32 = 2;
+    //         while (arg_iter.next()) |orig_arg_var| {
+    //             const fresh_arg_var = try instantiateVar(store, orig_arg_var, substitution);
+    //             const expected_arg_var = @as(Var, @enumFromInt(@intFromEnum(fresh_var) + arg_offset));
+    //             if (fresh_arg_var != expected_arg_var) {
+    //                 // Continue anyway
+    //             }
+    //             arg_offset += 1;
+    //         }
+    //     },
+    //     else => {},
+    // }
 
     // Remember this substitution for recursive references
     try substitution.put(var_, fresh_var);
@@ -121,7 +125,7 @@ fn instantiateFlatType(
         .list_unbound => FlatType.list_unbound,
         .tuple => |tuple| FlatType{ .tuple = try instantiateTuple(store, tuple, substitution) },
         .num => |num| FlatType{ .num = try instantiateNum(store, num, substitution) },
-        .nominal_type => |nominal| FlatType{ .nominal_type = nominal },
+        .nominal_type => |nominal| FlatType{ .nominal_type = try instantiateNominalType(store, nominal, substitution) },
         .fn_pure => |func| FlatType{ .fn_pure = try instantiateFunc(store, func, substitution) },
         .fn_effectful => |func| FlatType{ .fn_effectful = try instantiateFunc(store, func, substitution) },
         .fn_unbound => |func| FlatType{ .fn_unbound = try instantiateFunc(store, func, substitution) },
@@ -136,6 +140,30 @@ fn instantiateFlatType(
         .tag_union => |tag_union| FlatType{ .tag_union = try instantiateTagUnion(store, tag_union, substitution) },
 
         .empty_tag_union => FlatType.empty_tag_union,
+    };
+}
+
+fn instantiateNominalType(
+    store: *TypesStore,
+    nominal: types_mod.NominalType,
+    substitution: *VarSubstitution,
+) std.mem.Allocator.Error!types_mod.NominalType {
+    var fresh_vars = std.ArrayList(Var).init(store.gpa);
+    defer fresh_vars.deinit();
+
+    try fresh_vars.append(store.getNominalBackingVar(nominal));
+
+    var iter = store.iterNominalArgs(nominal);
+    while (iter.next()) |arg_var| {
+        const fresh_elem = try instantiateVar(store, arg_var, substitution);
+        try fresh_vars.append(fresh_elem);
+    }
+
+    const fresh_vars_range = store.appendVars(fresh_vars.items);
+    return types_mod.NominalType{
+        .ident = nominal.ident,
+        .vars = .{ .nonempty = fresh_vars_range },
+        .origin_module = nominal.origin_module,
     };
 }
 

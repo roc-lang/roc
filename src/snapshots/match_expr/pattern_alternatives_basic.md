@@ -143,10 +143,10 @@ kind = |color| match color {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt @6.1-6.5 (type "[Blue, Green, Orange, Red, Yellow, Purple]* -> Str")))
+		(patt @6.1-6.5 (type "Color -> Str")))
 	(type_decls
 		(alias @3.1-3.51 (type "Color")
 			(ty-header @3.1-3.6 (name "Color"))))
 	(expressions
-		(expr @6.8-9.2 (type "[Blue, Green, Orange, Red, Yellow, Purple]* -> Str"))))
+		(expr @6.8-9.2 (type "Color -> Str"))))
 ~~~

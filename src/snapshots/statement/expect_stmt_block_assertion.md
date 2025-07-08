@@ -74,7 +74,7 @@ foo = |a| {
 					(e-binop @1.1-1.1 (op "eq")
 						(e-lookup-local @5.12-5.13
 							(p-assign @4.8-4.9 (ident "a")))
-						(e-nominal @5.17-5.26 (nominal "Bool")
+						(e-nominal @5.17-5.21 (nominal "Bool")
 							(e-tag @5.17-5.26 (name "True")))))
 				(e-lookup-local @6.5-6.6
 					(p-assign @4.8-4.9 (ident "a")))))

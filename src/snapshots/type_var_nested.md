@@ -243,7 +243,7 @@ main = |_| "done"
 									(pattern (degenerate false)
 										(p-applied-tag @7.9-7.18)))
 								(value
-									(e-tag @7.22-7.42 (name "Ok")
+									(e-tag @7.22-7.24 (name "Ok")
 										(args
 											(e-call @7.25-7.41
 												(e-lookup-local @7.25-7.34
@@ -255,7 +255,7 @@ main = |_| "done"
 									(pattern (degenerate false)
 										(p-applied-tag @8.9-8.19)))
 								(value
-									(e-tag @8.23-8.33 (name "Err")
+									(e-tag @8.23-8.26 (name "Err")
 										(args
 											(e-lookup-local @8.27-8.32
 												(p-assign @8.13-8.18 (ident "error"))))))))))))
@@ -325,9 +325,9 @@ main = |_| "done"
 		(e-lambda @26.18-26.39
 			(args
 				(p-assign @26.19-26.24 (ident "value")))
-			(e-tag @26.26-26.39 (name "Ok")
+			(e-tag @26.26-26.28 (name "Ok")
 				(args
-					(e-tag @26.29-26.38 (name "Ok")
+					(e-tag @26.29-26.31 (name "Ok")
 						(args
 							(e-lookup-local @26.32-26.37
 								(p-assign @26.19-26.24 (ident "value"))))))))
