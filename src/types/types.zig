@@ -48,7 +48,7 @@ pub const Var = enum(u32) {
 pub const Descriptor = struct { content: Content, rank: Rank, mark: Mark };
 
 /// In general, the rank tracks the number of let-bindings a variable is "under".
-/// Top-level definitions have rank 1. A let in a top-level definition gets rank 2, and so on.
+/// Top-level definitions have rank 1. A let inside a top-level definition gets rank 2, and so on.
 ///
 /// An example:
 /// ```
@@ -58,7 +58,7 @@ pub const Descriptor = struct { content: Content, rank: Rank, mark: Mark };
 ///    x = 5
 ///    arg + x
 /// ```
-/// Here the rank of foo is 1 because it is at the top level and the rank of `x` is 2 because it is under `plus_five`.
+/// Here the rank of `foo` is 1 because it is at the top level and the rank of `x` is 2 because it is under or inside `plus_five`.
 ///
 /// Imported variables get rank 2.
 ///

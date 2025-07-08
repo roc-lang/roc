@@ -376,9 +376,9 @@ double arg =
     in
         arg * two
 ```
-This makes the scope of two very clear.
+This makes the scope of `two` very clear.
 
-In Roc, you can just define variables and use them without `let ... in`, we add that behind the scenes.
+In Roc, you can just define variables and use them without `let ... in`, we add `let` behind the scenes.
 See `Stmt::Let` in [crates/compiler/mono/src/ir.rs](crates/compiler/mono/src/ir.rs) (old compiler).
 
 ## Generalized
@@ -388,15 +388,15 @@ Say we have the following code:
 my_record =
     id = |x| x
 
-    { a: id(1), b: id("foo")}
+    { a: id(1), b: id("foo") }
 ```
-If we would infer the type of `id` to be `Int -> Int` that would lead to a type error at the next call site `id("foo")`.
+If we would infer the type of `id` to be `Int -> Int`, that would lead to a type error at the next call site `id("foo")`.
 So, we **generalize** the type of `id` to `a -> a`. This allows `id` to be called with any type.
 
 ## Rank
 
 In general, the rank tracks the number of [let-bindings](#let) a variable is "under". Top-level definitions
-have rank 1. A [let](#let) in a top-level definition gets rank 2, and so on.
+have rank 1. A [let](#let) inside a top-level definition gets rank 2, and so on.
 
 An example:
 ```roc 
@@ -406,7 +406,7 @@ plus_five = |arg|
     x = 5
     arg + x
 ```
-Here the rank of foo is 1 because it is at the top level and the rank of `x` is 2 because it is under `plus_five`.
+Here the rank of `foo` is 1 because it is at the top level and the rank of `x` is 2 because it is under or inside `plus_five`.
 
 Imported variables get rank 2.
 
