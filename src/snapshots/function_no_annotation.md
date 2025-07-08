@@ -116,7 +116,6 @@ NO CHANGE
 			(e-call @9.21-9.36
 				(e-lookup-external @9.21-9.33
 					(module-idx "0")
-					(field "line!")
 					(target-node-idx "0"))
 				(e-lookup-local @9.34-9.35
 					(pattern @9.18-9.19)))))

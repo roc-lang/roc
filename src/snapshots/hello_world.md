@@ -63,7 +63,6 @@ NO CHANGE
 			(e-call @5.13-5.42
 				(e-lookup-external @5.13-5.25
 					(module-idx "0")
-					(field "line!")
 					(target-node-idx "0"))
 				(e-string @5.26-5.41
 					(e-literal @5.27-5.40 (string "Hello, world!"))))))

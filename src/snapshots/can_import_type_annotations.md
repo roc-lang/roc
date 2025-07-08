@@ -423,7 +423,6 @@ combineResults = |result1, result2|
 				(p-assign @8.19-8.22 (ident "req")))
 			(e-lookup-external @8.24-8.44
 				(module-idx "0")
-				(field "defaultResponse")
 				(target-node-idx "0")))
 		(annotation @8.1-8.15
 			(declared-type
@@ -438,7 +437,6 @@ combineResults = |result1, result2|
 			(e-call @11.21-11.38
 				(e-lookup-external @11.21-11.31
 					(module-idx "1")
-					(field "parse")
 					(target-node-idx "0"))
 				(e-lookup-local @11.32-11.37
 					(pattern @11.14-11.19))))
@@ -459,7 +457,6 @@ combineResults = |result1, result2|
 					(e-call @15.14-15.39
 						(e-lookup-external @15.14-15.25
 							(module-idx "1")
-							(field "decode")
 							(target-node-idx "0"))
 						(e-dot-access @15.26-15.39 (field "body")
 							(receiver
@@ -503,7 +500,6 @@ combineResults = |result1, result2|
 		(p-assign @23.1-23.7 (ident "config"))
 		(e-lookup-external @23.10-23.28
 			(module-idx "1")
-			(field "defaultConfig")
 			(target-node-idx "0"))
 		(annotation @23.1-23.7
 			(declared-type
@@ -518,7 +514,6 @@ combineResults = |result1, result2|
 			(e-call @27.40-27.82
 				(e-lookup-external @27.40-27.61
 					(module-idx "1")
-					(field "parseWith")
 					(target-node-idx "0"))
 				(e-lookup-local @27.62-27.74
 					(pattern @27.19-27.31))

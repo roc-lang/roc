@@ -2372,7 +2372,6 @@ expect {
 				(e-call @191.2-195.3
 					(e-lookup-external @191.2-191.14
 						(module-idx "0")
-						(field "line!")
 						(target-node-idx "0"))
 					(e-string @192.3-194.18
 						(e-literal @192.4-192.14 (string "How about "))

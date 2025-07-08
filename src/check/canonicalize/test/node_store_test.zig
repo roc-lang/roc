@@ -205,7 +205,6 @@ test "NodeStore round trip - Expressions" {
     try expressions.append(CIR.Expr{
         .e_lookup_external = .{
             .module_idx = @enumFromInt(0),
-            .field_name = @bitCast(@as(u32, 345)),
             .target_node_idx = 42,
             .region = from_raw_offsets(200, 210),
         },

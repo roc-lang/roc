@@ -1632,7 +1632,6 @@ pub fn canonicalizeExpr(
                             // Create the e_lookup_external expression with Import.Idx
                             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_lookup_external = .{
                                 .module_idx = import_idx,
-                                .field_name = ident,
                                 .target_node_idx = target_node_idx,
                                 .region = region,
                             } });
@@ -1686,7 +1685,6 @@ pub fn canonicalizeExpr(
                             // Create the e_lookup_external expression with Import.Idx
                             const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_lookup_external = .{
                                 .module_idx = import_idx,
-                                .field_name = exposed_info.original_name,
                                 .target_node_idx = target_node_idx,
                                 .region = region,
                             } });
@@ -5819,7 +5817,6 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) ?CIR.Expr.Idx 
     // Create the e_lookup_external expression with Import.Idx
     const expr_idx = self.can_ir.store.addExpr(CIR.Expr{ .e_lookup_external = .{
         .module_idx = import_idx,
-        .field_name = field_name,
         .target_node_idx = target_node_idx,
         .region = region,
     } });

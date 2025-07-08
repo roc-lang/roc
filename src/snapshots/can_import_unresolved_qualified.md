@@ -164,7 +164,6 @@ parser = Json.create
 		(p-assign @7.1-7.5 (ident "main"))
 		(e-lookup-external @7.8-7.31
 			(module-idx "0")
-			(field "method")
 			(target-node-idx "0")))
 	(d-let
 		(p-assign @11.1-11.10 (ident "parseData"))
@@ -174,7 +173,6 @@ parser = Json.create
 			(e-call @11.20-11.40
 				(e-lookup-external @11.20-11.34
 					(module-idx "0")
-					(field "stringify")
 					(target-node-idx "0"))
 				(e-lookup-local @11.35-11.39
 					(pattern @11.14-11.18))))
@@ -191,7 +189,6 @@ parser = Json.create
 				(p-assign @15.19-15.22 (ident "req")))
 			(e-lookup-external @15.24-15.51
 				(module-idx "1")
-				(field "defaultResponse")
 				(target-node-idx "0")))
 		(annotation @15.1-15.15
 			(declared-type
@@ -205,7 +202,6 @@ parser = Json.create
 		(e-call @18.10-18.28
 			(e-lookup-external @18.10-18.20
 				(module-idx "0")
-				(field "prase")
 				(target-node-idx "0"))
 			(e-string @18.21-18.27
 				(e-literal @18.22-18.26 (string "test")))))
@@ -217,13 +213,11 @@ parser = Json.create
 		(p-assign @24.1-24.7 (ident "client"))
 		(e-lookup-external @24.10-24.28
 			(module-idx "1")
-			(field "invalidMethod")
 			(target-node-idx "0")))
 	(d-let
 		(p-assign @27.1-27.7 (ident "parser"))
 		(e-lookup-external @27.10-27.49
 			(module-idx "0")
-			(field "create")
 			(target-node-idx "0")))
 	(s-import @3.1-3.17 (module "json.Json") (qualifier "json")
 		(exposes))

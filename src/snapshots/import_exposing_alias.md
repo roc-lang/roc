@@ -101,7 +101,6 @@ main = {
 				(e-call @7.12-7.24
 					(e-lookup-external @7.12-7.18
 						(module-idx "0")
-						(field "encode")
 						(target-node-idx "0"))
 					(e-lookup-local @7.19-7.23
 						(pattern @6.2-6.6))))
@@ -110,7 +109,6 @@ main = {
 				(e-call @8.12-8.29
 					(e-lookup-external @8.12-8.20
 						(module-idx "0")
-						(field "decode")
 						(target-node-idx "0"))
 					(e-lookup-local @8.21-8.28
 						(pattern @7.2-7.9))))

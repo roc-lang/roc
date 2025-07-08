@@ -45,7 +45,6 @@ NO CHANGE
 		(p-assign @5.1-5.5 (ident "main"))
 		(e-lookup-external @5.8-5.21
 			(module-idx "0")
-			(field "decode")
 			(target-node-idx "0")))
 	(s-import @3.1-3.27 (module "json.Json") (qualifier "json") (alias "MyJson")
 		(exposes)))

@@ -202,8 +202,8 @@ pub fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!bo
             _ = self.unify(lookup_var, pattern_var);
         },
         .e_lookup_external => |e| {
-            // TODO: Update this to handle the new e_lookup_external structure
-            // For now, just skip type checking for external lookups
+            // TODO: Handle type checking for external lookups
+            // For now, just skip type checking
             _ = e;
         },
         .e_list => |list| {

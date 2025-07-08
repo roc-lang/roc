@@ -823,7 +823,6 @@ combineResults = |jsonResult, httpStatus|
 			(e-call @9.21-9.38
 				(e-lookup-external @9.21-9.31
 					(module-idx "0")
-					(field "parse")
 					(target-node-idx "0"))
 				(e-lookup-local @9.32-9.37
 					(pattern @9.14-9.19))))
@@ -845,7 +844,6 @@ combineResults = |jsonResult, httpStatus|
 					(e-call @14.14-14.35
 						(e-lookup-external @14.14-14.25
 							(module-idx "0")
-							(field "decode")
 							(target-node-idx "0"))
 						(e-dot-access @14.26-14.35 (field "body")
 							(receiver
@@ -864,7 +862,6 @@ combineResults = |jsonResult, httpStatus|
 									(e-call @16.22-16.36
 										(e-lookup-external @16.22-16.29
 											(module-idx "1")
-											(field "ok")
 											(target-node-idx "0"))
 										(e-lookup-local @16.30-16.35
 											(pattern @16.12-16.17)))))
@@ -875,7 +872,6 @@ combineResults = |jsonResult, httpStatus|
 									(e-call @17.23-17.45
 										(e-lookup-external @17.23-17.38
 											(module-idx "1")
-											(field "badRequest")
 											(target-node-idx "0"))
 										(e-lookup-local @17.39-17.44
 											(pattern @17.13-17.18))))))))))
@@ -900,7 +896,6 @@ combineResults = |jsonResult, httpStatus|
 					(e-call @26.13-26.41
 						(e-lookup-external @26.13-26.30
 							(module-idx "0")
-							(field "validateWith")
 							(target-node-idx "0"))
 						(e-lookup-local @26.31-26.37
 							(pattern @23.16-23.22))
@@ -924,7 +919,6 @@ combineResults = |jsonResult, httpStatus|
 			(e-call @38.25-38.48
 				(e-lookup-external @38.25-38.40
 					(module-idx "1")
-					(field "clientWith")
 					(target-node-idx "0"))
 				(e-lookup-local @38.41-38.47
 					(pattern @38.17-38.23))))
@@ -954,7 +948,6 @@ combineResults = |jsonResult, httpStatus|
 								(e-call @44.23-44.50
 									(e-lookup-external @44.23-44.42
 										(module-idx "1")
-										(field "statusToString")
 										(target-node-idx "0"))
 									(e-lookup-local @44.43-44.49
 										(pattern @44.12-44.18)))))

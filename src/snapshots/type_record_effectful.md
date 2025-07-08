@@ -104,7 +104,6 @@ main! = |_| {}
 					(e-call @7.5-7.30
 						(e-lookup-external @7.5-7.17
 							(module-idx "0")
-							(field "line!")
 							(target-node-idx "0"))
 						(e-dot-access @7.18-7.30 (field "name")
 							(receiver
